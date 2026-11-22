@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -357,6 +358,13 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	}
 	if c.rec.Backend == BackendClaude && spec.Holder != nil && spec.Holder.id != "" {
 		spec.restoredClaudeUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
+	}
+	if sink := c.r.opts.AuditSink; sink != nil {
+		class := wsaudit.SessionHostedChild
+		if spec.Lead != nil {
+			class = wsaudit.SessionHostedLead
+		}
+		spec.audit = &auditTap{Session: wsaudit.Session{ID: c.rec.ReplyID, Class: class}, Sink: sink, Log: c.r.opts.Log}
 	}
 	proc, err := backend.Start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)

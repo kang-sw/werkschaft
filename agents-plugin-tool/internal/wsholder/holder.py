@@ -42,6 +42,29 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
           "bad_request", "message": "..."} and the connection closes.
 
   The holder accepts the protocol version it reports and the one before it.
+
+  Audit channel, an optional capability negotiated on attach (no protocol
+  bump). A client that wants it adds "audit": <version it speaks> to its
+  attach request; a holder that predates the channel ignores the field and
+  never sends it. This holder speaks audit version 1: its attach reply then
+  carries "audit": 1, and only then does it send the audit messages below
+  on that connection. They are unsequenced, have no replay, and are never
+  kept in the ring.
+
+    {"event": "audit", "anchor": n, "index": k, "at": <UTC ns at read>,
+     "data": "<base64>"}
+        A whole stdout line the --ring-skip pattern kept out of the ring.
+        anchor is the ring sequence of the last stdout line kept before it
+        (0 before any), index its 1-based place among the lines skipped
+        after that anchor, dropped ones counted.
+    {"event": "audit_fence", "anchor": n, "next": m, "through": t,
+     "tee_count_sent": s, "dropped_count": d}   plus "final": true at the
+        end of the child's stdout. Sent at every kept-line batch boundary,
+        after that interval's audit lines: the interval after anchor is
+        closed, the kept lines next..through follow it with nothing skipped
+        between them, and of the interval's lines s were sent and d dropped
+        (no audit connection, or a full audit queue). A final fence has no
+        next and closes the last interval.
   The newest authenticated attach takes over: the previous connection gets
   {"event": "detached", "reason": "replaced"} and is closed, and only the
   new one may send operations.
@@ -124,6 +147,14 @@ DESCRIPTOR_NAME = "descriptor.json"
 LOG_NAME = "holder.log"
 EXIT_NAME = "exit.json"
 RING_PULSE_SECONDS = 5.0
+# The audit channel version this holder speaks (see the docstring).
+AUDIT_VERSION = 1
+# Audit messages one attachment may have queued: a tee line past either
+# bound is dropped and counted in its interval's fence; a fence past the
+# message bound is dropped too, and the daemon closes the interval on its
+# own bounded wait.
+AUDIT_QUEUE_MESSAGES = 4096
+AUDIT_QUEUE_BYTES = 4 << 20
 
 
 def _start_ticks():
@@ -263,15 +294,20 @@ def unskipped(pattern, pieces, at_start: bool):
     """The pieces of a pipe's output that pattern does not skip, and whether
     the next piece starts a line. Only a whole line (one record that starts
     a line and is not cut) is skipped."""
-    kept = []
-    skipped = False
+    marked, at_start = split_skipped(pattern, pieces, at_start)
+    kept = [(data, partial) for keep, data, partial in marked if keep]
+    return kept, at_start, len(kept) < len(marked)
+
+
+def split_skipped(pattern, pieces, at_start: bool):
+    """Each piece marked kept or skipped, in order, and whether the next
+    piece starts a line. As in unskipped, only a whole line is skipped."""
+    marked = []
     for data, partial in pieces:
-        if at_start and not partial and pattern.match(data):
-            skipped = True
-        else:
-            kept.append((data, partial))
+        skip = bool(at_start and not partial and pattern.match(data))
+        marked.append((not skip, data, partial))
         at_start = not partial
-    return kept, at_start, skipped
+    return marked, at_start
 
 
 class LineSplitter:
@@ -769,6 +805,10 @@ class Attachment:
         self.closing = False
         self.drain = False
         self.dead = False
+        # The audit channel version negotiated on attach; 0 for none.
+        self.audit = 0
+        self.audit_queue: list[dict] = []
+        self.audit_bytes = 0
         self.thread = threading.Thread(target=self._write_loop, daemon=True)
 
     # Callers hold holder.cond for push, start_stream, and finish.
@@ -776,6 +816,21 @@ class Attachment:
     def push(self, message: dict) -> None:
         self.control.append(message)
         self.holder.cond.notify_all()
+
+    def push_audit(self, message: dict, tee: bool) -> bool:
+        """Queue an audit message; False when it is dropped (no audit channel,
+        the connection closing, or the queue full)."""
+        if not self.audit or self.closing or self.dead:
+            return False
+        size = len(message.get("data", "")) + 96
+        if len(self.audit_queue) >= AUDIT_QUEUE_MESSAGES:
+            return False
+        if tee and self.audit_bytes + size > AUDIT_QUEUE_BYTES:
+            return False
+        self.audit_queue.append(message)
+        self.audit_bytes += size
+        self.holder.cond.notify_all()
+        return True
 
     def start_stream(self, from_seq: int) -> None:
         ring = self.holder.ring
@@ -818,11 +873,16 @@ class Attachment:
                     if self.dead:
                         return
                     pending = self.streaming and self.cursor < ring.next_seq and (self.drain or not self.closing)
-                    if self.control or pending or self.closing:
+                    if self.control or self.audit_queue or pending or self.closing:
                         break
                     holder.cond.wait()
-                messages = self.control
+                # Audit messages go after control replies and before the
+                # ring's records: a fence reaches the client no later than
+                # the kept lines it releases.
+                messages = self.control + self.audit_queue
                 self.control = []
+                self.audit_queue = []
+                self.audit_bytes = 0
                 sent_before = 0
                 if pending:
                     first = ring.first_seq()
@@ -898,6 +958,13 @@ class Holder:
         self.ring_pulse = ring_pulse.encode("utf-8") + b"\n" if ring_pulse else None
         self.ring_pulse_seconds = ring_pulse_seconds
         self.ring_pulse_at = float("-inf")
+        # The open audit interval of the skipping stdout reader: the last
+        # kept stdout sequence, and the interval's skipped lines (index), sent
+        # and dropped. Guarded by cond.
+        self.tee_anchor = 0
+        self.tee_index = 0
+        self.tee_sent = 0
+        self.tee_dropped = 0
         self.cond = threading.Condition()
         self.attachment: Attachment | None = None
         self.child = None
@@ -1118,6 +1185,9 @@ class Holder:
             )
             return None
         att = Attachment(self, sock)
+        offered = req.get("audit")
+        if isinstance(offered, int) and not isinstance(offered, bool) and offered >= AUDIT_VERSION:
+            att.audit = AUDIT_VERSION
         with self.cond:
             if self.exit_event.is_set():
                 return None
@@ -1126,24 +1196,25 @@ class Holder:
             if old is not None:
                 old.push({"event": "detached", "reason": "replaced"})
                 old.finish()
-            att.push(
-                {
-                    "reply": req.get("id"),
-                    "ok": True,
-                    "protocol": spoken,
-                    "holder": {
-                        "id": self.id,
-                        "pid": os.getpid(),
-                        "started_at": STARTED_AT,
-                        "script_hash": self.script_hash,
-                        "restart_safe": self.restart_safe,
-                        "session": self.session,
-                    },
-                    "child": dict(self.child_status),
-                    "first_seq": self.ring.first_seq(),
-                    "next_seq": self.ring.next_seq,
-                }
-            )
+            reply = {
+                "reply": req.get("id"),
+                "ok": True,
+                "protocol": spoken,
+                "holder": {
+                    "id": self.id,
+                    "pid": os.getpid(),
+                    "started_at": STARTED_AT,
+                    "script_hash": self.script_hash,
+                    "restart_safe": self.restart_safe,
+                    "session": self.session,
+                },
+                "child": dict(self.child_status),
+                "first_seq": self.ring.first_seq(),
+                "next_seq": self.ring.next_seq,
+            }
+            if att.audit:
+                reply["audit"] = att.audit
+            att.push(reply)
         att.thread.start()
         return att
 
@@ -1286,23 +1357,94 @@ class Holder:
             else:
                 pieces = list(splitter.feed(chunk))
             if skip is not None:
-                pieces, at_start, skipped = unskipped(skip, pieces, at_start)
-                if skipped and self.ring_pulse is not None:
-                    now = time.monotonic()
-                    if now - self.ring_pulse_at >= self.ring_pulse_seconds:
-                        pieces.append((self.ring_pulse, False))
-                        self.ring_pulse_at = now
-            self._append_output(stream, pieces)
+                marked, at_start = split_skipped(skip, pieces, at_start)
+                self._append_marked(stream, marked)
+            else:
+                self._append_output(stream, pieces)
         if splitter is not None:
             pieces = list(splitter.flush())
             if skip is not None:
-                pieces, at_start, skipped = unskipped(skip, pieces, at_start)
-                if skipped and self.ring_pulse is not None:
-                    now = time.monotonic()
-                    if now - self.ring_pulse_at >= self.ring_pulse_seconds:
-                        pieces.append((self.ring_pulse, False))
-                        self.ring_pulse_at = now
-            self._append_output(stream, pieces)
+                marked, at_start = split_skipped(skip, pieces, at_start)
+                self._append_marked(stream, marked)
+                with self.cond:
+                    self._audit_fence(0, self.tee_anchor, final=True)
+            else:
+                self._append_output(stream, pieces)
+
+    def _append_marked(self, stream: str, marked) -> None:
+        """Append kept pieces to the ring in order and tee the skipped lines
+        to the audit channel, fencing each kept run (see the docstring). The
+        pulse, when due, is a kept line after the chunk's pieces."""
+        if not marked:
+            return
+        at = time.time_ns()
+        with self.cond:
+            run = []
+            skipped = False
+            for kept, data, partial in marked:
+                if kept:
+                    run.append((data, partial))
+                    continue
+                skipped = True
+                if run:
+                    self._append_run(stream, run)
+                    run = []
+                self._audit_tee(data, at)
+            if skipped and self.ring_pulse is not None:
+                now = time.monotonic()
+                if now - self.ring_pulse_at >= self.ring_pulse_seconds:
+                    run.append((self.ring_pulse, False))
+                    self.ring_pulse_at = now
+            if run:
+                self._append_run(stream, run)
+            self.cond.notify_all()
+
+    def _append_run(self, stream: str, run) -> None:
+        """Append consecutive kept pieces and fence the interval before them
+        (called with cond held)."""
+        first = last = 0
+        for data, partial in run:
+            last = self.ring.append("output", stream, data, partial).seq
+            first = first or last
+        self._audit_fence(first, last)
+
+    def _audit_tee(self, data: bytes, at: int) -> None:
+        """Send one skipped line on the audit channel, or count it dropped
+        (called with cond held). Never blocks the reader."""
+        self.tee_index += 1
+        att = self.attachment
+        message = {
+            "event": "audit",
+            "anchor": self.tee_anchor,
+            "index": self.tee_index,
+            "at": at,
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+        if att is not None and att.push_audit(message, tee=True):
+            self.tee_sent += 1
+        else:
+            self.tee_dropped += 1
+
+    def _audit_fence(self, next_seq: int, through: int, final: bool = False) -> None:
+        """Close the open audit interval (called with cond held): the kept
+        lines next_seq..through follow it; a final fence closes the last."""
+        att = self.attachment
+        if att is not None and att.audit:
+            message = {
+                "event": "audit_fence",
+                "anchor": self.tee_anchor,
+                "tee_count_sent": self.tee_sent,
+                "dropped_count": self.tee_dropped,
+            }
+            if final:
+                message["final"] = True
+            else:
+                message["next"] = next_seq
+                message["through"] = through
+            att.push_audit(message, tee=False)
+        if not final:
+            self.tee_anchor = through
+        self.tee_index = self.tee_sent = self.tee_dropped = 0
 
     def _append_output(self, stream: str, pieces) -> None:
         if not pieces:

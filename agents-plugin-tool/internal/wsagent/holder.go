@@ -178,6 +178,7 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 	p.child, p.holder = h, h
 	if h.id != "" {
 		h.replaying = true
+		p.startAudit(h.id)
 		h.table.add(h.id, h)
 		return nil
 	}
@@ -196,6 +197,7 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 		return fmt.Errorf("start a session holder: %w", err)
 	}
 	h.id = id
+	p.startAudit(id)
 	// Listed before the spawn, so no record of the child is missed.
 	h.table.add(id, h)
 	env := map[string]string{}
@@ -253,6 +255,12 @@ func (h *holderChild) event(ev wsholder.Event) {
 		}
 	}
 	switch ev.Event {
+	case wsholder.EventAudit, wsholder.EventAuditFence, wsholder.EventAuditAttached, wsholder.EventAuditDetached:
+		// The audit channel (audit_capture.go): never a record of the ring.
+		if a := h.proc.audit; a != nil {
+			a.holderEvent(ev)
+		}
+		return
 	case "output":
 		h.seen(ev.Seq)
 		switch ev.Stream {

@@ -1,0 +1,643 @@
+package wsagent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wslive"
+)
+
+// memSink is an in-memory audit sink. block, when set, holds every append
+// until it is closed; fail, when set, refuses appends it returns an error
+// for.
+type memSink struct {
+	mu    sync.Mutex
+	evs   []wsaudit.Envelope
+	block chan struct{}
+	fail  func(wsaudit.Envelope) error
+}
+
+func (s *memSink) Append(_ context.Context, ev wsaudit.Envelope) error {
+	if s.block != nil {
+		<-s.block
+	}
+	if s.fail != nil {
+		if err := s.fail(ev); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.evs = append(s.evs, ev)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *memSink) events() []wsaudit.Envelope {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.evs)
+}
+
+// boundarySink is an in-memory SourcedSink that keeps identities, the
+// highest seq, each source's finalized boundary, and the losses recorded;
+// it outlives a capture, standing in for the store across a daemon restart.
+type boundarySink struct {
+	memSink
+	retained map[wsaudit.SourceID]bool
+	maxSeq   uint64
+	boundary map[string]uint64
+	lost     []wsaudit.SourceID
+	failID   func(wsaudit.SourceID) bool
+}
+
+func newBoundarySink() *boundarySink {
+	return &boundarySink{retained: map[wsaudit.SourceID]bool{}, boundary: map[string]uint64{}}
+}
+
+func (s *boundarySink) Recover(_, source string) wsaudit.Recovery {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return wsaudit.Recovery{MaxSeq: s.maxSeq, Boundary: s.boundary[source]}
+}
+
+func (s *boundarySink) Retained(_ string, id wsaudit.SourceID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.retained[id]
+}
+
+func (s *boundarySink) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failID != nil && s.failID(id) {
+		return errors.New("injected append failure")
+	}
+	if s.retained[id] {
+		return wsaudit.ErrDuplicateSource
+	}
+	s.retained[id] = true
+	s.maxSeq = max(s.maxSeq, ev.Seq)
+	s.evs = append(s.evs, ev)
+	return nil
+}
+
+func (s *boundarySink) Finalize(_ context.Context, _, source string, boundary uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.boundary[source] = max(s.boundary[source], boundary)
+	return nil
+}
+
+func (s *boundarySink) RecordLoss(_ context.Context, _ string, id wsaudit.SourceID, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lost = append(s.lost, id)
+	return nil
+}
+
+// auditNopHost is a holder host that accepts the mapper's writes and does
+// nothing else.
+type auditNopHost struct{}
+
+func (auditNopHost) AddSink(wsholder.Sink)  {}
+func (auditNopHost) Scan()                  {}
+func (auditNopHost) List() wsholder.Listing { return wsholder.Listing{} }
+func (auditNopHost) LaunchWith(wsholder.LaunchSpec) (string, error) {
+	return "", errors.New("no launch")
+}
+func (auditNopHost) Spawn(string, wsholder.SpawnSpec) (wsholder.ChildStatus, error) {
+	return wsholder.ChildStatus{}, errors.New("no spawn")
+}
+func (auditNopHost) Input(string, []byte, bool) error { return nil }
+func (auditNopHost) Status(string) (wsholder.AttachInfo, error) {
+	return wsholder.AttachInfo{}, nil
+}
+func (auditNopHost) Stop(string) error { return nil }
+
+// auditRig is a Claude lead process under a stand-in holder whose output
+// and audit channel events a test delivers by hand, with capture on.
+type auditRig struct {
+	t      *testing.T
+	p      *streamProcess
+	h      *holderChild
+	mu     sync.Mutex
+	evs    []Event
+	seq    uint64
+	anchor uint64
+	index  uint64
+}
+
+func newAuditRig(t *testing.T, sink wsaudit.Sink, holderID string) *auditRig {
+	t.Helper()
+	m := newClaudeMapper(leadSpec())
+	p := newStreamProcess(m, claudeProtocol{})
+	h := &holderChild{proc: p, id: holderID, host: auditNopHost{}, table: &holderTable{}}
+	p.child, p.holder = h, h
+	p.prepareAudit(StartSpec{audit: &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, Sink: sink}}, m)
+	p.startAudit(holderID)
+	r := &auditRig{t: t, p: p, h: h}
+	go func() {
+		for ev := range p.events {
+			r.mu.Lock()
+			r.evs = append(r.evs, ev)
+			r.mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		p.closeAudit()
+		p.finish(nil)
+	})
+	return r
+}
+
+// kept delivers a ring record (a kept line) and returns its sequence.
+func (r *auditRig) kept(line string) uint64 {
+	r.seq++
+	r.h.event(wsholder.Event{Event: "output", Seq: r.seq, Stream: "stdout", Data: []byte(line + "\n")})
+	return r.seq
+}
+
+func (r *auditRig) replayed(seq uint64, line string) {
+	r.h.skipTo = max(r.h.skipTo, seq)
+	r.h.event(wsholder.Event{Event: "output", Seq: seq, Stream: "stdout", Data: []byte(line + "\n")})
+}
+
+// tee delivers a line the holder skipped, anchored on the last kept line.
+func (r *auditRig) tee(line string) {
+	r.index++
+	r.h.event(wsholder.Event{Event: wsholder.EventAudit, Anchor: r.anchor, Index: r.index, At: time.Now().UnixNano(), Data: []byte(line + "\n")})
+}
+
+func (r *auditRig) audit(ev wsholder.Event) { r.h.event(ev) }
+
+// fence closes the open interval and releases the kept lines next..through.
+func (r *auditRig) fence(next, through, sent, dropped uint64) {
+	r.h.event(wsholder.Event{Event: wsholder.EventAuditFence, Anchor: r.anchor, Next: next, Through: through, Sent: sent, Dropped: dropped})
+	r.anchor, r.index = through, 0
+}
+
+// keptRun fences and delivers one kept line, as a holder does.
+func (r *auditRig) keptRun(line string, sent, dropped uint64) uint64 {
+	r.fence(r.seq+1, r.seq+1, sent, dropped)
+	return r.kept(line)
+}
+
+// end closes capture and waits until it has drained.
+func (r *auditRig) end() {
+	r.t.Helper()
+	r.p.closeAudit()
+	select {
+	case <-r.p.audit.done:
+	case <-time.After(10 * time.Second):
+		r.t.Fatal("capture did not drain")
+	}
+}
+
+func (r *auditRig) displayLines() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, ev := range r.evs {
+		if ev.LineEnd {
+			n++
+		}
+	}
+	return n
+}
+
+func kindsOf(evs []wsaudit.Envelope) []wsaudit.Kind {
+	var out []wsaudit.Kind
+	for _, ev := range evs {
+		out = append(out, ev.Kind)
+	}
+	return out
+}
+
+func find(evs []wsaudit.Envelope, pred func(wsaudit.Envelope) bool) []wsaudit.Envelope {
+	var out []wsaudit.Envelope
+	for _, ev := range evs {
+		if pred(ev) {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func ofKind(k wsaudit.Kind) func(wsaudit.Envelope) bool {
+	return func(ev wsaudit.Envelope) bool { return ev.Kind == k }
+}
+
+func isLoss(ev wsaudit.Envelope) bool {
+	return ev.Kind == wsaudit.KindSystem && ev.Subkind == wsaudit.SubkindLoss
+}
+
+// replayFixture runs recorded Claude lines through the rig as a holder with
+// the audit channel would deliver them: a line claudeRingSkip matches is a
+// tee line, every other line a fenced kept record.
+func (r *auditRig) replayFixture(names ...string) {
+	skip := regexp.MustCompile(claudeRingSkip)
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	var sent uint64
+	for _, name := range names {
+		for _, line := range claudeFixtureLines(r.t, name) {
+			if strings.HasPrefix(string(line), ">> ") {
+				continue // a line written to the child, not its output
+			}
+			if skip.Match(line) {
+				r.tee(string(line))
+				sent++
+				continue
+			}
+			r.keptRun(string(line), sent, 0)
+			sent = 0
+		}
+	}
+	r.h.event(wsholder.Event{Event: wsholder.EventAuditFence, Anchor: r.anchor, Sent: sent, Final: true})
+}
+
+// TestClaudeAuditCapturesEveryKindFromRecordings pins the Claude adapter
+// over recorded stream-json: each kind the policy admits is captured from
+// its recording (thinking assembled with the ring-skipped deltas that came
+// over the audit channel, tool calls and results joined by call ID, hooks,
+// the compaction boundary and its summary, subagent lines, system lines),
+// user and assistant text never are, and an unrecognized line is kept raw.
+func TestClaudeAuditCapturesEveryKindFromRecordings(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.replayFixture("claude-lead-partial-tool-input.jsonl", "claude-tool-turn.jsonl", "claude-lead-compaction.jsonl",
+		"claude-subagent-turn.jsonl", "claude-lead-background-agent-states.jsonl")
+	// Lines no recording holds: a reminder block, and a line of no known type.
+	r.keptRun(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>\nmind the budget\n</system-reminder>"},{"type":"text","text":"hi"}]}}`, 0, 0)
+	r.keptRun(`{"type":"brand_new","x":1}`, 0, 0)
+	r.end()
+	evs := sink.events()
+
+	for _, k := range []wsaudit.Kind{wsaudit.KindThinking, wsaudit.KindToolCall, wsaudit.KindToolResult, wsaudit.KindHook,
+		wsaudit.KindSystemReminder, wsaudit.KindSystem, wsaudit.KindCompaction, wsaudit.KindSubagent, wsaudit.KindOther} {
+		if len(find(evs, ofKind(k))) == 0 {
+			t.Errorf("no %s event captured", k)
+		}
+	}
+	for _, k := range []wsaudit.Kind{wsaudit.KindUser, wsaudit.KindAssistantText} {
+		if got := find(evs, ofKind(k)); len(got) > 0 {
+			t.Errorf("visible %s captured: %+v", k, got[0])
+		}
+	}
+	for i, ev := range evs {
+		if err := ev.Validate(); err != nil {
+			t.Fatalf("event %d %+v: %v", i, ev, err)
+		}
+		if ev.Seq != uint64(i+1) {
+			t.Fatalf("event %d has seq %d; seq is assigned in source order from 1", i, ev.Seq)
+		}
+		if ev.Kind != wsaudit.KindOther && ev.Raw != "" {
+			t.Fatalf("mapped event keeps a raw line: %+v", ev)
+		}
+		if strings.Contains(ev.Out, "thinking_delta") || strings.Contains(ev.Out, "input_json_delta") {
+			t.Fatalf("a ring-skipped delta was stored as a line: %.200s", ev.Out)
+		}
+	}
+	other := find(evs, ofKind(wsaudit.KindOther))
+	if len(other) != 1 || other[0].Raw != `{"type":"brand_new","x":1}` {
+		t.Fatalf("other events = %+v", other)
+	}
+	if rem := find(evs, ofKind(wsaudit.KindSystemReminder)); len(rem) != 1 || !strings.Contains(rem[0].Out, "mind the budget") {
+		t.Fatalf("reminders = %+v", rem)
+	}
+	// The thinking block of the partial recording is signature-only.
+	if th := find(evs, ofKind(wsaudit.KindThinking)); th[0].Meta[wsaudit.MetaSignatureOnly] != true {
+		t.Fatalf("first thinking = %+v", th[0])
+	}
+	// Each tool result carries the call ID of a captured call.
+	calls := map[string]bool{}
+	for _, ev := range find(evs, ofKind(wsaudit.KindToolCall)) {
+		if ev.CallID == "" || ev.In == "" || ev.Subkind == "" {
+			t.Fatalf("tool call without id, input, or name: %+v", ev)
+		}
+		calls[ev.CallID] = true
+	}
+	for _, ev := range find(evs, ofKind(wsaudit.KindToolResult)) {
+		if !calls[ev.CallID] {
+			t.Fatalf("tool result %q joins no captured call", ev.CallID)
+		}
+	}
+	if hooks := find(evs, ofKind(wsaudit.KindHook)); hooks[0].Subkind != "SessionStart" || hooks[0].Meta["hook_name"] != "SessionStart:compact" {
+		t.Fatalf("hook = %+v", hooks[0])
+	}
+	if s := find(evs, func(ev wsaudit.Envelope) bool { return ev.Subkind == "compact_summary" }); len(s) == 0 {
+		t.Fatal("the compaction summary was not captured")
+	}
+	if sub := find(evs, ofKind(wsaudit.KindSubagent)); sub[0].ParentID == "" && sub[0].AgentID == "" {
+		t.Fatalf("subagent event names neither its call nor its task: %+v", sub[0])
+	}
+	// The Claude compact_boundary is the model-seen cut.
+	marked, cut := wsaudit.ApplyModelSeenCut(evs)
+	if !cut.HasCompaction || cut.Estimated || marked[cut.Index].Kind != wsaudit.KindCompaction {
+		t.Fatalf("cut = %+v", cut)
+	}
+	if marked[0].ModelSeen || !marked[len(marked)-1].ModelSeen {
+		t.Fatal("events before the boundary are not cut off, or later ones are")
+	}
+	if n := find(evs, isLoss); len(n) != 0 {
+		t.Fatalf("a complete replay recorded loss: %+v", n)
+	}
+}
+
+const (
+	thinkStart      = `{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1"}}}`
+	thinkBlock      = `{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}}`
+	thinkStop       = `{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`
+	thinkLine       = `{"type":"assistant","message":{"id":"msg_1","content":[{"type":"thinking","thinking":"","signature":"sig"}]}}`
+	auditResultLine = `{"type":"result","subtype":"success","result":"ok"}`
+)
+
+func thinkDelta(text string) string {
+	return fmt.Sprintf(`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":%q}}}`, text)
+}
+
+// TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder pins Decision
+// 5's ordering: a tee line delivered after the kept line that follows it is
+// still assembled before that line, because the kept line waits for the
+// fence that releases it; the display stream never waits.
+func TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	// The kept stop line arrives before the interval's tee lines and fence.
+	r.kept(thinkStop)
+	r.tee(thinkDelta("plan "))
+	r.tee(thinkDelta("carefully"))
+	r.fence(r.seq, r.seq, 2, 0)
+	r.keptRun(thinkLine, 0, 0)
+	r.keptRun(auditResultLine, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "plan carefully" || th[0].Meta[wsaudit.MetaAssembled] != true || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the teed deltas assembled whole", th)
+	}
+	if got := r.displayLines(); got != 5 {
+		t.Fatalf("display delivered %d lines, want 5", got)
+	}
+}
+
+// TestAuditFenceAccounting pins the fence cases: a zero-skip interval closes
+// at once; a tee the holder dropped is recorded on the open assembled event
+// as incomplete, or as a standalone loss marker when none spans it; the
+// final fence at child exit closes the last interval with no disconnect.
+func TestAuditFenceAccounting(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("a"))
+	r.index++ // the holder dropped the second delta
+	r.tee(thinkDelta("c"))
+	r.fence(r.seq+1, r.seq+1, 2, 1)
+	r.kept(auditResultLine) // the block never stopped: the turn was cut short
+	// A zero-skip interval, then a final fence reporting one dropped line
+	// that no open block spans.
+	r.keptRun(`{"type":"system","subtype":"status","status":null}`, 0, 0)
+	r.h.event(wsholder.Event{Event: wsholder.EventAuditFence, Anchor: r.anchor, Dropped: 1, Final: true})
+	r.h.event(wsholder.Event{Event: "exit", Seq: r.seq + 1, ExitCode: new(int)})
+	r.end()
+	evs := sink.events()
+	th := find(evs, ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "ac" || th[0].Meta[wsaudit.MetaIncomplete] != true || th[0].Meta[wsaudit.MetaLost] != uint64(1) {
+		t.Fatalf("thinking = %+v, want the assembly marked incomplete with one lost line", th)
+	}
+	loss := find(evs, isLoss)
+	if len(loss) != 1 || loss[0].Meta[wsaudit.MetaLossReason] != wsaudit.LossDropped || loss[0].Meta[wsaudit.MetaLost] != uint64(1) {
+		t.Fatalf("loss markers = %+v, want one for the final interval's dropped line", loss)
+	}
+	if find(evs, func(ev wsaudit.Envelope) bool { return ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossDisconnect }) != nil {
+		t.Fatal("child exit recorded a disconnect")
+	}
+}
+
+// TestAuditFenceTimeoutClosesTheSourceWithoutReordering pins overload: a
+// kept line whose fence never comes is mapped after the bound, the source's
+// tee stream closes as incomplete, a later tee is lost rather than mapped
+// late, and later kept lines no longer wait.
+func TestAuditFenceTimeoutClosesTheSourceWithoutReordering(t *testing.T) {
+	old := auditFenceWait
+	auditFenceWait = 50 * time.Millisecond
+	t.Cleanup(func() { auditFenceWait = old })
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.kept(`{"type":"system","subtype":"status","status":"one"}`) // no fence
+	waitUntil(t, "the held line to time out", func() bool { return len(sink.events()) >= 2 })
+	r.tee(thinkDelta("late"))
+	r.kept(`{"type":"system","subtype":"status","status":"two"}`)
+	r.end()
+	evs := sink.events()
+	var subs []string
+	for _, ev := range evs {
+		subs = append(subs, ev.Subkind+"/"+fmt.Sprint(ev.Meta[wsaudit.MetaLossReason]))
+	}
+	want := []string{"status/<nil>", "audit_loss/fence_timeout", "audit_loss/late", "status/<nil>"}
+	if !slices.Equal(subs, want) {
+		t.Fatalf("events = %v, want %v", subs, want)
+	}
+	if got := r.displayLines(); got != 2 {
+		t.Fatalf("display delivered %d lines, want 2", got)
+	}
+}
+
+// TestAuditDisconnectMarksTheUnfencedIntervalIncomplete pins disconnect: the
+// tee lines of an interval no fence closed are mapped in order and the
+// assembly they feed is marked incomplete.
+func TestAuditDisconnectMarksTheUnfencedIntervalIncomplete(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("half a thou"))
+	r.audit(wsholder.Event{Event: wsholder.EventAuditDetached})
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "half a thou" || th[0].Meta[wsaudit.MetaIncomplete] != true || th[0].Meta[wsaudit.MetaLossReason] != wsaudit.LossDisconnect {
+		t.Fatalf("thinking = %+v, want the unfenced assembly marked incomplete by the disconnect", th)
+	}
+}
+
+// TestAuditOldHolderCapturesThePostFilterStream pins the new-daemon,
+// old-holder direction: with no audit channel the kept lines are captured
+// as they come, never held, and only the skipped-only content is missing.
+func TestAuditOldHolderCapturesThePostFilterStream(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	for _, line := range claudeFixtureLines(t, "claude-tool-turn.jsonl") {
+		if !strings.HasPrefix(string(line), ">> ") {
+			r.kept(string(line))
+		}
+	}
+	waitUntil(t, "capture without fences", func() bool { return len(find(sink.events(), ofKind(wsaudit.KindToolResult))) == 2 })
+	r.end()
+}
+
+// TestAuditReplayRecordsAFailedAppendAsLoss pins the recovery rule with a
+// boundary-keeping sink: append of source sequence 10 fails, 11 succeeds;
+// after a restart the holder replays its ring, and 10 is recorded as loss,
+// never appended after 11, while retained identities are not duplicated and
+// seq resumes above the recovered maximum.
+func TestAuditReplayRecordsAFailedAppendAsLoss(t *testing.T) {
+	sink := newBoundarySink()
+	sink.failID = func(id wsaudit.SourceID) bool { return id.Seq == 10 }
+	line := func(i int) string { return fmt.Sprintf(`{"type":"system","subtype":"status","status":"n%d"}`, i) }
+	r := newAuditRig(t, sink, "h1")
+	for i := 1; i <= 11; i++ {
+		r.kept(line(i))
+	}
+	r.end()
+	if len(sink.events()) != 10 || sink.boundary["h1"] != 11 {
+		t.Fatalf("first daemon: %d events, boundary %d", len(sink.events()), sink.boundary["h1"])
+	}
+	sink.failID = nil
+
+	r2 := newAuditRig(t, sink, "h1")
+	for i := 1; i <= 11; i++ {
+		r2.replayed(uint64(i), line(i))
+	}
+	r2.seq = 11
+	r2.kept(line(12))
+	r2.end()
+	evs := sink.events()
+	if len(evs) != 11 {
+		t.Fatalf("after replay: %d events, want 10 retained plus record 12", len(evs))
+	}
+	last := evs[len(evs)-1]
+	if !strings.Contains(last.Out, `"n12"`) || last.Seq != 11 {
+		t.Fatalf("last event = %+v, want record 12 at seq 11", last)
+	}
+	for _, ev := range evs {
+		if strings.Contains(ev.Out, `"n10"`) {
+			t.Fatal("record 10 was appended late")
+		}
+	}
+	if len(sink.lost) != 1 || sink.lost[0].Seq != 10 {
+		t.Fatalf("losses = %+v, want record 10", sink.lost)
+	}
+}
+
+// TestAuditSlowOrFailingSinkNeverDelaysLineDelivery pins the non-blocking
+// tap: a sink that blocks, or one that fails every append, never delays the
+// display stream; the queue's overflow is recorded as loss once it drains.
+func TestAuditSlowOrFailingSinkNeverDelaysLineDelivery(t *testing.T) {
+	t.Run("blocking", func(t *testing.T) {
+		sink := &memSink{block: make(chan struct{})}
+		r := newAuditRig(t, sink, "h1")
+		const n = auditQueueItems + 500
+		start := time.Now()
+		for i := 0; i < n; i++ {
+			r.kept(`{"type":"system","subtype":"status","status":null}`)
+		}
+		waitUntil(t, "every line on the display stream", func() bool { return r.displayLines() == n })
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("delivery took %s behind a blocked sink", d)
+		}
+		close(sink.block)
+		r.end()
+		loss := find(sink.events(), isLoss)
+		if len(loss) == 0 || loss[0].Meta[wsaudit.MetaLossReason] != wsaudit.LossQueueFull {
+			t.Fatalf("no queue overflow loss recorded: %+v", loss)
+		}
+	})
+	t.Run("failing", func(t *testing.T) {
+		sink := &memSink{fail: func(wsaudit.Envelope) error { return errors.New("disk full") }}
+		r := newAuditRig(t, sink, "h1")
+		for i := 0; i < 100; i++ {
+			r.kept(`{"type":"system","subtype":"status","status":null}`)
+		}
+		waitUntil(t, "every line on the display stream", func() bool { return r.displayLines() == 100 })
+		r.end()
+	})
+}
+
+// TestClaudeRingCallIDMatchesTheAuditCallID pins (601) for Claude: a tools
+// row's calls carry the same normalized IDs as the captured tool_call and
+// tool_result events, for an ID over 256 encoded bytes (digested) and for a
+// short literal ID spelled as that digest (kept, and a different key).
+func TestClaudeRingCallIDMatchesTheAuditCallID(t *testing.T) {
+	long := "toolu_" + strings.Repeat("x", 300)
+	digest := wsaudit.NormalizeID(long)
+	literal := digest // a harness ID spelled exactly like the digest
+	turn := []string{
+		fmt.Sprintf(`{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":%q,"name":"Read","input":{"file_path":"/a"}}]}}`, long),
+		fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":"a"}]}}`, long),
+		fmt.Sprintf(`{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":%q,"name":"Read","input":{"file_path":"/b"}}]}}`, literal),
+		fmt.Sprintf(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":"b"}]}}`, literal),
+		auditResultLine,
+	}
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	for _, line := range turn {
+		r.kept(line)
+	}
+	waitUntil(t, "the batches", func() bool { return r.displayLines() == len(turn) })
+	r.end()
+
+	st := wslive.NewState("")
+	r.mu.Lock()
+	for i, ev := range r.evs {
+		if ev.Live != nil {
+			if _, err := st.Apply(*ev.Live, int64(1000+i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r.mu.Unlock()
+	res, err := st.Apply(wslive.Event{Kind: wslive.KindReply, Final: true, Text: "done"}, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ring []string
+	for _, e := range res.Ring {
+		if e.Kind == wslive.RingTools {
+			for _, b := range e.Tools.Batches {
+				for _, c := range b.CallArgs {
+					ring = append(ring, c.ID)
+				}
+			}
+		}
+	}
+	keyed := map[string][]wsaudit.Kind{}
+	for _, ev := range sink.events() {
+		if ev.CallID != "" {
+			keyed[ev.CallID] = append(keyed[ev.CallID], ev.Kind)
+		}
+	}
+	wantLiteral := wsaudit.NormalizeID(literal)
+	if !slices.Equal(ring, []string{digest, wantLiteral}) || digest == wantLiteral {
+		t.Fatalf("ring call ids = %q, want the digest %q then the literal's own key %q", ring, digest, wantLiteral)
+	}
+	for _, id := range ring {
+		if !slices.Equal(keyed[id], []wsaudit.Kind{wsaudit.KindToolCall, wsaudit.KindToolResult}) {
+			t.Fatalf("history row id %q opens %v, want its call and its result", id, keyed[id])
+		}
+	}
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

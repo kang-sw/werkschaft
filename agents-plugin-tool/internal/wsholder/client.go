@@ -81,7 +81,35 @@ type Event struct {
 	From     uint64 `json:"from,omitempty"`
 	To       uint64 `json:"to,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+
+	// The audit channel's fields (holder.py's docstring): an "audit" line's
+	// At (UTC nanoseconds at read), Anchor and Index, with the line in Data;
+	// an "audit_fence"'s Anchor, Next, Through, Sent, Dropped and Final; and
+	// Next on the client's own "audit_attached".
+	At      int64  `json:"at,omitempty"`
+	Anchor  uint64 `json:"anchor,omitempty"`
+	Index   uint64 `json:"index,omitempty"`
+	Next    uint64 `json:"next,omitempty"`
+	Through uint64 `json:"through,omitempty"`
+	Sent    uint64 `json:"tee_count_sent,omitempty"`
+	Dropped uint64 `json:"dropped_count,omitempty"`
+	Final   bool   `json:"final,omitempty"`
 }
+
+// Audit channel events. EventAudit and EventAuditFence come from the
+// holder; the client itself delivers EventAuditAttached (Next is the
+// holder's next record sequence at attach) before any event of a connection
+// that negotiated the channel, and EventAuditDetached once that connection
+// has ended.
+const (
+	EventAudit         = "audit"
+	EventAuditFence    = "audit_fence"
+	EventAuditAttached = "audit_attached"
+	EventAuditDetached = "audit_detached"
+)
+
+// AuditVersion is the audit channel version this daemon speaks.
+const AuditVersion = 1
 
 // SpawnSpec is the child a holder starts. Env, when not nil, is the child's
 // whole environment. Mode is "pipe" or "pty"; Rows and Cols are a PTY's
@@ -112,6 +140,15 @@ type AttachInfo struct {
 	Child    ChildStatus `json:"child"`
 	FirstSeq uint64      `json:"first_seq"`
 	NextSeq  uint64      `json:"next_seq"`
+	// Audit is the audit channel version negotiated on this connection; 0
+	// for none (not offered, or a holder that predates the channel).
+	Audit int `json:"audit,omitempty"`
+}
+
+// AttachOptions are what an attach offers beyond the protocol.
+type AttachOptions struct {
+	// Audit offers the audit channel at this version; 0 offers none.
+	Audit int
 }
 
 // reply is a holder's answer to one request.
@@ -124,6 +161,7 @@ type reply struct {
 	Child    ChildStatus `json:"child"`
 	FirstSeq uint64      `json:"first_seq"`
 	NextSeq  uint64      `json:"next_seq"`
+	Audit    int         `json:"audit"`
 }
 
 // Client is one attach connection to a holder. A holder serves one at a
@@ -137,12 +175,21 @@ type Client struct {
 	nextID  int64
 	waiters map[int64]chan reply
 	done    chan struct{}
+	// audit is the negotiated audit channel version.
+	audit int
 }
 
 // Attach connects to the holder desc names, authenticates, and takes over
 // its attach slot. onEvent receives every event on the connection's reader
 // goroutine, in order; it may be nil. A failure is an *AttachError.
 func Attach(ctx context.Context, desc Descriptor, onEvent func(Event)) (*Client, AttachInfo, error) {
+	return AttachWith(ctx, desc, AttachOptions{}, onEvent)
+}
+
+// AttachWith is Attach with options. An audit offer is a field an older
+// holder ignores, so it never refuses the attach: the reply's Audit says
+// whether the channel is on.
+func AttachWith(ctx context.Context, desc Descriptor, opts AttachOptions, onEvent func(Event)) (*Client, AttachInfo, error) {
 	fail := func(cause Cause, protocol int, err error) (*Client, AttachInfo, error) {
 		return nil, AttachInfo{}, &AttachError{Cause: cause, Protocol: protocol, Err: err}
 	}
@@ -172,7 +219,11 @@ func Attach(ctx context.Context, desc Descriptor, onEvent func(Event)) (*Client,
 		_ = conn.Close()
 		return fail(CauseProtocol, hello.Protocol, fmt.Errorf("the holder speaks protocol %d, this daemon %d and the one before it", hello.Protocol, protocolVersion))
 	}
-	request, _ := json.Marshal(map[string]any{"op": "attach", "id": 0, "token": desc.Token, "protocol": hello.Protocol})
+	attach := map[string]any{"op": "attach", "id": 0, "token": desc.Token, "protocol": hello.Protocol}
+	if opts.Audit > 0 {
+		attach["audit"] = opts.Audit
+	}
+	request, _ := json.Marshal(attach)
 	if _, err := conn.Write(append(request, '\n')); err != nil {
 		_ = conn.Close()
 		return fail(CauseNoAnswer, hello.Protocol, err)
@@ -198,20 +249,30 @@ func Attach(ctx context.Context, desc Descriptor, onEvent func(Event)) (*Client,
 		return fail(cause, hello.Protocol, errors.New(answer.Message))
 	}
 	_ = conn.SetDeadline(time.Time{})
-	c := &Client{conn: conn, onEvent: onEvent, waiters: map[int64]chan reply{}, done: make(chan struct{})}
-	go c.read(reader)
-	return c, AttachInfo{Protocol: answer.Protocol, Child: answer.Child, FirstSeq: answer.FirstSeq, NextSeq: answer.NextSeq}, nil
+	audit := 0
+	if opts.Audit > 0 && answer.Audit > 0 && answer.Audit <= opts.Audit {
+		audit = answer.Audit
+	}
+	c := &Client{conn: conn, onEvent: onEvent, waiters: map[int64]chan reply{}, done: make(chan struct{}), audit: audit}
+	go c.read(reader, answer.NextSeq)
+	return c, AttachInfo{Protocol: answer.Protocol, Child: answer.Child, FirstSeq: answer.FirstSeq, NextSeq: answer.NextSeq, Audit: audit}, nil
 }
 
 // read delivers replies to their callers and events to onEvent until the
 // connection ends.
-func (c *Client) read(reader *bufio.Reader) {
+func (c *Client) read(reader *bufio.Reader, next uint64) {
 	defer func() {
 		_ = c.conn.Close()
+		if c.audit > 0 && c.onEvent != nil {
+			c.onEvent(Event{Event: EventAuditDetached})
+		}
 		c.mu.Lock()
 		close(c.done)
 		c.mu.Unlock()
 	}()
+	if c.audit > 0 && c.onEvent != nil {
+		c.onEvent(Event{Event: EventAuditAttached, Next: next})
+	}
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {

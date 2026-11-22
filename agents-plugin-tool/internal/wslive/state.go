@@ -1211,6 +1211,7 @@ type callIn struct {
 	EndedAt     int64  `json:"endedAt"`
 	Failed      bool   `json:"failed"`
 	ArgsPreview string `json:"argsPreview"`
+	ID          string `json:"id"`
 }
 
 var epochPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -1318,13 +1319,25 @@ func (st *State) normalizeCalls(raw []json.RawMessage, callCount int) []BatchCal
 		if json.Unmarshal(item, &in) != nil || strings.TrimSpace(in.Name) == "" {
 			continue
 		}
-		c := BatchCall{Name: cleanToolName(st.scrub.scrub(in.Name)), StartedAt: max(in.StartedAt, 0), Failed: in.Failed, ArgsPreview: st.argsPreview(in.ArgsPreview)}
+		c := BatchCall{Name: cleanToolName(st.scrub.scrub(in.Name)), StartedAt: max(in.StartedAt, 0), Failed: in.Failed, ArgsPreview: st.argsPreview(in.ArgsPreview), ID: callID(in.ID)}
 		if in.EndedAt >= c.StartedAt {
 			c.EndedAt = in.EndedAt
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// callID is an adapter's call ID as a batch keeps it: the adapter already
+// normalized it (wsaudit.NormalizeID) and it is kept as sent, never
+// normalized again, so it still matches its audit events' call_id. One
+// that no normalization yields (over CallIDMaxBytes) or that is not text
+// (invalid UTF-8) is dropped.
+func callID(id string) string {
+	if len(id) > CallIDMaxBytes || !utf8.ValidString(id) {
+		return ""
+	}
+	return id
 }
 
 // argsPreviewScanBytes bounds the text argsPreview scans: an adapter may

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -92,6 +93,14 @@ type streamProcess struct {
 
 	// holder is set for a process under a session holder (holder.go).
 	holder *holderChild
+
+	// audit captures the process's output for the audit store
+	// (audit_capture.go); nil captures nothing. auditTap and auditAdapter
+	// are what startAudit builds it from, once the source is known.
+	audit        *auditCapture
+	auditTap     *auditTap
+	auditHarness string
+	auditAdapter auditAdapter
 }
 
 func newStreamProcess(mapper lineMapper, proto lineProtocol) *streamProcess {
@@ -108,26 +117,65 @@ func newStreamProcess(mapper lineMapper, proto lineProtocol) *streamProcess {
 // startChild starts cmd and maps its output: under a session holder when
 // spec asks for one (a lead conversation), else as the daemon's own child.
 func startChild(spec StartSpec, cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*streamProcess, error) {
+	p := newStreamProcess(mapper, proto)
+	p.prepareAudit(spec, mapper)
 	if spec.Holder != nil {
-		p := newStreamProcess(mapper, proto)
 		if err := spec.Holder.start(p, cmd); err != nil {
+			p.closeAudit()
 			return nil, err
 		}
 		return p, nil
 	}
-	return startStreamProcess(cmd, mapper, proto)
+	if err := p.startExec(cmd); err != nil {
+		p.closeAudit()
+		return nil, err
+	}
+	return p, nil
+}
+
+// prepareAudit readies capture for spec's process when the runner gave it a
+// tap and the backend has an audit adapter (Claude in Phase 1).
+func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
+	if spec.audit == nil {
+		return
+	}
+	if _, ok := mapper.(*claudeMapper); ok {
+		p.auditTap, p.auditHarness, p.auditAdapter = spec.audit, BackendClaude, newClaudeAudit(spec.audit.Session.ID)
+	}
+}
+
+// startAudit starts capture under source (the holder generation, or a key
+// of the daemon's own child) before the first output line can arrive.
+func (p *streamProcess) startAudit(source string) {
+	if p.auditTap != nil && p.audit == nil {
+		p.audit = newAuditCapture(p.auditTap, p.auditHarness, source, p.auditAdapter)
+	}
+}
+
+func (p *streamProcess) closeAudit() {
+	if p.audit != nil {
+		p.audit.close()
+	}
 }
 
 // startStreamProcess starts cmd as the daemon's own child.
 func startStreamProcess(cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*streamProcess, error) {
 	p := newStreamProcess(mapper, proto)
+	if err := p.startExec(cmd); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// startExec starts cmd as the daemon's own child of p.
+func (p *streamProcess) startExec(cmd *exec.Cmd) error {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	cmd.Stderr = p.stderr
 	// A grandchild that inherited stderr (a tool process, a stdio MCP
@@ -135,9 +183,10 @@ func startStreamProcess(cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*
 	// after the child itself exited.
 	cmd.WaitDelay = streamWaitDelay
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s: %w", filepath.Base(cmd.Path), err)
+		return fmt.Errorf("start %s: %w", filepath.Base(cmd.Path), err)
 	}
 	p.child = &execChild{cmd: cmd, stdin: stdin}
+	p.startAudit(fmt.Sprintf("proc-%d-%s", cmd.Process.Pid, strconv.FormatInt(time.Now().UnixNano(), 36)))
 	read := make(chan struct{})
 	go func() {
 		defer close(read)
@@ -163,7 +212,7 @@ func startStreamProcess(cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*
 		}
 		p.finish(err)
 	}()
-	return p, nil
+	return nil
 }
 
 // feed maps one output line and delivers its events. seq is the line's
@@ -178,6 +227,9 @@ func (p *streamProcess) feed(line []byte, seq uint64, replay bool) {
 	defer p.feedMu.Unlock()
 	if p.finished {
 		return
+	}
+	if p.audit != nil {
+		p.audit.line(line, seq, replay)
 	}
 	var replies lineReplies = p
 	if replay {
@@ -241,6 +293,7 @@ func (p *streamProcess) finish(err error) {
 	}
 	p.finished = true
 	close(p.exited)
+	p.closeAudit()
 	select {
 	case <-p.closing:
 	default:
@@ -430,6 +483,10 @@ type batchTracker struct {
 	epoch string
 	seq   int64
 	batch *toolBatch
+	// callIDs makes each finished call carry its normalized harness call ID
+	// (wireCall.ID), for the adapters whose audit capture records the same
+	// key as call_id.
+	callIDs bool
 }
 
 type toolBatch struct {
@@ -546,6 +603,9 @@ type wireCall struct {
 	EndedAt     int64  `json:"endedAt,omitempty"`
 	Failed      bool   `json:"failed,omitempty"`
 	ArgsPreview string `json:"argsPreview,omitempty"`
+	// ID is the call's harness tool-call ID through wsaudit.NormalizeID, the
+	// ring call ID its audit events carry as call_id.
+	ID string `json:"id,omitempty"`
 }
 
 // event is the lead's batch list holding the current batch: running while
@@ -560,7 +620,11 @@ func (t *batchTracker) event() Event {
 		if !contains(w.ToolNames, c.name) {
 			w.ToolNames = append(w.ToolNames, c.name)
 		}
-		w.Calls = append(w.Calls, wireCall{Name: c.name, StartedAt: c.startedAt, EndedAt: c.endedAt, Failed: c.failed, ArgsPreview: c.args})
+		wc := wireCall{Name: c.name, StartedAt: c.startedAt, EndedAt: c.endedAt, Failed: c.failed, ArgsPreview: c.args}
+		if t.callIDs {
+			wc.ID = wsaudit.NormalizeID(c.id)
+		}
+		w.Calls = append(w.Calls, wc)
 		switch {
 		case c.endedAt == 0:
 			open++
