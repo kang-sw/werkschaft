@@ -32,6 +32,10 @@ func (c *conv) allowAgyBypassPending() {
 		return
 	}
 	for _, approval := range slices.Clone(c.approvals) {
+		if _, daemon := c.execAnswers[approval.ID]; daemon {
+			// The process never asked: recheckExecApprovals settles it.
+			continue
+		}
 		err := c.sendApproval(answerer, approval, true, "")
 		if err == nil {
 			c.dropApproval(approval.ID, false)

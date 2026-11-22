@@ -359,6 +359,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 		c.applySettings()
 	}
 	c.permissionNudge(level, !rec.Lead, "")
+	c.recheckExecApprovals()
 	return nil
 }
 
@@ -404,6 +405,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 			c.applySettings()
 		}
 		c.allowAgyBypassPending()
+		c.recheckExecApprovals()
 	}
 	return nil
 }

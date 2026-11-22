@@ -72,12 +72,37 @@ func Interrupt(dir string, now time.Time) (held []Record, name string, err error
 // deleted: never moved to the drained directory and never returned. The
 // drained directory is then trimmed to the newest DrainedCap records, and
 // the images only trimmed records listed are deleted.
-func Drain(dir string) ([]Record, error) { return drain(dir, false) }
+func Drain(dir string) ([]Record, error) { return drain(dir, false, nil) }
 
 // DrainSteer is Drain restricted to steered entries: it claims only the held
 // entries marked for steering and leaves every other one, interrupt entries
 // included, held.
-func DrainSteer(dir string) ([]Record, error) { return drain(dir, true) }
+func DrainSteer(dir string) ([]Record, error) { return drain(dir, true, nil) }
+
+// DrainSteerWhere is DrainSteer restricted further to the steered entries
+// take accepts; every other entry stays held.
+func DrainSteerWhere(dir string, take func(Entry) bool) ([]Record, error) {
+	return drain(dir, true, take)
+}
+
+// EventIDs returns the event id of every held and drained entry at dir that
+// carries one (Entry.EventID), held first, each part oldest first. An entry
+// that cannot be read is skipped. A missing inbox holds none.
+func EventIDs(dir string) ([]string, error) {
+	var out []string
+	for _, records := range []func(string) ([]Record, error){readAll, Drained} {
+		recs, err := records(dir)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return out, err
+		}
+		for _, r := range recs {
+			if r.Entry.EventID != "" {
+				out = append(out, r.Entry.EventID)
+			}
+		}
+	}
+	return out, nil
+}
 
 // DrainInterrupt claims only the interrupt entries at dir, oldest first,
 // deletes them, keeping no drained record, and returns those this call
@@ -118,7 +143,7 @@ func takeInterrupts(dir string, names []string) ([]Record, error) {
 	return out, firstErr
 }
 
-func drain(dir string, steerOnly bool) ([]Record, error) {
+func drain(dir string, steerOnly bool, take func(Entry) bool) ([]Record, error) {
 	names, err := entryNames(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -129,7 +154,7 @@ func drain(dir string, steerOnly bool) ([]Record, error) {
 	if steerOnly {
 		// An entry file is never rewritten, so reading it before the claim
 		// tells whether the claimed file is steered.
-		names = filterNames(dir, names, func(e Entry) bool { return e.Steer })
+		names = filterNames(dir, names, func(e Entry) bool { return e.Steer && (take == nil || take(e)) })
 	} else {
 		// Drop the interrupt entries; every other entry, an unreadable one
 		// included, takes the drained path below. A failed drop leaves the

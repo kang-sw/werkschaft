@@ -551,13 +551,15 @@ func (c *conv) forgetAnswered(id string) {
 }
 
 // clearApprovals settles every waiting prompt with no answer: the process
-// they came from is gone.
+// they came from is gone. A daemon-owned exec approval stays: it came from
+// an exec call, which its own end withdraws (ApproveExec).
 func (c *conv) clearApprovals() {
 	c.forgetAnswered("")
-	if len(c.approvals) == 0 {
+	kept := c.execApprovalsOnly()
+	if len(c.approvals) == len(kept) {
 		return
 	}
-	c.setStatus(func() { c.approvals = nil })
+	c.setStatus(func() { c.approvals = kept })
 	c.showApprovals(false)
 }
 
@@ -585,6 +587,11 @@ func (c *conv) showApprovals(quiet bool) {
 // forgotten before the write, so it is answered at most once.
 func (c *conv) answerApproval(id string, allow bool, message string) error {
 	conflict := func(msg string) error { return &requestError{status: http.StatusConflict, msg: msg} }
+	// A daemon-owned exec approval has no process answer: the waiting exec
+	// call takes it (ApproveExec), whatever the process is doing.
+	if c.answerExecApproval(id, allow, message) {
+		return nil
+	}
 	if c.replaying {
 		return conflict("the session is rejoining its process; answer again in a moment")
 	}
@@ -1103,6 +1110,9 @@ func (c *conv) closeIf(done func() bool) bool {
 		return false
 	}
 	c.rec.ClosedAt = c.r.opts.Now().UTC().Format(time.RFC3339)
+	// The completion fence (AdmitCompletion): a notice admitted under an
+	// earlier generation never reaches the conversation again, revived or not.
+	c.rec.OpenGen++
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()

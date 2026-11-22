@@ -22,6 +22,32 @@ import (
 type tokenAgents struct {
 	mu     sync.Mutex
 	tokens map[string]tokenGrant
+	// begun and ended count each token's tool calls (AgentMCPCallHost).
+	begun, ended map[string]int
+}
+
+func (a *tokenAgents) MCPCallBegin(token string) func() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.begun == nil {
+		a.begun, a.ended = map[string]int{}, map[string]int{}
+	}
+	a.begun[token]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			a.ended[token]++
+			a.mu.Unlock()
+		})
+	}
+}
+
+// calls returns token's tool calls begun and ended so far.
+func (a *tokenAgents) calls(token string) (begun, ended int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.begun[token], a.ended[token]
 }
 
 type tokenGrant struct {
@@ -142,6 +168,7 @@ func (s *rpcSession) Serve(ctx context.Context, stream io.ReadWriteCloser) {
 				Method string          `json:"method"`
 				Params struct {
 					RequestID json.RawMessage `json:"requestId"`
+					Name      string          `json:"name"`
 				} `json:"params"`
 			}
 			_ = json.Unmarshal(line, &m)
@@ -157,17 +184,19 @@ func (s *rpcSession) Serve(ctx context.Context, stream io.ReadWriteCloser) {
 				s.inflight.Add(1)
 				wg.Add(1)
 				cancelled := make(chan struct{})
-				if m.Method == "hold" {
+				// A tools/call of the tool "hold" holds as "hold" does.
+				hold := m.Method == "hold" || m.Method == "tools/call" && m.Params.Name == "hold"
+				if hold {
 					s.mu.Lock()
 					s.holds[string(m.ID)] = cancelled
 					s.mu.Unlock()
 				}
-				go func(id json.RawMessage, method string) {
+				go func(id json.RawMessage, method string, hold bool) {
 					defer wg.Done()
 					defer s.inflight.Add(-1)
 					result := map[string]any{"method": method}
-					switch method {
-					case "hold":
+					switch {
+					case hold:
 						select {
 						case <-s.release:
 							result["how"] = "released"
@@ -176,11 +205,11 @@ func (s *rpcSession) Serve(ctx context.Context, stream io.ReadWriteCloser) {
 						case <-s.drained:
 							result["how"] = "drained"
 						}
-					case "release":
+					case method == "release":
 						s.releaseOnce.Do(func() { close(s.release) })
 					}
 					write(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
-				}(m.ID, m.Method)
+				}(m.ID, m.Method, hold)
 			}
 		}
 		if err != nil {
@@ -563,6 +592,69 @@ func TestProxyHTTPCancelsARequestWhoseClientLeft(t *testing.T) {
 	status, body, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", `{"jsonrpc":"2.0","id":10,"method":"ping"}`)
 	if r := decodeReply(t, body); status != http.StatusOK || string(r.ID) != "10" {
 		t.Fatalf("next request = %d %s", status, body)
+	}
+}
+
+// TestProxyHelloNeverDecodesAConversation: a launcher's hello cannot name
+// the hosted conversation a session is bound to, under any spelling; only
+// a token resolution sets it.
+func TestProxyHelloNeverDecodesAConversation(t *testing.T) {
+	var hello ProxyHello
+	raw := `{"protocol":1,"mode":"mcp","cwd":"/w","env":{},"owner_pid":7,"conversation":"forged","Conversation":"forged"}`
+	if err := json.Unmarshal([]byte(raw), &hello); err != nil {
+		t.Fatal(err)
+	}
+	if hello.Conversation != "" {
+		t.Fatalf("a launcher hello set Conversation = %q", hello.Conversation)
+	}
+	out, err := json.Marshal(ProxyHello{Conversation: "bound"})
+	if err != nil || strings.Contains(string(out), "bound") {
+		t.Fatalf("the binding leaves the daemon in a hello: %s (%v)", out, err)
+	}
+}
+
+// TestProxyHTTPCountsToolCallsInFlightOnce: each tools/call on a token is
+// one call in flight for the agent host, from its forwarding until it is
+// answered or its client leaves; a late answer after the client left ends
+// nothing again, and other requests count nothing.
+func TestProxyHTTPCountsToolCallsInFlightOnce(t *testing.T) {
+	d, h, a := startHTTPProxyDaemon(t)
+	a.issue("tok-a", httpTestHello("claude"))
+	if status, body, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", initializeBody); status != http.StatusOK {
+		t.Fatalf("initialize: %d %s", status, body)
+	}
+	s := h.session(t, 0)
+	if status, body, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mailbox.send"}}`); status != http.StatusOK {
+		t.Fatalf("answered call: %d %s", status, body)
+	}
+	if begun, ended := a.calls("tok-a"); begun != 1 || ended != 1 {
+		t.Fatalf("answered call counted begun %d ended %d", begun, ended)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mcpPost(t, ctx, d, http.MethodPost, "tok-a", `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"hold"}}`)
+	}()
+	s.waitLines(t, 3)
+	if begun, ended := a.calls("tok-a"); begun != 2 || ended != 1 {
+		t.Fatalf("held call counted begun %d ended %d", begun, ended)
+	}
+	cancel()
+	<-done
+	// The session answers the cancelled call late; the route dropped it.
+	deadline := time.Now().Add(2 * time.Second)
+	for s.inflight.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if begun, ended := a.calls("tok-a"); begun != 2 || ended != 2 {
+		t.Fatalf("cancelled call counted begun %d ended %d", begun, ended)
+	}
+	if status, _, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", `{"jsonrpc":"2.0","id":5,"method":"ping"}`); status != http.StatusOK {
+		t.Fatalf("ping: %d", status)
+	}
+	if begun, ended := a.calls("tok-a"); begun != 2 || ended != 2 {
+		t.Fatalf("a ping counted as a tool call: begun %d ended %d", begun, ended)
 	}
 }
 

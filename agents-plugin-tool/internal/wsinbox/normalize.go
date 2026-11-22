@@ -29,7 +29,7 @@ func Normalize(e Entry) (Entry, error) {
 	if e.Command != nil {
 		return normalizeCommand(e)
 	}
-	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Steer: e.Steer, UTCOffsetMinutes: e.UTCOffsetMinutes}
+	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Steer: e.Steer, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
 	size, selectionMentions := 0, 0
 	for _, p := range e.Parts {
 		p = strings.TrimSpace(p)

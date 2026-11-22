@@ -66,6 +66,14 @@ type AgentMCPTokenHost interface {
 	ResolveMCPToken(token string) (hello ProxyHello, void <-chan struct{}, ok bool)
 }
 
+// AgentMCPCallHost is an optional AgentMCPTokenHost that counts the tool
+// calls in flight on a session token: MCPCallBegin starts one and returns
+// its end, which the route calls once the call is answered or abandoned
+// (its client went away, or the session ended). The end is idempotent.
+type AgentMCPCallHost interface {
+	MCPCallBegin(token string) (end func())
+}
+
 // AgentLiveHost is an optional AgentHost whose native lead snapshots are
 // delivered in RAM. The daemon binds it before Start; no wire protocol changes.
 type AgentLiveHost interface {

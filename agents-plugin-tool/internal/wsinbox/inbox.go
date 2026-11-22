@@ -198,6 +198,10 @@ type Entry struct {
 	// injects it at the session's next tool boundary instead of at the turn
 	// end. Steered entries queue ahead of the rest (queueRecords).
 	Steer bool `json:"steer,omitempty"`
+	// EventID is the stable id of the event a system notice delivers (an
+	// exec job's completion), empty for every other entry. The runner
+	// reads it back to admit one event once (EventIDs).
+	EventID string `json:"eventId,omitempty"`
 	// Interrupt marks an interrupt entry (Interrupt): a request to stop the
 	// session's running turn, never a message. It carries no other content.
 	Interrupt bool `json:"interrupt,omitempty"`
