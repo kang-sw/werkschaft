@@ -1290,7 +1290,7 @@ from a support conversation:
   sequence number. A daemon that sets the holder manager's `AuditChannel`
   offers the holder audit channel on attach (an optional `audit` field; an
   older holder ignores it and attaches as before, an older daemon never
-  offers it). On a negotiated connection the holder tees each skipped line
+  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
   as an unsequenced `audit` event anchored on the last kept stdout sequence
   and fences every kept run (`audit_fence`); lines skipped while no daemon
   is attached, or past the audit queue, are only counted in the fence. The
