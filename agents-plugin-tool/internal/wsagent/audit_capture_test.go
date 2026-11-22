@@ -814,7 +814,7 @@ func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
 	r.keptRun(`{"type":"system","subtype":"status","status":"first"}`, 0, 0)
 	// Capture stalls appending the first event; the queue fills behind it.
 	for i := 0; i < auditQueueItems+100; i++ {
-		r.tee(thinkDelta("lost"))
+		r.tee(`{"type":"keep_alive"}`)
 	}
 	if r.p.audit.refused.Load() == 0 {
 		t.Fatal("the queue never filled")
@@ -822,6 +822,7 @@ func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
 	r.conn, r.index = 2, 0
 	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: 2, Next: r.seq + 1})
 	close(sink.block)
+	waitUntil(t, "the queue to drain", func() bool { return len(r.p.audit.in) == 0 })
 	r.keptRun(thinkStart, 0, 0)
 	r.keptRun(thinkBlock, 0, 0)
 	r.tee(thinkDelta("second "))
@@ -833,7 +834,9 @@ func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
 	if len(th) != 1 || th[0].Out != "second connection" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
 		t.Fatalf("thinking = %+v, want the new connection's deltas assembled whole", th)
 	}
-	if loss := find(sink.events(), func(ev wsaudit.Envelope) bool { return isLoss(ev) && ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossQueueFull }); len(loss) == 0 {
+	if loss := find(sink.events(), func(ev wsaudit.Envelope) bool {
+		return isLoss(ev) && ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossQueueFull
+	}); len(loss) == 0 {
 		t.Fatal("the refused items were not recorded as loss")
 	}
 }
