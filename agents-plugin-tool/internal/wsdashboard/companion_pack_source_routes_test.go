@@ -152,9 +152,23 @@ func TestCompanionPackSourceRoutesZip(t *testing.T) {
 	first := companionTestZip(t, bundle...)
 	srv.serve("/packs.zip", first)
 	f := companionSourceFixture(t, srv, true, source)
+	// Count the store's file operations per action (performance.md).
+	ops, opens := map[string]int{}, 0
+	f.d.companionPacks.trace = func(op string) { ops[op]++ }
+	f.d.companionPacks.open = func(p companionPackFile, n string, d bool) (companionPackFile, error) {
+		opens++
+		return openCompanionPackEntry(p, n, d)
+	}
+	measured := func() (map[string]int, int) {
+		got, n := ops, opens
+		ops, opens = map[string]int{}, 0
+		return got, n
+	}
 
 	w := f.post(companionSourcesRoute+"/fetch", companionSourceBody(source))
 	listing := companionRouteDecode[companionInstallResult](t, w)
+	listOps, listOpens := measured()
+	t.Logf("one source listing (2 packs, cold store): installer %v, scan opens %d", listOps, listOpens)
 	if w.Code != http.StatusOK || listing.Listing.Kind != "zip" || listing.Listing.Official || listing.Listing.Source != source ||
 		len(listing.Listing.Packs) != 2 || listing.Catalog != nil {
 		t.Fatalf("fetch = %d %s", w.Code, w.Body)
@@ -178,6 +192,13 @@ func TestCompanionPackSourceRoutesZip(t *testing.T) {
 	}
 	if n := srv.requests(); n != 1 {
 		t.Fatalf("install after a listing made %d requests in total, want the listing's 1", n)
+	}
+	installOps, installOpens := measured()
+	t.Logf("one source install (1 pack, 1 raster, cached zip): installer %v, scan opens %d", installOps, installOpens)
+	// The download stays in memory, so a source install touches the disk
+	// exactly as a local import does.
+	if installOps["create"] != 3 || installOps["write"] != 3 || installOps["rename"] != 1 || installOpens != 5 {
+		t.Fatalf("source install ops: %v, scan opens %d", installOps, installOpens)
 	}
 
 	// Every listing click downloads again: that is the update check.
