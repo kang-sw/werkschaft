@@ -67,13 +67,16 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 			"worktree.acquire", "worktree.release", "note.query", "note.write",
 			"config.resolve_agent", "todo.list", "todo.check",
 		},
-		ToolsAlwaysLoad:   true,
-		ManualHarness:     BackendAgy,
-		PlaybookCommands:  true,
-		WorkerCapable:     true,
-		WorkerProfile:     AgentWorkerProfile(BackendAgy),
-		WorkerHTTPMCP:     true,
-		WorkerAutoApprove: true,
+		ToolsAlwaysLoad:  true,
+		ManualHarness:    BackendAgy,
+		PlaybookCommands: true,
+		// An agy lead explores with its own subagents and reaches the other
+		// harnesses through agent.spawn.
+		PreferNativeSubagent: true,
+		WorkerCapable:        true,
+		WorkerProfile:        AgentWorkerProfile(BackendAgy),
+		WorkerHTTPMCP:        true,
+		WorkerAutoApprove:    true,
 		Profiles: []BuiltinProfileRegistration{
 			agentWorkerBuiltinProfile(BackendAgy, nil),
 			leadBuiltinProfile(LeadProfileAgy, BackendAgy, ""),

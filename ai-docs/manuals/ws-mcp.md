@@ -1017,7 +1017,14 @@ from a support conversation:
   policy (a lead or an `agent.spawn` worker) whose backend catalog names a
   native subagent tool for its role also gets a line never to use that
   tool and to delegate through `agent.spawn`/`mailbox.send`
-  (`Runner.subagentSteer`); a worker gets it after its key sentence.
+  (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
+  of a backend with `PreferNativeSubagent` (agy) gets a native-first line
+  instead, whether or not its catalog names the tool: its native subagent
+  explores without ws tools at the harness's default model, while rendered
+  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
+  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
+  size or own-harness role tier a render recommends gets `claude.` or
+  `codex.` first), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1039,7 +1046,14 @@ from a support conversation:
   backend's `BackendRegistration`, read through the conversation record's
   `Backend`; common code names no backend. `ManualHarness` is the harness the
   lead's manual renders under (claude, agy, codex; Pi declares none);
-  `PlaybookCommands` is described above.
+  `PlaybookCommands` is described above. `PreferNativeSubagent` (agy only)
+  selects the native-first prompt line above and, for text the hosted lead
+  executes itself (`workflow_manual`, `playbook.read`, the playbook-command
+  render), native-first terminology: `ExploreAgent` names its native
+  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
+  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  `playbook.render` output is unchanged for every caller: a rendered
+  delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
   and a generated callable-tool index appended to their workflow manual.
   Only agy sets it today; ordinary plugin/stdio connections, other hosted

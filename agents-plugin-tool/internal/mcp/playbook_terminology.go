@@ -155,6 +155,19 @@ func piMCPOnlyTerminology(namespace string) map[string]string {
 	}
 }
 
+// nativeFirstTerminology is the terminology of text a PreferNativeSubagent
+// hosted lead executes itself (wsagent.BackendRegistration.PreferNativeSubagent):
+// exploration goes to its own native subagent, which has no ws tools and
+// runs at the harness's default model, and a spawn is piMCPOnlyTerminology's
+// agent.spawn on an external harness, a bare size or own-harness role tier
+// qualified with a harness first. ContinueIdiom is unchanged.
+func nativeFirstTerminology(namespace string) map[string]string {
+	terms := piMCPOnlyTerminology(namespace)
+	terms["ExploreAgent"] = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `" + namespace + "/agent.spawn` subagent at an external-harness tier)"
+	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness; authority: at most your own)"
+	return terms
+}
+
 // claudeSpawnIdiom is the Claude SpawnIdiom value. Claude's Agent tool takes a
 // per-call model but no reasoning-effort parameter; effort comes only from the
 // subagent definition, so the plugin ships one effort-carrier agent per Claude
