@@ -654,7 +654,17 @@
       }
     },
     "261122-feat-ws-keep-awake-during-turns": {
-      "registered_at": "2026-11-22T06:13:05Z"
+      "registered_at": "2026-11-22T06:13:05Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T06:26:04Z",
+        "impl": {
+          "branch": "impl/develop/keep-awake-turns"
+        }
+      }
     }
   }
 }
