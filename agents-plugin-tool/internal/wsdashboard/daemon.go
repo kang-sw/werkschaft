@@ -199,18 +199,20 @@ type NudgeBody struct {
 type Daemon struct {
 	companionPacks CompanionPackStore
 
-	dir        string
-	lock       *flock.Flock
-	server     *http.Server
-	listener   net.Listener
-	endpoint   Endpoint
-	log        io.Writer
-	index      *Index
-	source     SessionSource
-	config     *ConfigBackend
-	companion  companionState
-	agents     AgentHost
-	leadNudges interface {
+	dir       string
+	lock      *flock.Flock
+	server    *http.Server
+	listener  net.Listener
+	endpoint  Endpoint
+	log       io.Writer
+	index     *Index
+	source    SessionSource
+	config    *ConfigBackend
+	companion companionState
+	// companionCommands broadcasts agent-director commands to rail streams.
+	companionCommands companionCommandHub
+	agents            AgentHost
+	leadNudges        interface {
 		Start()
 		Close()
 	}
