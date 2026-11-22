@@ -156,6 +156,10 @@ var companionCommands = [], directed = {sessionId: "rid1", expression: "happy", 
 doc.addEventListener("ws-companion-command", function (e) { companionCommands.push(e.detail); });
 sockets[3].msg("companion-command", directed);
 check("the shell hands companion commands to its companion", companionCommands, [directed]);
+var companionFocus = [];
+doc.addEventListener("ws-companion-focus", function (e) { companionFocus.push(e.detail); });
+sockets[3].msg("companion-focus", {token: "abc123"});
+check("the shell hands its focus token to the companion", [window.wsCompanionFocusToken, companionFocus], ["abc123", ["abc123"]]);
 shell = false; framed = true; mode = "session";
 connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
@@ -163,6 +167,8 @@ sockets[4].msg("companion", {enabled: false});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
 sockets[4].msg("companion-command", {sessionId: "rid1", quip: "frame"});
 check("a frame ignores companion commands", companionCommands, [directed]);
+sockets[4].msg("companion-focus", {token: "frame"});
+check("a frame ignores the focus token", [window.wsCompanionFocusToken, companionFocus], ["abc123", ["abc123"]]);
 var companionReads = [];
 // The empty panel region establishes the last keyed baseline on reconnect.
 doc.createElement = function () { return { childNodes: [], children: [], innerHTML: "" }; };
