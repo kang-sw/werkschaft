@@ -1458,3 +1458,57 @@ func TestRailViewWithoutWorkspaceStoreKeepsSessionRoots(t *testing.T) {
 		t.Fatalf("storage-disabled rail hid session root: %+v", view)
 	}
 }
+
+// TestRailUnregisteredWorkspaceSessionsKeepNotificationRows: a live session
+// under a pending or rejected workspace still renders the .rs row
+// attributes (data-rid, data-asks, data-busy, data-active, data-ap) the
+// page's notification scan reads, hidden, and the rail still splits into
+// keyed rows.
+func TestRailUnregisteredWorkspaceSessionsKeepNotificationRows(t *testing.T) {
+	now := time.Now()
+	storedDir := mkDir(t, filepath.Join(t.TempDir(), "explicit-ws"))
+	pendDir := mkDir(t, filepath.Join(t.TempDir(), "pend"))
+	rejDir := mkDir(t, filepath.Join(t.TempDir(), "rej"))
+	view := buildRailView([]railInput{
+		{Session: railSession("s-explicit", storedDir, now.Add(-3*time.Minute), time.Time{})},
+		{Session: railSession("s-pend", pendDir, now.Add(-2*time.Minute), time.Time{})},
+		{Session: railSession("s-rej", rejDir, now.Add(-time.Minute), time.Time{})},
+	}, nil, []storedWorkspace{{Path: storedDir}}, now)
+	partitionRailWorkspaces(&view, []string{rejDir})
+	if len(view.PendingWorkspaces) != 1 || len(view.RejectedWorkspaces) != 1 {
+		t.Fatalf("partition = pending %d rejected %d, want 1 and 1", len(view.PendingWorkspaces), len(view.RejectedWorkspaces))
+	}
+	pend := &view.PendingWorkspaces[0].Sessions[0]
+	pend.Approval = &ApprovalWait{Tool: "Bash", Args: "make"}
+	pend.Busy, pend.Active = true, true
+	rej := &view.RejectedWorkspaces[0].Sessions[0]
+	rej.OpenAskIDs = "q1 q2"
+	view.CanAdd = true
+
+	reg, err := renderRailRegion(view, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(reg.HTML)
+	_, box, ok := strings.Cut(html, `<div class="unreg-notif" hidden>`)
+	if !ok {
+		t.Fatalf("no hidden notification box:\n%s", html)
+	}
+	for _, want := range []string{
+		`<div class="rs" data-rid="s-pend" data-asks="" data-busy="1" data-active="1" data-ap="1" data-ap-tool="Bash" data-ap-args="make">`,
+		`<div class="rs" data-rid="s-rej" data-asks="q1 q2">`,
+	} {
+		if !strings.Contains(box, want) {
+			t.Errorf("notification box lacks %s:\n%s", want, box)
+		}
+	}
+	rows := splitRailRows(html)
+	if rows == nil {
+		t.Fatal("rail with notification rows no longer splits into keyed rows")
+	}
+	for _, id := range []string{"s-explicit", "s-pend", "s-rej"} {
+		if _, ok := rows.rows[id]; !ok {
+			t.Errorf("keyed rows lack %s: %v", id, rows.order)
+		}
+	}
+}

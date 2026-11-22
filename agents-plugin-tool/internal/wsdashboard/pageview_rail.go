@@ -133,6 +133,25 @@ func (w RailWorkspace) AllSessions() []RailRow {
 	return out
 }
 
+// LiveSessions returns the workspace's live rows, children included, in
+// the workspace and in its worktrees: the rows a pending or rejected
+// workspace renders for the notification scan.
+func (w RailWorkspace) LiveSessions() []RailRow {
+	var out []RailRow
+	var add func([]RailRow)
+	add = func(rows []RailRow) {
+		for _, r := range rows {
+			out = append(out, r)
+			add(r.Children)
+		}
+	}
+	add(w.Sessions)
+	for _, wt := range w.Worktrees {
+		add(wt.Sessions)
+	}
+	return out
+}
+
 // SessionCount returns the number of listed sessions in the workspace across
 // live, ended, and archived folds.
 func (w RailWorkspace) SessionCount() int {
