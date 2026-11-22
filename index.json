@@ -587,7 +587,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T01:14:56Z"
+        "touched_at": "2026-11-22T01:17:08Z",
+        "impl": {
+          "branch": "impl/develop/huff-dill-tarot"
+        }
       }
     },
     "261122-feat-ws-companion-shell-engine": {
