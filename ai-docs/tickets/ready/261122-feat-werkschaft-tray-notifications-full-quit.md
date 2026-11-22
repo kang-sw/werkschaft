@@ -82,13 +82,13 @@ The prerequisite is satisfied: its Phase 4 Result (closed in 9c5a761a8) records 
 
 Implement the authenticated full-stop route: discover and stop all holders before stopping the daemon, and report remaining holders on partial failure. Design for concurrent starts and stop races. Test authorization and origin boundaries, discovery, termination, daemon shutdown, running sessions, races, partial failures and the evidenced directional compatibility tier. Preserve ordinary `/shutdown`, daemon replacement and surviving holders.
 
-### Result (e9d961574) - 2026-11-22
+### Result (c3c4c1da3) - 2026-11-22
 
 `POST /shutdown/all` takes `/shutdown`'s endpoint bearer and joins its
 loopback-only cookie exemption
 (`agents-plugin-tool/internal/wsdashboard/daemon_http.go:45,205-238`,
 `localhost_auth.go:104`). It calls `wsholder.Manager.StopAll`
-(`agents-plugin-tool/internal/wsholder/manager.go:818-918`). StopAll refuses
+(`agents-plugin-tool/internal/wsholder/manager.go:818-922`). StopAll refuses
 launches with `ErrStopping` from its call, including a launch queued behind a
 running one. A launch already running finishes and its holder is stopped.
 Each round rescans the holders directory and stops every holder not yet
@@ -116,6 +116,10 @@ stop are unchanged.
 - Partial-stop and race semantics: an incomplete stop never closes the
   daemon. A `Close` that begins during StopAll can end the process before it
   answers, so callers treat a lost answer as an incomplete stop.
+- Review fix (commit 4caa66a1b): `stopped` lists every holder StopAll tried
+  that is not among the survivors. Before, a holder whose process ended but
+  whose exit cleanup failed was missing from both lists
+  (`TestStopAllCountsAHolderWhoseCleanupFailedAsStopped`).
 - Verification: `go test ./internal/wsholder -run StopAll` passes against
   real isolated holders. It covers every holder ended with its running child,
   including unscanned, unattachable, and predecessor holders; a refused
@@ -139,7 +143,7 @@ stop are unchanged.
 
 Build on Phase 1 for Tauri: X hides to tray without a draft prompt; "닫기" exits only the app; "완전 종료" stops holders and daemon. Check unsent drafts on real exit, and confirm full quit only for running sessions, showing their count. Left-click restores and focuses except on macOS, where it opens the menu. Verify hide and restore, both exit actions, draft recovery and check failures, zero and nonzero session counts (agent sessions, children and terminals per (2144)), cancellation, incomplete-stop reporting, the unsupported response of an older daemon per (2142), and the reported successor daemon per (2145) against an isolated daemon; expose only the agreed two user-facing tiers.
 
-### Result (279dd4d4f) - 2026-11-22
+### Result (313f2066b) - 2026-11-22
 
 The main window's close button hides it to the tray with no draft check.
 The tray menu has Show Werkschaft, Close Werkschaft, and Quit Werkschaft and
@@ -167,7 +171,7 @@ background.
   the window. The tray needs only Tauri's `tray-icon` feature, whose crate
   was already locked.
 - Verification: `cargo test --locked --features custom-protocol` passes
-  (54 at `5e8fb3b6f`). Its tests cover response classification, bearer-only
+  (54 at `43b24a13e`). Its tests cover response classification, bearer-only
   requests after the identity recheck, holder counting, confirmation and
   report wording, exit routing, and tray click mapping. The isolated
   end-to-end run used
@@ -187,6 +191,133 @@ background.
 ### Phase 3: Native notifications
 
 Implement native notifications for user questions and session completion at full idle after all children and background tasks finish. Map native failure to browser fallback without duplicate delivery. Verify questions, child completion while work remains, final idle, a session with an unknown background-task count per (2146), permissions, denied or failed native delivery and fallback.
+
+### Result (a17dc8f71) - 2026-11-22
+
+The daemon now marks each rail row with `data-busy="1"` while its live
+session is not fully idle (commits 292daa65d, 42fd05cc8). That covers a
+working lead, a permission or approval wait, a running subagent, a known
+background task, a ws-known exec job, or any busy live child row at any
+depth (`agents-plugin-tool/internal/wsdashboard/rail_layout.go:1174`,
+`pageview_rail.go:206-222,383-389`). Exec jobs are counted from the daemon
+process's own live set (`internal/execjob/execjob.go:122,134`), the process
+that hosts the launchers' MCP servers. A job counts on every session row in
+its worktree. A job change wakes the rail stream once from cached inputs
+(`daemon_runtime.go:62`), with no file read and no ticker. The row also
+carries `data-active="1"` while it is busy by its own work, meaning
+everything above except exec jobs (commit 115623bca).
+
+The shell page that owns the rail selects three events from each rail read
+(`assets/rail.js:585-613`, wired in `assets/dashboard-lifecycle.js:16,79-97,116`):
+- the existing approval wait;
+- a top-level row's busy-to-idle edge, which is the full-idle finish. It
+  counts only when the busy span (consecutive busy reads, including a first
+  read) had a `data-active` read (commit ac981dbe6);
+- board question IDs new in a row's `data-asks`.
+
+A child that finishes under a busy parent does not notify, because the
+parent row stays busy. A session that sat idle while another session's exec
+job kept its worktree busy does not notify when that job ends. A session
+whose turn ended while its own job ran notifies when the job ends. A row's first read and a reconnect's first full rail
+only set the baseline. A row that ends, stops, or disappears does not
+notify. The viewed session in a visible, focused tab is skipped, as
+approvals already were. Tags are `ws-approval:<rid>\n<tool>\n<args>`,
+`ws-idle:<rid>:<last-tool ms>[.<n>]` and `ws-ask:<rid>:<sorted ids>`.
+
+Delivery tries the native path first (commit 43b24a13e). The bridge exists
+only in the Werkschaft main window's top frame at the pinned origin
+(`desktop/src/notify-bridge.js`, `desktop/src/notify.rs:109`). It answers
+true only when the OS accepted the notification, or when the same tag is
+being shown right now; that in-flight duplicate from another tab is
+collapsed (commit 016a608fa). It answers false on refusal, failure,
+timeout (10 s), or a transport error. Only on false does the page use the browser
+`Notification`, and only when permission is granted. Otherwise it shows a
+toast now, or holds it until the tab is visible and drops it once its
+condition has ended. Native and browser are never both used.
+
+The macOS path uses `mac-notification-sys` 0.6.15 under the bundle
+identifier. The Windows path uses `tauri-winrt-notification` 0.8.1 under the
+app identifier as AppUserModelID. Both report failure, which
+`tauri-plugin-notification` and `notify-rust` discard. Secondary windows are
+marked `werkschaftSecondary` on dashboard load and deliver nothing, so a
+WebView2 secondary window cannot add a browser duplicate.
+
+- (2146): a harness that reports an unknown background count (Codex, `-1`)
+  reads it as zero, through the existing `taskBadgeCounts` clamp. Such a
+  session therefore notifies a finish once its turn ended and no ws-known
+  child, background task, or exec job remains. It may notify early while
+  unseen background work runs. `RailRow.Busy`'s comment and the desktop
+  README say so.
+- Compatibility T0, by direction. `data-busy` is an additive attribute on
+  the daemon's own page, which older scripts ignore. A new page in an older
+  shell, or in a browser, finds no bridge and uses its existing browser and
+  toast path. An older page in the new shell never calls the bridge. No
+  stored shape changes.
+- Review fixes: the shell's 10-minute tag memory dropped a real repeat
+  alert, so it now holds a tag only while that tag is shown (016a608fa).
+  Worktree-wide exec jobs produced a false finish for a session that was
+  idle beside another session's job; `data-active` with the span rule fixes
+  that (115623bca, ac981dbe6). The bridge and the finish body cut text by
+  code point, so an emoji is never split into a lone surrogate, and bridge
+  ids stay unique across pages (016a608fa, 22297992c). The bridge replaces
+  a lone surrogate in its input with U+FFFD even where the WebView lacks
+  `toWellFormed` (a17dc8f71). Rejected: crediting
+  each exec job to the session that launched it. Exec tools carry no
+  session identity, and 261117 owns that surface.
+- Limits: a session's real finish waits while another session's long exec
+  job keeps its worktree busy, because jobs are not credited to the session
+  that launched them. A page against a daemon that never renders
+  `data-active` (mixed versions) gives no finish notices. Clicking a native
+  notification does not open the session, because the bridge has no click
+  callback. Browser notifications and toasts do open
+  it. Whether the OS shows a notification is measured in Phase 4: unsigned
+  macOS permission and portable Windows AppUserModelID. A notification that
+  the OS accepted but then hid (for example under Focus or a disabled app)
+  counts as delivered and does not fall back. On macOS the asynchronous send
+  may not report a denied permission either; Phase 4 tests with permission
+  turned off.
+- Review Minors left open, across phases:
+  - `desktop/src/close.rs:62`: an exit while the updater holds `closing`
+    gives no feedback.
+  - The shell waits 150 s for the full stop, but StopAll's worst case can
+    run longer. The shell then reports Unknown, and the watcher may restart
+    the daemon.
+  - No route-level test sends concurrent `/shutdown/all` requests;
+    `wsholder` covers the race.
+- Verification: `node testdata/notifications.test.cjs` (Go runner
+  `TestNotificationSelectionAndDelivery`) passes. It covers:
+  - delivery: native true; native false with permission granted, and with
+    permission not granted; native rejection; a throwing bridge; no bridge;
+    the secondary window;
+  - finishes: one edge notifies once; a child finishes while its parent
+    stays busy, then the parent finishes; baseline; a row that ends while
+    busy; a span with only a job (silent); active, then job, then idle (one
+    notice); the span resetting at idle; first reads; a baseline read
+    keeping the span; a 200-code-point emoji bound on the body;
+  - questions: new, unchanged, and reopened question IDs;
+  - suppression: the viewed session when visible and focused, and when
+    hidden;
+  - held items, and the parse of the shipped bundle.
+
+  `rail-attention.test.cjs` and `desktop/scripts/test-notify-bridge.cjs`
+  (now in the Tauri CI step; covers emoji and lone-surrogate cuts and ids
+  across pages) pass. Go tests `TestRailBusy` (busy and active, including
+  the rule that exec jobs never make a row active), `TestRailMarkupBusy`,
+  `TestExecJobsChangedReachesTheRailStream`, and
+  `TestActiveRootsAndObserverFollowAJobsLifetime` pass. `cargo test --locked
+  --features custom-protocol -- --include-ignored` passes 56 at `4caa66a1b`,
+  including `a_tag_is_held_only_while_it_is_shown` and both isolated
+  full-stop e2e tests against a daemon built from that commit, after the
+  rebase onto develop `ad4afa7ed`. The Windows target was type-checked with
+  `cargo clippy --target x86_64-pc-windows-msvc` using stub C and rc tools
+  (no link). No GUI was launched. The full `wsholder`, `execjob`, `wsi18n`,
+  and `wsagent` suites pass. In the full `wsdashboard` and `cmd/ws-mcp`
+  suites, only the four tests named in Phase 1 fail, and they fail on base
+  too.
+- Performance: the rail render calls the in-memory job count once per
+  render. Selection is one pass over rows per rail update, in tab memory,
+  with no timers. The shell holds only the tags it is showing at that
+  moment and persists nothing.
 
 ### Phase 4: Packaged macOS and Windows verification
 

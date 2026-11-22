@@ -25,6 +25,19 @@ an older daemon without the full stop, which stops nothing. When another
 client starts a new background right after, the app reports it. Left-clicking
 the tray icon shows the window on Windows and opens the menu on macOS.
 
+The main window notifies through the OS, also while hidden in the tray: when a
+session waits on an approval, when a board question opens, and when a
+top-level session is fully idle (its turn ended and none of its children,
+background tasks, or exec jobs still run). A child finishing under a busy
+parent does not notify. Exec jobs are counted per worktree, not per session:
+a session that worked notifies only once every job in its worktree has
+ended, and a session that sat idle while another session's job ran does not
+notify. A session whose harness does not report its
+background tasks (Codex) may notify as soon as its turn ends. Other windows
+stay silent. When the OS refuses or fails a notification, the dashboard shows
+its own (the browser notification, or a toast) instead, never both. Clicking
+an OS notification does not open the session yet.
+
 For development, set `WERKSCHAFT_DAEMON_ROOT` to an absolute path to a prepared
 candidate directory before launching Tauri. It has the same layout as the
 bundled input and needs the current daemon starter. A development candidate
