@@ -83,6 +83,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		agents:          opts.Agents,
 		config:          opts.Config,
 		cardBound:       opts.CardBound,
+		execJobs:        opts.ExecJobs,
 		leadNudges:      opts.LeadNudges,
 		beforeUnlock:    opts.BeforeUnlock,
 		mailWake:        opts.MailWake,

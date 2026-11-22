@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -157,6 +158,9 @@ func dashboardCommand(args []string) {
 		Holders:        holders,
 		Support:        support,
 		ScratchCapture: os.Getenv("WS_MCP_DASHBOARD_SCRATCH_CAPTURE") == "1",
+		// The servers this daemon hosts for launcher sessions run their exec
+		// jobs in this process, so its own job set is what the rail counts.
+		ExecJobs: execjob.ActiveRoots,
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
@@ -199,6 +203,12 @@ func dashboardCommand(args []string) {
 	agyActivity.set(daemon.AgyActivity)
 	host.live.Store(daemon)
 	labels.daemon.Store(daemon)
+	execjob.SetActiveObserver(func() {
+		if d := host.live.Load(); d != nil {
+			d.ExecJobsChanged()
+		}
+	})
+	defer execjob.SetActiveObserver(nil)
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
