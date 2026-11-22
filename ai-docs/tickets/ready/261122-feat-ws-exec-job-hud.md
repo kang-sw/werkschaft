@@ -850,3 +850,84 @@ no backend change was needed.
   "ended", tooltip, peek, peek with "N new", confirm, notice card, toast and a
   failed notice with Retry, plus `mockup-gallery-*` renders of the approved
   mockup for the same languages and themes.
+
+#### Edition (26847931e) - 2026-11-23
+
+The pre-merge review of 4535c801e..e1fedaf24 (codex, round 1: fix first) was
+fixed in 26847931e. The Phase 2 Result above stays as written; this Edition
+supersedes it where they differ.
+
+- Toast scope, settled by the lead: the toast stays View-only, matching the
+  approved mockup (its toast carries only View). The Phase 2 Scope's "toast
+  with Retry" wording is superseded: Retry lives on the notice card in the
+  peek, where a failed notice is visible and where the stop is. What the toast
+  must tell the truth about is fixed: a job that exited before the stop was
+  accepted reads "had already ended" (the daemon marks only a job a stop ended,
+  so the UI no longer calls a natural exit "Stopped"), and a toast still up
+  follows the job's notice (notifying, then sent or failed).
+- Performance claim corrected: the Result's "No file operation is made by any of
+  it" holds for the HUD's own paths only (list, output read and stop answer from
+  memory). Every authenticated GET and POST pays the shared localhost guard's
+  revalidation of the secret file: 4 counted file operations per request (all
+  in the guard; an equally authenticated 404 makes the same 4), identical
+  for the list with 0, 1, 50 and 200 jobs, the output read, the stop route and
+  an equally authenticated 404 (`TestExecHUDRoutesTouchNoFilesBeyondTheRequestGuard`,
+  p50 about 90 µs per request in the fake-service fixture). The guard is
+  unchanged on purpose: its per-request revalidation is the deliberate design
+  shared by every authenticated dashboard route (deleting the secret rotates
+  the cookie at once). Cost of an open peek, from the poll schedule (350 ms
+  first delay, x1.5 while idle, 3 s ceiling; 20 ms between reads while more
+  output waits): measured 4 polls in the first 2.5 s of an idle peek, then one
+  read per 3 s (about 1.3 file ops/s); a peek that follows a steady stream reads
+  about every 350 ms (about 3 requests/s, 11 file ops/s); a backlog is caught up
+  at up to 50 reads/s (200 file ops/s) only while bytes wait, 16 KiB per read. A
+  closed peek makes none. Whether to cut the guard's per-request stat for these
+  routes is a follow-up decision, not part of this phase.
+- Review findings fixed (each has a browser assertion in
+  `TestExecHUDReviewBrowser` that failed before the fix):
+  - I1: selecting the open tab again is a no-op (no rewind, no repeated output).
+  - I2: one output read in flight per tab, wake-ups coalesced into one more read;
+    a record older than the one held (a running snapshot answered after the end,
+    an earlier notice state) is never merged back, in reads and in list
+    refreshes; a tab drains only on a terminal record.
+  - I3: a >16 KiB single-line tail shows a bounded suffix marked cut; retained
+    text is capped at 192 KiB as well as 1500 lines (1.1 MB of output keeps about
+    196 K characters in 987 lines).
+  - I4: the HUD's Escape handler sits on the window in the capture phase from
+    load, so it runs before the drawer's own capture handler and consumes the
+    key; the real drawer stays open on it and still closes on its own Escape.
+  - I5: keyboard focus survives a confirmation timeout and an end under the
+    confirmation (Stop, else the selected tab), a fold on resize (the +N or
+    aggregate stands in), and closing a peek whose chip folded. Found on the way:
+    +N and the aggregate were hidden and shown again inside every layout pass,
+    which dropped focus from them on each one-second tick; they are set once.
+  - I6: an ended job has a Dismiss button in the peek, so a failure that only
+    the aggregate shows (320 px) is cleared by keyboard; the panel moves to the
+    next job or closes.
+  - I7: the aggregate's last step has a rule (`.compact` shows its node only);
+    +N is measured at its widest count; the test asserts every drawn chip,
+    +N and aggregate inside the protected gap at 69 widths x 4 badge sets with a
+    120-job crowd (three-digit counts) and while the badges change width.
+  - I8: toast truth as above.
+  - Also: a first read that finds more than the tail window waiting (the list's
+    size is only as new as its last event) re-reads the real tail instead of
+    paging through the log from a stale offset.
+- Minors fixed: the footer's stream label is inside the localized template in
+  all 11 tables (`js.xhud.out.tail`); a failed copy shows a failure label
+  (`js.xhud.pk.copyfail`) and keeps the keyboard on the button; the +N reopen of
+  the open job and the 10 s unpin boundary have assertions; the two 404 cases
+  are named for what they test: a routed 404 on the list (what a LAN viewer
+  gets from the localhost-only route; asked exactly once, never again) and an
+  unbound service (the daemon still announces its revision, the route answers
+  404, asked exactly once). A browser test over a real LAN address was not
+  added: the fixture serves loopback only, and the daemon-side LAN refusal is
+  pinned by `TestExecHUDRoutesAreLocalhostOnlyAndOwnerScoped`.
+- New keys: `js.xhud.toast.ended`, `js.xhud.pk.copyfail` (88 `js.xhud.*` keys per
+  table). The nine non-ko/en translations of these two keys and of the changed
+  footer were written by the worker and are unreviewed by a human.
+- Not fixed, minor: the group can still overlay the subagent badge for one
+  frame before the observer folds it; `xhSaveDismissed` caps by insertion order
+  (job ids are `exec_...`, so no effect).
+- Captures refreshed (untracked): all `<lang>-<light|dark>-01..13-*` and
+  `mockup-gallery-*`, plus new `en-light` and `ko-dark` `14-peek-ended-dismiss`,
+  `15-compact-aggregate`, `16-long-line`, `17-toast-ended`.
