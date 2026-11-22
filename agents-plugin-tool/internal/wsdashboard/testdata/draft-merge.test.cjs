@@ -225,5 +225,30 @@ const bytesOf = db => Promise.all(stored(db).map(p => p.blob.text()));
     assert.deepEqual(d.imgs.map(p => [p.name, p.n]), [['a.png', 1]]);
     assert.deepEqual(d.warnings, []);
   }
+
+  // 6. A's first pass commits, then A waits on hashing an older page's
+  // ID-less image; meanwhile B, opened before A's edit, commits a newer row
+  // and mirrors its text. A finds the row superseded: it must not overwrite
+  // B's mirror, or the reopened draft drops B's latest text for A's.
+  {
+    const db = fakeDB(), legacy = new Map(), a = await open(db, legacy), b = await open(db, legacy);
+    db.row = { active: { base: null, projection: null, draft: { text: '' }, images: [image(1, 'old.png', 'older page')] } };
+    let release;
+    const gate = new Promise(r => { release = r; });
+    a.crypto = { subtle: { digest: (alg, bytes) => gate.then(() => crypto.subtle.digest(alg, bytes)) } };
+    a.ctext.value = 'Text of the first window';
+    a.paste('a.png', 'first window');
+    const saving = a.save();
+    while (!(db.row && db.row.stamp)) await new Promise(setImmediate);
+    b.ctext.value = 'Latest text of the second window';
+    b.paste('b.png', 'second window');
+    assert.equal(await b.save(), true);
+    release();
+    assert.equal(await saving, true, 'A\'s record committed before B\'s');
+    const d = await open(db, legacy);
+    assert.match(d.ctext.value, /^Latest text of the second window \[Image #1\]/, 'B\'s newer draft is restored: ' + d.ctext.value);
+    assert.deepEqual(d.imgs.find(p => p.n === 1).name, 'b.png');
+    assert.deepEqual(d.imgs.map(p => p.name).sort(), ['a.png', 'b.png', 'old.png']);
+  }
   console.log('draft-merge: ok');
 })().catch(e => { console.error(e); process.exit(1); });

@@ -431,14 +431,18 @@
     // every ID-less entry over. Then their bytes are read and, while no
     // other write came between, a second pass drops the copies of this
     // renderer's own or removed bytes and gives the rest their legacy ID.
+    // superseded is set when another write replaced the row while this one
+    // read bytes: that writer has mirrored its own newer projection, which
+    // this renderer's late mirror must not overwrite.
+    var superseded = false;
     var write = first.then(function () {
       settleTombstones(pass);
       if (!pass.loose.length) return pass;
       return Promise.all([Promise.all(pass.loose.map(draftContentKey)), Promise.all(images.map(draftContentKey))]).then(function (keys) {
-        if (!keys[0].some(Boolean)) return pass;
         var second = null;
         return draftTransaction(true, function (existing) {
-          if (!existing || existing.stamp !== stamp) return undefined;
+          if (!existing || existing.stamp !== stamp) { superseded = true; return undefined; }
+          if (!keys[0].some(Boolean)) return undefined;
           second = mergeImages(existing, keys[0], keys[1]);
           return { active: second.active, deliveries: existing.deliveries, removed: second.removed, stamp: stamp };
         }).then(function () {
@@ -456,7 +460,9 @@
       });
       if (merge.full) { draftUnsaved = true; return false; }
       draftCommitted = draftRecoveryKey(record, states);
-      draftUnsaved = missingBlob || !saveLegacyDraft(d, projection) && !rich && hasDraft;
+      // Without a second pass the mirror follows the commit within the same
+      // task's microtasks, before any other write can land.
+      draftUnsaved = missingBlob || !superseded && !saveLegacyDraft(d, projection) && !rich && hasDraft;
       return !draftUnsaved;
     }, function () {
       if (draftWrite === write) {
