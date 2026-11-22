@@ -3024,7 +3024,7 @@
   "js.settings.key.pi.display_summary_style.label": "表示要約の文体",
   "js.settings.key.pi.display_summary_style.description": "表示用の要約を生成する際の文体指示です。",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "モデル応答タイムアウト",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "再試行の前に応答を待つ時間です。",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "ホスト型 agy リードが動く前に、生の ACP 更新がない状態が続く秒数です。agy.stall_log_check が有効なら、リードはまず agy 自身のログを確認し、ログが応答なしを示す場合にのみ中断して続行します。0 で無効になります。",
   "js.settings.key.agy.model_wait_retries.label": "モデル応答の再試行回数",
   "js.settings.key.agy.model_wait_retries.description": "モデルの応答がタイムアウトした後の再試行回数です。",
   "js.settings.key.agy.stall_log_check.label": "ログ確認によるストール打ち切り",

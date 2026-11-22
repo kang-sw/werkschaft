@@ -3024,7 +3024,7 @@
   "js.settings.key.pi.display_summary_style.label": "Стиль отображаемых сводок",
   "js.settings.key.pi.display_summary_style.description": "Инструкции по стилю для отображаемых сводок.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Время ожидания ответа модели",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Время ожидания ответа модели до новой попытки.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Секунды тишины (без «сырых» обновлений ACP), после которых размещённый лид agy действует. При включённом agy.stall_log_check лид сначала проверяет собственный журнал agy и прерывает и продолжает, только если журнал не показывает ответа; 0 отключает контроль.",
   "js.settings.key.agy.model_wait_retries.label": "Повторные попытки после тайм-аута",
   "js.settings.key.agy.model_wait_retries.description": "Сколько раз повторять попытку после истечения времени ответа модели.",
   "js.settings.key.agy.stall_log_check.label": "Обрыв зависания по журналу",

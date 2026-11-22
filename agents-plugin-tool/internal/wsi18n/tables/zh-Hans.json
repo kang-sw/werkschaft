@@ -3024,7 +3024,7 @@
   "js.settings.key.pi.display_summary_style.label": "显示摘要风格",
   "js.settings.key.pi.display_summary_style.description": "用于生成显示摘要的风格指令。",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "模型响应超时",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "重试前等待模型响应的时间。",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "托管 agy 主导会话在采取行动前，收不到原始 ACP 更新的静默秒数。启用 agy.stall_log_check 时，会先检查 agy 自身日志，仅当日志显示没有响应才中断并继续；0 表示关闭。",
   "js.settings.key.agy.model_wait_retries.label": "模型等待重试次数",
   "js.settings.key.agy.model_wait_retries.description": "等待模型响应超时后的重试次数。",
   "js.settings.key.agy.stall_log_check.label": "日志确认的停滞切断",

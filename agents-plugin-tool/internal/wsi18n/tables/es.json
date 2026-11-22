@@ -3024,7 +3024,7 @@
   "js.settings.key.pi.display_summary_style.label": "Estilo de los resúmenes de pantalla",
   "js.settings.key.pi.display_summary_style.description": "Instrucciones de estilo para generar los resúmenes de pantalla.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Tiempo de espera de respuesta del modelo",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Tiempo de espera de la respuesta del modelo antes de reintentar.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Segundos de silencio (sin actualización ACP en bruto) antes de que un lead de agy alojado actúe. Con agy.stall_log_check activo, el lead comprueba primero el registro de agy e interrumpe y continúa solo si el registro no muestra respuesta; 0 desactiva la vigilancia.",
   "js.settings.key.agy.model_wait_retries.label": "Reintentos de espera del modelo",
   "js.settings.key.agy.model_wait_retries.description": "Número de reintentos tras agotarse el tiempo de respuesta del modelo.",
   "js.settings.key.agy.stall_log_check.label": "Corte de bloqueo confirmado por registro",

@@ -3024,7 +3024,7 @@
   "js.settings.key.pi.display_summary_style.label": "Stile dei riepiloghi visualizzati",
   "js.settings.key.pi.display_summary_style.description": "Istruzioni sullo stile dei riepiloghi generati per la visualizzazione.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Tempo massimo di risposta del modello",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Tempo di attesa di una risposta prima di riprovare.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Secondi di silenzio (nessun aggiornamento ACP grezzo) prima che un lead agy ospitato agisca. Con agy.stall_log_check attivo, il lead controlla prima il log di agy e interrompe e continua solo se il log non mostra risposta; 0 disattiva il controllo.",
   "js.settings.key.agy.model_wait_retries.label": "Tentativi dopo il timeout del modello",
   "js.settings.key.agy.model_wait_retries.description": "Numero di tentativi dopo la scadenza del tempo di risposta.",
   "js.settings.key.agy.stall_log_check.label": "Interruzione dello stallo confermata dal log",
