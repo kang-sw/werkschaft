@@ -631,6 +631,9 @@
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
     },
+    "261122-feat-ws-exec-job-hud": {
+      "registered_at": "2026-11-22T13:11:55Z"
+    },
     "261122-feat-ws-provider-auth-layer": {
       "registered_at": "2026-11-22T08:45:21Z",
       "lease": {
