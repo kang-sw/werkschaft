@@ -793,9 +793,7 @@ func TestCompanionAuthoringGuideCaps(t *testing.T) {
 	// The first group is computed from the pipeline's constants. The second
 	// group has no constant of its own: the entry-text, pack ID and raster
 	// name caps are pinned below through the parsers, the canvas and
-	// autoMatch bounds through the schema test, and the download limits are
-	// literals of the fetcher (a source zip 64 MiB, an external pack zip
-	// 16 MiB, 60 s, 5 redirects) that this table repeats.
+	// autoMatch bounds through the schema test.
 	want := map[string]string{
 		"`marketplace.json` size":          companionGuideSize(companionMarketplaceCap),
 		"Packs listed in one marketplace":  fmt.Sprint(companionMaxPacks),
@@ -813,21 +811,21 @@ func TestCompanionAuthoringGuideCaps(t *testing.T) {
 		"Archive path length":              fmt.Sprintf("%d characters", companionArchivePathMax),
 		"Persona name":                     fmt.Sprintf("%d characters", companionPersonaNameMax),
 		"Persona voice":                    fmt.Sprintf("%d characters", companionPersonaVoiceMax),
+		"Source zip download":              companionGuideSize(int(companionSourceCap)),
+		"External pack zip download":       companionGuideSize(int(companionPackZipCap)),
+		"Download time":                    fmt.Sprintf("%d s", int(companionFetchTimeout.Seconds())),
+		"Redirects followed (https only)":  fmt.Sprint(companionRedirectMax),
 
-		"Canvas width or height":          "64 to 2048 px",
-		"Tags per `autoMatch` field":      "32",
-		"`autoMatch` tag length":          "128 characters",
-		"Frame loop speed":                "0.1 to 30 fps",
-		"Pack ID length":                  "64 characters",
-		"Raster file name length":         "128 characters before the extension",
-		"Marketplace and pack name":       "64 characters",
-		"Pack version":                    "32 characters",
-		"Author and license":              "64 characters",
-		"Pack description":                "280 characters",
-		"Source zip download":             "64 MiB",
-		"External pack zip download":      "16 MiB",
-		"Download time":                   "60 s",
-		"Redirects followed (https only)": "5",
+		"Canvas width or height":     "64 to 2048 px",
+		"Tags per `autoMatch` field": "32",
+		"`autoMatch` tag length":     "128 characters",
+		"Frame loop speed":           "0.1 to 30 fps",
+		"Pack ID length":             "64 characters",
+		"Raster file name length":    "128 characters before the extension",
+		"Marketplace and pack name":  "64 characters",
+		"Pack version":               "32 characters",
+		"Author and license":         "64 characters",
+		"Pack description":           "280 characters",
 	}
 	rows := map[string]string{}
 	inTable := false
