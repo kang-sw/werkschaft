@@ -110,6 +110,8 @@ var outsideDenied = []string{
 	".config/gcloud", ".azure", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
 	".vault-token", ".password-store", "Library/Keychains",
 	".cache/" + wsstate.DefaultCacheDirName + "/dashboard",
+	// The provider credential file's directory (wscred.DefaultPath).
+	".cache/" + wsstate.DefaultCacheDirName + "/auth",
 }
 
 // OutsideLinkSource is a PageSource that also lists the files outside the

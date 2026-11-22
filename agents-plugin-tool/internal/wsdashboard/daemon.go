@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"errors"
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net"
 	"net/http"
@@ -132,6 +133,10 @@ type DaemonOptions struct {
 	// memory only, once per render, nil counts none, and ExecJobsChanged
 	// re-renders the rail after the counts change.
 	HostedExecJobs func() map[string]int
+	// Credentials is the provider credential store the daemon owns
+	// (credential_routes.go): while the daemon runs it is the credential
+	// file's only writer. Nil serves no credential and takes no change.
+	Credentials *wscred.Store
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -169,6 +174,9 @@ type DaemonOptions struct {
 	hireNow func() time.Time
 	// authNow is a fixture clock for login codes and failed exchanges.
 	authNow func() time.Time
+	// credentialSource replaces Credentials, so a test sees the requests
+	// the token route makes; nil uses Credentials.
+	credentialSource credentialStore
 	// clipboard replaces the native login-link clipboard writer in tests.
 	// Nil selects the platform writer; it never disables authentication.
 	clipboard clipboardWriter
@@ -199,18 +207,21 @@ type NudgeBody struct {
 type Daemon struct {
 	companionPacks CompanionPackStore
 
-	dir        string
-	lock       *flock.Flock
-	server     *http.Server
-	listener   net.Listener
-	endpoint   Endpoint
-	log        io.Writer
-	index      *Index
-	source     SessionSource
-	config     *ConfigBackend
-	companion  companionState
-	agents     AgentHost
-	leadNudges interface {
+	dir       string
+	lock      *flock.Flock
+	server    *http.Server
+	listener  net.Listener
+	endpoint  Endpoint
+	log       io.Writer
+	index     *Index
+	source    SessionSource
+	config    *ConfigBackend
+	companion companionState
+	agents    AgentHost
+	// credentials is DaemonOptions.Credentials (or a test's
+	// credentialSource), nil without one.
+	credentials credentialStore
+	leadNudges  interface {
 		Start()
 		Close()
 	}

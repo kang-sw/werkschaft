@@ -67,6 +67,12 @@ type BackendRegistration struct {
 	Profiles []BuiltinProfileRegistration
 	// PlaybookTerminology supplies static harness wording for playbook renders.
 	PlaybookTerminology PlaybookTerminology
+	// ProviderCredentials admits this backend's hosted sessions to the
+	// daemon's provider token route (Runner.ResolveCredentialToken): a
+	// session may obtain a provider credential with its per-session token.
+	// Only a harness that makes model requests itself, for the signed-in
+	// user, sets it; a harness that brings its own login never does.
+	ProviderCredentials bool
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and

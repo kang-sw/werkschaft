@@ -155,6 +155,39 @@ func (r *Runner) voidMCPLocked(id string) {
 // A token whose process has not reported its start yet waits for it, up
 // to mcpStartWait.
 func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
+	return r.resolveMCPToken(token, true)
+}
+
+// ResolveCredentialToken resolves a live session token for the daemon's
+// provider token route (wsdashboard.AgentCredentialHost). The session
+// passes only when its backend's registration admits provider credentials
+// (BackendRegistration.ProviderCredentials); the backend is the record's,
+// bound when the token was drawn, never what the caller claims. Unlike
+// ResolveMCPToken it is not the harness reaching ws-mcp.
+func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSession, bool) {
+	hello, void, ok := r.resolveMCPToken(token, false)
+	if !ok {
+		return wsdashboard.CredentialSession{}, false
+	}
+	select {
+	case <-void:
+		return wsdashboard.CredentialSession{}, false
+	default:
+	}
+	reg, known := r.opts.Backends[hello.Harness]
+	session := wsdashboard.CredentialSession{Conversation: hello.Conversation, Harness: hello.Harness, Permitted: known && reg.ProviderCredentials}
+	if c := r.conv(hello.Conversation); c != nil {
+		c.mu.Lock()
+		session.Lead = c.rec.Lead
+		c.mu.Unlock()
+	}
+	return session, true
+}
+
+// resolveMCPToken resolves token as ResolveMCPToken does; connect marks the
+// token's first resolution as the harness reaching ws-mcp
+// (MCPSession.Connected).
+func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
 	if token == "" {
 		return wsdashboard.ProxyHello{}, nil, false
 	}
@@ -180,10 +213,12 @@ func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan s
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	select {
-	case <-t.connected:
-	default:
-		close(t.connected)
+	if connect {
+		select {
+		case <-t.connected:
+		default:
+			close(t.connected)
+		}
 	}
 	hello := t.hello
 	// The token is the binding: only this resolution names the conversation.
