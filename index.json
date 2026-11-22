@@ -557,7 +557,17 @@
       "registered_at": "2026-11-21T09:35:55Z"
     },
     "261121-refactor-ws-daemon-metadata-sqlite": {
-      "registered_at": "2026-11-21T08:27:21Z"
+      "registered_at": "2026-11-21T08:27:21Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T04:41:33Z",
+        "impl": {
+          "branch": "impl/develop/tweak-canon-owl"
+        }
+      }
     },
     "261121-research-werkschaft-lead-companion-wasu-rig": {
       "registered_at": "2026-11-21T09:52:43Z"
