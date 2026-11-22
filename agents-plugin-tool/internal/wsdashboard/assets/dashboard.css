@@ -370,7 +370,7 @@ details[open] > .ahead .am > .i { transform: rotate(180deg); }
 /* A native row keeps its name readable: the status chip (observation ended,
    completion unknown is long) and the lifecycle give way first. */
 .agent.native > details > .ahead .aname { flex-shrink: 0; max-width: 45%; }
-.agent.native > details > .ahead .astatus { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent.native > details > .ahead .astatus { flex: 0 1 auto; min-width: 0; max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent.d-unknown > details > .ahead .amk { color: var(--ring-hold, var(--wb-muted-fg)); font-weight: 800; }
 /* the lead row's live detail: the running or approval-waiting tool, one line */
 /* a subagent's telemetry (template astat); the agents popover is the

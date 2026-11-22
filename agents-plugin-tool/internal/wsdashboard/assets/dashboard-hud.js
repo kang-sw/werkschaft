@@ -292,7 +292,7 @@
     if (d.model) { var mc = doc.createElement("code"); mc.textContent = d.model; meta.appendChild(mc); }
     if (d.effort) { var ef = doc.createElement("span"); ef.textContent = d.effort; meta.appendChild(ef); }
     var elSpan = doc.createElement("span");
-    elSpan.appendChild(doc.createTextNode("\u00b7 "));
+    if (meta.childNodes.length) elSpan.appendChild(doc.createTextNode("\u00b7 "));
     if (d.activeSince > 0) {
       var tm = doc.createElement("time"); tm.setAttribute("data-ms", String(d.activeSince)); tm.setAttribute("data-f", "since");
       if (typeof fmtTime === "function") fmtTime(tm, Date.now());
