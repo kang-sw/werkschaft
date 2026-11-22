@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 42d1950ac50f2d4b
 sage-review-completeness-reviewed: 42d1950ac50f2d4b
+completed: 2026-11-22
 ---
 
 # Show native subagent start, end, and status in the chat's top agent list
@@ -312,3 +313,56 @@ Verification:
   (b) the expanded tree's ended group with an end-unknown agy row and a
   completed Codex row, saved under
   `ai-docs/assets/captures/261122/native-subagent-roster/` (untracked PNG).
+
+### Result (5fb755a22) - 2026-11-22
+
+Landed Decisions 1-11 in 7a03e15ba (implementation and tests), 029261d05
+(headless-Chromium capture test) and 5fb755a22 (status chip only on
+end-unknown rows).
+
+- wslive: native ID prefixes `agy-native:` / `codex-native:`, the
+  daemon-internal `Event.EndUnknown` (`json:"-"`) settling a row `done` with
+  no `EndedAt` or added `ActiveMs`, monotonic terminal native rows
+  (`nativeSettled`), `RunningAgents(prefix)`, and finished-row retention
+  ranked by `EndedAt` else the idle `PhaseStartedAt`.
+- wsagent: the agy lead-only `invoke_subagent` mapping (label `Role` >
+  `TypeName` > `subagent`, prompt never read, failed update ends `failed`);
+  the Codex `subAgentActivity` mapping (before the turn gate, parent-thread
+  only, item-id dedupe capped at 256, envelope times, orphan completions
+  dropped); agy rows settle end-unknown at the accepted logical turn end
+  (`endTurn` behind `!quiet`) and once `replayDone` runs; native row events
+  publish RAM-only via `applyCoalesced`.
+- wsdashboard: HUD `native`/`startedAt`/`endedAt` fields, `observationEnded`
+  count kept separate from `completed`, native rows never linked, expanded
+  tree native badge plus lifecycle times, `?` mark for end-unknown rows, the
+  companion relay emits no `subagent.done` for end-unknown rows; new keys in
+  all 11 locale tables.
+
+Verification (GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local):
+- `go test ./internal/wslive`, `./internal/wsi18n`: ok.
+- `go test ./internal/wsagent` (full package, run alone): ok (138.7s).
+- `go test ./internal/wsdashboard -run 'TestHUDProjection|TestRailBusy|TestAgentRow|TestAgentsIsland|TestAsset|TestCSS|I18n|Companion|Agent|Tree|Rail|Spawn|TestHandedOff'`: ok at 5fb755a22.
+- Browser (`WS_PLAYWRIGHT_MODULE`): `TestHUDOrgChartBrowser`,
+  `TestAgentBadgePopoverBrowser`, `TestNativeSubagentRosterBrowser`: ok.
+- `node testdata/agents-island.test.cjs`: ok; `node --test
+  frontend-companion.test.js`: 23/23.
+- Captures (untracked PNG, en and ko) under
+  `ai-docs/assets/captures/261122/native-subagent-roster/`:
+  `compact-hud-running-agy-*.png`, `compact-hud-observation-ended-*.png`,
+  `expanded-ended-group-*.png`.
+- Lite review: no Critical or Important findings; three Minor left open
+  (second Codex `started` for an open thread overwrites the open row; no
+  conv-level restore+replay test for a restored end-unknown row; repeated
+  agy `tool_call` re-emits `running` harmlessly).
+
+Decisions:
+- The RAM-only publication branch covers prefixed native IDs only; Claude
+  no-identity rows keep their existing path (Decision 5).
+- The tree count chip excludes end-unknown rows from finished/failed.
+- An empty Codex `agentPath` gets the label `subagent`.
+- The ended-row status chip shows only for end-unknown rows; done/failed
+  native rows rely on the mark (keeps the existing popover contract).
+- The retention fallback ranking applies to all finished rows.
+- The observation-ended count renders in both the compact and idle HUD.
+- The `done-leaf` HUD test fixture gained `EndedAt: 1` so it stays a
+  completed row rather than end-unknown.
