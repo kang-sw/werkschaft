@@ -39,27 +39,39 @@ const PAGE: &str = "/strip.html";
 /// never evaluates script from inside a window procedure.
 struct Shared {
     state: Mutex<State>,
-    to_page: mpsc::Sender<String>,
+    /// Gone once the strip is closed: dropping it ends the worker thread, and
+    /// later changes go nowhere.
+    to_page: Mutex<Option<mpsc::Sender<String>>>,
 }
 
 impl Shared {
+    fn send(&self, script: String) {
+        if let Some(to_page) = &*self.to_page.lock().unwrap() {
+            let _ = to_page.send(script);
+        }
+    }
+
+    fn close(&self) {
+        self.to_page.lock().unwrap().take();
+    }
+
     fn update(&self, change: impl FnOnce(&mut State)) {
         let mut state = self.state.lock().unwrap();
         let before = state.clone();
         change(&mut state);
         if *state != before {
             let patch = patch_between(&before, &state);
-            let _ = self.to_page.send(strip_msg::set_script(&patch));
+            self.send(strip_msg::set_script(&patch));
         }
     }
 
     fn patch(&self, patch: serde_json::Value) {
-        let _ = self.to_page.send(strip_msg::set_script(&patch));
+        self.send(strip_msg::set_script(&patch));
     }
 
     fn push_all(&self) {
         let state = self.state.lock().unwrap().json();
-        let _ = self.to_page.send(strip_msg::set_script(&state));
+        self.send(strip_msg::set_script(&state));
     }
 }
 
@@ -81,6 +93,13 @@ pub struct Strips(Mutex<Option<Arc<Shared>>>);
 impl Strips {
     fn current(&self) -> Option<Arc<Shared>> {
         self.0.lock().unwrap().clone()
+    }
+}
+
+/// The window is gone: the strip's state stops taking changes.
+pub fn detach(app: &AppHandle) {
+    if let Some(shared) = app.state::<Strips>().0.lock().unwrap().take() {
+        shared.close();
     }
 }
 
@@ -140,7 +159,7 @@ pub fn active(app: &AppHandle, window: &WebviewWindow) -> bool {
 /// the popup like a click does.
 pub fn open_menu(app: &AppHandle, menu: &str) {
     if let Some(strip) = app.state::<Strips>().current() {
-        let _ = strip.to_page.send(strip_msg::open_script(menu));
+        strip.send(strip_msg::open_script(menu));
     }
 }
 
@@ -163,15 +182,33 @@ pub fn attach(
 ) -> tauri::Result<()> {
     let result = build(app, window, connection);
     if result.is_err() {
-        fallback(window);
+        fallback(window, None);
     }
     result
 }
 
 /// The system title bar and menu bar again, with the dashboard following the
-/// window's size on its own.
-fn fallback(window: &WebviewWindow) {
+/// window's size on its own. The strip webview is closed and forgotten, so no
+/// key or message routes to it any more. `only` names the strip this call is
+/// about: if the window has since been rebuilt with another one, nothing is done.
+fn fallback(window: &WebviewWindow, only: Option<&Arc<Shared>>) {
+    let app = window.app_handle();
+    {
+        let strips = app.state::<Strips>();
+        let mut current = strips.0.lock().unwrap();
+        if let Some(only) = only {
+            if !current.as_ref().is_some_and(|now| Arc::ptr_eq(now, only)) {
+                return;
+            }
+        }
+        if let Some(shared) = current.take() {
+            shared.close();
+        }
+    }
     eprintln!("Werkschaft: Using the system title bar");
+    if let Some(strip) = app.get_webview(LABEL) {
+        let _ = strip.close();
+    }
     let _ = window.set_decorations(true);
     let _ = window.show_menu();
     let dashboard = AsRef::<Webview>::as_ref(window);
@@ -194,6 +231,7 @@ fn build(
     // strip. From here on only `snap::layout` places it. `fallback` hands the
     // sizing back to Tauri.
     AsRef::<Webview>::as_ref(window).set_auto_resize(false)?;
+    window.hide_menu()?;
     let size = window.inner_size()?;
     let logical = size.to_logical::<f64>(window.scale_factor()?);
     let (to_page, from_shell) = mpsc::channel();
@@ -202,7 +240,7 @@ fn build(
             title: window.title()?,
             ..State::default()
         }),
-        to_page,
+        to_page: Mutex::new(Some(to_page)),
     });
     let loaded = shared.clone();
     let background = match window.theme()? {
@@ -226,6 +264,8 @@ fn build(
         LogicalPosition::new(0.0, 0.0),
         LogicalSize::new(logical.width, snap::STRIP_HEIGHT),
     )?;
+    // From here `fallback` can find and close the strip.
+    *app.state::<Strips>().0.lock().unwrap() = Some(shared.clone());
 
     let worker = webview.clone();
     std::thread::spawn(move || {
@@ -241,6 +281,7 @@ fn build(
     })?;
     let owner = window.clone();
     let events = shared.clone();
+    let registered = shared.clone();
     let hwnd = window.hwnd()?.0 as isize;
     webview.with_webview(move |platform| {
         let Some(UiThread(dashboard)) = dashboard.lock().unwrap().take() else {
@@ -266,12 +307,10 @@ fn build(
             if let Err(error) = layout {
                 eprintln!("Werkschaft: Could not lay out the title strip ({error})");
                 // Never inside this callback: the window's state is borrowed.
-                queue(&owner, |window| fallback(&window));
+                queue(&owner, move |window| fallback(&window, Some(&registered)));
             }
         }
     })?;
-    window.hide_menu()?;
-    *app.state::<Strips>().0.lock().unwrap() = Some(shared);
     Ok(())
 }
 

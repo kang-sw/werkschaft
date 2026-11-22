@@ -53,6 +53,9 @@ mod registry {
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 app.state::<Windows>().0.lock().unwrap().remove(&label);
+                if crate::close::checks_draft(&label) {
+                    crate::strip::detach(&app);
+                }
             }
         });
     }
