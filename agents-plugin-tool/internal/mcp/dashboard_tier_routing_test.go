@@ -108,6 +108,9 @@ func TestDashboardTierRoutingViewDraftReferencesAndPins(t *testing.T) {
 	if view.Error != "" {
 		t.Fatalf("draft error: %s", view.Error)
 	}
+	if view.Revision != "" {
+		t.Fatalf("a draft preview names no stored revision, got %q", view.Revision)
+	}
 	review := tierViewNode(t, view, "review")
 	if review.Overrides["small"] != "claude.small" || review.Pointers["*"] != "codex.*" {
 		t.Fatalf("review: %+v", review)
@@ -191,5 +194,39 @@ func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 	}
 	if view, _ := dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"Bad Name":{}}}`), "claude"); view.Error == "" {
 		t.Fatal("unparsable draft accepted")
+	}
+}
+
+// The stored view names the revision of the value it read, the token a save
+// carries back; it moves when the stored graph changes and returns when the
+// graph is removed.
+func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
+	rsrc, opts := dashboardTierFixture(t)
+	revision := func() string {
+		t.Helper()
+		view, err := dashboardTierRoutingView(rsrc, opts, nil, "claude")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, stored, err := wsconfig.LoadTierRoutingRevision(opts)
+		if err != nil || view.Revision == "" || view.Revision != stored {
+			t.Fatalf("view revision %q, stored %q (%v)", view.Revision, stored, err)
+		}
+		return view.Revision
+	}
+	empty := revision()
+	resolver := wsconfig.NewResolver(opts, nil, nil, nil)
+	if err := resolver.SetStructured(wsconfig.ItemAgentTierRouting, json.RawMessage(`{"nodes":{"review":{"*":"codex.*"}}}`), wsconfig.ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	saved := revision()
+	if saved == empty {
+		t.Fatal("the revision did not move with the stored graph")
+	}
+	if err := resolver.UnsetStructured(wsconfig.ItemAgentTierRouting, wsconfig.ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	if again := revision(); again != empty {
+		t.Fatalf("revision after removal = %q, want %q", again, empty)
 	}
 }

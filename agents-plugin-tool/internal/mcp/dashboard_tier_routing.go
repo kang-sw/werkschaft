@@ -24,6 +24,11 @@ type dashboardTierView struct {
 	// Routing is the value the view describes: the stored overrides, or the
 	// draft as parsed (canonical) when it parses.
 	Routing wsconfig.TierRouting `json:"routing"`
+	// Revision identifies the stored value this view read
+	// (wsconfig.TierRoutingRevision); a save carries it back so the daemon
+	// refuses a graph built from a copy that has since changed. Empty for a
+	// draft preview.
+	Revision string `json:"revision,omitempty"`
 	// Error is why the value does not parse or validate; a draft with an
 	// error is refused on save. Empty when the graph is usable.
 	Error      string                `json:"error,omitempty"`
@@ -110,7 +115,7 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 	var routing wsconfig.TierRouting
 	var parseErr error
 	if draft == nil {
-		routing, parseErr = wsconfig.LoadTierRouting(opts)
+		routing, view.Revision, parseErr = wsconfig.LoadTierRoutingRevision(opts)
 	} else {
 		routing, parseErr = wsconfig.ParseTierRouting(draft)
 	}

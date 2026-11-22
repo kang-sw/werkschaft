@@ -151,7 +151,7 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     const chain = JSON.parse(JSON.stringify(v.routing));
     for (let i = 1; i <= 6; i++) chain.nodes['h' + i] = { '*': 'h' + (i + 1) + ':*' };
     chain.nodes.h7 = {};
-    const seeded = await page.request.post(origin + '/api/config/set', { headers: { Origin: origin }, data: { scope: 'global', key: 'agent.tier_routing', value: chain } });
+    const seeded = await page.request.post(origin + '/api/config/set', { headers: { Origin: origin }, data: { scope: 'global', key: 'agent.tier_routing', value: chain, revision: v.revision } });
     assert.equal(seeded.status(), 200, await seeded.text());
     await page.reload();
     await openSettings();
@@ -265,6 +265,78 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     await modal.locator('.tr-modal-x').click();
     assert.equal((await view()).bundles.some(b => b.name === 'late'), false);
     console.log('stale: a late preview of an older draft is dropped');
+
+    // 8d. A save built from a graph another tab has since changed is refused
+    // and nothing is written: this tab opens the delete of an unreferenced
+    // bundle, another tab points a node at it, this tab confirms.
+    const otherTab = async mutate => {
+      const current = await view();
+      const routing = JSON.parse(JSON.stringify(current.routing));
+      mutate(routing);
+      const wrote = await page.request.post(origin + '/api/config/set', { headers: { Origin: origin }, data: { scope: 'global', key: 'agent.tier_routing', value: routing, revision: current.revision } });
+      assert.equal(wrote.status(), 200, await wrote.text());
+    };
+    await otherTab(r => { r.bundles.spare = { harness: 'codex', model: 'gpt-5.5-mini' }; });
+    reread = responded('/api/config/tier-routing');
+    await card.locator('[data-tier-caller=claude]').click();
+    await reread;
+    shown = responded('/api/config/tier-routing/preview');
+    await card.locator('[data-id="b:spare"]').click();
+    modal = frame.locator('dialog[data-tier-modal=bundle]');
+    await modal.waitFor();
+    await shown;
+    await otherTab(r => { r.nodes['uses-spare'] = { '*': 'spare' }; });
+    const refused = page.waitForResponse(r => new URL(r.url()).pathname === '/api/config/set');
+    reread = responded('/api/config/tier-routing');
+    await modal.locator('.tr-delete').click();
+    assert.equal((await refused).status(), 409);
+    await reread;
+    await page.waitForTimeout(150);
+    assert.match(await modal.locator('.tr-modal-err').textContent(), /changed since it was loaded/);
+    assert.equal(await modal.locator('.tr-delete').isDisabled(), true, 'the stale modal cannot write again');
+    v = await view();
+    assert.ok(v.bundles.some(b => b.name === 'spare'), 'the bundle survives the stale delete');
+    assert.deepEqual(nodeOf(v, 'uses-spare').pointers, { '*': 'spare' }, "the other tab's pointer survives");
+    await modal.locator('.tr-modal-x').click();
+    assert.match(await card.locator('.tr-notice').textContent(), /changed since it was loaded/);
+    shown = responded('/api/config/tier-routing/preview');
+    await card.locator('[data-id="b:spare"]').click();
+    modal = frame.locator('dialog[data-tier-modal=bundle]');
+    await modal.waitFor();
+    await shown;
+    await modal.locator('.tr-delete').click();
+    assert.match(await modal.locator('.tr-modal-err').textContent(), /Still referenced by uses-spare · \*/, 'the reloaded graph knows the new reference');
+    await modal.locator('.tr-modal-x').click();
+    await otherTab(r => { delete r.nodes['uses-spare']; delete r.bundles.spare; });
+    console.log('concurrent: a save from a stale graph is refused, reloads, and loses nothing');
+
+    // 8e. Graph reads answer out of order: a slow read for an earlier caller
+    // harness does not undo a later switch.
+    let releaseRead;
+    const heldRead = new Promise(resolve => { releaseRead = resolve; });
+    const claudeRead = url => url.pathname === '/api/config/tier-routing' && url.searchParams.get('harness') === 'claude';
+    await page.route(claudeRead, async route => { await heldRead; await route.continue(); });
+    const slow = page.waitForRequest(r => claudeRead(new URL(r.url())));
+    await card.locator('[data-tier-caller=claude]').click();
+    await slow;
+    reread = page.waitForResponse(r => new URL(r.url()).searchParams.get('harness') === 'codex');
+    await card.locator('[data-tier-caller=codex]').click();
+    await reread;
+    await card.locator('[data-tier-caller-terminal=codex]').waitFor();
+    const lateRead = page.waitForResponse(r => claudeRead(new URL(r.url())));
+    releaseRead();
+    await lateRead;
+    await page.waitForTimeout(200);
+    await page.unroute(claudeRead);
+    assert.equal(await card.locator('[data-tier-caller-terminal=codex]').count(), 1, 'the late claude read is dropped');
+    assert.equal(await card.locator('[data-tier-caller=codex]').getAttribute('aria-pressed'), 'true');
+    await card.locator('[data-tier-node=ticket-worker]').hover();
+    assert.match((await chips(card.locator('.tr-trace'))).at(-1), /codex\.medium · caller/);
+    reread = responded('/api/config/tier-routing');
+    await card.locator('[data-tier-caller=claude]').click();
+    await reread;
+    await card.locator('[data-tier-caller-terminal=claude]').waitFor();
+    console.log('order: a late graph read for an earlier caller is dropped');
 
     // 9. After a reload the drawn graph and traces match the daemon's.
     await page.reload();

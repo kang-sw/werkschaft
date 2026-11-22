@@ -10,7 +10,9 @@
 // pointer to the same harness. An edit becomes a draft the daemon previews
 // (POST .../preview) before it can be saved through /api/config/set, which
 // validates again; cycles and the hop limit show inline and leave the
-// stored graph in force. The graph is global-only (one graph for every
+// stored graph in force. A save carries the revision of the graph it was
+// built from, and the daemon refuses it once that graph has changed (another
+// tab saved meanwhile), so a stale copy never replaces a newer graph. The graph is global-only (one graph for every
 // worktree). A node or bundle that pointers still reference cannot be
 // deleted; the editor lists those references instead.
 (function () {
@@ -177,7 +179,7 @@
   }
 
   function render(ctx) {
-    const state = { view: null, harness: storedCaller(), focus: "", failure: "", resetArmed: false };
+    const state = { view: null, harness: storedCaller(), focus: "", failure: "", notice: "", resetArmed: false };
     const card = el("section", "sgroup tr-card");
     card.dataset.configKey = ctx.entry.key;
     card.dataset.tierRouting = "1";
@@ -195,11 +197,16 @@
     const body = el("div", "tr-body");
     card.append(head, body);
     let observer = null;
+    // loads counts graph reads: only the latest one may replace the view, so
+    // a slow answer for an earlier caller harness cannot undo a later switch.
+    let loads = 0;
     load();
     return card;
 
     async function load() {
+      const mine = ++loads;
       const result = await call("/api/config/tier-routing?harness=" + encodeURIComponent(state.harness || ""));
+      if (mine !== loads) return;
       if (!result.ok) {
         state.failure = result.code;
         draw();
@@ -232,6 +239,11 @@
       status.className = "tr-status " + (view.error ? "bad" : "ok");
       status.textContent = view.error ? tr("js.settings.tier_routing.invalid", view.error) : tr("js.settings.tier_routing.valid", plan.max, view.max_hops);
       body.append(toolbar(view));
+      if (state.notice) {
+        const notice = el("p", "inline-warn tr-notice", state.notice);
+        notice.setAttribute("role", "alert");
+        body.append(notice);
+      }
       if (view.collisions.length) {
         const warn = el("div", "inline-warn tr-collisions");
         warn.append(el("b", "", tr("js.settings.tier_routing.collisions")), el("span", "", " " + view.collisions.join("; ")));
@@ -274,7 +286,7 @@
             if (!state.resetArmed) { state.resetArmed = true; reset.textContent = tr("js.settings.tier_routing.reset_confirm"); return; }
             state.resetArmed = false;
             reset.disabled = true;
-            const saved = await save({}, null);
+            const saved = await save({}, view.revision, null);
             if (!saved) reset.disabled = false;
           });
           bar.append(reset);
@@ -679,7 +691,7 @@
       const preview = previewer(build, function (result, problem, built) {
         traceRows.replaceChildren();
         pending = null;
-        m.fail(problem || (result && result.error) || "");
+        m.fail(problem || (result && result.error) || (m.stale ? state.notice : ""));
         // An invalid draft has no traces: the error box says why once.
         const subject = result && !result.error && result.nodes.find(function (n) { return n.name === built.name; });
         if (subject) {
@@ -691,14 +703,14 @@
         }
         const unchanged = built && built.value && same(built.value, stored);
         if (result && !result.error && !unchanged) pending = built;
-        saveBtn.disabled = readOnly || !pending;
+        saveBtn.disabled = readOnly || m.stale || !pending;
       });
       function changed() { pending = null; saveBtn.disabled = true; preview(); }
       async function commit(value) {
         saveBtn.disabled = true;
-        const saved = await save(value, m);
+        const saved = await save(value, view.revision, m);
         if (saved) m.dialog.close();
-        else saveBtn.disabled = !pending;
+        else saveBtn.disabled = m.stale || !pending;
       }
       m.dialog.showModal();
       preview();
@@ -771,19 +783,19 @@
       const preview = previewer(build, function (result, problem, built) {
         traceRows.replaceChildren();
         pending = null;
-        m.fail(problem || (result && result.error) || "");
+        m.fail(problem || (result && result.error) || (m.stale ? state.notice : ""));
         const subject = result && !result.error && result.bundles.find(function (b) { return b.name === built.name; });
         if (subject) traceRows.append(routeChips(subject.route, ""));
         const unchanged = built && built.value && same(built.value, stored);
         if (result && !result.error && !unchanged) pending = built;
-        saveBtn.disabled = readOnly || !pending;
+        saveBtn.disabled = readOnly || m.stale || !pending;
       });
       function changed() { pending = null; saveBtn.disabled = true; preview(); }
       async function commit(value) {
         saveBtn.disabled = true;
-        const saved = await save(value, m);
+        const saved = await save(value, view.revision, m);
         if (saved) m.dialog.close();
-        else saveBtn.disabled = !pending;
+        else saveBtn.disabled = m.stale || !pending;
       }
       m.dialog.showModal();
       preview();
@@ -791,20 +803,32 @@
     }
 
     // save stores draft as the whole graph (an empty draft resets the key
-    // so the packaged defaults apply) and reloads the daemon's view. A
-    // refusal shows the daemon's reason in the modal and keeps the stored
-    // graph in force.
-    async function save(draft, m) {
+    // so the packaged defaults apply) and reloads the daemon's view. base is
+    // the revision of the view the draft was built from. A refusal shows the
+    // daemon's reason in the modal and keeps the stored graph in force; a
+    // stale base (the graph changed since) also reloads the graph, keeps the
+    // reason on the card, and locks the modal's writes, since its draft was
+    // built from the old graph.
+    async function save(draft, base, m) {
       const empty = !Object.keys(draft).length;
-      const request = { scope: "global", target: "", context: { worktree: "", session: "" }, key: ctx.entry.key, selectors: {} };
+      const request = { scope: "global", target: "", context: { worktree: "", session: "" }, key: ctx.entry.key, selectors: {}, revision: base || "" };
       if (!empty) request.value = draft;
       const result = await call("/api/config/" + (empty ? "reset" : "set"), request);
       if (!result.ok) {
         const why = result.error || tr("js.settings.error." + result.code);
         if (m) m.fail(why);
         else { status.className = "tr-status bad"; status.textContent = why; }
+        if (result.code === "stale_revision") {
+          state.notice = why;
+          if (m) {
+            m.stale = true;
+            m.foot.querySelectorAll(".tr-save, .tr-delete, .tr-reset-node").forEach(function (b) { b.disabled = true; });
+          }
+          await load();
+        }
         return false;
       }
+      state.notice = "";
       if (ctx.onSaved) ctx.onSaved(result.json);
       await load();
       return true;

@@ -56,6 +56,10 @@ type configRequest struct {
 	Key       string            `json:"key"`
 	Selectors map[string]string `json:"selectors"`
 	Value     json.RawMessage   `json:"value"`
+	// Revision is the agent.tier_routing revision the edited graph was read
+	// at (the graph view's revision); required for that key, ignored for
+	// every other key.
+	Revision *string `json:"revision,omitempty"`
 }
 
 type configWarning struct {
@@ -82,6 +86,11 @@ var (
 	configForbidden     = configError{403, "forbidden", "Settings require local dashboard access."}
 	configUnsupported   = configError{409, "scope_unsupported", "This setting cannot be changed in the selected scope."}
 	configUnavailable   = configError{500, "config_error", "The configuration could not be loaded or saved."}
+	// The graph editor saves a whole graph built from the copy it loaded;
+	// these refuse a save that does not name that copy's revision or whose
+	// copy is no longer the stored one, so a concurrent edit is never lost.
+	tierRoutingNoRevision = configError{400, "invalid_request", "Saving agent.tier_routing needs the revision of the graph it edits. Reload the graph and apply the edit again."}
+	tierRoutingStale      = configError{409, "stale_revision", "The tier routing graph changed since it was loaded. Nothing was saved; the graph has been reloaded, so apply the edit again."}
 )
 
 func writeConfigError(w http.ResponseWriter, failure configError) {
@@ -384,10 +393,27 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	graph := mutation.Key == wsconfig.ItemAgentTierRouting
+	if graph {
+		// Hold the revision check through the write, so two saves from the
+		// same revision cannot both pass it.
+		d.tierRoutingMu.Lock()
+		defer d.tierRoutingMu.Unlock()
+	}
 	layers, writer, key, failure := d.configLayers(resolved)
 	if failure.status != 0 {
 		writeConfigError(w, failure)
 		return
+	}
+	if graph {
+		if request.Revision == nil {
+			writeConfigError(w, tierRoutingNoRevision)
+			return
+		}
+		if *request.Revision != wsconfig.TierRoutingRevision(layers.Files[wsconfig.ScopeGlobal]) {
+			writeConfigError(w, tierRoutingStale)
+			return
+		}
 	}
 	if err := mutation.Apply(request.Scope, resolved.opts, key, writer); err != nil {
 		writeConfigError(w, configUnavailable)

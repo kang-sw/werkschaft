@@ -2,6 +2,8 @@ package wsconfig
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -699,15 +701,42 @@ func sortedKeys[V any](m map[string]V) []string {
 // LoadTierRouting reads agent.tier_routing from the global config file; a
 // project or repo file never supplies it. Absent is the zero value.
 func LoadTierRouting(opts Options) (TierRouting, error) {
+	routing, _, err := LoadTierRoutingRevision(opts)
+	return routing, err
+}
+
+// LoadTierRoutingRevision is LoadTierRouting plus the stored value's
+// revision (TierRoutingRevision) from the same read. The revision is set
+// whenever the file was read, even when the stored value does not parse.
+func LoadTierRoutingRevision(opts Options) (TierRouting, string, error) {
 	cfg, err := loadGlobalConfig(opts)
 	if err != nil {
-		return TierRouting{}, err
+		return TierRouting{}, "", err
 	}
+	revision := TierRoutingRevision(cfg)
 	raw, ok := cfg.StructuredOverrides[ItemAgentTierRouting]
 	if !ok {
-		return TierRouting{}, nil
+		return TierRouting{}, revision, nil
 	}
-	return ParseTierRouting(raw)
+	routing, err := ParseTierRouting(raw)
+	return routing, revision, err
+}
+
+// TierRoutingRevision identifies the agent.tier_routing value stored in cfg
+// (the global file's layer): a hash of its compacted bytes, or of nothing
+// when no value is stored. A whole-graph writer that edited a value read at
+// one revision compares it with the current one before it writes, so an
+// edit made from a stale copy cannot silently replace a newer graph.
+func TierRoutingRevision(cfg Config) string {
+	var compacted bytes.Buffer
+	if raw, ok := cfg.StructuredOverrides[ItemAgentTierRouting]; ok {
+		compacted.WriteByte('=')
+		if json.Compact(&compacted, raw) != nil {
+			compacted.Write(raw)
+		}
+	}
+	sum := sha256.Sum256(compacted.Bytes())
+	return hex.EncodeToString(sum[:16])
 }
 
 // LoadTierAliases reads agent.tier_aliases (global-only) for opts.

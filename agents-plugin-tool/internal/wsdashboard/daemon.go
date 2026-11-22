@@ -250,8 +250,11 @@ type Daemon struct {
 	// auth holds bounded, ephemeral login codes and the exchange rate window.
 	auth      localhostAuth
 	clipboard clipboardWriter
-	memoMu    sync.Mutex      // serializes daemon-local memo read/modify/write
-	planUsage *planUsageStore // daemon-private account usage, never credentials
+	memoMu    sync.Mutex // serializes daemon-local memo read/modify/write
+	// tierRoutingMu serializes agent.tier_routing saves from revision check
+	// to write (handleConfigMutation).
+	tierRoutingMu sync.Mutex
+	planUsage     *planUsageStore // daemon-private account usage, never credentials
 	// pprof serves the pprof routes (pprofHandler).
 	pprof bool
 	// buildTime is the build time /health reports; zero is unknown.
