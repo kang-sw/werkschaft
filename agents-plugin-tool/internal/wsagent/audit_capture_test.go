@@ -878,6 +878,43 @@ func TestClaudeAuditTotalLossMarksTheThinking(t *testing.T) {
 	}
 }
 
+// TestAuditPendingTeesAreBounded pins the bound on tee lines held for an
+// interval no fence closed yet: past auditPendingBytes the tee stream closes
+// as incomplete (what was held is assembled, the rest of the interval is
+// lost), and the next fence reopens it, so the following block is whole.
+func TestAuditPendingTeesAreBounded(t *testing.T) {
+	restore := auditPendingBytes
+	auditPendingBytes = 1000
+	t.Cleanup(func() { auditPendingBytes = restore })
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	for i := 0; i < 40; i++ {
+		r.tee(thinkDelta(fmt.Sprintf("d%02d ", i)))
+	}
+	r.keptRun(thinkStop, 40, 0)
+	r.keptRun(thinkLine, 0, 0)
+	// The next message's block, after the fence reopened the stream.
+	r.keptRun(`{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_2"}}}`, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("whole"))
+	r.keptRun(thinkStop, 1, 0)
+	r.keptRun(`{"type":"assistant","message":{"id":"msg_2","content":[{"type":"thinking","thinking":"","signature":"sig"}]}}`, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 2 {
+		t.Fatalf("thinking = %+v", th)
+	}
+	if th[0].Meta[wsaudit.MetaIncomplete] != true || !strings.HasPrefix(th[0].Out, "d00 d01 ") || strings.Contains(th[0].Out, "d39") {
+		t.Fatalf("first thinking = %.300v, want the held deltas, cut short and incomplete", th[0])
+	}
+	if th[1].Out != "whole" || th[1].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("second thinking = %+v, want it whole after the fence reopened the stream", th[1])
+	}
+}
+
 // TestAuditSlowOrFailingSinkNeverDelaysLineDelivery pins the non-blocking
 // tap: a sink that blocks, or one that fails every append, never delays the
 // display stream; the queue's overflow is recorded as loss once it drains.

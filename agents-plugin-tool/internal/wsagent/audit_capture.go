@@ -81,6 +81,13 @@ const (
 // releases it; a test shortens it.
 var auditFenceWait = 2 * time.Second
 
+// auditPendingBytes bounds the tee lines held for intervals no fence closed
+// yet. Without a kept line nothing waits on them, so no timer runs; one
+// thinking or tool-input block can legitimately stream skipped deltas for
+// minutes. Past the bound the tee stream closes as incomplete (queue_full)
+// until the next fence reopens it. A test shortens it.
+var auditPendingBytes = 32 << 20
+
 type auditItemKind uint8
 
 const (
@@ -161,9 +168,11 @@ type auditCapture struct {
 	// been), in anchor order; held the kept lines waiting for a fence or for
 	// an earlier interval. stuckAt is when they last stopped draining.
 	pending map[uint64][]wsholder.Event
-	ready   []auditInterval
-	held    []auditItem
-	stuckAt time.Time
+	// pendingBytes is the tee data held in pending.
+	pendingBytes int
+	ready        []auditInterval
+	held         []auditItem
+	stuckAt      time.Time
 	// boundary is the highest kept sequence mapped, finalized the last one
 	// reported to the sink.
 	boundary  uint64
@@ -367,6 +376,11 @@ func (c *auditCapture) handle(it auditItem) {
 			ev.At = it.at.UnixNano()
 		}
 		c.pending[a] = append(c.pending[a], ev)
+		c.pendingBytes += len(ev.Data)
+		if c.pendingBytes > auditPendingBytes {
+			c.closeTee(wsaudit.LossQueueFull)
+			return
+		}
 		c.pump()
 	case auditItemFence:
 		f := it.ev
@@ -400,11 +414,9 @@ func (c *auditCapture) handle(it auditItem) {
 		}
 		sort.Slice(lost, func(i, j int) bool { return lost[i] < lost[j] })
 		for _, a := range lost {
-			c.ready = append(c.ready, auditInterval{anchor: a, tees: c.pending[a], unfenced: true, reason: wsaudit.LossDropped})
-			delete(c.pending, a)
+			c.ready = append(c.ready, auditInterval{anchor: a, tees: c.takePending(a), unfenced: true, reason: wsaudit.LossDropped})
 		}
-		c.ready = append(c.ready, auditInterval{anchor: f.Anchor, tees: c.pending[f.Anchor], sent: f.Sent, dropped: f.Dropped})
-		delete(c.pending, f.Anchor)
+		c.ready = append(c.ready, auditInterval{anchor: f.Anchor, tees: c.takePending(f.Anchor), sent: f.Sent, dropped: f.Dropped})
 		c.fenced, c.anyFence = f.Anchor, true
 		if !f.Final && f.Through > c.through {
 			c.through = f.Through
@@ -430,6 +442,17 @@ func (c *auditCapture) handle(it auditItem) {
 		c.live = false
 		c.closeTee(wsaudit.LossDisconnect)
 	}
+}
+
+// takePending removes and returns the pending tee lines of the interval
+// after anchor.
+func (c *auditCapture) takePending(anchor uint64) []wsholder.Event {
+	tees := c.pending[anchor]
+	delete(c.pending, anchor)
+	for _, t := range tees {
+		c.pendingBytes -= len(t.Data)
+	}
+	return tees
 }
 
 // pump maps, in source order, what the fences have released: a ready
@@ -515,6 +538,7 @@ func (c *auditCapture) closeTee(reason string) {
 		c.ready = append(c.ready, auditInterval{anchor: a, tees: tees, unfenced: true, reason: reason})
 	}
 	clear(c.pending)
+	c.pendingBytes = 0
 	sort.SliceStable(c.ready, func(i, j int) bool { return c.ready[i].anchor < c.ready[j].anchor })
 	c.teeOn = false
 	// A tee line sits after the kept line it is anchored on.
