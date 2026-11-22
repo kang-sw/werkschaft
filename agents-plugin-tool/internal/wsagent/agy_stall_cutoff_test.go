@@ -279,9 +279,14 @@ func TestAgyStallCutoffContentAfterBoundaryNeverCuts(t *testing.T) {
 	if r.armed() {
 		t.Fatal("model content left the silence timer running")
 	}
-	// Even a log without the header changes nothing once content arrived.
+	// Even a log without the header changes nothing once content arrived,
+	// including a firing that raced the content (the disarmed timer's
+	// channel is no longer read, so the handler runs directly).
 	r.baseLog()
-	r.fireSilence(10 * time.Minute)
+	r.clock.advance(10 * time.Minute)
+	c := r.conv()
+	c.do(func() { c.modelWaitTimedOut() })
+	r.sync()
 	if got, spent := r.cancels(), r.retries(); got != 0 || spent != 0 {
 		t.Fatalf("content then silence: cancels=%d retries=%d, want none", got, spent)
 	}
