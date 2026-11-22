@@ -647,3 +647,183 @@ for the owner to decide, without fixed thresholds. Record the evidence and
 the owner’s release decision in the phase Result. After P4 passes, re-home
 the overlapping reliability and Windows delivery work from
 `261115-feat-werkschaft-electron-shell` Phases 2–4 to Tauri.
+
+#### Windows smoke evidence - 2026-11-22
+
+**VERIFIED — Scope and host.** Owner decision (2082)=a authorized the
+existing Windows smoke account. The run used
+`C:\Users\ki608\ws-wintest\run-tauri-p4-20261122T083003KST` on
+`DESKTOP-3SUVUA9`. `Win32_OperatingSystem` and the Windows version
+registry values reported Windows 11 Pro 25H2, build 26200.9974, with
+16 logical CPUs. `msedgewebview2.exe` reported Evergreen 157.0.4341.60.
+CDP `/json/version` reported Edge 157.0.4341.60 in Tauri and Chromium
+152.0.7977.169 in Electron.
+
+**VERIFIED — Build and isolation.** The SSH Session 0 launch logged WebView2
+HRESULT `0x80070578`. The native checks ran in interactive Session 3 using
+temporary tasks with the existing account. `GetFolderPath('LocalApplicationData')`
+returned the real Local AppData even with `LOCALAPPDATA` and `USERPROFILE`
+overrides. The optimized Tauri benchmark build used `d9bcf101e`, Rust 1.95.0,
+and Tauri's `appDirectoriesOverride` directed into the run folder.
+`WEBVIEW2_USER_DATA_FOLDER` and Electron's `--user-data-dir` also pointed
+inside it. This was a non-release configuration with release-mode DevTools
+and unsigned installers. The comparison Electron executable came from the
+shipped win32 x64 v0.50.8 ZIP, verified against its accompanying SUMS.
+[Shipped Electron release](https://github.com/kang-sw/werkschaft/releases/tag/v0.50.8)
+
+The initial sandboxed probe,
+`ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes ki608@192.168.33.6 hostname`,
+exited 255 with `ssh: connect to host 192.168.33.6 port 22: Operation not permitted`.
+The identical command through the approved escalation returned
+`DESKTOP-3SUVUA9`. The first interactive task launch reported
+`0xC0000142`. Subsequent tasks specified Session 3 through Task Scheduler
+`RunEx`. [Microsoft Task Scheduler RunEx](https://learn.microsoft.com/en-us/windows/win32/taskschd/registeredtask-runex)
+
+**VERIFIED — Size, bytes.** Installed means logical app payload bytes with
+the daemon resources included or excluded. It excludes OS WebView2, user
+data, install registration, and installer-generated uninstaller files.
+NSIS payload counts came from `7z x` of the executable and daemon entries.
+Windows Installer's read-only `SELECT FileSize FROM File` agreed for MSI.
+The Electron without-daemon variant repacked the ASAR and the ZIP after
+removing the daemon. NSIS and MSI used the same Tauri binary and the same
+installer configuration in each pair, with the daemon resource mapping
+removed for the second bundle. Download numbers are file lengths, including
+the Evergreen bootstrapper where packaged.
+
+| Measure | Daemon | Tauri | Electron v0.50.8 | Tauri − Electron |
+|---|---|---:|---:|---:|
+| Installed app payload | Included | 67,232,265 | 424,880,653 | −357,648,388 |
+| Installed app payload | Excluded | 14,415,360 | 385,619,405 | −371,204,045 |
+| NSIS vs Electron ZIP download | Included | 24,523,509 | 173,635,745 | −149,112,236 |
+| NSIS vs Electron ZIP download | Excluded | 5,357,610 | 158,173,260 | −152,815,650 |
+| MSI vs Electron ZIP download | Included | 31,293,113 | 173,635,745 | −142,342,632 |
+| MSI vs Electron ZIP download | Excluded | 7,110,656 | 158,173,260 | −151,062,604 |
+
+The Tauri daemon resource tree contained 113 files totaling 52,816,905
+bytes. The shipped Electron daemon tree was 39,230,192 bytes. A second
+Electron build from the same source checkout and with the exact Tauri daemon
+tree gave 438,487,619 / 385,637,982 installed bytes and
+182,453,048 / 158,184,743 ZIP bytes with and without the daemon.
+Against that exact-daemon package, Tauri's installed deltas were
+−371,255,354 / −371,222,622 bytes. Its NSIS deltas were
+−157,929,539 / −152,827,133 bytes.
+
+**VERIFIED — Common runtime workload.** Both shells attached to the same
+loopback daemon on port 39517, PID 17212, created at
+`2026-11-21T23:44:47.8228590Z` with SHA-256
+`c892b3477b3906dfdd5e5e49c5b97f541e9e75aff93e0f15c9eaa409f60182ef`.
+The synthetic board contained eight topics with 12 formatted paragraphs
+each, 16 open checks, and 180 alternating conversation entries. The
+dashboard rendered 50 initial entries and reported the same asset ID
+`8af428b6d4e76a34` in both engines. The active same-origin session frame
+used an emulated 1080 × 650 CSS-pixel viewport at 1× scale. Both shells used
+the same three Chromium background-throttling switches and no open DevTools.
+Electron reported `document.hasFocus() === false` before composer focus and
+still delivered all 30 trusted input events.
+
+**VERIFIED — Working set, MiB.** For each shell, three CIM
+`Win32_Process.WorkingSetSize` snapshots began 0.9–1.0 s after the idle
+or active marker and continued about once per second. Idle followed 90
+baseline display-frame intervals. Active began with the first wheel input.
+The table uses the median across each three-snapshot series. Tauri's
+subtotal covers its app and associated WebView2 processes, seven total.
+Electron's subtotal covers its app and matching descendants, six total.
+The daemon appears separately. The sum of working sets can count shared
+resident pages in each process that maps them. The daemon values are
+observations of one continuing daemon, measured at different times.
+
+| Median working set | Tauri | Electron | Tauri − Electron |
+|---|---:|---:|---:|
+| Shell and webview, idle | 522.65 | 584.37 | −61.72 |
+| Shell and webview, active | 534.14 | 619.29 | −85.15 |
+| Daemon, idle | 75.69 | 92.10 | −16.41 |
+| Daemon, active | 75.60 | 92.15 | −16.55 |
+
+**VERIFIED — Rendering and input.** The CDP driver sent 60 mouse-wheel
+events at 100 ms intervals into the conversation pane, 30 at +80 CSS px
+and 30 at −64 CSS px. It entered one character from
+`phase four benchmark typing text` every other event into the composer
+without submitting. Each run received 30 trusted input events and ended
+480 CSS px below its initial scroll position. Frame intervals came from
+`requestAnimationFrame` in the session frame. Input latency measures the
+browser input event timestamp to its next animation-frame callback.
+
+| Measure | Tauri | Electron | Tauri − Electron |
+|---|---:|---:|---:|
+| Idle frame interval median / p95, ms | 17.8 / 18.3 | 17.7 / 18.2 | +0.1 / +0.1 |
+| Active frame interval median / p95, ms | 17.7 / 18.2 | 17.7 / 18.3 | 0.0 / −0.1 |
+| Longest active frame interval, ms | 338.2 | 139.8 | +198.4 |
+| Active gaps over 1.5× median idle interval | 2 of 329 | 1 of 348 | +1 gap |
+| Input-to-next-frame median / p95, ms | 14.8 / 15.5 | 14.9 / 15.8 | −0.1 / −0.3 |
+
+The raw records are in the run folder's `evidence/` directory.
+`OfficialPair.log` records the console session and launches.
+`{tauri,electron}-OfficialPair-memory.jsonl` records each process's path,
+creation time, and bytes. The matching `-render.json` files contain the
+individual frame intervals and input observations.
+
+**INFERRED — Measurement limits.** These are results from one sequential
+pair on one host. The comparable p95 values and isolated long gaps describe
+this workload. The input estimate does not measure hardware-to-display
+latency, and frame gaps do not provide a compositor dropped-frame count.
+
+**VERIFIED — Windows pass list.** `Parity2.log`, `Parity3.log`,
+`Parity4.log`, `job-check3.log`, and `job-check4.log` hold the run
+receipts. Each partial result applies to the isolated benchmark build.
+
+| Row | Status | Evidence and remaining prerequisites |
+|---|---|---|
+| (a) Daemon and cookie injection | **PASS** | Tauri's cold launch logged `WS_DAEMON_BREAKAWAY_DENIED=5`, retried, and opened the authenticated dashboard on port 39517. The same fallback PID survived several shell X-closes. In a controlled job the matching daemon start returned the same refusal, retried in the job, and the verified fallback exited when that job ended. The permissive job test started the independent daemon outside its launching job and it survived job termination. A separate independent start survived SSH exit, authenticated a fresh WebView2 profile, and kept serving after X-close. |
+| (b) Drag/drop and clipboard | **FAIL** | The dashboard received a trusted HTML5 drop with one PNG and rendered it. A synthetic clipboard image paste also rendered. The native Connection menu returned **Could not copy browser login link** and the clipboard still reported zero formats. The cause of the copy failure is unverified. Ordinary OS copy/paste is **DEFERRED** until the test window can safely receive physical input on an isolated clipboard. |
+| (c) Local origin, frame and popup guard | **FAIL** | The bundled `http://tauri.localhost/index.html` and pinned same-origin dashboard frame loaded. A blocked popup returned null and left the target count at one. With dashboard CSP active, the alternate listener returned 200 to its positive control and received no frame request. With CSP bypassed on the disposable fixture to test the native guard alone, the listener received an iframe request on `/p4-canary-native`. It recorded no frame commit or document execution. A repeated probe before this reproduced the network observation without recording the request path. |
+| (d) Menus, shortcuts, and X-close | **DEFERRED in part** | Native File, Edit, Window, Help, Connection and View menus were present. Menu zoom changed the reported ratio 1.25 → 1.375 → 1.25 and Actual Size restored 1.25. Opening DevTools from View created a DevTools target. A forced recovery refusal showed the native prompt and Stay dismissed it. Normal X-close exited and reopening recovered text and one image. Windows refused the harness's foreground ownership check for physical zoom and DevTools shortcuts. Those keys need a focused, attended console or disposable interactive account. |
+| (e) Installers and updater | **DEFERRED (2082)=a** | NSIS and MSI bundle generation and payload inspection passed. Signing, native install, updater restart, recovery and antivirus file-lock acceptance still need an isolated registered installation on a disposable account or VM. The exact signed executable uses Windows Known Folders for app-local data. Phase 3's signed NSIS exercise remains recorded above. |
+
+The independent and fallback job receipts exercised the same
+`daemon-start --desktop-start --start-wait 13s --require-independent-lifetime`
+entry point invoked by Tauri, supplying JSON `null` on stdin. The normal
+CSP frame probe and the native-only probe distinguish renderer policy from
+the native `FrameNavigationStarting` cancellation in
+`agents-plugin-tool/desktop/src/windows.rs:59`. The test established an
+HTTP request on one native-only attempt and no evidence of an alternate
+document commit. **INFERRED** — WebView2 may dispatch the request before
+native cancellation takes effect. Request and cancellation ordering remains
+unverified.
+[Microsoft WebView2 navigation events](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/navigation-events)
+
+**DEFERRED (2082)=a — Windows operations.** Use a disposable Windows
+account or VM for signed NSIS/MSI upgrade, restart, exact canary-to-stable
+downgrade, failed install and retry, and packaged Electron migration with
+a retained populated profile. Use a next-patch signed evaluation canary for
+stable opt-in and return. Check updater locking during those runs with
+antivirus enabled. Use a supported VM snapshot without Evergreen for the
+bootstrapper and a second account for shared portable-launcher marker
+isolation. The launch-only behavior after a Tauri self-update and the
+oldest Electron no-warning migration remain part of that same packaged
+exercise. For rollout signing requirements, see
+`agents-plugin-tool/desktop/RELEASE.md:157`.
+
+**VERIFIED — Native implementation reference.** Bundled daemon start,
+attach, and the numeric breakaway retry are in
+`agents-plugin-tool/desktop/src/daemon.rs:109` and `:352`. Windows
+navigation and clipboard permission checks are in
+`agents-plugin-tool/desktop/src/windows.rs:59` and `:93`. Native cookie
+validation and login-link handling are in
+`agents-plugin-tool/desktop/src/endpoint.rs:240` and
+`agents-plugin-tool/desktop/src/shell.rs:353`. The release-mode menu is in
+`agents-plugin-tool/desktop/src/main.rs:191`. The macOS Python
+requirement and bundled guide are documented in
+`agents-plugin-tool/desktop/README.md:11` and `:88`.
+
+**VERIFIED — Task cleanup.** The ten temporary task names used the prefix
+`WS-Werkschaft-P4-20261122T083003KST-`. Their suffixes were
+`Benchmark`, `BenchmarkS3`, `Diagnose`, `FrameCheck`, `Pair1`,
+`OfficialPair`, `Parity1`, `Parity2`, `Parity3`, and `Parity4`.
+`task-audit.txt` records registrations and the absent-task checks
+(`schtasks /query` exit 1). The cleanup receipt records the owned daemon
+paths and creation times. `cleanup-verified.txt` reports zero run processes,
+listeners, and scheduled tasks.
+
+The [macOS owner checklist](../assets/261121-feat-werkschaft-tauri-shell-return/phase-4-macos-owner-checklist.md)
+contains the pending WKWebView viability and paired measurement steps.
+Phase 4 remains open.
