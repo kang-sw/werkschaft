@@ -579,7 +579,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-22T16:42:07Z",
         "impl": {
           "branch": "impl/develop/bling-dairy-image"
@@ -596,19 +596,6 @@
         "touched_at": "2026-11-22T11:12:04Z",
         "impl": {
           "branch": "impl/develop/jinx-twice-unlit"
-        }
-      }
-    },
-    "261122-feat-ws-companion-paper-doll": {
-      "registered_at": "2026-11-22T09:59:01Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "active",
-        "touched_at": "2026-11-22T11:12:02Z",
-        "impl": {
-          "branch": "impl/develop/grab-stack-jelly"
         }
       }
     },
