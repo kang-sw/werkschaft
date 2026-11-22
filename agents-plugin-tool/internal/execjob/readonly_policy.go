@@ -64,6 +64,11 @@ func checkReadOnlyArgv(argv []string) error {
 	if !readOnlyPrograms[name] {
 		return refuse("program %q is not an allowed read command", name)
 	}
+	if goruntime.GOOS == "windows" {
+		if err := windowsWordRefusal(argv); err != nil {
+			return err
+		}
+	}
 	switch name {
 	case "git":
 		return checkGit(args)
@@ -115,6 +120,23 @@ func checkReadOnlyArgv(argv []string) error {
 			if shortHas(a, "z") || longExact(a, "pre", "pre-glob", "search-zip") {
 				return refuse("rg %s runs a program", a)
 			}
+		}
+	}
+	return nil
+}
+
+// windowsWordRefusal refuses a word the MSYS runtime would read differently
+// from the checked vector when its parent is a native process: it takes a
+// double quote as an argument boundary (it ignores Python's backslash
+// escape, also inside the Bash -c script) and expands a word starting with @
+// as a response file.
+func windowsWordRefusal(words []string) error {
+	for _, w := range words {
+		if strings.Contains(w, `"`) {
+			return refuse("word %q: a double quote is refused on Windows, where the command line is parsed again by the MSYS runtime", w)
+		}
+		if strings.HasPrefix(w, "@") {
+			return refuse("word %q: a word starting with @ is refused on Windows, where the MSYS runtime reads it as a response file", w)
 		}
 	}
 	return nil

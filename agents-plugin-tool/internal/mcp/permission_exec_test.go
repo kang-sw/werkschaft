@@ -106,6 +106,19 @@ func TestReadOnlyWorkerExecAllowlist(t *testing.T) {
 			if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
 				t.Fatalf("exec.run echo = %v %s", isErr, text)
 			}
+			// A backslash and a space survive intact; on Windows a double
+			// quote and a leading @ are refused (the MSYS runtime parses
+			// the command line again).
+			text, isErr = w.call("exec.run", map[string]any{"exe": "echo", "args": []string{`a\ b`}})
+			if isErr || !strings.Contains(text, "a\\ b\n") {
+				t.Fatalf("exec.run echo a\\ b = %v %s", isErr, text)
+			}
+			for _, word := range []string{`a"b`, "@rsp"} {
+				text, isErr = w.call("exec.run", map[string]any{"exe": "echo", "args": []string{word}})
+				if goruntime.GOOS == "windows" && (!isErr || !strings.Contains(text, "Windows")) {
+					t.Errorf("exec.run echo %q on Windows = %v %s, want a refusal", word, isErr, text)
+				}
+			}
 			text, isErr = w.call("exec.shell", map[string]any{"cmd": `echo '*.md' '$HOME' "a  b"`})
 			if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
 				t.Fatalf("exec.shell echo = %v %s", isErr, text)

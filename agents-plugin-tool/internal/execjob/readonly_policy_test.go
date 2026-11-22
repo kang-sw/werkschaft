@@ -217,3 +217,32 @@ func TestReadOnlyExecutableMustBeAbsoluteNative(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsWordRefusal(t *testing.T) {
+	for _, w := range []string{`say "hi"`, `"`, `a"b`, `@file`, `@`} {
+		if err := windowsWordRefusal([]string{"echo", w}); err == nil {
+			t.Errorf("%q passed", w)
+		}
+	}
+	for _, w := range []string{`a\ b`, "a b", "x@y", "it's", `C:\x`} {
+		if err := windowsWordRefusal([]string{"echo", w}); err != nil {
+			t.Errorf("%q refused: %v", w, err)
+		}
+	}
+	if goruntime.GOOS != "windows" {
+		return
+	}
+	// Both builders apply it to every checked word.
+	root := t.TempDir()
+	if _, err := ReadOnlyArgvLaunch("w", "exec.run", root, root, []string{"echo", `a"b`}, os.Environ(), nil); err == nil {
+		t.Error("exec.run: a word with a double quote passed")
+	}
+	if _, err := ReadOnlyArgvLaunch("w", "exec.run", root, root, []string{"echo", "@rsp"}, os.Environ(), nil); err == nil {
+		t.Error("exec.run: a word starting with @ passed")
+	}
+	for _, line := range []string{`echo 'a"b'`, `echo "a\"b"`, `echo '@rsp'`} {
+		if _, err := readOnlyLine(t, line); err == nil {
+			t.Errorf("%s passed", line)
+		}
+	}
+}
