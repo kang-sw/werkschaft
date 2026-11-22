@@ -155,6 +155,9 @@ test("rail gears preserve native activation and separate it from row actions", (
   const css = read("dashboard-rail.css");
   assert.match(css, /\.r-config-gear \{[^}]*opacity: 0;/);
   assert.match(css, /\.r-config-gear:hover,\n:root\[data-can-control\] \.rail \.r-config-gear:focus-visible,\n:root\[data-can-control\] \.rail \.r-config-gear\[aria-current="page"\] \{ opacity: 1; \}/);
+  assert.match(markup, /<div class="wsbar">[\s\S]*?\{\{template "r-config-gear" \(settingsgear "project" \.SettingsID ""\)\}\}<button type="button" class="memo-count"[\s\S]*?<\/button><span class="ct"/);
+  assert.doesNotMatch(css, /\.rail \.wsbar \.ct \{[^}]*margin-left:\s*auto/);
+  assert.match(css, /:root\[data-can-control\] \.rail \.wsbar > \.r-config-gear,\n:root:not\(\[data-can-control\]\) \.rail \.wsbar > \.r-config-gear \+ \* \{ margin-left: auto; \}/);
 });
 
 test("project rail target survives standalone scope traversal without becoming inspection context", () => {

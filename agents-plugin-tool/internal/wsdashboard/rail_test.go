@@ -1034,6 +1034,45 @@ func TestRailMarkupAddButtonsAndForget(t *testing.T) {
 	}
 }
 
+// TestRailMarkupWsbarButtonOrder pins the right-edge cluster order inside
+// .wsbar: optional approvals chip, hover-revealed project settings gear, memo
+// count pill, and live session count badge immediately following the memo pill.
+func TestRailMarkupWsbarButtonOrder(t *testing.T) {
+	view := RailView{Workspaces: []RailWorkspace{
+		{Name: "plain", Path: "/w/plain", MemoCount: 2, Live: 1},
+		{Name: "approvals", Path: "/w/approvals", Approvals: 3, MemoCount: 0, Live: 4},
+	}}
+	region, err := renderRailRegion(view, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(region.HTML)
+	for _, path := range []string{"/w/plain", "/w/approvals"} {
+		bar, _, ok := strings.Cut(railSection(t, html, path), `<div class="wsbody">`)
+		if !ok {
+			t.Fatalf("%s: missing wsbody boundary", path)
+		}
+		gearIdx := strings.Index(bar, `class="r-config-gear" data-scope-entry="project"`)
+		memoIdx := strings.Index(bar, `<button type="button" class="memo-count"`)
+		memoCloseIdx := -1
+		if memoIdx >= 0 {
+			if rel := strings.Index(bar[memoIdx:], `</button>`); rel >= 0 {
+				memoCloseIdx = memoIdx + rel + len(`</button>`)
+			}
+		}
+		ctIdx := strings.Index(bar, `<span class="ct"`)
+		if gearIdx < 0 || memoIdx < 0 || ctIdx < 0 {
+			t.Fatalf("%s: missing expected wsbar controls (gear=%d memo=%d ct=%d):\n%s", path, gearIdx, memoIdx, ctIdx, bar)
+		}
+		if !(gearIdx < memoIdx && memoIdx < ctIdx) {
+			t.Errorf("%s: wsbar order must be gear -> memo-count -> ct (gear=%d memo=%d ct=%d):\n%s", path, gearIdx, memoIdx, ctIdx, bar)
+		}
+		if memoCloseIdx != ctIdx {
+			t.Errorf("%s: memo-count must immediately precede .ct with no intervening element (memoClose=%d ct=%d):\n%s", path, memoCloseIdx, ctIdx, bar)
+		}
+	}
+}
+
 // TestRailMarkupHostedSessions pins what the rail shows of hosted sessions.
 // On a daemon that hosts them, whether or not it keeps stored workspaces,
 // every worktree row carries the icon-only new-session button right after
