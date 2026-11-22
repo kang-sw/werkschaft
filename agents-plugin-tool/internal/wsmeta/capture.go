@@ -520,14 +520,9 @@ func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) 
 func witnessContent(r legacyRead) string { return r.state + " " + r.digest }
 
 // fileIdentity is the identity of the directory entry at p itself (a link is
-// not followed): the generation token of gen_*.go, which a rename keeps.
-func fileIdentity(p string) (string, error) {
-	info, err := wsstate.Lstat(p)
-	if err != nil {
-		return "", err
-	}
-	return dirGeneration(p, info)
-}
+// not followed), which a rename within the volume keeps (ident_*.go; a test
+// seam).
+var fileIdentity = entryIdentity
 
 // routesThrough reports whether abs is a symbolic link that resolves to
 // wabs, by name (compared without case, so a case-insensitive volume cannot
