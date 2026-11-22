@@ -15,8 +15,10 @@ related:
   261117-feat-ws-hosted-compaction-lifecycle: "consumes the Phase 1 exec.list seam in a later restore-bundle edition"
   261120-feat-ws-agy-timeout-process-respawn: "shares the harness-kill survival fixture first established by exec Phase 1"
   261122-feat-ws-agent-turn-semaphore: "downstream consumer of Phase 1 conversation attribution and completion delivery"
-sage-review-design: required
-sage-review-completeness: required
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 338f16892c5ddf00
+sage-review-completeness-reviewed: 338f16892c5ddf00
 ---
 
 # ws/exec tools

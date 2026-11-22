@@ -6,8 +6,10 @@ related:
   261117-feat-ws-exec-tools: "prerequisite; Phase 1 supplies the authenticated origin and completion steer-or-wake seams"
   261121-bug-ws-agy-reattach-watchdog-sent-input: "agy watchdog recovery and reattached turn boundaries"
   261120-feat-ws-agy-timeout-process-respawn: "agy timeout recovery and process replacement boundaries"
-sage-review-design: required
-sage-review-completeness: required
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: a6b1ef3c13a78477
+sage-review-completeness-reviewed: a6b1ef3c13a78477
 ---
 
 # Agent turn semaphore
