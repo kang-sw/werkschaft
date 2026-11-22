@@ -172,6 +172,13 @@
       "default": 20,
       "default_scope": "global",
       "description": "Maximum calls of the agent companion director in a rolling hour; a trigger over the cap is dropped. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_sources",
+      "type": "string",
+      "default": "",
+      "default_scope": "global",
+      "description": "Companion pack sources the companion settings list for install: a whitespace-separated list of at most 16 https URLs, each a git repository (with an optional #ref) or a zip file holding a marketplace.json. A source is fetched only when the user asks to list, install, or update its packs. An invalid entry is shown as an error and skipped. Only the global value applies."
     }
   ]
 }

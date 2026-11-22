@@ -259,6 +259,7 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 		Attachments: text(wsdashboard.CompanionAttachmentsKey), Palette: text(wsdashboard.CompanionPaletteKey),
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
+		Sources:              text(wsdashboard.CompanionSourcesKey),
 	}, nil
 }
 

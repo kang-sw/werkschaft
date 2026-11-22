@@ -82,7 +82,7 @@ test("settings panel skips companion-modal and deprecated rows and keeps enabled
     "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
     "dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
     "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
-    "dashboard.companion_preset"
+    "dashboard.companion_preset", "dashboard.companion_sources"
   ]);
   // The 0.51.0 companion_mode alias stays declared but no UI renders it.
   const deprecated = catalog.filter(spec => spec.surface === "deprecated").map(spec => spec.key);
@@ -183,7 +183,7 @@ test("the companion modal maps every companion-modal catalog row to a live confi
   const fields = context.window.WsCompanion.companionConfigFields;
   const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
   assert.deepEqual(Object.keys(fields).sort(), modal);
-  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "attachments", "eyes", "hair", "outfit", "pack", "palette", "preset"]);
+  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "attachments", "eyes", "hair", "outfit", "pack", "palette", "preset", "sources"]);
 });
 
 function createFakeDOM() {

@@ -91,6 +91,7 @@ func TestCompanionModalRowsAndShellStrings(t *testing.T) {
 	want := []string{
 		CompanionPackKey, CompanionPresetKey, CompanionOutfitKey, CompanionHairKey, CompanionEyesKey,
 		CompanionAttachmentsKey, CompanionPaletteKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey,
+		CompanionSourcesKey,
 	}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("modal rows = %v, want %v", keys, want)

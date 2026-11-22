@@ -1,0 +1,358 @@
+# Companion pack authoring guide
+
+A companion pack is the art and the character data for the dashboard's
+desktop companion: a `pack.json` file plus the PNG or WebP images it uses.
+This guide shows how to make a pack, how to list packs in a marketplace, how
+to host them, and how to check them before anyone installs them.
+
+A pack is **data only**. It never carries code, and the dashboard never runs
+anything from a pack.
+
+Two JSON Schemas describe the two files you write. They are served next to
+this guide and work with any offline JSON Schema tool (draft 2020-12):
+
+- `pack.schema.json` describes `pack.json` (`ws-companion/v1`).
+- `marketplace.schema.json` describes `marketplace.json`
+  (`ws-companion-marketplace/v1`).
+
+The schemas cover the structure. The dashboard applies more checks (files that
+must exist, sizes, image headers), so also run the import preview described in
+[Validate before you publish](#validate-before-you-publish).
+
+## Pack layout
+
+One pack is one flat directory. The directory name is the pack ID.
+
+```text
+sample-a/
+  pack.json
+  stand.png
+  typing.webp
+  face-happy.png
+```
+
+- `pack.json` is the manifest. Every other file is a `.png` or `.webp` raster
+  that `pack.json` names.
+- There are no sub-directories. File names are plain: letters, digits, `.`,
+  `_` and `-`, starting with a letter or digit, at most 128 characters before the extension,
+  no `..`.
+- The pack ID is 1 to 64 characters: lowercase letters, digits, `-` and `_`,
+  starting with a letter or digit. `default` and `auto` are reserved.
+
+## A minimal pack
+
+Five fields are required: `schema`, `id`, `name`, `canvas`, and `poses` with a
+`stand` pose that has at least one layer. The `id` must equal the directory
+name (and the pack's `id` in the marketplace).
+
+```json example:pack-minimal
+{
+  "schema": "ws-companion/v1",
+  "id": "sample-a",
+  "name": "Sample A",
+  "canvas": [512, 512],
+  "poses": {
+    "stand": { "layers": [{ "file": "stand.png" }] }
+  }
+}
+```
+
+`canvas` is the logical drawing size in pixels, each side from 64 to 2048.
+Layer coordinates, such as `pivot`, use that canvas.
+
+A fuller pack adds optional parts. Every optional key below can be left out.
+
+```json example:pack-full
+{
+  "schema": "ws-companion/v1",
+  "id": "sample-a",
+  "name": "Sample A",
+  "canvas": [512, 512],
+  "autoMatch": { "harnesses": ["example-harness"], "models": ["example-model"] },
+  "persona": { "name": "Sample", "voice": "Calm and brief.", "quipLanguage": "en" },
+  "poses": {
+    "stand": { "layers": [{ "file": "stand.png" }] },
+    "typing": {
+      "fallback": "stand",
+      "layers": [
+        { "file": "typing.webp" },
+        { "frames": ["hands-1.png", "hands-2.png"], "fps": 4 }
+      ]
+    }
+  },
+  "gestures": {
+    "wave": {
+      "pose": "stand",
+      "layers": [
+        {
+          "file": "wave-arm.png",
+          "pivot": [300, 280],
+          "motion": { "oscillate": { "rotDeg": [-10, 10], "hz": 1.5 } }
+        }
+      ]
+    }
+  },
+  "expressions": { "happy": { "decal": "face-happy.png" } },
+  "props": { "sample-prop": { "file": "prop.png", "z": 60 } },
+  "presets": { "sample-look": {} }
+}
+```
+
+What the optional parts do:
+
+- `poses` is an open map. `stand` is required; other poses such as `typing`,
+  `perched` and `dangle` are optional. A pose that is missing a part falls
+  back to the pose named by `fallback` (default `stand`).
+- `gestures` is an open map of layers that play over a pose. A gesture can
+  name its `pose` and list layers it `replaces`.
+- A layer draws one raster (`file`), tinted channels (`line` and the `*Fill`
+  channels, plus `detail`), or a frame loop (`frames`, which needs `fps`).
+  `mode` is optional and is inferred from those keys. `z` orders layers
+  (default 20), `pivot` is the joint a `motion` rotates around, and `motion`
+  is a named track or an inline `oscillate` or `keyframes` track.
+- `head`, `hairs`, `expressions`, `props`, `fx`, `motions`, `presets` and
+  `scenarios` are optional maps of named parts. An expression with a `decal`
+  swaps the whole face for that raster.
+- `autoMatch` lists up to 32 `harnesses` and 32 `models` tags (1 to 128
+  printable ASCII characters each) that make the automatic pack choice prefer
+  this pack.
+- `persona` gives the character a voice. It is read as quoted text, never as
+  instructions. A malformed or too long persona is dropped; the pack still
+  loads.
+- Timing and physics extensions (`easings`, `stageEffects`, `propMotions`,
+  `physics`, `passive`) are optional open maps.
+
+**Unknown fields are ignored and kept.** A field a reader does not know does
+not fail the pack, so newer packs still load in older dashboards. Names inside
+open maps (the pose, gesture, prop and expression IDs) are yours to choose.
+
+## The marketplace manifest
+
+A pack is installed from a **source**: a collection that holds a
+`marketplace.json` listing its packs. The manifest is `marketplace.json` at the
+root of the source. If a host wraps the files in one top-level folder, as
+generated repository archives do, the manifest is read from that folder.
+
+A self-contained marketplace keeps every pack in the same source. Each entry's
+`path` names the pack directory:
+
+```json example:marketplace
+{
+  "schema": "ws-companion-marketplace/v1",
+  "name": "Example Packs",
+  "owner": { "name": "Example Author", "url": "https://example.invalid/" },
+  "packs": [
+    {
+      "id": "sample-a",
+      "name": "Sample A",
+      "version": "1.0.0",
+      "author": "Example Author",
+      "license": "CC-BY-4.0",
+      "description": "A small example pack.",
+      "path": "packs/sample-a"
+    }
+  ]
+}
+```
+
+The source then holds this tree. Files outside the listed pack directories
+(a README, a license, source art) are ignored and never stored.
+
+```text
+marketplace.json
+packs/
+  sample-a/
+    pack.json
+    stand.png
+```
+
+An external entry points at a separate pack zip instead of a directory. It
+needs both `url` and `sha256`, the SHA-256 of that zip as 64 lowercase hex
+characters (for example the output of `sha256sum sample-b.zip`):
+
+```json example:marketplace-external-entry
+{
+  "id": "sample-b",
+  "name": "Sample B",
+  "version": "2.1.0",
+  "license": "CC0-1.0",
+  "url": "https://example.invalid/packs/sample-b.zip",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+The pack zip holds `pack.json` and its rasters at its root, or inside its one
+top-level folder. The download is checked against `sha256` before it is
+opened, so replace the hash whenever you republish the zip. One marketplace
+can mix `path` and `url` entries.
+
+Rules for entries:
+
+- `id`, `name` and `version` are required. `author`, `license` and
+  `description` are optional.
+- Exactly one of `path` or `url` is set. `sha256` goes with `url` only.
+- `path` is a clean relative directory: no leading `/`, drive letter,
+  backslash or `..` segment.
+- `url` is an absolute `https:` URL without a user name or password.
+- The entry `id` equals the `id` in that pack's `pack.json`. An `id` is listed
+  once.
+- Text fields hold no control characters.
+- An entry that fails does not hide the other entries; the dashboard reports
+  the error next to that entry.
+
+## Hosting
+
+### A git repository
+
+Put `marketplace.json` at the root of the repository (or in the folder the
+host wraps it in) and give users the repository's https address:
+
+```text
+https://example.invalid/author/example-packs
+https://example.invalid/author/example-packs#v1.0.0
+```
+
+The optional `#ref` after the address is a branch, a tag, or a full 40-hex
+commit. Without it the default branch (`HEAD`) is used. The dashboard resolves
+the ref to a commit and downloads a zip archive of that commit. It never runs
+git.
+
+The host must serve commit archives at one of these addresses, tried in this
+order:
+
+```text
+<repo>/archive/<sha>.zip
+<repo>/-/archive/<sha>/<name>-<sha>.zip
+```
+
+`<repo>` is the repository address, `<sha>` the commit, and `<name>` the last
+segment of the repository path without a trailing `.git`. If your host serves
+neither, publish a zip instead.
+
+### An https zip
+
+Build a zip with `marketplace.json` at its root (or in one top-level folder)
+and the pack directories beside it, upload it anywhere that serves the file
+directly over https, and give users the zip's address. The address must end in
+`.zip`. A page that merely links to the file is not enough: if the address does
+not return a zip, the dashboard says so and suggests importing the file
+instead.
+
+### A local zip
+
+A user can also import a zip file from disk in the dashboard. It uses the same
+layout and rules as an https zip, so one zip can carry a whole marketplace and
+its packs (for example a bundle shared from a personal drive). Use this when a
+share link opens a web page instead of downloading the file. A local import
+has no address to check again, so the user imports the new zip to update.
+
+A zip of a marketplace must always include `marketplace.json`, even when it
+holds only one pack.
+
+## The data-only rule
+
+A pack directory may hold exactly `pack.json` and the `.png` or `.webp` files
+that `pack.json` references. Anything else makes that pack fail and nothing of
+it is stored:
+
+- a file that is not `pack.json` or a referenced raster (a stray README,
+  `.svg`, HTML, script, or an unused image);
+- a symbolic link or any other non-regular entry;
+- a file inside a nested directory;
+- a raster whose content does not match its extension.
+
+Source files, drafts and licenses belong outside the pack directories.
+
+## Names
+
+- Names that differ only in letter case, such as `Stand.png` and `stand.png`,
+  are refused, because some file systems treat them as one file.
+- Reserved device names are refused for a pack ID and for a file name, with
+  or without an extension, in any case, because some file systems cannot
+  create them: `con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to
+  `lpt9`.
+- Archive entry names must be UTF-8 relative paths with no backslash, `..`
+  segment, drive letter or duplicate. Only stored or deflated, unencrypted
+  entries are accepted.
+
+## Limits
+
+Limits are counted on the bytes actually unpacked, not on the sizes an archive
+declares.
+
+| Limit | Value |
+|---|---|
+| `marketplace.json` size | 256 KiB |
+| Packs listed in one marketplace | 32 |
+| Installed local packs | 32 |
+| Entries in one zip | 4096 |
+| Files in one pack directory | 256 |
+| Compression ratio of one entry | 100:1 |
+| Unpacked bytes in one install | 64 MiB |
+| `pack.json` size | 512 KiB |
+| One raster file | 2 MiB |
+| One pack directory, total | 16 MiB |
+| All installed local packs, total | 64 MiB |
+| Raster width or height | 4096 px |
+| Canvas width or height | 64 to 2048 px |
+| Tags per `autoMatch` field | 32 |
+| `autoMatch` tag length | 128 characters |
+| Frame loop speed | 0.1 to 30 fps |
+| Pack ID length | 64 characters |
+| Raster file name length | 128 characters before the extension |
+| URL length | 2048 characters |
+| Archive path length | 512 characters |
+| Marketplace and pack name | 64 characters |
+| Pack version | 32 characters |
+| Author and license | 64 characters |
+| Pack description | 280 characters |
+| Persona name | 40 characters |
+| Persona voice | 800 characters |
+| Source zip download | 64 MiB |
+| External pack zip download | 16 MiB |
+| Download time | 60 s |
+| Redirects followed (https only) | 5 |
+
+## How updates are detected
+
+An installed pack is compared by its **content**: a hash of `pack.json` and the
+rasters it uses. A pack shows an update when the source now holds different
+content for it. An external `url` pack shows an update when its entry `sha256`
+changes. The `version` string is shown to the user and nothing more: change
+the content and the update is found even with the same version, keep the
+content and a new version number alone raises no update. An unrelated commit
+in a repository with many packs does not make every pack show an update.
+
+Checking and updating run only when the user asks. Nothing is fetched in the
+background.
+
+Installing a pack writes it, with an install record (`.ws-install.json`) that
+remembers where it came from, into the user's companion pack folder. Only
+directories that have an install record are ever replaced or uninstalled by a
+source. A pack the user made by hand, a directory without that record, is
+never replaced and never removed: an install that uses its ID is refused, and
+the user has to delete the directory first.
+
+## Validate before you publish
+
+- **Import preview.** In the dashboard's companion settings, import your zip
+  as a local file. The preview runs the same checks as an install without
+  writing anything and lists each pack with its errors. It calls the endpoint
+  `POST /api/companion/packs/validate` with the zip as the request body, which
+  only the local dashboard session may use. For a git source, build the same
+  zip from your checkout and preview that.
+- **External packs are not downloaded in the preview.** An entry with `url`
+  is listed with its status, and its zip is fetched and checked only when the
+  user installs it. Check an external pack zip yourself by putting the same
+  pack in a `path` entry of a local test marketplace and previewing that.
+- **Schemas.** Run `pack.schema.json` against each `pack.json` and
+  `marketplace.schema.json` against `marketplace.json` with any offline schema
+  tool. This catches structure and typing errors early. It does not open the
+  images or check file names against the folder.
+
+## Trust
+
+A source's packs are third-party content. The dashboard does not review them,
+and only the user decides which sources to trust. Add a source only when you
+trust its author. Pack text, such as names, descriptions and personas, is
+treated as untrusted data and shown as plain text.

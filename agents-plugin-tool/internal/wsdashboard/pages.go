@@ -82,6 +82,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-sources.js",
 	"dashboard-companion-settings.js",
 	"dashboard-companion-stage.js",
 }

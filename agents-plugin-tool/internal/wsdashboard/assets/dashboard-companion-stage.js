@@ -381,6 +381,8 @@
       picks: () => rig?.wardrobe() || null,
       anchor: () => hit.getBoundingClientRect(),
       resetSize() { sizing.reset(); },
+      // A pack install, update, uninstall or import already reloaded the daemon's store.
+      packsChanged() { requestPack(true); },
       applyPreset, notice
     });
 

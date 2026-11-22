@@ -226,6 +226,10 @@ type NudgeBody struct {
 // endpoint file.
 type Daemon struct {
 	companionPacks CompanionPackStore
+	// companionFetch downloads pack sources, only on a user's click.
+	companionFetch companionFetcher
+	// companionSources holds the last fetched source zip for its install.
+	companionSources companionSourceCache
 
 	// auditRead, when set, replaces the audit store for the audit query
 	// routes (a test's fixture store).

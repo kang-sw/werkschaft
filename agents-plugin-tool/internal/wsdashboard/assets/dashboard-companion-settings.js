@@ -12,8 +12,10 @@
     "dashboard.companion_attachments": "attachments",
     "dashboard.companion_palette": "palette",
     "dashboard.companion_agent_cooldown_seconds": "agentCooldownSeconds",
-    "dashboard.companion_agent_hourly_cap": "agentHourlyCap"
+    "dashboard.companion_agent_hourly_cap": "agentHourlyCap",
+    "dashboard.companion_sources": "sources"
   };
+  const sourcesKey = "dashboard.companion_sources";
   const voicePreview = 240;
   const pairMax = 16, hexColor = /^#[0-9a-f]{6}$/;
   const keyAttachments = "dashboard.companion_attachments", keyPalette = "dashboard.companion_palette";
@@ -45,7 +47,11 @@
     let controls = new Map(), packIds = null, packsRequest = null;
 
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
-    function rows() { return (hooks.rows() || []).filter(row => C.record(row) && Object.hasOwn(configFields, row.key)); }
+    // The Sources section renders dashboard.companion_sources, so it has no row of its own here.
+    function rows() {
+      return (hooks.rows() || []).filter(row => C.record(row) && Object.hasOwn(configFields, row.key) &&
+        row.key !== sourcesKey);
+    }
     function current(key) { return hooks.config()?.[configFields[key]]; }
 
     function el(tag, className, text) {
@@ -230,6 +236,8 @@
         if (row.key === "dashboard.companion_preset") { body.push(personaBlock()); persona = true; }
       }
       if (!persona) body.splice(1, 0, personaBlock());
+      sources.redraw();
+      body.push(sources.node);
       if (!canWrite()) body.push(el("p", "ws-companion-settings-muted", wsT("js.companion.settings_readonly")));
       const reset = el("button", "ws-companion-settings-action", wsT("js.companion.reset_size"));
       reset.type = "button";
@@ -266,21 +274,38 @@
     // a revert after a refused or failed write passes null to reset it too.
     function refresh(spare = doc.activeElement) {
       if (!dialog.open) return;
+      sources.refresh();
       for (const sync of controls.values()) sync(spare);
+    }
+
+    function applyCatalog(catalog) {
+      if (!Array.isArray(catalog?.packs)) return;
+      packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
+      if (dialog.open) controls.get("dashboard.companion_pack")?.(null);
+      sources.setCatalog(catalog);
     }
 
     function loadPacks() {
       if (packsRequest) return;
       packsRequest = fetch("/api/companion/packs", { credentials: "same-origin", signal })
         .then(response => response.ok ? response.json() : null)
-        .then(catalog => {
-          if (!Array.isArray(catalog?.packs)) return;
-          packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
-          if (dialog.open) controls.get("dashboard.companion_pack")?.(null);
-        })
+        .then(applyCatalog)
         .catch(() => {})
         .finally(() => { packsRequest = null; });
     }
+
+    // After an install, update, uninstall or import the modal takes the
+    // returned catalog (or asks for it again) and the stage reloads the active
+    // pack from the changed catalog.
+    const sources = C.sourcesSection({
+      doc, signal, options, canWrite, notice: hooks.notice,
+      raw: () => current(sourcesKey),
+      verdicts: () => hooks.config()?.sourceEntries,
+      catalogChanged(catalog) {
+        if (catalog) applyCatalog(catalog); else loadPacks();
+        hooks.packsChanged();
+      }
+    });
 
     // place sets the dialog beside the character, clamped to the viewport:
     // to its right when it fits, else to its left.
@@ -296,11 +321,26 @@
       dialog.style.top = Math.round(top) + "px";
     }
 
+    // Whatever resizes the open dialog (the Sources section opening, a listing
+    // or import preview, a wardrobe row gaining inputs) re-places it, at most
+    // once per frame. place() only moves the dialog, so it never feeds back.
+    let placeFrame = 0;
+    const resized = new ResizeObserver(() => {
+      if (!placeFrame) placeFrame = requestAnimationFrame(() => { placeFrame = 0; place(); });
+    });
+    function unobserve() {
+      resized.disconnect();
+      cancelAnimationFrame(placeFrame);
+      placeFrame = 0;
+    }
+    signal.addEventListener("abort", unobserve, { once: true });
+
     function show() {
       build();
       dialog.show();
       gear.setAttribute("aria-expanded", "true");
       place();
+      resized.observe(dialog);
       loadPacks();
       dialog.querySelector("select:not(:disabled), input:not(:disabled), button")?.focus({ preventScroll: true });
     }
@@ -308,6 +348,7 @@
     function hide(focusGear) {
       if (!dialog.open) return;
       const inside = dialog.contains(doc.activeElement);
+      unobserve();
       dialog.close();
       gear.setAttribute("aria-expanded", "false");
       if (focusGear || inside) gear.focus({ preventScroll: true });
