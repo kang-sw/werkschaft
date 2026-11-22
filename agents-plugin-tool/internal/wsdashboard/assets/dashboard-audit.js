@@ -490,6 +490,9 @@
   function auLoadMorePart(win, part, offset) {
     var ev = (part === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
     if (!ev || !ev.id) return;
+    win.moreBusy = win.moreBusy || {};
+    if (win.moreBusy[part]) return;
+    win.moreBusy[part] = true;
     var btn = win.el.querySelector('[data-au-more="' + part + '"]');
     if (btn) btn.disabled = true;
     var panel = win.el.querySelector(".au-panel");
@@ -500,6 +503,7 @@
       if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
       return r.json();
     }).then(function (chunk) {
+      win.moreBusy[part] = false;
       var stillActive = (ev === win.activeEnvelope) || (!win.inspectEventId && ev === win.resultEnvelope);
       if (!win.el.isConnected || !stillActive) return;
       if (chunk && typeof chunk.data === "string") {
@@ -515,6 +519,7 @@
       var newPanel = win.el.querySelector(".au-panel");
       if (newPanel) newPanel.scrollTop = scrollTop;
     }).catch(function () {
+      win.moreBusy[part] = false;
       if (btn) btn.disabled = false;
       toast(wsT("js.audit.loadmore.failed"));
     });

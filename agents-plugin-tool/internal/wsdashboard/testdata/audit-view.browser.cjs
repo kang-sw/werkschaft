@@ -190,8 +190,26 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     const loadMoreBtn = win.locator('[data-au-more="out"]');
     await loadMoreBtn.waitFor();
     const beforeLen = await win.locator('.au-line').count();
+    // A re-render (Wrap) while a range request is pending replaces the button;
+    // a second Load more must not fetch and append the same chunk again.
+    let rangeRequests = 0;
+    let releaseRange;
+    const rangeGate = new Promise(r => { releaseRange = r; });
+    const holdRange = async route => { rangeRequests++; await rangeGate; await route.continue(); };
+    await context.route(/part=out&offset=/, holdRange);
     await loadMoreBtn.click();
+    await win.locator('.au-wrap-btn').click();
+    await win.locator('[data-au-more="out"]').click();
+    await win.locator('.au-wrap-btn').click();
+    await win.locator('[data-au-more="out"]').click();
+    await page.waitForTimeout(200);
+    assert.equal(rangeRequests, 1, 'one range request while the first is pending');
+    releaseRange();
     await frame.waitForFunction((prev) => document.querySelectorAll('.au-win .au-line').length > prev, beforeLen);
+    await page.waitForTimeout(200);
+    await context.unroute(/part=out&offset=/, holdRange);
+    assert.equal(rangeRequests, 1, 'the pending chunk was appended once');
+    if (shots) await page.screenshot({ path: `${shots}/audit-paged.png` });
 
     // Search Ctrl+F scoped to window + Enter/Shift+Enter + Wrap + Copy
     await win.locator('.au-sinp').click();
