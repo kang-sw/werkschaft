@@ -35,6 +35,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemGitMergeSizeHardLines:     gitMergeSizeHardLinesKey.Default,
 		wsconfig.ItemGitMergeSizeExtensions:    gitMergeSizeExtensionsKey.Default,
 		wsconfig.ItemAgentChildWaitingDays:     strconv.Itoa(wsagent.DefaultChildWaitingDays),
+		wsconfig.ItemAgentKeepAwakeDuringTurns: keepAwakeDuringTurnsKey.Default,
 	}
 	for key, value := range wsconfig.CompactionDefaults {
 		defaults[key] = value
@@ -464,6 +465,20 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		},
 		ValueFields: childWaitingEntry.ValueFields,
 		Current:     currentWorkflowPreference(resolver, sessionKey, childWaitingEntry.Key),
+	})
+
+	keepAwakeEntry := registryEntryByKey(wsconfig.ItemAgentKeepAwakeDuringTurns)
+	appendKnob(keepAwakeEntry, tuningKnob{
+		ID:          keepAwakeEntry.Key,
+		Kind:        "workflow_preference",
+		Description: keepAwakeDuringTurnsHelp,
+		Writer:      tuningWriter{Tool: keepAwakeEntry.WriterTool, FixedArguments: map[string]string{"key": keepAwakeEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           keepAwakeEntry.ResetTool,
+			FixedArguments: map[string]string{"key": keepAwakeEntry.Key, "reset": "true"},
+		},
+		ValueFields: keepAwakeEntry.ValueFields,
+		Current:     currentWorkflowPreference(resolver, sessionKey, keepAwakeEntry.Key),
 	})
 
 	sageReviewEntry := registryEntryByKey(wsconfig.ItemSageReview)

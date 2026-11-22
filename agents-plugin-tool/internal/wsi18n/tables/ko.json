@@ -2933,6 +2933,8 @@
   "js.settings.tier_routing.save": "저장",
   "js.settings.key.agent.child_waiting_days.label": "대기 자식 에이전트 보존 일수",
   "js.settings.key.agent.child_waiting_days.description": "child-agent-waiting 상태로 유휴 대기 중인 자식 에이전트와 하위 트리를 데몬이 정리하기까지의 일수.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "턴 동안 절전 방지",
+  "js.settings.key.agent.keep_awake_during_turns.description": "에이전트 턴이 도는 동안 유휴 시스템 절전을 막습니다(macOS, Windows). 화면 꺼짐과 덮개 닫기는 그대로 적용됩니다.",
   "js.settings.key.agent.git_search_roots.label": "git.search 추가 검색 경로",
   "js.settings.key.agent.git_search_roots.description": "호스팅 에이전트의 읽기 전용 git.search가 최근 세션 루트 외에 추가로 읽을 수 있는 절대 디렉터리 목록.",
   "js.settings.key.compaction.lead_advisory.label": "리드 컴팩션 권고 임계치",

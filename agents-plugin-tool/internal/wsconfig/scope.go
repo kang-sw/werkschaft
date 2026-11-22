@@ -150,6 +150,13 @@ const (
 	// integer; global-only. Builtin default: 15.
 	ItemAgentChildWaitingDays = "agent.child_waiting_days"
 
+	// ItemAgentKeepAwakeDuringTurns makes the dashboard daemon hold one
+	// idle-system-sleep assertion while any hosted lead or spawned agent turn
+	// runs. Values: "true" or "false" (builtin default: false). Global-only:
+	// one daemon serves every project and harness, so the value must not
+	// depend on which project or package started it.
+	ItemAgentKeepAwakeDuringTurns = "agent.keep_awake_during_turns"
+
 	// ItemTicketAssigneeAware is the opt-in project gate for ticket assignee
 	// awareness. Values: "on" or "off" (builtin default: off). It is meant to be
 	// a shared, deterministic team decision, so a downstream project sets it in
@@ -257,6 +264,7 @@ func init() {
 	RegisterGlobalOnly(ItemAgentGitSearchRoots)
 	RegisterGlobalOnly(ItemAgentTierAliases)
 	RegisterGlobalOnly(ItemAgentChildWaitingDays)
+	RegisterGlobalOnly(ItemAgentKeepAwakeDuringTurns)
 	// sage_review* keys default to project scope: they are project-level opt-ins
 	// that should persist across sessions for the same project.
 	RegisterDefaultScope(ItemSageReview, ScopeProject)

@@ -31,6 +31,33 @@ func IsCompanionConfigKey(key string) bool {
 	return false
 }
 
+// IsDaemonGlobalConfigKey reports whether the daemon keeps key's global value
+// in memory, so a writer must invalidate it (NotifyCompanionConfigChange or
+// SendCompanionConfigChange) after committing a change: the companion keys
+// and the runner's agent.keep_awake_during_turns. The wire route keeps its
+// companion name; a daemon that predates the runner key refreshes only its
+// companion snapshot on it, which changes nothing.
+func IsDaemonGlobalConfigKey(key string) bool {
+	return IsCompanionConfigKey(key) || key == wsconfig.ItemAgentKeepAwakeDuringTurns
+}
+
+// AgentGlobalConfigHost is an agent host that keeps global configuration in
+// memory (the runner's keep-awake setting). The daemon calls
+// ReloadGlobalConfig once its endpoint is published, and after each matching
+// invalidation; the host rereads its own global layer, serialized, so a read
+// that finishes later never publishes an older value.
+type AgentGlobalConfigHost interface {
+	ReloadGlobalConfig()
+}
+
+// reloadAgentGlobalConfig asks the agent host, when it keeps any, to reread
+// its global configuration.
+func (d *Daemon) reloadAgentGlobalConfig() {
+	if h, ok := d.agents.(AgentGlobalConfigHost); ok {
+		h.ReloadGlobalConfig()
+	}
+}
+
 // CompanionConfig is the global configuration shared by every dashboard shell.
 // The pack field carries the selector so each shell can resolve auto itself.
 type CompanionConfig struct {
@@ -123,10 +150,12 @@ func (d *Daemon) refreshMatchingCompanion(configID string) error {
 	if err != nil {
 		return err
 	}
-	if configID == companionConfigID(path) {
-		return d.refreshCompanion()
+	if configID != companionConfigID(path) {
+		return nil
 	}
-	return nil
+	// The notification names no key: every in-memory global value rereads.
+	d.reloadAgentGlobalConfig()
+	return d.refreshCompanion()
 }
 
 func (d *Daemon) handleCompanionConfigChange(w http.ResponseWriter, r *http.Request) {
