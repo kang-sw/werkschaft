@@ -892,10 +892,13 @@ commit on top of bc6fa0448.
   conditional removal still answer; a wsagent test counts zero key-store calls.
 - One ordering point: a click's known-card, fence and token answers, its
   revision check (`resolve`) and its claim run under the composer's admission
-  lock, so a withdrawal is either before the claim (refused, nothing claimed)
-  or after it (the claim stands) and a second request with the same submission
-  id gets the first one's card. A test races five concurrent requests with one
-  submission id against a withdrawal for 40 rounds and asserts a single outcome.
+  lock. The registry read inside `resolve` is the ordering point against a
+  withdrawal: one committed before it refuses the click and claims nothing, one
+  after it follows the click, which runs the line the user saw (the admission
+  lock does not exclude registry writers; it makes a second request with the
+  same submission id wait and get the first one's card). A test races five
+  concurrent requests with one submission id against a withdrawal for 40 rounds
+  and asserts a single outcome.
 - Minor: the worktree a line was read for travels with the admission to the
   launch, which refuses another (tested at the launch binding), and the stream
   revision carries the worktree so the strip refetches when it changes; the
@@ -905,7 +908,8 @@ commit on top of bc6fa0448.
   browser tests with a real `dblclick` and with two scripted rapid clicks, the
   latter verified to fail without the guard); a hosted lead that connects while
   the daemon is starting waits (bounded, 5 s) for its user commands to settle,
-  chosen over a tool-list refresh because no list-changed notification exists.
+  chosen over a tool-list refresh because no list-changed notification exists
+  (round 2 moved this wait out of the connection's acceptance; see below).
 
 File operations per interactive path (store operations, composer file
 operations, key-record reads), measured by the tests above: list, page load,
@@ -921,3 +925,50 @@ with `-race` (Playwright included), `mcp` `UserCommand|Inventory|Shipped|Schema`
 `cmd/ws-mcp` `UserCommand|Usercmd|Composer|Exec|Dashboard`, `wsagent`
 `ComposerRoot|Exec|Passive`: pass; `GOOS=windows go vet` on the five touched
 packages: clean. The Windows host run is the lead's.
+
+#### Edition (fdae6fa40) - 2026-11-23
+
+Round 2 of the pre-merge review (two Important, four Minor), fixed in one
+commit on top of the round-1 Edition.
+
+- Startup wait: it no longer runs in `Accept`, where the HTTP route builds a
+  session under the daemon-wide session lock. It sits in the connection's own
+  user command lookup (`userCommandsFor`): only the first tool list of a hosted
+  lead, while the daemon's user commands are unsettled, waits (bounded, 5 s per
+  connection), and only when the runner reports the conversation as an open
+  lead (a memory read). A worker, a conversation that is not an open lead, a
+  connection with no conversation, another token's establishment and a request
+  on an already-open session never wait. A test over the real HTTP route holds
+  readiness open and asserts that a worker's establishment and tool list, a
+  second lead token's establishment, a request on the open worker session and
+  the first lead's own establishment all finish while the first lead's tool list
+  waits, that the list then names the tools once readiness closes, and that the
+  worker never lists them; it fails with the wait put back in `Accept`.
+- Out-of-order browser answers: the strip applies a list only if it is not
+  older than the one on screen. The revision is `epoch.N.rootTag`; within one
+  epoch and root tag an `N` below the shown one is dropped, and a different
+  epoch (daemon restart), a different root tag (the lead's worktree changed) or
+  an unparseable revision always wins, as does a stream wake. A browser test
+  holds a removal's answer after the daemon processed it, registers another
+  command so the stream-triggered read shows the newer list, then releases the
+  older answer and asserts the newer list stays; it fails with the check off.
+- Minor: the admission comment and the round-1 Edition now name the registry
+  read as the ordering point (corrected above). The store migration backfills
+  `meta` from the highest surviving revision when upgrading a version-1
+  database (tested, though version 1 never shipped). The rapid-click browser
+  test waits for the first click's acknowledgement before the second click
+  instead of a fixed 150 ms delay.
+- Windows `\\?\` database path: the exec and cron stores open the same driver
+  with the plain path (`sql.Open("sqlite", path)`), exactly as this store does,
+  so the extended-length path and the driver's `?` split are a known shared edge
+  and are left as is; no new DSN scheme was added.
+
+Verification: `wsusercmd` (full, `-race`); `wsdashboard`
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included); `mcp`
+`UserCommand|TestHostedExec|Inventory|Shipped|Schema|Session`; `cmd/ws-mcp`
+`UserCommand|Usercmd|Composer|Exec|Dashboard|RuntimeCapabilities|HostedLead`
+plus the new connection tests; `wsagent` with `-race`
+`ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
+`GOOS=windows go vet` on the five touched packages: clean. The Windows host run
+is the lead's.
