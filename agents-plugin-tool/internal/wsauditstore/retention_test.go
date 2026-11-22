@@ -3,7 +3,6 @@ package wsauditstore
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,8 +105,9 @@ func TestTotalCapEvictsWholeRingsLeastRecentlyUsed(t *testing.T) {
 	fill(t, s, "mid", 1, 50)
 	clock.Advance(time.Hour)
 	fill(t, s, "new", 1, 50)
-	if _, err := os.Stat(filepath.Join(root, "old")); !os.IsNotExist(err) {
-		t.Fatalf("least recently used ring survived: %v\n%s", err, log.String())
+	// Its data goes whole; its recovery state stays as one header line.
+	if segs := segSeqs(t, filepath.Join(root, "old")); len(segs) != 1 || diskBytes(t, filepath.Join(root, "old")) > 4096 {
+		t.Fatalf("least recently used ring survived: %v\n%s", segs, log.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "mid")); err != nil {
 		t.Fatal("a more recent ring was evicted first")
@@ -134,8 +134,10 @@ func TestTotalCapEvictsActiveRingLastKeepingNewest(t *testing.T) {
 	fill(t, s, "other", 1, 10)
 	clock.Advance(-time.Hour) // the active session looks older than the other
 	fill(t, s, "active", 1, 120)
-	if _, err := os.Stat(filepath.Join(root, "other")); !os.IsNotExist(err) {
-		t.Fatal("the idle ring outlived the active one's need for room")
+	// The idle ring's data is evicted; only its recovery state stays, as a
+	// header-only segment.
+	if evs := events(t, s, "other"); len(evs) != 0 {
+		t.Fatalf("the idle ring outlived the active one's need for room: %d events", len(evs))
 	}
 	dir := filepath.Join(root, "active")
 	if got := diskBytes(t, root); got > 4*mib {
@@ -328,21 +330,6 @@ func TestLimitsValidateAndClamp(t *testing.T) {
 	}
 }
 
-// diskRingBytes sums the segment files under root.
-func diskRingBytes(t *testing.T, root string) int64 {
-	t.Helper()
-	var n int64
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && segmentPattern.MatchString(d.Name()) {
-			if info, err := d.Info(); err == nil {
-				n += info.Size()
-			}
-		}
-		return nil
-	})
-	return n
-}
-
 func storeTotal(s *Store) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -379,7 +366,7 @@ func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
 	if !strings.Contains(log.String(), "delete segment 1") || !strings.Contains(log.String(), "sharing violation") {
 		t.Fatalf("failed segment deletion not logged: %s", log.String())
 	}
-	if disk, total := diskRingBytes(t, root), storeTotal(s); disk != total {
+	if disk, total := diskBytes(t, root), storeTotal(s); disk != total {
 		t.Fatalf("store total %d, disk %d", total, disk)
 	}
 	_ = s.Close()
@@ -407,7 +394,7 @@ func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
 	if !strings.Contains(log2.String(), "remove audit ring of session old") {
 		t.Fatalf("failed ring removal not logged: %s", log2.String())
 	}
-	if disk, total := diskRingBytes(t, root2), storeTotal(s2); disk != total {
+	if disk, total := diskBytes(t, root2), storeTotal(s2); disk != total {
 		t.Fatalf("store total %d, disk %d", total, disk)
 	}
 }
@@ -458,5 +445,115 @@ func TestNewerFormatRingIsNeverAgedOutOrEvicted(t *testing.T) {
 	flush(t, s2)
 	if _, err := os.Stat(seg); err != nil || !strings.Contains(log2.String(), "store total cap: keep audit ring of session future") {
 		t.Fatalf("the newer ring was evicted: %v; log: %s", err, log2.String())
+	}
+}
+
+// TestActiveRingTrimsItselfBeforeEvictingOthers pins the eviction order: a
+// write first drops the active ring's own oldest segments under its
+// per-session cap, and only then evicts other rings for the store total, so
+// an idle ring is not evicted for room the active ring's own trim frees.
+func TestActiveRingTrimsItselfBeforeEvictingOthers(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 5*mib + 256*kib, BodyBytes: 256 * kib, Retention: MinRetention}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, log := openTest(t, t.TempDir(), func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 3; seq++ {
+		mustAppend(t, s, bigRecord("idle", seq, lim))
+	}
+	flush(t, s)
+	clock.Advance(time.Hour)
+	for seq := uint64(1); seq <= 24; seq++ {
+		mustAppend(t, s, bigRecord("busy", seq, lim))
+	}
+	flush(t, s)
+	if got := len(events(t, s, "idle")); got != 3 || strings.Contains(log.String(), "evict audit ring of session idle") {
+		t.Fatalf("idle ring evicted though the busy ring's own trim made room: %d events\n%s", got, log.String())
+	}
+}
+
+// TestOpenEnforcesLoweredCaps pins cap enforcement for rings already on
+// disk: reopening with a lower per-session cap trims an unloaded ring to it
+// (newest segment kept, events still readable), and a lower store total
+// evicts the least recently seen ring.
+func TestOpenEnforcesLoweredCaps(t *testing.T) {
+	root := t.TempDir()
+	wide := Limits{SessionBytes: 16 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = wide; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 12; seq++ {
+		mustAppend(t, s, bigRecord("big", seq, wide))
+	}
+	flush(t, s)
+	clock.Advance(time.Hour)
+	for seq := uint64(1); seq <= 6; seq++ {
+		mustAppend(t, s, bigRecord("recent", seq, wide))
+	}
+	flush(t, s)
+	_ = s.Close()
+	if got := diskBytes(t, filepath.Join(root, "big")); got <= 4*mib {
+		t.Fatalf("setup: big ring holds only %d bytes", got)
+	}
+
+	narrow := wide
+	narrow.SessionBytes = 4 * mib
+	s2, log := openTest(t, root, func(o *Options) { o.Limits = narrow; o.Now = clock.Now; o.DeferFirstSweep = true })
+	if got := diskBytes(t, filepath.Join(root, "big")); got > 4*mib {
+		t.Fatalf("lowered session cap not enforced at open: %d bytes\n%s", got, log.String())
+	}
+	if seqs := sourceSeqs(t, s2, "big"); len(seqs) == 0 || seqs[len(seqs)-1] != 12 {
+		t.Fatalf("trimmed ring lost its newest records: %v", seqs)
+	}
+	_ = s2.Close()
+
+	tight := narrow
+	tight.TotalBytes = 4 * mib
+	s3, log3 := openTest(t, root, func(o *Options) { o.Limits = tight; o.Now = clock.Now })
+	if got := diskBytes(t, root); got > 4*mib {
+		t.Fatalf("lowered store total not enforced at open: %d bytes\n%s", got, log3.String())
+	}
+	if got := len(events(t, s3, "big")); got != 0 {
+		t.Fatalf("least recently seen ring kept %d events", got)
+	}
+	if got := len(events(t, s3, "recent")); got == 0 {
+		t.Fatal("the most recent ring was evicted whole")
+	}
+}
+
+// TestEvictedUnloadedRingKeepsItsFinalizedState pins that store-wide
+// eviction of a ring not loaded in this run keeps its recovery state durably:
+// after another restart its boundary still refuses a late replay.
+func TestEvictedUnloadedRingKeepsItsFinalizedState(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	ctx := context.Background()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	mustAppend(t, s, bigRecord("old", 1, lim))
+	mustAppend(t, s, bigRecord("old", 4, lim))
+	if err := s.Finalize(ctx, "old", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+
+	clock.Advance(time.Hour)
+	s2, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 8; seq++ { // "old" is never loaded in this run
+		mustAppend(t, s2, bigRecord("new", seq, lim))
+	}
+	flush(t, s2)
+	if !strings.Contains(log.String(), "evict audit ring of session old") {
+		t.Fatalf("old ring not evicted: %s", log.String())
+	}
+	_ = s2.Close()
+
+	s3, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s3, "old")
+	if rec := s3.Recover("old", "holder:1"); rec.Boundary != 4 || rec.MaxSeq != 4 {
+		t.Fatalf("recovery after eviction and restart = %+v", rec)
+	}
+	mustAppend(t, s3, sourced("old", 2, wsaudit.KindToolCall)) // late replay
+	flush(t, s3)
+	if got := len(events(t, s3, "old")); got != 0 || lossCount(t, s3, "old") != 1 {
+		t.Fatalf("late replay after eviction: %d events, loss %d", got, lossCount(t, s3, "old"))
 	}
 }

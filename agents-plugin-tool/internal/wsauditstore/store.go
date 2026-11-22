@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -219,6 +220,8 @@ func Open(opts Options) (*Store, error) {
 	}
 	if !opts.DeferFirstSweep {
 		s.sweep()
+	} else {
+		s.enforceCaps() // the caps need no registry
 	}
 	go s.run()
 	return s, nil
@@ -487,11 +490,9 @@ func (s *Store) shutdown() {
 		info.mu.Lock()
 		if r := info.ring; r != nil {
 			if payload := r.pendingLines(); len(payload) > 0 && r.readOnly == nil {
-				if _, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes()); err == nil {
+				if s.writeLocked(info, payload) == nil {
 					r.clearPending()
 				}
-				s.noteEvictErr(info)
-				s.account(info)
 			}
 			r.close()
 		}
@@ -645,8 +646,10 @@ func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID) {
 // store total, and syncs the byte accounting. info.mu is held.
 func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
 	r := info.ring
-	s.makeRoom(info, int64(len(payload))+s.headerAllowance(r, int64(len(payload))))
-	_, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes())
+	_, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), func(n int64) {
+		s.account(info) // the ring's own trim first
+		s.makeRoom(info, n)
+	})
 	s.noteEvictErr(info)
 	s.mu.Lock()
 	s.total += r.bytes - info.bytes
@@ -662,20 +665,6 @@ func (s *Store) noteEvictErr(info *sessionInfo) {
 		s.logf("session %s: %v; the ring stays over its cap until a later write retries", info.dir, r.evictErr)
 		r.evictErr = nil
 	}
-}
-
-// headerAllowance is the header line a write of n bytes would add by
-// rotating, for the store-total check.
-func (s *Store) headerAllowance(r *ring, n int64) int64 {
-	cur := len(r.segs) - 1
-	if r.file != nil && !r.forceRotate && cur >= 0 && r.segs[cur].size+n <= s.limits.SegmentBytes() {
-		return 0
-	}
-	h, err := r.headerLine()
-	if err != nil {
-		return 0
-	}
-	return int64(len(h))
 }
 
 // loseLocked records a source record finalized without being retained; the
@@ -735,9 +724,10 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 }
 
 // makeRoom evicts whole least-recently-used rings other than the active one
-// until need more bytes fit the store total. The active ring keeps itself
-// within the effective per-session cap, which never exceeds the total, so
-// it alone always fits.
+// until need more bytes fit the store total; past every other ring, the
+// active ring drops its own oldest segments, keeping its newest. A ring
+// whose data was already evicted (loaded, no events) is not a victim again.
+// active.mu is held.
 func (s *Store) makeRoom(active *sessionInfo, need int64) {
 	failed := map[*sessionInfo]bool{}
 	for {
@@ -748,7 +738,8 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		}
 		var victim *sessionInfo
 		for _, info := range s.sessions {
-			if info == active || info.bytes == 0 || failed[info] || info.newer {
+			if info == active || info.bytes == 0 || failed[info] || info.newer ||
+				(info.ring != nil && len(info.ring.events) == 0) {
 				continue
 			}
 			if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
@@ -758,16 +749,11 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		}
 		s.mu.Unlock()
 		if victim == nil {
-			if r := active.ring; r != nil {
-				s.mu.Lock()
-				room := s.limits.TotalBytes - (s.total - active.bytes) - need
-				s.mu.Unlock()
-				r.trimTo(max(room, 0))
-				s.noteEvictErr(active)
-				s.mu.Lock()
-				s.total += r.bytes - active.bytes
-				active.bytes = r.bytes
-				s.mu.Unlock()
+			s.mu.Lock()
+			room := s.limits.TotalBytes - (s.total - active.bytes) - need
+			s.mu.Unlock()
+			if !s.foreignLocked(active) {
+				s.trimRingLocked(active, max(room, 0))
 			}
 			return
 		}
@@ -783,18 +769,94 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 	}
 }
 
-// removeRing deletes a ring's directory. A loaded ring that lost only its
-// data to store-wide eviction keeps its recovery state, so a later record
-// cannot replay what was already finalized; forget drops the entry whole. A
-// deletion that fails is reported and leaves what remains on disk accounted;
-// the ring is then reloaded from it on next use.
+// trimRingLocked drops a ring's oldest whole segments until it holds at most
+// capBytes, keeping its newest. An unloaded ring is trimmed on disk without
+// being read: every segment header carries the recovery state as of its
+// creation, so the segments that remain still seed it. info.mu is held.
+func (s *Store) trimRingLocked(info *sessionInfo, capBytes int64) {
+	if r := info.ring; r != nil {
+		r.trimTo(capBytes)
+		s.noteEvictErr(info)
+		s.account(info)
+		return
+	}
+	dir := filepath.Join(s.opts.Root, info.dir)
+	segs, _, err := listSegments(dir)
+	if err != nil {
+		return
+	}
+	var size int64
+	for _, seg := range segs {
+		size += seg.size
+	}
+	for len(segs) > 1 && size > capBytes {
+		if err := removeFile(filepath.Join(dir, segmentName(segs[0].seq))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.logf("session %s: delete segment %d: %v; the ring stays over its cap until a later sweep retries", info.dir, segs[0].seq, err)
+			break
+		}
+		size -= segs[0].size
+		segs = segs[1:]
+	}
+	s.mu.Lock()
+	s.total += size - info.bytes
+	info.bytes = size
+	s.mu.Unlock()
+}
+
+// enforceCaps applies the byte caps to rings already on disk — for limits
+// lowered since they were written, or deletions that failed earlier: every
+// ring over the per-session cap drops its oldest whole segments, then whole
+// least-recently-used rings are evicted under the store total, the most
+// recently seen last (trimmed, keeping its newest segment). Rings of a newer
+// format are left alone. Writer goroutine, or Open before it starts.
+func (s *Store) enforceCaps() {
+	capBytes := s.limits.EffectiveSessionBytes()
+	s.mu.Lock()
+	var over []*sessionInfo
+	var newest *sessionInfo
+	for _, info := range s.sessions {
+		if info.bytes > capBytes {
+			over = append(over, info)
+		}
+		if newest == nil || info.lastSeen.After(newest.lastSeen) ||
+			(info.lastSeen.Equal(newest.lastSeen) && info.dir > newest.dir) {
+			newest = info
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(over, func(i, j int) bool { return over[i].dir < over[j].dir })
+	for _, info := range over {
+		if s.foreign(info) {
+			continue
+		}
+		s.logf("session cap: trim audit ring of session %s (%d bytes, cap %d)", info.dir, info.bytes, capBytes)
+		info.mu.Lock()
+		s.trimRingLocked(info, capBytes)
+		info.mu.Unlock()
+	}
+	if newest != nil {
+		newest.mu.Lock()
+		s.makeRoom(newest, 0)
+		newest.mu.Unlock()
+	}
+}
+
+// removeRing deletes a ring's directory. A ring that lost only its data to
+// store-wide eviction keeps its recovery state — read from its newest
+// segments first when it was not loaded — and persists it as a header-only
+// segment, so a later record cannot replay what was already finalized, even
+// across a restart; forget drops the entry whole. A deletion that fails is
+// reported and leaves what remains on disk accounted; the ring is then
+// reloaded from it on next use.
 func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 	info.mu.Lock()
 	r := info.ring
+	dir := filepath.Join(s.opts.Root, info.dir)
 	if r != nil {
 		r.close()
+	} else if !forget {
+		r = recoverTail(info.session, dir)
 	}
-	dir := filepath.Join(s.opts.Root, info.dir)
 	if err := removeAll(dir); err != nil {
 		var left int64
 		if segs, _, lerr := listSegments(dir); lerr == nil {
@@ -818,7 +880,19 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 		r.led.mu.Lock()
 		clear(r.led.retained)
 		r.led.mu.Unlock()
-		r.forceRotate = false
+		r.file, r.forceRotate, r.evictErr = nil, false, nil
+		r.clearPending() // the header below carries their state
+		delete(s.dirty, info)
+		if r.hasState() {
+			if _, err := r.write(nil, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), nil); err != nil {
+				s.logf("session %s: persist recovery state after eviction: %v", info.dir, err)
+			}
+		}
+		info.ring = r
+		info.led.Store(r.led)
+		if info.session == "" {
+			info.session = r.session
+		}
 	} else {
 		info.ring = nil
 		info.led.Store(nil)
@@ -828,7 +902,10 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 	s.mu.Lock()
 	s.total -= info.bytes
 	info.bytes = 0
-	if !keep && s.sessions[info.dir] == info {
+	if keep {
+		s.total += r.bytes
+		info.bytes = r.bytes
+	} else if s.sessions[info.dir] == info {
 		delete(s.sessions, info.dir)
 	}
 	s.mu.Unlock()
@@ -914,19 +991,24 @@ func (s *Store) sweep() {
 			s.logf("retention: %v", err)
 		}
 	}
+	s.enforceCaps()
 }
 
 // foreign reports whether info's ring holds a newer format: a loaded ring
 // refusing writes, or an unloaded one whose segment headers say so. The
 // answer is remembered. Writer goroutine only.
 func (s *Store) foreign(info *sessionInfo) bool {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return s.foreignLocked(info)
+}
+
+// foreignLocked is foreign with info.mu held.
+func (s *Store) foreignLocked(info *sessionInfo) bool {
 	if info.newer {
 		return true
 	}
-	info.mu.Lock()
-	r := info.ring
-	info.mu.Unlock()
-	if r != nil {
+	if r := info.ring; r != nil {
 		info.newer = errors.Is(r.readOnly, ErrNewerFormat)
 	} else {
 		info.newer = newerRingOnDisk(filepath.Join(s.opts.Root, info.dir))

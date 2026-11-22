@@ -412,6 +412,46 @@ func (r *ring) recover() error {
 	return nil
 }
 
+// recoverTail recovers a ring's identity state from its newest segments
+// alone — back to the newest one opening with a header, whose snapshot holds
+// everything before it — for an unloaded ring about to be evicted. It
+// returns nil when nothing is readable.
+func recoverTail(session, dir string) *ring {
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) == 0 {
+		return nil
+	}
+	raws := make([][]byte, len(segs))
+	start := len(segs) - 1
+	for ; start >= 0; start-- {
+		raw, err := readFile(filepath.Join(dir, segmentName(segs[start].seq)))
+		if err != nil {
+			continue
+		}
+		raws[start] = raw
+		if headerVersion(raw) > 0 {
+			break
+		}
+	}
+	start = max(start, 0)
+	r := newRing(session, dir)
+	for i := start; i < len(segs); i++ {
+		if raws[i] != nil {
+			r.replaySegment(&segs[i], raws[i])
+		}
+	}
+	return r
+}
+
+// hasState reports whether the ring's ledger holds recovery state worth
+// persisting after its data is evicted.
+func (r *ring) hasState() bool {
+	l := r.led
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.maxSeq > 0 || l.loss > 0 || len(l.bounds) > 0 || len(l.lost) > 0 || len(l.floor) > 0
+}
+
 // replaySegment applies one segment's lines. It returns the byte length of
 // the well-formed prefix, whether the header names a newer format, and
 // whether the segment opens with a well-formed header line.
@@ -438,6 +478,9 @@ func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer, header 
 			first = false
 			if ln.T == lineHeader {
 				header = true
+				if r.session == "" {
+					r.session = ln.Session
+				}
 				if ln.V > RingSchemaVersion {
 					return pos, true, header
 				}
@@ -649,9 +692,11 @@ func encodeLine(ln line) ([]byte, error) {
 }
 
 // write appends payload (whole lines) to the newest segment, rotating first
-// when it would overflow segBytes and dropping the oldest segments while the
-// ring would exceed capBytes. It returns the bytes removed by eviction.
-func (r *ring) write(payload []byte, segBytes, capBytes int64) (evicted int64, err error) {
+// when it would overflow segBytes, then dropping the ring's own oldest
+// segments while it would exceed capBytes, and only then calling room with
+// the bytes about to be written, so store-wide eviction sees the ring
+// already within its own cap. It returns the bytes removed by its own trim.
+func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64)) (evicted int64, err error) {
 	if r.readOnly != nil {
 		return 0, r.readOnly
 	}
@@ -690,6 +735,9 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64) (evicted int64, e
 			break // the ring runs over its cap until a later write retries
 		}
 		evicted += dropped
+	}
+	if room != nil {
+		room(n)
 	}
 	written, werr := writeFile(r.file, payload)
 	r.segs[len(r.segs)-1].size += int64(written)
