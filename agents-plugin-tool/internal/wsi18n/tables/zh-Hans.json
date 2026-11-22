@@ -2740,6 +2740,8 @@
   "js.settings.key.dashboard.companion_preset.description": "输入伙伴预设 ID。",
   "js.companion.character": "伙伴",
   "js.companion.return_home": "返回主页",
+  "js.companion.reset_size": "重置大小",
+  "js.companion.resize": "调整伙伴大小",
   "js.companion.hide": "隐藏",
   "js.companion.reload": "重新加载资源包",
   "js.companion.reload_denied": "此处无法重新加载资源包。",

@@ -2740,6 +2740,8 @@
   "js.settings.key.dashboard.companion_preset.description": "Введите ID предустановки компаньона.",
   "js.companion.character": "Компаньон",
   "js.companion.return_home": "Вернуться домой",
+  "js.companion.reset_size": "Сбросить размер",
+  "js.companion.resize": "Изменить размер компаньона",
   "js.companion.hide": "Скрыть",
   "js.companion.reload": "Перезагрузить пакеты",
   "js.companion.reload_denied": "Здесь нельзя перезагрузить пакеты.",

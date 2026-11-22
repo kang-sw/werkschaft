@@ -514,6 +514,7 @@
       // or during a drag. Reconnect's first full rail silently baselines.
       var railFrag = ev.name === "rail" && railAttention ? frag(WsRail.rowInputHTML(ev.html)) : null;
       if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
+      if (railFrag && shell) window.WsCompanion?.observeRail?.(railFrag, rid, railBaseline);
       if (railFrag && railBaseline) apScan(railFrag, "rail", true);
       if (ev.name === "rail") railBaseline = false;
       // A hidden tab keeps only each region's newest update and applies none;

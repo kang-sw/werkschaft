@@ -2740,6 +2740,8 @@
   "js.settings.key.dashboard.companion_preset.description": "Enter a companion preset ID.",
   "js.companion.character": "Companion",
   "js.companion.return_home": "Return home",
+  "js.companion.reset_size": "Reset size",
+  "js.companion.resize": "Resize companion",
   "js.companion.hide": "Hide",
   "js.companion.reload": "Reload packs",
   "js.companion.reload_denied": "Pack reload is not available here.",

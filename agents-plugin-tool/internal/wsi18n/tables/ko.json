@@ -2740,6 +2740,8 @@
   "js.settings.key.dashboard.companion_preset.description": "컴패니언 프리셋 ID를 입력합니다.",
   "js.companion.character": "컴패니언",
   "js.companion.return_home": "집으로 돌아가기",
+  "js.companion.reset_size": "크기 초기화",
+  "js.companion.resize": "컴패니언 크기 조절",
   "js.companion.hide": "숨기기",
   "js.companion.reload": "팩 다시 불러오기",
   "js.companion.reload_denied": "이곳에서는 팩을 다시 불러올 수 없습니다.",

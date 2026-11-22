@@ -2740,6 +2740,8 @@
   "js.settings.key.dashboard.companion_preset.description": "Inserisci un ID di preimpostazione del compagno.",
   "js.companion.character": "Compagno",
   "js.companion.return_home": "Torna a casa",
+  "js.companion.reset_size": "Ripristina dimensioni",
+  "js.companion.resize": "Ridimensiona il compagno",
   "js.companion.hide": "Nascondi",
   "js.companion.reload": "Ricarica pacchetti",
   "js.companion.reload_denied": "I pacchetti non possono essere ricaricati qui.",
