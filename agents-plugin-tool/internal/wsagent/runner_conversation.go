@@ -120,7 +120,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
 		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
 	}
-	if !rec.Lead {
+	// Derived from the record's immutable backend on every load, with no
+	// stored field, and before any profile or config read.
+	refusal := r.admitWorkerRecord(rec)
+	if !rec.Lead && refusal == nil {
 		if level, source, err := r.currentWorkerPermission(rec); err == nil {
 			c.workerPermissionLevel = level
 			c.workerPermissionSource = source
@@ -200,6 +203,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		if !rec.TurnOpen && (last.Result.Status == TurnFailed || last.Result.Status == TurnInterrupted) {
 			c.lastErr = last.Result.Error
 		}
+	}
+	if refusal != nil {
+		// A cross-harness worker shows why it does not run,
+		// whatever its last turn says (interrupted settles a turn left
+		// open with this reason too).
+		c.lastErr = refusal.Error()
 	}
 	c.writeRegistration()
 	// A row a terminal login took while no daemon ran: the loop lets the

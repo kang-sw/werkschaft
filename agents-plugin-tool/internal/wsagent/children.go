@@ -328,6 +328,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 		Prompt:  req.Prompt,
 		Label:   label,
 		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		// The token holder is the verified spawner.
+		spawnerBackend: rec.Backend,
 	})
 	if err != nil {
 		return State{}, err
@@ -651,8 +653,13 @@ func (r *Runner) deliverLater(id string) {
 // (Record.PendingReports) to its open conversation parent, taking them
 // from the child's record in the same step of the parent's loop, so the
 // parent never reads the child with a report in neither place
-// (holdsReport). A report whose parent is closed or unknown, or whose own
-// conversation closed, stays where it is.
+// (holdsReport). That step runs inside a step of the child's own loop,
+// which waits for it: the child's record is its loop's to copy unlocked,
+// so the take must not overlap the loop's other work. Neither loop waits
+// on another conversation's loop elsewhere, and a parent is never its
+// child's descendant, so the nesting cannot cycle. A report whose parent
+// is closed or unknown, or whose own conversation closed, stays where it
+// is.
 func (r *Runner) deliver(id string) {
 	child := r.conv(id)
 	if child == nil {
@@ -666,23 +673,28 @@ func (r *Runner) deliver(id string) {
 	if parent == nil {
 		return
 	}
-	var taken []PendingReport
-	parent.do(func() {
-		if parent.closed {
+	child.do(func() {
+		if child.closed {
 			return
 		}
-		child.update(func(rec *Record) {
-			if !child.closed {
-				taken, rec.PendingReports = rec.PendingReports, nil
+		var taken []PendingReport
+		parent.do(func() {
+			if parent.closed {
+				return
+			}
+			child.update(func(rec *Record) {
+				if !child.closed {
+					taken, rec.PendingReports = rec.PendingReports, nil
+				}
+			})
+			if len(taken) == 0 {
+				return
+			}
+			st := child.state()
+			for _, rep := range taken {
+				parent.takeReport(ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result}))
 			}
 		})
-		if len(taken) == 0 {
-			return
-		}
-		st := child.state()
-		for _, rep := range taken {
-			parent.takeReport(ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result}))
-		}
 	})
 }
 
@@ -1060,12 +1072,19 @@ func (r *Runner) wait(ctx context.Context, id string, timeout time.Duration, asP
 			// still waits in the record: one the runner took meanwhile
 			// already reached the parent, so the answer says so instead
 			// of repeating it.
+			// The take runs in the child's loop, whose record copies it
+			// must not overlap (deliver); a loop that ended copies none.
 			handed := false
-			c.update(func(rec *Record) {
-				n := len(rec.PendingReports)
-				rec.PendingReports = slices.DeleteFunc(rec.PendingReports, func(p PendingReport) bool { return p.ID == report })
-				handed = len(rec.PendingReports) == n
-			})
+			take := func() {
+				c.update(func(rec *Record) {
+					n := len(rec.PendingReports)
+					rec.PendingReports = slices.DeleteFunc(rec.PendingReports, func(p PendingReport) bool { return p.ID == report })
+					handed = len(rec.PendingReports) == n
+				})
+			}
+			if !c.do(take) {
+				take()
+			}
 			if handed {
 				last.Message, last.Error, last.Delivered = "", "", true
 			}

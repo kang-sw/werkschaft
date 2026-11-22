@@ -127,6 +127,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		delegatedAuthority: true,
 		SystemPrompt:       system,
 		claimWidth:         claimWidth,
+		spawnerBackend:     caller.VerifiedBackend,
 	})
 	if err != nil {
 		return AgentSpawnResult{}, err

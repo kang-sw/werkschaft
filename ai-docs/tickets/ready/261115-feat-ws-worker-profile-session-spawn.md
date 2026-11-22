@@ -280,7 +280,9 @@ Phase 2; keep keys, lineage and input/mail ownership unchanged.
 
 Implement the worker sidecar, explicit tool admission, short manual,
 `worker.bootstrap`, worker creation routes and support signal from the
-technical contract. The dialog requires a reachable owning lead and offers
+technical contract. The support signal and the dialog exclude agy: owner
+(1545) made agy a lead-only harness
+(`261122-feat-ws-agy-lead-only-harness`). The dialog requires a reachable owning lead and offers
 an editable one-line intro; mail its address/intro automatically and expose
 copy-address on the page. Add actual non-lead hosted mail watch/input delivery
 through the existing single-owner path. Preserve direct lead creation,

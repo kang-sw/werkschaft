@@ -65,11 +65,13 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			// or resume there, live process or not.
 			refusal = checkoutReleasedRefusal(checkout)
 		case asleep:
-			rp, resolveErr := r.resolve(rec.Profile, rec.Root)
-			if resolveErr != nil {
-				refusal = resolveErr
-			} else {
-				_, _, refusal = r.childAdmission(rec, rp.Definition)
+			// Ahead of the profile: its edits never mask a cross-harness refusal.
+			if refusal = r.admitWorkerRecord(rec); refusal == nil {
+				if rp, resolveErr := r.resolve(rec.Profile, rec.Root); resolveErr != nil {
+					refusal = resolveErr
+				} else {
+					_, _, refusal = r.childAdmission(rec, rp.Definition)
+				}
 			}
 		}
 	}
