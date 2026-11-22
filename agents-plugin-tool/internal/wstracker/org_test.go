@@ -551,9 +551,15 @@ func TestEndingOrgRuleReextendsOverlappingRule(t *testing.T) {
 	if s.asg[plainRule+">lena"] != nil {
 		t.Fatal("overlapping plain rule unexpectedly owned lena before removal")
 	}
+	tm.do("lena.pc", TypeItemStatus, map[string]any{"item": it, "status": "doing", "note": "halfway"})
 	tm.do("maya.pc", TypeItemUnassign, map[string]any{"item": it, "rule": orgRule})
 	v := tm.view("maya.pc")
-	wantEq(t, "other rule fills gap in same step", asg(t, v, plainRule+">lena").State, "live")
+	filled := asg(t, v, plainRule+">lena")
+	wantEq(t, "other rule fills gap in same step", filled.State, "live")
+	wantEq(t, "continued coverage keeps status", filled.Status, "doing")
+	if filled.Note == nil || *filled.Note != "halfway" {
+		t.Fatalf("continued coverage note = %v, want halfway", filled.Note)
+	}
 }
 
 func TestEndingOrgRuleByRootReextendsOverlappingRule(t *testing.T) {
