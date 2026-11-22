@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 06c73425b5249759
 sage-review-completeness-reviewed: 06c73425b5249759
+completed: 2026-11-22
 ---
 
 # Cut headerless agy model streams after 120 seconds and add an opt-in HTTP/2 frame trace
@@ -295,3 +296,51 @@ Verification:
     and leaves stderr handling unchanged.
 - Settings catalog and manifest tests for both keys, in ws and wsflow, with
   the package defaults above.
+
+### Result (5beb97f2f) - 2026-11-22
+
+Landed in 5beb97f2f, with a test hardening in e12f131ff after lite review.
+
+- `wsagent/agy_stall_log.go`:
+  - The locator runs once per agy process. It considers `acp-worker-*.log` files modified since the process start minus 2 s, newest first, and picks the one whose bounded content (8 MiB) has the `server.go` `Sending user message to conversation <id>` line.
+  - The tail read is 512 KiB.
+  - The glog parser takes the year from the boundary and handles a year wrap. A tail is verified when its first complete line is before the boundary minus 2 s (coverage) and it holds at least one `http_helpers.go` `URL: ...streamGenerateContent` line (format).
+  - A header line is main unless its goroutine logged `llm_monitor.go` `Calling LLM` in the same tail. Anything unverified is unknown, never cuts, and logs one notice per session.
+- Watchdog (`agy_watchdog.go`), lead convs only:
+  - The request boundary is the prompt sent with no turn active, the automatic `continue`, or the turn's last pending tool call ending.
+  - A steer restarts the timer but keeps the boundary. A background completion changes nothing.
+  - A message chunk, thought chunk, holder pulse, or plan update after the boundary marks content. The timer then stops, and a firing that raced the content does not cut.
+  - When the timer fires, a main header in the window, content, or an unknown log restarts the timer with no retry spent. A verified headerless tail cuts through the existing interrupt-plus-`continue` path on the shared retry budget.
+  - The in-band failure path, the 11-minute drain, and peer mail delivery are unchanged. `agySilenceWatchdogEnabled` stays as a test-only raw mode.
+- Frame trace:
+  - `agy.http2_frame_trace=true` merges `GODEBUG=http2debug=2` into agy's environment.
+  - It also passes `http2_capture{path,max_bytes}` on the holder spawn. holder.py routes `http2:` stderr lines (classified on the first record, which covers split records) through the framer-field allowlist into `<session dir>/agy-http2-frames.log`. The file is capped at 64 MiB with one marker line, and none of these lines reach the ring.
+  - The daemon appends a cutoff marker to the same file.
+- Config:
+  - The new keys are `agy.stall_log_check` (default true) and `agy.http2_frame_trace` (default false).
+  - Both are in both manifests, the settings catalog, the 11 i18n tables, and the dashboard read limits. `ws-mcp.md` is updated.
+- File operations:
+  - One firing: open, lseek, pread, close.
+  - Locator, once per process: one ReadDir, one lstat per `acp-worker-` entry, and a bounded scan per candidate.
+  - These counts follow from the code. They were not traced: tracing needs root.
+
+Verification (all pass):
+- `go test ./internal/wsagent -run 'Agy|Lead|Steer|Holder|ModelWait|Wake|Background'`
+- New stall tests run with `-race -count=5`.
+- After review, the content test was mutation-checked: with the content guard removed, it fails.
+- `go test ./internal/wsholder -run 'TestSpawnHTTP2Capture|TestLaunchRing|TestAConsumersReplay'`
+- The Python holder suite (51).
+- `go test ./internal/mcp -run 'TestShippedAgy|TestAgyManifestExposure|Settings|Manifest'`
+- wsi18n, wspackage, and wsdashboard with `-run 'Settings|Manifest|Catalog|I18n|Table'`.
+- `./cmd/ws-mcp -run 'HostedPlugin|Agy|Manifest'`
+- `generate-package-assets.py --check`
+- `go vet` and gofmt are clean.
+- The glog line shapes were confirmed read-only against a local agy log. All fixtures are synthetic.
+
+Decisions:
+- A tool-completion boundary is stamped when ws processes the update. That is cosmetic: the 2 s skew absorbs ordinary loop lag.
+- A locator failure is cached for the process lifetime. This follows "locate once" and fails safe.
+- Open minor review notes:
+  - The steer-deadline test's stale-channel assertion: its real evidence is the timer count plus the later cut.
+  - Untested: the worker conv exclusion and `steerMail` restarting the timer.
+  - holder.py depends on Go's standard `log` prefix before `http2: `.
