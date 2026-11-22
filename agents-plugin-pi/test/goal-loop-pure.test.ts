@@ -279,8 +279,7 @@ describe("buildGoalAnnouncement", () => {
 describe("buildCompactionLeverResult", () => {
   test("names the requested compaction without echoing the prose the summary already carries", () => {
     const text = buildCompactionLeverResult();
-    assert.ok(text.startsWith("Compaction requested; the conversation will resume from a summary carrying"));
-    assert.match(text, /fixed headings/);
+    assert.equal(text, "Compaction requested. The summary carries the session state and your prose under the fixed headings.");
   });
 });
 

@@ -69,7 +69,7 @@
  * sections plus that prose, replacing Pi's native summarizer for the lead.
  * The lever works with or without an active goal; only while a goal is active
  * does it re-arm the goal loop (it never calls `disarmGoal()`). With no goal,
- * a lever call that cut work short (autonomous, or after the hard cut) is
+ * an autonomous lever call that cut work short is
  * followed by one resume message from the lever's completion callback, once
  * an idle release has flushed held pushes (261003); the lead can also request
  * that resume explicitly with `continue_after_compact: true` (261004), which
@@ -103,6 +103,7 @@ import {
   GOAL_ANNOUNCEMENT_PREFIX,
   GOAL_REMINDER_MARKER_PREFIX,
   isLeadCompactionDetails,
+  HOSTED_PREPARATION_MARKER,
   LEAD_COMPACT_CUSTOM_TYPE,
   LEAD_COMPACT_TOOL_NAME,
   LEAD_COMPACTION_DETAILS_KIND,
@@ -378,7 +379,7 @@ export function buildGoalAnnouncement(goal: string): string {
  * it already sits in the lever call's own arguments and in the summary.
  */
 export function buildCompactionLeverResult(): string {
-  return "Compaction requested; the conversation will resume from a summary carrying the session state and your prose under the fixed headings.";
+  return "Compaction requested. The summary carries the session state and your prose under the fixed headings.";
 }
 
 /** One `ws-compact` file-list entry's JSON schema (261007). */
@@ -455,15 +456,18 @@ type CompactionOperation = {
 
 /**
  * Whether a goal-less lever compaction reached by `route` resumes the lead
- * (261003). Only the routes whose run was mid-work when the abort landed do;
- * after the advisory nudge, a milestone wake turn (261007), or a user
- * `/compact` the next move is the user's
+ * (261003). An autonomous call resumes; after a preparation notice, a
+ * milestone wake turn, or a user `/compact` the next move is the user's
  * unless the lead set `continue_after_compact` (261004), the other
  * eligibility term, which the release check ORs with this predicate.
  */
 export function resumesAfterCompaction(route: CompactionOperation["route"]): boolean {
-  return route === "hard" || route === "autonomous";
+  return route === "autonomous";
 }
+
+// Daemon-to-Pi markers distinguish hosted preparation and hard fallback from
+// ordinary user prompts and manual /compact commands.
+const HOSTED_AUTO_COMPACT_MARKER = "<!-- ws-pi-daemon-auto-compact -->";
 
 /**
  * The goal-less resume message (261003): Pi's `compact()` aborts the run that
@@ -1465,11 +1469,16 @@ export function registerGoalLoop(
   // terminal lever or force-stop does, both of which run inside a turn whose
   // own `agent_start` already cleared the key on entry.
   pi.on("message_start", (event) => {
-    if (event.message.role !== "user" || !outstandingReminderHandoff) return;
+    if (event.message.role !== "user") return;
     const content = event.message.content;
     const text = typeof content === "string"
       ? content
       : content.filter((part) => part.type === "text").map((part) => part.text).join("");
+    if (opts.isHosted?.() && !isChildProcess(process.env) && text.includes(HOSTED_PREPARATION_MARKER)) {
+      preparation = true;
+      preparationKind = "advisory";
+    }
+    if (!outstandingReminderHandoff) return;
     const marker = `${GOAL_REMINDER_MARKER_PREFIX}${outstandingReminderHandoff.id} -->`;
     if (text.includes(marker)) outstandingReminderHandoff = undefined;
   });
@@ -1643,7 +1652,8 @@ export function registerGoalLoop(
     expectOwnCompaction = false;
     stagedRecovery = undefined;
     const lever = pendingLever;
-    if (event.reason === "manual" && !lever) {
+    const daemonFallback = opts.isHosted?.() && event.customInstructions?.trim() === HOSTED_AUTO_COMPACT_MARKER;
+    if (event.reason === "manual" && !lever && !daemonFallback) {
       // A user /compact (or any manual compaction not started by the lever)
       // is cancelled; the failure event Pi emits for the cancel releases the
       // hold and then queues the preparation turn with the focus text.
@@ -1841,7 +1851,7 @@ export function registerGoalLoop(
     name: LEAD_COMPACT_TOOL_NAME,
     label: LEAD_COMPACT_TOOL_NAME,
     description:
-      "Compact the lead's context now. Fill every heading with your carry-forward prose (empty when there is nothing): for content already persisted (tickets, commits, notes, agenda, todos) give its path or pointer; for content that lives only in the conversation, summarize it as precisely as possible. The adapter adds the session key, active ticket and playbook, child agents, and the recent dialog (user messages, your replies, branch summaries, one line per tool call) itself. After compaction, an active goal keeps running. With no goal, a resume message follows when you called this on your own or after the hard-threshold notice; after the advisory nudge, a milestone, or a user /compact, the next move is the user's unless you set continue_after_compact to true because you hold known remaining work that does not await the user.",
+      "Compact the lead's context now. Give carry-forward prose or an empty value for each heading. Give paths or pointers for saved state and summarize details that live only in the conversation. The adapter adds the session key, active ticket and playbook, child agents, and recent dialog. An active goal keeps running. Without a goal, an autonomous compaction resumes work. After a preparation notice, milestone, or user /compact, the next move is the user's. Set continue_after_compact to true when you have work that can proceed without user input.",
     parameters: leadCompactParameterSchema() as never,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ExtensionContext) {
       if (isChildProcess(process.env)) {

@@ -5,9 +5,13 @@ package wsagent
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/kang-sw/devenv/internal/wsinbox"
+	"math/rand/v2"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 // piProtocol writes Pi's RPC commands.
@@ -33,7 +37,9 @@ type piProcess struct {
 	mu     sync.Mutex
 	effort string
 	// lead marks a lead conversation's process.
-	lead bool
+	lead              bool
+	compactSteerEpoch string
+	compactSteers     []piCompactSteer
 }
 
 func (p *piProcess) processControls() processControls {
@@ -92,6 +98,42 @@ func piCompactCommand(text string) (string, bool) {
 // its current tool calls, before its next model request.
 func (p *piProcess) Steer(text string) error {
 	return p.writeLine(map[string]any{"type": "steer", "message": text})
+}
+
+const piCompactSteerID = "ws-compact-steer-"
+const piCompactSteerIDBase = 1 << 52
+
+type piCompactSteer struct{ id, text string }
+
+// Pi's rpc-types declare id?: string. The Pi 1.5.2 RPC runtime passes integer
+// IDs through, verified locally. Reserve negative safe integers so an older
+// daemon's string-only decoder skips these replies during worker rejoin.
+func (p *piProcess) steerCompaction(text string) (string, error) {
+	number := -piCompactSteerIDBase - int64(rand.Uint64N(piCompactSteerIDBase))
+	id := strconv.FormatInt(number, 10)
+	if err := p.writeLine(map[string]any{"id": number, "type": "steer", "message": text}); err != nil {
+		return "", err
+	}
+	p.compactSteers = append(p.compactSteers, piCompactSteer{id, text})
+	return id, nil
+}
+
+func (p *piProcess) takeCompactSteer(id string) piCompactSteer {
+	i := slices.IndexFunc(p.compactSteers, func(steer piCompactSteer) bool { return id == "" || steer.id == id })
+	if i < 0 {
+		return piCompactSteer{}
+	}
+	steer := p.compactSteers[i]
+	p.compactSteers = slices.Delete(p.compactSteers, i, i+1)
+	return steer
+}
+
+func (p *piProcess) fallbackCompactSteer(text string) (string, error) {
+	if p.compactSteerEpoch == "" {
+		p.compactSteerEpoch = newMCPToken()
+	}
+	id := piCompactSteerID + p.compactSteerEpoch + "-" + p.nextID()
+	return id, p.writeLine(map[string]any{"id": id, "type": "steer", "message": text})
 }
 
 // ClearSteered is pi's clear_queue command: it drops the steered messages

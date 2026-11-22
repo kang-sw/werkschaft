@@ -5,6 +5,7 @@ package wsagent
 import (
 	"encoding/json"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,10 +43,12 @@ type piMapper struct {
 	messages           int
 	turnErr            string
 	turnReason         string
+	compactRequested   bool
 	// Explicit opt-in from this process's native bundle. Legacy bundles keep
 	// their reasonless hosted ends and existing answer-check behavior.
-	summaryCapable bool
-	lastStatsAt    int64
+	summaryCapable     bool
+	compactPreparation atomic.Bool
+	lastStatsAt        int64
 	// Receipt-time streaming span, excluding request and tool latency. A
 	// missing/burst-flushed stream has no usable rate.
 	outputStartedAt int64
@@ -154,7 +157,7 @@ type piStats struct {
 func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 	var l piLine
 	if json.Unmarshal(line, &l) != nil {
-		return nil
+		return piNumericCompactSteerReply(line)
 	}
 	now := m.now().UnixMilli()
 	switch l.Type {
@@ -178,6 +181,10 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 			replies.answer(l.ID, controlAnswer{ok: l.Success, err: l.Error, body: l.Data})
 		}
 		switch l.Command {
+		case "parse":
+			if !l.Success && l.ID == "" && l.Error != "" {
+				return []Event{{compactSteerReply: &compactSteerReply{refusal: l.Error, piNumeric: true}}}
+			}
 		case "prompt":
 			if !l.Success {
 				return m.commandDone(now, "prompt refused: "+l.Error)
@@ -209,6 +216,16 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 			}
 			return m.commandDone(now, errText)
 		case "steer":
+			if strings.HasPrefix(l.ID, piCompactSteerID) {
+				answer := compactSteerReply{id: l.ID}
+				if !l.Success {
+					answer.refusal = l.Error
+					if answer.refusal == "" {
+						answer.refusal = "refused"
+					}
+				}
+				return []Event{{compactSteerReply: &answer}}
+			}
 			// A non-lead process steers a child's report, which the runner
 			// sends as a turn instead when pi refuses it (children.go).
 			if m.spec.Lead == nil {
@@ -232,6 +249,7 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 		m.nativeRun, m.nativeKnown = true, true
 		m.nativeGeneration++
 		m.pendingCommand = nil
+		m.compactRequested = false
 		out := []Event{{TurnStart: true}}
 		if warning := m.pendingLeadWarning; warning != "" {
 			out = append(out, Event{CommandError: warning})
@@ -258,6 +276,14 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 		m.askStats(replies, now, false)
 	case "tool_execution_end":
 		out := m.batches.endCall(l.ToolCallID, l.IsError, now)
+		if m.spec.Lead != nil && l.ToolName == "ws-compact" && !l.IsError {
+			// Pi aborts and settles the invoking run before starting manual
+			// compaction. Hold the idle boundary for that native operation.
+			m.compactRequested = true
+			for i := range out {
+				out[i].ToolBoundary = false
+			}
+		}
 		var result struct {
 			Content []piBlock `json:"content"`
 		}
@@ -277,6 +303,7 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 		}
 		return append(out, resultEvents(tool, strings.Join(parts, "\n"))...)
 	case "compaction_start", "compaction_end":
+		m.compactRequested = false
 		trigger := ""
 		switch l.Reason {
 		case "manual":
@@ -337,6 +364,10 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 						m.summaryCapable = *ev.summaryCapability && len(line)+1 <= wslive.SummaryFrameBytes
 						ev.summaryCapability = nil
 					}
+					if ev.piCompactCapability != nil {
+						m.compactPreparation.Store(*ev.piCompactCapability && len(line)+1 <= wslive.SummaryFrameBytes)
+						ev.piCompactCapability = nil
+					}
 					if ev.ReasoningSummary != nil && (!m.summaryCapable || len(line)+1 > wslive.SummaryFrameBytes) {
 						continue
 					}
@@ -350,6 +381,27 @@ func (m *piMapper) mapLine(line []byte, replies lineReplies) []Event {
 		}
 	}
 	return nil
+}
+
+func piNumericCompactSteerReply(line []byte) []Event {
+	var reply struct {
+		Type, Command, Error string
+		ID                   int64
+		Success              bool
+	}
+	if json.Unmarshal(line, &reply) != nil || reply.Type != "response" ||
+		(reply.Command != "steer" && (reply.Command != "parse" || reply.Success)) ||
+		reply.ID > -piCompactSteerIDBase || reply.ID <= -2*piCompactSteerIDBase {
+		return nil
+	}
+	answer := compactSteerReply{id: strconv.FormatInt(reply.ID, 10), piNumeric: true}
+	if !reply.Success {
+		answer.refusal = reply.Error
+		if answer.refusal == "" {
+			answer.refusal = "refused"
+		}
+	}
+	return []Event{{compactSteerReply: &answer}}
 }
 
 // askStats coalesces busy message/turn boundaries. Settlement always gets a

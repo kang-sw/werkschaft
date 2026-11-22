@@ -103,7 +103,9 @@ func (m *piMapper) endTurn(now int64, turnErr string) []Event {
 		reason = m.turnReason
 	}
 	m.turnErr, m.turnReason = "", ""
-	return append(out, Event{TurnEnd: true, TurnError: turnErr, TurnReason: reason})
+	requested := m.compactRequested
+	m.compactRequested = false
+	return append(out, Event{TurnEnd: true, TurnError: turnErr, TurnReason: reason, CompactRequested: requested})
 }
 
 func (m *piMapper) message(raw json.RawMessage, now int64) []Event {

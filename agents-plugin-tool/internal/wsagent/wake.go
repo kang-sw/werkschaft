@@ -143,6 +143,7 @@ func (m *claudeMapper) taskWake(l claudeLine) []Event {
 // It carries JSON live-event lines like the agent widget, but never allows
 // an extension to reset the runner's state or replace its usage or turns.
 const piEventsWidgetKey = "ws-dashboard-events"
+const piCompactCapability = "pi_compaction_preparation_v1"
 
 func piHostedEvents(raw json.RawMessage) []Event {
 	var lines []string
@@ -181,11 +182,12 @@ func piHostedEvents(raw json.RawMessage) []Event {
 						Capabilities []string `json:"capabilities"`
 					}
 					if json.Unmarshal([]byte(line), &hello) == nil && hello.Capabilities != nil && len(hello.Capabilities) <= 16 {
-						capable := false
+						summary, compact := false, false
 						for _, capability := range hello.Capabilities {
-							capable = capable || capability == wslive.ReasoningSummaryCapability
+							summary = summary || capability == wslive.ReasoningSummaryCapability
+							compact = compact || capability == piCompactCapability
 						}
-						status.summaryCapability = &capable
+						status.summaryCapability, status.piCompactCapability = &summary, &compact
 					}
 					out = append(out, status)
 				}

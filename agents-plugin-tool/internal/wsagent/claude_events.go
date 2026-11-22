@@ -32,6 +32,9 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 	switch l.Type {
 	case "control_response":
 		replies.answer(l.Response.RequestID, controlAnswer{ok: l.Response.Subtype == "success", err: l.Response.Error, body: l.Response.Response})
+		if l.Response.RequestID == claudeRecoveryContextAsk {
+			return m.recoveryContextUsage(l)
+		}
 		if strings.HasPrefix(l.Response.RequestID, claudeContextAsk) {
 			return m.contextUsage(l)
 		}
@@ -109,7 +112,9 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 					return []Event{{HarnessState: l.State}}
 				}
 				out := append([]Event{{HarnessState: l.State}}, m.closeTurn(now)...)
-				out = append(out, m.status(), Event{TurnEnd: true, TurnError: m.turnErr, CompactRequested: m.leverEnd})
+				status := m.status()
+				status.FinalUsage = true
+				out = append(out, status, Event{TurnEnd: true, TurnError: m.turnErr, CompactRequested: m.leverEnd})
 				m.turnErr, m.leverEnd = "", false
 				return out
 			}
@@ -252,7 +257,9 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 		if l.TotalCostUSD != nil {
 			m.cost = &wslive.UsageCost{USD: *l.TotalCostUSD, Estimate: true}
 		}
-		out = append(out, m.status())
+		status := m.status()
+		status.FinalUsage = true
+		out = append(out, status)
 		// An interrupted turn's lever call does not hold: the person is
 		// taking over, and the mod parks the request without compacting.
 		lever := m.lever && !strings.HasPrefix(l.TerminalState, "aborted")

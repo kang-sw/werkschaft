@@ -811,6 +811,22 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
       assert.ok(pi.tools.has("ws-compact"));
     });
 
+    test("hosted daemon hard fallback compacts with the lead summary without rerouting", async () => {
+      const { pi, ctx, preparations } = triggerRun(undefined, () => true);
+      Object.assign(ctx, {
+        model: { id: "m", maxTokens: 4096 },
+        modelRegistry: { complete: async () => ({ role: "assistant", stopReason: "stop", usage: { input: 1, output: 2 }, content: [{ type: "text", text: "### Current work\nFALLBACK" }] }) },
+      });
+      const event = { ...compactionEvent("manual"), customInstructions: "<!-- ws-pi-daemon-auto-compact -->" };
+      const result = await (pi.handlers.get("session_before_compact")!(event, ctx) as unknown as Promise<{ compaction: { summary: string; details: { source: string } } }>);
+      assert.equal(result.compaction.details.source, "fallback");
+      assert.match(result.compaction.summary, /FALLBACK/);
+      pi.handlers.get("session_compact")!({ reason: "manual", fromExtension: false, compactionEntry: { details: result.compaction.details } }, ctx);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(preparations().length, 0);
+      assert.equal(pi.sentUserMessages.length, 0);
+    });
+
     test("token thresholds resolve against the window; milestones sit between the resolved token counts", () => {
       const { usage, preparations, text, milestones, runEnd, toolTurn } = tokenRun({ compaction_advisory_percent: "300k", compaction_hard_percent: "50%|600k" });
       usage.tokens = 299_000;

@@ -11,6 +11,7 @@ import { hostedSummaryLine } from "./reasoning-summary-transport.ts";
 import type { SpawnRole } from "./process-role.ts";
 
 export const HOSTED_EVENTS_WIDGET_KEY = "ws-dashboard-events";
+export const PI_COMPACTION_PREPARATION_CAPABILITY = "pi_compaction_preparation_v1";
 
 export interface HostedDashboardEventsOptions {
   setWidget: (key: string, lines: string[]) => void;
@@ -18,6 +19,7 @@ export interface HostedDashboardEventsOptions {
   reasoningSummary?: () => ReasoningSummary | undefined;
   // Explicit process-local opt-in; omitted by legacy bundles, false on unsupported hosts.
   reasoningSummaryCapable?: boolean;
+  compactionPreparationCapable?: boolean;
   now?: () => number;
   schedule?: (fn: () => void, ms: number) => () => void;
 }
@@ -51,8 +53,11 @@ export function createHostedDashboardEvents(options: HostedDashboardEventsOption
       const counts = options.taskCounts();
       const status = JSON.stringify({
         kind: "status", background: counts.timed, monitors: counts.monitors,
-        ...(options.reasoningSummaryCapable === undefined ? {} : {
-          capabilities: options.reasoningSummaryCapable ? [REASONING_SUMMARY_CAPABILITY] : [],
+        ...(options.reasoningSummaryCapable === undefined && options.compactionPreparationCapable === undefined ? {} : {
+          capabilities: [
+            ...(options.reasoningSummaryCapable ? [REASONING_SUMMARY_CAPABILITY] : []),
+            ...(options.compactionPreparationCapable ? [PI_COMPACTION_PREPARATION_CAPABILITY] : []),
+          ],
         }),
       });
       const lines = pending.map((wake) => JSON.stringify(wake));
@@ -110,7 +115,7 @@ export function createHostedDashboardEvents(options: HostedDashboardEventsOption
     start() {
       stop();
       stopped = false;
-      capabilityDirty = options.reasoningSummaryCapable !== undefined;
+      capabilityDirty = options.reasoningSummaryCapable !== undefined || options.compactionPreparationCapable !== undefined;
       // A running task must reach the host before its idle timer can stop the
       // conversation. Do not coalesce membership changes behind the dashboard timer.
       unsubscribe = onBackgroundTasksChanged(tasksChanged);
@@ -122,12 +127,12 @@ export function createHostedDashboardEvents(options: HostedDashboardEventsOption
       if (stopped) return;
       const e = event as { type?: unknown; message?: unknown } | undefined;
       if (e?.type === "agent_start") {
-        capabilityDirty = options.reasoningSummaryCapable !== undefined;
+        capabilityDirty = options.reasoningSummaryCapable !== undefined || options.compactionPreparationCapable !== undefined;
         dirty();
         return;
       }
       if (e?.type === "agent_settled") {
-        capabilityDirty = options.reasoningSummaryCapable !== undefined;
+        capabilityDirty = options.reasoningSummaryCapable !== undefined || options.compactionPreparationCapable !== undefined;
         cancel?.();
         cancel = undefined;
         summaryDirty = true;

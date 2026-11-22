@@ -97,6 +97,9 @@ type conv struct {
 	compactLoaded                                                                                                  bool
 	compactUsageFresh, compactAdvised, compactM1Issued, compactM2Issued, compactHardIssued, compactAdvisoryEnabled bool
 	compactAwaitTurn                                                                                               bool
+	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
+	compactHardSteerID                                                                                             string
+	compactContinueAtIdle, compactIdleInternal                                                                     bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -1170,7 +1173,7 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 // it, which each turn end submits; mail waits for the next message turn, or
 // goes alone once nothing is queued.
 func (c *conv) canKick() bool {
-	return !c.closed && !c.hidden && !c.turn && !c.replaying && len(c.steered) == 0 && c.leverC == nil &&
+	return !c.closed && !c.hidden && !c.quitting && !c.turn && !c.replaying && len(c.steered) == 0 && c.leverC == nil &&
 		!(c.r.opts.Holders != nil && !c.r.scanDone())
 }
 

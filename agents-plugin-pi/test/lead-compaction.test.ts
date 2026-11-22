@@ -121,6 +121,7 @@ describe("human-typed user text", () => {
       user(3, `${label}\nGoal yet running: "fix the parser".\n\n<!-- ws-pi-goal-reminder:1-1 -->`),
       user(4, buildPushWakeLine(2)),
       user(5, "and the lexer too"),
+      user(6, "<!-- ws-pi-compaction-preparation --> Context advisory"),
     ] as never);
     assert.deepEqual(items.map((item) => (item as { text?: string }).text), ["please fix the parser", "/goal fix the parser", "and the lexer too"]);
   });

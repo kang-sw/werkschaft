@@ -320,11 +320,12 @@ const (
 	HarnessIdle    = "idle"
 )
 
-// Event is one item of a process's output. Exactly one of its parts is set,
-// except that a TurnEnd may carry TurnError, a BackgroundTasks update may
-// carry known Background and Monitors splits, and Seq and Replay mark
-// any event of a process under a session holder.
+// Event is one item of a process's output. Metadata such as Seq, Replay,
+// ToolBoundary, and FinalUsage accompanies the event it describes.
 type Event struct {
+	// ToolBoundary accompanies the final result of a tool batch. Forced
+	// batch closures at turn end are displayed but carry no boundary.
+	ToolBoundary bool
 	// Seq is the holder record sequence of the line the event came from;
 	// 0 for the daemon's own child. Replay marks a line the runner already
 	// applied under an earlier daemon: it rebuilds state and writes
@@ -396,12 +397,16 @@ type Event struct {
 	// LiveCoalescesTurnEnd marks a live status immediately followed by this
 	// mapper's TurnEnd. File-only recovery can persist both in one snapshot.
 	LiveCoalescesTurnEnd bool
+	// FinalUsage is a settled model run's status. It can trigger idle
+	// compaction, since the caller may still be processing its turn end.
+	FinalUsage bool
 	// ReasoningSummary is a validated lead-only widget projection, never an
 	// extension-supplied lifecycle/usage/key command.
 	ReasoningSummary *wslive.ReasoningSummary
 	// summaryCapability is the hosted bundle's explicit process-local opt-in,
 	// consumed by piMapper, never stored or inferred from a summary payload.
-	summaryCapability *bool
+	summaryCapability   *bool
+	piCompactCapability *bool
 	// Card is a tracker card the lead showed: a successful tracker.show call
 	// of the attached ws-mcp whose result opens with its card line.
 	Card *wslive.CardRef
@@ -431,8 +436,7 @@ type Event struct {
 	// agyReplay carries the mapper's in-memory observation at ReplayDone.
 	agyReplay *agyReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful
-	// compaction lever call (a *__request_compaction tool call whose result
-	// is not an error) and was not interrupted. The runner holds queued
+	// harness compaction lever call. The runner holds queued
 	// input until that compaction starts (leverHoldCap at most), so the
 	// compaction runs before the next turn.
 	CompactRequested bool
@@ -443,14 +447,21 @@ type Event struct {
 	// steer command (a child's report, children.go), in the order they
 	// were written; UserTaken is the text of a user message its run took
 	// (a prompt, or a steered message it worked in).
-	SteerAnswer *SteerAnswer
-	UserTaken   string
+	SteerAnswer       *SteerAnswer
+	UserTaken         string
+	compactSteerReply *compactSteerReply
 }
 
 // SteerAnswer is how the harness answered a steer command: Refusal is
 // empty when it queued the message for its run.
 type SteerAnswer struct {
 	Refusal string
+}
+
+// compactSteerReply acknowledges guidance without accounting for a report.
+type compactSteerReply struct {
+	id, refusal string
+	piNumeric   bool
 }
 
 // harnessEnv returns env without the variables a parent harness session

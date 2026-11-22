@@ -44,6 +44,9 @@ export const LEAD_COMPACT_TOOL_NAME = "ws-compact";
 /** `customType` of the adapter's preparation messages (advisory nudge, hard-cut steer, `/compact` reroute). */
 export const LEAD_COMPACT_CUSTOM_TYPE = "ws-lead-compact";
 
+/** Daemon preparation prompts are scaffolding, not human dialog. */
+export const HOSTED_PREPARATION_MARKER = "<!-- ws-pi-compaction-preparation -->";
+
 /** `details.kind` stamped on every compaction entry this adapter authors; how a stored entry is recognized as ours. */
 export const LEAD_COMPACTION_DETAILS_KIND = "ws-pi-lead-compaction";
 
@@ -250,7 +253,9 @@ export function collectDialogItems(entries: readonly SessionEntry[]): DialogItem
     }
     const message = entryMessage(entry);
     if (message?.role === "user") {
-      const text = humanTextOf(messageText(message.content));
+      const raw = messageText(message.content);
+      if (raw.includes(HOSTED_PREPARATION_MARKER)) continue;
+      const text = humanTextOf(raw);
       if (text !== undefined) items.push({ kind: "user", timestamp: entry.timestamp, text });
     } else if (message?.role === "assistant") {
       let pending: string[] = [];

@@ -82,8 +82,13 @@ func TestLeadRejoinsItsProcessAfterADaemonRestart(t *testing.T) {
 	if got := h.ring(id); !reflect.DeepEqual(got, ringBefore) {
 		t.Fatalf("a rejoin writes no conversation entry:\n%+v\nbefore\n%+v", got, ringBefore)
 	}
-	if got := h.holders.inputs(holder, ""); !slices.Equal(got[:len(inputsBefore)], inputsBefore) || len(got) != len(inputsBefore)+1 {
-		t.Fatalf("a rejoin writes nothing to the process but the answer: %q", got)
+	eventually(t, "fresh context usage query after the rejoin", func() bool {
+		return slices.ContainsFunc(h.holders.inputs(holder, "control_request"), func(line string) bool {
+			return strings.Contains(line, `"request_id":"`+claudeRecoveryContextAsk+`"`) && strings.Contains(line, `"subtype":"get_context_usage"`)
+		})
+	})
+	if got := h.holders.inputs(holder, ""); len(got) != len(inputsBefore)+2 || !slices.Equal(got[:len(inputsBefore)], inputsBefore) {
+		t.Fatalf("rejoin writes only a usage query and the approval answer: %q", got)
 	}
 
 	// The harness works on while no daemon runs.

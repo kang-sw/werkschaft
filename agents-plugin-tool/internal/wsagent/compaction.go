@@ -29,6 +29,7 @@ const (
 	compactionRestoreMarker = "\x00ws-restore:compaction\x00"
 	restartRestoreMarker    = "\x00ws-restore:restart\x00"
 	leadStartStateMarker    = "\x00ws-lead-start-state\x00"
+	piCompactPreparation    = "<!-- ws-pi-compaction-preparation -->"
 )
 
 func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
@@ -44,6 +45,8 @@ func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
 type compactRequest struct {
 	resume   bool
 	internal bool
+	auto     bool
+	crossing bool
 	err      error
 }
 
@@ -107,7 +110,7 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 			out = CompactResult{"queued", "compaction already pending"}
 			return
 		}
-		req := &compactRequest{resume: again, internal: dest.compactInternalTurn}
+		req := &compactRequest{resume: again, internal: dest.compactInternalTurn, crossing: dest.aboveCompactHard()}
 		dest.compactPending = req
 		out = CompactResult{"queued", "native compaction waits for the idle boundary"}
 		dest.kick()
@@ -162,8 +165,12 @@ func NotifyCompactionConfigChanged() {
 func (c *conv) loadCompaction() {
 	c.loadCompactionThresholds()
 	c.compactLoaded = true
-	c.compactUsageFresh = false
+	c.compactUsageFresh, c.compactAwaitTurn, c.compactContinueAtIdle = false, false, false
 	c.compactPrevTokens, c.compactPrevWindow = 0, 0
+	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
+	c.compactHardSteerID = ""
+	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
+	c.compactNudge = compactionNudge{}
 }
 
 func (c *conv) loadCompactionThresholds() {
@@ -262,7 +269,8 @@ func (c *conv) disarmCompactionLatches() {
 		c.compactM1Issued, c.compactM2Issued = false, false
 	}
 	if c.compactTokens < c.compactHard.Point(c.compactWindow) {
-		c.compactHardIssued = false
+		c.compactHardIssued, c.compactHardSteered, c.compactHardHandled = false, false, false
+		c.clearCompactionSteerReplies()
 	}
 }
 
@@ -285,6 +293,8 @@ func (c *conv) refreshCompaction() {
 func (c *conv) observeCompaction(ev wslive.Event) {
 	if ev.Kind == wslive.KindTurnStart {
 		c.compactUsageFresh, c.compactAwaitTurn = false, false
+		c.compactContinueAtIdle = false
+		c.clearCompactionSteerReplies()
 	}
 	if ev.Kind != wslive.KindStatus || ev.Context == nil || c.compactAwaitTurn {
 		return
@@ -298,6 +308,9 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	c.compactUsageFresh = true
 	c.refreshCompaction()
 	c.disarmCompactionLatches()
+	if c.compactPending != nil && c.aboveCompactHard() {
+		c.compactPending.crossing = true
+	}
 }
 
 // checkUsageDropCompaction detects native compaction completion on harnesses
@@ -354,22 +367,12 @@ func (c *conv) compactIdle() bool {
 	if (strings.HasPrefix(c.compactNote, restartRestoreMarker) || strings.HasPrefix(c.compactNote, compactionRestoreMarker)) && !c.r.startupReady() {
 		return true
 	}
-	if c.compactPending == nil && c.compactUsageFresh {
+	if c.compactNote == "" && c.compactUsageFresh {
 		c.refreshCompaction()
-		hard := c.compactHard.Point(c.compactWindow)
-		if c.compactTokens >= hard && !c.compactHardIssued {
-			c.compactHardIssued, c.compactAdvised, c.compactM1Issued, c.compactM2Issued = true, true, true, true
-			c.compactNudge = compactionNudge{}
-			if why := c.compactUnsupported(); why == "" {
-				c.compactPending = &compactRequest{}
-			} else {
-				c.setStatus(func() { c.lastErr = why })
-				if c.compactAdvisoryEnabled {
-					c.compactNote += fmt.Sprintf("Context usage is %.0f tokens (%.0f%%); hard point %.0f tokens (%.0f%%). Native compaction is unsupported: %s. Write durable state to your agenda before compacting.\n", c.compactTokens, c.compactTokens/c.compactWindow*100, hard, hard/c.compactWindow*100, why)
-				}
-			}
-		} else {
-			c.stageCompactionNudge(hard)
+		if c.aboveCompactHard() {
+			c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+		} else if c.compactPending == nil {
+			c.stageCompactionNudge(c.compactHard.Point(c.compactWindow))
 		}
 	}
 	if req := c.compactPending; req != nil {
@@ -383,8 +386,16 @@ func (c *conv) compactIdle() bool {
 		c.compactResume, c.compactCommand = req.resume, true
 		c.compactResumeInternal = req.resume && req.internal
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
-		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: wslive.TriggerManual})
-		if err := c.runCommand(wsinbox.Command{Name: "compact"}); err != nil {
+		trigger := wslive.TriggerManual
+		if req.auto {
+			trigger = wslive.TriggerAuto
+		}
+		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
+		cmd := wsinbox.Command{Name: "compact"}
+		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
+			cmd.Args = "<!-- ws-pi-daemon-auto-compact -->"
+		}
+		if err := c.runCommand(cmd); err != nil {
 			req.err = err
 			c.compactCommand = false
 			c.stopCompactWatchdog()
@@ -429,6 +440,138 @@ func (c *conv) compactIdle() bool {
 	return false
 }
 
+func (c *conv) aboveCompactHard() bool {
+	return c.compactUsageFresh && c.compactTokens >= c.compactHard.Point(c.compactWindow)
+}
+
+// stageHardCompaction runs before settlement so a worker's report can wait
+// through a compaction and its continuation. Dispatch still waits for idle.
+func (c *conv) stageHardCompaction(resume, internal bool) {
+	if c.quitting || c.replaying || c.compacting || c.compactCommand || c.leverC != nil ||
+		!c.aboveCompactHard() || c.compactHardHandled || c.compactHardIssued {
+		return
+	}
+	if c.compactPending != nil {
+		c.compactPending.crossing = true
+		return
+	}
+	c.compactHardIssued, c.compactAdvised, c.compactM1Issued, c.compactM2Issued = true, true, true, true
+	c.compactNudge = compactionNudge{}
+	if why := c.compactUnsupported(); why != "" {
+		c.setStatus(func() { c.lastErr = why })
+		if c.compactAdvisoryEnabled && c.compactNote == "" {
+			c.compactNote = fmt.Sprintf("Context usage is %.0f tokens (%.0f%%). Native compaction is unavailable. %s\n", c.compactTokens, c.compactTokens/c.compactWindow*100, c.compactionStateInstruction())
+		}
+		return
+	}
+	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
+}
+
+func (c *conv) compactionStateInstruction() string {
+	if !c.rec.Lead && c.workerPermissionLevel == PermissionReadOnly {
+		return "Put the state needed to resume in your report."
+	}
+	return "Save the state needed to resume in your agenda."
+}
+
+func (c *conv) piLeadCompaction() bool {
+	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.rec, nil)
+}
+
+func (c *conv) canSteerCompaction() bool {
+	return c.turn && c.proc != nil && !c.quitting && !c.replaying && !c.wrapHold && !c.closed && !c.hidden &&
+		!c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactHardHandled && !c.compactHardIssued &&
+		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer))
+}
+
+// steerCompaction uses live usage for the first warning and one completed
+// tool batch for each subsequent warning. A request takes over at idle.
+func (c *conv) steerCompaction(boundary bool) {
+	if !c.canSteerCompaction() {
+		return
+	}
+	c.refreshCompaction()
+	st := controlsFor(c.proc).steer
+	if st == nil || !c.aboveCompactHard() || c.compactHardSteerID != "" || c.compactHardSteered && !boundary {
+		return
+	}
+	hard := c.compactHard.Point(c.compactWindow)
+	var text string
+	if c.compactHardSteered {
+		text = fmt.Sprintf("Hard %s, +%.0f%% (%s). End your turn for auto-compaction and continuation.", compactTokenCount(hard), (c.compactTokens/hard-1)*100, compactTokenCount(c.compactTokens))
+		if c.piLeadCompaction() {
+			text += " " + piCompactPreparation
+		}
+	} else {
+		text = fmt.Sprintf("Context usage is %s and has reached the hard point of %s. %s Wrap up the current step and end your turn so compaction can run and work can continue.", compactTokenCount(c.compactTokens), compactTokenCount(hard), c.compactionStateInstruction())
+		if c.piLeadCompaction() {
+			text += " You can call ws-compact with your carry-forward details at a safe boundary.\n" + piCompactPreparation
+		}
+	}
+	var id string
+	var err error
+	if advisory, ok := st.(interface{ steerCompaction(string) (string, error) }); ok {
+		id, err = advisory.steerCompaction(text)
+	} else {
+		err = st.Steer(text)
+	}
+	if err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: steer compaction guidance: %v\n", c.rec.ReplyID, err)
+		return
+	}
+	if id == "" {
+		c.compactHardSteered = true
+	} else if !c.compactHardSteered {
+		c.compactHardSteerID = id
+	}
+}
+
+func (c *conv) compactSteerAnswered(reply compactSteerReply) {
+	if reply.piNumeric {
+		p, ok := c.proc.(*piProcess)
+		if !ok {
+			return
+		}
+		steer := p.takeCompactSteer(reply.id)
+		if steer.id == "" {
+			return
+		}
+		reply.id = steer.id
+		if reply.refusal != "" && c.canSteerCompaction() && c.aboveCompactHard() {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: Pi refused the numeric compaction steer ID (%s). Retrying once with a string ID.\n", c.rec.ReplyID, reply.refusal)
+			id, err := p.fallbackCompactSteer(steer.text)
+			if err == nil {
+				if c.compactHardSteerID == reply.id {
+					c.compactHardSteerID = id
+				}
+				return
+			}
+			reply.refusal = err.Error()
+		}
+	}
+	if reply.id == c.compactHardSteerID {
+		c.compactHardSteerID = ""
+		c.compactHardSteered = reply.refusal == ""
+	}
+	if reply.refusal != "" {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: the harness refused compaction guidance: %s\n", c.rec.ReplyID, reply.refusal)
+	}
+}
+
+func (c *conv) clearCompactionSteerReplies() {
+	c.compactHardSteerID = ""
+	if p, ok := c.proc.(*piProcess); ok {
+		p.compactSteers = nil
+	}
+}
+
+func compactTokenCount(tokens float64) string {
+	if tokens < 1000 {
+		return fmt.Sprintf("%.0f", tokens)
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", tokens/1000), ".0") + "k"
+}
+
 // stageCompactionNudge prepares the note and the levels its delivery covers.
 // A jump from below soft still uses the first advisory's wording.
 func (c *conv) stageCompactionNudge(hard float64) {
@@ -451,20 +594,23 @@ func (c *conv) stageCompactionNudge(hard float64) {
 		return
 	}
 	standalone := c.compactUnsupported() == ""
-	if c.compactNudge.level == level && c.compactNudge.standalone == standalone {
-		return
-	}
 	usage := fmt.Sprintf("Context usage is %.0f tokens (%.0f%%); ", c.compactTokens, c.compactTokens/c.compactWindow*100)
 	if c.compactAdvised {
 		usage += fmt.Sprintf("compaction reminder %d/3 (%.0f tokens, hard point %.0f tokens). ", level-1, point, hard)
 	} else {
 		usage += fmt.Sprintf("advisory point %.0f tokens (%.0f%%). ", soft, soft/c.compactWindow*100)
 	}
-	action := "Write durable state to your agenda before compacting."
-	if standalone {
-		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing."
+	action := "Write durable state to your agenda before compacting. No summary prose is requested."
+	switch {
+	case c.piLeadCompaction():
+		if !c.compactAdvised && !math.IsInf(hard, 0) {
+			usage += fmt.Sprintf("The hard point is %.0f tokens (%.0f%%). ", hard, hard/c.compactWindow*100)
+		}
+		action = "At a safe boundary, call ws-compact with the carry-forward details requested by the tool.\n" + piCompactPreparation
+	case standalone:
+		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
 	}
-	c.compactNudge = compactionNudge{usage + action + " No summary prose is requested.", level, standalone}
+	c.compactNudge = compactionNudge{usage + action, level, standalone}
 }
 
 func (c *conv) consumeCompactionNudge() {
@@ -510,7 +656,7 @@ func (c *conv) restartRestoreHasInput() bool {
 }
 
 func (c *conv) compactHoldsReport() bool {
-	return (c.compactPending != nil && c.compactPending.resume) ||
+	return (c.compacting && c.heldRes != nil) || (c.compactPending != nil && c.compactPending.resume) ||
 		((c.compacting || c.compactCommand || c.compactNote != "") && c.compactResume)
 }
 
@@ -549,19 +695,30 @@ func (c *conv) compactEvent(ev wslive.Event) {
 	switch ev.Phase {
 	case wslive.CompactStart:
 		c.stopIdle()
+		if !c.compacting {
+			c.compactHardAtStart = c.aboveCompactHard() || c.compactHardSteered
+		}
 		c.compacting = true
+		c.clearCompactionSteerReplies()
 		c.compactUsageFresh = false
 		c.compactNudge = compactionNudge{}
 		c.compactAdvised, c.compactM1Issued, c.compactM2Issued, c.compactHardIssued = true, true, true, true
 	case wslive.CompactFailed:
 		c.compacting, c.compactResume = false, false
 		c.compactResumeInternal = false
+		c.compactHardAtStart = false
 	case wslive.CompactEnd:
 		// Duplicate ends carry neither a second note nor another continue turn.
 		if !c.compacting {
 			return
 		}
 		c.compacting = false
+		if c.compactPending != nil && c.compactPending.crossing {
+			// Native compaction already handled the queued request's crossing.
+			c.compactPending = nil
+		}
+		c.compactHardHandled = c.compactHardHandled || c.compactHardAtStart || c.aboveCompactHard()
+		c.compactHardAtStart = false
 		// A stats answer queued before compaction may still carry old tokens.
 		// Only the next model turn can produce a fresh post-compaction sample.
 		c.compactAwaitTurn = true

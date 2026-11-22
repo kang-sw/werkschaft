@@ -218,20 +218,55 @@ func TestCompactionIdleRestoreOrderingAndResume(t *testing.T) {
 }
 
 func TestCompactionAutoDoesNotStartContinue(t *testing.T) {
-	h := compactionHarness(t)
-	id, holder := h.runLead("one")
-	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
-	h.idle(id)
-	compactBoundary(h, id, holder)
-	h.idle(id)
-	if got := h.userInputs(holder); len(got) != 1 {
-		t.Fatalf("native auto started a turn: %q", got)
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendPi} {
+		t.Run(backend, func(t *testing.T) {
+			var h *leadHarness
+			switch backend {
+			case BackendClaude:
+				h = compactionHarness(t)
+			case BackendCodex:
+				h, _ = newCodexLeadHarness(t)
+				h.startAt(codexSyntheticEndpoint)
+			case BackendPi:
+				h, _ = newFakePiRecoveryHarness(t)
+				reg := h.runner.opts.Backends[BackendPi]
+				reg.NativeCompaction = PiCompaction()
+				h.runner.opts.Backends[BackendPi] = reg
+			}
+			probe := &restoreProbe{state: "fresh"}
+			h.runner.opts.RestoreBundle = probe.render
+			id := h.lead(backend, LeadOptions{}).ID
+			h.send(id, "one")
+			holder := h.holder(id)
+			inputs := func() []string { return h.userInputs(holder) }
+			switch backend {
+			case BackendClaude:
+				h.holders.out(holder, `{"type":"system","subtype":"status","status":"compacting"}`, `{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto"}}`, resultLine(), stateLine(HarnessIdle))
+			case BackendCodex:
+				inputs = func() []string { return codexUserInputs(h, holder) }
+				h.holders.out(holder,
+					`{"method":"item/started","params":{"threadId":"codex-s1","turnId":"t1","item":{"id":"c","type":"contextCompaction"}}}`,
+					`{"method":"item/completed","params":{"threadId":"codex-s1","turnId":"t1","item":{"id":"c","type":"contextCompaction"}}}`,
+					codexSyntheticEnd("t1", "first", "completed"),
+				)
+			case BackendPi:
+				inputs = func() []string { return h.holders.inputs(holder, "prompt") }
+				h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"compaction_start","reason":"threshold"}`, `{"type":"compaction_end","reason":"threshold"}`, `{"type":"agent_settled"}`)
+			}
+			h.idle(id)
+			if got := inputs(); len(got) != 1 {
+				t.Fatalf("native auto started a turn: %q", got)
+			}
+			h.send(id, "after")
+			eventually(t, "ordinary input carries restore", func() bool {
+				got := inputs()
+				return len(got) == 2 && strings.Contains(got[1], "restore[fresh]") && strings.Contains(got[1], "after")
+			})
+			if calls := probe.snapshot(); len(calls) != 1 || calls[0].cause != RestoreCompaction || calls[0].key != h.record(id).WSKey {
+				t.Fatalf("native restore calls = %+v", calls)
+			}
+		})
 	}
-	h.send(id, "after")
-	eventually(t, "ordinary input carries note", func() bool {
-		got := h.userInputs(holder)
-		return len(got) == 2 && strings.Contains(got[1], "Context was compacted") && strings.Contains(got[1], "after")
-	})
 }
 
 func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
@@ -346,7 +381,11 @@ func TestCompactionThresholdLatchAndStaleUsage(t *testing.T) {
 		t.Fatal("stale usage triggered compaction")
 	}
 	observe(&high)
-	c.do(func() { c.kick() })
+	c.do(func() {
+		// An idle session observed after recovery has no turn to continue.
+		c.compactContinueAtIdle = false
+		c.kick()
+	})
 	eventually(t, "hard before advisory", func() bool { return len(h.userInputs(holder)) == 2 })
 	if got := h.userInputs(holder)[1]; got != "/compact" {
 		t.Fatal(got)
@@ -1408,6 +1447,8 @@ func TestCompactionAgyCommandAndPromptResponse(t *testing.T) {
 
 func TestCompactionAgyUsageDropAutoDetection(t *testing.T) {
 	h, f := newAgyLeadHarness(t)
+	probe := &restoreProbe{state: "fresh"}
+	h.opts.RestoreBundle = probe.render
 	h.startAt("http://127.0.0.1:1")
 	id := h.lead(BackendAgy, LeadOptions{}).ID
 	f.replyID = id
@@ -1472,8 +1513,11 @@ func TestCompactionAgyUsageDropAutoDetection(t *testing.T) {
 	h.send(id, "turn-3")
 	eventually(t, "turn 3 prompt", func() bool { return len(agyPromptIDs(h, holder)) == 3 })
 	prompts := h.holders.acpInputs(holder, "session/prompt")
-	if got := string(prompts[2]); !strings.Contains(got, key) || !strings.Contains(got, "Context was compacted") || !strings.Contains(got, "turn-3") {
+	if got := string(prompts[2]); !strings.Contains(got, "restore[fresh]") || !strings.Contains(got, "turn-3") {
 		t.Fatalf("next turn missing restore note: %s", got)
+	}
+	if calls := probe.snapshot(); len(calls) != 1 || calls[0].key != key || calls[0].cause != RestoreCompaction {
+		t.Fatalf("auto-compaction restore calls = %+v", calls)
 	}
 }
 

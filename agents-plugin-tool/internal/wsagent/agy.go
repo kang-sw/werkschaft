@@ -401,12 +401,16 @@ func agyHTTPServer(s *MCPSession) map[string]any {
 // Send submits a user turn as a session/prompt; sent while a turn runs it
 // steers that turn.
 func (p *agyProcess) Send(text string) error {
+	return p.sendPrompt(text, text)
+}
+
+func (p *agyProcess) sendPrompt(text, acknowledgedText string) error {
 	sid := p.m.session()
 	if sid == "" {
 		return errors.New("the agy session is not open")
 	}
 	id := p.newID(agyKindPrompt)
-	p.m.promptSentText(id, text)
+	p.m.promptSentText(id, acknowledgedText)
 	err := p.writeLine(map[string]any{"jsonrpc": "2.0", "id": id, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sid,
 		"prompt":    []any{map[string]any{"type": "text", "text": text}},
@@ -420,6 +424,10 @@ func (p *agyProcess) Send(text string) error {
 // Steer writes text as another prompt: agy ends the running prompt and
 // carries its run on under this one (seen on 1.5.9).
 func (p *agyProcess) Steer(text string) error { return p.Send(text) }
+
+func (p *agyProcess) steerCompaction(text string) (string, error) {
+	return "", p.sendPrompt(text, "")
+}
 
 // ClearSteered is a no-op for agy. Its acknowledgement is the prior prompt's
 // end_turn response, which also proves the replacement prompt took the run;
@@ -993,17 +1001,21 @@ func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64, seq
 		delete(m.outstanding, id)
 		reattached := m.reattachedPromptAfter != nil && seq > *m.reattachedPromptAfter
 		var steerEvents []Event
+		tookSteer := false
 		for i, steerID := range m.steerOrder {
 			if m.outstanding[steerID] {
 				text := m.steerText[steerID]
 				delete(m.steerText, steerID)
 				m.steerOrder = slices.Delete(m.steerOrder, i, i+1)
-				steerEvents = append(steerEvents, Event{SteerAnswer: &SteerAnswer{}}, Event{UserTaken: text})
+				tookSteer = true
+				if text != "" {
+					steerEvents = append(steerEvents, Event{SteerAnswer: &SteerAnswer{}}, Event{UserTaken: text})
+				}
 				break
 			}
 		}
 		// Responses from before the open prompt cannot acknowledge its steers.
-		recoveredSteer := len(steerEvents) == 0 && len(m.recoveredSteers) > 0 && (m.reattachedPromptAfter == nil || reattached)
+		recoveredSteer := !tookSteer && len(m.recoveredSteers) > 0 && (m.reattachedPromptAfter == nil || reattached)
 		if recoveredSteer {
 			text := m.recoveredSteers[0]
 			m.recoveredSteers = m.recoveredSteers[1:]
