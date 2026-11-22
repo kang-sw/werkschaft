@@ -155,7 +155,8 @@ func (r *stallRig) writeLog(lines ...string) {
 // covered from a minute before it, naming the session, holding one monitor
 // header, and one main header of an earlier request of this process (the
 // first-request safeguard is past). extra lines join it in time order, as
-// agy writes them (glog lines of one month sort by their text).
+// agy writes them, by the instants they parse to (so a fixture that
+// straddles a year end still orders correctly).
 func (r *stallRig) baseLog(extra ...string) {
 	b := r.boundary
 	lines := []string{
@@ -166,7 +167,11 @@ func (r *stallRig) baseLog(extra ...string) {
 		agyGlogHeader(b.Add(time.Second), 7),
 	}
 	lines = append(lines, extra...)
-	slices.SortStableFunc(lines, func(a, b string) int { return strings.Compare(a[:21], b[:21]) })
+	slices.SortStableFunc(lines, func(x, y string) int {
+		lx, _ := parseAgyGlogLine(strings.TrimSuffix(x, "\n"), b)
+		ly, _ := parseAgyGlogLine(strings.TrimSuffix(y, "\n"), b)
+		return lx.at.Compare(ly.at)
+	})
 	r.writeLog(lines...)
 }
 
