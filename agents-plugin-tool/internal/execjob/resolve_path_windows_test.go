@@ -4,6 +4,7 @@ package execjob
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,7 +156,8 @@ func TestResolvePathFollowsAShortJunctionToALongTarget(t *testing.T) {
 // Win32 open and CreateProcess see it, short or past MAX_PATH; where both
 // names exist (made through the extended-length form), the resolver still
 // answers what the unprefixed open sees, so admission and the process
-// agree on the directory.
+// agree on the directory, and the literal dotted directory, reached by a
+// prefixed request or a junction, is refused.
 func TestResolvePathOfATrailingDotNamesTheUndottedDirectory(t *testing.T) {
 	base, err := resolvePath(t.TempDir())
 	if err != nil {
@@ -201,6 +203,30 @@ func TestResolvePathOfATrailingDotNamesTheUndottedDirectory(t *testing.T) {
 	}
 	if !os.SameFile(seen, resolved) || got != dual {
 		t.Fatalf("resolvePath(%q) with both names present = %q, want %q, the directory the unprefixed open sees", dual+".", got, dual)
+	}
+
+	// The literal `dual.`, which only extended syntax reaches, has no
+	// ordinary spelling: CreateProcess given `dual.` starts in `dual`. A
+	// canonical prefixed request for it, and a junction whose target it
+	// is, are refused rather than admitted under the spelling spawn uses.
+	literal := `\\?\` + dual + "."
+	if got, err := resolvePath(literal); !errors.Is(err, errNoOrdinarySpelling) {
+		t.Fatalf("resolvePath(%q) = %q, %v, want %v", literal, got, err, errNoOrdinarySpelling)
+	}
+	if _, _, err := admittedPlaces(base, literal); !errors.Is(err, errNoOrdinarySpelling) || !strings.Contains(err.Error(), "cannot be resolved, so the launch is refused") {
+		t.Fatalf("admittedPlaces(prefixed literal dotted cwd) = %v, want a refusal naming %v", err, errNoOrdinarySpelling)
+	}
+	link := filepath.Join(base, "j")
+	makeJunction(t, link, dual+".")
+	if got, err := resolvePath(link); !errors.Is(err, errNoOrdinarySpelling) {
+		t.Fatalf("resolvePath(junction to the literal %q) = %q, %v, want %v", dual+".", got, err, errNoOrdinarySpelling)
+	}
+	if _, _, err := admittedPlaces(base, link); !errors.Is(err, errNoOrdinarySpelling) {
+		t.Fatalf("admittedPlaces(junction to the literal dotted directory) = %v, want %v", err, errNoOrdinarySpelling)
+	}
+	// The candidate side does not spawn; it keeps the recorded spelling.
+	if forms := rootForms(link); len(forms) != 1 || forms[0] != link {
+		t.Fatalf("rootForms(junction to the literal dotted directory) = %q, want only %q", forms, link)
 	}
 }
 

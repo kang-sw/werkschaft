@@ -3,6 +3,8 @@
 package execjob
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -18,7 +20,9 @@ import (
 // open takes p as win32Path gives it: a deep worktree or working directory
 // in the extended-length form, so it resolves on a host whose Win32 calls
 // stay MAX_PATH-limited, and any other as given. The result comes back in
-// the ordinary spelling.
+// the ordinary spelling, or is an error where that spelling would name
+// another directory (ordinarySpelling); rootForms then keeps only the
+// candidate's recorded spelling, and admission refuses the job.
 func resolvePath(p string) (string, error) {
 	name, err := windows.UTF16PtrFromString(win32Path(p))
 	if err != nil {
@@ -34,8 +38,33 @@ func resolvePath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Clean(stripExtendedPrefix(final)), nil
+	return ordinarySpelling(final)
 }
+
+// ordinarySpelling is the final path final without its extended-length
+// prefix, provided that spelling names the same directory: the ordinary
+// spelling is what spawn hands CreateProcess, which applies the Win32
+// rules (a trailing dot or space dropped, . and .. resolved) the prefixed
+// form skips. A directory only extended syntax reaches, such as a literal
+// `dual.` beside `dual` opened through \\?\ or a junction, has no such
+// spelling: the process would start in `dual` while the fence tracks
+// `dual.`, so it is errNoOrdinarySpelling and admission refuses the job.
+// GetFullPathName is a string operation, so the check opens nothing.
+func ordinarySpelling(final string) (string, error) {
+	stripped := filepath.Clean(stripExtendedPrefix(final))
+	full, err := fullPathName(stripped)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q: %w", errNoOrdinarySpelling, final, err)
+	}
+	if filepath.Clean(full) != stripped {
+		return "", fmt.Errorf("%w: %q reads as %q", errNoOrdinarySpelling, final, full)
+	}
+	return stripped, nil
+}
+
+// errNoOrdinarySpelling marks a resolved directory whose ordinary Win32
+// spelling names another directory, or none.
+var errNoOrdinarySpelling = errors.New("the resolved directory has no ordinary Win32 spelling")
 
 // win32Path is p as a raw CreateFile must take it to open what an
 // ordinary Win32 open of p opens. Go's os package lengthens a long path
