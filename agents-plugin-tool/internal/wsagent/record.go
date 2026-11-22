@@ -462,6 +462,11 @@ type liveWriter struct {
 	// restored is what the snapshot an earlier daemon left says of agy
 	// native rows, for the first replay to end (takeRestored).
 	restored restoredAgyNative
+	// extraDisk is the content of the session's extra file
+	// (wslive.SnapshotExtra) as last read or written; nil when the file is
+	// missing. It is rewritten ahead of a recovery snapshot write only when
+	// the content to write differs.
+	extraDisk []byte
 	// coverage names the holder records the state applied, written into the
 	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none
 	// (tests that build a bare writer).
@@ -508,13 +513,18 @@ func (w *liveWriter) endBatch(force bool) bool {
 // rows it lists (any status), those it lists running (as listed), its write
 // time, and the holder records it covers (covered, with holderID and
 // coveredSeq; unset from a writer that predates them). readable is false
-// when no snapshot of this session could be read.
+// when no snapshot of this session could be read. erased is set when the
+// snapshot lacks coverage although a daemon that records it wrote this
+// session before (wslive.SnapshotExtra.Coverage): an older writer replaced
+// the file and dropped the rows it does not seed, so the file's absences
+// say nothing of retention.
 type restoredAgyNative struct {
 	readable   bool
 	updatedAt  int64
 	listed     map[string]bool
 	running    map[string]wslive.Agent
 	covered    bool
+	erased     bool
 	holderID   string
 	coveredSeq uint64
 }
@@ -523,7 +533,10 @@ type restoredAgyNative struct {
 // daemon applied alone, first seen at holder record startSeq of holderID,
 // was evicted by retention: the snapshot is readable and does not list it,
 // and its start is one the snapshot covers. Without the snapshot's coverage
-// (a writer that predates it) an unlisted row counts as evicted. Coverage
+// (a writer that predates it) an unlisted row counts as evicted, unless an
+// older writer replaced a file that had it (erased): that writer removes rows
+// itself, so the row is rebuilt from the holder's retained records, which
+// retention then bounds like any rebuilt roster. Coverage
 // of another holder covers none of this one's records, a known empty
 // coverage (seq 0) none of any, and a snapshot written with no holder
 // (seq 0, no holder ID) none either.
@@ -532,7 +545,7 @@ func (r restoredAgyNative) evicted(id, holderID string, startSeq uint64) bool {
 		return false
 	}
 	if !r.covered {
-		return true
+		return !r.erased
 	}
 	return r.holderID != "" && r.holderID == holderID && startSeq <= r.coveredSeq
 }
@@ -583,8 +596,14 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		folded = false
 	}
 	var restored restoredAgyNative
+	extra, extraFound := wslive.ReadSnapshotExtra(dir)
+	var extraDisk []byte
+	if extraFound {
+		extraDisk, _ = json.Marshal(extra)
+	}
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
 		restored = restoredAgyNativeOf(prev, st.ReplyID())
+		restored.erased = restored.readable && !restored.covered && extra.Coverage
 		st.SeedFinished(prev)
 		st.SeedLastTurn(prev)
 		if prev.Lead.OutputRate != nil {
@@ -607,6 +626,7 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		observedSeeded:    folded,
 		outputRates:       wslive.NewOutputRateLog(dir),
 		restored:          restored,
+		extraDisk:         extraDisk,
 	}
 }
 
@@ -877,6 +897,11 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 	}
 	if err == nil {
 		err = w.withOwner(func() error {
+			// The extra file goes first: a snapshot that names coverage never
+			// exists without it.
+			if err := w.writeExtra(); err != nil {
+				return err
+			}
 			if err := w.writeSnapshotFile(wslive.SnapshotPath(w.dir), raw, 0o644); err != nil {
 				return err
 			}
@@ -893,6 +918,24 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 	if err != nil {
 		fmt.Fprintf(w.log, "agent %s: snapshot write: %v\n", w.st.ReplyID(), err)
 	}
+}
+
+// writeExtra writes the session's extra file (wslive.SnapshotExtra) when its
+// content differs from what the file holds: with a coverage writer's first
+// recovery write, then never again while the content stays the same.
+func (w *liveWriter) writeExtra() error {
+	if w.coverage == nil {
+		return nil
+	}
+	raw, err := json.Marshal(wslive.SnapshotExtra{Coverage: true})
+	if err != nil || bytes.Equal(raw, w.extraDisk) {
+		return err
+	}
+	if err := w.writeSnapshotFile(wslive.SnapshotExtraPath(w.dir), raw, 0o644); err != nil {
+		return err
+	}
+	w.extraDisk = raw
+	return nil
 }
 
 func (w *liveWriter) currentSlot() wsdashboard.HostedSlot {
