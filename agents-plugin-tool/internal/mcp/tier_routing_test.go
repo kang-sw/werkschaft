@@ -70,11 +70,12 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	f := roleRenderFixture(t)
 	nativeFallback := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendPi, "medium", f.s.configOptions()), "\n"))
 
-	// Pi sets no medium slot: a native caller keeps the config fallback
-	// chain's binding, but agent.spawn refuses pi.medium, so the role
-	// recommendation advertises no binding instead of another harness's.
-	if daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)); daemon != "recommended-tier: ticket-worker:medium" {
-		t.Fatalf("slotless daemon metadata = %q", daemon)
+	// Pi sets no medium slot: the bare size takes the config fallback
+	// chain's binding, and the unmapped role tier, which falls through to
+	// that bare size, carries the same binding byte for byte (agent.spawn
+	// refuses both forms alike: TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers).
+	if daemon, want := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)), strings.Replace(nativeFallback, "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1); daemon != want || !strings.Contains(want, "recommended-model: ") {
+		t.Fatalf("slotless daemon metadata = %q, want the bare fallback %q", daemon, want)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeFallback {
 		t.Fatalf("slotless native metadata = %q, want %q", native, nativeFallback)
@@ -123,6 +124,78 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	setRouting(t, f.s, `{"nodes":{"implement":{"*":"nosuch:*"}}}`)
 	if daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)); daemon != "recommended-tier: ticket-worker:medium" {
 		t.Fatalf("invalid-graph daemon metadata = %q", daemon)
+	}
+}
+
+// With no user config an unmapped role tier, whose chain ends at the bare
+// size on the caller's harness, resolves exactly as that bare size does on
+// every surface that reports a binding: config.resolve_agent for Pi (no
+// medium slot: the legacy fallback chain), an omitted harness on a session
+// with no detected harness (the default bucket), Codex, and Claude, and the
+// render binding for the same harnesses.
+func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
+	f := roleRenderFixture(t)
+	resolve := func(tier, harness string) (resolveAgentTierResult, string) {
+		t.Helper()
+		args := map[string]any{"tier": tier, "format": "json"}
+		if harness != "" {
+			args["harness"] = harness
+		}
+		resp := callToolOnce(t, f.s, 4, "config.resolve_agent", args)
+		if toolIsError(t, resp) {
+			return resolveAgentTierResult{}, toolText(t, resp)
+		}
+		var got resolveAgentTierResult
+		if err := json.Unmarshal([]byte(toolText(t, resp)), &got); err != nil {
+			t.Fatalf("decode %s: %v", resp, err)
+		}
+		return got, ""
+	}
+	if h := f.s.currentHarness(); h != "" {
+		t.Fatalf("fixture session harness = %q, want none detected", h)
+	}
+	opts := f.s.configOptions()
+	for _, harness := range []string{wsagent.BackendPi, "", "codex", wsagent.BackendClaude} {
+		bare, bareErr := resolve("medium", harness)
+		role, roleErr := resolve("ticket-worker:medium", harness)
+		if bareErr != "" || roleErr != "" {
+			t.Fatalf("harness %q: bare error %q, role error %q", harness, bareErr, roleErr)
+		}
+		caller := harness
+		if caller == "" {
+			caller = "<caller>"
+		}
+		if want := "ticket-worker:medium -> implement:medium -> medium -> " + caller + ".medium"; role.Trace != want {
+			t.Fatalf("harness %q: role trace = %q, want %q", harness, role.Trace, want)
+		}
+		role.Trace = ""
+		if role != bare {
+			t.Fatalf("harness %q: role = %+v, bare = %+v", harness, role, bare)
+		}
+		switch harness {
+		case wsagent.BackendPi, "":
+			if bare.ResolvedFrom != "default" {
+				t.Fatalf("harness %q: bare resolved_from = %q, want the default bucket fallback", harness, bare.ResolvedFrom)
+			}
+		default:
+			if bare.ResolvedFrom != harness {
+				t.Fatalf("harness %q: bare resolved_from = %q", harness, bare.ResolvedFrom)
+			}
+		}
+
+		// Render: the role recommendation carries the bare recommendation's
+		// binding for the same harness, whichever harness the walk uses.
+		f.s.rootMu.Lock()
+		f.s.sessionHarness = harness
+		f.s.rootMu.Unlock()
+		wantRender := strings.Replace(withRecommendedRenderBinding("path", harness, "medium", opts), "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1)
+		got := f.s.withRecommendedRenderBindingFor("path", harness, "ticket-worker:medium", opts)
+		f.s.rootMu.Lock()
+		f.s.sessionHarness = ""
+		f.s.rootMu.Unlock()
+		if got != wantRender || !strings.Contains(got, "recommended-model: ") {
+			t.Fatalf("harness %q: role render = %q, want %q", harness, got, wantRender)
+		}
 	}
 }
 

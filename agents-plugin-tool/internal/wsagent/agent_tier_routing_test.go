@@ -60,6 +60,27 @@ func TestAgentSpawnDefaultRoleChainMatchesTheBareSize(t *testing.T) {
 	}
 }
 
+// A caller whose harness sets no slot at the size is refused for the bare
+// size and for an unmapped role tier alike: render and config.resolve_agent
+// report the bare size's config fallback for both, but agent.spawn never
+// launches another harness's slot.
+func TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers(t *testing.T) {
+	h := routingHarness(t)
+	pi := LeadCaller(leadParent.ReplyID, h.root, BackendPi, h.config.Config)
+	if got := h.spawnBinding(pi, "small"); got.Backend != BackendPi {
+		t.Fatalf("pi small = %+v, want a pi launch", got)
+	}
+	spawned := len(h.runner.AgentList(pi))
+	// The fixture's pi bucket sets small, medium, and large, not xlarge.
+	for _, tier := range []string{"xlarge", "ticket-worker:xlarge"} {
+		_, err := h.runner.AgentSpawn(pi, AgentSpawnRequest{Prompt: "x", Tier: tier, Authority: "read-only"})
+		agentRefused(t, err, http.StatusBadRequest, "pi.xlarge has no model in agents.tier")
+	}
+	if n := len(h.runner.AgentList(pi)); n != spawned {
+		t.Fatalf("a refused tier spawned: %d children, was %d", n, spawned)
+	}
+}
+
 func TestAgentSpawnRoutesRoleTiersAndBundles(t *testing.T) {
 	h := routingHarness(t)
 	setTierRouting(t, h.config.Config, `{
