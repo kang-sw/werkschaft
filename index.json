@@ -417,19 +417,6 @@
     "261118-feat-ship-gate-facts": {
       "registered_at": "2026-11-18T13:13:07Z"
     },
-    "261118-feat-ws-agy-tool-names-and-worker-role": {
-      "registered_at": "2026-11-18T07:33:38Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-19T13:15:57Z",
-        "impl": {
-          "branch": "impl/develop/tickets-post-v2"
-        }
-      }
-    },
     "261118-feat-ws-daemon-version-arbitration": {
       "registered_at": "2026-11-18T03:26:36Z"
     },
@@ -596,32 +583,6 @@
         "touched_at": "2026-11-22T02:27:21Z",
         "impl": {
           "branch": "impl/develop/stark-fled-ninth"
-        }
-      }
-    },
-    "261122-feat-ws-agy-lead-only-harness": {
-      "registered_at": "2026-11-22T07:53:46Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:02:54Z",
-        "impl": {
-          "branch": "impl/develop/arise-gory-poker"
-        }
-      }
-    },
-    "261122-feat-ws-agy-same-harness-workers": {
-      "registered_at": "2026-11-22T09:53:47Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T10:02:56Z",
-        "impl": {
-          "branch": "impl/develop/arise-gory-poker"
         }
       }
     },
