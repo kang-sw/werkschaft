@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import getpass
 import hashlib
 import json
 import os
@@ -2421,13 +2422,17 @@ def main() -> int:
     clear_launch_breadcrumb()
     if mode == "mcp":
         return proxy_serve(link, argv, sys.stdin.buffer, sys.stdout.buffer, sys.stderr)
-    reads_stdin = argv[:2] == ["mailbox", "codex-stop-hook"] or (
+    reads_stdin = argv[:2] == ["mailbox", "codex-stop-hook"] or argv[:2] == ["credential", "set"] or (
         argv[:2] == ["git", "commit"] and ("--description-file=-" in argv or "-description-file=-" in argv
         or any(arg in {"--description-file", "-description-file"} and index + 1 < len(argv) and argv[index + 1] == "-"
                for index, arg in enumerate(argv))))
     # The pipe is UTF-8 regardless of Python's Windows console/locale encoding.
     # Replacement matches Go JSON decoding for malformed UTF-8 hook payloads.
-    input_text = sys.stdin.buffer.read().decode("utf-8", errors="replace") if reads_stdin else None
+    if reads_stdin and argv[:2] == ["credential", "set"] and sys.stdin.isatty():
+        # A key typed at a terminal is not echoed.
+        input_text = getpass.getpass("API key: ")
+    else:
+        input_text = sys.stdin.buffer.read().decode("utf-8", errors="replace") if reads_stdin else None
     return proxy_cli(link, argv, sys.stdout.buffer, sys.stderr.buffer, input_text)
 
 
