@@ -329,8 +329,8 @@
       // mount from; the views behind them (the heavy reads) wait for the
       // page's first show when a hidden frame loaded it (shStage). A store
       // the page's route enters meanwhile (check) reads its own view; the
-      // held pass leaves it, so one summary is in flight and the entry's
-      // seen-marking lands on the data it asked for.
+      // held pass leaves it and waits for it, so one summary is in flight and
+      // the entry's seen-marking lands on the data it asked for.
       var ids = status === 200 ? tkOrder.slice() : [], left = ids.length, open = {};
       ids.forEach(function (id) { open[id] = true; });
       tkHeld = shHolding() ? open : null;
@@ -339,7 +339,15 @@
       shStage(function () {
         tkHeld = null;
         ids.forEach(function (id) {
-          if (!open[id]) { if (--left === 0) done(); return; }
+          var claim = open[id];
+          if (claim !== true) {
+            // The entry's read may still be out: the reload stays busy until
+            // it lands, so no second read of the store (a nudge from the
+            // check's own revision bump included) supersedes it.
+            if (claim.n) claim.waiters.push(function () { if (--left === 0) done(); });
+            else if (--left === 0) done();
+            return;
+          }
           tkLoadView(id, function (changed) {
             if (changed) tkDirty = true;
             if (--left === 0) done();
@@ -457,9 +465,16 @@
       });
     },
     check: function (id, done) {
-      if (tkHeld) delete tkHeld[id];
+      var claim = null;
+      if (tkHeld && tkHeld[id]) {
+        claim = tkHeld[id] === true ? (tkHeld[id] = { n: 0, waiters: [] }) : tkHeld[id];
+        claim.n++;
+      }
       tkFetch(tkUrl(id, "check"), {}, function () {
-        tkLoadView(id, function () { tkNotify(); if (done) done(); });
+        tkLoadView(id, function () {
+          tkNotify(); if (done) done();
+          if (claim && --claim.n === 0) claim.waiters.splice(0).forEach(function (fn) { fn(); });
+        });
       });
     },
     // The route's pushed is a yes/no; the renderer counts commits, so a push

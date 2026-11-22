@@ -30,10 +30,10 @@ const summary = { cursor: 'epoch.1', reset: true, removed: [], feed: [], globals
     assignments: { a0: { id: 'a0', item: 'i0', by: 'me', to: 'me', sender: 'me', state: 'live', status: 'todo', ts: now, lastUpdate: now, completion: 'assignee', chain: [] } },
     requests: {}, rules: {}, notices: [], time: { recentlyClosed: false, recentAssignments: {} } } } } };
 
-async function open(browser, { framed, hash = '' }) {
+async function open(browser, { framed, hash = '', hold = false }) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const tab = await context.newPage();
-  const errors = [], log = { lists: 0, views: [], terminals: 0, ws: [], checks: 0, seen: [] };
+  const errors = [], log = { lists: 0, views: [], terminals: 0, ws: [], checks: 0, seen: [], checkGate: null, viewGates: [] };
   tab.on('pageerror', e => errors.push(e.message));
   tab.on('websocket', ws => { if (ws.url().includes('/terminals/')) log.ws.push(ws.url()); });
   await context.addInitScript(() => {
@@ -43,17 +43,27 @@ async function open(browser, { framed, hash = '' }) {
       const mo = new MutationObserver(() => { if (document.documentElement) { document.documentElement.removeAttribute('data-frame'); mo.disconnect(); } });
       mo.observe(document, { childList: true });
     }
+    // The page's own sockets, so a test can deliver a stream event to them.
+    const Socket = window.WebSocket;
+    window.pageSockets = [];
+    window.WebSocket = class extends Socket { constructor(...a) { super(...a); window.pageSockets.push(this); } };
     // One restored chat terminal tab, as a returning reader's browser holds.
     try { localStorage.setItem('ws.dashboard.cterm.livesession', JSON.stringify([{ id: 't1', num: 1 }])); } catch (e) { /* a sandboxed body frame has no storage */ }
   });
   await tab.route('**/__host', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>host</title><body></body>' }));
   await tab.route('**/tracker/stores', route => { log.lists++; route.fulfill({ json: { stores: [{ id: 's1', label: 'S1' }], rev: 1 } }); });
-  await tab.route('**/tracker/stores/s1/**', route => {
+  await tab.route('**/tracker/stores/s1/**', async route => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith('/check')) { log.checks++; return route.fulfill({ json: {} }); }
+    if (url.pathname.endsWith('/check')) {
+      log.checks++;
+      // A held check answers when the test says so, as a slow daemon does.
+      if (hold) await new Promise(r => { log.checkGate = r; });
+      return route.fulfill({ json: {} });
+    }
     if (url.pathname.endsWith('/seen')) { log.seen.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); }
     log.views.push(url.pathname);
     // The room's own store has a view with one new key; any other read fails.
+    if (hold && /\/(summary|delta)$/.test(url.pathname)) await new Promise(r => log.viewGates.push(r));
     if (hash) route.fulfill({ json: summary }); else route.fulfill({ status: 503, json: { error: 'fixture' } });
   });
   await tab.route('**/s/livesession/terminals', route => {
@@ -125,6 +135,32 @@ async function open(browser, { framed, hash = '' }) {
       assert.deepEqual(p.errors, []);
       await p.context.close();
       console.log('PASS hidden framed page at #/s1: summaries=1 seen=1 across the first show');
+    }
+    // The first show lands while the route entry's check is still out, and the
+    // daemon's revision bump (the check's own TrackerChanged) reaches the page
+    // as a tracker event before the entry's view answers: that nudge must not
+    // start a second read that supersedes the entry's, or the viewed store's
+    // new key would load unmarked.
+    {
+      const p = await open(browser, { framed: true, hash: '#/s1', hold: true });
+      await until(() => p.log.checks >= 1 && p.log.checkGate, 'the entry check is out');
+      await p.shown(true);
+      await wait(400);
+      assert.deepEqual(p.log.views, [], 'a pending claim leaves the first show no store view to read');
+      p.log.checkGate();
+      await until(() => p.log.viewGates.length >= 1, 'the entry read starts after the check');
+      await p.f.evaluate(() => {
+        const sock = window.pageSockets.filter(s => s.url.includes('/events') && s.readyState === 1).pop();
+        sock.onmessage({ data: JSON.stringify({ event: 'tracker', data: { rev: 2 } }) });
+      });
+      await wait(400);
+      // Answer every read the page makes, in the order it asks.
+      for (let i = 0; i < 20; i++) { while (p.log.viewGates.length) p.log.viewGates.shift()(); await wait(100); }
+      assert.equal(p.log.seen.length, 1, 'the viewed store is marked seen once, from the data its entry asked for');
+      assert.deepEqual(p.log.seen[0], { badge: ['i0'], read: [] });
+      assert.deepEqual(p.errors, []);
+      await p.context.close();
+      console.log('PASS hidden framed page at #/s1 shown while the entry check is out: views=' + p.log.views.length + ' seen=1');
     }
     // Selecting a restored chat tab on a page still held starts its replay
     // at once, so the pane never shows an empty emulator.
