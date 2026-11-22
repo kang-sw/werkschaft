@@ -24,6 +24,13 @@ type Backend interface {
 	Release() error
 }
 
+// closingBackend is a Backend holding a resource of its own (the Windows
+// dedicated thread). Core closes it when its worker exits, after the final
+// Release.
+type closingBackend interface {
+	Close() error
+}
+
 // Core keeps the assertion held exactly while the setting is enabled and at
 // least one member (a live turn, keyed by its conversation instance) exists.
 // Every method is safe from any goroutine, and on a nil Core (a no-op), and
@@ -202,6 +209,11 @@ func (c *Core) run() {
 			continue
 		}
 		if closed {
+			if b, ok := c.backend.(closingBackend); ok {
+				if err := b.Close(); err != nil {
+					fmt.Fprintf(c.log, "keep-awake: close the idle-sleep backend: %v\n", err)
+				}
+			}
 			return
 		}
 		<-c.wake

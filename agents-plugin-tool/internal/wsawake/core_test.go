@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -266,3 +267,44 @@ func waitAcquires(t *testing.T, f *fakeBackend, n int) {
 type writerFunc func([]byte) (int, error)
 
 func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
+
+// closeFake is a fakeBackend that counts Close calls.
+type closeFake struct {
+	*fakeBackend
+	closes atomic.Int32
+}
+
+func (f *closeFake) Close() error {
+	f.closes.Add(1)
+	return nil
+}
+
+// The core closes its backend once its worker made the final Release, and
+// never while the core runs.
+func TestCoreClosesBackend(t *testing.T) {
+	f := &closeFake{fakeBackend: newFake()}
+	c := New(f, nil)
+	c.SetEnabled(true)
+	c.SetMember(new(int), true)
+	waitHeld(t, f.fakeBackend, true)
+	c.SetEnabled(false)
+	waitHeld(t, f.fakeBackend, false)
+	if f.closes.Load() != 0 {
+		t.Fatal("the backend was closed before the core")
+	}
+	c.Close()
+	if n := f.closes.Load(); n != 1 {
+		t.Fatalf("backend closes = %d, want 1", n)
+	}
+}
+
+// A core whose worker never ran made no backend call, so it closes nothing.
+func TestCoreCloseWithoutWorkerClosesNoBackend(t *testing.T) {
+	f := &closeFake{fakeBackend: newFake()}
+	c := New(f, nil)
+	c.SetMember(new(int), true)
+	c.Close()
+	if n := f.closes.Load(); n != 0 {
+		t.Fatalf("backend closes = %d, want 0", n)
+	}
+}
