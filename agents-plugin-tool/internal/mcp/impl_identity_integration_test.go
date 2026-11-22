@@ -499,3 +499,75 @@ func TestImplIdentityMergedLeftoverResolveAcquireRoute(t *testing.T) {
 		t.Fatalf("unlanded canonical branch was reset: got %s, want %s", gotHead, unlandedTip)
 	}
 }
+
+// TestImplIdentityMergedLeftoverUnderDifferentProvisionedBranch reproduces the
+// reported dogfood flow: a lead provisioned the worktree on its own branch name
+// while the stem-derived canonical branch was an earlier, fully merged run of
+// the same ticket. route.resolve_implement must keep the guarded behavior: no
+// silent recreate or discard without the lead's identity vouch, recreate once
+// vouched, and a leftover carrying unique commits is never recreated.
+func TestImplIdentityMergedLeftoverUnderDifferentProvisionedBranch(t *testing.T) {
+	useLeadProfile(t)
+	for _, tc := range []struct {
+		name         string
+		leftoverWork bool
+		vouch        bool
+		want         string
+	}{
+		{name: "merged leftover without vouch stops", want: "stop"},
+		{name: "merged leftover with vouch recreates", vouch: true, want: "recreate"},
+		{name: "unmerged leftover with vouch stops", leftoverWork: true, vouch: true, want: "stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			initGit(t, root)
+			root = canonicalRootForTest(t, root)
+			stem := "261115-feat-ws-permission-profile"
+			path := writeImplIdentityReadyTicket(t, root, stem)
+			runGit(t, root, "checkout", "-b", "develop")
+			runGit(t, root, "add", ".")
+			runGit(t, root, "commit", "-m", "fixture")
+			canonical := implTicketBranch("develop", stem)
+
+			// Earlier run of the same ticket: its branch landed on develop.
+			runGit(t, root, "switch", "-c", canonical)
+			runGit(t, root, "commit", "--allow-empty", "-m", "earlier phase work")
+			runGit(t, root, "switch", "develop")
+			runGit(t, root, "merge", "--no-ff", canonical, "-m", "merge earlier phase")
+			if tc.leftoverWork {
+				runGit(t, root, "switch", canonical)
+				runGit(t, root, "commit", "--allow-empty", "-m", "unlanded leftover work")
+				runGit(t, root, "switch", "develop")
+			}
+			leftoverTip := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", canonical)))
+
+			// The lead provisions the checkout on a differently named branch.
+			provisioned := "impl/develop/permission-p3-codex"
+			runGit(t, root, "switch", "-c", provisioned)
+
+			t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+			server := NewServer(root, "test")
+			key, err := server.sessions.mint(root, roleLead, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := implIdentityRouteArgs(stem, path, "yes")
+			if tc.vouch {
+				args["policy"].(map[string]any)["branch"].(map[string]any)["identity_vouch"] = map[string]any{"branch": provisioned, "ticket_stem": stem}
+			}
+			var got implementResult
+			text := callToolWithKey(t, server, 1, key, "route.resolve_implement", args)
+			if err := json.Unmarshal([]byte(text), &got); err != nil {
+				t.Fatalf("route response: %v\n%s", err, text)
+			}
+			plan := got.Verdict.BranchPlan
+			if plan.Action != tc.want || plan.TargetBranch != canonical || plan.CurrentBranch != provisioned {
+				t.Fatalf("branch plan = %+v, want action %s target %s current %s", plan, tc.want, canonical, provisioned)
+			}
+			// Route resolution is read-only: the leftover keeps its tip.
+			if tip := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", canonical))); tip != leftoverTip {
+				t.Fatalf("route moved leftover %s: %s -> %s", canonical, leftoverTip, tip)
+			}
+		})
+	}
+}
