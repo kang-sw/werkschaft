@@ -565,3 +565,92 @@ omitted, known-empty read as absent). The full wsagent package passes, as
 do the focused wsagent and wslive `-race` sets, the narrow wsdashboard set,
 `GOOS=windows go vet`, the agents-island contract, and the companion Node
 suite (27/27).
+
+#### Edition (ab0a05139) - 2026-11-22
+
+Fixes from the round-7 re-review (codex 4d2a74c5, afd797633..6607f4581).
+They supersede the (a8fc5d858) Edition where the two differ. The branch
+first merged develop 5e49cc041 (e2519088e), the tip that contains
+7c0b1c1c4.
+
+- **The fold judges staged starts against the replay's own holder.**
+  - On a process end during a replay, the holder leaves the record before
+    `processEnded` folds. This happens in `releaseHolder`, `processGone`
+    and the retirements.
+  - So `agyNativeReplayRows.holderID` is taken from the record at the
+    first staged event (`wsagent/runner_conv.go:1428`). The fold uses that
+    holder, not the record's (`:1506`).
+  - A covered eviction now stays dropped whether the replay ends by
+    ReplayDone or by a process end, as the (032bc13f0) Edition requires.
+  - Evidence: in `TestAgyNativeReplayExitKeepsCoveredEvictions`, a quiet
+    start at record 40 is staged against coverage through 80, and
+    `processExited` then releases the holder. The row stays absent and the
+    saved row keeps its stored values.
+- **The fold publishes once.**
+  - `finishAgyNativeReplay` runs inside `liveWriter.beginBatch` /
+    `endBatch` (`record.go:487`, `:494`; `runner_conv.go:1467-1483`). While
+    the batch is open, `applyRAM`, `write` and `flushSnapshot` publish and
+    write nothing (`record.go:641`, `:756`, `:818`). Ring and evidence
+    appends still happen, and a held ring append's wake follows the closing
+    write.
+  - `endBatch` makes one snapshot write of the retained roster. It also
+    writes when the fold lifted `diskHold` and changed nothing.
+    `finishAgyNativeReplay` reports whether it wrote.
+  - `processEnded` and the failed lead rejoin write only when the fold did
+    not (`runner_events.go:875`, `runner_process.go:706`). The retired
+    downgraded worker no longer writes a second time
+    (`worker_rejoin.go:222`).
+  - ReplayDone's own later write still goes out, carrying its turn and
+    usage changes. It shows the same, already capped roster.
+  - Evidence: `TestAgyNativeReplayFoldsLifecyclesBeforeRetention`, 65
+    starts and 64 failures.
+    - Through ReplayDone, every publication holds either no native row or
+      exactly the five retained ones.
+    - A direct fold publishes exactly one snapshot, both with
+      `processGone` false (the first row ends end-unknown) and with it true
+      (the first row fails).
+- **Pre-holder snapshots carry known-empty coverage.**
+  - A current writer always serializes `holderSeq`. With no holder, it
+    writes `holderSeq: 0` and no `holderId` (`record.go:870`), which covers
+    no record of any holder.
+  - `restoredAgyNative.covered` is set whenever `holderSeq` is present
+    (`record.go:546`). `evicted` requires a non-empty covered holder ID
+    (`:537`). Only absent `holderSeq` takes the legacy option-B fallback.
+  - The startup write before any holder exists
+    (`runner_conversation.go:215-218`) therefore no longer looks like a
+    legacy file. A same-version crash keeps a quiet native start the file
+    could not have seen.
+  - Evidence:
+    - `TestAgyNativeReplayKeepsStartAfterPreHolderSnapshot` covers a
+      same-version pre-holder file, which keeps the start end-unknown at
+      the replay end, and the same file with `holderSeq` stripped, which
+      drops it.
+    - `TestSnapshotRecordsHolderCoverage` now expects a no-holder write to
+      serialize `holderSeq` 0 without `holderId`.
+    - `TestRestoredAgyNativeCoverageBoundary` covers "written with no
+      holder" (not evicted) against "legacy with no holder" (evicted).
+- **Compatibility is unchanged: T0/T1.** `holderSeq` stays an optional
+  member (`wslive/snapshot.go:205`).
+  - Readers that predate it ignore it (7482aa91e
+    `wslive/snapshot.go:130-160`, `:451-460`).
+  - The (a8fc5d858) downgrade decision still applies as written. After an
+    old writer's rewrite, coverage is absent and option B applies; this
+    affects display-only roster history.
+
+Verification:
+
+- Each new regression fails under its mutation: holder read from the
+  record at fold time, batch disabled, pre-holder coverage omitted, and a
+  reader that requires `holderId`.
+- These pass:
+  - `wslive` under `-race`;
+  - the focused wsagent `-race` set (64 tests);
+  - the narrow wsdashboard set, including settings and combobox;
+  - `wsi18n`;
+  - `go vet` and `GOOS=windows go vet`;
+  - the agents-island contract;
+  - the companion (32/32) and settings (11/11) Node suites.
+- The whole wsagent package fails only
+  `TestHeldWorkerLaunchFailureHasNoDirectFallback/agy`. That failure comes
+  from develop: test 7ea6903dd collides with the same-harness admission in
+  212c828d5.
