@@ -244,6 +244,9 @@ type ring struct {
 	forceRotate bool
 	readOnly    error
 
+	// view guards events and ids, the in-memory index readers copy from. The
+	// writer takes it only around in-memory changes, never across disk I/O.
+	view   sync.RWMutex
 	events []wsaudit.Envelope
 	ids    []*wsaudit.SourceID // parallel to events; nil for an unsourced event
 	led    *ledger
@@ -546,8 +549,10 @@ func (r *ring) apply(ln line, seg *segment) {
 // index adds a retained event, under its source identity when it has one,
 // to the in-memory index.
 func (r *ring) index(ev wsaudit.Envelope, id *wsaudit.SourceID) {
+	r.view.Lock()
 	r.events = append(r.events, ev)
 	r.ids = append(r.ids, id)
+	r.view.Unlock()
 	if ev.At.After(r.lastSeen) {
 		r.lastSeen = ev.At
 	}
@@ -814,8 +819,10 @@ func (r *ring) dropOldest() (int64, error) {
 		}
 	}
 	r.led.mu.Unlock()
+	r.view.Lock()
 	r.events = append([]wsaudit.Envelope(nil), r.events[seg.events:]...)
 	r.ids = append([]*wsaudit.SourceID(nil), r.ids[seg.events:]...)
+	r.view.Unlock()
 	return seg.size, nil
 }
 

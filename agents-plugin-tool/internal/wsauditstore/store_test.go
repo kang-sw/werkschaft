@@ -119,10 +119,11 @@ func retainedIDs(t *testing.T, s *Store, session string) []string {
 	if err != nil || info == nil {
 		t.Fatalf("session %s not loaded: %v", session, err)
 	}
-	info.mu.Lock()
-	defer info.mu.Unlock()
+	r := info.view.Load()
+	r.view.RLock()
+	defer r.view.RUnlock()
 	var out []string
-	for _, id := range info.ring.ids {
+	for _, id := range r.ids {
 		if id != nil {
 			out = append(out, id.String())
 		}
@@ -949,5 +950,102 @@ func TestStoreBurstOfControlLinesNeverOverflowsASegment(t *testing.T) {
 	}
 	if got := lossCount(t, s, "sess"); got != n {
 		t.Fatalf("loss = %d", got)
+	}
+}
+
+// blockingLog is a log writer stuck until released, like a log file on a
+// stalled disk.
+type blockingLog struct{ release chan struct{} }
+
+func (b *blockingLog) Write(p []byte) (int, error) {
+	<-b.release
+	return len(p), nil
+}
+
+// TestStoreQueueFullNeverWaitsOnTheLog pins the interactive path: a producer
+// that finds the queue full returns at once even when the log writer is
+// stuck; the writer reports the drops once it catches up.
+func TestStoreQueueFullNeverWaitsOnTheLog(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	stall := make(chan struct{})
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		<-stall
+		return orig(f, b)
+	}
+	logw := &blockingLog{release: make(chan struct{})}
+	s, err := Open(Options{Root: t.TempDir(), Log: logw, SweepInterval: -1, QueueDepth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		full := 0
+		for seq := uint64(1); seq <= 50; seq++ {
+			if errors.Is(s.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope), ErrQueueFull) {
+				full++
+			}
+		}
+		done <- full
+	}()
+	select {
+	case full := <-done:
+		if full == 0 {
+			t.Fatal("the queue never filled")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a full queue made the producer wait on the log writer")
+	}
+	close(stall)
+	close(logw.release)
+	_ = s.Close()
+}
+
+// TestStoreReadsNeverWaitOnAWrite pins reads against a stalled disk: Events,
+// Event and EventsByCallID answer from memory while the writer is stuck in a
+// write of the same ring.
+func TestStoreReadsNeverWaitOnAWrite(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	s, _ := openTest(t, t.TempDir(), nil)
+	first := sourced("sess", 1, wsaudit.KindToolCall)
+	first.CallID = "call-1"
+	mustAppend(t, s, first)
+	flush(t, s)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return orig(f, b)
+	}
+	defer close(release)
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	<-entered
+	done := make(chan error, 1)
+	go func() {
+		ctx := context.Background()
+		evs, err := s.Events(ctx, "sess")
+		if err == nil && len(evs) != 1 {
+			err = fmt.Errorf("events = %d", len(evs))
+		}
+		if _, ok, _ := s.Event(ctx, "sess", "ev-1"); !ok && err == nil {
+			err = errors.New("event not found")
+		}
+		if got, _ := s.EventsByCallID(ctx, "sess", "call-1"); len(got) != 1 && err == nil {
+			err = errors.New("call lookup failed")
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reads waited on the writer's disk write")
 	}
 }

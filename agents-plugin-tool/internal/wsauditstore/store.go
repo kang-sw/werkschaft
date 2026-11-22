@@ -107,6 +107,9 @@ type sessionInfo struct {
 
 	mu   sync.Mutex
 	ring *ring
+	// view is ring for readers, who never take mu (the writer holds it across
+	// disk I/O); set and cleared with ring.
+	view atomic.Pointer[ring]
 
 	// led is ring's identity ledger once the ring is loaded; loading is set
 	// while a load is queued, so readers queue it at most once.
@@ -140,7 +143,8 @@ type Store struct {
 	idx   *indexLog                 // writer goroutine only
 	dirty map[*sessionInfo]struct{} // rings with pending control lines; writer only
 
-	dropped atomic.Uint64
+	dropped    atomic.Uint64
+	queueDrops atomic.Uint64 // queue-full drops not yet logged
 }
 
 var _ wsaudit.SourcedSink = (*Store)(nil)
@@ -269,8 +273,10 @@ func (s *Store) enqueue(j job, droppable bool) error {
 	}
 	if droppable && s.appends >= s.opts.QueueDepth {
 		s.qmu.Unlock()
+		// No log line here: the log may be a file, and the producer must not
+		// wait on it. The writer reports the count once it catches up.
 		s.dropped.Add(1)
-		s.logf("drop %s event of session %s: write queue full", j.ev.Kind, j.ev.Session)
+		s.queueDrops.Add(1)
 		return ErrQueueFull
 	}
 	s.queue = append(s.queue, j)
@@ -454,6 +460,9 @@ func (s *Store) run() {
 				s.handle(j)
 			}
 		}
+		if n := s.queueDrops.Swap(0); n > 0 {
+			s.logf("dropped %d audit events: write queue full", n)
+		}
 		s.flushPending()
 		if s.isClosed() {
 			s.shutdown()
@@ -559,6 +568,7 @@ func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 	}
 	info.mu.Lock()
 	info.ring = r
+	info.view.Store(r)
 	info.session = session
 	info.mu.Unlock()
 	info.led.Store(r.led)
@@ -867,6 +877,7 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 			}
 		}
 		info.ring = nil
+		info.view.Store(nil)
 		info.led.Store(nil)
 		delete(s.dirty, info)
 		info.mu.Unlock()
@@ -878,7 +889,10 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 	}
 	keep := r != nil && !forget
 	if keep {
-		r.segs, r.events, r.ids, r.bytes = nil, nil, nil, 0
+		r.view.Lock()
+		r.events, r.ids = nil, nil
+		r.view.Unlock()
+		r.segs, r.bytes = nil, 0
 		r.led.mu.Lock()
 		clear(r.led.retained)
 		r.led.mu.Unlock()
@@ -891,12 +905,14 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 			}
 		}
 		info.ring = r
+		info.view.Store(r)
 		info.led.Store(r.led)
 		if info.session == "" {
 			info.session = r.session
 		}
 	} else {
 		info.ring = nil
+		info.view.Store(nil)
 		info.led.Store(nil)
 		delete(s.dirty, info)
 	}
@@ -1044,17 +1060,30 @@ func maxTime(a, b time.Time) time.Time {
 }
 
 // Events returns the session's retained events, oldest first, from memory.
+// It never waits on the writer's disk I/O.
 func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope, error) {
+	var out []wsaudit.Envelope
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		out = append([]wsaudit.Envelope(nil), evs...)
+	})
+	return out, err
+}
+
+// scan calls fn with the session's retained events under the ring's read
+// lock (fn must not keep the slice).
+func (s *Store) scan(ctx context.Context, session string, fn func([]wsaudit.Envelope)) error {
 	info, err := s.loaded(ctx, session)
 	if err != nil || info == nil {
-		return nil, err
+		return err
 	}
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	if info.ring == nil {
-		return nil, nil
+	r := info.view.Load()
+	if r == nil {
+		return nil
 	}
-	return append([]wsaudit.Envelope(nil), info.ring.events...), nil
+	r.view.RLock()
+	defer r.view.RUnlock()
+	fn(r.events)
+	return nil
 }
 
 // Event returns the retained event whose ID key is key. The store owns
@@ -1065,26 +1094,31 @@ func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope,
 // would name a different record). session is the raw session ID, like every
 // other session argument.
 func (s *Store) Event(ctx context.Context, session, key string) (wsaudit.Envelope, bool, error) {
-	evs, err := s.Events(ctx, session)
-	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].ID == key {
-			return evs[i], true, err
+	var out wsaudit.Envelope
+	var found bool
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		for i := len(evs) - 1; i >= 0; i-- {
+			if evs[i].ID == key {
+				out, found = evs[i], true
+				return
+			}
 		}
-	}
-	return wsaudit.Envelope{}, false, err
+	})
+	return out, found, err
 }
 
 // EventsByCallID returns the retained events whose call key is key, oldest
 // first. As for Event, key is wsaudit.NormalizeID(raw call ID) — the display
 // key — and is compared verbatim.
 func (s *Store) EventsByCallID(ctx context.Context, session, key string) ([]wsaudit.Envelope, error) {
-	evs, err := s.Events(ctx, session)
 	var out []wsaudit.Envelope
-	for _, ev := range evs {
-		if ev.CallID == key {
-			out = append(out, ev)
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		for _, ev := range evs {
+			if ev.CallID == key {
+				out = append(out, ev)
+			}
 		}
-	}
+	})
 	return out, err
 }
 
@@ -1098,10 +1132,7 @@ func (s *Store) loaded(ctx context.Context, session string) (*sessionInfo, error
 	if info == nil {
 		return nil, nil
 	}
-	info.mu.Lock()
-	ready := info.ring != nil
-	info.mu.Unlock()
-	if !ready {
+	if info.view.Load() == nil {
 		if _, err := s.call(ctx, job{kind: jobLoad, session: session}); err != nil {
 			return nil, err
 		}
