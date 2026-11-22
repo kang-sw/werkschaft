@@ -86,11 +86,10 @@
    edge of the viewport reads the target and its percentage, and the
    target's dot carries .pull-target. */
 :root { --pbw: calc(1680px - 32px - 356px); }
+/* --stagew stays --pbw in Band 3; Band 4 sizes .dbody directly with --boardw. */
 .dash { --stagew: var(--pbw); }
 .dash.board { --pbw: 900px; }
 .dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }
-:root[data-boardw] .dash.board { --stagew: var(--boardw); }
-:root[data-boardw] .dash:has(> .dwrap .dgrid:is(.live, .history)) { --stagew: calc(var(--cvw) + 16px + var(--boardw)); }
 .bgal { display: none; }
 :root[data-gal] .bgal:not([hidden]) { display: flex; gap: 6px; min-width: 0; min-height: 0; }
 .bgal > .bp-edge { display: none; }
