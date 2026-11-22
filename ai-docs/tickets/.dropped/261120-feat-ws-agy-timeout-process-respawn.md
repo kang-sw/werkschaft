@@ -3,6 +3,7 @@ title: "agy 모델 대기 타임아웃 시 agy 프로세스를 종료하고 재�
 blocked-by: 261117-feat-ws-exec-tools
 related:
   261117-feat-ws-exec-tools: "prerequisite; exec must first separate exec lifetime from the agy harness process lifetime, so killing agy no longer kills running exec jobs"
+dropped: 2026-11-22
 ---
 
 # agy model-wait timeout kills and respawns or resumes the agy process
@@ -107,3 +108,14 @@ Compatibility: the expected tier is T0. Runner behavior changes only; no MCP
 tool, hello, store shape, or manifest field changes. Confirm this when the
 design settles; if a new config key is added, it is a manifest addition and
 still T0.
+
+
+## Resolution (2026-11-22)
+
+Dropped after a read-only re-assessment (2026-11-22, static analysis, no agy runtime). The process/session wedge this ticket assumed was not confirmed by the ticket's own evidence, and the recovery it asked for already ships:
+
+- The agy watchdog force-stops the turn when Interrupt/continue Send fails or no TurnEnd arrives within 5s. It records the failed turn once, and the next admitted input lazily starts a new process on the same record (`agy_watchdog.go`, `runner_events.go`, `runner_conv.go`; the fake parent-once watchdog test pins it).
+- Manual Restart and the automatic idle-MCP/stale-route restarts call `restartProcess`. A saved session reopens with ACP `session/resume`; a fresh one uses `session/new`.
+- The observed headerless stalls recovered in the same process after about 10 minutes (261122 stall-cutoff ticket, `ai-docs/assets/mockups/261122/agy-stall-trace/analysis.md`). The root cause was inferred to be server-side.
+
+The real residual is detection, not process reset. A worker that stalls with no events and no in-band failure is not caught: the worker log cut never arms, and wsflow's model-wait timeout defaults to zero. If a reproducible case appears where the process stays unhealthy after in-process recovery, open a new ticket targeting that confirmed failure. It should prefer `session/resume` and preserve identity, jobs and fences. Any fresh `session/new` or replay of in-flight input needs its own evidence.
