@@ -58,6 +58,9 @@ type companionPackInfo struct {
 	Rev       string             `json:"rev"`
 	Presets   []string           `json:"presets"`
 	AutoMatch companionAutoMatch `json:"autoMatch"`
+	// Persona is the validated pack persona; the shell's companion modal
+	// reads it here rather than from the raw manifest.
+	Persona *CompanionPersona `json:"persona,omitempty"`
 }
 
 type companionPackError struct {
@@ -301,6 +304,7 @@ func loadCompanionPack(id, source string, budget int, read func(string, int) ([]
 	pack.info = companionPackInfo{
 		ID: id, Name: manifest.Name, Schema: manifest.Schema, Source: source,
 		Rev: hex.EncodeToString(revision.Sum(nil)[:16]), Presets: sortedCompanionKeys(manifest.Presets), AutoMatch: auto,
+		Persona: manifest.Persona,
 	}
 	return pack, "", nil
 }

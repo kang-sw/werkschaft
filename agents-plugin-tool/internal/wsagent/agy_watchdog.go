@@ -3,6 +3,7 @@ package wsagent
 import (
 	"fmt"
 	"math/rand/v2"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,13 @@ import (
 const (
 	DefaultAgyModelWaitTimeoutSeconds = 120
 	DefaultAgyModelWaitRetries        = 3
+)
+
+// DefaultAgyStallLogCheck and DefaultAgyHTTP2FrameTrace are both packages'
+// defaults for agy.stall_log_check and agy.http2_frame_trace.
+const (
+	DefaultAgyStallLogCheck   = true
+	DefaultAgyHTTP2FrameTrace = false
 )
 
 // agyAPIErrorPrefix starts agy's in-band API error line. The full matcher is
@@ -56,6 +64,10 @@ const (
 
 // Owner disabled silence detection: long tool-call generation looks identical
 // to a stalled stream, while agy's in-band failures still trigger retries.
+// A hosted lead's silence timer runs again only behind agy's own log
+// (agy.stall_log_check): a firing cuts only a request with no response
+// headers since its boundary. This switch, for tests, restores the raw
+// silence cutoff that needs no log.
 var agySilenceWatchdogEnabled = false
 
 // defaultAgyModelWaitBackoff uses equal jitter: each attempt waits between
@@ -143,11 +155,111 @@ func (c *conv) loadModelWait() {
 	}
 	c.modelWaitTimeout = time.Duration(sec) * time.Second
 	c.modelWaitMaxRetries = retries
+	// The log-confirmed cutoff and the frame trace are hosted-lead only.
+	c.modelWaitLogCheck, c.agyFrameTrace = false, ""
+	if !c.rec.Lead {
+		return
+	}
+	bools := wsconfig.NewResolver(cfg, map[string]string{
+		wsconfig.ItemAgyStallLogCheck:   strconv.FormatBool(DefaultAgyStallLogCheck),
+		wsconfig.ItemAgyHTTP2FrameTrace: strconv.FormatBool(DefaultAgyHTTP2FrameTrace),
+	}, reader, nil)
+	readBool := func(item string, def bool) bool {
+		rv, err := bools.Get(c.rec.WSKey, item)
+		if err != nil {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", c.rec.ReplyID, item, err)
+			return def
+		}
+		v, perr := strconv.ParseBool(strings.TrimSpace(rv.Value))
+		if perr != nil {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: invalid value %q; using %v\n", c.rec.ReplyID, item, rv.Value, def)
+			return def
+		}
+		return v
+	}
+	c.modelWaitLogCheck = readBool(wsconfig.ItemAgyStallLogCheck, DefaultAgyStallLogCheck)
+	if readBool(wsconfig.ItemAgyHTTP2FrameTrace, DefaultAgyHTTP2FrameTrace) && c.dir != "" {
+		c.agyFrameTrace = filepath.Join(c.dir, AgyFrameLogName)
+	}
 }
 
-// startModelWait resets per-turn state for a freshly sent ordinary prompt.
-func (c *conv) startModelWait() {
+// markModelWaitBoundary records that a fresh model request started at or
+// after at: a user-turn prompt with no turn running or the watchdog's own
+// automatic continue, with at taken before the send reaches the holder. A
+// steer and a background tool completion are not boundaries. A zero at
+// means no trustworthy time: the attempt has no boundary and never cuts.
+func (c *conv) markModelWaitBoundary(at time.Time) {
+	c.modelWaitBoundary = at
+	c.modelWaitContent = false
+}
+
+// silenceTimerEnabled reports whether the silence timer may arm: always in
+// the raw test mode, otherwise only for a hosted lead's log-confirmed
+// cutoff while the current attempt has a boundary and no model content.
+func (c *conv) silenceTimerEnabled() bool {
+	if agySilenceWatchdogEnabled {
+		return true
+	}
+	return c.modelWaitLogCheck && !c.modelWaitBoundary.IsZero() && !c.modelWaitContent
+}
+
+// newAgyLog is the worker log state of an agy process starting (or
+// rejoined) now: the locator considers only logs modified since then.
+func (c *conv) newAgyLog() *agyStallLog {
+	dir := c.r.opts.AgyLogDir
+	if dir == "" {
+		dir = agyDefaultLogDir()
+	}
+	return newAgyStallLog(dir, time.Now())
+}
+
+// headerlessStall reads this session's agy worker log once and reports
+// whether it confirms that the request begun at the boundary has no
+// response headers. A log that cannot be located, read, verified, or parsed
+// is not confirmation; the session logs one notice for it.
+func (c *conv) headerlessStall() bool {
+	if c.agyLog == nil {
+		c.agyLog = c.newAgyLog()
+	}
+	verdict, reason := c.agyLog.verdict(c.rec.SessionID, c.modelWaitBoundary)
+	switch verdict {
+	case agyStallHeaderless:
+		return true
+	case agyStallUnknown:
+		if !c.agyLogNoted {
+			c.agyLogNoted = true
+			fmt.Fprintf(c.r.opts.Log, "agent %s: agy stall log check cannot confirm a stalled request (%s); silence does not interrupt this session's turns while the log stays unconfirmed\n", c.rec.ReplyID, reason)
+		}
+	}
+	return false
+}
+
+// noteAgyFrameCutoff asks proc's holder to add one marker line to its frame
+// capture, so the stalled stream can be found by its time. The holder owns
+// the capture file and its cap: it writes the line only when its child was
+// spawned with a capture, whatever the daemon's settings say now, and a
+// holder that predates the operation writes nothing. The marker is a
+// diagnostic: it is asked for after the interrupt went out and off the
+// loop, so a slow holder reply never delays the cut and its failure only
+// logs.
+func (c *conv) noteAgyFrameCutoff(proc Process, boundary, cutoff time.Time) {
+	noter, ok := proc.(frameCaptureNoter)
+	if !ok {
+		return
+	}
+	text := fmt.Sprintf("ws: headerless cutoff boundary=%s cutoff=%s", boundary.Local().Format(time.RFC3339Nano), cutoff.Local().Format(time.RFC3339Nano))
+	go func() {
+		if err := noter.NoteFrameCapture(text); err != nil {
+			c.do(func() { fmt.Fprintf(c.r.opts.Log, "agent %s: agy frame trace marker: %v\n", c.rec.ReplyID, err) })
+		}
+	}()
+}
+
+// startModelWait resets per-turn state for a freshly sent ordinary prompt;
+// sentAt was read before the send.
+func (c *conv) startModelWait(sentAt time.Time) {
 	c.disarmModelWait()
+	c.markModelWaitBoundary(sentAt)
 	c.armModelWait()
 }
 
@@ -163,7 +275,7 @@ func (c *conv) armModelWait() {
 
 func (c *conv) resetModelWaitTimer() {
 	c.stopModelWaitTimer()
-	if !agySilenceWatchdogEnabled || !c.modelWaitArmed || c.modelWaitCancelling || c.modelWaitFailure != "" || c.modelWaitFailErr != "" || c.modelWaitTimeout <= 0 {
+	if !c.silenceTimerEnabled() || !c.modelWaitArmed || c.modelWaitCancelling || c.modelWaitFailure != "" || c.modelWaitFailErr != "" || c.modelWaitTimeout <= 0 {
 		return
 	}
 	if c.modelWaitPending > 0 || len(c.approvals) > 0 {
@@ -226,13 +338,29 @@ func (c *conv) disarmModelWait() {
 	c.modelWaitFailureClasses = nil
 	c.modelWaitFailure = ""
 	c.modelWaitFailureExcluded = false
+	c.modelWaitBoundary = time.Time{}
+	c.modelWaitContent = false
 }
 
 // onModelActivity handles a raw ACP session/update activity signal carrying
-// the current count of pending tool calls (including daemon run_command calls).
-func (c *conv) onModelActivity(pending int) {
+// the current count of pending tool calls (including daemon run_command
+// calls) and whether the update carried model content.
+func (c *conv) onModelActivity(pending int, content bool) {
 	if !c.modelWaitArmed {
 		return
+	}
+	// The turn's last pending tool call (one that paused the timer)
+	// reached a terminal status: agy's next model request follows its
+	// result. No time at or before that completion is known (the update
+	// can wait behind the holder's ring and the stream's backpressure while
+	// agy already logs the next request's header), so that request has no
+	// boundary and the headerless cutoff stays off until the next prompt or
+	// automatic continue. A background command that outlived an earlier
+	// turn is not among the pending calls, so its completion moves nothing.
+	if pending < c.modelWaitPending && pending == 0 {
+		c.markModelWaitBoundary(time.Time{})
+	} else if content {
+		c.modelWaitContent = true
 	}
 	c.modelWaitPending = pending
 	if c.modelWaitCancelling || c.modelWaitFailErr != "" {
@@ -333,6 +461,17 @@ func (c *conv) modelWaitTimedOut() {
 	}
 	if c.modelWaitPending > 0 || len(c.approvals) > 0 {
 		return
+	}
+	if !agySilenceWatchdogEnabled {
+		// A main-request header in the window means the model is
+		// generating; an unconfirmed log never cuts. Either way the
+		// timer runs again without spending a retry.
+		if c.modelWaitContent || !c.headerlessStall() {
+			c.resetModelWaitTimer()
+			return
+		}
+		// The marker follows the interrupt below, whichever branch sends it.
+		defer c.noteAgyFrameCutoff(c.proc, c.modelWaitBoundary, c.r.opts.Now())
 	}
 	c.noteModelWaitFailure("")
 	dur := formatWatchdogDuration(c.modelWaitTimeout)
@@ -453,7 +592,11 @@ func (c *conv) modelWaitBackoffTimedOut() {
 	// notice's fence (admitInput); a refused continue is no attempt: it is
 	// neither counted nor a failure, and the process is left running, as a
 	// release never stops it.
+	//
+	// sentAt is taken just before the send, inside the fence, so the
+	// stall boundary it stamps lies at or before the continue it marks.
 	var err error
+	var sentAt time.Time
 	if checkout := c.admitInput(func() {
 		c.noteModelWaitFailure(failure)
 		c.modelWaitRetries++
@@ -462,6 +605,7 @@ func (c *conv) modelWaitBackoffTimedOut() {
 		} else {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: agy reported terminal in-band model failure; sending automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, c.modelWaitRetries, c.modelWaitMaxRetries, failure)
 		}
+		sentAt = c.r.opts.Now()
 		err = c.proc.Send("continue")
 	}); checkout != "" {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model stream stalled; no automatic continue: its worktree %s was released\n", c.rec.ReplyID, checkout)
@@ -475,7 +619,17 @@ func (c *conv) modelWaitBackoffTimedOut() {
 		c.failModelWaitImmediately(reason)
 		return
 	}
+	c.markModelWaitBoundary(sentAt)
 	c.resetModelWaitTimer()
+}
+
+// modelWaitSteered restarts the silence timer with a full timeout after a
+// successful steer, keeping the boundary: the steer's acknowledgement is a
+// prompt response, not model activity.
+func (c *conv) modelWaitSteered() {
+	if c.modelWaitArmed {
+		c.resetModelWaitTimer()
+	}
 }
 
 func (c *conv) cancelModelWaitBackoffForInput() {

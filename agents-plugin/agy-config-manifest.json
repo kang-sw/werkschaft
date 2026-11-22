@@ -7,7 +7,7 @@
       "type": "integer",
       "minimum": 0,
       "default": 120,
-      "description": "Hosted Antigravity (agy) only (unused on other hosts): seconds without a raw ACP session/update during an active model wait, paused while any tool call or approval is pending, before the runner interrupts the stalled turn and may recover with automatic continue attempts. The same retry budget applies to terminal in-band model failures. 0 disables the watchdog. Read at process start for hosted leads and workers."
+      "description": "Hosted Antigravity (agy) only (unused on other hosts): seconds without a raw ACP session/update during an active model wait, paused while any tool call or approval is pending, after which a hosted lead checks agy's own worker log (agy.stall_log_check) and, when the current model request still has no response headers, interrupts the stalled turn and may recover with automatic continue attempts. The same retry budget applies to terminal in-band model failures. 0 disables the watchdog, including the log-confirmed cutoff. Read at process start for hosted leads and workers."
     },
     {
       "key": "agy.model_wait_retries",
@@ -15,6 +15,18 @@
       "minimum": 0,
       "default": 3,
       "description": "Hosted Antigravity (agy) only (unused on other hosts): maximum automatic continue attempts per logical turn after model-wait silence or a terminal in-band model failure. The shared budget resets for each new user turn; exhaustion fails the turn and adds a visible diagnostic. 0 disables automatic retries. Read at process start for hosted leads and workers."
+    },
+    {
+      "key": "agy.stall_log_check",
+      "type": "boolean",
+      "default": true,
+      "description": "Hosted Antigravity (agy) leads only (unused on other hosts and for agy workers): when agy.model_wait_timeout_seconds of silence pass with no tool call or approval pending, read the tail of this session's agy worker log once and interrupt plus automatically continue only when it shows no model response headers since the request began; a response, any streamed text, or a log that cannot be found, read, or verified never cuts. Uses the agy.model_wait_retries budget. Has no effect while agy.model_wait_timeout_seconds is 0. false keeps recovery to agy's in-band failure lines. Read at process start."
+    },
+    {
+      "key": "agy.http2_frame_trace",
+      "type": "boolean",
+      "default": false,
+      "description": "Hosted Antigravity (agy) leads only (unused on other hosts and for agy workers): start agy with GODEBUG=http2debug=2 and keep a filtered HTTP/2 frame summary (frame type, stream, length, flags, and error fields only; header values and data are dropped) in agy-http2-frames.log in the session directory, capped at 64 MiB, with a marker line at each log-confirmed cutoff. Best-effort: agy may not honor GODEBUG, and then the file stays empty. Diagnostic use; read at process start."
     }
   ]
 }
