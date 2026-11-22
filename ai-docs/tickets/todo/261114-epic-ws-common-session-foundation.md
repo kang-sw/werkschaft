@@ -259,7 +259,7 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
   for all harnesses, voice or authority UI. Its backend/API/UI ordering and
   approvals 594-611 survive.
 - **Compatibility.** New tools and endpoints are additive (T0); the 8
-  old `exec.*` tools stay as aliases (T0); `pi.*` hidden from `tools/list` (T0) supersedes
+  old `exec.*` tools stay callable with their legacy semantics (T0; not all are pure aliases, see `261117-feat-ws-exec-tools` Decisions 1 and 3); `pi.*` hidden from `tools/list` (T0) supersedes
   its alias (owner 19:16, (54)=b); relation computed, not stored, is T0.
   The mailbox store ships as a patch with its T1/T2 downgrade judgment in-ticket.
   The holder protocol is versioned and the new daemon speaks the old holder
