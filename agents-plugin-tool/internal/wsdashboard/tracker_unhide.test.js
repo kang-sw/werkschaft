@@ -331,3 +331,30 @@ test('show hidden puts my hidden assignments in the Mine layouts and hidden comm
   assert.ok(related.includes('Hidden mention'), related);
   assert.ok(!related.includes('Hidden own comment'), 'my own comment mention is not a mention source');
 });
+
+test('show hidden routes hidden Related items as the daemon does: involved left out, CC first, wrapped closed', () => {
+  const { c } = harness();
+  vm.runInContext(section('  // ------------------------------------------------------------- view modes', '  function whoTag(x)'), c);
+  c.lastWrite = () => '';
+  const hidden = (id, title, extra) => makeItem(id, { title, author: 'lena', hidden: true, ...extra });
+  c.VS.items = {
+    h1: hidden('h1', 'Hidden CC and comment', { cc: ['maya'] }),
+    h2: hidden('h2', 'Hidden mine', { author: 'maya' }),
+    h3: hidden('h3', 'Hidden assigned', { assignments: ['a3'] }),
+    h4: hidden('h4', 'Hidden wrapped', { status: 'done' }),
+    h5: hidden('h5', 'Hidden open mention')
+  };
+  c.VS.itemOrder = ['h1', 'h2', 'h3', 'h4', 'h5'];
+  c.VS.assignments = { a3: { id: 'a3', item: 'h3', by: 'lena', to: 'maya', state: 'pending', status: 'todo' } };
+  c.VS.comments = Object.fromEntries(c.VS.itemOrder.map((item, i) => ['k' + i, { id: 'k' + i, item, author: 'lena', body: '@maya', hidden: null, mentions: ['maya'] }]));
+  c.panelState().showHidden = true;
+  c.CLOSED = { entries: [], older: 0 };
+  const html = c.listRelated();
+  const sectionOf = key => html.slice(html.indexOf(`data-rsec="${key}"`), key === 'cc' ? html.indexOf('data-rsec="mentioned"') : undefined);
+  assert.ok(sectionOf('cc').includes('Hidden CC and comment'), 'a hidden CC item is a CC row');
+  assert.ok(!sectionOf('mentioned').includes('Hidden CC and comment'), 'and never repeats under Mentioned');
+  assert.ok(sectionOf('mentioned').includes('Hidden open mention'));
+  assert.ok(!html.includes('Hidden mine') && !html.includes('Hidden assigned'), 'my own and assigned items stay in my own scopes');
+  assert.ok(!html.includes('Hidden wrapped'), 'a wrapped item is not an open mention');
+  assert.ok(c.CLOSED.entries.some(e => e.html.includes('Hidden wrapped')), 'a wrapped item goes to the closed rows');
+});
