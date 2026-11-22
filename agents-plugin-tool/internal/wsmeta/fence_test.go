@@ -1063,3 +1063,58 @@ func TestCopiedWitnessNeverProvesARemoval(t *testing.T) {
 		}
 	})
 }
+
+// A re-fence never clears an owned witness that the new legacy path
+// resolves through, at any depth of its link chain: deleting it would
+// change what the path names, and the move would close a cycle.
+func TestRemovalNeverClearsAWitnessTheSourceResolvesThrough(t *testing.T) {
+	ctx := context.Background()
+	const backing = "hooks-backing.json"
+	for _, tc := range []struct {
+		name  string
+		chain func(t *testing.T, dir string) // links tracker-hooks.json through the witness
+	}{
+		{"through a second link", func(t *testing.T, dir string) {
+			mustSymlink(t, hooksWitness, filepath.Join(dir, "hooks-link2.json"))
+			mustSymlink(t, "hooks-link2.json", filepath.Join(dir, fenceHooks))
+		}},
+		{"through a directory alias", func(t *testing.T, dir string) {
+			mustSymlink(t, ".", filepath.Join(dir, "alias"))
+			mustSymlink(t, filepath.Join("alias", hooksWitness), filepath.Join(dir, fenceHooks))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := legacyFixture(t)
+			put(t, dir, backing, hooksBytes)
+			abs := filepath.Join(dir, fenceHooks)
+			if err := os.Remove(abs); err != nil {
+				t.Fatal(err)
+			}
+			mustSymlink(t, backing, abs)
+			s := openTest(t, dir, testOpts())
+			mustStage(t, s)
+			// The legacy link moves to the witness, still naming the backing file.
+			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+				t.Fatal(err)
+			}
+			tc.chain(t, dir)
+			mustStage(t, s)
+			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
+				t.Fatalf("re-fence through the witness = %v, want ErrWitnessOccupied", err)
+			}
+			if target, err := os.Readlink(filepath.Join(dir, hooksWitness)); err != nil || target != backing {
+				t.Fatalf("witness = %q, %v; want the moved link kept", target, err)
+			}
+			if got := readRel(t, dir, fenceHooks); got != hooksBytes {
+				t.Fatalf("legacy path reads %q", got)
+			}
+		})
+	}
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}

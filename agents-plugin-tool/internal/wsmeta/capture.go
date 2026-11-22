@@ -489,8 +489,17 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 // does a legacy path that resolves to the witness, which the move would
 // destroy.
 func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) (id, content string, err error) {
-	if got.state != CaptureAbsent && routesThrough(abs, wabs) {
-		return "", "", fmt.Errorf("%w: %s resolves to it", ErrWitnessOccupied, filepath.Base(abs))
+	if got.state != CaptureAbsent {
+		through, err := routesThrough(abs, wabs)
+		if errors.Is(err, errLinkChain) {
+			return "", "", fmt.Errorf("%w: %v", ErrWitnessOccupied, err)
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("%w: %s resolution: %v", ErrLegacyUnread, filepath.Base(abs), err)
+		}
+		if through {
+			return "", "", fmt.Errorf("%w: %s resolves through it", ErrWitnessOccupied, filepath.Base(abs))
+		}
 	}
 	w := readLegacy(wabs, s.opts.ReadFile)
 	if w.transient {
@@ -525,28 +534,84 @@ func witnessContent(r legacyRead) string { return r.state + " " + r.digest }
 // seam).
 var fileIdentity = entryIdentity
 
-// routesThrough reports whether abs is a symbolic link that resolves to
-// wabs, by name (compared without case, so a case-insensitive volume cannot
-// hide it) or to the same file. Moving such a link onto its own target
-// would destroy the target. Any other entry, a hard link included, moves
-// intact.
-func routesThrough(abs, wabs string) bool {
-	t, err := os.Readlink(abs)
+// routesThrough reports whether resolving abs passes through the directory
+// entry wabs at any depth: abs itself, a link in its chain, or a directory
+// alias on the way. Clearing that entry would change what abs names, and
+// moving abs there would close a cycle. The walk resolves one component at
+// a time, as the kernel does. An entry matches wabs by its name, compared
+// without case so a case-insensitive volume cannot hide it, in the same
+// directory, compared by identity so an alias of the directory cannot hide
+// it. Other names for the same file, hard links included, do not depend on
+// the entry and move intact. A chain longer than maxLinkHops cannot be
+// excluded and is an error.
+func routesThrough(abs, wabs string) (bool, error) {
+	wdir, err := os.Stat(filepath.Dir(wabs))
 	if err != nil {
-		return false
+		return false, err
 	}
-	if !filepath.IsAbs(t) {
-		t = filepath.Join(filepath.Dir(abs), t)
+	wname := filepath.Base(wabs)
+	sep := string(filepath.Separator)
+	vol := filepath.VolumeName(abs)
+	cur := vol + sep
+	todo := splitPath(abs[len(vol):])
+	for hops := 0; len(todo) > 0; {
+		part := todo[0]
+		todo = todo[1:]
+		switch part {
+		case ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		if strings.EqualFold(part, wname) {
+			if d, err := os.Stat(cur); err != nil {
+				return false, err
+			} else if os.SameFile(d, wdir) {
+				return true, nil
+			}
+		}
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Dangling: nothing beyond it is resolved.
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		if hops++; hops > maxLinkHops {
+			return false, fmt.Errorf("%w: %s", errLinkChain, abs)
+		}
+		t, err := os.Readlink(next)
+		if err != nil {
+			return false, err
+		}
+		if v := filepath.VolumeName(t); v != "" || filepath.IsAbs(t) || (t != "" && os.IsPathSeparator(t[0])) {
+			if v == "" {
+				v = filepath.VolumeName(cur)
+			}
+			cur = v + sep
+			t = t[len(filepath.VolumeName(t)):]
+		}
+		todo = append(splitPath(t), todo...)
 	}
-	if strings.EqualFold(filepath.Clean(t), filepath.Clean(wabs)) {
-		return true
-	}
-	a, err := os.Stat(abs)
-	if err != nil {
-		return false
-	}
-	w, err := os.Lstat(wabs)
-	return err == nil && os.SameFile(a, w)
+	return false, nil
+}
+
+// maxLinkHops bounds a link chain, as the kernel's own limit does.
+const maxLinkHops = 40
+
+// errLinkChain reports a link chain too long (or cyclic) to exclude a
+// dependency on the witness.
+var errLinkChain = fmt.Errorf("more than %d links to resolve", maxLinkHops)
+
+func splitPath(p string) []string {
+	return strings.FieldsFunc(p, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) })
 }
 
 // removeDurably deletes p so that the deletion survives a crash: a rename to
