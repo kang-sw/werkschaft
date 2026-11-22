@@ -26,10 +26,11 @@ const [base, updates] = process.argv.slice(2);
     await page.locator('section.topic').nth(111).waitFor({ state: 'attached' });
     await page.waitForFunction(() => !!document.querySelector('section.topic[data-topic="topic-001"]'));
     await page.evaluate(() => { window.unchangedTopic = document.querySelector('section.topic[data-topic="topic-001"]'); });
-    // Wait until the connection's first full board established its baseline.
+    // 0843f8a34: the server skips the first board the page already holds (HTML), so the
+    // connection's baseline is established by its first panels region instead.
     await new Promise((resolve, reject) => {
       const limit = Date.now() + 15000;
-      const check = () => events.some(e => e.event === 'region' && e.data.name === 'board') ? resolve() : Date.now() > limit ? reject(new Error('no first full board')) : setTimeout(check, 20);
+      const check = () => events.some(e => e.event === 'region' && (e.data.name === 'board' || e.data.name === 'panels')) ? resolve() : Date.now() > limit ? reject(new Error('no first full board')) : setTimeout(check, 20);
       check();
     });
     if (output) fs.mkdirSync(output, { recursive: true });
