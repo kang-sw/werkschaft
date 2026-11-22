@@ -432,19 +432,6 @@
     "261118-feat-ws-remote-chat-bridge": {
       "registered_at": "2026-11-18T07:11:45Z"
     },
-    "261118-refactor-ws-harness-name-branches": {
-      "registered_at": "2026-11-18T07:53:02Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T13:39:13Z",
-        "impl": {
-          "branch": "impl/develop/yoga-fever-sip"
-        }
-      }
-    },
     "261118-refactor-ws-split-agy-adapter": {
       "registered_at": "2026-11-18T13:12:58Z"
     },
@@ -591,6 +578,9 @@
     },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
+    },
+    "261123-bug-ws-exec-cutover-worker-authority": {
+      "registered_at": "2026-11-22T20:28:58Z"
     },
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
