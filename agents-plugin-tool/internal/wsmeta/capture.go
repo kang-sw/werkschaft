@@ -58,7 +58,8 @@ const (
 //
 //	none   --apply over the staged original-->  intent  (record durable first)
 //	intent --publication durable----------->    landed
-//	intent --re-apply, publication proven-->    landed  (only a durability barrier)
+//	intent --re-apply, publication proven-->    landed  (published again; a removal
+//	                                                     gets a durability barrier)
 //	intent, landed --a pass that cannot prove the publication--> none
 //	                  (the live state is re-staged as the original)
 //
@@ -84,7 +85,11 @@ const (
 //  5. The record is durable before its publication. landed is set only once
 //     the publication's file data, sentinel mtime and directory entry are
 //     durable. A pass cannot tell whether an unlanded publication is
-//     durable, so it stays pending until the fence is re-applied.
+//     durable, so it stays pending until the fence is re-applied. Every
+//     rename and deletion the migration makes is itself durable (a
+//     directory sync on POSIX, a write-through rename on Windows). Only a
+//     re-applied removal, whose rename an interrupted attempt made, rests
+//     on a directory barrier alone (sync_*.go).
 //  6. Commit proceeds only when every path with fence_required has a landed
 //     record that the commit's own pass proves. When proof fails, the outcome
 //     is a re-stage plus a re-fence. The staged original is never written
@@ -269,8 +274,9 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 // fence, even when it is byte-identical (2135).
 //
 // Re-applying after an interruption is safe. If the publication is already
-// in place, ApplyFence only makes it durable and marks it landed; otherwise
-// it publishes again over the staged original. A live file that is neither
+// in place, ApplyFence publishes the same bytes under the same sentinel
+// again, durably, and marks it landed; otherwise it publishes over the
+// staged original. A live file that is neither
 // returns ErrFenceStale. The directory must exist: a fence never recreates a
 // pruned session.
 func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
@@ -284,12 +290,10 @@ func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error
 	if err := s.hit("fence-prepared"); err != nil {
 		return err
 	}
-	if plan.proven {
-		err = s.syncDir(filepath.Dir(abs))
-	} else {
-		err = s.publishFile(abs, fenced, time.Unix(plan.mtime, 0))
-	}
-	if err != nil {
+	// A proven but unlanded publication is published again, identically:
+	// its own write-through rename is the durability the platform documents,
+	// where a barrier after another process's rename would only be inferred.
+	if err := s.publishFile(abs, fenced, time.Unix(plan.mtime, 0)); err != nil {
 		return err
 	}
 	if err := s.hit("fence-replaced"); err != nil {

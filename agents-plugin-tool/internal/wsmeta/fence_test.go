@@ -922,3 +922,50 @@ func TestRemovalNeverTouchesAFileItDidNotPlace(t *testing.T) {
 		}
 	})
 }
+
+// Re-applying a replacement whose publication is in place but unlanded
+// publishes it again through its own durable rename, instead of trusting a
+// barrier to cover the interrupted attempt's rename. The file keeps the
+// fence's bytes and sentinel.
+func TestReappliedReplacementIsPublishedAgain(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	armed := false
+	var events []string
+	opts := crashAt("fence-renamed", &armed)
+	crash := opts.Fault
+	opts.Fault = func(stage string) error {
+		events = append(events, stage)
+		return crash(stage)
+	}
+	s := openTest(t, dir, opts)
+	mustStage(t, s)
+	armed = true
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
+		t.Fatalf("fence = %v", err)
+	}
+	first, err := os.Stat(filepath.Join(dir, filepath.FromSlash(fencePerm)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"before-commit", "fence-prepared", "fence-renamed", "fence-replaced", "before-commit"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("re-application events = %v, want %v", events, want)
+	}
+	again, err := os.Stat(filepath.Join(dir, filepath.FromSlash(fencePerm)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.ModTime().Equal(first.ModTime()) || readRel(t, dir, fencePerm) != string(fencedSelector) {
+		t.Fatalf("republished fence = %v %q, want the same sentinel and bytes", again.ModTime(), readRel(t, dir, fencePerm))
+	}
+	if runtime.GOOS != "windows" && os.SameFile(first, again) {
+		t.Fatal("the re-application did not publish a new file")
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+}
