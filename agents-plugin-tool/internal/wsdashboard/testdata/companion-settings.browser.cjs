@@ -90,7 +90,7 @@ async function shot(page, name) {
         expanded: document.querySelector('.ws-companion-gear').getAttribute('aria-expanded'),
         labels: [...d.querySelectorAll('.ws-companion-settings-label')].map(e => e.textContent),
         persona: d.querySelector('.ws-companion-settings-persona').textContent,
-        controls: d.querySelectorAll('select, input').length };
+        controls: d.querySelectorAll('.ws-companion-settings-control select, .ws-companion-settings-control input').length };
     });
     assert.equal(modal.modal, false, 'the settings dialog is non-modal');
     assert.ok(modal.l >= 0 && modal.t >= 0 && modal.r <= modal.vw && modal.b <= modal.vh, 'dialog inside the viewport: ' + JSON.stringify(modal));
