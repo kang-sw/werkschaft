@@ -814,6 +814,23 @@ func TestHeaderAndControlLinesStayWithinTheirBounds(t *testing.T) {
 	if err := s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: 1}, strings.Repeat("r", 5*int(mib))); err != nil {
 		t.Fatal(err)
 	}
+	// The loss line is written ahead of the next record; check it there,
+	// before any rotation could take its segment away.
+	mustAppend(t, s, sourced("sess", 100, wsaudit.KindToolCall))
+	flush(t, s)
+	var early []byte
+	segs, _, _ := listSegments(filepath.Join(root, "sess")) // none: nothing written
+	for _, seg := range segs {
+		raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(seg.seq)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		early = append(early, raw...)
+	}
+	cut := `"reason":"` + strings.Repeat("r", maxReasonBytes) + `"`
+	if !bytes.Contains(early, []byte(cut)) || bytes.Contains(early, []byte(strings.Repeat("r", maxReasonBytes+1))) {
+		t.Fatalf("the huge loss reason was not written cut to %d bytes (%d bytes on disk)", maxReasonBytes, len(early))
+	}
 	for i := 0; i < 2000; i++ {
 		id := wsaudit.SourceID{Source: "daemon", Key: fmt.Sprintf("%s-%d", pad, i)}
 		if err := s.RecordLoss(ctx, "sess", id, wsaudit.LossDropped); err != nil {
