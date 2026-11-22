@@ -2,6 +2,7 @@ package execjob
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -514,4 +515,63 @@ func TestHostedJobStoppedInsideItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T)
 	if v := <-launched; v.ID != id {
 		t.Fatalf("the blocked launch answered job %q, want %q", v.ID, id)
 	}
+}
+
+// A predecessor's holders that a new daemon's start stops keep their exec
+// ids reserved until the stop is confirmed: one no job owns keeps its id
+// from being drawn, one of an ended job keeps that job from being pruned.
+// Once the stops go through, the reservations lift.
+func TestHostedStartReservesTheIDsOfHoldersItStops(t *testing.T) {
+	prevMin, prevMax := retireRetryMin, retireRetryMax
+	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
+	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
+	prevKey := newExecKey
+	t.Cleanup(func() { newExecKey = prevKey })
+
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	ended, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	_ = fx.h.Close()
+	code := 0
+	row, _ := fx.store.row(ended.ID)
+	row.State, row.ExitCode, row.EndedAt = HostedExited, &code, 1
+	_ = fx.store.Put(row)
+	fx.holders.mu.Lock()
+	fx.holders.live["h-orphan"] = json.RawMessage(`{"kind":"exec","exec_id":"exec_orphan-id"}`)
+	fx.holders.stopErr = errors.New("holder busy")
+	fx.holders.mu.Unlock()
+
+	fx.open(10 * time.Millisecond)
+	t.Cleanup(func() { fx.h.Close() })
+	draws := []string{"orphan-id", "fresh-id"}
+	newExecKey = func() (string, error) {
+		key := draws[0]
+		if len(draws) > 1 {
+			draws = draws[1:]
+		}
+		return key, nil
+	}
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil || v.ID != "exec_fresh-id" {
+		t.Fatalf("a launch while the orphan holder is stopped: %q, %v", v.ID, err)
+	}
+	newExecKey = prevKey
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	dropped := slices.Contains(fx.store.deleted, ended.ID)
+	fx.store.mu.Unlock()
+	if dropped {
+		t.Fatal("the ended job whose holder is still being stopped was pruned")
+	}
+
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = nil
+	fx.holders.mu.Unlock()
+	eventuallyExec(t, "the reservations to lift", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		return len(fx.h.retiring) == 0
+	})
 }

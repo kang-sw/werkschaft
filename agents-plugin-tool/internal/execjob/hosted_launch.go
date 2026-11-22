@@ -218,7 +218,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 	// that drew the same id may have been admitted since.
 	_, taken := h.jobs[j.row.ID]
 	_, pending := h.deleting[j.row.ID]
-	if taken || pending {
+	if taken || pending || h.retiring[j.row.ID] > 0 {
 		h.mu.Unlock()
 		return errIDTaken
 	}
@@ -228,7 +228,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 		switch {
 		case !have.row.Terminal():
 			running++
-		case have.holderPinned:
+		case have.holderPinned || h.retiring[have.row.ID] > 0:
 			// A holder of it may still write its exit copy: it stays, and
 			// counts toward the cap, until that holder is gone.
 			held++
@@ -245,6 +245,12 @@ func (h *Hosted) admit(j *hostedJob) error {
 	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
+	}
+	for id := range h.retiring {
+		if _, ok := h.jobs[id]; !ok {
+			// A predecessor's holder no job owns holds its id the same way.
+			held++
+		}
 	}
 	if running+held >= HostedMaxJobs {
 		h.mu.Unlock()
@@ -369,12 +375,14 @@ func (h *Hosted) newID(legacy bool) (string, error) {
 			id = "exec_" + key
 		}
 		// An id whose dropped row is still being deleted stays reserved:
-		// reusing it would overwrite that row and its exit copy.
+		// reusing it would overwrite that row and its exit copy. So does
+		// one a predecessor's holder still being stopped runs under.
 		h.mu.Lock()
 		_, taken := h.jobs[id]
 		_, pending := h.deleting[id]
+		retiring := h.retiring[id] > 0
 		h.mu.Unlock()
-		taken = taken || pending
+		taken = taken || pending || retiring
 		if !taken {
 			return id, nil
 		}

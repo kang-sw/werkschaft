@@ -34,6 +34,12 @@ type Hosted struct {
 	// cap, so a failing store bounds them. deleteGen numbers the claims.
 	deleting  map[string]*tombstone
 	deleteGen uint64
+	// retiring counts, per exec id, a predecessor's holders Start is
+	// stopping whose id no live job records (one no job owns, or one of an
+	// ended job): the holder may still write the exit copy at that id's
+	// path, so the id is not drawn, its ended job not pruned, and both count
+	// toward the job cap until the stop is confirmed (retireOld).
+	retiring map[string]int
 	started   bool
 	closed    bool
 	retry     *time.Timer
@@ -145,7 +151,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}, quit: make(chan struct{})}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}, retiring: map[string]int{}, quit: make(chan struct{})}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
@@ -233,17 +239,21 @@ func (h *Hosted) Start() {
 		if owned && !ended {
 			stdinFromHolderLocked(j, info)
 		}
+		if !owned || ended {
+			// Reserved before the jobs are published (this start returns).
+			h.retiring[execID]++
+		}
 		h.mu.Unlock()
 		switch {
 		case !owned:
 			// Launched and never recorded (a crash between the holder's
 			// start and the first row), or of a job this daemon pruned.
 			h.logf("stopping exec holder %s: no job owns it", info.ID)
-			go h.stopHolder(info.ID)
+			go h.retireOld(execID, info.ID)
 		case ended:
 			// Its job's end was stored, and the daemon went before the
 			// holder's stop.
-			go h.stopHolder(info.ID)
+			go h.retireOld(execID, info.ID)
 		}
 	}
 	h.mu.Lock()
@@ -486,6 +496,26 @@ func (h *Hosted) retireHolder(j *hostedJob, holder string) error {
 	}
 	retired()
 	return nil
+}
+
+// retireOld stops holder, a predecessor's holder under exec id execID
+// that no live job records, and releases execID's reservation (retiring)
+// once the holder is confirmed gone; a failed stop is retried
+// (retryRetire).
+func (h *Hosted) retireOld(execID, holder string) {
+	release := func() {
+		h.mu.Lock()
+		if h.retiring[execID]--; h.retiring[execID] <= 0 {
+			delete(h.retiring, execID)
+		}
+		h.mu.Unlock()
+	}
+	if err := h.stopGone(holder); err != nil {
+		h.logf("stop exec holder %s: %v; exec id %s stays reserved while the stop is retried", holder, err, execID)
+		h.retryRetire(holder, release)
+		return
+	}
+	release()
 }
 
 // stopGone stops holder; one already gone counts as stopped.
