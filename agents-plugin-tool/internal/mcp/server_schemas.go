@@ -943,6 +943,29 @@ func tools() []map[string]any {
 			},
 		},
 		{
+			"name":        "cron",
+			"description": `Schedule prompts for yourself. Each time a schedule's cron expression matches, the daemon sends its prompt to this session as a message wrapped in a cron envelope that carries the schedule's id, name, and the matched minute (at), the way a user message arrives wrapped in its own envelope. Hosted lead sessions only: a worker, a plain CLI session, and a connection the dashboard does not host are refused. The arguments are mutually exclusive: none lists your schedules, each as {id, name, expr, tz, next_at, last_at, pending, dropped}; add {name, expr, prompt, tz?} registers one and returns {id, next_at}; delete takes a schedule id or name. A name is unique within your session and an add never overwrites, so to change a schedule delete it, then add it again. expr is standard 5-field Linux cron (minute hour day-of-month month day-of-week): lists, ranges, steps, JAN-DEC and SUN-SAT names, 0 or 7 for Sunday, and the day-of-month/day-of-week OR rule when both are restricted (a field starting with * counts as unrestricted); or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly. @reboot, a seconds field, and an expression that can never fire (such as February 30) are refused. tz is UTC, Z, or a fixed offset +HH:MM or -HH:MM from -12:00 to +14:00, and defaults to UTC whatever the host's own zone; zone names and daylight saving are not supported. A fire reaches you as your next turn's input and never interrupts a running turn. At most one fire per schedule waits at a time: a fire that finds the previous one still undelivered is dropped and counted in dropped, and pending is true while a fire waits. Fires missed while the daemon was down or the machine slept are skipped, not caught up. At most 32 schedules per session and 16 KiB per prompt. Schedules survive a daemon restart and are removed when the session is deleted or expires. Text by default; format=json for structured output.`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription + " Accepted for convenience; the schedule always belongs to the calling session."),
+					"add": map[string]any{
+						"type":        "object",
+						"description": "Register a schedule. Mutually exclusive with delete.",
+						"properties": map[string]any{
+							"name":   stringProperty("Unique within your session; at most 64 characters, no control characters, and not of the form cron- followed by hex (that is the id form)."),
+							"expr":   stringProperty("5-field cron expression or a macro such as @daily."),
+							"prompt": stringProperty("The message delivered at each match; at most 16 KiB."),
+							"tz":     stringProperty("UTC, Z, or a fixed offset +HH:MM / -HH:MM (-12:00 to +14:00). Default UTC."),
+						},
+						"required": []string{"name", "expr", "prompt"},
+					},
+					"delete": stringProperty("Delete the schedule with this id or name. Mutually exclusive with add."),
+					"format": stringProperty(formatPropertyDescription),
+				},
+			},
+		},
+		{
 			"name":        dashboardIntakeTool,
 			"description": `Adapter-only: agents must not call. Applies ordered events to the session's dashboard state; each has a kind and optional at (epoch ms). Kinds: reset (clears live state; send at adapter start); turn_start {origin?: terminal|whiteboard|mail}; turn_end {reason?}; agent {agentId?, parentId?, label?, sessionKey?, status?: running|done|failed, caption?, batches?, model?, effort?, contextTokens?, outputTps?} updates the lead or one subagent; permission {agentId?, tool, args} or {agentId?, clear: true}; reply {text, final?} replaces the reply so far, final moves it to the conversation; user {text, origin?}; status {context?, limits?, cost?}; compact {phase: start|end|failed, trigger?}; commands {commands: [{name, description?, source?, layer?}]}; command {command, text?}. Send replies at most 10 times a second. With the dashboard off nothing is recorded. Send status, compact, commands or command only while the latest result's accepts line names it.`,
 			"inputSchema": map[string]any{
@@ -961,7 +984,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        dashboardInboxDrainTool,
-			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user or ws:cron (scheduled prompt) envelope as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
+			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user envelope, and each ws:cron envelope (a scheduled prompt), as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

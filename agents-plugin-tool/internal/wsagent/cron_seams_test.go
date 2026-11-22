@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -177,4 +178,31 @@ func TestForgetClosedReportsPermanentEndOnly(t *testing.T) {
 	}
 	h.runner.BindCron(nil)
 	h.runner.ForgetClosed(id)
+}
+
+// TestCronIsNotAChildTool: a scheduled prompt can only reach a hosted lead,
+// so no worker allowlist lists cron; a worker's call is refused by the
+// server (TestCronRefusesAWorker in the mcp package).
+func TestCronIsNotAChildTool(t *testing.T) {
+	for name, list := range map[string][]string{
+		"ChildSafeWSTools": ChildSafeWSTools, "AgentWSTools": AgentWSTools,
+		"PiMiniLeadWSTools": PiMiniLeadWSTools, "PiWorkerWSTools": PiWorkerWSTools,
+	} {
+		if slices.Contains(list, "cron") {
+			t.Errorf("%s lists cron", name)
+		}
+	}
+}
+
+// TestAgyLeadReachesCronThroughTheCallFallback pins the mechanism: agy lists
+// only a curated set of tools directly, and cron is not among them, so an agy
+// lead calls it through the call fallback its registration enables.
+func TestAgyLeadReachesCronThroughTheCallFallback(t *testing.T) {
+	_, reg := (AgyBackend{}).registration()
+	if slices.Contains(reg.DirectTools, "cron") {
+		t.Fatalf("agy lists cron directly: %v", reg.DirectTools)
+	}
+	if !reg.CallFallback {
+		t.Fatal("agy has no call fallback, so its lead could not reach cron")
+	}
 }

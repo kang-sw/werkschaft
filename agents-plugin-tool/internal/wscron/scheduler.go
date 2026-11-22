@@ -411,6 +411,10 @@ func checkName(name string) (string, error) {
 	return name, nil
 }
 
+// IsLead reports whether owner is a hosted lead conversation the daemon can
+// deliver to; the error says it is not (closed, handed off or unknown).
+func (s *Scheduler) IsLead(owner string) (bool, error) { return s.sessions.IsLead(owner) }
+
 // Add registers a schedule for conversation owner, which must be a hosted
 // lead, and returns its id and first fire (RFC 3339 in the schedule's
 // offset). tz is empty, UTC, Z or a fixed offset (ParseTZ).

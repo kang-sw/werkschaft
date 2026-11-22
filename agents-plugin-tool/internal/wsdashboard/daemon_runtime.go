@@ -30,6 +30,9 @@ func (d *Daemon) sessionChanged(replyID string) {
 			if f, ok := d.source.(SessionForgetter); ok {
 				f.ForgetSession(replyID)
 			}
+			if d.forgotten != nil {
+				d.forgotten(replyID)
+			}
 		}
 	}
 	d.stats.WakeSession.Add(1)

@@ -103,6 +103,7 @@ func dashboardCommand(args []string) {
 	// The hosted exec jobs bind after StartDaemon (their store opens under
 	// the lock); their holders' records and exits go through execLink.
 	execLink := &hostedExecLink{}
+	cron := &cronHost{}
 	holders := wsholder.New(wsholder.Options{
 		Dir:    filepath.Join(dir, wsholder.DirName),
 		Python: os.Getenv(wsholder.PythonEnv),
@@ -181,6 +182,9 @@ func dashboardCommand(args []string) {
 		// A hosted session's jobs run under the hosted exec jobs, which
 		// know their owning conversation; nil until they bind.
 		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
+		// A session that left the index may have ended for good: its
+		// scheduled prompts go once the runner no longer knows it.
+		SessionForgotten: func(id string) { cron.sessionForgotten(agents, id) },
 		// The companion director's isolated one-shot call, dispatched
 		// through the harness's backend registration.
 		CompanionOneShot:    wsagent.RunOneShot,
@@ -190,6 +194,8 @@ func dashboardCommand(args []string) {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
 			}
 			exportMailbox.call()
+			// Under the lock, so the successor never fires the same schedules.
+			cron.close(logw)
 		},
 	})
 	if errors.Is(err, wsdashboard.ErrLocked) {
@@ -249,6 +255,14 @@ func dashboardCommand(args []string) {
 	// Start ran before this Store, so its wakes read no jobs: a job a
 	// predecessor left running reaches the rail with this one.
 	execJobsChanged()
+	// Scheduled prompts open under the lock too, once the runner knows its
+	// conversations: the start reaps schedules of sessions it lost and
+	// rebuilds which fires still wait in an inbox.
+	if sched := openCron(dir, agents, logw); sched != nil {
+		cron.sched.Store(sched)
+		host.cron.Store(sched)
+		agents.BindCron(sched)
+	}
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
@@ -291,6 +305,7 @@ func dashboardCommand(args []string) {
 			fmt.Fprintf(logw, "dashboard: hosted exec close: %v\n", err)
 		}
 	}
+	cron.close(logw)
 	stopWatch()
 	stopPoll()
 	stopHooks()
