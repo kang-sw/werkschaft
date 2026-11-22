@@ -1,6 +1,8 @@
 package wsauditstore
 
 import (
+	"errors"
+	"io"
 	"os"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -19,6 +21,21 @@ var (
 		return f.Write(b)
 	}
 )
+
+// readHead reads at most n bytes from the start of path.
+var readHead = func(path string, n int) ([]byte, error) {
+	f, err := wsstate.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFile(f)
+	buf := make([]byte, n)
+	k, err := io.ReadFull(f, buf)
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return buf[:k], err
+}
 
 func openAppend(path string) (*os.File, error) {
 	return wsstate.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)

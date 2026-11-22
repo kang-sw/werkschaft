@@ -411,3 +411,52 @@ func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
 		t.Fatalf("store total %d, disk %d", total, disk)
 	}
 }
+
+// writeNewerRing writes an unopened ring of a newer format with a padded
+// segment of about size bytes.
+func writeNewerRing(t *testing.T, root, session string, size int, mtime time.Time) string {
+	t.Helper()
+	dir := filepath.Join(root, session)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seg := filepath.Join(dir, segmentName(1))
+	content := `{"t":"h","v":2,"session":"` + session + `"}` + "\n" + `{"t":"future","pad":"` + strings.Repeat("z", size) + `"}` + "\n"
+	if err := os.WriteFile(seg, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(seg, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return seg
+}
+
+// TestNewerFormatRingIsNeverAgedOutOrEvicted pins forward safety (T0): an
+// unopened ring a newer binary wrote survives the retention sweep past its
+// age and store-wide eviction, with a log line each time.
+func TestNewerFormatRingIsNeverAgedOutOrEvicted(t *testing.T) {
+	root := t.TempDir()
+	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	seg := writeNewerRing(t, root, "future", 3*int(mib), clock.now.Add(-30*24*time.Hour))
+	if headerVersion([]byte(`{"t":"h","v":2,"sess`)) != 2 || headerVersion([]byte(`{"t":"e","e":{"v":9}}`)) != 0 {
+		t.Fatal("headerVersion misreads a torn header or an event line")
+	}
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 6 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(seg); err != nil || !strings.Contains(log.String(), "retention: keep audit ring of session future") {
+		t.Fatalf("the newer ring was aged out: %v; log: %s", err, log.String())
+	}
+	_ = s.Close()
+	// A fresh store meets the ring first as an eviction candidate.
+	s2, log2 := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now; o.DeferFirstSweep = true })
+	for seq := uint64(1); seq <= 8; seq++ {
+		mustAppend(t, s2, bigRecord("now", seq, lim))
+	}
+	flush(t, s2)
+	if _, err := os.Stat(seg); err != nil || !strings.Contains(log2.String(), "store total cap: keep audit ring of session future") {
+		t.Fatalf("the newer ring was evicted: %v; log: %s", err, log2.String())
+	}
+}

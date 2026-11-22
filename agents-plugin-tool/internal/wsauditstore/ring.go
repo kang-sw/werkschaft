@@ -262,6 +262,64 @@ func newRing(session, dir string) *ring {
 	return &ring{session: session, dir: dir, led: newLedger(), pendingFin: map[string]uint64{}}
 }
 
+// headReadBytes bounds how much of a segment newerRingOnDisk reads; the
+// version is the header's second key.
+const headReadBytes = 4 << 10
+
+// newerRingOnDisk reports whether any segment of the ring at dir opens with a
+// header of a newer format, reading only each segment's head. Age-out and
+// capacity eviction never delete such a ring (Decision 4, forward safety).
+func newerRingOnDisk(dir string) bool {
+	segs, _, err := listSegments(dir)
+	if err != nil {
+		return false
+	}
+	for _, seg := range segs {
+		head, err := readHead(filepath.Join(dir, segmentName(seg.seq)), headReadBytes)
+		if err == nil && headerVersion(head) > RingSchemaVersion {
+			return true
+		}
+	}
+	return false
+}
+
+// headerVersion is the "v" of a header line at the start of head, read token
+// by token so a torn or long line still yields it; 0 when head does not open
+// with a header object carrying one.
+func headerVersion(head []byte) int {
+	dec := json.NewDecoder(bytes.NewReader(head))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return 0
+	}
+	header := false
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return 0
+		}
+		switch key {
+		case "t":
+			var t string
+			if dec.Decode(&t) != nil {
+				return 0
+			}
+			header = t == lineHeader
+		case "v":
+			var v int
+			if dec.Decode(&v) != nil || !header {
+				return 0
+			}
+			return v
+		default:
+			var skip json.RawMessage
+			if dec.Decode(&skip) != nil {
+				return 0
+			}
+		}
+	}
+	return 0
+}
+
 // listSegments returns the ring's segment sequence numbers and sizes in
 // order, from one directory listing.
 func listSegments(dir string) ([]segment, time.Time, error) {

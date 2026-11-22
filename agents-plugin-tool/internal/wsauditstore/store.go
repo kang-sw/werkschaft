@@ -110,6 +110,9 @@ type sessionInfo struct {
 	// while a load is queued, so readers queue it at most once.
 	led     atomic.Pointer[ledger]
 	loading atomic.Bool
+	// newer is set once the ring is known to hold a newer format; age-out and
+	// capacity eviction leave it alone.
+	newer bool
 }
 
 // Store is the audit segment ring store. It implements wsaudit.SourcedSink.
@@ -745,7 +748,7 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		}
 		var victim *sessionInfo
 		for _, info := range s.sessions {
-			if info == active || info.bytes == 0 || failed[info] {
+			if info == active || info.bytes == 0 || failed[info] || info.newer {
 				continue
 			}
 			if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
@@ -767,6 +770,10 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 				s.mu.Unlock()
 			}
 			return
+		}
+		if s.foreign(victim) {
+			s.logf("store total cap: keep audit ring of session %s: it holds a newer format", victim.dir)
+			continue
 		}
 		s.logf("store total cap: evict audit ring of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
 		if err := s.removeRing(victim, false); err != nil {
@@ -898,11 +905,33 @@ func (s *Store) sweep() {
 				}
 			}
 		}
+		if s.foreign(info) {
+			s.logf("retention: keep audit ring of session %s: it holds a newer format", info.dir)
+			continue
+		}
 		s.logf("retention: remove audit ring of session %s (last seen %s)", info.dir, formatTime(info.lastSeen))
 		if err := s.removeRing(info, true); err != nil {
 			s.logf("retention: %v", err)
 		}
 	}
+}
+
+// foreign reports whether info's ring holds a newer format: a loaded ring
+// refusing writes, or an unloaded one whose segment headers say so. The
+// answer is remembered. Writer goroutine only.
+func (s *Store) foreign(info *sessionInfo) bool {
+	if info.newer {
+		return true
+	}
+	info.mu.Lock()
+	r := info.ring
+	info.mu.Unlock()
+	if r != nil {
+		info.newer = errors.Is(r.readOnly, ErrNewerFormat)
+	} else {
+		info.newer = newerRingOnDisk(filepath.Join(s.opts.Root, info.dir))
+	}
+	return info.newer
 }
 
 func maxTime(a, b time.Time) time.Time {
