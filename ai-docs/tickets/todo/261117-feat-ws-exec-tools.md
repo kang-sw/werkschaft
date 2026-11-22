@@ -1,17 +1,20 @@
 ---
 title: "ws/exec 도구: 비동기 전환, 완료 푸시, 네이티브 프로세스 도구 제거를 포함한 데몬 소유 명령 실행"
 parent: 261114-epic-ws-common-session-foundation
+blocked-by: 261115-feat-ws-permission-profile#phase2
 related:
   261117-feat-ws-single-session-holder: "idea-only context; not a prerequisite to the per-job holder start"
   261120-refactor-ws-agent-workers-under-holders: "landed holder-per-process pattern reused by per-job exec holders (merge 92c12990a)"
   261112-feat-pi-subagent-long-shell-auto-background: "absorbed; dropped (43); origin of the exec concept (owner, 2026-11-13)"
   261117-feat-ws-exec-mux-terminal: "owns the PTY mux direction split out of this ticket (51)=a"
-  261114-feat-ws-conversation-audit-event-store: "future consumer of daemon-visible exec I/O"
-  261115-feat-ws-permission-profile: "permission-profile caps are enforced here"
+  261119-epic-ws-conversation-audit: "future consumer of daemon-visible exec I/O; supersedes the dropped 261114-feat-ws-conversation-audit-event-store"
+  261115-feat-ws-permission-profile: "prerequisite; landed Phase 2 supplies the current permission profile used for exec approval"
   261117-feat-ws-harness-capability-catalog: "default tool removal range and native subagent removability items"
   261117-feat-ws-agent-tools-mailbox-routing: "shares the sleep-not-close and cascading-close rules for child agents"
   261117-research-ws-daemon-file-touch-map: "release-gate file-touch constraint; not edited from here"
-  261122-feat-ws-agent-turn-semaphore: "counts in-flight exec calls and gates completion notices that open a worker turn"
+  261117-feat-ws-hosted-compaction-lifecycle: "consumes the Phase 1 exec.list seam in a later restore-bundle edition"
+  261120-feat-ws-agy-timeout-process-respawn: "shares the harness-kill survival fixture first established by exec Phase 1"
+  261122-feat-ws-agent-turn-semaphore: "downstream consumer of Phase 1 conversation attribution and completion delivery"
 ---
 
 # ws/exec tools
@@ -32,7 +35,8 @@ workers in `261120-refactor-ws-agent-workers-under-holders` (merge `92c12990a`).
 
 ## Decisions
 
-The following amendments are owner-confirmed on 2026-11-22.
+Decisions 1–18 reflect the owner-confirmed plan as of 2026-11-22.
+Decisions 19–20 record technical settlements.
 
 1. **Surface (16), (18), (40), (42), (50), (51)=a.**
    - `exec.run(exe, args[], cwd?, env?, stdin?, async?)` runs argv directly.
@@ -80,13 +84,15 @@ The following amendments are owner-confirmed on 2026-11-22.
 4. **Daemon-owned advisory approval (18), (1505)=a.** Apply ws command
    rules first, including denies under `full`, then ask through the
    existing dashboard approval UI when the rules require a decision.
-   Bind approval to the normalized command and its owning session. The
+   Bind approval to the normalized launch and its owning session. The
    current `answerApproval` requires a native answerer
-   (`wsagent/runner_events.go:583-605`), so exec approvals need a daemon
-   owner. The permission gate names exec and reads the live profile at
-   approval and at start (`mcp/permission_gate.go:10-37`). Enforcement
-   provides no OS confinement. The owner accepts the loss of the native
-   Codex OS sandbox for read-only Codex sessions. Future LLM intent
+   (`wsagent/runner_events.go#L584-L609`), so exec approvals need a daemon
+   owner. The current `permissionRefusal` only checks the worker's launch
+   authority against a static tool list (`mcp/permission_gate.go#L17-L37`).
+   Add the exec gate and use the conversation's current permission profile
+   at approval and at start. Enforcement is advisory, and the owner accepts
+   the loss of the native Codex OS sandbox for read-only Codex sessions.
+   Future LLM intent
    judgment belongs to `261118-feat-ws-exec-intent-filter`.
    Rejected: retain native sandboxed shells for read-only sessions ((1505)=b)
    or implement OS confinement in ws/exec ((1505)=c).
@@ -150,10 +156,10 @@ The following amendments are owner-confirmed on 2026-11-22.
     or converted jobs, durably across daemon replacement, keyed by a stable
     per-job completion event ID so replay and restart never deliver a second
     notice. Suppress completion after the session closes. `Runner.Deliver`
-    currently marks steer only for spawned Pi children
-    (`wsagent/runner_operations.go:118`); Phase 1 extends steer marking to
-    every harness path that supports steering. Rejected: next-turn-only
-    delivery.
+    delegates to `Runner.Send`, which currently marks steer only for spawned
+    Pi children (`wsagent/runner_operations.go:118`). Phase 1 extends steer
+    marking to every harness path that supports steering. Rejected:
+    next-turn-only delivery.
 11. **agy command blocking (1503), after the agy 1.5.14 live probe on
     2026-11-22.** The settled launch policy is native `default` mode.
     Native `auto` and `--dangerously-skip-permissions` are never used.
@@ -221,9 +227,33 @@ The following amendments are owner-confirmed on 2026-11-22.
     the corresponding line in `wsagent/instructions/agent-worker-agy.md:5`.
     Update `TestAgyLeadPromptCarriesTheWorkflowManual` and
     `TestAgyWorkerProfile` in `wsagent/agy_lead_test.go`.
+19. **Legacy hosted timing.** Apply the approved 30 s execution window to
+    hosted `exec.spawn` and legacy-form `exec.shell`. Keep their legacy
+    launch arguments, shell resolution, `exec_key` and reply shape, including
+    the running response and its reader guidance after time expires. This
+    follows Decision 3's explicit replacement of `ForegroundWindow` and
+    keeps old clients able to use the returned key in legacy readers and
+    `exec.abort`. Non-hosted legacy launches retain the existing 5 s window
+    because the rollout targets hosted sessions. The old timed branch is
+    `internal/execjob/execjob.go#L255-L269`; the legacy wrappers are in
+    `internal/mcp/server_dispatch.go#L289-L309`.
+20. **Integration order.** Phase 1 owns the authenticated conversation
+    attribution and standard `Runner.Deliver` steer-or-wake seam, including
+    when no semaphore is present. `261122-feat-ws-agent-turn-semaphore`
+    consumes those seams after Phase 1 lands. The harness-kill survival
+    fixture also lands here, using an independently stoppable harness and
+    live job holder. These producer-side checks establish the handoff before
+    the semaphore and the agy recovery ticket exercise their own behavior.
 
 ## Constraints
 
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin/, agents-plugin-wsflow/, agents-plugin-tool/)
+- Convention: ai-docs/manuals/skill-authoring.md (declared for agents-plugin/rsrc/, agents-plugin/skills/, agents-plugin-wsflow/rsrc/, agents-plugin-wsflow/skills/, agents-plugin-tool/internal/wsdoc/conventions/)
+- Convention: ai-docs/manuals/wsflow-mirroring.md (declared for agents-plugin/rsrc/, agents-plugin/skills/, agents-plugin/hooks/, agents-plugin-wsflow/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/config-settings-ui.md (declared for agents-plugin-tool/internal/mcp/config_registry.go, agents-plugin/config-manifest.json, agents-plugin/agy-config-manifest.json, agents-plugin/dashboard-config-manifest.json, agents-plugin-pi/config-manifest.json, agents-plugin-tool/internal/wsdashboard/config_routes.go, agents-plugin-tool/internal/wsdashboard/config_proposals.go, agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*)
 - Run Go tests locally on macOS and run Windows checks on the Windows host
   (owner (68), recorded in `261115-feat-ws-hosted-codex-adapter-contract`).
 - Read before editing `agents-plugin-tool/`:
@@ -242,13 +272,37 @@ The following amendments are owner-confirmed on 2026-11-22.
 
 ## Compatibility
 
-The new exec shapes are additive (T0). Keep all eight legacy calls supported,
-including both argument families on `exec.shell`, distinct status/result and
-raw readers, and old records and byte offsets. Retain holder exit status
-through a downgrade and reopen. State the tier of any exec-specific holder
-protocol change here. Record the concrete verdict in Phase 1's Result with
-source lines showing which version writes and reads each surface, per
-`ai-docs/manuals/release-compatibility.md`.
+The new MCP shapes target T0. Keep all eight legacy calls supported, including
+both argument families on `exec.shell`, distinct status/result and raw readers,
+and old records and byte offsets. Capability-gate new names and arguments on
+older servers. Verify the approved hosted timing and approval changes with a
+legacy caller's timeout and result handling. Retain holder exit status through
+a downgrade and reopen. Grade the holder protocol and restore data separately
+and record the directional verdicts in Phase 1's Result, with source lines
+showing which version writes and reads each surface and what survives reopening.
+
+## Prior Decisions
+
+- 1f3a7477e (2026-11-19, commit): "Only undeclared metadata is stripped; a schema-declared property keeps its original value and handler validation. Other unknown inputs remain refused." — bearing: constrains
+- 70678ab2e (2026-11-13, commit): "Keep optional exit fields in the session registration rather than relying on transient holder logs; preserve them across runner heartbeats and persist before directory cleanup, retrying failed writes." — bearing: constrains
+- 261118-feat-ws-agy-tool-names-and-worker-role (2026-11-18, commit): "Worker eligibility, profile, HTTP attachment and auto-approval are registration metadata; common launch/admission code gains no agy branch." — bearing: constrains
+- e83316aeb (2026-11-18, commit): "Approval ids are agy's toolCallId, not the JSON-RPC id: request ids restart per process, while the call id is stable and is what tool_call_update settles." — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/internal/execjob/, internal/mcp/, internal/wsagent/, internal/wsholder/; harness integration and config registry |
+| scope.surface | public-interface | exec.run, exec.shell, exec.stop, exec.tail, exec.list, exec.write and legacy MCP contracts |
+| scope.new_public_symbol | yes | exec.run, exec.stop, exec.tail, exec.list, exec.write |
+| scope.new_type_contract | yes | new MCP tool argument and response contracts; exec.shell argument families |
+| scope.test_surface | existing | agents-plugin-tool/internal/mcp/server_stdio_exec_test.go; wsagent/agy_lead_test.go |
+| complexity.reuse_points | confirmed | internal/execjob/execjob.go, wsagent/agent_delivery.go, wsholder/manager.go |
+| complexity.side_effect_risk | high | process execution, approval, lifecycle, and native tool cutover |
+| risk.correctness | high | durable completion and concurrent process, session, worktree, and replay lifecycle |
+| risk.fit | high | coordination across harnesses, legacy tools, semaphore, and holder behavior |
+| risk.test | high | cross-platform process trees, downgrade and replay, harness-specific cutover |
+| risk.security_or_contract | high | approval, authenticated ownership, native process tool removal, and legacy compatibility |
 
 ## Phases
 
@@ -260,21 +314,25 @@ and daemon-owned approval to the authenticated conversation and enforce the
 same approval policy for hosted legacy launches. Implement the process-group
 lifecycle, output retention, and session-scoped `exec.list` read seam.
 Deliver durable async completion with the existing steer, idle-turn, and
-next-turn routes. Implement the independent 30 s execution window and check
-Claude's MCP approval path. Phase 2 uses this surface before removing native
-tools. Restore-bundle integration follows separately.
+next-turn routes. Implement the independent 30 s hosted execution window and
+check Claude's MCP approval path. Phase 2 uses this surface before removing
+native tools. The semaphore and restore bundle integrate with the Phase 1
+seams in their respective tickets.
 
 Verification:
 
 - Exercise direct argv, both `exec.shell` shapes, rejection of mixed arguments
   by the precheck, original launch and stop shapes, all five distinct legacy
-  readers, and preserved old records and raw byte offsets.
+  readers, and preserved old records and raw byte offsets. Compare the timed
+  running response on a hosted legacy call with the existing non-hosted 5 s
+  path, including an older client's follow-up status, result, and abort.
 - Exercise sync, async, conversion in the current turn, and pipe stdin via
   `exec.write`. Prove preflight, approval, and slot re-acquisition do not
   consume the 30 s conversion window. Verify running, idle, and next-turn
   completion delivery on every steer-capable harness, once across daemon
   replacement and replay by its stable event ID, including suppression
-  after close and absence of notices for synchronous completions.
+  after close and absence of notices for synchronous completions. Exercise
+  the delivery seam through ordinary Runner admission without a semaphore.
 - Verify T0 with an old daemon running the new holder, then holder exit, then
   new-daemon reopen and terminal-status retrieval. Share the harness-kill
   survival case with `261120-feat-ws-agy-timeout-process-respawn`.
@@ -283,7 +341,7 @@ Verification:
   UTF-8 decoding, 4 KiB previews, per-job and total-ring eviction offsets,
   finite metadata and list bounds, and session-scoped listings.
 - Verify command-rule allow and deny, deny under `full`, dashboard approvals
-  bound to command and owner, live profile changes before approval or start,
+  bound to launch and owner, live profile changes before approval or start,
   legacy shape enforcement, and rejection of owner selection by a descendant
   key. Pin the Claude `can_use_tool` finding and verify one approval path.
 - Measure syscalls/s on the owner's PC and account for cold-start and exit
@@ -294,6 +352,7 @@ Verification:
 
 After Phase 1, add the exec tools to worker allowlists and then enable verified
 per-harness native process tool removal with its rollout switch and exclusions.
+Use the existing config registry and settings catalog for the rollout switch.
 On agy, use the native default launch mode and daemon `reject_once` for
 `run_command`; preserve daemon-side bypass for other requests and handle
 commands that start without a request. Append the creation-time instruction,
