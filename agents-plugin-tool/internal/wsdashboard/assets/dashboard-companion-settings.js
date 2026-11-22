@@ -184,6 +184,7 @@
     const sources = C.sourcesSection({
       doc, signal, options, canWrite, notice: hooks.notice,
       raw: () => current(sourcesKey),
+      verdicts: () => hooks.config()?.sourceEntries,
       layout: () => place(),
       catalogChanged(catalog) {
         if (catalog) applyCatalog(catalog); else loadPacks();

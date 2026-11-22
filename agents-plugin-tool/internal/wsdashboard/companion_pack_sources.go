@@ -43,14 +43,22 @@ func parseCompanionSources(raw string) []companionSourceEntry {
 	return entries
 }
 
-// companionSourceListed reports whether source is a valid entry of the
+// companionSourceProblem reports whether source is a valid entry of the
 // configured list. Fetch and install act only on listed sources, so a source
-// is always one the user added.
-func companionSourceListed(raw, source string) bool {
+// is always one the user added. When source is listed only as an invalid
+// entry, problem carries that entry's error; a source not listed at all has
+// neither.
+func companionSourceProblem(raw, source string) (problem string, listed bool) {
 	for _, entry := range parseCompanionSources(raw) {
-		if entry.Error == "" && entry.URL == source {
-			return true
+		if entry.URL != source {
+			continue
+		}
+		if entry.Error == "" {
+			return "", true
+		}
+		if problem == "" {
+			problem = entry.Error
 		}
 	}
-	return false
+	return problem, false
 }

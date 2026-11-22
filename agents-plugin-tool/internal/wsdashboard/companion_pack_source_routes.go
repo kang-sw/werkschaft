@@ -95,9 +95,14 @@ func (d *Daemon) companionSourceGate(w http.ResponseWriter, r *http.Request) (co
 		companionWriteError(w, http.StatusBadRequest, "the request body must be a JSON object")
 		return req, false
 	}
-	if req.Source != companionOfficialSource && !companionSourceListed(config.Sources, req.Source) {
-		companionWriteError(w, http.StatusBadRequest, "add the source to the source list first")
-		return req, false
+	if req.Source != companionOfficialSource {
+		if problem, listed := companionSourceProblem(config.Sources, req.Source); problem != "" {
+			companionWriteError(w, http.StatusBadRequest, "this source cannot be used: "+problem)
+			return req, false
+		} else if !listed {
+			companionWriteError(w, http.StatusBadRequest, "add the source to the source list first")
+			return req, false
+		}
 	}
 	return req, true
 }

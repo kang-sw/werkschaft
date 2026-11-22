@@ -32,10 +32,10 @@ const cls = (root, name) => root.all().filter(c => c.className.split(" ").includ
 const tagged = (root, tag) => root.all().filter(c => c.tagName === tag);
 const buttonOf = (root, label) => root.all().find(c => c.tagName === "BUTTON" && c.textContent === label);
 
-function setup({ raw = "", write = true, handler, catalog } = {}) {
+function setup({ raw = "", write = true, handler, catalog, verdicts } = {}) {
   const doc = dom();
   const calls = [], changed = [], notices = [];
-  const state = { raw, write, layouts: 0 };
+  const state = { raw, write, layouts: 0, verdicts };
   const fetch = async (url, init = {}) => {
     calls.push({ url, init, body: typeof init.body === "string" ? JSON.parse(init.body) : init.body });
     const out = await (handler?.(url, init, calls.at(-1).body) ?? { status: 200, body: {} });
@@ -49,6 +49,7 @@ function setup({ raw = "", write = true, handler, catalog } = {}) {
   const signal = new AbortController().signal;
   const section = C.sourcesSection({
     doc, signal, options: { signal }, canWrite: () => state.write, raw: () => state.raw,
+    verdicts: () => state.verdicts,
     notice: key => notices.push(key), layout: () => { state.layouts++; },
     catalogChanged: next => changed.push(next)
   });
@@ -74,6 +75,55 @@ test("source entries are judged one by one and an invalid entry never uses up a 
   assert.equal(ok.length, 16, "six invalid entries left all 16 slots to the valid ones");
   assert.equal(over.length, 2, "only entries past the 16th valid one are refused");
   assert.equal(C.parseCompanionSources("").length, 0);
+});
+
+test("the daemon's verdicts decide which entries are usable and how the slots count", async () => {
+  // A git URL with a query passes the local prefix check, but the daemon's
+  // source rules refuse it; it must not look usable or take a slot.
+  const query = "https://example.invalid/team/repo?tab=readme";
+  const urls = Array.from({ length: 16 }, (_, i) => `https://example.invalid/s${i}.git`);
+  const raw = [query, ...urls].join(" ");
+  const daemonQuery = "a git repository URL must not carry a query; name a branch or tag after # instead";
+  const verdicts = [{ url: query, error: daemonQuery }, ...urls.map(url => ({ url }))];
+  const rows = t => cls(t.root, "ws-companion-sources-source").slice(1);
+  const show = row => buttonOf(row, "js.companion.sources.show");
+
+  const t = setup({ raw, verdicts });
+  assert.match(rows(t)[0].text(), /must not carry a query/, "the refused entry shows the daemon's reason");
+  assert.equal(show(rows(t)[0]), undefined, "and cannot be fetched");
+  assert.ok(!rows(t)[0].text().includes("js.companion.sources.warning"), "an error replaces the warning");
+  assert.ok(rows(t).slice(1).every(row => show(row)), "all 16 valid entries are usable: the refused one took no slot");
+  assert.ok(!t.root.text().includes("js.companion.sources.err_limit"));
+
+  // Without verdicts for this exact list (none yet, or a stale list), the
+  // local check stands in and counts the query URL as a slot.
+  for (const stale of [undefined, verdicts.slice(1), [{ url: "https://example.invalid/other.git" }, ...verdicts.slice(1)]]) {
+    const local = setup({ raw, verdicts: stale });
+    assert.ok(show(rows(local)[0]), "the local check passes the query URL");
+    assert.match(rows(local).at(-1).text(), /js\.companion\.sources\.err_limit/);
+  }
+
+  // Where the local check agrees, its translated message is shown; a limit
+  // refusal is recounted from the daemon's verdicts.
+  const extra = "https://example.invalid/extra.git";
+  const agree = setup({
+    raw: ["http://example.invalid/x", ...urls, extra].join(" "),
+    verdicts: [{ url: "http://example.invalid/x", error: "URL must be an absolute https URL" }, ...urls.map(url => ({ url })),
+      { url: extra, error: "at most 16 sources are used" }]
+  });
+  assert.match(rows(agree)[0].text(), /js\.companion\.sources\.err_url/);
+  assert.ok(!rows(agree)[0].text().includes("absolute https"));
+  assert.match(rows(agree).at(-1).text(), /js\.companion\.sources\.err_limit/);
+
+  // A fetch acts only on an entry the daemon accepts.
+  const installed = setup({
+    raw, verdicts,
+    catalog: { packs: [{ id: "p", name: "P", origin: { source: query, kind: "git", version: "1" } }] }
+  });
+  assert.equal(buttonOf(installed.root, "js.companion.sources.check"), undefined, "an installed pack's source the daemon refuses offers no check");
+
+  const resolved = t.C.resolveCompanionSources(raw, verdicts);
+  assert.equal(resolved.filter(entry => !entry.error).length, 16);
 });
 
 test("add and remove rewrite the whole value and keep every other entry as it was", async () => {

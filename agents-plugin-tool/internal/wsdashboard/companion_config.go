@@ -111,9 +111,21 @@ type CompanionConfig struct {
 	Preset               string `json:"preset"`
 	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
 	AgentHourlyCap       int    `json:"agentHourlyCap"`
-	// Sources is the raw dashboard.companion_sources value; the modal splits
-	// it and shows each invalid entry (parseCompanionSources).
+	// Sources is the raw dashboard.companion_sources value. The JSON form adds
+	// sourceEntries, the verdict of parseCompanionSources on it (MarshalJSON).
 	Sources string `json:"sources"`
+}
+
+// MarshalJSON adds sourceEntries: each entry of Sources as the source routes
+// judge it. The modal shows these verdicts rather than its own, so an entry
+// the routes would refuse never looks usable. It is computed here, not
+// stored, so CompanionConfig stays comparable.
+func (c CompanionConfig) MarshalJSON() ([]byte, error) {
+	type plain CompanionConfig
+	return json.Marshal(struct {
+		plain
+		SourceEntries []companionSourceEntry `json:"sourceEntries"`
+	}{plain(c), parseCompanionSources(c.Sources)})
 }
 
 type companionConfigSnapshot struct {

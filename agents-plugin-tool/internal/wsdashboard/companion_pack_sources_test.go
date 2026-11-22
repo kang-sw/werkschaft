@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -43,8 +44,64 @@ func TestCompanionPackSourcesParse(t *testing.T) {
 			t.Errorf("entry %d = %+v, want error %v", i, entry, wantErr)
 		}
 	}
-	if !companionSourceListed(raw, "https://example.invalid/a.git") || companionSourceListed(raw, "http://example.invalid/b.zip") ||
-		companionSourceListed(raw, "official") || companionSourceListed(raw, "https://example.invalid/other.git") {
-		t.Fatal("companionSourceListed must accept exactly the valid configured entries")
+	for _, tc := range []struct {
+		source, problem string
+		listed          bool
+	}{
+		{"https://example.invalid/a.git", "", true},
+		{"http://example.invalid/b.zip", "absolute https URL", false},
+		{"official", "absolute https URL", false},
+		{"https://example.invalid/d.zip#x", "fragment", false},
+		{"https://example.invalid/other.git", "", false},
+	} {
+		problem, listed := companionSourceProblem(raw, tc.source)
+		if listed != tc.listed || (tc.problem == "") != (problem == "") || !strings.Contains(problem, tc.problem) {
+			t.Errorf("companionSourceProblem(%q) = %q, %v; want problem containing %q, listed %v",
+				tc.source, problem, listed, tc.problem, tc.listed)
+		}
+	}
+}
+
+// TestCompanionConfigSourceEntriesJSON pins the daemon's verdicts the modal
+// renders: entries a prefix check would pass but the source routes refuse
+// carry the routes' error, and only valid entries use up one of the slots.
+func TestCompanionConfigSourceEntriesJSON(t *testing.T) {
+	var many []string
+	for i := 0; i < companionSourcesMax; i++ {
+		many = append(many, fmt.Sprintf("https://example.invalid/%d.git", i))
+	}
+	refused := []string{
+		"https://example.invalid/team/repo?tab=readme",
+		"https://example.invalid/packs.zip#top",
+		"https://example.invalid/repo.git#" + strings.Repeat("r", companionRefMax+1),
+		"https://example.invalid/%zz.git",
+		"https://example.invalid:port/repo.git",
+	}
+	config := CompanionConfig{Enabled: true, Sources: strings.Join(append(refused, many...), " ")}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Enabled       bool                   `json:"enabled"`
+		Sources       string                 `json:"sources"`
+		SourceEntries []companionSourceEntry `json:"sourceEntries"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.Sources != config.Sources || len(got.SourceEntries) != len(refused)+len(many) {
+		t.Fatalf("config JSON = %s", raw)
+	}
+	for i, entry := range got.SourceEntries {
+		if wantErr := i < len(refused); (entry.Error != "") != wantErr {
+			t.Errorf("entry %d %q error %q, want error %v", i, entry.URL, entry.Error, wantErr)
+		}
+	}
+	// The empty list is an empty array, never null, so the modal can tell
+	// "no entries" from "no verdicts".
+	raw, _ = json.Marshal(CompanionConfig{})
+	if !strings.Contains(string(raw), `"sourceEntries":[]`) {
+		t.Fatalf("empty config JSON = %s", raw)
 	}
 }

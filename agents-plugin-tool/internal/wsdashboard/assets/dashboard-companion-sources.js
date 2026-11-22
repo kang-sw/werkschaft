@@ -34,8 +34,10 @@
     return n;
   }
 
-  // urlError mirrors the daemon's check for display only: an absolute https
-  // URL of at most 2048 bytes with no userinfo. It returns an i18n key.
+  // urlError is a quick local check, used before an entry is written and for
+  // a translated message: an absolute https URL of at most 2048 bytes with no
+  // userinfo. The daemon's source rules are stricter; resolveSources lets its
+  // verdicts decide. It returns an i18n key.
   function urlError(url) {
     if (utf8Length(url) > maxURL) return "js.companion.sources.err_long";
     if (/[\u0000-\u001f\u007f-\u009f\s]/.test(url)) return "js.companion.sources.err_url";
@@ -46,8 +48,8 @@
     return at >= 0 ? "js.companion.sources.err_creds" : "";
   }
 
-  // parseSources splits the raw value as the daemon does. An invalid entry
-  // keeps its error and never uses up one of the 16 slots.
+  // parseSources splits the raw value with the local check. An invalid entry
+  // keeps its error key and never uses up one of the 16 slots.
   function parseSources(raw) {
     const entries = [], seen = new Set();
     let valid = 0;
@@ -61,6 +63,29 @@
       entries.push({ url, error });
     }
     return entries;
+  }
+
+  // resolveSources judges each entry of raw by the daemon's verdicts (the
+  // config payload's sourceEntries, from the parser the source routes use),
+  // so an entry the routes refuse never looks usable and the 16 slots count
+  // as the daemon counts them. The local check only supplies a translated
+  // message where it agrees; until verdicts for this exact list arrive (just
+  // after a write) it stands in. Each returned error is display text.
+  function resolveSources(raw, verdicts) {
+    const local = parseSources(raw), limit = "js.companion.sources.err_limit";
+    const known = Array.isArray(verdicts) && verdicts.length === local.length &&
+      verdicts.every((verdict, i) => record(verdict) && verdict.url === local[i].url);
+    if (!known) return local.map(entry => ({ url: entry.url, error: entry.error ? t(entry.error) : "" }));
+    let valid = 0;
+    return local.map((entry, i) => {
+      const refused = text(verdicts[i].error);
+      let error = "";
+      if (!refused) valid++;
+      else if (entry.error && entry.error !== limit) error = t(entry.error);
+      else if (valid >= maxSources) error = t(limit);
+      else error = refused;
+      return { url: entry.url, error };
+    });
   }
 
   function isHTTPS(url) { return typeof url === "string" && /^https:\/\/[^\s\u0000-\u001f\u007f-\u009f]+$/i.test(url); }
@@ -157,7 +182,9 @@
     function done(message) { state.message = message; state.failed = false; }
     function fail(message) { state.message = message; state.failed = true; }
 
-    function entries() { return parseSources(raw()); }
+    // Before a write lands, raw() is the optimistic list and the verdicts
+    // (for the daemon's list) do not match it, so the local check stands in.
+    function entries() { return resolveSources(raw(), deps.verdicts?.()); }
     function listed(url) { return entries().some(entry => !entry.error && entry.url === url); }
 
     async function writeSources(urls) {
@@ -325,7 +352,7 @@
       if (isOfficial) name.append(el("span", "", label), badge("js.companion.sources.badge_official"));
       else name.append(link(label));
       row.append(name);
-      if (error) row.append(el("p", "ws-companion-sources-error", t(error)));
+      if (error) row.append(el("p", "ws-companion-sources-error", error));
       else if (!isOfficial) row.append(warning());
       const actions = el("div", "ws-companion-sources-actions");
       if (!error) {
@@ -519,12 +546,16 @@
       details.replaceChildren(summary, body);
     }
 
-    // refresh follows the live config: it redraws only when the source list or
-    // the write permission changed, so typing in the add field is undisturbed.
+    // refresh follows the live config: it redraws only when the source list,
+    // the daemon's verdicts on it, or the write permission changed, so typing
+    // in the add field is undisturbed.
+    function signatureOf() {
+      return raw() + "\n" + canWrite() + "\n" + JSON.stringify(deps.verdicts?.() ?? null);
+    }
     function refresh() {
       const config = deps.raw();
       if (config !== state.lastConfig) { state.lastConfig = config; state.optimistic = null; }
-      const signature = raw() + "\n" + canWrite();
+      const signature = signatureOf();
       if (signature === state.signature) return;
       state.signature = signature;
       render();
@@ -539,9 +570,9 @@
     // Nothing is drawn until the modal builds: redraw runs on every build.
     return {
       node: details, setCatalog, refresh,
-      redraw() { state.signature = raw() + "\n" + canWrite(); render(); }
+      redraw() { state.signature = signatureOf(); render(); }
     };
   }
 
-  Object.assign(C, { sourcesSection, parseCompanionSources: parseSources });
+  Object.assign(C, { sourcesSection, parseCompanionSources: parseSources, resolveCompanionSources: resolveSources });
 })(window.WsCompanion);

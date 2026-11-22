@@ -111,19 +111,25 @@ func TestCompanionPackSourceRoutesGate(t *testing.T) {
 		}
 	})
 	t.Run("unlisted source and bad requests", func(t *testing.T) {
-		f := companionSourceFixture(t, srv, true, source+" http://example.invalid/bad.zip")
+		// The git URL with a query is listed but refused by the source rules;
+		// the answer names that rule, not "add the source".
+		query := srv.srv.URL + "/team/repo?tab=readme"
+		f := companionSourceFixture(t, srv, true, source+" http://example.invalid/bad.zip "+query)
 		for _, tc := range []struct {
 			route string
 			body  []byte
+			want  string
 		}{
-			{"/fetch", companionSourceBody(srv.srv.URL + "/other.zip")},
-			{"/fetch", companionSourceBody("http://example.invalid/bad.zip")},
-			{"/fetch", []byte("not json")},
-			{"/install", companionSourceBody(source)},
-			{"/install", companionSourceBody(source, "Bad ID")},
+			{"/fetch", companionSourceBody(srv.srv.URL + "/other.zip"), "add the source to the source list first"},
+			{"/fetch", companionSourceBody("http://example.invalid/bad.zip"), "this source cannot be used: URL must be an absolute https URL"},
+			{"/fetch", companionSourceBody(query), "this source cannot be used: a git repository URL must not carry a query"},
+			{"/fetch", []byte("not json"), "JSON object"},
+			{"/install", companionSourceBody(source), ""},
+			{"/install", companionSourceBody(source, "Bad ID"), ""},
 		} {
-			if w := f.post(companionSourcesRoute+tc.route, tc.body); w.Code != http.StatusBadRequest {
-				t.Errorf("%s %s = %d %s, want 400", tc.route, tc.body, w.Code, w.Body)
+			w := f.post(companionSourcesRoute+tc.route, tc.body)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("%s %s = %d %s, want 400 with %q", tc.route, tc.body, w.Code, w.Body, tc.want)
 			}
 		}
 	})
