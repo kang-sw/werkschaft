@@ -1030,3 +1030,26 @@ with `-race` (Playwright included); `mcp`
 `ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
 `GOOS=windows go vet` on the five touched packages: clean. The Windows host run
 is the lead's.
+
+#### Edition (8c096b4c7) - 2026-11-23
+
+Round 4 of the pre-merge review (one Important, one Minor), fixed in one commit
+on top of the round-3 Edition.
+
+- A write answer after a refused read: a removal or refused-run answer now
+  applies only when its comparison with the shown revision is equal or newer, so
+  not when nothing is shown (a read refused with 401, 403, 404 or 405 had
+  cleared the strip); it is dropped and one read asks again. Browser regression:
+  a removal's answer is held, a read is refused (the strip clears), the answer is
+  released, and the strip stays hidden while one more read fires; it fails with
+  the round-3 rule.
+- Spent wait: a lead's discovery whose 5 s budget is already spent returns the
+  user commands bound in the meantime (the store may bind during the lead check)
+  instead of nothing; the cap is unchanged (the constant became a variable so a
+  test can spend it). Go test: the runner's lead check binds the store after the
+  budget is spent and the lookup reports it; it fails with the old `nil` return.
+
+Verification: `wsdashboard` `-race` `UserCommand|Usercmd|TestComposer`
+(Playwright included) and `cmd/ws-mcp`
+`UserCommand|Usercmd|HostedLead|HostedConnections`: pass; `GOOS=windows go vet`
+on both: clean.
