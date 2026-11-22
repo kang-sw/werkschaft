@@ -19,6 +19,7 @@ use url::Url;
 use crate::{
     close,
     navigation::{self, Destination, Popup},
+    notify,
     shell::Connection,
     updates, webview_setup_failed,
 };
@@ -29,20 +30,27 @@ struct NavigationState {
     dashboard: Option<(AppHandle, usize)>,
 }
 
-struct UpdateState {
+#[derive(Clone, Copy)]
+enum Bridge {
+    Update,
+    Notify,
+}
+
+struct BridgeState {
     app: AppHandle,
     epoch: usize,
+    bridge: Bridge,
 }
 
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[ivars = UpdateState]
-    struct UpdateMessages;
+    #[ivars = BridgeState]
+    struct BridgeMessages;
 
-    unsafe impl NSObjectProtocol for UpdateMessages {}
+    unsafe impl NSObjectProtocol for BridgeMessages {}
 
-    unsafe impl WKScriptMessageHandler for UpdateMessages {
+    unsafe impl WKScriptMessageHandler for BridgeMessages {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
         fn receive(&self, _: &WKUserContentController, message: &WKScriptMessage) {
             let frame = unsafe { message.frameInfo() };
@@ -58,7 +66,11 @@ define_class!(
             };
             let state = self.ivars();
             if let Some(window) = state.app.get_webview_window("main") {
-                updates::receive(window, state.epoch, true, source, &text.to_string());
+                let text = text.to_string();
+                match state.bridge {
+                    Bridge::Update => updates::receive(window, state.epoch, true, source, &text),
+                    Bridge::Notify => notify::receive(window, state.epoch, source, &text),
+                }
             }
         }
     }
@@ -257,19 +269,32 @@ pub fn install(
                 ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
             );
             webview.setNavigationDelegate(Some(protocol));
-            if main && target.try_state::<Arc<updates::Controller>>().is_some() {
-                let messages = marker.alloc::<UpdateMessages>().set_ivars(UpdateState {
+            let bridges = [
+                (
+                    Bridge::Update,
+                    ns_string!("werkschaftUpdate"),
+                    target.try_state::<Arc<updates::Controller>>().is_some(),
+                ),
+                (
+                    Bridge::Notify,
+                    ns_string!("werkschaftNotify"),
+                    target.try_state::<Arc<notify::Notifier>>().is_some(),
+                ),
+            ];
+            for (bridge, name, managed) in bridges {
+                if !main || !managed {
+                    continue;
+                }
+                let messages = marker.alloc::<BridgeMessages>().set_ivars(BridgeState {
                     app: target.app_handle().clone(),
                     epoch,
+                    bridge,
                 });
-                let messages: objc2::rc::Retained<UpdateMessages> =
+                let messages: objc2::rc::Retained<BridgeMessages> =
                     msg_send![super(messages), init];
                 let controller = webview.configuration().userContentController();
-                controller.removeScriptMessageHandlerForName(ns_string!("werkschaftUpdate"));
-                controller.addScriptMessageHandler_name(
-                    ProtocolObject::from_ref(&*messages),
-                    ns_string!("werkschaftUpdate"),
-                );
+                controller.removeScriptMessageHandlerForName(name);
+                controller.addScriptMessageHandler_name(ProtocolObject::from_ref(&*messages), name);
             }
         }
         ready(target);

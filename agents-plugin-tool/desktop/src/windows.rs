@@ -16,7 +16,8 @@ use windows::{
 };
 
 use crate::{
-    accelerator, close, menu_action, navigation, shell::Connection, updates, webview_setup_failed,
+    accelerator, close, menu_action, navigation, notify, shell::Connection, updates,
+    webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -157,7 +158,9 @@ unsafe fn install_hooks(
 
     let failed = connection.clone();
     let epoch = failed.window_epoch();
-    if window.try_state::<Arc<updates::Controller>>().is_some() {
+    let update_bridge = window.try_state::<Arc<updates::Controller>>().is_some();
+    let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
+    if update_bridge || notify_bridge {
         let target = window.clone();
         // The core event receives the top-level document only. Frame messages
         // have a separate WebView2 event, which the shell does not register.
@@ -169,13 +172,23 @@ unsafe fn install_hooks(
                         return Ok(());
                     }
                     let message = take_pwstr(raw);
-                    if !message.starts_with("werkschaft:update:") || message.len() > 32 {
+                    let update = update_bridge
+                        && message.starts_with("werkschaft:update:")
+                        && message.len() <= 32;
+                    let notice = notify_bridge
+                        && message.starts_with(notify::PREFIX)
+                        && message.len() <= notify::MAX_MESSAGE;
+                    if !update && !notice {
                         return Ok(());
                     }
                     let mut raw = PWSTR::null();
                     args.Source(&mut raw)?;
                     if let Ok(source) = url::Url::parse(&take_pwstr(raw)) {
-                        updates::receive(target.clone(), epoch, true, source, &message);
+                        if update {
+                            updates::receive(target.clone(), epoch, true, source, &message);
+                        } else {
+                            notify::receive(target.clone(), epoch, source, &message);
+                        }
                     }
                 }
                 Ok(())

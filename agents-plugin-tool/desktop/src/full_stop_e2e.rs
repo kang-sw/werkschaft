@@ -175,7 +175,6 @@ fn binary(name: &str) -> Option<PathBuf> {
 
 #[test]
 #[ignore = "starts real daemons; set WERKSCHAFT_E2E_WS_MCP"]
-#[cfg(unix)]
 fn full_stop_ends_the_sessions_and_the_daemon_and_reports_a_successor() {
     let Some(new) = binary("WERKSCHAFT_E2E_WS_MCP") else {
         eprintln!("WERKSCHAFT_E2E_WS_MCP is unset; skipped");
@@ -211,7 +210,6 @@ fn full_stop_ends_the_sessions_and_the_daemon_and_reports_a_successor() {
 
 #[test]
 #[ignore = "starts real daemons; set WERKSCHAFT_E2E_OLD_WS_MCP"]
-#[cfg(unix)]
 fn an_older_daemon_is_unsupported_and_stops_nothing() {
     let Some(old) = binary("WERKSCHAFT_E2E_OLD_WS_MCP") else {
         eprintln!("WERKSCHAFT_E2E_OLD_WS_MCP is unset; skipped");

@@ -9,11 +9,12 @@ mod close;
 mod daemon;
 mod daemon_package;
 mod endpoint;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod full_stop_e2e;
 #[cfg(target_os = "macos")]
 mod macos;
 mod navigation;
+mod notify;
 mod python;
 mod shell;
 mod tray;
@@ -72,12 +73,14 @@ fn build_webview(
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = window.set_zoom(window.state::<Zoom>().current());
-                if main
-                    && destination(payload.url(), notice.pinned_url().as_ref())
-                        == Destination::Dashboard
-                {
+                let dashboard = destination(payload.url(), notice.pinned_url().as_ref())
+                    == Destination::Dashboard;
+                if main && dashboard {
                     notice.show_refusal(&window);
                     updates::inject(&window, payload.url());
+                    notify::inject(&window, payload.url());
+                } else if dashboard {
+                    notify::mark_secondary(&window);
                 }
             }
         })
@@ -339,6 +342,7 @@ fn main() {
                 });
             app.manage(zoom);
             install_menu(app.handle())?;
+            notify::manage(app.handle(), setup_state.clone());
             let tray_state = setup_state.clone();
             tray::install(app.handle(), move |app| restore_main(app, &tray_state))?;
             updates::Controller::start(app.handle(), setup_state.clone());
