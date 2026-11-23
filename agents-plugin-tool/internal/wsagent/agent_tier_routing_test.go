@@ -87,7 +87,7 @@ func TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers(t *testing.T) {
 	// The fixture's pi bucket sets small, medium, and large, not xlarge.
 	for _, tier := range []string{"xlarge", "ticket-worker:xlarge"} {
 		_, err := h.runner.AgentSpawn(pi, AgentSpawnRequest{Prompt: "x", Tier: tier, Authority: "read-only"})
-		agentRefused(t, err, http.StatusBadRequest, "werk.xlarge has no usable OpenRouter model")
+		agentRefused(t, err, http.StatusBadRequest, "werk.xlarge has no usable model")
 	}
 	if n := len(h.runner.AgentList(pi)); n != spawned {
 		t.Fatalf("a refused tier spawned: %d children, was %d", n, spawned)

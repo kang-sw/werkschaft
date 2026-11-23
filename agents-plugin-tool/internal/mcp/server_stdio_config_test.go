@@ -226,7 +226,7 @@ func TestServeStdioConfigResolveAgentRefusesAnUnsetRetiredPiTier(t *testing.T) {
 	}
 	byID := responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
 	text := toolText(t, byID["2"])
-	if !toolIsError(t, byID["2"]) || !strings.Contains(text, "werk.medium has no usable OpenRouter model") {
+	if !toolIsError(t, byID["2"]) || !strings.Contains(text, "werk.medium has no usable model") {
 		t.Fatalf("retired Pi tier fell through or did not explain the missing werk slot: %s", text)
 	}
 }

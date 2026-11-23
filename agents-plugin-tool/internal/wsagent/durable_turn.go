@@ -51,13 +51,13 @@ func orderInboxClaims(records []wsinbox.Record) {
 }
 
 type durableTurnProcess interface {
-	submitTurn(id, text string, steers []durableSteer) error
+	submitTurn(id, text string, steers []durableSteer, interactive bool) error
 }
 
 // admitDurableTurn commits the prepared model input with the inbox coverage.
 // A failed submit leaves that same input available to a successor. It runs
 // under admitInput, which orders the commit and submit against release.
-func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, startedAt int64, mail, reports, settleHeld bool) (bool, error) {
+func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, startedAt int64, mail, reports, settleHeld, interactive bool) (bool, error) {
 	release, err := c.r.admitDurableTransition()
 	if err != nil {
 		return false, err
@@ -87,7 +87,7 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 	if err != nil {
 		return false, err
 	}
-	return true, c.submitDurableTurn(input)
+	return true, c.submitDurableTurn(input, interactive)
 }
 
 // compactDurableContinue admits a requested, separate continuation through
@@ -107,7 +107,7 @@ func (c *conv) compactDurableContinue() bool {
 	var committed bool
 	err := c.sendStandalonePrompt(true, func() error {
 		var err error
-		committed, err = c.admitDurableTurn(text, c.rec.Queued, c.rec.TurnMark, start.UnixMilli(), false, false, true)
+		committed, err = c.admitDurableTurn(text, c.rec.Queued, c.rec.TurnMark, start.UnixMilli(), false, false, true, false)
 		return err
 	})
 	if checkout, ok := releasedInput(err); ok {
@@ -133,7 +133,7 @@ func (c *conv) compactDurableContinue() bool {
 	return true
 }
 
-func (c *conv) submitDurableTurn(input *durableTurnInput) error {
+func (c *conv) submitDurableTurn(input *durableTurnInput, interactive bool) error {
 	p, ok := c.proc.(durableTurnProcess)
 	if !ok {
 		return errors.New("the backend does not accept durable turn input")
@@ -143,7 +143,7 @@ func (c *conv) submitDurableTurn(input *durableTurnInput) error {
 	c.turnMark, c.reply = c.rec.TurnMark, ""
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	c.syncAwake()
-	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers); err != nil {
+	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers, interactive); err != nil {
 		c.setStatus(func() { c.turn = false })
 		return err
 	}
@@ -178,7 +178,7 @@ func (c *conv) resumeDurableTurn() {
 			return
 		}
 		defer release()
-		err = c.submitDurableTurn(c.rec.DurableTurn)
+		err = c.submitDurableTurn(c.rec.DurableTurn, false)
 	})
 	if refused != "" {
 		c.refuseStart(checkoutReleasedRefusal(refused))

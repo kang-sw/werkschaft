@@ -178,9 +178,10 @@ func newWerkDaemonFixture(t *testing.T) *werkDaemonFixture {
 }
 
 type werkDaemonOpening struct {
-	runner *wsagent.Runner
-	daemon *wsdashboard.Daemon
-	jobs   *execjob.Hosted
+	runner   *wsagent.Runner
+	daemon   *wsdashboard.Daemon
+	jobs     *execjob.Hosted
+	backends map[string]wsagent.BackendRegistration
 }
 
 type werkProxyFileHook struct {
@@ -208,7 +209,7 @@ func (f *werkDaemonFixture) open(record func(context.Context, wsfs.FileCall, fun
 	keys := mcp.NewAgentKeyStore()
 	backends := wsagent.WithProviderCredentials(wsagent.BuiltinBackendRegistrations(), f.credential, f.configured)
 	r := wsagent.NewRunner(wsagent.Options{
-		Dir: f.state, Config: f.config, Keys: keys, Log: f.log, Backends: backends, DaemonMCP: agentDaemonMCP,
+		Dir: f.state, Config: f.config, Keys: keys, LeadKeys: keys, Log: f.log, Backends: backends, DaemonMCP: agentDaemonMCP,
 		Holders: wsagent.ManagerHost{Manager: holders},
 		Report:  func(rep wsagent.TurnReport) { f.reports <- rep },
 	})
@@ -234,7 +235,7 @@ func (f *werkDaemonFixture) open(record func(context.Context, wsfs.FileCall, fun
 	})
 	host.exec.Store(jobs)
 	r.BindExecJobs(jobs)
-	return werkDaemonOpening{r, d, jobs}
+	return werkDaemonOpening{runner: r, daemon: d, jobs: jobs, backends: backends}
 }
 
 func (f *werkDaemonFixture) spawn(open werkDaemonOpening, prompt, authority string) string {

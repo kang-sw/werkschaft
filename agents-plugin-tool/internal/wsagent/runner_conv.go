@@ -614,6 +614,13 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 	}
 	text := c.mailLegend([]string{m.Text}, []string{m.Sender})[0]
 	ctl := controlsFor(c.proc)
+	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
+		queued := false
+		c.admitInput(func() {
+			queued = c.queueDurableSteer(p, durableSteer{Text: text, Mail: m.Text}, nil, *wakeEvent("mail", "mailbox", "", text).Live)
+		})
+		return queued
+	}
 	if c.rec.Lead {
 		if err := ctl.steer.Steer(text); err != nil {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
@@ -622,13 +629,6 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 		c.modelWaitSteered()
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 		return true
-	}
-	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
-		queued := false
-		c.admitInput(func() {
-			queued = c.queueDurableSteer(p, durableSteer{Text: text, Mail: m.Text}, nil, *wakeEvent("mail", "mailbox", "", text).Live)
-		})
-		return queued
 	}
 	// Persist before the holder write. The child can accept the steer and
 	// outlive this daemon before its acknowledgement reaches the runner.
@@ -716,6 +716,10 @@ func (c *conv) steer() {
 	}
 	if !c.rec.Lead {
 		c.steerWorker()
+		return
+	}
+	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
+		c.steerDurableInbox(p)
 		return
 	}
 	ctl := controlsFor(c.proc)
@@ -1849,11 +1853,12 @@ func (c *conv) kickInput() {
 	queue := slices.Clone(c.rec.Queued)
 	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
+		interactive := durable && c.rec.Lead && rec.Entry.EventID == "" && rec.Entry.Cron == nil
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
-			queue = append(queue, QueuedInput{Command: &cmd, After: from})
+			queue = append(queue, QueuedInput{Command: &cmd, After: from, Interactive: interactive})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			queue = append(queue, QueuedInput{Text: text, After: from})
+			queue = append(queue, QueuedInput{Text: text, After: from, Interactive: interactive})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -1923,7 +1928,8 @@ func (c *conv) kickInput() {
 			if ordinary {
 				text = c.turnInput(text)
 			}
-			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false)
+			interactive := c.rec.Lead && slices.ContainsFunc(queue[:len(queue)-len(rest)], func(input QueuedInput) bool { return input.Interactive })
+			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false, interactive)
 			return
 		}
 		c.setStatus(func() { c.turn, c.lastErr = true, "" })

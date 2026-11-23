@@ -113,15 +113,27 @@
   // arrives.
   // A list read here is stamped with the connection epoch it was read in;
   // only a list of the current epoch can offer common permission levels.
-  function leadChoices(done, refresh) {
-    var held = !!supChoices && !supChoices.error, epoch = permEpoch;
+  function leadChoices(done, refresh, active) {
+    var held = !!supChoices && !supChoices.error;
+    // The daemon bounds one catalog listing at 15 seconds. Leave time for
+    // the final publication, and keep polling light on a slow provider.
+    var deadline = Date.now() + 18000, delay = 250;
     if (held) done();
-    tkFetch("/support/choices", undefined, function (status, v) {
-      if (status === 200 && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
-      else if (supChoices) supChoices.wsEpoch = -1;
-      if (!held) done();
-      else if (refresh) refresh();
-    });
+    function loadChoices() {
+      if (active && !active()) return;
+      var epoch = permEpoch;
+      tkFetch("/support/choices", undefined, function (status, v) {
+        if (status === 200 && v && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
+        else if (supChoices) supChoices.wsEpoch = -1;
+        if (!held) { held = true; done(); }
+        else if (refresh) refresh();
+        if (status === 200 && v && v.pickers_pending && refresh && Date.now() < deadline) {
+          setTimeout(loadChoices, delay);
+          delay = Math.min(delay * 2, 2000);
+        }
+      });
+    }
+    loadChoices();
   }
 
   // --- common permission level ------------------------------------------------
@@ -350,9 +362,26 @@
     if (leadHarnesses().some(function (x) { return x.lead === true; })) return h && Array.isArray(h.permission_modes) ? h.permission_modes : [];
     return harness === "claude" ? LEAD_MODES : [];
   }
-  function leadModels(harness) {
-    var h = supHarness(harness);
-    return ((h && h.models) || []).map(function (m) { return String(m.id); });
+  function leadModelKey(id, provider) { return provider === "openai" && id ? provider + " " + id : id; }
+  function leadModelPick(key) {
+    return key.indexOf("openai ") === 0 ? { model: key.slice(7), provider: "openai" } : { model: key, provider: "" };
+  }
+  function leadModelEntries(harness, provider, spawn) {
+    var h = supHarness(harness), entries = ((h && h.models) || []);
+    if (harness !== "werk") return entries;
+    if (!spawn) return entries.filter(function (m) { return (m.provider || "openrouter") === (provider || "openrouter"); });
+    var providers = (h && h.model_providers) || [];
+    return entries.filter(function (m) { return providers.indexOf(m.provider || "openrouter") >= 0; });
+  }
+  function leadModels(harness, provider, spawn) {
+    return leadModelEntries(harness, provider, spawn).map(function (m) { return spawn ? leadModelKey(String(m.id), m.provider) : String(m.id); });
+  }
+  function leadModelLabels(harness, provider, spawn) {
+    var labels = Object.create(null);
+    leadModelEntries(harness, provider, spawn).forEach(function (m) {
+      if (m.display_name) labels[spawn ? leadModelKey(String(m.id), m.provider) : String(m.id)] = m.display_name + (spawn ? " · OpenAI" : "");
+    });
+    return labels;
   }
   function leadEfforts(harness) {
     var h = supHarness(harness);
@@ -361,15 +390,15 @@
   // leadOptions lists "default" and list in sel with cur picked (added when
   // the list lacks it). An unchanged list is left alone, so a redraw never
   // closes an open select.
-  function leadOptions(sel, list, cur) {
+  function leadOptions(sel, list, cur, labels) {
     var all = list.slice();
     if (cur && all.indexOf(cur) < 0) all.push(cur);
-    var sig = all.join("\n");
+    var sig = JSON.stringify(all.map(function (v) { return [v, labels && labels[v]]; }));
     if (sel.wsSig !== sig) {
       sel.wsSig = sig;
       sel.textContent = "";
       sel.appendChild(mk("option", null, wsT("js.sup.default"))).value = "";
-      all.forEach(function (v) { sel.appendChild(mk("option", null, v)).value = v; });
+      all.forEach(function (v) { sel.appendChild(mk("option", null, labels && labels[v] || v)).value = v; });
     }
     if (sel.value !== (cur || "")) sel.value = cur || "";
   }
@@ -429,10 +458,10 @@
     };
     // set shows harness's choices with v's model, effort, and mode picked.
     R.set = function (harness, v) {
-      var h = supHarness(harness), models = leadModels(harness), efforts = leadEfforts(harness), modes = leadModes(harness);
+      var h = supHarness(harness), models = leadModels(harness, v.provider, keep), efforts = leadEfforts(harness), modes = leadModes(harness);
       own = ownNote = extra = "";
       cur.modes = modes;
-      leadOptions(m.sel, models, v.model);
+      leadOptions(m.sel, models, v.model, leadModelLabels(harness, v.provider, keep));
       leadOptions(e.sel, efforts, v.effort);
       var sig = modes.join("\n");
       if (p.sel.wsSig !== sig) {
@@ -494,13 +523,17 @@
       return v && typeof v === "object" && !Array.isArray(v) ? v : {};
     }
     function showPick(k) {
-      var v = pick(k), models = leadModels(k), efforts = leadEfforts(k);
-      rows.set(k, { model: models.indexOf(v.model) >= 0 ? v.model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
+      var v = pick(k), models = leadModels(k, "", true), model = leadModelKey(v.model, v.provider), efforts = leadEfforts(k);
+      rows.set(k, { model: models.indexOf(model) >= 0 ? model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
       P.iso = v.iso === "isolated" ? "isolated" : "default";
       permDraw();
     }
     function currentPick() {
-      return { model: rows.model.disabled ? "" : rows.model.value, mode: rows.free(), effort: rows.effort.disabled ? "" : rows.effort.value, iso: P.iso };
+      var chosen = leadModelPick(rows.model.disabled ? "" : rows.model.value);
+      chosen.mode = rows.free();
+      chosen.effort = rows.effort.disabled ? "" : rows.effort.value;
+      chosen.iso = P.iso;
+      return chosen;
     }
     var el = P.el = rpPop(wsT("js.lead.title"));
     el.appendChild(mk("div", "sphd", wsT("js.lead.title")));
@@ -661,7 +694,7 @@
       hwarn.hidden = P.harness !== "agy";
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
       idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
-      start.disabled = P.busy || P.loading || off(P.harness);
+      start.disabled = P.busy || P.loading || off(P.harness) || (P.harness === "werk" && !rows.model.value);
       tierPick.busy = P.busy || !!P.loading;
       tierPick.draw();
     }
@@ -710,10 +743,11 @@
     // legacy route, as before), ack (the full warning's grant), and the pick
     // stored for the harness once the spawn succeeds.
     function launchSnap(level, ack) {
+      var chosen = currentPick();
       return {
         harness: P.harness,
-        chosen: currentPick(),
-        form: { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
+        chosen: chosen,
+        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
       };
     }
     // launch spawns exactly snap's request.
@@ -844,7 +878,7 @@
         railPopPlace();
       }, function () {
         if (rpLive(P, gen)) choicesArrived();
-      });
+      }, function () { return rpLive(P, gen); });
     };
     // choicesArrived shows a newer choices list over a form the user may
     // have edited. A re-read never changes the form on its own: the harness,
@@ -869,7 +903,7 @@
       var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
       var arrived = function () { if (live()) choicesArrived(); };
       if (live()) { permDraw(); sync(); railPopPlace(); }
-      if (read) leadChoices(arrived, arrived);
+      if (read) leadChoices(arrived, arrived, live);
     };
     P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
     P.close = function () { permFullDrop(); };
@@ -1086,7 +1120,7 @@
       }
       if (!st) return;
       var text = failed || (st.error ? String(st.error) : "");
-      rows.set(String(st.backend || ""), { model: String(st.model || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
+      rows.set(String(st.backend || ""), { model: String(st.model || ""), provider: String(st.provider || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
       permDraw(st);
       rows.disable(P.busy);
       stop.b.disabled = P.busy || !st.process;
@@ -1121,7 +1155,7 @@
       }
       P.draw();
       var redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
-      leadChoices(redraw, redraw);
+      leadChoices(redraw, redraw, function () { return P.live(gen); });
       P.fetch();
     };
     // permDraw shows st's permission state and, for a lead whose harness
@@ -1152,7 +1186,7 @@
     P.permSync = function (read) {
       var gen = P.gen, redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
       redraw();
-      if (read) leadChoices(redraw, redraw);
+      if (read) leadChoices(redraw, redraw, function () { return P.live(gen); });
     };
     P.focus = function () { rows.model.focus(); };
     P.close = function () {
@@ -1591,10 +1625,12 @@
     var slot = composerPop.slot;
     if (!slot || !composerPills) return;
     var pop = composerEnsurePortal(), harness = composerHarness(), cur = composerCurrent(slot);
-    var list = slot === "model" ? leadModels(harness) : leadEfforts(harness);
+    var provider = lead.st && lead.st.provider;
+    var list = slot === "model" ? leadModels(harness, provider) : leadEfforts(harness);
+    var labels = slot === "model" ? leadModelLabels(harness, provider, false) : {};
     var all = list.slice();
     if (cur && all.indexOf(cur) < 0) all.push(cur);
-    var sig = [slot, harness, cur].concat(all).join("\n");
+    var sig = JSON.stringify([slot, harness, cur, all, labels]);
     if (!pop.hidden && pop.getAttribute("data-sig") === sig) {
       composerPlacePop();
       return;
@@ -1603,7 +1639,7 @@
     pop.textContent = "";
     var hdText = (composerHarnessLabel(harness) ? composerHarnessLabel(harness) + " " : "") + wsT(slot === "model" ? "js.sup.model" : "js.sup.effort");
     pop.appendChild(mk("div", "fpop-hd", hdText));
-    var opts = [{ val: "", label: wsT("js.sup.default") }].concat(all.map(function (v) { return { val: v, label: v }; }));
+    var opts = (slot === "model" && harness === "werk" ? [] : [{ val: "", label: wsT("js.sup.default") }]).concat(all.map(function (v) { return { val: v, label: labels[v] || v }; }));
     opts.forEach(function (o) {
       var opt = mk("button", "fpop-opt");
       opt.type = "button";
@@ -1676,7 +1712,7 @@
       composerPop.slot = slot;
       btn.setAttribute("aria-expanded", "true");
       composerDrawPop();
-      leadChoices(composerDrawPop, composerDrawPop);
+      leadChoices(composerDrawPop, composerDrawPop, function () { return composerPop.slot === slot; });
     });
     doc.addEventListener("click", function (e) {
       if (!composerPop.slot) return;

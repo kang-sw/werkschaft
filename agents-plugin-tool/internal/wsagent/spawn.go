@@ -75,6 +75,8 @@ type SpawnSpec struct {
 	// Model and Effort replace the profile's; empty keeps it.
 	Model  string
 	Effort string
+	// provider is the credential provider from the selected tier binding.
+	provider string
 	// Prompt is the first user message; required.
 	Prompt string
 	// Label is the conversation's one-line name; empty is none.
@@ -127,6 +129,7 @@ func (spec *SpawnSpec) apply(rec *Record) {
 	if spec.Effort != "" {
 		rec.Effort = spec.Effort
 	}
+	rec.Provider = spec.provider
 	rec.Label = spec.Label
 	rec.Tier = spec.Tier
 	rec.SystemPrompt = spec.SystemPrompt != ""

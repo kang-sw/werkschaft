@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,17 +11,32 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 )
+
+type retiredPiAccountCatalog struct {
+	testCredentialSource
+}
+
+func (retiredPiAccountCatalog) OpenAIModels(context.Context, wscred.Request) ([]wscred.OpenAIModel, error) {
+	return []wscred.OpenAIModel{{Slug: "vendor/account-only"}}, nil
+}
 
 func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[{"id":"vendor/exact"},{"id":"vendor/bundle"},{"id":"vendor/lowercase"}]}`)
 	}))
 	defer models.Close()
-	configured := true
+	routerConfigured, accountConfigured := true, true
 	_, werkReg := (WerkBackend{
 		modelsURL: models.URL, httpClient: models.Client(),
-		credentialStatus: func(string) (bool, error) { return configured, nil },
+		credentials: retiredPiAccountCatalog{},
+		credentialStatus: func(provider string) (bool, error) {
+			if provider == string(wscred.ProviderOpenAI) {
+				return accountConfigured, nil
+			}
+			return routerConfigured, nil
+		},
 	}).registration()
 	cfg := wsconfig.Options{ConfigHome: t.TempDir()}
 	for _, slot := range []struct{ size, harness, model string }{
@@ -29,6 +45,7 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 		{"medium", "default", "default-model"},
 		{"large", "pi", "vendor/exact"},
 		{"large", "werk", "vendor/explicit"},
+		{"xlarge", "pi", "vendor/account-only"},
 	} {
 		if _, err := wsconfig.SetGlobalAgentsTierForHarness(cfg, slot.size, "", slot.model, slot.harness, "low"); err != nil {
 			t.Fatal(err)
@@ -53,7 +70,7 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 			t.Errorf("%s resolved to %s.%s %+v, %v", tc.token, harness, rank, binding, err)
 		}
 	}
-	if _, _, _, err := r.resolveTier(caller, "pi.medium"); err == nil || !strings.Contains(err.Error(), "werk.medium has no usable OpenRouter model") {
+	if _, _, _, err := r.resolveTier(caller, "pi.medium"); err == nil || !strings.Contains(err.Error(), "werk.medium has no usable model") {
 		t.Fatalf("inexact model should leave the slot unset: %v", err)
 	}
 	tiers, err := r.AgentTiers(caller)
@@ -64,7 +81,18 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 	if err != nil || legacy["small"].Model != "vendor/exact" {
 		t.Fatalf("stored Pi config changed: %+v, %v", legacy, err)
 	}
-	configured = false
+	if _, _, _, err := r.resolveTier(caller, "pi.xlarge"); err == nil || !strings.Contains(err.Error(), "werk.xlarge has no usable model") {
+		t.Fatalf("account-only model should leave the legacy slot unset: %v", err)
+	}
+	routerConfigured = false
+	if _, _, _, err := r.resolveTier(caller, "legacy-bundle"); err == nil || !strings.Contains(err.Error(), werkNoKeyReason) {
+		t.Fatalf("account sign-in should not enable the legacy OpenRouter bundle: %v", err)
+	}
+	setTierRouting(t, cfg, `{"bundles":{"account-bundle":{"harness":"pi","model":"vendor/account-only"}}}`)
+	if _, _, _, err := r.resolveTier(caller, "account-bundle"); err == nil || !strings.Contains(err.Error(), "exact OpenRouter model ID") {
+		t.Fatalf("account-only model should not resolve a legacy bundle: %v", err)
+	}
+	accountConfigured = false
 	if _, _, _, err := r.resolveTier(caller, "pi.small"); err == nil || !strings.Contains(err.Error(), werkNoKeyReason) {
 		t.Fatalf("no-key refusal = %v", err)
 	}

@@ -122,10 +122,10 @@ func TestAgentSpawnResolvesTiers(t *testing.T) {
 	}{
 		{lead, "", "tier is required"},
 		{lead, "huge", `tier "huge" is neither a tier, <harness>.<tier>, nor an alias`},
-		{lead, "werk.xlarge", "werk.xlarge has no usable OpenRouter model"},
+		{lead, "werk.xlarge", "werk.xlarge has no usable model"},
 		{lead, "werk.huge", "names no tier"},
 		{lead, "agy.large", `harness "agy" is not registered in this daemon`},
-		{lead, "big", "werk.xlarge has no usable OpenRouter model"},
+		{lead, "big", "werk.xlarge has no usable model"},
 		{lead, "far", `harness "agy" is not registered`},
 		{codex, "small", `harness "codex" is registered for hosted leads only`},
 		{lead, "codex.small", `harness "codex" is registered for hosted leads only`},
@@ -171,7 +171,7 @@ func TestAgentTiersListsNativeExtAndAliases(t *testing.T) {
 		t.Fatalf("native = %+v", got)
 	}
 	if !slices.Equal(tierNames(got.Ext), []string{"claude.small", "claude.medium", "claude.large", "claude.xlarge", "werk.small", "werk.medium", "werk.large"}) ||
-		got.Ext[4] != (AgentTierEntry{Tier: "werk.small", Model: "prov/small-model", Effort: "low"}) {
+		got.Ext[4] != (AgentTierEntry{Tier: "werk.small", Model: "prov/small-model", Effort: "low", Provider: "openrouter"}) {
 		t.Fatalf("ext = %+v", got.Ext)
 	}
 	wantAliases := []AgentAliasEntry{
@@ -289,6 +289,10 @@ type unavailableWerkFixture struct{ *fakeBackend }
 
 func (*unavailableWerkFixture) workerCredentialGap() string {
 	return "OpenRouter fixture credential missing"
+}
+
+func (b *unavailableWerkFixture) workerProviderGap(string) string {
+	return b.workerCredentialGap()
 }
 
 func (*unavailableWerkFixture) workerTierGap(map[string]wsconfig.AgentTier) string { return "" }

@@ -164,9 +164,10 @@ type AgentChildActivity struct {
 
 // AgentTierEntry is one spawnable tier and what it resolves to.
 type AgentTierEntry struct {
-	Tier   string `json:"tier"`
-	Model  string `json:"model"`
-	Effort string `json:"effort,omitempty"`
+	Tier     string `json:"tier"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // AgentAliasEntry is one agent.tier_aliases entry: its target and, when
@@ -391,7 +392,7 @@ func tierEntries(prefix string, tiers map[string]wsconfig.AgentTier) []AgentTier
 	var out []AgentTierEntry
 	for _, t := range []string{"small", "medium", "large", "xlarge"} {
 		if m, ok := tiers[t]; ok {
-			out = append(out, AgentTierEntry{Tier: prefix + t, Model: m.Model, Effort: m.Effort})
+			out = append(out, AgentTierEntry{Tier: prefix + t, Model: m.Model, Effort: m.Effort, Provider: m.Provider})
 		}
 	}
 	return out
@@ -410,12 +411,26 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		if err != nil {
 			return AgentTiers{}, fmt.Errorf("read agents.tier: %w", err)
 		}
-		usable[h] = tiers
 		if setup, ok := r.opts.Backends[h].Backend.(workerSetup); ok {
 			if why := setup.workerTierGap(tiers); why != "" {
 				out.Unavailable = append(out.Unavailable, h+": "+why)
 			}
+			gaps := make(map[string]string)
+			for _, tier := range []string{"small", "medium", "large", "xlarge"} {
+				if mapping, set := tiers[tier]; set {
+					why, checked := gaps[mapping.Provider]
+					if !checked {
+						why = setup.workerProviderGap(mapping.Provider)
+						gaps[mapping.Provider] = why
+					}
+					if why != "" {
+						out.Unavailable = append(out.Unavailable, h+"."+tier+": "+why)
+						delete(tiers, tier)
+					}
+				}
+			}
 		}
+		usable[h] = tiers
 		if h == TierRuntimeHarness(caller.Harness) {
 			out.Native = tierEntries("", tiers)
 		}
@@ -481,6 +496,8 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 			binding, err := RoutedTierBinding(caller.Config, res, r.opts.Backends)
 			if err != nil {
 				e.Error = err.Error()
+			} else if why := r.workerProviderGap(harness, binding.Provider); why != "" {
+				e.Error = why
 			} else {
 				e.Model, e.Effort = binding.Model, binding.Effort
 			}
@@ -561,6 +578,9 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 				if err != nil {
 					return "", "", mapping, badRequest("tier %q (%s): %v", tier, res.Trace(), err)
 				}
+				if why := r.workerProviderGap(harness, binding.Provider); why != "" {
+					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
+				}
 				return harness, res.Rank(), binding, nil
 			}
 			harness, bare = res.Harness, res.Size
@@ -584,7 +604,17 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	if err != nil {
 		return "", "", mapping, err
 	}
+	if why := r.workerProviderGap(harness, mapping.Provider); why != "" {
+		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
+	}
 	return harness, bare, mapping, nil
+}
+
+func (r *Runner) workerProviderGap(harness, provider string) string {
+	if setup, ok := r.opts.Backends[harness].Backend.(workerSetup); ok {
+		return setup.workerProviderGap(provider)
+	}
+	return ""
 }
 
 // noTierSlotError is a harness with no agents.tier model at a size.
@@ -593,7 +623,7 @@ type noTierSlotError struct{ harness, size string }
 // Retained name check: stored tiers can still name Pi (TestRetiredPiTierRedirectsToWerk).
 func (e noTierSlotError) Error() string {
 	if e.harness == BackendWerk {
-		return fmt.Sprintf("werk.%s has no usable OpenRouter model; set one with config.tune key \"agents.tier\" (harness \"werk\", tier \"%s\", and an exact OpenRouter model ID from the dashboard model picker)", e.size, e.size)
+		return fmt.Sprintf("werk.%s has no usable model; set one with config.tune key \"agents.tier\" (harness \"werk\", tier \"%s\", and an exact model ID for its provider from the dashboard model picker)", e.size, e.size)
 	}
 	return fmt.Sprintf("%s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", e.harness, e.size)
 }

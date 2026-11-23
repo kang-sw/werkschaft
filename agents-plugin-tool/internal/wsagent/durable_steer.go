@@ -21,7 +21,7 @@ type durableSteerProcess interface {
 	submitSteer(turnID string, steer durableSteer) error
 }
 
-func (c *conv) steerDurableWorker(p durableSteerProcess) {
+func (c *conv) steerDurableInbox(p durableSteerProcess) {
 	if err := c.ackInboxClaims(); err != nil {
 		c.durableTurnError("acknowledge queued steering", err)
 		return

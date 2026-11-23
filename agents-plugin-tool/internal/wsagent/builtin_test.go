@@ -103,7 +103,7 @@ func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 func TestBuiltinLeadProfilesResolve(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
-	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy} {
+	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy, BackendWerk: LeadProfileWerk} {
 		if LeadProfileFor(backend) != name {
 			t.Fatalf("LeadProfileFor(%s) = %q, want %q", backend, LeadProfileFor(backend), name)
 		}

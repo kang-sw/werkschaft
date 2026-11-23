@@ -14,7 +14,9 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 )
@@ -33,33 +35,35 @@ type werkLoop struct {
 	agent  *werk.Agent
 }
 
-var errWerkLead = errors.New("werk backend: the lead role is unavailable")
-
 func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
 	}
-	endpoint, err := b.loopResponder()
+	endpoint, err := b.loopResponderFor(spec.Provider)
 	if err != nil {
 		return nil, err
 	}
-	spec.modelContextWindow = b.contextWindow
+	spec.modelContextWindow = func(model string) int64 { return b.providerContextWindow(spec.Provider, model) }
 	return startWerkLoop(ctx, spec, endpoint)
 }
 
-func (b WerkBackend) loopResponder() (*werk.Client, error) {
+func (b WerkBackend) loopResponder() (*werk.Client, error) { return b.loopResponderFor("") }
+
+func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 	if b.credentials == nil {
 		return nil, errors.New("werk backend: the provider credential source is unavailable")
 	}
-	provider, ok := wscred.Lookup(werk.Provider)
-	if !ok {
-		return nil, wscred.ErrUnknownProvider
+	provider, err := werkProvider(id)
+	if err != nil {
+		return nil, err
 	}
 	return &werk.Client{
-		BaseURL: provider.BaseURL,
+		BaseURL:  provider.BaseURL,
+		Provider: provider.ID,
+		HTTP:     b.httpClient,
 		Token: func(ctx context.Context) (string, error) {
 			cred, err := b.credentials.Credential(ctx, wscred.Request{
-				Provider: provider.ID, AgentSession: true, Background: true,
+				Provider: provider.ID, AgentSession: true, Background: !werk.InteractiveTurn(ctx),
 			})
 			if err != nil {
 				return "", err
@@ -70,16 +74,13 @@ func (b WerkBackend) loopResponder() (*werk.Client, error) {
 }
 
 func validateWerkStart(spec StartSpec) error {
-	if spec.Lead != nil {
-		return errWerkLead
-	}
 	if strings.TrimSpace(spec.Model) == "" {
-		return errors.New("werk backend: a tier model is required")
+		return errors.New("werk backend: a model is required")
 	}
 	switch spec.PermissionLevel {
 	case PermissionReadOnly, PermissionWorkdirWrite, PermissionFull:
 	default:
-		return errors.New("werk backend: a worker authority is required")
+		return errors.New("werk backend: a permission level is required")
 	}
 	if s := spec.MCPSession; s == nil || s.URL == "" || s.Token == "" {
 		return errors.New("werk backend: an authenticated MCP session is required")
@@ -106,9 +107,18 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		cmds: make(chan werk.Command, 32), events: make(chan Event, 256),
 		mapper: newWerkMapper(spec.SessionID),
 	}
+	if spec.Lead != nil {
+		provider, err := werkProvider(spec.Provider)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		p.mapper.provider = string(provider.ID)
+	}
 	cfg := werk.Config{
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
+		Lead:  spec.Lead != nil,
 		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
 		Endpoint: endpoint, RecoverExec: spec.recoverExec,
 		WS:             &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
@@ -117,6 +127,11 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	}
 	if spec.compactState != nil {
 		cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
+	}
+	if cfg.Lead {
+		cfg.RereadFiles = func(paths []string, maxBytes int64) map[string]string {
+			return wsdashboard.ReadWorktreeTextFiles(spec.Root, paths, maxBytes)
+		}
 	}
 	cfg.ContextWindow = spec.modelContextWindow
 	a, err := werk.New(cfg)
@@ -224,8 +239,8 @@ func (p *werkLoop) command(cmd werk.Command) error {
 	}
 }
 
-func (p *werkLoop) submitTurn(id, text string, steers []durableSteer) error {
-	cmd := werk.Command{Type: werk.CmdUser, TurnID: id, Text: text}
+func (p *werkLoop) submitTurn(id, text string, steers []durableSteer, interactive bool) error {
+	cmd := werk.Command{Type: werk.CmdUser, TurnID: id, Text: text, Interactive: interactive}
 	for _, steer := range steers {
 		cmd.Steers = append(cmd.Steers, werk.Steer{ID: steer.ID, Text: steer.Text})
 	}
@@ -240,11 +255,19 @@ func (p *werkLoop) Send(text string) error {
 	return p.command(werk.Command{Type: werk.CmdUser, Text: text})
 }
 
+type leadSummaryCompactor interface {
+	compactWithSummary(*wscompact.LeadSummary) error
+}
+
+func (p *werkLoop) compactWithSummary(summary *wscompact.LeadSummary) error {
+	return p.command(werk.Command{Type: werk.CmdCompact, LeadSummary: summary})
+}
+
 func (p *werkLoop) RunCommand(cmd wsinbox.Command) error {
 	if cmd.Name != "compact" {
 		return ErrUnsupported
 	}
-	return p.command(werk.Command{Type: werk.CmdCompact})
+	return p.compactWithSummary(nil)
 }
 
 func (p *werkLoop) Interrupt() error {
@@ -269,9 +292,6 @@ func (p *werkLoop) SetModel(model string) error {
 }
 
 func (p *werkLoop) SetEffort(effort string) error {
-	if effort == "" {
-		return ErrUnsupported
-	}
 	return p.command(werk.Command{Type: werk.CmdSet, Effort: &effort})
 }
 

@@ -189,7 +189,8 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		current, workerLevel := c.rec, c.workerPermissionLevel
 		c.mu.Unlock()
 		if current.Lead {
-			level, _, err := c.r.leadPermission(current, c.dir)
+			selected, explicit, readErr := cachedPermissionSelection(c.dir)
+			level, _, err := c.r.resolveLeadPermission(current, selected, explicit, readErr)
 			if err != nil {
 				return ""
 			}

@@ -209,6 +209,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		Dir:          c.dir,
 		Profile:      def,
 		Model:        rec.Model,
+		Provider:     rec.Provider,
 		Effort:       rec.Effort,
 		SessionID:    rec.SessionID,
 		Cwd:          rec.Cwd,

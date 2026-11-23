@@ -550,7 +550,7 @@ func (c *conv) steerWorker() {
 		return
 	}
 	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
-		c.steerDurableWorker(p)
+		c.steerDurableInbox(p)
 		return
 	}
 	// Every Runner.Send to this worker is marked for steering. Serialize

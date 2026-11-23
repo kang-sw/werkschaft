@@ -209,7 +209,8 @@ func TestConfigTuneWerkTierProvider(t *testing.T) {
 	}{
 		{"werk", "", ""},
 		{"werk", "openrouter", ""},
-		{"werk", "openai", "unsupported werk provider"},
+		{"werk", "openai", ""},
+		{"werk", "other", "unsupported werk provider"},
 		{"claude", "openrouter", "only for werk tiers"},
 	} {
 		t.Run(tc.harness+"/"+tc.provider, func(t *testing.T) {
@@ -228,8 +229,12 @@ func TestConfigTuneWerkTierProvider(t *testing.T) {
 			if toolIsError(t, resp) {
 				t.Fatalf("write = %s", resp)
 			}
+			wantProvider := tc.provider
+			if wantProvider == "" {
+				wantProvider = wsconfig.WerkDefaultProvider
+			}
 			tiers, err := wsconfig.HarnessTiers(wsconfig.Options{}, "werk")
-			if err != nil || tiers["small"].Provider != wsconfig.WerkDefaultProvider || tiers["small"].Model != "fixture/model" {
+			if err != nil || tiers["small"].Provider != wantProvider || tiers["small"].Model != "fixture/model" {
 				t.Fatalf("werk.small = %+v, %v", tiers["small"], err)
 			}
 			data, err := os.ReadFile(filepath.Join(os.Getenv("WS_CONFIG_HOME"), "config.json"))

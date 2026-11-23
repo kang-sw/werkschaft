@@ -25,7 +25,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 		{BackendClaude, LeadProfileClaude, []string{SupportProfileClaude, AgentWorkerProfile(BackendClaude), SearchAnswerProfileClaude, LeadProfileClaude}, true, ClaudeCatalog().Compaction},
 		{BackendCodex, LeadProfileCodex, []string{AgentWorkerProfile(BackendCodex), LeadProfileCodex}, true, CodexCatalog().Compaction},
 		{BackendAgy, LeadProfileAgy, []string{AgentWorkerProfile(BackendAgy), LeadProfileAgy}, true, AgyCatalog().Compaction},
-		{BackendWerk, "", []string{AgentWorkerProfile(BackendWerk)}, true, WerkCatalog().Compaction},
+		{BackendWerk, LeadProfileWerk, []string{AgentWorkerProfile(BackendWerk), LeadProfileWerk}, true, WerkCatalog().Compaction},
 	}
 	for _, want := range wants {
 		t.Run(want.backend, func(t *testing.T) {

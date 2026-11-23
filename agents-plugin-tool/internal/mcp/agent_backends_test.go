@@ -19,7 +19,7 @@ func registerFixtureAgentBackends(s *Server) {
 		wsagent.BackendPi:     {LeadProfile: wsagent.LeadProfilePi},
 		wsagent.BackendAgy:    {LeadProfile: wsagent.LeadProfileAgy, PermissionModes: wsagent.AgyPermissionModes},
 		wsagent.BackendCodex:  {LeadProfile: wsagent.LeadProfileCodex, PermissionModes: wsagent.CodexPermissionModes},
-		wsagent.BackendWerk:   {},
+		wsagent.BackendWerk:   {LeadProfile: wsagent.LeadProfileWerk},
 		"fixture":             {LeadProfile: "fixture-lead", PermissionModes: []string{"review"}},
 	}})
 }

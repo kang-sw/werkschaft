@@ -252,7 +252,7 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	// review:xlarge lands on pi.xlarge, whose werk slot is unset: agent.spawn
 	// refuses it, so config.resolve_agent does too rather than answering
 	// with another harness's slot.
-	if got, errText := resolve("review:xlarge"); !strings.Contains(errText, "werk.xlarge has no usable OpenRouter model") {
+	if got, errText := resolve("review:xlarge"); !strings.Contains(errText, "werk.xlarge has no usable model") {
 		t.Fatalf("slotless routed tier = %+v %q", got, errText)
 	}
 	// With a runner of its own, the server applies the spawn's harness
