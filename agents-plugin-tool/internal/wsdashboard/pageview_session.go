@@ -184,8 +184,6 @@ type sessionLookup struct {
 	// observed is needed only by non-compact peer child hovers. Counts and
 	// compact peer rows use snapshot, which need not sweep retained history.
 	observed func(replyID string) *wslive.Snapshot
-	// piDeleted checks revival only for settled Pi rows, never native rows.
-	piDeleted func(replyID string) bool
 	// harnesses declares the registered harnesses' traits (DaemonOptions.Harnesses).
 	harnesses HarnessTraitSet
 }
@@ -418,19 +416,13 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 				continue // a parent cycle in a malformed snapshot
 			}
 			seen[a.ID] = true
+			a = endedPiRow(a)
 			node := AgentNode{Agent: a}
 			node.Finished, node.Running, node.Generating = splitBatches(a.Batches)
 			if node.IsRunning() {
 				node.Slots = liveSlots(node.Permission, node.Finished, node.Running, node.Generating)
 			}
 			if a.ReplyID != "" {
-				// Retained name check: a finished Pi child row is told apart by its
-				// persisted agent kind (TestPiSpawnDisplayRefreshesAfterSessionRemoval).
-				if a.AgentKind == wslive.AgentKindPi && a.Status == wslive.StatusDone && lookup.piDeleted != nil {
-					node.PiDeleted = lookup.piDeleted(a.ReplyID)
-				}
-				// A conversation the agent runner hosts (a spawned Pi
-				// subagent) has a page and no board.
 				if s, ok := lookup.get(a.ReplyID); ok && (s.HasBoard || s.Agent) {
 					node.Linked = true
 				}

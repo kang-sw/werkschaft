@@ -147,16 +147,13 @@ func TestAgentsPanelSpinsOnlyOnToolRows(t *testing.T) {
 	}
 	// Reduced motion stops the pulse as it stops the spinner.
 	css := mustAsset(t, "dashboard.css")
-	if !strings.Contains(css, "@media (prefers-reduced-motion: reduce) { .spin, .caret, .pulse, .pibadge { animation: none; } }") {
-		t.Errorf("reduced-motion rule does not name .pulse and .pibadge")
+	if !strings.Contains(css, "@media (prefers-reduced-motion: reduce) { .spin, .caret, .pulse { animation: none; } }") {
+		t.Errorf("reduced-motion rule does not name .pulse")
 	}
 }
 
-// TestPiAgentRowBlinksAPiBadgeAndLinks pins a Pi subagent's row: while it
-// runs, a blinking "pi" badge stands where another running row pulses; a
-// finished one shows its outcome as any row does; and its reply-id links to
-// the conversation the agent runner hosts, which has a page and no board.
-func TestPiAgentRowBlinksAPiBadgeAndLinks(t *testing.T) {
+// TestRetiredPiAgentRowEndsAndLinks keeps stale Pi rows readable as ended history.
+func TestRetiredPiAgentRowEndsAndLinks(t *testing.T) {
 	now := testNow
 	snap := liveSnap(now, wslive.Lead{},
 		wslive.Agent{ID: "pi:childone", Label: "pi worker", Status: wslive.StatusRunning, AgentKind: wslive.AgentKindPi, ReplyID: "childone"},
@@ -169,8 +166,8 @@ func TestPiAgentRowBlinksAPiBadgeAndLinks(t *testing.T) {
 	html := renderTree(t, v)
 	// The compact source repeats presentation marks, not full-tree rows.
 	html = html[strings.Index(html, `<div class="thead">`):]
-	if n := strings.Count(html, `<span class="pibadge"`); n != 1 {
-		t.Fatalf("pi badges = %d, want the running pi row's alone: %s", n, html)
+	if n := strings.Count(html, `<span class="pibadge"`); n != 0 {
+		t.Fatalf("Pi badge present in ended history: %s", html)
 	}
 	if n := strings.Count(html, `<span class="pulse"></span>`); n != 1 {
 		t.Fatalf("pulses = %d, want the native running row's alone: %s", n, html)
@@ -180,10 +177,6 @@ func TestPiAgentRowBlinksAPiBadgeAndLinks(t *testing.T) {
 	}
 	if strings.Contains(html, `href="/s/childtwo"`) {
 		t.Fatalf("a reply-id this daemon does not serve must not link: %s", html)
-	}
-	css := mustAsset(t, "dashboard.css")
-	if !strings.Contains(css, ".pibadge {") || !strings.Contains(css, "animation: dash-pulse") {
-		t.Fatalf("the pi badge should blink as the pulse does")
 	}
 }
 
@@ -214,8 +207,7 @@ func TestAgentTreeCloseControl(t *testing.T) {
 
 // TestAgentRowRendersHarnessBadgeWhenPresent pins that a running agent.spawn
 // child with Harness renders the 2-letter harness badge (.hb.sm) in both the
-// compact roster and full tree instead of the legacy pibadge, while an old
-// record without Harness still falls back to pibadge.
+// compact roster and full tree. Retired rows carry no running badge.
 func TestAgentRowRendersHarnessBadgeWhenPresent(t *testing.T) {
 	now := testNow
 	snap := liveSnap(now, wslive.Lead{},
@@ -236,8 +228,8 @@ func TestAgentRowRendersHarnessBadgeWhenPresent(t *testing.T) {
 		if n := strings.Count(html, `<span class="hb sm" data-h="claude"></span>`); n != 1 {
 			t.Fatalf("%s: claude hb badges = %d, want 1 (running only): %s", label, n, html)
 		}
-		if n := strings.Count(html, `<span class="pibadge"`); n != 1 {
-			t.Fatalf("%s: legacy pibadge fallback = %d, want 1 (legacy row only): %s", label, n, html)
+		if n := strings.Count(html, `<span class="pibadge"`); n != 0 {
+			t.Fatalf("%s: legacy Pi badge present: %s", label, html)
 		}
 	}
 	if !strings.Contains(treeHTML, `class="chip astatus">sleep</span>`) {
@@ -250,8 +242,8 @@ func TestSpawnTreeUsesOrdinaryNestingAndCountsWithoutDuplicateRows(t *testing.T)
 	st := wslive.NewState("lead-key")
 	st.SetAdapter("claude")
 	for _, ev := range []wslive.Event{
-		{Kind: wslive.KindAgent, AgentID: "pi:child", AgentKind: wslive.AgentKindPi, SessionKey: "child-key", Label: "worker", Status: wslive.StatusRunning},
-		{Kind: wslive.KindAgent, AgentID: "pi:leaf", AgentKind: wslive.AgentKindPi, ParentID: "pi:child", Label: "leaf", Status: wslive.StatusDone},
+		{Kind: wslive.KindAgent, AgentID: "pi:child", AgentKind: wslive.AgentKindPi, Harness: "claude", SessionKey: "child-key", Label: "worker", Status: wslive.StatusRunning},
+		{Kind: wslive.KindAgent, AgentID: "pi:leaf", AgentKind: wslive.AgentKindPi, Harness: "claude", ParentID: "pi:child", Label: "leaf", Status: wslive.StatusDone},
 		{Kind: wslive.KindAgent, AgentID: "harness-child", SessionKey: "child-key", Label: "duplicate", Status: wslive.StatusRunning},
 	} {
 		if _, err := st.Apply(ev, now.UnixMilli()); err != nil {

@@ -249,8 +249,6 @@ type AgentNode struct {
 	// serves with a page (a board, or an agent runner's conversation), so
 	// its label links to that page.
 	Linked bool
-	// PiDeleted is display-only; the live snapshot keeps its legacy status.
-	PiDeleted bool
 	// Native marks a harness's own subagent (hudNative, markNativeAgents):
 	// the row shows a native badge and its start, end, and state.
 	Native     bool
@@ -283,22 +281,16 @@ type LiveSlot struct {
 func (a AgentNode) IsRunning() bool { return a.Status == wslive.StatusRunning }
 
 // EndedStatus is the localized status key suffix for an ended row. A row with
-// running background work shows "background"; Pi children otherwise sleep
-// between turns; native Claude/Codex rows finish done.
+// running background work shows "background".
 func (a AgentNode) EndedStatus() string {
+	if a.AgentKind == wslive.AgentKindPi && !retiredPiRow(a.Agent) && a.Status == wslive.StatusDone && a.BackgroundTasks == 0 {
+		return "sleep"
+	}
 	if a.EndUnknown() {
 		return "unknown"
 	}
 	if a.Status == wslive.StatusDone && a.BackgroundTasks > 0 {
 		return "background"
-	}
-	// Retained name check: a finished Pi child row is told apart by its persisted
-	// agent kind (TestPiSpawnDisplayStatus).
-	if a.AgentKind == wslive.AgentKindPi && a.Status == wslive.StatusDone {
-		if a.PiDeleted {
-			return "deleted"
-		}
-		return "sleep"
 	}
 	if a.Status == wslive.StatusFailed {
 		return "failed"
@@ -463,4 +455,20 @@ type ConversationView struct {
 // running agents of a running delegate that holds its own ws session.
 type SubagentCount struct {
 	Direct, Deep int
+}
+
+// Old Pi rows used the agent kind as their only harness marker. Newer hosted
+// workers retain that kind for wire compatibility and name their own harness.
+func retiredPiRow(a wslive.Agent) bool {
+	return a.Harness == "pi" || a.Harness == "" && a.AgentKind == wslive.AgentKindPi
+}
+
+func endedPiRow(a wslive.Agent) wslive.Agent {
+	if retiredPiRow(a) {
+		if a.Status == wslive.StatusRunning {
+			a.Status = wslive.StatusDone
+		}
+		a.BackgroundTasks = 0
+	}
+	return a
 }

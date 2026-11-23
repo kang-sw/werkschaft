@@ -133,7 +133,7 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 	if byID["perm"].Task != "bash rm -rf" {
 		t.Fatalf("perm Task = %q, want %q", byID["perm"].Task, "bash rm -rf")
 	}
-	// Pi fallback when neither parent nor lead specifies a harness.
+	// A retired Pi row projects as ended without a harness badge.
 	piLead := liveSession("self2", "/p", now)
 	piLead.Harness = ""
 	piView := buildSessionView(pageInputs{
@@ -141,8 +141,8 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 		Snapshot: liveSnap(now, wslive.Lead{}, wslive.Agent{ID: "pi:1", AgentKind: wslive.AgentKindPi, Status: wslive.StatusRunning}),
 		Now:      now,
 	})
-	if len(piView.Tree.HUD.Roots) != 1 || piView.Tree.HUD.Roots[0].Harness != "pi" {
-		t.Fatalf("Pi fallback harness = %+v", piView.Tree.HUD.Roots)
+	if len(piView.Tree.HUD.Roots) != 1 || piView.Tree.HUD.Roots[0].Harness != "" {
+		t.Fatalf("retired Pi HUD = %+v", piView.Tree.HUD.Roots)
 	}
 }
 
@@ -284,9 +284,9 @@ func TestHUDHarnessLegacyPiAgentKind(t *testing.T) {
 		parent string
 		want   string
 	}{
-		{"kind alone", set, legacy, "", "pi"},
-		{"kind alone, no registrations", nil, legacy, "", "pi"},
-		{"parent wins", set, legacy, "claude", "claude"},
+		{"kind alone", set, legacy, "", ""},
+		{"kind alone, no registrations", nil, legacy, "", ""},
+		{"retired row omits parent badge", set, legacy, "claude", ""},
 		{"own registered name wins", set, wslive.Agent{ID: "a", AgentKind: wslive.AgentKindPi, Harness: " Codex "}, "claude", "codex"},
 		{"unregistered name is not a harness", set, wslive.Agent{ID: "a", Harness: "other"}, "", ""},
 		{"no registrations name no harness", nil, wslive.Agent{ID: "a", Harness: "claude"}, "", ""},

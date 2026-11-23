@@ -12,11 +12,10 @@ import (
 func TestPlanUsageDetectionRetriesReadFailureAcrossForcedRefresh(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, raw, plan string
-		codex, pi             bool
+		codex                 bool
 	}{
 		{name: "Claude", path: ".claude/.credentials.json", raw: `{"claudeAiOauth":{"subscriptionType":"max"}}`, plan: "max"},
 		{name: "Codex", path: ".codex/auth.json", raw: `{"auth_mode":"chatgpt","tokens":{}}`, codex: true},
-		{name: "Pi", path: ".pi/agent/auth.json", raw: `{"openai-codex":{}}`, pi: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := usageTestStore(t)
@@ -39,7 +38,7 @@ func TestPlanUsageDetectionRetriesReadFailureAcrossForcedRefresh(t *testing.T) {
 			// No real credential values or upstream requests are needed: the
 			// probe rejects these empty tokens after detection succeeds.
 			s.writeFile = func(string, string, []byte) error { return nil }
-			if plan, codex, pi := s.detect(); plan != "" || codex || pi {
+			if plan, codex := s.detect(); plan != "" || codex {
 				t.Fatal("failed read reported a login")
 			}
 			if reads != 1 {
@@ -48,8 +47,8 @@ func TestPlanUsageDetectionRetriesReadFailureAcrossForcedRefresh(t *testing.T) {
 			fail = false
 			s.refresh(context.Background(), true)
 			s.probes.Wait()
-			if plan, codex, pi := s.detect(); plan != tc.plan || codex != tc.codex || pi != tc.pi {
-				t.Fatalf("after recovery: plan=%q codex=%v pi=%v", plan, codex, pi)
+			if plan, codex := s.detect(); plan != tc.plan || codex != tc.codex {
+				t.Fatalf("after recovery: plan=%q codex=%v", plan, codex)
 			}
 			if reads != 2 {
 				t.Fatalf("reads after recovery = %d, want one failure and one successful refill", reads)

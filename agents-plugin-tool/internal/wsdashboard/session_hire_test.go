@@ -662,7 +662,7 @@ func TestHiringRegistryAdmission(t *testing.T) {
 	}{
 		{"registered extension", "fixture", map[string]bool{"fixture": true}, true},
 		{"registered builtin", "claude", map[string]bool{"claude": true}, true},
-		{"unregistered builtin", "pi", map[string]bool{"fixture": true}, false},
+		{"retired even if registered", "pi", map[string]bool{"pi": true}, false},
 		{"worker only", "worker", map[string]bool{"worker": false}, false},
 		{"unknown", "unknown", map[string]bool{}, false},
 		{"unspecified", "", map[string]bool{}, true},
@@ -676,8 +676,14 @@ func TestHiringRegistryAdmission(t *testing.T) {
 				if err != nil || p.Harness != tt.harness {
 					t.Fatalf("request = %+v, %v", p, err)
 				}
-			} else if err == nil || err.Error() != "harness must be claude or pi" {
-				t.Fatalf("refusal text changed: %v", err)
+			} else {
+				want := "the requested harness does not support hosted leads"
+				if tt.harness == "pi" {
+					want = "the Pi harness is retired; choose an available lead harness"
+				}
+				if err == nil || err.Error() != want {
+					t.Fatalf("refusal = %v, want %s", err, want)
+				}
 			}
 			queue, err := f.d.pendingHires()
 			if err != nil || len(queue) != map[bool]int{true: 1, false: 0}[tt.want] || creator.created != 0 {
@@ -695,7 +701,7 @@ func TestHiringHostWithoutLeadAdmission(t *testing.T) {
 		o.Agents = struct{ AgentHost }{creator}
 	})
 	enableHiring(t, f.d, "livesession")
-	for _, harness := range []string{"claude", "pi", "unknown"} {
+	for _, harness := range []string{"claude", "unknown"} {
 		_, err := f.d.RequestHire("livesession", HireRequest{Reason: "why", RecoveryContext: "recover", Harness: harness})
 		if err == nil || err.Error() != "this daemon's agent host cannot admit a lead harness" {
 			t.Fatalf("%s: inaccurate host refusal: %v", harness, err)
