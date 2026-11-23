@@ -72,8 +72,9 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     assert.equal(await input.inputValue(), 'English');
 
     await frame.locator('[data-settings-section=prompts]').click();
-    const prompt = row('prompt.UserPreferenceSection');
-    assert.equal(await prompt.locator('.seed-pre').textContent(), "Use the project's terminology and communication style.");
+    await frame.locator('[data-settings-prompt-point="prompt.TicketHandlerPersistConfirmation"]').click();
+    const prompt = row('prompt.TicketHandlerPersistConfirmation');
+    assert.match(await prompt.locator('.seed-pre').textContent(), /the confirmation record/);
     const editor = prompt.locator('[data-settings-prompt-editor]');
     await editor.fill('Use <literal> terminology.');
     assert.match(await prompt.locator('[data-settings-prompt-diff]').textContent(), /\+ Use <literal> terminology\./);
@@ -81,8 +82,21 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     await prompt.locator('button[type=submit]').click();
     assert.equal((await mutation).status(), 200);
     const savedPrompt = (await get('session', contextFor(selectedSession))).find(e =>
-      e.key === 'prompt.UserPreferenceSection' && e.selectors.harness === '*');
+      e.key === 'prompt.TicketHandlerPersistConfirmation' && e.selectors.harness === '*');
     assert.equal(savedPrompt.value, 'Use <literal> terminology.');
+    await page.goto(origin + '/settings');
+    await frame.locator('[data-settings-section=prompts]').click();
+    const legacy = frame.locator('.preferences-legacy');
+    const defaultSlot = frame.locator('[data-preference-slot=default] textarea');
+    assert.equal(await defaultSlot.inputValue(), 'A preference saved before harness buckets.');
+    mutation = page.waitForResponse(r => r.url() === api + 'reset');
+    await legacy.locator('button').click();
+    assert.equal((await mutation).status(), 200);
+    await legacy.waitFor({state: 'hidden'});
+    const migrated = await get('global');
+    assert.equal(migrated.find(e => e.key === 'preference.default').value, 'A preference saved before harness buckets.');
+    assert.equal(migrated.find(e => e.key === 'prompt.UserPreferenceSection' && e.selectors.harness === '*').layers
+      .find(layer => layer.scope === 'global').present, false);
     assert.deepEqual(errors, []);
     console.log('Production manifests, bucket refresh, live session isolation and packaged prompt seeds verified.');
   } finally {

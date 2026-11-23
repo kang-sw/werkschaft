@@ -17,6 +17,76 @@ const context = vm.createContext({window: {}, URLSearchParams});
 vm.runInContext(read("shell.js"), context);
 const shell = context.window.WsShell;
 
+const preferenceWindow = {};
+vm.runInNewContext(read("dashboard-settings-preferences.js"), {window: preferenceWindow});
+const preferences = preferenceWindow.WsSettingsPreferences;
+
+test("preference names follow the config key grammar and reject duplicates", () => {
+  const keys = new Set(["preference.in-use"]);
+  for (const name of ["default", "0", "1-a_2", "a_", "a--"]) {
+    assert.equal(preferences.nameError(name, keys), "", name);
+  }
+  for (const name of ["_first", "-first", "Upper", "é", "a.b", "a b", "a\n"]) {
+    assert.equal(preferences.nameError(name, keys), "name_invalid", name);
+  }
+  assert.equal(preferences.nameError("", keys), "name_required");
+  assert.equal(preferences.nameError("in-use", keys), "name_duplicate");
+});
+
+test("preference slots use manual order and distinguish hidden overrides from reset", () => {
+  const layer = (scope, value) => ({scope, value, selected: value, present: true});
+  const entry = (name, ...layers) => ({key: "preference." + name, selectors: {}, layers});
+  const inputs = [
+    entry("z", layer("global", "Z")),
+    entry("masked", layer("global", "kept text"), layer("repo", "")),
+    entry("a", layer("repo", "A")),
+    entry("default", layer("global", "Default")),
+    entry("a-2", layer("global", "A dash 2")),
+    entry("a_1", layer("global", "A underscore 1")),
+    entry("unused"),
+  ];
+  const selection = {scope: "repo"};
+  const initial = preferences.slotModel(inputs, selection, [], () => null);
+  assert.equal(initial.rows.map(row => row.key.slice(11)).join(" "), "default a a-2 a_1 z masked");
+  assert.equal(initial.rows.at(-1).winner.value, "");
+  assert.equal(initial.rows.at(-1).masked, "kept text");
+  assert.equal(initial.rows[1].resetTo, undefined);
+  const key = "preference.masked";
+  const hide = preferences.slotOperation(key, "hide");
+  const reset = preferences.slotOperation(key, "reset");
+  assert.equal(hide.action, "set");
+  assert.equal(hide.value, "");
+  assert.equal(reset.action, "reset");
+  assert(!Object.hasOwn(reset, "value"));
+  assert.equal(JSON.stringify(preferences.slotOperation(key, "restore")), JSON.stringify(reset));
+  const restored = preferences.slotModel(inputs, selection, [reset], entry => entry.key === key ? reset : null);
+  assert.equal(restored.rows.find(row => row.key === key).winner.value, "kept text");
+});
+
+test("moving the legacy preference copies its value before resetting its bucket", () => {
+  const selections = [{harness: "*"}, {}];
+  for (const selectors of selections) {
+    const ops = preferences.migrationOperations("legacy", selectors, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(ops)), [
+      {key: "preference.default", selectors: {}, action: "set", value: "legacy"},
+      {key: "prompt.UserPreferenceSection", selectors, action: "reset"}
+    ]);
+    assert.deepEqual(JSON.parse(JSON.stringify(preferences.migrationOperations("legacy", selectors, true))),
+      [JSON.parse(JSON.stringify(ops[1]))]);
+  }
+  const common = {
+    key: "prompt.UserPreferenceSection", selectors: {harness: "*"}, seed: "seed",
+    layers: [{scope: "global", bucket: "all", value: "legacy", selected: "legacy", present: true}]
+  };
+  const state = preferences.slotModel([common], {scope: "global"}, [], () => null);
+  assert.equal(state.rows[0].current.value, "legacy");
+  assert.equal(state.rows[0].current.legacy, true);
+  assert.equal(state.move.copied, false);
+  const inherited = preferences.slotModel([common], {scope: "repo"}, [], () => null);
+  assert.equal(inherited.rows[0].current.scope, "global");
+  assert.equal(inherited.move, undefined);
+});
+
 test("companion director labels use key-specific translations and retain translated off", () => {
   const source = read("dashboard-settings.js");
   const settingsContext = {document: {querySelector: () => null}};

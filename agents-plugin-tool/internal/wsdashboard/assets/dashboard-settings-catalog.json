@@ -10,7 +10,6 @@
   {"key": "sage_review_design", "section": "workflow", "control": "choice", "label": "js.settings.key.sage_review_design.label", "description": "js.settings.key.sage_review_design.description", "selectors": []},
   {"key": "ticket_review_auto_ack", "section": "workflow", "control": "toggle", "label": "js.settings.key.ticket_review_auto_ack.label", "description": "js.settings.key.ticket_review_auto_ack.description", "selectors": []},
   {"key": "review_phase", "section": "workflow", "control": "choice", "label": "js.settings.key.review_phase.label", "description": "js.settings.key.review_phase.description", "selectors": []},
-  {"key": "preference.*", "section": "workflow", "control": "textarea", "label": "js.settings.key.preference.*.label", "description": "js.settings.key.preference.*.description", "selectors": []},
   {"key": "agents.tier", "section": "agents", "control": "tier", "label": "js.settings.key.agents.tier.label", "description": "js.settings.key.agents.tier.description", "selectors": ["harness", "tier"]},
   {"key": "agent.tier_aliases", "section": "agents", "control": "text", "label": "js.settings.key.agent.tier_aliases.label", "description": "js.settings.key.agent.tier_aliases.description", "selectors": []},
   {"key": "agent.tier_routing", "section": "agents", "control": "tier_routing", "label": "js.settings.key.agent.tier_routing.label", "description": "js.settings.key.agent.tier_routing.description", "selectors": []},
@@ -86,5 +85,6 @@
   {"key": "dashboard.companion_sources", "section": "companion", "control": "text", "label": "js.settings.key.dashboard.companion_sources.label", "description": "js.settings.key.dashboard.companion_sources.description", "selectors": [], "surface": "companion-modal"},
   {"key": "worktree.profile.*", "section": "profiles", "control": "profile", "label": "js.settings.key.worktree.profile.*.label", "description": "js.settings.key.worktree.profile.*.description", "selectors": []},
   {"key": "agent.profile.*", "section": "profiles", "control": "profile", "label": "js.settings.key.agent.profile.*.label", "description": "js.settings.key.agent.profile.*.description", "selectors": []},
+  {"key": "preference.*", "section": "prompts", "control": "textarea", "label": "js.settings.key.preference.*.label", "description": "js.settings.key.preference.*.description", "selectors": []},
   {"key": "prompt.*", "section": "prompts", "control": "prompt", "label": "js.settings.key.prompt.*.label", "description": "js.settings.key.prompt.*.description", "selectors": ["harness"]}
 ]
