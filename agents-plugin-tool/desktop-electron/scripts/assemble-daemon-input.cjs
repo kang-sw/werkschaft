@@ -22,8 +22,8 @@
  * the existing metadata gate separately binds identity to the binary hash.
  * Assembly NEVER generates assets into, or recompiles, the supplied binary.
  * PYTHON may name a Python 3 executable; defaults: python on Windows, python3
- * elsewhere. Reuses prepare-workflow-bundles.py's package_files producer: copies
- * the generated rsrc manifest and generates the missing wsflow skills manifest
+ * elsewhere. The stager copies the generated rsrc manifest and generates the
+ * missing wsflow skills manifest
  * with its existing CRLF-normalized schema-1 algorithm. No source tree is edited.
  */
 const fs = require('node:fs');
@@ -32,21 +32,6 @@ const { execFileSync } = require('node:child_process');
 const { parseArgs } = require('node:util');
 const { validateDaemonRoot } = require('../daemon-selection');
 const repo = path.resolve(__dirname, '../../..');
-
-// Import only the producer's finite package assembly function, not prepare():
-// prepare() also rewrites Pi archives, which this desktop build must not touch.
-const PREPARE = `
-import importlib.util, pathlib, sys
-sys.dont_write_bytecode = True
-producer, source, destination = map(pathlib.Path, sys.argv[1:])
-spec = importlib.util.spec_from_file_location('workflow_packages', producer)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-for name, data in module.package_files(source).items():
-    target = destination.joinpath(*name.split('/'))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-`;
 
 function assemble({ binary, out, package: product = 'wsflow', metadata, platform = process.platform,
   python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3') } = {}) {
@@ -78,8 +63,7 @@ function assemble({ binary, out, package: product = 'wsflow', metadata, platform
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.mkdirSync(out); // Exclusive ownership: never overwrite or clean an existing output.
   try {
-    execFileSync(python, ['-c', PREPARE,
-      path.join(repo, 'agents-plugin-pi', 'scripts', 'prepare-workflow-bundles.py'), source, out], { stdio: 'pipe' });
+    execFileSync(python, [path.join(__dirname, 'stage-workflow-package.py'), source, out], { stdio: 'pipe' });
     const target = path.join(out, platform === 'win32' ? 'ws-mcp.exe' : 'ws-mcp');
     fs.copyFileSync(binary, target);
     fs.chmodSync(target, platform === 'darwin' ? 0o755 : 0o644);

@@ -8,11 +8,9 @@ on:
     paths:
       - ".github/workflows/ws-mcp-release.yml"
       - ".github/workflows/werkschaft-tauri-build.yml"
-      - "package.json"
       - ".agents/plugins/marketplace.json"
       - ".claude-plugin/marketplace.json"
       - "agents-plugin/**"
-      - "agents-plugin-pi/**"
       - "agents-plugin-wsflow/**"
       - "agents-plugin-tool/**"
   workflow_dispatch:
@@ -129,29 +127,8 @@ jobs:
           jq . ../agents-plugin/runtime.json >/dev/null
           jq . ../.agents/plugins/marketplace.json >/dev/null
           jq . ../.claude-plugin/marketplace.json >/dev/null
-          jq . ../package.json >/dev/null
-          jq . ../agents-plugin-pi/package.json >/dev/null
           test "$(jq -r '.plugins[].name' ../.agents/plugins/marketplace.json | sort | tr '\n' ' ')" = "ws wsflow "
           test "$(jq -r '.plugins[].name' ../.claude-plugin/marketplace.json | sort | tr '\n' ' ')" = "ws wsflow "
-          diff -q ../agents-plugin/runtime.json ../agents-plugin-pi/runtime.json
-          diff -q ../agents-plugin/bin/ws-mcp-launcher.py ../agents-plugin-pi/bin/ws-mcp-launcher.py
-          diff -rq ../agents-plugin/rsrc ../agents-plugin-pi/rsrc
-          # Root package.json's dependencies must mirror agents-plugin-pi/package.json's
-          # runtime dependencies exactly: Pi's git-install flow runs `npm install`
-          # only against the root manifest. The two files legitimately differ
-          # elsewhere (root carries pi.extensions, omits type/files/scripts/
-          # devDependencies), so compare only the parsed dependencies object,
-          # not the whole file.
-          diff <(jq -S '.dependencies' ../package.json) <(jq -S '.dependencies' ../agents-plugin-pi/package.json)
-          # Prepared native Pi closures and workflow bundles need no Node/npm/network.
-          python3 ../agents-plugin-pi/scripts/prepare-workflow-bundles.py --check
-          for product in agents-plugin agents-plugin-wsflow; do
-            python3 "../$product/bin/ws-pi-payload.py" --plugin "../$product" --check-source ..
-          done
-          for artifact in native-pi/closure-manifest.json native-pi/closure.zip native-pi/first-party-manifest.json bin/ws-pi-payload.py; do
-            cmp "../agents-plugin/$artifact" "../agents-plugin-wsflow/$artifact"
-          done
-          diff -r ../agents-plugin/native-pi/first-party ../agents-plugin-wsflow/native-pi/first-party
 
       - name: Generate embedded workflow packages
         run: python3 scripts/generate-package-assets.py

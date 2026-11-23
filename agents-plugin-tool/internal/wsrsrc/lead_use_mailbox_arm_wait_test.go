@@ -18,8 +18,8 @@ func TestLeadUseMailboxArmTheWaitHarnessComposition(t *testing.T) {
 			if strings.TrimSpace(pb.Body) == "" {
 				t.Fatal("empty mailbox playbook")
 			}
-			if got, want := strings.Contains(pb.Body, "{{.MailboxWaitCommand}}"), harness != "pi"; got != want {
-				t.Errorf("wait-command placeholder present = %v, want %v", got, want)
+			if !strings.Contains(pb.Body, "{{.MailboxWaitCommand}}") {
+				t.Error("wait-command placeholder is missing")
 			}
 		})
 	}

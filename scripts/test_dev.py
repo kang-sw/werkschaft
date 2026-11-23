@@ -183,7 +183,7 @@ class SeedPackageTest(unittest.TestCase):
                 self.assertIn("--build-time", run.call_args.args[0])
 
     def test_daemon_start_points_rsrc_root_at_checkout_package(self):
-        # The daemon resolves the Pi worker launcher as <dir(WS_RSRC_ROOT)>/bin/ws-mcp-launcher.py.
+        # The daemon resolves the worker launcher as <dir(WS_RSRC_ROOT)>/bin/ws-mcp-launcher.py.
         marker = "WS_MCP_LAUNCHER_START_LOCK_HELD"
         stale = {"WS_RSRC_ROOT": "/stale/cache/rsrc", "WS_SKILLS_ROOT": "/stale/cache/skills", marker: "0"}
         with mock.patch.dict(dev.os.environ, stale),                 mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='{"outcome":"started"}', stderr="")) as run:

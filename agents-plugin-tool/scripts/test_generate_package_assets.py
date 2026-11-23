@@ -31,31 +31,21 @@ class GenerationTests(unittest.TestCase):
         self.output = self.repo / 'agents-plugin-tool/internal/wspackage/generated'
         for product, folder in generator.PACKAGES.items():
             root = self.repo / folder
-            for name in generator.FILES + (('bin/ws-pi-payload.py',) if product == 'ws' else ()):
+            for name in generator.FILES:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((product + '/' + name).encode())
-            for tree in generator.TREES + (('native-pi',) if product == 'ws' else ()):
+            for tree in generator.TREES:
                 path = root / tree / 'asset.txt'
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((product + tree).encode())
         self.source = self.repo / 'agents-plugin/rsrc/asset.txt'
-        pi = self.repo / 'agents-plugin-pi/config-manifest.json'
-        pi.parent.mkdir(parents=True)
-        pi.write_bytes(b'canonical pi manifest')
 
-    def test_manifest_inputs_and_pi_drift(self):
+    def test_manifest_assets_match_canonical_inputs(self):
         self.generate()
         for product, folder in generator.PACKAGES.items():
             for name in ('config-manifest.json', 'agy-config-manifest.json', 'dashboard-config-manifest.json'):
                 self.assertEqual((self.output / product / name).read_bytes(), (self.repo / folder / name).read_bytes())
-            self.assertEqual((self.output / product / 'pi-config-manifest.json').read_bytes(),
-                             (self.repo / 'agents-plugin-pi/config-manifest.json').read_bytes())
-        (self.repo / 'agents-plugin-pi/config-manifest.json').write_bytes(b'changed')
-        with self.assertRaisesRegex(ValueError, 'pi-config-manifest.json'):
-            self.generate(check=True)
-        self.generate()
-        self.generate(check=True)
 
     def generate(self, check=False):
         generator.generate(self.repo, self.output, check)
@@ -117,8 +107,6 @@ class GenerationTests(unittest.TestCase):
         self.generate()
         self.assertEqual(files, {p.relative_to(self.output).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
                                 for p in self.output.rglob('*') if p.is_file()})
-        self.assertNotIn('wsflow/native-pi/asset.txt', files)
-        self.assertIn('ws/native-pi/asset.txt', files)
         self.assertIn('ws/.claude-plugin/plugin.json', files)
         self.assertFalse(any('junk' in name or 'private' in name or name.endswith('/link') or '.DS_Store' in name for name in files))
         self.assertNotEqual(files['ws/runtime.json'][0], files['wsflow/runtime.json'][0])

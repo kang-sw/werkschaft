@@ -9,7 +9,7 @@ import (
 
 // Namespace substitution exercises hash-verified plugin-root loading.
 func TestWhiteboardSelectionGuidance(t *testing.T) {
-	for _, pkg := range []string{"agents-plugin", "agents-plugin-wsflow", "agents-plugin-pi"} {
+	for _, pkg := range []string{"agents-plugin", "agents-plugin-wsflow"} {
 		t.Run(pkg, func(t *testing.T) {
 			root, err := filepath.Abs(filepath.Join("..", "..", "..", pkg, "rsrc"))
 			if err != nil {
@@ -27,11 +27,7 @@ func TestWhiteboardSelectionGuidance(t *testing.T) {
 					if err != nil || resolved != root {
 						t.Fatalf("ResolveRoot() = %q, %v; want %q", resolved, err, root)
 					}
-					harness := ""
-					if pkg == "agents-plugin-pi" {
-						harness = "pi"
-					}
-					pb, err := Load(resolved, "whiteboard", harness, "", nil)
+					pb, err := Load(resolved, "whiteboard", "", "", nil)
 					if err != nil {
 						t.Fatal(err)
 					}

@@ -177,7 +177,7 @@ func TestPackageDirectoryIndex(t *testing.T) {
 
 func TestBuildOwnedAssets(t *testing.T) {
 	t.Setenv(EnvDevCheckout, "")
-	root, err := Embedded("ws")
+	_, err := Embedded("ws")
 	if _, absent := fs.Stat(assets, "generated/inventory.json"); absent != nil {
 		if err == nil {
 			t.Fatal("bare build accepted placeholder")
@@ -187,19 +187,22 @@ func TestBuildOwnedAssets(t *testing.T) {
 		}
 		return
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"runtime.json", ".claude-plugin/plugin.json", "rsrc/manifest.json", "skills/lead-bootstrap/AGENTS.template.md", "bin/ws-mcp-launcher.py", "bin/ws-pi-payload.py", "native-pi/closure.zip"} {
-		if _, err := fs.Stat(root, name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	flow, err := Embedded("wsflow")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fs.Stat(flow, "native-pi"); !os.IsNotExist(err) {
-		t.Fatalf("native payload duplicated: %v", err)
+	for _, product := range []string{"ws", "wsflow"} {
+		t.Run(product, func(t *testing.T) {
+			root, err := Embedded(product)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"runtime.json", ".claude-plugin/plugin.json", "rsrc/manifest.json", "skills/lead-bootstrap/AGENTS.template.md", "bin/ws-mcp-launcher.py"} {
+				if _, err := fs.Stat(root, name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"bin/ws-pi-payload.py", "native-pi", "pi-config-manifest.json"} {
+				if _, err := fs.Stat(root, name); !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("retired package input %s: %v", name, err)
+				}
+			}
+		})
 	}
 }

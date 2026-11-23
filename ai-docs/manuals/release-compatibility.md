@@ -4,7 +4,7 @@ summary: Required when a change touches a cross-version surface (MCP tool or arg
 
 # Release Compatibility
 
-Several ws versions run on one machine at once: Claude, Codex, and Pi each
+Several ws versions run on one machine at once: Claude and Codex each
 install their own plugin copy and update on their own schedule. Decide a
 change's compatibility tier during discussion and record it in the ticket's
 `## Decisions`; release confirms that decision against the implementation.
@@ -25,9 +25,7 @@ change's compatibility tier during discussion and record it in the ticket's
   daemon-process-only source override.
 - **Connection guards are strict today.** The hello accepts only its exact
   protocol and, when supplied, the daemon's major.minor
-  (`wsdashboard/proxy.go:232–254`). Pi additionally requires the server to be
-  at least its bundled version in that minor
-  (`agents-plugin-pi/src/version-check.ts:39–57`). Since 0.50 a minor
+  (`wsdashboard/proxy.go`). Since 0.50 a minor
   mismatch does not create a second server: when any starter (dev rebuild,
   upgraded plugin, Werkschaft) replaces the daemon with a newer minor,
   previous-minor sessions fail their calls until the updated plugin's session
@@ -38,8 +36,7 @@ change's compatibility tier during discussion and record it in the ticket's
   `DaemonNewerMinor`).
 - **Reconnect is not compatibility negotiation.** The launcher replays
   initialization, not sent requests or tool discovery
-  (`agents-plugin/bin/ws-mcp-launcher.py:1473–1481,1656–1683`). Pi discovers
-  tools at initialization (`agents-plugin-pi/src/bridge.ts:1072–1079`).
+  (`agents-plugin/bin/ws-mcp-launcher.py`, `StdioProxy`).
 - **Store behavior is per writer.** Some writers preserve unknown raw fields;
   others serialize a fixed struct and lose them. Some readers/writers refuse
   newer schemas. The scenario sheet audits examples; a schema field alone
@@ -102,8 +99,8 @@ the new version, not reconnecting the transport.
 
 | # | Situation and direction | Reads/writes and reopen result | Grade and evidence |
 |---|---|---|---|
-| 1 | Pi updates a patch; Claude uses old skill text against the new daemon | The old caller sends legacy tool/argument names; the new dispatcher reads them. No store write occurs on precheck/unknown-tool refusal; reopen cannot restore a removed call. Compatible additions keep the legacy handlers' behavior | T0 for compatible additions; T3 for removal without alias. `mcp/server_dispatch.go:1662`, `mcp/tool_arguments.go:65–128` |
-| 2 | Claude updates a patch; Pi is older in the same minor | Pi reads the new daemon's version and tool list, then sends old calls to it. The version pin permits this direction; data/reopen consequences remain those of the called handlers in row 1 | T0 with compatible old calls; T3 with removals. `agents-plugin-pi/src/version-check.ts:39–57`, `agents-plugin-pi/src/bridge.ts:1072–1079`, row 1 |
+| 1 | A plugin updates a patch; another session uses old skill text against the new daemon | The old caller sends legacy tool or argument names and the new dispatcher checks them. A precheck or unknown-tool refusal writes nothing. Reopening cannot restore a removed call | T0 when the old call still works. T3 for removal without a working alias. `mcp/server_dispatch.go`, `mcp/tool_arguments.go` |
+| 2 | A 0.51 Pi caller meets the 0.52 retirement boundary | The daemon rejects the older minor at hello. A compatible-version caller can still invoke the hidden `pi.*` names through 0.52. Authorized `pi.list` and `pi.transcript` read retained data. Execution calls refuse before a write. An installed 0.51 package can still read the original data when run with its matching daemon | T3 for the minor boundary and execution refusals. History stays readable. `wsdashboard/proxy.go`, `mcp/pi_tools.go`, `wsagent/runner_startup.go` |
 | 3 | Another harness replaces the daemon mid-session | The launcher forwards old requests to the successor; already-sent calls fail with unknown outcome and are not replayed. A handler may already have written data, so reconnect proves no rollback or reopen recovery. Discovery refresh alone says nothing about those writes | No standalone tier for replacement: grade each call/store path. Compatible discovery can be T0/T1 only under the mapping above; removed calls are T3. `agents-plugin/bin/ws-mcp-launcher.py:1473–1481,1642–1683`, row 1 |
 | 4 | Old plugin connects across a minor/protocol boundary | The daemon reads its hello and refuses before handing it to the session handler. No session/store write on this path; reopening stored data is not a remedy for connection refusal | T3. `wsdashboard/proxy.go:232–254` |
 | 4a | A newer-minor starter (dev rebuild, upgraded plugin, Werkschaft) replaces a previous-minor daemon | Ensure drains any older numeric core, never a newer one. The previous-minor launcher then finds a healthy newer-minor daemon. It sends no hello, writes nothing, and starts nothing. From 0.50.6 it errors each MCP request at once, logs once, and exits a CLI call non-zero at once; it reconnects if a same-minor daemon returns. Reopen does not apply: no data is touched | T0 behaviour over the row 4 boundary; recovery is the updated plugin plus a session restart. `wsdashboard/ensure.go:210–217`, `desktop-electron/daemon-controller.js:95–98`, `agents-plugin/bin/ws-mcp-launcher.py:1530,1773–1776,1831–1843,1904–1905,1988–1990,2003,2116–2118` |
@@ -157,8 +154,8 @@ this sheet.
    startup just to obtain a version.
 5. **A daemon replacement refreshes the tool list.** The planned mechanism
    sends `tools/list_changed` first, with forced reconnect where a host ignores
-   it: widen the Claude mod watchdog to version/content changes and re-fetch
-   Pi's tool list on reconnect. Refresh does not repair incompatible old calls.
+   it. The planned Claude mod watchdog also reacts to version and content
+   changes. Legacy calls still need a compatible handler.
 
 ## Enforcement State
 

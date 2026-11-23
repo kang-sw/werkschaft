@@ -46,22 +46,16 @@ def package_input_paths(repo):
     result = {}
     for product, folder in PACKAGES.items():
         root = repo / folder
-        for name in FILES + (("bin/ws-pi-payload.py",) if product == "ws" else ()):
+        for name in FILES:
             path = root / name
             # Do not follow links even in explicitly selected paths.
             if any((repo / Path(*path.relative_to(repo).parts[:i])).is_symlink()
                    for i in range(1, len(path.relative_to(repo).parts) + 1)) or not path.is_file():
                 raise ValueError(f"missing regular input file: {path}")
             result[f"{product}/{name}"] = path
-        for tree in TREES + (("native-pi",) if product == "ws" else ()):
+        for tree in TREES:
             for path in tree_files(root / tree):
                 result[f"{product}/{path.relative_to(root).as_posix()}"] = path
-    pi = repo / "agents-plugin-pi/config-manifest.json"
-    if any((repo / Path(*pi.relative_to(repo).parts[:i])).is_symlink()
-           for i in range(1, len(pi.relative_to(repo).parts) + 1)) or not pi.is_file():
-        raise ValueError(f"missing regular input file: {pi}")
-    for product in PACKAGES:
-        result[f"{product}/pi-config-manifest.json"] = pi
     return result
 
 

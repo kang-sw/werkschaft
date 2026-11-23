@@ -457,22 +457,19 @@ fi
 # Defined early so settings.json and known_marketplaces.json can reference it.
 PLUGIN_CACHE="$HOME/.claude/plugins/ws-plugin"
 
-# Validate producer-owned inputs before touching a usable snapshot or registering it.
+# Stage the complete snapshot before replacing the installed copy.
 info "Syncing ws plugin snapshot to $PLUGIN_CACHE/ws/..."
 python3 - "$REPO_DIR" "$PLUGIN_CACHE" <<'SNAPSHOTEOF'
-import json, os, shutil, subprocess, sys, tempfile
+import json, shutil, sys, tempfile
 from pathlib import Path
 
 repo, cache = map(Path, sys.argv[1:])
 source = repo / "agents-plugin"
-helper = source / "bin/ws-pi-payload.py"
-subprocess.run([sys.executable, str(helper), "--plugin", str(source), "--check-source", str(repo), "--allow-stale-source"], check=True)
 cache.parent.mkdir(parents=True, exist_ok=True)
 stage = Path(tempfile.mkdtemp(prefix=".ws-snapshot-", dir=cache.parent))
 backup = stage / "previous"
 try:
     shutil.copytree(source, stage / "ws")
-    subprocess.run([sys.executable, str(stage / "ws/bin/ws-pi-payload.py"), "--plugin", str(stage / "ws")], check=True)
     plugin = json.loads((stage / "ws/.claude-plugin/plugin.json").read_text())
     marketplace = {
         "name": "kang-sw-devenv",

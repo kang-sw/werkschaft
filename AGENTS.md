@@ -63,7 +63,6 @@ Deliverables stay grouped by package:
 - `agents-plugin/` - the `ws` plugin.
 - `agents-plugin-wsflow/` - the `wsflow` package: the same product with
   conservative per-package config defaults.
-- `agents-plugin-pi/` - the Pi harness package.
 - `agents-plugin-tool/` - native tooling and MCP source tree.
 
 Do not add loose root-level `cmd/`, `internal/`, `scripts/`, or language module
@@ -191,7 +190,7 @@ proceed fact normalizes to `n/a`.
 | `agents-plugin-tool/internal/mcp/` | `ai-docs/manuals/ws-mcp.md` |
 | `agents-plugin-tool/internal/` | `ai-docs/manuals/release-compatibility.md` |
 | `agents-plugin-tool/` | `ai-docs/manuals/performance.md` |
-| `agents-plugin-tool/internal/mcp/config_registry.go`, `agents-plugin/config-manifest.json`, `agents-plugin/agy-config-manifest.json`, `agents-plugin/dashboard-config-manifest.json`, `agents-plugin-pi/config-manifest.json`, `agents-plugin-tool/internal/wsdashboard/config_routes.go`, `agents-plugin-tool/internal/wsdashboard/config_proposals.go`, `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*` | `ai-docs/manuals/config-settings-ui.md` |
+| `agents-plugin-tool/internal/mcp/config_registry.go`, `agents-plugin/config-manifest.json`, `agents-plugin/agy-config-manifest.json`, `agents-plugin/dashboard-config-manifest.json`, `agents-plugin-tool/internal/wsdashboard/config_routes.go`, `agents-plugin-tool/internal/wsdashboard/config_proposals.go`, `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*` | `ai-docs/manuals/config-settings-ui.md` |
 
 Each row's manual is read before editing a file its `paths` cover. This is a
 live obligation, not a pointer list: the worker playbook reads every matching

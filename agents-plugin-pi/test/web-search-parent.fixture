@@ -1,2 +1,0 @@
-const { createWebSearch } = await import(process.argv[2]);
-await createWebSearch().execute({ query: 'parent lifetime' });
