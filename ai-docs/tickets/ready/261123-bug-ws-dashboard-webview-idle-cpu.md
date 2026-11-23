@@ -350,6 +350,70 @@ lands on top of Phase 1 shows
 
 Deferred: protocol/payload changes (out of T0).
 
+### Result (9589e6261) - 2026-11-23
+
+Landed (static analysis plus a counting Node test; no trace was possible on this
+PC, see Pending):
+
+- `stream-view.js`: `snapshot()` now memoizes `rendered(node)` (`checkVisibility`)
+  per pass and exposes it; the `watch` rAF frame reads through one snapshot
+  (visibility and scroller walk once per node/ancestor); new `own(scrollers)`
+  creates scroll owners (the `overflow-anchor` writes) together; `keep()` accepts
+  a pre-resolved `{scroller}` and skips `scrollerOf`. `stream-panels.js` exports
+  `own` on `wbHistory`.
+- `dashboard-board.js`: `boardKeep` (the board swap's scroll capture) is two
+  phases: reads (rendered + scroller per node via the snapshot), then `own()`,
+  then one `keep` per scroller. `boardExposed`/`boardScroller` use the
+  snapshot's memoized `rendered` when a snapshot is open. Fallbacks keep older
+  `wbHistory` fakes working (no `own`, no `snapshot.rendered`).
+- Test `wsdashboard/frontend-stream-message.test.js` (fake layout engine: a DOM
+  write dirties it, a read while dirty is one forced layout). Fixture: 6
+  scrollers x 8 nodes after one swap write. Pre-change (new test run against the
+  unmodified handler first): cold 7 flushes / 156 probes, warm 1 / 156. Now: cold
+  2 / 132, warm 1 / 132 (warm 1 is the swap's own write, unavoidable). A second
+  test pins parity: one capture per scroller, non-rendered nodes skipped, owners
+  before the first capture, fallback without `own`.
+- Verification: `node --test frontend-stream-message.test.js frontend-history.test.js
+  testdata/board-exposure.test.cjs testdata/session-view-anchors.test.cjs`: 11/11
+  pass. Wider `node --test frontend-*.test.js testdata/*.test.cjs`: 27 failures
+  after versus 31 at the base copy; every post-change failure also fails at base
+  (the failing-name diff only removes entries), none introduced. No Go run (no Go
+  surface touched; the Go tests that load these assets via `historyKit` mocks are
+  unchanged and not run).
+- Lite review: no Critical/Important. Minor findings applied: tightened test
+  thresholds, added the parity test and a `boardWithSnap` comment that a snapshot
+  also freezes `rendered()` for the pass. Not done: the review's suggested
+  stale-snapshot test, and a check of `boardExposureUnits`/`boardViewedPanels`
+  for DOM writes inside a snapshot pass (read as write-free by the reviewer).
+
+Not done / decisions:
+
+- Goal "replace whole-tree `innerHTML` rebuilds with a keyed patch": not changed.
+  The tree/panels/entries/board regions already merge keyed rows
+  (`mergeTreeRows`, `mergePanelRows`, the board morph); the `innerHTML` fallback
+  runs only when the merge declines. Statically I found no per-idle-message
+  rebuild to replace, so the 79 ms `innerHTML` leaf is left for the trace.
+- Goal "identify the event type behind the 394 ms message": not statically
+  decidable. The handler dispatches `region`, `board-topics`, `rail-rows`,
+  `tree-rows`, `entry-rows`, `panel-rows`, `tracker`, `execjobs`, ... all into
+  `receiveRegion`/`swap`; the layout-forcing reads are in `swap`'s board path
+  (`boardRead`, `boardSpots`, `boardKeep`, `captureBoardHistory`), so a board
+  event is the likeliest, unconfirmed. Needs the owner's trace (event names in
+  the `ws.onmessage` call tree).
+- `getClientRects` visibility callers (`visible()` in `dashboard.js`,
+  lifecycle, composer, exec HUD, cards, files) are left as is: they are outside
+  the `ws.onmessage` call tree in the baseline.
+- Out of scope per the lead: the xterm width-measure storm (separate ticket).
+
+Pending (owner capture after the next daemon restart): the (1412) trace bar. An
+idle trace on top of Phase 1 + this change, recording the Phase 1 trace's
+`ws.onmessage` total first, must show total at least 50% below the 680 ms/25-call
+baseline and no call over 100 ms. The newest trace (2026-11-23 10:58, taken
+before this change) still shows `ws.onmessage` bursts plus `rendered`/`scrollerOf`/
+`checkVisibility` at about 4 s per 50 s. If the bar is missed, the likely next
+step is attributing the event type and batching `boardRead`/`boardSpots`/
+`captureBoardHistory` reads in `swap`.
+
 ## Verification
 
 Phase 1 (checks 1-4):

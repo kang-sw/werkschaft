@@ -75,8 +75,8 @@
         watchFrame = true;
         win.requestAnimationFrame(function () {
           watchFrame = false;
-          var scrollers = new Set();
-          watchNodes.forEach(function (n) { if (rendered(n)) scrollers.add(scrollerOf(n)); });
+          var scrollers = new Set(), snap = snapshot();
+          watchNodes.forEach(function (n) { if (snap.rendered(n)) scrollers.add(snap.scroller(n)); });
           watchNodes.clear();
           scrollers.forEach(owner);
         });
@@ -285,7 +285,7 @@
     function idle(scroller) { var o = owner(scroller); return o.ready() && !sessions.get(scroller) && !o.pin; }
     function keep(node, opt) {
       opt = opt || {};
-      var scroller = scrollerOf(node), o = owner(scroller), s = sessions.get(scroller);
+      var scroller = opt.scroller || scrollerOf(node), o = owner(scroller), s = sessions.get(scroller);
       var inspect = { scroller: scroller, visible: function (n) { return exposed(n, scroller); }, viewport: function () { return viewport(scroller); }, apply: function () {}, end: function () {} };
       if (opt.capture === false) return inspect;
       if (s && s.follow) return s.handle;
@@ -460,6 +460,9 @@
       sessions.set(scroller, s);
       return s;
     }
+    // own(scrollers) creates the scroll owners together (each one writes
+    // overflow-anchor), so a capture's reads that follow share one layout.
+    function own(list) { list.forEach(owner); }
     function keeping(scroller) { var s = sessions.get(scroller); return s ? s.handle : null; }
     // snapshot() is a read-only exposure view for one synchronous pass with
     // no DOM write inside it: each scroller's viewport and each ancestor's
@@ -481,16 +484,22 @@
         chain.forEach(function (c) { under.set(c, found); });
         return found;
       }
+      // rendered() reads style (checkVisibility): once per node per pass.
+      var shown = new Map();
+      function cachedRendered(node) {
+        if (!shown.has(node)) shown.set(node, rendered(node));
+        return shown.get(node);
+      }
       function visible(node) {
         if (visibility.has(node)) return visibility.get(node);
-        if (!rendered(node)) { visibility.set(node, false); return false; }
+        if (!cachedRendered(node)) { visibility.set(node, false); return false; }
         var s = scroller(node), v = views.get(s);
         if (!v) { v = viewport(s, read); views.set(s, v); }
         var result = exposed(node, s, v, read);
         visibility.set(node, result);
         return result;
       }
-      return { scroller: scroller, visible: visible };
+      return { scroller: scroller, visible: visible, rendered: cachedRendered };
     }
-    return { watch: watch, unwatch: unwatch, sweep: sweep, seen: seen, keep: keep, pin: pin, pinning: pinning, idle: idle, place: place, keeping: keeping, jump: jump, bands: bands, snapshot: snapshot, rendered: rendered };
+    return { watch: watch, unwatch: unwatch, sweep: sweep, seen: seen, keep: keep, pin: pin, pinning: pinning, idle: idle, place: place, keeping: keeping, jump: jump, bands: bands, snapshot: snapshot, rendered: rendered, own: own };
   }
