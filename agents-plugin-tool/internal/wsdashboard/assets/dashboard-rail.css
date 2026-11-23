@@ -196,9 +196,10 @@
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]) { position: relative; z-index: auto; top: auto; bottom: auto; right: auto; width: auto; grid-column: 3; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }
   :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }
-  /* Overview Quick Look (wide >=1600px, !tabs): open column 3 both when pages
-     are docked and when 0 pages are docked; keep docked .gal-viewport mounted
-     offscreen via transform (never display:none) so docked xterm/iframes live. */
+  /* Overview Quick Look (Band 4: WsCards.isFourCol(), !tabs && vw >= 1600 &&
+     canFitFourCol): open column 3 both when pages are docked and when 0 pages
+     are docked; keep docked .gal-viewport mounted offscreen via transform
+     (never display:none) so docked xterm/iframes live. */
   :root[data-overview-preview] .dwrap:not(.narrow),
   :root[data-overview-preview] .dgrid.board { max-width: none; margin: 0; }
   :root[data-overview-preview] .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 852px)), 100% - 652px)) minmax(280px, 1fr); }

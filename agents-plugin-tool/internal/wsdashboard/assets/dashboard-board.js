@@ -637,7 +637,7 @@
     if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
     if (hadOverviewLive) target.setAttribute("data-overview-live", "");
     if (hadOverviewHere) target.classList.add("overview-here");
-    indexFrames();
+    indexFrames(target);
     if (window.wbForm) window.wbForm();
     mermaid([target]);
     applySent(true);

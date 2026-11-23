@@ -18,6 +18,7 @@
 //      virtualDescribeNode work with zero virtualStore prunes.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
@@ -86,21 +87,37 @@ function buildTopicHtml(i, opts = {}) {
       </div></div>`
     : '';
 
-  const lazyAttr = opts.lazyFetch ? ' data-lazy="1"' : '';
-  const lazyPayload = opts.lazyFetch
-    ? '<template data-history-gap="gap-' + i + '"></template>'
-    : `<template data-history-gap="gap-${i}">
+  const lazyAttr = opts.lazyFetch ? ' data-lazy' : '';
+  const gap1Payload = opts.lazyFetch
+    ? '<template data-history-gap></template>'
+    : `<template data-history-gap>
         <div class="timeline-row" data-row="t${i}-r0">
-          <article class="wb-entry" id="e${i}00" data-entry="e${i}00"><span class="entry-text">ArchivedGapEntry-${i}</span></article>
+          <article class="wb-entry" id="e${i}00" data-entry="e${i}00"><span class="entry-text">ArchivedGap1Phrase-${i}</span></article>
         </div>
       </template>`;
+  const gap2Block = opts.twoGaps
+    ? `<div class="timeline-row" data-row="t${i}-r1">
+        <article class="wb-entry" id="e${i}01" data-entry="e${i}01"><span class="entry-text">LiveMiddleRow-${i}</span></article>
+      </div>
+      <div class="history-gap"${lazyAttr} data-count="1" data-from="200" data-to="200">
+        <span class="gap-label">⋯ 1</span><span class="gap-range"></span><span class="gap-actions"><button type="button" data-load="down" hidden></button></span>
+        ${opts.lazyFetch
+          ? '<template data-history-gap></template>'
+          : `<template data-history-gap>
+              <div class="timeline-row" data-row="t${i}-r3">
+                <article class="wb-entry" id="e${i}04" data-entry="e${i}04"><span class="entry-text">ArchivedGap2Phrase-${i}</span></article>
+              </div>
+            </template>`}
+      </div>`
+    : '';
 
   const historyBlock = `<div class="topic-stream"><div class="wb-history" data-history="${tid}">
     <div class="history-live">
-      <div class="history-gap"${lazyAttr} data-gap-id="gap-${i}" data-count="1">
-        <span class="gap-label">⋯ 1</span><span class="gap-range"></span><button type="button" data-load="down" hidden></button>
-        ${lazyPayload}
+      <div class="history-gap"${lazyAttr} data-count="1" data-from="100" data-to="100">
+        <span class="gap-label">⋯ 1</span><span class="gap-range"></span><span class="gap-actions"><button type="button" data-load="down" hidden></button></span>
+        ${gap1Payload}
       </div>
+      ${gap2Block}
       <div class="timeline-row" data-row="t${i}-r2">
         <article class="wb-entry" id="e${i}02" data-entry="e${i}02"><span class="entry-text">${streamNote}</span></article>
       </div>
@@ -138,7 +155,7 @@ function buildFixtureHtml(topicCount = 14) {
   const sprite = readAsset(WSW, 'sprite.svg');
   const topics = [];
   for (let i = 1; i <= topicCount; i++) {
-    topics.push(buildTopicHtml(i, { withAsk: i === 1, lazyFetch: i === 13 }));
+    topics.push(buildTopicHtml(i, { withAsk: i === 1, lazyFetch: i === 13, twoGaps: i === 13 }));
   }
 
   return `<!doctype html>
@@ -325,6 +342,7 @@ function buildBootstrapScript(savedCards) {
       window.__testApi = {
         swapBoard: function (hash, html) { swap("board", hash, html, true); },
         paletteRows: paletteRows,
+        paletteHistory: paletteHistory,
         palettePick: palettePick,
         effectJump: effectJump,
         hasOverviewHeld: function () { return !!boardOverviewHeld; },
@@ -460,7 +478,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.equal(liveRes.activeId, 'e1202', 'exact stream entry focused');
 
     // Navigate back to Topic 1 so Topic 13 is collapsed again, and mock wbHistoryFetch for lazy topic 13.
-    const fullTopic13Html = buildTopicHtml(13, { lazyFetch: false });
+    const fullTopic13Html = buildTopicHtml(13, { lazyFetch: false, twoGaps: true });
     const lazyRes = await page.evaluate(([t1, t13, html13]) => {
       window.WsBoardAnchor.select(document.getElementById(t1), { smooth: false });
       const wasCollapsed = document.getElementById(t13).hasAttribute('data-wb-virtual');
@@ -547,6 +565,163 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.deepEqual(errors, []);
   });
 
+  await t.test('0.51.3 Important #1 (strategy-driller-graceless): detached two-gap lazy-history search matches production markup, recovers after failed fetch, returns distinct gap 1 & gap 2 hits, and lands accurately on gap 2', async () => {
+    const { ctx, page, errors } = await openHarness(browser, { topicCount: 14 });
+    t.after(async () => { await ctx.close(); });
+
+    const fullTopic13Html = buildTopicHtml(13, { lazyFetch: false, twoGaps: true });
+    const t13 = topicHexId(13);
+
+    // 1. Confirm collapsed Topic 13 has two production-shaped lazy gaps (data-count/data-from/data-to, NO data-gap-id).
+    const beforeState = await page.evaluate((tid) => {
+      const sec = document.getElementById(tid);
+      const roots = window.WsBoardVirtual.searchRoots(tid);
+      const gaps = [];
+      roots.forEach(r => r.querySelectorAll('.history-gap[data-lazy]').forEach(g => gaps.push({
+        hasGapId: g.hasAttribute('data-gap-id'),
+        count: g.getAttribute('data-count'),
+        from: g.getAttribute('data-from'),
+        to: g.getAttribute('data-to'),
+      })));
+      return { collapsed: sec.hasAttribute('data-wb-virtual'), gaps };
+    }, t13);
+    assert.equal(beforeState.collapsed, true, 'topic 13 starts collapsed');
+    assert.equal(beforeState.gaps.length, 2, 'topic 13 has two detached lazy gaps');
+    assert.equal(beforeState.gaps[0].hasGapId, false, 'production markup has no data-gap-id');
+    assert.equal(beforeState.gaps[1].hasGapId, false, 'production markup has no data-gap-id');
+    assert.equal(beforeState.gaps[0].from, '100');
+    assert.equal(beforeState.gaps[1].from, '200');
+
+    // 2. First fetch rejects -> verify data-lazy is NOT stripped and retry is NOT poisoned.
+    const afterFail = await page.evaluate((tid) => {
+      let attempts = 0;
+      window.__failFetchCount = 0;
+      window.wbHistoryFetch = function () {
+        attempts++;
+        window.__failFetchCount = attempts;
+        return Promise.reject(new Error('simulated transient network error'));
+      };
+      return new Promise((resolve) => {
+        let updated = false;
+        window.__testApi.paletteHistory(() => { updated = true; });
+        setTimeout(() => {
+          const roots = window.WsBoardVirtual.searchRoots(tid);
+          let lazyLeft = 0;
+          roots.forEach(r => { lazyLeft += r.querySelectorAll('.history-gap[data-lazy]').length; });
+          resolve({
+            attempts: window.__failFetchCount,
+            updated,
+            lazyLeft,
+            collapsed: document.getElementById(tid).hasAttribute('data-wb-virtual'),
+          });
+        }, 60);
+      });
+    }, t13);
+    assert.equal(afterFail.attempts, 1, 'initial fetch attempted once');
+    assert.equal(afterFail.updated, false, 'failed fetch does not fire palette update');
+    assert.equal(afterFail.lazyLeft, 2, 'failed fetch must NOT strip data-lazy from detached gaps');
+    assert.equal(afterFail.collapsed, true, 'topic 13 remains collapsed after failed fetch');
+
+    // 3. Retry succeeds -> verify distinct hits in BOTH gap 1 and gap 2 without duplicating gap 1 into gap 2.
+    const afterRetry = await page.evaluate(([tid, html13]) => {
+      let retryCalls = 0;
+      window.wbHistoryFetch = function (names) {
+        retryCalls++;
+        return Promise.resolve([{ name: tid, html: html13 }]);
+      };
+      return new Promise((resolve) => {
+        window.__testApi.paletteHistory((rows) => {
+          const t13Rows = rows.filter(r => r.topic === tid && r.kind === 'board-entry');
+          const gap1 = t13Rows.find(r => r.entry === 'e1300');
+          const gap2 = t13Rows.find(r => r.entry === 'e1304');
+          const roots = window.WsBoardVirtual.searchRoots(tid);
+          let lazyLeft = 0;
+          roots.forEach(r => { lazyLeft += r.querySelectorAll('.history-gap[data-lazy]').length; });
+          window.__gap2Match = gap2 || null;
+          window.__gap1Match = gap1 || null;
+          resolve({
+            retryCalls,
+            lazyLeft,
+            collapsed: document.getElementById(tid).hasAttribute('data-wb-virtual'),
+            gap1Title: gap1 ? gap1.title : '',
+            gap2Title: gap2 ? gap2.title : '',
+            gap1Count: t13Rows.filter(r => r.title.includes('ArchivedGap1Phrase-13')).length,
+            gap2Count: t13Rows.filter(r => r.title.includes('ArchivedGap2Phrase-13')).length,
+          });
+        });
+      });
+    }, [t13, fullTopic13Html]);
+
+    assert.equal(afterRetry.retryCalls, 1, 'retry fetch executed cleanly after prior failure');
+    assert.equal(afterRetry.lazyLeft, 0, 'both detached lazy gaps hydrated on retry');
+    assert.equal(afterRetry.collapsed, true, 'detached lazy-history search must NOT hydrate live DOM');
+    assert.ok(afterRetry.gap1Title.includes('ArchivedGap1Phrase-13'), `gap 1 hit present, got "${afterRetry.gap1Title}"`);
+    assert.ok(afterRetry.gap2Title.includes('ArchivedGap2Phrase-13'), `gap 2 hit present, got "${afterRetry.gap2Title}"`);
+    assert.equal(afterRetry.gap1Count, 1, 'gap 1 entry appears exactly once (not duplicated into gap 2)');
+    assert.equal(afterRetry.gap2Count, 1, 'gap 2 entry appears exactly once');
+
+    if (process.env.WS_LOOK_SHOTS) {
+      const shotDir = path.join(os.tmpdir(), 'snap-deck-0513-followups-shots');
+      fs.mkdirSync(shotDir, { recursive: true });
+      await page.evaluate(() => {
+        const g1 = window.__gap1Match, g2 = window.__gap2Match;
+        const overlay = document.createElement('div');
+        overlay.id = '__shot_palette';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);display:flex;align-items:flex-start;justify-content:center;padding-top:72px;z-index:9999;';
+        overlay.innerHTML = `<div style="width:640px;background:#1e293b;border:1px solid #475569;border-radius:10px;box-shadow:0 20px 50px rgba(0,0,0,0.45);overflow:hidden;color:#f8fafc;font:13px/1.5 system-ui,sans-serif;">
+          <div style="padding:12px 16px;border-bottom:1px solid #334155;font-weight:600;">Search Board: <span style="color:#38bdf8;">ArchivedGap</span> (detached 2-gap lazy history after retry)</div>
+          <div style="padding:8px;">
+            <div style="padding:8px 12px;border-radius:6px;margin-bottom:4px;background:#0f172a;">
+              <div style="font-size:11px;color:#94a3b8;">Topic 13 · Gap 1 (data-from=100, data-to=100) · entry ${g1.entry}</div>
+              <div style="color:#e2e8f0;">${g1.title}</div>
+            </div>
+            <div style="padding:8px 12px;border-radius:6px;background:#1d4ed8;">
+              <div style="font-size:11px;color:#bfdbfe;">Topic 13 · Gap 2 (data-from=200, data-to=200) · entry ${g2.entry} [selected]</div>
+              <div style="color:#ffffff;font-weight:600;">${g2.title}</div>
+            </div>
+          </div>
+        </div>`;
+        document.body.appendChild(overlay);
+      });
+      await page.screenshot({ path: path.join(shotDir, '01-detached-two-gap-search-palette.png') });
+      await page.evaluate(() => {
+        const el = document.getElementById('__shot_palette');
+        if (el) el.remove();
+      });
+    }
+
+    // 4. Selecting the gap-2 hit hydrates Topic 13, materializes gap 2 into live DOM, and focuses e1304 accurately.
+    const afterPick = await page.evaluate((tid) => {
+      const match = window.__gap2Match;
+      window.__testApi.palettePick(match, {});
+      const sec = document.getElementById(tid);
+      const target = document.getElementById('e1304');
+      return {
+        collapsedAfterPick: sec.hasAttribute('data-wb-virtual'),
+        inLive: !!(target && target.closest('.history-live')),
+        activeId: document.activeElement ? document.activeElement.id : '',
+        entryText: target ? target.textContent : '',
+      };
+    }, t13);
+    assert.equal(afterPick.collapsedAfterPick, false, 'selecting gap-2 hit hydrates collapsed topic 13');
+    assert.equal(afterPick.inLive, true, 'gap-2 entry materialized into .history-live');
+    assert.equal(afterPick.activeId, 'e1304', 'gap-2 entry focused accurately');
+    assert.ok(afterPick.entryText.includes('ArchivedGap2Phrase-13'), 'gap-2 entry text rendered');
+
+    // Also verify exact === true through loadTarget / effectJump for gap 2.
+    const exactCheck = await page.evaluate((tid) => new Promise((resolve) => {
+      window.__testApi.effectJump(tid, 'e1304', (found, exact) => resolve({ found, exact }));
+    }), t13);
+    assert.equal(exactCheck.found, true);
+    assert.equal(exactCheck.exact, true, 'gap-2 target lands with exact === true');
+
+    if (process.env.WS_LOOK_SHOTS) {
+      await page.waitForTimeout(80);
+      await page.screenshot({ path: path.join(os.tmpdir(), 'snap-deck-0513-followups-shots', '02-detached-gap2-selected-landed.png') });
+    }
+    assert.deepEqual(errors, []);
+  });
+
   await t.test('Finding #11: switching Quick Look from Topic A to Topic B immediately applies boardOverviewHeld to Topic B', async () => {
     const { ctx, page, errors } = await openHarness(browser, { topicCount: 6 });
     t.after(async () => { await ctx.close(); });
@@ -626,5 +801,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.equal(s24.deltaReconciles, 6);
     assert.equal(s12.describes, s24.describes, `describes must be invariant across N=12 (${s12.describes}) and N=24 (${s24.describes})`);
     assert.ok(s24.describes <= 6, `expected <= 6 total describes across 6 steps, got ${s24.describes}`);
+    assert.equal(s12.slotVisits, s24.slotVisits, `slotVisits must be O(1) invariant across N=12 (${s12.slotVisits}) and N=24 (${s24.slotVisits})`);
+    assert.ok(s24.slotVisits > 0 && s24.slotVisits <= 80, `slotVisits must stay O(1)-bounded across 6 steps, got ${s24.slotVisits}`);
+    assert.equal(s12.frameIndexes, s24.frameIndexes, `frameIndexes must be O(1) invariant across N=12 (${s12.frameIndexes}) and N=24 (${s24.frameIndexes})`);
+    assert.ok(s24.frameIndexes <= 12, `frameIndexes must stay O(1)-bounded across 6 steps, got ${s24.frameIndexes}`);
   });
 });

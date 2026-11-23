@@ -148,7 +148,9 @@ function makeEl(tag, attrs = {}, children = []) {
 function makeTopic(name, opts = {}) {
   const head = makeEl('div', { class: 'tophead', 'data-rev': opts.rev || 'v1' });
   const body = makeEl('div', { class: 'tdoc', 'data-rev': opts.rev || 'v1' }, [
-    makeEl('div', { class: 'doc-body', _text: opts.bodyText || `Body of ${name}` }),
+    makeEl('div', { class: 'doc-body', _text: opts.bodyText || `Body of ${name}` }, [
+      makeEl('iframe', { class: 'doc-frame', 'data-doc-key': `topic:${name}` }),
+    ]),
   ]);
   const stream = makeEl('div', { class: 'topic-stream' }, [
     makeEl('article', { class: 'wb-entry', id: `e-${name}`, _text: opts.entryText || `Entry of ${name}` }),
@@ -199,7 +201,11 @@ function loadVirtualWorld(nodes = []) {
     bandBoard: () => {},
     fmtTimes: () => {},
     sweepOutImgs: () => {},
-    indexFrames: () => {},
+    indexFrames: (scope) => {
+      const root = scope && scope.querySelectorAll ? scope : board;
+      const frames = root.querySelectorAll('iframe.doc-frame');
+      if (ctx.virtualStats) ctx.virtualStats.frameIndexes += frames.length;
+    },
     mermaid: () => {},
     applySent: () => {},
     getComputedStyle: () => ({ overflowY: 'auto', paddingTop: '0' }),
@@ -250,6 +256,46 @@ test('Finding #12: steady-state anchorMark navigation is strictly O(1) across N=
   // steps 3, 4, 5 each have exactly 1 leaving slot (slot 0, slot 1, slot 2) => 3 total describes!
   assert.equal(s12.describes, 3, 'N=12 should inspect only the 3 leaving slots across 5 steps');
   assert.equal(s60.describes, 3, 'N=60 must perform the exact same O(1) describes as N=12');
+  assert.equal(s12.slotVisits, s60.slotVisits, `slotVisits must be O(1) invariant across N=12 (${s12.slotVisits}) and N=60 (${s60.slotVisits})`);
+  assert.ok(s60.slotVisits > 0 && s60.slotVisits <= 60, `slotVisits must stay O(1)-bounded across 5 steps, got ${s60.slotVisits}`);
+  assert.equal(s12.frameIndexes, s60.frameIndexes, `frameIndexes must be O(1) invariant across N=12 (${s12.frameIndexes}) and N=60 (${s60.frameIndexes})`);
+  assert.ok(s60.frameIndexes <= 5, `frameIndexes must only touch entering slots (<= 5), got ${s60.frameIndexes}`);
+});
+
+test('Finding #12: anchorDrainMutations invalidates synchronously on hide/filter/closed-page mutations, but ignores inner virtualCollapse/virtualHydrate', () => {
+  const closedTopic = makeTopic('closed1');
+  const closedPage = makeEl('div', { class: 'closed-page' }, [closedTopic]);
+  const nodes = [makeTopic('t0'), makeTopic('t1'), makeTopic('t2'), makeTopic('t3'), makeTopic('t4'), closedPage];
+  const { ctx, board } = loadVirtualWorld(nodes);
+  const pending = [];
+  ctx.anchorBoardMO = { takeRecords: () => pending.splice(0, pending.length) };
+
+  ctx.anchorMark(nodes[0]);
+  assert.equal(ctx.anchorCurrent(), nodes[0]);
+  const cacheBefore = ctx.anchorCache;
+
+  // Inner childList mutation inside section.topic (virtualCollapse / virtualHydrate) must NOT invalidate anchorCache.
+  pending.push({ type: 'childList', target: nodes[4] });
+  assert.equal(ctx.anchorCards(), cacheBefore.list, 'inner topic childList does not invalidate anchorCache');
+  assert.equal(ctx.anchorCache, cacheBefore, 'anchorCache identity preserved across inner topic mutations');
+
+  // Attribute mutation on a descendant inside section.topic must NOT invalidate anchorCache.
+  pending.push({ type: 'attributes', target: nodes[0].children[0] });
+  assert.equal(ctx.anchorCurrent(), nodes[0]);
+  assert.equal(ctx.anchorCache, cacheBefore, 'descendant attribute mutation does not invalidate anchorCache');
+
+  // Hiding or filtering anchorLast invalidates synchronously so anchorCurrent() returns null.
+  nodes[0].setAttribute('data-state-filtered', '');
+  pending.push({ type: 'attributes', target: nodes[0] });
+  assert.equal(ctx.anchorCurrent(), null, 'filtered anchorLast is synchronously dropped from anchorCurrent()');
+  assert.notEqual(ctx.anchorCache, cacheBefore, 'board-child attribute mutation invalidates anchorCache');
+
+  // Removing a topic inside .closed-page invalidates synchronously.
+  const cacheAfterFilter = ctx.anchorCache;
+  closedPage.removeChild(closedTopic);
+  pending.push({ type: 'childList', target: closedPage });
+  assert.equal(ctx.anchorCards().includes(closedTopic), false, 'removed .closed-page child dropped synchronously');
+  assert.notEqual(ctx.anchorCache, cacheAfterFilter, '.closed-page childList invalidates anchorCache');
 });
 
 test('Finding #12: virtualExemptSet tracks far exempt topics and collapses them once exemption clears, and virtualPrune removes dead keys', () => {

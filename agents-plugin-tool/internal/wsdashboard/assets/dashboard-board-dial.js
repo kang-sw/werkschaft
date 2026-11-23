@@ -8,7 +8,7 @@
   var DIAL_MAX = 18;
   var DIAL_SCRUB_STEP = 14;
   var dialEl = null, dialTrack = null, dialTip = null;
-  var dialCards = [], dialActive = -1, dialWinStart = 0, dialWinEnd = 0;
+  var dialCards = [], dialIndexByNode = new Map(), dialActive = -1, dialWinStart = 0, dialWinEnd = 0;
   var dialDots = [];
   var dialScrubbing = false, dialScrub = null, dialSwallowClick = false;
   var dialWheel = null, dialTipIdx = -1;
@@ -206,6 +206,8 @@
     var rootEl = doc.documentElement;
     var list = anchorCards();
     dialCards = list;
+    dialIndexByNode = new Map();
+    for (var di = 0; di < list.length; di++) dialIndexByNode.set(list[di], di);
     var show = !!(anchorSized.bounded && list.length > 1);
     if (show) {
       if (!dialEnsureMounted()) show = false;
@@ -241,7 +243,7 @@
   // the window in place when needed, without rebuilding DOM or querying topics.
   function boardDialMark(n) {
     if (!dialEl || dialEl.hidden || !dialCards.length) return;
-    var idx = n ? dialCards.indexOf(n) : -1;
+    var idx = n && dialIndexByNode.has(n) ? dialIndexByNode.get(n) : -1;
     if (idx < 0) {
       boardDialSync();
       return;

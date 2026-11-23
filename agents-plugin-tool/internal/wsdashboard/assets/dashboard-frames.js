@@ -52,6 +52,10 @@
     if (p.wbKeep) f.wbKeep = true;
     if (p.wbGrow) f.wbGrow = true;
     if (p.parentNode) p.parentNode.replaceChild(f, p);
+    if (f.contentWindow) {
+      frameWins.set(f.contentWindow, f);
+      if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
+    }
     return f;
   }
   function mountFrames(el) {
@@ -210,6 +214,7 @@
     Array.prototype.forEach.call(f.attributes, function (a) { if (a.name !== "srcdoc" && a.name !== "sandbox") p.setAttribute(a.name, a.value); });
     p.setAttribute("data-sandbox", f.getAttribute("sandbox") || "");
     if (frameSizes.has(f)) { p.style.height = Math.ceil(frameSizes.get(f)) + "px"; frameSizes.delete(f); }
+    if (f.contentWindow) frameWins.delete(f.contentWindow);
     if (f.parentNode) f.parentNode.replaceChild(p, f);
     if (kept) kept.apply();
     return p;
@@ -272,12 +277,23 @@
   // indexed again by every board swap and on any miss: a frame that moved
   // without Element.moveBefore (a pin, a reorder) took a new window, and a
   // message from a window that is no board frame finds none either way.
-  var frameWins = new Map();
-  function indexFrames() {
-    frameWins = new Map();
-    boardQ("iframe.doc-frame").forEach(function (f) { if (f.contentWindow) frameWins.set(f.contentWindow, f); });
+  var frameWins = new WeakMap();
+  function indexFrames(scope) {
+    if (scope && scope.nodeType === 1) {
+      q("iframe.doc-frame", scope).forEach(function (f) {
+        if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
+        if (f.contentWindow) frameWins.set(f.contentWindow, f);
+      });
+      return;
+    }
+    frameWins = new WeakMap();
+    boardQ("iframe.doc-frame").forEach(function (f) {
+      if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
+      if (f.contentWindow) frameWins.set(f.contentWindow, f);
+    });
   }
   function docFrame(win) {
+    if (!win || typeof win !== "object") return undefined;
     var f = frameWins.get(win);
     if (f && f.contentWindow === win && inBoard(f)) return f;
     indexFrames();

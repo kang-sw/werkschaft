@@ -12,7 +12,7 @@
   var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4;
   var ANCHOR_BOT_0 = 6, ANCHOR_BOT_1 = 27, ANCHOR_BOT_2 = 47, ANCHOR_CARD_GAP_EXTRA = 12;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
-  var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
+  var anchorLast = null, anchorRO = null, anchorMO = null, anchorBoardMO = null, anchorFaceEl = null, anchorReplyEl = null, anchorCache = null;
   var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
   var anchorProg = null, anchorProgSeq = 0, anchorGlideAnim = null, anchorWheelCtrl = null;
   var WHEEL_DEFAULTS = {
@@ -144,7 +144,7 @@
   var virtualInitialized = false;
   var virtualLastBounded = null;
   var virtualLastNearSlots = VIRTUAL_NEAR_DEFAULT;
-  var virtualStats = { describes: 0, prunes: 0, fullReconciles: 0, deltaReconciles: 0 };
+  var virtualStats = { describes: 0, prunes: 0, fullReconciles: 0, deltaReconciles: 0, slotVisits: 0, frameIndexes: 0 };
   var VIRTUAL_ASK_SEL = '.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])';
   var VIRTUAL_KEEP_ATTRS = {
     "data-wb-virtual": true, "data-current": true, "data-anchor-cap": true,
@@ -340,10 +340,10 @@
     if (!scrubbing && virtualNearSet.has(sec)) return true;
     var list = anchorCards();
     if (!list.length) return true;
-    var idx = list.indexOf(sec);
+    var idx = anchorCache && anchorCache.indexByNode.has(sec) ? anchorCache.indexByNode.get(sec) : list.indexOf(sec);
     if (idx < 0) return true;
     var cur = anchorCurrent() || list[0];
-    var curIdx = cur ? list.indexOf(cur) : 0;
+    var curIdx = cur && anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : (cur ? list.indexOf(cur) : 0);
     if (curIdx < 0) curIdx = 0;
     if (Math.abs(idx - curIdx) <= virtualNearSlots) return true;
     return virtualIsItemExempt(virtualDescribeNode(sec));
@@ -442,7 +442,7 @@
       else if (typeof mountFramesPaced === "function") mountFramesPaced(sec);
       if (rec.answers && typeof writeAnswers === "function") writeAnswers(sec, rec.answers);
       if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
-      if (typeof indexFrames === "function") indexFrames();
+      if (typeof indexFrames === "function") indexFrames(sec);
       if (window.wbForm) window.wbForm();
       if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
       if (typeof mermaid === "function") mermaid([sec]);
@@ -453,7 +453,7 @@
       if (typeof bandBoard === "function") bandBoard(sec);
       if (immediate && typeof mountFrames === "function") mountFrames(sec);
       else if (typeof mountFramesPaced === "function") mountFramesPaced(sec);
-      if (typeof indexFrames === "function") indexFrames();
+      if (typeof indexFrames === "function") indexFrames(sec);
     }
     if (rec.scrollTop) sec.scrollTop = rec.scrollTop;
     return true;
@@ -475,8 +475,8 @@
 
   function virtualNodeHasLazyGap(node) {
     if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
-    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy]")) return true;
-    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy]"));
+    if (node.nodeType === 1 && node.hasAttribute && node.hasAttribute("data-lazy")) return true;
+    return !!(node.querySelector && node.querySelector("[data-lazy]"));
   }
 
   function virtualFindTopic(key) {
@@ -542,8 +542,9 @@
     return [];
   }
 
-  function virtualHydrateLazySearch(fetchFn) {
-    if (typeof fetchFn !== "function" || !virtualStore.size) return Promise.resolve(0);
+  function virtualHydrateLazySearch() {
+    if (!virtualStore.size) return Promise.resolve(0);
+    if (!window.wbHistory || typeof window.wbHistory.hydrateDetached !== "function") return Promise.resolve(0);
     var names = [];
     virtualStore.forEach(function (rec, k) {
       if (rec.stashed && virtualNodeHasLazyGap(rec.stashed)) { names.push(k); return; }
@@ -554,54 +555,12 @@
       }
     });
     if (!names.length) return Promise.resolve(0);
-    var queries = [];
-    for (var qi = 0; qi < names.length; qi += 256) {
-      queries.push(names.slice(qi, qi + 256).map(function (n) { return "name=" + encodeURIComponent(n); }).join("&"));
-    }
-    return Promise.all(queries.map(fetchFn)).then(function (all) {
-      var list = [].concat.apply([], all);
-      var filled = 0;
-      list.forEach(function (t) {
-        if (!t || typeof t.name !== "string" || typeof t.html !== "string") return;
-        var rec = virtualStore.get(t.name);
-        if (!rec) return;
-        var parsed = doc.createElement("template");
-        parsed.innerHTML = t.html;
-        var full = parsed.content.querySelector("section.topic");
-        if (!full) return;
-        var roots = rec.stashed ? [rec.stashed] : (rec.children || []);
-        var fullGaps = {};
-        if (full.querySelectorAll) {
-          full.querySelectorAll(".history-gap[data-gap-id]").forEach(function (fg) {
-            fullGaps[fg.getAttribute("data-gap-id")] = fg;
-          });
-        }
-        var topicFilled = 0;
-        roots.forEach(function (r) {
-          if (!r || r.nodeType !== 1 || !r.querySelectorAll) return;
-          var gaps = r.matches && r.matches(".history-gap[data-lazy]") ? [r] : Array.prototype.slice.call(r.querySelectorAll(".history-gap[data-lazy]"));
-          gaps.forEach(function (g) {
-            var gid = g.getAttribute("data-gap-id");
-            var src = (gid && fullGaps[gid]) || full.querySelector(".history-gap");
-            if (!src) return;
-            var srcTpl = src.querySelector("template[data-history-gap], template[data-history-page]");
-            if (srcTpl) {
-              var oldTpl = g.querySelector("template[data-history-gap], template[data-history-page]");
-              if (oldTpl && oldTpl.parentNode) oldTpl.parentNode.replaceChild(srcTpl.cloneNode(true), oldTpl);
-              else g.appendChild(srcTpl.cloneNode(true));
-              g.removeAttribute("data-lazy");
-              topicFilled++;
-            }
-          });
-        });
-        if (topicFilled) filled += topicFilled;
-      });
-      return filled;
-    });
+    return window.wbHistory.hydrateDetached(virtualSearchRoots, names);
   }
 
   function virtualPrune(presentKeys) {
     virtualStats.prunes++;
+    anchorCache = null;
     virtualNearSet.forEach(function (n) { if (!n || !n.isConnected) virtualNearSet.delete(n); });
     virtualExemptSet.forEach(function (n) { if (!n || !n.isConnected) virtualExemptSet.delete(n); });
     if (!virtualStore.size) return 0;
@@ -620,7 +579,7 @@
           if (btk !== null) present.add(btk);
         }
       }
-      var list = anchorCards();
+      var list = anchorCards(true);
       for (var i = 0; i < list.length; i++) {
         var tk = topicKey(list[i]);
         if (tk !== null) present.add(tk);
@@ -643,12 +602,12 @@
   function virtualReconcile(opts) {
     var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing && !(opts && opts.force);
     if (scrubbing) return false;
-    var list = anchorCards();
-    var cur = anchorCurrent() || list[0] || null;
-    var activeIdx = cur ? list.indexOf(cur) : 0;
-    if (activeIdx < 0) activeIdx = 0;
     var bounded = !!anchorSized.bounded;
     var full = !!(opts && opts.full) || !virtualInitialized || virtualLastBounded !== bounded || virtualLastNearSlots !== virtualNearSlots;
+    var list = anchorCards(full);
+    var cur = anchorCurrent() || list[0] || null;
+    var activeIdx = cur && anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : (cur ? list.indexOf(cur) : 0);
+    if (activeIdx < 0) activeIdx = 0;
     var changed = false;
 
     if (!bounded) {
@@ -664,14 +623,16 @@
         });
       }
       if (opts && opts.full) virtualPrune();
-      if (changed && typeof indexFrames === "function") indexFrames();
       return changed;
     }
 
     var lo = list.length ? Math.max(0, activeIdx - virtualNearSlots) : 0;
     var hi = list.length ? Math.min(list.length - 1, activeIdx + virtualNearSlots) : -1;
     var nextNear = new Set();
-    for (var ni = lo; ni <= hi; ni++) nextNear.add(list[ni]);
+    for (var ni = lo; ni <= hi; ni++) {
+      virtualStats.slotVisits++;
+      nextNear.add(list[ni]);
+    }
 
     if (full) {
       virtualStats.fullReconciles++;
@@ -708,11 +669,13 @@
       virtualStats.deltaReconciles++;
       var candidates = [];
       virtualNearSet.forEach(function (prevNode) {
+        virtualStats.slotVisits++;
         if (!prevNode || !prevNode.isConnected || nextNear.has(prevNode)) return;
         if (prevNode.hasAttribute && prevNode.hasAttribute("data-wb-virtual")) return;
         candidates.push(prevNode);
       });
       Array.from(virtualExemptSet).forEach(function (exNode) {
+        virtualStats.slotVisits++;
         if (!exNode || !exNode.isConnected || nextNear.has(exNode)) {
           virtualExemptSet.delete(exNode);
           return;
@@ -754,7 +717,6 @@
       if (virtualHydrate(livePreview, { immediate: true })) changed = true;
     }
     if (opts && opts.prune) virtualPrune();
-    if (changed && typeof indexFrames === "function") indexFrames();
     return changed;
   }
 
@@ -775,7 +737,14 @@
     detachedNodes: virtualSearchRoots,
     hydrateLazySearch: virtualHydrateLazySearch,
     stats: function () { return Object.assign({}, virtualStats); },
-    resetStats: function () { virtualStats.describes = 0; virtualStats.prunes = 0; virtualStats.fullReconciles = 0; virtualStats.deltaReconciles = 0; },
+    resetStats: function () {
+      virtualStats.describes = 0;
+      virtualStats.prunes = 0;
+      virtualStats.fullReconciles = 0;
+      virtualStats.deltaReconciles = 0;
+      virtualStats.slotVisits = 0;
+      virtualStats.frameIndexes = 0;
+    },
     hasStashed: function (k) { var r = virtualStore.get(k); return !!(r && r.stashed); },
     collapsedCount: function () { return virtualStore.size; }
   };
@@ -836,6 +805,11 @@
   }
   function anchorCardCap(n, list) {
     if (!n || !(n.hasAttribute("data-topic") || n.hasAttribute("data-rail"))) return 0;
+    if (!list || (anchorCache && list === anchorCache.list)) {
+      anchorCards();
+      var idx = anchorCache.indexByNode.get(n);
+      if (idx !== undefined) return anchorCapH(Math.min(2, anchorCache.railBefore[idx]));
+    }
     var cards = list || anchorCards(), at = cards.indexOf(n), prev = 0;
     for (var i = 0; i < at; i++) if (cards[i].hasAttribute("data-topic") || cards[i].hasAttribute("data-rail")) prev++;
     return anchorCapH(Math.min(2, prev));
@@ -849,25 +823,69 @@
   }
   // The snap order: the board region's cards in board order, fetched closed
   // pages (nested in one another) in place, filtered ones left out. Docked
-  // topics stand in the gallery and have their own pages.
-  function anchorCards() {
-    var b = region("board"), out = [];
-    if (!b) return out;
-    (function walk(box) {
-      Array.prototype.forEach.call(box.children, function (n) {
-        if (n.classList.contains("closed-page")) walk(n);
-        else if (anchorId(n) !== null && !n.hidden && !n.hasAttribute("data-state-filtered")) out.push(n);
-      });
-    })(b);
+  // topics stand in the gallery and have their own pages. Maintained as a
+  // keyed cache rebuilt only on structural updates (settle, board mutations,
+  // full reconcile) so steady-state navigation stays strictly O(1).
+  function anchorRecordsAffectOrder(records) {
+    if (!records || !records.length) return false;
+    var b = region("board");
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i], t = r.target;
+      if (!t) continue;
+      if (r.type === "childList") {
+        if (t === b || (t.classList && t.classList.contains("closed-page"))) return true;
+      } else if (r.type === "attributes") {
+        var p = t.parentNode;
+        if (p && (p === b || (p.classList && p.classList.contains("closed-page")))) return true;
+      }
+    }
+    return false;
+  }
+  function anchorDrainMutations() {
+    if (anchorBoardMO && anchorBoardMO.takeRecords && anchorRecordsAffectOrder(anchorBoardMO.takeRecords())) {
+      anchorCache = null;
+    }
+  }
+  function anchorCards(rebuild) {
+    if (!rebuild && typeof anchorDrainMutations === "function") anchorDrainMutations();
+    if (!rebuild && anchorCache) return anchorCache.list;
+    var b = region("board"), out = [], byKey = new Map(), indexByNode = new Map(), railBefore = [], railCount = 0;
+    if (b) {
+      (function walk(box) {
+        Array.prototype.forEach.call(box.children, function (n) {
+          if (n.classList.contains("closed-page")) walk(n);
+          else {
+            var id = anchorId(n);
+            if (id !== null && !n.hidden && !n.hasAttribute("data-state-filtered")) {
+              if (typeof virtualStats !== "undefined") virtualStats.slotVisits++;
+              indexByNode.set(n, out.length);
+              byKey.set(id, n);
+              railBefore.push(railCount);
+              if (n.hasAttribute("data-topic") || n.hasAttribute("data-rail")) railCount++;
+              out.push(n);
+            }
+          }
+        });
+      })(b);
+    }
+    anchorCache = { list: out, byKey: byKey, indexByNode: indexByNode, railBefore: railBefore };
     return out;
   }
   function anchorNode(key) {
     if (key === null) return null;
-    var list = anchorCards();
-    for (var i = 0; i < list.length; i++) if (anchorId(list[i]) === key) return list[i];
-    return null;
+    anchorCards();
+    if (typeof virtualStats !== "undefined") virtualStats.slotVisits++;
+    return anchorCache.byKey.get(key) || null;
   }
-  function anchorCurrent() { return anchorNode(anchorKey); }
+  function anchorCurrent() {
+    if (anchorKey === null) return null;
+    if (typeof anchorDrainMutations === "function") anchorDrainMutations();
+    if (anchorLast && anchorCache && anchorCache.indexByNode.has(anchorLast) && anchorLast.isConnected !== false && !anchorLast.hidden && !anchorLast.hasAttribute("data-state-filtered") && anchorId(anchorLast) === anchorKey) {
+      if (typeof virtualStats !== "undefined") virtualStats.slotVisits++;
+      return anchorLast;
+    }
+    return anchorNode(anchorKey);
+  }
   function anchorStore() {
     try {
       if (anchorKey === null) window.sessionStorage.removeItem(ANCHOR_STORE);
@@ -936,7 +954,9 @@
       var calm = reducedMotion(), wantSmooth = !!(opt && opt.smooth && !calm);
       var glideDir = opt && opt.glide ? opt.glide : 0;
       if (anchorSized.bounded && !glideDir && wantSmooth && prevNode && prevNode !== n) {
-        var list = anchorCards(), fromIdx = list.indexOf(prevNode), toIdx = list.indexOf(n);
+        var list = anchorCards();
+        var fromIdx = anchorCache && anchorCache.indexByNode.has(prevNode) ? anchorCache.indexByNode.get(prevNode) : list.indexOf(prevNode);
+        var toIdx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
         if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) glideDir = toIdx > fromIdx ? 1 : -1;
       }
       var smooth = anchorSized.bounded ? false : wantSmooth;
@@ -955,7 +975,8 @@
   }
   // step selects the card after (d = 1) or before (d = -1) the current one.
   function anchorStep(d) {
-    var list = anchorCards(), at = list.indexOf(anchorCurrent());
+    var list = anchorCards(), cur = anchorCurrent();
+    var at = cur && anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : list.indexOf(cur);
     if (at < 0) { anchorSelect(list[d > 0 ? 0 : list.length - 1], { smooth: true }); return true; }
     var to = list[at + d];
     if (to) { anchorSelect(to, { smooth: true }); return true; }
@@ -1029,7 +1050,7 @@
     anchorLastNode = lastNode;
   }
   function anchorSettle(before) {
-    var list = anchorCards(), n = anchorNode(anchorKey);
+    var list = anchorCards(true), n = anchorNode(anchorKey);
     anchorSlotCaps(list);
     if (n) {
       if (n !== anchorLast) anchorMark(n, { full: true });
@@ -1046,7 +1067,11 @@
   // jump resolves a board topic or card to its containing card, then lets the
   // caller scroll inside it.
   function anchorOwner(n) {
-    for (var p = n; p && p.nodeType === 1 && p !== doc.body; p = p.parentNode) if (anchorId(p) !== null && anchorCards().indexOf(p) >= 0) return p;
+    if (typeof anchorDrainMutations === "function") anchorDrainMutations();
+    if (!anchorCache) anchorCards(true);
+    for (var p = n; p && p.nodeType === 1 && p !== doc.body; p = p.parentNode) {
+      if (anchorId(p) !== null && anchorCache.indexByNode.has(p)) return p;
+    }
     return null;
   }
   // Exposure of a node for staging: inside the current card, clipped to the
@@ -1199,9 +1224,9 @@
     var list = anchorCards();
     if (!list.length) return;
     var cur = anchorCurrent() || list[0];
-    var at = list.indexOf(cur);
+    var at = anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : -1;
     if (at < 0) at = 0;
-    if (!card || list.indexOf(card) < 0) card = cur;
+    if (!card || !(anchorCache && anchorCache.indexByNode.has(card))) card = cur;
     var dy = +rawDy || 0;
     if (deltaMode === 1) dy *= 40;
     else if (deltaMode === 2) dy *= 800;
@@ -1328,6 +1353,15 @@
         if (anchorProg) anchorRealign(true);
       });
       anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });
+      anchorBoardMO = new MutationObserver(function (records) {
+        if (anchorRecordsAffectOrder(records)) anchorCache = null;
+      });
+      anchorBoardMO.observe(region("board"), {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["hidden", "data-state-filtered", "data-card", "data-topic", "data-rail"]
+      });
     }
     col.wbScrollOwner = true;
     anchorSettle(null);
