@@ -47,22 +47,31 @@ func TestStoreAppendsOneLinePerItemAndRecovers(t *testing.T) {
 func TestStoreTrimsATornLastLine(t *testing.T) {
 	dir := t.TempDir()
 	session := NewSessionID()
-	s, _, _ := OpenStore(dir, session, nil)
-	_ = s.Append(json.RawMessage(`{"a":1}`))
-	s.Close()
-	f, _ := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(`{"k":"item","item":{"torn`)
-	f.Close()
+	s, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	must(t, s.Append(json.RawMessage(`{"a":1}`)))
+	must(t, s.Close())
+	f, err := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = f.WriteString(`{"k":"item","item":{"torn`)
+	closeErr := f.Close()
+	must(t, err)
+	must(t, closeErr)
 
 	s2, items, err := OpenStore(dir, session, nil)
-	if err != nil || len(items) != 1 {
-		t.Fatalf("open = %v, %d items", err, len(items))
+	must(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+	if len(items) != 1 {
+		t.Fatalf("after trim: %d items, want 1", len(items))
 	}
-	_ = s2.Append(json.RawMessage(`{"b":2}`))
-	s2.Close()
-	_, items, err = OpenStore(dir, session, nil)
-	if err != nil || len(items) != 2 || string(items[1]) != `{"b":2}` {
-		t.Fatalf("after the torn line: %v, %s", err, items)
+	must(t, s2.Append(json.RawMessage(`{"b":2}`)))
+	must(t, s2.Close())
+	reopened, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, reopened.Close())
+	if len(items) != 2 || string(items[1]) != `{"b":2}` {
+		t.Fatalf("after the torn line: %s", items)
 	}
 }
 
