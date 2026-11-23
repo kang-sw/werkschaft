@@ -71,10 +71,9 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.equal(tok3, '+1.7k', 'c3 in req-2 -> req-3 gets token delta');
     assert.equal(att1, '+2', 'c1 shows attached event count (+2)');
 
-    // Verify fold (+2 more) and uncapped/no-ID static row inside .au-fold
-    const moreBtn = frame.locator('.au-tools .au-more');
-    assert.equal(await frame.locator('.au-row[data-call="c4"]').isVisible(), false);
-    await moreBtn.click();
+    // No group frame: no header line, no fold or "+N more" button. Every call
+    // row (ID'd or not) is rendered visible from the start.
+    assert.equal(await frame.locator('.au-thead, .au-more, .au-fold').count(), 0, 'tool-call frame shell is gone');
     assert.equal(await frame.locator('.au-row[data-call="c4"]').isVisible(), true);
     assert.equal(await frame.locator('.au-tools .au-static').isVisible(), true);
 
@@ -280,6 +279,11 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.equal(await win.locator('.au-crumb:not([hidden])').count(), 0);
 
     // Next call via button + ArrowRight / ArrowLeft, plus c3 tool_result failed pill & output, plus kind="other" Raw tab
+    // The attached hook row is folded behind a run summary by default and next/prev only step through
+    // visible rows, so expand the run first.
+    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"]', { state: 'attached' });
+    assert.equal(await frame.locator('.au-hid[data-event-id="e-hook-1"]').evaluate(el => el.hidden), true, 'hook row starts folded');
+    await frame.evaluate(() => { for (const s of document.querySelectorAll('.au-run[aria-expanded="false"]')) s.click(); });
     await win.locator('.au-next').click();
     await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"].au-sel');
     await win.locator('.au-next').click();

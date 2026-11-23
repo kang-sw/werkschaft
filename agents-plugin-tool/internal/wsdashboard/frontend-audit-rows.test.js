@@ -107,6 +107,12 @@ function makeFakeDOM() {
     hasAttribute(k) {
       return Object.prototype.hasOwnProperty.call(this.attrs, k);
     }
+    toggleAttribute(k, force) {
+      const on = force === undefined ? !this.hasAttribute(k) : !!force;
+      if (on) this.attrs[k] = '';
+      else delete this.attrs[k];
+      return on;
+    }
     appendChild(child) {
       if (child.tagName === '#text') {
         this._textContent += child._textContent;
@@ -308,30 +314,6 @@ test('auIsHiddenAuditKind and auIsSessionStartEvent classify all audit kinds acc
   assert.equal(h.auIsSessionStartEvent({ kind: 'hook', subkind: 'system_prompt' }), false);
 });
 
-test('auReadKindsPref and auWriteKindsPref default cleanly and persist toggles', () => {
-  const h = loadAuditRowsHelpers();
-  const store = new Map();
-  const storage = {
-    getItem(k) { return store.has(k) ? store.get(k) : null; },
-    setItem(k, v) { store.set(k, String(v)); }
-  };
-  const def = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(def.thinking, true);
-  assert.equal(def.other, true);
-
-  def.thinking = false;
-  def.unknown_ignored = false;
-  h.auWriteKindsPref(storage, 'ws.dashboard.auditkinds', def);
-  const reread = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(reread.thinking, false);
-  assert.equal(reread.hook, true);
-  assert.equal(reread.unknown_ignored, undefined);
-
-  store.set('ws.dashboard.auditkinds', '{broken json');
-  const fallback = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(fallback.thinking, true);
-});
-
 test('auInterleavePlan attaches matching call_ids, falls back orphans chronologically, and anchors sysStart', () => {
   const h = loadAuditRowsHelpers();
   const entries = [
@@ -376,7 +358,6 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
 
   const fetched = [];
   const opened = [];
-  const store = new Map();
   let mode = 'normal';
 
   const fetchFn = async (url) => {
@@ -440,10 +421,6 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
     wsT(k) { return k; },
     CustomEvent: function CustomEvent(type, init) { this.type = type; this.detail = (init || {}).detail || {}; },
     window: {
-      localStorage: {
-        getItem(k) { return store.has(k) ? store.get(k) : null; },
-        setItem(k, v) { store.set(k, String(v)); }
-      },
       getSelection() { return { isCollapsed: true }; },
       fetch: fetchFn
     }
@@ -452,7 +429,7 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
     fmtBytes: (n) => `${n} B`,
     openCall(id) { opened.push(['call', id]); },
     openEvent(id, opts) { opened.push(['event', id, opts && opts.tab]); },
-    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]').filter((el) => !el.classList.contains('au-kind-hidden')); },
+    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]'); },
     syncSelection() {}
   };
   vm.createContext(ctx);
@@ -490,13 +467,11 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(fetched.some((u) => u.includes('after=cur2')), '410 triggered once then reset from floor');
 
-  // Kind filter chip toggle hides thinking rows and persists preference
-  const thinkChip = dom.convo.querySelector('.au-fchip[data-au-kind="thinking"]');
-  dom.convo.querySelector('.au-bar').dispatchEvent({ type: 'click', target: thinkChip });
-  assert.equal(dom.centries.querySelector('.au-hid[data-event-id="ev-think"]').classList.contains('au-kind-hidden'), true);
-  assert.equal(JSON.parse(store.get('ws.dashboard.auditkinds')).thinking, false);
+  // No filter bar is drawn: every kind of hidden-event row stays in the stream.
+  assert.equal(dom.convo.querySelector('.au-bar'), null);
+  assert.equal(dom.centries.querySelector('.au-hid[data-event-id="ev-think"]').classList.contains('au-kind-hidden'), false);
 
-  // Scoped J/K/Enter: skips hidden thinking, ignores outside containers (.au-win, #composer)
+  // Scoped J/K/Enter: ignores outside containers (.au-win, #composer)
   const composer = new dom.El('DIV');
   composer.id = 'composer';
   const composerBtn = new dom.El('BUTTON');
@@ -506,7 +481,9 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.convo, preventDefault() {} });
   assert.equal(dom.centries.querySelector('.au-sysrow').focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.centries.querySelector('.au-sysrow'), preventDefault() {} });
-  // Skips thinking (hidden) and lands on r1 (c1)
+  const thinkEl = dom.centries.querySelector('.au-hid[data-event-id="ev-think"]');
+  assert.equal(thinkEl.focused, true);
+  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: thinkEl, preventDefault() {} });
   assert.equal(r1.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: r1, preventDefault() {} });
   const hookEl = dom.centries.querySelector('.au-hid[data-event-id="ev-hook"]');
@@ -637,4 +614,141 @@ test('history end still opens below an already covered interval', async () => {
   assert.equal(urls.length, 1);
   assert.equal(new URL(urls[0], 'http://fixture').searchParams.get('until'), t1);
   assert.equal(ctx.auOpenBelowDone, true);
+});
+
+test('run labels use fixed kind order and only system/thinking/hook/reminder fold', () => {
+  const h = loadAuditRowsHelpers();
+  for (const k of ['system', 'thinking', 'hook', 'system_reminder']) assert.equal(h.auIsRunKind(k), true, k);
+  for (const k of ['subagent', 'compaction', 'other', 'tool_call']) assert.equal(h.auIsRunKind(k), false, k);
+  assert.equal(h.auRunLabel(['thinking', 'system', 'system', 'hook', 'system', 'system']), 'js.audit.kind.system 4 · js.audit.kind.thinking 1 · js.audit.kind.hook 1');
+});
+
+function runCollapseFixture() {
+  const { ctx, dom } = raceRowsHarness(async () => auditPage({ events: [], end: true }));
+  const entry = (key, at) => {
+    const el = new dom.El('DIV');
+    el.setAttribute('data-entry', key);
+    el.setAttribute('data-at', at);
+    return el;
+  };
+  const e1 = entry('k1', '2026-11-20T10:00:00Z');
+  const tools = entry('k3', '2026-11-20T10:00:10Z');
+  tools.className = 'au-tools';
+  const calls = new dom.El('OL');
+  calls.className = 'au-calls';
+  for (const id of ['c1', 'c2']) {
+    const li = new dom.El('LI');
+    li.className = 'au-row au-done';
+    li.setAttribute('data-call', id);
+    calls.appendChild(li);
+  }
+  tools.appendChild(calls);
+  const e2 = entry('k2', '2026-11-20T10:00:20Z');
+  dom.centries.appendChild(e1);
+  dom.centries.appendChild(tools);
+  dom.centries.appendChild(e2);
+  const evs = {};
+  const add = (id, seq, kind, at, extra) => { evs[id] = Object.assign({ id, seq, kind, at }, extra || {}); };
+  ctx.auEventsById = evs;
+  return { ctx, dom, calls, e1, tools, e2, add };
+}
+
+function countDomOps(dom, fn) {
+  const proto = dom.El.prototype;
+  const names = ['appendChild', 'insertBefore', 'removeChild', 'setAttribute', 'toggleAttribute'];
+  const saved = {};
+  let ops = 0;
+  for (const n of names) {
+    saved[n] = proto[n];
+    proto[n] = function (...a) { ops++; return saved[n].apply(this, a); };
+  }
+  const tc = Object.getOwnPropertyDescriptor(proto, 'textContent');
+  Object.defineProperty(proto, 'textContent', { configurable: true, get: tc.get, set(v) { ops++; tc.set.call(this, v); } });
+  try { fn(); } finally {
+    for (const n of names) proto[n] = saved[n];
+    Object.defineProperty(proto, 'textContent', tc);
+  }
+  return ops;
+}
+
+function rowById(dom, id) {
+  return dom.centries.querySelector('.au-hid[data-event-id="' + id + '"]');
+}
+
+test('consecutive system/thinking/hook/reminder rows collapse into one summary; other rows break the run', () => {
+  const f = runCollapseFixture();
+  f.add('s1', 1, 'system', '2026-11-20T10:00:12Z', { subkind: 'status' });
+  f.add('s2', 2, 'system', '2026-11-20T10:00:13Z', { subkind: 'thinking_tokens' });
+  f.add('t1', 3, 'thinking', '2026-11-20T10:00:14Z');
+  f.add('sub', 4, 'subagent', '2026-11-20T10:00:15Z');
+  f.add('r1', 5, 'system_reminder', '2026-11-20T10:00:16Z');
+  f.add('h1', 6, 'hook', '2026-11-20T10:00:11Z', { call_id: 'c1' });
+  f.add('h2', 7, 'hook', '2026-11-20T10:00:11.5Z', { call_id: 'c1' });
+  f.ctx.auReconcileRows();
+
+  const runs = f.dom.centries.querySelectorAll('.au-run');
+  assert.equal(runs.length, 3, 'stream: [s1 s2 t1] and [r1]; call list: [h1 h2]');
+  const streamRuns = runs.filter((r) => r.parentNode === f.dom.centries);
+  assert.equal(streamRuns.length, 2);
+  assert.equal(streamRuns[0].textContent, 'js.audit.kind.system 2 · js.audit.kind.thinking 1');
+  assert.equal(streamRuns[1].textContent, 'js.audit.kind.reminder 1');
+  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'false');
+  // The subagent row is never folded and splits the two runs.
+  const sub = rowById(f.dom, 'sub');
+  assert.equal(sub.hasAttribute('hidden'), false);
+  assert.equal(sub.previousElementSibling, rowById(f.dom, 't1'));
+  assert.equal(sub.nextElementSibling, streamRuns[1]);
+  for (const id of ['s1', 's2', 't1', 'r1', 'h1', 'h2']) {
+    assert.equal(rowById(f.dom, id).hasAttribute('hidden'), true, id + ' starts collapsed');
+  }
+  // Call rows never fold; the attached hooks fold under their call row in the list.
+  assert.equal(f.calls.children[0].getAttribute('data-call'), 'c1');
+  const inRun = runs.find((r) => r.parentNode === f.calls);
+  assert.ok(inRun && inRun.tagName === 'LI' && inRun.textContent === 'js.audit.kind.hook 2');
+  assert.equal(f.calls.children[1], inRun);
+  assert.equal(f.calls.querySelectorAll('.au-row[data-call]').every((r) => !r.hasAttribute('hidden')), true);
+
+  // Click expands in place, Enter collapses again.
+  f.dom.doc.dispatchEvent({ type: 'click', target: streamRuns[0] });
+  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'true');
+  for (const id of ['s1', 's2', 't1']) assert.equal(rowById(f.dom, id).hasAttribute('hidden'), false);
+  assert.equal(rowById(f.dom, 'r1').hasAttribute('hidden'), true, 'other run stays folded');
+  f.dom.doc.dispatchEvent({ type: 'keydown', key: 'Enter', target: streamRuns[0], preventDefault() {} });
+  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'false');
+  assert.equal(rowById(f.dom, 's1').hasAttribute('hidden'), true);
+});
+
+test('a row joining a run patches only that summary; an unchanged reconcile writes nothing', () => {
+  const f = runCollapseFixture();
+  f.add('s1', 1, 'system', '2026-11-20T10:00:12Z');
+  f.add('t1', 2, 'thinking', '2026-11-20T10:00:13Z');
+  f.ctx.auReconcileRows();
+  const sum = f.dom.centries.querySelector('.au-run');
+  assert.equal(sum.textContent, 'js.audit.kind.system 1 · js.audit.kind.thinking 1');
+
+  assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0, 'idempotent reconcile performs no DOM writes');
+
+  f.add('s2', 3, 'system', '2026-11-20T10:00:14Z');
+  const ops = countDomOps(f.dom, () => f.ctx.auReconcileRows());
+  assert.equal(f.dom.centries.querySelector('.au-run'), sum, 'summary node is reused, not rebuilt');
+  assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 1);
+  assert.equal(sum.textContent, 'js.audit.kind.system 2 · js.audit.kind.thinking 1');
+  // One new row (11 writes to build and insert it), its hidden flag and the label write:
+  // bounded and independent of the stream size.
+  assert.ok(ops <= 14, 'joining a run cost ' + ops + ' DOM writes');
+  assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0);
+
+  // An expanded run stays expanded when a row joins it.
+  f.dom.doc.dispatchEvent({ type: 'click', target: sum });
+  assert.equal(sum.getAttribute('aria-expanded'), 'true');
+  f.add('s3', 4, 'system', '2026-11-20T10:00:15Z');
+  f.ctx.auReconcileRows();
+  assert.equal(sum.textContent, 'js.audit.kind.system 3 · js.audit.kind.thinking 1');
+  assert.equal(sum.getAttribute('aria-expanded'), 'true');
+  assert.equal(rowById(f.dom, 's3').hasAttribute('hidden'), false);
+
+  // Removing every row of a run drops its summary.
+  for (const id of Object.keys(f.ctx.auEventsById)) delete f.ctx.auEventsById[id];
+  f.ctx.auReconcileRows();
+  assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
 });

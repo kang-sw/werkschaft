@@ -1,69 +1,9 @@
 /* class prefix: au */
-/* Phase 2 audit rows inside #convo: kind filter chip bar, dotted hidden-event
+/* Phase 2 audit rows inside #convo: dotted hidden-event
    rows (.au-hid), call-attached indented rows (.au-hid.au-inner), centered
    session-start system banner (.au-sysrow), keyboard focus ring (.au-cur).
    Every selector class uses the .au- prefix for CSS module collision hygiene. */
 
-.au-bar {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 12px;
-  background: color-mix(in srgb, var(--wb-bg) 42%, var(--wb-card));
-  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
-  backdrop-filter: blur(6px);
-}
-
-.au-fchips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.au-fchip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--wb-line) 90%, transparent);
-  background: transparent;
-  color: var(--wb-muted-fg);
-  font: 600 11px/1 var(--wb-sans);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-  transition: background-color .12s, color .12s, border-color .12s, opacity .12s;
-}
-
-.au-fchip:hover {
-  color: var(--wb-fg);
-  background: color-mix(in srgb, var(--wb-fg) 6%, transparent);
-}
-
-.au-fchip:focus-visible {
-  outline: 1.5px solid var(--wb-primary);
-  outline-offset: 1px;
-}
-
-.au-fchip.au-on {
-  color: var(--wb-fg);
-  background: color-mix(in srgb, var(--wb-fg) 8%, var(--wb-card));
-  border-color: color-mix(in srgb, var(--wb-fg) 22%, transparent);
-}
-
-.au-fchip:not(.au-on) {
-  opacity: .68;
-}
-
-.au-fdot,
 .au-dot-ev {
   width: 7px;
   height: 7px;
@@ -80,7 +20,6 @@
 .au-kind-system { --au-ev-c: #f59e0b; }
 .au-kind-other { --au-ev-c: #9ca3af; }
 
-.au-fdot,
 .au-dot-ev {
   background: var(--au-ev-c, var(--wb-muted-fg));
 }
@@ -190,12 +129,49 @@
   font-weight: 600;
 }
 
-.au-kind-hidden {
-  display: none !important;
+/* Collapsed run of low-signal rows (system / thinking / hook / reminder):
+   one muted line, no border or frame. Rows carry [hidden] while collapsed. */
+.au-hid[hidden] {
+  display: none;
 }
 
-@media (max-width: 640px) {
-  .au-bar {
-    padding: 5px 8px;
-  }
+.au-run {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 10px;
+  border-radius: 4px;
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.au-run-in {
+  margin-left: 18px;
+  padding: 1.5px 8px;
+  list-style: none;
+}
+
+.au-run:hover {
+  color: var(--wb-fg);
+}
+
+.au-run:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: -1px;
+}
+
+.au-run-lbl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.au-run::after {
+  content: " \25b8";
+}
+
+.au-run[aria-expanded="true"]::after {
+  content: " \25be";
 }

@@ -6,6 +6,14 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const base = process.env.AUDIT_BASE;
 const shots = process.env.AUDIT_P2_SHOTS || '';
 
+// Hook/thinking/system/reminder rows start folded behind a per-run summary line.
+// Click every collapsed summary so the rows below it become interactive.
+async function expandRuns(f) {
+  await f.evaluate(() => {
+    for (const s of document.querySelectorAll('.au-run[aria-expanded="false"]')) s.click();
+  });
+}
+
 (async () => {
   const server = await chromium.launchServer({ headless: true });
   const browser = await chromium.connect(server.wsEndpoint());
@@ -33,23 +41,30 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
     const frameEl = await page.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
     const frame = await frameEl.contentFrame();
 
-    // Verify harness badge in #chead and data-at on rendered entries
-    await frame.waitForSelector('#chead .hb[data-h]');
-    const badgeH = await frame.locator('#chead .hb').getAttribute('data-h');
-    assert.ok(badgeH, '#chead renders .hb[data-h]');
+    // Verify no harness chip in #chead, and data-at on rendered entries
+    assert.equal(await frame.locator('#chead .hb').count(), 0, '#chead draws no harness chip');
     const atCount = await frame.locator('#r-entries .centries > [data-entry][data-at]').count();
     assert.ok(atCount >= 40, `rendered ConvEntry elements carry data-at (got ${atCount})`);
 
     // Wait for initial interleaved rows (attached hook inside c1, reminder, subagent, compaction, other)
-    await frame.waitForSelector('#convo .au-bar .au-fchip[data-au-kind="thinking"]');
-    await frame.waitForSelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]');
+    // Hook/thinking/system/reminder rows start folded behind a summary line, so they are only attached.
+    await frame.waitForSelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]', { state: 'attached' });
     await frame.waitForSelector('.au-hid[data-event-id="p2-other"]');
-    await frame.waitForSelector('.au-hid[data-event-id="p2-orphan-hook"]:not(.au-inner)');
+    await frame.waitForSelector('.au-hid[data-event-id="p2-orphan-hook"]:not(.au-inner)', { state: 'attached' });
 
-    // Check attached hook is positioned directly below p2-c1
+    // Collapsed by default: one muted summary per run, unmapped/subagent/compaction rows never fold.
+    assert.ok(await frame.locator('#convo .au-run').count() >= 1, 'low-signal rows fold behind a summary line');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').evaluate(el => el.hidden), true, 'attached hook starts collapsed');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-other"]').evaluate(el => el.hidden), false, 'unmapped rows are not collapsed');
+    await expandRuns(frame);
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').evaluate(el => el.hidden), false, 'clicking the summary expands the run in place');
+
+    // Check attached hook is positioned directly below p2-c1 (a run summary may sit between them)
     const hookPrevCall = await frame.evaluate(() => {
       const h = document.querySelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]');
-      return h && h.previousElementSibling ? h.previousElementSibling.getAttribute('data-call') : null;
+      let p = h && h.previousElementSibling;
+      while (p && p.classList.contains('au-run')) p = p.previousElementSibling;
+      return p ? p.getAttribute('data-call') : null;
     });
     assert.equal(hookPrevCall, 'p2-c1', 'attached hidden event sits directly below its matching call row');
 
@@ -60,7 +75,7 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
       c.dispatchEvent(new Event('scroll'));
     });
     await frame.waitForSelector('.au-sysrow[data-event-id="p2-sys-start"]');
-    await frame.waitForSelector('.au-hid[data-event-id="p2-think-hist"]');
+    await frame.waitForSelector('.au-hid[data-event-id="p2-think-hist"]', { state: 'attached' });
     assert.ok(eventsRequests.some(u => u.includes('since=') && u.includes('until=')), 'history page issued half-open [since, until) query');
     assert.ok(eventsRequests.some(u => !u.includes('since=') && u.includes('until=')), 'end:true issued open-below until= query');
 
@@ -77,20 +92,17 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
       c.scrollTop = c.scrollHeight;
     });
 
-    // Test filter chip persistence: toggle "subagent" off, reload page, confirm persisted under ws.dashboard.auditkinds
-    const subChip = frame.locator('.au-fchip[data-au-kind="subagent"]');
-    await subChip.click();
-    await frame.waitForFunction(() => document.querySelector('.au-hid[data-event-id="p2-subagent"]')?.classList.contains('au-kind-hidden'));
-    const storedPref = await frame.evaluate(() => JSON.parse(localStorage.getItem('ws.dashboard.auditkinds') || '{}'));
-    assert.equal(storedPref.subagent, false, 'kind chip toggle persisted to ws.dashboard.auditkinds');
+    // No filter bar is drawn, so every hidden-event row stays visible, also after a reload.
+    assert.equal(await frame.locator('#convo .au-bar, .au-fchip').count(), 0, 'no audit filter bar or chips');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-subagent"]').evaluate(el => el.classList.contains('au-kind-hidden')), false);
 
     await page.reload();
     const frame2El = await page.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
     const frame2 = await frame2El.contentFrame();
-    await frame2.waitForSelector('.au-hid[data-event-id="p2-subagent"].au-kind-hidden', { state: 'attached' });
-    // Re-enable subagent for visibility & screenshot
-    await frame2.locator('.au-fchip[data-au-kind="subagent"]').click();
-    await frame2.waitForFunction(() => !document.querySelector('.au-hid[data-event-id="p2-subagent"]')?.classList.contains('au-kind-hidden'));
+    await frame2.waitForSelector('.au-hid[data-event-id="p2-subagent"]', { state: 'attached' });
+    assert.equal(await frame2.locator('#convo .au-bar, .au-fchip').count(), 0, 'no audit filter bar or chips after reload');
+    await frame2.waitForSelector('.au-hid[data-event-id="p2-reminder"]', { state: 'attached' });
+    await expandRuns(frame2);
 
     // Click kind="other" row -> auto-opens Raw tab, marks .au-sel
     await frame2.evaluate(() => {
@@ -120,6 +132,7 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
     await win.locator('.au-close').click();
     await frame2.waitForFunction(() => document.querySelectorAll('.au-win').length === 0);
 
+    await expandRuns(frame2);
     await frame2.locator('.au-row[data-call="p2-c1"]').focus();
     await page.keyboard.press('j');
     assert.equal(await frame2.evaluate(() => document.activeElement?.getAttribute('data-event-id')), 'p2-attach-hook', 'J advances from call row to attached hidden row');
@@ -175,6 +188,8 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
       const lFrameEl = await lightPage.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
       const lFrame = await lFrameEl.contentFrame();
       await lFrame.waitForSelector('.au-hid[data-event-id="p2-other"]');
+      await lFrame.waitForSelector('.au-hid[data-event-id="p2-reminder"]', { state: 'attached' });
+      await expandRuns(lFrame);
       await lFrame.locator('.au-hid[data-event-id="p2-reminder"]').click();
       await lFrame.locator('.au-win').first().waitFor();
       await lFrame.waitForFunction(() => document.querySelector('.au-win .au-tab[aria-selected="true"]')?.getAttribute('data-au-tab') === 'out' && document.querySelector('.au-win .au-panel')?.textContent.includes('Remember to inspect screenshot captures.'));
@@ -202,6 +217,8 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
       const nlFrameEl = await nlPage.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
       const nlFrame = await nlFrameEl.contentFrame();
       await nlFrame.waitForSelector('.au-hid[data-event-id="p2-other"]');
+      await nlFrame.waitForSelector('.au-hid[data-event-id="p2-reminder"]', { state: 'attached' });
+      await expandRuns(nlFrame);
       await nlFrame.locator('.au-hid[data-event-id="p2-reminder"]').click();
       await nlFrame.locator('.au-win').first().waitFor();
       await nlFrame.waitForFunction(() => document.querySelector('.au-win .au-tab[aria-selected="true"]')?.getAttribute('data-au-tab') === 'out' && document.querySelector('.au-win .au-panel')?.textContent.includes('Remember to inspect screenshot captures.'));

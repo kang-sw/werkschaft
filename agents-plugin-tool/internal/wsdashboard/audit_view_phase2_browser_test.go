@@ -16,9 +16,9 @@ import (
 
 // TestAuditViewPhase2Browser exercises Phase 2 hidden-event interleaving,
 // UTC [since, until) history paging, open-below oldest on end:true, SSE after=
-// incremental refresh, 410 reset & 503 retry, kind filter chip persistence,
-// J/K/Enter conversation navigation & Left/Right window stepping, harness
-// badge, and optional 4-shot visual captures (when WS_AUDIT_P2_SHOTS is set).
+// incremental refresh, 410 reset & 503 retry, no filter bar or header
+// harness chip, J/K/Enter conversation navigation & Left/Right window
+// stepping, and optional 4-shot visual captures (when WS_AUDIT_P2_SHOTS is set).
 func TestAuditViewPhase2Browser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE for disposable Chromium acceptance")

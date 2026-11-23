@@ -1,6 +1,5 @@
 /* ===== conversation ===== */
 .d-jump-wrap { position: sticky; top: 8px; height: 0; z-index: 3; pointer-events: none; }
-.convo:has(> .au-bar) .d-jump-wrap { top: calc(var(--au-bar-h, 36px) + 8px); }
 .d-jump-btn { position: absolute; left: 8px; top: 0; pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 999px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); cursor: pointer; transition: background-color .15s, color .15s; }
 .d-jump-btn[hidden] { display: none; }
 .d-jump-btn .i { width: 14px; height: 14px; stroke-width: 2; transition: transform .15s; }
