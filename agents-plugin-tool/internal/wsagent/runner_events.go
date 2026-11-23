@@ -233,6 +233,8 @@ func (c *conv) handle(ev Event) {
 		if !quiet {
 			c.compactSteerAnswered(*ev.compactSteerReply)
 		}
+	case ev.durableSteerID != "":
+		c.acceptDurableSteer(ev.durableSteerID)
 	case ev.UserTaken != "":
 		c.steerTaken(ev.UserTaken)
 	case ev.CommandError != "":

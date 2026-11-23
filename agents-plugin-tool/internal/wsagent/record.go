@@ -133,6 +133,7 @@ type Record struct {
 	// when that process is gone.
 	TurnOpen bool `json:"turn_open,omitempty"`
 	// Active durable state belongs to the private runner store.
+	DurableSteers       []durableSteer    `json:"durable_steers,omitempty"`
 	DurableTurn         *durableTurnInput `json:"durable_turn,omitempty"`
 	DurableInboxClaims  []string          `json:"durable_inbox_claims,omitempty"`
 	DurableHeldReportID string            `json:"durable_held_report_id,omitempty"`

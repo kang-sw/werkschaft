@@ -194,8 +194,16 @@ func (p *werkLoop) command(cmd werk.Command) error {
 	}
 }
 
-func (p *werkLoop) submitTurn(id, text string) error {
-	return p.command(werk.Command{Type: werk.CmdUser, TurnID: id, Text: text})
+func (p *werkLoop) submitTurn(id, text string, steers []durableSteer) error {
+	cmd := werk.Command{Type: werk.CmdUser, TurnID: id, Text: text}
+	for _, steer := range steers {
+		cmd.Steers = append(cmd.Steers, werk.Steer{ID: steer.ID, Text: steer.Text})
+	}
+	return p.command(cmd)
+}
+
+func (p *werkLoop) submitSteer(turnID string, steer durableSteer) error {
+	return p.command(werk.Command{Type: werk.CmdSteer, TurnID: turnID, ID: steer.ID, Text: steer.Text})
 }
 
 func (p *werkLoop) Send(text string) error {

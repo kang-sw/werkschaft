@@ -192,6 +192,7 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 			var l struct {
 				fileIntentLine
 				TurnID   string          `json:"turn_id"`
+				SteerID  string          `json:"steer_id"`
 				User     json.RawMessage `json:"user"`
 				End      *durableEnd     `json:"end"`
 				Item     json.RawMessage `json:"item"`
@@ -215,6 +216,12 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 				}
 				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items)}
 				clear(s.fileIntents)
+				items = append(items, l.User)
+			case l.K == "turn_steer" && l.SteerID != "" && len(l.User) > 0:
+				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {
+					return nil, 0, errors.New("the durable steer has no active turn")
+				}
+				s.turnJournal.steers = append(s.turnJournal.steers, turnSteerRecord{K: l.K, TurnID: l.TurnID, ID: l.SteerID, User: l.User})
 				items = append(items, l.User)
 			case l.K == "turn_end" && l.TurnID != "" && l.End != nil:
 				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {

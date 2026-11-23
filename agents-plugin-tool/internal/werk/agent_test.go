@@ -575,7 +575,7 @@ func TestUntakenSteerIsDroppedAtTurnEnd(t *testing.T) {
 	r.waitTurnEnd(1)
 	// A steer that no request took does not leak into a later turn.
 	r.agent.mu.Lock()
-	r.agent.steers = []string{"stale"}
+	r.agent.steers = []Steer{{Text: "stale"}}
 	r.agent.mu.Unlock()
 	r.send(Command{Type: CmdClearSteered})
 	r.user("two")

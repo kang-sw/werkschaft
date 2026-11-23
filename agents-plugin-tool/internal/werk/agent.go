@@ -155,7 +155,7 @@ type Agent struct {
 	effort     string
 	session    string
 	transcript []json.RawMessage
-	steers     []string
+	steers     []Steer
 	turn       int
 	journal    turnJournal
 	tools      map[string]toolEntry
@@ -375,10 +375,15 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 		done    chan error
 		queued  []Command
 		running bool
+		turnID  string
 	)
 	start := func(cmd Command) {
 		tctx, c := context.WithCancel(ctx)
 		cancel, done, running = c, make(chan error, 1), true
+		turnID = cmd.TurnID
+		a.mu.Lock()
+		a.steers = append(a.steers, cmd.Steers...)
+		a.mu.Unlock()
 		go func(result chan<- error) {
 			var err error
 			defer func() {
@@ -437,12 +442,24 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 					start(c)
 				}
 			case CmdSteer:
+				if c.TurnID != "" {
+					// A command arriving after settlement still belongs to
+					// its original turn. The runner keeps it for later.
+					if running && c.TurnID == turnID {
+						a.mu.Lock()
+						a.steers = append(a.steers, Steer{ID: c.ID, Text: c.Text})
+						a.mu.Unlock()
+					}
+					continue
+				}
 				switch {
 				case !running:
 					a.out.line(Line{T: LineSteerAck, ID: c.ID, Refusal: "no turn is running"})
+				case turnID != "":
+					a.out.line(Line{T: LineSteerAck, ID: c.ID, Refusal: "a durable steer requires its turn identity"})
 				default:
 					a.mu.Lock()
-					a.steers = append(a.steers, c.Text)
+					a.steers = append(a.steers, Steer{Text: c.Text})
 					a.mu.Unlock()
 					a.out.line(Line{T: LineSteerAck, ID: c.ID})
 				}
@@ -477,19 +494,27 @@ func (a *Agent) dropSteers() {
 	a.mu.Unlock()
 }
 
-// takeSteers moves the queued steered messages into the transcript.
-func (a *Agent) takeSteers() {
+// takeSteers moves pending messages into the transcript before the request
+// runs. A durable steer's receipt and user item share one committed record.
+func (a *Agent) takeSteers(turnID string) error {
 	a.mu.Lock()
 	steers := a.steers
 	a.steers = nil
 	a.mu.Unlock()
-	for _, text := range steers {
-		a.append(userItem(text))
+	for _, steer := range steers {
+		if turnID != "" {
+			if err := a.commitSteer(turnID, steer); err != nil {
+				return err
+			}
+			continue
+		}
+		a.append(userItem(steer.Text))
 		a.mu.Lock()
-		a.taken = append(a.taken, text)
+		a.taken = append(a.taken, steer.Text)
 		a.mu.Unlock()
-		a.out.line(Line{T: LineUserTaken, Text: text})
+		a.out.line(Line{T: LineUserTaken, Text: steer.Text})
 	}
+	return nil
 }
 
 func (a *Agent) hasSteers() bool {
@@ -515,7 +540,8 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	a.out.line(Line{T: LineTurnStart, Turn: turn})
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
-	reason, errText = a.loop(ctx, nil, turn)
+	result, _ := a.loop(ctx, nil, turn, "")
+	reason, errText = result.Reason, result.Error
 }
 
 func (a *Agent) endTurn(turn int, reason, errText string) {
@@ -529,21 +555,23 @@ func (a *Agent) endTurn(turn int, reason, errText string) {
 }
 
 // loop runs model requests and tool calls until the model asks for no more.
-func (a *Agent) loop(ctx, host context.Context, turn int) (reason, errText string) {
+func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durableEnd, error) {
 	if err := a.loadTools(ctx); err != nil {
 		a.out.line(Line{T: LineNotice, Text: "the ws tools are not available: " + err.Error()})
 	}
 	for {
 		if ctx.Err() != nil {
-			return ReasonAborted, ""
+			return durableEnd{Reason: ReasonAborted}, nil
 		}
-		a.takeSteers()
+		if err := a.takeSteers(turnID); err != nil {
+			return durableEnd{}, err
+		}
 		resp, err := a.request(ctx, turn)
 		if err != nil {
 			if ctx.Err() != nil {
-				return ReasonAborted, ""
+				return durableEnd{Reason: ReasonAborted}, nil
 			}
-			return ReasonError, err.Error()
+			return durableEnd{Reason: ReasonError, Error: err.Error()}, nil
 		}
 		a.appendResponse(resp)
 		a.report(turn, resp)
@@ -552,13 +580,13 @@ func (a *Agent) loop(ctx, host context.Context, turn int) (reason, errText strin
 			if a.hasSteers() && ctx.Err() == nil {
 				continue
 			}
-			return ReasonDone, ""
+			return durableEnd{Reason: ReasonDone}, nil
 		}
 		if a.runCalls(ctx, host, turn, resp.ID, calls) {
-			return ReasonError, "a werk tool failed unexpectedly"
+			return durableEnd{Reason: ReasonError, Error: "a werk tool failed unexpectedly"}, nil
 		}
 		if ctx.Err() != nil {
-			return ReasonAborted, ""
+			return durableEnd{Reason: ReasonAborted}, nil
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 type turnStartRecord struct {
@@ -25,6 +26,13 @@ type turnEndRecord struct {
 	End    durableEnd `json:"end"`
 }
 
+type turnSteerRecord struct {
+	K      string          `json:"k"`
+	TurnID string          `json:"turn_id"`
+	ID     string          `json:"steer_id"`
+	User   json.RawMessage `json:"user"`
+}
+
 // turnJournal identifies the last turn and the point reached in the log
 // when opened. The live turn appends to the transcript in order.
 type turnJournal struct {
@@ -34,6 +42,7 @@ type turnJournal struct {
 	response    *Response
 	responseEnd int
 	end         *durableEnd
+	steers      []turnSteerRecord
 }
 
 func (a *Agent) beginDurableTurn(cmd Command) (resumed bool, err error) {
@@ -93,6 +102,10 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 
 	a.out.line(Line{T: LineTurnStart, Turn: turn, TurnID: cmd.TurnID})
 	if resumed {
+		for _, steer := range journal.steers {
+			a.out.line(Line{T: LineUserTaken, TurnID: cmd.TurnID, ID: steer.ID})
+		}
+		a.discardCommittedSteers(journal.steers)
 		a.restoreDurableReply(turn, a.transcript[journal.input+1:])
 	} else {
 		a.out.line(Line{T: LineUser, Turn: turn, Text: cmd.Text})
@@ -104,7 +117,7 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 	if journal.response != nil {
 		// A complete response with no calls ends a turn unless a later
 		// input (e.g. a steer) was already added to the transcript.
-		if journal.responseEnd == len(a.transcript) && len(functionCalls(journal.response.Output)) == 0 {
+		if journal.responseEnd == len(a.transcript) && len(functionCalls(journal.response.Output)) == 0 && !a.hasSteers() {
 			result.Reason = ReasonDone
 			return nil
 		}
@@ -117,7 +130,37 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 			return nil
 		}
 	}
-	result.Reason, result.Error = a.loop(ctx, host, turn)
+	result, err = a.loop(ctx, host, turn, cmd.TurnID)
+	return err
+}
+
+func (a *Agent) discardCommittedSteers(committed []turnSteerRecord) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steers = slices.DeleteFunc(a.steers, func(steer Steer) bool {
+		return slices.ContainsFunc(committed, func(row turnSteerRecord) bool { return row.ID == steer.ID })
+	})
+}
+
+func (a *Agent) commitSteer(turnID string, steer Steer) error {
+	row := turnSteerRecord{K: "turn_steer", TurnID: turnID, ID: steer.ID, User: userItem(steer.Text)}
+	if previous := slices.IndexFunc(a.journal.steers, func(row turnSteerRecord) bool { return row.ID == steer.ID }); previous >= 0 {
+		if !bytes.Equal(a.journal.steers[previous].User, row.User) {
+			return errors.New("the durable steer input changed")
+		}
+	} else {
+		if steer.ID == "" {
+			return errors.New("the durable steer has no identity")
+		}
+		if err := a.log.commit(row); err != nil {
+			return fmt.Errorf("save the durable steer: %w", err)
+		}
+		a.mu.Lock()
+		a.journal.steers = append(a.journal.steers, row)
+		a.transcript = append(a.transcript, row.User)
+		a.mu.Unlock()
+	}
+	a.out.line(Line{T: LineUserTaken, TurnID: turnID, ID: steer.ID, Text: steer.Text})
 	return nil
 }
 

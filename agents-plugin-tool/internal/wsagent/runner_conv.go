@@ -623,6 +623,13 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 		return true
 	}
+	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
+		queued := false
+		c.admitInput(func() {
+			queued = c.queueDurableSteer(p, durableSteer{Text: text, Mail: m.Text}, nil, *wakeEvent("mail", "mailbox", "", text).Live)
+		})
+		return queued
+	}
 	// Persist before the holder write. The child can accept the steer and
 	// outlive this daemon before its acknowledgement reaches the runner.
 	// Text is the labeled steer the child's taken messages match; Mail

@@ -10,6 +10,7 @@ func (c *conv) holdDurable(res TurnResult) error {
 		finishActiveTurn(rec, c.r.opts.Now().UnixMilli())
 		rec.HeldTurn, rec.TurnOpen, rec.LastTurn = &res, false, nil
 		if rec.DurableTurn != nil {
+			requeueDurableSteers(rec)
 			rec.DurableHeldReportID = rec.DurableTurn.ID
 			rec.DurableTurn = nil
 		}
@@ -35,6 +36,7 @@ func (c *conv) publishDurableRecord(res TurnResult, keepOpen bool, also func(*Re
 		}
 		now := c.r.opts.Now()
 		if !keepOpen {
+			requeueDurableSteers(rec)
 			finishActiveTurn(rec, now.UnixMilli())
 			rec.TurnOpen, rec.DurableTurn = false, nil
 		}

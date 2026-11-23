@@ -51,7 +51,7 @@ func orderInboxClaims(records []wsinbox.Record) {
 }
 
 type durableTurnProcess interface {
-	submitTurn(id, text string) error
+	submitTurn(id, text string, steers []durableSteer) error
 }
 
 // admitDurableTurn commits the prepared model input with the inbox coverage.
@@ -96,7 +96,7 @@ func (c *conv) submitDurableTurn(input *durableTurnInput) error {
 	c.turnMark, c.reply = c.rec.TurnMark, ""
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	c.syncAwake()
-	if err := p.submitTurn(input.ID, input.Text); err != nil {
+	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers); err != nil {
 		c.setStatus(func() { c.turn = false })
 		return err
 	}

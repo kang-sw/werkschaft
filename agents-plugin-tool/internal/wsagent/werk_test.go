@@ -20,6 +20,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -334,6 +335,61 @@ func TestWerkResumesActiveTurnAcrossRunnerReplacement(t *testing.T) {
 		return string(x) == string(y)
 	}) {
 		t.Fatal("the interrupted model input changed or was duplicated")
+	}
+}
+
+func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
+	started := make(chan struct{})
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		func(ctx context.Context, _ werk.Request) (*werk.Response, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		werkMessage("resumed with steering"),
+	}}
+	h, fleet, reports := werkHarness(t, model)
+	id := spawnWerk(t, h, "workdir-write")
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no initial model request")
+	}
+	h.send(id, "take this steer")
+	c := h.runner.conv(id)
+	held, err := wsinbox.Held(c.inbox)
+	if err != nil || len(held) != 1 {
+		t.Fatalf("expected one held steer candidate: %v, %v", held, err)
+	}
+	if _, err := wsinbox.Steer(c.inbox, held[0].Name); err != nil {
+		t.Fatal(err)
+	}
+	c.signalInbox()
+	eventually(t, "the durable steer queue", func() bool {
+		return len(c.record().DurableSteers) == 1
+	})
+	before := c.record()
+	steer := before.DurableSteers[0]
+	if steer.ID == "" || steer.Mark <= before.TurnMark {
+		t.Fatal("pending steering did not retain its own send coverage")
+	}
+	h.runner.Close()
+	if len(reports.list()) != 0 {
+		t.Fatal("the predecessor reported an abandoned turn")
+	}
+
+	fleet.start(h)
+	eventually(t, "the original turn's report", func() bool { return len(reports.list()) == 1 })
+	after := werkRecord(t, h, id)
+	if after.ReportID != before.DurableTurn.ID || after.LastTurn == nil || after.LastTurn.Mark != steer.Mark ||
+		len(after.DurableSteers) != 0 || len(after.Reports) != 0 {
+		t.Fatal("the resumed steer did not settle with its original turn and coverage")
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	reqs := model.reqs
+	if len(reqs) != 2 || len(reqs[1].Input) != 2 || !strings.Contains(string(reqs[1].Input[1]), "take this steer") {
+		t.Fatalf("the successor did not receive the pending steer exactly once: %d requests", len(reqs))
 	}
 }
 

@@ -488,6 +488,7 @@ type Event struct {
 	// (a prompt, or a steered message it worked in).
 	SteerAnswer       *SteerAnswer
 	UserTaken         string
+	durableSteerID    string
 	compactSteerReply *compactSteerReply
 }
 

@@ -109,6 +109,9 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 	case werk.LineSteerAck:
 		return []Event{{SteerAnswer: &SteerAnswer{Refusal: l.Refusal}}}
 	case werk.LineUserTaken:
+		if l.TurnID != "" {
+			return []Event{{TurnID: l.TurnID, durableSteerID: l.ID}}
+		}
 		if l.Text == "" {
 			return nil
 		}

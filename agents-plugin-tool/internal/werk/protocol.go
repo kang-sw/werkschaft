@@ -46,6 +46,12 @@ const (
 	CmdSet = "set"
 )
 
+// Steer is an admitted mid-turn message. ID is stable across daemon openings.
+type Steer struct {
+	ID   string
+	Text string
+}
+
 // Command is a request from the daemon to the session loop.
 type Command struct {
 	Type   string  `json:"type"`
@@ -54,6 +60,7 @@ type Command struct {
 	Text   string  `json:"text,omitempty"`
 	Model  string  `json:"model,omitempty"`
 	Effort *string `json:"effort,omitempty"`
+	Steers []Steer `json:"-"`
 }
 
 // Line types, process to daemon.

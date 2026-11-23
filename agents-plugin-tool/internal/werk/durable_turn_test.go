@@ -161,3 +161,68 @@ func TestDurableTurnRecoversPendingReadsAndFileEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestDurableSteerReceiptsReconcilePartialLogCommit(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	ctx := context.Background()
+	cmd := Command{Type: CmdUser, TurnID: "original-turn", Text: "start"}
+	steers := []Steer{{ID: "first-steer", Text: "same text"}, {ID: "second-steer", Text: "same text"}}
+	var receipts []string
+	var ended bool
+	open := func(model Responder, appendHook func(json.RawMessage) error) *Agent {
+		t.Helper()
+		a, err := New(Config{
+			Dir: dir, Session: session, Endpoint: model, Authority: AuthorityReadOnly,
+			BeforeAppend: appendHook,
+			Emit: func(l Line) {
+				if l.T == LineUserTaken {
+					if l.TurnID != cmd.TurnID {
+						t.Errorf("steer receipt had turn %q", l.TurnID)
+					}
+					receipts = append(receipts, l.ID)
+				}
+				if l.T == LineTurnEnd {
+					ended = true
+				}
+			},
+		})
+		must(t, err)
+		t.Cleanup(func() { _ = a.Close() })
+		a.steers = append([]Steer(nil), steers...)
+		return a
+	}
+	firstModel := &scripted{}
+	writeFailure := errors.New("simulated failure committing a steer")
+	first := open(firstModel, func(raw json.RawMessage) error {
+		var row turnSteerRecord
+		if json.Unmarshal(raw, &row) == nil && row.K == "turn_steer" && row.ID == steers[1].ID {
+			return writeFailure
+		}
+		return nil
+	})
+	if err := first.runDurableTurn(ctx, ctx, cmd); !errors.Is(err, writeFailure) {
+		t.Fatalf("steer commit failed with %v", err)
+	}
+	must(t, first.Close())
+	if len(firstModel.requests()) != 0 || ended || !reflect.DeepEqual(receipts, []string{steers[0].ID}) {
+		t.Fatalf("partially committed steering yielded receipts %v and ended=%v", receipts, ended)
+	}
+
+	receipts = nil
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("done"))}}
+	next := open(model, nil)
+	must(t, next.runDurableTurn(ctx, ctx, cmd))
+	must(t, next.Close())
+	if !ended || !reflect.DeepEqual(receipts, []string{steers[0].ID, steers[1].ID}) {
+		t.Fatalf("recovery yielded receipts %v and ended=%v", receipts, ended)
+	}
+	reqs := model.requests()
+	if len(reqs) != 1 || len(reqs[0].Input) != 3 {
+		t.Fatalf("recovery duplicated or lost a steer: %v", reqs)
+	}
+	for _, item := range reqs[0].Input[1:] {
+		if string(item) != string(userItem("same text")) {
+			t.Fatalf("recovered steer = %s", item)
+		}
+	}
+}
