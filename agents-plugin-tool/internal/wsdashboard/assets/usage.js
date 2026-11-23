@@ -239,7 +239,12 @@
           var column = el("span", "usage-column" + (noRecent ? " usage-stale" : ""));
           var current = el("span", "usage-current"), number;
           if (noRecent) {
-            number = el("span", "usage-number", "—");
+            if (at) {
+              number = el("span", "usage-number", Math.round(w.percent));
+              number.appendChild(el("span", "usage-percent", "%"));
+            } else {
+              number = el("span", "usage-number", "—");
+            }
           } else {
             number = el("span", "usage-number", Math.round(w.percent));
             number.appendChild(el("span", "usage-percent", "%"));
