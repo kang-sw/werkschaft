@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Repository-local developer commands. Not shipped with any plugin package.
 
-    python scripts/dev.py rerun daemon [--local] [--no-seed] [--health-window SECONDS]
+    python scripts/dev.py rerun daemon [--local | --staged PATH] [--no-seed] [--health-window SECONDS]
 
 `rerun daemon` builds agents-plugin-tool/cmd/ws-mcp from the working tree
 (cross-built on the sys_lock remote w5090 by default, `go build` here with
---local), stages it under the dashboard daemon's bin/ directory exactly as the launcher
-does, and runs `daemon-start --replace --build-time <now>` under the
+--local, or reusing an already-staged binary with --staged PATH), stages it
+under the dashboard daemon's bin/ directory exactly as the launcher
+does (skipped when --staged is given), and runs `daemon-start --replace --build-time <now>` under the
 launcher's starter gate, holding it through bounded REST confirmation of the
 expected build. Session launchers reconnect on their own.
 
@@ -63,7 +64,7 @@ DAEMON_PACKAGE = REPO / "agents-plugin-wsflow"
 
 # One lifecycle budget for starter-gate acquisition, daemon-start and REST
 # confirmation. Builds and seeding stay outside this deadline and the gate.
-START_TIMEOUT_SECONDS = 60.0
+START_TIMEOUT_SECONDS = 180.0
 HEALTH_WINDOW_SECONDS = 300
 HEALTH_INTERVAL_SECONDS = 20
 ROLLBACK_STOP_SECONDS = 15
@@ -119,7 +120,15 @@ def remote_available() -> str | None:
     if not bash or not Path(SYS_LOCK).is_file():
         return f"{SYS_LOCK} or bash is not present"
     try:
-        proc = subprocess.run([bash, SYS_LOCK, "remote", "list"], capture_output=True, text=True, timeout=60, check=False)
+        proc = subprocess.run(
+            [bash, SYS_LOCK, "remote", "list"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return f"sys_lock remote list failed: {exc}"
     if proc.returncode != 0 or REMOTE not in proc.stdout.split():
@@ -226,6 +235,8 @@ def run_daemon_start(launcher, staged: Path, build_time: int, plugin_dir: Path =
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
     )
@@ -409,11 +420,25 @@ def restore_daemon(launcher, daemon_dir: Path, previous: dict, stop) -> dict:
     return health
 
 
-def rerun_daemon(local: bool, seed: bool = True, health_window: float = HEALTH_WINDOW_SECONDS) -> int:
+def rerun_daemon(local: bool = False, seed: bool = True, health_window: float = HEALTH_WINDOW_SECONDS,
+                 staged: Path | str | None = None) -> int:
+    if local and staged is not None:
+        raise RuntimeError("--local and --staged are mutually exclusive")
     launcher = load_launcher()
     env = dict(os.environ)
     daemon_dir = launcher.proxy_daemon_dir(env)
     bin_dir = daemon_dir / launcher.DAEMON_BIN_DIR_NAME
+
+    if staged is not None:
+        built = Path(os.path.abspath(staged))
+        if not built.is_file():
+            raise RuntimeError(f"staged binary does not exist: {built}")
+        check_built(launcher, built)
+        digest = launcher.sha256_file(built)
+        result = restart_daemon(launcher, daemon_dir, bin_dir, built, digest, health_window, stage=False)
+        if result == 0 and seed:
+            seed_packages(launcher, built)
+        return result
 
     with tempfile.TemporaryDirectory(prefix="ws-mcp-dev-") as scratch:
         built = build(launcher, Path(scratch), local)
@@ -425,7 +450,8 @@ def rerun_daemon(local: bool, seed: bool = True, health_window: float = HEALTH_W
         return result
 
 
-def restart_daemon(launcher, daemon_dir: Path, bin_dir: Path, built: Path, digest: str, health_window: float) -> int:
+def restart_daemon(launcher, daemon_dir: Path, bin_dir: Path, built: Path, digest: str, health_window: float,
+                   *, stage: bool = True) -> int:
     deadline = time.monotonic() + START_TIMEOUT_SECONDS
     starter = launcher.LauncherStartLock(daemon_dir)
     try:
@@ -447,13 +473,18 @@ def restart_daemon(launcher, daemon_dir: Path, bin_dir: Path, built: Path, diges
         previous = None
         if health_window:
             previous = rollback_target(launcher, daemon_dir, before)
-            target = bin_dir / launcher.staged_daemon_name(built, digest)
-            if target.resolve() == Path(previous["executable"]).resolve() and digest != previous["binary_sha256"]:
-                raise RuntimeError("staging would overwrite the rollback target")
-        # Staging leaves other content-addressed entries alone. The daemon
-        # replaces the last-running record, so retain the old value in memory.
-        staged = launcher.stage_daemon_binary(built, bin_dir)
-        print(f"staged: {staged}")
+            if stage:
+                target = bin_dir / launcher.staged_daemon_name(built, digest)
+                if target.resolve() == Path(previous["executable"]).resolve() and digest != previous["binary_sha256"]:
+                    raise RuntimeError("staging would overwrite the rollback target")
+        if stage:
+            # Staging leaves other content-addressed entries alone. The daemon
+            # replaces the last-running record, so retain the old value in memory.
+            staged = launcher.stage_daemon_binary(built, bin_dir)
+            print(f"staged: {staged}")
+        else:
+            staged = built
+            print(f"staged (reused): {staged}")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError("lifecycle deadline expired before daemon-start")
@@ -504,7 +535,9 @@ def main(argv: list[str]) -> int:
     rerun = sub.add_parser("rerun", help="replace a running component with the working-tree build")
     rerun_sub = rerun.add_subparsers(dest="target", required=True)
     daemon = rerun_sub.add_parser("daemon", help="replace the dashboard daemon")
-    daemon.add_argument("--local", action="store_true", help=f"build with the local go instead of on the {REMOTE} sys_lock remote")
+    source = daemon.add_mutually_exclusive_group()
+    source.add_argument("--local", action="store_true", help=f"build with the local go instead of on the {REMOTE} sys_lock remote")
+    source.add_argument("--staged", type=Path, metavar="PATH", help="reuse an already-built/staged binary at PATH without building or re-staging")
     daemon.add_argument("--no-seed", action="store_true", help="do not seed the build into the local-devenv plugin runtime dirs")
     daemon.add_argument("--health-window", type=float, default=HEALTH_WINDOW_SECONDS, metavar="SECONDS",
                         help="monitor the replacement before accepting it (default: 300, 0 disables)")
@@ -513,7 +546,7 @@ def main(argv: list[str]) -> int:
         if args.command == "rerun" and args.target == "daemon":
             if not math.isfinite(args.health_window) or args.health_window < 0:
                 daemon.error("--health-window must be finite and non-negative")
-            return rerun_daemon(args.local, not args.no_seed, args.health_window)
+            return rerun_daemon(args.local, not args.no_seed, args.health_window, args.staged)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
