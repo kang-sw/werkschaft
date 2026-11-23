@@ -532,7 +532,14 @@
       "registered_at": "2026-11-16T04:15:13Z"
     },
     "261117-bug-pi-ticket-worker-profile-tools": {
-      "registered_at": "2026-11-17T05:39:55Z"
+      "registered_at": "2026-11-17T05:39:55Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:36:37Z"
+      }
     },
     "261117-feat-role-scoped-workflow-context": {
       "registered_at": "2026-11-17T05:54:39Z"
