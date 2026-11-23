@@ -73,12 +73,14 @@ func TestComposerInteractivePathsTouchNoFiles(t *testing.T) {
 		t.Fatal(res.Body)
 	}
 	waitCard(t, f.d, "perf-files-002", "done")
-	// The loop's sweep, asked by the write, may add its own listing.
+	// The loop's sweep, asked by the write, adds its listing and then one
+	// stat for the file; "readdir" alone is observable mid-sweep, so wait for
+	// the sweep's last operation.
 	waitFor(t, "the write's sweep", func() bool {
 		log.mu.Lock()
 		defer log.mu.Unlock()
 		for _, op := range log.ops {
-			if op == "readdir" {
+			if op == "stat" {
 				return true
 			}
 		}
