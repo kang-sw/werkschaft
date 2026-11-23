@@ -31,7 +31,10 @@ import (
 // ~/.ws/config.json. It is unconditional: an inherited WS_CONFIG_HOME is a
 // real config just the same. Tests that need a config home set their own.
 func TestMain(m *testing.M) {
-	scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
+	if os.Getenv("WS_TEST_INHERITED_ENV_SCRUBBED") != "1" {
+		scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
+		_ = os.Setenv("WS_TEST_INHERITED_ENV_SCRUBBED", "1")
+	}
 	checkout, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		panic(err)

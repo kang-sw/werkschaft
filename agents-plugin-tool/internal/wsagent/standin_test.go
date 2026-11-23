@@ -42,7 +42,10 @@ func TestMain(m *testing.M) {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	}
-	scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
+	if os.Getenv("WS_TEST_INHERITED_ENV_SCRUBBED") != "1" {
+		scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
+		_ = os.Setenv("WS_TEST_INHERITED_ENV_SCRUBBED", "1")
+	}
 	checkout, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		panic(err)
