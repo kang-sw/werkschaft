@@ -31,12 +31,29 @@ import (
 // ~/.ws/config.json. It is unconditional: an inherited WS_CONFIG_HOME is a
 // real config just the same. Tests that need a config home set their own.
 func TestMain(m *testing.M) {
+	scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
 	checkout, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		panic(err)
 	}
 	_ = os.Setenv("WS_RSRC_DEV_CHECKOUT", checkout)
 	os.Exit(runTestMain(m))
+}
+
+// scrubInheritedWSEnv prevents hosted-session WS_* values from reaching the live daemon.
+func scrubInheritedWSEnv(exempt ...string) {
+	keep := make(map[string]struct{}, len(exempt))
+	for _, key := range exempt {
+		keep[key] = struct{}{}
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "WS_") {
+			if _, ok := keep[key]; !ok {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
 }
 
 func runTestMain(m *testing.M) int {
@@ -55,6 +72,14 @@ func runTestMain(m *testing.M) int {
 	defer os.RemoveAll(configHome)
 	_ = os.Setenv("WS_CONFIG_HOME", configHome)
 	return m.Run()
+}
+
+func TestInheritedWSEnvIsScrubbed(t *testing.T) {
+	for _, key := range []string{"WS_MCP_PI_TOKEN", "WS_MCP_PI_ENDPOINT"} {
+		if got := os.Getenv(key); got != "" {
+			t.Fatalf("%s = %q, want empty", key, got)
+		}
+	}
 }
 
 func toolPropertiesByName(t *testing.T, listLine, toolName string) map[string]any {
