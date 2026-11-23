@@ -32,7 +32,11 @@
     var board = name === "board";
     if (board && boardReturnTimer) still = true;
     if (el.getAttribute("data-h") === hash && !(board && Object.keys(boardPending).length)) { if (board) { deferred = null; boardReturnApply(); } if (name === "rail") { if (railGate) railGate.forget(); if (typeof html !== "string") railRendered = html; } if (name === "tree" && typeof html !== "string") treeRendered = html; if (name === "entries" && typeof html !== "string") entryRendered = html; if (name === "panels" && typeof html !== "string") panelRendered = html; return; }
-    if (board && window.WsOverview && window.WsOverview.holding()) { boardOverviewHeld = { hash: hash, html: html }; return; }
+    if (board && window.WsOverview && window.WsOverview.holding()) {
+      boardOverviewHeld = { hash: hash, html: html };
+      patchOverviewPreview(html);
+      return;
+    }
     if (board && window.WsCards && window.WsCards.dragging && window.WsCards.dragging()) { boardDragHeld = { hash: hash, html: html }; return; }
     // A rail render from before the layout change this page saw applied
     // would undo it on screen until the next one: it is dropped, and the
@@ -117,16 +121,26 @@
       if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
       ins.forEach(bandBoard);
       ins.forEach(function (n) {
+        var taken = n && n.__wbVirtualTaken || null;
+        if (taken) delete n.__wbVirtualTaken;
         // Materialize the reader's older pages before restoring disclosures
         // and frame heights, including immutable panel versions off the tail.
-        if (window.wbHistory) { window.wbHistory.init(n); window.wbHistory.restore(n, history); }
+        if (window.wbHistory) {
+          window.wbHistory.init(n);
+          window.wbHistory.restore(n, history);
+          if (taken && taken.history) window.wbHistory.restore(n, taken.history);
+        }
         watchBoard(n);
+        if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
         restoreOpen(n);
         fmtTimes(n);
         sweepOutImgs(n);
+        if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
         setFrameHeights(n, frameH);
         mountFrames(n);
+        if (taken && taken.answers) writeAnswers(n, taken.answers);
         writeAnswers(n, answers);
+        if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
         // A placeholder a swap brought (the viewport bands mount it later)
         // takes the mark too, and its frame takes it once mounted.
         q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
@@ -165,7 +179,6 @@
     if (kept) kept.h.apply();
     if (board) {
       anchorSettle(anchored);
-      anchorWatchLast();
       boardRecordPending(); boardPendingBadge(); boardHoldIndicators();
       if (typeof boardDialSync === "function") boardDialSync();
       if (!boardRelease) boardReturnApply();
@@ -480,6 +493,12 @@
       frames: function () { return boardRead(frameHeights); },
       restoreFrames: function (h) { var kept = boardKeep(); boardBoxes().forEach(function (b) { setFrameHeights(b, h); }); if (kept) kept.h.apply(); },
       changed: function () { doc.dispatchEvent(new Event("ws-overview")); },
+      onPreview: function (node) {
+        if (!node) return;
+        if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(node, { immediate: true });
+        mountFrames(node);
+        q("iframe.doc-frame", node).forEach(function (f) { postDoc(f, { wbDoc: "size" }); });
+      },
       release: function () {
         var h = boardOverviewHeld;
         boardOverviewHeld = null;
@@ -495,6 +514,66 @@
     if (window.ResizeObserver) new ResizeObserver(queueGallery).observe($("bcol") || cardBoard);
   }
   boardBoxes().forEach(watchBoard);
+  // While Overview is open with Quick Look active, admit keyed patches for the
+  // actively previewed topic ONLY so live interactions (e.g. answering an ask)
+  // reflect immediately without shifting the Overview tile list in #bcol.
+  function patchOverviewPreview(html) {
+    if (!window.WsOverview || !window.WsOverview.previewNode) return;
+    var liveNode = window.WsOverview.previewNode();
+    if (!liveNode || !liveNode.isConnected) return;
+    var key = topicKey(liveNode);
+    if (key === null) return;
+    var incoming = null;
+    if (typeof html === "string") {
+      var parsed = boardInputFull(html);
+      if (parsed && parsed.topics) incoming = parsed.topics[key] || null;
+      else {
+        Array.prototype.some.call(frag(html).children, function (n) {
+          if (topicKey(n) === key) { incoming = n; return true; }
+          return false;
+        });
+      }
+    } else if (html && html.topics) {
+      incoming = html.topics[key] || null;
+    }
+    if (!incoming) return;
+    var seenKey = "t:" + key, h = topicSeen(incoming);
+    if (boardSeen[seenKey] === h) return;
+    boardSeen[seenKey] = h;
+    if (boardRendered && boardRendered.topics) boardRendered.topics[key] = incoming.cloneNode(true);
+    var answers = readAnswers(liveNode);
+    var frameH = frameHeights(liveNode);
+    var history = window.wbHistory ? window.wbHistory.capture(liveNode) : null;
+    var scrollTop = liveNode.scrollTop;
+    var next = incoming.cloneNode(true);
+    var g = frameGraftable(liveNode, next);
+    var reuse = frameKeep([{ old: liveNode, n: next, g: g }]);
+    var target = liveNode;
+    if (g) {
+      frameGraft(g);
+    } else if (liveNode.parentNode) {
+      liveNode.parentNode.replaceChild(next, liveNode);
+      if (window.WsOverview.replacePreviewNode) window.WsOverview.replacePreviewNode(liveNode, next);
+      target = next;
+    }
+    frameKept(reuse);
+    bandBoard(target);
+    if (window.wbHistory) { window.wbHistory.init(target); window.wbHistory.restore(target, history); }
+    watchBoard(target);
+    restoreOpen(target);
+    fmtTimes(target);
+    sweepOutImgs(target);
+    setFrameHeights(target, frameH);
+    mountFrames(target);
+    writeAnswers(target, answers);
+    q(".doc-frame", target).forEach(function (f) { f.wbKeep = true; });
+    if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
+    indexFrames();
+    if (window.wbForm) window.wbForm();
+    mermaid([target]);
+    applySent(true);
+    target.scrollTop = scrollTop;
+  }
   // morphBoard applies a board region event to el and returns the element
   // nodes it inserted, in order, for the caller to prepare.
   function morphBoard(el, html) {
@@ -530,9 +609,24 @@
       // server folds a closed topic's body and settled rows under the same
       // keys an open topic uses, so the user's earlier choices for them are
       // forgotten here, and later toggles are kept again.
-      if (live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed")) { forgetOpen(live[key]); forgetOpen(n); }
+      var newlyClosed = !!(live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed"));
+      if (newlyClosed) { forgetOpen(live[key]); forgetOpen(n); }
       if (live[key] && boardSeen[key] === h) { want.push(live[key]); delete live[key]; }
-      else {
+      else if (live[key] && live[key].hasAttribute("data-wb-virtual") && !window.WsCards.isDocked(live[key]) && typeof virtualStashUpdate === "function" && virtualStashUpdate(live[key], n)) {
+        want.push(live[key]); delete live[key];
+      } else {
+        if (live[key] && live[key].hasAttribute("data-wb-virtual")) {
+          var taken = typeof virtualTakeCollapsed === "function" ? virtualTakeCollapsed(k) : null;
+          if (!taken && typeof virtualDropCollapsed === "function") virtualDropCollapsed(k);
+          if (taken) {
+            if (newlyClosed) {
+              taken.openDetails = null;
+              if (taken.stashed) forgetOpen(taken.stashed);
+              if (taken.children) taken.children.forEach(function (c) { if (c && c.nodeType === 1) forgetOpen(c); });
+            }
+            n.__wbVirtualTaken = taken;
+          }
+        }
         // A docked topic's live section wraps its body (cards.js wrap): the
         // incoming one takes the same wrapper first, so the graft's paths
         // match and its body frame stays live.

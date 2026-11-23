@@ -248,7 +248,6 @@ var bad = [], log = [];
 function syncSpinnerPhases() {}
 function anchorCards() { return []; }
 function anchorSettle() {}
-function anchorWatchLast() {}
 function boardApplied() {}
 function anchorCurrent() { return null; }
 function anchorOwner() { return null; }

@@ -346,7 +346,9 @@ test('stale boundary is strictly after 30 minutes, per window, switching stale c
   assert.equal(env.button.querySelector('.usage-pace').textContent, '−23%');
   env.now(at + 30 * 60000 + 1); mounted.sync();
   const staleCol = env.button.querySelector('.usage-stale');
-  assert.equal(staleCol.querySelector('.usage-number').textContent, '—');
+  assert.equal(staleCol.className, 'usage-column usage-stale');
+  assert.equal(staleCol.querySelector('.usage-number').textContent, '20%');
+  assert.equal(staleCol.querySelector('.usage-percent').textContent, '%');
   assert.equal(staleCol.querySelector('.usage-pace'), null);
   assert.ok(env.button.querySelector('.usage-clock'));
   assert.match(staleCol.attributes['aria-label'], /No recent 5-hour report/);
@@ -354,13 +356,13 @@ test('stale boundary is strictly after 30 minutes, per window, switching stale c
   assert.equal(env.button.querySelector('.usage-columns').children[1].className, 'usage-column');
   assert.equal(env.button.querySelector('.usage-columns').children[1].querySelector('.usage-number').textContent, '53%');
   env.now(at + 42 * 60000); mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '20%');
   assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace'), null);
   env.now(at + 55 * 60000); mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
-  // Stale positive-pace values also render as em-dash without pace or over tone.
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '20%');
+  // Stale positive-pace values retain the observed value without pace or over tone.
   entry.windows[0].percent = 64; mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '64%');
   assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace'), null);
   assert.equal(env.button.querySelector('.usage-stale').querySelector('.over'), null);
   assert.match(env.button.querySelector('.usage-stale').title, /last 64% at /);
@@ -774,7 +776,7 @@ test('popover uses window rows, transposed container rules and a localized missi
   pop.close();
 });
 
-test('stale 5h 0% with fresh weekly shows em-dash/no-report and weekly heading age, then handles reset and fresh 0%', async () => {
+test('stale 5h 0% with fresh weekly retains the value in the footer, shows em-dash in cards, and handles reset', async () => {
   const t0711 = Date.UTC(2026, 10, 22, 7, 11);
   const reset5h = Date.UTC(2026, 10, 22, 11, 0);
   const t1011 = Date.UTC(2026, 10, 22, 10, 11);
@@ -797,7 +799,7 @@ test('stale 5h 0% with fresh weekly shows em-dash/no-report and weekly heading a
   const cols1 = groups(env.button)[0].querySelector('.usage-columns').children;
   assert.equal(cols1.length, 2);
   assert.ok(cols1[0].className.includes('usage-stale'));
-  assert.equal(cols1[0].querySelector('.usage-number').textContent, '—');
+  assert.equal(cols1[0].querySelector('.usage-number').textContent, '0%');
   assert.equal(cols1[0].querySelector('.usage-pace'), null);
   assert.match(cols1[0].title, /No recent 5-hour report/);
   assert.match(cols1[0].title, /last 0% at /);

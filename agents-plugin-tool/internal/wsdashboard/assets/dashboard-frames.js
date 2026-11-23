@@ -104,8 +104,11 @@
   function boardBands() { return !!(window.wbHistory && window.wbHistory.bands && window.wbHistory.watch); }
   function frameNear(f) {
     if (!boardBands()) return true;
+    if (frameInOverviewPreview(f)) return true;
     var t = f.parentNode ? f.parentNode.closest("section.topic[data-topic]") : null;
     if (!t) return true;
+    if (t.hasAttribute("data-overview-live") || t.hasAttribute("data-max")) return true;
+    if (window.WsBoardVirtual && window.WsBoardVirtual.isNear && window.WsBoardVirtual.isNear(t)) return true;
     bandTopic(t);
     var near = t.wbNear !== undefined ? t.wbNear : topicNear[t.getAttribute("data-topic")] === true;
     return near;
@@ -167,10 +170,10 @@
   // docked page (the root's data-gal-away).
   function topicBand(t, r, near) {
     if (!r.rect || (!r.rect.width && !r.rect.height)) return;
-    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
+    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !t.hasAttribute("data-overview-live") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
     t.wbNear = r.visible;
     topicNear[t.getAttribute("data-topic")] = r.visible;
-    if (r.visible) mountFramesPaced(t);
+    if (r.visible && !t.hasAttribute("data-wb-virtual")) mountFramesPaced(t);
   }
   // unmountFrames turns topic t's frames back into placeholders, except a
   // frame the page still holds: a graft's pair (wbNext, wbOut), the focused
@@ -290,8 +293,17 @@
     if (grid && !tabShown("board")) setTab("board");
     var isTopic = id.indexOf("topic-") === 0;
     var alternate = id.replace(/^(item|check)-/, function (s) { return s === "item-" ? "check-" : "item-"; });
+    if (typeof virtualHydrateForTarget === "function") {
+      virtualHydrateForTarget(id);
+      if (alternate !== id) virtualHydrateForTarget(alternate);
+    }
     var target = null, unfoldTopic = window.WsCards && window.WsCards.unfoldTopic;
-    if (!isTopic && window.wbHistory) boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+    if (!isTopic && window.wbHistory) {
+      boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      if (!target && typeof virtualHydrateLazyTopics === "function" && virtualHydrateLazyTopics()) {
+        boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      }
+    }
     var loaded = !!target;
     // A target in history the page has not fetched yet jumps once its topic
     // arrives (a second miss starts no further wait: its fetch fills nothing).
@@ -410,26 +422,55 @@
   // board's worth of frames rather than one per message. The height it
   // eases from is its set height (style.height), 0 when it has none, as the
   // stylesheet's iframe.doc-frame starts it, so nothing reads layout.
-  var frameSizes = new Map(), frameSizeFrame = 0;
+  var frameSizes = new Map(), frameSizeFrame = 0, frameOverviewWait = false;
+  function frameInOverviewPreview(f) {
+    return !!(f && window.WsOverview && window.WsOverview.inPreview && window.WsOverview.inPreview(f));
+  }
   function queueFrameHeight(f, h) {
     if (shHidden) return;
     frameSizes.set(f, h);
+    if (window.WsOverview && window.WsOverview.holding()) {
+      if (!frameOverviewWait && window.WsOverview.onRelease) {
+        frameOverviewWait = true;
+        window.WsOverview.onRelease(function () {
+          frameOverviewWait = false;
+          if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
+        });
+      }
+      if (!frameInOverviewPreview(f)) return;
+    }
     if (!frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
   }
   function applyFrameHeights() {
     if (shHidden) { frameSizes.clear(); frameSizeFrame = 0; return; }
-    // While overview is active or transitioning, board frames are inside
-    // display:none containers and report collapsed heights. Applying those
-    // would overwrite the saved inline heights that exit uses to restore the
-    // unfolded layout, causing a height jump at the end of the exit motion.
-    // Re-queue until overview releases.
-    if (window.WsOverview && window.WsOverview.holding()) {
-      frameSizeFrame = requestAnimationFrame(applyFrameHeights);
-      return;
+    // While overview is active or transitioning, off-preview board frames are
+    // inside display:none containers and report collapsed heights; defer them
+    // with a one-shot release listener while sizing Quick Look preview frames
+    // immediately.
+    var holding = !!(window.WsOverview && window.WsOverview.holding());
+    var batch;
+    if (holding) {
+      batch = new Map();
+      frameSizes.forEach(function (h, f) {
+        if (frameInOverviewPreview(f)) {
+          batch.set(f, h);
+          frameSizes.delete(f);
+        }
+      });
+      frameSizeFrame = 0;
+      if (frameSizes.size && !frameOverviewWait && window.WsOverview.onRelease) {
+        frameOverviewWait = true;
+        window.WsOverview.onRelease(function () {
+          frameOverviewWait = false;
+          if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
+        });
+      }
+      if (!batch.size) return;
+    } else {
+      batch = frameSizes;
+      frameSizes = new Map();
+      frameSizeFrame = 0;
     }
-    var batch = frameSizes;
-    frameSizes = new Map();
-    frameSizeFrame = 0;
     // Every height applies at once, under one capture per actual scroller,
     // including old frames and independent pinned columns. A frame's srcdoc
     // never changes, so its height reports are the rendering of content the
@@ -520,6 +561,16 @@
       if (window.wbCardFind && window.wbCardFind.onFrameScroll) window.wbCardFind.onFrameScroll(f, num(m.seq), num(m.top), num(m.height));
     } else if (m.wbDoc === "hover") {
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
+    } else if (m.wbDoc === "wheel") {
+      if (window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) window.WsBoardAnchor.onFrameWheel(f, num(m.dy), num(m.dx), num(m.mode));
+    } else if (m.wbDoc === "middleclick") {
+      var ma = navigator.userActivation, col = $("bcol");
+      if (shHidden || !col || !col.contains(f)) return;
+      if (f.closest && f.closest("[data-max], .bgal")) return;
+      if (root.hasAttribute("data-board-max")) return;
+      if (doc.querySelector("#tkqpop[open], dialog[open], .tpop:not([hidden]), [popover]:popover-open")) return;
+      if (ma && !ma.isActive) return;
+      if (window.WsOverview && window.WsOverview.toggle) window.WsOverview.toggle();
     }
   });
   // A swap re-creates a changed topic's frame (or loads its next one beside

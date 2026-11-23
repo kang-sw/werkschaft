@@ -189,7 +189,8 @@
         if (r.top <= 0 && r.bottom > 0) inset = Math.max(inset, r.bottom + 4);
       });
       var top = main ? inset : s.getBoundingClientRect().top + s.clientTop;
-      var floating = board.getBoundingClientRect().top < top;
+      var snapDeck = !main && !!(s && s.wbScrollOwner) && !overviewOn;
+      var floating = snapDeck ? false : board.getBoundingClientRect().top < top;
       var rows = {};
       Array.prototype.forEach.call(row.children, function (n) {
         var r = n.getBoundingClientRect();
@@ -840,7 +841,7 @@
       delete dotEls[k];
     });
     var rail = !!(lay && lay.rail), empty = !!(lay && lay.empty), shown = rail || empty;
-    galEl.hidden = !shown;
+    galEl.hidden = !shown && !doc.documentElement.hasAttribute("data-overview-preview");
     railEl.hidden = !rail;
     galEl.setAttribute("data-pos", String(pos));
     galEl.setAttribute("data-pages", String(n));
@@ -1413,6 +1414,7 @@
   // (a graft keeps the wrapper) move in alone. unwrapTopic gives the stock
   // markup back.
   function wrapTopic(sec) {
+    if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(sec, { immediate: true });
     var head = child(sec, "tophead");
     if (!head) return null;
     var body = child(sec, "gal-pbody"), before = [], after = [], past = false, n;
@@ -1634,13 +1636,7 @@
     [c.icon, c.name, c.sub, c.badge, c.acts, c.pinBtn, c.foldBtn, c.raiseBtn, c.maxBtn, c.minBtn, c.closeBtn].forEach(function (n) { head.appendChild(n); });
     c.foldEl = mk("div", "bc-folded");
     c.body = mk("div", "bc-body");
-    c.grip = mk("div", "bc-grip");
-    c.grip.setAttribute("role", "separator");
-    c.grip.setAttribute("aria-orientation", "horizontal");
-    c.grip.tabIndex = 0;
-    c.grip.title = wsT("js.card.grip");
-    c.grip.setAttribute("aria-label", wsT("js.card.grip"));
-    [head, c.foldEl, c.body, c.grip].forEach(function (n) { inner.appendChild(n); });
+    [head, c.foldEl, c.body].forEach(function (n) { inner.appendChild(n); });
     el.appendChild(inner);
     c.pinBtn.addEventListener("click", function () { c.pin(!c.pinned); });
     c.foldBtn.addEventListener("click", function () { c.fold(!c.folded); });
@@ -1650,7 +1646,6 @@
     c.closeBtn.addEventListener("click", async function () {
       if (!c.k.closing || (await c.k.closing(c, c.closeBtn)) !== false) c.close();
     });
-    c.wireGrip();
     c.paint();
   };
   // paint writes the framework's own view state to the card's node.
@@ -1731,44 +1726,6 @@
     if (this.el.parentNode) this.el.parentNode.removeChild(this.el);
     if (this.pinned) { gal = G.undock(gal, refOf(this)); sync(); arrange(null); } else countTopics();
     persist();
-  };
-  // The handle under the body drags its height; the pointer is captured, so
-  // the drag keeps going over a frame in the body. Double click (or Home)
-  // goes back to the base height.
-  Card.prototype.wireGrip = function () {
-    var c = this, from = null;
-    function set(h) {
-      c.h = Math.max(MIN, Math.round(h));
-      c.body.style.height = c.h + "px";
-    }
-    function end() {
-      if (from === null) return;
-      from = null;
-      c.el.classList.remove("drag");
-      persist();
-      c.sized();
-    }
-    c.grip.addEventListener("pointerdown", function (e) {
-      if (e.button !== undefined && e.button !== 0) return;
-      from = { y: e.clientY, h: c.body.getBoundingClientRect().height };
-      c.el.classList.add("drag");
-      try { c.grip.setPointerCapture(e.pointerId); } catch (x) { /* no capture: the move still lands */ }
-      e.preventDefault();
-    });
-    c.grip.addEventListener("pointermove", function (e) { if (from) set(from.h + e.clientY - from.y); });
-    c.grip.addEventListener("pointerup", end);
-    c.grip.addEventListener("pointercancel", end);
-    function reset() { c.h = 0; c.paint(); persist(); c.sized(); }
-    c.grip.addEventListener("dblclick", reset);
-    c.grip.addEventListener("keydown", function (e) {
-      var d = e.key === "ArrowUp" ? -STEP : e.key === "ArrowDown" ? STEP : 0;
-      if (e.key === "Home") { e.preventDefault(); reset(); return; }
-      if (!d) return;
-      e.preventDefault();
-      set(c.body.getBoundingClientRect().height + d);
-      persist();
-      c.sized();
-    });
   };
 
   // --- the maximize sheet -------------------------------------------------------
@@ -1892,6 +1849,7 @@
       }
     }
     if (!c) return;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.cancelGlide) window.WsBoardAnchor.cancelGlide();
     c.normalWidth = floatOn ? 1100 : sheetWidth(c);
     c.extended = false;
     if (!scrim) {
@@ -1901,7 +1859,7 @@
     }
     scrim.hidden = false;
     maxed = c;
-    doc.documentElement.setAttribute("data-board-max", "");
+    syncBoardMaxAttr(c.el);
     if (c.files) {
       // The page owns this explorer independently of the conversation tab.
       c.el.hidden = false;
@@ -1957,13 +1915,18 @@
     var row = n.tagName === "DETAILS" ? n.firstElementChild : child(child(n, "tophead") || n, "tbar");
     return row ? child(row, cls) : null;
   }
+  function syncBoardMaxAttr(el) {
+    doc.documentElement.setAttribute("data-board-max", galEl && el && galEl.contains(el) ? "gal" : "");
+  }
   function grow(t) {
     var n = sheetNode(t);
     if (t.el && t.el !== n) shrinkNode(t);
     t.el = n;
     if (!n) return;
+    syncBoardMaxAttr(n);
     sizeSheet(t);
     if (n.hasAttribute("data-max")) return;
+    if (t.topic && window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(n, { immediate: true });
     if (t.topic) {
       if (!t.scroll) {
         t.scroll = [];
@@ -1972,12 +1935,26 @@
     } else {
       n.open = true;
       n.parentNode.style.height = n.parentNode.getBoundingClientRect().height + "px";
+      var sec = n.closest && n.closest("section.topic");
+      var hosts = [];
+      if (sec) {
+        hosts.push(sec);
+        for (var p = n.parentNode; p && p !== sec; p = p.parentNode) {
+          if (p.parentNode === sec && !p.classList.contains("tophead")) { hosts.push(p); break; }
+        }
+        hosts.forEach(function (h) { h.setAttribute("data-has-panel-max", ""); });
+      }
+      t.panelHosts = hosts;
     }
     n.setAttribute("data-max", "");
   }
   function shrinkNode(t) {
     t.el.style.removeProperty("--sheet-inset");
     t.el.removeAttribute("data-max");
+    if (t.panelHosts) {
+      t.panelHosts.forEach(function (h) { if (h && h.removeAttribute) h.removeAttribute("data-has-panel-max"); });
+      t.panelHosts = null;
+    }
     if (!t.topic && t.el.parentNode) t.el.parentNode.style.height = "";
   }
   // shrink draws t's node in its place again and returns its maximize
@@ -2069,35 +2046,9 @@
   // its board updates (opt.drag), the root carries data-bdrag, and the
   // gallery's rail shows even with no docked page, so a first unit can be
   // dropped on +.
-  var dg = null, dragged = false, line = null, raf = 0;
+  var dg = null, dragged = false, raf = 0;
   function rectOf(el) { return el && el.getClientRects().length ? el.getBoundingClientRect() : null; }
   function inside(r, x, y) { return !!r && x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
-  function drawLine(box) {
-    if (!box) { if (line) line.hidden = true; return; }
-    if (!line) {
-      line = doc.body.appendChild(mk("div", "bdrop"));
-      line.setAttribute("aria-hidden", "true");
-    }
-    line.style.left = box.left + "px";
-    line.style.width = box.width + "px";
-    line.style.top = Math.round(box.top - 1) + "px";
-    line.hidden = false;
-  }
-  // slot finds where y falls among peers: the index of the first whose
-  // middle is below it, and the line between it and the one before.
-  function slot(peers, y, box) {
-    var at = peers.length, i;
-    for (i = 0; i < peers.length; i++) {
-      var r = peers[i].getBoundingClientRect();
-      if (y < r.top + r.height / 2) { at = i; break; }
-    }
-    var top;
-    if (!peers.length) top = box.top + 4;
-    else if (at === peers.length) top = peers[at - 1].getBoundingClientRect().bottom + 4;
-    else if (at === 0) top = peers[0].getBoundingClientRect().top - 4;
-    else top = (peers[at - 1].getBoundingClientRect().bottom + peers[at].getBoundingClientRect().top) / 2;
-    return { at: at, line: { left: box.left, width: box.width, top: top } };
-  }
   function scroller(el) {
     for (var n = el; n && n !== doc.body; n = n.parentNode) if (n.nodeType === 1 && /auto|scroll/.test(getComputedStyle(n).overflowY)) return n;
     return null;
@@ -2181,18 +2132,10 @@
     if (window.WsGalPreview && window.WsGalPreview.dragOver) window.WsGalPreview.dragOver(hitDot ? hitDot.el : null, to);
     markDrop(lightEl);
     drawZone(to && to.gal === "place" ? to : null);
-    drawLine(to && to.line);
     d.scr = scr;
     var sr = rectOf(scr);
     d.edge = sr ? (y < sr.top + EDGE ? -1 : y > sr.bottom - EDGE ? 1 : 0) : 0;
     if (d.edge && !raf) raf = requestAnimationFrame(autoScroll);
-  }
-  // flowNext is the open-flow node beside n in the board (dir -1: above).
-  function flowNext(n, dir) {
-    for (var m = dir < 0 ? n.previousElementSibling : n.nextElementSibling; m; m = dir < 0 ? m.previousElementSibling : m.nextElementSibling) {
-      if (isCard(m) || topicAt(m) !== null) return m;
-    }
-    return null;
   }
   function autoScroll() {
     raf = 0;
@@ -2254,7 +2197,6 @@
     if (!d.on) return;
     d.el.classList.remove("bdrag");
     doc.documentElement.removeAttribute("data-bdrag");
-    drawLine(null);
     markDrop(null);
     drawZone(null);
     unspring();
@@ -2264,7 +2206,7 @@
     var to = d.to;
     if (e && e.type === "pointerup" && to && d.el.isConnected) {
       if (to.gal) galDrop(d.unit, to);
-      else if (to.line || d.unit.pinned) { to.el = d.el; drop(d.unit, to); }
+      else if (d.unit.pinned) { to.el = d.el; drop(d.unit, to); }
     }
     relayout();
     if (opt.drag) opt.drag(false);
@@ -2531,7 +2473,6 @@
     overview: function (on) {
       overviewOn = !!on;
       if (overviewOn && window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
-      if (board) arrange(null);
     },
     // pinnedTopic tells whether a topic name is docked on this page (its
     // node stands in a pane).

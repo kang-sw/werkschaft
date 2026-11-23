@@ -9,13 +9,591 @@
   // change of any card reads and writes nothing on the outer board. Geometry
   // is read only by an explicit user move (selecting, a native scroll's end).
   var ANCHOR_STORE = "ws.dashboard.board-card." + location.pathname + location.search;
-  var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4, ANCHOR_FADE = 14;
-  var ANCHOR_BOT = ANCHOR_FADE + 2 * ANCHOR_CAP + ANCHOR_GAP + ANCHOR_PAD;
-  var ANCHOR_BOT_MARGIN = 8;
-  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
+  var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4;
+  var ANCHOR_BOT_0 = 6, ANCHOR_BOT_1 = 27, ANCHOR_BOT_2 = 47, ANCHOR_CARD_GAP_EXTRA = 12;
+  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
-  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null;
-  var anchorProg = null, anchorProgSeq = 0;
+  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
+  var anchorProg = null, anchorProgSeq = 0, anchorGlideAnim = null, anchorWheelCtrl = null;
+  var WHEEL_DEFAULTS = {
+    threshold: 52,
+    peekPx: 0,
+    wallGuardMs: 140,
+    chainWindowMs: 360,
+    minStepMs: 165,
+    animMs: 220,
+    idleGapMs: 140,
+    discretePx: 48,
+    discreteGapMs: 60
+  };
+  var WHEEL_OWN = '.xterm, .tm-host, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
+  // Pure wheel-virtualized deck state machine (Preset A: Crisp Instant Glide).
+  // Exposed as window.WsBoardWheel for deterministic unit testing without DOM.
+  function createBoardWheel(opts) {
+    var cfg = {};
+    Object.keys(WHEEL_DEFAULTS).forEach(function (k) {
+      cfg[k] = opts && opts[k] !== undefined ? opts[k] : WHEEL_DEFAULTS[k];
+    });
+    var state = "IDLE", accum = 0, minAbs = Infinity;
+    var lastEvtAt = 0, lastCommitAt = -1e9, lastDir = 0;
+    var coastDir = 0, wallDir = 0, lastInnerAt = -1e9, lastInnerDir = 0;
+    function reset() {
+      state = "IDLE"; accum = 0; minAbs = Infinity;
+      lastEvtAt = 0; lastCommitAt = -1e9; lastDir = 0;
+      coastDir = 0; wallDir = 0; lastInnerAt = -1e9; lastInnerDir = 0;
+    }
+    function commit(dir, now, abs) {
+      state = "COAST_ABSORB";
+      coastDir = dir;
+      lastDir = dir;
+      lastCommitAt = now;
+      minAbs = abs;
+      accum = 0;
+      return { action: "commit", dir: dir };
+    }
+    function step(ev) {
+      if (!ev) return { action: "ignore" };
+      var dy = +ev.dy || 0, dx = +ev.dx || 0;
+      var scale = ev.deltaMode === 1 ? 40 : ev.deltaMode === 2 ? 800 : 1;
+      dy *= scale;
+      dx *= scale;
+      if (!dy || Math.abs(dy) < 0.01) return { action: "ignore" };
+      if (Math.abs(dx) > Math.abs(dy) * 1.15) return { action: "ignore" };
+      var now = typeof ev.now === "number" ? ev.now : Date.now();
+      var dir = dy > 0 ? 1 : -1, abs = Math.abs(dy);
+      var dt = lastEvtAt ? now - lastEvtAt : 9999;
+      lastEvtAt = now;
+      var isDiscrete = (ev.deltaMode !== 0 && ev.deltaMode != null) || (abs >= cfg.discretePx && dt >= cfg.discreteGapMs);
+      if (dt >= cfg.idleGapMs) {
+        if (state === "WALL_ABSORB" || state === "COAST_ABSORB") {
+          state = "IDLE"; minAbs = Infinity;
+        }
+        accum = 0;
+      }
+      var inChain = (now - lastCommitAt) <= cfg.chainWindowMs && dir === lastDir;
+      if (state === "WALL_ABSORB" && dir !== wallDir) {
+        state = "IDLE"; accum = 0; minAbs = Infinity;
+      }
+      if (state === "COAST_ABSORB") {
+        if (dir !== coastDir) {
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        } else {
+          if (abs < minAbs) minAbs = abs;
+          var spiked = (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 10)) && (now - lastCommitAt >= cfg.minStepMs);
+          if (!spiked) return { action: "absorb", reason: "coast" };
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        }
+      }
+      if (ev.canInnerScroll && !inChain) {
+        lastInnerAt = now;
+        lastInnerDir = dir;
+        state = "IDLE";
+        accum = 0;
+        return { action: "inner" };
+      }
+      if (state === "IDLE" && !inChain && !isDiscrete && (now - lastInnerAt) <= cfg.wallGuardMs && dir === lastInnerDir) {
+        state = "WALL_ABSORB";
+        wallDir = dir;
+        minAbs = abs;
+        accum = 0;
+        return { action: "absorb", reason: "wall" };
+      }
+      if (state === "WALL_ABSORB") {
+        if (abs < minAbs) minAbs = abs;
+        if (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 12)) {
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        } else {
+          return { action: "absorb", reason: "wall" };
+        }
+      }
+      if ((dir < 0 && ev.atFirst) || (dir > 0 && ev.atLast)) {
+        accum = 0;
+        return { action: "edge", dir: dir };
+      }
+      if (isDiscrete) {
+        if (now - lastCommitAt >= cfg.minStepMs || dir !== lastDir) return commit(dir, now, abs);
+        return { action: "absorb", reason: "rate" };
+      }
+      if ((accum > 0 && dir < 0) || (accum < 0 && dir > 0)) accum = 0;
+      accum += dy;
+      var effThreshold = inChain ? Math.round(cfg.threshold * 0.65) : cfg.threshold;
+      if (Math.abs(accum) >= effThreshold) return commit(dir, now, abs);
+      return { action: "charge", dir: dir, progress: Math.min(1, Math.abs(accum) / effThreshold) };
+    }
+    return {
+      step: step,
+      reset: reset,
+      config: function () { return Object.assign({}, cfg); },
+      state: function () { return state; }
+    };
+  }
+  window.WsBoardWheel = { defaults: Object.assign({}, WHEEL_DEFAULTS), create: createBoardWheel };
+
+  // --- windowed O(1) topic slot virtualization (±2 around anchorCurrent) ---
+  // Far section.topic bodies outside ±virtualNearSlots around anchorCurrent()
+  // are detached into memory while keeping their fixed-height outer snap shell
+  // and .tophead mounted (0px layout shift, intact Overview tiles & dial).
+  // Strict exemptions: .bcard widgets, #bgal-docked panes, Overview Quick Look
+  // previewed panels, maximized panels, .xterm/.tm-host PTYs, and topics with
+  // active focus/edits/selection are never evicted.
+  var VIRTUAL_NEAR_DEFAULT = 2;
+  var virtualNearSlots = VIRTUAL_NEAR_DEFAULT;
+  var virtualStore = new Map();
+  var VIRTUAL_ASK_SEL = '.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])';
+  var VIRTUAL_KEEP_ATTRS = {
+    "data-wb-virtual": true, "data-current": true, "data-anchor-cap": true,
+    "data-anchor-bot": true, "data-anchor-last": true, "data-state-filtered": true,
+    "data-size": true, "tabindex": true, "data-overview-live": true,
+    "data-max": true, "data-has-panel-max": true
+  };
+
+  function virtualIsItemExempt(it) {
+    if (!it || !it.isTopic) return true;
+    return !!(it.docked || it.overviewLive || it.maximized || it.hasTerminal || it.hasActiveEdit || it.hasSelection);
+  }
+
+  // Pure planner: returns per-slot action ("exempt" | "hydrate" | "collapse" |
+  // "keep" | "keep-collapsed") for deterministic unit testing without DOM.
+  function planBoardVirtualWindow(items, activeIdx, opts) {
+    var cfg = opts || {};
+    var near = typeof cfg.nearSlots === "number" && cfg.nearSlots >= 0 ? cfg.nearSlots : virtualNearSlots;
+    var enabled = cfg.enabled !== false;
+    var scrubbing = !!cfg.scrubbing;
+    if (!Array.isArray(items) || !items.length) return { skip: false, actions: [] };
+    if (scrubbing) return { skip: true, actions: [] };
+    var cur = typeof activeIdx === "number" && activeIdx >= 0 && activeIdx < items.length ? activeIdx : 0;
+    var actions = items.map(function (it, idx) {
+      if (!it || !it.isTopic) return { index: idx, key: it && it.key || null, action: "exempt" };
+      if (!enabled) return { index: idx, key: it.key, action: it.collapsed ? "hydrate" : "keep" };
+      var inWindow = Math.abs(idx - cur) <= near;
+      if (inWindow || virtualIsItemExempt(it)) {
+        return { index: idx, key: it.key, action: it.collapsed ? "hydrate" : "keep" };
+      }
+      return { index: idx, key: it.key, action: it.collapsed ? "keep-collapsed" : "collapse" };
+    });
+    return { skip: false, actions: actions };
+  }
+
+  function virtualHasActiveEdit(sec) {
+    if (!sec) return false;
+    var act = doc.activeElement;
+    if (act && act !== sec && sec.contains && sec.contains(act)) {
+      var head = sec.querySelector && sec.querySelector(":scope > .tophead");
+      if (!head || !head.contains(act)) return true;
+      var tag = act.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || act.isContentEditable) return true;
+    }
+    if (sec.querySelectorAll) {
+      var tnotes = sec.querySelectorAll(".tnote[data-topic]");
+      for (var t = 0; t < tnotes.length; t++) {
+        var tn = tnotes[t];
+        if (!tn.hidden || (tn.value && String(tn.value).trim())) return true;
+      }
+      var fields = sec.querySelectorAll("textarea, input[type='text'], input[type='search'], input:not([type])");
+      for (var i = 0; i < fields.length; i++) {
+        var f = fields[i];
+        if (f.closest && f.closest(".tophead")) continue;
+        if (f.value && String(f.value).trim()) return true;
+      }
+      if (sec.querySelector('.opt[data-opt][aria-pressed="true"], label.ack > input:checked, label.ck > input:checked, [data-no]')) return true;
+    }
+    return false;
+  }
+
+  function virtualHasHeldFrame(sec) {
+    if (!sec || !sec.querySelectorAll) return false;
+    var frames = sec.querySelectorAll("iframe.doc-frame");
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      if (f.wbNext || f.wbOut || f.wbHoldSelection || f === doc.activeElement || (typeof mpend !== "undefined" && mpend && mpend.frame === f)) return true;
+    }
+    return false;
+  }
+
+  function virtualDescribeNode(n) {
+    var k = topicKey(n);
+    if (k === null) return { key: anchorId(n), isTopic: false };
+    var docked = !!(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(n));
+    var overviewLive = !!(n.hasAttribute("data-overview-live") || (n.closest && n.closest(".overview-preview-stage")));
+    var maximized = !!(n.hasAttribute("data-max") || n.hasAttribute("data-has-panel-max") || (n.querySelector && n.querySelector("[data-max]")));
+    var hasTerminal = !!(n.querySelector && n.querySelector(".xterm, .tm-host"));
+    return {
+      key: "t:" + k,
+      isTopic: true,
+      collapsed: n.hasAttribute("data-wb-virtual"),
+      docked: docked,
+      overviewLive: overviewLive,
+      maximized: maximized,
+      hasTerminal: hasTerminal,
+      hasActiveEdit: virtualHasActiveEdit(n),
+      hasSelection: virtualHasHeldFrame(n)
+    };
+  }
+
+  function virtualCaptureOpen(sec) {
+    if (!sec || !sec.querySelectorAll) return [];
+    var head = sec.querySelector(":scope > .tophead");
+    var out = [], list = sec.querySelectorAll("details");
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (head && head.contains(d)) continue;
+      out.push({ key: d.getAttribute("data-key") || "", id: d.id || "", idx: out.length, open: !!d.open });
+    }
+    return out;
+  }
+
+  function virtualRestoreOpen(sec, saved, opts) {
+    if (!sec || !saved || !saved.length || !sec.querySelectorAll) return;
+    var stashed = !!(opts && opts.stashed);
+    var head = sec.querySelector(":scope > .tophead");
+    var byKey = Object.create(null), byId = Object.create(null), byIdx = Object.create(null);
+    saved.forEach(function (s) {
+      if (s.key) byKey[s.key] = s.open;
+      else if (s.id) byId[s.id] = s.open;
+      else byIdx[s.idx] = s.open;
+    });
+    var list = sec.querySelectorAll("details"), bodyIdx = 0;
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (head && head.contains(d)) continue;
+      if (stashed && d.classList && (d.classList.contains("entry-panel") || d.classList.contains("system-run"))) {
+        bodyIdx++;
+        continue;
+      }
+      var k = d.getAttribute("data-key") || "", id = d.id || "";
+      if (k && Object.prototype.hasOwnProperty.call(byKey, k)) d.open = !!byKey[k];
+      else if (id && Object.prototype.hasOwnProperty.call(byId, id)) d.open = !!byId[id];
+      else if (!stashed && !k && !id && Object.prototype.hasOwnProperty.call(byIdx, bodyIdx)) d.open = !!byIdx[bodyIdx];
+      bodyIdx++;
+    }
+  }
+
+  function virtualHasAskItem(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.matches && node.matches(VIRTUAL_ASK_SEL)) return true;
+    return !!(node.querySelector && node.querySelector(VIRTUAL_ASK_SEL));
+  }
+
+  function virtualCollapse(sec) {
+    if (!sec || sec.nodeType !== 1 || !sec.hasAttribute("data-topic") || sec.hasAttribute("data-wb-virtual")) return false;
+    if (virtualIsItemExempt(virtualDescribeNode(sec))) return false;
+    var head = sec.querySelector && sec.querySelector(":scope > .tophead");
+    if (!head) return false;
+    var k = topicKey(sec);
+    if (k === null) return false;
+    if (typeof unmountFrames === "function") unmountFrames(sec);
+    var scrollTop = sec.scrollTop || 0;
+    var history = window.wbHistory && window.wbHistory.capture ? window.wbHistory.capture(sec) : null;
+    var answers = typeof readAnswers === "function" ? readAnswers(sec) : null;
+    var frameH = typeof frameHeights === "function" ? frameHeights(sec) : null;
+    var openDetails = virtualCaptureOpen(sec);
+    var raw = Array.prototype.slice.call(sec.childNodes || []);
+    var children = [], detached = 0;
+    for (var i = 0; i < raw.length; i++) {
+      var c = raw[i];
+      if (c === head) continue;
+      children.push(c);
+      if (!virtualHasAskItem(c)) {
+        sec.removeChild(c);
+        detached++;
+      }
+    }
+    if (!detached) return false;
+    virtualStore.set(k, {
+      children: children,
+      scrollTop: scrollTop,
+      history: history,
+      answers: answers,
+      frameH: frameH,
+      openDetails: openDetails,
+      stashed: null
+    });
+    sec.setAttribute("data-wb-virtual", "1");
+    return true;
+  }
+
+  function virtualSyncAttrs(liveSec, incomingSec) {
+    var keepClasses = ["overview-here", "flash", "wb-stuck"];
+    var preserved = keepClasses.filter(function (c) { return liveSec.classList && liveSec.classList.contains(c); });
+    liveSec.className = incomingSec.className;
+    preserved.forEach(function (c) { if (liveSec.classList) liveSec.classList.add(c); });
+    Array.prototype.slice.call(liveSec.attributes || []).forEach(function (a) {
+      if (a.name === "class" || VIRTUAL_KEEP_ATTRS[a.name]) return;
+      if (!incomingSec.hasAttribute(a.name)) liveSec.removeAttribute(a.name);
+    });
+    Array.prototype.slice.call(incomingSec.attributes || []).forEach(function (a) {
+      if (a.name === "class" || VIRTUAL_KEEP_ATTRS[a.name]) return;
+      if (liveSec.getAttribute(a.name) !== a.value) liveSec.setAttribute(a.name, a.value);
+    });
+  }
+
+  function virtualIsNearNode(sec) {
+    if (!sec || !anchorSized.bounded) return true;
+    if (virtualIsItemExempt(virtualDescribeNode(sec))) return true;
+    var list = anchorCards();
+    if (!list.length) return true;
+    var idx = list.indexOf(sec);
+    if (idx < 0) return true;
+    var cur = anchorCurrent() || list[0];
+    var curIdx = cur ? list.indexOf(cur) : 0;
+    if (curIdx < 0) curIdx = 0;
+    return Math.abs(idx - curIdx) <= virtualNearSlots;
+  }
+
+  function virtualStashUpdate(liveSec, incomingSec) {
+    if (!liveSec || !incomingSec || !liveSec.hasAttribute("data-wb-virtual")) return false;
+    if (!anchorSized.bounded || virtualIsNearNode(liveSec)) return false;
+    var k = topicKey(liveSec);
+    if (k === null) return false;
+    var newlyClosed = !!(liveSec.classList && !liveSec.classList.contains("closed") && incomingSec.classList && incomingSec.classList.contains("closed"));
+    var rec = virtualStore.get(k) || {
+      children: null, scrollTop: 0, history: null, answers: null, frameH: null, openDetails: null, stashed: null
+    };
+    if (newlyClosed) {
+      if (typeof forgetOpen === "function") {
+        forgetOpen(liveSec);
+        forgetOpen(incomingSec);
+        if (rec.stashed) forgetOpen(rec.stashed);
+        if (rec.children) {
+          for (var fi = 0; fi < rec.children.length; fi++) {
+            if (rec.children[fi] && rec.children[fi].nodeType === 1) forgetOpen(rec.children[fi]);
+          }
+        }
+      }
+      rec.openDetails = null;
+    }
+    var oldHead = liveSec.querySelector && liveSec.querySelector(":scope > .tophead");
+    var headAnswers = oldHead && typeof readAnswers === "function" ? readAnswers(oldHead) : null;
+    virtualSyncAttrs(liveSec, incomingSec);
+    var newHead = incomingSec.querySelector && incomingSec.querySelector(":scope > .tophead");
+    if (oldHead && newHead) {
+      liveSec.replaceChild(newHead.cloneNode(true), oldHead);
+      if (headAnswers && Object.keys(headAnswers).length) {
+        if (typeof writeAnswers === "function") writeAnswers(liveSec, headAnswers);
+        if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
+        if (window.wbForm) window.wbForm();
+      }
+    }
+    // Refresh any kept open-ask child without mounting heavy body parts.
+    Array.prototype.slice.call(liveSec.childNodes || []).forEach(function (c) {
+      if (c !== liveSec.querySelector(":scope > .tophead")) liveSec.removeChild(c);
+    });
+    Array.prototype.slice.call(incomingSec.childNodes || []).forEach(function (c) {
+      if (c !== newHead && virtualHasAskItem(c)) liveSec.appendChild(c.cloneNode(true));
+    });
+    if (typeof fmtTimes === "function") fmtTimes(liveSec);
+    rec.stashed = incomingSec.cloneNode(true);
+    rec.children = null;
+    virtualStore.set(k, rec);
+    return true;
+  }
+
+  function virtualTakeCollapsed(k) {
+    if (k === null || k === undefined) return null;
+    var rec = virtualStore.get(k) || null;
+    virtualStore.delete(k);
+    return rec;
+  }
+
+  function virtualDropCollapsed(k) {
+    if (k !== null && k !== undefined) virtualStore.delete(k);
+  }
+
+  function virtualHydrate(sec, opts) {
+    if (!sec || !sec.hasAttribute || !sec.hasAttribute("data-wb-virtual")) return false;
+    var k = topicKey(sec);
+    var rec = k !== null ? virtualStore.get(k) : null;
+    sec.removeAttribute("data-wb-virtual");
+    if (k !== null) virtualStore.delete(k);
+    if (!rec) return false;
+    var immediate = !!(opts && opts.immediate);
+    var head = sec.querySelector && sec.querySelector(":scope > .tophead");
+    if (rec.stashed) {
+      Array.prototype.slice.call(sec.childNodes || []).forEach(function (c) {
+        if (c !== head) sec.removeChild(c);
+      });
+      var stashedHead = rec.stashed.querySelector && rec.stashed.querySelector(":scope > .tophead");
+      Array.prototype.slice.call(rec.stashed.childNodes || []).forEach(function (c) {
+        if (c !== stashedHead) sec.appendChild(c);
+      });
+      if (window.wbHistory) {
+        window.wbHistory.init(sec);
+        if (rec.history) window.wbHistory.restore(sec, rec.history);
+      }
+      if (typeof watchBoard === "function") watchBoard(sec);
+      if (typeof bandBoard === "function") bandBoard(sec);
+      virtualRestoreOpen(sec, rec.openDetails, { stashed: true });
+      if (typeof restoreOpen === "function") restoreOpen(sec);
+      if (typeof fmtTimes === "function") fmtTimes(sec);
+      if (typeof sweepOutImgs === "function") sweepOutImgs(sec);
+      if (rec.frameH && typeof setFrameHeights === "function") setFrameHeights(sec, rec.frameH);
+      if (immediate && typeof mountFrames === "function") mountFrames(sec);
+      else if (typeof mountFramesPaced === "function") mountFramesPaced(sec);
+      if (rec.answers && typeof writeAnswers === "function") writeAnswers(sec, rec.answers);
+      if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
+      if (typeof indexFrames === "function") indexFrames();
+      if (window.wbForm) window.wbForm();
+      if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
+      if (typeof mermaid === "function") mermaid([sec]);
+      if (typeof applySent === "function") applySent(true);
+    } else if (rec.children) {
+      for (var i = 0; i < rec.children.length; i++) sec.appendChild(rec.children[i]);
+      virtualRestoreOpen(sec, rec.openDetails);
+      if (typeof bandBoard === "function") bandBoard(sec);
+      if (immediate && typeof mountFrames === "function") mountFrames(sec);
+      else if (typeof mountFramesPaced === "function") mountFramesPaced(sec);
+      if (typeof indexFrames === "function") indexFrames();
+    }
+    if (rec.scrollTop) sec.scrollTop = rec.scrollTop;
+    return true;
+  }
+
+  function virtualNodeContainsId(node, id) {
+    if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
+    if (node.nodeType === 1 && node.id === id) return true;
+    var esc = window.CSS && window.CSS.escape ? window.CSS.escape(id) : String(id).replace(/["\\]/g, "\\$&");
+    if (node.querySelector && node.querySelector("#" + esc)) return true;
+    if (node.querySelectorAll) {
+      var tpls = node.querySelectorAll("template");
+      for (var i = 0; i < tpls.length; i++) {
+        if (tpls[i].content && virtualNodeContainsId(tpls[i].content, id)) return true;
+      }
+    }
+    return false;
+  }
+
+  function virtualNodeHasLazyGap(node) {
+    if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
+    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy], template[data-history-topic]")) return true;
+    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy], template[data-history-topic]"));
+  }
+
+  function virtualFindTopic(key) {
+    if (key === null || key === undefined) return null;
+    var board = typeof region === "function" ? region("board") : null;
+    if (board && board.querySelector) {
+      var esc = window.CSS && window.CSS.escape ? window.CSS.escape(String(key)) : String(key).replace(/["\\]/g, "\\$&");
+      var found = board.querySelector('section.topic[data-topic="' + esc + '"]');
+      if (found) return found;
+    }
+    return anchorNode("t:" + key);
+  }
+
+  function virtualHydrateForTarget(id) {
+    if (!id) return false;
+    var live = $(id);
+    if (live && live.hasAttribute && live.hasAttribute("data-wb-virtual")) {
+      return virtualHydrate(live, { immediate: true });
+    }
+    if (live) return false;
+    var foundKey = null;
+    virtualStore.forEach(function (rec, k) {
+      if (foundKey !== null) return;
+      if (rec.stashed && virtualNodeContainsId(rec.stashed, id)) { foundKey = k; return; }
+      if (rec.children) {
+        for (var i = 0; i < rec.children.length; i++) {
+          if (virtualNodeContainsId(rec.children[i], id)) { foundKey = k; return; }
+        }
+      }
+    });
+    if (foundKey === null) return false;
+    var sec = virtualFindTopic(foundKey);
+    return sec ? virtualHydrate(sec, { immediate: true }) : false;
+  }
+
+  function virtualHydrateLazyTopics() {
+    var keys = [];
+    virtualStore.forEach(function (rec, k) {
+      if (rec.stashed && virtualNodeHasLazyGap(rec.stashed)) { keys.push(k); return; }
+      if (rec.children) {
+        for (var i = 0; i < rec.children.length; i++) {
+          if (virtualNodeHasLazyGap(rec.children[i])) { keys.push(k); return; }
+        }
+      }
+    });
+    var hydrated = false;
+    for (var j = 0; j < keys.length; j++) {
+      var sec = virtualFindTopic(keys[j]);
+      if (sec && virtualHydrate(sec, { immediate: true })) hydrated = true;
+    }
+    return hydrated;
+  }
+
+  function virtualReconcile(opts) {
+    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing && !(opts && opts.force);
+    if (scrubbing) return false;
+    var list = anchorCards();
+    var cur = anchorCurrent() || list[0] || null;
+    var activeIdx = cur ? list.indexOf(cur) : 0;
+    if (activeIdx < 0) activeIdx = 0;
+    var items = list.map(virtualDescribeNode);
+    var plan = planBoardVirtualWindow(items, activeIdx, {
+      nearSlots: virtualNearSlots,
+      enabled: !!anchorSized.bounded,
+      scrubbing: false
+    });
+    if (plan.skip) return false;
+    var changed = false;
+    var present = new Set();
+    var board = typeof region === "function" ? region("board") : null;
+    if (board && board.querySelectorAll) {
+      var allBoardTopics = board.querySelectorAll("section.topic[data-topic]");
+      for (var bi = 0; bi < allBoardTopics.length; bi++) {
+        var btk = topicKey(allBoardTopics[bi]);
+        if (btk !== null) present.add(btk);
+      }
+    }
+    for (var i = 0; i < list.length; i++) {
+      var tk = topicKey(list[i]);
+      if (tk !== null) present.add(tk);
+    }
+    if (doc.querySelectorAll) {
+      var stageTopics = doc.querySelectorAll(".overview-preview-stage > section.topic[data-topic]");
+      for (var si = 0; si < stageTopics.length; si++) {
+        var stk = topicKey(stageTopics[si]);
+        if (stk !== null) present.add(stk);
+      }
+    }
+    // Hydrate newly near or newly exempt topics first, then collapse far ones.
+    for (var h = 0; h < plan.actions.length; h++) {
+      if (plan.actions[h].action === "hydrate") {
+        if (virtualHydrate(list[h], { immediate: h === activeIdx })) changed = true;
+      }
+    }
+    for (var c = 0; c < plan.actions.length; c++) {
+      if (plan.actions[c].action === "collapse") {
+        if (virtualCollapse(list[c])) changed = true;
+      }
+    }
+    // Ensure any Overview Quick Look previewed node outside #r-board is hydrated.
+    var livePreview = doc.querySelector && doc.querySelector(".overview-preview-stage > section.topic[data-wb-virtual]");
+    if (livePreview) {
+      var pk = topicKey(livePreview);
+      if (pk !== null) present.add(pk);
+      if (virtualHydrate(livePreview, { immediate: true })) changed = true;
+    }
+    // Prune store entries for topics no longer on the board (never state-filtered or hidden ones).
+    Array.from(virtualStore.keys()).forEach(function (k) {
+      if (!present.has(k)) virtualStore.delete(k);
+    });
+    if (changed && typeof indexFrames === "function") indexFrames();
+    return changed;
+  }
+
+  window.WsBoardVirtual = {
+    nearSlots: function (n) {
+      if (typeof n === "number" && n >= 0) { virtualNearSlots = Math.floor(n); virtualReconcile(); }
+      return virtualNearSlots;
+    },
+    plan: planBoardVirtualWindow,
+    isExempt: virtualIsItemExempt,
+    isNear: virtualIsNearNode,
+    hydrate: virtualHydrate,
+    collapse: virtualCollapse,
+    reconcile: virtualReconcile,
+    hasStashed: function (k) { var r = virtualStore.get(k); return !!(r && r.stashed); },
+    collapsedCount: function () { return virtualStore.size; }
+  };
   function anchorCapH(n) { return n ? ANCHOR_PAD + n * (ANCHOR_CAP + ANCHOR_GAP) : 0; }
   function anchorToolbarFace() {
     var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
@@ -28,8 +606,48 @@
     }
     return anchorSized.bar ? anchorSized.bar + 6 : anchorSized.inset;
   }
-  function anchorBotReserve() {
-    return ANCHOR_BOT + ANCHOR_BOT_MARGIN + (anchorSized.reply ? anchorSized.reply + 14 : 0);
+  function anchorBotReserve(n) {
+    var base = n === 0 ? ANCHOR_BOT_0 : n === 1 ? ANCHOR_BOT_1 : ANCHOR_BOT_2;
+    return base + (anchorSized.reply ? anchorSized.reply + 14 : 0);
+  }
+  var anchorGlideRealign = false;
+  function anchorCancelGlide() {
+    anchorGlideRealign = false;
+    if (anchorGlideAnim) {
+      try { anchorGlideAnim.cancel(); } catch (e) {}
+      anchorGlideAnim = null;
+    }
+  }
+  function anchorGlide(n, dir) {
+    anchorCancelGlide();
+    if (!n || !dir || !n.animate || reducedMotion()) return;
+    if (doc.documentElement.hasAttribute("data-board-max") || doc.documentElement.hasAttribute("data-overview")) return;
+    var dist = Math.min(72, Math.max(32, Math.round((anchorSized.h || 600) * 0.08)));
+    var y0 = dir > 0 ? dist : -dist;
+    try {
+      var anim = n.animate(
+        [{ transform: "translate3d(0," + y0 + "px,0)" }, { transform: "translate3d(0,0,0)" }],
+        { duration: WHEEL_DEFAULTS.animMs, easing: "cubic-bezier(.22, 1, .36, 1)", fill: "none" }
+      );
+      anchorGlideAnim = anim;
+      var finish = function () {
+        if (anchorGlideAnim !== anim) return;
+        anchorGlideAnim = null;
+        if (anchorGlideRealign) { anchorGlideRealign = false; anchorRealign(true); }
+      };
+      var cancel = function () {
+        if (anchorGlideAnim !== anim) return;
+        anchorGlideAnim = null;
+        anchorGlideRealign = false;
+      };
+      if (anim.addEventListener) {
+        anim.addEventListener("finish", finish);
+        anim.addEventListener("cancel", cancel);
+      } else {
+        anim.onfinish = finish;
+        anim.oncancel = cancel;
+      }
+    } catch (e) {}
   }
   function anchorCardCap(n, list) {
     if (!n || !(n.hasAttribute("data-topic") || n.hasAttribute("data-rail"))) return 0;
@@ -79,6 +697,7 @@
     anchorKey = n ? anchorId(n) : null;
     anchorStore();
     if (typeof boardDialMark === "function") boardDialMark(n);
+    if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile();
   }
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
@@ -116,19 +735,31 @@
     if (!col || !col.contains(n)) return false;
     var key = anchorId(n);
     if (key === null) return false;
+    var prevNode = anchorLast;
     var left = anchorKey !== null && anchorKey !== key;
+    if (typeof virtualHydrate === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing) && n.hasAttribute && n.hasAttribute("data-wb-virtual")) {
+      virtualHydrate(n, { immediate: true });
+    }
     if (anchorKey !== key || anchorLast !== n) anchorMark(n);
     if (left && !(opt && opt.keep) && Object.keys(boardPending).length) {
       boardFlushViewed(true);
       n = anchorNode(key) || n;
     }
     if (!(opt && opt.still)) {
-      var calm = reducedMotion(), smooth = !!(opt && opt.smooth && !calm);
+      var calm = reducedMotion(), wantSmooth = !!(opt && opt.smooth && !calm);
+      var glideDir = opt && opt.glide ? opt.glide : 0;
+      if (anchorSized.bounded && !glideDir && wantSmooth && prevNode && prevNode !== n) {
+        var list = anchorCards(), fromIdx = list.indexOf(prevNode), toIdx = list.indexOf(n);
+        if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) glideDir = toIdx > fromIdx ? 1 : -1;
+      }
+      var smooth = anchorSized.bounded ? false : wantSmooth;
       var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
+      anchorCancelGlide();
       anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
       var moved = anchorAlign(col, n, smooth);
+      if (glideDir && !calm) anchorGlide(n, glideDir);
       if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
       if (!smooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
@@ -182,11 +813,42 @@
     anchorCap0 = next0;
     anchorCapR0 = nextR0;
     anchorCap1 = next1;
+    // Stamp data-anchor-bot="0|1" on trailing edge cards (O(1) DOM writes)
+    // so each card spans down to its actual bottom capsule stack (0, 1, or 2).
+    var nextBots = [], botMap = new Map(), afterRail = 0;
+    for (var k = cards.length - 1; k >= 0; k--) {
+      var ck = cards[k];
+      if (afterRail < 2) {
+        var val = String(afterRail);
+        nextBots.push(ck);
+        botMap.set(ck, val);
+      }
+      if (ck.hasAttribute("data-topic") || ck.hasAttribute("data-rail")) {
+        afterRail++;
+        if (afterRail >= 2) break;
+      }
+    }
+    for (var m = 0; m < anchorBotNodes.length; m++) {
+      var pb = anchorBotNodes[m];
+      if (pb && !botMap.has(pb)) pb.removeAttribute("data-anchor-bot");
+    }
+    botMap.forEach(function (val, node) {
+      if (!node.getAttribute || node.getAttribute("data-anchor-bot") !== val) node.setAttribute("data-anchor-bot", val);
+    });
+    anchorBotNodes = nextBots;
+    var lastNode = cards.length ? cards[cards.length - 1] : null;
+    if (anchorLastNode && anchorLastNode !== lastNode) anchorLastNode.removeAttribute("data-anchor-last");
+    if (lastNode && (!lastNode.getAttribute || lastNode.getAttribute("data-anchor-last") !== "1")) lastNode.setAttribute("data-anchor-last", "1");
+    anchorLastNode = lastNode;
   }
   function anchorSettle(before) {
     var list = anchorCards(), n = anchorNode(anchorKey);
     anchorSlotCaps(list);
-    if (n) { if (n !== anchorLast) anchorMark(n); return; }
+    if (n) {
+      if (n !== anchorLast) anchorMark(n);
+      else if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile();
+      return;
+    }
     if (!list.length) { anchorMark(null); return; }
     var saved = null;
     if (anchorKey === null) try { saved = window.sessionStorage.getItem(ANCHOR_STORE); } catch (e) {}
@@ -225,22 +887,43 @@
   // --- sizes: the usable scrollport ---------------------------------------------
   // ResizeObserver entries carry the sizes, so no layout is forced to read
   // them; --board-usable clears both top 2-row rail stack and bottom 2-row
-  // rail stack (+ reply bar when visible), and --board-runway keeps the last
-  // card reachable at the top rail landing line.
+  // rail stack (+ reply bar when visible).
   function anchorSetVar(s, k, v) { if (!s.getPropertyValue || s.getPropertyValue(k) !== v) s.setProperty(k, v); }
   function anchorApplySizes(col) {
-    var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2), botSpace = anchorBotReserve();
+    var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2);
+    var bot0 = anchorBotReserve(0), bot1 = anchorBotReserve(1), bot2 = anchorBotReserve(2);
     anchorSized.inset = inset;
     var s = col.style;
     anchorSetVar(s, "--board-toolbar", topSpace + "px");
     anchorSetVar(s, "--board-pad-top", anchorSized.padTop + "px");
     if (!anchorSized.bounded) {
-      if (s.removeProperty) { s.removeProperty("--board-usable"); s.removeProperty("--board-runway"); }
+      if (col.removeAttribute) col.removeAttribute("data-board-bounded");
+      if (s.removeProperty) {
+        s.removeProperty("--board-h");
+        s.removeProperty("--board-top-0");
+        s.removeProperty("--board-top-rail0");
+        s.removeProperty("--board-top-1");
+        s.removeProperty("--board-top-2");
+        s.removeProperty("--board-bot-0");
+        s.removeProperty("--board-bot-1");
+        s.removeProperty("--board-bot-2");
+        s.removeProperty("--board-card-gap");
+        s.removeProperty("--board-usable");
+      }
       return;
     }
-    var usable = Math.max(120, anchorSized.h - topSpace - botSpace);
+    if (col.setAttribute && (!col.hasAttribute || !col.hasAttribute("data-board-bounded"))) col.setAttribute("data-board-bounded", "");
+    anchorSetVar(s, "--board-h", anchorSized.h + "px");
+    anchorSetVar(s, "--board-top-0", (inset + 4) + "px");
+    anchorSetVar(s, "--board-top-rail0", inset + "px");
+    anchorSetVar(s, "--board-top-1", (inset + anchorCapH(1)) + "px");
+    anchorSetVar(s, "--board-top-2", topSpace + "px");
+    anchorSetVar(s, "--board-bot-0", bot0 + "px");
+    anchorSetVar(s, "--board-bot-1", bot1 + "px");
+    anchorSetVar(s, "--board-bot-2", bot2 + "px");
+    anchorSetVar(s, "--board-card-gap", (bot2 + ANCHOR_CARD_GAP_EXTRA) + "px");
+    var usable = Math.max(120, anchorSized.h - topSpace - bot2);
     anchorSetVar(s, "--board-usable", usable + "px");
-    anchorSetVar(s, "--board-runway", Math.max(0, anchorSized.h - topSpace - (anchorSized.last || 0)) + "px");
   }
   function anchorObserveAux(col) {
     if (!anchorRO || !col) return;
@@ -260,6 +943,7 @@
   function anchorRealign(fromInsetOrFrame) {
     var p = anchorProg;
     if (!p || p.key !== anchorKey || Date.now() > p.until) { anchorProg = null; return; }
+    if (anchorGlideAnim) { anchorGlideRealign = true; return; }
     var col = $("bcol"), n = anchorNode(p.key);
     if (!col || !n || !n.isConnected) return;
     var moved = anchorAlign(col, n, !p.scrollDone && p.smooth);
@@ -286,27 +970,87 @@
         var nextBar = bb ? bb.blockSize : e.contentRect.height;
         if (nextBar !== anchorSized.bar) insetChanged = true;
         anchorSized.bar = nextBar;
-      } else if (e.target === anchorLastCard) {
-        anchorSized.last = bb ? bb.blockSize : e.contentRect.height;
       } else if (e.target === reply) {
         anchorSized.reply = bb ? bb.blockSize : e.contentRect.height;
       }
     });
     anchorApplySizes(col);
-    if (anchorSized.bounded !== prevBounded && typeof boardDialSync === "function") boardDialSync();
+    if (anchorSized.bounded !== prevBounded) {
+      if (typeof virtualReconcile === "function") virtualReconcile();
+      if (typeof boardDialSync === "function") boardDialSync();
+    }
     if (insetChanged && anchorProg) anchorRealign(false);
   }
-  var anchorLastCard = null;
-  function anchorWatchLast() {
-    if (!anchorRO) return;
-    var list = anchorCards(), last = list[list.length - 1] || null;
-    if (last === anchorLastCard) return;
-    if (anchorLastCard) anchorRO.unobserve(anchorLastCard);
-    anchorLastCard = last;
-    anchorSized.last = 0;
-    if (last) anchorRO.observe(last);
-  }
   function anchorCancelProg() { anchorProg = null; }
+  function anchorCanReach(el, dy) {
+    if (!el || el.scrollHeight <= el.clientHeight + 2) return false;
+    return dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1.5 : el.scrollTop > 1.5;
+  }
+  function anchorCanInnerScroll(target, card, dy) {
+    if (!card) return false;
+    for (var n = target; n && n.nodeType === 1; n = n.parentNode) {
+      if (n === card) {
+        if (card.hasAttribute("data-topic")) return anchorCanReach(card, dy);
+        var body = card.querySelector ? card.querySelector(":scope > .bc-in > .bc-body") : null;
+        return anchorCanReach(body, dy);
+      }
+      if (n.classList && n.classList.contains("bc-body")) return anchorCanReach(n, dy);
+      if (n.scrollHeight > n.clientHeight + 2) {
+        var cs = getComputedStyle(n);
+        if (/auto|scroll/.test(cs.overflowY)) {
+          if (anchorCanReach(n, dy)) return true;
+          if (/contain|none/.test(cs.overscrollBehaviorY)) return false;
+        }
+      }
+    }
+    return false;
+  }
+  function anchorHandleWheel(target, card, rawDy, rawDx, deltaMode, prevent) {
+    anchorProg = null;
+    if (!anchorSized.bounded) return;
+    if (doc.documentElement.hasAttribute("data-overview") || doc.documentElement.hasAttribute("data-board-max")) return;
+    var list = anchorCards();
+    if (!list.length) return;
+    var cur = anchorCurrent() || list[0];
+    var at = list.indexOf(cur);
+    if (at < 0) at = 0;
+    if (!card || list.indexOf(card) < 0) card = cur;
+    var dy = +rawDy || 0;
+    if (deltaMode === 1) dy *= 40;
+    else if (deltaMode === 2) dy *= 800;
+    var canInner = anchorCanInnerScroll(target || card, card, dy);
+    if (!anchorWheelCtrl) anchorWheelCtrl = createBoardWheel();
+    var now = window.performance && window.performance.now ? window.performance.now() : Date.now();
+    var res = anchorWheelCtrl.step({
+      dy: rawDy,
+      dx: rawDx,
+      deltaMode: deltaMode,
+      now: now,
+      canInnerScroll: canInner,
+      atFirst: at <= 0,
+      atLast: at >= list.length - 1
+    });
+    if (res.action === "ignore" || res.action === "inner" || res.action === "edge") return;
+    if (prevent) prevent();
+    if (res.action === "commit") {
+      var next = list[at + res.dir];
+      if (next) anchorSelect(next, { smooth: false, glide: res.dir });
+    }
+  }
+  function anchorOnWheel(e) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    var t = e.target;
+    if (t && t.closest && (t.closest(WHEEL_OWN) || t.closest(".tpop, [popover]:popover-open, dialog[open]"))) return;
+    var card = t && t.closest ? t.closest("section.topic[data-topic], .bcard[data-card]") : null;
+    anchorHandleWheel(t, card, e.deltaY, e.deltaX, e.deltaMode, function () { e.preventDefault(); });
+  }
+  function anchorOnFrameWheel(frame, dy, dx, mode) {
+    if (!frame || !frame.isConnected) return;
+    var col = $("bcol");
+    if (!col || !col.contains(frame)) return;
+    var card = frame.closest ? frame.closest("section.topic[data-topic], .bcard[data-card]") : null;
+    anchorHandleWheel(frame, card, dy, dx, mode || 0, null);
+  }
   function anchorOnKey(e) {
     var k = e && e.key;
     if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorProg = null;
@@ -323,6 +1067,11 @@
       if (!p.smooth && Math.abs(col.scrollTop - p.target) > 120) { anchorProg = null; }
       else {
       var targetNode = anchorNode(p.key) || anchorLast;
+      if (anchorGlideAnim) {
+        p.scrollDone = true;
+        anchorGlideRealign = true;
+        return;
+      }
       if (targetNode && targetNode.isConnected) {
         var err = 0, canMove = false;
         if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
@@ -372,7 +1121,8 @@
     anchorSized.padTop = parseFloat(colCs.paddingTop) || 0;
     anchorSized.bounded = /auto|scroll/.test(colCs.overflowY);
     anchorSized.inset = anchorRailInset(col);
-    col.addEventListener("wheel", anchorCancelProg, { passive: true });
+    anchorWheelCtrl = createBoardWheel();
+    col.addEventListener("wheel", anchorOnWheel, { passive: false, capture: true });
     col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
     col.addEventListener("touchstart", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
@@ -394,7 +1144,7 @@
     }
     col.wbScrollOwner = true;
     anchorSettle(null);
-    anchorWatchLast();
+    if (typeof virtualReconcile === "function") virtualReconcile();
     if (typeof boardDialInit === "function") boardDialInit();
     window.WsBoardAnchor = {
       restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); },
@@ -403,8 +1153,19 @@
       owner: anchorOwner,
       key: function () { return anchorKey; },
       cards: anchorCards,
-      settle: function () { anchorSettle(null); anchorWatchLast(); if (typeof boardDialSync === "function") boardDialSync(); },
+      bounded: function () { return !!anchorSized.bounded; },
+      cancelGlide: anchorCancelGlide,
+      wheel: anchorWheelCtrl,
+      onFrameWheel: anchorOnFrameWheel,
+      settle: function (opts) {
+        anchorSettle(null);
+        if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile();
+        if (typeof boardDialSync === "function") boardDialSync();
+      },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
+      hydrate: typeof virtualHydrate === "function" ? virtualHydrate : null,
+      reconcile: typeof virtualReconcile === "function" ? virtualReconcile : null,
+      virtual: window.WsBoardVirtual || null,
       dialWindow: typeof boardDialWindow === "function" ? boardDialWindow : null,
       dialTier: typeof boardDialTier === "function" ? boardDialTier : null
     };

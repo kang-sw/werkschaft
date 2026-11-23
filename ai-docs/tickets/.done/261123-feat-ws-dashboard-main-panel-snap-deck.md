@@ -6,6 +6,7 @@ sage-review-completeness-reviewed: 7aca1c5a3e6172f6
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7aca1c5a3e6172f6
+completed: 2026-11-24
 ---
 
 # Redesign dashboard main panel list as fixed-height snap deck, dial, and Overview Quick Look
@@ -281,6 +282,15 @@ Phase 2 implemented on `impl/develop/main-panel-snap-deck-p2` (commits `4fb9d24e
   - Visual inspection: 7 Chromium screenshots (`/tmp/snap-deck-p2-shots/01..07.png`) verified across wide 4-col light/dark, 24-panel sliding window, split-page hover light/dark, narrow Home hover, and drag-hover drop-hint + spring bar.
   - Pre-existing drift note: `TestBoardHoldPillBrowser` and `TestBoardToolbarPlacementAndCounts` remain pre-existing Phase 1 drift (untouched by Phase 2).
 
+#### Edition (da7938e02) - 2026-11-24
+
+- Consolidated 4-part live-dogfood feel fixes on `impl/develop/main-panel-snap-deck-feel-fixes` (`c1e91f919`, `da7938e02`):
+  - **Wheel virtualization (Preset A `(114)=a`):** replaced CSS scroll-snap drift on `#bcol` with pure `WsBoardWheel` (`dashboard-board-anchor.js`, calibrated mockup `ai-docs/assets/mockups/261124/main-panel-redesign/snap-deck-wheel-tuner-v1.html`), instant `scrollTop` jump + single compositor WAAPI glide, conditional passive `doc-frame.js` wheel forwarding, `.tpop`/popover/dialog wheel bypass, `deltaMode` scaling for `dx`, and `@media (hover: hover) and (pointer: fine)` scoped inner `overscroll-behavior-y: contain`.
+  - **Per-edge 100% full-span height & 0px peek:** stamped `O(1)` `data-anchor-cap`, `data-anchor-bot`, and dedicated `data-anchor-last="1"` attributes with per-edge `--board-top-*`/`--board-bot-*`/`--board-card-gap` CSS variables and parameterized `.wb-rail-wrap.dn .wb-rail-stack` (`--wb-rail-dn-pad`, `--wb-rail-dn-bg`).
+  - **Overview fast exit & zero idle rAF:** replaced `:has(details.entry-panel[data-max])` with explicit `data-has-panel-max`, replaced `WsOverview.holding()` rAF spin with one-shot `WsOverview.onRelease(fn)`, and added snap-deck fast Overview exit (`settle()` before `select()`, 0 `data-overview-motion` tags, 160ms opacity-only settle).
+  - **Maximize stacking & opaque sheet surface:** stamped `data-board-max="gal"` for `.bgal` sheets with `var(--z-modal, 70)` lift + `.bgal::before` scrim + `--wb-chg-pe` dimmed-pane pointer-event guard, added explicit opaque `background: var(--wb-bg)` on `details.entry-panel[data-max]`, and added `transition: none !important` on `:root[data-board-max] :is(.r-board, .gal-page[data-active])` so inline `translate` clears immediately on frame 0.
+- **Verification:** Node unit tests 32/32 PASS (`board-wheel.test.cjs`, `board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`); Playwright suites 5/5 PASS (`board-snap-deck-feel.browser.cjs`, `board-snap-deck-p2.browser.cjs`, `board-scroll-p1-fixes.browser.cjs`); Go `wswhiteboard` + `wsdashboard` suites (including `TestCSSClassesDoNotCollideAcrossModules`, `TestGalleryNoReservedColumnWithoutAPage`, `TestGalleryBrowser`) PASS; 6 Chromium screenshots under `/tmp/snap-deck-feel-shots/` verified.
+
 ### Phase 3: Overview ("한 눈에 보기") Middle-Click Entry, Hero Highlight, and Wide 4-Col Quick-Look Live Preview
 
 Upgrade Overview into a fast mouse + keyboard Hero Panel switcher with stateful Quick Look preview in wide 4-column mode.
@@ -311,6 +321,28 @@ Upgrade Overview into a fast mouse + keyboard Hero Panel switcher with stateful 
      - single-click / `Enter` commit and `Escape` / outside-click cancel;
      - wide 4-col Quick Look hover (~120ms settle), keyboard arrow preview, column-3 pointer lock, answering an ask inside the column-3 Quick Look preview updating live without cancelling Overview (including editable `ArrowUp`/`ArrowDown`/`Enter` and focus preservation), `applyFrameHeights` sizing inside preview, maximize handoff via `WsOverview.after`, `Element.moveBefore` preservation of docked `#bgal` and previewed `xterm`/iframe state, and placeholder stability in `#bcol`.
 
+### Result (72a001316) - 2026-11-24
+
+Phase 3 implemented on `impl/develop/main-panel-snap-deck-p3` (commits `c30c66b5f`, `72a001316`):
+
+- **Phase 3 implementation (`c30c66b5f`):**
+  - Added `#bcol` middle-click (`button === 1`) Overview toggle with `mousedown` + `auxclick` autoscroll suppression, interactive/terminal/modal/max exclusions (`a[href]`, `.xterm`, `.tm-host`, `.tpop`, `[popover]:popover-open`, `dialog[open]`, `[data-max]`, `.board-toolbar`, `data-board-max`), and same-origin `iframe.doc-frame` relay (`doc-frame.js` -> `dashboard-frames.js`).
+  - Upgraded Hero Panel `.overview-here` highlight (with snap-deck `data-current` fallback in `overview.js` and `.r-board`-scoped accent bar in `dashboard-board.css`).
+  - Implemented Wide 4-col Quick Look (`>=1600px`, `!tabs`) inside `#bgal` for both 0-docked and docked states (`overview.js`, `dashboard-board.css`, `dashboard-rail.css`), moving live nodes via `Element.moveBefore` with exact-height `.overview-placeholder`, ~120ms hover debounce, instant `ArrowUp`/`ArrowDown` preview, column-3 `pointerenter` lock, and offscreen `inert` + `aria-hidden` preservation of docked `.gal-viewport`/`.gal-rail` (never `display: none`).
+  - Implemented all 4+1 Overview holding exemptions: preview click/focus passthrough, preview editable/terminal/button key passthrough, in-place keyed `patchOverviewPreview` in `dashboard-board.js`, maximize restoration before `data-board-max` sync, and immediate `rAF` `doc-frame` height application inside Quick Look (`dashboard-frames.js`).
+- **Code-review polish (`72a001316`):**
+  - Synced `boardRendered.topics[key]` inside `patchOverviewPreview` so Overview exit never reverts a live-patched topic via `boardStageSnap`.
+  - Guarded `galEl.hidden` in `cards.js` `paintGallery()` against `data-overview-preview` and removed `data-overview-preview` before re-syncing `#bgal` via `WsCards.relayout()` in `teardownPreview()`.
+  - Exempted `frameInOverviewPreview` and `data-overview-live` in `dashboard-frames.js` `frameNear()` and `topicBand()` so far-offscreen previewed `doc-frame`s mount and never unmount.
+  - Added `:not([data-overview-live])` to `[data-size="fold"]` topic/card/terminal/web rules so folded items unfold cleanly in Quick Look and re-fold on exit; hid destructive/reparenting header buttons (`.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close`) inside `.overview-preview-stage` while keeping `.d-max`/`.bc-max` visible.
+  - Preserved `.overview-here` and migrated `tabs` Map entries in `replacePreviewNode()`; registered cleanup-tracked `#r-board` `pointerleave` and `window` `blur` listeners to cancel pending 120ms hover switches; added `[data-overview-preview]` to `:root[data-boardw]` `--dgrid-cols` in `dashboard-layout.css`.
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py`: exit 0 (clean).
+  - Node unit tests: 32/32 PASS (`board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`, `board-wheel.test.cjs`).
+  - Playwright Chromium suites: 8/8 PASS (`board-snap-deck-p3.browser.cjs` including 7 review-regression assertions, `board-snap-deck-feel.browser.cjs`, `board-snap-deck-p2.browser.cjs`, `board-scroll-p1-fixes.browser.cjs`).
+  - Go tests: `go test -count=1 ./internal/wsi18n/...`, `go test -count=1 ./internal/wswhiteboard -run "DocFrame|Asset"`, and `go test -count=1 ./internal/wsdashboard -run "TestCSSClassesDoNotCollideAcrossModules|TestAssetSource|TestBoardOverviewShortcut|TestGalleryNoReservedColumnWithoutAPage|TestGalleryBrowser|TestI18n|TestCards|TestPincol|TestOverview|TestToolbar"` all PASS.
+  - Screenshots refreshed under `/tmp/snap-deck-p3-shots/` (`01-overview-wide-hero-highlight-dark.png`, `02-overview-wide-quicklook-hover-light.png`, `03-overview-wide-quicklook-docked-preserved-dark.png`, `04-overview-narrow-hero-highlight-light.png`).
+
 ### Phase 4: Virtualized / Lazy Topic Slot Hydration & Dead-Code Cleanup (Superseding `261123` Phase 2)
 
 Absorb `261123-feat-ws-dashboard-board-topic-anchor-scroll` Phase 2 onto fixed-height 100% snap slots for O(1) rendering cost on large boards, and complete dead-code cleanup deferred from Phase 1.
@@ -329,3 +361,26 @@ Absorb `261123-feat-ws-dashboard-board-topic-anchor-scroll` Phase 2 onto fixed-h
      - `±2` near window hydration/eviction around `anchorCurrent()` on far `section.topic` slots, stashed revision reconciliation upon near-window entry, and preserved history rows / fold state / lazy gaps across eviction + re-hydration;
      - strict eviction exemptions for all unpinned `.bcard` widgets (`terminal`, `web`, `preview`, `explorer`), `#bgal`-docked panes, Overview-previewed panels, and `.xterm`/`.tm-host` PTYs;
      - zero layout shift (`scrollTop` / active anchor stability) across rapid dial scrub / fast flicks, zero idle `rAF`, and bounded mounted `doc-frame` / DOM node count on large multi-topic boards (`go test ./internal/wsdashboard/... ./internal/wswhiteboard/...`).
+
+### Result (aa7c7dae9) - 2026-11-24
+
+Phase 4 implemented on `impl/develop/main-panel-snap-deck-p4` (commits `481ba5668`, `aa7c7dae9`):
+
+- **Phase 4 implementation (`481ba5668`):**
+  - Added `WsBoardVirtual` (`dashboard-board-anchor.js`) implementing O(1) `±2` snap-slot virtualization around `anchorCurrent()` for far `section.topic` bodies, keeping each collapsed slot's outer shell and `.tophead` (plus open asks) mounted so eviction causes zero outer layout shift or scroll-anchor jump.
+  - Wired stashed SSE revision reconciliation (`virtualStashUpdate`) in `dashboard-board.js` `morphBoard()`, preserving loaded history rows, `details[open]` state, answers, frame heights, and inner `scrollTop` across eviction/re-hydration and reconciling stashed revisions on near-window entry, `boardJump`, Quick Look hover (`onPreview`), `cards.js` `grow`/`wrapTopic`, and dial scrub end (`dashboard-board-dial.js`).
+  - Enforced strict eviction exemptions for all unpinned `.bcard` widgets (`terminal`, `web`, `preview`, `explorer`), `#bgal`-docked panes, active Overview-previewed panels, maximized panels, `.xterm`/`.tm-host` PTYs, active edits, and held frames/selections; integrated `frameNear` and `topicBand` in `dashboard-frames.js`.
+  - Completed Phase 1 dead-code removal: retired `.bc-grip`/`wireGrip`, `#bcol` flow-reorder `slot`/`flowNext`/`drawLine`/`.bdrop`, and unused `--board-runway`/`anchorWatchLast` bookkeeping while preserving `T0` `cards[].h`/`at` persistence shape.
+- **Code-review polish (`aa7c7dae9`):**
+  - Fixed all 10 findings from `phase4-snap-deck-code-review`: scanned all connected `section.topic[data-topic]` under `region("board")` + `.overview-preview-stage` in `virtualReconcile()` so state-filtered/hidden collapsed topics are never wiped; preserved `virtualStore` client state across non-stashed SSE replacements via `virtualTakeCollapsed()`; protected `.tophead > textarea.tnote` drafts in `virtualHasActiveEdit()` and `virtualStashUpdate()`; cleared stale `openDetails` and ran `forgetOpen()` when a collapsed topic closes on the server; skipped positional `byIdx` fallback and `.entry-panel`/`.system-run` overrides on stashed `virtualRestoreOpen()`; eliminated Quick Look click-commit collapse/re-hydrate thrash in `overview.js` (including when `wbPill.apply` defers landing); extended `virtualNodeContainsId()` / `virtualFindTopic()` / `virtualHydrateLazyTopics()` for `<template>` gaps and state-filtered topics in `boardJump()`; re-bound capsule notes (`bindCapsuleNotes()`) after stashed hydration; removed leftover dead-code references in test harnesses; and added 7 Chromium regression checks in `board-snap-deck-p4.browser.cjs`.
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py`: exit 0 (clean).
+  - Node unit tests: 49/49 PASS (`board-virtualize.test.cjs`, `board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`, `board-home-ack.test.cjs`, `board-wheel.test.cjs`, `confirmation.test.cjs`).
+  - Playwright Chromium suites: 10/10 PASS (`board-scroll-p1-fixes.browser.cjs`, `board-snap-deck-feel.browser.cjs`, `board-snap-deck-p2.browser.cjs`, `board-snap-deck-p3.browser.cjs`, `board-snap-deck-p4.browser.cjs`).
+  - Go tests: `go test -count=1 ./internal/wsi18n/...`, `go test -count=1 ./internal/wswhiteboard -run "DocFrame|Asset"`, and `go test -count=1 ./internal/wsdashboard -run "TestCSSClassesDoNotCollideAcrossModules|TestAssetSource|TestBoardOverviewShortcut|TestGalleryNoReservedColumnWithoutAPage|TestGalleryBrowser|TestI18n|TestCards|TestPincol|TestOverview|TestToolbar"` all PASS.
+  - Screenshots refreshed under `/tmp/snap-deck-p4-shots/` (`01-large-board-near-window-dark.png`, `02-rehydrated-far-topic-preserved-light.png`, `03-overview-with-far-collapsed-topics-dark.png`, `04-bcard-exempt-unpinned-widget-light.png`).
+
+
+## Resolution (2026-11-24)
+
+All 4 phases (Phase 1 bounded 100% Snap Deck + feel fixes, Phase 2 minimal edge indicator dial + docked rail preview + 3a/3b clearance, Phase 3 middle-click Overview + Wide 4-col Quick Look, Phase 4 O(1) ±2 topic virtualization + Phase 1 dead-code cleanup) and independent code-review polish commits are implemented and verified across Node unit tests, Playwright Chromium suites, and Go test suites.

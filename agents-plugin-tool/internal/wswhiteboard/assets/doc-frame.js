@@ -358,4 +358,53 @@
   d.addEventListener("pointermove", function () { setHover(true); }, { passive: true });
   d.addEventListener("pointerleave", function () { setHover(false); });
   window.addEventListener("blur", function () { setHover(false); });
+  // Forward wheel deltas passively so the host's snap-deck wheel controller
+  // sees boundary gestures while native 120Hz inner card scroll stays unblocked.
+  // Skip forwarding when any scrollable ancestor inside this frame can still
+  // scroll in the gesture direction.
+  function canScrollInFrame(target, dy) {
+    var root = d.scrollingElement || d.documentElement;
+    for (var n = target && target.nodeType === 1 ? target : root; n && n.nodeType === 1; n = n.parentNode) {
+      if (n.scrollHeight > n.clientHeight + 2) {
+        var isRoot = n === root || n === d.documentElement || n === d.body;
+        var cs = isRoot ? null : window.getComputedStyle && window.getComputedStyle(n);
+        if (isRoot || (cs && /auto|scroll/.test(cs.overflowY))) {
+          var canMove = dy > 0 ? n.scrollTop + n.clientHeight < n.scrollHeight - 1 : n.scrollTop > 1;
+          if (canMove) return true;
+        }
+      }
+      if (n === root) break;
+    }
+    return false;
+  }
+  d.addEventListener("wheel", function (e) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    if (e.deltaY && canScrollInFrame(e.target, e.deltaY)) return;
+    post({ wbDoc: "wheel", dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode });
+  }, { passive: true });
+  // Middle-click (button 1) toggles the host board's Overview while suppressing
+  // browser autoscroll on both mousedown and auxclick. Leave links and terminal
+  // surfaces native, and relay at most once per click.
+  var midHandled = false, midTimer = 0;
+  function midSkip(t) {
+    return !!(t && t.closest && t.closest("a[href], .xterm, .tm-host"));
+  }
+  d.addEventListener("mousedown", function (e) {
+    if (e.button !== 1 || e.defaultPrevented || midSkip(e.target)) return;
+    e.preventDefault();
+    midHandled = true;
+    clearTimeout(midTimer);
+    midTimer = setTimeout(function () { midHandled = false; }, 600);
+    post({ wbDoc: "middleclick" });
+  }, true);
+  d.addEventListener("auxclick", function (e) {
+    if (e.button !== 1) return;
+    if (midHandled) {
+      e.preventDefault();
+      midHandled = false;
+      clearTimeout(midTimer);
+      return;
+    }
+    if (!e.defaultPrevented && !midSkip(e.target)) e.preventDefault();
+  }, true);
 })();

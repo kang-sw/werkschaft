@@ -108,7 +108,6 @@ function returningBoard() {
     function reducedMotion() { return false; }
     function anchorCards() { return []; }
     function anchorSettle() {}
-    function anchorWatchLast() {}
     function anchorCurrent() { return null; }
     function anchorOwner() { return null; }
     function companionStream() {}

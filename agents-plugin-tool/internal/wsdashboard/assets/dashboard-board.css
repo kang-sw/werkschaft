@@ -65,18 +65,15 @@
    with the column like a topic's bar. */
 .bc-body, .bc-folded { isolation: isolate; }
 .bc-body { overflow: auto; border-top: 1px solid var(--wb-muted); min-height: 0; }
-.bc-grip { height: 9px; flex: none; cursor: ns-resize; display: grid; place-items: center; touch-action: none; outline: 0; }
-.bc-grip::after { content: ""; width: 28px; height: 3px; border-radius: 2px; background: var(--wb-muted); transition: background .15s; }
-.bc-grip:hover::after, .bcard.drag .bc-grip::after, .bc-grip:focus-visible::after { background: var(--wb-primary); }
-.bcard[data-size="fold"] .bc-body, .bcard[data-size="fold"] .bc-grip { display: none; }
-.bcard[data-size="fold"] .bc-folded:not(:empty) { display: block; }
+.bcard[data-size="fold"]:not([data-overview-live]) .bc-body { display: none; }
+.bcard[data-size="fold"]:not([data-overview-live]) .bc-folded:not(:empty) { display: block; }
 .bcard[data-size="fold"] .bc-fold .li, section.topic[data-size="fold"] > .tophead > .tbar > .t-fold .li { transform: rotate(-90deg); }
 /* Mask renderer-owned regions without mutating inner disclosures. Maximum
-   view reveals them temporarily and leaves the whole-card fold intact. */
-section.topic[data-size="fold"]:not([data-max]) > :not(.tophead),
-section.topic[data-size="fold"]:not([data-max]) > .tophead > :not(.tbar),
-section.topic[data-size="fold"]:not([data-max]) > .tophead > .tbar > details > :not(summary) { display: none !important; }
-section.topic[data-size="fold"]:not([data-max]) > .tophead > .tbar { padding-right: 12px; }
+   view and Quick Look reveal them temporarily and leave the whole-card fold intact. */
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > :not(.tophead),
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > :not(.tbar),
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > .tbar > details > :not(summary) { display: none !important; }
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > .tbar { padding-right: 12px; }
 /* Visible-only rendering: a topic's body parts (every child but its head)
    and a card's body skip style, layout and paint while far from the view
    (content-visibility). The heads stay out, so they still stick and cast the
@@ -94,18 +91,18 @@ section.topic[data-size="fold"]:not([data-max]) > .tophead > .tbar { padding-rig
    focus entered it (a suspected Edge renderer crash). A topic's
    popovers open from its head, in the top layer. */
 section.topic[data-topic] > :not(.tophead) { contain-intrinsic-block-size: auto 480px; }
-section.topic:not([data-max]) > :not(.tophead):not(:has(details.entry-panel[data-max])) { contain: layout style paint; }
-section.topic:not([data-max]) > [data-wbcv]:not(.tophead):not(:has(details.entry-panel[data-max])),
+section.topic:not([data-max]) > :not(.tophead):not([data-has-panel-max]) { contain: layout style paint; }
+section.topic:not([data-max]) > [data-wbcv]:not(.tophead):not([data-has-panel-max]),
 .bcard:not([data-max]):not(:focus-within) > .bc-in > .bc-body { content-visibility: auto; }
 /* a frame in the body would take the pointer mid-drag */
 .bcard.drag .bc-body { pointer-events: none; }
 .bcard.flash .bc-in { animation: bc-flash .9s ease-out; }
 @keyframes bc-flash { from { box-shadow: 0 0 0 2px var(--wb-primary), var(--wb-shadow-hi); } to { box-shadow: var(--wb-shadow); } }
-.bc-scrim { position: fixed; inset: 0; z-index: calc(var(--z-modal) - 1); background: var(--scrim); }
+.bc-scrim { position: fixed; inset: 0; z-index: calc(var(--z-modal, 70) - 1); background: var(--scrim); }
 .bc-scrim[hidden] { display: none; }
-.bcard[data-max] .bc-in { position: fixed; z-index: var(--z-modal); top: 52px; left: 16px; right: 16px; bottom: 12px; box-shadow: var(--wb-shadow-hi); }
+.bcard[data-max] .bc-in { position: fixed; z-index: var(--z-modal, 70); top: 52px; left: 16px; right: 16px; bottom: 12px; box-shadow: var(--wb-shadow-hi); }
 .bcard[data-max] .bc-body { display: block; flex: 1 1 0; height: auto !important; }
-.bcard[data-max] .bc-folded, .bcard[data-max] .bc-grip, .bcard[data-max] .bc-pin, .bcard[data-max] .bc-fold, .bcard[data-max] .bc-raise, .bcard[data-max] .bc-max, .bcard[data-max] .bc-close { display: none; }
+.bcard[data-max] .bc-folded, .bcard[data-max] .bc-pin, .bcard[data-max] .bc-fold, .bcard[data-max] .bc-raise, .bcard[data-max] .bc-max, .bcard[data-max] .bc-close { display: none; }
 .bcard[data-max] .bc-min { display: inline-grid; }
 /* The one shared sheet owns a transient normal width and an in-sheet toggle.
    Mobile retains its original insets; only wide sheets use the captured span. */
@@ -127,14 +124,15 @@ details.entry-panel[data-max] > summary:has(> .sheet-width:not([hidden])) > .d-m
 .tbar :is(.d-max, .d-min, .t-fold, .t-raise) { color: inherit; opacity: .45; }
 .tbar:hover :is(.d-max, .d-min, .t-fold, .t-raise), .tbar :is(.d-max, .d-min, .t-fold, .t-raise):focus-visible { opacity: .9; }
 .tbar > .d-min, summary > .d-min { display: none; }
-section.topic[data-max], details.entry-panel[data-max] { position: fixed; z-index: var(--z-modal); top: 52px; left: 16px; right: 16px; bottom: 12px; margin: 0; overflow: auto; overscroll-behavior: contain; box-shadow: var(--wb-shadow-hi); }
+section.topic[data-max], details.entry-panel[data-max] { position: fixed; z-index: var(--z-modal, 70); top: 52px; left: 16px; right: 16px; bottom: 12px; margin: 0; overflow: auto; overscroll-behavior: contain; box-shadow: var(--wb-shadow-hi); }
 section.topic[data-max] { background: var(--wb-card); }
+details.entry-panel[data-max] { background: var(--wb-bg); }
 section.topic[data-max] > .tophead, details.entry-panel[data-max] > summary { position: sticky; top: 0; z-index: 2; }
 details.entry-panel[data-max] > summary { background: var(--wb-bg); cursor: default; }
 section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max { display: none; }
 section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-max] > summary > .d-min { display: inline-grid; }
 @media (max-width: 640px) { section.topic[data-max], details.entry-panel[data-max] { top: 46px; left: 8px; right: 8px; bottom: 8px; } }
-@media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } .bc-grip::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } }
 
 /* ===== overview picker (overview.js) =====
    Only the view folds: no card record or disclosure is changed. Keeping
@@ -150,7 +148,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 :root[data-overview] .r-board :is(section.topic > :not(.tophead), .bcard .bc-body) { content-visibility: visible !important; }
 :root[data-overview] .r-board section.topic:not([data-overview-motion]) > :not(.tophead),
 :root[data-overview] .r-board .tophead > .tnote,
-:root[data-overview] .r-board .bcard:not([data-overview-motion]) :is(.bc-body, .bc-grip, .bc-folded),
+:root[data-overview] .r-board .bcard:not([data-overview-motion]) :is(.bc-body, .bc-folded),
 :root[data-overview] .r-board > .reply { display: none !important; }
 :root[data-overview] .r-board .tophead, :root[data-overview] .r-board .bc-hd { position: static !important; }
 :root[data-overview] .r-board .trecap .rtext { display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
@@ -160,8 +158,25 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 :root[data-overview] .r-board :is(.tpin, .bc-pin)[aria-pressed="true"] { opacity: 1; color: var(--wb-primary); pointer-events: none; }
 :root[data-overview] .r-board :is(section.topic, .bcard) { position: relative; margin-bottom: 6px; }
 :root[data-overview] .r-board :is(section.topic, .bcard):is(:hover, :focus-visible) { outline: 1px solid var(--wb-primary); outline-offset: -1px; }
-.overview-here::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--wb-primary); z-index: 3; pointer-events: none; }
-:root[data-overview] .bgal { filter: brightness(.28) saturate(.4); }
+:root[data-overview] .r-board :is(section.topic, .bcard, .overview-placeholder).overview-here { background: color-mix(in srgb, var(--wb-primary) 11%, var(--wb-card)); box-shadow: inset 4px 0 0 var(--wb-primary), 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 65%, transparent), var(--wb-shadow); }
+:root[data-overview] .r-board .overview-here::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--wb-primary); z-index: 3; pointer-events: none; border-radius: var(--wb-radius) 0 0 var(--wb-radius); }
+:root[data-overview] .r-board .overview-placeholder { position: relative; box-sizing: border-box; margin-bottom: 6px; padding: 10px 12px 10px 16px; border-radius: var(--wb-radius); cursor: pointer; overflow: hidden; background: color-mix(in srgb, var(--wb-primary) 7%, var(--wb-card)); border: 1.5px dashed color-mix(in srgb, var(--wb-primary) 60%, var(--wb-line)); color: var(--wb-fg); display: flex; flex-direction: column; gap: 4px; justify-content: center; }
+:root[data-overview] .r-board .overview-placeholder:is(:hover, :focus-visible) { outline: 2px solid var(--wb-primary); outline-offset: -1px; }
+:root[data-overview] .r-board .overview-placeholder.overview-here { border-style: solid; border-color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); }
+.overview-placeholder-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.overview-placeholder-title { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
+.overview-placeholder-badge { flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card)); color: var(--wb-primary); white-space: nowrap; }
+.overview-placeholder-recap { font-size: 12px; color: var(--wb-muted-fg); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+:root[data-overview]:not([data-overview-preview]) .bgal { filter: brightness(.28) saturate(.4); }
+.overview-preview { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; z-index: 4; display: flex; flex-direction: column; border-radius: var(--wb-radius); background: var(--wb-bg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-primary) 42%, var(--wb-line)), var(--wb-shadow-hi); overflow: hidden; }
+.overview-preview-stage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.overview-preview-stage > section.topic[data-topic] { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; margin: 0; overflow-y: auto; overflow-x: clip; overscroll-behavior: contain; contain: none; content-visibility: visible !important; }
+.overview-preview-stage > section.topic[data-topic] > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
+.overview-preview-stage > section.topic[data-topic] > :not(.tophead) { content-visibility: visible !important; contain: none; }
+.overview-preview-stage > .bcard { flex: 1 1 auto; min-height: 0; height: 100%; margin: 0; display: flex; flex-direction: column; contain: none; }
+.overview-preview-stage > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; contain: none; }
+.overview-preview-stage > .bcard > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; content-visibility: visible !important; }
+.overview-preview-stage :is(.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close) { display: none; }
 .r-board [data-overview-motion] { content-visibility: visible !important; position: relative; }
 .r-board [data-overview-motion] :is(section.topic > :not(.tophead), .bc-body) { content-visibility: visible !important; }
 .r-board [data-overview-motion] :is(.tophead, .bc-hd) { position: static !important; }
@@ -215,7 +230,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    The board column's header row holds "+ Terminal" and its folder
    popover; it stays at the column's top while the cards scroll. */
 .bcard[data-kind="terminal"] .bc-body, .bcard[data-kind="terminal"][data-max] .bc-body { display: flex; flex-direction: column; overflow: hidden; }
-.bcard[data-kind="terminal"][data-size="fold"]:not([data-max]) .bc-body { display: none; }
+.bcard[data-kind="terminal"][data-size="fold"]:not([data-max]):not([data-overview-live]) .bc-body { display: none; }
 .tm-host { flex: 1 1 0; min-height: 0; overflow: hidden; background: var(--wb-card); }
 .tm-host .xterm { height: 100%; padding: 4px 0 4px 10px; }
 .tm-host .xterm-viewport { background: transparent !important; }
@@ -338,7 +353,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    the attach button carries the page's error count. "+ Web" stands in the
    status-line slot beside "+ Terminal" and shares its popover's look. */
 .bcard[data-kind="web"] .bc-body, .bcard[data-kind="web"][data-max] .bc-body { display: flex; flex-direction: column; overflow: hidden; }
-.bcard[data-kind="web"][data-size="fold"] .bc-body { display: none; }
+.bcard[data-kind="web"][data-size="fold"]:not([data-max]):not([data-overview-live]) .bc-body { display: none; }
 .wc-bar { flex: none; display: flex; padding: 5px 8px; border-bottom: 1px solid var(--wb-muted); }
 .wc-bar .fpin { flex: 1 1 auto; min-width: 0; }
 .wc-note { flex: none; padding: 6px 12px; font-size: 12.5px; color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 8%, var(--wb-card)); overflow-wrap: anywhere; }
@@ -359,34 +374,42 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .hdcwd { font-family: var(--wb-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 
 /* Hero Panel Snap Deck scrolling (dashboard-board-anchor.js). #bcol is a
-   mandatory y-snap deck whose scrollbar is hidden; each card (topic section
-   or unpinned .bcard) occupies a fixed --board-usable slot height and scrolls
-   internally under its sticky header. Non-overview cards carry CSS containment
-   (contain: strict on topics and .bc-in) and overflow-anchor: none on
-   non-current cards so off-card updates move nothing and cost zero outer
-   geometry reads. Maximized topics, entry panels, cards, and overview mode
-   lift containment and snap so sheets stay fixed to the viewport. */
-.dgrid:is(.live, .history, .worktree) > #bcol { scroll-snap-type: y mandatory; scroll-snap-stop: normal; scrollbar-width: none; }
+   wheel-virtualized deck (no CSS scroll-snap drift) whose scrollbar is hidden;
+   each card (topic section or unpinned .bcard) spans its exact per-edge usable
+   height (between its actual top and bottom capsule rows) and scrolls
+   internally under its sticky header with overscroll-behavior-y: contain so
+   inner momentum never leaks into #bcol. Inter-card margin-bottom clears the
+   bottom capsule stack so the next card never peeks above it. Non-overview
+   cards carry CSS containment (contain: strict on topics and .bc-in) and
+   overflow-anchor: none on non-current cards so off-card updates move nothing
+   and cost zero outer geometry reads. Maximized topics, entry panels, cards,
+   and overview mode lift containment so sheets stay fixed to the viewport. */
+.dgrid:is(.live, .history, .worktree) > #bcol { scrollbar-width: none; }
 .dgrid:is(.live, .history, .worktree) > #bcol::-webkit-scrollbar { display: none; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]) { height: var(--board-usable, auto); max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overflow-anchor: none; scroll-snap-align: start; scroll-margin-top: calc(var(--board-pad-top, 2px) + 44px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .board-toolbar .board-toolbar-face::before { content: ""; position: absolute; inset: calc(-12px - var(--toolbar-top, 0px)) 0 0; background: var(--wb-bg); z-index: -1; pointer-events: none; }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] { --wb-rail-dn-pad: 4px 0 4px; --wb-rail-dn-bg: var(--wb-bg); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard):not([data-max]) { --card-top: var(--board-top-2, 0px); --card-bot: var(--board-bot-2, 0px); --board-slot-h: max(120px, calc(var(--board-h) - var(--card-top) - var(--card-bot))); margin-bottom: var(--board-card-gap, 59px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard)[data-anchor-cap="0"]:not([data-max]) { --card-top: var(--board-top-0, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard[data-rail])[data-anchor-cap="rail0"]:not([data-max]) { --card-top: var(--board-top-rail0, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard[data-rail])[data-anchor-cap="1"]:not([data-max]) { --card-top: var(--board-top-1, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board .bcard:not([data-rail]):not([data-anchor-cap="0"]):not([data-max]) { --card-top: var(--board-top-rail0, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard)[data-anchor-bot="0"]:not([data-max]) { --card-bot: var(--board-bot-0, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard)[data-anchor-last="1"]:not([data-max]) { margin-bottom: 0; }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] .r-board :is(section.topic[data-topic], .bcard)[data-anchor-bot="1"]:not([data-max]) { --card-bot: var(--board-bot-1, 0px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]) { height: var(--board-slot-h, var(--board-usable, auto)); max-height: var(--board-slot-h, var(--board-usable, none)); overflow-y: auto; overflow-x: clip; overflow-anchor: none; }
 .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]) > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) { overflow-anchor: none; scroll-snap-align: start; scroll-margin-top: var(--board-pad-top, 2px); }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-rail]:not([data-max]) { scroll-margin-top: calc(var(--board-pad-top, 2px) + 44px); }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) > .bc-in { height: var(--board-usable, auto); max-height: var(--board-usable, none); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) { overflow-anchor: none; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) > .bc-in { height: var(--board-slot-h, var(--board-usable, auto)); max-height: var(--board-slot-h, var(--board-usable, none)); }
 .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in > .bc-grip { display: none; }
-:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]):not(:has(details.entry-panel[data-max])) { contain: strict; }
-:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]):not(:has(details.entry-panel[data-max])) { contain: layout style; }
-:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]):not(:has(details.entry-panel[data-max])) > .bc-in { contain: strict; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard)[data-anchor-cap="0"]:not([data-max]) { scroll-margin-top: 160px; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-rail])[data-anchor-cap="rail0"]:not([data-max]) { scroll-margin-top: var(--board-pad-top, 2px); }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-rail])[data-anchor-cap="1"]:not([data-max]) { scroll-margin-top: calc(var(--board-pad-top, 2px) + 24px); }
+@media (hover: hover) and (pointer: fine) {
+  .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]),
+  .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in > .bc-body { overscroll-behavior-y: contain; }
+}
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]):not([data-has-panel-max]) { contain: strict; }
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) { contain: layout style; }
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in { contain: strict; }
 .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard)[data-current]:not([data-max]) { overflow-anchor: auto; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board button[data-closed-next] { scroll-snap-align: end; scroll-margin-bottom: 12px; }
-.dgrid:is(.live, .history, .worktree) > #bcol .r-board { padding-bottom: var(--board-runway, 0px); }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol { scroll-snap-type: none; }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic] { height: auto; max-height: none; overflow-y: visible; contain: none; scroll-snap-align: none; }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard { contain: none; scroll-snap-align: none; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic] { height: auto; max-height: none; overflow-y: visible; contain: none; margin-bottom: 6px; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard { contain: none; margin-bottom: 6px; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in { height: auto; max-height: none; contain: none; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in > .bc-body { flex: 0 1 auto; }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board button[data-closed-next] { scroll-snap-align: none; }
