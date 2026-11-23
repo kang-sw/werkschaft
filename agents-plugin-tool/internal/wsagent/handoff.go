@@ -66,6 +66,9 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if err != nil {
 		return State{}, errUnknown
 	}
+	if row.Harness == BackendPi {
+		return State{}, errPiRetired
+	}
 	if row.Agent {
 		return State{}, badRequest("an agent conversation is not a lead session")
 	}
@@ -79,6 +82,9 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	backend := ls.Harness
 	if backend == "" {
 		backend = row.Harness
+	}
+	if backend == BackendPi {
+		return State{}, errPiRetired
 	}
 	// A backend adopts terminal conversations only through terminalSession:
 	// registering its lead profile does not implicitly grant that parity
@@ -257,6 +263,8 @@ func (r *Runner) Reopen(id string) (State, error) {
 		return State{}, conflict("the session is open")
 	case !closed:
 		return State{}, errUnknown
+	case rec.Backend == BackendPi:
+		return State{}, errPiRetired
 	case !rec.Lead:
 		return State{}, badRequest("reopen applies to a lead session only")
 	case rec.ClosedAt == "":

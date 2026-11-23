@@ -36,7 +36,12 @@ var errClosed = &requestError{status: http.StatusConflict, msg: "the conversatio
 var errHandedOff = &requestError{status: http.StatusConflict, msg: "the session was handed to a terminal: it runs there, not in the dashboard"}
 
 // endedError is the refusal of a write to a conversation no loop serves.
+var errPiRetired = &requestError{status: http.StatusConflict, msg: "the Pi harness is retired; its sessions are available as history"}
+
 func endedError(rec Record) error {
+	if rec.Backend == BackendPi {
+		return errPiRetired
+	}
 	if rec.ClosedAt == "" && rec.handedOff() {
 		return errHandedOff
 	}

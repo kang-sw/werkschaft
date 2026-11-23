@@ -381,7 +381,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	r.mu.Lock()
 	rec, closed := r.closed[id]
 	r.mu.Unlock()
-	if !closed || rec.ClosedAt == "" || rec.Lead || rec.Parent == nil || !r.lifecycle(rec.Backend).NativeChildren {
+	if !closed || rec.Backend == BackendPi || rec.ClosedAt == "" || rec.Lead || rec.Parent == nil || !r.lifecycle(rec.Backend).NativeChildren {
 		return nil, err
 	}
 	// A send authorized before its caller closed may have waited behind

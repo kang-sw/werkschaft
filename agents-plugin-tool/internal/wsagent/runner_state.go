@@ -200,7 +200,7 @@ func closedState(rec Record) State {
 		// A lead's Cwd is a taken-over terminal's, not a spawn choice.
 		st.Cwd = rec.Cwd
 	}
-	if rec.ClosedAt == "" && rec.handedOff() {
+	if rec.Backend != BackendPi && rec.ClosedAt == "" && rec.handedOff() {
 		st.Status, st.HandedOffAt = StatusHandedOff, rec.HandedOffAt
 		if rec.Lead {
 			st.Lifecycle = wsdashboard.SessionStopped
