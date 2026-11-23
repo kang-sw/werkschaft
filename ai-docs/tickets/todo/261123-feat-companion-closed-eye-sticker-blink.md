@@ -265,7 +265,7 @@ belongs to the art workflow, not this ticket.
 
 ## Open Decision Queue
 
-(155) Release tier for the new pack field. Recommended: the `head.mouths`
+(160) Release tier for the new pack field. Recommended: the `head.mouths`
 `eyeclosed-*` registration, which makes the field T1 and lets it ship in a
 patch, at the cost of one redundant registration line per plate in each pack.
 Alternative: no shim, ship the plain field as T3 (older dashboards refuse to
@@ -275,7 +275,7 @@ downstream-visible authoring burden, so it is not settled here. Implementation
 builds the shim by default; dropping it removes only the shim lines and the
 extra lint.
 
-(156) Whether the blink threshold should be a pack-tunable field. Recommended:
+(161) Whether the blink threshold should be a pack-tunable field. Recommended:
 no; keep the engine constants (0.5 and 0.95) and revisit when real art shows a
 need. A field would be another downstream-visible schema surface and, with the
 unreferenced-file rule, no added compat cost, but it is scope beyond the owner
