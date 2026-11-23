@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -372,6 +373,37 @@ func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
 	plain := startProxyTestDaemon(t, &echoHandler{})
 	if status, _, _ := mcpPost(t, context.Background(), plain, http.MethodPost, "tok-a", initializeBody); status != http.StatusNotFound {
 		t.Fatalf("without a token host: status %d, want 404", status)
+	}
+}
+
+func TestProxyHTTPAccessGuardLogs401(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		lan          bool
+	}{
+		{"loopback-only", "dashboard login required", false},
+		{"LAN", "missing or invalid LAN access token", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var log bytes.Buffer
+			d := &Daemon{dir: t.TempDir(), lan: tt.lan, log: &log}
+			req := httptest.NewRequest(http.MethodPost, ProxyHTTPPath, nil)
+			req.RemoteAddr = "192.0.2.1:50000"
+			req.Header.Set("Authorization", "Bearer fixture-bearer")
+			rec := httptest.NewRecorder()
+			d.accessGuard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("the access guard admitted a non-loopback request without dashboard credentials")
+			})).ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("access guard returned %d, want 401", rec.Code)
+			}
+			if strings.Count(log.String(), "dashboard: /mcp/session 401: "+tt.reason+"\n") != 1 {
+				t.Errorf("expected one 401 log for %q", tt.reason)
+			}
+			if strings.Contains(log.String(), "fixture-bearer") {
+				t.Fatal("401 diagnostics exposed a bearer")
+			}
+		})
 	}
 }
 

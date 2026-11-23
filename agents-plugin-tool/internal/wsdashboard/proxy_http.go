@@ -71,8 +71,12 @@ func (st httpMCPStream) Read(b []byte) (int, error)  { return st.s.inR.Read(b) }
 func (st httpMCPStream) Write(b []byte) (int, error) { return st.s.outW.Write(b) }
 func (st httpMCPStream) Close() error                { return st.s.inW.Close() }
 
-func (d *Daemon) refuseProxyHTTP(w http.ResponseWriter, reason string) {
+func (d *Daemon) logProxyHTTPUnauthorized(reason string) {
 	fmt.Fprintf(d.log, "dashboard: %s 401: %s\n", ProxyHTTPPath, reason)
+}
+
+func (d *Daemon) refuseProxyHTTP(w http.ResponseWriter, reason string) {
+	d.logProxyHTTPUnauthorized(reason)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
