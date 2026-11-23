@@ -288,6 +288,7 @@
       if (!list) return;
       var known = {};
       (list.cards || []).forEach(function (card) { known[card.id] = card; });
+      var fresh = cexecCards.length > 0;
       cexecRestoring = true;
       remembered.forEach(function (m) {
         if (cexecById[m.id]) return;
@@ -295,7 +296,7 @@
       });
       cexecRestoring = false;
       // Restored history starts folded to the bar; a run still active shows.
-      if (cexecCards.length) { cexecOpen = false; cexecSync(); }
+      if (cexecCards.length && !fresh) { cexecOpen = false; cexecSync(); }
     });
   }
   // cexecList reads the daemon's private card list once and keeps its admission
