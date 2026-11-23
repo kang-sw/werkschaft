@@ -430,6 +430,7 @@ func (s *Support) open(store, root string, sel Selection, hs []SupportHarness) (
 }
 
 // StoreAnswer is a store's support state.
+// Retained name check: notice for an old stored support selection (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
 type StoreAnswer struct {
 	Store string `json:"store"`
 	// Conversation is the store's open conversation; null when none is.

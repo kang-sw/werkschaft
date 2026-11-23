@@ -150,6 +150,8 @@ func (s *Server) detectHarnessFromInitializeParams(raw json.RawMessage) string {
 
 // bridgeHarness is the backend whose declared bridge client name is exactly
 // name, "" for none.
+// Retained name check: accept the old bridge handshake as a client identity
+// independently of the available execution backends (TestDetectHarnessFromInitializeParamsPrecedence).
 func (s *Server) bridgeHarness(name string) string {
 	if name == "" {
 		return ""
@@ -165,6 +167,9 @@ func (s *Server) bridgeHarness(name string) string {
 		if named.Connection.BridgeClientName == name {
 			return named.Name
 		}
+	}
+	if name == "ws-pi-bridge" {
+		return wsagent.BackendPi
 	}
 	return ""
 }

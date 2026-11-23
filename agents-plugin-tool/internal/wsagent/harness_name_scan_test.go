@@ -105,6 +105,10 @@ var harnessNameAllowlist = func() []nameSite {
 
 	// Pi retirement compatibility paths.
 	add(
+		site("internal/mcp/server_harness.go", "ws-pi-bridge", 1, classExternal, "legacy exact MCP client name", "TestDetectHarnessFromInitializeParamsPrecedence"),
+		site("internal/mcp/server_harness.go", "BackendPi", 1, classExternal, "legacy exact MCP client identity", "TestDetectHarnessFromInitializeParamsPrecedence"),
+		site("internal/wsagent/agent_tools.go", "BackendPi", 2, classPersisted, "stored tier routing can still name Pi", "TestRetiredPiTierRedirectsToWerk"),
+		site("internal/wsagent/agent_tools.go", "BackendWerk", 1, classPersisted, "the effective backend for a stored Pi tier", "TestRetiredPiTierRedirectsToWerk"),
 		site("internal/mcp/config_manifest.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
 		site("internal/mcp/config_manifest.go", "pi.", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
 		site("internal/mcp/session_hire.go", "pi", 1, classPersisted, "legacy hire requests", "TestRetiredPiHireRefuses"),
@@ -181,12 +185,12 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/mcp/dashboard_settings_config.go", "agy.prefer_native_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.avoid_agy_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "claude.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/server_dispatch.go", "pi.spawn", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.send", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.list", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.stop", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.transcript", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.wait", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
+		site("internal/mcp/server_dispatch.go", "pi.spawn", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.send", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.list", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.stop", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.transcript", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.wait", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
 		site("internal/mcp/server_harness.go", "x-codex-turn-metadata", 2, classExternal, "Codex's own request metadata key and its raw marker", detect),
 		site("internal/mcp/server_harness.go", "codex", 3, classExternal, "historical raw initialize substring and its precedence over claude", detect),
 		site("internal/mcp/server_harness.go", "claude", 2, classExternal, "historical raw initialize substring", detect),
@@ -212,7 +216,6 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claudeAiOauth"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
-		site("internal/wsdashboard/plan_usage.go", `json:"openai-codex"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
 		site("internal/wsdashboard/plan_usage.go", "codexFiveHourHistory", 1, classPersisted, "the plan-usage response member the page reads", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
 		site("internal/wsdashboard/plan_usage_history.go", "plan-usage-codex-history.json", 1, classPersisted, "the persisted five-hour history file name", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
 		site("internal/wsdashboard/plan_usage_history.go", "codex", 2, classPersisted, "persisted history validators accept the labels earlier writers wrote", history),
@@ -224,7 +227,6 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage_probe.go", "codex", 1, classPersisted, "persisted history harness label", history),
 		site("internal/wsdashboard/plan_usage_probe.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage_probe.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
-		site("internal/wsdashboard/plan_usage_probe.go", `json:"openai-codex"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
 		site("internal/wsdashboard/plan_usage_probe.go", "codex_cli_rs", 1, classExternal, "the provider's usage endpoint originator header", "TestPlanUsageIgnoresPiLogin"),
 	)
 

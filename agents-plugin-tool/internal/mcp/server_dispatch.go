@@ -18,6 +18,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
+// Retained name check: old MCP tool names remain callable through 0.52 (TestRetiredPiExecutionToolsAreHiddenAndRefuse).
 func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	var params struct {
 		Name      string         `json:"name"`

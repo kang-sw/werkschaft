@@ -222,6 +222,7 @@ type AgentRouteEntry struct {
 // TierHarnesses are the harness names a tier route or bundle may name: the
 // built-in harnesses and every registered backend. A known harness that is
 // unavailable stays valid in config and reports at resolution.
+// Retained name check: stored tiers can still name Pi (TestRetiredPiTierRedirectsToWerk).
 func TierHarnesses(registries ...map[string]BackendRegistration) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -306,15 +307,7 @@ func agentID(address string) string {
 // caller verified on callerBackend: not registered, refused across
 // harnesses, or not installed. "" is spawnable.
 func (r *Runner) spawnableHarness(callerBackend, harness string) string {
-	if why := r.registeredWorker(callerBackend, harness); why != "" {
-		return why
-	}
-	if r.lifecycle(harness).NativeChildren && r.opts.ChildCheck != nil {
-		if err := r.opts.ChildCheck(); err != nil {
-			return err.Error()
-		}
-	}
-	return ""
+	return r.registeredWorker(callerBackend, harness)
 }
 
 // registeredWorker is spawnableHarness before the child check: registration,
@@ -597,6 +590,7 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 // noTierSlotError is a harness with no agents.tier model at a size.
 type noTierSlotError struct{ harness, size string }
 
+// Retained name check: stored tiers can still name Pi (TestRetiredPiTierRedirectsToWerk).
 func (e noTierSlotError) Error() string {
 	if e.harness == BackendWerk {
 		return fmt.Sprintf("werk.%s has no usable OpenRouter model; set one with config.tune key \"agents.tier\" (harness \"werk\", tier \"%s\", and an exact OpenRouter model ID from the dashboard model picker)", e.size, e.size)
@@ -623,6 +617,7 @@ func harnessSlot(cfg wsconfig.Options, harness, bare string, registries ...map[s
 // resolved harness's agents.tier slot at the resolved size. It never falls
 // back to another harness's slot, so a surface that reports it (render,
 // config.resolve_agent) names what the spawn uses or fails as it does.
+// Retained name check: stored tiers can still name Pi (TestRetiredPiTierRedirectsToWerk).
 func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution, registries ...map[string]BackendRegistration) (wsconfig.AgentTier, error) {
 	harness := TierRuntimeHarness(res.Harness)
 	if res.Bundle != "" {
@@ -681,29 +676,9 @@ func (r *Runner) CallerBackend(conversation, capability string) string {
 	return c.rec.Backend
 }
 
-// HarnessAvailability is SpawnableHarness for an interactive view: it never
-// runs a probe subprocess. The child check (Pi's version) answers from
-// ChildCheckKnown; while that needs a probe, or no ChildCheckKnown is set,
-// known is false and why is empty: availability is not known yet. caller is
-// the view's caller harness, admitted as SpawnableHarness's callerBackend.
+// HarnessAvailability serves interactive views without probing a subprocess.
 func (r *Runner) HarnessAvailability(caller, harness string) (why string, known bool) {
-	if why := r.registeredWorker(caller, harness); why != "" {
-		return why, true
-	}
-	if !r.lifecycle(harness).NativeChildren || r.opts.ChildCheck == nil {
-		return "", true
-	}
-	if r.opts.ChildCheckKnown == nil {
-		return "", false
-	}
-	known, err := r.opts.ChildCheckKnown()
-	switch {
-	case !known:
-		return "", false
-	case err != nil:
-		return err.Error(), true
-	}
-	return "", true
+	return r.registeredWorker(caller, harness), true
 }
 
 // tierRefusal is a 400 naming why and every tier caller may spawn now.

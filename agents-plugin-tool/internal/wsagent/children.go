@@ -49,6 +49,7 @@ import (
 
 // Env names the runner sets on the ws-mcp it attaches to a spawned
 // conversation that may spawn (children.go).
+// Retained name check: legacy environment keys forwarded by workers (TestCapabilityTokenGoesToSpawnedWorkersOnly).
 const (
 	// EnvPiToken is the conversation's capability token for the token
 	// route.
