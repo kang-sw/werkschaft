@@ -563,18 +563,11 @@
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
     },
+    "261123-bug-ws-audit-search-empty-budget-page": {
+      "registered_at": "2026-11-23T00:07:49Z"
+    },
     "261123-bug-ws-daemon-replace-gap-older-daemon": {
       "registered_at": "2026-11-22T20:54:14Z"
-    },
-    "261123-bug-ws-exec-cutover-worker-authority": {
-      "registered_at": "2026-11-22T20:28:58Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T23:15:34Z"
-      }
     },
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
