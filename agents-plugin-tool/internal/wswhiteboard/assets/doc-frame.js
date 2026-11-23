@@ -358,4 +358,28 @@
   d.addEventListener("pointermove", function () { setHover(true); }, { passive: true });
   d.addEventListener("pointerleave", function () { setHover(false); });
   window.addEventListener("blur", function () { setHover(false); });
+  // Forward wheel deltas passively so the host's snap-deck wheel controller
+  // sees boundary gestures while native 120Hz inner card scroll stays unblocked.
+  // Skip forwarding when any scrollable ancestor inside this frame can still
+  // scroll in the gesture direction.
+  function canScrollInFrame(target, dy) {
+    var root = d.scrollingElement || d.documentElement;
+    for (var n = target && target.nodeType === 1 ? target : root; n && n.nodeType === 1; n = n.parentNode) {
+      if (n.scrollHeight > n.clientHeight + 2) {
+        var isRoot = n === root || n === d.documentElement || n === d.body;
+        var cs = isRoot ? null : window.getComputedStyle && window.getComputedStyle(n);
+        if (isRoot || (cs && /auto|scroll/.test(cs.overflowY))) {
+          var canMove = dy > 0 ? n.scrollTop + n.clientHeight < n.scrollHeight - 1 : n.scrollTop > 1;
+          if (canMove) return true;
+        }
+      }
+      if (n === root) break;
+    }
+    return false;
+  }
+  d.addEventListener("wheel", function (e) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    if (e.deltaY && canScrollInFrame(e.target, e.deltaY)) return;
+    post({ wbDoc: "wheel", dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode });
+  }, { passive: true });
 })();

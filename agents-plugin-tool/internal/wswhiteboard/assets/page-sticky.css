@@ -83,7 +83,7 @@ button.oq-arr:hover { color: var(--wb-fg); background: var(--wb-muted); }
 .wb-rail-ghost > * { position: absolute; left: 0; top: 50%; width: 100%; margin: 0; transform: translateY(-50%); background: transparent; box-shadow: none; border-radius: 0; opacity: 1; }
 /* the shadow carries the band's fill over the scroller's top padding, which a sticky inset counts from */
 .wb-rail-wrap.up .wb-rail-stack { top: 0; padding: 4px 0 3px; background: var(--wb-bg); box-shadow: 0 -8px 0 var(--wb-bg); }
-.wb-rail-wrap.dn .wb-rail-stack { bottom: 0; padding: 14px 0 4px; background: linear-gradient(to bottom, transparent, var(--wb-bg) 14px); }
+.wb-rail-wrap.dn .wb-rail-stack { bottom: 0; padding: var(--wb-rail-dn-pad, 14px 0 4px); background: var(--wb-rail-dn-bg, linear-gradient(to bottom, transparent, var(--wb-bg) 14px)); }
 /* A capsule is as wide as its item's bar (the stack spans the board, as the
    items do), so it reads as the bar collapsed, and the morph between the
    two (rail.js) changes only height; the far one stands back by type and

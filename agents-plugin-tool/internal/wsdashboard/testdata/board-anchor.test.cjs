@@ -27,11 +27,12 @@ function vars(source, names) {
     return found[0];
   }).join('');
 }
-const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT', 'ANCHOR_BOT_MARGIN', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorCap0', 'anchorProg']) +
-  funcs(anchorSrc, ['anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
+const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorCap0', 'anchorProg', 'WHEEL_OWN']) +
+  anchorSrc.match(/\n  var WHEEL_DEFAULTS = \{[\s\S]*?\n  \};\n/)[0] +
+  funcs(anchorSrc, ['createBoardWheel', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCancelGlide', 'anchorGlide', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
-    'anchorSize', 'anchorWatchLast', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
+    'anchorSize', 'anchorWatchLast', 'anchorCancelProg', 'anchorCanReach', 'anchorCanInnerScroll', 'anchorHandleWheel', 'anchorOnWheel', 'anchorOnFrameWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -214,19 +215,17 @@ test('removal of the current card falls back to the next card, else the previous
   assert.equal(w.cur(), 't:C', 'a card that leaves the order (hidden) hands over too');
 });
 
-test('no wheel trap, no overscroll-behavior contain, capsule-only scroll-margin-top, mandatory snap deck, and no .board-step buttons or i18n keys', () => {
-  assert.doesNotMatch(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior:\s*contain/);
-  assert.match(cssSrc, /scroll-snap-type:\s*y\s+mandatory/);
-  assert.match(cssSrc, /\[data-anchor-cap="0"\][^}]*scroll-margin-top:\s*160px/);
-  assert.match(cssSrc, /\[data-anchor-cap="rail0"\][^}]*scroll-margin-top:\s*var\(--board-pad-top,\s*2px\)/);
-  assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*24px\)/);
-  assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*44px\)/);
-  assert.doesNotMatch(cssSrc, /\.bcard\[data-card\]:not\(\[data-max\]\)\s*>\s*\.bc-in\s*>\s*\.bc-body\s*\{[^}]*overflow\s*:/);
-  assert.doesNotMatch(cssSrc, /scroll-margin-top:[^;]*(?:--board-toolbar|--wb-rail-inset)/);
+test('wheel-virtualized deck: no CSS scroll-snap drift, overscroll-behavior-y contain on inner scrollers, explicit data-has-panel-max, and no .board-step buttons or i18n keys', () => {
+  assert.doesNotMatch(cssSrc, /scroll-snap-type\s*:/);
+  assert.doesNotMatch(cssSrc, /scroll-snap-align\s*:/);
+  assert.doesNotMatch(cssSrc, /scroll-snap-stop\s*:/);
+  assert.match(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior-y:\s*contain/);
+  assert.match(cssSrc, /\.bcard\[data-card\]:not\(\[data-max\]\)\s*>\s*\.bc-in\s*>\s*\.bc-body[^}]*overscroll-behavior-y:\s*contain/);
+  assert.doesNotMatch(cssSrc, /:has\(details\.entry-panel\[data-max\]\)/);
+  assert.match(cssSrc, /:not\(\[data-has-panel-max\]\)/);
   assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
-  assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["'][^)]*passive\s*:\s*false/);
-  assert.doesNotMatch(anchorSrc, /e\.preventDefault\(/);
+  assert.match(anchorSrc, /addEventListener\(\s*["']wheel["'][^)]*passive\s*:\s*false/);
   const w = world([T('A'), T('B')]);
   w.c.anchorInit();
   assert.equal(w.bar.children[0].children.length, 0, 'anchorInit mounts no .board-step toolbar buttons');
@@ -271,14 +270,24 @@ test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches t
     { target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 800 }], contentRect: { width: 900, height: 800 } },
     { target: w.c.anchorLastCard, borderBoxSize: [{ blockSize: 500 }], contentRect: { height: 500 } },
   ]);
-  // topSpace = 34 + capH(2)=44 = 78; botSpace = BOT(55) + margin(8) = 63 => usable = 800 - 78 - 63 = 659
-  assert.equal(w.bcol.props.get('--board-usable'), '659px');
+  // topSpace = 34 + capH(2)=44 = 78; bot2 = 47 => usable = 800 - 78 - 47 = 675
+  assert.equal(w.bcol.props.get('--board-usable'), '675px');
+  assert.equal(w.bcol.props.get('--board-h'), '800px');
+  assert.equal(w.bcol.props.get('--board-top-0'), '38px');
+  assert.equal(w.bcol.props.get('--board-top-1'), '58px');
+  assert.equal(w.bcol.props.get('--board-top-2'), '78px');
+  assert.equal(w.bcol.props.get('--board-bot-0'), '6px');
+  assert.equal(w.bcol.props.get('--board-bot-1'), '27px');
+  assert.equal(w.bcol.props.get('--board-bot-2'), '47px');
+  assert.equal(w.bcol.props.get('--board-card-gap'), '59px');
+  assert.equal(w.bcol.hasAttribute('data-board-bounded'), true);
   // runway = 800 - 78 - 500 = 222
   assert.equal(w.bcol.props.get('--board-runway'), '222px');
   // Unbounded document-scrolled board must clear --board-usable and --board-runway
   w.bcol.overflowY = 'visible';
   w.bcol.style.removeProperty = k => w.bcol.props.delete(k);
   w.c.anchorSize([{ target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 5000 }], contentRect: { width: 900, height: 5000 } }]);
+  assert.equal(w.bcol.hasAttribute('data-board-bounded'), false);
   assert.equal(w.bcol.props.has('--board-usable'), false);
   assert.equal(w.bcol.props.has('--board-runway'), false);
 });
@@ -459,4 +468,47 @@ test('anchorSlotCaps stamps rail0 on first railed card when slot 0 is a non-rail
   assert.equal(w.node('t:A').getAttribute('data-anchor-cap'), '0');
   assert.equal(w.node('t:B').getAttribute('data-anchor-cap'), '1');
   assert.equal(w.node('t:C').getAttribute('data-anchor-cap'), null);
+  assert.equal(w.node('t:A').getAttribute('data-anchor-bot'), null);
+  assert.equal(w.node('t:B').getAttribute('data-anchor-bot'), '1');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-last'), '1');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), null);
+});
+
+test('anchorSlotCaps isolates data-anchor-last to the trailing non-rail .bcard', () => {
+  const w = world([T('A'), T('B'), Cd('u1')]);
+  w.c.anchorSettle(null);
+  // Both t:B and trailing non-rail c:u1 have 0 bottom rail capsules (data-anchor-bot="0"),
+  // but only c:u1 is the actual last visible card (data-anchor-last="1") so t:B keeps its inter-card gap.
+  assert.equal(w.node('t:B').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), null);
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-last'), '1');
+  // Removing trailing card moves data-anchor-last cleanly onto t:B.
+  const u1 = w.node('c:u1');
+  u1.remove();
+  w.c.anchorSettle(null);
+  assert.equal(u1.getAttribute('data-anchor-last'), null);
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), '1');
+});
+
+test('anchorOnWheel ignores wheel events inside .tpop, open popover, or dialog[open]', () => {
+  const w = world([T('A'), T('B')]);
+  w.bcol.overflowY = 'auto';
+  w.c.anchorInit();
+  w.select('t:A');
+  for (const hit of ['.tpop', '[popover]:popover-open', 'dialog[open]']) {
+    let prevented = false;
+    w.c.anchorOnWheel({
+      defaultPrevented: false,
+      ctrlKey: false,
+      deltaY: 120,
+      deltaX: 0,
+      deltaMode: 1,
+      target: { closest: sel => sel.includes(hit) ? {} : null },
+      preventDefault: () => { prevented = true; }
+    });
+    assert.equal(prevented, false, 'wheel inside ' + hit + ' must not be intercepted');
+    assert.equal(w.cur(), 't:A', 'wheel inside ' + hit + ' must not change current card');
+  }
 });

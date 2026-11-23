@@ -281,6 +281,15 @@ Phase 2 implemented on `impl/develop/main-panel-snap-deck-p2` (commits `4fb9d24e
   - Visual inspection: 7 Chromium screenshots (`/tmp/snap-deck-p2-shots/01..07.png`) verified across wide 4-col light/dark, 24-panel sliding window, split-page hover light/dark, narrow Home hover, and drag-hover drop-hint + spring bar.
   - Pre-existing drift note: `TestBoardHoldPillBrowser` and `TestBoardToolbarPlacementAndCounts` remain pre-existing Phase 1 drift (untouched by Phase 2).
 
+#### Edition (da7938e02) - 2026-11-24
+
+- Consolidated 4-part live-dogfood feel fixes on `impl/develop/main-panel-snap-deck-feel-fixes` (`c1e91f919`, `da7938e02`):
+  - **Wheel virtualization (Preset A `(114)=a`):** replaced CSS scroll-snap drift on `#bcol` with pure `WsBoardWheel` (`dashboard-board-anchor.js`, calibrated mockup `ai-docs/assets/mockups/261124/main-panel-redesign/snap-deck-wheel-tuner-v1.html`), instant `scrollTop` jump + single compositor WAAPI glide, conditional passive `doc-frame.js` wheel forwarding, `.tpop`/popover/dialog wheel bypass, `deltaMode` scaling for `dx`, and `@media (hover: hover) and (pointer: fine)` scoped inner `overscroll-behavior-y: contain`.
+  - **Per-edge 100% full-span height & 0px peek:** stamped `O(1)` `data-anchor-cap`, `data-anchor-bot`, and dedicated `data-anchor-last="1"` attributes with per-edge `--board-top-*`/`--board-bot-*`/`--board-card-gap` CSS variables and parameterized `.wb-rail-wrap.dn .wb-rail-stack` (`--wb-rail-dn-pad`, `--wb-rail-dn-bg`).
+  - **Overview fast exit & zero idle rAF:** replaced `:has(details.entry-panel[data-max])` with explicit `data-has-panel-max`, replaced `WsOverview.holding()` rAF spin with one-shot `WsOverview.onRelease(fn)`, and added snap-deck fast Overview exit (`settle()` before `select()`, 0 `data-overview-motion` tags, 160ms opacity-only settle).
+  - **Maximize stacking & opaque sheet surface:** stamped `data-board-max="gal"` for `.bgal` sheets with `var(--z-modal, 70)` lift + `.bgal::before` scrim + `--wb-chg-pe` dimmed-pane pointer-event guard, added explicit opaque `background: var(--wb-bg)` on `details.entry-panel[data-max]`, and added `transition: none !important` on `:root[data-board-max] :is(.r-board, .gal-page[data-active])` so inline `translate` clears immediately on frame 0.
+- **Verification:** Node unit tests 32/32 PASS (`board-wheel.test.cjs`, `board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`); Playwright suites 5/5 PASS (`board-snap-deck-feel.browser.cjs`, `board-snap-deck-p2.browser.cjs`, `board-scroll-p1-fixes.browser.cjs`); Go `wswhiteboard` + `wsdashboard` suites (including `TestCSSClassesDoNotCollideAcrossModules`, `TestGalleryNoReservedColumnWithoutAPage`, `TestGalleryBrowser`) PASS; 6 Chromium screenshots under `/tmp/snap-deck-feel-shots/` verified.
+
 ### Phase 3: Overview ("한 눈에 보기") Middle-Click Entry, Hero Highlight, and Wide 4-Col Quick-Look Live Preview
 
 Upgrade Overview into a fast mouse + keyboard Hero Panel switcher with stateful Quick Look preview in wide 4-column mode.

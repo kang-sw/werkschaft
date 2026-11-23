@@ -230,7 +230,13 @@ async function routeTerminal(context) {
       // its scroll offset and nodes stay.
       await dot(page, -1).click();
       await until(async () => await pos(page) === -1, 'home');
-      await page.evaluate(() => { const b = document.getElementById('bcol'); b.scrollTop = 240; window.__board = { beta: document.querySelector('section.topic[data-topic="beta"]'), top: b.scrollTop }; });
+      await page.evaluate(() => {
+        const b = document.getElementById('bcol');
+        const ep = document.querySelector('section.topic[data-topic="epsilon"]');
+        if (window.WsBoardAnchor && ep) window.WsBoardAnchor.select(ep, { smooth: false });
+        else b.scrollTop = 240;
+        window.__board = { beta: document.querySelector('section.topic[data-topic="beta"]'), top: b.scrollTop };
+      });
       await page.evaluate(() => window.__gal.frames());
       const homeSeen = await page.evaluate(() => window.__gal.seen([document.querySelector('section.topic[data-topic="epsilon"]'), document.querySelector('#bgal .gal-pane[data-ref="t:alpha"]')]));
       await dot(page, 0).click();
@@ -1012,7 +1018,7 @@ async function routeTerminal(context) {
       await seed(context, 'livesession', { cards: [], topics: [{ n: 'alpha', p: 1, a: 0, b: 0 }] });
       const { tab, page, errors } = await open(context, 'livesession');
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha"]]', 'one docked page (OWN last)');
-      await until(() => page.evaluate(() => !!document.querySelector('#r-board .bcard[data-kind="terminal"] .tm-host .xterm')), 'terminal card mounted in #r-board', 15000);
+      await until(() => page.evaluate(() => !!document.querySelector('#r-board .bcard[data-kind="terminal"]')), 'terminal card present in #r-board', 15000);
       await page.evaluate(helpers3);
       if (await pos(page) !== -1) await dot(page, -1).click();
       await until(async () => await pos(page) === -1, 'Page 0 (OWN last)');
@@ -1032,6 +1038,7 @@ async function routeTerminal(context) {
         const cards = window.WsBoardAnchor.cards();
         return { isLast: cards[cards.length - 1] === term, termOverflow, webOverflow };
       });
+      await until(() => page.evaluate(() => !!document.querySelector('#r-board .bcard[data-kind="terminal"] .tm-host .xterm')), 'terminal card mounted in #r-board', 15000);
       assert.equal(ownSetup.isLast, true, 'terminal .bcard is the last visible panel in ⌂');
       assert.equal(ownSetup.termOverflow, 'hidden', 'terminal .bc-body preserves overflow: hidden inside #bcol');
       assert.equal(ownSetup.webOverflow, 'hidden', 'web .bc-body preserves overflow: hidden inside #bcol');
@@ -1052,7 +1059,11 @@ async function routeTerminal(context) {
       assert.equal(await pos(page), -1, 'wheel inside OWN terminal body stays on Page 0');
       // (b) Wheel on its header (.bc-hd) cleanly flips to Pinned Page 1.
       await sleep(G_INERTIA + 80);
-      const hdAt = await boxCenter('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-hd');
+      const hdAt = await (async () => {
+        const o = await off();
+        const r = await page.evaluate(() => { const b = document.querySelector('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-hd').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + 4 }; });
+        return { x: o.x + r.x, y: o.y + r.y };
+      })();
       await wheel(hdAt, 100, 4, 30);
       assert.equal(await pos(page), 0, 'wheel on OWN terminal header (.bc-hd) flips to Pinned Page 1');
       // Return to ⌂ and verify clicking .gal-rail dot flips cleanly to Pinned Page 1.

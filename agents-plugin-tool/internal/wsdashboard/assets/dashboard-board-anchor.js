@@ -9,13 +9,125 @@
   // change of any card reads and writes nothing on the outer board. Geometry
   // is read only by an explicit user move (selecting, a native scroll's end).
   var ANCHOR_STORE = "ws.dashboard.board-card." + location.pathname + location.search;
-  var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4, ANCHOR_FADE = 14;
-  var ANCHOR_BOT = ANCHOR_FADE + 2 * ANCHOR_CAP + ANCHOR_GAP + ANCHOR_PAD;
-  var ANCHOR_BOT_MARGIN = 8;
+  var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4;
+  var ANCHOR_BOT_0 = 6, ANCHOR_BOT_1 = 27, ANCHOR_BOT_2 = 47, ANCHOR_CARD_GAP_EXTRA = 12;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
-  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null;
-  var anchorProg = null, anchorProgSeq = 0;
+  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
+  var anchorProg = null, anchorProgSeq = 0, anchorGlideAnim = null, anchorWheelCtrl = null;
+  var WHEEL_DEFAULTS = {
+    threshold: 52,
+    peekPx: 0,
+    wallGuardMs: 140,
+    chainWindowMs: 360,
+    minStepMs: 165,
+    animMs: 220,
+    idleGapMs: 140,
+    discretePx: 48,
+    discreteGapMs: 60
+  };
+  var WHEEL_OWN = '.xterm, .tm-host, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
+  // Pure wheel-virtualized deck state machine (Preset A: Crisp Instant Glide).
+  // Exposed as window.WsBoardWheel for deterministic unit testing without DOM.
+  function createBoardWheel(opts) {
+    var cfg = {};
+    Object.keys(WHEEL_DEFAULTS).forEach(function (k) {
+      cfg[k] = opts && opts[k] !== undefined ? opts[k] : WHEEL_DEFAULTS[k];
+    });
+    var state = "IDLE", accum = 0, minAbs = Infinity;
+    var lastEvtAt = 0, lastCommitAt = -1e9, lastDir = 0;
+    var coastDir = 0, wallDir = 0, lastInnerAt = -1e9, lastInnerDir = 0;
+    function reset() {
+      state = "IDLE"; accum = 0; minAbs = Infinity;
+      lastEvtAt = 0; lastCommitAt = -1e9; lastDir = 0;
+      coastDir = 0; wallDir = 0; lastInnerAt = -1e9; lastInnerDir = 0;
+    }
+    function commit(dir, now, abs) {
+      state = "COAST_ABSORB";
+      coastDir = dir;
+      lastDir = dir;
+      lastCommitAt = now;
+      minAbs = abs;
+      accum = 0;
+      return { action: "commit", dir: dir };
+    }
+    function step(ev) {
+      if (!ev) return { action: "ignore" };
+      var dy = +ev.dy || 0, dx = +ev.dx || 0;
+      var scale = ev.deltaMode === 1 ? 40 : ev.deltaMode === 2 ? 800 : 1;
+      dy *= scale;
+      dx *= scale;
+      if (!dy || Math.abs(dy) < 0.01) return { action: "ignore" };
+      if (Math.abs(dx) > Math.abs(dy) * 1.15) return { action: "ignore" };
+      var now = typeof ev.now === "number" ? ev.now : Date.now();
+      var dir = dy > 0 ? 1 : -1, abs = Math.abs(dy);
+      var dt = lastEvtAt ? now - lastEvtAt : 9999;
+      lastEvtAt = now;
+      var isDiscrete = (ev.deltaMode !== 0 && ev.deltaMode != null) || (abs >= cfg.discretePx && dt >= cfg.discreteGapMs);
+      if (dt >= cfg.idleGapMs) {
+        if (state === "WALL_ABSORB" || state === "COAST_ABSORB") {
+          state = "IDLE"; minAbs = Infinity;
+        }
+        accum = 0;
+      }
+      var inChain = (now - lastCommitAt) <= cfg.chainWindowMs && dir === lastDir;
+      if (state === "WALL_ABSORB" && dir !== wallDir) {
+        state = "IDLE"; accum = 0; minAbs = Infinity;
+      }
+      if (state === "COAST_ABSORB") {
+        if (dir !== coastDir) {
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        } else {
+          if (abs < minAbs) minAbs = abs;
+          var spiked = (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 10)) && (now - lastCommitAt >= cfg.minStepMs);
+          if (!spiked) return { action: "absorb", reason: "coast" };
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        }
+      }
+      if (ev.canInnerScroll && !inChain) {
+        lastInnerAt = now;
+        lastInnerDir = dir;
+        state = "IDLE";
+        accum = 0;
+        return { action: "inner" };
+      }
+      if (state === "IDLE" && !inChain && !isDiscrete && (now - lastInnerAt) <= cfg.wallGuardMs && dir === lastInnerDir) {
+        state = "WALL_ABSORB";
+        wallDir = dir;
+        minAbs = abs;
+        accum = 0;
+        return { action: "absorb", reason: "wall" };
+      }
+      if (state === "WALL_ABSORB") {
+        if (abs < minAbs) minAbs = abs;
+        if (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 12)) {
+          state = "IDLE"; accum = 0; minAbs = Infinity;
+        } else {
+          return { action: "absorb", reason: "wall" };
+        }
+      }
+      if ((dir < 0 && ev.atFirst) || (dir > 0 && ev.atLast)) {
+        accum = 0;
+        return { action: "edge", dir: dir };
+      }
+      if (isDiscrete) {
+        if (now - lastCommitAt >= cfg.minStepMs || dir !== lastDir) return commit(dir, now, abs);
+        return { action: "absorb", reason: "rate" };
+      }
+      if ((accum > 0 && dir < 0) || (accum < 0 && dir > 0)) accum = 0;
+      accum += dy;
+      var effThreshold = inChain ? Math.round(cfg.threshold * 0.65) : cfg.threshold;
+      if (Math.abs(accum) >= effThreshold) return commit(dir, now, abs);
+      return { action: "charge", dir: dir, progress: Math.min(1, Math.abs(accum) / effThreshold) };
+    }
+    return {
+      step: step,
+      reset: reset,
+      config: function () { return Object.assign({}, cfg); },
+      state: function () { return state; }
+    };
+  }
+  window.WsBoardWheel = { defaults: Object.assign({}, WHEEL_DEFAULTS), create: createBoardWheel };
   function anchorCapH(n) { return n ? ANCHOR_PAD + n * (ANCHOR_CAP + ANCHOR_GAP) : 0; }
   function anchorToolbarFace() {
     var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
@@ -28,8 +140,48 @@
     }
     return anchorSized.bar ? anchorSized.bar + 6 : anchorSized.inset;
   }
-  function anchorBotReserve() {
-    return ANCHOR_BOT + ANCHOR_BOT_MARGIN + (anchorSized.reply ? anchorSized.reply + 14 : 0);
+  function anchorBotReserve(n) {
+    var base = n === 0 ? ANCHOR_BOT_0 : n === 1 ? ANCHOR_BOT_1 : ANCHOR_BOT_2;
+    return base + (anchorSized.reply ? anchorSized.reply + 14 : 0);
+  }
+  var anchorGlideRealign = false;
+  function anchorCancelGlide() {
+    anchorGlideRealign = false;
+    if (anchorGlideAnim) {
+      try { anchorGlideAnim.cancel(); } catch (e) {}
+      anchorGlideAnim = null;
+    }
+  }
+  function anchorGlide(n, dir) {
+    anchorCancelGlide();
+    if (!n || !dir || !n.animate || reducedMotion()) return;
+    if (doc.documentElement.hasAttribute("data-board-max") || doc.documentElement.hasAttribute("data-overview")) return;
+    var dist = Math.min(72, Math.max(32, Math.round((anchorSized.h || 600) * 0.08)));
+    var y0 = dir > 0 ? dist : -dist;
+    try {
+      var anim = n.animate(
+        [{ transform: "translate3d(0," + y0 + "px,0)" }, { transform: "translate3d(0,0,0)" }],
+        { duration: WHEEL_DEFAULTS.animMs, easing: "cubic-bezier(.22, 1, .36, 1)", fill: "none" }
+      );
+      anchorGlideAnim = anim;
+      var finish = function () {
+        if (anchorGlideAnim !== anim) return;
+        anchorGlideAnim = null;
+        if (anchorGlideRealign) { anchorGlideRealign = false; anchorRealign(true); }
+      };
+      var cancel = function () {
+        if (anchorGlideAnim !== anim) return;
+        anchorGlideAnim = null;
+        anchorGlideRealign = false;
+      };
+      if (anim.addEventListener) {
+        anim.addEventListener("finish", finish);
+        anim.addEventListener("cancel", cancel);
+      } else {
+        anim.onfinish = finish;
+        anim.oncancel = cancel;
+      }
+    } catch (e) {}
   }
   function anchorCardCap(n, list) {
     if (!n || !(n.hasAttribute("data-topic") || n.hasAttribute("data-rail"))) return 0;
@@ -116,6 +268,7 @@
     if (!col || !col.contains(n)) return false;
     var key = anchorId(n);
     if (key === null) return false;
+    var prevNode = anchorLast;
     var left = anchorKey !== null && anchorKey !== key;
     if (anchorKey !== key || anchorLast !== n) anchorMark(n);
     if (left && !(opt && opt.keep) && Object.keys(boardPending).length) {
@@ -123,12 +276,20 @@
       n = anchorNode(key) || n;
     }
     if (!(opt && opt.still)) {
-      var calm = reducedMotion(), smooth = !!(opt && opt.smooth && !calm);
+      var calm = reducedMotion(), wantSmooth = !!(opt && opt.smooth && !calm);
+      var glideDir = opt && opt.glide ? opt.glide : 0;
+      if (anchorSized.bounded && !glideDir && wantSmooth && prevNode && prevNode !== n) {
+        var list = anchorCards(), fromIdx = list.indexOf(prevNode), toIdx = list.indexOf(n);
+        if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) glideDir = toIdx > fromIdx ? 1 : -1;
+      }
+      var smooth = anchorSized.bounded ? false : wantSmooth;
       var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
+      anchorCancelGlide();
       anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
       var moved = anchorAlign(col, n, smooth);
+      if (glideDir && !calm) anchorGlide(n, glideDir);
       if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
       if (!smooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
@@ -182,6 +343,33 @@
     anchorCap0 = next0;
     anchorCapR0 = nextR0;
     anchorCap1 = next1;
+    // Stamp data-anchor-bot="0|1" on trailing edge cards (O(1) DOM writes)
+    // so each card spans down to its actual bottom capsule stack (0, 1, or 2).
+    var nextBots = [], botMap = new Map(), afterRail = 0;
+    for (var k = cards.length - 1; k >= 0; k--) {
+      var ck = cards[k];
+      if (afterRail < 2) {
+        var val = String(afterRail);
+        nextBots.push(ck);
+        botMap.set(ck, val);
+      }
+      if (ck.hasAttribute("data-topic") || ck.hasAttribute("data-rail")) {
+        afterRail++;
+        if (afterRail >= 2) break;
+      }
+    }
+    for (var m = 0; m < anchorBotNodes.length; m++) {
+      var pb = anchorBotNodes[m];
+      if (pb && !botMap.has(pb)) pb.removeAttribute("data-anchor-bot");
+    }
+    botMap.forEach(function (val, node) {
+      if (!node.getAttribute || node.getAttribute("data-anchor-bot") !== val) node.setAttribute("data-anchor-bot", val);
+    });
+    anchorBotNodes = nextBots;
+    var lastNode = cards.length ? cards[cards.length - 1] : null;
+    if (anchorLastNode && anchorLastNode !== lastNode) anchorLastNode.removeAttribute("data-anchor-last");
+    if (lastNode && (!lastNode.getAttribute || lastNode.getAttribute("data-anchor-last") !== "1")) lastNode.setAttribute("data-anchor-last", "1");
+    anchorLastNode = lastNode;
   }
   function anchorSettle(before) {
     var list = anchorCards(), n = anchorNode(anchorKey);
@@ -229,16 +417,40 @@
   // card reachable at the top rail landing line.
   function anchorSetVar(s, k, v) { if (!s.getPropertyValue || s.getPropertyValue(k) !== v) s.setProperty(k, v); }
   function anchorApplySizes(col) {
-    var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2), botSpace = anchorBotReserve();
+    var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2);
+    var bot0 = anchorBotReserve(0), bot1 = anchorBotReserve(1), bot2 = anchorBotReserve(2);
     anchorSized.inset = inset;
     var s = col.style;
     anchorSetVar(s, "--board-toolbar", topSpace + "px");
     anchorSetVar(s, "--board-pad-top", anchorSized.padTop + "px");
     if (!anchorSized.bounded) {
-      if (s.removeProperty) { s.removeProperty("--board-usable"); s.removeProperty("--board-runway"); }
+      if (col.removeAttribute) col.removeAttribute("data-board-bounded");
+      if (s.removeProperty) {
+        s.removeProperty("--board-h");
+        s.removeProperty("--board-top-0");
+        s.removeProperty("--board-top-rail0");
+        s.removeProperty("--board-top-1");
+        s.removeProperty("--board-top-2");
+        s.removeProperty("--board-bot-0");
+        s.removeProperty("--board-bot-1");
+        s.removeProperty("--board-bot-2");
+        s.removeProperty("--board-card-gap");
+        s.removeProperty("--board-usable");
+        s.removeProperty("--board-runway");
+      }
       return;
     }
-    var usable = Math.max(120, anchorSized.h - topSpace - botSpace);
+    if (col.setAttribute && (!col.hasAttribute || !col.hasAttribute("data-board-bounded"))) col.setAttribute("data-board-bounded", "");
+    anchorSetVar(s, "--board-h", anchorSized.h + "px");
+    anchorSetVar(s, "--board-top-0", (inset + 4) + "px");
+    anchorSetVar(s, "--board-top-rail0", inset + "px");
+    anchorSetVar(s, "--board-top-1", (inset + anchorCapH(1)) + "px");
+    anchorSetVar(s, "--board-top-2", topSpace + "px");
+    anchorSetVar(s, "--board-bot-0", bot0 + "px");
+    anchorSetVar(s, "--board-bot-1", bot1 + "px");
+    anchorSetVar(s, "--board-bot-2", bot2 + "px");
+    anchorSetVar(s, "--board-card-gap", (bot2 + ANCHOR_CARD_GAP_EXTRA) + "px");
+    var usable = Math.max(120, anchorSized.h - topSpace - bot2);
     anchorSetVar(s, "--board-usable", usable + "px");
     anchorSetVar(s, "--board-runway", Math.max(0, anchorSized.h - topSpace - (anchorSized.last || 0)) + "px");
   }
@@ -260,6 +472,7 @@
   function anchorRealign(fromInsetOrFrame) {
     var p = anchorProg;
     if (!p || p.key !== anchorKey || Date.now() > p.until) { anchorProg = null; return; }
+    if (anchorGlideAnim) { anchorGlideRealign = true; return; }
     var col = $("bcol"), n = anchorNode(p.key);
     if (!col || !n || !n.isConnected) return;
     var moved = anchorAlign(col, n, !p.scrollDone && p.smooth);
@@ -307,6 +520,75 @@
     if (last) anchorRO.observe(last);
   }
   function anchorCancelProg() { anchorProg = null; }
+  function anchorCanReach(el, dy) {
+    if (!el || el.scrollHeight <= el.clientHeight + 2) return false;
+    return dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1.5 : el.scrollTop > 1.5;
+  }
+  function anchorCanInnerScroll(target, card, dy) {
+    if (!card) return false;
+    for (var n = target; n && n.nodeType === 1; n = n.parentNode) {
+      if (n === card) {
+        if (card.hasAttribute("data-topic")) return anchorCanReach(card, dy);
+        var body = card.querySelector ? card.querySelector(":scope > .bc-in > .bc-body") : null;
+        return anchorCanReach(body, dy);
+      }
+      if (n.classList && n.classList.contains("bc-body")) return anchorCanReach(n, dy);
+      if (n.scrollHeight > n.clientHeight + 2) {
+        var cs = getComputedStyle(n);
+        if (/auto|scroll/.test(cs.overflowY)) {
+          if (anchorCanReach(n, dy)) return true;
+          if (/contain|none/.test(cs.overscrollBehaviorY)) return false;
+        }
+      }
+    }
+    return false;
+  }
+  function anchorHandleWheel(target, card, rawDy, rawDx, deltaMode, prevent) {
+    anchorProg = null;
+    if (!anchorSized.bounded) return;
+    if (doc.documentElement.hasAttribute("data-overview") || doc.documentElement.hasAttribute("data-board-max")) return;
+    var list = anchorCards();
+    if (!list.length) return;
+    var cur = anchorCurrent() || list[0];
+    var at = list.indexOf(cur);
+    if (at < 0) at = 0;
+    if (!card || list.indexOf(card) < 0) card = cur;
+    var dy = +rawDy || 0;
+    if (deltaMode === 1) dy *= 40;
+    else if (deltaMode === 2) dy *= 800;
+    var canInner = anchorCanInnerScroll(target || card, card, dy);
+    if (!anchorWheelCtrl) anchorWheelCtrl = createBoardWheel();
+    var now = window.performance && window.performance.now ? window.performance.now() : Date.now();
+    var res = anchorWheelCtrl.step({
+      dy: rawDy,
+      dx: rawDx,
+      deltaMode: deltaMode,
+      now: now,
+      canInnerScroll: canInner,
+      atFirst: at <= 0,
+      atLast: at >= list.length - 1
+    });
+    if (res.action === "ignore" || res.action === "inner" || res.action === "edge") return;
+    if (prevent) prevent();
+    if (res.action === "commit") {
+      var next = list[at + res.dir];
+      if (next) anchorSelect(next, { smooth: false, glide: res.dir });
+    }
+  }
+  function anchorOnWheel(e) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    var t = e.target;
+    if (t && t.closest && (t.closest(WHEEL_OWN) || t.closest(".tpop, [popover]:popover-open, dialog[open]"))) return;
+    var card = t && t.closest ? t.closest("section.topic[data-topic], .bcard[data-card]") : null;
+    anchorHandleWheel(t, card, e.deltaY, e.deltaX, e.deltaMode, function () { e.preventDefault(); });
+  }
+  function anchorOnFrameWheel(frame, dy, dx, mode) {
+    if (!frame || !frame.isConnected) return;
+    var col = $("bcol");
+    if (!col || !col.contains(frame)) return;
+    var card = frame.closest ? frame.closest("section.topic[data-topic], .bcard[data-card]") : null;
+    anchorHandleWheel(frame, card, dy, dx, mode || 0, null);
+  }
   function anchorOnKey(e) {
     var k = e && e.key;
     if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorProg = null;
@@ -323,6 +605,11 @@
       if (!p.smooth && Math.abs(col.scrollTop - p.target) > 120) { anchorProg = null; }
       else {
       var targetNode = anchorNode(p.key) || anchorLast;
+      if (anchorGlideAnim) {
+        p.scrollDone = true;
+        anchorGlideRealign = true;
+        return;
+      }
       if (targetNode && targetNode.isConnected) {
         var err = 0, canMove = false;
         if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
@@ -372,7 +659,8 @@
     anchorSized.padTop = parseFloat(colCs.paddingTop) || 0;
     anchorSized.bounded = /auto|scroll/.test(colCs.overflowY);
     anchorSized.inset = anchorRailInset(col);
-    col.addEventListener("wheel", anchorCancelProg, { passive: true });
+    anchorWheelCtrl = createBoardWheel();
+    col.addEventListener("wheel", anchorOnWheel, { passive: false, capture: true });
     col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
     col.addEventListener("touchstart", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
@@ -403,6 +691,10 @@
       owner: anchorOwner,
       key: function () { return anchorKey; },
       cards: anchorCards,
+      bounded: function () { return !!anchorSized.bounded; },
+      cancelGlide: anchorCancelGlide,
+      wheel: anchorWheelCtrl,
+      onFrameWheel: anchorOnFrameWheel,
       settle: function () { anchorSettle(null); anchorWatchLast(); if (typeof boardDialSync === "function") boardDialSync(); },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
       dialWindow: typeof boardDialWindow === "function" ? boardDialWindow : null,

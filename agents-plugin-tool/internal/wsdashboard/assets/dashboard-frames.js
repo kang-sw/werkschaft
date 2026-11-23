@@ -410,21 +410,36 @@
   // board's worth of frames rather than one per message. The height it
   // eases from is its set height (style.height), 0 when it has none, as the
   // stylesheet's iframe.doc-frame starts it, so nothing reads layout.
-  var frameSizes = new Map(), frameSizeFrame = 0;
+  var frameSizes = new Map(), frameSizeFrame = 0, frameOverviewWait = false;
   function queueFrameHeight(f, h) {
     if (shHidden) return;
     frameSizes.set(f, h);
+    if (window.WsOverview && window.WsOverview.holding()) {
+      if (!frameOverviewWait && window.WsOverview.onRelease) {
+        frameOverviewWait = true;
+        window.WsOverview.onRelease(function () {
+          frameOverviewWait = false;
+          if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
+        });
+      }
+      return;
+    }
     if (!frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
   }
   function applyFrameHeights() {
     if (shHidden) { frameSizes.clear(); frameSizeFrame = 0; return; }
     // While overview is active or transitioning, board frames are inside
-    // display:none containers and report collapsed heights. Applying those
-    // would overwrite the saved inline heights that exit uses to restore the
-    // unfolded layout, causing a height jump at the end of the exit motion.
-    // Re-queue until overview releases.
+    // display:none containers and report collapsed heights. Defer with a
+    // one-shot release listener so Overview holds zero idle rAF frames.
     if (window.WsOverview && window.WsOverview.holding()) {
-      frameSizeFrame = requestAnimationFrame(applyFrameHeights);
+      frameSizeFrame = 0;
+      if (!frameOverviewWait && window.WsOverview.onRelease) {
+        frameOverviewWait = true;
+        window.WsOverview.onRelease(function () {
+          frameOverviewWait = false;
+          if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
+        });
+      }
       return;
     }
     var batch = frameSizes;
@@ -520,6 +535,8 @@
       if (window.wbCardFind && window.wbCardFind.onFrameScroll) window.wbCardFind.onFrameScroll(f, num(m.seq), num(m.top), num(m.height));
     } else if (m.wbDoc === "hover") {
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
+    } else if (m.wbDoc === "wheel") {
+      if (window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) window.WsBoardAnchor.onFrameWheel(f, num(m.dy), num(m.dx), num(m.mode));
     }
   });
   // A swap re-creates a changed topic's frame (or loads its next one beside

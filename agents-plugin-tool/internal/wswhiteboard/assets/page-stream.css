@@ -231,7 +231,7 @@
    left of the text column, so they never read as a blockquote's border */
 .wb-chg-layer { position: relative; height: 0; }
 .wb-chg-bar { position: absolute; width: 2px; border-radius: 1px; pointer-events: none; --chg: transparent; background: var(--chg); }
-.wb-chg-hit { position: absolute; pointer-events: auto; }
+.wb-chg-hit { position: absolute; pointer-events: var(--wb-chg-pe, auto); }
 .wb-chg-hit:hover > .wb-chg-bar { transform: scaleX(2); }
 .wb-chg-hit:hover > .wb-chg-bar.del { transform: scaleY(2); }
 .wb-chg-tip { position: fixed; z-index: 10; pointer-events: none; max-width: calc(100vw - 8px); box-sizing: border-box; padding: 3px 7px; border-radius: 4px; background: var(--wb-fg); color: var(--wb-bg); font: 12px/1.4 system-ui, sans-serif; }

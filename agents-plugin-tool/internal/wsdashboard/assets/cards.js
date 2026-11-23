@@ -189,7 +189,8 @@
         if (r.top <= 0 && r.bottom > 0) inset = Math.max(inset, r.bottom + 4);
       });
       var top = main ? inset : s.getBoundingClientRect().top + s.clientTop;
-      var floating = board.getBoundingClientRect().top < top;
+      var snapDeck = !main && !!(s && s.wbScrollOwner) && !overviewOn;
+      var floating = snapDeck ? false : board.getBoundingClientRect().top < top;
       var rows = {};
       Array.prototype.forEach.call(row.children, function (n) {
         var r = n.getBoundingClientRect();
@@ -1892,6 +1893,7 @@
       }
     }
     if (!c) return;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.cancelGlide) window.WsBoardAnchor.cancelGlide();
     c.normalWidth = floatOn ? 1100 : sheetWidth(c);
     c.extended = false;
     if (!scrim) {
@@ -1901,7 +1903,7 @@
     }
     scrim.hidden = false;
     maxed = c;
-    doc.documentElement.setAttribute("data-board-max", "");
+    syncBoardMaxAttr(c.el);
     if (c.files) {
       // The page owns this explorer independently of the conversation tab.
       c.el.hidden = false;
@@ -1957,11 +1959,15 @@
     var row = n.tagName === "DETAILS" ? n.firstElementChild : child(child(n, "tophead") || n, "tbar");
     return row ? child(row, cls) : null;
   }
+  function syncBoardMaxAttr(el) {
+    doc.documentElement.setAttribute("data-board-max", galEl && el && galEl.contains(el) ? "gal" : "");
+  }
   function grow(t) {
     var n = sheetNode(t);
     if (t.el && t.el !== n) shrinkNode(t);
     t.el = n;
     if (!n) return;
+    syncBoardMaxAttr(n);
     sizeSheet(t);
     if (n.hasAttribute("data-max")) return;
     if (t.topic) {
@@ -1972,12 +1978,26 @@
     } else {
       n.open = true;
       n.parentNode.style.height = n.parentNode.getBoundingClientRect().height + "px";
+      var sec = n.closest && n.closest("section.topic");
+      var hosts = [];
+      if (sec) {
+        hosts.push(sec);
+        for (var p = n.parentNode; p && p !== sec; p = p.parentNode) {
+          if (p.parentNode === sec && !p.classList.contains("tophead")) { hosts.push(p); break; }
+        }
+        hosts.forEach(function (h) { h.setAttribute("data-has-panel-max", ""); });
+      }
+      t.panelHosts = hosts;
     }
     n.setAttribute("data-max", "");
   }
   function shrinkNode(t) {
     t.el.style.removeProperty("--sheet-inset");
     t.el.removeAttribute("data-max");
+    if (t.panelHosts) {
+      t.panelHosts.forEach(function (h) { if (h && h.removeAttribute) h.removeAttribute("data-has-panel-max"); });
+      t.panelHosts = null;
+    }
     if (!t.topic && t.el.parentNode) t.el.parentNode.style.height = "";
   }
   // shrink draws t's node in its place again and returns its maximize
@@ -2531,7 +2551,6 @@
     overview: function (on) {
       overviewOn = !!on;
       if (overviewOn && window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
-      if (board) arrange(null);
     },
     // pinnedTopic tells whether a topic name is docked on this page (its
     // node stands in a pane).
