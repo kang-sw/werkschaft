@@ -1,5 +1,5 @@
 ---
-title: "자체 Go 에이전트 하네스: 공통 인터페이스를 100% 충족하는 내장 하네스와 Pi 철거"
+title: "자체 Go 에이전트 하네스: 공통 인터페이스를 100% 충족하는 데몬 내장 하네스"
 parent: 261114-epic-ws-common-session-foundation
 blocked-by:
   - 261118-refactor-ws-harness-name-branches
@@ -13,6 +13,7 @@ related:
   261119-feat-ws-audit-capture-harness-adapters: "prerequisite: Phase 1 supplies the capture tap this harness's own adapter writes to; its Pi adapter (Phase 4) still lands while Pi runs"
   261117-feat-ws-harness-capability-catalog: "the catalog this harness fills completely"
   261114-feat-ws-live-reasoning-summary: "provider reasoning summaries reach the dashboard through the common event contract instead of the Pi extension transport"
+  261123-chore-ws-retire-pi-harness: "retires Pi independently of this ticket (Decision 1) and carries the pi.* to werk.* redirect (Decision 9)"
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 0ed6148db7f53fc6
@@ -70,89 +71,179 @@ Verified evidence (read-only audits on develop `b2e3b900e`, 2026-11-22):
   OpenCode's takes `{path, oldString, newString, replaceAll?}`. Pi's agent
   loop is about 890 lines; its OpenAI Responses adapter about 425.
 
+Revision of 2026-11-23 (owner board, items (05) to (13)): Pi retires now on
+its own ticket; the loop moves into the daemon to bound executions of the ws
+binary; file tools become daemon `fs.*` tools; compaction follows the Pi
+extension's style; vLLM and Ollama become required providers. Evidence
+gathered for it (read-only, 2026-11-23):
+
+- Stateless Responses is served by all four target providers: OpenAI and
+  OpenRouter (above), vLLM 0.34.0 (tool calls need the server started with
+  `--enable-auto-tool-choice` and a `--tool-call-parser`; cache counts need
+  `--enable-prompt-tokens-details`)
+  <https://docs.vllm.ai/en/v0.34.0/serving/online_serving/openai_compatible_server/>,
+  <https://github.com/vllm-project/vllm/blob/v0.34.0/vllm/entrypoints/openai/responses/serving.py#L833-L855>,
+  and Ollama 0.40.17 (tool support depends on the model; `tool_choice` is not
+  supported; its Responses reasoning-token count is a placeholder zero)
+  <https://docs.ollama.com/api/openai-compatibility>,
+  <https://github.com/ollama/ollama/blob/v0.40.17/openai/responses.go#L595-L602>.
+- Pi's OpenAI login uses the Codex CLI's public client ID and calls
+  `chatgpt.com/backend-api/codex/responses`, the path the auth layer's
+  Decision 2 rejected; SIWC stays the OpenAI path (owner (11)=ok). Pi's
+  source (MIT) is a reference for PKCE and refresh flow only.
+- The daemon already serves read-only `fs.read`, `fs.grep` and `fs.list`
+  MCP tools, listed only for a cutover Codex session
+  (`internal/mcp/server_exec_cutover.go`, `LifecyclePolicy.ExecReadTools`).
+- Every hosted worker is granted `ws/compact` at launch
+  (`internal/wsagent/runner_create.go`); Phase 1 grades werk worker
+  compaction `unsupported`, so the call answers unsupported today.
+
 ## Decisions
 
-1. **Own Go harness instead of Pi (owner (5002)=a).** Pi is frozen (no new
-   work) and retires through Phase 3's gate. Rejected: rebuilding Pi beneath
-   the common interface (`261120`); keeping Pi as a hedge ((5002) option b).
-   Frozen means no new Pi feature scope. Work that keeps running Pi sessions
-   inside a cross-harness invariant until retirement still lands: Pi changes
-   inside a cross-harness phase (`261117-feat-ws-exec-tools` Phase 2 tool
-   flags), the Pi audit adapter that the audit epic's every-hosted-session
-   capture requires (`261119-feat-ws-audit-capture-harness-adapters` Phase 4),
-   and Pi work already in implementation
-   (`261114-feat-ws-live-reasoning-summary` Phase 1). Retirement drops such
-   Pi phases that are still unimplemented.
-2. **Separate process under a session holder ((5003), auto-confirmed).** The
-   harness runs as a subcommand of the same ws binary, started through the
-   existing holder path like every other `agent.spawn` worker, so it survives
-   a daemon swap. Rejected: running the loop inside the daemon - a daemon
-   swap would kill every builtin session.
-3. **ws tools through the daemon's authenticated HTTP MCP ((5004),
-   auto-confirmed from the parent rebuild's Decision 3).** The harness is an
-   MCP client of the daemon like the other hosted backends, using the
-   per-session bearer; no in-process shortcut. No change to the daemon
-   application layer, MCP tools, or prompt assembly to fit this harness.
-4. **One wire format first: OpenAI Responses ((5009), technical).** Responses
-   over Chat Completions as the first adapter - OpenRouter and SIWC both
-   accept the stateless Responses shape (Background), so one adapter serves
-   both providers; Anthropic and Google models are reached through
-   OpenRouter. A Chat Completions adapter is added only when a needed model
-   fails on OpenRouter's Responses endpoint with recorded evidence.
-5. **File tools in the harness, shell through `ws/exec.*` ((5010),
-   technical).** `read`, `edit` (exact string replacement; each match must be
-   unique; multiple non-overlapping edits per call; returns a unified diff),
-   `write`, `grep`, `glob`. String replacement over patch format - the format
-   the reference harnesses share and current models handle reliably. Shell
-   goes through `ws/exec.*` over a native bash tool - one execution path with
-   holders and the never-auto-terminate rule. Writes obey the session's
-   authority: `read-only` refuses `edit`/`write`; `workdir-write` confines
-   them to the session's worktree; `full` is unrestricted. Shell needs
-   `261117-feat-ws-exec-tools` Phase 2 (report hold, sleep check, and
-   worktree-release protection for live jobs), hence `blocked-by`; calling
-   the Phase 1 tools early would let a worker report completion or release
-   its worktree under a running job.
-6. **Memory-first session state ((5011), technical; performance manual).**
-   The live transcript is in memory; each turn appends a JSONL delta to the
-   session's conversation directory for recovery; compaction is the common
-   `ws/compact` lifecycle with the catalog's compaction protocol.
-7. **Credentials only from the provider auth layer.** The harness fetches
-   tokens per `261122-feat-ws-provider-auth-layer` Decision 6 and never reads
-   the credential file itself.
-8. **Tier models start empty ((5013), technical).** `werk.small`
-   through `werk.xlarge` have no default model; until the user configures one the
-   harness reports itself unavailable with an actionable reason in
-   `agent.tiers` and the dashboard. Rejected: shipping default OpenRouter
-   models - it would spend the user's credit on our choice.
-9. **Pi retirement keeps old calls working ((5016), announced from (1921)'s
-   prefer-T0 rule and (5002)=a).** When Pi retires, `pi.*` tier names
-   (`pi.small` ... `pi.xlarge`, `agent.tier_aliases` targets) resolve to the
-   builtin harness instead of being refused; the `ws-pi-bridge` client-name
-   recognition and the Pi session JSONL reader (transcripts, history) stay.
-   A redirected `pi.<tier>` resolves to `werk.<tier>` only; it never borrows
-   another backend's tier (the resolver returns a backend with the model,
-   `wsconfig/config.go`, so a borrowed tier would run a different harness).
-   The redirect runs the same availability check as a direct `werk.<tier>`
-   call - a provider credential from the auth layer and a configured model -
-   and when it fails the call is refused with werk's actionable reason (add
-   an OpenRouter key, pick a tier model) instead of a silent substitute.
-   Retirement copies a user's configured `pi.<tier>` model into an unset
-   `werk.<tier>` only when the model ID matches an OpenRouter model-list ID
-   exactly. Before retirement lands, the dashboard shows a user with
-   configured `pi.*` tiers and no werk availability a setup prompt, so a
-   Pi-only user can configure werk while Pi still works.
-   The legacy `pi.*` MCP tool handlers are not this ticket's concern: their
-   removal at a minor is already settled by the parent epic ((54)=b).
-   Rejected: refusing the `pi.*` spelling as an unknown tier; falling back to
-   the `default`/`codex` tier chain (a different backend and model namespace,
-   and no help to a Pi-only user without that backend).
-10. **Compatibility tier T0 for Phases 1-2 ((5012)).** A new backend,
-    registration, config keys, and catalog profile are additions. Phase 3
-    states its own tier per removed surface before it lands.
+1. **Own Go harness; Pi retires now, on its own ticket (owner (5002)=a;
+   owner (05)=b, 2026-11-23).** Pi's retirement no longer waits for this
+   ticket: `261123-chore-ws-retire-pi-harness` removes Pi independently of
+   these phases (owner: "요즘 pi 아예 안 쓰기도 합니다"). Work that ran on Pi
+   moves to the Codex and Claude tiers meanwhile. Rejected: retiring Pi after
+   a parity and A/B gate (the former Phase 3); rebuilding Pi beneath the
+   common interface (`261120`); keeping Pi as a hedge.
+2. **The agent loop runs inside the daemon (owner (07)=b, 2026-11-23).**
+   The owner's reason, verbatim: "데몬도 실행할 때 v3을 **한 번은** 긁습니다.
+   근데 홀더마다 매번 바이너리를 재실행하면 매번 승인을 눌러줘야 해서, 바이너리
+   실행 횟수를 한정하자는 취지에서 제안한 거에요." A werk session is a set of
+   goroutines in the daemon, each guarded by panic recovery so one session
+   cannot take the daemon down; it starts no process of its own. The
+   session's append-only log (Decision 6) is the source of truth and daemon
+   memory is a cache, so a daemon replace or crash loses only the in-flight
+   step, which Decision 12 recovers. The runner gains a log-backed durable
+   process kind beside the holder-backed one; its rejoin is log replay, not
+   holder attach (lead start refuses a non-held process today,
+   `runner_lead_start.go`). Shell commands still run as holder-backed exec
+   jobs (Decision 5): this decision bounds executions of the ws binary, not
+   of the Python holder. Rejected: Phase 1's hidden `werk-run` subcommand
+   under a session holder - every session start re-executes the ws binary,
+   and on the owner's corporate machines each execution asks for an
+   antivirus approval.
+3. **ws tools through the daemon's authenticated HTTP MCP, also from inside
+   the daemon (owner (10)=b over c).** The in-daemon loop calls the daemon's
+   own loopback MCP endpoint with the per-session bearer, the admission and
+   authority gate every other hosted backend passes. No change to MCP tool
+   semantics or prompt assembly to fit this harness beyond Decision 5.
+   Rejected: dispatching tool calls in-process ((10) option c) - a second
+   admission path that must be kept equal to the first.
+4. **One wire format: OpenAI Responses (technical (5009); owner (09)=a).**
+   OpenRouter, OpenAI SIWC, vLLM 0.34 and Ollama 0.40.17 all serve stateless
+   `/v1/responses` (Background). A Chat Completions adapter is added only
+   when a needed provider or model fails on Responses with recorded evidence.
+   Rejected: a Chat Completions adapter alongside from the start.
+5. **File tools are ws `fs.*` tools served by the daemon; shell through
+   `ws/exec.*` (owner (10)=b, refining (04)).** The harness implements no
+   file tool itself. Its file calls are daemon MCP tools of the `fs.*`
+   family: the existing `fs.read`, `fs.grep` and `fs.list` (today listed only
+   for a cutover Codex session, through `LifecyclePolicy.ExecReadTools`) plus
+   new `fs.edit` and `fs.write` carrying Phase 1's semantics (exact string
+   replacement, each match unique, several non-overlapping edits per call, a
+   unified diff returned; write creates or replaces a file). Phase 1's
+   `internal/werk/filetools.go` moves behind those tools; there is no second
+   implementation. The daemon enforces authority per call: `read-only`
+   refuses `fs.edit`, `fs.write` and the exec launch tools; `workdir-write`
+   confines writes to the session's worktree with symlinks resolved as Phase
+   1's Editions settled; `full` is unrestricted. In this ticket the write
+   tools are listed and admitted for werk sessions only; offering the `fs.*`
+   set to other harnesses in place of their native tools is the owner's later
+   direction and out of scope. Rejected: file tools inside the harness (the
+   previous Decision 5) - a second implementation beside `fs.*`.
+6. **Memory-first session state (technical (5011); performance manual).**
+   The live transcript is in memory; each step appends a JSONL delta to the
+   session's conversation directory; a mutating call's intent is durable
+   before the call runs (Phase 1 Edition d988440e3).
+7. **Credentials only from the provider auth layer.** Inside the daemon the
+   harness asks the auth layer's credential source in-process
+   (`261122-feat-ws-provider-auth-layer` Decision 6); the internal token
+   route, built for a child process, is not used by werk. The harness never
+   reads the credential file itself.
+8. **Tier models start empty; a tier names its provider (technical (5013);
+   technical (15)).** No default model ships; until the user configures one
+   the harness reports itself unavailable with an actionable reason in
+   `agent.tiers` and the dashboard. A werk tier value is `{tier, provider,
+   model, effort}`; `provider` is a provider ID of Decision 13 and reads as
+   `openrouter` when absent, so Phase 1's stored values keep resolving.
+   Rejected: shipping default models (it spends the user's credit on our
+   choice); encoding the provider in the model string (OpenRouter model IDs
+   already contain `/`).
+9. **`pi.*` tier names resolve to `werk.*` (announced (5016)).** Carried out
+   by `261123-chore-ws-retire-pi-harness`, which holds the detailed rules: a
+   `pi.<tier>` call resolves to `werk.<tier>` only, runs werk's availability
+   check, and while werk is unavailable is refused with werk's actionable
+   reason instead of a silent substitute.
+10. **Compatibility.** Every werk addition is T0 (Phase 1 Result), except the
+    configured-werk downgrade path of Phase 1 Edition a0b7dc391, held in the
+    Open Decision Queue as (14). Each later phase states its tier per changed
+    surface in its Result.
 11. **Harness ID `werk` (owner (5014)=b).** The ID used for tier names
     (`werk.small` ... `werk.xlarge`), config keys, and the dashboard label.
-    Rejected: `native` (collides with the existing "native subagent" term);
-    `ws` (collides with the `ws/` tool prefix).
+    Rejected: `native` (collides with "native subagent"); `ws` (collides with
+    the `ws/` tool prefix).
+12. **Recovery after a daemon replace or crash (owner (08)=ok).** The
+    successor replays the log and finds the last unfinished step. A model
+    request is sent again and partial streamed text is dropped. A running exec
+    job is rejoined through its holder. An `fs.edit` or `fs.write` records the
+    target's prior content hash with its intent; the successor compares the
+    file: the prior hash means not applied, the expected result hash means
+    applied, anything else means outcome unknown. Each verdict returns to the
+    model as the tool result; nothing mutating re-runs on its own. Read-only
+    calls run again. Rejected: re-running mutating calls (a half-applied
+    change could apply twice).
+13. **Providers are profiles over one Responses adapter (technical (16)).**
+    A profile holds the endpoint, the auth source, the request fields the
+    server refuses (SIWC: `temperature`, `max_output_tokens`, `background`;
+    Ollama: `tool_choice`), the reasoning dialect, and the usage and cache
+    field mapping. Providers: `openrouter` (Phase 1), `openai` through SIWC
+    (Phase 2, after the auth layer's Phase 2), and user-named
+    OpenAI-compatible endpoints for vLLM and Ollama (Phase 5): a base URL in
+    config plus an optional API key held by the auth layer, with the model
+    list from `GET <base>/models`. Rejected: one adapter per provider.
+14. **Native compaction in the Pi extension's style (owner (12)=ok,
+    (13)=ok).** The daemon assembles the summary and replaces the transcript
+    itself; `ws/compact`, which the runner already grants every hosted worker
+    at launch (`runner_create.go`), is the entry. The summary follows
+    `agents-plugin-pi/src/lead-compaction.ts`: the lead's prose under seven
+    fixed headings; deterministic sections recomputed from the full log every
+    time (children in flight and finished, exec jobs, active ticket and
+    playbook), never parsed back out of an earlier summary; a near-raw
+    `## Dialog` section under a byte budget that excludes tool results; the
+    lead's chosen re-read files inlined within a budget; no raw tail; the log
+    path for search. Advisory and hard thresholds use the common compaction
+    keys. A worker has no lever of its own: its prose comes from a model
+    summary call (Pi's fallback path). How the lead's prose reaches the daemon
+    (optional `ws/compact` arguments or a werk-only lever tool) is settled in
+    Phase 2.
+15. **The holder-run path never ships (technical (17)).**
+    `impl/develop/werk-harness-p1` and its successor branch merge into
+    develop only after Phase 4 has removed the `werk-run` subcommand, the line
+    protocol and the holder launch. A shipped holder-run werk process would
+    become a cross-version surface on upgrade.
+16. **No A/B gate (technical (18)).** The former Phase 3 A/B gate existed to
+    decide Pi's retirement, which (05)=b settled; the catalog parity
+    checklist stays as Phase 6.
+
+## Open Decision Queue
+
+Last ID: (18)
+
+(14) [open] [policy] Keep werk out of `agent.tier_routing` and saved custom profiles until a minor release, so the configured-werk downgrade path stays T0
+- Phase 1 Edition a0b7dc391: once a user puts a `werk` target into the
+  global tier routing graph or saves a profile naming the `werk` backend, an
+  older binary refuses the whole value (`wsconfig/tier_routing.go`
+  `NewTierGraph` validation, `wsagent/profile.go` `ResolveProfiles`), which
+  is a T3 boundary under `release-compatibility.md`, not T1.
+- alternative a: refuse `werk` targets in those two surfaces until a minor
+  release; werk stays reachable through `werk.<tier>` names and the `pi.*`
+  redirect, so nothing an older binary reads ever names werk (T0).
+- alternative b: allow them and take the T3 boundary with a minor bump at
+  the release that ships werk.
+> a: keeps the release a patch and costs only the routing-graph convenience
+> until a minor that bumps anyway.
 
 ## Constraints
 
@@ -161,10 +252,9 @@ Verified evidence (read-only audits on develop `b2e3b900e`, 2026-11-22):
   `ai-docs/manuals/shipped-surface-boundary.md`,
   `ai-docs/manuals/config-settings-ui.md` (tier and harness settings).
 - New Go code lives under `agents-plugin-tool/`; the harness adds no Node,
-  npm, or Python dependency of its own. The existing session holder (a
-  Python process every hosted session already runs under,
-  `agents-plugin-tool/internal/wsholder/holder.go`) is shared runtime, not a
-  new dependency; replacing it is out of scope.
+  npm, or Python dependency and starts no process of its own (Decision 2).
+  Exec jobs keep running under the existing session holder
+  (`agents-plugin-tool/internal/wsholder/`); replacing it is out of scope.
 - Never log or capture tokens or authorization headers (the auth layer's
   redaction rule applies to request traces).
 - Provider reasoning: replay reasoning items unchanged; surface only
@@ -174,7 +264,9 @@ Verified evidence (read-only audits on develop `b2e3b900e`, 2026-11-22):
   completed; tool-call/result pairs and opaque reasoning items survive
   compaction intact.
 - Out of scope: Chat Completions and Anthropic Messages adapters (Decision 4),
-  image/video generation, a TUI, Anthropic/Google subscription logins.
+  image/video generation, a TUI, Anthropic/Google subscription logins,
+  replacing other harnesses' native tools with `fs.*` (Decision 5), Pi's
+  removal (Decision 1).
 - Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
 - Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
 - Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
@@ -506,31 +598,81 @@ browser tests for the settings page were not rerun in this pass.
 
 ### Phase 2: Lead role and OpenAI SIWC
 
+Runs after Phase 4.
+
 - Hosted lead registration: lead profile, permission levels, dashboard steer
   and interrupt, approvals through the common path, model/effort choices,
-  `ws/compact` lifecycle, provider reasoning summaries through the common
-  event contract.
+  provider reasoning summaries through the common event contract, the model's
+  context window for the usage bar.
+- Lead compaction per Decision 14, including the route of the lead's prose
+  into the daemon.
 - SIWC provider via the auth layer's Phase 2, which must land first (SIWC
-  model list from `GET /v1/models`; unsupported request fields omitted). When
-  `261122-feat-ws-web-tools` Phase 1 has landed, attach the SIWC search tool
-  per its Decisions 2-3.
-- Verification: lead fixtures matching the Codex/agy lead test set, one live
-  hosted lead session on each provider recorded in the Result.
+  model list from `GET /v1/models`; refused request fields omitted per
+  Decision 13). When `261122-feat-ws-web-tools` Phase 1 has landed, attach
+  the SIWC search tool per its Decisions 2-3.
+- Verification: lead fixtures matching the Codex/agy lead test set, lead
+  compaction fixtures (fixed headings present, deterministic sections
+  recomputed, dialog budget, re-read inlining), one live hosted lead session
+  on each provider recorded in the Result.
 
-### Phase 3: Parity and A/B gate, then Pi retirement
+### Phase 3: [dropped] Parity and A/B gate, then Pi retirement
+
+Dropped 2026-11-23. Pi's retirement moved to
+`261123-chore-ws-retire-pi-harness` (Decision 1, owner (05)=b); the A/B gate
+is dropped (Decision 16); the catalog parity checklist is Phase 6.
+
+### Phase 4: In-daemon loop and the werk fs tools
+
+Runs next after Phase 1, before Phase 2; on its own branch based on
+`impl/develop/werk-harness-p1`.
+
+- Move the loop into the daemon per Decision 2: a log-backed `Process`
+  driven by goroutines with per-session panic recovery. Delete the hidden
+  `werk-run` subcommand, the line protocol between daemon and child, the
+  holder launch and the child environment scrub. Keep the Responses client,
+  the log store and writer, the loop, the mapper and the audit adapter.
+- Runner: a durable process kind whose rejoin is log replay; lead start's
+  holder requirement admits it. Only werk registers it in this phase.
+- Recovery per Decision 12, including the prior-hash verdict for `fs.edit`
+  and `fs.write`.
+- `fs.*` tools per Decision 5: add `fs.edit` and `fs.write`; list and admit
+  `fs.read`, `fs.grep`, `fs.list`, `fs.edit`, `fs.write` for werk sessions;
+  remove the harness's own file tools; the loop's parallel read-only set
+  covers the `fs` read tools.
+- ws calls over loopback HTTP MCP with the session bearer (Decision 3),
+  keeping Phase 1's retry rules (no retry after the request was written).
+- Worker compaction per Decision 14, so `ws/compact` on a werk worker
+  queues and completes; catalog compaction graded to match.
+- The tier value's `provider` field (Decision 8).
+- The outcome of (14).
+- Verification: the Phase 1 werk tests ported to the in-daemon loop; a
+  daemon replace during a model request (the request is resent), during an
+  exec job (rejoined), and during an `fs.edit` for each verdict (applied, not
+  applied, unknown); a panicking session leaves other sessions running;
+  `fs.*` authority per tool and level through MCP; `fs.edit` and `fs.write`
+  absent from `tools/list` for non-werk sessions; no process started per werk
+  session other than exec jobs; worker compaction fixtures; the live
+  OpenRouter worker run in Phase 1 Result's steps, recorded in the Result.
+  The branch then merges per Decision 15.
+
+### Phase 5: OpenAI-compatible local endpoints (vLLM, Ollama)
+
+- User-named endpoints: a base URL in config, an optional API key through
+  the auth layer's API-key provider kind, the model list from
+  `GET <base>/models`, and the dashboard model picker per endpoint; settings
+  rows per `ai-docs/manuals/config-settings-ui.md`.
+- Profile quirks per Decision 13: Ollama gets no `tool_choice`; an absent or
+  zero reasoning-token count is shown as absent; cache fields read when
+  present.
+- Verification: fixture tests against fake vLLM-shaped and Ollama-shaped
+  Responses servers covering each quirk; one live worker run against a local
+  Ollama or vLLM server with a tool-capable model recorded in the Result
+  (owner-run when this host has none).
+
+### Phase 6: Catalog parity
 
 - Parity checklist: every catalog item, worker and lead, graded no lower
-  than the Codex profile's grade for the same item and role (Codex is the A/B
-  reference; the catalog has no Pi profile, `wsagent/catalog.go`), recorded
-  beside the Codex and agy profiles. An item Codex grades `unsupported` (for
-  example rewind, `catalog.go` `CodexCatalog`) may stay `unsupported`.
-- A/B gate: a fixed set of 8 small coding tasks drawn from closed tickets of
-  this repository, each run with the same model on the Codex harness and on
-  this harness. The gate passes when this harness solves at least as many
-  tasks as Codex minus one and the owner accepts the side-by-side result
-  summary (a check on the board).
-- After the gate, and once `261122-feat-ws-web-tools` Phase 1 has landed
-  (Pi's web tools need their replacement first): retire the Pi extension package, the bundled native Pi
-  payload and launcher shims, and the Pi backend, per Decision 9; state each
-  removed surface's compatibility tier in the Result. Drop the Pi-only
-  tickets that remain open at that time.
+  than the Codex profile's grade for the same item and role (Codex is the
+  reference; `wsagent/catalog.go`), recorded beside the Codex and agy
+  profiles. An item Codex grades `unsupported` (for example rewind,
+  `CodexCatalog`) may stay `unsupported`.
