@@ -212,10 +212,10 @@ func TestAuditSpanSentinelRetryIsLinear(t *testing.T) {
 					t.Errorf("n=%d: spans took %v", n, d)
 				}
 				st := s.seamed.stats
-				// The head is one pass; the tail ("a") is a window of its own with
-				// no right neighbour, read by one shape match at most.
-				if st.bounded != 1 || st.shape > 1 || st.rows > n+1 {
-					t.Errorf("n=%d: stats %+v: want one pass of at most %d positions and no retry", n, st, n+1)
+				// The head is one pass; the tail ("a") is a window of its own,
+				// one pass of two positions.
+				if st.bounded != 2 || st.rows > n+4 {
+					t.Errorf("n=%d: stats %+v: want two passes of at most %d positions", n, st, n+4)
 				}
 				if res.Capped || len(res.Spans) != len(ref)+n-200 {
 					t.Fatalf("n=%d: %d spans (capped %v), want %d", n, len(res.Spans), res.Capped, len(ref)+n-200)
@@ -233,32 +233,47 @@ func TestAuditSpanSentinelRetryIsLinear(t *testing.T) {
 }
 
 // TestAuditSpanTailWindowRetryIsLinear pins the window that ends with its line
-// and starts after a seam: nothing can reach a right sentinel there, the
-// left neighbour is context only, and a match that starts in the context
-// character is replaced by the first one after it, each such read costing the
-// distance to the match. Many such matches cost a read each, and not a rescan
-// of the window (the scan took the shape expression once per match).
+// and starts after a seam: the left neighbour is context only, and a
+// preferred alternative that starts in the context character and runs
+// through the whole window must not cost a rescan per short match. The probe
+// counts the positions evaluated, which is the window's length whatever the
+// number of spans.
 func TestAuditSpanTailWindowRetryIsLinear(t *testing.T) {
-	for _, q := range []string{`\b\w`, `\ba|a\b|a`, `\Ba`} {
+	for _, q := range []string{`\b\w+\b|\w`, `\b\w+|\w`, `\b\w`, `\ba|a\b|a`, `\Ba`, `\B\w+\b|a`} {
 		t.Run(q, func(t *testing.T) {
-			n := 20000
-			body := "x" + strings.Repeat("aa ", n)
-			s, err := newAuditSearch(q, true, true, nil, "", 10)
-			if err != nil || s.seamed == nil {
+			// The spans at a size the reference can afford are its spans.
+			small := "a" + strings.Repeat("a", 1500)
+			ss, err := newAuditSearch(q, true, true, nil, "", 10)
+			if err != nil || ss.seamed == nil {
 				t.Fatalf("search: %v", err)
 			}
-			start := time.Now()
-			res := s.bodySpans(body, 1, len(body))
-			if d := time.Since(start); d > time.Second {
-				t.Errorf("spans took %v", d)
+			if got, want := scanLineSpans(ss, small, 1), refLineSpans(t, q, small, 1); !reflect.DeepEqual(got, want) {
+				t.Fatalf("scan %v, reference %v", got, want)
 			}
-			// The head "x" is a window of two positions; the tail is read by
-			// the shape expression once per span at most.
-			if st := s.seamed.stats; st.bounded != 1 || st.rows > 2 || st.shape > len(res.Spans)+1 {
-				t.Errorf("stats %+v for %d spans", st, len(res.Spans))
+			var rows [2]int
+			for i, n := range []int{5000, 9000} {
+				body := "a" + strings.Repeat("a", n)
+				s, err := newAuditSearch(q, true, true, nil, "", 10)
+				if err != nil || s.seamed == nil {
+					t.Fatalf("search: %v", err)
+				}
+				start := time.Now()
+				res := s.bodySpans(body, 1, len(body))
+				if d := time.Since(start); d > time.Second {
+					t.Errorf("n=%d: spans took %v", n, d)
+				}
+				st := s.seamed.stats
+				rows[i] = st.rows
+				// The head "a" is a window of two positions, the tail one pass.
+				if st.bounded != 2 || st.rows > n+5 {
+					t.Errorf("n=%d: stats %+v: want two passes of at most %d positions", n, st, n+5)
+				}
+				if res.Capped {
+					t.Errorf("n=%d: capped with %d spans", n, len(res.Spans))
+				}
 			}
-			if len(res.Spans) < 1000 {
-				t.Fatalf("only %d spans", len(res.Spans))
+			if rows[1] > 2*rows[0] {
+				t.Errorf("rows grew %d -> %d for 1.8x the text", rows[0], rows[1])
 			}
 		})
 	}

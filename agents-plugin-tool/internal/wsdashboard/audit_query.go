@@ -745,8 +745,6 @@ type seamMatcher struct {
 	// re is the compiled form by the left and right sentinel kind (see
 	// sentinelKind), made on first use; a request is served by one goroutine.
 	re map[[2]int]*regexp.Regexp
-	// ctx is the resumable form (see audit_span_scan.go), by its shape.
-	ctx [2]*regexp.Regexp
 	// bounded is the program of the scan that ends a window's matches at its
 	// edge; stats counts the scan's branches.
 	bounded *boundedProg

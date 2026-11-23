@@ -1,7 +1,6 @@
 package wsdashboard
 
 import (
-	"regexp"
 	"regexp/syntax"
 	"strings"
 	"unicode/utf8"
@@ -17,9 +16,11 @@ const spanBatch = 64
 // follow Go's FindAll (empty ones included, an empty match advances by one
 // rune) under the rules of matchLine: none consumes text from both sides of
 // the seam (seam >= 0). Without assertions the head and the tail are matched
-// apart; with them, each side is matched as a window of the whole line. The
-// work is linear in the line: no text is scanned twice, and the scan ends
-// with emit.
+// apart; with them, each side is matched as a window of the whole line. A
+// pattern with assertions is scanned in one pass over each window (see each).
+// A pattern without them is the regexp engine's own FindAll, whose cost is the
+// engine's (a pattern such as x.*q|. reads to the end of the window per
+// match); the scan ends with emit.
 func (s auditSearch) eachLineMatch(line string, seam int, emit func(start, end int) bool) {
 	if seam < 0 {
 		s.eachWindowMatch(line, 0, len(line), emit)
@@ -50,7 +51,7 @@ func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, e
 		}
 		return false
 	case s.seamed != nil:
-		return s.seamed.each(s.re, line, lo, hi, emit)
+		return s.seamed.each(line, lo, hi, emit)
 	}
 	// No assertion reads the text around a position, so the scan resumes on
 	// the rest of the window without context.
@@ -83,110 +84,31 @@ func runeWidth(s string, at int) int {
 	return max(w, 1)
 }
 
-// each calls emit with every non-overlapping match of re (the pattern's plain
-// expression) inside the window [lo, hi) of line, in order, as Go's FindAll
-// gives them on the window with its neighbours as sentinels, until emit
-// returns true (reported). A match that reaches the right neighbour is not
-// one: the window's matches end inside it.
+// each calls emit with every non-overlapping match of the pattern inside the
+// window [lo, hi) of line, in order, as Go's FindAll gives them on the window
+// with its neighbours as sentinels, until emit returns true (reported). A
+// match that reaches a neighbour is not one: the window's matches end inside
+// it, and none starts before it.
 //
-// A window with a right neighbour (the head of a stored_trunc line) is scanned
-// by boundedMatches, one pass over the window whatever the number of matches
-// and whatever the pattern: a preferred alternative that runs to the
-// sentinel and fails there, or a match that would take the sentinel, costs
-// nothing more than any other step. A window that ends with its line has no
-// right sentinel and nothing can reach it, so the matches are FindAll's, read
-// in batches. The window is copied once; a resume reads the same text from
-// the character before the resume point, which is the real context of the
-// point (the left neighbour at the window's start), so a resume costs the
-// distance to the next match, not the rest of the window.
-func (m *seamMatcher) each(re *regexp.Regexp, line string, lo, hi int, emit func(start, end int) bool) bool {
+// Every window is scanned by boundedMatches, one pass over the window whatever
+// the number of matches and whatever the pattern. A resumable FindAll read
+// would cost the rest of the window per match whenever the preferred
+// alternative runs on (through the right sentinel, or from the left
+// neighbour's context character) and is then given up for a short match; the
+// bounded program has no such alternative to retry.
+func (m *seamMatcher) each(line string, lo, hi int, emit func(start, end int) bool) bool {
 	left, right := sentinelKind(line, lo-1), sentinelKind(line, hi)
 	ls, rs := seamSentinels[left], seamSentinels[right]
 	win := ls + line[lo:hi] + rs
 	end := len(win) - len(rs) // the window's own text ends here
 	delta := lo - len(ls)     // a window offset plus delta is a line offset
-	if right != 0 {
-		return m.boundedMatches(win, len(ls), end, delta, emit)
-	}
-	pos := len(ls)
-	for pos < end {
-		// t is the text from the character before pos (its context) on.
-		c := 0
-		if pos > 0 {
-			_, w := utf8.DecodeLastRuneInString(win[:pos])
-			c = pos - w
-		}
-		t, ctx := win[c:], pos-c
-		l := re.FindStringIndex(t)
-		if l == nil {
-			return false
-		}
-		if l[0] >= ctx { // not through the context: the run is FindAll's
-			locs := re.FindAllStringIndex(t, spanBatch)
-			for _, l := range locs {
-				if emit(c+l[0]+delta, c+l[1]+delta) {
-					return true
-				}
-			}
-			if len(locs) < spanBatch {
-				return false
-			}
-			last := locs[len(locs)-1]
-			pos = c + last[1]
-			if last[0] == last[1] {
-				pos += runeWidth(win[:end], pos)
-			}
-			continue
-		}
-		// The match starts in the context character: the first match that
-		// starts after it is the window's.
-		start, stop, ok := m.shapeFirst(t, ctx > 0)
-		if !ok {
-			return false
-		}
-		m.stats.shape++
-		if emit(c+start+delta, c+stop+delta) {
-			return true
-		}
-		pos = c + stop
-		if start == stop {
-			pos += runeWidth(win[:end], pos)
-		}
-	}
-	return false
+	return m.boundedMatches(win, len(ls), end, delta, emit)
 }
 
-// shapeFirst is the first match of the pattern in t that starts after its
-// context character (when hasCtx): the context, a lazy prefix and the
-// pattern's group. The expression stops at the match, so a call costs the
-// distance to it.
-func (m *seamMatcher) shapeFirst(t string, hasCtx bool) (start, stop int, ok bool) {
-	k := 0
-	expr := `\A`
-	if hasCtx {
-		k = 1
-		expr += `(?s:.)`
-	}
-	re := m.ctx[k]
-	if re == nil {
-		var err error
-		if re, err = regexp.Compile(expr + `(?s:.*?)((?:` + m.pattern + `))`); err != nil {
-			return 0, 0, false
-		}
-		m.ctx[k] = re
-	}
-	loc := re.FindStringSubmatchIndex(t)
-	if loc == nil {
-		return 0, 0, false
-	}
-	return loc[2], loc[3], true
-}
-
-// seamStats counts which way the scans went, for tests that pin the work of
-// each branch: matches taken from the shape expression, scans of a window with
-// a right neighbour by boundedMatches, and the positions it evaluated.
+// seamStats counts the work of the scans, for tests that pin it: windows
+// scanned by boundedMatches, and the positions it evaluated.
 type seamStats struct {
-	shape, bounded, rows int
+	bounded, rows int
 }
 
 // boundedProg is the pattern as a program for boundedMatches: the roots are
