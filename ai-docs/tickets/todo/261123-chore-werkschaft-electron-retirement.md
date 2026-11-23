@@ -12,7 +12,7 @@ related:
 The owner is dogfooding the Tauri shell and it runs well. The Tauri shell was
 adopted at `b25b9f368`, but Electron is still built and shipped by the
 release workflow. This ticket plans the retirement of the Electron shell. It
-is a todo outline, not ready for dispatch (see Open ordering question).
+is a todo outline, not ready for dispatch (see Open Decision Queue).
 
 ## Decisions
 
@@ -35,19 +35,21 @@ is a todo outline, not ready for dispatch (see Open ordering question).
   swapping in Tauri-compatible payloads (Tauri ticket decisions (2057) and
   (2065)=a; no separate bridge release).
 
-## Open ordering question (blocks promotion to ready)
+## Open Decision Queue
 
-The order of "stop shipping Electron builds" versus "existing Electron
-installs have been migrated" is **not settled**. Stopping Electron builds
-while installs still depend on the Electron updater could strand them. The
-owner must settle this ordering before this ticket is promoted to ready. No
-decision is assumed here.
+Last ID: (5101)
+
+(5101) [open] [policy] Order "stop shipping Electron builds" against "existing Electron installs have migrated to Tauri".
+- Context: stopping Electron builds while installs still depend on the Electron updater could strand them. The owner must settle this before promotion to ready; no decision is assumed here.
+- Alternative a: keep shipping the Electron build until existing installs have migrated through the Electron updater (migration window), then remove the build and code.
+- Alternative b: stop shipping Electron builds now; remaining Electron installs reinstall manually.
+> Recommendation a: the migration path (decisions (2057), (2065)=a) needs the Electron updater to keep receiving releases during the window.
 
 ## Phases
 
 ### Phase 1: Retire Electron (rough outline)
 
-Pending the open ordering question: relocate `assemble-daemon-input.cjs`,
+Pending (5101): relocate `assemble-daemon-input.cjs`,
 remove the `desktop-build` job and Electron release assets, then delete
 `agents-plugin-tool/desktop-electron/`. Refine and split once the ordering is
 settled.
