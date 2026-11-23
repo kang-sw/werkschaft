@@ -235,9 +235,10 @@ func TestBoardHistoryHooksSurroundSSESwap(t *testing.T) {
 	// board branch rather than mistaking a tree restoration for the board's.
 	board := js[morph:]
 	materialize, disclosure := strings.Index(board, "window.wbHistory.restore(n, history)"), strings.Index(board, "restoreOpen(n)")
+	stashed := strings.Index(board, "if (taken && taken.history) window.wbHistory.restore(n, taken.history)")
 	outerScroll := strings.Index(board, "restoreScroll(scroll)")
-	if materialize < 0 || materialize >= disclosure || outerScroll <= disclosure || strings.Count(js, "window.wbHistory.restore(") != 1 {
-		t.Fatal("SSE swaps must restore history once before board disclosures and outer scrolling")
+	if materialize < 0 || materialize >= disclosure || stashed <= materialize || stashed >= disclosure || outerScroll <= disclosure || strings.Count(js, "window.wbHistory.restore(") != 2 {
+		t.Fatal("SSE swaps must restore history (and any stashed virtualized history) before board disclosures and outer scrolling")
 	}
 
 	// Execute the actual dispatcher too: each inserted board root must receive

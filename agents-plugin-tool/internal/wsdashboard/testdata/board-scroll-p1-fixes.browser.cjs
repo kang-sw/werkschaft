@@ -14,7 +14,7 @@ const { chromium } = require(pwPath);
 const REPO = path.resolve(__dirname, '../../../..');
 const WSD = path.join(REPO, 'agents-plugin-tool/internal/wsdashboard/assets');
 const WSW = path.join(REPO, 'agents-plugin-tool/internal/wswhiteboard/assets');
-const SHOTS_DIR = process.env.WS_LOOK_SHOTS || (process.platform === 'win32' ? 'D:/Temp/board-scroll-p1-fixes-look' : path.join(os.tmpdir(), 'board-scroll-p1-fixes-look'));
+const SHOTS_DIR = process.env.WS_LOOK_SHOTS || '';
 
 function readAsset(dir, name) {
   return fs.readFileSync(path.join(dir, name), 'utf8');
@@ -246,7 +246,7 @@ async function waitForScrollSettle(page, timeoutMs = 1500) {
 }
 
 test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + zero non-current geometry reads', async () => {
-  fs.mkdirSync(SHOTS_DIR, { recursive: true });
+  if (SHOTS_DIR) fs.mkdirSync(SHOTS_DIR, { recursive: true });
   let executablePath;
   if (!fs.existsSync(chromium.executablePath())) {
     const fallback = 'C:\\Users\\user\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1248\\chrome-headless-shell-win64\\chrome-headless-shell.exe';
@@ -327,7 +327,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.equal(t4TopMetrics.oqVisible, true, 'top ↑ pill should be visible for unanswered Topic 1 ask');
     assert.ok(t4TopMetrics.oqTop >= t4TopMetrics.headBottom - 0.5, `↑ pill top (${t4TopMetrics.oqTop}) must be below card header bottom (${t4TopMetrics.headBottom})`);
 
-    await page.screenshot({ path: path.join(SHOTS_DIR, '01-top-rail-and-oq-pill.png') });
+    if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '01-top-rail-and-oq-pill.png') });
 
     // Bug 4: Scroll inside Topic 4 to bottom edge and verify bottom 2-row rail clearance
     const t4BotMetrics = await page.evaluate(() => {
@@ -353,7 +353,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.ok(t4BotMetrics.lastLineBottom <= t4BotMetrics.cardBottom + 0.5 && t4BotMetrics.lastLineBottom <= t4BotMetrics.botStackTop + 0.5,
       `last line bottom (${t4BotMetrics.lastLineBottom}) must not clip`);
 
-    await page.screenshot({ path: path.join(SHOTS_DIR, '02-tall-card-bottom-clearance.png') });
+    if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '02-tall-card-bottom-clearance.png') });
 
     // Bug 1: Real wheel over visible iframe.doc-frame scrolls Topic 4 down to bottom ->
     // chains into #bcol -> moves off Topic 4, and upward wheel chains back up #bcol!
@@ -443,7 +443,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     const t3Gap = t3Landed.cardTop - t3Landed.topStackBottom;
     assert.ok(t3Gap >= -1 && t3Gap <= 3, `Topic 3 .wb-cap jump must compensate toolbar float transition (gap=${t3Gap.toFixed(2)}px)`);
 
-    await page.screenshot({ path: path.join(SHOTS_DIR, '03-after-bottom-cap-click.png') });
+    if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '03-after-bottom-cap-click.png') });
 
     // Now test clicking top .wb-cap for Topic 1
     const clickedTopic1 = await page.evaluate(() => {
@@ -506,7 +506,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.ok(termLanded.scrollTop === 0 || Math.abs(termLanded.cardTop - termLanded.expectedTop) <= 3,
       `Terminal 1 card top (${termLanded.cardTop}) must align to expected top (${termLanded.expectedTop}): ${JSON.stringify(termLanded)}`);
 
-    await page.screenshot({ path: path.join(SHOTS_DIR, '04-bcard-cap-click.png') });
+    if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '04-bcard-cap-click.png') });
 
     // Phase 1 invariant: non-current card DOM/size update performs ZERO outer-board geometry reads
     const geomCounts = await page.evaluate(() => {

@@ -311,7 +311,9 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         measurements.push({ theme, id, scroll }); write('measurements', measurements);
         assert(scroll.top > 0, 'owned board actually scrolls');
         if (history) assert.equal(scroll.id, 'bcol', 'saved history uses bounded board scroller');
-        await until(async () => await page.locator('.board-toolbar').evaluate(n => n.hasAttribute('data-floating')), 'toolbar floats in actual scroller');
+        const expectFloat = scroll.document;
+        await until(async () => await page.locator('.board-toolbar').evaluate(n => n.hasAttribute('data-floating')) === expectFloat,
+          expectFloat ? 'toolbar floats in document scroller' : 'toolbar stays non-floating in bounded snap-deck scroller');
         await geometry(`${id}-${theme}-floating`, true); await capture(`${id}-${theme}-floating`);
         await width(800); await select('implementing');
         await page.locator('.board-overview').click();

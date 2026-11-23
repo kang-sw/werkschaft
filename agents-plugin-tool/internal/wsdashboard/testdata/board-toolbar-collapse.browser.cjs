@@ -210,7 +210,7 @@ function assertSingleRow(m, label) {
         assertSingleRow(m, `${lang} awaiting-confirmation w=${w}`);
       }
 
-      // Verify floating toolbar state stays single-row too (restore "all" so #bcol overflows and scrolls).
+      // Verify scrolled toolbar stays non-floating and single-row in bounded snap-deck mode.
       await setExactToolbarWidth(page, 1600);
       await resetScroll(page);
       await page.locator('.board-state-radio[data-filter="all"]').click();
@@ -222,9 +222,9 @@ function assertSingleRow(m, label) {
         b.dispatchEvent(new Event('scroll', { bubbles: true }));
       });
       await settle(page);
-      const floating = await measureToolbar(page);
-      assert.equal(floating.floating, true, `${lang} scrolled toolbar floats`);
-      assertSingleRow(floating, `${lang} floating w=803`);
+      const scrolled = await measureToolbar(page);
+      assert.equal(scrolled.floating, false, `${lang} scrolled toolbar stays non-floating in bounded snap-deck mode`);
+      assertSingleRow(scrolled, `${lang} scrolled w=803`);
 
       assert.deepEqual(pageErrors, [], `${lang} no page errors`);
       console.log(`PASS toolbar-width sweep (${lang}): transitions=${JSON.stringify(transitions.map(t => ({ w: t.w, sig: t.sig, faceH: t.m.faceHeight, filterW: t.m.filterWidth })))}`);

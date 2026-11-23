@@ -240,7 +240,7 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	for _, want := range []string{
 		".dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
 		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }`,
-		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
+		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
 		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 16px; }",
 	} {
 		if !strings.Contains(css, want) {
@@ -248,7 +248,8 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 		}
 	}
 	// Band 3 must ignore data-boardw: --stagew stays --pbw and every
-	// :root[data-boardw] rule in dashboard.css is scoped to Band 4.
+	// :root[data-boardw] rule in dashboard.css is scoped to Band 4 (gallery
+	// column or wide-only overview Quick Look preview).
 	for _, gone := range []string{
 		":root[data-boardw] .dash.board",
 		":root[data-boardw] .dash:has(> .dwrap .dgrid:is(.live, .history))",
@@ -262,7 +263,9 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 		t.Errorf("--stagew definitions = %v, want only [--stagew: var(--pbw);]", matches)
 	}
 	for _, m := range regexp.MustCompile(`:root\[data-boardw\][^{]*`).FindAllString(css, -1) {
-		if !strings.Contains(m, `:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"])`) {
+		if !strings.Contains(m, `:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"])`) &&
+			!strings.Contains(m, `:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview])`) &&
+			!strings.Contains(m, `:root[data-boardw][data-overview-preview]`) {
 			t.Errorf("unscoped :root[data-boardw] selector %q", strings.TrimSpace(m))
 		}
 	}
