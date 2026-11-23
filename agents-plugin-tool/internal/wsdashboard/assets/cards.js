@@ -211,7 +211,7 @@
       style(doc.getElementById("bcol") || board, "--wb-rail-inset", (inset + height + 6) + "px");
       if (scrollBox && scrollBox !== s) scrollBox.style.removeProperty("scroll-padding-top");
       scrollBox = s;
-      style(s, "scroll-padding-top", (inset + height + 10) + "px");
+      style(s, "scroll-padding-top", (inset + height + 6) + "px");
       if (maxed && maxed.files) style(maxed.el, "--files-top", Math.max(52, faceRect.bottom + 8) + "px");
     }
     function queue() { if (!frame) frame = requestAnimationFrame(update); }

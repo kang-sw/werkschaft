@@ -367,14 +367,11 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    a size change of any card moves nothing the reader sees and costs the page
    no geometry read. Maximized topics, panels and cards stay fixed to the
    viewport: no containment is added above them. */
-#bcol .r-board section.topic[data-topic]:not([data-max]) { max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overscroll-behavior: contain; scroll-margin-top: var(--board-toolbar, 0px); overflow-anchor: none; }
+#bcol .r-board section.topic[data-topic]:not([data-max]) { max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overflow-anchor: none; }
 #bcol .r-board section.topic[data-topic]:not([data-max]) > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
-#bcol .r-board .bcard:not([data-max]) { scroll-margin-top: var(--board-toolbar, 0px); overflow-anchor: none; }
+#bcol .r-board .bcard:not([data-max]) { overflow-anchor: none; }
 #bcol .r-board .bcard:not([data-max]) > .bc-in { max-height: var(--board-usable, none); }
 #bcol .r-board :is(section.topic[data-topic], .bcard)[data-current]:not([data-max]) { overflow-anchor: auto; }
 #bcol .r-board { padding-bottom: var(--board-runway, 0px); }
 :root[data-overview] #bcol .r-board section.topic[data-topic] { max-height: none; overflow-y: visible; }
 :root[data-overview] #bcol .r-board .bcard > .bc-in { max-height: none; }
-.board-step { display: inline-flex; gap: 2px; flex: none; }
-.board-step .board-action { padding-inline: 7px; }
-.board-step .board-action:disabled { opacity: .35; cursor: default; }

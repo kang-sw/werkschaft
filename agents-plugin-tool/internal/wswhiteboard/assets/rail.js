@@ -469,18 +469,34 @@
   }
 
   // Jump: put the topic's top where its bar sticks, under the top capsules
-  // it will have once current.
+  // it will have once current. Route through WsBoardAnchor when inside the
+  // dashboard's board column so card state, toolbar settling, and scrollend
+  // stay aligned without snap-back.
+  function cssEsc(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/["\\]/g, "\\$&"); }
+  function resolveTopic(t) {
+    if (!t) return null;
+    if (t.isConnected) return t;
+    if (t.id) { var byId = d.getElementById(t.id); if (byId) return byId; }
+    var attr = t.getAttribute && (t.hasAttribute("data-topic") ? ["data-topic", t.getAttribute("data-topic")] :
+      t.hasAttribute("data-rail") ? ["data-rail", t.getAttribute("data-rail")] :
+      t.hasAttribute("data-card") ? ["data-card", t.getAttribute("data-card")] : null);
+    if (!attr || attr[1] === null) return null;
+    var prefix = attr[0] === "data-topic" ? "section.topic" : "";
+    return box.querySelector(prefix + "[" + attr[0] + '="' + cssEsc(attr[1]) + '"]');
+  }
   function jump(e) {
     var b = e.target.closest && e.target.closest(".wb-cap"), t = b && b.wbTopic;
     if (!t) return;
     if (window.wbPill && window.wbPill.apply && !window.wbPill.apply(function () { jump(e); })) return;
-    if (!t.isConnected) t = t.id ? d.getElementById(t.id) : null;
+    t = resolveTopic(t);
     if (!t) return;
+    var smooth = !(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+    if (window.WsBoardAnchor && window.WsBoardAnchor.select && (host.id === "bcol" || (host.closest && host.closest("#bcol"))) &&
+        window.WsBoardAnchor.select(t, { smooth: smooth })) return;
     var peers = Array.prototype.slice.call(box.querySelectorAll(ITEMS)).filter(function (n) { return n.getBoundingClientRect().height; });
     var j = peers.indexOf(t);
     readInset();
     var delta = t.getBoundingClientRect().top - (viewTop() + capH(Math.min(2, Math.max(0, j))));
-    var smooth = !(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
     scroller.scrollBy({ top: delta, behavior: smooth ? "smooth" : "auto" });
   }
   wraps.top.addEventListener("click", jump);

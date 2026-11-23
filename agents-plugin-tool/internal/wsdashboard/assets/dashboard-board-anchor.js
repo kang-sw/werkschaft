@@ -2,14 +2,43 @@
   // The Main Board scrolls by card, not by pixel. One card is the topic section
   // (section.topic[data-topic]) or an unpinned card (.bcard[data-card]) the
   // reader stands on: its key ("t:" topic, "c:" id) is the whole outer scroll
-  // state, its top aligned with the usable scrollport top below the sticky
-  // toolbar (scroll-margin-top, --board-toolbar). Cards keep their content
+  // state, its top aligned with wswhiteboard/rail.js's active landing line
+  // (--wb-rail-inset + capH(min(2, prev))). Cards keep their content
   // height up to --board-usable and scroll inside themselves; overflow
   // anchoring is scoped to the current card (dashboard-board.css), so a size
   // change of any card reads and writes nothing on the outer board. Geometry
   // is read only by an explicit user move (selecting, a native scroll's end).
   var ANCHOR_STORE = "ws.dashboard.board-card." + location.pathname + location.search;
-  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0 }, anchorWheelGate = null, anchorLast = null, anchorRO = null;
+  var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4, ANCHOR_FADE = 14;
+  var ANCHOR_BOT = ANCHOR_FADE + 2 * ANCHOR_CAP + ANCHOR_GAP + ANCHOR_PAD;
+  var ANCHOR_BOT_MARGIN = 8;
+  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0 };
+  var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
+  var anchorProg = null, anchorProgSeq = 0;
+  function anchorCapH(n) { return n ? ANCHOR_PAD + n * (ANCHOR_CAP + ANCHOR_GAP) : 0; }
+  function anchorToolbarFace() {
+    var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
+    return bar && (bar.firstElementChild || bar) || null;
+  }
+  function anchorRailInset(col) {
+    if (col && col.style && col.style.getPropertyValue) {
+      var raw = parseFloat(col.style.getPropertyValue("--wb-rail-inset"));
+      if (!isNaN(raw)) return raw;
+    }
+    return anchorSized.bar ? anchorSized.bar + 6 : anchorSized.inset;
+  }
+  function anchorBotReserve() {
+    return ANCHOR_BOT + ANCHOR_BOT_MARGIN + (anchorSized.reply ? anchorSized.reply + 14 : 0);
+  }
+  function anchorCardCap(n, list) {
+    if (!n || !(n.hasAttribute("data-topic") || n.hasAttribute("data-rail"))) return 0;
+    var cards = list || anchorCards(), at = cards.indexOf(n), prev = 0;
+    for (var i = 0; i < at; i++) if (cards[i].hasAttribute("data-topic") || cards[i].hasAttribute("data-rail")) prev++;
+    return anchorCapH(Math.min(2, prev));
+  }
+  function anchorLandingTop(col, colRect, n, list) {
+    return colRect.top + (col.clientTop || 0) + anchorSized.padTop + anchorRailInset(col) + anchorCardCap(n, list);
+  }
   function anchorId(n) {
     var k = n && n.nodeType === 1 ? topicKey(n) : null;
     return k !== null ? "t:" + k : n && n.nodeType === 1 && n.hasAttribute("data-card") ? "c:" + n.getAttribute("data-card") : null;
@@ -48,11 +77,31 @@
     if (n) n.setAttribute("data-current", "");
     anchorKey = n ? anchorId(n) : null;
     anchorStore();
-    anchorControls();
   }
-  // select makes node n the current card and aligns it. The one alignment
-  // write is the browser's scrollIntoView; no geometry is read here. Leaving a
-  // card with staged updates admits the newest revision first.
+  function anchorAlign(col, n, smooth, list) {
+    if (!col || !n || !n.isConnected) return false;
+    var c = col.getBoundingClientRect(), r = n.getBoundingClientRect();
+    var delta = r.top - anchorLandingTop(col, c, n, list);
+    var target = Math.max(0, col.scrollTop + delta);
+    if (anchorProg && anchorProg.key === anchorId(n)) anchorProg.target = target;
+    if (Math.abs(delta) <= 0.5) return false;
+    if (col.scrollTo) col.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
+    else col.scrollTop = target;
+    return true;
+  }
+  function anchorWaitFrames(pid, count) {
+    if (typeof requestAnimationFrame !== "function") return;
+    requestAnimationFrame(function () {
+      if (!anchorProg || anchorProg.id !== pid) return;
+      if (count > 1) { anchorWaitFrames(pid, count - 1); return; }
+      anchorRealign(true);
+    });
+  }
+  // select makes node n the current card and aligns it directly to rail.js's
+  // top-capsule landing line. Marking current first activates overflow-anchor
+  // and unskips containment before measuring the target card alone; no non-
+  // current card geometry is read. Leaving a card with staged updates admits
+  // the newest revision first.
   function anchorSelect(n, opt) {
     if (!n || !n.isConnected) return false;
     var col = $("bcol");
@@ -66,8 +115,14 @@
       n = anchorNode(key) || n;
     }
     if (!(opt && opt.still)) {
-      var calm = reducedMotion();
-      n.scrollIntoView({ block: "start", behavior: opt && opt.smooth && !calm ? "smooth" : "auto" });
+      var calm = reducedMotion(), smooth = !!(opt && opt.smooth && !calm);
+      var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
+      var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
+      var pid = ++anchorProgSeq;
+      anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
+      anchorAlign(col, n, smooth);
+      if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
+      if (!smooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
     }
     return true;
   }
@@ -96,7 +151,7 @@
   // and a card that left the order hands over to a neighbour.
   function anchorSettle(before) {
     var list = anchorCards(), n = anchorNode(anchorKey);
-    if (n) { if (n !== anchorLast) anchorMark(n); anchorControls(); return; }
+    if (n) { if (n !== anchorLast) anchorMark(n); return; }
     if (!list.length) { anchorMark(null); return; }
     var saved = null;
     if (anchorKey === null) try { saved = window.sessionStorage.getItem(ANCHOR_STORE); } catch (e) {}
@@ -119,7 +174,7 @@
     var col = $("bcol"), cur = anchorCurrent(), v = null;
     if (col && cur) {
       var c = col.getBoundingClientRect(), r = cur.getBoundingClientRect();
-      v = { card: cur, top: Math.max(c.top + col.clientTop + anchorSized.bar + 10, r.top), bottom: Math.min(c.bottom, r.bottom, window.innerHeight || Infinity),
+      v = { card: cur, top: Math.max(anchorLandingTop(col, c, cur), r.top), bottom: Math.min(c.bottom - anchorBotReserve(), r.bottom, window.innerHeight || Infinity),
         left: Math.max(c.left, r.left), right: Math.min(c.right, r.right) };
     }
     if (snap) snap.anchorView = v;
@@ -132,50 +187,71 @@
     var r = n.getBoundingClientRect();
     return r.height > 0 && Math.min(v.bottom, r.bottom) - Math.max(v.top, r.top) >= 1 && Math.min(v.right, r.right) - Math.max(v.left, r.left) >= 1;
   }
-  // --- toolbar controls --------------------------------------------------------
-  var anchorBtns = null;
-  function anchorControls() {
-    if (!anchorBtns) return;
-    var list = anchorCards(), at = list.indexOf(anchorLast);
-    anchorBtns.prev.disabled = at <= 0;
-    anchorBtns.next.disabled = at < 0 || at >= list.length - 1;
-  }
-  function anchorMount() {
-    var tools = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
-    tools = tools && tools.querySelector(".board-tools");
-    if (!tools || anchorBtns) return;
-    var group = doc.createElement("span");
-    group.className = "board-step";
-    function btn(cls, label, path, d) {
-      var b = doc.createElement("button");
-      b.type = "button"; b.className = "board-action board-step-" + cls;
-      b.title = label; b.setAttribute("aria-label", label);
-      b.innerHTML = '<svg class="li" viewBox="0 0 24 24" aria-hidden="true"><path d="' + path + '"/></svg>';
-      b.addEventListener("click", function () { anchorStep(d); });
-      group.appendChild(b);
-      return b;
-    }
-    anchorBtns = { prev: btn("prev", wsT("js.board.step.prev"), "M18 15l-6-6-6 6", -1), next: btn("next", wsT("js.board.step.next"), "M6 9l6 6 6-6", 1) };
-    tools.insertBefore(group, tools.firstChild);
-    anchorControls();
-  }
   // --- sizes: the usable scrollport ---------------------------------------------
   // ResizeObserver entries carry the sizes, so no layout is forced to read
-  // them; the trailing runway derives from the usable height and the last card.
+  // them; --board-usable clears both top 2-row rail stack and bottom 2-row
+  // rail stack (+ reply bar when visible), and --board-runway keeps the last
+  // card reachable at the top rail landing line.
+  function anchorSetVar(s, k, v) { if (!s.getPropertyValue || s.getPropertyValue(k) !== v) s.setProperty(k, v); }
+  function anchorApplySizes(col) {
+    var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2), botSpace = anchorBotReserve();
+    anchorSized.inset = inset;
+    var usable = Math.max(120, anchorSized.h - topSpace - botSpace);
+    var s = col.style;
+    anchorSetVar(s, "--board-toolbar", topSpace + "px");
+    anchorSetVar(s, "--board-usable", usable + "px");
+    anchorSetVar(s, "--board-runway", Math.max(0, anchorSized.h - topSpace - (anchorSized.last || 0)) + "px");
+  }
+  function anchorObserveAux(col) {
+    if (!anchorRO || !col) return;
+    var face = anchorToolbarFace(), reply = col.querySelector(".reply");
+    if (face !== anchorFaceEl) {
+      if (anchorFaceEl) anchorRO.unobserve(anchorFaceEl);
+      anchorFaceEl = face;
+      if (face) anchorRO.observe(face);
+    }
+    if (reply !== anchorReplyEl) {
+      if (anchorReplyEl) anchorRO.unobserve(anchorReplyEl);
+      anchorReplyEl = reply;
+      anchorSized.reply = 0;
+      if (reply) anchorRO.observe(reply);
+    }
+  }
+  function anchorRealign(fromInsetOrFrame) {
+    var p = anchorProg;
+    if (!p || p.key !== anchorKey || Date.now() > p.until) { anchorProg = null; return; }
+    var col = $("bcol"), n = anchorNode(p.key);
+    if (!col || !n || !n.isConnected) return;
+    var moved = anchorAlign(col, n, !p.scrollDone && p.smooth);
+    if (moved) p.scrollDone = false;
+    if (fromInsetOrFrame) {
+      p.waitFloat = false;
+      if (p.scrollDone && !moved) anchorProg = null;
+    }
+  }
   function anchorSize(entries) {
-    var col = $("bcol"), bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
+    var col = $("bcol");
     if (!col) return;
+    anchorObserveAux(col);
+    var face = anchorFaceEl, reply = anchorReplyEl, insetChanged = false;
     entries.forEach(function (e) {
       var box = e.contentBoxSize && e.contentBoxSize[0], bb = e.borderBoxSize && e.borderBoxSize[0];
-      if (e.target === col) { anchorSized.w = box ? box.inlineSize : e.contentRect.width; anchorSized.h = box ? box.blockSize : e.contentRect.height; }
-      else if (e.target === bar) anchorSized.bar = bb ? bb.blockSize : e.contentRect.height;
-      else if (e.target === anchorLastCard) anchorSized.last = bb ? bb.blockSize : e.contentRect.height;
+      if (e.target === col) {
+        anchorSized.w = box ? box.inlineSize : e.contentRect.width;
+        anchorSized.h = box ? box.blockSize : e.contentRect.height;
+        anchorSized.padTop = parseFloat(getComputedStyle(col).paddingTop) || 0;
+      } else if (e.target === face) {
+        var nextBar = bb ? bb.blockSize : e.contentRect.height;
+        if (nextBar !== anchorSized.bar) insetChanged = true;
+        anchorSized.bar = nextBar;
+      } else if (e.target === anchorLastCard) {
+        anchorSized.last = bb ? bb.blockSize : e.contentRect.height;
+      } else if (e.target === reply) {
+        anchorSized.reply = bb ? bb.blockSize : e.contentRect.height;
+      }
     });
-    var gap = anchorSized.bar + 10, usable = Math.max(120, anchorSized.h - gap);
-    var s = col.style;
-    s.setProperty("--board-toolbar", gap + "px");
-    s.setProperty("--board-usable", usable + "px");
-    s.setProperty("--board-runway", Math.max(0, usable - (anchorSized.last || 0)) + "px");
+    anchorApplySizes(col);
+    if (insetChanged && anchorProg) anchorRealign(false);
   }
   var anchorLastCard = null;
   function anchorWatchLast() {
@@ -187,70 +263,83 @@
     anchorSized.last = 0;
     if (last) anchorRO.observe(last);
   }
-  // --- gestures -----------------------------------------------------------------
-  // A wheel over a card that can still scroll inside goes to the card. At its
-  // edge (or over a short card) the first gesture stops there; the next
-  // gesture in the same direction selects the adjacent card. WsGallery.Gate
-  // gives the pinned gallery's momentum and gesture timing; its charge alone
-  // would cross in one continuous burst from an edge, so a burst that began at
-  // the edge (no gap of G.C.INERTIA_MS before it) never moves the board.
-  var ANCHOR_OWN = '.xterm, .tm-host, iframe, canvas, video, embed, object, [data-max], [data-max] *';
-  function anchorCanScroll(t, dy, col) {
-    for (var n = t; n && n !== col; n = n.parentNode) {
-      if (n.nodeType !== 1 || !(n.scrollHeight - n.clientHeight > 1)) continue;
-      var oy = n === doc.scrollingElement ? "" : getComputedStyle(n).overflowY;
-      if (!/auto|scroll/.test(oy)) continue;
-      if (dy > 0 ? n.scrollTop + n.clientHeight < n.scrollHeight - 1 : n.scrollTop > 1) return true;
-    }
-    return false;
+  function anchorCancelProg() { anchorProg = null; }
+  function anchorOnKey(e) {
+    var k = e && e.key;
+    if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorProg = null;
   }
-  var anchorBurst = { dir: 0, last: -Infinity, stop: 0, go: false, lock: -Infinity };
-  function anchorWheel(e) {
-    if (e.defaultPrevented || e.ctrlKey || e.deltaY === 0 || !e.target.closest) return;
-    if (window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) return;
-    if (doc.documentElement.hasAttribute("data-overview")) return;
-    var col = $("bcol"), G = window.WsGallery;
-    if (!col || !G || e.target.closest(ANCHOR_OWN) || !e.target.closest("#r-board")) return;
-    var dy = +e.deltaY || 0;
-    if (e.deltaMode === 1) dy *= 40; else if (e.deltaMode === 2) dy *= 800;
-    var dir = dy > 0 ? 1 : -1, now = Date.now(), b = anchorBurst, fresh = now - b.last >= G.C.INERTIA_MS || b.dir !== dir;
-    b.last = now; b.dir = dir;
-    if (anchorCanScroll(e.target, dy, col)) { b.stop = 0; return; }
-    e.preventDefault();
-    if (now < b.lock) return;
-    // A gesture that reaches or starts at the edge stops there; only a fresh
-    // gesture in the same direction after it moves one card.
-    if (fresh) {
-      if (b.stop === dir) { b.stop = 0; b.lock = now + G.C.LOCK_MS; anchorStep(dir); }
-      else b.stop = dir;
-    }
-  }
-  // A native scroll (touch, keys, the scrollbar) ends on the nearest card, which
-  // becomes current: the one geometry pass of a user move.
+  // A native scroll (wheel chaining across cards, touch, keys, the scrollbar)
+  // ends on the active rail card, matching rail.js's cur band. Programmatic
+  // anchorSelect runs are guarded so toolbar float settling never snaps back
+  // to an earlier short or folded card.
   function anchorScrollEnd(e) {
     var col = $("bcol");
     if (e.target !== col) return;
-    var list = anchorCards(), top = col.getBoundingClientRect().top + anchorSized.bar + 10, best = null, gap = Infinity;
-    list.forEach(function (n) {
-      var d = Math.abs(n.getBoundingClientRect().top - top);
-      if (d < gap) { gap = d; best = n; }
-    });
+    var p = anchorProg;
+    if (p && p.key === anchorKey && Date.now() <= p.until) {
+      var targetNode = anchorNode(p.key) || anchorLast;
+      if (targetNode && targetNode.isConnected) {
+        var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
+        var err = r.top - anchorLandingTop(col, c, targetNode);
+        var canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
+        if (Math.abs(err) > 1.5 && canMove && p.tries < 2) {
+          p.tries++;
+          anchorAlign(col, targetNode, false);
+          return;
+        }
+      }
+      p.scrollDone = true;
+      if (!p.waitFloat) anchorProg = null;
+      else anchorWaitFrames(p.id, 3);
+      return;
+    }
+    anchorProg = null;
+    var list = anchorCards();
+    if (!list.length) return;
+    var colRect = col.getBoundingClientRect();
+    var vt = colRect.top + (col.clientTop || 0) + anchorSized.padTop + anchorRailInset(col);
+    var rects = list.map(function (n) { return n.getBoundingClientRect(); });
+    var railCount = 0, pick = -1, closest = null, gap = Infinity;
+    for (var k = 0; k < list.length; k++) {
+      var n = list[k], rk = rects[k];
+      if (!rk.height) { if (n.hasAttribute("data-topic") || n.hasAttribute("data-rail")) railCount++; continue; }
+      var cap = n.hasAttribute("data-topic") || n.hasAttribute("data-rail") ? anchorCapH(Math.min(2, railCount)) : 0;
+      if (n.hasAttribute("data-topic") || n.hasAttribute("data-rail")) railCount++;
+      var line = vt + cap;
+      if (rk.top <= line + 1.5) pick = k;
+      var d = Math.abs(rk.top - line);
+      if (d < gap) { gap = d; closest = n; }
+    }
+    var best = pick >= 0 && rects[pick].bottom > vt + anchorCardCap(list[pick], list) + 1.5 ? list[pick] : closest;
     if (best && best !== anchorLast) anchorMark(best);
   }
   function anchorInit() {
     var col = $("bcol");
     if (!col || !region("board")) return;
-    col.addEventListener("wheel", anchorWheel, { passive: false });
+    anchorSized.padTop = parseFloat(getComputedStyle(col).paddingTop) || 0;
+    anchorSized.inset = anchorRailInset(col);
+    col.addEventListener("wheel", anchorCancelProg, { passive: true });
+    col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
+    col.addEventListener("touchstart", anchorCancelProg, { passive: true });
+    col.addEventListener("keydown", anchorOnKey, { passive: true });
     col.addEventListener("scrollend", anchorScrollEnd, { passive: true });
     if (window.ResizeObserver) {
       anchorRO = new ResizeObserver(anchorSize);
       anchorRO.observe(col);
-      var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
-      if (bar) anchorRO.observe(bar);
+      anchorObserveAux(col);
+    }
+    if (window.MutationObserver) {
+      anchorMO = new MutationObserver(function () {
+        var nextInset = anchorRailInset(col);
+        if (nextInset === anchorSized.inset) return;
+        anchorSized.inset = nextInset;
+        anchorApplySizes(col);
+        if (anchorProg) anchorRealign(true);
+      });
+      anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });
     }
     col.wbScrollOwner = true;
-    anchorMount();
     anchorSettle(null);
     anchorWatchLast();
-    window.WsBoardAnchor = { restore: function () { var n = anchorCurrent(); if (n) n.scrollIntoView({ block: "start" }); }, select: anchorSelect, step: anchorStep, owner: anchorOwner, key: function () { return anchorKey; }, cards: anchorCards };
+    window.WsBoardAnchor = { restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); }, select: anchorSelect, step: anchorStep, owner: anchorOwner, key: function () { return anchorKey; }, cards: anchorCards };
   }
