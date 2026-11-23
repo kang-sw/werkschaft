@@ -81,6 +81,14 @@ func (m *werkMapper) mapLine(raw []byte, replies lineReplies) []Event {
 	if err != nil || l.T == "" {
 		return nil
 	}
+	if l.T == werk.LineStatus {
+		replies.answer(l.ID, controlAnswer{ok: true, body: json.RawMessage(raw)})
+		return nil
+	}
+	return m.mapEvent(l)
+}
+
+func (m *werkMapper) mapEvent(l werk.Line) []Event {
 	now := lineTime(l)
 	switch l.T {
 	case werk.LineInit:
@@ -132,8 +140,6 @@ func (m *werkMapper) mapLine(raw []byte, replies lineReplies) []Event {
 			return nil
 		}
 		return []Event{{UserTaken: l.Text}}
-	case werk.LineStatus:
-		replies.answer(l.ID, controlAnswer{ok: true, body: json.RawMessage(raw)})
 	case werk.LineNotice:
 		if l.Text != "" {
 			return []Event{{Notice: l.Text}}

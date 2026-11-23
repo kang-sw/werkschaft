@@ -62,9 +62,11 @@ type Config struct {
 	Instructions string
 	// LocalTools names the file tools the profile offers; empty offers all.
 	LocalTools []string
-	Endpoint   Responder
-	WS         WSTools
-	Out        io.Writer
+	// MCPFilesOnly uses the daemon's file tools for all file operations.
+	MCPFilesOnly bool
+	Endpoint     Responder
+	WS           WSTools
+	Out          io.Writer
 	// Emit receives typed events for a daemon host. When provided it replaces
 	// the legacy writer; calls are serialized even during parallel tool reads.
 	Emit func(Line)
@@ -748,10 +750,12 @@ func (a *Agent) loadTools(ctx context.Context) error {
 	}
 	tools := map[string]toolEntry{}
 	var defs []ToolDef
-	for _, t := range a.files.Tools(a.cfg.LocalTools) {
-		t := t
-		tools[t.Def.Name] = toolEntry{local: &t, readOnly: t.ReadOnly}
-		defs = append(defs, t.Def)
+	if !a.cfg.MCPFilesOnly {
+		for _, t := range a.files.Tools(a.cfg.LocalTools) {
+			t := t
+			tools[t.Def.Name] = toolEntry{local: &t, readOnly: t.ReadOnly}
+			defs = append(defs, t.Def)
+		}
 	}
 	var listErr error
 	if a.cfg.WS != nil {
