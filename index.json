@@ -597,6 +597,9 @@
           "branch": "impl/develop/uncut-claim-aide"
         }
       }
+    },
+    "261123-feat-ws-dashboard-board-topic-anchor-scroll": {
+      "registered_at": "2026-11-23T02:37:10Z"
     }
   }
 }
