@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+func TestComposerExecJobsRetryBrowser(t *testing.T) {
+	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
+		t.Skip("set WS_PLAYWRIGHT_MODULE to run Chromium acceptance")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "node", "--test", "--test-name-pattern",
+		"^exec jobs history retries", "testdata/composer-bang.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("Chromium exec jobs retry: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
 // TestComposerExecBrowser drives the composer's `!` commands in Chromium
 // against the real session page and route (only the command service is a
 // fake): the private card in its states in both ko and en, the old-daemon
