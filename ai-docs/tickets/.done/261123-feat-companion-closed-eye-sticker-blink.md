@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: f1326b323104afba
 sage-review-design-reviewed: f1326b323104afba
+completed: 2026-11-23
 ---
 
 # 컴패니언 눈 깜빡임을 닫힌 눈 스티커 2프레임 교체로 전환
@@ -317,3 +318,11 @@ Work:
 
 Verification boundary: Go and node tests above. Visual sign-off of real plates
 belongs to the art workflow, not this ticket.
+
+### Result (5cdb22d91) - 2026-11-23
+
+Landed: `closedL`/`closedR` in `companionEyeAssets`, the frontend `eyeFields`, and the compositor eye closure (`eyeSwap`, `BLINK_SWAP_AT = 0.5`, `LID_SHUT_AT = 0.95`); `eyeclosed-*` mouth keys are skipped by the mouth lookup; three lint warnings; schema, guide, rigging manual and release-compatibility row 14.
+
+Verified: node companion tests (87 pass, incl. new blink and fetch-list tests); Go `-run Companion` ok; `generate-package-assets.py --check` and `prepare-workflow-bundles.py --check` exit 0. Full `go test ./internal/wsdashboard` fails only in unrelated board, toolbar, inline-capsule and slash-picker node-harness tests (`inBoard`, `anchorCurrent`, `bangMode` undefined), not run against the base.
+
+Decisions: the swap is both eyes together; a one-sided wink stays rigid. `half_lid` is defined by no shipped file (only referenced), so its lid value is pack-authored and the 0.95 guard is the contract. Old binary scan: `scanLocal` lists pack directories and `loadCompanionPack` reads only enumerated files, so a hand-placed directory with extra plates loads on an old binary; only zip install refuses (row 14: T3 plain, T1 with the shim).
