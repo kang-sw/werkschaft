@@ -195,10 +195,10 @@ MAIN on 2026-11-15 at 07:02:38, and (1017)=a at 07:04:53.
   the hire requester's identity as an authorization parent.
 - Clerk research (720)–(722) is not worker-profile authority; this ticket adds
   no clerk encoding, authoring parity, or existing-fork reclassification.
-- Scope is current Claude/Pi worker sessions; no new harness, clerk authority,
+- Scope is current Claude worker sessions; no new harness, clerk authority,
   global permission configuration or retroactive session migration.
 - Phase 1 consumes `261115-feat-ws-permission-profile#phase2`: reusable
-  controls, Claude/Pi permission backend, existing-worker admission and
+  controls, Claude permission backend, existing-worker admission and
   lead/settings paths, following its Phase 1 contract. The permission
   producer does not consume this ticket's new worker routes, posture or UI.
   This ticket's Phase 1 composes them after that producer lands; its Phase 2
@@ -254,7 +254,7 @@ new writer/read/reopen path before claiming T0.
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | agents-plugin-tool/internal/{wsagent,mcp,wsdashboard,wsmailbox}, shared worker manual and mirrored guidance; Pi adapter restriction seams in agents-plugin-pi/src. |
+| scope.span | multi-file | agents-plugin-tool/internal/{wsagent,mcp,wsdashboard,wsmailbox}, shared worker manual and mirrored guidance; Pi retires per `261123-chore-ws-retire-pi-harness`. |
 | scope.surface | cross-module | Public bootstrap command, creation HTTP and session.request_hire profile contract cross runner, MCP, dashboard and mailbox. |
 | scope.new_public_symbol | yes | worker.bootstrap, /agents/workers, /agents/workers/permission and /session-hires/<request-id>/approve/permission are additive entry points. Source searches found no current tooling/dashboard name collision; the landed hire router still requires exact-dispatch verification. |
 | scope.new_type_contract | yes | worker metadata/bootstrap, worker routes/support/State and hire profile/approved_profile/approved_permission_level plus hire_permission_supported are specified here. Shared permission meaning/service stays sibling-owned; this ticket produces its hire approval transport/persistence integration. |
@@ -296,7 +296,8 @@ Verification:
   and `internal/wsmailbox` fixtures for delegate mint, effective allowlist
   (including keyless calls/reconnect), lead-only/orchestration refusals,
   unchanged old lead calls, short manual and the two allowed subagent
-  categories. Test enforced versus advisory results on Claude/Pi fixtures.
+  categories. Test enforced versus advisory results on Claude fixtures.
+  Pi retires per `261123-chore-ws-retire-pi-harness`.
 - Cover reachable-lead validation, intro default/edit, automatic introduction,
   actual mail task/report exchange, copy-address equality, no inherited
   named-inbox theft, and one input owner through stop/restart/reopen.
@@ -314,7 +315,7 @@ Verification:
   create/revive/restart. An unresolved actual parent yields visible pending/
   error; root absence is distinct. Permission non-enforceability alone gives
   a nudge and does not block launch.
-- Run touched i18n/manual/manifest and wsflow/Pi mirror checks. Use focused
+- Run touched i18n/manual/manifest and wsflow mirror checks. Use focused
   existing test harnesses; static fixtures are not live provider acceptance.
 
 ### Phase 2: Owner-approved worker hiring
