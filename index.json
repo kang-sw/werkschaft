@@ -564,7 +564,14 @@
       "registered_at": "2026-11-22T20:54:14Z"
     },
     "261123-bug-ws-dashboard-renderer-native-memory-growth": {
-      "registered_at": "2026-11-23T02:06:44Z"
+      "registered_at": "2026-11-23T02:06:44Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T02:47:21Z"
+      }
     },
     "261123-bug-ws-dashboard-webview-idle-cpu": {
       "registered_at": "2026-11-23T01:26:42Z",
