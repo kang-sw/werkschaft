@@ -6,7 +6,7 @@
    badges keep their natural width (flex: none); the exec group takes what is
    left, measured by dashboard-exec-hud.js, never by a fixed breakpoint. */
 .composer { --xh-line: color-mix(in srgb, var(--wb-fg) 16%, transparent); }
-@keyframes xh-spin { to { --hud-spin-b: 505deg; } }
+@keyframes xh-spin { to { transform: rotate(360deg); } }
 @keyframes xh-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .34; } }
 @keyframes xh-blink { 50% { opacity: 0; } }
 @keyframes xh-flash { 0% { box-shadow: 0 0 0 3px var(--wb-primary); } 100% { box-shadow: 0 0 0 0 transparent; } }
@@ -33,7 +33,9 @@
 .xemb { width: 18px; height: 18px; border-radius: 4.5px; display: inline-flex; align-items: center; justify-content: center; background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; font: 800 9px/1 var(--wb-mono); letter-spacing: -.04em; }
 .xemb.user { background: #f2f2f2; color: #18181b; box-shadow: inset 0 0 0 1px rgb(24 24 27 / .22); font-size: 11px; }
 .xring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; }
-[data-st="running"] .xring { padding: 1.5px; background: conic-gradient(from var(--hud-spin-b), #7dd3fc 0deg 20deg, var(--ring-tool) 20deg 114deg, transparent 124deg 360deg), linear-gradient(color-mix(in srgb, var(--ring-tool) 24%, transparent), color-mix(in srgb, var(--ring-tool) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: xh-spin .9s linear infinite; }
+/* the conic arcs rotate on a pseudo-element under the ring's static mask (see .hb .hbr in dashboard.css) */
+[data-st="running"] .xring { padding: 1.5px; background: linear-gradient(color-mix(in srgb, var(--ring-tool) 24%, transparent), color-mix(in srgb, var(--ring-tool) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
+[data-st="running"] .xring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 145deg, #7dd3fc 0deg 20deg, var(--ring-tool) 20deg 114deg, transparent 124deg 360deg); animation: xh-spin .9s linear infinite; }
 [data-st="stopping"] .xring { border: 1.5px solid var(--ring-fail); animation: xh-breathe .9s ease-in-out infinite; }
 [data-st="ok"] .xring { border: 1.5px solid var(--wb-ok); }
 [data-st="failed"] .xring { border: 1.5px solid var(--ring-fail); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-fail) 24%, transparent); }
@@ -161,5 +163,6 @@
 .xpeek[hidden], .xtoast[hidden], .xtip[hidden] { display: none; }
 .cexec.xflash { animation: xh-flash .9s ease-out 2; }
 @media (max-width: 560px) { .xpeek { right: -4px; width: calc(100% + 8px); } .xpeek .xbtn .lbl-long { display: none; } }
-:root[data-animation-paused] :is(.xring, .xp-dot, .xp-foot .xlive::before, .xout.live::after) { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { .xgroup *, .xpeek, .xpeek *, .xtoast, .xchip, .cexec.xflash { animation: none !important; transition: none !important; } [data-st="running"] .xring { animation: none !important; } }
+:root[data-animation-paused] .xring::before,
+:root[data-animation-paused] :is(.xring, .xspinr, .xp-dot, .xp-foot .xlive::before, .xout.live::after) { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .xgroup *, .xpeek, .xpeek *, .xtoast, .xchip, .cexec.xflash { animation: none !important; transition: none !important; } [data-st="running"] .xring, [data-st="running"] .xring::before { animation: none !important; } }

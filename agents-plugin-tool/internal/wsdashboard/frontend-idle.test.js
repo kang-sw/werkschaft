@@ -91,6 +91,31 @@ test('idle CSS bounds animation rates and contains without paint or size contain
   assert.match(clocks, /time\.tago, time\.entry-at\[data-at\] \{[^}]*contain: layout style;/);
 });
 
+test('conic spinners rotate a pseudo-element by transform and every pseudo animation pauses and honours reduced motion', () => {
+  const base = read(dashboard, 'dashboard.css');
+  const conversation = read(dashboard, 'dashboard-conversation.css');
+  const exec = read(dashboard, 'dashboard-exec-hud.css');
+  const rail = read(dashboard, 'dashboard-rail.css');
+  const all = base + conversation + exec + rail;
+  // No angle custom property animates inside a gradient (main-thread repaint every frame).
+  assert.doesNotMatch(all, /@property --(hba|hud-spin-[ab])/);
+  assert.doesNotMatch(all, /@keyframes[^{]+\{\s*to\s*\{\s*--/);
+  // Box-shadow never animates in a perpetual keyframe set; only opacity or transform.
+  for (const name of ['hbspin', 'hud-spin-think', 'hud-spin-tool', 'xh-spin', 'hud-hold-breathe', 'hud-perm-pulse', 'attn-flash-ring', 'attn-breathe-ring']) {
+    const m = all.match(new RegExp(String.raw`^@keyframes ${name}\b[^\n]*\n(?:[ \t][^\n]*\n)*`, 'm'));
+    assert(m, `@keyframes ${name}`);
+    assert.doesNotMatch(m[0], /box-shadow|--[a-z]/, `${name} animates only transform or opacity`);
+  }
+  for (const [css, sel] of [[base, '.hb .hbr::before'], [conversation, '.hud-node[data-state="thinking"] .hud-ring::before'], [conversation, '.hud-node[data-state="tool"] .hud-ring::before'], [exec, '[data-st="running"] .xring::before']]) {
+    const i = css.indexOf(sel + ' {'); assert(i >= 0, sel);
+    assert.match(css.slice(i, css.indexOf('}', i)), /conic-gradient\([^)]*\)?[^}]*animation: [a-z-]+ [^;]+;/, `${sel} carries the rotating gradient`);
+  }
+  assert.match(base, /:root\[data-animation-paused\] :is\(\.hb \.hbr, \.hud-node\[data-state\] \.hud-ring\)::before,\s*:root\[data-animation-paused\] \.hud-node\[data-state\] \.hud-ring::after\s*\{\s*animation-play-state: paused;/);
+  assert.match(exec, /:root\[data-animation-paused\] \.xring::before/);
+  assert.match(rail, /\.hb \.hbr::before \{ animation: none; \}/);
+  assert.match(base, /\.hud-node\[data-state\] \.hud-ring::before, \.hud-node\[data-state\] \.hud-ring::after \{ animation: none; \}/);
+});
+
 test('HUD node animations pause when hidden and disable under reduced motion', () => {
   const base = read(dashboard, 'dashboard.css');
   const conversation = read(dashboard, 'dashboard-conversation.css');

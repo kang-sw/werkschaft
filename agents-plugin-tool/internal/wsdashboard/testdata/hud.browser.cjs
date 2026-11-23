@@ -51,14 +51,14 @@ async function checkKeyedRebuild(frame) {
     };
     const h3 = node('h3'), h4 = node('h4'), h5 = node('h5');
     const ring = h3.querySelector('.hud-ring');
-    const animation = ring.getAnimations()[0];
+    const animation = ring.getAnimations({ subtree: true })[0];
     const startTime = animation?.currentTime;
     const delay = id => parseFloat(getComputedStyle(node(id).querySelector('.hud-ring')).animationDelay) * 1000;
     const stagger = [delay('h3'), delay('h5')];
     await new Promise(resolve => setTimeout(resolve, 65));
     project(source);
     const same = node('h3') === h3 && node('h4') === h4 && node('h5') === h5 &&
-      node('h3').querySelector('.hud-ring') === ring && ring.getAnimations()[0] === animation;
+      node('h3').querySelector('.hud-ring') === ring && ring.getAnimations({ subtree: true })[0] === animation;
     const advanced = animation?.currentTime - startTime;
     const changed = structuredClone(source);
     const h2 = changed.roots.find(r => r.id === 'h1').children.find(c => c.id === 'h2');
@@ -73,7 +73,7 @@ async function checkKeyedRebuild(frame) {
       node('h3').getAttribute('aria-label').includes('sym-extract-updated') &&
       node('h4') === h4 && node('h5') === h5;
     const thinkingDelay = delay('h3');
-    const oldH4Animation = h4.querySelector('.hud-ring').getAnimations()[0];
+    const oldH4Animation = h4.querySelector('.hud-ring').getAnimations({ subtree: true })[0];
     const oldH4Time = oldH4Animation?.currentTime;
     const oldClock = document.timeline.currentTime;
     h2.children = h2.children.filter(c => c.id !== 'h4');
@@ -81,7 +81,7 @@ async function checkKeyedRebuild(frame) {
     const removed = !node('h4') && node('h3') === h3;
     project(source);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const newH4Time = node('h4').querySelector('.hud-ring').getAnimations()[0]?.currentTime;
+    const newH4Time = node('h4').querySelector('.hud-ring').getAnimations({ subtree: true })[0]?.currentTime;
     const elapsed = document.timeline.currentTime - oldClock;
     const period = 1150;
     const drift = Number.isFinite(oldH4Time) && Number.isFinite(newH4Time)
@@ -90,7 +90,7 @@ async function checkKeyedRebuild(frame) {
     const remounted = node('h4') !== h4 && node('h3') === h3 && node('h5') === h5;
     carrier.textContent = original;
     return { same, advanced, stagger, reordered, updated, thinkingDelay, removed, remounted, drift,
-      animationName: getComputedStyle(ring).animationName };
+      animationName: getComputedStyle(ring, '::before').animationName };
   });
   assert.equal(result.same, true, 'stable keys preserve buttons, rings and running CSS animation');
   assert(result.advanced > 30 && result.advanced < 300, `animation advances across unchanged rebuild: ${result.advanced}`);

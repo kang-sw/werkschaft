@@ -446,21 +446,18 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 }
 .rail .rs.attn .hb::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent);
+  box-shadow: 0 0 0 3px var(--wb-accent-policy);
+  opacity: .25;
   animation: attn-breathe-ring 1s ease-in-out infinite;
 }
 .rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }
 .rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }
 @keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }
 @keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }
-@keyframes attn-flash-ring {
-  0%, 100% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent); }
-  50% { box-shadow: 0 0 0 4px var(--wb-accent-policy); }
-}
-@keyframes attn-breathe-ring {
-  0%, 100% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent); }
-  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent-policy) 85%, transparent); }
-}
+/* The ring's shadow is static and only its opacity moves, so the pulse stays
+   compositor-side (an animated box-shadow repaints on the main thread). */
+@keyframes attn-flash-ring { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes attn-breathe-ring { 0%, 100% { opacity: .25; } 50% { opacity: .85; } }
 :root[data-animation-paused] .rail .rs.attn::before,
 :root[data-animation-paused] .rail .rs.attn .hb::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
@@ -817,6 +814,7 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
   .bgbadge { animation: none; }
   .rail .sbn { animation: none; }
   .hb .hbr, .rail .hb.perm { animation: none; }
+  .hb .hbr::before { animation: none; }
   .rail .kidtog .i { transition: none; }
   .rail .drkwork { animation: none; }
 }

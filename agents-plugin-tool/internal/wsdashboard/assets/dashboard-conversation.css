@@ -341,8 +341,6 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .agpop .ahead:has(> .aclose:not([hidden])) .am { padding-right: 20px; }
 .agpop .ahead:hover > .aclose, .agpop .ahead:focus-within > .aclose { opacity: 1; }
 .agpop .aclose[hidden] { display: none; }
-@property --hud-spin-a { syntax: "<angle>"; inherits: false; initial-value: 28deg; }
-@property --hud-spin-b { syntax: "<angle>"; inherits: false; initial-value: 145deg; }
 .hud-node { position: relative; width: 24px; height: 24px; border-radius: 7px; padding: 0; border: 0; background: color-mix(in srgb, var(--wb-card) 72%, transparent); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: transform .12s ease, opacity .15s ease; }
 .hud-node:hover, .hud-node:focus-visible, .hud-node.is-hovered { transform: translateY(-1px); outline: none; }
 .hud-node:focus-visible { box-shadow: 0 0 0 1.5px var(--wb-primary); }
@@ -352,17 +350,23 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .hud-emblem[data-h="agy"]    { background: #3b7be8; color: #ffffff; }
 .hud-emblem[data-h="pi"]     { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
 .hud-ring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; z-index: 2; }
-.hud-node[data-state="thinking"] .hud-ring { padding: 1.5px; background: conic-gradient(from var(--hud-spin-a), var(--ring-think) 0deg 128deg, transparent 140deg 360deg), linear-gradient(color-mix(in srgb, var(--ring-think) 24%, transparent), color-mix(in srgb, var(--ring-think) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: hud-spin-think 1.15s linear infinite; }
-@keyframes hud-spin-think { to { --hud-spin-a: 388deg; } }
-.hud-node[data-state="tool"] .hud-ring { padding: 1.5px; background: conic-gradient(from var(--hud-spin-b), #7dd3fc 0deg 20deg, var(--ring-tool) 20deg 114deg, transparent 124deg 360deg), linear-gradient(color-mix(in srgb, var(--ring-tool) 24%, transparent), color-mix(in srgb, var(--ring-tool) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: hud-spin-tool .9s linear infinite; }
-@keyframes hud-spin-tool { to { --hud-spin-b: 505deg; } }
-.hud-node[data-state="holding"] .hud-ring { border: 1.5px solid var(--ring-hold); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-hold) 24%, transparent); animation: hud-hold-breathe 1.8s ease-in-out infinite; }
-@keyframes hud-hold-breathe { 0%, 100% { opacity: 1; box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-hold) 26%, transparent); } 50% { opacity: .34; box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--ring-hold) 12%, transparent); } }
+/* The conic arcs rotate on a pseudo-element under the ring's static mask (see
+   .hb .hbr in dashboard.css); the host keeps the static track. */
+.hud-node[data-state="thinking"] .hud-ring { padding: 1.5px; background: linear-gradient(color-mix(in srgb, var(--ring-think) 24%, transparent), color-mix(in srgb, var(--ring-think) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
+.hud-node[data-state="thinking"] .hud-ring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 28deg, var(--ring-think) 0deg 128deg, transparent 140deg 360deg); animation: hud-spin-think 1.15s linear infinite; animation-delay: inherit; }
+@keyframes hud-spin-think { to { transform: rotate(360deg); } }
+.hud-node[data-state="tool"] .hud-ring { padding: 1.5px; background: linear-gradient(color-mix(in srgb, var(--ring-tool) 24%, transparent), color-mix(in srgb, var(--ring-tool) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
+.hud-node[data-state="tool"] .hud-ring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 145deg, #7dd3fc 0deg 20deg, var(--ring-tool) 20deg 114deg, transparent 124deg 360deg); animation: hud-spin-tool .9s linear infinite; animation-delay: inherit; }
+@keyframes hud-spin-tool { to { transform: rotate(360deg); } }
+.hud-node[data-state="holding"] .hud-ring { border: 1.5px solid var(--ring-hold); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring-hold) 20%, transparent); animation: hud-hold-breathe 1.8s ease-in-out infinite; }
+@keyframes hud-hold-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .34; } }
 .hud-node[data-state="idle"] { opacity: .42; }
 .hud-node[data-state="idle"]:hover, .hud-node[data-state="idle"]:focus-visible, .hud-node[data-state="idle"].is-hovered { opacity: .8; }
 .hud-node[data-state="idle"] .hud-ring { border: 1.5px solid color-mix(in srgb, var(--wb-muted-fg) 42%, transparent); }
-.hud-node[data-state="permission"] .hud-ring { border: 1.5px solid var(--ring-perm); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring-perm) 26%, transparent); animation: hud-perm-pulse 1.15s ease-in-out infinite; }
-@keyframes hud-perm-pulse { 0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-perm) 35%, transparent); } 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring-perm) 18%, transparent); } }
+/* the halo is a static shadow on ::after whose opacity pulses (compositor-only) */
+.hud-node[data-state="permission"] .hud-ring { border: 1.5px solid var(--ring-perm); }
+.hud-node[data-state="permission"] .hud-ring::after { content: ""; position: absolute; inset: -1.5px; border-radius: inherit; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring-perm) 26%, transparent); animation: hud-perm-pulse 1.15s ease-in-out infinite; animation-delay: inherit; }
+@keyframes hud-perm-pulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
 .hud-node[data-state="failed"] .hud-ring { border: 1.5px solid var(--ring-fail); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring-fail) 24%, transparent); }
 .hud-badge { position: absolute; top: -3px; right: -3px; z-index: 4; width: 11px; height: 11px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font: 900 8px/1 var(--wb-sans); color: #fff; box-shadow: 0 0 0 1.5px var(--wb-card); pointer-events: none; }
 .hud-badge.perm { background: var(--ring-perm); color: #18181b; }
@@ -399,6 +403,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-cmp .d-now::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: tt-cmp-pulse 1.2s ease-in-out infinite; }
 @keyframes tt-cmp-pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .tt-cmp .d-now::before { animation: none; } }
+:root[data-animation-paused] .tt-cmp .d-now::before { animation-play-state: paused; }
 .tt-cmp .cnt { font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
