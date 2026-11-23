@@ -583,7 +583,17 @@
       "registered_at": "2026-11-23T00:31:15Z"
     },
     "261123-feat-companion-closed-eye-sticker-blink": {
-      "registered_at": "2026-11-23T12:29:11Z"
+      "registered_at": "2026-11-23T12:29:11Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T12:34:04Z",
+        "impl": {
+          "branch": "impl/develop/poker-foe-essay"
+        }
+      }
     },
     "261123-feat-ws-dashboard-board-topic-anchor-scroll": {
       "registered_at": "2026-11-23T02:37:10Z",
