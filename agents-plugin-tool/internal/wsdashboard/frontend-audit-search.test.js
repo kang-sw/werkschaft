@@ -132,7 +132,7 @@ function makeMockFetchEnv(handlers) {
   };
   vm.runInNewContext(winSrc.replace("buildSearchUrl: buildSearchUrl,", "bindUI: bindSearchUI, buildSearchUrl: buildSearchUrl,"), sandbox);
   sandbox.window.WsAuditSearch.bindUI(wrap);
-  return { api: sandbox.window.WsAuditSearch, sandbox, elements: { subBtn, statEl, listBox, retryBtn, footEl, hitsEl, inp, rxBtn: rx, csBtn: cs, kindSel } };
+  return { api: sandbox.window.WsAuditSearch, sandbox, elements: { subBtn, statEl, listBox, retryBtn, footEl, moreBtn, hitsEl, inp, rxBtn: rx, csBtn: cs, kindSel } };
 }
 
 test("buildSearchUrl encodes q, regex, case, optional kinds and cursor", () => {
@@ -336,6 +336,51 @@ test("append uses successful committed query and preserves hits for 400/503/netw
     assert.match(env.elements.statEl.textContent, /unavail/);
   }
 });
+test("an empty page that carries a cursor keeps Load more until the cursor is exhausted", async () => {
+  const urls = [];
+  const env = makeMockFetchEnv({fetch: async url => {
+    urls.push(url);
+    if (urls.length === 1) return response([], "c-budget");
+    if (urls.length === 2) return response([], "c-budget-2");
+    return response([hit], null);
+  }});
+  env.api.state().q = "old";
+  await env.api.executeSearch();
+  assert.equal(env.api.state().hits.length, 0);
+  assert.equal(env.elements.footEl.hidden, false, "More stays reachable on a zero-hit page");
+  assert.doesNotMatch(env.elements.statEl.textContent, /csearch\.empty/);
+  assert.match(env.elements.statEl.textContent, /hits_more:0/);
+  // A second zero-hit page still holds the cursor; the button drives the append.
+  env.elements.moreBtn.listeners.click[0]();
+  await flush();
+  assert.match(urls[1], /cursor=c-budget$/);
+  assert.equal(env.elements.footEl.hidden, false);
+  env.elements.moreBtn.listeners.click[0]();
+  await flush();
+  assert.match(urls[2], /cursor=c-budget-2$/);
+  assert.equal(env.api.state().hits.length, 1);
+  assert.equal(env.api.state().next, null);
+  assert.equal(env.elements.footEl.hidden, true);
+  // Only an exhausted cursor with no hit reads as "No matches".
+  const done = makeMockFetchEnv({fetch: async () => response([], null)});
+  done.api.state().q = "none";
+  await done.api.executeSearch();
+  assert.match(done.elements.statEl.textContent, /csearch\.empty/);
+  assert.equal(done.elements.footEl.hidden, true);
+  // A failed continuation on an empty list retries the cursor, not a restart.
+  let fail = true; const u2 = [];
+  const retry = makeMockFetchEnv({fetch: async url => { u2.push(url); if (u2.length === 1) return response([], "cc"); return fail ? {status:503,ok:false,text:async()=>""} : response([hit], null); }});
+  retry.api.state().q = "r";
+  await retry.api.executeSearch();
+  retry.elements.moreBtn.listeners.click[0]();
+  await flush();
+  assert.equal(retry.elements.retryBtn.hidden, false);
+  fail = false;
+  retry.elements.retryBtn.listeners.click[0]();
+  await flush();
+  assert.match(u2[2], /cursor=cc$/);
+  assert.equal(retry.api.state().hits.length, 1);
+});
 test("stored truncation numbers concatenated text in four seam variants and matches seam regex", () => {
   for (const [head,tail,target] of [["head","TAIL\nhit",2],["head\n","TAIL\nhit",3],["","TAIL\nhit",2],["hit","",1]]) {
     const ev = {in:head+tail,model_seen:true,stored_trunc:{in:{head_bytes:Buffer.byteLength(head),tail_bytes:Buffer.byteLength(tail),original_bytes:100}}};
@@ -344,8 +389,41 @@ test("stored truncation numbers concatenated text in four seam variants and matc
     assert.equal((res.html.match(/au-trunc-row/g)||[]).length,1);
     if (!head) assert.ok(res.html.indexOf("au-trunc-row") < res.html.indexOf("au-line"));
   }
-  const res = winHelpers.auRenderBodyContent({in:"headTAIL",stored_trunc:{in:{head_bytes:4,tail_bytes:4,original_bytes:99}}},"in",{search:"headTAIL$",regex:true});
-  assert.equal(res.matchCount,1);
+  // A match may not span the omitted middle (the server refuses it), though the
+  // line stays numbered as one concatenated line.
+  const seamEv = {in:"headTAIL",stored_trunc:{in:{head_bytes:4,tail_bytes:4,original_bytes:99}}};
+  for (const [search,regex] of [["headTAIL$",true],["adTA",true],["adTA",false],["head.*TAIL",true]]) {
+    const res = winHelpers.auRenderBodyContent(seamEv,"in",{search,regex,caseSensitive:true});
+    assert.equal(res.matchCount,0,search);
+    assert.equal((res.html.match(/au-lnum">/g)||[]).length,1);
+  }
+  // Each side still matches, and a spanning candidate does not hide a later match.
+  for (const [search,regex,want] of [["TAIL$",true,1],["^head",true,1],["ead",false,1],["a",false,1],["[a-z]{2}",true,2]]) {
+    const res = winHelpers.auRenderBodyContent(seamEv,"in",{search,regex,caseSensitive:true});
+    assert.equal(res.matchCount,want,search);
+  }
+  const lateMatch = winHelpers.auRenderBodyContent({in:"ababTAIL",stored_trunc:{in:{head_bytes:3,tail_bytes:5,original_bytes:99}}},"in",{search:"ba",regex:false,caseSensitive:true});
+  assert.equal(lateMatch.matchCount,1); // "ba" at 1..3 stays in the head; "ba" at 2..4 spans the seam
+});
+test("inspector regex follows RE2 syntax the server accepts: inline flags, anchors, classes", () => {
+  const ev = {in:"alpha FOO\nfoo bar\nA1 b2\nx.y\n"};
+  const count = (search, caseSensitive) => winHelpers.auRenderBodyContent(ev,"in",{search,regex:true,caseSensitive:!!caseSensitive});
+  assert.equal(count("(?i)foo",true).matchCount,2);   // server hit with case-sensitive on
+  assert.equal(count("foo",true).matchCount,1);
+  assert.equal(count("foo",false).matchCount,2);
+  assert.equal(count("(?-i)foo",false).matchCount,1);
+  assert.equal(count("\\Afoo",true).matchCount,1);   // the server matches line by line
+  assert.equal(count("\\Abar",true).matchCount,0);
+  assert.equal(count("^foo",true).matchCount,1);       // JS and RE2 agree: single-line
+  assert.equal(count("(?m)^foo",true).matchCount,1);
+  assert.equal(count("(?P<w>[[:alpha:]]+)\\d",true).matchCount,2);
+  assert.equal(count("\\pLoo",true).matchCount,1);
+  assert.equal(count("\\Qx.y\\E",true).matchCount,1);
+  assert.equal(count("\\x{62}\\d",true).matchCount,1);
+  assert.equal(count("(?s)a.p",true).matchCount,1);
+  // Unsupported constructs highlight nothing instead of guessing.
+  for (const q of ["(?U)a+", "a(?i:b)", "\\Cx", "[[:^alpha:]]", "(?P<n"]) assert.equal(count(q,true).matchCount,0,q);
+  assert.equal(winHelpers.auBuildSearchMatcher("(?U)a+",true,true),null);
 });
 test("CRLF regex matching trims CR while byte offsets retain CR and UTF8", () => {
   const lines = winHelpers.auSplitLinesWithBytes("é\r\nfoo\r\n***",0);

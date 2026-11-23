@@ -72,6 +72,9 @@ function makeFakeDOM() {
       this.tabIndex = 0;
       this.focused = false;
       this.id = '';
+      this.offsetHeight = 0;
+      // The bar-height sync writes a custom property onto the conversation el.
+      this.style = { props: Object.create(null), setProperty(k, v) { this.props[k] = String(v); } };
     }
     get isConnected() {
       let cur = this;

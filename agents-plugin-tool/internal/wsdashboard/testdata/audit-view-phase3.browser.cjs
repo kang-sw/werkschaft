@@ -197,6 +197,38 @@ async function runSearch(frame, query, opts = {}) {
       return s && !s.classList.contains("au-sstat-err") && document.querySelectorAll(".au-shit").length === 0;
     });
 
+    // 6b. A zero-hit page that carries a cursor (the server spent its scan budget before a hit) keeps
+    // Load more; the older hit arrives on the next page and "No matches" never shows in between.
+    const budgetHit = { event_id: "p3-ev-case", kind: "tool_result", field: "out", line_no: 2, line: "Exact CaseCheck_77 match", call_id: "p3-c-multi" };
+    await page.route("**/s/livesession/audit/search*", (route) => {
+      const u = new URL(route.request().url());
+      if (u.searchParams.get("q") !== "BUDGET_PAGE_QUERY") return route.fallback();
+      const body = u.searchParams.get("cursor") ? { hits: [budgetHit], next: null } : { hits: [], next: "budget-cursor-1" };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await runSearch(frame, "BUDGET_PAGE_QUERY", { regex: false, caseSensitive: false });
+    await frame.waitForSelector(".au-smore", { state: "visible" });
+    assert.equal(await frame.locator(".au-shit").count(), 0);
+    assert.doesNotMatch(await frame.locator(".au-slist-stat").textContent(), /No matches/);
+    if (SHOTS) {
+      fs.mkdirSync(SHOTS, { recursive: true });
+      await page.screenshot({ animations: "disabled", path: path.join(SHOTS, "search-more-after-empty-page.png") });
+    }
+    await frame.locator(".au-smore").click();
+    await frame.waitForSelector(".au-shit");
+    assert.equal(await frame.locator(".au-shit").count(), 1);
+    assert.equal(await frame.locator(".au-sfoot").evaluate((n) => n.hidden), true);
+
+    // 6c. A server-accepted RE2 query that JS spells differently ((?i) inline flag) still marks the inspector.
+    await runSearch(frame, "(?i)alpha_needle", { regex: true, caseSensitive: true });
+    await frame.waitForSelector(".au-shit");
+    await frame.locator(".au-shit").first().click();
+    await frame.waitForSelector(".au-win .au-hit");
+    assert.ok((await frame.locator(".au-win .au-hit").count()) > 0, "inspector marks a (?i) RE2 query the server matched");
+    if (SHOTS) {
+      await page.screenshot({ animations: "disabled", path: path.join(SHOTS, "inspector-re2-inline-flag.png") });
+    }
+
     // 7. Clear removes hit list and all row badges.
     await runSearch(frame, "ALPHA_NEEDLE");
     await frame.waitForSelector(".au-sbadge");
