@@ -48,6 +48,9 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, err
 	}
+	if req.ReadOnly && !within(realRoot, realCwd) {
+		return HostedView{}, refuse("the resolved working directory %q is outside the worktree root %q", realCwd, realRoot)
+	}
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)

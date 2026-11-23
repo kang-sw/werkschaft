@@ -577,7 +577,7 @@ func ReadOnlyShellLaunch(owner, tool, root, cwdArg, line string, environ []strin
 	if base := strings.ToLower(filepath.Base(shellArgv[0])); strings.HasPrefix(base, "bash") {
 		shellArgv = append([]string{shellArgv[0], "--noprofile", "--norc"}, shellArgv[1:]...)
 	}
-	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: shellArgv, Display: line, Command: line, Shell: shellArgv[0]}, nil
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, ReadOnly: true, Environ: env, Argv: shellArgv, Display: line, Command: line, Shell: shellArgv[0]}, nil
 }
 
 // ReadOnlyArgvLaunch is the exec.run launch of a read-only worker: argv's
@@ -596,5 +596,5 @@ func ReadOnlyArgvLaunch(owner, tool, root, cwd string, argv []string, environ []
 		return HostedLaunch{}, err
 	}
 	run := append([]string{bin}, argv[1:]...)
-	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: run}, nil
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, ReadOnly: true, Environ: env, Argv: run}, nil
 }
