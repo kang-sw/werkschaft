@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -330,7 +331,17 @@ func decodeReply(t *testing.T, body string) rpcReply {
 const initializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"claude-code","version":"2"}}}`
 
 func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
-	d, h, a := startHTTPProxyDaemon(t)
+	logFile, err := os.CreateTemp(t.TempDir(), "mcp-log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logFile.Close() })
+	h, a := &rpcHandler{}, &tokenAgents{}
+	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Home: t.TempDir(), Proxy: h, Agents: a, Log: logFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
 	a.issue("tok-a", httpTestHello("claude"))
 	if status, body, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", initializeBody); status != http.StatusOK {
 		t.Fatalf("valid token: %d %s", status, body)
@@ -343,6 +354,19 @@ func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
 	}
 	if h.count() != 1 {
 		t.Fatalf("sessions accepted = %d, want 1", h.count())
+	}
+	raw, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(raw)
+	for _, reason := range []string{"missing or malformed bearer", "token rejected", "token void"} {
+		if strings.Count(log, "dashboard: /mcp/session 401: "+reason+"\n") != 1 {
+			t.Errorf("expected one 401 log for %q", reason)
+		}
+	}
+	if strings.Contains(log, "tok-a") || strings.Contains(log, "tok-x") {
+		t.Fatal("401 diagnostics exposed a bearer")
 	}
 	// The route exists only with a token host.
 	plain := startProxyTestDaemon(t, &echoHandler{})

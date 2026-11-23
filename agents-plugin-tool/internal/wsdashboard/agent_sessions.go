@@ -73,6 +73,14 @@ type AgentMCPTokenHost interface {
 	ResolveMCPToken(token string) (hello ProxyHello, void <-chan struct{}, ok bool)
 }
 
+// AgentMCPTokenDiagnostics is an optional AgentMCPTokenHost that reports a
+// reason for a failed resolution. The HTTP route logs the reason locally,
+// so implementations must use fixed messages without request or record data.
+// An empty reason means the token resolved.
+type AgentMCPTokenDiagnostics interface {
+	ResolveMCPTokenWithReason(token string) (hello ProxyHello, void <-chan struct{}, reason string)
+}
+
 // AgentMCPCallHost is an optional AgentMCPTokenHost that counts the tool
 // calls in flight on a session token: MCPCallBegin starts one and returns
 // its end, which the route calls once the call is answered or abandoned

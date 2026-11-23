@@ -366,6 +366,9 @@ type Runner struct {
 	// token, and mcpTokenOf by conversation id.
 	mcpTokens  map[string]*mcpToken
 	mcpTokenOf map[string]string
+	// mcpWaitMisses correlates early timeouts with later worker restoration.
+	// It holds only bounded, ephemeral digests under mu.
+	mcpWaitMisses map[[32]byte]struct{}
 	// versions are the harness versions processes last reported, by
 	// backend (harness_versions.go).
 	versions *harnessVersions

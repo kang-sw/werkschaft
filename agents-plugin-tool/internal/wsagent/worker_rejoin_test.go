@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -663,6 +663,40 @@ func TestWorkerMCPTokenWaitsForStartupRejoin(t *testing.T) {
 	begin := time.Now()
 	if _, _, ok := h.runner.ResolveMCPToken("another-unknown"); ok || time.Since(begin) > time.Second {
 		t.Fatalf("after the rejoin an unknown token resolved (%v) or waited (%v)", ok, time.Since(begin))
+	}
+}
+
+func TestHeldWorkerMCPLogsMissedStartupWait(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendClaude)
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendClaude, "workdir-write")
+	token := h.record(id).MCPToken
+	if token == "" {
+		t.Fatal("held worker has no saved bearer")
+	}
+	h.runner.Close()
+	h.holders.restart()
+	entered, release := h.gateScan()
+	defer release()
+	previous := mcpRejoinWait
+	mcpRejoinWait = 20 * time.Millisecond
+	t.Cleanup(func() { mcpRejoinWait = previous })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "the startup scan to be held open", entered)
+
+	if _, _, reason := h.runner.ResolveMCPTokenWithReason(token); reason != "rejoin wait expired" {
+		t.Fatalf("miss during rejoin: %q", reason)
+	}
+	release()
+	wait(t, "rejoin", h.runner.rejoined)
+	if _, _, reason := h.runner.ResolveMCPTokenWithReason(token); reason != "" {
+		t.Fatalf("lookup after rejoin: %q", reason)
+	}
+	log := h.log.String()
+	if !strings.Contains(log, "agent "+id+": worker MCP rejoin: missed wait before restoration") {
+		t.Fatal("late restoration did not record the worker's missed wait")
+	}
+	if strings.Contains(log, token) {
+		t.Fatal("rejoin diagnostics exposed a bearer")
 	}
 }
 

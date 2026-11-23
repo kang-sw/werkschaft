@@ -174,7 +174,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 	if r.opts.Holders == nil {
 		// No holder to wait for.
 		r.markScanned()
-		r.rejoinOnce.Do(func() { close(r.rejoined) })
+		r.finishMCPRejoin()
 		return
 	}
 	r.wg.Add(1)
@@ -183,7 +183,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		r.opts.Holders.Scan()
 		r.markScanned()
 		r.holdersScanned()
-		r.rejoinOnce.Do(func() { close(r.rejoined) })
+		r.finishMCPRejoin()
 	}()
 }
 
