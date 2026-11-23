@@ -475,7 +475,3 @@ func renderSettingsPage(lang, theme string) (string, error) {
 	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{assets.data, theme})
 	return buf.String(), err
 }
-
-func (p shellPageData) Settings() bool {
-	return strings.HasPrefix(p.Src, "/settings?")
-}

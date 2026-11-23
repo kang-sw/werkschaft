@@ -99,8 +99,11 @@ test("settings links and frames keep the exact inspection identifiers", () => {
   ];
   for (const selection of origins) {
     const href = shell.settingsScopeHref("builtin", selection, () => "");
-    const frame = shell.framed(new URL(href, origin), origin);
-    const src = new URL(shell.src(frame), origin);
+    const url = new URL(href, origin);
+    const frame = shell.settingsFrame(url, origin);
+    const src = new URL(frame.src, origin);
+    assert.equal(shell.framed(url, origin), null);
+    assert.equal(shell.settingsFrame(url, "https://other.example"), null);
     assert.equal(src.pathname, "/settings");
     assert.equal(src.searchParams.get("scope"), "builtin");
     assert.equal(src.searchParams.get("target"), null);
@@ -108,8 +111,9 @@ test("settings links and frames keep the exact inspection identifiers", () => {
     assert.equal(src.searchParams.get("session"), selection.context.session || null);
     assert.equal(src.searchParams.get("frame"), "1");
     assert.equal(shell.pagePath(src) + src.hash, href);
-    assert.equal(shell.framed(src, origin).path, frame.path);
-    assert.equal(frame.rid, "");
+    assert.equal(src.searchParams.get("modal"), "1");
+    assert.equal(shell.settingsFrame(src, origin).href, href);
+    assert.equal(frame.href, href);
   }
 });
 
