@@ -573,6 +573,10 @@ func TestAdmitCompletionWaitsForTheNextTurnWithoutASteer(t *testing.T) {
 	if got := p.nextSent(t); got != h.envelope("first") {
 		t.Fatalf("first turn = %q", got)
 	}
+	eventually(t, "the first turn's input to leave the queue", func() bool {
+		st := h.state(id)
+		return st.Status == StatusRunning && st.Held == 0
+	})
 	owner, err := h.runner.ExecOwner(id)
 	if err != nil {
 		t.Fatal(err)
