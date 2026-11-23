@@ -585,16 +585,6 @@
         }
       }
     },
-    "261123-feat-ws-dashboard-composer-bang-history": {
-      "registered_at": "2026-11-23T04:36:05Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-23T07:46:06Z"
-      }
-    },
     "261123-feat-ws-dashboard-workflow-settings-modal": {
       "registered_at": "2026-11-23T07:07:30Z"
     }
