@@ -1227,3 +1227,55 @@ func TestCompanionArchiveZeroBudgetRefusesWithoutReading(t *testing.T) {
 		t.Fatalf("budget changed: %d", inflate.left)
 	}
 }
+
+// TestCompanionPackInstallClosedEyePlates pins the closed-eye plate install
+// path, and documents the older binary's view: a plate named only by the new
+// keys is not referenced, so the pack is refused; registering it under
+// head.mouths as an eyeclosed-* key restores it.
+func TestCompanionPackInstallClosedEyePlates(t *testing.T) {
+	png8 := companionTestPNG(t, 8, 8)
+	bundle := func(manifest string, files ...string) []byte {
+		entries := []companionZipEntry{
+			{name: "marketplace.json", data: companionTestMarket(companionTestEntry("kit", "packs/kit"))},
+			{name: "packs/kit/pack.json", data: []byte(manifest)},
+		}
+		for _, name := range files {
+			entries = append(entries, companionZipEntry{name: "packs/kit/" + name, data: png8})
+		}
+		return companionTestZip(t, entries...)
+	}
+	files := append(append([]string{}, companionKitFiles...), "closed-l.png", "closed-r.png", "round-closed-l.png", "round-closed-r.png")
+	full := companionClosedFixture(t, nil)
+	result, err := companionTestRun(new(CompanionPackStore), t.TempDir(), bundle(full, files...), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kit := companionListed(result, "kit"); kit == nil || !kit.Installed || kit.Error != nil {
+		t.Fatalf("pack with closed plates: %+v", kit)
+	}
+
+	// What an older validator sees: the new keys are unknown, and the mouth
+	// registration is gone, so the plate files are unreferenced.
+	oldView := strings.NewReplacer(`"closedL":"closed-l.png",`, ``, `"closedR":"closed-r.png"`, `"x":1`,
+		`"closedL":"round-closed-l.png","closedR":"round-closed-r.png",`, ``,
+		`"mouths":{"eyeclosed-kit-L":"closed-l.png","eyeclosed-kit-R":"closed-r.png","eyeclosed-round-L":"round-closed-l.png","eyeclosed-round-R":"round-closed-r.png"}`, `"mouths":{}`).Replace(full)
+	result, err = companionTestRun(new(CompanionPackStore), t.TempDir(), bundle(oldView, files...), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kit := companionListed(result, "kit"); kit == nil || kit.Installed || kit.Error == nil || !strings.Contains(kit.Error.Message, "not referenced") {
+		t.Fatalf("plates named only by unknown keys = %+v, want the pack refused", kit)
+	}
+
+	// The shim form: an older validator ignores the closed keys but still
+	// collects the plates through head.mouths, so the pack installs.
+	shimView := strings.NewReplacer(`"closedL":"closed-l.png",`, ``, `"closedR":"closed-r.png"`, `"x":1`,
+		`"closedL":"round-closed-l.png","closedR":"round-closed-r.png",`, ``).Replace(full)
+	result, err = companionTestRun(new(CompanionPackStore), t.TempDir(), bundle(shimView, files...), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kit := companionListed(result, "kit"); kit == nil || !kit.Installed || kit.Error != nil {
+		t.Fatalf("head.mouths registered form: %+v", kit)
+	}
+}

@@ -3,7 +3,7 @@
   const base = "/api/companion/packs";
   const layerFields = ["file", "line", "jacketFill", "accentFill", "skinFill", "detail", "hairFill"];
   const eyeFields = ["sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR",
-    "lidLashL", "lidLashR", "browL", "browR"];
+    "lidLashL", "lidLashR", "browL", "browR", "closedL", "closedR"];
 
   function own(obj, key) { return obj && Object.hasOwn(obj, key) ? obj[key] : undefined; }
   function values(obj) { return Object.values(obj || {}); }

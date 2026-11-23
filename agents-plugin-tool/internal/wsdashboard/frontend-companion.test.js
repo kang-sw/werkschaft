@@ -1783,13 +1783,13 @@ test("companion loader fetches every paper-doll raster the server enumerates", a
   const requested = [];
   const manifestData = {
     id: "kit", schema: "ws-companion/v1", canvas: [512, 512],
-    head: {egg: {skinFill: "egg.png", fills: {blush: "blush.png"}}},
+    head: {egg: {skinFill: "egg.png", fills: {blush: "blush.png"}}, eyes: {sclera: "h-sclera.png", closedL: "h-closed-l.png", closedR: "h-closed-r.png"}},
     hairs: {bob: {front: {line: "hair.png", fills: {tip: "tip.png"}}}},
     poses: {stand: {layers: [{line: "stand.png", fills: {trim: "trim.png"}}]}},
     outfits: {o: {poses: {stand: {layers: [{fills: {skin: "o-skin.png"}}, {fps: 2, frames: [{fills: {skin: "o-frame.png"}}, "o-frame2.png"]}]}},
       gestures: {wave: {layers: [{line: "o-wave.png"}]}}}},
     attachments: {t: {layers: [{file: "t.png"}], columns: {stand: {layers: [{fills: {hair: "t-col.png"}}]}}}},
-    eyesets: {round: {sclera: "r-sclera.png", irisFill: "r-iris.png", note: "ignored.png"}},
+    eyesets: {round: {sclera: "r-sclera.png", irisFill: "r-iris.png", closedL: "r-closed-l.png", closedR: "r-closed-r.png", note: "ignored.png"}},
     future: {file: "never.png"}
   };
   const { packLoader } = companion({
@@ -1804,8 +1804,8 @@ test("companion loader fetches every paper-doll raster the server enumerates", a
     createImageBitmap: async () => ({width: 512, height: 512, close() {}})
   });
   await new Promise((done, fail) => packLoader(done, () => fail(new Error("unexpected failure"))).load("kit", {}));
-  assert.deepEqual(requested.sort(), ["blush.png", "egg.png", "hair.png", "o-frame.png", "o-frame2.png", "o-skin.png", "o-wave.png",
-    "r-iris.png", "r-sclera.png", "stand.png", "t-col.png", "t.png", "tip.png", "trim.png"]);
+  assert.deepEqual(requested.sort(), ["blush.png", "egg.png", "h-closed-l.png", "h-closed-r.png", "h-sclera.png", "hair.png", "o-frame.png", "o-frame2.png", "o-skin.png", "o-wave.png",
+    "r-closed-l.png", "r-closed-r.png", "r-iris.png", "r-sclera.png", "stand.png", "t-col.png", "t.png", "tip.png", "trim.png"]);
 });
 
 function focusHarness(visibility = "visible") {

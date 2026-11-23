@@ -378,3 +378,77 @@ test("the synthetic dangle fixture chains hip and knee, pins the hands under the
   assert.ok(ys.some(y => Math.abs(y - 148) < 1e-6), `the head rides the breath by half the lift: ${JSON.stringify(ys)}`);
   assert.ok(bitmaps.size >= 4);
 });
+
+// eyePack is an IP-clean 16 x 16 pack whose head carries the full open eye
+// stack; closed adds the two sticker plates, mouths adds the shim entries.
+function eyePack(closed, expression = {}, mouths = undefined) {
+  const names = ["egg", "legacy", "sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR", "lidLashL", "lidLashR",
+    "browL", "browR", "closedL", "closedR", "shim"];
+  const eyes = { sclera: "sclera.png", irisFill: "irisFill.png", irisLine: "irisLine.png", frameLower: "frameLower.png",
+    lidCoverL: "lidCoverL.png", lidCoverR: "lidCoverR.png", lidLashL: "lidLashL.png", lidLashR: "lidLashR.png",
+    browL: "browL.png", browR: "browR.png" };
+  if (closed) Object.assign(eyes, { closedL: "closedL.png", closedR: "closedR.png" });
+  const manifest = {
+    canvas: [16, 16],
+    head: { pivot: [8, 4], egg: { file: "egg.png" }, eyes, mouths },
+    poses: { stand: { headAnchor: [8, 4], layers: [{ file: "legacy.png" }] } },
+    gestures: {},
+    expressions: { idle: expression }
+  };
+  return { manifest, bitmaps: new Map(names.map(id => [id + ".png", { id: id + ".png" }])) };
+}
+
+// blinkFrame renders at time t and returns the drawn bitmap IDs and the y
+// offsets of the lid pieces, in call order.
+function blinkFrame(pack, t) {
+  const rec = recorder();
+  const view = companion({ OffscreenCanvas: rec.Canvas }).makeRig(pack, null, "").view("stand", null, "idle", []);
+  rec.clear();
+  view.render(t, gaze);
+  // Tinted rasters (the iris fill, lid covers) are anonymous canvases: they show as "tint".
+  return rec.log.filter(entry => entry.op === "drawImage" && entry.c === 0 || entry.op === "drawImage" && entry.image?.id)
+    .map(entry => (entry.image.id ? entry.image.id.replace(".png", "") : "tint") + (entry.args[1] ? "@" + entry.args[1].toFixed(4) : ""));
+}
+
+test("a pack with both closed plates swaps the open eye stack for them at the blink peak", () => {
+  // cycle = t * 0.23 % 1; the blink peaks at cycle 0.82 and is 0.5 at 0.82 +- 1/56.
+  const peak = 0.82 / 0.23, ramp = (0.82 - 0.5 / 28 - 0.01) / 0.23;
+  const open = blinkFrame(eyePack(true), 0);
+  assert.ok(!open.some(id => id.startsWith("closed")), `open frame draws no plate: ${open}`);
+  const mid = blinkFrame(eyePack(true), ramp);
+  assert.ok(!mid.some(id => id.startsWith("closed")), `below 0.5 draws no plate: ${mid}`);
+  assert.ok(mid.some(id => id.startsWith("lidLashL@")), "below 0.5 keeps the rigid slide");
+  const shut = blinkFrame(eyePack(true), peak);
+  // The whole closed frame: no sclera, iris, lash or tinted lid cover, only the plates over the base.
+  assert.deepEqual(shut.slice(shut.indexOf("egg")), ["egg", "frameLower", "closedL", "closedR", "browL", "browR"]);
+  assert.deepEqual(open.slice(open.indexOf("egg")),
+    ["egg", "sclera", "irisLine", "sclera", "tint", "frameLower", "tint", "lidLashL", "browL", "tint", "lidLashR", "browR"]);
+});
+
+test("a pack without both plates blinks with the rigid lid slide, and a lone side never swaps", () => {
+  const peak = 0.82 / 0.23;
+  for (const pack of [eyePack(false), (() => { const p = eyePack(true); delete p.manifest.head.eyes.closedR; return p; })()]) {
+    const shut = blinkFrame(pack, peak);
+    assert.deepEqual(shut.filter(id => id.startsWith("closed")), []);
+    assert.ok(shut.includes("sclera"), "the open stack stays");
+    assert.ok(shut.includes("lidLashL@0.5600") && shut.includes("lidLashR@0.5600"), `rigid translation 16 * 0.035 * 1: ${shut}`);
+  }
+});
+
+test("a held lid swaps the plates only at 0.95 and never from a half lid plus a small blink", () => {
+  const held = lid => blinkFrame(eyePack(true, { lid }), 0);
+  assert.deepEqual(held(0.6).filter(id => id.startsWith("closed")), []);
+  assert.ok(held(0.6).some(id => id.startsWith("lidLashL@")), "a half lid keeps the slide");
+  assert.deepEqual(held(1).filter(id => id.startsWith("closed")), ["closedL", "closedR"]);
+  // A wink (one side held) stays on the rigid path.
+  assert.deepEqual(blinkFrame(eyePack(true, { lidL: 1 }), 0).filter(id => id.startsWith("closed")), []);
+  // A held 0.6 with a blink of 0.3 is not a swap.
+  const cycle = (0.82 - 0.7 / 28) / 0.23;
+  assert.deepEqual(blinkFrame(eyePack(true, { lid: 0.6 }), cycle).filter(id => id.startsWith("closed")), []);
+});
+
+test("an eyeclosed-* mouth entry is never drawn as a mouth", () => {
+  const mouths = { "eyeclosed-default-L": "shim.png", idle: "egg.png" };
+  assert.ok(!blinkFrame(eyePack(true, {}, mouths), 0).includes("shim"));
+  assert.ok(!blinkFrame(eyePack(true, { mouth: "eyeclosed-default-L" }, { "eyeclosed-default-L": "shim.png" }), 0).includes("shim"));
+});
