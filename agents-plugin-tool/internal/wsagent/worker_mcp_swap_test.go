@@ -44,6 +44,8 @@ func (workerSwapProxy) Serve(_ context.Context, stream io.ReadWriteCloser) {
 }
 
 func TestHeldClaudeWorkerMCPAcrossDashboardReplacement(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	h, _ := workerRecoveryHarness(t, BackendClaude)
 	h.runner.Close()
 	python := lookPython(t)
@@ -118,7 +120,7 @@ for line in sys.stdin:
 	defer client.CloseIdleConnections()
 	post := func(url, method string) (int, error) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":%q}`, method)))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":%q}`, method)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -149,7 +151,7 @@ for line in sys.stdin:
 
 	shutdown := func() {
 		t.Helper()
-		if err := wsdashboard.RequestShutdown(t.Context(), client, daemon.Endpoint()); err != nil {
+		if err := wsdashboard.RequestShutdown(ctx, client, daemon.Endpoint()); err != nil {
 			t.Fatal(err)
 		}
 		daemon.Close()

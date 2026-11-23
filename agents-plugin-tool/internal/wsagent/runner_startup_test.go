@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 )
 
 func TestDashboardPublishesAfterWorkerRejoinBeforeClosedPresentation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	h, _ := workerRecoveryHarness(t, BackendClaude)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -94,7 +97,7 @@ func TestDashboardPublishesAfterWorkerRejoinBeforeClosedPresentation(t *testing.
 		t.Fatal("initially published daemon did not restore the held worker")
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	if _, err := wsdashboard.Health(t.Context(), client, daemon.Endpoint()); err != nil {
+	if _, err := wsdashboard.Health(ctx, client, daemon.Endpoint()); err != nil {
 		t.Fatalf("health with presentation blocked: %v", err)
 	}
 	parent := ParentRef{Kind: ParentConversation, ReplyID: worker}
