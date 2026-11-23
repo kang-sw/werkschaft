@@ -397,7 +397,14 @@
       "registered_at": "2026-11-14T15:00:37Z"
     },
     "261115-bug-pi-print-mode-empty-after-subagent-push": {
-      "registered_at": "2026-11-14T23:55:38Z"
+      "registered_at": "2026-11-14T23:55:38Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:36:08Z"
+      }
     },
     "261115-bug-ws-claude-binary-provenance-and-resume-model": {
       "registered_at": "2026-11-14T23:28:48Z"
