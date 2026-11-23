@@ -513,7 +513,17 @@
       }
     },
     "261122-feat-ws-builtin-agent-harness": {
-      "registered_at": "2026-11-22T08:45:27Z"
+      "registered_at": "2026-11-22T08:45:27Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "active",
+        "touched_at": "2026-11-23T14:01:29Z",
+        "impl": {
+          "branch": "impl/track/harness/viral-fame-kung"
+        }
+      }
     },
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
