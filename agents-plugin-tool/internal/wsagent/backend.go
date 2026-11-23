@@ -97,6 +97,7 @@ type StartSpec struct {
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
 	RecoveredSteers []string
+	recoverExec     func(context.Context, string) (string, error)
 	restoredUsage   *wslive.Usage
 
 	// reattachedPromptAfter is the holder sequence before the worker's

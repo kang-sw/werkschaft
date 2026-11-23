@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsfs"
@@ -105,9 +106,9 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
 		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
-		Endpoint: endpoint,
-		WS:       &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
-		Emit:     p.emit,
+		Endpoint: endpoint, RecoverExec: spec.recoverExec,
+		WS:   &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
+		Emit: p.emit,
 	})
 	if err != nil {
 		cancel()
@@ -129,6 +130,17 @@ func (p *werkLoop) recordFileCall(ctx context.Context, call wsfs.FileCall) error
 		return err
 	}
 	return p.agent.RecordFileCall(ctx, call)
+}
+
+type execLaunchRecorder interface {
+	recordExecLaunch(context.Context, execjob.ModelLaunch) error
+}
+
+func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) error {
+	if err := p.ctx.Err(); err != nil {
+		return err
+	}
+	return p.agent.RecordExecLaunch(ctx, call)
 }
 
 func (p *werkLoop) run(a *werk.Agent) {

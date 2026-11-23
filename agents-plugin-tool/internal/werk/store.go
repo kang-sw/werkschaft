@@ -76,6 +76,12 @@ type fileIntentLine struct {
 	Intent *wsfs.FileIntent `json:"intent"`
 }
 
+type execJobLine struct {
+	K      string `json:"k"`
+	CallID string `json:"call_id"`
+	JobID  string `json:"job_id"`
+}
+
 // Store is one session's conversation file.
 type Store struct {
 	mu          sync.Mutex
@@ -86,6 +92,7 @@ type Store struct {
 	lock        *flock.Flock
 	now         func() int64
 	fileIntents map[string]wsfs.FileIntent
+	execJobs    map[string]string
 	turnJournal turnJournal
 }
 
@@ -127,6 +134,7 @@ func OpenStore(dir, session string, now func() int64) (*Store, []json.RawMessage
 func openStore(dir, session, path string, now func() int64) (*Store, []json.RawMessage, error) {
 	s := &Store{dir: dir, session: session, path: path, now: now}
 	s.fileIntents = make(map[string]wsfs.FileIntent)
+	s.execJobs = make(map[string]string)
 	items, keep, err := s.readSegment()
 	if err != nil {
 		return nil, nil, err
@@ -192,6 +200,7 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 			var l struct {
 				fileIntentLine
 				TurnID   string          `json:"turn_id"`
+				JobID    string          `json:"job_id"`
 				SteerID  string          `json:"steer_id"`
 				User     json.RawMessage `json:"user"`
 				End      *durableEnd     `json:"end"`
@@ -216,6 +225,7 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 				}
 				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items)}
 				clear(s.fileIntents)
+				clear(s.execJobs)
 				items = append(items, l.User)
 			case l.K == "turn_steer" && l.SteerID != "" && len(l.User) > 0:
 				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {
@@ -230,6 +240,8 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 				s.turnJournal.end = l.End
 			case l.K == "file_intent" && l.CallID != "" && l.Intent != nil:
 				s.fileIntents[l.CallID] = *l.Intent
+			case l.K == "exec_job" && l.CallID != "" && l.JobID != "":
+				s.execJobs[l.CallID] = l.JobID
 			default:
 				return items, good, nil
 			}

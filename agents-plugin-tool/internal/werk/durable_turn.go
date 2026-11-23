@@ -220,6 +220,11 @@ func (a *Agent) recoverToolCalls(ctx, host context.Context, turn int, journal *t
 		if intent, ok := a.store.fileIntents[call.CallID]; ok && canonicalFileTool(call.Name) != "" {
 			output = "Recovered file mutation: " + intent.Outcome() + ". The tool was not run again."
 		}
+		if job := a.store.execJobs[call.CallID]; job != "" && canonicalExecLaunch(call.Name) != "" && a.cfg.RecoverExec != nil {
+			if text, err := a.cfg.RecoverExec(ctx, job); err == nil {
+				output = "Recovered exec launch:\n" + text
+			}
+		}
 		a.append(functionOutputItem(call.CallID, output))
 	}
 	if len(pending) != 0 {

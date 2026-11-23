@@ -316,6 +316,10 @@ func (h *Hosted) Start() {
 			// start and the first row), or of a job this daemon pruned.
 			h.logf("stopping exec holder %s: no job owns it", info.ID)
 			go h.retireOld(execID, info.ID)
+		case owned && !ended && info.Attached && info.Child != nil && info.Child.State == "none":
+			// A correlated launch may have committed its holder before
+			// Spawn. No command reached a holder that reports no child.
+			h.failStart(j, info.ID, errors.New("exec: the daemon ended before the command started"))
 		case ended:
 			// Its job's end was stored, and the daemon went before the
 			// holder's stop.
@@ -736,16 +740,16 @@ func (h *Hosted) snapLocked(j *hostedJob) (HostedJobRow, uint64) {
 // save stores j's snapshot row numbered rev, unless a later one is stored
 // already: the writes run outside h.mu, so a running row taken before the
 // job's end can reach save after the end's row did.
-func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
+func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) error {
 	j.saveMu.Lock()
 	defer j.saveMu.Unlock()
 	if rev <= j.saved {
-		return
+		return nil
 	}
 	j.saved = rev
 	if err := h.opts.Store.Put(row); err != nil {
 		h.logf("store job %s: %v", row.ID, err)
-		return
+		return err
 	}
 	if row.Terminal() && !j.endStored {
 		j.endStored = true
@@ -754,6 +758,7 @@ func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
 			h.removeExitCopy(row.ID)
 		}
 	}
+	return nil
 }
 
 // dropExitCopy removes j's exit copy once a terminal row of j is stored.
@@ -915,6 +920,9 @@ type HostedLaunch struct {
 	// the callback must be all-or-nothing: it returns an error only when nothing
 	// reached the owner or the client, never after a partial publication.
 	OnConvert func(HostedView) error
+	// BindJob commits a trusted caller's association with the allocated
+	// job before its holder launch. A failed binding prevents the launch.
+	BindJob func(jobID string) error
 	// Origin is who launched it: OriginUser for the composer's own `!`
 	// command, else (empty) the agent's tool. Kept in memory for the job
 	// list and the stop notice's route.

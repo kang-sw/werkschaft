@@ -15,7 +15,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
-func rawFileToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
+func rawCorrelatedToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{"name": name, "arguments": arguments, "_meta": map[string]string{mcpframe.ToolCallIDMeta: callID}})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestFileWriteToolsRequireTrustedWerkWriteAuthority(t *testing.T) {
 					t.Errorf("%s listed = %v, want %v", tool, listed, tc.want)
 				}
 			}
-			text, failed := rawFileToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"})
+			text, failed := rawCorrelatedToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"})
 			if failed == tc.want {
 				t.Fatalf("fs.write = %v, %s", failed, text)
 			}
@@ -99,18 +99,18 @@ func TestFileWriteToolsResolveWorkingDirectoryAndRefuseUnrecordedCalls(t *testin
 	s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk, FileWrites: binding})
 	edit := map[string]any{"path": "edit.txt", "edits": []map[string]string{{"oldText": "old", "newText": "new"}}}
 	for _, id := range []string{"", "unknown"} {
-		if text, failed := rawFileToolCall(t, s, "fs.edit", id, edit); !failed {
+		if text, failed := rawCorrelatedToolCall(t, s, "fs.edit", id, edit); !failed {
 			t.Fatalf("edit with call %q: %s", id, text)
 		}
 	}
-	if text, failed := rawFileToolCall(t, s, "fs.edit", "okay", edit); failed || !strings.Contains(text, "-old") || !strings.Contains(text, "+new") {
+	if text, failed := rawCorrelatedToolCall(t, s, "fs.edit", "okay", edit); failed || !strings.Contains(text, "-old") || !strings.Contains(text, "+new") {
 		t.Fatalf("recorded edit = %v, %s", failed, text)
 	}
 	if data, err := os.ReadFile(filepath.Join(cwd, "edit.txt")); err != nil || string(data) != "new\n" {
 		t.Fatalf("edited target = %q, %v", data, err)
 	}
 	target := filepath.Join(outside, "escaped")
-	if text, failed := rawFileToolCall(t, s, "fs.write", "okay", map[string]any{"path": target, "content": "forbidden"}); !failed || !strings.Contains(text, "outside the session's worktree") {
+	if text, failed := rawCorrelatedToolCall(t, s, "fs.write", "okay", map[string]any{"path": target, "content": "forbidden"}); !failed || !strings.Contains(text, "outside the session's worktree") {
 		t.Fatalf("write outside = %v, %s", failed, text)
 	}
 }
@@ -139,7 +139,7 @@ func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
 	if !s.fsReadTools() || s.fileWriteTools() || !s.refuseBoundReadOnlyExec("exec.run") {
 		t.Fatal("the bound connection did not become read-only")
 	}
-	if text, failed := rawFileToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"}); !failed {
+	if text, failed := rawCorrelatedToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"}); !failed {
 		t.Fatalf("the old connection accepted a direct write: %s", text)
 	}
 	if _, err := os.Stat(filepath.Join(root, "test.txt")); !os.IsNotExist(err) {

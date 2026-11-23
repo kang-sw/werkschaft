@@ -67,6 +67,7 @@ type Config struct {
 	Instructions string
 	Endpoint     Responder
 	WS           WSTools
+	RecoverExec  func(context.Context, string) (string, error)
 	Out          io.Writer
 	// Emit receives typed events for a daemon host. When provided it replaces
 	// the legacy writer; calls are serialized even during parallel tool reads.
@@ -111,6 +112,8 @@ var parallelMCP = map[string]bool{
 	"git_merge_base": true, "api_list": true, "project_tree": true, "runtime_read": true,
 	"todo_list": true, "todo_read": true, "mailbox_recipients": true,
 	"fs_read": true, "fs_grep": true, "fs_list": true,
+	"exec_list": true, "exec_tail": true, "exec_status": true, "exec_result": true,
+	"exec_raw_tail": true, "exec_raw_read": true, "exec_raw_grep": true,
 }
 
 // execLaunchTools are the ws tools that start or feed a process. A read-only
@@ -147,8 +150,8 @@ type Agent struct {
 	out   *emitter
 	now   func() time.Time
 
-	fileMu   sync.Mutex
-	fileCall *activeFileCall
+	mutationMu   sync.Mutex
+	mutationCall *activeMutationCall
 
 	mu         sync.Mutex
 	model      string
@@ -983,8 +986,12 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	var res CallResult
 	var err error
 	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
-		if tool := canonicalFileTool(e.ws); tool != "" {
-			end, err := a.beginFileCall(ctx, c.CallID, tool, args)
+		tool := canonicalFileTool(e.ws)
+		if tool == "" {
+			tool = canonicalExecLaunch(e.ws)
+		}
+		if tool != "" {
+			end, err := a.beginMutationCall(ctx, c.CallID, tool, args)
 			if err != nil {
 				return "Error: " + err.Error(), true
 			}

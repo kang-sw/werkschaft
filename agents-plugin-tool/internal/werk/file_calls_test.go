@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
@@ -96,5 +97,42 @@ func TestFileCallRecordsOnlyMatchingIntentBeforeMutation(t *testing.T) {
 				t.Fatalf("replayed intent has outcome %q and prior %v", intent.Outcome(), intent.Prior)
 			}
 		})
+	}
+}
+
+func TestExecLaunchRecordsOnlyMatchingCall(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	a, err := New(Config{Dir: dir, Authority: AuthorityWorkdirWrite, Endpoint: &scripted{}})
+	must(t, err)
+	defer a.Close()
+	call := execjob.ModelLaunch{ID: "c", Tool: "exec.run", JobID: "job", Arguments: json.RawMessage(`{"exe":"printf"}`)}
+	if a.RecordExecLaunch(ctx, call) == nil {
+		t.Fatal("an unsolicited call was recorded")
+	}
+	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments)
+	must(t, err)
+	for _, wrong := range []execjob.ModelLaunch{
+		{ID: "wrong", Tool: call.Tool, JobID: call.JobID, Arguments: call.Arguments},
+		{ID: call.ID, Tool: "exec.shell", JobID: call.JobID, Arguments: call.Arguments},
+		{ID: call.ID, Tool: call.Tool, JobID: call.JobID, Arguments: json.RawMessage(`{"exe":"other"}`)},
+		{ID: call.ID, Tool: call.Tool, Arguments: call.Arguments},
+	} {
+		if a.RecordExecLaunch(ctx, wrong) == nil {
+			t.Errorf("a mismatched call was recorded: %+v", wrong)
+		}
+	}
+	must(t, a.RecordExecLaunch(ctx, call))
+	call.JobID = "duplicate"
+	if a.RecordExecLaunch(ctx, call) == nil {
+		t.Error("a duplicate call was recorded")
+	}
+	done()
+	must(t, a.Close())
+	store, _, err := OpenStore(dir, a.Session(), nil)
+	must(t, err)
+	defer store.Close()
+	if job := store.execJobs[call.ID]; job != "job" {
+		t.Fatalf("associated job = %q", job)
 	}
 }

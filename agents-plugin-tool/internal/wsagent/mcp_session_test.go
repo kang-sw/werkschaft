@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
@@ -750,6 +751,7 @@ func TestClaudeLeadRejoinBrokenMCPCurrentRouteWaitsForIdlePoint(t *testing.T) {
 type recordingMCPProcess struct {
 	Process
 	fileCalls int
+	execCalls int
 	submitted chan<- durableTurnInput
 }
 
@@ -763,6 +765,44 @@ func (p *recordingMCPProcess) submitTurn(id, text string, _ []durableSteer) erro
 func (p *recordingMCPProcess) recordFileCall(context.Context, wsfs.FileCall) error {
 	p.fileCalls++
 	return nil
+}
+
+func (p *recordingMCPProcess) recordExecLaunch(context.Context, execjob.ModelLaunch) error {
+	p.execCalls++
+	return nil
+}
+
+func TestDurableMCPExecBindingTracksAuthorityAndRevocation(t *testing.T) {
+	root := t.TempDir()
+	r := NewRunner(Options{Dir: t.TempDir(), Backends: map[string]BackendRegistration{
+		"fixture": {ProcessKind: ProcessDurable},
+	}})
+	r.SetEndpoint("http://127.0.0.1:1")
+	rec := Record{ReplyID: "child", Backend: "fixture", Root: root}
+	proc := &recordingMCPProcess{}
+	c := &conv{r: r, rec: rec, proc: proc, workerPermissionLevel: PermissionWorkdirWrite}
+	session := r.attachMCP(rec.ReplyID, "", nil, root, 0, rec.Backend)
+	c.bindDurableMCP(session, rec, proc, PermissionWorkdirWrite)
+	session.Started(nil, 0)
+	hello, void, ok := r.ResolveMCPToken(session.Token)
+	if !ok || hello.Conversation != rec.ReplyID || hello.RecordExecLaunch == nil {
+		t.Fatal("the bearer did not resolve to its exec binding")
+	}
+
+	ctx := context.Background()
+	launch := execjob.ModelLaunch{ID: "call", Tool: "exec.run", JobID: "job"}
+	if err := hello.RecordExecLaunch(ctx, launch); err != nil || proc.execCalls != 1 {
+		t.Fatalf("admitted launch = %v, recorder called %d times", err, proc.execCalls)
+	}
+	c.setStatus(func() { c.workerPermissionLevel = PermissionReadOnly })
+	if err := hello.RecordExecLaunch(ctx, launch); err == nil || proc.execCalls != 1 {
+		t.Fatal("the read-only session recorded a launch")
+	}
+	c.setStatus(func() { c.workerPermissionLevel = PermissionWorkdirWrite })
+	r.revokeToken(rec.ReplyID)
+	if err := hello.RecordExecLaunch(ctx, launch); !isClosed(void) || err == nil || proc.execCalls != 1 {
+		t.Fatal("the revoked session recorded a launch")
+	}
 }
 
 func TestDurableMCPFileBindingTracksLiveAuthorityAndRevocation(t *testing.T) {

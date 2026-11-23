@@ -116,7 +116,8 @@ type ServerOptions struct {
 	Conversation string
 	// FileWrites is the bound session's filesystem context and durable
 	// intent recorder. A launcher hello never supplies it.
-	FileWrites *FileWriteSession
+	FileWrites       *FileWriteSession
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error
 	// ExecCutover is the bound conversation's harness when its process
 	// launched under the exec cutover (wsdashboard.ProxyHello.ExecCutover);
 	// empty otherwise and on every launcher connection.
@@ -226,6 +227,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.recordExecLaunch = opts.RecordExecLaunch
 		if opts.FileWrites != nil {
 			binding := *opts.FileWrites
 			s.fileWrites = &binding

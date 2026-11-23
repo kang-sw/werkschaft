@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
@@ -90,6 +91,8 @@ type ProxyHello struct {
 	// FileWrites is populated with the authority and recorder of the
 	// live in-daemon process by its own token resolution.
 	FileWrites *wsfs.FileWriteSession `json:"-"`
+	// RecordExecLaunch comes from the same trusted in-daemon binding.
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error `json:"-"`
 }
 
 // ProxyAccept is the daemon's one-line answer to the hello: accepted, and

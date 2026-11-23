@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
@@ -89,8 +90,9 @@ type mcpToken struct {
 	connected chan struct{}
 	// cutover is the backend of a process started under the exec cutover
 	// (markMCPCutover), "" otherwise.
-	cutover    string
-	fileWrites *wsfs.FileWriteSession
+	cutover          string
+	fileWrites       *wsfs.FileWriteSession
+	recordExecLaunch func(context.Context, execjob.ModelLaunch) error
 }
 
 // newMCPToken draws a token, or "" when no random source answers.
@@ -214,6 +216,26 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		}
 	}
 	t.fileWrites = files
+	t.recordExecLaunch = func(ctx context.Context, call execjob.ModelLaunch) error {
+		canLaunch := func() bool {
+			level := authority()
+			return level == wsfs.AuthorityWorkdirWrite || level == wsfs.AuthorityFull
+		}
+		if !canLaunch() {
+			return errors.New("the session cannot launch exec jobs with its current authority")
+		}
+		recorder, ok := proc.(execLaunchRecorder)
+		if !ok {
+			return errors.New("the session has no durable exec job recorder")
+		}
+		if err := recorder.recordExecLaunch(ctx, call); err != nil {
+			return err
+		}
+		if !canLaunch() {
+			return errors.New("the exec launch's authority changed")
+		}
+		return nil
+	}
 }
 
 // voidMCPLocked voids conversation id's token, if any; r.mu is held.
@@ -345,6 +367,7 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 	hello.Conversation = t.id
 	hello.ExecCutover = t.cutover
 	hello.FileWrites = t.fileWrites
+	hello.RecordExecLaunch = t.recordExecLaunch
 	return hello, t.void, ""
 }
 

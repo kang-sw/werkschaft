@@ -162,6 +162,86 @@ func TestDurableTurnRecoversPendingReadsAndFileEvidence(t *testing.T) {
 	}
 }
 
+func TestDurableTurnRecoversAssociatedExecWithoutRelaunch(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	cmd := Command{Type: CmdUser, TurnID: "original-turn", Text: "run once"}
+	store, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	must(t, store.appendBarrier(turnStartRecord{K: "turn_start", TurnID: cmd.TurnID, User: userItem(cmd.Text)}))
+	items := []json.RawMessage{json.RawMessage(callOf("inspect", "exec_tail", `{"exec_id":"job-running"}`))}
+	for _, id := range []string{"running", "exited", "lost", "unbound"} {
+		items = append(items, json.RawMessage(callOf(id, "exec_run", `{"exe":"printf"}`)))
+	}
+	must(t, store.AppendResponse(&Response{ID: "committed", Output: items}))
+	for _, id := range []string{"running", "exited", "lost"} {
+		must(t, store.appendBarrier(execJobLine{K: "exec_job", CallID: id, JobID: "job-" + id}))
+	}
+	must(t, store.Close())
+
+	var lookedUp, finished []string
+	ws := &fakeWS{tools: []MCPTool{{Name: "exec.run"}, {Name: "exec.tail"}}}
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("done"))}}
+	a, err := New(Config{Dir: dir, Session: session, Endpoint: model, Authority: AuthorityWorkdirWrite, WS: ws,
+		RecoverExec: func(_ context.Context, id string) (string, error) {
+			lookedUp = append(lookedUp, id)
+			switch id {
+			case "job-running":
+				return "exec_id: job-running\nstatus: running", nil
+			case "job-exited":
+				return "exec_id: job-exited\nstatus: exited", nil
+			default:
+				return "", errors.New("job unavailable")
+			}
+		},
+		Emit: func(line Line) {
+			if line.T == LineTurnEnd {
+				finished = append(finished, line.TurnID)
+			}
+		},
+	})
+	must(t, err)
+	defer a.Close()
+	ctx := context.Background()
+	must(t, a.runDurableTurn(ctx, ctx, cmd))
+	if calls := ws.callNames(); !reflect.DeepEqual(calls, []string{"exec.tail"}) {
+		t.Fatalf("replacement called %v, want only the unfinished read", calls)
+	}
+	if !reflect.DeepEqual(lookedUp, []string{"job-running", "job-exited", "job-lost"}) {
+		t.Fatalf("looked up jobs %v", lookedUp)
+	}
+	if !reflect.DeepEqual(finished, []string{cmd.TurnID}) {
+		t.Fatalf("finished turns %v", finished)
+	}
+	reqs := model.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("replacement sent %d continuations, want one", len(reqs))
+	}
+	outputs := map[string]string{}
+	for _, raw := range reqs[0].Input {
+		var item struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+			Output string `json:"output"`
+		}
+		must(t, json.Unmarshal(raw, &item))
+		if item.Type == "function_call_output" {
+			outputs[item.CallID] = item.Output
+		}
+	}
+	for id, expected := range map[string]string{
+		"inspect": "ran exec.tail",
+		"running": "exec_id: job-running\nstatus: running",
+		"exited":  "exec_id: job-exited\nstatus: exited",
+		"lost":    "outcome is unknown",
+		"unbound": "outcome is unknown",
+	} {
+		if !strings.Contains(outputs[id], expected) {
+			t.Fatalf("call %q recovered %q, want %q", id, outputs[id], expected)
+		}
+	}
+}
+
 func TestDurableSteerReceiptsReconcilePartialLogCommit(t *testing.T) {
 	dir, session := t.TempDir(), NewSessionID()
 	ctx := context.Background()
