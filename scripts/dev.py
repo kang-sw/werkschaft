@@ -21,10 +21,7 @@ compatibility stamp, so the next session start does not rebuild the same source
 locally. --no-seed skips that.
 
 The daemon is started with WS_RSRC_ROOT/WS_SKILLS_ROOT pointing at this
-checkout's agents-plugin-wsflow package, as its launcher would set them: the
-daemon resolves the Python launcher it hands to Pi workers as
-<dir(WS_RSRC_ROOT)>/bin/ws-mcp-launcher.py, and the staged exe has no package
-beside it.
+checkout's agents-plugin-wsflow package, as its launcher would set them.
 """
 import argparse
 from contextlib import ExitStack
@@ -57,9 +54,7 @@ REMOTE_DIST = "agents-plugin-tool/dist-x"
 # Package dirs of this checkout whose launcher runtime gets seeded.
 SEED_PACKAGES = ("agents-plugin", "agents-plugin-wsflow")
 
-# Package dir whose rsrc/ and skills/ the daemon is started against, as the
-# launcher of that package would; its bin/ws-mcp-launcher.py is what Pi
-# workers run.
+# Package directory used for the daemon's launcher environment.
 DAEMON_PACKAGE = REPO / "agents-plugin-wsflow"
 
 # One lifecycle budget for starter-gate acquisition, daemon-start and REST

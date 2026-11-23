@@ -846,7 +846,8 @@ A spawn records its `tier` (`SpawnSpec.Tier`, `Record.tier`).
 #### Legacy Pi compatibility
 
 The daemon keeps the `ws-pi-bridge` initialization identity and six hidden
-`pi.*` handlers through 0.52 (`internal/mcp/pi_tools.go`). Authorized callers
+`pi.*` handlers through 0.52. Handler removal is scheduled for 0.53
+(`internal/mcp/pi_tools.go`). Authorized callers
 can use `pi.list` for their own recorded Pi children and `pi.transcript`
 for a child's retained transcript. These reads work without the retired
 `dashboard.pi_spawn_enabled` setting. `pi.spawn`, `pi.send`, `pi.stop`,
