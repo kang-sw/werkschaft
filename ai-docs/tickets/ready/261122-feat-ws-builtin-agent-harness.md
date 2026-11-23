@@ -231,9 +231,9 @@ gathered for it (read-only, 2026-11-23):
     lead's chosen re-read files inlined within a budget; no raw tail; the log
     path for search. Advisory and hard thresholds use the common compaction
     keys. A worker has no lever of its own: its prose comes from a model
-    summary call (Pi's fallback path). How the lead's prose reaches the daemon
-    (optional `ws/compact` arguments or a werk-only lever tool) is settled in
-    Phase 2.
+    summary call (Pi's fallback path). Phase 2 carries the lead's prose in
+    the optional `lead_summary` argument to `ws/compact` (T0). The Phase 2
+    Result records the authority checks and mixed-version behavior.
 15. **The holder-run path never ships (technical (17)).**
     Every phase lands on the integration branch `track/harness`, which
     carries `impl/develop/werk-harness-p1` and its successor. `track/harness`
@@ -876,6 +876,107 @@ Runs after Phase 4.
   compaction fixtures (fixed headings present, deterministic sections
   recomputed, dialog budget, re-read inlining), one live hosted lead session
   on each provider recorded in the Result.
+
+### Result (68181cfae) - 2026-11-24
+
+- Registered `lead-werk` as a hosted lead in the in-daemon durable runner.
+  It uses the common working-directory permissions, steer and interrupt
+  controls, approval queue, and model and effort settings. Provider-tagged
+  reasoning summaries flow through the shared live and replay projection.
+  The picker shows each provider's catalog and the usage bar uses the
+  selected provider's context window when the catalog supplies it.
+- OpenAI uses the auth layer's in-process SIWC source and account-scoped
+  `GET /v1/models` catalog. Requests follow the SIWC profile's field
+  omissions. Unattended leads and SIWC worker tiers require background
+  consent. The provider is stored separately from the model ID so equal IDs
+  across providers keep their own credentials, context limits, and reasoning
+  dialect.
+- **Decision 14, T0.** Added optional `lead_summary` to `ws/compact`.
+  The same daemon advertises and consumes the argument for its own hosted
+  lead (`agents-plugin-tool/internal/mcp/compaction.go:59-107`).
+  The runner checks self ownership and uses the existing quiescent
+  compaction queue and resume handling
+  (`agents-plugin-tool/internal/wsagent/compaction.go:76-136`). A
+  second tool would duplicate the same authority and lifecycle checks.
+  Existing callers omit the field and take the existing path. Older daemons
+  do not advertise the field, and their schema validation refuses it if
+  sent (`agents-plugin-tool/internal/mcp/tool_arguments.go:130`).
+- The checkpoint assembles the seven prose headings and recomputes the
+  deterministic sections from current state and the full raw log. It keeps
+  near-raw dialogue within 40 KiB, excludes tool results, names the retained
+  log, and inlines whole worktree files within a separate budget through the
+  dashboard's confined, credential-denying reader. Reopen replays the
+  checkpoint and post-checkpoint records. Worker summaries still use a
+  model call. See `agents-plugin-tool/internal/werk/compaction.go:62-120`
+  and `agents-plugin-tool/internal/wsdashboard/fs_local.go:84-106`.
+- **Configuration and display compatibility.** The Werk tier provider is
+  optional and defaults to OpenRouter
+  (`agents-plugin-tool/internal/wsconfig/config.go:77-82,161-163,540-550`).
+  T0 against v0.51.1 for storage and existing calls. Its tier reader
+  recognizes the prior harnesses and ignores the extra field
+  (`v0.51.1:agents-plugin-tool/internal/wsconfig/config.go:77-81,732-740`).
+  Its writer preserves unknown tier members on rewrite, so a new reader can
+  recover the saved provider directly
+  (`v0.51.1:agents-plugin-tool/internal/wsconfig/preserve.go:67-98`).
+  Older dashboard display is T1. It lacks the Werk lead choice and can omit
+  new provider and reasoning metadata. The optional provider fields do
+  not require a record migration, and replay still reads the raw durable
+  log (`agents-plugin-tool/internal/wsagent/http.go:130-137`,
+  `agents-plugin-tool/internal/wsagent/record.go:46`,
+  `agents-plugin-tool/internal/wsagent/support.go:53,239`,
+  `agents-plugin-tool/internal/wslive/reasoning_summary.go:118,202`).
+- The independent lite review found one Important issue. Picker retries
+  ended before the catalog deadline. The fix bounds polling by the catalog
+  deadline and keeps the open popover refreshing across connection epoch
+  changes. Chromium exercises model selection after the earlier cutoff in
+  light and dark themes. The picker updates the affected controls while
+  preserving the popover. The full MCP run also caught the discovery
+  schema exceeding the agy size limit. The revised descriptions fit
+  within the cap, with all seven fields still discoverable.
+
+Verification from `agents-plugin-tool` with inherited `WS_*` and live
+opt-ins cleared:
+
+- `go build ./...` passed.
+- `go test -timeout 45m ./internal/werk ./internal/wscred ./internal/wsconfig ./internal/wsagent ./internal/wslive ./cmd/ws-mcp -count=1`
+  passed after the review fixes. The subsequent discovery schema and
+  rejoin fixture changes passed their focused tests.
+- `go test -timeout 45m ./internal/mcp -count=1` passed, including the
+  discovery byte cap and builtin lead profile tests.
+- The focused race run passed three times across `internal/werk`,
+  `internal/wsagent`, `internal/wsdashboard`, and `cmd/ws-mcp`. Fixtures
+  cover interactive OpenRouter and SIWC, in-process auth and background
+  consent, discovery, permission denials through common approvals, model
+  context windows, steer and interrupt, reasoning replay, and checkpoint
+  evidence, budget, and recovery. The two-provider fixture reopens the
+  lead after daemon replacement and checks its saved provider and
+  permission, then verifies the checkpoint and user prompt at the model.
+- `go test -timeout 10m ./internal/wsdashboard -v -count=1 -run '^TestPermissionUIBrowser$'`
+  passed in Chromium with the Playwright module configured. The full
+  dashboard suite failed only `TestBoardToolbarPlacementAndCounts`, which
+  reproduced the same Node JSON parse error three times on a clean archive
+  of `269db6c0d`. `TestAgentsIslandBehavior` passed in this run.
+- **Pending owner live verification.** The live fixture starts its own
+  daemon and requires a deliberately selected provider, model, and isolated
+  credential store. Prepare `fixture_cache` with `mktemp -d`, clear inherited
+  `WS_*` variables, and set `WS_CACHE_HOME="$fixture_cache"` for these
+  credential commands. Use `go run ./cmd/ws-mcp credential set openrouter`
+  with the key supplied via stdin and
+  `go run ./cmd/ws-mcp credential sign-in openai --enable-plan` for SIWC.
+  Set `openrouter_model` and `openai_model` to models available to those
+  accounts. Run one fixture for each provider:
+
+  ```sh
+  WERK_LIVE_LEAD_PROVIDER=openrouter WERK_LIVE_LEAD_MODEL="$openrouter_model" \
+    WERK_LIVE_CREDENTIAL_PATH="$fixture_cache/dashboard/auth/credentials.json" \
+    go test -timeout 45m ./cmd/ws-mcp -run '^TestWerkLiveHostedLead$' -count=1
+  WERK_LIVE_LEAD_PROVIDER=openai WERK_LIVE_LEAD_MODEL="$openai_model" \
+    WERK_LIVE_CREDENTIAL_PATH="$fixture_cache/dashboard/auth/credentials.json" \
+    go test -timeout 45m ./cmd/ws-mcp -run '^TestWerkLiveHostedLead$' -count=1
+  ```
+
+Omitted: the owner live runs above and the SIWC search attachment, which
+depends on Phase 1 of `261122-feat-ws-web-tools`.
 
 ### Phase 3: [dropped] Parity and A/B gate, then Pi retirement
 
