@@ -2,6 +2,10 @@
 title: "대화창 ! 명령의 터미널형 표시: 셸 입력창, 콘솔 결과, 슬롯 키캡"
 related:
   261121-feat-ws-board-command-slots: shipped composer `!`, command card, slot strip and exec HUD that this restyles
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 72e66d63c8e25ff0
+sage-review-completeness-reviewed: 72e66d63c8e25ff0
 ---
 
 # Composer `!` terminal look: shell input, console results, slot keycaps
@@ -65,6 +69,17 @@ preview):
   data, formatting data) lives in the backend phase, and the later frontend
   phase only renders those fields.
 
+- **Times (technical, from review 2026-11-23).** The exec card JSON already
+  carries `started_at` and `ended_at` (ms, `composerCard` in
+  `agents-plugin-tool/internal/wsdashboard/composer_exec.go`); the dashboard JS
+  does not read them yet. Phase 1 draws no time on the status line (a client
+  receive-time stamp would show a wrong duration, and display data that is not
+  rendering belongs to the backend phase under the work-split rule). Phase 2
+  adds only what is missing (a server-derived duration and a running-elapsed
+  base); Phase 3 renders it. Rejected: a client receive-time stamp in Phase 1;
+  client-side `ended_at - started_at` in Phase 1 (duration derivation is
+  display data owned by the backend phase).
+
 ## Constraints
 
 Implementation Conventions rows from `AGENTS.md` matching the touched paths
@@ -77,6 +92,9 @@ also touches Go under `agents-plugin-tool/internal/`):
 | `agents-plugin-tool/internal/` | `ai-docs/manuals/release-compatibility.md` |
 | `agents-plugin-tool/` | `ai-docs/manuals/performance.md` |
 
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
 - Read each manual before editing a covered file.
 - i18n: if any label or placeholder changes (e.g. the `bash` badge, hint text,
   Run, console clear/expand), update the i18n tables for every locale, not only
@@ -95,6 +113,43 @@ also touches Go under `agents-plugin-tool/internal/`):
 - Go tests (Phase 2, backend) run only on w5090. No local `go test`, no ws executables,
   no Electron.
 - Run only the Node test files this change touches.
+- Mockup states (legend of `overview.html`): ① idle, ② `!` typed, ③ short
+  output done, ④ failure (stderr, exit != 0), ⑤ long output to file, ⑥ async
+  run in progress, ⑦ command slot. Phase 1 covers ①, ②, ③, ④ (without stderr
+  separation), ⑤, ⑥ without live tail, and ⑦; Phase 3 adds the field-dependent
+  parts of ③-⑥ and the ② title.
+- Phase 1 test targets (touched Node/browser fixtures, for example
+  `testdata/composer-exec.browser.cjs` and `testdata/composer-usercmd.browser.cjs`):
+  first Esc removes the leading `!` and a second Esc arms Tab-exit; the removal
+  keeps caret, mention paint (`.chl`) and draft state consistent, as the
+  Backspace path does, and does not disturb the send/retry text comparison;
+  `@` and `/` popups stay closed in `!` mode; console collapse and clear; the
+  failure, running and amber status colors.
+
+## Prior Decisions
+
+- 261121-feat-ws-board-command-slots (2026-11-22, Result): "Performance, measured on macOS (the probes under `WS_COMPOSER_PERF=1`, `composer_exec_perf_test.go` and `TestComposerExecConversionProbe`; p50 / p95)" — bearing: constrains
+- 11caef15 (2026-11-22, commit): "A LAN viewer typing `!` fails closed (route refused, draft kept, hint to start with a space) rather than sending a command line as a prompt." — bearing: constrains
+- 11caef15 (2026-11-22, commit): "Only a session rendered as a hosted non-child composer sets data-cexec; the server still decides (a non-lead is refused after acceptance with a refused card)." — bearing: constrains
+- ce20146a (2026-11-22, commit): "Retry semantics: only a resend of the same text after an unresolved attempt sets retry; 4xx settles the attempt, a network failure or 5xx leaves it unresolved." — bearing: constrains
+- 0e918e11 (2026-11-23, commit): "JS: ucmdCompare orders a revision against the shown one; ucmdApply(list, post) differs for a read and a write answer; ucmdRefresh funnels a wake or a dropped answer into one read" — bearing: constrains
+- 7d13b55d (2026-05-21, commit): "Captured transcript rendering direction: exec items use terminal-output style, agent items render action-unit blocks" — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | wsdashboard/assets/dashboard-composer-exec.js, dashboard-composer-ucmd.js, dashboard-composer-keyboard.js, dashboard-conversation.css, dashboard-exec-hud.css; Phase 2 Go under agents-plugin-tool/internal/ |
+| scope.surface | cross-module | Phase 2 adds card/list fields consumed by dashboard JS; Phase 1 is client-only |
+| scope.new_public_symbol | unknown | Phase 2 chooses the field names and records them in its Result; none are fixed yet |
+| scope.new_type_contract | yes | Phase 2 additive card/list fields (times, stream segments, tail, cwd/shell) |
+| scope.test_surface | existing | testdata/composer-exec.browser.cjs, testdata/composer-usercmd.browser.cjs, composer_exec_test.go, composer_usercmd_test.go |
+| complexity.reuse_points | confirmed | mention layer .chl (dashboard-conversation.css#L482), .d-cexec, .d-ucmd, dashboard-composer-keyboard.js Escape/tabOut handler |
+| complexity.side_effect_risk | moderate | Esc handler shares the Tab-out arming; the mention and slash popups are disabled in bang mode |
+| risk.correctness | moderate | first-Esc-removes-bang versus Tab-out arming, plus send/draft/retry logic that depends on the leading bang |
+| risk.fit | moderate | the mockup must be matched across a light theme with dark terminal surfaces |
+| risk.test | moderate | LOOK check needs the running UI and cannot run locally; Go tests run only on w5090 |
+| risk.security_or_contract | moderate | Phase 2 adds wire fields (additive hypothesis, unconfirmed); approval and TrustedWrite routing untouched |
 
 ## Phases
 
@@ -110,11 +165,14 @@ Uses only data the cards already carry: exit code, byte count, job ID, state,
 - Esc rule: the first Esc in `!` mode removes the leading `!` (leaves shell
   mode); a second Esc keeps today's behaviour (prepares Tab-exit). See Decisions.
 - Results: one console scrollback with prompt line, output block, and status
-  line `✓ 0 · bytes · time`-shaped using existing data only (exit code, bytes,
-  job ID; the receive-time stamp is client-side). Failure colors the status
-  line and `$` red; running is blue; signal/stop/lost stay amber chips. The
-  file link renders as an output line. Collapses to one line when idle; clear
-  closes all cards using the existing close.
+  line `✓ 0 · bytes` using existing data only (exit code, bytes, job ID; byte
+  formatting stays in the client, as today); no
+  time is drawn until Phase 3 (see the Times decision). Failure colors the
+  status line and `$` red; running is blue; signal/stop/lost stay amber chips.
+  The file link renders as an output line. "Idle" means no running card: the
+  console collapses to one line then. The per-card close (`cexec-x`,
+  `cexecDismiss`) stays on each run; clear is a console-level action that
+  closes every card through that same existing close.
 - Slots: keycap button, command line as main text on a dark `$` block, full
   stored line shown without truncation.
 - Elements needing a not-yet-existing field are not drawn in this phase.
@@ -126,15 +184,20 @@ touched Node tests. This phase has no backend dependency and ships first (T0).
 ### Phase 2: Additive server fields (backend: Codex)
 
 Self-contained; independent of Phase 1 and may land before or after it. Owns all
-non-rendering work: the server adds additive card/list fields and any display
-data derived server-side, so the client only renders them.
+non-rendering work: the server adds additive card fields derived server-side, so
+the client only renders them. The field set is exactly the list below, tied to
+the Phase 3 elements; nothing else is added.
 
-- start and end times (and a derived duration / running elapsed base)
+- duration and a running-elapsed base (`started_at`/`ended_at` already exist on
+  the card, so only the derived values are new)
 - separate stdout/stderr (stream-tagged segments)
 - a short output tail (preview lines for long output, live tail while running)
 - cwd and shell name (e.g. `bash ~/work/demo`; Git Bash on Windows)
-- any other display data that can be computed server-side (exit status label,
-  byte/duration formatting data, slot metadata) rather than in the client
+
+This phase picks the exact field names, types and absent-field semantics and
+records them in its Result; Phase 1 does not depend on them and Phase 3 reads
+that Result. Done when each field above is emitted, and omitted (not zero or
+empty) when it does not apply, with Go tests for both paths.
 
 Constraints: fields are additive only; the first-byte `!` grammar, approval and
 TrustedWrite routing are unchanged. Applies the Constraints rows above
@@ -154,10 +217,15 @@ Blocked on Phase 1's and Phase 2's landed Results. Pure client rendering in the
 element positions Phase 1 already laid out; each element switches on when its
 field exists and stays hidden otherwise (an old daemon leaves them hidden):
 
-- duration/elapsed in the status line
+- duration/elapsed in the status line, from the Phase 2 derived fields (the
+  Phase 1 status line has no time)
 - red stderr lines with a left rule from the stream-tagged segments
 - preview lines for long output and live tail while running
 - console title with shell name and cwd
+
+Sequencing note: `261115-feat-ws-whiteboard-agent-card` Phase 2 embeds the same
+conversation/composer shell, so whichever lands second checks that `!`-mode
+styling and the exec console still work inside the embedded card.
 
 No server code and no derivation logic beyond display. Verification: LOOK check
 against the mockup states ③–⑥ and ② (title) plus touched Node tests.
