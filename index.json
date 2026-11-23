@@ -541,7 +541,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-23T12:12:45Z"
+        "touched_at": "2026-11-23T12:13:42Z",
+        "impl": {
+          "branch": "impl/develop/motto-grab-small"
+        }
       }
     },
     "261123-bug-ws-dashboard-card-note-typing-lag": {
