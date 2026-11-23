@@ -234,6 +234,8 @@ func TierHarnesses(registries ...map[string]BackendRegistration) []string {
 	for _, name := range BuiltinHarnessNames() {
 		add(name)
 	}
+	// The retired harness is still valid in stored routing graphs.
+	add(BackendPi)
 	for _, reg := range registries {
 		for _, name := range sortedRegistrationNames(reg) {
 			add(name)
@@ -386,6 +388,9 @@ func (r *Runner) unusableHarnessError(callerBackend, harness string) string {
 	if err := r.admitWorker(harness, callerBackend); err != nil {
 		return err.Error()
 	}
+	if why := r.registeredWorker(callerBackend, harness); why != "" {
+		return why
+	}
 	return fmt.Sprintf("harness %q has no spawnable tier now", harness)
 }
 
@@ -408,7 +413,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 			out.Unavailable = append(out.Unavailable, h+": "+why)
 			continue
 		}
-		tiers, err := wsconfig.HarnessTiers(caller.Config, h)
+		tiers, err := tierBindings(caller.Config, h, "", r.opts.Backends)
 		if err != nil {
 			return AgentTiers{}, fmt.Errorf("read agents.tier: %w", err)
 		}
@@ -418,7 +423,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 				out.Unavailable = append(out.Unavailable, h+": "+why)
 			}
 		}
-		if h == caller.Harness {
+		if h == TierRuntimeHarness(caller.Harness) {
 			out.Native = tierEntries("", tiers)
 		}
 		out.Ext = append(out.Ext, tierEntries(h+".", tiers)...)
@@ -436,6 +441,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		target := aliases[name]
 		entry := AgentAliasEntry{Alias: name, Target: target}
 		h, t, _ := strings.Cut(target, ".")
+		h = TierRuntimeHarness(h)
 		if tiers, ok := usable[h]; !ok {
 			entry.Error = r.unusableHarnessError(caller.VerifiedBackend, h)
 		} else if m, ok := tiers[t]; !ok {
@@ -472,18 +478,24 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 		if err != nil {
 			return AgentRouteEntry{Tier: token, Error: err.Error()}
 		}
-		e := AgentRouteEntry{Tier: token, Trace: res.Trace(), Harness: res.Harness}
-		tiers, ok := usable[res.Harness]
+		harness := TierRuntimeHarness(res.Harness)
+		e := AgentRouteEntry{Tier: token, Trace: res.Trace(), Harness: harness}
+		tiers, ok := usable[harness]
 		switch {
 		case !ok:
-			e.Error = r.unusableHarnessError(caller.VerifiedBackend, res.Harness)
+			e.Error = r.unusableHarnessError(caller.VerifiedBackend, harness)
 		case res.Bundle != "":
-			e.Model, e.Effort = res.Model, res.Effort
+			binding, err := RoutedTierBinding(caller.Config, res, r.opts.Backends)
+			if err != nil {
+				e.Error = err.Error()
+			} else {
+				e.Model, e.Effort = binding.Model, binding.Effort
+			}
 		default:
 			if m, ok := tiers[res.Size]; ok {
 				e.Model, e.Effort = m.Model, m.Effort
 			} else {
-				e.Error = fmt.Sprintf("tier %q is not set for %s", res.Size, res.Harness)
+				e.Error = fmt.Sprintf("tier %q is not set for %s", res.Size, harness)
 			}
 		}
 		return e
@@ -548,10 +560,15 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 				return "", "", mapping, r.tierRefusal(caller, rerr.Error())
 			}
 			if res.Bundle != "" {
-				if why := r.spawnableHarness(caller.VerifiedBackend, res.Harness); why != "" {
+				harness := TierRuntimeHarness(res.Harness)
+				if why := r.spawnableHarness(caller.VerifiedBackend, harness); why != "" {
 					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
 				}
-				return res.Harness, res.Rank(), wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+				binding, err := RoutedTierBinding(caller.Config, res, r.opts.Backends)
+				if err != nil {
+					return "", "", mapping, badRequest("tier %q (%s): %v", tier, res.Trace(), err)
+				}
+				return harness, res.Rank(), binding, nil
 			}
 			harness, bare = res.Harness, res.Size
 			break
@@ -562,10 +579,11 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	if bare == "" {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q names no tier (small, medium, large, xlarge)", tier))
 	}
+	harness = TierRuntimeHarness(harness)
 	if why := r.spawnableHarness(caller.VerifiedBackend, harness); why != "" {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
 	}
-	mapping, err = harnessSlot(caller.Config, harness, bare)
+	mapping, err = harnessSlot(caller.Config, harness, bare, r.opts.Backends)
 	var noSlot noTierSlotError
 	if errors.As(err, &noSlot) {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %v", tier, err))
@@ -580,13 +598,16 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 type noTierSlotError struct{ harness, size string }
 
 func (e noTierSlotError) Error() string {
+	if e.harness == BackendWerk {
+		return fmt.Sprintf("werk.%s has no usable OpenRouter model; set one with config.tune key \"agents.tier\" (harness \"werk\", tier \"%s\", and an exact OpenRouter model ID from the dashboard model picker)", e.size, e.size)
+	}
 	return fmt.Sprintf("%s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", e.harness, e.size)
 }
 
 // harnessSlot is the agents.tier model agent.spawn launches for harness at
 // bare: the harness's own slot, with no cross-harness fallback.
-func harnessSlot(cfg wsconfig.Options, harness, bare string) (wsconfig.AgentTier, error) {
-	tiers, err := wsconfig.HarnessTiers(cfg, harness)
+func harnessSlot(cfg wsconfig.Options, harness, bare string, registries ...map[string]BackendRegistration) (wsconfig.AgentTier, error) {
+	tiers, err := tierBindings(cfg, harness, bare, registries...)
 	if err != nil {
 		return wsconfig.AgentTier{}, fmt.Errorf("read agents.tier: %w", err)
 	}
@@ -602,11 +623,15 @@ func harnessSlot(cfg wsconfig.Options, harness, bare string) (wsconfig.AgentTier
 // resolved harness's agents.tier slot at the resolved size. It never falls
 // back to another harness's slot, so a surface that reports it (render,
 // config.resolve_agent) names what the spawn uses or fails as it does.
-func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution) (wsconfig.AgentTier, error) {
+func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution, registries ...map[string]BackendRegistration) (wsconfig.AgentTier, error) {
+	harness := TierRuntimeHarness(res.Harness)
 	if res.Bundle != "" {
-		return wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+		if res.Harness == BackendPi && !hasExactModel(werkChoiceLister(registries), res.Model) {
+			return wsconfig.AgentTier{}, fmt.Errorf("bundle %q needs an exact OpenRouter model ID for werk; update its model in agent.tier_routing", res.Bundle)
+		}
+		return wsconfig.AgentTier{Backend: harness, Model: res.Model, Effort: res.Effort}, nil
 	}
-	return harnessSlot(cfg, res.Harness, res.Size)
+	return harnessSlot(cfg, harness, res.Size, registries...)
 }
 
 // SpawnableHarness reports why agent.spawn cannot launch harness now for a

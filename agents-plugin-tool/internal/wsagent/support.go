@@ -498,8 +498,8 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 			out = append(out, tier)
 			continue
 		}
-		tier.Trace, tier.Harness = res.Trace(), res.Harness
-		if binding, err := RoutedTierBinding(caller.Config, res); err != nil {
+		tier.Trace, tier.Harness = res.Trace(), TierRuntimeHarness(res.Harness)
+		if binding, err := RoutedTierBinding(caller.Config, res, s.opts.Runner.opts.Backends); err != nil {
 			tier.Error = err.Error()
 		} else {
 			tier.Model, tier.Effort = binding.Model, binding.Effort

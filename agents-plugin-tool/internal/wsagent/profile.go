@@ -244,7 +244,7 @@ func (p Profile) validate(registries ...map[string]BackendRegistration) error {
 	if p.Backend == "" {
 		return fmt.Errorf("backend is required: %s", backendAlternatives(names))
 	}
-	if !slices.Contains(names, p.Backend) {
+	if p.Backend != BackendPi && !slices.Contains(names, p.Backend) {
 		return fmt.Errorf("backend must be %s; got %q", backendAlternatives(names), p.Backend)
 	}
 	if p.Model != "" && !modelPattern.MatchString(p.Model) {
@@ -303,7 +303,7 @@ func (p Profile) validate(registries ...map[string]BackendRegistration) error {
 		}
 	}
 	if p.Lead {
-		if len(registries) > 0 && registries[0][p.Backend].LeadProfile == "" {
+		if p.Backend != BackendPi && len(registries) > 0 && registries[0][p.Backend].LeadProfile == "" {
 			return fmt.Errorf("backend %q cannot host a lead profile", p.Backend)
 		}
 		if len(p.Tools) > 0 || len(p.WSTools) > 0 || len(p.MCPServers) > 0 || len(p.Plugins) > 0 || p.Skills || p.Instructions != "" || p.ListInIndex {

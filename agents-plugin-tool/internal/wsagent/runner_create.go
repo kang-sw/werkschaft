@@ -367,6 +367,9 @@ func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 	if err != nil {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("%v", err))
 	}
+	if rp.Definition.Backend == BackendPi {
+		return ResolvedProfile{}, errPiRetired
+	}
 	if _, err := r.backend(rp.Name, rp.Definition.Backend); err != nil {
 		return ResolvedProfile{}, err
 	}
