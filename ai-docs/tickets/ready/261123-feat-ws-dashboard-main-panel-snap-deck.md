@@ -320,6 +320,28 @@ Upgrade Overview into a fast mouse + keyboard Hero Panel switcher with stateful 
      - single-click / `Enter` commit and `Escape` / outside-click cancel;
      - wide 4-col Quick Look hover (~120ms settle), keyboard arrow preview, column-3 pointer lock, answering an ask inside the column-3 Quick Look preview updating live without cancelling Overview (including editable `ArrowUp`/`ArrowDown`/`Enter` and focus preservation), `applyFrameHeights` sizing inside preview, maximize handoff via `WsOverview.after`, `Element.moveBefore` preservation of docked `#bgal` and previewed `xterm`/iframe state, and placeholder stability in `#bcol`.
 
+### Result (72a001316) - 2026-11-24
+
+Phase 3 implemented on `impl/develop/main-panel-snap-deck-p3` (commits `c30c66b5f`, `72a001316`):
+
+- **Phase 3 implementation (`c30c66b5f`):**
+  - Added `#bcol` middle-click (`button === 1`) Overview toggle with `mousedown` + `auxclick` autoscroll suppression, interactive/terminal/modal/max exclusions (`a[href]`, `.xterm`, `.tm-host`, `.tpop`, `[popover]:popover-open`, `dialog[open]`, `[data-max]`, `.board-toolbar`, `data-board-max`), and same-origin `iframe.doc-frame` relay (`doc-frame.js` -> `dashboard-frames.js`).
+  - Upgraded Hero Panel `.overview-here` highlight (with snap-deck `data-current` fallback in `overview.js` and `.r-board`-scoped accent bar in `dashboard-board.css`).
+  - Implemented Wide 4-col Quick Look (`>=1600px`, `!tabs`) inside `#bgal` for both 0-docked and docked states (`overview.js`, `dashboard-board.css`, `dashboard-rail.css`), moving live nodes via `Element.moveBefore` with exact-height `.overview-placeholder`, ~120ms hover debounce, instant `ArrowUp`/`ArrowDown` preview, column-3 `pointerenter` lock, and offscreen `inert` + `aria-hidden` preservation of docked `.gal-viewport`/`.gal-rail` (never `display: none`).
+  - Implemented all 4+1 Overview holding exemptions: preview click/focus passthrough, preview editable/terminal/button key passthrough, in-place keyed `patchOverviewPreview` in `dashboard-board.js`, maximize restoration before `data-board-max` sync, and immediate `rAF` `doc-frame` height application inside Quick Look (`dashboard-frames.js`).
+- **Code-review polish (`72a001316`):**
+  - Synced `boardRendered.topics[key]` inside `patchOverviewPreview` so Overview exit never reverts a live-patched topic via `boardStageSnap`.
+  - Guarded `galEl.hidden` in `cards.js` `paintGallery()` against `data-overview-preview` and removed `data-overview-preview` before re-syncing `#bgal` via `WsCards.relayout()` in `teardownPreview()`.
+  - Exempted `frameInOverviewPreview` and `data-overview-live` in `dashboard-frames.js` `frameNear()` and `topicBand()` so far-offscreen previewed `doc-frame`s mount and never unmount.
+  - Added `:not([data-overview-live])` to `[data-size="fold"]` topic/card/terminal/web rules so folded items unfold cleanly in Quick Look and re-fold on exit; hid destructive/reparenting header buttons (`.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close`) inside `.overview-preview-stage` while keeping `.d-max`/`.bc-max` visible.
+  - Preserved `.overview-here` and migrated `tabs` Map entries in `replacePreviewNode()`; registered cleanup-tracked `#r-board` `pointerleave` and `window` `blur` listeners to cancel pending 120ms hover switches; added `[data-overview-preview]` to `:root[data-boardw]` `--dgrid-cols` in `dashboard-layout.css`.
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py`: exit 0 (clean).
+  - Node unit tests: 32/32 PASS (`board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`, `board-wheel.test.cjs`).
+  - Playwright Chromium suites: 8/8 PASS (`board-snap-deck-p3.browser.cjs` including 7 review-regression assertions, `board-snap-deck-feel.browser.cjs`, `board-snap-deck-p2.browser.cjs`, `board-scroll-p1-fixes.browser.cjs`).
+  - Go tests: `go test -count=1 ./internal/wsi18n/...`, `go test -count=1 ./internal/wswhiteboard -run "DocFrame|Asset"`, and `go test -count=1 ./internal/wsdashboard -run "TestCSSClassesDoNotCollideAcrossModules|TestAssetSource|TestBoardOverviewShortcut|TestGalleryNoReservedColumnWithoutAPage|TestGalleryBrowser|TestI18n|TestCards|TestPincol|TestOverview|TestToolbar"` all PASS.
+  - Screenshots refreshed under `/tmp/snap-deck-p3-shots/` (`01-overview-wide-hero-highlight-dark.png`, `02-overview-wide-quicklook-hover-light.png`, `03-overview-wide-quicklook-docked-preserved-dark.png`, `04-overview-narrow-hero-highlight-light.png`).
+
 ### Phase 4: Virtualized / Lazy Topic Slot Hydration & Dead-Code Cleanup (Superseding `261123` Phase 2)
 
 Absorb `261123-feat-ws-dashboard-board-topic-anchor-scroll` Phase 2 onto fixed-height 100% snap slots for O(1) rendering cost on large boards, and complete dead-code cleanup deferred from Phase 1.
