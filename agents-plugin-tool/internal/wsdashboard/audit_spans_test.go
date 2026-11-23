@@ -2,11 +2,15 @@ package wsdashboard
 
 import (
 	"fmt"
+	"math/rand"
 	"net/url"
 	"reflect"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsauditstore"
@@ -347,4 +351,190 @@ func TestAuditEventSpansStayWithinTheReturnedPrefix(t *testing.T) {
 			t.Errorf("%q: spans %v, want %v", tc.q, got.Spans, tc.spans)
 		}
 	}
+}
+
+// TestAuditSpanScanWork checks the full scan below and above the response cap.
+// In each case a more preferred branch looks far ahead before losing to ".".
+func TestAuditSpanScanWork(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		seamed  bool
+	}{
+		{"\\w+\\b|.", true},
+		{"\\B\\w+\\b|.", true},
+		{"a+z\\b|.", false},
+		{"a+z|.", false},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			s, err := newAuditSearch(tc.pattern, true, true, nil, "", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := func(n int) time.Duration {
+				line, seam := strings.Repeat("a", n+1), -1
+				if tc.seamed {
+					seam = n
+				}
+				best := time.Duration(1<<63 - 1)
+				for range 3 {
+					count := 0
+					started := time.Now()
+					s.eachLineMatch(line, seam, func(start, end int) bool {
+						if start != count || end != count+1 {
+							t.Fatalf("match %d = [%d,%d)", count, start, end)
+						}
+						count++
+						return false
+					})
+					best = min(best, time.Since(started))
+					if count != len(line) {
+						t.Fatalf("got %d matches, want %d", count, len(line))
+					}
+				}
+				return best
+			}
+			small, large := run(8000), run(16000)
+			t.Logf("8k: %v, 16k: %v", small, large)
+			if float64(large) > 3.3*float64(small) {
+				t.Errorf("doubling the line grew scan time from %v to %v", small, large)
+			}
+		})
+	}
+}
+
+func TestAuditSpanScanStopsAtResponseCap(t *testing.T) {
+	s, err := newAuditSearch(".", true, true, nil, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(n int) time.Duration {
+		line := strings.Repeat("a", n)
+		best := time.Duration(1<<63 - 1)
+		for range 3 {
+			started := time.Now()
+			got := s.bodySpans(line, -1, len(line))
+			best = min(best, time.Since(started))
+			if !got.Capped || len(got.Spans) != auditSpansMax || got.Spans[auditSpansMax-1] != (auditSpan{1, auditSpansMax - 1, auditSpansMax}) {
+				t.Fatalf("size %d: got %d spans, capped %v", n, len(got.Spans), got.Capped)
+			}
+		}
+		return best
+	}
+	short, long := run(auditSpansMax+1), run(100*auditSpansMax)
+	t.Logf("near cap: %v, 1M: %v", short, long)
+	if long > 5*short {
+		t.Errorf("lengthening the unseen suffix grew scan time from %v to %v", short, long)
+	}
+}
+
+func TestAuditSpanScanScratchAllocation(t *testing.T) {
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name, pattern, body string
+		wantSpans, maxBytes int
+	}{
+		{"long lookahead", "(?:a+z|.)(?:b{1000})?", strings.Repeat("a", mib), auditSpansMax, 12 * mib},
+		{"interleaved alternatives", "(?:a|b?)+z", strings.Repeat("a", mib), 0, 12 * mib},
+		{"short lines", "az", strings.Repeat("a\n", mib/2), 0, mib},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := newAuditSearch(tc.pattern, true, true, nil, "", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := s.bodySpans(tc.body, -1, len(tc.body))
+			runtime.ReadMemStats(&after)
+			bytes := after.TotalAlloc - before.TotalAlloc
+			t.Logf("allocated %d bytes", bytes)
+			if bytes > uint64(tc.maxBytes) {
+				t.Errorf("allocated %d bytes, want at most %d", bytes, tc.maxBytes)
+			}
+			if len(got.Spans) != tc.wantSpans || got.Capped != (tc.wantSpans == auditSpansMax) {
+				t.Errorf("got %d spans, capped %v", len(got.Spans), got.Capped)
+			}
+		})
+	}
+}
+
+func TestAuditSpanScanAgreesWithRegexp(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	alphabet := []string{"a", "b", "_", " ", "\x00", "\xff", "\u00e9", "\U0001f642"}
+	patterns := []string{
+		".", "(?i:a)+", "a+?b|a", "a.*b|a", "a+z|.", "a*",
+		"(a?)*", "(a*|b)+?", "(?:|a)+b|a", "((a)|(b))*", "(?:a??|b?)*a",
+		"^|.", "$|a", "\\A.*\\z", "\\w+\\b|.", "\\B\\w+\\b|.",
+		"\\ba\\w?|a\\B", "\\w?b\\b", "\\B[a_]+|.",
+		"(?:\\b|a)*?b", "\\b\\p{L}*", "\\p{L}*|.", "\\p{So}+",
+	}
+	for range 24 {
+		a, b := patterns[rng.Intn(len(patterns))], patterns[rng.Intn(len(patterns))]
+		patterns = append(patterns, "(?:"+a+"|"+b+")"+[]string{"", "?", "*", "+?"}[rng.Intn(4)])
+	}
+	patterns = append(patterns, "(?:a|b?)+z", "(?:a|b?)+z|a", "a.*z|ab|a", "a.*z|a|ab")
+	lines := []string{"", "a", "a b", "abac", "abzaaz", strings.Repeat("ab", 130) + "a"}
+	for range 48 {
+		var line strings.Builder
+		for range rng.Intn(24) {
+			line.WriteString(alphabet[rng.Intn(len(alphabet))])
+		}
+		lines = append(lines, line.String())
+	}
+	for _, pattern := range patterns {
+		s, err := newAuditSearch(pattern, true, true, nil, "", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		re := regexp.MustCompile(pattern)
+		for _, line := range lines {
+			for _, seam := range []int{-1, len(line) / 3, len(line) / 2} {
+				var got [][2]int
+				s.eachLineMatch(line, seam, func(start, end int) bool {
+					got = append(got, [2]int{start, end})
+					return false
+				})
+				want := referenceAuditSpanScan(s.seamed, re, line, seam)
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("%q on %q at seam %d: got %v, want %v", pattern, line, seam, got, want)
+				}
+			}
+		}
+	}
+}
+
+// Use the ordinary regexp engine and, on a seamed assertion, the search
+// matcher's bounded regexp for each resume. Only the short fixtures use this
+// intentionally repetitive reference.
+func referenceAuditSpanScan(m *seamMatcher, re *regexp.Regexp, line string, seam int) (spans [][2]int) {
+	window := func(lo, hi int) {
+		if m == nil || seam < 0 {
+			for _, match := range re.FindAllStringIndex(line[lo:hi], -1) {
+				if match[0] < match[1] {
+					spans = append(spans, [2]int{lo + match[0], lo + match[1]})
+				}
+			}
+			return
+		}
+		for lo < hi {
+			start, end, ok := m.first(line, lo, hi)
+			if !ok {
+				return
+			}
+			lo = end
+			if start < end {
+				spans = append(spans, [2]int{start, end})
+			} else {
+				_, width := utf8.DecodeRuneInString(line[end:hi])
+				lo += width
+			}
+		}
+	}
+	if seam < 0 {
+		window(0, len(line))
+	} else {
+		window(0, seam)
+		window(seam, len(line))
+	}
+	return spans
 }

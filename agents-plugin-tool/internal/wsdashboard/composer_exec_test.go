@@ -469,6 +469,7 @@ func TestComposerRefusedLaunchShowsRefused(t *testing.T) {
 func TestComposerAsyncConvertedCardFinishesOnRefresh(t *testing.T) {
 	f := startComposerFixture(t)
 	f.svc.mu.Lock()
+	f.svc.jobs["exec_slow"] = ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Async: true}
 	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
 		return ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Command: req.Line, Async: true}, nil
 	}
@@ -481,9 +482,6 @@ func TestComposerAsyncConvertedCardFinishesOnRefresh(t *testing.T) {
 		t.Fatalf("card = %+v", card)
 	}
 	// Still running: the refresh keeps it async.
-	f.svc.mu.Lock()
-	f.svc.jobs["exec_slow"] = ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Async: true}
-	f.svc.mu.Unlock()
 	if c := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/sub-async-0001")); c.Phase != "async" {
 		t.Fatalf("running card = %+v", c)
 	}

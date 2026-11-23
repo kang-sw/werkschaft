@@ -518,13 +518,13 @@ type auditSearch struct {
 	// holds a zero-width assertion (^ $ \A \z \b \B), whose answer depends
 	// on the text around a position; nil for a pattern without one.
 	seamed *seamMatcher
-	// re is the compiled expression (nil for a case-sensitive literal, which
-	// is lit); the span extraction runs the same expression as match.
-	re    *regexp.Regexp
-	lit   string
-	kinds map[wsaudit.Kind]bool
-	n     int
-	query string
+	// spanScan runs the same expression as match and reuses its scratch
+	// space across lines. It is nil for a case-sensitive literal.
+	spanScan *spanScan
+	lit      string
+	kinds    map[wsaudit.Kind]bool
+	n        int
+	query    string
 }
 
 // newAuditSearch compiles q: a regular expression (RE2, linear time) when
@@ -552,8 +552,11 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 	if err != nil {
 		return s, err
 	}
-	s.re = re
-	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil && hasAssertion(tree) {
+	tree, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return s, err
+	}
+	if hasAssertion(tree) {
 		// The parsed expression's own spelling, not the source: a source can
 		// end inside a construct that runs to the end of the pattern (\Q
 		// with no \E), which would swallow the wrapping.
@@ -561,6 +564,11 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 			return s, err
 		}
 	}
+	prog, err := syntax.Compile(tree.Simplify())
+	if err != nil {
+		return s, err
+	}
+	s.spanScan = &spanScan{prog: prog}
 	s.match = func(line string) (int, int, bool) {
 		loc := re.FindStringIndex(line)
 		if loc == nil {
@@ -745,8 +753,6 @@ type seamMatcher struct {
 	// re is the compiled form by the left and right sentinel kind (see
 	// sentinelKind), made on first use; a request is served by one goroutine.
 	re map[[2]int]*regexp.Regexp
-	// ctx is the resumable form (see audit_span_scan.go), by its shape.
-	ctx map[[3]int]*regexp.Regexp
 }
 
 // seamSentinels are the sentinel characters by kind: 0 none (a line edge),
@@ -754,7 +760,7 @@ type seamMatcher struct {
 var seamSentinels = [3]string{"", "\x00", "_"}
 
 func newSeamMatcher(pattern string) (*seamMatcher, error) {
-	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}, ctx: map[[3]int]*regexp.Regexp{}}
+	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}}
 	if _, err := m.compiled(0, 0); err != nil {
 		return nil, err
 	}
@@ -908,9 +914,6 @@ func (s auditSearch) bodySpans(body string, head, through int) auditBodyMatches 
 	eachLine(body[:through], head, func(no int, line string, seam int) bool {
 		units := utf16Cursor{s: line}
 		s.eachLineMatch(line, seam, func(start, end int) bool {
-			if start == end {
-				return false
-			}
 			if len(res.Spans) == auditSpansMax {
 				res.Capped = true
 				return true

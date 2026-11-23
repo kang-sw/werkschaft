@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: f3a326e60f210bf7
 sage-review-completeness-reviewed: f3a326e60f210bf7
+completed: 2026-11-23
 ---
 
 # Audit span right-sentinel rescan, stored Raw cap flag, composer test waits (re-sweep repair)
@@ -153,3 +154,71 @@ Run the targeted wsdashboard audit Go tests (also under `-race`), the
 combined Node audit suites, the audit-view browser tests,
 `go test ./internal/wsdashboard -run TestComposer -count=3`, and
 `GOOS=windows go vet ./internal/wsdashboard/`.
+
+#### Implementation attempt (cd081e97d) - 2026-11-23
+
+The stored Raw counter and composer fixture fixes are in `b5c8892a3`.
+The scanner in `3d7971c47` reuses failed regex states past a match. The R1
+fix in `cd081e97d` stores only reached instructions, reuses scratch across
+lines, and compresses runs of one deferred instruction.
+
+R2 closed the dense-row and repeated short-line allocation findings. It
+retained one Critical on deferred alternative storage. On a long run of
+`a`, `(?:a|b?)+z` defers two alternating instructions per byte before it
+can backtrack. The stack can reach about 64 MiB on a 1 MiB body before
+allocation overhead. The next attempt needs to bound storage for interleaved
+alternatives, preserve RE2 priority, and add an allocation regression for
+this pattern. R1 and R2 artifacts are `66fc2ce5-01-findings.md` and
+`c50ad7a3-01-findings.md` in the worktree's review cache.
+
+At `cd081e97d`, targeted audit Go, the three audit-view Chromium tests,
+`GOOS=windows go vet ./internal/wsdashboard/`, and `go build ./...` passed
+on w5090. Doubling the pathological lines took 1.83–2.06×. Extending the
+capped dense input from 10,001 to 1,000,000 bytes took 1.45×. The 1 MiB
+wide-program and multiline allocation probes used 4,828,784 and 248 bytes.
+The prior snapshot passed the targeted audit race run, the three composer
+suite repeats, the two fixture tests with `-race -cpu 1,2,4 -count=30`,
+and the scratch 150 ms pause with `-cpu 1`. The combined Node audit
+suites passed 42 tests with `--test-isolation=none`. The Chrome capture
+of the production inspector with a fixture span response is
+`D:/Temp/sentinel-rescan/capped-other-raw.png`.
+
+Forward: `TestHostedExecStopEndsTheJobsProcessGroup` is a known w5090
+failure and was excluded from the full suite attempt.
+
+### Result (a980f6b1e) - 2026-11-23
+
+The scanner advances regexp threads in RE2 priority order one rune at a
+time. The two thread slices hold the current position and its successors,
+with storage bounded by the compiled program size. The sparse visited
+cache reuses failed lookahead across resumes. Assertions still see stored
+seam neighbours, and the callback ends the scan at the 10,001st visible
+span. The stored Raw counter displays `1/10000+` and the composer
+fixtures register running jobs before conversion (`b5c8892a3`).
+
+- The 1 MiB `(?:a|b?)+z` no-match regression allocated 3,718,504 bytes on
+  w5090. The wide-program and short-line probes allocated 4,828,608 and
+  232 bytes. Doubling pathological inputs took 1.91–2.05×. Growing the
+  dense line from 10,001 to 1,000,000 bytes took 1.10× at the response cap.
+  The Go differential suite also covers interleaved alternatives,
+  fallback priority, resumed matches, and seam context.
+- Passed on w5090: focused audit spans, `go test -race
+  ./internal/wsdashboard -run TestAudit -count=1`, `go build ./...`,
+  `GOOS=windows go vet ./internal/wsdashboard/`, and the full
+  `go test ./... -count=1` run with the three process tests below excluded.
+- All three audit-view and four settings Chromium checks passed on w5090
+  with generated package assets and cached Chromium. The prior attempt's
+  42 Node audit tests, three composer suite repeats, composer race stress,
+  and scratch 150 ms pause checks cover the same Raw and composer changes.
+  The stored Raw capture is `D:/Temp/sentinel-rescan/capped-other-raw.png`.
+- Independent R1 Lite had zero findings for the retry range.
+  Artifact: `d1ca4f10-01-findings.md`.
+
+Forward: w5090 reproduced process-group liveness failures at base
+`3cd749223` in `TestHostedExecStopEndsTheJobsProcessGroup`,
+`TestOneShotTimeoutKillsProcessTree`, and
+`TestDescendantsOfAHeldChildSurviveAManagerReplace`. The passing full run
+excluded those three. The same base reproduced
+`TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder` reading zero
+display lines in 8 of 180 trials. The collector test stayed enabled and
+passed in the final full run.
