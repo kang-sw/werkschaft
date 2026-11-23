@@ -77,7 +77,8 @@ func TestPlaybookPrintPiHarnessSelectsOverlay(t *testing.T) {
 		"overlay-pb/overlay-pb.pi.md": "---\nkind: print\ndelegates: false\n---\n# Overlay Playbook (Pi)\n\n" + overlayText + "\n",
 	})
 
-	piServer := newTestServerWithHarness(t, "pi")
+	piServer := newTestServerWithHarness(t, "")
+	piServer.recordHarness("initialize", "pi")
 	piBody, _, err := printPlaybook(piServer, os.DirFS(rsrcRoot), "overlay-pb", nil, wsconfig.Options{}, "", nil)
 	if err != nil {
 		t.Fatalf("printPlaybook (pi): %v", err)

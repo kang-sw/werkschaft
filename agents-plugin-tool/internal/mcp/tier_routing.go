@@ -94,7 +94,7 @@ func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, 
 	if res.Bundle != "" {
 		return binding.Model, binding.Effort, "", true
 	}
-	return binding.Model, binding.Effort, binding.Backend + "." + res.Size, true
+	return binding.Model, binding.Effort, wsagent.TierRuntimeHarness(res.Harness) + "." + res.Size, true
 }
 
 // harnessAvailability is the runner's per-harness spawn check

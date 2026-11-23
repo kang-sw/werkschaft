@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -37,7 +38,7 @@ func intakeSummaryFixture() *wslive.ReasoningSummary {
 
 func summaryIntake(t *testing.T, s *Server, key string, ev map[string]any) response {
 	t.Helper()
-	args := map[string]any{"session_key": key, "adapter": "pi", "events": []any{ev}}
+	args := map[string]any{"session_key": key, "adapter": s.currentHarness(), "events": []any{ev}}
 	p, _ := json.Marshal(map[string]any{"name": dashboardIntakeTool, "arguments": args})
 	op := s.intake.ingress(request{Method: "tools/call", Params: p})
 	defer op.finish()
@@ -59,7 +60,8 @@ func newSummaryIntakeFixture(t *testing.T) (liveFixture, *summaryIntakeSlot) {
 	t.Setenv(envHarnessPID, strconv.Itoa(os.Getpid()))
 	f.server.ownerPID = os.Getpid()
 	f.server.intake = &intakeOrder{}
-	f.server.sessionHarness = "pi"
+	f.server.sessionHarness = "fixture"
+	f.server.agentBackendSource = wsagent.NewRunner(wsagent.Options{Backends: harnessExtensionRegistrations()})
 	slot := &summaryIntakeSlot{owned: true}
 	f.server.live.host = summaryIntakeHost{slot}
 	// Direct intake calls bypass the keyed dispatch that registers the row.
@@ -71,7 +73,7 @@ func newSummaryIntakeFixture(t *testing.T) (liveFixture, *summaryIntakeSlot) {
 	row.EndedAt = ""
 	row.HarnessPID = os.Getpid()
 	row.MCPOwnerPID = os.Getpid()
-	row.Harness = "pi"
+	row.Harness = "fixture"
 	if err := wsdashboard.WriteRegistration(f.stateDir, row); err != nil {
 		t.Fatal(err)
 	}

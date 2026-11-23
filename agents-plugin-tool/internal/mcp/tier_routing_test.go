@@ -26,17 +26,30 @@ Do the work.
 `
 
 const (
-	piInitNative = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-pi-bridge"}}}`
-	piInitDaemon = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}}`
+	piInitNative    = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-pi-bridge"}}}`
+	codexInitNative = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"codex"}}}`
+	codexInitDaemon = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"codex"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}}`
 )
 
-// roleRenderFixture is a Pi lead whose package holds one role playbook.
+// daemonRenderFixture lets a fixture Codex caller opt in to daemon
+// delegation. Live Codex policy is unchanged.
+func daemonRenderFixture(t *testing.T) *piRecordFixture {
+	f := newPiRecordFixture(t)
+	backends := wsagent.BuiltinBackendRegistrations()
+	codex := backends[wsagent.BackendCodex]
+	codex.Connection.ClientDaemonAgents = true
+	backends[wsagent.BackendCodex] = codex
+	f.s.agentBackendSource = wsagent.NewRunner(wsagent.Options{Backends: backends})
+	return f
+}
+
+// roleRenderFixture is a fixture lead whose package holds one role playbook.
 func roleRenderFixture(t *testing.T) *piRecordFixture {
 	t.Helper()
 	useResourceFixture(t, buildTestRsrcTree(t, map[string]string{
 		"role-pb/role-pb.md": rolePlaybookContent,
 	}))
-	return newPiRecordFixture(t)
+	return daemonRenderFixture(t)
 }
 
 // renderResponse completes the initialize request, renders name through
@@ -71,50 +84,37 @@ func metadata(lines []string) string { return strings.Join(lines[1:], "\n") }
 // harness's binding, mapping or not.
 func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	f := roleRenderFixture(t)
-	nativeFallback := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendPi, "medium", f.s.configOptions()), "\n"))
-
-	// Pi sets no medium slot: the bare size takes the config fallback
-	// chain's binding, and the unmapped role tier, which falls through to
-	// that bare size, carries the same binding byte for byte (agent.spawn
-	// refuses both forms alike: TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers).
-	if daemon, want := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)), nativeFallback; daemon != want || !strings.Contains(want, "recommended-model: ") {
-		t.Fatalf("slotless daemon metadata = %q, want the bare fallback %q", daemon, want)
-	}
-	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeFallback {
-		t.Fatalf("slotless native metadata = %q, want %q", native, nativeFallback)
-	}
-
-	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
-		"value": map[string]any{"tier": "medium", "model": "pi-mid", "effort": "high"}})
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "codex",
+		"value": map[string]any{"tier": "medium", "model": "codex-mid", "effort": "high"}})
 	if toolIsError(t, resp) {
-		t.Fatalf("set pi.medium: %s", resp)
+		t.Fatalf("set codex.medium: %s", resp)
 	}
-	nativeBaseline := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendPi, "medium", f.s.configOptions()), "\n"))
-	if nativeBaseline != "recommended-tier: medium\nrecommended-model: pi-mid\nrecommended-reasoning-effort: high" {
+	nativeBaseline := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendCodex, "medium", f.s.configOptions()), "\n"))
+	if nativeBaseline != "recommended-tier: medium\nrecommended-model: codex-mid\nrecommended-reasoning-effort: high" {
 		t.Fatalf("baseline = %q", nativeBaseline)
 	}
 
 	// Default chain: the daemon caller's binding is the bare size's.
-	daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
+	daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil))
 	if want := nativeBaseline; daemon != want {
 		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
 	}
-	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitNative, nil)); native != nativeBaseline {
 		t.Fatalf("default-chain native metadata = %q, want %q", native, nativeBaseline)
 	}
 
 	// A cross-harness mapping moves only the daemon caller's binding.
 	setRouting(t, f.s, `{"nodes":{"implement":{"*":"claude.*"}}}`)
-	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
+	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil))
 	if want := "recommended-tier: claude.medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("mapped daemon metadata = %q, want %q", daemon, want)
 	}
-	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitNative, nil)); native != nativeBaseline {
 		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBaseline)
 	}
 
 	// tier_override keeps its bare validation and replaces the role's size.
-	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, map[string]any{"tier_override": "opus"}))
+	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, map[string]any{"tier_override": "opus"}))
 	if want := "recommended-tier: claude.large\nrecommended-model: opus\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("override daemon metadata = %q, want %q", daemon, want)
 	}
@@ -123,17 +123,26 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 		t.Fatalf("a role-shaped tier_override must stay rejected: %s", resp)
 	}
 
+	resp = callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "werk",
+		"value": map[string]any{"tier": "medium", "backend": "werk", "model": "provider/worker", "effort": "low"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("set werk.medium: %s", resp)
+	}
+	setRouting(t, f.s, `{"nodes":{"implement":{"*":"pi.*"}}}`)
+	if got := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil)); got != "recommended-tier: werk.medium\nrecommended-model: provider/worker\nrecommended-reasoning-effort: low" {
+		t.Fatalf("legacy Pi pointer recommends %q", got)
+	}
+
 	// An invalid graph keeps the role recommendation without a binding.
 	setRouting(t, f.s, `{"nodes":{"implement":{"*":"nosuch:*"}}}`)
-	if daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)); daemon != "recommended-tier: ticket-worker:medium" {
+	if daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil)); daemon != "recommended-tier: ticket-worker:medium" {
 		t.Fatalf("invalid-graph daemon metadata = %q", daemon)
 	}
 }
 
 // With no user config an unmapped role tier, whose chain ends at the bare
 // size on the caller's harness, resolves exactly as that bare size does on
-// every surface that reports a binding: config.resolve_agent for Pi (no
-// medium slot: the legacy fallback chain), an omitted harness on a session
+// every surface that reports a binding: config.resolve_agent with an omitted harness on a session
 // with no detected harness (the default bucket), Codex, and Claude, and the
 // render binding for the same harnesses.
 func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
@@ -158,7 +167,7 @@ func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
 		t.Fatalf("fixture session harness = %q, want none detected", h)
 	}
 	opts := f.s.configOptions()
-	for _, harness := range []string{wsagent.BackendPi, "", "codex", wsagent.BackendClaude} {
+	for _, harness := range []string{"", wsagent.BackendCodex, wsagent.BackendClaude, wsagent.BackendAgy} {
 		bare, bareErr := resolve("medium", harness)
 		role, roleErr := resolve("ticket-worker:medium", harness)
 		if bareErr != "" || roleErr != "" {
@@ -176,7 +185,7 @@ func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
 			t.Fatalf("harness %q: role = %+v, bare = %+v", harness, role, bare)
 		}
 		switch harness {
-		case wsagent.BackendPi, "":
+		case "":
 			if bare.ResolvedFrom != "default" {
 				t.Fatalf("harness %q: bare resolved_from = %q, want the default bucket fallback", harness, bare.ResolvedFrom)
 			}
@@ -210,7 +219,7 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	}`)
 	resolve := func(tier string) (resolveAgentTierResult, string) {
 		t.Helper()
-		resp := callToolOnce(t, f.s, 4, "config.resolve_agent", map[string]any{"tier": tier, "harness": "pi", "format": "json"})
+		resp := callToolOnce(t, f.s, 4, "config.resolve_agent", map[string]any{"tier": tier, "harness": "codex", "format": "json"})
 		if toolIsError(t, resp) {
 			return resolveAgentTierResult{}, toolText(t, resp)
 		}
@@ -221,7 +230,7 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 		return got, ""
 	}
 	want, err := func() (resolveAgentTierResult, error) {
-		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(f.s.configOptions(), "medium", "pi")
+		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(f.s.configOptions(), "medium", "codex")
 		return resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: from}, err
 	}()
 	if err != nil {
@@ -240,10 +249,10 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	if got, errText := resolve("claude.large"); errText != "" || got.Model != "opus" || got.Trace != "claude.large" {
 		t.Fatalf("explicit target = %+v %s", got, errText)
 	}
-	// review:xlarge lands on pi.xlarge, which Pi does not set: agent.spawn
+	// review:xlarge lands on pi.xlarge, whose werk slot is unset: agent.spawn
 	// refuses it, so config.resolve_agent does too rather than answering
 	// with another harness's slot.
-	if got, errText := resolve("review:xlarge"); !strings.Contains(errText, "pi.xlarge has no model in agents.tier") {
+	if got, errText := resolve("review:xlarge"); !strings.Contains(errText, "werk.xlarge has no usable OpenRouter model") {
 		t.Fatalf("slotless routed tier = %+v %q", got, errText)
 	}
 	// With a runner of its own, the server applies the spawn's harness
@@ -315,11 +324,11 @@ func TestFormatAgentTiersRoutingSection(t *testing.T) {
 // size and caller-harness binding with or without it.
 func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 	useResourceFixture(t, "../../../agents-plugin/rsrc")
-	f := newPiRecordFixture(t)
-	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
-		"value": map[string]any{"tier": "large", "model": "pi-large", "effort": "high"}})
+	f := daemonRenderFixture(t)
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "codex",
+		"value": map[string]any{"tier": "large", "model": "codex-large", "effort": "high"}})
 	if toolIsError(t, resp) {
-		t.Fatalf("set pi.large: %s", resp)
+		t.Fatalf("set codex.large: %s", resp)
 	}
 	tier := func(initialize, name string) string {
 		first, _, _ := strings.Cut(metadata(renderResponse(t, f.s, f.leadKey, name, initialize, nil)), "\n")
@@ -330,24 +339,24 @@ func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 		"ticket-worker-elevated": "large",
 		"explore":                "small",
 	} {
-		if got := tier(piInitDaemon, name); got != "recommended-tier: "+bare {
+		if got := tier(codexInitDaemon, name); got != "recommended-tier: "+bare {
 			t.Fatalf("daemon %s = %q, want %q", name, got, bare)
 		}
-		if got := tier(piInitNative, name); got != "recommended-tier: "+bare {
+		if got := tier(codexInitNative, name); got != "recommended-tier: "+bare {
 			t.Fatalf("native %s = %q, want bare %q", name, got, bare)
 		}
 	}
 
-	nativeBefore := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil))
-	daemon := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil))
-	if want := "recommended-tier: large\nrecommended-model: pi-large\nrecommended-reasoning-effort: high"; daemon != want {
+	nativeBefore := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitNative, nil))
+	daemon := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitDaemon, nil))
+	if want := "recommended-tier: large\nrecommended-model: codex-large\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
 	}
 	setRouting(t, f.s, `{"nodes":{"review":{"*":"claude.*"}}}`)
-	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: claude.large\nrecommended-model: opus") {
+	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: claude.large\nrecommended-model: opus") {
 		t.Fatalf("mapped daemon metadata = %q", daemon)
 	}
-	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil)); native != nativeBefore {
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitNative, nil)); native != nativeBefore {
 		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBefore)
 	}
 }
@@ -405,12 +414,12 @@ func legacyV0510ResolveTier(cfg wsconfig.Options, callerHarness, tier string) (h
 // v0.51.0 refuses it before creating a child, per the named-tiers decision).
 func TestRenderedTierSurvivesDaemonRollbackBeforeSpawn(t *testing.T) {
 	f := roleRenderFixture(t)
-	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
-		"value": map[string]any{"tier": "medium", "model": "pi-mid", "effort": "high"}})
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "codex",
+		"value": map[string]any{"tier": "medium", "model": "codex-mid", "effort": "high"}})
 	if toolIsError(t, resp) {
-		t.Fatalf("set pi.medium: %s", resp)
+		t.Fatalf("set codex.medium: %s", resp)
 	}
-	const callerHarness = wsagent.BackendPi
+	const callerHarness = wsagent.BackendCodex
 	cases := []struct {
 		name, routing string
 		wantTier      string // recommended-tier the render returns
@@ -418,14 +427,14 @@ func TestRenderedTierSurvivesDaemonRollbackBeforeSpawn(t *testing.T) {
 	}{
 		{name: "default chain falls through to the caller's slot", routing: `{}`, wantTier: "medium"},
 		{name: "cross-harness slot", routing: `{"nodes":{"implement":{"*":"claude.*"}}}`, wantTier: "claude.medium"},
-		{name: "caller-harness slot reached through a pointer", routing: `{"nodes":{"implement":{"*":"pi.*"}}}`, wantTier: "pi.medium"},
+		{name: "caller-harness slot reached through a pointer", routing: `{"nodes":{"implement":{"*":"codex.*"}}}`, wantTier: "codex.medium"},
 		{name: "bundle terminal", routing: `{"nodes":{"implement":{"*":"deep-impl"}},"bundles":{"deep-impl":{"harness":"claude","model":"custom-model","effort":"high"}}}`, wantTier: "ticket-worker:medium", bundle: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			setRouting(t, f.s, tc.routing)
 			// 1. Render on the candidate daemon.
-			lines := renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)
+			lines := renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil)
 			var tier, model, effort string
 			for _, line := range lines[1:] {
 				if v, ok := strings.CutPrefix(line, "recommended-tier: "); ok {
