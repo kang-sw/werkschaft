@@ -2,6 +2,7 @@
 title: "이전 런처가 쥔 시작 잠금을 새 데몬 시작기가 기다리다 실패"
 related:
   261123-bug-ws-daemon-replace-gap-older-daemon: regression source (Phases 2-5, merge 39043582a)
+completed: 2026-11-24
 ---
 
 # Old launcher holds launcher-start.lock while the newer Go starter waits on it
@@ -60,3 +61,8 @@ Verification:
 - Update the operational lock instructions in
   `ai-docs/manuals/ws-mcp.md` (around lines 1959-1982) and add the scenario
   to `ai-docs/manuals/release-compatibility.md`.
+
+
+## Resolution (2026-11-24)
+
+Phase 1 landed in merge 67844c433 (b2e6cebeb): daemon-start joins launcher-start.lock only for strict starters without the inherited marker; mixed-version regression TestDaemonStartStartsUnderLegacyLauncherLock; manuals updated with T0 evidence for both directions.
