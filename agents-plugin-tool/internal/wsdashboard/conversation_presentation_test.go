@@ -333,6 +333,21 @@ func TestConversationPresentationWhiteboardFoldAndTargets(t *testing.T) {
 	}
 }
 
+func TestConversationPresentationRootOnlyCommandRendersNoEmptyCard(t *testing.T) {
+	floor := wswhiteboard.Effect{Kind: "setting", Field: "id-floor", Before: "10", After: "1411"}
+	log := wswhiteboard.Effect{Kind: "log", Topic: "plan", EntryID: "e7", Field: "text", After: "note"}
+	if card := effectPresentation(t, floor).WhiteboardCard(); len(card.Topics) != 0 {
+		t.Fatalf("root-only setting must yield no topic card: %+v", card)
+	}
+	html := effectHTML(t, floor, log)
+	if n := strings.Count(html, `class="wbupdate-topic"`); n != 1 {
+		t.Fatalf("want exactly the plan topic card, got %d: %s", n, html)
+	}
+	if strings.Contains(html, `<section class="wbupdate-topic"><div class="wbupdate-bar">`) {
+		t.Fatalf("nameless title-only card rendered: %s", html)
+	}
+}
+
 func TestConversationPresentationTopicBubbleShowsLabelNotStem(t *testing.T) {
 	state := &wswhiteboard.State{}
 	if _, problems := wswhiteboard.Apply(state, `<wb:topic name="send-latency" label="Send latency label"><wb:log>first</wb:log></wb:topic>`, wswhiteboard.Env{Now: testNow}); len(problems) != 0 {

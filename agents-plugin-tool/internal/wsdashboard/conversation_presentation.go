@@ -174,6 +174,17 @@ func (e ConvEntry) WhiteboardCard() conversationEffectCard {
 			}
 		}
 	}
+	// A root-level effect (e.g. a wb:floor "setting") outside any topic group
+	// opens a nameless topic that gains no row; rendered, its bar would fall
+	// back to the bare confirmed title as an empty card. Drop such topics.
+	kept := card.Topics[:0]
+	for _, topic := range card.Topics {
+		if topic.Name == "" && topic.Label == "" && len(topic.Rows) == 0 && len(topic.Items) == 0 {
+			continue
+		}
+		kept = append(kept, topic)
+	}
+	card.Topics = kept
 	for i := range card.Topics {
 		for j := range card.Topics[i].Rows {
 			row := &card.Topics[i].Rows[j]
