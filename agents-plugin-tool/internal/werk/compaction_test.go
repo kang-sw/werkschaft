@@ -47,7 +47,7 @@ func TestCheckpointSelectsOnlySummaryAndDeltasAfterReopen(t *testing.T) {
 			ChildrenInFlight: []string{"in-flight child"}, ChildrenFinished: []string{"finished child"}, ExecJobs: []string{"running job"},
 		}
 	}
-	a.reportCompaction(ctx)
+	a.reportCompaction(ctx, nil)
 	cp := lines[len(lines)-1]
 	if cp.T != LineCheckpoint || !ValidSessionID(cp.ID) || cp.Replayed {
 		t.Fatalf("unexpected checkpoint event: %+v", cp)
@@ -164,7 +164,7 @@ func TestCheckpointFailureLeavesInputIntact(t *testing.T) {
 				}})
 			must(t, err)
 			t.Cleanup(func() { _ = a.Close() })
-			a.reportCompaction(context.Background())
+			a.reportCompaction(context.Background(), nil)
 			if last.T != LineCompactFailed {
 				t.Fatalf("expected a failed compaction event: %+v", last)
 			}

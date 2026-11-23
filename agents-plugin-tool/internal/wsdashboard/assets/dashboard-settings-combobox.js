@@ -106,7 +106,7 @@ var WsSettingsCombobox = (function () {
     var h = harnessEntry(harnessName);
     if (!h || !Array.isArray(h.models)) return [];
     return h.models
-      .filter(function (m) { return m && m.id; })
+      .filter(function (m) { return m && m.id && (!m.provider || m.provider === "openrouter"); })
       .map(function (m) { return { id: String(m.id), thinking: m.thinking === true }; });
   }
 

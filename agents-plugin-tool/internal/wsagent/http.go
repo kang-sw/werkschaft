@@ -131,6 +131,7 @@ type leadRequest struct {
 	permissionRequest
 	Root            string `json:"root"`
 	Harness         string `json:"harness"`
+	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model"`
 	Effort          string `json:"effort"`
 	PermissionMode  string `json:"permission_mode"`
@@ -229,10 +230,10 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		var body leadRequest
-		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "model", "effort", "plugin_isolation") {
+		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "provider", "model", "effort", "plugin_isolation") {
 			return
 		}
-		opts := LeadOptions{Model: body.Model, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation}
+		opts := LeadOptions{Model: body.Model, Provider: body.Provider, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation}
 		if action == "permission" {
 			level, ack, err := body.selection()
 			if err != nil {

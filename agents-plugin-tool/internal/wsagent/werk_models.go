@@ -3,6 +3,7 @@ package wsagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,53 @@ const werkModelsTimeout = 15 * time.Second
 // one that declares its parameters without it; a listing that declares none
 // says nothing.
 func (b WerkBackend) Choices(ctx context.Context) ([]ModelChoice, []string, error) {
+	ctx, cancel := context.WithTimeout(ctx, werkModelsTimeout)
+	defer cancel()
+	catalog, ok := b.credentials.(interface {
+		OpenAIModels(context.Context, wscred.Request) ([]wscred.OpenAIModel, error)
+	})
+	if !ok || b.providerGap(wscred.ProviderOpenAI) != "" {
+		return b.openRouterChoices(ctx)
+	}
+	type listing struct {
+		models []ModelChoice
+		err    error
+	}
+	router := make(chan listing, 1)
+	go func() {
+		models, _, err := b.openRouterChoices(ctx)
+		router <- listing{models, err}
+	}()
+	// Listing account models does not start inference or require background
+	// consent. The lead's credential request checks consent before every turn.
+	account, openAIErr := catalog.OpenAIModels(ctx, wscred.Request{AgentSession: true})
+	result := <-router
+	if openAIErr != nil {
+		if b.openAIWindows != nil {
+			b.openAIWindows.Store(nil)
+		}
+		return result.models, werkEfforts, errors.Join(result.err, openAIErr)
+	}
+	windows := make(map[string]int64, len(account))
+	for _, entry := range account {
+		if !modelPattern.MatchString(entry.Slug) {
+			continue
+		}
+		result.models = append(result.models, ModelChoice{
+			ID: entry.Slug, Provider: string(wscred.ProviderOpenAI), DisplayName: entry.DisplayName,
+		})
+		windows[entry.Slug] = max(entry.ContextWindow, 0)
+	}
+	if b.openAIWindows != nil {
+		b.openAIWindows.Store(&windows)
+	}
+	if len(result.models) > 0 {
+		return result.models, werkEfforts, nil
+	}
+	return result.models, werkEfforts, result.err
+}
+
+func (b WerkBackend) openRouterChoices(ctx context.Context) ([]ModelChoice, []string, error) {
 	url := b.modelsURL
 	if url == "" {
 		provider, ok := wscred.Lookup(werk.Provider)
@@ -79,8 +127,16 @@ func (b WerkBackend) Choices(ctx context.Context) ([]ModelChoice, []string, erro
 }
 
 func (b WerkBackend) contextWindow(model string) int64 {
-	if b.modelWindows != nil {
-		if windows := b.modelWindows.Load(); windows != nil {
+	return b.providerContextWindow("", model)
+}
+
+func (b WerkBackend) providerContextWindow(provider, model string) int64 {
+	cache := b.modelWindows
+	if provider == string(wscred.ProviderOpenAI) {
+		cache = b.openAIWindows
+	}
+	if cache != nil {
+		if windows := cache.Load(); windows != nil {
 			return (*windows)[model]
 		}
 	}

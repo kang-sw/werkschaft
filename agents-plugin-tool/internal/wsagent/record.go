@@ -43,6 +43,7 @@ type Record struct {
 	// until the first process reported one.
 	SessionID string `json:"backend_session_id,omitempty"`
 	Model     string `json:"model,omitempty"`
+	Provider  string `json:"provider,omitempty"`
 	Effort    string `json:"effort,omitempty"`
 	// WSKey is the conversation's ws session key; it never leaves this file,
 	// the composed instruction file, and the child processes.
@@ -309,8 +310,9 @@ type ParentRef struct {
 // QueuedInput is one drained dashboard input waiting for its turn: a
 // message's text, or a slash command.
 type QueuedInput struct {
-	Text    string           `json:"text,omitempty"`
-	Command *wsinbox.Command `json:"command,omitempty"`
+	Interactive bool             `json:"interactive,omitempty"`
+	Text        string           `json:"text,omitempty"`
+	Command     *wsinbox.Command `json:"command,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

@@ -51,6 +51,7 @@ type LeadOptions struct {
 	HireRequestID   string
 	HireLabel       string
 	Model           string
+	Provider        string
 	Effort          string
 	PermissionMode  string
 	PluginIsolation string
@@ -90,6 +91,13 @@ func (r *Runner) CreateLead(backend, root string, opts LeadOptions) (State, erro
 	}
 	if opts.Effort != "" && !effortPattern.MatchString(opts.Effort) {
 		return State{}, categorized(ErrInvalidProfile, badRequest("effort %q must be a lowercase word", opts.Effort))
+	}
+	if choice, ok := r.opts.Backends[strings.TrimSpace(backend)].Backend.(leadProviderAdmitter); ok {
+		if err := choice.admitLeadProvider(opts.Provider, opts.Model); err != nil {
+			return State{}, categorized(ErrInvalidProfile, err)
+		}
+	} else if opts.Provider != "" {
+		return State{}, badRequest("this harness does not take a provider selection")
 	}
 	modes := permissionModes(strings.TrimSpace(backend), []map[string]BackendRegistration{r.opts.Backends})
 	if opts.PermissionMode != "" && !slices.Contains(modes, opts.PermissionMode) {
@@ -244,6 +252,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	if lead != nil {
 		rec.Lead = true
+		rec.Provider = lead.Provider
 		rec.PluginIsolation = leadPluginIsolation(lead.PluginIsolation)
 		rec.PermissionMode = rp.Definition.PermissionMode
 		if lead.Model != "" {

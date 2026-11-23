@@ -1,8 +1,12 @@
 package wsagent
 
 import (
+	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -12,7 +16,7 @@ import (
 // common contract. It keeps only what a replay rebuilds from the lines
 // alone: the running batch, the session's cost, and the open turn.
 //
-// A worker's lines map as follows (the lead role is Phase 2):
+// Lines map as follows:
 //   - init: the backend session id and the harness report (its version);
 //   - turn_start, turn_end: TurnStart and TurnEnd (an aborted turn names
 //     that reason; an error turn carries its text);
@@ -23,9 +27,8 @@ import (
 //   - retry: the request retry the dashboard shows;
 //   - steer_ack, user_taken: the answers a worker's steered reports need.
 //
-// user, reasoning and notice lines are not conversation content: the runner
-// shows user messages itself, and the provider-exposed summary is Phase 2's
-// lead surface.
+// The runner owns user-message rendering. The lead reasoning widget gets
+// only provider-exposed summary text.
 type werkMapper struct {
 	session string
 	batches batchTracker
@@ -34,10 +37,12 @@ type werkMapper struct {
 	resp int
 	// cost is the session's accumulated cost in USD; hasCost says the
 	// provider reported one.
-	cost    float64
-	hasCost bool
-	turn    int
-	turnID  string
+	cost     float64
+	hasCost  bool
+	turn     int
+	turnID   string
+	provider string
+	summary  *wslive.ReasoningSummary
 }
 
 func newWerkMapper(session string) *werkMapper {
@@ -73,7 +78,7 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 			{Harness: &HarnessReport{Version: l.Version}},
 		}
 	case werk.LineTurnStart:
-		m.turn, m.turnID = l.Turn, l.TurnID
+		m.turn, m.turnID, m.summary = l.Turn, l.TurnID, nil
 		return []Event{{TurnStart: true, TurnID: l.TurnID}}
 	case werk.LineReply:
 		ev := &wslive.Event{Kind: wslive.KindReply, Text: l.Text}
@@ -82,6 +87,8 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 			ev.Source = m.replySource(l)
 		}
 		return []Event{{Live: ev, TurnID: m.turnID}}
+	case werk.LineReasoning:
+		return m.reasoning(l)
 	case werk.LineToolStart:
 		return m.batches.addCall(m.group(), l.Call, l.Name, l.Args, now)
 	case werk.LineToolEnd:
@@ -129,6 +136,59 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 		}
 	}
 	return nil
+}
+
+func (m *werkMapper) reasoning(l werk.Line) []Event {
+	if m.provider == "" || l.Text == "" || l.Model == "" || m.turn <= 0 || m.resp <= 0 {
+		return nil
+	}
+	var next wslive.ReasoningSummary
+	if m.summary == nil {
+		next = wslive.ReasoningSummary{V: 1, Producer: uuid.NewString(), Turn: int64(m.turn)}
+	} else {
+		next = *m.summary
+		next.Requests = slices.Clone(next.Requests)
+	}
+	request := int64(m.resp)
+	if len(next.Requests) == 0 || next.Requests[len(next.Requests)-1].Request != request {
+		if len(next.Requests) == wslive.SummaryAttemptCap {
+			next.Requests = next.Requests[1:]
+			next.Truncated = true
+		}
+		next.Requests = append(next.Requests, wslive.SummaryAttempt{
+			Request: request, Attempt: 1, Provider: m.provider, API: "openai-responses",
+			Model: l.Model, Status: wslive.SummaryComplete,
+		})
+	}
+	remaining, parts := wslive.SummaryTextBytes, 0
+	for _, a := range next.Requests {
+		for _, p := range a.Parts {
+			remaining -= len(p.Text)
+			parts++
+		}
+	}
+	attempt := &next.Requests[len(next.Requests)-1]
+	if parts < wslive.SummaryPartCap && remaining > 0 {
+		text := l.Text[:min(len(l.Text), remaining)]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+		truncated := len(text) < len(l.Text)
+		attempt.Truncated = attempt.Truncated || truncated
+		attempt.Parts = append(slices.Clone(attempt.Parts), wslive.SummaryPart{
+			Output: int64(len(attempt.Parts)), Text: text, ObservedBytes: int64(len(l.Text)),
+			RetainedBytes: int64(len(text)), Truncated: truncated, Status: wslive.SummaryComplete,
+		})
+	} else {
+		attempt.Truncated = true
+	}
+	next.Truncated = next.Truncated || attempt.Truncated
+	next.Revision++
+	if wslive.ValidateReasoningSummary(&next) != nil {
+		return nil
+	}
+	m.summary = &next
+	return []Event{{ReasoningSummary: m.summary, TurnID: m.turnID}}
 }
 
 // group is the batch group of the response whose calls are running.

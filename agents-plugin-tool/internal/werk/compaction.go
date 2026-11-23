@@ -55,7 +55,7 @@ func (c *checkpointLine) event(replayed bool) Line {
 	return Line{T: LineCheckpoint, ID: c.ID, At: c.At, Checkpoint: c.Sequence, Text: c.Summary, Replayed: replayed}
 }
 
-func (a *Agent) reportCompaction(ctx context.Context) {
+func (a *Agent) reportCompaction(ctx context.Context, lead *LeadSummary) {
 	var err error
 	defer func() {
 		if recover() != nil {
@@ -65,10 +65,12 @@ func (a *Agent) reportCompaction(ctx context.Context) {
 			a.out.line(Line{T: LineCompactFailed, Error: Scrub(err.Error())})
 		}
 	}()
-	err = a.compact(ctx)
+	err = a.compactWithSummary(ctx, lead)
 }
 
-func (a *Agent) compact(ctx context.Context) error {
+func (a *Agent) compact(ctx context.Context) error { return a.compactWithSummary(ctx, nil) }
+
+func (a *Agent) compactWithSummary(ctx context.Context, lead *LeadSummary) error {
 	if a.journal.id != "" && a.journal.end == nil {
 		return errors.New("compaction requires a finished turn")
 	}
@@ -93,19 +95,23 @@ func (a *Agent) compact(ctx context.Context) error {
 		evidence = "Previous checkpoint (background only):\n" + boundedText(Scrub(prior.Summary, a.cfg.SummarySecrets...), 16<<10) + "\n\n"
 		since = time.UnixMilli(prior.At)
 	}
-	a.mu.Lock()
-	model := a.model
-	a.mu.Unlock()
-	response, err := a.cfg.Endpoint.Respond(ctx, Request{
-		Model: model, Instructions: proseInstructions(),
-		Input: []json.RawMessage{userItem(evidence + dialog)},
-	}, StreamHandler{})
-	if err != nil {
-		return fmt.Errorf("obtain the model summary: %w", err)
-	}
-	prose, err := readCompactProse(response, a.cfg.SummarySecrets)
-	if err != nil {
-		return err
+	var prose []string
+	var rereads string
+	if lead != nil {
+		if !a.cfg.Lead {
+			return errors.New("lead summary requires a lead session")
+		}
+		prose = make([]string, len(lead.prose))
+		for i, text := range lead.prose {
+			prose[i] = boundedText(Scrub(text, a.cfg.SummarySecrets...), proseFieldBytes)
+		}
+		rereads = a.compactRereads(lead.paths)
+	} else {
+		var err error
+		prose, err = a.compactModelProse(ctx, evidence+dialog)
+		if err != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -116,7 +122,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	}
 	checkpoint := &checkpointLine{
 		K: "checkpoint", ID: NewSessionID(), At: a.now().UnixMilli(), Sequence: a.store.checkpoint.next(),
-		Summary: archive.summary(state, prose, dialog),
+		Summary: archive.summary(state, prose, dialog, a.cfg.Lead, rereads),
 	}
 	if err := a.log.commit(checkpoint); err != nil {
 		return fmt.Errorf("save the compaction checkpoint: %w", err)
@@ -128,6 +134,20 @@ func (a *Agent) compact(ctx context.Context) error {
 	a.store.checkpoint = checkpoint
 	a.out.line(checkpoint.event(false))
 	return nil
+}
+
+func (a *Agent) compactModelProse(ctx context.Context, evidence string) ([]string, error) {
+	a.mu.Lock()
+	model := a.model
+	a.mu.Unlock()
+	response, err := a.cfg.Endpoint.Respond(ctx, Request{
+		Model: model, Instructions: proseInstructions(),
+		Input: []json.RawMessage{userItem(evidence)},
+	}, StreamHandler{})
+	if err != nil {
+		return nil, fmt.Errorf("obtain the model summary: %w", err)
+	}
+	return readCompactProse(response, a.cfg.SummarySecrets)
 }
 
 func proseInstructions() string {
@@ -278,9 +298,13 @@ func (a *compactArchive) dialog(path string) string {
 		strings.Join(a.lines, "")
 }
 
-func (a *compactArchive) summary(state CompactionState, prose []string, dialog string) string {
+func (a *compactArchive) summary(state CompactionState, prose []string, dialog string, lead bool, rereads string) string {
 	var out strings.Builder
-	out.WriteString("Compacted worker conversation. Use the ticket and ws tooling for durable state.\n\n## Session")
+	role := "worker"
+	if lead {
+		role = "lead"
+	}
+	fmt.Fprintf(&out, "Compacted %s conversation. Use the ticket and ws tooling for durable state.\n\n## Session", role)
 	ticket, playbook := a.ticket, a.playbook
 	if ticket == "" {
 		ticket = "(none recorded)"
@@ -298,6 +322,7 @@ func (a *compactArchive) summary(state CompactionState, prose []string, dialog s
 	writeCompactSection(&out, "Child agents in flight", state.ChildrenInFlight)
 	writeCompactSection(&out, "Child agents finished since the previous compaction", state.ChildrenFinished)
 	writeCompactSection(&out, "Exec jobs", state.ExecJobs)
+	out.WriteString(rereads)
 	out.WriteString("\n")
 	out.WriteString(dialog)
 	return out.String()

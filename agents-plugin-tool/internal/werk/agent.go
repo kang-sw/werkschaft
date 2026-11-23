@@ -75,6 +75,7 @@ type Config struct {
 	// redaction.
 	SummarySecrets []string
 	ContextWindow  func(model string) int64
+	Lead           bool
 	Out            io.Writer
 	// Emit receives typed events for a daemon host. When provided it replaces
 	// the legacy writer; calls are serialized even during parallel tool reads.
@@ -392,6 +393,9 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 	)
 	start := func(cmd Command) {
 		tctx, c := context.WithCancel(ctx)
+		if cmd.Interactive {
+			tctx = context.WithValue(tctx, interactiveTurnKey{}, true)
+		}
 		cancel, done, running = c, make(chan error, 1), true
 		turnID = cmd.TurnID
 		a.mu.Lock()
@@ -406,7 +410,7 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 				result <- err
 			}()
 			if cmd.Type == CmdCompact {
-				a.reportCompaction(tctx)
+				a.reportCompaction(tctx, cmd.LeadSummary)
 				return
 			}
 			if cmd.TurnID != "" {
@@ -503,6 +507,14 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 			}
 		}
 	}
+}
+
+type interactiveTurnKey struct{}
+
+// InteractiveTurn reports whether a request is part of a fresh operator send.
+func InteractiveTurn(ctx context.Context) bool {
+	interactive, _ := ctx.Value(interactiveTurnKey{}).(bool)
+	return interactive
 }
 
 func (a *Agent) dropSteers() {
@@ -657,8 +669,8 @@ func (a *Agent) report(turn int, resp *Response) {
 					parts = append(parts, s.Text)
 				}
 			}
-			text := strings.Join(parts, "\n")
-			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Encrypted: text == "" && it.Encrypted != ""})
+			text := Scrub(strings.Join(parts, "\n"), a.cfg.SummarySecrets...)
+			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Model: resp.model, Text: text, Encrypted: text == "" && it.Encrypted != ""})
 		case "message":
 			if text := it.reply(); text != "" {
 				a.reportReply(Line{T: LineReply, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Final: true})
@@ -716,8 +728,11 @@ func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
 		a.mu.Unlock()
 		resp, err := a.cfg.Endpoint.Respond(ctx, req, a.streamHandler(turn))
 		if err == nil {
-			if resp != nil && a.cfg.ContextWindow != nil {
-				resp.window = a.cfg.ContextWindow(req.Model)
+			if resp != nil {
+				resp.model = req.Model
+				if a.cfg.ContextWindow != nil {
+					resp.window = a.cfg.ContextWindow(req.Model)
+				}
 			}
 			return resp, nil
 		}
@@ -800,7 +815,11 @@ func (a *Agent) streamHandler(turn int) StreamHandler {
 // instruction text. The caller holds a.mu.
 func (a *Agent) instructions() string {
 	var b strings.Builder
-	b.WriteString("You are a ws worker running on ws's builtin agent harness. ")
+	if a.cfg.Lead {
+		b.WriteString("You are a ws lead running on ws's builtin agent harness. ")
+	} else {
+		b.WriteString("You are a ws worker running on ws's builtin agent harness. ")
+	}
 	if a.cfg.Cwd != "" {
 		fmt.Fprintf(&b, "Your working directory is %s. ", a.cfg.Cwd)
 	}

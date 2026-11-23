@@ -48,8 +48,9 @@ type StartSpec struct {
 	Profile Profile
 	// Model and Effort are the conversation's current values; empty leaves
 	// the harness default.
-	Model  string
-	Effort string
+	Model    string
+	Effort   string
+	Provider string
 	// SessionID is the backend session to resume; empty starts a new one.
 	SessionID string
 	// Cwd is the child's working directory when it is not Root, and

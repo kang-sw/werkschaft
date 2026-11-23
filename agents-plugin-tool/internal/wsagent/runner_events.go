@@ -1132,6 +1132,13 @@ func (c *conv) holdForLever(arm bool) {
 }
 
 func (c *conv) setSettings(model, effort *string) error {
+	if model != nil && c.rec.Lead {
+		if provider, ok := c.r.opts.Backends[c.rec.Backend].Backend.(leadProviderAdmitter); ok {
+			if err := provider.admitLeadProvider(c.rec.Provider, *model); err != nil {
+				return err
+			}
+		}
+	}
 	c.update(func(rec *Record) {
 		if model != nil && *model != rec.Model {
 			rec.Model = *model
@@ -1165,7 +1172,7 @@ func (c *conv) applySettings() {
 	rec := c.record()
 	restart := false
 	controls := controlsFor(c.proc)
-	if permission && !rec.Lead {
+	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend)) {
 		restart = true
 	}
 	if model && !restart && controls.SetModel(rec.Model) != nil {

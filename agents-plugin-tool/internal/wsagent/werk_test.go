@@ -465,14 +465,11 @@ func TestWerkRefusesAWorkerWithoutAModelOrAuthority(t *testing.T) {
 		}
 	}
 	b := WerkBackend{}
-	if _, err := b.Start(context.Background(), mk("", "vendor/m")); err == nil || !strings.Contains(err.Error(), "authority is required") {
+	if _, err := b.Start(context.Background(), mk("", "vendor/m")); err == nil || !strings.Contains(err.Error(), "permission level is required") {
 		t.Errorf("no authority: %v", err)
 	}
-	if _, err := b.Start(context.Background(), mk(PermissionFull, "")); err == nil || !strings.Contains(err.Error(), "tier model is required") {
+	if _, err := b.Start(context.Background(), mk(PermissionFull, "")); err == nil || !strings.Contains(err.Error(), "a model is required") {
 		t.Errorf("no model: %v", err)
-	}
-	if _, err := b.Start(context.Background(), StartSpec{Lead: &LeadSpec{}}); !errors.Is(err, errWerkLead) {
-		t.Errorf("a lead: %v", err)
 	}
 	spec := mk(PermissionFull, "vendor/m")
 	spec.MCPSession = nil
@@ -610,8 +607,8 @@ func TestWerkCatalogGradesEveryItemForBothRoles(t *testing.T) {
 		caps.Grade(ItemFollowUp) != GradeSubstitute || caps.Grade(ItemModelEffort) != GradeNative || caps.Grade(ItemUsageQuery) != GradeNative {
 		t.Errorf("worker capabilities = %+v", caps)
 	}
-	if lead := cat.Resolve(RoleLead, werk.ProtocolVersion); lead.Allows(ItemSteer) {
-		t.Errorf("no werk lead exists yet: %+v", lead)
+	if lead := cat.Resolve(RoleLead, werk.ProtocolVersion); !lead.Allows(ItemSteer) || !lead.Allows(ItemApproval) || !lead.Allows(ItemCompaction) {
+		t.Errorf("lead capabilities = %+v", lead)
 	}
 }
 

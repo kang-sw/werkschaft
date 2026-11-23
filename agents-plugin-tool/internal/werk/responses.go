@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net/http"
 	"strconv"
@@ -62,6 +63,7 @@ type Response struct {
 	Output []json.RawMessage `json:"output"`
 	Usage  Usage             `json:"usage"`
 	window int64
+	model  string
 }
 
 // StreamHandler receives the response's streamed text. Both callbacks are
@@ -77,7 +79,8 @@ type StreamHandler struct {
 // Client talks to one Responses endpoint.
 type Client struct {
 	// BaseURL is the API root ("https://openrouter.ai/api/v1").
-	BaseURL string
+	BaseURL  string
+	Provider wscred.ProviderID
 	// Token returns the credential to send, asked for on every request.
 	Token func(ctx context.Context) (string, error)
 	HTTP  *http.Client
@@ -222,7 +225,9 @@ type reasoningWire struct {
 var emptyObjectSchema = json.RawMessage(`{"type":"object","properties":{}}`)
 
 // body is the request's JSON.
-func (r Request) body() ([]byte, error) {
+func (r Request) body() ([]byte, error) { return r.bodyFor("") }
+
+func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
 	w := requestWire{
 		Model: r.Model, Instructions: r.Instructions, Input: r.Input,
 		Stream: true, Store: false,
@@ -244,6 +249,8 @@ func (r Request) body() ([]byte, error) {
 		// A provider-exposed summary is asked for with the effort; opaque
 		// reasoning content comes back for the stateless replay.
 		w.Reasoning = &reasoningWire{Effort: r.Effort, Summary: "auto"}
+	}
+	if r.Effort != "" || provider == wscred.ProviderOpenAI {
 		w.Include = []string{"reasoning.encrypted_content"}
 	}
 	return json.Marshal(w)
@@ -258,7 +265,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	if token == "" {
 		return nil, ErrNoCredential
 	}
-	body, err := req.body()
+	body, err := req.bodyFor(c.Provider)
 	if err != nil {
 		return nil, err
 	}
