@@ -279,6 +279,11 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.equal(await win.locator('.au-crumb:not([hidden])').count(), 0);
 
     // Next call via button + ArrowRight / ArrowLeft, plus c3 tool_result failed pill & output, plus kind="other" Raw tab
+    // The attached hook row is folded behind a run summary by default and next/prev only step through
+    // visible rows, so expand the run first.
+    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"]', { state: 'attached' });
+    assert.equal(await frame.locator('.au-hid[data-event-id="e-hook-1"]').evaluate(el => el.hidden), true, 'hook row starts folded');
+    await frame.evaluate(() => { for (const s of document.querySelectorAll('.au-run[aria-expanded="false"]')) s.click(); });
     await win.locator('.au-next').click();
     await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"].au-sel');
     await win.locator('.au-next').click();

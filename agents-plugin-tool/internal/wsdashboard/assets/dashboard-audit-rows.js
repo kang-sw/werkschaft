@@ -118,6 +118,33 @@
     return { attached: attached, standalone: standalone };
   }
 
+  // Low-signal rows collapse by default: consecutive runs of these kinds fold
+  // into one muted summary line. Order here is the order of the summary labels.
+  var AU_RUN_KINDS = [
+    { kind: "system", i18n: "js.audit.kind.system" },
+    { kind: "thinking", i18n: "js.audit.kind.thinking" },
+    { kind: "hook", i18n: "js.audit.kind.hook" },
+    { kind: "system_reminder", i18n: "js.audit.kind.reminder" }
+  ];
+
+  function auIsRunKind(kind) {
+    for (var i = 0; i < AU_RUN_KINDS.length; i++) if (AU_RUN_KINDS[i].kind === kind) return true;
+    return false;
+  }
+
+  // "System 4 · Thinking 1" for rows given as kind strings, in fixed kind order
+  // so the label does not reshuffle while counts change.
+  function auRunLabel(kinds) {
+    var counts = Object.create(null);
+    for (var i = 0; i < kinds.length; i++) counts[kinds[i]] = (counts[kinds[i]] || 0) + 1;
+    var parts = [];
+    for (var k = 0; k < AU_RUN_KINDS.length; k++) {
+      var n = counts[AU_RUN_KINDS[k].kind];
+      if (n) parts.push((typeof wsT === "function" ? wsT(AU_RUN_KINDS[k].i18n) : AU_RUN_KINDS[k].kind) + " " + n);
+    }
+    return parts.join(" · ");
+  }
+
   // Controller active only in a session dashboard with #convo and WsAudit.
   if (typeof doc !== "undefined" && typeof window !== "undefined" && $("convo") && window.WsAudit) {
     var auRowsRid = root.getAttribute("data-rid") || (typeof rid !== "undefined" ? rid : "") || "";
@@ -131,6 +158,7 @@
     var auEpoch = 0;
     var auFailedJobs = [];
     var auFocusedAuditEl = null;
+    var auExpandedRows = Object.create(null);
 
     function auConvo() { return $("convo"); }
     function auEntriesContainer() {
@@ -210,6 +238,104 @@
       return el;
     }
 
+    // Run summaries are transparent to row adjacency: a summary node never
+    // counts as the sibling a row must sit next to.
+    function auPrevRowEl(el) {
+      var p = el.previousElementSibling;
+      while (p && p.classList.contains("au-run")) p = p.previousElementSibling;
+      return p;
+    }
+    function auNextRowEl(el) {
+      var n = el.nextElementSibling;
+      while (n && n.classList.contains("au-run")) n = n.nextElementSibling;
+      return n;
+    }
+
+    function auIsRunRow(el) {
+      return el.classList.contains("au-hid") && auIsRunKind(el.getAttribute("data-kind"));
+    }
+
+    // Patches by key: an existing summary is reused and only its label text,
+    // aria-expanded and the rows' hidden flag are written when they differ.
+    // Nothing is rebuilt when a row joins or leaves a run. A run is expanded
+    // when any of its rows was expanded by the user; rows joining it follow.
+    function auApplyRunsIn(container, tag) {
+      var runs = [], orphans = [], cur = null, pending = null;
+      for (var c = container.firstElementChild; c; c = c.nextElementSibling) {
+        if (c.classList.contains("au-run")) {
+          if (cur) orphans.push(c);
+          else {
+            if (pending) orphans.push(pending);
+            pending = c;
+          }
+        } else if (auIsRunRow(c)) {
+          if (!cur) {
+            cur = { rows: [], sum: pending };
+            runs.push(cur);
+            pending = null;
+          }
+          cur.rows.push(c);
+        } else {
+          cur = null;
+          if (pending) { orphans.push(pending); pending = null; }
+        }
+      }
+      if (pending) orphans.push(pending);
+      for (var o = 0; o < orphans.length; o++) {
+        if (orphans[o].parentNode) orphans[o].parentNode.removeChild(orphans[o]);
+      }
+      for (var r = 0; r < runs.length; r++) {
+        var rows = runs[r].rows, sum = runs[r].sum, expanded = false, kinds = [];
+        for (var i = 0; i < rows.length; i++) {
+          var eid = rows[i].getAttribute("data-event-id");
+          if (eid && auExpandedRows[eid]) expanded = true;
+          kinds.push(rows[i].getAttribute("data-kind"));
+        }
+        if (!sum) {
+          sum = doc.createElement(tag);
+          sum.className = "au-run" + (tag === "li" ? " au-run-in" : "");
+          sum.tabIndex = 0;
+          sum.setAttribute("role", "button");
+          var lbl = doc.createElement("span");
+          lbl.className = "au-run-lbl";
+          sum.appendChild(lbl);
+        }
+        if (sum.nextElementSibling !== rows[0] || sum.parentNode !== container) container.insertBefore(sum, rows[0]);
+        var text = auRunLabel(kinds);
+        var lblEl = sum.firstElementChild;
+        if (lblEl && lblEl.textContent !== text) lblEl.textContent = text;
+        var want = expanded ? "true" : "false";
+        if (sum.getAttribute("aria-expanded") !== want) sum.setAttribute("aria-expanded", want);
+        for (var j = 0; j < rows.length; j++) {
+          if (expanded) {
+            var rowId = rows[j].getAttribute("data-event-id");
+            if (rowId) auExpandedRows[rowId] = true;
+          }
+          if (rows[j].hasAttribute("hidden") === expanded) rows[j].toggleAttribute("hidden", !expanded);
+        }
+      }
+    }
+
+    function auApplyRuns(box) {
+      auApplyRunsIn(box, "div");
+      var lists = box.querySelectorAll(".au-calls");
+      for (var i = 0; i < lists.length; i++) auApplyRunsIn(lists[i], "li");
+    }
+
+    function auToggleRun(sum) {
+      var rows = [];
+      for (var n = sum.nextElementSibling; n && auIsRunRow(n); n = n.nextElementSibling) rows.push(n);
+      if (!rows.length) return;
+      var expand = sum.getAttribute("aria-expanded") !== "true";
+      for (var i = 0; i < rows.length; i++) {
+        var id = rows[i].getAttribute("data-event-id");
+        if (id) { if (expand) auExpandedRows[id] = true; else delete auExpandedRows[id]; }
+        rows[i].toggleAttribute("hidden", !expand);
+      }
+      sum.setAttribute("aria-expanded", expand ? "true" : "false");
+      if (!expand && auFocusedAuditEl && auFocusedAuditEl.hasAttribute("hidden")) auSetCurrentRow(null);
+    }
+
     function auReconcileRows() {
       var box = auEntriesContainer();
       if (!box) return;
@@ -244,7 +370,7 @@
             if (anode && anode.parentNode) anode.parentNode.removeChild(anode);
             anode = auBuildRowNode(aev, true, false);
           }
-          if (anode.previousElementSibling !== anchor || anode.parentNode !== callEl.parentNode) {
+          if (auPrevRowEl(anode) !== anchor || anode.parentNode !== callEl.parentNode) {
             callEl.parentNode.insertBefore(anode, anchor.nextSibling);
           }
           anchor = anode;
@@ -252,6 +378,9 @@
       }
 
       // 2. Place standalone & session-start rows chronologically inside .centries.
+      // A row is left alone when it already sits right before the next row of
+      // its slot (or the slot's reference entry), so a settled stream moves nothing.
+      var snodes = [];
       for (var s = 0; s < plan.standalone.length; s++) {
         var item = plan.standalone[s];
         var sev = item.event;
@@ -261,9 +390,15 @@
           if (snode && snode.parentNode) snode.parentNode.removeChild(snode);
           snode = auBuildRowNode(sev, false, item.sysStart);
         }
-        var refEl = item.beforeIndex < entries.length ? entries[item.beforeIndex].el : null;
-        if (snode.parentNode !== box || snode.nextElementSibling !== refEl) {
-          box.insertBefore(snode, refEl);
+        snodes.push(snode);
+      }
+      // Walked last to first so each row's successor in its slot is already in place.
+      for (var s2 = snodes.length - 1; s2 >= 0; s2--) {
+        var item2 = plan.standalone[s2];
+        var refEl = item2.beforeIndex < entries.length ? entries[item2.beforeIndex].el : null;
+        var wantNext = (s2 + 1 < snodes.length && plan.standalone[s2 + 1].beforeIndex === item2.beforeIndex) ? snodes[s2 + 1] : refEl;
+        if (snodes[s2].parentNode !== box || auNextRowEl(snodes[s2]) !== wantNext) {
+          box.insertBefore(snodes[s2], wantNext);
         }
       }
 
@@ -274,6 +409,7 @@
           existing[exIds[r]].parentNode.removeChild(existing[exIds[r]]);
         }
       }
+      auApplyRuns(box);
       if (window.WsAudit && window.WsAudit.syncSelection) window.WsAudit.syncSelection();
     }
 
@@ -502,6 +638,7 @@
       auFailedJobs = [];
       auFetchQueue = Promise.resolve();
       auEventsById = Object.create(null);
+      auExpandedRows = Object.create(null);
       auReconcileRows();
       if (oldest) auInitialSync();
     });
@@ -532,6 +669,11 @@
     }
 
     doc.addEventListener("click", function (e) {
+      var sumEl = e.target && e.target.closest ? e.target.closest(".au-run") : null;
+      if (sumEl) {
+        auToggleRun(sumEl);
+        return;
+      }
       var row = e.target && e.target.closest ? e.target.closest(".au-hid[data-event-id], .au-sysrow[data-event-id]") : null;
       if (!row) return;
       var sel = window.getSelection && window.getSelection();
@@ -567,6 +709,12 @@
         return;
       }
 
+      if ((e.key === "Enter" || e.key === " ") && t.matches && t.matches(".au-run")) {
+        e.preventDefault();
+        auToggleRun(t);
+        return;
+      }
+
       if (e.key === "Enter" || e.key === " ") {
         var hidRow = t.matches && t.matches(".au-hid[data-event-id], .au-sysrow[data-event-id]") ? t : null;
         if (hidRow) {
@@ -593,6 +741,8 @@
       cmpAuditEvent: auCmpAuditEvent,
       isHiddenKind: auIsHiddenAuditKind,
       isSessionStartEvent: auIsSessionStartEvent,
+      isRunKind: auIsRunKind,
+      runLabel: auRunLabel,
       interleavePlan: auInterleavePlan,
       reconcile: auReconcileRows
     };

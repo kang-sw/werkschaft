@@ -128,3 +128,50 @@
   white-space: nowrap;
   font-weight: 600;
 }
+
+/* Collapsed run of low-signal rows (system / thinking / hook / reminder):
+   one muted line, no border or frame. Rows carry [hidden] while collapsed. */
+.au-hid[hidden] {
+  display: none;
+}
+
+.au-run {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 10px;
+  border-radius: 4px;
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.au-run-in {
+  margin-left: 18px;
+  padding: 1.5px 8px;
+  list-style: none;
+}
+
+.au-run:hover {
+  color: var(--wb-fg);
+}
+
+.au-run:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: -1px;
+}
+
+.au-run-lbl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.au-run::after {
+  content: " \25b8";
+}
+
+.au-run[aria-expanded="true"]::after {
+  content: " \25be";
+}
