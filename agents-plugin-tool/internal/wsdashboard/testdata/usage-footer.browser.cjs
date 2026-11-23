@@ -57,7 +57,7 @@ function entries(variant) {
         if (variant === 'stale') {
           const staleCols = page.locator('.usage-column.usage-stale');
           assert.equal(await staleCols.count(), 2);
-          assert.deepEqual(await staleCols.locator('.usage-number').allTextContents(), ['—', '—']);
+          assert.deepEqual(await staleCols.locator('.usage-number').allTextContents(), ['20%', '53%']);
           assert.equal(await staleCols.locator('.usage-pace').count(), 0);
           assert.equal(await page.locator('.usage-pace').first().textContent(), '−7%');
         } else {
