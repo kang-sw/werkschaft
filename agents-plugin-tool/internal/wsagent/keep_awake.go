@@ -35,7 +35,7 @@ func newKeepAwake(opts Options) *wsawake.Core {
 }
 
 // ReloadGlobalConfig rereads the runner's global settings that change at
-// runtime: today agent.keep_awake_during_turns. The daemon calls it once its
+// runtime: keep-awake and provider settings. The daemon calls it once its
 // endpoint is published and after every invalidation (an MCP config.tune
 // set or reset, a dashboard settings write). The read and the publish are
 // one serialized step, so of overlapping reloads the last read wins, and a
@@ -44,6 +44,15 @@ func (r *Runner) ReloadGlobalConfig() {
 	r.awakeReloadMu.Lock()
 	defer r.awakeReloadMu.Unlock()
 	r.awake.SetEnabled(r.readKeepAwake())
+	r.reloadProviderConfig()
+}
+
+func (r *Runner) reloadProviderConfig() {
+	if load := r.opts.LoadProviderConfig; load != nil {
+		if err := load(r.opts.Config); err != nil {
+			fmt.Fprintf(r.opts.Log, "providers: load endpoint settings: %v\n", err)
+		}
+	}
 }
 
 // readKeepAwake resolves the setting from the global layer (the key is

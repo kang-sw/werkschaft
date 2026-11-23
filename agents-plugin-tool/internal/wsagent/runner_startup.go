@@ -84,6 +84,7 @@ func (r *Runner) StartForPublication(notify func(replyID, project string), servi
 }
 
 func (r *Runner) start(notify func(replyID, project string)) {
+	r.reloadProviderConfig()
 	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()

@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Lokale Werk-Endpunkte",
+  "js.settings.key.agent.werk_endpoints.description": "Globales JSON-Objekt: Namen (ASCII-Kleinbuchstaben, Ziffern, Bindestriche) zu {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}. kind: vllm oder ollama. Optionale API-Schlüssel beim Anmeldedatenanbieter local/<name> speichern.",
   "wb.panel.diff.against": "ggü. v{0}",
   "wb.panel.diff.title": "Änderungen seit {0} — zum direkten Vergleich klicken",
   "wb.panel.diff.note": "Änderungen seit {0} werden im Inhalt angezeigt.",

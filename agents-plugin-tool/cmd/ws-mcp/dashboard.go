@@ -488,11 +488,14 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	}
 	keys := mcp.NewAgentKeyStore(boards)
 	backends := wsagent.BuiltinBackendRegistrations()
+	var loadProviderConfig func(wsconfig.Options) error
 	if credentials != nil {
 		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
+		loadProviderConfig = credentials.LoadLocalEndpoints
 	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{
+		LoadProviderConfig:         loadProviderConfig,
 		Dir:                        dir,
 		DaemonVersion:              version,
 		AgyModelWaitTimeoutSeconds: &modelWaitSeconds,

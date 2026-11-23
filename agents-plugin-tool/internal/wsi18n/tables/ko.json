@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Werk 로컬 엔드포인트",
+  "js.settings.key.agent.werk_endpoints.description": "전역 JSON 객체: 이름(소문자 ASCII 문자, 숫자, 하이픈)을 {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}에 매핑합니다. kind는 vllm 또는 ollama입니다. 선택적 API 키의 자격 증명 공급자는 local/<name>입니다.",
   "wb.panel.diff.against": "v{0} 대비",
   "wb.panel.diff.title": "{0} 대비 변경 — 클릭하면 본문에서 전체 비교",
   "wb.panel.diff.note": "{0} 대비 변경을 본문에 표시하고 있습니다.",

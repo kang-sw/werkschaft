@@ -119,23 +119,32 @@ type leadProviderAdmitter interface {
 	leadCredentialGap() string
 }
 
-func werkProvider(id string) (wscred.Provider, error) {
+func (b WerkBackend) werkProvider(id string) (wscred.Provider, error) {
 	if id == "" {
 		id = string(wscred.ProviderOpenRouter)
 	}
-	switch wscred.ProviderID(id) {
-	case wscred.ProviderOpenRouter, wscred.ProviderOpenAI:
-		if provider, ok := wscred.Lookup(wscred.ProviderID(id)); ok {
+	if provider, ok := wscred.Lookup(wscred.ProviderID(id)); ok {
+		return provider, nil
+	}
+	for _, provider := range b.localProviders() {
+		if provider.ID == wscred.ProviderID(id) {
 			return provider, nil
 		}
 	}
 	return wscred.Provider{}, fmt.Errorf("unsupported werk provider %q", id)
 }
 
+func (b WerkBackend) localProviders() []wscred.Provider {
+	if catalog, ok := b.credentials.(interface{ LocalProviders() []wscred.Provider }); ok {
+		return catalog.LocalProviders()
+	}
+	return nil
+}
+
 const werkSIWCReason = "sign in with ChatGPT using the CLI command \"credential sign-in openai\""
 
 func (b WerkBackend) providerGap(id wscred.ProviderID) string {
-	if b.credentialStatus == nil {
+	if wsconfig.IsLocalWerkProvider(string(id)) || b.credentialStatus == nil {
 		return ""
 	}
 	if configured, err := b.credentialStatus(string(id)); err != nil {
@@ -150,7 +159,7 @@ func (b WerkBackend) providerGap(id wscred.ProviderID) string {
 }
 
 func (b WerkBackend) admitLeadProvider(id, model string) error {
-	provider, err := werkProvider(id)
+	provider, err := b.werkProvider(id)
 	if err != nil {
 		return badRequest("%s", err)
 	}
@@ -170,11 +179,14 @@ func (b WerkBackend) leadProviders() []string {
 			ready = append(ready, string(id))
 		}
 	}
+	for _, provider := range b.localProviders() {
+		ready = append(ready, string(provider.ID))
+	}
 	return ready
 }
 
 func (b WerkBackend) leadCredentialGap() string {
-	if openRouter := b.providerGap(wscred.ProviderOpenRouter); openRouter != "" && b.providerGap(wscred.ProviderOpenAI) != "" {
+	if openRouter := b.providerGap(wscred.ProviderOpenRouter); openRouter != "" && b.providerGap(wscred.ProviderOpenAI) != "" && len(b.localProviders()) == 0 {
 		return openRouter + ", or " + werkSIWCReason
 	}
 	return ""
@@ -193,7 +205,7 @@ func (b WerkBackend) workerCredentialGap() string {
 }
 
 func (b WerkBackend) workerProviderGap(id string) string {
-	provider, err := werkProvider(id)
+	provider, err := b.werkProvider(id)
 	if err != nil {
 		return err.Error()
 	}

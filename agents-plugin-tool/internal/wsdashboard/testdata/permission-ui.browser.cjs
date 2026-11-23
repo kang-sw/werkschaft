@@ -18,8 +18,8 @@ function choices(levels, claude = {}) {
   return { harnesses: [
     { harness: 'claude', lead: true, available: true, models: [{ id: 'opus-4.7' }, { id: 'sonnet-4.6' }], efforts: ['low', 'medium', 'high', 'max'], permission_modes: MODES, ...extra, ...claude },
     { harness: 'pi', lead: true, available: true, models: [{ id: 'gpt-5.5' }], efforts: ['off', 'low', 'medium', 'high'], permission_modes: [], ...extra },
-    { harness: 'werk', lead: true, available: true, model_providers: ['openrouter', 'openai'],
-      models: [{ id: 'vendor/fixture' }, { id: 'vendor/fixture', provider: 'openai', display_name: 'Account fixture' }],
+    { harness: 'werk', lead: true, available: true, model_providers: ['openrouter', 'openai', 'local/office', 'local/home'],
+      models: [{ id: 'vendor/fixture' }, { id: 'vendor/fixture', provider: 'openai', display_name: 'Account fixture' }, { id: 'vendor/fixture', provider: 'local/office' }, { id: 'vendor/fixture', provider: 'local/home' }],
       efforts: ['low', 'high'], permission_modes: [], permission_levels: ['read-only', 'workdir-write', 'full'], ...extra }
   ], last: {} };
 }
@@ -183,13 +183,18 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
             throw new Error('model unavailable after catalog polls at offsets ' + S.catalogPolls.join(', ') + ': ' + e.message);
           }
           S.catalogAt = 0;
+          for (const name of ['office', 'home']) {
+            await model.selectOption('local/' + name + ' vendor/fixture');
+            assert.equal(await model.inputValue(), 'local/' + name + ' vendor/fixture');
+          }
+          await model.selectOption('local/home vendor/fixture');
           assert.equal(await model.locator('option[value="vendor/fixture"]').textContent(), 'vendor/fixture');
           await pop.locator('.pmseg [data-level="read-only"]').click();
           const created = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/agents/leads/permission');
           await pop.locator('.sprow .pbtn.go').click();
           await created;
           assert.deepEqual(S.posts.map(p => [p.path, p.body.harness, p.body.provider, p.body.model, p.body.permission_level]), [
-            ['/agents/leads/permission', 'werk', 'openai', 'vendor/fixture', 'read-only']
+            ['/agents/leads/permission', 'werk', 'local/home', 'vendor/fixture', 'read-only']
           ]);
           await closePop();
         });

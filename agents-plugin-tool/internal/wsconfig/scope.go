@@ -275,6 +275,7 @@ func init() {
 	RegisterGlobalOnly(ItemBootstrapAlarm)
 	RegisterGlobalOnly(ItemAgentGitSearchRoots)
 	RegisterGlobalOnly(ItemAgentTierAliases)
+	RegisterGlobalOnly(ItemWerkEndpoints)
 	RegisterGlobalOnly(ItemAgentChildWaitingDays)
 	RegisterGlobalOnly(ItemAgentKeepAwakeDuringTurns)
 	// sage_review* keys default to project scope: they are project-level opt-ins

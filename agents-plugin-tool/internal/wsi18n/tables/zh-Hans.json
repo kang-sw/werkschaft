@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Werk 本地端点",
+  "js.settings.key.agent.werk_endpoints.description": "全局 JSON 对象将名称（ASCII 小写字母、数字、连字符）映射到 {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}。kind 为 vllm 或 ollama。可选 API 密钥使用凭据提供方 local/<name> 保存。",
   "wb.panel.diff.against": "对比 v{0}",
   "wb.panel.diff.title": "相较 {0} 的更改 — 点击在正文中完整对比",
   "wb.panel.diff.note": "正在正文中显示相较 {0} 的更改。",

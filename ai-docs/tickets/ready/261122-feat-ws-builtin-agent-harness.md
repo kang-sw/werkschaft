@@ -1000,6 +1000,66 @@ Runs after Phase 2.
   Ollama or vLLM server with a tool-capable model recorded in the Result
   (owner-run when this host has none).
 
+### Result (1e31337ae) - 2026-11-24
+
+- Added global `agent.werk_endpoints` in Settings → Agents. The JSON object
+  maps names to a `base_url` and a `kind` of `ollama` or `vllm`. Werk uses
+  `local/<name>` as the provider in worker tiers and hosted lead selections.
+  Set an optional key with `ws-mcp credential set local/<name>`. The auth
+  layer stores it as an API key and binds it to the configured API root.
+- Werk discovers models with `GET <base>/models`. The existing Settings and
+  new-session pickers keep equal model IDs from different endpoints distinct.
+  An endpoint edit refreshes choices on the next picker open (`4a561b5e7`).
+  Both profiles use the same Responses adapter. Ollama receives no
+  `tool_choice`. Absent or zero reasoning usage is omitted and cache usage
+  is read when supplied.
+- **Decision 10, T0 for shared storage and existing calls.** In v0.51.1 the
+  global reader and writer preserve text entries in the overrides map
+  (`v0.51.1:agents-plugin-tool/internal/wsconfig/config.go:34-47`,
+  `v0.51.1:agents-plugin-tool/internal/wsconfig/preserve.go:14-45`) and
+  preserve unknown tier members on rewrite
+  (`v0.51.1:agents-plugin-tool/internal/wsconfig/preserve.go:67-98`). Its credential
+  writer preserves raw entries for unrecognized providers
+  (`v0.51.1:agents-plugin-tool/internal/wscred/store.go:218-228,252-279,385-428`).
+  Reopening in the new version recovers the configuration and the key
+  bound to the original API root
+  (`agents-plugin-tool/internal/wscred/local_endpoints.go:69-74`).
+  The new optional transcript field uses the existing append log and JSON
+  reader (`agents-plugin-tool/internal/werk/protocol.go:150`,
+  `agents-plugin-tool/internal/werk/store.go:216`). Config and credentials
+  use the existing type 5 stores and transcripts use the existing type 1
+  store. Each global config reload takes one config snapshot. Picker and
+  Responses requests use in-memory state and add no file operations.
+- The lite review found that switching a tier from Werk to another backend
+  could retain the local provider and fail validation. Fixed in `3cf3dcefb`
+  and verified with an actual Settings save in Chromium.
+- Verification with inherited `WS_*` cleared passed the build, full
+  `go test ./internal/mcp -timeout 45m -count=1` (852 seconds), and full suites for
+  `cmd/ws-mcp`, `wsagent`, `wsconfig`, `wscred`, `werk`, `wsi18n`, and
+  `wspackage`. Focused race checks, fake Ollama and vLLM fixtures, catalog
+  checks, and Settings and permission picker Chromium tests passed.
+  The full dashboard suite reported only the baseline
+  `TestBoardToolbarPlacementAndCounts` JSON parse failure.
+- The live Ollama worker passed with `gemma4:e4b`, both with and without
+  an optional key. Each run made two HTTP 200 Responses requests, performed
+  one `fs.read`, and recorded one completed report with the file's nonce.
+  To repeat from the repository root, set `local_api_root` to the running
+  Ollama instance's OpenAI-compatible API root ending in `/v1`. Set
+  `WERK_LIVE_LOCAL_API_KEY` in the environment to exercise the optional key.
+
+  ```sh
+  python3 -c 'import os, sys; os.execvpe(sys.argv[1], sys.argv[1:], {k: v for k, v in os.environ.items() if not k.startswith("WS_")})' \
+    env -u WS_MCP_PROJECT_ROOT -u WS_MCP_HOSTED_PACKAGE -u WS_RSRC_ROOT \
+    -u WS_MCP_NAMESPACE -u WS_MCP_NO_AGENT -u WS_MCP_NO_DASHBOARD \
+    -u WS_MCP_ALLOWED_TOOLS WERK_LIVE_LOCAL=1 \
+    WERK_LIVE_LOCAL_BASE_URL="$local_api_root" \
+    WERK_LIVE_LOCAL_MODEL="${local_model:-gemma4:e4b}" \
+    go -C agents-plugin-tool test ./cmd/ws-mcp -run '^TestWerkLiveLocal$' \
+    -count=1 -v -timeout=5m
+  ```
+
+Omitted live vLLM testing and Windows antivirus measurements.
+
 ### Phase 6: Catalog parity
 
 Runs after Phase 5.

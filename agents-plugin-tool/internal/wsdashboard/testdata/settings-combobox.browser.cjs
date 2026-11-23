@@ -70,9 +70,11 @@ const CHOICES = {
     });
 
     let choicesRequests = 0;
+    let endpointModels = [];
     await page.route('**/support/choices', async route => {
       choicesRequests++;
-      await route.fulfill({ json: CHOICES, headers: { 'Cache-Control': 'no-store' } });
+      const pickers = [{ harness: 'werk', available: true, models: endpointModels }];
+      await route.fulfill({ json: { ...CHOICES, pickers }, headers: { 'Cache-Control': 'no-store' } });
     });
 
     // The modal's index backdrop loads tracker stores; this fixture has no tracker backend.
@@ -176,6 +178,40 @@ const CHOICES = {
     const saveResp = page.waitForResponse(r => r.url().endsWith('/api/config/set') && r.request().method() === 'POST');
     await mediumRow.locator('.save-btn').click();
     assert.equal((await saveResp).status(), 200);
+
+    const activeBucket = await frame().locator('[data-bucket-key="agents.tier"][aria-pressed="true"]').getAttribute('data-settings-bucket');
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="werk"]').click();
+    const werkRow = frame().locator('tbody.tier-entry[data-settings-tier=small]');
+    const werkInputs = werkRow.locator('input.scb-inp');
+    assert.equal(await werkInputs.nth(1).inputValue(), 'local/desk same');
+    await werkInputs.nth(0).fill('claude');
+    await werkInputs.nth(1).fill('sonnet');
+    const switched = page.waitForResponse(r => r.url().endsWith('/api/config/set') && r.request().method() === 'POST');
+    await werkRow.locator('.save-btn').click();
+    const switchedResponse = await switched;
+    assert.equal(switchedResponse.status(), 200);
+    const switchedValue = switchedResponse.request().postDataJSON().value;
+    assert.equal(switchedValue.model, 'sonnet');
+    assert.equal(switchedValue.provider, '');
+
+    // Changing the endpoint list refreshes the already-cached model choices.
+    const endpointRow = frame().locator('[data-config-key="agent.werk_endpoints"]');
+    const endpointsSaved = page.waitForResponse(r => r.url().endsWith('/api/config/set') &&
+      r.request().postDataJSON()?.key === 'agent.werk_endpoints');
+    await endpointRow.locator('textarea').fill(JSON.stringify({
+      desk: { base_url: 'https://ollama.example/v1', kind: 'ollama' }
+    }));
+    endpointModels = [{ id: 'new-model', provider: 'local/desk' }];
+    await endpointRow.locator('.save-btn').click();
+    assert.equal((await endpointsSaved).status(), 200);
+    await endpointRow.locator('.reset-btn').waitFor({ state: 'visible' });
+    assert.equal(choicesRequests, 1, 'endpoint save leaves discovery lazy');
+    await werkInputs.nth(0).fill('werk');
+    await werkRow.locator('.scb-btn').nth(1).click();
+    await popup.getByText('local/desk new-model', { exact: true }).waitFor();
+    assert.equal(choicesRequests, 2, 'model picker fetched new choices after endpoint save');
+    await werkInputs.nth(1).press('Escape');
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="' + activeBucket + '"]').click();
 
     // Bundle modal in dark theme: popup mounts inside <dialog> on top of top-layer modal!
     await frame().locator('[data-id="b:deep-design"]').click();

@@ -580,6 +580,9 @@ var wsSettingsChoiceLabels = {
         var result = pending ? await pending :
           await request("/api/config/" + action, Object.assign({}, selection, {key: operation.key, selectors: operation.selectors, value: operation.value}));
         if (result.entry) {
+          if (entry.key === "agent.werk_endpoints" && window.WsSettingsCombobox) {
+            window.WsSettingsCombobox.invalidateChoices();
+          }
           var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
@@ -837,11 +840,11 @@ var wsSettingsChoiceLabels = {
     var combos = {};
     var cb = window.WsSettingsCombobox;
     var inputs = fields.map(function (field) {
-      var input = textInput(value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
+      var input = textInput(field === "model" ? cb.modelKey(value.model, value.provider) : value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
       var combo = cb.attach(input, {
         getOptions: function () {
           if (field === "backend") return cb.backendOptions();
-          var backendVal = inputs[0] ? inputs[0].value : value.backend;
+          var backendVal = (inputs[0] ? inputs[0].value : value.backend) || entry.selectors.harness;
           return field === "model"
             ? cb.modelOptions(backendVal)
             : cb.effortOptions(backendVal);
@@ -887,7 +890,12 @@ var wsSettingsChoiceLabels = {
     }
     if (canEdit) {
       save = button("save-btn", tr("js.settings.save"), function () {
-        submit("set", Object.fromEntries(fields.map(function (field, i) { return [field, inputs[i].value]; }))).then(syncSecondary, syncSecondary);
+        var next = Object.fromEntries(fields.map(function (field, i) { return [field, inputs[i].value]; }));
+        var backend = next.backend.trim().toLowerCase() || entry.selectors.harness;
+        var selection = cb.modelSelection(next.model, value.provider);
+        if (entry.selectors.harness !== "werk" || backend !== "werk") selection.provider = "";
+        Object.assign(next, selection);
+        submit("set", next).then(syncSecondary, syncSecondary);
       });
       save.disabled = true;
       group.addEventListener("input", function () {

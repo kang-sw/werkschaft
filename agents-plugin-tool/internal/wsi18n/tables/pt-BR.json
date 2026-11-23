@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Endpoints locais do Werk",
+  "js.settings.key.agent.werk_endpoints.description": "Objeto JSON global que mapeia nomes (letras ASCII minúsculas, dígitos, hífens) para {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}. kind: vllm ou ollama. Salve as chaves API opcionais com o provedor de credenciais local/<name>.",
   "wb.panel.diff.against": "vs. v{0}",
   "wb.panel.diff.title": "Alterações desde {0} — clique para comparar aqui",
   "wb.panel.diff.note": "Mostrando no conteúdo as alterações desde {0}.",

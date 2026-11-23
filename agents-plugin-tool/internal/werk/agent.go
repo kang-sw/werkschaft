@@ -656,7 +656,7 @@ func (a *Agent) report(turn int, resp *Response) {
 	a.out.line(Line{
 		T: LineUsage, Turn: turn, Response: resp.ID,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
-		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens, Window: resp.window,
+		CostUSD: u.CostUSD, CacheWriteTokens: u.CacheWriteTokens, Context: u.InputTokens + u.OutputTokens, Window: resp.window,
 	})
 	for _, raw := range resp.Output {
 		var it responseItem

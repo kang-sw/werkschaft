@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Локальные конечные точки Werk",
+  "js.settings.key.agent.werk_endpoints.description": "Глобальный JSON-объект сопоставляет имена (строчные буквы ASCII, цифры, дефисы) с {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}. kind: vllm или ollama. Необязательные ключи API сохраняются у поставщика учётных данных local/<name>.",
   "wb.panel.diff.against": "с v{0}",
   "wb.panel.diff.title": "Изменения с {0} — нажмите для сравнения в тексте",
   "wb.panel.diff.note": "В тексте показаны изменения с {0}.",

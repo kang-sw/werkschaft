@@ -84,15 +84,17 @@ func IsCompanionConfigKey(key string) bool {
 // IsDaemonGlobalConfigKey reports whether the daemon keeps key's global value
 // in memory, so a writer must invalidate it (NotifyCompanionConfigChange or
 // SendCompanionConfigChange) after committing a change: the companion keys
-// and the runner's agent.keep_awake_during_turns. The wire route keeps its
-// companion name; a daemon that predates the runner key refreshes only its
-// companion snapshot on it, which changes nothing.
+// and the runner's global keys. The wire route keeps its companion name.
 func IsDaemonGlobalConfigKey(key string) bool {
-	return IsCompanionConfigKey(key) || key == wsconfig.ItemAgentKeepAwakeDuringTurns
+	return IsCompanionConfigKey(key) || isAgentGlobalConfigKey(key)
+}
+
+func isAgentGlobalConfigKey(key string) bool {
+	return key == wsconfig.ItemAgentKeepAwakeDuringTurns || key == wsconfig.ItemWerkEndpoints
 }
 
 // AgentGlobalConfigHost is an agent host that keeps global configuration in
-// memory (the runner's keep-awake setting). The daemon calls
+// memory. The daemon calls
 // ReloadGlobalConfig once its endpoint is published, and after each matching
 // invalidation; the host rereads its own global layer, serialized, so a read
 // that finishes later never publishes an older value.

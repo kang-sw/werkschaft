@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 )
 
@@ -281,6 +282,11 @@ func applyOfflineCredentialChange(lock *flock.Flock, credPath string, change wsc
 	store := wscred.NewStore(credPath)
 	if err := store.MigrateLegacy(); err != nil {
 		return wscred.ChangeResult{}, err
+	}
+	if wsconfig.IsLocalWerkProvider(string(change.Provider)) {
+		if err := store.LoadLocalEndpoints(wsconfig.Options{}); err != nil {
+			return wscred.ChangeResult{}, err
+		}
 	}
 	return store.Apply(change)
 }
