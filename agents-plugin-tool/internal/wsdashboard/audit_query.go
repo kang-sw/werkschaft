@@ -445,6 +445,9 @@ type auditEnvelopeExtra struct {
 	RawBytes  int                         `json:"raw_bytes"`
 	Truncated bool                        `json:"truncated"`
 	Range     map[string]auditRangeFollow `json:"range,omitempty"`
+	// Matches is each stored body's match spans, present only when the
+	// request carried a query (see serveAuditEvent).
+	Matches map[string]auditBodyMatches `json:"matches,omitempty"`
 }
 
 // auditRangeFollow names where a truncated body's range follow-up starts.
@@ -455,8 +458,8 @@ type auditRangeFollow struct {
 
 // envelopeAnswer encodes the full envelope, each body capped at
 // auditBodyMax with its range follow-up, store-level stored_trunc unchanged.
-func envelopeAnswer(ev wsaudit.Envelope) ([]byte, error) {
-	extra := auditEnvelopeExtra{InBytes: len(ev.In), OutBytes: len(ev.Out), RawBytes: len(ev.Raw)}
+func envelopeAnswer(ev wsaudit.Envelope, matches map[string]auditBodyMatches) ([]byte, error) {
+	extra := auditEnvelopeExtra{InBytes: len(ev.In), OutBytes: len(ev.Out), RawBytes: len(ev.Raw), Matches: matches}
 	for _, p := range []struct {
 		name string
 		body *string
@@ -515,9 +518,13 @@ type auditSearch struct {
 	// holds a zero-width assertion (^ $ \A \z \b \B), whose answer depends
 	// on the text around a position; nil for a pattern without one.
 	seamed *seamMatcher
-	kinds  map[wsaudit.Kind]bool
-	n      int
-	query  string
+	// re is the compiled expression (nil for a case-sensitive literal, which
+	// is lit); the span extraction runs the same expression as match.
+	re    *regexp.Regexp
+	lit   string
+	kinds map[wsaudit.Kind]bool
+	n     int
+	query string
 }
 
 // newAuditSearch compiles q: a regular expression (RE2, linear time) when
@@ -527,6 +534,7 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 	sum := sha256.Sum256([]byte(strings.Join([]string{q, boolDigit(regex), boolDigit(caseSensitive), kindsRaw}, "\x00")))
 	s.query = hex.EncodeToString(sum[:8])
 	if !regex && caseSensitive {
+		s.lit = q
 		s.match = func(line string) (int, int, bool) {
 			i := strings.Index(line, q)
 			return i, i + len(q), i >= 0
@@ -544,6 +552,7 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 	if err != nil {
 		return s, err
 	}
+	s.re = re
 	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil && hasAssertion(tree) {
 		// The parsed expression's own spelling, not the source: a source can
 		// end inside a construct that runs to the end of the pattern (\Q
@@ -721,47 +730,83 @@ func (s auditSearch) matchLine(line string, seam int) (int, int, bool) {
 	return start + seam, end + seam, ok
 }
 
-// seamMatcher finds a match of a pattern holding zero-width assertions on
-// one side of a seam inside a line (0 < seam < len(line)), evaluating every
-// assertion against the whole line. Each side is matched with the other
-// side's adjacent character stood in for by a sentinel of the same word
-// class (the only context ^ $ \A \z \b \B read in a line without line
-// breaks): the head as head+sentinel, keeping the pattern's match ending at
-// or before the seam; the tail as sentinel+tail, keeping its match starting
-// at or after it. Matching allocates the two side copies and the submatch
-// indexes, however many matches the line holds. Its pattern is a parsed
-// expression's String(), which closes every construct it opens.
+// seamMatcher matches a pattern holding zero-width assertions inside a
+// window [lo, hi) of one stored line, evaluating every assertion against the
+// whole line. The window's outside neighbours are stood in for by a sentinel
+// of the same word class (the only context ^ $ \A \z \b \B read in a line
+// without line breaks): none at the line's own start or end. A match is kept
+// inside the window by the shape of the expression: sentinel, lazy prefix,
+// the pattern's group, the rest, sentinel. Matching allocates the window
+// copy and the submatch indexes, however many matches the window holds. Its
+// pattern is a parsed expression's String(), which closes every construct it
+// opens.
 type seamMatcher struct {
-	// head[w] and tail[w] use a word (w=1) or non-word (w=0) sentinel.
-	head, tail [2]*regexp.Regexp
+	pattern string
+	// re is the compiled form by the left and right sentinel kind (see
+	// sentinelKind), made on first use; a request is served by one goroutine.
+	re map[[2]int]*regexp.Regexp
+	// ctx is the resumable form (see audit_span_scan.go), by its shape.
+	ctx map[[3]int]*regexp.Regexp
 }
 
-// seamSentinels are the sentinel characters by word class.
-var seamSentinels = [2]string{"\x00", "_"}
+// seamSentinels are the sentinel characters by kind: 0 none (a line edge),
+// 1 a non-word character, 2 a word character.
+var seamSentinels = [3]string{"", "\x00", "_"}
 
 func newSeamMatcher(pattern string) (*seamMatcher, error) {
-	m := &seamMatcher{}
-	for w, sentinel := range seamSentinels {
-		var err error
-		// Group 1 is the pattern's match; the sentinel ends (starts) the text.
-		if m.head[w], err = regexp.Compile(`((?:` + pattern + `))(?s:.*)` + regexp.QuoteMeta(sentinel) + `\z`); err != nil {
-			return nil, err
-		}
-		if m.tail[w], err = regexp.Compile(`\A` + regexp.QuoteMeta(sentinel) + `(?s:.*?)((?:` + pattern + `))`); err != nil {
-			return nil, err
-		}
+	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}, ctx: map[[3]int]*regexp.Regexp{}}
+	if _, err := m.compiled(0, 0); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
 
+// compiled is the expression for a window whose left and right neighbours
+// are of the given sentinel kinds.
+func (m *seamMatcher) compiled(left, right int) (*regexp.Regexp, error) {
+	k := [2]int{left, right}
+	if re := m.re[k]; re != nil {
+		return re, nil
+	}
+	// Group 1 is the pattern's match; the sentinels end and start the text.
+	re, err := regexp.Compile(`\A` + regexp.QuoteMeta(seamSentinels[left]) + `(?s:.*?)((?:` + m.pattern + `))(?s:.*)` + regexp.QuoteMeta(seamSentinels[right]) + `\z`)
+	if err != nil {
+		return nil, err
+	}
+	m.re[k] = re
+	return re, nil
+}
+
+// sentinelKind is the sentinel kind standing for the byte next to a window
+// edge: none past the line.
+func sentinelKind(line string, i int) int {
+	if i < 0 || i >= len(line) {
+		return 0
+	}
+	return 1 + wordClass(line[i])
+}
+
+// first is the first match inside the window [lo, hi) of line, in line
+// offsets.
+func (m *seamMatcher) first(line string, lo, hi int) (int, int, bool) {
+	left, right := sentinelKind(line, lo-1), sentinelKind(line, hi)
+	re, err := m.compiled(left, right)
+	if err != nil {
+		return 0, 0, false
+	}
+	loc := re.FindStringSubmatchIndex(seamSentinels[left] + line[lo:hi] + seamSentinels[right])
+	if loc == nil {
+		return 0, 0, false
+	}
+	return loc[2] - len(seamSentinels[left]) + lo, loc[3] - len(seamSentinels[left]) + lo, true
+}
+
+// match is the first match on a line with a seam: on the head, else the tail.
 func (m *seamMatcher) match(line string, seam int) (int, int, bool) {
-	if loc := m.head[wordClass(line[seam])].FindStringSubmatchIndex(line[:seam] + seamSentinels[wordClass(line[seam])]); loc != nil {
-		return loc[2], loc[3], true
+	if start, end, ok := m.first(line, 0, seam); ok {
+		return start, end, true
 	}
-	if loc := m.tail[wordClass(line[seam-1])].FindStringSubmatchIndex(seamSentinels[wordClass(line[seam-1])] + line[seam:]); loc != nil {
-		return loc[2] - 1 + seam, loc[3] - 1 + seam, true
-	}
-	return 0, 0, false
+	return m.first(line, seam, len(line))
 }
 
 // wordClass is 1 for an ASCII word byte (what \b counts as a word
@@ -831,4 +876,99 @@ func excerpt(line string, start, end int) (string, bool) {
 		from--
 	}
 	return clipUTF8(line[from:], auditLineMax), true
+}
+
+// auditSpansMax bounds the spans one body's answer carries; a body with more
+// matches is answered with the first ones, marked capped.
+const auditSpansMax = 10000
+
+// auditSpan is one match on a stored line: the line's number in the server's
+// numbering (a stored_trunc body's head and tail numbered as one text, as in
+// search hits) and start/end offsets in UTF-16 code units within the line, so
+// a browser slices the line without conversion. Matches are never empty.
+type auditSpan struct {
+	Line  int `json:"line"`
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// auditBodyMatches is one body's match spans over its first Through bytes.
+type auditBodyMatches struct {
+	Through int         `json:"through"`
+	Spans   []auditSpan `json:"spans"`
+	Capped  bool        `json:"capped,omitempty"`
+}
+
+// bodySpans is the non-empty matches of the first through bytes of body, line
+// by line, up to auditSpansMax; one more visible match marks the answer
+// capped. Empty matches are skipped and never count toward the cap. head is
+// the body's stored_trunc head length (-1 for a body stored whole).
+func (s auditSearch) bodySpans(body string, head, through int) auditBodyMatches {
+	res := auditBodyMatches{Through: through, Spans: []auditSpan{}}
+	eachLine(body[:through], head, func(no int, line string, seam int) bool {
+		units := utf16Cursor{s: line}
+		s.eachLineMatch(line, seam, func(start, end int) bool {
+			if start == end {
+				return false
+			}
+			if len(res.Spans) == auditSpansMax {
+				res.Capped = true
+				return true
+			}
+			res.Spans = append(res.Spans, auditSpan{Line: no, Start: units.at(start), End: units.at(end)})
+			return false
+		})
+		return !res.Capped
+	})
+	return res
+}
+
+// utf16Cursor converts increasing byte offsets of a string to UTF-16 code
+// unit offsets, as a browser string counts them: one unit per rune below
+// U+10000 (a byte that is not UTF-8 counts one, as the JSON encoding turns
+// it into U+FFFD), two above.
+type utf16Cursor struct {
+	s       string
+	b, unit int
+}
+
+func (c *utf16Cursor) at(b int) int {
+	for c.b < b {
+		r, w := utf8.DecodeRuneInString(c.s[c.b:])
+		c.b += w
+		c.unit++
+		if r >= 0x10000 {
+			c.unit++
+		}
+	}
+	return c.unit
+}
+
+// throughBytes is how much of body a spans request reads: all of it unless
+// the request names a shorter loaded prefix, moved forward to a character
+// boundary.
+func throughBytes(body string, through int) int {
+	through = min(through, len(body))
+	for through < len(body) && !utf8.RuneStart(body[through]) {
+		through++
+	}
+	return through
+}
+
+// eventMatches is the spans of each stored body the event carries, keyed by
+// field. through is a field's loaded prefix in bytes, absent for the whole
+// body.
+func eventMatches(s auditSearch, ev *wsaudit.Envelope, through map[string]int) map[string]auditBodyMatches {
+	out := map[string]auditBodyMatches{}
+	for _, f := range []struct{ name, body string }{{wsaudit.FieldIn, ev.In}, {wsaudit.FieldOut, ev.Out}, {wsaudit.FieldRaw, ev.Raw}} {
+		if f.body == "" {
+			continue
+		}
+		n := len(f.body)
+		if t, ok := through[f.name]; ok {
+			n = throughBytes(f.body, t)
+		}
+		out[f.name] = s.bodySpans(f.body, storedTrunc(ev, f.name), n)
+	}
+	return out
 }

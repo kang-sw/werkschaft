@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -76,6 +77,9 @@ func newHostedExecFixture(t *testing.T, window time.Duration) *hostedExecFixture
 		t.Fatalf("the hosted exec tests need python3 for the session holder: %v", err)
 	}
 	useLeadProfile(t)
+	// The lead's authority is stated, not inherited: a caller running these
+	// tests as a read-only worker has the level in its own environment.
+	t.Setenv(wsagent.EnvPermissionLevel, "")
 	root := t.TempDir()
 	mustWrite(t, root, "README.md", "x\n")
 	mustWrite(t, root, "sub/.keep", "x\n")

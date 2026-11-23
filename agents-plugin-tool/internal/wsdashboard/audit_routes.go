@@ -244,8 +244,88 @@ func serveAuditEvents(w http.ResponseWriter, r *http.Request, v wsauditstore.Vie
 	return nil
 }
 
+// auditPattern parses the query parameters the search and the event route's
+// match spans share: q (required, non-empty), regex and case as 0|1.
+func auditPattern(q url.Values) (text string, regex, caseSensitive bool, err error) {
+	text = q.Get("q")
+	if text == "" {
+		return "", false, false, auditBadRequest("q must not be empty")
+	}
+	flag := func(key string) (bool, error) {
+		switch q.Get(key) {
+		case "", "0":
+			return false, nil
+		case "1":
+			return true, nil
+		}
+		return false, auditBadRequest(key + " must be 0 or 1")
+	}
+	if regex, err = flag("regex"); err != nil {
+		return "", false, false, err
+	}
+	if caseSensitive, err = flag("case"); err != nil {
+		return "", false, false, err
+	}
+	return text, regex, caseSensitive, nil
+}
+
+// auditEventMatches reads the event route's match request: q, regex and case
+// as /audit/search takes them (an invalid expression is refused alike), the
+// optional through_in, through_out and through_raw (the bytes of a body the
+// viewer has loaded, default all of it), and only=matches to answer the spans
+// without the envelope. It returns nil matches when the request carries no q.
+func auditEventMatches(q url.Values, ev *wsaudit.Envelope) (matches map[string]auditBodyMatches, only bool, err error) {
+	if _, has := q["q"]; !has {
+		for _, key := range []string{"regex", "case", "only", "through_in", "through_out", "through_raw"} {
+			if _, set := q[key]; set {
+				return nil, false, auditBadRequest(key + " needs q")
+			}
+		}
+		return nil, false, nil
+	}
+	text, regex, caseSensitive, err := auditPattern(q)
+	if err != nil {
+		return nil, false, err
+	}
+	switch q.Get("only") {
+	case "":
+	case "matches":
+		only = true
+	default:
+		return nil, false, auditBadRequest("only must be matches")
+	}
+	through := map[string]int{}
+	for _, f := range []string{wsaudit.FieldIn, wsaudit.FieldOut, wsaudit.FieldRaw} {
+		raw, set := q["through_"+f]
+		if !set {
+			continue
+		}
+		n, err := strconv.Atoi(raw[0])
+		if err != nil || n < 0 {
+			return nil, false, auditBadRequest("through_" + f + " must be a non-negative byte count")
+		}
+		through[f] = n
+	}
+	s, err := newAuditSearch(text, regex, caseSensitive, nil, "", 1)
+	if err != nil {
+		return nil, false, auditBadRequest("q is not a valid regular expression: " + err.Error())
+	}
+	// Without through_<part> a body is read as the envelope answer returns
+	// it: its head within auditBodyMax, clipped back to a character boundary
+	// as envelopeAnswer clips it, so no span lies outside the returned text.
+	for _, f := range []struct{ name, body string }{{wsaudit.FieldIn, ev.In}, {wsaudit.FieldOut, ev.Out}, {wsaudit.FieldRaw, ev.Raw}} {
+		if _, set := through[f.name]; !set && len(f.body) > auditBodyMax {
+			through[f.name] = len(headUTF8(f.body, auditBodyMax))
+		}
+	}
+	return eventMatches(s, ev, through), only, nil
+}
+
 // serveAuditEvent serves /audit/event/<event id>: the full envelope, or with
-// part=in|out|raw a range of one stored body.
+// part=in|out|raw a range of one stored body. With q (and regex, case, as
+// /audit/search takes them) the envelope also carries "matches": each stored
+// body's match spans, in the server's matcher and numbering; only=matches
+// answers the spans alone.
 func serveAuditEvent(w http.ResponseWriter, r *http.Request, v wsauditstore.View, id string) error {
 	if err := auditID("event id", id); err != nil {
 		return err
@@ -265,7 +345,15 @@ func serveAuditEvent(w http.ResponseWriter, r *http.Request, v wsauditstore.View
 		if i < 0 {
 			return errAuditNotFound
 		}
-		body, err := envelopeAnswer(v.Events[i])
+		matches, only, err := auditEventMatches(q, &v.Events[i])
+		if err != nil {
+			return err
+		}
+		if only {
+			writeAuditJSON(w, map[string]any{"matches": matches})
+			return nil
+		}
+		body, err := envelopeAnswer(v.Events[i], matches)
 		if err != nil {
 			return err
 		}
@@ -277,6 +365,11 @@ func serveAuditEvent(w http.ResponseWriter, r *http.Request, v wsauditstore.View
 	}
 	if i < 0 {
 		return errAuditNotFound
+	}
+	for _, key := range []string{"q", "regex", "case", "only", "through_in", "through_out", "through_raw"} {
+		if _, set := q[key]; set {
+			return auditBadRequest(key + " cannot be combined with part")
+		}
 	}
 	ev := &v.Events[i]
 	body, ok := auditPart(ev, part[0])
@@ -310,24 +403,7 @@ func serveAuditSearch(w http.ResponseWriter, r *http.Request, v wsauditstore.Vie
 	if err != nil {
 		return err
 	}
-	text := q.Get("q")
-	if text == "" {
-		return auditBadRequest("q must not be empty")
-	}
-	flag := func(key string) (bool, error) {
-		switch q.Get(key) {
-		case "", "0":
-			return false, nil
-		case "1":
-			return true, nil
-		}
-		return false, auditBadRequest(key + " must be 0 or 1")
-	}
-	regex, err := flag("regex")
-	if err != nil {
-		return err
-	}
-	caseSensitive, err := flag("case")
+	text, regex, caseSensitive, err := auditPattern(q)
 	if err != nil {
 		return err
 	}

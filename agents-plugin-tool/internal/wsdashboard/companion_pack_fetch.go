@@ -446,11 +446,21 @@ func (f *companionFetcher) get(ctx context.Context, target string, opt companion
 		if _, err := io.CopyN(&buf, body, 4); err != nil && err != io.EOF {
 			return nil, f.failure(ctx, err)
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, f.failure(ctx, err)
+		}
 		if !companionZipMagic(buf.Bytes()) {
 			return nil, errCompanionNotZip
 		}
 	}
 	if _, err := buf.ReadFrom(body); err != nil {
+		return nil, f.failure(ctx, err)
+	}
+	// A deadline or cancellation that passed during the read voids the result
+	// even when the body ended cleanly: when the client's connection closes as
+	// the context ends, the server's terminating chunk can still reach this
+	// read as a clean EOF, so a truncated body would look complete.
+	if err := ctx.Err(); err != nil {
 		return nil, f.failure(ctx, err)
 	}
 	if int64(buf.Len()) > opt.limit {

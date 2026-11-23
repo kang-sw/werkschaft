@@ -489,6 +489,17 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The server's refusal of the find text replaces the count. */
+.au-scnt.au-scnt-err {
+  flex: 0 1 auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--wb-fail);
+}
+
 .au-tbar-sp {
   margin-left: auto;
 }

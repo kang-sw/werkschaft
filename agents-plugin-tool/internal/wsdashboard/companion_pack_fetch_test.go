@@ -603,6 +603,71 @@ func TestCompanionPackFetchTimeout(t *testing.T) {
 	}
 }
 
+// companionExpiryBody is a response body whose first read waits for the
+// request's context to end and then returns what the server had sent plus a
+// clean EOF: the shape a transport hands back when the timeout and the end of
+// the body arrive together (a closing client connection can let the server's
+// terminating chunk through before the local close lands).
+type companionExpiryBody struct {
+	ctx  context.Context
+	data []byte
+}
+
+func (b *companionExpiryBody) Read(p []byte) (int, error) {
+	<-b.ctx.Done()
+	if len(b.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, nil
+}
+
+func (b *companionExpiryBody) Close() error { return nil }
+
+type companionExpiryTransport struct{}
+
+func (companionExpiryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    http.StatusOK,
+		Status:        "200 OK",
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{},
+		ContentLength: -1,
+		Body:          &companionExpiryBody{ctx: req.Context(), data: []byte("PK\x03\x04")},
+		Request:       req,
+	}, nil
+}
+
+// TestCompanionPackFetchTimeoutBodyEOF: a call whose deadline passed while the
+// body was being read never reports success, even when the body then ends
+// cleanly: the bytes before the EOF are not known to be the whole download.
+func TestCompanionPackFetchTimeoutBodyEOF(t *testing.T) {
+	f := &companionFetcher{timeout: 50 * time.Millisecond}
+	f.once.Do(func() { f.client = &http.Client{Transport: companionExpiryTransport{}} })
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"source", func() error {
+			_, err := f.fetchSource(context.Background(), "https://packs.example/stall.zip")
+			return err
+		}},
+		{"pack", func() error {
+			_, err := f.fetchPack(context.Background(), companionMarketplaceEntry{URL: "https://packs.example/stall.zip"}, nil)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); err == nil || !strings.Contains(err.Error(), "did not finish within 50ms") {
+				t.Fatalf("err = %v, want a timeout", err)
+			}
+		})
+	}
+}
+
 // TestCompanionPackFetchLoopbackRefused dials an httptest server on loopback
 // under the default policy: the dial is refused and the server never sees a
 // request.
