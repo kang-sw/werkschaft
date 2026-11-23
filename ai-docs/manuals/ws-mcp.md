@@ -1475,8 +1475,8 @@ from a support conversation:
   daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
   before the kept lines a fence releases and never blocks the holder reader
   or the stream mapper. When the audit store opens, the daemon binds it as
-  the runner's `AuditSink` before hosted Claude and Codex sessions can start
-  or reattach. If the store is unavailable, hosted sessions still run.
+  the runner's `AuditSink` before hosted Claude, Codex, and Antigravity sessions can
+  start or reattach. If the store is unavailable, hosted sessions still run.
   The Claude adapter writes `meta.request = {id, prev_id, ctx}` on every
   event from a model request (`wsaudit.RequestChain`): one chain for the lead and one per
   native subagent (`parent_tool_use_id`), advancing once per assistant

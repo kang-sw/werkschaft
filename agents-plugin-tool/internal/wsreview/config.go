@@ -22,7 +22,7 @@ const (
 // checkpointNudgeSectionRE isolates a `## Checkpoint Nudge` section's body
 // out of ai-docs/_review.local.md, stopping at the next level-1 or level-2
 // heading or end of file.
-var checkpointNudgeSectionRE = regexp.MustCompile(`(?ms)^## Checkpoint Nudge\s*\n(.*?)(?:\n#{1,2} |\z)`)
+var checkpointNudgeSectionRE = regexp.MustCompile(`(?ms)^## Checkpoint Nudge[^\S\r\n]*\r?\n(.*?)(?:^#{1,2} |\z)`)
 
 // stalenessLineRE matches a `staleness: <N> commits` line inside the
 // Checkpoint Nudge section.
