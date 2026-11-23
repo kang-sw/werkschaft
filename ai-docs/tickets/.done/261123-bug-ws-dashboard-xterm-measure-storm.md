@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 9eed8268695e3087
 sage-review-completeness-reviewed: 9eed8268695e3087
+completed: 2026-11-23
 ---
 
 # Dashboard xterm character width measurement storm
@@ -279,3 +280,90 @@ Verification:
   and the PTY dimensions agree. Include the hidden-panel case from Phase 1
   in the workload.
 - Run the touched Node test files with `node --test`.
+
+### Result (370008b2b) - 2026-11-23
+
+**Fix.** A dashboard-side fix exists, so the vendored xterm bundle is
+untouched. `assets/terminal.js` `holdSelection(s)` runs right after
+`term.open` and overrides the instance's
+`_core._renderService.handleSelectionChanged` (xterm's `onRequestRedraw`
+looks the method up at call time). While the host has no box
+(`clientWidth`/`clientHeight` 0: inactive tab, folded card) the redraw is
+held as `s.held`. The host `ResizeObserver` calls `s.release()` before
+`later(c)`, which draws the newest held selection once the box is back. A
+held "nothing selected" is dropped when no selection is drawn, since the
+unpause full refresh covers it. PTY writes, fold previews, `fit` and size
+frames are unchanged. The gate is a synchronous host-box read, not xterm's
+`_isPaused`, because a redraw queued while visible and run after a same-task
+hide still sees `_isPaused === false`.
+
+**Verification** (fresh loopback fixture, headless Chrome 158.0.8127.36,
+1200 × 850, DPR 1, real `terminal.js` and the vendored hash-named bundle, fake
+WebSocket and card framework, one restored hidden chat tab and one folded
+card, Phase 1 burst of 56 lines × 72 alternating glyphs cycling
+normal/bold/italic/bold+italic, 280 ms settle; no live dashboard, no owner
+token). The fixture is in the temp dir only and was deleted. It counts
+`createRow`, `WidthCache.get` and `_measure` positive/zero per instance, and
+CDP `Performance` `RecalcStyleCount`/`LayoutCount` deltas per step, and times
+every rAF callback. The before run reproduced Phase 1.
+
+| step | before: createRow / reads pos+zero / style recalcs / longest rAF | after |
+|---|---|---|
+| hidden tab, first AB | 24 / 0+1,657 / 0 / 6.6 ms | 0 / 0+0 / 0 / 0.1 ms |
+| hidden tab, repeat AB | 24 / 0+1,657 / 0 / 2.3 ms | 0 / 0+0 / 0 / 0.1 ms |
+| folded card, first AB | 24 / 0+1,657 / 0 / 1.4 ms | 0 / 0+0 / 0 / 0.1 ms |
+| reveal at 640 × 420 | 72 / 9+0 / 13 / 1.7 ms | 72 / 9+0 / 13 / 8.2 ms |
+| visible AB, cold then repeat | 96 / 0+0 / 3 each / ≤ 1.4 ms | 96 / 0+0 / 4 each / ≤ 1.6 ms |
+| hidden, warm keys (hide + AB) | 48 / 0+0 / 1 | 24 / 0+0 / 1 |
+| hidden tab, new keys CD | 24 / 0+1,656 / 0 / 1.7 ms | 0 / 0+0 / 0 / 0.2 ms |
+| folded card, new keys CD | 24 / 0+1,657 / 0 / 2.9 ms | 0 / 0+0 / 0 / 0.1 ms |
+| reveal again, CD never drawn visibly | 24 / 8+0 / 10 / 1.5 ms | 24 / 8+0 / 10 / 2.4 ms |
+
+- Redundant zero-width measurement is gone: 0 `createRow` and 0 reads for
+  hidden tabs and folded cards, where before each write cost 1,657 zero reads.
+  Legitimate cold measurements are unchanged: 9 positive reads on the first
+  visible redraw (eight glyph/style keys and space), 8 for the new keys on
+  reveal, none for repeats. The longest xterm rAF is under 10 ms before and
+  after (the fixture was already under 100 ms, so it measures work counts).
+- Selection: a selection queued while visible, then hidden in the same task
+  (`_isPaused` still false, host 0 × 0): 0 `createRow` and 0 reads in the
+  callback (before: 24 rows, 1,657 reads), one style recalc. Showing the pane
+  drew it with no input (`getSelection` length 10, 2 `.xterm-selection`
+  divs). Selecting, hiding, clearing while hidden and showing left no stale
+  selection divs.
+- Invalidation is unchanged before and after: a font-size change cleared the
+  cache (2 clears, 1 `setFont`) and re-measured 20 keys; a DPR 2 override
+  re-measured 8 keys.
+- Fit and size: the revealed tab fit once to 24 rows × 86 columns with 24 DOM
+  rows and exactly one size frame (24 × 86); hidden writes sent none, and the
+  folded card sent none. The folded preview still followed output
+  (`CDCDCDCD` equals the buffer's last line). Span-width deviation from
+  `cols × cell` is 0.618 px before and after (existing sub-pixel rounding).
+- `node --test session-load.test.cjs`: 9 pass, including a new test that pins
+  hold, newest-wins, clear-while-hidden, drop-when-nothing-drawn, bare
+  emulator and the wiring order. No Go file or embedded asset list changed, so
+  the Go suite was not run (w5090 not used).
+- Lite review (one pass, `code-review-lite`): no Critical or Important
+  findings.
+
+**Decisions.** The gate costs one forced style flush per selection rAF while
+the terminal is visible (4 vs 3 recalcs per 4 visible redraws in the fixture);
+accepted because the hidden path is the one the trace blames and the visible
+redraw does the same work either way. The first commit lacks the model's
+Co-Authored-By trailer (the commit tool did not add it and history is not
+amended).
+
+**Remaining check.** Historical attribution of the owner's 35.9 s of
+`offsetWidth` and the 100 ms gate on the owner's expensive path still need
+the owner-side before/after Werkschaft Performance capture described in the
+Phase 1 Result.
+
+**Forward** (minor, from review):
+- `holdSelection` leaves `RenderService._selectionState` stale while held;
+  release rewrites it, so no wrong end state, but the invariant is undocumented.
+- Release depends on the host `ResizeObserver`'s 0 → box transition; no
+  reachable case without a size change was found.
+- The unit test cannot detect a vendored-bundle upgrade that binds
+  `handleSelectionChanged` early (the `typeof` guard would silently disable the
+  hold); only the Chrome fixture covers it, and it is not in the suite.
+- `s.held` is not cleared on dispose (no reachable stale draw today).
