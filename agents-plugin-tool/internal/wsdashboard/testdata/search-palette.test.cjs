@@ -459,7 +459,7 @@ async function hostCases() {
   const frames = { iframe: { getAttribute: k => k === 'srcdoc' ? '<div class="doc-body">Mounted body</div>' : null },
     placeholder: { getAttribute: k => k === 'data-srcdoc' ? '<div class="doc-body">Deferred body</div>' : null } };
   let frame = null, parsedFrom = '';
-  const boardTopic = { getAttribute: () => 'example', querySelector: s => s === '.tname' ? textNode('Example') : s === ':scope > .tdoc > .doc-body' ? { querySelector: f => f === '.doc-frame' ? frame : null } : null };
+  const boardTopic = { nodeType: 1, tagName: 'SECTION', hasAttribute: k => k === 'data-topic', getAttribute: () => 'example', querySelector: s => s === '.tname' ? textNode('Example') : s === ':scope > .tdoc > .doc-body' ? { querySelector: f => f === '.doc-frame' ? frame : null } : null };
   const rowsCtx = vm.createContext({ framed: false, readItem: () => null, boardQ: () => [boardTopic],
     doc: { createElement: () => ({ set innerHTML(v) { parsedFrom = v; }, content: { querySelector: () => textNode(parsedFrom) } }) },
     q: (s, root) => s === '[id^="item-"]' && root === boardTopic ? [unanswered] : [] });
@@ -500,7 +500,7 @@ async function hostCases() {
   const gapContent = { entries: [gapEntry] }, historyGap = { content: gapContent };
   const stream = { entries: [log, system, panel, old] };
   let ownBody = null;
-  const topicWithStream = { getAttribute: () => 'stream-topic', querySelector: selector => selector === '.tname' ? leaf('Stream topic') :
+  const topicWithStream = { nodeType: 1, tagName: 'SECTION', hasAttribute: k => k === 'data-topic', getAttribute: () => 'stream-topic', querySelector: selector => selector === '.tname' ? leaf('Stream topic') :
     selector === ':scope > .tdoc > .doc-body' ? ownBody : selector === '.rtext' ? leaf('Topic recap') : null };
   function query(selector, root) {
     if (selector === '.topic-stream' && root === topicWithStream) return [stream];
@@ -537,7 +537,7 @@ async function hostCases() {
   // landing geometry or focus, without opening unrelated disclosures.
   let folded = true, active = 'palette';
   const fold = { tagName: 'DETAILS', open: false };
-  const topic = { parentElement: {}, querySelector: s => s === '.tdoc' ? body : null, getAttribute: () => 'closed' };
+  const topic = { parentElement: {}, hasAttribute: () => false, querySelector: s => s === '.tdoc' ? body : null, getAttribute: () => 'closed' };
   function landing(tagName, parentElement) {
     return { parentElement, tagName, classList: { remove() {}, add() {} },
       matches: () => false, setAttribute() {},
