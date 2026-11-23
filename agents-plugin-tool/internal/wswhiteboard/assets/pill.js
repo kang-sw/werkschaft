@@ -508,7 +508,13 @@
       }
       var w = window.wbHistory;
       if (w && w.navigate) w.navigate(el, { behavior: "smooth" });
-      else el.scrollIntoView({ block: "center", behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+      else {
+        if (window.WsCards && window.WsCards.activate) window.WsCards.activate(el);
+        var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(el);
+        var calm = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+        if (card) { anchor.select(card, { smooth: el === card && !calm }); if (el === card) return; }
+        el.scrollIntoView({ block: "center", behavior: calm ? "instant" : "smooth" });
+      }
     };
   }
   pills.top.onclick = click("top");

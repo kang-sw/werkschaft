@@ -27,10 +27,10 @@ function vars(source, names) {
     return found[0];
   }).join('');
 }
-const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT', 'ANCHOR_BOT_MARGIN', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorProg']) +
+const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT', 'ANCHOR_BOT_MARGIN', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorCap0', 'anchorProg']) +
   funcs(anchorSrc, ['anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
-    'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
+    'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
     'anchorSize', 'anchorWatchLast', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
@@ -214,9 +214,16 @@ test('removal of the current card falls back to the next card, else the previous
   assert.equal(w.cur(), 't:C', 'a card that leaves the order (hidden) hands over too');
 });
 
-test('no wheel trap, no overscroll-behavior contain, no scroll-margin-top, and no .board-step buttons or i18n keys', () => {
+test('no wheel trap, no overscroll-behavior contain, capsule-only scroll-margin-top, mandatory snap deck, and no .board-step buttons or i18n keys', () => {
   assert.doesNotMatch(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior:\s*contain/);
-  assert.doesNotMatch(cssSrc, /scroll-margin-top:/);
+  assert.match(cssSrc, /scroll-snap-type:\s*y\s+mandatory/);
+  assert.match(cssSrc, /\[data-anchor-cap="0"\][^}]*scroll-margin-top:\s*160px/);
+  assert.match(cssSrc, /\[data-anchor-cap="rail0"\][^}]*scroll-margin-top:\s*var\(--board-pad-top,\s*2px\)/);
+  assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*24px\)/);
+  assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*44px\)/);
+  assert.doesNotMatch(cssSrc, /\.bcard\[data-card\]:not\(\[data-max\]\)\s*>\s*\.bc-in\s*>\s*\.bc-body\s*\{[^}]*overflow\s*:/);
+  assert.doesNotMatch(cssSrc, /scroll-margin-top:[^;]*(?:--board-toolbar|--wb-rail-inset)/);
+  assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
   assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["'][^)]*passive\s*:\s*false/);
   assert.doesNotMatch(anchorSrc, /e\.preventDefault\(/);
@@ -256,6 +263,7 @@ test('WsBoardAnchor.step navigates both ways across an interleaved sequence and 
 
 test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches top line', () => {
   const w = world([T('A'), T('B'), T('C')]);
+  w.bcol.overflowY = 'auto';
   w.bcol.style.setProperty('--wb-rail-inset', '34px');
   w.c.anchorSized.padTop = 2;
   w.c.anchorLastCard = w.node('t:C');
@@ -267,10 +275,17 @@ test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches t
   assert.equal(w.bcol.props.get('--board-usable'), '659px');
   // runway = 800 - 78 - 500 = 222
   assert.equal(w.bcol.props.get('--board-runway'), '222px');
+  // Unbounded document-scrolled board must clear --board-usable and --board-runway
+  w.bcol.overflowY = 'visible';
+  w.bcol.style.removeProperty = k => w.bcol.props.delete(k);
+  w.c.anchorSize([{ target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 5000 }], contentRect: { width: 900, height: 5000 } }]);
+  assert.equal(w.bcol.props.has('--board-usable'), false);
+  assert.equal(w.bcol.props.has('--board-runway'), false);
 });
 
 test('anchorSelect aligns to rail landing line and shields programmatic jump from short preceding card snap-back', () => {
   const w = world([T('A'), T('B'), T('C')]);
+  w.bcol.overflowY = 'auto';
   w.bcol.style.setProperty('--wb-rail-inset', '34px');
   w.bcol.clientHeight = 800; w.bcol.scrollHeight = 2000;
   w.bcol.getBoundingClientRect = () => ({ top: 100, bottom: 900, left: 0, right: 800, height: 800, width: 800 });
@@ -427,4 +442,21 @@ test('boardKeep without a current card keeps the main box first child; with one 
   w.C.reset(); w.select('t:B');
   w.c.boardKeep();
   assert.ok(w.C.d.keep.length === 1 && w.node('t:B').contains(w.C.d.keep[0]), 'only the current card inside the main board');
+});
+
+test('anchorSlotCaps stamps rail0 on first railed card when slot 0 is a non-rail .bcard', () => {
+  const w = world([Cd('u1'), T('A'), T('B'), T('C')]);
+  w.c.anchorSettle(null);
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-cap'), '0');
+  assert.equal(w.node('t:A').getAttribute('data-anchor-cap'), 'rail0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-cap'), '1');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-cap'), null);
+  // Removing non-rail slot 0 promotes t:A to slot 0 and clears stale caps cleanly.
+  const u1 = w.node('c:u1');
+  u1.remove();
+  w.c.anchorSettle(null);
+  assert.equal(u1.getAttribute('data-anchor-cap'), null);
+  assert.equal(w.node('t:A').getAttribute('data-anchor-cap'), '0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-cap'), '1');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-cap'), null);
 });

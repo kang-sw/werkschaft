@@ -42,11 +42,51 @@ const live = JSON.parse(fs.readFileSync(fixture, 'utf8'));
    assert(await frame.locator('article.wbeffects.wbupdate').count()>0,'expanded whiteboard card');
    assert(await frame.locator('.turnline').count()>0,'turn summary rendered');
    const traceHeight=await frame.locator('.mailline > summary').first().evaluate(el=>el.getBoundingClientRect().height);
+   const primaryColor=await frame.evaluate(()=>{
+    const probe=document.createElement('span');
+    probe.style.color='var(--wb-primary)';
+    document.body.appendChild(probe);
+    const color=getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+   });
+   const collapsedRows=frame.locator('.conv-row:not(.aph):not(.mh)');
+   for(const row of await collapsedRows.elementHandles()) {
+    const metrics=await row.evaluate(el=>({
+     classes:el.className,
+     text:el.textContent.trim().slice(0,160),
+     height:el.getBoundingClientRect().height,
+     whiteSpace:getComputedStyle(el.querySelector('.row-content')).whiteSpace,
+     contentColor:getComputedStyle(el.querySelector('.row-content :is(.mpeer, b)') || el.querySelector('.row-content')).color,
+     iconColor:getComputedStyle(el.querySelector('.row-icon :is(.arr, .i, .li)') || el.querySelector('.row-icon')).color,
+     isMail:!!el.closest('.mail-notification') || !!el.querySelector('.mail-icon')
+    }));
+    assert.equal(metrics.whiteSpace,'nowrap','collapsed row content stays on one line');
+    assert(metrics.height<=traceHeight+4,`collapsed row stays one trace line (${metrics.height}px vs ${traceHeight}px; ${metrics.classes}; ${metrics.text})`);
+    if(metrics.isMail) {
+     assert.equal(metrics.iconColor,primaryColor,'mail icon uses the primary blue family');
+     assert.equal(metrics.contentColor,primaryColor,'trigger mail name uses the primary blue family');
+    }
+   }
    for(const height of await frame.locator('.turnline > summary').evaluateAll(rows=>rows.map(el=>el.getBoundingClientRect().height))) {
     assert(height<=traceHeight+4,`turn summary stays one trace line (${height}px vs ${traceHeight}px)`);
    }
    // Retain collapsed and expanded examples in the same capture.
    await frame.locator('details.turnline').last().evaluate(el=>el.open=true);
+   for (const row of await frame.locator('.au-call-details > summary, .mailline > summary, .mail-notification > summary, .turnline > summary').elementHandles()) {
+    assert.equal(await row.evaluate(el=>[...el.querySelectorAll('.row-chevron')].some(c=>getComputedStyle(c).display!=='none')),false,'trace chevron hidden');
+    assert(!(await row.textContent()).includes('✓'),'trace has no success check');
+   }
+   const flatCall=frame.locator('.au-call-details').filter({has:frame.locator('[data-call="grammar-call"]')}).first();
+   await flatCall.evaluate(el=>{for(let p=el.parentElement;p;p=p.parentElement) if(p.tagName==='DETAILS')p.open=true;el.open=false;});
+   await flatCall.locator('summary').click();
+   assert(await flatCall.evaluate(el=>el.open),'click expands tool details');
+   const geometry=await frame.locator('summary[data-call="grammar-call"], .au-turn-tool').evaluateAll(rows=>rows.filter(el=>el.getClientRects().length).map(el=>{
+    const icon=el.querySelector('.row-icon');
+    return {x:icon.getBoundingClientRect().x-el.getBoundingClientRect().x,font:getComputedStyle(icon).fontSize};
+   }));
+   assert(geometry.length>1,'turn references retained');
+   for(const metric of geometry) assert.deepEqual(metric,geometry[0],'tool and reference icon alignment and font match');
    const capture=async name=>{
     if (!shots) return;
     fs.mkdirSync(shots,{recursive:true});

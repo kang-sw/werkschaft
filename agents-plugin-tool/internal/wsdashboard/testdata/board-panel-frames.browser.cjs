@@ -6,9 +6,19 @@ const [base, updates] = process.argv.slice(2);
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    const tab = await browser.newPage({ viewport: { width: 1600, height: 1800 }, locale: 'en-US' });
+    const tab = await browser.newPage({ viewport: { width: 2600, height: 1800 }, locale: 'en-US' });
     const errors = [], failures = [];
     tab.on('pageerror', e => errors.push(e.message));
+    // Under Snap Deck, each board slot fills --board-usable; dock PanelOnly beside
+    // BodyAndPanel in the wide gallery so both topics remain continuously in view.
+    await tab.addInitScript(() => {
+      try {
+        const key = 'ws.dashboard.cards.livesession';
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, JSON.stringify({ cards: [], topics: [{ n: 'PanelOnly', p: 1, a: 0, b: 0 }] }));
+        }
+      } catch (e) {}
+    });
     // Enter through the shell, then operate on its active session frame.
     await tab.goto(base + '/s/livesession');
     const active = tab.locator('iframe.sframe.on');

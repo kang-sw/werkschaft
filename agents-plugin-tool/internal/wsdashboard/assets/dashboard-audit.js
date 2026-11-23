@@ -951,8 +951,6 @@
       if (errByCall[cid] && !row.classList.contains("au-fail")) {
         row.classList.remove("au-done");
         row.classList.add("au-fail");
-        var mk = row.querySelector(".au-mk");
-        if (mk && mk.textContent !== "\u2717") mk.textContent = "\u2717";
       }
       var durEl = row.querySelector(".au-dur");
       if (durEl && typeof s.duration_ms === "number" && s.duration_ms > 0) {

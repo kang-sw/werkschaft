@@ -804,6 +804,12 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .turn-trigger > .conv-row > .row-icon,
 .turn-trigger > .conv-row > .row-content :is(.mpeer, b),
 .turn-trigger > .conv-row > .row-icon :is(.arr, .i, .li) { color: var(--conv-trigger); }
+.conv-row > .row-content { overflow: hidden; white-space: nowrap; }
+.conv-row > .row-content > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailline > .conv-row > .row-icon :is(.arr, .i, .li),
+.mail-notification > .conv-row > .row-icon :is(.arr, .i, .li) { color: var(--wb-primary); }
+.mailline.turn-trigger > .conv-row > .row-content :is(.mpeer, b),
+.mail-notification.turn-trigger > .conv-row > .row-content :is(.mpeer, b) { color: var(--wb-primary); }
 .mailline.fail > .conv-row, .au-row.au-fail { color: var(--wb-fail); background: none; box-shadow: none; }
 .sysline.boundary-badge { display: block; align-self: stretch; padding: 0; background: none; box-shadow: none; border-radius: 0; margin-block: 12px; text-align: center; color: var(--wb-muted-fg); }
 .boundary-badge > summary { border: 1px solid var(--wb-line); display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 12px; border-radius: 999px; background: var(--wb-muted); font-size: 11.5px; font-weight: 500; list-style: none; cursor: pointer; overflow-wrap: anywhere; }
@@ -835,12 +841,17 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .conv-row .trace-content { display: flex; gap: 7px; min-width: 0; align-items: center; }
 .conv-row .trace-content > .au-pv::before { content: "·"; margin-right: 7px; }
 
-/* The disclosure marker stays in the first column, leaving the clock aligned. */
+/* Trace icons and clocks align with the turn references. */
 .conv-row:not(.mh), .au-call-details > summary.au-row.conv-row { grid-template-columns: 14px 20px minmax(0, 1fr) 44px; column-gap: 6px; }
 .conv-row:not(.mh) > .row-icon { grid-column: 2; grid-row: 1; }
 .conv-row:not(.mh) > .row-content { grid-column: 3; grid-row: 1; }
 .conv-row:not(.mh) > .row-time { grid-column: 4; grid-row: 1; }
-.conv-row:not(.mh) > .row-chevron { grid-column: 1; grid-row: 1; }
+.conv-row:not(.mh) > .row-chevron { display: none; }
 .conv-row.au-turn-tool { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
 .conv-row.au-turn-tool:hover { background: color-mix(in srgb, var(--wb-fg) 4%, transparent); }
 .conv-row.au-turn-trigger > .row-icon, .conv-row.au-turn-trigger .row-name { color: var(--conv-trigger); }
+
+.conv-row.au-row.au-done > .au-mk { color: var(--wb-muted-fg); }
+.conv-row.au-row.au-fail .au-tool { color: var(--wb-fail); }
+.conv-row.au-row > .au-mk { font-size: inherit; width: auto; }
+.conv-row.au-row { font-size: 13px; line-height: 1.5; }

@@ -130,7 +130,9 @@ const helpers3 = () => {
       const s = document.querySelector('#bgal .gal-pullpill.lit');
       if (!s) return null;
       const pulled = document.querySelector('[data-gal-pull]'), tr = pulled ? (pulled.style.translate || '').split(' ') : [];
-      return { side: s.classList.contains('top') ? 'top' : 'bottom', text: s.querySelector('.gal-pulltxt').textContent, fill: s.querySelector('.gal-pullfill').style.width,
+      const fillEl = s.querySelector('.gal-pullfill'), trMatch = (fillEl.style.transform || '').match(/scaleX\(([^)]+)\)/);
+      const fill = trMatch ? Math.round(parseFloat(trMatch[1]) * 100) + '%' : fillEl.style.width;
+      return { side: s.classList.contains('top') ? 'top' : 'bottom', text: s.querySelector('.gal-pulltxt').textContent, fill,
         ready: s.classList.contains('ready'), damped: s.classList.contains('damped'), target: [...document.querySelectorAll('#bgal .gal-dot.pull-target')].map(b => +b.getAttribute('data-pos')),
         shift: tr.length > 1 ? parseFloat(tr[1]) : 0, pulled: pulled ? pulled.id || pulled.className : null };
     },
@@ -917,7 +919,7 @@ async function routeTerminal(context) {
       await sleep(G_MICRO + 80);
       assert.equal(await pill(), null);
 
-      // Page 0's rendered bottom (no auto-load) pulls toward page 1 and flips.
+      // Page 0's rendered bottom (last visible panel in anchorCards) pulls toward page 1 and flips.
       await col('end');
       await page.evaluate(() => window.__gal.frames());
       boardAt = await spot('#r-board');
@@ -928,7 +930,32 @@ async function routeTerminal(context) {
       await wheel(boardAt, 100, 3, 30);
       assert.equal(await pos(page), 0, 'Page 0 bottom flips to page 1');
       assert.equal(await page.evaluate(() => document.getElementById('r-board').style.translate), '', 'the board\'s band is released');
-      done.push('narrow Page 0: top micro-bounce, rendered bottom flips to page 1');
+
+      // Return to Page 0, verify intermediate-panel wheel advances #bcol natively without Gate,
+      // and verify Hero Panel selection restores when returning from Page 1.
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'returned to Page 0');
+      await col(0);
+      await sleep(G_LOCK + 60);
+      boardAt = await spot('#r-board');
+      await wheel(boardAt, 100);
+      assert.equal(await pill(), null, 'intermediate panel wheel-down does not charge Gate');
+      assert.equal(await pos(page), -1, 'intermediate panel wheel-down stays on Page 0');
+      await sleep(300);
+
+      await page.evaluate(() => {
+        const g = document.querySelector('section.topic[data-topic="gamma"]');
+        if (g && window.WsBoardAnchor) window.WsBoardAnchor.select(g, { smooth: false });
+      });
+      await sleep(80);
+      assert.equal(await page.evaluate(() => window.WsBoardAnchor && window.WsBoardAnchor.key()), 't:gamma', 'Hero Panel selected on Page 0');
+      await dot(page, 0).click();
+      await until(async () => await pos(page) === 0, 'switched to Page 1 from Hero Panel gamma');
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'returned to Page 0 for Hero Panel restore');
+      await page.evaluate(() => window.__gal.frames());
+      assert.equal(await page.evaluate(() => window.WsBoardAnchor && window.WsBoardAnchor.key()), 't:gamma', 'returning to Page 0 restores Hero Panel');
+      done.push('narrow Page 0: top micro-bounce, rendered bottom flips to page 1, intermediate wheel native, Hero Panel restores');
 
       // Spring from the board: a board topic held over page 1's dot shows
       // that page after 300ms (the board steps away mid-drag), and drops
@@ -975,6 +1002,66 @@ async function routeTerminal(context) {
       assert.deepEqual(inert, { wheels: [false, false, false, false, false, false], pulled: 0, hidden: true }, 'zero pages: the Page 0 bottom gate stays inert');
       done.push('narrow Page 0 bottom inert with zero docked pages');
       assert.deepEqual(errors, [], 'no page errors (gate narrow)');
+      await context.close();
+    }
+
+    // ---- Phase 3 (narrow 1400): OWN widget as last panel in ⌂ + overflow: hidden ----
+    {
+      const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, locale: 'en-US', reducedMotion: 'no-preference' });
+      await routeTerminal(context);
+      await seed(context, 'livesession', { cards: [], topics: [{ n: 'alpha', p: 1, a: 0, b: 0 }] });
+      const { tab, page, errors } = await open(context, 'livesession');
+      await until(async () => JSON.stringify(await pages(page)) === '[["alpha"]]', 'one docked page (OWN last)');
+      await until(() => page.evaluate(() => !!document.querySelector('#r-board .bcard[data-kind="terminal"] .tm-host .xterm')), 'terminal card mounted in #r-board', 15000);
+      await page.evaluate(helpers3);
+      if (await pos(page) !== -1) await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'Page 0 (OWN last)');
+      // Place the terminal .bcard as the last panel in #r-board (with no trailing closed-more) and verify overflow: hidden on terminal/web .bc-body.
+      const ownSetup = await page.evaluate(() => {
+        const board = document.getElementById('r-board');
+        const term = board.querySelector('.bcard[data-kind="terminal"]');
+        const more = board.querySelector('button.closed-more');
+        if (more) { more.hidden = true; board.insertBefore(term, more); } else board.appendChild(term);
+        term.removeAttribute('data-anchor-cap');
+        const body = term.querySelector(':scope > .bc-in > .bc-body');
+        const termOverflow = getComputedStyle(body).overflowY;
+        term.setAttribute('data-kind', 'web');
+        const webOverflow = getComputedStyle(body).overflowY;
+        term.setAttribute('data-kind', 'terminal');
+        window.WsBoardAnchor.select(term, { smooth: false });
+        const cards = window.WsBoardAnchor.cards();
+        return { isLast: cards[cards.length - 1] === term, termOverflow, webOverflow };
+      });
+      assert.equal(ownSetup.isLast, true, 'terminal .bcard is the last visible panel in ⌂');
+      assert.equal(ownSetup.termOverflow, 'hidden', 'terminal .bc-body preserves overflow: hidden inside #bcol');
+      assert.equal(ownSetup.webOverflow, 'hidden', 'web .bc-body preserves overflow: hidden inside #bcol');
+      await page.evaluate(() => window.__gal.frames());
+      await sleep(G_INERTIA + 80);
+      const off = async () => { const b = await tab.locator('iframe.sframe.on').boundingBox(); return { x: b.x, y: b.y }; };
+      const wheel = async (at, dy, n = 1, gap = 0) => { await tab.mouse.move(at.x, at.y); for (let i = 0; i < n; i++) { if (i && gap) await sleep(gap); await tab.mouse.wheel(0, dy); } await page.evaluate(() => window.__gal.frames()); };
+      const pill = () => page.evaluate(() => window.__gal3.pill());
+      const boxCenter = async sel => {
+        const o = await off();
+        const r = await page.evaluate(s => { const el = document.querySelector(s); const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }, sel);
+        return { x: o.x + r.x, y: o.y + r.y };
+      };
+      // (a) Wheel inside OWN widget body stays native: does NOT charge Gate or flip to Page 1.
+      const bodyAt = await boxCenter('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-body');
+      await wheel(bodyAt, 125, 5, 35);
+      assert.equal(await pill(), null, 'wheel inside OWN terminal body does not charge Gate');
+      assert.equal(await pos(page), -1, 'wheel inside OWN terminal body stays on Page 0');
+      // (b) Wheel on its header (.bc-hd) cleanly flips to Pinned Page 1.
+      await sleep(G_INERTIA + 80);
+      const hdAt = await boxCenter('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-hd');
+      await wheel(hdAt, 100, 4, 30);
+      assert.equal(await pos(page), 0, 'wheel on OWN terminal header (.bc-hd) flips to Pinned Page 1');
+      // Return to ⌂ and verify clicking .gal-rail dot flips cleanly to Pinned Page 1.
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'returned to ⌂ from Page 1');
+      await dot(page, 0).click();
+      await until(async () => await pos(page) === 0, 'clicking .gal-rail dot flips from ⌂ to Pinned Page 1');
+      done.push('narrow Page 0 OWN last panel: body wheel native, header wheel & rail dot flip to Page 1, overflow: hidden preserved');
+      assert.deepEqual(errors, [], 'no page errors (OWN last panel)');
       await context.close();
     }
 
@@ -1068,26 +1155,24 @@ async function routeTerminal(context) {
           return same >= 12;
         }, 'the board\'s topic heights settle (' + how + ')');
       }
-      await page.evaluate(() => { const b = document.getElementById('bcol'); b.scrollTop += document.querySelector('section.topic[data-topic="beta"]').getBoundingClientRect().top - b.getBoundingClientRect().top - 40; });
+      await page.evaluate(() => { window.WsBoardAnchor.select(document.querySelector('section.topic[data-topic="beta"]'), { smooth: false }); });
       await page.evaluate(() => window.__gal.frames());
       let target = null;
       const during = await drag(tab, await grip(bar(page, 'beta')), async () => target, async () => {
         await until(() => page.locator('#bgal').isVisible(), 'rail on drag start');
         const o = await tab.locator('iframe.sframe.on').boundingBox();
         const p = await page.evaluate(() => {
-          let n = document.querySelector('section.topic[data-topic="beta"]').nextElementSibling;
-          while (n && !(n.matches('section.topic[data-topic]') && !n.classList.contains('closed'))) n = n.nextElementSibling;
-          const r = n.getBoundingClientRect(), y = Math.min(r.top + r.height * 0.75, innerHeight - 80);
-          return y > r.top + r.height / 2 ? { x: r.left + r.width / 2, y } : null;
+          const r = document.querySelector('section.topic[data-topic="beta"]').getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: Math.min(r.top + r.height * 0.65, innerHeight - 80) };
         });
-        assert(p, 'the next topic\'s lower half in view');
+        assert(p, 'beta body point in view for in-board drag cancel check');
         target = { x: o.x + p.x, y: o.y + p.y };
         await tab.mouse.move(target.x, target.y, { steps: 4 });
         await page.evaluate(() => window.__gal.frames());
         return page.evaluate(async () => ({ dots: window.__gal.dots(), pos: window.__gal.pos(), away: document.documentElement.hasAttribute('data-gal-away'), inert: document.getElementById('r-board').inert,
           seen: (await window.__gal.seen([document.querySelector('section.topic[data-topic="beta"]')]))[0], line: !!document.querySelector('.bdrop:not([hidden])') }));
       });
-      assert.deepEqual(during, { dots: ['⌂*', '+'], pos: -1, away: false, inert: false, seen: true, line: true }, 'a board drag keeps the Main Board shown, its drop line drawn (' + how + ')');
+      assert.deepEqual(during, { dots: ['⌂*', '+'], pos: -1, away: false, inert: false, seen: true, line: false }, 'a board drag keeps the Main Board shown without a flow-reorder drop line (' + how + ')');
       await page.evaluate(() => window.__gal.frames());
       const after = await page.evaluate(() => ({ away: document.documentElement.hasAttribute('data-gal-away'), hidden: document.getElementById('bgal').hidden, pages: window.__gal.pages().length }));
       assert.deepEqual(after, { away: false, hidden: true, pages: 0 }, 'the drop stays on the board (' + how + ')');
@@ -1111,8 +1196,12 @@ async function routeTerminal(context) {
       const b = await tab.locator('iframe.sframe.on').boundingBox();
       const r = await page.evaluate(() => { const c = document.getElementById('bcol').getBoundingClientRect(); return { x: c.left + c.width * 0.6, y: c.top + c.height / 2 }; });
       const gesture = yDistance => cdp.send('Input.synthesizeScrollGesture', { x: Math.round(b.x + r.x), y: Math.round(b.y + r.y), yDistance, gestureSourceType: 'touch', speed: 1200 });
-      const top0 = await page.evaluate(() => { const c = document.getElementById('bcol'); c.scrollTop = 200; return c.scrollTop; });
-      await gesture(-300);
+      const top0 = await page.evaluate(() => {
+        const c = document.getElementById('bcol'), b = document.querySelector('section.topic[data-topic="beta"]');
+        if (b) c.scrollTop = c.scrollTop + b.getBoundingClientRect().top - c.getBoundingClientRect().top - 40;
+        return c.scrollTop;
+      });
+      await gesture(-500);
       const top1 = await page.evaluate(() => document.getElementById('bcol').scrollTop);
       assert(top1 > top0 + 50, `the touch gesture scrolls the board (${top0} -> ${top1})`);
       await page.evaluate(() => { const c = document.getElementById('bcol'); c.scrollTop = c.scrollHeight; });

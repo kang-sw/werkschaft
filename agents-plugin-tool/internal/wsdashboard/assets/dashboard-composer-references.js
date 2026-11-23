@@ -87,7 +87,11 @@
     var n = topicNote(name), topic = n && n.closest(".topic");
     if (!n) return;
     if (live && !tabShown("board")) setTab("board");
-    if (topic) topic.scrollIntoView({ block: "nearest" });
+    if (window.WsCards && window.WsCards.activate) window.WsCards.activate(topic || n);
+    if (window.WsCards && window.WsCards.unfoldTopic && topic) window.WsCards.unfoldTopic(topic);
+    var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(topic || n);
+    if (card) anchor.select(card, { smooth: false });
+    else if (topic) topic.scrollIntoView({ block: "nearest" });
     var pen = topic && topic.querySelector(".tnote-toggle");
     if (n.hidden && pen) pen.click();
     else n.focus();

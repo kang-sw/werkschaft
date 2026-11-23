@@ -765,7 +765,12 @@
       target.focus({ preventScroll: true });
     }
     if (window.wbHistory && window.wbHistory.navigate) window.wbHistory.navigate(target);
-    else target.scrollIntoView({ block: "center" });
+    else {
+      if (window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
+      var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(target);
+      if (card) anchor.select(card, { smooth: target === card });
+      if (target !== card) target.scrollIntoView({ block: "center" });
+    }
     target.classList.remove("palette-flash");
     void target.offsetWidth;
     target.classList.add("palette-flash");
