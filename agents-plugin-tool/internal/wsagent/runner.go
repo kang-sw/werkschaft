@@ -272,6 +272,8 @@ type Options struct {
 	closedSnapshotRead func(string)
 	// sendAdmitting observes the revival admission fence in tests.
 	sendAdmitting func(string)
+	// beforeDurableWrite injects a failed private record write in tests.
+	beforeDurableWrite func(Record) error
 }
 
 // Runner hosts the agent conversations of one dashboard daemon.

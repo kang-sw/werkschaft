@@ -157,6 +157,11 @@ func (c *conv) commitDurableRecord(stage func(*Record), after func()) error {
 	defer c.mu.Unlock()
 	next := c.rec
 	stage(&next)
+	if inject := c.r.opts.beforeDurableWrite; inject != nil {
+		if err := inject(next); err != nil {
+			return err
+		}
+	}
 	if err := c.r.persistAgentRecord(c.dir, next); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: durable record write: %v\n", c.rec.ReplyID, err)
 		return err

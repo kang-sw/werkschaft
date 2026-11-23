@@ -2,10 +2,12 @@ package wsagent
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,7 +245,7 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 	}
 }
 
-func durableTurnHarness(t *testing.T) (*harness, *reports, <-chan durableTurnInput) {
+func durableTurnHarness(t *testing.T, beforeWrite func(Record) error) (*harness, *reports, <-chan durableTurnInput) {
 	t.Helper()
 	h := newHarness(t, map[string]string{"chat": `{"backend":"claude","ws_tools":["tickets.query"]}`})
 	h.runner.Close()
@@ -255,6 +257,7 @@ func durableTurnHarness(t *testing.T) (*harness, *reports, <-chan durableTurnInp
 	h.endpoint = "http://127.0.0.1:1"
 	got := &reports{}
 	h.config.Report = got.add
+	h.config.beforeDurableWrite = beforeWrite
 	h.start()
 	return h, got, submitted
 }
@@ -271,7 +274,7 @@ func nextDurableInput(t *testing.T, submitted <-chan durableTurnInput) durableTu
 }
 
 func TestDurableRunnerResumesOriginalTurnAfterExecBinding(t *testing.T) {
-	h, got, submitted := durableTurnHarness(t)
+	h, got, submitted := durableTurnHarness(t, nil)
 	idle := h.create("chat")
 	child := h.spawn("first input", leadParent)
 	input := nextDurableInput(t, submitted)
@@ -341,7 +344,7 @@ func TestDurableRunnerRecoversInboxClaimsAcrossCommit(t *testing.T) {
 			name = "after commit"
 		}
 		t.Run(name, func(t *testing.T) {
-			h, _, submitted := durableTurnHarness(t)
+			h, _, submitted := durableTurnHarness(t, nil)
 			st := h.create("chat")
 			c := h.runner.conv(st.ID)
 			_, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{"once only"}}, h.config.Now())
@@ -376,6 +379,83 @@ func TestDurableRunnerRecoversInboxClaimsAcrossCommit(t *testing.T) {
 			drained, err := wsinbox.Drained(c.inbox)
 			if err != nil || len(drained) != 1 || drained[0].Name != claims[0].Name {
 				t.Fatal("the recovered claim did not reach drained history once")
+			}
+		})
+	}
+}
+
+func TestDurableRunnerRetriesWithSameIdentity(t *testing.T) {
+	for _, failure := range []string{"submit", "process exit", "settlement", "repeated submit"} {
+		t.Run(failure, func(t *testing.T) {
+			var refused atomic.Bool
+			h, got, submitted := durableTurnHarness(t, func(rec Record) error {
+				if failure == "settlement" && rec.DurableTurn == nil && rec.ReportID != "" &&
+					refused.CompareAndSwap(false, true) {
+					return errors.New("the test refused the terminal record write")
+				}
+				return nil
+			})
+			switch failure {
+			case "submit":
+				h.backend.setFailSends(1)
+			case "repeated submit":
+				h.backend.setFailSends(2)
+			}
+			child := h.spawn("first input", leadParent)
+			c := h.runner.conv(child.ID)
+			input := nextDurableInput(t, submitted)
+			first := h.backend.waitProc(t, 0)
+			spec := h.backend.start(0)
+			original := c.record()
+			if original.DurableTurn == nil || *original.DurableTurn != input || original.SessionID != spec.SessionID {
+				t.Fatal("the first attempt did not have a committed identity")
+			}
+
+			settle := func(p *fakeProc) {
+				p.events <- Event{TurnID: input.ID, Live: &wslive.Event{Kind: wslive.KindReply, Text: "final result", Final: true}}
+				p.events <- Event{TurnID: input.ID, TurnEnd: true}
+			}
+			if failure == "process exit" {
+				first.exit()
+			} else if failure == "settlement" {
+				settle(first)
+			}
+			if retry := nextDurableInput(t, submitted); retry != input {
+				t.Fatalf("retry changed the admitted input: %+v, want %+v", retry, input)
+			}
+			rec := c.record()
+			if rec.DurableTurn == nil || *rec.DurableTurn != input || rec.SessionID != spec.SessionID ||
+				rec.TurnMark != original.TurnMark || rec.TurnStartedAt != original.TurnStartedAt || len(got.list()) != 0 {
+				t.Fatal("a retry changed the turn boundary or reported prematurely")
+			}
+
+			retrying := first
+			if failure == "settlement" {
+				if !refused.Load() || h.backend.startCount() != 1 {
+					t.Fatal("retry did not follow a failed settlement on the existing process")
+				}
+			} else {
+				retrying = h.backend.waitProc(t, 1)
+				if h.backend.start(1).SessionID != spec.SessionID {
+					t.Fatal("retried process started a new session")
+				}
+			}
+			if failure == "repeated submit" {
+				eventually(t, "the second refused process stops", retrying.isClosed)
+				select {
+				case extra := <-submitted:
+					t.Fatalf("retry bound allowed another automatic submission: %+v", extra)
+				case <-time.After(50 * time.Millisecond):
+				}
+				if rec := c.record(); rec.DurableTurn == nil || *rec.DurableTurn != input || len(got.list()) != 0 {
+					t.Fatal("exhausted retry discarded or settled the active input")
+				}
+				return
+			}
+			settle(retrying)
+			eventually(t, "the retry settles once", func() bool { return len(got.list()) == 1 })
+			if rec := c.record(); rec.DurableTurn != nil || rec.ReportID != input.ID || got.list()[0].Result.Message != "final result" {
+				t.Fatal("the retry lost its stable settlement identity or result")
 			}
 		})
 	}
