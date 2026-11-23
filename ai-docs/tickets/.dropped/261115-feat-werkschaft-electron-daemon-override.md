@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 4bf35c6c91796d9c
 sage-review-design-reviewed: dbccf1873e641d01
+dropped: 2026-11-23
 ---
 
 # Electron standalone daemon start and replacement
@@ -442,3 +443,8 @@ separate ticket's downloader, promotion or rollback operation. Windows real
 start/survival acceptance awaits the separately approved strict-lifetime step;
 missing Windows or macOS evidence leaves Phase 4 and ticket closure pending.
 Document exact results and limitations before closing the ticket.
+
+
+## Resolution (2026-11-23)
+
+Phases 1-3 shipped in Electron and were ported to the Tauri shell (261121-feat-werkschaft-tauri-shell-return Phase 2, 0aeef115b); Phase 4 packaged acceptance is waived because the owner retired Electron in favour of Tauri ((1396)=a, 2026-11-23).

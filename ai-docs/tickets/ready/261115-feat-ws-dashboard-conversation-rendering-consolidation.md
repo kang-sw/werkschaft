@@ -3,7 +3,6 @@ title: "대화 메일 전달 및 보고 표시 통합"
 related:
   261114-refactor-ws-dashboard-whiteboard-asset-split: prerequisite; consume its landed move map before Phase 1 starts
   261115-feat-ws-whiteboard-committed-effects-in-conversation: accepted committed-effects substrate; preserve its producer contract and no-panel-HTML boundary
-blocked-by: 261114-refactor-ws-dashboard-whiteboard-asset-split
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 42eff2aed293f527
@@ -53,7 +52,7 @@ claim that the approved mockup has shipped.
 - Preserve disclosure state and existing conversation scroll ownership/anchoring. This ticket does not choose a second scroll owner or change the viewed-panel golden rules.
 - Where current record metadata cannot support a proposed association or source distinction safely, preserve the compact/neutral fallback instead of silently widening scope to producer or storage changes. Any new product choice is returned to MAIN for its decision ID; this capture mints none.
 - The approved HTML is a visual reference, not evidence that a matcher, classifier, history reconciliation or accessibility behavior already works. No browser or runtime verification was performed for ticket finalization.
-- Respect the separately approved asset-split start pause and consume the landed split's move map before a new UI implementation starts. Ready status is preparation only: the declared `blocked-by` prerequisite must land before dispatch, and MAIN owns implementation assignment. The split's overlap does not authorize source import or bypass its coordination gate.
+- Update 2026-11-23: the asset split is done (`.done/261114-refactor-ws-dashboard-whiteboard-asset-split`); consume its landed move map before a new UI implementation starts. MAIN owns implementation assignment.
 - Read `ai-docs/manuals/shipped-surface-boundary.md` before eventual tooling/asset edits, and `ai-docs/manuals/release-compatibility.md` for any eventual cross-version surface change. Phase 1 does not authorize shipped playbook edits.
 - MAIN supplied the owner-approved (811)/(812) extension under (826)–(828); attach its exact approved bytes without regenerating or editing the reference. The extension changes display/navigation requirements only. It does not reopen optional Phase 2 producer/storage mechanisms or supply new implementation/rollout authority.
 - Reuse the existing committed-effects data only where it can truthfully support the approved cards. MAIN accepted `261115-feat-ws-whiteboard-committed-effects-in-conversation` at `1b815bf67`, with its result/closure merged at `0757abf2ae08f205e4c2522880f05afe50d7f6d6`. That acceptance is not acceptance of these unimplemented conversation cards or their combined navigation. Do not add missing effect fields or alter the producer contract; return any requirement for new stored IDs, producer data, wire fields or protocol semantics to MAIN before widening Phase 1.

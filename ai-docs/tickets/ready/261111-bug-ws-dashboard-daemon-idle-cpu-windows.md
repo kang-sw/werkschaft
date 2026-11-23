@@ -229,6 +229,8 @@ here while the related idle-file-touch ticket and polling-minimization design
 study settle the next work. Phase 2 has not started; do not dispatch another
 discovery optimization or daemon rebuild/swap from this ticket.
 
+Update 2026-11-23: the idle-file-touch half is done (.done/261116-bug-ws-dashboard-daemon-idle-file-touches); remaining gate is todo/261116-research-ws-polling-minimization-event-ledger and todo/261117-research-ws-daemon-file-touch-map.
+
 ## Phases
 
 ### Phase 1: Index or cache whiteboard nudge discovery with before/after pprof
