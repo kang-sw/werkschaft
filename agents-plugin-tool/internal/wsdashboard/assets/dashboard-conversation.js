@@ -269,6 +269,11 @@
         if (epoch !== effectJumpEpoch) return;
         // SSE may have replaced the topic while overview/filter restore ran.
         if (effectTopic(topicID) !== topic) { step(); return; }
+        // Hydrate collapsed far topics before target lookup or lazy-gap loading
+        // so stashed revisions, live rows, and inert history gaps exist in DOM.
+        if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) {
+          window.WsBoardAnchor.hydrate(topic, { immediate: true });
+        }
         var target = topic, loaded = false;
         if (id !== topicID) {
           var alternate = id.replace(/^(item|check)-/, function (s) { return s === "item-" ? "check-" : "item-"; });

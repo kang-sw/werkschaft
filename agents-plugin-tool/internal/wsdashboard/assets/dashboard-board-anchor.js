@@ -139,6 +139,12 @@
   var VIRTUAL_NEAR_DEFAULT = 2;
   var virtualNearSlots = VIRTUAL_NEAR_DEFAULT;
   var virtualStore = new Map();
+  var virtualNearSet = new Set();
+  var virtualExemptSet = new Set();
+  var virtualInitialized = false;
+  var virtualLastBounded = null;
+  var virtualLastNearSlots = VIRTUAL_NEAR_DEFAULT;
+  var virtualStats = { describes: 0, prunes: 0, fullReconciles: 0, deltaReconciles: 0 };
   var VIRTUAL_ASK_SEL = '.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])';
   var VIRTUAL_KEEP_ATTRS = {
     "data-wb-virtual": true, "data-current": true, "data-anchor-cap": true,
@@ -211,6 +217,7 @@
   }
 
   function virtualDescribeNode(n) {
+    virtualStats.describes++;
     var k = topicKey(n);
     if (k === null) return { key: anchorId(n), isTopic: false };
     var docked = !!(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(n));
@@ -274,9 +281,9 @@
     return !!(node.querySelector && node.querySelector(VIRTUAL_ASK_SEL));
   }
 
-  function virtualCollapse(sec) {
+  function virtualCollapse(sec, preDesc) {
     if (!sec || sec.nodeType !== 1 || !sec.hasAttribute("data-topic") || sec.hasAttribute("data-wb-virtual")) return false;
-    if (virtualIsItemExempt(virtualDescribeNode(sec))) return false;
+    if (virtualIsItemExempt(preDesc || virtualDescribeNode(sec))) return false;
     var head = sec.querySelector && sec.querySelector(":scope > .tophead");
     if (!head) return false;
     var k = topicKey(sec);
@@ -329,7 +336,8 @@
 
   function virtualIsNearNode(sec) {
     if (!sec || !anchorSized.bounded) return true;
-    if (virtualIsItemExempt(virtualDescribeNode(sec))) return true;
+    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing;
+    if (!scrubbing && virtualNearSet.has(sec)) return true;
     var list = anchorCards();
     if (!list.length) return true;
     var idx = list.indexOf(sec);
@@ -337,7 +345,8 @@
     var cur = anchorCurrent() || list[0];
     var curIdx = cur ? list.indexOf(cur) : 0;
     if (curIdx < 0) curIdx = 0;
-    return Math.abs(idx - curIdx) <= virtualNearSlots;
+    if (Math.abs(idx - curIdx) <= virtualNearSlots) return true;
+    return virtualIsItemExempt(virtualDescribeNode(sec));
   }
 
   function virtualStashUpdate(liveSec, incomingSec) {
@@ -400,11 +409,13 @@
   }
 
   function virtualHydrate(sec, opts) {
+    if (typeof sec === "string") sec = virtualFindTopic(sec);
     if (!sec || !sec.hasAttribute || !sec.hasAttribute("data-wb-virtual")) return false;
     var k = topicKey(sec);
     var rec = k !== null ? virtualStore.get(k) : null;
     sec.removeAttribute("data-wb-virtual");
     if (k !== null) virtualStore.delete(k);
+    if (!virtualNearSet.has(sec)) virtualExemptSet.add(sec);
     if (!rec) return false;
     var immediate = !!(opts && opts.immediate);
     var head = sec.querySelector && sec.querySelector(":scope > .tophead");
@@ -464,8 +475,8 @@
 
   function virtualNodeHasLazyGap(node) {
     if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
-    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy], template[data-history-topic]")) return true;
-    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy], template[data-history-topic]"));
+    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy]")) return true;
+    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy]"));
   }
 
   function virtualFindTopic(key) {
@@ -519,33 +530,101 @@
     return hydrated;
   }
 
-  function virtualReconcile(opts) {
-    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing && !(opts && opts.force);
-    if (scrubbing) return false;
-    var list = anchorCards();
-    var cur = anchorCurrent() || list[0] || null;
-    var activeIdx = cur ? list.indexOf(cur) : 0;
-    if (activeIdx < 0) activeIdx = 0;
-    var items = list.map(virtualDescribeNode);
-    var plan = planBoardVirtualWindow(items, activeIdx, {
-      nearSlots: virtualNearSlots,
-      enabled: !!anchorSized.bounded,
-      scrubbing: false
-    });
-    if (plan.skip) return false;
-    var changed = false;
-    var present = new Set();
-    var board = typeof region === "function" ? region("board") : null;
-    if (board && board.querySelectorAll) {
-      var allBoardTopics = board.querySelectorAll("section.topic[data-topic]");
-      for (var bi = 0; bi < allBoardTopics.length; bi++) {
-        var btk = topicKey(allBoardTopics[bi]);
-        if (btk !== null) present.add(btk);
-      }
+  function virtualSearchRoots(topicOrKey) {
+    var k = typeof topicOrKey === "string" ? topicOrKey : topicKey(topicOrKey);
+    if (k === null || k === undefined) return [];
+    var rec = virtualStore.get(k);
+    if (!rec) return [];
+    if (rec.stashed) return [rec.stashed];
+    if (rec.children) {
+      return rec.children.filter(function (c) { return c && c.nodeType === 1; });
     }
-    for (var i = 0; i < list.length; i++) {
-      var tk = topicKey(list[i]);
-      if (tk !== null) present.add(tk);
+    return [];
+  }
+
+  function virtualHydrateLazySearch(fetchFn) {
+    if (typeof fetchFn !== "function" || !virtualStore.size) return Promise.resolve(0);
+    var names = [];
+    virtualStore.forEach(function (rec, k) {
+      if (rec.stashed && virtualNodeHasLazyGap(rec.stashed)) { names.push(k); return; }
+      if (rec.children) {
+        for (var i = 0; i < rec.children.length; i++) {
+          if (virtualNodeHasLazyGap(rec.children[i])) { names.push(k); return; }
+        }
+      }
+    });
+    if (!names.length) return Promise.resolve(0);
+    var queries = [];
+    for (var qi = 0; qi < names.length; qi += 256) {
+      queries.push(names.slice(qi, qi + 256).map(function (n) { return "name=" + encodeURIComponent(n); }).join("&"));
+    }
+    return Promise.all(queries.map(fetchFn)).then(function (all) {
+      var list = [].concat.apply([], all);
+      var filled = 0;
+      list.forEach(function (t) {
+        if (!t || typeof t.name !== "string" || typeof t.html !== "string") return;
+        var rec = virtualStore.get(t.name);
+        if (!rec) return;
+        var parsed = doc.createElement("template");
+        parsed.innerHTML = t.html;
+        var full = parsed.content.querySelector("section.topic");
+        if (!full) return;
+        var roots = rec.stashed ? [rec.stashed] : (rec.children || []);
+        var fullGaps = {};
+        if (full.querySelectorAll) {
+          full.querySelectorAll(".history-gap[data-gap-id]").forEach(function (fg) {
+            fullGaps[fg.getAttribute("data-gap-id")] = fg;
+          });
+        }
+        var topicFilled = 0;
+        roots.forEach(function (r) {
+          if (!r || r.nodeType !== 1 || !r.querySelectorAll) return;
+          var gaps = r.matches && r.matches(".history-gap[data-lazy]") ? [r] : Array.prototype.slice.call(r.querySelectorAll(".history-gap[data-lazy]"));
+          gaps.forEach(function (g) {
+            var gid = g.getAttribute("data-gap-id");
+            var src = (gid && fullGaps[gid]) || full.querySelector(".history-gap");
+            if (!src) return;
+            var srcTpl = src.querySelector("template[data-history-gap], template[data-history-page]");
+            if (srcTpl) {
+              var oldTpl = g.querySelector("template[data-history-gap], template[data-history-page]");
+              if (oldTpl && oldTpl.parentNode) oldTpl.parentNode.replaceChild(srcTpl.cloneNode(true), oldTpl);
+              else g.appendChild(srcTpl.cloneNode(true));
+              g.removeAttribute("data-lazy");
+              topicFilled++;
+            }
+          });
+        });
+        if (topicFilled) filled += topicFilled;
+      });
+      return filled;
+    });
+  }
+
+  function virtualPrune(presentKeys) {
+    virtualStats.prunes++;
+    virtualNearSet.forEach(function (n) { if (!n || !n.isConnected) virtualNearSet.delete(n); });
+    virtualExemptSet.forEach(function (n) { if (!n || !n.isConnected) virtualExemptSet.delete(n); });
+    if (!virtualStore.size) return 0;
+    var present;
+    if (presentKeys instanceof Set) {
+      present = presentKeys;
+    } else if (Array.isArray(presentKeys)) {
+      present = new Set(presentKeys);
+    } else {
+      present = new Set();
+      var board = typeof region === "function" ? region("board") : null;
+      if (board && board.querySelectorAll) {
+        var allBoardTopics = board.querySelectorAll("section.topic[data-topic]");
+        for (var bi = 0; bi < allBoardTopics.length; bi++) {
+          var btk = topicKey(allBoardTopics[bi]);
+          if (btk !== null) present.add(btk);
+        }
+      }
+      var list = anchorCards();
+      for (var i = 0; i < list.length; i++) {
+        var tk = topicKey(list[i]);
+        if (tk !== null) present.add(tk);
+      }
     }
     if (doc.querySelectorAll) {
       var stageTopics = doc.querySelectorAll(".overview-preview-stage > section.topic[data-topic]");
@@ -554,43 +633,149 @@
         if (stk !== null) present.add(stk);
       }
     }
-    // Hydrate newly near or newly exempt topics first, then collapse far ones.
-    for (var h = 0; h < plan.actions.length; h++) {
-      if (plan.actions[h].action === "hydrate") {
-        if (virtualHydrate(list[h], { immediate: h === activeIdx })) changed = true;
+    var pruned = 0;
+    Array.from(virtualStore.keys()).forEach(function (k) {
+      if (!present.has(k)) { virtualStore.delete(k); pruned++; }
+    });
+    return pruned;
+  }
+
+  function virtualReconcile(opts) {
+    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing && !(opts && opts.force);
+    if (scrubbing) return false;
+    var list = anchorCards();
+    var cur = anchorCurrent() || list[0] || null;
+    var activeIdx = cur ? list.indexOf(cur) : 0;
+    if (activeIdx < 0) activeIdx = 0;
+    var bounded = !!anchorSized.bounded;
+    var full = !!(opts && opts.full) || !virtualInitialized || virtualLastBounded !== bounded || virtualLastNearSlots !== virtualNearSlots;
+    var changed = false;
+
+    if (!bounded) {
+      virtualInitialized = true;
+      virtualLastBounded = false;
+      virtualLastNearSlots = virtualNearSlots;
+      virtualNearSet.clear();
+      virtualExemptSet.clear();
+      if (virtualStore.size) {
+        Array.from(virtualStore.keys()).forEach(function (k) {
+          var sec = virtualFindTopic(k);
+          if (sec && virtualHydrate(sec, { immediate: sec === cur })) changed = true;
+        });
+      }
+      if (opts && opts.full) virtualPrune();
+      if (changed && typeof indexFrames === "function") indexFrames();
+      return changed;
+    }
+
+    var lo = list.length ? Math.max(0, activeIdx - virtualNearSlots) : 0;
+    var hi = list.length ? Math.min(list.length - 1, activeIdx + virtualNearSlots) : -1;
+    var nextNear = new Set();
+    for (var ni = lo; ni <= hi; ni++) nextNear.add(list[ni]);
+
+    if (full) {
+      virtualStats.fullReconciles++;
+      virtualInitialized = true;
+      virtualLastBounded = true;
+      virtualLastNearSlots = virtualNearSlots;
+      var items = list.map(virtualDescribeNode);
+      var plan = planBoardVirtualWindow(items, activeIdx, {
+        nearSlots: virtualNearSlots,
+        enabled: true,
+        scrubbing: false
+      });
+      if (plan.skip) return false;
+      virtualNearSet = nextNear;
+      virtualExemptSet = new Set();
+      // Hydrate newly near or newly exempt topics first, then collapse far ones.
+      for (var h = 0; h < plan.actions.length; h++) {
+        if (plan.actions[h].action === "hydrate") {
+          if (virtualHydrate(list[h], { immediate: h === activeIdx })) changed = true;
+        }
+        if (!nextNear.has(list[h]) && items[h] && items[h].isTopic && virtualIsItemExempt(items[h])) {
+          virtualExemptSet.add(list[h]);
+        }
+      }
+      for (var c = 0; c < plan.actions.length; c++) {
+        if (plan.actions[c].action === "collapse") {
+          if (virtualCollapse(list[c], items[c])) changed = true;
+        }
+      }
+    } else {
+      // Steady-state O(1) delta reconcile: inspect ONLY leaving slots and the
+      // bounded previously-exempt far set; never scan unchanged far slots or
+      // prune virtualStore during normal navigation.
+      virtualStats.deltaReconciles++;
+      var candidates = [];
+      virtualNearSet.forEach(function (prevNode) {
+        if (!prevNode || !prevNode.isConnected || nextNear.has(prevNode)) return;
+        if (prevNode.hasAttribute && prevNode.hasAttribute("data-wb-virtual")) return;
+        candidates.push(prevNode);
+      });
+      Array.from(virtualExemptSet).forEach(function (exNode) {
+        if (!exNode || !exNode.isConnected || nextNear.has(exNode)) {
+          virtualExemptSet.delete(exNode);
+          return;
+        }
+        if (candidates.indexOf(exNode) < 0) candidates.push(exNode);
+      });
+      virtualNearSet = nextNear;
+      var entering = [];
+      for (var ei = lo; ei <= hi; ei++) {
+        var en = list[ei];
+        virtualExemptSet.delete(en);
+        if (en && en.hasAttribute && en.hasAttribute("data-wb-virtual")) {
+          entering.push({ node: en, immediate: ei === activeIdx });
+        }
+      }
+      for (var eh = 0; eh < entering.length; eh++) {
+        if (virtualHydrate(entering[eh].node, { immediate: entering[eh].immediate })) changed = true;
+      }
+      for (var ci = 0; ci < candidates.length; ci++) {
+        var cn = candidates[ci];
+        var desc = virtualDescribeNode(cn);
+        if (!desc.isTopic) {
+          virtualExemptSet.delete(cn);
+          continue;
+        }
+        if (virtualIsItemExempt(desc)) {
+          virtualExemptSet.add(cn);
+          if (desc.collapsed && virtualHydrate(cn, { immediate: false })) changed = true;
+        } else {
+          virtualExemptSet.delete(cn);
+          if (!desc.collapsed && virtualCollapse(cn, desc)) changed = true;
+        }
       }
     }
-    for (var c = 0; c < plan.actions.length; c++) {
-      if (plan.actions[c].action === "collapse") {
-        if (virtualCollapse(list[c])) changed = true;
-      }
-    }
+
     // Ensure any Overview Quick Look previewed node outside #r-board is hydrated.
     var livePreview = doc.querySelector && doc.querySelector(".overview-preview-stage > section.topic[data-wb-virtual]");
     if (livePreview) {
-      var pk = topicKey(livePreview);
-      if (pk !== null) present.add(pk);
       if (virtualHydrate(livePreview, { immediate: true })) changed = true;
     }
-    // Prune store entries for topics no longer on the board (never state-filtered or hidden ones).
-    Array.from(virtualStore.keys()).forEach(function (k) {
-      if (!present.has(k)) virtualStore.delete(k);
-    });
+    if (opts && opts.prune) virtualPrune();
     if (changed && typeof indexFrames === "function") indexFrames();
     return changed;
   }
 
   window.WsBoardVirtual = {
     nearSlots: function (n) {
-      if (typeof n === "number" && n >= 0) { virtualNearSlots = Math.floor(n); virtualReconcile(); }
+      if (typeof n === "number" && n >= 0) { virtualNearSlots = Math.floor(n); virtualReconcile({ full: true }); }
       return virtualNearSlots;
     },
     plan: planBoardVirtualWindow,
     isExempt: virtualIsItemExempt,
     isNear: virtualIsNearNode,
     hydrate: virtualHydrate,
+    hydrateForTarget: virtualHydrateForTarget,
     collapse: virtualCollapse,
     reconcile: virtualReconcile,
+    prune: virtualPrune,
+    searchRoots: virtualSearchRoots,
+    detachedNodes: virtualSearchRoots,
+    hydrateLazySearch: virtualHydrateLazySearch,
+    stats: function () { return Object.assign({}, virtualStats); },
+    resetStats: function () { virtualStats.describes = 0; virtualStats.prunes = 0; virtualStats.fullReconciles = 0; virtualStats.deltaReconciles = 0; },
     hasStashed: function (k) { var r = virtualStore.get(k); return !!(r && r.stashed); },
     collapsedCount: function () { return virtualStore.size; }
   };
@@ -689,7 +874,7 @@
       else window.sessionStorage.setItem(ANCHOR_STORE, anchorKey);
     } catch (e) {}
   }
-  function anchorMark(n) {
+  function anchorMark(n, opts) {
     var was = anchorLast;
     anchorLast = n || null;
     if (was && was !== n) was.removeAttribute("data-current");
@@ -697,7 +882,9 @@
     anchorKey = n ? anchorId(n) : null;
     anchorStore();
     if (typeof boardDialMark === "function") boardDialMark(n);
-    if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile();
+    if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) {
+      virtualReconcile(opts && opts.full ? { full: true } : undefined);
+    }
   }
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
@@ -740,7 +927,7 @@
     if (typeof virtualHydrate === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing) && n.hasAttribute && n.hasAttribute("data-wb-virtual")) {
       virtualHydrate(n, { immediate: true });
     }
-    if (anchorKey !== key || anchorLast !== n) anchorMark(n);
+    if (anchorKey !== key || anchorLast !== n) anchorMark(n, opt && opt.fullVirtual ? { full: true } : undefined);
     if (left && !(opt && opt.keep) && Object.keys(boardPending).length) {
       boardFlushViewed(true);
       n = anchorNode(key) || n;
@@ -845,16 +1032,16 @@
     var list = anchorCards(), n = anchorNode(anchorKey);
     anchorSlotCaps(list);
     if (n) {
-      if (n !== anchorLast) anchorMark(n);
-      else if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile();
+      if (n !== anchorLast) anchorMark(n, { full: true });
+      else if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile({ full: true });
       return;
     }
-    if (!list.length) { anchorMark(null); return; }
+    if (!list.length) { anchorMark(null, { full: true }); return; }
     var saved = null;
     if (anchorKey === null) try { saved = window.sessionStorage.getItem(ANCHOR_STORE); } catch (e) {}
     var key = saved !== null ? saved : null, next = key !== null ? anchorNode(key) : null;
     if (!next && before && anchorLast) next = anchorFallback(before, anchorLast);
-    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next });
+    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next, fullVirtual: true });
   }
   // jump resolves a board topic or card to its containing card, then lets the
   // caller scroll inside it.
@@ -976,7 +1163,7 @@
     });
     anchorApplySizes(col);
     if (anchorSized.bounded !== prevBounded) {
-      if (typeof virtualReconcile === "function") virtualReconcile();
+      if (typeof virtualReconcile === "function") virtualReconcile({ full: true });
       if (typeof boardDialSync === "function") boardDialSync();
     }
     if (insetChanged && anchorProg) anchorRealign(false);
@@ -1144,7 +1331,7 @@
     }
     col.wbScrollOwner = true;
     anchorSettle(null);
-    if (typeof virtualReconcile === "function") virtualReconcile();
+    if (typeof virtualReconcile === "function") virtualReconcile({ full: true });
     if (typeof boardDialInit === "function") boardDialInit();
     window.WsBoardAnchor = {
       restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); },
@@ -1159,11 +1346,12 @@
       onFrameWheel: anchorOnFrameWheel,
       settle: function (opts) {
         anchorSettle(null);
-        if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile();
+        if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile({ full: true });
         if (typeof boardDialSync === "function") boardDialSync();
       },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
       hydrate: typeof virtualHydrate === "function" ? virtualHydrate : null,
+      hydrateForTarget: typeof virtualHydrateForTarget === "function" ? virtualHydrateForTarget : null,
       reconcile: typeof virtualReconcile === "function" ? virtualReconcile : null,
       virtual: window.WsBoardVirtual || null,
       dialWindow: typeof boardDialWindow === "function" ? boardDialWindow : null,
