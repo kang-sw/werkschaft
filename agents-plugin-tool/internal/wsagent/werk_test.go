@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -191,10 +193,14 @@ func (f *werkFixture) nextBinding(t *testing.T) wsdashboard.ProxyHello {
 	}
 }
 
+const werkSpawnInstructions = "Use the repository conventions for this worker."
+
 func spawnWerk(t *testing.T, h *leadHarness, authority string) string {
 	t.Helper()
 	caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
-	res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "do the work", Tier: BackendWerk + ".small", Authority: authority})
+	res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{
+		Prompt: "do the work", SystemPrompt: werkSpawnInstructions, Tier: BackendWerk + ".small", Authority: authority,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +214,22 @@ func werkRecord(t *testing.T, h *leadHarness, id string) Record {
 		t.Fatal("no live durable conversation")
 	}
 	return c.record()
+}
+
+func assertWerkRequestInstructions(t *testing.T, model *werkModel, rec Record) {
+	t.Helper()
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.reqs) == 0 {
+		t.Fatal("no model request received")
+	}
+	for i, req := range model.reqs {
+		if !strings.Contains(req.Instructions, werkSpawnInstructions) ||
+			rec.WSKey == "" || !strings.Contains(req.Instructions, "Your ws session key is `"+rec.WSKey+"`") ||
+			rec.Parent == nil || !strings.Contains(req.Instructions, "id:"+rec.Parent.ReplyID) {
+			t.Errorf("request %d omitted the worker's composed instructions or ws identity", i+1)
+		}
+	}
 }
 
 func TestWerkWorkerRunsATurnAndReportsItThroughTheRunner(t *testing.T) {
@@ -240,6 +262,7 @@ func TestWerkWorkerRunsATurnAndReportsItThroughTheRunner(t *testing.T) {
 		t.Fatal("the daemon process did not get its trusted tool authority")
 	}
 	rec := werkRecord(t, h, id)
+	assertWerkRequestInstructions(t, model, rec)
 	if rec.Backend != BackendWerk || rec.SessionID == "" || rec.Model != "vendor/some-model" || rec.Effort != "medium" ||
 		rec.HolderID != "" || rec.MCPToken != "" || h.holders.opCount("spawn") != 0 {
 		t.Fatal("daemon worker did not keep its stable identity without a holder")
@@ -304,6 +327,7 @@ func TestWerkResumesActiveTurnAcrossRunnerReplacement(t *testing.T) {
 		after.LastTurn.Result.Message != "resumed the request" || h.holders.opCount("spawn") != 0 {
 		t.Fatal("the replacement lost the original logical turn")
 	}
+	assertWerkRequestInstructions(t, model, after)
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	if len(model.reqs) != 2 || !slices.EqualFunc(model.reqs[0].Input, model.reqs[1].Input, func(x, y json.RawMessage) bool {
@@ -366,6 +390,22 @@ func TestWerkRefusesAWorkerWithoutAModelOrAuthority(t *testing.T) {
 	spec.MCPSession = nil
 	if _, err := b.Start(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "authenticated MCP session is required") {
 		t.Errorf("no MCP binding: %v", err)
+	}
+}
+
+func TestWerkRefusesToStartWhenItsInstructionsCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	spec := StartSpec{
+		Dir: dir, Root: dir, Model: "fixture-model", PermissionLevel: PermissionReadOnly,
+		Instructions: filepath.Join(dir, "missing.md"),
+		MCPSession:   &MCPSession{URL: "http://127.0.0.1:1", Token: "fixture"},
+	}
+	loop, err := startWerkLoop(context.Background(), spec, &werkModel{})
+	if loop != nil {
+		_ = loop.Close()
+	}
+	if !errors.Is(err, os.ErrNotExist) || loop != nil {
+		t.Fatalf("start with unreadable instructions: %v", err)
 	}
 }
 
@@ -581,6 +621,7 @@ func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
 	if woken := werkRecord(t, h, id).SessionID; woken != session || h.holders.opCount("spawn") != 0 {
 		t.Fatal("the woken daemon loop changed sessions or launched a holder")
 	}
+	assertWerkRequestInstructions(t, model, werkRecord(t, h, id))
 	model.mu.Lock()
 	second := model.reqs[1].Input
 	model.mu.Unlock()

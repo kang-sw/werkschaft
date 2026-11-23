@@ -1,16 +1,8 @@
-// Package werk is the builtin Go agent harness's runtime: the process a
-// session holder keeps alive for one agent.spawn worker (ticket
-// 261122-feat-ws-builtin-agent-harness, Phase 1). It runs the model loop
-// (request, tool calls, tool results, repeat) against an OpenAI-Responses
-// compatible endpoint, serves the file tools, reaches the daemon's ws tools
-// as an MCP client over the per-session bearer, and keeps its conversation
-// in memory with one appended JSONL delta per change.
-//
-// The daemon side (internal/wsagent) never imports this package's loop; it
-// speaks the line protocol below to the process: one JSON object per line on
-// the child's standard input (Command) and output (Line). The line protocol
-// is the harness's own event stream, which the daemon maps to the common
-// event contract and to the audit envelope.
+// Package werk runs the builtin Go agent harness inside the ws daemon.
+// It sends Responses requests to the provider, calls tools through the
+// session's authenticated MCP connection, and journals conversation items
+// in an append-only log. The daemon feeds it typed commands and maps its
+// output events to the common runner and audit contracts.
 package werk
 
 import (
@@ -54,7 +46,7 @@ const (
 	CmdSet = "set"
 )
 
-// Command is one line of the process's standard input.
+// Command is a request from the daemon to the session loop.
 type Command struct {
 	Type   string  `json:"type"`
 	TurnID string  `json:"-"`

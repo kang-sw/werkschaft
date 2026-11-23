@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -84,6 +86,14 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
 	}
+	var instructions []byte
+	if spec.Instructions != "" {
+		var err error
+		instructions, err = os.ReadFile(spec.Instructions)
+		if err != nil {
+			return nil, fmt.Errorf("read the werk instruction file: %w", err)
+		}
+	}
 	session := spec.MCPSession
 	ctx, cancel := context.WithCancel(ctx)
 	p := &werkLoop{
@@ -94,7 +104,7 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	a, err := werk.New(werk.Config{
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
-		Model: spec.Model, Effort: spec.Effort, Instructions: spec.Instructions,
+		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
 		Endpoint: endpoint,
 		WS:       &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
 		Emit:     p.emit,
