@@ -434,6 +434,7 @@ func TestAuditSpanScanScratchAllocation(t *testing.T) {
 		wantSpans, maxBytes int
 	}{
 		{"long lookahead", "(?:a+z|.)(?:b{1000})?", strings.Repeat("a", mib), auditSpansMax, 12 * mib},
+		{"interleaved alternatives", "(?:a|b?)+z", strings.Repeat("a", mib), 0, 12 * mib},
 		{"short lines", "az", strings.Repeat("a\n", mib/2), 0, mib},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -471,7 +472,8 @@ func TestAuditSpanScanAgreesWithRegexp(t *testing.T) {
 		a, b := patterns[rng.Intn(len(patterns))], patterns[rng.Intn(len(patterns))]
 		patterns = append(patterns, "(?:"+a+"|"+b+")"+[]string{"", "?", "*", "+?"}[rng.Intn(4)])
 	}
-	lines := []string{"", "a", "a b", "abac", strings.Repeat("ab", 130) + "a"}
+	patterns = append(patterns, "(?:a|b?)+z", "(?:a|b?)+z|a", "a.*z|ab|a", "a.*z|a|ab")
+	lines := []string{"", "a", "a b", "abac", "abzaaz", strings.Repeat("ab", 130) + "a"}
 	for range 48 {
 		var line strings.Builder
 		for range rng.Intn(24) {

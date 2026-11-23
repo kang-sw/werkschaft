@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -66,18 +67,6 @@ func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, e
 	return false
 }
 
-type spanState struct {
-	pc  uint32
-	pos int
-}
-
-// A greedy loop often defers the same alternative at each rune. Keep a
-// sequence of evenly spaced positions as one stack entry.
-type spanBranch struct {
-	spanState
-	count, step int
-}
-
 type spanScan struct {
 	prog        *syntax.Prog
 	text        string
@@ -89,7 +78,8 @@ type spanScan struct {
 	spare    map[uint32]uint64
 	released int
 	atStart  []uint64
-	pending  []spanBranch
+	current  []uint32
+	next     []uint32
 }
 
 func (s *spanScan) releaseBefore(page int) {
@@ -109,16 +99,16 @@ func (s *spanScan) reset() {
 	s.text = ""
 }
 
-func (s *spanScan) seen(state spanState, start int) bool {
-	if state.pos == start {
-		word, bit := state.pc/64, uint64(1)<<(state.pc%64)
+func (s *spanScan) seen(pc uint32, pos, start int) bool {
+	if pos == start {
+		word, bit := pc/64, uint64(1)<<(pc%64)
 		if s.atStart[word]&bit != 0 {
 			return true
 		}
 		s.atStart[word] |= bit
 		return false
 	}
-	page, bit := state.pos/64, uint64(1)<<(state.pos%64)
+	page, bit := pos/64, uint64(1)<<(pos%64)
 	for len(s.pages) <= page {
 		s.pages = append(s.pages, nil)
 	}
@@ -130,90 +120,71 @@ func (s *spanScan) seen(state spanState, start int) bool {
 		}
 		s.pages[page] = visited
 	}
-	if visited[state.pc]&bit != 0 {
+	if visited[pc]&bit != 0 {
 		return true
 	}
-	visited[state.pc] |= bit
+	visited[pc] |= bit
 	return false
 }
 
-func (s *spanScan) push(state spanState) {
-	if n := len(s.pending); n > 0 {
-		top := &s.pending[n-1]
-		if top.pc == state.pc {
-			step := state.pos - top.pos
-			if top.count == 1 || top.step == step {
-				top.pos, top.step = state.pos, step
-				top.count++
-				return
-			}
-		}
-	}
-	s.pending = append(s.pending, spanBranch{spanState: state, count: 1})
-}
-
-func (s *spanScan) pop() spanState {
-	last := len(s.pending) - 1
-	top := &s.pending[last]
-	state := top.spanState
-	top.count--
-	if top.count == 0 {
-		s.pending = s.pending[:last]
-	} else {
-		top.pos -= top.step
-	}
-	return state
-}
-
-// findAt tries the preferred branches first, as regexp's bounded backtracker
-// does. States reached strictly beyond a winning end have already failed.
-// Start each attempt with fresh bits at its own start so states on the last
-// match's end can be retried. Captures cannot affect a later decision.
+// findAt advances the live threads in priority order. Each position keeps
+// only its first match and advances only higher-priority threads. This
+// bounds pending branches by program size, even during long lookahead.
+// States visited beyond the final match end have failed and can be reused.
+// Use fresh bits at start so the last match's end can be retried.
 func (s *spanScan) findAt(start int) int {
 	if s.atStart == nil {
 		s.atStart = make([]uint64, (len(s.prog.Inst)+63)/64)
 	}
 	clear(s.atStart)
-	s.pending = s.pending[:0]
-	s.push(spanState{pc: uint32(s.prog.Start), pos: start})
-nextBranch:
-	for len(s.pending) > 0 {
-		state := s.pop()
-		for !s.seen(state, start) {
-			inst := &s.prog.Inst[state.pc]
-			switch inst.Op {
-			case syntax.InstMatch:
-				return state.pos
-			case syntax.InstFail:
-				continue nextBranch
-			case syntax.InstAlt, syntax.InstAltMatch:
-				s.push(spanState{pc: inst.Arg, pos: state.pos})
-			case syntax.InstEmptyWidth:
-				prev, next := s.left, s.right
-				if state.pos > 0 {
-					prev, _ = utf8.DecodeLastRuneInString(s.text[:state.pos])
-				}
-				if state.pos < len(s.text) {
-					next, _ = utf8.DecodeRuneInString(s.text[state.pos:])
-				}
-				want := syntax.EmptyOp(inst.Arg)
-				if syntax.EmptyOpContext(prev, next)&want != want {
-					continue nextBranch
-				}
-			case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
-				if state.pos == len(s.text) {
-					continue nextBranch
-				}
-				r, width := utf8.DecodeRuneInString(s.text[state.pos:])
-				if !spanRuneMatches(inst, r) {
-					continue nextBranch
-				}
-				state.pos += width
-			}
-			state.pc = inst.Out
-		}
+	s.current = append(s.current[:0], uint32(s.prog.Start))
+	prev := s.left
+	if start > 0 {
+		prev, _ = utf8.DecodeLastRuneInString(s.text[:start])
 	}
-	return -1
+	end := -1
+	for pos := start; len(s.current) > 0; {
+		r, width := s.right, 0
+		if pos < len(s.text) {
+			r, width = utf8.DecodeRuneInString(s.text[pos:])
+		}
+		s.next = s.next[:0]
+	nextBranch:
+		for len(s.current) > 0 {
+			last := len(s.current) - 1
+			pc := s.current[last]
+			s.current = s.current[:last]
+			for !s.seen(pc, pos, start) {
+				inst := &s.prog.Inst[pc]
+				switch inst.Op {
+				case syntax.InstMatch:
+					end = pos
+					break nextBranch
+				case syntax.InstFail:
+					continue nextBranch
+				case syntax.InstAlt, syntax.InstAltMatch:
+					s.current = append(s.current, inst.Arg)
+				case syntax.InstEmptyWidth:
+					want := syntax.EmptyOp(inst.Arg)
+					if syntax.EmptyOpContext(prev, r)&want != want {
+						continue nextBranch
+					}
+				case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
+					if width > 0 && spanRuneMatches(inst, r) {
+						s.next = append(s.next, inst.Out)
+					}
+					continue nextBranch
+				}
+				pc = inst.Out
+			}
+		}
+		// Successors arrive in priority order. Reverse them so the next
+		// position can pop the preferred thread and expand its branches first.
+		slices.Reverse(s.next)
+		s.current, s.next = s.next, s.current
+		prev, pos = r, pos+width
+	}
+	return end
 }
 
 func spanRuneMatches(inst *syntax.Inst, r rune) bool {
