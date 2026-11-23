@@ -605,7 +605,10 @@
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-23T04:47:19Z"
+        "touched_at": "2026-11-23T04:47:47Z",
+        "impl": {
+          "branch": "impl/develop/ditch-runt-coil"
+        }
       }
     },
     "261123-feat-ws-dashboard-composer-bang-history": {
