@@ -13,13 +13,26 @@ var errDurableStopping = conflict("durable sessions are stopping for Full Quit")
 var errDurableClose = errors.New("the durable session could not be marked closed")
 var errDurableUnavailable = errors.New("the durable session record is unavailable")
 
-// FenceDurableStarts blocks new or waking durable sessions. A creation
-// already writing its record registers before the caller lists the sessions.
-// A partial Full Quit resumes any wake that encountered the fence.
+// admitDurableTransition orders creation, process start and turn submission
+// against Full Quit. The fence drains admitted steps before returning.
+func (r *Runner) admitDurableTransition() (func(), error) {
+	if r.durableStopping.Load() {
+		return nil, errDurableStopping
+	}
+	r.durableAdmissionMu.RLock()
+	if r.durableStopping.Load() {
+		r.durableAdmissionMu.RUnlock()
+		return nil, errDurableStopping
+	}
+	return r.durableAdmissionMu.RUnlock, nil
+}
+
+// FenceDurableStarts blocks new and waking durable sessions. A partial
+// Full Quit resumes any wake that encountered the fence.
 func (r *Runner) FenceDurableStarts() func() {
 	r.durableStopping.Store(true)
-	r.durableCreateMu.Lock()
-	r.durableCreateMu.Unlock()
+	r.durableAdmissionMu.Lock()
+	r.durableAdmissionMu.Unlock()
 	return func() {
 		r.durableStopping.Store(false)
 		for _, session := range r.DurableSessions() {

@@ -378,6 +378,13 @@ func (c *conv) compactIdle() bool {
 		}
 	}
 	if req := c.compactPending; req != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			release, err := c.r.admitDurableTransition()
+			if err != nil {
+				return true
+			}
+			defer release()
+		}
 		if c.proc == nil {
 			c.compactPending = nil
 			c.setStatus(func() { c.lastErr = "compaction requires a running harness" })

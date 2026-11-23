@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,6 +37,61 @@ func (g *fullQuitHolderGate) StopAllFenced() (wsholder.StopAllResult, func()) {
 		<-g.proceed
 	}
 	return wsholder.StopAllResult{Stopped: []string{}, Remaining: []wsholder.StopFailure{}}, func() { g.resumptions.Add(1) }
+}
+
+func TestFullQuitDrainsAdmittedWakeBeforeReturningFence(t *testing.T) {
+	starting, permitStart := make(chan struct{}), make(chan struct{})
+	var paused atomic.Bool
+	h, _, submitted := durableTurnHarness(t, func(rec Record) error {
+		if rec.SessionID != "" && paused.CompareAndSwap(false, true) {
+			close(starting)
+			<-permitStart
+		}
+		return nil
+	})
+	releaseStart := sync.OnceFunc(func() { close(permitStart) })
+	defer releaseStart()
+	idle := h.create("chat")
+	if _, err := h.runner.Send(idle.ID, "wake from the inbox"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-starting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wake never reached the backend's session-identity write")
+	}
+	fenced := make(chan func(), 1)
+	go func() { fenced <- h.runner.FenceDurableStarts() }()
+	eventually(t, "durable starts are stopping", h.runner.durableStopping.Load)
+	select {
+	case resume := <-fenced:
+		resume()
+		t.Fatal("the fence returned while an admitted wake was starting")
+	case <-time.After(75 * time.Millisecond):
+	}
+	releaseStart()
+	var resume func()
+	select {
+	case resume = <-fenced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fence did not drain the admitted wake")
+	}
+	// The backend start already had permission. Its prompt submission is a
+	// separate transition and must wait for partial-stop recovery.
+	c := h.runner.conv(idle.ID)
+	c.do(func() {})
+	if h.backend.startCount() != 1 {
+		t.Fatal("the backend did not start before the fence returned")
+	}
+	select {
+	case <-submitted:
+		t.Fatal("the wake submitted a turn after the fence was installed")
+	default:
+	}
+	resume()
+	if input := nextDurableInput(t, submitted); !strings.Contains(input.Text, "wake from the inbox") {
+		t.Fatal("the partial stop lost the inbox input")
+	}
 }
 
 func TestFullQuitDurableCloseFailureFencesStartsAndWakes(t *testing.T) {

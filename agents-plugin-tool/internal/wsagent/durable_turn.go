@@ -58,6 +58,11 @@ type durableTurnProcess interface {
 // A failed submit leaves that same input available to a successor. It runs
 // under admitInput, which orders the commit and submit against release.
 func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, startedAt int64, mail, reports, settleHeld bool) (bool, error) {
+	release, err := c.r.admitDurableTransition()
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	input := &durableTurnInput{ID: newReportID(), Text: text}
 	stage := func(rec *Record) {
 		rec.DurableTurn, rec.DurableInboxClaims = input, nil
@@ -72,7 +77,6 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 		}
 		rec.HeldTurn, rec.DurableHeldReportID = nil, ""
 	}
-	var err error
 	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && (reports || settleHeld) && !c.ownsLiveExec() {
 		err = c.publishWith(*c.heldRes, true, stage)
 	} else {
@@ -109,6 +113,10 @@ func (c *conv) compactDurableContinue() bool {
 	if checkout, ok := releasedInput(err); ok {
 		c.dropReleasedInput("continuation after compaction", checkout)
 		return false
+	}
+	if errors.Is(err, errDurableStopping) {
+		c.compactResume = true
+		return true
 	}
 	if committed {
 		c.compactNote = ""
@@ -149,6 +157,9 @@ func (c *conv) resumeDurableTurn() {
 	}
 	if c.proc == nil {
 		if err := c.startProcess(); err != nil {
+			if errors.Is(err, errDurableStopping) {
+				return
+			}
 			var refused *admissionRefusal
 			if errors.As(err, &refused) {
 				c.refuseStart(refused)
@@ -160,10 +171,21 @@ func (c *conv) resumeDurableTurn() {
 		c.setStatus(func() { c.wakeRefused = false })
 	}
 	var err error
-	refused := c.admitInput(func() { err = c.submitDurableTurn(c.rec.DurableTurn) })
+	refused := c.admitInput(func() {
+		var release func()
+		release, err = c.r.admitDurableTransition()
+		if err != nil {
+			return
+		}
+		defer release()
+		err = c.submitDurableTurn(c.rec.DurableTurn)
+	})
 	if refused != "" {
 		c.refuseStart(checkoutReleasedRefusal(refused))
 		c.armIdle()
+		return
+	}
+	if errors.Is(err, errDurableStopping) {
 		return
 	}
 	if err != nil {

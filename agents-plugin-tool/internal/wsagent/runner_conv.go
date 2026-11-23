@@ -1799,6 +1799,9 @@ func (c *conv) kickInput() {
 			return
 		}
 		if err := c.startProcess(); err != nil {
+			if errors.Is(err, errDurableStopping) {
+				return
+			}
 			var refused *admissionRefusal
 			if errors.As(err, &refused) {
 				c.refuseStart(refused)
@@ -1949,6 +1952,9 @@ func (c *conv) kickInput() {
 		return
 	}
 	if durable && err != nil {
+		if errors.Is(err, errDurableStopping) {
+			return
+		}
 		c.durableTurnError("start durable turn", err)
 		if committed {
 			c.stopProcess("")

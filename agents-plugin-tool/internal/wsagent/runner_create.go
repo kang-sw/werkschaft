@@ -193,12 +193,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	releaseDurableCreation := func() {}
 	if r.durableProcess(rp.Definition.Backend) {
-		r.durableCreateMu.RLock()
-		releaseDurableCreation = sync.OnceFunc(r.durableCreateMu.RUnlock)
-		defer releaseDurableCreation()
-		if r.durableStopping.Load() {
-			return State{}, errDurableStopping
+		release, err := r.admitDurableTransition()
+		if err != nil {
+			return State{}, err
 		}
+		releaseDurableCreation = sync.OnceFunc(release)
+		defer releaseDurableCreation()
 	}
 	var key string
 	if lead != nil {

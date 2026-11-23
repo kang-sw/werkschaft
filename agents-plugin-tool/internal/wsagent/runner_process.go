@@ -77,6 +77,13 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	if c.r.durableProcess(rec.Backend) {
+		release, err := c.r.admitDurableTransition()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	// A launch, wake or resume of a spawned conversation in a checkout
 	// released after it was bound is refused: the release ended that binding.
 	// A start is a cold path, so the check reads the checkouts' markers, not
