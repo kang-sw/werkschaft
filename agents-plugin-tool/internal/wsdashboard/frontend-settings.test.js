@@ -99,8 +99,11 @@ test("settings links and frames keep the exact inspection identifiers", () => {
   ];
   for (const selection of origins) {
     const href = shell.settingsScopeHref("builtin", selection, () => "");
-    const frame = shell.framed(new URL(href, origin), origin);
-    const src = new URL(shell.src(frame), origin);
+    const url = new URL(href, origin);
+    const frame = shell.settingsFrame(url, origin);
+    const src = new URL(frame.src, origin);
+    assert.equal(shell.framed(url, origin), null);
+    assert.equal(shell.settingsFrame(url, "https://other.example"), null);
     assert.equal(src.pathname, "/settings");
     assert.equal(src.searchParams.get("scope"), "builtin");
     assert.equal(src.searchParams.get("target"), null);
@@ -108,8 +111,9 @@ test("settings links and frames keep the exact inspection identifiers", () => {
     assert.equal(src.searchParams.get("session"), selection.context.session || null);
     assert.equal(src.searchParams.get("frame"), "1");
     assert.equal(shell.pagePath(src) + src.hash, href);
-    assert.equal(shell.framed(src, origin).path, frame.path);
-    assert.equal(frame.rid, "");
+    assert.equal(src.searchParams.get("modal"), "1");
+    assert.equal(shell.settingsFrame(src, origin).href, href);
+    assert.equal(frame.href, href);
   }
 });
 
@@ -835,4 +839,86 @@ test("agy subagent settings DOM lifecycle: renderRow lock badge, makeSubmit togg
   repoAvoid = repo.rowFor("agy.avoid_agy_subagent");
   assert.equal(repoAvoid.querySelector(".tg").disabled, true, "draft queueing must not unlock dependent row before snapshot update");
   assert.equal(repoAvoid.querySelector(".tag.lock").textContent, "js.settings.disabled.requires_native_subagent_off");
+});
+
+test("modal settings iframe owns navigation, close, and Escape precedence", () => {
+  function mount(modal) {
+    const messages = [], keys = [], close = {};
+    const search = {value: "", dispatchEvent() { this.cleared = true; }};
+    const root = {setAttribute(name) { this[name] = true; }};
+    const doc = {
+      documentElement: root,
+      querySelector(selector) {
+        if (selector === "[data-settings-view]") return view;
+        if (selector === "dialog[open]") return this.dialog;
+        return null;
+      },
+      addEventListener(type, fn, capture) {
+        if (type === "keydown") keys.push({fn, capture});
+      }
+    };
+    const view = {querySelector(selector) {
+      if (selector === "[data-settings-search]") return search;
+      if (selector === "[data-settings-close]") return {addEventListener(type, fn) { close.click = fn; }};
+      return {};
+    }};
+    const win = {
+      parent: {
+        location: {hash: "#project=parent"},
+        document: {querySelectorAll: () => []},
+        postMessage(message, target) { messages.push({message, target}); }
+      },
+      WsShell: shell, WsSettingsCatalog: [], addEventListener() {}
+    };
+    const location = new URL(origin + "/settings?frame=1" + (modal ? "&modal=1" : "") + "#project=iframe");
+    let source = read("dashboard-settings.js").split("  function scopeName(name)")[0];
+    source += "window.testScopeHref = scopeHref; window.testNavigate = navigate; })();";
+    vm.runInNewContext(source, {window: win, document: doc, location, URLSearchParams, Map, Set,
+      Event: class {constructor(type) { this.type = type; }}});
+    function key(fields = {}) {
+      const event = Object.assign({key: "Escape", preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; }}, fields);
+      for (const listener of keys.filter(k => k.capture)) listener.fn(event);
+      if (!event.stopped) for (const listener of keys.filter(k => !k.capture)) listener.fn(event);
+      return event;
+    }
+    return {win, doc, root, search, close, messages, key};
+  }
+
+  const m = mount(true);
+  assert.equal(m.root["data-settings-modal"], true);
+  assert.equal(new URL(m.win.testScopeHref("project"), origin).searchParams.get("target"), "iframe");
+  m.win.testNavigate("/settings?scope=global#project=iframe");
+  assert.deepEqual(JSON.parse(JSON.stringify(m.messages.pop())), {
+    message: {wsShell: "settings-navigate", href: "/settings?scope=global#project=iframe"}, target: origin
+  });
+  m.close.click();
+  assert.equal(m.messages.pop().message.wsShell, "settings-close");
+  m.key({key: "`", code: "Backquote", ctrlKey: true});
+  assert.equal(m.messages.length, 0);
+  let open = true;
+  m.win.WsSettingsCombobox = {closeActive() { const was = open; open = false; return was; }};
+  assert.equal(m.key().defaultPrevented, true);
+  assert.equal(m.messages.length, 0);
+  m.doc.dialog = {};
+  m.key(); // Native dialog cancel owns this key.
+  assert.equal(m.messages.length, 0);
+  m.doc.dialog = null;
+  m.search.value = "filter";
+  m.key({target: m.search});
+  assert.equal(m.search.value, "");
+  assert.equal(m.search.cleared, true);
+  assert.equal(m.messages.length, 0);
+  m.key({repeat: true});
+  assert.equal(m.messages.length, 0);
+  m.key();
+  assert.deepEqual(JSON.parse(JSON.stringify(m.messages.pop().message)), {wsShell: "settings-close"});
+
+  const frame = mount(false);
+  assert.equal(frame.root["data-settings-modal"], undefined);
+  assert.equal(new URL(frame.win.testScopeHref("project"), origin).searchParams.get("target"), "parent");
+  frame.key();
+  assert.equal(frame.messages.pop().message.key, "esc");
+  frame.win.testNavigate("/settings?scope=global");
+  assert.equal(frame.messages.pop().message.wsShell, "nav");
 });

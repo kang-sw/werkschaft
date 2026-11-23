@@ -9,7 +9,7 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     page.setDefaultTimeout(8000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    const frame = page.frameLocator('iframe.sframe.on');
+    const frame = page.frameLocator('#workflow-settings[open] > iframe');
     const row = key => frame.locator('[data-config-key=' + JSON.stringify(key) + ']');
     await page.goto(login);
     await page.waitForURL(url => url.pathname === '/settings' && !url.searchParams.has('login'));
@@ -22,7 +22,7 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
       return (await response.json()).entries;
     };
     const global = await get('global');
-    for (const [adapter, count] of Object.entries({claude:13, agy:4, pi:15, dashboard:22})) {
+    for (const [adapter, count] of Object.entries({claude:13, agy:6, pi:15, dashboard:22})) {
       assert.equal(global.filter(entry => entry.key.startsWith(adapter + '.')).length, count);
     }
     assert.equal(global.find(e => e.key === 'dashboard.port').type, 'integer');
@@ -45,13 +45,14 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     await profile.locator('[data-settings-bucket=codex]').click();
     assert.equal(await profile.locator('[data-settings-option=direct]').getAttribute('aria-pressed'), 'true');
 
+    await frame.locator('[data-settings-close]').click();
     const gear = id => page.locator('[data-scope-entry=session][data-settings-target=' + JSON.stringify(id) + ']');
     if (await page.locator('#railbtn').isVisible() && !await page.locator('html').evaluate(el => el.classList.contains('rail-open'))) {
       await page.locator('#railbtn').click();
     }
     await gear(selectedSession).click();
-    await page.waitForURL(url => url.searchParams.get('target') === selectedSession);
-    const worktree = new URL(page.url()).searchParams.get('worktree');
+    await (await (await page.locator('#workflow-settings > iframe').elementHandle()).contentFrame()).waitForURL(url => url.searchParams.get('target') === selectedSession);
+    const worktree = new URL(page.frames().find(f => f.url().includes('modal=1')).url()).searchParams.get('worktree');
     assert(worktree);
     const contextFor = sid => ({worktree, target:sid, session:sid});
     const language = row('workflow.lang');

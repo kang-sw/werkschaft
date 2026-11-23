@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: ce9554445ed0ef75
 sage-review-completeness-reviewed: ce9554445ed0ef75
+completed: 2026-11-23
 ---
 
 # Convert Workflow Settings Into a Floating Shell Modal Across All Layers
@@ -120,3 +121,28 @@ Implement the shell-hosted `<dialog>` modal for `/settings?frame=1` across all c
 **Verification:**
 - Remote `w5090` Go tests covering `internal/wsdashboard` config routes, shell rendering, and asset assembly (never local `go test` on Windows).
 - Local targeted `node --test` covering `agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js` (`testdata/settings*.browser.cjs` and `testdata/tier-routing.browser.cjs` are standalone Playwright scripts launched by Go tests with daemon args and `WS_PLAYWRIGHT_MODULE`, not `node --test` suites).
+
+### Result (9eaf78687) - 2026-11-23
+
+Workflow Settings now opens in a shell-hosted dialog from the global menu and
+all four rail layers. Settings navigation keeps the existing session iframe
+shown and preserves the browser address. A direct `/settings` visit opens the
+modal over the index and uses replacement history for layer changes and
+dismissal. Close, backdrop, and layered Escape handling preserve staged repo
+proposals in the parent window.
+
+- Verified the dashboard build, route and asset assembly checks, 15 Settings
+  Node tests, and ten targeted Go tests, including the five headless Chromium
+  suites. The lead approved macOS verification because `w5090` was unavailable
+  from this host. The eight known unrelated frontend fixture failures stayed
+  outside this run.
+- Captured and inspected `/tmp/settings-modal-shots/global-1200.png`,
+  `/tmp/settings-modal-shots/global-760.png`,
+  `/tmp/settings-modal-shots/rail-1200.png`, and
+  `/tmp/settings-modal-shots/rail-760.png`. Chromium reached and opened the
+  final category through the horizontal strip at 760px from both entry points.
+- The production fixture's agy manifest count now includes the two keys added
+  by `295e953b2`. The combobox fixture serves an empty tracker list for the
+  newly mounted index behind Settings.
+- Independent lite review reported no actionable findings. It inspected
+  focus restoration and popstate statically.

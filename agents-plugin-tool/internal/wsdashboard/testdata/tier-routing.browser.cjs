@@ -23,7 +23,7 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     await page.goto(login);
     await page.waitForURL(url => url.pathname === '/settings' && !url.searchParams.has('login'));
     const origin = new URL(page.url()).origin;
-    const frame = page.frameLocator('iframe.sframe.on');
+    const frame = page.frameLocator('#workflow-settings[open] > iframe');
     const card = frame.locator('[data-tier-routing]');
     const view = async harness => (await page.request.get(origin + '/api/config/tier-routing?harness=' + (harness || 'claude'))).json();
     const nodeOf = (v, name) => v.nodes.find(n => n.name === name);

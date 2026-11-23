@@ -67,6 +67,8 @@
     head: { html: "?string", qs: "string", pad: "number", top: "number" },
     title: { title: "string" },
     nav: { href: "string" },
+    "settings-close": {},
+    "settings-navigate": { href: "string" },
     key: { key: "string" },
     press: {},
     layout: { pincol: "boolean", dim: "number" },
@@ -120,7 +122,6 @@
   // index.
   function framed(u, origin) {
     if (!u || u.origin !== origin) return null;
-    if (u.pathname === "/settings") return { path: pagePath(u), hash: u.hash || "", rid: "" };
     var search = u.search || "";
     if (search && search !== "?" && search !== "?frame=1") return null;
     if (u.pathname === "/") return { path: "/", hash: u.hash || "", rid: "" };
@@ -134,13 +135,24 @@
   // hash.
   function src(f) { return f.path + (f.path.includes("?") ? "&" : "?") + "frame=1" + (f.hash || ""); }
 
-  // Preserve the settings context in shell history while leaving unrelated
-  // queries (for example a LAN token on an index URL) out of frames.
+  // Preserve settings context while leaving unrelated page queries, such
+  // as a LAN token on the index URL, out of frames.
   function pagePath(loc) {
     if (loc.pathname !== "/settings") return loc.pathname;
     var query = new URLSearchParams(loc.search);
     query.delete("frame");
+    query.delete("modal");
     return "/settings" + (query.size ? "?" + query.toString() : "");
+  }
+
+  function settingsFrame(u, origin) {
+    if (u.origin !== origin || u.pathname !== "/settings") return null;
+    var path = pagePath(u);
+    var hash = u.hash || "";
+    return {
+      href: path + hash,
+      src: path + (path.includes("?") ? "&" : "?") + "frame=1&modal=1" + hash
+    };
   }
 
   function settingsHref(scope, target, worktree, session) {
@@ -179,5 +191,5 @@
     return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
   }
 
-  window.WsShell = { message: message, companionContext: companionContext, framed: framed, src: src, pagePath: pagePath, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT };
+  window.WsShell = { message: message, companionContext: companionContext, framed: framed, src: src, pagePath: pagePath, settingsFrame: settingsFrame, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT };
 })();
