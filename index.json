@@ -579,6 +579,9 @@
     },
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
+    },
+    "261123-chore-werkschaft-electron-retirement": {
+      "registered_at": "2026-11-23T00:31:15Z"
     }
   }
 }
