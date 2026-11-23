@@ -2,6 +2,8 @@ package wsagent
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -53,7 +55,12 @@ func (scriptMapper) mapLine(line []byte, _ lineReplies) []Event {
 
 func startScript(t *testing.T, script string) *streamProcess {
 	t.Helper()
-	p, err := startStreamProcess(exec.Command("sh", "-c", script), scriptMapper{}, claudeProtocol{})
+	return startStreamFixture(t, exec.Command("sh", "-c", script))
+}
+
+func startStreamFixture(t *testing.T, cmd *exec.Cmd) *streamProcess {
+	t.Helper()
+	p, err := startStreamProcess(cmd, scriptMapper{}, claudeProtocol{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +106,25 @@ func awaitLine(t *testing.T, p *streamProcess, want string) {
 	}
 }
 
-// holdOn is a stand-in's last command, which runs until it is killed. MSYS
-// sh on Windows emulates exec with a child process, so a sleep there would
-// outlive the killed sh and hold stdout open; a builtin loop dies with sh.
-func holdOn() string {
-	if runtime.GOOS == "windows" {
-		return "while :; do :; done"
+const streamFixtureLine = "WS_TEST_STREAM_FIXTURE_LINE"
+
+// Git for Windows can put a launcher between the test and the shell. Use
+// the test binary directly when the test needs to kill the stdout writer.
+func startBlockingStream(t *testing.T, line string) *streamProcess {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStreamBlockingChild$")
+	cmd.Env = append(os.Environ(), streamFixtureLine+"="+line)
+	return startStreamFixture(t, cmd)
+}
+
+func TestStreamBlockingChild(t *testing.T) {
+	line, ok := os.LookupEnv(streamFixtureLine)
+	if !ok {
+		t.Skip("helper process only")
 	}
-	return "exec sleep 30"
+	fmt.Fprintln(os.Stdout, line)
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
 }
 
 func signalOf(t *testing.T, p *streamProcess) (syscall.Signal, bool) {
@@ -121,6 +139,19 @@ func signalOf(t *testing.T, p *streamProcess) (syscall.Signal, bool) {
 		t.Skip("no wait status on this platform")
 	}
 	return ws.Signal(), ws.Signaled()
+}
+
+func assertStreamKilled(t *testing.T, p *streamProcess) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if state := p.child.(*execChild).cmd.ProcessState; state.Success() {
+			t.Fatalf("child exited successfully, want forced termination: %v", state)
+		}
+		return
+	}
+	if sig, ok := signalOf(t, p); !ok || sig != syscall.SIGKILL {
+		t.Fatalf("child ended by %v (signaled %v), want SIGKILL", sig, ok)
+	}
 }
 
 // commandName is how a Fatal names p's command: "sh", or "sh.exe" on Windows.
@@ -147,14 +178,12 @@ func TestNonZeroExitIsFatalWithStderrTail(t *testing.T) {
 // A mapper's Fatal (a refused launch) kills the child at once rather than
 // waiting for it to exit.
 func TestFatalKillsTheChild(t *testing.T) {
-	p := startScript(t, "echo 'fatal launch refused'; "+holdOn())
+	p := startBlockingStream(t, "fatal launch refused")
 	evs := collect(t, p)
 	if len(evs) == 0 || evs[0].Fatal == nil || evs[0].Fatal.Error() != "launch refused" {
 		t.Fatalf("events = %+v, want the mapper's Fatal first", evs)
 	}
-	if sig, ok := signalOf(t, p); !ok || sig != syscall.SIGKILL {
-		t.Fatalf("child ended by %v (signaled %v), want SIGKILL", sig, ok)
-	}
+	assertStreamKilled(t, p)
 }
 
 // A stdout read error (here a line over the scanner cap) ends the turn as a
@@ -164,7 +193,7 @@ func TestScannerErrorIsFatal(t *testing.T) {
 	restore := maxLineBytes
 	maxLineBytes = 1 << 10
 	t.Cleanup(func() { maxLineBytes = restore })
-	p := startScript(t, "head -c 4096 /dev/zero | tr '\\0' a; echo; "+holdOn())
+	p := startBlockingStream(t, strings.Repeat("a", 4096))
 	evs := collect(t, p)
 	if len(evs) == 0 || evs[0].Fatal == nil || !strings.Contains(evs[0].Fatal.Error(), "token too long") {
 		t.Fatalf("events = %+v, want a read Fatal first", evs)
@@ -172,9 +201,7 @@ func TestScannerErrorIsFatal(t *testing.T) {
 	if !strings.HasPrefix(evs[0].Fatal.Error(), "reading "+commandName(p)+" output: ") {
 		t.Fatalf("Fatal = %q, want it to name the command", evs[0].Fatal)
 	}
-	if sig, ok := signalOf(t, p); !ok || sig != syscall.SIGKILL {
-		t.Fatalf("child ended by %v (signaled %v), want SIGKILL", sig, ok)
-	}
+	assertStreamKilled(t, p)
 }
 
 // Close escalates: input EOF, then SIGTERM, then SIGKILL, closeGrace apart.
@@ -199,12 +226,10 @@ func TestCloseEscalates(t *testing.T) {
 				if c.signal == syscall.SIGKILL {
 					t.Skip("no SIGTERM to ignore on Windows")
 				}
-				p := startScript(t, "echo ready; "+holdOn())
+				p := startBlockingStream(t, "ready")
 				awaitLine(t, p, "ready")
 				p.Close()
-				if p.child.(*execChild).cmd.ProcessState.Success() {
-					t.Fatalf("a child ignoring EOF should end killed, got %v", p.child.(*execChild).cmd.ProcessState)
-				}
+				assertStreamKilled(t, p)
 				return
 			}
 			p := startScript(t, c.script)

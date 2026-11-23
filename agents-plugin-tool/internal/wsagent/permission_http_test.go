@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPermissionHTTPSelection(t *testing.T) {
@@ -63,8 +64,14 @@ func TestPermissionHTTPSelection(t *testing.T) {
 }
 
 func TestPermissionHTTPInvalidZeroWrites(t *testing.T) {
-	h := permissionHarness(t).start()
+	h := permissionHarness(t)
+	// Compare request writes after startup settles, with the periodic
+	// snapshot writer deferred until after the test.
+	h.opts.heartbeat = time.Hour
+	h.start()
 	st := h.lead(BackendClaude, LeadOptions{})
+	wait(t, "the initial holder scan", h.runner.rejoined)
+	h.mailSettled(st.ID)
 	path := "/agents/" + st.ID + "/settings/permission"
 	invalid := []map[string]any{
 		{}, {"permission_level": nil}, {"permission_level": ""}, {"permission_level": "bogus"}, {"permission_level": 3},
