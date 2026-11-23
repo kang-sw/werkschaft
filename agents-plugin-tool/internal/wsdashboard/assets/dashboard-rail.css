@@ -1171,3 +1171,77 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .apanswered .apin { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--wb-mono); }
 .apanswered > .conv-audit-items { margin-left: 36px; }
 .apanswered:not([open]) > .conv-audit-items { display: none; }
+
+/* ===== Right-side outer circle-chain board dial (dashboard-board-dial.js) =====
+   Sits in #bcol's right-edge margin (26px reserved only when bounded & >1 card)
+   so it never overlaps cards. Hide states (Overview, gal-away, file-preview,
+   maximized sheet) toggle visibility on #bdial itself, keeping #bcol padding
+   stable. */
+:root[data-board-dial] .dgrid:is(.live, .history, .worktree) > #bcol { padding-right: 26px; }
+.d-board-dial { position: relative; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 22px; padding: 6px 0; box-sizing: border-box; touch-action: none; -webkit-user-select: none; user-select: none; }
+.d-board-dial[hidden] { display: none !important; }
+:root[data-overview] .d-board-dial,
+:root[data-gal-away] .d-board-dial,
+:root[data-file-preview] .d-board-dial,
+:root[data-board-max] .d-board-dial { visibility: hidden; pointer-events: none; }
+.d-board-dial-track { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.d-board-dial-dot { position: relative; display: grid; place-items: center; width: 18px; height: 14px; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: pointer; outline: none; }
+.d-board-dial-dot:focus-visible { box-shadow: 0 0 0 1.5px var(--wb-primary); }
+.d-board-dial-pip { display: block; border-radius: 50%; box-sizing: border-box; transition: width .14s ease, height .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease, box-shadow .14s ease; }
+.d-board-dial-dot[data-tier="0"] .d-board-dial-pip { width: 8px; height: 8px; background: var(--wb-primary); border: 0; opacity: 1; }
+.d-board-dial-dot[data-tier="1"] .d-board-dial-pip { width: 6px; height: 6px; background: transparent; border: 1.5px solid color-mix(in srgb, var(--wb-fg) 56%, transparent); opacity: .9; }
+.d-board-dial-dot[data-tier="2"] .d-board-dial-pip { width: 4.5px; height: 4.5px; background: color-mix(in srgb, var(--wb-muted-fg) 72%, transparent); border: 0; opacity: .78; }
+.d-board-dial-dot[data-tier="3"] .d-board-dial-pip { width: 3px; height: 3px; background: color-mix(in srgb, var(--wb-muted-fg) 52%, transparent); border: 0; opacity: .52; }
+.d-board-dial-dot[data-edge="1"] .d-board-dial-pip { opacity: .35; }
+.d-board-dial-dot[data-closed="1"]:not([data-tier="0"]) .d-board-dial-pip { opacity: .4; }
+.d-board-dial-dot[data-kind="card"]:not([data-tier="0"]) .d-board-dial-pip { border-radius: 2px; }
+.d-board-dial-dot[data-ask="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-warn); }
+.d-board-dial-dot[data-held="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-primary); }
+.d-board-dial-dot[data-ask="1"][data-held="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-warn), 0 0 0 3.5px var(--wb-primary); }
+.d-board-dial-dot:hover .d-board-dial-pip { opacity: 1; border-color: var(--wb-primary); }
+.d-board-dial-dot:not([data-tier="1"]):hover .d-board-dial-pip { background: var(--wb-primary); }
+.d-board-dial[data-scrub] { cursor: ns-resize; }
+.d-board-dial-tip { position: fixed; top: 0; left: 0; z-index: 42; pointer-events: none; display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 8px; border-radius: 7px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); font: 600 11.5px/1.3 var(--wb-sans); white-space: nowrap; will-change: transform; }
+.d-board-dial-tip[hidden] { display: none; }
+.d-board-dial-tip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.d-board-dial-tip-badge { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+.d-board-dial-tip-ask { background: color-mix(in srgb, var(--wb-warn) 22%, transparent); color: var(--wb-warn-ink); }
+.d-board-dial-tip-held { background: color-mix(in srgb, var(--wb-primary) 18%, transparent); color: var(--wb-primary); }
+
+/* ===== .gal-rail hover & drag-hover preview popover (gal-rail-preview.js) =====
+   Single reused fixed popover (z-index 42: above narrow/drag .bgal 35/40, below
+   session rail/scrim 44/45). Docked pages render miniature split cards directly
+   inside the 6px-padded outer frame with no outer header or ratio metadata. */
+.gal-pop { position: fixed; top: 0; left: 0; z-index: 42; pointer-events: none; box-sizing: border-box; border-radius: 10px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); will-change: transform; }
+.gal-pop[hidden] { display: none; }
+.gal-pop::before { content: ""; position: absolute; top: var(--caret-y, 50%); width: 8px; height: 8px; background: var(--wb-card); border: 1px solid var(--wb-line); transform: translateY(-50%) rotate(45deg); }
+.gal-pop[data-side="right"]::before { left: -5px; border-right: 0; border-top: 0; }
+.gal-pop[data-side="left"]::before { right: -5px; border-left: 0; border-bottom: 0; }
+.gal-pop[data-mode="pill"] { padding: 5px 10px; border-radius: 8px; }
+.gal-pop[data-mode="page"] { width: 256px; padding: 6px; }
+.gal-pop-pill { display: inline-flex; align-items: center; gap: 6px; font: 700 12px/1.3 var(--wb-sans); white-space: nowrap; }
+.gal-pop-pill[data-gal-drop="1"] { color: var(--wb-primary); }
+.gal-pop-pill-glyph { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--wb-muted); font-size: 11px; line-height: 1; }
+.gal-pop-pill[data-gal-drop="1"] .gal-pop-pill-glyph { background: color-mix(in srgb, var(--wb-primary) 16%, transparent); color: var(--wb-primary); }
+.gal-pop-layout { display: flex; flex-direction: column; width: 100%; height: 148px; }
+.gal-pop-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; gap: 5px; }
+.gal-pop-row { flex-direction: row; }
+.gal-pop-col { flex-direction: column; }
+.gal-pop-card { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 6px 7px; border-radius: 6px; background: var(--wb-bg); border: 1px solid var(--wb-line); overflow: hidden; }
+.gal-pop-card[data-closed="1"] { opacity: .65; }
+.gal-pop-card[data-ask="1"] { border-color: color-mix(in srgb, var(--wb-warn) 60%, var(--wb-line)); }
+.gal-pop-card-hd { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.gal-pop-card-icon { flex: none; width: 13px; height: 13px; color: var(--wb-muted-fg); }
+.gal-pop-card-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 11.5px/1.3 var(--wb-sans); color: var(--wb-fg); }
+.gal-pop-card-ask { flex: none; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--wb-warn) 22%, transparent); color: var(--wb-warn-ink); font: 700 10px/15px var(--wb-sans); }
+.gal-pop-card-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.35 var(--wb-sans); color: var(--wb-muted-fg); }
+.gal-pop-drop { margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--wb-primary) 13%, transparent); color: var(--wb-primary); font: 700 11px/1.3 var(--wb-sans); text-align: center; }
+.gal-pop-drop[hidden] { display: none; }
+.gal-pop-spring { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.gal-pop-spring[hidden] { display: none; }
+.gal-pop-spring-label { font: 600 10px/1.2 var(--wb-sans); color: var(--wb-muted-fg); text-align: center; }
+.gal-pop-spring-track { height: 3px; border-radius: 999px; background: var(--wb-muted); overflow: hidden; }
+.gal-pop-spring-bar { height: 100%; width: 100%; background: var(--wb-primary); transform-origin: left center; transform: scaleX(0); will-change: transform; }
+@media (prefers-reduced-motion: reduce) {
+  .d-board-dial-pip { transition: none; }
+}

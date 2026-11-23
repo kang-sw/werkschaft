@@ -172,12 +172,24 @@
     var reply = box.querySelector(".reply"), replyOff = reply && reply.offsetHeight ? reply.offsetHeight + 14 : 0;
     var line = vb - replyOff - BOT, below = [], rest = scrollRest();
     for (k = above + (cur >= 0 ? 1 : 0); k < n; k++) if (rects[k].top >= line && !(rects[k].top < vb && rects[k].top - rest >= line)) below.push(k);
+    var bar = cur >= 0 ? stickOf(topics[cur]) : null;
+    var barOff = 0;
+    if (!bar && n > 0 && above === 0 && rects[0].top > vt + 1) {
+      var cap0 = topics[0].getAttribute && topics[0].getAttribute("data-anchor-cap");
+      if (cap0 !== "rail0" && (cap0 === "0" || rects[0].top <= vt + 16)) {
+        bar = stickOf(topics[0]);
+        barOff = Math.max(0, Math.round(rects[0].top - vt));
+      }
+    }
+    var barH = bar ? bar.offsetHeight : 0;
     draw({
       top: top,
       cur: cur,
       // The current head sits at the stick line; it is stuck (and casts its
       // shadow) once its card's top has passed that line.
-      bar: cur >= 0 ? stickOf(topics[cur]) : null,
+      bar: bar,
+      barH: barH,
+      barOff: barOff,
       stuck: cur >= 0 && rects[cur].top < vt + top - 0.5,
       up: [above - 1, above - 2].filter(function (x) { return x >= 0; }),
       upMore: Math.max(0, above - 2),
@@ -191,18 +203,20 @@
     var pending = pendingMotion;
     pendingMotion = null;
     var key = s ? [inset, s.top, s.upMore, s.downMore, s.replyOff, s.stuck, names(s.up), names(s.down), names([s.cur])].join("|") : "" + inset;
+    var nextH = inset + (s ? s.top + (s.barOff || 0) + (s.barH || 0) : 0) + "px";
     // A re-queried board can hold heads that never got the offset, and the
     // current head may have changed height (a note opened, a summary line
-    // wrapping), which resizes its topic and so re-queries.
+    // wrapping) or shifted near the top of the board.
     if (key === last) {
-      if (fresh && s && s.bar) vals.h = inset + s.top + s.bar.offsetHeight + "px";
+      var hChanged = vals.h !== nextH;
+      if (hChanged) vals.h = nextH;
       // A scroll can arrive before the destination frame. Its geometry
       // reads are done, and this draw still has the same destination: play
       // the pending motion now, before any offset writes, rather than
       // starving morphs during continuous scrolling.
       if (pending) after(pending);
       dropStaleGhosts(staleGhosts);
-      if (fresh) offsets();
+      if (fresh || hChanged) offsets();
       return;
     }
     last = key;
@@ -213,10 +227,6 @@
     var member = s ? [inset, s.replyOff, names(s.up), names(s.down), names([s.cur])].join("|") : "";
     var pre = motion() && !fresh && member !== moved ? before(s) : null;
     var bar = s && s.bar, shadow = s && s.stuck ? bar : null;
-    // Finish geometry reads before even the shadow class changes. A shadow
-    // or count change alone still has the pending motion's destination;
-    // after() starts animations, so it must follow the height read too.
-    var barH = bar ? bar.offsetHeight : 0;
     if (pending && member === moved) after(pending);
     dropStaleGhosts(staleGhosts);
     moved = member;
@@ -241,7 +251,7 @@
     var replyOff = s ? s.replyOff : 0;
     wraps.bot.firstChild.style.paddingBottom = replyOff ? replyOff + PAD + "px" : "";
     vals.top = inset + (s ? s.top : 0) + "px";
-    vals.h = inset + (s ? s.top + barH : 0) + "px";
+    vals.h = nextH;
     vals.bot = (down.length ? FADE + down.length * CAP + (down.length - 1) * GAP + PAD : 0) + "px";
     offsets();
     curTopic = s && s.cur >= 0 ? topics[s.cur] : null;
