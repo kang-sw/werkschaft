@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,7 +208,7 @@ func TestWerkLoopIsolatesTurnPanicAndInterruptsAnotherSession(t *testing.T) {
 
 func TestWerkLoopKeepsSourcedAuditAcrossOpenings(t *testing.T) {
 	dir, session := t.TempDir(), werk.NewSessionID()
-	sink := newBoundarySink()
+	sink := openStoreSink(t, t.TempDir())
 	run := func(text string) {
 		t.Helper()
 		model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
@@ -227,18 +228,58 @@ func TestWerkLoopKeepsSourcedAuditAcrossOpenings(t *testing.T) {
 	run("first request")
 	run("second request")
 
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	if len(sink.boundary) != 2 || len(sink.lost) != 0 {
-		t.Errorf("boundaries = %v, lost = %v", sink.boundary, sink.lost)
+	if err := sink.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, err := sink.Events(context.Background(), "fixture-worker")
+	if err != nil {
+		t.Fatal(err)
 	}
 	var usage int
-	for _, e := range sink.evs {
+	for _, e := range events {
 		if e.Kind == wsaudit.KindSystem && e.Subkind == werk.LineUsage {
 			usage++
 		}
 	}
 	if usage != 2 {
 		t.Errorf("usage events = %d, want both turns", usage)
+	}
+}
+
+func TestWerkLoopCloseWaitsForAuditDrain(t *testing.T) {
+	sink := &memSink{block: make(chan struct{})}
+	var unblock sync.Once
+	release := func() { unblock.Do(func() { close(sink.block) }) }
+	defer release()
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		werkMessage("finished"),
+	}}
+	loop := startTestWerkLoop(t, t.TempDir(), "", model, sink, nil)
+	if err := loop.Send("queue audit events"); err != nil {
+		t.Fatal(err)
+	}
+	nextWerkLoopEvent(t, loop, func(e Event) bool { return e.TurnEnd })
+
+	closed := make(chan error, 1)
+	go func() { closed <- loop.Close() }()
+	<-loop.ctx.Done()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned while the audit sink was blocked: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after audit drained")
+	}
+	if !slices.ContainsFunc(sink.events(), func(e wsaudit.Envelope) bool {
+		return e.Kind == wsaudit.KindSystem && e.Subkind == werk.LineUsage
+	}) {
+		t.Error("Close lost the queued usage record")
 	}
 }
