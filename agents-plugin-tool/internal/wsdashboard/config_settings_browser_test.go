@@ -40,14 +40,18 @@ func RunSettingsVisualBrowser(t *testing.T, backend *ConfigBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(global, []byte(`{"overrides":{"workflow.lang":"Korean","workflow.profile.all":"direct","workflow.profile.claude":"orchestrate","workflow.prefer_subagent":"on","workflow.tracker_enabled.all":"off","claude.compaction_advisory_percent":"60%"}}`), 0o600); err != nil {
+	if err := os.WriteFile(global, []byte(`{"overrides":{"workflow.lang":"Korean","workflow.profile.all":"direct","workflow.profile.claude":"orchestrate","workflow.prefer_subagent":"on","workflow.tracker_enabled.all":"off","claude.compaction_advisory_percent":"60%",
+		"prompt.UserPreferenceSection.all":"Reply in Korean. Keep code identifiers, commit messages, and ticket bodies in English.\nPrefer short, direct answers; ask before destructive git operations.",
+		"preference.gpt-leash":"When delegating to GPT-family workers, restate scope limits in the first message and forbid edits outside the named paths.\nAsk for a diff summary before any commit.",
+		"preference.review-style":"Review findings: lead with the verdict, then numbered issues with file:line."}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repo, _ := wsconfig.RepoPath(opts)
 	if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	repoContents := `{"overrides":{"workflow.lang":"Korean","workflow.whiteboard_enabled.all":"on"},"structured_overrides":{"agent.profile.reviewer-readonly":{"description":"Read-only code reviewer","backend":"claude","model":"sonnet","mcp_servers":{"test":{"type":"stdio","command":"/private/bin/node","args":["--api-key=secret-123"],"url":"https://user:secret@example.com/mcp?token=abc","env":{"PASSWORD":"secret-env"}}}}}}`
+	repoContents := `{"overrides":{"workflow.lang":"Korean","workflow.whiteboard_enabled.all":"on","preference.gpt-leash":"",
+		"preference.repo-terms":"In this repo, \"lead\" means the top-level ws session and \"worker\" a spawned child. Never call tickets \"issues\"."},"structured_overrides":{"agent.profile.reviewer-readonly":{"description":"Read-only code reviewer","backend":"claude","model":"sonnet","mcp_servers":{"test":{"type":"stdio","command":"/private/bin/node","args":["--api-key=secret-123"],"url":"https://user:secret@example.com/mcp?token=abc","env":{"PASSWORD":"secret-env"}}}}}}`
 	if err := os.WriteFile(repo, []byte(repoContents), 0o600); err != nil {
 		t.Fatal(err)
 	}

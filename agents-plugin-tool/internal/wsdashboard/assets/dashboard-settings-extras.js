@@ -77,6 +77,7 @@
   const modal = modalQuery.get("frame") === "1" && modalQuery.get("modal") === "1";
   const host = window.parent;
   const drafts = host.wsSettingsRepoDrafts || (host.wsSettingsRepoDrafts = new Map());
+  const draftGroups = host.wsSettingsRepoDraftGroups || (host.wsSettingsRepoDraftGroups = new WeakMap());
   if (!host.wsSettingsRepoDraftGuard) {
     host.wsSettingsRepoDraftGuard = true;
     host.addEventListener("beforeunload", event => {
@@ -90,16 +91,30 @@
   window.wsPersistDraftForWindowClose = async () => ![...drafts.values()].some(draft => draft.size > 0);
   let refresh = null;
   let doRerender = null;
-  let activePrompt = "prompt.UserPreferenceSection";
+  let activePrompt = "preference.*";
 
   function pending(entry, selection) {
     return selection.scope === "repo" && drafts.get(selection.target)?.get(identity(entry));
   }
 
-  function discardEntryDraft(entry, selection) {
+  function discardEntryDraft(entry, selection, rerender = true) {
     if (selection.scope !== "repo" || !selection.target) return;
-    drafts.get(selection.target)?.delete(identity(entry));
-    if (doRerender) doRerender();
+    const draft = drafts.get(selection.target);
+    const operation = draft?.get(identity(entry));
+    for (const item of draftGroups.get(operation) || (operation ? [operation] : [])) {
+      if (draft.get(identity(item)) === item) draft.delete(identity(item));
+    }
+    if (rerender && doRerender) doRerender();
+    if (refresh) refresh();
+  }
+
+  function queue(operations, selection, rerender = false) {
+    const draft = targetDraft(selection.target);
+    for (const operation of operations) {
+      if (operations.length > 1) draftGroups.set(operation, operations);
+      draft.set(identity(operation), operation);
+    }
+    if (rerender && doRerender) doRerender();
     if (refresh) refresh();
   }
 
@@ -317,7 +332,8 @@
     button.removeAttribute("data-bucket-override");
     button.removeAttribute("title");
     if (!entries || !bucketState) return;
-    const st = bucketState(entries.filter(entry => entry.key === key));
+    const st = bucketState(entries.filter(entry => key === "preference.*"
+      ? window.WsSettingsPreferences.replaces(entry.key) : entry.key === key));
     if (st.kind === "none") return;
     button.dataset.bucketOverride = st.kind;
     const dot = node("span", "bdot " + st.kind);
@@ -340,17 +356,19 @@
       }
     }
     if (section !== "prompts") return;
-    const cards = [...list.children].filter(row => row.dataset.configKey?.startsWith("prompt."));
+    const cards = [...list.children].filter(row => row.dataset.settingsPromptCard || row.dataset.configKey?.startsWith("prompt."));
     if (!cards.length) return;
-    if (!cards.some(row => row.dataset.configKey === activePrompt)) activePrompt = cards[0].dataset.configKey;
+    const point = row => row.dataset.settingsPromptCard || row.dataset.configKey;
+    const active = () => cards.some(row => point(row) === activePrompt) ? activePrompt : point(cards[0]);
     const picker = node("div", "prompt-picker");
     picker.setAttribute("role", "group");
     picker.setAttribute("aria-label", tr("js.settings.prompt.points"));
     const buttons = cards.map(row => {
-      const key = row.dataset.configKey;
+      const key = point(row);
       const button = node("button", "fchip");
       button.type = "button";
       button.dataset.settingsPromptPoint = key;
+      if (key === "preference.*") button.append(tr("js.settings.preference.title") + " ");
       button.append(node("code", "", key));
       syncPromptPointDot(button, key, entries, bucketState, bucketTitle);
       button.addEventListener("click", () => {
@@ -361,12 +379,9 @@
     });
     function apply() {
       buttons.forEach((button, index) => {
-        const selected = button.dataset.settingsPromptPoint === activePrompt;
+        const selected = button.dataset.settingsPromptPoint === active();
         button.setAttribute("aria-pressed", String(selected));
-        const key = cards[index].dataset.configKey;
-        for (const row of list.children) {
-          if (row.dataset.configKey === key) row.hidden = !selected;
-        }
+        cards[index].hidden = !selected;
       });
     }
     picker.append(...buttons);
@@ -537,12 +552,14 @@
     afterRender,
     onMutate,
     mount,
+    discard(entry, selection) { return discardEntryDraft(entry, selection, false); },
+    operations(selection) {
+      return selection.scope === "repo" ? [...(drafts.get(selection.target)?.values() || [])] : [];
+    },
+    queue,
     submit(operation, selection) {
       if (selection.scope !== "repo" || !selection.target) return undefined;
-      const draft = targetDraft(selection.target);
-      draft.set(identity(operation), operation);
-      if (doRerender) doRerender();
-      if (refresh) refresh();
+      queue([operation], selection, true);
       return Promise.resolve({});
     }
   };

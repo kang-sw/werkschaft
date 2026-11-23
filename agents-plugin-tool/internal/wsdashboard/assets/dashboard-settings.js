@@ -98,6 +98,7 @@ var wsSettingsChoiceLabels = {
   var specs = new Map(catalog.map(function (spec) { return [spec.key, spec]; }));
   var families = catalog.filter(function (spec) { return spec.key.endsWith(".*"); });
   var extension = window.WsSettingsExtension || {};
+  var preferences = window.WsSettingsPreferences;
   var content = view.querySelector("[data-settings-content]");
   var search = view.querySelector("[data-settings-search]");
   var count = view.querySelector("[data-settings-count]");
@@ -370,6 +371,42 @@ var wsSettingsChoiceLabels = {
     err.code = result && result.error && result.error.code ||
       (response.status === 404 ? "upgrade_required" : "config_error");
     throw err;
+  }
+
+  function preferenceTarget(name) {
+    if (name === scope) return selection;
+    var href = scopeHref(name);
+    if (!href) return null;
+    var params = new URL(href, location.origin).searchParams;
+    return {scope: name, target: params.get("target") || "", context: selection.context};
+  }
+
+  async function changePreferences(operations, target) {
+    try {
+      if (target.scope === "repo") {
+        extension.queue(operations, target);
+        return;
+      }
+      for (var operation of operations) {
+        var result = await request("/api/config/" + operation.action, Object.assign({}, target, {
+          key: operation.key, selectors: operation.selectors, value: operation.value
+        }));
+        var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
+        snapshot.entries = snapshot.entries.map(function (entry) {
+          var id = entryID(entry), fresh = affected.get(id);
+          affected.delete(id);
+          return fresh ? Object.assign({}, fresh, {editable: entry.editable, disabled_reason: entry.disabled_reason}) : entry;
+        });
+        for (var fresh of affected.values()) {
+          // A new slot is writable in every settings scope except built-in.
+          snapshot.entries.push(Object.assign({}, fresh, {editable: scope !== "builtin"}));
+        }
+      }
+    } finally {
+      renderCounts();
+      extension.onMutate({section: activeSection, list: content.querySelector(".klist"),
+        entries: sectionEntries(activeSection), bucketState, bucketTitle});
+    }
   }
 
   function buildLayerDrawer(entry, spec, drawerId) {
@@ -1106,6 +1143,18 @@ var wsSettingsChoiceLabels = {
       byKey.get(entry.key).push(entry);
     }
     var list = el("div", "klist");
+    if (activeSection === "prompts" && preferences) {
+      var slots = preferences.render({
+        selection, entries: () => sectionEntries("prompts"),
+        matches: entry => matches(entry, specFor(entry.key)),
+        unfiltered: filter === "all" && !search.value.trim(),
+        targetFor: preferenceTarget, scopeName, scopeHref, navigate, submit: changePreferences, statusText,
+        pending: entry => extension.hasDraft(entry, selection),
+        drafts: () => extension.operations(selection),
+        discard: entry => extension.discard(entry, selection)
+      });
+      if (slots) list.append(slots);
+    }
     var rowGroup = null;
     function appendRow(node) {
       if (!rowGroup) {
@@ -1118,6 +1167,7 @@ var wsSettingsChoiceLabels = {
       if (spec.section !== (activeSection === "adapters" ? adapter : activeSection)) continue;
       for (var [key, rows] of byKey) {
         if (specFor(key) !== spec) continue;
+        if (preferences && preferences.replaces(key)) continue;
         if (spec.control === "tier") {
           if (rows.some(function (entry) { return matches(entry, spec); })) {
             rowGroup = null;
