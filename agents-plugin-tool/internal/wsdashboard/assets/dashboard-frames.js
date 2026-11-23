@@ -298,7 +298,12 @@
       if (alternate !== id) virtualHydrateForTarget(alternate);
     }
     var target = null, unfoldTopic = window.WsCards && window.WsCards.unfoldTopic;
-    if (!isTopic && window.wbHistory) boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+    if (!isTopic && window.wbHistory) {
+      boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      if (!target && typeof virtualHydrateLazyTopics === "function" && virtualHydrateLazyTopics()) {
+        boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      }
+    }
     var loaded = !!target;
     // A target in history the page has not fetched yet jumps once its topic
     // arrives (a second miss starts no further wait: its fetch fills nothing).

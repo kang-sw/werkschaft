@@ -892,7 +892,6 @@ test('Phase 3 review regressions: #1 boardRendered sync, #2 bgal relayout, #3 fa
           '</div></div>' +
           '<div class="bc-folded">folded summary</div>' +
           '<div class="bc-body"><div class="tm-host">terminal body</div></div>' +
-          '<div class="bc-grip"></div>' +
         '</div>';
       const spacer = board.querySelector('.overview-spacer');
       board.insertBefore(card, spacer || null);

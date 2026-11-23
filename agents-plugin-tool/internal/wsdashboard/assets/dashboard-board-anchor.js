@@ -184,6 +184,11 @@
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || act.isContentEditable) return true;
     }
     if (sec.querySelectorAll) {
+      var tnotes = sec.querySelectorAll(".tnote[data-topic]");
+      for (var t = 0; t < tnotes.length; t++) {
+        var tn = tnotes[t];
+        if (!tn.hidden || (tn.value && String(tn.value).trim())) return true;
+      }
       var fields = sec.querySelectorAll("textarea, input[type='text'], input[type='search'], input:not([type])");
       for (var i = 0; i < fields.length; i++) {
         var f = fields[i];
@@ -237,8 +242,9 @@
     return out;
   }
 
-  function virtualRestoreOpen(sec, saved) {
+  function virtualRestoreOpen(sec, saved, opts) {
     if (!sec || !saved || !saved.length || !sec.querySelectorAll) return;
+    var stashed = !!(opts && opts.stashed);
     var head = sec.querySelector(":scope > .tophead");
     var byKey = Object.create(null), byId = Object.create(null), byIdx = Object.create(null);
     saved.forEach(function (s) {
@@ -250,10 +256,14 @@
     for (var i = 0; i < list.length; i++) {
       var d = list[i];
       if (head && head.contains(d)) continue;
+      if (stashed && d.classList && (d.classList.contains("entry-panel") || d.classList.contains("system-run"))) {
+        bodyIdx++;
+        continue;
+      }
       var k = d.getAttribute("data-key") || "", id = d.id || "";
       if (k && Object.prototype.hasOwnProperty.call(byKey, k)) d.open = !!byKey[k];
       else if (id && Object.prototype.hasOwnProperty.call(byId, id)) d.open = !!byId[id];
-      else if (!k && !id && Object.prototype.hasOwnProperty.call(byIdx, bodyIdx)) d.open = !!byIdx[bodyIdx];
+      else if (!stashed && !k && !id && Object.prototype.hasOwnProperty.call(byIdx, bodyIdx)) d.open = !!byIdx[bodyIdx];
       bodyIdx++;
     }
   }
@@ -335,10 +345,35 @@
     if (!anchorSized.bounded || virtualIsNearNode(liveSec)) return false;
     var k = topicKey(liveSec);
     if (k === null) return false;
-    virtualSyncAttrs(liveSec, incomingSec);
+    var newlyClosed = !!(liveSec.classList && !liveSec.classList.contains("closed") && incomingSec.classList && incomingSec.classList.contains("closed"));
+    var rec = virtualStore.get(k) || {
+      children: null, scrollTop: 0, history: null, answers: null, frameH: null, openDetails: null, stashed: null
+    };
+    if (newlyClosed) {
+      if (typeof forgetOpen === "function") {
+        forgetOpen(liveSec);
+        forgetOpen(incomingSec);
+        if (rec.stashed) forgetOpen(rec.stashed);
+        if (rec.children) {
+          for (var fi = 0; fi < rec.children.length; fi++) {
+            if (rec.children[fi] && rec.children[fi].nodeType === 1) forgetOpen(rec.children[fi]);
+          }
+        }
+      }
+      rec.openDetails = null;
+    }
     var oldHead = liveSec.querySelector && liveSec.querySelector(":scope > .tophead");
+    var headAnswers = oldHead && typeof readAnswers === "function" ? readAnswers(oldHead) : null;
+    virtualSyncAttrs(liveSec, incomingSec);
     var newHead = incomingSec.querySelector && incomingSec.querySelector(":scope > .tophead");
-    if (oldHead && newHead) liveSec.replaceChild(newHead.cloneNode(true), oldHead);
+    if (oldHead && newHead) {
+      liveSec.replaceChild(newHead.cloneNode(true), oldHead);
+      if (headAnswers && Object.keys(headAnswers).length) {
+        if (typeof writeAnswers === "function") writeAnswers(liveSec, headAnswers);
+        if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
+        if (window.wbForm) window.wbForm();
+      }
+    }
     // Refresh any kept open-ask child without mounting heavy body parts.
     Array.prototype.slice.call(liveSec.childNodes || []).forEach(function (c) {
       if (c !== liveSec.querySelector(":scope > .tophead")) liveSec.removeChild(c);
@@ -347,13 +382,17 @@
       if (c !== newHead && virtualHasAskItem(c)) liveSec.appendChild(c.cloneNode(true));
     });
     if (typeof fmtTimes === "function") fmtTimes(liveSec);
-    var rec = virtualStore.get(k) || {
-      children: null, scrollTop: 0, history: null, answers: null, frameH: null, openDetails: null, stashed: null
-    };
     rec.stashed = incomingSec.cloneNode(true);
     rec.children = null;
     virtualStore.set(k, rec);
     return true;
+  }
+
+  function virtualTakeCollapsed(k) {
+    if (k === null || k === undefined) return null;
+    var rec = virtualStore.get(k) || null;
+    virtualStore.delete(k);
+    return rec;
   }
 
   function virtualDropCollapsed(k) {
@@ -383,8 +422,8 @@
       }
       if (typeof watchBoard === "function") watchBoard(sec);
       if (typeof bandBoard === "function") bandBoard(sec);
+      virtualRestoreOpen(sec, rec.openDetails, { stashed: true });
       if (typeof restoreOpen === "function") restoreOpen(sec);
-      virtualRestoreOpen(sec, rec.openDetails);
       if (typeof fmtTimes === "function") fmtTimes(sec);
       if (typeof sweepOutImgs === "function") sweepOutImgs(sec);
       if (rec.frameH && typeof setFrameHeights === "function") setFrameHeights(sec, rec.frameH);
@@ -394,6 +433,7 @@
       if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
       if (typeof indexFrames === "function") indexFrames();
       if (window.wbForm) window.wbForm();
+      if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
       if (typeof mermaid === "function") mermaid([sec]);
       if (typeof applySent === "function") applySent(true);
     } else if (rec.children) {
@@ -409,10 +449,34 @@
   }
 
   function virtualNodeContainsId(node, id) {
-    if (!node || node.nodeType !== 1) return false;
-    if (node.id === id) return true;
+    if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
+    if (node.nodeType === 1 && node.id === id) return true;
     var esc = window.CSS && window.CSS.escape ? window.CSS.escape(id) : String(id).replace(/["\\]/g, "\\$&");
-    return !!(node.querySelector && node.querySelector("#" + esc));
+    if (node.querySelector && node.querySelector("#" + esc)) return true;
+    if (node.querySelectorAll) {
+      var tpls = node.querySelectorAll("template");
+      for (var i = 0; i < tpls.length; i++) {
+        if (tpls[i].content && virtualNodeContainsId(tpls[i].content, id)) return true;
+      }
+    }
+    return false;
+  }
+
+  function virtualNodeHasLazyGap(node) {
+    if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
+    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy], template[data-history-topic]")) return true;
+    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy], template[data-history-topic]"));
+  }
+
+  function virtualFindTopic(key) {
+    if (key === null || key === undefined) return null;
+    var board = typeof region === "function" ? region("board") : null;
+    if (board && board.querySelector) {
+      var esc = window.CSS && window.CSS.escape ? window.CSS.escape(String(key)) : String(key).replace(/["\\]/g, "\\$&");
+      var found = board.querySelector('section.topic[data-topic="' + esc + '"]');
+      if (found) return found;
+    }
+    return anchorNode("t:" + key);
   }
 
   function virtualHydrateForTarget(id) {
@@ -433,8 +497,26 @@
       }
     });
     if (foundKey === null) return false;
-    var sec = anchorNode("t:" + foundKey);
+    var sec = virtualFindTopic(foundKey);
     return sec ? virtualHydrate(sec, { immediate: true }) : false;
+  }
+
+  function virtualHydrateLazyTopics() {
+    var keys = [];
+    virtualStore.forEach(function (rec, k) {
+      if (rec.stashed && virtualNodeHasLazyGap(rec.stashed)) { keys.push(k); return; }
+      if (rec.children) {
+        for (var i = 0; i < rec.children.length; i++) {
+          if (virtualNodeHasLazyGap(rec.children[i])) { keys.push(k); return; }
+        }
+      }
+    });
+    var hydrated = false;
+    for (var j = 0; j < keys.length; j++) {
+      var sec = virtualFindTopic(keys[j]);
+      if (sec && virtualHydrate(sec, { immediate: true })) hydrated = true;
+    }
+    return hydrated;
   }
 
   function virtualReconcile(opts) {
@@ -453,9 +535,24 @@
     if (plan.skip) return false;
     var changed = false;
     var present = new Set();
+    var board = typeof region === "function" ? region("board") : null;
+    if (board && board.querySelectorAll) {
+      var allBoardTopics = board.querySelectorAll("section.topic[data-topic]");
+      for (var bi = 0; bi < allBoardTopics.length; bi++) {
+        var btk = topicKey(allBoardTopics[bi]);
+        if (btk !== null) present.add(btk);
+      }
+    }
     for (var i = 0; i < list.length; i++) {
       var tk = topicKey(list[i]);
       if (tk !== null) present.add(tk);
+    }
+    if (doc.querySelectorAll) {
+      var stageTopics = doc.querySelectorAll(".overview-preview-stage > section.topic[data-topic]");
+      for (var si = 0; si < stageTopics.length; si++) {
+        var stk = topicKey(stageTopics[si]);
+        if (stk !== null) present.add(stk);
+      }
     }
     // Hydrate newly near or newly exempt topics first, then collapse far ones.
     for (var h = 0; h < plan.actions.length; h++) {
@@ -475,7 +572,7 @@
       if (pk !== null) present.add(pk);
       if (virtualHydrate(livePreview, { immediate: true })) changed = true;
     }
-    // Prune store entries for topics no longer on the board.
+    // Prune store entries for topics no longer on the board (never state-filtered or hidden ones).
     Array.from(virtualStore.keys()).forEach(function (k) {
       if (!present.has(k)) virtualStore.delete(k);
     });
@@ -1060,7 +1157,11 @@
       cancelGlide: anchorCancelGlide,
       wheel: anchorWheelCtrl,
       onFrameWheel: anchorOnFrameWheel,
-      settle: function () { anchorSettle(null); if (typeof virtualReconcile === "function") virtualReconcile(); if (typeof boardDialSync === "function") boardDialSync(); },
+      settle: function (opts) {
+        anchorSettle(null);
+        if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile();
+        if (typeof boardDialSync === "function") boardDialSync();
+      },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
       hydrate: typeof virtualHydrate === "function" ? virtualHydrate : null,
       reconcile: typeof virtualReconcile === "function" ? virtualReconcile : null,

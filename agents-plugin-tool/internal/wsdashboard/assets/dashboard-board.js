@@ -121,16 +121,26 @@
       if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
       ins.forEach(bandBoard);
       ins.forEach(function (n) {
+        var taken = n && n.__wbVirtualTaken || null;
+        if (taken) delete n.__wbVirtualTaken;
         // Materialize the reader's older pages before restoring disclosures
         // and frame heights, including immutable panel versions off the tail.
-        if (window.wbHistory) { window.wbHistory.init(n); window.wbHistory.restore(n, history); }
+        if (window.wbHistory) {
+          window.wbHistory.init(n);
+          window.wbHistory.restore(n, history);
+          if (taken && taken.history) window.wbHistory.restore(n, taken.history);
+        }
         watchBoard(n);
+        if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
         restoreOpen(n);
         fmtTimes(n);
         sweepOutImgs(n);
+        if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
         setFrameHeights(n, frameH);
         mountFrames(n);
+        if (taken && taken.answers) writeAnswers(n, taken.answers);
         writeAnswers(n, answers);
+        if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
         // A placeholder a swap brought (the viewport bands mount it later)
         // takes the mark too, and its frame takes it once mounted.
         q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
@@ -599,12 +609,24 @@
       // server folds a closed topic's body and settled rows under the same
       // keys an open topic uses, so the user's earlier choices for them are
       // forgotten here, and later toggles are kept again.
-      if (live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed")) { forgetOpen(live[key]); forgetOpen(n); }
+      var newlyClosed = !!(live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed"));
+      if (newlyClosed) { forgetOpen(live[key]); forgetOpen(n); }
       if (live[key] && boardSeen[key] === h) { want.push(live[key]); delete live[key]; }
       else if (live[key] && live[key].hasAttribute("data-wb-virtual") && !window.WsCards.isDocked(live[key]) && typeof virtualStashUpdate === "function" && virtualStashUpdate(live[key], n)) {
         want.push(live[key]); delete live[key];
       } else {
-        if (live[key] && live[key].hasAttribute("data-wb-virtual") && typeof virtualDropCollapsed === "function") virtualDropCollapsed(k);
+        if (live[key] && live[key].hasAttribute("data-wb-virtual")) {
+          var taken = typeof virtualTakeCollapsed === "function" ? virtualTakeCollapsed(k) : null;
+          if (!taken && typeof virtualDropCollapsed === "function") virtualDropCollapsed(k);
+          if (taken) {
+            if (newlyClosed) {
+              taken.openDetails = null;
+              if (taken.stashed) forgetOpen(taken.stashed);
+              if (taken.children) taken.children.forEach(function (c) { if (c && c.nodeType === 1) forgetOpen(c); });
+            }
+            n.__wbVirtualTaken = taken;
+          }
+        }
         // A docked topic's live section wraps its body (cards.js wrap): the
         // incoming one takes the same wrapper first, so the graft's paths
         // match and its body frame stays live.

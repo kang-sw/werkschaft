@@ -392,8 +392,8 @@ test('counts: board updates read nothing outside the current card', () => {
   const inCur = n => w.node('t:T20').contains(n);
   assert.ok(w.C.d.rendered.every(inCur) && w.C.d.keep.every(inCur), 'the swap captures only the current card inner scroller (rendered/keep: ' + w.C.d.rendered.length + '/' + w.C.d.keep.length + ')');
   row('(a) content, non-current');
-  // (b) size-only changes of non-current cards above and below: late frame heights and the last-card observer
-  const last = w.node('c:preview'); w.c.anchorLastCard = last;
+  // (b) size-only changes of non-current cards above and below: late frame heights
+  const last = w.node('c:preview');
   [frame('t:T05'), frame('t:T35'), frame('t:T01')].forEach(f => w.c.queueFrameHeight(f, 300));
   assert.equal(w.g.raf.length, 1, 'one frame callback for the batch');
   w.g.raf.shift()();

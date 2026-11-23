@@ -102,10 +102,11 @@ function buildTopicHtml(i, opts = {}) {
       </div>
     </div>
   </div></div>`;
-  const lines = Array.from({ length: 10 }, (_, j) =>
+  const lines = Array.from({ length: opts.tall ? 40 : 10 }, (_, j) =>
     `<div class="log-line">Topic ${i} line ${j + 1} (${rev})</div>`
   ).join('');
-  return `<section class="topic" id="topic-${i}" data-topic="topic-${i}" data-th="${rev}" data-state="${st}" data-open-asks="false">
+  const cls = opts.closed ? 'topic closed' : 'topic';
+  return `<section class="${cls}" id="topic-${i}" data-topic="topic-${i}" data-th="${rev}" data-state="${st}" data-open-asks="false">
     <div class="tophead">
       <div class="tbar">
         <span class="tdot"></span>
@@ -113,6 +114,7 @@ function buildTopicHtml(i, opts = {}) {
         <span class="tstate">${st}</span>
       </div>
       <div class="tsub"><div class="trecap"><span class="rat">L04:20 · just now — </span><div class="rtext">${bodyNote}</div></div></div>
+      <textarea class="tnote" data-topic="topic-${i}" hidden></textarea>
     </div>
     ${frameBlock}
     ${historyBlock}
@@ -140,7 +142,7 @@ function buildFixtureHtml(opts = {}) {
   const sprite = readAsset(WSW, 'sprite.svg');
   const topics = [];
   for (let i = 1; i <= topicCount; i++) {
-    topics.push(buildTopicHtml(i, { withPty: i === 17 }));
+    topics.push(buildTopicHtml(i, { withPty: i === 17, tall: i === 13 }));
   }
 
   return `<!doctype html>
@@ -297,9 +299,51 @@ function buildBootstrapScript(opts = {}) {
       function tlCount() {}
       function labelEditing() { return false; }
       function editing() { return false; }
-      function bindCapsuleNotes() {}
-      function readAnswers() { return {}; }
-      function writeAnswers() {}
+      var openState = Object.create(null);
+      window.__p4Counters = { bindCapsuleNotes: 0, forgetOpen: 0 };
+      function bindCapsuleNotes() { window.__p4Counters.bindCapsuleNotes++; }
+      function forgetOpen(el) {
+        if (!el || !el.querySelectorAll) return;
+        window.__p4Counters.forgetOpen++;
+        q("details[data-key]", el).forEach(function (d) { delete openState[d.getAttribute("data-key")]; });
+      }
+      function restoreOpen(el) {
+        if (!el || !el.querySelectorAll) return;
+        q("details[data-key]", el).forEach(function (d) {
+          var dk = d.getAttribute("data-key");
+          if (Object.prototype.hasOwnProperty.call(openState, dk)) d.open = !!openState[dk];
+        });
+      }
+      doc.addEventListener("toggle", function (e) {
+        var d = e.target;
+        if (d && d.tagName === "DETAILS" && d.hasAttribute("data-key")) openState[d.getAttribute("data-key")] = !!d.open;
+      }, true);
+      function readAnswers(el) {
+        var out = {};
+        if (!el || !el.querySelectorAll) return out;
+        q(".tnote[data-topic]", el).forEach(function (note) {
+          if (note.value || !note.hidden) out["t:" + note.getAttribute("data-topic")] = { note: note.value, noteOpen: !note.hidden };
+        });
+        q("textarea.note[data-id]", el).forEach(function (note) {
+          if (note.value) out[note.getAttribute("data-id")] = { note: note.value, noteOpen: !note.hidden };
+        });
+        return out;
+      }
+      function writeAnswers(el, saved) {
+        if (!el || !saved || !el.querySelectorAll) return;
+        q(".tnote[data-topic]", el).forEach(function (note) {
+          var s = saved["t:" + note.getAttribute("data-topic")];
+          if (!s) return;
+          note.value = s.note || "";
+          if (s.noteOpen) note.hidden = false;
+        });
+        q("textarea.note[data-id]", el).forEach(function (note) {
+          var s = saved[note.getAttribute("data-id")];
+          if (!s) return;
+          note.value = s.note || "";
+          if (s.noteOpen) note.hidden = false;
+        });
+      }
       function boardKeep() { return { h: { apply: function () {} }, scroller: function () { return $("bcol"); } }; }
       function boardRecordPending() {}
       function boardPendingBadge() {}
@@ -332,6 +376,7 @@ function buildBootstrapScript(opts = {}) {
           return function () {};
         },
         init: function () {},
+        prepare: function () {},
         capture: function (box) {
           var hs = Array.prototype.slice.call((box || doc).querySelectorAll('.wb-history[data-history]'));
           return hs.map(function (h) {
@@ -360,15 +405,34 @@ function buildBootstrapScript(opts = {}) {
               var node = t.content.firstElementChild;
               if (node) liveBox.insertBefore(node, firstRow || null);
             });
-            var foldMap = new Map(saved.folds || []);
-            Array.prototype.forEach.call(h.querySelectorAll('details[data-key]'), function (d) {
-              var dk = d.getAttribute('data-key');
-              if (foldMap.has(dk)) d.open = !!foldMap.get(dk);
-            });
+            if (!box || !box.classList || !box.classList.contains('closed')) {
+              var foldMap = new Map(saved.folds || []);
+              Array.prototype.forEach.call(h.querySelectorAll('details[data-key]'), function (d) {
+                var dk = d.getAttribute('data-key');
+                if (foldMap.has(dk)) d.open = !!foldMap.get(dk);
+              });
+            }
           });
         },
         place: function () {},
-        loadTarget: function () { return null; },
+        loadTarget: function (box, id) {
+          var live = box && box.querySelector && box.querySelector('#' + id);
+          if (live) return live;
+          var tpls = Array.prototype.slice.call((box || doc).querySelectorAll('template[data-history-gap]'));
+          for (var i = 0; i < tpls.length; i++) {
+            var tpl = tpls[i];
+            if (tpl.content && tpl.content.querySelector && tpl.content.querySelector('#' + id)) {
+              var fragNode = tpl.content.cloneNode(true);
+              var gap = tpl.closest('.history-gap') || tpl.parentNode;
+              if (gap && gap.parentNode) {
+                gap.parentNode.insertBefore(fragNode, gap);
+                gap.remove();
+              }
+              return box.querySelector('#' + id);
+            }
+          }
+          return null;
+        },
         keep: function () { return { apply: function () {}, end: function () {}, visible: function () { return true; }, scroller: $("bcol") }; },
         rendered: function () { return true; }
       };
@@ -437,6 +501,8 @@ function buildBootstrapScript(opts = {}) {
       bandBoard(region("board"));
       mountFrames(region("board"));
       window.__p4SwapBoard = function (hash, html) { swap("board", hash, html, true); };
+      window.__p4BoardJump = function (id) { return boardJump(id); };
+      window.__p4SetOpenState = function (k, v) { openState[k] = !!v; };
     })();`,
   ].join('\n');
 }
@@ -788,6 +854,268 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
     if (SHOTS_DIR) {
       await page.screenshot({ path: path.join(SHOTS_DIR, '04-bcard-exempt-unpinned-widget-light.png') });
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, tnote draft, close forgetOpen, template/filtered jump, Quick Look click no-thrash, bindCapsuleNotes', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1760, height: 960 }, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', err => pageErrors.push(String(err && err.stack || err)));
+    await page.setContent(buildFixtureHtml({ theme: 'dark', topicCount: 18 }), { waitUntil: 'domcontentloaded' });
+    await page.addScriptTag({ content: buildBootstrapScript() });
+    await waitFrames(page, 8);
+    assert.deepEqual(pageErrors, [], 'no uncaught page errors');
+
+    // Move to topic-1 so topic-12..16 are far & collapsed
+    await page.evaluate(() => { window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false }); });
+    await waitFrames(page, 6);
+
+    // (a) Toggling state filter while far topics are collapsed + clearing filter must NOT wipe bodies
+    const filterResult = await page.evaluate(() => {
+      const t14 = document.getElementById('topic-14');
+      const collapsedBefore = t14.hasAttribute('data-wb-virtual');
+      t14.setAttribute('data-state-filtered', '');
+      window.WsBoardAnchor.reconcile();
+      const stillStored = window.WsBoardVirtual.collapsedCount() > 0;
+      t14.removeAttribute('data-state-filtered');
+      window.WsBoardAnchor.select(t14, { smooth: false });
+      return {
+        collapsedBefore,
+        stillStored,
+        collapsedAfter: t14.hasAttribute('data-wb-virtual'),
+        hasBodyAfter: !!t14.querySelector('.tbody'),
+        lineCount: t14.querySelectorAll('.log-line').length,
+      };
+    });
+    assert.equal(filterResult.collapsedBefore, true);
+    assert.equal(filterResult.stillStored, true);
+    assert.equal(filterResult.collapsedAfter, false, '(a) state-filtered collapsed topic hydrates cleanly when unfiltered');
+    assert.equal(filterResult.hasBodyAfter, true, '(a) state-filtered collapsed topic body was NOT wiped blank');
+    assert.equal(filterResult.lineCount, 10);
+
+    // Move back to topic-1
+    await page.evaluate(() => { window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false }); });
+    await waitFrames(page, 6);
+
+    // (b) Non-stashed SSE update to a collapsed topic (when virtualStashUpdate returns false, e.g.
+    //     active slot moved near during deferred dial scrub before reconcile) preserves history,
+    //     openDetails, and scrollTop via virtualTakeCollapsed; AND stashed hydration calls bindCapsuleNotes (g).
+    await page.evaluate(() => {
+      const t13 = document.getElementById('topic-13');
+      window.WsBoardAnchor.select(t13, { smooth: false });
+      const liveBox = t13.querySelector('.history-live');
+      const extra = document.createElement('div');
+      extra.className = 'timeline-row';
+      extra.setAttribute('data-row', 't13-nonstashed-loaded');
+      extra.innerHTML = '<div class="wb-entry" id="e1399">Non-stashed loaded row</div>';
+      liveBox.insertBefore(extra, liveBox.firstElementChild);
+      t13.querySelector('details.entry-panel').open = true;
+      window.__p4SetOpenState('panel-13', true);
+      t13.scrollTop = 48;
+      // Move away so topic-13 and topic-10 collapse
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
+    });
+    await waitFrames(page, 4);
+
+    // Start a dial scrub to topic-12 so topic-13 is now within ±2 (virtualIsNearNode === true)
+    // while still collapsed (dialScrubbing defers virtualReconcile) -> forces non-stashed branch!
+    const nonStashedHtml = Array.from({ length: 18 }, (_, idx) => {
+      const i = idx + 1;
+      return buildTopicHtml(i, {
+        withPty: i === 17,
+        tall: i === 13,
+        rev: i === 13 ? 'rev-13-nonstash-v2' : i === 10 ? 'rev-10-stashed-v2' : `rev-${i}-v1`,
+        bodyNote: i === 13 ? 'Non-stashed SSE v2 body' : i === 10 ? 'Stashed SSE v2 body' : undefined,
+      });
+    }).join('\n');
+
+    // Drag from dot 0 down to dot 12 and hold pointerdown so dialScrubbing === true at slot 12
+    const dot0Box = await page.locator('.d-board-dial-dot').first().boundingBox();
+    const dot12Box = await page.locator('.d-board-dial-dot').nth(12).boundingBox();
+    await page.mouse.move(dot0Box.x + dot0Box.width / 2, dot0Box.y + dot0Box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dot12Box.x + dot12Box.width / 2, dot12Box.y + dot12Box.height / 2, { steps: 6 });
+    await waitFrames(page, 2);
+
+    const nonStashedCheck = await page.evaluate((html) => {
+      const t13Before = document.getElementById('topic-13');
+      const wasCollapsed = t13Before.hasAttribute('data-wb-virtual');
+      const wasNear = window.WsBoardVirtual.isNear(t13Before);
+      // Swap while scrubbing: t13 is collapsed AND near -> virtualStashUpdate returns false -> non-stashed branch!
+      window.__p4SwapBoard('h-nonstash', html);
+      const t13After = document.getElementById('topic-13');
+      return {
+        wasCollapsed,
+        wasNear,
+        replacedNode: t13After !== t13Before,
+        collapsedAfter: t13After.hasAttribute('data-wb-virtual'),
+        hasLoadedRow: !!t13After.querySelector('[data-row="t13-nonstashed-loaded"]'),
+        detailOpen: !!t13After.querySelector('details.entry-panel')?.open,
+        scrollTop: t13After.scrollTop,
+        rev: t13After.getAttribute('data-th'),
+      };
+    }, nonStashedHtml);
+    await page.mouse.up();
+    await waitFrames(page, 4);
+
+    assert.equal(nonStashedCheck.wasCollapsed, true);
+    assert.equal(nonStashedCheck.wasNear, true, '(b) topic-13 was near while collapsed during scrub');
+    assert.equal(nonStashedCheck.replacedNode, true, '(b) morphBoard took the non-stashed replacement branch');
+    assert.equal(nonStashedCheck.collapsedAfter, false);
+    assert.equal(nonStashedCheck.hasLoadedRow, true, '(b) loaded history row preserved on non-stashed SSE replacement');
+    assert.equal(nonStashedCheck.detailOpen, true, '(b) details[open] preserved on non-stashed SSE replacement');
+    assert.ok(nonStashedCheck.scrollTop >= 40, '(b) scrollTop preserved on non-stashed SSE replacement');
+    assert.equal(nonStashedCheck.rev, 'rev-13-nonstash-v2');
+
+    // (g) Verify bindCapsuleNotes is invoked on stashed hydration (topic-10 was far during swap, now jump to it)
+    const capsuleCheck = await page.evaluate(() => {
+      // Ensure topic-10 gets a stashed update while far from topic-1
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
+      return document.getElementById('topic-10').hasAttribute('data-wb-virtual');
+    });
+    assert.equal(capsuleCheck, true);
+    const stashedHtml10 = Array.from({ length: 18 }, (_, idx) => {
+      const i = idx + 1;
+      return buildTopicHtml(i, {
+        withPty: i === 17,
+        rev: i === 10 ? 'rev-10-stashed-v3' : `rev-${i}-v1`,
+      });
+    }).join('\n');
+    const capsuleCount = await page.evaluate((html) => {
+      const before = window.__p4Counters.bindCapsuleNotes;
+      window.__p4SwapBoard('h-stash-10', html);
+      window.WsBoardAnchor.select(document.getElementById('topic-10'), { smooth: false });
+      return window.__p4Counters.bindCapsuleNotes - before;
+    }, stashedHtml10);
+    assert.ok(capsuleCount >= 1, '(g) bindCapsuleNotes invoked on stashed hydration');
+
+    // (c) .tnote draft in .tophead exempts topic from collapse and survives SSE update
+    const tnoteCheck = await page.evaluate(() => {
+      const t11 = document.getElementById('topic-11');
+      window.WsBoardAnchor.select(t11, { smooth: false });
+      const tn = t11.querySelector('textarea.tnote[data-topic="topic-11"]');
+      tn.hidden = false;
+      tn.value = 'Draft topic note must survive';
+      // Move far away to topic-1
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
+      return {
+        exemptFromCollapse: !t11.hasAttribute('data-wb-virtual'),
+        draftIntact: t11.querySelector('textarea.tnote[data-topic="topic-11"]').value === 'Draft topic note must survive',
+      };
+    });
+    assert.equal(tnoteCheck.exemptFromCollapse, true, '(c) open/non-empty .tnote in .tophead exempts topic from collapse');
+    assert.equal(tnoteCheck.draftIntact, true, '(c) .tnote draft preserved across far scroll');
+
+    // (d) Open -> closed topic SSE stash + hydrate respects forgetOpen()
+    await page.evaluate(() => {
+      const t16 = document.getElementById('topic-16');
+      window.WsBoardAnchor.select(t16, { smooth: false });
+      t16.querySelector('details.entry-panel').open = true;
+      window.__p4SetOpenState('panel-16', true);
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
+    });
+    await waitFrames(page, 4);
+    const closedHtml = Array.from({ length: 18 }, (_, idx) => {
+      const i = idx + 1;
+      return buildTopicHtml(i, {
+        withPty: i === 17,
+        closed: i === 16,
+        rev: i === 16 ? 'rev-16-closed' : `rev-${i}-v1`,
+      });
+    }).join('\n');
+    const closeCheck = await page.evaluate((html) => {
+      const t16 = document.getElementById('topic-16');
+      const collapsedBefore = t16.hasAttribute('data-wb-virtual');
+      const forgetBefore = window.__p4Counters.forgetOpen;
+      window.__p4SwapBoard('h-close-16', html);
+      const forgetAfter = window.__p4Counters.forgetOpen;
+      window.WsBoardAnchor.select(t16, { smooth: false });
+      return {
+        collapsedBefore,
+        forgetRan: forgetAfter > forgetBefore,
+        isClosed: t16.classList.contains('closed'),
+        detailOpen: !!t16.querySelector('details.entry-panel')?.open,
+      };
+    }, closedHtml);
+    assert.equal(closeCheck.collapsedBefore, true);
+    assert.equal(closeCheck.forgetRan, true, '(d) forgetOpen ran when collapsed topic closed on server');
+    assert.equal(closeCheck.isClosed, true);
+    assert.equal(closeCheck.detailOpen, false, '(d) newly closed topic stays folded after hydration');
+
+    // (e) boardJump targeting an element inside a collapsed <template> history gap AND a state-filtered collapsed topic
+    await page.evaluate(() => {
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
+    });
+    await waitFrames(page, 4);
+    const jumpCheck = await page.evaluate(() => {
+      const t15 = document.getElementById('topic-15');
+      const collapsedBefore = t15.hasAttribute('data-wb-virtual');
+      // e1500 lives ONLY inside <template data-history-gap="gap-15"> inside collapsed topic-15!
+      t15.setAttribute('data-state-filtered', '');
+      const landed = window.__p4BoardJump('e1500');
+      t15.removeAttribute('data-state-filtered');
+      return {
+        collapsedBefore,
+        landedId: landed ? landed.id : null,
+        t15Hydrated: !t15.hasAttribute('data-wb-virtual'),
+      };
+    });
+    assert.equal(jumpCheck.collapsedBefore, true);
+    assert.equal(jumpCheck.landedId, 'e1500', '(e) boardJump hydrated collapsed state-filtered topic and materialized <template> gap target');
+    assert.equal(jumpCheck.t15Hydrated, true);
+
+    // (f) Wide Overview Quick Look click-commit of a far topic does 0 collapse/re-hydrate thrash
+    await page.evaluate(() => {
+      window.WsBoardAnchor.select(document.getElementById('topic-2'), { smooth: false });
+    });
+    await waitFrames(page, 6);
+    await page.evaluate(() => { window.WsOverview.toggle(); });
+    await page.waitForFunction(() => document.documentElement.hasAttribute('data-overview-preview'));
+    await page.evaluate(() => { document.getElementById('topic-15').scrollIntoView({ block: 'center' }); });
+    await waitFrames(page, 2);
+    const t15Box = await page.locator('#topic-15').boundingBox();
+    const hx = t15Box.x + Math.min(60, t15Box.width / 2);
+    const hy = t15Box.y + Math.min(20, t15Box.height / 2);
+    await page.mouse.move(hx - 10, hy);
+    await page.mouse.move(hx, hy, { steps: 3 });
+    await page.waitForFunction(() => document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic') === 'topic-15');
+    await waitFrames(page, 4);
+
+    // Stamp identity on the live previewed .tbody and iframe.doc-frame, then click placeholder to commit exit!
+    const preStamp = await page.evaluate(() => {
+      const live = document.querySelector('.overview-preview-stage > section.topic[data-topic="topic-15"]');
+      live.querySelector('.tbody').__noThrashBody = 'same-body-node';
+      const f = live.querySelector('iframe.doc-frame');
+      if (f) f.__noThrashFrame = 'same-iframe-node';
+      return { hasFrameBefore: !!f };
+    });
+    assert.equal(preStamp.hasFrameBefore, true, '(f) previewed topic-15 had mounted iframe.doc-frame before click');
+    await page.locator('.overview-placeholder[data-overview-target-topic="topic-15"]').click();
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-overview'));
+    await waitFrames(page, 6);
+
+    const noThrash = await page.evaluate(() => {
+      const t15 = document.getElementById('topic-15');
+      const f = t15.querySelector('iframe.doc-frame');
+      return {
+        isCurrent: t15.hasAttribute('data-current'),
+        collapsed: t15.hasAttribute('data-wb-virtual'),
+        sameBody: t15.querySelector('.tbody')?.__noThrashBody === 'same-body-node',
+        hasFrameAfter: !!f,
+        sameFrame: !!(f && f.__noThrashFrame === 'same-iframe-node'),
+      };
+    });
+    assert.equal(noThrash.isCurrent, true, '(f) clicked Quick Look topic became current Hero Panel');
+    assert.equal(noThrash.collapsed, false, '(f) clicked Quick Look topic stayed hydrated');
+    assert.equal(noThrash.sameBody, true, '(f) 0 collapse/re-hydrate thrash: exact .tbody DOM node preserved');
+    assert.equal(noThrash.sameFrame, true, '(f) 0 collapse/re-hydrate thrash: exact iframe.doc-frame node preserved: ' + JSON.stringify(noThrash));
+
+    assert.deepEqual(pageErrors, [], 'no uncaught page errors across all review regression checks');
   } finally {
     await browser.close();
   }
