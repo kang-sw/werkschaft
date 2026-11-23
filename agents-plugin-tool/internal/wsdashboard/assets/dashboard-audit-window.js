@@ -99,12 +99,134 @@
     return '<span class="au-red" title="' + auEsc(wsT("js.audit.redacted.title", rule || "secret", length || 0)) + '">\ud83d\udd12 ' + auEsc(rule || "secret") + " \u00b7 " + auEsc(String(length || 0)) + "B" + auEsc(extra) + "</span>";
   }
 
+  // POSIX classes RE2 accepts inside a bracket expression, spelled as JS class
+  // members. A negated [:^name:] has no member form, so it is refused.
+  var AU_POSIX = {
+    alnum: "0-9A-Za-z", alpha: "A-Za-z", ascii: "\\x00-\\x7F", blank: " \\t",
+    cntrl: "\\x00-\\x1F\\x7F", digit: "0-9", graph: "!-~", lower: "a-z", print: " -~",
+    punct: "!-\\/:-@\\[-`{-~", space: "\\t\\n\\v\\f\\r ", upper: "A-Z", word: "0-9A-Za-z_",
+    xdigit: "0-9A-Fa-f"
+  };
+
+  // Translates the RE2 syntax the server compiles into a JS RegExp source, or
+  // returns null for a construct JS cannot reproduce (the inspector then
+  // highlights nothing rather than something the server did not match).
+  // Handled: leading (?imsU) flags, (?P<name>, \A \z, \Q..\E, \pX, \x{H},
+  // \a, ASCII \s, a "." that excludes only \n, and POSIX classes. Refused:
+  // (?U), flags after the pattern start, \C, [[:^name:]], and anything the
+  // browser's RegExp rejects.
+  function auTranslateRe2(q, caseSensitive) {
+    var i = 0, n = q.length, on = { i: !caseSensitive, m: false, s: false }, m;
+    for (;;) {
+      m = /^\(\?([imsU]*)(?:-([imsU]*))?\)/.exec(q.slice(i));
+      if (!m || (!m[1] && !m[2])) break;
+      if (/U/.test(m[1]) || /U/.test(m[2] || "")) return null;
+      for (var a = 0; a < m[1].length; a++) on[m[1][a]] = true;
+      for (var b = 0, neg = m[2] || ""; b < neg.length; b++) on[neg[b]] = false;
+      i += m[0].length;
+    }
+    var out = "", needU = false;
+    function lit(c) { return /[\\^$.*+?()[\]{}|\/]/.test(c) ? "\\" + c : c; }
+    function prop(ch, name) {
+      needU = true;
+      return "\\" + ch + "{" + name + "}";
+    }
+    // Reads an escape at q[i] === "\\"; inClass selects the member spelling.
+    function esc(inClass) {
+      var c = q.charAt(i + 1);
+      if (!c) return null;
+      i += 2;
+      if (c === "p" || c === "P") {
+        if (q.charAt(i) === "{") {
+          var close = q.indexOf("}", i);
+          if (close < 0) return null;
+          var nm = q.slice(i + 1, close);
+          i = close + 1;
+          return prop(c, nm);
+        }
+        var one = q.charAt(i++);
+        return one ? prop(c, one) : null;
+      }
+      if (c === "x" && q.charAt(i) === "{") {
+        var cl = q.indexOf("}", i);
+        if (cl < 0) return null;
+        var hex = q.slice(i + 1, cl);
+        i = cl + 1;
+        needU = true;
+        return "\\u{" + hex + "}";
+      }
+      if (c === "a") return "\\x07";
+      if (c === "C") return null;
+      if (c === "s") return inClass ? "\\t\\n\\f\\r " : "[\\t\\n\\f\\r ]";
+      if (c === "S") return inClass ? null : "[^\\t\\n\\f\\r ]";
+      if (!inClass && c === "A") return on.m ? "(?<![\\s\\S])" : "^";
+      if (!inClass && c === "z") return on.m ? "(?![\\s\\S])" : "$";
+      if (!inClass && c === "Q") {
+        var e = q.indexOf("\\E", i), lq = e < 0 ? q.slice(i) : q.slice(i, e), r = "";
+        i = e < 0 ? n : e + 2;
+        for (var k = 0; k < lq.length; k++) r += lit(lq[k]);
+        return r;
+      }
+      return "\\" + c;
+    }
+    while (i < n) {
+      var ch = q.charAt(i), piece;
+      if (ch === "\\") {
+        piece = esc(false);
+        if (piece == null) return null;
+        out += piece;
+      } else if (ch === "[") {
+        out += "[";
+        i++;
+        if (q.charAt(i) === "^") { out += "^"; i++; }
+        if (q.charAt(i) === "]") { out += "\\]"; i++; }
+        for (;;) {
+          if (i >= n) return null;
+          var cc = q.charAt(i);
+          if (cc === "]") { out += "]"; i++; break; }
+          if (cc === "[" && q.charAt(i + 1) === ":") {
+            var end = q.indexOf(":]", i + 2);
+            if (end >= 0) {
+              var cls = q.slice(i + 2, end);
+              if (!Object.prototype.hasOwnProperty.call(AU_POSIX, cls)) return null;
+              out += AU_POSIX[cls];
+              i = end + 2;
+              continue;
+            }
+          }
+          if (cc === "\\") {
+            piece = esc(true);
+            if (piece == null) return null;
+            out += piece;
+            continue;
+          }
+          out += cc === "[" ? "\\[" : cc;
+          i++;
+        }
+      } else if (ch === "(" && q.charAt(i + 1) === "?") {
+        if (q.slice(i, i + 4) === "(?P<") { out += "(?<"; i += 4; }
+        else if (q.slice(i, i + 3) === "(?:") { out += "(?:"; i += 3; }
+        else if (q.charAt(i + 2) === "<" && q.charAt(i + 3) !== "=" && q.charAt(i + 3) !== "!") { out += "(?<"; i += 3; }
+        else return null; // flags after the pattern start, or a form RE2 lacks
+      } else if (ch === ".") {
+        out += on.s ? "[\\s\\S]" : "[^\\n]";
+        i++;
+      } else {
+        out += ch;
+        i++;
+      }
+    }
+    return { source: out, flags: "g" + (on.i ? "i" : "") + (on.m ? "m" : "") + (needU ? "u" : "") };
+  }
+
   function auBuildSearchMatcher(query, regex, caseSensitive) {
     if (!query) return null;
     var q = String(query);
     if (regex) {
+      var tr = auTranslateRe2(q, !!caseSensitive);
+      if (!tr) return null;
       try {
-        return { regex: new RegExp(q, caseSensitive ? "g" : "gi") };
+        return { regex: new RegExp(tr.source, tr.flags) };
       } catch (e) {
         return null;
       }
@@ -113,7 +235,9 @@
   }
 
   // Applies highlight matches AND literal redacted markers onto a plain line slice.
-  function auRenderLineText(text, lineStartByte, lineRedactions, queryMatcher, matchState) {
+  // seamChar is the char index of the stored head/tail seam inside text, or -1: a
+  // match may not span it, as the server refuses a match across the omitted middle.
+  function auRenderLineText(text, lineStartByte, lineRedactions, queryMatcher, matchState, seamChar) {
     // 1. Replace stored "***" redactions whose byte offset falls inside this line,
     // and any inline ⟦REDACTED:rule:len⟧ markers if present.
     var segments = [];
@@ -124,14 +248,14 @@
         var r = sorted[i];
         if (r.localChar < pos || r.localChar >= text.length) continue;
         if (text.slice(r.localChar, r.localChar + 3) === "***") {
-          if (r.localChar > pos) segments.push({ type: "text", value: text.slice(pos, r.localChar) });
+          if (r.localChar > pos) segments.push({ type: "text", value: text.slice(pos, r.localChar), off: pos });
           segments.push({ type: "red", rule: r.rule, length: r.length, count: r.count });
           pos = r.localChar + 3;
         }
       }
-      if (pos < text.length) segments.push({ type: "text", value: text.slice(pos) });
+      if (pos < text.length) segments.push({ type: "text", value: text.slice(pos), off: pos });
     } else {
-      segments.push({ type: "text", value: text });
+      segments.push({ type: "text", value: text, off: 0 });
     }
     // Expand inline ⟦REDACTED:kind:len⟧ tokens if emitted directly.
     var expanded = [];
@@ -142,11 +266,11 @@
       var last = 0, m;
       litRe.lastIndex = 0;
       while ((m = litRe.exec(seg.value)) !== null) {
-        if (m.index > last) expanded.push({ type: "text", value: seg.value.slice(last, m.index) });
+        if (m.index > last) expanded.push({ type: "text", value: seg.value.slice(last, m.index), off: seg.off + last });
         expanded.push({ type: "red", rule: m[1], length: Number(m[2]), count: 1 });
         last = m.index + m[0].length;
       }
-      if (last < seg.value.length) expanded.push({ type: "text", value: seg.value.slice(last) });
+      if (last < seg.value.length) expanded.push({ type: "text", value: seg.value.slice(last), off: seg.off + last });
     }
     var html = "";
     for (var e = 0; e < expanded.length; e++) {
@@ -156,6 +280,8 @@
         continue;
       }
       var val = part.value;
+      // The seam position inside this piece; a match must not contain it.
+      var seamAt = seamChar >= 0 && seamChar > part.off && seamChar < part.off + val.length ? seamChar - part.off : -1;
       var matcher = typeof queryMatcher === "string"
         ? (queryMatcher ? { needle: queryMatcher, caseSensitive: false } : null)
         : queryMatcher;
@@ -171,6 +297,7 @@
             continue;
           }
           var mStart = m.index, mEnd = mStart + m[0].length;
+          if (seamAt >= 0 && mStart < seamAt && mEnd > seamAt) { re.lastIndex = mStart + 1; continue; }
           if (mStart > rcursor) html += auEsc(val.slice(rcursor, mStart));
           var isCurR = matchState.total === matchState.activeIndex;
           html += '<mark class="au-hit' + (isCurR ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(m[0]) + "</mark>";
@@ -184,6 +311,12 @@
       var needle = matcher.needle;
       var cursor = 0, idx;
       while ((idx = hay.indexOf(needle, cursor)) >= 0) {
+        if (seamAt >= 0 && idx < seamAt && idx + needle.length > seamAt) {
+          // Spans the omitted middle: not a match; look again just after it.
+          if (idx + 1 > cursor) html += auEsc(val.slice(cursor, idx + 1));
+          cursor = idx + 1;
+          continue;
+        }
         if (idx > cursor) html += auEsc(val.slice(cursor, idx));
         var isCur = matchState.total === matchState.activeIndex;
         html += '<mark class="au-hit' + (isCur ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(val.slice(idx, idx + needle.length)) + "</mark>";
@@ -227,7 +360,7 @@
     return { head: head, tail: tail, omitted: omitted };
   }
 
-  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, queryMatcher, matchState, gap) {
+  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, queryMatcher, matchState, gap, seamByte) {
     var html = gap && gap.line === 0 ? gap.html : "", seenDrawn = false;
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i], no = startLineNo + i;
@@ -244,7 +377,8 @@
         }
       }
       var unseen = wholeUnseen || (seenLocalByte != null && seenLocalByte >= 0 && ln.startByte >= seenLocalByte);
-      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, queryMatcher, matchState);
+      var seamChar = seamByte != null && seamByte > ln.startByte && seamByte < ln.endByte ? auUtf8ByteToCharIndex(ln.text, seamByte - ln.startByte) : -1;
+      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, queryMatcher, matchState, seamChar);
       var isTarget = matchState && matchState.targetLine === no;
       html += '<div class="au-line' + (unseen ? " au-unseen" : "") + (isTarget ? " au-ln-target" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
       if (gap && gap.line === no) html += gap.html;
@@ -291,8 +425,9 @@
 
     outHtml += '<div class="au-code' + (opts.wrap ? " au-wrap" : "") + '">';
     if (storedTrunc && typeof storedTrunc.head_bytes === "number") {
-      // Match and number the concatenation exactly as the server does, including
-      // a line spanning the stored head/tail seam. Keep the gap as a separate row.
+      // Number the concatenation exactly as the server does, including a line
+      // spanning the stored head/tail seam, but never match across that seam.
+      // Keep the gap as a separate row.
       var lines = auSplitLinesWithBytes(body, 0);
       var hb = storedTrunc.head_bytes;
       var seam = auUtf8ByteToCharIndex(body, hb);
@@ -302,7 +437,7 @@
       }));
       var omitted = Math.max(0, (storedTrunc.original_bytes || 0) - hb - (storedTrunc.tail_bytes || 0));
       var gap = '<div class="au-trunc-row"><span>' + auEsc(wsT("js.audit.stored.trunc", auFmtBytes(omitted))) + "</span>" + (modelSeen && seenBound === hb ? '<span class="au-seencut-badge">' + auEsc(wsT("js.audit.seen.cut")) + "</span>" : "") + "</div>";
-      outHtml += auRenderLinesBlock(lines, 1, combinedReds, modelSeen ? seenBound : null, !modelSeen, queryMatcher, matchState, { line: gapLine, html: gap });
+      outHtml += auRenderLinesBlock(lines, 1, combinedReds, modelSeen ? seenBound : null, !modelSeen, queryMatcher, matchState, { line: gapLine, html: gap }, hb);
       if (!lines.length && hb !== 0) outHtml += gap;
     } else {
       var lines = auSplitLinesWithBytes(body, 0);

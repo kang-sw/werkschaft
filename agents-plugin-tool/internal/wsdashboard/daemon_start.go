@@ -115,6 +115,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		proxy:           opts.Proxy,
 		openSystem:      opts.openSystem,
 		hostFiles:       opts.hostFiles,
+		auditRead:       opts.auditRead,
 		browseRoots:     opts.browseRoots,
 		worktrees:       opts.Worktrees,
 		sizes:           newSizeCache(),

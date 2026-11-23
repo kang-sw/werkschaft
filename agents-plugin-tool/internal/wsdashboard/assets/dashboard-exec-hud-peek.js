@@ -77,7 +77,7 @@
     var same = xhPk.open && xhPk.id === id;
     xhPk.open = true;
     xhPk.id = id;
-    if (origin) xhPk.origin = origin;
+    xhPk.origin = origin || "";
     if (!same) { xhPk.confirm = ""; xhPk.follow = true; xhPk.pending = 0; }
     xhHideTip();
     xhPk.sig = "";

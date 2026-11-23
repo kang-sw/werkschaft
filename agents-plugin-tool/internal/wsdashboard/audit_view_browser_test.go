@@ -37,7 +37,10 @@ func TestAuditViewBrowser(t *testing.T) {
 	}
 	t.Setenv("WS_MCP_DASHBOARD_DEV_SOURCE", "")
 
-	f := startPageFixture(t, func(o *DaemonOptions) { o.Home = os.Getenv("HOME") })
+	// The reader is handed over before the daemon serves; its events are set later,
+	// under its own lock, so no request races an assignment to the daemon.
+	fx := &fixtureAudit{}
+	f := startPageFixture(t, func(o *DaemonOptions) { o.Home, o.auditRead = os.Getenv("HOME"), fx })
 
 	// Populate RingTools entries: one ID'd rich group and one legacy fallback.
 	ringDir := wslive.RingDir(SessionDir(f.dir, "livesession"))
@@ -100,7 +103,6 @@ func TestAuditViewBrowser(t *testing.T) {
 	longLine := "ok line needle here in paged output " + strings.Repeat("x", 16300) + "\n"
 	largeOut := strings.Repeat(longLine, 530) // >8 MiB to trigger auditBodyMax range/load-more with ~530 lines
 
-	fx := &fixtureAudit{}
 	fx.set("livesession", wsauditstore.View{
 		Events: []wsaudit.Envelope{
 			{
@@ -183,7 +185,6 @@ func TestAuditViewBrowser(t *testing.T) {
 			},
 		},
 	})
-	f.d.auditRead = fx
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

@@ -178,6 +178,9 @@ type DaemonOptions struct {
 	// handle, for the tests that pin which regions a stream sends.
 	gitRead    func(root string) GitBadge
 	noGitBadge bool
+	// auditRead replaces the audit store for the audit query, set before the
+	// daemon serves so a test's reader needs no later, unsynchronized write.
+	auditRead auditViewer
 	// refreshInterval replaces sseRefreshInterval, so a test drives the
 	// refresh tick; zero is sseRefreshInterval.
 	refreshInterval time.Duration

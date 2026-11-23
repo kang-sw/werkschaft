@@ -422,7 +422,9 @@
       return;
     }
 
-    if (!state.hits.length) {
+    // A page can be empty yet carry a cursor: the server spends its scan budget
+    // before it finds a hit. Only an exhausted cursor is "No matches".
+    if (!state.hits.length && !state.next) {
       statEl.textContent = state.staleNotice ? t("js.audit.csearch.err.stale") + " · " + t("js.audit.csearch.empty") : t("js.audit.csearch.empty");
       if (state.staleNotice) statEl.classList.add("au-sstat-warn");
       colBtn.hidden = true;
@@ -447,11 +449,12 @@
       statEl.textContent = countText;
     }
 
-    colBtn.hidden = false;
+    var noHitsYet = !state.hits.length;
+    colBtn.hidden = noHitsYet;
     colBtn.textContent = t(state.collapsed ? "js.audit.csearch.toggle.show" : "js.audit.csearch.toggle.hide");
     colBtn.setAttribute("aria-expanded", state.collapsed ? "false" : "true");
-    hitsEl.hidden = state.collapsed;
-    hdEl.setAttribute("data-empty", state.collapsed ? "true" : "false");
+    hitsEl.hidden = state.collapsed || noHitsYet;
+    hdEl.setAttribute("data-empty", state.collapsed || noHitsYet ? "true" : "false");
 
     var html = "";
     var inLbl = t("js.audit.csearch.field.in");
@@ -475,7 +478,7 @@
     }
     hitsEl.innerHTML = html;
 
-    var hasMore = !!(state.next && !state.collapsed);
+    var hasMore = !!(state.next && (!state.collapsed || noHitsYet));
     footEl.hidden = !hasMore;
     if (moreBtn) moreBtn.disabled = state.loadingMore;
   }
@@ -773,7 +776,7 @@
       renderHitList();
     });
     retryBtn.addEventListener("click", function () {
-      if (state.hits.length && state.next) {
+      if (state.next) {
         executeSearch({ append: true, cursor: state.next });
       } else {
         executeSearch({ append: false });

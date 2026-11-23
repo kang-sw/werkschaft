@@ -37,7 +37,10 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 	}
 	t.Setenv("WS_MCP_DASHBOARD_DEV_SOURCE", "")
 
-	f := startPageFixture(t, func(o *DaemonOptions) { o.Home = os.Getenv("HOME") })
+	// The reader is handed over before the daemon serves; its events are set later,
+	// under its own lock, so no request races an assignment to the daemon.
+	fx := &fixtureAudit{}
+	f := startPageFixture(t, func(o *DaemonOptions) { o.Home, o.auditRead = os.Getenv("HOME"), fx })
 	ringDir := wslive.RingDir(SessionDir(f.dir, "livesession"))
 
 	tBeforeAll := time.Now().UTC().Add(-2 * time.Second)
@@ -104,7 +107,6 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 
 	f.change(t, "livesession", f.project, "live board text", 5)
 
-	fx := &fixtureAudit{}
 	fx.set("livesession", wsauditstore.View{
 		Events: []wsaudit.Envelope{
 			{
@@ -170,7 +172,6 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 			},
 		},
 	})
-	f.d.auditRead = fx
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

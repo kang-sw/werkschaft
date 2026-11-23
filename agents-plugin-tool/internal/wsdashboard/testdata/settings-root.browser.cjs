@@ -215,6 +215,14 @@ const [base, emptyBase] = process.argv.slice(2);
       // keeps the canonical value (44d01be77).
       const textarea = fresh.locator('#ctext'), box = fresh.locator(editor);
       await box.waitFor();
+      // The audit controls survive denied storage: obtaining localStorage throws, yet the
+      // filter bar is built and a kind chip still toggles in memory.
+      const auChip = fresh.locator('.au-bar .au-fchip').first();
+      await auChip.waitFor({ state: 'attached' });
+      const auBefore = await auChip.getAttribute('aria-pressed');
+      await auChip.evaluate(el => el.click());
+      assert.notEqual(await auChip.getAttribute('aria-pressed'), auBefore, failure + ': an audit kind chip toggles with storage unavailable');
+      await auChip.evaluate(el => el.click());
       await box.fill('Actual send-key mode');
       await box.press('Enter');
       assert.equal(await textarea.inputValue(), 'Actual send-key mode\n');

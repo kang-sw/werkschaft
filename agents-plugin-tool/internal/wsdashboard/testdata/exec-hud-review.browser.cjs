@@ -324,6 +324,39 @@ async function run(browser, { lang, scheme }) {
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 
+  // FOCUS-MORE (sweep Important 5): the peek tracks the trigger of every open. A visible chip opened and
+  // closed, then +N opened while that chip is still drawn: Escape returns the keyboard to +N, not the old chip.
+  await sect('FOCUS-MORE', async () => {
+    const many = Array.from({ length: 6 }, (_, i) => J('exec_m' + i, 'job number ' + i + ' --watch', { started_at: Date.now() - (60 - i) * 1000 }));
+    await setJobs(many);
+    await fakeBadges(view, { ib: true, sub: '3' });
+    let both = false;
+    for (const w of [1100, 900, 760, 640, 560, 520, 460]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await sleep(350);
+      both = await view.evaluate(() => !![...document.querySelectorAll('.xgroup .xchip[data-xid]')].filter(n => n.getClientRects().length).length && !![...document.querySelectorAll('.xgroup .xmore')].filter(n => n.getClientRects().length).length);
+      if (both) break;
+    }
+    assert.ok(both, 'FOCUS-MORE: a visible chip and +N are drawn together at some width');
+    const chipId = await view.evaluate(() => { const c = [...document.querySelectorAll('.xgroup .xchip[data-xid]')].filter(n => n.getClientRects().length)[0]; c.focus(); return c.getAttribute('data-xid'); });
+    await page.keyboard.press('Enter');
+    await view.waitForSelector('.xpeek:not([hidden]) .xout');
+    await page.keyboard.press('Escape');
+    await view.waitForSelector('.xpeek', { state: 'hidden' });
+    assert.equal(await view.evaluate(() => document.activeElement.getAttribute('data-xid')), chipId, 'FOCUS-MORE: the first close returns to the chip that opened it');
+    await view.evaluate(() => [...document.querySelectorAll('.xgroup .xmore')].filter(n => n.getClientRects().length)[0].focus());
+    await page.keyboard.press('Enter');
+    await view.waitForSelector('.xpeek:not([hidden]) .xout');
+    await snap(page, view, 'hud-more-open-' + tag);
+    await page.keyboard.press('Escape');
+    await view.waitForSelector('.xpeek', { state: 'hidden' });
+    fi = await view.evaluate(() => { const a = document.activeElement; return { more: !!(a && a.classList.contains('xmore')), id: a && a.getAttribute('data-xid') }; });
+    assert.equal(fi.more, true, 'FOCUS-MORE: Escape from a peek opened by +N returns focus to +N, not the earlier chip: ' + JSON.stringify(fi));
+    await snap(page, view, 'hud-more-closed-' + tag);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await sleep(300);
+  });
+
   // I6: an ended job is dismissed by keyboard from the panel when only the aggregate is drawn.
   await sect('I6', async () => {
     await page.setViewportSize({ width: 320, height: 900 });
