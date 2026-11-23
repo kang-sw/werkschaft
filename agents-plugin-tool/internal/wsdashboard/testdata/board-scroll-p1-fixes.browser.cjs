@@ -531,7 +531,14 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       ep.setAttribute('data-max', '');
       t4.appendChild(ep);
       const t4ContainMax = getComputedStyle(t4).contain;
+      const epRect = ep.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
       ep.remove();
+      // Verify terminal/web .bc-body preserves overflow: hidden inside #bcol
+      const origKind = card.getAttribute('data-kind');
+      card.setAttribute('data-kind', 'web');
+      const webBodyOverflow = getComputedStyle(body).overflowY;
+      if (origKind === null) card.removeAttribute('data-kind'); else card.setAttribute('data-kind', origKind);
       document.documentElement.setAttribute('data-overview', '');
       const ovSnap = getComputedStyle(bcol).scrollSnapType;
       const ovContain = getComputedStyle(t4).contain;
@@ -545,6 +552,9 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         cardScrollMarginTop: getComputedStyle(card).scrollMarginTop,
         t4Contain: getComputedStyle(t4).contain,
         t4ContainMax,
+        epRect: { top: epRect.top, left: epRect.left, width: epRect.width, height: epRect.height },
+        vw, vh,
+        webBodyOverflow,
         ovSnap,
         ovContain,
         cardSnap: getComputedStyle(card).scrollSnapAlign,
@@ -560,6 +570,11 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.equal(snapDeck.t1ScrollMarginTop, '26px', 'slot 1 aligns scroll-margin-top to padTop + 24px (26px)');
     assert.equal(snapDeck.t4Contain, 'strict', 'normal topic uses contain: strict');
     assert.equal(snapDeck.t4ContainMax, 'none', 'entry-panel[data-max] lifts contain: strict');
+    assert.ok(Math.abs(snapDeck.epRect.top - 52) <= 1 && Math.abs(snapDeck.epRect.left - 16) <= 1 &&
+      Math.abs(snapDeck.epRect.width - (snapDeck.vw - 32)) <= 2 && Math.abs(snapDeck.epRect.height - (snapDeck.vh - 64)) <= 2 &&
+      snapDeck.epRect.height > snapDeck.usable + 50,
+      `entry-panel[data-max] fills viewport unclipped by #bcol / contain: strict: ${JSON.stringify(snapDeck.epRect)} vs ${snapDeck.vw}x${snapDeck.vh}`);
+    assert.equal(snapDeck.webBodyOverflow, 'hidden', 'web .bcard .bc-body preserves overflow: hidden inside #bcol');
     assert.equal(snapDeck.ovSnap, 'none', 'overview lifts scroll-snap-type');
     assert.equal(snapDeck.ovContain, 'none', 'overview lifts containment');
     assert.equal(snapDeck.cardSnap, 'start', '.bcard snaps to start');

@@ -1141,11 +1141,13 @@
         else if (reach(homeScr, dy)) {
           var anchor = window.WsBoardAnchor, list = anchor && anchor.cards ? anchor.cards() : [];
           var last = list.length ? list[list.length - 1] : null;
-          var more = board && board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not(.filtered-out)");
-          var colRect = homeScr.getBoundingClientRect();
-          if (more && more.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS) can = true;
-          else if (last && (!panel || panel === last) && last.getBoundingClientRect().bottom <= colRect.bottom + G.C.EPS) can = false;
-          else can = true;
+          if (!last || (panel && panel !== last)) can = true;
+          else {
+            var more = board && board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])");
+            var colRect = homeScr.getBoundingClientRect();
+            if (more && more.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS) can = true;
+            else can = last.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS;
+          }
         }
       }
     } else {

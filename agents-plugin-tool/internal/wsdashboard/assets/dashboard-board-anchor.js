@@ -14,7 +14,7 @@
   var ANCHOR_BOT_MARGIN = 8;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
-  var anchorCap0 = null, anchorCap1 = null;
+  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null;
   var anchorProg = null, anchorProgSeq = 0;
   function anchorCapH(n) { return n ? ANCHOR_PAD + n * (ANCHOR_CAP + ANCHOR_GAP) : 0; }
   function anchorToolbarFace() {
@@ -157,21 +157,29 @@
   // key is retained across insertion and reorder (the browser's anchoring
   // holds its place), the saved or first card is taken when none is current,
   // and a card that left the order hands over to a neighbour.
-  // Only the first two rail-bearing slots carry explicit cap offsets; slot 2+
-  // use the CSS default (padTop + 44px) so non-current updates touch no DOM.
+  // Only slot 0 and the first two rail-bearing slots carry explicit cap
+  // offsets; rail slot 2+ use the CSS default (padTop + 44px) so non-current
+  // updates touch no DOM. When slot 0 is a non-rail .bcard, the first railed
+  // slot carries "rail0" (padTop + 0px) instead of falling through to 44px.
   function anchorSlotCaps(list) {
-    var cards = list || anchorCards(), next0 = null, next1 = null, seen = 0;
+    var cards = list || anchorCards(), next0 = null, nextR0 = null, next1 = null, seen = 0;
     for (var i = 0; i < cards.length; i++) {
       var c = cards[i], rail = c.hasAttribute("data-topic") || c.hasAttribute("data-rail");
-      if (!next0 && (!rail || seen === 0)) next0 = c;
-      else if (!next1 && rail && seen === 1) { next1 = c; break; }
+      if (i === 0) next0 = c;
+      else if (rail && seen === 0) nextR0 = c;
+      else if (rail && seen === 1) { next1 = c; break; }
       if (rail) seen++;
     }
-    if (anchorCap0 && anchorCap0 !== next0 && anchorCap0 !== next1) anchorCap0.removeAttribute("data-anchor-cap");
-    if (anchorCap1 && anchorCap1 !== next0 && anchorCap1 !== next1) anchorCap1.removeAttribute("data-anchor-cap");
+    var prev = [anchorCap0, anchorCapR0, anchorCap1];
+    for (var j = 0; j < prev.length; j++) {
+      var p = prev[j];
+      if (p && p !== next0 && p !== nextR0 && p !== next1) p.removeAttribute("data-anchor-cap");
+    }
     if (next0 && (!next0.getAttribute || next0.getAttribute("data-anchor-cap") !== "0")) next0.setAttribute("data-anchor-cap", "0");
+    if (nextR0 && (!nextR0.getAttribute || nextR0.getAttribute("data-anchor-cap") !== "rail0")) nextR0.setAttribute("data-anchor-cap", "rail0");
     if (next1 && (!next1.getAttribute || next1.getAttribute("data-anchor-cap") !== "1")) next1.setAttribute("data-anchor-cap", "1");
     anchorCap0 = next0;
+    anchorCapR0 = nextR0;
     anchorCap1 = next1;
   }
   function anchorSettle(before) {

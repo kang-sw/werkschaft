@@ -218,8 +218,10 @@ test('no wheel trap, no overscroll-behavior contain, capsule-only scroll-margin-
   assert.doesNotMatch(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior:\s*contain/);
   assert.match(cssSrc, /scroll-snap-type:\s*y\s+mandatory/);
   assert.match(cssSrc, /\[data-anchor-cap="0"\][^}]*scroll-margin-top:\s*160px/);
+  assert.match(cssSrc, /\[data-anchor-cap="rail0"\][^}]*scroll-margin-top:\s*var\(--board-pad-top,\s*2px\)/);
   assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*24px\)/);
   assert.match(cssSrc, /scroll-margin-top:\s*calc\(var\(--board-pad-top,\s*2px\)\s*\+\s*44px\)/);
+  assert.doesNotMatch(cssSrc, /\.bcard\[data-card\]:not\(\[data-max\]\)\s*>\s*\.bc-in\s*>\s*\.bc-body\s*\{[^}]*overflow\s*:/);
   assert.doesNotMatch(cssSrc, /scroll-margin-top:[^;]*(?:--board-toolbar|--wb-rail-inset)/);
   assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
@@ -440,4 +442,21 @@ test('boardKeep without a current card keeps the main box first child; with one 
   w.C.reset(); w.select('t:B');
   w.c.boardKeep();
   assert.ok(w.C.d.keep.length === 1 && w.node('t:B').contains(w.C.d.keep[0]), 'only the current card inside the main board');
+});
+
+test('anchorSlotCaps stamps rail0 on first railed card when slot 0 is a non-rail .bcard', () => {
+  const w = world([Cd('u1'), T('A'), T('B'), T('C')]);
+  w.c.anchorSettle(null);
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-cap'), '0');
+  assert.equal(w.node('t:A').getAttribute('data-anchor-cap'), 'rail0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-cap'), '1');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-cap'), null);
+  // Removing non-rail slot 0 promotes t:A to slot 0 and clears stale caps cleanly.
+  const u1 = w.node('c:u1');
+  u1.remove();
+  w.c.anchorSettle(null);
+  assert.equal(u1.getAttribute('data-anchor-cap'), null);
+  assert.equal(w.node('t:A').getAttribute('data-anchor-cap'), '0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-cap'), '1');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-cap'), null);
 });

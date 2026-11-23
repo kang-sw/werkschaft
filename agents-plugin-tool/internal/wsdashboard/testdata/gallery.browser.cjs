@@ -1005,6 +1005,66 @@ async function routeTerminal(context) {
       await context.close();
     }
 
+    // ---- Phase 3 (narrow 1400): OWN widget as last panel in ⌂ + overflow: hidden ----
+    {
+      const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, locale: 'en-US', reducedMotion: 'no-preference' });
+      await routeTerminal(context);
+      await seed(context, 'livesession', { cards: [], topics: [{ n: 'alpha', p: 1, a: 0, b: 0 }] });
+      const { tab, page, errors } = await open(context, 'livesession');
+      await until(async () => JSON.stringify(await pages(page)) === '[["alpha"]]', 'one docked page (OWN last)');
+      await until(() => page.evaluate(() => !!document.querySelector('#r-board .bcard[data-kind="terminal"] .tm-host .xterm')), 'terminal card mounted in #r-board', 15000);
+      await page.evaluate(helpers3);
+      if (await pos(page) !== -1) await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'Page 0 (OWN last)');
+      // Place the terminal .bcard as the last panel in #r-board (with no trailing closed-more) and verify overflow: hidden on terminal/web .bc-body.
+      const ownSetup = await page.evaluate(() => {
+        const board = document.getElementById('r-board');
+        const term = board.querySelector('.bcard[data-kind="terminal"]');
+        const more = board.querySelector('button.closed-more');
+        if (more) { more.hidden = true; board.insertBefore(term, more); } else board.appendChild(term);
+        term.removeAttribute('data-anchor-cap');
+        const body = term.querySelector(':scope > .bc-in > .bc-body');
+        const termOverflow = getComputedStyle(body).overflowY;
+        term.setAttribute('data-kind', 'web');
+        const webOverflow = getComputedStyle(body).overflowY;
+        term.setAttribute('data-kind', 'terminal');
+        window.WsBoardAnchor.select(term, { smooth: false });
+        const cards = window.WsBoardAnchor.cards();
+        return { isLast: cards[cards.length - 1] === term, termOverflow, webOverflow };
+      });
+      assert.equal(ownSetup.isLast, true, 'terminal .bcard is the last visible panel in ⌂');
+      assert.equal(ownSetup.termOverflow, 'hidden', 'terminal .bc-body preserves overflow: hidden inside #bcol');
+      assert.equal(ownSetup.webOverflow, 'hidden', 'web .bc-body preserves overflow: hidden inside #bcol');
+      await page.evaluate(() => window.__gal.frames());
+      await sleep(G_INERTIA + 80);
+      const off = async () => { const b = await tab.locator('iframe.sframe.on').boundingBox(); return { x: b.x, y: b.y }; };
+      const wheel = async (at, dy, n = 1, gap = 0) => { await tab.mouse.move(at.x, at.y); for (let i = 0; i < n; i++) { if (i && gap) await sleep(gap); await tab.mouse.wheel(0, dy); } await page.evaluate(() => window.__gal.frames()); };
+      const pill = () => page.evaluate(() => window.__gal3.pill());
+      const boxCenter = async sel => {
+        const o = await off();
+        const r = await page.evaluate(s => { const el = document.querySelector(s); const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }, sel);
+        return { x: o.x + r.x, y: o.y + r.y };
+      };
+      // (a) Wheel inside OWN widget body stays native: does NOT charge Gate or flip to Page 1.
+      const bodyAt = await boxCenter('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-body');
+      await wheel(bodyAt, 125, 5, 35);
+      assert.equal(await pill(), null, 'wheel inside OWN terminal body does not charge Gate');
+      assert.equal(await pos(page), -1, 'wheel inside OWN terminal body stays on Page 0');
+      // (b) Wheel on its header (.bc-hd) cleanly flips to Pinned Page 1.
+      await sleep(G_INERTIA + 80);
+      const hdAt = await boxCenter('#r-board .bcard[data-kind="terminal"] > .bc-in > .bc-hd');
+      await wheel(hdAt, 100, 4, 30);
+      assert.equal(await pos(page), 0, 'wheel on OWN terminal header (.bc-hd) flips to Pinned Page 1');
+      // Return to ⌂ and verify clicking .gal-rail dot flips cleanly to Pinned Page 1.
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'returned to ⌂ from Page 1');
+      await dot(page, 0).click();
+      await until(async () => await pos(page) === 0, 'clicking .gal-rail dot flips from ⌂ to Pinned Page 1');
+      done.push('narrow Page 0 OWN last panel: body wheel native, header wheel & rail dot flip to Page 1, overflow: hidden preserved');
+      assert.deepEqual(errors, [], 'no page errors (OWN last panel)');
+      await context.close();
+    }
+
     // ---- Phase 3 (wide 2560): a docked explorer's list is the scroller ----
     // The gate reads the nearest scrolling ancestor of the wheel's target
     // within the pane, not the card's body: the explorer's own list scrolls
