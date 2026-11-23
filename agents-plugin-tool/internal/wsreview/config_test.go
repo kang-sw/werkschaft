@@ -78,6 +78,18 @@ func TestParseCheckpointConfigOverridesAndPartialDefaults(t *testing.T) {
 		wantExcl   []string
 	}{
 		{
+			name:       "empty section stops at immediate heading",
+			content:    "## Checkpoint Nudge\n## Deep Review\nmerges: 1\nlines: 2\nstaleness: 3 commits\nexclude: dist/**\n",
+			wantMerges: defaultMergesThreshold,
+			wantLines:  defaultLinesThreshold,
+		},
+		{
+			name:       "empty section with blank line stops at heading",
+			content:    "## Checkpoint Nudge\r\n\r\n# Other\r\nmerges: 1\r\n",
+			wantMerges: defaultMergesThreshold,
+			wantLines:  defaultLinesThreshold,
+		},
+		{
 			name: "both metric thresholds and repeated excludes",
 			content: "# Review: example\r\n\r\n## Checkpoint Nudge\r\n" +
 				"merges: 25\r\n" +
