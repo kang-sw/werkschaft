@@ -7,17 +7,20 @@ blocked-by:
   - 261117-feat-ws-exec-tools#phase2
   - 261119-feat-ws-audit-capture-harness-adapters#phase1
 related:
+  261118-refactor-ws-harness-name-branches: "prerequisite: supplies the registration policy seam the runner extends"
   261122-feat-ws-provider-auth-layer: "prerequisite for Phase 1 (OpenRouter key) and Phase 2 (SIWC); the harness obtains credentials only through it"
-  261122-feat-ws-web-tools: "web capability attached to this harness only"
+  261122-feat-ws-web-tools: "the SIWC search attachment follows its Phase 1; Pi retires on its own schedule"
   261117-feat-ws-exec-tools: "prerequisite: Phase 2 supplies the live-job report hold and worktree-release protection the harness's shell relies on"
-  261119-feat-ws-audit-capture-harness-adapters: "prerequisite: Phase 1 supplies the capture tap this harness's own adapter writes to; its Pi adapter (Phase 4) still lands while Pi runs"
+  261119-feat-ws-audit-capture-harness-adapters: "prerequisite: Phase 1 supplies the capture tap; the Pi retirement ticket owns dropping the Pi adapter phase"
   261117-feat-ws-harness-capability-catalog: "the catalog this harness fills completely"
   261114-feat-ws-live-reasoning-summary: "provider reasoning summaries reach the dashboard through the common event contract instead of the Pi extension transport"
-  261123-chore-ws-retire-pi-harness: "retires Pi independently of this ticket (Decision 1) and carries the pi.* to werk.* redirect (Decision 9)"
+  261121-refactor-ws-daemon-metadata-sqlite: "owns the shared record authority cutover; keep werk recovery behind the runner persistence seam"
+  261122-feat-werkschaft-tray-notifications-full-quit: "Full Quit counts and stops in-daemon werk sessions under the same contract"
+  261123-chore-ws-retire-pi-harness: "its Phase 1 owns the pi.* to werk.* redirect on the harness integration track (Decisions 1 and 9)"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-completeness-reviewed: 0ed6148db7f53fc6
-sage-review-design-reviewed: 0ed6148db7f53fc6
+sage-review-completeness-reviewed: cca7a6b1be82a939
+sage-review-design-reviewed: cca7a6b1be82a939
 ---
 
 # Builtin Go agent harness
@@ -48,9 +51,10 @@ Verified evidence (read-only audits on develop `b2e3b900e`, 2026-11-22):
   reference.
 - Common-layer branches that still name Claude/Codex/agy (lead prompt
   composition and HTTP MCP admission in `runner_process.go`, permission
-  mapping, worker availability, compaction wording, playbook terminology) are
-  the scope of `261118-refactor-ws-harness-name-branches` Phases 2-4; a new
-  backend cannot plug in without them, hence `blocked-by`.
+  mapping, worker availability, compaction wording, playbook terminology) were
+  the scope of `261118-refactor-ws-harness-name-branches` Phases 2-4, now
+  completed (`ai-docs/tickets/.done/261118-refactor-ws-harness-name-branches.md`,
+  Resolution); the prerequisite is present on this branch.
 - OpenRouter's `POST /api/v1/responses` is OpenAI-Responses-compatible and
   stateless (re-send history; `store: true` and `previous_response_id`
   rejected); streamed `function_call` items with
@@ -105,8 +109,9 @@ gathered for it (read-only, 2026-11-23):
    ticket: `261123-chore-ws-retire-pi-harness` removes Pi independently of
    these phases (owner: "요즘 pi 아예 안 쓰기도 합니다"). Work that ran on Pi
    moves to the Codex and Claude tiers meanwhile. Rejected: retiring Pi after
-   a parity and A/B gate (the former Phase 3); rebuilding Pi beneath the
-   common interface (`261120`); keeping Pi as a hedge.
+   a parity and A/B gate (the former Phase 3 and the parent epic's
+   retirement timing under (5002)=a, superseded by (05)=b); rebuilding
+   Pi beneath the common interface (`261120`); keeping Pi as a hedge.
 2. **The agent loop runs inside the daemon (owner (07)=b, 2026-11-23).**
    The owner's reason, verbatim: "데몬도 실행할 때 v3을 **한 번은** 긁습니다.
    근데 홀더마다 매번 바이너리를 재실행하면 매번 승인을 눌러줘야 해서, 바이너리
@@ -172,10 +177,12 @@ gathered for it (read-only, 2026-11-23):
    choice); encoding the provider in the model string (OpenRouter model IDs
    already contain `/`).
 9. **`pi.*` tier names resolve to `werk.*` (announced (5016)).** Carried out
-   by `261123-chore-ws-retire-pi-harness`, which holds the detailed rules: a
-   `pi.<tier>` call resolves to `werk.<tier>` only, runs werk's availability
-   check, and while werk is unavailable is refused with werk's actionable
-   reason instead of a silent substitute.
+   by Phase 1 of `261123-chore-ws-retire-pi-harness` on the harness
+   integration track carrying werk Phase 1. That ticket's Decision 3 owns
+   the redirect and compatibility for stored Pi values. A `pi.<tier>`
+   call resolves to `werk.<tier>` only, runs werk's availability check,
+   and gives werk's actionable reason when unavailable. Werk Phase 4
+   supplies the durable backend and has no tier redirect work.
 10. **Compatibility: T0, with werk kept out of tier routing and saved
     profiles until a minor (owner (14)=a).** Every werk addition is T0 (Phase 1
     Result). The configured-werk downgrade path of Phase 1 Edition a0b7dc391
@@ -184,8 +191,8 @@ gathered for it (read-only, 2026-11-23):
     `wsagent/profile.go` `ResolveProfiles`) is closed by refusing `werk`
     targets in the tier routing graph and `werk` as a saved custom profile's
     backend until a minor release; werk stays reachable through `werk.<tier>`
-    names and the `pi.*` redirect, so nothing an older binary reads names
-    werk. Rejected: allowing them with a minor bump at the release that ships
+    names and the `pi.*` redirect. Neither stored graph targets nor saved
+    custom profiles directly name werk. Rejected: allowing them with a minor bump at the release that ships
     werk ((14) option b). Each later phase states its tier per changed
     surface in its Result.
 11. **Harness ID `werk` (owner (5014)=b).** The ID used for tier names
@@ -215,7 +222,8 @@ gathered for it (read-only, 2026-11-23):
     (13)=ok).** The daemon assembles the summary and replaces the transcript
     itself; `ws/compact`, which the runner already grants every hosted worker
     at launch (`runner_create.go`), is the entry. The summary follows
-    `agents-plugin-pi/src/lead-compaction.ts`: the lead's prose under seven
+    `ceff96b7f:agents-plugin-pi/src/lead-compaction.ts` (Git history keeps
+    the reference after Pi retires): the lead's prose under seven
     fixed headings; deterministic sections recomputed from the full log every
     time (children in flight and finished, exec jobs, active ticket and
     playbook), never parsed back out of an earlier summary; a near-raw
@@ -234,6 +242,61 @@ gathered for it (read-only, 2026-11-23):
 16. **No A/B gate (technical (18)).** The former Phase 3 A/B gate existed to
     decide Pi's retirement, which (05)=b settled; the catalog parity
     checklist stays as Phase 6.
+17. **Schedule by phase section order (announced (41)).** The ticket
+    worker owns the earliest unfinished phase (`ticket-worker.md`).
+    Place Phase 4 ahead of Phase 2 and retain the existing phase numbers.
+18. **Correlate recovery with the admitted tool call (technical (42)).**
+    Match the provider call ID to the existing session-scoped MCP request,
+    then record filesystem recovery facts in the admitted write handler and
+    associate an exec launch with its holder-backed job. Use private
+    correlation metadata, leaving model-visible tool arguments and legacy
+    MCP calls intact. The handler observes the bytes and target that are
+    actually used before committing a file change. A caller-side preflight
+    would observe a potentially different target or contents.
+19. **Commit compaction at a quiescent boundary (technical (39)).** Keep the
+    raw append-only log searchable and use a durable checkpoint to select the
+    compacted model input. Only a finished transcript can be compacted.
+    Discarding old segments with the Phase 1 `Rotate` implementation would
+    lose the source for later summaries and drop original tool/reasoning items.
+20. **Keep route validation distinct from direct tier resolution (announced
+    (40)).** Enforce Decision 10 at stored graph target/bundle and custom
+    profile validation, including dashboard and MCP writes. An explicit
+    `werk.<size>` is resolved by `wsconfig.TierGraph.Resolve` before node
+    walking. Keep werk registered: the builtin profile, direct tier call,
+    and the Pi redirect of Decision 9 rely on registration.
+21. **Full Quit also ends durable sessions (announced (34)).** Apply the
+    Full Quit contract of `261122-feat-werkschaft-tray-notifications-full-quit`
+    (2088), (2144) and (2145) to werk. The shell's existing `GET /holders`
+    count includes each live durable session once through a compatibility
+    entry with no process identity. The authenticated `/shutdown/all`
+    operation fences new starts and wakes, ends those sessions durably,
+    and reports remaining work on failure. Plain `/shutdown`, replacement
+    and crash retain recovery state.
+22. **Keep the authoritative durable record outside legacy startup
+    (technical (35)).** Reuse the common record and storage seams with
+    werk-private state. Release 0.51.1 startup loads and rewrites
+    `agent.json` and interrupts open parented holderless records
+    (`runner_startup.go`, `runner_conv.go`, `spawn.go`). Adding a field to
+    an open legacy record would still let it settle the turn and strip
+    the field. An additive private record leaves the old scheduler with
+    nothing to settle and preserves the log and report state for re-upgrade.
+    Keep common registration/history projections and integrate record
+    access with the metadata SQLite cutover's Decision (1980).
+23. **Recover settlement by the original turn identity (technical (36)).**
+    A durable final result belongs to the same common turn and report ID
+    across replacement. Reconcile against common settlement and held-exec
+    state before publishing it; appending a second turn or queuing a second
+    report is incorrect. Keep the common callback's existing delivery
+    semantics (`spawn.go` report append/marker window).
+24. **Tie the audit cut to the committed checkpoint (technical (37)).**
+    The werk audit adapter emits the common compaction cut for a checkpoint
+    with a stable identity. The durable checkpoint supplies the identity on
+    replay, so a replacement cannot add another cut or leave a committed
+    input replacement unrepresented.
+25. **Pi retirement owns the integration edits (announced (38)).** The
+    retirement's Phase 1 carries the redirect on the track with werk Phase
+    1. The retirement ticket also owns disposition of the Pi audit
+    adapter. Both follow the confirmed independent retirement schedule.
 
 ## Constraints
 
@@ -260,35 +323,37 @@ gathered for it (read-only, 2026-11-23):
 - Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
 - Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
 - Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/config-settings-ui.md (declared for agents-plugin-tool/internal/mcp/config_registry.go, agents-plugin/config-manifest.json, agents-plugin/agy-config-manifest.json, agents-plugin/dashboard-config-manifest.json, agents-plugin-pi/config-manifest.json, agents-plugin-tool/internal/wsdashboard/config_routes.go, agents-plugin-tool/internal/wsdashboard/config_proposals.go, agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*)
 
 ## Prior Decisions
 
-- 261122-feat-ws-provider-auth-layer (2026-11-22, Decisions): "One shared layer owns provider credentials (owner (5002)=a). Consumers (the builtin harness, web tools, ...) ask it for a credential by provider ID; none reads tokens or keys on its own." — bearing: constrains
-- 261117-feat-ws-exec-tools (2026-11-22, Result): "Phase 1 keeps the tools out of `tools/list`. Advertising them is part of the Phase 2 cutover, so Codex is not prompted twice before its approval config exists." — bearing: constrains
-- 261121-bug-compaction-advisory-followups (2026-11-22, Result): "VERIFIED T0 crossing and request state are loop-owned. The Record, holder and MCP schemas are unchanged." — bearing: constrains
-- 261118-refactor-ws-harness-name-branches (2026-11-22, be7e3a76): "Phase 1 read-only audits (develop b2e3b900e) showed the remaining common-layer harness-name branches block any new backend, so the builtin harness is blocked-by 261118-refactor-ws-harness-name-branches." — bearing: constrains
-- 261117-feat-ws-harness-capability-catalog (2026-11-17, Result): "This result feeds the Pi extension retirement parity criterion; it approves no removal." — bearing: constrains
-- 261116-refactor-ws-pi-retire-native-agent-tools (2026-11-16, Decisions): "Owner (1227)=b: add a minimal builtin `explore` profile in `internal/wsagent/builtin.go` / `BuiltinProfiles`, using existing Profile fields: backend Pi; read/grep/find/ls only" — bearing: constrains
-- 261118-feat-ws-agy-tool-names-and-worker-role (2026-11-18, Decisions): "(155)=b: builtin agy tier defaults. Like Claude's builtin tiers, agy ships builtin small..xlarge mappings ... Rejected: (a) no builtin, configured by the owner like Pi." — bearing: supports
-- 261112-research-ws-ade-desktop-shell-and-rename (2026-11-12, Confirmed Decisions): "(5002)=a, owner 2026-11-22, supersedes (495)=a: the built-in agent is our own Go harness inside the single binary, with provider logins from 261122-feat-ws-provider-auth-layer; Pi is no longer bundled." — bearing: supports
+- 261118-refactor-ws-harness-name-branches (2026-11-23, Resolution): "Common code reads harness policy through the registration seam." — bearing: constrains
+- 13d5a4db (2026-11-23, commit): "T0 only: the new policy types and interfaces are in-memory and reach no Profile, Record, holder, config, history file, or MCP schema." — bearing: constrains
+- e56aef79 (2026-11-23, commit): "Tier models start empty; do not add a default (Decision 8)." — bearing: constrains
+- 27b01bbf (2026-11-23, commit): "Resume across a process restart is covered in two halves: werk.OpenStore/Agent.repairPending (loop) and werkArgs (daemon)." — bearing: supports
+- 4f6a9327 (2026-11-23, commit): "Parallel read-only ws tools are the static parallelMCP set in agent.go; extend it only with tools that never write." — bearing: constrains
+- 261112-research-ws-ade-desktop-shell-and-rename (2026-11-12, Confirmed Decisions): "(5002)=a, owner 2026-11-22, supersedes (495)=a: the built-in agent is our own Go harness" — bearing: supports
 
 ## Route Facts
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | new harness subcommand and adapter under agents-plugin-tool/, registration in agents-plugin-tool/internal/wsagent/registration.go and catalog.go, tier config and dashboard picker |
-| scope.surface | cross-module | new backend registration, config keys, agent.tiers availability, dashboard label and model picker, holder-run subcommand, Pi tier-name aliasing in Phase 3 |
-| scope.new_public_symbol | yes | harness ID werk, werk.small through werk.xlarge tier names, config keys, ws binary subcommand (no werk symbol exists yet: git grep for BackendWerk and werk.small on HEAD returned nothing) |
-| scope.new_type_contract | yes | new Backend and Process implementation (Backend.Start(ctx, StartSpec) (Process, error) at agents-plugin-tool/internal/wsagent/backend.go#L25-L29), new BackendRegistration and HarnessProfile values |
-| scope.test_surface | new-files | Phase 1 fixture tests against a fake Responses server, authority tests, holder survival; existing wsagent tests such as agy_worker_test.go and codex_worker_test.go are the pattern |
-| complexity.reuse_points | confirmed | Backend and Process seam, BackendRegistration (WorkerCapable, WorkerHTTPMCP), CatalogProfile builders (ClaudeCatalog, CodexCatalog, AgyCatalog in catalog.go), existing holder path, ws/compact lifecycle; read at backend.go and catalog.go |
-| complexity.side_effect_risk | high | new streaming loop, session persistence and holder survival across a daemon swap, and Phase 3 retires the Pi backend, extension package, and bundled payload |
-| risk.correctness | high | stateless Responses replay, reasoning-item ordering, no re-run of completed tool calls after a cut stream, tool-call/result pairs surviving compaction |
-| risk.fit | moderate | blocked-by 261118-refactor-ws-harness-name-branches (ready, Phases 2-4 unresolved) must land before a new backend can plug in; Phase 1 also depends on the provider auth layer and ws/exec cutover (both ready, unresolved) |
-| risk.test | high | needs a recorded or fake Responses server plus a live OpenRouter run and holder survival across a daemon replace; A/B gate needs owner acceptance |
-| risk.security_or_contract | high | provider credentials and bearer tokens must never be logged, write-authority enforcement per tool, Pi retirement compatibility tiers and pi.* tier-name aliasing |
+| scope.span | multi-file | Phase 4 changes agents-plugin-tool/internal/werk/, internal/wsagent/werk.go and runner lifecycle, internal/mcp/server_exec_cutover.go, and tier configuration |
+| scope.surface | cross-module | Phase 4 adds daemon fs.edit/fs.write admission and a durable in-daemon process kind; integrates Full Quit, compaction audit, and the optional tier provider |
+| scope.new_public_symbol | yes | fs.edit and fs.write are new MCP tool names; BackendWerk and werk tier names already exist in agents-plugin-tool/internal/wsagent/werk.go |
+| scope.new_type_contract | yes | Phase 4 durable process kind must rejoin by log replay rather than holder attachment; current WerkBackend.Start requires spec.Holder (agents-plugin-tool/internal/wsagent/werk.go) |
+| scope.test_surface | existing | agents-plugin-tool/internal/werk/agent_test.go, filetools_test.go, store_test.go, mcpclient_test.go; internal/wsagent/werk_test.go; internal/mcp/server_fs_test.go cover seams Phase 4 extends |
+| complexity.reuse_points | confirmed | Read existing werk Responses client, log store, MCP client, Files authority checks, WerkBackend.Start holder seam, Backend.Start contract and LifecyclePolicy.ExecReadTools admission |
+| complexity.side_effect_risk | high | Moving a live loop into daemon goroutines changes crash isolation and replacement recovery; mutating fs calls require durable intents and hash verdicts |
+| risk.correctness | high | Phase 4 resends interrupted model requests, rejoins exec jobs, classifies interrupted writes without repeating mutations, and compacts worker transcripts |
+| risk.fit | moderate | Phase 1 is complete on d0f31e4a1; name-branch and exec prerequisites are done, auth and capture Phase 1 have Results; Phase 4 must preserve the policy seam and Decisions 10 and 15 |
+| risk.test | high | Existing holder-based werk fixtures must be ported; Phase 4 requires replacement at three interruption sites, panic isolation, fs admission by authority, compaction fixtures and a recorded live worker run |
+| risk.security_or_contract | high | New fs mutations enforce symlink-aware write authority; session bearer stays over loopback MCP; provider defaults must preserve old values and werk routing/profile targets must be refused |
 
 ## Phases
+
+Execution order: 1, 4, 2, 5, 6. Phase 3 is dropped.
 
 ### Phase 1: Worker backend over OpenRouter
 
@@ -586,6 +651,103 @@ Verification: `go build` and `go vet` clean on darwin and `GOOS=windows`;
 and `./internal/wsi18n` pass; `frontend-settings.test.js` passes 14 of 14. The
 browser tests for the settings page were not rerun in this pass.
 
+### Phase 4: In-daemon loop and the werk fs tools
+
+Runs next on `impl/develop/werk-harness-p2`, which carries the Phase 1
+implementation. Phase 2 waits for this phase.
+
+- Move the loop into the daemon per Decision 2. Replace the hidden
+  `werk-run` subcommand, child line protocol, holder launch and child
+  environment scrub with a goroutine-driven `Process`. Keep the Responses
+  client, log writer, mapper and audit adapter and preserve the common
+  turn, usage, cost, interrupt and steer events. On a session goroutine
+  panic, settle the affected turn through the common failure path and
+  release that session's waiters. Other sessions continue.
+- Add a durable process kind through the registration seam. Startup and
+  wake recover the same conversation from its log under one writer, after
+  the runner has restored session identity and MCP authority. Resume an
+  interrupted active turn automatically. Idle workers stay idle until
+  woken. Preserve orphan handling, cancellation, and the single worker
+  report and worktree hold semantics. The lead start seam admits the
+  durable kind in preparation for Phase 2. Only werk registers it in
+  Phase 4. Use the provider auth credential source in-process per Decision
+  7 and preserve redaction. Keep authoritative durable runner state behind
+  Decision 22's persistence boundary. An older daemon can read the history
+  projection while bypassing any active werk turn in its legacy scheduler.
+- Integrate the durable kind with Full Quit per Decision 21. Keep current
+  holder entries and stop behavior, and let the existing shell decoder
+  count durable sessions through the existing list. Apply existing
+  viewer/origin rules if a projected entry is individually stopped.
+  Count idle live sessions and unavailable status as in the Full Quit
+  ticket. Success requires durable settlement before shutdown, so a fresh
+  successor starts no stopped session. Partial stop keeps the daemon up and
+  reports what remains.
+- Send tool calls over the authenticated loopback HTTP MCP endpoint per
+  Decision 3. Retry only when the request was never sent. Move Phase 1's
+  write/edit implementation behind `fs.edit` and `fs.write`. List and
+  admit those tools only for werk with write authority, checking authority
+  again on direct calls. Grant werk the existing `fs.read`, `fs.grep`
+  and `fs.list` tools through lifecycle policy and allow those reads in
+  parallel. Preserve cutover Codex's existing read access. Retain the
+  Phase 1 read-only shell launch refusal at the daemon admission boundary.
+- Recover per Decisions 12 and 18. Resume from committed model output,
+  retry an unfinished model request without its partial stream, replay
+  durable tool results, and repeat unfinished reads. Flush the ordered
+  intent before a mutation. For file writes, persist the resolved target
+  and the prior and expected content hashes before changing it, recording
+  absence explicitly for new paths. Recovery compares the current state:
+  prior state means not applied, expected state means applied, and any
+  other state or unverifiable target means outcome unknown. If prior and
+  expected state are identical, the expected state is already satisfied.
+  Return that verdict to the model and never replay a mutation.
+- For exec, record the call's association with the holder-backed job
+  before the job can start. Rejoin or read the terminal result from that
+  job, keeping the existing report and worktree holds. Replacement uses
+  the exec drain path so it preserves the job; a user interrupt still
+  cancels via the common path. With an ambiguous launch and no recoverable
+  job, return an unknown outcome rather than relaunching. Other
+  interrupted mutations with no durable result follow the same unknown
+  outcome rule. Final output and common settlement reconcile by the same
+  turn/report identity per Decision 23.
+- Queue worker `ws/compact` on the common lifecycle per Decisions 14
+  and 19. At the safe turn boundary, obtain worker prose through the model
+  summary path, build the bounded summary, and commit it before replacing
+  model input. On failure keep the old input. Rejoin uses the latest
+  committed checkpoint and subsequent deltas. Emit the common audit cut
+  per Decision 24 so model-seen history reflects the selected input.
+  Grade worker compaction to match. Use cached OpenRouter model
+  context-window metadata for common advisory and hard thresholds when
+  available. Manual compaction works without that metadata.
+- Add the tier value's optional `provider` field, defaulting reads to
+  `openrouter` as in Decision 8. Phase 4 only runs OpenRouter. Enforce
+  Decision 10 through the validations in Decision 20. Record the per-surface
+  compatibility verdict in the Result with source-backed downgrade evidence,
+  including the new tool names, tier values, worker records, and log.
+- Verification: port Phase 1 fixtures, including audit, to the in-daemon
+  loop. Replace the daemon during a model request, a holder-backed exec job
+  and file writes with all three recovery outcomes, including a newly
+  created path. Assert one mutation at most, one report, and preserved job
+  identity. Cover intent-write failure, panic isolation, idle wake, and
+  compaction success, failure and restart. Call `fs.*` through MCP at
+  each authority level and force unlisted writes from read-only and
+  non-werk sessions. Verify cutover Codex's read tools, no child process
+  for a werk session apart from its exec jobs, legacy tier values, direct
+  werk tiers and builtin profile availability, and refusal of stored werk
+  graph targets and custom profiles. Re-run the old shell's count decoder
+  with durable sessions present. Verify Full Quit blocks concurrent
+  starts, reports partial stop, and leaves a fresh successor; verify
+  ordinary replacement resumes the same turn. Run a new → 0.51.1 → new
+  fixture with an active werk turn and held exec job: the old runner
+  emits no werk report and re-upgrade reuses the same turn and job.
+  Exercise crashes before and after common settlement with and without
+  an exec hold, checking one logical report. Assert one audit cut after
+  checkpoint replay and zero cuts for a failed checkpoint.
+- Record one live OpenRouter worker run using the Phase 1 Result's
+  credential, tier and spawn setup on the Phase 4 build. Confirm model
+  requests, fs tools, exec and report delivery, and use the Phase 4
+  replacement checks above in place of the old holder-survival check.
+  The branch then merges per Decision 15.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 Runs after Phase 4.
@@ -611,43 +773,9 @@ Dropped 2026-11-23. Pi's retirement moved to
 `261123-chore-ws-retire-pi-harness` (Decision 1, owner (05)=b); the A/B gate
 is dropped (Decision 16); the catalog parity checklist is Phase 6.
 
-### Phase 4: In-daemon loop and the werk fs tools
-
-Runs next after Phase 1, before Phase 2; on its own branch based on
-`impl/develop/werk-harness-p1`.
-
-- Move the loop into the daemon per Decision 2: a log-backed `Process`
-  driven by goroutines with per-session panic recovery. Delete the hidden
-  `werk-run` subcommand, the line protocol between daemon and child, the
-  holder launch and the child environment scrub. Keep the Responses client,
-  the log store and writer, the loop, the mapper and the audit adapter.
-- Runner: a durable process kind whose rejoin is log replay; lead start's
-  holder requirement admits it. Only werk registers it in this phase.
-- Recovery per Decision 12, including the prior-hash verdict for `fs.edit`
-  and `fs.write`.
-- `fs.*` tools per Decision 5: add `fs.edit` and `fs.write`; list and admit
-  `fs.read`, `fs.grep`, `fs.list`, `fs.edit`, `fs.write` for werk sessions;
-  remove the harness's own file tools; the loop's parallel read-only set
-  covers the `fs` read tools.
-- ws calls over loopback HTTP MCP with the session bearer (Decision 3),
-  keeping Phase 1's retry rules (no retry after the request was written).
-- Worker compaction per Decision 14, so `ws/compact` on a werk worker
-  queues and completes; catalog compaction graded to match.
-- The tier value's `provider` field (Decision 8).
-- The tier routing and saved-profile refusal of Decision 10.
-- Verification: the Phase 1 werk tests ported to the in-daemon loop; a
-  daemon replace during a model request (the request is resent), during an
-  exec job (rejoined), and during an `fs.edit` for each verdict (applied, not
-  applied, unknown); a panicking session leaves other sessions running;
-  `fs.*` authority per tool and level through MCP; `fs.edit` and `fs.write`
-  absent from `tools/list` for non-werk sessions; no process started per werk
-  session other than exec jobs; a werk target in the tier routing graph and
-  a saved profile with backend `werk` are refused with a reason; worker
-  compaction fixtures; the live
-  OpenRouter worker run in Phase 1 Result's steps, recorded in the Result.
-  The branch then merges per Decision 15.
-
 ### Phase 5: OpenAI-compatible local endpoints (vLLM, Ollama)
+
+Runs after Phase 2.
 
 - User-named endpoints: a base URL in config, an optional API key through
   the auth layer's API-key provider kind, the model list from
@@ -662,6 +790,8 @@ Runs next after Phase 1, before Phase 2; on its own branch based on
   (owner-run when this host has none).
 
 ### Phase 6: Catalog parity
+
+Runs after Phase 5.
 
 - Parity checklist: every catalog item, worker and lead, graded no lower
   than the Codex profile's grade for the same item and role (Codex is the
