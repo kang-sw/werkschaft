@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,13 +12,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
+var legacyPiToolNames = []string{"pi.spawn", "pi.send", "pi.stop", "pi.wait", "pi.list", "pi.transcript"}
+
 func isPiTool(name string) bool {
-	switch name {
-	case "pi.spawn", "pi.send", "pi.stop", "pi.wait", "pi.list", "pi.transcript":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(legacyPiToolNames, name)
 }
 
 func (s *Server) handlePiTool(ctx context.Context, id json.RawMessage, tool string, args map[string]any) response {

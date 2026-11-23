@@ -64,6 +64,9 @@ func leadToolNames(getenv func(string) string) []string {
 			names = append(names, name)
 		}
 	}
+	// The launcher checks callable aliases against the shipped runtime
+	// contract. They have no MCP definitions and stay out of tools/list.
+	names = append(names, legacyPiToolNames...)
 	sort.Strings(names)
 	return names
 }
