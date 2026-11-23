@@ -60,6 +60,7 @@ window.__slots = { rev: "1.1.x", token: "tok", commands: [{ id: "t", label: "Run
 window.fetch = function (url, o) {
   var u = String(url), body = o && o.body ? JSON.parse(o.body) : null, J = ${JSON.stringify(JOBS)};
   function res(v, st) { return Promise.resolve({ ok: !st || st < 400, status: st || 200, json: function () { return Promise.resolve(v); }, text: function () { return Promise.resolve(JSON.stringify(v)); } }); }
+  if (/composer-exec$/.test(u) && !body && window.__get) { if (window.__get === "net") return Promise.reject(new TypeError("x")); return Promise.resolve({ ok: false, status: window.__get, json: function () { return Promise.reject(0); }, text: function () { return Promise.resolve(window.__getText + " "); } }); }
   if (/composer-exec$/.test(u) && !body) return res({ token: "tok", cards: [] });
   if (/composer-exec$/.test(u) && body) { var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.ok)); }
   if (/composer-exec\\//.test(u)) return res({}, 404);
@@ -82,7 +83,7 @@ async function open(t) {
   await page.addScriptTag({ content: read('mention.js') });
   await page.addScriptTag({ content: route });
   const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
-  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { cards: cexecCards, slashToken: slashToken };})();' });
+  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { cards: cexecCards, slashToken: slashToken, dropToken: function () { cexecToken = ""; } };})();' });
   const ed = page.locator('.cfield [contenteditable]').first();
   const type = async text => { await ed.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Delete'); await page.keyboard.insertText(text); };
   const state = () => page.evaluate(() => ({ v: ctext.value, bang: composer.hasAttribute('data-bang'), hl: CSS.highlights.has('ws-bang'), sel: [ctext.selectionStart, ctext.selectionEnd] }));
@@ -190,4 +191,20 @@ test('light theme tints the terminal surfaces Solarized, dark stays dark', { ski
   assert.equal(await bg(), 'rgb(19, 20, 23)', 'dark theme');
   await page.emulateMedia({ colorScheme: 'light' });
   assert.equal(await bg(), 'rgb(253, 246, 227)', 'light theme: Solarized base3');
+});
+
+test('a refused token read keeps its status and reason in the warning, and the draft', { skip }, async t => {
+  const { page, type, ed } = await open(t);
+  const send = async () => { await page.evaluate(() => window.__t.dropToken()); await type('!ls'); await page.keyboard.press('Enter'); await page.waitForTimeout(150); };
+  const warn = () => page.evaluate(() => window.__warn);
+  await page.evaluate(() => { window.__get = 404; window.__getText = 'unknown session'; });
+  await send();
+  assert.equal(await warn(), 'the dashboard is not reachable (404: unknown session)');
+  assert.equal(await page.evaluate(() => ctext.value), '!ls', 'draft stays');
+  await page.evaluate(() => { window.__get = 'net'; });
+  await send();
+  assert.equal(await warn(), 'the dashboard is not reachable (network error)');
+  await page.evaluate(() => { window.__get = 0; });
+  await send();
+  assert.equal(await page.evaluate(() => ctext.value), '', 'a healthy read sends and clears the draft');
 });

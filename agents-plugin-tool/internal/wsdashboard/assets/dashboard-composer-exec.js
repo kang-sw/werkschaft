@@ -5,7 +5,7 @@
 // assembly. Nothing here falls back to sending the text as a prompt: a daemon
 // that does not know the route refuses, and the draft stays.
   var cexecEnabled = !!(composer && composer.getAttribute("data-cexec") === "1" && rid && window.fetch);
-  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
+  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecWhy = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
   function cexecNewID() {
     var bytes = new Uint8Array(12);
     if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
@@ -305,13 +305,26 @@
     // A transport failure, and a body that fails to read or parse after good
     // headers, both end as null: done always runs, so a caller that waits on it
     // (a send needing the token) clears its busy state and keeps the draft.
+    // The outcome of a failed read stays in cexecWhy (the HTTP status and the
+    // server's short reason, or "network error"), so a send that needed the
+    // token can tell the user why instead of only that the dashboard is unreachable.
+    cexecWhy = "";
     fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      return r.ok ? r.json() : null;
-    }).catch(function () { return null; }).then(function (list) {
-      if (!list || !Array.isArray(list.cards)) { done(null); return; }
+      if (r.ok) return r.json();
+      return r.text().then(function (s) { return s; }, function () { return ""; }).then(function (s) {
+        cexecWhy = r.status + (s && s.trim() ? ": " + s.trim().slice(0, 120) : "");
+        return null;
+      });
+    }, function () { cexecWhy = wsT("js.cexec.neterr"); return null; }).catch(function () { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); return null; }).then(function (list) {
+      if (!list || !Array.isArray(list.cards)) { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); done(null); return; }
       if (typeof list.token === "string" && list.token) cexecToken = list.token;
       done(list);
     });
+  }
+  // cexecUnreachable is the warning for a send the dashboard could not take,
+  // with the recorded cause when one is known.
+  function cexecUnreachable(why) {
+    return why ? wsT("js.post.unreachable.why", why) : wsT("js.post.unreachable");
   }
   // cexecAttached reports whether the draft carries any composer state beyond
   // its plain text: images, answer chips, topic notes, board selections,
@@ -432,7 +445,7 @@
         cexecBusy = false;
         // Outcome unknown: the draft and the recorded attempt stay, so sending
         // the same text again is a retry of the same submission.
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(wsT("js.cexec.neterr")));
       });
     }
     if (cexecToken || retry) post();
@@ -442,7 +455,7 @@
       if (!list) {
         cexecBusy = false;
         settled();
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(cexecWhy));
         return;
       }
       post();
