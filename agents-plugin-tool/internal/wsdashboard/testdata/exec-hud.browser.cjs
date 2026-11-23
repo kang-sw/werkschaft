@@ -21,6 +21,12 @@ const note = (k, v) => { report.push(k + ' = ' + v); console.log('MEASURE ' + k 
 async function openPage(browser, { lang, scheme, width = 1280, reduced = false, filterExecEvent = false, list404 = false }) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 }, locale: lang === 'ko' ? 'ko-KR' : 'en-US', colorScheme: scheme, reducedMotion: reduced ? 'reduce' : 'no-preference', permissions: ['clipboard-read', 'clipboard-write'] });
   await ctx.addCookies([{ name: 'ws_dashboard_lang', value: lang, url: base }]);
+  // The HUD's one-second clock callback (it re-fits the strip), kept so a test can run one fitting pass in one task.
+  await ctx.addInitScript(() => {
+    const si = window.setInterval;
+    window.__xhTicks = [];
+    window.setInterval = function (fn, ms, ...rest) { if (ms === 1000 && String(fn).includes('xhRender')) window.__xhTicks.push(fn); return si.call(this, fn, ms, ...rest); };
+  });
   const page = await ctx.newPage();
   const errors = [], requests = [];
   page.on('pageerror', e => { errors.push('pageerror: ' + e.message); console.error('PAGE ERROR:', e.message); });
@@ -128,6 +134,24 @@ async function run(browser, { lang, scheme, full }) {
   assert.ok(c.some(x => x.kind === 'more' && /^\+\d+/.test(x.text)), 'a +N chip folds the rest: ' + JSON.stringify(c));
   await snap(page, view, tag + '-03-many');
 
+  // One fitting pass is one read phase: the layouts it forces are counted around a single run of the
+  // strip's clock callback (ai-docs/manuals/performance.md, Frontend Minimal Updates 4 and 6). It may
+  // cost one layout for the measurement and one for the flush that closes the probe, not one per
+  // measured element (the pass used to flush after each of +N, the aggregate and its compact fallback).
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const layoutCount = async () => (await cdp.send('Performance.getMetrics')).metrics.find(m => m.name === 'LayoutCount').value;
+  const fitLayouts = async () => {
+    await view.evaluate(() => document.body.offsetHeight);
+    const before = await layoutCount();
+    const ran = await view.evaluate(() => { const tick = window.__xhTicks[window.__xhTicks.length - 1]; if (!tick) return false; tick(); document.body.offsetHeight; return true; });
+    assert.ok(ran, 'the HUD clock is running while jobs run');
+    return (await layoutCount()) - before;
+  };
+  const foldedLayouts = await fitLayouts();
+  note('forced layouts of one fitting pass (chips + fold)', foldedLayouts);
+  assert.ok(foldedLayouts <= 2, 'a fitting pass measures in one read phase: ' + foldedLayouts + ' layouts');
+
   // widths: the interrupt and subagent badges never change, whatever the chips do.
   const widths = [1280, 900, 700, 560, 480, 420, 360, 320];
   const shownByWidth = [];
@@ -172,6 +196,9 @@ async function run(browser, { lang, scheme, full }) {
   await setJobs(view, many);
   await fakeBadges(view, { ib: true, sub: '3' });
   await snap(page, view, tag + '-04-aggregate-320');
+  const aggLayouts = await fitLayouts();
+  note('forced layouts of one fitting pass (aggregate at 320px)', aggLayouts);
+  assert.ok(aggLayouts <= 2, 'the aggregate fit, compact fallback included, adds no layout read: ' + aggLayouts + ' layouts');
   await page.setViewportSize({ width: 1000, height: 900 });
   await sleep(300);
 
