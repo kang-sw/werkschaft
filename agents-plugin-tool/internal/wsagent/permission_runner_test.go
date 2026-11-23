@@ -17,6 +17,8 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
+const permissionWorkerProfile = `{"backend":"claude","tools":["Read","Edit"],"ws_tools":["git.status"]}`
+
 func permissionHarness(t *testing.T) *leadHarness {
 	t.Helper()
 	h := newLeadHarness(t)
@@ -80,26 +82,18 @@ func TestPermissionLaunchMatrix(t *testing.T) {
 }
 
 func TestPermissionLegacyNoWriteback(t *testing.T) {
-	for _, backend := range []string{BackendClaude} {
-		t.Run(backend, func(t *testing.T) {
-			h := permissionHarness(t).start()
-			st := h.lead(backend, LeadOptions{})
-			if st.PermissionLevel != PermissionWorkdirWrite || st.PermissionSource != "legacy-derived" || st.PermissionEnforcement != "advisory" {
-				t.Fatalf("legacy: %+v", st)
-			}
-			h.send(st.ID, "legacy")
-			args := h.holders.spawned(h.holder(st.ID)).Argv
-			mode, present := flagValue(args, "--permission-mode")
-			if backend == BackendClaude && (!present || mode != "auto") {
-				t.Fatalf("changed auto: %v", args)
-			}
-			if backend == BackendClaude && present {
-				t.Fatalf("invented mode: %v", args)
-			}
-			if _, err := os.Stat(filepath.Join(wsdashboard.SessionDir(h.dir, st.ID), "permission.json")); !os.IsNotExist(err) {
-				t.Fatalf("legacy wrote sidecar: %v", err)
-			}
-		})
+	h := permissionHarness(t).start()
+	st := h.lead(BackendClaude, LeadOptions{})
+	if st.PermissionLevel != PermissionWorkdirWrite || st.PermissionSource != "legacy-derived" || st.PermissionEnforcement != "advisory" {
+		t.Fatalf("legacy: %+v", st)
+	}
+	h.send(st.ID, "legacy")
+	args := h.holders.spawned(h.holder(st.ID)).Argv
+	if mode, present := flagValue(args, "--permission-mode"); !present || mode != "auto" {
+		t.Fatalf("changed auto: %v", args)
+	}
+	if _, err := os.Stat(filepath.Join(wsdashboard.SessionDir(h.dir, st.ID), "permission.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy wrote sidecar: %v", err)
 	}
 }
 
@@ -134,8 +128,8 @@ func TestPermissionWorkerFullUserGate(t *testing.T) {
 	h, _ := childHarness(t)
 	before := len(h.runner.List())
 	for name, spec := range map[string]SpawnSpec{
-		"untrusted-ack": {Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "work", PermissionLevel: PermissionFull, PermissionFullAck: true},
-		"user-no-ack":   {Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "work", PermissionLevel: PermissionFull, permissionUser: true},
+		"untrusted-ack": {Profile: "permission-worker", Root: h.root, Prompt: "work", PermissionLevel: PermissionFull, PermissionFullAck: true},
+		"user-no-ack":   {Profile: "permission-worker", Root: h.root, Prompt: "work", PermissionLevel: PermissionFull, permissionUser: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if st, err := h.runner.Spawn(spec); err == nil || st.ID != "" {
@@ -147,7 +141,7 @@ func TestPermissionWorkerFullUserGate(t *testing.T) {
 		t.Fatal("refused generic full worker created a conversation")
 	}
 	st, err := h.runner.Spawn(SpawnSpec{
-		Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "trusted full", PermissionLevel: PermissionFull,
+		Profile: "permission-worker", Root: h.root, Prompt: "trusted full", PermissionLevel: PermissionFull,
 		PermissionFullAck: true, permissionUser: true,
 	})
 	if err != nil {
@@ -329,7 +323,7 @@ func TestPermissionWorkerInputStateAndControl(t *testing.T) {
 		t.Fatalf("worker State: %+v", state)
 	}
 	assertPermissionSelection(t, wsdashboard.SessionDir(h.dir, st.ID), PermissionWorkdirWrite, false)
-	if got := log.String(); !strings.Contains(got, "Permission workdir-write is advisory on pi: current-parent admission passed") {
+	if got := log.String(); !strings.Contains(got, "Permission workdir-write is advisory on claude: current-parent admission passed") {
 		t.Fatalf("authority-accurate worker nudge: %s", got)
 	}
 	lowered, err := h.runner.SetPermissionLevel(st.ID, PermissionReadOnly)
@@ -352,7 +346,7 @@ func TestPermissionWorkerInputStateAndControl(t *testing.T) {
 	if !h.backend.proc(0).isClosed() {
 		t.Fatal("worker lowering did not replace the prior process at the turn boundary")
 	}
-	root, err := h.runner.Create(AgentWorkerProfile(BackendClaude), h.root)
+	root, err := h.runner.Create("permission-worker", h.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +354,7 @@ func TestPermissionWorkerInputStateAndControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.backend.waitProcStart(t, 2)
-	if got := log.String(); !strings.Contains(got, "Permission workdir-write is advisory on pi: root worker has no authority parent") {
+	if got := log.String(); !strings.Contains(got, "Permission workdir-write is advisory on claude: root worker has no authority parent") {
 		t.Fatalf("root worker nudge: %s", got)
 	}
 }
@@ -370,7 +364,7 @@ func TestPermissionWorkerInputStateAndControl(t *testing.T) {
 func TestPermissionLaunchCompactKeepsReadOnlyLegacyLevel(t *testing.T) {
 	h := permissionHarness(t).start()
 	h.globalProfile("ro-custom", `{"backend":"claude","tools":["read"],"ws_tools":["git.status"]}`)
-	for _, name := range []string{"ro-custom", "explore"} {
+	for _, name := range []string{"ro-custom"} {
 		rp, err := h.runner.resolve(name, h.root)
 		if err != nil {
 			t.Fatal(err)
@@ -396,9 +390,10 @@ func TestPermissionLaunchCompactKeepsReadOnlyLegacyLevel(t *testing.T) {
 
 func TestPermissionCurrentParentAdmission(t *testing.T) {
 	h := permissionHarness(t).start()
+	h.globalProfile("permission-worker", permissionWorkerProfile)
 	parent := h.lead(BackendClaude, LeadOptions{PermissionLevel: PermissionWorkdirWrite})
 	parentRef := ParentRef{Kind: ParentLead, ReplyID: parent.ID}
-	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &parentRef})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: "permission-worker", Root: h.root, Prompt: "work", Parent: &parentRef})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +414,7 @@ func TestPermissionCurrentParentAdmission(t *testing.T) {
 	if got := h.state(child.ID); got.Process || !strings.Contains(got.Error, "authority workdir-write is above the parent's current level read-only") {
 		t.Fatalf("worker started above current parent: %+v", got)
 	}
-	if _, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "new child", Parent: &parentRef}); err == nil || !strings.Contains(err.Error(), "above the parent's current level read-only") {
+	if _, err := h.runner.Spawn(SpawnSpec{Profile: "permission-worker", Root: h.root, Prompt: "new child", Parent: &parentRef}); err == nil || !strings.Contains(err.Error(), "above the parent's current level read-only") {
 		t.Fatalf("creation admission: %v", err)
 	}
 }
@@ -440,7 +435,7 @@ func TestPermissionMissingParentAdmission(t *testing.T) {
 	}
 	missingLead := ParentRef{Kind: ParentLead, ReplyID: "missingleadrecord"}
 	_, err = h.runner.Spawn(SpawnSpec{
-		Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "explicit generic work", Parent: &missingLead,
+		Profile: "permission-worker", Root: h.root, Prompt: "explicit generic work", Parent: &missingLead,
 		PermissionLevel: PermissionWorkdirWrite,
 	})
 	if err == nil || !strings.Contains(err.Error(), "parent lead") || !strings.Contains(err.Error(), "has no hosted record") {
@@ -449,7 +444,7 @@ func TestPermissionMissingParentAdmission(t *testing.T) {
 	if len(h.runner.List()) != before {
 		t.Fatal("missing-lead refusal created a conversation")
 	}
-	legacy, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "legacy work", Parent: &missingLead})
+	legacy, err := h.runner.Spawn(SpawnSpec{Profile: "permission-worker", Root: h.root, Prompt: "legacy work", Parent: &missingLead})
 	if err != nil {
 		t.Fatalf("legacy detached-lead compatibility: %v", err)
 	}
@@ -469,7 +464,7 @@ func TestPermissionMissingParentAdmission(t *testing.T) {
 	if !delegatedPermission(wsdashboard.SessionDir(h.dir, delegated.ID)) {
 		t.Fatal("agent.spawn authority provenance was not persisted")
 	}
-	root, err := h.runner.Create(AgentWorkerProfile(BackendClaude), h.root)
+	root, err := h.runner.Create("permission-worker", h.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +475,7 @@ func TestPermissionMissingParentAdmission(t *testing.T) {
 
 func TestPermissionConcurrentParentLoweringWorkerStart(t *testing.T) {
 	h, _ := childHarness(t)
-	parent, err := h.runner.Create(AgentWorkerProfile(BackendClaude), h.root)
+	parent, err := h.runner.Create("permission-worker", h.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +488,7 @@ func TestPermissionConcurrentParentLoweringWorkerStart(t *testing.T) {
 	}
 	gate := h.backend.gateStarts(t)
 	parentRef := ParentRef{Kind: ParentConversation, ReplyID: parent.ID}
-	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &parentRef})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: "permission-worker", Root: h.root, Prompt: "work", Parent: &parentRef})
 	if err != nil {
 		t.Fatal(err)
 	}

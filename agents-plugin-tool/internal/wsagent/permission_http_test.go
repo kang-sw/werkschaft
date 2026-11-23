@@ -196,11 +196,12 @@ func TestPermissionHTTPRegistryAbsentAndLegacy(t *testing.T) {
 
 func TestPermissionHTTPWorkerControl(t *testing.T) {
 	h := permissionHarness(t)
-	// The builtin worker has ws tools; satisfy its capability attachment check
+	// The worker has ws tools; satisfy its capability attachment check
 	// with a command the fake holder never executes.
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/fake/ws-mcp"}, nil }
 	h.start()
-	st, err := h.runner.Create("pi-worker", h.root)
+	h.globalProfile("permission-worker", permissionWorkerProfile)
+	st, err := h.runner.Create("permission-worker", h.root)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -140,9 +140,9 @@ func TestCompactionStateFailedIsNotCounted(t *testing.T) {
 	}
 }
 
-// A hosted Pi worker's compaction state reaches its parent's agent row: the
+// A hosted worker's compaction state reaches its parent's agent row: the
 // compacting flag toggles, and the count and latest origin follow completion,
-// a ws auto request recorded as auto though pi names "manual" for its command.
+// a ws auto request recorded as auto though Claude records its command as manual.
 func TestCompactionStateReachesTheParentsAgentRow(t *testing.T) {
 	h, _ := newHeldWorkerHarness(t)
 	reg := h.runner.opts.Backends[BackendClaude]
@@ -154,7 +154,7 @@ func TestCompactionStateReachesTheParentsAgentRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 	h.idle(child.ID)
 	row := func() wslive.Agent {
 		for _, a := range h.snapshot(lead.ID).Agents {
@@ -175,8 +175,8 @@ func TestCompactionStateReachesTheParentsAgentRow(t *testing.T) {
 		c.kick()
 	})
 	eventually(t, "row shows compacting", func() bool { return row().Compacting })
-	eventually(t, "worker RPC compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`, `{"type":"response","command":"compact","success":true}`)
+	eventually(t, "worker compact command", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
+	compactBoundary(h, child.ID, holder)
 	eventually(t, "row shows the completed compaction", func() bool {
 		r := row()
 		return !r.Compacting && r.Compactions == 1 && r.CompactOrigin == wslive.CompactOriginAuto
@@ -319,7 +319,7 @@ func TestCompactionStateCountSurvivesARunnerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 	h.idle(child.ID)
 	row := func() wslive.Agent {
 		for _, a := range h.snapshot(lead.ID).Agents {
@@ -374,7 +374,7 @@ func TestCompactionStateClosedChildKeepsItsCountAcrossARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 	h.idle(child.ID)
 	h.runner.conv(child.ID).do(func() {
 		c := h.runner.conv(child.ID)
@@ -382,8 +382,8 @@ func TestCompactionStateClosedChildKeepsItsCountAcrossARestart(t *testing.T) {
 		c.publishCompaction(false)
 		c.kick()
 	})
-	eventually(t, "worker RPC compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`, `{"type":"response","command":"compact","success":true}`)
+	eventually(t, "worker compact command", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
+	compactBoundary(h, child.ID, holder)
 	eventually(t, "the completed compaction", func() bool { return h.state(child.ID).Compactions == 1 })
 	eventually(t, "the row shows the count", func() bool {
 		for _, a := range h.snapshot(lead.ID).Agents {

@@ -275,7 +275,7 @@ func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
 		if got := h.runner.Compact(key, "", &resume); got.Status != "queued" {
 			t.Fatal(got)
 		}
-		eventually(t, "lead native compact", func() bool { return len(h.userInputs(holder)) == 2 })
+		eventually(t, "lead native compact", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 		h.send(id, "ordinary after compact")
 		probe.setState("fresh-at-delivery")
 		compactBoundary(h, id, holder)
@@ -315,34 +315,35 @@ func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
 		lead := h.lead(BackendClaude, LeadOptions{})
 		child, err := h.runner.Spawn(SpawnSpec{
 			Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "work", Tier: "medium",
+			PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true,
 			Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		holder := h.holder(child.ID)
-		h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+		h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 		h.idle(child.ID)
 		key := h.record(child.ID).WSKey
 		resume := false
 		if got := h.runner.Compact(key, "", &resume); got.Status != "queued" {
 			t.Fatal(got)
 		}
-		eventually(t, "child native compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
+		eventually(t, "child native compact", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 		if _, err := h.runner.Send(child.ID, "ordinary after compact"); err != nil {
 			t.Fatal(err)
 		}
 		probe.setState("fresh-at-delivery")
-		h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`, `{"type":"response","command":"compact","success":true}`)
-		eventually(t, "child restore before ordinary work", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
-		text := h.holders.inputs(holder, "prompt")[1]
+		compactBoundary(h, child.ID, holder)
+		eventually(t, "child restore before ordinary work", func() bool { return len(h.userInputs(holder)) == 3 })
+		text := h.userInputs(holder)[2]
 		if restoreAt, workAt := strings.Index(text, "restore[fresh-at-delivery]"), strings.Index(text, "ordinary after compact"); restoreAt < 0 || workAt < 0 || restoreAt > workAt {
 			t.Fatalf("child restore ordering = %q", text)
 		}
 		if calls := probe.snapshot(); len(calls) != 1 || calls[0].key != key || calls[0].cause != RestoreCompaction {
 			t.Fatalf("child restore calls = %+v", calls)
 		}
-		h.holders.out(holder, `{"type":"compaction_end","reason":"manual"}`)
+		h.holders.out(holder, `{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}`)
 		time.Sleep(30 * time.Millisecond)
 		if calls := probe.snapshot(); len(calls) != 1 {
 			t.Fatalf("duplicate child compact end rendered again: %+v", calls)
@@ -773,8 +774,8 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 	c := h.runner.conv(child.ID)
 	h.holders.out(holder, recoveryWorkerReply("settled work")...)
 	eventually(t, "original report settled", func() bool { return len(got.list()) == 1 })
-	h.holders.out(holder, `{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":55000,"contextWindow":100000}}}`)
-	eventually(t, "late idle Pi stats triggered advisory", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
+	c.do(func() { c.handle(compactionUsage(55000)) })
+	eventually(t, "late idle usage triggers advisory", func() bool { return len(h.userInputs(holder)) == 2 })
 	c.doT(t, func(failf func(string, ...any)) {
 		if !c.turn || c.rec.TurnOpen || c.rec.LastTurn == nil || c.rec.LastTurn.Result.Message != "settled work" {
 			failf("internal turn disturbed the settled result: open=%v result=%+v", c.rec.TurnOpen, c.rec.LastTurn)
@@ -793,13 +794,9 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 		t.Fatal(out)
 	}
 	h.holders.out(holder, recoveryWorkerReply("compaction requested")...)
-	eventually(t, "native compaction from reminder", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	h.holders.out(holder,
-		`{"type":"compaction_start","reason":"manual"}`,
-		`{"type":"compaction_end","reason":"manual"}`,
-		`{"type":"response","command":"compact","success":true}`,
-	)
-	eventually(t, "post-compaction continuation", func() bool { return len(h.holders.inputs(holder, "prompt")) == 4 })
+	eventually(t, "native compaction from reminder", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
+	compactBoundary(h, child.ID, holder)
+	eventually(t, "post-compaction continuation", func() bool { return len(h.userInputs(holder)) == 5 })
 	h.holders.out(holder, recoveryWorkerReply("continuation handled")...)
 	h.idle(child.ID)
 	res, err = h.runner.Wait(context.Background(), child.ID, time.Second)
@@ -877,35 +874,24 @@ func TestCompactionWorkerSelfResumeDefersParentSettle(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`)
+	h.holders.out(holder, stateLine(HarnessRunning))
 	eventually(t, "worker running", func() bool { return h.state(child.ID).Status == StatusRunning })
 	key := h.record(child.ID).WSKey
 	if res := h.runner.Compact(key, "", nil); res.Status != "queued" {
 		t.Fatal(res)
 	}
-	// Initial turn finishes: parent must NOT receive TurnDone yet; compact RPC runs first.
-	h.holders.out(holder,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pre-compact"}]}}`,
-		`{"type":"agent_settled"}`,
-	)
-	eventually(t, "worker compact queued after turn", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
+	// Initial turn finishes: parent must NOT receive TurnDone yet; the compact command runs first.
+	h.holders.out(holder, recoveryWorkerReply("pre-compact")...)
+	eventually(t, "worker compact queued after turn", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 	if reps := got.list(); len(reps) != 0 {
 		t.Fatalf("parent settled before compaction resumed: %+v", reps)
 	}
-	h.holders.out(holder,
-		`{"type":"compaction_start","reason":"manual"}`,
-		`{"type":"compaction_end","reason":"manual"}`,
-		`{"type":"response","command":"compact","success":true}`,
-	)
-	eventually(t, "resumed continue turn sent", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
+	compactBoundary(h, child.ID, holder)
+	eventually(t, "resumed continue turn sent", func() bool { return len(h.userInputs(holder)) == 3 })
 	if reps := got.list(); len(reps) != 0 {
 		t.Fatalf("parent settled before resumed turn ended: %+v", reps)
 	}
-	h.holders.out(holder,
-		`{"type":"agent_start"}`,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"resumed final"}]}}`,
-		`{"type":"agent_settled"}`,
-	)
+	h.holders.out(holder, recoveryWorkerReply("resumed final")...)
 	eventually(t, "parent receives one report after resumed turn", func() bool { return len(got.list()) == 1 })
 	reps := got.list()
 	if len(reps) != 1 || reps[0].Result.Status != TurnDone || reps[0].Result.Message != "resumed final" {
@@ -978,16 +964,13 @@ func TestCompactionStopProcessWithLiveProcessReleasesHeldReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`)
+	h.holders.out(holder, stateLine(HarnessRunning))
 	eventually(t, "worker running", func() bool { return h.state(child.ID).Status == StatusRunning })
 	if res := h.runner.Compact(h.record(child.ID).WSKey, "", nil); res.Status != "queued" {
 		t.Fatal(res)
 	}
-	h.holders.out(holder,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pre-compact"}]}}`,
-		`{"type":"agent_settled"}`,
-	)
-	eventually(t, "worker compact dispatched", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
+	h.holders.out(holder, recoveryWorkerReply("pre-compact")...)
+	eventually(t, "worker compact dispatched", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 	if reps := got.list(); len(reps) != 0 {
 		t.Fatalf("parent settled before stopProcess: %+v", reps)
 	}
@@ -1018,18 +1001,15 @@ func TestCompactionBeginTurnPreservesHeldReportOnCompactFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`)
+	h.holders.out(holder, stateLine(HarnessRunning))
 	eventually(t, "worker running", func() bool { return h.state(child.ID).Status == StatusRunning })
 	if res := h.runner.Compact(h.record(child.ID).WSKey, "", nil); res.Status != "queued" {
 		t.Fatal(res)
 	}
-	h.holders.out(holder,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"turn-1-work"}]}}`,
-		`{"type":"agent_settled"}`,
-	)
-	eventually(t, "worker compact dispatched", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
+	h.holders.out(holder, recoveryWorkerReply("turn-1-work")...)
+	eventually(t, "worker compact dispatched", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 	// Compaction emits TurnStart while compactCommand is true: held turn-1 report must survive.
-	h.holders.out(holder, `{"type":"agent_start"}`)
+	h.holders.out(holder, stateLine(HarnessRunning))
 	c := h.runner.conv(child.ID)
 	eventually(t, "compaction TurnStart observed with held report preserved", func() bool {
 		ok := false
@@ -1040,7 +1020,7 @@ func TestCompactionBeginTurnPreservesHeldReportOnCompactFailure(t *testing.T) {
 		t.Fatal("beginTurn cleared rec.HeldTurn during compaction command")
 	}
 	// Compaction turn ends without CompactEnd (failure): parent must receive the held turn-1 report.
-	h.holders.out(holder, `{"type":"agent_settled"}`)
+	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 	eventually(t, "parent receives held turn-1 report after failed compaction", func() bool { return len(got.list()) == 1 })
 	reps := got.list()
 	if len(reps) != 1 || reps[0].Result.Status != TurnDone || reps[0].Result.Message != "turn-1-work" {

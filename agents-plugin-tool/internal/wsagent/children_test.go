@@ -18,12 +18,16 @@ import (
 )
 
 // childHarness provides Claude and werk tiers, steered reports, and an MCP endpoint.
+const customWorkerProfile = `{"backend":"claude","tools":["Read","Edit"],"ws_tools":["agent.spawn"],"idle_timeout_seconds":1}`
+
 func childHarness(t *testing.T) (*harness, *reports) {
 	t.Helper()
 	setLookPath(t, func(file string) (string, error) { return file, nil })
 	h := newHarness(t, map[string]string{
-		"chat": chatProfile,
-		"piw":  `{"backend":"claude","model":"haiku","ws_tools":["pi.spawn","pi.list"]}`,
+		"chat":              chatProfile,
+		"custom-worker":     customWorkerProfile,
+		"permission-worker": permissionWorkerProfile,
+		"piw":               `{"backend":"claude","model":"haiku","ws_tools":["pi.spawn","pi.list"]}`,
 	})
 	got := &reports{}
 	h.config.Report = got.add
@@ -156,11 +160,17 @@ func (h *harness) record(id string) Record {
 // with a running child it spawned (process 1).
 func workerWithChild(t *testing.T, h *harness) (w State, wp *fakeProc, token string, gc State, gp *fakeProc) {
 	t.Helper()
-	w = h.spawnWorker("medium")
+	w, err := h.runner.Spawn(SpawnSpec{
+		Profile: "custom-worker", Root: h.root, Prompt: "work", Tier: "medium", Parent: &leadParent,
+		PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	wp = h.backend.waitProc(t, 0)
 	wp.nextSent(t)
 	token = h.token(0)
-	gc = h.spawnChild(token, "small", "sub task")
+	gc = h.spawnChild(token, "claude.small", "sub task")
 	gp = h.backend.waitProc(t, 1)
 	gp.nextSent(t)
 	return w, wp, token, gc, gp

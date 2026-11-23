@@ -38,7 +38,7 @@ func TestHostedObservedCoalescedChildHistorySurvivesRestart(t *testing.T) {
 		holder string
 	}{{direct, directHolder}, {deep, deepHolder}} {
 		for i, model := range []string{"A", "B", "C"} {
-			h.holders.out(child.holder, string(observedClaudeLine("msg", fmt.Sprintf("%s-%d", child.st.ID, i), model, time.UnixMilli(int64(1000+i)).UTC().Format(time.RFC3339Nano), "")))
+			h.holders.out(child.holder, string(observedClaudeLine(fmt.Sprintf("msg-%d", i), fmt.Sprintf("%s-%d", child.st.ID, i), model, time.UnixMilli(int64(1000+i)).UTC().Format(time.RFC3339Nano), "")))
 		}
 		eventually(t, "all child responses applied while parent blocked", func() bool { return len(h.state(child.st.ID).Observations) == 3 })
 	}

@@ -2,8 +2,6 @@ package wsagent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,7 +151,7 @@ func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
 	waitRows(wslive.StatusDone, wslive.StatusDone)
 }
 
-func TestMappedPiFailureReachesRecursiveWatchFeedBeforeAnotherUpdate(t *testing.T) {
+func TestMappedClaudeFailureReachesRecursiveWatchFeedBeforeAnotherUpdate(t *testing.T) {
 	h, _ := newHeldWorkerHarness(t)
 	worker, _ := spawnRecoveryWorker(t, h)
 	var mu sync.Mutex
@@ -176,7 +174,7 @@ func TestMappedPiFailureReachesRecursiveWatchFeedBeforeAnotherUpdate(t *testing.
 		t.Fatal(err)
 	}
 	holder := h.holder(leaf.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"mapped failure","content":[]}}`, `{"type":"agent_settled"}`)
+	h.holders.out(holder, stateLine(HarnessRunning), `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"mapped failure"}`, stateLine(HarnessIdle))
 	eventually(t, "one coherent failed descendant emission", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -277,7 +275,6 @@ func TestHostedUsageWakesDoNotRereadClosedSnapshots(t *testing.T) {
 		})
 	}
 	finished, active := spawn(), spawn()
-	file := filepath.Join(h.runner.conv(finished.ID).dir, "pi", "session.jsonl")
 	setUsage(finished.ID, 1200, 10)
 	if _, err := h.runner.CloseConversation(finished.ID); err != nil {
 		t.Fatal(err)
@@ -302,23 +299,6 @@ func TestHostedUsageWakesDoNotRereadClosedSnapshots(t *testing.T) {
 	}
 	if got := reads.Load(); got != before {
 		t.Fatalf("usage-only wakes reread closed snapshots: %d -> %d", before, got)
-	}
-	// A closed Pi child can reopen. Its next closure must not reuse the
-	// previous lifetime's cached usage, even within the same timestamp second.
-	if err := os.WriteFile(file, []byte("persisted conversation\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h.send(finished.ID, "continue")
-	h.holder(finished.ID)
-	setUsage(finished.ID, 3400, 30)
-	if _, err := h.runner.CloseConversation(finished.ID); err != nil {
-		t.Fatal(err)
-	}
-	if st := h.state(finished.ID); st.ContextTokens == nil || *st.ContextTokens != 3400 {
-		t.Fatalf("reclosed usage reused stale cache: %+v", st)
-	}
-	if got := reads.Load(); got != before {
-		t.Fatalf("new closure should reuse live state without snapshot I/O: %d -> %d", before, got)
 	}
 }
 
