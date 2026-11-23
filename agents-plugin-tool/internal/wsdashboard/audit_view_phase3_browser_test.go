@@ -137,6 +137,29 @@ func TestAuditViewPhase3Browser(t *testing.T) {
 		},
 	}
 
+	// Events for the inspector's server-drawn marks: Unicode, rune width, and
+	// stored_trunc seam lines (head "xa" + tail "bz", head "pre alpha" + tail
+	// "beta post"). No rendered row names them: they are opened from hits.
+	events = append(events,
+		wsaudit.Envelope{
+			V: 1, ID: "p3-ev-uni", Seq: 9, Session: "livesession", At: t0.Add(9 * time.Millisecond),
+			Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Bash", CallID: "p3-c-uni", ModelSeen: true,
+			Out: "plain FOO line\nτα ελληνικά αβγ here\n😀\n😀a\n",
+		},
+		wsaudit.Envelope{
+			V: 1, ID: "p3-ev-seam1", Seq: 10, Session: "livesession", At: t0.Add(10 * time.Millisecond),
+			Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Bash", CallID: "p3-c-seam1", ModelSeen: true,
+			Out:         "xabz\nlast",
+			StoredTrunc: &wsaudit.StoredTrunc{Out: &wsaudit.BodyTrunc{OriginalBytes: 5000, HeadBytes: 2, TailBytes: 8}},
+		},
+		wsaudit.Envelope{
+			V: 1, ID: "p3-ev-seam2", Seq: 11, Session: "livesession", At: t0.Add(11 * time.Millisecond),
+			Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Bash", CallID: "p3-c-seam2", ModelSeen: true,
+			Out:         "pre alphabeta post\nend",
+			StoredTrunc: &wsaudit.StoredTrunc{Out: &wsaudit.BodyTrunc{OriginalBytes: 5000, HeadBytes: 9, TailBytes: 13}},
+		},
+	)
+
 	seq := uint64(20)
 	for i := 1; i <= 105; i++ {
 		seq++

@@ -80,7 +80,7 @@ test('auRenderBodyContent handles redactions, stored_trunc, seam seen-cut, searc
     truncated: true,
     range: { in: { offset: 25, total: 200 } }
   };
-  const res = h.auRenderBodyContent(ev, 'in', { search: 'tail', activeMatch: 0, wrap: true });
+  const res = h.auRenderBodyContent(ev, 'in', { search: 'tail', activeMatch: 0, wrap: true, matches: { in: { spans: [{ line: 2, start: 0, end: 4 }] } } });
   assert.equal(res.matchCount, 1);
   assert.ok(res.html.includes('class="au-code au-wrap"'));
   assert.ok(res.html.includes('🔒 api-key · 32B'));
