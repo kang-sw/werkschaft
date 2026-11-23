@@ -3,6 +3,7 @@ title: "감사 일치 위치의 경계 표시 재스캔·Raw 탭 상한 표시·
 related:
   261123-bug-ws-audit-span-cost-and-cap: "its bounded-work Decision is not met on the right-sentinel fallback this ticket repairs"
   261123-bug-ws-audit-inspector-matching: "its Result specifies the N+ capped display the stored Raw tab drops"
+completed: 2026-11-23
 ---
 
 # Audit span right-sentinel rescan, stored Raw cap flag, composer test waits (re-sweep repair)
@@ -99,3 +100,38 @@ Run the targeted wsdashboard audit Go tests (also under `-race`), the
 combined Node audit suites, the audit-view browser tests,
 `go test ./internal/wsdashboard -run TestComposer -count=3`, and
 `GOOS=windows go vet ./internal/wsdashboard/`.
+
+### Result (4b7e718a5) - 2026-11-23
+
+Landed in `9a36b5655` and `4b7e718a5`:
+
+- Every seamed window (head with a right neighbour, tail with a left one) is
+  scanned by `boundedMatches` (`audit_span_scan.go`): the pattern's
+  `regexp/syntax` program run backwards over the window once, holding per
+  position the first-match end for each state a thread can wait in. Work is
+  window x program size, independent of the span count; spans are
+  leftmost-first FindAll bounded to the window. `shapeFirst`, the context
+  expressions and the retry are gone. `audit_query.go` is 980 lines.
+- The stored `other` Raw tab carries `matchCapped` (`dashboard-audit-window.js`);
+  node test shows `1/10000+` capped, `1/3` uncapped. Capture (not committed):
+  `/tmp/audit-raw-cap-shots/stored-other-raw-capped-counter.png`.
+- Composer tests register `exec_slow` / `exec_async_p` before the card
+  converts (`composer_exec_test.go`, `composer_exec_perf_test.go`).
+
+Verification: `TestAuditSpanSentinelRetryIsLinear` (10 head shapes, n=5000 and
+9000, `rows <= n+1`, one pass), `TestAuditSpanTailWindowRetryIsLinear` (6 tail
+shapes incl. `\b\w+\b|\w`, rows bound and ratio, spans equal the reference),
+`TestAuditSpanScanAgreesWithPlainReference` (generated, ~23k cases),
+`TestAuditSpanBoundedWindowEdges`; an old-vs-new scratch comparison of 152,100
+cases gave identical nonempty spans (head-side change). Audit Go tests pass
+also under `-race`; node audit suites 42/42; audit-view browser tests pass;
+composer tests pass with a 150 ms scratch pause under `-cpu 1`, with
+`-race -cpu 1,2,4 -count=30`, and `-run TestComposer -count=3`;
+`GOOS=windows go vet` clean.
+
+Decisions: Route Facts were absent; proceeded on the lead's instruction. The
+lite review's Critical (tail window quadratic) was fixed in `4b7e718a5`.
+Patterns without assertions use the engine's own FindAll, whose cost for
+shapes like `x.*q|.` is the engine's; the doc comment states this (unchanged
+baseline, not made bounded). The bounded pass does not stop early at the span
+cap (11-73 ms for a 540 KB head).
