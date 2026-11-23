@@ -159,7 +159,14 @@
       "registered_at": "2026-10-20T13:35:50Z"
     },
     "261028-bug-pi-agent-batch-summary-language-drift": {
-      "registered_at": "2026-10-28T11:45:02Z"
+      "registered_at": "2026-10-28T11:45:02Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:35:02Z"
+      }
     },
     "261029-chore-wsflow-no-agent-env-rename-and-setup-tool-removal": {
       "registered_at": "2026-10-29T00:09:05Z"
