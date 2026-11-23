@@ -13,6 +13,8 @@ module.exports = function renderedEntries(source, fixture) {
       if (this.tagName === 'TEMPLATE') this.content = new Node({ children: data.content });
     }
     get id() { return this.attrs.id || ''; }
+    get nodeType() { return 1; }
+    get classList() { return { contains: c => (this.attrs.class || '').split(/\s+/).includes(c) }; }
     get textContent() { return this.text + this.children.map(n => n.textContent).join(''); }
     getAttribute(name) { return this.attrs[name] ?? null; }
     hasAttribute(name) { return name in this.attrs; }
