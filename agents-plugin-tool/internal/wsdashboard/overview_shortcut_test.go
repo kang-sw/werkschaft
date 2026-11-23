@@ -17,7 +17,7 @@ func TestBoardOverviewShortcutTargets(t *testing.T) {
 	}
 	runNode(t, "Overview shortcut targets", `
 var bad = [], handler, clicked = 0, sent = 0, visible = true, present = true;
-var shell = false, shHidden = false, shOn = null;
+var shell = false, shHidden = false, shOn = null, shSettingsEntry = null;
 var button = { getClientRects: function () { return visible ? [{}] : []; }, click: function () { clicked++; } };
 var doc = { querySelector: function () { return present ? button : null; }, addEventListener: function (kind, fn) { handler = fn; } };
 function shSend(ent, kind) { if (ent !== shOn || kind !== "overview") throw Error("wrong recipient"); sent++; }
