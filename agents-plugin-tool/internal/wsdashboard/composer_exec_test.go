@@ -1060,16 +1060,25 @@ func TestComposerRetentionRunsWithoutNewOutput(t *testing.T) {
 	if card.File == "" {
 		t.Fatalf("no file: %+v", card)
 	}
-	// The file ages past seven days; nothing else happens.
-	old := time.Now().Add(-8 * 24 * time.Hour)
-	if err := os.Chtimes(card.File, old, old); err != nil {
-		t.Fatal(err)
-	}
-	// A card read does not touch the file (it is still there).
-	composerGet(f.d, "/s/livesession/composer-exec/retention-0001")
-	if _, err := os.Stat(card.File); err != nil {
-		t.Fatal("a card read removed the file")
-	}
+	// The write that produced the file asked the loop for a sweep, and that
+	// sweep may still be queued behind the card turning "done". Holding the
+	// sweep lock while the file ages and the card is read keeps any sweep from
+	// reading the directory in between, so only a card read could remove the
+	// file here; the queued sweep (and the kick below) run after the unlock.
+	func() {
+		composerPruneMu.Lock()
+		defer composerPruneMu.Unlock()
+		// The file ages past seven days; nothing else happens.
+		old := time.Now().Add(-8 * 24 * time.Hour)
+		if err := os.Chtimes(card.File, old, old); err != nil {
+			t.Fatal(err)
+		}
+		// A card read does not touch the file (it is still there).
+		composerGet(f.d, "/s/livesession/composer-exec/retention-0001")
+		if _, err := os.Stat(card.File); err != nil {
+			t.Fatal("a card read removed the file")
+		}
+	}()
 	// The loop's retention pass (what the period or a write wakes).
 	f.d.composer.kick <- struct{}{}
 	waitFor(t, "the expired file to be removed and its absence published", func() bool {
