@@ -219,15 +219,72 @@ async function runSearch(frame, query, opts = {}) {
     assert.equal(await frame.locator(".au-shit").count(), 1);
     assert.equal(await frame.locator(".au-sfoot").evaluate((n) => n.hidden), true);
 
-    // 6c. A server-accepted RE2 query that JS spells differently ((?i) inline flag) still marks the inspector.
-    await runSearch(frame, "(?i)alpha_needle", { regex: true, caseSensitive: true });
-    await frame.waitForSelector(".au-shit");
-    await frame.locator(".au-shit").first().click();
-    await frame.waitForSelector(".au-win .au-hit");
-    assert.ok((await frame.locator(".au-win .au-hit").count()) > 0, "inspector marks a (?i) RE2 query the server matched");
-    if (SHOTS) {
-      await page.screenshot({ animations: "disabled", path: path.join(SHOTS, "inspector-re2-inline-flag.png") });
-    }
+    // 6c. Server-accepted RE2 queries that JS spells differently or lacks: the inspector draws the server's
+    // spans (the event route's matches), so each is marked exactly as the search matched it.
+    console.log("STEP 4b: inspector marks are the server's spans");
+    const shot = async (name) => {
+      if (!SHOTS) return;
+      fs.mkdirSync(SHOTS, { recursive: true });
+      await page.screenshot({ animations: "disabled", path: path.join(SHOTS, name) });
+    };
+    const openHit = async (query, opts, lineText) => {
+      await runSearch(frame, query, opts);
+      await frame.waitForSelector(".au-shit");
+      const hits = frame.locator(".au-shit");
+      const n = await hits.count();
+      for (let i = 0; i < n; i++) {
+        if ((await hits.nth(i).textContent()).includes(lineText)) {
+          await hits.nth(i).click();
+          await frame.waitForSelector(".au-win .au-hit");
+          return;
+        }
+      }
+      throw new Error("no hit shows " + lineText + " for " + query);
+    };
+    const marks = async (lineNo) => frame.locator(".au-win " + (lineNo ? `.au-line[data-line="${lineNo}"] ` : "") + ".au-hit").allTextContents();
+    await openHit("(?i)alpha_needle", { regex: true, caseSensitive: true }, "ALPHA_NEEDLE");
+    assert.ok((await marks()).length > 0, "inspector marks a (?i) RE2 query the server matched");
+    await shot("inspector-re2-inline-flag.png");
+
+    await openHit("(?i:foo)", { regex: true, caseSensitive: true }, "plain FOO line");
+    assert.deepEqual(await marks(1), ["FOO"]);
+    await shot("inspector-scoped-flag.png");
+
+    await openHit("\\p{Greek}+", { regex: true, caseSensitive: true }, "ελληνικά");
+    assert.deepEqual(await marks(2), ["τα", "ελληνικά", "αβγ"]);
+    await shot("inspector-greek-script.png");
+
+    await openHit("^.$", { regex: true, caseSensitive: true }, "😀");
+    assert.deepEqual(await marks(3), ["😀"], "a lone emoji is one rune for ^.$");
+    assert.deepEqual(await marks(4), []);
+    await shot("inspector-emoji-line.png");
+
+    // The inspector's own find box asks the server too: an empty-able Unicode class over an astral
+    // character followed by a letter completes (it froze the local loop), and marks the letter.
+    await frame.locator(".au-win .au-sinp").fill("\\p{L}*");
+    await frame.waitForFunction(() => {
+      const l = document.querySelector('.au-win .au-line[data-line="4"] .au-hit');
+      return l && l.textContent === "a";
+    });
+    assert.deepEqual(await marks(4), ["a"]);
+    assert.deepEqual(await marks(3), []);
+    assert.deepEqual(await marks(1), ["plain", "FOO", "line"]);
+    await shot("inspector-empty-unicode-class.png");
+
+    // A refused query shows the server's text and zero marks.
+    await frame.locator(".au-win .au-sinp").fill("(");
+    await frame.waitForSelector(".au-win .au-scnt.au-scnt-err");
+    assert.match(await frame.locator(".au-win .au-scnt").textContent(), /valid regular expression/);
+    assert.equal(await frame.locator(".au-win .au-hit").count(), 0);
+    await shot("inspector-invalid-query.png");
+
+    // Seam lines: the same-start alternative marks the retained head; both sides of a seam are marked.
+    await openHit("ab|a", { regex: true, caseSensitive: true }, "xabz");
+    assert.deepEqual(await marks(1), ["a"], "ab|a with head a and tail b marks a on the head");
+    await shot("inspector-seam-same-start.png");
+    await openHit("alpha|beta", { regex: true, caseSensitive: true }, "pre alphabeta post");
+    assert.deepEqual(await marks(1), ["alpha", "beta"]);
+    await shot("inspector-seam-both-sides.png");
 
     // 7. Clear removes hit list and all row badges.
     await runSearch(frame, "ALPHA_NEEDLE");

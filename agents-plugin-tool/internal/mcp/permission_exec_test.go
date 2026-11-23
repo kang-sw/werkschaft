@@ -36,7 +36,14 @@ func (w *workerFixture) call(name string, args map[string]any) (string, bool) {
 func newWorkerFixture(t *testing.T, harness string, level wsagent.PermissionLevel, extraEnv ...string) *workerFixture {
 	t.Helper()
 	fx := newHostedExecFixture(t, 10*time.Second)
-	env := append(os.Environ(), extraEnv...)
+	// The worker's level is its own, whatever level the test process runs at.
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, wsagent.EnvPermissionLevel+"=") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, extraEnv...)
 	if level != "" {
 		env = append(env, wsagent.EnvPermissionLevel+"="+string(level))
 	}

@@ -255,6 +255,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await win.locator('.au-sinp').click();
     await page.keyboard.press('Control+f');
     await win.locator('.au-sinp').fill('needle');
+    // The count is the server's spans, asked for after the debounce.
+    await frame.waitForFunction(() => /^\d+\//.test(document.querySelector('.au-win .au-scnt')?.textContent || ''));
     const scnt = await win.locator('.au-scnt').textContent();
     assert.ok(scnt.startsWith('1/'), `search match count shown: ${scnt}`);
     await page.keyboard.press('Enter');
