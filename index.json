@@ -595,19 +595,6 @@
     "261123-chore-ws-retire-pi-harness": {
       "registered_at": "2026-11-23T13:30:34Z"
     },
-    "261123-feat-ws-dashboard-board-topic-anchor-scroll": {
-      "registered_at": "2026-11-23T02:37:10Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-23T04:47:47Z",
-        "impl": {
-          "branch": "impl/develop/ditch-runt-coil"
-        }
-      }
-    },
     "261123-feat-ws-dashboard-main-panel-snap-deck": {
       "registered_at": "2026-11-23T12:17:35Z"
     }
