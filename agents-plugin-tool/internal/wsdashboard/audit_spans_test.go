@@ -226,3 +226,125 @@ func TestAuditEventSpansAreCapped(t *testing.T) {
 		t.Fatalf("exactly the cap: %d spans, capped %v", len(got.Spans), got.Capped)
 	}
 }
+
+// spansOf answers the event route's match spans for one case.
+func spansOf(t *testing.T, c spanCase) (out struct {
+	Through int
+	Spans   []auditSpan
+	Capped  bool
+}) {
+	t.Helper()
+	got := auditJSON[spanOut](t, spanFixture(c), "/s/sess/audit/event/e1?only=matches&"+c.params(), 200).Matches[wsaudit.FieldOut]
+	out.Through, out.Spans, out.Capped = got.Through, got.Spans, got.Capped
+	return out
+}
+
+// TestAuditEventSpansBoundaryMatchesOnRetainedSideAreBounded pins that many
+// assertion matches on a retained side of a seam line cost linear work: a
+// word character before the tail window makes the first match of every resume
+// touch the window's sentinel, which once rescanned the rest of the window per
+// word. The spans equal the words' starts, whose offsets are known by
+// construction; the time bound is generous (the quadratic form took seconds).
+func TestAuditEventSpansBoundaryMatchesOnRetainedSideAreBounded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		words  int
+		capped bool
+	}{"below the cap": {9000, false}, "past the cap": {auditSpansMax + 500, true}} {
+		t.Run(name, func(t *testing.T) {
+			// "x" is the head; the tail window opens on a word character
+			// whose left neighbour is a word character, so its first word is
+			// not at a boundary.
+			c := spanCase{body: "x" + strings.Repeat("ab ", tc.words), head: 1, q: `\b\w`, regex: true, cs: true}
+			start := time.Now()
+			got := spansOf(t, c)
+			if d := time.Since(start); d > 3*time.Second {
+				t.Errorf("spans took %v", d)
+			}
+			// The head "x" is a word of its own; the tail's first word is
+			// not at a boundary, every later one is.
+			want := min(tc.words, auditSpansMax)
+			if len(got.Spans) != want || got.Capped != tc.capped {
+				t.Fatalf("%d spans (want %d), capped %v", len(got.Spans), want, got.Capped)
+			}
+			for i, sp := range got.Spans {
+				w := auditSpan{1, 1 + 3*i, 2 + 3*i}
+				if i == 0 {
+					w = auditSpan{1, 0, 1}
+				}
+				if sp != w {
+					t.Fatalf("span %d = %v, want %v", i, sp, w)
+				}
+			}
+		})
+	}
+}
+
+// TestAuditEventSpanCapCountsVisibleSpans pins that empty matches never count
+// toward the cap: a long run of them before a visible match leaves the match
+// and no capped mark, and empty matches between visible ones do not shorten
+// the answer.
+func TestAuditEventSpanCapCountsVisibleSpans(t *testing.T) {
+	got := spansOf(t, spanCase{body: strings.Repeat("1", auditSpansMax+1) + "x", head: -1, q: `\p{L}*`, regex: true, cs: true})
+	if want := []auditSpan{{1, auditSpansMax + 1, auditSpansMax + 2}}; !reflect.DeepEqual(got.Spans, want) || got.Capped {
+		t.Fatalf("spans %v capped %v, want %v uncapped", got.Spans, got.Capped, want)
+	}
+	// The same on both sides of a seam, with an assertion in the pattern.
+	got = spansOf(t, spanCase{body: strings.Repeat("1", auditSpansMax+1) + " x" + strings.Repeat("1", 50), head: auditSpansMax + 20, q: `\b\p{L}*`, regex: true, cs: true})
+	if want := []auditSpan{{1, auditSpansMax + 2, auditSpansMax + 3}}; got.Capped || !reflect.DeepEqual(got.Spans, want) {
+		t.Fatalf("seam: spans %v capped %v", got.Spans, got.Capped)
+	}
+	// Visible spans fill the cap with empty matches between them.
+	got = spansOf(t, spanCase{body: strings.Repeat("a1", auditSpansMax+5), head: -1, q: `a?`, regex: true, cs: true})
+	if len(got.Spans) != auditSpansMax || !got.Capped {
+		t.Fatalf("%d spans, capped %v", len(got.Spans), got.Capped)
+	}
+}
+
+// TestAuditEventSpansEmptyMatchAtWindowEnd pins that an empty match at the end
+// of a seam window (an assertion or a star that matches nothing there) marks
+// nothing and does not disturb the window's other matches.
+func TestAuditEventSpansEmptyMatchAtWindowEnd(t *testing.T) {
+	for _, q := range []string{`b*`, `\b`, `$`, `\w*`} {
+		got := spansOf(t, spanCase{body: "ab cd", head: 2, q: q, regex: true, cs: true})
+		if len(got.Spans) > 2 {
+			t.Errorf("%s: spans %v", q, got.Spans)
+		}
+	}
+	got := spansOf(t, spanCase{body: "ab cd", head: 2, q: `\w*`, regex: true, cs: true})
+	if want := []auditSpan{{1, 0, 2}, {1, 3, 5}}; !reflect.DeepEqual(got.Spans, want) {
+		t.Fatalf("spans %v, want %v", got.Spans, want)
+	}
+}
+
+// TestAuditEventSpansStayWithinTheReturnedPrefix pins that with no through_*
+// the spans cover exactly the prefix the envelope returns: a character
+// crossing the implicit cutoff is clipped from both, so a span lies inside
+// the returned text and one ending just before the character is kept.
+func TestAuditEventSpansStayWithinTheReturnedPrefix(t *testing.T) {
+	body := strings.Repeat("a", auditBodyMax-4) + "end" + "😀" + "tail"
+	if body[auditBodyMax-1:auditBodyMax+3] != "😀" {
+		t.Fatal("the character does not cross the cutoff")
+	}
+	for _, tc := range []struct {
+		q     string
+		spans []auditSpan
+	}{
+		{"end", []auditSpan{{1, auditBodyMax - 4, auditBodyMax - 1}}},
+		{"😀", nil},
+		{"tail", nil},
+	} {
+		c := spanCase{body: body, head: -1, q: tc.q, cs: true}
+		d := spanFixture(c)
+		raw := auditJSON[map[string]any](t, d, "/s/sess/audit/event/e1?"+c.params(), 200)
+		if got := len(raw["out"].(string)); got != auditBodyMax-1 {
+			t.Fatalf("envelope out = %d bytes, want %d", got, auditBodyMax-1)
+		}
+		got := spansOf(t, c)
+		if got.Through != auditBodyMax-1 {
+			t.Fatalf("%q: through %d, want %d", tc.q, got.Through, auditBodyMax-1)
+		}
+		if !reflect.DeepEqual(append([]auditSpan{}, got.Spans...), append([]auditSpan{}, tc.spans...)) {
+			t.Errorf("%q: spans %v, want %v", tc.q, got.Spans, tc.spans)
+		}
+	}
+}

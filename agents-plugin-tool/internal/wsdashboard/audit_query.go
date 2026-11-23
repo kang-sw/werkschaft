@@ -745,6 +745,8 @@ type seamMatcher struct {
 	// re is the compiled form by the left and right sentinel kind (see
 	// sentinelKind), made on first use; a request is served by one goroutine.
 	re map[[2]int]*regexp.Regexp
+	// ctx is the resumable form (see audit_span_scan.go), by its shape.
+	ctx map[[3]int]*regexp.Regexp
 }
 
 // seamSentinels are the sentinel characters by kind: 0 none (a line edge),
@@ -752,7 +754,7 @@ type seamMatcher struct {
 var seamSentinels = [3]string{"", "\x00", "_"}
 
 func newSeamMatcher(pattern string) (*seamMatcher, error) {
-	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}}
+	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}, ctx: map[[3]int]*regexp.Regexp{}}
 	if _, err := m.compiled(0, 0); err != nil {
 		return nil, err
 	}
@@ -805,50 +807,6 @@ func (m *seamMatcher) match(line string, seam int) (int, int, bool) {
 		return start, end, true
 	}
 	return m.first(line, seam, len(line))
-}
-
-// all appends every non-overlapping match of re (the pattern's plain
-// expression) inside the window [lo, hi), in order, as Go's FindAll gives
-// them on the window with its neighbours as sentinels. A match that touches
-// a sentinel (leftmost-first took an alternative reaching out of the window)
-// is not one: the window's first match is taken by shape instead, and the
-// search resumes after it. stop reports a full answer.
-func (m *seamMatcher) all(re *regexp.Regexp, line string, lo, hi int, out *[][2]int, stop func() bool) {
-	for lo < hi {
-		left, right := sentinelKind(line, lo-1), sentinelKind(line, hi)
-		ls, rs := seamSentinels[left], seamSentinels[right]
-		win := ls + line[lo:hi] + rs
-		resume := -1
-		for _, l := range re.FindAllStringIndex(win, -1) {
-			if l[0] >= len(ls) && l[1] <= len(win)-len(rs) {
-				*out = append(*out, [2]int{l[0] - len(ls) + lo, l[1] - len(ls) + lo})
-				if stop() {
-					return
-				}
-				continue
-			}
-			// Reached a sentinel: only the window's first or last match can.
-			from := lo + max(l[0]-len(ls), 0)
-			start, end, ok := m.first(line, from, hi)
-			if !ok {
-				return
-			}
-			*out = append(*out, [2]int{start, end})
-			if stop() {
-				return
-			}
-			resume = end
-			if end == start { // an empty match: move up one character
-				_, w := utf8.DecodeRuneInString(line[end:hi])
-				resume = end + max(w, 1)
-			}
-			break
-		}
-		if resume < 0 {
-			return
-		}
-		lo = resume
-	}
 }
 
 // wordClass is 1 for an ASCII word byte (what \b counts as a word
@@ -941,72 +899,25 @@ type auditBodyMatches struct {
 	Capped  bool        `json:"capped,omitempty"`
 }
 
-// findAll is up to limit non-overlapping matches inside text, in byte
-// offsets, the way Go's FindAll gives them (an empty match adjacent to the
-// previous match is dropped, an empty match advances by one rune).
-func (s auditSearch) findAll(text string, limit int) [][2]int {
-	if s.re == nil {
-		var out [][2]int
-		for at := 0; len(out) < limit; {
-			i := strings.Index(text[at:], s.lit)
-			if i < 0 {
-				break
-			}
-			out = append(out, [2]int{at + i, at + i + len(s.lit)})
-			at += i + len(s.lit)
-		}
-		return out
-	}
-	locs := s.re.FindAllStringIndex(text, limit)
-	out := make([][2]int, len(locs))
-	for i, l := range locs {
-		out[i] = [2]int{l[0], l[1]}
-	}
-	return out
-}
-
-// lineMatches is up to limit matches on one stored line, in byte offsets of
-// the line, under the rules of matchLine: none consumes text from both sides
-// of the seam (seam >= 0). Without assertions the head and the tail are
-// matched apart; with them, each side is matched as a window of the whole
-// line.
-func (s auditSearch) lineMatches(line string, seam, limit int) [][2]int {
-	if seam < 0 {
-		return s.findAll(line, limit)
-	}
-	if s.seamed == nil {
-		out := s.findAll(line[:seam], limit)
-		if len(out) < limit {
-			for _, m := range s.findAll(line[seam:], limit-len(out)) {
-				out = append(out, [2]int{m[0] + seam, m[1] + seam})
-			}
-		}
-		return out
-	}
-	var out [][2]int
-	full := func() bool { return len(out) >= limit }
-	s.seamed.all(s.re, line, 0, seam, &out, full)
-	if !full() {
-		s.seamed.all(s.re, line, seam, len(line), &out, full)
-	}
-	return out
-}
-
 // bodySpans is the non-empty matches of the first through bytes of body, line
-// by line, up to auditSpansMax. head is the body's stored_trunc head length
-// (-1 for a body stored whole).
+// by line, up to auditSpansMax; one more visible match marks the answer
+// capped. Empty matches are skipped and never count toward the cap. head is
+// the body's stored_trunc head length (-1 for a body stored whole).
 func (s auditSearch) bodySpans(body string, head, through int) auditBodyMatches {
 	res := auditBodyMatches{Through: through, Spans: []auditSpan{}}
 	eachLine(body[:through], head, func(no int, line string, seam int) bool {
 		units := utf16Cursor{s: line}
-		limit := auditSpansMax - len(res.Spans) + 1
-		ms := s.lineMatches(line, seam, limit)
-		for _, m := range ms {
-			if m[0] != m[1] && len(res.Spans) < auditSpansMax {
-				res.Spans = append(res.Spans, auditSpan{Line: no, Start: units.at(m[0]), End: units.at(m[1])})
+		s.eachLineMatch(line, seam, func(start, end int) bool {
+			if start == end {
+				return false
 			}
-		}
-		res.Capped = len(ms) >= limit
+			if len(res.Spans) == auditSpansMax {
+				res.Capped = true
+				return true
+			}
+			res.Spans = append(res.Spans, auditSpan{Line: no, Start: units.at(start), End: units.at(end)})
+			return false
+		})
 		return !res.Capped
 	})
 	return res
