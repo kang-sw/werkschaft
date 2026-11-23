@@ -308,30 +308,6 @@ test('auIsHiddenAuditKind and auIsSessionStartEvent classify all audit kinds acc
   assert.equal(h.auIsSessionStartEvent({ kind: 'hook', subkind: 'system_prompt' }), false);
 });
 
-test('auReadKindsPref and auWriteKindsPref default cleanly and persist toggles', () => {
-  const h = loadAuditRowsHelpers();
-  const store = new Map();
-  const storage = {
-    getItem(k) { return store.has(k) ? store.get(k) : null; },
-    setItem(k, v) { store.set(k, String(v)); }
-  };
-  const def = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(def.thinking, true);
-  assert.equal(def.other, true);
-
-  def.thinking = false;
-  def.unknown_ignored = false;
-  h.auWriteKindsPref(storage, 'ws.dashboard.auditkinds', def);
-  const reread = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(reread.thinking, false);
-  assert.equal(reread.hook, true);
-  assert.equal(reread.unknown_ignored, undefined);
-
-  store.set('ws.dashboard.auditkinds', '{broken json');
-  const fallback = h.auReadKindsPref(storage, 'ws.dashboard.auditkinds');
-  assert.equal(fallback.thinking, true);
-});
-
 test('auInterleavePlan attaches matching call_ids, falls back orphans chronologically, and anchors sysStart', () => {
   const h = loadAuditRowsHelpers();
   const entries = [
@@ -376,7 +352,6 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
 
   const fetched = [];
   const opened = [];
-  const store = new Map();
   let mode = 'normal';
 
   const fetchFn = async (url) => {
@@ -440,10 +415,6 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
     wsT(k) { return k; },
     CustomEvent: function CustomEvent(type, init) { this.type = type; this.detail = (init || {}).detail || {}; },
     window: {
-      localStorage: {
-        getItem(k) { return store.has(k) ? store.get(k) : null; },
-        setItem(k, v) { store.set(k, String(v)); }
-      },
       getSelection() { return { isCollapsed: true }; },
       fetch: fetchFn
     }
@@ -452,7 +423,7 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
     fmtBytes: (n) => `${n} B`,
     openCall(id) { opened.push(['call', id]); },
     openEvent(id, opts) { opened.push(['event', id, opts && opts.tab]); },
-    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]').filter((el) => !el.classList.contains('au-kind-hidden')); },
+    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]'); },
     syncSelection() {}
   };
   vm.createContext(ctx);
@@ -490,13 +461,11 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(fetched.some((u) => u.includes('after=cur2')), '410 triggered once then reset from floor');
 
-  // Kind filter chip toggle hides thinking rows and persists preference
-  const thinkChip = dom.convo.querySelector('.au-fchip[data-au-kind="thinking"]');
-  dom.convo.querySelector('.au-bar').dispatchEvent({ type: 'click', target: thinkChip });
-  assert.equal(dom.centries.querySelector('.au-hid[data-event-id="ev-think"]').classList.contains('au-kind-hidden'), true);
-  assert.equal(JSON.parse(store.get('ws.dashboard.auditkinds')).thinking, false);
+  // No filter bar is drawn: every kind of hidden-event row stays in the stream.
+  assert.equal(dom.convo.querySelector('.au-bar'), null);
+  assert.equal(dom.centries.querySelector('.au-hid[data-event-id="ev-think"]').classList.contains('au-kind-hidden'), false);
 
-  // Scoped J/K/Enter: skips hidden thinking, ignores outside containers (.au-win, #composer)
+  // Scoped J/K/Enter: ignores outside containers (.au-win, #composer)
   const composer = new dom.El('DIV');
   composer.id = 'composer';
   const composerBtn = new dom.El('BUTTON');
@@ -506,7 +475,9 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.convo, preventDefault() {} });
   assert.equal(dom.centries.querySelector('.au-sysrow').focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.centries.querySelector('.au-sysrow'), preventDefault() {} });
-  // Skips thinking (hidden) and lands on r1 (c1)
+  const thinkEl = dom.centries.querySelector('.au-hid[data-event-id="ev-think"]');
+  assert.equal(thinkEl.focused, true);
+  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: thinkEl, preventDefault() {} });
   assert.equal(r1.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: r1, preventDefault() {} });
   const hookEl = dom.centries.querySelector('.au-hid[data-event-id="ev-hook"]');

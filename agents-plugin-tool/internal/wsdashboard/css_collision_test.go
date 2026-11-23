@@ -331,7 +331,7 @@ func TestCSSClassesDoNotCollideAcrossModules(t *testing.T) {
 }
 
 func TestAuditCSSUsesAuPrefix(t *testing.T) {
-	for _, name := range []string{"dashboard-audit.css", "dashboard-audit-rows.css", "dashboard-audit-search.css"} {
+	for _, name := range []string{"dashboard-audit.css", "dashboard-audit-rows.css"} {
 		b, err := readDashboardSource(embeddedDashboardAsset, name)
 		if err != nil {
 			t.Fatal(err)

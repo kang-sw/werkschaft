@@ -33,15 +33,12 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
     const frameEl = await page.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
     const frame = await frameEl.contentFrame();
 
-    // Verify harness badge in #chead and data-at on rendered entries
-    await frame.waitForSelector('#chead .hb[data-h]');
-    const badgeH = await frame.locator('#chead .hb').getAttribute('data-h');
-    assert.ok(badgeH, '#chead renders .hb[data-h]');
+    // Verify no harness chip in #chead, and data-at on rendered entries
+    assert.equal(await frame.locator('#chead .hb').count(), 0, '#chead draws no harness chip');
     const atCount = await frame.locator('#r-entries .centries > [data-entry][data-at]').count();
     assert.ok(atCount >= 40, `rendered ConvEntry elements carry data-at (got ${atCount})`);
 
     // Wait for initial interleaved rows (attached hook inside c1, reminder, subagent, compaction, other)
-    await frame.waitForSelector('#convo .au-bar .au-fchip[data-au-kind="thinking"]');
     await frame.waitForSelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]');
     await frame.waitForSelector('.au-hid[data-event-id="p2-other"]');
     await frame.waitForSelector('.au-hid[data-event-id="p2-orphan-hook"]:not(.au-inner)');
@@ -77,20 +74,15 @@ const shots = process.env.AUDIT_P2_SHOTS || '';
       c.scrollTop = c.scrollHeight;
     });
 
-    // Test filter chip persistence: toggle "subagent" off, reload page, confirm persisted under ws.dashboard.auditkinds
-    const subChip = frame.locator('.au-fchip[data-au-kind="subagent"]');
-    await subChip.click();
-    await frame.waitForFunction(() => document.querySelector('.au-hid[data-event-id="p2-subagent"]')?.classList.contains('au-kind-hidden'));
-    const storedPref = await frame.evaluate(() => JSON.parse(localStorage.getItem('ws.dashboard.auditkinds') || '{}'));
-    assert.equal(storedPref.subagent, false, 'kind chip toggle persisted to ws.dashboard.auditkinds');
+    // No filter bar is drawn, so every hidden-event row stays visible, also after a reload.
+    assert.equal(await frame.locator('#convo .au-bar, .au-fchip').count(), 0, 'no audit filter bar or chips');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-subagent"]').evaluate(el => el.classList.contains('au-kind-hidden')), false);
 
     await page.reload();
     const frame2El = await page.locator('iframe.sframe.on').elementHandle({ timeout: 10000 });
     const frame2 = await frame2El.contentFrame();
-    await frame2.waitForSelector('.au-hid[data-event-id="p2-subagent"].au-kind-hidden', { state: 'attached' });
-    // Re-enable subagent for visibility & screenshot
-    await frame2.locator('.au-fchip[data-au-kind="subagent"]').click();
-    await frame2.waitForFunction(() => !document.querySelector('.au-hid[data-event-id="p2-subagent"]')?.classList.contains('au-kind-hidden'));
+    await frame2.waitForSelector('.au-hid[data-event-id="p2-subagent"]', { state: 'attached' });
+    assert.equal(await frame2.locator('#convo .au-bar, .au-fchip').count(), 0, 'no audit filter bar or chips after reload');
 
     // Click kind="other" row -> auto-opens Raw tab, marks .au-sel
     await frame2.evaluate(() => {

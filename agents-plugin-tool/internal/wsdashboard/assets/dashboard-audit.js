@@ -35,7 +35,7 @@
 
   function auVisibleAuditRows() {
     return auCallElements().filter(function (el) {
-      return !el.hidden && !el.closest("[hidden], .au-kind-hidden");
+      return !el.hidden && !el.closest("[hidden]");
     });
   }
 
@@ -357,7 +357,7 @@
 
     var res;
     var spans = auSpansFor(win, ev);
-    var opts = { wrap: win.wrap, search: win.search, regex: !!win.regex, caseSensitive: !!win.caseSensitive, targetLine: win.targetLine || 0, activeMatch: win.activeMatch, matches: spans.parts };
+    var opts = { wrap: win.wrap, search: win.search, regex: !!win.regex, caseSensitive: !!win.caseSensitive, activeMatch: win.activeMatch, matches: spans.parts };
     if (win.tab === "raw") {
       res = auRenderRawTab(ev, opts);
     } else {
@@ -384,11 +384,10 @@
     }
     var sinpEl = win.el.querySelector(".au-sinp");
     if (sinpEl && sinpEl.value !== (win.search || "")) sinpEl.value = win.search || "";
-    var jumpEl = win.targetLine ? panel.querySelector(".au-line.au-ln-target") : (win.search && res.matchCount > 0 ? panel.querySelector(".au-hit.au-hit-cur") : null);
+    var jumpEl = win.search && res.matchCount > 0 ? panel.querySelector(".au-hit.au-hit-cur") : null;
     if (jumpEl && typeof jumpEl.scrollIntoView === "function") {
-      try { jumpEl.scrollIntoView({ block: win.targetLine ? "center" : "nearest", inline: "nearest" }); } catch (e) {}
+      try { jumpEl.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
     }
-    if (auHooks.onRender) auHooks.onRender(win, res);
   }
 
   function auIsResultSummary(ev, callId) {
@@ -541,7 +540,7 @@
     win.emptyState = false;
     win.loading = true;
     win.activeMatch = 0;
-    win.search = ""; win.regex = false; win.caseSensitive = false; win.targetLine = 0;
+    win.search = ""; win.regex = false; win.caseSensitive = false;
 
     if (rowEl) {
       var tn = rowEl.querySelector(".au-tool");
@@ -823,7 +822,7 @@
         var nextTab = tabBtn.getAttribute("data-au-tab");
         if (nextTab && AU_TABS.indexOf(nextTab) >= 0) {
           win.tab = nextTab;
-          win.activeMatch = 0; win.targetLine = 0;
+          win.activeMatch = 0;
           auRenderWindowBody(win);
         }
         return;
@@ -862,7 +861,7 @@
     if (sinp) {
       sinp.addEventListener("input", function () {
         win.search = sinp.value || "";
-        win.activeMatch = 0; win.targetLine = 0;
+        win.activeMatch = 0;
         win.spansDebounce = true;
         auRenderWindowBody(win);
       });
@@ -885,7 +884,7 @@
       if (!auWindows[i].pinned) { win = auWindows[i]; break; }
     }
     if (!win) {
-      win = { id: ++auWinSeq, callId: "", eventId: "", pinned: false, tab: initialTab || "in", wrap: false, search: "", regex: false, caseSensitive: false, targetLine: 0, activeMatch: 0, matchCount: 0, reqToken: 0, spansToken: 0, spansDebounce: false, spans: null, spansPending: null, spansTimer: 0, cache: Object.create(null), linkedEvents: [] };
+      win = { id: ++auWinSeq, callId: "", eventId: "", pinned: false, tab: initialTab || "in", wrap: false, search: "", regex: false, caseSensitive: false, activeMatch: 0, matchCount: 0, reqToken: 0, spansToken: 0, spansDebounce: false, spans: null, spansPending: null, spansTimer: 0, cache: Object.create(null), linkedEvents: [] };
       auBuildWindowDOM(win);
       var box = auComputeWidePlacement(auWindows.filter(function (w) { return w.pinned; }).length);
       win.el.style.left = box.left + "px"; win.el.style.top = box.top + "px";
@@ -906,7 +905,7 @@
     win.activeSummary = opts.summary || null; win.callSummary = opts.callSummary || null;
     win.primaryEventId = opts.primaryEventId || ""; win.resultEventId = opts.resultEventId || ""; win.resultEnvelope = null; win.resultError = null; win.resultLoading = false; win.linkedEvents = opts.linkedEvents || [];
     win.errorState = null; win.emptyState = false; win.activeMatch = 0;
-    win.search = opts.search || ""; win.regex = !!opts.regex; win.caseSensitive = !!opts.caseSensitive; win.targetLine = opts.targetLine || 0;
+    win.search = opts.search || ""; win.regex = !!opts.regex; win.caseSensitive = !!opts.caseSensitive;
     var rowEl = opts.rowEl, kind = opts.kind || (rowEl && rowEl.getAttribute("data-kind")) || (opts.summary && opts.summary.kind) || "";
     var pv = rowEl && rowEl.querySelector(".au-pv, .au-sysrow-lbl");
     win.toolLabel = opts.label || (pv && pv.textContent) || eventId;
@@ -1138,7 +1137,6 @@
     if (row && $("convo") && $("convo").contains(row)) {
       var sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed) return;
-      if (auHooks.onCallActivate && auHooks.onCallActivate(row.getAttribute("data-call"), row)) return;
       auOpenCall(row.getAttribute("data-call"), row);
     }
   });
@@ -1220,7 +1218,6 @@
   }
   auScheduleHydration();
 
-  var auHooks = Object.create(null);
   window.WsAudit = {
     fmtBytes: auFmtBytes,
     fmtSpan: auFmtSpan,
@@ -1234,7 +1231,6 @@
     visibleRows: auVisibleAuditRows,
     syncSelection: auSyncSelectedMarks,
     closeUnpinned: auCloseUnpinned,
-    hooks: auHooks,
     renderWindow: auRenderWindowBody,
     fetchEnvelope: auFetchEnvelope,
     displayedEnvelope: auDisplayedEnvelope,

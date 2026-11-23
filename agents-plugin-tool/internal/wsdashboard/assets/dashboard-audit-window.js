@@ -230,8 +230,7 @@
       }
       var unseen = wholeUnseen || (seenLocalByte != null && seenLocalByte >= 0 && ln.startByte >= seenLocalByte);
       var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, spansByLine && spansByLine[no], matchState);
-      var isTarget = matchState && matchState.targetLine === no;
-      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + (isTarget ? " au-ln-target" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
+      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
       if (gap && gap.line === no) html += gap.html;
       if (!seenDrawn && seenLocalByte != null && seenLocalByte > ln.startByte && seenLocalByte <= ln.endByte) {
         html += '<div class="au-seencut">' + auEsc(wsT("js.audit.seen.cut")) + "</div>";
@@ -263,7 +262,7 @@
     // are pending, refused or not asked for.
     var bodyMatches = opts.matches && opts.matches[field];
     var spansByLine = bodyMatches ? auSpansByLine(bodyMatches.spans) : null;
-    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0, targetLine: typeof opts.targetLine === "number" ? opts.targetLine : 0 };
+    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0 };
     var outHtml = "";
 
     if (!modelSeen) {
