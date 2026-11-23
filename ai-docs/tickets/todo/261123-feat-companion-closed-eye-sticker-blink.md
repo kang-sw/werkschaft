@@ -2,6 +2,8 @@
 title: "컴패니언 눈 깜빡임을 닫힌 눈 스티커 2프레임 교체로 전환"
 related:
   261122-feat-ws-companion-engine-v2: engine and pack grammar this extends
+sage-review-design: required
+sage-review-completeness: required
 ---
 
 # 컴패니언 눈 깜빡임을 닫힌 눈 스티커 2프레임 교체로 전환
@@ -56,9 +58,9 @@ share one key list (`companion_pack_schema.go:329-336`, `:419-428`,
   validator stays safety-only, as the rigging manual requires
   (`ai-docs/manuals/companion-pet-rigging.md:175-176`, `:202`).
 - **Lint.** Extend `lintCompanionKit` (non-rejecting,
-  `companion_pack_kit.go`) with two warnings per eye block: a closed plate
-  without its `sclera` (nothing to hide), and a closed key present on one side
-  only.
+  `companion_pack_kit.go`) with three warnings: a closed plate without its
+  `sclera` (nothing to hide), a closed key present on one side only, and a
+  closed raster not also registered under `head.mouths` (D5).
 
 ### D2. Switch threshold: 0.5 on the combined close value, with a sustained-lid guard
 
@@ -77,17 +79,21 @@ The swap condition per side is `close >= 0.5`, where `close` is the existing
   hysteresis is needed.
 - **Sustained lid expressions.** `lid`, `lidL` and `lidR` also feed `close`
   for held expressions such as a half-lidded look. A held value of 0.5 must
-  not snap the eye fully shut. So the swap uses `max(blink, sustained) >= 0.5`
-  only where the blink term is the one at or above 0.5, plus a sustained
-  value `>= 0.95` (an intentionally shut eye). A sustained value below 0.95
-  keeps the rigid lid translation on that frame, because a closed sticker has
-  no partial state. The implementer verifies this against the built-in
-  expressions in `dashboard-companion-builtins.js` and the scenario
-  `half_lid` use (`dashboard-companion-scenarios.js:20`).
+  not snap the eye shut. The rule per side is one formula:
+  `swap = blink >= 0.5 || sustained >= 0.95`, where `blink` is the blink
+  triangle alone and `sustained` is `max(lid, lidL/lidR)` for that side. The
+  held value never adds to the blink term for the swap decision (a held 0.6
+  with a blink of 0.3 does not swap; a held 0.6 with a blink of 0.6 does,
+  because the blink alone passes). When the formula is false the side keeps the
+  rigid translation by `close`. A closed sticker has no partial state. The
+  implementer locates where the `half_lid` expression's lid value is defined
+  (it is only referenced at `dashboard-companion-builtins.js:165` and
+  `dashboard-companion-scenarios.js:20`; search for the expression ID) and
+  confirms it is below 0.95, so that expression keeps the rigid half-lid. A
+  value at or above 0.95 would swap and must be raised in the Result.
 - **Constants.** Name the two numbers (`BLINK_SWAP_AT = 0.5`,
   `LID_SHUT_AT = 0.95`) at the top of the eye section so a later tuning pass
-  edits one place. They are not pack fields in this change (see the Open
-  Decision Queue).
+  edits one place. They are not pack fields in this change (see (161) in D6).
 
 ### D3. Compositor behavior
 
@@ -98,8 +104,8 @@ sclera, iris, lid cover and lash. Otherwise
 draw today's stack with today's translation.
 
 - `frameLower` (`:445`) is not part of the hidden set in the owner decision and
-  stays drawn in both frames. Confirm with the first art pass; the closed plate
-  may cover it.
+  stays drawn in both frames. This is final; a plate that needs it covered
+  paints over it.
 - Brows (`:452-460`) stay drawn in both frames and do not move on blink.
 - The current code draws the sclera and the clipped iris for both eyes in one
   full-canvas pass (`:437-447`), not per side. Per-side hiding needs the sclera
@@ -166,16 +172,37 @@ changes and nothing is refused).
 
 - The new validator and engine treat the `head.mouths` entry as inert; the new
   engine reads the plate only from `closedL`/`closedR`. The mouth key is a
-  compatibility registration, not a second source of truth.
+  compatibility registration, not a second source of truth. The engine must
+  never draw an `eyeclosed-*` entry as a mouth: skip that prefix wherever mouths
+  are looked up or listed (the `idle` fallback and expression `mouth` lookup in
+  `expressionPaint`), and the lint's mouth checks ignore it. A test asserts it.
 - The new `lintCompanionKit` warns when a closed raster is not also registered
   under `head.mouths` as `eyeclosed-*`, naming the consequence: older
   dashboards will refuse to install the pack.
 - Guide text says so in plain terms (see Phase 1, guide).
 - If the registration is judged too awkward for authors, the fallback is the
-  plain design at T3. That is a release-policy choice, queued below.
+  plain design at T3. That is a release-policy choice, settled as (160) below.
 
 The compositor side is T0/T1: an old engine ignores the unknown eye keys at
 `...compositor.js:425-427` and draws the rigid blink.
+
+### D6. Settled decisions
+
+(160) **Ship the `head.mouths` shim (T1, patch-eligible).** Class: announced
+default. Citation: `AGENTS.md` Compatibility Tiers ("T0–T2 permit patches.
+Prefer them to a T3 boundary"; T3 needs a minor bump and the owner's explicit
+approval). The plain field would be T3 (D5), so the shim is built by default.
+Auto-confirmed by lead 2026-11-23; owner may override. The shim can be retired
+once the supported old-version floor passes this release (a later decision, not
+this ticket): then the redundant `eyeclosed-*` registration lines and their
+lint warning are removed and the plain field stands alone.
+
+(161) **The blink threshold is not pack-tunable.** Class: technical. The
+surface stays simpler, and 0.5 is derived from the `blinkHz` blink triangle
+(D2); a tunable can be added later as a T0 optional field. The engine keeps the
+named constants 0.5 and 0.95. Auto-confirmed by lead.
+
+Last ID: (161)
 
 ## Constraints
 
@@ -189,6 +216,8 @@ The compositor side is T0/T1: an old engine ignores the unknown eye keys at
   `expressionPaint` and the key list, and leave gesture head anchoring, the
   head band composition and pose code alone. If a merge conflict appears in
   those files, take develop's side and re-apply the eye-section edit.
+- Citations in this ticket are evidence at drafting time. After merging
+  develop, re-locate each by symbol, not by line number.
 - The open (non-closed) path stays byte-identical in draw order and
   translation constants.
 - No new pack file kinds: the plate is a `.png`/`.webp` raster like the others,
@@ -198,6 +227,22 @@ The compositor side is T0/T1: an old engine ignores the unknown eye keys at
 - Shipped-surface rule: the guide and schema ship downstream. Their text and
   examples use generic wording and fixture names only, with no character,
   model, product or company names.
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/internal/wsdashboard/assets/dashboard-companion-compositor.js, assets/dashboard-companion-packs.js, companion_pack_schema.go, companion_pack_kit.go, assets/companion/authoring/pack.schema.json, assets/companion/authoring/guide.md, ai-docs/manuals/companion-pet-rigging.md, ai-docs/manuals/release-compatibility.md |
+| scope.surface | public-interface | optional eye-block raster keys closedL and closedR in the shipped pack format, schema and guide |
+| scope.new_public_symbol | no | none |
+| scope.new_type_contract | no | none |
+| scope.test_surface | existing | companion_pack_guide_test.go, companion_pack_install_test.go, frontend-companion.test.js |
+| complexity.reuse_points | confirmed | companionEyeAssets, companionManifestCheck.assets, lintCompanionKit, expressionPaint eye key loop |
+| complexity.side_effect_risk | low | opt-in field; packs without it draw and validate as before |
+| risk.correctness | moderate | swap threshold against the blink triangle and held-lid values |
+| risk.fit | moderate | in-flight pack install, zip and gesture head anchor fixes touch neighboring files |
+| risk.test | moderate | no blink-specific compositor test exists today |
+| risk.security_or_contract | moderate | old binaries refuse unreferenced rasters; the head.mouths shim keeps this T1 |
 
 ## Phases
 
@@ -211,6 +256,12 @@ per-side winks, per-expression plates, any lid animation, shipped art.
 
 Work:
 
+0. **Frontend fetch list.** The frontend keeps its own copy of the eye key
+   list: `eyeFields` in `assets/dashboard-companion-packs.js` (`:5-6`, used at
+   `:34` and `:43`), which decides which rasters it requests. Add `closedL` and
+   `closedR` there, or the plates are never fetched and the swap never draws.
+   Add a node test that the pack's file list includes both plates for
+   `head.eyes` and an eye set.
 1. **Compositor.** In `dashboard-companion-compositor.js`, add the two keys to
    the eye key loop (`:425-427`, no tint) and implement D2/D3 inside the
    `expressionPaint` closure. Keep the constants named. Do not change the iris
@@ -229,7 +280,9 @@ Work:
    requirement, the fallback for packs without them, and the older-dashboard
    consequence with the `head.mouths` `eyeclosed-*` registration. Extend a
    kit example only if the guide test requires every key to appear. Use
-   fixture names only.
+   fixture names only (for example `eyeclosed-default-L`), and finish with a
+   grep over `guide.md` and `pack.schema.json` for character, model, product
+   and company names that must find none.
 5. **Rigging manual.** Update `ai-docs/manuals/companion-pet-rigging.md`
    (Eye sets `:98`, the layer list `:70`, and the T0 claims `:47`, `:202`) to
    state that adding a raster-referencing field is not T0 for older binaries
@@ -262,21 +315,3 @@ Work:
 
 Verification boundary: Go and node tests above. Visual sign-off of real plates
 belongs to the art workflow, not this ticket.
-
-## Open Decision Queue
-
-(160) Release tier for the new pack field. Recommended: the `head.mouths`
-`eyeclosed-*` registration, which makes the field T1 and lets it ship in a
-patch, at the cost of one redundant registration line per plate in each pack.
-Alternative: no shim, ship the plain field as T3 (older dashboards refuse to
-install packs that use it), which needs a minor release and explicit owner
-approval per `release-compatibility.md:65`. The choice is release policy and a
-downstream-visible authoring burden, so it is not settled here. Implementation
-builds the shim by default; dropping it removes only the shim lines and the
-extra lint.
-
-(161) Whether the blink threshold should be a pack-tunable field. Recommended:
-no; keep the engine constants (0.5 and 0.95) and revisit when real art shows a
-need. A field would be another downstream-visible schema surface and, with the
-unreferenced-file rule, no added compat cost, but it is scope beyond the owner
-decision.
