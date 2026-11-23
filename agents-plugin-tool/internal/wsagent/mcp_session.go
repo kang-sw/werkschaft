@@ -205,13 +205,17 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 	}
 	if recorder, ok := proc.(fileCallRecorder); ok && c.r.lifecycle(rec.Backend).FileWriteTools {
 		files.Record = func(ctx context.Context, call wsfs.FileCall) error {
-			if authority() != call.Authority {
+			expected := files.Authority
+			if files.LiveAuthority {
+				expected = call.Authority
+			}
+			if expected == "" || authority() != expected {
 				return errors.New("the file call's session authority changed")
 			}
 			if err := recorder.recordFileCall(ctx, call); err != nil {
 				return err
 			}
-			if authority() != call.Authority {
+			if authority() != expected {
 				return errors.New("the file call's session authority changed")
 			}
 			return nil
