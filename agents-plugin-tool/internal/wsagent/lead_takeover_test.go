@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -213,77 +212,59 @@ func TestTakeoverAdoptsTheKeyAndResumesWhereTheHarnessRan(t *testing.T) {
 	check(h.holder(id), "after a daemon restart")
 }
 
-// TestTakeoverAdoptsUnderTheResolvedTargetBackend: the source harness decides
-// whether its terminal session can be taken over, but the record is adopted
-// under the backend the lead profile resolves to, which a profile override can
-// make a different one. The record shape is the resolved target's, as before
-// adoption moved into registration data.
 func TestTakeoverAdoptsUnderTheResolvedTargetBackend(t *testing.T) {
+	h := newLeadHarness(t)
+	h.opts.Backends["fixture"] = BackendRegistration{
+		Backend: ClaudeBackend{}, LeadProfile: "fixture-lead",
+	}
+	h.globalProfile("fixture-lead", `{"backend":"claude","lead":true,"permission_mode":"acceptEdits"}`)
+	h.start()
+	const id, session = "overridden", "sess-term"
+	h.terminalSession(id, LeadSession{Key: "override-key", Harness: "fixture", Session: session, Cwd: h.root}, nil)
+	if _, err := h.runner.TakeOver(id); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.record(id)
+	if rec.Backend != BackendClaude || rec.PermissionMode != "acceptEdits" || rec.SessionID != session || rec.SessionFile != "" {
+		t.Fatalf("record did not adopt the resolved Claude profile: %+v", rec)
+	}
+	h.send(id, "hello")
+	holder := h.holder(id)
+	spec := h.holders.spawned(holder)
+	if resumed, _ := flagValue(spec.Argv, "--resume"); resumed != session {
+		t.Fatalf("spawn resumed %q, want %q", resumed, session)
+	}
+	if mode, _ := flagValue(spec.Argv, "--permission-mode"); mode != "acceptEdits" {
+		t.Fatalf("spawn permission mode %q, want acceptEdits", mode)
+	}
+	h.holders.out(holder, turnLines(session, "u1", "done")...)
+	h.idle(id)
+	st, err := h.runner.HandOff(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := resumeLine(h.root, "claude", "--resume", session); st.ResumeCommand != want {
+		t.Fatalf("hand-off resume command %q, want %q", st.ResumeCommand, want)
+	}
+}
+
+func TestRetiredPiTakeoverRefusesSourceAndTarget(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, profile, override string
-		want                            Record
-		// launch is the flag the first start resumes the session with, and
-		// mode the permission mode it runs under ("" for none).
-		launch, mode string
-		handOff      bool
 	}{
-		{"pi terminal under a claude profile", BackendPi, LeadProfilePi, `{"backend":"claude","lead":true,"permission_mode":"acceptEdits"}`,
-			Record{Backend: BackendClaude, PermissionMode: "acceptEdits", SessionID: "SESSION"}, "--resume", "acceptEdits", true},
-		{"claude terminal under a pi profile", BackendClaude, LeadProfileClaude, `{"backend":"pi","lead":true}`,
-			Record{Backend: BackendPi, SessionFile: "SESSION"}, "--session", "", false},
+		{"Pi source", BackendPi, LeadProfilePi, `{"backend":"claude","lead":true}`},
+		{"Pi target", BackendClaude, LeadProfileClaude, `{"backend":"pi","lead":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newLeadHarness(t).start()
-			session := "sess-term"
-			if tc.source == BackendPi {
-				session = filepath.Join(t.TempDir(), "pi-sessions", "s.jsonl")
-				if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(session, []byte("{}\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
+			h := newLeadHarness(t)
 			h.globalProfile(tc.profile, tc.override)
-			const id = "overridden"
-			h.terminalSession(id, LeadSession{Key: "override-key", Harness: tc.source, Session: session, Cwd: h.root}, nil)
-			if _, err := h.runner.TakeOver(id); err != nil {
-				t.Fatal(err)
+			h.start()
+			h.terminalSession("terminal", LeadSession{Key: "override-key", Harness: tc.source, Session: "sess-term", Cwd: h.root}, nil)
+			if _, err := h.runner.TakeOver("terminal"); !errors.Is(err, errPiRetired) {
+				t.Fatalf("takeover = %v, want retirement refusal", err)
 			}
-			rec := h.record(id)
-			got := Record{Backend: rec.Backend, PermissionMode: rec.PermissionMode, SessionID: rec.SessionID, SessionFile: rec.SessionFile}
-			want := tc.want
-			if want.SessionID != "" {
-				want.SessionID = session
-			}
-			if want.SessionFile != "" {
-				want.SessionFile = session
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("record = %+v, want %+v", got, want)
-			}
-			// End to end: the launch reads the adopted record, and a hand-off
-			// resumes it under the target backend's terminal command.
-			h.send(id, "hello")
-			holder := h.holder(id)
-			spec := h.holders.spawned(holder)
-			if resumed, _ := flagValue(spec.Argv, tc.launch); resumed != session {
-				t.Fatalf("spawn %v: %s = %q, want %q", spec.Argv, tc.launch, resumed, session)
-			}
-			if mode, _ := flagValue(spec.Argv, "--permission-mode"); mode != tc.mode {
-				t.Fatalf("spawn %v: permission mode %q, want %q", spec.Argv, mode, tc.mode)
-			}
-			if !tc.handOff {
-				return
-			}
-			h.holders.out(holder, turnLines(session, "u1", "done")...)
-			h.idle(id)
-			st, err := h.runner.HandOff(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if want := resumeLine(h.root, "claude", "--resume", session); st.ResumeCommand != want {
-				t.Fatalf("hand-off resume command %q, want %q", st.ResumeCommand, want)
+			if len(h.runner.List()) != 0 || len(h.holders.opList()) != 0 {
+				t.Fatal("retired takeover created a hosted session")
 			}
 		})
 	}
@@ -510,7 +491,6 @@ func TestReopenOpensAClosedHostedSession(t *testing.T) {
 // on a non-Windows host, PowerShell on a Windows one.
 func TestResumeCommand(t *testing.T) {
 	dir := t.TempDir()
-	own := filepath.Join(dir, "pi", "session.jsonl")
 	cases := []struct {
 		rec           Record
 		posix, window string
@@ -532,11 +512,7 @@ func TestResumeCommand(t *testing.T) {
 			"# PowerShell cannot pass this session's --conversation value to agy intact; resume it by hand:\n" +
 				"# 1. Change to the directory: C:\\w\n" +
 				"# 2. Run agy --conversation with exactly this value: x\"y"},
-		{Record{Lead: true, Backend: BackendPi, Root: `C:\Users\O'Neil\repo`, SessionFile: "C:\\h\\.pi\\s \u2019$x.jsonl"},
-			"cd 'C:\\Users\\O'\\''Neil\\repo' && pi --session 'C:\\h\\.pi\\s \u2019$x.jsonl'",
-			"Set-Location -LiteralPath 'C:\\Users\\O''Neil\\repo' -ErrorAction Stop; pi --session 'C:\\h\\.pi\\s \u2019\u2019$x.jsonl'"},
-		// A pi session the daemon started has no file until its first run.
-		{Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, "", ""},
+		{Record{Lead: true, Backend: BackendPi, Root: "/w/repo", SessionFile: "preserved.jsonl"}, "", ""},
 		{Record{Backend: BackendClaude, Root: "/w/repo", SessionID: "abc-1"}, "", ""},
 	}
 	for _, windows := range []bool{false, true} {
@@ -551,22 +527,7 @@ func TestResumeCommand(t *testing.T) {
 			}
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(own), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(own, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// The temp directory is plain on Linux but holds backslashes (and an
-	// 8.3 "~") on Windows, which a POSIX shell must see quoted.
-	setHostWindows(t, false)
-	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
-		t.Errorf("a daemon-started pi session = %q, want %q", got, want)
-	}
-	setHostWindows(t, true)
-	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
-		t.Errorf("a daemon-started pi session on Windows = %q, want %q", got, want)
-	}
+
 }
 
 // TestHandOffNeedsTheProcessEnded: a session whose process could not be

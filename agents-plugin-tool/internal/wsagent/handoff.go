@@ -96,7 +96,7 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	}
 	profile := LeadProfileFor(backend, r.opts.Backends)
 	if profile == "" || terminal == nil {
-		return State{}, badRequest("only a claude or pi session can be taken over; this one ran under %q", backend)
+		return State{}, badRequest("terminal takeover is unavailable for harness %q", backend)
 	}
 	if ls.Session == "" {
 		return State{}, conflict("the session cannot be taken over: %s", TakeoverNoSession)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestHeldWorkerLaunchFailureHasNoDirectFallback(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		t.Run(backend, func(t *testing.T) {
 			h, _ := workerRecoveryHarness(t, backend)
 			// After the startup scan's own kicks (holdersScanned): a start
@@ -34,7 +34,7 @@ func TestHeldWorkerLaunchFailureHasNoDirectFallback(t *testing.T) {
 }
 
 func TestHeldWorkerInterruptKeepsHolderAndCloseRevokesIt(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		t.Run(backend, func(t *testing.T) {
 			h, _ := workerRecoveryHarness(t, backend)
 			id, holder := spawnHeldRecoveryWorker(t, h, backend, "workdir-write")
@@ -73,7 +73,7 @@ func TestPrunedWorkerHolderIsSwept(t *testing.T) {
 }
 
 func TestHeldWorkerMailWaitsForReplacementReconciliation(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		t.Run(backend, func(t *testing.T) {
 			h, got := workerRecoveryHarness(t, backend)
 			id, holder := spawnHeldRecoveryWorker(t, h, backend, "workdir-write")

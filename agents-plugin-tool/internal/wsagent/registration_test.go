@@ -13,7 +13,7 @@ import (
 
 func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	registrations := BuiltinBackendRegistrations()
-	if len(registrations) != 5 {
+	if len(registrations) != 4 {
 		t.Fatalf("builtin registrations = %v", registrations)
 	}
 	wants := []struct {
@@ -131,7 +131,6 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 	}
 	production := map[string]BackendRegistration{
 		BackendClaude: {LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes},
-		BackendPi:     {LeadProfile: LeadProfilePi},
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
 		BackendWerk:   {},
@@ -148,7 +147,7 @@ func TestRegisteredLeadOverrideChecksResolvedBackend(t *testing.T) {
 	}{
 		{"worker-only override", "fixture", "", false},
 		{"lead-capable extension override", "fixture", "fixture-lead", true},
-		{"builtin cross-backend override", BackendPi, LeadProfilePi, true},
+		{"builtin cross-backend override", BackendCodex, LeadProfileCodex, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newLeadHarness(t)
@@ -193,7 +192,7 @@ func TestRunnerRegistrationErrorsAtBoundary(t *testing.T) {
 		{"unavailable backend", func() error { _, err := h.runner.Create("unavailable", h.root); return err }, ErrBackendUnavailable, 400, "is not available in this daemon"},
 		{"launch failure", func() error { _, err := c.startBackend(StartSpec{}); return err }, ErrLaunchFailed, 500, launchCause.Error()},
 		{"absent mode", func() error { return controlsFor(&fakeProc{}).setPermissionMode("review") }, ErrUnsupported, 500, ErrUnsupported.Error()},
-		{"absent model form", func() error { return controlsFor(&fakeProc{}).SetModel("ambiguous") }, ErrUnsupported, 500, ErrUnsupported.Error()},
+		{"absent model form", func() error { return controlsFor(&fakeProc{noModel: true}).SetModel("ambiguous") }, ErrUnsupported, 500, ErrUnsupported.Error()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.run()

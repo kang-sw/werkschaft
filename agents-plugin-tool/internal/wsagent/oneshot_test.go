@@ -52,22 +52,6 @@ func TestOneShotClaudeArgsIsolation(t *testing.T) {
 	}
 }
 
-func TestOneShotPiArgsIsolation(t *testing.T) {
-	reg := builtinRegistration(BackendPi)
-	if reg.OneShot == nil {
-		t.Fatal("pi registers no one-shot mode")
-	}
-	args := reg.OneShot.Args("p/m", "low")
-	for _, flag := range []string{"-p", "--no-session", "--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files"} {
-		if !slices.Contains(args, flag) {
-			t.Errorf("args %q lack %s", args, flag)
-		}
-	}
-	if slices.Contains(args, "--tools") || slices.Contains(args, "-e") || slices.Contains(args, "--extension") {
-		t.Errorf("args %q enable tools or extensions", args)
-	}
-}
-
 func TestOneShotRegistrationCloneCopiesSupport(t *testing.T) {
 	reg := builtinRegistration(BackendClaude)
 	clone := cloneBackendRegistration(reg)
@@ -77,7 +61,7 @@ func TestOneShotRegistrationCloneCopiesSupport(t *testing.T) {
 }
 
 func TestOneShotUnsupportedHarnessSpawnsNothing(t *testing.T) {
-	for _, harness := range []string{BackendCodex, BackendAgy, "no-such-harness"} {
+	for _, harness := range []string{BackendCodex, BackendAgy, BackendPi, "no-such-harness"} {
 		if reg := builtinRegistration(harness); reg.OneShot != nil {
 			t.Fatalf("%s registers a one-shot mode; update this test with its probe", harness)
 		}
@@ -243,7 +227,7 @@ func TestOneShotHelperProcess(t *testing.T) {
 }
 
 func TestHasOneShotFollowsRegistrations(t *testing.T) {
-	for harness, want := range map[string]bool{"claude": true, "pi": true, "codex": false, "agy": false, "nope": false} {
+	for harness, want := range map[string]bool{"claude": true, "pi": false, "codex": false, "agy": false, "nope": false} {
 		if got := HasOneShot(harness); got != want {
 			t.Errorf("HasOneShot(%q) = %v, want %v", harness, got, want)
 		}

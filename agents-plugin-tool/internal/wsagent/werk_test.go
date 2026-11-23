@@ -489,7 +489,7 @@ func TestWerkAvailabilityNamesWhatIsMissing(t *testing.T) {
 		t.Errorf("tiers have no default model, yet listed %+v", tiers.Ext)
 	}
 	_, err = h.runner.AgentSpawn(lead, AgentSpawnRequest{Prompt: "x", Tier: "werk.small", Authority: "read-only"})
-	if err == nil || !strings.Contains(err.Error(), "werk.small has no model in agents.tier") {
+	if err == nil || !strings.Contains(err.Error(), "werk.small has no usable OpenRouter model") {
 		t.Errorf("spawn with no tier model: %v", err)
 	}
 

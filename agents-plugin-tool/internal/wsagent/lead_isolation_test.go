@@ -103,7 +103,7 @@ func TestLeadIsolationRejectsUnknownValue(t *testing.T) {
 func TestLegacyLeadIsolationDefaultsAtLaunch(t *testing.T) {
 	h := newLeadHarness(t)
 	backend := &isolationBackend{starts: make(chan StartSpec, 1)}
-	h.opts.Backends[BackendClaude] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude}
+	h.opts.Backends[BackendClaude] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}
 	h.start()
 	st := h.lead(BackendClaude, LeadOptions{})
 	_, err := h.runner.act(st.ID, func(c *conv) error {
@@ -119,6 +119,3 @@ func TestLegacyLeadIsolationDefaultsAtLaunch(t *testing.T) {
 		t.Fatalf("legacy launch isolation = %q", spec.Lead.PluginIsolation)
 	}
 }
-
-// piLaunchBackend runs the real Pi lead launch decision against a fixture Pi
-// and reports it, without starting a process.

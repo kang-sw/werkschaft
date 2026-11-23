@@ -25,25 +25,31 @@ func registrationChoicesSupport(t *testing.T, backends map[string]BackendRegistr
 
 func TestRegistrationChoicesMetadataAndJSON(t *testing.T) {
 	stubLookPath(t)
-	for _, piLead := range []bool{true, false} {
-		name := "pi without lead"
-		piProfile := ""
-		if piLead {
-			name, piProfile = "pi with lead", LeadProfilePi
+	for _, extensionLead := range []bool{true, false} {
+		name := "worker extension"
+		leadProfile := ""
+		if extensionLead {
+			name, leadProfile = "lead extension", "fixture-lead"
 		}
 		t.Run(name, func(t *testing.T) {
 			s := registrationChoicesSupport(t, map[string]BackendRegistration{
 				BackendClaude: {Backend: &fakeBackend{}, LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes},
-				BackendPi:     {Backend: &fakeBackend{}, LeadProfile: piProfile},
+				"fixture":     {Backend: &fakeBackend{}, LeadProfile: leadProfile},
 			})
 			ans := s.Choices(context.Background())
 			claude := harnessByName(t, ans, BackendClaude)
-			pi := harnessByName(t, ans, BackendPi)
+			if !extensionLead {
+				if len(ans.Harnesses) != 1 || ans.Harnesses[0].Harness != BackendClaude {
+					t.Fatalf("worker-only extension in lead or support choices: %+v", ans.Harnesses)
+				}
+				return
+			}
+			extension := harnessByName(t, ans, "fixture")
 			if !claude.Lead || !reflect.DeepEqual(claude.PermissionModes, LeadPermissionModes) {
 				t.Fatalf("claude metadata = %+v", claude)
 			}
-			if pi.Lead != piLead || pi.PermissionModes != nil {
-				t.Fatalf("pi metadata = %+v, want lead=%v and nil permission modes", pi, piLead)
+			if !extension.Lead || extension.PermissionModes != nil {
+				t.Fatalf("extension metadata = %+v", extension)
 			}
 			raw, err := json.Marshal(ans)
 			if err != nil {
@@ -68,8 +74,8 @@ func TestRegistrationChoicesMetadataAndJSON(t *testing.T) {
 			if _, ok := wire.Harnesses[1]["permission_modes"]; ok {
 				t.Fatalf("nil permission modes must be omitted: %s", raw)
 			}
-			if value, ok := wire.Harnesses[1]["lead"]; ok != piLead || (ok && string(value) != "true") {
-				t.Fatalf("false lead must be omitted, true lead retained: %s", raw)
+			if value, ok := wire.Harnesses[1]["lead"]; !ok || string(value) != "true" {
+				t.Fatalf("lead metadata must be retained: %s", raw)
 			}
 		})
 	}
@@ -128,17 +134,15 @@ func TestRegistrationChoicesOrderingAndSupportDefaults(t *testing.T) {
 		want    Selection
 	}{
 		{name: "claude first", want: Selection{Harness: BackendClaude}},
-		{name: "pi fallback", missing: []string{"fake-claude"}, want: Selection{Harness: BackendPi}},
-		{name: "lead only is not a fallback", missing: []string{"fake-claude", "fake-pi"}},
-		{name: "last support selection", last: &Selection{Harness: BackendPi, Model: "chosen-model", Effort: "high"}, want: Selection{Harness: BackendPi, Model: "chosen-model", Effort: "high"}},
-		{name: "unavailable last resets settings", missing: []string{"fake-pi"}, last: &Selection{Harness: BackendPi, Model: "old-model", Effort: "high"}, want: Selection{Harness: BackendClaude}},
+		{name: "lead only is not a fallback", missing: []string{"fake-claude"}},
+		{name: "last support selection", last: &Selection{Harness: BackendClaude, Model: "chosen-model", Effort: "high"}, want: Selection{Harness: BackendClaude, Model: "chosen-model", Effort: "high"}},
+		{name: "retired last resets settings", last: &Selection{Harness: BackendPi, Model: "old-model", Effort: "high"}, want: Selection{Harness: BackendClaude}},
 		{name: "lead only last is ignored", last: &Selection{Harness: "alpha", Model: "old-model"}, want: Selection{Harness: BackendClaude}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			stubLookPath(t, tt.missing...)
 			s := registrationChoicesSupport(t, map[string]BackendRegistration{
 				"zeta":        {Backend: &fakeBackend{}, LeadProfile: "zeta-lead"},
-				BackendPi:     {Backend: &fakeBackend{exe: "fake-pi"}, LeadProfile: LeadProfilePi},
 				"worker-only": {Backend: &fakeBackend{}},
 				"alpha":       {Backend: &fakeBackend{}, LeadProfile: "alpha-lead"},
 				BackendClaude: {Backend: &fakeBackend{exe: "fake-claude"}, LeadProfile: LeadProfileClaude},
@@ -154,8 +158,8 @@ func TestRegistrationChoicesOrderingAndSupportDefaults(t *testing.T) {
 					}
 				}
 			}
-			if !reflect.DeepEqual(names, []string{BackendClaude, BackendPi, "alpha", "zeta"}) || ans.Last != tt.want {
-				t.Fatalf("choices order %v, last %+v; want claude/pi/alpha/zeta, %+v", names, ans.Last, tt.want)
+			if !reflect.DeepEqual(names, []string{BackendClaude, "alpha", "zeta"}) || ans.Last != tt.want {
+				t.Fatalf("choices order %v, last %+v; want claude/alpha/zeta, %+v", names, ans.Last, tt.want)
 			}
 			for _, name := range []string{"alpha", "zeta", "worker-only"} {
 				_, err := s.Select("store", selectRequest{Harness: strp(name)})

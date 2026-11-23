@@ -240,7 +240,7 @@ func TestRecordSurvivesDaemonRestart(t *testing.T) {
 func TestHandedOffStatesDoNotCacheSnapshots(t *testing.T) {
 	reads := 0
 	r := NewRunner(Options{Dir: t.TempDir(), closedSnapshotRead: func(string) { reads++ }})
-	rec := Record{ReplyID: "handedoff", Lead: true, Backend: BackendPi, Root: t.TempDir(), HandedOffAt: "2026-01-01T00:00:00Z"}
+	rec := Record{ReplyID: "handedoff", Lead: true, Backend: BackendClaude, Root: t.TempDir(), HandedOffAt: "2026-01-01T00:00:00Z"}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for range 2 {

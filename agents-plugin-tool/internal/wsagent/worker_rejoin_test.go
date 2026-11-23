@@ -82,8 +82,8 @@ func TestWorkerHolderOwnership(t *testing.T) {
 				})
 			}
 			meta.Kind, meta.Backend = holderKindPiWorker, ""
-			if workerHolderMatches(rec, meta, &child) != (backend == BackendPi) {
-				t.Fatal("legacy descriptor applies only to Pi")
+			if workerHolderMatches(rec, meta, &child) {
+				t.Fatal("a retired Pi descriptor was accepted for recovery")
 			}
 		})
 	}
