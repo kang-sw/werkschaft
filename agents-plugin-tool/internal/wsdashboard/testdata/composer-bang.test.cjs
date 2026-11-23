@@ -1,6 +1,7 @@
-// Composer `!` terminal look, client side (Phase 1 of 261123-feat-ws-composer-bang-terminal-look):
-// shell mode flag and amber `!`, the first-Esc rule, no @ or / popup in shell mode, the console
-// (fold, clear, tones, status line) and the slot blocks. Runs the real composer scripts in Chromium
+// Composer `!` terminal look, client side (Phase 1 + Phase 4 of 261123-feat-ws-composer-bang-terminal-look):
+// shell mode flag and amber `!`, the first-Esc rule, no @ or / popup in shell mode, headless
+// submission tracking (`ws:cexec-admitted`, bounded poll, toast warnings), 0 px height invariance,
+// Solarized Light / dark palette, and the slot blocks. Runs the real composer scripts in Chromium
 // against a static composer fixture with a stubbed fetch (no daemon). Needs WS_PLAYWRIGHT_MODULE
 // (a playwright-core path) and PLAYWRIGHT_BROWSERS_PATH when Chromium is not installed by default.
 const test = require('node:test');
@@ -33,6 +34,7 @@ var composer = $("composer"), ctext = $("ctext"), inputMode = "enter", mention =
 if (window.WsCapsules) window.WsCapsules.attach(ctext);
 function grow() {} function clearMentions() {} function saveDraft() {} function queueDraft() {} function noteWarn(m) { window.__warn = m; }
 function copyText() {} function syncMarkers() {} function trackMentions() {} function syncChips() {} function followImgs() {} function inBoard() { return false; } function uncommand() {}
+function execWake() { window.__execWakes = (window.__execWakes || 0) + 1; }
 function sendMessage() { if (!cexecSend()) window.__msg = ctext.value; }
 function editField(el, start, end, s) {
   el.focus(); el.setSelectionRange(start, end);
@@ -49,22 +51,31 @@ ${slice(pickers, '  function slashToken', '  function commandRow')}
 window.__slashToken = slashToken;
 `.replace(/function clearMentions\(\) \{\}/, '');
 const JOBS = {
-  ok: { phase: 'done', exit_code: 0, output: 'hi\n', output_bytes: 3, state: 'exited' },
-  bad: { phase: 'done', exit_code: 2, output: 'boom\n', output_bytes: 5, state: 'exited' },
-  sig: { phase: 'done', signal: 9, output_bytes: 0 },
-  stop: { phase: 'done', state: 'stopped', output_bytes: 0 },
+  done: { phase: 'done', exec_id: 'exec_done1', exit_code: 0, output: 'hi\n', output_bytes: 3, state: 'exited' },
   sleep: { phase: 'async', exec_id: 'exec_7f3a2c', output: 'tail\n' },
+  pending: { phase: 'running' },
+  refused: { phase: 'refused', error: 'worktree locked' },
+  unk: { phase: 'done', unknown: true },
 };
 const route = `
 window.__slots = { rev: "1.1.x", token: "tok", commands: [{ id: "t", label: "Run tests", description: "d", line: "make test\\n./run --verbose", revision: "r1" }] };
+window.__admitted = [];
+window.addEventListener("ws:cexec-admitted", function (e) { window.__admitted.push(e.detail); });
+window.__polls = [];
 window.fetch = function (url, o) {
   var u = String(url), body = o && o.body ? JSON.parse(o.body) : null, J = ${JSON.stringify(JOBS)};
   function res(v, st) { return Promise.resolve({ ok: !st || st < 400, status: st || 200, json: function () { return Promise.resolve(v); }, text: function () { return Promise.resolve(JSON.stringify(v)); } }); }
   if (/composer-exec$/.test(u) && !body && window.__hook) { var held = window.__hook(window.__gets = (window.__gets || 0) + 1); if (held) return held; }
   if (/composer-exec$/.test(u) && !body && window.__get) { if (window.__get === "net") return Promise.reject(new TypeError("x")); return Promise.resolve({ ok: false, status: window.__get, json: function () { return Promise.reject(0); }, text: function () { return Promise.resolve(window.__getText + " "); } }); }
   if (/composer-exec$/.test(u) && !body) return res({ token: "tok", cards: [] });
-  if (/composer-exec$/.test(u) && body) { var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.ok)); }
-  if (/composer-exec\\//.test(u)) return res({}, 404);
+  if (/composer-exec$/.test(u) && body) { var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.done), cmd === "pending" ? 202 : 200); }
+  if (/user-commands\\/[^/]+\\/run$/.test(u) && body) { return res(Object.assign({ id: body.submission_id, command: "make test\\n./run --verbose", token: "tok" }, window.__ucmdReply || { phase: "running" }), window.__ucmdStatus || 202); }
+  if (/composer-exec\\/([^/]+)$/.test(u)) {
+    var pid = RegExp.$1;
+    window.__polls.push(pid);
+    if (window.__onPoll) return Promise.resolve(window.__onPoll(pid, window.__polls.length, res));
+    return res({}, 404);
+  }
   if (/files\\?/.test(u)) return res({ items: [{ path: "src/a.go", name: "a.go", dir: "src" }] });
   if (/user-commands$/.test(u)) return res(window.__slots);
   return res({}, 404);
@@ -73,7 +84,7 @@ window.fetch = function (url, o) {
 // pre runs in the page before the composer scripts: a seeded history, or a list-read hook.
 async function open(t, pre) {
   const { chromium } = require(mod);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.env.WS_PLAYWRIGHT_EXECUTABLE ? { executablePath: process.env.WS_PLAYWRIGHT_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const page = await (await browser.newContext({ viewport: { width: 860, height: 900 }, reducedMotion: 'reduce', colorScheme: 'dark' })).newPage();
   const errs = [];
@@ -86,24 +97,29 @@ async function open(t, pre) {
   await page.addScriptTag({ content: route });
   if (pre) await page.evaluate(pre);
   const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
-  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { cards: cexecCards, slashToken: slashToken, dropToken: function () { cexecToken = ""; } };})();' });
+  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { slashToken: slashToken, dropToken: function () { cexecToken = ""; } };})();' });
   const ed = page.locator('.cfield [contenteditable]').first();
   const type = async text => { await ed.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Delete'); await page.keyboard.insertText(text); };
   const state = () => page.evaluate(() => ({ v: ctext.value, bang: composer.hasAttribute('data-bang'), hl: CSS.highlights.has('ws-bang'), sel: [ctext.selectionStart, ctext.selectionEnd] }));
   return { page, ed, type, state, errs };
 }
 
-test('shell mode flag follows the first character and paints the bang', { skip }, async t => {
+test('shell mode flag follows the first character, paints the bang, and keeps 0px height growth', { skip }, async t => {
   const { page, type, state, errs } = await open(t);
+  await page.waitForSelector('.d-ucmd .ucmd');
+  const h0 = await page.evaluate(() => composer.getBoundingClientRect().height);
+  assert.equal(await page.locator('.d-cexec, .cbang').count(), 0, 'no inline console or cbang hint row');
   await type('!echo hi');
   let s = await state();
   assert.equal(s.bang, true); assert.equal(s.hl, true);
+  assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), h0, '0px vertical height change in dark bang mode');
   assert.equal(await page.evaluate(() => ctext.getAttribute('aria-description')), en['js.cexec.bang.aria']);
   assert.equal(await page.evaluate(() => document.getElementById('csend').getAttribute('aria-label')), en['js.cexec.bang.send']);
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.cfield [contenteditable]')).backgroundColor), 'rgb(19, 20, 23)', 'dark input');
   await type(' !echo hi');
   s = await state();
   assert.equal(s.bang, false, 'a leading space is a prompt, not shell mode'); assert.equal(s.hl, false);
+  assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), h0, '0px vertical height change leaving bang mode');
   await type('hi !');
   assert.equal((await state()).bang, false);
   assert.deepEqual(errs, []);
@@ -146,36 +162,128 @@ test('no @ or / popup in shell mode', { skip }, async t => {
   assert.notEqual(await page.evaluate(() => window.__slashToken('/b', 2)), null, 'the slash token still works elsewhere');
 });
 
-test('console: status line, tones, fold, clear', { skip }, async t => {
-  const { page, type } = await open(t);
-  const run = async text => { await type(text); await page.keyboard.press('Enter'); await page.waitForTimeout(150); };
-  await run('!ok');
-  const card = (n) => page.locator('.d-cexec .cexec').nth(n);
-  assert.equal(await card(0).getAttribute('data-tone'), 'ok');
-  assert.match(await card(0).locator('.cexec-stl').textContent(), /✓ exit 0\s*·\s*3 B/);
-  assert.equal(await card(0).locator('code').textContent(), 'ok');
-  await run('!bad'); await run('!sig'); await run('!stop'); await run('!sleep');
-  assert.deepEqual(await page.$$eval('.cexec', els => els.map(e => e.getAttribute('data-tone'))), ['ok', 'fail', 'warn', 'warn', 'run']);
-  assert.match(await card(1).locator('.cexec-stl').textContent(), /✗ exit 2/);
-  assert.match(await card(4).locator('.cexec-stl').textContent(), /… .*job exec_7f3a2c/);
-  const color = sel => page.evaluate(s => getComputedStyle(document.querySelector(s)).color, sel);
-  assert.equal(await color('.cexec[data-tone="fail"] .cexec-stl'), 'rgb(240, 121, 126)', 'failure is red');
-  assert.equal(await color('.cexec[data-tone="run"] .cexec-stl'), 'rgb(91, 155, 240)', 'running is blue');
-  assert.equal(await color('.cexec[data-tone="warn"] .cexec-stl'), 'rgb(224, 168, 74)', 'stop and signal are amber');
-  // a running run keeps the console open; the toggle folds it only when idle
-  await page.click('.cexec-head');
-  assert.equal(await page.locator('.cexec-log').isVisible(), true, 'active run keeps it open');
-  // the user's fold applies once the run ends: closing the running card leaves a one-line bar
-  await card(4).locator('.cexec-x').click();
-  assert.equal(await page.locator('.cexec-log').isVisible(), false, 'idle console folds to one bar');
-  assert.match(await page.locator('.cexec-mini').textContent(), /! stop/);
-  await page.click('.cexec-head');
-  assert.equal(await page.locator('.cexec-log').isVisible(), true);
-  // clear closes every run through the per-run close and forgets them
-  await page.click('.cexec-clear');
-  assert.equal(await page.locator('.cexec').count(), 0);
-  assert.equal(await page.locator('.d-cexec').isVisible(), false);
-  assert.equal(await page.evaluate(() => sessionStorage.getItem('ws.cexec.fx')), '[]');
+test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors, and bounded polling', { skip }, async t => {
+  const timerControl = `
+    window.__timers = [];
+    window.__now = 1000;
+    Date.now = function () { return window.__now; };
+    window.__origSetTimeout = window.setTimeout;
+    window.setTimeout = function (fn, ms) {
+      if (ms >= 700 && ms <= 5000) {
+        var id = window.__timers.length + 1;
+        window.__timers.push({ id: id, fn: fn, ms: ms, cleared: false });
+        return id;
+      }
+      return window.__origSetTimeout(fn, ms);
+    };
+    window.__origClearTimeout = window.clearTimeout;
+    window.clearTimeout = function (id) {
+      var item = window.__timers.find(function (t) { return t.id === id; });
+      if (item) item.cleared = true;
+      return window.__origClearTimeout(id);
+    };
+    window.__flushTimer = function () {
+      var next = window.__timers.find(function (t) { return !t.cleared; });
+      if (!next) return false;
+      next.cleared = true;
+      window.__now += next.ms;
+      next.fn();
+      return true;
+    };
+  `;
+  const { page, type, errs } = await open(t, timerControl);
+  await page.waitForSelector('.d-ucmd .ucmd');
+  const h0 = await page.evaluate(() => composer.getBoundingClientRect().height);
+
+  // 1) Immediate exec_id on POST (e.g. retry or fast launch) emits once and wakes HUD.
+  await type('!sleep');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__admitted.length === 1);
+  assert.deepEqual(await page.evaluate(() => window.__admitted[0]), {
+    submission_id: await page.evaluate(() => window.__admitted[0].submission_id),
+    command: 'sleep',
+    exec_id: 'exec_7f3a2c',
+    origin: 'cexec',
+  });
+  assert.equal(await page.evaluate(() => window.__execWakes), 1);
+  assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), h0, '0px height change after submit');
+
+  // 2) Accepted 202 without exec_id polls until exec_id arrives, then emits once and stops polling.
+  await page.evaluate(() => {
+    window.__polls.length = 0;
+    window.__onPoll = function (id, n, res) {
+      return n < 2 ? res({ id: id, command: 'pending', phase: 'running' }) : res({ id: id, command: 'pending', phase: 'async', exec_id: 'exec_polled' });
+    };
+  });
+  await type('!pending');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared));
+  await page.evaluate(() => window.__flushTimer());
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared));
+  await page.evaluate(() => window.__flushTimer());
+  await page.waitForFunction(() => window.__admitted.length === 2);
+  assert.equal(await page.evaluate(() => window.__admitted[1].exec_id), 'exec_polled');
+  assert.equal(await page.evaluate(() => window.__admitted[1].origin), 'cexec');
+  assert.equal(await page.evaluate(() => window.__execWakes), 2);
+  assert.equal(await page.evaluate(() => window.__timers.some(t => !t.cleared)), false, 'polling stops once admitted');
+
+  // 3) User command slot click goes through headless tracker with origin: 'ucmd'.
+  await page.evaluate(() => {
+    window.__onPoll = function (id, n, res) {
+      return res({ id: id, command: 'make test\n./run --verbose', phase: 'done', exec_id: 'exec_ucmd1' });
+    };
+  });
+  await page.click('.ucmd-run');
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared));
+  await page.evaluate(() => window.__flushTimer());
+  await page.waitForFunction(() => window.__admitted.length === 3);
+  assert.equal(await page.evaluate(() => window.__admitted[2].origin), 'ucmd');
+  assert.equal(await page.evaluate(() => window.__admitted[2].exec_id), 'exec_ucmd1');
+  assert.equal(await page.evaluate(() => window.__execWakes), 3);
+
+  // 4) unknown: true on POST shows noteWarn and keeps the draft; refused shows refused noteWarn.
+  await page.evaluate(() => { window.__warn = null; });
+  await type('!unk');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__warn);
+  assert.equal(await page.evaluate(() => window.__warn), en['js.cexec.unknown']);
+  assert.equal(await page.evaluate(() => ctext.value), '!unk', 'unknown retry leaves draft intact');
+
+  await page.evaluate(() => { window.__warn = null; });
+  await type('!refused');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__warn);
+  assert.equal(await page.evaluate(() => window.__warn), en['js.cexec.refused'].replace('{0}', 'worktree locked'));
+
+  // 5) 404 on poll triggers unknown warning and stops polling.
+  await page.evaluate(() => { window.__warn = null; window.__onPoll = function (_, __, res) { return res({}, 404); }; });
+  await type('!pending');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared));
+  await page.evaluate(() => window.__flushTimer());
+  await page.waitForFunction(() => window.__warn);
+  assert.equal(await page.evaluate(() => window.__warn), en['js.cexec.unknown']);
+  assert.equal(await page.evaluate(() => window.__timers.some(t => !t.cleared)), false, '404 stops polling');
+
+  // 6) Bounded poll cap: stops after <= 20 polls and <= 30000 ms on persistent running / 5xx.
+  await page.evaluate(() => {
+    window.__polls.length = 0;
+    window.__timers.length = 0;
+    window.__now = 100000;
+    window.__onPoll = function (id, n, res) { return res({ id: id, command: 'pending', phase: 'running' }); };
+  });
+  await type('!pending');
+  await page.keyboard.press('Enter');
+  for (let i = 0; i < 30; i++) {
+    const fired = await page.evaluate(() => window.__flushTimer());
+    if (!fired) break;
+    await page.waitForTimeout(10);
+  }
+  const pollCount = await page.evaluate(() => window.__polls.length);
+  assert.ok(pollCount > 0 && pollCount <= 20, 'poll count bounded: ' + pollCount);
+  assert.equal(await page.evaluate(() => window.__timers.some(t => !t.cleared)), false, 'no pending poll timer past bound');
+  assert.equal(await page.locator('.d-cexec, .cbang').count(), 0);
+  assert.deepEqual(errs, []);
 });
 
 test('slot blocks show the whole stored line on a dark $ block', { skip }, async t => {
@@ -187,13 +295,20 @@ test('slot blocks show the whole stored line on a dark $ block', { skip }, async
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ucmd-line'), '::before').content), '"$ "');
 });
 
-test('light theme tints the terminal surfaces Solarized, dark stays dark', { skip }, async t => {
-  const { page } = await open(t);
+test('light theme tints the terminal surfaces Solarized, dark stays dark, with 0px height delta', { skip }, async t => {
+  const { page, type } = await open(t);
   await page.waitForSelector('.d-ucmd .ucmd');
-  const bg = () => page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor);
-  assert.equal(await bg(), 'rgb(19, 20, 23)', 'dark theme');
+  const hDark = await page.evaluate(() => composer.getBoundingClientRect().height);
+  const ucmdBg = () => page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor);
+  const edBg = () => page.evaluate(() => getComputedStyle(document.querySelector('.cfield [contenteditable]')).backgroundColor);
+  assert.equal(await ucmdBg(), 'rgb(19, 20, 23)', 'dark theme ucmd');
   await page.emulateMedia({ colorScheme: 'light' });
-  assert.equal(await bg(), 'rgb(253, 246, 227)', 'light theme: Solarized base3');
+  const hLightIdle = await page.evaluate(() => composer.getBoundingClientRect().height);
+  assert.equal(hLightIdle, hDark, 'matching baseline height across themes');
+  assert.equal(await ucmdBg(), 'rgb(253, 246, 227)', 'light theme ucmd: Solarized base3');
+  await type('!ls');
+  assert.equal(await edBg(), 'rgb(253, 246, 227)', 'light theme bang input: Solarized base3');
+  assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), hLightIdle, '0px vertical height change in light bang mode');
 });
 
 test('a refused token read keeps its status and reason in the warning, and the draft', { skip }, async t => {
@@ -245,31 +360,16 @@ const OLD = [{ id: 'cxold1', command: 'old1' }, { id: 'cxold2', command: 'old2' 
 const seedOld = `sessionStorage.setItem("ws.cexec.fx", ${JSON.stringify(JSON.stringify(OLD))});`;
 const listOld = `{ token: "tok", cards: [{ id: "cxold1", command: "old1", phase: "done", exit_code: 0, output_bytes: 0 }, { id: "cxold2", command: "old2", phase: "done", exit_code: 0, output_bytes: 0 }] }`;
 
-test('a run that finishes before the restore read returns stays newest, and its console stays open', { skip }, async t => {
-  const { page, type } = await open(t, seedOld + HELD + `
-window.__hook = function (n) { if (n === 1) return held("restore", function () { return ${ok(listOld)}; }); };`);
-  await type('!ok');
-  await page.keyboard.press('Enter');
-  await page.locator('.d-cexec .cexec').first().waitFor();
-  await page.waitForFunction(() => document.querySelector('.cexec[data-phase="done"]'));
-  assert.equal(await page.locator('.d-cexec .cexec').count(), 1, 'the older cards wait for the restore read');
-  await page.evaluate(() => window.__rel.restore());
-  await page.waitForFunction(() => document.querySelectorAll('.d-cexec .cexec').length === 3);
-  const order = () => page.$$eval('.d-cexec .cexec code', els => els.map(e => e.textContent));
-  assert.deepEqual(await order(), ['old1', 'old2', 'ok'], 'the older runs are placed before the fresh one');
-  assert.deepEqual(await page.evaluate(() => window.__t.cards.map(c => c.command)), ['old1', 'old2', 'ok'], 'the card list is chronological');
-  assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ws.cexec.fx')).map(c => c.command)), ['old1', 'old2', 'ok'], 'saved history is chronological');
-  assert.equal(await page.locator('.d-cexec').getAttribute('data-folded'), null, 'the fresh run keeps the console open');
-  assert.equal(await page.locator('.cexec-log').isVisible(), true);
-  assert.match(await page.locator('.cexec-mini').textContent(), /ok$/, 'the bar shows the newest run');
-});
-
-test('a history-only restore starts folded with the newest saved run on the bar', { skip }, async t => {
-  const { page } = await open(t, seedOld + `
+test('page load primes the admission token via composer-exec list without restoring cards', { skip }, async t => {
+  const { page, type, errs } = await open(t, seedOld + `
 window.__hook = function (n) { if (n === 1) return Promise.resolve(${ok(listOld)}); };`);
-  await page.waitForFunction(() => document.querySelectorAll('.d-cexec .cexec').length === 2);
-  assert.equal(await page.locator('.d-cexec').getAttribute('data-folded'), '', 'folded to the bar');
-  assert.equal(await page.locator('.cexec-log').isVisible(), false);
-  assert.match(await page.locator('.cexec-mini').textContent(), /old2$/, 'the bar shows the newest remembered run');
-  assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ws.cexec.fx')).map(c => c.command)), ['old1', 'old2']);
+  await page.waitForFunction(() => window.__gets === 1);
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('.d-cexec, .cexec').count(), 0, 'no cards restored in composer');
+  assert.equal(await page.evaluate(() => window.__polls.length), 0, 'no per-card polls triggered for old history');
+  await type('!sleep');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__admitted.length === 1);
+  assert.equal(await page.evaluate(() => window.__gets), 1, 'primed token was reused for fresh submission');
+  assert.deepEqual(errs, []);
 });
