@@ -430,6 +430,7 @@
     trigger.appendChild(mk("span", "term-arrow", "▾"));
     trigger.setAttribute("aria-label", wsT("js.board.filter.label") + ": " + stateUI.labels[i] + " " + totals[stateFilter]);
     fitToolbar(true);
+    if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
   }
   function topicName(n) {
     return n && n.nodeType === 1 && n.tagName === "SECTION" && n.classList.contains("topic") && n.hasAttribute("data-topic") ? n.getAttribute("data-topic") : null;
@@ -865,6 +866,8 @@
     if (on === r.hasAttribute("data-gal-away")) return;
     if (on) r.setAttribute("data-gal-away", ""); else r.removeAttribute("data-gal-away");
     if (board) board.inert = on;
+    // Return upward from Pinned Page 1 lands back on the last Hero Panel.
+    if (!on && window.WsBoardAnchor && window.WsBoardAnchor.restore) window.WsBoardAnchor.restore();
   }
   // slide stands a page off positions from the one shown: an inactive page
   // stays mounted, translated out of the clipped viewport (the stylesheet's
@@ -1128,9 +1131,31 @@
     var dy = +e.deltaY || 0;
     if (e.deltaMode === 1) dy *= 40; else if (e.deltaMode === 2) dy *= 800;
     if (e.target.closest(OWN)) return;
-    var bound = home ? homeScr : e.target.closest(".gal-pane, .gal-page") || viewEl, fall = home ? homeScr : null;
-    if (!home && bound && bound.classList.contains("gal-pane")) fall = bound.querySelector(PANE_BODY);
-    var can = canScroll(e.target, bound, dy, fall), w = gateIn;
+    var bound, fall = null, can;
+    if (home) {
+      var panel = e.target.closest("section.topic[data-topic], .bcard[data-card]");
+      bound = panel || homeScr;
+      can = panel ? canScroll(e.target, panel, dy, null) : false;
+      if (!can) {
+        if (dy < 0) can = reach(homeScr, dy);
+        else if (reach(homeScr, dy)) {
+          var anchor = window.WsBoardAnchor, list = anchor && anchor.cards ? anchor.cards() : [];
+          var last = list.length ? list[list.length - 1] : null;
+          if (!last || (panel && panel !== last)) can = true;
+          else {
+            var more = board && board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])");
+            var colRect = homeScr.getBoundingClientRect();
+            if (more && more.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS) can = true;
+            else can = last.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS;
+          }
+        }
+      }
+    } else {
+      bound = e.target.closest(".gal-pane, .gal-page") || viewEl;
+      if (bound && bound.classList.contains("gal-pane")) fall = bound.querySelector(PANE_BODY);
+      can = canScroll(e.target, bound, dy, fall);
+    }
+    var w = gateIn;
     // The model is replaced, never changed, on every change: its
     // neighbors are read once per model and view.
     if (nbOf !== gal || nbNarrow !== narrow) { nb = G.neighbors(gal, pos, narrow); nbOf = gal; nbNarrow = narrow; }
@@ -1952,6 +1977,7 @@
     delete u.rank;
     if (!isCard(u.el)) u.at = 0;
     if (to.gal === "home") galSet(G.activate(G.undock(gal, ref), -1, true), u);
+    else if (to.gal === "unpin") galSet(G.undock(gal, ref), u);
     else if (to.gal === "place") galSet(G.place(gal, ref, to.target, to.zone), u);
     else galSet(to.gal === "append" ? G.append(gal, ref, to.pos) : G.dock(gal, ref), u);
   }
@@ -2064,13 +2090,9 @@
     } else if (inRail(x, y) || inside(rectOf(toolbar), x, y)) { /* the rail and the toolbar are never drop targets */ }
     else if (boardShown() && inside(rectOf(scroller(board) || board), x, y)) {
       scr = scroller(board);
-      if (!isCard(d.el) && topicAt(d.el) === null) to = d.unit.pinned ? { pin: false, line: null } : null;
-      else {
-        var flow = Array.prototype.filter.call(board.children, function (n) { return n !== d.el && (isCard(n) || topicAt(n) !== null); });
-        var br = rectOf(board), f = slot(flow, y, br), after = flow[f.at - 1] || null, before = flow[f.at] || null;
-        var still = !d.unit.pinned && d.el.parentNode === board && flowNext(d.el, -1) === after && flowNext(d.el, 1) === before;
-        to = { pin: false, after: after, before: before, line: still ? null : f.line };
-      }
+      // Flow reordering inside the snap deck is retired; dragging back over
+      // #bcol only undocks a docked unit or cancels cleanly.
+      to = d.unit.pinned ? { gal: "unpin" } : null;
     }
     d.to = to;
     spring(hit && hit.el.classList.contains("gal-dot") ? hit : null);

@@ -128,9 +128,20 @@
       cb.addEventListener('click', function () { close(true); });
       link.addEventListener('click', function (e) {
         e.preventDefault(); var id = data.prior.ID; close(false);
-        if (window.wbHistory) window.wbHistory.loadTarget(d, id);
-        var target = d.getElementById(id);
-        if (target) { var details = target.querySelector('.entry-panel'); if (details) details.open = true; target.scrollIntoView({ block: 'center' }); }
+        var target = window.wbHistory && window.wbHistory.loadTarget ? window.wbHistory.loadTarget(d, id) : null;
+        if (!target) {
+          target = d.getElementById(id);
+          if (target) {
+            var details = target.querySelector('.entry-panel'); if (details) details.open = true;
+            if (window.wbHistory && window.wbHistory.navigate) window.wbHistory.navigate(target);
+            else {
+              if (window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
+              var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(target);
+              if (card) anchor.select(card, { smooth: target === card });
+              if (target !== card) target.scrollIntoView({ block: 'center' });
+            }
+          }
+        }
         window.location.hash = id;
       });
     }

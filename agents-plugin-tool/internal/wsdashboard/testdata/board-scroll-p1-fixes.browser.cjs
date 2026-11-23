@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
@@ -13,7 +14,7 @@ const { chromium } = require(pwPath);
 const REPO = path.resolve(__dirname, '../../../..');
 const WSD = path.join(REPO, 'agents-plugin-tool/internal/wsdashboard/assets');
 const WSW = path.join(REPO, 'agents-plugin-tool/internal/wswhiteboard/assets');
-const SHOTS_DIR = process.env.WS_LOOK_SHOTS || 'D:/Temp/board-scroll-p1-fixes-look';
+const SHOTS_DIR = process.env.WS_LOOK_SHOTS || (process.platform === 'win32' ? 'D:/Temp/board-scroll-p1-fixes-look' : path.join(os.tmpdir(), 'board-scroll-p1-fixes-look'));
 
 function readAsset(dir, name) {
   return fs.readFileSync(path.join(dir, name), 'utf8');
@@ -262,7 +263,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       return { overscrollY: cs.overscrollBehaviorY, scrollMarginTop: cs.scrollMarginTop, overflowAnchor: cs.overflowAnchor };
     });
     assert.equal(topicCss.overscrollY, 'auto', 'section.topic must allow scroll chaining');
-    assert.equal(topicCss.scrollMarginTop, '0px', 'scroll-margin-top must not double-count scroll-padding-top');
+    assert.equal(topicCss.scrollMarginTop, '46px', 'topic 2+ must carry padTop(2px) + 44px capsule-aligned scroll-margin-top');
     assert.equal(topicCss.overflowAnchor, 'none', 'non-current card must keep overflow-anchor: none');
 
     // Bug 3 + Bug 4 toolbar-float transition: select Topic 4 from scrollTop=0
@@ -475,11 +476,16 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         cardTop: term.getBoundingClientRect().top,
         expectedTop,
         scrollTop: bcol.scrollTop,
+        maxScroll: bcol.scrollHeight - bcol.clientHeight,
+        smt: getComputedStyle(term).scrollMarginTop,
+        spt: getComputedStyle(bcol).scrollPaddingTop,
+        runway: bcol.style.getPropertyValue('--board-runway'),
+        usable: bcol.style.getPropertyValue('--board-usable'),
       };
     });
     assert.equal(termLanded.key, 'c:term-1', '.bcard cap click must route through WsBoardAnchor.select');
     assert.ok(termLanded.scrollTop === 0 || Math.abs(termLanded.cardTop - termLanded.expectedTop) <= 3,
-      `Terminal 1 card top (${termLanded.cardTop}) must align to expected top (${termLanded.expectedTop})`);
+      `Terminal 1 card top (${termLanded.cardTop}) must align to expected top (${termLanded.expectedTop}): ${JSON.stringify(termLanded)}`);
 
     await page.screenshot({ path: path.join(SHOTS_DIR, '04-bcard-cap-click.png') });
 
@@ -506,6 +512,97 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       return { outerReads, otherReads };
     });
     assert.deepEqual(geomCounts, { outerReads: 0, otherReads: 0 }, 'non-current card update must perform zero geometry reads');
+
+    // Phase 1 Snap Deck assertions: mandatory snap, hidden scrollbar, fixed slot height,
+    // contain: strict with entry-panel[data-max] & overview lifts, hidden .bcard .bc-grip,
+    // and .oq-pill 2-level offscreen jump back to Topic 1's #item-1.
+    const snapDeck = await page.evaluate(() => {
+      const bcol = document.getElementById('bcol');
+      const bcolCs = getComputedStyle(bcol);
+      const t1 = document.getElementById('topic-1');
+      const t4 = document.getElementById('topic-4');
+      const card = document.querySelector('.bcard[data-card="term-1"]');
+      const cardIn = card.querySelector(':scope > .bc-in');
+      const grip = cardIn.querySelector(':scope > .bc-grip');
+      const body = cardIn.querySelector(':scope > .bc-body');
+      const usable = parseFloat(bcol.style.getPropertyValue('--board-usable'));
+      const ep = document.createElement('details');
+      ep.className = 'entry-panel';
+      ep.setAttribute('data-max', '');
+      t4.appendChild(ep);
+      const t4ContainMax = getComputedStyle(t4).contain;
+      const epRect = ep.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+      ep.remove();
+      // Verify terminal/web .bc-body preserves overflow: hidden inside #bcol
+      const origKind = card.getAttribute('data-kind');
+      card.setAttribute('data-kind', 'web');
+      const webBodyOverflow = getComputedStyle(body).overflowY;
+      if (origKind === null) card.removeAttribute('data-kind'); else card.setAttribute('data-kind', origKind);
+      document.documentElement.setAttribute('data-overview', '');
+      const ovSnap = getComputedStyle(bcol).scrollSnapType;
+      const ovContain = getComputedStyle(t4).contain;
+      document.documentElement.removeAttribute('data-overview');
+      return {
+        snapType: bcolCs.scrollSnapType,
+        scrollbarWidth: bcolCs.scrollbarWidth,
+        usable,
+        t1H: t1.getBoundingClientRect().height,
+        t1ScrollMarginTop: getComputedStyle(t1).scrollMarginTop,
+        cardScrollMarginTop: getComputedStyle(card).scrollMarginTop,
+        t4Contain: getComputedStyle(t4).contain,
+        t4ContainMax,
+        epRect: { top: epRect.top, left: epRect.left, width: epRect.width, height: epRect.height },
+        vw, vh,
+        webBodyOverflow,
+        ovSnap,
+        ovContain,
+        cardSnap: getComputedStyle(card).scrollSnapAlign,
+        cardInH: cardIn.getBoundingClientRect().height,
+        gripDisplay: getComputedStyle(grip).display,
+        bodyFlexGrow: getComputedStyle(body).flexGrow,
+      };
+    });
+    assert.equal(snapDeck.snapType, 'y mandatory', '#bcol uses mandatory y snap');
+    assert.equal(snapDeck.scrollbarWidth, 'none', '#bcol hides outer scrollbar');
+    assert.ok(Math.abs(snapDeck.t1H - snapDeck.usable) <= 1.5, `topic height (${snapDeck.t1H}) matches --board-usable (${snapDeck.usable})`);
+    assert.equal(snapDeck.cardScrollMarginTop, '160px', 'slot 0 aligns scroll-margin-top to 160px (snaps to scrollTop=0)');
+    assert.equal(snapDeck.t1ScrollMarginTop, '26px', 'slot 1 aligns scroll-margin-top to padTop + 24px (26px)');
+    assert.equal(snapDeck.t4Contain, 'strict', 'normal topic uses contain: strict');
+    assert.equal(snapDeck.t4ContainMax, 'none', 'entry-panel[data-max] lifts contain: strict');
+    assert.ok(Math.abs(snapDeck.epRect.top - 52) <= 1 && Math.abs(snapDeck.epRect.left - 16) <= 1 &&
+      Math.abs(snapDeck.epRect.width - (snapDeck.vw - 32)) <= 2 && Math.abs(snapDeck.epRect.height - (snapDeck.vh - 64)) <= 2 &&
+      snapDeck.epRect.height > snapDeck.usable + 50,
+      `entry-panel[data-max] fills viewport unclipped by #bcol / contain: strict: ${JSON.stringify(snapDeck.epRect)} vs ${snapDeck.vw}x${snapDeck.vh}`);
+    assert.equal(snapDeck.webBodyOverflow, 'hidden', 'web .bcard .bc-body preserves overflow: hidden inside #bcol');
+    assert.equal(snapDeck.ovSnap, 'none', 'overview lifts scroll-snap-type');
+    assert.equal(snapDeck.ovContain, 'none', 'overview lifts containment');
+    assert.equal(snapDeck.cardSnap, 'start', '.bcard snaps to start');
+    assert.ok(Math.abs(snapDeck.cardInH - snapDeck.usable) <= 1.5, `.bcard > .bc-in height (${snapDeck.cardInH}) fills --board-usable (${snapDeck.usable})`);
+    assert.equal(snapDeck.gripDisplay, 'none', 'in-board .bcard hides .bc-grip');
+    assert.equal(snapDeck.bodyFlexGrow, '1', 'in-board .bcard > .bc-in > .bc-body flex-grows');
+
+    // Offscreen .oq-pill 2-level jump: from Topic 4 (offscreen from Topic 1), update pill and click.
+    await page.evaluate(() => {
+      window.WsBoardAnchor.select(document.getElementById('topic-4'), { smooth: false });
+    });
+    await waitForScrollSettle(page);
+    await page.evaluate(() => { if (window.wbPill && window.wbPill.update) window.wbPill.update(); });
+    await waitFrames(page, 4);
+    const pillTop = page.locator('.wb-oq-top .oq-pill');
+    assert.equal(await pillTop.isVisible(), true, 'top .oq-pill visible when Topic 1 ask is offscreen above');
+    await pillTop.click();
+    await waitForScrollSettle(page);
+    const jumped = await page.evaluate(() => {
+      const bcol = document.getElementById('bcol').getBoundingClientRect();
+      const item = document.getElementById('item-1').getBoundingClientRect();
+      return {
+        key: window.WsBoardAnchor.key(),
+        visible: item.bottom > bcol.top && item.top < bcol.bottom,
+      };
+    });
+    assert.equal(jumped.key, 't:topic-1', 'offscreen .oq-pill jump selects target card first');
+    assert.equal(jumped.visible, true, 'offscreen .oq-pill jump reveals target #item-1 inside card');
   } finally {
     await browser.close();
   }

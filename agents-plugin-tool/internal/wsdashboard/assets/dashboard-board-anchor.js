@@ -12,8 +12,9 @@
   var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4, ANCHOR_FADE = 14;
   var ANCHOR_BOT = ANCHOR_FADE + 2 * ANCHOR_CAP + ANCHOR_GAP + ANCHOR_PAD;
   var ANCHOR_BOT_MARGIN = 8;
-  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0 };
+  var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
+  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null;
   var anchorProg = null, anchorProgSeq = 0;
   function anchorCapH(n) { return n ? ANCHOR_PAD + n * (ANCHOR_CAP + ANCHOR_GAP) : 0; }
   function anchorToolbarFace() {
@@ -80,9 +81,15 @@
   }
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
-    var c = col.getBoundingClientRect(), r = n.getBoundingClientRect();
-    var delta = r.top - anchorLandingTop(col, c, n, list);
-    var target = Math.max(0, col.scrollTop + delta);
+    var delta, target;
+    if (anchorSized.bounded && n.getAttribute && n.getAttribute("data-anchor-cap") === "0") {
+      target = 0;
+      delta = -col.scrollTop;
+    } else {
+      var c = col.getBoundingClientRect(), r = n.getBoundingClientRect();
+      delta = r.top - anchorLandingTop(col, c, n, list);
+      target = Math.max(0, col.scrollTop + delta);
+    }
     if (anchorProg && anchorProg.key === anchorId(n)) anchorProg.target = target;
     if (Math.abs(delta) <= 0.5) return false;
     if (col.scrollTo) col.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
@@ -120,7 +127,8 @@
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
       anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
-      anchorAlign(col, n, smooth);
+      var moved = anchorAlign(col, n, smooth);
+      if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
       if (!smooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
     }
@@ -149,8 +157,34 @@
   // key is retained across insertion and reorder (the browser's anchoring
   // holds its place), the saved or first card is taken when none is current,
   // and a card that left the order hands over to a neighbour.
+  // Only slot 0 and the first two rail-bearing slots carry explicit cap
+  // offsets; rail slot 2+ use the CSS default (padTop + 44px) so non-current
+  // updates touch no DOM. When slot 0 is a non-rail .bcard, the first railed
+  // slot carries "rail0" (padTop + 0px) instead of falling through to 44px.
+  function anchorSlotCaps(list) {
+    var cards = list || anchorCards(), next0 = null, nextR0 = null, next1 = null, seen = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i], rail = c.hasAttribute("data-topic") || c.hasAttribute("data-rail");
+      if (i === 0) next0 = c;
+      else if (rail && seen === 0) nextR0 = c;
+      else if (rail && seen === 1) { next1 = c; break; }
+      if (rail) seen++;
+    }
+    var prev = [anchorCap0, anchorCapR0, anchorCap1];
+    for (var j = 0; j < prev.length; j++) {
+      var p = prev[j];
+      if (p && p !== next0 && p !== nextR0 && p !== next1) p.removeAttribute("data-anchor-cap");
+    }
+    if (next0 && (!next0.getAttribute || next0.getAttribute("data-anchor-cap") !== "0")) next0.setAttribute("data-anchor-cap", "0");
+    if (nextR0 && (!nextR0.getAttribute || nextR0.getAttribute("data-anchor-cap") !== "rail0")) nextR0.setAttribute("data-anchor-cap", "rail0");
+    if (next1 && (!next1.getAttribute || next1.getAttribute("data-anchor-cap") !== "1")) next1.setAttribute("data-anchor-cap", "1");
+    anchorCap0 = next0;
+    anchorCapR0 = nextR0;
+    anchorCap1 = next1;
+  }
   function anchorSettle(before) {
     var list = anchorCards(), n = anchorNode(anchorKey);
+    anchorSlotCaps(list);
     if (n) { if (n !== anchorLast) anchorMark(n); return; }
     if (!list.length) { anchorMark(null); return; }
     var saved = null;
@@ -196,9 +230,14 @@
   function anchorApplySizes(col) {
     var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2), botSpace = anchorBotReserve();
     anchorSized.inset = inset;
-    var usable = Math.max(120, anchorSized.h - topSpace - botSpace);
     var s = col.style;
     anchorSetVar(s, "--board-toolbar", topSpace + "px");
+    anchorSetVar(s, "--board-pad-top", anchorSized.padTop + "px");
+    if (!anchorSized.bounded) {
+      if (s.removeProperty) { s.removeProperty("--board-usable"); s.removeProperty("--board-runway"); }
+      return;
+    }
+    var usable = Math.max(120, anchorSized.h - topSpace - botSpace);
     anchorSetVar(s, "--board-usable", usable + "px");
     anchorSetVar(s, "--board-runway", Math.max(0, anchorSized.h - topSpace - (anchorSized.last || 0)) + "px");
   }
@@ -237,9 +276,11 @@
     entries.forEach(function (e) {
       var box = e.contentBoxSize && e.contentBoxSize[0], bb = e.borderBoxSize && e.borderBoxSize[0];
       if (e.target === col) {
+        var cs = getComputedStyle(col);
+        anchorSized.bounded = /auto|scroll/.test(cs.overflowY);
         anchorSized.w = box ? box.inlineSize : e.contentRect.width;
-        anchorSized.h = box ? box.blockSize : e.contentRect.height;
-        anchorSized.padTop = parseFloat(getComputedStyle(col).paddingTop) || 0;
+        anchorSized.h = anchorSized.bounded ? (box ? box.blockSize : e.contentRect.height) : 0;
+        anchorSized.padTop = parseFloat(cs.paddingTop) || 0;
       } else if (e.target === face) {
         var nextBar = bb ? bb.blockSize : e.contentRect.height;
         if (nextBar !== anchorSized.bar) insetChanged = true;
@@ -277,11 +318,19 @@
     if (e.target !== col) return;
     var p = anchorProg;
     if (p && p.key === anchorKey && Date.now() <= p.until) {
+      if (!p.smooth && Math.abs(col.scrollTop - p.target) > 120) { anchorProg = null; }
+      else {
       var targetNode = anchorNode(p.key) || anchorLast;
       if (targetNode && targetNode.isConnected) {
-        var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
-        var err = r.top - anchorLandingTop(col, c, targetNode);
-        var canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
+        var err = 0, canMove = false;
+        if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
+          err = -col.scrollTop;
+          canMove = col.scrollTop > 1;
+        } else {
+          var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
+          err = r.top - anchorLandingTop(col, c, targetNode);
+          canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
+        }
         if (Math.abs(err) > 1.5 && canMove && p.tries < 2) {
           p.tries++;
           anchorAlign(col, targetNode, false);
@@ -292,6 +341,7 @@
       if (!p.waitFloat) anchorProg = null;
       else anchorWaitFrames(p.id, 3);
       return;
+      }
     }
     anchorProg = null;
     var list = anchorCards();
@@ -316,7 +366,9 @@
   function anchorInit() {
     var col = $("bcol");
     if (!col || !region("board")) return;
-    anchorSized.padTop = parseFloat(getComputedStyle(col).paddingTop) || 0;
+    var colCs = getComputedStyle(col);
+    anchorSized.padTop = parseFloat(colCs.paddingTop) || 0;
+    anchorSized.bounded = /auto|scroll/.test(colCs.overflowY);
     anchorSized.inset = anchorRailInset(col);
     col.addEventListener("wheel", anchorCancelProg, { passive: true });
     col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
@@ -341,5 +393,5 @@
     col.wbScrollOwner = true;
     anchorSettle(null);
     anchorWatchLast();
-    window.WsBoardAnchor = { restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); }, select: anchorSelect, step: anchorStep, owner: anchorOwner, key: function () { return anchorKey; }, cards: anchorCards };
+    window.WsBoardAnchor = { restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); }, select: anchorSelect, step: anchorStep, owner: anchorOwner, key: function () { return anchorKey; }, cards: anchorCards, settle: function () { anchorSettle(null); anchorWatchLast(); } };
   }

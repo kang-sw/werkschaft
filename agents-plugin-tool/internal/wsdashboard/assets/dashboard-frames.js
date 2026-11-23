@@ -306,7 +306,7 @@
       for (var p = target; p && inBoard(p); p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
       var w = window.wbHistory, anchor = window.WsBoardAnchor, card = anchor && anchor.owner(target);
       // A board target snaps to its containing card first, then scrolls inside it.
-      if (card) { anchor.select(card, { smooth: true }); if (target === card) return; }
+      if (card) { anchor.select(card, { smooth: target === card }); if (target === card) return; }
       if (!loaded && w && w.navigate) w.navigate(target);
       else if (!loaded && window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
       // History targets were anchored by the loader; never scroll their clip.

@@ -1,9 +1,12 @@
 ---
 title: "보드 스크롤을 현재 카드에 고정"
+related:
+  261123-feat-ws-dashboard-main-panel-snap-deck: supersedes (1426)=b short-card stacking and --board-runway model; absorbs Phase 2 outward lazy hydration onto fixed 100% snap slots
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 68f43bf6e2b869bf
 sage-review-completeness-reviewed: 68f43bf6e2b869bf
+completed: 2026-11-23
 ---
 
 # Anchor the dashboard board scroll to the current card
@@ -144,7 +147,9 @@ Fixed four live dogfood defects found on Phase 1 (`6b0c81e6d`, merged at `54c984
 
 Verification: local `node --test` (including real headless Chromium `board-scroll-p1-fixes.browser.cjs`) 85/85 PASS; 4 LOOK screenshots visually verified; remote `w5090` `generate-package-assets.py` + `go test ./internal/wsdashboard/... ./internal/wsi18n/... ./internal/wspackage/... ./internal/wswhiteboard/...` all PASS.
 
-### Phase 2: Load visible topic bodies outward from the current card
+### Phase 2: [dropped] Load visible topic bodies outward from the current card
+
+> Superseded and absorbed by `261123-feat-ws-dashboard-main-panel-snap-deck` Phase 4 (fixed 100% snap-slot virtualization replaces outward short-card stacking hydration).
 
 Start after Phase 1 has landed and its Result reports the forced-layout and DOM-operation counts. Fully render the selected topic body when the current card is a topic, and retain demand-driven history loading inside it. In each direction from the current card, advance through the Main Board order one card at a time. Hydrate a topic body when its card would be visible within the usable board scrollport, then use visibility after that hydration to evaluate the next card. Continue past visible unpinned cards using their existing body lifecycle. Stop each direction at the first undrawn card. Use `IntersectionObserver` or equivalent visibility notifications to drive this work without geometry polling.
 
@@ -155,3 +160,8 @@ Keep topics beyond the drawn range as a header and lightweight placeholder. `con
 - Run the touched Node test files with `node --test <file>`. Exercise outward hydration with a topic and with an unpinned card selected, the first invisible stopping point in each direction, resumption on visibility changes, and jumps that make a placeholder topic current. Verify that placeholder height changes above and below keep either kind of current card aligned. Exercise history and fold restoration if far-topic eviction is used.
 - Use the same board fixture to compare the Phase 1 baseline with Phase 2. Report before/after DOM node counts and forced layouts for the same load, navigation, and update actions, and check that non-current size changes still cause zero outer-board geometry reads. Use a fixture with enough off-screen topics to show the reduction in mounted nodes.
 - Capture a before/after LOOK at the same current card and viewport. Show that visible short cards still stack and that hydration maintains the current card's alignment. Use the Phase 1 `w5090` command for any Go verification.
+
+
+## Resolution (2026-11-23)
+
+Phase 1 landed on develop (`58a404962`, `54c9847cd`). Phase 2 (outward topic-body lazy hydration) was dropped and superseded by `261123-feat-ws-dashboard-main-panel-snap-deck` Phase 4 (fixed 100% snap-slot virtualization).

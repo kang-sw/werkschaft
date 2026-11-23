@@ -138,13 +138,21 @@
     if (motionRaf) cancelAnimationFrame(motionRaf);
     motionRaf = 0;
     readInset();
+    var staleGhosts = null;
+    ["top", "bot"].forEach(function (e) {
+      var g = ghosts[e];
+      if (!g || !g.isBarTarget) return;
+      if (!g.into || !g.into.isConnected || Math.abs(g.into.getBoundingClientRect().top - g.toTop) > 2) {
+        (staleGhosts || (staleGhosts = {}))[e] = g;
+      }
+    });
     if (dirty) { found = Array.prototype.slice.call(box.querySelectorAll(ITEMS)); dirty = false; fresh = true; }
     var rects = [];
     topics = [];
     found.forEach(function (t) { var r = t.getBoundingClientRect(); if (r.height) { topics.push(t); rects.push(r); } });
     var n = topics.length;
     // Nothing rendered (the board tab is hidden) or nothing to rail.
-    if (!n) return draw(null);
+    if (!n) return draw(null, staleGhosts);
     var vt = viewTop(), vb = root ? root.getBoundingClientRect().bottom : window.innerHeight;
     // i is the last topic whose top has reached where its bar would stick;
     // it is current while its card still spans that line, and otherwise
@@ -176,10 +184,10 @@
       down: below.slice(0, 2),
       downMore: Math.max(0, below.length - 2),
       replyOff: replyOff
-    });
+    }, staleGhosts);
   }
 
-  function draw(s) {
+  function draw(s, staleGhosts) {
     var pending = pendingMotion;
     pendingMotion = null;
     var key = s ? [inset, s.top, s.upMore, s.downMore, s.replyOff, s.stuck, names(s.up), names(s.down), names([s.cur])].join("|") : "" + inset;
@@ -193,6 +201,7 @@
       // the pending motion now, before any offset writes, rather than
       // starving morphs during continuous scrolling.
       if (pending) after(pending);
+      dropStaleGhosts(staleGhosts);
       if (fresh) offsets();
       return;
     }
@@ -209,6 +218,7 @@
     // after() starts animations, so it must follow the height read too.
     var barH = bar ? bar.offsetHeight : 0;
     if (pending && member === moved) after(pending);
+    dropStaleGhosts(staleGhosts);
     moved = member;
     if (stuck !== shadow) {
       if (stuck) stuck.classList.remove("wb-stuck");
@@ -379,8 +389,17 @@
   }
   function dropGhost(edge) {
     (edge ? [edge] : ["top", "bot"]).forEach(function (e) {
-      (ghosts[e] || []).forEach(function (el) { if (el.parentNode) el.parentNode.removeChild(el); });
+      var g = ghosts[e];
+      if (!g) return;
       ghosts[e] = null;
+      if (g.hide && typeof g.hide.cancel === "function") g.hide.cancel();
+      g.els.forEach(function (el) { if (el.parentNode) el.parentNode.removeChild(el); });
+    });
+  }
+  function dropStaleGhosts(stale) {
+    if (!stale) return;
+    ["top", "bot"].forEach(function (e) {
+      if (stale[e] && ghosts[e] === stale[e]) dropGhost(e);
     });
   }
   // morph lays out the copy at its destination once, then uses only a
@@ -418,16 +437,19 @@
       if (nm && l.size) nm.style.fontSize = l.size;
       el.appendChild(c);
     });
-    ghosts[edge] = [el];
+    var els = [el];
     if (!bar && into.closest(".wb-stuck")) {
       var plate = d.createElement("div");
       plate.className = "wb-rail-ghost";
       plate.style.cssText = "left:" + el.style.left + ";width:" + el.style.width + ";top:" + (to.top - w.top) + "px;height:" + to.height + "px;background:var(--wb-bg)";
       wrap.appendChild(plate);
-      ghosts[edge].unshift(plate);
+      els.unshift(plate);
     }
     wrap.appendChild(el);
-    var mine = ghosts[edge];
+    var hideAnim = null;
+    if (typeof into.animate === "function") hideAnim = into.animate([{ opacity: 0 }, { opacity: 0 }], { duration: DUR });
+    var mine = { els: els, into: into, isBarTarget: !bar, toTop: to.top, hide: hideAnim };
+    ghosts[edge] = mine;
     el.animate([
       { transform: "translateY(" + (from.top - to.top) + "px) scaleY(" + (to.height > 0 ? from.height / to.height : 1) + ")" },
       { transform: "none" }
@@ -436,7 +458,6 @@
     // over the second, so their differently placed text never doubles up.
     el.firstChild.animate([{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }], { duration: DUR, fill: "forwards" });
     el.lastChild.animate([{ opacity: 0 }, { opacity: 0, offset: 0.5 }, { opacity: 1 }], { duration: DUR, fill: "forwards" });
-    into.animate([{ opacity: 0 }, { opacity: 0 }], { duration: DUR });
   }
   // The keys of the items at the given indices: the draw key holds keys,
   // not indices, so a re-queried board (closed topics fetched in, a topic
@@ -455,7 +476,7 @@
   // opened, closed topics fetched in) can change the topic list and every
   // position; the box's own size changes when its tab shows or the window
   // resizes.
-  function reflow() { dirty = true; insetDirty = true; pendingMotion = null; kick(); }
+  function reflow() { dirty = true; insetDirty = true; pendingMotion = null; dropGhost(); kick(); }
   // The dashboard writes --wb-rail-inset on the host as its toolbar changes.
   // Observe only host inputs, not the capsule/offset writes below it.
   var mo = window.MutationObserver ? new window.MutationObserver(reflow) : null;
