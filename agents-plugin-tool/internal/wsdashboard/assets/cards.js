@@ -1611,7 +1611,9 @@
     if (opt && opt.reveal) opt.reveal();
     activate(el);
     var calm = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-    if (el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: calm ? "auto" : "smooth" });
+    // An unpinned card is a Main Board card: showing it selects it (anchor).
+    if (window.WsBoardAnchor && window.WsBoardAnchor.select(el, { smooth: true })) { /* aligned */ }
+    else if (el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: calm ? "auto" : "smooth" });
     el.classList.remove("flash");
     void el.offsetWidth;
     el.classList.add("flash");

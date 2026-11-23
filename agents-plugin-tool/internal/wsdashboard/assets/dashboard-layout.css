@@ -23,7 +23,7 @@
 .dgrid.worktree > * { min-width: 0; }
 .dgrid.worktree > .thead { grid-column: 1; grid-row: 1; border-radius: var(--wb-radius) var(--wb-radius) 0 0; box-shadow: var(--wb-shadow); }
 .dgrid.worktree > .fpane { grid-column: 1; grid-row: 2; display: flex; border-top-left-radius: 0; border-top-right-radius: 0; }
-.dgrid.worktree > .bcol { grid-column: 2; grid-row: 1 / -1; overflow: auto; overflow-anchor: none; padding: 2px 4px 0 2px; }
+.dgrid.worktree > .bcol { grid-column: 2; grid-row: 1 / -1; overflow: auto; overflow-anchor: auto; padding: 2px 4px 0 2px; }
 .worktree-branch { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .worktree-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root[data-sysopen] .wthd { cursor: pointer; }
@@ -37,7 +37,7 @@
 .dgrid.history > * { min-width: 0; min-height: 0; }
 .dgrid.history > .tabbar { grid-column: 1 / -1; }
 .dgrid.history > .convo, .dgrid.history > .bcol { grid-column: 1; grid-row: 2; overflow: auto; }
-.dgrid.history > .bcol { overflow-anchor: none; }
+.dgrid.history > .bcol { overflow-anchor: auto; }
 .dgrid.history[data-tab="board"] > .convo, .dgrid.history:not([data-tab="board"]) > .bcol { display: none; }
 @media (min-width: 1100px) {
   .dgrid.history { grid-template-columns: minmax(320px, 5fr) minmax(0, 7fr); grid-template-rows: minmax(0, 1fr); }
@@ -103,8 +103,8 @@
 .dgrid.live > .composer { grid-area: composer; margin-top: 10px; }
 /* One shared release control for staged rendering, placement and heights.
    Fixed outside the board flow so the badge itself changes no reading geometry. */
-/* Owned board scrollers use permanent manual anchoring (wbHistory.keep). */
-.dgrid.live > .bcol { grid-column: 1; grid-row: chead-start / convo-end; overflow: auto; overflow-anchor: none; padding: 2px 4px 0 2px; }
+/* The board column anchors natively, scoped to the current card (dashboard-board.css); inner owned scrollers use manual anchoring (wbHistory.keep). */
+.dgrid.live > .bcol { grid-column: 1; grid-row: chead-start / convo-end; overflow: auto; overflow-anchor: auto; padding: 2px 4px 0 2px; }
 .dgrid.live[data-tab="board"] > .convo, .dgrid.live:not([data-tab="board"]) > .bcol { display: none; }
 /* The conversation panel's header (chead) carries its own tabs (ctabs):
    "Conversation | Files". Under the Files tab the Files pane takes the

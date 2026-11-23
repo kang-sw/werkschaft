@@ -358,3 +358,23 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .hdrow > .hdbtns { grid-area: stop; display: inline-flex; gap: 4px; }
 .hdcwd { font-family: var(--wb-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 
+/* Card-keyed board scrolling (dashboard-board-anchor.js). A card is a topic
+   section or an unpinned card: it keeps its content height up to the usable
+   scrollport (--board-usable, below the sticky toolbar) and scrolls inside
+   itself, so short cards stack and a tall one never exceeds the screen. The
+   topic section is its own scroll owner under its sticky head. Overflow
+   anchoring is scoped to the current card: every other card is excluded, so
+   a size change of any card moves nothing the reader sees and costs the page
+   no geometry read. Maximized topics, panels and cards stay fixed to the
+   viewport: no containment is added above them. */
+#bcol .r-board section.topic[data-topic]:not([data-max]) { max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overscroll-behavior: contain; scroll-margin-top: var(--board-toolbar, 0px); overflow-anchor: none; }
+#bcol .r-board section.topic[data-topic]:not([data-max]) > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
+#bcol .r-board .bcard:not([data-max]) { scroll-margin-top: var(--board-toolbar, 0px); overflow-anchor: none; }
+#bcol .r-board .bcard:not([data-max]) > .bc-in { max-height: var(--board-usable, none); }
+#bcol .r-board [data-current] { overflow-anchor: auto; }
+#bcol .r-board { padding-bottom: var(--board-runway, 0px); }
+:root[data-overview] #bcol .r-board section.topic[data-topic] { max-height: none; overflow-y: visible; }
+:root[data-overview] #bcol .r-board .bcard > .bc-in { max-height: none; }
+.board-step { display: inline-flex; gap: 2px; flex: none; }
+.board-step .board-action { padding-inline: 7px; }
+.board-step .board-action:disabled { opacity: .35; cursor: default; }

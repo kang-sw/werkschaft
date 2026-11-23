@@ -500,6 +500,8 @@
   "js.term.loadfail": "無法載入終端機模擬器",
   "js.board.toolbar.label": "看板操作",
   "js.board.toolbar.overview": "總覽",
+  "js.board.step.prev": "Previous card",
+  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "總覽 (Ctrl+Q)",
   "js.board.toolbar.download": "下載",
   "js.board.toolbar.download.title": "將此看板下載為 zip",

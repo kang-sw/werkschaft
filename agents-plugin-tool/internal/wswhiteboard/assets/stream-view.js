@@ -103,10 +103,16 @@
     // A node's nearest scroller: the first ancestor whose overflow scrolls
     // and whose content overflows it, else the document's.
     function docScroller() { return doc.scrollingElement || doc.documentElement; }
+    // A board body owns its scroll whether or not it overflows now: a pane body
+    // (.gal-pbody), a card body (.bc-body) and a dashboard board topic section.
+    // Ownership must survive a short card growing into overflow.
+    function ownsBody(p) {
+      return p.classList.contains("gal-pbody") || p.classList.contains("bc-body") || (p.classList.contains("topic") && p.hasAttribute("data-topic"));
+    }
     function scrollerOf(node) {
       for (var p = node && node.parentElement; p && p !== doc.body && p !== doc.documentElement; p = p.parentElement) {
         var oy = win.getComputedStyle(p).overflowY;
-        if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || p.classList.contains("gal-pbody"))) return p;
+        if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || ownsBody(p))) return p;
       }
       return docScroller();
     }
@@ -478,7 +484,7 @@
           if (under.has(p)) { found = under.get(p); break; }
           chain.push(p);
           var oy = win.getComputedStyle(p).overflowY;
-          if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || p.classList.contains("gal-pbody"))) { found = p; break; }
+          if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || ownsBody(p))) { found = p; break; }
         }
         if (!found) found = docScroller();
         chain.forEach(function (c) { under.set(c, found); });

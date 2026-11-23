@@ -327,7 +327,7 @@
     entries.forEach(function (entry) {
       var el = entry.target, shown = entry.contentRect.width > 0 && entry.contentRect.height > 0;
       paneVisible[el.id] = shown;
-      if (shown) paneScroll[el.id] = el.scrollTop;
+      if (shown && !el.wbScrollOwner) paneScroll[el.id] = el.scrollTop;
     });
   }) : null;
   function notePanes() {
@@ -336,12 +336,14 @@
       if (!paneMoved[id]) return;
       paneMoved[id] = false;
       var el = $(id);
-      if (el && (paneObserver ? paneVisible[id] : visible(el))) paneScroll[id] = el.scrollTop;
+      if (el && !el.wbScrollOwner && (paneObserver ? paneVisible[id] : visible(el))) paneScroll[id] = el.scrollTop;
     });
   }
   PANES.forEach(function (id) {
     var el = $(id);
     if (!el) return;
+    // The board column's scroll state is its current card's key (anchor).
+    if (id === "bcol") el.wbScrollOwner = true;
     if (paneObserver) paneObserver.observe(el);
     el.addEventListener("scroll", function () {
       paneMoved[id] = true;
@@ -442,7 +444,8 @@
       var el = $(id);
       var shown = visible(el);
       paneVisible[id] = shown;
-      if (shown && Object.prototype.hasOwnProperty.call(paneScroll, id)) el.scrollTop = paneScroll[id];
+      if (shown && el.wbScrollOwner && window.WsBoardAnchor) window.WsBoardAnchor.restore();
+      else if (shown && Object.prototype.hasOwnProperty.call(paneScroll, id)) el.scrollTop = paneScroll[id];
     });
     pinConvo();
     nearTop(); // a conversation shown too short to scroll still loads older entries
