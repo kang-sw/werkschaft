@@ -16,7 +16,7 @@ import (
 
 // agentHarness is childHarness with both worker harnesses spawnable for
 // agent.*: lookPath finds the fake's executable, and claude's small,
-// medium, and large tiers are set beside Pi's. configure, when not nil,
+// medium, and large tiers are set beside werk's. configure, when not nil,
 // edits the runner's options before a restart.
 func agentHarness(t *testing.T, configure func(*Options)) (*harness, *reports) {
 	t.Helper()
@@ -200,11 +200,11 @@ func TestAgentSpawnAndListDescribeTheChild(t *testing.T) {
 	if text := ap.nextSent(t); !strings.Contains(text, "investigate the cache") {
 		t.Fatalf("the first turn = %q", text)
 	}
-	b, _ := h.agentRunning(lead, AgentSpawnRequest{Prompt: "check pi\nmore", Tier: "pi.small", Authority: "read-only"})
+	b, _ := h.agentRunning(lead, AgentSpawnRequest{Prompt: "check pi\nmore", Tier: "werk.small", Authority: "read-only"})
 	if st := h.state(a); st.Backend != BackendClaude || st.Profile != AgentWorkerProfile(BackendClaude) || st.Parent == nil || *st.Parent != leadParent || st.Tier != "medium" {
 		t.Fatalf("a's state = %+v", st)
 	}
-	if st := h.state(b); st.Backend != BackendPi || st.Profile != AgentWorkerProfile(BackendPi) {
+	if st := h.state(b); st.Backend != BackendWerk || st.Profile != AgentWorkerProfile(BackendWerk) {
 		t.Fatalf("b's state = %+v", st)
 	}
 
@@ -218,7 +218,7 @@ func TestAgentSpawnAndListDescribeTheChild(t *testing.T) {
 		t.Fatalf("a's entry = %+v", ca)
 	}
 	// An omitted label is the prompt's first line.
-	if cb.Label != "check pi" || cb.Tier != "pi.small" || cb.Authority != PermissionReadOnly || cb.Model != "prov/small-model" || cb.Effort != "low" {
+	if cb.Label != "check pi" || cb.Tier != "werk.small" || cb.Authority != PermissionReadOnly || cb.Model != "prov/small-model" || cb.Effort != "low" {
 		t.Fatalf("b's entry = %+v", cb)
 	}
 	eventually(t, "a running", func() bool { return findAgent(t, h.runner.AgentList(lead), a).State == AgentRunning })

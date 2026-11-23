@@ -66,15 +66,15 @@ func TestAgentSpawnDefaultRoleChainMatchesTheBareSize(t *testing.T) {
 // launches another harness's slot.
 func TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers(t *testing.T) {
 	h := routingHarness(t)
-	pi := LeadCaller(leadParent.ReplyID, h.root, BackendPi, h.config.Config)
-	if got := h.spawnBinding(pi, "small"); got.Backend != BackendPi {
-		t.Fatalf("pi small = %+v, want a pi launch", got)
+	pi := LeadCaller(leadParent.ReplyID, h.root, BackendWerk, h.config.Config)
+	if got := h.spawnBinding(pi, "small"); got.Backend != BackendWerk {
+		t.Fatalf("pi small = %+v, want a werk launch", got)
 	}
 	spawned := len(h.runner.AgentList(pi))
 	// The fixture's pi bucket sets small, medium, and large, not xlarge.
 	for _, tier := range []string{"xlarge", "ticket-worker:xlarge"} {
 		_, err := h.runner.AgentSpawn(pi, AgentSpawnRequest{Prompt: "x", Tier: tier, Authority: "read-only"})
-		agentRefused(t, err, http.StatusBadRequest, "pi.xlarge has no model in agents.tier")
+		agentRefused(t, err, http.StatusBadRequest, "werk.xlarge has no usable OpenRouter model")
 	}
 	if n := len(h.runner.AgentList(pi)); n != spawned {
 		t.Fatalf("a refused tier spawned: %d children, was %d", n, spawned)
@@ -84,8 +84,8 @@ func TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers(t *testing.T) {
 func TestAgentSpawnRoutesRoleTiersAndBundles(t *testing.T) {
 	h := routingHarness(t)
 	setTierRouting(t, h.config.Config, `{
-		"nodes":{"review":{"*":"pi.*","medium":"discussion"},"implement":{"large":"claude.small"}},
-		"bundles":{"discussion":{"harness":"pi","model":"prov/thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
+		"nodes":{"review":{"*":"werk.*","medium":"discussion"},"implement":{"large":"claude.small"}},
+		"bundles":{"discussion":{"harness":"werk","model":"prov/thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
 	}`)
 	lead := h.leadCaller()
 	for _, tc := range []struct {
@@ -93,13 +93,13 @@ func TestAgentSpawnRoutesRoleTiersAndBundles(t *testing.T) {
 		want spawnBinding
 	}{
 		// A group mapping moves the role to another harness.
-		{"ticket-reviewer-design:small", spawnBinding{BackendPi, "prov/small-model", "low", "small"}},
+		{"ticket-reviewer-design:small", spawnBinding{BackendWerk, "prov/small-model", "low", "small"}},
 		// A per-size exception routes to a bundle, keeping the routed size.
-		{"ticket-reviewer-design:medium", spawnBinding{BackendPi, "prov/thinking", "high", "medium"}},
+		{"ticket-reviewer-design:medium", spawnBinding{BackendWerk, "prov/thinking", "high", "medium"}},
 		// A pinned target changes the size.
 		{"ticket-worker:large", spawnBinding{BackendClaude, "claude-small", "high", "small"}},
 		// A bare bundle name supplies no size and records xlarge.
-		{"discussion", spawnBinding{BackendPi, "prov/thinking", "high", "xlarge"}},
+		{"discussion", spawnBinding{BackendWerk, "prov/thinking", "high", "xlarge"}},
 		// An explicit target wins over every mapping.
 		{"claude.medium", spawnBinding{BackendClaude, "claude-medium", "high", "medium"}},
 	} {
@@ -169,13 +169,13 @@ func TestAgentSpawnRoutedTierCeilings(t *testing.T) {
 
 func TestAgentSpawnRoutingKeepsLegacyAliasPrecedenceAndRefusesAnInvalidGraph(t *testing.T) {
 	h := routingHarness(t)
-	setTierAliases(t, h.config.Config, "ticket-worker:large=pi.large implement:small=pi.small")
+	setTierAliases(t, h.config.Config, "ticket-worker:large=werk.large implement:small=werk.small")
 	setTierRouting(t, h.config.Config, `{"nodes":{"implement":{"*":"claude.xlarge"}}}`)
 	lead := h.leadCaller()
-	if got := h.spawnBinding(lead, "ticket-worker:large"); got.Backend != BackendPi || got.Model != "prov/large-model" {
+	if got := h.spawnBinding(lead, "ticket-worker:large"); got.Backend != BackendWerk || got.Model != "prov/large-model" {
 		t.Fatalf("whole-token alias = %+v", got)
 	}
-	if got := h.spawnBinding(lead, "ticket-worker:small"); got.Backend != BackendPi || got.Model != "prov/small-model" {
+	if got := h.spawnBinding(lead, "ticket-worker:small"); got.Backend != BackendWerk || got.Model != "prov/small-model" {
 		t.Fatalf("alias at a walked node = %+v", got)
 	}
 	if got := h.spawnBinding(lead, "ticket-worker:medium"); got.Backend != BackendClaude || got.Tier != "xlarge" {
@@ -192,9 +192,9 @@ func TestAgentSpawnRoutingKeepsLegacyAliasPrecedenceAndRefusesAnInvalidGraph(t *
 
 func TestAgentTiersRoutingSection(t *testing.T) {
 	h := routingHarness(t)
-	setTierAliases(t, h.config.Config, "discussion=pi.small")
+	setTierAliases(t, h.config.Config, "discussion=werk.small")
 	setTierRouting(t, h.config.Config, `{
-		"nodes":{"review":{"*":"pi.*"},"mine":{}},
+		"nodes":{"review":{"*":"werk.*"},"mine":{}},
 		"bundles":{"discussion":{"harness":"claude","model":"claude-thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
 	}`)
 	got, err := h.runner.AgentTiers(h.leadCaller())
@@ -212,24 +212,24 @@ func TestAgentTiersRoutingSection(t *testing.T) {
 	if e := routes["ticket-worker:medium"]; e.Trace != "ticket-worker:medium -> implement:medium -> medium -> claude.medium" || e.Model != "claude-medium" || e.Error != "" {
 		t.Fatalf("role route = %+v", e)
 	}
-	if e := routes["ticket-reviewer-design:large"]; e.Trace != "ticket-reviewer-design:large -> review:large -> pi.large" || e.Model != "prov/large-model" {
+	if e := routes["ticket-reviewer-design:large"]; e.Trace != "ticket-reviewer-design:large -> review:large -> werk.large" || e.Model != "prov/large-model" {
 		t.Fatalf("mapped role route = %+v", e)
 	}
 	if _, listed := routes["ticket-worker:large"]; listed {
 		t.Fatal("a role is listed at a size its playbook does not declare")
 	}
-	if e := routes["review:xlarge"]; e.Error != `tier "xlarge" is not set for pi` {
+	if e := routes["review:xlarge"]; e.Error != `tier "xlarge" is not set for werk` {
 		t.Fatalf("unset slot route = %+v", e)
 	}
 	if e := routes["mine:small"]; e.Trace != "mine:small -> small -> claude.small" {
 		t.Fatalf("user node route = %+v", e)
 	}
 	// The alias shadows the bundle's name, so the token spawns the alias.
-	if len(r.Bundles) != 2 || r.Bundles[0] != (AgentRouteEntry{Tier: "discussion", Trace: "discussion -> pi.small [alias discussion]", Harness: BackendPi, Model: "prov/small-model", Effort: "low"}) ||
-		r.Bundles[1].Error != `harness "agy" has no spawnable tier now` {
+	if len(r.Bundles) != 2 || r.Bundles[0] != (AgentRouteEntry{Tier: "discussion", Trace: "discussion -> werk.small [alias discussion]", Harness: BackendWerk, Model: "prov/small-model", Effort: "low"}) ||
+		r.Bundles[1].Error != `harness "agy" is not registered in this daemon` {
 		t.Fatalf("bundles = %+v", r.Bundles)
 	}
-	if len(r.Collisions) != 1 || !strings.Contains(r.Collisions[0], "alias discussion -> pi.small shadows bundle discussion") {
+	if len(r.Collisions) != 1 || !strings.Contains(r.Collisions[0], "alias discussion -> werk.small shadows bundle discussion") {
 		t.Fatalf("collisions = %v", r.Collisions)
 	}
 
@@ -296,7 +296,7 @@ func TestRoleTierAgainstThePreFeatureResolver(t *testing.T) {
 		t.Fatalf("the new daemon must report routing support: %+v, %v", current.Routing, err)
 	}
 
-	setTierAliases(t, h.config.Config, role+"=pi.large")
+	setTierAliases(t, h.config.Config, role+"=werk.large")
 	aliases, err := wsconfig.LoadTierAliases(h.config.Config)
 	if err != nil {
 		t.Fatal(err)
@@ -348,11 +348,11 @@ func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T)
 	}
 
 	setTierRouting(t, h.config.Config, `{"nodes":{
-		"review":{"*":"pi.*"},
+		"review":{"*":"werk.*"},
 		"explore":{"*":"claude.*"},
 		"ticket-worker-elevated":{"*":"claude.small"}
 	}}`)
-	pi := func(size string) spawnBinding { return h.spawnBinding(lead, "pi."+size) }
+	werk := func(size string) spawnBinding { return h.spawnBinding(lead, "werk."+size) }
 	claude := func(size string) spawnBinding { return h.spawnBinding(lead, "claude."+size) }
 	for _, d := range declared {
 		got := h.spawnBinding(lead, d.Role+":"+d.Size)
@@ -361,7 +361,7 @@ func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T)
 		case d.Role == "ticket-worker-elevated":
 			want = spawnBinding{claude("small").Backend, claude("small").Model, claude("small").Effort, "small"}
 		case strings.HasPrefix(d.Parent, "review:"):
-			want = pi(d.Size)
+			want = werk(d.Size)
 		case strings.HasPrefix(d.Parent, "explore:"):
 			want = claude(d.Size)
 		default:

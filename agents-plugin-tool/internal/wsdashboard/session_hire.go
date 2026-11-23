@@ -52,6 +52,7 @@ type HireCreator interface {
 
 // HireProposal is a daemon-private journal. Launch is an approval intent,
 // persisted before creation; a restart completes it without creating twice.
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 type HireProposal struct {
 	ID        string `json:"id"`
 	Requester string `json:"requester"`
@@ -184,6 +185,7 @@ func (d *Daemon) hireHierarchyReady(replyID string) bool {
 
 // RequestHire is called only after the MCP server authenticates a top-level
 // lead key. There is no model-facing flag setter or approval operation.
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 func (d *Daemon) RequestHire(replyID string, request HireRequest) (HireProposal, error) {
 	if strings.TrimSpace(request.Reason) == "" || strings.TrimSpace(request.RecoveryContext) == "" {
 		return HireProposal{}, errors.New("reason and recovery_context are required")
@@ -314,6 +316,7 @@ func (d *Daemon) settleHiresLocked(proposals []HireProposal) error {
 	return err
 }
 
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 func (d *Daemon) settleHiresDeadlineLocked(proposals []HireProposal) (time.Time, error) {
 	var next time.Time
 	arm := func(at time.Time) {

@@ -28,7 +28,7 @@ func agentLeadHarness(t *testing.T) (*leadHarness, *wakeRefusals) {
 	h.opts.Backends["codex"] = BackendRegistration{Backend: &fakeBackend{}, LeadProfile: "codex-lead"}
 	h.globalProfile("codex-lead", `{"backend":"codex","lead":true}`)
 	for tier, model := range map[string]string{"small": "prov/small", "medium": "prov/medium"} {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, PiTierHarness, "low"); err != nil {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, BackendClaude, "low"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,7 +44,7 @@ func (h *leadHarness) caller(lead State) AgentCaller {
 func TestAgentSpawnCapsAtAHostedLeadsLevel(t *testing.T) {
 	h, _ := agentLeadHarness(t)
 	spawn := func(caller AgentCaller, level PermissionLevel) (string, error) {
-		res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "x", Tier: "pi.small", Authority: string(level)})
+		res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "x", Tier: "claude.small", Authority: string(level)})
 		return agentID(res.Address), err
 	}
 
@@ -87,9 +87,9 @@ func TestAgentSpawnCapsAtAHostedLeadsLevel(t *testing.T) {
 	}
 	_, err = h.runner.AgentSpawn(h.caller(codex), AgentSpawnRequest{Prompt: "x", Tier: "small", Authority: "read-only"})
 	// No bare tier is listed for a lead-only harness.
-	agentRefused(t, err, http.StatusBadRequest, `harness "codex" is registered for hosted leads only`, "valid tiers: claude.small", "pi.small, pi.medium")
+	agentRefused(t, err, http.StatusBadRequest, `harness "codex" is registered for hosted leads only`, "valid tiers: claude.small", "claude.medium")
 	ghost := LeadCaller("noleadrecordhere", h.root, BackendClaude, h.opts.Config)
-	_, err = h.runner.AgentSpawn(ghost, AgentSpawnRequest{Prompt: "x", Tier: "pi.small", Authority: "full"})
+	_, err = h.runner.AgentSpawn(ghost, AgentSpawnRequest{Prompt: "x", Tier: "claude.small", Authority: "full"})
 	agentRefused(t, err, http.StatusForbidden, "above this session's own level workdir-write")
 }
 
@@ -98,14 +98,14 @@ func TestAgentSpawnCapsAtAHostedLeadsLevel(t *testing.T) {
 func TestRefusedWakeUnderAHostedLead(t *testing.T) {
 	h, refusals := agentLeadHarness(t)
 	lead := h.lead(BackendClaude, LeadOptions{PermissionMode: "auto"})
-	res, err := h.runner.AgentSpawn(h.caller(lead), AgentSpawnRequest{Prompt: "work", Tier: "pi.small", Authority: "workdir-write"})
+	res, err := h.runner.AgentSpawn(h.caller(lead), AgentSpawnRequest{Prompt: "work", Tier: "claude.small", Authority: "workdir-write"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	x := agentID(res.Address)
 	first := h.holder(x)
-	h.holders.out(first, `{"type":"agent_start"}`)
-	h.holders.out(first, recoveryPiReply("x done")...)
+	h.holders.out(first, stateLine(HarnessRunning))
+	h.holders.out(first, recoveryWorkerReply("x done")...)
 	eventually(t, "x's turn settled", func() bool { rec := h.record(x); return rec.LastTurn != nil && !rec.TurnOpen })
 	if _, err := h.runner.Stop(x); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestRefusedWakeUnderAHostedLead(t *testing.T) {
 	eventually(t, "the admitted wake", func() bool { return h.holders.opCount("launch") == launches+1 })
 	next := h.holder(x)
 	eventually(t, "both mails taken", func() bool {
-		all := strings.Join(h.holders.inputs(next, "prompt"), "\n")
+		all := strings.Join(h.userInputs(next), "\n")
 		return strings.Contains(all, "held mail") && strings.Contains(all, "second mail")
 	})
 	if got := refusals.list(); len(got) != 1 {
@@ -152,9 +152,8 @@ func TestRefusedWakeUnderAHostedLead(t *testing.T) {
 }
 
 // A child whose wake was refused sleeps: its kept input holds no done turn
-// of its parent's, and a send over the parent's token route tells the
-// parent (the sender) of the refusal as Deliver does.
-func TestRefusedChildHoldsNoReportAndTheTokenSendTellsTheSender(t *testing.T) {
+// of its parent's. Deliver reports the refusal to the sender.
+func TestRefusedChildHoldsNoReportAndDeliverTellsTheSender(t *testing.T) {
 	refusals := &wakeRefusals{}
 	h, _ := agentHarness(t, func(o *Options) { o.WakeRefused = refusals.add })
 	a, b := settledPair(t, h)
@@ -167,9 +166,8 @@ func TestRefusedChildHoldsNoReportAndTheTokenSendTellsTheSender(t *testing.T) {
 	}
 	ap := h.backend.waitProc(t, starts)
 	ap.nextSent(t)
-	code, body := h.tokenCall(h.token(starts), "send", map[string]any{"id": b, "message": "held for b"})
-	if code != http.StatusOK {
-		t.Fatalf("a's send to b = %d %s", code, body)
+	if _, err := h.runner.Deliver(b, Delivery{From: a, Text: "held for b"}); err != nil {
+		t.Fatal(err)
 	}
 	eventually(t, "b's refused start", func() bool {
 		return strings.Contains(h.state(b).Error, "above the parent's current level read-only")
@@ -188,16 +186,10 @@ func TestRefusedChildHoldsNoReportAndTheTokenSendTellsTheSender(t *testing.T) {
 }
 
 // agent-worker profiles run only through agent.spawn, with an authority:
-// the pi.spawn token route and a bare Runner.Spawn refuse them.
+// a bare Runner.Spawn refuses them.
 func TestAgentWorkerProfilesNeedAgentSpawn(t *testing.T) {
 	h, _ := agentHarness(t, nil)
-	h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "parent", Tier: "medium", Authority: "read-only"})
-	token := h.token(0)
-	for _, profile := range []string{AgentWorkerProfile(BackendClaude), AgentWorkerProfile(BackendPi)} {
-		code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": "escape", "tier": "small", "profile": profile})
-		if code != http.StatusBadRequest || !strings.Contains(body, "agent.spawn's internal profile") {
-			t.Fatalf("pi spawn of %s = %d %s", profile, code, body)
-		}
+	for _, profile := range []string{AgentWorkerProfile(BackendClaude), AgentWorkerProfile(BackendCodex)} {
 		parent := leadParent
 		_, err := h.runner.Spawn(SpawnSpec{Profile: profile, Root: h.root, Prompt: "x", Tier: "small", Parent: &parent})
 		agentRefused(t, err, http.StatusBadRequest, "needs a parent and an authority")
@@ -420,18 +412,6 @@ func TestAgentChildMissingPermissionRecordFailsClosed(t *testing.T) {
 	if lvl := h.backend.start(starts).WSMCP.Env[EnvPermissionLevel]; lvl != string(PermissionReadOnly) {
 		t.Fatalf("restored child EnvPermissionLevel = %q, want %q", lvl, PermissionReadOnly)
 	}
-
-	// 2. Legitimate Pi child (pi.spawn) has no permission.json and still launches.
-	piStarts := h.backend.startCount()
-	parent := leadParent
-	piChild, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "pi task", Tier: "small", Parent: &parent})
-	if err != nil {
-		t.Fatalf("PiWorkerProfile spawn: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(wsdashboard.SessionDir(h.dir, piChild.ID), "permission.json")); !os.IsNotExist(err) {
-		t.Fatalf("PiWorkerProfile should not write permission.json, stat err = %v", err)
-	}
-	h.backend.waitProc(t, piStarts).nextSent(t)
 
 	// 3. Legitimate hosted top-level lead without permission.json still works.
 	lh, _ := agentLeadHarness(t)
