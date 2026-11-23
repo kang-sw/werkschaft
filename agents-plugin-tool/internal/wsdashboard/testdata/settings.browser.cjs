@@ -27,6 +27,13 @@ const snapshot = '/api/config/snapshot';
     const gear = (scope, target) => page.locator('[data-scope-entry=' + scope + ']' + (target ? '[data-settings-target=' + JSON.stringify(target) + ']' : ''));
     const scopeButton = name => frame().locator('[data-settings-precedence] [data-settings-scope=' + name + ']');
     const proposal = name => frame().locator('[data-settings-proposal-action=' + name + ']');
+    const headerBadgeMetrics = () => frame().locator('.shd-top').evaluate(top => {
+      const pill = top.querySelector('[data-settings-target-display]').getBoundingClientRect();
+      const route = top.querySelector('.route-pill').getBoundingClientRect();
+      const pillCenter = pill.top + pill.height / 2;
+      const routeCenter = route.top + route.height / 2;
+      return { pillCenter, routeCenter, delta: Math.abs(pillCenter - routeCenter) };
+    });
     const show = async (scope, target, worktree, sid) => {
       const wanted = new URL(endpoint(scope, target, worktree, sid));
       await (await (await page.locator('#workflow-settings > iframe').elementHandle()).contentFrame()).waitForURL(url => url.pathname === '/settings' &&
@@ -292,14 +299,23 @@ const snapshot = '/api/config/snapshot';
     await show('builtin');
     await page.reload();
     await show('builtin');
+    const badgeCenters = {};
+    const recordBadgeCenter = async name => {
+      const m = await headerBadgeMetrics();
+      assert(m.delta <= 1, `expected header badge aligned with /settings on ${name}, delta=${m.delta}`);
+      badgeCenters[name] = m.pillCenter;
+    };
     await scopeButton('global').click();
     await show('global');
+    await recordBadgeCenter('global');
     await scopeButton('project').click();
     await show('project', workspace);
+    await recordBadgeCenter('project');
     assert(await row('workflow.prefer_subagent').locator('button.tg').isDisabled());
     await ensureRailOpen();
     await gear('session', session).click();
     await show('session', session, root, session);
+    await recordBadgeCenter('session');
     await scopeButton('builtin').click();
     await show('builtin', null, root, session);
     assert(await row('workflow.lang').locator('input').isDisabled());
@@ -309,6 +325,10 @@ const snapshot = '/api/config/snapshot';
     await ensureRailOpen();
     await gear('repo', root).click();
     await show('repo', root, root);
+    await recordBadgeCenter('repo');
+    const centerVals = Object.values(badgeCenters);
+    assert(Math.max(...centerVals) - Math.min(...centerVals) <= 1,
+      'expected header badge vertical center to match across scopes: ' + JSON.stringify(badgeCenters));
     await scopeButton('builtin').click();
     await show('builtin', null, root);
     assert.match(await scopeButton('session').textContent(), /미평가/);

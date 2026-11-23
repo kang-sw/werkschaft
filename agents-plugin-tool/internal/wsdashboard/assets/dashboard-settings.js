@@ -263,7 +263,7 @@ var wsSettingsChoiceLabels = {
 
   function renderHeader() {
     var display = view.querySelector("[data-settings-target-display]");
-    display.className = "scope-target-pill " + (scopes.includes(scope) ? scope : "");
+    display.className = "scope-target-pill" + (scopes.includes(scope) ? " scope-" + scope : "");
     display.querySelector("span").textContent = scopeName(scope);
     var path = display.querySelector("code");
     path.textContent = snapshot && snapshot.path || (scope === "session" ? selection.target : "");
