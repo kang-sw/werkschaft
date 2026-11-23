@@ -21,7 +21,7 @@ func (s auditSearch) eachLineMatch(line string, seam int, emit func(start, end i
 
 // eachWindowMatch reports whether emit stopped the scan.
 func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, end int) bool) bool {
-	if s.spanProg == nil {
+	if s.spanScan == nil {
 		if s.lit == "" {
 			return false
 		}
@@ -38,10 +38,9 @@ func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, e
 		}
 		return false
 	}
-	scan := spanScan{
-		prog: s.spanProg, text: line[lo:hi],
-		left: -1, right: -1, words: (len(s.spanProg.Inst) + 63) / 64,
-	}
+	scan := s.spanScan
+	scan.text, scan.left, scan.right = line[lo:hi], -1, -1
+	defer scan.reset()
 	if s.seamed != nil {
 		if lo > 0 {
 			scan.left = rune(seamSentinels[sentinelKind(line, lo-1)][0])
@@ -50,21 +49,13 @@ func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, e
 			scan.right = rune(seamSentinels[sentinelKind(line, hi)][0])
 		}
 	}
-	released := 0
 	for start := 0; start < len(scan.text); {
-		for released < start/spanScanPage {
-			scan.visited[released] = nil
-			released++
-		}
+		scan.releaseBefore(start / 64)
 		end := scan.findAt(start)
 		if end > start {
 			if emit(lo+start, lo+end) {
 				return true
 			}
-			// Paths still in flight when the match won were at or before
-			// end. All states visited beyond end have already failed, so
-			// the next search can reuse them. Retry the states at end.
-			clear(scan.row(end))
 			start = end
 		} else {
 			// Both a miss and an empty match advance by one rune.
@@ -80,46 +71,115 @@ type spanState struct {
 	pos int
 }
 
-const spanScanPage = 256
+// A greedy loop often defers the same alternative at each rune. Keep a
+// sequence of evenly spaced positions as one stack entry.
+type spanBranch struct {
+	spanState
+	count, step int
+}
 
 type spanScan struct {
 	prog        *syntax.Prog
 	text        string
 	left, right rune // assertion context outside text, never consumed
-	words       int  // bitset words per byte position
-	visited     [][]uint64
-	pending     []spanState
+
+	// One word per reached instruction for every 64 bytes of lookahead.
+	// Keep a spare page for the next line or the next step of a short scan.
+	pages    []map[uint32]uint64
+	spare    map[uint32]uint64
+	released int
+	atStart  []uint64
+	pending  []spanBranch
 }
 
-// row allocates visited bits only as the matcher reaches new pages. A scan
-// that stops at the span cap does not build a table for the remaining line.
-func (s *spanScan) row(pos int) []uint64 {
-	page := pos / spanScanPage
-	if page == len(s.visited) {
-		s.visited = append(s.visited, make([]uint64, spanScanPage*s.words))
+func (s *spanScan) releaseBefore(page int) {
+	for ; s.released < min(page, len(s.pages)); s.released++ {
+		if s.spare == nil && s.pages[s.released] != nil {
+			s.spare = s.pages[s.released]
+			clear(s.spare)
+		}
+		s.pages[s.released] = nil
 	}
-	offset := (pos % spanScanPage) * s.words
-	return s.visited[page][offset : offset+s.words]
 }
 
-// findAt tries the program's preferred branches first, as regexp's bounded
-// backtracker does. A state is visited at most once until that byte position
-// becomes a match end. Captures cannot affect a later decision.
+func (s *spanScan) reset() {
+	s.releaseBefore(len(s.pages))
+	s.pages = s.pages[:0]
+	s.released = 0
+	s.text = ""
+}
+
+func (s *spanScan) seen(state spanState, start int) bool {
+	if state.pos == start {
+		word, bit := state.pc/64, uint64(1)<<(state.pc%64)
+		if s.atStart[word]&bit != 0 {
+			return true
+		}
+		s.atStart[word] |= bit
+		return false
+	}
+	page, bit := state.pos/64, uint64(1)<<(state.pos%64)
+	for len(s.pages) <= page {
+		s.pages = append(s.pages, nil)
+	}
+	visited := s.pages[page]
+	if visited == nil {
+		visited, s.spare = s.spare, nil
+		if visited == nil {
+			visited = make(map[uint32]uint64)
+		}
+		s.pages[page] = visited
+	}
+	if visited[state.pc]&bit != 0 {
+		return true
+	}
+	visited[state.pc] |= bit
+	return false
+}
+
+func (s *spanScan) push(state spanState) {
+	if n := len(s.pending); n > 0 {
+		top := &s.pending[n-1]
+		if top.pc == state.pc {
+			step := state.pos - top.pos
+			if top.count == 1 || top.step == step {
+				top.pos, top.step = state.pos, step
+				top.count++
+				return
+			}
+		}
+	}
+	s.pending = append(s.pending, spanBranch{spanState: state, count: 1})
+}
+
+func (s *spanScan) pop() spanState {
+	last := len(s.pending) - 1
+	top := &s.pending[last]
+	state := top.spanState
+	top.count--
+	if top.count == 0 {
+		s.pending = s.pending[:last]
+	} else {
+		top.pos -= top.step
+	}
+	return state
+}
+
+// findAt tries the preferred branches first, as regexp's bounded backtracker
+// does. States reached strictly beyond a winning end have already failed.
+// Start each attempt with fresh bits at its own start so states on the last
+// match's end can be retried. Captures cannot affect a later decision.
 func (s *spanScan) findAt(start int) int {
-	s.pending = append(s.pending[:0], spanState{pc: uint32(s.prog.Start), pos: start})
+	if s.atStart == nil {
+		s.atStart = make([]uint64, (len(s.prog.Inst)+63)/64)
+	}
+	clear(s.atStart)
+	s.pending = s.pending[:0]
+	s.push(spanState{pc: uint32(s.prog.Start), pos: start})
 nextBranch:
 	for len(s.pending) > 0 {
-		last := len(s.pending) - 1
-		state := s.pending[last]
-		s.pending = s.pending[:last]
-		for {
-			row := s.row(state.pos)
-			word, bit := state.pc/64, uint64(1)<<(state.pc%64)
-			if row[word]&bit != 0 {
-				continue nextBranch
-			}
-			row[word] |= bit
-
+		state := s.pop()
+		for !s.seen(state, start) {
 			inst := &s.prog.Inst[state.pc]
 			switch inst.Op {
 			case syntax.InstMatch:
@@ -127,7 +187,7 @@ nextBranch:
 			case syntax.InstFail:
 				continue nextBranch
 			case syntax.InstAlt, syntax.InstAltMatch:
-				s.pending = append(s.pending, spanState{pc: inst.Arg, pos: state.pos})
+				s.push(spanState{pc: inst.Arg, pos: state.pos})
 			case syntax.InstEmptyWidth:
 				prev, next := s.left, s.right
 				if state.pos > 0 {

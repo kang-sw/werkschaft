@@ -518,9 +518,9 @@ type auditSearch struct {
 	// holds a zero-width assertion (^ $ \A \z \b \B), whose answer depends
 	// on the text around a position; nil for a pattern without one.
 	seamed *seamMatcher
-	// spanProg runs the same expression as match, sharing failed states
-	// between span lookups. It is nil for a case-sensitive literal.
-	spanProg *syntax.Prog
+	// spanScan runs the same expression as match and reuses its scratch
+	// space across lines. It is nil for a case-sensitive literal.
+	spanScan *spanScan
 	lit      string
 	kinds    map[wsaudit.Kind]bool
 	n        int
@@ -564,10 +564,11 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 			return s, err
 		}
 	}
-	s.spanProg, err = syntax.Compile(tree.Simplify())
+	prog, err := syntax.Compile(tree.Simplify())
 	if err != nil {
 		return s, err
 	}
+	s.spanScan = &spanScan{prog: prog}
 	s.match = func(line string) (int, int, bool) {
 		loc := re.FindStringIndex(line)
 		if loc == nil {

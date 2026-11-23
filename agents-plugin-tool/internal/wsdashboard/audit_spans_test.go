@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -423,6 +424,36 @@ func TestAuditSpanScanStopsAtResponseCap(t *testing.T) {
 	t.Logf("near cap: %v, 1M: %v", short, long)
 	if long > 5*short {
 		t.Errorf("lengthening the unseen suffix grew scan time from %v to %v", short, long)
+	}
+}
+
+func TestAuditSpanScanScratchAllocation(t *testing.T) {
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name, pattern, body string
+		wantSpans, maxBytes int
+	}{
+		{"long lookahead", "(?:a+z|.)(?:b{1000})?", strings.Repeat("a", mib), auditSpansMax, 12 * mib},
+		{"short lines", "az", strings.Repeat("a\n", mib/2), 0, mib},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := newAuditSearch(tc.pattern, true, true, nil, "", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := s.bodySpans(tc.body, -1, len(tc.body))
+			runtime.ReadMemStats(&after)
+			bytes := after.TotalAlloc - before.TotalAlloc
+			t.Logf("allocated %d bytes", bytes)
+			if bytes > uint64(tc.maxBytes) {
+				t.Errorf("allocated %d bytes, want at most %d", bytes, tc.maxBytes)
+			}
+			if len(got.Spans) != tc.wantSpans || got.Capped != (tc.wantSpans == auditSpansMax) {
+				t.Errorf("got %d spans, capped %v", len(got.Spans), got.Capped)
+			}
+		})
 	}
 }
 
