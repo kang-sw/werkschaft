@@ -153,12 +153,16 @@ type werkDaemonFixture struct {
 	state, home, root string
 	config            wsconfig.Options
 	reports           chan wsagent.TurnReport
+	credential        wscred.Source
+	configured        func(string) (bool, error)
+	log               io.Writer
 }
 
 func newWerkDaemonFixture(t *testing.T) *werkDaemonFixture {
 	t.Helper()
 	f := &werkDaemonFixture{t: t, state: t.TempDir(), home: t.TempDir(),
-		reports: make(chan wsagent.TurnReport, 8)}
+		reports: make(chan wsagent.TurnReport, 8), log: replacementTestLog{t},
+		credential: fixtureWerkCredential{}, configured: func(string) (bool, error) { return true, nil }}
 	t.Setenv("WS_CACHE_HOME", t.TempDir())
 	t.Setenv("WS_CONFIG_HOME", f.home)
 	f.root = initGitFixtureForHookTest(t)
@@ -202,15 +206,15 @@ func (f *werkDaemonFixture) open(record func(context.Context, wsfs.FileCall, fun
 	link := &hostedExecLink{}
 	holders := newDashboardHolders(f.state, io.Discard, link)
 	keys := mcp.NewAgentKeyStore()
-	backends := wsagent.WithProviderCredentials(wsagent.BuiltinBackendRegistrations(), fixtureWerkCredential{}, func(string) (bool, error) { return true, nil })
+	backends := wsagent.WithProviderCredentials(wsagent.BuiltinBackendRegistrations(), f.credential, f.configured)
 	r := wsagent.NewRunner(wsagent.Options{
-		Dir: f.state, Config: f.config, Keys: keys, Log: replacementTestLog{t}, Backends: backends, DaemonMCP: agentDaemonMCP,
+		Dir: f.state, Config: f.config, Keys: keys, Log: f.log, Backends: backends, DaemonMCP: agentDaemonMCP,
 		Holders: wsagent.ManagerHost{Manager: holders},
 		Report:  func(rep wsagent.TurnReport) { f.reports <- rep },
 	})
 	r.ExpectExecJobs()
-	host := &proxyHost{dir: f.state, logw: replacementTestLog{t}, agents: r}
-	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{Dir: f.state, Home: f.home, Version: version, Proxy: werkProxyFileHook{host, record}, Log: replacementTestLog{t}, Holders: holders, Agents: r})
+	host := &proxyHost{dir: f.state, logw: f.log, agents: r}
+	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{Dir: f.state, Home: f.home, Version: version, Proxy: werkProxyFileHook{host, record}, Log: f.log, Holders: holders, Agents: r})
 	if err != nil {
 		t.Fatal(err)
 	}
