@@ -49,6 +49,21 @@ preview):
   state changes). Phase 2 is expected to be additive (an old client ignores
   new fields); that is a hypothesis for Phase 2's own evidence to confirm, not
   a settled verdict.
+- **One ticket over two (owner-acknowledged 2026-11-23, was (1403)).** The
+  server fields and the client elements that switch on for them share one
+  contract, so the element list lives in one place. Rejected: two tickets (the
+  element list would be split across two contracts).
+- **Esc in `!` mode (owner-acknowledged 2026-11-23, was (1404)).** The first
+  Esc removes the leading `!` (leaves shell mode); a second Esc keeps today's
+  behaviour (prepare Tab-exit). Rejected: making Esc always leave the composer
+  - Esc is already bound to the Tab-exit preparation, so overloading it once
+  keeps that binding reachable.
+- **Work split (owner rule 2026-11-23).** Tickets are split frontend/backend and
+  as much work as possible goes to the backend part, which Codex implements;
+  Claude implements only frontend code. Phase 1 stays pure client rendering so
+  it can ship first (T0); everything that is not rendering (new fields, display
+  data, formatting data) lives in the backend phase, and the later frontend
+  phase only renders those fields.
 
 ## Constraints
 
@@ -77,13 +92,13 @@ also touches Go under `agents-plugin-tool/internal/`):
 - LOOK check: capture the running UI for each matrix state and compare
   side by side with the mockup. UI that must match a mockup goes to a native
   Claude worker given the mockup path; text-only inspection does not count.
-- Go tests (Phase 2) run only on w5090. No local `go test`, no ws executables,
+- Go tests (Phase 2, backend) run only on w5090. No local `go test`, no ws executables,
   no Electron.
 - Run only the Node test files this change touches.
 
 ## Phases
 
-### Phase 1: Client-only terminal look
+### Phase 1: Client-only terminal look (frontend: Claude)
 
 Uses only data the cards already carry: exit code, byte count, job ID, state,
 `file`/`file_url`/`truncated`, and the registered slot fields.
@@ -93,7 +108,7 @@ Uses only data the cards already carry: exit code, byte count, job ID, state,
   `!`) restores the normal look.
 - Disable the `@` mention and `/` command popups while in `!` mode.
 - Esc rule: the first Esc in `!` mode removes the leading `!` (leaves shell
-  mode); a second Esc keeps today's behaviour (prepares Tab-exit). See (1404).
+  mode); a second Esc keeps today's behaviour (prepares Tab-exit). See Decisions.
 - Results: one console scrollback with prompt line, output block, and status
   line `✓ 0 · bytes · time`-shaped using existing data only (exit code, bytes,
   job ID; the receive-time stamp is client-side). Failure colors the status
@@ -105,25 +120,44 @@ Uses only data the cards already carry: exit code, byte count, job ID, state,
 - Elements needing a not-yet-existing field are not drawn in this phase.
 - Light theme: terminal surfaces stay dark.
 
-Deferred: everything in Phase 2. Verification boundary: LOOK check plus touched
-Node tests.
+Deferred: everything in Phases 2 and 3. Verification boundary: LOOK check plus
+touched Node tests. This phase has no backend dependency and ships first (T0).
 
-### Phase 2: Additive server fields
+### Phase 2: Additive server fields (backend: Codex)
 
-Depends on Phase 1's landed Result. Add additive card/list fields; each element
-switches on when its field exists and stays hidden otherwise:
+Self-contained; independent of Phase 1 and may land before or after it. Owns all
+non-rendering work: the server adds additive card/list fields and any display
+data derived server-side, so the client only renders them.
 
-- start and end times (elapsed time in the status line, running elapsed)
-- separate stdout/stderr (red stderr lines with a left rule)
+- start and end times (and a derived duration / running elapsed base)
+- separate stdout/stderr (stream-tagged segments)
 - a short output tail (preview lines for long output, live tail while running)
-- cwd and shell name (console title, e.g. `bash ~/work/demo`)
+- cwd and shell name (e.g. `bash ~/work/demo`; Git Bash on Windows)
+- any other display data that can be computed server-side (exit status label,
+  byte/duration formatting data, slot metadata) rather than in the client
+
+Constraints: fields are additive only; the first-byte `!` grammar, approval and
+TrustedWrite routing are unchanged. Applies the Constraints rows above
+(release-compatibility, performance, shipped-surface-boundary).
 
 Compatibility: expected additive (old client ignores the new fields; an old
-daemon simply omits them and the client leaves the elements hidden). To be
-confirmed by this phase's own evidence under
-`ai-docs/manuals/release-compatibility.md` before it is called T0/additive.
+daemon simply omits them). To be confirmed by this phase's own evidence under
+`ai-docs/manuals/release-compatibility.md` (new -> old -> new cycle) before it
+is called additive/T0.
 
-## Open Decision Queue
+Verification: Go tests for the new fields and the absent-field path, run only on
+w5090 (no local `go test`, no ws executables).
 
-- (1403) [open] [technical] One ticket with two phases over two tickets - Phase 2 only switches on elements Phase 1 already lays out, so one contract keeps the element list in one place.
-- (1404) [open] [technical] In `!` mode the first Esc removes the leading `!` (leaves shell mode) and a second Esc keeps today's Esc behaviour (prepare Tab-exit) over making Esc always leave the composer - Esc is already bound to the Tab-exit preparation, so overloading it once keeps that binding reachable.
+### Phase 3: Render the new fields (frontend: Claude)
+
+Blocked on Phase 1's and Phase 2's landed Results. Pure client rendering in the
+element positions Phase 1 already laid out; each element switches on when its
+field exists and stays hidden otherwise (an old daemon leaves them hidden):
+
+- duration/elapsed in the status line
+- red stderr lines with a left rule from the stream-tagged segments
+- preview lines for long output and live tail while running
+- console title with shell name and cwd
+
+No server code and no derivation logic beyond display. Verification: LOOK check
+against the mockup states ③–⑥ and ② (title) plus touched Node tests.
