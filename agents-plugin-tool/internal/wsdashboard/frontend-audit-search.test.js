@@ -659,3 +659,36 @@ test("same cached envelope supersedes an aborted paging lock without losing the 
   assert.equal(win._auPagingOwner, null);
   assert.equal(win._morePending.get(ev).out, undefined);
 });
+
+// The find counter of the window body: the server's spans reach it from the
+// tab that was rendered, and a capped answer shows the count as N+ on every
+// searchable tab, the stored Raw tab of an `other` event included.
+function renderCounter(win, parts) {
+  const src = fs.readFileSync(path.join(__dirname, "assets", "dashboard-audit-window.js"), "utf8");
+  const ctrl = fs.readFileSync(path.join(__dirname, "assets", "dashboard-audit.js"), "utf8");
+  const winSnippet = src.slice(src.indexOf("  function auEsc(s) {"), src.indexOf("  function auBuildWindowDOM("));
+  const ctrlSnippet = ctrl.slice(ctrl.indexOf("  function auRenderWindowBody("), ctrl.indexOf("  function auIsResultSummary("));
+  const sandbox = {
+    wsT(k, a) { return a == null ? k : `${k}:${a}`; }, wsTn(k, n) { return `${k}:${n}`; }, renderMd(s) { return String(s); },
+    JSON, Math, Date, Object, Array, String, Number, RegExp, Error,
+    auSyncWindowHeader() {}, auDisplayedEnvelope: (w) => w.activeEnvelope, auSpansFor: () => ({ parts, pending: false, error: "" }),
+    auHooks: {},
+  };
+  vm.runInNewContext(winSnippet + "\n" + ctrlSnippet + "\nglobalThis.render = auRenderWindowBody;", sandbox);
+  const scnt = { textContent: "", classList: { toggle() {} }, setAttribute() {}, removeAttribute() {} };
+  const panel = { innerHTML: "", querySelector: () => null };
+  win.el = { querySelector: (sel) => ({ ".au-panel": panel, ".au-scnt": scnt }[sel] || null) };
+  sandbox.render(win);
+  return scnt.textContent;
+}
+
+test("a capped answer shows the count as N+ on the stored Raw tab of an other event", () => {
+  const spans = (n) => Array.from({ length: n }, (_, i) => ({ line: 1, start: i, end: i + 1 }));
+  const other = { id: "o1", kind: "other", harness: "pi", raw: "a".repeat(10001) };
+  const win = (tab, ev) => ({ tab, search: "a", regex: true, caseSensitive: true, activeMatch: 0, activeEnvelope: ev });
+  assert.equal(renderCounter(win("raw", other), { raw: { spans: spans(10000), capped: true } }), "1/10000+");
+  assert.equal(renderCounter(win("raw", other), { raw: { spans: spans(3), capped: false } }), "1/3");
+  // The other tabs keep their form.
+  const call = { id: "c1", in: "a".repeat(10001), out: "a" };
+  assert.equal(renderCounter(win("in", call), { in: { spans: spans(10000), capped: true } }), "1/10000+");
+});
