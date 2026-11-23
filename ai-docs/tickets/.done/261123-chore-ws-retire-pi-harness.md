@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 14ca4dcc4c18ea66
 sage-review-completeness-reviewed: 14ca4dcc4c18ea66
+completed: 2026-11-24
 ---
 
 # Retire the Pi harness
@@ -321,3 +322,84 @@ Depends on Phase 1.
   of ws and wsflow (runtime contract and skill-shim drift); `git grep -i
   '\bpi\b'` over shipped paths reviewed, with each remaining hit justified in
   the Result.
+
+### Result (7dff60d1c) - 2026-11-24
+
+- `292355d5d` removed the Pi plugin and root npm entry, both bundled native
+  payloads, and their installer, CI, release, versioning, and asset-generation
+  steps. Desktop staging now assembles ws and wsflow from the shared package
+  file rules. The README, project workflow context, release and mirroring
+  guides, and shared playbooks now describe the two active distributions.
+  The wsflow mirrors track the ws changes. `7dff60d1c` removed the remaining
+  orphaned lead launch scripts and put both resource manifests in generator
+  order.
+- `acb74123c` dropped 25 Pi-only backlog tickets under Decision 9
+  (22 ideas and three todo items). Each closure links to the retirement
+  decision. Broader work stays on its existing tickets.
+- **T3 distribution boundary at 0.52.** Before this change, the root
+  `package.json` selected the Pi plugin and the payload preparation scripts
+  populated both plugin roots. The new generator selects the two surviving
+  packages (`agents-plugin-tool/scripts/generate-package-assets.py:17,62`),
+  and the launcher starts the daemon without extracting a Pi payload
+  (`agents-plugin/bin/ws-mcp-launcher.py:1339`). An older installed package
+  retains its own bundled assets and can read existing data with its matching
+  daemon. The daemon enforces the minor-version boundary at hello
+  (`agents-plugin-tool/internal/wsdashboard/proxy.go:272`). The release owner
+  will bump the plugin manifests at the 0.52 develop promotion. This branch
+  keeps the current manifest versions and tested the bump in a scratch tree.
+- **T0 retained readers and tier aliases.** Stored records and settings keep
+  their original representation. The compatible daemon still recognizes the
+  bridge identity and dispatches the six hidden names through 0.52
+  (`internal/mcp/server_harness.go:171`, `internal/mcp/pi_tools.go:21`).
+  Startup still reads legacy holder records and protects old orphan holders
+  (`internal/wsagent/runner_startup.go:126,388`). The tier resolver still
+  translates old tier names (`internal/wsagent/retired_pi_tiers.go:13`).
+  Authorized history reads continue, and handler removal is scheduled for
+  0.53. The distribution change adds no data migration. Phase 1 records the
+  execution refusals.
+- **Verification.** With `env -i` limited to PATH, HOME, GOPATH, GOCACHE,
+  and TMPDIR, the `cmd/ws-mcp`, `internal/wspackage`, and `internal/wsrsrc`
+  suites passed, as did focused MCP playbook, package-manifest and retirement
+  checks, dashboard settings checks, and wsagent retired and legacy Pi
+  checks. The ws package suite ran 178 tests (three skipped) and the wsflow
+  suite ran 22 (two skipped), covering the runtime contract and skill shims.
+  The package generator (10 tests), dev tooling (39 tests), and desktop
+  assembly (five tests) also passed.
+- **Local equivalents.** The CI and release YAML parsed, and the extracted
+  release contract check passed. `build-release-assets.sh` cross-built six
+  binaries. All six binaries and six metadata files passed SHA-256
+  verification, and `generate-package-assets.py --check` passed.
+  `./install.sh update` ran with fresh temporary HOME, Claude, Codex, and
+  XDG config directories. The Claude CLI registered and installed the ws
+  snapshot there, with neither the payload nor its helper. The PowerShell
+  installer could not run locally. Its changed embedded Python snapshot
+  block passed both fresh-install and replacement checks. The version
+  helper bumped both packages in the scratch tree. Shell syntax checks
+  passed. The independent lite review of `292355d5d` found no issues.
+- **Shipped Pi reference audit.** Reviewed `git grep -i '\bpi\b'` over the
+  shipped paths. The two plugin `runtime.json` files each retain the
+  `pi.spawn`, `pi.send`, `pi.list`, `pi.stop`, `pi.transcript`, and
+  `pi.wait` contract rows for the bridge window. The mirrored
+  `hooks/claude-mod/settings.test.ts` uses an old backend setting to
+  exercise settings input, and `watcher.test.ts` verifies that the old
+  sender label and message text survive rendering and batching. The release
+  compatibility manual records the old-minor handshake and recovery. The
+  MCP manual covers retained paths, ended and orphan holder behavior,
+  authorized history, hidden handlers, tier and settings fallback, and
+  the historical worker token names. The board, palette, rail, and
+  webcard headless scripts seed synthetic old records for UI checks.
+  Shipped skills, resources, and active install and release scripts have
+  no Pi hits.
+- **Native audit.** The remaining runtime hits support old clients and
+  stored data: MCP bridge names, routing and scope checks, agent records
+  and holder guards, old live snapshots, metadata imports, dashboard wire
+  kinds, history styling and translations, and stored plan usage. Tests
+  and fixtures cover the same old inputs and the absence of the retired
+  package. Historical-summary fixtures record the old source names.
+  Math constants, the tracker priority index, vendored minified code, and
+  icon bytes also match the search. Some Go comments and MCP schema
+  examples still describe the old runtime, including those in
+  `cmd/ws-mcp/{dashboard,proxy}.go` and
+  `internal/mcp/{agent_profile,config_registry,server_config,server_schemas}.go`.
+  The lead reserved runtime Go changes for parallel work. All Go edits in
+  this phase are tests.
