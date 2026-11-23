@@ -32,7 +32,7 @@ func TestPolicyReadsDoNotCloneTheRegistry(t *testing.T) {
 	reg := &policyLookupRegistry{regs: wsagent.BuiltinBackendRegistrations()}
 	s := &Server{agentBackendSource: reg, conversation: "conv", execCutover: wsagent.BackendCodex}
 	for i := 0; i < 3; i++ {
-		if !s.codexReadTools() {
+		if !s.fsReadTools() {
 			t.Fatal("a Codex cutover connection must list the fs.* read tools")
 		}
 	}

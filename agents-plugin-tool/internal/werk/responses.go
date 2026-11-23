@@ -47,20 +47,21 @@ type Request struct {
 
 // Usage is one response's figures.
 type Usage struct {
-	InputTokens     int64
-	OutputTokens    int64
-	CachedTokens    int64
-	ReasoningTokens int64
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
 	// CostUSD is the provider's own cost figure, nil when it sent none.
-	CostUSD *float64
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // Response is a completed model response.
 type Response struct {
-	ID string
+	ID string `json:"id"`
 	// Output are the response's items in order, as received.
-	Output []json.RawMessage
-	Usage  Usage
+	Output []json.RawMessage `json:"output"`
+	Usage  Usage             `json:"usage"`
+	window int64
 }
 
 // StreamHandler receives the response's streamed text. Both callbacks are

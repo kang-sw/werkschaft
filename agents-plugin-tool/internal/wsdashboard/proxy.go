@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // proxy.go is the daemon's MCP hosting route. The launcher that a harness
@@ -71,7 +74,8 @@ type ProxyHello struct {
 	// Harness is the harness kind the launcher detected, when any.
 	Harness string `json:"harness,omitempty"`
 	// OwnerPID is the launcher's PID: the owner of the session's mailbox
-	// presence and listening markers.
+	// presence and listening markers. A trusted in-daemon worker has no
+	// launcher and leaves it zero.
 	OwnerPID int `json:"owner_pid"`
 	// Version is the launcher's plugin version, when known; the daemon
 	// refuses a hello from another minor version.
@@ -85,6 +89,11 @@ type ProxyHello struct {
 	// launched under the exec cutover (native shell tools removed in favour
 	// of the ws exec tools); set with Conversation and never decoded.
 	ExecCutover string `json:"-"`
+	// FileWrites is populated with the authority and recorder of the
+	// live in-daemon process by its own token resolution.
+	FileWrites *wsfs.FileWriteSession `json:"-"`
+	// RecordExecLaunch comes from the same trusted in-daemon binding.
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error `json:"-"`
 }
 
 // ProxyAccept is the daemon's one-line answer to the hello: accepted, and
@@ -251,7 +260,10 @@ func (d *Daemon) acceptProxy(hello ProxyHello) (ProxySession, error) {
 	if hello.Env == nil {
 		return nil, errors.New("hello carries no environment")
 	}
-	if hello.OwnerPID <= 0 {
+	// Only the token resolver can supply an in-daemon binding. A launcher
+	// hello still needs a positive PID.
+	inDaemon := hello.Mode == ProxyModeMCP && hello.Conversation != "" && hello.FileWrites != nil
+	if hello.OwnerPID < 0 || (hello.OwnerPID == 0 && !inDaemon) {
 		return nil, errors.New("hello carries no owner pid")
 	}
 	if hello.Mode == ProxyModeCLI && len(hello.Argv) == 0 {

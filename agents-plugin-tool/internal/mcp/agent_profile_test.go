@@ -39,6 +39,7 @@ func TestConfigTuneAgentProfile(t *testing.T) {
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "pi", "plugins": []any{"ext.ts"}}, "scope": "repo"}, "may not start programs"},
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "claude", "ws_tools": []any{"ferrule"}}, "scope": "repo"}, "lead session key"},
 		{map[string]any{"key": "agent.profile.triage", "value": "{}", "scope": "repo"}, "must be a profile object"},
+		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "werk"}, "scope": "repo"}, "builtin profiles only"},
 		{map[string]any{"key": "agent.profile.triage", "scope": "repo"}, "value is required"},
 	}
 	for i, tc := range rejects {

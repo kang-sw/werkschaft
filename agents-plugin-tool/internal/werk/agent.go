@@ -10,7 +10,10 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 // agent.go is the model loop: request, tool calls, tool results, repeat,
@@ -29,6 +32,9 @@ import (
 //   - Output items go back to the provider as received, in order (reasoning
 //     included); the harness adds nothing between them.
 
+// Provider is the model provider used by this harness during worker operation.
+const Provider = wscred.ProviderOpenRouter
+
 // Responder is the model endpoint (*Client).
 type Responder interface {
 	Respond(ctx context.Context, req Request, h StreamHandler) (*Response, error)
@@ -38,6 +44,10 @@ type Responder interface {
 type WSTools interface {
 	ListTools(ctx context.Context) ([]MCPTool, error)
 	Call(ctx context.Context, name string, args json.RawMessage) (CallResult, error)
+}
+
+type correlatedWSTools interface {
+	CallCorrelated(context.Context, string, json.RawMessage, string) (CallResult, error)
 }
 
 // Config is what an Agent runs with.
@@ -55,11 +65,20 @@ type Config struct {
 	// Instructions is the instruction text composed for the session, added to
 	// the harness's own preamble.
 	Instructions string
-	// LocalTools names the file tools the profile offers; empty offers all.
-	LocalTools []string
-	Endpoint   Responder
-	WS         WSTools
-	Out        io.Writer
+	Endpoint     Responder
+	WS           WSTools
+	RecoverExec  func(context.Context, string) (string, error)
+	// CompactionState snapshots the current child and exec records. A zero
+	// time asks for all finished children.
+	CompactionState func(since time.Time) CompactionState
+	// SummarySecrets adds session-specific credentials to the usual summary
+	// redaction.
+	SummarySecrets []string
+	ContextWindow  func(model string) int64
+	Out            io.Writer
+	// Emit receives typed events for a daemon host. When provided it replaces
+	// the legacy writer; calls are serialized even during parallel tool reads.
+	Emit func(Line)
 
 	// Now is the clock (nil is time.Now). Sleep waits for d or the context
 	// (nil is a timer). Backoff is the delay before retry n, one-based (nil is
@@ -91,14 +110,17 @@ const (
 	replyThrottle = 300 * time.Millisecond
 )
 
-// parallelMCP are the ws tools that only read, which a response's calls may
+// parallelMCP holds the model spellings of the ws tools that only read, which a response's calls may
 // run side by side; every other ws tool runs alone.
 var parallelMCP = map[string]bool{
-	"tickets.query": true, "tickets.template": true, "tickets.checklist": true, "tickets.verify": true,
-	"config.resolve_agent": true, "infra.read": true, "convention.read": true, "playbook.read": true,
-	"note.query": true, "rationale.query": true, "git.status": true, "git.diff": true, "git.log": true,
-	"git.merge_base": true, "api.list": true, "project_tree": true, "runtime.read": true,
-	"todo.list": true, "todo.read": true, "mailbox.recipients": true,
+	"tickets_query": true, "tickets_template": true, "tickets_checklist": true, "tickets_verify": true,
+	"config_resolve_agent": true, "infra_read": true, "convention_read": true, "playbook_read": true,
+	"note_query": true, "rationale_query": true, "git_status": true, "git_diff": true, "git_log": true,
+	"git_merge_base": true, "api_list": true, "project_tree": true, "runtime_read": true,
+	"todo_list": true, "todo_read": true, "mailbox_recipients": true,
+	"fs_read": true, "fs_grep": true, "fs_list": true,
+	"exec_list": true, "exec_tail": true, "exec_status": true, "exec_result": true,
+	"exec_raw_tail": true, "exec_raw_read": true, "exec_raw_grep": true,
 }
 
 // execLaunchTools are the ws tools that start or feed a process. A read-only
@@ -122,7 +144,6 @@ func launchesProcess(modelName string) bool {
 }
 
 type toolEntry struct {
-	local *Tool
 	// ws is the daemon-side name of a ws tool.
 	ws       string
 	readOnly bool
@@ -131,19 +152,22 @@ type toolEntry struct {
 // Agent is one session's loop.
 type Agent struct {
 	cfg   Config
-	files *Files
 	store *Store
 	log   *writer
 	out   *emitter
 	now   func() time.Time
+
+	mutationMu   sync.Mutex
+	mutationCall *activeMutationCall
 
 	mu         sync.Mutex
 	model      string
 	effort     string
 	session    string
 	transcript []json.RawMessage
-	steers     []string
+	steers     []Steer
 	turn       int
+	journal    turnJournal
 	tools      map[string]toolEntry
 	defs       []ToolDef
 	toolsDone  bool
@@ -160,22 +184,28 @@ type Agent struct {
 }
 
 type emitter struct {
-	mu  sync.Mutex
-	out io.Writer
-	now func() time.Time
+	mu   sync.Mutex
+	out  io.Writer
+	emit func(Line)
+	now  func() time.Time
 }
 
 func (e *emitter) line(l Line) {
 	if l.At == 0 {
 		l.At = e.now().UnixMilli()
 	}
-	raw, err := json.Marshal(l)
-	if err != nil {
-		return
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, _ = e.out.Write(append(raw, '\n'))
+	if e.emit != nil {
+		e.emit(l)
+		return
+	}
+	if e.out != nil {
+		raw, err := json.Marshal(l)
+		if err == nil {
+			_, _ = e.out.Write(append(raw, '\n'))
+		}
+	}
 }
 
 // New opens the session's conversation and builds the agent. It starts no
@@ -201,17 +231,19 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a := &Agent{
 		cfg:   cfg,
-		files: &Files{Root: cfg.Root, Cwd: cfg.Cwd, Authority: cfg.Authority},
 		store: store,
-		out:   &emitter{out: cfg.Out, now: now},
+		out:   &emitter{out: cfg.Out, emit: cfg.Emit, now: now},
 		now:   now,
 		model: cfg.Model, effort: cfg.Effort, session: session,
 		transcript: items, resumed: len(items),
+		journal: store.turnJournal, turn: store.turnJournal.number,
 	}
 	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
 		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
 	})
-	a.repaired = a.repairPending()
+	if a.journal.id == "" {
+		a.repaired = a.repairPending()
+	}
 	return a, nil
 }
 
@@ -247,6 +279,7 @@ func pendingCalls(items []json.RawMessage) []string {
 	for _, raw := range items {
 		var it struct {
 			Type   string `json:"type"`
+			ID     string `json:"id"`
 			CallID string `json:"call_id"`
 		}
 		if json.Unmarshal(raw, &it) != nil {
@@ -254,6 +287,9 @@ func pendingCalls(items []json.RawMessage) []string {
 		}
 		switch it.Type {
 		case "function_call":
+			if it.CallID == "" {
+				it.CallID = it.ID
+			}
 			if it.CallID != "" && !open[it.CallID] {
 				open[it.CallID] = true
 				order = append(order, it.CallID)
@@ -295,22 +331,23 @@ func (a *Agent) append(item json.RawMessage) {
 	a.mu.Unlock()
 }
 
+func (a *Agent) appendResponse(response *Response) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.transcript = append(a.transcript, response.Output...)
+	a.log.AddResponse(response)
+}
+
 // Close writes what is queued and releases the conversation file.
 func (a *Agent) Close() error {
 	a.log.Close()
 	return a.store.Close()
 }
 
-// Serve runs the session: it reads commands from in until it ends, and
-// returns after the running turn has ended.
+// Serve adapts the holder's command stream to the typed command loop.
 func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
-	defer a.log.Flush()
-	a.mu.Lock()
-	a.out.line(Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed})
-	a.mu.Unlock()
-	if a.repaired > 0 {
-		a.out.line(Line{T: LineNotice, Text: fmt.Sprintf("%d tool call(s) of the earlier process had no result; they were answered as interrupted and not run again", a.repaired)})
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	cmds := make(chan Command)
 	go func() {
 		defer close(cmds)
@@ -328,21 +365,63 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 			}
 		}
 	}()
+	return a.ServeCommands(ctx, cmds)
+}
+
+// ServeCommands runs the session's commands to channel closure or host context
+// cancellation. It returns after cancelling and joining any running turn.
+func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
+	defer a.log.Flush()
+	a.mu.Lock()
+	init := Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed}
+	a.mu.Unlock()
+	if checkpoint := a.store.checkpoint; checkpoint != nil {
+		a.out.line(checkpoint.event(true))
+	}
+	a.out.line(init)
+	if a.repaired > 0 {
+		a.out.line(Line{T: LineNotice, Text: fmt.Sprintf("%d tool call(s) of the earlier process had no result; they were answered as interrupted and not run again", a.repaired)})
+	}
 
 	var (
 		cancel  context.CancelFunc
-		done    chan struct{}
-		queued  []string
+		done    chan error
+		queued  []Command
 		running bool
+		turnID  string
 	)
-	start := func(text string) {
+	start := func(cmd Command) {
 		tctx, c := context.WithCancel(ctx)
-		cancel, done, running = c, make(chan struct{}), true
-		go func(d chan struct{}) {
-			defer close(d)
-			a.runTurn(tctx, text)
+		cancel, done, running = c, make(chan error, 1), true
+		turnID = cmd.TurnID
+		a.mu.Lock()
+		a.steers = append(a.steers, cmd.Steers...)
+		a.mu.Unlock()
+		go func(result chan<- error) {
+			var err error
+			defer func() {
+				if recover() != nil {
+					err = errors.New("the werk turn failed unexpectedly")
+				}
+				result <- err
+			}()
+			if cmd.Type == CmdCompact {
+				a.reportCompaction(tctx)
+				return
+			}
+			if cmd.TurnID != "" {
+				err = a.runDurableTurn(tctx, ctx, cmd)
+				return
+			}
+			a.runTurn(tctx, cmd.Text)
 		}(done)
 	}
+	defer func() {
+		if running {
+			cancel()
+			<-done
+		}
+	}()
 	finish := func() {
 		cancel()
 		running = false
@@ -354,40 +433,50 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 		}
 	}
 	for {
-		var doneC <-chan struct{}
+		var doneC <-chan error
 		if running {
 			doneC = done
 		}
 		select {
 		case <-ctx.Done():
-			if running {
-				<-done
-			}
 			return ctx.Err()
-		case <-doneC:
+		case err := <-doneC:
+			if err != nil {
+				cancel()
+				running = false
+				return err
+			}
 			finish()
 		case c, ok := <-cmds:
 			if !ok {
-				if running {
-					cancel()
-					<-done
-				}
 				return nil
 			}
 			switch c.Type {
-			case CmdUser:
+			case CmdUser, CmdCompact:
 				if running {
-					queued = append(queued, c.Text)
+					queued = append(queued, c)
 				} else {
-					start(c.Text)
+					start(c)
 				}
 			case CmdSteer:
+				if c.TurnID != "" {
+					// A command arriving after settlement still belongs to
+					// its original turn. The runner keeps it for later.
+					if running && c.TurnID == turnID {
+						a.mu.Lock()
+						a.steers = append(a.steers, Steer{ID: c.ID, Text: c.Text})
+						a.mu.Unlock()
+					}
+					continue
+				}
 				switch {
 				case !running:
 					a.out.line(Line{T: LineSteerAck, ID: c.ID, Refusal: "no turn is running"})
+				case turnID != "":
+					a.out.line(Line{T: LineSteerAck, ID: c.ID, Refusal: "a durable steer requires its turn identity"})
 				default:
 					a.mu.Lock()
-					a.steers = append(a.steers, c.Text)
+					a.steers = append(a.steers, Steer{Text: c.Text})
 					a.mu.Unlock()
 					a.out.line(Line{T: LineSteerAck, ID: c.ID})
 				}
@@ -422,19 +511,27 @@ func (a *Agent) dropSteers() {
 	a.mu.Unlock()
 }
 
-// takeSteers moves the queued steered messages into the transcript.
-func (a *Agent) takeSteers() {
+// takeSteers moves pending messages into the transcript before the request
+// runs. A durable steer's receipt and user item share one committed record.
+func (a *Agent) takeSteers(turnID string) error {
 	a.mu.Lock()
 	steers := a.steers
 	a.steers = nil
 	a.mu.Unlock()
-	for _, text := range steers {
-		a.append(userItem(text))
+	for _, steer := range steers {
+		if turnID != "" {
+			if err := a.commitSteer(turnID, steer); err != nil {
+				return err
+			}
+			continue
+		}
+		a.append(userItem(steer.Text))
 		a.mu.Lock()
-		a.taken = append(a.taken, text)
+		a.taken = append(a.taken, steer.Text)
 		a.mu.Unlock()
-		a.out.line(Line{T: LineUserTaken, Text: text})
+		a.out.line(Line{T: LineUserTaken, Text: steer.Text})
 	}
+	return nil
 }
 
 func (a *Agent) hasSteers() bool {
@@ -450,12 +547,23 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	turn := a.turn
 	a.running, a.lastReply, a.lastReason, a.lastError, a.taken = true, "", "", "", nil
 	a.mu.Unlock()
+	var reason, errText string
+	defer func() {
+		if recover() != nil {
+			reason, errText = ReasonError, "the werk turn failed unexpectedly"
+		}
+		a.endTurn(turn, reason, errText)
+	}()
 	a.out.line(Line{T: LineTurnStart, Turn: turn})
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
-	reason, errText := a.loop(ctx, turn)
-	// The log is whole before the turn's end is reported, an interrupted turn
-	// included: no unpersisted window extends past what the caller was told.
+	result, _ := a.loop(ctx, nil, turn, "")
+	reason, errText = result.Reason, result.Error
+}
+
+func (a *Agent) endTurn(turn int, reason, errText string) {
+	// Complete the log before publishing the turn end, including after an
+	// interrupt. On a log failure the existing notice reports the cause.
 	a.log.Flush()
 	a.mu.Lock()
 	a.running, a.lastReason, a.lastError = false, reason, errText
@@ -464,36 +572,38 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 }
 
 // loop runs model requests and tool calls until the model asks for no more.
-func (a *Agent) loop(ctx context.Context, turn int) (reason, errText string) {
+func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durableEnd, error) {
 	if err := a.loadTools(ctx); err != nil {
 		a.out.line(Line{T: LineNotice, Text: "the ws tools are not available: " + err.Error()})
 	}
 	for {
 		if ctx.Err() != nil {
-			return ReasonAborted, ""
+			return durableEnd{Reason: ReasonAborted}, nil
 		}
-		a.takeSteers()
+		if err := a.takeSteers(turnID); err != nil {
+			return durableEnd{}, err
+		}
 		resp, err := a.request(ctx, turn)
 		if err != nil {
 			if ctx.Err() != nil {
-				return ReasonAborted, ""
+				return durableEnd{Reason: ReasonAborted}, nil
 			}
-			return ReasonError, err.Error()
+			return durableEnd{Reason: ReasonError, Error: err.Error()}, nil
 		}
-		for _, item := range resp.Output {
-			a.append(item)
-		}
+		a.appendResponse(resp)
 		a.report(turn, resp)
 		calls := functionCalls(resp.Output)
 		if len(calls) == 0 {
 			if a.hasSteers() && ctx.Err() == nil {
 				continue
 			}
-			return ReasonDone, ""
+			return durableEnd{Reason: ReasonDone}, nil
 		}
-		a.runCalls(ctx, turn, resp.ID, calls)
+		if a.runCalls(ctx, host, turn, resp.ID, calls) {
+			return durableEnd{Reason: ReasonError, Error: "a werk tool failed unexpectedly"}, nil
+		}
 		if ctx.Err() != nil {
-			return ReasonAborted, ""
+			return durableEnd{Reason: ReasonAborted}, nil
 		}
 	}
 }
@@ -532,21 +642,10 @@ func (a *Agent) report(turn int, resp *Response) {
 	a.out.line(Line{
 		T: LineUsage, Turn: turn, Response: resp.ID,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
-		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens,
+		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens, Window: resp.window,
 	})
 	for _, raw := range resp.Output {
-		var it struct {
-			Type    string `json:"type"`
-			ID      string `json:"id"`
-			Summary []struct {
-				Text string `json:"text"`
-			} `json:"summary"`
-			Encrypted string `json:"encrypted_content"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
+		var it responseItem
 		if json.Unmarshal(raw, &it) != nil {
 			continue
 		}
@@ -561,20 +660,45 @@ func (a *Agent) report(turn int, resp *Response) {
 			text := strings.Join(parts, "\n")
 			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Encrypted: text == "" && it.Encrypted != ""})
 		case "message":
-			var parts []string
-			for _, c := range it.Content {
-				if c.Type == "output_text" || c.Type == "text" {
-					parts = append(parts, c.Text)
-				}
-			}
-			if text := strings.Join(parts, ""); strings.TrimSpace(text) != "" {
-				a.mu.Lock()
-				a.lastReply = text
-				a.mu.Unlock()
-				a.out.line(Line{T: LineReply, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Final: true})
+			if text := it.reply(); text != "" {
+				a.reportReply(Line{T: LineReply, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Final: true})
 			}
 		}
 	}
+}
+
+type responseItem struct {
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Summary []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
+	Encrypted string `json:"encrypted_content"`
+	Content   []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
+
+func (it responseItem) reply() string {
+	var parts []string
+	for _, c := range it.Content {
+		if c.Type == "output_text" || c.Type == "text" {
+			parts = append(parts, c.Text)
+		}
+	}
+	text := strings.Join(parts, "")
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return text
+}
+
+func (a *Agent) reportReply(line Line) {
+	a.mu.Lock()
+	a.lastReply = line.Text
+	a.mu.Unlock()
+	a.out.line(line)
 }
 
 // request sends one model request, retrying the failures that are worth it.
@@ -592,6 +716,9 @@ func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
 		a.mu.Unlock()
 		resp, err := a.cfg.Endpoint.Respond(ctx, req, a.streamHandler(turn))
 		if err == nil {
+			if resp != nil && a.cfg.ContextWindow != nil {
+				resp.window = a.cfg.ContextWindow(req.Model)
+			}
 			return resp, nil
 		}
 		if ctx.Err() != nil {
@@ -697,9 +824,8 @@ func (a *Agent) instructions() string {
 	return b.String()
 }
 
-// loadTools lists the tools once: the profile's file tools and the daemon's
-// ws tools. A failed listing leaves the file tools and is tried again on the
-// next turn.
+// loadTools lists the daemon's ws tools. A failed listing is tried again
+// on the next turn.
 func (a *Agent) loadTools(ctx context.Context) error {
 	a.mu.Lock()
 	done := a.toolsDone
@@ -709,11 +835,6 @@ func (a *Agent) loadTools(ctx context.Context) error {
 	}
 	tools := map[string]toolEntry{}
 	var defs []ToolDef
-	for _, t := range a.files.Tools(a.cfg.LocalTools) {
-		t := t
-		tools[t.Def.Name] = toolEntry{local: &t, readOnly: t.ReadOnly}
-		defs = append(defs, t.Def)
-	}
 	var listErr error
 	if a.cfg.WS != nil {
 		listed, err := a.cfg.WS.ListTools(ctx)
@@ -728,7 +849,7 @@ func (a *Agent) loadTools(ctx context.Context) error {
 			if a.cfg.Authority == AuthorityReadOnly && launchesProcess(name) {
 				continue
 			}
-			tools[name] = toolEntry{ws: mt.Name, readOnly: parallelMCP[mt.Name]}
+			tools[name] = toolEntry{ws: mt.Name, readOnly: parallelMCP[name]}
 			defs = append(defs, ToolDef{Name: name, Description: mt.Description, Parameters: mt.InputSchema})
 		}
 	}
@@ -762,13 +883,14 @@ func ModelToolName(wsName string) string {
 // runCalls runs one response's tool calls and appends each result as it
 // finishes. Consecutive read-only calls run together; any other call runs
 // alone. A call the interrupt cut off is answered as interrupted.
-func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls []functionCall) {
+func (a *Agent) runCalls(ctx, host context.Context, turn int, response string, calls []functionCall) bool {
 	a.mu.Lock()
 	tools := a.tools
 	a.mu.Unlock()
 	answered := map[string]bool{}
+	var panicked atomic.Bool
 	i := 0
-	for i < len(calls) && ctx.Err() == nil {
+	for i < len(calls) && ctx.Err() == nil && !panicked.Load() {
 		j := i
 		if a.readOnlyCall(tools, calls[i]) {
 			for j < len(calls) && a.readOnlyCall(tools, calls[j]) {
@@ -782,12 +904,17 @@ func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls [
 			wg.Add(1)
 			go func(c functionCall) {
 				defer wg.Done()
-				a.runCall(ctx, turn, response, tools, c)
+				if a.runCall(ctx, host, turn, response, tools, c) {
+					panicked.Store(true)
+				}
 			}(c)
 			answered[c.CallID] = true
 		}
 		wg.Wait()
 		i = j
+	}
+	if host != nil && host.Err() != nil {
+		return panicked.Load()
 	}
 	// Whatever did not run (the turn was interrupted) is answered, so the
 	// transcript has a result for every call.
@@ -798,6 +925,7 @@ func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls [
 			a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: interruptedOutput, Failed: true})
 		}
 	}
+	return panicked.Load()
 }
 
 func (a *Agent) readOnlyCall(tools map[string]toolEntry, c functionCall) bool {
@@ -814,18 +942,30 @@ func clip(s string, max int) string {
 
 // runCall runs one call: start line, the tool, the result into the
 // transcript, end line.
-func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) {
+func (a *Agent) runCall(ctx, host context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) bool {
 	a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
-	var output string
-	var failed bool
-	if e, ok := tools[c.Name]; ok && e.readOnly {
-		output, failed = a.invoke(ctx, tools, c)
-	} else {
-		output, failed = a.invokeMutating(ctx, tools, c)
+	output, failed, panicked := a.invokeSafely(ctx, tools, c)
+	if host != nil && host.Err() != nil {
+		return panicked
 	}
 	shown, cut := TruncateOutput(output, ToolOutputBytes)
 	a.append(functionOutputItem(c.CallID, shown))
 	a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: shown, Truncated: cut, Failed: failed})
+	return panicked
+}
+
+func (a *Agent) invokeSafely(ctx context.Context, tools map[string]toolEntry, c functionCall) (output string, failed, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			output, failed, panicked = "Error: the tool failed unexpectedly; its outcome may be unknown.", true, true
+		}
+	}()
+	if a.readOnlyCall(tools, c) {
+		output, failed = a.invoke(ctx, tools, c)
+	} else {
+		output, failed = a.invokeMutating(ctx, tools, c)
+	}
+	return output, failed, false
 }
 
 // invokeMutating runs a call that may change something, after the log holds
@@ -860,17 +1000,24 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	if !json.Valid(args) {
 		return "Error: the tool arguments are not valid JSON", true
 	}
-	if e.local != nil {
-		out, err := e.local.Run(ctx, args)
-		if err != nil {
-			if ctx.Err() != nil {
-				return interruptedOutput, true
-			}
-			return "Error: " + err.Error(), true
+	var res CallResult
+	var err error
+	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
+		tool := canonicalFileTool(e.ws)
+		if tool == "" {
+			tool = canonicalExecLaunch(e.ws)
 		}
-		return out, false
+		if tool != "" {
+			end, err := a.beginMutationCall(ctx, c.CallID, tool, args)
+			if err != nil {
+				return "Error: " + err.Error(), true
+			}
+			defer end()
+		}
+		res, err = correlated.CallCorrelated(ctx, e.ws, args, c.CallID)
+	} else {
+		res, err = a.cfg.WS.Call(ctx, e.ws, args)
 	}
-	res, err := a.cfg.WS.Call(ctx, e.ws, args)
 	switch {
 	case err == nil:
 		return res.Text, res.IsError

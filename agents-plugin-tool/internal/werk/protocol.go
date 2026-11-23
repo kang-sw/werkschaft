@@ -1,20 +1,14 @@
-// Package werk is the builtin Go agent harness's runtime: the process a
-// session holder keeps alive for one agent.spawn worker (ticket
-// 261122-feat-ws-builtin-agent-harness, Phase 1). It runs the model loop
-// (request, tool calls, tool results, repeat) against an OpenAI-Responses
-// compatible endpoint, serves the file tools, reaches the daemon's ws tools
-// as an MCP client over the per-session bearer, and keeps its conversation
-// in memory with one appended JSONL delta per change.
-//
-// The daemon side (internal/wsagent) never imports this package's loop; it
-// speaks the line protocol below to the process: one JSON object per line on
-// the child's standard input (Command) and output (Line). The line protocol
-// is the harness's own event stream, which the daemon maps to the common
-// event contract and to the audit envelope.
+// Package werk runs the builtin Go agent harness inside the ws daemon.
+// It sends Responses requests to the provider, calls tools through the
+// session's authenticated MCP connection, and journals conversation items
+// in an append-only log. The daemon feeds it typed commands and maps its
+// output events to the common runner and audit contracts.
 package werk
 
 import (
 	"encoding/json"
+
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // ProtocolVersion is the harness version the process reports in its init
@@ -22,31 +16,14 @@ import (
 // release, so a ws upgrade never moves a recorded catalog range.
 const ProtocolVersion = "1.0.0"
 
-// Environment names a werk process reads. The session URL and token are the
-// daemon's HTTP MCP route and the per-session bearer; the daemon's provider
-// token route is derived from the URL (wscred.DaemonBaseURL).
-const (
-	EnvSessionURL   = "WS_MCP_SESSION_URL"
-	EnvSessionToken = "WS_MCP_SESSION_TOKEN"
-)
-
-// Authority is a worker's permission level, in the daemon's spelling.
-type Authority string
+// Authority is the filesystem permission assigned to a session.
+type Authority = wsfs.Authority
 
 const (
-	AuthorityReadOnly     Authority = "read-only"
-	AuthorityWorkdirWrite Authority = "workdir-write"
-	AuthorityFull         Authority = "full"
+	AuthorityReadOnly     = wsfs.AuthorityReadOnly
+	AuthorityWorkdirWrite = wsfs.AuthorityWorkdirWrite
+	AuthorityFull         = wsfs.AuthorityFull
 )
-
-// Valid reports whether a is one of the three levels.
-func (a Authority) Valid() bool {
-	switch a {
-	case AuthorityReadOnly, AuthorityWorkdirWrite, AuthorityFull:
-		return true
-	}
-	return false
-}
 
 // Command types, daemon to process.
 const (
@@ -67,33 +44,45 @@ const (
 	// CmdSet changes Model and, when Effort is present, the reasoning effort
 	// for the next request.
 	CmdSet = "set"
+	// CmdCompact selects a new model input at the next quiescent boundary.
+	CmdCompact = "compact"
 )
 
-// Command is one line of the process's standard input.
+// Steer is an admitted mid-turn message. ID is stable across daemon openings.
+type Steer struct {
+	ID   string
+	Text string
+}
+
+// Command is a request from the daemon to the session loop.
 type Command struct {
 	Type   string  `json:"type"`
+	TurnID string  `json:"-"`
 	ID     string  `json:"id,omitempty"`
 	Text   string  `json:"text,omitempty"`
 	Model  string  `json:"model,omitempty"`
 	Effort *string `json:"effort,omitempty"`
+	Steers []Steer `json:"-"`
 }
 
 // Line types, process to daemon.
 const (
-	LineInit      = "init"
-	LineUser      = "user"
-	LineTurnStart = "turn_start"
-	LineReply     = "reply"
-	LineReasoning = "reasoning"
-	LineToolStart = "tool_start"
-	LineToolEnd   = "tool_end"
-	LineUsage     = "usage"
-	LineRetry     = "retry"
-	LineTurnEnd   = "turn_end"
-	LineSteerAck  = "steer_ack"
-	LineUserTaken = "user_taken"
-	LineNotice    = "notice"
-	LineStatus    = "status"
+	LineInit          = "init"
+	LineUser          = "user"
+	LineTurnStart     = "turn_start"
+	LineReply         = "reply"
+	LineReasoning     = "reasoning"
+	LineToolStart     = "tool_start"
+	LineToolEnd       = "tool_end"
+	LineUsage         = "usage"
+	LineRetry         = "retry"
+	LineTurnEnd       = "turn_end"
+	LineSteerAck      = "steer_ack"
+	LineUserTaken     = "user_taken"
+	LineNotice        = "notice"
+	LineStatus        = "status"
+	LineCheckpoint    = "checkpoint"
+	LineCompactFailed = "compact_failed"
 )
 
 // Turn end reasons.
@@ -108,6 +97,10 @@ const (
 // process (ToolOutputBytes for a tool result).
 type Line struct {
 	T string `json:"t"`
+	// Replayed distinguishes a recovered checkpoint from a new operation.
+	Replayed bool `json:"-"`
+	// Checkpoint is the ordinal of a committed compaction.
+	Checkpoint uint64 `json:"checkpoint,omitempty"`
 	// At is the line's wall time, epoch milliseconds.
 	At int64 `json:"at,omitempty"`
 
@@ -121,7 +114,8 @@ type Line struct {
 	Resumed int `json:"resumed,omitempty"`
 
 	// Turn is the turn counter (1-based) a turn-scoped line belongs to.
-	Turn int `json:"turn,omitempty"`
+	Turn   int    `json:"turn,omitempty"`
+	TurnID string `json:"-"`
 	// Response is the provider's id of the model response a usage, reasoning,
 	// reply or tool_start line comes from: the model request of the audit
 	// chain.

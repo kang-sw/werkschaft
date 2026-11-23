@@ -279,19 +279,31 @@ func (c *conv) lastError() string {
 // children.go): neither reported nor a wait's answer, until a later turn
 // settles, or releaseHeld finds nothing left to wait for. The loop calls
 // it.
-func (c *conv) settleTurn(status, errText string, mark uint64) {
+func (c *conv) settleTurn(status, errText string, mark uint64) error {
 	res := TurnResult{ID: c.rec.ReplyID, Status: status, Error: errText, mark: mark}
 	if status == TurnDone || status == TurnFailed {
 		res.Message = c.reply
 	}
-	c.reply = ""
 	if status == TurnDone && c.holdsReport() {
-		c.hold(&res)
+		if c.r.durableProcess(c.rec.Backend) {
+			if err := c.holdDurable(res); err != nil {
+				return err
+			}
+		} else {
+			c.hold(&res)
+		}
+		c.reply = ""
 		c.watched()
-		return
+		return nil
 	}
-	c.hold(nil)
-	c.publish(res, false)
+	if !c.r.durableProcess(c.rec.Backend) {
+		c.hold(nil)
+	}
+	if err := c.publish(res, false); err != nil {
+		return err
+	}
+	c.reply = ""
+	return nil
 }
 
 // finishActiveTurn closes a child turn once, including on interruption. Clearing
@@ -327,13 +339,13 @@ func (c *conv) hold(res *TurnResult) {
 // settle, the turn-open mark's clearing, and the pending report are one
 // record update, so a parent never reads its child between them. keepOpen
 // preserves a successor's boundary when reporting a result held earlier.
-func (c *conv) publish(res TurnResult, keepOpen bool) {
-	c.publishWith(res, keepOpen, nil)
+func (c *conv) publish(res TurnResult, keepOpen bool) error {
+	return c.publishWith(res, keepOpen, nil)
 }
 
 // publishWith is publish with also applied to the record in the same write,
 // before the settle: a successor's boundary that must not land without it.
-func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) {
+func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) error {
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
@@ -342,7 +354,13 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 		c.settled = res
 		c.settledReport = ""
 	}
-	if parent == nil && !c.rec.TurnOpen && also == nil {
+	if c.r.durableProcess(c.rec.Backend) {
+		var err error
+		waited, err = c.publishDurableRecord(res, keepOpen, also)
+		if err != nil {
+			return err
+		}
+	} else if parent == nil && !c.rec.TurnOpen && also == nil {
 		c.mu.Lock()
 		settle()
 		c.mu.Unlock()
@@ -374,7 +392,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 	}
 	c.signalSettled()
 	if parent == nil {
-		return
+		return nil
 	}
 	c.reportLast()
 	st := c.state()
@@ -382,6 +400,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 		c.r.deliverLater(c.rec.ReplyID)
 	}
 	c.r.emit(st)
+	return nil
 }
 
 // reportLast uses the existing append/report path. Marking after the callback
@@ -389,6 +408,9 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 func (c *conv) reportLast() {
 	last := c.rec.LastTurn
 	if last == nil || c.rec.Parent == nil || c.rec.ReportID == "" || c.rec.ReportID == c.rec.LastReportedTurn {
+		return
+	}
+	if suppress := c.r.opts.suppressReportDelivery; suppress != nil && suppress(c.record()) {
 		return
 	}
 	if report := c.r.opts.Report; report != nil {

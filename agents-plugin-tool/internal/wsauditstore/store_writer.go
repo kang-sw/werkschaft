@@ -95,7 +95,12 @@ func (s *Store) handle(j job) {
 	var res jobResult
 	switch j.kind {
 	case jobAppend:
-		s.appendEvent(j.ev, j.id, j.rec)
+		_ = s.appendEvent(j.ev, j.id, j.rec, false)
+	case jobCheckpoint:
+		res.err = s.appendEvent(j.ev, j.id, j.rec, true)
+		if res.err == nil {
+			s.finalize(j.session, j.id.Source, j.id.Seq)
+		}
 	case jobFinalize:
 		s.finalize(j.session, j.source, j.seq)
 	case jobLoss:
@@ -170,13 +175,13 @@ func (s *Store) account(info *sessionInfo) {
 	s.mu.Unlock()
 }
 
-func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsaudit.SourceID) {
+func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsaudit.SourceID, checkpoint bool) error {
 	ev, err := prepare(raw, s.limits)
 	if err != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: %v", raw.Kind, raw.Session, err)
-		if raw.Session == "" || id == nil {
-			return
+		if raw.Session == "" || id == nil || checkpoint {
+			return err
 		}
 		// A dropped record with an identity is finalized as lost.
 		if info, err := s.info(wsaudit.NormalizeID(raw.Session), true); err == nil {
@@ -184,27 +189,29 @@ func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsau
 			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 			info.mu.Unlock()
 		}
-		return
+		return err
 	}
 	info, err := s.info(ev.Session, true)
 	if err != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: recover ring: %v", ev.Kind, ev.Session, err)
-		return
+		return err
 	}
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	r := info.ring
 	if r.readOnly != nil {
 		s.dropped.Add(1)
-		return
+		return r.readOnly
 	}
 	switch r.admit(id, rec) {
 	case admitDuplicate:
-		return
+		return nil
 	case admitLoss:
-		s.loseLocked(info, *id, wsaudit.LossAppendFailed)
-		return
+		if !checkpoint {
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+		}
+		return nil
 	}
 	if ev.Seq <= r.led.maxSeq {
 		ev.Seq = r.led.maxSeq + 1
@@ -216,25 +223,26 @@ func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsau
 	if err != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: %v", ev.Kind, ev.Session, err)
-		if id != nil {
+		if id != nil && !checkpoint {
 			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 		}
-		return
+		return err
 	}
 	payload := append(r.pendingLines(), evLine...)
 	if werr := s.writeLocked(info, payload); werr != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: write: %v", ev.Kind, ev.Session, werr)
-		if id != nil {
+		if id != nil && !checkpoint {
 			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 		}
-		return
+		return werr
 	}
 	r.clearPending()
 	delete(s.dirty, info)
 	r.segs[len(r.segs)-1].events++
 	r.index(ev, id)
 	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+	return nil
 }
 
 // writeLocked writes payload to info's ring, first making room under the

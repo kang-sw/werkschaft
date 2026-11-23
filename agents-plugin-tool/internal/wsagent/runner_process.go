@@ -77,6 +77,13 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	if c.r.durableProcess(rec.Backend) {
+		release, err := c.r.admitDurableTransition()
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	// A launch, wake or resume of a spawned conversation in a checkout
 	// released after it was bound is refused: the release ended that binding.
 	// A start is a cold path, so the check reads the checkouts' markers, not
@@ -109,6 +116,13 @@ func (c *conv) startProcess() error {
 	if rp.Definition.Lead != rec.Lead {
 		return fmt.Errorf("agent profile %q changed its lead setting; refusing to start", rec.Profile)
 	}
+	if c.r.durableProcess(rec.Backend) && rec.SessionID == "" {
+		session := newReportID()
+		if err := c.commitDurableRecord(func(rec *Record) { rec.SessionID = session }, nil); err != nil {
+			return fmt.Errorf("save the backend session identity: %w", err)
+		}
+		rec.SessionID = session
+	}
 	if rec.Lead {
 		return c.startLead(rec, rp.Definition, false)
 	}
@@ -116,6 +130,10 @@ func (c *conv) startProcess() error {
 }
 
 func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
+	durable := c.r.durableProcess(rec.Backend)
+	if durable && attach {
+		return errors.New("a durable process cannot attach to a holder")
+	}
 	native := c.r.lifecycle(rec.Backend).NativeChildren
 	releaseAdmission := func() {}
 	if !attach {
@@ -212,7 +230,6 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		SessionID:    rec.SessionID,
 		Cwd:          rec.Cwd,
 		Instructions: instructions,
-		Env:          environ(),
 		// The child's authority, which a backend that sandboxes its worker
 		// maps itself (codexWorkerMode).
 		PermissionLevel: level,
@@ -221,6 +238,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		SessionState: c.r.lifecycle(rec.Backend).WorkerSessionState && isAgentWorkerProfile(rec.Profile),
 		// An agent.spawn child delegates through agent.spawn only.
 		RemoveSubagents: RemovesSubagents(rec),
+	}
+	if !durable {
+		spec.Env = environ()
 	}
 	if attach {
 		// Harness-initiated wakeups also set TurnOpen. Only a runner send
@@ -237,7 +257,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// The mapper needs the original ws tool surface, not a new bridge.
 		spec.WSMCP = &MCPCommand{}
 	} else if len(def.WSTools) > 0 {
-		cmd, err := c.r.opts.WSMCP(rec.Root)
+		cmd, err := c.r.mcpCommand(durable)(rec.Root)
 		if err != nil {
 			return fmt.Errorf("ws-mcp command: %w", err)
 		}
@@ -274,12 +294,16 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		}
 		cmd.Env = env
 		spec.WSMCP = &cmd
-		if c.r.opts.Backends[rec.Backend].WorkerHTTPMCP {
-			// The same HTTP tuple is persisted with the holder after launch.
+		if durable || c.r.opts.Backends[rec.Backend].WorkerHTTPMCP {
+			// Only an external process persists the HTTP tuple with its holder.
 			spec.MCPSession = c.r.attachMCP(rec.ReplyID, "", env, rec.workDir(), 0, rec.Backend)
 		}
 	}
-	if c.r.opts.Holders != nil {
+	if durable && spec.MCPSession == nil {
+		c.r.revokeToken(rec.ReplyID)
+		return errors.New("a durable process requires an authenticated MCP session")
+	}
+	if !durable && c.r.opts.Holders != nil {
 		spec.Holder = &holderChild{host: c.r.opts.Holders, table: &c.r.holders,
 			session: holderSession{Kind: holderKindAgentWorker, Backend: rec.Backend, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Capability: capabilityHash(rec.Capability)}}
 		if attach {
@@ -315,6 +339,10 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	c.setStatus(func() { c.proc = proc })
 	c.events = proc.Events()
+	if durable {
+		c.bindDurableMCP(spec.MCPSession, rec, proc, level)
+		spec.MCPSession.Started(nil, 0)
+	}
 	if !attach {
 		c.steerSeq, c.steerAnswers = 0, 0
 	}

@@ -116,10 +116,15 @@ type LifecyclePolicy struct {
 	// state and background tasks (StartSpec.SessionState), so a task it still
 	// runs keeps it from idling.
 	WorkerSessionState bool
-	// ExecReadTools marks a backend whose shell is also its read surface: a
-	// worker's exec cutover needs the ws fs.* read tools beside exec.shell
-	// (CodexReadWSTools), and its cutover session lists them.
+	// ExecReadTools supplies the ws fs.* read tools to a cutover session.
+	// A worker's profile must include them before its exec cutover.
 	ExecReadTools bool
+	// FileWriteTools admits daemon file mutations when the session supplies
+	// a durable recorder for them.
+	FileWriteTools bool
+	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
+	// worker of this backend, including calls made outside the cutover.
+	ReadOnlyNoExec bool
 	// ExecOptIn is the config key and label of an opt-in a backend's exec
 	// cutover needs beyond the rollout switch: off unless the key says on, and
 	// off when config cannot be read. Zero: the rollout switch alone decides.

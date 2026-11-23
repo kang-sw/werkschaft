@@ -114,6 +114,10 @@ type ServerOptions struct {
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
 	// session_key grants a root, never ownership.
 	Conversation string
+	// FileWrites is the bound session's filesystem context and durable
+	// intent recorder. A launcher hello never supplies it.
+	FileWrites       *FileWriteSession
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error
 	// ExecCutover is the bound conversation's harness when its process
 	// launched under the exec cutover (wsdashboard.ProxyHello.ExecCutover);
 	// empty otherwise and on every launcher connection.
@@ -223,6 +227,11 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.recordExecLaunch = opts.RecordExecLaunch
+		if opts.FileWrites != nil {
+			binding := *opts.FileWrites
+			s.fileWrites = &binding
+		}
 	}
 	s.callerBinding = opts.CallerBinding
 	if s.callerBinding == nil && opts.Agents != nil {

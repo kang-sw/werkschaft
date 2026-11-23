@@ -31,7 +31,7 @@ import (
 // carries the whole body. An event of a response (a usage, reasoning, reply
 // or tool_start line names its response id) carries meta.request, the chain
 // of the session's model requests with the context the response reported.
-// There is no compaction event: the harness has none in Phase 1.
+// Committed checkpoints are persisted separately from droppable lines.
 type werkAudit struct {
 	session string
 	chain   wsaudit.RequestChain
@@ -50,6 +50,13 @@ func (a *werkAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
 	return ev
 }
 
+func (a *werkAudit) checkpoint(l werk.Line) wsaudit.Envelope {
+	ev := a.env(wsaudit.KindCompaction, time.UnixMilli(l.At))
+	ev.Out = l.Text
+	setMeta(&ev, "checkpoint_id", l.ID)
+	return ev
+}
+
 func (a *werkAudit) mapLine(raw []byte, at time.Time) (bool, []auditEvent, []auditEvent) {
 	l, err := werk.ParseLine(raw)
 	if err != nil || l.T == "" {
@@ -60,6 +67,8 @@ func (a *werkAudit) mapLine(raw []byte, at time.Time) (bool, []auditEvent, []aud
 	}
 	request := a.request(l)
 	switch l.T {
+	case werk.LineCompactFailed:
+		return true, nil, nil
 	case werk.LineUser:
 		ev := a.env(wsaudit.KindUser, at)
 		ev.Out = l.Text

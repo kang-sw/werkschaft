@@ -101,12 +101,67 @@ func TestStoreRotateStartsASnapshotSegmentAndDropsTheOldOne(t *testing.T) {
 	}
 	_ = s.Append(json.RawMessage(`{"after":1}`))
 	s.Close()
-	entries, _ := os.ReadDir(filepath.Dir(segmentPath(dir, session)))
-	if len(entries) != 1 {
-		t.Errorf("segments left = %d", len(entries))
+	segments, err := filepath.Glob(filepath.Join(filepath.Dir(segmentPath(dir, session)), "*.jsonl"))
+	if err != nil || len(segments) != 1 {
+		t.Errorf("segments left = %d, %v", len(segments), err)
 	}
-	_, items, err := OpenStore(dir, session, nil)
+	reopened, items, err := OpenStore(dir, session, nil)
 	if err != nil || len(items) != 2 || string(items[0]) != `{"summary":1}` || string(items[1]) != `{"after":1}` {
 		t.Fatalf("after rotate: %v, %s", err, items)
+	}
+	defer reopened.Close()
+}
+
+func TestStoreResponseIsRecoveredAsAUnit(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	s, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, s.Append(json.RawMessage(userItem("question"))))
+	first := &Response{ID: "committed", Output: []json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","id":"r"}`),
+		json.RawMessage(callOf("c", "read", "{}")),
+	}}
+	must(t, s.AppendResponse(first))
+	must(t, s.Close())
+	tail, err := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = tail.WriteString(`{"k":"response","response":{"id":"torn","output":[{"type":"message"}`)
+	must(t, err)
+	must(t, tail.Close())
+
+	reopened, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	defer reopened.Close()
+	if len(items) != 3 || string(items[1]) != string(first.Output[0]) || string(items[2]) != string(first.Output[1]) {
+		t.Fatalf("replayed %s", items)
+	}
+}
+
+func TestStoreKeepsTheWriterLeaseAcrossRotation(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	writer, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	assertBusy := func() {
+		t.Helper()
+		second, _, err := OpenStore(dir, session, nil)
+		if err == nil {
+			_ = second.Close()
+			t.Fatal("the same session admitted another writer")
+		}
+		if !strings.Contains(err.Error(), "already has a writer") {
+			t.Fatal(err)
+		}
+	}
+	assertBusy()
+	must(t, writer.Rotate(nil))
+	assertBusy()
+	must(t, writer.Append(json.RawMessage(`{"step":"committed"}`)))
+	must(t, writer.Close())
+	successor, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = successor.Close() })
+	if len(items) != 1 || string(items[0]) != `{"step":"committed"}` {
+		t.Errorf("successor's transcript = %s", items)
 	}
 }

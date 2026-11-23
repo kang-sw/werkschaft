@@ -280,11 +280,12 @@ type tuningScopedValue struct {
 }
 
 type tuningAgentTierCurrent struct {
-	Tier    string `json:"tier"`
-	Harness string `json:"harness"`
-	Backend string `json:"backend,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Tier     string `json:"tier"`
+	Harness  string `json:"harness"`
+	Backend  string `json:"backend,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
 }
 
 // harness selects the bucket a harness-bucketed knob's current value is
@@ -742,11 +743,12 @@ func currentAgentTierMappings(opts wsconfig.Options) ([]tuningAgentTierCurrent, 
 		for _, harness := range sortedAgentTierKeys(byHarness) {
 			value := byHarness[harness]
 			rows = append(rows, tuningAgentTierCurrent{
-				Tier:    tier,
-				Harness: harness,
-				Backend: value.Backend,
-				Model:   value.Model,
-				Effort:  value.Effort,
+				Tier:     tier,
+				Harness:  harness,
+				Provider: value.Provider,
+				Backend:  value.Backend,
+				Model:    value.Model,
+				Effort:   value.Effort,
 			})
 		}
 	}

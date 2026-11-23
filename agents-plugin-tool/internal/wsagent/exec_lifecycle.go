@@ -5,6 +5,7 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,23 @@ type ExecJobs interface {
 	// progress); UnfenceOwner lifts that for a revival.
 	FenceOwner(owner string)
 	UnfenceOwner(owner string)
+}
+
+type modelExecRecovery interface {
+	RecoverModelJob(owner string, gen uint64, id string) (string, error)
+}
+
+func (r *Runner) recoverModelExec(owner string, gen uint64) func(context.Context, string) (string, error) {
+	return func(ctx context.Context, jobID string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		src, ok := r.execJobs().(modelExecRecovery)
+		if !ok {
+			return "", errors.New("hosted exec recovery is unavailable")
+		}
+		return src.RecoverModelJob(owner, gen, jobID)
+	}
 }
 
 // execState is the runner's view of the hosted exec jobs: the source once
@@ -141,6 +159,11 @@ func (r *Runner) BindExecJobs(src ExecJobs) {
 	}
 	r.mu.Unlock()
 	r.execReconsider(all)
+	for id := range all {
+		if c := r.conv(id); c != nil && r.durableProcess(c.record().Backend) {
+			c.signalInbox()
+		}
+	}
 }
 
 func (r *Runner) execJobs() ExecJobs {

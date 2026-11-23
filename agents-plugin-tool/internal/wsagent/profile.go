@@ -329,12 +329,16 @@ func validateToolEntry(entry string) error {
 	return nil
 }
 
-// CheckProfileScope refuses a committed (repo-scope) profile that starts
+// CheckProfileScope enforces saved-profile compatibility and refuses a
+// committed (repo-scope) profile that starts
 // programs. The repo file comes with a checkout anyone with push access
 // writes, and a conversation at that root runs as the daemon's user, so the
 // fields that run a command without the model (MCP servers, plugin
 // directories with their hooks) belong to the machine-local scopes.
-func CheckProfileScope(p Profile, scope wsconfig.Scope) error {
+func CheckProfileScope(p Profile, scope wsconfig.Scope, registries ...map[string]BackendRegistration) error {
+	if scope != wsconfig.ScopeBuiltin && builtinProfilesOnly(p.Backend, registries) {
+		return fmt.Errorf("backend %q is available through builtin profiles only", p.Backend)
+	}
 	if scope != wsconfig.ScopeRepo {
 		return nil
 	}
@@ -429,7 +433,7 @@ func resolvedValue(v wsconfig.StructuredValue, registries ...map[string]BackendR
 	}
 	p, err := ParseProfile(v.Value, registries...)
 	if err == nil {
-		err = CheckProfileScope(p, v.Scope)
+		err = CheckProfileScope(p, v.Scope, registries...)
 	}
 	if err != nil {
 		return ResolvedProfile{}, fmt.Errorf("invalid agent profile key %q in %s: %w", v.Key, where, err)
@@ -481,7 +485,7 @@ func ProfileValueSchema(registries ...map[string]BackendRegistration) map[string
 		"required":             []string{"backend"},
 		"properties": map[string]any{
 			"description": map[string]any{"type": "string"},
-			"backend":     map[string]any{"enum": profileBackends(registries), "description": "The harness the conversation runs in."},
+			"backend":     map[string]any{"enum": savedProfileBackends(registries), "description": "The harness the conversation runs in."},
 			"model":       map[string]any{"type": "string", "pattern": modelPattern.String(), "description": "Starting model; absent leaves the harness default."},
 			"effort":      map[string]any{"type": "string", "pattern": effortPattern.String(), "description": "Starting reasoning effort; absent leaves the harness default."},
 			"tools":       stringList("Built-in tool allowlist: tool names, or claude permission rules such as \"Bash(git status)\". Absent allows none; everything not listed is denied without a prompt."),

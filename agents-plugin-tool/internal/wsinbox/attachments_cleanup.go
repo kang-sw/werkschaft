@@ -71,9 +71,11 @@ func referencedAttachments(dir string) map[string]bool {
 		}
 	}
 	readHeldSide()
-	if records, err := readAll(DrainedDir(dir)); err == nil {
-		for _, r := range records {
-			add(r.Entry)
+	for _, bucket := range []string{claimDir(dir), DrainedDir(dir)} {
+		if records, err := readAll(bucket); err == nil {
+			for _, r := range records {
+				add(r.Entry)
+			}
 		}
 	}
 	readHeldSide()

@@ -247,6 +247,33 @@ func (h *Hosted) Tail(owner, id string, max int) (HostedView, Slice, error) {
 	return h.view(j, 0), j.out.Tail(StreamCombined, max), nil
 }
 
+// RecoverModelJob reads an associated job from the same owner generation.
+// A missing or lost holder leaves the launch's outcome unknown.
+func (h *Hosted) RecoverModelJob(owner string, gen uint64, id string) (string, error) {
+	view, tail, err := h.Tail(owner, id, HostedPreviewBytes)
+	if err != nil {
+		return "", err
+	}
+	if view.Gen != gen || view.State == HostedLost {
+		return "", ErrExecNotFound
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "exec_id: %s\nstatus: %s\n", view.ID, view.State)
+	if view.ExitCode != nil {
+		fmt.Fprintf(&out, "exit_code: %d\n", *view.ExitCode)
+	}
+	if view.Signal != nil {
+		fmt.Fprintf(&out, "signal: %d\n", *view.Signal)
+	}
+	if view.Error != "" {
+		fmt.Fprintf(&out, "error: %s\n", view.Error)
+	}
+	if len(tail.Data) > 0 {
+		fmt.Fprintf(&out, "output (bytes %d–%d):\n%s", tail.Start, tail.End, tail.Data)
+	}
+	return out.String(), nil
+}
+
 // Retained returns the whole retained combined output of owner's job id,
 // not the preview's last bytes: Start is where the ring's retention begins
 // (nonzero once earlier output was evicted).

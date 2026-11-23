@@ -107,6 +107,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if refusal := s.permissionRefusal(params.Name, params.Arguments); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
+	if isFSWriteTool(params.Name) && !s.fileWriteTools() {
+		return toolTextResponse(req.ID, "", fmt.Errorf("%s: this session has no daemon file write authority", params.Name))
+	}
 	// Keyed capability gate: when a session_key is present and maps to a known
 	// non-lead scope, enforce roleAllowsTool for this call. Unknown session keys
 	// are not rejected here; root-aware tools surface the unknown_session error
@@ -291,10 +294,12 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
 		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "fs.read", "fs.grep", "fs.list":
-		if !s.codexReadTools() {
-			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoCodexReadTools))
+		if !s.fsReadTools() {
+			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoFSReadTools))
 		}
 		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
+	case "fs.edit", "fs.write":
+		return s.callFSWrite(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),

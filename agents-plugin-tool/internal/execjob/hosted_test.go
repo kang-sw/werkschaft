@@ -290,6 +290,8 @@ func (f *fakeExecHolders) List() wsholder.Listing {
 		child := &wsholder.ChildStatus{State: "running"}
 		if f.exited[id] {
 			child.State = "exited"
+		} else if _, spawned := f.spawned[id]; !spawned {
+			child.State = "none"
 		} else if !f.noInputState {
 			closed := f.inputClosed[id]
 			child.InputClosed = &closed

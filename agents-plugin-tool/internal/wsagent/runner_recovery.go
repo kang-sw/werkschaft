@@ -233,6 +233,9 @@ func (c *conv) restartIfDue() bool {
 // same backend session: it takes what is held as its first turn, or waits
 // for input like after a turn.
 func (c *conv) restartProcess() error {
+	if c.r.durableProcess(c.rec.Backend) && c.r.durableStopping.Load() {
+		return errDurableStopping
+	}
 	c.stopProcess("")
 	if err := c.startProcess(); err != nil {
 		c.setStatus(func() { c.lastErr = err.Error() })

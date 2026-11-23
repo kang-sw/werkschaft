@@ -13,12 +13,23 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
+// ProcessKind selects the process lifecycle for hosted sessions.
+type ProcessKind uint8
+
+const (
+	// ProcessExternal is the existing executable lifecycle.
+	ProcessExternal ProcessKind = iota
+	// ProcessDurable is a daemon-hosted loop with a private runner record.
+	ProcessDurable
+)
+
 // BackendRegistration is the admission descriptor of one registered backend.
 // Optional process controls remain instance-owned (controlsFor), not promises
 // made by a backend-wide flag. ChoiceLister is asserted on Backend itself.
 // This descriptor is runtime-only: it adds nothing to persisted profiles.
 type BackendRegistration struct {
 	Backend         Backend
+	ProcessKind     ProcessKind
 	LeadProfile     string
 	PermissionModes []string
 	// WorkerCapable admits agent.spawn on this backend. WorkerProfile is
@@ -90,6 +101,9 @@ type BackendRegistration struct {
 	// They feed the config floor but are not fields of the persisted Profile
 	// shape. Support marks the profiles offered by tracker support, in order.
 	Profiles []BuiltinProfileRegistration
+	// BuiltinProfilesOnly keeps the backend out of saved profiles while
+	// allowing runtime-owned profiles to use it.
+	BuiltinProfilesOnly bool
 	// PlaybookTerminology supplies static harness wording for playbook renders.
 	PlaybookTerminology PlaybookTerminology
 	// ExecCutover is the backend's verified native process tool removal
@@ -410,6 +424,19 @@ func profileBackends(registries []map[string]BackendRegistration) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func builtinProfilesOnly(name string, registries []map[string]BackendRegistration) bool {
+	if len(registries) > 0 {
+		return registries[0][name].BuiltinProfilesOnly
+	}
+	return builtinRegistration(name).BuiltinProfilesOnly
+}
+
+func savedProfileBackends(registries []map[string]BackendRegistration) []string {
+	return slices.DeleteFunc(profileBackends(registries), func(name string) bool {
+		return builtinProfilesOnly(name, registries)
+	})
 }
 
 // permissionModes preserves legacy Pi values accepted on reads and ignored at

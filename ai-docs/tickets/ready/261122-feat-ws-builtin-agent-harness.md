@@ -752,6 +752,96 @@ Phase 2 waits for this phase.
   The phase then lands on `track/harness`; develop promotion follows
   Decision 15.
 
+### Result (e11f29bb4) - 2026-11-24
+
+Hosted Werk workers now run in the daemon and use the provider credential
+source in-process. The obsolete holder launch, `werk-run` subcommand and
+line protocol are removed. The runner admits turns and steers durably,
+rejoins the same turn on replacement, and commits settlement before
+publishing a report. Idle workers wake from their saved state. A loop panic
+settles its own turn while other workers continue.
+
+Authenticated MCP admits the existing read tools and gives eligible Werk
+workers `fs.edit` and `fs.write`. The file handler commits an intent before
+mutating through a pinned directory handle. Recovery checks the prior or
+expected hash and reports an unknown outcome when neither can be verified.
+An interrupted write never runs twice. Hosted exec records the job identity
+before launch and keeps that job and its report and worktree holds across
+replacement. Full Quit fences starts and wakes, counts idle durable workers
+without process IDs, and leaves the daemon available to retry partial stops.
+
+Worker compaction requests a bounded tool-free summary and commits a
+checkpoint before switching model input. Restart uses the last committed
+checkpoint, and the audit store reconciles its cut once, including after
+eviction. Failed checkpoints preserve the previous input and emit no cut.
+
+**Compatibility against `v0.51.1` (`fa3239f`).**
+
+- **T0, existing MCP calls.** The old `internal/mcp/server_exec_cutover.go:20`
+  offers `fs.read`, `fs.grep` and `fs.list` to cutover Codex sessions. The
+  new `internal/mcp/server_exec_cutover.go:36` preserves that admission and
+  extends the read surface to Werk. `internal/mcp/server_fs_write.go:17`
+  adds the two write names under a trusted binding.
+- **T0, tier values.** The old `internal/wsconfig/config.go:77` decodes the
+  existing tier fields. `internal/wsconfig/config.go:78–85,162,540–552` adds
+  `provider` with OpenRouter as the only supported value and the default when
+  omitted. If an old tier writer omits it, reopen selects the same provider.
+  Saved graph targets and custom profiles still reject Werk (Decision 10).
+- **T0 for existing worker records, T1 for live Werk presentation.** The new
+  `internal/wsagent/runner_durable.go:59–105` writes authoritative state to
+  `internal/wsmeta/durable_records.go:21` and projects legacy history with the
+  handoff fence. The old `internal/wsagent/runner_startup.go:90` treats that
+  row as history. Its `internal/execjob/hosted.go:234–291` still reattaches
+  the ordinary holder job. The tagged release fixture confirmed the old
+  daemon retains the job and emits no Werk report. Re-upgrade resumes the
+  original turn and job and publishes one report.
+- **T0, private append-only log.** The tagged release has no `internal/werk`
+  reader or writer. It leaves this transcript intact. The new
+  `internal/werk/store.go:107–250` replays committed items and the checkpoint
+  when the original worker returns.
+- **T0, Full Quit count.** `internal/wsdashboard/holders.go:66–95`
+  appends durable sessions to the existing list. The old
+  `desktop/src/endpoint.rs:314–327` counts those entries by
+  decoding each as `IgnoredAny`.
+
+**Verification.**
+
+- `go build ./...`, Windows cross-vet of affected Go packages, and
+  `git diff --check` passed.
+- The `cmd/ws-mcp` Werk race fixtures passed three times. Coverage includes
+  model, file, and exec interruption, all file verdicts including creation,
+  and concurrent panic isolation. The exec fixture also passed with the
+  actual `v0.51.1` test daemon built from its tag. Settlement replacement
+  passed three times with and without an exec hold, before durable settlement
+  and after commit but before report delivery.
+- The current branch passed full race suites for `internal/wsagent`,
+  `internal/werk`, `internal/wsfs`, `internal/wsconfig`, `internal/wscred`,
+  `internal/wsmeta`, `internal/wsaudit`, `internal/execjob`,
+  `internal/wsdashboard` and `internal/wsholder`.
+- Full `internal/wsauditstore` passed both `go test` and
+  `go test -race ./internal/wsauditstore -count=1 -timeout=30m`.
+  `internal/mcp` race tests passed for trusted file write and read admission,
+  permission changes, cutover inventory and exec call correlation.
+- Full Quit, durable runner and compaction race fixtures passed three
+  times across `internal/wsagent`, `internal/wsdashboard` and `internal/wsholder`.
+- The offline Rust test
+  `running_sessions_counts_every_listed_holder_with_the_browser_credential`
+  passed with durable entries in the holder list.
+- The scripted provider fixture made four Responses requests and verified
+  one file read, one write, one hosted exec and one report. It also checks
+  that losing a mutation response cannot admit a repeat.
+
+**Pending.** Live OpenRouter verification awaits the owner's credential
+and gates `track/harness` promotion to `develop`. With the OpenRouter
+credential-store entry and a configured global `werk.small` tier, run
+`WERK_LIVE_OPENROUTER=1 go test ./cmd/ws-mcp -run '^TestWerkLiveOpenRouter$'`
+from `agents-plugin-tool`. The test skips by default. This host made no live
+provider requests. Windows runtime checks remain pending on the lead's
+Windows host. From `agents-plugin-tool`, run `go test -timeout 45m
+./internal/wsfs ./internal/werk ./internal/mcp -run
+'Test(FileIntent|FileMutation|PinnedMutation|FileWrite|AuthorityPerTool|Edit|DanglingSymlinkWriteBoundary|RelativeLinkThroughDirectoryLinkAndDotDot)'
+-count=1`.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 Runs after Phase 4.

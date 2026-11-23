@@ -113,6 +113,13 @@ type HostedOwner struct {
 	Lead bool
 }
 
+// ModelLaunch associates a pending tool call from a daemon-owned session
+// with its hosted job. Arguments are the original tool arguments.
+type ModelLaunch struct {
+	ID, Tool, JobID string
+	Arguments       json.RawMessage
+}
+
 // HostedCall is one launch as its approval shows it: everything the call
 // gives that decides what runs. Program is argv[0] resolved on the job's
 // PATH, the binary that starts; Env is the call's own environment overlay
