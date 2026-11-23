@@ -599,7 +599,7 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "track/harness",
         "phase": "active",
-        "touched_at": "2026-11-23T17:24:58Z",
+        "touched_at": "2026-11-23T20:20:41Z",
         "impl": {
           "branch": "impl/track/harness/jolt-false-coat"
         }
