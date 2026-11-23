@@ -8,6 +8,7 @@
   var entry = null, spacer = null, tabs = new Map(), callbacks = [], releaseCallbacks = [];
   var preview = null, previewTimer = 0, previewHoverTarget = null, previewLocked = false;
   var previewLeaveCleanup = null;
+  var pendingLandKey = null, pendingLandNode = null;
   var midHandled = false, midTimer = 0;
   var PREVIEW_DELAY = 120;
   var ITEM = "section.topic[data-topic], .bcard[data-card]";
@@ -137,10 +138,10 @@
     };
     return preview;
   }
-  function restorePreviewNode() {
+  function restorePreviewNode(opts) {
     if (!preview || !preview.node) return;
     var node = preview.node, ph = preview.placeholder;
-    node.removeAttribute("data-overview-live");
+    if (!(opts && opts.keepLiveAttr)) node.removeAttribute("data-overview-live");
     if (ph && ph.parentNode) {
       var wasFocused = doc.activeElement === ph;
       var phTab = ph.getAttribute("tabindex");
@@ -151,8 +152,9 @@
     }
     preview.node = null;
     preview.placeholder = null;
+    if (!(opts && opts.skipReconcile) && window.WsBoardAnchor && window.WsBoardAnchor.reconcile) window.WsBoardAnchor.reconcile();
   }
-  function teardownPreview() {
+  function teardownPreview(opts) {
     clearPreviewTimer();
     previewLocked = false;
     previewHoverTarget = null;
@@ -160,7 +162,7 @@
       root.removeAttribute("data-overview-preview");
       return;
     }
-    restorePreviewNode();
+    restorePreviewNode(opts);
     if (preview.dockedViewport) {
       preview.dockedViewport.inert = false;
       preview.dockedViewport.removeAttribute("aria-hidden");
@@ -430,12 +432,22 @@
           keep(live, clearance(live)); select(live); flash(live);
           if (!(options && options.keep)) { live.setAttribute("tabindex", "-1"); live.focus({ preventScroll: true }); }
         }
+        if (pendingLandNode) {
+          pendingLandNode.removeAttribute("data-overview-live");
+          pendingLandNode = null;
+        }
+        pendingLandKey = null;
+        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
         if (done) done();
       };
+      pendingLandKey = key;
       if (!window.wbPill.apply(land)) return;
+      pendingLandKey = null;
+      pendingLandNode = null;
     }
     unbindPreviewCancel();
-    teardownPreview();
+    var exitingPreviewNode = preview && preview.node || null;
+    teardownPreview({ skipReconcile: true, keepLiveAttr: !!exitingPreviewNode });
     var n = resolved;
     if (n && n.hasAttribute("data-state-filtered")) n = null;
     var h = o.frames ? o.frames() : null;
@@ -453,9 +465,16 @@
       var targetFast = landedFast || restore || items()[0] || null;
       o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "false");
       save(); changed();
-      if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
-      if (targetFast) window.WsBoardAnchor.select(targetFast, { keep: true, still: false, smooth: false });
-      else keep(o.toolbar, entry.offset);
+      if (targetFast && window.WsBoardAnchor && window.WsBoardAnchor.select) {
+        window.WsBoardAnchor.select(targetFast, { keep: true, still: false, smooth: false });
+      }
+      if (pendingLandKey) {
+        pendingLandNode = exitingPreviewNode;
+      } else {
+        if (exitingPreviewNode) exitingPreviewNode.removeAttribute("data-overview-live");
+        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
+      }
+      if (!targetFast) keep(o.toolbar, entry.offset);
       if (targetFast && !calm() && targetFast.animate) {
         try {
           targetFast.animate(
@@ -499,6 +518,12 @@
         if (!(options && options.keep)) { landed.setAttribute("tabindex", "-1"); landed.focus({ preventScroll: true }); }
       } else if (!(options && options.keep)) o.toolbar.querySelector(".board-overview").focus({ preventScroll: true });
       all(".overview-here", o.board).forEach(function (x) { x.classList.remove("overview-here"); });
+      if (pendingLandKey) {
+        pendingLandNode = exitingPreviewNode;
+      } else {
+        if (exitingPreviewNode) exitingPreviewNode.removeAttribute("data-overview-live");
+        if (window.WsBoardAnchor && window.WsBoardAnchor.reconcile) window.WsBoardAnchor.reconcile();
+      }
       finish();
       if (done) done();
     };

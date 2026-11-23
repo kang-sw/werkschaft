@@ -512,18 +512,18 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     const geomCounts = await page.evaluate(() => {
       const orig = Element.prototype.getBoundingClientRect;
       const bcol = document.getElementById('bcol');
-      const t6 = document.getElementById('topic-6');
+      const t2 = document.getElementById('topic-2');
       let outerReads = 0, otherReads = 0;
       Element.prototype.getBoundingClientRect = function () {
         if (this === bcol || this === document.documentElement) outerReads++;
-        else if (t6.contains(this)) otherReads++;
+        else if (t2.contains(this)) otherReads++;
         return orig.call(this);
       };
       try {
         const extra = document.createElement('div');
         extra.className = 'log-line';
         extra.textContent = 'Non-current streamed line';
-        t6.querySelector('.tbody').appendChild(extra);
+        t2.querySelector('.tbody').appendChild(extra);
         window.WsBoardAnchor.select(document.querySelector('.bcard[data-card="term-1"]'), { still: true });
       } finally {
         Element.prototype.getBoundingClientRect = orig;
@@ -580,7 +580,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         ovContain,
         cardSnap: getComputedStyle(card).scrollSnapAlign,
         cardInH: cardIn.getBoundingClientRect().height,
-        gripDisplay: getComputedStyle(grip).display,
+        hasGrip: !!grip,
         bodyFlexGrow: getComputedStyle(body).flexGrow,
       };
     });
@@ -600,7 +600,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.equal(snapDeck.ovContain, 'none', 'overview lifts containment');
     assert.equal(snapDeck.cardSnap, 'none', '.bcard uses wheel virtualization (no CSS scroll-snap-align)');
     assert.ok(snapDeck.cardInH >= snapDeck.usable - 1.5, `.bcard > .bc-in height (${snapDeck.cardInH}) is at least --board-usable (${snapDeck.usable})`);
-    assert.equal(snapDeck.gripDisplay, 'none', 'in-board .bcard hides .bc-grip');
+    assert.equal(snapDeck.hasGrip, false, 'retired .bc-grip is not rendered on .bcard');
     assert.equal(snapDeck.bodyFlexGrow, '1', 'in-board .bcard > .bc-in > .bc-body flex-grows');
 
     // Offscreen .oq-pill 2-level jump: from Topic 4 (offscreen from Topic 1), update pill and click.

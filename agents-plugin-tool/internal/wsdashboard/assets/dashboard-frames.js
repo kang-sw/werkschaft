@@ -107,7 +107,8 @@
     if (frameInOverviewPreview(f)) return true;
     var t = f.parentNode ? f.parentNode.closest("section.topic[data-topic]") : null;
     if (!t) return true;
-    if (t.hasAttribute("data-overview-live")) return true;
+    if (t.hasAttribute("data-overview-live") || t.hasAttribute("data-max")) return true;
+    if (window.WsBoardVirtual && window.WsBoardVirtual.isNear && window.WsBoardVirtual.isNear(t)) return true;
     bandTopic(t);
     var near = t.wbNear !== undefined ? t.wbNear : topicNear[t.getAttribute("data-topic")] === true;
     return near;
@@ -172,7 +173,7 @@
     if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !t.hasAttribute("data-overview-live") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
     t.wbNear = r.visible;
     topicNear[t.getAttribute("data-topic")] = r.visible;
-    if (r.visible) mountFramesPaced(t);
+    if (r.visible && !t.hasAttribute("data-wb-virtual")) mountFramesPaced(t);
   }
   // unmountFrames turns topic t's frames back into placeholders, except a
   // frame the page still holds: a graft's pair (wbNext, wbOut), the focused
@@ -292,8 +293,17 @@
     if (grid && !tabShown("board")) setTab("board");
     var isTopic = id.indexOf("topic-") === 0;
     var alternate = id.replace(/^(item|check)-/, function (s) { return s === "item-" ? "check-" : "item-"; });
+    if (typeof virtualHydrateForTarget === "function") {
+      virtualHydrateForTarget(id);
+      if (alternate !== id) virtualHydrateForTarget(alternate);
+    }
     var target = null, unfoldTopic = window.WsCards && window.WsCards.unfoldTopic;
-    if (!isTopic && window.wbHistory) boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+    if (!isTopic && window.wbHistory) {
+      boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      if (!target && typeof virtualHydrateLazyTopics === "function" && virtualHydrateLazyTopics()) {
+        boardBoxes().some(function (b) { target = window.wbHistory.loadTarget(b, id, unfoldTopic) || (alternate !== id && window.wbHistory.loadTarget(b, alternate, unfoldTopic)); return !!target; });
+      }
+    }
     var loaded = !!target;
     // A target in history the page has not fetched yet jumps once its topic
     // arrives (a second miss starts no further wait: its fetch fills nothing).

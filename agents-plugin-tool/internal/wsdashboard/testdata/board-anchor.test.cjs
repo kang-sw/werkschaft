@@ -27,12 +27,12 @@ function vars(source, names) {
     return found[0];
   }).join('');
 }
-const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorCap0', 'anchorProg', 'WHEEL_OWN']) +
+const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorCap0', 'anchorProg', 'WHEEL_OWN']) +
   anchorSrc.match(/\n  var WHEEL_DEFAULTS = \{[\s\S]*?\n  \};\n/)[0] +
   funcs(anchorSrc, ['createBoardWheel', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCancelGlide', 'anchorGlide', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
-    'anchorSize', 'anchorWatchLast', 'anchorCancelProg', 'anchorCanReach', 'anchorCanInnerScroll', 'anchorHandleWheel', 'anchorOnWheel', 'anchorOnFrameWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
+    'anchorSize', 'anchorCancelProg', 'anchorCanReach', 'anchorCanInnerScroll', 'anchorHandleWheel', 'anchorOnWheel', 'anchorOnFrameWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -265,10 +265,8 @@ test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches t
   w.bcol.overflowY = 'auto';
   w.bcol.style.setProperty('--wb-rail-inset', '34px');
   w.c.anchorSized.padTop = 2;
-  w.c.anchorLastCard = w.node('t:C');
   w.c.anchorSize([
     { target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 800 }], contentRect: { width: 900, height: 800 } },
-    { target: w.c.anchorLastCard, borderBoxSize: [{ blockSize: 500 }], contentRect: { height: 500 } },
   ]);
   // topSpace = 34 + capH(2)=44 = 78; bot2 = 47 => usable = 800 - 78 - 47 = 675
   assert.equal(w.bcol.props.get('--board-usable'), '675px');
@@ -281,9 +279,8 @@ test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches t
   assert.equal(w.bcol.props.get('--board-bot-2'), '47px');
   assert.equal(w.bcol.props.get('--board-card-gap'), '59px');
   assert.equal(w.bcol.hasAttribute('data-board-bounded'), true);
-  // runway = 800 - 78 - 500 = 222
-  assert.equal(w.bcol.props.get('--board-runway'), '222px');
-  // Unbounded document-scrolled board must clear --board-usable and --board-runway
+  assert.equal(w.bcol.props.has('--board-runway'), false);
+  // Unbounded document-scrolled board must clear --board-usable
   w.bcol.overflowY = 'visible';
   w.bcol.style.removeProperty = k => w.bcol.props.delete(k);
   w.c.anchorSize([{ target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 5000 }], contentRect: { width: 900, height: 5000 } }]);
@@ -395,8 +392,8 @@ test('counts: board updates read nothing outside the current card', () => {
   const inCur = n => w.node('t:T20').contains(n);
   assert.ok(w.C.d.rendered.every(inCur) && w.C.d.keep.every(inCur), 'the swap captures only the current card inner scroller (rendered/keep: ' + w.C.d.rendered.length + '/' + w.C.d.keep.length + ')');
   row('(a) content, non-current');
-  // (b) size-only changes of non-current cards above and below: late frame heights and the last-card observer
-  const last = w.node('c:preview'); w.c.anchorLastCard = last;
+  // (b) size-only changes of non-current cards above and below: late frame heights
+  const last = w.node('c:preview');
   [frame('t:T05'), frame('t:T35'), frame('t:T01')].forEach(f => w.c.queueFrameHeight(f, 300));
   assert.equal(w.g.raf.length, 1, 'one frame callback for the batch');
   w.g.raf.shift()();
