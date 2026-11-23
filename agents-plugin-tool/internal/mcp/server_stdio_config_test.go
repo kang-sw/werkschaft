@@ -130,13 +130,7 @@ func TestServeStdioConfigAgentsTierUsesDetectedHarness(t *testing.T) {
 	}
 }
 
-// TestServeStdioConfigAgentsTierUsesDetectedPiHarness mirrors
-// TestServeStdioConfigAgentsTierUsesDetectedHarness for the Pi harness: an
-// `initialize` request whose clientInfo.name is exactly "ws-pi-bridge" must
-// be detected via the structured clientInfo check
-// (detectHarnessFromInitializeParams) and used as the config.tune harness
-// default.
-func TestServeStdioConfigAgentsTierUsesDetectedPiHarness(t *testing.T) {
+func TestServeStdioConfigAgentsTierRefusesWritesToDetectedPi(t *testing.T) {
 	useLeadProfile(t)
 	root := initTicketRepo(t, "260513-feat-harness-local-agent-tier-config")
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
@@ -155,8 +149,8 @@ func TestServeStdioConfigAgentsTierUsesDetectedPiHarness(t *testing.T) {
 	}
 	byID := responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
 	configText := toolText(t, byID["2"])
-	if !strings.Contains(configText, `"pi":{"backend":"pi","model":"pi-model","effort":"medium"}`) {
-		t.Fatalf("config response missing pi harness mapping: %s", byID["2"])
+	if !toolIsError(t, byID["2"]) || !strings.Contains(configText, `got "pi"`) {
+		t.Fatalf("legacy Pi write did not refuse with the supported harnesses: %s", byID["2"])
 	}
 }
 
@@ -169,14 +163,7 @@ type resolveAgentTierResponse struct {
 	ResolvedFrom string `json:"resolved_from"`
 }
 
-// TestServeStdioConfigResolveAgentUsesDetectedPiHarness covers the ticket's
-// "each tier under pi with a set value" case: for every fixed tier, seed a
-// "pi" bucket via config.tune under a detected "pi" harness session, then
-// call config.resolve_agent with no explicit harness and assert it reports
-// resolved_from == "pi" and the exact backend/model/effort that was set
-// (260905 Phase 3). Mirrors
-// TestServeStdioConfigAgentsTierUsesDetectedPiHarness.
-func TestServeStdioConfigResolveAgentUsesDetectedPiHarness(t *testing.T) {
+func TestServeStdioConfigResolveAgentRedirectsDetectedPiToWerk(t *testing.T) {
 	for _, tier := range []string{"small", "medium", "large", "xlarge"} {
 		t.Run(tier, func(t *testing.T) {
 			useLeadProfile(t)
@@ -191,8 +178,8 @@ func TestServeStdioConfigResolveAgentUsesDetectedPiHarness(t *testing.T) {
 			}
 
 			out.Reset()
-			model := "pi-model-" + tier
-			configInput := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","value":{"tier":%q,"backend":"pi","model":%q,"effort":"high"}}}}`, tier, model)
+			model := "provider/model-" + tier
+			configInput := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"config.tune","arguments":{"harness":"werk","key":"agents.tier","value":{"tier":%q,"backend":"werk","model":%q,"effort":"high"}}}}`, tier, model)
 			if err := server.ServeStdio(context.Background(), strings.NewReader(configInput), &out); err != nil {
 				t.Fatalf("ServeStdio config.tune returned error: %v", err)
 			}
@@ -210,23 +197,17 @@ func TestServeStdioConfigResolveAgentUsesDetectedPiHarness(t *testing.T) {
 			if err := json.Unmarshal([]byte(toolText(t, byID["3"])), &result); err != nil {
 				t.Fatalf("decode config.resolve_agent response: %v", err)
 			}
-			if result.Backend != "pi" || result.Model != model || result.Effort != "high" {
-				t.Fatalf("result = %#v, want backend=pi model=%s effort=high", result, model)
+			if result.Backend != "werk" || result.Model != model || result.Effort != "high" {
+				t.Fatalf("result = %#v, want backend=werk model=%s effort=high", result, model)
 			}
-			if result.ResolvedFrom != "pi" {
-				t.Fatalf("resolved_from = %q, want %q", result.ResolvedFrom, "pi")
+			if result.ResolvedFrom != "werk" {
+				t.Fatalf("resolved_from = %q, want %q", result.ResolvedFrom, "werk")
 			}
 		})
 	}
 }
 
-// TestServeStdioConfigResolveAgentFallsBackToDefault covers the ticket's
-// "fallback to default with the answering bucket reported" case: under a
-// detected "pi" harness session with nothing set for the "pi" bucket,
-// config.resolve_agent must resolve at the seeded "default" bucket
-// (applyDefaultModelAliases always seeds "default"/"codex", never "pi") and
-// report resolved_from == "default".
-func TestServeStdioConfigResolveAgentFallsBackToDefault(t *testing.T) {
+func TestServeStdioConfigResolveAgentRefusesAnUnsetRetiredPiTier(t *testing.T) {
 	useLeadProfile(t)
 	root := initTicketRepo(t, "260905-feat-ws-pi-harness-config-layer")
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
@@ -244,15 +225,9 @@ func TestServeStdioConfigResolveAgentFallsBackToDefault(t *testing.T) {
 		t.Fatalf("ServeStdio config.resolve_agent returned error: %v", err)
 	}
 	byID := responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
-	var result resolveAgentTierResponse
-	if err := json.Unmarshal([]byte(toolText(t, byID["2"])), &result); err != nil {
-		t.Fatalf("decode config.resolve_agent response: %v", err)
-	}
-	if result.Backend != "codex" || result.Model != "gpt-6.1-terra" || result.Effort != "high" {
-		t.Fatalf("result = %#v, want the seeded default medium tier", result)
-	}
-	if result.ResolvedFrom != "default" {
-		t.Fatalf("resolved_from = %q, want %q", result.ResolvedFrom, "default")
+	text := toolText(t, byID["2"])
+	if !toolIsError(t, byID["2"]) || !strings.Contains(text, "werk.medium has no usable OpenRouter model") {
+		t.Fatalf("retired Pi tier fell through or did not explain the missing werk slot: %s", text)
 	}
 }
 
@@ -321,9 +296,9 @@ func TestServeStdioConfigResolveAgentUsesDefaultCodexTierTable(t *testing.T) {
 
 // TestServeStdioConfigResolveAgentExplicitHarnessOverridesDetected proves an
 // explicit harness argument to config.resolve_agent overrides the detected
-// session harness: the session detects "codex", but a "pi" bucket is seeded
-// and the caller passes harness:"pi" explicitly, so the answer must come
-// from the pi bucket, not the detected codex one.
+// session harness: the session detects "codex", but a "claude" bucket is seeded
+// and the caller passes harness:"claude" explicitly, so the answer must come
+// from the Claude bucket, not the detected codex one.
 func TestServeStdioConfigResolveAgentExplicitHarnessOverridesDetected(t *testing.T) {
 	useLeadProfile(t)
 	root := initTicketRepo(t, "260905-feat-ws-pi-harness-config-layer")
@@ -343,13 +318,13 @@ func TestServeStdioConfigResolveAgentExplicitHarnessOverridesDetected(t *testing
 	}
 
 	out.Reset()
-	seedPiInput := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","harness":"pi","value":{"tier":"medium","backend":"pi","model":"pi-medium-model"}}}}`
-	if err := server.ServeStdio(context.Background(), strings.NewReader(seedPiInput), &out); err != nil {
-		t.Fatalf("ServeStdio config.tune (pi) returned error: %v", err)
+	seedClaudeInput := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","harness":"claude","value":{"tier":"medium","backend":"claude","model":"claude-medium-model"}}}}`
+	if err := server.ServeStdio(context.Background(), strings.NewReader(seedClaudeInput), &out); err != nil {
+		t.Fatalf("ServeStdio config.tune (claude) returned error: %v", err)
 	}
 
 	out.Reset()
-	resolveInput := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"config.resolve_agent","arguments":{"tier":"medium","harness":"pi","format":"json"}}}`
+	resolveInput := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"config.resolve_agent","arguments":{"tier":"medium","harness":"claude","format":"json"}}}`
 	if err := server.ServeStdio(context.Background(), strings.NewReader(resolveInput), &out); err != nil {
 		t.Fatalf("ServeStdio config.resolve_agent returned error: %v", err)
 	}
@@ -358,11 +333,11 @@ func TestServeStdioConfigResolveAgentExplicitHarnessOverridesDetected(t *testing
 	if err := json.Unmarshal([]byte(toolText(t, byID["4"])), &result); err != nil {
 		t.Fatalf("decode config.resolve_agent response: %v", err)
 	}
-	if result.Backend != "pi" || result.Model != "pi-medium-model" {
+	if result.Backend != "claude" || result.Model != "claude-medium-model" {
 		t.Fatalf("explicit harness argument did not override detected codex harness: %#v", result)
 	}
-	if result.ResolvedFrom != "pi" {
-		t.Fatalf("resolved_from = %q, want %q", result.ResolvedFrom, "pi")
+	if result.ResolvedFrom != "claude" {
+		t.Fatalf("resolved_from = %q, want %q", result.ResolvedFrom, "claude")
 	}
 }
 
@@ -444,9 +419,9 @@ func TestServeStdioConfigAgentsTierScopesWriteAndResolve(t *testing.T) {
 	server := NewServer(root, "test")
 	inputs := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","scope":"global","harness":"claude","value":{"tier":"medium","backend":"claude","model":"global-claude","effort":"low"}}}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","scope":"project","harness":"pi","value":{"tier":"medium","backend":"pi","model":"project-pi","effort":"high"}}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","scope":"project","harness":"agy","value":{"tier":"medium","backend":"agy","model":"project-agy","effort":"high"}}}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"config.resolve_agent","arguments":{"tier":"medium","harness":"claude","format":"json"}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"config.resolve_agent","arguments":{"tier":"medium","harness":"pi","format":"json"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"config.resolve_agent","arguments":{"tier":"medium","harness":"agy","format":"json"}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","scope":"session","value":{"tier":"medium"}}}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"config.tune","arguments":{"key":"agents.tier","scope":"repo","value":{"tier":"medium"}}}}`,
 		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"config.list","arguments":{"format":"json"}}}`,
@@ -473,7 +448,7 @@ func TestServeStdioConfigAgentsTierScopesWriteAndResolve(t *testing.T) {
 		if resp, ok := byID["3"]; ok && !strings.Contains(toolText(t, resp), `"model":"global-claude"`) {
 			t.Fatalf("global resolution = %s", resp)
 		}
-		if resp, ok := byID["4"]; ok && !strings.Contains(toolText(t, resp), `"model":"project-pi"`) {
+		if resp, ok := byID["4"]; ok && !strings.Contains(toolText(t, resp), `"model":"project-agy"`) {
 			t.Fatalf("project leaf resolution = %s", resp)
 		}
 		if resp, ok := byID["7"]; ok && !strings.Contains(toolText(t, resp), `"model":"global-claude"`) {
