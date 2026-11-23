@@ -402,6 +402,18 @@ test("stored truncation numbers concatenated text in four seam variants and matc
     const res = winHelpers.auRenderBodyContent(seamEv,"in",{search,regex,caseSensitive:true});
     assert.equal(res.matchCount,want,search);
   }
+  // A greedy match that reaches the seam is a server hit truncated at it (the
+  // server matches the head piece apart from the tail piece): it highlights the
+  // head part and counts once.
+  for (const [search,marked] of [["ead.*","ead"],["he\\w+","head"],["a.*","ad"]]) {
+    const res = winHelpers.auRenderBodyContent(seamEv,"in",{search,regex:true,caseSensitive:true});
+    assert.equal(res.matchCount,1,search);
+    assert.deepEqual([...res.html.matchAll(/<mark[^>]*>([^<]*)<\/mark>/g)].map(m=>m[1]),[marked],search);
+    assert.match(res.html,/<\/mark>TAIL</,search); // the tail side stays plain text
+  }
+  // A greedy match clipped at the seam does not hide a later match in the tail piece.
+  const greedyTail = winHelpers.auRenderBodyContent({in:"headTAILhead",stored_trunc:{in:{head_bytes:4,tail_bytes:8,original_bytes:99}}},"in",{search:"ead.*",regex:true,caseSensitive:true});
+  assert.equal(greedyTail.matchCount,2);
   const lateMatch = winHelpers.auRenderBodyContent({in:"ababTAIL",stored_trunc:{in:{head_bytes:3,tail_bytes:5,original_bytes:99}}},"in",{search:"ba",regex:false,caseSensitive:true});
   assert.equal(lateMatch.matchCount,1); // "ba" at 1..3 stays in the head; "ba" at 2..4 spans the seam
 });
