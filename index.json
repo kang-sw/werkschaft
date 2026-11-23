@@ -540,6 +540,9 @@
     "261123-bug-ws-daemon-replace-gap-older-daemon": {
       "registered_at": "2026-11-22T20:54:14Z"
     },
+    "261123-bug-ws-dashboard-webview-idle-cpu": {
+      "registered_at": "2026-11-23T01:26:42Z"
+    },
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
     },
