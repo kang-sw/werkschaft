@@ -781,6 +781,9 @@
           "branch": "impl/track/harness/jolt-false-coat"
         }
       }
+    },
+    "261124-chore-ws-remove-legacy-pi-handlers": {
+      "registered_at": "2026-11-23T20:41:17Z"
     }
   }
 }
