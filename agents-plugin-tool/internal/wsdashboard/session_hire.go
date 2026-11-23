@@ -196,13 +196,16 @@ func (d *Daemon) RequestHire(replyID string, request HireRequest) (HireProposal,
 		return HireProposal{}, err
 	}
 	request.Label = label
+	if strings.EqualFold(strings.TrimSpace(request.Harness), "pi") {
+		return HireProposal{}, errors.New("the Pi harness is retired; choose an available lead harness")
+	}
 	if request.Harness != "" {
 		admitted, ok := d.agents.(interface{ AdmitsLead(string) bool })
 		if !ok {
 			return HireProposal{}, errors.New("this daemon's agent host cannot admit a lead harness")
 		}
 		if !admitted.AdmitsLead(request.Harness) {
-			return HireProposal{}, errors.New("harness must be claude or pi")
+			return HireProposal{}, errors.New("the requested harness does not support hosted leads")
 		}
 	}
 	d.hireMu.Lock()

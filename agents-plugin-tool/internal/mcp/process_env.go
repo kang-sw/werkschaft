@@ -69,10 +69,9 @@ type ServerOptions struct {
 	// snapshot file only for recovery (live_snapshot.go). nil is the direct
 	// path, a ws-mcp in its own process, which writes the file and nudges.
 	Live wsdashboard.LiveHost
-	// Agents is the dashboard daemon's agent runner, where the pi.* tools
-	// spawn the session's Pi subagents (pi_tools.go); nil on the direct
-	// path, where they refuse.
-	Agents PiAgents
+	// Agents is the dashboard daemon's runner for spawning and reading
+	// conversations. It is nil on the direct path.
+	Agents AgentHost
 	// AgentBackends exposes the dashboard daemon's registered backend
 	// descriptors without granting the lead runner handle (Agents). Set for
 	// every daemon-hosted connection, including token-forwarding workers, so
@@ -217,7 +216,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	if opts.Harness != "" {
 		s.observeHarness("hello", opts.Harness)
 	}
-	s.pi.agents = opts.Agents
+	s.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
@@ -230,13 +229,12 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.callerBinding = binding
 		}
 	}
-	s.pi.worktreeChildren = opts.WorktreeChildren
-	if s.pi.worktreeChildren == nil && opts.Agents != nil {
+	s.worktreeChildren = opts.WorktreeChildren
+	if s.worktreeChildren == nil && opts.Agents != nil {
 		if reader, ok := opts.Agents.(WorktreeChildrenReader); ok {
-			s.pi.worktreeChildren = reader
+			s.worktreeChildren = reader
 		}
 	}
-	s.startPiFeed()
 	return s
 }
 
@@ -549,9 +547,6 @@ func (s *Server) Drain(ctx context.Context) bool {
 // must release them itself, or every ended session keeps its Server alive
 // for the daemon's lifetime. Call it after ServeStdio has returned.
 func (s *Server) Close() {
-	if stop := s.pi.stopWatch; stop != nil {
-		stop()
-	}
 	s.live.close()
 	d := &s.dashboard
 	d.mu.Lock()

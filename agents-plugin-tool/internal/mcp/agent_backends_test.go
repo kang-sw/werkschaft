@@ -14,7 +14,7 @@ func registerFixtureAgentBackends(s *Server) {
 	// Real runner metadata, no process start. The extra backend exists only
 	// in this fixture's private config; production's builtin lead and worker
 	// profiles must all resolve.
-	s.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: map[string]wsagent.BackendRegistration{
+	s.agents = wsagent.NewRunner(wsagent.Options{Backends: map[string]wsagent.BackendRegistration{
 		wsagent.BackendClaude: {LeadProfile: wsagent.LeadProfileClaude, PermissionModes: wsagent.LeadPermissionModes},
 		wsagent.BackendPi:     {LeadProfile: wsagent.LeadProfilePi},
 		wsagent.BackendAgy:    {LeadProfile: wsagent.LeadProfileAgy, PermissionModes: wsagent.AgyPermissionModes},

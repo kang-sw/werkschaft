@@ -31,14 +31,17 @@ func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[str
 	}
 	replyID := wsmailbox.ReplyID(key)
 	if name == "session.request_hire" {
-		host, ok := s.live.host.(sessionHireHost)
-		if !ok {
-			return toolTextResponse(id, "", fmt.Errorf("hiring requests require the dashboard daemon"))
-		}
 		request := wsdashboard.HireRequest{}
 		raw, _ := json.Marshal(args)
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return toolTextResponse(id, "", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(request.Harness), "pi") {
+			return toolTextResponse(id, "", fmt.Errorf("the Pi harness is retired; choose an available lead harness"))
+		}
+		host, ok := s.live.host.(sessionHireHost)
+		if !ok {
+			return toolTextResponse(id, "", fmt.Errorf("hiring requests require the dashboard daemon"))
 		}
 		// Open the env-less reply channel before accepting a request. Posting an
 		// outcome alone neither opens the piggyback nor publishes this return id.
@@ -120,7 +123,7 @@ func sessionHireTools() []map[string]any {
 			"reason":           stringProperty("Owner-facing explanation (required)."),
 			"recovery_context": stringProperty("Context to recover this request after compaction; required, at most 16 KiB."),
 			"label":            stringProperty("Suggested session label."),
-			"harness":          stringProperty("Suggested harness: claude or pi; omitted uses the new-session default."),
+			"harness":          stringProperty("Suggested hosted lead harness; omitted uses the new-session default."),
 			"model":            stringProperty("Suggested model; omitted uses the new-session default."),
 			"effort":           stringProperty("Suggested effort; omitted uses the new-session default."),
 			"format":           stringProperty("json for structured output; compact text otherwise."),

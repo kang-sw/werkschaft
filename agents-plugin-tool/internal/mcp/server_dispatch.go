@@ -1623,8 +1623,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		}
 		return toolTextResponse(req.ID, text+"\n", err)
 
-	// Retained name check: the Pi extension's own MCP tool names, forwarded to the
-	// daemon; the extension calls them by these names (TestPiForwardShowsSleepAndDeleted).
+	// Legacy history reads and retirement refusals remain callable through 0.52.
 	case "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait":
 		return s.handlePiTool(ctx, req.ID, params.Name, params.Arguments)
 	case "compact":

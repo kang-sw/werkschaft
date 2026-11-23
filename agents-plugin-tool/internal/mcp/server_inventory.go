@@ -78,13 +78,6 @@ func (s *Server) filteredTools() []map[string]any {
 		if permanentlyHiddenTool(name) && !s.cutoverListed(name) {
 			continue
 		}
-		if isPiTool(name) {
-			// Never listed: agent.* and mailbox.send replace them. Their
-			// handlers still answer (piUnavailable gates a call), so a
-			// session started on an older plugin keeps working until they
-			// are deleted.
-			continue
-		}
 		if userCommandTool(name) && !s.userCommandsListed() {
 			// Advertised only to an authenticated open hosted lead: its
 			// trusted binding, not a supplied key, names the session.
@@ -97,7 +90,7 @@ func (s *Server) filteredTools() []map[string]any {
 			if !s.agentListed() {
 				continue
 			}
-			if s.piForwards() {
+			if s.workerForwards() {
 				tool = agentWorkerTool(tool)
 			}
 		}
@@ -149,8 +142,8 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 // rewrite execution needs; discovery never runs a handler or writes a board.
 func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*subleadBoard, string) {
 	// A forwarding worker's delegation tools use its token, not its key.
-	piByToken := (isPiTool(name) || isAgentTool(name)) && s.piForwards()
-	if entry.scope != roleLead && !piByToken && (isLeadOnlyTool(name) || !roleAllowsTool(entry.scope, name)) {
+	workerByToken := (isPiTool(name) || isAgentTool(name)) && s.workerForwards()
+	if entry.scope != roleLead && !workerByToken && (isLeadOnlyTool(name) || !roleAllowsTool(entry.scope, name)) {
 		msg := fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
 		if entry.scope == roleDelegate && isLeadOnlyTool(name) {
 			// A spawn key is delegate-scoped by design; the lead-scoped key a

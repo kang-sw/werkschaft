@@ -248,14 +248,14 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	}
 	// With a runner of its own, the server applies the spawn's harness
 	// availability check: no harness is registered here.
-	f.s.pi.agents = wsagent.NewRunner(wsagent.Options{})
+	f.s.agents = wsagent.NewRunner(wsagent.Options{})
 	if got, errText := resolve("ticket-worker:medium"); !strings.Contains(errText, `harness "claude" is not registered in this daemon`) {
 		t.Fatalf("unavailable harness = %+v %q", got, errText)
 	}
 	if got, errText := resolve("discussion"); !strings.Contains(errText, `harness "agy" is not registered`) {
 		t.Fatalf("unavailable bundle harness = %+v %q", got, errText)
 	}
-	f.s.pi.agents = nil
+	f.s.agents = nil
 	if _, errText := resolve("nosuch:large"); !strings.Contains(errText, "tier must be small, medium, large, or xlarge") || !strings.Contains(errText, "not a tier node") {
 		t.Fatalf("unknown role error = %q", errText)
 	}

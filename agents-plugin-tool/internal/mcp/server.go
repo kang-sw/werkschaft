@@ -58,8 +58,9 @@ type Server struct {
 	dashboard dashboardLink
 	// tracker is this process's tracker host (tracker_host.go).
 	tracker trackerLink
-	// pi is the pi.* tools' daemon runner and live feed (pi_tools.go).
-	pi piHost
+	// agents is the dashboard daemon's runner.
+	agents           AgentHost
+	worktreeChildren WorktreeChildrenReader
 	// exec returns the daemon's hosted exec jobs and conversation is the
 	// hosted conversation this connection's trusted binding names
 	// (server_exec_hosted.go); nil and empty where there is none.

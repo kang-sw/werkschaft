@@ -32,7 +32,7 @@ var dashboardPackages = []struct {
 
 // perPackageDefault is a dashboard key whose default differs by package.
 func perPackageDefault(key any) bool {
-	return key == DashboardEnabledKey || key == DashboardPiSpawnKey
+	return key == DashboardEnabledKey || key == "dashboard.pi_spawn_enabled"
 }
 
 // dashboardOffManifest writes a copy of the ws dashboard manifest whose
@@ -117,9 +117,9 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 			if !ok || enabled.DefaultValue != pkg.enabled {
 				t.Fatalf("%s = %+v (declared %v), want default %v", DashboardEnabledKey, enabled.DefaultValue, ok, pkg.enabled)
 			}
-			piSpawn, ok := declared.lookup(DashboardPiSpawnKey)
+			piSpawn, ok := declared.lookup("dashboard.pi_spawn_enabled")
 			if !ok || piSpawn.DefaultValue != pkg.piSpawn {
-				t.Fatalf("%s = %+v (declared %v), want default %v", DashboardPiSpawnKey, piSpawn.DefaultValue, ok, pkg.piSpawn)
+				t.Fatalf("%s = %+v (declared %v), want default %v", "dashboard.pi_spawn_enabled", piSpawn.DefaultValue, ok, pkg.piSpawn)
 			}
 			port, ok := declared.lookup(DashboardPortKey)
 			if !ok || port.DefaultValue != int64(wsdashboard.DefaultPort) {

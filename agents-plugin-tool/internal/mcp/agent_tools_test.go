@@ -89,7 +89,7 @@ func listedAgentTools(s *Server) []string {
 
 // agentLeadFixture is a lead session on a Claude-hosted server over agents
 // (nil: no runner).
-func agentLeadFixture(t *testing.T, manifests string, agents PiAgents) piFixture {
+func agentLeadFixture(t *testing.T, manifests string, agents AgentHost) piFixture {
 	t.Helper()
 	setupMailboxTestEnv(t)
 	t.Setenv(envConfigManifests, manifests)
@@ -105,7 +105,7 @@ func agentLeadFixture(t *testing.T, manifests string, agents PiAgents) piFixture
 // the Pi install say, and in the agentless product mode too; without a
 // runner (or a token) it lists none, and a call refuses naming why.
 func TestAgentToolsListedWhereARunnerAnswers(t *testing.T) {
-	setPiVersion(t, "", errors.New("no pi here"))
+
 	wsflow := dashboardPackages[1]
 	for _, tc := range []struct {
 		name      string
@@ -123,7 +123,7 @@ func TestAgentToolsListedWhereARunnerAnswers(t *testing.T) {
 			if tc.noAgent {
 				t.Setenv(envNoAgent, "1")
 			}
-			var agents PiAgents
+			var agents AgentHost
 			if tc.agents {
 				agents = newFakePiAgents()
 			}

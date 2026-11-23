@@ -14,7 +14,7 @@ import (
 )
 
 type compactAccessRunner struct {
-	PiAgents
+	AgentHost
 	caller string
 }
 

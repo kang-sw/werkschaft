@@ -80,11 +80,11 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		resume = &b
 	}
 	out := wsagent.CompactResult{Status: "unsupported", Reason: "native compaction requires a hosted session"}
-	if runner, ok := s.pi.agents.(compactRunner); ok {
+	if runner, ok := s.agents.(compactRunner); ok {
 		out = runner.Compact(key, target, resume)
-	} else if s.piForwards() {
+	} else if s.workerForwards() {
 		// The token route limits this request to the token's own key.
-		if err := s.piCall(ctx, "compact", map[string]any{"target": target, "resume": resume}, piForwardTimeout, &out); err != nil {
+		if err := s.workerCall(ctx, "compact", map[string]any{"target": target, "resume": resume}, workerForwardTimeout, &out); err != nil {
 			out = wsagent.CompactResult{Status: "error", Reason: err.Error()}
 		}
 	}

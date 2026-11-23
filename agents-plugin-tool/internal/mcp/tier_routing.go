@@ -161,7 +161,7 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 	if err != nil {
 		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
 	}
-	if check, hosted := s.pi.agents.(harnessAvailability); hosted {
+	if check, hosted := s.agents.(harnessAvailability); hosted {
 		if why := check.SpawnableHarness(caller, res.Harness); why != "" {
 			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 		}

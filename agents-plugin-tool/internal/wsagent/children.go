@@ -360,8 +360,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 
 // ownChild refuses an id that is not one of parent's children.
 func (r *Runner) ownChild(tool, id string, parent ParentRef) error {
-	st, err := r.Get(id)
-	if err == nil && st.Parent != nil && *st.Parent == parent {
+	st, err := r.Lineage(id)
+	if err == nil && st.Backend == BackendPi && st.Parent != nil && *st.Parent == parent {
 		return nil
 	}
 	return &requestError{status: http.StatusNotFound, msg: fmt.Sprintf("%s: %s is not one of this conversation's Pi subagents (pi.list lists them)", tool, id)}
@@ -574,71 +574,35 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 		r.serveAgentToken(w, req, caller, op)
 		return
 	}
-	if check := r.opts.ChildCheck; check != nil {
-		if err := check(); err != nil {
-			// Retained name check: the pi.* tool names are the Pi extension's own.
-			writeAnswer(w, 0, nil, &requestError{status: http.StatusServiceUnavailable, msg: "pi." + op + ": " + err.Error()})
-			return
-		}
-	}
-	var body tokenRequest
-	if !decode(w, req, &body) {
-		return
-	}
 	parent := ParentRef{Kind: ParentConversation, ReplyID: caller.record().ReplyID}
-	// Retained name check: the pi.* tool names are the Pi extension's own
-	// (TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey).
-	tool := "pi." + op
 	switch op {
-	case "spawn":
-		st, err := r.spawnFor(caller, body.ChildSpawn)
-		writeAnswer(w, http.StatusCreated, st, err)
-		return
+	case "spawn", "send", "stop", "wait":
+		writeAnswer(w, 0, nil, errPiRetired)
 	case "list":
 		children := r.Children(parent)
+		children = slices.DeleteFunc(children, func(st State) bool { return st.Backend != BackendPi })
 		if children == nil {
 			children = []State{}
 		}
 		writeAnswer(w, http.StatusOK, map[string]any{"conversations": children}, nil)
-		return
-	case "send", "stop", "transcript", "wait":
-	default:
-		http.Error(w, "unknown agent route", http.StatusNotFound)
-		return
-	}
-	if err := r.ownChild(tool, body.ID, parent); err != nil {
-		writeAnswer(w, 0, nil, err)
-		return
-	}
-	switch op {
-	case "send":
-		if strings.TrimSpace(body.Message) == "" {
-			writeAnswer(w, 0, nil, badRequest("%s: message is required", tool))
+	case "transcript":
+		var body struct {
+			ID string `json:"id"`
+		}
+		if !decode(w, req, &body) {
 			return
 		}
-		st, err := r.Deliver(body.ID, Delivery{From: parent.ReplyID, Text: body.Message})
-		writeAnswer(w, http.StatusOK, st, err)
-	case "stop":
-		st, err := r.CloseConversation(body.ID)
-		if err == errClosed {
-			// A child already closed (a dashboard close) is as asked.
-			st, err = r.Get(body.ID)
+		if err := r.ownChild("pi.transcript", body.ID, parent); err != nil {
+			writeAnswer(w, 0, nil, err)
+			return
 		}
-		writeAnswer(w, http.StatusOK, st, err)
-	case "transcript":
 		records, err := r.Transcript(body.ID)
 		if records == nil {
 			records = []wslive.RingRecord{}
 		}
 		writeAnswer(w, http.StatusOK, map[string]any{"records": records}, err)
-	case "wait":
-		timeout := tokenWaitDefault
-		if body.TimeoutS > 0 {
-			timeout = time.Duration(body.TimeoutS * float64(time.Second))
-		}
-		timeout = min(timeout, tokenWaitMax)
-		res, err := r.wait(req.Context(), body.ID, timeout, true)
-		writeAnswer(w, http.StatusOK, res, err)
+	default:
+		http.Error(w, "unknown agent route", http.StatusNotFound)
 	}
 }
 

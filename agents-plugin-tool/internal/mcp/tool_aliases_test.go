@@ -107,7 +107,7 @@ func hostedBackendConnection(t *testing.T, backend string, regs map[string]wsage
 	}
 	s := f.connect(t)
 	runner := wsagent.NewRunner(wsagent.Options{Backends: regs})
-	s.pi.agents = runner
+	s.agents = runner
 	// The daemon's token binding names the lead's conversation, which its
 	// runner holds open on that backend.
 	s.conversation = rec.ReplyID
@@ -298,7 +298,7 @@ func TestHostedIdentityConnectionKeepsDottedNames(t *testing.T) {
 	// Not hosted: the connection stays ordinary.
 	t.Setenv(envHostedSession, "")
 	plain := NewServer(f.root, "test")
-	plain.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: descriptorRegistrations()})
+	plain.agents = wsagent.NewRunner(wsagent.Options{Backends: descriptorRegistrations()})
 	if listed := listedToolNames(t, plain); !listed["todo.list"] || listed["todo_list"] {
 		t.Fatalf("an ordinary connection lists dotted names: %v", listed)
 	}
