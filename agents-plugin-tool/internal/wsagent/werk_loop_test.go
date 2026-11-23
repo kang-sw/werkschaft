@@ -17,7 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
-func startTestWerkLoop(t *testing.T, model *werkModel, sink *memSink, called chan<- string) *werkLoop {
+func startTestWerkLoop(t *testing.T, dir, session string, model *werkModel, sink wsaudit.Sink, called chan<- string) *werkLoop {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fixture" {
@@ -66,8 +66,7 @@ func startTestWerkLoop(t *testing.T, model *werkModel, sink *memSink, called cha
 		}
 	}))
 	t.Cleanup(srv.Close)
-	dir := t.TempDir()
-	spec := StartSpec{Dir: dir, Root: dir, Model: "fixture-model", PermissionLevel: PermissionReadOnly,
+	spec := StartSpec{Dir: dir, Root: dir, SessionID: session, Model: "fixture-model", PermissionLevel: PermissionReadOnly,
 		MCPSession: &MCPSession{URL: srv.URL, Token: "fixture"},
 	}
 	if sink != nil {
@@ -124,7 +123,7 @@ func TestWerkLoopUsesOnlyDaemonToolsAndMapsTheTurn(t *testing.T) {
 		},
 	}}
 	sink := &memSink{}
-	loop := startTestWerkLoop(t, model, sink, called)
+	loop := startTestWerkLoop(t, t.TempDir(), "", model, sink, called)
 	if err := loop.SetModel("next-model"); err != nil {
 		t.Fatal(err)
 	}
@@ -151,24 +150,24 @@ func TestWerkLoopUsesOnlyDaemonToolsAndMapsTheTurn(t *testing.T) {
 	if err := loop.Close(); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "audit tool result", func() bool {
-		return slices.ContainsFunc(sink.events(), func(e wsaudit.Envelope) bool {
-			return e.Kind == wsaudit.KindToolResult && e.CallID == "read-call"
-		})
-	})
+	if !slices.ContainsFunc(sink.events(), func(e wsaudit.Envelope) bool {
+		return e.Kind == wsaudit.KindToolResult && e.CallID == "read-call"
+	}) {
+		t.Error("Close returned before the tool result was captured")
+	}
 	if err := loop.Send("after close"); err != io.ErrClosedPipe {
 		t.Errorf("send after close = %v", err)
 	}
 }
 
 func TestWerkLoopIsolatesTurnPanicAndInterruptsAnotherSession(t *testing.T) {
-	panicking := startTestWerkLoop(t, &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+	panicking := startTestWerkLoop(t, t.TempDir(), "", &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		func(context.Context, werk.Request) (*werk.Response, error) {
 			panic("sensitive panic detail")
 		},
 	}}, nil, nil)
 	started := make(chan struct{})
-	active := startTestWerkLoop(t, &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+	active := startTestWerkLoop(t, t.TempDir(), "", &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		func(ctx context.Context, _ werk.Request) (*werk.Response, error) {
 			close(started)
 			<-ctx.Done()
@@ -203,5 +202,43 @@ func TestWerkLoopIsolatesTurnPanicAndInterruptsAnotherSession(t *testing.T) {
 	end := nextWerkLoopEvent(t, active, func(e Event) bool { return e.TurnEnd })
 	if end.TurnReason != wslive.TurnAborted {
 		t.Errorf("turn ended with %q", end.TurnReason)
+	}
+}
+
+func TestWerkLoopKeepsSourcedAuditAcrossOpenings(t *testing.T) {
+	dir, session := t.TempDir(), werk.NewSessionID()
+	sink := newBoundarySink()
+	run := func(text string) {
+		t.Helper()
+		model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+			werkMessage(text),
+		}}
+		loop := startTestWerkLoop(t, dir, session, model, sink, nil)
+		if err := loop.Send(text); err != nil {
+			t.Fatal(err)
+		}
+		if end := nextWerkLoopEvent(t, loop, func(e Event) bool { return e.TurnEnd }); end.TurnError != "" {
+			t.Fatal(end.TurnError)
+		}
+		if err := loop.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("first request")
+	run("second request")
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.boundary) != 2 || len(sink.lost) != 0 {
+		t.Errorf("boundaries = %v, lost = %v", sink.boundary, sink.lost)
+	}
+	var usage int
+	for _, e := range sink.evs {
+		if e.Kind == wsaudit.KindSystem && e.Subkind == werk.LineUsage {
+			usage++
+		}
+	}
+	if usage != 2 {
+		t.Errorf("usage events = %d, want both turns", usage)
 	}
 }

@@ -56,7 +56,9 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	}
 	if spec.audit != nil {
 		harness, adapter := p.mapper.newAudit(spec.audit.Session.ID)
-		p.audit = newAuditCapture(spec.audit, harness, a.Session(), adapter)
+		// Capture sequences are local to this loop. Give each opening a
+		// distinct source even when it resumes an existing conversation.
+		p.audit = newAuditCapture(spec.audit, harness, werk.NewSessionID(), adapter)
 	}
 	go p.run(a)
 	return p, nil
@@ -66,17 +68,22 @@ func (p *werkLoop) run(a *werk.Agent) {
 	defer close(p.done)
 	defer close(p.events)
 	defer p.cancel()
+	defer func() {
+		if err := a.Close(); err != nil {
+			p.deliver(Event{Notice: "the conversation could not be closed: " + err.Error()})
+		}
+	}()
 	if p.audit != nil {
-		defer p.audit.close()
+		defer func() {
+			// Finish capture before releasing the log's writer lease,
+			// so a new opening cannot race the previous audit source.
+			p.audit.close()
+			<-p.audit.done
+		}()
 	}
 	defer func() {
 		if recover() != nil {
 			p.deliver(Event{TurnEnd: true, TurnError: "the werk session failed unexpectedly"})
-		}
-	}()
-	defer func() {
-		if err := a.Close(); err != nil {
-			p.deliver(Event{Notice: "the conversation could not be closed: " + err.Error()})
 		}
 	}()
 	_ = a.ServeCommands(p.ctx, p.cmds)
