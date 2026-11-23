@@ -263,6 +263,24 @@ Add a compact spatial position indicator and rapid scrubber along `#bcol`'s righ
      - **Wide-mode top clearance (3a/3b):** `.oq-wrap.wb-oq-top` clears Topic 0's `.tbar`/`.tsub` without regressing Phase 1 `rail0` or `TestRailLayoutReadsBeforeWrites`, and at rest on card `k` (unfloated and `[data-floating]`), `card.top - (padTop + --wb-rail-inset + capH(min(2, k)))` is within `1px` with top `.wb-rail-stack` bottom meeting `.tophead`;
      - **Performance cost-counting assertions (`performance.md` rule 6):** count DOM writes / forced layouts for dial sync on board update & scroll end, `over()` on unchanged pointer move (0 writes), popover hover entry (<= 1 forced layout), and zero idle `rAF` for BOTH dial and popover.
 
+### Result (9b3a332cc) - 2026-11-24
+
+Phase 2 implemented on `impl/develop/main-panel-snap-deck-p2` (commits `4fb9d24e7`, `e97362b52`, `18460586c`, `9b3a332cc`):
+
+- **Spec & design-review folding (`4fb9d24e7`, `e97362b52`):** Folded `(112)` left `.gal-rail` hover/drag preview popover and its tracked reference mockup (`ai-docs/assets/mockups/261123/main-panel-redesign/gal-rail-hover-preview-v1.html`), plus 12 `claude.xlarge` delta design-review technical fixes into the Phase 2 spec.
+- **Phase 2 implementation (`18460586c`):**
+  - Added right-side outer circle-chain dial (`dashboard-board-dial.js`) with sliding window (`>18` panels), window-frozen pointer drag-scrub + `WsBoardAnchor.scrubbing()`, `WsGallery.RailWheel` wheel stepping, open-ask & post-`boardHoldIndicators()` `[data-board-held]` rings, all-layout `.dgrid` placement, and stable `#bcol` padding across hide states.
+  - Added left `.gal-rail` hover & title-drag-hover preview popover (`gal-rail-preview.js`) with single reused compositor-positioned `.gal-pop`, Home/`+` compact pills, recursive docked split-tree mini panes with no outer header bar, and `d.to`/WAAPI spring-load sync.
+  - Applied wide-mode top clearance polish in `wswhiteboard/assets/rail.js` (preserving `TestRailLayoutReadsBeforeWrites` and `rail0` behavior).
+  - Registered 9 i18n keys across all 11 locale tables (`js.gal.preview.{home,home.drag,new,new.drag,append,spring}` and `js.board.dial.{label,asks,held}`) and added Node unit + Playwright Chromium test suites.
+- **Code-review & screenshot polish (`9b3a332cc`):** Hid `.gal-pop` on `show()`, extracted `.tname`/`.bc-nm` titles, rendered state-colored dot + state pill + `.trecap .rtext` recap in popover leaves, ordered `spring()` before `dragOver()`, added dial tooltip state badge & hide rules, and removed duplicate scrub listeners.
+- **Verification:**
+  - Node unit tests: 22/22 PASS (`board-anchor.test.cjs`, `board-dial-and-preview.test.cjs`).
+  - Playwright Chromium suites: 2/2 PASS (`board-snap-deck-p2.browser.cjs`, `board-scroll-p1-fixes.browser.cjs`).
+  - Go tests: `go test ./internal/wsi18n/...`, `wswhiteboard` rail/pill/render/sticky tests, and `wsdashboard` CSS collision / asset source / gallery / cards / pincol / i18n tests all PASS.
+  - Visual inspection: 7 Chromium screenshots (`/tmp/snap-deck-p2-shots/01..07.png`) verified across wide 4-col light/dark, 24-panel sliding window, split-page hover light/dark, narrow Home hover, and drag-hover drop-hint + spring bar.
+  - Pre-existing drift note: `TestBoardHoldPillBrowser` and `TestBoardToolbarPlacementAndCounts` remain pre-existing Phase 1 drift (untouched by Phase 2).
+
 ### Phase 3: Overview ("한 눈에 보기") Middle-Click Entry, Hero Highlight, and Wide 4-Col Quick-Look Live Preview
 
 Upgrade Overview into a fast mouse + keyboard Hero Panel switcher with stateful Quick Look preview in wide 4-column mode.
