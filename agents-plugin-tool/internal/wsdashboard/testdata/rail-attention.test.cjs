@@ -14,7 +14,12 @@ function row(id, asks) {
     setAttribute: (k, v) => { link[k] = v; },
     removeAttribute: k => { delete link[k]; }
   };
+  const listeners = new Set();
   return {
+    listeners,
+    addEventListener: (t, f) => { if (t === 'animationend') listeners.add(f); },
+    removeEventListener: (t, f) => { if (t === 'animationend') listeners.delete(f); },
+    fire: name => [...listeners].forEach(f => f({ animationName: name })),
     getAttribute: k => attrs[k] ?? null,
     setAttribute: (k, v) => { attrs[k] = v; },
     querySelector: () => link,
@@ -96,6 +101,22 @@ assert.equal(flashing(heldRow), false, 'later patches do not replay held flash')
 held.observe([row('held', '8')], 'shown');
 held.mark([heldRow], 'held', 'New question');
 assert.equal(flagged(heldRow), false, 'successful show clears a held flag');
+
+// The flash must not outlive its three flashes: the delayed breathe it overlaps
+// on the same opacity would never reach the compositor.
+const flashRow = row('flash', '');
+const flashState = window.WsRail.attention();
+flashState.sync([flashRow], 'shown', 'New question');
+flashRow.setAttribute('data-asks', '5');
+flashState.sync([flashRow], 'shown', 'New question');
+assert.equal(flashing(flashRow), true, 'a fresh flag flashes');
+flashRow.fire('attn-breathe');
+flashRow.fire('some-other-animation');
+assert.equal(flashing(flashRow), true, 'unrelated animations do not end the flash');
+flashRow.fire('attn-flash');
+assert.equal(flashing(flashRow), false, 'the flash class drops when the flashes end');
+assert.equal(flagged(flashRow), true, 'the flag stays, now breathing alone');
+assert.equal(flashRow.listeners.size, 0, 'the end listener removes itself');
 
 const railCss = fs.readFileSync(path.join(__dirname, '../assets/dashboard-rail.css'), 'utf8');
 assert.match(railCss, /\.rail \.rs\.attn::before\s*\{[^}]*linear-gradient\(90deg,[^}]*animation:\s*attn-breathe 1s ease-in-out infinite;/s, 'settled unread row pulses smoothly at 1Hz with amber gradient');

@@ -91,40 +91,86 @@
   // project from it without moving tree nodes, preserving disclosure state.
   var agpop = $("agpop"), agpin = $("agpin"), agisland = $("agisland"), agcompact = $("agcompact"), agidle = $("agidle");
   var AGPIN_KEY = "ws.dashboard.agpop.pin", agFull = {}, agRunning = 0, agSeen = false, agDismissed = false;
+  // agSize keeps the island's pixel size in step with its view. The streamed
+  // tree swaps every second or so, so a routine update must not read layout:
+  // a read right after the swap's DOM writes forces a synchronous layout of the
+  // whole page. A ResizeObserver reports the sizes after the frame's own layout
+  // instead. Its callback measures (agMeasure) and the compact view's numbers
+  // stay cached (agBox) for the next call, which only compares and, when
+  // something differs, writes. The idle and full views have no cheap
+  // signature of their own beyond the mode, the idle label and the observed
+  // sizes (agDone), so an update that changed none of them returns at once.
+  var agRO = typeof ResizeObserver === "function" ? new ResizeObserver(agObserved) : null;
+  var agWatched = [], agBox, agDone = "";
+  // agObserved re-measures only for a size the current mode depends on: the
+  // compact HUD's canvas and scroller, the full popover, or the column.
+  function agObserved(entries) {
+    if (!agisland) return;
+    var mode = agisland.getAttribute("data-mode");
+    var hit = entries.some(function (e) {
+      var t = e.target;
+      return t === $("convo") || (mode === "full" && t === agpop) || (mode === "compact" && t !== agpop);
+    });
+    if (!hit) return;
+    agDone = ""; agBox = undefined;
+    agMeasure();
+  }
+  function agWatch() {
+    if (!agRO) return;
+    [agcompact && agcompact.querySelector && agcompact.querySelector(".hud-canvas"),
+      agcompact && agcompact.querySelector && agcompact.querySelector(".hud-tree-scroll"), agpop, $("convo")].forEach(function (el) {
+      if (el && agWatched.indexOf(el) < 0) { agWatched.push(el); agRO.observe(el); }
+    });
+  }
   function agSize() {
     if (!agisland || agisland.hidden) return;
-    if (agisland.getClientRects && !agisland.getClientRects().length) return;
+    var mode = agisland.getAttribute("data-mode");
+    if (!agRO) { agMeasure(); return; }
+    agWatch();
+    if (mode === "compact") {
+      // The cache is empty on entering the mode (the observer ignored the
+      // canvas meanwhile); a zero box is a hidden island, which the observer
+      // reports again once it shows.
+      if (agBox) agApplyCompact(agBox); else agMeasure();
+      return;
+    }
+    agBox = undefined;
+    if (agSig(mode) !== agDone) agMeasure();
+  }
+  function agSig(mode) { return mode + "|" + (mode === "idle" && agidle ? agidle.textContent : ""); }
+  // agMeasure reads the island's sizes in one pass, before any write, and
+  // applies them. It forces layout, so it runs from the observer callback
+  // (clean layout) or, without a ResizeObserver, from every update.
+  function agMeasure() {
+    if (!agisland || agisland.hidden) return;
     var mode = agisland.getAttribute("data-mode"), view = mode === "full" ? agpop : mode === "compact" ? agcompact : agidle;
+    if (agisland.getClientRects && !agisland.getClientRects().length) {
+      if (mode === "compact") agBox = { hidden: true }; else agDone = agSig(mode);
+      return;
+    }
     if (mode === "compact" && view) {
       // Measure intrinsic rest size from .hud-canvas + .hud-tree-scroll padding
       // without mutating agisland/agcompact styles or interrupting hover.
       var scroll = view.querySelector ? view.querySelector(".hud-tree-scroll") : null;
       var canvas = view.querySelector ? view.querySelector(".hud-canvas") : null;
       var cs = scroll && typeof getComputedStyle === "function" ? getComputedStyle(scroll) : null;
-      var padX = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : (scroll ? 16 : 0);
-      var padY = cs ? (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) : (scroll ? 12 : 0);
       var cRect = canvas && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
-      var cw = canvas ? (cRect && cRect.width ? Math.ceil(cRect.width) : canvas.offsetWidth) : view.offsetWidth;
-      var ch = canvas ? (cRect && cRect.height ? Math.ceil(cRect.height) : canvas.offsetHeight) : view.offsetHeight;
-      var naturalW = cw + padX;
       var convo = $("convo");
-      var availW = convo && convo.getBoundingClientRect ? Math.floor(convo.getBoundingClientRect().width) - 16 : 0;
-      var width = availW > 0 ? Math.min(naturalW, availW) : naturalW;
-      var sbH = scroll && naturalW > width ? Math.max(0, (scroll.offsetHeight || 0) - (scroll.clientHeight || 0)) : 0;
-      var height = ch + padY + sbH;
-      var wPx = width + "px", hPx = height + "px";
-      var prevW = agisland.style.getPropertyValue ? agisland.style.getPropertyValue("--ag-cw") : agisland.style["--ag-cw"];
-      var prevH = agisland.style.getPropertyValue ? agisland.style.getPropertyValue("--ag-ch") : agisland.style["--ag-ch"];
-      if (prevW === wPx && prevH === hPx && agisland.style.width === wPx && agisland.style.height === hPx) return;
-      if (prevW !== wPx) agisland.style.setProperty("--ag-cw", wPx);
-      if (prevH !== hPx) agisland.style.setProperty("--ag-ch", hPx);
-      if (agisland.style.width !== wPx) agisland.style.width = wPx;
-      if (agisland.style.height !== hPx) agisland.style.height = hPx;
+      agBox = {
+        padX: cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : (scroll ? 16 : 0),
+        padY: cs ? (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) : (scroll ? 12 : 0),
+        cw: canvas ? (cRect && cRect.width ? Math.ceil(cRect.width) : canvas.offsetWidth) : view.offsetWidth,
+        ch: canvas ? (cRect && cRect.height ? Math.ceil(cRect.height) : canvas.offsetHeight) : view.offsetHeight,
+        availW: convo && convo.getBoundingClientRect ? Math.floor(convo.getBoundingClientRect().width) - 16 : 0,
+        sbH: scroll ? Math.max(0, (scroll.offsetHeight || 0) - (scroll.clientHeight || 0)) : 0
+      };
+      agApplyCompact(agBox);
       return;
     }
     // Measure at the destination width without painting the temporary auto
     // height. Restore the current interpolated box before setting pixel targets,
     // so both dimensions can transition even during a streaming update.
+    agDone = agSig(mode);
     var box = agisland.getBoundingClientRect(), transition = agisland.style.transition;
     agisland.style.transition = "none";
     agisland.style.width = mode === "full" ? "500px" : "100%";
@@ -139,6 +185,20 @@
     agisland.style.transition = transition;
     agisland.style.width = width + "px";
     agisland.style.height = height + "px";
+  }
+  function agApplyCompact(m) {
+    if (m.hidden) return;
+    var naturalW = m.cw + m.padX;
+    var width = m.availW > 0 ? Math.min(naturalW, m.availW) : naturalW;
+    var height = m.ch + m.padY + (naturalW > width ? m.sbH : 0);
+    var wPx = width + "px", hPx = height + "px";
+    var prevW = agisland.style.getPropertyValue ? agisland.style.getPropertyValue("--ag-cw") : agisland.style["--ag-cw"];
+    var prevH = agisland.style.getPropertyValue ? agisland.style.getPropertyValue("--ag-ch") : agisland.style["--ag-ch"];
+    if (prevW === wPx && prevH === hPx && agisland.style.width === wPx && agisland.style.height === hPx) return;
+    if (prevW !== wPx) agisland.style.setProperty("--ag-cw", wPx);
+    if (prevH !== hPx) agisland.style.setProperty("--ag-ch", hPx);
+    if (agisland.style.width !== wPx) agisland.style.width = wPx;
+    if (agisland.style.height !== hPx) agisland.style.height = hPx;
   }
   function agOpen(open) {
     if (!agpop) return;
@@ -206,7 +266,7 @@
       if (agpop.hidden || agPinned() || (agisland || agpop).contains(e.target) || sbadge.contains(e.target)) return;
       agOpen(false);
     }, true);
-    window.addEventListener("resize", agSize);
+    window.addEventListener("resize", function () { agDone = ""; agBox = undefined; agSize(); });
     if (agisland) agisland.hidden = true;
     if (load(AGPIN_KEY) === "1") agPin(true);
     agProject();

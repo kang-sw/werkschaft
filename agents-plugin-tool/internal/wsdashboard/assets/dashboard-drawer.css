@@ -16,6 +16,8 @@
 .dr-in { position: relative; max-width: 1680px; margin: 0; }
 .dr-clip { position: absolute; top: var(--drtop, 48px); left: var(--dpad); right: var(--dpad); height: 0; overflow: hidden; pointer-events: auto; visibility: hidden; border-radius: 0 0 var(--wb-radius) var(--wb-radius); box-shadow: var(--wb-shadow-hi); }
 .drawer.open .dr-clip { visibility: visible; }
+/* a closed drawer is visibility: hidden, where animations lose the compositor, so its content waits paused */
+.drawer:not(.open) .dr-clip *, .drawer:not(.open) .dr-clip *::before, .drawer:not(.open) .dr-clip *::after { animation-play-state: paused !important; }
 .drawer.anim .dr-clip { transition: height .18s ease-out, visibility 0s linear .18s; }
 .drawer.anim.open .dr-clip { transition: height .18s ease-out, visibility 0s; }
 @media (min-width: 1600px) {
