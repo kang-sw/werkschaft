@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -53,6 +54,9 @@ func NewRunner(opts Options) *Runner {
 
 // SetLiveHost binds the daemon's RAM projection before Start.
 func (r *Runner) SetLiveHost(host wsdashboard.LiveHost) { r.opts.LiveHost = host }
+
+// SetAuditSink binds the daemon's capture sink before Start.
+func (r *Runner) SetAuditSink(sink wsaudit.Sink) { r.opts.AuditSink = sink }
 
 // Start loads every conversation record from the session registry, with no
 // process (lazy resume), and starts serving them. notify is called after

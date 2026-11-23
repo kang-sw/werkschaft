@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -78,6 +79,11 @@ type AgentMCPCallHost interface {
 // delivered in RAM. The daemon binds it before Start; no wire protocol changes.
 type AgentLiveHost interface {
 	SetLiveHost(LiveHost)
+}
+
+// AgentAuditHost receives the daemon's audit sink before Start.
+type AgentAuditHost interface {
+	SetAuditSink(wsaudit.Sink)
 }
 
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off

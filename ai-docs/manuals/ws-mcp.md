@@ -1465,20 +1465,20 @@ from a support conversation:
   thinking, and signature delta lines out of its ring and client stream.
   It skips only whole stdout lines that fit one record and match from the
   line's start; split or unmatched lines stay. Skipped lines consume no
-  sequence number. A daemon that sets the holder manager's `AuditChannel`
-  offers the holder audit channel on attach (an optional `audit` field; an
-  older holder ignores it and attaches as before, an older daemon never
-  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
+  sequence number. The daemon sets the holder manager's `AuditChannel` to
+  offer the optional `audit` field on attach. Capable Claude lead holders
+  with `--ring-skip` accept it. Older holders ignore the offer and attach
+  as before. On a negotiated connection the holder tees each skipped line
   as an unsequenced `audit` event anchored on the last kept stdout sequence
   and fences every kept run (`audit_fence`); lines skipped while no daemon
   is attached, or past the audit queue, are only counted in the fence. The
   daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
   before the kept lines a fence releases and never blocks the holder reader
-  or the stream mapper. Capture runs only when the runner has an
-  `AuditSink`; the shipped daemon sets neither yet (the audit store,
-  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
-  writes `meta.request = {id, prev_id, ctx}` on every event from a model
-  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  or the stream mapper. When the audit store opens, the daemon binds it as
+  the runner's `AuditSink` before hosted Claude and Codex sessions can start
+  or reattach. If the store is unavailable, hosted sessions still run.
+  The Claude adapter writes `meta.request = {id, prev_id, ctx}` on every
+  event from a model request (`wsaudit.RequestChain`): one chain for the lead and one per
   native subagent (`parent_tool_use_id`), advancing once per assistant
   message ID, text-only messages included; `ctx` is input + cache read +
   cache creation tokens and is absent without usage. Codex streams carry
