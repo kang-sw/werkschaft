@@ -826,8 +826,28 @@
   // topics stand in the gallery and have their own pages. Maintained as a
   // keyed cache rebuilt only on structural updates (settle, board mutations,
   // full reconcile) so steady-state navigation stays strictly O(1).
+  function anchorRecordsAffectOrder(records) {
+    if (!records || !records.length) return false;
+    var b = region("board");
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i], t = r.target;
+      if (!t) continue;
+      if (r.type === "childList") {
+        if (t === b || (t.classList && t.classList.contains("closed-page"))) return true;
+      } else if (r.type === "attributes") {
+        var p = t.parentNode;
+        if (p && (p === b || (p.classList && p.classList.contains("closed-page")))) return true;
+      }
+    }
+    return false;
+  }
+  function anchorDrainMutations() {
+    if (anchorBoardMO && anchorBoardMO.takeRecords && anchorRecordsAffectOrder(anchorBoardMO.takeRecords())) {
+      anchorCache = null;
+    }
+  }
   function anchorCards(rebuild) {
-    if (!rebuild && anchorBoardMO && anchorBoardMO.takeRecords && anchorBoardMO.takeRecords().length) anchorCache = null;
+    if (!rebuild && typeof anchorDrainMutations === "function") anchorDrainMutations();
     if (!rebuild && anchorCache) return anchorCache.list;
     var b = region("board"), out = [], byKey = new Map(), indexByNode = new Map(), railBefore = [], railCount = 0;
     if (b) {
@@ -859,7 +879,8 @@
   }
   function anchorCurrent() {
     if (anchorKey === null) return null;
-    if (anchorLast && anchorCache && anchorCache.indexByNode.has(anchorLast) && anchorLast.isConnected !== false && anchorId(anchorLast) === anchorKey) {
+    if (typeof anchorDrainMutations === "function") anchorDrainMutations();
+    if (anchorLast && anchorCache && anchorCache.indexByNode.has(anchorLast) && anchorLast.isConnected !== false && !anchorLast.hidden && !anchorLast.hasAttribute("data-state-filtered") && anchorId(anchorLast) === anchorKey) {
       if (typeof virtualStats !== "undefined") virtualStats.slotVisits++;
       return anchorLast;
     }
@@ -1046,6 +1067,7 @@
   // jump resolves a board topic or card to its containing card, then lets the
   // caller scroll inside it.
   function anchorOwner(n) {
+    if (typeof anchorDrainMutations === "function") anchorDrainMutations();
     if (!anchorCache) anchorCards(true);
     for (var p = n; p && p.nodeType === 1 && p !== doc.body; p = p.parentNode) {
       if (anchorId(p) !== null && anchorCache.indexByNode.has(p)) return p;
@@ -1202,9 +1224,9 @@
     var list = anchorCards();
     if (!list.length) return;
     var cur = anchorCurrent() || list[0];
-    var at = list.indexOf(cur);
+    var at = anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : -1;
     if (at < 0) at = 0;
-    if (!card || list.indexOf(card) < 0) card = cur;
+    if (!card || !(anchorCache && anchorCache.indexByNode.has(card))) card = cur;
     var dy = +rawDy || 0;
     if (deltaMode === 1) dy *= 40;
     else if (deltaMode === 2) dy *= 800;
@@ -1331,8 +1353,15 @@
         if (anchorProg) anchorRealign(true);
       });
       anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });
-      anchorBoardMO = new MutationObserver(function () { anchorCache = null; });
-      anchorBoardMO.observe(region("board"), { childList: true });
+      anchorBoardMO = new MutationObserver(function (records) {
+        if (anchorRecordsAffectOrder(records)) anchorCache = null;
+      });
+      anchorBoardMO.observe(region("board"), {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["hidden", "data-state-filtered", "data-card", "data-topic", "data-rail"]
+      });
     }
     col.wbScrollOwner = true;
     anchorSettle(null);

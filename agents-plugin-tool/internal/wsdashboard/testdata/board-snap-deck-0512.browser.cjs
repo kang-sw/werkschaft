@@ -18,6 +18,7 @@
 //      virtualDescribeNode work with zero virtualStore prunes.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
@@ -660,7 +661,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.equal(afterRetry.gap2Count, 1, 'gap 2 entry appears exactly once');
 
     if (process.env.WS_LOOK_SHOTS) {
-      const shotDir = '/tmp/snap-deck-0513-followups-shots';
+      const shotDir = path.join(os.tmpdir(), 'snap-deck-0513-followups-shots');
       fs.mkdirSync(shotDir, { recursive: true });
       await page.evaluate(() => {
         const g1 = window.__gap1Match, g2 = window.__gap2Match;
@@ -716,7 +717,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
 
     if (process.env.WS_LOOK_SHOTS) {
       await page.waitForTimeout(80);
-      await page.screenshot({ path: '/tmp/snap-deck-0513-followups-shots/02-detached-gap2-selected-landed.png' });
+      await page.screenshot({ path: path.join(os.tmpdir(), 'snap-deck-0513-followups-shots', '02-detached-gap2-selected-landed.png') });
     }
     assert.deepEqual(errors, []);
   });
@@ -792,7 +793,6 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
 
     const s12 = await measure(12);
     const s24 = await measure(24);
-    console.log('Finding #12 Chromium metrics:', JSON.stringify({ n12: s12, n24: s24 }));
     assert.equal(s12.prunes, 0, 'zero prunes during steady-state step navigation (N=12)');
     assert.equal(s24.prunes, 0, 'zero prunes during steady-state step navigation (N=24)');
     assert.equal(s12.fullReconciles, 0, 'zero full reconciles during steady-state step navigation');

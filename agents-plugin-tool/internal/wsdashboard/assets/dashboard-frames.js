@@ -277,7 +277,7 @@
   // indexed again by every board swap and on any miss: a frame that moved
   // without Element.moveBefore (a pin, a reorder) took a new window, and a
   // message from a window that is no board frame finds none either way.
-  var frameWins = new Map();
+  var frameWins = new WeakMap();
   function indexFrames(scope) {
     if (scope && scope.nodeType === 1) {
       q("iframe.doc-frame", scope).forEach(function (f) {
@@ -286,13 +286,14 @@
       });
       return;
     }
-    frameWins = new Map();
+    frameWins = new WeakMap();
     boardQ("iframe.doc-frame").forEach(function (f) {
       if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
       if (f.contentWindow) frameWins.set(f.contentWindow, f);
     });
   }
   function docFrame(win) {
+    if (!win || typeof win !== "object") return undefined;
     var f = frameWins.get(win);
     if (f && f.contentWindow === win && inBoard(f)) return f;
     indexFrames();
