@@ -140,7 +140,7 @@ type auditSource interface {
 }
 
 // prepareAudit readies capture for spec's process when the runner gave it a
-// tap and the backend has an audit adapter (Claude, Codex).
+// tap and the backend has an audit adapter.
 func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
 	if spec.audit == nil {
 		return
