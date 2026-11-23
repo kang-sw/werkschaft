@@ -366,9 +366,14 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 	for _, info := range listed {
 		var meta holderSession
 		if json.Unmarshal(info.Session, &meta) != nil || retiredPiHolders[info.ID] ||
-			meta.Kind == holderKindPiWorker || meta.Backend == BackendPi ||
-			(meta.Kind == holderKindLead && meta.Label == LeadProfilePi) {
+			meta.Kind == holderKindPiWorker || meta.Backend == BackendPi {
 			// Pi history is closed, but its holders retain ownership of their processes.
+			continue
+		}
+		// Older lead descriptors recorded only the profile name. A custom
+		// profile could have launched Pi, and current config cannot establish
+		// the backend that originally launched an orphaned holder.
+		if meta.Kind == holderKindLead && meta.Backend == "" {
 			continue
 		}
 		if (meta.Kind != holderKindLead && meta.Kind != holderKindAgentWorker) || owned[info.ID] || r.holders.isRejected(info.ID) {

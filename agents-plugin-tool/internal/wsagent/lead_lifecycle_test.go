@@ -237,13 +237,11 @@ func TestLeadStartEndsThePreviousHolderFirst(t *testing.T) {
 	})
 }
 
-// TestLeadOrphanHolderIsEndedAfterTheFirstScan: a lead holder no
-// conversation owns runs a process nobody can reach; it is ended once the
-// first scan has shown every holder. A holder of another kind is not the
-// runner's to end.
+// The first scan ends an orphaned lead holder with an identified supported
+// backend. Terminal holders are outside the conversation sweep.
 func TestLeadOrphanHolderIsEndedAfterTheFirstScan(t *testing.T) {
 	h := newLeadHarness(t)
-	orphan := h.holders.add(holderSession{Kind: "lead", ReplyID: "gone"})
+	orphan := h.holders.add(holderSession{Kind: holderKindLead, Backend: BackendClaude, ReplyID: "gone"})
 	other := h.holders.add(map[string]any{"kind": "terminal"})
 	h.start()
 	eventually(t, "the orphan to be ended", func() bool { return h.holders.opCount("stop "+orphan) == 1 })

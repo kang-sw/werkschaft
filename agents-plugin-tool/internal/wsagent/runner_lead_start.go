@@ -46,7 +46,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		}
 	}
 	host := c.r.opts.Holders
-	holder := &holderChild{host: host, table: &c.r.holders, session: holderSession{Kind: holderKindLead, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Label: rec.Profile}}
+	holder := &holderChild{host: host, table: &c.r.holders, session: holderSession{Kind: holderKindLead, Backend: rec.Backend, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Label: rec.Profile}}
 	instructions := ""
 	if attach {
 		holder.id, holder.skipTo = rec.HolderID, rec.HolderSeq
