@@ -41,9 +41,8 @@ func agentDaemonMCP(root string) (wsagent.MCPCommand, error) {
 	if err != nil {
 		return wsagent.MCPCommand{}, err
 	}
-	// The in-process caller does not inherit the daemon environment.
-	// Its MCP server must resolve the session key and policy in the same
-	// stores that the runner used to mint and configure the session.
+	// Bind the MCP caller to the same stores the runner used to mint the
+	// session key and configure its policy.
 	for _, key := range []string{"WS_CACHE_HOME", "WS_CONFIG_HOME"} {
 		if value := os.Getenv(key); value != "" {
 			path, err := filepath.Abs(value)
@@ -51,6 +50,15 @@ func agentDaemonMCP(root string) (wsagent.MCPCommand, error) {
 				return wsagent.MCPCommand{}, fmt.Errorf("resolve %s for hosted MCP: %w", key, err)
 			}
 			cmd.Env[key] = path
+		}
+	}
+	if goruntime.GOOS == "windows" {
+		// Hosted exec resolves Git Bash against the MCP caller's search
+		// path. Windows has no default shell path for this form of exec.shell.
+		for _, key := range []string{"PATH", "PATHEXT"} {
+			if value, ok := os.LookupEnv(key); ok {
+				cmd.Env[key] = value
+			}
 		}
 	}
 	return cmd, nil
