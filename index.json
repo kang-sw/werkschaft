@@ -534,6 +534,9 @@
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
     },
+    "261123-bug-ws-audit-live-capture-unwired": {
+      "registered_at": "2026-11-23T02:23:30Z"
+    },
     "261123-bug-ws-audit-span-sentinel-rescan": {
       "registered_at": "2026-11-23T01:23:15Z",
       "lease": {
