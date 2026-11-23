@@ -18,6 +18,7 @@
   --wb-toast-warn: #f2c06b;
   --ring-think: #6a4fc4;
   --ring-tool: #0284c7;
+  --d-hud-ring-tool-tip: #38bdf8;
   --ring-hold: #0e7a83;
   --ring-perm: #d97706;
   --ring-fail: #c0262d;
@@ -41,6 +42,7 @@
     --wb-toast-warn: #9a5a00;
     --ring-think: #967af7;
     --ring-tool: #38bdf8;
+    --d-hud-ring-tool-tip: #7dd3fc;
     --ring-hold: #2dd4bf;
     --ring-perm: #f59e0b;
     --ring-fail: #f0797e;
@@ -63,6 +65,7 @@
   --wb-toast-warn: #9a5a00;
   --ring-think: #967af7;
   --ring-tool: #38bdf8;
+  --d-hud-ring-tool-tip: #7dd3fc;
   --ring-hold: #2dd4bf;
   --ring-perm: #f59e0b;
   --ring-fail: #f0797e;

@@ -51,15 +51,48 @@ async function checkKeyedRebuild(frame) {
     };
     const h3 = node('h3'), h4 = node('h4'), h5 = node('h5');
     const ring = h3.querySelector('.hud-ring');
-    const animation = ring.getAnimations({ subtree: true })[0];
+    const spinAnim = () => ring.getAnimations({ subtree: true }).find(a => a.animationName === 'hud-spin');
+    const animation = spinAnim();
     const startTime = animation?.currentTime;
     const delay = id => parseFloat(getComputedStyle(node(id).querySelector('.hud-ring')).animationDelay) * 1000;
     const stagger = [delay('h3'), delay('h5')];
     await new Promise(resolve => setTimeout(resolve, 65));
     project(source);
     const same = node('h3') === h3 && node('h4') === h4 && node('h5') === h5 &&
-      node('h3').querySelector('.hud-ring') === ring && ring.getAnimations({ subtree: true })[0] === animation;
+      node('h3').querySelector('.hud-ring') === ring && spinAnim() === animation;
     const advanced = animation?.currentTime - startTime;
+    // In-place tool -> thinking -> tool preserves exact animation instance, stamp, and delay while transitioning colors over 0.5s.
+    const toolRingStyle = getComputedStyle(ring);
+    const beforeToolArc = toolRingStyle.getPropertyValue('--d-hud-ring-arc').trim();
+    const beforeToolTip = toolRingStyle.getPropertyValue('--d-hud-ring-tip').trim();
+    const beforeToolBg = toolRingStyle.backgroundColor;
+    const beforeToolDelay = delay('h3');
+    const beforeToolStamp = ring.wsAnimationStamp;
+    const beforeToolTransition = toolRingStyle.transitionProperty;
+    const beforeToolDuration = toolRingStyle.transitionDuration;
+    const inPlaceThink = structuredClone(source);
+    inPlaceThink.roots.find(r => r.id === 'h1').children.find(c => c.id === 'h2').children.find(c => c.id === 'h3').state = 'thinking';
+    project(inPlaceThink);
+    const sameAnimThink = spinAnim() === animation;
+    const thinkDelayInPlace = delay('h3');
+    const thinkStampInPlace = ring.wsAnimationStamp;
+    const thinkAnimName = getComputedStyle(ring, '::before').animationName;
+    const activeTransitions = ring.getAnimations().map(a => a.transitionProperty).filter(Boolean).sort();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const thinkRingStyle = getComputedStyle(ring);
+    const afterThinkArc = thinkRingStyle.getPropertyValue('--d-hud-ring-arc').trim();
+    const afterThinkTip = thinkRingStyle.getPropertyValue('--d-hud-ring-tip').trim();
+    const afterThinkBg = thinkRingStyle.backgroundColor;
+    project(source);
+    const sameAnimBackToTool = spinAnim() === animation;
+    const backToToolDelay = delay('h3');
+    const backToToolStamp = ring.wsAnimationStamp;
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const settledToolStyle = getComputedStyle(ring);
+    const settledToolArc = settledToolStyle.getPropertyValue('--d-hud-ring-arc').trim();
+    const settledToolTip = settledToolStyle.getPropertyValue('--d-hud-ring-tip').trim();
+    const settledToolBg = settledToolStyle.backgroundColor;
+
     const changed = structuredClone(source);
     const h2 = changed.roots.find(r => r.id === 'h1').children.find(c => c.id === 'h2');
     h2.children.reverse();
@@ -73,7 +106,7 @@ async function checkKeyedRebuild(frame) {
       node('h3').getAttribute('aria-label').includes('sym-extract-updated') &&
       node('h4') === h4 && node('h5') === h5;
     const thinkingDelay = delay('h3');
-    const oldH4Animation = h4.querySelector('.hud-ring').getAnimations({ subtree: true })[0];
+    const oldH4Animation = h4.querySelector('.hud-ring').getAnimations({ subtree: true }).find(a => a.animationName === 'hud-spin');
     const oldH4Time = oldH4Animation?.currentTime;
     const oldClock = document.timeline.currentTime;
     h2.children = h2.children.filter(c => c.id !== 'h4');
@@ -81,28 +114,53 @@ async function checkKeyedRebuild(frame) {
     const removed = !node('h4') && node('h3') === h3;
     project(source);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const newH4Time = node('h4').querySelector('.hud-ring').getAnimations({ subtree: true })[0]?.currentTime;
+    const newH4Time = node('h4').querySelector('.hud-ring').getAnimations({ subtree: true }).find(a => a.animationName === 'hud-spin')?.currentTime;
     const elapsed = document.timeline.currentTime - oldClock;
-    const period = 1150;
+    const period = 1000;
     const drift = Number.isFinite(oldH4Time) && Number.isFinite(newH4Time)
       ? Math.abs((((newH4Time - oldH4Time - elapsed) % period) + period * 1.5) % period - period / 2)
       : null;
     const remounted = node('h4') !== h4 && node('h3') === h3 && node('h5') === h5;
     carrier.textContent = original;
     return { same, advanced, stagger, reordered, updated, thinkingDelay, removed, remounted, drift,
+      beforeToolArc, beforeToolTip, beforeToolBg, beforeToolDelay, beforeToolStamp,
+      beforeToolTransition, beforeToolDuration,
+      sameAnimThink, thinkDelayInPlace, thinkStampInPlace, thinkAnimName, activeTransitions,
+      afterThinkArc, afterThinkTip, afterThinkBg,
+      sameAnimBackToTool, backToToolDelay, backToToolStamp,
+      settledToolArc, settledToolTip, settledToolBg,
       animationName: getComputedStyle(ring, '::before').animationName };
   });
   assert.equal(result.same, true, 'stable keys preserve buttons, rings and running CSS animation');
   assert(result.advanced > 30 && result.advanced < 300, `animation advances across unchanged rebuild: ${result.advanced}`);
-  assert(result.stagger.every(x => Number.isFinite(x) && x <= 0 && x > -900), `tool delays are bounded: ${result.stagger}`);
+  assert(result.stagger.every(x => Number.isFinite(x) && x <= 0 && x > -1000), `tool delays are bounded: ${result.stagger}`);
   assert.notEqual(result.stagger[0], result.stagger[1], 'different agent keys stagger equal-period rings');
+  assert.equal(result.sameAnimThink, true, 'tool -> thinking keeps the exact same CSSAnimation instance');
+  assert.equal(result.sameAnimBackToTool, true, 'thinking -> tool keeps the exact same CSSAnimation instance');
+  assert.equal(result.thinkDelayInPlace, result.beforeToolDelay, 'tool -> thinking keeps identical animationDelay');
+  assert.equal(result.backToToolDelay, result.beforeToolDelay, 'thinking -> tool keeps identical animationDelay');
+  assert.equal(result.thinkStampInPlace, result.beforeToolStamp, 'tool -> thinking keeps identical wsAnimationStamp');
+  assert.equal(result.backToToolStamp, result.beforeToolStamp, 'thinking -> tool keeps identical wsAnimationStamp');
+  assert.equal(result.thinkAnimName, 'hud-spin', 'thinking uses shared hud-spin animation');
+  assert.match(result.beforeToolTransition, /background-color/);
+  assert.match(result.beforeToolTransition, /--d-hud-ring-arc/);
+  assert.match(result.beforeToolTransition, /--d-hud-ring-tip/);
+  assert.match(result.beforeToolDuration, /0\.5s/);
+  assert.deepEqual(result.activeTransitions, ['--d-hud-ring-arc', '--d-hud-ring-tip', 'background-color'], 'tool -> thinking starts 0.5s color transitions');
+  assert.notEqual(result.afterThinkArc, result.beforeToolArc, 'thinking arc color settles to distinct token');
+  assert.notEqual(result.afterThinkTip, result.beforeToolTip, 'thinking tip color settles to distinct token');
+  assert.notEqual(result.afterThinkBg, result.beforeToolBg, 'thinking track color settles to distinct token');
+  assert.equal(result.afterThinkArc, result.afterThinkTip, 'thinking arc and tip converge to --ring-think');
+  assert.equal(result.settledToolArc, result.beforeToolArc, 'returning to tool restores arc color');
+  assert.equal(result.settledToolTip, result.beforeToolTip, 'returning to tool restores tip color');
+  assert.equal(result.settledToolBg, result.beforeToolBg, 'returning to tool restores track color');
   assert.deepEqual(result.reordered, ['h4', 'h3'], 'sibling order follows new source order');
   assert.equal(result.updated, true, 'state and label update in place while siblings keep identity');
-  assert(result.thinkingDelay <= 0 && result.thinkingDelay > -1150, 'state change restamps within thinking period');
+  assert(result.thinkingDelay <= 0 && result.thinkingDelay > -1000, 'state change restamps within shared spin period');
   assert.equal(result.removed, true, 'removed keyed node disappears');
   assert.equal(result.remounted, true, 'reappearing node is new while surviving nodes stay mounted');
   assert(Number.isFinite(result.drift) && result.drift < 80, `remounted ring resumes phase within 80ms: ${result.drift}`);
-  assert.match(result.animationName, /hud-spin-tool/, 'restored state uses tool animation');
+  assert.match(result.animationName, /hud-spin/, 'restored state uses shared hud-spin animation');
 }
 
 (async () => {

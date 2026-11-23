@@ -355,15 +355,17 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .hud-emblem[data-h="codex"]  { background: #f2f2f2; color: #18181b; box-shadow: inset 0 0 0 1px rgb(24 24 27 / .18); }
 .hud-emblem[data-h="agy"]    { background: #3b7be8; color: #ffffff; }
 .hud-emblem[data-h="pi"]     { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
-.hud-ring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; z-index: 2; }
+@property --d-hud-ring-arc { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --d-hud-ring-tip { syntax: "<color>"; inherits: true; initial-value: transparent; }
+.hud-ring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; z-index: 2; transition: background-color 0.5s ease, --d-hud-ring-arc 0.5s ease, --d-hud-ring-tip 0.5s ease; }
 /* The conic arcs rotate on a pseudo-element under the ring's static mask (see
-   .hb .hbr in dashboard.css); the host keeps the static track. */
-.hud-node[data-state="thinking"] .hud-ring { padding: 1.5px; background: linear-gradient(color-mix(in srgb, var(--ring-think) 24%, transparent), color-mix(in srgb, var(--ring-think) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
-.hud-node[data-state="thinking"] .hud-ring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 28deg, var(--ring-think) 0deg 128deg, transparent 140deg 360deg); animation: hud-spin-think 1.15s linear infinite; animation-delay: inherit; }
-@keyframes hud-spin-think { to { transform: rotate(360deg); } }
-.hud-node[data-state="tool"] .hud-ring { padding: 1.5px; background: linear-gradient(color-mix(in srgb, var(--ring-tool) 24%, transparent), color-mix(in srgb, var(--ring-tool) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
-.hud-node[data-state="tool"] .hud-ring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 145deg, #7dd3fc 0deg 20deg, var(--ring-tool) 20deg 114deg, transparent 124deg 360deg); animation: hud-spin-tool .9s linear infinite; animation-delay: inherit; }
-@keyframes hud-spin-tool { to { transform: rotate(360deg); } }
+   .hb .hbr in dashboard.css); the host keeps the static track and transitions
+   track/arc colors via typed <color> custom properties. */
+.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring { padding: 1.5px; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); contain: paint; }
+.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(from 145deg, var(--d-hud-ring-tip) 0deg 20deg, var(--d-hud-ring-arc) 20deg 120deg, transparent 132deg 360deg); animation: hud-spin 1s linear infinite; animation-delay: inherit; }
+@keyframes hud-spin { to { transform: rotate(360deg); } }
+.hud-node[data-state="thinking"] .hud-ring { background-color: color-mix(in srgb, var(--ring-think) 24%, transparent); --d-hud-ring-arc: var(--ring-think); --d-hud-ring-tip: var(--ring-think); }
+.hud-node[data-state="tool"] .hud-ring { background-color: color-mix(in srgb, var(--ring-tool) 24%, transparent); --d-hud-ring-arc: var(--ring-tool); --d-hud-ring-tip: var(--d-hud-ring-tool-tip); }
 .hud-node[data-state="holding"] .hud-ring { border: 1.5px solid var(--ring-hold); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ring-hold) 20%, transparent); animation: hud-hold-breathe 1.8s ease-in-out infinite; }
 @keyframes hud-hold-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .34; } }
 .hud-node[data-state="idle"] { opacity: .42; }
@@ -427,7 +429,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .agidle .hud-obs { display: inline; margin: 0 0 0 5px; }
 /* The label sits in the island, so chat text behind the translucent glass must not read through it. */
 .dgrid.live > .agisland:is([data-mode="compact"], [data-mode="idle"]):has(.hud-obs) { background: var(--wb-card); backdrop-filter: none; -webkit-backdrop-filter: none; }
-@media (prefers-reduced-motion: reduce) { .agisland, .agview, .agpop, .agcompact::before, .hud-node, .hud-folded, .hud-close, .aclose { transition: none !important; } .hud-node[data-state] .hud-ring { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .agisland, .agview, .agpop, .agcompact::before, .hud-node, .hud-ring, .hud-ring::before, .hud-folded, .hud-close, .aclose { transition: none !important; } .hud-node[data-state] .hud-ring { animation: none; } }
 /* Keep the hidden full view measurable for the island's size transition;
    data-mode controls its visibility and the hidden attribute remains JS state. */
 .agpop, .agpop[hidden] { width: var(--ag-fw, 500px); max-height: 60vh; max-height: 60dvh; display: flex; flex-direction: column; overflow: hidden; }
