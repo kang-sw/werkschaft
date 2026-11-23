@@ -20,8 +20,8 @@ live by the daemon.
 ## Rules
 
 - Every ask goes on the board as an item.
-- One open ask per topic (a check counts); patch or re-ask it as the work
-  moves.
+- One item per decision, never bundled into a panel or a shared ask; patch or
+  re-ask it as the work moves.
 - A discussion reached a conclusion (decisions settled, a diagnosis finished,
   a ticket written or promoted) → before the topic closes or goes idle, post
   an item proposing the follow-up: what runs next (implementation, a ticket
