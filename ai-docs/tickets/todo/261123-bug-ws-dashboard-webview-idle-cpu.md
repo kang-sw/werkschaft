@@ -75,10 +75,37 @@ or persisted-data change. Classification follows
   2026-11-23). Phase 1 removes idle frame production; Phase 2 fixes the
   `ws.onmessage` layout-forcing path. Phase 2 is measured against the Phase 1
   result because frame production confounds the trace.
-- Active-state appearance must not change: spinners and attention cues look the
-  same while shown; only idle/hidden behavior changes.
 - This is the webview side only. Daemon CPU stays in
   `261111-bug-ws-dashboard-daemon-idle-cpu-windows`.
+- (1407) Idle target: renderer and GPU each under 2% of one core (60 s average,
+  window visible, no busy items) and under 0.5% when the window is hidden.
+  Rejected: the looser 5% / 1% target.
+- (1408) Keep animation quality; fix only how they paint. Every visible
+  animation stays. Phase 1 makes spins/pulses compositor-only
+  (`transform`/`opacity`), contains their invalidation to the element (own
+  layer / `contain`), and pauses only animations on invisible elements (hidden,
+  collapsed, zero-opacity, `display`/`visibility`-hidden ancestors) and when the
+  window is hidden. Reducing or pausing visible decorative animations is
+  revisited only if the (1407) target is missed after Phase 1. Rejected:
+  pausing visible decorative animations (`rail-blink`, skeleton pulse) up
+  front. Reason: the trace (main-thread Paint 604 ms, Layerize 443 ms,
+  UpdateLayoutTree 354 ms in 5.6 s idle) shows the animations are not
+  compositor-only and their invalidation is not contained, so the cost is the
+  paint path, not the animations themselves.
+- (1409) Off-screen (scrolled-out) pausing via IntersectionObserver is out of
+  scope for Phase 1; rely on invisibility gating and `display:none`/collapse
+  for hidden parts. IntersectionObserver already cost 188 ms in the trace.
+  Revisit only if the Phase 1 sample misses the target. Rejected: adding
+  observers up front.
+- (1410) Confirm with the hidden-window trace (Verification 1) whether the
+  Tauri/WebView2 window flips `document.hidden`/`shHidden` on minimize or
+  occlusion, so the existing `data-animation-paused` hook fires. If it does
+  not, drive the attribute from a Tauri window visibility/focus event
+  (client-side only, still T0). Rejected: assuming it works unverified.
+- (1411) Conic-gradient spinners (`hbspin`, `hud-spin-think`): rotate a
+  pseudo-element carrying the static gradient and keep the existing mask.
+  Rejected: replacing the ring with an SVG/border arc (also compositor-only but
+  changes the look).
 
 ## Phases
 
@@ -86,17 +113,25 @@ or persisted-data change. Classification follows
 
 Goals:
 
-- Perpetual CSS animations pause when the window/document is hidden, and when
-  the animated item is not actually busy/attention-worthy (scope of
-  "attention-worthy" and of off-screen pausing: see Open Decision Queue).
-  Extend the existing `data-animation-paused` mechanism rather than adding a
-  parallel one; make sure every perpetual animation listed above is covered.
-- Convert spinners that animate a custom property inside `conic-gradient`
-  (`hbspin`/`--hba`, `hud-spin-think`/`--hud-spin-a`) to compositor-only
-  `transform`/`opacity`, e.g. rotating a pseudo-element that carries the static
-  gradient and keeping the existing mask. Visual look while active stays the
-  same.
+- First diagnose, and record in the Result: why main-thread
+  Paint/Layerize/style recalc run every frame (DevTools paint flashing and
+  layer borders, or the Animations/Layers panels: which animations are not
+  composited and what each invalidates), and which of the 11 `dash-spin` and 7
+  `dash-pulse` instances sit on invisible elements (hidden, collapsed,
+  zero-opacity, hidden ancestors).
+- Keep every visible animation and its look. Make spins/pulses compositor-only
+  (`transform`/`opacity`) and contain their invalidation to the element (own
+  layer / `contain`), per (1408).
+- Convert `hbspin`/`--hba` and `hud-spin-think`/`--hud-spin-a` (custom property
+  inside `conic-gradient`) to a rotating pseudo-element with the existing mask
+  (1411).
+- Pause only animations on invisible elements and when the window/document is
+  hidden. Extend the existing `data-animation-paused` mechanism, cover every
+  perpetual animation listed above, and verify the hidden-window behavior
+  (1410). No off-screen observers (1409).
 - Keep `prefers-reduced-motion` behavior intact.
+- Target: (1407). If missed after this phase, revisit pausing visible
+  decorative animations.
 
 Deferred: message-path work (Phase 2); daemon CPU.
 
@@ -125,42 +160,10 @@ Deferred: protocol/payload changes (out of T0).
    while idle with the window visible and no busy items, and zero while the
    window is hidden.
 2. Live per-process CPU sample (the owner's sampler, `D:/Temp/werk-perf/samples.csv`,
-   exists today) with renderer + GPU idle under the target in Open Decision
-   (1407).
+   exists today) with renderer + GPU idle under the (1407) target (< 2% of one
+   core visible-idle, < 0.5% hidden).
 3. Active spinners look the same: side-by-side LOOK capture before/after for
    `hbspin`, `hud-spin-think`, `dash-spin`, attention ring/breathe.
 4. Test scope: only the touched Node test files, run locally with
    `node --test`. Go tests run only on w5090; no local `go test`, no ws
    executables, no Electron.
-
-## Open Decision Queue
-
-- [ ] (1407) class: policy — Numeric idle target for renderer + GPU. Reason:
-  sets the pass/fail line for Verification 2; the brief gives only the baseline
-  (renderer 31%, GPU 39% of one core). Recommendation: each of renderer and GPU
-  under 2% of one core averaged over 60 s idle with the window visible and no
-  busy items, and under 0.5% when hidden.
-- [ ] (1408) class: policy — Which animations are "attention-worthy" and must
-  keep running while visible? Reason: determines what Phase 1 may pause.
-  Recommendation: keep running only for a genuinely busy item (live tool-row
-  spinner, thinking HUD ring, running-agent pulse) and for rail `attn` items
-  awaiting the user; pause idle/decorative ones (`rail-blink`, skeleton
-  `dash-pulse`, `.dskel i`) and any attn item that is not currently
-  unresolved.
-- [ ] (1409) class: technical — Is pausing off-screen (scrolled out or
-  collapsed) animated items in scope? Reason: IntersectionObserver already cost
-  188 ms in the trace, so adding more observers may cost more than it saves.
-  Recommendation: out of scope for Phase 1; rely on busy-state gating and
-  `content-visibility`/`display:none` for collapsed parts; revisit only if the
-  Phase 1 sample misses the target.
-- [ ] (1410) class: technical — Does the Tauri/WebView2 window flip
-  `document.hidden` (and `shHidden`) on minimize/occlusion, so the existing
-  `data-animation-paused` hook fires? Reason: the idle trace was taken with the
-  window visible, so hidden behavior is unverified. Recommendation: confirm
-  with the hidden-window trace in Verification 1 first; if it does not flip,
-  drive the attribute from a Tauri window visibility/focus event (client-side
-  only, still T0).
-- [ ] (1411) class: technical — For the conic-gradient spinners, rotate a
-  pseudo-element vs. replace the gradient ring with an SVG/border arc. Reason:
-  both are compositor-only, but the rotating pseudo-element keeps the exact
-  look and the existing mask. Recommendation: rotating pseudo-element.
