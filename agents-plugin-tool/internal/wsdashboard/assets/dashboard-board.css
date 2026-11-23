@@ -68,15 +68,15 @@
 .bc-grip { height: 9px; flex: none; cursor: ns-resize; display: grid; place-items: center; touch-action: none; outline: 0; }
 .bc-grip::after { content: ""; width: 28px; height: 3px; border-radius: 2px; background: var(--wb-muted); transition: background .15s; }
 .bc-grip:hover::after, .bcard.drag .bc-grip::after, .bc-grip:focus-visible::after { background: var(--wb-primary); }
-.bcard[data-size="fold"] .bc-body, .bcard[data-size="fold"] .bc-grip { display: none; }
-.bcard[data-size="fold"] .bc-folded:not(:empty) { display: block; }
+.bcard[data-size="fold"]:not([data-overview-live]) .bc-body, .bcard[data-size="fold"]:not([data-overview-live]) .bc-grip { display: none; }
+.bcard[data-size="fold"]:not([data-overview-live]) .bc-folded:not(:empty) { display: block; }
 .bcard[data-size="fold"] .bc-fold .li, section.topic[data-size="fold"] > .tophead > .tbar > .t-fold .li { transform: rotate(-90deg); }
 /* Mask renderer-owned regions without mutating inner disclosures. Maximum
-   view reveals them temporarily and leaves the whole-card fold intact. */
-section.topic[data-size="fold"]:not([data-max]) > :not(.tophead),
-section.topic[data-size="fold"]:not([data-max]) > .tophead > :not(.tbar),
-section.topic[data-size="fold"]:not([data-max]) > .tophead > .tbar > details > :not(summary) { display: none !important; }
-section.topic[data-size="fold"]:not([data-max]) > .tophead > .tbar { padding-right: 12px; }
+   view and Quick Look reveal them temporarily and leave the whole-card fold intact. */
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > :not(.tophead),
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > :not(.tbar),
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > .tbar > details > :not(summary) { display: none !important; }
+section.topic[data-size="fold"]:not([data-max]):not([data-overview-live]) > .tophead > .tbar { padding-right: 12px; }
 /* Visible-only rendering: a topic's body parts (every child but its head)
    and a card's body skip style, layout and paint while far from the view
    (content-visibility). The heads stay out, so they still stick and cast the
@@ -180,6 +180,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .overview-preview-stage > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; contain: none; }
 .overview-preview-stage > .bcard > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; content-visibility: visible !important; }
 .overview-preview-stage > .bcard > .bc-in > .bc-grip { display: none; }
+.overview-preview-stage :is(.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close) { display: none; }
 .r-board [data-overview-motion] { content-visibility: visible !important; position: relative; }
 .r-board [data-overview-motion] :is(section.topic > :not(.tophead), .bc-body) { content-visibility: visible !important; }
 .r-board [data-overview-motion] :is(.tophead, .bc-hd) { position: static !important; }
@@ -233,7 +234,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    The board column's header row holds "+ Terminal" and its folder
    popover; it stays at the column's top while the cards scroll. */
 .bcard[data-kind="terminal"] .bc-body, .bcard[data-kind="terminal"][data-max] .bc-body { display: flex; flex-direction: column; overflow: hidden; }
-.bcard[data-kind="terminal"][data-size="fold"]:not([data-max]) .bc-body { display: none; }
+.bcard[data-kind="terminal"][data-size="fold"]:not([data-max]):not([data-overview-live]) .bc-body { display: none; }
 .tm-host { flex: 1 1 0; min-height: 0; overflow: hidden; background: var(--wb-card); }
 .tm-host .xterm { height: 100%; padding: 4px 0 4px 10px; }
 .tm-host .xterm-viewport { background: transparent !important; }
@@ -356,7 +357,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    the attach button carries the page's error count. "+ Web" stands in the
    status-line slot beside "+ Terminal" and shares its popover's look. */
 .bcard[data-kind="web"] .bc-body, .bcard[data-kind="web"][data-max] .bc-body { display: flex; flex-direction: column; overflow: hidden; }
-.bcard[data-kind="web"][data-size="fold"] .bc-body { display: none; }
+.bcard[data-kind="web"][data-size="fold"]:not([data-max]):not([data-overview-live]) .bc-body { display: none; }
 .wc-bar { flex: none; display: flex; padding: 5px 8px; border-bottom: 1px solid var(--wb-muted); }
 .wc-bar .fpin { flex: 1 1 auto; min-width: 0; }
 .wc-note { flex: none; padding: 6px 12px; font-size: 12.5px; color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 8%, var(--wb-card)); overflow-wrap: anywhere; }

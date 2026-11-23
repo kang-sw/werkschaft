@@ -530,6 +530,7 @@
     var seenKey = "t:" + key, h = topicSeen(incoming);
     if (boardSeen[seenKey] === h) return;
     boardSeen[seenKey] = h;
+    if (boardRendered && boardRendered.topics) boardRendered.topics[key] = incoming.cloneNode(true);
     var answers = readAnswers(liveNode);
     var frameH = frameHeights(liveNode);
     var history = window.wbHistory ? window.wbHistory.capture(liveNode) : null;

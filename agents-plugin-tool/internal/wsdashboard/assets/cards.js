@@ -841,7 +841,7 @@
       delete dotEls[k];
     });
     var rail = !!(lay && lay.rail), empty = !!(lay && lay.empty), shown = rail || empty;
-    galEl.hidden = !shown;
+    galEl.hidden = !shown && !doc.documentElement.hasAttribute("data-overview-preview");
     railEl.hidden = !rail;
     galEl.setAttribute("data-pos", String(pos));
     galEl.setAttribute("data-pages", String(n));

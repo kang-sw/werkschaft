@@ -104,8 +104,10 @@
   function boardBands() { return !!(window.wbHistory && window.wbHistory.bands && window.wbHistory.watch); }
   function frameNear(f) {
     if (!boardBands()) return true;
+    if (frameInOverviewPreview(f)) return true;
     var t = f.parentNode ? f.parentNode.closest("section.topic[data-topic]") : null;
     if (!t) return true;
+    if (t.hasAttribute("data-overview-live")) return true;
     bandTopic(t);
     var near = t.wbNear !== undefined ? t.wbNear : topicNear[t.getAttribute("data-topic")] === true;
     return near;
@@ -167,7 +169,7 @@
   // docked page (the root's data-gal-away).
   function topicBand(t, r, near) {
     if (!r.rect || (!r.rect.width && !r.rect.height)) return;
-    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
+    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !t.hasAttribute("data-overview-live") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
     t.wbNear = r.visible;
     topicNear[t.getAttribute("data-topic")] = r.visible;
     if (r.visible) mountFramesPaced(t);

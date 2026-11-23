@@ -7,6 +7,7 @@
   var doc = document, root = doc.documentElement, o = null, on = false, busy = false;
   var entry = null, spacer = null, tabs = new Map(), callbacks = [], releaseCallbacks = [];
   var preview = null, previewTimer = 0, previewHoverTarget = null, previewLocked = false;
+  var previewLeaveCleanup = null;
   var midHandled = false, midTimer = 0;
   var PREVIEW_DELAY = 120;
   var ITEM = "section.topic[data-topic], .bcard[data-card]";
@@ -36,6 +37,23 @@
   }
   function clearPreviewTimer() {
     if (previewTimer) { clearTimeout(previewTimer); previewTimer = 0; }
+  }
+  function cancelHoverPreview() {
+    clearPreviewTimer();
+    previewHoverTarget = null;
+  }
+  function unbindPreviewCancel() {
+    if (previewLeaveCleanup) previewLeaveCleanup();
+  }
+  function bindPreviewCancel() {
+    unbindPreviewCancel();
+    if (o && o.board && o.board.addEventListener) o.board.addEventListener("pointerleave", cancelHoverPreview);
+    if (window.addEventListener) window.addEventListener("blur", cancelHoverPreview);
+    previewLeaveCleanup = function () {
+      if (o && o.board && o.board.removeEventListener) o.board.removeEventListener("pointerleave", cancelHoverPreview);
+      if (window.removeEventListener) window.removeEventListener("blur", cancelHoverPreview);
+      previewLeaveCleanup = null;
+    };
   }
   function canPreview() {
     if (!o || !o.board) return false;
@@ -152,9 +170,11 @@
       preview.dockedRail.removeAttribute("aria-hidden");
     }
     if (preview.host && preview.host.parentNode) preview.host.remove();
-    if (preview.gal) preview.gal.hidden = preview.galWasHidden;
+    var gal = preview.gal, galWasHidden = preview.galWasHidden;
     root.removeAttribute("data-overview-preview");
     preview = null;
+    if (window.WsCards && window.WsCards.relayout) window.WsCards.relayout();
+    else if (gal) gal.hidden = galWasHidden;
   }
   function showPreview(slot) {
     if (!on || !slot || !canPreview()) return;
@@ -379,6 +399,7 @@
     o.board.appendChild(spacer);
     on = true;
     root.setAttribute("data-overview", "");
+    bindPreviewCancel();
     if (n) n.classList.add("overview-here");
     o.place(true);
     if (o.restoreFrames) o.restoreFrames(h);
@@ -413,6 +434,7 @@
       };
       if (!window.wbPill.apply(land)) return;
     }
+    unbindPreviewCancel();
     teardownPreview();
     var n = resolved;
     if (n && n.hasAttribute("data-state-filtered")) n = null;
@@ -604,6 +626,11 @@
       if (!preview || preview.node !== oldNode || !newNode) return;
       oldNode.removeAttribute("data-overview-live");
       newNode.setAttribute("data-overview-live", "");
+      if (oldNode.classList.contains("overview-here")) newNode.classList.add("overview-here");
+      if (tabs.has(oldNode)) {
+        tabs.set(newNode, tabs.get(oldNode));
+        tabs.delete(oldNode);
+      }
       preview.node = newNode;
     },
     toggle: function () { if (on) exit(null); else enter(null); },

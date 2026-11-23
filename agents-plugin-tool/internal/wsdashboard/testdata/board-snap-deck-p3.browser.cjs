@@ -758,3 +758,222 @@ test('Phase 3: wide 4-col Quick Look (0-docked + docked), 4+1 exemptions, moveBe
     await browser.close();
   }
 });
+
+test('Phase 3 review regressions: #1 boardRendered sync, #2 bgal relayout, #3 far doc-frame, #4 fold unfold, #5 hidden destructive btns, #6 replacePreviewNode, #7 pointerleave cancel', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const { context, page, errors } = await openFixture(browser, {
+      viewport: { width: 1720, height: 960 },
+      theme: 'dark',
+      savedCards: {
+        topics: [{ n: 'topic-4', p: 0, a: 0, b: null, f: true }],
+        cards: [],
+      },
+    });
+
+    // Inject a folded topic, a folded terminal bcard, and a far-offscreen doc-frame topic.
+    await page.evaluate(() => {
+      const board = document.getElementById('r-board');
+      const t4 = board.querySelector('section.topic[data-topic="topic-4"]');
+      t4.setAttribute('data-size', 'fold');
+      // Add pin/fold/raise buttons to topic-4 to verify #5 hiding inside Quick Look.
+      const tbar = t4.querySelector(':scope > .tophead > .tbar');
+      ['tpin', 't-fold', 't-raise'].forEach(cls => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ibtn ' + cls;
+        tbar.appendChild(b);
+      });
+    });
+
+    // Select topic-2 as Hero Panel and open Overview.
+    await page.evaluate(() => {
+      const t2 = document.querySelector('section.topic[data-topic="topic-2"]');
+      window.WsBoardAnchor.select(t2, { keep: true, still: false, smooth: false });
+      window.WsOverview.toggle();
+    });
+    await page.waitForFunction(() => document.documentElement.hasAttribute('data-overview-preview'));
+
+    // --- Regression #7: pointerleave on #r-board cancels pending 120ms hover switch ---
+    const t3Box = await page.locator('#r-board section.topic[data-topic="topic-3"]').boundingBox();
+    await page.mouse.move(t3Box.x + 40, t3Box.y + 15);
+    await page.waitForTimeout(30);
+    await page.evaluate(() => {
+      document.getElementById('r-board').dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }));
+    });
+    await page.waitForTimeout(160);
+    assert.equal(
+      await page.evaluate(() => document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic')),
+      'topic-2',
+      '#7: pointerleave on #r-board must cancel pending 120ms hover preview switch'
+    );
+
+    // --- Regression #2: WsCards.relayout() during Quick Look keeps #bgal visible; exit re-hides it ---
+    const galDuringRelayout = await page.evaluate(() => {
+      window.WsCards.relayout();
+      return {
+        hidden: document.getElementById('bgal').hidden,
+        hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+      };
+    });
+    assert.equal(galDuringRelayout.hidden, false, '#2: paintGallery must keep #bgal visible while data-overview-preview is active');
+    assert.equal(galDuringRelayout.hasPreviewAttr, true);
+
+    // --- Regression #6: replacePreviewNode preserves .overview-here and migrates tabs Map ---
+    const replaceCheck = await page.evaluate(() => {
+      const oldNode = window.WsOverview.previewNode();
+      const hadHere = oldNode.classList.contains('overview-here');
+      const clone = oldNode.cloneNode(true);
+      clone.classList.remove('overview-here');
+      clone.removeAttribute('data-overview-live');
+      oldNode.parentNode.replaceChild(clone, oldNode);
+      window.WsOverview.replacePreviewNode(oldNode, clone);
+      return {
+        hadHere,
+        newHasHere: clone.classList.contains('overview-here'),
+        newIsPreview: window.WsOverview.previewNode() === clone,
+      };
+    });
+    assert.equal(replaceCheck.hadHere, true);
+    assert.equal(replaceCheck.newHasHere, true, '#6: replacePreviewNode must copy .overview-here');
+    assert.equal(replaceCheck.newIsPreview, true);
+
+    // --- Regression #4 & #5: folded topic-4 unfolds in Quick Look, destructive btns hidden, .d-max visible ---
+    await page.evaluate(() => {
+      // Simulate band state being far-offscreen on topic-4 before previewing (#3).
+      const t4 = document.querySelector('#r-board section.topic[data-topic="topic-4"]');
+      t4.wbNear = false;
+    });
+    await page.keyboard.press('ArrowDown'); // topic-3
+    await page.keyboard.press('ArrowDown'); // topic-4
+    await page.waitForFunction(() => document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic') === 'topic-4');
+    // Wait for far-offscreen doc-frame inside topic-4 to mount and size (#3).
+    await page.waitForFunction(() => {
+      const f = document.querySelector('.overview-preview-stage section.topic[data-topic="topic-4"] iframe.doc-frame');
+      return f && parseFloat(f.style.height) > 50;
+    });
+
+    const t4Checks = await page.evaluate(() => {
+      const t4 = document.querySelector('.overview-preview-stage > section.topic[data-topic="topic-4"]');
+      const body = t4.querySelector('.tbody');
+      const frame = t4.querySelector('iframe.doc-frame');
+      return {
+        bodyDisplay: getComputedStyle(body).display,
+        tpinDisplay: getComputedStyle(t4.querySelector('.tpin')).display,
+        tfoldDisplay: getComputedStyle(t4.querySelector('.t-fold')).display,
+        traiseDisplay: getComputedStyle(t4.querySelector('.t-raise')).display,
+        dmaxDisplay: getComputedStyle(t4.querySelector('.d-max')).display,
+        frameMounted: !!frame && frame.tagName === 'IFRAME',
+      };
+    });
+    assert.notEqual(t4Checks.bodyDisplay, 'none', '#4: folded topic must unfold inside Quick Look');
+    assert.equal(t4Checks.tpinDisplay, 'none', '#5: .tpin hidden in Quick Look');
+    assert.equal(t4Checks.tfoldDisplay, 'none', '#5: .t-fold hidden in Quick Look');
+    assert.equal(t4Checks.traiseDisplay, 'none', '#5: .t-raise hidden in Quick Look');
+    assert.notEqual(t4Checks.dmaxDisplay, 'none', '#5: .d-max stays visible in Quick Look');
+    assert.equal(t4Checks.frameMounted, true, '#3: far-offscreen doc-frame must mount in Quick Look');
+
+    // Append a folded terminal .bcard inside #r-board and navigate to it (topic-5 -> topic-6 -> card-term-1) to verify #4 & #5 on cards.
+    await page.evaluate(() => {
+      const board = document.getElementById('r-board');
+      const card = document.createElement('article');
+      card.className = 'bcard';
+      card.setAttribute('data-card', 'card-term-1');
+      card.setAttribute('data-kind', 'terminal');
+      card.setAttribute('data-size', 'fold');
+      card.innerHTML =
+        '<div class="bc-in">' +
+          '<div class="bc-hd"><span class="bc-nm">Term Card</span><div class="bc-acts">' +
+            '<button type="button" class="ibtn bc-pin"></button>' +
+            '<button type="button" class="ibtn bc-fold"></button>' +
+            '<button type="button" class="ibtn bc-raise"></button>' +
+            '<button type="button" class="ibtn bc-max"></button>' +
+            '<button type="button" class="ibtn bc-close"></button>' +
+          '</div></div>' +
+          '<div class="bc-folded">folded summary</div>' +
+          '<div class="bc-body"><div class="tm-host">terminal body</div></div>' +
+          '<div class="bc-grip"></div>' +
+        '</div>';
+      const spacer = board.querySelector('.overview-spacer');
+      board.insertBefore(card, spacer || null);
+    });
+    await page.keyboard.press('ArrowDown'); // topic-5
+    await page.keyboard.press('ArrowDown'); // topic-6
+    await page.keyboard.press('ArrowDown'); // card-term-1
+    await page.waitForFunction(() => document.querySelector('.overview-preview-stage > .bcard')?.getAttribute('data-card') === 'card-term-1');
+    const cardChecks = await page.evaluate(() => {
+      const c = document.querySelector('.overview-preview-stage > .bcard[data-card="card-term-1"]');
+      return {
+        bodyDisplay: getComputedStyle(c.querySelector('.bc-body')).display,
+        foldedDisplay: getComputedStyle(c.querySelector('.bc-folded')).display,
+        pinDisplay: getComputedStyle(c.querySelector('.bc-pin')).display,
+        foldDisplay: getComputedStyle(c.querySelector('.bc-fold')).display,
+        raiseDisplay: getComputedStyle(c.querySelector('.bc-raise')).display,
+        closeDisplay: getComputedStyle(c.querySelector('.bc-close')).display,
+        maxDisplay: getComputedStyle(c.querySelector('.bc-max')).display,
+      };
+    });
+    assert.equal(cardChecks.bodyDisplay, 'flex', '#4: folded terminal bcard must preserve display:flex in Quick Look');
+    assert.equal(cardChecks.foldedDisplay, 'none', '#4: .bc-folded stays hidden in Quick Look');
+    assert.equal(cardChecks.pinDisplay, 'none', '#5: .bc-pin hidden in Quick Look');
+    assert.equal(cardChecks.foldDisplay, 'none', '#5: .bc-fold hidden in Quick Look');
+    assert.equal(cardChecks.raiseDisplay, 'none', '#5: .bc-raise hidden in Quick Look');
+    assert.equal(cardChecks.closeDisplay, 'none', '#5: .bc-close hidden in Quick Look');
+    assert.notEqual(cardChecks.maxDisplay, 'none', '#5: .bc-max stays visible in Quick Look');
+
+    // --- Regression #1: patchOverviewPreview updates boardRendered.topics so exit never reverts ---
+    await page.keyboard.press('ArrowUp'); // topic-6 (card-term-1 returns to #r-board without data-overview-live)
+    const cardRefolded = await page.evaluate(() => {
+      const c = document.querySelector('#r-board .bcard[data-card="card-term-1"]');
+      return {
+        hasLive: c.hasAttribute('data-overview-live'),
+        sizeAttr: c.getAttribute('data-size'),
+        bodyDisplay: getComputedStyle(c.querySelector('.bc-body')).display,
+      };
+    });
+    assert.equal(cardRefolded.hasLive, false, '#4: leaving Quick Look removes data-overview-live from folded bcard');
+    assert.equal(cardRefolded.sizeAttr, 'fold');
+    assert.equal(cardRefolded.bodyDisplay, 'none', '#4: folded bcard re-folds cleanly after leaving Quick Look');
+
+    await page.keyboard.press('ArrowUp'); // topic-5
+    await page.keyboard.press('ArrowUp'); // topic-4
+    await page.keyboard.press('ArrowUp'); // topic-3
+    await page.waitForFunction(() => document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic') === 'topic-3');
+    const patchedHtml = [1, 2, 3, 4, 5, 6].map(i =>
+      buildTopicHtml(i, {
+        withFrame: i === 2 || i === 3 || i === 4,
+        rev: i === 3 ? 'rev-3-post-patch' : `rev-${i}`,
+        askAnswered: i === 3,
+      })
+    ).join('\n');
+    await page.evaluate((html) => window.__testSwapBoard('h-reg-1', html), patchedHtml);
+
+    // Exit Overview via Escape: topic-3 must keep its live-patched content, #bgal re-hides, folded topic re-folds, tabindex restored.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => window.WsOverview.active() === false);
+    const postExit = await page.evaluate(() => {
+      const t3 = document.querySelector('#r-board section.topic[data-topic="topic-3"]');
+      const t2 = document.querySelector('#r-board section.topic[data-topic="topic-2"]');
+      const t4 = document.querySelector('#r-board section.topic[data-topic="topic-4"]');
+      return {
+        t3AskStatus: t3?.querySelector('.ask-status')?.textContent,
+        t3Rev: t3?.getAttribute('data-th'),
+        galHidden: document.getElementById('bgal').hidden,
+        t4BodyDisplay: getComputedStyle(t4.querySelector('.tbody')).display,
+        t4FoldedAttr: t4.getAttribute('data-size'),
+        t2Tabindex: t2.getAttribute('tabindex'),
+      };
+    });
+    assert.equal(postExit.t3AskStatus, 'Answer recorded: Option A', '#1: Overview exit must preserve live-patched topic without reverting');
+    assert.equal(postExit.t3Rev, 'rev-3-post-patch');
+    assert.equal(postExit.galHidden, true, '#2: teardownPreview must re-sync #bgal.hidden via WsCards.relayout()');
+    assert.equal(postExit.t4BodyDisplay, 'none', '#4: folded topic must re-fold cleanly on Overview exit');
+    assert.equal(postExit.t4FoldedAttr, 'fold');
+    assert.equal(postExit.t2Tabindex, null, '#6: unrove() must restore tabindex on replaced preview node');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+});
