@@ -41,6 +41,12 @@ type AgentHost interface {
 	Close()
 }
 
+// AgentStartupHost restores held sessions before publication and starts
+// closed-session presentation recovery when the listener accepts requests.
+type AgentStartupHost interface {
+	StartForPublication(notify func(replyID, project string), serving <-chan struct{})
+}
+
 // AgentPageInputHost distinguishes an explicit composer send from passive
 // inbox notifications. PageInput admits write against the conversation's
 // in-memory lifetime, then asynchronously restores a hidden session only if

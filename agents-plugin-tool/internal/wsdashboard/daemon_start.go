@@ -247,6 +247,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	}
 	d.openAudit(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	accepting := make(chan struct{})
 	// The runner takes its change hook before the first request can reach
 	// it.
 	if d.agents != nil {
@@ -259,7 +260,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if ah, ok := d.agents.(AgentAuditHost); ok {
 			ah.SetAuditSink(d.AuditSink())
 		}
-		d.agents.Start(d.agentChanged)
+		if startup, ok := d.agents.(AgentStartupHost); ok {
+			startup.StartForPublication(d.agentChanged, accepting)
+		} else {
+			d.agents.Start(d.agentChanged)
+		}
 	}
 	if err := writeEndpoint(opts.Dir, d.endpoint); err != nil {
 		// A detached daemon's returned error has no reader; the log does.
@@ -285,7 +290,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	// Read them once more as Serve starts accepting: a writer's notification
 	// is one attempt with a timeout, so one that could not be served before
 	// this point committed before this read, and every later one is served.
-	serving := &servingListener{Listener: listener, first: func() { go d.reloadAgentGlobalConfig() }}
+	serving := &servingListener{Listener: listener, first: func() {
+		close(accepting)
+		go d.reloadAgentGlobalConfig()
+	}}
 	go func() {
 		if err := d.server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(d.log, "dashboard: serve: %v\n", err)
