@@ -68,6 +68,11 @@ func checkReadOnlyArgv(argv []string) error {
 		if err := windowsWordRefusal(argv); err != nil {
 			return err
 		}
+		if name == "sort" {
+			if err := windowsSortRefusal(args); err != nil {
+				return err
+			}
+		}
 	}
 	switch name {
 	case "git":
@@ -147,6 +152,23 @@ func windowsWordRefusal(words []string) error {
 		}
 		if strings.HasPrefix(w, "@") {
 			return refuse("word %q: a word starting with @ is refused on Windows, where the MSYS runtime reads it as a response file", w)
+		}
+	}
+	return nil
+}
+
+// windowsSortRefusal refuses every slash-leading word of a sort launch. The
+// PATH may resolve sort to Windows' native sort.exe (System32 ahead of Git's
+// usr\bin), which reads /O file (and /OUTPUT, in any letter case) as an output
+// file and /T dir as a temporary directory. Its slash options are not
+// enumerated: a prefix or case variant it accepts would slip past a list, and
+// no read-only use needs a slash-leading word (an absolute path argument
+// reads the same through a relative one or stdin). It is a pure argument
+// check, so it runs on any platform.
+func windowsSortRefusal(args []string) error {
+	for _, a := range args {
+		if strings.HasPrefix(a, "/") {
+			return refuse("sort %s: a slash-leading word is refused on Windows, where the native sort.exe reads it as an option (/O writes a file)", a)
 		}
 	}
 	return nil

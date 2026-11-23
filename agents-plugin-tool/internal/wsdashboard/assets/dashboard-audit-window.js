@@ -236,7 +236,8 @@
 
   // Applies highlight matches AND literal redacted markers onto a plain line slice.
   // seamChar is the char index of the stored head/tail seam inside text, or -1: a
-  // match may not span it, as the server refuses a match across the omitted middle.
+  // match may not consume text from both sides of it, as the server matches the
+  // head and tail pieces apart; a regex match reaching the seam is clipped to it.
   function auRenderLineText(text, lineStartByte, lineRedactions, queryMatcher, matchState, seamChar) {
     // 1. Replace stored "***" redactions whose byte offset falls inside this line,
     // and any inline ⟦REDACTED:rule:len⟧ markers if present.
@@ -297,7 +298,20 @@
             continue;
           }
           var mStart = m.index, mEnd = mStart + m[0].length;
-          if (seamAt >= 0 && mStart < seamAt && mEnd > seamAt) { re.lastIndex = mStart + 1; continue; }
+          if (seamAt >= 0 && mStart < seamAt && mEnd > seamAt) {
+            // The server matches the head piece apart from the tail piece, so
+            // a greedy match reaching the seam is a hit cut at the seam. Retry
+            // the match at its start against the head piece alone: a pattern
+            // that still matches there is clipped to the head; one that needs
+            // the omitted middle (a literal spanning it) is no match.
+            if (!matcher.headRegex) matcher.headRegex = new RegExp(re.source, re.flags.replace("g", "") + "y");
+            matcher.headRegex.lastIndex = mStart;
+            var hm = matcher.headRegex.exec(val.slice(0, seamAt));
+            if (!hm || hm[0].length === 0) { re.lastIndex = mStart + 1; continue; }
+            m = hm;
+            mEnd = mStart + hm[0].length;
+            re.lastIndex = seamAt;
+          }
           if (mStart > rcursor) html += auEsc(val.slice(rcursor, mStart));
           var isCurR = matchState.total === matchState.activeIndex;
           html += '<mark class="au-hit' + (isCurR ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(m[0]) + "</mark>";
