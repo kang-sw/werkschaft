@@ -134,6 +134,129 @@ row range, cache lifetime and renderer choice in the phase Result with
 reproduction or trace must match and the precise frontend change it needs
 to verify. This phase is analysis only, with no product code changes.
 
+### Result (6d8a8bbb8) - 2026-11-23
+
+**Cause reproduced.** PTY output that scrolls an inactive tab or folded card
+queues a selection redraw even with no active selection. The redraw bypasses
+xterm's intersection pause and renders the whole viewport. Under
+`display: none`, each uncached glyph/style lookup reads a zero
+`offsetWidth`. The cache admits positive widths only, so every repeated
+lookup for that key measures again, across rows and later frames.
+
+- `assets/terminal.js:194-213,235-247,399-412` delivers PTY output via
+  `term.write` and loads only FitAddon. The bundle hash matched
+  `xterm-2107c771a5c2.js` using `terminal_routes.go:99-118`. The vendored
+  `assets/xterm/xterm.js:1` (columns 32892, 35859) installs DomRenderer
+  when no addon has set a renderer. Both fixture instances had
+  `.xterm-rows`. The cell-size service can use OffscreenCanvas
+  (columns 98834-101045), which accounts for valid cell dimensions on hidden
+  open despite zero DOM glyph widths.
+- In `xterm.js:1`, buffer scroll emits the core scroll event (columns
+  264099, 146268), which requests `SelectionService.refresh` (34423). Its
+  rAF emits the redraw signal (118104-118560) and calls
+  `RenderService.handleSelectionChanged` (34169, 114284-114560).
+  This directly reaches DomRenderer and `renderRows(0, rows - 1)` even
+  with undefined selection endpoints (81692-81895). Ordinary
+  `refreshRows` does honor the intersection pause (111884-112420).
+  `renderRows` calls `createRow` for each viewport row at `ydisp + row`
+  (83500-83939), where the row factory looks up width before span merging
+  (85889-89300).
+- The renderer owns one cache for its lifetime (75055-75450).
+  `setFont` clears it when the family, size or weights change, and
+  character-size and DPR handlers clear it directly (80657-81490,
+  83101-83430, 92440-93510). `_measure` writes the glyph repeated 32
+  times and reads `offsetWidth / 32` (93401). Across fixture refreshes
+  the cache identity stayed fixed, with zero post-open `clear`,
+  `setFont` or renderer replacements. The tab and fold used the 80-column,
+  24-row default (276443). Revealing the tab at 640 × 420 px kept 24 rows,
+  fit once to 86 columns and sent one matching size frame. The hidden
+  writes caused zero resizes or size frames. See
+  `assets/terminal.js:145-184,442-447,775-795` for the visibility and
+  resize guards.
+- The fixture had two mounted xterms while no terminal body was visible.
+  The restored inactive tab and the nearby folded card each had a
+  0 × 0 host and a paused render service. After the pause settled, each
+  redrew on its own output while the other stayed idle. The third was a fresh
+  off-screen board card, with no xterm or socket. Board cards start
+  within a 200 px intersection margin, including folded cards for their
+  previews, then keep the widget until removal. Restored tabs can open
+  unselected after the page's first show. Multiple distinct hidden tabs
+  may coexist, and previously mounted off-screen cards can still exist.
+  See `assets/terminal.js:373-398,438-460,527-535,753-814,837-909`,
+  `assets/dashboard.js:65-79`, `assets/dashboard-layout.css:118-122,214-215`,
+  `assets/dashboard-board.css:71,218` and `assets/cards.js:1619-1625`.
+  Composer `!` output uses `pre.textContent`
+  (`assets/dashboard-composer-exec.js:130`).
+
+**Before/after fixture.** Use a loopback static page with the real
+`terminal.js`, hash-named vendor bundle, xterm and dashboard CSS, and the
+vendored WsNerdSymbols font. Use a synthetic terminal list and WebSocket,
+a stored tab ID with `data-ctab="convo"`, a near folded card, and a fresh
+off-screen card 2,000 px down. Use an isolated headless Chrome profile
+(158.0.8127.36, 1200 × 850, DPR 1 for this run). Wait for both mounted
+render services to report paused before sending output. Each `out` message
+carries 56 lines of 72 alternating ASCII glyphs followed by CRLF, cycling
+normal, bold, italic and bold+italic with an SGR reset before every line.
+Use `AB` for the first five writes, including the folded card and the
+visible and re-hidden controls, then `CD` for fresh keys after hiding.
+Reveal using `syncCtab(true, true)` at 640 × 420 px, then hide using
+`syncCtab(false, false)`. Let rendering settle between writes
+(280 ms in the fixture after the initial readiness gate).
+
+Count `createRow`, cache lookups and positive/zero `_measure` results
+by instance and glyph/style. Mark each `renderRows` interval and count
+same-thread CDP `UpdateLayoutTree` and `Layout` events within it, using
+`devtools.timeline,blink.user_timing`. Time the enclosing
+`FireAnimationFrame`; the longest row-producing callback was 9.27 ms
+in this run. Fixture assertions passed.
+
+| Write or transition | Buffer rows passed to `createRow` | Width reads per refresh, positive / zero | `UpdateLayoutTree` / `Layout` in row render |
+|---|---|---:|---:|
+| Restored hidden tab, first output | 33–56 | 0 / 1,657 | 0 / 0 |
+| Same tab, repeat hidden output | 89–112 | 0 / 1,657 | 0 / 0 |
+| Near folded card, first output | 33–56 | 0 / 1,657 | 0 / 0 |
+| Tab revealed, first visible redraw | 89–112 | 9 / 0 | 9 / 9 |
+| Tab visible, repeat output | 145–168 | 0 / 0 | 0 / 0 |
+| Tab hidden again, warmed glyphs | 201–224 | 0 / 0 | 0 / 0 |
+| Tab hidden again, new glyphs | 257–280 | 0 / 1,656 | 0 / 0 |
+
+Each measured row refresh covered viewport indices 0–23, with 1,657 cell
+lookups from 23 populated rows plus the cursor cell. The cold visible
+redraw measured eight glyph/style keys and space once each. Later visible
+and warmed hidden redraws reused them. The fold preview still showed the
+last nonempty line. The fixture reproduces redundant width reads and records
+zero forced style recalculations in those hidden row renders. The owner's
+trace counts forced recalculations, and its 35.9 s of `offsetWidth` self time
+remains unattributed to a specific instance. This fixture already falls
+below 100 ms, so it measures regression work counts.
+
+**Phase 2 target.** Gate the direct selection redraw in xterm's
+`RenderService.handleSelectionChanged`, or at its renderer call, so hidden
+terminals retain the latest selection state and resume rendering it on show.
+Keep PTY writes and fold previews active. Repeat the fixture and require
+zero hidden `createRow` and glyph reads after settling, one positive read per
+visible cold key, warm reuse, and the existing character-size/DPR invalidation.
+
+Also queue a redraw with a known selection while visible and hide in the
+same task. Hold the hidden intersection notification in the test until the
+queued callback runs and assert zero `createRow` and glyph reads in that
+callback. Show the pane and check that the first drawable refresh shows
+the correct selection without any new output or selection input. Check glyph
+alignment and verify visible fit and PTY dimensions.
+
+For historical attribution and the 100 ms gate on the expensive path, the
+owner-side follow-up is a shareable before/after Werkschaft Performance
+capture with a known PTY output burst and no terminal panel visible. First
+reproduce the expensive path before the fix. Correlate expensive selection
+rAFs with a redacted terminal ID, host size and ancestor visibility,
+rows/columns and `ydisp`, cache identity and invalidation counts,
+zero/positive width-read counts by key, and stack-attributed
+`UpdateLayoutTree` and `Layout` durations. Compare a visible control replay of
+the same output in the same webview. Measure all relevant xterm rAFs in
+both captures, including callbacks that skip row rendering after the fix.
+Historical attribution and the expensive-path timing gate remain unverified
+until a comparable capture exists.
+
 ### Phase 2: Fix xterm refresh and width measurement (frontend: Claude)
 
 Use the Phase 1 Result to fix the source of excessive row refreshes and
