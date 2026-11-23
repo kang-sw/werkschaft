@@ -4,8 +4,10 @@ related:
   261113-bug-ws-installed-plugin-locked-out-by-newer-minor-dev-daemon: "the newer-minor lockout this ticket's floor complements; the floor stops the reverse case, an older minor winning the gap"
   261113-bug-ws-daemon-replace-stops-hosted-sessions: "earlier replacement-gap report; hosted sessions now survive under holders"
   261121-refactor-ws-daemon-metadata-sqlite: "moves agent.json and its sidecars into SQLite; Phase 3 here only reorders the restore, independent of where records live"
-sage-review-design: required
-sage-review-completeness: required
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: 5001442a4f9b77f1
+sage-review-design-reviewed: 5001442a4f9b77f1
 ---
 
 # Daemon replacement gap: refuse older-minor autostart, shorten the gap
@@ -84,7 +86,8 @@ found four contributing gaps.
     because the external Python launcher reads it raw.
   - Writes: the lock-owning daemon advances it atomically, only to a
     higher minor, after startup initialization and before publishing the
-    endpoint. Lowering it is governed by (5019).
+    endpoint. It is never lowered except by the `--below-floor` rollback
+    below.
   - Reads: one per lifecycle check, never on an interactive path.
   - An absent file is legacy state and admits any candidate. An unreadable
     or malformed existing file is a startup error, not an admit.
@@ -108,6 +111,30 @@ found four contributing gaps.
   - The Python launchers (ws, wsflow and Pi share one launcher blob) on
     absence admission, after candidate selection and before staging. This
     includes the hosted launcher's `last-running-executable.json` restart.
+- The floor binds every cold start, with no exception for an explicit
+  replacement: `dev.py rerun`, `daemon-start --replace`, desktop, plugin
+  upgrade and autostart all refuse a candidate below the floor.
+  - Rollback is an explicit `daemon-start --below-floor` flag. It admits
+    the lower candidate and lowers the floor to that candidate's own minor,
+    under the singleton lock, before the floor advance would run. No other
+    path lowers it.
+  - The public launcher routes `daemon-start` through `ensure_healthy`,
+    which checks floor admission before invoking Go
+    (`ws-mcp-launcher.py:1822-1865,2212-2218,2406-2421`). When
+    `--below-floor` is explicitly present, the launcher precheck admits the
+    candidate and forwards the flag, so the documented recovery command
+    reaches `StartDaemon`.
+  - Owner decision (5019)=a, 2026-11-23: one rule for every start matches
+    the never-downgrade contract, and a rollback is rare and deliberate.
+  - Rejected: autostart-only enforcement, where an explicit replacement
+    with no daemon running may start a lower minor and rewrite the floor.
+    It conflicts with the never-downgrade contract (302f38aac).
+  - Rejected: deferring the floor and shipping only Phases 2-5. It leaves
+    the gap (2180) asked to close.
+- Release placement: floor enforcement is the T3 boundary approved under
+  (5019), so the first release that contains Phase 1 is 0.52.0. Phase 1
+  merges into the review track only after 0.51.2 is cut. Phases 2-5 are T0
+  and may ship in a patch.
 - Never drain a healthy newer daemon, on any path. This is unchanged: it
   is the `keepRunning` rule (`wsdashboard/ensure.go:210-217`) and the
   "never downgrade" contract of
@@ -122,8 +149,7 @@ found four contributing gaps.
     existing hello check needs a live daemon, so this boundary is new
     (`ai-docs/manuals/release-compatibility.md` T3 rows). The first
     release pair that enforces the floor carries the minor bump and owner
-    approval under (5019), with the recovery path that question
-    settles.
+    approval granted under (5019), with the `--below-floor` recovery path.
 - `dashboard.log` is opened for append only after the singleton lock.
   - It rotates once at a fixed cap (8 MiB) to `dashboard.log.1`.
   - A byte counter is seeded from the file size once, so there is no stat
@@ -165,29 +191,6 @@ found four contributing gaps.
     still starts at admission (`ensure.go:261-295`).
   - Rejected: two daemons serving at once with a handover protocol. It
     breaks the singleton-lock design that every store relies on.
-
-## Open Decision Queue
-
-Last ID: (5019)
-
-- (5019) [open] [policy] Does the floor bind every cold start, including
-  explicit replacement, and how does a user roll back?
-  - Context: a design review found that letting an explicit replacement
-    start below the floor conflicts with the never-downgrade contract
-    (302f38aac). Enforcement is a new T3 boundary either way, so the first
-    enforcing release needs a minor bump and this approval.
-  - a. Strict: the floor binds every cold start, including `dev.py rerun`,
-    `daemon-start --replace` and desktop. Rolling back takes an explicit
-    `daemon-start --below-floor` flag, which lowers the floor to its own
-    minor. Enforcement ships in the next minor (0.52.0).
-  - b. Autostart only: an explicit replacement with no daemon running may
-    start a lower minor and rewrite the floor. Enforcement still ships in
-    the next minor.
-  - c. Defer the floor. Ship only Phases 2-5, which shrink the gap, and
-    keep (2180) open.
-  - Recommendation: a. One rule for every start matches the
-    never-downgrade contract. A rollback is rare and deliberate, so an
-    explicit flag is enough.
 
 ## Constraints
 
@@ -252,7 +255,9 @@ points above.
     daemon keeps serving.
   - The start intent reaches `StartDaemon`, and its recheck agrees with
     `Ensure` for each intent.
-  - The recovery path settled in (5019) works and is documented.
+  - `daemon-start --below-floor` admits a lower candidate, lowers the
+    floor to its minor, and is documented; no other path lowers it. Test
+    it through the launcher entry as well as the Go binary.
 - Update `ai-docs/manuals/ws-mcp.md` replacement section with the floor.
 
 ### Phase 2: Append-and-rotate dashboard log
