@@ -57,7 +57,7 @@ func resolveCompactionValue(r *wsconfig.Resolver, key, item, harness string, reg
 // compactTool is discoverable before use; an older daemon refuses the unknown
 // tool. It never falls back to sending a slash prompt from a caller.
 func compactTool() map[string]any {
-	return map[string]any{"name": "compact", "description": "Queue native compaction at the hosted session's next idle boundary. Write durable state to your agenda first. Returns queued, unsupported or error with a reason; queued is not completion. Discover this tool before calling an older daemon.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+	return map[string]any{"name": "compact", "description": "Queue compaction for the next hosted idle boundary. Save your agenda first. Discover support before calling. Queued means pending.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 		"session_key":  map[string]any{"type": "string", "description": "Your ws session key."},
 		"lead_summary": wscompact.LeadSummarySchema(),
 		"target":       map[string]any{"type": "string", "description": "Optional self key or owned descendant key / spawn address id:<id>; defaults to self."},

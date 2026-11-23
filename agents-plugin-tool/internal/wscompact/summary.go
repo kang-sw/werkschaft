@@ -36,17 +36,17 @@ func LeadSummarySchema() map[string]any {
 	properties := map[string]any{
 		"reread": map[string]any{
 			"type": "array", "maxItems": maxRereads, "items": map[string]any{"type": "string"},
-			"description": "Text files in this worktree to read again after compaction. The daemon inlines whole files within its byte budget.",
+			"description": "Worktree text files to inline within the byte budget.",
 		},
 	}
 	required := make([]string, 0, len(ProseFields()))
 	for _, field := range ProseFields() {
-		properties[field.Key] = map[string]any{"type": "string", "description": field.Heading + ". Use an empty string when no details need carrying forward."}
+		properties[field.Key] = map[string]any{"type": "string"}
 		required = append(required, field.Key)
 	}
 	return map[string]any{
 		"type": "object", "properties": properties, "required": required, "additionalProperties": false,
-		"description": "A hosted builtin lead compacting itself may supply these seven carry-forward fields and optional re-read paths.",
+		"description": "Builtin lead self-compaction prose. Use empty strings for sections with nothing to carry forward.",
 	}
 }
 
