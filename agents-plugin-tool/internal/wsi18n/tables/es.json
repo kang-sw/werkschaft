@@ -500,6 +500,8 @@
   "js.term.loadfail": "No se pudo cargar el emulador de terminal",
   "js.board.toolbar.label": "Acciones del tablero",
   "js.board.toolbar.overview": "Vista general",
+  "js.board.step.prev": "Previous card",
+  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Vista general (Ctrl+Q)",
   "js.board.toolbar.download": "Descargar",
   "js.board.toolbar.download.title": "Descargar este tablero como zip",

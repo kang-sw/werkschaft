@@ -500,6 +500,8 @@
   "js.term.loadfail": "L'émulateur de terminal n'a pas pu être chargé",
   "js.board.toolbar.label": "Actions du tableau",
   "js.board.toolbar.overview": "Vue d’ensemble",
+  "js.board.step.prev": "Previous card",
+  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Vue d’ensemble (Ctrl+Q)",
   "js.board.toolbar.download": "Télécharger",
   "js.board.toolbar.download.title": "Télécharger ce tableau au format zip",

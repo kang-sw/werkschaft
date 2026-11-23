@@ -113,6 +113,27 @@ The board swap currently defers a whole update during editing, Overview transiti
   bash D:/sys_lock.sh remote w5090 run <who> <min> --sync '<worktree>' -- 'export PATH=$HOME/sdk/go/bin:$PATH; cd agents-plugin-tool && python3 scripts/generate-package-assets.py && go test ./internal/wsdashboard/... ./internal/wswhiteboard/...' > D:/Temp/<purpose>/go-test.log
   ```
 
+### Result (24681115c) - 2026-11-23
+
+Landed on `impl/develop/ditch-runt-coil` (`03466dd2e`, `078c1f645`, `450ff97fb`, `945f6e78e`, `24681115c`): the Main Board scrolls by current card key. New `dashboard-board-anchor.js` (snap order, `data-current`, tab-scoped sessionStorage key, `scrollIntoView` + `scroll-margin-top`, prev/next toolbar buttons, wheel edge gate, `--board-usable/--board-toolbar/--board-runway` via ResizeObserver). Staging is per card (current card + editor card only); the frozen interval, exposure units, release-due, paged/top staging, FLIP motion and reload geometry are removed from `dashboard-board.js`. `boardKeep` is scoped to docked panes and the current card.
+
+Outer-board cost per update (`board-anchor.test.cjs`, 40 topics + 3 cards, current = T20, spy `wbHistory`):
+
+| update | outer rect | outer top | checkVisibility | getComputedStyle | other-card rect | current-card rect | keep | rendered | DOM ops |
+|---|---|---|---|---|---|---|---|---|---|
+| content, non-current | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 7 |
+| size-only, above/below | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 3 |
+| content, current (staged) | 1 | 0 | 0 | 0 | 0 | 2 | 1 | 3 | 3 |
+| frame height, current | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 |
+
+The current key and alignment are unchanged for non-current updates. `boardExposureUnits`, `boardReleaseDue`, `boardWithSnap`, `boardLivePanels` and the all-board `boardKeep` scan no longer exist on the update path (the only outer read is one `#bcol` rect for the usable view when the current card is staged).
+
+Verification: `node --test` board-anchor 14/14, board-exposure 1/1, board-home-ack 7/7, board-navigation 36/36, session-view-anchors 2/2, gallery-wheel 22/22. Go on w5090 (`go test ./internal/wsdashboard/... ./internal/wswhiteboard/...`): wsdashboard `ok`; wswhiteboard fails only `TestTopicStateBadge*` with "node required" (w5090 has no node; unrelated to this change). Static Chromium LOOK (before/after, short stacking, tall inner scroll, last-card runway, 0 px anchoring shift): after-captures confirm caps and alignment; the reference board is shown on the base ref for comparison. `frontend-scroll.test.js` test 2 (`firstEntryEl is not defined`) fails identically on the base commit.
+
+Decisions: topic section is its own scroll owner (no DOM restructuring, frame graft paths untouched); `overflow-anchor` auto only on the current card (`:is(...)[data-current]:not([data-max])` to win specificity); tests of the removed model (Go `board_viewed`/motion tests and the four viewed-* browser pairs) were deleted, their node counterparts rewritten.
+
+Open for Phase 2 / follow-up: Overview and drag still defer the whole board swap rather than admitting other-card updates; the editor card counts toward the pending badge; alignment sits ~8 px below the toolbar in the harness (padding); browser-level checks (maximized overlays, lazy-history jump/prepend, reused frames, real-board layout counts) were not run in a real dashboard (no live dashboard allowed); `sessionBoardAnchors/restoreSessionBoard` stubs are dead code left for cleanup.
+
 ### Phase 2: Load visible topic bodies outward from the current card
 
 Start after Phase 1 has landed and its Result reports the forced-layout and DOM-operation counts. Fully render the selected topic body when the current card is a topic, and retain demand-driven history loading inside it. In each direction from the current card, advance through the Main Board order one card at a time. Hydrate a topic body when its card would be visible within the usable board scrollport, then use visibility after that hydration to evaluate the next card. Continue past visible unpinned cards using their existing body lifecycle. Stop each direction at the first undrawn card. Use `IntersectionObserver` or equivalent visibility notifications to drive this work without geometry polling.
