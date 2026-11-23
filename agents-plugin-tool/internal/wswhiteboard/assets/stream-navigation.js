@@ -84,6 +84,18 @@
     // not shown: that page shows first. A docked topic scrolls in its
     // pane's body (.gal-pbody) under a head that does not stick.
     if (window.WsCards && window.WsCards.activate) window.WsCards.activate(node);
+    var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(node);
+    if (card) {
+      var calm = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+      var smooth = (!options || options.behavior !== "auto") && !calm;
+      if (node === card) {
+        anchor.select(card, { smooth: smooth });
+        return node;
+      }
+      // Snap the deck synchronously before inner measurement so viewport()
+      // sees the owning panel on screen.
+      anchor.select(card, { smooth: false });
+    }
     function clearance() {
       var topic = node.closest('.topic'), head = topic && topic.querySelector('.tophead'), offset = 0;
       var style = head && window.getComputedStyle(head);

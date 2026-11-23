@@ -367,11 +367,26 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    a size change of any card moves nothing the reader sees and costs the page
    no geometry read. Maximized topics, panels and cards stay fixed to the
    viewport: no containment is added above them. */
-#bcol .r-board section.topic[data-topic]:not([data-max]) { max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overflow-anchor: none; }
-#bcol .r-board section.topic[data-topic]:not([data-max]) > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
-#bcol .r-board .bcard:not([data-max]) { overflow-anchor: none; }
-#bcol .r-board .bcard:not([data-max]) > .bc-in { max-height: var(--board-usable, none); }
-#bcol .r-board :is(section.topic[data-topic], .bcard)[data-current]:not([data-max]) { overflow-anchor: auto; }
-#bcol .r-board { padding-bottom: var(--board-runway, 0px); }
-:root[data-overview] #bcol .r-board section.topic[data-topic] { max-height: none; overflow-y: visible; }
-:root[data-overview] #bcol .r-board .bcard > .bc-in { max-height: none; }
+.dgrid:is(.live, .history, .worktree) > #bcol { scroll-snap-type: y mandatory; scroll-snap-stop: normal; scrollbar-width: none; }
+.dgrid:is(.live, .history, .worktree) > #bcol::-webkit-scrollbar { display: none; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]) { height: var(--board-usable, auto); max-height: var(--board-usable, none); overflow-y: auto; overflow-x: clip; overflow-anchor: none; scroll-snap-align: start; scroll-margin-top: calc(var(--board-pad-top, 2px) + 44px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]) > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) { overflow-anchor: none; scroll-snap-align: start; scroll-margin-top: var(--board-pad-top, 2px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-rail]:not([data-max]) { scroll-margin-top: calc(var(--board-pad-top, 2px) + 44px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard:not([data-max]) > .bc-in { height: var(--board-usable, auto); max-height: var(--board-usable, none); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; overflow: auto; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]) > .bc-in > .bc-grip { display: none; }
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic]:not([data-max]):not(:has(details.entry-panel[data-max])) { contain: strict; }
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]):not(:has(details.entry-panel[data-max])) { contain: layout style; }
+:root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard[data-card]:not([data-max]):not(:has(details.entry-panel[data-max])) > .bc-in { contain: strict; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard)[data-anchor-cap="0"]:not([data-max]) { scroll-margin-top: 160px; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-rail])[data-anchor-cap="1"]:not([data-max]) { scroll-margin-top: calc(var(--board-pad-top, 2px) + 24px); }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard)[data-current]:not([data-max]) { overflow-anchor: auto; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board button[data-closed-next] { scroll-snap-align: end; scroll-margin-bottom: 12px; }
+.dgrid:is(.live, .history, .worktree) > #bcol .r-board { padding-bottom: var(--board-runway, 0px); }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol { scroll-snap-type: none; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic] { height: auto; max-height: none; overflow-y: visible; contain: none; scroll-snap-align: none; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard { contain: none; scroll-snap-align: none; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in { height: auto; max-height: none; contain: none; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in > .bc-body { flex: 0 1 auto; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board button[data-closed-next] { scroll-snap-align: none; }

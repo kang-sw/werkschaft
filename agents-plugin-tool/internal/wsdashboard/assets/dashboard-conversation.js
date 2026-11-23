@@ -295,7 +295,11 @@
         else if (!loaded && cards && cards.activate) cards.activate(target);
         // loadTarget owns lazy-history positioning, including version folds.
         if (!target.closest(".wb-history")) {
-          if (!loaded && (!window.wbHistory || !window.wbHistory.navigate)) target.scrollIntoView({ block: "start" });
+          if (!loaded && (!window.wbHistory || !window.wbHistory.navigate)) {
+            var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(target);
+            if (card) anchor.select(card, { smooth: target === card });
+            if (target !== card) target.scrollIntoView({ block: "start" });
+          }
           if (window.wbHistory && window.wbHistory.keep) window.wbHistory.keep(target);
           // Entry/item flashes belong to loadTarget; topic-only navigation
           // (including an absent element's fallback) uses the existing pulse.

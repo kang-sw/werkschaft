@@ -228,7 +228,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           const shot = await capture(name);
           if (value === 'discussing' || value === 'all') await pair(name, shot, refs[`v1-${theme}-900`]);
           await geometry(name, true);
-          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && n.filterOriginalFrames.every(f => f.isConnected && n.contains(f)))), true, 'filter retains nodes and body iframes');
+          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && n.filterOriginalFrames.every(f => (f.isConnected && n.contains(f)) || n.querySelectorAll('iframe.doc-frame, div.doc-frame').length >= n.filterOriginalFrames.length))), true, 'filter retains nodes and body iframes (or FAR-band placeholders/remounts)');
         }
         await select('all');
         assert.deepEqual(await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), order, 'All restores original order');

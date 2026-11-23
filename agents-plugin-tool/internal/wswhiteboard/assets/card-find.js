@@ -355,13 +355,21 @@
     if (!cur) return;
     if (cur.kind === "host") {
       hitMarks(cur.el).forEach(function (h) { h.classList.add("wb-find-cur"); });
-      if (scroll && cur.el.scrollIntoView) cur.el.scrollIntoView({ block: "center", behavior: "auto" });
+      if (scroll) {
+        if (window.WsCards && window.WsCards.activate) window.WsCards.activate(cur.el);
+        var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(cur.el);
+        if (card) anchor.select(card, { smooth: false });
+        if (cur.el !== card && cur.el.scrollIntoView) cur.el.scrollIntoView({ block: "center", behavior: "auto" });
+      }
     } else if (cur.kind === "frame") {
       postToFrame(cur.frame, { wbDoc: "find-focus", seq: state.seq, index: cur.local, scroll: !!scroll });
     }
   }
   function scrollFrameMatch(frame, top, height) {
     if (!frame || frame.isConnected === false) return;
+    if (window.WsCards && window.WsCards.activate) window.WsCards.activate(frame);
+    var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(frame);
+    if (card) anchor.select(card, { smooth: false });
     var fr = frame.getBoundingClientRect();
     var targetY = fr.top + top + (height || 0) / 2;
     // Scroll the closest scrollable ancestor of the frame so the match centers.
