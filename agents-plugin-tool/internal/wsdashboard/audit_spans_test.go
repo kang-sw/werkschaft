@@ -411,10 +411,12 @@ func TestAuditSpanScanWork(t *testing.T) {
 					}
 				})
 			}
-			small, large := run(8000), run(16000)
-			t.Logf("8k: %v, 16k: %v", small, large)
-			if float64(large) > 3.3*float64(small) {
-				t.Errorf("doubling the line grew scan time from %v to %v", small, large)
+			// A 4x size gap separates linear (4x) from quadratic (16x) growth
+			// while keeping enough look-ahead work to expose a superlinear scan.
+			small, large := run(4000), run(16000)
+			t.Logf("4k: %v, 16k: %v", small, large)
+			if float64(large) > 8*float64(small) {
+				t.Errorf("quadrupling the line grew scan time from %v to %v", small, large)
 			}
 		})
 	}
