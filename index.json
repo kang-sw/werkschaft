@@ -782,6 +782,9 @@
         }
       }
     },
+    "261124-bug-ws-old-launcher-start-lock-wait": {
+      "registered_at": "2026-11-23T20:44:02Z"
+    },
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
     }
