@@ -616,10 +616,15 @@ test('history end still opens below an already covered interval', async () => {
   assert.equal(ctx.auOpenBelowDone, true);
 });
 
-test('run labels use fixed kind order and only system/thinking/hook/reminder fold', () => {
+test('run labels use fixed kind order and only system/thinking/hook/reminder and subagent task rows fold', () => {
   const h = loadAuditRowsHelpers();
-  for (const k of ['system', 'thinking', 'hook', 'system_reminder']) assert.equal(h.auIsRunKind(k), true, k);
-  for (const k of ['subagent', 'compaction', 'other', 'tool_call']) assert.equal(h.auIsRunKind(k), false, k);
+  for (const k of ['system', 'thinking', 'hook', 'system_reminder', 'subagent']) assert.equal(h.auIsRunKind(k), true, k);
+  for (const k of ['compaction', 'other', 'tool_call']) assert.equal(h.auIsRunKind(k), false, k);
+  assert.equal(h.auRunKindOf({ kind: 'subagent', subkind: 'task_started' }), 'subagent');
+  assert.equal(h.auRunKindOf({ kind: 'subagent', subkind: 'text' }), '');
+  assert.equal(h.auRunKindOf({ kind: 'subagent' }), '');
+  assert.equal(h.auRunKindOf({ kind: 'system', subkind: 'init' }), 'system');
+  assert.equal(h.auRunKindOf({ kind: 'other' }), '');
   assert.equal(h.auRunLabel(['thinking', 'system', 'system', 'hook', 'system', 'system']), 'js.audit.kind.system 4 · js.audit.kind.thinking 1 · js.audit.kind.hook 1');
 });
 
@@ -751,4 +756,144 @@ test('a row joining a run patches only that summary; an unchanged reconcile writ
   for (const id of Object.keys(f.ctx.auEventsById)) delete f.ctx.auEventsById[id];
   f.ctx.auReconcileRows();
   assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
+});
+
+// A fixture audit store behind the real /audit/events selection: the filter
+// (kinds, since <= at < until) first, then the cursor and n, newest page when
+// no cursor, oldest-first events, before/after naming the page's ends.
+function simAuditFetch(store, log) {
+  return async (url) => {
+    log.push(url);
+    const q = new URL(url, 'http://fixture').searchParams;
+    const n = Number(q.get('n') || 100);
+    const kinds = q.get('kinds') ? q.get('kinds').split(',') : null;
+    const since = q.get('since') ? Date.parse(q.get('since')) : null;
+    const until = q.get('until') ? Date.parse(q.get('until')) : null;
+    const sel = [];
+    store.forEach((ev, i) => {
+      const at = Date.parse(ev.at);
+      if (kinds && !kinds.includes(ev.kind)) return;
+      if (since !== null && at < since) return;
+      if (until !== null && at >= until) return;
+      sel.push(i);
+    });
+    const posOf = (id) => store.findIndex((e) => e.id === id);
+    let start, stop;
+    if (q.get('before')) { stop = sel.filter((i) => i < posOf(q.get('before'))).length; start = Math.max(stop - n, 0); }
+    else if (q.get('after')) { start = sel.filter((i) => i <= posOf(q.get('after'))).length; stop = Math.min(start + n, sel.length); }
+    else { stop = sel.length; start = Math.max(stop - n, 0); }
+    const idx = sel.slice(start, stop);
+    return auditPage({ events: idx.map((i) => store[i]), before: idx.length ? store[idx[0]].id : '',
+      after: idx.length ? store[idx[idx.length - 1]].id : '', end: start === 0 });
+  };
+}
+
+const boundBase = Date.parse('2026-11-20T00:00:00Z');
+const boundAt = (sec) => new Date(boundBase + sec * 1000).toISOString().replace('.000Z', 'Z');
+function boundStore(oldCount, spanCount) {
+  const store = [];
+  const kinds = ['system', 'thinking', 'hook', 'subagent'];
+  for (let i = 0; i < oldCount; i++) store.push({ id: 'old-' + i, seq: i, kind: kinds[i % 4], at: boundAt(i) });
+  for (let i = 0; i < spanCount; i++) store.push({ id: 'span-' + i, seq: oldCount + i, kind: kinds[i % 4], at: boundAt(100000 + i) });
+  return store;
+}
+function boundEntries(dom, firstAt) {
+  const t0 = Date.parse(firstAt);
+  for (let i = 0; i < 3; i++) {
+    const el = new dom.El('DIV');
+    el.setAttribute('data-entry', 'k' + i);
+    el.setAttribute('data-at', new Date(t0 + i * 60000).toISOString().replace('.000Z', 'Z'));
+    dom.centries.appendChild(el);
+  }
+}
+const urlParams = (u) => new URL(u, 'http://fixture').searchParams;
+
+test('history end with a short covered span fetches the span and one page below, not the whole older store', async () => {
+  const store = boundStore(5000, 30);
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness(simAuditFetch(store, urls));
+  const first = boundAt(100000);
+  boundEntries(dom, first);
+  dom.doc.dispatchEvent({ type: 'ws-history-page', detail: { oldestAt: first, end: true } });
+  await ctx.auFetchQueue;
+  const stored = Object.keys(ctx.auEventsById).length;
+  assert.ok(urls.length <= 3, 'requests: ' + urls.length);
+  assert.ok(stored <= 30 + 200, 'stored events: ' + stored);
+  assert.equal(ctx.auOpenBelowDone, true);
+  assert.equal(ctx.auCoveredSince, first);
+});
+
+test('an oversized covered span stops at the page cap and records the floor it reached', async () => {
+  const store = boundStore(0, 6000);
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness(simAuditFetch(store, urls));
+  const first = boundAt(100000);
+  boundEntries(dom, first);
+  dom.doc.dispatchEvent({ type: 'ws-entries-merged', detail: { oldestAt: first } });
+  await ctx.auFetchQueue;
+  assert.ok(urls.length <= 10, 'requests: ' + urls.length);
+  assert.ok(Object.keys(ctx.auEventsById).length <= 2000);
+  const floor = ctx.auCoveredSince;
+  assert.ok(floor && ctx.auCmpStrNs(floor, first) > 0, 'covered floor moved up to ' + floor);
+  const lowest = Object.values(ctx.auEventsById).map((e) => e.at).sort()[0];
+  assert.equal(floor, lowest, 'floor is the oldest fetched event');
+});
+
+test('entries without a date fetch one newest page, never the whole store', async () => {
+  const store = boundStore(5000, 0);
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness(simAuditFetch(store, urls));
+  dom.doc.dispatchEvent({ type: 'ws-history-page', detail: { oldestAt: '', end: true, empty: true } });
+  await ctx.auFetchQueue;
+  assert.equal(urls.length, 1);
+  assert.equal(Object.keys(ctx.auEventsById).length, 200);
+  dom.doc.dispatchEvent({ type: 'ws-entries-merged', detail: { oldestAt: '', empty: true } });
+  await ctx.auFetchQueue;
+  assert.ok(urls.length <= 2, 'a second look reuses the latest cursor: ' + urls.length);
+});
+
+test('per-turn init events keep one session banner; later ones and subagent task rows fold', () => {
+  const f = runCollapseFixture();
+  f.add('init1', 1, 'system', '2026-11-20T10:00:05Z', { subkind: 'init' });
+  f.add('init2', 2, 'system', '2026-11-20T10:00:12Z', { subkind: 'init' });
+  f.add('init3', 3, 'system', '2026-11-20T10:00:13Z', { subkind: 'init' });
+  f.add('ts', 4, 'subagent', '2026-11-20T10:00:14Z', { subkind: 'task_started' });
+  f.add('tn', 5, 'subagent', '2026-11-20T10:00:15Z', { subkind: 'task_notification' });
+  f.add('sub-text', 6, 'subagent', '2026-11-20T10:00:16Z', { subkind: 'text' });
+  f.ctx.auReconcileRows();
+  const banners = f.dom.centries.querySelectorAll('.au-sysrow');
+  assert.equal(banners.length, 1, 'one full-height session-start row');
+  assert.equal(banners[0].getAttribute('data-event-id'), 'init1');
+  assert.equal(rowById(f.dom, 'init2').hasAttribute('hidden'), true);
+  assert.equal(rowById(f.dom, 'init3').hasAttribute('hidden'), true);
+  assert.equal(rowById(f.dom, 'ts').hasAttribute('hidden'), true);
+  assert.equal(rowById(f.dom, 'tn').hasAttribute('hidden'), true);
+  assert.equal(rowById(f.dom, 'sub-text').hasAttribute('hidden'), false, 'subagent content stays visible');
+  const run = f.dom.centries.querySelectorAll('.au-run').filter((r) => r.parentNode === f.dom.centries)[0];
+  assert.equal(run.textContent, 'js.audit.kind.system 2 · js.audit.kind.subagent 2');
+
+  // An older init arriving later takes over the banner and demotes the old one in place.
+  f.add('init0', 0, 'system', '2026-11-20T10:00:01Z', { subkind: 'init' });
+  f.ctx.auReconcileRows();
+  const after = f.dom.centries.querySelectorAll('.au-sysrow');
+  assert.equal(after.length, 1);
+  assert.equal(after[0].getAttribute('data-event-id'), 'init0');
+  assert.equal(rowById(f.dom, 'init1').hasAttribute('hidden'), true);
+});
+
+test('rows added under a bottom-pinned conversation re-pin it; no-op reconciles and unpinned views do not move it', () => {
+  for (const stick of [true, false]) {
+    const f = runCollapseFixture();
+    let pins = 0;
+    f.ctx.stick = stick;
+    f.ctx.pinConvo = () => { pins++; };
+    f.add('t1', 1, 'thinking', '2026-11-20T10:00:05Z');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 1 : 0, 'rows arriving re-pin only a pinned view');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 1 : 0, 'an unchanged reconcile does not touch the scroll');
+    f.add('t2', 2, 'hook', '2026-11-20T10:00:06Z');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 2 : 0);
+  }
 });
