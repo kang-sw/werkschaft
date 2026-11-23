@@ -16,7 +16,7 @@ import (
 
 func TestDashboardSettingsCatalog(t *testing.T) {
 	t.Setenv(wspackage.EnvDevCheckout, "")
-	var namespaces = map[string]int{"claude": 13, "agy": 4, "dashboard": 22, "pi": 15}
+	var namespaces = map[string]int{"claude": 13, "agy": 6, "dashboard": 22, "pi": 15}
 	for _, pkg := range []string{"ws", "wsflow"} {
 		t.Run(pkg, func(t *testing.T) {
 			catalog, err := DashboardConfigCatalog(pkg)
@@ -146,6 +146,8 @@ func TestDashboardAdapterReadLimitsKeepHarnessKeyScopes(t *testing.T) {
 		{"agy.model_wait_retries", false, true},
 		{"agy.stall_log_check", false, true},
 		{"agy.http2_frame_trace", false, true},
+		{"agy.prefer_native_subagent", false, true},
+		{"agy.avoid_agy_subagent", false, true},
 		{DashboardPortKey, true, true},
 		{"dashboard.pi_spawn_enabled", true, true},
 		{"claude.some_unlisted_key", true, true},

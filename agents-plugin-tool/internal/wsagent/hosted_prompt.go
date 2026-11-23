@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -46,15 +47,33 @@ func (r *Runner) subagentSteer(rec Record) string {
 	if !RemovesSubagents(rec) {
 		return ""
 	}
+	reg := r.opts.Backends[rec.Backend]
+	if rec.Lead {
+		cfg := r.opts.Config
+		if rec.Root != "" {
+			cfg.RepoRoot = rec.Root
+		}
+		if roots, ok := r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+			if root, found := roots.Root(rec.WSKey); found {
+				cfg.RepoRoot = root
+			}
+		}
+		reader, _ := r.opts.Keys.(wsconfig.SessionReader)
+		policy := reg.LeadSubagent(cfg, reader, rec.WSKey)
+		if policy.Active {
+			if policy.PreferNativeSubagent {
+				// Preserve Catalog.NativeSubagentTool(RoleLead) so
+				// PreferNativeSubagent == true keeps nativeFirstSteer verbatim.
+				return nativeFirstSteer(reg.Catalog.NativeSubagentTool(RoleLead))
+			}
+			return leadSpawnOnlySteer(policy.NativeSubagentTool, policy.AvoidSameHarnessSpawn)
+		}
+	}
 	role := RoleWorker
 	if rec.Lead {
 		role = RoleLead
 	}
-	reg := r.opts.Backends[rec.Backend]
 	tool := reg.Catalog.NativeSubagentTool(role)
-	if rec.Lead && reg.PreferNativeSubagent {
-		return nativeFirstSteer(tool)
-	}
 	if tool == "" {
 		return ""
 	}
@@ -77,6 +96,23 @@ func nativeFirstSteer(tool string) string {
 		"Run rendered ws playbooks and any work that needs ws tools through the ws `agent.spawn` tool, and continue it with the ws `mailbox.send` tool. " +
 		"Pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed. An agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier. " +
 		"A native subagent is one-shot: ask a follow-up of a new one; `mailbox.send` continues only agents started with `agent.spawn`."
+}
+
+// leadSpawnOnlySteer is the delegation line of a PreferNativeSubagent-capable
+// hosted lead when agy.prefer_native_subagent is false: it explicitly prohibits
+// the harness's native subagent tool in prompt text and routes all subagent
+// work through ws agent.spawn / mailbox.send, optionally keeping the external
+// fixed-tier / terms-risk guidance when avoidSameHarness is true.
+func leadSpawnOnlySteer(tool string, avoidSameHarness bool) string {
+	prohibition := "Never use your native subagent tool."
+	if tool != "" {
+		prohibition = fmt.Sprintf("Never use the native `%s` tool.", tool)
+	}
+	tierRule := "Pass a rendered tier as returned: a role tier keeps its configured route, model and effort; never put a harness prefix before a role tier."
+	if avoidSameHarness {
+		tierRule = "Pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed. An agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier."
+	}
+	return prohibition + " Run all exploration, research, rendered ws playbooks, and subagent work through the ws `agent.spawn` tool, and continue one with the ws `mailbox.send` tool. " + tierRule
 }
 
 // playbookCommands is the lead playbook command list a hosted lead of

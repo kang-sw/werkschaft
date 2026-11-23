@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsrsrc"
 )
@@ -22,6 +23,7 @@ type HostedRender struct {
 	Harness              string
 	PlaybookCommands     bool
 	PreferNativeSubagent bool
+	ResolveLeadSubagent  func(cfg wsconfig.Options, reader wsconfig.SessionReader, wsKey string) wsagent.LeadSubagentPolicy
 	ToolNameScheme       string
 	CallFallback         bool
 	DirectTools          []string
@@ -56,7 +58,7 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 		s.Close()
 		return nil, nil, err
 	}
-	s.descriptor = connectionDescriptor{manualHarness: render.Harness, playbookCommands: render.PlaybookCommands, preferNativeSubagent: render.PreferNativeSubagent, aliases: aliases, callFallback: render.CallFallback, directTools: render.DirectTools, leadRender: true}
+	s.descriptor = connectionDescriptor{manualHarness: render.Harness, playbookCommands: render.PlaybookCommands, preferNativeSubagent: render.PreferNativeSubagent, resolveLeadSubagent: render.ResolveLeadSubagent, aliases: aliases, callFallback: render.CallFallback, directTools: render.DirectTools, leadRender: true}
 	s.descriptorResolved = true
 	// A render may start the session-start tracker check (a background
 	// fetch); the server is released once that settles, without holding up

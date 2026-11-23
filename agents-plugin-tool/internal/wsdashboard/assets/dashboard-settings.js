@@ -69,7 +69,9 @@ var wsSettingsChoiceLabels = {
     setting_read_only: "js.settings.disabled.setting_read_only",
     tier_scope: "js.settings.disabled.tier_scope",
     repo_read_only: "js.settings.disabled.repo_read_only",
-    scope_unsupported: "js.settings.disabled.scope_unsupported"
+    scope_unsupported: "js.settings.disabled.scope_unsupported",
+    dependency_unmet: "js.settings.disabled.dependency_unmet",
+    requires_native_subagent_off: "js.settings.disabled.requires_native_subagent_off"
   };
   var errors = {
     invalid_request: "js.settings.error.invalid_request",
@@ -271,12 +273,24 @@ var wsSettingsChoiceLabels = {
     return selected(entry) !== undefined || scopes.indexOf(entry.source_scope) > scopes.indexOf(scope);
   }
 
-  function editable(entry, spec) {
-    if (spec.control === "profile" || scope === "builtin") return false;
+  function enabledWhenMet(spec) {
+    if (!spec || !spec.enabled_when) return true;
+    var controller = snapshot && snapshot.entries && snapshot.entries.find(function (item) {
+      return item.key === spec.enabled_when.key;
+    });
+    return !!controller && controller.value === spec.enabled_when.equals;
+  }
+
+  function baseEditable(entry) {
     if (scope === "repo") {
       return entry.editable && !!extension.editable && extension.editable(entry, selection) === true;
     }
     return entry.editable;
+  }
+
+  function editable(entry, spec) {
+    if (spec.control === "profile" || scope === "builtin") return false;
+    return baseEditable(entry) && enabledWhenMet(spec);
   }
 
   function bucketName(name) {
@@ -496,6 +510,7 @@ var wsSettingsChoiceLabels = {
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
           if (row.isConnected) replace(result.entry, hadFocus);
+          refreshDependentRows(entry.key);
           renderCounts();
           if (extension.onMutate) extension.onMutate({
             section: activeSection,
@@ -518,10 +533,32 @@ var wsSettingsChoiceLabels = {
     };
   }
 
+  function refreshDependentRows(controllerKey) {
+    var existing = new Map();
+    content.querySelectorAll(".krow").forEach(function (node) {
+      if (node.dataset.configKey) existing.set(node.dataset.configKey, node);
+    });
+    for (var depSpec of catalog) {
+      if (!depSpec.enabled_when || depSpec.enabled_when.key !== controllerKey) continue;
+      var depEntry = snapshot && snapshot.entries && snapshot.entries.find(function (item) {
+        return item.key === depSpec.key;
+      });
+      if (!depEntry) continue;
+      var node = existing.get(depSpec.key);
+      if (Boolean(node) !== matches(depEntry, depSpec)) {
+        renderContent();
+        return;
+      }
+      if (node) node.replaceWith(renderRow(depEntry, depSpec));
+    }
+  }
+
   function rowReason(entry, spec) {
     if (scope === "builtin") return "builtin_read_only";
     if (spec.control === "profile") return "profile_read_only";
     if (entry.disabled_reason) return entry.disabled_reason;
+    if (!baseEditable(entry)) return scope === "repo" ? "repo_read_only" : "scope_unsupported";
+    if (!enabledWhenMet(spec)) return (spec.enabled_when && spec.enabled_when.reason) || "dependency_unmet";
     return scope === "repo" ? "repo_read_only" : "scope_unsupported";
   }
 

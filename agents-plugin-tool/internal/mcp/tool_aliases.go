@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 // toolAliasTable spells ws's canonical (dotted) tool names the way one
@@ -78,9 +79,10 @@ type connectionDescriptor struct {
 	directTools      []string
 	playbookCommands bool
 	// preferNativeSubagent marks a hosted lead whose backend registration
-	// sets PreferNativeSubagent: text it executes itself names its native
-	// subagent for exploration (nativeFirstTerminology).
+	// sets PreferNativeSubagent: text it executes itself resolves its live
+	// delegation policy (nativeFirstTerminology or spawnOnlyTerminology).
 	preferNativeSubagent bool
+	resolveLeadSubagent  func(cfg wsconfig.Options, reader wsconfig.SessionReader, wsKey string) wsagent.LeadSubagentPolicy
 	// leadRender marks the throwaway server of a daemon-side render for a
 	// hosted lead (hostedRenderServer): it serves no connection, but renders
 	// as the lead's own daemon-hosted connection would.
@@ -135,6 +137,9 @@ func (s *Server) connectionDescriptor() connectionDescriptor {
 	// as before, whatever its profile keeps.
 	s.descriptor.playbookCommands = reg.PlaybookCommands && rec.Lead
 	s.descriptor.preferNativeSubagent = reg.PreferNativeSubagent && !worker && rec.Lead
+	if s.descriptor.preferNativeSubagent {
+		s.descriptor.resolveLeadSubagent = reg.ResolveLeadSubagent
+	}
 	names := make([]string, 0, len(tools()))
 	for _, tool := range tools() {
 		if name, _ := tool["name"].(string); name != "" {
@@ -160,4 +165,23 @@ func (s *Server) playbookHarness() string {
 		return harness
 	}
 	return s.connectionDescriptor().manualHarness
+}
+
+// leadSubagentPolicy resolves the caller's live LeadSubagentPolicy per render
+// so config changes in project or global settings take effect on the next
+// self-executed render without reconnecting.
+func (s *Server) leadSubagentPolicy(descriptor connectionDescriptor, callerKey string) wsagent.LeadSubagentPolicy {
+	if !descriptor.preferNativeSubagent {
+		return wsagent.LeadSubagentPolicy{}
+	}
+	if descriptor.resolveLeadSubagent != nil {
+		cfg := s.sessionConfigOptions(callerKey)
+		adapter := sessionConfigAdapter{s: s.sessions}
+		return descriptor.resolveLeadSubagent(cfg, adapter, callerKey)
+	}
+	return wsagent.LeadSubagentPolicy{
+		Active:                true,
+		PreferNativeSubagent:  true,
+		AvoidSameHarnessSpawn: true,
+	}
 }

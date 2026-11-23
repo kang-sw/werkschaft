@@ -334,3 +334,111 @@ func TestPlaybookCommandsFailedReadOffersNone(t *testing.T) {
 		t.Fatalf("a worker's list changed: %+v", got)
 	}
 }
+
+// TestAgySubagentConfigOverridesSteer checks the four
+// (agy.prefer_native_subagent, agy.avoid_agy_subagent) combinations on hosted
+// agy leads, leaving workers and AgyCatalog().ItemSubagentRemoval untouched.
+func TestAgySubagentConfigOverridesSteer(t *testing.T) {
+	if got := AgyCatalog().NativeSubagentTool(RoleLead); got != "" {
+		t.Fatalf("AgyCatalog().NativeSubagentTool(RoleLead) = %q, want empty", got)
+	}
+	wantNative := (&Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}).subagentSteer(Record{Backend: BackendAgy, Lead: true})
+
+	for _, tc := range []struct {
+		name              string
+		prefer            string
+		avoid             string
+		wantExact         string
+		wantContains      []string
+		wantNotContains   []string
+	}{
+		{
+			name:      "prefer true avoid true",
+			prefer:    "true",
+			avoid:     "true",
+			wantExact: wantNative,
+		},
+		{
+			name:      "prefer true avoid false",
+			prefer:    "true",
+			avoid:     "false",
+			wantExact: wantNative,
+		},
+		{
+			name:   "prefer false avoid true",
+			prefer: "false",
+			avoid:  "true",
+			wantContains: []string{
+				"Never use the native `invoke_subagent` tool.",
+				"ws `agent.spawn` tool",
+				"ws `mailbox.send` tool",
+				"never put a harness prefix before a role tier",
+				"Antigravity terms risk",
+				"`claude.small`",
+			},
+			wantNotContains: []string{"Use your native"},
+		},
+		{
+			name:   "prefer false avoid false",
+			prefer: "false",
+			avoid:  "false",
+			wantContains: []string{
+				"Never use the native `invoke_subagent` tool.",
+				"ws `agent.spawn` tool",
+				"ws `mailbox.send` tool",
+				"never put a harness prefix before a role tier",
+			},
+			wantNotContains: []string{"Use your native", "Antigravity terms risk", "`claude.small`", "external fixed tier"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			cfg := wsconfig.Options{RepoRoot: root, ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+			resolver := wsconfig.NewResolver(cfg, nil, nil, nil)
+			if err := resolver.Set(wsconfig.ItemAgyPreferNativeSubagent, tc.prefer, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err != nil {
+				t.Fatal(err)
+			}
+			if err := resolver.Set(wsconfig.ItemAgyAvoidAgySubagent, tc.avoid, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err != nil {
+				t.Fatal(err)
+			}
+			r := &Runner{opts: Options{Backends: BuiltinBackendRegistrations(), Config: cfg}}
+			got := r.subagentSteer(Record{Backend: BackendAgy, Lead: true, Root: root, WSKey: "k-agy"})
+			if tc.wantExact != "" && got != tc.wantExact {
+				t.Fatalf("steer =\n%s\nwant\n%s", got, tc.wantExact)
+			}
+			for _, sub := range tc.wantContains {
+				if !strings.Contains(got, sub) {
+					t.Errorf("steer missing %q:\n%s", sub, got)
+				}
+			}
+			for _, banned := range tc.wantNotContains {
+				if strings.Contains(got, banned) {
+					t.Errorf("steer unexpectedly contains %q:\n%s", banned, got)
+				}
+			}
+			if workerGot := r.subagentSteer(Record{Backend: BackendAgy, Profile: AgentWorkerProfile(BackendAgy), Root: root}); workerGot != "" {
+				t.Fatalf("worker steer = %q, want empty", workerGot)
+			}
+		})
+	}
+
+	t.Run("rec.Root overrides non-empty Options.Config.RepoRoot", func(t *testing.T) {
+		otherRoot := t.TempDir()
+		recRoot := t.TempDir()
+		baseCfg := wsconfig.Options{RepoRoot: otherRoot, ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+		// otherRoot keeps prefer=true; recRoot sets prefer=false, avoid=false.
+		recCfg := wsconfig.Options{RepoRoot: recRoot, ConfigHome: baseCfg.ConfigHome, CacheHome: baseCfg.CacheHome}
+		resolver := wsconfig.NewResolver(recCfg, nil, nil, nil)
+		if err := resolver.Set(wsconfig.ItemAgyPreferNativeSubagent, "false", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err != nil {
+			t.Fatal(err)
+		}
+		if err := resolver.Set(wsconfig.ItemAgyAvoidAgySubagent, "false", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err != nil {
+			t.Fatal(err)
+		}
+		r := &Runner{opts: Options{Backends: BuiltinBackendRegistrations(), Config: baseCfg}}
+		got := r.subagentSteer(Record{Backend: BackendAgy, Lead: true, Root: recRoot, WSKey: "k-agy"})
+		if !strings.Contains(got, "Never use the native `invoke_subagent` tool.") || strings.Contains(got, "Antigravity terms risk") {
+			t.Fatalf("steer did not resolve from rec.Root:\n%s", got)
+		}
+	})
+}
