@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+
+	"github.com/gofrs/flock"
 )
 
 // store.go is the conversation's persistence. The live transcript is the
@@ -73,6 +75,7 @@ type Store struct {
 	session string
 	path    string
 	f       *os.File
+	lock    *flock.Flock
 	now     func() int64
 }
 
@@ -81,8 +84,8 @@ func segmentPath(dir, session string) string {
 }
 
 // OpenStore opens session's file under dir and returns the items it holds. A
-// session with no file starts one. A torn last line is dropped, and the file
-// truncated to its last whole line, so the next append starts clean.
+// session with no file starts one. The writer lease covers replay and repair
+// as well as appends: a successor cannot trim a predecessor's live log.
 func OpenStore(dir, session string, now func() int64) (*Store, []json.RawMessage, error) {
 	if !ValidSessionID(session) {
 		return nil, nil, fmt.Errorf("%q is not a werk session id", session)
@@ -94,6 +97,24 @@ func OpenStore(dir, session string, now func() int64) (*Store, []json.RawMessage
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, nil, err
 	}
+	// The lease has its own inode because rotation replaces the segment.
+	lock := flock.New(path + ".lock")
+	acquired, err := lock.TryLock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("acquire conversation writer: %w", err)
+	}
+	if !acquired {
+		return nil, nil, errors.New("the conversation already has a writer")
+	}
+	s, items, err := openStore(dir, session, path, now)
+	if err != nil {
+		return nil, nil, errors.Join(err, lock.Close())
+	}
+	s.lock = lock
+	return s, items, nil
+}
+
+func openStore(dir, session, path string, now func() int64) (*Store, []json.RawMessage, error) {
 	s := &Store{dir: dir, session: session, path: path, now: now}
 	items, keep, err := readSegment(path, session)
 	if err != nil {
@@ -257,14 +278,18 @@ func (s *Store) Rotate(items []json.RawMessage) error {
 	return renameErr
 }
 
-// Close releases the file.
+// Close releases the file and its writer lease.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.f == nil {
-		return nil
+	var err error
+	if s.f != nil {
+		err = s.f.Close()
+		s.f = nil
 	}
-	err := s.f.Close()
-	s.f = nil
+	if s.lock != nil {
+		err = errors.Join(err, s.lock.Close())
+		s.lock = nil
+	}
 	return err
 }
