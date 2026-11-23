@@ -265,17 +265,17 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "exec.spawn",
-			"description": "Start a durable structured command job using argv, with bounded inline output when it completes quickly.",
+			"description": "Start a durable structured command job using argv, with bounded inline output when it completes quickly (unavailable to read-only workers).",
 			"inputSchema": execSpawnSchema(),
 		},
 		{
 			"name":        "exec.shell",
-			"description": "Run one shell line with the configured shell (Bash; Git Bash on Windows): pass cmd, with optional cwd and async. It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message. The legacy form takes command, with optional working_dir and shell, and keeps its original replies. The two forms cannot be mixed in one call.",
+			"description": "Run one shell line with the configured shell (Bash; Git Bash on Windows): pass cmd, with optional cwd and async (read-only workers may use only this form and allowlisted read commands). It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message. The legacy form takes command, with optional working_dir and shell, and keeps its original replies. The two forms cannot be mixed in one call.",
 			"inputSchema": execShellSchema(),
 		},
 		{
 			"name":        "exec.run",
-			"description": "Run one program with its arguments directly, without a shell. It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message.",
+			"description": "Run one program with its arguments directly, without a shell (read-only workers may run only allowlisted read commands). It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message.",
 			"inputSchema": execRunSchema(),
 		},
 		{
