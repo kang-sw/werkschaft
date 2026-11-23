@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,8 +57,8 @@ func TestEnsureDesktopStartGuardsTheObservedPredecessor(t *testing.T) {
 				case "before spawn":
 					t.Fatal("unexpected spawn")
 				case "after spawn":
-					admit, err := PrepareDetachedSuccessor(os.Args[0],
-						[]string{"-test.run=^TestDesktopGatedSuccessorChild$", "--", "desktop-preflight-child"}, dir)
+					admit, err := PrepareDetachedSuccessor(t.Context(), os.Args[0],
+						[]string{"-test.run=^TestDesktopGatedSuccessorChild$", "--", "desktop-preflight-child"}, dir, false)
 					if err != nil {
 						return nil, err
 					}
@@ -122,14 +123,14 @@ func waitForPreflightFile(t *testing.T, dir, name string) string {
 }
 
 func TestDesktopGatedSuccessorChild(t *testing.T) {
-	if os.Args[len(os.Args)-1] != "desktop-preflight-child" {
+	if !slices.Contains(os.Args, "desktop-preflight-child") {
 		t.Skip("subprocess fixture")
 	}
 	if err := os.WriteFile("waiting", []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	admission := "denied"
-	if AwaitDesktopPreflight(os.Stdin) {
+	if AwaitDesktopPreflight(os.Stdin, os.Stdout) {
 		admission = "admitted"
 	}
 	if err := os.WriteFile("admission", []byte(admission), 0o600); err != nil {
@@ -138,10 +139,12 @@ func TestDesktopGatedSuccessorChild(t *testing.T) {
 }
 
 func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
+	noColdStart := func([]string) error { return errors.New("unexpected cold start") }
 	t.Run("strict preflight failure leaves old serving", func(t *testing.T) {
 		dir := t.TempDir()
 		old := startTestDaemon(t, dir, "0.48.0")
-		opts := ensureOpts(dir, "0.48.0", func([]string) error { return errors.New("breakaway refused") })
+		opts := ensureOpts(dir, "0.48.0", noColdStart)
+		opts.PrepareSuccessor = func([]string) (func(bool) error, error) { return nil, errors.New("breakaway refused") }
 		opts.Replace, opts.SpawnBeforeShutdown = true, true
 		outcome, err := Ensure(context.Background(), opts)
 		if outcome != OutcomeUnavailable || err == nil {
@@ -156,12 +159,18 @@ func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
 		old := startTestDaemon(t, dir, "0.48.0")
 		sp := &inProcessSpawner{t: t, dir: dir, versions: []string{"0.48.0"}}
 		defer sp.closeAll()
-		opts := ensureOpts(dir, "0.48.0", func(args []string) error {
-			if _, err := Health(context.Background(), testClient(), old.Endpoint()); err != nil {
-				t.Fatalf("predecessor stopped before independent creation: %v", err)
+		opts := ensureOpts(dir, "0.48.0", noColdStart)
+		opts.PrepareSuccessor = func(args []string) (func(bool) error, error) {
+			if _, err := Health(t.Context(), testClient(), old.Endpoint()); err != nil {
+				t.Fatalf("predecessor stopped before successor readiness: %v", err)
 			}
-			return sp.spawn(args)
-		})
+			return func(allow bool) error {
+				if allow {
+					return sp.spawn(args)
+				}
+				return nil
+			}, nil
+		}
 		opts.Replace, opts.SpawnBeforeShutdown = true, true
 		outcome, err := Ensure(context.Background(), opts)
 		if err != nil || outcome != OutcomeReplaced || len(sp.calls) != 1 {
@@ -172,7 +181,8 @@ func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
 	t.Run("accepted creation with no healthy successor is unavailable", func(t *testing.T) {
 		dir := t.TempDir()
 		old := startTestDaemon(t, dir, "0.48.0")
-		opts := ensureOpts(dir, "0.48.0", func([]string) error { return nil })
+		opts := ensureOpts(dir, "0.48.0", noColdStart)
+		opts.PrepareSuccessor = func([]string) (func(bool) error, error) { return func(bool) error { return nil }, nil }
 		opts.Replace, opts.SpawnBeforeShutdown = true, true
 		opts.StartWait = 100 * time.Millisecond
 		outcome, err := Ensure(context.Background(), opts)
@@ -202,7 +212,15 @@ func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
 		old := startTestDaemon(t, dir, "0.49.3")
 		sp := &inProcessSpawner{t: t, dir: dir, versions: []string{"0.50.1"}}
 		defer sp.closeAll()
-		opts := ensureOpts(dir, "0.50.1", sp.spawn)
+		opts := ensureOpts(dir, "0.50.1", noColdStart)
+		opts.PrepareSuccessor = func(args []string) (func(bool) error, error) {
+			return func(allow bool) error {
+				if allow {
+					return sp.spawn(args)
+				}
+				return nil
+			}, nil
+		}
 		opts.SpawnBeforeShutdown, opts.PreserveRunningLAN = true, true
 		outcome, err := Ensure(context.Background(), opts)
 		if err != nil || outcome != OutcomeReplaced || len(sp.calls) != 1 {

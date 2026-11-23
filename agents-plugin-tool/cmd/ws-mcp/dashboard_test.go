@@ -29,7 +29,7 @@ var dashboardTestClient = &http.Client{Timeout: 2 * time.Second}
 func TestStartDashboardWithTheKeyOffSpawnsNothing(t *testing.T) {
 	dir := t.TempDir()
 	calls := 0
-	outcome := startDashboard(context.Background(), mcp.DashboardSettings{Enabled: false, Port: 12345}, dir, 0, "", func([]string) error { calls++; return nil }, io.Discard)
+	outcome := startDashboard(context.Background(), mcp.DashboardSettings{Enabled: false, Port: 12345}, dir, 0, "", func([]string) error { calls++; return nil }, nil, io.Discard)
 	if calls != 0 || outcome != "" {
 		t.Fatalf("key off: %d spawns, outcome %q", calls, outcome)
 	}
@@ -44,7 +44,7 @@ func TestStartDashboardPassesThePortKeyAsTheDaemonFlag(t *testing.T) {
 	outcome := startDashboard(context.Background(), mcp.DashboardSettings{Enabled: true, Port: 12345}, t.TempDir(), 0, "", func(args []string) error {
 		got = args
 		return errors.New("spawn refused in test")
-	}, &log)
+	}, nil, &log)
 	if want := []string{"dashboard", "--port", "12345"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("spawn args = %v, want %v", got, want)
 	}
@@ -59,7 +59,7 @@ func TestStartDashboardPassesLANAsTheDaemonFlag(t *testing.T) {
 		startDashboard(context.Background(), mcp.DashboardSettings{Enabled: true, Port: 12345, LAN: lan}, t.TempDir(), 0, "", func(args []string) error {
 			got = args
 			return errors.New("spawn refused in test")
-		}, io.Discard)
+		}, nil, io.Discard)
 		want := []string{"dashboard", "--port", "12345"}
 		if lan {
 			want = append(want, "--lan")
@@ -75,7 +75,7 @@ func TestStartDashboardPassesTheBuildTimeAsTheDaemonFlag(t *testing.T) {
 	startDashboard(context.Background(), mcp.DashboardSettings{Enabled: true, Port: 12345}, t.TempDir(), 1700000000000, "", func(args []string) error {
 		got = args
 		return errors.New("spawn refused in test")
-	}, io.Discard)
+	}, nil, io.Discard)
 	if want := []string{"dashboard", "--port", "12345", "--build-time", "1700000000000"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("spawn args = %v, want %v", got, want)
 	}

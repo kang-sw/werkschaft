@@ -24,22 +24,28 @@ import (
 // With a hidden console of its own, children and grandchildren inherit it and
 // open no window, and the console is still not the host terminal's.
 func startDetached(exe string, args []string, dir string) (*exec.Cmd, error) {
-	return startWindowsDetached(exe, args, dir, false)
+	return startDetachedWithPipes(exe, args, dir, nil, nil, false)
 }
 
-func startDetachedStrict(exe string, args []string, dir string, stdin *os.File) (*exec.Cmd, error) {
-	// Electron retries only after the numeric breakaway-denied marker below.
-	// Keep the same Ensure prestart ordering; only process creation mode changes.
-	jobLifetime := os.Getenv("WS_MCP_DAEMON_JOB_LIFETIME") == "1"
-	return startElectronDetachedWith(jobLifetime, func(flags uint32) (*exec.Cmd, error) {
+func startDetachedWithPipes(exe string, args []string, dir string, stdin, stdout *os.File, strict bool) (*exec.Cmd, error) {
+	start := func(flags uint32) (*exec.Cmd, error) {
 		cmd := exec.Command(exe, args...)
 		cmd.Dir = dir
 		if stdin != nil {
 			cmd.Stdin = stdin
 		}
+		if stdout != nil {
+			cmd.Stdout = stdout
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags, HideWindow: true}
 		return cmd, cmd.Start()
-	}, func(message string) { fmt.Fprintln(os.Stderr, message) })
+	}
+	if strict {
+		// Electron retries only after the numeric breakaway-denied marker.
+		jobLifetime := os.Getenv("WS_MCP_DAEMON_JOB_LIFETIME") == "1"
+		return startElectronDetachedWith(jobLifetime, start, func(message string) { fmt.Fprintln(os.Stderr, message) })
+	}
+	return startWindowsDetachedWith(false, start)
 }
 
 func startElectronDetachedWith(jobLifetime bool, start func(uint32) (*exec.Cmd, error), log func(string)) (*exec.Cmd, error) {
@@ -56,15 +62,6 @@ func startElectronDetachedWith(jobLifetime bool, start func(uint32) (*exec.Cmd, 
 		log("WS_DAEMON_BREAKAWAY_DENIED=5")
 	}
 	return cmd, err
-}
-
-func startWindowsDetached(exe string, args []string, dir string, strict bool) (*exec.Cmd, error) {
-	return startWindowsDetachedWith(strict, func(flags uint32) (*exec.Cmd, error) {
-		cmd := exec.Command(exe, args...)
-		cmd.Dir = dir
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags, HideWindow: true}
-		return cmd, cmd.Start()
-	})
 }
 
 func startWindowsDetachedWith(strict bool, start func(uint32) (*exec.Cmd, error)) (*exec.Cmd, error) {
