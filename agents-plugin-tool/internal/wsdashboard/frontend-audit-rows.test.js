@@ -730,6 +730,19 @@ test('audit counterparts stay in their owning disclosures and the finished turn 
   assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
 });
 
+test('Antigravity approval audit requests pair with the live owner by call ID', () => {
+  const f = turnFixture(false);
+  const sameTime = f.owner('approval', 5, 'another-call');
+  const approval = f.owner('approval', 9, 'c1');
+  f.add('agy-request', 1, 'system', 5, {
+    subkind: 'request:session/request_permission', call_id: 'c1'
+  });
+  f.ctx.auReconcileRows();
+
+  assert.equal(sameTime.querySelector('.conv-audit-items').children.length, 0);
+  assert.equal(rowById(f.dom, 'agy-request')?.parentNode, approval.querySelector('.conv-audit-items'));
+});
+
 test('retry detail leaves the live badge and counts under the finished turn on recovery', () => {
   const f = turnFixture(false);
   const retry = f.owner('retry', 13);

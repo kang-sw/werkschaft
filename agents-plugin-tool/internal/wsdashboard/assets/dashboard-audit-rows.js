@@ -90,7 +90,8 @@
     var sub = String(ev.subkind || "");
     if (ev.kind === "compaction" || sub === "compact_failed") return "compaction";
     if (sub === "api_retry") return "retry";
-    if (/^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
+    if (sub === "request:session/request_permission" ||
+        /^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
     if (ev.kind === "subagent" && sub.indexOf("task_") === 0) return "subagent";
     return "";
   }
