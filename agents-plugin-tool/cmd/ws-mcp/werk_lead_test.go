@@ -119,7 +119,7 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 					if !found || key == "" {
 						return nil, fmt.Errorf("lead is missing hosted instructions")
 					}
-					switch calls.Add(1) {
+					switch call := calls.Add(1); call {
 					case 1:
 						if !bytes.Contains(wire["tools"], []byte(`"name":"exec_shell"`)) || !bytes.Contains(wire["tools"], []byte(`"lead_summary"`)) {
 							return nil, fmt.Errorf("lead did not discover tool and compaction controls")
@@ -135,11 +135,15 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 								"current_work": "Fixture compaction", "next_step": "", "mood_rapport": "", "residual_details": "",
 							},
 						})
-					case 3:
-						if !bytes.Contains(wire["input"], []byte("queued")) {
+					case 3, 4:
+						if call == 3 && !bytes.Contains(wire["input"], []byte("queued")) {
 							return nil, fmt.Errorf("model did not receive compact acknowledgement")
 						}
-						raw := `{"type":"response.completed","response":{"id":"lead-answer","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hosted lead answered."}]}],"usage":{"input_tokens":300,"output_tokens":8}}}`
+						if call == 4 && (!bytes.Contains(wire["input"], []byte("Fixture compaction")) ||
+							!bytes.Contains(wire["input"], []byte("Continue after replacement"))) {
+							return nil, fmt.Errorf("rejoined lead did not send its checkpoint and next prompt")
+						}
+						raw := fmt.Sprintf(`{"type":"response.completed","response":{"id":"lead-answer-%d","status":"completed","output":[{"type":"message","id":"msg_%d","role":"assistant","content":[{"type":"output_text","text":"Hosted lead answered."}]}],"usage":{"input_tokens":300,"output_tokens":8}}}`, call, call)
 						return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
 							Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: " + raw + "\n\n"))}, nil
 					default:
@@ -173,7 +177,20 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 			if done.ContextWindow != tc.window || done.Error != "" || len(done.Approvals) != 0 {
 				t.Fatalf("unexpected final usage, approval or error state (window %d)", done.ContextWindow)
 			}
-			for i := 0; i < 3; i++ {
+			open.daemon.Close()
+			open = f.open(nil)
+			rejoined, err := open.runner.Get(st.ID)
+			if err != nil || !rejoined.Lead || rejoined.Provider != string(tc.id) || rejoined.PermissionLevel != st.PermissionLevel {
+				t.Fatalf("rejoined lead metadata lost its provider or permissions: %v", err)
+			}
+			if _, err := open.runner.Send(st.ID, "Continue after replacement"); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := open.runner.Wait(context.Background(), st.ID, 10*time.Second)
+			if err != nil || resumed.Status != wsagent.TurnDone || resumed.Message != "Hosted lead answered." {
+				t.Fatalf("compacted lead did not continue after replacement: %s, %v", resumed.Status, err)
+			}
+			for i := 0; i < 4; i++ {
 				req := awaitWerkFixture(t, source.requests, "interactive credential request")
 				if req.Background || !req.AgentSession || req.Provider != tc.id {
 					t.Fatalf("wrong credential scope: %+v", req)
@@ -191,7 +208,7 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 				waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
 					return st.Status == wsagent.StatusIdle && st.Error != ""
 				})
-				if calls.Load() != 3 {
+				if calls.Load() != 4 {
 					t.Fatal("scheduled prompt reached SIWC without consent")
 				}
 			}
