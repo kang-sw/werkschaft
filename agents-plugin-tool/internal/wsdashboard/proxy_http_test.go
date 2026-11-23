@@ -337,7 +337,7 @@ func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
 	}
 	t.Cleanup(func() { logFile.Close() })
 	h, a := &rpcHandler{}, &tokenAgents{}
-	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Home: t.TempDir(), Proxy: h, Agents: a, Log: logFile})
+	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Home: t.TempDir(), Version: "1.2.3", Proxy: h, Agents: a, Log: logFile})
 	if err != nil {
 		t.Fatal(err)
 	}
