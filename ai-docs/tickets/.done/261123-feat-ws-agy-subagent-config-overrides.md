@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3a939a69414590f5
 sage-review-completeness-reviewed: 3a939a69414590f5
+completed: 2026-11-23
 ---
 
 # Allow overriding `PreferNativeSubagent` and `agy` subagent avoidance in `agy` adapter settings
@@ -132,3 +133,19 @@ Wire effective resolution for hosted `agy` leads only (workers with `rec.Lead ==
     ```
 - **Frontend Settings UI test (local `node --test` on touched test file only):**
   - Verify `agy.avoid_agy_subagent` renders disabled with its reason badge when `agy.prefer_native_subagent` is `true`, becomes enabled immediately in the DOM when `agy.prefer_native_subagent` is toggled to `false`, and disables again when toggled back to `true`, without rebuilding unrelated rows or rejecting out-of-order writes via `config.tune` / API; verify read-only disabled reasons (`builtin_read_only`, `scope_unsupported` at `session`, `repo_read_only`) take precedence over `enabled_when` and repo draft proposals do not falsely flip dependent rows before `snapshot.entries` updates.
+
+### Result (295e953b) - 2026-11-23
+
+- **Landed:**
+  - Declared `agy.prefer_native_subagent` and `agy.avoid_agy_subagent` (`boolean`, default `true`) in `agents-plugin/agy-config-manifest.json` and `agents-plugin-wsflow/agy-config-manifest.json`, registered `wsconfig.ItemAgyPreferNativeSubagent` / `wsconfig.ItemAgyAvoidAgySubagent` (`scope.go`), and added adapter read limits (`noRepo=false`, `noSession=true`) in `internal/mcp/dashboard_settings_config.go`.
+  - Added `LeadSubagentPolicy` and `BackendRegistration.ResolveLeadSubagent` (`internal/wsagent/registration.go`, `agy.go`), wired hosted-lead prompt steering (`internal/wsagent/hosted_prompt.go`) and per-render MCP/hosted workflow rendering (`internal/mcp/hosted_render.go`, `tool_aliases.go`, `playbook_terminology.go`, `playbook_render.go`, `workflow_manual.go` consumer via `HostedRender`, `cmd/ws-mcp/dashboard.go`) across `prefer=true`, `prefer=false, avoid=true`, and `prefer=false, avoid=false` without modifying `AgyCatalog().ItemSubagentRemoval`, `agy` workers, `playbook.render`, `RestoreBundle`, or other harnesses.
+  - Added Settings UI `enabled_when` support, `requires_native_subagent_off` lock badge / precedence, `editable` filter refresh (`dashboard-settings.js`, `dashboard-settings-catalog.json`), translations in all 11 `internal/wsi18n/tables/*.json` locales, updated `settings-description-digests.json`, and regenerated Pi bundles + package assets.
+  - Applied `code-review-lite` remediations (`rec.Root` unconditional override in `subagentSteer` + `Keys.Root` fallback, `nil` session reader in `agyLeadSubagentPolicy` matching `noSession=true` + `scope.go` doc comment, `filter=editable` handling in `refreshDependentRows`, full fake-DOM lifecycle test in `frontend-settings.test.js`, and local `generate-package-assets.py` regeneration).
+- **Verification:**
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js`: 14/14 passed (`fail 0`, `skipped 0`).
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: exit 0.
+  - `python3 -m unittest discover agents-plugin-wsflow/tests`: 22 tests ran, `OK (skipped=1)`.
+  - Remote `w5090` (`python3 scripts/generate-package-assets.py && go test ./internal/wsconfig/... ./internal/wsconfigservice/... ./internal/wsagent/... ./internal/mcp/... ./internal/wsdashboard/... ./internal/wsi18n/... ./cmd/ws-mcp/...`): `internal/wsconfig` ok `(cached)`, `internal/wsconfigservice` `[no test files]`, `internal/wsdashboard` ok (`345.778s`), `internal/wsi18n` ok (`3.235s`), `cmd/ws-mcp` ok (`327.218s`); `internal/wsagent` and `internal/mcp` failed only on pre-existing Linux container process-tree reaper timeouts (`TestOneShotTimeoutKillsProcessTree` `oneshot_test.go:202` and `TestHostedExecStopEndsTheJobsProcessGroup` `server_exec_hosted_unix_test.go:44`), with all new and existing `agy` subagent override, catalog, digest, and harness-name-scan tests passing.
+- **Decisions & Unresolved:**
+  - Resolved `agy.*` subagent overrides strictly from `repo`/`project`/`global`/`builtin` layers (`nil` `SessionReader` / empty `wsKey` in `agyLeadSubagentPolicy`) to match `dashboardAdapterReadLimits` (`noSession=true`).
+  - `TestOneShotTimeoutKillsProcessTree` and `TestHostedExecStopEndsTheJobsProcessGroup` timed out waiting for child process exit under `w5090` Linux container runs (pre-existing, unrelated to this change).
