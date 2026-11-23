@@ -42,6 +42,9 @@
     paintMentions();
   }
   function paintMentions() {
+    // A text set whole (a restored draft, a cleared send) reaches the shell-mode
+    // flag here, as it does the mention layer.
+    if (typeof bangSync === "function") bangSync();
     if (!chl || !window.wsMention) return;
     if (ctext.wsc) { chl.hidden = true; return; }
     // The textarea's scrollbar narrows its text; the layer narrows alike.
@@ -70,6 +73,8 @@
     mention = window.wsMention.attach(ctext, {
       label: wsT("js.mention.label"),
       source: fileCandidates,
+      // No file popup in shell mode: an @ in a command is just an @.
+      token: function (v, caret) { return bangMode() ? null : window.wsMention.tokenAt(v, caret); },
       insert: editText,
       onPick: function (p) {
         mentions.push({ start: p.start, end: p.end, text: p.text });
@@ -121,7 +126,7 @@
   // A slash token is local to the caret; only whitespace may follow it.
   // Sessions without advertised commands never offer an invocation picker.
   function slashToken(v, caret) {
-    if (cmdSel || !commandList().length) return null;
+    if (cmdSel || !commandList().length || bangMode()) return null;
     if (window.WsCapsules) return window.WsCapsules.token(v, caret, "/");
     if (!/^\/\S*$/.test(v) || caret < 1) return null;
     return { start: 0, end: v.length, q: v.slice(1, caret) };

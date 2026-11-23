@@ -50,7 +50,12 @@
         indentLines(e.shiftKey);
         return;
       }
-      if (e.key === "Escape") { tabOut = true; return; }
+      if (e.key === "Escape") {
+        // In shell mode the first Esc removes the leading `!`; the next one
+        // prepares Tab-out as before.
+        if (bangMode() && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); tabOut = false; bangLeave(); return; }
+        tabOut = true; return;
+      }
       if (e.key !== "Shift") tabOut = false;
       if (e.key !== "Enter") return;
       var mod = e.ctrlKey || e.metaKey;

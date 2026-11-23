@@ -113,35 +113,86 @@
 .cmdecho .t { font-size: 11px; font-variant-numeric: tabular-nums; }
 .cmdout { margin: 0; padding: 7px 10px; background: var(--wb-card); border-radius: 8px; box-shadow: var(--wb-shadow); font: 12px/1.45 var(--wb-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
 .cmdnote { padding-left: 18px; font-size: 11.5px; font-style: italic; color: var(--wb-muted-fg); }
-/* The private result cards of the composer's `!` commands: the command-card
-   treatment above, kept in a strip over the composer, never in the shared
-   transcript. */
-.d-cexec { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 8px; max-height: 38vh; overflow: auto; }
-.d-cexec[hidden] { display: none; }
-.cexec .cexec-state { margin-left: auto; font-size: 11px; white-space: nowrap; }
-.cexec[data-phase="running"] .cexec-state, .cexec[data-phase="async"] .cexec-state { color: var(--wb-primary); }
-.cexec[data-phase="refused"] .cexec-state, .cexec[data-phase="unknown"] .cexec-state { color: var(--wb-fail); }
-.cexec .cexec-x, .cexec .cexec-copy { cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--wb-muted-fg); }
-.cexec .cexec-copy { background: var(--wb-card); color: var(--wb-fg); flex: none; white-space: nowrap; }
-.cexec .cexec-x:focus-visible, .cexec .cexec-copy:focus-visible { outline: 2px solid var(--wb-primary); }
-.cexec-file { display: flex; align-items: center; gap: 8px; padding-left: 18px; font-size: 11.5px; min-width: 0; }
-.cexec-file a { overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; font-family: var(--wb-mono); }
-.cexec .cexec-label { font-weight: 700; color: var(--wb-fg); flex: none; }
+/* Terminal surfaces (the `!` console, the slot blocks, the shell-mode input) stay
+   dark in the light theme too: they carry their own palette. */
+.composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; }
+/* The private result console of the composer's `!` commands, kept over the
+   composer, never in the shared transcript: a bar over a scrollback of runs. */
+.d-cexec { display: flex; flex-direction: column; min-width: 0; border-radius: 10px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); overflow: hidden; }
+.d-cexec[hidden], .d-cexec [hidden] { display: none; }
+.cexec-bar { display: flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 5px 0 0; background: var(--tm-bg2); font: 600 11px/1 var(--wb-mono); color: var(--tm-dim); }
+.d-cexec:not([data-folded]) .cexec-bar { box-shadow: 0 1px 0 var(--tm-line); }
+.cexec-head { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 0 4px 0 9px; height: 26px; border: 0; background: transparent; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.cexec-sh { color: var(--tm-fg); font-weight: 800; flex: none; }
+.cexec-count { flex: none; }
+.cexec-mini { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tm-fg); }
+.d-cexec:not([data-folded]) .cexec-mini { display: none; }
+.cexec-mini[data-tone="ok"] { color: var(--tm-green); }
+.cexec-mini[data-tone="fail"] { color: var(--tm-red); }
+.cexec-mini[data-tone="run"] { color: var(--tm-blue); }
+.cexec-mini[data-tone="warn"] { color: var(--tm-amber); }
+.cexec-chev { margin-left: auto; flex: none; font-family: var(--wb-sans, system-ui, sans-serif); font-weight: 600; }
+.cexec-clear { flex: none; border: 0; border-radius: 5px; padding: 3px 6px; background: transparent; color: var(--tm-dim); font: 600 10.5px/1 system-ui, sans-serif; cursor: pointer; }
+.d-cexec[data-folded] .cexec-clear { display: none; }
+.cexec-head:hover, .cexec-clear:hover { color: var(--tm-fg); }
+.cexec-head:focus-visible, .cexec-clear:focus-visible, .cexec .cexec-x:focus-visible, .cexec .cexec-copy:focus-visible { outline: 2px solid var(--tm-blue); outline-offset: -2px; }
+.cexec-log { display: flex; flex-direction: column; gap: 10px; padding: 6px 10px 8px; max-height: min(38vh, 300px); overflow: auto; font: 12px/1.5 var(--wb-mono); }
+.cexec { gap: 2px; color: var(--tm-fg); }
+.cexec .cmdecho { align-items: baseline; gap: 7px; font-size: 12px; color: var(--tm-dim); }
+.cexec .cmdecho .mk { color: var(--tm-green); font-weight: 800; flex: none; }
+.cexec .cmdecho code { flex: 1 1 auto; color: #e6e6e6; font-weight: 700; }
+.cexec[data-tone="fail"] .cmdecho .mk { color: var(--tm-red); }
+.cexec[data-tone="run"] .cmdecho .mk { color: var(--tm-blue); }
+.cexec .cexec-label { flex: none; padding: 0 6px; border-radius: 4px; background: #33264d; color: #a57bf0; font: 700 10.5px/17px system-ui, sans-serif; }
+.cexec .cmdout { margin: 0; padding: 0; background: transparent; border-radius: 0; box-shadow: none; color: var(--tm-fg); font: 12px/1.5 var(--wb-mono); max-height: 220px; }
+.cexec .cmdnote { padding-left: 0; font-size: 11.5px; font-style: italic; color: var(--tm-dim); }
+.cexec .cexec-x, .cexec .cexec-copy { cursor: pointer; border: 0; border-radius: 5px; padding: 1px 6px; font: inherit; background: transparent; color: var(--tm-dim); }
+.cexec .cexec-x { margin-left: auto; flex: none; opacity: .6; padding: 0 4px; }
+.cexec .cexec-x:hover { opacity: 1; }
+.cexec .cexec-copy { border: 1px solid var(--tm-line); background: var(--tm-bg2); color: var(--tm-fg); flex: none; white-space: nowrap; font: 600 10.5px/1.4 system-ui, sans-serif; }
+.cexec-file { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; color: var(--tm-dim); }
+.cexec-file a { overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; font-family: var(--wb-mono); color: var(--tm-blue); text-decoration: underline; text-underline-offset: 2px; }
+.cexec-stl { display: flex; align-items: center; gap: 6px; margin-top: 3px; font: 700 10.5px/1.2 var(--wb-mono); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; color: var(--tm-green); }
+.cexec-stl::before { content: ""; flex: none; width: 10px; height: 1px; background: currentColor; opacity: .4; }
+.cexec-stl::after { content: ""; flex: 1 1 auto; min-width: 12px; order: 99; height: 1px; background: currentColor; opacity: .3; }
+.cexec-stl > i { font-style: normal; opacity: .5; }
+.cexec-stl .cexec-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cexec-stl .cexec-bytes, .cexec-stl .cexec-job { color: var(--tm-dim); font-weight: 600; font-style: normal; overflow: hidden; text-overflow: ellipsis; }
+.cexec[data-tone="fail"] .cexec-stl { color: var(--tm-red); }
+.cexec[data-tone="run"] .cexec-stl { color: var(--tm-blue); }
+.cexec[data-tone="warn"] .cexec-stl { color: var(--tm-amber); }
 /* The lead's user commands ("command slots"): a strip over the composer's result
-   cards, one row per command with its exact stored line, localhost-only. */
+   console, one dark block per command with its exact stored line, localhost-only. */
 .d-ucmd { padding: 4px 2px 2px; font-size: 12px; }
 .d-ucmd[hidden] { display: none; }
 .d-ucmd > summary { cursor: pointer; color: var(--wb-muted-fg); font-size: 11.5px; padding: 2px 0; user-select: none; }
-.d-ucmd-list { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 6px; max-height: 30vh; overflow: auto; }
-.ucmd { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.d-ucmd-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 6px; max-height: 30vh; overflow: auto; }
+.ucmd { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 5px 7px 6px; border-radius: 9px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); }
 .ucmd-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ucmd-run { cursor: pointer; border: 0; border-radius: 8px; padding: 3px 10px; font: inherit; font-weight: 600; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ucmd-run:hover:not(:disabled) { color: var(--wb-primary); }
-.ucmd-run:disabled { opacity: .55; cursor: progress; }
-.ucmd-desc { color: var(--wb-muted-fg); min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
-.ucmd-x { margin-left: auto; cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--wb-muted-fg); flex: none; }
+.ucmd-run { cursor: pointer; border: 0; border-radius: 7px; padding: 3px 10px 4px; font: inherit; font-weight: 700; background: var(--tm-green-bg); color: var(--tm-green); box-shadow: 0 2px 0 #0b0c0e, inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ucmd-run:hover:not(:disabled) { color: #fff; }
+.ucmd-run:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 #0b0c0e, inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); }
+.ucmd-run:disabled { opacity: .7; cursor: progress; color: var(--tm-blue); background: #1f3550; }
+.ucmd-desc { color: var(--tm-dim); min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.ucmd-x { margin-left: auto; cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--tm-dim); flex: none; }
 .ucmd-run:focus-visible, .ucmd-x:focus-visible, .d-ucmd > summary:focus-visible { outline: 2px solid var(--wb-primary); }
-.ucmd-line { display: block; padding-left: 4px; font-family: var(--wb-mono); font-size: 11.5px; color: var(--wb-muted-fg); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.ucmd-line { display: block; padding: 2px 4px; font-family: var(--wb-mono); font-size: 12.5px; font-weight: 600; line-height: 1.5; color: #e6e6e6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.ucmd-line::before { content: "$ "; color: var(--tm-green); font-weight: 800; }
+/* Shell mode: the composer's first character is `!`. The input turns into a
+   dark mono field, the `!` is painted amber by the highlight registry, the send
+   button becomes a green Run, and a bash badge with its keys shows under it. */
+::highlight(ws-bang) { color: #e0a84a; }
+.composer[data-bang] { box-shadow: var(--wb-shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--tm-green) 45%, transparent); }
+.composer[data-bang] .cfield { background: var(--tm-bg); box-shadow: inset 0 0 0 1px var(--tm-line); }
+.composer[data-bang] textarea + .wsc-editor { font: 13px/1.5 var(--wb-mono); color: var(--tm-fg); background: var(--tm-bg); caret-color: var(--tm-green); padding: 9px 10px; }
+.composer[data-bang] textarea + .wsc-editor:focus { outline-color: var(--tm-green); }
+.composer[data-bang] .csend { background: var(--tm-green-bg); color: var(--tm-green); }
+.composer[data-bang] .csend svg { display: none; }
+.composer[data-bang] .csend::after { content: "\25B6"; font-size: 14px; line-height: 1; }
+.cbang { display: none; align-items: center; gap: 8px; min-height: 22px; flex-wrap: wrap; font-size: 11.5px; color: var(--wb-muted-fg); }
+.composer[data-bang] .cbang { display: flex; }
+.cbang-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; background: var(--tm-green-bg); color: var(--tm-green); font: 800 10.5px/1 var(--wb-mono); letter-spacing: .02em; }
+.cbang-hint kbd { display: inline-block; padding: 2px 5px 1px; border-radius: 4px; background: var(--wb-muted); box-shadow: inset 0 -1px 0 var(--wb-line), inset 0 0 0 1px var(--wb-line); font: 600 10.5px/1.2 var(--wb-mono); color: var(--wb-fg); }
 .caret { display: inline-block; width: 7px; height: 13px; background: currentColor; vertical-align: -2px; margin-left: 2px; animation: dash-blink 1s steps(1) infinite; }
 @keyframes dash-blink { 50% { opacity: 0; } }
 .permwait { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wb-ph-perm) 16%, var(--wb-card)); border-radius: 10px; padding: 7px 11px; font-size: 13px; }
