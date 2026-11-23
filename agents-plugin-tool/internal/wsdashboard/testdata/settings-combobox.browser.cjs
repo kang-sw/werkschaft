@@ -70,9 +70,11 @@ const CHOICES = {
     });
 
     let choicesRequests = 0;
+    let endpointModels = [];
     await page.route('**/support/choices', async route => {
       choicesRequests++;
-      await route.fulfill({ json: CHOICES, headers: { 'Cache-Control': 'no-store' } });
+      const pickers = [{ harness: 'werk', available: true, models: endpointModels }];
+      await route.fulfill({ json: { ...CHOICES, pickers }, headers: { 'Cache-Control': 'no-store' } });
     });
 
     // The modal's index backdrop loads tracker stores; this fixture has no tracker backend.
@@ -191,6 +193,24 @@ const CHOICES = {
     const switchedValue = switchedResponse.request().postDataJSON().value;
     assert.equal(switchedValue.model, 'sonnet');
     assert.equal(switchedValue.provider, '');
+
+    // Changing the endpoint list refreshes the already-cached model choices.
+    const endpointRow = frame().locator('[data-config-key="agent.werk_endpoints"]');
+    const endpointsSaved = page.waitForResponse(r => r.url().endsWith('/api/config/set') &&
+      r.request().postDataJSON()?.key === 'agent.werk_endpoints');
+    await endpointRow.locator('textarea').fill(JSON.stringify({
+      desk: { base_url: 'https://ollama.example/v1', kind: 'ollama' }
+    }));
+    endpointModels = [{ id: 'new-model', provider: 'local/desk' }];
+    await endpointRow.locator('.save-btn').click();
+    assert.equal((await endpointsSaved).status(), 200);
+    await endpointRow.locator('.reset-btn').waitFor({ state: 'visible' });
+    assert.equal(choicesRequests, 1, 'endpoint save leaves discovery lazy');
+    await werkInputs.nth(0).fill('werk');
+    await werkRow.locator('.scb-btn').nth(1).click();
+    await popup.getByText('local/desk new-model', { exact: true }).waitFor();
+    assert.equal(choicesRequests, 2, 'model picker fetched new choices after endpoint save');
+    await werkInputs.nth(1).press('Escape');
     await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="' + activeBucket + '"]').click();
 
     // Bundle modal in dark theme: popup mounts inside <dialog> on top of top-layer modal!

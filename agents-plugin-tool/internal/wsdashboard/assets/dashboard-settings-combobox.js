@@ -4,6 +4,7 @@ var WsSettingsCombobox = (function () {
   var PENDING_RETRY_MS = 1500;
   var choicesPromise = null;
   var choicesData = null;
+  var choicesGeneration = 0;
   var seq = 0;
   var activeClose = null;
   var waiters = [];
@@ -18,6 +19,13 @@ var WsSettingsCombobox = (function () {
     return typeof window !== "undefined" && typeof window.wsT === "function" ? window.wsT(key) : key;
   }
 
+  function invalidateChoices() {
+    choicesGeneration++;
+    choicesData = null;
+    choicesPromise = null;
+    pendingRetries = 0;
+  }
+
   function loadChoices() {
     if (choicesData) return Promise.resolve(choicesData);
     if (choicesPromise) return choicesPromise;
@@ -25,12 +33,14 @@ var WsSettingsCombobox = (function () {
       choicesData = { harnesses: [], failed: true };
       return Promise.resolve(choicesData);
     }
+    var generation = choicesGeneration;
     choicesPromise = fetch("/support/choices", { credentials: "same-origin", cache: "no-store" })
       .then(function (resp) {
         if (!resp || !resp.ok) throw new Error("choices unavailable");
         return resp.json();
       })
       .then(function (json) {
+        if (generation !== choicesGeneration) return;
         if (!json || !Array.isArray(json.harnesses)) throw new Error("invalid choices");
         // pickers are harnesses that list models for this picker but open no
         // support conversation or lead (a worker-only backend): beside the rest here.
@@ -40,11 +50,13 @@ var WsSettingsCombobox = (function () {
         if (json.pickers_pending && typeof setTimeout === "function" && pendingRetries < MAX_PENDING_RETRIES) {
           pendingRetries++;
           setTimeout(function () {
+            if (generation !== choicesGeneration) return;
             choicesData = null;
             choicesPromise = null;
             // Fetched here, not left for the next interaction: an open picker
             // shows the list as soon as it arrives.
             loadChoices().then(function () {
+              if (generation !== choicesGeneration) return;
               refreshHooks.slice().forEach(function (hook) {
                 if (!hook.gone()) { try { hook.refresh(); } catch (_) {} }
               });
@@ -57,10 +69,12 @@ var WsSettingsCombobox = (function () {
         return choicesData;
       })
       .catch(function () {
+        if (generation !== choicesGeneration) return;
         choicesData = { harnesses: [], failed: true };
         return choicesData;
       })
       .then(function (resolved) {
+        if (generation !== choicesGeneration) return;
         var list = waiters.splice(0, waiters.length);
         list.forEach(function (fn) { try { fn(resolved); } catch (_) {} });
         return resolved;
@@ -546,6 +560,7 @@ var WsSettingsCombobox = (function () {
     },
     attach: attach,
     loadChoices: loadChoices,
+    invalidateChoices: invalidateChoices,
     backendOptions: backendOptions,
     modelOptions: modelOptions,
     modelKey: modelKey,
@@ -553,8 +568,7 @@ var WsSettingsCombobox = (function () {
     effortOptions: effortOptions,
     filterOptions: filterOptions,
     _resetForTest: function () {
-      choicesPromise = null;
-      choicesData = null;
+      invalidateChoices();
       waiters = [];
       if (activeClose) activeClose();
     }

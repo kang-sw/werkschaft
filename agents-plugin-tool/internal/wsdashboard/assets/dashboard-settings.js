@@ -580,6 +580,9 @@ var wsSettingsChoiceLabels = {
         var result = pending ? await pending :
           await request("/api/config/" + action, Object.assign({}, selection, {key: operation.key, selectors: operation.selectors, value: operation.value}));
         if (result.entry) {
+          if (entry.key === "agent.werk_endpoints" && window.WsSettingsCombobox) {
+            window.WsSettingsCombobox.invalidateChoices();
+          }
           var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
