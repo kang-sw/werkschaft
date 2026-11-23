@@ -29,7 +29,7 @@
   // lead is the viewed hosted session: its last read state, the read in
   // flight, the permission line the state was last read for, and the
   // approval cards by request id.
-  var lead = { st: null, busy: false, again: false, gone: false, key: "", cards: {}, need: null };
+  var lead = { st: null, busy: false, again: false, gone: false, key: "", cards: {}, answered: {}, need: null };
   // toolLabel is a tool's name as the server's rows show it: an MCP tool
   // without its server prefix.
   function toolLabel(name) {
@@ -1242,6 +1242,80 @@
     if (can) { chip.setAttribute("role", "button"); chip.setAttribute("tabindex", "0"); }
     else { chip.removeAttribute("role"); chip.removeAttribute("tabindex"); }
   }
+  function apChanged() {
+    document.dispatchEvent(new CustomEvent("ws-approval-rows-changed"));
+  }
+  function apMetadata(el, a) {
+    el.setAttribute("data-audit-owner", "approval");
+    el.setAttribute("data-approval-id", String(a.id));
+    if (a.tool_use_id) el.setAttribute("data-approval-call", String(a.tool_use_id));
+    if (a.started_at) el.setAttribute("data-at", new Date(a.started_at).toISOString());
+  }
+  // State contains pending prompts only; disappearance cannot prove a decision.
+  // Client-owned rows have no data-entry, so transcript merges retain them.
+  function apMountAnswered() {
+    var convo = $("convo"), changed = false;
+    if (!convo) return false;
+    var box = convo.querySelector(".centries");
+    if (!box) return false;
+    var oldest = box.querySelector("[data-entry][data-at]");
+    var cutoff = oldest ? Date.parse(oldest.getAttribute("data-at")) : NaN;
+    Object.keys(lead.answered).forEach(function (id) {
+      var row = lead.answered[id], at = Date.parse(row.getAttribute("data-at"));
+      if (isFinite(at) && isFinite(cutoff) && at < cutoff) {
+        if (row.parentNode) { row.remove(); changed = true; }
+        delete lead.answered[id];
+        return;
+      }
+      var before = null;
+      Array.prototype.some.call(box.children, function (child) {
+        if (child === row) return false;
+        var stamp = Date.parse(child.getAttribute("data-at"));
+        var other = child.getAttribute("data-approval-id");
+        if (stamp > at || (stamp === at && other && other > id)) { before = child; return true; }
+        return false;
+      });
+      if (row.parentNode !== box || row.nextSibling !== before) {
+        box.insertBefore(row, before);
+        changed = true;
+      }
+    });
+    return changed;
+  }
+  function apAnswered(a, behavior, message, pending) {
+    if (lead.answered[a.id]) return;
+    var row = mk("details", "apanswered");
+    apMetadata(row, a);
+    var h = row.appendChild(mk("summary", "conv-row"));
+    h.appendChild(mk("span", "row-icon")).appendChild(gIcon(behavior === "allow" ? "check" : "x"));
+    var content = h.appendChild(mk("span", "row-content"));
+    content.appendChild(mk("b", null, wsT("js.ap.answered")));
+    content.appendChild(mk("code", null, toolLabel(String(a.tool || ""))));
+    content.appendChild(mk("span", null, wsT(behavior === "allow" ? "js.ap.allow" : "js.ap.deny")));
+    if (a.started_at) content.appendChild(mk("span", "apwait", Math.max(0, Math.round((Date.now() - a.started_at) / 1000)) + "s"));
+    var time = h.appendChild(mk("span", "row-time"));
+    if (a.started_at) {
+      var t = time.appendChild(mk("time", "t"));
+      t.setAttribute("data-ms", String(a.started_at));
+      t.setAttribute("data-f", "clock");
+    }
+    h.appendChild(mk("span", "row-chevron")).appendChild(gIcon("chev"));
+    var body = row.appendChild(mk("div", "row-details"));
+    if (a.description) body.appendChild(mk("div", "apdesc", String(a.description)));
+    var text = WsRail.approvalText(a.input);
+    if (text) body.appendChild(mk("pre", "apin", text));
+    if (message) body.appendChild(mk("div", "apdesc", message));
+    // Preserve already-linked audit nodes when the pending card becomes a trace.
+    var audit = pending.querySelector(".conv-audit-items") || mk("div", "conv-audit-items");
+    row.appendChild(audit);
+    lead.answered[a.id] = row;
+    apMountAnswered();
+    fmtTimes(row);
+    lead.approvalChanged = true;
+  }
+  document.addEventListener("ws-entries-merged", function () {
+    if (apMountAnswered()) apChanged();
+  });
   // apCard builds the card of approval request a: the tool, the request's
   // description, a readable preview of the input, and Allow and Deny (Deny
   // opens an optional message to send with it). A viewer without the
@@ -1251,17 +1325,22 @@
   function apCard(a, can) {
     var C = { busy: false };
     var el = C.el = mk("div", "apcard");
-    var h = el.appendChild(mk("div", "aph"));
-    h.appendChild(gIcon("lock"));
-    h.appendChild(mk("b", null, wsT("js.ap.title")));
-    h.appendChild(mk("code", null, toolLabel(String(a.tool || "")))).title = String(a.tool || "");
-    if (a.agent_id) h.appendChild(mk("span", "apsub", wsT("js.ap.agent")));
-    C.n = h.appendChild(mk("span", "apn"));
+    apMetadata(el, a);
+    var h = el.appendChild(mk("div", "aph conv-row"));
+    h.appendChild(mk("span", "row-icon")).appendChild(gIcon("lock"));
+    var content = h.appendChild(mk("span", "row-content"));
+    content.appendChild(mk("b", null, wsT("js.ap.title")));
+    content.appendChild(mk("code", null, toolLabel(String(a.tool || "")))).title = String(a.tool || "");
+    if (a.agent_id) content.appendChild(mk("span", "apsub", wsT("js.ap.agent")));
+    C.n = content.appendChild(mk("span", "apn"));
+    var time = h.appendChild(mk("span", "row-time"));
     if (a.started_at) {
-      var t = h.appendChild(mk("time", "t"));
+      var t = time.appendChild(mk("time", "t"));
       t.setAttribute("data-ms", String(a.started_at));
       t.setAttribute("data-f", "since");
     }
+    h.appendChild(mk("span", "row-chevron"));
+    el.appendChild(mk("div", "conv-audit-items"));
     var b = el.appendChild(mk("div", "apb")), text = WsRail.approvalText(a.input);
     if (a.description) b.appendChild(mk("div", "apdesc", String(a.description)));
     if (text) b.appendChild(mk("pre", "apin", text));
@@ -1312,7 +1391,7 @@
       railPost("/agents/" + encodeURIComponent(rid) + "/approvals/" + encodeURIComponent(String(a.id)), body, function (st, v, s) {
         C.busy = false;
         sync();
-        if (st === 200 && v.id) { lead.st = v; leadDraw(); return; }
+        if (st === 200 && v.id) { apAnswered(a, behavior, body.message, el); lead.st = v; leadDraw(); return; }
         if (st === 409) { leadFetch(); return; }
         err.textContent = leadErr(st, s);
         err.hidden = false;
@@ -1344,18 +1423,20 @@
     handedDraw(st);
     harnessDraw(st);
     if (!box) return;
-    var open = !leadGone(st), pin = pinned(), keep = {};
+    var open = !leadGone(st), pin = pinned(), keep = {}, changed = apMountAnswered() || !!lead.approvalChanged;
+    lead.approvalChanged = false;
     var list = open && Array.isArray(st.approvals) ? st.approvals.filter(function (a) { return a && a.id; }) : [];
     var need = open && !list.length && st.action_needed ? String(st.action_needed) : "";
     list.forEach(function (a) { keep[a.id] = true; });
     Object.keys(lead.cards).forEach(function (id) {
       if (keep[id]) return;
       lead.cards[id].el.remove();
+      changed = true;
       delete lead.cards[id];
     });
     list.forEach(function (a, i) {
       var c = lead.cards[a.id] || (lead.cards[a.id] = apCard(a, !!st.can_control));
-      if (box.children[i] !== c.el) box.insertBefore(c.el, box.children[i] || null);
+      if (box.children[i] !== c.el) { box.insertBefore(c.el, box.children[i] || null); changed = true; }
       c.n.textContent = (i + 1) + "/" + list.length;
       c.n.hidden = list.length < 2;
     });
@@ -1373,6 +1454,7 @@
     box.hidden = !list.length && !need;
     if (convo) convo.classList.toggle("ap-on", !box.hidden);
     fmtTimes(box);
+    if (changed) apChanged();
     if (pin) pinConvo();
   }
   // handedDraw shows, while st says the session was handed to a terminal,

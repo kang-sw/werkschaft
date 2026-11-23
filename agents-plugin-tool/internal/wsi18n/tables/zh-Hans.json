@@ -2130,6 +2130,7 @@
   "js.lead.close": "关闭",
   "js.lead.close.note": "结束对话和进程，并停止邮件唤醒。可从轨道重新打开。",
   "js.lead.close.confirm": "关闭此会话？其进程将结束，对话无法继续。",
+  "js.ap.answered": "已答复",
   "js.ap.title": "批准请求",
   "js.ap.agent": "子代理",
   "js.ap.readonly": "只有仪表盘所在电脑上的浏览器可以回答。",

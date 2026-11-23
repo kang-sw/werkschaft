@@ -26,7 +26,7 @@ func TestSessionPageRendersLiveRegions(t *testing.T) {
 		"streamed &lt;partial&gt; reply",
 		// The mail whose history entry exists expands to its body; the
 		// other shows its first line only.
-		`mail second line`, `<div class="mailline sent nobody" data-entry=`,
+		`mail second line`, `<div class="mailline turn-trigger sent nobody" data-entry=`,
 		// The peer is served here, so its name links to its page.
 		`href="/s/boardsession"`,
 	} {

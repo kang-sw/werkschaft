@@ -152,7 +152,7 @@ func TestConversationMailWakeReplyIDHeader(t *testing.T) {
 				t.Fatal(err)
 			}
 			html := string(set[regionEntries].HTML)
-			if strings.Contains(html, "mail-notification") || strings.Count(html, `href="/s/suspectcaboosetalonunretired"`) != 1 || !strings.Contains(html, "Synthetic regression &lt;text&gt;") || !strings.Contains(html, "[ws mailbox]") || strings.Count(html, ">EXEC 4</a>") != 1 || strings.Count(html, `class="mail-block"`) != 1 || strings.Count(html, `class="mailline recv"`) != 1 {
+			if strings.Contains(html, "mail-notification") || strings.Count(html, `href="/s/suspectcaboosetalonunretired"`) != 1 || !strings.Contains(html, "Synthetic regression &lt;text&gt;") || !strings.Contains(html, "[ws mailbox]") || strings.Count(html, ">EXEC 4</a>") != 1 || strings.Count(html, `class="mail-block"`) != 1 || strings.Count(html, `class="mailline turn-trigger recv"`) != 1 {
 				t.Fatalf("missing linked presentation or raw diagnostics: %s", html)
 			}
 			if !strings.Contains(html, `<span class="arr">←</span><svg class="i mail-icon"`) || strings.Count(html, `class="i mail-icon"`) != 1 {
@@ -171,7 +171,7 @@ func TestConversationMailWakeReplyIDHeader(t *testing.T) {
 				t.Fatal(err)
 			}
 			html = string(set[regionEntries].HTML)
-			if strings.Count(html, `class="mail-notification"`) != 1 || strings.Count(html, `class="mailline recv nobody"`) != 1 || strings.Contains(html, "data-mail-wake=") || strings.Count(html, "data-entry=") != 2 || strings.Count(html, ">EXEC 4</a>") != 1 {
+			if strings.Count(html, `class="mail-notification turn-trigger"`) != 1 || strings.Count(html, `class="mailline turn-trigger recv nobody"`) != 1 || strings.Contains(html, "data-mail-wake=") || strings.Count(html, "data-entry=") != 2 || strings.Count(html, ">EXEC 4</a>") != 1 {
 				t.Fatalf("expired history did not restore both separate rows: %s", html)
 			}
 			if set[regionEntries].Hash == matchedHash {

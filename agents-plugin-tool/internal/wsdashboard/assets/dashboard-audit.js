@@ -35,7 +35,8 @@
 
   function auVisibleAuditRows() {
     return auCallElements().filter(function (el) {
-      return !el.hidden && !el.closest("[hidden]");
+      var parent = el.tagName === "SUMMARY" ? el.parentElement.parentElement : el.parentElement;
+      return !el.hidden && !el.closest("[hidden]") && !(parent && parent.closest("details:not([open])"));
     });
   }
 
@@ -942,7 +943,8 @@
     for (var j = 0; j < rows.length; j++) {
       var row = rows[j];
       var cid = row.getAttribute("data-call");
-      var s = cid ? byCall[cid] : null;
+      if (!cid) continue;
+      var s = byCall[cid];
       if (s || markChecked) row.setAttribute("data-au-hydrated", "1");
       if (!s) continue;
 
@@ -1109,7 +1111,10 @@
   // --- Event delegation on #convo, keyboard scope & layout sync ---
   doc.addEventListener("click", function (e) {
     var t = e.target;
-    var row = t && t.closest ? t.closest(".au-row[data-call]") : null;
+    var button = t && t.closest ? t.closest(".au-open-call[data-call]") : null;
+    var row = button ? button.closest(".au-call-details").querySelector("summary.au-row") :
+      (t && t.closest ? t.closest(".au-row[data-call]") : null);
+    if (!button && row && row.classList.contains("conv-row") && row.tagName === "SUMMARY") return;
     if (row && $("convo") && $("convo").contains(row)) {
       var sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed) return;
@@ -1119,7 +1124,7 @@
 
   doc.addEventListener("keydown", function (e) {
     var t = e.target;
-    if ((e.key === "Enter" || e.key === " ") && t && t.matches && t.matches(".au-row[data-call]")) {
+    if ((e.key === "Enter" || e.key === " ") && t && t.matches && t.matches(".au-row[data-call]") && t.tagName !== "SUMMARY") {
       e.preventDefault();
       auOpenCall(t.getAttribute("data-call"), t);
       return;

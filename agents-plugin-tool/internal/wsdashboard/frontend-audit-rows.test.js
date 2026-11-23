@@ -323,7 +323,7 @@ test('auInterleavePlan attaches matching call_ids, falls back orphans chronologi
   const renderedCallIds = { c1: true };
   const events = [
     { id: 'e-attached', seq: 5, kind: 'hook', at: '2026-11-20T10:00:02Z', call_id: 'c1' },
-    { id: 'e-orphan', seq: 6, kind: 'thinking', at: '2026-11-20T10:00:03Z', call_id: 'c-missing' },
+    { id: 'e-orphan', seq: 6, kind: 'other', at: '2026-11-20T10:00:03Z', call_id: 'c-missing' },
     { id: 'e-sys-eq', seq: 1, kind: 'system', subkind: 'system_prompt', at: '2026-11-20T10:00:01Z' },
     { id: 'e-tail', seq: 8, kind: 'compaction', at: '2026-11-20T10:00:08Z' },
     { id: 'e-non-hidden', seq: 2, kind: 'tool_call', at: '2026-11-20T10:00:02Z', call_id: 'c1' }
@@ -351,10 +351,15 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   const r1 = new dom.El('LI');
   r1.className = 'au-row au-done';
   r1.setAttribute('data-call', 'c1');
-  calls.appendChild(r1);
+  const call = new dom.El('DETAILS');
+  call.className = 'au-call-details';
+  call.appendChild(r1);
+  call.appendChild(itemsSlot(dom));
+  calls.appendChild(call);
   tools.appendChild(calls);
   dom.centries.appendChild(e1);
   dom.centries.appendChild(tools);
+  const turn = addTurn(dom, 'k4', '2026-11-20T10:00:03.500Z');
 
   const fetched = [];
   const opened = [];
@@ -429,7 +434,7 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
     fmtBytes: (n) => `${n} B`,
     openCall(id) { opened.push(['call', id]); },
     openEvent(id, opts) { opened.push(['event', id, opts && opts.tab]); },
-    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]'); },
+    visibleRows() { return dom.centries.querySelectorAll('.au-row[data-call], .au-hid[data-event-id], .au-sysrow .au-hid[data-event-id]'); },
     syncSelection() {}
   };
   vm.createContext(ctx);
@@ -438,7 +443,7 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   // Allow initial queued sync to complete
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(fetched[0].includes('since=2026-11-20T10%3A00%3A02Z') && !fetched[0].includes('until='));
-  assert.ok(dom.centries.querySelector('.au-hid.au-inner[data-event-id="ev-hook"]'));
+  assert.ok(dom.centries.querySelector('.au-call-details .conv-audit-items .au-hid[data-event-id="ev-hook"]'));
 
   // Older history page arrives with end: true -> fetches [T1, T2) AND open-below [, T1)
   const e0 = new dom.El('DIV');
@@ -449,8 +454,8 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(fetched.some((u) => u.includes('since=2026-11-20T10%3A00%3A01Z') && u.includes('until=2026-11-20T10%3A00%3A02Z')));
   assert.ok(fetched.some((u) => !u.includes('since=') && u.includes('until=2026-11-20T10%3A00%3A01Z')));
-  assert.ok(dom.centries.querySelector('.au-sysrow[data-event-id="ev-sys"]'));
-  assert.ok(dom.centries.querySelector('.au-hid[data-event-id="ev-think"]'));
+  assert.ok(dom.centries.querySelector('.au-sysrow .au-hid[data-event-id="ev-sys"]'));
+  assert.ok(turn.querySelector('.au-hid[data-event-id="ev-think"]'));
 
   // 503 preserves cur1 for subsequent retry; 410 resets once and recovers
   mode = '503';
@@ -479,16 +484,17 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: composerBtn, preventDefault() { throw new Error('must not fire in #composer'); } });
 
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.convo, preventDefault() {} });
-  assert.equal(dom.centries.querySelector('.au-sysrow').focused, true);
-  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: dom.centries.querySelector('.au-sysrow'), preventDefault() {} });
-  const thinkEl = dom.centries.querySelector('.au-hid[data-event-id="ev-think"]');
-  assert.equal(thinkEl.focused, true);
-  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: thinkEl, preventDefault() {} });
+  const initEl = dom.centries.querySelector('.au-sysrow .au-hid');
+  assert.equal(initEl.focused, true);
+  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: initEl, preventDefault() {} });
   assert.equal(r1.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: r1, preventDefault() {} });
   const hookEl = dom.centries.querySelector('.au-hid[data-event-id="ev-hook"]');
   assert.equal(hookEl.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: hookEl, preventDefault() {} });
+  const thinkEl = turn.querySelector('.au-hid[data-event-id="ev-think"]');
+  assert.equal(thinkEl.focused, true);
+  dom.doc.dispatchEvent({ type: 'keydown', key: 'j', target: thinkEl, preventDefault() {} });
   const otherEl = dom.centries.querySelector('.au-hid[data-event-id="ev-other"]');
   assert.equal(otherEl.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'Enter', target: otherEl, preventDefault() {} });
@@ -616,46 +622,58 @@ test('history end still opens below an already covered interval', async () => {
   assert.equal(ctx.auOpenBelowDone, true);
 });
 
-test('run labels use fixed kind order and only system/thinking/hook/reminder and subagent task rows fold', () => {
-  const h = loadAuditRowsHelpers();
-  for (const k of ['system', 'thinking', 'hook', 'system_reminder', 'subagent']) assert.equal(h.auIsRunKind(k), true, k);
-  for (const k of ['compaction', 'other', 'tool_call']) assert.equal(h.auIsRunKind(k), false, k);
-  assert.equal(h.auRunKindOf({ kind: 'subagent', subkind: 'task_started' }), 'subagent');
-  assert.equal(h.auRunKindOf({ kind: 'subagent', subkind: 'text' }), '');
-  assert.equal(h.auRunKindOf({ kind: 'subagent' }), '');
-  assert.equal(h.auRunKindOf({ kind: 'system', subkind: 'init' }), 'system');
-  assert.equal(h.auRunKindOf({ kind: 'other' }), '');
-  assert.equal(h.auRunLabel(['thinking', 'system', 'system', 'hook', 'system', 'system']), 'js.audit.kind.system 4 · js.audit.kind.thinking 1 · js.audit.kind.hook 1');
-});
+function itemsSlot(dom) {
+  const body = new dom.El('DIV');
+  body.className = 'conv-audit-items';
+  return body;
+}
 
-function runCollapseFixture() {
+function addTurn(dom, key, at) {
+  const turn = new dom.El('DETAILS');
+  turn.className = 'turnline';
+  turn.setAttribute('data-entry', key);
+  turn.setAttribute('data-at', at);
+  const counts = new dom.El('SPAN');
+  counts.className = 'turn-audit-counts';
+  turn.appendChild(counts);
+  turn.appendChild(itemsSlot(dom));
+  dom.centries.appendChild(turn);
+  return turn;
+}
+
+function turnFixture(finished = true) {
   const { ctx, dom } = raceRowsHarness(async () => auditPage({ events: [], end: true }));
-  const entry = (key, at) => {
-    const el = new dom.El('DIV');
-    el.setAttribute('data-entry', key);
-    el.setAttribute('data-at', at);
-    return el;
-  };
-  const e1 = entry('k1', '2026-11-20T10:00:00Z');
-  const tools = entry('k3', '2026-11-20T10:00:10Z');
+  const at = (seconds) => '2026-11-20T10:00:' + String(seconds).padStart(2, '0') + 'Z';
+  const tools = new dom.El('DIV');
   tools.className = 'au-tools';
-  const calls = new dom.El('OL');
-  calls.className = 'au-calls';
-  for (const id of ['c1', 'c2']) {
-    const li = new dom.El('LI');
-    li.className = 'au-row au-done';
-    li.setAttribute('data-call', id);
-    calls.appendChild(li);
-  }
-  tools.appendChild(calls);
-  const e2 = entry('k2', '2026-11-20T10:00:20Z');
-  dom.centries.appendChild(e1);
+  tools.setAttribute('data-entry', 'tools');
+  tools.setAttribute('data-at', at(10));
+  const call = new dom.El('DETAILS');
+  call.className = 'au-call-details';
+  const summary = new dom.El('SUMMARY');
+  summary.className = 'au-row';
+  summary.setAttribute('data-call', 'c1');
+  summary.textContent = 'Read';
+  call.appendChild(summary);
+  call.appendChild(itemsSlot(dom));
+  tools.appendChild(call);
   dom.centries.appendChild(tools);
-  dom.centries.appendChild(e2);
-  const evs = {};
-  const add = (id, seq, kind, at, extra) => { evs[id] = Object.assign({ id, seq, kind, at }, extra || {}); };
-  ctx.auEventsById = evs;
-  return { ctx, dom, calls, e1, tools, e2, add };
+  const turn = finished ? addTurn(dom, 'turn', at(20)) : null;
+  function owner(kind, seconds, callId) {
+    const el = new dom.El('DETAILS');
+    el.setAttribute('data-audit-owner', kind);
+    if (callId) el.setAttribute('data-approval-call', callId);
+    el.setAttribute('data-at', at(seconds));
+    el.appendChild(itemsSlot(dom));
+    dom.convo.appendChild(el);
+    return el;
+  }
+  const events = {};
+  ctx.auEventsById = events;
+  function add(id, seq, kind, seconds, extra) {
+    events[id] = { id, seq, kind, at: at(seconds), ...extra };
+  }
+  return { ctx, dom, at, call, turn, owner, add };
 }
 
 function countDomOps(dom, fn) {
@@ -677,85 +695,74 @@ function countDomOps(dom, fn) {
 }
 
 function rowById(dom, id) {
-  return dom.centries.querySelector('.au-hid[data-event-id="' + id + '"]');
+  return dom.convo.querySelector('.au-hid[data-event-id="' + id + '"]');
 }
 
-test('consecutive system/thinking/hook/reminder rows collapse into one summary; other rows break the run', () => {
-  const f = runCollapseFixture();
-  f.add('s1', 1, 'system', '2026-11-20T10:00:12Z', { subkind: 'status' });
-  f.add('s2', 2, 'system', '2026-11-20T10:00:13Z', { subkind: 'thinking_tokens' });
-  f.add('t1', 3, 'thinking', '2026-11-20T10:00:14Z');
-  f.add('sub', 4, 'subagent', '2026-11-20T10:00:15Z');
-  f.add('r1', 5, 'system_reminder', '2026-11-20T10:00:16Z');
-  f.add('h1', 6, 'hook', '2026-11-20T10:00:11Z', { call_id: 'c1' });
-  f.add('h2', 7, 'hook', '2026-11-20T10:00:11.5Z', { call_id: 'c1' });
+test('audit counterparts stay in their owning disclosures and the finished turn orders the remaining events', () => {
+  const f = turnFixture();
+  const compact = f.owner('compaction', 14);
+  const approval = f.owner('approval', 5, 'c1');
+  const completion = f.owner('subagent', 17);
+  f.add('prompt', 1, 'system', 1, { subkind: 'init', out_bytes: 20 });
+  f.add('thinking', 2, 'thinking', 2);
+  f.add('hook', 3, 'hook', 3, { parent_id: 'c1' });
+  f.add('request', 4, 'system', 5, { subkind: 'control_request:can_use_tool', call_id: 'c1' });
+  f.add('start', 5, 'tool_call', 6, { call_id: 'c1' });
+  f.add('task-start', 6, 'subagent', 7, { subkind: 'task_started', agent_id: 'a1' });
+  f.add('progress', 7, 'system', 8, { subkind: 'tool_progress', call_id: 'c1' });
+  f.add('orphan-progress', 8, 'other', 9, { subkind: 'tool_progress' });
+  f.add('reminder', 9, 'system_reminder', 12);
+  f.add('compact', 10, 'compaction', 14);
+  f.add('task-end', 11, 'subagent', 17, { subkind: 'task_notification', agent_id: 'a1' });
   f.ctx.auReconcileRows();
 
-  const runs = f.dom.centries.querySelectorAll('.au-run');
-  assert.equal(runs.length, 3, 'stream: [s1 s2 t1] and [r1]; call list: [h1 h2]');
-  const streamRuns = runs.filter((r) => r.parentNode === f.dom.centries);
-  assert.equal(streamRuns.length, 2);
-  assert.equal(streamRuns[0].textContent, 'js.audit.kind.system 2 · js.audit.kind.thinking 1');
-  assert.equal(streamRuns[1].textContent, 'js.audit.kind.reminder 1');
-  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'false');
-  // The subagent row is never folded and splits the two runs.
-  const sub = rowById(f.dom, 'sub');
-  assert.equal(sub.hasAttribute('hidden'), false);
-  assert.equal(sub.previousElementSibling, rowById(f.dom, 't1'));
-  assert.equal(sub.nextElementSibling, streamRuns[1]);
-  for (const id of ['s1', 's2', 't1', 'r1', 'h1', 'h2']) {
-    assert.equal(rowById(f.dom, id).hasAttribute('hidden'), true, id + ' starts collapsed');
-  }
-  // Call rows never fold; the attached hooks fold under their call row in the list.
-  assert.equal(f.calls.children[0].getAttribute('data-call'), 'c1');
-  const inRun = runs.find((r) => r.parentNode === f.calls);
-  assert.ok(inRun && inRun.tagName === 'LI' && inRun.textContent === 'js.audit.kind.hook 2');
-  assert.equal(f.calls.children[1], inRun);
-  assert.equal(f.calls.querySelectorAll('.au-row[data-call]').every((r) => !r.hasAttribute('hidden')), true);
-
-  // Click expands in place, Enter collapses again.
-  f.dom.doc.dispatchEvent({ type: 'click', target: streamRuns[0] });
-  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'true');
-  for (const id of ['s1', 's2', 't1']) assert.equal(rowById(f.dom, id).hasAttribute('hidden'), false);
-  assert.equal(rowById(f.dom, 'r1').hasAttribute('hidden'), true, 'other run stays folded');
-  f.dom.doc.dispatchEvent({ type: 'keydown', key: 'Enter', target: streamRuns[0], preventDefault() {} });
-  assert.equal(streamRuns[0].getAttribute('aria-expanded'), 'false');
-  assert.equal(rowById(f.dom, 's1').hasAttribute('hidden'), true);
+  const ids = (root) => root.querySelector('.conv-audit-items').children.map((row) => row.getAttribute('data-event-id'));
+  assert.deepEqual(ids(f.dom.convo.querySelector('.au-sysrow')), ['prompt']);
+  assert.deepEqual(ids(f.call), ['hook', 'progress']);
+  assert.deepEqual(ids(compact), ['compact']);
+  assert.deepEqual(ids(approval), ['request']);
+  assert.deepEqual(ids(completion), ['task-start', 'task-end']);
+  assert.deepEqual(ids(f.turn), ['thinking', null, 'reminder']);
+  assert.equal(f.turn.querySelector('.au-turn-tool').textContent, 'Read');
+  assert.equal(f.turn.querySelector('.turn-audit-counts').textContent,
+    'js.audit.kind.system 2 · js.audit.kind.hook 1 · js.audit.kind.reminder 1 · js.audit.kind.thinking 1 · js.audit.kind.subagent 2 · js.audit.kind.compaction 1');
+  assert.equal(rowById(f.dom, 'orphan-progress'), null);
+  assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
 });
 
-test('a row joining a run patches only that summary; an unchanged reconcile writes nothing', () => {
-  const f = runCollapseFixture();
-  f.add('s1', 1, 'system', '2026-11-20T10:00:12Z');
-  f.add('t1', 2, 'thinking', '2026-11-20T10:00:13Z');
+test('retry detail leaves the live badge and counts under the finished turn on recovery', () => {
+  const f = turnFixture(false);
+  const retry = f.owner('retry', 13);
+  f.add('retry-old', 1, 'system', 12, { subkind: 'api_retry' });
+  f.add('retry-live', 2, 'system', 13, { subkind: 'api_retry' });
   f.ctx.auReconcileRows();
-  const sum = f.dom.centries.querySelector('.au-run');
-  assert.equal(sum.textContent, 'js.audit.kind.system 1 · js.audit.kind.thinking 1');
+  const live = rowById(f.dom, 'retry-live');
+  assert.equal(live.parentNode, retry.querySelector('.conv-audit-items'));
+  assert.equal(rowById(f.dom, 'retry-old'), null);
+  f.dom.convo.removeChild(retry);
+  const turn = addTurn(f.dom, 'turn', f.at(20));
+  f.ctx.auReconcileRows();
+  assert.equal(f.dom.convo.querySelector('[data-audit-owner="retry"]'), null);
+  assert.equal(turn.querySelectorAll('[data-kind="system"]').length, 2);
+  assert.equal(turn.querySelector('.turn-audit-counts').textContent, 'js.audit.kind.system 2');
+});
 
-  assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0, 'idempotent reconcile performs no DOM writes');
-
-  f.add('s2', 3, 'system', '2026-11-20T10:00:14Z');
-  const ops = countDomOps(f.dom, () => f.ctx.auReconcileRows());
-  assert.equal(f.dom.centries.querySelector('.au-run'), sum, 'summary node is reused, not rebuilt');
-  assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 1);
-  assert.equal(sum.textContent, 'js.audit.kind.system 2 · js.audit.kind.thinking 1');
-  // One new row (11 writes to build and insert it), its hidden flag and the label write:
-  // bounded and independent of the stream size.
-  assert.ok(ops <= 14, 'joining a run cost ' + ops + ' DOM writes');
+test('new audit events update the keyed turn disclosure without structural churn', () => {
+  const f = turnFixture();
+  f.add('s1', 1, 'system', 12);
+  f.add('t1', 2, 'thinking', 13);
+  f.ctx.auReconcileRows();
+  const sum = f.turn.querySelector('.turn-audit-counts');
+  const retained = rowById(f.dom, 't1');
   assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0);
-
-  // An expanded run stays expanded when a row joins it.
-  f.dom.doc.dispatchEvent({ type: 'click', target: sum });
-  assert.equal(sum.getAttribute('aria-expanded'), 'true');
-  f.add('s3', 4, 'system', '2026-11-20T10:00:15Z');
-  f.ctx.auReconcileRows();
-  assert.equal(sum.textContent, 'js.audit.kind.system 3 · js.audit.kind.thinking 1');
-  assert.equal(sum.getAttribute('aria-expanded'), 'true');
-  assert.equal(rowById(f.dom, 's3').hasAttribute('hidden'), false);
-
-  // Removing every row of a run drops its summary.
-  for (const id of Object.keys(f.ctx.auEventsById)) delete f.ctx.auEventsById[id];
-  f.ctx.auReconcileRows();
-  assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
+  f.turn.setAttribute('open', '');
+  f.add('s2', 3, 'system', 14);
+  const ops = countDomOps(f.dom, () => f.ctx.auReconcileRows());
+  assert.ok(ops <= 22, 'one event and one label cost ' + ops + ' DOM writes');
+  assert.equal(rowById(f.dom, 't1'), retained);
+  assert.equal(sum.textContent, 'js.audit.kind.system 2 · js.audit.kind.thinking 1');
+  assert.equal(f.turn.hasAttribute('open'), true);
+  assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0);
 });
 
 // A fixture audit store behind the real /audit/events selection: the filter
@@ -852,47 +859,35 @@ test('entries without a date fetch one newest page, never the whole store', asyn
   assert.ok(urls.length <= 2, 'a second look reuses the latest cursor: ' + urls.length);
 });
 
-test('per-turn init events keep one session banner; later ones and subagent task rows fold', () => {
-  const f = runCollapseFixture();
-  f.add('init1', 1, 'system', '2026-11-20T10:00:05Z', { subkind: 'init' });
-  f.add('init2', 2, 'system', '2026-11-20T10:00:12Z', { subkind: 'init' });
-  f.add('init3', 3, 'system', '2026-11-20T10:00:13Z', { subkind: 'init' });
-  f.add('ts', 4, 'subagent', '2026-11-20T10:00:14Z', { subkind: 'task_started' });
-  f.add('tn', 5, 'subagent', '2026-11-20T10:00:15Z', { subkind: 'task_notification' });
-  f.add('sub-text', 6, 'subagent', '2026-11-20T10:00:16Z', { subkind: 'text' });
+test('the earliest retained init owns the only session-start badge', () => {
+  const f = turnFixture();
+  f.add('init1', 1, 'system', 5, { subkind: 'init' });
+  f.add('init2', 2, 'system', 12, { subkind: 'init' });
   f.ctx.auReconcileRows();
-  const banners = f.dom.centries.querySelectorAll('.au-sysrow');
-  assert.equal(banners.length, 1, 'one full-height session-start row');
-  assert.equal(banners[0].getAttribute('data-event-id'), 'init1');
-  assert.equal(rowById(f.dom, 'init2').hasAttribute('hidden'), true);
-  assert.equal(rowById(f.dom, 'init3').hasAttribute('hidden'), true);
-  assert.equal(rowById(f.dom, 'ts').hasAttribute('hidden'), true);
-  assert.equal(rowById(f.dom, 'tn').hasAttribute('hidden'), true);
-  assert.equal(rowById(f.dom, 'sub-text').hasAttribute('hidden'), false, 'subagent content stays visible');
-  const run = f.dom.centries.querySelectorAll('.au-run').filter((r) => r.parentNode === f.dom.centries)[0];
-  assert.equal(run.textContent, 'js.audit.kind.system 2 · js.audit.kind.subagent 2');
+  assert.equal(f.dom.centries.querySelectorAll('.au-sysrow').length, 1);
+  assert.equal(f.dom.centries.firstElementChild, f.dom.centries.querySelector('.au-sysrow'));
+  assert.equal(f.dom.centries.querySelector('.au-sysrow .au-hid').getAttribute('data-event-id'), 'init1');
+  assert.ok(f.turn.querySelector('[data-event-id="init2"]'));
 
-  // An older init arriving later takes over the banner and demotes the old one in place.
-  f.add('init0', 0, 'system', '2026-11-20T10:00:01Z', { subkind: 'init' });
+  f.add('init0', 0, 'system', 1, { subkind: 'init' });
   f.ctx.auReconcileRows();
-  const after = f.dom.centries.querySelectorAll('.au-sysrow');
-  assert.equal(after.length, 1);
-  assert.equal(after[0].getAttribute('data-event-id'), 'init0');
-  assert.equal(rowById(f.dom, 'init1').hasAttribute('hidden'), true);
+  assert.equal(f.dom.centries.querySelectorAll('.au-sysrow').length, 1);
+  assert.equal(f.dom.centries.querySelector('.au-sysrow .au-hid').getAttribute('data-event-id'), 'init0');
+  assert.ok(f.turn.querySelector('[data-event-id="init1"]'));
 });
 
 test('rows added under a bottom-pinned conversation re-pin it; no-op reconciles and unpinned views do not move it', () => {
   for (const stick of [true, false]) {
-    const f = runCollapseFixture();
+    const f = turnFixture();
     let pins = 0;
     f.ctx.stick = stick;
     f.ctx.pinConvo = () => { pins++; };
-    f.add('t1', 1, 'thinking', '2026-11-20T10:00:05Z');
+    f.add('t1', 1, 'thinking', 5);
     f.ctx.auReconcileRows();
     assert.equal(pins, stick ? 1 : 0, 'rows arriving re-pin only a pinned view');
     f.ctx.auReconcileRows();
     assert.equal(pins, stick ? 1 : 0, 'an unchanged reconcile does not touch the scroll');
-    f.add('t2', 2, 'hook', '2026-11-20T10:00:06Z');
+    f.add('t2', 2, 'hook', 6);
     f.ctx.auReconcileRows();
     assert.equal(pins, stick ? 2 : 0);
   }

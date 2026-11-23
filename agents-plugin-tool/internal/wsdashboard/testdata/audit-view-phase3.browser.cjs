@@ -51,6 +51,8 @@ const SHOTS = process.env.AUDIT_P3_SHOTS || "";
     // 2. A call row still opens its popup.
     console.log("STEP 2: a call row opens the popup");
     await frame.locator('.au-row[data-call="p3-c-multi"]').click();
+    assert.equal(await frame.locator('.au-win').count(), 0, 'summary expands without opening the inspector');
+    await frame.locator('.au-row[data-call="p3-c-multi"]').locator('xpath=..').locator('.au-open-call').click();
     await frame.waitForSelector(".au-win");
     assert.equal(await frame.locator(".au-win .au-sinp").inputValue(), "");
     await frame.locator(".au-win .au-close").first().click();

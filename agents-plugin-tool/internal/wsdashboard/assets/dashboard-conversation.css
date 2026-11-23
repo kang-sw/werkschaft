@@ -65,10 +65,6 @@
 .src { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
 .turnline { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; margin-left: 36px; font-size: 12px; color: var(--wb-muted-fg); }
 /* Wake notifications: quiet completion chips, expandable content cards. */
-.wake-divider { display: flex; align-items: center; gap: 10px; color: var(--wb-muted-fg); font-size: 11px; }
-.wake-divider::before, .wake-divider::after { content: ""; flex: 1; height: 1px; background: var(--wb-muted); }
-.wake-divider > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.wake-divider.fail { color: var(--wb-fail); }
 .wake-card { align-self: stretch; border-left: 3px solid var(--wb-technical); border-radius: 4px; background: var(--wb-card); padding: 8px 12px; min-width: 0; }
 .wake-card > summary { list-style: none; cursor: pointer; }
 .wake-card > summary::-webkit-details-marker { display: none; }
@@ -585,7 +581,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .close-request-reason:focus-visible { outline: 1px solid var(--wb-primary); }
 .close-request-chip > .unchip { margin-left: auto; }
 .achip .anote { color: var(--wb-muted-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 22ch; }
-.achip .anote::before { content: "· "; }
+.achip .anote::before { content: " · "; }
 .achip.tchip { cursor: pointer; background: var(--wb-muted); box-shadow: inset 0 0 0 1px var(--wb-line); }
 .achip.tchip .anote::before { content: none; }
 /* a board mention: "[topic] (id)" and the selected text, quoted */
@@ -676,7 +672,7 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .icapsule-val { flex: none; white-space: nowrap; }
 .icapsule-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-muted-fg); font-style: italic; }
 .icapsule-answer .icapsule-sub { font-style: normal; }
-.icapsule-answer .icapsule-sub::before { content: "· "; }
+.icapsule-answer .icapsule-sub::before { content: " · "; }
 .icapsule-topic { background: var(--wb-muted); box-shadow: inset 0 0 0 1px var(--wb-line); }
 .icapsule-topic .icapsule-sub { font-style: normal; }
 .icapsule-mention, .icapsule-selection, .icapsule-pick { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); }
@@ -792,25 +788,58 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .tdot.on { display: inline-block; }
 
 
-/* Conversation density: only lead chat, owner messages and whiteboard-update
-   cards get generous vertical room. Mail, subagent, notification, tool and
-   turn-footer rows sit close together (0.2em above and below, in em so it
-   scales with the row's font) and are dimmed; hover or opening one restores
-   full contrast. A centred pill (compaction, notice, ui line) takes a full
-   line of room above and below. */
+/* Body and card spacing; traces use one compact, unboxed row. */
 .conv { gap: 0; }
 .conv > * { margin-block: .2em; }
 .msg.fromlead, .msg.user, .wbeffects.wbupdate { margin-block: 8px; }
-.sysline { margin-block: 1em; }
-.mailline, .mail-notification, .toolsline, .turnline, .sysline, .wake-divider, .wake-card, .input-record { opacity: .68; transition: opacity .12s; }
-.mailline:hover, .mailline[open], .mail-notification:hover, .mail-notification[open], .toolsline:hover, .toolsline[open], .wake-card:hover, .input-record:hover { opacity: 1; }
-.mailline > summary.conv-row, .mailline > .conv-row, .mail-notification .conv-row, .toolsline > summary.conv-row { padding-block: 1px; line-height: 1.4; }
-.toolsline .tsum { row-gap: 0; line-height: 1.15; }
-.toolsline .tsl, .toolsline .tsn { line-height: 1.15; }
-.mailline .arr { color: var(--wb-primary); }
+.mailline, .mail-notification, .toolsline, .turnline, .input-record { color: var(--wb-muted-fg); }
+.mailline > summary.conv-row, .mailline > .conv-row, .mail-notification .conv-row, .toolsline > summary.conv-row, .turnline > summary.conv-row { padding-block: 2px; line-height: 1.4; }
+.toolsline .tsum, .toolsline .tsl, .toolsline .tsn { line-height: 1.4; }
+.turnline { align-self: stretch; display: block; margin-left: 0; border: 0; padding: 0; background: none; }
+.turnline > summary .row-content { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-audit-counts:empty { display: none; }
+.turn-audit-counts:not(:empty)::before { content: " · "; }
+.conv-row:hover, .sysline.uiline:hover { background: color-mix(in srgb, var(--wb-fg) 4%, transparent); }
+.turn-trigger > .conv-row > .row-icon,
+.turn-trigger > .conv-row > .row-content :is(.mpeer, b),
+.turn-trigger > .conv-row > .row-icon :is(.arr, .i, .li) { color: var(--conv-trigger); }
+.mailline.fail > .conv-row, .au-row.au-fail { color: var(--wb-fail); background: none; box-shadow: none; }
+.sysline.boundary-badge { display: block; align-self: stretch; padding: 0; background: none; box-shadow: none; border-radius: 0; margin-block: 12px; text-align: center; color: var(--wb-muted-fg); }
+.boundary-badge > summary { border: 1px solid var(--wb-line); display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 12px; border-radius: 999px; background: var(--wb-muted); font-size: 11.5px; font-weight: 500; list-style: none; cursor: pointer; overflow-wrap: anywhere; }
+.boundary-badge > summary::-webkit-details-marker { display: none; }
+.boundary-badge:has(> .conv-audit-items:not(:empty)) > summary::after { content: "›"; font-size: 14px; line-height: 1; }
+.boundary-badge[open]:has(> .conv-audit-items:not(:empty)) > summary::after { transform: rotate(90deg); }
+.boundary-badge > summary:hover { background: color-mix(in srgb, var(--wb-muted) 80%, var(--wb-card)); }
+.boundary-badge.fail > summary, .boundary-badge.fail .mk { color: var(--wb-fail); }
+.boundary-badge:not(.fail) .mk { color: inherit; }
+.boundary-badge > summary:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+.conv-audit-items { text-align: left; margin: 3px 0 3px 28px; min-width: 0; }
+.conv-audit-items:empty { display: none; }
+.sysline.uiline { display: grid; align-self: stretch; max-width: none; padding: 2px 0; border-radius: 6px; background: none; box-shadow: none; margin-block: .2em; text-align: left; font-weight: 400; }
+.sysline.uiline .mk { color: var(--wb-muted-fg); }
 /* Rendered conversation references use the same navigation as update cards. */
 .hchips .achip[data-wb-nav], .wbupdate .wbref { cursor: pointer; }
 .hchips .achip[data-wb-nav]:hover, .hchips .achip[data-wb-nav]:focus-visible { background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); box-shadow: inset 0 0 0 1px var(--wb-primary); }
 .wbupdate .wbref { color: var(--wb-primary); text-decoration: underline; text-underline-offset: 2px; border-radius: 3px; }
 .wbupdate .wbref:hover { background: var(--wb-muted); }
 [data-wb-nav]:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+
+/* Expanded traces retain the same unboxed hierarchy. */
+.mailline > .row-details, .mailline > .mbody, .mail-notification > .row-details { background: none; box-shadow: none; border: 0; border-radius: 0; padding: 3px 0; }
+.input-record { border: 0; background: none; box-shadow: none; padding: 2px 0; }
+
+.toolsline .brows { background: none; box-shadow: none; border-radius: 0; padding: 3px 0; }
+.conv-row.au-hid, .conv-row.au-turn-tool { padding-block: 2px; color: var(--wb-muted-fg); }
+.conv-row.au-turn-tool.au-fail { color: var(--wb-fail); }
+.conv-row .trace-content { display: flex; gap: 7px; min-width: 0; align-items: center; }
+.conv-row .trace-content > .au-pv::before { content: "·"; margin-right: 7px; }
+
+/* The disclosure marker stays in the first column, leaving the clock aligned. */
+.conv-row:not(.mh), .au-call-details > summary.au-row.conv-row { grid-template-columns: 14px 20px minmax(0, 1fr) 44px; column-gap: 6px; }
+.conv-row:not(.mh) > .row-icon { grid-column: 2; grid-row: 1; }
+.conv-row:not(.mh) > .row-content { grid-column: 3; grid-row: 1; }
+.conv-row:not(.mh) > .row-time { grid-column: 4; grid-row: 1; }
+.conv-row:not(.mh) > .row-chevron { grid-column: 1; grid-row: 1; }
+.conv-row.au-turn-tool { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
+.conv-row.au-turn-tool:hover { background: color-mix(in srgb, var(--wb-fg) 4%, transparent); }
+.conv-row.au-turn-trigger > .row-icon, .conv-row.au-turn-trigger .row-name { color: var(--conv-trigger); }
