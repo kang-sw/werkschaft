@@ -16,6 +16,8 @@ import (
 )
 
 func TestEnsureDesktopStartGuardsTheObservedPredecessor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	// The gate is identical in either Windows process creation mode; this
 	// fixture can run in a test runner's job even if breakaway is forbidden.
 	t.Setenv("WS_MCP_DAEMON_JOB_LIFETIME", "1")
@@ -57,7 +59,7 @@ func TestEnsureDesktopStartGuardsTheObservedPredecessor(t *testing.T) {
 				case "before spawn":
 					t.Fatal("unexpected spawn")
 				case "after spawn":
-					admit, err := PrepareDetachedSuccessor(t.Context(), os.Args[0],
+					admit, err := PrepareDetachedSuccessor(ctx, os.Args[0],
 						[]string{"-test.run=^TestDesktopGatedSuccessorChild$", "--", "desktop-preflight-child"}, dir, false)
 					if err != nil {
 						return nil, err
@@ -139,6 +141,8 @@ func TestDesktopGatedSuccessorChild(t *testing.T) {
 }
 
 func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	noColdStart := func([]string) error { return errors.New("unexpected cold start") }
 	t.Run("strict preflight failure leaves old serving", func(t *testing.T) {
 		dir := t.TempDir()
@@ -161,7 +165,7 @@ func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
 		defer sp.closeAll()
 		opts := ensureOpts(dir, "0.48.0", noColdStart)
 		opts.PrepareSuccessor = func(args []string) (func(bool) error, error) {
-			if _, err := Health(t.Context(), testClient(), old.Endpoint()); err != nil {
+			if _, err := Health(ctx, testClient(), old.Endpoint()); err != nil {
 				t.Fatalf("predecessor stopped before successor readiness: %v", err)
 			}
 			return func(allow bool) error {
