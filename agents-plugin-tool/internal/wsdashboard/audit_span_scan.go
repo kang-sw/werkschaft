@@ -1,24 +1,14 @@
 package wsdashboard
 
 import (
-	"regexp"
+	"regexp/syntax"
 	"strings"
 	"unicode/utf8"
 )
 
-// spanBatch is how many matches one regexp call reads ahead while a window is
-// scanned, so a scan that stops early (the span cap) has materialized only a
-// bounded number of matches beyond the ones it used.
-const spanBatch = 64
-
-// eachLineMatch calls emit with each match of the search on one stored line,
-// in order, as byte offsets of the line, until emit returns true. Matches
-// follow Go's FindAll (empty ones included, an empty match advances by one
-// rune) under the rules of matchLine: none consumes text from both sides of
-// the seam (seam >= 0). Without assertions the head and the tail are matched
-// apart; with them, each side is matched as a window of the whole line. The
-// work is linear in the line: no text is scanned twice, and the scan ends
-// with emit.
+// eachLineMatch calls emit with the nonempty matches on one stored line,
+// in order, as byte offsets, until emit returns true. A stored seam separates
+// the windows for consumption while assertions can still see their neighbours.
 func (s auditSearch) eachLineMatch(line string, seam int, emit func(start, end int) bool) {
 	if seam < 0 {
 		s.eachWindowMatch(line, 0, len(line), emit)
@@ -29,11 +19,9 @@ func (s auditSearch) eachLineMatch(line string, seam int, emit func(start, end i
 	}
 }
 
-// eachWindowMatch is eachLineMatch over the window [lo, hi) of line; it
-// reports whether emit stopped the scan.
+// eachWindowMatch reports whether emit stopped the scan.
 func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, end int) bool) bool {
-	switch {
-	case s.re == nil: // a case-sensitive literal
+	if s.spanProg == nil {
 		if s.lit == "" {
 			return false
 		}
@@ -42,168 +30,141 @@ func (s auditSearch) eachWindowMatch(line string, lo, hi int, emit func(start, e
 			if i < 0 {
 				return false
 			}
-			if emit(at+i, at+i+len(s.lit)) {
+			start := at + i
+			at = start + len(s.lit)
+			if emit(start, at) {
 				return true
 			}
-			at += i + len(s.lit)
 		}
 		return false
-	case s.seamed != nil:
-		return s.seamed.each(s.re, line, lo, hi, emit)
 	}
-	// No assertion reads the text around a position, so the scan resumes on
-	// the rest of the window without context.
-	text := line[lo:hi]
-	for pos := 0; pos <= len(text); {
-		locs := s.re.FindAllStringIndex(text[pos:], spanBatch)
-		for _, l := range locs {
-			if emit(lo+pos+l[0], lo+pos+l[1]) {
+	scan := spanScan{
+		prog: s.spanProg, text: line[lo:hi],
+		left: -1, right: -1, words: (len(s.spanProg.Inst) + 63) / 64,
+	}
+	if s.seamed != nil {
+		if lo > 0 {
+			scan.left = rune(seamSentinels[sentinelKind(line, lo-1)][0])
+		}
+		if hi < len(line) {
+			scan.right = rune(seamSentinels[sentinelKind(line, hi)][0])
+		}
+	}
+	released := 0
+	for start := 0; start < len(scan.text); {
+		for released < start/spanScanPage {
+			scan.visited[released] = nil
+			released++
+		}
+		end := scan.findAt(start)
+		if end > start {
+			if emit(lo+start, lo+end) {
 				return true
 			}
-		}
-		if len(locs) < spanBatch {
-			return false
-		}
-		last := locs[len(locs)-1]
-		pos += last[1]
-		if last[0] == last[1] {
-			pos += runeWidth(text, pos)
-		}
-	}
-	return false
-}
-
-// runeWidth is the width in bytes of the character at s[at:], 1 past the end.
-func runeWidth(s string, at int) int {
-	if at >= len(s) {
-		return 1
-	}
-	_, w := utf8.DecodeRuneInString(s[at:])
-	return max(w, 1)
-}
-
-// each calls emit with every non-overlapping match of re (the pattern's plain
-// expression) inside the window [lo, hi) of line, in order, as Go's FindAll
-// gives them on the window with its neighbours as sentinels, until emit
-// returns true (reported). A match that touches a sentinel (leftmost-first
-// took an alternative reaching out of the window) is not one: the first match
-// by shape (see shapeFirst) is taken instead and the scan resumes after it.
-//
-// The window is copied once; a resume reads the same text from the character
-// before the resume point, which is the real context of the point, so a
-// resume costs the distance to the next match, not the rest of the window.
-func (m *seamMatcher) each(re *regexp.Regexp, line string, lo, hi int, emit func(start, end int) bool) bool {
-	left, right := sentinelKind(line, lo-1), sentinelKind(line, hi)
-	ls, rs := seamSentinels[left], seamSentinels[right]
-	win := ls + line[lo:hi] + rs
-	end := len(win) - len(rs) // the window's own text ends here
-	delta := lo - len(ls)     // a window offset plus delta is a line offset
-	pos := len(ls)
-	shape := false // the next match comes from shapeFirst
-	for pos < end {
-		// t is the text from the character before pos (its context) on.
-		c := 0
-		if pos > 0 {
-			_, w := utf8.DecodeLastRuneInString(win[:pos])
-			c = pos - w
-		}
-		t, ctx, limit := win[c:], pos-c, end-c
-		if !shape {
-			l := re.FindStringIndex(t)
-			if l == nil {
-				return false
-			}
-			if l[0] >= ctx { // not through the context: the run is FindAll's
-				locs := re.FindAllStringIndex(t, spanBatch)
-				touched := false
-				for _, l := range locs {
-					if l[1] > limit { // reaches the right sentinel: only the last can
-						pos, shape, touched = c+l[0], true, true
-						break
-					}
-					if emit(c+l[0]+delta, c+l[1]+delta) {
-						return true
-					}
-				}
-				if touched {
-					continue
-				}
-				if len(locs) < spanBatch {
-					return false
-				}
-				last := locs[len(locs)-1]
-				pos = c + last[1]
-				if last[0] == last[1] {
-					pos += runeWidth(win[:end], pos)
-				}
-				continue
-			}
-		}
-		shape = false
-		start, stop, ok := m.shapeFirst(t, ctx > 0, right, limit)
-		if !ok {
-			return false
-		}
-		if emit(c+start+delta, c+stop+delta) {
-			return true
-		}
-		pos = c + stop
-		if start == stop {
-			pos += runeWidth(win[:end], pos)
+			// Paths still in flight when the match won were at or before
+			// end. All states visited beyond end have already failed, so
+			// the next search can reuse them. Retry the states at end.
+			clear(scan.row(end))
+			start = end
+		} else {
+			// Both a miss and an empty match advance by one rune.
+			_, width := utf8.DecodeRuneInString(scan.text[start:])
+			start += width
 		}
 	}
 	return false
 }
 
-// shapeFirst is the first match of the pattern in t that starts after its
-// context character (when hasCtx) and ends within limit, as the first match
-// of a window whose neighbours are those of t. It tries the expression
-// without the right bound first, which stops at the match; only a match that
-// reaches the right sentinel needs the bounded form, which reads the rest of
-// the text.
-func (m *seamMatcher) shapeFirst(t string, hasCtx bool, right, limit int) (int, int, bool) {
-	re := m.shape(hasCtx, right, false)
-	if re == nil {
-		return 0, 0, false
-	}
-	loc := re.FindStringSubmatchIndex(t)
-	if loc == nil {
-		return 0, 0, false
-	}
-	if loc[3] > limit {
-		if re = m.shape(hasCtx, right, true); re == nil {
-			return 0, 0, false
-		}
-		if loc = re.FindStringSubmatchIndex(t); loc == nil {
-			return 0, 0, false
-		}
-	}
-	return loc[2], loc[3], true
+type spanState struct {
+	pc  uint32
+	pos int
 }
 
-// shape is the expression for text opening with one context character
-// (hasCtx) and closing with the right sentinel of the given kind: the
-// context, a lazy prefix, the pattern's group, and with bounded the rest and
-// the sentinel, which keeps the group off the sentinel.
-func (m *seamMatcher) shape(hasCtx bool, right int, bounded bool) *regexp.Regexp {
-	k := [3]int{0, right, 0}
-	expr := `\A`
-	if hasCtx {
-		k[0] = 1
-		expr += `(?s:.)`
+const spanScanPage = 256
+
+type spanScan struct {
+	prog        *syntax.Prog
+	text        string
+	left, right rune // assertion context outside text, never consumed
+	words       int  // bitset words per byte position
+	visited     [][]uint64
+	pending     []spanState
+}
+
+// row allocates visited bits only as the matcher reaches new pages. A scan
+// that stops at the span cap does not build a table for the remaining line.
+func (s *spanScan) row(pos int) []uint64 {
+	page := pos / spanScanPage
+	if page == len(s.visited) {
+		s.visited = append(s.visited, make([]uint64, spanScanPage*s.words))
 	}
-	expr += `(?s:.*?)((?:` + m.pattern + `))`
-	if bounded {
-		k[2] = 1
-		expr += `(?s:.*)` + regexp.QuoteMeta(seamSentinels[right]) + `\z`
+	offset := (pos % spanScanPage) * s.words
+	return s.visited[page][offset : offset+s.words]
+}
+
+// findAt tries the program's preferred branches first, as regexp's bounded
+// backtracker does. A state is visited at most once until that byte position
+// becomes a match end. Captures cannot affect a later decision.
+func (s *spanScan) findAt(start int) int {
+	s.pending = append(s.pending[:0], spanState{pc: uint32(s.prog.Start), pos: start})
+nextBranch:
+	for len(s.pending) > 0 {
+		last := len(s.pending) - 1
+		state := s.pending[last]
+		s.pending = s.pending[:last]
+		for {
+			row := s.row(state.pos)
+			word, bit := state.pc/64, uint64(1)<<(state.pc%64)
+			if row[word]&bit != 0 {
+				continue nextBranch
+			}
+			row[word] |= bit
+
+			inst := &s.prog.Inst[state.pc]
+			switch inst.Op {
+			case syntax.InstMatch:
+				return state.pos
+			case syntax.InstFail:
+				continue nextBranch
+			case syntax.InstAlt, syntax.InstAltMatch:
+				s.pending = append(s.pending, spanState{pc: inst.Arg, pos: state.pos})
+			case syntax.InstEmptyWidth:
+				prev, next := s.left, s.right
+				if state.pos > 0 {
+					prev, _ = utf8.DecodeLastRuneInString(s.text[:state.pos])
+				}
+				if state.pos < len(s.text) {
+					next, _ = utf8.DecodeRuneInString(s.text[state.pos:])
+				}
+				want := syntax.EmptyOp(inst.Arg)
+				if syntax.EmptyOpContext(prev, next)&want != want {
+					continue nextBranch
+				}
+			case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
+				if state.pos == len(s.text) {
+					continue nextBranch
+				}
+				r, width := utf8.DecodeRuneInString(s.text[state.pos:])
+				if !spanRuneMatches(inst, r) {
+					continue nextBranch
+				}
+				state.pos += width
+			}
+			state.pc = inst.Out
+		}
 	}
-	if re := m.ctx[k]; re != nil {
-		return re
+	return -1
+}
+
+func spanRuneMatches(inst *syntax.Inst, r rune) bool {
+	switch inst.Op {
+	case syntax.InstRune1:
+		return r == inst.Rune[0]
+	case syntax.InstRuneAny:
+		return true
+	case syntax.InstRuneAnyNotNL:
+		return r != '\n'
+	default:
+		return inst.MatchRune(r)
 	}
-	re, err := regexp.Compile(expr)
-	if err != nil {
-		return nil
-	}
-	m.ctx[k] = re
-	return re
 }
