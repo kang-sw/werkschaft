@@ -140,7 +140,7 @@ func TestPlaybookRegisteredAgentBackendProfileFallback(t *testing.T) {
 	}
 	f.record(t, key, wsagent.Record{Backend: wsagent.BackendPi, Profile: "fixture-worker"})
 	rp, err := wsagent.ResolveProfile(f.s.configOptions(), f.root, "fixture-worker", f.s.agentBackends()...)
-	if err != nil || rp.Definition.Backend != "fixture" || wsagent.PiMCPOnly(wsagent.Record{Backend: wsagent.BackendPi, Root: f.root}, &rp.Definition) {
+	if err != nil || rp.Definition.Backend != "fixture" {
 		t.Fatalf("registered fallback profile = %+v, %v", rp, err)
 	}
 	if f.s.callerDaemonAgents(key) {

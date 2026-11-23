@@ -12,13 +12,12 @@ import (
 // Exercise registration, the profile allowlist and actual dispatch together.
 // A server launched in the original checkout must use the caller key's linked
 // worktree, not its own root. A caller cannot override that binding.
-func TestPiWorkerToolsUseBoundWorktree(t *testing.T) {
+func TestAgentWorkerToolsUseBoundWorktree(t *testing.T) {
 	for _, profile := range []struct {
 		name  string
 		tools []string
 	}{
-		{wsagent.PiWorkerProfile, wsagent.PiWorkerWSTools},
-		{wsagent.PiMiniLeadProfile, wsagent.PiMiniLeadWSTools},
+		{wsagent.AgentWorkerProfile(wsagent.BackendClaude), wsagent.AgentWSTools},
 	} {
 		for _, scope := range []toolRole{roleLead, roleDelegate} {
 			t.Run(profile.name+"/"+string(scope), func(t *testing.T) {
@@ -95,7 +94,7 @@ func TestPiWorkerToolsUseBoundWorktree(t *testing.T) {
 				if matches, err := filepath.Glob(filepath.Join(original, "ai-docs/tickets/todo/*-bug-worker-native-create.md")); err != nil || len(matches) != 0 {
 					t.Fatalf("creation escaped to original checkout: %v, %v", matches, err)
 				}
-				if profile.name == wsagent.PiMiniLeadProfile {
+				{
 					got = callToolWithKey(t, server, 4, key, "tickets.query", map[string]any{
 						"ticket_stem": "261116-bug-bound-worker",
 					})

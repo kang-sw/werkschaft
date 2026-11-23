@@ -49,24 +49,29 @@ func TestHostedCLIWorkerTokenRouting(t *testing.T) {
 	}
 	config := wsconfig.Options{ConfigHome: hello.Env["WS_CONFIG_HOME"], CacheHome: hello.Env["WS_CACHE_HOME"]}
 	for _, tier := range []string{"small", "medium", "large"} {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(config, tier, "", "provider/"+tier, wsagent.PiTierHarness, "low"); err != nil {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(config, tier, "", "provider/"+tier, wsagent.BackendClaude, "low"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	backend := &cliTokenBackend{starts: make(chan wsagent.StartSpec, 8)}
 	runner := wsagent.NewRunner(wsagent.Options{Dir: t.TempDir(), Config: config, Keys: keys,
-		Backends: map[string]wsagent.BackendRegistration{wsagent.BackendPi: {Backend: backend, Permission: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Permission, Lifecycle: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Lifecycle}},
-		WSMCP:    func(string) (wsagent.MCPCommand, error) { return wsagent.MCPCommand{Command: "unused"}, nil },
+		Backends: map[string]wsagent.BackendRegistration{
+			wsagent.BackendClaude: {
+				Backend: backend, WorkerCapable: true, WorkerProfile: wsagent.AgentWorkerProfile(wsagent.BackendClaude),
+				Permission: wsagent.BuiltinBackendRegistrations()[wsagent.BackendClaude].Permission,
+			},
+		},
+		WSMCP: func(string) (wsagent.MCPCommand, error) { return wsagent.MCPCommand{Command: "unused"}, nil },
 	})
 	daemon := httptest.NewServer(runner.Handler())
 	defer daemon.Close()
 	runner.SetEndpoint(daemon.URL)
 	runner.Start(nil)
 	defer runner.Close()
-	parent := wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: "parentreplyid"}
+	parent := wsagent.LeadCaller("parentreplyid", hello.Cwd, wsagent.BackendClaude, config)
 	spawnWorker := func() string {
 		t.Helper()
-		_, err := runner.Spawn(wsagent.SpawnSpec{Profile: wsagent.PiWorkerProfile, Root: hello.Cwd, Prompt: "work", Tier: "medium", Parent: &parent})
+		_, err := runner.AgentSpawn(parent, wsagent.AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "read-only"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,9 +89,9 @@ func TestHostedCLIWorkerTokenRouting(t *testing.T) {
 	tokenA, tokenB := spawnWorker(), spawnWorker()
 	hello.Env[wsagent.EnvPiEndpoint] = daemon.URL
 	hello.Env[wsagent.EnvPiToken] = tokenA
-	hello.Env["WS_MCP_ALLOWED_TOOLS"] = "pi.spawn,pi.list,pi.transcript,pi.wait"
+	hello.Env["WS_MCP_ALLOWED_TOOLS"] = "agent.spawn,agent.list,agent.interrupt,pi.wait"
 	host := &proxyHost{agents: runner, logw: io.Discard}
-	// pi.* is never listed, to a worker or a lead; its calls still answer.
+	// Legacy Pi calls remain hidden for worker and lead sessions.
 	for _, token := range []string{tokenA, "  "} {
 		hello.Env[wsagent.EnvPiToken] = token
 		out, stderr, code := hostedCLIResultWithHost(t, host, hello, "tools", "pi.spawn")
@@ -99,39 +104,30 @@ func TestHostedCLIWorkerTokenRouting(t *testing.T) {
 		t.Helper()
 		return hostedCLIResultWithHost(t, host, hello, "call", tool, args)
 	}
-	out, stderr, code := call("pi.spawn", fmt.Sprintf(`{"session_key":%q,"prompt":"child","tier":"small","format":"json"}`, key))
+	out, stderr, code := call("agent.spawn", fmt.Sprintf(`{"session_key":%q,"prompt":"child","tier":"small","authority":"read-only","format":"json"}`, key))
 	if code != 0 {
 		t.Fatalf("spawn: %q %q %d", out, stderr, code)
 	}
-	var child struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(out), &child); err != nil || child.ID == "" {
+	var child wsagent.AgentSpawnResult
+	if err := json.Unmarshal([]byte(out), &child); err != nil || child.Address == "" {
 		t.Fatalf("child: %q %v", out, err)
 	}
-	out, stderr, code = call("pi.list", fmt.Sprintf(`{"session_key":%q}`, key))
-	if code != 0 || !strings.Contains(out, child.ID) {
-		t.Fatalf("list: %q %q %d", out, stderr, code)
-	}
-	args := fmt.Sprintf(`{"session_key":%q,"id":%q}`, key, child.ID)
-	out, stderr, code = call("pi.transcript", args)
-	if code != 0 {
-		t.Fatalf("owned transcript: %q %q %d", out, stderr, code)
-	}
-	waitArgs := fmt.Sprintf(`{"session_key":%q,"id":%q,"timeout_s":0.01}`, key, child.ID)
-	out, stderr, code = call("pi.wait", waitArgs)
-	if code != 0 {
-		t.Fatalf("owned wait: %q %q %d", out, stderr, code)
+	args := fmt.Sprintf(`{"session_key":%q}`, key)
+	out, stderr, code = call("agent.list", args)
+	if code != 0 || !strings.Contains(out, child.Address) {
+		t.Fatalf("own list: %q %q %d", out, stderr, code)
 	}
 	hello.Env[wsagent.EnvPiToken] = tokenB
-	for _, tc := range []struct{ tool, args string }{{"pi.transcript", args}, {"pi.wait", waitArgs}} {
-		out, stderr, code = call(tc.tool, tc.args)
-		if code == 0 || !strings.Contains(stderr, "is not one of this conversation's Pi subagents") {
-			t.Fatalf("foreign %s: %q %q %d", tc.tool, out, stderr, code)
-		}
+	out, stderr, code = call("agent.list", args)
+	if code != 0 || strings.Contains(out, child.Address) {
+		t.Fatalf("foreign list: %q %q %d", out, stderr, code)
 	}
-	out, stderr, code = call("pi.spawn", fmt.Sprintf(`{"session_key":%q,"prompt":"too high","tier":"large"}`, key))
+	out, stderr, code = call("agent.spawn", fmt.Sprintf(`{"session_key":%q,"prompt":"too high","tier":"large","authority":"read-only","format":"json"}`, key))
 	if code == 0 || !strings.Contains(stderr, "above this conversation's own tier") {
 		t.Fatalf("tier cap: %q %q %d", out, stderr, code)
+	}
+	out, stderr, code = call("pi.wait", fmt.Sprintf(`{"session_key":%q,"id":%q}`, key, child.Address))
+	if code == 0 || !strings.Contains(stderr, "Pi harness is retired") {
+		t.Fatalf("legacy wait: %q %q %d", out, stderr, code)
 	}
 }

@@ -177,6 +177,7 @@ func parseConfigManifest(path string, builtinKeys map[string]struct{}, namespace
 	return parseConfigManifestBytes(path, data, builtinKeys, namespaces)
 }
 
+// Retained name check: retired manifest keys from old packages (TestRetiredPiManifestKeysAreIgnored).
 func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]struct{}, namespaces map[string]string) (string, []declaredConfigKey, error) {
 	var file configManifestFile
 	decoder := json.NewDecoder(bytes.NewReader(data))

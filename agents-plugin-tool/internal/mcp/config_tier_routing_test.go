@@ -138,9 +138,9 @@ func TestConfigTuneTierRoutingRoundTripAndGlobalScope(t *testing.T) {
 	// untouched routes.
 	for _, want := range []string{
 		"trace: discussion\n",
-		"trace: ticket-worker:medium -> review:medium -> medium -> pi.medium\n",
+		"trace: ticket-worker:medium -> review:medium -> medium -> <caller>.medium\n",
 		"trace: ticket-worker:large -> claude.xlarge\n",
-		"trace: mine:small -> small -> pi.small\n",
+		"trace: mine:small -> small -> <caller>.small\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("echo missing %q:\n%s", want, text)
@@ -355,9 +355,9 @@ func TestConfigListTierRoutingKnob(t *testing.T) {
 	}
 	traces := strings.Join(got.Traces, "\n")
 	for _, want := range []string{
-		"ticket-worker:medium -> review:medium -> medium -> pi.medium",
-		"review:large -> large -> pi.large",
-		"explore:xlarge -> xlarge -> pi.xlarge",
+		"ticket-worker:medium -> review:medium -> medium -> <caller>.medium",
+		"review:large -> large -> <caller>.large",
+		"explore:xlarge -> xlarge -> <caller>.xlarge",
 	} {
 		if !strings.Contains(traces, want) {
 			t.Errorf("current traces missing %q:\n%s", want, traces)

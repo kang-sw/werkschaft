@@ -22,6 +22,7 @@ type sessionHireHost interface {
 	RequestHire(string, wsdashboard.HireRequest) (wsdashboard.HireProposal, error)
 }
 
+// Retained name check: legacy hire requests (TestRetiredPiHireRefuses).
 func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[string]any) response {
 	key, _ := args["session_key"].(string)
 	key = strings.TrimSpace(key)
@@ -116,6 +117,7 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 	return map[string]any{"type": "object", "properties": properties, "required": required}
 }
 
+// Retained name check: legacy hire requests (TestRetiredPiHireRefuses).
 func sessionHireTools() []map[string]any {
 	return []map[string]any{
 		{"name": "session.request_hire", "description": "Request an owner-approved hosted peer without blocking; only owner-enabled top-level leads may hire. reason is owner-facing; recovery_context (max 16 KiB) aids compaction recovery. Optional harness, model, effort and label prefill owner controls. The peer uses your worktree. Outcomes (approved, rejected, expired after 30 minutes, withdrawn) arrive by mail with recovery_context. A hired peer cannot hire and grants no stop/close authority.", "inputSchema": objectSchema(map[string]any{

@@ -76,6 +76,7 @@ func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, config
 // the walk fell through to the caller's harness, else <harness>.<size>. A
 // bundle terminal (its own model and effort) has none, and compat is "" for
 // it, for a token that is not routed, and when the binding does not resolve.
+// Retained name check: stored tier routing harness aliases (TestDashboardTierRoutingViewReportsHarnessAvailability).
 func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort, compat string, ok bool) {
 	tier = strings.TrimSpace(tier)
 	if !wsconfig.IsRoutedTierToken(tier) {
@@ -212,6 +213,7 @@ func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, 
 // bare token does (the fallback chain for harness, the default bucket when
 // harness is empty), so an unmapped role tier answers what its bare size
 // answers, plus the trace.
+// Retained name check: stored tier routing harness aliases (TestDashboardTierRoutingViewReportsHarnessAvailability).
 func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult, error) {
 	opts := s.configOptions()
 	if size := wsconfig.NormalizedTier(tier); size != "" && strings.EqualFold(strings.TrimSpace(harness), wsagent.BackendPi) {

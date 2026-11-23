@@ -309,10 +309,10 @@ func TestAgentWorkerForwardsOnItsToken(t *testing.T) {
 	root := t.TempDir()
 	initGit(t, root)
 
-	// The loadout without agent.* (a pi.spawn worker) lists none.
+	// A worker restricted to mailbox tools cannot list agent.* tools.
 	t.Setenv(wsagent.EnvPiToken, "tok123")
 	t.Setenv(wsagent.EnvPiEndpoint, daemon.URL+"/")
-	t.Setenv(envAllowedTools, strings.Join(wsagent.PiWorkerWSTools, ","))
+	t.Setenv(envAllowedTools, "mailbox.send")
 	other := NewServer(root, "test")
 	defer other.Close()
 	if got := listedAgentTools(other); len(got) != 0 {
@@ -413,7 +413,7 @@ func TestAgentForwardSessionKeyDoesNotSelectCompletionParent(t *testing.T) {
 // loadout, while the spawned authority still controls their write paths.
 func TestAgentWSToolsIncludeReviewLedgerToolsUnderReadOnlyGate(t *testing.T) {
 	setupMailboxTestEnv(t)
-	for _, backend := range []string{wsagent.BackendClaude, wsagent.BackendPi, wsagent.BackendAgy, wsagent.BackendCodex} {
+	for _, backend := range []string{wsagent.BackendClaude, wsagent.BackendWerk, wsagent.BackendAgy, wsagent.BackendCodex} {
 		t.Run("lists/"+backend, func(t *testing.T) {
 			var profile wsagent.Profile
 			raw := wsagent.BuiltinProfiles()[wsagent.ProfilePrefix+wsagent.AgentWorkerProfile(backend)]
