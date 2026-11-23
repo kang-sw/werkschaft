@@ -170,6 +170,7 @@ func TestEditRefusals(t *testing.T) {
 		return err
 	}
 	must(t, os.WriteFile(filepath.Join(root, "dup.txt"), []byte("x\nx\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "overlap.txt"), []byte("aaa"), 0o644))
 	cases := []struct {
 		name string
 		do   func() error
@@ -179,6 +180,10 @@ func TestEditRefusals(t *testing.T) {
 		{"empty", func() error { return edit(map[string]string{"oldText": "", "newText": "d"}) }, "oldText is empty"},
 		{"ambiguous", func() error {
 			_, err := call(t, f, "edit", map[string]any{"path": "dup.txt", "edits": []map[string]string{{"oldText": "x", "newText": "y"}}})
+			return err
+		}, "matches 2 places"},
+		{"ambiguous overlapping matches", func() error {
+			_, err := call(t, f, "edit", map[string]any{"path": "overlap.txt", "edits": []map[string]string{{"oldText": "aa", "newText": "y"}}})
 			return err
 		}, "matches 2 places"},
 		{"overlap", func() error {

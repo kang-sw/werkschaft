@@ -36,6 +36,9 @@ type Files struct {
 	// Cwd is the directory a relative path resolves against.
 	Cwd       string
 	Authority Authority
+	// RecordMutation persists the admitted target and content states before
+	// the file is touched. It is nil for the legacy local tool adapter.
+	RecordMutation func(context.Context, FileIntent) error
 }
 
 // Tool limits.
@@ -65,8 +68,8 @@ type Tool struct {
 func (f *Files) Tools(allow []string) []Tool {
 	all := []Tool{
 		{Def: readDef, ReadOnly: true, Run: f.read},
-		{Def: editDef, Run: f.edit},
-		{Def: writeDef, Run: f.write},
+		{Def: editDef, Run: f.Edit},
+		{Def: writeDef, Run: f.Write},
 		{Def: grepDef, ReadOnly: true, Run: f.grep},
 		{Def: globDef, ReadOnly: true, Run: f.glob},
 	}
@@ -197,7 +200,11 @@ func (f *Files) writable(path string) (string, error) {
 		return "", errors.New("this session is read-only: it may not edit or write files")
 	case AuthorityWorkdirWrite:
 	case AuthorityFull:
-		return f.abs(path)
+		target, err := f.abs(path)
+		if err != nil {
+			return "", err
+		}
+		return realPath(target)
 	default:
 		return "", fmt.Errorf("this session has no write authority (%q)", string(f.Authority))
 	}
@@ -220,7 +227,7 @@ func (f *Files) writable(path string) (string, error) {
 	if !within(realRoot, realTarget) {
 		return "", fmt.Errorf("%s is outside the session's worktree; workdir-write may write inside it only", path)
 	}
-	return p, nil
+	return realTarget, nil
 }
 
 // within reports whether target is root or lies under it.
@@ -300,7 +307,8 @@ func (f *Files) read(_ context.Context, raw json.RawMessage) (string, error) {
 	return b.String(), nil
 }
 
-func (f *Files) edit(_ context.Context, raw json.RawMessage) (string, error) {
+// Edit applies unique, non-overlapping replacements to one text file.
+func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Path  string `json:"path"`
 		Edits []struct {
@@ -318,9 +326,12 @@ func (f *Files) edit(_ context.Context, raw json.RawMessage) (string, error) {
 	if len(a.Edits) == 0 {
 		return "", errors.New("edits is empty")
 	}
-	data, err := os.ReadFile(p)
+	prior, data, err := inspectFile(p, true)
 	if err != nil {
 		return "", err
+	}
+	if prior.info == nil {
+		return "", &os.PathError{Op: "read", Path: p, Err: fs.ErrNotExist}
 	}
 	if isBinary(data) {
 		return "", fmt.Errorf("%s is a binary file", a.Path)
@@ -341,13 +352,13 @@ func (f *Files) edit(_ context.Context, raw json.RawMessage) (string, error) {
 		if old == "" {
 			return "", fmt.Errorf("edit %d: oldText is empty", i+1)
 		}
-		switch n := strings.Count(text, old); {
-		case n == 0:
+		at := strings.Index(text, old)
+		if at < 0 {
 			return "", fmt.Errorf("edit %d: oldText was not found in %s; it must match the file exactly, whitespace included", i+1, a.Path)
-		case n > 1:
+		}
+		if n := countMatches(text[at:], old); n > 1 {
 			return "", fmt.Errorf("edit %d: oldText matches %d places in %s; add surrounding text so it matches exactly one", i+1, n, a.Path)
 		}
-		at := strings.Index(text, old)
 		spans[i] = span{at, at + len(old)}
 	}
 	order := make([]int, len(spans))
@@ -377,7 +388,7 @@ func (f *Files) edit(_ context.Context, raw json.RawMessage) (string, error) {
 	if crlf {
 		result = strings.ReplaceAll(result, "\n", "\r\n")
 	}
-	if err := writeKeepingMode(p, []byte(result)); err != nil {
+	if err := f.commitFile(ctx, p, prior, []byte(result)); err != nil {
 		return "", err
 	}
 	if diff == "" {
@@ -386,7 +397,20 @@ func (f *Files) edit(_ context.Context, raw json.RawMessage) (string, error) {
 	return diff, nil
 }
 
-func (f *Files) write(_ context.Context, raw json.RawMessage) (string, error) {
+func countMatches(text, match string) int {
+	count := 0
+	for {
+		i := strings.Index(text, match)
+		if i < 0 {
+			return count
+		}
+		count++
+		text = text[i+1:]
+	}
+}
+
+// Write creates or replaces one file, creating missing parent directories.
+func (f *Files) Write(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -398,29 +422,18 @@ func (f *Files) write(_ context.Context, raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	prior, _, err := inspectFile(p, false)
+	if err != nil {
+		return "", err
+	}
+	if err := f.commitFile(ctx, p, prior, []byte(a.Content)); err != nil {
+		return "", err
+	}
 	verb := "created"
-	if _, err := os.Stat(p); err == nil {
+	if prior.info != nil {
 		verb = "overwrote"
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return "", err
-	}
-	if err := writeKeepingMode(p, []byte(a.Content)); err != nil {
-		return "", err
-	}
 	return fmt.Sprintf("%s %s (%d bytes)", verb, a.Path, len(a.Content)), nil
-}
-
-// writeKeepingMode writes data to p, keeping an existing file's permission.
-func writeKeepingMode(p string, data []byte) error {
-	mode := fs.FileMode(0o644)
-	if info, err := os.Stat(p); err == nil {
-		if info.IsDir() {
-			return fmt.Errorf("%s is a directory", p)
-		}
-		mode = info.Mode().Perm()
-	}
-	return os.WriteFile(p, data, mode)
 }
 
 func (f *Files) grep(ctx context.Context, raw json.RawMessage) (string, error) {
