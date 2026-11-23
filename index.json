@@ -111,7 +111,14 @@
       "registered_at": "2026-09-26T04:40:03Z"
     },
     "260927-bug-pi-develop-marker-static-manual-fixture-drifts": {
-      "registered_at": "2026-09-27T03:33:43Z"
+      "registered_at": "2026-09-27T03:33:43Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:34:38Z"
+      }
     },
     "260930-bug-wsconfig-writer-replaces-symlinked-config": {
       "registered_at": "2026-09-30T02:49:06Z"
