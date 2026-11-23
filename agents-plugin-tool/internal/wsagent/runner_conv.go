@@ -1853,11 +1853,12 @@ func (c *conv) kickInput() {
 	queue := slices.Clone(c.rec.Queued)
 	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
+		interactive := durable && c.rec.Lead && rec.Entry.EventID == "" && rec.Entry.Cron == nil
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
-			queue = append(queue, QueuedInput{Command: &cmd, After: from, Interactive: rec.Entry.EventID == "" && rec.Entry.Cron == nil})
+			queue = append(queue, QueuedInput{Command: &cmd, After: from, Interactive: interactive})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			queue = append(queue, QueuedInput{Text: text, After: from, Interactive: rec.Entry.EventID == "" && rec.Entry.Cron == nil})
+			queue = append(queue, QueuedInput{Text: text, After: from, Interactive: interactive})
 		}
 	}
 	if durable && len(recs) > 0 {

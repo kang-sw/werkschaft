@@ -306,10 +306,14 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		var st State
 		if err == nil {
 			st, err = r.act(id, func(c *conv) error {
+				if err := c.checkModelSetting(body.Model); err != nil {
+					return err
+				}
 				if err := c.setPermissionLevel(level, true, ack); err != nil {
 					return err
 				}
-				return c.setSettings(body.Model, body.Effort)
+				c.setSettings(body.Model, body.Effort)
+				return nil
 			})
 		}
 		writeAnswer(w, http.StatusOK, view(st), err)

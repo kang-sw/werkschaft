@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kang-sw/devenv/internal/werk"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -48,7 +49,7 @@ type compactRequest struct {
 	auto     bool
 	crossing bool
 	err      error
-	lead     *werk.LeadSummary
+	lead     *wscompact.LeadSummary
 }
 
 type compactionNudge struct {
@@ -72,7 +73,7 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 }
 
 // CompactWithSummary queues a checkpoint with prose supplied by its own lead.
-func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *werk.LeadSummary) CompactResult {
+func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *wscompact.LeadSummary) CompactResult {
 	target = strings.TrimSpace(target)
 	var own, dest *conv
 	r.mu.Lock()
@@ -425,7 +426,11 @@ func (c *conv) compactIdle() bool {
 			if req.lead == nil {
 				return c.runCommand(cmd)
 			}
-			err := c.proc.(leadSummaryCompactor).compactWithSummary(req.lead)
+			p, ok := c.proc.(leadSummaryCompactor)
+			if !ok {
+				return errors.New("lead summary requires a running builtin lead")
+			}
+			err := p.compactWithSummary(req.lead)
 			if err == nil {
 				c.armCompactWatchdog()
 			}

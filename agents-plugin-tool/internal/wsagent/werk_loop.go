@@ -14,6 +14,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsinbox"
@@ -249,10 +250,10 @@ func (p *werkLoop) Send(text string) error {
 }
 
 type leadSummaryCompactor interface {
-	compactWithSummary(*werk.LeadSummary) error
+	compactWithSummary(*wscompact.LeadSummary) error
 }
 
-func (p *werkLoop) compactWithSummary(summary *werk.LeadSummary) error {
+func (p *werkLoop) compactWithSummary(summary *wscompact.LeadSummary) error {
 	return p.command(werk.Command{Type: werk.CmdCompact, LeadSummary: summary})
 }
 

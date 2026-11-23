@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
@@ -59,7 +59,7 @@ func resolveCompactionValue(r *wsconfig.Resolver, key, item, harness string, reg
 func compactTool() map[string]any {
 	return map[string]any{"name": "compact", "description": "Queue native compaction at the hosted session's next idle boundary. Write durable state to your agenda first. Returns queued, unsupported or error with a reason; queued is not completion. Discover this tool before calling an older daemon.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 		"session_key":  map[string]any{"type": "string", "description": "Your ws session key."},
-		"lead_summary": werk.LeadSummarySchema(),
+		"lead_summary": wscompact.LeadSummarySchema(),
 		"target":       map[string]any{"type": "string", "description": "Optional self key or owned descendant key / spawn address id:<id>; defaults to self."},
 		"resume":       map[string]any{"type": "boolean", "description": "Start one continue turn after confirmed compaction and restoration. Defaults true for self, false for a descendant."},
 		"format":       map[string]any{"type": "string", "enum": []string{"text", "json"}},
@@ -87,12 +87,12 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		if err != nil {
 			return toolTextResponse(id, "", fmt.Errorf("invalid lead_summary: %w", err))
 		}
-		prose, err := werk.ParseLeadSummary(raw)
+		prose, err := wscompact.ParseLeadSummary(raw)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
 		if runner, ok := s.pi.agents.(interface {
-			CompactWithSummary(string, string, *bool, *werk.LeadSummary) wsagent.CompactResult
+			CompactWithSummary(string, string, *bool, *wscompact.LeadSummary) wsagent.CompactResult
 		}); ok {
 			out = runner.CompactWithSummary(key, target, resume, prose)
 		} else {

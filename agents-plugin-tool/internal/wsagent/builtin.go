@@ -53,7 +53,6 @@ const (
 	LeadProfilePi     = "lead-pi"
 	LeadProfileAgy    = "lead-agy"
 	LeadProfileCodex  = "lead-codex"
-	LeadProfileWerk   = "lead-werk"
 )
 
 // LeadProfileFor is the builtin lead profile of a harness, "" for a harness

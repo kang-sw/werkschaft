@@ -164,9 +164,10 @@ type AgentChildActivity struct {
 
 // AgentTierEntry is one spawnable tier and what it resolves to.
 type AgentTierEntry struct {
-	Tier   string `json:"tier"`
-	Model  string `json:"model"`
-	Effort string `json:"effort,omitempty"`
+	Tier     string `json:"tier"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // AgentAliasEntry is one agent.tier_aliases entry: its target and, when
@@ -393,7 +394,7 @@ func tierEntries(prefix string, tiers map[string]wsconfig.AgentTier) []AgentTier
 	var out []AgentTierEntry
 	for _, t := range []string{"small", "medium", "large", "xlarge"} {
 		if m, ok := tiers[t]; ok {
-			out = append(out, AgentTierEntry{Tier: prefix + t, Model: m.Model, Effort: m.Effort})
+			out = append(out, AgentTierEntry{Tier: prefix + t, Model: m.Model, Effort: m.Effort, Provider: m.Provider})
 		}
 	}
 	return out
@@ -412,12 +413,26 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		if err != nil {
 			return AgentTiers{}, fmt.Errorf("read agents.tier: %w", err)
 		}
-		usable[h] = tiers
 		if setup, ok := r.opts.Backends[h].Backend.(workerSetup); ok {
 			if why := setup.workerTierGap(tiers); why != "" {
 				out.Unavailable = append(out.Unavailable, h+": "+why)
 			}
+			gaps := make(map[string]string)
+			for _, tier := range []string{"small", "medium", "large", "xlarge"} {
+				if mapping, set := tiers[tier]; set {
+					why, checked := gaps[mapping.Provider]
+					if !checked {
+						why = setup.workerProviderGap(mapping.Provider)
+						gaps[mapping.Provider] = why
+					}
+					if why != "" {
+						out.Unavailable = append(out.Unavailable, h+"."+tier+": "+why)
+						delete(tiers, tier)
+					}
+				}
+			}
 		}
+		usable[h] = tiers
 		if h == caller.Harness {
 			out.Native = tierEntries("", tiers)
 		}
@@ -572,6 +587,11 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	}
 	if err != nil {
 		return "", "", mapping, err
+	}
+	if setup, ok := r.opts.Backends[harness].Backend.(workerSetup); ok {
+		if why := setup.workerProviderGap(mapping.Provider); why != "" {
+			return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
+		}
 	}
 	return harness, bare, mapping, nil
 }

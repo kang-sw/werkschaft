@@ -633,7 +633,7 @@ var configRegistry = []configKeyEntry{
 			},
 			{
 				Name:        "provider",
-				Description: "Optional provider for a werk tier. Defaults to openrouter, the supported provider.",
+				Description: "Optional provider for a werk tier: openrouter (default) or openai (Sign in with ChatGPT, with background consent).",
 			},
 			{
 				Name:        "effort",

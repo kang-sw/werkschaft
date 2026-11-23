@@ -472,7 +472,11 @@ func (r *Runner) SetSettings(id string, model, effort *string) (State, error) {
 		return State{}, badRequest("effort %q must be a lowercase word", *effort)
 	}
 	return r.act(id, func(c *conv) error {
-		return c.setSettings(model, effort)
+		if err := c.checkModelSetting(model); err != nil {
+			return err
+		}
+		c.setSettings(model, effort)
+		return nil
 	})
 }
 

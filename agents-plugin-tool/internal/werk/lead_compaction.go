@@ -2,8 +2,6 @@ package werk
 
 import (
 	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -17,64 +15,6 @@ import (
 )
 
 const rereadBytes = 40 << 10
-const maxRereads = 12
-
-// LeadSummary holds validated carry-forward prose for the next checkpoint.
-type LeadSummary struct {
-	prose []string
-	paths []string
-}
-
-// LeadSummarySchema is the optional compact tool argument seen at discovery.
-func LeadSummarySchema() map[string]any {
-	properties := map[string]any{
-		"reread": map[string]any{
-			"type": "array", "maxItems": maxRereads, "items": map[string]any{"type": "string"},
-			"description": "Text files in this worktree to read again after compaction. The daemon inlines whole files within its byte budget.",
-		},
-	}
-	required := make([]string, 0, len(compactProse))
-	for _, field := range compactProse {
-		properties[field.key] = map[string]any{"type": "string", "description": field.heading + ". Use an empty string when no details need carrying forward."}
-		required = append(required, field.key)
-	}
-	return map[string]any{
-		"type": "object", "properties": properties, "required": required, "additionalProperties": false,
-		"description": "A hosted builtin lead compacting itself may supply these seven carry-forward fields and optional re-read paths.",
-	}
-}
-
-// ParseLeadSummary refuses malformed or excessive input before a turn is queued.
-func ParseLeadSummary(raw json.RawMessage) (*LeadSummary, error) {
-	var fields map[string]json.RawMessage
-	if len(raw) > maxSummaryResponseBytes || json.Unmarshal(raw, &fields) != nil || fields == nil {
-		return nil, errors.New("lead_summary must be a bounded object")
-	}
-	out := &LeadSummary{prose: make([]string, len(compactProse))}
-	for i, field := range compactProse {
-		var text *string
-		if json.Unmarshal(fields[field.key], &text) != nil || text == nil || len(*text) > proseFieldBytes {
-			return nil, fmt.Errorf("lead_summary.%s requires a string of at most %d bytes", field.key, proseFieldBytes)
-		}
-		out.prose[i] = strings.TrimSpace(*text)
-		delete(fields, field.key)
-	}
-	if raw, ok := fields["reread"]; ok {
-		if json.Unmarshal(raw, &out.paths) != nil || len(out.paths) > maxRereads {
-			return nil, fmt.Errorf("lead_summary.reread takes at most %d paths", maxRereads)
-		}
-		for _, path := range out.paths {
-			if strings.TrimSpace(path) == "" || len(path) > 1024 || strings.ContainsAny(path, "\r\n\x00") {
-				return nil, errors.New("lead_summary.reread contains an invalid path")
-			}
-		}
-		delete(fields, "reread")
-	}
-	if len(fields) != 0 {
-		return nil, errors.New("lead_summary contains unknown fields")
-	}
-	return out, nil
-}
 
 func (a *Agent) compactRereads(paths []string) string {
 	if len(paths) == 0 {

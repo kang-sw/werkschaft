@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -72,14 +73,20 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 		t.Fatalf("steer did not reach the model: %+v", h.state(st.ID))
 	}
 	eventually(t, "lead idle", func() bool { return h.state(st.ID).Status == StatusIdle })
-	ring, err := h.runner.Transcript(st.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	written, _ := json.Marshal(ring)
-	if !strings.Contains(string(written), "Provider summary") || strings.Contains(string(written), "opaque") {
-		t.Fatal("the common turn history did not retain only the provider summary")
-	}
+	eventually(t, "provider summary in common turn history", func() bool {
+		ring, err := h.runner.Transcript(st.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		written, err := json.Marshal(ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(written, []byte("opaque")) {
+			t.Fatal("the common turn history exposed encrypted reasoning")
+		}
+		return bytes.Contains(written, []byte("Provider summary"))
+	})
 	h.send(st.ID, "interrupt this")
 	wait(third)
 	if _, _, err := h.runner.Interrupt(st.ID); err != nil {
