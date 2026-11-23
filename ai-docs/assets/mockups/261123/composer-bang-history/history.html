@@ -1,0 +1,152 @@
+<!-- composer-bang-history mockup: static fragment, no scripts, no external resources. -->
+<style>
+.mk-hist { --bg:#1e1f22; --fg:#e6e6e6; --bd:#444; --card:#2a2b2f; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --tm-bg:#131417; --tm-bg2:#1a1b1f; --tm-line:#34373d; --tm-fg:#d9dbdf; --tm-dim:#9ea2a9; --tm-green:#5cc46a; --tm-green-bg:#1d3b24; --tm-red:#f0797e; --tm-amber:#e0a84a; --tm-blue:#5b9bf0;
+  background:var(--bg); color:var(--fg); padding:20px; font:13px/1.5 system-ui,"Malgun Gothic",sans-serif; box-sizing:border-box; }
+.mk-hist *, .mk-hist *::before, .mk-hist *::after { box-sizing:border-box; }
+.mk-hist h2 { margin:0 0 4px; font-size:15px; }
+.mk-hist .mk-lead { margin:0 0 16px; color:var(--tm-dim); font-size:12px; }
+.mk-hist .mk-grid { display:grid; grid-template-columns:repeat(3, minmax(300px, 1fr)); gap:18px; align-items:stretch; }
+.mk-hist .mk-col { display:flex; flex-direction:column; min-width:0; }
+.mk-hist .mk-title { font-weight:700; font-size:12.5px; margin:0 0 8px; }
+.mk-hist .mk-title b { color:var(--tm-amber); font-family:var(--mono); }
+.mk-hist .mk-cap { margin:6px 2px 0; font-size:11px; line-height:1.45; color:var(--tm-dim); }
+.mk-hist .mk-cap em { font-style:normal; color:var(--tm-amber); font-weight:700; }
+.mk-hist .mk-spacer { flex:1 1 auto; min-height:8px; }
+
+/* popup, anchored above the composer, same dark terminal palette as bang mode */
+.mk-hist .chist { margin-bottom:6px; border-radius:10px; background:var(--tm-bg); color:var(--tm-fg);
+  box-shadow:0 8px 24px rgba(0,0,0,.45), inset 0 0 0 1px var(--bd); overflow:hidden; }
+.mk-hist .chist-head { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--tm-bg2); border-bottom:1px solid var(--tm-line); font-size:11px; color:var(--tm-dim); }
+.mk-hist .chist-head .q { font:600 11.5px var(--mono); color:var(--tm-fg); }
+.mk-hist .chist-head .q::before { content:"(reverse-i-search) "; color:var(--tm-dim); font-weight:400; }
+.mk-hist .chist-count { margin-left:auto; font:600 10.5px var(--mono); color:var(--tm-green); }
+.mk-hist .chist-list { margin:0; padding:3px; list-style:none; }
+.mk-hist .chist-row { display:flex; align-items:center; gap:8px; min-height:30px; padding:3px 4px 3px 8px; border-radius:6px; cursor:pointer; }
+.mk-hist .chist-row.hover { background:#1f2024; }
+.mk-hist .chist-row.sel { background:var(--tm-green-bg); box-shadow:inset 2px 0 0 var(--tm-green); }
+.mk-hist .chist-cmd { flex:1 1 auto; min-width:0; font:12.5px/1.4 var(--mono); color:var(--tm-fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mk-hist .chist-cmd::before { content:"$ "; color:var(--tm-green); font-weight:800; }
+.mk-hist .chist-cmd mark { background:transparent; color:var(--tm-amber); font-weight:800; text-decoration:underline; text-underline-offset:2px; }
+.mk-hist .chist-row.sel .chist-cmd { color:#fff; }
+.mk-hist .chist-ex { flex:none; font:700 10px/1 var(--mono); padding:2px 5px; border-radius:4px; }
+.mk-hist .chist-ex.ok { color:var(--tm-green); background:var(--tm-green-bg); }
+.mk-hist .chist-ex.fail { color:var(--tm-red); background:#3d1f22; }
+.mk-hist .chist-ago { flex:none; width:48px; text-align:right; font-size:10.5px; color:var(--tm-dim); }
+.mk-hist .chist-del { flex:none; width:22px; height:22px; border:0; border-radius:5px; background:transparent; color:var(--tm-dim); font:14px/1 var(--mono); cursor:pointer; opacity:.55; }
+.mk-hist .chist-row.sel .chist-del { opacity:1; }
+.mk-hist .chist-del.hot { opacity:1; color:#fff; background:#7a2a30; }
+.mk-hist .chist-empty { padding:18px 12px; text-align:center; color:var(--tm-dim); font-size:12px; }
+.mk-hist .chist-empty code { display:block; margin-bottom:4px; font:600 12.5px var(--mono); color:var(--tm-amber); }
+.mk-hist .chist-foot { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:6px 10px; border-top:1px solid var(--tm-line); background:var(--tm-bg2); font-size:10.5px; color:var(--tm-dim); }
+.mk-hist .chist-foot span { white-space:nowrap; }
+.mk-hist kbd { display:inline-block; padding:2px 5px 1px; border-radius:4px; background:#33353a; box-shadow:inset 0 -1px 0 #444, inset 0 0 0 1px #444; font:600 10.5px/1.2 var(--mono); color:var(--fg); }
+.mk-hist .chist-clear { margin-left:auto; border:0; background:transparent; color:var(--tm-dim); font:inherit; cursor:pointer; padding:1px 4px; border-radius:4px; text-decoration:underline dotted; }
+.mk-hist .chist-clear.confirm { color:#fff; background:#7a2a30; text-decoration:none; }
+
+/* composer replica (real class names: .composer[data-bang] .cfield .csend .cbang .cbang-badge) */
+.mk-hist .composer { background:var(--card); border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,.4), inset 0 0 0 1.5px color-mix(in srgb, var(--tm-green) 45%, transparent); padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+.mk-hist .cmain { display:flex; gap:8px; align-items:stretch; }
+.mk-hist .cfield { flex:1 1 auto; min-width:0; background:var(--tm-bg); border-radius:10px; box-shadow:inset 0 0 0 1px var(--tm-line); }
+.mk-hist .wsc-editor { font:13px/1.5 var(--mono); color:var(--tm-fg); padding:9px 10px; min-height:40px; white-space:pre-wrap; }
+.mk-hist .wsc-editor .bang { color:var(--tm-amber); }
+.mk-hist .wsc-editor .caret { display:inline-block; width:1.5px; height:15px; vertical-align:-3px; background:var(--tm-green); }
+.mk-hist .csend { width:34px; border:0; border-radius:10px; background:var(--tm-green-bg); color:var(--tm-green); font-size:14px; line-height:1; }
+.mk-hist .cbang { display:flex; align-items:center; gap:8px; min-height:22px; flex-wrap:wrap; font-size:11.5px; color:var(--tm-dim); }
+.mk-hist .cbang-badge { display:inline-flex; align-items:center; height:20px; padding:0 8px; border-radius:6px; background:var(--tm-green-bg); color:var(--tm-green); font:800 10.5px/1 var(--mono); letter-spacing:.02em; }
+.mk-hist .cbang-scope { margin-left:auto; font-size:10.5px; color:var(--tm-dim); }
+
+.mk-hist .mk-dec { margin-top:20px; padding:12px 14px; border:1px dashed var(--bd); border-radius:10px; font-size:11.5px; color:var(--tm-dim); }
+.mk-hist .mk-dec h3 { margin:0 0 6px; font-size:12px; color:var(--fg); }
+.mk-hist .mk-dec ol { margin:0; padding-left:18px; display:grid; gap:3px; }
+.mk-hist .mk-dec b { color:var(--tm-amber); }
+.mk-hist .mk-dec code { font-family:var(--mono); color:var(--tm-fg); }
+</style>
+
+<div class="mk-hist">
+  <h2>컴포저 <code>!</code> 모드 — 명령 히스토리 팝업 (Ctrl+R 스타일)</h2>
+  <p class="mk-lead">다크 테마 · 팝업은 컴포저 바로 위에 앵커 · 최신순 · 저장소는 브라우저 localStorage · 각 행 오른쪽 ✕로 삭제</p>
+
+  <div class="mk-grid">
+    <!-- 1. empty prompt -->
+    <div class="mk-col">
+      <p class="mk-title">① <b>!</b> 입력 직후 (빈 쿼리)</p>
+      <div class="mk-spacer"></div>
+      <div class="chist" role="listbox" aria-label="명령 히스토리">
+        <div class="chist-head"><span class="q"></span><span class="chist-count">최근 7개</span></div>
+        <ul class="chist-list">
+          <li class="chist-row sel"><span class="chist-cmd">git status -sb</span><span class="chist-ex ok">0</span><span class="chist-ago">2분 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd">go test ./internal/wsdashboard/...</span><span class="chist-ex fail">1</span><span class="chist-ago">14분 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row hover"><span class="chist-cmd">git stash pop</span><span class="chist-ex ok">0</span><span class="chist-ago">1시간 전</span><button class="chist-del hot" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd">rg -n "cbang" agents-plugin-tool</span><span class="chist-ex ok">0</span><span class="chist-ago">3시간 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd">gh run list --status failure</span><span class="chist-ex ok">0</span><span class="chist-ago">어제</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd">npm run build -- --watch=false</span><span class="chist-ex fail">127</span><span class="chist-ago">어제</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd">ls -la ai-docs/tickets/todo</span><span class="chist-ex ok">0</span><span class="chist-ago">3일 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+        </ul>
+        <div class="chist-foot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> 이동</span><span><kbd>Enter</kbd> 채우기 · 다시 <kbd>Enter</kbd> 실행</span><span><kbd>Tab</kbd> 자동완성</span><span><kbd>Esc</kbd> 닫기</span>
+          <button class="chist-clear">전체 지우기</button>
+        </div>
+      </div>
+      <div class="composer" data-bang>
+        <div class="cmain"><div class="cfield"><div class="wsc-editor"><span class="bang">!</span><span class="caret"></span></div></div><button class="csend">▶</button></div>
+        <div class="cbang"><span class="cbang-badge">bash</span><span class="cbang-scope">히스토리: 이 워크트리</span></div>
+      </div>
+      <p class="mk-cap">3행 호버(✕ 강조) · 1행 키보드 선택(↑/↓로 이동, 확정된 동작). 종료 코드 칩은 선택 사항 — <em>결정 A</em></p>
+    </div>
+
+    <!-- 2. fuzzy query -->
+    <div class="mk-col">
+      <p class="mk-title">② <b>!gst</b> 퍼지 검색</p>
+      <div class="mk-spacer"></div>
+      <div class="chist" role="listbox" aria-label="명령 히스토리">
+        <div class="chist-head"><span class="q">gst</span><span class="chist-count">4 / 38 일치</span></div>
+        <ul class="chist-list">
+          <li class="chist-row sel"><span class="chist-cmd"><mark>g</mark>it <mark>st</mark>atus -sb</span><span class="chist-ex ok">0</span><span class="chist-ago">2분 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd"><mark>g</mark>it <mark>st</mark>ash pop</span><span class="chist-ex ok">0</span><span class="chist-ago">1시간 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd"><mark>g</mark>o te<mark>st</mark> ./internal/wsdashboard/...</span><span class="chist-ex fail">1</span><span class="chist-ago">14분 전</span><button class="chist-del" aria-label="삭제">✕</button></li>
+          <li class="chist-row"><span class="chist-cmd"><mark>g</mark>h run li<mark>st</mark> --status failure</span><span class="chist-ex ok">0</span><span class="chist-ago">어제</span><button class="chist-del" aria-label="삭제">✕</button></li>
+        </ul>
+        <div class="chist-foot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> 이동</span><span><kbd>Enter</kbd> 채우기 · 다시 <kbd>Enter</kbd> 실행</span><span><kbd>Tab</kbd> 자동완성</span><span><kbd>Ctrl</kbd>+<kbd>R</kbd> 다음 일치</span><span><kbd>Esc</kbd> 닫기</span>
+        </div>
+      </div>
+      <div class="composer" data-bang>
+        <div class="cmain"><div class="cfield"><div class="wsc-editor"><span class="bang">!</span>gst<span class="caret"></span></div></div><button class="csend">▶</button></div>
+        <div class="cbang"><span class="cbang-badge">bash</span><span class="cbang-scope">히스토리: 이 워크트리</span></div>
+      </div>
+      <p class="mk-cap">입력할 때마다 자동 재필터(입력창 텍스트는 그대로, 선택 행만 따라감). 일치 글자는 앰버 밑줄. 점수순 정렬, 동점은 최신순. 맨 위가 미리 선택됨. <em>결정 B</em></p>
+    </div>
+
+    <!-- 3. no match -->
+    <div class="mk-col">
+      <p class="mk-title">③ 일치 없음 / 전체 지우기 확인</p>
+      <div class="mk-spacer"></div>
+      <div class="chist" role="listbox" aria-label="명령 히스토리">
+        <div class="chist-head"><span class="q">gstzz</span><span class="chist-count" style="color:var(--tm-red)">0 / 38 일치</span></div>
+        <div class="chist-empty"><code>일치하는 명령이 없습니다</code>Enter를 누르면 입력한 그대로 실행됩니다</div>
+        <div class="chist-foot">
+          <span><kbd>Enter</kbd> 그대로 실행</span><span><kbd>Esc</kbd> 닫기</span>
+          <button class="chist-clear confirm">정말 전체 삭제 (38개)</button>
+        </div>
+      </div>
+      <div class="composer" data-bang>
+        <div class="cmain"><div class="cfield"><div class="wsc-editor"><span class="bang">!</span>gstzz<span class="caret"></span></div></div><button class="csend">▶</button></div>
+        <div class="cbang"><span class="cbang-badge">bash</span><span class="cbang-scope">히스토리: 이 워크트리</span></div>
+      </div>
+      <p class="mk-cap">"전체 지우기"는 2단계 확인(클릭하면 빨간 확인 상태, 3초 후 복귀). 히스토리가 비어 있으면 팝업 자체를 띄우지 않음. <em>결정 E</em></p>
+    </div>
+  </div>
+
+  <div class="mk-dec">
+    <h3>오너 결정 필요 항목 (권장안)</h3>
+    <ol>
+      <li><b>A. 행 메타 정보</b> — 상대 시간 + 종료 코드 칩 표시? 권장: 둘 다 표시(종료 코드는 실행 완료 후 기록, 없으면 칩 생략).</li>
+      <li><b>B. Enter 동작</b> — 선택 행에서 첫 Enter는 명령을 입력창에 채우고, 두 번째 Enter는 채운 명령을 실행합니다. ↑/↓는 선택 행을 이동하고 Tab은 선택 명령을 자동완성합니다.</li>
+      <li><b>C. 저장 범위</b> — 워크트리별 vs 전역. 권장: 워크트리별(명령이 cwd 의존적), 전역 토글은 후속.</li>
+      <li><b>D. 크기 제한</b> — 권장: 최대 200개, 같은 명령은 중복 저장 없이 맨 위로 이동, 초과 시 오래된 것부터 삭제, 항목당 최대 2 KB.</li>
+      <li><b>E. 전체 지우기</b> — 푸터 링크 + 2단계 확인. 권장: 포함(개별 ✕만으로 200개 정리는 번거로움).</li>
+      <li><b>F. 열리는 시점</b> — <code>!</code> 입력 직후 자동 vs ↑키로만. 권장: 자동 오픈. 첫 Esc는 팝업만 닫고 두 번째 Esc가 기존 bang 종료(기존 Esc 동작 보존).</li>
+    </ol>
+  </div>
+</div>
