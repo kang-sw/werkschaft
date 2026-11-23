@@ -101,7 +101,7 @@ type AgentAuditHost interface {
 }
 
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off
-// conversation from its in-memory state when the daemon purges its session.
+// conversation when the daemon purges its session directory.
 type AgentForgetter interface {
 	ForgetClosed(replyID string)
 }

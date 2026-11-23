@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"maps"
 	"os"
 	"path/filepath"
@@ -97,5 +98,37 @@ func TestRunnerWithExternalBackendsDoesNotOpenPrivateStore(t *testing.T) {
 	t.Cleanup(r.Close)
 	if _, err := os.Stat(filepath.Join(dir, wsmeta.DBName)); !os.IsNotExist(err) {
 		t.Fatalf("metadata store opened without a durable backend: %v", err)
+	}
+}
+
+func TestDurableRunnerForgetClosedDeletesPrivateRecord(t *testing.T) {
+	const backend = "fixture"
+	r := NewRunner(Options{
+		Dir:      t.TempDir(),
+		Backends: map[string]BackendRegistration{backend: {ProcessKind: ProcessDurable}},
+	})
+	r.Start(nil)
+	t.Cleanup(r.Close)
+	rec := Record{
+		ReplyID: "finished", Backend: backend, Root: t.TempDir(), WSKey: "fixture-key",
+		ClosedAt: r.opts.Now().UTC().Format(time.RFC3339),
+	}
+	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.persistAgentRecord(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	r.loadClosed(rec)
+
+	r.ForgetClosed(rec.ReplyID)
+
+	rows, err := r.durableRecords.DurableAgentRecords(context.Background())
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("private records after purge = %d, error %v", len(rows), err)
+	}
+	if _, err := os.Stat(recordPath(dir)); err != nil {
+		t.Fatalf("caller no longer owns directory cleanup: %v", err)
 	}
 }
