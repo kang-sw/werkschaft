@@ -92,6 +92,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 	if notify != nil {
 		r.notify = notify
 	}
+	private := r.openDurableAgentRecords()
 	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
 	var all, open []Record
 	for _, e := range entries {
@@ -99,12 +100,21 @@ func (r *Runner) start(notify func(replyID, project string)) {
 			continue
 		}
 		dir := wsdashboard.SessionDir(r.opts.Dir, e.Name())
+		if rec, ok := private[e.Name()]; ok {
+			r.restoreDurableProjection(dir, rec)
+			all = append(all, rec)
+			continue
+		}
 		rec, err := readRecord(dir)
 		if err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				fmt.Fprintf(r.opts.Log, "agent: skip %s: %v\n", e.Name(), err)
 			}
 			continue
+		}
+		// The history projection is never an input to the durable scheduler.
+		if r.durableProcess(rec.Backend) {
+			rec = durableHistoryProjection(rec)
 		}
 		all = append(all, rec)
 	}
@@ -129,6 +139,9 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		if err := os.RemoveAll(sessionDir); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
 			continue
+		}
+		if rec, ok := private[id]; ok {
+			r.deleteDurableRecord(rec)
 		}
 		gone[id] = true
 	}
@@ -161,7 +174,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		c.do(func() {
 			// Release a persisted HeldTurn whose background work ended
 			// with the previous daemon (open children still hold it).
-			if c.rec.Parent != nil && c.rec.HolderID == "" {
+			if c.rec.Parent != nil && c.rec.HolderID == "" && !r.durableProcess(c.rec.Backend) {
 				c.releaseHeld()
 			}
 			c.spawnDirty = true
@@ -258,7 +271,7 @@ func (r *Runner) closeAtStart(rec Record) bool {
 	// An orphan's cut-off turn ends here, as close ends a running one.
 	finishActiveTurn(&rec, now.UnixMilli())
 	rec.TurnOpen = false
-	if err := writeRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
+	if err := r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 		return false
 	}
@@ -286,9 +299,10 @@ func (r *Runner) orphansAtStart(open []Record) map[string]bool {
 		for _, rec := range open {
 			id := rec.ReplyID
 			// Legacy direct non-Pi children keep their existing next-launch
-			// admission refusal when a parent disappears. Held workers of
-			// every backend use the former Pi orphan cleanup.
-			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && rec.HolderID == "") {
+			// admission refusal when a parent disappears. Workers with
+			// recoverable processes also use the former Pi orphan cleanup.
+			recoverable := rec.HolderID != "" || r.durableProcess(rec.Backend)
+			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && !recoverable) {
 				continue
 			}
 			if rec.Parent.Kind == ParentConversation && !stays(rec.Parent.ReplyID) {

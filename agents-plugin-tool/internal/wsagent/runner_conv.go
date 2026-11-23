@@ -774,7 +774,7 @@ func (c *conv) loop() {
 	defer beat.Stop()
 	// Settle the predecessor before inbox signals (including nested reports)
 	// can start a genuinely new turn.
-	if c.rec.Parent != nil && c.rec.HolderID == "" {
+	if c.rec.Parent != nil && c.rec.HolderID == "" && !c.r.durableProcess(c.rec.Backend) {
 		c.interrupted()
 		if c.requeueSteered() {
 			c.signalInbox()
@@ -1068,7 +1068,7 @@ func (c *conv) update(fn func(rec *Record)) error {
 // without letting an older copy overwrite a newer change.
 func (c *conv) persistRecord() error {
 	rec := c.record()
-	err := writeRecord(c.dir, rec)
+	err := c.r.persistAgentRecord(c.dir, rec)
 	c.recordDirty = err != nil
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)

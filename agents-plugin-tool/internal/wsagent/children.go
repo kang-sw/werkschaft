@@ -413,7 +413,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	// A done turn held for descendants was abandoned by the close, not
 	// left waiting for this new turn to publish it.
 	rec.HeldTurn = nil
-	if err := writeRecord(dir, rec); err != nil {
+	if err := r.persistAgentRecord(dir, rec); err != nil {
 		return nil, err
 	}
 	r.unfenceExec(id)

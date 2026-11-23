@@ -287,7 +287,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
-	if err := writeRecord(dir, rec); err != nil {
+	if err := r.persistAgentRecord(dir, rec); err != nil {
 		return State{}, err
 	}
 	var seed []wslive.SlashCommand

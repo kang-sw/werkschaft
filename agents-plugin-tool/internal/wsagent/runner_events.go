@@ -1229,7 +1229,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()
-	if err := writeRecord(c.dir, rec); err != nil {
+	if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 	}
 	c.wmu.Unlock()

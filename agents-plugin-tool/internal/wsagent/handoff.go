@@ -176,7 +176,7 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return State{}, err
 	}
-	if err := writeRecord(dir, rec); err != nil {
+	if err := r.persistAgentRecord(dir, rec); err != nil {
 		return State{}, err
 	}
 	reg := registration(rec, now)
@@ -293,7 +293,7 @@ func (r *Runner) Reopen(id string) (State, error) {
 	delete(r.closedRows, id)
 	r.mu.Unlock()
 	rec.ClosedAt = ""
-	err = writeRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec)
+	err = r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec)
 	unlock()
 	if err == nil {
 		r.unfenceExec(id)

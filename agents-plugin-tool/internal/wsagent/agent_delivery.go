@@ -265,6 +265,8 @@ func (r *Runner) forget(id string) {
 	wslive.DropRing(wslive.RingDir(sessionDir))
 	if err := os.RemoveAll(sessionDir); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
+	} else {
+		r.deleteDurableRecord(rec)
 	}
 	r.notify(id, rec.Root)
 }

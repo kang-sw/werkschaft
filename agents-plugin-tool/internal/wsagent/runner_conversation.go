@@ -14,6 +14,11 @@ import (
 func (r *Runner) Close() {
 	r.once.Do(func() { close(r.quit) })
 	r.wg.Wait()
+	if r.durableRecords != nil {
+		if err := r.durableRecords.Close(); err != nil {
+			fmt.Fprintf(r.opts.Log, "agent: close durable records: %v\n", err)
+		}
+	}
 	// Every loop has removed its membership; drain the backend so no late
 	// acquisition outlives the runner.
 	r.awake.Close()

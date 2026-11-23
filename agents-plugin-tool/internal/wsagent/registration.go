@@ -13,12 +13,23 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
+// ProcessKind selects the process lifecycle for hosted sessions.
+type ProcessKind uint8
+
+const (
+	// ProcessExternal is the existing executable lifecycle.
+	ProcessExternal ProcessKind = iota
+	// ProcessDurable is a daemon-hosted loop with a private runner record.
+	ProcessDurable
+)
+
 // BackendRegistration is the admission descriptor of one registered backend.
 // Optional process controls remain instance-owned (controlsFor), not promises
 // made by a backend-wide flag. ChoiceLister is asserted on Backend itself.
 // This descriptor is runtime-only: it adds nothing to persisted profiles.
 type BackendRegistration struct {
 	Backend         Backend
+	ProcessKind     ProcessKind
 	LeadProfile     string
 	PermissionModes []string
 	// WorkerCapable admits agent.spawn on this backend. WorkerProfile is

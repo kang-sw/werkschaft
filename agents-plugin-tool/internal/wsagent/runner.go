@@ -12,6 +12,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // KeyStore mints and keeps the ws session key of each conversation. The
@@ -277,6 +278,10 @@ type Options struct {
 type Runner struct {
 	opts   Options
 	notify func(replyID, project string)
+	// Opened during daemon startup under the dashboard lock, then held
+	// until all conversations have drained.
+	durableRecords     *wsmeta.Store
+	durableProjections sync.Map // reply-id -> last published projection digest
 	// fixedProfile belongs only to a private one-shot answer runner. Freeze
 	// the checked ceiling so config edits cannot widen it between create
 	// and process start. Ordinary conversations still resolve on every start.
