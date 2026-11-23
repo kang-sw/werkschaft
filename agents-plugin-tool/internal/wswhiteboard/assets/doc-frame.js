@@ -382,4 +382,29 @@
     if (e.deltaY && canScrollInFrame(e.target, e.deltaY)) return;
     post({ wbDoc: "wheel", dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode });
   }, { passive: true });
+  // Middle-click (button 1) toggles the host board's Overview while suppressing
+  // browser autoscroll on both mousedown and auxclick. Leave links and terminal
+  // surfaces native, and relay at most once per click.
+  var midHandled = false, midTimer = 0;
+  function midSkip(t) {
+    return !!(t && t.closest && t.closest("a[href], .xterm, .tm-host"));
+  }
+  d.addEventListener("mousedown", function (e) {
+    if (e.button !== 1 || e.defaultPrevented || midSkip(e.target)) return;
+    e.preventDefault();
+    midHandled = true;
+    clearTimeout(midTimer);
+    midTimer = setTimeout(function () { midHandled = false; }, 600);
+    post({ wbDoc: "middleclick" });
+  }, true);
+  d.addEventListener("auxclick", function (e) {
+    if (e.button !== 1) return;
+    if (midHandled) {
+      e.preventDefault();
+      midHandled = false;
+      clearTimeout(midTimer);
+      return;
+    }
+    if (!e.defaultPrevented && !midSkip(e.target)) e.preventDefault();
+  }, true);
 })();
