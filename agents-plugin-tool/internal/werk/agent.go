@@ -305,6 +305,13 @@ func (a *Agent) append(item json.RawMessage) {
 	a.mu.Unlock()
 }
 
+func (a *Agent) appendResponse(response *Response) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.transcript = append(a.transcript, response.Output...)
+	a.log.AddResponse(response)
+}
+
 // Close writes what is queued and releases the conversation file.
 func (a *Agent) Close() error {
 	a.log.Close()
@@ -507,9 +514,7 @@ func (a *Agent) loop(ctx context.Context, turn int) (reason, errText string) {
 			}
 			return ReasonError, err.Error()
 		}
-		for _, item := range resp.Output {
-			a.append(item)
-		}
+		a.appendResponse(resp)
 		a.report(turn, resp)
 		calls := functionCalls(resp.Output)
 		if len(calls) == 0 {

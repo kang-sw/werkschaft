@@ -26,16 +26,21 @@ type writer struct {
 	// the write); an error from it is a failed write, and the item is not
 	// appended.
 	before func(json.RawMessage) error
-	// onErr reports the first failed write; the writer goes on.
+	// onErr reports the first failed write. The durable log remains a prefix.
 	onErr func(error)
 
 	mu       sync.Mutex
 	cond     *sync.Cond
-	queue    []json.RawMessage
+	queue    []logAppend
 	inflight bool
 	closed   bool
 	err      error // the first failed write; sticky
 	done     chan struct{}
+}
+
+type logAppend struct {
+	item     json.RawMessage
+	response *Response
 }
 
 func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
@@ -47,12 +52,20 @@ func newWriter(store *Store, before func(json.RawMessage) error, onErr func(erro
 
 // Add queues an item behind those already queued.
 func (w *writer) Add(item json.RawMessage) {
+	w.enqueue(logAppend{item: item})
+}
+
+func (w *writer) AddResponse(response *Response) {
+	w.enqueue(logAppend{response: response})
+}
+
+func (w *writer) enqueue(record logAppend) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed {
+	if w.closed || w.err != nil {
 		return
 	}
-	w.queue = append(w.queue, item)
+	w.queue = append(w.queue, record)
 	w.cond.Broadcast()
 }
 
@@ -72,17 +85,16 @@ func (w *writer) run() {
 		w.inflight = true
 		w.mu.Unlock()
 
-		for _, item := range batch {
-			if err := w.append(item); err != nil {
+		for _, record := range batch {
+			if err := w.append(record); err != nil {
 				w.mu.Lock()
-				first := w.err == nil
-				if first {
-					w.err = err
-				}
+				w.err = err
+				w.queue = nil
 				w.mu.Unlock()
-				if first && w.onErr != nil {
+				if w.onErr != nil {
 					w.onErr(err)
 				}
+				break
 			}
 		}
 
@@ -93,18 +105,28 @@ func (w *writer) run() {
 	}
 }
 
-func (w *writer) append(item json.RawMessage) (err error) {
+func (w *writer) append(record logAppend) (err error) {
 	defer func() {
 		if recover() != nil {
 			err = errors.New("the werk log writer failed unexpectedly")
 		}
 	}()
+	if record.response != nil {
+		if w.before != nil {
+			for _, item := range record.response.Output {
+				if err := w.before(item); err != nil {
+					return err
+				}
+			}
+		}
+		return w.store.AppendResponse(record.response)
+	}
 	if w.before != nil {
-		if err := w.before(item); err != nil {
+		if err := w.before(record.item); err != nil {
 			return err
 		}
 	}
-	return w.store.Append(item)
+	return w.store.Append(record.item)
 }
 
 // Flush returns once every item added before it has been written. It returns

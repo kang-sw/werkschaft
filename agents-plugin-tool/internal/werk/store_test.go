@@ -110,3 +110,28 @@ func TestStoreRotateStartsASnapshotSegmentAndDropsTheOldOne(t *testing.T) {
 		t.Fatalf("after rotate: %v, %s", err, items)
 	}
 }
+
+func TestStoreResponseIsRecoveredAsAUnit(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	s, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, s.Append(json.RawMessage(userItem("question"))))
+	first := &Response{ID: "committed", Output: []json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","id":"r"}`),
+		json.RawMessage(callOf("c", "read", "{}")),
+	}}
+	must(t, s.AppendResponse(first))
+	must(t, s.Close())
+	tail, err := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = tail.WriteString(`{"k":"response","response":{"id":"torn","output":[{"type":"message"}`)
+	must(t, err)
+	must(t, tail.Close())
+
+	reopened, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	defer reopened.Close()
+	if len(items) != 3 || string(items[1]) != string(first.Output[0]) || string(items[2]) != string(first.Output[1]) {
+		t.Fatalf("replayed %s", items)
+	}
+}

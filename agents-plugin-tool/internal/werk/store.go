@@ -21,11 +21,9 @@ import (
 // Storage type 1 of ai-docs/manuals/performance.md (an append-only log, read
 // back by replay): one JSONL file per session, opened once and held, one
 // write() per change, never read again after startup. The first line is a
-// header, so a segment is self-describing; every later line is one transcript
-// item as the provider sent or the harness built it. Recovery trims a torn
-// last line instead of relying on fsync. There is no rewrite: a compaction
-// that shortens the transcript starts a new segment whose first line is the
-// snapshot of what it keeps, and deletes the old one whole (Rotate).
+// header, so a segment is self-describing. Each later line is a transcript
+// item or one complete model response. Recovery discards a torn tail so it
+// cannot mistake part of a response for committed model output.
 
 // storeDirName is the directory under a session's directory that holds the
 // conversation segments.
@@ -61,6 +59,11 @@ type segmentHeader struct {
 type itemLine struct {
 	K    string          `json:"k"`
 	Item json.RawMessage `json:"item"`
+}
+
+type responseLine struct {
+	K        string    `json:"k"`
+	Response *Response `json:"response"`
 }
 
 // Store is one session's conversation file.
@@ -153,11 +156,22 @@ func readSegment(path, session string) ([]json.RawMessage, int64, error) {
 			}
 			first = false
 		} else {
-			var l itemLine
-			if err := json.Unmarshal(line, &l); err != nil || l.K != "item" || len(l.Item) == 0 {
+			var l struct {
+				K        string          `json:"k"`
+				Item     json.RawMessage `json:"item"`
+				Response *Response       `json:"response"`
+			}
+			if err := json.Unmarshal(line, &l); err != nil {
 				break
 			}
-			items = append(items, append(json.RawMessage(nil), l.Item...))
+			switch {
+			case l.K == "item" && len(l.Item) > 0:
+				items = append(items, l.Item)
+			case l.K == "response" && l.Response != nil:
+				items = append(items, l.Response.Output...)
+			default:
+				return items, good, nil
+			}
 		}
 		good += int64(nl + 1)
 		rest = rest[nl+1:]
@@ -182,6 +196,17 @@ func (s *Store) Append(item json.RawMessage) error {
 		return errors.New("the conversation store is closed")
 	}
 	return s.writeLocked(itemLine{K: "item", Item: item})
+}
+
+// AppendResponse saves the completed output as a unit, including empty
+// responses. Tool calls are eligible to run only after their intent is saved.
+func (s *Store) AppendResponse(response *Response) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return errors.New("the conversation store is closed")
+	}
+	return s.writeLocked(responseLine{K: "response", Response: response})
 }
 
 // Rotate starts a new segment holding items as its snapshot and deletes the

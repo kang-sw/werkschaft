@@ -1138,3 +1138,26 @@ func nextTypedTurnEnd(t *testing.T, events <-chan Line) Line {
 		}
 	}
 }
+
+func TestPartialModelResponseLogFailureKeepsAValidPrefix(t *testing.T) {
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(`{"type":"reasoning","id":"r"}`, callOf("c1", "read", `{"path":"a.txt"}`)),
+		reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Endpoint: model, BeforeAppend: func(item json.RawMessage) error {
+		if strings.Contains(string(item), `"type":"function_call"`) {
+			return errors.New("fixture response commit failed")
+		}
+		return nil
+	}})
+	r.user("go")
+	r.waitTurnEnd(1)
+	r.stop()
+	must(t, r.agent.Close())
+	reopened, items, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	defer reopened.Close()
+	if len(items) != 1 || string(items[0]) != string(userItem("go")) {
+		t.Fatalf("recovered %s; want only the user input", items)
+	}
+}
