@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1394877f00c880c1
 sage-review-completeness-reviewed: 1394877f00c880c1
+completed: 2026-11-23
 ---
 
 # Composer `!` terminal look: shell input, console results, slot keycaps
@@ -367,3 +368,13 @@ Keep intact:
   ```bash
   bash D:/sys_lock.sh remote w5090 run <who> <min> --sync '<worktree>' -- 'export PATH=$HOME/sdk/go/bin:$PATH; cd agents-plugin-tool && python3 scripts/generate-package-assets.py && go test ./internal/wsdashboard/... ./internal/wsi18n/...'
   ```
+
+### Result (40daceb) - 2026-11-23
+
+Landed (40daceb): removed the in-flow `.d-cexec` console DOM, `.cbang` bottom hint row, `sessionStorage` card restoration, `ucmdContainer`'s `cexecBox` anchor (`dashboard-composer-ucmd.js`), `xpeek` Jump-to-card (`xhCardFor`, `act === "jump"`, `.cexec.xflash`), orphaned CSS rules, and 24 orphaned `js.cexec.*` / `js.xhud.pk.jump*` i18n keys across all 11 locale tables per `(1493)=a`, `(1499)=a`, `(1500)`, `(1501)`, and `(1505)`. Kept `!` shell-mode input styling (`data-bang`, `ws-bang`, green Run, `@`/`/` suppression, Esc rule), `$` `.d-ucmd` slot blocks, dark `#131417` and Solarized Light `--tm-*` (`#fdf6e3`) surfaces, `cexecPrime()` (`cexecList` on load without restoring cards), and bounded headless submission polling (`CEXEC_POLL_MAX = 20`, `CEXEC_POLL_MS = 30000`) routing both `cexecSend` and `ucmdRun` (`202` + immediate `POST 200` retries), dispatching `ws:cexec-admitted` (`origin: "cexec"|"ucmd"`), calling `execWake()` / `xhFetch()`, and surfacing `unknown` / `refused` via `noteWarn` (`WsToast`). Migrated `composer-bang.test.cjs`, `composer-exec.browser.cjs`, `composer-usercmd.browser.cjs`, and `exec-hud.browser.cjs` to headless HUD + toast + `0 px` height growth assertions.
+
+Verification:
+- `node --test agents-plugin-tool/internal/wsdashboard/testdata/composer-bang.test.cjs`: 9/9 pass (`68911.5ms`).
+- Remote `w5090` (`python3 scripts/generate-package-assets.py && go test ./internal/wsdashboard/... ./internal/wsi18n/...`): `ok github.com/kang-sw/devenv/internal/wsdashboard 341.208s`, `ok github.com/kang-sw/devenv/internal/wsi18n 3.089s`.
+- Before/after Playwright LOOK captures (`D:/Temp/composer-bang-p4-look/`): `#composer` height remained `193px` (`0 px` delta vs `221px` `!` / `297.8px` active before) across `idle`, `!` typed, and active `!` run in both dark (`rgb(19, 20, 23)`) and Solarized Light (`rgb(253, 246, 227)`).
+- `code-review-lite` (`agy.medium`, `58a4049..40daceb`): clean with 2 minor test-coverage observations remaining (poll cap 5xx vs running stop condition, direct `ucmdRun` `unknown`/`refused` slot-click path).
