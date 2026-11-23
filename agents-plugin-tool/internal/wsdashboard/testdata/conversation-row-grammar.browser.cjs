@@ -73,6 +73,20 @@ const live = JSON.parse(fs.readFileSync(fixture, 'utf8'));
    }
    // Retain collapsed and expanded examples in the same capture.
    await frame.locator('details.turnline').last().evaluate(el=>el.open=true);
+   for (const row of await frame.locator('.au-call-details > summary, .mailline > summary, .mail-notification > summary, .turnline > summary').elementHandles()) {
+    assert.equal(await row.evaluate(el=>[...el.querySelectorAll('.row-chevron')].some(c=>getComputedStyle(c).display!=='none')),false,'trace chevron hidden');
+    assert(!(await row.textContent()).includes('✓'),'trace has no success check');
+   }
+   const flatCall=frame.locator('.au-call-details').filter({has:frame.locator('[data-call="grammar-call"]')}).first();
+   await flatCall.evaluate(el=>{for(let p=el.parentElement;p;p=p.parentElement) if(p.tagName==='DETAILS')p.open=true;el.open=false;});
+   await flatCall.locator('summary').click();
+   assert(await flatCall.evaluate(el=>el.open),'click expands tool details');
+   const geometry=await frame.locator('summary[data-call="grammar-call"], .au-turn-tool').evaluateAll(rows=>rows.filter(el=>el.getClientRects().length).map(el=>{
+    const icon=el.querySelector('.row-icon');
+    return {x:icon.getBoundingClientRect().x-el.getBoundingClientRect().x,font:getComputedStyle(icon).fontSize};
+   }));
+   assert(geometry.length>1,'turn references retained');
+   for(const metric of geometry) assert.deepEqual(metric,geometry[0],'tool and reference icon alignment and font match');
    const capture=async name=>{
     if (!shots) return;
     fs.mkdirSync(shots,{recursive:true});

@@ -840,12 +840,17 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .conv-row .trace-content { display: flex; gap: 7px; min-width: 0; align-items: center; }
 .conv-row .trace-content > .au-pv::before { content: "·"; margin-right: 7px; }
 
-/* The disclosure marker stays in the first column, leaving the clock aligned. */
+/* Trace icons and clocks align with the turn references. */
 .conv-row:not(.mh), .au-call-details > summary.au-row.conv-row { grid-template-columns: 14px 20px minmax(0, 1fr) 44px; column-gap: 6px; }
 .conv-row:not(.mh) > .row-icon { grid-column: 2; grid-row: 1; }
 .conv-row:not(.mh) > .row-content { grid-column: 3; grid-row: 1; }
 .conv-row:not(.mh) > .row-time { grid-column: 4; grid-row: 1; }
-.conv-row:not(.mh) > .row-chevron { grid-column: 1; grid-row: 1; }
+.conv-row:not(.mh) > .row-chevron { display: none; }
 .conv-row.au-turn-tool { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
 .conv-row.au-turn-tool:hover { background: color-mix(in srgb, var(--wb-fg) 4%, transparent); }
 .conv-row.au-turn-trigger > .row-icon, .conv-row.au-turn-trigger .row-name { color: var(--conv-trigger); }
+
+.conv-row.au-row.au-done > .au-mk { color: var(--wb-muted-fg); }
+.conv-row.au-row.au-fail .au-tool { color: var(--wb-fail); }
+.conv-row.au-row > .au-mk { font-size: inherit; width: auto; }
+.conv-row.au-row { font-size: 13px; line-height: 1.5; }
