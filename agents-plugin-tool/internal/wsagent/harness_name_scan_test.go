@@ -264,7 +264,7 @@ var (
 	adapterOwned = []*regexp.Regexp{
 		// Backend implementation files own genuine harness behavior.
 		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi)[a-z0-9_]*\.go$`),
-		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex)\.go$`),
+		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|agy)\.go$`),
 		// The Pi extension's MCP tool surface and forwarder.
 		regexp.MustCompile(`^internal/mcp/pi_[a-z0-9_]*\.go$`),
 		// The Agy usage provider.
