@@ -61,8 +61,7 @@ func TestBuiltinSupportProfilesResolve(t *testing.T) {
 }
 
 // TestBuiltinAgentWorkerProfiles: each worker harness has an internal
-// agent-worker profile with the common ws loadout: agent.* and
-// mailbox.send in place of pi.*.
+// agent-worker profile with the common ws tools and any backend additions.
 func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 	for backend, tools := range map[string][]string{BackendClaude: AgentClaudeTools, BackendPi: PiWorkerTools, BackendAgy: nil, BackendCodex: nil, BackendWerk: nil} {
 		name := AgentWorkerProfile(backend)
@@ -71,7 +70,11 @@ func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 			t.Fatalf("ResolveProfile(%s): %v", name, err)
 		}
 		p := rp.Definition
-		if rp.Scope != wsconfig.ScopeBuiltin || p.Backend != backend || p.Lead || !slices.Equal(p.Tools, tools) || !slices.Equal(p.WSTools, AgentWSTools) {
+		wsTools := AgentWSTools
+		if backend == BackendWerk {
+			wsTools = append(slices.Clone(wsTools), "fs.edit", "fs.write")
+		}
+		if rp.Scope != wsconfig.ScopeBuiltin || p.Backend != backend || p.Lead || !slices.Equal(p.Tools, tools) || !slices.Equal(p.WSTools, wsTools) {
 			t.Fatalf("%s = %+v", name, rp)
 		}
 		for _, tool := range []string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "mailbox.send", "config.resolve_agent", "infra.read", "path.write"} {

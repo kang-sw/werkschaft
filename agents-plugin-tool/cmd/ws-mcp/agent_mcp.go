@@ -19,7 +19,7 @@ import (
 // agentMCPCommand uses the configured hosted package, not the daemon's staged
 // executable or the worker's project directory. The starter supplies Python.
 func agentMCPCommand(root, _ string) (wsagent.MCPCommand, error) {
-	cmd, err := agentDaemonMCP(root)
+	cmd, err := hostedMCPCommand(root)
 	if err != nil {
 		return wsagent.MCPCommand{}, err
 	}
@@ -35,8 +35,28 @@ func agentMCPCommand(root, _ string) (wsagent.MCPCommand, error) {
 	return cmd, nil
 }
 
-// agentDaemonMCP supplies the hosted bundle and project to the daemon proxy.
+// agentDaemonMCP supplies the hosted bundle and the daemon's stores.
 func agentDaemonMCP(root string) (wsagent.MCPCommand, error) {
+	cmd, err := hostedMCPCommand(root)
+	if err != nil {
+		return wsagent.MCPCommand{}, err
+	}
+	// The in-process caller does not inherit the daemon environment.
+	// Its MCP server must resolve the session key and policy in the same
+	// stores that the runner used to mint and configure the session.
+	for _, key := range []string{"WS_CACHE_HOME", "WS_CONFIG_HOME"} {
+		if value := os.Getenv(key); value != "" {
+			path, err := filepath.Abs(value)
+			if err != nil {
+				return wsagent.MCPCommand{}, fmt.Errorf("resolve %s for hosted MCP: %w", key, err)
+			}
+			cmd.Env[key] = path
+		}
+	}
+	return cmd, nil
+}
+
+func hostedMCPCommand(root string) (wsagent.MCPCommand, error) {
 	name, warning, err := wsagent.ResolveHostedPackage()
 	if err != nil {
 		return wsagent.MCPCommand{}, fmt.Errorf("cannot resolve ws-mcp launcher: %w", err)

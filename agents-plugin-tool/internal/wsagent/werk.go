@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -40,6 +41,8 @@ func init() {
 }
 
 func (b WerkBackend) registration() (string, BackendRegistration) {
+	worker := agentWorkerBuiltinProfile(BackendWerk, nil)
+	worker.Definition.WSTools = append(slices.Clone(worker.Definition.WSTools), "fs.edit", "fs.write")
 	return BackendWerk, BackendRegistration{
 		Backend:             b,
 		ProcessKind:         ProcessDurable,
@@ -64,7 +67,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 		// removal against: the removal is the absence of the tool.
 		ExecCutover: &ExecCutoverSupport{},
 		Dashboard:   werkDashboardTraits(),
-		Profiles:    []BuiltinProfileRegistration{agentWorkerBuiltinProfile(BackendWerk, nil)},
+		Profiles:    []BuiltinProfileRegistration{worker},
 	}
 }
 
