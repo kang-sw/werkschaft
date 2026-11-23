@@ -293,7 +293,14 @@
       }
     },
     "261114-bug-pi-hosted-key-blocks-lead-worktree-context": {
-      "registered_at": "2026-11-14T11:59:11Z"
+      "registered_at": "2026-11-14T11:59:11Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:35:41Z"
+      }
     },
     "261114-bug-windows-bootstrap-metadata-destination-max-path": {
       "registered_at": "2026-11-14T13:57:08Z"
