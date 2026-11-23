@@ -16,7 +16,7 @@ import (
 
 func TestDashboardSettingsCatalog(t *testing.T) {
 	t.Setenv(wspackage.EnvDevCheckout, "")
-	var namespaces = map[string]int{"claude": 13, "agy": 6, "dashboard": 22, "pi": 15}
+	var namespaces = map[string]int{"claude": 13, "agy": 6, "dashboard": 21}
 	for _, pkg := range []string{"ws", "wsflow"} {
 		t.Run(pkg, func(t *testing.T) {
 			catalog, err := DashboardConfigCatalog(pkg)
@@ -41,6 +41,9 @@ func TestDashboardSettingsCatalog(t *testing.T) {
 					t.Errorf("missing family %q", family)
 				}
 			}
+			if slices.Contains(keys, "dashboard.pi_spawn_enabled") {
+				t.Fatal("dashboard catalog still contains the retired Pi setting")
+			}
 			if err := catalog.Compare(keys); err != nil {
 				t.Fatal(err)
 			}
@@ -48,10 +51,6 @@ func TestDashboardSettingsCatalog(t *testing.T) {
 				if err := catalog.Compare(broken); err == nil {
 					t.Errorf("accepted mismatched UI catalog")
 				}
-			}
-			entry := catalog.Entry("dashboard.pi_spawn_enabled", nil, wsconfig.ScopeGlobal, wsconfigservice.Layers{})
-			if entry.Default != (pkg == "ws") {
-				t.Errorf("dashboard.pi_spawn_enabled default for %s = %v", pkg, entry.Default)
 			}
 		})
 	}
@@ -149,9 +148,7 @@ func TestDashboardAdapterReadLimitsKeepHarnessKeyScopes(t *testing.T) {
 		{"agy.prefer_native_subagent", false, true},
 		{"agy.avoid_agy_subagent", false, true},
 		{DashboardPortKey, true, true},
-		{"dashboard.pi_spawn_enabled", true, true},
 		{"claude.some_unlisted_key", true, true},
-		{"pi.some_unlisted_key", true, true},
 		{"unrelated.key", false, false},
 	} {
 		noRepo, noSession := dashboardAdapterReadLimits(tc.key)

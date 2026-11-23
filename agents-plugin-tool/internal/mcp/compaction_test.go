@@ -62,7 +62,7 @@ func TestCompactionToolIsListedAndCallableForBuiltinProfiles(t *testing.T) {
 }
 
 func TestCompactionRegistryManifestParity(t *testing.T) {
-	legacy, _ := loadDeclaredConfig(piManifestPath).lookup("pi.compaction_advisory_percent")
+	legacy, _ := loadDeclaredConfig(claudeManifestPath).lookup("claude.compaction_advisory_percent")
 	if legacy.Pattern != wsconfig.ThresholdPattern {
 		t.Fatal("threshold grammar drifted from shipped manifests")
 	}

@@ -1,6 +1,6 @@
 var WsSettingsCombobox = (function () {
   "use strict";
-  var FALLBACK_HARNESSES = ["claude", "codex", "pi", "agy", "werk"];
+  var FALLBACK_HARNESSES = ["claude", "codex", "agy", "werk"];
   var PENDING_RETRY_MS = 1500;
   var choicesPromise = null;
   var choicesData = null;

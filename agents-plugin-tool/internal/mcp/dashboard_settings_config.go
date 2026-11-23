@@ -140,7 +140,7 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		}
 	}
 	namespaces := make(map[string]string)
-	for _, name := range []string{wspackage.ConfigManifestFile, wspackage.AgYConfigManifestFile, wspackage.DashboardConfigManifestFile, wspackage.PiConfigManifestFile} {
+	for _, name := range []string{wspackage.ConfigManifestFile, wspackage.AgYConfigManifestFile, wspackage.DashboardConfigManifestFile} {
 		raw, err := fs.ReadFile(pkg, name)
 		if err != nil {
 			return nil, err
@@ -305,16 +305,13 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	// (TestDashboardSettingsReadTunedValues).
 	case "claude.status_band_enabled":
 		return false, false
-	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",
-		"pi.context_window_override", "pi.compaction_dialog_budget_bytes", "pi.compaction_reread_budget_bytes":
-		return false, false
 	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries", "agy.stall_log_check", "agy.http2_frame_trace",
 		"agy.prefer_native_subagent", "agy.avoid_agy_subagent":
 		return false, true
-	case DashboardPortKey, "dashboard.pi_spawn_enabled":
+	case DashboardPortKey:
 		return true, true
 	}
-	if strings.HasPrefix(key, "claude.") || strings.HasPrefix(key, "pi.") {
+	if strings.HasPrefix(key, "claude.") {
 		return true, true
 	}
 	return false, false

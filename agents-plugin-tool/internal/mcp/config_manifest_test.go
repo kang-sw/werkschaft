@@ -525,7 +525,7 @@ func TestConfigGetTypesAndFallbacks(t *testing.T) {
 // manifest would only log at startup and silently leave every adapter knob
 // untunable.
 func TestShippedAdapterManifestsLoad(t *testing.T) {
-	for _, path := range []string{piManifestPath, claudeManifestPath, wsflowClaudeManifestPath, agyManifestPath, wsflowAgyManifestPath} {
+	for _, path := range []string{claudeManifestPath, wsflowClaudeManifestPath, agyManifestPath, wsflowAgyManifestPath} {
 		declared := loadDeclaredConfig(path)
 		if len(declared.rejected) != 0 {
 			t.Fatalf("shipped manifest rejected: %v", declared.rejected)
@@ -537,7 +537,6 @@ func TestShippedAdapterManifestsLoad(t *testing.T) {
 }
 
 var (
-	piManifestPath     = filepath.Join("..", "..", "..", "agents-plugin-pi", "config-manifest.json")
 	claudeManifestPath = filepath.Join("..", "..", "..", "agents-plugin", "config-manifest.json")
 	// wsflowClaudeManifestPath is the wsflow package's own Claude manifest:
 	// the same keys as claudeManifestPath, differing only in each default.
@@ -568,41 +567,14 @@ func checkThresholdCorpus(t *testing.T, name string, key declaredConfigKey) {
 	}
 }
 
-// TestShippedPiCompactionThresholdPattern runs the Pi compaction-threshold
-// grammar corpus through the Go (RE2) loader; the Pi package's
-// adapter-config test runs the same corpus against its own parser, so
-// config.tune never accepts a value Pi would silently replace with the
-// default.
-func TestShippedPiCompactionThresholdPattern(t *testing.T) {
-	declared := loadDeclaredConfig(piManifestPath)
-	for _, name := range []string{"pi.compaction_advisory_percent", "pi.compaction_hard_percent"} {
-		key, ok := declared.lookup(name)
-		if !ok || key.Type != declaredTypeString || key.Pattern == "" {
-			t.Fatalf("%s = %+v, want a patterned string key", name, key)
-		}
-		checkThresholdCorpus(t, name, key)
-	}
-}
-
-// TestShippedClaudeAdvisoryMatchesPi: the Claude mod's advisory key accepts
-// exactly what Pi's advisory key accepts (the Claude mod's parser copies Pi's
-// grammar), carries the same pattern and default, and keeps the default
-// project scope, since a declared adapter key may not default to repo.
-func TestShippedClaudeAdvisoryMatchesPi(t *testing.T) {
+func TestShippedClaudeAdvisoryThreshold(t *testing.T) {
 	const name = "claude.compaction_advisory_percent"
 	claude, ok := loadDeclaredConfig(claudeManifestPath).lookup(name)
 	if !ok || claude.Type != declaredTypeString || claude.Pattern == "" {
 		t.Fatalf("%s = %+v, want a patterned string key", name, claude)
 	}
-	pi, ok := loadDeclaredConfig(piManifestPath).lookup("pi.compaction_advisory_percent")
-	if !ok {
-		t.Fatal("pi.compaction_advisory_percent is not declared")
-	}
-	if claude.Pattern != pi.Pattern {
-		t.Fatalf("%s pattern drifted from pi.compaction_advisory_percent:\n%s\n%s", name, claude.Pattern, pi.Pattern)
-	}
-	if claude.Default != pi.Default || claude.Default != "50%" {
-		t.Fatalf("%s default = %q, pi default = %q, want both 50%%", name, claude.Default, pi.Default)
+	if claude.Default != "50%" {
+		t.Fatalf("%s default = %q, want 50%%", name, claude.Default)
 	}
 	if claude.DefaultScope == wsconfig.ScopeRepo {
 		t.Fatalf("%s defaults to repo scope", name)
@@ -694,5 +666,23 @@ func TestConfigGetReadsClaudeCaptionKeys(t *testing.T) {
 	}
 	if got := configGetJSON(t, server, 930815, map[string]any{"key": "claude.status_band_enabled"}); got.Value != true || got.Scope != "builtin" {
 		t.Fatalf("session-tuned claude.status_band_enabled without a session key = %+v", got)
+	}
+}
+
+func TestRetiredPiManifestKeysAreIgnored(t *testing.T) {
+	pi := writeManifest(t, "pi.json", `{"schema_version":1,"namespace":"pi.","keys":[{"key":"pi.dashboard_enabled","type":"boolean","default":true,"description":"Legacy."}]}`)
+	dashboard := writeManifest(t, "dashboard.json", `{"schema_version":1,"namespace":"dashboard.","keys":[{"key":"dashboard.pi_spawn_enabled","type":"boolean","default":true,"description":"Legacy."},{"key":"dashboard.enabled","type":"boolean","default":true,"description":"Dashboard."}]}`)
+	s, _, key := manifestServer(t, pi, dashboard)
+	for _, name := range []string{"pi.dashboard_enabled", "dashboard.pi_spawn_enabled"} {
+		if _, ok := s.declared.lookup(name); ok {
+			t.Errorf("%s is still declared", name)
+		}
+		resp := keyedCall(t, s, 1, key, "config.tune", map[string]any{"key": name, "value": "false"})
+		if !toolIsError(t, resp) {
+			t.Errorf("config.tune accepted %s: %s", name, resp)
+		}
+	}
+	if v, ok := s.declared.lookup("dashboard.enabled"); !ok || v.DefaultValue != true {
+		t.Fatal("legacy manifest lost its active dashboard setting")
 	}
 }

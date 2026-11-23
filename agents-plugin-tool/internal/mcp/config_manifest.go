@@ -191,6 +191,10 @@ func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]s
 	if !manifestNamespacePattern.MatchString(namespace) {
 		return "", nil, fmt.Errorf("namespace %q must be one lowercase segment ending in a dot, e.g. \"example.\"", namespace)
 	}
+	// Older launchers can still supply the retired Pi manifest.
+	if namespace == "pi." {
+		return namespace, nil, nil
+	}
 	for _, reserved := range reservedConfigPrefixes {
 		if namespace == reserved {
 			return "", nil, fmt.Errorf("namespace %q is reserved for built-in keys", namespace)
@@ -210,6 +214,9 @@ func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]s
 	seen := map[string]struct{}{}
 	keys := make([]declaredConfigKey, 0, len(file.Keys))
 	for _, raw := range file.Keys {
+		if namespace == "dashboard." && raw.Key == "dashboard.pi_spawn_enabled" {
+			continue
+		}
 		key, err := validateManifestKey(raw, namespace)
 		if err != nil {
 			return "", nil, err
