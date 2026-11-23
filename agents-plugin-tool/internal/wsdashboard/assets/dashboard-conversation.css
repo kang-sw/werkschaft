@@ -115,7 +115,12 @@
 .cmdnote { padding-left: 18px; font-size: 11.5px; font-style: italic; color: var(--wb-muted-fg); }
 /* Terminal surfaces (the `!` console, the slot blocks, the shell-mode input) stay
    dark in the light theme too: they carry their own palette. */
-.composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; }
+/* Terminal surfaces (the `!` console, the slot blocks, the shell-mode input) carry their own
+   palette: dark by default in the dark theme, a subtle Solarized Light tint in the light theme
+   (the light theme is every case but the OS-or-pinned dark rule of dashboard.css). */
+.composer { --tm-bg: #fdf6e3; --tm-bg2: #eee8d5; --tm-line: #d9d0b4; --tm-fg: #586e75; --tm-dim: #7b8d91; --tm-green: #6f7f00; --tm-green-bg: #e4e6bd; --tm-blue: #268bd2; --tm-red: #dc322f; --tm-amber: #b58900; --tm-code: #073642; --tm-hover: #073642; --tm-key-shadow: #d3cab0; --tm-run-bg: #d3e5ee; --tm-label-bg: #e6e3f2; --tm-label-fg: #6c71c4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; --tm-code: #e6e6e6; --tm-hover: #fff; --tm-key-shadow: #0b0c0e; --tm-run-bg: #1f3550; --tm-label-bg: #33264d; --tm-label-fg: #a57bf0; } }
+:root[data-theme="dark"] .composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; --tm-code: #e6e6e6; --tm-hover: #fff; --tm-key-shadow: #0b0c0e; --tm-run-bg: #1f3550; --tm-label-bg: #33264d; --tm-label-fg: #a57bf0; }
 /* The private result console of the composer's `!` commands, kept over the
    composer, never in the shared transcript: a bar over a scrollback of runs. */
 .d-cexec { display: flex; flex-direction: column; min-width: 0; border-radius: 10px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); overflow: hidden; }
@@ -136,14 +141,14 @@
 .d-cexec[data-folded] .cexec-clear { display: none; }
 .cexec-head:hover, .cexec-clear:hover { color: var(--tm-fg); }
 .cexec-head:focus-visible, .cexec-clear:focus-visible, .cexec .cexec-x:focus-visible, .cexec .cexec-copy:focus-visible { outline: 2px solid var(--tm-blue); outline-offset: -2px; }
-.cexec-log { display: flex; flex-direction: column; gap: 10px; padding: 6px 10px 8px; max-height: min(38vh, 300px); overflow: auto; font: 12px/1.5 var(--wb-mono); }
+.cexec-log { display: flex; flex-direction: column; gap: 10px; padding: 8px 10px; max-height: min(38vh, 300px); overflow: auto; font: 12px/1.5 var(--wb-mono); }
 .cexec { gap: 2px; color: var(--tm-fg); }
 .cexec .cmdecho { align-items: baseline; gap: 7px; font-size: 12px; color: var(--tm-dim); }
 .cexec .cmdecho .mk { color: var(--tm-green); font-weight: 800; flex: none; }
-.cexec .cmdecho code { flex: 1 1 auto; color: #e6e6e6; font-weight: 700; }
+.cexec .cmdecho code { flex: 1 1 auto; color: var(--tm-code); font-weight: 700; }
 .cexec[data-tone="fail"] .cmdecho .mk { color: var(--tm-red); }
 .cexec[data-tone="run"] .cmdecho .mk { color: var(--tm-blue); }
-.cexec .cexec-label { flex: none; padding: 0 6px; border-radius: 4px; background: #33264d; color: #a57bf0; font: 700 10.5px/17px system-ui, sans-serif; }
+.cexec .cexec-label { flex: none; padding: 0 6px; border-radius: 4px; background: var(--tm-label-bg); color: var(--tm-label-fg); font: 700 10.5px/17px system-ui, sans-serif; }
 .cexec .cmdout { margin: 0; padding: 0; background: transparent; border-radius: 0; box-shadow: none; color: var(--tm-fg); font: 12px/1.5 var(--wb-mono); max-height: 220px; }
 .cexec .cmdnote { padding-left: 0; font-size: 11.5px; font-style: italic; color: var(--tm-dim); }
 .cexec .cexec-x, .cexec .cexec-copy { cursor: pointer; border: 0; border-radius: 5px; padding: 1px 6px; font: inherit; background: transparent; color: var(--tm-dim); }
@@ -163,25 +168,25 @@
 .cexec[data-tone="warn"] .cexec-stl { color: var(--tm-amber); }
 /* The lead's user commands ("command slots"): a strip over the composer's result
    console, one dark block per command with its exact stored line, localhost-only. */
-.d-ucmd { padding: 4px 2px 2px; font-size: 12px; }
+.d-ucmd { padding: 4px 0 0; font-size: 12px; }
 .d-ucmd[hidden] { display: none; }
 .d-ucmd > summary { cursor: pointer; color: var(--wb-muted-fg); font-size: 11.5px; padding: 2px 0; user-select: none; }
-.d-ucmd-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 6px; max-height: 30vh; overflow: auto; }
-.ucmd { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 5px 7px 6px; border-radius: 9px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); }
+.d-ucmd-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 8px; max-height: 30vh; overflow: auto; }
+.ucmd { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border-radius: 10px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); }
 .ucmd-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ucmd-run { cursor: pointer; border: 0; border-radius: 7px; padding: 3px 10px 4px; font: inherit; font-weight: 700; background: var(--tm-green-bg); color: var(--tm-green); box-shadow: 0 2px 0 #0b0c0e, inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ucmd-run:hover:not(:disabled) { color: #fff; }
-.ucmd-run:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 #0b0c0e, inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); }
-.ucmd-run:disabled { opacity: .7; cursor: progress; color: var(--tm-blue); background: #1f3550; }
+.ucmd-run { cursor: pointer; border: 0; border-radius: 7px; padding: 3px 10px 4px; font: inherit; font-weight: 700; background: var(--tm-green-bg); color: var(--tm-green); box-shadow: 0 2px 0 var(--tm-key-shadow), inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ucmd-run:hover:not(:disabled) { color: var(--tm-hover); }
+.ucmd-run:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 var(--tm-key-shadow), inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); }
+.ucmd-run:disabled { opacity: .7; cursor: progress; color: var(--tm-blue); background: var(--tm-run-bg); }
 .ucmd-desc { color: var(--tm-dim); min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
 .ucmd-x { margin-left: auto; cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--tm-dim); flex: none; }
 .ucmd-run:focus-visible, .ucmd-x:focus-visible, .d-ucmd > summary:focus-visible { outline: 2px solid var(--wb-primary); }
-.ucmd-line { display: block; padding: 2px 4px; font-family: var(--wb-mono); font-size: 12.5px; font-weight: 600; line-height: 1.5; color: #e6e6e6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.ucmd-line { display: block; padding: 0; font-family: var(--wb-mono); font-size: 12.5px; font-weight: 600; line-height: 1.5; color: var(--tm-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
 .ucmd-line::before { content: "$ "; color: var(--tm-green); font-weight: 800; }
 /* Shell mode: the composer's first character is `!`. The input turns into a
    dark mono field, the `!` is painted amber by the highlight registry, the send
    button becomes a green Run, and a bash badge with its keys shows under it. */
-::highlight(ws-bang) { color: #e0a84a; }
+::highlight(ws-bang) { color: var(--tm-amber); }
 .composer[data-bang] { box-shadow: var(--wb-shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--tm-green) 45%, transparent); }
 .composer[data-bang] .cfield { background: var(--tm-bg); box-shadow: inset 0 0 0 1px var(--tm-line); }
 .composer[data-bang] textarea + .wsc-editor { font: 13px/1.5 var(--wb-mono); color: var(--tm-fg); background: var(--tm-bg); caret-color: var(--tm-green); padding: 9px 10px; }

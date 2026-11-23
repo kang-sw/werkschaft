@@ -72,7 +72,7 @@ async function open(t) {
   const { chromium } = require(mod);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
-  const page = await (await browser.newContext({ viewport: { width: 860, height: 900 }, reducedMotion: 'reduce' })).newPage();
+  const page = await (await browser.newContext({ viewport: { width: 860, height: 900 }, reducedMotion: 'reduce', colorScheme: 'dark' })).newPage();
   const errs = [];
   page.on('pageerror', e => errs.push(e.message));
   // A real origin, so sessionStorage works.
@@ -181,4 +181,13 @@ test('slot blocks show the whole stored line on a dark $ block', { skip }, async
   assert.equal(await page.locator('.ucmd-run').textContent(), '▶ Run tests');
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor), 'rgb(19, 20, 23)');
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ucmd-line'), '::before').content), '"$ "');
+});
+
+test('light theme tints the terminal surfaces Solarized, dark stays dark', { skip }, async t => {
+  const { page } = await open(t);
+  await page.waitForSelector('.d-ucmd .ucmd');
+  const bg = () => page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor);
+  assert.equal(await bg(), 'rgb(19, 20, 23)', 'dark theme');
+  await page.emulateMedia({ colorScheme: 'light' });
+  assert.equal(await bg(), 'rgb(253, 246, 227)', 'light theme: Solarized base3');
 });
