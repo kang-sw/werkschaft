@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -161,9 +162,17 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 						t.Fatalf("durable state during callback = %v, %v", rows, err)
 					}
 					committed, err := decodeRecord("fixture", rows[0].ReplyID, rows[0].JSON)
-					if err != nil || committed.TurnOpen || committed.DurableTurn != nil || committed.ReportID != "original" ||
-						committed.LastTurn == nil || committed.LastTurn.Mark != 2 || committed.LastTurn.Result.Message != rep.Result.Message {
+					if err != nil || committed.ReportID != "original" ||
+						committed.LastTurn == nil || committed.LastTurn.Mark != 2 || committed.LastTurn.Result.Message != rep.Result.Message ||
+						len(committed.DurableSteers) != 0 {
 						t.Fatalf("callback did not observe its committed settlement: %+v, %v", committed, err)
+					}
+					if held {
+						if !committed.TurnOpen || committed.DurableTurn == nil || committed.DurableTurn.ID == "original" || len(committed.Reports) != 0 {
+							t.Fatal("the next turn did not take the requeued input when the held result published")
+						}
+					} else if committed.TurnOpen || committed.DurableTurn != nil || !slices.Equal(committed.Reports, []string{"held report", "original mail"}) {
+						t.Fatal("settlement did not leave untaken steers for a new turn")
 					}
 				},
 			})
@@ -172,9 +181,10 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 			if r.durableRecords == nil {
 				t.Fatal("the private record store did not open")
 			}
-			rec := Record{ReplyID: "fixturechild", Backend: backend, Root: dir, WSKey: "fixture-key",
+			rec := Record{ReplyID: "fixturechild", Backend: backend, Profile: AgentWorkerProfile(backend), Root: dir, WSKey: "fixture-key",
 				Parent: &ParentRef{Kind: ParentLead, ReplyID: "parent"}, TurnMark: 2,
 				TurnOpen: true, TurnStartedAt: r.opts.Now().UnixMilli(), DurableTurn: &durableTurnInput{ID: "original", Text: "work"},
+				DurableSteers: []durableSteer{{ID: "report", Text: "held report", Mark: 3}, {ID: "mail", Text: "mail legend: original mail", Mail: "original mail"}},
 			}
 			sessionDir := wsdashboard.SessionDir(dir, rec.ReplyID)
 			if err := os.MkdirAll(sessionDir, 0o700); err != nil {
@@ -191,7 +201,8 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 				if err := c.settleTurn(TurnDone, "", 2); err != nil {
 					t.Fatal(err)
 				}
-				if reports != 0 || c.rec.HeldTurn == nil || c.rec.DurableHeldReportID != "original" || c.rec.DurableTurn != nil {
+				if reports != 0 || c.rec.HeldTurn == nil || c.rec.DurableHeldReportID != "original" || c.rec.DurableTurn != nil ||
+					len(c.rec.DurableSteers) != 0 || !slices.Equal(c.rec.Reports, []string{"held report", "original mail"}) {
 					t.Fatal("the exec hold lost the original turn identity")
 				}
 				r.BindExecJobs(nil)
@@ -201,8 +212,14 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 			if err := r.durableRecords.Close(); err != nil {
 				t.Fatal(err)
 			}
+			nextText := strings.Join(c.rec.Reports, "\n\n")
+			startNext := func() (bool, error) {
+				return c.admitDurableTurn(nextText, nil, 3, r.opts.Now().UnixMilli(), false, true)
+			}
 			if held {
-				c.releaseHeld()
+				if accepted, err := startNext(); err == nil || accepted {
+					t.Fatal("a failed write admitted a new turn")
+				}
 				if c.heldRes == nil || c.rec.DurableHeldReportID != "original" {
 					t.Fatal("failed write discarded the held result")
 				}
@@ -210,7 +227,7 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 				if err := c.settleTurn(TurnDone, "", 2); err == nil {
 					t.Fatal("settlement reported success despite a closed private store")
 				}
-				if !c.rec.TurnOpen || c.rec.DurableTurn == nil || c.reply == "" {
+				if !c.rec.TurnOpen || c.rec.DurableTurn == nil || c.reply == "" || len(c.rec.DurableSteers) != 2 || len(c.rec.Reports) != 0 {
 					t.Fatal("failed write discarded the open turn")
 				}
 			}
@@ -225,7 +242,19 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 
 			r.openDurableAgentRecords()
 			if held {
-				c.releaseHeld()
+				sent := make(chan string, 1)
+				c.proc = &recordingMCPProcess{Process: &fakeProc{sent: sent}}
+				if accepted, err := startNext(); err != nil || !accepted {
+					t.Fatalf("the next turn was not admitted: %v", err)
+				}
+				select {
+				case got := <-sent:
+					if got != "held report\n\noriginal mail" {
+						t.Errorf("the next turn received %q", got)
+					}
+				default:
+					t.Fatal("the next turn did not receive the pending input")
+				}
 				c.releaseHeld()
 			} else if err := c.settleTurn(TurnDone, "", 2); err != nil {
 				t.Fatal(err)

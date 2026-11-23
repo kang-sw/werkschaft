@@ -209,6 +209,16 @@ func TestDurableSteerReceiptsReconcilePartialLogCommit(t *testing.T) {
 	}
 
 	receipts = nil
+	changed := open(&scripted{}, nil)
+	changed.steers[0].Text = "different text for the same identity"
+	if err := changed.runDurableTurn(ctx, ctx, cmd); err == nil || !strings.Contains(err.Error(), "input changed") {
+		t.Fatalf("the changed steer returned %v", err)
+	}
+	must(t, changed.Close())
+	if len(receipts) != 0 || ended {
+		t.Fatal("the changed steer received an acknowledgement or settled the turn")
+	}
+
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("done"))}}
 	next := open(model, nil)
 	must(t, next.runDurableTurn(ctx, ctx, cmd))

@@ -102,10 +102,12 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 
 	a.out.line(Line{T: LineTurnStart, Turn: turn, TurnID: cmd.TurnID})
 	if resumed {
+		if err := a.discardCommittedSteers(journal.steers); err != nil {
+			return err
+		}
 		for _, steer := range journal.steers {
 			a.out.line(Line{T: LineUserTaken, TurnID: cmd.TurnID, ID: steer.ID})
 		}
-		a.discardCommittedSteers(journal.steers)
 		a.restoreDurableReply(turn, a.transcript[journal.input+1:])
 	} else {
 		a.out.line(Line{T: LineUser, Turn: turn, Text: cmd.Text})
@@ -134,12 +136,23 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 	return err
 }
 
-func (a *Agent) discardCommittedSteers(committed []turnSteerRecord) {
+func (a *Agent) discardCommittedSteers(committed []turnSteerRecord) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	byID := make(map[string]json.RawMessage, len(committed))
+	for _, row := range committed {
+		byID[row.ID] = row.User
+	}
+	for _, steer := range a.steers {
+		if user, found := byID[steer.ID]; found && !bytes.Equal(user, userItem(steer.Text)) {
+			return errors.New("the durable steer input changed")
+		}
+	}
 	a.steers = slices.DeleteFunc(a.steers, func(steer Steer) bool {
-		return slices.ContainsFunc(committed, func(row turnSteerRecord) bool { return row.ID == steer.ID })
+		_, found := byID[steer.ID]
+		return found
 	})
+	return nil
 }
 
 func (a *Agent) commitSteer(turnID string, steer Steer) error {

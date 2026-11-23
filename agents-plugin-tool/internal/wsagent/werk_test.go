@@ -347,6 +347,7 @@ func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
 			return nil, ctx.Err()
 		},
 		werkMessage("resumed with steering"),
+		werkMessage("resumed with steering"),
 	}}
 	h, fleet, reports := werkHarness(t, model)
 	id := spawnWerk(t, h, "workdir-write")
@@ -368,7 +369,17 @@ func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
 	eventually(t, "the durable steer queue", func() bool {
 		return len(c.record().DurableSteers) == 1
 	})
+	var mailQueued bool
+	if !c.do(func() {
+		c.takeReport("child report fixture")
+		mailQueued = c.steerMail(ClaimedMail{Text: "mail fixture"})
+	}) {
+		t.Fatal("the conversation stopped before admitting inputs")
+	}
 	before := c.record()
+	if !mailQueued || len(before.DurableSteers) != 3 {
+		t.Fatal("child report and mailbox input did not enter the durable steer queue")
+	}
 	steer := before.DurableSteers[0]
 	if steer.ID == "" || steer.Mark <= before.TurnMark {
 		t.Fatal("pending steering did not retain its own send coverage")
@@ -378,8 +389,18 @@ func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
 		t.Fatal("the predecessor reported an abandoned turn")
 	}
 
+	var failed atomic.Bool
+	h.opts.beforeDurableWrite = func(rec Record) error {
+		if rec.ReplyID == id && rec.DurableTurn != nil && rec.TurnMark == steer.Mark && !failed.Swap(true) {
+			return errors.New("simulated error persisting the first steer receipt")
+		}
+		return nil
+	}
 	fleet.start(h)
 	eventually(t, "the original turn's report", func() bool { return len(reports.list()) == 1 })
+	if !failed.Load() {
+		t.Fatal("the fixture did not test a failed receipt write")
+	}
 	after := werkRecord(t, h, id)
 	if after.ReportID != before.DurableTurn.ID || after.LastTurn == nil || after.LastTurn.Mark != steer.Mark ||
 		len(after.DurableSteers) != 0 || len(after.Reports) != 0 {
@@ -388,8 +409,18 @@ func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	reqs := model.reqs
-	if len(reqs) != 2 || len(reqs[1].Input) != 2 || !strings.Contains(string(reqs[1].Input[1]), "take this steer") {
-		t.Fatalf("the successor did not receive the pending steer exactly once: %d requests", len(reqs))
+	if len(reqs) < 2 || len(reqs) > 3 {
+		t.Fatalf("replacing and retrying the loop yielded %d requests", len(reqs))
+	}
+	for _, req := range reqs[1:] {
+		if len(req.Input) != 4 {
+			t.Fatalf("a recovered model request had %d inputs, want 4", len(req.Input))
+		}
+		for i, text := range []string{"take this steer", "child report fixture", "mail fixture"} {
+			if !strings.Contains(string(req.Input[i+1]), text) {
+				t.Errorf("recovered input %d omitted %q", i+1, text)
+			}
+		}
 	}
 }
 
