@@ -18,7 +18,7 @@ func TestRailHarnessIcon(t *testing.T) {
 		`.hb[data-h="agy"]::before { content: "Ag"; }`,
 		`.hb::before { content: "??"; }`,
 		".hb.sm { width: 19px; height: 12px;",
-		"@keyframes hbspin { to { --hba: 360deg; } }",
+		"@keyframes hbspin { to { transform: rotate(360deg); } }",
 		".hb .hbr { position: absolute; inset: -2px;",
 		"@keyframes rail-nudge {",
 		".rail .hb.perm { outline: 2px solid var(--wb-perm-ink); animation: rail-nudge 1.5s steps(4) infinite; }",

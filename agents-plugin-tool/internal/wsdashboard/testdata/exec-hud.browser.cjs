@@ -424,11 +424,11 @@ async function run(browser, { lang, scheme, full }) {
   await v.waitForSelector('.xpeek', { state: 'hidden' });
 
   // 11. reduced motion and the motion it removes.
-  const motion = await v.evaluate(() => { const r = document.querySelector('.xring'); return r ? getComputedStyle(r).animationName : 'none'; });
+  const motion = await v.evaluate(() => { const r = document.querySelector('.xring'); return r ? getComputedStyle(r, '::before').animationName : 'none'; });
   await post('/jobs', [J('exec_m', 'sleep 100')]);
   await post('/bump');
   await v.waitForSelector('.xchip[data-xid="exec_m"]');
-  const motionRunning = await v.evaluate(() => getComputedStyle(document.querySelector('.xchip[data-xid="exec_m"] .xring')).animationName);
+  const motionRunning = await v.evaluate(() => getComputedStyle(document.querySelector('.xchip[data-xid="exec_m"] .xring'), '::before').animationName);
   assert.equal(motionRunning, 'xh-spin', 'a running ring spins');
   note('ring animation (no reduced-motion preference)', motionRunning + ' (was ' + motion + ')');
 
@@ -455,7 +455,7 @@ async function run(browser, { lang, scheme, full }) {
       await post('/jobs', [J('exec_m', 'sleep 100')]);
       const { ctx, view } = await openPage(browser, { lang: 'en', scheme: 'light', reduced: true });
       await view.waitForSelector('.xchip[data-xid="exec_m"]');
-      assert.equal(await view.evaluate(() => getComputedStyle(document.querySelector('.xchip[data-xid="exec_m"] .xring')).animationName), 'none', 'reduced motion: the ring does not spin');
+      assert.equal(await view.evaluate(() => getComputedStyle(document.querySelector('.xchip[data-xid="exec_m"] .xring'), '::before').animationName), 'none', 'reduced motion: the ring does not spin');
       assert.equal(await view.evaluate(() => getComputedStyle(document.querySelector('.xchip[data-xid="exec_m"]')).animationName), 'none', 'reduced motion: chips do not rise');
       await view.click('.xchip[data-xid="exec_m"]');
       assert.equal(await view.evaluate(() => getComputedStyle(document.querySelector('.xpeek')).animationName), 'none', 'reduced motion: the panel does not animate');

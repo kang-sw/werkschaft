@@ -25,11 +25,13 @@ test('animation period table matches CSS durations', () => {
   const conversation = fs.readFileSync(path.join(__dirname, '../assets/dashboard-conversation.css'), 'utf8');
   const dashboard = fs.readFileSync(path.join(__dirname, '../assets/dashboard.css'), 'utf8');
   const rules = [
-    ['thinking', conversation, '.hud-node[data-state="thinking"] .hud-ring', 'hud-spin-think'],
-    ['tool', conversation, '.hud-node[data-state="tool"] .hud-ring', 'hud-spin-tool'],
+    // Conic spinners and the permission halo animate a pseudo-element that
+    // inherits the host's inline phase delay.
+    ['thinking', conversation, '.hud-node[data-state="thinking"] .hud-ring::before', 'hud-spin-think'],
+    ['tool', conversation, '.hud-node[data-state="tool"] .hud-ring::before', 'hud-spin-tool'],
     ['holding', conversation, '.hud-node[data-state="holding"] .hud-ring', 'hud-hold-breathe'],
-    ['permission', conversation, '.hud-node[data-state="permission"] .hud-ring', 'hud-perm-pulse'],
-    ['hbr', dashboard, '.hb .hbr', 'hbspin'],
+    ['permission', conversation, '.hud-node[data-state="permission"] .hud-ring::after', 'hud-perm-pulse'],
+    ['hbr', dashboard, '.hb .hbr::before', 'hbspin'],
     ['spin', dashboard, '.spin', 'dash-spin']
   ];
   for (const [key, css, selector, name] of rules) {
