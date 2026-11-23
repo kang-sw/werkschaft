@@ -34,11 +34,17 @@ type ProviderID string
 // ProviderOpenRouter is OpenRouter, authenticated by an API key.
 const ProviderOpenRouter ProviderID = "openrouter"
 
+// ProviderOpenAI uses Sign in with ChatGPT for the local builtin harness.
+const ProviderOpenAI ProviderID = "openai"
+
 // Kind is how a provider authenticates.
 type Kind string
 
 // KindAPIKey is a static bearer API key the user supplies.
 const KindAPIKey Kind = "api_key"
+
+// KindSIWC is an OAuth credential authorized for ChatGPT plan usage.
+const KindSIWC Kind = "siwc"
 
 // Provider is one registry entry.
 type Provider struct {
@@ -61,6 +67,7 @@ type Provider struct {
 // providers is the registry, in display order.
 var providers = []Provider{
 	{ID: ProviderOpenRouter, Name: "OpenRouter", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-", EnvKeys: []string{"OPENROUTER_API_KEY"}},
+	{ID: ProviderOpenAI, Name: "OpenAI", Kind: KindSIWC, BaseURL: openAIResource},
 }
 
 // Providers returns the registry in display order.

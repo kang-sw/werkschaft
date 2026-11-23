@@ -126,6 +126,13 @@ type Store struct {
 	path string
 	now  func() time.Time
 
+	// openAIMu serializes OpenAI changes and refreshes. Always acquire it
+	// before mu. The browser wait and ordinary credential reads hold neither.
+	openAIMu             sync.Mutex
+	openAI               openAIOAuth
+	openAIAccount        openAIAccount
+	pendingOpenAIRefresh *openAIAccount
+
 	mu      sync.Mutex
 	loaded  bool
 	loadErr error
@@ -140,7 +147,7 @@ type Store struct {
 
 // NewStore returns the store for the credential file at path. It touches
 // no file until its first use.
-func NewStore(path string) *Store { return &Store{path: path, now: time.Now} }
+func NewStore(path string) *Store { return &Store{path: path, now: time.Now, openAI: newOpenAIOAuth()} }
 
 // Path is the credential file's path.
 func (s *Store) Path() string { return s.path }
@@ -160,6 +167,8 @@ var beforeCredentialWrite func()
 // it before it releases its single-instance lock, so no write of its lands
 // after another process has become the file's writer.
 func (s *Store) Close() {
+	s.openAIMu.Lock()
+	defer s.openAIMu.Unlock()
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
@@ -193,12 +202,13 @@ type ChangeResult struct {
 // ProviderStatus is a provider's display state; it never carries a secret,
 // only its masked form.
 type ProviderStatus struct {
-	Provider   ProviderID `json:"provider"`
-	Name       string     `json:"name"`
-	Kind       Kind       `json:"kind"`
-	Configured bool       `json:"configured"`
-	Masked     string     `json:"masked,omitempty"`
-	UpdatedAt  string     `json:"updated_at,omitempty"`
+	Provider       ProviderID            `json:"provider"`
+	Name           string                `json:"name"`
+	Kind           Kind                  `json:"kind"`
+	Configured     bool                  `json:"configured"`
+	Masked         string                `json:"masked,omitempty"`
+	UpdatedAt      string                `json:"updated_at,omitempty"`
+	OpenAIAccounts []OpenAIAccountStatus `json:"accounts,omitempty"`
 }
 
 type apiKeyEntry struct {
@@ -334,15 +344,24 @@ func (s *Store) loadLocked(retry bool) error {
 		s.loadErr = fmt.Errorf("the credential file %s is not valid JSON of the expected shape; fix or remove it", s.path)
 		return s.loadErr
 	}
-	s.doc, s.keys = doc, doc.apiKeys()
+	s.useDocumentLocked(doc)
 	return nil
 }
 
 // Credential returns req.Provider's current credential (Source).
-func (s *Store) Credential(_ context.Context, req Request) (Credential, error) {
+func (s *Store) useDocumentLocked(doc document) {
+	s.doc, s.keys = doc, doc.apiKeys()
+	openAI := doc.openAIState()
+	s.openAIAccount = openAI.account(openAI.Active)
+}
+
+func (s *Store) Credential(ctx context.Context, req Request) (Credential, error) {
 	p, ok := Lookup(req.Provider)
 	if !ok {
 		return Credential{}, &ProviderError{Provider: req.Provider, Err: ErrUnknownProvider}
+	}
+	if p.Kind == KindSIWC {
+		return s.openAICredential(ctx, req)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -373,6 +392,14 @@ func (s *Store) Status() ([]ProviderStatus, error) {
 
 func (s *Store) statusLocked(p Provider) ProviderStatus {
 	status := ProviderStatus{Provider: p.ID, Name: p.Name, Kind: p.Kind}
+	if p.Kind == KindSIWC {
+		account := s.openAIAccount
+		status.Configured = account.planEnabled() && account.IDToken != "" && account.AccessToken != "" && account.RefreshToken != ""
+		status.OpenAIAccounts = s.doc.openAIState().status()
+		if !account.UpdatedAt.IsZero() {
+			status.UpdatedAt = account.UpdatedAt.Format(time.RFC3339)
+		}
+	}
 	if entry, ok := s.keys[p.ID]; ok {
 		status.Configured, status.Masked, status.UpdatedAt = true, Mask(p, entry.APIKey), entry.UpdatedAt
 	}
@@ -401,14 +428,8 @@ func (s *Store) Apply(change Change) (ChangeResult, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return ChangeResult{}, ErrStoreClosed
-	}
-	if err := s.loadLocked(true); err != nil {
+	if err := s.prepareWriteLocked(); err != nil {
 		return ChangeResult{}, err
-	}
-	if s.doc.version > schemaVersion {
-		return ChangeResult{}, fmt.Errorf("the credential file was written by a newer ws version (schema %d); update ws to change it", s.doc.version)
 	}
 	next := s.doc.clone()
 	switch change.Op {
@@ -427,24 +448,44 @@ func (s *Store) Apply(change Change) (ChangeResult, error) {
 		}
 		delete(next.providers, string(p.ID))
 	}
+	if err := s.writeLocked(next); err != nil {
+		return ChangeResult{}, err
+	}
+	return ChangeResult{Changed: true, Status: s.statusLocked(p)}, nil
+}
+
+func (s *Store) prepareWriteLocked() error {
+	if s.closed {
+		return ErrStoreClosed
+	}
+	if err := s.loadLocked(true); err != nil {
+		return err
+	}
+	if s.doc.version > schemaVersion {
+		return fmt.Errorf("the credential file was written by a newer ws version (schema %d); update ws to change it", s.doc.version)
+	}
+	return nil
+}
+
+func (s *Store) writeLocked(next document) error {
 	next.version = schemaVersion
 	data, err := next.encode()
 	if err != nil {
-		return ChangeResult{}, err
+		return err
 	}
 	if beforeCredentialWrite != nil {
 		beforeCredentialWrite()
 	}
 	if err := writePrivateFile(s.path, data); err != nil {
-		return ChangeResult{}, fmt.Errorf("write the credential file: %w", err)
+		return fmt.Errorf("write the credential file: %w", err)
 	}
-	s.doc, s.keys = next, next.apiKeys()
-	return ChangeResult{Changed: true, Status: s.statusLocked(p)}, nil
+	s.useDocumentLocked(next)
+	return nil
 }
 
 // mergeEntry lays entry's fields over the raw entry it replaces, keeping
 // the fields this version does not know.
-func mergeEntry(old json.RawMessage, entry apiKeyEntry) (json.RawMessage, error) {
+func mergeEntry(old json.RawMessage, entry any) (json.RawMessage, error) {
 	fields := map[string]json.RawMessage{}
 	if len(old) > 0 {
 		// An entry that is not an object is replaced whole.

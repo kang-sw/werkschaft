@@ -76,6 +76,11 @@ func ServeToken(w http.ResponseWriter, r *http.Request, src Source, req Request)
 		RefuseToken(w, http.StatusBadRequest, RefusalBadRequest, "", "the request names no provider")
 		return
 	}
+	if body.Provider == ProviderOpenAI {
+		// SIWC serves the builtin harness through the in-process Store.
+		RefuseToken(w, http.StatusForbidden, RefusalNotPermitted, body.Provider, "OpenAI credentials are available only to the builtin harness")
+		return
+	}
 	req.Provider = body.Provider
 	cred, err := src.Credential(r.Context(), req)
 	if err != nil {

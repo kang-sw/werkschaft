@@ -175,6 +175,16 @@ closes its store to changes, and lets a change already in flight finish,
 before it releases the lock; a change that arrives later is answered as a
 drain, so the sender retries against the successor.
 
+Run the local `ws-mcp credential sign-in openai` binary command with the
+dashboard daemon stopped to authorize ChatGPT plan usage in the system
+browser. The command holds the daemon's writer lock during sign-in.
+`credential show openai` lists saved registrations. Use `--new-account`
+to register another account, `--account <client-id>` to reauthorize a
+saved registration, or `--enable-plan` to request plan consent again.
+The builtin harness uses the daemon's in-process store for its account
+catalog and access token. The store serializes refresh rotation and
+requires explicit consent on that registration before background use.
+
 A hosted harness obtains a credential from `POST /auth/provider/token` with
 its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
 tool. Only a session whose backend registration sets `ProviderCredentials`
