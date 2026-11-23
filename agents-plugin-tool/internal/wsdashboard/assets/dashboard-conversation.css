@@ -803,6 +803,12 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .turn-trigger > .conv-row > .row-icon,
 .turn-trigger > .conv-row > .row-content :is(.mpeer, b),
 .turn-trigger > .conv-row > .row-icon :is(.arr, .i, .li) { color: var(--conv-trigger); }
+.conv-row > .row-content { overflow: hidden; white-space: nowrap; }
+.conv-row > .row-content > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailline > .conv-row > .row-icon :is(.arr, .i, .li),
+.mail-notification > .conv-row > .row-icon :is(.arr, .i, .li) { color: var(--wb-primary); }
+.mailline.turn-trigger > .conv-row > .row-content :is(.mpeer, b),
+.mail-notification.turn-trigger > .conv-row > .row-content :is(.mpeer, b) { color: var(--wb-primary); }
 .mailline.fail > .conv-row, .au-row.au-fail { color: var(--wb-fail); background: none; box-shadow: none; }
 .sysline.boundary-badge { display: block; align-self: stretch; padding: 0; background: none; box-shadow: none; border-radius: 0; margin-block: 12px; text-align: center; color: var(--wb-muted-fg); }
 .boundary-badge > summary { border: 1px solid var(--wb-line); display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 12px; border-radius: 999px; background: var(--wb-muted); font-size: 11.5px; font-weight: 500; list-style: none; cursor: pointer; overflow-wrap: anywhere; }
