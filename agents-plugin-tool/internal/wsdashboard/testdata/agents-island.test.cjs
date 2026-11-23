@@ -384,8 +384,20 @@ assert.notEqual(oldRing.style.animationDelay, oldDelay);
 assert.equal(buttons[1].querySelector('.hud-badge').className, 'hud-badge fail');
 assert.equal(buttons[2].parentNode.querySelector('.hud-overflow'), null);
 const toolDelay = oldRing.style.animationDelay;
+const toolStamp = oldRing.wsAnimationStamp;
 ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, toolDelay, 'running ring is not restamped on an unchanged tick');
+hudPayload.roots[0].state = 'thinking';
+ctx.agSwapped();
+assert.equal(buttons[0].getAttribute('data-state'), 'thinking');
+assert.equal(oldRing.wsAnimationStamp, toolStamp, 'tool -> thinking keeps the shared spin stamp');
+assert.equal(oldRing.style.animationDelay, toolDelay, 'tool -> thinking preserves animationDelay without phase jump');
+hudPayload.roots[0].state = 'tool';
+ctx.agSwapped();
+assert.equal(oldRing.style.animationDelay, toolDelay, 'thinking -> tool preserves animationDelay without phase jump');
+hudPayload.roots[0].state = 'holding';
+ctx.agSwapped();
+assert.notEqual(oldRing.style.animationDelay, toolDelay, 'entering holding from spinning restamps');
 hudPayload.roots[0].state = 'idle';
 ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, '', 'leaving an animated state clears its delay');
@@ -407,7 +419,7 @@ assert.equal(hudRoots.children[0].firstElementChild.firstElementChild, buttons[3
 assert.equal(buttons[3].querySelector('.hud-ring'), movedRing);
 assert.notEqual(movedRing.style.animationDelay, movedDelay, 'moved ring is restamped');
 assert.equal(movedRing.style.animationDelay,
-  (-((700 + ctx.animationPhaseOffset('a4', 1150)) % 1150)).toFixed(1) + 'ms');
+  (-((700 + ctx.animationPhaseOffset('a4', 1000)) % 1000)).toFixed(1) + 'ms');
 assert.equal(oldRing.style.animationDelay, stableDelay, 'unmoved sibling is not restamped');
 
 // Native rows: a dashed native node with its lifecycle in the tooltip; a

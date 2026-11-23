@@ -9,6 +9,7 @@
     permission: "js.hud.state.permission",
     failed: "js.hud.state.failed"
   };
+  var HUD_ANIMATION_STATE_KEY = { thinking: "hud-spin", tool: "hud-spin" };
   var hudRegistry = {}, hudEdges = [], hudHoveredId = "", hudFoldedHovered = false, hudFoldedBtn = null, hudFoldedCount = 0, hudLead = "", hudBound = false, hudRO = null, hudRaf = 0, hudDrawn = "", hudRedraw = true;
 
   function hudCanControl() {
@@ -76,7 +77,7 @@
     btn.setAttribute("aria-label", label + " (" + (HUD_HARNESS_NAME[harness] || harness || "?") + ", " + hudStateText(state) + ")");
     if (harness) emb.setAttribute("data-h", harness); else emb.removeAttribute("data-h");
     emb.textContent = HUD_HARNESS_LABEL[harness] || "??";
-    if (ANIMATION_PERIOD_MS[state]) animationPhaseDelay(ring, ANIMATION_PERIOD_MS[state], node.id || "", state, moved);
+    if (ANIMATION_PERIOD_MS[state]) animationPhaseDelay(ring, ANIMATION_PERIOD_MS[state], node.id || "", HUD_ANIMATION_STATE_KEY[state] || state, moved);
     else if (oldState !== state) { ring.style.animationDelay = ""; ring.wsAnimationStamp = ""; }
     var badge = btn.querySelector(".hud-badge"), badgeClass = state === "permission" ? "perm" : state === "failed" ? "fail" : "";
     if (badgeClass) {

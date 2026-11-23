@@ -99,14 +99,21 @@ test('conic spinners rotate a pseudo-element by transform and every pseudo anima
   const all = base + conversation + exec + rail;
   // No angle custom property animates inside a gradient (main-thread repaint every frame).
   assert.doesNotMatch(all, /@property --(hba|hud-spin-[ab])/);
+  assert.doesNotMatch(all, /@property[^{]*\{[^}]*syntax:\s*["']<angle>["']/);
   assert.doesNotMatch(all, /@keyframes[^{]+\{\s*to\s*\{\s*--/);
+  // Typed color properties allow 0.5s color transitions without animating the gradient angle.
+  assert.match(conversation, /@property --d-hud-ring-arc\s*\{\s*syntax:\s*"<color>";\s*inherits:\s*true;/);
+  assert.match(conversation, /@property --d-hud-ring-tip\s*\{\s*syntax:\s*"<color>";\s*inherits:\s*true;/);
+  assert.match(conversation, /\.hud-ring\s*\{[^}]*transition:\s*[^;}]*background-color 0\.5s ease[^;}]*--d-hud-ring-arc 0\.5s ease[^;}]*--d-hud-ring-tip 0\.5s ease/);
+  assert.match(conversation, /\.hud-node:is\(\[data-state="thinking"\], \[data-state="tool"\]\) \.hud-ring\s*\{[^}]*contain:\s*paint;/);
+  assert.doesNotMatch(conversation, /\.hud-node\[data-state="(?:holding|permission)"\] \.hud-ring\s*\{[^}]*contain:\s*paint/);
   // Box-shadow never animates in a perpetual keyframe set; only opacity or transform.
-  for (const name of ['hbspin', 'hud-spin-think', 'hud-spin-tool', 'xh-spin', 'hud-hold-breathe', 'hud-perm-pulse', 'attn-flash-ring', 'attn-breathe-ring']) {
+  for (const name of ['hbspin', 'hud-spin', 'xh-spin', 'hud-hold-breathe', 'hud-perm-pulse', 'attn-flash-ring', 'attn-breathe-ring']) {
     const m = all.match(new RegExp(String.raw`^@keyframes ${name}\b[^\n]*\n(?:[ \t][^\n]*\n)*`, 'm'));
     assert(m, `@keyframes ${name}`);
     assert.doesNotMatch(m[0], /box-shadow|--[a-z]/, `${name} animates only transform or opacity`);
   }
-  for (const [css, sel] of [[base, '.hb .hbr::before'], [conversation, '.hud-node[data-state="thinking"] .hud-ring::before'], [conversation, '.hud-node[data-state="tool"] .hud-ring::before'], [exec, '[data-st="running"] .xring::before']]) {
+  for (const [css, sel] of [[base, '.hb .hbr::before'], [conversation, '.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring::before'], [exec, '[data-st="running"] .xring::before']]) {
     const i = css.indexOf(sel + ' {'); assert(i >= 0, sel);
     assert.match(css.slice(i, css.indexOf('}', i)), /conic-gradient\([^)]*\)?[^}]*animation: [a-z-]+ [^;]+;/, `${sel} carries the rotating gradient`);
   }
@@ -143,10 +150,11 @@ test('continuous motion stays off the main thread: hidden subtrees pause and no 
 test('HUD node animations pause when hidden and disable under reduced motion', () => {
   const base = read(dashboard, 'dashboard.css');
   const conversation = read(dashboard, 'dashboard-conversation.css');
-  for (const name of ['hud-spin-think', 'hud-spin-tool', 'hud-hold-breathe', 'hud-perm-pulse']) {
+  for (const name of ['hud-spin', 'hud-hold-breathe', 'hud-perm-pulse']) {
     assert.match(conversation, new RegExp(`@keyframes ${name}\\b`), `missing @keyframes ${name}`);
   }
   assert.match(base, /:root\[data-animation-paused\]\s+\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation-play-state:\s*paused;\s*\}/);
   assert.match(base, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}\s*\}/);
+  assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-ring,\s*\.hud-ring::before[^}]*transition:\s*none !important;/);
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}/);
 });
