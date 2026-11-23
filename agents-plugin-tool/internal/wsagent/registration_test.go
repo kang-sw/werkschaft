@@ -138,7 +138,7 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 		BackendPi:     {LeadProfile: LeadProfilePi},
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
-		BackendWerk:   {},
+		BackendWerk:   {BuiltinProfilesOnly: true},
 	}
 	if !reflect.DeepEqual(ProfileValueSchema(), ProfileValueSchema(production)) {
 		t.Fatal("production profile schema changed from the builtin-only contract")
