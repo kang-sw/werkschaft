@@ -519,7 +519,7 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "track/harness",
         "phase": "active",
-        "touched_at": "2026-11-23T19:35:57Z",
+        "touched_at": "2026-11-23T20:08:56Z",
         "impl": {
           "branch": "impl/track/harness/viral-fame-kung"
         }
@@ -603,16 +603,6 @@
         "impl": {
           "branch": "impl/track/harness/jolt-false-coat"
         }
-      }
-    },
-    "261123-feat-ws-dashboard-main-panel-snap-deck": {
-      "registered_at": "2026-11-23T12:17:35Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-23T19:59:42Z"
       }
     }
   }
