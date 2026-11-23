@@ -235,6 +235,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.worktreeChildren = reader
 		}
 	}
+	s.startWorkerFeed()
 	return s
 }
 
@@ -547,6 +548,9 @@ func (s *Server) Drain(ctx context.Context) bool {
 // must release them itself, or every ended session keeps its Server alive
 // for the daemon's lifetime. Call it after ServeStdio has returned.
 func (s *Server) Close() {
+	if s.stopWorkerWatch != nil {
+		s.stopWorkerWatch()
+	}
 	s.live.close()
 	d := &s.dashboard
 	d.mu.Lock()

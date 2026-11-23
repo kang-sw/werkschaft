@@ -507,6 +507,9 @@ func (s *Server) handleDashboardIntake(id json.RawMessage, args map[string]any) 
 	if releaseRow != nil {
 		releaseRow()
 	}
+	if created {
+		s.seedWorkerRows(ls)
+	}
 	optional := false
 	for _, raw := range rawEvents {
 		if obj, ok := raw.(map[string]any); ok && obj["reasoningSummary"] != nil {
@@ -555,6 +558,7 @@ func (s *Server) handleDashboardIntake(id json.RawMessage, args map[string]any) 
 		urgent   bool
 		// agentOnly stays true while every change is a subagent's own.
 		agentOnly bool
+		reset     bool
 	)
 	ls.mu.Lock()
 	changed = ls.state.SetAdapter(adapter)
@@ -575,6 +579,7 @@ func (s *Server) handleDashboardIntake(id json.RawMessage, args map[string]any) 
 					// A flush point of the hosted file (liveSession.fire).
 					ls.flushNow = true
 				}
+				reset = reset || ev.Kind == wslive.KindReset
 				observed = append(observed, res.Observed...)
 				if res.OutputRate != nil {
 					copy := *res.OutputRate
@@ -627,6 +632,9 @@ func (s *Server) handleDashboardIntake(id json.RawMessage, args map[string]any) 
 	}
 	ls.ringMu.Unlock()
 	ls.retrySummaryCommits()
+	if reset {
+		s.seedWorkerRows(ls)
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "ok: %d of %d events applied\n", applied, len(rawEvents))

@@ -93,6 +93,19 @@ func (f *fakePiAgents) CloseConversation(id string) (wsagent.State, error) {
 	return f.set(id, func(st *wsagent.State) { st.Status = wsagent.StatusClosed }), nil
 }
 
+func (f *fakePiAgents) Watch(fn func(wsagent.State)) func() {
+	f.mu.Lock()
+	f.watchN++
+	n := f.watchN
+	f.watchers[n] = fn
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		delete(f.watchers, n)
+		f.mu.Unlock()
+	}
+}
+
 func (f *fakePiAgents) Transcript(id string) ([]wslive.RingRecord, error) {
 	at := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
 	return []wslive.RingRecord{

@@ -21,9 +21,10 @@ import (
 // the runner's token route on its capability token (worker_forward.go).
 // The runner checks harness availability for each tier.
 
-// AgentHost is the daemon runner interface shared by agent tools and legacy history reads.
+// AgentHost is the daemon runner interface shared by agent tools, live rows and legacy history reads.
 type AgentHost interface {
 	AgentRunner
+	Watch(func(wsagent.State)) (stop func())
 	Lineage(id string) (wsagent.State, error)
 	Children(parent wsagent.ParentRef) []wsagent.State
 	Transcript(id string) ([]wslive.RingRecord, error)
