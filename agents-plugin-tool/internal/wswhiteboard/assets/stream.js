@@ -27,7 +27,10 @@
     return node.closest('.topic') || root.nodeType === 11 ? node : null;
   }
   var WINDOW_PX = 1000;
-  function payload(gap) { return gap.querySelector('template[data-history-gap]').content; }
+  function payload(gap) {
+    var tpl = gap && gap.querySelector && gap.querySelector('template[data-history-gap]');
+    return tpl ? tpl.content : null;
+  }
   function gaps(root) { return Array.from(root.querySelectorAll('.history-gap')); }
   function refresh(gap) {
     var list = Array.from(payload(gap).children);
@@ -209,29 +212,41 @@
     return fetching.get(query);
   }
   function named(list, attr, name) { return Array.from(list).filter(function (n) { return n.getAttribute(attr) === name; }); }
-  function fillTopic(section, full) {
+  function fillRoots(roots, full) {
     var filled = 0;
-    var lazyGaps = Array.from(section.querySelectorAll('.history-gap[data-lazy]')), fullGaps = Array.from(full.querySelectorAll('.history-gap'));
+    var lazyGaps = [], lazyBodies = [];
+    (roots || []).forEach(function (r) {
+      if (!r || r.nodeType !== 1) return;
+      if (r.matches && r.matches('.history-gap[data-lazy]')) lazyGaps.push(r);
+      else if (r.querySelectorAll) lazyGaps = lazyGaps.concat(Array.from(r.querySelectorAll('.history-gap[data-lazy]')));
+      if (r.matches && r.matches('.entry-body[data-lazy]')) lazyBodies.push(r);
+      else if (r.querySelectorAll) lazyBodies = lazyBodies.concat(Array.from(r.querySelectorAll('.entry-body[data-lazy]')));
+    });
+    var fullGaps = Array.from(full.querySelectorAll('.history-gap'));
     var same = lazyGaps.length === fullGaps.length && lazyGaps.every(function (g, i) {
       return ['data-count', 'data-from', 'data-to'].every(function (a) { return g.getAttribute(a) === fullGaps[i].getAttribute(a); });
     });
     if (same) lazyGaps.forEach(function (g, i) {
       var held = payload(g), rows = payload(fullGaps[i]);
+      if (!held || !rows) return;
       while (rows.firstChild) held.appendChild(rows.firstChild);
       g.removeAttribute('data-lazy');
       filled++;
     });
-    var entries = Array.from(full.querySelectorAll('.wb-entry[data-entry]'));
-    section.querySelectorAll('.entry-body[data-lazy]').forEach(function (body) {
-      var entry = body.closest('.wb-entry'), id = entry && entry.getAttribute('data-entry');
-      var match = id && named(entries, 'data-entry', id)[0], src = match && match.querySelector('.entry-panel > .entry-body');
-      if (!src || lazy(src)) return;
-      while (src.firstChild) body.appendChild(src.firstChild);
-      body.removeAttribute('data-lazy');
-      filled++;
-    });
+    if (lazyBodies.length) {
+      var entries = Array.from(full.querySelectorAll('.wb-entry[data-entry]'));
+      lazyBodies.forEach(function (body) {
+        var entry = body.closest && body.closest('.wb-entry'), id = entry && entry.getAttribute('data-entry');
+        var match = id && named(entries, 'data-entry', id)[0], src = match && match.querySelector('.entry-panel > .entry-body');
+        if (!src || lazy(src)) return;
+        while (src.firstChild) body.appendChild(src.firstChild);
+        body.removeAttribute('data-lazy');
+        filled++;
+      });
+    }
     return filled;
   }
+  function fillTopic(section, full) { return fillRoots([section], full); }
   function hydrateWith(root, topics) {
     var filled = 0;
     topics.forEach(function (t) {
@@ -293,6 +308,32 @@
     var list = Array.from(names), queries = [];
     for (var i = 0; i < list.length; i += 256) queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
     return Promise.all(queries.map(fetchTopics)).then(function (all) { return hydrateWith(root, [].concat.apply([], all)); });
+  }
+  // hydrateDetached fetches lazy history for detached topic roots (such as
+  // virtualized offscreen topics) through the shared fetchTopics pipeline
+  // (deduplicated, image-revision checked, retry-safe) and fills matching gaps
+  // and lazy entry bodies via fillRoots without running live DOM admission.
+  function hydrateDetached(getRoots, names) {
+    var list = Array.from(new Set((names || []).filter(Boolean)));
+    if (!list.length) return Promise.resolve(0);
+    var queries = [];
+    for (var i = 0; i < list.length; i += 256) {
+      queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
+    }
+    return Promise.all(queries.map(fetchTopics)).then(function (all) {
+      var topics = [].concat.apply([], all), filled = 0;
+      topics.forEach(function (t) {
+        if (!t || typeof t.name !== 'string' || typeof t.html !== 'string') return;
+        var roots = typeof getRoots === 'function' ? getRoots(t.name) : null;
+        if (!roots || !roots.length || !roots.some(lazyIn)) return;
+        var parsed = document.createElement('template');
+        parsed.innerHTML = t.html;
+        var full = parsed.content.querySelector('section.topic');
+        if (!full) return;
+        filled += fillRoots(roots, full);
+      });
+      return filled;
+    });
   }
   // A lazy board's deterministic file-image stamp changes even when its
   // retained topic sections do not. Refresh only hydrated image frames, not
