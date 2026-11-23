@@ -42,6 +42,10 @@ func TestMain(m *testing.M) {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	}
+	if os.Getenv("WS_TEST_INHERITED_ENV_SCRUBBED") != "1" {
+		scrubInheritedWSEnv("WS_TEST_EMBEDDED_PACKAGES")
+		_ = os.Setenv("WS_TEST_INHERITED_ENV_SCRUBBED", "1")
+	}
 	checkout, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		panic(err)
@@ -60,6 +64,30 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(home)
 	os.Exit(code)
+}
+
+// scrubInheritedWSEnv prevents hosted-session WS_* values from reaching the live daemon.
+func scrubInheritedWSEnv(exempt ...string) {
+	keep := make(map[string]struct{}, len(exempt))
+	for _, key := range exempt {
+		keep[key] = struct{}{}
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "WS_") {
+			if _, ok := keep[key]; !ok {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+}
+
+func TestInheritedWSEnvIsScrubbed(t *testing.T) {
+	for _, key := range []string{"WS_MCP_PI_TOKEN", "WS_MCP_PI_ENDPOINT"} {
+		if got := os.Getenv(key); got != "" {
+			t.Fatalf("%s = %q, want empty", key, got)
+		}
+	}
 }
 
 // standin is the stand-in harness command and the directory it records to;
