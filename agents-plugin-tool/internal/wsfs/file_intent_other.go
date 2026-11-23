@@ -1,6 +1,6 @@
 //go:build !unix
 
-package werk
+package wsfs
 
 import "os"
 

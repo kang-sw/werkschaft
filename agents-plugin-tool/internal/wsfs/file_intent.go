@@ -1,4 +1,4 @@
-package werk
+package wsfs
 
 import (
 	"context"

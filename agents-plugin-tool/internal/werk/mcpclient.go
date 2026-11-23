@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/mcpframe"
 )
 
 // mcpclient.go is the harness's ws tool client: MCP Streamable HTTP with JSON
@@ -60,10 +62,14 @@ func (m *MCP) String() string   { return "werk.MCP(" + m.URL + ")" }
 func (m *MCP) GoString() string { return m.String() }
 
 func (m *MCP) client() *http.Client {
+	client := http.DefaultClient
 	if m.HTTP != nil {
-		return m.HTTP
+		client = m.HTTP
 	}
-	return http.DefaultClient
+	// In particular, a 307 or 308 cannot submit this POST to a second URL.
+	noRedirect := *client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &noRedirect
 }
 
 // rpcError is a JSON-RPC error answer.
@@ -253,6 +259,11 @@ var ErrDeliveryUnknown = errors.New("the connection failed while the call ran")
 // the daemon is down; one whose delivery is unknown is not, and answers
 // ErrDeliveryUnknown.
 func (m *MCP) Call(ctx context.Context, name string, args json.RawMessage) (CallResult, error) {
+	return m.CallCorrelated(ctx, name, args, "")
+}
+
+// CallCorrelated sends the provider call ID as private MCP metadata.
+func (m *MCP) CallCorrelated(ctx context.Context, name string, args json.RawMessage, callID string) (CallResult, error) {
 	if err := m.Initialize(ctx); err != nil {
 		return CallResult{}, err
 	}
@@ -260,8 +271,12 @@ func (m *MCP) Call(ctx context.Context, name string, args json.RawMessage) (Call
 	if len(bytes.TrimSpace(args)) > 0 {
 		arguments = json.RawMessage(args)
 	}
+	params := map[string]any{"name": name, "arguments": arguments}
+	if callID != "" {
+		params["_meta"] = map[string]string{mcpframe.ToolCallIDMeta: callID}
+	}
 	raw, err := m.retryConnect(ctx, func() (json.RawMessage, error) {
-		return m.post(ctx, "tools/call", map[string]any{"name": name, "arguments": arguments}, true)
+		return m.post(ctx, "tools/call", params, true)
 	})
 	if err != nil {
 		var rpc *rpcError

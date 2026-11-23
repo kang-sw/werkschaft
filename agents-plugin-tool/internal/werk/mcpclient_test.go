@@ -8,10 +8,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/mcpframe"
 )
 
 type rpcServer struct {
@@ -157,5 +160,47 @@ func TestMCPDroppedConnectionIsNotRetried(t *testing.T) {
 	}
 	if seen.Load() != 1 {
 		t.Errorf("the dropped call was sent %d times", seen.Load())
+	}
+}
+
+func TestMCPCorrelatedCallDoesNotChangeArguments(t *testing.T) {
+	captured := make(chan json.RawMessage, 1)
+	server := &rpcServer{onCall: func(w http.ResponseWriter, params json.RawMessage) {
+		captured <- params
+		io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`)
+	}}
+	endpoint := httptest.NewServer(http.HandlerFunc(server.handler))
+	defer endpoint.Close()
+	client := &MCP{URL: endpoint.URL, Token: "fixture"}
+	if _, err := client.CallCorrelated(context.Background(), "fs.write", json.RawMessage(`{"path":"test","content":"data"}`), "call_fixture"); err != nil {
+		t.Fatal(err)
+	}
+	var args struct {
+		Arguments map[string]string `json:"arguments"`
+		Meta      map[string]string `json:"_meta"`
+	}
+	if err := json.Unmarshal(<-captured, &args); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(args.Arguments, map[string]string{"path": "test", "content": "data"}) || args.Meta[mcpframe.ToolCallIDMeta] != "call_fixture" {
+		t.Fatalf("call params = %+v", args)
+	}
+}
+
+func TestMCPDoesNotFollowToolCallRedirect(t *testing.T) {
+	var redirected atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected.Store(true)
+	}))
+	defer target.Close()
+	server := &rpcServer{onCall: func(w http.ResponseWriter, _ json.RawMessage) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}}
+	endpoint := httptest.NewServer(http.HandlerFunc(server.handler))
+	defer endpoint.Close()
+	client := &MCP{URL: endpoint.URL, Token: "fixture"}
+	if _, err := client.Call(context.Background(), "fs.write", nil); !errors.Is(err, ErrDeliveryUnknown) || redirected.Load() {
+		t.Fatalf("call error = %v, followed redirect = %v", err, redirected.Load())
 	}
 }

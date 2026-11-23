@@ -1,0 +1,115 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsagent"
+)
+
+func rawFileToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"name": name, "arguments": arguments, "_meta": map[string]string{mcpframe.ToolCallIDMeta: callID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := s.callTool(context.Background(), request{ID: json.RawMessage("21"), Method: "tools/call", Params: body})
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return toolText(t, string(raw)), toolIsError(t, string(raw))
+}
+
+func TestFileWriteToolsRequireTrustedWerkWriteAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, conversation, backend string
+		authority                   wsagent.PermissionLevel
+		recorder, want              bool
+	}{
+		{"workdir", "bound", wsagent.BackendWerk, wsagent.PermissionWorkdirWrite, true, true},
+		{"full", "bound", wsagent.BackendWerk, wsagent.PermissionFull, true, true},
+		{"read-only", "bound", wsagent.BackendWerk, wsagent.PermissionReadOnly, true, false},
+		{"no authority", "bound", wsagent.BackendWerk, "", true, false},
+		{"no recorder", "bound", wsagent.BackendWerk, wsagent.PermissionFull, false, false},
+		{"codex", "bound", wsagent.BackendCodex, wsagent.PermissionFull, true, false},
+		{"unbound", "", wsagent.BackendWerk, wsagent.PermissionFull, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			binding := &FileWriteSession{Root: root, Authority: tc.authority}
+			if tc.recorder {
+				binding.Record = func(_ context.Context, call FileWriteCall) error {
+					want, err := filepath.EvalSymlinks(root)
+					if err != nil || call.ID != "fixture-call" || call.Tool != "fs.write" ||
+						call.Intent.Target != filepath.Join(want, "test.txt") ||
+						call.Intent.Prior != nil || call.Intent.Outcome() != "not applied" {
+						t.Errorf("intent before write = %+v, %v", call, err)
+					}
+					return nil
+				}
+			}
+			s := NewServerWithOptions(ServerOptions{
+				Root: root, Version: "test", Env: []string{}, Harness: wsagent.BackendWerk,
+				Conversation: tc.conversation, ExecCutover: tc.backend, FileWrites: binding,
+			})
+			for _, tool := range []string{"fs.edit", "fs.write"} {
+				name := s.connectionDescriptor().aliases.advertised(tool)
+				if listed := slices.Contains(listedNames(s), name); listed != tc.want {
+					t.Errorf("%s listed = %v, want %v", tool, listed, tc.want)
+				}
+			}
+			text, failed := rawFileToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"})
+			if failed == tc.want {
+				t.Fatalf("fs.write = %v, %s", failed, text)
+			}
+			content, err := os.ReadFile(filepath.Join(root, "test.txt"))
+			if tc.want && (err != nil || string(content) != "new") || !tc.want && !os.IsNotExist(err) {
+				t.Fatalf("target = %q, %v", content, err)
+			}
+		})
+	}
+}
+
+func TestFileWriteToolsResolveWorkingDirectoryAndRefuseUnrecordedCalls(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	cwd := filepath.Join(root, "sub")
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, cwd, "edit.txt", "old\n")
+	binding := &FileWriteSession{Root: root, Cwd: cwd, Authority: wsagent.PermissionWorkdirWrite}
+	binding.Record = func(_ context.Context, call FileWriteCall) error {
+		if call.ID != "okay" || call.Tool != "fs.edit" {
+			return errors.New("no pending call")
+		}
+		if call.Intent.Prior == nil || call.Intent.Outcome() != "not applied" {
+			t.Errorf("edit intent = %+v", call)
+		}
+		return nil
+	}
+	s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk, FileWrites: binding})
+	edit := map[string]any{"path": "edit.txt", "edits": []map[string]string{{"oldText": "old", "newText": "new"}}}
+	for _, id := range []string{"", "unknown"} {
+		if text, failed := rawFileToolCall(t, s, "fs.edit", id, edit); !failed {
+			t.Fatalf("edit with call %q: %s", id, text)
+		}
+	}
+	if text, failed := rawFileToolCall(t, s, "fs.edit", "okay", edit); failed || !strings.Contains(text, "-old") || !strings.Contains(text, "+new") {
+		t.Fatalf("recorded edit = %v, %s", failed, text)
+	}
+	if data, err := os.ReadFile(filepath.Join(cwd, "edit.txt")); err != nil || string(data) != "new\n" {
+		t.Fatalf("edited target = %q, %v", data, err)
+	}
+	target := filepath.Join(outside, "escaped")
+	if text, failed := rawFileToolCall(t, s, "fs.write", "okay", map[string]any{"path": target, "content": "forbidden"}); !failed || !strings.Contains(text, "outside the session's worktree") {
+		t.Fatalf("write outside = %v, %s", failed, text)
+	}
+}

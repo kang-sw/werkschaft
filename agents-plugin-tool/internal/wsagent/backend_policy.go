@@ -119,6 +119,9 @@ type LifecyclePolicy struct {
 	// ExecReadTools supplies the ws fs.* read tools to a cutover session.
 	// A worker's profile must include them before its exec cutover.
 	ExecReadTools bool
+	// FileWriteTools admits daemon file mutations when the session supplies
+	// a durable recorder for them.
+	FileWriteTools bool
 	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
 	// worker of this backend, including calls made outside the cutover.
 	ReadOnlyNoExec bool

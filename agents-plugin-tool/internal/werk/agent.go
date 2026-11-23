@@ -41,6 +41,10 @@ type WSTools interface {
 	Call(ctx context.Context, name string, args json.RawMessage) (CallResult, error)
 }
 
+type correlatedWSTools interface {
+	CallCorrelated(context.Context, string, json.RawMessage, string) (CallResult, error)
+}
+
 // Config is what an Agent runs with.
 type Config struct {
 	// Dir is the session directory the conversation file lives under.
@@ -918,7 +922,13 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 		}
 		return out, false
 	}
-	res, err := a.cfg.WS.Call(ctx, e.ws, args)
+	var res CallResult
+	var err error
+	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
+		res, err = correlated.CallCorrelated(ctx, e.ws, args, c.CallID)
+	} else {
+		res, err = a.cfg.WS.Call(ctx, e.ws, args)
+	}
 	switch {
 	case err == nil:
 		return res.Text, res.IsError

@@ -84,6 +84,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			// The common ws/compact lifecycle is Phase 2.
 			NoWorkerCompactionSteer: true,
 			ExecReadTools:           true,
+			FileWriteTools:          true,
 			ReadOnlyNoExec:          true,
 		},
 		// The harness has no native process tools: shell goes through the

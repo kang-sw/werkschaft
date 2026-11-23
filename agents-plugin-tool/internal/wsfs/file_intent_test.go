@@ -1,7 +1,8 @@
-package werk
+package wsfs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestFileIntentRecoversContentState(t *testing.T) {
-	root := newTree(t)
+	root := t.TempDir()
 	f := &Files{Root: root, Authority: AuthorityWorkdirWrite}
 	for _, tc := range []struct {
 		name  string
@@ -49,7 +50,7 @@ func TestFileIntentRecoversContentState(t *testing.T) {
 				}
 				return nil
 			}
-			if _, err := call(t, f, tc.tool, tc.args); err != nil {
+			if _, err := callMutation(t, f, tc.tool, tc.args); err != nil {
 				t.Fatal(err)
 			}
 			if got := recorded.Outcome(); got != "applied" {
@@ -64,10 +65,10 @@ func TestFileIntentRecoversContentState(t *testing.T) {
 }
 
 func TestFileWriteRefusedWhenIntentCannotBeRecorded(t *testing.T) {
-	root := newTree(t)
+	root := t.TempDir()
 	stop := errors.New("log closed")
 	f := &Files{Root: root, Authority: AuthorityWorkdirWrite, RecordMutation: func(context.Context, FileIntent) error { return stop }}
-	if _, err := call(t, f, "write", map[string]any{"path": "new/target", "content": "test"}); !errors.Is(err, stop) {
+	if _, err := callMutation(t, f, "write", map[string]any{"path": "new/target", "content": "test"}); !errors.Is(err, stop) {
 		t.Fatalf("write error = %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "new")); !os.IsNotExist(err) {
@@ -88,7 +89,7 @@ func TestFileWriteRefusedIfTargetChangesDuringIntent(t *testing.T) {
 		must(t, os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "moved")))
 		return os.Symlink(outside, filepath.Join(root, "sub"))
 	}
-	if _, err := call(t, f, "write", map[string]any{"path": "sub/file", "content": "test"}); err == nil || !strings.Contains(err.Error(), "changed while preparing") {
+	if _, err := callMutation(t, f, "write", map[string]any{"path": "sub/file", "content": "test"}); err == nil || !strings.Contains(err.Error(), "changed while preparing") {
 		t.Fatalf("write error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "file")); !os.IsNotExist(err) {
@@ -96,5 +97,22 @@ func TestFileWriteRefusedIfTargetChangesDuringIntent(t *testing.T) {
 	}
 	if got := intent.Outcome(); got != "outcome unknown" {
 		t.Fatalf("after symlink substitution: %q", got)
+	}
+}
+
+func callMutation(t *testing.T, files *Files, name string, args map[string]any) (string, error) {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	must(t, err)
+	if name == "edit" {
+		return files.Edit(context.Background(), raw)
+	}
+	return files.Write(context.Background(), raw)
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

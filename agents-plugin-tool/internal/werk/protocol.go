@@ -15,6 +15,8 @@ package werk
 
 import (
 	"encoding/json"
+
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // ProtocolVersion is the harness version the process reports in its init
@@ -30,23 +32,14 @@ const (
 	EnvSessionToken = "WS_MCP_SESSION_TOKEN"
 )
 
-// Authority is a worker's permission level, in the daemon's spelling.
-type Authority string
+// Authority is the filesystem permission assigned to a session.
+type Authority = wsfs.Authority
 
 const (
-	AuthorityReadOnly     Authority = "read-only"
-	AuthorityWorkdirWrite Authority = "workdir-write"
-	AuthorityFull         Authority = "full"
+	AuthorityReadOnly     = wsfs.AuthorityReadOnly
+	AuthorityWorkdirWrite = wsfs.AuthorityWorkdirWrite
+	AuthorityFull         = wsfs.AuthorityFull
 )
-
-// Valid reports whether a is one of the three levels.
-func (a Authority) Valid() bool {
-	switch a {
-	case AuthorityReadOnly, AuthorityWorkdirWrite, AuthorityFull:
-		return true
-	}
-	return false
-}
 
 // Command types, daemon to process.
 const (

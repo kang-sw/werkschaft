@@ -79,6 +79,7 @@ type Server struct {
 	// cutover): the exec tools are listed, and Codex's fs.* read tools
 	// exist, only then. Empty elsewhere.
 	execCutover string
+	fileWrites  *FileWriteSession
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of pi.agents, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.

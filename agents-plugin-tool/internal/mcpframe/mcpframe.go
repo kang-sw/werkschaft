@@ -10,6 +10,10 @@ import (
 	"strconv"
 )
 
+// ToolCallIDMeta is the private tools/call metadata field for the model's
+// tool-call identity, scoped to the authenticated session.
+const ToolCallIDMeta = "ws/modelToolCallID"
+
 // MaxRequestBytes is the maximum payload size (in bytes) of a single MCP
 // JSON-RPC request across both HTTP (/mcp/session) and stdio transports.
 //

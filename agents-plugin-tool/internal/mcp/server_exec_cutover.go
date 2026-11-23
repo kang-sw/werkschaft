@@ -41,6 +41,8 @@ func (s *Server) fsReadTools() bool {
 // listed on this connection anyway.
 func (s *Server) cutoverListed(name string) bool {
 	switch {
+	case isFSWriteTool(name):
+		return s.fileWriteTools()
 	case isFSReadTool(name):
 		return s.fsReadTools()
 	case slices.Contains(cutoverExecTools, name):
