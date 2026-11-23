@@ -10,11 +10,15 @@ var wsSettingsChoiceLabels = {
   var view = document.querySelector("[data-settings-view]");
   if (!view) return;
   var query = new URLSearchParams(location.search);
+  var modal = query.get("frame") === "1" && query.get("modal") === "1";
   query.delete("frame");
+  query.delete("modal");
   if (window.parent === window) {
     location.replace(window.WsShell.pagePath(location));
     return;
   }
+
+  if (modal) document.documentElement.setAttribute("data-settings-modal", "");
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
   var sections = ["workflow", "agents", "compaction", "adapters", "companion", "profiles", "prompts"];
@@ -123,6 +127,15 @@ var wsSettingsChoiceLabels = {
     window.parent.postMessage(Object.assign({wsShell: kind}, fields), location.origin);
   }
 
+  function navigate(href) {
+    send(modal ? "settings-navigate" : "nav", {href: href});
+  }
+
+  var close = view.querySelector("[data-settings-close]");
+  if (close) close.addEventListener("click", function () {
+    if (modal) send("settings-close");
+  });
+
   function syncShell() {
     send("head", {html: null, qs: "", pad: 0, top: 0});
     send("title", {title: document.title});
@@ -150,11 +163,34 @@ var wsSettingsChoiceLabels = {
   document.addEventListener("keydown", function (event) {
     if (event.code === "Backquote" && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      send("key", {key: "rail"});
-    } else if (event.key === "Escape") {
+      if (!modal) send("key", {key: "rail"});
+    } else if (event.key === "Escape" && !modal) {
       send("key", {key: "esc"});
     }
   });
+
+  if (modal) document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+    // Consume before target handlers or native search clearing can erase the
+    // inner state; one key press must never also dismiss the outer modal.
+    var combo = window.WsSettingsCombobox;
+    if (combo && combo.closeActive && combo.closeActive()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (document.querySelector("dialog[open]")) return;
+    if (event.target === search && search.value) {
+      event.preventDefault();
+      event.stopPropagation();
+      search.value = "";
+      search.dispatchEvent(new Event("input", {bubbles: true}));
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) send("settings-close");
+  }, true);
 
   function projectForWorktree(worktree) {
     var gears = window.parent.document.querySelectorAll(".rail [data-settings-worktree]");
@@ -169,7 +205,7 @@ var wsSettingsChoiceLabels = {
 
   function scopeHref(name) {
     if (name === "synced") return "";
-    var rememberedProject = new URLSearchParams(window.parent.location.hash.slice(1)).get("project");
+    var rememberedProject = new URLSearchParams((modal ? location.hash : window.parent.location.hash).slice(1)).get("project");
     return window.WsShell.settingsScopeHref(name, selection, projectForWorktree, rememberedProject);
   }
 
@@ -212,7 +248,7 @@ var wsSettingsChoiceLabels = {
     var active = name === scope, planned = name === "synced";
     var href = scopeHref(name);
     var cls = "prec-node" + (planned ? " synced" : "") + (active ? " active " + name + "-mode" : "");
-    var node = button(cls, scopeName(name), function () { send("nav", {href: href}); });
+    var node = button(cls, scopeName(name), function () { navigate(href); });
     node.dataset.settingsScope = name;
     node.setAttribute("aria-current", active ? "page" : "false");
     node.disabled = !href;
@@ -389,7 +425,7 @@ var wsSettingsChoiceLabels = {
       if (href) {
         chip.title = (layer.status === "context_missing" ? tr("js.settings.context_missing") :
           !layer.present && layer.evaluated ? tr("js.settings.no_override") : from + " · " + valText);
-        chip.addEventListener("click", function () { send("nav", {href: href}); });
+        chip.addEventListener("click", function () { navigate(href); });
       } else {
         chip.disabled = true;
         chip.title = layer.status === "context_missing" ? tr("js.settings.context_missing") :

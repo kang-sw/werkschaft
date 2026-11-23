@@ -73,6 +73,8 @@
   }
 
   const prefixes = { ctx: "  ", add: "+ ", del: "− " };
+  const modalQuery = new URLSearchParams(location.search);
+  const modal = modalQuery.get("frame") === "1" && modalQuery.get("modal") === "1";
   const host = window.parent;
   const drafts = host.wsSettingsRepoDrafts || (host.wsSettingsRepoDrafts = new Map());
   if (!host.wsSettingsRepoDraftGuard) {
@@ -391,7 +393,7 @@
     let noLead = false;
     let manual = "";
 
-    window.wsHoldsDraft = () => draft.size > 0;
+    window.wsHoldsDraft = () => !modal && draft.size > 0;
     window.wsPrepareSessionLeave = window.wsHoldsDraft;
 
     function payload() {
