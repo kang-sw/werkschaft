@@ -916,6 +916,7 @@
   function show(pos, dir) {
     var narrow = !!(lay && lay.narrow), cur = G.position(gal, narrow), g = G.activate(gal, pos, narrow);
     if (g === gal) return false;
+    if (window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
     gal = g;
     if (pullEl) { pullOff(); gate.clear(); }
     paintGallery(dir === undefined ? (pos > cur ? 1 : -1) : dir);
@@ -993,27 +994,56 @@
           var icon = pageIcon(ref);
           if (ref.slice(0, 2) === "t:") {
             var name = ref.slice(2), topic = topics[name], el = topic && topic.el;
-            var subEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tsub");
+            var tnEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar .tname");
+            var title = (tnEl && tnEl.textContent ? tnEl.textContent.trim() : "") || name;
+            var rtextEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tsub .trecap .rtext");
+            var subEl = rtextEl || (el && el.querySelector && el.querySelector(":scope > .tophead > .tsub"));
             var askChip = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar > .chip.policy");
             var asks = el ? (el.hasAttribute("data-open-asks") ? el.getAttribute("data-open-asks") === "true" : !!askChip) : false;
             var asksCount = askChip && askChip.textContent ? askChip.textContent.trim() : "";
+            var closed = !!(el && el.classList.contains("closed"));
+            var rawState = el ? (el.getAttribute("data-state") || "") : "";
+            var state = closed ? "closed" : rawState;
+            var stateMap = {
+              implementing: ["impl", "js.wb.state.implementing"],
+              researching: ["research", "js.wb.state.researching"],
+              discussing: ["discuss", "js.wb.state.discussing"],
+              waiting: ["wait", "js.wb.state.waiting"],
+              "awaiting-confirmation": ["confirm", "js.wb.state.awaiting-confirmation"],
+              closed: ["closed", "js.board.filter.closed"]
+            };
+            var sm = stateMap[state];
+            var stateCode = sm ? sm[0] : "";
+            var stateLabel = "";
+            if (sm) {
+              var tr = wsT(sm[1]);
+              stateLabel = tr && tr !== sm[1] ? tr : (state === "closed" ? "Closed" : state);
+            }
             return {
-              title: name,
+              title: title,
               iconHref: icon.href,
               iconState: icon.state,
+              state: state,
+              stateCode: stateCode,
+              stateLabel: stateLabel,
               sub: subEl && subEl.textContent ? subEl.textContent.trim() : "",
               asks: asks,
               asksCount: asksCount,
-              closed: !!(el && el.classList.contains("closed")),
+              closed: closed,
               kind: "topic"
             };
           }
           var c = cards.filter(function (x) { return "c:" + x.id === ref; })[0];
-          var folded = c && c.k && typeof c.k.folded === "function" ? String(c.k.folded(c) || "") : "";
+          var folded = c && c.k && typeof c.k.folded === "function" ? String(c.k.folded(c) || "").trim() : "";
+          if (!folded && c && c.sub && c.sub.textContent) folded = c.sub.textContent.trim();
+          var badge = c && c.badge && c.badge.textContent ? c.badge.textContent.trim() : "";
           return {
             title: refName(ref),
             iconHref: icon.href,
             iconState: icon.state,
+            state: "card",
+            stateCode: "card",
+            stateLabel: badge,
             sub: folded,
             asks: false,
             closed: false,
@@ -2147,8 +2177,8 @@
     }
     d.to = to;
     var hitDot = hit && hit.el && hit.el.classList.contains("gal-dot") ? hit : null;
-    if (window.WsGalPreview && window.WsGalPreview.dragOver) window.WsGalPreview.dragOver(hitDot ? hitDot.el : null, to);
     spring(hitDot);
+    if (window.WsGalPreview && window.WsGalPreview.dragOver) window.WsGalPreview.dragOver(hitDot ? hitDot.el : null, to);
     markDrop(lightEl);
     drawZone(to && to.gal === "place" ? to : null);
     drawLine(to && to.line);

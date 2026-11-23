@@ -133,19 +133,46 @@
       return null;
     }
 
+    var STATE_CODES = {
+      implementing: "impl",
+      researching: "research",
+      discussing: "discuss",
+      waiting: "wait",
+      "awaiting-confirmation": "confirm",
+      closed: "closed",
+      card: "card"
+    };
+
+    function resolveStateCode(info) {
+      if (info.stateCode) return info.stateCode;
+      if (info.closed) return "closed";
+      if (info.state && STATE_CODES[info.state]) return STATE_CODES[info.state];
+      return "";
+    }
+
     function renderNode(node, getLeafInfo) {
       if (!node) return mk("div", "gal-pop-card");
       var ref = leafRef(node);
       if (ref !== null) {
         var info = getLeafInfo(ref) || {};
+        var isTopic = info.kind === "topic" || ref.slice(0, 2) === "t:";
+        var stateCode = resolveStateCode(info);
         var card = mk("div", "gal-pop-card");
         if (info.closed) card.setAttribute("data-closed", "1");
         if (info.asks) card.setAttribute("data-ask", "1");
+        if (stateCode) card.setAttribute("data-state", stateCode);
         var hd = mk("div", "gal-pop-card-hd");
-        if (info.iconHref) {
+        if (isTopic) {
+          var dot = mk("span", "gal-pop-card-dot");
+          dot.setAttribute("aria-hidden", "true");
+          hd.appendChild(dot);
+        } else if (info.iconHref) {
           hd.appendChild(makeSvgIcon(info.iconHref, "gal-pop-card-icon " + (info.iconState || "plain")));
         }
         hd.appendChild(mk("span", "gal-pop-card-title", info.title || ref));
+        if (info.stateLabel) {
+          hd.appendChild(mk("span", "gal-pop-card-state", info.stateLabel));
+        }
         if (info.asks) {
           hd.appendChild(mk("span", "gal-pop-card-ask", info.asksCount || "!"));
         }

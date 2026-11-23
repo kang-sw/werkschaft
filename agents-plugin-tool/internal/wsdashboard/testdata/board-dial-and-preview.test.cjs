@@ -127,17 +127,52 @@ function makeFakeDom() {
     contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
     closest(sel) { for (let n = this; n; n = n.parentNode) if (simpleMatch(n, sel)) return n; return null; }
     querySelector(sel) {
+      if (sel.includes(',')) {
+        for (const part of sel.split(',')) {
+          const hit = this.querySelector(part.trim());
+          if (hit) return hit;
+        }
+        return null;
+      }
       if (sel.startsWith(':scope > ')) {
-        const parts = sel.slice(':scope > '.length).split(' > ');
+        const rest = sel.slice(':scope > '.length);
+        const parts = rest.split(' > ');
         let cur = [this];
-        for (const p of parts) {
+        for (let i = 0; i < parts.length; i++) {
+          const p = parts[i].trim();
+          const spaceIdx = p.indexOf(' ');
+          const direct = spaceIdx >= 0 ? p.slice(0, spaceIdx) : p;
+          const desc = spaceIdx >= 0 ? p.slice(spaceIdx + 1).trim() : '';
           const next = [];
           for (const node of cur) {
-            for (const ch of node.children) if (simpleMatch(ch, p)) next.push(ch);
+            for (const ch of node.children) {
+              if (!simpleMatch(ch, direct)) continue;
+              if (desc) {
+                const sub = ch.querySelector(desc);
+                if (sub) next.push(sub);
+              } else {
+                next.push(ch);
+              }
+            }
           }
           cur = next;
         }
         return cur[0] || null;
+      }
+      if (sel.includes(' ')) {
+        const idx = sel.indexOf(' ');
+        const first = sel.slice(0, idx).trim();
+        const rest = sel.slice(idx + 1).trim();
+        const stack = [...this.children];
+        while (stack.length) {
+          const ch = stack.shift();
+          if (simpleMatch(ch, first)) {
+            const hit = ch.querySelector(rest);
+            if (hit) return hit;
+          }
+          stack.push(...ch.children);
+        }
+        return null;
       }
       for (const ch of this.children) {
         if (simpleMatch(ch, sel)) return ch;
@@ -214,16 +249,35 @@ function buildDialContext(cardSpecs, opts = {}) {
     const el = new dom.El(spec.card ? 'div' : 'section', spec.card ? ['bcard'] : ['topic']);
     if (spec.card) {
       el.attrs['data-card'] = spec.card;
+      if (spec.kind) el.attrs['data-kind'] = spec.kind;
       const hd = new dom.El('div', ['bc-hd']);
-      const title = new dom.El('span', ['bc-title']);
+      const title = new dom.El('span', ['bc-nm']);
+      title.attrs['data-rail-name'] = '';
       title._text = spec.title || spec.card;
       hd.appendChild(title);
+      if (spec.badge) {
+        const badge = new dom.El('span', ['bc-kind']);
+        badge._text = spec.badge;
+        hd.appendChild(badge);
+      }
       el.appendChild(hd);
     } else {
       el.attrs['data-topic'] = spec.topic;
+      if (spec.state) el.attrs['data-state'] = spec.state;
       if (spec.openAsks !== undefined) el.attrs['data-open-asks'] = String(spec.openAsks);
       if (spec.held) el.attrs['data-board-held'] = '';
       if (spec.closed) el.cls.add('closed');
+      if (spec.title) {
+        const tophead = new dom.El('div', ['tophead']);
+        const tbar = new dom.El('div', ['tbar']);
+        const tlead = new dom.El('div', ['tlead']);
+        const tname = new dom.El('span', ['tname']);
+        tname._text = spec.title;
+        tlead.appendChild(tname);
+        tbar.appendChild(tlead);
+        tophead.appendChild(tbar);
+        el.appendChild(tophead);
+      }
       if (spec.bodyPolicyCard) {
         const body = new dom.El('div', ['tbody']);
         const pc = new dom.El('div', ['card', 'policy']);
@@ -302,22 +356,38 @@ test('dial never mounts on unbounded .dgrid.board and costs 0 writes on unchange
   assert.equal(unbounded.grid.children.length, 1);
 
   const bounded = buildDialContext([
-    { topic: 'a', openAsks: true },
+    { topic: 'a', title: 'Alpha Human Title', state: 'discussing', openAsks: true },
     { topic: 'b', openAsks: false, bodyPolicyCard: true, held: true },
     { topic: 'c', closed: true },
-    { card: 'term-1', title: 'Terminal' }
+    { card: 'term-1', title: 'Terminal', kind: 'terminal', badge: 'TERM' }
   ]);
   assert.equal(bounded.dom.html.hasAttribute('data-board-dial'), true);
   const dial = bounded.grid.children[1];
   assert.equal(dial.id, 'bdial');
   const dots = dial.firstChild.children;
   assert.equal(dots.length, 4);
+  // Human titles from .tname (topic) and .bc-nm (bcard)
+  assert.equal(dots[0].getAttribute('aria-label'), 'Alpha Human Title');
+  assert.equal(dots[1].getAttribute('aria-label'), 'b');
+  assert.equal(dots[3].getAttribute('aria-label'), 'Terminal');
   // Ask ring reads data-open-asks, NEVER .card.policy inside topic body
   assert.equal(dots[0].getAttribute('data-ask'), '1');
   assert.equal(dots[1].getAttribute('data-ask'), null);
   assert.equal(dots[1].getAttribute('data-held'), '1');
   assert.equal(dots[2].getAttribute('data-closed'), '1');
   assert.equal(dots[3].getAttribute('data-kind'), 'card');
+
+  // Hover tooltip renders human title + state/kind badge
+  dial.dispatch('pointerover', { target: dots[0] });
+  const tip = bounded.dom.body.children.find(ch => ch.cls.has('d-board-dial-tip'));
+  assert.ok(tip && !tip.hidden);
+  assert.equal(tip.querySelector('.d-board-dial-tip-title').textContent, 'Alpha Human Title');
+  assert.equal(tip.querySelector('.d-board-dial-tip-state').getAttribute('data-state'), 'discuss');
+  dial.dispatch('pointerover', { target: dots[3] });
+  assert.equal(tip.querySelector('.d-board-dial-tip-title').textContent, 'Terminal');
+  assert.equal(tip.querySelector('.d-board-dial-tip-state').textContent, 'TERM');
+  dial.dispatch('pointerleave', {});
+  assert.equal(tip.hidden, true);
 
   // Performance rule 6: unchanged boardDialSync writes 0 DOM attributes and queues 0 idle rAF
   bounded.dom.stats.writes = 0;
@@ -348,8 +418,8 @@ test('dial scrub >18 freezes window, throttles aligns to 1 rAF/frame, defers flu
   dom.stats.selects.length = 0;
 
   dial.dispatch('pointerdown', { pointerId: 1, button: 0, clientY: 100, target: dots[9] });
-  dial.dispatch('pointermove', { pointerId: 1, clientY: 114, preventDefault() {} });
-  dial.dispatch('pointermove', { pointerId: 1, clientY: 142, preventDefault() {} });
+  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 114, preventDefault() {} });
+  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 142, preventDefault() {} });
   assert.equal(dom.stats.rafs, 1, 'at most 1 rAF queued across multiple moves in a frame');
   assert.equal(dom.stats.flushes, 0, 'boardFlushViewed deferred while scrubbing');
   assert.equal(dots[0].getAttribute('data-idx'), initialFirstIdx, 'sliding window frozen during scrub');
@@ -359,7 +429,7 @@ test('dial scrub >18 freezes window, throttles aligns to 1 rAF/frame, defers flu
   assert.equal(dom.stats.selects[0].opt.keep, true);
   assert.equal(dom.stats.flushes, 0);
 
-  dial.dispatch('pointerup', { pointerId: 1 });
+  dom.doc.dispatch('pointerup', { pointerId: 1 });
   assert.equal(dom.stats.flushes, 1, 'boardFlushViewed runs on pointerup');
   assert.equal(dom.rafQueue.length, 0, 'zero idle rAF after pointerup');
 });
@@ -431,8 +501,8 @@ test('gal-rail-preview hover, drag-hover, spring WAAPI, Escape, and 0-write unch
     isDragging: () => false,
     getState: () => ({ gal, narrow: true, pos: -1 }),
     getLeafInfo: ref => ref === 't:alpha'
-      ? { title: 'Alpha Topic', iconHref: '#i-chat', iconState: 'plain', sub: 'Summary line', asks: true, asksCount: '2' }
-      : { title: 'Terminal 1', iconHref: '#l-square-terminal', iconState: 'card', sub: 'npm test', asks: false }
+      ? { title: 'Alpha Topic', iconHref: '#i-chat', iconState: 'plain', state: 'discussing', stateCode: 'discuss', stateLabel: '논의 중', sub: 'Summary line', asks: true, asksCount: '2', kind: 'topic' }
+      : { title: 'Terminal 1', iconHref: '#l-square-terminal', iconState: 'card', state: 'card', stateCode: 'card', stateLabel: 'TERM', sub: 'npm test', asks: false, kind: 'terminal' }
   });
 
   // Hover Home pill
@@ -445,11 +515,15 @@ test('gal-rail-preview hover, drag-hover, spring WAAPI, Escape, and 0-write unch
   // Dot rect read before writes + pop rect read once after write = 2 total getBoundingClientRect calls (<= 1 forced layout)
   assert.equal(dom.stats.reads, 2);
 
-  // Hover docked split page: NO outer header, NO ratio metadata
+  // Hover docked split page: NO outer header, NO ratio metadata, topic dot + state pill rendered
   dotsEl.dispatch('pointerover', { target: dotPage });
   assert.equal(pop.getAttribute('data-mode'), 'page');
   assert.equal(pop.querySelector('.gal-pop-layout') !== null, true);
   assert.equal(pop.querySelector('.gal-pop-drop').hidden, true);
+  const firstCard = pop.querySelector('.gal-pop-card');
+  assert.equal(firstCard.getAttribute('data-state'), 'discuss');
+  assert.ok(firstCard.querySelector('.gal-pop-card-dot'));
+  assert.equal(firstCard.querySelector('.gal-pop-card-state').textContent, '논의 중');
 
   // Escape hides WITHOUT preventDefault or stopPropagation
   let escPrevented = false, escStopped = false;

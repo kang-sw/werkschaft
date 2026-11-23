@@ -47,11 +47,13 @@ function buildFixtureHtml(opts = {}) {
   ].join('\n');
 
   const sprite = readAsset(WSW, 'sprite.svg');
+  const states = ['discussing', 'implementing', 'researching', 'waiting', 'awaiting-confirmation'];
   const topics = [];
   for (let i = 1; i <= topicCount; i++) {
     const hasAsk = i === 1 || i === 3;
     const held = i === 2 ? ' data-board-held=""' : '';
     const askAttr = ` data-open-asks="${hasAsk ? 'true' : 'false'}"`;
+    const stAttr = ` data-state="${states[(i - 1) % states.length]}"`;
     const askCard = hasAsk
       ? `<div class="card policy" id="item-${i}" data-wb-hold="q-${i}" data-wb-q="q-${i}">
            <div class="phead">Open Question #${i}</div>
@@ -60,14 +62,14 @@ function buildFixtureHtml(opts = {}) {
     const lines = Array.from({ length: 18 }, (_, j) =>
       `<div class="log-line">Topic ${i} line ${j + 1}</div>`
     ).join('');
-    topics.push(`<section class="topic" id="topic-${i}" data-topic="topic-${i}" data-th="rev-${i}"${askAttr}${held}>
+    topics.push(`<section class="topic" id="topic-${i}" data-topic="topic-${i}" data-th="rev-${i}"${stAttr}${askAttr}${held}>
       <div class="tophead">
         <div class="tbar">
           <span class="tdot"></span>
           <span class="tname">Topic ${i}</span>
           ${hasAsk ? '<span class="chip policy">1</span>' : ''}
         </div>
-        <div class="tsub">Subtitle for Topic ${i}</div>
+        <div class="tsub"><div class="trecap"><span class="rat">L01:39 · 방금 — </span><div class="rtext">Clean recap for Topic ${i}</div></div></div>
       </div>
       ${askCard}
       <div class="tbody">${lines}</div>
@@ -120,6 +122,12 @@ window.wsT = function (k) {
     'js.board.dial.label': 'Board panels',
     'js.board.dial.asks': 'Open asks',
     'js.board.dial.held': 'Updated',
+    'js.board.filter.closed': '종료',
+    'js.wb.state.discussing': '논의 중',
+    'js.wb.state.implementing': '구현 중',
+    'js.wb.state.researching': '연구 중',
+    'js.wb.state.waiting': '대기',
+    'js.wb.state.awaiting-confirmation': '확인 대기',
     'js.gal.preview.home': '홈',
     'js.gal.preview.home.drag': '홈으로 언독',
     'js.gal.preview.new': '새 페이지',
@@ -251,18 +259,39 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
       assert.equal(info.tier1, '1');
       assert.equal(info.tier2, '2');
 
-      // Hide states toggle #bdial visibility ONLY, keeping #bcol paddingRight === 26
+      // Hover dot 0 shows human title + state badge; hide states hide both #bdial and .d-board-dial-tip
+      await page.locator('#bdial .d-board-dial-dot').nth(0).hover();
+      await page.waitForTimeout(40);
+      const tipInfo = await page.evaluate(() => {
+        const tip = document.querySelector('.d-board-dial-tip');
+        return {
+          hidden: tip ? tip.hidden : true,
+          title: tip && tip.querySelector('.d-board-dial-tip-title') ? tip.querySelector('.d-board-dial-tip-title').textContent : '',
+          state: tip && tip.querySelector('.d-board-dial-tip-state') ? tip.querySelector('.d-board-dial-tip-state').textContent : ''
+        };
+      });
+      assert.equal(tipInfo.hidden, false);
+      assert.equal(tipInfo.title, 'Topic 1');
+      assert.equal(tipInfo.state, '논의 중');
+
+      // Hide states toggle #bdial visibility ONLY (keeping #bcol paddingRight === 26) and hide .d-board-dial-tip
       for (const attr of ['data-overview', 'data-gal-away', 'data-file-preview', 'data-board-max']) {
         const res = await page.evaluate(a => {
           document.documentElement.setAttribute(a, '');
           const dial = document.getElementById('bdial');
           const bcol = document.getElementById('bcol');
-          const out = { vis: getComputedStyle(dial).visibility, pad: parseFloat(getComputedStyle(bcol).paddingRight) };
+          const tip = document.querySelector('.d-board-dial-tip');
+          const out = {
+            vis: getComputedStyle(dial).visibility,
+            pad: parseFloat(getComputedStyle(bcol).paddingRight),
+            tipDisp: tip ? getComputedStyle(tip).display : 'none'
+          };
           document.documentElement.removeAttribute(a);
           return out;
         }, attr);
         assert.equal(res.vis, 'hidden', `${attr} hides #bdial`);
         assert.equal(res.pad, 26, `${attr} preserves #bcol right padding`);
+        assert.equal(res.tipDisp, 'none', `${attr} hides .d-board-dial-tip`);
       }
 
       // Click dot 3 navigates to topic-4
@@ -385,7 +414,7 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
       assert.equal(homePop.pe, 'none');
       assert.ok(homePop.text.includes('홈'));
 
-      // Hover docked split page dot: mini cards directly in .gal-pop-layout, NO outer header, folded summary rendered
+      // Hover docked split page dot: mini cards directly in .gal-pop-layout, NO outer header, human title + state pill + clean .rtext recap
       await page.locator('.gal-dot.page').first().hover();
       await page.waitForTimeout(40);
       const pagePop = await page.evaluate(() => {
@@ -396,6 +425,8 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
           mode: p.getAttribute('data-mode'),
           cardCount: cards.length,
           titles: cards.map(c => c.querySelector('.gal-pop-card-title').textContent),
+          states: cards.map(c => { const s = c.querySelector('.gal-pop-card-state'); return s ? s.textContent : ''; }),
+          hasDot0: !!cards[0].querySelector('.gal-pop-card-dot'),
           subs: cards.map(c => { const s = c.querySelector('.gal-pop-card-sub'); return s ? s.textContent : ''; }),
           hasDrop: !p.querySelector('.gal-pop-drop').hidden,
           caretY: p.style.getPropertyValue('--caret-y')
@@ -404,12 +435,25 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
       assert.equal(pagePop.hidden, false);
       assert.equal(pagePop.mode, 'page');
       assert.equal(pagePop.cardCount, 2);
-      assert.deepEqual(pagePop.titles, ['topic-5', 'Build Shell']);
+      assert.deepEqual(pagePop.titles, ['Topic 5', 'Build Shell']);
+      assert.equal(pagePop.hasDot0, true);
+      assert.equal(pagePop.states[0], '확인 대기');
+      assert.equal(pagePop.subs[0], 'Clean recap for Topic 5');
       assert.equal(pagePop.subs[1], 'go test ./...');
       assert.equal(pagePop.hasDrop, false);
       assert.ok(pagePop.caretY.endsWith('px'));
 
+      // Switching pages via show() (clicking the hovered docked page dot) hides .gal-pop
+      await page.locator('.gal-dot.page').first().click();
+      await page.waitForTimeout(40);
+      assert.equal(await page.evaluate(() => document.querySelector('.gal-pop').hidden), true, 'show() page switch hides .gal-pop');
+      // Return to Home for subsequent checks
+      await page.locator('.gal-dot.main').click();
+      await page.waitForTimeout(40);
+
       // Escape hides without preventDefault
+      await page.locator('.gal-dot.page').first().hover();
+      await page.waitForTimeout(40);
       const escRes = await page.evaluate(() => {
         let def = false;
         const onKey = e => { def = e.defaultPrevented; };

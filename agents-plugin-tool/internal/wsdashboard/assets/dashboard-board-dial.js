@@ -37,11 +37,38 @@
     }
   }
 
+  var DIAL_STATE_MAP = {
+    implementing: ["impl", "js.wb.state.implementing"],
+    researching: ["research", "js.wb.state.researching"],
+    discussing: ["discuss", "js.wb.state.discussing"],
+    waiting: ["wait", "js.wb.state.waiting"],
+    "awaiting-confirmation": ["confirm", "js.wb.state.awaiting-confirmation"],
+    closed: ["closed", "js.board.filter.closed"]
+  };
+
   function dialCardTitle(el) {
     if (!el) return "";
-    if (el.hasAttribute("data-topic")) return el.getAttribute("data-topic") || "";
-    var t = el.querySelector && el.querySelector(".bc-hd .bc-title");
+    if (el.hasAttribute("data-topic")) {
+      var tn = el.querySelector && el.querySelector(":scope > .tophead > .tbar .tname");
+      return (tn && tn.textContent ? tn.textContent.trim() : "") || el.getAttribute("data-topic") || "";
+    }
+    var t = el.querySelector && el.querySelector(".bc-hd .bc-nm, .bc-hd [data-rail-name]");
     return (t && t.textContent ? t.textContent.trim() : "") || el.getAttribute("data-kind") || el.getAttribute("data-card") || "";
+  }
+
+  function dialCardBadge(el) {
+    if (!el) return null;
+    if (el.hasAttribute("data-topic")) {
+      var st = el.classList.contains("closed") ? "closed" : (el.getAttribute("data-state") || "");
+      var sm = DIAL_STATE_MAP[st];
+      if (!sm) return null;
+      var tr = wsT(sm[1]);
+      var label = tr && tr !== sm[1] ? tr : (st === "closed" ? "Closed" : st);
+      return { text: label, state: sm[0] };
+    }
+    var kb = el.querySelector && el.querySelector(".bc-hd .bc-kind");
+    var kind = (kb && kb.textContent ? kb.textContent.trim() : "") || el.getAttribute("data-kind") || "";
+    return kind ? { text: kind, state: "card" } : null;
   }
 
   function dialCardHasAsks(el) {
@@ -101,6 +128,14 @@
       title.className = "d-board-dial-tip-title";
       title.textContent = dialCardTitle(card);
       tip.appendChild(title);
+      var badge = dialCardBadge(card);
+      if (badge && badge.text) {
+        var sb = doc.createElement("span");
+        sb.className = "d-board-dial-tip-badge d-board-dial-tip-state";
+        if (badge.state) sb.setAttribute("data-state", badge.state);
+        sb.textContent = badge.text;
+        tip.appendChild(sb);
+      }
       var asks = dialCardHasAsks(card), held = card.hasAttribute("data-board-held");
       if (asks) {
         var ab = doc.createElement("span");
@@ -400,9 +435,6 @@
       };
     });
 
-    el.addEventListener("pointermove", onScrubMove);
-    el.addEventListener("pointerup", onScrubUp);
-    el.addEventListener("pointercancel", onScrubCancel);
     doc.addEventListener("pointermove", onScrubMove);
     doc.addEventListener("pointerup", onScrubUp);
     doc.addEventListener("pointercancel", onScrubCancel);
