@@ -277,8 +277,31 @@ misspelled slot or binding is not caught: check them yourself.
 
 `eyesets.<id>` takes the same keys as `head.eyes` (`sclera`, `irisFill`,
 `irisLine`, `frameLower`, `lidCoverL`, `lidCoverR`, `lidLashL`, `lidLashR`,
-`browL`, `browR`). `head.eyes` stays the default set. The user or a preset picks
-another by ID.
+`browL`, `browR`, `closedL`, `closedR`). `head.eyes` stays the default set. The
+user or a preset picks another by ID.
+
+#### Closed-eye stickers
+
+`closedL` and `closedR` are optional full-canvas rasters, positioned like every
+other eye raster, drawn as authored with no tint. When both exist, a blink is a
+two-frame swap: the open frame is the usual stack, and the closed frame hides
+the sclera, iris, lid covers and lash and draws the two plates over the face
+base. `frameLower` and the brows stay drawn in both frames, so a plate that must
+cover them paints over them.
+
+The swap happens when the blink value reaches 0.5, or when a held `lid`, `lidL`
+and `lidR` value reaches 0.95 on both sides. A held half-lid stays below that
+and keeps the lid slide. A pack without both plates, or an expression that
+winks one side, blinks with the lid slide as before. Expressions that use
+`decal` draw no eyes and never blink. The validator only checks the files are
+safe rasters. The lint warns about a plate without a `sclera`, a single-sided
+pair, and a missing registration (below).
+
+Older dashboards refuse to install a pack with a file that only a new key
+names. To keep the pack installable, also list each plate under `head.mouths`
+with an `eyeclosed-` key, for example `"eyeclosed-default-L": "closed-l.png"`.
+Older dashboards ignore that mouth and blink with the lid slide. The engine
+never draws an `eyeclosed-` entry as a mouth; the new key is the only source.
 
 ### Registration
 

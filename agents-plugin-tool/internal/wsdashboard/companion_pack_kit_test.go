@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -379,5 +380,64 @@ process.stdout.write(JSON.stringify(deformFixture(canvas).manifest));`
 	}
 	if !strings.Contains(string(raw), `"kneeL"`) || !strings.Contains(string(raw), `"roll"`) {
 		t.Fatalf("fixture lost its leg chain or roll: %s", raw)
+	}
+}
+
+// companionClosedFixture adds closed-eye plates to the head eyes and an eye
+// set, each registered under head.mouths as an eyeclosed-* key.
+func companionClosedFixture(t *testing.T, edit func(string) string) string {
+	t.Helper()
+	raw := strings.Replace(companionKitFixture, `"eyes":{"sclera":"eye-sclera.png"}}`,
+		`"eyes":{"sclera":"eye-sclera.png","closedL":"closed-l.png","closedR":"closed-r.png"},`+
+			`"mouths":{"eyeclosed-kit-L":"closed-l.png","eyeclosed-kit-R":"closed-r.png","eyeclosed-round-L":"round-closed-l.png","eyeclosed-round-R":"round-closed-r.png"}}`, 1)
+	raw = strings.Replace(raw, `"round-sclera.png","irisFill"`, `"round-sclera.png","closedL":"round-closed-l.png","closedR":"round-closed-r.png","irisFill"`, 1)
+	if raw == companionKitFixture {
+		t.Fatal("fixture edit missed")
+	}
+	if edit != nil {
+		raw = edit(raw)
+	}
+	return raw
+}
+
+func TestCompanionClosedEyePlatesAreReferencedAndLinted(t *testing.T) {
+	raw := companionClosedFixture(t, nil)
+	_, files, err := validateCompanionManifest([]byte(raw), "kit")
+	want := append(append([]string{}, companionKitFiles...), "closed-l.png", "closed-r.png", "round-closed-l.png", "round-closed-r.png")
+	sort.Strings(want)
+	if err != nil || !reflect.DeepEqual(files, want) {
+		t.Fatalf("closed plates: files=%q err=%v", files, err)
+	}
+	if issues := lintCompanionKit([]byte(raw)); len(issues) != 0 {
+		t.Fatalf("registered plates reported: %q", issues)
+	}
+	// A pack that omits the keys still validates (the base fixture).
+	if _, _, err := validateCompanionManifest([]byte(companionKitFixture), "kit"); err != nil {
+		t.Fatal(err)
+	}
+	// An unsafe plate name is refused like every other raster.
+	bad := strings.Replace(raw, `"closed-l.png","closedR"`, `"../closed-l.png","closedR"`, 1)
+	if _, _, err := validateCompanionManifest([]byte(bad), "kit"); err == nil {
+		t.Fatal("unsafe closed plate accepted")
+	}
+
+	for _, tc := range []struct{ name, old, replacement, want string }{
+		{"one side", `"closedR":"closed-r.png"`, `"x":1`, "closes one eye side only"},
+		{"no sclera", `"sclera":"eye-sclera.png","closedL"`, `"closedL"`, "no sclera"},
+		{"unregistered", `"eyeclosed-kit-L":"closed-l.png",`, ``, "head.mouths as an eyeclosed-* key"},
+	} {
+		edited := companionClosedFixture(t, func(s string) string {
+			if !strings.Contains(s, tc.old) {
+				t.Fatalf("%s: fixture lacks %s", tc.name, tc.old)
+			}
+			return strings.Replace(s, tc.old, tc.replacement, 1)
+		})
+		issues := lintCompanionKit([]byte(edited))
+		if got := strings.Join(issues, "\n"); !strings.Contains(got, tc.want) {
+			t.Fatalf("%s: lint = %q, want %q", tc.name, got, tc.want)
+		}
+		if _, _, err := validateCompanionManifest([]byte(edited), "kit"); err != nil {
+			t.Fatalf("%s: lint-only defect rejected: %v", tc.name, err)
+		}
 	}
 }

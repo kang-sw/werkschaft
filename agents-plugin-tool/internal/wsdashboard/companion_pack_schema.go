@@ -361,7 +361,7 @@ func (c companionManifestCheck) attachment(obj companionObject) error {
 var companionLayerAssets = []string{"file", "line", "jacketFill", "accentFill", "skinFill", "detail", "hairFill"}
 
 var companionEyeAssets = []string{"sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR",
-	"lidLashL", "lidLashR", "browL", "browR"}
+	"lidLashL", "lidLashR", "browL", "browR", "closedL", "closedR"}
 
 // fills enumerates a layer's generalized tint channels ({"<channel>":
 // "<file>"}) and returns how many it names. Every layer kind may carry them;

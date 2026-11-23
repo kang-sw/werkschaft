@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // companionSlotID is the attachment slot pattern the wardrobe config key
@@ -29,6 +30,8 @@ func (l *companionKitLint) issue(path, message string) {
 // changes a validation result. It reports:
 //   - a legacy poses/gestures layer or frame whose only rasters are fills,
 //     which an older daemon rejects (the legacy projection must use v1 keys);
+//   - an eye block whose closed-eye plates lack a sclera, sit on one side
+//     only, or are not also registered under head.mouths as eyeclosed-*;
 //   - an outfit that binds no stand column;
 //   - an outfit column with no top-level poses/gestures entry;
 //   - column headAnchor/feetPivot drift from the pack registration;
@@ -113,6 +116,7 @@ func lintCompanionKit(raw []byte) []string {
 			}
 		}
 	}
+	l.closedEyes(root)
 	attachments, _ := root["attachments"].(map[string]any)
 	for _, id := range sortedCompanionKeys(attachments) {
 		path := "attachments." + id
@@ -129,6 +133,50 @@ func lintCompanionKit(raw []byte) []string {
 	}
 	sort.Strings(l.issues)
 	return l.issues
+}
+
+// closedEyes checks the optional closed-eye plates of head.eyes and every eye
+// set. An older daemon refuses a raster only the new keys name, so each plate
+// is also registered under head.mouths as eyeclosed-*, which it ignores.
+func (l *companionKitLint) closedEyes(root map[string]any) {
+	head, _ := root["head"].(map[string]any)
+	registered := map[string]bool{}
+	mouths, _ := head["mouths"].(map[string]any)
+	for key, v := range mouths {
+		if name, ok := v.(string); ok && strings.HasPrefix(key, "eyeclosed-") {
+			registered[name] = true
+		}
+	}
+	blocks := map[string]map[string]any{}
+	blocks["head.eyes"], _ = head["eyes"].(map[string]any)
+	sets, _ := root["eyesets"].(map[string]any)
+	for id, v := range sets {
+		blocks["eyesets."+id], _ = v.(map[string]any)
+	}
+	paths := make([]string, 0, len(blocks))
+	for path := range blocks {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		block := blocks[path]
+		left, _ := block["closedL"].(string)
+		right, _ := block["closedR"].(string)
+		if left == "" && right == "" {
+			continue
+		}
+		if left == "" || right == "" {
+			l.issue(path, "closes one eye side only; the sticker swap needs both closedL and closedR, so the blink stays the lid slide")
+		}
+		if s, _ := block["sclera"].(string); s == "" {
+			l.issue(path, "carries closed-eye plates but no sclera; there is nothing for the plates to hide")
+		}
+		for _, key := range []string{"closedL", "closedR"} {
+			if name, _ := block[key].(string); name != "" && !registered[name] {
+				l.issue(path+"."+key, "is not also registered under head.mouths as an eyeclosed-* key; older dashboards will refuse to install the pack")
+			}
+		}
+	}
 }
 
 type companionRegistrationRef struct {
