@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: fa3b36bdc68a3c08
 sage-review-completeness-reviewed: fa3b36bdc68a3c08
+dropped: 2026-11-23
 ---
 
 # Latest body update time in topic header and change gutter
@@ -374,3 +375,8 @@ acceptance, closure or integration is recorded.
   automatic commit, daemon action or merge follows this stop. Further work
   requires a fresh scoped lead/MAIN continuation. Source remains uncommitted
   on `impl/feat/content-change-hover-677/awoke-stir-icon`.
+
+
+## Resolution (2026-11-23)
+
+Dropped by owner (1397)=a on 2026-11-23: stalled since 2026-11-14 at browser verification, its uncommitted source is gone, and the change gutter it targets was reworked (c2e4bcf99, 011f75cfd). If still wanted, write a new ticket against the current gutter.

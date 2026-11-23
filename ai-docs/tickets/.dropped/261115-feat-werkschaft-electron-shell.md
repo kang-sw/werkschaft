@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1c15439c2a1a2b7d
 sage-review-completeness-reviewed: 1c15439c2a1a2b7d
+dropped: 2026-11-23
 ---
 
 # Migrate the Werkschaft desktop shell from Tauri to Electron
@@ -1085,3 +1086,8 @@ commands/filesystem stay excluded, and existing browser guards, sanitizer
 and capability roots still hold. Document reload/re-bootstrap and any
 fetch/stream transport implications; do not assume browser WebSocket or
 EventSource accept bearer headers.
+
+
+## Resolution (2026-11-23)
+
+Superseded by the Tauri shell (261121-feat-werkschaft-tauri-shell-return, adopted (2140)=b); owner retired Electron (1396)=a on 2026-11-23. Phase 1 shipped as the Electron baseline; Phases 2-3 were re-homed to Tauri (Tauri Phase 2 0aeef115b, Phase 3 64fd7ebf6); the conditional scoped-grant Phase 4 moved to 261122-chore-werkschaft-tauri-deferred-verification.
