@@ -235,10 +235,13 @@ gathered for it (read-only, 2026-11-23):
     (optional `ws/compact` arguments or a werk-only lever tool) is settled in
     Phase 2.
 15. **The holder-run path never ships (technical (17)).**
-    `impl/develop/werk-harness-p1` and its successor branch merge into
-    develop only after Phase 4 has removed the `werk-run` subcommand, the line
-    protocol and the holder launch. A shipped holder-run werk process would
-    become a cross-version surface on upgrade.
+    Every phase lands on the integration branch `track/harness`, which
+    carries `impl/develop/werk-harness-p1` and its successor. `track/harness`
+    reaches develop once, after the last werk phase in execution order, at
+    the 0.52 minor fixed by the Pi-retirement ticket's owner answer (27)=a.
+    By then Phase 4 has removed the `werk-run` subcommand, the line protocol
+    and the holder launch. A shipped holder-run werk process would become a
+    cross-version surface on upgrade.
 16. **No A/B gate (technical (18)).** The former Phase 3 A/B gate existed to
     decide Pi's retirement, which (05)=b settled; the catalog parity
     checklist stays as Phase 6.
@@ -653,8 +656,8 @@ browser tests for the settings page were not rerun in this pass.
 
 ### Phase 4: In-daemon loop and the werk fs tools
 
-Runs next on `impl/develop/werk-harness-p2`, which carries the Phase 1
-implementation. Phase 2 waits for this phase.
+Runs next on `track/harness`, which carries the Phase 1 implementation.
+Phase 2 waits for this phase.
 
 - Move the loop into the daemon per Decision 2. Replace the hidden
   `werk-run` subcommand, child line protocol, holder launch and child
@@ -746,7 +749,8 @@ implementation. Phase 2 waits for this phase.
   credential, tier and spawn setup on the Phase 4 build. Confirm model
   requests, fs tools, exec and report delivery, and use the Phase 4
   replacement checks above in place of the old holder-survival check.
-  The branch then merges per Decision 15.
+  The phase then lands on `track/harness`; develop promotion follows
+  Decision 15.
 
 ### Phase 2: Lead role and OpenAI SIWC
 
