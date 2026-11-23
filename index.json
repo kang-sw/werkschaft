@@ -344,6 +344,16 @@
         "touched_at": "2026-11-23T20:35:56Z"
       }
     },
+    "261114-bug-ws-pi-wait-timeout-reports-transport-error": {
+      "registered_at": "2026-11-23T20:36:02Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:36:02Z"
+      }
+    },
     "261114-bug-ws-proxy-predecessor-end-write-after-reconnect": {
       "registered_at": "2026-11-14T14:43:37Z"
     },
