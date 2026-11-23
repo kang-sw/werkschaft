@@ -602,7 +602,14 @@
       "registered_at": "2026-11-23T12:17:35Z"
     },
     "261123-feat-ws-dashboard-workflow-settings-modal": {
-      "registered_at": "2026-11-23T07:07:30Z"
+      "registered_at": "2026-11-23T07:07:30Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T12:30:27Z"
+      }
     }
   }
 }
