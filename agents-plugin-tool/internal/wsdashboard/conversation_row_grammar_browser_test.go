@@ -55,7 +55,7 @@ func TestConversationRowGrammarBrowser(t *testing.T) {
 		ringRecord(8, wslive.RingEntry{Kind: "tools", Tools: toolsSummary()}),
 		ringRecord(9, wb),
 		ringRecord(10, wslive.RingEntry{Kind: "notice", Notice: &wslive.Notice{Kind: "usage_limit", Text: "limit hit"}}),
-		ringRecord(11, wslive.RingEntry{Kind: wslive.RingWake, Cause: "mail", Text: boardNudgeEnvelope + "Whiteboard lead nudge (unblocked).\n- One: ready to proceed; resolved targets: plan"}),
+		ringRecord(11, wslive.RingEntry{Kind: wslive.RingWake, Cause: "mail", Text: boardNudgeEnvelope + "Whiteboard lead nudge (unblocked).\n- This is a deliberately long board topic title that must remain a single collapsed row: ready to proceed; resolved targets: plan"}),
 		// a compaction pill between tool and turn-footer rows, for the spacing check
 		ringRecord(12, wslive.RingEntry{Kind: "tools", Tools: toolsSummary()}),
 		ringRecord(13, wslive.RingEntry{Kind: wslive.RingTurn, Origin: "terminal", Done: 12, Failed: 2, DurationMs: 372_000}),
