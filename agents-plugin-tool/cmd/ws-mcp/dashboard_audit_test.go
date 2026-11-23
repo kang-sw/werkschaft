@@ -116,6 +116,7 @@ func startDashboardAuditFixture(t *testing.T, blocked bool) (*wsdashboard.Daemon
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv(wsholder.PythonEnv, python)
 	t.Setenv("WS_CACHE_HOME", t.TempDir())
 	t.Setenv("WS_CONFIG_HOME", t.TempDir())
