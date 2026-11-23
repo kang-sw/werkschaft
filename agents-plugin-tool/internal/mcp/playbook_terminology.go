@@ -180,3 +180,55 @@ func nativeFirstManualRewrites(namespace string) []string {
 func nativeFirstManual(body, namespace string) string {
 	return strings.NewReplacer(nativeFirstManualRewrites(namespace)...).Replace(body)
 }
+
+func spawnOnlyTierRule(avoidSameHarness bool) string {
+	if avoidSameHarness {
+		return nativeFirstTierRule
+	}
+	return "pass a rendered tier as returned: a role tier keeps its configured route, model and effort; never put a harness prefix before a role tier (`claude.playbook-explore:small` is rejected)"
+}
+
+// spawnOnlyTerminology is the terminology of self-executed text for a hosted
+// lead whose registration has PreferNativeSubagent configured off (e.g.
+// agy.prefer_native_subagent = false): all exploration and spawning go
+// through agent.spawn, the native tool is explicitly forbidden, and external
+// fixed-tier avoidance is included only when avoidSameHarness is true.
+func spawnOnlyTerminology(namespace, nativeTool string, avoidSameHarness bool) map[string]string {
+	terms := piMCPOnlyTerminology(namespace)
+	prohibitClause := ""
+	if nativeTool != "" {
+		prohibitClause = "never use `" + nativeTool + "`"
+	}
+	exploreQuals := make([]string, 0, 2)
+	if prohibitClause != "" {
+		exploreQuals = append(exploreQuals, prohibitClause)
+	}
+	if avoidSameHarness {
+		exploreQuals = append(exploreQuals, "when another harness fits, choose an external fixed tier")
+	}
+	if len(exploreQuals) > 0 {
+		terms["ExploreAgent"] = "a read-only `" + namespace + "/agent.spawn` subagent (" + strings.Join(exploreQuals, "; ") + ")"
+	}
+	tierRule := spawnOnlyTierRule(avoidSameHarness)
+	if nativeTool != "" {
+		terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` (never use `" + nativeTool + "`; tier: the resolved capability tier, not a model name; " + tierRule + "; authority: at most your own)"
+	} else {
+		terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` (tier: the resolved capability tier, not a model name; " + tierRule + "; authority: at most your own)"
+	}
+	return terms
+}
+
+// spawnOnlyManual rewrites a rendered workflow manual body for a hosted lead
+// under spawnOnlyTerminology: exploration already expands ExploreAgent, while
+// the delegate-spawn and tier-rule lines use agent.spawn and spawnOnlyTierRule.
+func spawnOnlyManual(body, namespace string, avoidSameHarness bool) string {
+	spawn := "`" + namespace + "/agent.spawn`"
+	tierRule := spawnOnlyTierRule(avoidSameHarness)
+	rewrites := []string{
+		"give the subagent the returned path and spawn it with the\n  tier and bindings the render returns.",
+		"spawn the subagent through\n  " + spawn + " with the returned path and the render's tier, chosen as `### Choosing a tier` states.",
+		"- A rendered playbook → the tier its render recommends, passed as returned;\n  a role tier such as `ticket-worker:large` is valid there.\n",
+		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, " + tierRule + ".\n",
+	}
+	return strings.NewReplacer(rewrites...).Replace(body)
+}

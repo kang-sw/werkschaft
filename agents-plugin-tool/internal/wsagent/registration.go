@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
@@ -79,6 +80,12 @@ type BackendRegistration struct {
 	// executes itself (workflow_manual, playbook.read) say so; text rendered
 	// for another process (playbook.render) is unchanged.
 	PreferNativeSubagent bool
+	// ResolveLeadSubagent, when set alongside PreferNativeSubagent, resolves
+	// the hosted-lead subagent policy dynamically from layered wsconfig
+	// (project, global, optional session key) for prompt rendering and
+	// self-executed workflow text. When nil, LeadSubagent falls back to
+	// PreferNativeSubagent and Catalog.NativeSubagentTool(RoleLead).
+	ResolveLeadSubagent func(cfg wsconfig.Options, reader wsconfig.SessionReader, wsKey string) LeadSubagentPolicy
 	// Profiles are this backend's runtime-owned builtin profile definitions.
 	// They feed the config floor but are not fields of the persisted Profile
 	// shape. Support marks the profiles offered by tracker support, in order.
@@ -125,6 +132,43 @@ type PlaybookTerminology struct {
 // host-neutral one.
 func (t PlaybookTerminology) IsZero() bool {
 	return t.ExploreAgent == "" && t.SpawnIdiom == "" && t.ContinueIdiom == "" && t.SpawnIdiomFor == nil
+}
+
+// LeadSubagentPolicy describes how a hosted lead uses its native subagent tool
+// vs ws agent.spawn / mailbox.send when rendering its startup prompt or
+// self-executed workflow text (workflow_manual, playbook.read, ExpandCommand).
+type LeadSubagentPolicy struct {
+	// Active reports whether the registration supplies a hosted-lead subagent
+	// policy (native-first or explicit prompt-only spawn-only override).
+	Active bool
+	// PreferNativeSubagent selects native-first exploration + external-tier
+	// spawning guidance.
+	PreferNativeSubagent bool
+	// AvoidSameHarnessSpawn controls whether agent.spawn tier guidance warns
+	// against same-harness routes (external terms risk) and steers toward an
+	// external fixed tier when another harness fits.
+	AvoidSameHarnessSpawn bool
+	// NativeSubagentTool names the harness's native subagent tool referred to by
+	// prompt prohibition / steering (for example "invoke_subagent"), even when
+	// Catalog.ItemSubagentRemoval stays unsupported.
+	NativeSubagentTool string
+}
+
+// LeadSubagent resolves this backend's hosted-lead subagent policy for the
+// given layered config, session reader, and session key.
+func (r BackendRegistration) LeadSubagent(cfg wsconfig.Options, reader wsconfig.SessionReader, wsKey string) LeadSubagentPolicy {
+	if !r.PreferNativeSubagent {
+		return LeadSubagentPolicy{}
+	}
+	if r.ResolveLeadSubagent != nil {
+		return r.ResolveLeadSubagent(cfg, reader, wsKey)
+	}
+	return LeadSubagentPolicy{
+		Active:                true,
+		PreferNativeSubagent:  true,
+		AvoidSameHarnessSpawn: true,
+		NativeSubagentTool:    r.Catalog.NativeSubagentTool(RoleLead),
+	}
 }
 
 // BuiltinProfileRegistration is one builtin profile owned by a backend's

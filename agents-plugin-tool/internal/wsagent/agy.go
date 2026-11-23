@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -78,8 +79,10 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		Dashboard:        agyDashboardTraits(),
 		PlaybookCommands: true,
 		// An agy lead explores with its own subagents and delegates through
-		// agent.spawn, preferring another harness when one fits.
+		// agent.spawn, preferring another harness when one fits, unless
+		// overridden via agy.prefer_native_subagent / agy.avoid_agy_subagent.
 		PreferNativeSubagent: true,
+		ResolveLeadSubagent:  agyLeadSubagentPolicy,
 		// Same-harness workers only: an agy session (a hosted agy lead, or
 		// an agy worker spawning a nested child) may run agy workers; every
 		// other caller, and a creation with none, is refused (admitWorker).
@@ -797,6 +800,39 @@ type agyMapper struct {
 	rate        agyOutputRateTracker
 	// now is an optional local clock seam (epoch ms) for deterministic tests.
 	now func() int64
+}
+
+// agyNativeSubagentTool is agy's native subagent tool name, surfaced to
+// hosted-lead prompt steering when agy.prefer_native_subagent is false while
+// keeping AgyCatalog().ItemSubagentRemoval unset.
+const agyNativeSubagentTool = "invoke_subagent"
+
+func agyLeadSubagentPolicy(cfg wsconfig.Options, reader wsconfig.SessionReader, wsKey string) LeadSubagentPolicy {
+	// Session scope is unsupported for agy.* adapter overrides (noSession=true),
+	// so resolve strictly from repo/project/global/builtin layers.
+	_, _ = reader, wsKey
+	r := wsconfig.NewResolver(cfg, map[string]string{
+		wsconfig.ItemAgyPreferNativeSubagent: "true",
+		wsconfig.ItemAgyAvoidAgySubagent:     "true",
+	}, nil, nil)
+	prefer := true
+	if rv, err := r.Get("", wsconfig.ItemAgyPreferNativeSubagent); err == nil {
+		if b, err := strconv.ParseBool(rv.Value); err == nil {
+			prefer = b
+		}
+	}
+	avoid := true
+	if rv, err := r.Get("", wsconfig.ItemAgyAvoidAgySubagent); err == nil {
+		if b, err := strconv.ParseBool(rv.Value); err == nil {
+			avoid = b
+		}
+	}
+	return LeadSubagentPolicy{
+		Active:                true,
+		PreferNativeSubagent:  prefer,
+		AvoidSameHarnessSpawn: avoid,
+		NativeSubagentTool:    agyNativeSubagentTool,
+	}
 }
 
 func newAgyMapper(sessionID string) *agyMapper {

@@ -348,3 +348,101 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 		t.Fatalf("the agy backend started %d process(es), want the as-returned child only", len(agy.starts))
 	}
 }
+
+// TestAgySubagentConfigOverridesLiveRender verifies all four combinations of
+// agy.prefer_native_subagent and agy.avoid_agy_subagent across workflow_manual,
+// playbook.read, and RenderLeadManual/RenderLeadPlaybook, confirms live
+// per-render updates on an active connection without reconnecting, and pins
+// playbook.render unchanged.
+func TestAgySubagentConfigOverridesLiveRender(t *testing.T) {
+	regs := agyRegistrations(true)
+	reg := wsagent.BuiltinBackendRegistrations()[wsagent.BackendAgy]
+	agyReg := regs[wsagent.BackendAgy]
+	agyReg.ResolveLeadSubagent = reg.ResolveLeadSubagent
+	regs[wsagent.BackendAgy] = agyReg
+	s, f := hostedBackendConnection(t, wsagent.BackendAgy, regs)
+	cfg := s.sessionConfigOptions(f.hosted)
+	resolver := wsconfig.NewResolver(cfg, nil, nil, nil)
+	setProject := func(k, v string) {
+		t.Helper()
+		if err := resolver.Set(k, v, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hosted := HostedRender{
+		Harness:              reg.ManualHarness,
+		PlaybookCommands:     reg.PlaybookCommands,
+		PreferNativeSubagent: reg.PreferNativeSubagent,
+		ResolveLeadSubagent:  reg.ResolveLeadSubagent,
+		ToolNameScheme:       reg.ToolNameScheme,
+		CallFallback:         reg.CallFallback,
+		DirectTools:          reg.DirectTools,
+	}
+
+	// Consume the one-shot review-track nudge before taking the baseline.
+	_ = connectionManual(t, s, f.hosted)
+
+	baselineRenderExplore, _ := connectionRender(t, s, f.hosted, f.root, "explore")
+	baselineManual := connectionManual(t, s, f.hosted)
+	baselineRun := connectionRead(t, s, f.hosted, "lead-run")
+	baselineDiscuss := connectionRead(t, s, f.hosted, "lead-discuss")
+
+	// (true, false) matches (true, true) byte-for-byte.
+	setProject(wsconfig.ItemAgyAvoidAgySubagent, "false")
+	if got := connectionManual(t, s, f.hosted); got != baselineManual {
+		t.Fatalf("manual changed with prefer=true avoid=false")
+	}
+	if got := connectionRead(t, s, f.hosted, "lead-run"); got != baselineRun {
+		t.Fatalf("lead-run changed with prefer=true avoid=false")
+	}
+	if got := connectionRead(t, s, f.hosted, "lead-discuss"); got != baselineDiscuss {
+		t.Fatalf("lead-discuss changed with prefer=true avoid=false")
+	}
+
+	// (false, true): flip in project config WITHOUT reconnecting s.
+	setProject(wsconfig.ItemAgyPreferNativeSubagent, "false")
+	setProject(wsconfig.ItemAgyAvoidAgySubagent, "true")
+	manualFT := connectionManual(t, s, f.hosted)
+	assertContains(t, "manual (false,true)", manualFT, "never use `invoke_subagent`", "ws/agent.spawn", "Antigravity terms risk", "never put a harness prefix before a role tier")
+	assertLacks(t, "manual (false,true)", manualFT, "your native subagent", "When a subagent started with")
+	runFT := connectionRead(t, s, f.hosted, "lead-run")
+	assertContains(t, "lead-run (false,true)", runFT, "never use `invoke_subagent`", "ws/agent.spawn", "Antigravity terms risk")
+	assertLacks(t, "lead-run (false,true)", runFT, "your native subagent", "When a subagent started with")
+	discussFT := connectionRead(t, s, f.hosted, "lead-discuss")
+	assertContains(t, "lead-discuss (false,true)", discussFT, "never use `invoke_subagent`", piMCPOnlyExplore, genericTip)
+	assertLacks(t, "lead-discuss (false,true)", discussFT, "your native subagent", "When a subagent started with")
+
+	t.Setenv(envHostedSession, "")
+	daemonManualFT, err := RenderLeadManual(os.Environ(), f.root, hosted, f.hosted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, "daemon manual (false,true)", daemonManualFT, "never use `invoke_subagent`", "Antigravity terms risk")
+	daemonDiscussFT, err := RenderLeadPlaybook(os.Environ(), f.root, hosted, f.hosted, "lead-discuss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemonDiscussFT != strings.TrimSpace(discussFT) {
+		t.Fatalf("daemon discuss differs from live read under (false,true)")
+	}
+
+	// (false, false): flip on same connection again.
+	setProject(wsconfig.ItemAgyAvoidAgySubagent, "false")
+	manualFF := connectionManual(t, s, f.hosted)
+	assertContains(t, "manual (false,false)", manualFF, "never use `invoke_subagent`", "ws/agent.spawn", "never put a harness prefix before a role tier")
+	assertLacks(t, "manual (false,false)", manualFF, nativeFirstMarkers...)
+	runFF := connectionRead(t, s, f.hosted, "lead-run")
+	assertContains(t, "lead-run (false,false)", runFF, "never use `invoke_subagent`", "ws/agent.spawn", "never put a harness prefix before a role tier")
+	assertLacks(t, "lead-run (false,false)", runFF, nativeFirstMarkers...)
+
+	// playbook.render stays untouched under every combination.
+	if afterRender, _ := connectionRender(t, s, f.hosted, f.root, "explore"); afterRender != baselineRenderExplore {
+		t.Fatalf("playbook.render changed under agy subagent overrides")
+	}
+
+	// Restore (true, true) on the same live connection without reconnect.
+	setProject(wsconfig.ItemAgyPreferNativeSubagent, "true")
+	if got := connectionManual(t, s, f.hosted); got != baselineManual {
+		t.Fatalf("live manual did not revert to baseline without reconnect")
+	}
+}

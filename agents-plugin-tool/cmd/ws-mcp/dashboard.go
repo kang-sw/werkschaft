@@ -624,5 +624,5 @@ func serveDashboard(server *mcp.Server) {
 // hostedRender is what reg says about text the daemon renders for its
 // hosted lead.
 func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores) mcp.HostedRender {
-	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
+	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ResolveLeadSubagent: reg.ResolveLeadSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
 }

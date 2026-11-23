@@ -27,6 +27,18 @@
       "type": "boolean",
       "default": false,
       "description": "Hosted Antigravity (agy) leads only (unused on other hosts and for agy workers): start agy with GODEBUG=http2debug=2 and keep a filtered HTTP/2 frame summary (frame type, stream, length, flags, and error fields only; header values and data are dropped) in agy-http2-frames.log in the session directory, capped at 64 MiB, with a marker line at each log-confirmed cutoff. Best-effort: agy may not honor GODEBUG, and then the file stays empty. Diagnostic use; read at process start."
+    },
+    {
+      "key": "agy.prefer_native_subagent",
+      "type": "boolean",
+      "default": true,
+      "description": "Hosted agy leads: use agy's native subagent for bounded exploration when enabled, or require ws/agent.spawn for all subagent work when disabled."
+    },
+    {
+      "key": "agy.avoid_agy_subagent",
+      "type": "boolean",
+      "default": true,
+      "description": "Hosted agy leads: include guidance to prefer an external harness tier in ws/agent.spawn when agy.prefer_native_subagent is disabled."
     }
   ]
 }

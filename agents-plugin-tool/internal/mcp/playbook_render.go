@@ -116,13 +116,17 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	daemonAgentClient := (s.connectionOf(harness).ClientDaemonAgents && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
-	// A PreferNativeSubagent lead explores with its own native subagent and
-	// spawns through agent.spawn under its tier rule, but only in text it
-	// executes itself: a rendered delegate runs elsewhere and keeps the
-	// daemon-agent wording.
-	nativeFirst := selfExecuted && daemonAgents && descriptor.preferNativeSubagent
+	// A PreferNativeSubagent lead resolves its live subagent delegation policy
+	// (native-first vs prompt-only spawn-only, and same-harness avoidance) per
+	// render, but only in text it executes itself: a rendered delegate runs
+	// elsewhere and keeps the daemon-agent wording.
+	policy := s.leadSubagentPolicy(descriptor, callerKey)
+	leadPolicyActive := selfExecuted && daemonAgents && policy.Active
+	nativeFirst := leadPolicyActive && policy.PreferNativeSubagent
 	if nativeFirst {
 		terminology = nativeFirstTerminology(s.runtimeNamespace())
+	} else if leadPolicyActive {
+		terminology = spawnOnlyTerminology(s.runtimeNamespace(), policy.NativeSubagentTool, policy.AvoidSameHarnessSpawn)
 	}
 
 	// The workflow manual's harness overlay maps a render onto that
@@ -161,8 +165,12 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	if err != nil {
 		return "", "", err
 	}
-	if nativeFirst && name == workflowManualPlaybookName {
-		body = nativeFirstManual(body, s.runtimeNamespace())
+	if leadPolicyActive && name == workflowManualPlaybookName {
+		if nativeFirst {
+			body = nativeFirstManual(body, s.runtimeNamespace())
+		} else {
+			body = spawnOnlyManual(body, s.runtimeNamespace(), policy.AvoidSameHarnessSpawn)
+		}
 	}
 	if pb.Meta.Delegates {
 		spawnedWith := ""

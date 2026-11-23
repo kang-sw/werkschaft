@@ -218,6 +218,12 @@ const (
 	// filtered capture file. Both are booleans read at process start.
 	ItemAgyStallLogCheck   = "agy.stall_log_check"
 	ItemAgyHTTP2FrameTrace = "agy.http2_frame_trace"
+	// ItemAgyPreferNativeSubagent and ItemAgyAvoidAgySubagent control how a
+	// hosted agy lead's delegation prompt and self-executed workflow text
+	// handle its native subagent tool vs ws agent.spawn. Both are booleans
+	// read from repo/project/global/builtin layers (no session scope).
+	ItemAgyPreferNativeSubagent = "agy.prefer_native_subagent"
+	ItemAgyAvoidAgySubagent     = "agy.avoid_agy_subagent"
 
 	// ItemExecNativeToolRemoval is the per-harness rollout switch of the
 	// exec cutover: on (the default) launches a dashboard-hosted session
