@@ -547,7 +547,10 @@
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-23T01:45:55Z"
+        "touched_at": "2026-11-23T01:46:35Z",
+        "impl": {
+          "branch": "impl/develop/pout-mop-gravy"
+        }
       }
     },
     "261123-bug-ws-windows-test-env-failures": {
