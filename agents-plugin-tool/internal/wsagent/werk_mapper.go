@@ -57,6 +57,7 @@ type werkMapper struct {
 	cost    float64
 	hasCost bool
 	turn    int
+	turnID  string
 }
 
 func newWerkMapper(session string) *werkMapper {
@@ -66,7 +67,11 @@ func newWerkMapper(session string) *werkMapper {
 // werkReplySource is the dedup key of a final reply: the session, the turn
 // and the message item.
 func (m *werkMapper) replySource(l werk.Line) string {
-	return "werk/" + m.session + "/" + strconv.Itoa(l.Turn) + "/" + l.Item
+	turn := m.turnID
+	if turn == "" {
+		turn = strconv.Itoa(l.Turn)
+	}
+	return "werk/" + m.session + "/" + turn + "/" + l.Item
 }
 
 func lineTime(l werk.Line) int64 {
@@ -100,7 +105,7 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 			{Harness: &HarnessReport{Version: l.Version}},
 		}
 	case werk.LineTurnStart:
-		m.turn = l.Turn
+		m.turn, m.turnID = l.Turn, l.TurnID
 		return []Event{{TurnStart: true}}
 	case werk.LineReply:
 		ev := &wslive.Event{Kind: wslive.KindReply, Text: l.Text}

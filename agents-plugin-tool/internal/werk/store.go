@@ -86,6 +86,7 @@ type Store struct {
 	lock        *flock.Flock
 	now         func() int64
 	fileIntents map[string]wsfs.FileIntent
+	turnJournal turnJournal
 }
 
 func segmentPath(dir, session string) string {
@@ -126,7 +127,7 @@ func OpenStore(dir, session string, now func() int64) (*Store, []json.RawMessage
 func openStore(dir, session, path string, now func() int64) (*Store, []json.RawMessage, error) {
 	s := &Store{dir: dir, session: session, path: path, now: now}
 	s.fileIntents = make(map[string]wsfs.FileIntent)
-	items, keep, err := readSegment(path, session, s.fileIntents)
+	items, keep, err := s.readSegment()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -156,7 +157,8 @@ func openStore(dir, session, path string, now func() int64) (*Store, []json.RawM
 
 // readSegment returns the items of the file at path and the length of its
 // whole-line prefix (-1 when the file does not exist).
-func readSegment(path, session string, fileIntents map[string]wsfs.FileIntent) ([]json.RawMessage, int64, error) {
+func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
+	path, session := s.path, s.session
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, -1, nil
@@ -189,6 +191,9 @@ func readSegment(path, session string, fileIntents map[string]wsfs.FileIntent) (
 		} else {
 			var l struct {
 				fileIntentLine
+				TurnID   string          `json:"turn_id"`
+				User     json.RawMessage `json:"user"`
+				End      *durableEnd     `json:"end"`
 				Item     json.RawMessage `json:"item"`
 				Response *Response       `json:"response"`
 			}
@@ -200,8 +205,24 @@ func readSegment(path, session string, fileIntents map[string]wsfs.FileIntent) (
 				items = append(items, l.Item)
 			case l.K == "response" && l.Response != nil:
 				items = append(items, l.Response.Output...)
+				if s.turnJournal.id != "" && s.turnJournal.end == nil {
+					s.turnJournal.response = l.Response
+					s.turnJournal.responseEnd = len(items)
+				}
+			case l.K == "turn_start" && l.TurnID != "" && len(l.User) > 0:
+				if s.turnJournal.id != "" && s.turnJournal.end == nil {
+					return nil, 0, errors.New("a durable turn started before its predecessor finished")
+				}
+				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items)}
+				clear(s.fileIntents)
+				items = append(items, l.User)
+			case l.K == "turn_end" && l.TurnID != "" && l.End != nil:
+				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {
+					return nil, 0, errors.New("the durable turn result has no active turn")
+				}
+				s.turnJournal.end = l.End
 			case l.K == "file_intent" && l.CallID != "" && l.Intent != nil:
-				fileIntents[l.CallID] = *l.Intent
+				s.fileIntents[l.CallID] = *l.Intent
 			default:
 				return items, good, nil
 			}
@@ -242,14 +263,14 @@ func (s *Store) AppendResponse(response *Response) error {
 	return s.writeLocked(responseLine{K: "response", Response: response})
 }
 
-// appendFileIntent commits the ordered log prefix before the target can change.
-func (s *Store) appendFileIntent(intent fileIntentLine) error {
+// appendBarrier commits the ordered log prefix for a turn or a tool intent.
+func (s *Store) appendBarrier(record any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.f == nil {
 		return errors.New("the conversation store is closed")
 	}
-	if err := s.writeLocked(intent); err != nil {
+	if err := s.writeLocked(record); err != nil {
 		return err
 	}
 	return s.f.Sync()

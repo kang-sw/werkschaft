@@ -39,9 +39,9 @@ type writer struct {
 }
 
 type logAppend struct {
-	item       json.RawMessage
-	response   *Response
-	fileIntent *fileIntentLine
+	item     json.RawMessage
+	response *Response
+	barrier  any
 }
 
 func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
@@ -60,8 +60,16 @@ func (w *writer) AddResponse(response *Response) {
 	w.enqueue(logAppend{response: response})
 }
 
-func (w *writer) addFileIntent(intent fileIntentLine) error {
-	return w.enqueue(logAppend{fileIntent: &intent})
+// commit appends a journal record and flushes the log through that record.
+func (w *writer) commit(record any) error {
+	if err := w.addBarrier(record); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+func (w *writer) addBarrier(record any) error {
+	return w.enqueue(logAppend{barrier: record})
 }
 
 func (w *writer) enqueue(record logAppend) error {
@@ -120,9 +128,9 @@ func (w *writer) append(record logAppend) (err error) {
 			err = errors.New("the werk log writer failed unexpectedly")
 		}
 	}()
-	if record.fileIntent != nil {
+	if record.barrier != nil {
 		if w.before != nil {
-			raw, err := json.Marshal(record.fileIntent)
+			raw, err := json.Marshal(record.barrier)
 			if err != nil {
 				return err
 			}
@@ -130,7 +138,7 @@ func (w *writer) append(record logAppend) (err error) {
 				return err
 			}
 		}
-		return w.store.appendFileIntent(*record.fileIntent)
+		return w.store.appendBarrier(record.barrier)
 	}
 	if record.response != nil {
 		if w.before != nil {

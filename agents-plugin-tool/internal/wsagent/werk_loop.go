@@ -127,7 +127,9 @@ func (p *werkLoop) run(a *werk.Agent) {
 			p.deliver(Event{TurnEnd: true, TurnError: "the werk session failed unexpectedly"})
 		}
 	}()
-	_ = a.ServeCommands(p.ctx, p.cmds)
+	if err := a.ServeCommands(p.ctx, p.cmds); err != nil && p.ctx.Err() == nil {
+		p.deliver(Event{Notice: err.Error()})
+	}
 }
 
 func (p *werkLoop) emit(line werk.Line) {
@@ -164,6 +166,10 @@ func (p *werkLoop) command(cmd werk.Command) error {
 	default:
 		return errors.New("werk backend: the session command queue is full")
 	}
+}
+
+func (p *werkLoop) submitTurn(id, text string) error {
+	return p.command(werk.Command{Type: werk.CmdUser, TurnID: id, Text: text})
 }
 
 func (p *werkLoop) Send(text string) error {

@@ -17,7 +17,7 @@ type correlatedFileFixture struct {
 }
 
 func (w *correlatedFileFixture) CallCorrelated(ctx context.Context, tool string, args json.RawMessage, id string) (CallResult, error) {
-	return w.call(ctx, wsfs.FileCall{ID: id, Tool: tool, Arguments: args})
+	return w.call(ctx, wsfs.FileCall{ID: id, Tool: canonicalFileTool(tool), Arguments: args})
 }
 
 func TestFileCallRecordsOnlyMatchingIntentBeforeMutation(t *testing.T) {
@@ -75,7 +75,7 @@ func TestFileCallRecordsOnlyMatchingIntentBeforeMutation(t *testing.T) {
 				return CallResult{Text: text}, err
 			}
 			a.append(json.RawMessage(`{"type":"function_call","call_id":"c","name":"fs_write"}`))
-			_, failed := a.invokeMutating(ctx, map[string]toolEntry{"fs_write": {ws: "fs.write"}},
+			_, failed := a.invokeMutating(ctx, map[string]toolEntry{"fs_write": {ws: "fs_write"}},
 				functionCall{CallID: "c", Name: "fs_write", Arguments: string(args)})
 			if failed != rejectWrite {
 				t.Fatalf("mutation failed = %v, want %v", failed, rejectWrite)

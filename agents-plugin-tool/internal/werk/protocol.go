@@ -65,6 +65,7 @@ const (
 // Command is one line of the process's standard input.
 type Command struct {
 	Type   string  `json:"type"`
+	TurnID string  `json:"-"`
 	ID     string  `json:"id,omitempty"`
 	Text   string  `json:"text,omitempty"`
 	Model  string  `json:"model,omitempty"`
@@ -114,7 +115,8 @@ type Line struct {
 	Resumed int `json:"resumed,omitempty"`
 
 	// Turn is the turn counter (1-based) a turn-scoped line belongs to.
-	Turn int `json:"turn,omitempty"`
+	Turn   int    `json:"turn,omitempty"`
+	TurnID string `json:"-"`
 	// Response is the provider's id of the model response a usage, reasoning,
 	// reply or tool_start line comes from: the model request of the audit
 	// chain.

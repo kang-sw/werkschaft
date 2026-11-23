@@ -9,6 +9,18 @@ import (
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
+// canonicalFileTool maps a daemon-advertised alias to the name the handler sees.
+func canonicalFileTool(tool string) string {
+	switch tool {
+	case "fs_write", "fs.write":
+		return "fs.write"
+	case "fs_edit", "fs.edit":
+		return "fs.edit"
+	default:
+		return ""
+	}
+}
+
 type activeFileCall struct {
 	ctx      context.Context
 	id, tool string
@@ -55,7 +67,7 @@ func (a *Agent) RecordFileCall(ctx context.Context, call wsfs.FileCall) error {
 		return err
 	}
 	active.recorded = true
-	err := a.log.addFileIntent(fileIntentLine{K: "file_intent", CallID: call.ID, Intent: &call.Intent})
+	err := a.log.addBarrier(fileIntentLine{K: "file_intent", CallID: call.ID, Intent: &call.Intent})
 	a.fileMu.Unlock()
 	if err != nil {
 		return err
