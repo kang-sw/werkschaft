@@ -982,19 +982,24 @@
   // Short owner captures, once per actual scroller, including independent
   // pins. No post-morph target selection or ordinary resize following.
   function boardKeep(nodes) {
-    var w = window.wbHistory, handles = [], scrollers = new Set(), resolved = new Map();
+    var w = window.wbHistory, handles = [], scrollers = new Set(), resolved = new Map(), firsts = [];
     if (!w || !w.keep) return null;
     var lookup = w.snapshot && w.snapshot();
+    // Read phase: visibility and scroller of every node, once each (the
+    // snapshot memoizes both), before any owner is created or capture taken.
     (nodes || boardBoxes().map(function (b) { return b.firstElementChild || b; })).forEach(function (n) {
-      if (w.rendered && !w.rendered(n)) return;
+      if (!(lookup && lookup.rendered ? lookup.rendered(n) : !w.rendered || w.rendered(n))) return;
       // A height batch shares ancestor/scroller lookup; inspecting keep() for
       // every frame repeated style/scrollHeight walks through the same topic.
       var s = lookup ? lookup.scroller(n) : w.keep(n, { capture: false }).scroller;
       resolved.set(n, s);
       if (scrollers.has(s)) return;
       scrollers.add(s);
-      handles.push(w.keep(n));
+      firsts.push({ n: n, s: s });
     });
+    // Write phase first (owners), then one capture per scroller.
+    if (w.own) w.own(firsts.map(function (f) { return f.s; }));
+    firsts.forEach(function (f) { handles.push(w.keep(f.n, { scroller: f.s })); });
     return { scroller: function (n) { return resolved.get(n); }, h: { apply: function () { handles.forEach(function (h) { h.apply(); }); }, end: function () { handles.forEach(function (h) { h.end(); }); } } };
   }
   // Asset reloads cross a document boundary. Keep only tab-local, short-lived
@@ -1110,13 +1115,13 @@
   function boardExposed(n) {
     if (!n || n.isConnected === false) return false;
     var w = window.wbHistory;
-    if (w && w.rendered && !w.rendered(n)) return false;
     if (boardSnap) return boardSnap.visible(n);
+    if (w && w.rendered && !w.rendered(n)) return false;
     return !!(w && w.keep && w.keep(n, { capture: false }).visible(n));
   }
   function boardScroller(n) {
     var w = window.wbHistory;
-    if (!n || (w && w.rendered && !w.rendered(n))) return null;
+    if (!n || (w && w.rendered && !(boardSnap && boardSnap.rendered ? boardSnap.rendered(n) : w.rendered(n)))) return null;
     return boardSnap ? boardSnap.scroller(n) : w && w.keep ? w.keep(n, { capture: false }).scroller : null;
   }
   // Freeze the interval, not just the reading reference. A single scroll
