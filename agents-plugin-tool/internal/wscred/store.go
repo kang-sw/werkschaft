@@ -348,13 +348,13 @@ func (s *Store) loadLocked(retry bool) error {
 	return nil
 }
 
-// Credential returns req.Provider's current credential (Source).
 func (s *Store) useDocumentLocked(doc document) {
 	s.doc, s.keys = doc, doc.apiKeys()
 	openAI := doc.openAIState()
 	s.openAIAccount = openAI.account(openAI.Active)
 }
 
+// Credential returns req.Provider's current credential (Source).
 func (s *Store) Credential(ctx context.Context, req Request) (Credential, error) {
 	p, ok := Lookup(req.Provider)
 	if !ok {
