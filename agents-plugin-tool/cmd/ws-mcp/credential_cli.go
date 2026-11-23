@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -62,7 +63,7 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	var id wscred.ProviderID
 	if len(positional) == 1 {
 		id = wscred.ProviderID(positional[0])
-		if _, ok := wscred.Lookup(id); !ok {
+		if _, ok := wscred.Lookup(id); !ok && !wsconfig.IsLocalWerkProvider(string(id)) {
 			return c.failed(name, fmt.Errorf("unknown provider; known providers: %s", knownProviderIDs()))
 		}
 	}
@@ -72,7 +73,7 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	case "remove":
 		return c.credentialApply(name, *format, wscred.Change{Op: wscred.OpRemove, Provider: id})
 	}
-	if p, _ := wscred.Lookup(id); p.Kind != wscred.KindAPIKey {
+	if p, ok := wscred.Lookup(id); ok && p.Kind != wscred.KindAPIKey {
 		return c.failed(name, errors.New("OpenAI uses ChatGPT sign-in; run \"credential sign-in openai\""))
 	}
 	key, err := c.readKey()
@@ -267,7 +268,10 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 		if dir, err = wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome)); err == nil {
 			if credPath, err = c.credentialPath(); err == nil {
 				if err = wsdashboard.MigrateCredentialFile(dir, credPath); err == nil {
-					statuses, err = wscred.NewStore(credPath).Status()
+					store := wscred.NewStore(credPath)
+					if err = store.LoadLocalEndpoints(wsconfig.Options{ConfigHome: c.getenv(wsconfig.EnvConfigHome)}); err == nil {
+						statuses, err = store.Status()
+					}
 				}
 			}
 		}
@@ -280,6 +284,9 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 			}
 		}
 		statuses = one
+		if len(one) == 0 {
+			err = errors.New("unknown provider; check agent.werk_endpoints")
+		}
 	}
 	var text strings.Builder
 	for _, s := range statuses {

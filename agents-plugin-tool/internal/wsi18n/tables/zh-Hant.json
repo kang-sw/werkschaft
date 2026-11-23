@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Werk 本機端點",
+  "js.settings.key.agent.werk_endpoints.description": "全域 JSON 物件將名稱（ASCII 小寫字母、數字、連字號）對應至 {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}。kind 為 vllm 或 ollama。選用 API 金鑰使用認證提供者 local/<name> 儲存。",
   "wb.panel.diff.against": "對比 v{0}",
   "wb.panel.diff.title": "相較 {0} 的變更 — 點擊在本文中完整對比",
   "wb.panel.diff.note": "正在本文中顯示相較 {0} 的變更。",

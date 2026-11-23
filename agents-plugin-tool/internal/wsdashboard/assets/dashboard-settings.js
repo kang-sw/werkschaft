@@ -837,7 +837,7 @@ var wsSettingsChoiceLabels = {
     var combos = {};
     var cb = window.WsSettingsCombobox;
     var inputs = fields.map(function (field) {
-      var input = textInput(value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
+      var input = textInput(field === "model" ? cb.modelKey(value.model, value.provider) : value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
       var combo = cb.attach(input, {
         getOptions: function () {
           if (field === "backend") return cb.backendOptions();
@@ -887,7 +887,9 @@ var wsSettingsChoiceLabels = {
     }
     if (canEdit) {
       save = button("save-btn", tr("js.settings.save"), function () {
-        submit("set", Object.fromEntries(fields.map(function (field, i) { return [field, inputs[i].value]; }))).then(syncSecondary, syncSecondary);
+        var next = Object.fromEntries(fields.map(function (field, i) { return [field, inputs[i].value]; }));
+        Object.assign(next, cb.modelSelection(next.model, value.provider));
+        submit("set", next).then(syncSecondary, syncSecondary);
       });
       save.disabled = true;
       group.addEventListener("input", function () {

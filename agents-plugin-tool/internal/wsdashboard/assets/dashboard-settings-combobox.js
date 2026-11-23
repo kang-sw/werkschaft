@@ -102,12 +102,21 @@ var WsSettingsCombobox = (function () {
     return FALLBACK_HARNESSES.map(function (id) { return { id: id }; });
   }
 
+  function modelKey(model, provider) {
+    return model && provider ? provider + " " + model : model;
+  }
+
+  function modelSelection(key, provider) {
+    var match = /^(openai|openrouter|local\/[a-z0-9-]+) (.+)$/.exec(key);
+    return match ? { model: match[2], provider: match[1] } : { model: key, provider: provider || "" };
+  }
+
   function modelOptions(harnessName) {
     var h = harnessEntry(harnessName);
     if (!h || !Array.isArray(h.models)) return [];
     return h.models
-      .filter(function (m) { return m && m.id && (!m.provider || m.provider === "openrouter"); })
-      .map(function (m) { return { id: String(m.id), thinking: m.thinking === true }; });
+      .filter(function (m) { return m && m.id; })
+      .map(function (m) { return { id: modelKey(String(m.id), m.provider || (harnessName === "werk" ? "openrouter" : "")), thinking: m.thinking === true }; });
   }
 
   function effortOptions(harnessName) {
@@ -539,6 +548,8 @@ var WsSettingsCombobox = (function () {
     loadChoices: loadChoices,
     backendOptions: backendOptions,
     modelOptions: modelOptions,
+    modelKey: modelKey,
+    modelSelection: modelSelection,
     effortOptions: effortOptions,
     filterOptions: filterOptions,
     _resetForTest: function () {

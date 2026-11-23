@@ -366,9 +366,10 @@
     if (leadHarnesses().some(function (x) { return x.lead === true; })) return h && Array.isArray(h.permission_modes) ? h.permission_modes : [];
     return harness === "claude" ? LEAD_MODES : [];
   }
-  function leadModelKey(id, provider) { return provider === "openai" && id ? provider + " " + id : id; }
+  function leadModelKey(id, provider) { return provider && provider !== "openrouter" && id ? provider + " " + id : id; }
   function leadModelPick(key) {
-    return key.indexOf("openai ") === 0 ? { model: key.slice(7), provider: "openai" } : { model: key, provider: "" };
+    var match = /^(openai|openrouter|local\/[a-z0-9-]+) (.+)$/.exec(key);
+    return match ? { model: match[2], provider: match[1] } : { model: key, provider: "" };
   }
   function leadModelEntries(harness, provider, spawn) {
     var h = supHarness(harness), entries = ((h && h.models) || []);
@@ -383,7 +384,7 @@
   function leadModelLabels(harness, provider, spawn) {
     var labels = Object.create(null);
     leadModelEntries(harness, provider, spawn).forEach(function (m) {
-      if (m.display_name) labels[spawn ? leadModelKey(String(m.id), m.provider) : String(m.id)] = m.display_name + (spawn ? " · OpenAI" : "");
+      labels[spawn ? leadModelKey(String(m.id), m.provider) : String(m.id)] = (m.display_name || String(m.id)) + (spawn && m.provider && m.provider !== "openrouter" ? " · " + (m.provider === "openai" ? "OpenAI" : m.provider) : "");
     });
     return labels;
   }

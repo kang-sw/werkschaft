@@ -55,6 +55,8 @@ type Provider struct {
 	// BaseURL is the provider's API root its credential authenticates
 	// against.
 	BaseURL string
+	// Dialect is the Responses wire profile for a user-configured endpoint.
+	Dialect string
 	// KeyPrefix is the non-secret prefix the provider's keys start with,
 	// which a masked display keeps; "" when its keys have none.
 	KeyPrefix string

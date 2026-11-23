@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Werk ローカルエンドポイント",
+  "js.settings.key.agent.werk_endpoints.description": "グローバル JSON オブジェクトで名前（ASCII 小文字、数字、ハイフン）を {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"} に対応付けます。kind は vllm または ollama。任意の API キーは認証情報プロバイダー local/<name> に保存します。",
   "wb.panel.diff.against": "v{0} と比較",
   "wb.panel.diff.title": "{0} からの変更 — クリックして本文で全体を比較",
   "wb.panel.diff.note": "{0} からの変更を本文に表示しています。",

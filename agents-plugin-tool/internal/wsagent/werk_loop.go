@@ -53,24 +53,34 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 	if b.credentials == nil {
 		return nil, errors.New("werk backend: the provider credential source is unavailable")
 	}
-	provider, err := werkProvider(id)
+	provider, err := b.werkProvider(id)
 	if err != nil {
 		return nil, err
 	}
 	return &werk.Client{
 		BaseURL:  provider.BaseURL,
 		Provider: provider.ID,
+		Dialect:  provider.Dialect,
 		HTTP:     b.httpClient,
 		Token: func(ctx context.Context) (string, error) {
-			cred, err := b.credentials.Credential(ctx, wscred.Request{
-				Provider: provider.ID, AgentSession: true, Background: !werk.InteractiveTurn(ctx),
-			})
-			if err != nil {
-				return "", err
-			}
-			return cred.Secret.Reveal(), nil
+			return b.providerToken(ctx, provider, !werk.InteractiveTurn(ctx))
 		},
 	}, nil
+}
+
+func (b WerkBackend) providerToken(ctx context.Context, provider wscred.Provider, background bool) (string, error) {
+	request := wscred.Request{Provider: provider.ID, AgentSession: true, Background: background}
+	if provider.Dialect != "" {
+		request.BaseURL = provider.BaseURL
+	}
+	cred, err := b.credentials.Credential(ctx, request)
+	if provider.Dialect != "" && errors.Is(err, wscred.ErrNotConfigured) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return cred.Secret.Reveal(), nil
 }
 
 func validateWerkStart(spec StartSpec) error {
@@ -108,12 +118,10 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		mapper: newWerkMapper(spec.SessionID),
 	}
 	if spec.Lead != nil {
-		provider, err := werkProvider(spec.Provider)
-		if err != nil {
-			cancel()
-			return nil, err
+		p.mapper.provider = spec.Provider
+		if p.mapper.provider == "" {
+			p.mapper.provider = string(wscred.ProviderOpenRouter)
 		}
-		p.mapper.provider = string(provider.ID)
 	}
 	cfg := werk.Config{
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),

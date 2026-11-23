@@ -149,9 +149,10 @@ type Support struct {
 }
 
 type cachedChoices struct {
-	at      time.Time
-	models  []ModelChoice
-	efforts []string
+	revision uint64
+	at       time.Time
+	models   []ModelChoice
+	efforts  []string
 	// err is a failed listing's message; such an entry answers for
 	// choicesFailTTL only.
 	err string
@@ -644,14 +645,19 @@ func (s *Support) pickerListing(name string, lister ChoiceLister) (cachedChoices
 		s.pickerCache = map[string]cachedChoices{}
 		s.pickerBusy = map[string]bool{}
 	}
+	var revision uint64
+	if source, ok := lister.(interface{ choiceRevision() uint64 }); ok {
+		revision = source.choiceRevision()
+	}
 	c, have := s.pickerCache[name]
+	have = have && c.revision == revision
 	if (!have || !c.fresh(s.opts.Now())) && !s.pickerBusy[name] {
 		s.pickerBusy[name] = true
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), choicesTimeout)
 			models, efforts, err := lister.Choices(ctx)
 			cancel()
-			entry := cachedChoices{at: s.opts.Now(), models: models, efforts: efforts}
+			entry := cachedChoices{at: s.opts.Now(), models: models, efforts: efforts, revision: revision}
 			if err != nil {
 				entry.err = err.Error()
 			}

@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Werk local endpoints",
+  "js.settings.key.agent.werk_endpoints.description": "Global JSON object mapping endpoint names (lowercase ASCII letters, digits, hyphens) to {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}. Kind: vllm or ollama. Store optional API keys using credential provider local/<name>.",
   "wb.panel.diff.against": "vs v{0}",
   "wb.panel.diff.title": "Changes since {0} — click to compare in place",
   "wb.panel.diff.note": "Showing changes since {0} in the body.",

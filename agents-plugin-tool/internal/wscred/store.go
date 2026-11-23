@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -123,8 +124,10 @@ func (s *Store) MigrateLegacy() error {
 // never holds what the file does not. While a daemon runs, its Store is the
 // file's only writer (see the package doc).
 type Store struct {
-	path string
-	now  func() time.Time
+	localProviders atomic.Pointer[[]Provider]
+	localRevision  atomic.Uint64
+	path           string
+	now            func() time.Time
 
 	// openAIMu serializes OpenAI changes and refreshes. Always acquire it
 	// before mu. The browser wait and ordinary credential reads hold neither.
@@ -283,21 +286,17 @@ func (d document) encode() ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-// apiKeys decodes the API-key entries of the registered API-key providers.
+// apiKeys decodes API-key entries. Lookup checks the registry on access.
 // An entry of another kind (a newer version's) is not this version's to
 // read and counts as absent.
 func (d document) apiKeys() map[ProviderID]apiKeyEntry {
 	out := map[ProviderID]apiKeyEntry{}
-	for _, p := range providers {
-		raw, ok := d.providers[string(p.ID)]
-		if !ok || p.Kind != KindAPIKey {
-			continue
-		}
+	for id, raw := range d.providers {
 		var entry apiKeyEntry
 		if json.Unmarshal(raw, &entry) != nil || entry.Kind != KindAPIKey || entry.APIKey == "" {
 			continue
 		}
-		out[p.ID] = entry
+		out[ProviderID(id)] = entry
 	}
 	return out
 }
@@ -356,19 +355,22 @@ func (s *Store) useDocumentLocked(doc document) {
 
 // Credential returns req.Provider's current credential (Source).
 func (s *Store) Credential(ctx context.Context, req Request) (Credential, error) {
-	p, ok := Lookup(req.Provider)
+	p, ok := s.lookupProvider(req.Provider)
 	if !ok {
 		return Credential{}, &ProviderError{Provider: req.Provider, Err: ErrUnknownProvider}
 	}
 	if p.Kind == KindSIWC {
 		return s.openAICredential(ctx, req)
 	}
+	if p.Dialect != "" && req.BaseURL != p.BaseURL {
+		return Credential{}, &ProviderError{Provider: p.ID, Err: ErrNotPermitted}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.loadLocked(false); err != nil {
 		return Credential{}, err
 	}
-	entry, ok := s.keys[p.ID]
+	entry, ok := s.keys[p.keyID()]
 	if !ok {
 		return Credential{}, &ProviderError{Provider: p.ID, Err: ErrNotConfigured}
 	}
@@ -383,8 +385,9 @@ func (s *Store) Status() ([]ProviderStatus, error) {
 	if err := s.loadLocked(false); err != nil {
 		return nil, err
 	}
-	out := make([]ProviderStatus, 0, len(providers))
-	for _, p := range providers {
+	registered := append(Providers(), s.LocalProviders()...)
+	out := make([]ProviderStatus, 0, len(registered))
+	for _, p := range registered {
 		out = append(out, s.statusLocked(p))
 	}
 	return out, nil
@@ -400,7 +403,7 @@ func (s *Store) statusLocked(p Provider) ProviderStatus {
 			status.UpdatedAt = account.UpdatedAt.Format(time.RFC3339)
 		}
 	}
-	if entry, ok := s.keys[p.ID]; ok {
+	if entry, ok := s.keys[p.keyID()]; p.Kind == KindAPIKey && ok {
 		status.Configured, status.Masked, status.UpdatedAt = true, Mask(p, entry.APIKey), entry.UpdatedAt
 	}
 	return status
@@ -410,7 +413,9 @@ func (s *Store) statusLocked(p Provider) ProviderStatus {
 // writes nothing when the file already holds the requested state. Its
 // errors never quote the key.
 func (s *Store) Apply(change Change) (ChangeResult, error) {
-	p, ok := Lookup(change.Provider)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.lookupProvider(change.Provider)
 	if !ok {
 		return ChangeResult{}, &ProviderError{Provider: change.Provider, Err: ErrUnknownProvider}
 	}
@@ -426,30 +431,32 @@ func (s *Store) Apply(change Change) (ChangeResult, error) {
 	} else if change.Op != OpRemove {
 		return ChangeResult{}, fmt.Errorf("unknown credential change %q", change.Op)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := s.prepareWriteLocked(); err != nil {
 		return ChangeResult{}, err
 	}
 	next := s.doc.clone()
+	keyID := p.keyID()
 	switch change.Op {
 	case OpSet:
-		if cur, ok := s.keys[p.ID]; ok && cur.APIKey == key {
+		if cur, ok := s.keys[keyID]; ok && cur.APIKey == key {
 			return ChangeResult{Status: s.statusLocked(p)}, nil
 		}
-		entry, err := mergeEntry(next.providers[string(p.ID)], apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: s.now().UTC().Format(time.RFC3339)})
+		entry, err := mergeEntry(next.providers[string(keyID)], apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: s.now().UTC().Format(time.RFC3339)})
 		if err != nil {
 			return ChangeResult{}, err
 		}
-		next.providers[string(p.ID)] = entry
+		next.providers[string(keyID)] = entry
 	case OpRemove:
-		if _, ok := next.providers[string(p.ID)]; !ok {
+		if _, ok := next.providers[string(keyID)]; !ok {
 			return ChangeResult{Status: s.statusLocked(p)}, nil
 		}
-		delete(next.providers, string(p.ID))
+		delete(next.providers, string(keyID))
 	}
 	if err := s.writeLocked(next); err != nil {
 		return ChangeResult{}, err
+	}
+	if p.Dialect != "" {
+		s.localRevision.Add(1)
 	}
 	return ChangeResult{Changed: true, Status: s.statusLocked(p)}, nil
 }

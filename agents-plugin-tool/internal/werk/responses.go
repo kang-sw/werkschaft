@@ -48,10 +48,11 @@ type Request struct {
 
 // Usage is one response's figures.
 type Usage struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	CachedTokens    int64 `json:"cached_tokens"`
-	ReasoningTokens int64 `json:"reasoning_tokens"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CachedTokens     int64  `json:"cached_tokens"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
 	// CostUSD is the provider's own cost figure, nil when it sent none.
 	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
@@ -81,6 +82,9 @@ type Client struct {
 	// BaseURL is the API root ("https://openrouter.ai/api/v1").
 	BaseURL  string
 	Provider wscred.ProviderID
+	// Dialect is "ollama" or "vllm" for configured local endpoints; empty
+	// retains hosted credential requirements.
+	Dialect string
 	// Token returns the credential to send, asked for on every request.
 	Token func(ctx context.Context) (string, error)
 	HTTP  *http.Client
@@ -191,10 +195,18 @@ func Retryable(err error) (delay time.Duration, ok bool) {
 }
 
 func (c *Client) httpClient() *http.Client {
-	if c.HTTP != nil {
-		return c.HTTP
+	base := c.HTTP
+	if base == nil {
+		base = http.DefaultClient
 	}
-	return http.DefaultClient
+	if c.Dialect == "" {
+		return base
+	}
+	client := *base
+	// Never forward an endpoint credential to a redirected URL. Copy the
+	// client so the caller's redirect policy remains untouched.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
 }
 
 type toolWire struct {
@@ -258,11 +270,15 @@ func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
 
 // Respond sends req and reads the streamed response to its terminal event.
 func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Response, error) {
-	token, err := c.Token(ctx)
-	if err != nil {
-		return nil, err
+	var token string
+	var err error
+	if c.Token != nil {
+		token, err = c.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if token == "" {
+	if token == "" && c.Dialect != "ollama" && c.Dialect != "vllm" {
 		return nil, ErrNoCredential
 	}
 	body, err := req.bodyFor(c.Provider)
@@ -281,7 +297,9 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+	}
 	secret := token
 	token = ""
 	// The header watchdog: Do returns only once the headers arrive, so a
@@ -578,10 +596,12 @@ func (s *streamState) handle(event string, data []byte, h StreamHandler) (*Respo
 }
 
 type usageWire struct {
-	InputTokens        int64 `json:"input_tokens"`
-	OutputTokens       int64 `json:"output_tokens"`
+	CacheWriteTokens   *int64 `json:"cache_write_tokens"`
+	InputTokens        int64  `json:"input_tokens"`
+	OutputTokens       int64  `json:"output_tokens"`
 	InputTokensDetails struct {
-		CachedTokens int64 `json:"cached_tokens"`
+		CachedTokens     int64  `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -608,10 +628,14 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 	}
 	resp.Output = s.fillArguments(resp.Output)
 	if u := d.Response.Usage; u != nil {
+		cacheWrite := u.InputTokensDetails.CacheWriteTokens
+		if cacheWrite == nil {
+			cacheWrite = u.CacheWriteTokens
+		}
 		resp.Usage = Usage{
 			InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 			CachedTokens: u.InputTokensDetails.CachedTokens, ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
-			CostUSD: u.Cost,
+			CostUSD: u.Cost, CacheWriteTokens: cacheWrite,
 		}
 	}
 	return resp, nil

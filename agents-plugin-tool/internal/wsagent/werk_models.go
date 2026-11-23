@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/werk"
@@ -37,6 +38,98 @@ const werkModelsTimeout = 15 * time.Second
 // one that declares its parameters without it; a listing that declares none
 // says nothing.
 func (b WerkBackend) Choices(ctx context.Context) ([]ModelChoice, []string, error) {
+	providers := b.localProviders()
+	if len(providers) == 0 {
+		return b.hostedChoices(ctx)
+	}
+	ctx, cancel := context.WithTimeout(ctx, werkModelsTimeout)
+	defer cancel()
+	type listing struct {
+		models []ModelChoice
+		err    error
+	}
+	local := make([]listing, len(providers))
+	var requests sync.WaitGroup
+	for i, provider := range providers {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			local[i].models, local[i].err = b.localChoices(ctx, provider)
+		}()
+	}
+	models, efforts, err := b.hostedChoices(ctx)
+	requests.Wait()
+	for _, result := range local {
+		models = append(models, result.models...)
+		err = errors.Join(err, result.err)
+	}
+	return models, efforts, err
+}
+
+func (b WerkBackend) choiceRevision() uint64 {
+	if source, ok := b.credentials.(interface{ LocalRevision() uint64 }); ok {
+		return source.LocalRevision()
+	}
+	return 0
+}
+
+func (b WerkBackend) localChoices(ctx context.Context, provider wscred.Provider) ([]ModelChoice, error) {
+	models, err := b.listLocalModels(ctx, provider)
+	if err != nil {
+		return nil, fmt.Errorf("list %s models: %w", provider.ID, err)
+	}
+	return models, nil
+}
+
+func (b WerkBackend) listLocalModels(ctx context.Context, provider wscred.Provider) ([]ModelChoice, error) {
+	token, err := b.providerToken(ctx, provider, false)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, provider.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := b.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := clientCopy.Do(req)
+	if err != nil {
+		return nil, errors.New("could not reach the endpoint")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the endpoint answered %d", resp.StatusCode)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxModelList+1))
+	if err != nil || len(raw) > maxModelList || json.Unmarshal(raw, &list) != nil || list.Data == nil {
+		return nil, errors.New("the endpoint model list is not readable")
+	}
+	seen := make(map[string]bool, len(list.Data))
+	models := make([]ModelChoice, 0, len(list.Data))
+	for _, entry := range list.Data {
+		if modelPattern.MatchString(entry.ID) && !seen[entry.ID] {
+			seen[entry.ID] = true
+			models = append(models, ModelChoice{ID: entry.ID, Provider: string(provider.ID)})
+		}
+	}
+	slices.SortFunc(models, func(a, b ModelChoice) int { return strings.Compare(a.ID, b.ID) })
+	return models, nil
+}
+
+func (b WerkBackend) hostedChoices(ctx context.Context) ([]ModelChoice, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, werkModelsTimeout)
 	defer cancel()
 	catalog, ok := b.credentials.(interface {

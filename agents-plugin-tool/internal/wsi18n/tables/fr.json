@@ -1,4 +1,6 @@
 {
+  "js.settings.key.agent.werk_endpoints.label": "Points de terminaison locaux Werk",
+  "js.settings.key.agent.werk_endpoints.description": "Objet JSON global associant des noms (lettres ASCII minuscules, chiffres, tirets) à {\"base_url\":\"http://localhost:11434/v1\",\"kind\":\"ollama\"}. kind : vllm ou ollama. Enregistrez les clés API facultatives avec le fournisseur d’identifiants local/<name>.",
   "wb.panel.diff.against": "vs v{0}",
   "wb.panel.diff.title": "Modifications depuis {0} — cliquer pour comparer sur place",
   "wb.panel.diff.note": "Les modifications depuis {0} sont affichées dans le contenu.",

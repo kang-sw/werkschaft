@@ -64,6 +64,8 @@ type Credential struct {
 // to the user's own agent sessions; an API-key provider ignores them.
 type Request struct {
 	Provider ProviderID
+	// BaseURL must match the configured API root for a local endpoint.
+	BaseURL string
 	// AgentSession marks a request from an agent harness running a session
 	// for the signed-in user. The daemon derives it from its in-process
 	// session or the authenticated registration on the token route.

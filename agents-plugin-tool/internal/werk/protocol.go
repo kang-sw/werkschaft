@@ -144,11 +144,12 @@ type Line struct {
 
 	// usage: one model request's figures. CostUSD is the provider's own
 	// figure when the response carried one.
-	InputTokens     int64    `json:"input_tokens,omitempty"`
-	OutputTokens    int64    `json:"output_tokens,omitempty"`
-	CachedTokens    int64    `json:"cached_tokens,omitempty"`
-	ReasoningTokens int64    `json:"reasoning_tokens,omitempty"`
-	CostUSD         *float64 `json:"cost_usd,omitempty"`
+	InputTokens      int64    `json:"input_tokens,omitempty"`
+	OutputTokens     int64    `json:"output_tokens,omitempty"`
+	CachedTokens     int64    `json:"cached_tokens,omitempty"`
+	CacheWriteTokens *int64   `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64    `json:"reasoning_tokens,omitempty"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"`
 	// Context is the request's input size in tokens, the context window's
 	// occupancy; Window is the model's window when the process knows it.
 	Context int64 `json:"context,omitempty"`
