@@ -535,7 +535,14 @@
       "registered_at": "2026-11-22T08:45:33Z"
     },
     "261123-bug-ws-daemon-replace-gap-older-daemon": {
-      "registered_at": "2026-11-22T20:54:14Z"
+      "registered_at": "2026-11-22T20:54:14Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T12:12:45Z"
+      }
     },
     "261123-bug-ws-dashboard-card-note-typing-lag": {
       "registered_at": "2026-11-23T07:07:21Z"
