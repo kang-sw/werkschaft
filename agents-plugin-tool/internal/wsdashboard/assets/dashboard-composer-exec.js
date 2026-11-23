@@ -5,7 +5,7 @@
 // assembly. Nothing here falls back to sending the text as a prompt: a daemon
 // that does not know the route refuses, and the draft stays.
   var cexecEnabled = !!(composer && composer.getAttribute("data-cexec") === "1" && rid && window.fetch);
-  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
+  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecWhy = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
   function cexecNewID() {
     var bytes = new Uint8Array(12);
     if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
@@ -43,16 +43,79 @@
     } catch (e) { return null; }
   }
   cexecPending = cexecEnabled ? cexecLoadAttempt() : null;
+  // The results are one console window: a bar (bash, run count, the newest
+  // run when folded, clear) over a scrollback of runs. It folds to the bar
+  // alone while no run is active, unless the user opened it or a run was just
+  // submitted; the bar button toggles it.
+  var cexecLog = null, cexecCount = null, cexecMini = null, cexecChev = null, cexecOpen = true, cexecRestoring = false;
   function cexecContainer() {
     if (cexecBox) return cexecBox;
     cexecBox = doc.createElement("div");
     cexecBox.className = "d-cexec";
-    cexecBox.setAttribute("role", "log");
-    cexecBox.setAttribute("aria-label", wsT("js.cexec.aria"));
     cexecBox.hidden = true;
+    var bar = doc.createElement("div");
+    bar.className = "cexec-bar";
+    var head = doc.createElement("button");
+    head.type = "button";
+    head.className = "cexec-head";
+    var sh = doc.createElement("span");
+    sh.className = "cexec-sh";
+    sh.textContent = "bash";
+    cexecCount = doc.createElement("span");
+    cexecCount.className = "cexec-count";
+    cexecMini = doc.createElement("span");
+    cexecMini.className = "cexec-mini";
+    cexecChev = doc.createElement("span");
+    cexecChev.className = "cexec-chev";
+    head.appendChild(sh); head.appendChild(cexecCount); head.appendChild(cexecMini); head.appendChild(cexecChev);
+    head.addEventListener("click", function () {
+      cexecOpen = cexecBox.hasAttribute("data-folded");
+      cexecSync();
+    });
+    var clear = doc.createElement("button");
+    clear.type = "button";
+    clear.className = "cexec-clear";
+    clear.textContent = wsT("js.cexec.clear");
+    // Clearing closes every run through the same per-run close.
+    clear.addEventListener("click", function () { cexecCards.slice().forEach(cexecDismiss); });
+    bar.appendChild(head); bar.appendChild(clear);
+    cexecLog = doc.createElement("div");
+    cexecLog.className = "cexec-log";
+    cexecLog.setAttribute("role", "log");
+    cexecLog.setAttribute("aria-label", wsT("js.cexec.aria"));
+    cexecBox.appendChild(bar); cexecBox.appendChild(cexecLog);
     var anchor = composer.querySelector(".cimgs");
     composer.insertBefore(cexecBox, anchor || composer.firstChild);
     return cexecBox;
+  }
+  function cexecTone(card) {
+    if (card.unknown || card.phase === "refused" || card.state === "failed") return "fail";
+    if (card.phase === "running" || card.phase === "async") return "run";
+    if (card.state === "stopped" || card.state === "lost" || typeof card.signal === "number") return "warn";
+    if (typeof card.exit_code === "number" && card.exit_code !== 0) return "fail";
+    return "ok";
+  }
+  var cexecMarks = { ok: "✓", fail: "✗", warn: "!", run: "…" };
+  function cexecBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KiB";
+    return (n / 1048576).toFixed(1) + " MiB";
+  }
+  // cexecSync refreshes the console frame from the card list: writes only, no
+  // measuring.
+  function cexecSync() {
+    if (!cexecBox) return;
+    var n = cexecCards.length, running = cexecCards.some(function (c) { return c.card.phase === "running" || c.card.phase === "async"; });
+    cexecBox.hidden = !n;
+    if (!n) return;
+    var folded = !cexecOpen && !running;
+    cexecBox.toggleAttribute("data-folded", folded);
+    cexecLog.hidden = folded;
+    cexecChev.textContent = folded ? "▸ " + wsT("js.cexec.expand") : "▾ " + wsT("js.cexec.collapse");
+    cexecCount.textContent = "· " + wsT("js.cexec.runs", String(n));
+    var last = cexecCards[n - 1], tone = cexecTone(last.card);
+    cexecMini.setAttribute("data-tone", tone);
+    cexecMini.textContent = cexecMarks[tone] + " " + last.command;
   }
   function cexecAdd(id, command, card) {
     var c = cexecById[id];
@@ -62,7 +125,10 @@
       cexecCards.push(c);
       cexecSave();
     } else if (card) c.card = card;
+    // A run just submitted opens the console; a restored one leaves it folded.
+    if (!cexecRestoring) cexecOpen = true;
     cexecRender(c);
+    if (!cexecRestoring && !c.shown) { c.shown = true; if (c.el.scrollIntoView) c.el.scrollIntoView({ block: "nearest" }); }
     cexecWatch(c);
     return c;
   }
@@ -79,25 +145,23 @@
     return wsT("js.cexec.done");
   }
   function cexecRender(c) {
-    var box = cexecContainer(), card = c.card, el = c.el;
+    var box = cexecContainer(), card = c.card, el = c.el, tone = cexecTone(card);
     if (!el) {
       el = c.el = doc.createElement("div");
       el.className = "cmdrun cexec";
       el.setAttribute("data-cexec", c.id);
-      box.appendChild(el);
+      cexecLog.appendChild(el);
     }
     el.setAttribute("data-phase", card.unknown ? "unknown" : card.phase);
+    el.setAttribute("data-tone", tone);
     el.replaceChildren();
     var echo = doc.createElement("div");
     echo.className = "cmdecho";
     var mk = doc.createElement("span");
     mk.className = "mk";
-    mk.textContent = "❯";
+    mk.textContent = "$";
     var code = doc.createElement("code");
     code.textContent = c.command;
-    var state = doc.createElement("span");
-    state.className = "cexec-state";
-    state.textContent = cexecStateText(card);
     var close = doc.createElement("button");
     close.type = "button";
     close.className = "cexec-x";
@@ -113,7 +177,7 @@
       lbl.textContent = card.label;
       echo.appendChild(lbl);
     }
-    echo.appendChild(code); echo.appendChild(state); echo.appendChild(close);
+    echo.appendChild(code); echo.appendChild(close);
     el.appendChild(echo);
     function note(text) {
       var n = doc.createElement("div");
@@ -121,7 +185,6 @@
       n.textContent = text;
       el.appendChild(n);
     }
-    if (card.exec_id) note(wsT("js.cexec.job", card.exec_id));
     if (card.error && card.phase !== "refused") note(card.error);
     if (card.phase === "done" || (card.phase === "async" && card.output)) {
       if (card.output) {
@@ -134,6 +197,9 @@
     if (card.file) {
       var row = doc.createElement("div");
       row.className = "cexec-file";
+      var arrow = doc.createElement("span");
+      arrow.className = "cexec-arrow";
+      arrow.textContent = "→";
       var link = doc.createElement("a");
       link.href = card.file_url;
       link.target = "_blank";
@@ -144,13 +210,39 @@
       copy.className = "cexec-copy";
       copy.textContent = wsT("js.cexec.copypath");
       copy.addEventListener("click", function () { copyText(card.file); });
-      row.appendChild(link); row.appendChild(copy);
+      row.appendChild(arrow); row.appendChild(link); row.appendChild(copy);
       el.appendChild(row);
     }
     if (card.file_error) note(card.file_error);
     if (card.truncated) note(wsT("js.cexec.truncated", String(card.truncated)));
     if (card.replaced) note(wsT("js.cexec.replaced"));
-    box.hidden = false;
+    // The status line: mark and outcome, then the byte count and job id the
+    // card already carries (no time until the server supplies one).
+    var stl = doc.createElement("div");
+    stl.className = "cexec-stl";
+    var state = doc.createElement("span");
+    state.className = "cexec-state";
+    state.textContent = cexecMarks[tone] + " " + cexecStateText(card);
+    stl.appendChild(state);
+    function part(node) {
+      var dot = doc.createElement("i");
+      dot.textContent = "·";
+      stl.appendChild(dot); stl.appendChild(node);
+    }
+    if (typeof card.output_bytes === "number" && card.output_bytes > 0) {
+      var by = doc.createElement("span");
+      by.className = "cexec-bytes";
+      by.textContent = cexecBytes(card.output_bytes);
+      part(by);
+    }
+    if (card.exec_id) {
+      var job = doc.createElement("span");
+      job.className = "cmdnote cexec-job";
+      job.textContent = wsT("js.cexec.job", card.exec_id);
+      part(job);
+    }
+    el.appendChild(stl);
+    cexecSync();
   }
   function cexecDismiss(c) {
     clearTimeout(c.timer);
@@ -159,7 +251,7 @@
     delete cexecById[c.id];
     cexecCards.splice(cexecCards.indexOf(c), 1);
     cexecSave();
-    if (cexecBox) cexecBox.hidden = !cexecBox.firstChild;
+    cexecSync();
   }
   // An active card refreshes from the daemon's owner-checked job state with
   // a growing delay, and stops once it is terminal.
@@ -196,10 +288,15 @@
       if (!list) return;
       var known = {};
       (list.cards || []).forEach(function (card) { known[card.id] = card; });
+      var fresh = cexecCards.length > 0;
+      cexecRestoring = true;
       remembered.forEach(function (m) {
         if (cexecById[m.id]) return;
         cexecAdd(m.id, m.command, known[m.id] || { id: m.id, command: m.command, phase: "done", unknown: true });
       });
+      cexecRestoring = false;
+      // Restored history starts folded to the bar; a run still active shows.
+      if (cexecCards.length && !fresh) { cexecOpen = false; cexecSync(); }
     });
   }
   // cexecList reads the daemon's private card list once and keeps its admission
@@ -208,13 +305,26 @@
     // A transport failure, and a body that fails to read or parse after good
     // headers, both end as null: done always runs, so a caller that waits on it
     // (a send needing the token) clears its busy state and keeps the draft.
+    // The outcome of a failed read stays in cexecWhy (the HTTP status and the
+    // server's short reason, or "network error"), so a send that needed the
+    // token can tell the user why instead of only that the dashboard is unreachable.
+    cexecWhy = "";
     fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      return r.ok ? r.json() : null;
-    }).catch(function () { return null; }).then(function (list) {
-      if (!list || !Array.isArray(list.cards)) { done(null); return; }
+      if (r.ok) return r.json();
+      return r.text().then(function (s) { return s; }, function () { return ""; }).then(function (s) {
+        cexecWhy = r.status + (s && s.trim() ? ": " + s.trim().slice(0, 120) : "");
+        return null;
+      });
+    }, function () { cexecWhy = wsT("js.cexec.neterr"); return null; }).catch(function () { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); return null; }).then(function (list) {
+      if (!list || !Array.isArray(list.cards)) { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); done(null); return; }
       if (typeof list.token === "string" && list.token) cexecToken = list.token;
       done(list);
     });
+  }
+  // cexecUnreachable is the warning for a send the dashboard could not take,
+  // with the recorded cause when one is known.
+  function cexecUnreachable(why) {
+    return why ? wsT("js.post.unreachable.why", why) : wsT("js.post.unreachable");
   }
   // cexecAttached reports whether the draft carries any composer state beyond
   // its plain text: images, answer chips, topic notes, board selections,
@@ -274,6 +384,7 @@
     } else {
       ctext.value = now.slice(text.length); grow();
     }
+    bangSync();
     saveDraft();
   }
   // cexecSend takes the composer's raw text when its very first character is
@@ -334,7 +445,7 @@
         cexecBusy = false;
         // Outcome unknown: the draft and the recorded attempt stay, so sending
         // the same text again is a retry of the same submission.
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(wsT("js.cexec.neterr")));
       });
     }
     if (cexecToken || retry) post();
@@ -344,11 +455,80 @@
       if (!list) {
         cexecBusy = false;
         settled();
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(cexecWhy));
         return;
       }
       post();
     });
     return true;
   }
+  // Shell mode is only a look over the shipped grammar: the draft's first
+  // character is `!` (the same test cexecSend makes), shown by a data-bang flag
+  // on the composer (dark mono input, bash badge, Run button) and an amber `!`
+  // painted by the CSS highlight registry over the editor's own text, which
+  // adds no markup and no layout work. The flag and the paint are written only
+  // when the first character changes.
+  var bangOn = false, bangDesc = null, bangHint = null;
+  function bangMode() {
+    return !!(cexecEnabled && ctext && typeof ctext.value === "string" && ctext.value.charAt(0) === "!");
+  }
+  function bangPaint(on) {
+    if (!(window.CSS && CSS.highlights && typeof window.Highlight === "function")) return;
+    var node = null, editor = ctext.wsc && ctext.wsc.editor;
+    if (on && editor) {
+      node = editor.firstChild;
+      while (node && node.nodeType === 1 && node.firstChild && !node.hasAttribute("data-wsc-kind")) node = node.firstChild;
+      if (!node || node.nodeType !== 3 || node.nodeValue.charAt(0) !== "!") node = null;
+    }
+    if (!node) { CSS.highlights.delete("ws-bang"); return; }
+    var r = doc.createRange();
+    r.setStart(node, 0); r.setEnd(node, 1);
+    CSS.highlights.set("ws-bang", new Highlight(r));
+  }
+  function bangSync() {
+    if (!cexecEnabled || !ctext) return;
+    var on = bangMode();
+    if (on !== bangOn) {
+      bangOn = on;
+      composer.toggleAttribute("data-bang", on);
+      var csendBtn = $("csend");
+      if (on) {
+        bangDesc = ctext.getAttribute("aria-description") || "";
+        ctext.setAttribute("aria-description", wsT("js.cexec.bang.aria"));
+        if (csendBtn) { csendBtn.title = wsT("js.cexec.bang.send"); csendBtn.setAttribute("aria-label", wsT("js.cexec.bang.send")); }
+      } else {
+        if (bangDesc !== null) ctext.setAttribute("aria-description", bangDesc);
+        if (csendBtn) { csendBtn.title = wsT("composer.send"); csendBtn.setAttribute("aria-label", wsT("composer.send")); }
+      }
+    }
+    bangPaint(on);
+  }
+  function bangBuildHint() {
+    if (!cexecEnabled || bangHint) return;
+    bangHint = doc.createElement("div");
+    bangHint.className = "cbang";
+    var badge = doc.createElement("span");
+    badge.className = "cbang-badge";
+    badge.textContent = "bash";
+    var hint = doc.createElement("span");
+    hint.className = "cbang-hint";
+    function kbd(t) { var k = doc.createElement("kbd"); k.textContent = t; return k; }
+    function txt(t) { return doc.createTextNode(t); }
+    hint.appendChild(kbd("Enter")); hint.appendChild(txt(" " + wsT("js.cexec.bang.run") + " · "));
+    hint.appendChild(kbd("Esc")); hint.appendChild(txt(" / ")); hint.appendChild(kbd("⌫")); hint.appendChild(txt(" " + wsT("js.cexec.bang.leave")));
+    bangHint.appendChild(badge); bangHint.appendChild(hint);
+    var foot = composer.querySelector(".cfoot");
+    composer.insertBefore(bangHint, foot);
+  }
+  // bangLeave is the first Esc: it removes the leading `!` through the editing
+  // command (undo keeps it, an input event follows) and keeps the caret on the
+  // same text.
+  function bangLeave() {
+    var caret = ctext.selectionEnd;
+    editText(0, 1, "");
+    var at = Math.max(0, caret - 1);
+    ctext.setSelectionRange(at, at);
+  }
+  bangBuildHint();
+  if (cexecEnabled && ctext) ctext.addEventListener("input", bangSync);
   cexecRestore();

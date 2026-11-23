@@ -543,7 +543,7 @@
   "js.term.pop.worktree": "工作階段工作樹",
   "js.term.state.exited": "已結束",
   "js.term.state.wait": "正在重新連線…",
-  "js.hint.enter": "傳送訊息給此工作階段。Enter 傳送，Shift+Enter 換行。白板回答與貼上的圖片會一併附上。",
+  "js.hint.enter": "傳送訊息給此工作階段。Enter 傳送，Shift+Enter 換行。白板回答與貼上的圖片會一併附上。以 ! 開頭則為 bash 指令。",
   "js.hint.mod": "傳送訊息給此工作階段。Ctrl/Cmd+Enter 傳送，Enter 換行。白板回答與貼上的圖片會一併附上。",
   "js.img.big": "{0} 大於 10 MiB",
   "js.img.max": "一則訊息最多包含 {0} 張圖片",
@@ -584,6 +584,9 @@
   "js.pins.width": "拖曳調整寬度，按兩下重設",
   "js.post.nobrowser": "此瀏覽器無法傳送",
   "js.post.unreachable": "無法連線至儀表板",
+  "js.post.unreachable.why": "無法連線至儀表板（{0}）",
+  "js.cexec.neterr": "網路錯誤",
+  "js.cexec.badreply": "非預期的回應",
   "js.post.timeout": "沒有回應；重試前請在側欄確認工作階段是否已建立",
   "js.preview.failed": "無法載入預覽",
   "js.preview.gone": "此檔案已無法使用。請從看板重新開啟。",
@@ -3412,5 +3415,13 @@
   "js.xhud.toast.user": "已停止 {0}",
   "js.xhud.toast.ended": "{0} 已經結束",
   "js.xhud.toast.stop.fail": "無法停止 {0}：{1}",
-  "js.xhud.toast.view": "檢視"
+  "js.xhud.toast.view": "檢視",
+  "js.cexec.bang.aria": "Shell 指令模式：此訊息將作為 bash 指令執行",
+  "js.cexec.bang.run": "執行",
+  "js.cexec.bang.leave": "刪除 ! 即為訊息",
+  "js.cexec.bang.send": "執行 (Enter)",
+  "js.cexec.clear": "清除",
+  "js.cexec.expand": "展開",
+  "js.cexec.collapse": "摺疊",
+  "js.cexec.runs": "執行 {0}"
 }

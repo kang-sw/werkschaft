@@ -108,7 +108,7 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       // a reload keeps the cards by id (the daemon still knows them)
       await page.reload();
       view = await sessionFrame(page);
-      await view.waitForSelector('.d-cexec .cexec');
+      await view.waitForSelector('.d-cexec .cexec', { state: 'attached' });
       assert.ok(await view.locator('.d-cexec .cexec').count() >= 5, 'cards restored after reload');
 
       // a leading space or a prompt is an ordinary message, not a command
@@ -222,7 +222,7 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await page.unroute('**/composer-exec');
       await page.reload();
       view = await sessionFrame(page);
-      await view.waitForSelector('.d-cexec .cexec');
+      await view.waitForSelector('.d-cexec .cexec', { state: 'attached' });
 
       // the first private list read answers with good headers but a body that is
       // cut short: the send that needed its token ends (busy clears, the draft is

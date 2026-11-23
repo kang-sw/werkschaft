@@ -543,7 +543,7 @@
   "js.term.pop.worktree": "会话工作树",
   "js.term.state.exited": "已退出",
   "js.term.state.wait": "正在重新连接…",
-  "js.hint.enter": "向此会话发送消息。Enter 发送，Shift+Enter 换行。白板回答和粘贴的图片会一并附上。",
+  "js.hint.enter": "向此会话发送消息。Enter 发送，Shift+Enter 换行。白板回答和粘贴的图片会一并附上。以 ! 开头则为 bash 命令。",
   "js.hint.mod": "向此会话发送消息。Ctrl/Cmd+Enter 发送，Enter 换行。白板回答和粘贴的图片会一并附上。",
   "js.img.big": "{0} 大于 10 MiB",
   "js.img.max": "一条消息最多包含 {0} 张图片",
@@ -584,6 +584,9 @@
   "js.pins.width": "拖动调整宽度，双击重置",
   "js.post.nobrowser": "此浏览器无法发送",
   "js.post.unreachable": "无法连接到仪表盘",
+  "js.post.unreachable.why": "无法连接仪表板（{0}）",
+  "js.cexec.neterr": "网络错误",
+  "js.cexec.badreply": "意外的响应",
   "js.post.timeout": "没有响应；重试前请在侧栏确认会话是否已创建",
   "js.preview.failed": "无法加载预览",
   "js.preview.gone": "此文件已不可用。请从看板重新打开。",
@@ -3412,5 +3415,13 @@
   "js.xhud.toast.user": "已停止 {0}",
   "js.xhud.toast.ended": "{0} 已经结束",
   "js.xhud.toast.stop.fail": "无法停止 {0}：{1}",
-  "js.xhud.toast.view": "查看"
+  "js.xhud.toast.view": "查看",
+  "js.cexec.bang.aria": "Shell 命令模式：此消息将作为 bash 命令运行",
+  "js.cexec.bang.run": "运行",
+  "js.cexec.bang.leave": "删除 ! 即为消息",
+  "js.cexec.bang.send": "运行 (Enter)",
+  "js.cexec.clear": "清除",
+  "js.cexec.expand": "展开",
+  "js.cexec.collapse": "折叠",
+  "js.cexec.runs": "运行 {0}"
 }

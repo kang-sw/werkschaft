@@ -215,7 +215,7 @@
         finish();
         // Outcome unknown: the recorded attempt stays, so the next click on this
         // revision is a retry of the same submission.
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(wsT("js.cexec.neterr")));
       });
     }
     if (cexecToken || retry) post();
@@ -223,7 +223,7 @@
       if (!list) {
         finish();
         settled();
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(cexecWhy));
         return;
       }
       post();
