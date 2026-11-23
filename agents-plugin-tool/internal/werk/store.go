@@ -24,7 +24,8 @@ import (
 //
 // Storage type 1 of ai-docs/manuals/performance.md (an append-only log, read
 // back by replay): one JSONL file per session, opened once and held, one
-// write() per change, never read again after startup. The first line is a
+// write() per change. Reads occur at startup and when compacting the raw
+// history at an idle boundary. The first line is a
 // header, so a segment is self-describing. Each later line is a transcript
 // item, a complete model response, or recovery evidence for a mutation. Recovery discards a torn tail so it
 // cannot mistake part of a response for committed model output.
@@ -94,6 +95,7 @@ type Store struct {
 	fileIntents map[string]wsfs.FileIntent
 	execJobs    map[string]string
 	turnJournal turnJournal
+	checkpoint  *checkpointLine
 }
 
 func segmentPath(dir, session string) string {
@@ -135,7 +137,7 @@ func openStore(dir, session, path string, now func() int64) (*Store, []json.RawM
 	s := &Store{dir: dir, session: session, path: path, now: now}
 	s.fileIntents = make(map[string]wsfs.FileIntent)
 	s.execJobs = make(map[string]string)
-	items, keep, err := s.readSegment()
+	items, keep, err := s.readSegment(nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,7 +167,7 @@ func openStore(dir, session, path string, now func() int64) (*Store, []json.RawM
 
 // readSegment returns the items of the file at path and the length of its
 // whole-line prefix (-1 when the file does not exist).
-func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
+func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, error) {
 	path, session := s.path, s.session
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -206,6 +208,10 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 				End      *durableEnd     `json:"end"`
 				Item     json.RawMessage `json:"item"`
 				Response *Response       `json:"response"`
+				Summary  string          `json:"summary"`
+				ID       string          `json:"id"`
+				At       int64           `json:"at"`
+				Sequence uint64          `json:"sequence"`
 			}
 			if err := json.Unmarshal(line, &l); err != nil {
 				break
@@ -213,8 +219,12 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 			switch {
 			case l.K == "item" && len(l.Item) > 0:
 				items = append(items, l.Item)
+				archive.observe(l.Item)
 			case l.K == "response" && l.Response != nil:
 				items = append(items, l.Response.Output...)
+				for _, item := range l.Response.Output {
+					archive.observe(item)
+				}
 				if s.turnJournal.id != "" && s.turnJournal.end == nil {
 					s.turnJournal.response = l.Response
 					s.turnJournal.responseEnd = len(items)
@@ -223,21 +233,32 @@ func (s *Store) readSegment() ([]json.RawMessage, int64, error) {
 				if s.turnJournal.id != "" && s.turnJournal.end == nil {
 					return nil, 0, errors.New("a durable turn started before its predecessor finished")
 				}
-				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items)}
+				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items), user: l.User}
 				clear(s.fileIntents)
 				clear(s.execJobs)
 				items = append(items, l.User)
+				archive.observe(l.User)
 			case l.K == "turn_steer" && l.SteerID != "" && len(l.User) > 0:
 				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {
 					return nil, 0, errors.New("the durable steer has no active turn")
 				}
 				s.turnJournal.steers = append(s.turnJournal.steers, turnSteerRecord{K: l.K, TurnID: l.TurnID, ID: l.SteerID, User: l.User})
 				items = append(items, l.User)
+				archive.observe(l.User)
 			case l.K == "turn_end" && l.TurnID != "" && l.End != nil:
 				if s.turnJournal.id != l.TurnID || s.turnJournal.end != nil {
 					return nil, 0, errors.New("the durable turn result has no active turn")
 				}
 				s.turnJournal.end = l.End
+			case l.K == "checkpoint":
+				if !ValidSessionID(l.ID) || l.Summary == "" || l.Sequence != s.checkpoint.next() || (s.turnJournal.id != "" && s.turnJournal.end == nil) {
+					return nil, 0, errors.New("invalid conversation checkpoint")
+				}
+				s.checkpoint = &checkpointLine{K: l.K, ID: l.ID, At: l.At, Sequence: l.Sequence, Summary: l.Summary}
+				items = []json.RawMessage{userItem(l.Summary)}
+				s.turnJournal.selectCheckpoint()
+				clear(s.fileIntents)
+				clear(s.execJobs)
 			case l.K == "file_intent" && l.CallID != "" && l.Intent != nil:
 				s.fileIntents[l.CallID] = *l.Intent
 			case l.K == "exec_job" && l.CallID != "" && l.JobID != "":
@@ -289,10 +310,24 @@ func (s *Store) appendBarrier(record any) error {
 	if s.f == nil {
 		return errors.New("the conversation store is closed")
 	}
-	if err := s.writeLocked(record); err != nil {
-		return err
+	offset := int64(-1)
+	if _, checkpoint := record.(*checkpointLine); checkpoint {
+		var err error
+		offset, err = s.f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
 	}
-	return s.f.Sync()
+	err := s.writeLocked(record)
+	if err == nil {
+		err = s.f.Sync()
+	}
+	if err != nil && offset >= 0 {
+		// Keep the preceding model input selected on replay when a failed
+		// append or sync can be rolled back. The writer then stops.
+		err = errors.Join(err, s.f.Truncate(offset), s.f.Sync())
+	}
+	return err
 }
 
 // Rotate starts a new segment holding items as its snapshot and deletes the

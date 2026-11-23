@@ -86,6 +86,13 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 		return m.batches.addCall(m.group(), l.Call, l.Name, l.Args, now)
 	case werk.LineToolEnd:
 		return m.batches.endCall(l.Call, l.Failed, now)
+	case werk.LineCheckpoint:
+		if l.Replayed {
+			return nil
+		}
+		return []Event{{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}, compactCommandDone: true}}
+	case werk.LineCompactFailed:
+		return []Event{{CommandError: "compaction: " + l.Error}}
 	case werk.LineUsage:
 		return m.usage(l)
 	case werk.LineRetry:

@@ -9,11 +9,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/werk"
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 // werkLoop runs a session in the daemon and delivers typed events to the
@@ -40,6 +43,7 @@ func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, er
 	if err != nil {
 		return nil, err
 	}
+	spec.modelContextWindow = b.contextWindow
 	return startWerkLoop(ctx, spec, endpoint)
 }
 
@@ -102,14 +106,20 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		cmds: make(chan werk.Command, 32), events: make(chan Event, 256),
 		mapper: newWerkMapper(spec.SessionID),
 	}
-	a, err := werk.New(werk.Config{
+	cfg := werk.Config{
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
 		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
 		Endpoint: endpoint, RecoverExec: spec.recoverExec,
-		WS:   &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
-		Emit: p.emit,
-	})
+		WS:             &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
+		SummarySecrets: []string{spec.sessionSecret, session.Token},
+		Emit:           p.emit,
+	}
+	if spec.compactState != nil {
+		cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
+	}
+	cfg.ContextWindow = spec.modelContextWindow
+	a, err := werk.New(cfg)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -172,7 +182,15 @@ func (p *werkLoop) run(a *werk.Agent) {
 
 func (p *werkLoop) emit(line werk.Line) {
 	if p.audit != nil {
-		if raw, err := json.Marshal(line); err == nil {
+		if line.T == werk.LineCheckpoint {
+			id := wsaudit.SourceID{Source: "checkpoint-" + p.agent.Session(), Seq: line.Checkpoint}
+			ev := p.audit.adapter.(*werkAudit).checkpoint(line)
+			if err := p.audit.commitCheckpoint(p.ctx, id, ev); err != nil {
+				p.deliver(Event{Notice: "save the committed compaction audit cut: " + err.Error()})
+				p.cancel()
+				return
+			}
+		} else if raw, err := json.Marshal(line); err == nil {
 			p.audit.line(raw, 0, false)
 		}
 	}
@@ -222,6 +240,13 @@ func (p *werkLoop) Send(text string) error {
 	return p.command(werk.Command{Type: werk.CmdUser, Text: text})
 }
 
+func (p *werkLoop) RunCommand(cmd wsinbox.Command) error {
+	if cmd.Name != "compact" {
+		return ErrUnsupported
+	}
+	return p.command(werk.Command{Type: werk.CmdCompact})
+}
+
 func (p *werkLoop) Interrupt() error {
 	return p.command(werk.Command{Type: werk.CmdInterrupt})
 }
@@ -257,5 +282,5 @@ func (p *werkLoop) Close() error {
 }
 
 func (p *werkLoop) processControls() processControls {
-	return processControls{Process: p, steer: p, reports: p}
+	return processControls{Process: p, steer: p, reports: p, commands: p}
 }

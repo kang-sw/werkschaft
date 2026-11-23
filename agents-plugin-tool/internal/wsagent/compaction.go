@@ -424,6 +424,9 @@ func (c *conv) compactIdle() bool {
 		return true
 	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			return c.compactDurableContinue()
+		}
 		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
@@ -490,6 +493,10 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		}
 		return
 	}
+	// A durable worker has finished and journaled this turn before the
+	// checkpoint. Automatically compact its next input without extending
+	// the finished turn. An explicit resume request still opens new input.
+	resume = resume && !c.r.durableProcess(c.rec.Backend)
 	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
 	c.publishCompaction(false)
 }
@@ -636,7 +643,8 @@ func (c *conv) stageCompactionNudge(hard float64) {
 		c.compactNudge = compactionNudge{}
 		return
 	}
-	standalone := c.compactUnsupported() == ""
+	supported := c.compactUnsupported() == ""
+	standalone := supported && !c.r.durableProcess(c.rec.Backend)
 	usage := fmt.Sprintf("Context usage is %.0f tokens (%.0f%%); ", c.compactTokens, c.compactTokens/c.compactWindow*100)
 	if c.compactAdvised {
 		usage += fmt.Sprintf("compaction reminder %d/3 (%.0f tokens, hard point %.0f tokens). ", level-1, point, hard)
@@ -650,7 +658,7 @@ func (c *conv) stageCompactionNudge(hard float64) {
 			usage += fmt.Sprintf("The hard point is %.0f tokens (%.0f%%). ", hard, hard/c.compactWindow*100)
 		}
 		action = "At a safe boundary, call ws-compact with the carry-forward details requested by the tool.\n" + piCompactPreparation
-	case standalone:
+	case supported:
 		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
 	}
 	c.compactNudge = compactionNudge{usage + action, level, standalone}

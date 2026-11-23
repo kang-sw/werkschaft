@@ -68,7 +68,23 @@ func (b WerkBackend) Choices(ctx context.Context) ([]ModelChoice, []string, erro
 		return nil, werkEfforts, fmt.Errorf("list OpenRouter models: %w", err)
 	}
 	models, err := parseWerkModels(raw)
+	if err == nil && b.modelWindows != nil {
+		windows := make(map[string]int64, len(models))
+		for _, model := range models {
+			windows[model.ID] = model.contextWindow
+		}
+		b.modelWindows.Store(&windows)
+	}
 	return models, werkEfforts, err
+}
+
+func (b WerkBackend) contextWindow(model string) int64 {
+	if b.modelWindows != nil {
+		if windows := b.modelWindows.Load(); windows != nil {
+			return (*windows)[model]
+		}
+	}
+	return 0
 }
 
 // parseWerkModels reads an OpenRouter model list answer.
@@ -76,6 +92,7 @@ func parseWerkModels(raw []byte) ([]ModelChoice, error) {
 	var list struct {
 		Data []struct {
 			ID                  string   `json:"id"`
+			ContextWindow       int64    `json:"context_length"`
 			SupportedParameters []string `json:"supported_parameters"`
 		} `json:"data"`
 	}
@@ -89,7 +106,7 @@ func parseWerkModels(raw []byte) ([]ModelChoice, error) {
 		if id == "" || seen[id] {
 			continue
 		}
-		choice := ModelChoice{ID: id}
+		choice := ModelChoice{ID: id, contextWindow: max(m.ContextWindow, 0)}
 		if len(m.SupportedParameters) > 0 {
 			if !slices.Contains(m.SupportedParameters, "tools") {
 				continue

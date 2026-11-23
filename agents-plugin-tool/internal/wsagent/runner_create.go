@@ -439,6 +439,8 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 		}
 		start = durable.startLoop
 		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
+		spec.compactState = c.r.compactionState(c.rec.ReplyID)
+		spec.sessionSecret = c.rec.WSKey
 	}
 	proc, err := start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)

@@ -68,7 +68,14 @@ type Config struct {
 	Endpoint     Responder
 	WS           WSTools
 	RecoverExec  func(context.Context, string) (string, error)
-	Out          io.Writer
+	// CompactionState snapshots the current child and exec records. A zero
+	// time asks for all finished children.
+	CompactionState func(since time.Time) CompactionState
+	// SummarySecrets adds session-specific credentials to the usual summary
+	// redaction.
+	SummarySecrets []string
+	ContextWindow  func(model string) int64
+	Out            io.Writer
 	// Emit receives typed events for a daemon host. When provided it replaces
 	// the legacy writer; calls are serialized even during parallel tool reads.
 	Emit func(Line)
@@ -368,6 +375,9 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 	a.mu.Lock()
 	init := Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed}
 	a.mu.Unlock()
+	if checkpoint := a.store.checkpoint; checkpoint != nil {
+		a.out.line(checkpoint.event(true))
+	}
 	a.out.line(init)
 	if a.repaired > 0 {
 		a.out.line(Line{T: LineNotice, Text: fmt.Sprintf("%d tool call(s) of the earlier process had no result; they were answered as interrupted and not run again", a.repaired)})
@@ -395,6 +405,10 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 				}
 				result <- err
 			}()
+			if cmd.Type == CmdCompact {
+				a.reportCompaction(tctx)
+				return
+			}
 			if cmd.TurnID != "" {
 				err = a.runDurableTurn(tctx, ctx, cmd)
 				return
@@ -438,7 +452,7 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 				return nil
 			}
 			switch c.Type {
-			case CmdUser:
+			case CmdUser, CmdCompact:
 				if running {
 					queued = append(queued, c)
 				} else {
@@ -628,7 +642,7 @@ func (a *Agent) report(turn int, resp *Response) {
 	a.out.line(Line{
 		T: LineUsage, Turn: turn, Response: resp.ID,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
-		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens,
+		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens, Window: resp.window,
 	})
 	for _, raw := range resp.Output {
 		var it responseItem
@@ -702,6 +716,9 @@ func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
 		a.mu.Unlock()
 		resp, err := a.cfg.Endpoint.Respond(ctx, req, a.streamHandler(turn))
 		if err == nil {
+			if resp != nil && a.cfg.ContextWindow != nil {
+				resp.window = a.cfg.ContextWindow(req.Model)
+			}
 			return resp, nil
 		}
 		if ctx.Err() != nil {

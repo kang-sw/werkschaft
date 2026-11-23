@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync/atomic"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -29,6 +30,9 @@ type WerkBackend struct {
 	// and its client; a test sets them, a daemon never does.
 	modelsURL  string
 	httpClient *http.Client
+	// The existing picker lookup populates this cache. Model requests
+	// read its last successful publication from memory.
+	modelWindows *atomic.Pointer[map[string]int64]
 }
 
 // werkWorkerText is the instruction text of the harness's worker profile.
@@ -41,6 +45,7 @@ func init() {
 }
 
 func (b WerkBackend) registration() (string, BackendRegistration) {
+	b.modelWindows = new(atomic.Pointer[map[string]int64])
 	worker := agentWorkerBuiltinProfile(BackendWerk, nil)
 	worker.Definition.WSTools = append(slices.Clone(worker.Definition.WSTools), "fs.edit", "fs.write")
 	return BackendWerk, BackendRegistration{
@@ -54,7 +59,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 		// tools spelled exec_shell, agent_spawn (werk.ModelToolName).
 		ToolNameScheme: ToolNameSchemeSanitize,
 		Lifecycle: LifecyclePolicy{
-			// The common ws/compact lifecycle is Phase 2.
+			// Durable compaction waits for a quiescent boundary.
 			NoWorkerCompactionSteer: true,
 			ExecReadTools:           true,
 			FileWriteTools:          true,

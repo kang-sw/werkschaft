@@ -96,9 +96,12 @@ type StartSpec struct {
 	// RecoveredSteers are the unconsumed worker steers persisted before a
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
-	RecoveredSteers []string
-	recoverExec     func(context.Context, string) (string, error)
-	restoredUsage   *wslive.Usage
+	RecoveredSteers    []string
+	recoverExec        func(context.Context, string) (string, error)
+	restoredUsage      *wslive.Usage
+	compactState       func(time.Time) compactionState
+	sessionSecret      string
+	modelContextWindow func(string) int64
 
 	// reattachedPromptAfter is the holder sequence before the worker's
 	// outstanding daemon-sent prompt. Nil means there is no such prompt.
@@ -399,6 +402,8 @@ type Event struct {
 	// CommandError reports a refused command without settling the active
 	// run. It updates State.Error, not the conversation or typed failure.
 	CommandError string
+	// A compaction control can settle without a model turn of its own.
+	compactCommandDone bool
 	// BackgroundTasks is the harness's aggregate background task count. A
 	// whole-list update also replaces the optional split counts: nil means
 	// the stream could not classify every task. The aggregate still includes

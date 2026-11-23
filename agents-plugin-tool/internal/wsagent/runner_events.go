@@ -55,6 +55,10 @@ func (c *conv) handle(ev Event) {
 	case ev.Harness != nil:
 		c.harnessReported(*ev.Harness, quiet)
 	case ev.Live != nil:
+		if !quiet && ev.compactCommandDone {
+			c.compactCommand = false
+			c.stopCompactWatchdog()
+		}
 		if ev.Live.Kind == wslive.KindCommands {
 			// The list is offered without the commands of unsupported items
 			// and with the lead's playbook commands; the dashboard runs only

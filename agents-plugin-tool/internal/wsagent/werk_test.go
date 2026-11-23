@@ -92,6 +92,7 @@ func (b werkFixtureBackend) startLoop(ctx context.Context, spec StartSpec) (Proc
 	if spec.Holder != nil || len(spec.Env) != 0 {
 		return nil, errors.New("daemon loop got child launch context")
 	}
+	spec.modelContextWindow = b.contextWindow
 	return startWerkLoop(ctx, spec, b.model)
 }
 
@@ -166,7 +167,7 @@ func werkHarness(t *testing.T, model *werkModel) (*leadHarness, *werkFixture, *r
 	if reg.ProcessKind != ProcessDurable {
 		t.Fatal("the production registration did not select the daemon loop")
 	}
-	reg.Backend = werkFixtureBackend{model: model}
+	reg.Backend = werkFixtureBackend{WerkBackend: reg.Backend.(WerkBackend), model: model}
 	h.opts.Backends[BackendWerk] = reg
 	h.execJobs = newFakeExecJobs()
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "vendor/some-model", BackendWerk, "medium"); err != nil {

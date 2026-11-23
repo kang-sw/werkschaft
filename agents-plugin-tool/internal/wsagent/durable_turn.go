@@ -57,7 +57,7 @@ type durableTurnProcess interface {
 // admitDurableTurn commits the prepared model input with the inbox coverage.
 // A failed submit leaves that same input available to a successor. It runs
 // under admitInput, which orders the commit and submit against release.
-func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, startedAt int64, mail, reports bool) (bool, error) {
+func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, startedAt int64, mail, reports, settleHeld bool) (bool, error) {
 	input := &durableTurnInput{ID: newReportID(), Text: text}
 	stage := func(rec *Record) {
 		rec.DurableTurn, rec.DurableInboxClaims = input, nil
@@ -73,7 +73,7 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 		rec.HeldTurn, rec.DurableHeldReportID = nil, ""
 	}
 	var err error
-	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && reports && !c.ownsLiveExec() {
+	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && (reports || settleHeld) && !c.ownsLiveExec() {
 		err = c.publishWith(*c.heldRes, true, stage)
 	} else {
 		err = c.commitDurableRecord(stage, func() {
@@ -84,6 +84,45 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 		return false, err
 	}
 	return true, c.submitDurableTurn(input)
+}
+
+// compactDurableContinue admits a requested, separate continuation through
+// the same journal as every other prompt. Existing user input stays queued.
+func (c *conv) compactDurableContinue() bool {
+	c.compactResume = false
+	if c.heldRes != nil && c.holdsReport() {
+		c.compactResume = true
+		return false
+	}
+	if err := c.ackInboxClaims(); err != nil {
+		c.durableTurnError("acknowledge queued input", err)
+		return false
+	}
+	text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
+	start := c.r.opts.Now()
+	var committed bool
+	err := c.sendStandalonePrompt(true, func() error {
+		var err error
+		committed, err = c.admitDurableTurn(text, c.rec.Queued, c.rec.TurnMark, start.UnixMilli(), false, false, true)
+		return err
+	})
+	if checkout, ok := releasedInput(err); ok {
+		c.dropReleasedInput("continuation after compaction", checkout)
+		return false
+	}
+	if committed {
+		c.compactNote = ""
+		c.compactResumeInternal = false
+	}
+	if err != nil {
+		c.durableTurnError("continue after compaction", err)
+		if committed {
+			c.retryDurableTurn()
+		}
+		return committed
+	}
+	c.beginTurn(false)
+	return true
 }
 
 func (c *conv) submitDurableTurn(input *durableTurnInput) error {

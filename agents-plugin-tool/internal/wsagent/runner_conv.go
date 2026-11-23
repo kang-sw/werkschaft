@@ -838,6 +838,9 @@ func (c *conv) loop() {
 		case <-c.mailC:
 			c.mailChanged()
 		case <-c.spawnC:
+			if c.compactResume && c.r.durableProcess(c.rec.Backend) {
+				c.kick()
+			}
 			c.spawnDirty = true
 			c.live.writeSnapshot()
 			if c.live.currentSlot() == nil {
@@ -1917,7 +1920,7 @@ func (c *conv) kickInput() {
 			if ordinary {
 				text = c.turnInput(text)
 			}
-			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0)
+			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false)
 			return
 		}
 		c.setStatus(func() { c.turn, c.lastErr = true, "" })

@@ -44,6 +44,8 @@ const (
 	// CmdSet changes Model and, when Effort is present, the reasoning effort
 	// for the next request.
 	CmdSet = "set"
+	// CmdCompact selects a new model input at the next quiescent boundary.
+	CmdCompact = "compact"
 )
 
 // Steer is an admitted mid-turn message. ID is stable across daemon openings.
@@ -65,20 +67,22 @@ type Command struct {
 
 // Line types, process to daemon.
 const (
-	LineInit      = "init"
-	LineUser      = "user"
-	LineTurnStart = "turn_start"
-	LineReply     = "reply"
-	LineReasoning = "reasoning"
-	LineToolStart = "tool_start"
-	LineToolEnd   = "tool_end"
-	LineUsage     = "usage"
-	LineRetry     = "retry"
-	LineTurnEnd   = "turn_end"
-	LineSteerAck  = "steer_ack"
-	LineUserTaken = "user_taken"
-	LineNotice    = "notice"
-	LineStatus    = "status"
+	LineInit          = "init"
+	LineUser          = "user"
+	LineTurnStart     = "turn_start"
+	LineReply         = "reply"
+	LineReasoning     = "reasoning"
+	LineToolStart     = "tool_start"
+	LineToolEnd       = "tool_end"
+	LineUsage         = "usage"
+	LineRetry         = "retry"
+	LineTurnEnd       = "turn_end"
+	LineSteerAck      = "steer_ack"
+	LineUserTaken     = "user_taken"
+	LineNotice        = "notice"
+	LineStatus        = "status"
+	LineCheckpoint    = "checkpoint"
+	LineCompactFailed = "compact_failed"
 )
 
 // Turn end reasons.
@@ -93,6 +97,10 @@ const (
 // process (ToolOutputBytes for a tool result).
 type Line struct {
 	T string `json:"t"`
+	// Replayed distinguishes a recovered checkpoint from a new operation.
+	Replayed bool `json:"-"`
+	// Checkpoint is the ordinal of a committed compaction.
+	Checkpoint uint64 `json:"checkpoint,omitempty"`
 	// At is the line's wall time, epoch milliseconds.
 	At int64 `json:"at,omitempty"`
 

@@ -61,6 +61,7 @@ type Response struct {
 	// Output are the response's items in order, as received.
 	Output []json.RawMessage `json:"output"`
 	Usage  Usage             `json:"usage"`
+	window int64
 }
 
 // StreamHandler receives the response's streamed text. Both callbacks are

@@ -52,7 +52,8 @@ type ModelChoice struct {
 	ID string `json:"id"`
 	// Thinking reports whether the model takes a reasoning effort; absent
 	// when the harness does not say.
-	Thinking *bool `json:"thinking,omitempty"`
+	Thinking      *bool `json:"thinking,omitempty"`
+	contextWindow int64
 }
 
 // ChoiceLister is a Backend that can tell what it offers: the executable

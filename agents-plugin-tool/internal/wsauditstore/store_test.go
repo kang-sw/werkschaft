@@ -315,6 +315,62 @@ func TestStoreFailedWriteIsLossNeverLateAppend(t *testing.T) {
 	}
 }
 
+func TestCheckpointRetriesAndKeepsWatermarkPastEviction(t *testing.T) {
+	root := t.TempDir()
+	opts := func(o *Options) { o.Limits = smallLimits(64 * mib) }
+	ctx := context.Background()
+	id := wsaudit.SourceID{Source: "checkpoint-worker", Seq: 1}
+	cut := sourced("sess", 1, wsaudit.KindCompaction).Envelope
+	cut.ID = "checkpoint-one"
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	s, _ := openTest(t, root, opts)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		if bytes.Contains(b, []byte(`"id":"checkpoint-one"`)) {
+			return 0, errors.New("injected checkpoint write failure")
+		}
+		return orig(f, b)
+	}
+	if err := s.AppendCheckpoint(ctx, id, cut); err == nil {
+		t.Fatal("checkpoint hid its write failure")
+	}
+	if got := s.Recover("sess", id.Source).Boundary; got != 0 {
+		t.Fatalf("failed checkpoint advanced watermark to %d", got)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile = orig
+
+	s, _ = openTest(t, root, opts)
+	if err := s.AppendCheckpoint(ctx, id, cut); err != nil {
+		t.Fatal(err)
+	}
+	if got := wsaudit.FindModelSeenCut(events(t, s, "sess")); got.EventID != cut.ID {
+		t.Fatalf("checkpoint retry did not publish its cut: %+v", got)
+	}
+	fill(t, s, "sess", 1, 150)
+	if got := wsaudit.FindModelSeenCut(events(t, s, "sess")); got.HasCompaction {
+		t.Fatal("expected the oldest checkpoint to be evicted")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ = openTest(t, root, opts)
+	s.Preload("sess")
+	flush(t, s)
+	if got := s.Recover("sess", id.Source).Boundary; got != id.Seq {
+		t.Fatalf("eviction lost checkpoint watermark: %d", got)
+	}
+	if err := s.AppendCheckpoint(ctx, id, cut); err != nil {
+		t.Fatal(err)
+	}
+	if got := wsaudit.FindModelSeenCut(events(t, s, "sess")); got.HasCompaction {
+		t.Fatal("replay moved the evicted cut after newer model history")
+	}
+}
+
 // TestStoreFinalizedBoundaryRefusesLateRecords pins the per-source
 // finalized boundary: a record at or below it without a retained identity
 // is loss, even across a restart.

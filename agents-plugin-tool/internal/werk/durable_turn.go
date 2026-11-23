@@ -39,16 +39,25 @@ type turnJournal struct {
 	id          string
 	number      int
 	input       int
+	user        json.RawMessage
 	response    *Response
 	responseEnd int
 	end         *durableEnd
 	steers      []turnSteerRecord
 }
 
+// Preserve the completed identity and original input while dropping indexes
+// into the previous model input. An already-settled turn may still be
+// submitted again during reconciliation.
+func (j *turnJournal) selectCheckpoint() {
+	j.input, j.responseEnd = 0, 0
+	j.response, j.steers = nil, nil
+}
+
 func (a *Agent) beginDurableTurn(cmd Command) (resumed bool, err error) {
 	item := userItem(cmd.Text)
 	if a.journal.id == cmd.TurnID {
-		if !bytes.Equal(a.transcript[a.journal.input], item) {
+		if !bytes.Equal(a.journal.user, item) {
 			return false, errors.New("the durable turn input changed")
 		}
 		return true, nil
@@ -60,7 +69,7 @@ func (a *Agent) beginDurableTurn(cmd Command) (resumed bool, err error) {
 		return false, fmt.Errorf("save the durable turn input: %w", err)
 	}
 	a.mu.Lock()
-	a.journal = turnJournal{id: cmd.TurnID, number: a.journal.number + 1, input: len(a.transcript)}
+	a.journal = turnJournal{id: cmd.TurnID, number: a.journal.number + 1, input: len(a.transcript), user: item}
 	a.transcript = append(a.transcript, item)
 	a.mu.Unlock()
 	return false, nil
@@ -108,7 +117,9 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 		for _, steer := range journal.steers {
 			a.out.line(Line{T: LineUserTaken, TurnID: cmd.TurnID, ID: steer.ID})
 		}
-		a.restoreDurableReply(turn, a.transcript[journal.input+1:])
+		if journal.input+1 < len(a.transcript) {
+			a.restoreDurableReply(turn, a.transcript[journal.input+1:])
+		}
 	} else {
 		a.out.line(Line{T: LineUser, Turn: turn, Text: cmd.Text})
 	}

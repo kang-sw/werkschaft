@@ -14,10 +14,7 @@ import "github.com/kang-sw/devenv/internal/werk"
 // says what the worker's wiring would be and that no lead is registered yet.
 func WerkCatalog() *HarnessProfile {
 	p := &HarnessProfile{
-		// Compaction is Phase 2's ws/compact lifecycle: no command and no
-		// lifecycle signal exist yet, so the daemon plans none for a werk
-		// worker (LifecyclePolicy.NoWorkerCompactionSteer).
-		Compaction: CompactionProtocol{},
+		Compaction: CompactionProtocol{WorkerCommand: true, Lifecycle: true, PromptPersists: true},
 		Oldest:     werk.ProtocolVersion,
 		Newest:     werk.ProtocolVersion,
 		Entries: []CapabilityEntry{
@@ -25,8 +22,8 @@ func WerkCatalog() *HarnessProfile {
 				Source: "the harness has no skill mechanism; ws's text reaches a worker in its instruction file"},
 			{Item: ItemSkillInjection, Role: RoleWorker, Grade: GradeUnsupported,
 				Source: "no skills: the daemon includes the worker's playbook text in its composed instructions"},
-			{Item: ItemCompaction, Role: RoleWorker, Grade: GradeUnsupported,
-				Source: "the common ws/compact lifecycle is Phase 2; Phase 1 has no compaction command or completion signal"},
+			{Item: ItemCompaction, Role: RoleWorker, Grade: GradeNative,
+				Source: "ws/compact replaces model input with a committed worker summary at an idle boundary (werk.Agent)"},
 			{Item: ItemRewind, Role: RoleWorker, Grade: GradeUnsupported, Source: "no ws wiring"},
 			{Item: ItemToolRemoval, Role: RoleWorker, Grade: GradeNative, Values: []string{CatalogAnyValue},
 				Source: "the daemon lists its file tools according to the worker's bound authority"},
