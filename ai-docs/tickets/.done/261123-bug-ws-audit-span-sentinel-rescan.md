@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: f3a326e60f210bf7
 sage-review-completeness-reviewed: f3a326e60f210bf7
+completed: 2026-11-23
 ---
 
 # Audit span right-sentinel rescan, stored Raw cap flag, composer test waits (re-sweep repair)
@@ -184,3 +185,40 @@ of the production inspector with a fixture span response is
 
 Forward: `TestHostedExecStopEndsTheJobsProcessGroup` is a known w5090
 failure and was excluded from the full suite attempt.
+
+### Result (a980f6b1e) - 2026-11-23
+
+The scanner advances regexp threads in RE2 priority order one rune at a
+time. The two thread slices hold the current position and its successors,
+with storage bounded by the compiled program size. The sparse visited
+cache reuses failed lookahead across resumes. Assertions still see stored
+seam neighbours, and the callback ends the scan at the 10,001st visible
+span. The stored Raw counter displays `1/10000+` and the composer
+fixtures register running jobs before conversion (`b5c8892a3`).
+
+- The 1 MiB `(?:a|b?)+z` no-match regression allocated 3,718,504 bytes on
+  w5090. The wide-program and short-line probes allocated 4,828,608 and
+  232 bytes. Doubling pathological inputs took 1.91–2.05×. Growing the
+  dense line from 10,001 to 1,000,000 bytes took 1.10× at the response cap.
+  The Go differential suite also covers interleaved alternatives,
+  fallback priority, resumed matches, and seam context.
+- Passed on w5090: focused audit spans, `go test -race
+  ./internal/wsdashboard -run TestAudit -count=1`, `go build ./...`,
+  `GOOS=windows go vet ./internal/wsdashboard/`, and the full
+  `go test ./... -count=1` run with the three process tests below excluded.
+- All three audit-view and four settings Chromium checks passed on w5090
+  with generated package assets and cached Chromium. The prior attempt's
+  42 Node audit tests, three composer suite repeats, composer race stress,
+  and scratch 150 ms pause checks cover the same Raw and composer changes.
+  The stored Raw capture is `D:/Temp/sentinel-rescan/capped-other-raw.png`.
+- Independent R1 Lite had zero findings for the retry range.
+  Artifact: `d1ca4f10-01-findings.md`.
+
+Forward: w5090 reproduced process-group liveness failures at base
+`3cd749223` in `TestHostedExecStopEndsTheJobsProcessGroup`,
+`TestOneShotTimeoutKillsProcessTree`, and
+`TestDescendantsOfAHeldChildSurviveAManagerReplace`. The passing full run
+excluded those three. The same base reproduced
+`TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder` reading zero
+display lines in 8 of 180 trials. The collector test stayed enabled and
+passed in the final full run.
