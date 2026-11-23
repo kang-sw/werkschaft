@@ -196,9 +196,6 @@ func TestLeadSeedsCommandsFromLastSession(t *testing.T) {
 	if got := h.snapshot(h.lead(BackendClaude, LeadOptions{}).ID).Commands; !slices.Equal(got, launched) {
 		t.Fatalf("seeded from the newest session with a list: %+v", got)
 	}
-	if got := h.snapshot(h.lead(BackendPi, LeadOptions{}).ID).Commands; len(got) != 0 {
-		t.Fatalf("another harness seeds nothing: %+v", got)
-	}
 	other, err := h.runner.CreateLead(BackendClaude, t.TempDir(), LeadOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -366,132 +363,9 @@ func TestLeadStopKeepsTheQueueWithoutARestart(t *testing.T) {
 // pi leaves out; a held command goes as a prompt of its typed line at the
 // turn's end (never a steer or follow-up), and a held /compact as the
 // compact command.
-func TestPiLeadCommands(t *testing.T) {
-	h := newLeadHarness(t).start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "hello")
-	holder := h.holder(id)
-	eventually(t, "the command list ask at start", func() bool { return len(h.holders.inputs(holder, "get_commands")) == 1 })
-	h.holders.out(holder, `{"type":"response","command":"get_commands","success":true,"data":{"commands":[`+
-		`{"name":"review","description":"Review the diff","source":"extension","sourceInfo":{"path":"/x"}},`+
-		`{"name":"fix","source":"prompt"},`+
-		`{"name":"skill:audit","description":"Audit","source":"skill"}]}}`)
-	want := []wslive.SlashCommand{
-		{Name: "compact", Description: "Manually compact the session context", Source: "builtin"},
-		{Name: "review", Description: "Review the diff", Source: "extension"},
-		{Name: "fix", Source: "prompt"},
-		{Name: "skill:audit", Description: "Audit", Source: "skill"},
-	}
-	eventually(t, "the command list", func() bool { return sameJSON(t, h.snapshot(id).Commands, mustJSON(t, want)) })
-
-	h.holders.out(holder, `{"type":"agent_start"}`)
-	eventually(t, "the turn", func() bool { return h.state(id).Status == StatusRunning })
-	h.sendCommand(id, "review", "the tests")
-	h.sendCommand(id, "compact", "keep the names")
-	h.runner.conv(id).do(func() {})
-	prompts := func() []string { return h.holders.inputs(holder, "prompt") }
-	if got := prompts(); len(got) != 1 || h.state(id).Held != 2 {
-		t.Fatalf("held commands wait for the turn's end: prompts %q, state %+v", got, h.state(id))
-	}
-	h.holders.out(holder, `{"type":"agent_settled"}`)
-	eventually(t, "the command's prompt", func() bool { return len(prompts()) == 2 })
-	if got := prompts()[1]; !sameJSON(t, json.RawMessage(got), []byte(`{"type":"prompt","message":"/review the tests"}`)) {
-		t.Fatalf("command prompt = %s", got)
-	}
-	eventually(t, "the command list ask after the turn", func() bool { return len(h.holders.inputs(holder, "get_commands")) == 2 })
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
-	eventually(t, "the compact command", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	if got := h.holders.inputs(holder, "compact")[0]; !sameJSON(t, json.RawMessage(got), []byte(`{"type":"compact","customInstructions":"keep the names"}`)) {
-		t.Fatalf("compact line = %s", got)
-	}
-	h.holders.out(holder, `{"type":"response","command":"compact","success":true}`)
-	h.idle(id)
-	if n := len(h.holders.inputs(holder, "steer")) + len(h.holders.inputs(holder, "follow_up")); n != 0 {
-		t.Fatalf("a command is never steered: %d lines", n)
-	}
-	if got := ringTexts(h.ring(id), wslive.RingUser); !slices.Equal(got, []string{h.envelope("hello"), "/review the tests", "/compact keep the names"}) {
-		t.Fatalf("ring user entries = %q", got)
-	}
-}
-
-func TestPiLeadCommandAnswerKeepsActiveRunAndSteering(t *testing.T) {
-	for _, tc := range []struct{ name, response, commandErr string }{
-		{"handled prompt", `{"type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}`, ""},
-		{"refused prompt", `{"type":"response","command":"prompt","success":false,"error":"Agent is already processing"}`, "prompt refused: Agent is already processing"},
-		{"completed compact", `{"type":"response","command":"compact","success":true}`, ""},
-		{"refused compact", `{"type":"response","command":"compact","success":false,"error":"busy"}`, "compact refused: busy"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newLeadHarness(t).start()
-			id := h.lead(BackendPi, LeadOptions{}).ID
-			h.send(id, "hello")
-			holder := h.holder(id)
-			h.holders.out(holder, `{"type":"agent_start"}`)
-			h.send(id, "next owner message")
-			eventually(t, "the message held for the running turn", func() bool { return h.state(id).Held == 1 })
-			before := len(h.ring(id))
-			h.holders.out(holder, tc.response)
-			// Wait for the command's LineEnd before inspecting its error,
-			// without sending assistant output as a synchronization marker.
-			target := uint64(h.holders.records(holder))
-			c := h.runner.conv(id)
-			eventually(t, "the command answer to be applied", func() bool {
-				var applied bool
-				c.do(func() { applied = c.seq >= target })
-				return applied
-			})
-			if st := h.state(id); st.Status != StatusRunning || st.Error != tc.commandErr || st.Failure != nil || st.Held != 1 {
-				t.Fatalf("a command answer must preserve the run and held input while exposing only its command error: %+v", st)
-			}
-			if got := len(h.ring(id)); got != before {
-				t.Fatalf("a command answer must add no conversation entry: got %d, want %d", got, before)
-			}
-			if prompts := h.holders.inputs(holder, "prompt"); len(prompts) != 1 {
-				t.Fatalf("a command answer must not release held input: %q", prompts)
-			}
-			h.holders.out(holder,
-				`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"still running"}]}}`)
-			eventually(t, "continued output after the command answer", func() bool {
-				return slices.Contains(ringTexts(h.ring(id), wslive.RingReply), "still running")
-			})
-			h.steerHeld(id)
-			h.runner.InboxChanged(id)
-			eventually(t, "the message steered into the existing run", func() bool {
-				return len(h.holders.inputs(holder, "steer")) == 1
-			})
-			if prompts := h.holders.inputs(holder, "prompt"); len(prompts) != 1 {
-				t.Fatalf("an active run must not receive another plain prompt: %q", prompts)
-			}
-			h.holders.out(holder, `{"type":"agent_settled"}`)
-			h.idle(id)
-		})
-	}
-}
-
 // TestPiCommandsMapping pins the get_commands answer's mapping: pi's own
 // compact entry is kept rather than added twice, and a profile
 // conversation's settled turn asks for no command list.
-func TestPiCommandsMapping(t *testing.T) {
-	evs := piCommands(json.RawMessage(`{"commands":[{"name":"compact","description":"mine","source":"extension"}]}`))
-	if len(evs) != 1 || !sameJSON(t, evs[0].Live.Commands, []byte(`[{"name":"compact","description":"mine","source":"extension"}]`)) {
-		t.Fatalf("events = %+v", evs)
-	}
-	if evs := piCommands(json.RawMessage(`{"commands":[]}`)); len(evs) != 1 || len(evs[0].Live.Commands) != 1 || evs[0].Live.Commands[0] != piCompact {
-		t.Fatalf("an empty list still offers compact: %+v", evs)
-	}
-	replies := &recordedReplies{}
-	newPiMapper(piSpec(t, `{"backend":"pi"}`)).mapLine([]byte(`{"type":"agent_settled"}`), replies)
-	if len(replies.sent) != 1 || replies.sent[0]["type"] != "get_session_stats" {
-		t.Fatalf("a profile conversation asks for statistics only: %v", replies.sent)
-	}
-	replies = &recordedReplies{}
-	lead := newPiMapper(StartSpec{Root: "/work", Dir: "/sess", Profile: Profile{Backend: BackendPi, Lead: true}, Lead: &LeadSpec{}})
-	lead.mapLine([]byte(`{"type":"agent_settled"}`), replies)
-	if len(replies.sent) != 2 || replies.sent[1]["type"] != "get_commands" {
-		t.Fatalf("a lead's settled turn asks for its commands: %v", replies.sent)
-	}
-}
-
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(v)

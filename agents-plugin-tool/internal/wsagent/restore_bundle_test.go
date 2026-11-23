@@ -58,10 +58,15 @@ func (p *restoreProbe) snapshot() []restoreProbeCall {
 func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	probe := &restoreProbe{state: "stale"}
 	h := newLeadHarness(t)
+	// The fixture launches workers with stdio MCP. Keep their holders attached
+	// across restart so this test exercises restore delivery after replay.
+	reg := h.opts.Backends[BackendClaude]
+	reg.WorkerHTTPMCP = false
+	h.opts.Backends[BackendClaude] = reg
 	h.opts.RestoreBundle = probe.render
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	for tier, model := range map[string]string{"small": "prov/small", "medium": "prov/medium"} {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, PiTierHarness, "low"); err != nil {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, BackendClaude, "low"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,16 +76,19 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	h.holders.out(leadHolder, turnLines("sess-1", "lead-1", "lead done")...)
 	h.idle(leadID)
 	worker, err := h.runner.Spawn(SpawnSpec{
-		Profile: PiWorkerProfile, Root: h.root, Prompt: "worker work", Tier: "medium",
+		Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "worker work", Tier: "medium",
+		PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true,
 		Parent: &ParentRef{Kind: ParentLead, ReplyID: leadID},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	workerHolder := h.holder(worker.ID)
-	h.holders.out(workerHolder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+	eventually(t, "worker prompt before restart", func() bool { return len(h.userInputs(workerHolder)) == 1 })
+	h.holders.out(workerHolder, stateLine(HarnessRunning), initLine("worker-s1", "dontAsk"))
+	h.holders.out(workerHolder, recoveryWorkerReply("worker done")...)
 	h.idle(worker.ID)
-	if got := len(h.holders.inputs(workerHolder, "prompt")); got != 1 {
+	if got := len(h.userInputs(workerHolder)); got != 1 {
 		t.Fatalf("worker prompts before restart = %d, want 1", got)
 	}
 
@@ -97,16 +105,16 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	if got := len(h.userInputs(leadHolder)); got != 1 {
 		t.Fatalf("lead received restore before holder replay: %d inputs", got)
 	}
-	if got := len(h.holders.inputs(workerHolder, "prompt")); got != 1 {
+	if got := len(h.userInputs(workerHolder)); got != 1 {
 		t.Fatalf("worker received restore before holder replay: %d prompts", got)
 	}
 
 	release()
 	eventually(t, "one restart restore for lead and child", func() bool {
-		return len(probe.snapshot()) == 2 && len(h.userInputs(leadHolder)) == 2 && len(h.holders.inputs(workerHolder, "prompt")) == 2
+		return len(probe.snapshot()) == 2 && len(h.userInputs(leadHolder)) == 2 && len(h.userInputs(workerHolder)) == 2
 	})
 	leadRestore := h.userInputs(leadHolder)[1]
-	workerRestore := h.holders.inputs(workerHolder, "prompt")[1]
+	workerRestore := h.userInputs(workerHolder)[1]
 	for role, text := range map[string]string{"lead": leadRestore, "worker": workerRestore} {
 		if !strings.Contains(text, "restore[fresh-after-launch]") || !strings.Contains(text, "cause=restart") {
 			t.Fatalf("%s restart restore = %q", role, text)

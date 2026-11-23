@@ -309,7 +309,7 @@ func TestPermissionCodexLeadPerRun(t *testing.T) {
 		parentRef := ParentRef{Kind: ParentLead, ReplyID: parent.ID}
 		before := len(h.runner.List())
 		_, err := h.runner.Spawn(SpawnSpec{
-			Profile: PiWorkerProfile, Root: h.root, Prompt: "above parent", Parent: &parentRef,
+			Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "above parent", Parent: &parentRef,
 			PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true,
 		})
 		if err == nil || !strings.Contains(err.Error(), "above the parent's current level read-only") || len(h.runner.List()) != before {

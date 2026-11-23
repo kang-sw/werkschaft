@@ -85,14 +85,6 @@ func TestHostedLeadAmbientReachesEveryBackendSend(t *testing.T) {
 			inputs: (*leadHarness).userInputs,
 		},
 		{
-			name: BackendPi,
-			new: func(t *testing.T) (*leadHarness, func(string)) {
-				return newLeadHarness(t), func(string) {}
-			},
-			start:  func(h *leadHarness) { h.start() },
-			inputs: piPrompts,
-		},
-		{
 			name: BackendCodex,
 			new: func(t *testing.T) (*leadHarness, func(string)) {
 				h, fake := newCodexLeadHarness(t)

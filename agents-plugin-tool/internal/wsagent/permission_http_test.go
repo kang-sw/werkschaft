@@ -21,7 +21,7 @@ func TestPermissionHTTPSelection(t *testing.T) {
 			t.Fatalf("create user gate: %d %s", res.status, res.body)
 		}
 	}
-	for _, backend := range []string{BackendClaude, BackendPi} {
+	for _, backend := range []string{BackendClaude} {
 		body := map[string]any{"root": h.root, "harness": backend, "permission_level": "read-only"}
 		res := h.route(localBrowser, http.MethodPost, "/agents/leads/permission", body)
 		if res.status != 201 {
@@ -196,11 +196,12 @@ func TestPermissionHTTPRegistryAbsentAndLegacy(t *testing.T) {
 
 func TestPermissionHTTPWorkerControl(t *testing.T) {
 	h := permissionHarness(t)
-	// The builtin worker has ws tools; satisfy its capability attachment check
+	// The worker has ws tools; satisfy its capability attachment check
 	// with a command the fake holder never executes.
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/fake/ws-mcp"}, nil }
 	h.start()
-	st, err := h.runner.Create("pi-worker", h.root)
+	h.globalProfile("permission-worker", permissionWorkerProfile)
+	st, err := h.runner.Create("permission-worker", h.root)
 	if err != nil {
 		t.Fatal(err)
 	}

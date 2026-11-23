@@ -9,7 +9,6 @@ import (
 func TestLeadProfileForBuiltinFallbackMatchesRegistry(t *testing.T) {
 	registry := map[string]BackendRegistration{
 		BackendClaude: {LeadProfile: LeadProfileClaude},
-		BackendPi:     {LeadProfile: LeadProfilePi},
 		BackendAgy:    {LeadProfile: LeadProfileAgy},
 		BackendCodex:  {LeadProfile: LeadProfileCodex},
 		BackendWerk:   {LeadProfile: LeadProfileWerk},

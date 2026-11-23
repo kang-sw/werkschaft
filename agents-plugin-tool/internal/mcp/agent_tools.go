@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wswake"
 )
@@ -17,9 +18,17 @@ import (
 // agent.list and agent.tiers. A lead session's server calls the dashboard
 // daemon's runner (ServerOptions.Agents) with the lead as the caller; a
 // spawned agent's attached ws-mcp has no runner and forwards each call to
-// the runner's token route on its capability token, as pi.* does
-// (pi_forward.go). Harness availability is the runner's per-tier check,
-// so no knob or Pi probe gates these tools here.
+// the runner's token route on its capability token (worker_forward.go).
+// The runner checks harness availability for each tier.
+
+// AgentHost is the daemon runner interface shared by agent tools, live rows and legacy history reads.
+type AgentHost interface {
+	AgentRunner
+	Watch(func(wsagent.State)) (stop func())
+	Lineage(id string) (wsagent.State, error)
+	Children(parent wsagent.ParentRef) []wsagent.State
+	Transcript(id string) ([]wslive.RingRecord, error)
+}
 
 // AgentRunner is the daemon runner's agent.* side (*wsagent.Runner).
 type AgentRunner interface {
@@ -46,18 +55,18 @@ func isAgentTool(name string) bool {
 func (s *Server) agentListed() bool {
 	// A daemon-side render for a hosted lead has no runner of its own, but
 	// renders for the lead's daemon-hosted connection, which lists them.
-	return s.pi.agents != nil || s.piForwards() || s.connectionDescriptor().leadRender
+	return s.agents != nil || s.workerForwards() || s.connectionDescriptor().leadRender
 }
 
 func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool string, args map[string]any) response {
-	if s.piForwards() {
+	if s.workerForwards() {
 		return s.handleAgentForward(ctx, id, tool, args)
 	}
 	key, err := s.requireLeadSessionKey(tool, args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
-	if s.pi.agents == nil {
+	if s.agents == nil {
 		return toolTextResponse(id, "", fmt.Errorf("%s: spawned agents run in the dashboard daemon's agent runner, and this MCP server is not hosted by the dashboard daemon (it runs as a ws-mcp process of its own, after the daemon refused its connection); restart the session once the dashboard daemon accepts it", tool))
 	}
 	entry, found := s.lookupSession(key)
@@ -70,7 +79,7 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 	caller := wsagent.LeadCaller(s.mailboxReplyID(key), entry.root, s.playbookHarness(), s.sessionConfigOptions(key))
 	caller.VerifiedBackend = s.agentAdmissionBackend()
 	caller.PolicyKey = key
-	runner := s.pi.agents
+	runner := s.agents
 	switch tool {
 	case "agent.spawn":
 		req, err := agentSpawnRequest(args)
@@ -152,7 +161,7 @@ func (s *Server) handleAgentForward(ctx context.Context, id json.RawMessage, too
 			"system_prompt": req.SystemPrompt, "system_prompt_path": req.SystemPromptPath,
 			"cwd": req.Cwd, "worktree": req.Worktree, "label": req.Label}
 		var res wsagent.AgentSpawnResult
-		if err := s.piCall(ctx, tool, body, piForwardTimeout, &res); err != nil {
+		if err := s.workerCall(ctx, tool, body, workerForwardTimeout, &res); err != nil {
 			return agentFailure(id, tool, err)
 		}
 		if wantsJSON(args) {
@@ -165,7 +174,7 @@ func (s *Server) handleAgentForward(ctx context.Context, id json.RawMessage, too
 			return toolTextResponse(id, "", err)
 		}
 		var res wsagent.AgentInterruptResult
-		if err := s.piCall(ctx, tool, map[string]any{"address": address}, piForwardTimeout, &res); err != nil {
+		if err := s.workerCall(ctx, tool, map[string]any{"address": address}, workerForwardTimeout, &res); err != nil {
 			return agentFailure(id, tool, err)
 		}
 		if wantsJSON(args) {
@@ -176,13 +185,13 @@ func (s *Server) handleAgentForward(ctx context.Context, id json.RawMessage, too
 		var answer struct {
 			Agents []wsagent.AgentChild `json:"agents"`
 		}
-		if err := s.piCall(ctx, tool, map[string]any{}, piForwardTimeout, &answer); err != nil {
+		if err := s.workerCall(ctx, tool, map[string]any{}, workerForwardTimeout, &answer); err != nil {
 			return agentFailure(id, tool, err)
 		}
 		return agentListResponse(id, answer.Agents, args)
 	case "agent.tiers":
 		var res wsagent.AgentTiers
-		if err := s.piCall(ctx, tool, map[string]any{}, piForwardTimeout, &res); err != nil {
+		if err := s.workerCall(ctx, tool, map[string]any{}, workerForwardTimeout, &res); err != nil {
 			return agentFailure(id, tool, err)
 		}
 		if wantsJSON(args) {
@@ -479,7 +488,7 @@ func agentSpawnDescription(worker bool) string {
 }
 
 // agentWorkerTool is tool, an agent.* definition, as a spawned agent
-// reads it (piForwards).
+// reads it (workerForwards).
 func agentWorkerTool(tool map[string]any) map[string]any {
 	name, _ := tool["name"].(string)
 	clone := make(map[string]any, len(tool))
@@ -520,3 +529,12 @@ func agentWorkerTool(tool map[string]any) map[string]any {
 	clone["inputSchema"] = schemaClone
 	return clone
 }
+
+func orDash(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
+}
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

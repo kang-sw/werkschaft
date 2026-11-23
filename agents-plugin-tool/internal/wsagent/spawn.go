@@ -148,7 +148,7 @@ const labelRunes = 120
 // first send; a launch failure settles the turn as failed.
 func (r *Runner) Spawn(spec SpawnSpec) (State, error) {
 	if strings.TrimSpace(spec.Profile) == "" {
-		spec.Profile = PiWorkerProfile
+		return State{}, badRequest("profile is required")
 	}
 	if strings.TrimSpace(spec.Prompt) == "" {
 		return State{}, badRequest("prompt is empty")
@@ -194,30 +194,6 @@ func (r *Runner) Spawn(spec SpawnSpec) (State, error) {
 	return r.create(spec.Profile, spec.Root, nil, &spec)
 }
 
-// checkChildProfile enforces the parent's launched capability ceiling at
-// creation and every Pi process start. Lead parents are unrestricted.
-func (r *Runner) checkChildProfile(parent *ParentRef, name string, def Profile) error {
-	if !r.lifecycle(def.Backend).NativeChildren || parent == nil || parent.Kind != ParentConversation || isAgentWorkerProfile(name) {
-		// An agent.spawn child's ceiling is its authority (agent_tools.go),
-		// not its parent's tool list.
-		return nil
-	}
-	rec, ok := r.recordOf(parent.ReplyID)
-	if !ok {
-		return badRequest("pi.spawn: parent %s has no launched profile snapshot", parent.ReplyID)
-	}
-	if rec.Lead {
-		return nil
-	}
-	if rec.ResolvedDefinition == nil {
-		return badRequest("pi.spawn: child profile %q cannot be checked against parent profile %q: no launched definition snapshot; restart the parent first", name, rec.Profile)
-	}
-	if excess := excessProfileTools(def, *rec.ResolvedDefinition); len(excess) > 0 {
-		return badRequest("pi.spawn: child profile %q exceeds parent profile %q's launched tools: %s", name, rec.Profile, strings.Join(excess, ", "))
-	}
-	return nil
-}
-
 // cleanLabel is label's first non-blank line, at most labelRunes runes.
 func cleanLabel(label string) string {
 	for _, line := range strings.Split(label, "\n") {
@@ -242,21 +218,6 @@ func (r *Runner) spawned(c *conv, prompt string) (State, error) {
 	if err != nil {
 		_, _ = r.CloseConversation(c.rec.ReplyID)
 		return State{}, err
-	}
-	rec := c.record()
-	if p := rec.Parent; r.lifecycle(rec.Backend).NativeChildren && p != nil && p.Kind == ParentLead {
-		// A hosted lead's close may have snapshotted descendants before
-		// this spawn registered. Re-check under its cascade fence: either
-		// that close sees this child, or we see the completed parent close.
-		// External mailbox leads have no runner record and remain valid.
-		r.resumeMu.Lock()
-		parent, known := r.recordOf(p.ReplyID)
-		parentClosed := known && parent.Lead && parent.ClosedAt != ""
-		r.resumeMu.Unlock()
-		if parentClosed {
-			_, _ = r.CloseConversation(rec.ReplyID)
-			return State{}, errClosed
-		}
 	}
 	c.watched()
 	return st, nil

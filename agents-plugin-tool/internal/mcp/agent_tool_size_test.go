@@ -19,7 +19,7 @@ func TestAgentToolDefinitionSize(t *testing.T) {
 			t.Setenv(wsagent.EnvPiEndpoint, "")
 			t.Setenv(envAllowedTools, "")
 			manifests := wsManifests()
-			var agents PiAgents = newFakePiAgents()
+			var agents AgentHost = newFakePiAgents()
 			if surface == "wsflow-lead" {
 				t.Setenv(envNamespace, "wsflow")
 				pkg := dashboardPackages[1]
@@ -31,7 +31,7 @@ func TestAgentToolDefinitionSize(t *testing.T) {
 				t.Setenv(wsagent.EnvPiEndpoint, "http://127.0.0.1:1")
 			}
 			f := agentLeadFixture(t, manifests, agents)
-			if surface == "forwarding-worker" && !f.server.piForwards() {
+			if surface == "forwarding-worker" && !f.server.workerForwards() {
 				t.Fatal("worker must use token forwarding")
 			}
 			// Decode the protocol response, matching the shared all-tools guard.

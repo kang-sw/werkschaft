@@ -76,20 +76,14 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 	if time.Since(s.lastQuery) < usageQueryInterval(force) {
 		return
 	}
-	_, codex, pi := s.detect()
-	if !codex && !pi {
+	_, codex := s.detect()
+	if !codex {
 		return
 	}
 	// A viewer disconnect must not cache a failed query for every viewer.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	var entry planUsageEntry
-	var err error
-	if codex {
-		entry, err = s.queryCodex(ctx)
-	} else {
-		entry, err = s.queryPi(ctx)
-	}
+	entry, err := s.queryCodex(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -97,18 +91,8 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 	}
 	if err != nil {
 		s.gpt.Status = "usage unavailable"
-		if !codex && err == errPiExpired {
-			s.gpt.Status = "Pi token expired - open Pi to refresh"
-		}
-		// Keep the last value's source, not the failed attempt's source.
-		// Retained name check: "via Pi" is the persisted history source label
-		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 		if s.gpt.Source == "" {
-			if codex {
-				s.gpt.Source = codexUsageSource
-			} else {
-				s.gpt.Source = "via Pi"
-			}
+			s.gpt.Source = codexUsageSource
 		}
 	} else {
 		s.gpt = entry
@@ -175,7 +159,7 @@ func codexUsageEntry(limits codexUsageLimits, source string) (planUsageEntry, er
 
 func (s *planUsageStore) queryCodex(ctx context.Context) (planUsageEntry, error) {
 	// File selection stays narrower than the CLI's full auth resolver. Never
-	// borrow an API key, refresh/login, or fall through to Pi after selection.
+	// borrow an API key, refresh/login, or switch providers after selection.
 	var auth struct {
 		Mode   string          `json:"auth_mode"`
 		APIKey json.RawMessage `json:"OPENAI_API_KEY"`
@@ -251,55 +235,6 @@ func expiredUsageAccess(access string) bool {
 	// Decoding is only an early expiry refusal, never signature validation.
 	// Unknown/missing expiry remains server-authoritative for eligible tokens.
 	return json.Unmarshal(payload, &claims) == nil && claims.Exp != nil && *claims.Exp <= float64(time.Now().Unix())
-}
-
-var errPiExpired = errors.New("Pi token expired - open Pi to refresh")
-
-func (s *planUsageStore) queryPi(ctx context.Context) (planUsageEntry, error) {
-	// Retained name check: the Pi credential file, its provider member, the usage
-	// endpoint headers, and the persisted source label are external and persisted
-	// identifiers (TestPlanUsageCodexCredentials, TestPlanUsageCodexRESTWindows).
-	// Credential values stay request-local; no upstream diagnostics escape.
-	var auth struct {
-		Codex struct {
-			Type    string `json:"type"`
-			Access  string `json:"access"`
-			Account string `json:"accountId"`
-			Expires int64  `json:"expires"`
-		} `json:"openai-codex"`
-	}
-	if !readUsageJSON(filepath.Join(s.home, ".pi", "agent", "auth.json"), &auth) {
-		return planUsageEntry{}, errPlanUsage
-	}
-	if auth.Codex.Expires <= time.Now().UnixMilli() {
-		return planUsageEntry{}, errPiExpired
-	}
-	if auth.Codex.Type != "oauth" || auth.Codex.Access == "" {
-		return planUsageEntry{}, errPlanUsage
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.usageURL, nil)
-	if err != nil {
-		return planUsageEntry{}, errPlanUsage
-	}
-	req.Header.Set("Authorization", "Bearer "+auth.Codex.Access)
-	if auth.Codex.Account != "" {
-		req.Header.Set("ChatGPT-Account-Id", auth.Codex.Account)
-	}
-	req.Header.Set("User-Agent", "codex-cli")
-	req.Header.Set("OpenAI-Beta", "codex-1")
-	req.Header.Set("originator", "Codex Desktop")
-	body, err := s.readUsageResponse(req)
-	if err != nil {
-		return planUsageEntry{}, err
-	}
-	convert := func(w *usageHTTPWindow) *codexUsageWindow {
-		if w == nil {
-			return nil
-		}
-		// Preserve Pi's existing seconds-to-minutes classification semantics.
-		return &codexUsageWindow{Percent: w.Percent, Minutes: w.Seconds / 60, Reset: w.Reset}
-	}
-	return codexUsageEntry(codexUsageLimits{Plan: body.Plan, Primary: convert(body.Limits.Primary), Secondary: convert(body.Limits.Secondary)}, "via Pi")
 }
 
 type usageHTTPWindow struct {

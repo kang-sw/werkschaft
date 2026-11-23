@@ -2,7 +2,6 @@ package wsagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -515,13 +514,13 @@ func TestKeepAwakeLeadTurnsAndRejoin(t *testing.T) {
 	}
 }
 
-// awakePiHarness is the Pi worker recovery harness over a fake idle-sleep
+// awakeWorkerHarness is the hosted worker recovery harness over a fake idle-sleep
 // backend with the setting on.
-func awakePiHarness(t *testing.T) (*leadHarness, *fakeAwake, func()) {
+func awakeWorkerHarness(t *testing.T) (*leadHarness, *fakeAwake, func()) {
 	t.Helper()
 	h := newLeadHarness(t)
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
-	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "medium", "", "prov/medium", PiTierHarness, "low"); err != nil {
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "medium", "", "sonnet", BackendClaude, "low"); err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeAwake{}
@@ -541,12 +540,11 @@ func awakePiHarness(t *testing.T) (*leadHarness, *fakeAwake, func()) {
 // turn from the start, before the holder's replay settles it (the replay
 // itself publishes nothing); a turn still running stays counted until the
 // harness ends it, a turn that finished during the downtime drops out once
-// the replay settles it, and a replay that lost records with no turn
-// boundary after them (wrapHold) counts the turn until the harness ends one.
+// the replay settles it.
 func TestKeepAwakeWorkerHolderRejoin(t *testing.T) {
-	for _, scenario := range []string{"running", "finished during downtime", "lost records"} {
+	for _, scenario := range []string{"running", "finished during downtime"} {
 		t.Run(scenario, func(t *testing.T) {
-			h, fake, start := awakePiHarness(t)
+			h, fake, start := awakeWorkerHarness(t)
 			worker, holder := spawnRecoveryWorker(t, h)
 			awaitAwake(t, h.runner, fake, 1, true)
 			h.runner.Close()
@@ -558,10 +556,7 @@ func TestKeepAwakeWorkerHolderRejoin(t *testing.T) {
 			case "running":
 				// The turn works on; its ring still shows the agent_start.
 			case "finished during downtime":
-				h.holders.out(holder, recoveryPiReply("held result")...)
-			case "lost records":
-				h.holders.out(holder, `{"type":"response","command":"get_session_stats","success":true,"data":{"sessionId":"saved-session"}}`)
-				h.holders.trim(holder, h.holders.records(holder)-1)
+				h.holders.out(holder, recoveryWorkerReply("held result")...)
 			}
 			entered, release := h.gateScan()
 			defer release()
@@ -577,38 +572,9 @@ func TestKeepAwakeWorkerHolderRejoin(t *testing.T) {
 				eventually(t, "the running turn to be back", func() bool { st := h.state(worker.ID); return st.Process && st.Status == StatusRunning })
 				h.quiesce(worker.ID)
 				awaitAwake(t, h.runner, fake, 1, true)
-				h.holders.out(holder, recoveryPiReply("done")...)
+				h.holders.out(holder, recoveryWorkerReply("done")...)
 			case "finished during downtime":
 				eventually(t, "the replayed turn to settle", func() bool { return !h.record(worker.ID).TurnOpen })
-			case "lost records":
-				// Each probe asks the surviving child whether its turn runs;
-				// answer the newest unanswered one.
-				answered := map[string]int{}
-				answer := func(command string, data any) {
-					t.Helper()
-					var inputs []string
-					eventually(t, command+" probe", func() bool { inputs = h.holders.inputs(holder, command); return len(inputs) > answered[command] })
-					answered[command] = len(inputs)
-					var request struct{ ID string }
-					if err := json.Unmarshal([]byte(inputs[len(inputs)-1]), &request); err != nil {
-						t.Fatal(err)
-					}
-					h.holders.out(holder, jsonLine(map[string]any{"type": "response", "id": request.ID, "command": command, "success": true, "data": data}))
-				}
-				answer("get_state", map[string]any{"isStreaming": true, "isCompacting": false})
-				h.quiesce(worker.ID)
-				if st := h.state(worker.ID); st.Status != StatusRunning {
-					t.Fatalf("the wrapped replay should hold the turn as running: %+v", st)
-				}
-				awaitAwake(t, h.runner, fake, 1, true)
-				// The harness ends the turn; its end is reconciled by a new probe.
-				startedAt := h.record(worker.ID).TurnStartedAt
-				h.holders.out(holder, recoveryPiReply("done")...)
-				answer("get_state", map[string]any{"isStreaming": false, "isCompacting": false})
-				answer("get_messages", map[string]any{"messages": []any{map[string]any{
-					"role": "assistant", "timestamp": startedAt, "stopReason": "stop",
-					"content": []any{map[string]any{"type": "text", "text": "done"}},
-				}}})
 			}
 			eventually(t, "the worker turn to end", func() bool { return !h.record(worker.ID).TurnOpen && h.state(worker.ID).Status != StatusRunning })
 			awaitAwake(t, h.runner, fake, 0, false)
@@ -633,14 +599,14 @@ func (b attachFails) Start(ctx context.Context, spec StartSpec) (Process, error)
 // replay could settle that turn, so it drops out of the keep-awake count
 // instead of holding the assertion for good.
 func TestKeepAwakeFailedWorkerRejoin(t *testing.T) {
-	h, fake, start := awakePiHarness(t)
+	h, fake, start := awakeWorkerHarness(t)
 	worker, _ := spawnRecoveryWorker(t, h)
 	awaitAwake(t, h.runner, fake, 1, true)
 	h.runner.Close()
 	h.holders.restart()
-	reg := h.opts.Backends[BackendPi]
+	reg := h.opts.Backends[BackendClaude]
 	reg.Backend = attachFails{reg.Backend}
-	h.opts.Backends[BackendPi] = reg
+	h.opts.Backends[BackendClaude] = reg
 	// The recovery settles only after the first holder scan, which waits on
 	// every other holder in turn: the failed worker must already be out of
 	// the count while that scan is still gated.

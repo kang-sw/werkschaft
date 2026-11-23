@@ -24,7 +24,6 @@ var settingsDescriptionManifests = []string{
 	"agents-plugin/config-manifest.json",
 	"agents-plugin/agy-config-manifest.json",
 	"agents-plugin/dashboard-config-manifest.json",
-	"agents-plugin-pi/config-manifest.json", // while Pi ships
 }
 
 // settingsDescriptionDigests maps "<manifest>#<key>" to a digest of the key's

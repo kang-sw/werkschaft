@@ -250,9 +250,6 @@ func (p *streamProcess) feed(line []byte, seq uint64, replay bool) {
 	} else {
 		evs = p.mapper.mapLine(line, replies)
 	}
-	if m, ok := p.mapper.(*piMapper); ok && m.pendingCommand != nil && m.pendingCommand.Seq == 0 {
-		m.pendingCommand.Seq, m.pendingCommand.Replay = seq, replay
-	}
 	for _, ev := range evs {
 		if ev.Fatal != nil && !replay {
 			p.child.kill()

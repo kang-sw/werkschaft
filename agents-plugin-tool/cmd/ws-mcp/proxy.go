@@ -68,7 +68,7 @@ type proxyHost struct {
 	// agents is the daemon's agent runner, where a hosted session's pi.*
 	// tools spawn its Pi subagents (mcp.ServerOptions.Agents); nil leaves
 	// them refusing.
-	agents mcp.PiAgents
+	agents mcp.AgentHost
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
 	exec atomic.Pointer[execjob.Hosted]

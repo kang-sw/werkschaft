@@ -208,7 +208,7 @@ async function checkKeyedRebuild(frame) {
       assert(geom.pathD.includes('M') && geom.pathD.includes('V') && geom.pathD.includes('H'), 'orthogonal SVG connector');
       assert.equal(geom.idleOpacity, '0.42');
       assert.equal(geom.nodeCount, 12);
-      assert.deepEqual(geom.harnesses, ['agy', 'claude', 'codex', 'pi']);
+      assert.deepEqual(geom.harnesses, ['agy', 'claude', 'codex']);
       assert.deepEqual(geom.states, ['failed', 'holding', 'idle', 'permission', 'thinking', 'tool']);
       const flat = await frame.evaluate(() => {
         const panel = document.getElementById('agisland'), compact = document.getElementById('agcompact');

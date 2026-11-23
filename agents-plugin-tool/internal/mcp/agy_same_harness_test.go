@@ -71,7 +71,7 @@ func TestDeclaredAgyConnectionWithoutAnAgyRecordIsRefusedAgyWorkers(t *testing.T
 			f := newHostedKeyFixture(t)
 			s := NewServer(f.root, "test")
 			runner := wsagent.NewRunner(wsagent.Options{Backends: shippedAgyRegistrations()})
-			s.pi.agents, s.callerBinding = runner, runner
+			s.agents, s.callerBinding = runner, runner
 			var out bytes.Buffer
 			line := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"agy","version":"0"}}}` + "\n"
 			if err := s.ServeStdio(context.Background(), strings.NewReader(line), &out); err != nil {
@@ -166,8 +166,8 @@ func TestForwardingServerRoutedBindingChecksItsAuthenticatedCaller(t *testing.T)
 	t.Setenv(wsagent.EnvPiToken, "claude-capability")
 	claude := NewServer(f.root, "test")
 	claude.callerBinding = binding
-	if claude.pi.agents != nil || claude.agentAdmissionBackend() != wsagent.BackendClaude {
-		t.Fatalf("precondition: a forwarding Claude worker (runner %v, caller %q)", claude.pi.agents, claude.agentAdmissionBackend())
+	if claude.agents != nil || claude.agentAdmissionBackend() != wsagent.BackendClaude {
+		t.Fatalf("precondition: a forwarding Claude worker (runner %v, caller %q)", claude.agents, claude.agentAdmissionBackend())
 	}
 	opts := claude.configOptions()
 	if _, err := claude.resolveAgentTier("agy.small", wsagent.BackendClaude); err == nil || !strings.Contains(err.Error(), agyCrossHarnessText) {

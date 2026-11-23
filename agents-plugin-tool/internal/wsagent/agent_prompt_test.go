@@ -123,7 +123,7 @@ func TestAgentChildGetsATokenAndItsAuthority(t *testing.T) {
 		backend string
 	}{
 		{"small", PermissionWorkdirWrite, BackendClaude},
-		{"pi.small", PermissionReadOnly, BackendPi},
+		{"werk.small", PermissionReadOnly, BackendWerk},
 	} {
 		h.agentRunning(lead, AgentSpawnRequest{Prompt: "x", Tier: tc.tier, Authority: string(tc.level)})
 		spec := h.backend.start(i)

@@ -160,8 +160,7 @@ function dialogParts(d) {
   assert.equal(w.posts[0].route, '/agents/leads');
   assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'auto' });
   assert.equal(w.fetches.length, 0, 'the default start needs no preflight');
-  f.harness('pi');
-  assert.equal(f.off.textContent, 'js.perm.off.plain(Pi)');
+  assert(!f.seg.all(n => n.attrs['data-harness'] === 'pi').length);
 }
 
 // 2. Supported: default first and checked; the native mode moves under
@@ -212,18 +211,7 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   assert.equal(g.mode.value, 'default');
   assert.equal(g.mode.disabled, false);
 }
-{
-  // Pi: no native mode, every level advisory, the level still sent.
-  const w = world(), f = creation(w);
-  f.harness('pi');
-  assert.deepEqual(f.levels(), ['', 'read-only', 'workdir-write', 'full']);
-  f.level('workdir-write');
-  assert.equal(shown(f.adv), false, 'Pi has no native mode to disclose');
-  assert.deepEqual(f.map.children.map(n => n.cls + ':' + n.textContent), [':js.perm.map.pi(Pi)', 'pmq advisory:js.perm.q.advisory']);
-  f.start.click();
-  w.choices(choices());
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'pi', plugin_isolation: 'default', permission_level: 'workdir-write' });
-}
+
 {
   // Codex: common intent owns the app-server's per-run sandbox selection;
   // reported quality remains conservative because user MCP paths are outside it.
@@ -460,9 +448,9 @@ const rowsOf = m => m.state.children.map(n => n.textContent);
   assert.deepEqual(rowsOf(m).slice(3), ['Claudeplanjs.perm.native.next', 'js.perm.k.evidence', 'js.perm.q.pendingjs.perm.ev.pending(Claude)'], 'no observation is pending, never enforced');
   m = menu(world(), { ...ro, process: true, active_mode: 'acceptEdits', permission_enforcement: 'advisory' });
   assert.deepEqual(rowsOf(m).slice(3), ['ClaudeacceptEditsjs.perm.native.asked(plan)', 'js.perm.k.evidence', 'js.perm.q.advisoryjs.perm.ev.mismatch(Claude)']);
-  // Pi: no fabricated native mode.
+  // Retained history has no native mode.
   m = menu(world(), { ...base, backend: 'pi', permission_level: 'workdir-write', permission_source: 'explicit', permission_enforcement: 'advisory' });
-  assert.deepEqual(rowsOf(m).slice(3), ['js.perm.native.none(Pi)', 'js.perm.k.evidence', 'js.perm.q.advisoryjs.perm.ev.plain(Pi)']);
+  assert.deepEqual(rowsOf(m).slice(3), ['js.perm.native.none(pi)', 'js.perm.k.evidence', 'js.perm.q.advisoryjs.perm.ev.plain(pi)']);
 }
 {
   // Lowering: fresh read, then settings/permission without acknowledgement.

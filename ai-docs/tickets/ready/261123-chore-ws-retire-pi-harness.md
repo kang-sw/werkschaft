@@ -237,6 +237,74 @@ Footprint (read-only survey at `b3ee18816`, 2026-11-23; Go paths below are relat
   not idle out a live child (`internal/wsholder/holder.py:157–159`), so safety must hold without
   waiting for it to exit (technical (31)).
 
+### Result (6151e528c) - 2026-11-24
+
+- Removed the daemon's Pi execution backend, dashboard launch and revival
+  controls, and Pi settings overlay. Support falls back from a saved Pi
+  selection with a notice. Plan-usage discovery uses Codex credentials.
+  The companion director uses the remaining one-shot backend. Generic
+  worker forwarding keeps its existing token and endpoint environment names
+  for installed readers.
+- **T0 retained readers.** The old daemon wrote Pi agent records, transcript
+  data and settings. The new daemon loads Pi records as ended before
+  startup expiry or rejoin (`internal/wsagent/runner_startup.go:115`), and
+  authorized callers still read the old list and transcript through
+  `internal/mcp/pi_tools.go:21`. Record and transcript formats remain
+  readable by older binaries. The packaged Pi JSONL reader remains available
+  in Phase 1. The new manifest reader skips the retired keys
+  (`internal/mcp/config_manifest.go:218`), leaving stored values available
+  to older readers. Saved Pi profiles and routing values also remain
+  readable. The installed launcher can still resolve the retained aliases,
+  and the server recognizes the old bridge
+  (`internal/mcp/server_harness.go:171`).
+- **T0 working tier alias and T3 refusals.** The new resolver interprets
+  `pi.<tier>` as `werk.<tier>`. It uses exact OpenRouter catalog IDs from
+  legacy bindings only to fill unset werk slots in memory
+  (`internal/wsagent/retired_pi_tiers.go:12`). Older readers still see the
+  original config. Missing werk credentials or usable models return the werk
+  setup reason. Pi execution, resume, wake, handoff, hiring, and retired
+  setting writes can no longer perform operations the previous binary
+  accepted. This is the approved 0.52 boundary. Legacy MCP handlers stay
+  callable through 0.52 and stay out of discovery.
+- **Upgrade and review.** Isolated old record-backed and orphaned Pi holders
+  survived startup. Retained history opens and execution controls refuse
+  resumption. The independent lite review found that old lead descriptors
+  could omit the backend and carry custom profile names. The startup sweep
+  now preserves unidentifiable legacy lead holders and reads the backend
+  stored in new lead descriptors (`internal/wsagent/runner_startup.go:368`,
+  `internal/wsagent/runner_lead_start.go:49`). The regression tests cover
+  both the old holder and the sweep of known non-Pi orphans. History,
+  ownership, exact-ID routing, legacy graph and profile decoding, and the
+  unchanged stored support preference have dedicated fixtures.
+- **Verification.** Darwin and Windows `go build ./...` and
+  `go vet ./...` passed. The full `wsagent`, `mcp` (45-minute timeout),
+  `wsconfig`, `wspackage`, `wsi18n`, and `cmd/ws-mcp` suites passed.
+  Generated package assets are current. The focused dashboard suite passed
+  with Chromium and covered the HUD org chart, settings and combobox,
+  lead popover, rail, permissions, plan usage, hiring, and retired rows.
+  The Chromium permissions fixture also passed on its own with a legacy
+  choices response that still advertises Pi.
+- **Full dashboard suite.** `go test ./internal/wsdashboard -timeout 45m
+  -count=1` finished with failures under Chromium. Two stale expectations
+  for features removed in Phase 1, `TestCSSClassesDoNotCollideAcrossModules`
+  and `TestPermissionUIBrowser`, were updated and passed on rerun.
+  `TestAgentsIslandBehavior` and `TestBoardToolbarPlacementAndCounts`
+  also fail on the integration baseline `ebcf1c4fc` in the lead's
+  independent run.
+- **Other dashboard findings.** `TestAgentBadgePopoverBrowser` passed its
+  status checks for ended Pi history, then the conversation panel
+  intercepted a click on a native agent row. The click target and
+  conversation stylesheet match the baseline.
+  `TestBoardChatSmallUXBrowser` timed out waiting on its iframe,
+  `TestBoardHoldPillBrowser` failed the distinct-topic count,
+  `TestComposerExecBrowser` reported a height change, and
+  `TestUserCommandBrowser` sent twice on rapid clicks.
+  `TestWarmSwitchReadsBrowser` also failed in isolation with zero board
+  offset reads where it expected one. `TestWhiteboardEffectsBrowser`
+  failed its jump-target clipping check. The board, composer, scroll,
+  and whiteboard test fixtures and relevant scripts match the integration
+  track. These remaining observations are from the implementation branch.
+
 ### Phase 2: Package, distribution and docs
 
 Depends on Phase 1.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -40,9 +41,8 @@ func TestDevCheckout(t *testing.T) {
 		if err != nil || string(data) != name {
 			t.Fatalf("%s: %q, %v", name, data, err)
 		}
-		data, err = fs.ReadFile(got, PiConfigManifestFile)
-		if err != nil || string(data) != "pi" {
-			t.Fatalf("%s pi: %q, %v", name, data, err)
+		if _, err := fs.ReadFile(got, "pi-config-manifest.json"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("legacy Pi overlay exposed: %v", err)
 		}
 	}
 	for _, name := range []string{"", "pi", "../ws", "WS"} {
@@ -77,7 +77,7 @@ func TestManifestAssetsStandalone(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{ConfigManifestFile, AgYConfigManifestFile, DashboardConfigManifestFile, PiConfigManifestFile} {
+			for _, name := range []string{ConfigManifestFile, AgYConfigManifestFile, DashboardConfigManifestFile} {
 				data, err := fs.ReadFile(root, name)
 				if err != nil {
 					t.Fatal(err)
@@ -94,12 +94,8 @@ func TestManifestAssetsStandalone(t *testing.T) {
 	}
 	expected := make(map[string]string)
 	for product, dir := range map[string]string{"ws": "agents-plugin", "wsflow": "agents-plugin-wsflow"} {
-		for _, name := range []string{ConfigManifestFile, AgYConfigManifestFile, DashboardConfigManifestFile, PiConfigManifestFile} {
-			sourceDir, sourceName := dir, name
-			if name == PiConfigManifestFile {
-				sourceDir, sourceName = "agents-plugin-pi", ConfigManifestFile
-			}
-			data, err := os.ReadFile(filepath.Join("..", "..", "..", sourceDir, sourceName))
+		for _, name := range []string{ConfigManifestFile, AgYConfigManifestFile, DashboardConfigManifestFile} {
+			data, err := os.ReadFile(filepath.Join("..", "..", "..", dir, name))
 			if err != nil {
 				t.Fatal(err)
 			}

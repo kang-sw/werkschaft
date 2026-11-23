@@ -134,7 +134,6 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	if durable && attach {
 		return errors.New("a durable process cannot attach to a holder")
 	}
-	native := c.r.lifecycle(rec.Backend).NativeChildren
 	releaseAdmission := func() {}
 	if !attach {
 		releaseAdmission = c.r.holdParentAdmission(rec.Parent)
@@ -147,11 +146,6 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	if !refused {
 		c.loadCompaction()
 		c.loadModelWait()
-	}
-	if c.r.lifecycle(rec.Backend).NativeChildren && !attach {
-		if err := c.r.checkChildProfile(rec.Parent, rec.Profile, def); err != nil {
-			return err
-		}
 	}
 	level, source := PermissionLevel(""), ""
 	if refused {
@@ -192,19 +186,8 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	instructions := ""
 	if !attach {
-		keyRoot := rec.Root
-		if native {
-			keyRoot = rec.workDir()
-		}
-		if err := c.r.opts.Keys.Ensure(keyRoot, rec.WSKey); err != nil {
-			// 0.49.x bound Pi child keys to Root even when Cwd differed.
-			// Ensure still checks root and scope: a foreign key fails both.
-			if !native || rec.Parent == nil || keyRoot == rec.Root {
-				return fmt.Errorf("ws session key: %w", err)
-			}
-			if err := c.r.opts.Keys.Ensure(rec.Root, rec.WSKey); err != nil {
-				return fmt.Errorf("ws session key: %w", err)
-			}
+		if err := c.r.opts.Keys.Ensure(rec.Root, rec.WSKey); err != nil {
+			return fmt.Errorf("ws session key: %w", err)
 		}
 		if rec.SystemPrompt && c.systemPrompt == "" {
 			// Read once per daemon: the text stays in memory for every
@@ -327,11 +310,6 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 			mcpEnv = spec.WSMCP.Env
 		}
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
-	}
-	if native && !attach {
-		// Persist exactly the definition checked above and passed to Start,
-		// after retiring the previous process. Reattachment keeps this copy.
-		c.update(func(rec *Record) { rec.ResolvedDefinition = &def })
 	}
 	proc, err := c.startBackend(spec)
 	if err != nil {

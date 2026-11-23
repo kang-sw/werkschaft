@@ -466,30 +466,9 @@ func (r agentRecordEnd) terminalConversation(sessionDir string) bool {
 }
 
 // retired reports a lead session the runner serves no more (closed, or
-// handed to a terminal), or a closed spawned child (a closed Pi child only
-// a Send reopens on the session file this directory holds).
+// handed to a terminal), or a closed spawned child.
 func (r agentRecordEnd) retired() bool {
 	return (r.Lead || r.Parent != nil) && (r.ClosedAt != "" || (r.HandedOffAt != "" && !HeldAgentWorker(r.Lead, r.HolderID, r.HandedOffAt)))
-}
-
-// piChildDeleted is a presentation-only revival check for an already settled
-// Pi spawn row. An open record may still be creating its first session file.
-// A removed record/directory, like a closed record without a regular session
-// file, cannot revive. Keep the file check aligned with wsagent.PiSessionAvailable.
-//
-// The pi/session.jsonl location is persisted bytes the Pi adapter wrote (1881
-// survivor), watched for revival by the page reader beside it.
-func piChildDeleted(dir, id string) bool {
-	if !ValidReplyID(id) {
-		return false
-	}
-	sessionDir := SessionDir(dir, id)
-	record, hosted := readAgentRecordEnd(sessionDir)
-	if hosted && record.ClosedAt == "" {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(sessionDir, "pi", "session.jsonl"))
-	return err != nil || !info.Mode().IsRegular()
 }
 
 // readAgentRecordEnd reads sessionDir's agent record; hosted is false when

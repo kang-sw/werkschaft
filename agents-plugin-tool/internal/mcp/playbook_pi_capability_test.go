@@ -27,13 +27,13 @@ func TestPiDaemonAgentInitializeCapability(t *testing.T) {
 	}
 }
 
-func TestPlaybookPiCapabilityAndToolGates(t *testing.T) {
+func TestRetiredPiCapabilityDoesNotEnableDaemonDelegation(t *testing.T) {
 	for _, tc := range []struct {
 		name, init, allow string
 		forward, want     bool
 	}{
 		{"old-client", `{"clientInfo":{"name":"ws-pi-bridge"}}`, "", true, false},
-		{"marked", `{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}`, "", true, true},
+		{"marked", `{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}`, "", true, false},
 		{"unavailable", `{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}`, "", false, false},
 		{"filtered", `{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}`, "playbook.render,agent.spawn", true, false},
 	} {

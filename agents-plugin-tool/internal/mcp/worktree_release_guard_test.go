@@ -293,7 +293,7 @@ func canonicalWorktreeTestPath(p string) string {
 func TestWorktreeReleaseRefusesLiveDirectAndNestedBoundChildren(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	children := &fakeWorktreeChildren{}
-	s.pi.worktreeChildren = children
+	s.worktreeChildren = children
 
 	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/bound-child")
 	draft := writeDraft(t, acq.Path)
@@ -498,7 +498,7 @@ func TestWorktreeReleaseRacesAgentSpawnOnSameWorktree(t *testing.T) {
 	t.Run("release waits for in-flight spawn and sees newly bound child", func(t *testing.T) {
 		s, base, leadA, _ := releaseGuardServer(t)
 		children := &fakeWorktreeChildren{}
-		s.pi.worktreeChildren = children
+		s.worktreeChildren = children
 		acq := acquireForTest(t, s, 1, leadA, base, "impl/test/race-b")
 		draft := writeDraft(t, acq.Path)
 

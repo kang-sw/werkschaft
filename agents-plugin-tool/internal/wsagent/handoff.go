@@ -49,6 +49,7 @@ const TakeoverNoSession = "its harness reported no conversation to resume (it la
 // claude and pi, one whose lead key is gone (which includes every session
 // outside a git worktree), and one whose key record names no harness
 // conversation are refused too.
+// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
 func (r *Runner) TakeOver(id string) (State, error) {
 	if !wsdashboard.ValidReplyID(id) {
 		return State{}, errUnknown
@@ -66,6 +67,9 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if err != nil {
 		return State{}, errUnknown
 	}
+	if row.Harness == BackendPi {
+		return State{}, errPiRetired
+	}
 	if row.Agent {
 		return State{}, badRequest("an agent conversation is not a lead session")
 	}
@@ -80,6 +84,9 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if backend == "" {
 		backend = row.Harness
 	}
+	if backend == BackendPi {
+		return State{}, errPiRetired
+	}
 	// A backend adopts terminal conversations only through terminalSession:
 	// registering its lead profile does not implicitly grant that parity
 	// (Codex's first hosted slice has none).
@@ -89,7 +96,7 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	}
 	profile := LeadProfileFor(backend, r.opts.Backends)
 	if profile == "" || terminal == nil {
-		return State{}, badRequest("only a claude or pi session can be taken over; this one ran under %q", backend)
+		return State{}, badRequest("terminal takeover is unavailable for harness %q", backend)
 	}
 	if ls.Session == "" {
 		return State{}, conflict("the session cannot be taken over: %s", TakeoverNoSession)
@@ -247,6 +254,7 @@ func (c *conv) handOff() error {
 // input or mail. It is refused once the session's row is a terminal's (a
 // terminal login took the closed session); such a session comes back
 // through TakeOver.
+// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
 func (r *Runner) Reopen(id string) (State, error) {
 	r.mu.Lock()
 	_, open := r.convs[id]
@@ -257,6 +265,8 @@ func (r *Runner) Reopen(id string) (State, error) {
 		return State{}, conflict("the session is open")
 	case !closed:
 		return State{}, errUnknown
+	case rec.Backend == BackendPi:
+		return State{}, errPiRetired
 	case !rec.Lead:
 		return State{}, badRequest("reopen applies to a lead session only")
 	case rec.ClosedAt == "":

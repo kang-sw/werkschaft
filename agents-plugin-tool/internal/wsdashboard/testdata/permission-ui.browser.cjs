@@ -29,10 +29,10 @@ const STATES = {
   picked: lead({ process: true, permission_mode: 'plan', permission_level: 'read-only', permission_source: 'explicit', permission_enforcement: 'advisory' }),
   A: lead({ process: true, permission_mode: 'plan', active_mode: 'plan', permission_level: 'read-only', permission_source: 'explicit', permission_enforcement: 'partial' }),
   B: lead({ process: true, permission_mode: 'auto', active_mode: 'auto', permission_level: 'workdir-write', permission_source: 'legacy-derived', permission_enforcement: 'advisory' }),
-  C: lead({ backend: 'pi', process: true, permission_level: 'workdir-write', permission_source: 'explicit', permission_enforcement: 'advisory' }),
+  C: lead({ backend: 'codex', model: 'gpt-5.5', process: true, permission_level: 'workdir-write', permission_source: 'explicit', permission_enforcement: 'advisory' }),
   D: lead({ process: true, permission_mode: 'plan', active_mode: 'acceptEdits', permission_level: 'read-only', permission_source: 'explicit', permission_enforcement: 'advisory' }),
   E: lead({ process: false, permission_mode: 'bypassPermissions', permission_level: 'full', permission_source: 'explicit', permission_enforcement: 'advisory' }),
-  chipFull: lead({ backend: 'pi', process: true, permission_level: 'full', permission_source: 'explicit', permission_enforcement: 'advisory' })
+  chipFull: lead({ backend: 'codex', model: 'gpt-5.5', process: true, permission_level: 'full', permission_source: 'explicit', permission_enforcement: 'advisory' })
 };
 const SAVED = { harness: 'claude', harnesses: { claude: { model: 'opus-4.7', effort: 'high', mode: 'auto', iso: 'default' }, pi: { model: 'gpt-5.5', effort: 'medium', iso: 'isolated' } } };
 
@@ -132,12 +132,8 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           assert.equal(await pop.locator('.pmadv').evaluate(d => d.open), false, 'Advanced starts collapsed');
           assert.equal(await pop.locator('.pmadv select').inputValue(), 'auto');
           await page.screenshot({ path: out(name('create')) });
-          if (width === 1440) {
-            await pop.locator('.spseg [data-harness="pi"]').click();
-            await pop.locator('.pmseg [data-level="workdir-write"]').click();
-            assert.equal(await pop.locator('.pmadv').isVisible(), false, 'Pi has no native disclosure');
-            await page.screenshot({ path: out(name('create-pi')) });
-          }
+          assert.equal(await pop.locator('.spseg [data-harness="pi"]').count(), 0,
+            'retired Pi stays hidden even if a legacy choices response advertises it');
           await closePop();
         });
 
@@ -310,7 +306,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           await g.screenshot({ path: out(file), fullPage: true });
           await g.close();
         };
-        const CAP = { A: 'A. Claude, 명시적 읽기 전용', B: 'B. Claude, 선택 없음 (기존 세션)', C: 'C. Pi, 명시적 작업 폴더 쓰기', D: 'D. Claude, 요청과 다른 모드 보고', E: 'E. Claude, 아직 관측 없음', 'chip-A': '헤드: 칩 없음 (읽기 전용)', 'chip-B': '헤드: 칩 없음 (추정)', 'chip-chipFull': '헤드: 칩 없음 (전체)', 'chip-D': '헤드: 불일치 아이콘 칩' };
+        const CAP = { A: 'A. Claude, 명시적 읽기 전용', B: 'B. Claude, 선택 없음 (기존 세션)', C: 'C. Codex, 명시적 작업 폴더 쓰기', D: 'D. Claude, 요청과 다른 모드 보고', E: 'E. Claude, 아직 관측 없음', 'chip-A': '헤드: 칩 없음 (읽기 전용)', 'chip-B': '헤드: 칩 없음 (추정)', 'chip-chipFull': '헤드: 칩 없음 (전체)', 'chip-D': '헤드: 불일치 아이콘 칩' };
         await gal(name('state'), '세션 권한 상태: 의도 · 네이티브 모드 · 근거', tiles.map(t => ({ ...t, cap: CAP[t.k] })));
         const UCAP = { A: 'A. 이 데몬이 권한 수준을 알리지 않음', B: 'B. 선택이 거부됨 (404)', B2: 'B2. 다시 확인해도 지원 없음', C: 'C. 세션 메뉴, 지원 없음' };
         await gal(name('unsupported'), '지원 없음 · 거부됨 (기존 경로로 대체하지 않음)', utiles.map(t => ({ ...t, cap: UCAP[t.k] })));

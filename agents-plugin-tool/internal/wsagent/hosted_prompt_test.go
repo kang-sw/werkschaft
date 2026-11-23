@@ -205,9 +205,6 @@ func TestHostedLeadPlaybookCommands(t *testing.T) {
 	if got := h.snapshot(h.lead(BackendClaude, LeadOptions{}).ID).Commands; !slices.Equal(got, playbooks) {
 		t.Fatalf("a new lead offers its playbook commands before any launch: %+v", got)
 	}
-	if got := h.snapshot(h.lead(BackendPi, LeadOptions{}).ID).Commands; len(got) != 0 {
-		t.Fatalf("a backend without PlaybookCommands offers none: %+v", got)
-	}
 
 	h.holders.setControl("initialize", "", `{"commands":[{"name":"compact","description":"Free up context"},{"name":"review","description":"Harness review"}]}`)
 	id, holder := h.runLead("one")
@@ -345,12 +342,12 @@ func TestAgySubagentConfigOverridesSteer(t *testing.T) {
 	wantNative := (&Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}).subagentSteer(Record{Backend: BackendAgy, Lead: true})
 
 	for _, tc := range []struct {
-		name              string
-		prefer            string
-		avoid             string
-		wantExact         string
-		wantContains      []string
-		wantNotContains   []string
+		name            string
+		prefer          string
+		avoid           string
+		wantExact       string
+		wantContains    []string
+		wantNotContains []string
 	}{
 		{
 			name:      "prefer true avoid true",

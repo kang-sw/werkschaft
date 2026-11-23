@@ -51,9 +51,6 @@ const claudeRecoveryContextAsk = "ws-recovery-context"
 // replayed usage, becomes the first live observation after reattachment.
 func (c *conv) queryRecoveryUsage() {
 	switch p := c.proc.(type) {
-	case *piProcess:
-		c.compactUsageFresh = false
-		p.send(map[string]any{"type": "get_session_stats"})
 	case claudeProcess:
 		if p.lead {
 			c.compactUsageFresh = false

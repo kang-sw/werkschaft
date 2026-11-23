@@ -29,12 +29,7 @@ func (c *conv) reattach() {
 	// skips its config reads too).
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
 	if !c.crossHarnessRejoin {
-		if c.r.lifecycle(rec.Backend).NativeChildren && rec.ResolvedDefinition != nil {
-			def = *rec.ResolvedDefinition
-		} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
-			// Best-effort mapping for a legacy held process is not evidence of
-			// what it launched with. Keep its child ceiling unavailable until
-			// an actual startWorker launch records the checked definition.
+		if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
 			def = rp.Definition
 		}
 	}

@@ -25,7 +25,7 @@
     plan: "js.lead.mode.plan", dontAsk: "js.lead.mode.dontask", bypassPermissions: "js.lead.mode.bypass"
   };
   // The effort levels when the daemon's choices name none.
-  var LEAD_EFFORTS = { claude: ["low", "medium", "high", "xhigh", "max"], pi: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] };
+  var LEAD_EFFORTS = { claude: ["low", "medium", "high", "xhigh", "max"] };
   // lead is the viewed hosted session: its last read state, the read in
   // flight, the permission line the state was last read for, and the
   // approval cards by request id.
@@ -158,7 +158,7 @@
     codex: { "read-only": "read-only", "workdir-write": "workspace-write", full: "danger-full-access" }
   };
   var permEpoch = 0, permDlg = null;
-  function permHarness(k) { return k === "claude" ? "Claude" : k === "pi" ? "Pi" : k; }
+  function permHarness(k) { return k === "claude" ? "Claude" : k; }
   // permLevels is harness's offered levels in order: null while unknown (no
   // list of the current epoch), empty when the daemon offers none.
   function permLevels(harness) {
@@ -194,13 +194,9 @@
   }
   // permMap fills el with how harness carries level: the native mode it
   // runs in (mode; for no level the native pick) and the quality to expect.
-  // Pi has no native mode, so every level is advisory there.
   function permMap(el, harness, level, mode, change) {
     el.textContent = "";
-    if (harness === "pi") {
-      el.appendChild(mk("span", null, wsT("js.perm.map.pi", permHarness(harness))));
-      el.appendChild(permQ("advisory"));
-    } else if (PERM_NATIVE[harness] && mode) {
+    if (PERM_NATIVE[harness] && mode) {
       permCoded(el, wsT(!level ? "js.perm.map.default" : change ? "js.perm.map.switch" : "js.perm.map.run", "\u0001"), harness, mode);
       if (level) {
         el.appendChild(mk("span", null, "·"));
@@ -356,10 +352,10 @@
     if (q === "pending" || q === "partial" || q === "advisory") v.appendChild(mk("span", "pmsrc", wsT(why, permHarness(harness))));
     if (note) box.appendChild(mk("p", "pmnote", note));
   }
-  // Older daemons have no lead markers; retain their Claude/Pi controls.
+  // An older daemon may omit lead markers.
   function leadHarnesses() {
-    var hs = ((supChoices && supChoices.harnesses) || []).filter(function (h) { return h.lead === true; });
-    return hs.length ? hs : [supHarness("claude") || { harness: "claude" }, supHarness("pi") || { harness: "pi" }];
+    var hs = ((supChoices && supChoices.harnesses) || []).filter(function (h) { return h.lead === true && h.harness !== "pi"; });
+    return hs.length ? hs : [supHarness("claude") || { harness: "claude" }];
   }
   function leadModes(harness) {
     var h = supHarness(harness);
@@ -390,7 +386,7 @@
   }
   function leadEfforts(harness) {
     var h = supHarness(harness);
-    return h && Array.isArray(h.efforts) && h.efforts.length ? h.efforts.map(String) : (harness === "claude" || harness === "pi" ? LEAD_EFFORTS[harness] : []);
+    return h && Array.isArray(h.efforts) && h.efforts.length ? h.efforts.map(String) : (harness === "claude" ? LEAD_EFFORTS.claude : []);
   }
   // leadOptions lists "default" and list in sel with cur picked (added when
   // the list lacks it). An unchanged list is left alone, so a redraw never
@@ -493,10 +489,10 @@
       var claude = harness === "claude", mode = p.sel.value;
       cur.harness = harness;
       cur.active = active || "";
-      pd.hidden = !mode && harness !== "pi";
-      pd.textContent = own ? ownNote : (!mode ? (harness === "pi" ? wsT("js.lead.mode.pi") : "") : (claude && LEAD_MODE_NOTE[mode] ? wsT(LEAD_MODE_NOTE[mode]) : mode) + (active && active !== mode ? " " + wsT("js.lead.mode.active", active) : "")) + (extra && !own ? " " + extra : "");
+      pd.hidden = !mode;
+      pd.textContent = own ? ownNote : (!mode ? "" : (claude && LEAD_MODE_NOTE[mode] ? wsT(LEAD_MODE_NOTE[mode]) : mode) + (active && active !== mode ? " " + wsT("js.lead.mode.active", active) : "")) + (extra && !own ? " " + extra : "");
       pd.classList.toggle("warn", !own && claude && mode === "bypassPermissions");
-      ed.textContent = e.sel.value ? (claude ? "--effort " : harness === "pi" ? "--thinking " : "") + e.sel.value : wsT("js.lead.effort.default");
+      ed.textContent = e.sel.value ? (claude ? "--effort " : "") + e.sel.value : wsT("js.lead.effort.default");
     };
     return R;
   }
@@ -590,7 +586,7 @@
     var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
     var rows = leadRows(opts, edited, adv, true);
     // Plugin isolation: which plugins the hosted session loads. The pick goes
-    // out as plugin_isolation; Pi's standalone binary supports only isolated.
+    // out as plugin_isolation.
     var isec = el.appendChild(mk("div", "spsec"));
     isec.appendChild(mk("div", "splbl", wsT("js.lead.iso")));
     var iseg = isec.appendChild(mk("div", "spseg"));
@@ -698,7 +694,7 @@
       });
       hwarn.hidden = P.harness !== "agy";
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
-      idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint") + (P.harness === "pi" ? " " + wsT("js.lead.iso.pi") : "");
+      idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
       start.disabled = P.busy || P.loading || off(P.harness) || (P.harness === "werk" && !rows.model.value);
       tierPick.busy = P.busy || !!P.loading;
       tierPick.draw();
@@ -1583,7 +1579,6 @@
     if (k === "claude") return "Claude";
     if (k === "codex") return "Codex";
     if (k === "agy") return "AGY";
-    if (k === "pi") return "Pi";
     return k || "";
   }
   function composerCurrent(slot) {

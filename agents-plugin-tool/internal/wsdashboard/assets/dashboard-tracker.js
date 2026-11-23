@@ -996,6 +996,7 @@
       if (status !== 200) { c.err = tkErrText(status, v); supDraw(c); return; }
       c.loaded = true; c.err = "";
       c.sel = v.selection || null;
+      c.retiredPi = v.retired_pi === true;
       supSetConv(c, v.conversation || null);
       supDraw(c);
     });
@@ -1129,8 +1130,8 @@
     e.hidden = !empty;
     e.textContent = !c.loaded ? (c.err ? "" : wsT("js.sup.loading")) : wsT("js.sup.empty");
     var er = c.root.querySelector(".superr");
-    er.hidden = !c.err;
-    er.textContent = c.err;
+    er.hidden = !c.err && !c.retiredPi;
+    er.textContent = c.err || (c.retiredPi ? wsT("js.sup.pi.retired") : "");
     var cur = supCur(c), none = c.loaded && !cur.harness;
     c.chip.innerHTML = "<span>" + supEsc(supSelText(cur)) + "</span>" + supIcon("#tki-chev");
     c.chip.title = wsT("js.sup.chip.tip");
@@ -1171,6 +1172,7 @@
     tkFetch(supUrl(c.id, "select"), req, function (status, v) {
       if (status !== 200) { c.err = tkErrText(status, v); supDraw(c); supDrawPop(c); return; }
       c.sel = v.selection || c.sel;
+      c.retiredPi = false;
       supSetConv(c, v.conversation || null);
       supDraw(c); supDrawPop(c);
     });

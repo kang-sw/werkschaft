@@ -71,8 +71,8 @@ func TestAgentBadgePopoverBrowser(t *testing.T) {
 			agent("a6", "worker-test", wslive.StatusFailed, "sonnet-5.5", 30000, batches(2, "Bash"), 0, 2, 200000),
 			child,
 		}}
-	// Keep the ordinary done class for old page CSS, but show Pi revival
-	// labels in the row and hover. Native review-a must still say done.
+	// Keep the ordinary done class for legacy rows. A supported hosted
+	// worker can still sleep, while retired Pi history is ended.
 	for i, id := range map[int]string{3: "sleepchild", 4: "deletedchild"} {
 		snap.Agents[i].AgentKind, snap.Agents[i].ReplyID = wslive.AgentKindPi, id
 		dir := SessionDir(f.dir, id)
@@ -88,6 +88,7 @@ func TestAgentBadgePopoverBrowser(t *testing.T) {
 			}
 		}
 	}
+	snap.Agents[3].Harness = "claude"
 	f.d.snapshots.SetLive(f.dir, "livesession", snap)
 	f.d.broker.wake(liveDep("livesession"))
 	// The zero-running fixture keeps a working lead and one ended agent;
@@ -175,7 +176,7 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			mk("h1", "", "parser-worker", "codex", wslive.StatusDone, "", "gpt-5.4", "high", "Waiting on ast-scanner", 134000, true, true),
 			h2,
 			mk("h3", "h2", "sym-extract", "agy", wslive.StatusRunning, wslive.PhaseTool, "gemini-4-h", "high", "rg -n internal/", 41000, false, true),
-			mk("h4", "h2", "type-bounds", "pi", wslive.StatusRunning, wslive.PhaseThinking, "o3-mini", "medium", "Constraint graph", 29000, false, true),
+			mk("h4", "h2", "type-bounds", "claude", wslive.StatusRunning, wslive.PhaseThinking, "o3-mini", "medium", "Constraint graph", 29000, false, true),
 			h5,
 			mk("h6", "", "graph-auditor", "claude", wslive.StatusDone, "", "opus-4.6", "high", "Waiting on cycle-detect", 129000, true, true),
 			h7,
@@ -184,7 +185,7 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			mk("h10", "h9", "unit-matrix", "codex", wslive.StatusRunning, wslive.PhaseTool, "gpt-5.4", "medium", "go test", 58000, false, true),
 			h11,
 			mk("h12", "h8", "pkg-edges", "codex", wslive.StatusRunning, wslive.PhaseTool, "gpt-5.4", "medium", "go list -deps", 19000, false, true),
-			mk("hd1", "h1", "cache-warm", "pi", wslive.StatusDone, "", "gpt-5.4", "low", "", 30000, false, false),
+			mk("hd1", "h1", "cache-warm", "claude", wslive.StatusDone, "", "gpt-5.4", "low", "", 30000, false, false),
 			mk("hd2", "h9", "bench-closed", "agy", wslive.StatusDone, "", "gemini-4-h", "low", "", 40000, false, false),
 		}}
 
@@ -194,16 +195,16 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			mk("d1", "", "arch-lead", "claude", wslive.StatusDone, "", "opus-4.6", "high", "", 60000, true, true),
 			mk("d2", "d1", "core-split", "codex", wslive.StatusDone, "", "gpt-5.4", "high", "", 50000, true, true),
 			mk("d3", "d2", "ast-rewriter", "agy", wslive.StatusDone, "", "gemini-4-h", "high", "", 40000, true, true),
-			mk("d4", "d3", "leaf-patcher", "pi", wslive.StatusRunning, wslive.PhaseTool, "o3-mini", "medium", "patching", 30000, false, true),
+			mk("d4", "d3", "leaf-patcher", "claude", wslive.StatusRunning, wslive.PhaseTool, "o3-mini", "medium", "patching", 30000, false, true),
 			mk("d5a", "d4", "depth5-a", "codex", wslive.StatusRunning, wslive.PhaseThinking, "gpt-5.4", "low", "", 10000, false, true),
 			mk("d5b", "d4", "depth5-b", "claude", wslive.StatusRunning, wslive.PhaseTool, "sonnet-4.6", "low", "", 8000, false, true),
 		}}
 
 	// Wide fan-out (14 direct)
 	fanAgents := make([]wslive.Agent, 14)
-	harnesses := []string{"claude", "codex", "agy", "pi"}
+	harnesses := []string{"claude", "codex", "agy"}
 	for i := range fanAgents {
-		fanAgents[i] = mk(string(rune('a'+i)), "", "shard", harnesses[i%4], wslive.StatusRunning, wslive.PhaseTool, "gpt-5.4", "medium", "work", int64(10000+i*1000), false, true)
+		fanAgents[i] = mk(string(rune('a'+i)), "", "shard", harnesses[i%len(harnesses)], wslive.StatusRunning, wslive.PhaseTool, "gpt-5.4", "medium", "work", int64(10000+i*1000), false, true)
 	}
 	fanout := wslive.Snapshot{SchemaVersion: 1, Adapter: "claude", UpdatedAt: now, HeartbeatMs: 30000, Agents: fanAgents}
 	idleOnly := wslive.Snapshot{SchemaVersion: 1, Adapter: "claude", UpdatedAt: now, HeartbeatMs: 30000,

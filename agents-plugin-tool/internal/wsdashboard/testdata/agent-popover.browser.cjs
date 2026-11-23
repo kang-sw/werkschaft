@@ -89,8 +89,8 @@ const fits = (s, what) => {
       assert.deepEqual(statuses, [
         { legacyClass: true, label: '', hover: '완료' },
         { legacyClass: true, label: '휴면', hover: '휴면' },
-        { legacyClass: true, label: '삭제됨', hover: '삭제됨' }
-      ], 'localized Pi sleep/deleted labels leave native done and old CSS intact');
+        { legacyClass: true, label: '완료', hover: '완료' }
+      ], 'localized statuses preserve hosted sleep and show retired Pi as done');
       // Order: lead, running, ended, background, peers.
       const order = await frame.evaluate(() => {
         const sel = ['details[data-key="agent-lead"]', '.tgroup.run', '.tgroup.ended', '.tgroup.bg', '.pgroup'];

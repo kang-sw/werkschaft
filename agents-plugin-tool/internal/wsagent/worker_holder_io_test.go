@@ -12,14 +12,14 @@ import (
 // The same fixture runs in the pinned old tree through the downgrade script.
 // Counters cover instrumented file APIs; fake holder transport adds no disk IO.
 func TestWorkerHolderFileOperations(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	h.runner.Close()
 	h.holders.restart()
 	h.opts.heartbeat = time.Hour
 	h.start()
 	wait(t, "initial scan", h.runner.rejoined)
 	before := wsstate.FileIOCounters()["file_io_total"]
-	worker, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Tier: "medium", Parent: &leadParent})
+	worker, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Tier: "medium", Parent: &leadParent})
 	if err != nil {
 		t.Fatal(err)
 	}

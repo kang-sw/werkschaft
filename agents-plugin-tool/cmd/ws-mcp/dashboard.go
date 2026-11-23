@@ -531,14 +531,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		Log:            logw,
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
-		// A spawned Pi subagent's settled turns go to its lead's mailbox.
-		Report: mcp.PiTurnReporter(logw),
-		// A Pi subagent's own pi.* calls (the token route) need a usable
-		// Pi, as a lead's do.
-		ChildCheck: mcp.PiReady,
-		// The dashboard's tier routing view asks availability without
-		// running pi --version (Runner.HarnessAvailability).
-		ChildCheckKnown: mcp.PiReadyKnown,
+		Report:         mcp.AgentTurnReporter(logw),
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.
 		TierRoles: mcp.PackagedTierRoles,

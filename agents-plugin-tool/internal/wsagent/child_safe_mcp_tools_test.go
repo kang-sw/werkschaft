@@ -251,7 +251,7 @@ func TestAgentWSToolsListSageGateAndStamp(t *testing.T) {
 		if !slices.Contains(AgentWSTools, name) {
 			t.Errorf("AgentWSTools lacks %s", name)
 		}
-		for loadout, tools := range map[string][]string{"PiWorkerWSTools": PiWorkerWSTools, "PiMiniLeadWSTools": PiMiniLeadWSTools, "ChildSafeWSTools": ChildSafeWSTools} {
+		for loadout, tools := range map[string][]string{"ChildSafeWSTools": ChildSafeWSTools} {
 			if slices.Contains(tools, name) {
 				t.Errorf("%s must not list %s", loadout, name)
 			}

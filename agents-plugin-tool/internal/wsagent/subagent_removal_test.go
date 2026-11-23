@@ -20,8 +20,6 @@ func TestRemovesSubagentsScope(t *testing.T) {
 		{Record{Backend: BackendPi, Profile: AgentWorkerProfile(BackendPi)}, true},
 		{Record{Backend: BackendClaude, Profile: SupportProfileClaude}, false},
 		{Record{Backend: BackendClaude, Profile: SearchAnswerProfileClaude}, false},
-		{Record{Backend: BackendPi, Profile: PiWorkerProfile}, false},
-		{Record{Backend: BackendPi, Profile: PiMiniLeadProfile}, false},
 		{Record{Backend: BackendClaude, Profile: "agent-worker-codex"}, true},
 		{Record{Backend: BackendAgy, Profile: AgentWorkerProfile(BackendAgy)}, true},
 	} {

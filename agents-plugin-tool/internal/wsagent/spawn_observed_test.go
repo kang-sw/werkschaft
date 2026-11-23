@@ -3,6 +3,7 @@ package wsagent
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -10,11 +11,11 @@ import (
 // Hold the actual parent loop so its one-slot wake channel necessarily
 // coalesces A/B/C; a latest-only projection loses A/B on this path.
 func TestHostedObservedCoalescedChildHistorySurvivesRestart(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	lead := h.lead(BackendClaude, LeadOptions{})
 	spawn := func(parent ParentRef) (State, string) {
 		t.Helper()
-		st, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Tier: "small", Parent: &parent})
+		st, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Tier: "small", Parent: &parent})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +38,7 @@ func TestHostedObservedCoalescedChildHistorySurvivesRestart(t *testing.T) {
 		holder string
 	}{{direct, directHolder}, {deep, deepHolder}} {
 		for i, model := range []string{"A", "B", "C"} {
-			h.holders.out(child.holder, string(observedPiLine(fmt.Sprintf("%s-%d", child.st.ID, i), model, "", "", int64(1000+i))))
+			h.holders.out(child.holder, string(observedClaudeLine(fmt.Sprintf("msg-%d", i), fmt.Sprintf("%s-%d", child.st.ID, i), model, time.UnixMilli(int64(1000+i)).UTC().Format(time.RFC3339Nano), "")))
 		}
 		eventually(t, "all child responses applied while parent blocked", func() bool { return len(h.state(child.st.ID).Observations) == 3 })
 	}

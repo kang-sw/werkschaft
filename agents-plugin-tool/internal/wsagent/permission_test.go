@@ -64,9 +64,6 @@ func TestPermissionLeadMapping(t *testing.T) {
 			}
 		}
 	}
-	if got := builtinPermission(BackendPi).legacyLevel(""); got != PermissionWorkdirWrite {
-		t.Fatal(got)
-	}
 	if got := builtinPermission(BackendClaude).legacyLevel("unknown"); got != "" {
 		t.Fatalf("unknown mode fabricated %s", got)
 	}

@@ -64,37 +64,11 @@ func LeadProfileFor(backend string, registries ...map[string]BackendRegistration
 	return builtinRegistration(backend).LeadProfile
 }
 
-// PiWorkerProfile is the builtin profile of a Pi subagent a session spawns
-// (Runner.Spawn): Pi's built-in coding tools and the few ws tools a
-// delegated implementation or review prompt names, with no instruction
-// file, since the spawner's rendered prompt is the first message.
-const PiWorkerProfile = "pi-worker"
-
-// PiMiniLeadProfile adds bounded ticket workflow tools to the coding worker.
-const PiMiniLeadProfile = "pi-mini-lead"
-
-// ExploreProfile is a local, read-only Pi researcher; the caller selects its tier.
-const ExploreProfile = "explore"
-
-// PiWorkerTools are Pi's built-in coding tools the pi-worker profile
-// allows.
-var PiWorkerTools = []string{"read", "bash", "edit", "write", "grep", "find", "ls"}
-
-// PiWorkerWSTools are the ws tools the pi-worker profile allows: the exec
-// tools that replace a cutover session's shell, the commit an
-// implementation prompt ends with, the git reads a commit and a diff
-// review need, implementation-branch resolution, ticket creation and preflight
-// verification, and the pi.* tools a spawning playbook needs. A worker's
-// pi.* calls go to the daemon on its capability token (children.go), which
-// caps the spawn tree's depth and tier. Ticket lifecycle operations remain
-// on pi-mini-lead; worktree leasing has its own authorization boundary.
-// Retained name check: the Pi extension's own MCP tool names, the Pi worker's
-// allowlist (TestBuiltinPiMiniLeadProfileResolves).
-var PiWorkerWSTools = append([]string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set"}, ExecWSTools...)
-
-// PiMiniLeadWSTools adds ticket workflow reads and lifecycle operations, but
-// no lead-only tools or note, whiteboard, or tracker writes.
-var PiMiniLeadWSTools = append(append([]string{}, PiWorkerWSTools...),
+// workerWorkflowTools are shared by hosted workers with workflow access.
+var workerWorkflowTools = append(append([]string{
+	"git.status", "git.diff", "git.log", "git.merge_base", "git.commit",
+	"git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "compact", "agenda.set",
+}, ExecWSTools...),
 	"tickets.query", "tickets.acquire", "tickets.release", "tickets.close",
 	"tickets.move", "tickets.checklist", "note.query",
 	"playbook.read", "playbook.render", "path.generate", "route.resolve_implement",
@@ -168,17 +142,7 @@ func childSafeWSToolsFor(p Profile) []string {
 var AgentWSTools = agentWSTools()
 
 func agentWSTools() []string {
-	out := []string{}
-	for _, name := range PiMiniLeadWSTools {
-		// Retained name check: the Pi extension's own pi.* tool-name prefix
-		// (TestAgentWSToolsListSageGateAndStamp).
-		if !strings.HasPrefix(name, "pi.") {
-			out = append(out, name)
-		}
-	}
-	// The exec tools came in with PiMiniLeadWSTools; Codex's fs.* read
-	// tools join them here (ws-mcp admits those for a cutover Codex child
-	// only), before any harness's native process tools are removed.
+	out := slices.Clone(workerWorkflowTools)
 	extra := append([]string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp"}, CodexReadWSTools...)
 	for _, name := range append(extra, ChildSafeWSTools...) {
 		if !slices.Contains(out, name) {
@@ -206,7 +170,7 @@ var codexWorkerText string
 // builtinInstructionTexts are the embedded instruction texts by name.
 var builtinInstructionTexts = map[string]string{
 	supportInstructions:  trackerSupportText,
-	ExploreProfile:       exploreText,
+	"explore":            exploreText,
 	"agent-worker-agy":   agyWorkerText,
 	"agent-worker-codex": codexWorkerText,
 }

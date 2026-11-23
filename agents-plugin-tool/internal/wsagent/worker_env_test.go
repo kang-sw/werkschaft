@@ -23,11 +23,6 @@ func TestWorkerBackendsDropInheritedHarnessSessionEnv(t *testing.T) {
 			want: map[string]string{"CLAUDE_CONFIG_DIR": "/user/claude"},
 		},
 		{
-			name: "pi",
-			env:  piWorkerEnv(append(inherited, "WS_PI_ROLE=parent")),
-			want: map[string]string{"PI_SKIP_VERSION_CHECK": "1", "WS_PI_SPAWN_ROLE": "worker"},
-		},
-		{
 			name: "codex",
 			env: codexEnv(StartSpec{
 				Env:        append(inherited, "CODEX_THREAD_ID=parent", "CODEX_HOME=/user/codex"),

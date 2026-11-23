@@ -60,7 +60,7 @@ func TestHeartbeatSweepRefreshesBlockedLoopOnce(t *testing.T) {
 	rec := Record{
 		ReplyID:   "blockedlead",
 		Root:      t.TempDir(),
-		Backend:   BackendPi,
+		Backend:   BackendClaude,
 		WSKey:     "blocked-key",
 		CreatedAt: clock.Now().Format(time.RFC3339),
 		Lead:      true,
@@ -152,7 +152,7 @@ func TestHeartbeatSweepLeavesHealthyDeadlineToLoopRepair(t *testing.T) {
 	clock := &testClock{now: time.Unix(1_250, 0).UTC()}
 	dir := t.TempDir()
 	r := NewRunner(Options{Dir: dir, Now: clock.Now, Log: io.Discard, heartbeat: 30 * time.Second})
-	rec := Record{ReplyID: "healthylead", Root: t.TempDir(), Backend: BackendPi, Lead: true, HostPID: 51}
+	rec := Record{ReplyID: "healthylead", Root: t.TempDir(), Backend: BackendClaude, Lead: true, HostPID: 51}
 	c := addHeartbeatSweepConv(t, r, rec)
 	drifted := heartbeatRegistration(t, dir, rec.ReplyID)
 	drifted.Project = "/stale/project"
@@ -185,7 +185,7 @@ func TestHeartbeatSweeperRunsFromStartAndStopsOnClose(t *testing.T) {
 	rec := Record{
 		ReplyID:   "lifecyclelead",
 		Root:      t.TempDir(),
-		Backend:   BackendPi,
+		Backend:   BackendClaude,
 		WSKey:     "lifecycle-key",
 		CreatedAt: clock.Now().Format(time.RFC3339),
 		Lead:      true,
@@ -271,8 +271,8 @@ func TestHeartbeatSweepBusyEarlierRowDoesNotStallHealthyRow(t *testing.T) {
 	r := NewRunner(Options{Dir: dir, Now: clock.Now, Log: io.Discard})
 	// Hyphens are invalid reply-id characters; these retain the requested
 	// lexical lead-a-before-lead-b ordering with valid IDs.
-	a := addHeartbeatSweepConv(t, r, Record{ReplyID: "leada", Root: t.TempDir(), Backend: BackendPi, Lead: true, HostPID: 11})
-	b := addHeartbeatSweepConv(t, r, Record{ReplyID: "leadb", Root: t.TempDir(), Backend: BackendPi, Lead: true, HostPID: 22})
+	a := addHeartbeatSweepConv(t, r, Record{ReplyID: "leada", Root: t.TempDir(), Backend: BackendClaude, Lead: true, HostPID: 11})
+	b := addHeartbeatSweepConv(t, r, Record{ReplyID: "leadb", Root: t.TempDir(), Backend: BackendClaude, Lead: true, HostPID: 22})
 	beforeA := heartbeatRegistration(t, dir, a.rec.ReplyID)
 	beforeB := heartbeatRegistration(t, dir, b.rec.ReplyID)
 
@@ -340,7 +340,7 @@ func TestHeartbeatSweepSkipsInMemoryIneligibleConversations(t *testing.T) {
 			clock := &testClock{now: time.Unix(3_000, 0).UTC()}
 			dir := t.TempDir()
 			r := NewRunner(Options{Dir: dir, Now: clock.Now, Log: io.Discard})
-			c := addHeartbeatSweepConv(t, r, Record{ReplyID: "memoryskip", Root: t.TempDir(), Backend: BackendPi, Lead: tc.lead, HostPID: 31})
+			c := addHeartbeatSweepConv(t, r, Record{ReplyID: "memoryskip", Root: t.TempDir(), Backend: BackendClaude, Lead: tc.lead, HostPID: 31})
 			before := heartbeatRegistration(t, dir, c.rec.ReplyID)
 			if tc.mutate != nil {
 				tc.mutate(t, c)
@@ -388,7 +388,7 @@ func TestHeartbeatSweepRejectsUnsafeRows(t *testing.T) {
 			clock := &testClock{now: time.Unix(4_000, 0).UTC()}
 			dir := t.TempDir()
 			r := NewRunner(Options{Dir: dir, Now: clock.Now, Log: io.Discard})
-			c := addHeartbeatSweepConv(t, r, Record{ReplyID: "unsaferow", Root: t.TempDir(), Backend: BackendPi, Lead: true, HostPID: 41})
+			c := addHeartbeatSweepConv(t, r, Record{ReplyID: "unsaferow", Root: t.TempDir(), Backend: BackendClaude, Lead: true, HostPID: 41})
 			want := heartbeatRegistration(t, dir, c.rec.ReplyID)
 			if tc.remove {
 				if err := os.Remove(wsdashboard.RegistrationPath(dir, c.rec.ReplyID)); err != nil {

@@ -165,6 +165,10 @@ func appendDiagnostic(existing, diagnostic string) string {
 	return existing + "; " + diagnostic
 }
 
+// legacyPiWorkerTools preserves permission diagnostics for stored allowlists.
+// Retained name check: legacy tool names in stored profiles (TestRetiredPiProfileRemainsReadable).
+var legacyPiWorkerTools = []string{"pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait"}
+
 // A worker projection is used only for the diagnostic. Unknown surfaces remain
 // unresolved and never become an authority ceiling or applied selection.
 func legacyWorkerPermission(def Profile) PermissionLevel {
@@ -187,7 +191,7 @@ func legacyWorkerPermission(def Profile) PermissionLevel {
 		// and it runs at read-only authority: it cannot raise the level.
 		case "git.status", "git.diff", "git.log", "git.merge_base", "compact":
 		default:
-			if slices.Contains(PiWorkerWSTools, tool) || slices.Contains(PiMiniLeadWSTools, tool) {
+			if slices.Contains(workerWorkflowTools, tool) || slices.Contains(legacyPiWorkerTools, tool) {
 				mutable = true
 				continue
 			}

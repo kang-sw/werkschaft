@@ -184,6 +184,7 @@ func (r *Runner) closedState(rec Record) State {
 	return r.permissionState(st, rec, dir)
 }
 
+// Retained name check: ended state of retained Pi records (TestRetiredPiHoldersKeepRunning).
 func closedState(rec Record) State {
 	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
 	if rec.Lead {
@@ -201,7 +202,7 @@ func closedState(rec Record) State {
 		// A lead's Cwd is a taken-over terminal's, not a spawn choice.
 		st.Cwd = rec.Cwd
 	}
-	if rec.ClosedAt == "" && rec.handedOff() {
+	if rec.Backend != BackendPi && rec.ClosedAt == "" && rec.handedOff() {
 		st.Status, st.HandedOffAt = StatusHandedOff, rec.HandedOffAt
 		if rec.Lead {
 			st.Lifecycle = wsdashboard.SessionStopped

@@ -22,14 +22,14 @@ const claudeInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params"
 func TestPlaybookRenderSubagentRemovedClaudeCallerUsesAgentIdioms(t *testing.T) {
 	f := newPiRecordFixture(t)
 	f.record(t, f.leadKey, wsagent.Record{Backend: wsagent.BackendClaude, Lead: true, Profile: wsagent.LeadProfileClaude})
-	assertPiMCPOnlyBody(t, renderedBody(t, f.s, f.leadKey, "ticket-worker-elevated", claudeInitialize))
+	assertDaemonAgentBody(t, renderedBody(t, f.s, f.leadKey, "ticket-worker-elevated", claudeInitialize))
 
 	child, err := NewAgentKeyStore().Mint(f.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.record(t, child, wsagent.Record{Backend: wsagent.BackendClaude, Profile: wsagent.AgentWorkerProfile(wsagent.BackendClaude)})
-	assertPiMCPOnlyBody(t, renderedBody(t, f.s, child, "ticket-worker-elevated", claudeInitialize))
+	assertDaemonAgentBody(t, renderedBody(t, f.s, child, "ticket-worker-elevated", claudeInitialize))
 }
 
 // TestPlaybookRenderClaudeCallerKeepingSubagentsKeepsClaudeRow: a tracker

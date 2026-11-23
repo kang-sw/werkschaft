@@ -185,7 +185,7 @@ func TestExecBindKeepsTheHoldWhileItReads(t *testing.T) {
 // A worker whose session owns a live exec job holds its done report until
 // the job ends; then the report goes to its parent.
 func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	jobs := newFakeExecJobs()
 	h.runner.BindExecJobs(jobs)
 	worker, holder := spawnRecoveryWorker(t, h)
@@ -202,7 +202,7 @@ func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
 		defer c.mu.Unlock()
 		return len(c.parentWaits) > 0
 	})
-	h.holders.out(holder, recoveryPiReply("started the build; its completion comes as a message")...)
+	h.holders.out(holder, recoveryWorkerReply("started the build; its completion comes as a message")...)
 	h.idle(worker.ID)
 	select {
 	case res := <-waited:
@@ -234,7 +234,7 @@ func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
 // it binds them; binding still has every conversation the unbound hold kept
 // reconsider it, so a held report with no live job goes out.
 func TestExecBindReleasesReportsHeldBeforeBinding(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	h.runner.ExpectExecJobs()
 	worker, holder := spawnRecoveryWorker(t, h)
 	waited := make(chan TurnResult, 1)
@@ -248,7 +248,7 @@ func TestExecBindReleasesReportsHeldBeforeBinding(t *testing.T) {
 		defer c.mu.Unlock()
 		return len(c.parentWaits) > 0
 	})
-	h.holders.out(holder, recoveryPiReply("done")...)
+	h.holders.out(holder, recoveryWorkerReply("done")...)
 	h.idle(worker.ID)
 	// A change signal while the jobs settle, before binding.
 	h.runner.ExecJobsChanged()
@@ -271,11 +271,11 @@ func TestExecBindReleasesReportsHeldBeforeBinding(t *testing.T) {
 // An explicit close refuses new exec jobs of the whole tree first, then
 // ends each conversation's jobs before it closes, deepest first.
 func TestExecCloseFencesThenStopsDeepestFirst(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	jobs := newFakeExecJobs()
 	h.runner.BindExecJobs(jobs)
 	parent, _ := spawnRecoveryWorker(t, h)
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "child", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: parent.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "child", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: parent.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,12 +298,12 @@ func TestExecCloseFencesThenStopsDeepestFirst(t *testing.T) {
 // A job that does not stop keeps its conversation, and every conversation
 // above it, open and unfenced; the close says why.
 func TestExecCloseKeepsTheTreeOpenWhenAJobDoesNotStop(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	jobs := newFakeExecJobs()
 	jobs.stopErr = map[string]error{}
 	h.runner.BindExecJobs(jobs)
 	parent, _ := spawnRecoveryWorker(t, h)
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "child", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: parent.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "child", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: parent.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestExecCloseKeepsTheTreeOpenWhenAJobDoesNotStop(t *testing.T) {
 // predecessor left waits for the binding, then stops the jobs it learned
 // of; one that sees no binding in time is refused and closes nothing.
 func TestExecCloseWaitsForTheJobsToBind(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	h.runner.ExpectExecJobs()
 	worker, _ := spawnRecoveryWorker(t, h)
 	old := execBindWait

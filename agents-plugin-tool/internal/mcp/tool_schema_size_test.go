@@ -70,7 +70,7 @@ func listedToolSizes(t *testing.T, s *Server) []listedToolSize {
 // what the canonical list costs. A failure lists every tool over the cap,
 // largest first.
 func TestListedToolSchemasFitByteCap(t *testing.T) {
-	setPiVersion(t, "", fmt.Errorf("no pi here"))
+
 	wsflow := dashboardPackages[1]
 	for _, tc := range []struct {
 		name      string
@@ -84,7 +84,7 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(envNamespace, tc.namespace)
-			var agents PiAgents
+			var agents AgentHost
 			if tc.forward {
 				t.Setenv(wsagent.EnvPiToken, "token")
 				t.Setenv(wsagent.EnvPiEndpoint, "http://127.0.0.1:1")

@@ -3,365 +3,114 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"path/filepath"
+	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
-	"github.com/kang-sw/devenv/internal/wsconfig"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
-	"github.com/kang-sw/devenv/internal/wsmailbox"
-	"github.com/kang-sw/devenv/internal/wswake"
 )
 
-// pi_tools.go is the pi.* tools: a lead session spawns Pi subagents in the
-// dashboard daemon's agent runner (ServerOptions.Agents), steers them by
-// id, and collects each finished turn from a completion mail the daemon
-// posts to its reply-id queue (PiTurnReporter), with pi.wait as the
-// fallback. The live feed of the session's agents popover is pi_live.go.
-//
-// A Pi subagent's own attached ws-mcp has no runner: on the capability
-// token and the daemon endpoint the runner put in its environment
-// (wsagent.EnvPiToken, wsagent.EnvPiEndpoint), it forwards each pi.* call
-// to the runner's token route, which spawns and steers that subagent's own
-// children and delivers their reports into it (pi_forward.go).
+var legacyPiToolNames = []string{"pi.spawn", "pi.send", "pi.stop", "pi.wait", "pi.list", "pi.transcript"}
 
-// PiAgents is the dashboard daemon's agent runner as the pi.* tools use it
-// (*wsagent.Runner).
-type PiAgents interface {
-	Spawn(wsagent.SpawnSpec) (wsagent.State, error)
-	Send(id, text string) (wsagent.State, error)
-	Get(id string) (wsagent.State, error)
-	// Lineage reads a conversation's spawn edge without Get's file reads.
-	Lineage(id string) (wsagent.State, error)
-	Children(parent wsagent.ParentRef) []wsagent.State
-	CloseConversation(id string) (wsagent.State, error)
-	Wait(ctx context.Context, id string, timeout time.Duration) (wsagent.TurnResult, error)
-	Watch(fn func(wsagent.State)) (stop func())
-	Transcript(id string) ([]wslive.RingRecord, error)
-	// The agent.* tools (agent_tools.go) use the same runner.
-	AgentRunner
-}
-
-// DashboardPiSpawnKey lists the pi.* tools (with a daemon handle and a Pi
-// of at least piMinMajor.piMinMinor). Its manifest default differs per
-// package.
-const DashboardPiSpawnKey = "dashboard.pi_spawn_enabled"
-
-// The Pi version the pi.* tools need: the first whose RPC mode the Pi
-// backend speaks.
-const (
-	piMinMajor = 1
-	piMinMinor = 0
-)
-
-// pi.wait's timeout_s: its default and its cap.
-const (
-	piWaitDefault = 300 * time.Second
-	piWaitMax     = wsagent.PiWaitMax
-)
-
-// piTranscriptDefault is how many of the newest transcript entries
-// pi.transcript returns without a limit.
-const piTranscriptDefault = 40
-
-// piHarness is the agents.tier harness bucket pi.spawn resolves its tier
-// from, alone.
-const piHarness = wsagent.PiTierHarness
-
-// piProbe runs `pi --version` (a test seam); piVersion caches its answer
-// for the process: every server the daemon hosts shares one probe.
-// piProbeRecord reads the probe's on-disk record without running pi (a test
-// seam).
-var (
-	piProbe       = wsagent.PiVersion
-	piProbeRecord = wsagent.PiVersionCached
-	piVersion     = new(piVersionCache)
-)
-
-type piVersionCache struct {
-	once    sync.Once
-	done    atomic.Bool // set once version and err hold the probe's answer
-	version string
-	err     error
-	// recordOnce reads the probe's on-disk record at most once per process
-	// for PiReadyKnown; record and recorded hold what it found.
-	recordOnce sync.Once
-	record     string
-	recorded   bool
-}
-
-// installedPiVersion is the installed Pi's version, probed once per process.
-func installedPiVersion() (string, error) {
-	cache := piVersion
-	cache.once.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cache.version, cache.err = piProbe(ctx)
-		cache.done.Store(true)
-	})
-	return cache.version, cache.err
-}
-
-// WorktreeChildrenReader queries the daemon's runner for non-closed
-// conversations bound to a worktree. Set for every daemon-hosted server
-// (including token-forwarding workers) without granting the lead runner handle.
-type WorktreeChildrenReader interface {
-	ActiveChildrenInWorktree(worktree string) []wsagent.BoundWorktreeChild
-}
-
-// HasWorktreeChildrenReader reports whether this server holds a direct
-// daemon-side bound-child reader (for wiring tests).
-func (s *Server) HasWorktreeChildrenReader() bool { return s.pi.worktreeChildren != nil }
-
-// piHost is the server's side of the pi.* tools.
-type piHost struct {
-	// agents is the daemon's runner; nil on the direct path.
-	agents PiAgents
-	// worktreeChildren reads daemon-wide bound children for worktree.release.
-	worktreeChildren WorktreeChildrenReader
-	// stopWatch ends the live feed's runner subscription (Server.Close).
-	stopWatch func()
-
-	// keys caches a child's ws session key by its id, for its agents-popover
-	// row (pi_live.go).
-	keyMu sync.Mutex
-	keys  map[string]string
-}
-
-func isPiTool(name string) bool { return strings.HasPrefix(name, "pi.") }
-
-// piUnavailable is why the pi.* tools cannot run in this server, nil when
-// they can: no daemon runner, the knob off, or no usable Pi.
-func (s *Server) piUnavailable() error {
-	if s.piForwards() {
-		// The knob passed at the spawn tree's root; the daemon checks the
-		// Pi version and its runner on every forwarded call.
-		return nil
-	}
-	if s.pi.agents == nil {
-		return errors.New("Pi subagents run in the dashboard daemon's agent runner, and this MCP server is not hosted by the dashboard daemon (it runs as a ws-mcp process of its own, after the daemon refused its connection); restart the session once the dashboard daemon accepts it")
-	}
-	if !s.piKnobOn() {
-		return fmt.Errorf("%s is off; turn it on with config.tune and reconnect the session", DashboardPiSpawnKey)
-	}
-	return PiReady()
-}
-
-// piKnobOn reads dashboard.pi_spawn_enabled without a session, as
-// DashboardSettings does: undeclared reads off.
-func (s *Server) piKnobOn() bool {
-	if _, ok := s.declared.lookup(DashboardPiSpawnKey); !ok {
-		return false
-	}
-	got, err := s.resolveConfigGet("", DashboardPiSpawnKey)
-	if err != nil {
-		return false
-	}
-	on, _ := got.Value.(bool)
-	return on
-}
-
-// piParent is the parent reference of the children sessionKey spawns.
-func (s *Server) piParent(sessionKey string) wsagent.ParentRef {
-	return wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: s.mailboxReplyID(sessionKey)}
+func isPiTool(name string) bool {
+	return slices.Contains(legacyPiToolNames, name)
 }
 
 func (s *Server) handlePiTool(ctx context.Context, id json.RawMessage, tool string, args map[string]any) response {
-	if s.piForwards() {
-		return s.handlePiForward(ctx, id, tool, args)
+	if tool != "pi.list" && tool != "pi.transcript" {
+		return toolTextResponse(id, "", fmt.Errorf("%s: the Pi harness is retired; use agent.* for worker operations", tool))
+	}
+	if s.workerForwards() {
+		key, err := stringArg(tool, "session_key", args)
+		if err != nil {
+			return toolTextResponse(id, "", err)
+		}
+		if _, found := s.lookupSession(key); !found {
+			return toolTextResponse(id, "", fmt.Errorf("%s: unknown_session: session key not found", tool))
+		}
+		return s.forwardPiHistory(ctx, id, tool, args)
 	}
 	key, err := s.requireLeadSessionKey(tool, args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
-	if err := s.piUnavailable(); err != nil {
-		return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
+	if s.agents == nil {
+		return toolTextResponse(id, "", fmt.Errorf("%s: Pi session history requires a connection to the dashboard daemon", tool))
 	}
-	parent := s.piParent(key)
-	if tool == "pi.spawn" {
-		return s.handlePiSpawn(id, key, parent, args)
-	}
+
+	parent := wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: s.mailboxReplyID(key)}
 	if tool == "pi.list" {
-		children := s.pi.agents.Children(parent)
-		if wantsJSON(args) {
-			out := make([]piChildOut, 0, len(children))
-			for _, st := range children {
-				out = append(out, s.piChild(st))
-			}
-			return toolJSONResponse(id, out, nil)
-		}
-		return toolTextResponse(id, s.formatPiList(children), nil)
+		return piListResponse(id, args, s.agents.Children(parent))
 	}
 	child, err := stringArg(tool, "id", args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
-	if err := s.piOwned(tool, child, parent); err != nil {
-		return toolTextResponse(id, "", err)
+	st, err := s.agents.Lineage(child)
+	if err != nil || st.Backend != wsagent.BackendPi || st.Parent == nil || *st.Parent != parent {
+		return toolTextResponse(id, "", fmt.Errorf("%s: %s is not one of this session's Pi subagents (pi.list lists them)", tool, child))
 	}
-	switch tool {
-	case "pi.send":
-		message, err := rawStringArg(tool, "message", args)
-		if err == nil && strings.TrimSpace(message) == "" {
-			err = fmt.Errorf("%s: message is required", tool)
-		}
-		if err != nil {
-			return toolTextResponse(id, "", err)
-		}
-		st, err := s.pi.agents.Deliver(child, wsagent.Delivery{From: parent.ReplyID, Text: message})
-		if err != nil {
-			return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, s.piChild(st), nil)
-		}
-		return toolTextResponse(id, fmt.Sprintf("sent to Pi subagent %s: starts a turn if idle, otherwise steers its running turn at the next tool boundary. That turn's completion mail covers the message.\n", child), nil)
-	case "pi.stop":
-		st, err := s.pi.agents.CloseConversation(child)
-		if err != nil {
-			// A finished child closes on its own: a stop after that finds
-			// it as asked.
-			if cur, gerr := s.pi.agents.Get(child); gerr == nil && cur.Status == wsagent.StatusClosed {
-				st, err = cur, nil
-			}
-		}
-		if err != nil {
-			return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, s.piChild(st), nil)
-		}
-		return toolTextResponse(id, fmt.Sprintf("Pi subagent %s: %s; its process stopped; pi.send resumes the same conversation if its session file still exists, and pi.transcript still reads it.\n", child, s.piChildStatus(st)), nil)
-	case "pi.transcript":
-		records, err := s.pi.agents.Transcript(child)
-		if err != nil {
-			return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
-		}
-		limit := intFromArgument(args["limit"], piTranscriptDefault)
-		if len(records) > limit {
-			records = records[len(records)-limit:]
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, piTranscriptJSON(records), nil)
-		}
-		return toolTextResponse(id, formatPiTranscript(child, records), nil)
-	case "pi.wait":
-		timeout := piWaitDefault
-		if v, ok := args["timeout_s"]; ok {
-			if d := durationFromSeconds(v); d > 0 {
-				timeout = d
-			}
-		}
-		timeout = min(timeout, piWaitMax)
-		// The wait also ends when the server begins to drain.
-		waitCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		stop := context.AfterFunc(s.drainContext(), cancel)
-		defer stop()
-		res, err := s.pi.agents.Wait(waitCtx, child, timeout)
-		if err != nil {
-			return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, s.piWaitResult(res), nil)
-		}
-		return toolTextResponse(id, s.formatPiWait(res, "its completion mail arrives when the turn ends"), nil)
-	}
-	return toolTextResponse(id, "", fmt.Errorf("unknown tool: %s", tool))
-}
-
-// piOwned refuses a child id that is not one of parent's children.
-func (s *Server) piOwned(tool, child string, parent wsagent.ParentRef) error {
-	st, err := s.pi.agents.Get(child)
-	if err == nil && st.Parent != nil && *st.Parent == parent {
-		return nil
-	}
-	return fmt.Errorf("%s: %s is not one of this session's Pi subagents (pi.list lists them)", tool, child)
-}
-
-func piSpawnProfile(args map[string]any) (string, error) {
-	if _, present := args["profile"]; !present {
-		return wsagent.PiWorkerProfile, nil
-	}
-	return stringArg("pi.spawn", "profile", args)
-}
-
-func (s *Server) handlePiSpawn(id json.RawMessage, key string, parent wsagent.ParentRef, args map[string]any) response {
-	const tool = "pi.spawn"
-	profile, err := piSpawnProfile(args)
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
-	prompt, err := rawStringArg(tool, "prompt", args)
-	if err == nil && strings.TrimSpace(prompt) == "" {
-		err = fmt.Errorf("%s: prompt is required", tool)
-	}
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
-	rawTier, err := stringArg(tool, "tier", args)
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
-	tier := wsconfig.ModelAlias(rawTier)
-	if tier == "" {
-		return toolTextResponse(id, "", fmt.Errorf("%s: tier must be small, medium, large, or xlarge; got %q", tool, rawTier))
-	}
-	tiers, err := wsconfig.HarnessTiers(s.sessionConfigOptions(key), piHarness)
-	if err != nil {
-		return toolTextResponse(id, "", fmt.Errorf("%s: read agents.tier: %w", tool, err))
-	}
-	mapping, ok := tiers[tier]
-	if !ok {
-		return toolTextResponse(id, "", wsagent.PiTierRefusal(tool, tier, tiers))
-	}
-	entry, found := s.lookupSession(key)
-	if !found {
-		return toolTextResponse(id, "", fmt.Errorf("%s: unknown_session: session key not found", tool))
-	}
-	cwd, _ := args["cwd"].(string)
-	cwd = strings.TrimSpace(cwd)
-	switch {
-	case cwd == "":
-		cwd = entry.root
-	case !filepath.IsAbs(cwd):
-		cwd = filepath.Join(entry.root, cwd)
-	}
-	label, _ := args["label"].(string)
-	if strings.TrimSpace(label) == "" {
-		label = prompt
-	}
-	st, err := s.pi.agents.Spawn(wsagent.SpawnSpec{
-		Profile: profile,
-		Root:    entry.root,
-		Cwd:     cwd,
-		Model:   mapping.Model,
-		Effort:  mapping.Effort,
-		Tier:    tier,
-		Prompt:  prompt,
-		Label:   label,
-		Parent:  &parent,
-	})
+	records, err := s.agents.Transcript(child)
 	if err != nil {
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
 	}
-	out := s.piChild(st)
-	out.Tier = tier
-	if wantsJSON(args) {
-		return toolJSONResponse(id, out, nil)
-	}
-	return toolTextResponse(id, fmt.Sprintf("spawned Pi subagent %s (tier %s: %s, effort %s) in %s; its first turn runs now.\nIts completion mail (status and final message) arrives in this session's mailbox when the turn ends: end your turn and let it arrive. Use pi.wait only on a host that does not wake on mailbox push. Finished children sleep; pi.send resumes the same conversation if its session file still exists. Steer it with pi.send; stop it with pi.stop.\n", st.ID, tier, orDash(st.Model), orDash(st.Effort), piCwd(st)), nil)
+	return piTranscriptResponse(id, args, child, records)
 }
 
-// piChildOut is one child as pi.spawn, pi.send, pi.stop, and pi.list
-// answer it in JSON.
+func (s *Server) forwardPiHistory(ctx context.Context, id json.RawMessage, tool string, args map[string]any) response {
+	op := strings.TrimPrefix(tool, "pi.")
+	if op == "list" {
+		var answer struct {
+			Conversations []wsagent.State `json:"conversations"`
+		}
+		if err := s.workerCall(ctx, op, map[string]any{}, workerForwardTimeout, &answer); err != nil {
+			return agentFailure(id, tool, err)
+		}
+		return piListResponse(id, args, answer.Conversations)
+	}
+	child, err := stringArg(tool, "id", args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	var answer struct {
+		Records []wslive.RingRecord `json:"records"`
+	}
+	if err := s.workerCall(ctx, op, map[string]any{"id": child}, workerForwardTimeout, &answer); err != nil {
+		return agentFailure(id, tool, err)
+	}
+	return piTranscriptResponse(id, args, child, answer.Records)
+}
+
+func piListResponse(id json.RawMessage, args map[string]any, states []wsagent.State) response {
+	children := make([]wsagent.State, 0, len(states))
+	for _, st := range states {
+		if st.Backend == wsagent.BackendPi {
+			children = append(children, st)
+		}
+	}
+	if wantsJSON(args) {
+		out := make([]piChildOut, 0, len(children))
+		for _, st := range children {
+			out = append(out, piChild(st))
+		}
+		return toolJSONResponse(id, out, nil)
+	}
+	return toolTextResponse(id, formatPiList(children), nil)
+}
+
+func piTranscriptResponse(id json.RawMessage, args map[string]any, child string, records []wslive.RingRecord) response {
+	limit := intFromArgument(args["limit"], 40)
+	if len(records) > limit {
+		records = records[len(records)-limit:]
+	}
+	if wantsJSON(args) {
+		return toolJSONResponse(id, piTranscriptJSON(records), nil)
+	}
+	return toolTextResponse(id, formatPiTranscript(child, records), nil)
+}
+
 type piChildOut struct {
 	ID      string `json:"id"`
 	Status  string `json:"status"`
@@ -376,24 +125,8 @@ type piChildOut struct {
 	Closed  string `json:"closed_at,omitempty"`
 }
 
-func (s *Server) piChild(st wsagent.State) piChildOut {
-	return piChildOut{ID: st.ID, Status: s.piChildStatus(st), Label: st.Label, Tier: st.Tier, Model: st.Model, Effort: st.Effort, Cwd: piCwd(st), Held: st.Held, Error: st.Error, Created: st.CreatedAt, Closed: st.ClosedAt}
-}
-
-// piChildStatus is an MCP-only lifecycle label. Keep the runner and REST
-// status unchanged. Only closed children require an existing session file to
-// revive; an open idle child can still be starting its first process/file.
-func (s *Server) piChildStatus(st wsagent.State) string {
-	if st.Status == wsagent.StatusClosed {
-		if dir, err := s.dashboard.stateDir(); err == nil && !wsagent.PiSessionAvailable(wsdashboard.SessionDir(dir, st.ID)) {
-			return "deleted"
-		}
-		return "sleep"
-	}
-	if st.Status == wsagent.StatusIdle && !st.Process {
-		return "sleep"
-	}
-	return st.Status
+func piChild(st wsagent.State) piChildOut {
+	return piChildOut{ID: st.ID, Status: wsagent.StatusClosed, Label: st.Label, Tier: st.Tier, Model: st.Model, Effort: st.Effort, Cwd: piCwd(st), Held: st.Held, Error: st.Error, Created: st.CreatedAt, Closed: st.ClosedAt}
 }
 
 // piCwd is the directory a child runs in.
@@ -404,20 +137,13 @@ func piCwd(st wsagent.State) string {
 	return st.Root
 }
 
-func orDash(v string) string {
-	if v == "" {
-		return "-"
-	}
-	return v
-}
-
-func (s *Server) formatPiList(children []wsagent.State) string {
+func formatPiList(children []wsagent.State) string {
 	if len(children) == 0 {
 		return "no Pi subagents\n"
 	}
 	var b strings.Builder
 	for _, st := range children {
-		fmt.Fprintf(&b, "%s  %s  %s/%s  %s", st.ID, s.piChildStatus(st), orDash(st.Model), orDash(st.Effort), piCwd(st))
+		fmt.Fprintf(&b, "%s  %s  %s/%s  %s", st.ID, wsagent.StatusClosed, orDash(st.Model), orDash(st.Effort), piCwd(st))
 		if st.Label != "" {
 			fmt.Fprintf(&b, "  %q", st.Label)
 		}
@@ -428,44 +154,6 @@ func (s *Server) formatPiList(children []wsagent.State) string {
 			fmt.Fprintf(&b, "  error: %s", oneLine(st.Error))
 		}
 		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// piWaitResult relabels only Wait's closed-conversation sentinel, not a
-// settled turn outcome (done, failed, or interrupted).
-func (s *Server) piWaitResult(res wsagent.TurnResult) wsagent.TurnResult {
-	if res.Status == wsagent.TurnClosed {
-		res.Status = s.piChildStatus(wsagent.State{ID: res.ID, Status: wsagent.StatusClosed})
-	}
-	return res
-}
-
-// formatPiWait is pi.wait's answer; later says how the turn's report
-// arrives when the wait ends first.
-func (s *Server) formatPiWait(res wsagent.TurnResult, later string) string {
-	var b strings.Builder
-	switch res.Status {
-	case wsagent.TurnRunning:
-		fmt.Fprintf(&b, "Pi subagent %s: still running; %s (or call pi.wait again)\n", res.ID, later)
-		return b.String()
-	case wsagent.TurnClosed:
-		fmt.Fprintf(&b, "Pi subagent %s: %s (no turn result); pi.send resumes it if its session file still exists\n", res.ID, s.piWaitResult(res).Status)
-		return b.String()
-	}
-	if res.Delivered {
-		fmt.Fprintf(&b, "Pi subagent %s: turn %s; its report already reached you (steered into your turn or sent as your next message), so it is not repeated here\n", res.ID, res.Status)
-		return b.String()
-	}
-	fmt.Fprintf(&b, "Pi subagent %s: turn %s", res.ID, res.Status)
-	if res.Error != "" {
-		fmt.Fprintf(&b, ": %s", res.Error)
-	}
-	b.WriteString("\n")
-	if res.Message != "" {
-		b.WriteString("\n" + res.Message + "\n")
 	}
 	return b.String()
 }
@@ -527,152 +215,4 @@ func piToolsLine(r wslive.RingRecord) string {
 		line += " (" + strings.Join(parts, ", ") + ")"
 	}
 	return line
-}
-
-// PiReady is the daemon runner's Options.ChildCheck: an installed Pi of at
-// least piMinMajor.piMinMinor, probed once per process as for a lead's
-// pi.* tools.
-func PiReady() error {
-	return piReadyVersion(installedPiVersion())
-}
-
-// PiReadyKnown is the daemon runner's Options.ChildCheckKnown: PiReady's
-// answer without running pi. It answers from the process's probe once that
-// ran, else from a fresh on-disk probe record read once per process (as the
-// probe itself runs once); known is false otherwise.
-func PiReadyKnown() (known bool, err error) {
-	cache := piVersion
-	if cache.done.Load() {
-		return true, piReadyVersion(cache.version, cache.err)
-	}
-	cache.recordOnce.Do(func() { cache.record, cache.recorded = piProbeRecord() })
-	if !cache.recorded {
-		return false, nil
-	}
-	return true, piReadyVersion(cache.record, nil)
-}
-
-func piReadyVersion(version string, err error) error {
-	if err != nil {
-		return fmt.Errorf("no usable pi: %v", err)
-	}
-	if !wsagent.VersionAtLeast(version, piMinMajor, piMinMinor) {
-		return fmt.Errorf("pi %s is installed; Pi subagents need pi %d.%d or later", version, piMinMajor, piMinMinor)
-	}
-	return nil
-}
-
-// PiTurnReporter is the daemon runner's Options.Report: it posts each
-// settled turn of a lead's spawned child to the lead's reply-id queue as a
-// system message labelled agent:<id> and wakes the mailbox waits. The
-// registry is the one the daemon's own environment resolves, as for every
-// session it hosts. A failed post is logged to log.
-func PiTurnReporter(log io.Writer) func(wsagent.TurnReport) {
-	return func(rep wsagent.TurnReport) {
-		if rep.Parent.Kind != wsagent.ParentLead {
-			return
-		}
-		address := wsagent.AgentAddress(rep.Result.ID)
-		content := fmt.Sprintf("Reply with mailbox.send(to: %q).\n%s", address, wsagent.ReportText(rep))
-		if err := (wsmailbox.Paths{}).Store().PostSystem(rep.Parent.ReplyID, "agent:"+rep.Result.ID, content, time.Now()); err != nil {
-			if log != nil {
-				fmt.Fprintf(log, "agent %s: report to %s: %v\n", rep.Result.ID, rep.Parent.ReplyID, err)
-			}
-			return
-		}
-		wswake.Mailbox.Wake()
-	}
-}
-
-// piToolDefinitions are the pi.* tools' definitions.
-func piToolDefinitions() []map[string]any {
-	key := stringProperty("Caller's ws session key (see ws:workflow-manual); a lead session's.")
-	format := stringProperty(`Optional output format. Use "json" for structured output.`)
-	child := stringProperty("The Pi subagent's id, as pi.spawn returned it.")
-	return []map[string]any{
-		{
-			"name":        "pi.spawn",
-			"description": "Spawn a Pi subagent: a headless Pi coding agent the dashboard daemon runs for this session, working in cwd. profile names any resolvable non-lead Pi agent profile; omitted means pi-worker (coding and ws git tools), while pi-mini-lead adds bounded ticket workflow tools. prompt is its first message; a rendered playbook prompt works as it does for a native subagent. tier picks the model from the pi bucket of agents.tier alone; an unset tier refuses and names the tiers that are set. Returns the subagent's id at once while its turn runs. Each time a turn ends or fails, a completion mail (the id, the status, and the final assistant message) arrives in this session's mailbox: that is the primary signal, and on a host with mailbox push it starts this session's next turn. End your turn and let the completion mail arrive; use pi.wait only on a host that does not wake on mailbox push. Steer it with pi.send, read it with pi.transcript, list this session's subagents with pi.list, and stop one with pi.stop. Finished children sleep; pi.send resumes the same conversation if its session file still exists.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"prompt":      stringProperty("The subagent's first message."),
-					"profile":     stringProperty("Optional agent.profile name: a non-lead Pi profile. Default: pi-worker. pi-mini-lead adds bounded ticket workflow tools."),
-					"tier":        stringProperty(`Capability tier: "small", "medium", "large", or "xlarge", resolved from agents.tier's pi bucket.`),
-					"cwd":         stringProperty("Directory the subagent works in: absolute, or relative to the session's root. Default: the session's root."),
-					"label":       stringProperty("Optional one-line name for the subagent's agents-popover row and its completion mail; default: the prompt's first line."),
-					"format":      format,
-				},
-				"required": []string{"session_key", "prompt", "tier"},
-			},
-		},
-		{
-			"name":        "pi.send",
-			"description": "Send one of this session's Pi subagents a follow-up message. A sleeping subagent resumes on its existing session file with the same id and settings; a missing, inaccessible, or non-regular file is refused when reopening a retired child, shown as deleted by pi.list. With no turn running it starts the next turn now; during a turn it steers that running turn at the next tool boundary, without cancelling in-flight tool calls. The running turn's completion mail covers the steered message; no extra turn is queued after it is taken. End your turn and let the completion mail arrive; use pi.wait only on a host that does not wake on mailbox push.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"id":          child,
-					"message":     stringProperty("The message."),
-					"format":      format,
-				},
-				"required": []string{"session_key", "id", "message"},
-			},
-		},
-		{
-			"name":        "pi.list",
-			"description": "List the Pi subagents this session spawned: id, status (idle, running, sleep, or deleted), model and effort, working directory, label, held messages, and the last error. Sleep means no process runs. Deleted means a retired child's session file is missing, inaccessible, or not regular; pi.send cannot revive it on that file. Other resume prerequisites are not checked by this list.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"format":      format,
-				},
-				"required": []string{"session_key"},
-			},
-		},
-		{
-			"name":        "pi.stop",
-			"description": "Stop one of this session's Pi subagents and its descendants: its process stops and a running turn ends with it. No completion mail follows. Its record stays: pi.list shows sleep (or deleted if its session file is unavailable), pi.transcript still reads it, and pi.send resumes it if its session file still exists.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"id":          child,
-					"format":      format,
-				},
-				"required": []string{"session_key", "id"},
-			},
-		},
-		{
-			"name":        "pi.transcript",
-			"description": "Read one of this session's Pi subagents' conversation, oldest first: the messages it was sent, its replies, its tool calls by tool, and its turn ends. Works for a sleeping subagent too.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"id":          child,
-					"limit":       integerProperty(fmt.Sprintf("How many of the newest entries to return; default %d.", piTranscriptDefault)),
-					"format":      format,
-				},
-				"required": []string{"session_key", "id"},
-			},
-		},
-		{
-			"name":        "pi.wait",
-			"description": fmt.Sprintf("For a host that does not wake on mailbox push; otherwise end your turn and let the completion mail arrive. Block until the turn of one of this session's Pi subagents that took your last pi.send (or pi.spawn's prompt) ends or fails, and return its status and final assistant message; it never returns an earlier turn's message, and a turn that already ended returns at once. timeout_s defaults to %d and is capped at %d; when it passes first the status is running. The host may cut a long call off sooner (a tool-call timeout), so prefer a timeout below the host's. The completion mail still arrives after a wait collected the result.", int(piWaitDefault/time.Second), int(piWaitMax/time.Second)),
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_key": key,
-					"id":          child,
-					"timeout_s":   numberProperty(fmt.Sprintf("Seconds to wait at most; default %d, at most %d.", int(piWaitDefault/time.Second), int(piWaitMax/time.Second))),
-					"format":      format,
-				},
-				"required": []string{"session_key", "id"},
-			},
-		},
-	}
 }

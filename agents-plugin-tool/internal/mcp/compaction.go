@@ -91,18 +91,18 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
-		if runner, ok := s.pi.agents.(interface {
+		if runner, ok := s.agents.(interface {
 			CompactWithSummary(string, string, *bool, *wscompact.LeadSummary) wsagent.CompactResult
 		}); ok {
 			out = runner.CompactWithSummary(key, target, resume, prose)
 		} else {
 			out = wsagent.CompactResult{Status: "unsupported", Reason: "lead_summary requires an in-daemon builtin lead"}
 		}
-	} else if runner, ok := s.pi.agents.(compactRunner); ok {
+	} else if runner, ok := s.agents.(compactRunner); ok {
 		out = runner.Compact(key, target, resume)
-	} else if s.piForwards() {
+	} else if s.workerForwards() {
 		// The token route limits this request to the token's own key.
-		if err := s.piCall(ctx, "compact", map[string]any{"target": target, "resume": resume}, piForwardTimeout, &out); err != nil {
+		if err := s.workerCall(ctx, "compact", map[string]any{"target": target, "resume": resume}, workerForwardTimeout, &out); err != nil {
 			out = wsagent.CompactResult{Status: "error", Reason: err.Error()}
 		}
 	}

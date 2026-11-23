@@ -806,7 +806,7 @@ func TestRebindMailboxOwnerRebuildsReclaimedRecord(t *testing.T) {
 
 	t.Setenv(envMailbox, "ivan@worktree")
 	s := NewServer(root, "test")
-	s.observeHarness("test", "pi")
+	s.observeHarness("test", "claude")
 	s.ensureMailboxRegistered(root)
 
 	deadPID := exitedChildPID(t)
@@ -832,7 +832,7 @@ func TestRebindMailboxOwnerRebuildsReclaimedRecord(t *testing.T) {
 	got := loadPresence(t, path, "ivan")
 	want := wsmailbox.Presence{
 		Name: "ivan", Scope: wsmailbox.ScopeWorktree,
-		Harness: "pi", Cwd: root, StartedAt: rebindAt, LastSeen: rebindAt,
+		Harness: "claude", Cwd: root, StartedAt: rebindAt, LastSeen: rebindAt,
 		PID: os.Getpid(), Owner: "lead-key",
 	}
 	if got != want {

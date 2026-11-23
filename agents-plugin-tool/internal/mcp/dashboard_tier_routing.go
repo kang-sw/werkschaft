@@ -297,15 +297,15 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, toke
 		route.Error = err.Error()
 		return route
 	}
-	route.Trace, route.Hops, route.Harness, route.Resolved, route.Bundle = res.Trace(), res.Hops, res.Harness, res.Size, res.Bundle
+	route.Trace, route.Hops, route.Harness, route.Resolved, route.Bundle = res.Trace(), res.Hops, wsagent.TierRuntimeHarness(res.Harness), res.Size, res.Bundle
 	route.CallerFallthrough = res.CallerFallthrough
-	why, known := check(res.Harness)
+	why, known := check(route.Harness)
 	if why != "" {
 		route.Unavailable, route.BindingError = why, why
 		return route
 	}
 	if !known {
-		route.AvailabilityUnknown = unknown(res.Harness)
+		route.AvailabilityUnknown = unknown(route.Harness)
 	}
 	binding, err := wsagent.RoutedTierBinding(opts, res)
 	if err != nil {

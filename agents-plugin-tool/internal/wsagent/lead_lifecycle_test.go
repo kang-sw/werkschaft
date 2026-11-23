@@ -1,7 +1,6 @@
 package wsagent
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -239,13 +237,11 @@ func TestLeadStartEndsThePreviousHolderFirst(t *testing.T) {
 	})
 }
 
-// TestLeadOrphanHolderIsEndedAfterTheFirstScan: a lead holder no
-// conversation owns runs a process nobody can reach; it is ended once the
-// first scan has shown every holder. A holder of another kind is not the
-// runner's to end.
+// The first scan ends an orphaned lead holder with an identified supported
+// backend. Terminal holders are outside the conversation sweep.
 func TestLeadOrphanHolderIsEndedAfterTheFirstScan(t *testing.T) {
 	h := newLeadHarness(t)
-	orphan := h.holders.add(holderSession{Kind: "lead", ReplyID: "gone"})
+	orphan := h.holders.add(holderSession{Kind: holderKindLead, Backend: BackendClaude, ReplyID: "gone"})
 	other := h.holders.add(map[string]any{"kind": "terminal"})
 	h.start()
 	eventually(t, "the orphan to be ended", func() bool { return h.holders.opCount("stop "+orphan) == 1 })
@@ -345,240 +341,17 @@ func TestLeadIdleStopWaitsForBackgroundTasks(t *testing.T) {
 }
 
 // TestPiLeadIdleStopWaitsForBackgroundShell verifies the hosted count gates idle stop.
-func TestPiLeadIdleStopWaitsForBackgroundShell(t *testing.T) {
-	h := newLeadHarness(t)
-	h.globalProfile(LeadProfilePi, `{"backend":"pi","lead":true,"idle_timeout_seconds":1}`)
-	h.start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "one")
-	holder := h.holder(id)
-	h.holders.out(holder, `{"type":"agent_start"}`, string(piWidgetLine(piEventsWidgetKey, `{"kind":"status","background":1,"monitors":0}`)), `{"type":"agent_settled"}`)
-	h.idle(id)
-	eventually(t, "background shell count", func() bool { return h.state(id).BackgroundTasks == 1 })
-	time.Sleep(1600 * time.Millisecond)
-	if st := h.state(id); !st.Process || st.BackgroundTasks != 1 || h.holders.opCount("stop") != 0 {
-		t.Fatalf("a background shell keeps the process alive: %+v, holder calls %v", st, h.holders.opList())
-	}
-	h.holders.out(holder, string(piWidgetLine(piEventsWidgetKey, `{"kind":"status","background":0,"monitors":0}`)))
-	eventually(t, "the idle stop", func() bool { return !h.state(id).Process && h.holders.opCount("stop "+holder) == 1 })
-}
-
 // TestPiLeadIdleStopAndMailWake verifies a stopped Pi lead wakes for mail.
-func TestPiLeadIdleStopAndMailWake(t *testing.T) {
-	h := newLeadHarness(t)
-	h.globalProfile(LeadProfilePi, `{"backend":"pi","lead":true,"idle_timeout_seconds":1}`)
-	h.start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "one")
-	holder := h.holder(id)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
-	h.idle(id)
-	eventually(t, "the idle stop", func() bool { return !h.state(id).Process && h.holders.opCount("stop "+holder) == 1 })
-	h.mail.deliver(h.record(id).WSKey, "From a@x: ping")
-	eventually(t, "mail to restart the lead", func() bool {
-		newHolder := h.record(id).HolderID
-		if newHolder == "" || newHolder == holder {
-			return false
-		}
-		prompts := h.holders.inputs(newHolder, "prompt")
-		return len(prompts) == 1 && sameJSON(t, json.RawMessage(prompts[0]), []byte(`{"type":"prompt","message":"From a@x: ping"}`))
-	})
-}
-
 // TestPiLeadTurnsAndCompact: a pi lead runs the user's own loadout (no
 // off switches on its command line, no tool-loadout check), a run that
 // starts with no send opens a turn, and a typed /compact is the RPC compact
 // command whose answer ends the turn.
-func TestPiLeadTurnsAndCompact(t *testing.T) {
-	h := newLeadHarness(t).start()
-	st := h.lead(BackendPi, LeadOptions{})
-	id := st.ID
-	if !st.Lead || st.Profile != LeadProfilePi || st.PermissionMode != "" {
-		t.Fatalf("created pi lead = %+v", st)
-	}
-	h.send(id, "hello")
-	holder := h.holder(id)
-	spec := h.holders.spawned(holder)
-	if mode, _ := flagValue(spec.Argv, "--mode"); spec.Argv[0] != fakeHarness("pi") || mode != "rpc" {
-		t.Fatalf("spawn argv = %v", spec.Argv)
-	}
-	for _, banned := range []string{"--no-extensions", "--no-skills", "--no-tools", "--tools", "--no-context-files", "--system-prompt", "--append-system-prompt"} {
-		if slices.Contains(spec.Argv, banned) {
-			t.Fatalf("a pi lead's args must not carry %s: %v", banned, spec.Argv)
-		}
-	}
-	for name, want := range map[string]string{EnvHostedSession: "1", EnvHostedSessionKey: h.record(id).WSKey, EnvHostedSessionRow: wsdashboard.RegistrationPath(h.dir, id)} {
-		if got, _ := specEnv(spec, name); got != want {
-			t.Fatalf("env %s = %q, want %q", name, got, want)
-		}
-	}
-	for _, name := range []string{"WS_PI_ROLE", "WS_MAILBOX", "WS_MCP_ROOT"} {
-		if v, ok := specEnv(spec, name); ok {
-			t.Fatalf("env %s=%q must not reach a lead's harness", name, v)
-		}
-	}
-	prompts := func() []string { return h.holders.inputs(holder, "prompt") }
-	if got := prompts(); len(got) != 1 || !sameJSON(t, json.RawMessage(got[0]), mustJSON(t, map[string]string{"type": "prompt", "message": h.envelope("hello")})) {
-		t.Fatalf("prompt lines = %q", got)
-	}
-	// A tool loadout no profile lists is the user's own, not a refusal.
-	h.holders.out(holder,
-		`{"type":"agent_start"}`,
-		`{"type":"message_end","message":{"role":"system","toolsAdded":[{"name":"bash"},{"name":"some_extension_tool"}]}}`,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"stopReason":"stop"}}`,
-		`{"type":"agent_settled"}`)
-	h.idle(id)
-	if st := h.state(id); !st.Process || st.Error != "" {
-		t.Fatalf("after a pi turn: %+v", st)
-	}
-	if got := ringTexts(h.ring(id), wslive.RingReply); !slices.Equal(got, []string{"hi"}) {
-		t.Fatalf("ring replies = %q", got)
-	}
-
-	// A run nobody sent (a pushed batch) is a turn.
-	h.holders.out(holder, `{"type":"agent_start"}`)
-	eventually(t, "the unsolicited run", func() bool { return h.state(id).Status == StatusRunning })
-	h.holders.out(holder, `{"type":"agent_settled"}`)
-	h.idle(id)
-
-	// /compact is the compact command, and its answer ends the turn.
-	h.send(id, "/compact keep the names")
-	eventually(t, "the compact command", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	if got := h.holders.inputs(holder, "compact")[0]; !sameJSON(t, json.RawMessage(got), []byte(`{"type":"compact","customInstructions":"keep the names"}`)) || len(prompts()) != 1 {
-		t.Fatalf("compact line = %s (prompts %q)", got, prompts())
-	}
-	if st := h.state(id); st.Status != StatusRunning {
-		t.Fatalf("a compaction is a turn: %+v", st)
-	}
-	h.holders.out(holder, `{"type":"response","command":"compact","success":true}`)
-	h.idle(id)
-	h.send(id, "/compact")
-	eventually(t, "the second compact command", func() bool { return len(h.holders.inputs(holder, "compact")) == 2 })
-	h.holders.out(holder, `{"type":"response","command":"compact","success":false,"error":"nothing to compact"}`)
-	eventually(t, "the refused compaction to end the turn with its error", func() bool {
-		st := h.state(id)
-		return st.Status == StatusIdle && strings.Contains(st.Error, "nothing to compact")
-	})
-
-	// Pi leads do not idle stop unless their profile explicitly opts in.
-	var idleAfter time.Duration
-	c := h.runner.conv(id)
-	c.do(func() { idleAfter = c.idleAfter })
-	if idleAfter != 0 || h.holders.opCount("stop") != 0 {
-		t.Fatalf("a pi lead's idle stop = %v, want 0; holder calls %v", idleAfter, h.holders.opList())
-	}
-}
-
 // TestPiLeadSubagentRows: the subagent widget a hosted pi lead sets
 // reaches the session's snapshot as subagent rows, through the runner's
 // own projection, and the rows still running end failed when the lead's
 // process exits, as a claude lead's subagents do.
-func TestPiLeadSubagentRows(t *testing.T) {
-	h := newLeadHarness(t).start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "hello")
-	holder := h.holder(id)
-	h.holders.out(holder, `{"type":"agent_start"}`,
-		string(piWidgetLine(piAgentsWidgetKey,
-			`{"kind":"agent","agentId":"child-1","label":"audit","status":"running","caption":"worker","batches":[],"model":"gpt-x","effort":"high"}`,
-			`{"kind":"agent","agentId":"child-2","label":"probe","status":"running","caption":"explore","batches":[]}`,
-			`{"kind":"reset"}`,
-		)),
-		string(piWidgetLine(piAgentsWidgetKey, `{"kind":"agent","agentId":"child-2","status":"done"}`)),
-		`{"type":"agent_settled"}`)
-	h.idle(id)
-	rows := func() map[string]wslive.Agent {
-		out := map[string]wslive.Agent{}
-		for _, a := range h.snapshot(id).Agents {
-			out[a.ID] = a
-		}
-		return out
-	}
-	got := rows()
-	// The widget's reset line was skipped: it would have dropped both rows.
-	if a := got["child-1"]; len(got) != 2 || a.Status != wslive.StatusRunning || a.Label != "audit" || a.Model != "gpt-x" || a.Effort != "high" || got["child-2"].Status != wslive.StatusDone {
-		t.Fatalf("subagent rows = %+v", got)
-	}
-
-	h.holders.exit(holder, 0)
-	eventually(t, "the process's end", func() bool { return !h.state(id).Process })
-	got = rows()
-	if got["child-1"].Status != wslive.StatusFailed || got["child-2"].Status != wslive.StatusDone {
-		t.Fatalf("rows after the process ended = %+v", got)
-	}
-}
-
 // TestPiLeadMapper pins what a pi lead's mapper does differently from a
 // profile conversation's.
-func TestPiLeadMapper(t *testing.T) {
-	spec := StartSpec{Root: "/work", Dir: "/sess", Profile: Profile{Backend: BackendPi, Lead: true}, Lead: &LeadSpec{}}
-	args := piLeadArgs(spec)
-	if session, _ := flagValue(args, "--session"); len(args) != 6 || args[0] != "--mode" || args[1] != "rpc" || session != piSessionFile("/sess") {
-		t.Fatalf("piLeadArgs = %v", args)
-	}
-	spec.Model, spec.Effort = "anthropic/claude-x", "high"
-	args = piLeadArgs(spec)
-	if model, _ := flagValue(args, "--model"); model != "anthropic/claude-x" {
-		t.Fatalf("piLeadArgs = %v", args)
-	}
-	if thinking, _ := flagValue(args, "--thinking"); thinking != "high" {
-		t.Fatalf("piLeadArgs = %v", args)
-	}
-
-	lead := newPiMapper(spec)
-	if evs := lead.mapLine([]byte(`{"type":"agent_start"}`), nopReplies{}); len(evs) != 1 || !evs[0].TurnStart {
-		t.Fatalf("a lead's agent_start = %+v", evs)
-	}
-	if evs := lead.mapLine([]byte(`{"type":"response","command":"compact","success":true}`), nopReplies{}); len(evs) != 0 {
-		t.Fatalf("a compact answer must not settle the lead's active native run: %+v", evs)
-	}
-	lead.mapLine([]byte(`{"type":"agent_settled"}`), nopReplies{})
-	if evs := lead.mapLine([]byte(`{"type":"response","command":"compact","success":true}`), nopReplies{}); len(evs) == 0 || !evs[len(evs)-1].TurnEnd || evs[len(evs)-1].TurnError != "" {
-		t.Fatalf("an idle lead's compact answer = %+v", evs)
-	}
-	loadout := []byte(`{"type":"message_end","message":{"role":"system","toolsAdded":[{"name":"some_extension_tool"}]}}`)
-	if evs := lead.mapLine(loadout, nopReplies{}); countEvents(evs, func(ev Event) bool { return ev.Fatal != nil }) != 0 {
-		t.Fatalf("a lead's loadout is not checked: %+v", evs)
-	}
-
-	plain := newPiMapper(piSpec(t, `{"backend":"pi"}`))
-	if evs := plain.mapLine([]byte(`{"type":"agent_start"}`), nopReplies{}); len(evs) != 1 || !evs[0].TurnStart {
-		t.Fatalf("a worker's agent_start rebuilds its held turn: %+v", evs)
-	}
-	if evs := plain.mapLine([]byte(`{"type":"response","command":"compact","success":true}`), nopReplies{}); len(evs) != 0 {
-		t.Fatalf("a profile conversation sends no compact command: %+v", evs)
-	}
-	if evs := plain.mapLine(loadout, nopReplies{}); countEvents(evs, func(ev Event) bool { return ev.Fatal != nil }) != 1 {
-		t.Fatalf("a profile conversation's loadout is checked: %+v", evs)
-	}
-
-	// Explicit timeouts, including zero, override the lead default.
-	seconds, zero := 90, 0
-	for _, tc := range []struct {
-		profile Profile
-		want    time.Duration
-	}{
-		{Profile{Backend: BackendPi, Lead: true, IdleTimeoutSeconds: &zero}, 0},
-		{Profile{Backend: BackendPi, Lead: true, IdleTimeoutSeconds: &seconds}, 90 * time.Second},
-		{Profile{Backend: BackendPi, Lead: true}, 0},
-	} {
-		if got := tc.profile.IdleTimeout(); got != tc.want {
-			t.Errorf("%+v idle timeout = %v, want %v", tc.profile, got, tc.want)
-		}
-	}
-
-	for text, want := range map[string]string{"/compact": "", "/compact keep x": "keep x", " /compact ": ""} {
-		if rest, ok := piCompactCommand(text); !ok || rest != want {
-			t.Errorf("piCompactCommand(%q) = %q, %v", text, rest, ok)
-		}
-	}
-	for _, text := range []string{"/compacted", "please /compact", "/compact\nand more"} {
-		if _, ok := piCompactCommand(text); ok {
-			t.Errorf("piCompactCommand(%q) should not match", text)
-		}
-	}
-}
-
 // ringKinds counts the ring's entries of kind.
 func ringKinds(ring []wslive.RingEntry, kind string) int {
 	n := 0
@@ -672,30 +445,6 @@ func TestLeadFailedMailOnlySendRetriesOnce(t *testing.T) {
 }
 
 // A compact write with unknown outcome is never retried automatically.
-func TestPiLeadFailedCommandNeedsExplicitRetry(t *testing.T) {
-	h := newLeadHarness(t).start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.holders.failInputs("compact", 1)
-	h.sendCommand(id, "compact", "keep the names")
-	eventually(t, "failed compact reported", func() bool { return strings.Contains(h.state(id).Error, "compaction:") })
-	c := h.runner.conv(id)
-	c.do(func() {})
-	holder := h.record(id).HolderID
-	if h.holders.opCount("spawn") != 1 || len(h.holders.inputs(holder, "compact")) != 0 {
-		t.Fatal("failed compact was retried")
-	}
-	if len(h.record(id).Queued) != 0 {
-		t.Fatal("failed compact stayed queued")
-	}
-	h.sendCommand(id, "compact", "keep the names")
-	eventually(t, "explicit retry", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	h.holders.out(holder, `{"type":"response","command":"compact","success":true}`)
-	h.idle(id)
-	if h.holders.opCount("spawn") != 1 {
-		t.Fatal("explicit retry restarted the harness")
-	}
-}
-
 // TestLeadTurnEndsAtResultWhileABackgroundTaskRuns: a claude lead whose
 // turn leaves a background task running gets no idle state until the task
 // ends (Claude 2.1.323), so the result ends the turn: the lead is idle
