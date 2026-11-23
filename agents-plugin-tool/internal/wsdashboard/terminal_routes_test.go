@@ -231,6 +231,31 @@ func TestPickShell(t *testing.T) {
 	}
 	posix := func(name string) (string, bool) { return name, name == "/bin/zsh" }
 	for _, c := range []struct {
+		name  string
+		goos  string
+		key   string
+		value string
+		keep  bool
+	}{
+		{"drop PAGER=cat", "linux", "PAGER", "cat", false},
+		{"drop GIT_PAGER=cat", "linux", "GIT_PAGER", "cat", false},
+		{"drop mixed-case Windows PAGER", "windows", "PaGeR", " cat ", false},
+		{"drop mixed-case Windows GIT_PAGER", "windows", "Git_Pager", "cat", false},
+		{"keep mixed-case POSIX name", "linux", "Pager", "cat", true},
+		{"keep PAGER=less", "linux", "PAGER", "less", true},
+		{"keep GIT_PAGER=delta", "windows", "Git_Pager", "delta", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := pickShell(c.goos, []string{c.key + "=" + c.value, "TERM=dumb"}, runnable())
+			if value, ok := got.Env[c.key]; ok != c.keep || (ok && value != c.value) {
+				t.Errorf("%s = %q (present: %t), want presence %t and original value when present", c.key, value, ok, c.keep)
+			}
+			if got.Env["TERM"] != terminalTerm {
+				t.Errorf("TERM = %q, want %q", got.Env["TERM"], terminalTerm)
+			}
+		})
+	}
+	for _, c := range []struct {
 		what    string
 		goos    string
 		environ []string
