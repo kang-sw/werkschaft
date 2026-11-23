@@ -45,7 +45,14 @@
       }
     },
     "260918-chore-pi-mailbox-waiter-epoch-race-test-coverage": {
-      "registered_at": "2026-09-24T10:38:33Z"
+      "registered_at": "2026-09-24T10:38:33Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:33:53Z"
+      }
     },
     "260920-bug-pi-rpc-child-stderr-cascades-into-tui": {
       "registered_at": "2026-09-24T10:38:33Z"
