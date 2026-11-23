@@ -118,6 +118,30 @@ enabled = false
 		t.Errorf("lead skills = %v, want %v", got, want)
 	}
 	assertWerkSkillBody(t, lead["claude-tools:deploy"], "claude-tools")
+
+	t.Run("nested working directory", func(t *testing.T) {
+		spec.Cwd = filepath.Join(spec.Root, "app")
+		if err := os.Mkdir(spec.Cwd, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeWerkSkillFixture(t, filepath.Join(claude, "settings.json"), `{"enabledPlugins":{"inactive@market":true}}`)
+		writeWerkSkillFixture(t, filepath.Join(spec.Root, ".claude", "settings.json"),
+			`{"enabledPlugins":{"claude-tools@market":true,"inactive@market":false}}`)
+		if err := os.Remove(filepath.Join(spec.Root, ".claude", "settings.local.json")); err != nil {
+			t.Fatal(err)
+		}
+		got := werkSkillsByName(discoverWerkSkills(spec))
+		want := []string{"claude-tools:deploy", "codex-tools:deploy"}
+		if names := slices.Sorted(maps.Keys(got)); !slices.Equal(names, want) {
+			t.Fatalf("lead skills below project root = %v, want %v", names, want)
+		}
+		writeWerkSkillFixture(t, filepath.Join(spec.Root, ".claude", "settings.local.json"),
+			`{"enabledPlugins":{"claude-tools@market":false}}`)
+		got = werkSkillsByName(discoverWerkSkills(spec))
+		if _, ok := got["claude-tools:deploy"]; ok {
+			t.Fatal("project-local plugin disable was ignored")
+		}
+	})
 }
 
 func TestWerkDiscoverSkillsLoadsLazilyWithLimits(t *testing.T) {

@@ -366,9 +366,13 @@ func werkClaudeInstalledSkills(claude, managed werkSkillLocation, project []stri
 	settingsPaths := []werkSkillLocation{claude.join("settings.json")}
 	if len(project) > 0 {
 		cwd, root := project[0], project[len(project)-1]
-		settingsPaths = append(settingsPaths, werkSkillLocation{cwd, filepath.Join(".claude", "settings.json")}, werkSkillLocation{cwd, filepath.Join(".claude", "settings.local.json")})
-		if root != cwd {
-			settingsPaths = append(settingsPaths, werkSkillLocation{root, filepath.Join(".claude", "settings.local.json")})
+		settingsPaths = append(settingsPaths, werkSkillLocation{root, filepath.Join(".claude", "settings.json")})
+		if cwd != root {
+			settingsPaths = append(settingsPaths, werkSkillLocation{cwd, filepath.Join(".claude", "settings.json")})
+		}
+		settingsPaths = append(settingsPaths, werkSkillLocation{root, filepath.Join(".claude", "settings.local.json")})
+		if cwd != root {
+			settingsPaths = append(settingsPaths, werkSkillLocation{cwd, filepath.Join(".claude", "settings.local.json")})
 		}
 	}
 	settingsPaths = append(settingsPaths, managed.join("managed-settings.json"))

@@ -456,7 +456,7 @@ func permissionModes(backend string, registries []map[string]BackendRegistration
 func profilePermissionModes(registries []map[string]BackendRegistration) []string {
 	modes := []string{}
 	seen := map[string]bool{}
-	for _, name := range profileBackends(registries) {
+	for _, name := range savedProfileBackends(registries) {
 		choices := permissionModes(name, registries)
 		for _, mode := range choices {
 			if !seen[mode] {

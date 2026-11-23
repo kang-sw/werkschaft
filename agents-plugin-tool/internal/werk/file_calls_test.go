@@ -136,3 +136,55 @@ func TestExecLaunchRecordsOnlyMatchingCall(t *testing.T) {
 		t.Fatalf("associated job = %q", job)
 	}
 }
+
+func TestWerkExecLaunchRequiresMatchingLiveApproval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prompts := 0
+	preview := json.RawMessage(`{"program":"printf"}`)
+	a, err := New(Config{
+		Dir: t.TempDir(), Lead: true, Authority: AuthorityWorkdirWrite, Endpoint: &scripted{},
+		Approve: func(_ context.Context, tool string, input json.RawMessage) error {
+			prompts++
+			if tool != "exec.run" || string(input) != string(preview) {
+				t.Errorf("unexpected approval preview for %q", tool)
+			}
+			return nil
+		},
+	})
+	must(t, err)
+	defer a.Close()
+	call := execjob.ModelLaunch{ID: "c", Tool: "exec.run", JobID: "job", Arguments: json.RawMessage(`{"exe":"printf","args":["hello"]}`)}
+	if a.ApproveExecLaunch(ctx, call, preview) == nil {
+		t.Fatal("unsolicited preview was accepted")
+	}
+	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false)
+	must(t, err)
+	if a.RecordExecLaunch(ctx, call) == nil {
+		t.Fatal("job was bound before the matching approval")
+	}
+	for _, wrong := range []execjob.ModelLaunch{
+		{ID: "wrong", Tool: call.Tool, Arguments: call.Arguments},
+		{ID: call.ID, Tool: "exec.shell", Arguments: call.Arguments},
+		{ID: call.ID, Tool: call.Tool, Arguments: json.RawMessage(`{"exe":"printf","args":["changed"]}`)},
+	} {
+		if a.ApproveExecLaunch(ctx, wrong, preview) == nil {
+			t.Fatal("mismatched preview was accepted")
+		}
+	}
+	must(t, a.ApproveExecLaunch(ctx, call, preview))
+	must(t, a.RecordExecLaunch(ctx, call))
+	if a.ApproveExecLaunch(ctx, call, preview) == nil || a.RecordExecLaunch(ctx, call) == nil || prompts != 1 {
+		t.Fatal("approval or job binding could be reused")
+	}
+	done()
+
+	stale := execjob.ModelLaunch{ID: "cancelled", Tool: call.Tool, JobID: "other-job", Arguments: call.Arguments}
+	end, err := a.beginMutationCall(ctx, stale.ID, stale.Tool, stale.Arguments, false)
+	must(t, err)
+	defer end()
+	cancel()
+	if a.ApproveExecLaunch(context.Background(), stale, preview) == nil || a.RecordExecLaunch(context.Background(), stale) == nil {
+		t.Fatal("a cancelled call accepted a preview or bound a job")
+	}
+}

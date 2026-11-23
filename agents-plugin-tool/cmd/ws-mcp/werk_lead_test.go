@@ -127,8 +127,17 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 						}
 						return werkLeadFixtureCall("exec_shell", "exec-fixture", map[string]any{"session_key": key, "cmd": "printf fixture"})
 					case 2:
-						if !bytes.Contains(wire["input"], []byte("denied")) {
-							return nil, fmt.Errorf("model did not receive the exec denial")
+						want := "denied"
+						if tc.id == wscred.ProviderOpenRouter {
+							want = "fixture"
+						}
+						var items []struct{ Type, Output string }
+						if err := json.Unmarshal(wire["input"], &items); err != nil {
+							return nil, err
+						}
+						if len(items) == 0 || items[len(items)-1].Type != "function_call_output" ||
+							!strings.Contains(items[len(items)-1].Output, want) {
+							return nil, fmt.Errorf("model did not receive the exec result for %s", tc.id)
 						}
 						return werkLeadFixtureCall("compact", "compact-fixture", map[string]any{
 							"session_key": key, "resume": false, "lead_summary": map[string]string{
@@ -174,7 +183,14 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 				bytes.Contains(prompt.Input, []byte(`"session_key"`)) {
 				t.Fatal("Werk approval must show the resolved exec without connection credentials")
 			}
-			if _, err = open.runner.AnswerApproval(st.ID, prompt.ID, false, "fixture denied"); err != nil {
+			if rows, _ := open.jobs.List(st.ID); len(rows) != 0 {
+				t.Fatalf("a job was admitted before approval: %d jobs", len(rows))
+			}
+			allow, message := tc.id == wscred.ProviderOpenRouter, ""
+			if !allow {
+				message = "fixture denied"
+			}
+			if _, err = open.runner.AnswerApproval(st.ID, prompt.ID, allow, message); err != nil {
 				t.Fatal(err)
 			}
 			done := waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
@@ -182,6 +198,20 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 			})
 			if done.ContextWindow != tc.window || done.Error != "" || len(done.Approvals) != 0 {
 				t.Fatalf("unexpected final usage, approval or error state (window %d)", done.ContextWindow)
+			}
+			rows, _ := open.jobs.List(st.ID)
+			wantJobs := 0
+			if allow {
+				wantJobs = 1
+			}
+			if len(rows) != wantJobs {
+				t.Fatalf("exec admission after answer = %d jobs, want %d", len(rows), wantJobs)
+			}
+			if allow {
+				_, tail, err := open.jobs.Tail(st.ID, rows[0].ID, 0)
+				if err != nil || string(tail.Data) != "fixture" {
+					t.Fatalf("approved exec output = %q, %v", tail.Data, err)
+				}
 			}
 			open.daemon.Close()
 			open = f.open(nil)

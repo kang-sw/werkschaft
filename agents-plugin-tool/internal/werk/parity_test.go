@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/execjob"
 )
 
 func TestWerkLoadsOnlyRequestedSkill(t *testing.T) {
@@ -43,7 +45,16 @@ func TestWerkLoadsOnlyRequestedSkill(t *testing.T) {
 	}
 }
 
-func TestWerkRecoversPendingApprovalButNeverDispatchesTwice(t *testing.T) {
+type approvalTestExecTools struct {
+	fakeWS
+	launch func(context.Context, execjob.ModelLaunch) (CallResult, error)
+}
+
+func (w *approvalTestExecTools) CallCorrelated(ctx context.Context, tool string, args json.RawMessage, id string) (CallResult, error) {
+	return w.launch(ctx, execjob.ModelLaunch{Tool: tool, Arguments: args, ID: id})
+}
+
+func TestWerkRecoversPendingExecApprovalButNeverDispatchesTwice(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		cancelIn  string
@@ -54,27 +65,38 @@ func TestWerkRecoversPendingApprovalButNeverDispatchesTwice(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, session := t.TempDir(), NewSessionID()
-			command := Command{Type: CmdUser, TurnID: "persisted-turn", Text: "write to fixture job"}
+			command := Command{Type: CmdUser, TurnID: "persisted-turn", Text: "start the fixture job"}
 			firstCtx, replace := context.WithCancel(context.Background())
 			defer replace()
 			var calls, firstPrompts, secondPrompts int
-			ws := &fakeWS{
-				tools: []MCPTool{{Name: "exec.write"}},
-				byName: map[string]func(context.Context, json.RawMessage) (CallResult, error){
-					"exec.write": func(ctx context.Context, _ json.RawMessage) (CallResult, error) {
-						calls++
-						replace()
-						return CallResult{}, ctx.Err()
-					},
-				},
-			}
 			predecessor := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-				reply(callOf("mutation", "exec_write", `{"exec_id":"fixture","data":"hello"}`)),
+				reply(callOf("mutation", "exec_run", `{"exe":"printf"}`)),
 			}}
 			start := func(model Responder, level Authority, approve func(context.Context, string, json.RawMessage) error) *Agent {
 				t.Helper()
-				a, err := New(Config{Dir: dir, Session: session, Authority: level, Lead: true, WS: ws, Endpoint: model, Approve: approve})
+				ws := &approvalTestExecTools{fakeWS: fakeWS{tools: []MCPTool{{Name: "exec.run"}}}}
+				a, err := New(Config{
+					Dir: dir, Session: session, Authority: level, Lead: true, WS: ws, Endpoint: model, Approve: approve,
+					RecoverExec: func(_ context.Context, job string) (string, error) {
+						if job != "fixture-job" {
+							return "", errors.New("wrong recovered job")
+						}
+						return "original job", nil
+					},
+				})
 				must(t, err)
+				ws.launch = func(ctx context.Context, call execjob.ModelLaunch) (CallResult, error) {
+					if err := a.ApproveExecLaunch(ctx, call, json.RawMessage(`{"program":"printf"}`)); err != nil {
+						return CallResult{}, err
+					}
+					call.JobID = "fixture-job"
+					if err := a.RecordExecLaunch(ctx, call); err != nil {
+						return CallResult{}, err
+					}
+					calls++
+					replace()
+					return CallResult{}, ctx.Err()
+				}
 				t.Cleanup(func() { _ = a.Close() })
 				return a
 			}
@@ -91,7 +113,7 @@ func TestWerkRecoversPendingApprovalButNeverDispatchesTwice(t *testing.T) {
 				t.Fatalf("predecessor saw %d prompts and %d calls", firstPrompts, calls)
 			}
 
-			wantResult := "outcome is unknown"
+			wantResult := "Recovered exec launch"
 			wantPrompts := 0
 			if tc.cancelIn == "approval" {
 				wantResult, wantPrompts = "owner declined on recovery", 1
@@ -99,7 +121,7 @@ func TestWerkRecoversPendingApprovalButNeverDispatchesTwice(t *testing.T) {
 			nextModel := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("done"))}}
 			second := start(nextModel, AuthorityFull, func(_ context.Context, name string, _ json.RawMessage) error {
 				secondPrompts++
-				if name != "exec.write" {
+				if name != "exec.run" {
 					return errors.New("wrong recovered tool")
 				}
 				return errors.New("owner declined on recovery")
