@@ -534,26 +534,13 @@
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
     },
-    "261123-bug-ws-audit-live-capture-unwired": {
-      "registered_at": "2026-11-23T02:23:30Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-23T02:37:52Z",
-        "impl": {
-          "branch": "impl/develop/manor-panda-rug"
-        }
-      }
-    },
     "261123-bug-ws-audit-span-sentinel-rescan": {
       "registered_at": "2026-11-23T01:23:15Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-23T02:40:55Z",
         "impl": {
           "branch": "impl/develop/basil-alive-sash"
