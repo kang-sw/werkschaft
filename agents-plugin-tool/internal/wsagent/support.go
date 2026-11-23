@@ -240,6 +240,7 @@ type SupportHarness struct {
 // default order, without listing choices. Each profile is resolved through
 // the global and builtin layers; one whose backend another already took is
 // left out.
+// Retained name check: old support selection and response notice (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
 func (s *Support) harnesses() []SupportHarness {
 	var out []SupportHarness
 	seen := map[string]bool{}
@@ -249,7 +250,7 @@ func (s *Support) harnesses() []SupportHarness {
 		if err == nil {
 			h.Harness = rp.Definition.Backend
 		}
-		if seen[h.Harness] {
+		if h.Harness == BackendPi || seen[h.Harness] {
 			continue
 		}
 		seen[h.Harness] = true
@@ -359,24 +360,26 @@ func findHarness(hs []SupportHarness, name string) (SupportHarness, bool) {
 // selection is the effective selection: the last one when its harness is
 // available, else the first available harness with default model and
 // effort, else the empty selection.
-func (s *Support) selection(hs []SupportHarness) Selection {
+// Retained name check: old support selection and response notice (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
+func (s *Support) selection(hs []SupportHarness) (Selection, bool) {
 	s.mu.Lock()
 	last := s.state.Last
 	s.mu.Unlock()
 	if last != nil {
 		if h, ok := findHarness(hs, last.Harness); ok && h.Available && h.Profile != "" {
-			return *last
+			return *last, false
 		}
 	}
+	retiredPi := last != nil && last.Harness == BackendPi
 	for _, h := range hs {
 		if h.Available && h.Profile != "" {
-			return Selection{Harness: h.Harness}
+			return Selection{Harness: h.Harness}, retiredPi
 		}
 	}
-	return Selection{}
+	return Selection{}, retiredPi
 }
 
-var errNoHarness = &requestError{status: http.StatusServiceUnavailable, msg: "no support harness is available: neither claude nor pi is installed and registered"}
+var errNoHarness = &requestError{status: http.StatusServiceUnavailable, msg: "no support harness is installed and registered"}
 
 // current returns the store's open conversation, if any: the mapped one,
 // still open, at root.
@@ -432,6 +435,7 @@ type StoreAnswer struct {
 	// Conversation is the store's open conversation; null when none is.
 	Conversation *State    `json:"conversation"`
 	Selection    Selection `json:"selection"`
+	RetiredPi    bool      `json:"retired_pi,omitempty"`
 }
 
 // SelectAnswer is a select's answer.
@@ -544,7 +548,8 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 	s.listChoices(ctx, hs)
 	pickers, pending := s.pickers(seen)
 	tiers, tiersErr := s.namedTiers()
-	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr, Pickers: pickers, PickersPending: pending}
+	last, _ := s.selection(hs)
+	return ChoicesAnswer{Harnesses: hs, Last: last, Tiers: tiers, TiersError: tiersErr, Pickers: pickers, PickersPending: pending}
 }
 
 // pickers lists the registered worker-only backends that list their choices
@@ -636,7 +641,8 @@ func (s *Support) Store(store string) (StoreAnswer, error) {
 		return StoreAnswer{}, err
 	}
 	hs := s.harnesses()
-	ans := StoreAnswer{Store: store, Selection: s.selection(hs)}
+	sel, retiredPi := s.selection(hs)
+	ans := StoreAnswer{Store: store, Selection: sel, RetiredPi: retiredPi}
 	if st, ok := s.current(store, root); ok {
 		ans.Conversation = &st
 	}
@@ -658,7 +664,8 @@ func (s *Support) Send(store, text string) (State, error) {
 	defer s.lockStore(store)()
 	st, ok := s.current(store, root)
 	if !ok {
-		if st, err = s.open(store, root, s.selection(hs), hs); err != nil {
+		sel, _ := s.selection(hs)
+		if st, err = s.open(store, root, sel, hs); err != nil {
 			return State{}, err
 		}
 	}
@@ -682,7 +689,8 @@ func (s *Support) New(store string) (State, error) {
 			return State{}, err
 		}
 	}
-	return s.open(store, root, s.selection(hs), hs)
+	sel, _ := s.selection(hs)
+	return s.open(store, root, sel, hs)
 }
 
 // CloseUnregistered closes the conversation of every mapped store that is
@@ -765,7 +773,7 @@ func (s *Support) Select(store string, req selectRequest) (SelectAnswer, error) 
 	// The base is the open conversation's own settings, else the last
 	// selection: "same harness" is the conversation's.
 	st, open := s.current(store, root)
-	cur := s.selection(hs)
+	cur, _ := s.selection(hs)
 	if open {
 		cur = Selection{Harness: st.Backend, Model: st.Model, Effort: st.Effort}
 	}

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -334,4 +335,40 @@ func TestHostedCodexChoicesFollowTheCacheFile(t *testing.T) {
 	if h := harnessByName(t, s.Choices(context.Background()), BackendCodex); h.Error != "" || len(h.Models) != 1 || h.Models[0].ID != "repaired" {
 		t.Fatalf("the failure was cached past choicesFailTTL: %+v", h)
 	}
+}
+
+// listingStub replaces runListing; it counts calls.
+type listingStub struct {
+	mu    sync.Mutex
+	calls int
+	out   string
+	err   error
+	// during, when set, runs inside each listing (a listing that takes time).
+	during func()
+}
+
+func stubListing(t *testing.T, out string, err error) *listingStub {
+	t.Helper()
+	s := &listingStub{out: out, err: err}
+	old := runListing
+	runListing = func(ctx context.Context, _ string, _, _ []string) ([]byte, error) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.calls++
+		if s.during != nil {
+			s.during()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err // as an exec under a done context fails
+		}
+		return []byte(s.out), s.err
+	}
+	t.Cleanup(func() { runListing = old })
+	return s
+}
+
+func (s *listingStub) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }

@@ -7,32 +7,27 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/kang-sw/devenv/internal/wsconfig"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
-// children.go is the spawn tree under a lead: a spawned Pi worker spawns
-// Pi children of its own through the daemon, which owns the whole tree.
+// children.go manages the daemon-owned spawn tree under a lead.
 //
 //   - Token. A conversation started through Runner.Spawn with a recorded
-//     parent and tier, whose profile allows a pi.* tool, gets a capability
+//     parent and tier, whose profile allows a delegation tool, gets a capability
 //     token in its attached ws-mcp's environment (EnvPiToken, beside the
 //     daemon's loopback base URL in EnvPiEndpoint). The token is drawn at
 //     every process start, persisted privately for held workers, and void
 //     once the process ends or the conversation closes. Its key stays a parentless delegate key:
 //     the token, not the key, authorizes the token route below, and only
 //     for the holder's own children.
-//   - Route. POST /agents/by-token/<op> (spawn, list, send, stop,
-//     transcript, wait; agent.spawn, agent.interrupt, agent.list,
-//     agent.tiers) with the token as a bearer credential, from this
+//   - Route. POST /agents/by-token/<op> (agent.spawn, agent.interrupt,
+//     agent.list, agent.tiers, and legacy history reads) with the token as a bearer credential, from this
 //     machine only. A spawn records the holder as the child's parent
 //     (ParentConversation); its depth (the lead is 0) may not pass
 //     MaxSpawnDepth, and its tier may not pass the holder's own.
@@ -57,8 +52,7 @@ import (
 const (
 	// EnvPiToken is the conversation's capability token for the token
 	// route.
-	// Retained name check: the environment variables the bundled Pi extension
-	// reads (TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey).
+	// The historical variable names are part of cross-version worker forwarding.
 	EnvPiToken = "WS_MCP_PI_TOKEN"
 	// EnvPiEndpoint is the daemon's loopback base URL ("http://127.0.0.1:
 	// <port>"), where the token route is.
@@ -69,27 +63,13 @@ const (
 // depth 1, and so on; a conversation at the cap spawns none.
 const MaxSpawnDepth = 4
 
-// PiTierHarness is the agents.tier harness bucket a Pi spawn's tier
-// resolves in, alone.
-//
-// Retained name: "pi" is the persisted config bucket key of that tier, which
-// existing config files hold; registration data does not rename it.
-// Retained name check: PiTierHarness is the stored harness bucket (see above).
-const PiTierHarness = "pi"
-
 // tokenRoute is the id segment of the token route. It holds a dash, which
 // no reply-id does, so it never names a conversation.
 const tokenRoute = "by-token"
 
-// The token route's wait: its default and its cap.
-const (
-	tokenWaitDefault = 300 * time.Second
-	tokenWaitMax     = PiWaitMax
-)
-
 var errDaemonDetached = &requestError{status: http.StatusServiceUnavailable, msg: "the dashboard daemon detached; reissue the wait"}
 
-var errBadToken = &requestError{status: http.StatusUnauthorized, msg: "the capability token is not valid: only a running Pi subagent the dashboard daemon spawned holds one, and it ends with that subagent's process"}
+var errBadToken = &requestError{status: http.StatusUnauthorized, msg: "the capability token is not valid: only a running hosted worker holds one, and it ends with the worker process"}
 
 // SetEndpoint gives the runner the daemon's loopback base URL, which a
 // token holder's ws-mcp calls back on. The daemon sets it before Start;
@@ -102,8 +82,9 @@ func (r *Runner) SetEndpoint(baseURL string) {
 
 // mayHoldToken reports whether a conversation's process gets a capability
 // token: a spawned one (a recorded parent and tier) whose profile allows an
-// agent.* tool, or a pi.* tool while pi.spawn's profiles remain. A
+// agent.* tool or legacy Pi history tool. A
 // conversation opened through POST /agents has neither.
+// Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
 func mayHoldToken(rec Record, def Profile) bool {
 	if rec.Lead || rec.Parent == nil || rec.Tier == "" {
 		return false
@@ -111,7 +92,7 @@ func mayHoldToken(rec Record, def Profile) bool {
 	for _, name := range def.WSTools {
 		// Retained name check: a worker's allowlist holds the Pi extension's own pi.*
 		// tool names alongside agent.*.
-		if strings.HasPrefix(name, "agent.") || strings.HasPrefix(name, "pi.") {
+		if strings.HasPrefix(name, "agent.") || name == "pi.list" || name == "pi.transcript" {
 			return true
 		}
 	}
@@ -246,180 +227,14 @@ func tierRank(tier string) int {
 	return 0
 }
 
-// PiTierRefusal names the config.tune key a spawn's unset tier needs and
-// the tiers that are set.
-func PiTierRefusal(tool, tier string, tiers map[string]wsconfig.AgentTier) error {
-	// Retained name check: PiTierHarness is the stored agents.tier bucket the
-	// refusal tells the user to tune (TestPiSpawnResolvesThePiTierAndCwd).
-	set := make([]string, 0, len(tiers))
-	for _, t := range []string{"small", "medium", "large", "xlarge"} {
-		if _, ok := tiers[t]; ok {
-			set = append(set, t)
-		}
-	}
-	tune := fmt.Sprintf(`config.tune key "agents.tier" with harness %q, tier %q, and a model Pi runs`, PiTierHarness, tier)
-	if len(set) == 0 {
-		return fmt.Errorf("%s: no Pi tier is set, so tier %q has no model; set it with %s", tool, tier, tune)
-	}
-	return fmt.Errorf("%s: tier %q is not set for Pi; pick a set tier (%s) or set this one with %s", tool, tier, strings.Join(set, ", "), tune)
-}
-
-// ChildSpawn is a token holder's spawn request: the pi.spawn arguments.
-type ChildSpawn struct {
-	Prompt string `json:"prompt"`
-	Tier   string `json:"tier"`
-	// Profile defaults to pi-worker; any resolved non-lead Pi profile is allowed
-	// when its tools are within the holder's launched definition.
-	Profile string `json:"profile,omitempty"`
-	// Cwd is absolute, or relative to the holder's own working directory
-	// (Record.workDir: a worker in a worktree spawns into that worktree);
-	// empty is that directory.
-	Cwd   string `json:"cwd,omitempty"`
-	Label string `json:"label,omitempty"`
-}
-
-// spawnFor spawns a Pi child of caller, the token holder, after the depth
-// and tier caps; model and effort come from the tier's entry in the pi
-// bucket of agents.tier at the holder's root.
-func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
-	// Retained name check: the Pi extension's own spawn tool name.
-	const tool = "pi.spawn"
-	rec := caller.record()
-	if isAgentWorkerProfile(strings.TrimSpace(req.Profile)) {
-		return State{}, badRequest("%s: profile %q is agent.spawn's internal profile; spawn it with agent.spawn and an authority", tool, req.Profile)
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		return State{}, badRequest("%s: prompt is required", tool)
-	}
-	d, ok := r.depth(rec)
-	if !ok {
-		return State{}, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("%s: this conversation's spawn chain cannot be traced to its lead, so its depth is unknown and it spawns no subagent", tool)}
-	}
-	if d+1 > MaxSpawnDepth {
-		return State{}, depthRefusal(tool, d)
-	}
-	tier := wsconfig.ModelAlias(req.Tier)
-	if tier == "" {
-		return State{}, badRequest("%s: tier must be small, medium, large, or xlarge; got %q", tool, req.Tier)
-	}
-	if rec.Tier == "" {
-		return State{}, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("%s: this conversation has no recorded tier, so no tier cap for its subagents can be set; it spawns none", tool)}
-	}
-	if tierRank(tier) > tierRank(rec.Tier) {
-		return State{}, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("%s: tier %q is above this conversation's own tier %q, which caps its subagents' tier; pick %q or lower", tool, tier, rec.Tier, rec.Tier)}
-	}
-	cfg := r.opts.Config
-	cfg.RepoRoot = rec.Root
-	// Retained name check: the Pi tier mapping lives in the stored PiTierHarness
-	// bucket (TestPiSpawnResolvesThePiTierAndCwd).
-	tiers, err := wsconfig.HarnessTiers(cfg, PiTierHarness)
-	if err != nil {
-		return State{}, fmt.Errorf("%s: read agents.tier: %w", tool, err)
-	}
-	mapping, ok := tiers[tier]
-	if !ok {
-		return State{}, badRequest("%v", PiTierRefusal(tool, tier, tiers))
-	}
-	cwd, base := strings.TrimSpace(req.Cwd), rec.workDir()
-	switch {
-	case cwd == "":
-		cwd = base
-	case !filepath.IsAbs(cwd):
-		cwd = filepath.Join(base, cwd)
-	}
-	label := req.Label
-	if strings.TrimSpace(label) == "" {
-		label = req.Prompt
-	}
-	st, err := r.Spawn(SpawnSpec{
-		Profile: req.Profile,
-		Root:    rec.Root,
-		Cwd:     cwd,
-		Model:   mapping.Model,
-		Effort:  mapping.Effort,
-		Tier:    tier,
-		Prompt:  req.Prompt,
-		Label:   label,
-		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
-		// The child's key inherits the holder's session-scope config.
-		policyKey: rec.WSKey,
-		// The token holder is the verified spawner.
-		spawnerBackend: rec.Backend,
-	})
-	if err != nil {
-		return State{}, err
-	}
-	// A close of the caller that ran meanwhile listed its descendants
-	// before this child existed: the child closes with it here.
-	if caller.isClosed() {
-		_, _ = r.CloseConversation(st.ID)
-		return State{}, errClosed
-	}
-	return st, nil
-}
-
 // ownChild refuses an id that is not one of parent's children.
+// Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
 func (r *Runner) ownChild(tool, id string, parent ParentRef) error {
 	st, err := r.Lineage(id)
 	if err == nil && st.Backend == BackendPi && st.Parent != nil && *st.Parent == parent {
 		return nil
 	}
 	return &requestError{status: http.StatusNotFound, msg: fmt.Sprintf("%s: %s is not one of this conversation's Pi subagents (pi.list lists them)", tool, id)}
-}
-
-// resumePiChild returns an open conversation for Send. Only a closed,
-// spawned Pi child is revivable: its identity and launch settings stay in
-// the same record, and the ordinary lazy-start path resumes its Pi file.
-// Open children whose process died already use that same lazy-start path.
-// The caller holds resumeMu through both revival and message admission.
-func (r *Runner) resumePiChild(id string) (*conv, error) {
-	// A concurrent send may have reopened it while this one waited.
-	c, err := r.open(id)
-	if err == nil {
-		return c, nil
-	}
-	r.mu.Lock()
-	rec, closed := r.closed[id]
-	r.mu.Unlock()
-	if !closed || rec.Backend == BackendPi || rec.ClosedAt == "" || rec.Lead || rec.Parent == nil || !r.lifecycle(rec.Backend).NativeChildren {
-		return nil, err
-	}
-	// A send authorized before its caller closed may have waited behind
-	// that close's cascade. It must not resurrect a descendant afterward.
-	if rec.Parent.Kind == ParentConversation {
-		parent := r.conv(rec.Parent.ReplyID)
-		if parent == nil || parent.isClosed() {
-			return nil, conflict("cannot resume Pi subagent %s: its parent conversation is closed", id)
-		}
-	}
-	// A release of its checkout after it was bound ended that binding: it is
-	// not reopened there.
-	if checkout := r.loadReleasedCheckout(rec); checkout != "" {
-		return nil, conflict("cannot resume Pi subagent %s: %s", id, checkoutReleasedRefusal(checkout).Error())
-	}
-	dir := wsdashboard.SessionDir(r.opts.Dir, id)
-	file := piSessionFile(dir)
-	if !PiSessionAvailable(dir) {
-		return nil, conflict("cannot resume Pi subagent %s: its session file is missing, inaccessible, or not a regular file: %s", id, file)
-	}
-	// A revived child binds to its worktree again: hold the release
-	// reservation until it is registered (Runner.create).
-	unlockBound, err := reserveBoundWorktrees(rec.Root, rec.Cwd)
-	if err != nil {
-		return nil, boundReservationRefusal(err)
-	}
-	defer unlockBound()
-	rec.ClosedAt = ""
-	// A done turn held for descendants was abandoned by the close, not
-	// left waiting for this new turn to publish it.
-	rec.HeldTurn = nil
-	if err := writeRecord(dir, rec); err != nil {
-		return nil, err
-	}
-	r.unfenceExec(id)
-	c = r.startConv(rec, nil)
-	c.watched()
-	return c, nil
 }
 
 // tokenReleaseNoticeInstant is the release instant a worker token's
@@ -454,16 +269,8 @@ func tokenRootLead(c *conv) bool {
 	return rec.Lead && rec.Parent == nil
 }
 
-// tokenRequest is the token route's body: the fields each op reads.
-type tokenRequest struct {
-	ChildSpawn
-	ID       string  `json:"id"`
-	Message  string  `json:"message"`
-	TimeoutS float64 `json:"timeout_s"`
-}
-
-// serveToken serves POST /agents/by-token/<op>: a token holder's pi.*
-// call, scoped to its own children.
+// serveToken serves worker calls and legacy history reads scoped to the token holder.
+// Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
 func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string) {
 	if local, _ := r.opts.Trusted(req); !local {
 		http.Error(w, "unknown agent route", http.StatusNotFound)
@@ -970,6 +777,7 @@ func (r *Runner) releaseLater(id string) {
 // descendants are conversation id's open descendants through
 // conversation parents, and through a lead's mailbox reply-id (its
 // conversation id) for the Pi children it spawned, deepest first.
+// Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
 func (r *Runner) descendants(id string) []string {
 	r.mu.Lock()
 	byParent := map[string][]string{}
@@ -977,7 +785,7 @@ func (r *Runner) descendants(id string) []string {
 		c.mu.Lock()
 		p, backend, profile := c.rec.Parent, c.rec.Backend, c.rec.Profile
 		c.mu.Unlock()
-		if p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (r.lifecycle(backend).NativeChildren || isAgentWorkerProfile(profile))) {
+		if p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (backend == BackendPi || isAgentWorkerProfile(profile))) {
 			byParent[p.ReplyID] = append(byParent[p.ReplyID], cid)
 		}
 	}

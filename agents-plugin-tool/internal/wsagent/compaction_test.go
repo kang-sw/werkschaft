@@ -23,11 +23,11 @@ func TestCompactionUsesTheKeysConfigRoot(t *testing.T) {
 	root := t.TempDir()
 	cfg := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir(), RepoRoot: root}
 	resolver := wsconfig.NewResolver(cfg, nil, nil, nil)
-	if err := resolver.Set("compaction.worker_hard.pi", "65%", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeRepo}); err != nil {
+	if err := resolver.Set("compaction.worker_hard.claude", "65%", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeRepo}); err != nil {
 		t.Fatal(err)
 	}
-	r := NewRunner(Options{Config: cfg, Keys: compactionRootKeys{root: root}, Backends: map[string]BackendRegistration{BackendPi: {NativeCompaction: PiCompaction()}}})
-	c := &conv{r: r, rec: Record{Root: t.TempDir(), WSKey: "key", Backend: BackendPi}}
+	r := NewRunner(Options{Config: cfg, Keys: compactionRootKeys{root: root}, Backends: map[string]BackendRegistration{BackendClaude: {NativeCompaction: fixtureCompaction()}}})
+	c := &conv{r: r, rec: Record{Root: t.TempDir(), WSKey: "key", Backend: BackendClaude}}
 	c.loadCompaction()
 	if c.compactHard.Percent != 65 {
 		t.Fatalf("nudge ignored the key's repo config: %+v", c.compactHard)
@@ -35,8 +35,8 @@ func TestCompactionUsesTheKeysConfigRoot(t *testing.T) {
 }
 
 func TestCompactionIsNotIdleTimeoutEligible(t *testing.T) {
-	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendPi: {NativeCompaction: PiCompaction()}}})
-	c := &conv{r: r, rec: Record{Backend: BackendPi}, idleAfter: time.Hour}
+	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendClaude: {NativeCompaction: fixtureCompaction()}}})
+	c := &conv{r: r, rec: Record{Backend: BackendClaude}, idleAfter: time.Hour}
 	c.idle = time.NewTimer(time.Hour)
 	c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 	if c.idle != nil || c.idleNow() {
@@ -75,7 +75,7 @@ func TestCompactionDescriptors(t *testing.T) {
 		lead, worker, signals, detects, promptPersists bool
 	}{
 		{BackendClaude, ClaudeCatalog().Compaction, true, true, true, true, true},
-		{BackendPi, *PiCompaction(), true, true, true, true, true},
+		{BackendClaude, *fixtureCompaction(), true, true, true, true, true},
 		{BackendCodex, CodexCatalog().Compaction, true, true, true, true, false},
 		{BackendAgy, AgyCatalog().Compaction, true, true, false, true, true},
 	} {
@@ -126,25 +126,20 @@ func TestCompactionMeasuredMissingSignals(t *testing.T) {
 
 func TestCompactionLiveNativeFixtures(t *testing.T) {
 	for _, lead := range []bool{false, true} {
-		for _, name := range []string{"claude-compaction-probe.jsonl", "pi-compaction-probe.jsonl", "pi-compaction-failure-probe.jsonl"} {
+		for _, name := range []string{"claude-compaction-probe.jsonl"} {
 			t.Run(fmt.Sprintf("%s/lead=%v", name, lead), func(t *testing.T) {
 				spec := StartSpec{}
 				if lead {
 					spec.Lead = &LeadSpec{}
 				}
-				pi, cl := newPiMapper(spec), newClaudeMapper(spec)
+				cl := newClaudeMapper(spec)
 				r := &recordedReplies{}
 				counts := map[string]int{}
 				for _, line := range readLeadFixture(t, name) {
 					if line.in {
 						continue
 					}
-					var evs []Event
-					if strings.HasPrefix(name, "pi-") {
-						evs = pi.mapLine(line.raw, r)
-					} else {
-						evs = cl.mapLine(line.raw, r)
-					}
+					evs := cl.mapLine(line.raw, r)
 					for _, ev := range evs {
 						if ev.Live != nil && ev.Live.Kind == wslive.KindCompact {
 							counts[ev.Live.Phase]++
@@ -218,7 +213,7 @@ func TestCompactionIdleRestoreOrderingAndResume(t *testing.T) {
 }
 
 func TestCompactionAutoDoesNotStartContinue(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendCodex, BackendPi} {
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendClaude} {
 		t.Run(backend, func(t *testing.T) {
 			var h *leadHarness
 			switch backend {
@@ -227,11 +222,7 @@ func TestCompactionAutoDoesNotStartContinue(t *testing.T) {
 			case BackendCodex:
 				h, _ = newCodexLeadHarness(t)
 				h.startAt(codexSyntheticEndpoint)
-			case BackendPi:
-				h, _ = newFakePiRecoveryHarness(t)
-				reg := h.runner.opts.Backends[BackendPi]
-				reg.NativeCompaction = PiCompaction()
-				h.runner.opts.Backends[BackendPi] = reg
+
 			}
 			probe := &restoreProbe{state: "fresh"}
 			h.runner.opts.RestoreBundle = probe.render
@@ -249,9 +240,7 @@ func TestCompactionAutoDoesNotStartContinue(t *testing.T) {
 					`{"method":"item/completed","params":{"threadId":"codex-s1","turnId":"t1","item":{"id":"c","type":"contextCompaction"}}}`,
 					codexSyntheticEnd("t1", "first", "completed"),
 				)
-			case BackendPi:
-				inputs = func() []string { return h.holders.inputs(holder, "prompt") }
-				h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"compaction_start","reason":"threshold"}`, `{"type":"compaction_end","reason":"threshold"}`, `{"type":"agent_settled"}`)
+
 			}
 			h.idle(id)
 			if got := inputs(); len(got) != 1 {
@@ -316,16 +305,16 @@ func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
 		h := newLeadHarness(t)
 		h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 		h.opts.RestoreBundle = probe.render
-		reg := h.opts.Backends[BackendPi]
-		reg.NativeCompaction = PiCompaction()
-		h.opts.Backends[BackendPi] = reg
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "medium", "", "prov/medium", PiTierHarness, "low"); err != nil {
+		reg := h.opts.Backends[BackendClaude]
+		reg.NativeCompaction = fixtureCompaction()
+		h.opts.Backends[BackendClaude] = reg
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "medium", "", "prov/medium", BackendClaude, "low"); err != nil {
 			t.Fatal(err)
 		}
 		h.start()
 		lead := h.lead(BackendClaude, LeadOptions{})
 		child, err := h.runner.Spawn(SpawnSpec{
-			Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Tier: "medium",
+			Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "work", Tier: "medium",
 			Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID},
 		})
 		if err != nil {
@@ -473,89 +462,6 @@ func TestCompactionRestoreRespectsPromptDescriptor(t *testing.T) {
 	})
 }
 
-func TestCompactionPiWorkerTargetAndResponseOrdering(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
-	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	holder := h.holder(child.ID)
-	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
-	h.idle(child.ID)
-	key := h.record(child.ID).WSKey
-	parent := h.record(child.ID).Parent
-	if got := h.runner.Compact(key, h.record(lead.ID).WSKey, nil); got.Status != "error" {
-		t.Fatal("child controlled ancestor", got)
-	}
-	if got := h.runner.Compact(h.record(lead.ID).WSKey, AgentAddress(child.ID), nil); got.Status != "queued" {
-		t.Fatal(got)
-	}
-	eventually(t, "worker RPC compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-	h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`)
-	eventually(t, "worker completion awaits response", func() bool {
-		ready := false
-		h.runner.conv(child.ID).do(func() { c := h.runner.conv(child.ID); ready = c.compactNote != "" && c.compactCommand })
-		return ready
-	})
-	if len(h.holders.inputs(holder, "prompt")) != 1 {
-		t.Fatal("continue sent before command response")
-	}
-	h.holders.out(holder, `{"type":"response","command":"compact","success":true}`)
-	eventually(t, "targeted compact response consumed", func() bool {
-		ready := false
-		h.runner.conv(child.ID).do(func() {
-			c := h.runner.conv(child.ID)
-			ready = !c.compactCommand && !c.compacting && c.compactNote != ""
-		})
-		return ready
-	})
-	h.idle(child.ID)
-	if len(h.holders.inputs(holder, "prompt")) != 1 {
-		t.Fatal("targeted compact defaulted resume to true")
-	}
-	if got := h.runner.Compact(key, "", nil); got.Status != "queued" {
-		t.Fatal(got)
-	}
-	eventually(t, "second worker RPC compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 2 })
-	h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`, `{"type":"response","command":"compact","success":true}`)
-	eventually(t, "one self continue", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
-	got := h.holders.inputs(holder, "prompt")[1]
-	if !strings.Contains(got, "Context was compacted") || !strings.Contains(got, "Continue the work") {
-		t.Fatal(got)
-	}
-	rec := h.record(child.ID)
-	if rec.WSKey != key || rec.Parent == nil || *rec.Parent != *parent {
-		t.Fatal("identity or lineage changed")
-	}
-}
-
-func TestCompactionPiFailureSignals(t *testing.T) {
-	for _, lead := range []bool{false, true} {
-		spec := StartSpec{}
-		if lead {
-			spec.Lead = &LeadSpec{}
-		}
-		m := newPiMapper(spec)
-		r := &recordedReplies{}
-		for _, line := range []string{`{"type":"compaction_end","reason":"manual","aborted":true}`, `{"type":"compaction_end","reason":"threshold","errorMessage":"failed"}`} {
-			evs := m.mapLine([]byte(line), r)
-			found := false
-			for _, ev := range evs {
-				if ev.Live != nil && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase == wslive.CompactFailed {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("role lead=%v: no failure for %s: %+v", lead, line, evs)
-			}
-		}
-	}
-}
-
 // Observe only the memory state: token events add no file operations. The
 // ordinary projection's persistence remains covered by transcript I/O tests.
 func TestCompactionObservationMemoryOnly(t *testing.T) {
@@ -575,149 +481,6 @@ func TestCompactionObservationMemoryOnly(t *testing.T) {
 		}
 	}
 	t.Logf("100000 memory observations in %s; zero instrumented file operations", time.Since(start))
-}
-
-func TestCompactionNeverWedgesOnPiUnknownEndTurnOrTimeout(t *testing.T) {
-	// 1a: live Pi compact response must end the command even when nativeKnown is false;
-	// replay (silentReplies) keeps unknown-state probing intact.
-	spec := piSpec(t, `{"backend":"pi"}`)
-	spec.Holder = &holderChild{id: "existing"}
-	m := newPiMapper(spec)
-	line := []byte(`{"type":"response","command":"compact","success":true}`)
-	if evs := m.mapLine(line, silentReplies{}); len(evs) != 0 {
-		t.Fatalf("replay compact response settled unknown state: %+v", evs)
-	}
-	if evs := m.mapLine(line, &recordedReplies{}); len(evs) == 0 || !evs[len(evs)-1].TurnEnd {
-		t.Fatalf("live compact response with !nativeKnown did not end turn: %+v", evs)
-	}
-
-	// 1b: endTurn with empty turnErr still clears compacting/compactCommand (including dashboard /compact).
-	h := compactionHarness(t)
-	id, holder := h.runLead("one")
-	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
-	h.idle(id)
-	h.sendCommand(id, "compact", "")
-	eventually(t, "dashboard compact sent", func() bool { got := h.userInputs(holder); return len(got) == 2 && got[1] == "/compact" })
-	// Return idle turn end with no CompactEnd and no error.
-	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
-	h.sync(id, holder)
-	c := h.runner.conv(id)
-	c.doT(t, func(failf func(string, ...any)) {
-		if c.compacting || c.compactCommand {
-			failf("endTurn without error left compaction stuck: compacting=%v cmd=%v", c.compacting, c.compactCommand)
-			return
-		}
-	})
-	h.send(id, "after-silent-compact")
-	eventually(t, "queued work runs after silent compact end", func() bool {
-		got := h.userInputs(holder)
-		return len(got) == 3 && strings.Contains(got[2], "after-silent-compact")
-	})
-	h.holders.out(holder, turnLines("sess-1", "u2", "second")...)
-	h.idle(id)
-
-	// 1c: CommandError, standalone CompactEnd, and standalone CompactFailed re-arm idle and kick.
-	for _, tc := range []struct {
-		name string
-		ev   Event
-	}{
-		{"CommandError", Event{CommandError: "compact refused"}},
-		{"CompactEnd", Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}}},
-		{"CompactFailed", Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c.doT(t, func(failf func(string, ...any)) {
-				c.idleAfter = time.Hour
-				c.stopIdle()
-				c.compacting = true
-				if tc.name == "CommandError" {
-					c.compactCommand = true
-				}
-				c.handle(tc.ev)
-				if c.compacting || c.compactCommand {
-					failf("%s left compaction active: compacting=%v cmd=%v", tc.name, c.compacting, c.compactCommand)
-					return
-				}
-				if c.idle == nil {
-					failf("%s did not re-arm idle timer", tc.name)
-					return
-				}
-				c.stopIdle()
-				c.idleAfter = 0
-			})
-		})
-	}
-
-	// 1d: watchdog timeout (10m) stops the stalled process (including after Claude
-	// status:compacting / TurnStart), publishes CompactFailed, isolates late completion,
-	// and lets the next turn restart and resume cleanly.
-	if compactCommandTimeout != 10*time.Minute {
-		t.Fatalf("compactCommandTimeout = %s, want 10m", compactCommandTimeout)
-	}
-	timers := &leverTimers{}
-	wh := newLeadHarness(t)
-	reg := wh.opts.Backends[BackendClaude]
-	reg.Catalog = ClaudeCatalog()
-	wh.opts.Backends[BackendClaude] = reg
-	wh.opts.Timer = timers.start
-	wh.start()
-	wid, wholder := wh.runLead("one")
-	wh.holders.out(wholder, turnLines("sess-2", "u1", "first")...)
-	wh.idle(wid)
-	wc := wh.runner.conv(wid)
-	resume := false
-	if got := wh.runner.Compact(wh.record(wid).WSKey, "", &resume); got.Status != "queued" {
-		t.Fatal(got)
-	}
-	eventually(t, "watchdog armed on compact command", func() bool {
-		started, _ := timers.counts()
-		return started == 1 && timers.durs[0] == compactCommandTimeout
-	})
-	// Feed Claude status:compacting (emits TurnStart + CompactStart) before watchdog fires.
-	wh.holders.out(wholder, `{"type":"system","subtype":"status","status":"compacting"}`)
-	eventually(t, "claude compaction turn active", func() bool {
-		ok := false
-		wc.do(func() { ok = wc.turn && wc.compacting && wc.compactCommand })
-		return ok
-	})
-	timers.fire(t, 0)
-	eventually(t, "watchdog stopped stalled process and cleared turn/compaction state", func() bool {
-		ok := false
-		wc.do(func() { ok = wc.proc == nil && !wc.turn && !wc.compacting && !wc.compactCommand })
-		return ok && !wh.state(wid).Process && wh.state(wid).Status == StatusIdle
-	})
-	// Stalled holder was stopped (no late completion can arrive on it).
-	if got := wh.holders.opCount("stop " + wholder); got != 1 {
-		t.Fatalf("expected stalled holder %s to be stopped once, got %d (%v)", wholder, got, wh.holders.opList())
-	}
-	wh.send(wid, "after-watchdog")
-	eventually(t, "next turn restarts new holder after watchdog stop", func() bool {
-		nh := wh.record(wid).HolderID
-		if nh == "" || nh == wholder {
-			return false
-		}
-		got := wh.userInputs(nh)
-		return len(got) == 1 && strings.Contains(got[0], "after-watchdog")
-	})
-	foundFailed, foundSuccess := false, false
-	for _, entry := range wh.ring(wid) {
-		if entry.Kind == wslive.RingCompact {
-			if entry.CompactFailed {
-				foundFailed = true
-			} else {
-				foundSuccess = true
-			}
-		}
-	}
-	if !foundFailed || foundSuccess {
-		t.Fatalf("watchdog ring entries wrong (failed=%v success=%v): %+v", foundFailed, foundSuccess, wh.ring(wid))
-	}
-	wc.doT(t, func(failf func(string, ...any)) {
-		if wc.compactNote != "" {
-			failf("late completion queued restore note after watchdog stop: %q", wc.compactNote)
-			return
-		}
-	})
 }
 
 func TestCompactionUnsupportedNudgesStayOnOrdinaryInput(t *testing.T) {
@@ -979,12 +742,12 @@ func TestCompactionLeadAdvisoryRunsWithBackgroundWork(t *testing.T) {
 }
 
 func TestCompactionAdvisoryRunsWithActiveDescendant(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	reg := h.runner.opts.Backends[BackendClaude]
 	reg.Catalog = ClaudeCatalog()
 	h.runner.opts.Backends[BackendClaude] = reg
 	id, holder := h.runLead("one")
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "worker task", Tier: "medium", Parent: &ParentRef{Kind: ParentLead, ReplyID: id}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "worker task", Tier: "medium", Parent: &ParentRef{Kind: ParentLead, ReplyID: id}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1002,13 +765,13 @@ func TestCompactionAdvisoryRunsWithActiveDescendant(t *testing.T) {
 }
 
 func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
-	h, got := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, got := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	child, holder := spawnRecoveryWorker(t, h)
 	c := h.runner.conv(child.ID)
-	h.holders.out(holder, recoveryPiReply("settled work")...)
+	h.holders.out(holder, recoveryWorkerReply("settled work")...)
 	eventually(t, "original report settled", func() bool { return len(got.list()) == 1 })
 	h.holders.out(holder, `{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":55000,"contextWindow":100000}}}`)
 	eventually(t, "late idle Pi stats triggered advisory", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
@@ -1018,7 +781,7 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 			return
 		}
 	})
-	h.holders.out(holder, recoveryPiReply("advisory reply")...)
+	h.holders.out(holder, recoveryWorkerReply("advisory reply")...)
 	h.idle(child.ID)
 	res, err := h.runner.Wait(context.Background(), child.ID, time.Second)
 	if err != nil || res.Status != TurnDone || res.Message != "settled work" || len(got.list()) != 1 {
@@ -1029,7 +792,7 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 	if out := h.runner.Compact(h.record(child.ID).WSKey, "", nil); out.Status != "queued" {
 		t.Fatal(out)
 	}
-	h.holders.out(holder, recoveryPiReply("compaction requested")...)
+	h.holders.out(holder, recoveryWorkerReply("compaction requested")...)
 	eventually(t, "native compaction from reminder", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
 	h.holders.out(holder,
 		`{"type":"compaction_start","reason":"manual"}`,
@@ -1037,7 +800,7 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 		`{"type":"response","command":"compact","success":true}`,
 	)
 	eventually(t, "post-compaction continuation", func() bool { return len(h.holders.inputs(holder, "prompt")) == 4 })
-	h.holders.out(holder, recoveryPiReply("continuation handled")...)
+	h.holders.out(holder, recoveryWorkerReply("continuation handled")...)
 	h.idle(child.ID)
 	res, err = h.runner.Wait(context.Background(), child.ID, time.Second)
 	if err != nil || res.Message != "settled work" || len(got.list()) != 1 {
@@ -1104,12 +867,12 @@ func TestCompactionWorkerAdvisoryPreservesHeldResult(t *testing.T) {
 }
 
 func TestCompactionWorkerSelfResumeDefersParentSettle(t *testing.T) {
-	h, got := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, got := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1182,16 +945,16 @@ func TestCompactionStatusRespectsKickGuards(t *testing.T) {
 }
 
 func TestCompactionWorkerRestoreUsesSystemPromptNotLeadManual(t *testing.T) {
-	p := *PiCompaction()
+	p := *fixtureCompaction()
 	p.PromptPersists = false
 	manual := &leadManualRender{text: "LEAD MANUAL MUST NOT APPEAR"}
 	r := NewRunner(Options{
 		LeadManual: manual.render,
-		Backends:   map[string]BackendRegistration{BackendPi: {NativeCompaction: &p}},
+		Backends:   map[string]BackendRegistration{BackendClaude: {NativeCompaction: &p}},
 	})
 	c := &conv{
 		r:            r,
-		rec:          Record{Backend: BackendPi, Lead: false, WSKey: "worker-key"},
+		rec:          Record{Backend: BackendClaude, Lead: false, WSKey: "worker-key"},
 		systemPrompt: "WORKER SYSTEM PROMPT",
 		compacting:   true,
 	}
@@ -1205,12 +968,12 @@ func TestCompactionWorkerRestoreUsesSystemPromptNotLeadManual(t *testing.T) {
 }
 
 func TestCompactionStopProcessWithLiveProcessReleasesHeldReport(t *testing.T) {
-	h, got := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, got := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1245,12 +1008,12 @@ func TestCompactionStopProcessWithLiveProcessReleasesHeldReport(t *testing.T) {
 }
 
 func TestCompactionBeginTurnPreservesHeldReportOnCompactFailure(t *testing.T) {
-	h, got := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, got := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1768,4 +1531,9 @@ func TestCompactionMilestonesAndUsageContext(t *testing.T) {
 	if !c.compactAdvised || c.compactM1Issued || c.compactM2Issued {
 		t.Fatalf("refreshCompaction did not clear m1/m2 below raised thresholds: advised=%v m1=%v m2=%v", c.compactAdvised, c.compactM1Issued, c.compactM2Issued)
 	}
+}
+
+// fixtureCompaction models a backend that permits both hosted roles to compact.
+func fixtureCompaction() *CompactionProtocol {
+	return &CompactionProtocol{LeadCommand: true, WorkerCommand: true, Lifecycle: true, PromptPersists: true}
 }

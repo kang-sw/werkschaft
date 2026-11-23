@@ -98,7 +98,7 @@ func completeRecoveryWorker(t *testing.T, h *leadHarness, backend, holder string
 			`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"held result"}}}}`,
 			jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompt, "result": map[string]any{"stopReason": "end_turn"}}))
 	case BackendPi:
-		h.holders.out(holder, recoveryPiReply("held result")...)
+		h.holders.out(holder, recoveryWorkerReply("held result")...)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestHeldWorkerChildLoadsBeforeLowerCeilingParent(t *testing.T) {
 				t.Fatal(err)
 			}
 			parentDir := wsdashboard.SessionDir(h.dir, parentID)
-			parent := Record{ReplyID: parentID, Profile: PiWorkerProfile, Backend: BackendPi, Root: h.root,
+			parent := Record{ReplyID: parentID, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendPi, Root: h.root,
 				WSKey: "parent-key", CreatedAt: before.CreatedAt, Parent: &leadParent}
 			if tc.lead {
 				parent.Lead, parent.Profile, parent.Backend, parent.Parent = true, LeadProfileClaude, BackendClaude, nil

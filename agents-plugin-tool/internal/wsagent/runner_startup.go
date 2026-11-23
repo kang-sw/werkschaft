@@ -83,6 +83,7 @@ func (r *Runner) StartForPublication(notify func(replyID, project string), servi
 	}()
 }
 
+// Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
 func (r *Runner) start(notify func(replyID, project string)) {
 	r.started.Store(true)
 	startupLoaded := make(chan struct{})
@@ -300,7 +301,7 @@ func (r *Runner) orphansAtStart(open []Record) map[string]bool {
 			// Legacy direct non-Pi children keep their existing next-launch
 			// admission refusal when a parent disappears. Held workers of
 			// every backend use the former Pi orphan cleanup.
-			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && rec.HolderID == "") {
+			if done[id] || rec.Lead || rec.Parent == nil || rec.HolderID == "" {
 				continue
 			}
 			if rec.Parent.Kind == ParentConversation && !stays(rec.Parent.ReplyID) {
@@ -321,6 +322,7 @@ func (r *Runner) markScanned() {
 // gone), and a lead holder no conversation runs under is ended, so no
 // second process of a session stays behind a crash between a spawn and its
 // record.
+// Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
 func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 	// Listed before the conversations are taken and asked: a conversation
 	// opened after the listing launched no holder in it, and a holder a

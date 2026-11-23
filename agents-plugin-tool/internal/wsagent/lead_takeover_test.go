@@ -213,37 +213,6 @@ func TestTakeoverAdoptsTheKeyAndResumesWhereTheHarnessRan(t *testing.T) {
 	check(h.holder(id), "after a daemon restart")
 }
 
-// TestTakeoverOfAPiSessionRunsOnItsOwnSessionFile: a pi session is resumed
-// on the session file its harness reported, in pi's own session directory
-// for it, not on a file of the daemon's.
-func TestTakeoverOfAPiSessionRunsOnItsOwnSessionFile(t *testing.T) {
-	h := newLeadHarness(t).start()
-	file := filepath.Join(t.TempDir(), "pi-sessions", "2026-11-12_abc.jsonl")
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	const id = "pisess"
-	h.terminalSession(id, LeadSession{Key: "pi-lead-key", Harness: BackendPi, Session: file, Cwd: h.root}, nil)
-	if _, err := h.runner.TakeOver(id); !isConflict(err) || !strings.Contains(err.Error(), "file is gone") {
-		t.Fatalf("TakeOver with no session file = %v, want a conflict", err)
-	}
-	if err := os.WriteFile(file, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	st, err := h.runner.TakeOver(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec := h.record(id); st.Backend != BackendPi || st.PermissionMode != "" || rec.SessionFile != file || rec.Cwd != "" || rec.SessionID != "" {
-		t.Fatalf("state %+v, record %+v", st, rec)
-	}
-	h.send(id, "hello")
-	spec := h.holders.spawned(h.holder(id))
-	if session, _ := flagValue(spec.Argv, "--session"); session != file || slices.Contains(spec.Argv, "--session-dir") || spec.Cwd != h.root {
-		t.Fatalf("spawn = %v in %q, want --session %s and no --session-dir", spec.Argv, spec.Cwd, file)
-	}
-}
-
 // TestTakeoverAdoptsUnderTheResolvedTargetBackend: the source harness decides
 // whether its terminal session can be taken over, but the record is adopted
 // under the backend the lead profile resolves to, which a profile override can
@@ -541,7 +510,7 @@ func TestReopenOpensAClosedHostedSession(t *testing.T) {
 // on a non-Windows host, PowerShell on a Windows one.
 func TestResumeCommand(t *testing.T) {
 	dir := t.TempDir()
-	own := piSessionFile(dir)
+	own := filepath.Join(dir, "pi", "session.jsonl")
 	cases := []struct {
 		rec           Record
 		posix, window string

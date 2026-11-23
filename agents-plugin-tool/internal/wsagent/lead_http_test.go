@@ -212,8 +212,8 @@ func TestLeadControlRoutesTakeTheTrustedGate(t *testing.T) {
 	}
 
 	local, own = true, true
-	r = h.route(as, http.MethodPost, "/agents/leads", map[string]any{"root": h.root, "harness": BackendPi, "model": "provider/some-model", "effort": "high", "permission_mode": "plan"})
-	if st := decodeState(t, r); r.status != http.StatusCreated || !st.Lead || st.Backend != BackendPi || st.Model != "provider/some-model" || st.Effort != "high" || st.PermissionMode != "" || !st.CanControl {
+	r = h.route(as, http.MethodPost, "/agents/leads", map[string]any{"root": h.root, "harness": BackendClaude, "model": "sonnet", "effort": "high", "permission_mode": "plan"})
+	if st := decodeState(t, r); r.status != http.StatusCreated || !st.Lead || st.Backend != BackendClaude || st.Model != "sonnet" || st.Effort != "high" || st.PermissionMode != "plan" || !st.CanControl {
 		t.Fatalf("spawn = %d %s", r.status, r.body)
 	}
 	if r := h.route(as, http.MethodPost, "/agents/leads", map[string]any{"root": h.root, "harness": "codex"}); r.status != http.StatusBadRequest {

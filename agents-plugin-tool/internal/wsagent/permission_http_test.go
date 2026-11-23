@@ -21,7 +21,7 @@ func TestPermissionHTTPSelection(t *testing.T) {
 			t.Fatalf("create user gate: %d %s", res.status, res.body)
 		}
 	}
-	for _, backend := range []string{BackendClaude, BackendPi} {
+	for _, backend := range []string{BackendClaude} {
 		body := map[string]any{"root": h.root, "harness": backend, "permission_level": "read-only"}
 		res := h.route(localBrowser, http.MethodPost, "/agents/leads/permission", body)
 		if res.status != 201 {

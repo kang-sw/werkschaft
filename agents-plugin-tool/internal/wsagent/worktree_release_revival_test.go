@@ -4,7 +4,6 @@ package wsagent
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,39 +137,3 @@ func TestReleaseRefusesALeadReopen(t *testing.T) {
 
 // TestReleaseRefusesAPiChildRevival: a closed Pi child's send does not
 // revive it into a worktree being released, and starts nothing.
-func TestReleaseRefusesAPiChildRevival(t *testing.T) {
-	h, _ := childHarness(t)
-	_, _, token, child, oldProc := workerWithChild(t, h)
-	if code, body := h.tokenCall(token, "stop", map[string]any{"id": child.ID}); code != http.StatusOK {
-		t.Fatalf("stop = %d %s", code, body)
-	}
-	if !oldProc.isClosed() {
-		t.Fatal("pi.stop left the process alive")
-	}
-	file := piSessionFile(wsdashboard.SessionDir(h.dir, child.ID))
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, []byte("persisted conversation\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	bound := len(h.runner.ActiveChildrenInWorktree(h.root))
-	release := holdRelease(t, h.root)
-	code, body := h.tokenCall(token, "send", map[string]any{"id": child.ID, "message": "continue"})
-	if code != http.StatusConflict || !strings.Contains(body, "currently being released") {
-		t.Fatalf("revival during a release = %d %s", code, body)
-	}
-	if h.state(child.ID).Status != StatusClosed || h.record(child.ID).ClosedAt == "" || h.backend.startCount() != 2 {
-		t.Fatal("a refused revival must leave the record closed and start nothing")
-	}
-	if got := h.runner.ActiveChildrenInWorktree(h.root); len(got) != bound {
-		t.Fatalf("a refused revival changed the bound sessions: %+v", got)
-	}
-	release()
-	if code, body := h.tokenCall(token, "send", map[string]any{"id": child.ID, "message": "continue"}); code != http.StatusOK {
-		t.Fatalf("revival after the release = %d %s", code, body)
-	}
-	if text := h.backend.waitProc(t, 2).nextSent(t); text != h.envelope("continue") {
-		t.Fatalf("resumed prompt = %q", text)
-	}
-}

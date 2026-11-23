@@ -12,8 +12,8 @@ import (
 
 func TestHiringCancellationOnlyRollsBackItsCorrelatedCreation(t *testing.T) {
 	h := newLeadHarness(t).start()
-	ownerSession := h.lead("pi", LeadOptions{})
-	provisional, err := h.runner.CreateHireLead("unfinished", h.root, wsdashboard.HireLaunch{Harness: "pi"})
+	ownerSession := h.lead("claude", LeadOptions{})
+	provisional, err := h.runner.CreateHireLead("unfinished", h.root, wsdashboard.HireLaunch{Harness: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,8 @@ func TestHiringCancellationOnlyRollsBackItsCorrelatedCreation(t *testing.T) {
 
 func TestHiringCreationUsesOwnerLeadAndSurvivesRetry(t *testing.T) {
 	h := newLeadHarness(t).start()
-	requester := h.lead("pi", LeadOptions{})
-	launch := wsdashboard.HireLaunch{Harness: "pi", Model: "owner-model", Effort: "high", Label: "hired peer"}
+	requester := h.lead("claude", LeadOptions{})
+	launch := wsdashboard.HireLaunch{Harness: "claude", Model: "owner-model", Effort: "high", Label: "hired peer"}
 	var wg sync.WaitGroup
 	ids := make(chan string, 8)
 	errs := make(chan error, 8)

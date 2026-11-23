@@ -64,9 +64,6 @@ func TestBuiltinBackendPolicyTable(t *testing.T) {
 			legacy:    map[string]PermissionLevel{"read-only": PermissionReadOnly, "workspace-write": PermissionWorkdirWrite, "danger-full-access": PermissionFull}},
 		{backend: BackendAgy, terminal: true, admitter: true,
 			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true, InternalTurns: true, WorkerLog: true}},
-		{backend: BackendPi, terminal: true,
-			lifecycle: LifecyclePolicy{NativeChildren: true, TerminalSummaries: true},
-			fallback:  PermissionWorkdirWrite},
 	} {
 		t.Run(tc.backend, func(t *testing.T) {
 			reg, ok := regs[tc.backend]
@@ -122,7 +119,7 @@ func TestRegisteredPolicyDrivesCommonCode(t *testing.T) {
 				LegacyDefault:      PermissionWorkdirWrite,
 				LiveModeProjection: true,
 			},
-			Lifecycle: LifecyclePolicy{NativeChildren: true, TerminalSummaries: true, LeadHTTPMCP: true},
+			Lifecycle: LifecyclePolicy{TerminalSummaries: true, LeadHTTPMCP: true},
 		},
 		// A built-in name with no declaration is a plain backend.
 		BackendClaude: {Backend: &fakeBackend{}, LeadProfile: LeadProfileClaude},
@@ -165,7 +162,7 @@ func TestRegisteredPolicyDrivesCommonCode(t *testing.T) {
 			t.Errorf("%s: projection = %q, want %q", name, got, want)
 		}
 	}
-	if !runner.lifecycle("fixture").NativeChildren || !runner.lifecycle("fixture").TerminalSummaries {
+	if !runner.lifecycle("fixture").TerminalSummaries {
 		t.Error("the declared lifecycle was not read")
 	}
 	if got := runner.resumeCommand(Record{Lead: true, Backend: "fixture", SessionID: "s1"}, ""); got != "fixture --resume s1" {
@@ -237,7 +234,6 @@ func TestTerminalSessionAdoption(t *testing.T) {
 	}{
 		{BackendClaude, Record{PermissionMode: "acceptEdits", SessionID: "s1"}},
 		{BackendAgy, Record{SessionID: "s1"}},
-		{BackendPi, Record{SessionFile: "s1"}},
 	} {
 		ts, ok := BuiltinBackendRegistrations()[tc.backend].Backend.(terminalSession)
 		if !ok {
@@ -267,7 +263,6 @@ func TestBuiltinDashboardTraits(t *testing.T) {
 	want := wsdashboard.HarnessTraitSet{
 		BackendClaude: {PushesClaudeUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
 		BackendCodex:  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
-		BackendPi:     {TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"},
 		BackendAgy:    {ReplayClientName: "agy"},
 		BackendWerk:   {ReplayClientName: "ws-werk"},
 	}
@@ -298,7 +293,6 @@ func TestBuiltinConnectionPolicy(t *testing.T) {
 	want := map[string]conn{
 		BackendClaude: {named: true, delegates: true},
 		BackendCodex:  {named: true},
-		BackendPi:     {named: true, bridge: "ws-pi-bridge", daemonAgents: true, delegates: true},
 		BackendAgy:    {},
 		BackendWerk:   {},
 	}
@@ -316,7 +310,7 @@ func TestBuiltinConnectionPolicy(t *testing.T) {
 	if c := BuiltinConnection("not-built-in"); c.NamedClient || c.DelegatesThroughDaemon != nil {
 		t.Fatalf("an unknown name declares %+v", c)
 	}
-	if l := BuiltinLifecycle(BackendPi); !l.TerminalSummaries || BuiltinLifecycle("not-built-in") != (LifecyclePolicy{}) {
+	if l := BuiltinLifecycle(BackendPi); l.TerminalSummaries || BuiltinLifecycle("not-built-in") != (LifecyclePolicy{}) {
 		t.Fatalf("BuiltinLifecycle = %+v", l)
 	}
 }
@@ -333,28 +327,7 @@ func TestDelegatesThroughDaemon(t *testing.T) {
 	if claude(Record{Backend: BackendClaude, Profile: SupportProfileClaude}, nil) {
 		t.Error("the Claude support profile keeps its native subagent tool")
 	}
-	pi := BuiltinConnection(BackendPi).DelegatesThroughDaemon
-	none := func() *Profile { t.Fatal("resolver must not be called"); return nil }
-	if !pi(Record{Backend: BackendPi, Lead: true, PluginWarning: piExtensionFallbackMarker}, none) {
-		t.Error("a Pi lead that fell back to the MCP bridge delegates through the daemon")
-	}
-	if pi(Record{Backend: BackendPi, Lead: true}, none) {
-		t.Error("a Pi lead with the native extension does not")
-	}
-	tools := &Profile{Backend: BackendPi, WSTools: []string{"agent.spawn", "mailbox.send"}}
-	if !pi(Record{Backend: BackendPi, ResolvedDefinition: tools}, none) {
-		t.Error("an MCP-only Pi worker granted both tools delegates through the daemon")
-	}
-	if pi(Record{Backend: BackendPi, ResolvedDefinition: &Profile{Backend: BackendPi, WSTools: []string{"agent.spawn"}}}, none) {
-		t.Error("a Pi worker without mailbox.send does not")
-	}
-	called := false
-	if !pi(Record{Backend: BackendPi}, func() *Profile { called = true; return tools }) || !called {
-		t.Error("a record with no snapshot resolves its launched profile")
-	}
-	if pi(Record{Backend: BackendPi}, func() *Profile { return nil }) {
-		t.Error("an unresolvable launched profile does not delegate")
-	}
+
 }
 
 // TestResidualPolicyDrivesCommonCode: the compaction, session-state, exec
@@ -399,23 +372,6 @@ func TestResidualPolicyDrivesCommonCode(t *testing.T) {
 // TestBuiltinResidualPolicyInterfaces pins which built-in declares the
 // extension-bridge compaction and the audit adapter, with literal expectations.
 func TestBuiltinResidualPolicyInterfaces(t *testing.T) {
-	regs := BuiltinBackendRegistrations()
-	for name, want := range map[string]bool{BackendClaude: false, BackendCodex: false, BackendAgy: false, BackendPi: true} {
-		_, got := regs[name].Backend.(leadCompactionBridge)
-		if got != want {
-			t.Errorf("%s leadCompactionBridge = %v, want %v", name, got, want)
-		}
-	}
-	runner := policyRunner(regs)
-	lead := Record{Backend: BackendPi, Lead: true}
-	if !runner.bridgedLeadCompaction(lead) {
-		t.Error("a Pi lead with the extension compacts through the bridge")
-	}
-	lead.PluginWarning = piExtensionFallbackMarker
-	if runner.bridgedLeadCompaction(lead) || runner.bridgedLeadCompaction(Record{Backend: BackendPi}) ||
-		runner.bridgedLeadCompaction(Record{Backend: BackendClaude, Lead: true}) {
-		t.Error("an MCP-only Pi lead, a Pi worker, or another backend compacts through the bridge")
-	}
 	if h, a := (&claudeMapper{}).newAudit("s"); h != BackendClaude || a == nil {
 		t.Errorf("claude audit = %q %v", h, a)
 	}

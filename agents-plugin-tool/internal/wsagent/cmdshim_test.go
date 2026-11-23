@@ -290,11 +290,6 @@ func TestHarnessStartsGoThroughTheShimUnwrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	starts := map[string]func(StartSpec) (Process, error){
-		"pi": func(s StartSpec) (Process, error) { return PiBackend{Command: bad}.Start(context.Background(), s) },
-		"pi lead": func(s StartSpec) (Process, error) {
-			s.Lead = &LeadSpec{}
-			return PiBackend{Command: bad}.Start(context.Background(), s)
-		},
 		"claude": func(s StartSpec) (Process, error) { return ClaudeBackend{Command: bad}.Start(context.Background(), s) },
 		"claude lead": func(s StartSpec) (Process, error) {
 			s.Lead = &LeadSpec{}

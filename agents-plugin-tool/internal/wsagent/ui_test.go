@@ -1,7 +1,6 @@
 package wsagent
 
 import (
-	"encoding/json"
 	"io"
 	"testing"
 	"time"
@@ -63,24 +62,6 @@ func TestClaudeMapperRaisesUICommands(t *testing.T) {
 }
 
 // TestPiMapperRaisesUICommands is the Pi form.
-func TestPiMapperRaisesUICommands(t *testing.T) {
-	m := newPiMapper(piSpec(t, `{"backend":"pi"}`))
-	ui := piMCPToolName(ReservedMCPServer, UITool)
-	var events []Event
-	for _, l := range []map[string]any{
-		{"type": "tool_execution_end", "toolCallId": "c1", "toolName": ui, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ui search ribbon\n"}}}, "isError": false},
-		{"type": "tool_execution_end", "toolCallId": "c2", "toolName": ui, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": uiResult}}}, "isError": true},
-		{"type": "tool_execution_end", "toolCallId": "c3", "toolName": "read", "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": uiResult}}}, "isError": false},
-		{"type": "tool_execution_end", "toolCallId": "c4", "toolName": ui, "result": "not an object", "isError": false},
-	} {
-		raw, _ := json.Marshal(l)
-		events = append(events, m.mapLine(raw, nopReplies{})...)
-	}
-	if got := uiCommands(events); len(got) != 1 || got[0] != (wslive.UICommand{Op: "search", Arg: "ribbon"}) {
-		t.Fatalf("ui commands: %+v", got)
-	}
-}
-
 // TestLiveWriterWritesUILines pins the runner's path: a UI command lands
 // in the conversation's ring as a ui entry; one outside the tracker view's
 // offer is dropped.

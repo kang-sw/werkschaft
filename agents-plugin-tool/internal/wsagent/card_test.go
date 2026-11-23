@@ -81,24 +81,6 @@ func TestClaudeMapperDrawsTrackerShowCards(t *testing.T) {
 
 // TestPiMapperDrawsTrackerShowCards is the Pi form: tool_execution_end names
 // the tool and carries the result's text blocks.
-func TestPiMapperDrawsTrackerShowCards(t *testing.T) {
-	m := newPiMapper(piSpec(t, `{"backend":"pi"}`))
-	show := piMCPToolName(ReservedMCPServer, CardTool)
-	var events []Event
-	for _, l := range []map[string]any{
-		{"type": "tool_execution_end", "toolCallId": "c1", "toolName": show, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": cardResult}}}, "isError": false},
-		{"type": "tool_execution_end", "toolCallId": "c2", "toolName": show, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": cardResult}}}, "isError": true},
-		{"type": "tool_execution_end", "toolCallId": "c3", "toolName": "read", "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": cardResult}}}, "isError": false},
-		{"type": "tool_execution_end", "toolCallId": "c4", "toolName": show, "result": "not an object", "isError": false},
-	} {
-		raw, _ := json.Marshal(l)
-		events = append(events, m.mapLine(raw, nopReplies{})...)
-	}
-	if got := cards(events); len(got) != 1 || got[0].Title != `Fix the "sync" ribbon` {
-		t.Fatalf("cards: %+v", got)
-	}
-}
-
 // TestLiveWriterWritesCardLines pins the runner's path: a card lands in the
 // conversation's ring as a card entry.
 func TestLiveWriterWritesCardLines(t *testing.T) {
@@ -150,23 +132,6 @@ func TestClaudeMapperRaisesTrackerWrites(t *testing.T) {
 }
 
 // TestPiMapperRaisesTrackerWrites is the Pi form.
-func TestPiMapperRaisesTrackerWrites(t *testing.T) {
-	m := newPiMapper(piSpec(t, `{"backend":"pi"}`))
-	update := piMCPToolName(ReservedMCPServer, TrackerWriteTool)
-	var events []Event
-	for _, l := range []map[string]any{
-		{"type": "tool_execution_end", "toolCallId": "c1", "toolName": update, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "created"}}}, "isError": false},
-		{"type": "tool_execution_end", "toolCallId": "c2", "toolName": update, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "refused"}}}, "isError": true},
-		{"type": "tool_execution_end", "toolCallId": "c3", "toolName": "read", "result": map[string]any{"content": []any{}}, "isError": false},
-	} {
-		raw, _ := json.Marshal(l)
-		events = append(events, m.mapLine(raw, nopReplies{})...)
-	}
-	if n := trackerWrites(events); n != 1 {
-		t.Fatalf("tracker writes: %d, want 1", n)
-	}
-}
-
 // TestRunnerCallsTrackerChangedOnTrackerWrite pins the runner's path: a
 // TrackerWrite event calls Options.TrackerChanged; a runner without one
 // ignores it.

@@ -17,8 +17,6 @@ func TestProcessControlsMatchTheLaunchedProcess(t *testing.T) {
 		proc Process
 		want []string
 	}{
-		{"pi worker", &piProcess{}, []string{"steer", "reports", "commands", "turns", "recovery"}},
-		{"pi lead", &piProcess{lead: true}, []string{"steer", "reports", "commands", "turns", "recovery"}},
 		{"claude worker", claudeProcess{}, []string{"steer"}},
 		{"claude lead", claudeProcess{lead: true}, []string{"approval", "mode", "mcp", "steer"}},
 		{"minimal process", &fakeProc{}, nil},
@@ -84,13 +82,6 @@ func TestProcessControlsKeepCommandAndModeFallbacks(t *testing.T) {
 		t.Fatalf("missing permission mode control = %v", err)
 	}
 	// The real adapters still decide support from the control arguments.
-	pi := controlsFor(&piProcess{})
-	if err := pi.SetModel("fuzzy-model"); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("Pi fuzzy model = %v", err)
-	}
-	if err := pi.SetEffort(""); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("Pi default effort = %v", err)
-	}
 	claude := controlsFor(claudeProcess{lead: true})
 	if err := claude.setPermissionMode(""); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("Claude empty mode = %v", err)

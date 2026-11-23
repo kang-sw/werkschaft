@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -19,22 +17,26 @@ import (
 	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
-// childHarness is a spawn harness whose fake backend also runs the
-// pi-worker profile, takes steered reports, and whose runner has an
-// endpoint, with the small, medium, and large Pi tiers set.
+// childHarness provides Claude and werk tiers, steered reports, and an MCP endpoint.
 func childHarness(t *testing.T) (*harness, *reports) {
 	t.Helper()
+	setLookPath(t, func(file string) (string, error) { return file, nil })
 	h := newHarness(t, map[string]string{
 		"chat": chatProfile,
 		"piw":  `{"backend":"claude","model":"haiku","ws_tools":["pi.spawn","pi.list"]}`,
 	})
 	got := &reports{}
 	h.config.Report = got.add
-	h.config.Backends[BackendPi] = BackendRegistration{Backend: h.backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}
+	h.config.Backends[BackendWerk] = BackendRegistration{Backend: h.backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendWerk)}
 	h.backend.steers = true
 	h.endpoint = "http://127.0.0.1:1"
 	for tier, model := range map[string]string{"small": "prov/small-model", "medium": "prov/medium-model", "large": "prov/large-model"} {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.config.Config, tier, "", model, PiTierHarness, "low"); err != nil {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.config.Config, tier, "", model, BackendWerk, "low"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for tier, model := range map[string]string{"small": "claude-small", "medium": "claude-medium", "large": "claude-large"} {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.config.Config, tier, "", model, BackendClaude, "high"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,10 +45,10 @@ func childHarness(t *testing.T) (*harness, *reports) {
 	return h, got
 }
 
-// spawnWorker spawns a lead's Pi worker of tier.
+// spawnWorker spawns a lead's worker of tier.
 func (h *harness) spawnWorker(tier string) State {
 	h.t.Helper()
-	st, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Tier: tier, Label: "worker", Parent: &leadParent})
+	st, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Tier: tier, Label: "worker", Parent: &leadParent})
 	if err != nil {
 		h.t.Fatalf("Spawn: %v", err)
 	}
@@ -87,18 +89,32 @@ func (h *harness) tokenCallFrom(remote, token, op string, body any) (int, string
 	return rec.Code, rec.Body.String()
 }
 
-// spawnChild spawns a Pi child of the token holder through the token route.
+// parentWait exercises report delivery through the shared wait implementation.
+func (h *harness) parentWait(id string, timeout time.Duration) (int, string) {
+	h.t.Helper()
+	result, err := h.runner.wait(context.Background(), id, timeout, true)
+	if err != nil {
+		h.t.Fatalf("wait: %v", err)
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return http.StatusOK, string(body)
+}
+
+// spawnChild spawns a child of the token holder through the token route.
 func (h *harness) spawnChild(token, tier, prompt string) State {
 	h.t.Helper()
-	code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": prompt, "tier": tier})
+	code, body := h.tokenCall(token, "agent.spawn", map[string]any{"prompt": prompt, "tier": tier, "authority": "workdir-write"})
 	if code != http.StatusCreated {
 		h.t.Fatalf("token spawn = %d %s", code, body)
 	}
-	var st State
-	if err := json.Unmarshal([]byte(body), &st); err != nil {
+	var result AgentSpawnResult
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		h.t.Fatal(err)
 	}
-	return st
+	return h.state(agentID(result.Address))
 }
 
 // leadReports are the reports to the lead parent (leadParent).
@@ -156,8 +172,8 @@ func TestCapabilityTokenGoesToSpawnedWorkersOnly(t *testing.T) {
 	spec := h.backend.waitProcStart(t, 0)
 	env := spec.WSMCP.Env
 	first := env[EnvPiToken]
-	if len(first) != 64 || env[EnvPiEndpoint] != h.endpoint || !strings.Contains(env[EnvAllowedTools], "pi.spawn") {
-		t.Fatalf("a spawned worker's ws-mcp gets a token, the endpoint, and pi.*: %v", env)
+	if len(first) != 64 || env[EnvPiEndpoint] != h.endpoint || !strings.Contains(env[EnvAllowedTools], "agent.spawn") {
+		t.Fatalf("a spawned worker's ws-mcp gets a token, the endpoint, and agent.spawn: %v", env)
 	}
 	if rec := h.record(w.ID); rec.Tier != "medium" || h.state(w.ID).Tier != "medium" {
 		t.Fatalf("the tier is recorded: %+v", rec)
@@ -170,7 +186,7 @@ func TestCapabilityTokenGoesToSpawnedWorkersOnly(t *testing.T) {
 	}
 
 	// No recorded tier: no token.
-	if _, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "x", Parent: &leadParent}); err != nil {
+	if _, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "x", Parent: &leadParent}); err != nil {
 		t.Fatal(err)
 	}
 	if tok := h.token(1); tok != "" {
@@ -204,145 +220,6 @@ func TestCapabilityTokenGoesToSpawnedWorkersOnly(t *testing.T) {
 	}
 	if code, _ := h.tokenCall(second, "list", nil); code != http.StatusOK {
 		t.Fatalf("the new token lists: %d", code)
-	}
-}
-
-func TestTokenSpawnRecordsTheHolderAsParent(t *testing.T) {
-	h, _ := childHarness(t)
-	w := h.spawnWorker("medium")
-	token := h.token(0)
-	if err := os.Mkdir(filepath.Join(h.root, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": "sub task", "tier": "small", "cwd": "sub", "label": "gc"})
-	if code != http.StatusCreated {
-		t.Fatalf("spawn = %d %s", code, body)
-	}
-	var gc State
-	if err := json.Unmarshal([]byte(body), &gc); err != nil {
-		t.Fatal(err)
-	}
-	want := ParentRef{Kind: ParentConversation, ReplyID: w.ID}
-	if gc.Parent == nil || *gc.Parent != want || gc.Tier != "small" || gc.Model != "prov/small-model" || gc.Effort != "low" ||
-		gc.Profile != PiWorkerProfile || gc.Cwd != filepath.Join(h.root, "sub") || gc.Label != "gc" || gc.Root != h.root {
-		t.Fatalf("the child = %+v", gc)
-	}
-	if rec := h.record(gc.ID); rec.Parent == nil || *rec.Parent != want || rec.Tier != "small" {
-		t.Fatalf("the child's record = %+v", rec)
-	}
-	if got := h.backend.waitProc(t, 1).nextSent(t); got != h.envelope("sub task") {
-		t.Fatalf("the child's first turn = %q", got)
-	}
-	if tok := h.token(1); tok == "" || tok == token {
-		t.Fatalf("the child holds a token of its own: %q", tok)
-	}
-
-	open := len(h.runner.List())
-	for name, tok := range map[string]string{"missing": "", "forged": strings.Repeat("ab", 32)} {
-		if code, body := h.tokenCall(tok, "spawn", map[string]any{"prompt": "x", "tier": "small"}); code != http.StatusUnauthorized {
-			t.Fatalf("%s token: %d %s", name, code, body)
-		}
-	}
-	if code, _ := h.tokenCallFrom("192.0.2.1:5555", token, "spawn", map[string]any{"prompt": "x", "tier": "small"}); code != http.StatusNotFound {
-		t.Fatalf("another machine's call: %d", code)
-	}
-	if n := len(h.runner.List()); n != open {
-		t.Fatalf("a refused call spawns nothing: %d open, was %d", n, open)
-	}
-
-	// A closed conversation's token is stale.
-	if _, err := h.runner.CloseConversation(w.ID); err != nil {
-		t.Fatal(err)
-	}
-	if code, _ := h.tokenCall(token, "list", nil); code != http.StatusUnauthorized {
-		t.Fatalf("a closed worker's token: %d", code)
-	}
-}
-
-func TestTokenHolderReachesItsOwnChildrenAlone(t *testing.T) {
-	h, _ := childHarness(t)
-	a := h.spawnWorker("medium")
-	tokA := h.token(0)
-	b := h.spawnWorker("medium")
-	tokB := h.token(1)
-	gc := h.spawnChild(tokA, "small", "a's child")
-
-	list := func(token string) []State {
-		code, body := h.tokenCall(token, "list", nil)
-		var answer struct {
-			Conversations []State `json:"conversations"`
-		}
-		if code != http.StatusOK || json.Unmarshal([]byte(body), &answer) != nil {
-			t.Fatalf("list = %d %s", code, body)
-		}
-		return answer.Conversations
-	}
-	if got := list(tokA); len(got) != 1 || got[0].ID != gc.ID {
-		t.Fatalf("a lists its child: %+v", got)
-	}
-	if got := list(tokB); len(got) != 0 {
-		t.Fatalf("b lists none: %+v", got)
-	}
-	for _, op := range []string{"send", "stop", "transcript", "wait"} {
-		code, body := h.tokenCall(tokB, op, map[string]any{"id": gc.ID, "message": "x", "timeout_s": 0.01})
-		if code != http.StatusNotFound || !strings.Contains(body, "is not one of this conversation's Pi subagents") {
-			t.Fatalf("b's %s on a's child = %d %s", op, code, body)
-		}
-		// A sibling, the holder itself, and the lead's other worker are
-		// no children either.
-		for _, id := range []string{b.ID, a.ID} {
-			if code, _ := h.tokenCall(tokA, op, map[string]any{"id": id, "message": "x", "timeout_s": 0.01}); code != http.StatusNotFound {
-				t.Fatalf("a's %s on %s = %d", op, id, code)
-			}
-		}
-	}
-	if code, body := h.tokenCall(tokA, "send", map[string]any{"id": gc.ID, "message": "more"}); code != http.StatusOK {
-		t.Fatalf("a sends its child: %d %s", code, body)
-	}
-	if code, body := h.tokenCall(tokA, "transcript", map[string]any{"id": gc.ID}); code != http.StatusOK || !strings.Contains(body, `"records"`) {
-		t.Fatalf("a reads its child: %d %s", code, body)
-	}
-	if code, body := h.tokenCall(tokA, "stop", map[string]any{"id": gc.ID}); code != http.StatusOK || h.state(gc.ID).Status != StatusClosed {
-		t.Fatalf("a closes its child: %d %s", code, body)
-	}
-}
-
-func TestTokenSpawnCapsDepthAndTier(t *testing.T) {
-	h, _ := childHarness(t)
-	h.spawnWorker("medium")
-	token := h.token(0)
-	code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": "x", "tier": "large"})
-	if code != http.StatusForbidden || !strings.Contains(body, `tier "large" is above this conversation's own tier "medium"`) {
-		t.Fatalf("a tier above the caller's = %d %s", code, body)
-	}
-	if code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": "x", "tier": "huge"}); code != http.StatusBadRequest {
-		t.Fatalf("an unknown tier = %d %s", code, body)
-	}
-	// A chain down to depth 4: each child keeps its token, and the one at
-	// the cap gets the cap message.
-	var last State
-	for depth := 2; depth <= MaxSpawnDepth; depth++ {
-		last = h.spawnChild(token, "medium", "deeper")
-		if token = h.token(depth - 1); token == "" {
-			t.Fatalf("a depth-%d child holds a token", depth)
-		}
-	}
-	code, body = h.tokenCall(token, "spawn", map[string]any{"prompt": "x", "tier": "small"})
-	if code != http.StatusForbidden || !strings.Contains(body, "pi.spawn: the spawn depth cap is 4") || !strings.Contains(body, "at depth 4") {
-		t.Fatalf("a depth-5 spawn = %d %s", code, body)
-	}
-	if n := len(h.runner.Children(ParentRef{Kind: ParentConversation, ReplyID: last.ID})); n != 0 {
-		t.Fatalf("a refused spawn spawns nothing: %d", n)
-	}
-
-	// A caller with no recorded tier is refused, never left uncapped.
-	plain, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "x", Parent: &leadParent})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = h.runner.spawnFor(h.runner.conv(plain.ID), ChildSpawn{Prompt: "x", Tier: "small"})
-	if requestStatus(err) != http.StatusForbidden || !strings.Contains(err.Error(), "no recorded tier") {
-		t.Fatalf("a tierless caller = %v", err)
 	}
 }
 
@@ -489,14 +366,14 @@ func TestSteeredReportTheRunMissedGoesAsTheNextTurn(t *testing.T) {
 
 func TestParentWaitIsTheReportsDelivery(t *testing.T) {
 	h, got := childHarness(t)
-	w, wp, token, gc, gp := workerWithChild(t, h)
+	w, wp, _, gc, gp := workerWithChild(t, h)
 	type answer struct {
 		code int
 		body string
 	}
 	done := make(chan answer, 1)
 	go func() {
-		code, body := h.tokenCall(token, "wait", map[string]any{"id": gc.ID, "timeout_s": 5})
+		code, body := h.parentWait(gc.ID, 5*time.Second)
 		done <- answer{code, body}
 	}()
 	c := h.runner.conv(gc.ID)
@@ -533,7 +410,7 @@ func TestParentWaitIsTheReportsDelivery(t *testing.T) {
 	ch.mu.Lock()
 	ch.settledReport = "later"
 	ch.mu.Unlock()
-	if code, body := h.tokenCall(token, "wait", map[string]any{"id": gc.ID, "timeout_s": 1}); code != http.StatusOK {
+	if code, body := h.parentWait(gc.ID, 1*time.Second); code != http.StatusOK {
 		t.Fatalf("the late wait = %d %s", code, body)
 	}
 	if rec := h.record(gc.ID); len(rec.PendingReports) != 0 {
@@ -698,7 +575,7 @@ func TestHeldReportIsReleasedWhenTheChildCloses(t *testing.T) {
 // a parent's token wait (the report's only delivery) and the lead's alike.
 func TestWaitTakesATurnThatSettlesRightAfterItsCheck(t *testing.T) {
 	h, _ := childHarness(t)
-	_, wp, token, gc, gp := workerWithChild(t, h)
+	_, wp, _, gc, gp := workerWithChild(t, h)
 	c := h.runner.conv(gc.ID)
 	settledCount := func() uint64 {
 		c.mu.Lock()
@@ -724,7 +601,7 @@ func TestWaitTakesATurnThatSettlesRightAfterItsCheck(t *testing.T) {
 	const timeout = 3 * time.Second
 	settleOnce("first")
 	start := time.Now()
-	code, body := h.tokenCall(token, "wait", map[string]any{"id": gc.ID, "timeout_s": timeout.Seconds()})
+	code, body := h.parentWait(gc.ID, timeout)
 	var res TurnResult
 	if code != http.StatusOK || json.Unmarshal([]byte(body), &res) != nil || res.Status != TurnDone || res.Message != "first" {
 		t.Fatalf("the parent's wait = %d %s", code, body)
@@ -737,8 +614,8 @@ func TestWaitTakesATurnThatSettlesRightAfterItsCheck(t *testing.T) {
 		t.Fatalf("the waited report is not steered too: %q", steered)
 	}
 
-	if code, body := h.tokenCall(token, "send", map[string]any{"id": gc.ID, "message": "again"}); code != http.StatusOK {
-		t.Fatalf("send = %d %s", code, body)
+	if _, err := h.runner.Send(gc.ID, "again"); err != nil {
+		t.Fatal(err)
 	}
 	gp.nextSent(t)
 	settleOnce("second")
@@ -811,7 +688,7 @@ func TestRestartSettlesTheCutTurnBeforeTheNextStarts(t *testing.T) {
 func TestParentWaitDoesNotRepeatAHandedReport(t *testing.T) {
 	wait := func(h *harness, token, id string) TurnResult {
 		t.Helper()
-		code, body := h.tokenCall(token, "wait", map[string]any{"id": id, "timeout_s": 2})
+		code, body := h.parentWait(id, 2*time.Second)
 		var res TurnResult
 		if code != http.StatusOK || json.Unmarshal([]byte(body), &res) != nil {
 			t.Fatalf("the wait = %d %s", code, body)
@@ -879,7 +756,7 @@ func TestWaitAfterARestartAnswersASettledTurnAtOnce(t *testing.T) {
 	wp2 := h.backend.waitProc(t, 2)
 	wp2.nextSent(t)
 	start = time.Now()
-	code, body := h.tokenCall(h.token(2), "wait", map[string]any{"id": gc.ID, "timeout_s": timeout.Seconds()})
+	code, body := h.parentWait(gc.ID, timeout)
 	var child TurnResult
 	if code != http.StatusOK || json.Unmarshal([]byte(body), &child) != nil || child.Status != TurnDone || !child.Delivered {
 		t.Fatalf("the parent's wait after the restart = %d %s", code, body)
@@ -894,14 +771,14 @@ func TestWaitAfterARestartAnswersASettledTurnAtOnce(t *testing.T) {
 // open, so the worker's done turn is reported.
 func TestCancelledMessageLeavesNoChildOpen(t *testing.T) {
 	h, got := childHarness(t)
-	w, wp, token, gc, gp := workerWithChild(t, h)
+	w, wp, _, gc, gp := workerWithChild(t, h)
 	// pi.send now steers a running child immediately. Hold its loop so
 	// this test really cancels before the drain, rather than racing it.
 	g := newGate(t, func() {})
 	go h.runner.conv(gc.ID).do(g.wait)
 	g.awaitEntered(t)
-	if code, body := h.tokenCall(token, "send", map[string]any{"id": gc.ID, "message": "more"}); code != http.StatusOK {
-		t.Fatalf("send = %d %s", code, body)
+	if _, err := h.runner.Send(gc.ID, "more"); err != nil {
+		t.Fatal(err)
 	}
 	inbox := wsinbox.Dir(wsdashboard.SessionDir(h.dir, gc.ID))
 	held, err := wsinbox.Held(inbox)
@@ -931,39 +808,5 @@ func TestCancelledMessageLeavesNoChildOpen(t *testing.T) {
 // a directory of its own (a worktree) spawns its children there: an empty
 // cwd is that directory and a relative one resolves against it, while the
 // child's root stays the holder's.
-func TestTokenSpawnCwdFollowsTheHoldersWorkingDirectory(t *testing.T) {
-	h, _ := childHarness(t)
-	wt := filepath.Join(h.root, "wt")
-	if err := os.MkdirAll(filepath.Join(wt, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Cwd: wt, Prompt: "work", Tier: "medium", Label: "worker", Parent: &leadParent}); err != nil {
-		t.Fatal(err)
-	}
-	token := h.token(0)
-	for _, tc := range []struct{ cwd, want string }{{"", wt}, {"sub", filepath.Join(wt, "sub")}} {
-		code, body := h.tokenCall(token, "spawn", map[string]any{"prompt": "sub task", "tier": "small", "cwd": tc.cwd})
-		var gc State
-		if code != http.StatusCreated || json.Unmarshal([]byte(body), &gc) != nil {
-			t.Fatalf("spawn with cwd %q = %d %s", tc.cwd, code, body)
-		}
-		if gc.Cwd != tc.want || gc.Root != h.root {
-			t.Fatalf("cwd %q: the child works in %q under root %q, want %q under %q", tc.cwd, gc.Cwd, gc.Root, tc.want, h.root)
-		}
-	}
-}
-
 // TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey: the legacy token
 // pi.spawn route inherits the holder's session-scope config like agent.spawn.
-func TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey(t *testing.T) {
-	h, _ := childHarness(t)
-	worker := h.spawnWorker("medium")
-	workerKey := h.record(worker.ID).WSKey
-	if workerKey == "" {
-		t.Fatal("the worker has no ws key")
-	}
-	kid := h.spawnChild(h.token(0), "small", "review")
-	if got := h.keys.policyParents[h.record(kid.ID).WSKey]; got != workerKey {
-		t.Fatalf("token-spawned child key policy parent = %q, want the holder's key %q", got, workerKey)
-	}
-}

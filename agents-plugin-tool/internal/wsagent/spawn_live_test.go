@@ -3,6 +3,7 @@ package wsagent
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,14 +58,14 @@ func TestAgentSpawnHostedWorkerRows(t *testing.T) {
 // The hosted Claude lead has no intake-fed live session: only its runner's
 // writer can publish these rows. Exercise real spawn/watch/replay plumbing.
 func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	lead := h.lead(BackendClaude, LeadOptions{})
 	h.send(lead.ID, "work")
 	leadHolder := h.holder(lead.ID)
 	other := h.lead(BackendClaude, LeadOptions{})
 	spawn := func(parent ParentRef, label string) (State, string) {
 		t.Helper()
-		st, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: label, Label: label, Tier: "small", Parent: &parent})
+		st, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: label, Label: label, Tier: "small", Parent: &parent})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +127,7 @@ func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
 		defer c.mu.Unlock()
 		return len(c.parentWaits) > 0
 	})
-	h.holders.out(leafHolder, recoveryPiReply("leaf done")...)
+	h.holders.out(leafHolder, recoveryWorkerReply("leaf done")...)
 	if res := <-waited; res.Status != TurnDone {
 		t.Fatalf("leaf wait: %+v", res)
 	}
@@ -153,7 +154,7 @@ func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
 }
 
 func TestMappedPiFailureReachesRecursiveWatchFeedBeforeAnotherUpdate(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	worker, _ := spawnRecoveryWorker(t, h)
 	var mu sync.Mutex
 	feed := wslive.NewState("intake-lead")
@@ -170,7 +171,7 @@ func TestMappedPiFailureReachesRecursiveWatchFeedBeforeAnotherUpdate(t *testing.
 		}
 	})
 	defer stop()
-	leaf, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "fail", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: worker.ID}})
+	leaf, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "fail", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: worker.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,12 +219,12 @@ func TestHostedSpawnProjectionListsOncePerInvalidationNotPerStreamWrite(t *testi
 	h.start()
 	lead := h.lead(BackendClaude, LeadOptions{})
 	for range 3 {
-		worker, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+		worker, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		h.holder(worker.ID)
-		leaf, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "leaf", Parent: &ParentRef{Kind: ParentConversation, ReplyID: worker.ID}})
+		leaf, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "leaf", Parent: &ParentRef{Kind: ParentConversation, ReplyID: worker.ID}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +262,7 @@ func TestHostedUsageWakesDoNotRereadClosedSnapshots(t *testing.T) {
 	lead := h.lead(BackendClaude, LeadOptions{})
 	spawn := func() State {
 		t.Helper()
-		st, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+		st, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +277,7 @@ func TestHostedUsageWakesDoNotRereadClosedSnapshots(t *testing.T) {
 		})
 	}
 	finished, active := spawn(), spawn()
-	file := piSessionFile(h.runner.conv(finished.ID).dir)
+	file := filepath.Join(h.runner.conv(finished.ID).dir, "pi", "session.jsonl")
 	setUsage(finished.ID, 1200, 10)
 	if _, err := h.runner.CloseConversation(finished.ID); err != nil {
 		t.Fatal(err)

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -27,10 +26,6 @@ func commonContractCases() []commonContractCase {
 			func(text string) []string {
 				return []string{replyLine("common-reply", text), resultLine(), stateLine(HarnessIdle)}
 			}},
-		{BackendPi, piPrompts, []string{`{"type":"agent_start"}`},
-			func(text string) []string {
-				return []string{jsonLine(map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}, "stopReason": "stop"}}), `{"type":"agent_settled"}`}
-			}},
 	}
 }
 
@@ -44,12 +39,6 @@ func (tc commonContractCase) assertResume(h *leadHarness, id, holder string) {
 	h.t.Helper()
 	argv := h.holders.spawned(holder).Argv
 	flag, want := "--resume", "common-session"
-	if tc.backend == BackendPi {
-		flag, want = "--session", piSessionFile(wsdashboard.SessionDir(h.dir, id))
-		if slices.Contains(argv, "--resume") {
-			h.t.Fatalf("Pi resumes its file, not a Claude session: %v", argv)
-		}
-	}
 	if got, ok := flagValue(argv, flag); !ok || got != want {
 		h.t.Fatalf("%s = %q (present %v), want %q: %v", flag, got, ok, want, argv)
 	}
@@ -211,41 +200,6 @@ func commonSettingWires(h *leadHarness, holder, backend string) []any {
 		}
 	}
 	return out
-}
-
-func TestCommonContractPiUnsupportedSettingsRestart(t *testing.T) {
-	for _, change := range []struct {
-		name          string
-		model, effort *string
-		flag, want    string
-	}{
-		{"fuzzy-model", ptr("opus"), nil, "--model", "opus"},
-		{"default-model", ptr(""), nil, "--model", ""},
-		{"default-effort", nil, ptr(""), "--thinking", ""},
-	} {
-		t.Run(change.name, func(t *testing.T) {
-			tc := commonContractCases()[1]
-			h := newLeadHarness(t).start()
-			id := h.lead(BackendPi, LeadOptions{Model: "anthropic/claude-opus", Effort: "high"}).ID
-			h.send(id, "one")
-			holder := h.holder(id)
-			h.holders.out(holder, tc.start...)
-			tc.end(h, id, holder, "first")
-			if _, err := h.runner.SetSettings(id, change.model, change.effort); err != nil {
-				t.Fatal(err)
-			}
-			if h.state(id).Process || h.holders.opCount("stop "+holder) != 1 || len(commonSettingWires(h, holder, BackendPi)) != 0 {
-				t.Fatalf("unsupported arguments must stop without an RPC: %v", h.holders.opList())
-			}
-			h.send(id, "two")
-			second := h.holder(id)
-			tc.assertResume(h, id, second)
-			got, present := flagValue(h.holders.spawned(second).Argv, change.flag)
-			if got != change.want || present != (change.want != "") {
-				t.Fatalf("restart %s = %q (present %v), want %q", change.flag, got, present, change.want)
-			}
-		})
-	}
 }
 
 func TestCommonContractJSONCompatibility(t *testing.T) {

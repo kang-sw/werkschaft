@@ -220,7 +220,6 @@ func TestPassiveHandStartsNoTurnAndRidesTheNextSend(t *testing.T) {
 	}
 	cases := []backendCase{
 		{BackendClaude, func(t *testing.T) (*leadHarness, func(string)) { return newLeadHarness(t), func(string) {} }, func(h *leadHarness) { h.start() }, (*leadHarness).userInputs},
-		{BackendPi, func(t *testing.T) (*leadHarness, func(string)) { return newLeadHarness(t), func(string) {} }, func(h *leadHarness) { h.start() }, piPrompts},
 		{BackendCodex, func(t *testing.T) (*leadHarness, func(string)) {
 			h, fake := newCodexLeadHarness(t)
 			return h, func(id string) { fake.replyID = id }

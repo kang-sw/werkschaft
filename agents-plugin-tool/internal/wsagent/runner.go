@@ -234,15 +234,6 @@ type Options struct {
 	// LiveHost is the daemon's in-memory snapshot hand-off. The daemon sets
 	// it before Start; nil keeps the legacy file-only projection.
 	LiveHost wsdashboard.LiveHost
-	// ChildCheck, when not nil, is asked before each call of the token
-	// route (children.go): an error refuses the call with its text (no
-	// usable Pi, say).
-	ChildCheck func() error
-	// ChildCheckKnown, when not nil, is ChildCheck's answer without running
-	// a probe: known is false while the answer would need one (a Pi
-	// version not yet probed). HarnessAvailability asks it, never
-	// ChildCheck.
-	ChildCheckKnown func() (known bool, err error)
 	// TierRoles, when not nil, lists the packaged playbook role nodes of
 	// the agent.tier_routing graph agent.spawn and agent.tiers resolve
 	// through. Nil leaves only the built-in groups and user nodes.

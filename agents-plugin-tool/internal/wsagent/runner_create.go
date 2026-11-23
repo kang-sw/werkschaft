@@ -38,6 +38,7 @@ var errHandedOff = &requestError{status: http.StatusConflict, msg: "the session 
 // endedError is the refusal of a write to a conversation no loop serves.
 var errPiRetired = &requestError{status: http.StatusConflict, msg: "the Pi harness is retired; its sessions are available as history"}
 
+// Retained name check: legacy profile and record backend (TestRetiredPiProfileRemainsReadable).
 func endedError(rec Record) error {
 	if rec.Backend == BackendPi {
 		return errPiRetired
@@ -159,12 +160,6 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()
-		if spawn.Tier != "" && !r.lifecycle(rp.Definition.Backend).NativeChildren && !isAgentWorkerProfile(rp.Name) {
-			return State{}, badRequest("pi.spawn: profile %q must be a non-lead Pi profile", rp.Name)
-		}
-		if err := r.checkChildProfile(spawn.Parent, rp.Name, rp.Definition); err != nil {
-			return State{}, err
-		}
 		level, source, err := resolveWorkerPermission(rp.Definition, spawn.PermissionLevel, spawn.PermissionLevel != "", nil)
 		if err != nil {
 			return State{}, err
@@ -206,14 +201,10 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, fmt.Errorf("mint the lead session key: %w", err)
 		}
 	} else {
-		keyRoot := root
-		if spawn != nil && r.lifecycle(rp.Definition.Backend).NativeChildren && spawn.Cwd != "" {
-			keyRoot = spawn.Cwd
-		}
 		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
-			key, err = child.MintChild(keyRoot, spawn.policyKey)
+			key, err = child.MintChild(root, spawn.policyKey)
 		} else {
-			key, err = r.opts.Keys.Mint(keyRoot)
+			key, err = r.opts.Keys.Mint(root)
 		}
 		if err != nil {
 			return State{}, fmt.Errorf("mint ws session key: %w", err)
@@ -353,6 +344,7 @@ func (r *Runner) lastCommands(rec Record) []wslive.SlashCommand {
 // resolve resolves profile through root and checks everything a launch
 // needs: a backend this daemon has, an existing instruction file, and a
 // ws-mcp command when the profile allows ws tools.
+// Retained name check: legacy profile and record backend (TestRetiredPiProfileRemainsReadable).
 func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 	var rp ResolvedProfile
 	var err error

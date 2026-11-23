@@ -19,7 +19,7 @@ import (
 func TestBuiltinSupportProfilesResolve(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
-	for name, backend := range map[string]string{SupportProfileClaude: BackendClaude, SupportProfilePi: BackendPi} {
+	for name, backend := range map[string]string{SupportProfileClaude: BackendClaude} {
 		rp, err := ResolveProfile(opts, root, name)
 		if err != nil {
 			t.Fatalf("ResolveProfile(%s): %v", name, err)
@@ -55,8 +55,8 @@ func TestBuiltinSupportProfilesResolve(t *testing.T) {
 	}
 	resolver := wsconfig.NewResolver(opts, nil, nil, nil)
 	all, err := ResolveProfiles(&resolver)
-	if err != nil || len(all) != 16 {
-		t.Fatalf("ResolveProfiles with no config should list all sixteen builtin profiles: %+v, %v", all, err)
+	if err != nil || len(all) != len(BuiltinProfiles()) {
+		t.Fatalf("ResolveProfiles with no config should list all builtin profiles: %+v, %v", all, err)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestBuiltinSupportProfilesResolve(t *testing.T) {
 // agent-worker profile with the common ws loadout: agent.* and
 // mailbox.send in place of pi.*.
 func TestBuiltinAgentWorkerProfiles(t *testing.T) {
-	for backend, tools := range map[string][]string{BackendClaude: AgentClaudeTools, BackendPi: PiWorkerTools, BackendAgy: nil, BackendCodex: nil, BackendWerk: nil} {
+	for backend, tools := range map[string][]string{BackendClaude: AgentClaudeTools, BackendAgy: nil, BackendCodex: nil, BackendWerk: nil} {
 		name := AgentWorkerProfile(backend)
 		rp, err := ResolveProfile(testConfig(t), t.TempDir(), name)
 		if err != nil {
@@ -88,82 +88,8 @@ func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 			t.Errorf("%s is not recognized as an agent-worker profile", name)
 		}
 	}
-	if !isAgentWorkerProfile(AgentWorkerProfile("future")) || isAgentWorkerProfile(PiWorkerProfile) {
+	if !isAgentWorkerProfile(AgentWorkerProfile("future")) || isAgentWorkerProfile("pi-worker") {
 		t.Error("the internal namespace is reserved even before a backend is registered")
-	}
-}
-
-func TestBuiltinExploreProfile(t *testing.T) {
-	rp, err := ResolveProfile(testConfig(t), t.TempDir(), ExploreProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := rp.Definition
-	if rp.Scope != wsconfig.ScopeBuiltin || p.Backend != BackendPi || p.Lead || !slices.Equal(p.Tools, []string{"read", "grep", "find", "ls"}) || !slices.Equal(p.WSTools, []string{"compact"}) || len(p.MCPServers)+len(p.Plugins) != 0 || p.Skills || p.Model != "" || p.Effort != "" {
-		t.Fatalf("explore profile is not local read-only and tier-selected: %+v", p)
-	}
-	text, ok := p.BuiltinInstructions()
-	if !ok || !strings.Contains(text, "file paths and line numbers") || !strings.Contains(text, "uncertainty") {
-		t.Fatalf("explore evidence instructions missing: %q", text)
-	}
-}
-
-// TestBuiltinPiWorkerProfileResolves: the pi-worker profile runs Pi with
-// its built-in coding tools and the ws commit and git reads, composes no
-// instruction text (the spawner's prompt is the first message), stays off
-// the session index, and allows the pi.* tools (a spawning playbook's).
-func TestBuiltinPiWorkerProfileResolves(t *testing.T) {
-	opts := testConfig(t)
-	root := t.TempDir()
-	rp, err := ResolveProfile(opts, root, PiWorkerProfile)
-	if err != nil {
-		t.Fatalf("ResolveProfile(%s): %v", PiWorkerProfile, err)
-	}
-	p := rp.Definition
-	if rp.Scope != wsconfig.ScopeBuiltin || p.Backend != BackendPi || p.Lead {
-		t.Fatalf("pi-worker should resolve from the builtin floor as a non-lead pi profile: %+v (scope %s)", p, rp.Scope)
-	}
-	if want := []string{"read", "bash", "edit", "write", "grep", "find", "ls"}; !slices.Equal(p.Tools, want) {
-		t.Errorf("pi-worker tools = %v, want %v", p.Tools, want)
-	}
-	if want := []string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set", "exec.run", "exec.shell", "exec.stop", "exec.tail", "exec.list", "exec.write"}; !slices.Equal(p.WSTools, want) {
-		t.Errorf("pi-worker ws_tools = %v, want %v", p.WSTools, want)
-	}
-	var pi []string
-	for _, tool := range p.WSTools {
-		if strings.HasPrefix(tool, "pi.") {
-			pi = append(pi, tool)
-		}
-	}
-	slices.Sort(pi)
-	if want := []string{"pi.list", "pi.send", "pi.spawn", "pi.stop", "pi.transcript", "pi.wait"}; !slices.Equal(pi, want) {
-		t.Errorf("pi-worker pi.* tools = %v, want %v", pi, want)
-	}
-	if p.Instructions != "" || p.InstructionsPath(root) != "" || p.ListInIndex || p.Skills || len(p.MCPServers) != 0 || len(p.Plugins) != 0 {
-		t.Errorf("pi-worker should append no instructions, load no server, plugin, or skill, and stay off the index: %+v", p)
-	}
-	if err := checkPiToolEntries(p); err != nil {
-		t.Errorf("pi-worker tools should be whole pi tools: %v", err)
-	}
-}
-
-func TestBuiltinPiMiniLeadProfileResolves(t *testing.T) {
-	rp, err := ResolveProfile(testConfig(t), t.TempDir(), PiMiniLeadProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := rp.Definition
-	if p.Backend != BackendPi || p.Lead || !slices.Equal(p.Tools, PiWorkerTools) || p.Instructions != "" || p.Skills || p.ListInIndex || len(p.MCPServers)+len(p.Plugins) != 0 {
-		t.Fatalf("mini-lead must be an ordinary non-lead coding profile: %+v", p)
-	}
-	want := append(append([]string{}, PiWorkerWSTools...), "tickets.query", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "tickets.checklist", "note.query", "playbook.read", "playbook.render", "path.generate", "route.resolve_implement")
-	if !slices.Equal(p.WSTools, want) {
-		t.Fatalf("mini-lead ws_tools = %v, want %v", p.WSTools, want)
-	}
-	// path.generate(kind: "report") is allocation only; the mini-lead keeps no
-	// path.write and gains no write authority from the new kind.
-	if !slices.Contains(p.WSTools, "path.generate") || slices.Contains(p.WSTools, "path.write") {
-		t.Fatalf("mini-lead must allocate but not write generated paths: %v", p.WSTools)
 	}
 }
 
@@ -174,7 +100,7 @@ func TestBuiltinPiMiniLeadProfileResolves(t *testing.T) {
 func TestBuiltinLeadProfilesResolve(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
-	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendPi: LeadProfilePi, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy} {
+	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy} {
 		if LeadProfileFor(backend) != name {
 			t.Fatalf("LeadProfileFor(%s) = %q, want %q", backend, LeadProfileFor(backend), name)
 		}
@@ -193,13 +119,13 @@ func TestBuiltinLeadProfilesResolve(t *testing.T) {
 	if LeadProfileFor("other") != "" {
 		t.Fatal("LeadProfileFor should name no profile for an unknown harness")
 	}
-	claude, pi := builtinProfile(t, LeadProfileClaude), builtinProfile(t, LeadProfilePi)
-	if claude.PermissionMode != DefaultLeadPermissionMode || pi.PermissionMode != "" {
-		t.Fatalf("permission modes = %q, %q; want the default for claude and none for pi", claude.PermissionMode, pi.PermissionMode)
+	claude, codex := builtinProfile(t, LeadProfileClaude), builtinProfile(t, LeadProfileCodex)
+	if claude.PermissionMode != DefaultLeadPermissionMode || codex.PermissionMode != "" {
+		t.Fatalf("permission modes = %q, %q; want the default for claude and none for codex", claude.PermissionMode, codex.PermissionMode)
 	}
 	// Both lead backends default to never idle-stopping.
-	if claude.IdleTimeout() != 0 || pi.IdleTimeout() != 0 {
-		t.Fatalf("idle timeouts = %s, %s; want zero for both", claude.IdleTimeout(), pi.IdleTimeout())
+	if claude.IdleTimeout() != 0 || codex.IdleTimeout() != 0 {
+		t.Fatalf("idle timeouts = %s, %s; want zero for both", claude.IdleTimeout(), codex.IdleTimeout())
 	}
 	for _, bad := range []string{
 		`{"backend":"claude","permission_mode":"auto"}`,

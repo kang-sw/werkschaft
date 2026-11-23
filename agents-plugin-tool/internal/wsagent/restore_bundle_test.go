@@ -61,7 +61,7 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	h.opts.RestoreBundle = probe.render
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	for tier, model := range map[string]string{"small": "prov/small", "medium": "prov/medium"} {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, PiTierHarness, "low"); err != nil {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, tier, "", model, BackendClaude, "low"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,7 +71,7 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	h.holders.out(leadHolder, turnLines("sess-1", "lead-1", "lead done")...)
 	h.idle(leadID)
 	worker, err := h.runner.Spawn(SpawnSpec{
-		Profile: PiWorkerProfile, Root: h.root, Prompt: "worker work", Tier: "medium",
+		Profile: AgentWorkerProfile(BackendClaude), Root: h.root, Prompt: "worker work", Tier: "medium",
 		Parent: &ParentRef{Kind: ParentLead, ReplyID: leadID},
 	})
 	if err != nil {

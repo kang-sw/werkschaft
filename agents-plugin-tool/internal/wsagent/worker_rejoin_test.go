@@ -101,7 +101,7 @@ func TestDowngradeRetirementRetriesStop(t *testing.T) {
 
 func testDowngradeRetirement(t *testing.T, stopError string) {
 	t.Helper()
-	h, reports := newFakePiRecoveryHarness(t)
+	h, reports := newHeldWorkerHarness(t)
 	worker, holder := spawnRecoveryWorker(t, h)
 	h.runner.Close()
 	h.holders.restart()
@@ -109,7 +109,7 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 	now := h.opts.Now().UTC().Truncate(time.Second)
 	child.Parent = &ParentRef{Kind: ParentConversation, ReplyID: "zzparent"}
 	child.TurnStartedAt = now.Add(-2 * time.Second).UnixMilli()
-	parent := Record{ReplyID: "zzparent", Root: h.root, Backend: BackendPi, Profile: PiWorkerProfile, WSKey: "parent-key", Parent: &leadParent,
+	parent := Record{ReplyID: "zzparent", Root: h.root, Backend: BackendClaude, Profile: AgentWorkerProfile(BackendClaude), WSKey: "parent-key", Parent: &leadParent,
 		ResolvedDefinition: child.ResolvedDefinition, CreatedAt: now.Format(time.RFC3339), LastActiveAt: now.Format(time.RFC3339), Sends: 1, Drained: 1,
 		LastTurn: &PendingReport{Mark: 1, Result: TurnResult{ID: "zzparent", Status: TurnDone}}}
 	for _, rec := range []Record{child, parent} {
@@ -117,8 +117,20 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 			t.Fatal(err)
 		}
 	}
+	// A hosted worker has an explicit level in the current format. Match
+	// the child's authority so the retried stop can be followed by a wake.
+	if err := writePermissionSelection(wsdashboard.SessionDir(h.dir, parent.ReplyID), PermissionWorkdirWrite); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if t.Failed() {
+			if state, err := h.runner.Get(worker.ID); err == nil {
+				t.Logf("worker status=%s, launch error=%q", state.Status, state.Error)
+			}
+		}
+	}()
 	// Completion accumulated during downgrade must never publish a second report.
-	h.holders.out(holder, recoveryPiReply("late result")...)
+	h.holders.out(holder, recoveryWorkerReply("late result")...)
 	if stopError != "" {
 		h.opts.heartbeat = time.Hour
 		h.holders.set(func() { h.holders.stopErr = errors.New("fixture stop failure") })
@@ -399,7 +411,7 @@ func TestDowngradeLeadParentAdoptsLateWorkerReport(t *testing.T) {
 }
 
 func TestWorkerOwnershipMismatchNeverStopsForeignHolder(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
+	h, _ := newHeldWorkerHarness(t)
 	worker, holder := spawnRecoveryWorker(t, h)
 	h.runner.Close()
 	h.holders.restart()

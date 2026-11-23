@@ -144,12 +144,12 @@ func TestCompactionStateFailedIsNotCounted(t *testing.T) {
 // compacting flag toggles, and the count and latest origin follow completion,
 // a ws auto request recorded as auto though pi names "manual" for its command.
 func TestCompactionStateReachesTheParentsAgentRow(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, _ := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestCompactionStateAddsNoSnapshotWriteInsideTheInterval(t *testing.T) {
 		writes++
 		return writeFileAtomic(path, raw, mode)
 	}
-	child := State{ID: "c1", Backend: BackendPi, Status: StatusIdle, Process: true}
+	child := State{ID: "c1", Backend: BackendClaude, Status: StatusIdle, Process: true}
 	w.apply(SpawnAgentEvent(child, "key"))
 	base := writes
 	for _, st := range []State{
@@ -309,12 +309,12 @@ func TestCompactionStateAddsNoSnapshotWriteInsideTheInterval(t *testing.T) {
 // so the row neither drops to zero nor restarts its count, and a later
 // compaction continues from it.
 func TestCompactionStateCountSurvivesARunnerRestart(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, _ := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,12 +364,12 @@ func TestCompactionStateCountSurvivesARunnerRestart(t *testing.T) {
 // its closed row must republish the count the restored snapshot kept, not a
 // zero that would wipe it.
 func TestCompactionStateClosedChildKeepsItsCountAcrossARestart(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	reg := h.runner.opts.Backends[BackendPi]
-	reg.NativeCompaction = PiCompaction()
-	h.runner.opts.Backends[BackendPi] = reg
+	h, _ := newHeldWorkerHarness(t)
+	reg := h.runner.opts.Backends[BackendClaude]
+	reg.NativeCompaction = fixtureCompaction()
+	h.runner.opts.Backends[BackendClaude] = reg
 	lead := h.lead(BackendClaude, LeadOptions{})
-	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: AgentWorkerProfile(BackendClaude), PermissionLevel: PermissionWorkdirWrite, delegatedAuthority: true, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}

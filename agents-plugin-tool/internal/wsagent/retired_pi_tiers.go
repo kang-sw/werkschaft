@@ -9,6 +9,7 @@ import (
 
 // TierRuntimeHarness is the backend that runs a tier after resolving its
 // stored spelling. It does not change saved tiers or routing definitions.
+// Retained name check: stored Pi tier alias to werk (TestRetiredPiTierRedirectsToWerk).
 func TierRuntimeHarness(harness string) string {
 	if harness == BackendPi {
 		return BackendWerk
@@ -16,6 +17,7 @@ func TierRuntimeHarness(harness string) string {
 	return harness
 }
 
+// Retained name check: stored Pi tier alias to werk (TestRetiredPiTierRedirectsToWerk).
 func tierBindings(cfg wsconfig.Options, harness, size string, registries ...map[string]BackendRegistration) (map[string]wsconfig.AgentTier, error) {
 	tiers, err := wsconfig.HarnessTiers(cfg, harness)
 	if err != nil || harness != BackendWerk {
@@ -52,6 +54,7 @@ func tierBindings(cfg wsconfig.Options, harness, size string, registries ...map[
 	return tiers, nil
 }
 
+// Retained name check: stored Pi tier alias to werk (TestRetiredPiTierRedirectsToWerk).
 func werkChoiceLister(registries []map[string]BackendRegistration) ChoiceLister {
 	if len(registries) == 0 {
 		return WerkBackend{}

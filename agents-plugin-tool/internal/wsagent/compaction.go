@@ -393,9 +393,6 @@ func (c *conv) compactIdle() bool {
 		}
 		c.compactOrigin = trigger
 		cmd := wsinbox.Command{Name: "compact"}
-		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
-			cmd.Args = piDaemonAutoCompact
-		}
 		// The compaction starts with its command, behind the last release
 		// check: a refused one leaves no started compaction to unwind.
 		err := c.sendStandalonePrompt(false, func() error {
@@ -501,12 +498,6 @@ func (c *conv) compactionStateInstruction() string {
 	return "Save the state needed to resume in your agenda."
 }
 
-// bridgedLeadCompaction reports whether this lead's backend compacts through
-// its extension bridge (leadCompactionBridge) rather than the daemon's command.
-func (c *conv) bridgedLeadCompaction() bool {
-	return c.r.bridgedLeadCompaction(c.record())
-}
-
 func (c *conv) canSteerCompaction() bool {
 	return c.turn && c.proc != nil && !c.quitting && !c.replaying && !c.wrapHold && !c.closed && !c.hidden &&
 		!c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactHardHandled && !c.compactHardIssued &&
@@ -530,14 +521,8 @@ func (c *conv) steerCompaction(boundary bool) {
 	var text string
 	if c.compactHardSteered {
 		text = fmt.Sprintf("Hard %s, +%.0f%% (%s). End your turn for auto-compaction and continuation.", compactTokenCount(hard), (c.compactTokens/hard-1)*100, compactTokenCount(c.compactTokens))
-		if c.bridgedLeadCompaction() {
-			text += " " + piCompactPreparation
-		}
 	} else {
 		text = fmt.Sprintf("Context usage is %s and has reached the hard point of %s. %s Wrap up the current step and end your turn so compaction can run and work can continue.", compactTokenCount(c.compactTokens), compactTokenCount(hard), c.compactionStateInstruction())
-		if c.bridgedLeadCompaction() {
-			text += " You can call ws-compact with your carry-forward details at a safe boundary.\n" + piCompactPreparation
-		}
 	}
 	var id string
 	var err error
@@ -565,33 +550,6 @@ func (c *conv) steerCompaction(boundary bool) {
 }
 
 func (c *conv) compactSteerAnswered(reply compactSteerReply) {
-	if reply.piNumeric {
-		p, ok := c.proc.(*piProcess)
-		if !ok {
-			return
-		}
-		steer := p.takeCompactSteer(reply.id)
-		if steer.id == "" {
-			return
-		}
-		reply.id = steer.id
-		if reply.refusal != "" && c.canSteerCompaction() && c.aboveCompactHard() {
-			fmt.Fprintf(c.r.opts.Log, "agent %s: Pi refused the numeric compaction steer ID (%s). Retrying once with a string ID.\n", c.rec.ReplyID, reply.refusal)
-			var id string
-			var err error
-			if checkout := c.admitInput(func() { id, err = p.fallbackCompactSteer(steer.text) }); checkout != "" {
-				c.dropReleasedInput("compaction guidance retry", checkout)
-				return
-			}
-			if err == nil {
-				if c.compactHardSteerID == reply.id {
-					c.compactHardSteerID = id
-				}
-				return
-			}
-			reply.refusal = err.Error()
-		}
-	}
 	if reply.id == c.compactHardSteerID {
 		c.compactHardSteerID = ""
 		c.compactHardSteered = reply.refusal == ""
@@ -603,9 +561,6 @@ func (c *conv) compactSteerAnswered(reply compactSteerReply) {
 
 func (c *conv) clearCompactionSteerReplies() {
 	c.compactHardSteerID = ""
-	if p, ok := c.proc.(*piProcess); ok {
-		p.compactSteers = nil
-	}
 }
 
 func compactTokenCount(tokens float64) string {
@@ -645,11 +600,6 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	}
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
-	case c.bridgedLeadCompaction():
-		if !c.compactAdvised && !math.IsInf(hard, 0) {
-			usage += fmt.Sprintf("The hard point is %.0f tokens (%.0f%%). ", hard, hard/c.compactWindow*100)
-		}
-		action = "At a safe boundary, call ws-compact with the carry-forward details requested by the tool.\n" + piCompactPreparation
 	case standalone:
 		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
 	}

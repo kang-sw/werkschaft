@@ -49,6 +49,7 @@ const TakeoverNoSession = "its harness reported no conversation to resume (it la
 // claude and pi, one whose lead key is gone (which includes every session
 // outside a git worktree), and one whose key record names no harness
 // conversation are refused too.
+// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
 func (r *Runner) TakeOver(id string) (State, error) {
 	if !wsdashboard.ValidReplyID(id) {
 		return State{}, errUnknown
@@ -253,6 +254,7 @@ func (c *conv) handOff() error {
 // input or mail. It is refused once the session's row is a terminal's (a
 // terminal login took the closed session); such a session comes back
 // through TakeOver.
+// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
 func (r *Runner) Reopen(id string) (State, error) {
 	r.mu.Lock()
 	_, open := r.convs[id]

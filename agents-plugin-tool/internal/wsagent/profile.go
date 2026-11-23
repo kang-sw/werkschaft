@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -435,37 +434,6 @@ func resolvedValue(v wsconfig.StructuredValue, registries ...map[string]BackendR
 		return ResolvedProfile{}, fmt.Errorf("invalid agent profile key %q in %s: %w", v.Key, where, err)
 	}
 	return ResolvedProfile{Name: name, Scope: v.Scope, Source: v.Source, Definition: p}, nil
-}
-
-// excessProfileTools compares resolved Pi capabilities, not profile ranks.
-// A same-named MCP server must also have the same definition: changing its
-// command or environment can expose an entirely different tool surface.
-func excessProfileTools(child, parent Profile) []string {
-	var excess []string
-	for _, pair := range []struct {
-		name          string
-		child, parent []string
-	}{{"ws_tools", child.WSTools, parent.WSTools}, {"tools", child.Tools, parent.Tools}} {
-		for _, tool := range pair.child {
-			// Compact is available independently of the parent's profile.
-			// A profile snapshot from before that grant may omit it.
-			if pair.name == "ws_tools" && tool == "compact" {
-				continue
-			}
-			if !slices.Contains(pair.parent, tool) {
-				excess = append(excess, pair.name+"."+tool)
-			}
-		}
-	}
-	for name, value := range child.MCPServers {
-		var childServer, parentServer any
-		parentValue, ok := parent.MCPServers[name]
-		if !ok || json.Unmarshal(value, &childServer) != nil || json.Unmarshal(parentValue, &parentServer) != nil || !reflect.DeepEqual(childServer, parentServer) {
-			excess = append(excess, "mcp_servers."+name)
-		}
-	}
-	sort.Strings(excess)
-	return excess
 }
 
 // ProfileValueSchema is the JSON Schema config.list publishes for the

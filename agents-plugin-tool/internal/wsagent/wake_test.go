@@ -2,7 +2,6 @@ package wsagent
 
 import (
 	"encoding/json"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -127,40 +126,6 @@ func TestClaudeBackgroundCountSplits(t *testing.T) {
 		if evs := m.mapLine([]byte(`{"type":"system","subtype":"background_tasks_changed","tasks":`+tasks+`}`), nopReplies{}); len(evs) != 0 {
 			t.Fatalf("invalid list %s should leave counts alone: %+v", tasks, evs)
 		}
-	}
-}
-
-func TestPiHostedEventWidget(t *testing.T) {
-	m := newPiMapper(StartSpec{Lead: &LeadSpec{}})
-	var lines []string
-	causes := []string{"subagent_report", "subagent_done", "subagent_failed", "background_exit", "monitor", "mail", "message", "scheduled"}
-	for _, cause := range causes {
-		lines = append(lines, `{"kind":"wake","cause":"`+cause+`","source":"worker","caption":"one\nline","text":"full\nbody"}`)
-	}
-	lines = append(lines,
-		`{"kind":"status","background":2,"monitors":1,"cost":{"usd":999}}`,
-		`{"kind":"reset"}`, `{"kind":"turn_start"}`, `{"kind":"reply","text":"not a reply"}`,
-		`{"kind":"wake","cause":"future"}`, `{"kind":"wake","cause":"message","agentId":"child"}`,
-		`{"kind":"status","background":-1,"monitors":0}`, `{"kind":"status","background":1}`,
-		`{"kind":"status","background":1.5,"monitors":0}`, `not json`,
-	)
-	evs := m.mapLine(piWidgetLine(piEventsWidgetKey, lines...), nopReplies{})
-	wakes := liveWakes(evs)
-	if len(wakes) != len(causes) || len(evs) != len(causes)+1 {
-		t.Fatalf("events = %+v", evs)
-	}
-	for i, wake := range wakes {
-		if wake.Cause != causes[i] || wake.Source != "worker" || *wake.Caption != "one line" || wake.Text != "full\nbody" {
-			t.Fatalf("wake = %+v", wake)
-		}
-	}
-	counts := evs[len(evs)-1]
-	if counts.BackgroundTasks == nil || *counts.BackgroundTasks != 3 || *counts.Background != 2 || *counts.Monitors != 1 || counts.Live != nil {
-		t.Fatalf("counts = %+v", counts)
-	}
-	worker := newPiMapper(StartSpec{})
-	if got := worker.mapLine(piWidgetLine(piEventsWidgetKey, lines...), nopReplies{}); !reflect.DeepEqual(got, []Event{counts}) {
-		t.Fatalf("a non-lead must import only hosted task counts: %+v", got)
 	}
 }
 

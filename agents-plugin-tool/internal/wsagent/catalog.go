@@ -425,7 +425,7 @@ func ClaudeCatalog() *HarnessProfile {
 			{Item: ItemSteer, Role: RoleLead, Grade: GradeNative,
 				Source: "a user message the running turn takes up (claudeProcess.Steer; conv.steer for leads)"},
 			{Item: ItemSteer, Role: RoleWorker, Grade: GradeUnsupported,
-				Source: "no recoverable worker steer path: steerWorker serves Pi only and a Claude process sets no reports handle"},
+				Source: "Claude workers expose no recoverable steer path"},
 			{Item: ItemInterrupt, Grade: GradeNative,
 				Source: "the interrupt control request (claudeProcess.Interrupt, Runner.Interrupt)"},
 			{Item: ItemFollowUp, Grade: GradeSubstitute,
@@ -560,14 +560,6 @@ func AgyCatalog() *HarnessProfile {
 		p.Entries = append(p.Entries, entry)
 	}
 	return p
-}
-
-// PiCompaction describes RPC compact: it operates on the current session,
-// independently of lead privileges. The system prompt is rebuilt each turn.
-func PiCompaction() *CompactionProtocol {
-	// Retained name check: the Pi legacy compaction config keys a user's config may
-	// still hold (TestCompactionConfigGetTuneAndLegacy).
-	return &CompactionProtocol{LeadCommand: true, WorkerCommand: true, Lifecycle: true, PromptPersists: true, LegacyAdvisory: "pi.compaction_advisory_percent", LegacyHard: "pi.compaction_hard_percent"}
 }
 
 // BuiltinCompaction is the keyless config reader's descriptor floor. Runtime

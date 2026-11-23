@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -235,77 +234,6 @@ func TestRecordSurvivesDaemonRestart(t *testing.T) {
 	}
 	if len(h.keys.ensured) != 2 || h.keys.ensured[1] != rec.WSKey {
 		t.Fatalf("every start should keep the same key usable: %v", h.keys.ensured)
-	}
-}
-
-func TestPiWorkerResumeAcceptsLegacyRootKeyAndRefusesForeignKey(t *testing.T) {
-	for _, closed := range []bool{false, true} {
-		for _, foreign := range []bool{false, true} {
-			t.Run(fmt.Sprintf("closed=%t/foreign=%t", closed, foreign), func(t *testing.T) {
-				h, _ := childHarness(t)
-				worker := h.spawnWorker("small")
-				p := h.backend.waitProc(t, 0)
-				p.nextSent(t)
-				p.reply("initial result")
-				eventually(t, "initial turn settled", func() bool { return h.state(worker.ID).Status == StatusIdle })
-				if closed {
-					if _, err := h.runner.CloseConversation(worker.ID); err != nil {
-						t.Fatal(err)
-					}
-				}
-				h.runner.Close()
-				dir := wsdashboard.SessionDir(h.dir, worker.ID)
-				rec, err := readRecord(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				// Model a 0.49.x record: the key remains bound to Root,
-				// but the persisted child works in a different directory.
-				rec.Cwd = filepath.Join(h.root, "work")
-				if err := os.MkdirAll(rec.Cwd, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := writeRecord(dir, rec); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.MkdirAll(filepath.Dir(piSessionFile(dir)), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(piSessionFile(dir), []byte("persisted conversation\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if foreign {
-					h.keys.mu.Lock()
-					h.keys.roots[rec.WSKey] = t.TempDir()
-					h.keys.mu.Unlock()
-				}
-				h.start()
-				if _, err := h.runner.Send(worker.ID, "continue"); err != nil {
-					t.Fatal(err)
-				}
-				if foreign {
-					eventually(t, "foreign key refusal", func() bool {
-						return strings.Contains(h.state(worker.ID).Error, "session key record is not this conversation's")
-					})
-					if h.backend.startCount() != 1 {
-						t.Fatal("a foreign key started another process")
-					}
-					return
-				}
-				if got := h.backend.waitProc(t, 1).nextSent(t); got != h.envelope("continue") {
-					t.Fatalf("resumed prompt = %q", got)
-				}
-				if spec := h.backend.start(1); spec.Cwd != rec.Cwd || spec.Root != rec.Root {
-					t.Fatalf("legacy resume changed root/cwd: %+v", spec)
-				}
-				h.keys.mu.Lock()
-				boundRoot := h.keys.roots[rec.WSKey]
-				h.keys.mu.Unlock()
-				if boundRoot != rec.Root {
-					t.Fatalf("legacy key binding changed: %q", boundRoot)
-				}
-			})
-		}
 	}
 }
 
@@ -652,30 +580,6 @@ func TestFailingSendRestartsOnceAndStops(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
-
-// TestRunnerSuiteOnPi runs the runner suite again with every profile on
-// the pi backend: the runner treats the backends alike through Process.
-func TestRunnerSuiteOnPi(t *testing.T) {
-	suiteBackend = BackendPi
-	t.Cleanup(func() { suiteBackend = BackendClaude })
-	for name, test := range map[string]func(*testing.T){
-		"CreateWritesRecordRegistrationAndSnapshot": TestCreateWritesRecordRegistrationAndSnapshot,
-		"CreateRefusesBadLaunch":                    TestCreateRefusesBadLaunch,
-		"SendRunsTurnAndHeldSendsGoAsOneTurn":       TestSendRunsTurnAndHeldSendsGoAsOneTurn,
-		"IdleTimerEndsProcessAndNextSendResumes":    TestIdleTimerEndsProcessAndNextSendResumes,
-		"IdleTimeoutZeroNeverExits":                 TestIdleTimeoutZeroNeverExits,
-		"RecordSurvivesDaemonRestart":               TestRecordSurvivesDaemonRestart,
-		"StopKeepsHeldAndResumes":                   TestStopKeepsHeldAndResumes,
-		"CloseEndsConversationForGood":              TestCloseEndsConversationForGood,
-		"InterruptTakesBackHeldAndStopsTurn":        TestInterruptTakesBackHeldAndStopsTurn,
-		"SettingsApplyAtTurnBoundary":               TestSettingsApplyAtTurnBoundary,
-		"FailuresSurfaceInState":                    TestFailuresSurfaceInState,
-		"RESTRoutesEndToEnd":                        TestRESTRoutesEndToEnd,
-		"RESTWritesRefuseOtherOrigins":              TestRESTWritesRefuseOtherOrigins,
-	} {
-		t.Run(name, test)
-	}
-}
 
 // TestRunnerWithoutHoldersIsScannedAtStart: with no holder manager there is
 // no first scan to wait for, so Start marks it done at once, and a second
