@@ -311,10 +311,11 @@ func auditEventMatches(q url.Values, ev *wsaudit.Envelope) (matches map[string]a
 		return nil, false, auditBadRequest("q is not a valid regular expression: " + err.Error())
 	}
 	// Without through_<part> a body is read as the envelope answer returns
-	// it: its head within auditBodyMax.
+	// it: its head within auditBodyMax, clipped back to a character boundary
+	// as envelopeAnswer clips it, so no span lies outside the returned text.
 	for _, f := range []struct{ name, body string }{{wsaudit.FieldIn, ev.In}, {wsaudit.FieldOut, ev.Out}, {wsaudit.FieldRaw, ev.Raw}} {
 		if _, set := through[f.name]; !set && len(f.body) > auditBodyMax {
-			through[f.name] = auditBodyMax
+			through[f.name] = len(headUTF8(f.body, auditBodyMax))
 		}
 	}
 	return eventMatches(s, ev, through), only, nil
