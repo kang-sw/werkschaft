@@ -1,0 +1,792 @@
+<style>
+/* Composer `!` mode: terminal-feel mockup (2026-11-23). Static fragment, no
+   script, no external resources. Every selector is scoped under .bt so the
+   sheet can be inlined into a whiteboard fragment. Metrics follow the product
+   (dashboard-conversation.css .composer/.crow/.cfield/.csend/.cfoot/.cmdrun/
+   .d-cexec/.d-ucmd and dashboard-exec-hud.css .xchip/.xout); colours follow the
+   requested dark palette. Direction scopes: .A (셸 틴트), .B (콘솔 창),
+   .C (프롬프트 캡슐). */
+.bt {
+  --bg: #1e1f22; --fg: #e6e6e6; --line: #444; --card: #27292d; --muted: #313338; --mfg: #9ea2a9;
+  --blue-bg: #1f3550; --blue: #5b9bf0;
+  --amber-bg: #4a3a1c; --amber: #e0a84a;
+  --green-bg: #1d3b24; --green: #5cc46a;
+  --purple-bg: #33264d; --purple: #a57bf0;
+  --red-bg: #4a2228; --red: #f0797e;
+  --term: #131417; --term-2: #1a1b1f; --term-line: #34373d; --term-fg: #d9dbdf;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .42);
+  background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans);
+  padding: 20px 18px 28px; color-scheme: dark; min-width: 0;
+}
+.bt *, .bt *::before, .bt *::after { box-sizing: border-box; }
+.bt button { font: inherit; color: inherit; }
+.bt code, .bt kbd { font-family: var(--mono); }
+.bt p { margin: 0; }
+.bt h1 { margin: 0 0 6px; font-size: 18px; font-weight: 800; }
+.bt h2 { margin: 0; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.bt h3 { margin: 26px 0 8px; font-size: 14px; font-weight: 800; }
+.bt .lead { color: var(--mfg); font-size: 12.5px; max-width: 1040px; }
+.bt .lead code { color: var(--fg); }
+.bt kbd { display: inline-block; padding: 2px 5px 1px; border-radius: 4px; background: var(--muted); box-shadow: inset 0 -1px 0 var(--line), inset 0 0 0 1px var(--line); font: 600 10.5px/1.2 var(--mono); color: var(--fg); }
+.bt .i { width: 14px; height: 14px; flex: none; display: inline-block; vertical-align: -2px; }
+.bt .legend { display: flex; gap: 8px 14px; flex-wrap: wrap; margin-top: 10px; font-size: 11.5px; color: var(--mfg); align-items: center; }
+.bt .need { display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border-radius: 5px; font: 700 10px/1 var(--sans); white-space: nowrap; vertical-align: 1px; }
+.bt .need.have { background: var(--green-bg); color: var(--green); }
+.bt .need.new { background: var(--amber-bg); color: var(--amber); }
+.bt .need.cli { background: var(--blue-bg); color: var(--blue); }
+.bt .need.risk { background: var(--red-bg); color: var(--red); }
+@keyframes bt-blink { 50% { opacity: 0; } }
+@keyframes bt-spin { to { transform: rotate(360deg); } }
+@keyframes bt-scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+
+/* ---------- matrix ---------- */
+.bt .mx { display: grid; grid-template-columns: repeat(3, minmax(372px, 1fr)); grid-template-rows: repeat(8, auto); gap: 0 18px; margin-top: 18px; overflow-x: auto; padding-bottom: 6px; }
+.bt .dir { display: grid; grid-template-rows: subgrid; grid-row: span 8; row-gap: 16px; min-width: 0; padding: 12px 12px 14px; border-radius: 14px; background: #232428; box-shadow: inset 0 0 0 1px #34363b; }
+.bt .dh p { margin-top: 4px; font-size: 12px; color: var(--mfg); }
+.bt .dh p code { color: var(--fg); }
+.bt .lt { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; font: 800 12px/1 var(--mono); }
+.bt .A .lt { background: var(--green-bg); color: var(--green); }
+.bt .B .lt { background: var(--blue-bg); color: var(--blue); }
+.bt .C .lt { background: var(--purple-bg); color: var(--purple); }
+.bt .st { margin: 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.bt .st > figcaption { font-size: 11.5px; font-weight: 700; color: var(--mfg); display: flex; gap: 6px; align-items: baseline; }
+.bt .st > figcaption b { color: var(--fg); }
+.bt .notes { margin: 0; padding-left: 16px; font-size: 11.5px; color: var(--mfg); }
+.bt .notes li { margin: 2px 0; }
+.bt .notes code { color: var(--fg); font-size: 11px; }
+
+/* ---------- composer (product metrics) ---------- */
+.bt .cp { position: relative; background: var(--card); border-radius: 12px; box-shadow: var(--shadow-hi); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.bt .cp.hasgap { margin-top: 12px; }
+.bt .crow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: stretch; }
+.bt .crow.t3 { grid-template-columns: minmax(0, 1fr) auto auto; }
+.bt .crow.hascap { grid-template-columns: auto minmax(0, 1fr) auto; }
+.bt .cfield { position: relative; min-width: 0; background: var(--muted); border-radius: 10px; }
+.bt .ta { font: 13.5px/1.45 var(--sans); padding: 8px 10px; min-height: 38px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bt .ta.ph { color: var(--mfg); }
+.bt .phx { color: color-mix(in srgb, var(--amber) 70%, var(--mfg)); }
+.bt .phx code { color: var(--amber); font-weight: 800; }
+.bt .csend { width: 34px; min-height: 38px; padding: 0; border: 0; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--blue); background: var(--blue-bg); }
+.bt .csend .i { width: 17px; height: 17px; }
+.bt .csend.run { color: var(--green); background: var(--green-bg); }
+.bt .cfoot { display: flex; align-items: center; gap: 8px; min-height: 22px; min-width: 0; flex-wrap: wrap; font-size: 11.5px; color: var(--mfg); }
+.bt .hint { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.bt .hint .sep { opacity: .5; padding: 0 2px; }
+.bt .hint code { color: var(--amber); font-weight: 800; }
+.bt .stub { height: 30px; border-radius: 10px; background: var(--muted); color: var(--mfg); font-size: 12px; display: flex; align-items: center; padding: 0 10px; opacity: .75; }
+.bt .strip { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.bt .bang { color: var(--amber); font-weight: 800; }
+.bt .cur { display: inline-block; width: .6em; height: 1.15em; vertical-align: -.22em; margin-left: 1px; background: var(--green); animation: bt-blink 1s steps(1) infinite; }
+.bt .spin { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: bt-spin .8s linear infinite; flex: none; }
+.bt .x { flex: none; align-self: center; border: 0; border-radius: 6px; padding: 1px 6px; background: transparent; color: var(--mfg); cursor: pointer; }
+.bt .btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--muted); color: var(--fg); font: 600 11px/1 var(--sans); white-space: nowrap; cursor: pointer; flex: none; }
+.bt .btn .i { width: 12px; height: 12px; }
+
+/* status chips */
+.bt .chip { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font: 700 10.5px/1 var(--mono); white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--muted); color: var(--mfg); }
+.bt .chip.ok { background: var(--green-bg); color: var(--green); }
+.bt .chip.fail { background: var(--red-bg); color: var(--red); }
+.bt .chip.run { background: var(--blue-bg); color: var(--blue); }
+.bt .chip.warn { background: var(--amber-bg); color: var(--amber); }
+.bt .chip.pur { background: var(--purple-bg); color: var(--purple); }
+.bt .chip .spin { width: 8px; height: 8px; border-width: 1.5px; }
+
+/* terminal output block (lines mirror the HUD peek's .xout .l / .l.e) */
+.bt .tout { min-width: 0; padding: 7px 10px; border-radius: 8px; background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); font: 12px/1.5 var(--mono); color: var(--term-fg); max-height: 220px; overflow: auto; }
+.bt .l { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bt .l.e { color: var(--red); box-shadow: inset 2px 0 0 var(--red); padding-left: 7px; margin-left: -3px; }
+.bt .l.sys { color: var(--mfg); font-style: italic; }
+.bt .l.live::after { content: "\258D"; color: var(--mfg); animation: bt-blink 1s steps(2) infinite; }
+
+/* exec HUD chip in the composer gap (simplified .xchip) */
+.bt .gap { position: absolute; z-index: 2; right: 10px; top: -5px; transform: translateY(-50%); display: flex; gap: 6px; }
+.bt .xchip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 3px; border-radius: 999px; background: var(--card); font: 700 11.5px/1 var(--sans); white-space: nowrap; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--blue) 55%, transparent), var(--shadow-hi); }
+.bt .xemb { width: 18px; height: 18px; border-radius: 4.5px; display: inline-flex; align-items: center; justify-content: center; background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a, 0 0 0 1.5px var(--blue); font: 800 9px/1 var(--mono); letter-spacing: -.04em; }
+.bt .xlab { font: 600 11px/1 var(--mono); }
+.bt .xel { font-size: 11px; color: var(--mfg); font-variant-numeric: tabular-nums; }
+
+/* ============ A · 셸 틴트 ============ */
+.bt .A .cp.sh { box-shadow: var(--shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--green) 45%, transparent); }
+.bt .A .cp.sh .cfield { background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); }
+.bt .A .cp.sh .cfield.focus { outline: 1.5px solid var(--green); }
+.bt .A .cp.sh .ta { font: 13px/1.5 var(--mono); color: var(--term-fg); padding: 9px 10px; }
+.bt .A .modeb { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px 0 6px; border-radius: 6px; background: var(--green-bg); color: var(--green); font: 800 10.5px/1 var(--mono); letter-spacing: .02em; }
+.bt .A .modeb .i { width: 13px; height: 13px; }
+.bt .A .card { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bt .A .echo { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; font-size: 12px; min-width: 0; }
+.bt .A .echo .mk { flex: none; width: 10px; font: 800 12px/1 var(--mono); color: var(--green); }
+.bt .A .card.fail .echo .mk { color: var(--red); }
+.bt .A .card.run .echo .mk { color: var(--blue); align-self: center; }
+.bt .A .echo code { flex: 1 1 10em; font: 600 12px/1.4 var(--mono); color: var(--fg); overflow-wrap: anywhere; min-width: 0; }
+.bt .A .echo .lbl { flex: none; font-weight: 700; }
+.bt .A .echo .chips { margin-left: auto; display: inline-flex; gap: 4px; flex: none; align-self: center; }
+.bt .A .card > .tout, .bt .A .card > .file, .bt .A .card > .note, .bt .A .card > .acts { margin-left: 16px; }
+.bt .A .card.fail > .tout { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 35%, var(--term-line)); }
+.bt .A .file { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 8px; border-radius: 8px; background: color-mix(in srgb, var(--fg) 5%, var(--card)); font-size: 11.5px; min-width: 0; }
+.bt .A .file .lb { color: var(--mfg); flex: none; }
+.bt .A .file a { color: var(--blue); font-family: var(--mono); overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; text-decoration: none; }
+.bt .A .note { font-size: 11.5px; font-style: italic; color: var(--mfg); }
+.bt .A .acts { display: flex; gap: 6px; }
+.bt .A .ub > summary { cursor: pointer; color: var(--mfg); font-size: 11.5px; padding: 2px 0; }
+.bt .A .ul { display: flex; flex-direction: column; gap: 7px; padding: 4px 0 6px; }
+.bt .A .urow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 8px; align-items: center; }
+.bt .A .urun { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 0; border-radius: 8px; padding: 3px 10px 3px 8px; background: var(--term); color: var(--fg); box-shadow: inset 0 0 0 1px var(--term-line); font: 600 12px/1.35 var(--sans); cursor: pointer; }
+.bt .A .urun .pl { color: var(--green); font-size: 9px; }
+.bt .A .urun[disabled] { opacity: .7; cursor: progress; color: var(--blue); }
+.bt .A .udesc { color: var(--mfg); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.bt .A .uline { grid-column: 1 / -1; display: block; padding: 4px 8px; border-radius: 6px; background: var(--term); color: var(--term-fg); font: 11.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.bt .A .uline::before { content: "$ "; color: var(--green); }
+
+/* ============ B · 콘솔 창 ============ */
+.bt .B .win { min-width: 0; border-radius: 10px; background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); overflow: hidden; display: flex; flex-direction: column; }
+.bt .B .cp.sh .win { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--blue) 60%, var(--term-line)); }
+.bt .B .bar { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 5px 0 9px; background: var(--term-2); border-bottom: 1px solid var(--term-line); font: 600 11px/1 var(--mono); color: var(--mfg); min-width: 0; }
+.bt .B .bar .sh { color: var(--fg); font-weight: 800; flex: none; }
+.bt .B .bar .cwd { color: var(--blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.bt .B .bar .badge { margin-left: auto; flex: none; height: 17px; padding: 0 6px; border-radius: 4px; display: inline-flex; align-items: center; background: var(--blue-bg); color: var(--blue); font: 800 9.5px/1 var(--mono); letter-spacing: .08em; }
+.bt .B .bar .bbtn { flex: none; border: 0; background: transparent; color: var(--mfg); font: 600 10.5px/1 var(--sans); padding: 3px 6px; border-radius: 5px; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+.bt .B .bar .badge + .bbtn { margin-left: 0; }
+.bt .B .bar .bbtn.r { margin-left: auto; }
+.bt .B .log { padding: 6px 10px 6px; display: flex; flex-direction: column; gap: 10px; font: 12px/1.5 var(--mono); color: var(--term-fg); max-height: 300px; overflow: auto; }
+.bt .B .log.dim { gap: 2px; padding-bottom: 2px; opacity: .6; }
+.bt .B .ent { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bt .B .pl { display: flex; gap: 7px; align-items: baseline; min-width: 0; }
+.bt .B .pl .ps { color: var(--green); font-weight: 800; flex: none; }
+.bt .B .pl .cmd { color: var(--fg); font-weight: 700; overflow-wrap: anywhere; min-width: 0; }
+.bt .B .pl .x { margin-left: auto; align-self: baseline; opacity: .55; padding: 0 4px; }
+.bt .B .pl .t { margin-left: auto; color: var(--mfg); font-size: 10.5px; }
+.bt .B .pl .lbl { flex: none; height: 17px; padding: 0 6px; border-radius: 4px; display: inline-flex; align-items: center; background: var(--purple-bg); color: var(--purple); font: 700 10.5px/1 var(--sans); }
+.bt .B .stl { display: flex; align-items: center; gap: 6px; margin-top: 3px; font: 700 10.5px/1 var(--mono); color: var(--green); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; }
+.bt .B .stl .r0 { flex: none; width: 10px; height: 1px; background: currentColor; opacity: .4; }
+.bt .B .stl .rule { flex: 1 1 auto; min-width: 12px; height: 1px; background: currentColor; opacity: .3; }
+.bt .B .stl i:not(.spin) { font-style: normal; opacity: .5; }
+.bt .B .stl .t { color: var(--mfg); font-weight: 600; }
+.bt .B .stl .msg { color: var(--mfg); font-weight: 600; font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bt .B .ent.fail .stl { color: var(--red); }
+.bt .B .ent.run .stl { color: var(--blue); }
+.bt .B .ent.fail .pl .ps { color: var(--red); }
+.bt .B .ent.run .pl .ps { color: var(--blue); }
+.bt .B .l.lnk { margin-top: 3px; color: var(--mfg); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.bt .B .l.lnk a { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; min-width: 0; }
+.bt .B .tbtn { border: 1px solid var(--term-line); background: var(--term-2); color: var(--fg); border-radius: 5px; padding: 1px 6px; font: 600 10.5px/1.4 var(--sans); cursor: pointer; }
+.bt .B .in { padding: 6px 10px 8px; border-top: 1px dashed var(--term-line); }
+.bt .B .in .ta { font: 13px/1.5 var(--mono); color: var(--term-fg); padding: 0; min-height: 0; }
+.bt .B .ln { display: block; white-space: pre-wrap; }
+.bt .B .ln.c::before { content: "> "; color: var(--mfg); }
+.bt .B .cur { background: var(--blue); }
+.bt .B .mini { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border-radius: 8px; background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); font: 600 11px/1 var(--mono); color: var(--mfg); min-width: 0; white-space: nowrap; overflow: hidden; }
+.bt .B .mini b { color: var(--fg); }
+.bt .B .mini .cwd { color: var(--blue); }
+.bt .B .mini .ok { color: var(--green); }
+.bt .B .mini code { color: var(--term-fg); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bt .B .mini .chev { margin-left: auto; flex: none; font-family: var(--sans); }
+.bt .B .tgl { width: 34px; min-height: 38px; padding: 0; border: 0; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--mfg); background: var(--muted); }
+.bt .B .tgl .i { width: 17px; height: 17px; }
+.bt .B .rcp { padding: 5px 10px 7px; display: flex; flex-direction: column; gap: 2px; font: 12px/1.45 var(--mono); }
+.bt .B .rr { display: grid; grid-template-columns: 20px 7.2em minmax(0, 1fr) auto; column-gap: 8px; align-items: start; padding: 3px 0; border-radius: 6px; }
+.bt .B .rr .go { grid-column: 1; width: 20px; height: 19px; border: 0; border-radius: 5px; background: var(--green-bg); color: var(--green); font-size: 9px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.bt .B .rr .go[disabled] { background: var(--blue-bg); color: var(--blue); cursor: progress; }
+.bt .B .rr .nm { grid-column: 2; color: var(--fg); font: 700 12px/1.45 var(--sans); overflow-wrap: anywhere; }
+.bt .B .rr code { grid-column: 3; color: var(--term-fg); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.bt .B .rr .x { grid-column: 4; grid-row: 1; padding: 0 4px; opacity: .55; }
+.bt .B .rr .cm { grid-column: 3; color: #7f858e; }
+.bt .B .rr.busy { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+
+/* ============ C · 프롬프트 캡슐 ============ */
+.bt .C .cp.sh { box-shadow: var(--shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--purple) 50%, transparent); }
+.bt .C .cp.sh .cfield { background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); }
+.bt .C .cp.sh .cfield.focus { outline: 1.5px solid var(--purple); }
+.bt .C .cp.sh .ta { font: 13px/1.5 var(--mono); color: var(--term-fg); padding: 9px 10px; }
+.bt .C .cur { background: var(--purple); }
+.bt .C .cap { align-self: start; display: inline-flex; align-items: stretch; height: 38px; max-width: 46vw; border-radius: 10px; overflow: hidden; background: var(--muted); font: 700 11.5px/1 var(--mono); }
+.bt .C .seg { display: inline-flex; align-items: center; gap: 5px; padding: 0 14px 0 10px; min-width: 0; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%); }
+.bt .C .seg + .seg { margin-left: -6px; padding-left: 14px; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%, 8px 50%); }
+.bt .C .seg.m { background: var(--purple-bg); color: var(--purple); flex: none; position: relative; z-index: 1; }
+.bt .C .seg.d { background: var(--blue-bg); color: var(--blue); max-width: 10em; }
+.bt .C .seg.d span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt .C .seg .i { width: 14px; height: 14px; }
+.bt .C .capx { flex: none; border: 0; background: transparent; color: var(--mfg); padding: 0 8px 0 4px; cursor: pointer; font: 600 13px/1 var(--sans); }
+.bt .C .ghost { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 9px; border-radius: 999px; border: 1px dashed var(--line); color: var(--mfg); font: 600 11px/1 var(--sans); background: transparent; cursor: pointer; }
+.bt .C .ghost code { color: var(--purple); font-weight: 800; }
+.bt .C .rc { border-radius: 10px; background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line); overflow: hidden; min-width: 0; }
+.bt .C .rc.fail { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 40%, var(--term-line)); }
+.bt .C .rc.run::before { content: ""; display: block; height: 2px; background: linear-gradient(90deg, transparent, var(--blue), transparent) no-repeat; background-size: 40% 100%; animation: bt-scan 1.4s linear infinite; }
+.bt .C .rh { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; padding: 4px 4px 4px 10px; min-width: 0; }
+.bt .C .rh .pr { flex: none; color: var(--purple); font: 800 12px/1 var(--mono); }
+.bt .C .rh code { flex: 1 1 10em; min-width: 0; font: 600 12px/1.4 var(--mono); color: var(--fg); overflow-wrap: anywhere; }
+.bt .C .rh .lbl { flex: none; font: 700 11.5px/1 var(--sans); color: var(--purple); }
+.bt .C .segs { display: inline-flex; flex: none; padding-left: 6px; margin-left: auto; }
+.bt .C .sg { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 13px; margin-left: -6px; font: 700 10.5px/1 var(--mono); white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--muted); color: var(--fg); clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%); }
+.bt .C .sg:last-child { border-radius: 0 6px 6px 0; }
+.bt .C .sg.ok { background: var(--green-bg); color: var(--green); }
+.bt .C .sg.fail { background: var(--red-bg); color: var(--red); }
+.bt .C .sg.run { background: var(--blue-bg); color: var(--blue); }
+.bt .C .sg.warn { background: var(--amber-bg); color: var(--amber); }
+.bt .C .sg.dim { background: #26282c; color: var(--mfg); }
+.bt .C .sg .spin { width: 8px; height: 8px; border-width: 1.5px; }
+.bt .C .rb { border-top: 1px dashed var(--term-line); padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; font: 12px/1.5 var(--mono); color: var(--term-fg); }
+.bt .C .tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 7px; background: var(--term-2); box-shadow: inset 0 0 0 1px var(--term-line); font: 600 10.5px/1 var(--sans); }
+.bt .C .tabs b { padding: 4px 8px; border-radius: 5px; color: var(--mfg); font-weight: 600; }
+.bt .C .tabs b.on { background: var(--muted); color: var(--fg); }
+.bt .C .tabs b.e { color: var(--red); }
+.bt .C .fb { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--term-2); box-shadow: inset 0 0 0 1px var(--term-line); font-family: var(--sans); }
+.bt .C .fb .i { color: var(--amber); width: 18px; height: 18px; grid-row: span 2; }
+.bt .C .fb a { color: var(--blue); font: 600 11.5px/1.4 var(--mono); text-decoration: none; overflow-wrap: anywhere; min-width: 0; }
+.bt .C .fb .meta { grid-column: 2; font-size: 11px; color: var(--mfg); }
+.bt .C .fb .acts { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 4px; }
+.bt .C details.pv > summary { cursor: pointer; color: var(--mfg); font: 600 11px/1.4 var(--sans); }
+.bt .C .rf { display: flex; align-items: center; gap: 8px; font: 11.5px/1.4 var(--sans); color: var(--mfg); }
+.bt .C .rf a { color: var(--blue); text-decoration: none; margin-left: auto; white-space: nowrap; }
+.bt .C .slh { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--mfg); padding: 2px 0 6px; }
+.bt .C .slh b { color: var(--fg); }
+.bt .C .sgrid { display: flex; flex-wrap: wrap; gap: 8px 6px; padding-top: 4px; }
+.bt .C .key { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: 100%; min-width: 0; padding: 6px 11px 7px; border: 0; border-radius: 9px; background: var(--term); box-shadow: inset 0 0 0 1px var(--term-line), 0 2px 0 #0b0c0e; text-align: left; cursor: pointer; }
+.bt .C .key .lb { font: 600 10.5px/1.2 var(--sans); color: var(--mfg); }
+.bt .C .key code { font: 600 12px/1.4 var(--mono); color: var(--term-fg); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
+.bt .C .key code::before { content: "\276F  "; color: var(--purple); }
+.bt .C .key.hov { box-shadow: inset 0 0 0 1px var(--purple), 0 2px 0 #0b0c0e; }
+.bt .C .key .kx { position: absolute; top: -7px; right: -6px; width: 16px; height: 16px; border-radius: 50%; border: 0; padding: 0; background: var(--card); color: var(--mfg); box-shadow: 0 0 0 1px var(--line); font: 700 10px/1 var(--sans); display: inline-flex; align-items: center; justify-content: center; }
+.bt .C .key.busy { box-shadow: inset 0 0 0 1px var(--blue), 0 2px 0 #0b0c0e; cursor: progress; }
+.bt .C .key.busy code::before { content: none; }
+.bt .C .key.busy .lb { color: var(--blue); display: inline-flex; gap: 5px; align-items: center; }
+
+/* ---------- element catalogue ---------- */
+.bt table.el { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.bt table.el th, .bt table.el td { border-top: 1px solid var(--line); padding: 7px 8px; vertical-align: top; text-align: left; }
+.bt table.el th { color: var(--mfg); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.bt table.el td:first-child { font-weight: 700; white-space: nowrap; }
+.bt table.el td code { font-size: 11px; color: var(--fg); }
+.bt table.el td .need { margin: 1px 2px 1px 0; }
+.bt .rec { margin-top: 20px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--green) 7%, var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 35%, transparent); font-size: 12.5px; }
+.bt .rec ol { margin: 6px 0 0; padding-left: 18px; }
+.bt .rec li { margin: 3px 0; }
+.bt .rec code { color: var(--fg); }
+.bt .ctx { max-width: 760px; margin-top: 10px; padding: 26px 16px 16px; border-radius: 14px; background: var(--bg); box-shadow: inset 0 0 0 1px #34363b; }
+.bt .bub { margin: 0 31px 14px 18px; padding: 8px 12px; border-radius: 4px 12px 12px 12px; background: var(--card); box-shadow: var(--shadow); font-size: 13px; }
+.bt .bub .mh { font-size: 11.5px; color: var(--mfg); margin-bottom: 3px; }
+.bt .bub .mh b { color: var(--fg); }
+@media (prefers-reduced-motion: reduce) { .bt *, .bt *::before, .bt *::after { animation: none !important; } }
+</style>
+
+<div class="bt">
+  <h1>대화창 <code class="bang">!</code> 명령 — 터미널처럼 보이게 (디자인 제안 · 2026-11-23)</h1>
+  <p class="lead">현재 구현(261121-feat-ws-board-command-slots): 컴포저 맨 앞 글자가 <code>!</code>이면 서버가 bash 명령으로 실행하고, 결과는 컴포저 안 카드 띠(<code>.d-cexec</code>)에, 등록된 명령은 그 위 슬롯 띠(<code>.d-ucmd</code>)에, 실행 중 작업은 컴포저 틈의 HUD 칩에 보인다. 아래 세 방향은 같은 동작 위에 <b>보이는 것만</b> 바꾼다. 서버의 첫 바이트 문법, 앞 공백이면 일반 메시지라는 규칙, 슬롯이 저장된 줄을 <b>그대로 전부</b> 보여 주는 규칙은 세 방향 모두 유지한다.</p>
+  <div class="legend">
+    <span>각 열: ① 대기 · ② <code>!</code> 입력 즉시 · ③ 짧은 출력 완료 · ④ 실패(stderr, exit≠0) · ⑤ 긴 출력 → 파일 · ⑥ 비동기 실행 중 · ⑦ 명령 슬롯</span>
+  </div>
+  <div class="legend">
+    <span class="need have">지금 데이터</span> 카드 JSON에 이미 있음
+    <span class="need cli">클라이언트만</span> JS/CSS만 바꿈
+    <span class="need new">새 필드</span> 서버가 카드·목록에 덧붙여야 함 (추가 필드, T0)
+    <span class="need risk">주의</span> 기존 동작과 맞물림
+  </div>
+
+  <div class="mx">
+    <!-- ============================== A ============================== -->
+    <section class="dir A">
+      <header class="dh">
+        <h2><span class="lt">A</span>셸 틴트</h2>
+        <p>자리와 구조는 지금 그대로 두고 입력칸만 터미널색으로 바꾼다. 맨 앞 <code class="bang">!</code>를 지우지 않고 그대로 프롬프트 기호로 쓴다. 결과 카드는 지금 카드에 <code>$</code>와 상태 칩만 더한다.</p>
+      </header>
+
+      <figure class="st">
+        <figcaption><b>①</b> 대기</figcaption>
+        <div class="cp">
+          <div class="crow">
+            <div class="cfield"><div class="ta ph">이 세션에 메시지를 보냅니다. Enter로 전송, Shift+Enter로 줄 바꿈. <span class="phx"><code>!</code>로 시작하면 bash 명령.</span></div></div>
+            <button type="button" class="csend" title="보내기"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></button>
+          </div>
+        </div>
+        <ul class="notes"><li>자리표시자 끝에 <code>!</code> 안내 한 구절 <span class="need cli">클라이언트만</span> (i18n 11개 표 수정)</li></ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>②</b> <code>!</code> 입력 즉시</figcaption>
+        <div class="cp sh">
+          <div class="crow">
+            <div class="cfield focus"><div class="ta"><span class="bang">!</span>git status -sb<span class="cur"></span></div></div>
+            <button type="button" class="csend run" title="실행 (Enter)"><svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg></button>
+          </div>
+          <div class="cfoot">
+            <span class="modeb"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg>bash</span>
+            <span class="hint"><kbd>Enter</kbd> 실행<span class="sep">·</span><kbd>Esc</kbd> 또는 <kbd>⌫</kbd>로 <code>!</code>를 지우면 메시지</span>
+          </div>
+        </div>
+        <ul class="notes">
+          <li>테두리 초록, 입력칸 검정, 고정폭 글꼴 <span class="need cli">클라이언트만</span></li>
+          <li><code>!</code>는 텍스트에 그대로 두고 주황으로 칠한다. 서버가 첫 바이트로 판정하는 것과 화면이 같다. 칠하기는 멘션 레이어 <code>.chl</code>를 재사용</li>
+          <li>보내기 → 초록 ▶ 실행. 셸 모드에서는 <code>@</code> 멘션과 <code>/</code> 명령 팝업을 끈다</li>
+          <li>블록 커서는 그림일 뿐이다. 실제로는 <code>caret-color</code>만 바꾼다</li>
+          <li><span class="need risk">주의</span> Esc는 지금 Tab으로 빠져나가기를 준비하는 키다. 셸 모드에서는 첫 Esc가 <code>!</code>를 지우고, 두 번째 Esc가 그 일을 한다</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>③</b> 짧은 출력 · 완료</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="card ok">
+              <div class="echo"><span class="mk">$</span><code>git status -sb</code><span class="chips"><span class="chip ok">✓ 0</span><span class="chip">0.3s</span><span class="chip">82 B</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="tout"><span class="l">## main...origin/main [ahead 2]</span><span class="l"> M src/parser.go</span><span class="l"> M src/lexer.go</span><span class="l">?? notes/todo.md</span></div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li><code>❯</code> → <code>$</code> (성공 초록, 실패 빨강, 실행 중 파랑)</li>
+          <li>종료 코드 칩 <span class="need have">지금 데이터</span> · 바이트 <span class="need have">지금 데이터</span> (<code>output_bytes</code>) · 소요 시간 <span class="need new">새 필드</span> (시작·종료 시각)</li>
+          <li>출력은 지금의 <code>.cmdout</code> 카드 대신 검정 터미널 블록</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>④</b> 실패 · stderr · exit 2</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="card fail">
+              <div class="echo"><span class="mk">$</span><code>make build</code><span class="chips"><span class="chip fail">✗ exit 2</span><span class="chip">1.1s</span><span class="chip">268 B</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="tout"><span class="l">cc -O2 -Wall -c src/main.c -o build/main.o</span><span class="l e">src/main.c:17:9: error: use of undeclared identifier 'cfg'</span><span class="l e">   17 |     load(cfg);</span><span class="l e">      |          ^</span><span class="l e">1 error generated.</span><span class="l e">make: *** [Makefile:12: build/main.o] Error 1</span></div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>stderr 줄은 빨강 글자와 왼쪽 세로줄. HUD peek의 <code>.xout .l.e</code>와 같다</li>
+          <li><span class="need new">새 필드</span> 지금 카드의 <code>output</code>은 stdout과 stderr를 합친 문자열이다. HUD tail처럼 <code>segments[{stream,text}]</code>가 필요하다. 없으면 색 없이 표시한다</li>
+          <li>시그널, 중지, 유실은 주황 칩 (<code>signal</code>, <code>state</code> <span class="need have">지금 데이터</span>)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑤</b> 긴 출력 → 파일</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="card ok">
+              <div class="echo"><span class="mk">$</span><code>git log --stat -n 5000</code><span class="chips"><span class="chip ok">✓ 0</span><span class="chip">2.4s</span><span class="chip warn">1.4 MiB → 파일</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="tout"><span class="l sys">… 마지막 5줄 · 전체 출력은 파일에</span><span class="l">commit 3c1f0a9e2b7d4c55e8a1f60b9d2c7e4a1b3f5d08</span><span class="l">Author: Demo User &lt;demo@example.invalid&gt;</span><span class="l">Date:   Mon Jan 6 09:12:44 2025 +0900</span><span class="l">&nbsp;</span><span class="l">    initial import</span></div>
+              <div class="file"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span class="lb">출력 파일</span><a href="#">~/.local/state/ws/composer-exec/cx8d41e2b7.txt</a><button type="button" class="btn">경로 복사</button></div>
+              <div class="note">처음 419,430바이트는 보관되지 않았습니다.</div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>파일 줄(링크, 경로 복사, 잘림 안내) <span class="need have">지금 데이터</span> (<code>file</code>, <code>file_url</code>, <code>truncated</code>)</li>
+          <li>마지막 몇 줄 미리보기 <span class="need new">새 필드</span> 지금은 4 KiB를 넘으면 <code>output</code>이 비어 있다</li>
+          <li>바이트 칩은 4 KiB 초과 시 주황 "→ 파일"</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑥</b> 비동기 실행 중 (10초 넘김)</figcaption>
+        <div class="cp hasgap">
+          <div class="gap"><span class="xchip"><span class="xemb">$_</span><span class="xlab">e2e.sh</span><span class="xel">0:42</span></span></div>
+          <div class="strip">
+            <div class="card run">
+              <div class="echo"><span class="mk"><i class="spin"></i></span><code>sleep 30 &amp;&amp; ./scripts/e2e.sh</code><span class="chips"><span class="chip run">백그라운드</span><span class="chip">0:42</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="note">작업 7f3a2c · 백그라운드에서 계속 실행 중입니다. 결과는 메시지로 도착합니다</div>
+              <div class="tout"><span class="l">[e2e] booting fixture server on :4100</span><span class="l live">[e2e] 12/40 specs passed</span></div>
+              <div class="acts"><button type="button" class="btn">HUD에서 보기</button></div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>작업 ID, async 단계 <span class="need have">지금 데이터</span> · 경과 시간 <span class="need new">새 필드</span> (시작 시각)</li>
+          <li>실시간 tail은 카드 갱신에 <code>Hosted.Tail</code>을 실을 때만 <span class="need new">새 필드</span></li>
+          <li>"HUD에서 보기"를 누르면 위 칩이 번쩍인다. 반대 방향은 이미 있는 <code>.cexec.xflash</code></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑦</b> 명령 슬롯</figcaption>
+        <div class="cp">
+          <details class="ub" open>
+            <summary>명령 (4)</summary>
+            <div class="ul">
+              <div class="urow"><button type="button" class="urun"><span class="pl">▶</span>테스트 실행</button><span class="udesc">단위 테스트 전체</span><button type="button" class="x" title="이 명령 제거">×</button><code class="uline">make test</code></div>
+              <div class="urow"><button type="button" class="urun" disabled><i class="spin"></i>린트 + 자동 수정</button><span class="udesc">실행 중…</span><button type="button" class="x" title="이 명령 제거">×</button><code class="uline">make lint FIX=1</code></div>
+              <div class="urow"><button type="button" class="urun"><span class="pl">▶</span>미리보기 배포</button><span class="udesc">스테이징 미리보기 갱신</span><button type="button" class="x" title="이 명령 제거">×</button><code class="uline">./scripts/deploy-preview.sh --env staging</code></div>
+              <div class="urow"><button type="button" class="urun"><span class="pl">▶</span>오래된 로그 정리</button><span class="udesc"></span><button type="button" class="x" title="이 명령 제거">×</button><code class="uline">find logs -name '*.log' -mtime +7 -delete
+echo "정리 완료"</code></div>
+            </div>
+          </details>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>구조는 지금 그대로다(라벨 버튼, 설명, ×, 저장된 줄 전체). 버튼은 검정 바탕에 초록 ▶, 줄은 <code>$</code> 프롬프트가 붙은 터미널 블록 <span class="need cli">클라이언트만</span></li>
+        </ul>
+      </figure>
+    </section>
+
+    <!-- ============================== B ============================== -->
+    <section class="dir B">
+      <header class="dh">
+        <h2><span class="lt">B</span>콘솔 창</h2>
+        <p>결과 카드 띠를 터미널 창 하나의 스크롤백으로 바꾼다. 창 제목에 셸과 cwd를 보이고, 각 실행은 프롬프트 줄, 출력, 상태 줄 순서다. <code class="bang">!</code>를 치면 입력칸이 이 창의 맨 아래 줄로 붙는다.</p>
+      </header>
+
+      <figure class="st">
+        <figcaption><b>①</b> 대기</figcaption>
+        <div class="cp">
+          <div class="mini"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><b>bash</b><span class="cwd">~/work/demo</span><span>·</span><span>실행 3</span><span>·</span><span class="ok">✓</span><code>make test</code><span class="chev">▸ 펼치기</span></div>
+          <div class="crow t3">
+            <div class="cfield"><div class="ta ph">이 세션에 메시지를 보냅니다. Enter로 전송, Shift+Enter로 줄 바꿈.</div></div>
+            <button type="button" class="tgl" title="셸 명령 (맨 앞에 ! 넣기)"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg></button>
+            <button type="button" class="csend" title="보내기"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></button>
+          </div>
+        </div>
+        <ul class="notes">
+          <li>기록이 있으면 콘솔이 한 줄 막대로 접힌다(<code>.d-cexec</code> 스타일만 바꿈) <span class="need cli">클라이언트만</span></li>
+          <li>셸 토글 버튼은 맨 앞 <code>!</code>를 넣거나 뺄 뿐이다. 텍스트가 유일한 진실</li>
+          <li>cwd <span class="need new">새 필드</span> (리드 worktree 루트, 비공개 목록 응답에)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>②</b> <code>!</code> 입력 즉시 (여러 줄)</figcaption>
+        <div class="cp sh">
+          <div class="crow">
+            <div class="win">
+              <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><span class="badge">SHELL</span><button type="button" class="bbtn"><kbd>Esc</kbd> 메시지로</button></div>
+              <div class="log dim"><div class="pl"><span class="ps">$</span><span class="cmd">git status -sb</span><span class="t">✓ 0 · 14:02</span></div></div>
+              <div class="in"><div class="ta"><span class="ln"><span class="bang">!</span>for f in logs/*.log; do</span><span class="ln c">  wc -l "$f"</span><span class="ln c">done<span class="cur"></span></span></div></div>
+            </div>
+            <button type="button" class="csend run" title="실행 (Enter)"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4v7a4 4 0 0 1-4 4H4"/><path d="m9 10-5 5 5 5"/></svg></button>
+          </div>
+          <div class="cfoot"><span class="hint"><kbd>Enter</kbd> 실행<span class="sep">·</span><kbd>Shift</kbd>+<kbd>Enter</kbd> 다음 줄 (한 스크립트로 실행)<span class="sep">·</span>맨 앞 <code>!</code>를 지우면 메시지</span></div>
+        </div>
+        <ul class="notes">
+          <li>입력칸이 콘솔 창의 맨 아래 줄이 된다. 직전 실행은 흐리게 위에 남는다</li>
+          <li>둘째 줄부터 <code>&gt;</code> (PS2) 안내 기호 <span class="need risk">주의</span> textarea에서는 <code>.chl</code> 레이어에 줄마다 그려야 해서 비용이 크다. 빼도 된다</li>
+          <li>창 제목의 cwd와 셸 이름 <span class="need new">새 필드</span> (Windows에서는 Git Bash)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>③</b> 짧은 출력 · 완료</figcaption>
+        <div class="cp">
+          <div class="win">
+            <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><button type="button" class="bbtn r">지우기</button></div>
+            <div class="log">
+              <div class="ent ok">
+                <div class="pl"><span class="ps">$</span><span class="cmd">git status -sb</span><button type="button" class="x" title="닫기">×</button></div>
+                <div class="out"><span class="l">## main...origin/main [ahead 2]</span><span class="l"> M src/parser.go</span><span class="l"> M src/lexer.go</span><span class="l">?? notes/todo.md</span></div>
+                <div class="stl"><span class="r0"></span><span>✓ 0</span><i>·</i><span>0.3s</span><i>·</i><span>82 B</span><span class="rule"></span><span class="t">14:02:11</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>카드 테두리 없이 프롬프트 줄, 출력, 상태 줄을 쌓는다. 셸의 RPROMPT나 상태 막대를 흉내 냄</li>
+          <li>"지우기"는 <code>clear</code>처럼 띠의 카드를 모두 닫는다 (기존 닫기를 반복) <span class="need cli">클라이언트만</span></li>
+          <li>시각 <span class="need cli">클라이언트만</span> (접수 시각) · 소요 <span class="need new">새 필드</span></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>④</b> 실패 · stderr · exit 2</figcaption>
+        <div class="cp">
+          <div class="win">
+            <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><button type="button" class="bbtn r">지우기</button></div>
+            <div class="log">
+              <div class="ent fail">
+                <div class="pl"><span class="ps">$</span><span class="cmd">make build</span><button type="button" class="x" title="닫기">×</button></div>
+                <div class="out"><span class="l">cc -O2 -Wall -c src/main.c -o build/main.o</span><span class="l e">src/main.c:17:9: error: use of undeclared identifier 'cfg'</span><span class="l e">   17 |     load(cfg);</span><span class="l e">      |          ^</span><span class="l e">1 error generated.</span><span class="l e">make: *** [Makefile:12: build/main.o] Error 1</span></div>
+                <div class="stl"><span class="r0"></span><span>✗ exit 2</span><i>·</i><span>1.1s</span><i>·</i><span>268 B</span><span class="rule"></span><span class="t">14:03:40</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>실패하면 상태 줄 전체와 <code>$</code>가 빨강. 화면을 훑어 내려가도 바로 보인다</li>
+          <li>stderr 색 <span class="need new">새 필드</span> (A와 같음)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑤</b> 긴 출력 → 파일</figcaption>
+        <div class="cp">
+          <div class="win">
+            <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><button type="button" class="bbtn r">지우기</button></div>
+            <div class="log">
+              <div class="ent ok">
+                <div class="pl"><span class="ps">$</span><span class="cmd">git log --stat -n 5000</span><button type="button" class="x" title="닫기">×</button></div>
+                <div class="out"><span class="l sys">… 앞부분 생략 · 마지막 5줄</span><span class="l">commit 3c1f0a9e2b7d4c55e8a1f60b9d2c7e4a1b3f5d08</span><span class="l">Author: Demo User &lt;demo@example.invalid&gt;</span><span class="l">Date:   Mon Jan 6 09:12:44 2025 +0900</span><span class="l">&nbsp;</span><span class="l">    initial import</span><span class="l lnk">→ 출력 파일 <a href="#">~/.local/state/ws/composer-exec/cx8d41e2b7.txt</a><button type="button" class="tbtn">열기</button><button type="button" class="tbtn">경로 복사</button></span></div>
+                <div class="stl"><span class="r0"></span><span>✓ 0</span><i>·</i><span>2.4s</span><i>·</i><span style="color:var(--amber)">1.4 MiB</span><i>·</i><span class="msg">처음 419,430바이트 보관 안 됨</span><span class="rule"></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>파일 링크도 출력의 한 줄처럼 <code>→</code>로 표시한다 <span class="need have">지금 데이터</span></li>
+          <li>잘림 안내는 상태 줄로 옮긴다. 미리보기 줄은 <span class="need new">새 필드</span></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑥</b> 비동기 실행 중 (10초 넘김)</figcaption>
+        <div class="cp hasgap">
+          <div class="gap"><span class="xchip"><span class="xemb">$_</span><span class="xlab">e2e.sh</span><span class="xel">0:42</span></span></div>
+          <div class="win">
+            <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><button type="button" class="bbtn r">지우기</button></div>
+            <div class="log">
+              <div class="ent run">
+                <div class="pl"><span class="ps">$</span><span class="cmd">sleep 30 &amp;&amp; ./scripts/e2e.sh</span><button type="button" class="x" title="닫기">×</button></div>
+                <div class="out"><span class="l">[e2e] booting fixture server on :4100</span><span class="l live">[e2e] 12/40 specs passed</span></div>
+                <div class="stl"><span class="r0"></span><i class="spin"></i><span>백그라운드</span><i>·</i><span>job 7f3a2c</span><i>·</i><span>0:42</span><span class="rule"></span><span class="msg">끝나면 메시지로 도착</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>상태 줄이 파랑으로 돌며 job ID와 안내 문구를 함께 보인다. 상태 줄을 누르면 HUD 칩이 번쩍인다</li>
+          <li>실시간 tail, 경과 시간 <span class="need new">새 필드</span> (A와 같음)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑦</b> 명령 슬롯</figcaption>
+        <div class="cp">
+          <div class="win">
+            <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">명령 (4)</span><span>· 누르면 이 줄 그대로 실행</span><button type="button" class="bbtn r">▾ 접기</button></div>
+            <div class="rcp">
+              <div class="rr"><button type="button" class="go" title="실행: 테스트 실행">▶</button><span class="nm">테스트 실행</span><code>make test</code><button type="button" class="x" title="이 명령 제거">×</button><span class="cm"># 단위 테스트 전체</span></div>
+              <div class="rr busy"><button type="button" class="go" disabled><i class="spin"></i></button><span class="nm">린트 + 자동 수정</span><code>make lint FIX=1</code><button type="button" class="x" title="이 명령 제거">×</button></div>
+              <div class="rr"><button type="button" class="go" title="실행: 미리보기 배포">▶</button><span class="nm">미리보기 배포</span><code>./scripts/deploy-preview.sh --env staging</code><button type="button" class="x" title="이 명령 제거">×</button><span class="cm"># 스테이징 미리보기 갱신</span></div>
+              <div class="rr"><button type="button" class="go" title="실행: 오래된 로그 정리">▶</button><span class="nm">오래된 로그 정리</span><code>find logs -name '*.log' -mtime +7 -delete
+echo "정리 완료"</code><button type="button" class="x" title="이 명령 제거">×</button></div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li><code>just --list</code>나 <code>make help</code> 같은 목록: 라벨, 명령 줄, <code>#</code> 설명 순서 <span class="need cli">클라이언트만</span></li>
+          <li>명령 줄은 잘라 내지 않는다(여러 줄 포함). 표시한 줄이 곧 실행되는 줄이라는 계약</li>
+        </ul>
+      </figure>
+    </section>
+
+    <!-- ============================== C ============================== -->
+    <section class="dir C">
+      <header class="dh">
+        <h2><span class="lt">C</span>프롬프트 캡슐</h2>
+        <p>맨 앞 <code class="bang">!</code>가 powerline 모양 모드 캡슐(<code>bash ❯ ~/work/demo</code>)로 바뀌어 입력칸 앞에 붙는다. 슬래시 명령 캡슐 <code>.ccmd</code>와 같은 자리다. 결과는 상태 세그먼트가 붙은 영수증 카드로, 슬롯은 명령 줄이 주인공인 키캡으로 보인다.</p>
+      </header>
+
+      <figure class="st">
+        <figcaption><b>①</b> 대기</figcaption>
+        <div class="cp">
+          <div class="crow">
+            <div class="cfield"><div class="ta ph">이 세션에 메시지를 보냅니다. Enter로 전송, Shift+Enter로 줄 바꿈.</div></div>
+            <button type="button" class="csend" title="보내기"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></button>
+          </div>
+          <div class="cfoot"><button type="button" class="ghost"><code>!</code> 셸 명령</button></div>
+        </div>
+        <ul class="notes">
+          <li>아래 줄의 점선 알약이 발견 경로다. 누르거나 맨 앞에 <code>!</code>를 치면 캡슐이 생긴다 <span class="need cli">클라이언트만</span></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>②</b> <code>!</code> 입력 즉시</figcaption>
+        <div class="cp sh">
+          <div class="crow hascap">
+            <span class="cap"><span class="seg m"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg>bash</span><span class="seg d"><span>~/work/demo</span></span><button type="button" class="capx" title="메시지로 돌아가기">×</button></span>
+            <div class="cfield focus"><div class="ta">make build<span class="cur"></span></div></div>
+            <button type="button" class="csend run" title="실행 (Enter)"><svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg></button>
+          </div>
+          <div class="cfoot"><span class="hint"><kbd>Enter</kbd> 실행<span class="sep">·</span>빈 칸에서 <kbd>⌫</kbd> 또는 <kbd>Esc</kbd>: 메시지로 돌아가기</span></div>
+        </div>
+        <ul class="notes">
+          <li>슬래시 명령 캡슐과 같은 모양과 동작이다(빈 칸에서 ⌫로 캡슐 제거). 셸 이름과 cwd를 세그먼트로 보인다 <span class="need new">새 필드</span></li>
+          <li><span class="need risk">주의</span> <code>!</code>가 텍스트에서 빠진다. 그래서 전송할 때 <code>"!" + 텍스트</code>로 다시 붙여야 하고, 다음이 모두 <code>!</code>가 텍스트에 있다고 가정하므로 고쳐야 한다: 초안 저장·복원, <code>cexecAttached</code>(지금은 <code>cmdSel</code>을 첨부로 본다), <code>cexecAcknowledged</code>의 접두 비교, 재시도 판정(<code>cexecPending.text</code>)</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>③</b> 짧은 출력 · 완료</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="rc ok">
+              <div class="rh"><span class="pr">❯</span><code>git status -sb</code><span class="segs"><span class="sg ok">✓ 0</span><span class="sg">0.3s</span><span class="sg dim">82 B</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="rb"><div><span class="l">## main...origin/main [ahead 2]</span><span class="l"> M src/parser.go</span><span class="l"> M src/lexer.go</span><span class="l">?? notes/todo.md</span></div></div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>오른쪽 프롬프트(p10k, starship) 모양 세그먼트: 결과, 시간, 크기</li>
+          <li>카드 전체가 검정 터미널 판 하나. 머리와 몸 사이는 점선</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>④</b> 실패 · stderr · exit 2</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="rc fail">
+              <div class="rh"><span class="pr" style="color:var(--red)">❯</span><code>make build</code><span class="segs"><span class="sg fail">✗ 2</span><span class="sg">1.1s</span><span class="sg dim">268 B</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="rb">
+                <div class="tabs"><b class="on">전체 6</b><b>stdout 1</b><b class="e">stderr 5</b></div>
+                <div><span class="l">cc -O2 -Wall -c src/main.c -o build/main.o</span><span class="l e">src/main.c:17:9: error: use of undeclared identifier 'cfg'</span><span class="l e">   17 |     load(cfg);</span><span class="l e">      |          ^</span><span class="l e">1 error generated.</span><span class="l e">make: *** [Makefile:12: build/main.o] Error 1</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>전체/stdout/stderr 거르기 탭 <span class="need new">새 필드</span> (스트림 구분). 세 방향 중 가장 무겁고, 없어도 된다</li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑤</b> 긴 출력 → 파일</figcaption>
+        <div class="cp">
+          <div class="strip">
+            <div class="rc ok">
+              <div class="rh"><span class="pr">❯</span><code>git log --stat -n 5000</code><span class="segs"><span class="sg ok">✓ 0</span><span class="sg">2.4s</span><span class="sg warn">1.4 MiB</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="rb">
+                <div class="fb"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><a href="#">~/.local/state/ws/composer-exec/cx8d41e2b7.txt</a><span class="acts"><button type="button" class="btn"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>열기</button><button type="button" class="btn"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>복사</button></span><span class="meta">출력 파일 · 1 MiB 보관 · 처음 419,430바이트는 보관되지 않았습니다.</span></div>
+                <details class="pv"><summary>미리보기: 마지막 5줄</summary><div style="margin-top:4px"><span class="l">commit 3c1f0a9e2b7d4c55e8a1f60b9d2c7e4a1b3f5d08</span><span class="l">Author: Demo User &lt;demo@example.invalid&gt;</span><span class="l">Date:   Mon Jan 6 09:12:44 2025 +0900</span><span class="l">&nbsp;</span><span class="l">    initial import</span></div></details>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>파일이 결과의 주인공이 된다. 파일 블록 하나에 열기, 복사, 보관 안내를 모은다 <span class="need have">지금 데이터</span></li>
+          <li>미리보기는 접어 둔다 <span class="need new">새 필드</span></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑥</b> 비동기 실행 중 (10초 넘김)</figcaption>
+        <div class="cp hasgap">
+          <div class="gap"><span class="xchip"><span class="xemb">$_</span><span class="xlab">e2e.sh</span><span class="xel">0:42</span></span></div>
+          <div class="strip">
+            <div class="rc run">
+              <div class="rh"><span class="pr" style="color:var(--blue)">❯</span><code>sleep 30 &amp;&amp; ./scripts/e2e.sh</code><span class="segs"><span class="sg run"><i class="spin"></i>백그라운드</span><span class="sg">0:42</span><span class="sg dim">7f3a2c</span></span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="rb">
+                <div><span class="l">[e2e] booting fixture server on :4100</span><span class="l live">[e2e] 12/40 specs passed</span></div>
+                <div class="rf">결과는 메시지로 도착합니다<a href="#">HUD 칩 ↗</a></div>
+              </div>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>카드 맨 위에 파란 줄이 지나가며 계속 실행 중임을 보인다(동작 줄이기 설정에서는 멈춤)</li>
+          <li>job ID 세그먼트를 누르면 ID가 복사된다 <span class="need have">지금 데이터</span></li>
+        </ul>
+      </figure>
+
+      <figure class="st">
+        <figcaption><b>⑦</b> 명령 슬롯</figcaption>
+        <div class="cp">
+          <div>
+            <div class="slh"><b>명령 (4)</b><span>누르면 표시된 줄 그대로 실행</span></div>
+            <div class="sgrid">
+              <button type="button" class="key hov"><span class="lb">테스트 실행 · 단위 테스트 전체</span><code>make test</code><span class="kx" title="이 명령 제거">×</span></button>
+              <button type="button" class="key busy" disabled><span class="lb"><i class="spin"></i>린트 + 자동 수정 · 실행 중</span><code>make lint FIX=1</code></button>
+              <button type="button" class="key"><span class="lb">미리보기 배포 · 스테이징 미리보기 갱신</span><code>./scripts/deploy-preview.sh --env staging</code></button>
+              <button type="button" class="key"><span class="lb">오래된 로그 정리</span><code>find logs -name '*.log' -mtime +7 -delete
+echo "정리 완료"</code></button>
+            </div>
+          </div>
+          <div class="stub">메시지 입력…</div>
+        </div>
+        <ul class="notes">
+          <li>명령 줄이 큰 글씨, 라벨이 작은 글씨인 키캡. 버튼 자체가 셸 명령으로 읽힌다 <span class="need cli">클라이언트만</span></li>
+          <li>× 제거는 hover나 포커스 때 모서리에 나타난다. 키캡 안에 둔 버튼은 중첩 버튼이 되므로 실제로는 형제 요소로 둔다</li>
+          <li>긴 줄과 여러 줄도 줄바꿈해 전부 보인다</li>
+        </ul>
+      </figure>
+    </section>
+  </div>
+
+  <h3>요소 목록 — 섞어 쓸 수 있는 단위</h3>
+  <table class="el">
+    <thead><tr><th>요소</th><th>A 셸 틴트</th><th>B 콘솔 창</th><th>C 프롬프트 캡슐</th><th>데이터·비용</th></tr></thead>
+    <tbody>
+      <tr><td>모드 진입 신호</td><td>컴포저 테두리 초록, 입력칸 검정</td><td>입력칸이 콘솔 창 맨 아래 줄로 붙음</td><td><code>!</code>가 모드 캡슐로 바뀜</td><td><span class="need cli">클라이언트만</span> <code>cexecSend</code>와 같은 첫 글자 검사를 input 이벤트에서 해 <code>data-sh</code>를 토글. 서버 문법은 그대로</td></tr>
+      <tr><td>글꼴·색</td><td colspan="3">고정폭 13px, 터미널 바탕 <code>#131417</code>, 블록 커서는 그림일 뿐(실제는 <code>caret-color</code>)</td><td><span class="need cli">클라이언트만</span> 라이트 테마에서 터미널 면을 어둡게 둘지(흔한 관례) 밝은 판을 따로 둘지 정해야 함</td></tr>
+      <tr><td>프롬프트 기호</td><td>텍스트의 <code>!</code>를 주황으로</td><td><code>!</code> + 둘째 줄부터 <code>&gt;</code>(PS2)</td><td>캡슐 <code>bash ❯ cwd</code>. <code>!</code>는 텍스트에서 빠짐</td><td>A: <code>.chl</code> 레이어 재사용 <span class="need cli">클라이언트만</span> · B의 PS2 <span class="need risk">주의</span> · C <span class="need risk">주의</span> (초안, 확인, 재시도 로직)</td></tr>
+      <tr><td>cwd 표시</td><td>없음</td><td>창 제목</td><td>캡슐 세그먼트</td><td><span class="need new">새 필드</span> 서버에 이미 있는 리드 worktree 루트(<code>ComposerRoot</code>)를 비공개 목록 응답에 실음. <code>~</code> 줄임은 클라이언트. 로컬 전용 경로라 LAN에는 보이지 않음</td></tr>
+      <tr><td>모드 배지</td><td>아래 줄 <code>bash</code></td><td>창 제목 <code>SHELL</code></td><td>캡슐 자체</td><td>고정 문구면 <span class="need cli">클라이언트만</span> · 실제 셸 이름(Git Bash)을 보이려면 <span class="need new">새 필드</span></td></tr>
+      <tr><td>나가기 안내</td><td colspan="3"><kbd>⌫</kbd>로 맨 앞 <code>!</code>를 지우면 그대로 메시지가 됨 · <kbd>Esc</kbd>는 맨 앞 <code>!</code>만 지움(C는 캡슐 제거)</td><td><span class="need risk">주의</span> Esc는 지금 Tab으로 빠져나가기를 준비함. 셸 모드에서 첫 Esc는 모드 해제, 두 번째가 그 일을 함</td></tr>
+      <tr><td>팝업 끄기</td><td colspan="3">셸 모드에서 <code>@</code> 파일 멘션과 <code>/</code> 명령 팝업을 띄우지 않음(<code>git rev-parse @{u}</code>, <code>/usr/bin/env</code> 같은 줄)</td><td><span class="need cli">클라이언트만</span></td></tr>
+      <tr><td>실행 버튼</td><td colspan="3">보내기 → 초록 ▶ / ↵ "실행 (Enter)"</td><td><span class="need cli">클라이언트만</span></td></tr>
+      <tr><td>종료 상태</td><td>칩</td><td>상태 줄</td><td>세그먼트</td><td><span class="need have">지금 데이터</span> <code>exit_code</code>, <code>signal</code>, <code>state</code>, <code>unknown</code>, <code>phase</code></td></tr>
+      <tr><td>소요·경과 시간</td><td colspan="3">완료는 소요, 실행 중은 경과(1초마다 클라이언트 시계)</td><td><span class="need new">새 필드</span> 시작·종료 시각(<code>Hosted.Get</code>의 작업 행)</td></tr>
+      <tr><td>바이트·파일 여부</td><td colspan="3">4 KiB 이하는 회색, 초과하면 주황 "→ 파일"</td><td><span class="need have">지금 데이터</span> <code>output_bytes</code></td></tr>
+      <tr><td>stdout/stderr 색</td><td>빨강 + 세로줄</td><td>빨강 + 세로줄</td><td>빨강 + 거르기 탭</td><td><span class="need new">새 필드</span> 카드에 스트림별 segments. 4 KiB 인라인일 때만 해당. 파일은 합친 텍스트라 색 없음</td></tr>
+      <tr><td>긴 출력</td><td>파일 줄 + 미리보기</td><td><code>→</code> 출력 줄 + 상태 줄 안내</td><td>파일 블록 + 접힌 미리보기</td><td>링크, 복사, 잘림 <span class="need have">지금 데이터</span> · 미리보기 <span class="need new">새 필드</span></td></tr>
+      <tr><td>비동기</td><td>파란 스피너 칩 + "HUD에서 보기"</td><td>파란 상태 줄 + job ID</td><td>훑는 줄 + 세그먼트</td><td>job ID, async <span class="need have">지금 데이터</span> · HUD 칩 번쩍임 <code>.cexec.xflash</code> 재사용 · 실시간 tail <span class="need new">새 필드</span></td></tr>
+      <tr><td>슬롯 버튼</td><td>라벨 버튼 + <code>$</code> 줄 블록</td><td><code>just --list</code> 목록</td><td>명령이 주인공인 키캡</td><td><span class="need cli">클라이언트만</span> · 세 방향 모두 저장된 줄을 잘라 내지 않음(리비전 게이트 계약)</td></tr>
+      <tr><td>접근성</td><td colspan="3">모드가 바뀌면 입력칸의 <code>aria-description</code>을 "셸 명령 모드"로. 결과 띠는 계속 <code>role="log"</code>. 동작 줄이기 설정에서 커서, 스피너, 훑는 줄을 멈춤</td><td><span class="need cli">클라이언트만</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="rec">
+    <b>추천: A의 입력칸 + B의 결과 기록 + C의 슬롯 키캡을 두 단계로</b>
+    <ol>
+      <li><b>1단계, 클라이언트만:</b> A의 입력칸(<code>!</code>는 텍스트에 그대로, 칠하기만), B 방식의 콘솔 창 결과 띠(프롬프트 줄, 출력, 상태 줄; 상태에는 지금 있는 종료 코드, 바이트, job ID만), C의 슬롯 키캡, 팝업 끄기, Esc 규칙. 서버, 라우트, i18n 키 몇 개 말고는 바꾸지 않는다.</li>
+      <li><b>2단계, 추가 필드(T0):</b> 카드에 시작·종료 시각, 스트림 segments, 미리보기 tail, 목록 응답에 cwd와 셸 이름. 들어오면 시간, stderr 색, cwd 제목이 켜진다. 없으면 그 요소만 빠진다.</li>
+      <li><b>C의 캡슐 입력은 하지 않는다.</b> 가장 "모드"처럼 보이지만 <code>!</code>를 텍스트 밖으로 빼므로, 네 번의 리뷰를 거친 초안, 확인, 재시도 로직(<code>cexecAcknowledged</code>, <code>cexecPending</code>, <code>cexecAttached</code>)을 다시 건드려야 한다.</li>
+    </ol>
+  </div>
+
+  <h3>추천 조합 미리보기 (실제 폭 760px)</h3>
+  <div class="ctx A">
+    <div class="bub"><div class="mh"><b>lead</b> · 14:01</div>테스트 명령을 슬롯으로 등록해 두었습니다. 빌드가 깨지면 로그를 붙여 주세요.</div>
+    <div class="cp sh hasgap">
+      <div class="gap"><span class="xchip"><span class="xemb">$_</span><span class="xlab">e2e.sh</span><span class="xel">0:42</span></span></div>
+      <div class="C">
+        <div class="slh"><b>명령 (3)</b><span>누르면 표시된 줄 그대로 실행</span></div>
+        <div class="sgrid">
+          <button type="button" class="key"><span class="lb">테스트 실행</span><code>make test</code></button>
+          <button type="button" class="key"><span class="lb">린트 + 자동 수정</span><code>make lint FIX=1</code></button>
+          <button type="button" class="key"><span class="lb">미리보기 배포</span><code>./scripts/deploy-preview.sh --env staging</code></button>
+        </div>
+      </div>
+      <div class="B">
+        <div class="win">
+          <div class="bar"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><span class="sh">bash</span><span class="cwd">~/work/demo</span><button type="button" class="bbtn r">지우기</button></div>
+          <div class="log">
+            <div class="ent ok">
+              <div class="pl"><span class="ps">$</span><span class="cmd">git status -sb</span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="out"><span class="l">## main...origin/main [ahead 2]</span><span class="l"> M src/parser.go</span></div>
+              <div class="stl"><span class="r0"></span><span>✓ 0</span><i>·</i><span>0.3s</span><i>·</i><span>41 B</span><span class="rule"></span><span class="t">14:02:11</span></div>
+            </div>
+            <div class="ent fail">
+              <div class="pl"><span class="ps">$</span><span class="lbl">빌드</span><span class="cmd">make build</span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="out"><span class="l">cc -O2 -Wall -c src/main.c -o build/main.o</span><span class="l e">src/main.c:17:9: error: use of undeclared identifier 'cfg'</span><span class="l e">make: *** [Makefile:12: build/main.o] Error 1</span></div>
+              <div class="stl"><span class="r0"></span><span>✗ exit 2</span><i>·</i><span>1.1s</span><i>·</i><span>168 B</span><span class="rule"></span><span class="t">14:03:40</span></div>
+            </div>
+            <div class="ent run">
+              <div class="pl"><span class="ps">$</span><span class="cmd">sleep 30 &amp;&amp; ./scripts/e2e.sh</span><button type="button" class="x" title="닫기">×</button></div>
+              <div class="out"><span class="l live">[e2e] 12/40 specs passed</span></div>
+              <div class="stl"><span class="r0"></span><i class="spin"></i><span>백그라운드</span><i>·</i><span>job 7f3a2c</span><i>·</i><span>0:42</span><span class="rule"></span><span class="msg">끝나면 메시지로 도착</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="crow">
+        <div class="cfield focus"><div class="ta"><span class="bang">!</span>tail -n 50 build/build.log<span class="cur"></span></div></div>
+        <button type="button" class="csend run" title="실행 (Enter)"><svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg></button>
+      </div>
+      <div class="cfoot">
+        <span class="modeb"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg>bash</span>
+        <span class="hint"><kbd>Enter</kbd> 실행<span class="sep">·</span><kbd>Esc</kbd> 또는 <kbd>⌫</kbd>로 <code>!</code>를 지우면 메시지</span>
+      </div>
+    </div>
+  </div>
+</div>
