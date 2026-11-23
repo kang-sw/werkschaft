@@ -56,8 +56,11 @@ type EnsureOptions struct {
 	// Replace requests one explicit equal-core replacement, even for the
 	// same content. It never permits downgrading a newer numeric core.
 	Replace bool
-	// Electron opts in to OS-accepted successor creation before drain.
+	// SpawnBeforeShutdown waits for a gated successor's readiness before drain.
 	SpawnBeforeShutdown bool
+	// InheritedStarterLock means the calling launcher holds launcher-start.lock
+	// until this invocation exits.
+	InheritedStarterLock bool
 	// PreserveRunningLAN uses each fresh healthy observation, not an earlier probe.
 	PreserveRunningLAN bool
 	// DesktopStart limits the starter to one handoff of the shell's observed
@@ -65,7 +68,7 @@ type EnsureOptions struct {
 	DesktopStart bool
 	Predecessor  *DaemonIdentity
 	// PrepareSuccessor creates a process gated on the returned admission
-	// callback. It is needed only when a desktop start replaces a daemon.
+	// callback, returning only after the child finishes pre-lock initialization.
 	PrepareSuccessor func(args []string) (admit func(bool) error, err error)
 	// Port is the configured dashboard.port, passed to a started daemon as
 	// its --port flag.
@@ -129,10 +132,9 @@ func DaemonArgs(port int, lan bool, buildTime int64) []string {
 //     LAN mode is opts.LAN, unless opts.Replace explicitly requests a swap.
 //     Equal numeric cores ignore suffix, build time and content hash.
 //   - A healthy older daemon, an explicitly selected equal-core daemon,
-//     or one as new in the other LAN mode, gets the
-//     token-authenticated shutdown request; then a new daemon is started,
-//     which waits for the old one to release the lock. So a changed LAN value
-//     applies at the next ws-mcp start, without waiting for an upgrade.
+//     or one as new in the other LAN mode, gets a prepared successor before
+//     the token-authenticated shutdown request when SpawnBeforeShutdown is
+//     enabled. Admission then lets the successor wait for the singleton lock.
 //   - An unreachable daemon (no endpoint file, a refused or unanswered
 //     /health, an answer from another process) is never treated as dead:
 //     a new daemon is started and the lock decides. When the recorded daemon
@@ -158,9 +160,8 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	if logw == nil {
 		logw = io.Discard
 	}
-	// Only strict Electron starters join the Python launcher's persistent
-	// launcher-start.lock; ordinary plugins already hold it before exec.
-	if opts.SpawnBeforeShutdown {
+	// Join the persistent launcher lock unless our caller owns it.
+	if opts.SpawnBeforeShutdown && !opts.InheritedStarterLock {
 		lock := flock.New(filepath.Join(opts.Dir, "launcher-start.lock"))
 		ok, err := lock.TryLockContext(ctx, 50*time.Millisecond)
 		if err != nil {
@@ -196,29 +197,17 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 				}
 				return OutcomeStarted, nil
 			case err == nil:
-				if opts.DesktopStart {
-					if err := replaceFromDesktop(ctx, client, opts, previous); err != nil {
+				if opts.SpawnBeforeShutdown {
+					if err := replaceWithPreparedSuccessor(ctx, client, opts, previous, info, logw); err != nil {
 						return OutcomeUnavailable, err
 					}
-					if !waitForSuccessor(ctx, client, opts, previous.Token, logw) {
+					if !waitForSuccessor(ctx, client, opts, previous.Token, true, logw) {
 						return OutcomeUnavailable, nil
 					}
 					return OutcomeReplaced, nil
 				}
-				if opts.SpawnBeforeShutdown {
-					// A successful Spawn means OS-accepted independent process creation,
-					// not health readiness; lock wait must cover the drain below.
-					if err := opts.Spawn(DaemonArgs(opts.Port, opts.LAN, opts.BuildTime)); err != nil {
-						return OutcomeUnavailable, fmt.Errorf("dashboard: successor preflight: %w", err)
-					}
-					spawns++
-				}
 				if err := RequestShutdown(ctx, client, previous); err != nil {
-					// The older daemon still serves; leave it rather than race it.
 					fmt.Fprintf(logw, "dashboard: older daemon %s refused shutdown: %v\n", info.Version, err)
-					if opts.SpawnBeforeShutdown {
-						return OutcomeUnavailable, fmt.Errorf("dashboard: authenticated drain uncertain: %w", err)
-					}
 					return OutcomeRunning, nil
 				}
 				fmt.Fprintf(logw, "dashboard: replacing daemon %s (lan %v, build %d) with %s (lan %v, build %d)\n", info.Version, info.LAN, info.BuildTime, opts.Version, opts.LAN, opts.BuildTime)
@@ -230,15 +219,6 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 		if opts.DesktopStart && readErr != nil && opts.Predecessor != nil {
 			return OutcomeUnavailable, errors.New("dashboard: observed predecessor endpoint became unavailable")
 		}
-		if opts.SpawnBeforeShutdown && spawns > 0 {
-			opts.Replace = false // Explicit request is consumed by the first spawn.
-			// The successor was already created. A late child/lock/health failure
-			// is unavailable, never evidence that the predecessor survived.
-			if !waitForSuccessor(ctx, client, opts, previous.Token, logw) {
-				return OutcomeUnavailable, nil
-			}
-			continue
-		}
 		if spawns >= maxSpawns {
 			return OutcomeUnavailable, nil
 		}
@@ -249,7 +229,7 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 		if err := opts.Spawn(DaemonArgs(opts.Port, opts.LAN, opts.BuildTime)); err != nil {
 			return OutcomeUnavailable, fmt.Errorf("dashboard: start daemon: %w", err)
 		}
-		if !waitForSuccessor(ctx, client, opts, previous.Token, logw) {
+		if !waitForSuccessor(ctx, client, opts, previous.Token, false, logw) {
 			return OutcomeUnavailable, nil
 		}
 		if opts.DesktopStart {
@@ -258,12 +238,16 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	}
 }
 
-func replaceFromDesktop(ctx context.Context, client *http.Client, opts EnsureOptions, previous Endpoint) error {
+func replaceWithPreparedSuccessor(ctx context.Context, client *http.Client, opts EnsureOptions, previous Endpoint, previousHealth HealthInfo, logw io.Writer) error {
 	if opts.PrepareSuccessor == nil {
-		return errors.New("dashboard: no desktop successor preflight")
+		return errors.New("dashboard: no successor preflight")
 	}
-	// Retain the dashboard origin and its webview-local drafts.
-	admit, err := opts.PrepareSuccessor(DaemonArgs(previous.Port, opts.LAN, opts.BuildTime))
+	port := opts.Port
+	if opts.DesktopStart {
+		// Retain the dashboard origin and its webview-local drafts.
+		port = previous.Port
+	}
+	admit, err := opts.PrepareSuccessor(DaemonArgs(port, opts.LAN, opts.BuildTime))
 	if err != nil {
 		return fmt.Errorf("dashboard: successor preflight: %w", err)
 	}
@@ -280,12 +264,14 @@ func replaceFromDesktop(ctx context.Context, client *http.Client, opts EnsureOpt
 		return errors.New("dashboard: predecessor endpoint became unreadable")
 	}
 	health, err := Health(ctx, client, current)
-	if err != nil || !opts.Predecessor.matches(current, health) {
+	if err != nil || current != previous || health.StartedAt != previousHealth.StartedAt ||
+		health.Version != previousHealth.Version || (opts.DesktopStart && !opts.Predecessor.matches(current, health)) {
 		return errors.New("dashboard: predecessor changed before drain")
 	}
 	if rechecked, err := ReadEndpoint(opts.Dir); err != nil || rechecked != current {
 		return errors.New("dashboard: predecessor endpoint changed before drain")
 	}
+	fmt.Fprintf(logw, "dashboard: successor %s ready; requesting shutdown of daemon %s\n", opts.Version, health.Version)
 	if err := RequestShutdown(ctx, client, current); err != nil {
 		return fmt.Errorf("dashboard: authenticated drain uncertain: %w", err)
 	}
@@ -314,7 +300,7 @@ func keepRunning(info HealthInfo, opts EnsureOptions) bool {
 // that ends unmet logs its last endpoint-read and health errors: a daemon can
 // serve while its endpoint file stays unreadable to others (seen under heavy
 // antivirus on Windows), and only these lines tell that apart from no daemon.
-func waitForSuccessor(ctx context.Context, client *http.Client, opts EnsureOptions, previousToken string, logw io.Writer) bool {
+func waitForSuccessor(ctx context.Context, client *http.Client, opts EnsureOptions, previousToken string, prepared bool, logw io.Writer) bool {
 	wait := opts.StartWait
 	if wait <= 0 {
 		wait = DefaultStartWait
@@ -343,8 +329,14 @@ func waitForSuccessor(ctx context.Context, client *http.Client, opts EnsureOptio
 			readErr = errors.New("endpoint file names no successor yet")
 		default:
 			readErr = nil
-			if _, healthErr = Health(ctx, client, ep); healthErr == nil {
-				return true
+			var info HealthInfo
+			info, healthErr = Health(ctx, client, ep)
+			if healthErr == nil {
+				if !prepared || (info.Version == opts.Version && info.LAN == opts.LAN &&
+					(opts.ContentHash == "" || info.ContentHash == opts.ContentHash)) {
+					return true
+				}
+				healthErr = errors.New("healthy endpoint does not match the prepared successor")
 			}
 		}
 		select {

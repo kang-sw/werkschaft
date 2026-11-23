@@ -95,7 +95,7 @@ log=[]; boardKeep([other2]);
 check("a node of another board card is not captured",log.length === 0);
 var section={name:"topic",nodeType:1,matches:function(){return true;}};
 log=[];watchBoard(section);watchBoard(section);
-check("watch once",log.join() === "watch:topic");
+check("legacy watch hook leaves card ownership alone",log.length === 0);
 var other={scrollTop:5}, transient={scrollTop:60}; owned=transient;
 restoreScroll([[main,100],[pins,100],[other,50],[transient,0]]);
 check("scroll restoration waits for the frame", other.scrollTop===5 && transient.scrollTop===60);

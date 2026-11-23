@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsusercmd"
 )
 
@@ -210,5 +212,45 @@ func TestUserCommandsReloadAfterARestartAndAnOldDaemon(t *testing.T) {
 	}
 	if len(changed) != 2 || changed[0] != "lead" {
 		t.Fatalf("change signals %v", changed)
+	}
+}
+
+func TestUserCommandsKeepAClosedOwnerOnDashboardStartup(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	const id = "closedowner"
+	sd := wsdashboard.SessionDir(dir, id)
+	if err := os.MkdirAll(sd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(wsagent.Record{ReplyID: id, WSKey: "fixture", Root: home,
+		Backend: wsagent.BackendClaude, Lead: true, ClosedAt: "2026-11-22T12:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sd, wsdashboard.AgentRecordFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := wsusercmd.Open(filepath.Join(dir, wsusercmd.StoreName), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, setErr := reg.Set(id, home, wsusercmd.Input{ID: "build", Label: "Build", Line: "make"})
+	closeErr := reg.Close()
+	if err := errors.Join(setErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	runner := wsagent.NewRunner(wsagent.Options{Dir: dir})
+	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{Dir: dir, Home: home, Agents: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	commands, err := openUserCommands(dir, runner, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commands.Close()
+	if cmd, ok := commands.reg.Get(id, home, "build"); !ok || cmd.Line != "make" {
+		t.Fatal("startup discarded the closed owner's command")
 	}
 }

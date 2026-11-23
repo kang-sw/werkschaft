@@ -387,8 +387,8 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		ShellScript:      template.JS(get("shell.js")),
 		CompanionScript:  template.JS(get("dashboard-companion.js")),
 		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
-		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css")),
-		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
+		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css")),
+		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
 		OverviewScript:   template.JS(get("overview.js")),
 		CardsScript:      template.JS(get("gallery.js") + "\n;\n" + get("cards.js")),
@@ -474,8 +474,4 @@ func renderSettingsPage(lang, theme string) (string, error) {
 	var buf bytes.Buffer
 	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{assets.data, theme})
 	return buf.String(), err
-}
-
-func (p shellPageData) Settings() bool {
-	return strings.HasPrefix(p.Src, "/settings?")
 }

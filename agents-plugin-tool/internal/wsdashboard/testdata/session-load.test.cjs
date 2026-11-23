@@ -161,34 +161,26 @@ test('per-session scroll survives fresh frames; board uses its placement owner',
   back.c.restoreSessionView(); back.flush();
   assert.equal(back.nodes.convo.scrollTop, 140); assert.equal(back.doc.scrollingElement.scrollTop, 900);
   assert.equal(back.c.stick, false);
-  assert.equal(back.placements.length, 1); assert.equal(back.placements[0].ref, back.panel);
-  assert.equal(back.placements[0].options.readingOffset, 8);
+  assert.equal(back.placements.length, 0, 'session views leave current card placement to the board anchor');
+  assert.deepEqual(JSON.parse(Object.values(storage)[0])[0].board, []);
   const hidden = scrollFixture(storage, '/s/c'); hidden.c.restoreSessionView(); hidden.nodes['r-tree'].shown = false;
   hidden.c.paneScroll['r-tree'] = 777; hidden.c.wsSaveSessionView();
   const reveal = scrollFixture(storage, '/s/c'); reveal.c.restoreSessionView(); reveal.flush();
   assert.equal(reveal.nodes['r-tree'].scrollTop, 777, 'hidden pane retains its last visible offset');
 });
 
-test('I1: board content anchor follows late growth and pending reload restore wins', () => {
+test('legacy session board records still restore through the placement owner', () => {
   const storage = {}, first = scrollFixture(storage);
   first.c.restoreSessionView(); first.c.wsSaveSessionView();
+  const key = Object.keys(storage)[0], rows = JSON.parse(storage[key]);
+  rows[0].board = [{scroller: 'bcol', topic: 'topic-a', key: 'p1', offset: 8, top: 620}];
+  storage[key] = JSON.stringify(rows);
   const back = scrollFixture(storage); back.c.restoreSessionView(); back.flush();
   const anchor = back.placements[0];
   assert.equal(anchor.ref, back.panel); assert.equal(anchor.options.readingOffset, 8);
   assert.equal(anchor.position(), 620);
   back.growBoard(300);
-  assert.equal(anchor.position(), 920, 'growing content above the panel must move its placement, not pin the old pixel');
-
-  const reload = scrollFixture(storage);
-  storage[reload.reloadKey] = JSON.stringify({at: Date.now(), page: '/s/a?frame=1', records: [{}]});
-  reload.doc.scrollingElement.scrollTop = 3;
-  // Model boardRestoreReload's earlier rAF: it places the keyed node then
-  // consumes its record before the session-view callback gets its turn.
-  reload.frames.push(() => { reload.c.wbHistory.place(reload.panel, {readingOffset: 17}); delete storage[reload.reloadKey]; });
-  reload.c.restoreSessionView(); reload.flush();
-  assert.equal(reload.placements.length, 1, 'session-view must not override the earlier reload anchor');
-  assert.equal(reload.placements[0].options.readingOffset, 17);
-  assert.equal(reload.doc.scrollingElement.scrollTop, 3, 'pending reload owns document placement too');
+  assert.equal(anchor.position(), 920);
 });
 
 test('I2/M4: shifted conversation window anchors identity; missing/bottom follows and cancellation leaves stick alone', () => {

@@ -66,7 +66,7 @@ const CHOICES = {
     const errors = [];
     page.on('pageerror', e => { if (!/serviceWorker/.test(e.message)) errors.push('pageerror: ' + (e.stack || e.message)); });
     page.on('console', msg => {
-      if (msg.type() === 'error') errors.push('console: ' + msg.text());
+      if (msg.type() === 'error') errors.push('console: ' + msg.text() + ' ' + msg.location().url);
     });
 
     let choicesRequests = 0;
@@ -75,10 +75,12 @@ const CHOICES = {
       await route.fulfill({ json: CHOICES, headers: { 'Cache-Control': 'no-store' } });
     });
 
+    // The modal's index backdrop loads tracker stores; this fixture has no tracker backend.
+    await page.route('**/tracker/stores', route => route.fulfill({json: {rev: 1, stores: []}}));
     await page.goto(login);
     await page.waitForURL(url => url.pathname === '/settings' && !url.searchParams.has('login'));
     const base = new URL(page.url()).origin;
-    const frame = () => page.frameLocator('iframe.sframe.on');
+    const frame = () => page.frameLocator('#workflow-settings[open] > iframe');
 
     async function setTheme(theme) {
       await context.addCookies([{ name: 'ws_dashboard_theme', value: theme, url: base }]);
@@ -280,6 +282,8 @@ const CHOICES = {
         const scontent = document.querySelector('.scontent');
         const tierScroll = document.querySelector('.tier-scroll');
         return {
+          viewportWidth: innerWidth,
+          viewportHeight: innerHeight,
           width: rect.width,
           height: rect.height,
           left: rect.left,
@@ -290,24 +294,14 @@ const CHOICES = {
           tierOverflowX: !!tierScroll && tierScroll.scrollWidth > tierScroll.clientWidth + 1
         };
       }, { vw });
-      assert.equal(m.maxWidth, '1280px', `${label}: computed max-width`);
+      assert.equal(m.maxWidth, 'none', `${label}: computed max-width`);
       assert.equal(m.docOverflowX, false, `${label}: document horizontal overflow`);
       assert.equal(m.contentOverflowX, false, `${label}: .scontent horizontal overflow`);
       assert.equal(m.tierOverflowX, false, `${label}: .tier-scroll horizontal overflow`);
-      if (vw >= 1600) {
-        const col2Width = vw - 388;
-        const expectedWidth = Math.min(1280, col2Width);
-        const col2Center = (vw + 356) / 2;
-        assert(Math.abs(m.width - expectedWidth) <= 2, `${label}: expected width ~${expectedWidth}, got ${m.width}`);
-        assert(m.width <= 1280.5, `${label}: width ${m.width} exceeds 1280px`);
-        assert(Math.abs((m.left + m.width / 2) - col2Center) <= 2, `${label}: expected centered in column 2 (${col2Center}), got ${m.left + m.width / 2}`);
-        assert(m.height >= vh - 30, `${label}: expected full height (>=${vh - 30}), got ${m.height}`);
-      } else {
-        const expectedWidth = Math.min(1280, vw - 32);
-        assert(Math.abs(m.width - expectedWidth) <= 2, `${label}: expected width ~${expectedWidth}, got ${m.width}`);
-        assert(Math.abs((m.left + m.width / 2) - vw / 2) <= 2, `${label}: expected centered (${vw / 2}), got ${m.left + m.width / 2}`);
-        assert(m.height >= vh - 80, `${label}: expected full height (>=${vh - 80}), got ${m.height}`);
-      }
+      const expectedWidth = m.viewportWidth - 32;
+      assert(Math.abs(m.width - expectedWidth) <= 2, `${label}: expected width ~${expectedWidth}, got ${m.width}`);
+      assert(Math.abs(m.left + m.width / 2 - m.viewportWidth / 2) <= 2, `${label}: centered in modal iframe`);
+      assert(m.height >= m.viewportHeight - 80, `${label}: fills modal height`);
       return m;
     }
 

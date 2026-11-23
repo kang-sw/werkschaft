@@ -10,11 +10,15 @@ var wsSettingsChoiceLabels = {
   var view = document.querySelector("[data-settings-view]");
   if (!view) return;
   var query = new URLSearchParams(location.search);
+  var modal = query.get("frame") === "1" && query.get("modal") === "1";
   query.delete("frame");
+  query.delete("modal");
   if (window.parent === window) {
     location.replace(window.WsShell.pagePath(location));
     return;
   }
+
+  if (modal) document.documentElement.setAttribute("data-settings-modal", "");
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
   var sections = ["workflow", "agents", "compaction", "adapters", "companion", "profiles", "prompts"];
@@ -94,6 +98,7 @@ var wsSettingsChoiceLabels = {
   var specs = new Map(catalog.map(function (spec) { return [spec.key, spec]; }));
   var families = catalog.filter(function (spec) { return spec.key.endsWith(".*"); });
   var extension = window.WsSettingsExtension || {};
+  var preferences = window.WsSettingsPreferences;
   var content = view.querySelector("[data-settings-content]");
   var search = view.querySelector("[data-settings-search]");
   var count = view.querySelector("[data-settings-count]");
@@ -123,6 +128,15 @@ var wsSettingsChoiceLabels = {
     window.parent.postMessage(Object.assign({wsShell: kind}, fields), location.origin);
   }
 
+  function navigate(href) {
+    send(modal ? "settings-navigate" : "nav", {href: href});
+  }
+
+  var close = view.querySelector("[data-settings-close]");
+  if (close) close.addEventListener("click", function () {
+    if (modal) send("settings-close");
+  });
+
   function syncShell() {
     send("head", {html: null, qs: "", pad: 0, top: 0});
     send("title", {title: document.title});
@@ -150,11 +164,34 @@ var wsSettingsChoiceLabels = {
   document.addEventListener("keydown", function (event) {
     if (event.code === "Backquote" && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      send("key", {key: "rail"});
-    } else if (event.key === "Escape") {
+      if (!modal) send("key", {key: "rail"});
+    } else if (event.key === "Escape" && !modal) {
       send("key", {key: "esc"});
     }
   });
+
+  if (modal) document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+    // Consume before target handlers or native search clearing can erase the
+    // inner state; one key press must never also dismiss the outer modal.
+    var combo = window.WsSettingsCombobox;
+    if (combo && combo.closeActive && combo.closeActive()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (document.querySelector("dialog[open]")) return;
+    if (event.target === search && search.value) {
+      event.preventDefault();
+      event.stopPropagation();
+      search.value = "";
+      search.dispatchEvent(new Event("input", {bubbles: true}));
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) send("settings-close");
+  }, true);
 
   function projectForWorktree(worktree) {
     var gears = window.parent.document.querySelectorAll(".rail [data-settings-worktree]");
@@ -169,7 +206,7 @@ var wsSettingsChoiceLabels = {
 
   function scopeHref(name) {
     if (name === "synced") return "";
-    var rememberedProject = new URLSearchParams(window.parent.location.hash.slice(1)).get("project");
+    var rememberedProject = new URLSearchParams((modal ? location.hash : window.parent.location.hash).slice(1)).get("project");
     return window.WsShell.settingsScopeHref(name, selection, projectForWorktree, rememberedProject);
   }
 
@@ -212,7 +249,7 @@ var wsSettingsChoiceLabels = {
     var active = name === scope, planned = name === "synced";
     var href = scopeHref(name);
     var cls = "prec-node" + (planned ? " synced" : "") + (active ? " active " + name + "-mode" : "");
-    var node = button(cls, scopeName(name), function () { send("nav", {href: href}); });
+    var node = button(cls, scopeName(name), function () { navigate(href); });
     node.dataset.settingsScope = name;
     node.setAttribute("aria-current", active ? "page" : "false");
     node.disabled = !href;
@@ -336,6 +373,42 @@ var wsSettingsChoiceLabels = {
     throw err;
   }
 
+  function preferenceTarget(name) {
+    if (name === scope) return selection;
+    var href = scopeHref(name);
+    if (!href) return null;
+    var params = new URL(href, location.origin).searchParams;
+    return {scope: name, target: params.get("target") || "", context: selection.context};
+  }
+
+  async function changePreferences(operations, target) {
+    try {
+      if (target.scope === "repo") {
+        extension.queue(operations, target);
+        return;
+      }
+      for (var operation of operations) {
+        var result = await request("/api/config/" + operation.action, Object.assign({}, target, {
+          key: operation.key, selectors: operation.selectors, value: operation.value
+        }));
+        var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
+        snapshot.entries = snapshot.entries.map(function (entry) {
+          var id = entryID(entry), fresh = affected.get(id);
+          affected.delete(id);
+          return fresh ? Object.assign({}, fresh, {editable: entry.editable, disabled_reason: entry.disabled_reason}) : entry;
+        });
+        for (var fresh of affected.values()) {
+          // A new slot is writable in every settings scope except built-in.
+          snapshot.entries.push(Object.assign({}, fresh, {editable: scope !== "builtin"}));
+        }
+      }
+    } finally {
+      renderCounts();
+      extension.onMutate({section: activeSection, list: content.querySelector(".klist"),
+        entries: sectionEntries(activeSection), bucketState, bucketTitle});
+    }
+  }
+
   function buildLayerDrawer(entry, spec, drawerId) {
     var drawer = el("div", "layer-drawer");
     drawer.id = drawerId;
@@ -389,7 +462,7 @@ var wsSettingsChoiceLabels = {
       if (href) {
         chip.title = (layer.status === "context_missing" ? tr("js.settings.context_missing") :
           !layer.present && layer.evaluated ? tr("js.settings.no_override") : from + " · " + valText);
-        chip.addEventListener("click", function () { send("nav", {href: href}); });
+        chip.addEventListener("click", function () { navigate(href); });
       } else {
         chip.disabled = true;
         chip.title = layer.status === "context_missing" ? tr("js.settings.context_missing") :
@@ -1070,6 +1143,18 @@ var wsSettingsChoiceLabels = {
       byKey.get(entry.key).push(entry);
     }
     var list = el("div", "klist");
+    if (activeSection === "prompts" && preferences) {
+      var slots = preferences.render({
+        selection, entries: () => sectionEntries("prompts"),
+        matches: entry => matches(entry, specFor(entry.key)),
+        unfiltered: filter === "all" && !search.value.trim(),
+        targetFor: preferenceTarget, scopeName, scopeHref, navigate, submit: changePreferences, statusText,
+        pending: entry => extension.hasDraft(entry, selection),
+        drafts: () => extension.operations(selection),
+        discard: entry => extension.discard(entry, selection)
+      });
+      if (slots) list.append(slots);
+    }
     var rowGroup = null;
     function appendRow(node) {
       if (!rowGroup) {
@@ -1082,6 +1167,7 @@ var wsSettingsChoiceLabels = {
       if (spec.section !== (activeSection === "adapters" ? adapter : activeSection)) continue;
       for (var [key, rows] of byKey) {
         if (specFor(key) !== spec) continue;
+        if (preferences && preferences.replaces(key)) continue;
         if (spec.control === "tier") {
           if (rows.some(function (entry) { return matches(entry, spec); })) {
             rowGroup = null;

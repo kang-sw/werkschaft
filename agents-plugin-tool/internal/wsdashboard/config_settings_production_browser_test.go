@@ -43,7 +43,7 @@ func TestSettingsProductionBrowser(t *testing.T) {
 		t.Fatalf("initialize session worktree: %v\n%s", err, out)
 	}
 	global := filepath.Join(home, "config.json")
-	if err := os.WriteFile(global, []byte(`{"overrides":{"workflow.lang":"English"}}`), 0o600); err != nil {
+	if err := os.WriteFile(global, []byte(`{"overrides":{"workflow.lang":"English","prompt.UserPreferenceSection":"A preference saved before harness buckets."}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	source := mcp.NewDashboardSessionSource()

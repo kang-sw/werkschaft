@@ -220,6 +220,8 @@ def current_health(launcher, daemon_dir: Path, timeout: float = 3.0) -> tuple[di
 def run_daemon_start(launcher, staged: Path, build_time: int, plugin_dir: Path = DAEMON_PACKAGE,
                      *, timeout: float = START_TIMEOUT_SECONDS) -> dict:
     env = dict(os.environ)
+    # restart_daemon retains the starter lock through start and rollback.
+    env["WS_MCP_LAUNCHER_START_LOCK_HELD"] = "1"
     # Set, not defaulted: a shell inside a harness session can inherit a
     # versioned plugin-cache path, and this command means this checkout.
     env["WS_RSRC_ROOT"] = str(plugin_dir / "rsrc")

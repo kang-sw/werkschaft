@@ -64,7 +64,10 @@ func (f *pageFixture) attachments(t *testing.T) []string {
 
 func (f *pageFixture) postMessage(t *testing.T, body string) (int, string) {
 	t.Helper()
-	code, _, raw := postJSON(t, f.base+"/s/livesession/message", f.base, body)
+	// Attachment writes and concurrent sends can exceed the shared POST
+	// timeout on Windows runners; these tests check contents, not latency.
+	client := &http.Client{Timeout: 30 * time.Second, Transport: localhostTestHTTPTransport()}
+	code, _, raw := postJSONWith(t, client, f.base+"/s/livesession/message", f.base, body)
 	return code, raw
 }
 
@@ -124,7 +127,7 @@ func TestConcurrentSendsEachKeepTheirOwnEntry(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			code, _, raw := postJSON(t, f.base+"/s/livesession/message", f.base, `{"text":"s`+strconv.Itoa(i)+` [Image #1]","images":`+numberedImagesJSON(1)+`}`)
+			code, raw := f.postMessage(t, `{"text":"s`+strconv.Itoa(i)+` [Image #1]","images":`+numberedImagesJSON(1)+`}`)
 			if code != http.StatusOK {
 				t.Errorf("send %d = %d: %s", i, code, raw)
 			}

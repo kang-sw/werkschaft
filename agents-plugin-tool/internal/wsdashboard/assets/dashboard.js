@@ -552,7 +552,7 @@
   function setTheme(v, quiet) {
     if (v !== "light" && v !== "dark") v = "";
     if (framed && !quiet) shPost("theme", { theme: v });
-    if (shell && !quiet) shFrames.forEach(function (x) { shSend(x, "theme", { theme: v }); });
+    if (shell && !quiet) shBroadcastTheme(v);
     doc.cookie = THEME_COOKIE + "=" + v + "; Path=/; SameSite=Lax; Max-Age=" + (v ? 31536000 : 0);
     if (v) root.setAttribute("data-theme", v);
     else root.removeAttribute("data-theme");

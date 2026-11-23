@@ -41,6 +41,12 @@ type AgentHost interface {
 	Close()
 }
 
+// AgentStartupHost restores held sessions before publication and starts
+// closed-session presentation recovery when the listener accepts requests.
+type AgentStartupHost interface {
+	StartForPublication(notify func(replyID, project string), serving <-chan struct{})
+}
+
 // AgentPageInputHost distinguishes an explicit composer send from passive
 // inbox notifications. PageInput admits write against the conversation's
 // in-memory lifetime, then asynchronously restores a hidden session only if
@@ -65,6 +71,14 @@ type AgentMCPTokenHost interface {
 	// the token is void (its process ended, a new start re-issued it, or the
 	// conversation closed). ok is false for an unknown or void token.
 	ResolveMCPToken(token string) (hello ProxyHello, void <-chan struct{}, ok bool)
+}
+
+// AgentMCPTokenDiagnostics is an optional AgentMCPTokenHost that reports a
+// reason for a failed resolution. The HTTP route logs the reason locally,
+// so implementations must use fixed messages without request or record data.
+// An empty reason means the token resolved.
+type AgentMCPTokenDiagnostics interface {
+	ResolveMCPTokenWithReason(token string) (hello ProxyHello, void <-chan struct{}, reason string)
 }
 
 // AgentMCPCallHost is an optional AgentMCPTokenHost that counts the tool

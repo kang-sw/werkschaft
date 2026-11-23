@@ -324,13 +324,11 @@ func (d *Daemon) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeHTMLStatus(w, status, html)
 		return
 	}
-	src := r.URL.Query()
-	src.Set("frame", "1")
+	status := http.StatusOK
 	if failure.status != 0 {
-		d.serveShellStatus(w, r, nil, "/settings?"+src.Encode(), failure.status)
-		return
+		status = failure.status
 	}
-	d.serveShell(w, r, nil, "/settings?"+src.Encode())
+	d.serveShellStatus(w, r, nil, "/?frame=1", status)
 }
 
 func (d *Daemon) handleConfigSnapshot(w http.ResponseWriter, r *http.Request) {

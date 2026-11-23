@@ -50,11 +50,19 @@ body.tk-paged .ixmain { display: none; }
 @media (min-width: 1600px) { :root[data-frame] .dash.index { --tkmaxw: none; } }
 :root[data-frame] .rail-ph { visibility: hidden; box-shadow: none; background: none; }
 
-@media (min-width: 1600px) {
-  :root[data-settings-shell] .dash > .dwrap { box-sizing: border-box; padding-top: 12px; }
-  :root[data-settings-shell] .dwrap > .top { display: none; }
-  :root[data-settings-shell] #rail {
-    height: calc(100dvh - 24px);
-    margin-top: 0;
-  }
+#workflow-settings {
+  box-sizing: border-box;
+  width: min(1280px, calc(100% - 32px));
+  height: min(960px, calc(100% - 32px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: var(--wb-radius);
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  overflow: hidden;
 }
+#workflow-settings[open] { display: flex; flex-direction: column; }
+#workflow-settings::backdrop { background: rgb(0 0 0 / 48%); }
+#workflow-settings > iframe { flex: 1 1 0; min-height: 0; width: 100%; border: 0; }

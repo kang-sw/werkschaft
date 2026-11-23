@@ -160,6 +160,7 @@ Scroller.prototype.contains = function (t) { return this.kids.indexOf(t) >= 0; }
 Scroller.prototype.getBoundingClientRect = function () { return { top: this.top }; };
 var bcol = new Scroller("bcol", 50), html = new Scroller("html", 0);
 var doc = { scrollingElement: html };
+function inBoard() { return false; }
 function $(id) { return id === "bcol" ? bcol : null; }
 function getComputedStyle(s) { return { overflowY: s.oy || "auto" }; }
 // A topic's rect is its layout top less its scroller's scroll offset.

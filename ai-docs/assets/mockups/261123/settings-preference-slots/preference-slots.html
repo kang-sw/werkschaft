@@ -1,0 +1,571 @@
+<div class="pfs" data-theme="dark">
+<style>
+/* Scoped mockup: user preference slots editor (preference.<slot>) in the
+   Workflow Settings "prompts" section. All rules live under .pfs; tokens are
+   the dashboard's dark-theme values so the fragment reads the same on any board. */
+.pfs {
+  --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32;
+  --wb-muted-fg: #a2a6ad; --wb-primary: #7aa2ff; --wb-primary-fg: #0c1424;
+  --wb-line: color-mix(in srgb, #e7e7e4 14%, transparent);
+  --wb-wash: color-mix(in srgb, #e7e7e4 5%, transparent);
+  --wb-ok: #6cc39a; --wb-fail: #f1888e; --wb-warn: #e0a741; --wb-warn-ink: #f6c76b;
+  --wb-policy: #5b3a1c; --wb-on-policy: #f6d9bd;
+  --wb-technical: #26385e; --wb-on-technical: #d2dcf6;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --wb-radius: 12px;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wb-sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  container-type: inline-size;
+  display: flex; flex-direction: column; gap: 18px;
+  padding: 16px; background: var(--wb-bg); color: var(--wb-fg);
+  font-family: var(--wb-sans); font-size: 12px; line-height: 1.4;
+  color-scheme: dark; min-width: 0;
+}
+.pfs *, .pfs *::before, .pfs *::after { box-sizing: border-box; }
+.pfs code { font-family: var(--wb-mono); }
+.pfs .i { width: 13px; height: 13px; flex: none; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pfs button { font-family: inherit; }
+
+/* Mockup caption above each state */
+.pfs .cap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 2px -10px; }
+.pfs .cap b { font-size: 12.5px; font-weight: 800; }
+.pfs .cap span { font-size: 11px; color: var(--wb-muted-fg); word-break: keep-all; }
+.pfs .cap .letter { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: var(--wb-primary); color: var(--wb-primary-fg); font-size: 11px; font-weight: 800; }
+.pfs .cap.repo .letter { background: var(--wb-warn); color: #19140b; }
+
+/* Stage, header and precedence strip (copied look of dashboard-settings.css) */
+.pfs .stage { background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); border: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent); overflow: hidden; min-width: 0; }
+.pfs .shd-top { min-height: 42px; padding: 5px 16px; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 80%, transparent); }
+.pfs .shd-title { display: flex; align-items: center; gap: 7px; }
+.pfs .shd-title > .i { width: 15px; height: 15px; color: var(--wb-primary); }
+.pfs .shd-title h1 { margin: 0; font-size: 14px; font-weight: 800; white-space: nowrap; }
+.pfs .route-pill { font-family: var(--wb-mono); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 5px; background: var(--wb-wash); color: var(--wb-muted-fg); }
+.pfs .scope-target-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 700; background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card)); color: var(--wb-primary); min-width: 0; max-width: 100%; white-space: nowrap; }
+.pfs .scope-target-pill code { font-size: 10.5px; opacity: .9; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pfs .scope-target-pill.repo { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: var(--wb-warn-ink); }
+.pfs .prec-strip { min-height: 34px; padding: 4px 16px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; background: color-mix(in srgb, var(--wb-muted) 28%, var(--wb-card)); border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent); font-size: 11px; }
+.pfs .prec-lbl { font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg); margin-right: 3px; white-space: nowrap; }
+.pfs .prec-arrow { color: var(--wb-muted-fg); opacity: .55; }
+.pfs .prec-node { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid color-mix(in srgb, var(--wb-line) 85%, transparent); background: var(--wb-card); color: var(--wb-muted-fg); white-space: nowrap; cursor: pointer; }
+.pfs .prec-node.synced { border-style: dashed; background: transparent; opacity: .66; }
+.pfs .prec-node.active { background: var(--wb-primary); color: var(--wb-primary-fg); border-color: var(--wb-primary); }
+.pfs .prec-node.active.repo-mode { background: var(--wb-warn); color: #19140b; border-color: var(--wb-warn); }
+.pfs .prec-node .cnt { margin-left: 5px; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, currentColor 16%, transparent); }
+.pfs .prec-hint { margin-left: auto; font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; }
+
+/* Body: category nav + content */
+.pfs .sbody { display: grid; grid-template-columns: 156px minmax(0, 1fr); min-width: 0; }
+.pfs .snav { border-right: 1px solid var(--wb-muted); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; background: color-mix(in srgb, var(--wb-muted) 12%, var(--wb-card)); }
+.pfs .snav-btn { display: flex; align-items: center; gap: 7px; border: 0; border-radius: 7px; padding: 6px 8px; background: transparent; color: var(--wb-muted-fg); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; cursor: pointer; }
+.pfs .snav-btn[aria-current="true"] { background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card)); color: var(--wb-primary); font-weight: 700; }
+.pfs .snav-btn .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--wb-primary); flex: none; }
+.pfs .snav-btn .dot.none { background: transparent; }
+.pfs .scontent { min-width: 0; padding: 10px 16px 18px; display: flex; flex-direction: column; gap: 9px; }
+
+.pfs .prompt-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.pfs .fchip { display: inline-flex; align-items: center; gap: 6px; height: 27px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--wb-line); background: transparent; color: var(--wb-muted-fg); font-size: 11px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.pfs .fchip code { font-size: 10.5px; }
+.pfs .fchip[aria-pressed="true"] { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 48%, transparent); color: var(--wb-primary); }
+.pfs .bdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--wb-primary); }
+
+.pfs .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; padding: 2px 2px 0; }
+.pfs .sec-head h2 { margin: 0; font-size: 13px; font-weight: 800; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.pfs .sec-head p { margin: 0; font-size: 11px; color: var(--wb-muted-fg); word-break: keep-all; }
+.pfs .skey { font-family: var(--wb-mono); font-size: 11px; font-weight: 500; color: var(--wb-muted-fg); background: color-mix(in srgb, var(--wb-muted) 55%, transparent); padding: 0 5px; border-radius: 4px; line-height: 17px; white-space: nowrap; }
+
+/* Banners (repo + legacy notice) */
+.pfs .banner { min-height: 34px; padding: 6px 12px; border-radius: 8px; display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; font-size: 11.5px; word-break: keep-all; }
+.pfs .banner-l { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; min-width: 0; flex: 1 1 300px; }
+.pfs .banner-t { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.pfs .banner-d { color: var(--wb-muted-fg); line-height: 1.45; }
+.pfs .banner-d code { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: var(--wb-wash); color: var(--wb-fg); }
+.pfs .banner.repo { border: 1px solid color-mix(in srgb, var(--wb-warn) 42%, transparent); background: color-mix(in srgb, var(--wb-warn) 9%, var(--wb-card)); }
+.pfs .banner.repo .banner-t { color: var(--wb-warn-ink); }
+.pfs .banner.repo .banner-d { color: var(--wb-fg); }
+.pfs .banner.legacy { border: 1px solid color-mix(in srgb, var(--wb-technical) 90%, var(--wb-line)); background: color-mix(in srgb, var(--wb-technical) 32%, var(--wb-card)); }
+.pfs .banner.legacy .banner-t { color: var(--wb-on-technical); }
+.pfs .banner.legacy .banner-d { color: color-mix(in srgb, var(--wb-on-technical) 82%, transparent); }
+
+/* Hide vs reset legend */
+.pfs .legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.pfs .lg { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--wb-wash); font-size: 11px; color: var(--wb-muted-fg); line-height: 1.45; word-break: keep-all; }
+.pfs .lg b { color: var(--wb-fg); }
+.pfs .lg .act { pointer-events: none; flex: none; }
+
+/* Editor grid: slots + preview */
+.pfs .ed { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+.pfs .slots { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.pfs .slot { border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent); border-radius: 10px; background: var(--wb-card); overflow: hidden; }
+.pfs .slot.here { box-shadow: inset 3px 0 0 var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 4%, var(--wb-card)); }
+.pfs .slot.legacy { box-shadow: inset 3px 0 0 var(--wb-on-technical); }
+.pfs .slot.tomb { border-style: dashed; background: color-mix(in srgb, var(--wb-muted) 22%, var(--wb-bg)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--wb-muted-fg) 55%, transparent); }
+.pfs .slot-hd { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; padding: 8px 12px 6px; }
+.pfs .ord { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--wb-muted); color: var(--wb-muted-fg); font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pfs .sname { font-family: var(--wb-mono); font-size: 12.5px; font-weight: 700; color: var(--wb-fg); }
+.pfs .sname .pre { color: var(--wb-muted-fg); font-weight: 500; }
+.pfs .tag { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; line-height: 16px; padding: 0 6px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
+.pfs .tag.pri { background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card)); color: var(--wb-primary); }
+.pfs .tag.repo { background: color-mix(in srgb, var(--wb-warn) 15%, var(--wb-card)); color: var(--wb-warn-ink); }
+.pfs .tag.tomb { background: transparent; border: 1px dashed color-mix(in srgb, var(--wb-muted-fg) 70%, transparent); line-height: 14px; }
+.pfs .tag.legacy { background: var(--wb-technical); color: var(--wb-on-technical); }
+.pfs .sp { flex: 1 1 auto; }
+
+.pfs .origin-pill { flex: none; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent); background: var(--wb-wash); color: var(--wb-muted-fg); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
+.pfs .origin-pill .chev { font-size: 9px; opacity: .8; }
+.pfs .origin-pill.here { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 40%, transparent); color: var(--wb-primary); }
+.pfs .origin-pill.here.repo { background: color-mix(in srgb, var(--wb-warn) 15%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-warn) 45%, transparent); color: var(--wb-warn-ink); }
+.pfs .origin-pill.legacy { background: var(--wb-technical); border-color: transparent; color: var(--wb-on-technical); }
+.pfs .origin-pill.tomb { border-style: dashed; background: transparent; }
+
+.pfs .slot-body { padding: 0 12px; }
+.pfs .ta { display: block; width: 100%; resize: vertical; margin: 0; padding: 7px 10px; border: 1px solid var(--wb-line); border-radius: 7px; background: var(--wb-bg); color: var(--wb-fg); font-family: var(--wb-mono); font-size: 11px; line-height: 1.5; }
+.pfs .ta.inh { color: var(--wb-muted-fg); border-style: dashed; background: color-mix(in srgb, var(--wb-bg) 70%, var(--wb-card)); }
+.pfs .ta[readonly] { cursor: default; }
+.pfs .ghost { margin: 0; padding: 7px 10px; border-radius: 7px; border: 1px dashed color-mix(in srgb, var(--wb-line) 90%, transparent); font-family: var(--wb-mono); font-size: 11px; line-height: 1.5; color: color-mix(in srgb, var(--wb-muted-fg) 70%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--wb-muted-fg) 45%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pfs .ghost-l { display: block; margin-bottom: 3px; font-family: var(--wb-sans); font-size: 10.5px; font-weight: 700; text-decoration: none; color: var(--wb-muted-fg); }
+
+/* Mini layer chain under hidden / overridden slots */
+.pfs .chain { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.pfs .chain-l { font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg); margin-right: 2px; }
+.pfs .lchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--wb-line) 80%, transparent); background: var(--wb-card); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.pfs .lchip .ls { font-weight: 700; color: var(--wb-muted-fg); }
+.pfs .lchip .lv { font-family: var(--wb-mono); max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+.pfs .lchip.empty { opacity: .55; }
+.pfs .lchip.shadow .lv { text-decoration: line-through; color: var(--wb-muted-fg); }
+.pfs .lchip.win { border-color: color-mix(in srgb, var(--wb-ok) 55%, transparent); background: color-mix(in srgb, var(--wb-ok) 9%, var(--wb-card)); }
+.pfs .lchip.win .ls { color: var(--wb-ok); }
+.pfs .lchip.cur { box-shadow: 0 0 0 1.5px var(--wb-warn); border-color: var(--wb-warn); }
+.pfs .larrow { color: var(--wb-muted-fg); opacity: .55; font-size: 10.5px; }
+
+.pfs .slot-ft { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; padding: 7px 12px 9px; }
+.pfs .hint { font-size: 11px; color: var(--wb-muted-fg); line-height: 1.35; word-break: keep-all; }
+.pfs .hint.ok { color: var(--wb-ok); font-weight: 700; }
+.pfs .hint.err { color: var(--wb-fail); font-weight: 700; }
+
+/* Two distinct per-layer actions */
+.pfs .act { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 7px; font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer; background: transparent; }
+.pfs .act .sub { font-size: 10px; font-weight: 600; opacity: .8; padding-left: 6px; border-left: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+.pfs .act.hide { border: 1px solid color-mix(in srgb, var(--wb-fail) 42%, transparent); color: var(--wb-fail); }
+.pfs .act.hide:hover { background: color-mix(in srgb, var(--wb-fail) 12%, var(--wb-card)); }
+.pfs .act.reset { border: 1px solid color-mix(in srgb, var(--wb-line) 95%, transparent); color: var(--wb-primary); }
+.pfs .act.reset:hover { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
+.pfs .act.restore { border: 1px solid color-mix(in srgb, var(--wb-ok) 50%, transparent); color: var(--wb-ok); background: color-mix(in srgb, var(--wb-ok) 8%, var(--wb-card)); }
+.pfs .act:disabled { opacity: .38; cursor: not-allowed; }
+.pfs .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--wb-line); background: var(--wb-card); color: var(--wb-fg); font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.pfs .btn:disabled { opacity: .48; cursor: not-allowed; }
+.pfs .btn.pri { background: var(--wb-primary); color: var(--wb-primary-fg); border-color: var(--wb-primary); }
+.pfs .btn.tech { background: var(--wb-on-technical); color: #101a30; border-color: transparent; }
+.pfs .btn.warn { background: var(--wb-warn); color: #19140b; border-color: var(--wb-warn); }
+
+/* Add slot form */
+.pfs .add { border: 1px dashed color-mix(in srgb, var(--wb-primary) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--wb-primary) 3%, var(--wb-card)); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pfs .add-hd { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: var(--wb-primary); }
+.pfs .add-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: start; }
+.pfs .fld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pfs .fld > label { font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg); }
+.pfs .namebox { display: flex; align-items: center; height: 30px; border: 1px solid var(--wb-line); border-radius: 7px; background: var(--wb-bg); overflow: hidden; min-width: 0; }
+.pfs .namebox .pre { flex: none; height: 100%; display: inline-flex; align-items: center; padding: 0 7px 0 9px; font-family: var(--wb-mono); font-size: 11.5px; color: var(--wb-muted-fg); background: var(--wb-wash); border-right: 1px solid var(--wb-line); }
+.pfs .namebox input { flex: 1 1 auto; min-width: 0; height: 100%; border: 0; padding: 0 9px; background: transparent; color: var(--wb-fg); font-family: var(--wb-mono); font-size: 12px; outline: none; }
+.pfs .namebox.bad { border-color: var(--wb-fail); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-fail) 18%, transparent); }
+.pfs .namebox.good { border-color: color-mix(in srgb, var(--wb-ok) 60%, transparent); }
+.pfs .seg { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 2px; border-radius: 8px; background: var(--wb-muted); flex-wrap: nowrap; max-width: 100%; }
+.pfs .seg button { border: 0; background: transparent; border-radius: 6px; height: 26px; padding: 0 9px; font-size: 11.5px; font-weight: 700; color: var(--wb-muted-fg); white-space: nowrap; cursor: pointer; }
+.pfs .seg button[aria-pressed="true"] { background: var(--wb-card); color: var(--wb-fg); box-shadow: 0 1px 2px rgb(0 0 0 / .12), inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 70%, transparent); }
+.pfs .seg button.repo[aria-pressed="true"] { color: var(--wb-warn-ink); }
+.pfs .seg button:disabled { opacity: .4; cursor: not-allowed; }
+.pfs .rules { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10.5px; color: var(--wb-muted-fg); }
+.pfs .rules span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.pfs .rules .y { color: var(--wb-ok); }
+.pfs .rules .n { color: var(--wb-fail); }
+.pfs .add-ft { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Manual preview pane */
+.pfs .pv { position: sticky; top: 10px; border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--wb-bg) 55%, var(--wb-card)); overflow: hidden; min-width: 0; }
+.pfs .pv-hd { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent); background: var(--wb-card); }
+.pfs .pv-hd b { font-size: 12px; font-weight: 800; }
+.pfs .pv-live { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; color: var(--wb-ok); }
+.pfs .pv-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--wb-ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-ok) 20%, transparent); }
+.pfs .pv-body { padding: 10px 12px 12px; font-family: var(--wb-mono); font-size: 11px; line-height: 1.55; display: flex; flex-direction: column; gap: 8px; }
+.pfs .pv-h { color: var(--wb-primary); font-weight: 700; }
+.pfs .pv-p { position: relative; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--wb-line) 90%, transparent); }
+.pfs .pv-p.repo { border-left-color: color-mix(in srgb, var(--wb-warn) 60%, transparent); }
+.pfs .pv-p.legacy { border-left-color: var(--wb-on-technical); }
+.pfs .pv-g { display: flex; gap: 5px; align-items: center; margin-bottom: 1px; font-family: var(--wb-sans); font-size: 10px; font-weight: 700; color: var(--wb-muted-fg); opacity: .85; }
+.pfs .pv-g i { font-style: normal; font-weight: 600; opacity: .8; }
+.pfs .pv-p p { margin: 0; color: var(--wb-fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pfs .pv-x { font-family: var(--wb-sans); font-size: 10.5px; color: var(--wb-muted-fg); padding: 4px 8px; border: 1px dashed color-mix(in srgb, var(--wb-line) 90%, transparent); border-radius: 6px; }
+.pfs .pv-x code { text-decoration: line-through; }
+.pfs .pv-ft { padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent); font-size: 10.5px; color: var(--wb-muted-fg); line-height: 1.45; word-break: keep-all; }
+
+/* Panel-width responsive (container queries: the fragment adapts to its whiteboard panel) */
+@container (max-width: 1000px) {
+  .pfs .ed { grid-template-columns: minmax(0, 1fr) 260px; }
+  .pfs .sbody { grid-template-columns: 136px minmax(0, 1fr); }
+}
+@container (max-width: 860px) {
+  .pfs .sbody { grid-template-columns: minmax(0, 1fr); }
+  .pfs .snav { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--wb-muted); }
+  .pfs .ed { grid-template-columns: minmax(0, 1fr); }
+  .pfs .pv { position: static; }
+  .pfs .prec-hint { margin-left: 0; }
+}
+@container (max-width: 640px) {
+  .pfs .legend { grid-template-columns: minmax(0, 1fr); }
+  .pfs .add-row { grid-template-columns: minmax(0, 1fr); }
+  .pfs .scontent { padding: 10px 10px 16px; }
+  .pfs { padding: 10px; }
+}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="pfs-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="pfs-eyeoff" viewBox="0 0 24 24"><path d="M17.9 17.9A10 10 0 0 1 12 20c-7 0-10-8-10-8a18 18 0 0 1 5.1-5.9M9.9 4.2A9 9 0 0 1 12 4c7 0 10 8 10 8a18 18 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"/></symbol>
+  <symbol id="pfs-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+  <symbol id="pfs-eye" viewBox="0 0 24 24"><path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="pfs-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="pfs-move" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="pfs-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
+  <symbol id="pfs-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10a6 6 0 0 1-6 6H8"/></symbol>
+</svg>
+
+<!-- ======================================================================
+     State A · global scope, legacy value still present
+     ====================================================================== -->
+<div class="cap"><span class="letter">A</span><b>전역 스코프 · 슬롯 3개</b><span>default 슬롯이 아직 없어 레거시 <code>prompt.UserPreferenceSection</code> 값이 기본 단락으로 쓰이는 상태</span></div>
+<section class="stage" aria-label="전역 스코프 사용자 선호 슬롯">
+  <div class="shd-top">
+    <div class="shd-title"><svg class="i"><use href="#pfs-gear"/></svg><h1>워크플로 설정</h1><span class="route-pill">/settings</span></div>
+    <span class="scope-target-pill"><span>전역</span><code>~/.config/ws/config.toml</code></span>
+  </div>
+  <nav class="prec-strip" aria-label="우선순위">
+    <strong class="prec-lbl">우선순위</strong>
+    <button class="prec-node" type="button">내장 기본값</button><span class="prec-arrow">→</span>
+    <button class="prec-node synced" type="button">동기화</button><span class="prec-arrow">→</span>
+    <button class="prec-node active" type="button">전역<span class="cnt">2</span></button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">저장소</button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">프로젝트</button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">세션</button>
+    <span class="prec-hint">오른쪽 레이어가 왼쪽을 덮어씀</span>
+  </nav>
+  <div class="sbody">
+    <nav class="snav" aria-label="카테고리">
+      <button class="snav-btn" type="button"><span class="dot none"></span>워크플로 · 리뷰</button>
+      <button class="snav-btn" type="button"><span class="dot"></span>에이전트 · 티어</button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>컴팩션 · 워크트리</button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>프로필</button>
+      <button class="snav-btn" type="button" aria-current="true"><span class="dot"></span>프롬프트 오버라이드</button>
+    </nav>
+    <div class="scontent">
+      <div class="prompt-picker" role="group" aria-label="프롬프트 오버라이드 지점">
+        <button class="fchip" type="button" aria-pressed="true">사용자 선호 슬롯 <code>preference.*</code><span class="bdot"></span></button>
+        <button class="fchip" type="button" aria-pressed="false"><code>prompt.DelegationSection</code></button>
+        <button class="fchip" type="button" aria-pressed="false"><code>prompt.SeedSection</code></button>
+      </div>
+
+      <div class="sec-head">
+        <h2>사용자 선호 슬롯 <span class="skey">preference.&lt;slot&gt;</span></h2>
+        <p>매뉴얼 <code>### User preferences</code>에 default부터, 나머지는 이름순으로 이름 없이 붙습니다.</p>
+      </div>
+
+      <div class="banner legacy" role="note">
+        <div class="banner-l">
+          <span class="banner-t"><svg class="i"><use href="#pfs-archive"/></svg>레거시 값 있음</span>
+          <span class="banner-d"><code>prompt.UserPreferenceSection</code> (공통 버킷) 값은 여기서 읽기 전용입니다. <code>default</code> 슬롯이 없는 동안 기본 단락으로 쓰입니다.</span>
+        </div>
+        <button class="btn tech" type="button"><svg class="i"><use href="#pfs-move"/></svg>default 슬롯으로 옮기기</button>
+      </div>
+
+      <div class="legend">
+        <div class="lg"><span class="act hide"><svg class="i"><use href="#pfs-eyeoff"/></svg>숨김</span><span><b>이 레이어에 빈 값을 기록</b>합니다. 상위 레이어에 값이 있어도 슬롯을 끄고 매뉴얼에서 뺍니다.</span></div>
+        <div class="lg"><span class="act reset"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제</span><span><b>이 레이어의 값을 지웁니다.</b> 상위 레이어 값으로 돌아가고, 상위에도 없으면 슬롯이 사라집니다.</span></div>
+      </div>
+
+      <div class="ed">
+        <div class="slots">
+          <!-- default: legacy fallback -->
+          <article class="slot legacy">
+            <div class="slot-hd">
+              <span class="ord">1</span><span class="sname"><span class="pre">preference.</span>default</span>
+              <span class="tag pri">기본 단락 · 항상 첫 번째</span>
+              <span class="tag legacy">레거시 대체값</span>
+              <span class="sp"></span>
+              <button class="origin-pill legacy" type="button">출처 · 레거시 prompt 지점<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta inh" rows="3" readonly aria-label="default (레거시, 읽기 전용)">Reply in Korean. Keep code identifiers, commit messages, and ticket bodies in English.
+Prefer short, direct answers; ask before destructive git operations.</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint" title="옮기면 전역 레이어에 preference.default로 저장되고 레거시 값은 해제됩니다">읽기 전용 · 위 알림에서 옮길 수 있음</span>
+              <span class="sp"></span>
+              <button class="act hide" type="button" title="전역에 빈 default 슬롯을 기록해 기본 단락을 끕니다"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" disabled title="이 레이어에 값 없음"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">값 없음</span></button>
+            </div>
+          </article>
+
+          <!-- gpt-leash: global here -->
+          <article class="slot here">
+            <div class="slot-hd">
+              <span class="ord">2</span><span class="sname"><span class="pre">preference.</span>gpt-leash</span>
+              <span class="sp"></span>
+              <button class="origin-pill here" type="button">이 스코프의 오버라이드 · 전역<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta" rows="3" aria-label="gpt-leash">When delegating to GPT-family workers, restate scope limits in the first message and forbid edits outside the named paths.
+Ask for a diff summary before any commit.</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">2줄 · 저장됨</span>
+              <span class="sp"></span>
+              <button class="act hide" type="button"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" title="상위 레이어(내장 기본값)에 이 슬롯이 없어 슬롯이 사라집니다"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">슬롯 삭제</span></button>
+            </div>
+          </article>
+
+          <!-- review-style: global here, being edited -->
+          <article class="slot here">
+            <div class="slot-hd">
+              <span class="ord">3</span><span class="sname"><span class="pre">preference.</span>review-style</span>
+              <span class="sp"></span>
+              <button class="origin-pill here" type="button">이 스코프의 오버라이드 · 전역<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta" rows="3" aria-label="review-style">Review findings: lead with the verdict, then numbered issues with file:line. Skip praise and style nits unless asked.</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">수정됨 · 저장하지 않음</span>
+              <button class="btn pri" type="button">저장</button>
+              <span class="sp"></span>
+              <button class="act hide" type="button"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" title="상위 레이어(내장 기본값)에 이 슬롯이 없어 슬롯이 사라집니다"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">슬롯 삭제</span></button>
+            </div>
+          </article>
+
+          <!-- add slot, invalid name -->
+          <form class="add" onsubmit="return false">
+            <div class="add-hd"><svg class="i"><use href="#pfs-plus"/></svg>슬롯 추가</div>
+            <div class="add-row">
+              <div class="fld">
+                <label for="pfs-a-name">슬롯 이름</label>
+                <div class="namebox bad"><span class="pre">preference.</span><input id="pfs-a-name" value="Commit_Style" spellcheck="false" aria-invalid="true"></div>
+                <div class="rules"><span class="n">✕ 소문자 a-z · 숫자 0-9만</span><span class="y">✓ 첫 글자 뒤 <code>-</code> <code>_</code> 허용</span><span class="y">✓ 이름 중복 없음</span></div>
+                <span class="hint err">대문자는 쓸 수 없습니다 · 예: <code>commit_style</code></span>
+              </div>
+              <div class="fld">
+                <label>저장할 레이어</label>
+                <div class="seg" role="group" aria-label="저장할 레이어">
+                  <button type="button" aria-pressed="true">전역</button>
+                  <button type="button" class="repo" aria-pressed="false">저장소</button>
+                  <button type="button" aria-pressed="false">프로젝트</button>
+                  <button type="button" aria-pressed="false">세션</button>
+                </div>
+              </div>
+            </div>
+            <div class="fld">
+              <label for="pfs-a-text">텍스트</label>
+              <textarea id="pfs-a-text" class="ta" rows="2">Commit titles in imperative mood, under 72 characters.</textarea>
+            </div>
+            <div class="add-ft">
+              <button class="btn pri" type="button" disabled>슬롯 추가</button>
+              <span class="hint">빈 텍스트로는 추가할 수 없습니다 · 숨김은 기존 슬롯의 동작입니다</span>
+            </div>
+          </form>
+        </div>
+
+        <aside class="pv" aria-label="매뉴얼 미리보기">
+          <div class="pv-hd"><b>매뉴얼 미리보기</b><span class="tag pri">전역 기준</span><span class="sp"></span><span class="pv-live">실시간</span></div>
+          <div class="pv-body">
+            <div class="pv-h">### User preferences</div>
+            <div class="pv-p legacy"><div class="pv-g">default <i>· 레거시 대체값</i></div><p>Reply in Korean. Keep code identifiers, commit messages, and ticket bodies in English.
+Prefer short, direct answers; ask before destructive git operations.</p></div>
+            <div class="pv-p"><div class="pv-g">gpt-leash <i>· 전역</i></div><p>When delegating to GPT-family workers, restate scope limits in the first message and forbid edits outside the named paths.
+Ask for a diff summary before any commit.</p></div>
+            <div class="pv-p"><div class="pv-g">review-style <i>· 전역 · 저장 전 초안</i></div><p>Review findings: lead with the verdict, then numbered issues with file:line. Skip praise and style nits unless asked.</p></div>
+          </div>
+          <div class="pv-ft">단락에는 슬롯 이름이 붙지 않습니다. 왼쪽 표시는 미리보기에만 보입니다.</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================
+     State B · repo scope, gpt-leash hidden, repo-only slot added
+     ====================================================================== -->
+<div class="cap repo"><span class="letter">B</span><b>저장소 스코프 · gpt-leash 숨김 + 저장소 전용 슬롯</b><span>default를 전역 슬롯으로 옮긴 뒤의 상태 · 저장소 레이어 변경은 편집 제안으로 리드에 전달</span></div>
+<section class="stage" aria-label="저장소 스코프 사용자 선호 슬롯">
+  <div class="shd-top">
+    <div class="shd-title"><svg class="i"><use href="#pfs-gear"/></svg><h1>워크플로 설정</h1><span class="route-pill">/settings</span></div>
+    <span class="scope-target-pill repo"><span>저장소</span><code>devenv · develop</code></span>
+  </div>
+  <nav class="prec-strip" aria-label="우선순위">
+    <strong class="prec-lbl">우선순위</strong>
+    <button class="prec-node" type="button">내장 기본값</button><span class="prec-arrow">→</span>
+    <button class="prec-node synced" type="button">동기화</button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">전역</button><span class="prec-arrow">→</span>
+    <button class="prec-node active repo-mode" type="button">저장소<span class="cnt">2</span></button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">프로젝트</button><span class="prec-arrow">→</span>
+    <button class="prec-node" type="button">세션</button>
+    <span class="prec-hint">오른쪽 레이어가 왼쪽을 덮어씀</span>
+  </nav>
+  <div class="sbody">
+    <nav class="snav" aria-label="카테고리">
+      <button class="snav-btn" type="button"><span class="dot none"></span>워크플로 · 리뷰</button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>에이전트 · 티어</button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>컴팩션 · 워크트리</button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>프로필</button>
+      <button class="snav-btn" type="button" aria-current="true"><span class="dot"></span>프롬프트 오버라이드</button>
+    </nav>
+    <div class="scontent">
+      <div class="prompt-picker" role="group" aria-label="프롬프트 오버라이드 지점">
+        <button class="fchip" type="button" aria-pressed="true">사용자 선호 슬롯 <code>preference.*</code><span class="bdot"></span></button>
+        <button class="fchip" type="button" aria-pressed="false"><code>prompt.DelegationSection</code></button>
+        <button class="fchip" type="button" aria-pressed="false"><code>prompt.SeedSection</code></button>
+      </div>
+
+      <div class="banner repo" role="note">
+        <div class="banner-l">
+          <span class="banner-t"><svg class="i"><use href="#pfs-branch"/></svg>저장소 설정</span>
+          <span class="banner-d">리드가 검토하고 이 워크트리에 적용할 변경 사항을 모읍니다. 숨김·해제·추가는 편집 제안 초안이 됩니다.</span>
+        </div>
+      </div>
+
+      <div class="sec-head">
+        <h2>사용자 선호 슬롯 <span class="skey">preference.&lt;slot&gt;</span></h2>
+        <p>슬롯 4개 · 매뉴얼에 3개 · 숨김 1개</p>
+      </div>
+
+      <div class="ed">
+        <div class="slots">
+          <!-- default inherited from global -->
+          <article class="slot">
+            <div class="slot-hd">
+              <span class="ord">1</span><span class="sname"><span class="pre">preference.</span>default</span>
+              <span class="tag pri">기본 단락 · 항상 첫 번째</span>
+              <span class="sp"></span>
+              <button class="origin-pill" type="button">출처 · 전역<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta inh" rows="2" aria-label="default (전역에서 상속)">Reply in Korean. Keep code identifiers, commit messages, and ticket bodies in English.
+Prefer short, direct answers; ask before destructive git operations.</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">전역에서 상속 · 편집하면 저장소 오버라이드 초안이 생깁니다</span>
+              <span class="sp"></span>
+              <button class="act hide" type="button"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" disabled title="이 레이어에 값 없음"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">값 없음</span></button>
+            </div>
+          </article>
+
+          <!-- repo-only slot -->
+          <article class="slot here">
+            <div class="slot-hd">
+              <span class="ord">2</span><span class="sname"><span class="pre">preference.</span>repo-terms</span>
+              <span class="tag repo">저장소 전용</span>
+              <span class="sp"></span>
+              <button class="origin-pill here repo" type="button">이 스코프의 오버라이드 · 저장소<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta" rows="2" aria-label="repo-terms">In this repo, "lead" means the top-level ws session and "worker" a spawned child. Never call tickets "issues".</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">상위 레이어에 없는 슬롯</span>
+              <span class="sp"></span>
+              <button class="act hide" type="button"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" title="상위 레이어에 이 슬롯이 없어 슬롯이 사라집니다"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">슬롯 삭제</span></button>
+            </div>
+          </article>
+
+          <!-- review-style inherited -->
+          <article class="slot">
+            <div class="slot-hd">
+              <span class="ord">3</span><span class="sname"><span class="pre">preference.</span>review-style</span>
+              <span class="sp"></span>
+              <button class="origin-pill" type="button">출처 · 전역<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <textarea class="ta inh" rows="2" aria-label="review-style (전역에서 상속)">Review findings: lead with the verdict, then numbered issues with file:line. Skip praise and style nits unless asked.</textarea>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">전역에서 상속</span>
+              <span class="sp"></span>
+              <button class="act hide" type="button"><svg class="i"><use href="#pfs-eyeoff"/></svg>이 레이어에서 숨김<span class="sub">빈 값 기록</span></button>
+              <button class="act reset" type="button" disabled title="이 레이어에 값 없음"><svg class="i"><use href="#pfs-undo"/></svg>오버라이드 해제<span class="sub">값 없음</span></button>
+            </div>
+          </article>
+
+          <!-- gpt-leash tombstoned at repo -->
+          <article class="slot tomb" aria-label="gpt-leash (숨김)">
+            <div class="slot-hd">
+              <span class="ord">–</span><span class="sname"><span class="pre">preference.</span>gpt-leash</span>
+              <span class="tag tomb"><svg class="i" style="width:11px;height:11px"><use href="#pfs-eyeoff"/></svg>숨김 (빈 값)</span>
+              <span class="sp"></span>
+              <button class="origin-pill tomb" type="button">저장소에서 숨김<span class="chev">▾</span></button>
+            </div>
+            <div class="slot-body">
+              <p class="ghost"><span class="ghost-l">가려진 전역 값</span>When delegating to GPT-family workers, restate scope limits in the first message and forbid edits outside the named paths.</p>
+              <div class="chain">
+                <span class="chain-l">레이어</span>
+                <span class="lchip empty"><span class="ls">내장 기본값</span></span><span class="larrow">→</span>
+                <span class="lchip shadow"><span class="ls">전역</span><span class="lv">When delegating…</span></span><span class="larrow">→</span>
+                <span class="lchip win cur"><span class="ls">저장소</span><span class="lv">""</span></span><span class="larrow">→</span>
+                <span class="lchip empty"><span class="ls">프로젝트</span></span><span class="larrow">→</span>
+                <span class="lchip empty"><span class="ls">세션</span></span>
+              </div>
+            </div>
+            <div class="slot-ft">
+              <span class="hint">매뉴얼에서 제외됨 · 하위 레이어(프로젝트·세션)가 값을 쓰면 다시 나타납니다</span>
+              <span class="sp"></span>
+              <button class="act restore" type="button" title="저장소의 빈 값을 지워 전역 값으로 돌아갑니다"><svg class="i"><use href="#pfs-eye"/></svg>복원<span class="sub">빈 값 제거 → 전역 값</span></button>
+            </div>
+          </article>
+
+          <!-- add slot, valid name, repo target -->
+          <form class="add" onsubmit="return false">
+            <div class="add-hd"><svg class="i"><use href="#pfs-plus"/></svg>슬롯 추가</div>
+            <div class="add-row">
+              <div class="fld">
+                <label for="pfs-b-name">슬롯 이름</label>
+                <div class="namebox good"><span class="pre">preference.</span><input id="pfs-b-name" value="test-policy" spellcheck="false"></div>
+                <div class="rules"><span class="y">✓ 소문자 a-z · 숫자 0-9</span><span class="y">✓ 첫 글자 뒤 <code>-</code> <code>_</code> 허용</span><span class="y">✓ 이름 중복 없음</span></div>
+                <span class="hint ok">사용할 수 있는 이름 · 이름순으로 매뉴얼 마지막(review-style 뒤)에 들어갑니다</span>
+              </div>
+              <div class="fld">
+                <label>저장할 레이어</label>
+                <div class="seg" role="group" aria-label="저장할 레이어">
+                  <button type="button" aria-pressed="false">전역</button>
+                  <button type="button" class="repo" aria-pressed="true">저장소</button>
+                  <button type="button" aria-pressed="false">프로젝트</button>
+                  <button type="button" aria-pressed="false">세션</button>
+                </div>
+              </div>
+            </div>
+            <div class="fld">
+              <label for="pfs-b-text">텍스트</label>
+              <textarea id="pfs-b-text" class="ta" rows="2">Run go test ./... for touched packages before reporting done; never run the full e2e suite locally.</textarea>
+            </div>
+            <div class="add-ft">
+              <button class="btn warn" type="button">편집 제안 초안에 추가</button>
+              <span class="hint">저장소 레이어는 리드 검토 후 적용됩니다</span>
+            </div>
+          </form>
+        </div>
+
+        <aside class="pv" aria-label="매뉴얼 미리보기">
+          <div class="pv-hd"><b>매뉴얼 미리보기</b><span class="tag repo">저장소 기준</span><span class="sp"></span><span class="pv-live">실시간</span></div>
+          <div class="pv-body">
+            <div class="pv-h">### User preferences</div>
+            <div class="pv-p"><div class="pv-g">default <i>· 전역</i></div><p>Reply in Korean. Keep code identifiers, commit messages, and ticket bodies in English.
+Prefer short, direct answers; ask before destructive git operations.</p></div>
+            <div class="pv-p repo"><div class="pv-g">repo-terms <i>· 저장소</i></div><p>In this repo, "lead" means the top-level ws session and "worker" a spawned child. Never call tickets "issues".</p></div>
+            <div class="pv-p"><div class="pv-g">review-style <i>· 전역</i></div><p>Review findings: lead with the verdict, then numbered issues with file:line. Skip praise and style nits unless asked.</p></div>
+            <div class="pv-x"><code>gpt-leash</code> · 저장소에서 숨김으로 제외</div>
+          </div>
+          <div class="pv-ft">단락에는 슬롯 이름이 붙지 않습니다. 왼쪽 표시는 미리보기에만 보입니다. 작성 중인 <code>test-policy</code>는 추가 전이라 포함되지 않습니다.</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+</div>

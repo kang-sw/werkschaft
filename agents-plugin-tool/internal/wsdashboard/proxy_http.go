@@ -71,6 +71,15 @@ func (st httpMCPStream) Read(b []byte) (int, error)  { return st.s.inR.Read(b) }
 func (st httpMCPStream) Write(b []byte) (int, error) { return st.s.outW.Write(b) }
 func (st httpMCPStream) Close() error                { return st.s.inW.Close() }
 
+func (d *Daemon) logProxyHTTPUnauthorized(reason string) {
+	fmt.Fprintf(d.log, "dashboard: %s 401: %s\n", ProxyHTTPPath, reason)
+}
+
+func (d *Daemon) refuseProxyHTTP(w http.ResponseWriter, reason string) {
+	d.logProxyHTTPUnauthorized(reason)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
 // handleProxyHTTP is the HTTP hosting route.
 func (d *Daemon) handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 	if !loopbackPeer(r.RemoteAddr) {
@@ -83,22 +92,37 @@ func (d *Daemon) handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	tokens, _ := d.agents.(AgentMCPTokenHost)
 	token, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if tokens == nil || !bearer || token == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if tokens == nil {
+		d.refuseProxyHTTP(w, "token resolver unavailable")
+		return
+	}
+	if !bearer || token == "" {
+		d.refuseProxyHTTP(w, "missing or malformed bearer")
 		return
 	}
 	// Resolved on every request: a voided token stops at once, one voided
 	// right after it resolved too.
-	hello, void, ok := tokens.ResolveMCPToken(token)
-	if ok {
+	var hello ProxyHello
+	var void <-chan struct{}
+	var reason string
+	if diagnostics, ok := tokens.(AgentMCPTokenDiagnostics); ok {
+		hello, void, reason = diagnostics.ResolveMCPTokenWithReason(token)
+	} else {
+		var ok bool
+		hello, void, ok = tokens.ResolveMCPToken(token)
+		if !ok {
+			reason = "token rejected"
+		}
+	}
+	if reason == "" {
 		select {
 		case <-void:
-			ok = false
+			reason = "token void"
 		default:
 		}
 	}
-	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if reason != "" {
+		d.refuseProxyHTTP(w, reason)
 		return
 	}
 	if r.Method != http.MethodPost {

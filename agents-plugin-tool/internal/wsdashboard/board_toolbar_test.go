@@ -245,7 +245,7 @@ boardTop=-100;compact=true;faceHeight=28;row.children=[action(14),action(14),act
 check("scroll coalesces layout",animationFrames.size,1);
 flushAnimationFrames();
 check("compact keeps original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"46px"]);
-check("face drives rail and arrivals",[col.style.getPropertyValue("--wb-rail-inset"),col.style.getPropertyValue("scroll-padding-top")],["34px","38px"]);
+check("face drives rail and arrivals",[col.style.getPropertyValue("--wb-rail-inset"),col.style.getPropertyValue("scroll-padding-top")],["34px","34px"]);
 // The filter is a direct row child just like an action. A filter-only wrap
 // reserves a second full original row even while the live face is compact.
 row.children=[action(14),action(14),action(46)];faceHeight=60;resize();flushAnimationFrames();
@@ -256,12 +256,12 @@ check("original filter row survives floating",toolbar.style.getPropertyValue("--
 row.children=[action(14),action(46),action(46)];resize();flushAnimationFrames();
 check("wrapped actions reserve two original action rows",[toolbar.hasAttribute("data-wrapped-actions"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"82px"]);
 active=documentScroller;resize();flushAnimationFrames();
-check("scroller handoff clears old padding",[col.style.getPropertyValue("scroll-padding-top"),documentScroller.style.getPropertyValue("scroll-padding-top")],["","70px"]);
+check("scroller handoff clears old padding",[col.style.getPropertyValue("scroll-padding-top"),documentScroller.style.getPropertyValue("scroll-padding-top")],["","66px"]);
 maxed={files:true,el:{style:styles()}};resize();flushAnimationFrames();
 check("Files clears the live face",maxed.el.style.getPropertyValue("--files-top"),"68px");
 handles=[{getClientRects:function(){return [1];},getBoundingClientRect:function(){return {top:0,bottom:34};}}];resize();flushAnimationFrames();
 check("document face clears fixed handles",toolbar.style.getPropertyValue("--toolbar-top"),"38px");
-check("document rail and arrivals include handle clearance",[col.style.getPropertyValue("--wb-rail-inset"),documentScroller.style.getPropertyValue("scroll-padding-top")],["104px","108px"]);
+check("document rail and arrivals include handle clearance",[col.style.getPropertyValue("--wb-rail-inset"),documentScroller.style.getPropertyValue("scroll-padding-top")],["104px","104px"]);
 handles=[];
 boardTop=0;compact=false;faceHeight=82;resize();flushAnimationFrames();
 check("return restores original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"82px"]);

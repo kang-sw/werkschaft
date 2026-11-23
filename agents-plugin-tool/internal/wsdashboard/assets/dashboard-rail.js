@@ -48,6 +48,7 @@
   // Ctrl+` toggles rail + memos in overlay mode, memos alone beside a column;
   // a framed page hands it to the shell, which holds the rail.
   function railKey() {
+    if (shSettingsEntry) return;
     if (window.WsOverview && window.WsOverview.holding()) { window.WsOverview.after(railKey); return; }
     if (framed) { shPost("key", { key: "rail" }); return; }
     if (!railEl || !WsRail) return;
@@ -58,6 +59,16 @@
     root.classList.toggle("rail-open", !!open);
     if (memoPad) memoPad.open(!!open, railWide());
     if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || railWide()));
+  }
+  function railSettingsMark() {
+    var rail = region("rail");
+    if (!rail) return;
+    var settings = shSettingsEntry && new URL(shSettingsEntry.href, location.origin).searchParams;
+    q("[data-scope-entry]", rail).forEach(function (gear) {
+      var active = settings && gear.dataset.scopeEntry === (settings.get("scope") || "global") &&
+        (gear.dataset.settingsTarget || "") === (settings.get("target") || "");
+      gear.setAttribute("aria-current", active ? "page" : "false");
+    });
   }
   function railScrollTop() { var l = $("rlist"); return l ? l.scrollTop : null; }
   function railScrollTo(top) { var l = $("rlist"); if (l && top !== null && top !== undefined && l.scrollTop !== top) l.scrollTop = top; }
@@ -73,12 +84,7 @@
       var path = hd.closest(".rwt").getAttribute("data-g").replace(/\\/g, "/").replace(/^\//, "");
       hd.classList.toggle("worktree-selected", !!selectedPath && path === selectedPath);
     });
-    var settings = location.pathname === "/settings" ? new URLSearchParams(location.search) : null;
-    q("[data-scope-entry]", r).forEach(function (gear) {
-      var active = settings && gear.dataset.scopeEntry === (settings.get("scope") || "global") &&
-        (gear.dataset.settingsTarget || "") === (settings.get("target") || "");
-      gear.setAttribute("aria-current", active ? "page" : "false");
-    });
+    railSettingsMark();
     if (memoPad) memoPad.sync(rid);
     WsRail.markRevive(q(".rs", r), revBusy);
     q(".drarch", r).forEach(function (b) {
@@ -533,8 +539,9 @@
         e.preventDefault();
         e.stopPropagation();
         var entry = gear.dataset, scope = entry.scopeEntry;
-        railOpen(false);
-        go(window.WsShell.settingsHref(scope, entry.settingsTarget, entry.settingsWorktree, scope === "session" ? entry.settingsTarget : ""));
+        var href = window.WsShell.settingsHref(scope, entry.settingsTarget, entry.settingsWorktree, scope === "session" ? entry.settingsTarget : "");
+        if (shell) shOpenSettings(new URL(href, location.href), gear);
+        else go(href);
         return;
       }
       if (admissionClick(t)) { e.preventDefault(); return; }

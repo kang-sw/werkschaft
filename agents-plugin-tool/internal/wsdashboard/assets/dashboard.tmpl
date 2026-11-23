@@ -71,7 +71,7 @@ in the head, and the inline script right after the rail applies the marks
 (rail.js marks) and lifts data-premark, which keeps the rail's rows unseen
 until then. */}}
 {{define "shell"}}<!DOCTYPE html>
-<html data-mode="shell" data-shell="1"{{if .Settings}} data-settings-shell{{end}} data-rid="{{.RID}}" data-assets="{{.Assets.ID}}" data-lang="{{lang}}" data-langpref="{{.LangPref}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{if .SysOpen}} data-sysopen="1" data-can-control="1"{{end}}>
+<html data-mode="shell" data-shell="1" data-rid="{{.RID}}" data-assets="{{.Assets.ID}}" data-lang="{{lang}}" data-langpref="{{.LangPref}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{if .SysOpen}} data-sysopen="1" data-can-control="1"{{end}}>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}{{pwa .Theme}}
 <title>{{.Title}}</title>
 <style>{{.Assets.WhiteboardCSS}}</style>
@@ -95,6 +95,7 @@ until then. */}}
 })();</script><div class="rscrim" id="rscrim"></div>
 {{template "memopad"}}</div></div>
 {{template "settings" .}}
+{{if .SysOpen}}<dialog id="workflow-settings" aria-label="{{t "js.settings.title"}}"></dialog>{{end}}
 <script>{{i18n}}</script>
 <script>{{.Assets.ConfirmScript}}</script>
 <script>{{.Assets.ToastScript}}</script>
@@ -629,7 +630,8 @@ once in a few seconds per tab; a refused mint shows the note. */}}
 <main class="stage" data-settings-view aria-labelledby="settings-title">
 <header class="shd">
 <div class="shd-top"><div class="shd-title">{{icon "gear"}}<h1 id="settings-title">{{t "js.settings.title"}}</h1><span class="route-pill">/settings</span></div>
-<div class="scope-target-pill" data-settings-target-display><span></span><code></code></div></div>
+<div class="scope-target-pill" data-settings-target-display><span></span><code></code></div>
+<button type="button" data-settings-close aria-label="{{t "js.card.close"}}">×</button></div>
 <nav class="prec-strip" data-settings-precedence aria-label="{{t "js.settings.precedence"}}"></nav>
 </header>
 <div class="filter-bar">

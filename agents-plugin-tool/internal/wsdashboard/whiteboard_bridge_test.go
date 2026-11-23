@@ -246,12 +246,18 @@ func TestBoardHistoryHooksSurroundSSESwap(t *testing.T) {
 	runNode(t, "board and tree swap ordering", animationFrameHarness+`
 var bad = [], log = [];
 function syncSpinnerPhases() {}
+function anchorCards() { return []; }
+function anchorSettle() {}
+function anchorWatchLast() {}
+function boardApplied() {}
+function anchorCurrent() { return null; }
+function anchorOwner() { return null; }
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); }
 var main = {scrollTop:400, wbScrollOwner:true}, pins = {scrollTop:500, wbScrollOwner:true}, outer = {scrollTop:40}, treePane = {scrollTop:80};
 var oldMain = {name:"old-main", scroller:main}, oldPin = {name:"old-pin", scroller:pins};
 var boxes = [{name:"board", firstElementChild:oldMain}, {name:"pins", firstElementChild:oldPin}];
 var topic = {name:"topic"}, pinTopic = {name:"pin-topic"}, row = {name:"row"};
-function box(name) { return {name:name, getAttribute:function(){return "old";}, setAttribute:function(){log.push("hash:"+name);}}; }
+function box(name) { return {name:name, contains:function(){return false;}, getAttribute:function(){return "old";}, setAttribute:function(){log.push("hash:"+name);}}; }
 var boardEl = box("board"), treeEl = box("tree");
 Object.defineProperty(treeEl, "innerHTML", {set:function(){log.push("tree-replace");}});
 var focus = {isConnected:true, focus:function(opt){check("tree focus avoids scrolling",opt,{preventScroll:true});doc.activeElement=focus;log.push("focus");}};
@@ -288,7 +294,7 @@ function frameHeights(){return "heights";}
 function boardRead(fn){return fn();}
 function scrollState(){return [[main,main.scrollTop],[pins,pins.scrollTop],[outer,outer.scrollTop],[treePane,treePane.scrollTop]];}
 function morphBoard(el,html,frozen,paged){
-  check("morph uses the staged input and pending pages",[el===boardEl,html,frozen,paged],[true,"board-html",[],["paged"]]);
+  check("morph receives the current board input",[el===boardEl,html,frozen,paged],[true,"board-html",null,null]);
   main.scrollTop=pins.scrollTop=outer.scrollTop=0;log.push("morph");return [topic,pinTopic];
 }
 function watchBoard(n){log.push("watch:"+n.name);}
@@ -321,7 +327,7 @@ check("board lifecycle ordering and exactly-once owner corrections",log,
 check("owner captures apply before the batched numeric restore",[main.scrollTop,pins.scrollTop,outer.scrollTop],[400,500,0]);
 flushAnimationFrames();
 check("both reader owners survive numeric restoration",[main.scrollTop,pins.scrollTop,outer.scrollTop],[400,500,40]);
-check("paged edits are consumed once",boardPagedEdits,[]);
+
 log=[];swap("tree","row-delta",{html:"delta"});
 check("tree row lifecycle never captures board history",log,["tree-merge","open:row","times:row","images:row","hash:tree","focus","scroll","wait","agents"]);
 flushAnimationFrames();

@@ -184,9 +184,12 @@ class SeedPackageTest(unittest.TestCase):
 
     def test_daemon_start_points_rsrc_root_at_checkout_package(self):
         # The daemon resolves the Pi worker launcher as <dir(WS_RSRC_ROOT)>/bin/ws-mcp-launcher.py.
-        stale = {"WS_RSRC_ROOT": "/stale/cache/rsrc", "WS_SKILLS_ROOT": "/stale/cache/skills"}
+        marker = "WS_MCP_LAUNCHER_START_LOCK_HELD"
+        stale = {"WS_RSRC_ROOT": "/stale/cache/rsrc", "WS_SKILLS_ROOT": "/stale/cache/skills", marker: "0"}
         with mock.patch.dict(dev.os.environ, stale),                 mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='{"outcome":"started"}', stderr="")) as run:
             dev.run_daemon_start(self.launcher, self.built, 123)
+            self.assertEqual(os.environ[marker], "0")
+        self.assertEqual(run.call_args.kwargs["env"][marker], "1")
         env = run.call_args.kwargs["env"]
         self.assertEqual(env["WS_RSRC_ROOT"], str(dev.DAEMON_PACKAGE / "rsrc"))
         self.assertEqual(env["WS_SKILLS_ROOT"], str(dev.DAEMON_PACKAGE / "skills"))
@@ -282,6 +285,7 @@ class DevLifecycleTest(unittest.TestCase):
 
     def successful_start(self, *args, **kwargs):
         self.assert_gate_held()
+        self.assertEqual(kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
         self.health = dict(self.expected, build_time=int(args[0][-1]))
         return self.result()
 
@@ -349,6 +353,10 @@ class DevLifecycleTest(unittest.TestCase):
         self.assertEqual(self.run.call_count, 2)
         self.seed.assert_not_called()
         self.assertIn(self.binary.name, self.err.getvalue())
+        for call in self.run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], dev.START_TIMEOUT_SECONDS)
         self.assertIn(f"restored version={self.old['version']}", self.err.getvalue())
         self.assert_gate_released()
 
@@ -627,6 +635,10 @@ class DevLifecycleTest(unittest.TestCase):
         capture.return_value.assert_called_once_with(15)
         self.assertEqual(self.run.call_count, 2)
         self.seed.assert_not_called()
+        for call in self.run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], dev.START_TIMEOUT_SECONDS)
         self.assertIn(f"restored version={self.old['version']}", self.err.getvalue())
         self.assert_gate_released()
 
@@ -662,6 +674,7 @@ class EncodingAndStagedMetadataTest(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=stdout, stderr="")
 
         with mock.patch.object(dev.os, "name", "nt"), \
+             mock.patch.object(dev, "Path", type(self.root)), \
              mock.patch.object(dev, "SYS_LOCK", str(sys_lock)), \
              mock.patch.object(dev.shutil, "which", return_value="bash"), \
              mock.patch.object(dev.subprocess, "run", side_effect=fake_run):

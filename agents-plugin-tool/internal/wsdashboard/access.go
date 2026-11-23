@@ -139,6 +139,9 @@ func (d *Daemon) accessGuard(next http.Handler) http.Handler {
 			return
 		}
 		if !d.lan {
+			if r.URL.Path == ProxyHTTPPath {
+				d.logProxyHTTPUnauthorized("dashboard login required")
+			}
 			loginRequired(w)
 			return
 		}
@@ -163,6 +166,9 @@ func (d *Daemon) accessGuard(next http.Handler) http.Handler {
 		if c, err := r.Cookie(lanTokenCookie); err == nil && tokenMatches(c.Value, token) {
 			next.ServeHTTP(w, r)
 			return
+		}
+		if r.URL.Path == ProxyHTTPPath {
+			d.logProxyHTTPUnauthorized("missing or invalid LAN access token")
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "this dashboard needs its LAN access token: on the machine it runs on, open Settings (the gear in the session rail footer) at http://localhost:"+strconv.Itoa(d.endpoint.Port)+"/ for the address that carries the token", http.StatusUnauthorized)

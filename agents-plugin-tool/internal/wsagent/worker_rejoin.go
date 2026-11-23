@@ -29,16 +29,32 @@ func (c *conv) restoreWorkerMCP() {
 	if !c.r.opts.Backends[rec.Backend].WorkerHTTPMCP {
 		return
 	}
-	if rec.MCPToken == "" || rec.MCPHolder != rec.HolderID || !c.r.servesMCPURL(rec.MCPURL) || rec.MCPEnv == nil {
-		c.mcpStale = true
+	logOutcome := func(outcome string) {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: worker MCP rejoin: %s\n", rec.ReplyID, outcome)
+	}
+	switch {
+	case rec.MCPToken == "":
+		logOutcome("no saved token")
+	case rec.MCPHolder != rec.HolderID:
+		logOutcome("token holder mismatch")
+	case !c.r.servesMCPURL(rec.MCPURL):
+		logOutcome("URL mismatch")
+	case rec.MCPEnv == nil:
+		logOutcome("no saved environment")
+	default:
+		session := c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
+		if session != nil {
+			c.rejoinExecCutover(rec)
+			session.Started(c.workerMCPEnv, rec.HostPID)
+			c.workerMCPEnv = nil
+			logOutcome("restored")
+			if c.r.takeMCPWaitMiss(rec.MCPToken) {
+				logOutcome("missed wait before restoration")
+			}
+		}
 		return
 	}
-	session := c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
-	if session != nil {
-		c.rejoinExecCutover(rec)
-		session.Started(c.workerMCPEnv, rec.HostPID)
-		c.workerMCPEnv = nil
-	}
+	c.mcpStale = true
 }
 
 // retireCrossHarnessWorker ends the held process of a cross-harness worker
