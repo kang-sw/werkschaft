@@ -110,7 +110,7 @@ func TestExecLaunchRecordsOnlyMatchingCall(t *testing.T) {
 	if a.RecordExecLaunch(ctx, call) == nil {
 		t.Fatal("an unsolicited call was recorded")
 	}
-	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments)
+	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false)
 	must(t, err)
 	for _, wrong := range []execjob.ModelLaunch{
 		{ID: "wrong", Tool: call.Tool, JobID: call.JobID, Arguments: call.Arguments},

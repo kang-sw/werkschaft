@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -168,7 +169,12 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 				t.Fatal(err)
 			}
 			waiting := waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool { return len(st.Approvals) == 1 })
-			if _, err = open.runner.AnswerApproval(st.ID, waiting.Approvals[0].ID, false, "fixture denied"); err != nil {
+			prompt := waiting.Approvals[0]
+			if prompt.Tool != "exec.shell" || !bytes.Contains(prompt.Input, []byte(`"program"`)) ||
+				bytes.Contains(prompt.Input, []byte(`"session_key"`)) {
+				t.Fatal("Werk approval must show the resolved exec without connection credentials")
+			}
+			if _, err = open.runner.AnswerApproval(st.ID, prompt.ID, false, "fixture denied"); err != nil {
 				t.Fatal(err)
 			}
 			done := waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
@@ -213,6 +219,79 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWerkLeadApprovalHonorsLivePermissionAndCommitsOnce(t *testing.T) {
+	f := newWerkDaemonFixture(t)
+	var calls atomic.Int32
+	installWerkFixtureTransport(t, func(wrapped http.RoundTripper) http.RoundTripper {
+		return werkFixtureRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host != "openrouter.ai" {
+				return wrapped.RoundTrip(req)
+			}
+			var wire map[string]json.RawMessage
+			defer req.Body.Close()
+			if err := json.NewDecoder(req.Body).Decode(&wire); err != nil {
+				return nil, err
+			}
+			switch n := calls.Add(1); n {
+			case 1:
+				return werkLeadFixtureCall("fs_write", "allow-file", map[string]any{"path": "allowed.txt", "content": "approved"})
+			case 2:
+				if !bytes.Contains(wire["input"], []byte("allowed.txt")) {
+					return nil, fmt.Errorf("the first write did not return a tool result")
+				}
+				return werkLeadFixtureCall("fs_write", "deny-file", map[string]any{"path": "blocked.txt", "content": "blocked"})
+			case 3:
+				if bytes.Contains(wire["tools"], []byte(`"name":"fs_write"`)) ||
+					!bytes.Contains(wire["input"], []byte("became read-only")) {
+					return nil, fmt.Errorf("the active turn did not apply the new read-only mode")
+				}
+				raw := `{"type":"response.completed","response":{"id":"permission-done","status":"completed","output":[{"type":"message","id":"permission-msg","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: " + raw + "\n\n"))}, nil
+			default:
+				return nil, fmt.Errorf("unexpected model request %d", n)
+			}
+		})
+	})
+	open := f.open(nil)
+	st, err := open.runner.CreateLead(wsagent.BackendWerk, f.root, wsagent.LeadOptions{Model: "vendor/fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open.runner.Send(st.ID, "Try both fixture writes."); err != nil {
+		t.Fatal(err)
+	}
+	first := waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool { return len(st.Approvals) == 1 })
+	if first.ActiveMode != "workspace-write" || first.Approvals[0].Tool != "fs.write" {
+		t.Fatal("the workspace-write lead did not ask before the file mutation")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "allowed.txt")); !os.IsNotExist(err) {
+		t.Fatal("the file write ran before approval")
+	}
+	if _, err := open.runner.AnswerApproval(st.ID, first.Approvals[0].ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	second := waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
+		return len(st.Approvals) == 1 && st.Approvals[0].ID != first.Approvals[0].ID
+	})
+	if got, err := os.ReadFile(filepath.Join(f.root, "allowed.txt")); err != nil || string(got) != "approved" {
+		t.Fatal("the explicitly approved write did not reach the worktree")
+	}
+	mode, err := open.runner.SetPermissionLevel(st.ID, wsagent.PermissionReadOnly)
+	if err != nil || mode.ActiveMode != "read-only" {
+		t.Fatalf("read-only mode was not applied in the running turn: %v", err)
+	}
+	if _, err := open.runner.AnswerApproval(st.ID, second.Approvals[0].ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	done, err := open.runner.Wait(context.Background(), st.ID, 10*time.Second)
+	if err != nil || done.Status != wsagent.TurnDone || done.Message != "done" {
+		t.Fatalf("the fixture lead did not finish: %s, %v", done.Status, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "blocked.txt")); !os.IsNotExist(err) {
+		t.Fatal("the second write ignored the live read-only mode")
 	}
 }
 

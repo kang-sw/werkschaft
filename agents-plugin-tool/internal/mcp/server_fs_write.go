@@ -21,11 +21,9 @@ func (s *Server) fileWriteTools() bool {
 	if s.conversation == "" || binding == nil || binding.Record == nil || s.readOnlyAuthority() {
 		return false
 	}
-	if binding.Authority != wsfs.AuthorityFull &&
-		(binding.Authority != wsfs.AuthorityWorkdirWrite || !filepath.IsAbs(binding.Root)) {
-		return false
-	}
-	if binding.CurrentAuthority != nil && binding.CurrentAuthority() != binding.Authority {
+	authority := binding.AuthorityForCall()
+	if authority != wsfs.AuthorityFull &&
+		(authority != wsfs.AuthorityWorkdirWrite || !filepath.IsAbs(binding.Root)) {
 		return false
 	}
 	backend := s.execCutover
@@ -45,10 +43,11 @@ func (s *Server) callFSWrite(ctx context.Context, id json.RawMessage, name strin
 		return toolTextResponse(id, "", err)
 	}
 	binding := s.fileWrites
+	authority := binding.AuthorityForCall()
 	files := wsfs.Files{
-		Root: binding.Root, Cwd: binding.Cwd, Authority: binding.Authority,
+		Root: binding.Root, Cwd: binding.Cwd, Authority: authority,
 		RecordMutation: func(ctx context.Context, intent wsfs.FileIntent) error {
-			return binding.Record(ctx, FileWriteCall{ID: callID, Tool: name, Arguments: raw, Intent: intent})
+			return binding.Record(ctx, FileWriteCall{ID: callID, Tool: name, Arguments: raw, Authority: authority, Intent: intent})
 		},
 	}
 	var text string

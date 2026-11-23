@@ -582,7 +582,10 @@ func TestWerkCatalogGradesEveryItemForBothRoles(t *testing.T) {
 	if cat.Oldest != werk.ProtocolVersion || cat.Newest != werk.ProtocolVersion {
 		t.Errorf("range = %s..%s", cat.Oldest, cat.Newest)
 	}
+	gradeRank := map[CapabilityGrade]int{GradeUnsupported: 0, GradeSubstitute: 1, GradeNative: 2}
+	codex := CodexCatalog()
 	for _, role := range []CatalogRole{RoleWorker, RoleLead} {
+		want, got := codex.Resolve(role, codex.Newest), cat.Resolve(role, cat.Newest)
 		stated := map[CapabilityItem]bool{}
 		for _, e := range cat.Entries {
 			if e.Role == role {
@@ -595,6 +598,10 @@ func TestWerkCatalogGradesEveryItemForBothRoles(t *testing.T) {
 		for _, item := range CatalogItems {
 			if !stated[item] {
 				t.Errorf("%s: item %s is not stated", role, item)
+			}
+			rank, known := gradeRank[got.Grade(item)]
+			if !known || rank < gradeRank[want.Grade(item)] {
+				t.Errorf("%s %s: Werk = %s, Codex = %s", role, item, got.Grade(item), want.Grade(item))
 			}
 		}
 	}

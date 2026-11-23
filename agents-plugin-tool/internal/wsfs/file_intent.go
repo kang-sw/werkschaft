@@ -18,6 +18,7 @@ import (
 type FileCall struct {
 	ID, Tool  string
 	Arguments json.RawMessage
+	Authority Authority
 	Intent    FileIntent
 }
 
@@ -28,7 +29,21 @@ type FileWriteSession struct {
 	Root, Cwd        string
 	Authority        Authority
 	CurrentAuthority func() Authority
-	Record           func(context.Context, FileCall) error
+	// LiveAuthority is set when the harness applies mode changes in the current process.
+	LiveAuthority bool
+	Record        func(context.Context, FileCall) error
+}
+
+// AuthorityForCall snapshots the permission level to pin for one file operation.
+func (s *FileWriteSession) AuthorityForCall() Authority {
+	if s.CurrentAuthority == nil {
+		return s.Authority
+	}
+	current := s.CurrentAuthority()
+	if s.LiveAuthority || current == s.Authority {
+		return current
+	}
+	return ""
 }
 
 // FileIntent is the durable recovery evidence for one admitted file mutation.
