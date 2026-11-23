@@ -468,7 +468,12 @@ func TestComposerRefusedLaunchShowsRefused(t *testing.T) {
 // once, and no receipt comes from the dashboard (the exec notice's job).
 func TestComposerAsyncConvertedCardFinishesOnRefresh(t *testing.T) {
 	f := startComposerFixture(t)
+	// The job is registered before the card converts: the settle loop retires
+	// the card of a job the service does not know the moment it looks, however
+	// late this goroutine observes it, so the async phase stays until the test
+	// changes the job.
 	f.svc.mu.Lock()
+	f.svc.jobs["exec_slow"] = ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Async: true}
 	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
 		return ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Command: req.Line, Async: true}, nil
 	}
@@ -481,9 +486,6 @@ func TestComposerAsyncConvertedCardFinishesOnRefresh(t *testing.T) {
 		t.Fatalf("card = %+v", card)
 	}
 	// Still running: the refresh keeps it async.
-	f.svc.mu.Lock()
-	f.svc.jobs["exec_slow"] = ComposerJob{ExecID: "exec_slow", Gen: 4, State: "running", Async: true}
-	f.svc.mu.Unlock()
 	if c := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/sub-async-0001")); c.Phase != "async" {
 		t.Fatalf("running card = %+v", c)
 	}

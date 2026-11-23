@@ -44,6 +44,11 @@ func TestComposerInteractivePathsTouchNoFiles(t *testing.T) {
 	zero := 0
 	big := []byte(strings.Repeat("p", 6000))
 	f.svc.mu.Lock()
+	// The converted run's job is known to the service and running: the settle
+	// loop retires the card of a job it does not know, so without this the
+	// card is done (no longer queryable) as soon as a tick runs, and the wait
+	// for the async phase and the measured settling depend on scheduling.
+	f.svc.jobs["exec_async_p"] = ComposerJob{ExecID: "exec_async_p", Gen: 4, State: "running", Async: true}
 	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
 		if strings.HasPrefix(req.Line, "async") {
 			return ComposerJob{ExecID: "exec_async_p", Gen: 4, State: "running", Async: true}, nil
@@ -108,6 +113,9 @@ func TestComposerInteractivePathsTouchNoFiles(t *testing.T) {
 	composerPost(f.d, "perf-files-003", "!async")
 	waitCard(t, f.d, "perf-files-003", "async")
 	time.Sleep(120 * time.Millisecond) // several settle ticks
+	if c := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/perf-files-003")); c.Phase != "async" {
+		t.Fatalf("the settle ticks measured a card that is not async: %+v", c)
+	}
 	if ops := log.stop(); len(ops) != 0 {
 		t.Fatalf("a converted run's acknowledgement and settling made file operations: %v", ops)
 	}

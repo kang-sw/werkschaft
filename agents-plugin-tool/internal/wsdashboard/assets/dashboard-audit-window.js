@@ -372,7 +372,7 @@
     if (ev.kind === "other") {
       var banner = '<div class="au-banner"><strong>' + auEsc(wsT("js.audit.raw.other.title")) + "</strong> " + auEsc(wsT("js.audit.raw.other.sub")) + "</div>";
       var res = auRenderBodyContent(ev, "raw", opts);
-      return { html: banner + res.html, matchCount: res.matchCount, plainText: res.plainText };
+      return { html: banner + res.html, matchCount: res.matchCount, matchCapped: res.matchCapped, plainText: res.plainText };
     }
     var clone = Object.assign({}, ev);
     delete clone.raw;

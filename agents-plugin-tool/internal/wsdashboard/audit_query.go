@@ -745,8 +745,10 @@ type seamMatcher struct {
 	// re is the compiled form by the left and right sentinel kind (see
 	// sentinelKind), made on first use; a request is served by one goroutine.
 	re map[[2]int]*regexp.Regexp
-	// ctx is the resumable form (see audit_span_scan.go), by its shape.
-	ctx map[[3]int]*regexp.Regexp
+	// bounded is the program of the scan that ends a window's matches at its
+	// edge; stats counts the scan's branches.
+	bounded *boundedProg
+	stats   seamStats
 }
 
 // seamSentinels are the sentinel characters by kind: 0 none (a line edge),
@@ -754,8 +756,12 @@ type seamMatcher struct {
 var seamSentinels = [3]string{"", "\x00", "_"}
 
 func newSeamMatcher(pattern string) (*seamMatcher, error) {
-	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}, ctx: map[[3]int]*regexp.Regexp{}}
+	m := &seamMatcher{pattern: pattern, re: map[[2]int]*regexp.Regexp{}}
 	if _, err := m.compiled(0, 0); err != nil {
+		return nil, err
+	}
+	var err error
+	if m.bounded, err = newBoundedProg(pattern); err != nil {
 		return nil, err
 	}
 	return m, nil
