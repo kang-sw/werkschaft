@@ -132,3 +132,110 @@ func TestDurableRunnerForgetClosedDeletesPrivateRecord(t *testing.T) {
 		t.Fatalf("caller no longer owns directory cleanup: %v", err)
 	}
 }
+
+func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		name := "immediate"
+		if held {
+			name = "held by exec"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			const backend = "fixture"
+			var r *Runner
+			reports := 0
+			r = NewRunner(Options{
+				Dir: dir,
+				Backends: map[string]BackendRegistration{
+					backend: {ProcessKind: ProcessDurable},
+				},
+				Report: func(rep TurnReport) {
+					reports++
+					rows, err := r.durableRecords.DurableAgentRecords(context.Background())
+					if err != nil || len(rows) != 1 {
+						t.Fatalf("durable state during callback = %v, %v", rows, err)
+					}
+					committed, err := decodeRecord("fixture", rows[0].ReplyID, rows[0].JSON)
+					if err != nil || committed.TurnOpen || committed.DurableTurn != nil || committed.ReportID != "original" ||
+						committed.LastTurn == nil || committed.LastTurn.Mark != 2 || committed.LastTurn.Result.Message != rep.Result.Message {
+						t.Fatalf("callback did not observe its committed settlement: %+v, %v", committed, err)
+					}
+				},
+			})
+			r.openDurableAgentRecords()
+			t.Cleanup(r.Close)
+			if r.durableRecords == nil {
+				t.Fatal("the private record store did not open")
+			}
+			rec := Record{ReplyID: "fixturechild", Backend: backend, Root: dir, WSKey: "fixture-key",
+				Parent: &ParentRef{Kind: ParentLead, ReplyID: "parent"}, TurnMark: 2,
+				TurnOpen: true, TurnStartedAt: r.opts.Now().UnixMilli(), DurableTurn: &durableTurnInput{ID: "original", Text: "work"},
+			}
+			sessionDir := wsdashboard.SessionDir(dir, rec.ReplyID)
+			if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			c := &conv{r: r, rec: rec, dir: sessionDir, reply: "final answer", settleC: make(chan struct{})}
+			c.live = newLiveWriter(sessionDir, rec.WSKey, backend, r.opts.Now, r.opts.Log)
+			if err := r.persistAgentRecord(c.dir, rec); err != nil {
+				t.Fatal(err)
+			}
+
+			if held {
+				r.ExpectExecJobs()
+				if err := c.settleTurn(TurnDone, "", 2); err != nil {
+					t.Fatal(err)
+				}
+				if reports != 0 || c.rec.HeldTurn == nil || c.rec.DurableHeldReportID != "original" || c.rec.DurableTurn != nil {
+					t.Fatal("the exec hold lost the original turn identity")
+				}
+				r.BindExecJobs(nil)
+			}
+
+			signal := c.settleC
+			if err := r.durableRecords.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if held {
+				c.releaseHeld()
+				if c.heldRes == nil || c.rec.DurableHeldReportID != "original" {
+					t.Fatal("failed write discarded the held result")
+				}
+			} else {
+				if err := c.settleTurn(TurnDone, "", 2); err == nil {
+					t.Fatal("settlement reported success despite a closed private store")
+				}
+				if !c.rec.TurnOpen || c.rec.DurableTurn == nil || c.reply == "" {
+					t.Fatal("failed write discarded the open turn")
+				}
+			}
+			select {
+			case <-signal:
+				t.Fatal("failed write woke result waiters")
+			default:
+			}
+			if reports != 0 || c.settled.n != 0 {
+				t.Fatal("failed write published a turn")
+			}
+
+			r.openDurableAgentRecords()
+			if held {
+				c.releaseHeld()
+				c.releaseHeld()
+			} else if err := c.settleTurn(TurnDone, "", 2); err != nil {
+				t.Fatal(err)
+			}
+			if reports != 1 || c.settled.n != 1 || c.settled.mark != 2 {
+				t.Fatalf("settled %d times and reported %d times", c.settled.n, reports)
+			}
+			if !isClosed(signal) {
+				t.Fatal("committed result did not wake waiters")
+			}
+			projected, err := readRecord(sessionDir)
+			if err != nil || projected.DurableTurn != nil || projected.DurableHeldReportID != "" ||
+				projected.LastTurn == nil || projected.LastTurn.Result.Message != "final answer" {
+				t.Fatalf("incorrect history projection after settlement: %+v, %v", projected, err)
+			}
+		})
+	}
+}

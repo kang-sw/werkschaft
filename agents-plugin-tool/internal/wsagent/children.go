@@ -986,7 +986,9 @@ func (c *conv) releaseHeld() {
 		return
 	}
 	res := *c.heldRes
-	c.hold(nil)
+	if !c.r.durableProcess(c.rec.Backend) {
+		c.hold(nil)
+	}
 	c.publish(res, false)
 }
 

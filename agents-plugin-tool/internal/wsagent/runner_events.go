@@ -439,7 +439,12 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		if turnErr != "" {
 			status = TurnFailed
 		}
-		c.settleTurn(status, turnErr, c.turnMark)
+		if err := c.settleTurn(status, turnErr, c.turnMark); err != nil {
+			c.setStatus(func() { c.lastErr = "save turn settlement: " + err.Error() })
+			c.live.writeSnapshot()
+			c.r.notify(c.rec.ReplyID, c.rec.Root)
+			return
+		}
 		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
 			c.r.opts.AgyActivity()
 		}

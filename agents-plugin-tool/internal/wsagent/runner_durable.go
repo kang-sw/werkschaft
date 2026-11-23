@@ -139,3 +139,32 @@ func (r *Runner) deleteDurableRecord(rec Record) {
 		fmt.Fprintf(r.opts.Log, "agent %s: delete durable record: %v\n", rec.ReplyID, err)
 	}
 }
+
+// durableTurnInput is the prompt already admitted for the one active turn.
+// The process uses the same ID in its input and result journal.
+type durableTurnInput struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// commitDurableRecord makes a private transition visible only after its
+// transaction commits. stage assigns fields or copies any slice it changes.
+// after runs under mu after publication, for state read by waiting callers.
+func (c *conv) commitDurableRecord(stage func(*Record), after func()) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := c.rec
+	stage(&next)
+	if err := c.r.persistAgentRecord(c.dir, next); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: durable record write: %v\n", c.rec.ReplyID, err)
+		return err
+	}
+	c.rec = next
+	c.recordDirty = false
+	if after != nil {
+		after()
+	}
+	return nil
+}
