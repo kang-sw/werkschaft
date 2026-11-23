@@ -260,88 +260,92 @@
     if (xhAgg && !xhAgg.hidden) return xhAgg;
     return xhButtons()[0] || null;
   }
+  // xhLayoutNow fits the strip in one write phase, one read phase and one write
+  // phase (ai-docs/manuals/performance.md, Frontend Minimal Updates): the first
+  // puts every element in the state it is measured in (all chips, +N at its
+  // widest, the aggregate at full width), the read takes one width snapshot of
+  // all of them (the aggregate's compact width is its node plus the chip's own
+  // left padding and border, so it needs no probe), and the last writes the
+  // decision. +N and the aggregate are never hidden and shown again within one
+  // pass: an element that holds the keyboard loses it the moment it is
+  // display:none and a measurement flushes style. Each is set once, at the
+  // decision.
   function xhLayoutNow() {
-    var list = xhVis;
+    var list = xhVis, quiet = !list.length, i;
     xhSlots.forEach(function (s) { s.el.hidden = false; });
-    xhAgg.classList.remove("compact");
-    // +N and the aggregate are never hidden and shown again within one pass: an
-    // element that holds the keyboard loses it the moment it is display:none and
-    // a measurement flushes style. Each is set once, at the decision.
-    if (!list.length) {
+    if (quiet && !xhHidden) {
       xhMore.hidden = true;
-      if (xhHidden) {
-        xhAgg.hidden = false;
-        xhAgg.className = "xchip xagg quiet";
-        xhAgg.textContent = "";
-        var qn = xhEl("span", "xnode");
-        qn.appendChild(xhEl("span", "xemb", ">_"));
-        xhAgg.appendChild(qn);
-        xhAgg.appendChild(xhEl("span", "xst mute", wsT("js.xhud.agg.ended", String(xhHidden))));
-        xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(xhHidden)));
-        xhShown = [];
-        xhFolded = xhJobs.filter(function (j) { return !xhDismissed[j.id]; });
-        xhGroup.hidden = false;
-        xhFit(0, [], true);
-      } else {
-        xhShown = [];
-        xhFolded = [];
-        xhAgg.hidden = true;
-        xhGroup.hidden = true;
-      }
+      xhShown = [];
+      xhFolded = [];
+      xhAgg.classList.remove("compact");
+      xhAgg.hidden = true;
+      xhGroup.hidden = true;
       xhGroup.classList.remove("fresh");
       return;
     }
     xhGroup.hidden = false;
-    var cb = composer.querySelector(".cbadges"), ib = $("ibadge");
-    var cbw = cb ? cb.clientWidth : composer.clientWidth, ibw = ib ? ib.offsetWidth + 8 : 0, sib = 0, cnt = 0;
-    [$("bgbadge"), $("monbadge"), $("sbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
-    var avail = cbw - ibw - sib - cnt * XH_GAP;
-    var w = xhSlots.map(function (s) { return s.el.offsetWidth; });
-    // +N is measured as it will be drawn: the widest count it can show (all
-    // jobs, three digits included) with the corner badge a failure adds.
-    xhMore.hidden = false;
-    xhMore.textContent = "+" + list.length;
-    var mw = xhMore.offsetWidth;
-    var n = xhSlots.length;
-    function total(k) { var sum = 0; for (var i = 0; i < k; i++) sum += w[i] + (i ? XH_GAP : 0); if (k < list.length) sum += (k ? XH_GAP : 0) + mw; return sum; }
-    while (n > 1 && total(n) > avail) n--;
-    if (n === 1 && total(1) > avail) n = 0;
-    if (composer.clientWidth <= XH_NARROW_PX) n = 0;
-    xhShown = list.slice(0, n);
-    xhFolded = list.slice(n);
-    xhSlots.forEach(function (s, i) { s.el.hidden = i >= n; });
-    var attn = xhWorst(list), lead = list.filter(xhAttn)[0] || list.filter(function (j) { return !xhEnded(j); })[0] || list[0];
-    xhAgg.className = "xchip xagg";
     xhAgg.textContent = "";
-    xhAgg.appendChild(xhNode(lead));
-    xhAgg.appendChild(xhEl("span", "xn", String(list.length)));
-    if (attn) xhAgg.appendChild(xhEl("span", "xst " + attn[0], attn[1]));
-    xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(list.length)));
-    xhMore.hidden = n === 0 || !xhFolded.length;
-    xhAgg.hidden = n !== 0;
-    if (n === 0) xhFit(avail, list, false);
-    else if (xhFolded.length) {
-      xhMore.textContent = "+" + xhFolded.length;
-      xhMore.setAttribute("aria-label", wsT("js.xhud.more.aria", String(xhFolded.length)));
-      var at2 = xhWorst(xhFolded);
-      if (at2) xhMore.appendChild(xhEl("span", "xbadge " + at2[0], at2[1]));
+    if (quiet) {
+      xhMore.hidden = true;
+      xhAgg.className = "xchip xagg quiet";
+      var qn = xhEl("span", "xnode");
+      qn.appendChild(xhEl("span", "xemb", ">_"));
+      xhAgg.appendChild(qn);
+      xhAgg.appendChild(xhEl("span", "xst mute", wsT("js.xhud.agg.ended", String(xhHidden))));
+      xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(xhHidden)));
+      xhShown = [];
+      xhFolded = xhJobs.filter(function (j) { return !xhDismissed[j.id]; });
+    } else {
+      // +N is measured as it will be drawn: the widest count it can show (all
+      // jobs, three digits included) with the corner badge a failure adds.
+      xhMore.hidden = false;
+      xhMore.textContent = "+" + list.length;
+      var attn = xhWorst(list), lead = list.filter(xhAttn)[0] || list.filter(function (j) { return !xhEnded(j); })[0] || list[0];
+      xhAgg.className = "xchip xagg";
+      xhAgg.appendChild(xhNode(lead));
+      xhAgg.appendChild(xhEl("span", "xn", String(list.length)));
+      if (attn) xhAgg.appendChild(xhEl("span", "xst " + attn[0], attn[1]));
+      xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(list.length)));
+    }
+    xhAgg.hidden = false;
+    // Read phase: the one width snapshot.
+    var cb = composer.querySelector(".cbadges"), ib = $("ibadge"), sib = 0, cnt = 0;
+    [$("bgbadge"), $("monbadge"), $("sbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
+    var avail = (cb ? cb.clientWidth : composer.clientWidth) - (ib ? ib.offsetWidth + 8 : 0) - sib - cnt * XH_GAP;
+    var w = xhSlots.map(function (s) { return s.el.offsetWidth; });
+    var mw = quiet ? 0 : xhMore.offsetWidth, narrow = composer.clientWidth <= XH_NARROW_PX;
+    var aggW = xhAgg.offsetWidth, node = xhAgg.firstChild, ast = window.getComputedStyle(xhAgg);
+    var compactW = (node ? node.offsetWidth : 0) + (parseFloat(ast.paddingLeft) || 0) + (parseFloat(ast.borderLeftWidth) || 0) + (parseFloat(ast.borderRightWidth) || 0);
+    var n = 0;
+    if (!quiet) {
+      n = xhSlots.length;
+      var total = function (k) { var sum = 0; for (i = 0; i < k; i++) sum += w[i] + (i ? XH_GAP : 0); if (k < list.length) sum += (k ? XH_GAP : 0) + mw; return sum; };
+      while (n > 1 && total(n) > avail) n--;
+      if (n === 1 && total(1) > avail) n = 0;
+      if (narrow) n = 0;
+    }
+    // Write phase: the decision. When the aggregate stands alone it is the last
+    // resort: if it does not fit the remainder it shrinks to its node, and with
+    // no room at all the group hides (the chips stay reachable once the strip
+    // widens).
+    if (!quiet) {
+      xhShown = list.slice(0, n);
+      xhFolded = list.slice(n);
+      xhSlots.forEach(function (s, k) { s.el.hidden = k >= n; });
+      xhMore.hidden = n === 0 || !xhFolded.length;
+      xhAgg.hidden = n !== 0;
+      if (n > 0 && xhFolded.length) {
+        xhMore.textContent = "+" + xhFolded.length;
+        xhMore.setAttribute("aria-label", wsT("js.xhud.more.aria", String(xhFolded.length)));
+        var at2 = xhWorst(xhFolded);
+        if (at2) xhMore.appendChild(xhEl("span", "xbadge " + at2[0], at2[1]));
+      }
+    }
+    if (n === 0 && aggW > avail) {
+      xhAgg.classList.add("compact");
+      if (compactW > avail) { xhAgg.hidden = true; xhGroup.hidden = true; }
     }
     xhGroup.classList.remove("fresh");
-    xhRove();
-  }
-  // fit: the aggregate chip is the last resort; if it does not fit the
-  // remainder either, it shrinks to its node, and with no room at all the
-  // group hides (the chips stay reachable once the strip widens).
-  function xhFit(avail, list, quiet) {
-    if (quiet) {
-      var cb = composer.querySelector(".cbadges"), ib = $("ibadge"), sib = 0, cnt = 0;
-      [$("bgbadge"), $("monbadge"), $("sbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
-      avail = (cb ? cb.clientWidth : composer.clientWidth) - (ib ? ib.offsetWidth + 8 : 0) - sib - cnt * XH_GAP;
-    }
-    if (xhAgg.offsetWidth > avail) {
-      xhAgg.classList.add("compact");
-      if (xhAgg.offsetWidth > avail) { xhAgg.hidden = true; xhGroup.hidden = true; }
-    }
     xhRove();
   }
   // The group is a toolbar: one tab stop (the active chip), arrows move.

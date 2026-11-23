@@ -5,7 +5,7 @@
 // assembly. Nothing here falls back to sending the text as a prompt: a daemon
 // that does not know the route refuses, and the draft stays.
   var cexecEnabled = !!(composer && composer.getAttribute("data-cexec") === "1" && rid && window.fetch);
-  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecWhy = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
+  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
   function cexecNewID() {
     var bytes = new Uint8Array(12);
     if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
@@ -47,7 +47,7 @@
   // run when folded, clear) over a scrollback of runs. It folds to the bar
   // alone while no run is active, unless the user opened it or a run was just
   // submitted; the bar button toggles it.
-  var cexecLog = null, cexecCount = null, cexecMini = null, cexecChev = null, cexecOpen = true, cexecRestoring = false;
+  var cexecLog = null, cexecCount = null, cexecMini = null, cexecChev = null, cexecOpen = true, cexecRestoring = false, cexecRestoreAt = 0;
   function cexecContainer() {
     if (cexecBox) return cexecBox;
     cexecBox = doc.createElement("div");
@@ -122,7 +122,11 @@
     if (!c) {
       c = { id: id, command: command, card: card || { id: id, command: command, phase: "running" }, el: null, polls: 0, timer: 0 };
       cexecById[id] = c;
-      cexecCards.push(c);
+      // A restored card is older than every card already here (a fresh run
+      // that finished before the restore read returned), so it keeps its place
+      // ahead of them; saved history follows the same order.
+      if (cexecRestoring) cexecCards.splice(cexecRestoreAt++, 0, c);
+      else cexecCards.push(c);
       cexecSave();
     } else if (card) c.card = card;
     // A run just submitted opens the console; a restored one leaves it folded.
@@ -150,7 +154,10 @@
       el = c.el = doc.createElement("div");
       el.className = "cmdrun cexec";
       el.setAttribute("data-cexec", c.id);
-      cexecLog.appendChild(el);
+      // Cards are chronological: a restored (older) card goes before any run
+      // that finished while its read was in flight.
+      var next = cexecCards[cexecCards.indexOf(c) + 1];
+      cexecLog.insertBefore(el, next && next.el && next.el.parentNode === cexecLog ? next.el : null);
     }
     el.setAttribute("data-phase", card.unknown ? "unknown" : card.phase);
     el.setAttribute("data-tone", tone);
@@ -290,6 +297,7 @@
       (list.cards || []).forEach(function (card) { known[card.id] = card; });
       var fresh = cexecCards.length > 0;
       cexecRestoring = true;
+      cexecRestoreAt = 0;
       remembered.forEach(function (m) {
         if (cexecById[m.id]) return;
         cexecAdd(m.id, m.command, known[m.id] || { id: m.id, command: m.command, phase: "done", unknown: true });
@@ -305,20 +313,21 @@
     // A transport failure, and a body that fails to read or parse after good
     // headers, both end as null: done always runs, so a caller that waits on it
     // (a send needing the token) clears its busy state and keeps the draft.
-    // The outcome of a failed read stays in cexecWhy (the HTTP status and the
-    // server's short reason, or "network error"), so a send that needed the
-    // token can tell the user why instead of only that the dashboard is unreachable.
-    cexecWhy = "";
+    // The cause of a failed read (the HTTP status and the server's short
+    // reason, or "network error") is delivered with this read's own result, so a
+    // send that needed the token can tell the user why instead of only that the
+    // dashboard is unreachable, and overlapping reads never share a cause.
+    var why = "";
     fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       if (r.ok) return r.json();
       return r.text().then(function (s) { return s; }, function () { return ""; }).then(function (s) {
-        cexecWhy = r.status + (s && s.trim() ? ": " + s.trim().slice(0, 120) : "");
+        why = r.status + (s && s.trim() ? ": " + s.trim().slice(0, 120) : "");
         return null;
       });
-    }, function () { cexecWhy = wsT("js.cexec.neterr"); return null; }).catch(function () { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); return null; }).then(function (list) {
-      if (!list || !Array.isArray(list.cards)) { cexecWhy = cexecWhy || wsT("js.cexec.badreply"); done(null); return; }
+    }, function () { why = wsT("js.cexec.neterr"); return null; }).catch(function () { why = why || wsT("js.cexec.badreply"); return null; }).then(function (list) {
+      if (!list || !Array.isArray(list.cards)) { done(null, why || wsT("js.cexec.badreply")); return; }
       if (typeof list.token === "string" && list.token) cexecToken = list.token;
-      done(list);
+      done(list, "");
     });
   }
   // cexecUnreachable is the warning for a send the dashboard could not take,
@@ -449,13 +458,13 @@
       });
     }
     if (cexecToken || retry) post();
-    else cexecList(function (list) {
+    else cexecList(function (list, why) {
       // No admission token yet (the page's first list read has not landed, or
       // was denied): a fresh submission needs one, so read it first.
       if (!list) {
         cexecBusy = false;
         settled();
-        noteWarn(cexecUnreachable(cexecWhy));
+        noteWarn(cexecUnreachable(why));
         return;
       }
       post();

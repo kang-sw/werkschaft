@@ -60,6 +60,7 @@ window.__slots = { rev: "1.1.x", token: "tok", commands: [{ id: "t", label: "Run
 window.fetch = function (url, o) {
   var u = String(url), body = o && o.body ? JSON.parse(o.body) : null, J = ${JSON.stringify(JOBS)};
   function res(v, st) { return Promise.resolve({ ok: !st || st < 400, status: st || 200, json: function () { return Promise.resolve(v); }, text: function () { return Promise.resolve(JSON.stringify(v)); } }); }
+  if (/composer-exec$/.test(u) && !body && window.__hook) { var held = window.__hook(window.__gets = (window.__gets || 0) + 1); if (held) return held; }
   if (/composer-exec$/.test(u) && !body && window.__get) { if (window.__get === "net") return Promise.reject(new TypeError("x")); return Promise.resolve({ ok: false, status: window.__get, json: function () { return Promise.reject(0); }, text: function () { return Promise.resolve(window.__getText + " "); } }); }
   if (/composer-exec$/.test(u) && !body) return res({ token: "tok", cards: [] });
   if (/composer-exec$/.test(u) && body) { var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.ok)); }
@@ -69,7 +70,8 @@ window.fetch = function (url, o) {
   return res({}, 404);
 };`;
 
-async function open(t) {
+// pre runs in the page before the composer scripts: a seeded history, or a list-read hook.
+async function open(t, pre) {
   const { chromium } = require(mod);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -82,6 +84,7 @@ async function open(t) {
   await page.addScriptTag({ content: read('capsules.js') });
   await page.addScriptTag({ content: read('mention.js') });
   await page.addScriptTag({ content: route });
+  if (pre) await page.evaluate(pre);
   const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
   await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { cards: cexecCards, slashToken: slashToken, dropToken: function () { cexecToken = ""; } };})();' });
   const ed = page.locator('.cfield [contenteditable]').first();
@@ -207,4 +210,66 @@ test('a refused token read keeps its status and reason in the warning, and the d
   await page.evaluate(() => { window.__get = 0; });
   await send();
   assert.equal(await page.evaluate(() => ctext.value), '', 'a healthy read sends and clears the draft');
+});
+
+// A list read held by the test: resolves the nth GET of the composer-exec list by hand.
+const HELD = `
+window.__rel = {};
+function held(n, make) { return new Promise(function (resolve) { window.__rel[n] = function () { resolve(make()); }; }); }
+`;
+const ok = v => `{ ok: true, status: 200, json: function () { return Promise.resolve(${v}); }, text: function () { return Promise.resolve(JSON.stringify(${v})); } }`;
+
+test('overlapping list reads each carry their own failure cause', { skip }, async t => {
+  // The restore read (1st) and a send's token read (2nd) overlap: the restore read fails with a
+  // refusal while the send's read answers good headers and then a body that cannot be read. The
+  // send's warning names its own cause, not the refusal the other read recorded meanwhile.
+  const { page, type } = await open(t, HELD + `
+window.__hook = function (n) {
+  if (n === 1) return held("restore", function () { return { ok: false, status: 404, json: function () { return Promise.reject(0); }, text: function () { return Promise.resolve("unknown session"); } }; });
+  if (n === 2) return Promise.resolve({ ok: true, status: 200, json: function () { return new Promise(function (_, rej) { window.__rel.body = function () { rej(new SyntaxError("cut")); }; }); }, text: function () { return Promise.resolve(""); } });
+};`);
+  await page.evaluate(() => window.__t.dropToken());
+  await type('!ls');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__rel.body);
+  await page.evaluate(() => window.__rel.restore());
+  await page.waitForTimeout(150);
+  assert.equal(await page.evaluate(() => window.__warn), undefined, 'the send is still waiting for its own read');
+  await page.evaluate(() => window.__rel.body());
+  await page.waitForFunction(() => window.__warn);
+  assert.equal(await page.evaluate(() => window.__warn), `the dashboard is not reachable (${en['js.cexec.badreply']})`);
+  assert.equal(await page.evaluate(() => ctext.value), '!ls', 'draft stays');
+});
+
+const OLD = [{ id: 'cxold1', command: 'old1' }, { id: 'cxold2', command: 'old2' }];
+const seedOld = `sessionStorage.setItem("ws.cexec.fx", ${JSON.stringify(JSON.stringify(OLD))});`;
+const listOld = `{ token: "tok", cards: [{ id: "cxold1", command: "old1", phase: "done", exit_code: 0, output_bytes: 0 }, { id: "cxold2", command: "old2", phase: "done", exit_code: 0, output_bytes: 0 }] }`;
+
+test('a run that finishes before the restore read returns stays newest, and its console stays open', { skip }, async t => {
+  const { page, type } = await open(t, seedOld + HELD + `
+window.__hook = function (n) { if (n === 1) return held("restore", function () { return ${ok(listOld)}; }); };`);
+  await type('!ok');
+  await page.keyboard.press('Enter');
+  await page.locator('.d-cexec .cexec').first().waitFor();
+  await page.waitForFunction(() => document.querySelector('.cexec[data-phase="done"]'));
+  assert.equal(await page.locator('.d-cexec .cexec').count(), 1, 'the older cards wait for the restore read');
+  await page.evaluate(() => window.__rel.restore());
+  await page.waitForFunction(() => document.querySelectorAll('.d-cexec .cexec').length === 3);
+  const order = () => page.$$eval('.d-cexec .cexec code', els => els.map(e => e.textContent));
+  assert.deepEqual(await order(), ['old1', 'old2', 'ok'], 'the older runs are placed before the fresh one');
+  assert.deepEqual(await page.evaluate(() => window.__t.cards.map(c => c.command)), ['old1', 'old2', 'ok'], 'the card list is chronological');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ws.cexec.fx')).map(c => c.command)), ['old1', 'old2', 'ok'], 'saved history is chronological');
+  assert.equal(await page.locator('.d-cexec').getAttribute('data-folded'), null, 'the fresh run keeps the console open');
+  assert.equal(await page.locator('.cexec-log').isVisible(), true);
+  assert.match(await page.locator('.cexec-mini').textContent(), /ok$/, 'the bar shows the newest run');
+});
+
+test('a history-only restore starts folded with the newest saved run on the bar', { skip }, async t => {
+  const { page } = await open(t, seedOld + `
+window.__hook = function (n) { if (n === 1) return Promise.resolve(${ok(listOld)}); };`);
+  await page.waitForFunction(() => document.querySelectorAll('.d-cexec .cexec').length === 2);
+  assert.equal(await page.locator('.d-cexec').getAttribute('data-folded'), '', 'folded to the bar');
+  assert.equal(await page.locator('.cexec-log').isVisible(), false);
+  assert.match(await page.locator('.cexec-mini').textContent(), /old2$/, 'the bar shows the newest remembered run');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ws.cexec.fx')).map(c => c.command)), ['old1', 'old2']);
 });
