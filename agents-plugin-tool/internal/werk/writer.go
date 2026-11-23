@@ -2,6 +2,7 @@ package werk
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 )
 
@@ -72,14 +73,7 @@ func (w *writer) run() {
 		w.mu.Unlock()
 
 		for _, item := range batch {
-			var err error
-			if w.before != nil {
-				err = w.before(item)
-			}
-			if err == nil {
-				err = w.store.Append(item)
-			}
-			if err != nil {
+			if err := w.append(item); err != nil {
 				w.mu.Lock()
 				first := w.err == nil
 				if first {
@@ -97,6 +91,20 @@ func (w *writer) run() {
 		w.cond.Broadcast()
 		w.mu.Unlock()
 	}
+}
+
+func (w *writer) append(item json.RawMessage) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("the werk log writer failed unexpectedly")
+		}
+	}()
+	if w.before != nil {
+		if err := w.before(item); err != nil {
+			return err
+		}
+	}
+	return w.store.Append(item)
 }
 
 // Flush returns once every item added before it has been written. It returns

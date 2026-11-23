@@ -1049,3 +1049,92 @@ func TestRetryAfterAboveTheCapEndsTheTurn(t *testing.T) {
 		t.Fatalf("at the cap: end %+v slept %v", end, slept)
 	}
 }
+
+func TestTypedLoopIsolatesModelAndToolPanics(t *testing.T) {
+	panickingModel := func(context.Context, Request, StreamHandler) (*Response, error) {
+		panic("model failure detail")
+	}
+	ws := &fakeWS{
+		tools: []MCPTool{{Name: "git.status"}, {Name: "git.log"}},
+		byName: map[string]func(context.Context, json.RawMessage) (CallResult, error){
+			"git.status": func(context.Context, json.RawMessage) (CallResult, error) {
+				panic("tool failure detail")
+			},
+		},
+	}
+	faults := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		panickingModel,
+		reply(callOf("c1", "git_status", "{}"), callOf("c2", "git_log", "{}")),
+		reply(msgItem("after panic")),
+	}}
+	unaffected := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(msgItem("other session")),
+	}}
+	faultCommands, faultEvents := startTypedLoop(t, faults, ws)
+	otherCommands, otherEvents := startTypedLoop(t, unaffected, nil)
+	faultCommands <- Command{Type: CmdUser, Text: "model panic"}
+	otherCommands <- Command{Type: CmdUser, Text: "parallel healthy turn"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonError || end.Error != "the werk turn failed unexpectedly" {
+		t.Fatalf("panicked model turn = %+v", end)
+	}
+	if end := nextTypedTurnEnd(t, otherEvents); end.Reason != ReasonDone {
+		t.Fatalf("other session = %+v", end)
+	}
+	faultCommands <- Command{Type: CmdUser, Text: "tool panic"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonError || end.Error != "a werk tool failed unexpectedly" {
+		t.Fatalf("panicked tool turn = %+v", end)
+	}
+	faultCommands <- Command{Type: CmdUser, Text: "next turn"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonDone {
+		t.Fatalf("next turn = %+v", end)
+	}
+}
+
+func startTypedLoop(t *testing.T, endpoint Responder, ws WSTools) (chan<- Command, <-chan Line) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Line, 64)
+	a, err := New(Config{
+		Dir: t.TempDir(), Authority: AuthorityFull, Model: "vendor/model", Endpoint: endpoint, WS: ws,
+		Emit: func(line Line) {
+			select {
+			case events <- line:
+			case <-ctx.Done():
+			}
+		},
+	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	commands, done := make(chan Command, 8), make(chan struct{})
+	go func() {
+		defer close(done)
+		a.ServeCommands(ctx, commands)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		a.Close()
+	})
+	return commands, events
+}
+
+func nextTypedTurnEnd(t *testing.T, events <-chan Line) Line {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case l := <-events:
+			if strings.Contains(l.Error+l.Output+l.Text, "failure detail") {
+				t.Fatalf("panic payload reached the event stream: %+v", l)
+			}
+			if l.T == LineTurnEnd {
+				return l
+			}
+		case <-timer.C:
+			t.Fatal("typed loop did not finish the turn")
+		}
+	}
+}

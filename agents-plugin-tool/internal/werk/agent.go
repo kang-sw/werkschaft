@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,6 +61,9 @@ type Config struct {
 	Endpoint   Responder
 	WS         WSTools
 	Out        io.Writer
+	// Emit receives typed events for a daemon host. When provided it replaces
+	// the legacy writer; calls are serialized even during parallel tool reads.
+	Emit func(Line)
 
 	// Now is the clock (nil is time.Now). Sleep waits for d or the context
 	// (nil is a timer). Backoff is the delay before retry n, one-based (nil is
@@ -160,22 +164,28 @@ type Agent struct {
 }
 
 type emitter struct {
-	mu  sync.Mutex
-	out io.Writer
-	now func() time.Time
+	mu   sync.Mutex
+	out  io.Writer
+	emit func(Line)
+	now  func() time.Time
 }
 
 func (e *emitter) line(l Line) {
 	if l.At == 0 {
 		l.At = e.now().UnixMilli()
 	}
-	raw, err := json.Marshal(l)
-	if err != nil {
-		return
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_, _ = e.out.Write(append(raw, '\n'))
+	if e.emit != nil {
+		e.emit(l)
+		return
+	}
+	if e.out != nil {
+		raw, err := json.Marshal(l)
+		if err == nil {
+			_, _ = e.out.Write(append(raw, '\n'))
+		}
+	}
 }
 
 // New opens the session's conversation and builds the agent. It starts no
@@ -203,7 +213,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:   cfg,
 		files: &Files{Root: cfg.Root, Cwd: cfg.Cwd, Authority: cfg.Authority},
 		store: store,
-		out:   &emitter{out: cfg.Out, now: now},
+		out:   &emitter{out: cfg.Out, emit: cfg.Emit, now: now},
 		now:   now,
 		model: cfg.Model, effort: cfg.Effort, session: session,
 		transcript: items, resumed: len(items),
@@ -301,16 +311,10 @@ func (a *Agent) Close() error {
 	return a.store.Close()
 }
 
-// Serve runs the session: it reads commands from in until it ends, and
-// returns after the running turn has ended.
+// Serve adapts the holder's command stream to the typed command loop.
 func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
-	defer a.log.Flush()
-	a.mu.Lock()
-	a.out.line(Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed})
-	a.mu.Unlock()
-	if a.repaired > 0 {
-		a.out.line(Line{T: LineNotice, Text: fmt.Sprintf("%d tool call(s) of the earlier process had no result; they were answered as interrupted and not run again", a.repaired)})
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	cmds := make(chan Command)
 	go func() {
 		defer close(cmds)
@@ -328,6 +332,20 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 			}
 		}
 	}()
+	return a.ServeCommands(ctx, cmds)
+}
+
+// ServeCommands runs the session's commands to channel closure or host context
+// cancellation. It returns after cancelling and joining any running turn.
+func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
+	defer a.log.Flush()
+	a.mu.Lock()
+	init := Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed}
+	a.mu.Unlock()
+	a.out.line(init)
+	if a.repaired > 0 {
+		a.out.line(Line{T: LineNotice, Text: fmt.Sprintf("%d tool call(s) of the earlier process had no result; they were answered as interrupted and not run again", a.repaired)})
+	}
 
 	var (
 		cancel  context.CancelFunc
@@ -343,6 +361,12 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 			a.runTurn(tctx, text)
 		}(done)
 	}
+	defer func() {
+		if running {
+			cancel()
+			<-done
+		}
+	}()
 	finish := func() {
 		cancel()
 		running = false
@@ -360,18 +384,11 @@ func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
 		}
 		select {
 		case <-ctx.Done():
-			if running {
-				<-done
-			}
 			return ctx.Err()
 		case <-doneC:
 			finish()
 		case c, ok := <-cmds:
 			if !ok {
-				if running {
-					cancel()
-					<-done
-				}
 				return nil
 			}
 			switch c.Type {
@@ -450,12 +467,22 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	turn := a.turn
 	a.running, a.lastReply, a.lastReason, a.lastError, a.taken = true, "", "", "", nil
 	a.mu.Unlock()
+	var reason, errText string
+	defer func() {
+		if recover() != nil {
+			reason, errText = ReasonError, "the werk turn failed unexpectedly"
+		}
+		a.endTurn(turn, reason, errText)
+	}()
 	a.out.line(Line{T: LineTurnStart, Turn: turn})
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
-	reason, errText := a.loop(ctx, turn)
-	// The log is whole before the turn's end is reported, an interrupted turn
-	// included: no unpersisted window extends past what the caller was told.
+	reason, errText = a.loop(ctx, turn)
+}
+
+func (a *Agent) endTurn(turn int, reason, errText string) {
+	// Complete the log before publishing the turn end, including after an
+	// interrupt. On a log failure the existing notice reports the cause.
 	a.log.Flush()
 	a.mu.Lock()
 	a.running, a.lastReason, a.lastError = false, reason, errText
@@ -491,7 +518,9 @@ func (a *Agent) loop(ctx context.Context, turn int) (reason, errText string) {
 			}
 			return ReasonDone, ""
 		}
-		a.runCalls(ctx, turn, resp.ID, calls)
+		if a.runCalls(ctx, turn, resp.ID, calls) {
+			return ReasonError, "a werk tool failed unexpectedly"
+		}
 		if ctx.Err() != nil {
 			return ReasonAborted, ""
 		}
@@ -762,13 +791,14 @@ func ModelToolName(wsName string) string {
 // runCalls runs one response's tool calls and appends each result as it
 // finishes. Consecutive read-only calls run together; any other call runs
 // alone. A call the interrupt cut off is answered as interrupted.
-func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls []functionCall) {
+func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls []functionCall) bool {
 	a.mu.Lock()
 	tools := a.tools
 	a.mu.Unlock()
 	answered := map[string]bool{}
+	var panicked atomic.Bool
 	i := 0
-	for i < len(calls) && ctx.Err() == nil {
+	for i < len(calls) && ctx.Err() == nil && !panicked.Load() {
 		j := i
 		if a.readOnlyCall(tools, calls[i]) {
 			for j < len(calls) && a.readOnlyCall(tools, calls[j]) {
@@ -782,7 +812,9 @@ func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls [
 			wg.Add(1)
 			go func(c functionCall) {
 				defer wg.Done()
-				a.runCall(ctx, turn, response, tools, c)
+				if a.runCall(ctx, turn, response, tools, c) {
+					panicked.Store(true)
+				}
 			}(c)
 			answered[c.CallID] = true
 		}
@@ -798,6 +830,7 @@ func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls [
 			a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: interruptedOutput, Failed: true})
 		}
 	}
+	return panicked.Load()
 }
 
 func (a *Agent) readOnlyCall(tools map[string]toolEntry, c functionCall) bool {
@@ -814,18 +847,27 @@ func clip(s string, max int) string {
 
 // runCall runs one call: start line, the tool, the result into the
 // transcript, end line.
-func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) {
+func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) bool {
 	a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
-	var output string
-	var failed bool
-	if e, ok := tools[c.Name]; ok && e.readOnly {
+	output, failed, panicked := a.invokeSafely(ctx, tools, c)
+	shown, cut := TruncateOutput(output, ToolOutputBytes)
+	a.append(functionOutputItem(c.CallID, shown))
+	a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: shown, Truncated: cut, Failed: failed})
+	return panicked
+}
+
+func (a *Agent) invokeSafely(ctx context.Context, tools map[string]toolEntry, c functionCall) (output string, failed, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			output, failed, panicked = "Error: the tool failed unexpectedly; its outcome may be unknown.", true, true
+		}
+	}()
+	if a.readOnlyCall(tools, c) {
 		output, failed = a.invoke(ctx, tools, c)
 	} else {
 		output, failed = a.invokeMutating(ctx, tools, c)
 	}
-	shown, cut := TruncateOutput(output, ToolOutputBytes)
-	a.append(functionOutputItem(c.CallID, shown))
-	a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: shown, Truncated: cut, Failed: failed})
+	return output, failed, false
 }
 
 // invokeMutating runs a call that may change something, after the log holds
