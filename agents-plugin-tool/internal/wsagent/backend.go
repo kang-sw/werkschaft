@@ -377,6 +377,8 @@ type Event struct {
 	// completion, a compaction, a pushed batch); the runner starts one
 	// unless its own send already did.
 	TurnStart bool
+	// TurnID correlates a durable boundary or reply to its admitted input.
+	TurnID string
 	// Approval is a tool permission prompt now waiting; ApprovalDone names
 	// one (by request id) that is settled: withdrawn by the harness, or its
 	// tool call returned.

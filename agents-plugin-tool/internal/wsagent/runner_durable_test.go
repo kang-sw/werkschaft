@@ -5,10 +5,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsinbox"
+	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
@@ -235,6 +238,144 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 			if err != nil || projected.DurableTurn != nil || projected.DurableHeldReportID != "" ||
 				projected.LastTurn == nil || projected.LastTurn.Result.Message != "final answer" {
 				t.Fatalf("incorrect history projection after settlement: %+v, %v", projected, err)
+			}
+		})
+	}
+}
+
+func durableTurnHarness(t *testing.T) (*harness, *reports, <-chan durableTurnInput) {
+	t.Helper()
+	h := newHarness(t, map[string]string{"chat": `{"backend":"claude","ws_tools":["tickets.query"]}`})
+	h.runner.Close()
+	submitted := make(chan durableTurnInput, 16)
+	reg := h.config.Backends[suiteBackend]
+	reg.Backend = durableStartFixture{fakeBackend: h.backend, submitted: submitted}
+	reg.ProcessKind = ProcessDurable
+	h.config.Backends[suiteBackend] = reg
+	h.endpoint = "http://127.0.0.1:1"
+	got := &reports{}
+	h.config.Report = got.add
+	h.start()
+	return h, got, submitted
+}
+
+func nextDurableInput(t *testing.T, submitted <-chan durableTurnInput) durableTurnInput {
+	t.Helper()
+	select {
+	case input := <-submitted:
+		return input
+	case <-time.After(5 * time.Second):
+		t.Fatal("no typed input reached the process")
+		return durableTurnInput{}
+	}
+}
+
+func TestDurableRunnerResumesOriginalTurnAfterExecBinding(t *testing.T) {
+	h, got, submitted := durableTurnHarness(t)
+	idle := h.create("chat")
+	child := h.spawn("first input", leadParent)
+	input := nextDurableInput(t, submitted)
+	firstSpec := h.backend.waitProcStart(t, 0)
+	old := h.runner.conv(child.ID).record()
+	if old.DurableTurn == nil || *old.DurableTurn != input || input.ID == "" || !strings.Contains(input.Text, "first input") ||
+		firstSpec.SessionID == "" || old.SessionID != firstSpec.SessionID || !old.TurnOpen || len(old.Queued) != 0 {
+		t.Fatal("process received input without a matching admission and backend identity")
+	}
+	h.runner.Close()
+	if len(got.list()) != 0 {
+		t.Fatal("replacement settled the unfinished turn")
+	}
+
+	h.runner = NewRunner(h.config)
+	t.Cleanup(h.runner.Close)
+	h.runner.SetEndpoint(h.endpoint)
+	h.runner.ExpectExecJobs()
+	h.runner.Start(nil)
+	c := h.runner.conv(child.ID)
+	if c == nil || h.backend.startCount() != 1 {
+		t.Fatal("active turn was not retained behind the exec binding fence")
+	}
+	h.runner.BindExecJobs(nil)
+	if recovered := nextDurableInput(t, submitted); recovered != input {
+		t.Fatalf("resumed input changed: got %+v, want %+v", recovered, input)
+	}
+	spec := h.backend.waitProcStart(t, 1)
+	rec := c.record()
+	if spec.SessionID != old.SessionID || rec.TurnMark != old.TurnMark || rec.TurnStartedAt != old.TurnStartedAt {
+		t.Fatal("replacement started a different session or turn boundary")
+	}
+	hello, _, ok := h.runner.ResolveMCPToken(spec.MCPSession.Token)
+	if !ok || hello.Conversation != child.ID {
+		t.Fatal("resumed process has no restored MCP authority")
+	}
+
+	c.do(func() { c.handle(Event{TurnEnd: true, TurnID: "earlier"}) })
+	if rec := c.record(); rec.DurableTurn == nil || rec.DurableTurn.ID != input.ID || len(got.list()) != 0 {
+		t.Fatal("a stale end event settled the active turn")
+	}
+	p := h.backend.proc(1)
+	p.events <- Event{TurnID: input.ID, Live: &wslive.Event{Kind: wslive.KindReply, Text: "final result", Final: true}}
+	p.events <- Event{TurnID: input.ID, TurnEnd: true}
+	eventually(t, "the recovered turn is reported", func() bool { return len(got.list()) == 1 })
+	c.do(func() { c.handle(Event{TurnID: input.ID, TurnEnd: true}) })
+	rec = c.record()
+	if rec.DurableTurn != nil || rec.TurnOpen || rec.ReportID != input.ID || got.list()[0].Result.Message != "final result" {
+		t.Fatal("original turn's completion did not reconcile with the original report ID")
+	}
+	h.runner.conv(idle.ID).do(func() {})
+	if h.backend.startCount() != 2 || len(got.list()) != 1 {
+		t.Fatal("replacement woke the idle session or sent an extra report")
+	}
+	if _, err := h.runner.Send(idle.ID, "wake"); err != nil {
+		t.Fatal(err)
+	}
+	if wake := nextDurableInput(t, submitted); wake.ID == input.ID || !strings.Contains(wake.Text, "wake") {
+		t.Fatal("an idle session did not accept a new turn on wake")
+	}
+}
+
+func TestDurableRunnerRecoversInboxClaimsAcrossCommit(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		name := "before commit"
+		if committed {
+			name = "after commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, _, submitted := durableTurnHarness(t)
+			st := h.create("chat")
+			c := h.runner.conv(st.ID)
+			_, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{"once only"}}, h.config.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := wsinbox.Held(c.inbox)
+			if err != nil || len(held) != 1 {
+				t.Fatalf("stage inbox fixture: %v, %d messages", err, len(held))
+			}
+			claims, err := wsinbox.ClaimInputs(c.inbox, held)
+			if err != nil || len(claims) != 1 {
+				t.Fatalf("claim inbox fixture: %v, %d messages", err, len(claims))
+			}
+			if committed {
+				c.do(func() {
+					err = c.commitDurableRecord(func(rec *Record) {
+						rec.Queued = []QueuedInput{{Text: claims[0].Entry.Text()}}
+						rec.DurableInboxClaims = []string{claims[0].Name}
+					}, nil)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.runner.Close()
+			h.start()
+			input := nextDurableInput(t, submitted)
+			if strings.Count(input.Text, "once only") != 1 {
+				t.Fatalf("claimed input was lost or duplicated: %q", input.Text)
+			}
+			drained, err := wsinbox.Drained(c.inbox)
+			if err != nil || len(drained) != 1 || drained[0].Name != claims[0].Name {
+				t.Fatal("the recovered claim did not reach drained history once")
 			}
 		})
 	}

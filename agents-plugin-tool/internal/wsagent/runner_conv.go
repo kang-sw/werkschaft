@@ -325,6 +325,10 @@ type conv struct {
 	// retry (kick) and cleared by the next send that succeeds; a send that
 	// fails again meanwhile waits for the next inbox or mail signal.
 	sendRetried bool
+	// durableRetried is the turn already given an automatic recovery attempt
+	// after a submission, process or settlement failure in this daemon.
+	durableRetried   string
+	inboxClaimsAcked bool
 	// systemPrompt is agent.spawn's system prompt (Record.SystemPrompt),
 	// read once from the session directory; loop-owned.
 	systemPrompt string
@@ -774,7 +778,11 @@ func (c *conv) loop() {
 	defer beat.Stop()
 	// Settle the predecessor before inbox signals (including nested reports)
 	// can start a genuinely new turn.
-	if c.rec.Parent != nil && c.rec.HolderID == "" && !c.r.durableProcess(c.rec.Backend) {
+	if c.r.durableProcess(c.rec.Backend) {
+		if c.rec.DurableTurn == nil && c.requeueSteered() {
+			c.signalInbox()
+		}
+	} else if c.rec.Parent != nil && c.rec.HolderID == "" {
 		c.interrupted()
 		if c.requeueSteered() {
 			c.signalInbox()
@@ -1679,12 +1687,21 @@ type nativeLaunchForgetter interface {
 // it, which each turn end submits; mail waits for the next message turn, or
 // goes alone once nothing is queued.
 func (c *conv) canKick() bool {
-	return !c.closed && !c.hidden && !c.quitting && !c.turn && !c.replaying && len(c.steered) == 0 && c.leverC == nil &&
+	durable := c.r.durableProcess(c.rec.Backend)
+	if durable && (!c.r.startupReady() || c.r.exec.deferred.Load() && !c.r.exec.bound.Load()) {
+		return false
+	}
+	return !c.closed && !c.hidden && !c.quitting && !c.turn && !c.replaying &&
+		(len(c.steered) == 0 || durable && c.rec.DurableTurn != nil) && c.leverC == nil &&
 		!(c.r.opts.Holders != nil && !c.r.scanDone())
 }
 
 func (c *conv) kick() {
 	if !c.canKick() {
+		return
+	}
+	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
+		c.resumeDurableTurn()
 		return
 	}
 	// A released binding gets no compaction command, continuation or restore
@@ -1735,11 +1752,25 @@ func (c *conv) kickInput() {
 		c.held = len(held)
 	}
 	c.mu.Unlock()
+	durable := c.r.durableProcess(c.rec.Backend)
+	var pending []wsinbox.Record
+	if durable {
+		if err := c.ackInboxClaims(); err != nil {
+			c.durableTurnError("acknowledge queued input", err)
+			return
+		}
+		var claimErr error
+		pending, claimErr = wsinbox.PendingClaims(c.inbox, c.rec.DurableInboxClaims)
+		if claimErr != nil {
+			c.durableTurnError("read claimed input", claimErr)
+			return
+		}
+	}
 	mail := c.rec.Mail
 	// A child's reports (children.go) go with the next message turn, as
 	// mail does.
 	reports := c.rec.Reports
-	if (err != nil || len(held) == 0) && len(mail) == 0 && len(c.rec.Queued) == 0 && len(reports) == 0 {
+	if (err != nil || len(held) == 0) && len(mail) == 0 && len(c.rec.Queued) == 0 && len(reports) == 0 && len(pending) == 0 {
 		c.voidCancelled()
 		return
 	}
@@ -1775,13 +1806,33 @@ func (c *conv) kickInput() {
 	// Under mu, as Send writes: every send counted here is in the drain
 	// (Wait's turn marks).
 	c.mu.Lock()
-	recs, _ := wsinbox.Drain(c.inbox)
+	var recs []wsinbox.Record
+	if durable {
+		// Refresh under the same lock as Send, since a process start
+		// can take time and the earlier held snapshot is only advisory.
+		held, err = wsinbox.Held(c.inbox)
+		if err == nil {
+			recs, err = wsinbox.ClaimInputs(c.inbox, held)
+		}
+	} else {
+		recs, _ = wsinbox.Drain(c.inbox)
+	}
 	c.held = max(0, c.held-len(recs))
 	covered := c.sends
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	if durable && err != nil {
+		c.durableTurnError("claim input", err)
+		return
+	}
+	if len(pending) > 0 {
+		recs = append(pending, recs...)
+		orderInboxClaims(recs)
+	}
 	from := c.drained
-	c.drained = covered
+	if !durable {
+		c.drained = covered
+	}
 	queue := slices.Clone(c.rec.Queued)
 	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
@@ -1790,6 +1841,12 @@ func (c *conv) kickInput() {
 			queue = append(queue, QueuedInput{Command: &cmd, After: from})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
 			queue = append(queue, QueuedInput{Text: text, After: from})
+		}
+	}
+	if durable && len(recs) > 0 {
+		if err := c.commitInboxClaims(recs, queue, covered); err != nil {
+			c.durableTurnError("save queued input", err)
+			return
 		}
 	}
 	if len(queue) == 0 && len(mail) == 0 && len(reports) == 0 {
@@ -1825,7 +1882,7 @@ func (c *conv) kickInput() {
 	sentAt := c.r.opts.Now()
 	startedAt := sentAt.UnixMilli()
 	heldAgy := c.r.heldInternalWorker(c.record())
-	if len(recs) > 0 {
+	if !durable && len(recs) > 0 {
 		// Keep drained input recoverable until the send succeeds.
 		c.update(func(rec *Record) { rec.Queued = queue })
 	}
@@ -1835,10 +1892,27 @@ func (c *conv) kickInput() {
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
+	var committed bool
 	// The release check above is a snapshot: a release notice can land
 	// between it and the send, so the send is admitted against it once more
 	// (admitInput).
 	refusedBy := c.admitInput(func() {
+		if durable {
+			text := strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")
+			if cmd != nil {
+				if body, ok := c.playbookTurn(*cmd); ok {
+					text, ordinary = body, true
+				} else {
+					text = cmd.Line()
+				}
+			}
+			c.passiveTook = nil
+			if ordinary {
+				text = c.turnInput(text)
+			}
+			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0)
+			return
+		}
 		c.setStatus(func() { c.turn, c.lastErr = true, "" })
 		// The admitted turn is a keep-awake member before its send is
 		// tried; a failed send clears turn below, and the loop step's sync
@@ -1862,6 +1936,14 @@ func (c *conv) kickInput() {
 		// refused start keeps it, and the idle process may sleep again.
 		c.refuseStart(checkoutReleasedRefusal(refusedBy))
 		c.armIdle()
+		return
+	}
+	if durable && err != nil {
+		c.durableTurnError("start durable turn", err)
+		if committed {
+			c.stopProcess("")
+			c.retryDurableTurn()
+		}
 		return
 	}
 	if err == nil && heldAgy {
@@ -1945,14 +2027,16 @@ func (c *conv) kickInput() {
 	// background follow-ups, retain their interim-supersession behavior.
 	// A worker that still owns a live exec job keeps holding: its report
 	// waits for the job, and this successor's own turn reports later.
-	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
-		res := *c.heldRes
-		c.hold(nil)
-		c.publish(res, heldAgy)
-	} else {
-		c.hold(nil)
+	if !durable {
+		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
+			res := *c.heldRes
+			c.hold(nil)
+			c.publish(res, heldAgy)
+		} else {
+			c.hold(nil)
+		}
 	}
-	if !heldAgy {
+	if !heldAgy && !durable {
 		// A held agy worker wrote all of this when its holder accepted
 		// the prompt (above); a second identical write would only cost.
 		c.update(func(rec *Record) {

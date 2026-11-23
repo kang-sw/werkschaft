@@ -132,9 +132,9 @@ type Record struct {
 	// turns runs: a successor rejoins a held process, or reports interruption
 	// when that process is gone.
 	TurnOpen bool `json:"turn_open,omitempty"`
-	// DurableTurn and DurableHeldReportID are written in the private
-	// runner store. The legacy history projection omits both.
+	// Active durable state belongs to the private runner store.
 	DurableTurn         *durableTurnInput `json:"durable_turn,omitempty"`
+	DurableInboxClaims  []string          `json:"durable_inbox_claims,omitempty"`
 	DurableHeldReportID string            `json:"durable_held_report_id,omitempty"`
 	// Tier is the capability tier its spawner chose (small, medium, large,
 	// or xlarge); a conversation it spawns may ask for no higher one.

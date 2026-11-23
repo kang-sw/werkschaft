@@ -141,6 +141,11 @@ func (r *Runner) BindExecJobs(src ExecJobs) {
 	}
 	r.mu.Unlock()
 	r.execReconsider(all)
+	for id := range all {
+		if c := r.conv(id); c != nil && r.durableProcess(c.record().Backend) {
+			c.signalInbox()
+		}
+	}
 }
 
 func (r *Runner) execJobs() ExecJobs {

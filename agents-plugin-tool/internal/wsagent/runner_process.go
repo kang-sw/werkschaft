@@ -109,6 +109,13 @@ func (c *conv) startProcess() error {
 	if rp.Definition.Lead != rec.Lead {
 		return fmt.Errorf("agent profile %q changed its lead setting; refusing to start", rec.Profile)
 	}
+	if c.r.durableProcess(rec.Backend) && rec.SessionID == "" {
+		session := newReportID()
+		if err := c.commitDurableRecord(func(rec *Record) { rec.SessionID = session }, nil); err != nil {
+			return fmt.Errorf("save the backend session identity: %w", err)
+		}
+		rec.SessionID = session
+	}
 	if rec.Lead {
 		return c.startLead(rec, rp.Definition, false)
 	}

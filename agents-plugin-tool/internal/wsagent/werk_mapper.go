@@ -106,14 +106,14 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 		}
 	case werk.LineTurnStart:
 		m.turn, m.turnID = l.Turn, l.TurnID
-		return []Event{{TurnStart: true}}
+		return []Event{{TurnStart: true, TurnID: l.TurnID}}
 	case werk.LineReply:
 		ev := &wslive.Event{Kind: wslive.KindReply, Text: l.Text}
 		if l.Final {
 			ev.Final = true
 			ev.Source = m.replySource(l)
 		}
-		return []Event{{Live: ev}}
+		return []Event{{Live: ev, TurnID: m.turnID}}
 	case werk.LineToolStart:
 		return m.batches.addCall(m.group(), l.Call, l.Name, l.Args, now)
 	case werk.LineToolEnd:
@@ -127,7 +127,7 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 		if ev := m.batches.finish(now, true); ev != nil {
 			out = append(out, *ev)
 		}
-		end := Event{TurnEnd: true}
+		end := Event{TurnEnd: true, TurnID: l.TurnID}
 		switch l.Reason {
 		case werk.ReasonAborted:
 			end.TurnReason = wslive.TurnAborted

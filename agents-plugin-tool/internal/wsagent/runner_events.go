@@ -15,6 +15,11 @@ import (
 )
 
 func (c *conv) handle(ev Event) {
+	if c.r.durableProcess(c.rec.Backend) && (ev.TurnID != "" || ev.TurnStart || ev.TurnEnd) {
+		if c.rec.DurableTurn == nil || c.rec.DurableTurn.ID != ev.TurnID {
+			return
+		}
+	}
 	quiet := ev.Replay
 	c.eventSeq = ev.Seq
 	if ev.Seq > 0 && !ev.Replay {
@@ -443,6 +448,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.setStatus(func() { c.lastErr = "save turn settlement: " + err.Error() })
 			c.live.writeSnapshot()
 			c.r.notify(c.rec.ReplyID, c.rec.Root)
+			c.retryDurableTurn()
 			return
 		}
 		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
@@ -776,6 +782,7 @@ func (c *conv) processExited() {
 		c.replaying, c.replayAsked = false, false
 		c.kick()
 	}
+	c.retryDurableTurn()
 }
 
 // processGone handles a rejoin whose holder no longer exists: the process
@@ -837,7 +844,7 @@ func (c *conv) processEnded() {
 		// A turn the process took with it. A close settles none (its
 		// parent ended it), and the daemon's exit leaves it to the next
 		// daemon (interrupted).
-		if !c.closed && !c.quitting && !internal && (c.rec.Parent == nil || c.rec.TurnOpen) {
+		if !c.closed && !c.quitting && !internal && c.rec.DurableTurn == nil && (c.rec.Parent == nil || c.rec.TurnOpen) {
 			c.settleTurn(TurnFailed, c.lastError(), c.turnMark)
 		}
 		if internal {

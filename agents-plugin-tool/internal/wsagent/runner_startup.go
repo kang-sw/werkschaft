@@ -160,6 +160,11 @@ func (r *Runner) start(notify func(replyID, project string)) {
 	close(startupLoaded)
 	for _, c := range startup {
 		c.do(func() {
+			if r.durableProcess(c.rec.Backend) {
+				c.kick()
+				c.releaseHeld()
+				return
+			}
 			// Re-run only startup work whose earlier signal may have been
 			// consumed by the all-records-loaded barrier. A held inbox send on
 			// a processless conversation remains lazy until a new wake, as it

@@ -750,6 +750,14 @@ func TestClaudeLeadRejoinBrokenMCPCurrentRouteWaitsForIdlePoint(t *testing.T) {
 type recordingMCPProcess struct {
 	Process
 	fileCalls int
+	submitted chan<- durableTurnInput
+}
+
+func (p *recordingMCPProcess) submitTurn(id, text string) error {
+	if p.submitted != nil {
+		p.submitted <- durableTurnInput{ID: id, Text: text}
+	}
+	return p.Send(text)
 }
 
 func (p *recordingMCPProcess) recordFileCall(context.Context, wsfs.FileCall) error {
@@ -810,7 +818,10 @@ func TestDurableMCPFileBindingTracksLiveAuthorityAndRevocation(t *testing.T) {
 	}
 }
 
-type durableStartFixture struct{ *fakeBackend }
+type durableStartFixture struct {
+	*fakeBackend
+	submitted chan<- durableTurnInput
+}
 
 func (b durableStartFixture) Start(context.Context, StartSpec) (Process, error) {
 	return nil, errors.New("the external start was selected")
@@ -821,14 +832,14 @@ func (b durableStartFixture) startLoop(ctx context.Context, spec StartSpec) (Pro
 	if err != nil {
 		return nil, err
 	}
-	return &recordingMCPProcess{Process: p}, nil
+	return &recordingMCPProcess{Process: p, submitted: b.submitted}, nil
 }
 
 func TestDurableWorkerStartsWithAuthenticatedMCPAndNoChild(t *testing.T) {
 	h := newHarness(t, map[string]string{"chat": `{"backend":"claude","ws_tools":["tickets.query"]}`})
 	h.runner.Close()
 	reg := h.config.Backends[suiteBackend]
-	reg.Backend = durableStartFixture{h.backend}
+	reg.Backend = durableStartFixture{fakeBackend: h.backend}
 	reg.ProcessKind = ProcessDurable
 	reg.Lifecycle.FileWriteTools = true
 	h.config.Backends[suiteBackend] = reg
