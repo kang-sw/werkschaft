@@ -521,7 +521,7 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
   if (SHOTS_DIR) fs.mkdirSync(SHOTS_DIR, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1760, height: 960 }, reducedMotion: 'reduce' });
+    const context = await browser.newContext({ viewport: { width: 2560, height: 960 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', err => pageErrors.push(String(err && err.stack || err)));
@@ -862,7 +862,7 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
 test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, tnote draft, close forgetOpen, template/filtered jump, Quick Look click no-thrash, bindCapsuleNotes', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1760, height: 960 }, reducedMotion: 'reduce' });
+    const context = await browser.newContext({ viewport: { width: 2560, height: 960 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', err => pageErrors.push(String(err && err.stack || err)));

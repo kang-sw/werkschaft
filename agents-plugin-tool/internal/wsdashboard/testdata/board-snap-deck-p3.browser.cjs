@@ -350,7 +350,7 @@ function buildBootstrapScript(opts = {}) {
 
 async function openFixture(browser, opts = {}) {
   const context = await browser.newContext({
-    viewport: opts.viewport || { width: 1720, height: 960 },
+    viewport: opts.viewport || { width: 2560, height: 960 },
     colorScheme: opts.theme === 'dark' ? 'dark' : 'light',
     reducedMotion: 'reduce',
   });
@@ -477,10 +477,10 @@ test('Phase 3: middle-click toggle, autoscroll suppression, exclusions & doc-fra
 test('Phase 3: wide 4-col Quick Look (0-docked + docked), 4+1 exemptions, moveBefore & screenshots', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // --- A. Wide 4-col with 0 docked pages (dark theme for Shot 01, light for Shot 02) ---
+    // --- A. Wide 4-col (Band 4, >=2441px) with 0 docked pages (dark theme for Shot 01, light for Shot 02) ---
     {
       const { context, page, errors } = await openFixture(browser, {
-        viewport: { width: 1720, height: 960 },
+        viewport: { width: 2560, height: 960 },
         theme: 'dark',
       });
 
@@ -695,10 +695,10 @@ test('Phase 3: wide 4-col Quick Look (0-docked + docked), 4+1 exemptions, moveBe
       await context.close();
     }
 
-    // --- B. Wide 4-col with docked #bgal page preserved (dark theme for Shot 03) ---
+    // --- B. Wide 4-col (Band 4, >=2441px) with docked #bgal page preserved (dark theme for Shot 03) ---
     {
       const { context, page, errors } = await openFixture(browser, {
-        viewport: { width: 1720, height: 960 },
+        viewport: { width: 2560, height: 960 },
         theme: 'dark',
         savedCards: {
           topics: [{ n: 'topic-6', p: 1, a: 1, b: null, f: false }],
@@ -763,7 +763,7 @@ test('Phase 3 review regressions: #1 boardRendered sync, #2 bgal relayout, #3 fa
   const browser = await chromium.launch({ headless: true });
   try {
     const { context, page, errors } = await openFixture(browser, {
-      viewport: { width: 1720, height: 960 },
+      viewport: { width: 2560, height: 960 },
       theme: 'dark',
       savedCards: {
         topics: [{ n: 'topic-4', p: 0, a: 0, b: null, f: true }],
@@ -965,10 +965,105 @@ test('Phase 3 review regressions: #1 boardRendered sync, #2 bgal relayout, #3 fa
     });
     assert.equal(postExit.t3AskStatus, 'Answer recorded: Option A', '#1: Overview exit must preserve live-patched topic without reverting');
     assert.equal(postExit.t3Rev, 'rev-3-post-patch');
-    assert.equal(postExit.galHidden, true, '#2: teardownPreview must re-sync #bgal.hidden via WsCards.relayout()');
+    assert.equal(postExit.galHidden, false, '#2: Band 4 idle empty slot remains visible in #bgal after Overview exit');
     assert.equal(postExit.t4BodyDisplay, 'none', '#4: folded topic must re-fold cleanly on Overview exit');
     assert.equal(postExit.t4FoldedAttr, 'fold');
     assert.equal(postExit.t2Tabindex, null, '#6: unrove() must restore tabindex on replaced preview node');
+
+    assert.deepEqual(errors, []);
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggles cleanly across Band 3 <-> Band 4 resize', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    // 1720px on default 5:7 live grid is Band 3 (3-col: >=1600px, <2441px).
+    const { context, page, errors } = await openFixture(browser, {
+      viewport: { width: 1720, height: 960 },
+      theme: 'dark',
+    });
+
+    await page.evaluate(() => {
+      const t2 = document.querySelector('section.topic[data-topic="topic-2"]');
+      window.WsBoardAnchor.select(t2, { keep: true, still: false, smooth: false });
+      window.WsOverview.toggle();
+    });
+    await page.waitForFunction(() => window.WsOverview.active() === true);
+
+    const band3Open = await page.evaluate(() => ({
+      innerWidth: window.innerWidth,
+      isFourCol: window.WsCards.isFourCol(),
+      hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+      previewHostCount: document.querySelectorAll('.overview-preview').length,
+      placeholderCount: document.querySelectorAll('.overview-placeholder').length,
+      galHidden: document.getElementById('bgal').hidden,
+      t2InBoard: !!document.querySelector('#r-board section.topic[data-topic="topic-2"]'),
+    }));
+    assert.ok(band3Open.innerWidth >= 1600, 'Band 3 viewport is >= 1600px');
+    assert.equal(band3Open.isFourCol, false, '1720px live grid must NOT be 4-col (Band 4 starts at 2441px)');
+    assert.equal(band3Open.hasPreviewAttr, false, 'Band 3 Overview must NOT set data-overview-preview');
+    assert.equal(band3Open.previewHostCount, 0, 'Band 3 Overview must NOT mount .overview-preview');
+    assert.equal(band3Open.placeholderCount, 0);
+    assert.equal(band3Open.galHidden, true, 'Band 3 with 0 docked pages must keep #bgal hidden');
+    assert.equal(band3Open.t2InBoard, true);
+
+    // Hovering and pressing ArrowDown in Band 3 must still NOT open Quick Look.
+    const t3Box = await page.locator('#r-board section.topic[data-topic="topic-3"]').boundingBox();
+    await page.mouse.move(t3Box.x + 40, t3Box.y + 15);
+    await page.waitForTimeout(160);
+    await page.keyboard.press('ArrowDown');
+    const band3AfterNav = await page.evaluate(() => ({
+      hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+      previewHostCount: document.querySelectorAll('.overview-preview').length,
+    }));
+    assert.equal(band3AfterNav.hasPreviewAttr, false, 'hover/ArrowDown in Band 3 must NOT set data-overview-preview');
+    assert.equal(band3AfterNav.previewHostCount, 0, 'hover/ArrowDown in Band 3 must NOT mount .overview-preview');
+
+    // Resize UP from Band 3 (1720px) to Band 4 (2560px) while Overview is open -> Quick Look enables cleanly.
+    await page.setViewportSize({ width: 2560, height: 960 });
+    await page.waitForFunction(() => document.documentElement.hasAttribute('data-overview-preview'));
+    const band4Up = await page.evaluate(() => ({
+      isFourCol: window.WsCards.isFourCol(),
+      overviewActive: window.WsOverview.active(),
+      hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+      previewHostCount: document.querySelectorAll('.overview-preview').length,
+      liveTopic: document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic'),
+      galHidden: document.getElementById('bgal').hidden,
+    }));
+    assert.equal(band4Up.isFourCol, true);
+    assert.equal(band4Up.overviewActive, true);
+    assert.equal(band4Up.hasPreviewAttr, true, 'resizing Band 3 -> Band 4 while Overview is open must enable Quick Look');
+    assert.equal(band4Up.previewHostCount, 1);
+    assert.equal(band4Up.liveTopic, 'topic-3', 'Quick Look after Band 3 -> Band 4 resize must preview the roved topic');
+    assert.equal(band4Up.galHidden, false);
+
+    // Resize DOWN from Band 4 (2560px) to Band 3 (1720px) while Overview is open -> Quick Look tears down cleanly.
+    await page.setViewportSize({ width: 1720, height: 960 });
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-overview-preview'));
+    const band3Down = await page.evaluate(() => {
+      const t3 = document.querySelector('#r-board section.topic[data-topic="topic-3"]');
+      return {
+        isFourCol: window.WsCards.isFourCol(),
+        overviewActive: window.WsOverview.active(),
+        hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+        previewHostCount: document.querySelectorAll('.overview-preview').length,
+        placeholderCount: document.querySelectorAll('.overview-placeholder').length,
+        t3InBoard: !!t3,
+        t3HasLiveAttr: !!(t3 && t3.hasAttribute('data-overview-live')),
+        galHidden: document.getElementById('bgal').hidden,
+      };
+    });
+    assert.equal(band3Down.isFourCol, false);
+    assert.equal(band3Down.overviewActive, true, 'Overview stays open after Band 4 -> Band 3 resize');
+    assert.equal(band3Down.hasPreviewAttr, false);
+    assert.equal(band3Down.previewHostCount, 0);
+    assert.equal(band3Down.placeholderCount, 0);
+    assert.equal(band3Down.t3InBoard, true, 'previewed topic must be restored to #r-board on Band 4 -> Band 3 teardown');
+    assert.equal(band3Down.t3HasLiveAttr, false, 'restored topic must not retain data-overview-live');
+    assert.equal(band3Down.galHidden, true, '#bgal.hidden must re-sync to true in Band 3 with 0 docked pages');
 
     assert.deepEqual(errors, []);
     await context.close();

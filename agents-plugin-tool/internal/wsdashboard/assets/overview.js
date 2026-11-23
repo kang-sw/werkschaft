@@ -58,7 +58,7 @@
   }
   function canPreview() {
     if (!o || !o.board) return false;
-    if ((window.innerWidth || 0) < 1600) return false;
+    if (!(window.WsCards && typeof window.WsCards.isFourCol === "function" && window.WsCards.isFourCol())) return false;
     var grid = doc.querySelector(".dgrid");
     if (grid && grid.getAttribute("data-layout") === "tabs") return false;
     return !!doc.getElementById("bgal");
@@ -638,7 +638,16 @@
       doc.addEventListener("keydown", key, true);
       if (o.board && o.board.addEventListener) o.board.addEventListener("pointermove", boardPointerMove, { passive: true });
       if (window.addEventListener) window.addEventListener("resize", function () {
-        if (on && preview && !canPreview()) teardownPreview();
+        if (!on || busy) return;
+        if (preview && !canPreview()) {
+          teardownPreview();
+        } else if (!preview && canPreview()) {
+          var list = items();
+          var target = list.filter(function (n) { return n.getAttribute("tabindex") === "0"; })[0]
+            || o.board.querySelector(".overview-here")
+            || list[0];
+          if (target) showPreview(target);
+        }
       });
       var state = stored();
       if (state) requestAnimationFrame(function () { if (o.reveal) o.reveal(); enter(state); });

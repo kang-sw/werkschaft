@@ -1357,6 +1357,13 @@
     }
     return fitMetrics(boardw, convow) || (boardw > 0 && fitMetrics(0, 0));
   }
+  // isFourCol tells whether Band 4 (true 4-column mode) is active for the
+  // current viewport and layout mode, matching WsGallery.layout's exact rule.
+  function isFourCol() {
+    if (!opt || !board) return false;
+    var m = opt.mode ? opt.mode() : null, vw = m ? +m.width || 0 : 0, tabs = !!(m && m.tabs);
+    return !tabs && vw >= G.C.WIDE && canFitFourCol(vw, tabs);
+  }
   // relayout asks the page what it shows (opt.mode: its width and whether
   // the layout menu shows one column at a time), maps that to the
   // gallery's shape (WsGallery.layout, plus pages and dragging) and tells
@@ -2477,6 +2484,8 @@
     // pinnedTopic tells whether a topic name is docked on this page (its
     // node stands in a pane).
     pinnedTopic: function (name) { var r = topics[name]; return !!(r && r.pinned && r.el); },
+    // isFourCol tells whether Band 4 (true 4-column mode) is active now.
+    isFourCol: isFourCol,
     // relayout places everything again after the page's layout changed
     // (a width crossing, the layout menu).
     relayout: function () { if (board) arrange(null); },
