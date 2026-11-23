@@ -566,6 +566,9 @@
         }
       }
     },
+    "261123-bug-ws-dashboard-xterm-measure-storm": {
+      "registered_at": "2026-11-23T02:06:51Z"
+    },
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
     },
