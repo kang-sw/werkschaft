@@ -134,6 +134,16 @@ Decisions: topic section is its own scroll owner (no DOM restructuring, frame gr
 
 Open for Phase 2 / follow-up: Overview and drag still defer the whole board swap rather than admitting other-card updates; the editor card counts toward the pending badge; alignment sits ~8 px below the toolbar in the harness (padding); browser-level checks (maximized overlays, lazy-history jump/prepend, reused frames, real-board layout counts) were not run in a real dashboard (no live dashboard allowed); `sessionBoardAnchors/restoreSessionBoard` stubs are dead code left for cleanup.
 
+#### Edition (54c9847cd) - 2026-11-23
+
+Fixed four live dogfood defects found on Phase 1 (`6b0c81e6d`, merged at `54c9847cd`, T0):
+1. Removed `overscroll-behavior: contain` on non-maximized `section.topic` and retired `anchorWheel`/`anchorBurst` wheel trapping so native wheel events chain cleanly out of `iframe.doc-frame` and tall cards into `#bcol` while `anchorScrollEnd` updates `anchorKey`.
+2. Removed redundant `.board-step` toolbar chevron buttons (`dashboard-board-anchor.js`, `dashboard-board.css`, `js.board.step.{prev,next}` across all 11 `wsi18n` tables) in favor of `rail.js` top/bottom 2-row `.wb-cap` bars; kept `WsBoardAnchor.select`/`step` APIs.
+3. Removed `scroll-margin-top` double-counting, aligned `cards.js` `scroll-padding-top` (`--wb-rail-inset`) and `anchorSelect` to `rail.js`'s active landing line (`--wb-rail-inset + capH(min(2, prev))`), and observed `.board-toolbar-face` and `#bcol[style]` `--wb-rail-inset` across toolbar float transitions so top blank gap and `↑` pill header overlap are eliminated (`cardTop === topStackBottom`).
+4. Subtracted both top and bottom 2-row rail heights (`BOT=55 + 8 + .reply`) from `--board-usable`, routed `#bcol` `.wb-cap` clicks in `rail.js` through `WsBoardAnchor.select` (resolving disconnected targets by `data-topic`/`data-rail`/`data-card`), and shielded programmatic jumps in `anchorScrollEnd` against snap-back while preserving zero non-current outer-board geometry reads (`outerRect=0, otherRect=0`).
+
+Verification: local `node --test` (including real headless Chromium `board-scroll-p1-fixes.browser.cjs`) 85/85 PASS; 4 LOOK screenshots visually verified; remote `w5090` `generate-package-assets.py` + `go test ./internal/wsdashboard/... ./internal/wsi18n/... ./internal/wspackage/... ./internal/wswhiteboard/...` all PASS.
+
 ### Phase 2: Load visible topic bodies outward from the current card
 
 Start after Phase 1 has landed and its Result reports the forced-layout and DOM-operation counts. Fully render the selected topic body when the current card is a topic, and retain demand-driven history loading inside it. In each direction from the current card, advance through the Main Board order one card at a time. Hydrate a topic body when its card would be visible within the usable board scrollport, then use visibility after that hydration to evaluate the next card. Continue past visible unpinned cards using their existing body lifecycle. Stop each direction at the first undrawn card. Use `IntersectionObserver` or equivalent visibility notifications to drive this work without geometry polling.
