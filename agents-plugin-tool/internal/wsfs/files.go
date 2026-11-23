@@ -69,7 +69,10 @@ func (f *Files) ResolvePath(path string) (string, error) {
 // through it would create the target where the link points, and judging that
 // place would mean re-implementing the resolver.
 func realPath(p string) (string, error) {
-	p = filepath.Clean(p)
+	p, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
 	var rest []string
 	cur := p
 	for {
@@ -171,7 +174,12 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	if len(a.Edits) == 0 {
 		return "", errors.New("edits is empty")
 	}
-	prior, data, err := inspectFile(p, true)
+	target, err := pinMutationTarget(p)
+	if err != nil {
+		return "", err
+	}
+	defer target.close()
+	prior, data, err := target.inspect(true)
 	if err != nil {
 		return "", err
 	}
@@ -236,7 +244,7 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	if crlf {
 		result = strings.ReplaceAll(result, "\n", "\r\n")
 	}
-	if err := f.commitFile(ctx, p, prior, []byte(result)); err != nil {
+	if err := f.commitFile(ctx, target, prior, []byte(result)); err != nil {
 		return "", err
 	}
 	if diff == "" {
@@ -270,11 +278,16 @@ func (f *Files) Write(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	prior, _, err := inspectFile(p, false)
+	target, err := pinMutationTarget(p)
 	if err != nil {
 		return "", err
 	}
-	if err := f.commitFile(ctx, p, prior, []byte(a.Content)); err != nil {
+	defer target.close()
+	prior, _, err := target.inspect(false)
+	if err != nil {
+		return "", err
+	}
+	if err := f.commitFile(ctx, target, prior, []byte(a.Content)); err != nil {
 		return "", err
 	}
 	verb := "created"

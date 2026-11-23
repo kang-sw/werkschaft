@@ -23,11 +23,16 @@ type FileIntent struct {
 // Outcome checks the recorded target. Contents already equal to the expected
 // bytes satisfy the mutation, including when the prior and expected match.
 func (i FileIntent) Outcome() string {
-	if !filepath.IsAbs(i.Target) || !sameResolvedPath(i.Target) {
+	if !filepath.IsAbs(i.Target) {
 		return "outcome unknown"
 	}
-	current, _, err := inspectFile(i.Target, false)
-	if err != nil || !sameResolvedPath(i.Target) {
+	target, err := pinMutationTarget(i.Target)
+	if err != nil {
+		return "outcome unknown"
+	}
+	defer target.close()
+	current, _, err := target.inspect(false)
+	if err != nil || target.checkParent() != nil {
 		return "outcome unknown"
 	}
 	if current.digest != nil && *current.digest == i.Expected {
@@ -48,24 +53,24 @@ type fileSnapshot struct {
 	digest *string
 }
 
-func inspectFile(path string, keepData bool) (fileSnapshot, []byte, error) {
-	info, err := os.Lstat(path)
+func (t *mutationTarget) inspect(keepData bool) (fileSnapshot, []byte, error) {
+	if len(t.missing) != 0 {
+		return fileSnapshot{}, nil, nil
+	}
+	file, err := openMutationFile(t.parent, filepath.Base(t.path), os.O_RDONLY)
 	if errors.Is(err, fs.ErrNotExist) {
 		return fileSnapshot{}, nil, nil
 	}
 	if err != nil {
 		return fileSnapshot{}, nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return fileSnapshot{}, nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	file, err := openMutationFile(path, os.O_RDONLY)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return fileSnapshot{}, nil, err
 	}
-	defer file.Close()
-	if err := verifyFile(file, info); err != nil {
-		return fileSnapshot{}, nil, err
+	if !info.Mode().IsRegular() {
+		return fileSnapshot{}, nil, fmt.Errorf("%s is not a regular file", t.path)
 	}
 	var data []byte
 	var digest string
@@ -106,43 +111,32 @@ func contentHash(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func sameResolvedPath(path string) bool {
-	resolved, err := realPath(path)
-	return err == nil && resolved == path
-}
-
-func (f *Files) commitFile(ctx context.Context, path string, prior fileSnapshot, data []byte) error {
+func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fileSnapshot, data []byte) error {
 	expected := contentHash(data)
 	if f.RecordMutation != nil {
-		if err := f.RecordMutation(ctx, FileIntent{Target: path, Prior: prior.digest, Expected: expected}); err != nil {
+		if err := f.RecordMutation(ctx, FileIntent{Target: target.path, Prior: prior.digest, Expected: expected}); err != nil {
 			return fmt.Errorf("record file mutation intent: %w", err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !sameResolvedPath(path) {
-		return fmt.Errorf("%s changed while preparing the mutation", path)
+	if err := target.checkParent(); err != nil {
+		return err
 	}
 	flags := os.O_WRONLY
 	if prior.info == nil {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := target.createParents(); err != nil {
 			return err
-		}
-		if !sameResolvedPath(path) {
-			return fmt.Errorf("%s changed while preparing the mutation", path)
 		}
 		flags |= os.O_CREATE | os.O_EXCL
 	}
-	file, err := openMutationFile(path, flags)
+	file, err := openMutationFile(target.parent, filepath.Base(target.path), flags)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 	if prior.info != nil {
-		if !sameResolvedPath(path) {
-			return fmt.Errorf("%s changed while preparing the mutation", path)
-		}
 		if err := verifyFile(file, prior.info); err != nil {
 			return err
 		}

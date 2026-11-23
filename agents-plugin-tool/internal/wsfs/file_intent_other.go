@@ -1,9 +1,16 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package wsfs
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
-func openMutationFile(path string, flags int) (*os.File, error) {
-	return os.OpenFile(path, flags, 0o644)
+func openMutationDir(_ *os.File, _ string, _ bool) (*os.File, error) {
+	return nil, errors.ErrUnsupported
+}
+
+func openMutationFile(_ *os.File, _ string, _ int) (*os.File, error) {
+	return nil, errors.ErrUnsupported
 }
