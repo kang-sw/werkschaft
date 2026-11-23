@@ -717,3 +717,95 @@ func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
 		t.Errorf("the second request lost the first turn: %s", second)
 	}
 }
+
+func TestWerkReconcilesSettlementAcrossDaemonReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		beforeCommit, held bool
+	}{
+		{name: "before terminal commit", beforeCommit: true},
+		{name: "after terminal commit"},
+		{name: "before held commit", beforeCommit: true, held: true},
+		{name: "after held commit", held: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started, finish := make(chan struct{}), make(chan struct{})
+			const answer = "the written turn result"
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+				func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+					close(started)
+					select {
+					case <-finish:
+						return werkMessage(answer)(ctx, req)
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				},
+			}}
+			h, fleet, reports := werkHarness(t, model)
+			jobs := h.execJobs.(*fakeExecJobs)
+			h.runner.Close()
+			var attempts atomic.Int32
+			h.opts.beforeDurableWrite = func(rec Record) error {
+				if tc.beforeCommit && rec.DurableTurn == nil && (rec.ReportID != "" || rec.DurableHeldReportID != "") {
+					attempts.Add(1)
+					return errors.New("fixture lost before turn settlement")
+				}
+				return nil
+			}
+			fleet.start(h)
+			id := spawnWerk(t, h, "read-only")
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the first turn did not reach the model")
+			}
+			original := werkRecord(t, h, id)
+			if original.DurableTurn == nil {
+				t.Fatal("the model started without the admitted turn")
+			}
+			turnID := original.DurableTurn.ID
+			if tc.held {
+				jobs.set(id, 1)
+				h.runner.ExecJobsChanged()
+			}
+			close(finish)
+			eventually(t, "the selected settlement boundary", func() bool {
+				rec := werkRecord(t, h, id)
+				switch {
+				case tc.beforeCommit:
+					return attempts.Load() >= 2 && rec.DurableTurn != nil
+				case tc.held:
+					return rec.DurableHeldReportID == turnID
+				default:
+					return rec.LastReportedTurn == turnID
+				}
+			})
+			if (tc.beforeCommit || tc.held) && len(reports.list()) != 0 {
+				t.Fatal("the turn reported before settlement was eligible")
+			}
+			h.runner.Close()
+			h.opts.beforeDurableWrite = nil
+			fleet.start(h)
+			if tc.held {
+				eventually(t, "the successor's report hold", func() bool {
+					r := werkRecord(t, h, id)
+					return r.DurableHeldReportID == turnID && h.state(id).Holding
+				})
+				if len(reports.list()) != 0 {
+					t.Fatal("the successor reported before the held job ended")
+				}
+				jobs.set(id, 0)
+				h.runner.ExecJobsChanged()
+			}
+			eventually(t, "one original report", func() bool {
+				return werkRecord(t, h, id).LastReportedTurn == turnID
+			})
+			h.runner.Close()
+			got := reports.list()
+			if len(got) != 1 || got[0].Result.Message != answer || model.requestCount() != 1 {
+				t.Fatal("replacement repeated the finished model call or changed its report")
+			}
+		})
+	}
+}
