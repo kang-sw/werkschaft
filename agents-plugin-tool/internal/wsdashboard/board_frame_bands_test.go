@@ -23,7 +23,7 @@ import (
 // mounts at once, and without scroll margins everything mounts as before.
 // The cases execute under node when it is installed.
 func TestBoardFrameBands(t *testing.T) {
-	src := dashboardFuncs(t, "boardBands", "frameNear", "bandBoard", "bandTopic", "topicBand", "unmountFrames", "unmountFrame",
+	src := dashboardFuncs(t, "boardBands", "frameInOverviewPreview", "frameNear", "bandBoard", "bandTopic", "topicBand", "unmountFrames", "unmountFrame",
 		"frameShown", "mountFrame", "mountFrames", "mountFramesPaced", "mountSlice", "frameToggle", "cvWatch")
 	runNode(t, "viewport bands", frameDOM+src+`
 var root = { away: false, hasAttribute: function (k) { return k === "data-gal-away" && root.away; } };

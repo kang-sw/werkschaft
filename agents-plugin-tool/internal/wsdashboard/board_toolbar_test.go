@@ -89,8 +89,9 @@ first("drop placement keeps toolbar first");
 check("toolbar never moved during any operation", moves, 0);
 check("toolbar and overview placement never persist", /toolbar|overview|board-term-slot/.test(page.store.cards || ""), false);
 
-// A real pointer drag: hovering over the toolbar is not a flow drop. A
-// drop below it interpolates only between topics, not the infrastructure.
+// A real pointer drag: hovering over the toolbar is not a drop target, and
+// flow reordering inside the snap deck is retired so dragging an unpinned
+// topic over the board cancels cleanly without moving the toolbar or persisting.
 boot({}, function () { A = topic("a", 300); B = topic("b", 200); return [A, B]; });
 bar = page.W.toolbar();
 function rect(n, top, height) {
@@ -106,9 +107,8 @@ check("toolbar rejects drops", names(page.board), ["TOOLBAR", "a", "b"]);
 page.board.fire("pointerdown", e);
 page.doc.listeners.pointermove[0]({ pointerId: 1, pointerType: "mouse", buttons: 1, clientX: 50, clientY: 50, preventDefault: function () {} });
 page.doc.listeners.pointerup[0]({ pointerId: 1, type: "pointerup" });
-check("the toolbar is never a flow peer", names(page.board), ["TOOLBAR", "b", "a"]);
-var saved = JSON.parse(page.store.cards).topics.filter(function (r) { return r.n === "b"; })[0];
-check("head drop uses real topic time, not toolbar time", saved.a > 300, true);
+check("flow reorder inside snap deck cancels cleanly", names(page.board), ["TOOLBAR", "a", "b"]);
+check("cancelled flow drag does not persist cards state", page.store.cards, undefined);
 
 boot({}, function () { return [mk("div.empty")]; });
 check("empty board keeps the toolbar before the placeholder", names(page.board), ["TOOLBAR", "DIV"]);

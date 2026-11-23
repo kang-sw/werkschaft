@@ -736,7 +736,7 @@ func TestTopicRailRailsHostItems(t *testing.T) {
 		`if (dirty) { found = Array.prototype.slice.call(box.querySelectorAll(ITEMS)); dirty = false; fresh = true; }`,
 		`if (r.height) { topics.push(t); rects.push(r); }`,
 		`var nm = t.querySelector("[data-rail-name]"), ic = t.querySelector("[data-rail-icon]");`,
-		`bar: cur >= 0 ? stickOf(topics[cur]) : null,`,
+		`var bar = cur >= 0 ? stickOf(topics[cur]) : null;`,
 		`return topics[i] ? keyOf(topics[i]) : "";`,
 		`var TN = ".tname, [data-rail-name], .cn";`,
 		`<span class="ci" hidden></span><span class="cn"></span>`,
