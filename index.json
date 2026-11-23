@@ -541,7 +541,10 @@
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-23T02:36:33Z"
+        "touched_at": "2026-11-23T02:37:52Z",
+        "impl": {
+          "branch": "impl/develop/manor-panda-rug"
+        }
       }
     },
     "261123-bug-ws-audit-span-sentinel-rescan": {
