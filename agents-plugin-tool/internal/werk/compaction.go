@@ -85,7 +85,8 @@ func (a *Agent) compact(ctx context.Context) error {
 	if _, _, err := reader.readSegment(&archive); err != nil {
 		return fmt.Errorf("read compaction history: %w", err)
 	}
-	dialog := archive.dialog(filepath.Join(storeDirName, filepath.Base(a.store.path)))
+	reference := filepath.ToSlash(segmentPath("", a.store.session))
+	dialog := archive.dialog(reference)
 	var evidence string
 	var since time.Time
 	if prior := reader.checkpoint; prior != nil {

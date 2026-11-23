@@ -332,11 +332,10 @@ func TestLoopRunsToolsAndReplaysReasoningUnchanged(t *testing.T) {
 	// The conversation is on disk: a process that resumes the session finds
 	// the same items.
 	r.stop()
-	r.agent.Close()
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.agent.Close())
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != 5 || string(recovered[1]) != reasoning {
 		t.Errorf("recovered %d items: %s", len(recovered), recovered)
 	}
@@ -797,6 +796,7 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(release) })
 	var mu sync.Mutex
 	var written []string
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
@@ -810,6 +810,7 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}})
+	t.Cleanup(releaseWriter)
 	r.user("go")
 	// The writer is held at its first item; the loop still makes both model
 	// requests and runs its reads. Only the turn's end waits: it is reported
@@ -833,7 +834,7 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 	}
 	mu.Unlock()
 
-	close(release)
+	releaseWriter()
 	if end := r.waitTurnEnd(1); end.Reason != ReasonDone {
 		t.Fatalf("turn end %+v", end)
 	}
@@ -852,10 +853,9 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 			t.Errorf("item %d out of order or changed:\n written %s\n memory  %s", i, written[i], transcript[i])
 		}
 	}
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != len(transcript) {
 		t.Errorf("recovered %d items, want %d", len(recovered), len(transcript))
 	}
@@ -1047,10 +1047,9 @@ func TestInterruptedTurnFlushesTheLog(t *testing.T) {
 	if err := r.agent.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != 1 {
 		t.Errorf("recovered %d items, want the user message", len(recovered))
 	}
