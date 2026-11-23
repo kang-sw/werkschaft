@@ -89,6 +89,7 @@ files for plugin or tooling code unless a ticket changes the layout.
    follow `ai-docs/manuals/performance.md` and count file operations per action.
    Before adding or changing persisted data, pick its storage type in that
    manual's `## Storage Types`.
+7. **Frontend update budget.** Follow `## Frontend Minimal Updates` in `ai-docs/manuals/performance.md`.
 
 ## Workflow
 
