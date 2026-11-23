@@ -222,6 +222,112 @@ Deferred: message-path work (Phase 2); daemon CPU.
 
 Verification boundary: see Verification.
 
+### Result (1a1f210bc) - 2026-11-23
+
+Static diagnosis (no DevTools on the implementer's PC; every cause below is
+read from CSS, none was observed in a trace). Each line: cause, evidence, why
+it costs, fix applied.
+
+Confirmed statically:
+
+- Conic spinner animated through an `@property` angle. Evidence: `dashboard.css`
+  `.hb .hbr` / `@keyframes hbspin { --hba }`; `dashboard-conversation.css`
+  `.hud-ring` thinking and tool / `hud-spin-think`, `hud-spin-tool`
+  (`--hud-spin-a`, `--hud-spin-b`); `dashboard-exec-hud.css` `.xring` running /
+  `xh-spin` (`--hud-spin-b`). A custom property cannot be composited: each
+  frame changes the gradient input, so the host re-rasterises (Paint), its layer
+  re-layerizes and style recalculates on the main thread, every vsync, for as
+  long as a ring is mounted. Fix: the host keeps only the static track and the
+  mask; a 64px square `::before` carries the static `conic-gradient` and is
+  rotated by `transform` (compositor-only); `animation-delay: inherit` keeps the
+  inline phase stamp; the keyframe names and periods are unchanged.
+- Box-shadow animated in a perpetual keyframe set. Evidence: `dashboard-rail.css`
+  `attn-breathe-ring`, `attn-flash-ring` (`.rail .rs.attn .hb::after`);
+  `dashboard-conversation.css` `hud-hold-breathe`, `hud-perm-pulse`
+  (`.hud-ring` holding / permission). `box-shadow` is a paint property: every
+  frame repaints the layer on the main thread. Fix: the shadow is static at its
+  peak width and only `opacity` pulses (permission: halo moved to `::after`, host
+  border stays solid). Look approximation (see Decisions).
+- `xh-flash` (`dashboard-exec-hud.css`, `.cexec.xflash`) is a `box-shadow`
+  keyframe but runs twice then ends: not perpetual, left as is.
+- Perpetual animations already compositor-safe (`transform`/`opacity` only, so
+  they commit frames but need no main-thread paint): `dash-spin` (`.spin`,
+  `.ibadge.busy .istop`), `dash-pulse` (`.pulse`, `.pibadge`, `.dskel i`),
+  `rail-blink`, `attn-breathe`/`attn-flash` (`.rs.attn::before`), `rail-nudge`,
+  `dash-blink` (`.caret`), `xh-spinr`, `xh-breathe`, `xh-pulse`, `tt-cmp-pulse`,
+  `lg-spin`, `tk-qspin`. Left alone.
+- Pause gaps found and closed: `animation-play-state` is not inherited, so the
+  new pseudo-element animations need their own pause rules (added in
+  `dashboard.css`, `dashboard-exec-hud.css`); `.xspinr` and `.tt-cmp .d-now::before`
+  were in no pause list (added). Reduced motion: `.xgroup *` and
+  `.hud-node[data-state] .hud-ring` do not match pseudo-elements, so explicit
+  `::before`/`::after` `animation: none` rules were added in each sheet. The
+  verbatim pause list pinned in `css_collision_test.go` is untouched.
+- Containment: `contain: paint` only on the converted ring hosts (`.hb .hbr`,
+  thinking/tool `.hud-ring`, running `.xring`), which are masked leaves that clip
+  nothing; not on the holding/permission rings (their halos extend outside the
+  border box).
+
+Unconfirmed (needs the owner's trace, not statically decidable):
+
+- Whether the rest of the trace's Paint/UpdateLayoutTree cost comes from these
+  animations alone; the (1407) CPU target is unmeasured.
+- Which of the 11 `dash-spin` / 7 `dash-pulse` instances sit on invisible
+  elements, and whether the running spinners reflect genuinely busy state or
+  stale busy/thinking state (needs a live DOM; pause gating of invisible
+  elements beyond `display:none`/`[hidden]` was not added, `visibility:hidden`
+  ancestors cannot be selected in CSS).
+- Whether WebView2 flips `document.hidden` on minimize/occlusion (1410); the
+  `data-animation-paused` hook is reused unchanged and no desktop-shell relay
+  was added.
+- The look of the converted spinners in the live app (see Verification).
+
+Verification:
+
+- `node --test frontend-idle.test.js testdata/spinner-phase.test.cjs
+  testdata/rail-attention.test.cjs`: all pass except the pre-existing
+  `idle CSS bounds animation rates…` test, which asserts `rail-orbit` that
+  `dashboard-rail.css` does not contain at base fb29b7c29 (unrelated; stops that
+  test before its later assertions). New test `conic spinners rotate a
+  pseudo-element…` passes.
+- Go: `go test ./internal/wsdashboard/...` on w5090 after
+  `python3 scripts/generate-package-assets.py` (path is under
+  `agents-plugin-tool/scripts/`): `ok ... 349.551s`. This is where the updated
+  pins `orbit_css_test.go` (`@keyframes hbspin` now `transform`) and the
+  unchanged `css_collision_test.go` / `pageview_agents_test.go` were verified.
+- Browser tests `testdata/hud.browser.cjs`, `testdata/exec-hud.browser.cjs` were
+  updated (`getAnimations({ subtree: true })`, `getComputedStyle(el, '::before')`)
+  but not run (Playwright not run on this PC).
+- LOOK, static: `D:/Temp/idle-cpu-look/{old,new}.png` (Edge headless on a
+  standalone fixture built from HEAD vs working-tree CSS, animations frozen at
+  fixed phases): compared new.png vs old.png: match for `hbspin` (4 phases, both
+  sizes), `hud-spin-think`, `hud-spin-tool`, `xh-spin`; mismatch (slight,
+  expected) for `hud-hold-breathe` and `hud-perm-pulse` halo width, and
+  `attn-*-ring` not captured.
+- Lite review: clean, 3 minor, all about the halo approximations below.
+
+Decisions:
+
+- Pseudo-element is a fixed 64px square centred on the host (hosts are at most
+  28x24, so every rotation covers them; the host mask clips it), not `inset`
+  percentages (non-square `.hb` hosts would leave corners uncovered).
+- Ring halos use a static shadow plus opacity pulse. Look changes: the attention
+  ring rests at 3px/25% opacity (was 1.5px/25%), flash and breathe now share a 3px
+  ring (flash was 4px); hold halo is a static 1.5px pulsing with the ring (was
+  1px to 2.5px); permission halo is a static 3px pulsing between opacity .7 and 1
+  (was 1px to 3px). Owner confirms or asks for a different compromise in LOOK.
+- Pinned assertions changed with the CSS: `spinner-phase.test.cjs` period table
+  now matches the `::before`/`::after` rules; `orbit_css_test.go` hbspin keyframe.
+
+Owner verification after the next daemon update (live, cannot run here): compare
+`hbspin` (rail badge ring), `hud-spin-think`, `hud-spin-tool`, `xh-spin`,
+`dash-spin`, the attention ring/breathe/flash and the hold/permission halos
+before/after; take the idle trace and CPU sample (checks 1-2) against the
+(1407) target, plus the hidden-window trace for (1410).
+
+Forward: `frontend-idle.test.js` `idle CSS bounds animation rates…` fails at
+base on the missing `rail-orbit` assertion (pre-existing, unrelated).
+
 ### Phase 2: `ws.onmessage` path
 
 Depends on Phase 1 landed (its Result), so the idle trace is not dominated by
