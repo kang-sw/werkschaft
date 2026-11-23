@@ -21,6 +21,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 74a3370f8da1e035
 sage-review-design-reviewed: 74a3370f8da1e035
+completed: 2026-11-24
 ---
 
 # Builtin Go agent harness
@@ -1069,3 +1070,145 @@ Runs after Phase 5.
   reference; `wsagent/catalog.go`), recorded beside the Codex and agy
   profiles. An item Codex grades `unsupported` (for example rewind,
   `CodexCatalog`) may stay `unsupported`.
+
+### Result (77818de2b) - 2026-11-24
+
+Every Werk grade meets or exceeds the corresponding Codex grade.
+Each pair is worker / lead. N means native, S means ws-substitute, and U
+means unsupported. The reference grades come from `internal/wsagent/catalog.go`.
+`TestWerkCatalogGradesEveryItemForBothRoles` checks the complete catalog
+against Codex.
+
+| Catalog item | Codex | agy | Werk |
+| --- | --- | --- | --- |
+| Skill list | U / U | U / U | U / U |
+| Skill injection | N / N | N / N | N / N |
+| Compaction | N / N | N / N | N / N |
+| Rewind | U / U | U / U | U / U |
+| Tool removal | U / U | U / U | N / N |
+| Subagent removal | N / N | U / U | N / N |
+| Model and effort | N / N | N / N | N / N |
+| Approval | S / N | S / N | S / N |
+| Steer | N / N | N / N | N / N |
+| Interrupt | N / N | N / N | N / N |
+| Follow-up | S / S | S / S | S / S |
+| Resume | N / N | N / N | N / N |
+| Reasoning stream | U / U | U / U | U / S |
+| Usage query | N / N | N / N | N / N |
+
+#### Decisions and implementation
+
+- The lead settled the grading rule. Werk loop instructions, tools and
+  turn controls are native. Rendered playbooks, dashboard expansion and
+  common Runner behavior count as ws-substitutes. Worker approval uses
+  the existing `Runner.ApproveExec` grant after the read-only fence
+  (`internal/wsagent/exec_seams.go:144-175`). The tool-removal catalog now names
+  the operations actually fenced by authority.
+- Both roles receive an index of skill names and descriptions in the
+  provider instructions. The model's private `load_skill` function reads
+  the selected indexed body. Discovery uses local Codex and Claude
+  project, user and system roots and eligible installed plugins. Hosted
+  leads filter out installed ws and wsflow skills because the workflow
+  manual is already in their prompt. The nearest project takes precedence
+  and plugin names retain their namespace. The bounded index is built once
+  per loop start and only the requested body is read, capped at 48 KiB.
+  [Codex skill roots](https://learn.chatgpt.com/docs/build-skills),
+  [Claude skill roots](https://code.claude.com/docs/en/skills),
+  [Claude plugin manifests](https://code.claude.com/docs/en/plugins/manifest-reference).
+- Werk leads advertise `read-only`, `workspace-write` and `full-access`.
+  In workspace-write, file and exec mutations request binary consent
+  through the existing hosted approval prompt. Exec approval displays the
+  resolved program and binds the grant to the active correlated call. A
+  mode change applies during a running turn. A pending approval is
+  requested again after recovery, including when the recovered lead is
+  full-access. A dispatched mutation is recovered from its existing
+  file intent or job evidence when available, or marked uncertain.
+- **T0, skill injection and approval transport.** The provider-only skill
+  tool and the approval call bindings live in-process
+  (`internal/werk/skills.go:12-52`, `internal/execjob/hosted_launch.go:61-79`).
+  The hosted prompt and answer use the existing event and control
+  contracts (`internal/wsagent/backend.go:387-391`,
+  `internal/wsagent/runner_operations.go:344`). The changes add no tool
+  arguments or event fields to the public MCP wire.
+- **T0, permissions and private recovery.** The native names are stored
+  only in Werk lead records through the existing string field
+  (`internal/wsagent/record.go:73`, `internal/wsagent/permission.go:283-291,343-349`).
+  The common permission sidecar stores the existing level values and
+  profile admission excludes builtin-only backends and modes
+  (`internal/wsagent/permission_store.go:201-233`,
+  `internal/wsagent/registration.go:436-466`). The v0.51.1 registration
+  has no Werk (`v0.51.1:agents-plugin-tool/internal/wsagent/registration.go:120-138`).
+  It reads a record's mode as a string and uses the same common permission
+  sidecar shape (`v0.51.1:agents-plugin-tool/internal/wsagent/record.go:72`,
+  `v0.51.1:agents-plugin-tool/internal/wsagent/permission_store.go:201-233`).
+  No shipped release opens Werk's private log. On reopening, the new
+  reader accepts older Werk records and uses the committed pending and
+  dispatch markers for new ones (`internal/werk/approval.go:38-66,97-102`,
+  `internal/werk/store.go:266-274`). Each prompted mutation adds one
+  barrier before asking and one before dispatch on grant in the existing
+  type 1 append log. Mode switches use the existing permission stores.
+  The unpublished integration reader at `19001c155` stops replay at an
+  unfamiliar record kind (`19001c155:agents-plugin-tool/internal/werk/store.go:262-270`).
+  Decision 15 makes 0.52 the first shipped Werk reader.
+- Lite review found a missing project settings layer for nested Claude
+  plugin discovery and missing correlated exec tests. Both were fixed.
+  The full-suite profile-schema regression was fixed by deriving the
+  saved mode enum from backends eligible for saved profiles. The full suite
+  also caught a worker file-binding regression. The worker keeps its
+  session-bound authority while the live-mode lead pins a per-call snapshot.
+
+#### Verification
+
+- With inherited `WS_*` stripped, the `ws-mcp` build and complete
+  `internal/werk`, `internal/wsagent`, `internal/execjob`, `internal/wsfs`,
+  and `cmd/ws-mcp` test suites passed.
+  The full MCP suite passed in 740 seconds with
+  `go test -json ./internal/mcp -timeout 45m -count=1`.
+- The focused race run passed across Werk, wsagent, execjob, wsfs and
+  ws-mcp. The scripted fixtures exercised both approval answers, exact
+  correlated exec binding, cancellation, recovery before and after dispatch,
+  file writes and live authority changes, and skill discovery and loading.
+  The Chromium `TestPermissionUIBrowser` and `TestAgentsIslandBehavior`
+  passed. The lite review was completed and both Important findings fixed.
+- Live runs belong to the owner. The commands below reproduce the available
+  provider smoke tests. The local fixture checks a real tool call and nonce
+  report. The OpenRouter worker fixture checks file reads, writes and exec. The
+  hosted lead fixture checks an interactive turn on each provider.
+  The Phase 6 approval and skill assertions above use deterministic fixtures.
+
+From the repository root, set `local_api_root` to the Ollama API root
+ending in `/v1`. Use the normal OpenRouter credential store and a configured
+`werk.small` tier for the worker smoke test. For the lead test, prepare the
+isolated credential store and provider model variables from Phase 2.
+
+```sh
+clean_werk_env() {
+  env -i PATH="$PATH" HOME="$HOME" GOPATH="${GOPATH:-$HOME/go}" \
+    GOCACHE="${GOCACHE:-$HOME/Library/Caches/go-build}" TMPDIR="${TMPDIR:-/tmp}" "$@"
+}
+
+clean_werk_env WERK_LIVE_LOCAL=1 WERK_LIVE_LOCAL_BASE_URL="$local_api_root" \
+  WERK_LIVE_LOCAL_MODEL="${local_model:-gemma4:e4b}" \
+  WERK_LIVE_LOCAL_API_KEY="${WERK_LIVE_LOCAL_API_KEY:-}" \
+  go -C agents-plugin-tool test ./cmd/ws-mcp -run '^TestWerkLiveLocal$' \
+  -count=1 -v -timeout=5m
+
+clean_werk_env WERK_LIVE_OPENROUTER=1 \
+  go -C agents-plugin-tool test ./cmd/ws-mcp -run '^TestWerkLiveOpenRouter$' \
+  -count=1 -v -timeout=45m
+
+clean_werk_env WERK_LIVE_LEAD_PROVIDER=openrouter WERK_LIVE_LEAD_MODEL="$openrouter_model" \
+  WERK_LIVE_CREDENTIAL_PATH="$fixture_cache/dashboard/auth/credentials.json" \
+  go -C agents-plugin-tool test ./cmd/ws-mcp -run '^TestWerkLiveHostedLead$' \
+  -count=1 -v -timeout=45m
+
+clean_werk_env WERK_LIVE_LEAD_PROVIDER=openai WERK_LIVE_LEAD_MODEL="$openai_model" \
+  WERK_LIVE_CREDENTIAL_PATH="$fixture_cache/dashboard/auth/credentials.json" \
+  go -C agents-plugin-tool test ./cmd/ws-mcp -run '^TestWerkLiveHostedLead$' \
+  -count=1 -v -timeout=45m
+```
+
+Omitted live provider runs, the full dashboard suite, and Windows antivirus
+measurements. Skill discovery covers local inventories and startup roots.
+Cloud-only plugin inventories, per-skill host overrides, and Claude's
+descendant discovery on file touch are outside this implementation.
