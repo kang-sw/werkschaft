@@ -39,8 +39,8 @@
     ucmdBody.setAttribute("aria-label", wsT("js.ucmd.aria"));
     ucmdBox.appendChild(ucmdSum);
     ucmdBox.appendChild(ucmdBody);
-    // Above the result cards when they exist, else where they will go.
-    composer.insertBefore(ucmdBox, cexecBox || composer.querySelector(".cimgs") || composer.firstChild);
+    // Where the slot blocks sit above the attachments and draft.
+    composer.insertBefore(ucmdBox, composer.querySelector(".cimgs") || composer.firstChild);
     return ucmdBox;
   }
   function ucmdRender() {
@@ -126,6 +126,7 @@
     ucmdList = list.commands || [];
     ucmdRev = typeof list.rev === "string" ? list.rev : ucmdRev;
     ucmdRender();
+    if (typeof bangHistSyncBinding === "function") bangHistSyncBinding();
   }
   // ucmdRefresh asks for one read: now, or once the one in flight is done.
   function ucmdRefresh() {
@@ -146,7 +147,7 @@
       return r.json();
     }).catch(function () { return null; }).then(function (list) {
       ucmdFetching = false;
-      if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); }
+      if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); if (typeof bangHistSyncBinding === "function") bangHistSyncBinding(); }
       else if (list && Array.isArray(list.commands)) ucmdApply(list, false);
       // A wake that arrived while this read ran is answered with one more read
       // whether this one succeeded or not (never a loop: only a wake sets the
@@ -194,10 +195,10 @@
           if (body && typeof body.token === "string" && body.token) cexecToken = body.token;
           settled();
           if (body && body.unknown) {
-            cexecAdd(id, c.line, { id: id, command: c.line, label: c.label, phase: "done", unknown: true });
+            cexecTrackSubmission(id, c.line, { id: id, command: c.line, label: c.label, phase: "done", unknown: true }, "ucmd");
             return;
           }
-          cexecAdd(id, c.line, body && body.id === id ? body : null);
+          cexecTrackSubmission(id, c.line, body && body.id === id ? body : null, "ucmd");
           return;
         }
         if (r.status === 409 && body && Array.isArray(body.commands)) {
@@ -215,15 +216,15 @@
         finish();
         // Outcome unknown: the recorded attempt stays, so the next click on this
         // revision is a retry of the same submission.
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(wsT("js.cexec.neterr")));
       });
     }
     if (cexecToken || retry) post();
-    else cexecList(function (list) {
+    else cexecList(function (list, why) {
       if (!list) {
         finish();
         settled();
-        noteWarn(wsT("js.post.unreachable"));
+        noteWarn(cexecUnreachable(why));
         return;
       }
       post();

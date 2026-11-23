@@ -134,7 +134,7 @@ func TestReasoningSummaryHistoryImmutableTurnAssociationAndAttempts(t *testing.T
 	after := renderSummaryRegions(t, nil, ring, cache)
 	html := string(after[regionEntries].HTML)
 	atAttr := ` data-at="` + ring[3].At.UTC().Format(time.RFC3339Nano) + `"`
-	for _, want := range []string{`<div class="turn-with-summary" data-entry="` + ring[3].Name + `"` + atAttr + `><details class="d-summary saved" data-key="summary-turn-` + ring[3].Name + `">`, "Request 1 · attempt 1", "Request 1 · attempt 2", "Request 2 · attempt 1", "Output 1 · part 2", "Failed · observed prefix", "Aborted · observed prefix", "Locally clipped · retained prefix", "Incomplete · observed prefix", "Streaming · observed prefix", "full text not guaranteed", `</details><div class="turnline">`} {
+	for _, want := range []string{`<div class="turn-with-summary" data-entry="` + ring[3].Name + `"` + atAttr + `><details class="d-summary saved" data-key="summary-turn-` + ring[3].Name + `">`, "Request 1 · attempt 1", "Request 1 · attempt 2", "Request 2 · attempt 1", "Output 1 · part 2", "Failed · observed prefix", "Aborted · observed prefix", "Locally clipped · retained prefix", "Incomplete · observed prefix", "Streaming · observed prefix", "full text not guaranteed", `</details><details class="turnline">`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q: %s", want, html)
 		}

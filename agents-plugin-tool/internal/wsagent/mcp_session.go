@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"strconv"
@@ -47,10 +48,9 @@ const (
 var mcpStartWait = 10 * time.Second
 
 // mcpRejoinWait bounds how long an unknown token waits for the daemon's
-// startup rejoin: a graceful replace serves the route before the first
-// holder scan has restored the surviving workers' bearers, and a hard 401
-// in that window makes the harness drop its ws server for the rest of the
-// process. Past the bound the token is refused as any unknown one.
+// startup rejoin. Dashboard publication waits for the initial holder scan,
+// but a runner can serve in-process requests while rejoining. A request
+// that exhausts this wait is refused if the token is still unknown.
 var mcpRejoinWait = 8 * time.Second
 
 // mcpAfterMiss is a test hook: it runs between an unknown token's first
@@ -170,6 +170,13 @@ func (r *Runner) voidMCPLocked(id string) {
 // to mcpStartWait; an unknown token waits for the startup rejoin, up to
 // mcpRejoinWait, since that scan restores a replaced daemon's workers.
 func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
+	hello, void, reason := r.ResolveMCPTokenWithReason(token)
+	return hello, void, reason == ""
+}
+
+// ResolveMCPTokenWithReason returns the same resolution with a local
+// diagnostic reason on failure (wsdashboard.AgentMCPTokenDiagnostics).
+func (r *Runner) ResolveMCPTokenWithReason(token string) (wsdashboard.ProxyHello, <-chan struct{}, string) {
 	return r.resolveMCPToken(token, true)
 }
 
@@ -180,8 +187,8 @@ func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan s
 // bound when the token was drawn, never what the caller claims. Unlike
 // ResolveMCPToken it is not the harness reaching ws-mcp.
 func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSession, bool) {
-	hello, void, ok := r.resolveMCPToken(token, false)
-	if !ok {
+	hello, void, reason := r.resolveMCPToken(token, false)
+	if reason != "" {
 		return wsdashboard.CredentialSession{}, false
 	}
 	select {
@@ -202,10 +209,12 @@ func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSes
 // resolveMCPToken resolves token as ResolveMCPToken does; connect marks the
 // token's first resolution as the harness reaching ws-mcp
 // (MCPSession.Connected).
-func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
+func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyHello, <-chan struct{}, string) {
 	if token == "" {
-		return wsdashboard.ProxyHello{}, nil, false
+		return wsdashboard.ProxyHello{}, nil, "missing bearer"
 	}
+	reason := "token unknown"
+	expired := false
 	r.mu.Lock()
 	t := r.mcpTokens[token]
 	r.mu.Unlock()
@@ -223,7 +232,10 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 			select {
 			case <-r.rejoined:
 			case <-r.quit:
+				reason = "daemon stopping"
 			case <-wait.C:
+				reason = "rejoin wait expired"
+				expired = true
 			}
 			wait.Stop()
 		}
@@ -232,23 +244,26 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 		// rejoin that was already done is no reason to refuse it.
 		r.mu.Lock()
 		t = r.mcpTokens[token]
+		if t == nil && expired && connect {
+			r.recordMCPWaitMissLocked(token)
+		}
 		r.mu.Unlock()
 	}
 	if t == nil {
-		return wsdashboard.ProxyHello{}, nil, false
+		return wsdashboard.ProxyHello{}, nil, reason
 	}
 	timer := time.NewTimer(mcpStartWait)
 	defer timer.Stop()
 	select {
 	case <-t.ready:
 	case <-t.void:
-		return wsdashboard.ProxyHello{}, nil, false
+		return wsdashboard.ProxyHello{}, nil, "token void"
 	case <-timer.C:
-		return wsdashboard.ProxyHello{}, nil, false
+		return wsdashboard.ProxyHello{}, nil, "process start wait expired"
 	}
 	select {
 	case <-t.void:
-		return wsdashboard.ProxyHello{}, nil, false
+		return wsdashboard.ProxyHello{}, nil, "token void"
 	default:
 	}
 	r.mu.Lock()
@@ -264,7 +279,44 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 	// The token is the binding: only this resolution names the conversation.
 	hello.Conversation = t.id
 	hello.ExecCutover = t.cutover
-	return hello, t.void, true
+	return hello, t.void, ""
+}
+
+// recordMCPWaitMissLocked only tracks misses while rejoin can still restore
+// a worker. Cap the table because the bearer is untrusted until it matches.
+func (r *Runner) recordMCPWaitMissLocked(token string) {
+	select {
+	case <-r.rejoined:
+		return
+	default:
+	}
+	const maxMisses = 256
+	if len(r.mcpWaitMisses) >= maxMisses {
+		return
+	}
+	if r.mcpWaitMisses == nil {
+		r.mcpWaitMisses = make(map[[32]byte]struct{})
+	}
+	r.mcpWaitMisses[sha256.Sum256([]byte(token))] = struct{}{}
+}
+
+func (r *Runner) takeMCPWaitMiss(token string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.mcpWaitMisses) == 0 {
+		return false
+	}
+	digest := sha256.Sum256([]byte(token))
+	_, missed := r.mcpWaitMisses[digest]
+	delete(r.mcpWaitMisses, digest)
+	return missed
+}
+
+func (r *Runner) finishMCPRejoin() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mcpWaitMisses = nil
+	r.rejoinOnce.Do(func() { close(r.rejoined) })
 }
 
 // mcpHello is the hello the stdio launcher would have sent for a harness

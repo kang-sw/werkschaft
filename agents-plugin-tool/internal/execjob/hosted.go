@@ -870,9 +870,11 @@ type HostedLaunch struct {
 	// Owner is the conversation the connection's trusted binding names.
 	Owner string
 	Tool  string
-	// Root is the session's root the call's session_key granted; Cwd is
-	// already resolved inside it.
+	// Root is the session's root the call's session_key granted. Cwd has
+	// passed the lexical check against it.
 	Root, Cwd string
+	// ReadOnly requires the resolved cwd to remain inside the resolved root.
+	ReadOnly bool
 	// Argv is what runs; Argv[0] is resolved on Environ's PATH.
 	Argv []string
 	// Display is the command as the approval and the listing show it;

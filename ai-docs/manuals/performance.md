@@ -42,6 +42,41 @@ and uses that type's store; the rules below then apply to that store.
 8. **Exceptions need the owner's approval.** A change that breaks a rule above
    states which rule, why, and its measured cost, and waits for that approval.
 
+## Frontend Minimal Updates
+
+1. **Keep idle screens frame-free.** Stop frame scheduling once the UI settles.
+   For continuous motion on visible elements, animate only `transform` or
+   `opacity`. Keep gradient, filter, and shadow values static to avoid
+   main-thread paint on each frame.
+2. **Contain invalidation.** Give moving or frequently changing elements a
+   compositor layer or suitable layout, paint, or style containment to keep
+   layout and paint local. Use paint containment only where clipping is safe.
+3. **Pause invisible motion.** Pause animations on hidden or collapsed
+   elements and when the window is hidden to stop unnecessary frame work.
+4. **Batch DOM writes before layout reads.** Complete the writes for an
+   update before measuring. Reuse a probe snapshot per frame or read pass
+   for `getComputedStyle`, `getClientRects`, `checkVisibility`, and
+   `offsetWidth`. Share results across rows or items with the same probe key
+   to avoid repeated measurements and forced layout.
+5. **Patch by key.** For a local change, update only the affected element.
+   Replacing a subtree with `innerHTML` recreates unaffected nodes and
+   broadens style and layout work.
+6. **Count update costs.** In regression tests, count DOM operations and
+   forced layouts per message or frame to catch extra work on frequent paths.
+
+In `261123-bug-ws-dashboard-webview-idle-cpu`, a 5.6 s idle trace spent
+604 ms in Paint, 443 ms in Layerize, and 354 ms in UpdateLayoutTree. Phase 1
+replaced animated conic-gradient angles with static gradients on
+paint-contained `::before` elements rotated by `transform`, and animated
+box shadows with static shadows pulsed via `opacity`. The Phase 2 counting
+fixture for board scroll capture went from 7 to 2 cold forced flushes with
+one probe snapshot per read pass and batched writes.
+
+In `261123-bug-ws-dashboard-xterm-measure-storm`, xterm's DOM renderer
+repeated glyph-width reads through `offsetWidth` in the row path. The trace
+showed roughly 1,500 forced style recalculations in a refresh and 36 s of
+`UpdateLayoutTree` in 50 s, with one frame every 5–6 s.
+
 ## Storage Types
 
 Classify data by how it grows and how it is read, not by which feature owns

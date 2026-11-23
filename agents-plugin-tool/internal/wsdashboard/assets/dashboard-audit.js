@@ -35,7 +35,8 @@
 
   function auVisibleAuditRows() {
     return auCallElements().filter(function (el) {
-      return !el.hidden && !el.closest("[hidden], .au-kind-hidden");
+      var parent = el.tagName === "SUMMARY" ? el.parentElement.parentElement : el.parentElement;
+      return !el.hidden && !el.closest("[hidden]") && !(parent && parent.closest("details:not([open])"));
     });
   }
 
@@ -49,18 +50,6 @@
 
   function auRevealCallRow(row) {
     if (!row) return;
-    var tools = row.closest(".au-tools");
-    if (tools) {
-      var fold = tools.querySelector(".au-fold");
-      var btn = tools.querySelector(".au-more");
-      if (fold && fold.hidden) {
-        fold.hidden = false;
-        if (btn) {
-          btn.setAttribute("aria-expanded", "true");
-          btn.textContent = btn.getAttribute("data-less-label") || btn.textContent;
-        }
-      }
-    }
     if (typeof row.scrollIntoView === "function") {
       try { row.scrollIntoView({ block: "nearest" }); } catch (e) {}
     }
@@ -212,6 +201,91 @@
     auUpdateNavButtons(win);
   }
 
+  var AU_SPANS_DEBOUNCE_MS = 200;
+
+  // The bytes of each stored body this viewer holds, for the spans request:
+  // a body paged in by range follow-ups is matched only as far as it is
+  // loaded; one loaded whole is matched whole (undefined: the server's
+  // default).
+  function auLoadedBytes(ev, part) {
+    if (ev.range && ev.range[part] && typeof ev.range[part].offset === "number") return ev.range[part].offset;
+    if (ev.loadedBytes && typeof ev.loadedBytes[part] === "number") return ev.loadedBytes[part];
+    return undefined;
+  }
+
+  function auSpansKey(win, ev) {
+    var key = [ev.id, win.search, win.regex ? 1 : 0, win.caseSensitive ? 1 : 0];
+    ["in", "out", "raw"].forEach(function (part) {
+      var n = auLoadedBytes(ev, part);
+      key.push(n == null ? "" : n);
+    });
+    return key.join("\u0001");
+  }
+
+  function auSpansUrl(win, ev) {
+    var url = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/event/" + encodeURIComponent(ev.id) +
+      "?only=matches&q=" + encodeURIComponent(win.search) + (win.regex ? "&regex=1" : "") + (win.caseSensitive ? "&case=1" : "");
+    ["in", "out", "raw"].forEach(function (part) {
+      var n = auLoadedBytes(ev, part);
+      if (n != null) url += "&through_" + part + "=" + n;
+    });
+    return url;
+  }
+
+  function auSpansCancel(win) {
+    win.spansToken = (win.spansToken || 0) + 1;
+    if (win.spansTimer) { clearTimeout(win.spansTimer); win.spansTimer = 0; }
+    win.spansPending = null;
+  }
+
+  // The server's match spans for the displayed envelope under the window's
+  // find text: {parts} once they are here, {error} when the server refused the
+  // query (its text is shown, zero matches), {pending} while they are asked
+  // for. The request is debounced when the find box changed, and an answer
+  // for a superseded request is dropped (the latest-request guard).
+  function auSpansFor(win, ev) {
+    var searchable = win.tab === "in" || win.tab === "out" || (win.tab === "raw" && !!ev && ev.kind === "other");
+    if (!win.search || !searchable || !ev || !ev.id) {
+      if (!win.search || !searchable) { auSpansCancel(win); win.spans = null; }
+      win.spansDebounce = false;
+      return { parts: null, pending: false, error: "" };
+    }
+    var key = auSpansKey(win, ev);
+    if (win.spans && win.spans.key === key) {
+      return { parts: win.spans.parts || null, pending: false, error: win.spans.error || "" };
+    }
+    if (!win.spansPending || win.spansPending.key !== key) {
+      auSpansCancel(win);
+      var token = win.spansToken;
+      win.spansPending = { key: key };
+      var run = function () {
+        win.spansTimer = 0;
+        fetch(auSpansUrl(win, ev), { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+          return r.text().then(function (txt) {
+            var body = null;
+            try { body = JSON.parse(txt); } catch (e) {}
+            if (!r.ok) throw { message: (body && body.error) || txt || ("HTTP " + r.status) };
+            return body || {};
+          });
+        }).then(function (ans) {
+          if (token !== win.spansToken || !win.el.isConnected) return;
+          win.spansPending = null;
+          win.spans = { key: key, parts: ans.matches || {} };
+          auRenderWindowBody(win);
+        }).catch(function (err) {
+          if (token !== win.spansToken || !win.el.isConnected) return;
+          win.spansPending = null;
+          win.spans = { key: key, error: String(err && err.message || err) };
+          auRenderWindowBody(win);
+        });
+      };
+      if (win.spansDebounce) win.spansTimer = setTimeout(run, AU_SPANS_DEBOUNCE_MS);
+      else run();
+      win.spansDebounce = false;
+    }
+    return { parts: null, pending: true, error: "" };
+  }
+
   function auRenderWindowBody(win) {
     auSyncWindowHeader(win);
     var tbar = win.el.querySelector(".au-tbar");
@@ -271,7 +345,8 @@
     }
 
     var res;
-    var opts = { wrap: win.wrap, search: win.search, regex: !!win.regex, caseSensitive: !!win.caseSensitive, targetLine: win.targetLine || 0, activeMatch: win.activeMatch };
+    var spans = auSpansFor(win, ev);
+    var opts = { wrap: win.wrap, search: win.search, regex: !!win.regex, caseSensitive: !!win.caseSensitive, activeMatch: win.activeMatch, matches: spans.parts };
     if (win.tab === "raw") {
       res = auRenderRawTab(ev, opts);
     } else {
@@ -282,20 +357,26 @@
     win.currentPlain = res.plainText || "";
 
     if (scntEl) {
-      if (win.search) {
+      var scntErr = win.search && spans.error ? spans.error : "";
+      scntEl.classList.toggle("au-scnt-err", !!scntErr);
+      if (scntErr) scntEl.setAttribute("title", scntErr); else scntEl.removeAttribute("title");
+      if (scntErr) {
+        scntEl.textContent = scntErr;
+      } else if (win.search && spans.pending) {
+        scntEl.textContent = "\u2026";
+      } else if (win.search) {
         var cur = res.matchCount > 0 ? ((win.activeMatch % res.matchCount) + res.matchCount) % res.matchCount + 1 : 0;
-        scntEl.textContent = res.matchCount > 0 ? cur + "/" + res.matchCount : "0";
+        scntEl.textContent = res.matchCount > 0 ? cur + "/" + res.matchCount + (res.matchCapped ? "+" : "") : "0";
       } else {
         scntEl.textContent = "";
       }
     }
     var sinpEl = win.el.querySelector(".au-sinp");
     if (sinpEl && sinpEl.value !== (win.search || "")) sinpEl.value = win.search || "";
-    var jumpEl = win.targetLine ? panel.querySelector(".au-line.au-ln-target") : (win.search && res.matchCount > 0 ? panel.querySelector(".au-hit.au-hit-cur") : null);
+    var jumpEl = win.search && res.matchCount > 0 ? panel.querySelector(".au-hit.au-hit-cur") : null;
     if (jumpEl && typeof jumpEl.scrollIntoView === "function") {
-      try { jumpEl.scrollIntoView({ block: win.targetLine ? "center" : "nearest", inline: "nearest" }); } catch (e) {}
+      try { jumpEl.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
     }
-    if (auHooks.onRender) auHooks.onRender(win, res);
   }
 
   function auIsResultSummary(ev, callId) {
@@ -448,7 +529,7 @@
     win.emptyState = false;
     win.loading = true;
     win.activeMatch = 0;
-    win.search = ""; win.regex = false; win.caseSensitive = false; win.targetLine = 0;
+    win.search = ""; win.regex = false; win.caseSensitive = false;
 
     if (rowEl) {
       var tn = rowEl.querySelector(".au-tool");
@@ -527,6 +608,7 @@
       if (entry.aborted || win.reqToken !== token || (owner && (owner.cancelled || auDisplayedEnvelope(win) !== ev) && !entry.manual) || !win.el.isConnected || !stillActive || !ev.range || !ev.range[part] || ev.range[part].offset !== offset) return false;
       if (!chunk || typeof chunk.data !== "string") return false;
       ev[part] = (ev[part] || "") + chunk.data;
+      if (typeof chunk.next === "number") (ev.loadedBytes = ev.loadedBytes || {})[part] = chunk.next;
       if (chunk && chunk.end && ev.range) {
         delete ev.range[part];
         if (!Object.keys(ev.range).length) ev.truncated = false;
@@ -580,6 +662,7 @@
     var hadFocus = !!(win.el && active && (active === win.el || (win.el.contains && win.el.contains(active))));
     var idx = auWindows.indexOf(win);
     if (idx >= 0) auWindows.splice(idx, 1);
+    auSpansCancel(win);
     if (win.el && win.el.parentNode) win.el.parentNode.removeChild(win.el);
     if (auFocusedWin === win) {
       auFocusedWin = auWindows.length ? auWindows[auWindows.length - 1] : null;
@@ -728,7 +811,7 @@
         var nextTab = tabBtn.getAttribute("data-au-tab");
         if (nextTab && AU_TABS.indexOf(nextTab) >= 0) {
           win.tab = nextTab;
-          win.activeMatch = 0; win.targetLine = 0;
+          win.activeMatch = 0;
           auRenderWindowBody(win);
         }
         return;
@@ -767,7 +850,8 @@
     if (sinp) {
       sinp.addEventListener("input", function () {
         win.search = sinp.value || "";
-        win.activeMatch = 0; win.targetLine = 0;
+        win.activeMatch = 0;
+        win.spansDebounce = true;
         auRenderWindowBody(win);
       });
       sinp.addEventListener("keydown", function (e) {
@@ -789,7 +873,7 @@
       if (!auWindows[i].pinned) { win = auWindows[i]; break; }
     }
     if (!win) {
-      win = { id: ++auWinSeq, callId: "", eventId: "", pinned: false, tab: initialTab || "in", wrap: false, search: "", regex: false, caseSensitive: false, targetLine: 0, activeMatch: 0, matchCount: 0, reqToken: 0, cache: Object.create(null), linkedEvents: [] };
+      win = { id: ++auWinSeq, callId: "", eventId: "", pinned: false, tab: initialTab || "in", wrap: false, search: "", regex: false, caseSensitive: false, activeMatch: 0, matchCount: 0, reqToken: 0, spansToken: 0, spansDebounce: false, spans: null, spansPending: null, spansTimer: 0, cache: Object.create(null), linkedEvents: [] };
       auBuildWindowDOM(win);
       var box = auComputeWidePlacement(auWindows.filter(function (w) { return w.pinned; }).length);
       win.el.style.left = box.left + "px"; win.el.style.top = box.top + "px";
@@ -810,7 +894,7 @@
     win.activeSummary = opts.summary || null; win.callSummary = opts.callSummary || null;
     win.primaryEventId = opts.primaryEventId || ""; win.resultEventId = opts.resultEventId || ""; win.resultEnvelope = null; win.resultError = null; win.resultLoading = false; win.linkedEvents = opts.linkedEvents || [];
     win.errorState = null; win.emptyState = false; win.activeMatch = 0;
-    win.search = opts.search || ""; win.regex = !!opts.regex; win.caseSensitive = !!opts.caseSensitive; win.targetLine = opts.targetLine || 0;
+    win.search = opts.search || ""; win.regex = !!opts.regex; win.caseSensitive = !!opts.caseSensitive;
     var rowEl = opts.rowEl, kind = opts.kind || (rowEl && rowEl.getAttribute("data-kind")) || (opts.summary && opts.summary.kind) || "";
     var pv = rowEl && rowEl.querySelector(".au-pv, .au-sysrow-lbl");
     win.toolLabel = opts.label || (pv && pv.textContent) || eventId;
@@ -859,7 +943,8 @@
     for (var j = 0; j < rows.length; j++) {
       var row = rows[j];
       var cid = row.getAttribute("data-call");
-      var s = cid ? byCall[cid] : null;
+      if (!cid) continue;
+      var s = byCall[cid];
       if (s || markChecked) row.setAttribute("data-au-hydrated", "1");
       if (!s) continue;
 
@@ -1026,30 +1111,20 @@
   // --- Event delegation on #convo, keyboard scope & layout sync ---
   doc.addEventListener("click", function (e) {
     var t = e.target;
-    var moreBtn = t && t.closest ? t.closest(".au-more") : null;
-    if (moreBtn) {
-      var tools = moreBtn.closest(".au-tools");
-      var fold = tools ? tools.querySelector(".au-fold") : null;
-      if (fold) {
-        var open = fold.hidden;
-        fold.hidden = !open;
-        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-        moreBtn.textContent = moreBtn.getAttribute(open ? "data-less-label" : "data-more-label") || moreBtn.textContent;
-      }
-      return;
-    }
-    var row = t && t.closest ? t.closest(".au-row[data-call]") : null;
+    var button = t && t.closest ? t.closest(".au-open-call[data-call]") : null;
+    var row = button ? button.closest(".au-call-details").querySelector("summary.au-row") :
+      (t && t.closest ? t.closest(".au-row[data-call]") : null);
+    if (!button && row && row.classList.contains("conv-row") && row.tagName === "SUMMARY") return;
     if (row && $("convo") && $("convo").contains(row)) {
       var sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed) return;
-      if (auHooks.onCallActivate && auHooks.onCallActivate(row.getAttribute("data-call"), row)) return;
       auOpenCall(row.getAttribute("data-call"), row);
     }
   });
 
   doc.addEventListener("keydown", function (e) {
     var t = e.target;
-    if ((e.key === "Enter" || e.key === " ") && t && t.matches && t.matches(".au-row[data-call]")) {
+    if ((e.key === "Enter" || e.key === " ") && t && t.matches && t.matches(".au-row[data-call]") && t.tagName !== "SUMMARY") {
       e.preventDefault();
       auOpenCall(t.getAttribute("data-call"), t);
       return;
@@ -1124,7 +1199,6 @@
   }
   auScheduleHydration();
 
-  var auHooks = Object.create(null);
   window.WsAudit = {
     fmtBytes: auFmtBytes,
     fmtSpan: auFmtSpan,
@@ -1138,7 +1212,6 @@
     visibleRows: auVisibleAuditRows,
     syncSelection: auSyncSelectedMarks,
     closeUnpinned: auCloseUnpinned,
-    hooks: auHooks,
     renderWindow: auRenderWindowBody,
     fetchEnvelope: auFetchEnvelope,
     displayedEnvelope: auDisplayedEnvelope,

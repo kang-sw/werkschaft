@@ -247,8 +247,8 @@ func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
 		t.Errorf("legacy tools without call IDs did not use fallback:\n%s", legacyHTML)
 	}
 
-	// With call IDs, first 3 ID'd rows stay visible and overflow + trailing
-	// non-ID'd calls past cap fold behind .au-more.
+	// With call IDs, every call renders as a flat one-line row: no frame
+	// header, no fold. ID'd rows are clickable; non-ID'd rows are static.
 	summary := &wslive.ToolSummary{
 		Calls:      5,
 		DurationMs: 1_250,
@@ -285,9 +285,8 @@ func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
 		`data-call="c2"`,
 		`data-call="c3"`,
 		`data-call="c4"`,
-		`<ol class="au-calls au-fold" hidden>`,
-		`<li class="au-row au-done au-static">`,
-		`+2 more`,
+		`<ol class="au-calls">`,
+		`<summary class="conv-row au-row au-done au-static">`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("audit call rows lack %q:\n%s", want, html)
@@ -295,5 +294,10 @@ func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
 	}
 	if strings.Contains(html, `<details class="toolsline"`) {
 		t.Errorf("audit call rows unexpectedly rendered legacy details.toolsline:\n%s", html)
+	}
+	for _, gone := range []string{`au-thead`, `au-more`, `au-fold`, `+2 more`} {
+		if strings.Contains(html, gone) {
+			t.Errorf("audit call rows kept the group frame shell %q:\n%s", gone, html)
+		}
 	}
 }

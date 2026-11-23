@@ -414,7 +414,7 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, gone: onGone }
+      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onCompanion(config) {
@@ -555,6 +555,12 @@
     function onUsercmd(ev) {
       if (!ev || typeof ev.rev !== "string" || !rid) return;
       if (typeof ucmdWake === "function") ucmdWake(ev.rev);
+    }
+    // The exec job HUD's opaque revision: the job set changed (or the stream
+    // just connected), so the page reads its own job list. No content rides it.
+    function onExecJobs(ev) {
+      if (!ev || typeof ev.rev !== "number" || !rid) return;
+      if (typeof execWake === "function") execWake(ev.rev);
     }
     // A frame the shell hides reads the tracker once it shows (shShown).
     function onTracker(ev) {

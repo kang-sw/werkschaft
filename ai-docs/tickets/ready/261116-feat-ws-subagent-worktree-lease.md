@@ -99,9 +99,8 @@ advisory (`agents-plugin-tool/internal/mcp/git_merge.go:232-270,398-421`).
 
 ### Phase 1: Enable scoped subagent leases
 
-Allow `worktree.acquire` and `worktree.release` through the role gates, the
-two Pi profile allowlists (`PiWorkerWSTools`, `PiMiniLeadWSTools`), and
-`AgentWSTools` (inherited from `PiMiniLeadWSTools`), while explicitly refusing
+Allow `worktree.acquire` and `worktree.release` through the role gates and
+`AgentWSTools`, while explicitly refusing
 both tools in `readOnlyRefusedTool`
 (`agents-plugin-tool/internal/mcp/permission_gate.go#L19-L35`) and for
 `roleLeaf` (`agents-plugin-tool/internal/mcp/server_inventory.go#L232-L237`,
@@ -120,14 +119,12 @@ shipped tool descriptions for `worktree.acquire` and `worktree.release`
 non-root release rules) and mirrored workflow guidance in
 `agents-plugin/rsrc/lead-workflow-manual/lead-workflow-manual.md` and
 `agents-plugin-wsflow/rsrc/lead-workflow-manual/lead-workflow-manual.md`. Pi
-nested work uses the acquired path as `cwd`: bind the minted worker key to that
-acquired root without exceeding the caller's scope or profile tool ceiling.
+retires per `261123-chore-ws-retire-pi-harness`.
 
-Acceptance: tests cover native delegate, Pi profile, and `AgentWSTools`
+Acceptance: tests cover native delegate and `AgentWSTools`
 (`agent.spawn`) access; read-only `agent.spawn` child refusal via
 `readOnlyRefusedTool`; `roleLeaf` and unkeyed `call` discovery refusal; scoped
-minted keys; nested-Pi `cwd` acquisition with key binding and profile ceiling
-intact; holder and parent self-release; sibling `key`-argument refusal for
+minted keys; holder and parent self-release; sibling `key`-argument refusal for
 both delegates and parented `roleLead` workers; root-lead force and non-root
 force refusal; unchanged root-lead release behavior; updated
 `worktree.acquire`/`worktree.release` tool descriptions; and ws/wsflow guidance

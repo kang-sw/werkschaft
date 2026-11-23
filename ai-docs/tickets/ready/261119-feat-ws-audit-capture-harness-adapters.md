@@ -47,10 +47,10 @@ Verified findings (codex.large read-only research, 2026-11-19):
 
 ## Decisions
 
-1. **Adapter order: Claude -> Codex -> agy -> Pi** (parent epic harness order
+1. **Adapter order: Claude -> Codex -> agy** (parent epic harness order
    (25)). It replaces the stale Claude -> Pi -> Codex order. Each adapter maps
    onto the common envelope ((546)=a). Nothing harness-specific leaks outside
-   `meta`/`raw`.
+   `meta`/`raw`. Pi retires per `261123-chore-ws-retire-pi-harness`; Phase 4 is dropped.
 2. **Capture taps before the display reduction and before the holder
    ring-skip filter** (2026-11-19 finding). Where exactly is Decision 5
    ((1732)=a).
@@ -647,15 +647,9 @@ Verification: per-kind fixtures, including a thought chunk and a
 `/compact` completion that yields the estimated cut (`meta.estimated: true`,
 earlier events `model_seen: false`); ring call ID parity.
 
-### Phase 4: Pi adapter
+### Phase 4: Pi adapter [dropped]
 
-Depends on Phase 3. Map Pi's events onto the envelope, including
-`compaction_start`/`compaction_end` as the cut, fill the ring call ID
-where Pi's events carry one, and write `meta.request` (Decision 7) where
-its events carry a request ID, with `ctx` where they carry usage.
-
-Verification: per-kind fixtures, including a compaction pair; ring call ID
-parity.
+Pi retires per `261123-chore-ws-retire-pi-harness`; no Pi adapter is required.
 
 ### Phase 5: Store-integrated restart and replay verification
 

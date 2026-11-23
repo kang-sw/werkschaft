@@ -91,13 +91,70 @@ test('idle CSS bounds animation rates and contains without paint or size contain
   assert.match(clocks, /time\.tago, time\.entry-at\[data-at\] \{[^}]*contain: layout style;/);
 });
 
+test('conic spinners rotate a pseudo-element by transform and every pseudo animation pauses and honours reduced motion', () => {
+  const base = read(dashboard, 'dashboard.css');
+  const conversation = read(dashboard, 'dashboard-conversation.css');
+  const exec = read(dashboard, 'dashboard-exec-hud.css');
+  const rail = read(dashboard, 'dashboard-rail.css');
+  const all = base + conversation + exec + rail;
+  // No angle custom property animates inside a gradient (main-thread repaint every frame).
+  assert.doesNotMatch(all, /@property --(hba|hud-spin-[ab])/);
+  assert.doesNotMatch(all, /@property[^{]*\{[^}]*syntax:\s*["']<angle>["']/);
+  assert.doesNotMatch(all, /@keyframes[^{]+\{\s*to\s*\{\s*--/);
+  // Typed color properties allow 0.5s color transitions without animating the gradient angle.
+  assert.match(conversation, /@property --d-hud-ring-arc\s*\{\s*syntax:\s*"<color>";\s*inherits:\s*true;/);
+  assert.match(conversation, /@property --d-hud-ring-tip\s*\{\s*syntax:\s*"<color>";\s*inherits:\s*true;/);
+  assert.match(conversation, /\.hud-ring\s*\{[^}]*transition:\s*[^;}]*background-color 0\.5s ease[^;}]*--d-hud-ring-arc 0\.5s ease[^;}]*--d-hud-ring-tip 0\.5s ease/);
+  assert.match(conversation, /\.hud-node:is\(\[data-state="thinking"\], \[data-state="tool"\]\) \.hud-ring\s*\{[^}]*contain:\s*paint;/);
+  assert.doesNotMatch(conversation, /\.hud-node\[data-state="(?:holding|permission)"\] \.hud-ring\s*\{[^}]*contain:\s*paint/);
+  // Box-shadow never animates in a perpetual keyframe set; only opacity or transform.
+  for (const name of ['hbspin', 'hud-spin', 'xh-spin', 'hud-hold-breathe', 'hud-perm-pulse', 'attn-flash-ring', 'attn-breathe-ring']) {
+    const m = all.match(new RegExp(String.raw`^@keyframes ${name}\b[^\n]*\n(?:[ \t][^\n]*\n)*`, 'm'));
+    assert(m, `@keyframes ${name}`);
+    assert.doesNotMatch(m[0], /box-shadow|--[a-z]/, `${name} animates only transform or opacity`);
+  }
+  for (const [css, sel] of [[base, '.hb .hbr::before'], [conversation, '.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring::before'], [exec, '[data-st="running"] .xring::before']]) {
+    const i = css.indexOf(sel + ' {'); assert(i >= 0, sel);
+    assert.match(css.slice(i, css.indexOf('}', i)), /conic-gradient\([^)]*\)?[^}]*animation: [a-z-]+ [^;]+;/, `${sel} carries the rotating gradient`);
+  }
+  assert.match(base, /:root\[data-animation-paused\] :is\(\.hb \.hbr, \.hud-node\[data-state\] \.hud-ring\)::before,\s*:root\[data-animation-paused\] \.hud-node\[data-state\] \.hud-ring::after\s*\{\s*animation-play-state: paused;/);
+  assert.match(exec, /:root\[data-animation-paused\] \.xring::before/);
+  assert.match(rail, /\.hb \.hbr::before \{ animation: none; \}/);
+  assert.match(base, /\.hud-node\[data-state\] \.hud-ring::before, \.hud-node\[data-state\] \.hud-ring::after \{ animation: none; \}/);
+});
+
+test('continuous motion stays off the main thread: hidden subtrees pause and no bar animates width', () => {
+  const rail = read(dashboard, 'dashboard-rail.css');
+  const drawer = read(dashboard, 'dashboard-drawer.css');
+  const tracker = read(dashboard, 'tracker.css');
+  const conversation = read(dashboard, 'dashboard-conversation.css');
+  const diff = read(whiteboard, 'page-panel-diff.css');
+  // An animation under a visibility: hidden target cannot be composited and ticks every frame.
+  const pause = ' { animation-play-state: paused !important; }';
+  assert(rail.includes(':root:not(.rail-open) .rail *::after' + pause), 'closed rail drawer pauses');
+  assert(drawer.includes('.drawer:not(.open) .dr-clip *::after' + pause), 'closed drawer pauses');
+  assert(tracker.includes('.tk.tk-drawer:not(.open) .tk-dr-clip *::after' + pause), 'closed tracker drawer pauses');
+  assert(conversation.includes('.agisland:not([data-mode="compact"]) > .agcompact *::after,'), 'hidden compact HUD pauses');
+  assert(conversation.includes('.agisland:not([data-mode="full"]) > .agpop *::after' + pause), 'hidden full popover pauses');
+  const media = rail.indexOf('@media (max-width: 1599.98px) {');
+  assert(media >= 0 && rail.indexOf(':root:not(.rail-open) .rail *,', media) > media, 'the rail pauses only where it is a hidden drawer');
+  // Bars and fills grow by transform, never by an animated width or left.
+  assert.match(rail, /\.gal-pullfill \{[^}]*width: 100%;[^}]*transform: scaleX\(0\);[^}]*transition: transform \.06s linear;/);
+  assert.match(diff, /\.pdg-bar \{[^}]*transition: transform \.1s;/);
+  assert.match(diff, /\.pdg-hit:hover \.pdg-bar[^{]*\{ transform: scaleX\(1\.6667\); \}/);
+  assert.doesNotMatch(diff + rail + conversation, /transition: [^;}]*\b(width|left) \.(06|1|12)s/);
+  assert.doesNotMatch(conversation.match(/\.sb-bar \.fill \{[^}]*\}/)[0], /transition/);
+  assert.match(read(dashboard, 'cards.js'), /fill\.style\.transform = f/);
+});
+
 test('HUD node animations pause when hidden and disable under reduced motion', () => {
   const base = read(dashboard, 'dashboard.css');
   const conversation = read(dashboard, 'dashboard-conversation.css');
-  for (const name of ['hud-spin-think', 'hud-spin-tool', 'hud-hold-breathe', 'hud-perm-pulse']) {
+  for (const name of ['hud-spin', 'hud-hold-breathe', 'hud-perm-pulse']) {
     assert.match(conversation, new RegExp(`@keyframes ${name}\\b`), `missing @keyframes ${name}`);
   }
   assert.match(base, /:root\[data-animation-paused\]\s+\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation-play-state:\s*paused;\s*\}/);
   assert.match(base, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}\s*\}/);
+  assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-ring,\s*\.hud-ring::before[^}]*transition:\s*none !important;/);
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}/);
 });

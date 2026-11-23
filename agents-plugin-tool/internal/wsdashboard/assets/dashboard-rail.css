@@ -39,6 +39,9 @@
   .rail-open .rail { transform: none; visibility: visible; transition: transform .22s cubic-bezier(.2, .7, .3, 1); }
   .rscrim { display: block; position: fixed; inset: 0; z-index: 44; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .22s; }
   .rail-open .rscrim { opacity: 1; pointer-events: auto; }
+  /* Animations under a hidden target cannot run on the compositor and tick the main thread every
+     frame, so the closed drawer holds its rows' spinners and pulses until it opens. */
+  :root:not(.rail-open) .rail *, :root:not(.rail-open) .rail *::before, :root:not(.rail-open) .rail *::after { animation-play-state: paused !important; }
 }
 /* ===== paged docking gallery (cards.js #bgal, gallery.js) =====
    Docked topics and cards stand in the gallery: pages of panes, one page
@@ -130,7 +133,8 @@
 .gal-pullpill.damped { border-color: var(--wb-line); }
 .gal-pulltxt { font-size: 11px; font-weight: 600; color: var(--wb-fg); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gal-pulltrack { height: 3px; border-radius: 999px; background: var(--wb-muted); overflow: hidden; }
-.gal-pullfill { height: 100%; width: 0%; border-radius: 999px; background: var(--wb-primary); transition: width .06s linear; }
+/* the fill is always full width and scaled, so the pull animates on the compositor, not through layout */
+.gal-pullfill { height: 100%; width: 100%; border-radius: 999px; background: var(--wb-primary); transform: scaleX(0); transform-origin: 0 50%; transition: transform .06s linear; }
 .gal-pullpill.ready .gal-pullfill { background: #5cc46a; }
 .gal-split { flex: 1 1 0px; min-width: 0; min-height: 0; display: flex; }
 .gal-split.row { flex-direction: row; }
@@ -446,21 +450,18 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 }
 .rail .rs.attn .hb::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent);
+  box-shadow: 0 0 0 3px var(--wb-accent-policy);
+  opacity: .25;
   animation: attn-breathe-ring 1s ease-in-out infinite;
 }
 .rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }
 .rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }
 @keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }
 @keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }
-@keyframes attn-flash-ring {
-  0%, 100% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent); }
-  50% { box-shadow: 0 0 0 4px var(--wb-accent-policy); }
-}
-@keyframes attn-breathe-ring {
-  0%, 100% { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-accent-policy) 25%, transparent); }
-  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent-policy) 85%, transparent); }
-}
+/* The ring's shadow is static and only its opacity moves, so the pulse stays
+   compositor-side (an animated box-shadow repaints on the main thread). */
+@keyframes attn-flash-ring { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes attn-breathe-ring { 0%, 100% { opacity: .25; } 50% { opacity: .85; } }
 :root[data-animation-paused] .rail .rs.attn::before,
 :root[data-animation-paused] .rail .rs.attn .hb::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
@@ -817,6 +818,7 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
   .bgbadge { animation: none; }
   .rail .sbn { animation: none; }
   .hb .hbr, .rail .hb.perm { animation: none; }
+  .hb .hbr::before { animation: none; }
   .rail .kidtog .i { transition: none; }
   .rail .drkwork { animation: none; }
 }
@@ -1157,3 +1159,15 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
   }
   :root[data-settings-shell] #rscrim { display: none; }
 }
+
+/* Hosted decisions use the conversation trace grammar after the card is answered. */
+.apcard .aph.conv-row { display: grid; }
+.apcard .row-content code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apcard .row-time { color: var(--wb-muted-fg); }
+.apanswered { font-size: 13px; color: var(--wb-muted-fg); }
+.apanswered .row-content { flex-wrap: wrap; }
+.apanswered .row-content code { font: 12px var(--wb-mono); overflow-wrap: anywhere; }
+.apanswered .row-details { background: none; box-shadow: none; border: 0; padding: 4px 26px 8px 36px; }
+.apanswered .apin { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--wb-mono); }
+.apanswered > .conv-audit-items { margin-left: 36px; }
+.apanswered:not([open]) > .conv-audit-items { display: none; }

@@ -25,11 +25,14 @@ test('animation period table matches CSS durations', () => {
   const conversation = fs.readFileSync(path.join(__dirname, '../assets/dashboard-conversation.css'), 'utf8');
   const dashboard = fs.readFileSync(path.join(__dirname, '../assets/dashboard.css'), 'utf8');
   const rules = [
-    ['thinking', conversation, '.hud-node[data-state="thinking"] .hud-ring', 'hud-spin-think'],
-    ['tool', conversation, '.hud-node[data-state="tool"] .hud-ring', 'hud-spin-tool'],
+    // Conic spinners and the permission halo animate a pseudo-element that
+    // inherits the host's inline phase delay. Both thinking and tool share one
+    // spinning keyframe and period so switching between them does not jump.
+    ['thinking', conversation, '.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring::before', 'hud-spin'],
+    ['tool', conversation, '.hud-node:is([data-state="thinking"], [data-state="tool"]) .hud-ring::before', 'hud-spin'],
     ['holding', conversation, '.hud-node[data-state="holding"] .hud-ring', 'hud-hold-breathe'],
-    ['permission', conversation, '.hud-node[data-state="permission"] .hud-ring', 'hud-perm-pulse'],
-    ['hbr', dashboard, '.hb .hbr', 'hbspin'],
+    ['permission', conversation, '.hud-node[data-state="permission"] .hud-ring::after', 'hud-perm-pulse'],
+    ['hbr', dashboard, '.hb .hbr::before', 'hbspin'],
     ['spin', dashboard, '.spin', 'dash-spin']
   ];
   for (const [key, css, selector, name] of rules) {
@@ -70,9 +73,16 @@ test('a remounted ring resumes the global phase while a stable ring keeps its de
   const resumedPhase = ((-Number.parseFloat(fresh.style.animationDelay)) % period + period) % period;
   const oldPhase = ((-originalDelay + 222) % period + period) % period;
   assert(Math.abs(resumedPhase - oldPhase) < 0.11, `${resumedPhase} vs ${oldPhase}`);
-  context.animationPhaseDelay(old, context.ANIMATION_PERIOD_MS.thinking, 'h3', 'thinking');
-  assert.match(old.wsAnimationStamp, /^thinking\|h3\|1150$/);
-  assert(Number.parseFloat(old.style.animationDelay) > -1150);
+  context.animationPhaseDelay(old, context.ANIMATION_PERIOD_MS.thinking, 'h3', 'hud-spin');
+  assert.match(old.wsAnimationStamp, /^hud-spin\|h3\|1000$/);
+  assert(Number.parseFloat(old.style.animationDelay) > -1000);
+  const spinDelay = old.style.animationDelay;
+  doc.timeline.currentTime = 600;
+  context.animationPhaseDelay(old, context.ANIMATION_PERIOD_MS.tool, 'h3', 'hud-spin');
+  assert.equal(old.style.animationDelay, spinDelay, 'shared hud-spin stateKey keeps identical delay across thinking <-> tool');
+  context.animationPhaseDelay(old, context.ANIMATION_PERIOD_MS.holding, 'h3', 'holding');
+  assert.equal(old.wsAnimationStamp, 'holding|h3|1800');
+  assert.notEqual(old.style.animationDelay, spinDelay, 'entering holding from hud-spin restamps');
   root.paused = true;
   const paused = element(null);
   context.animationPhaseDelay(paused, period, 'h3', 'tool');

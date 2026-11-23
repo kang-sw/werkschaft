@@ -45,9 +45,22 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		return nil, ErrLocked
 	}
 
+	var endLog func()
+	if opts.LogUnderLock != nil {
+		endLog = opts.LogUnderLock()
+	}
+	started := false
+	defer func() {
+		if !started {
+			if endLog != nil {
+				endLog()
+			}
+			_ = lock.Unlock()
+		}
+	}()
+
 	listener, err := listen(bindHostFor(opts), portCandidates(opts.Dir, opts.Port))
 	if err != nil {
-		_ = lock.Unlock()
 		return nil, err
 	}
 	logw := opts.Log
@@ -62,13 +75,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	token, err := newToken()
 	if err != nil {
 		_ = listener.Close()
-		_ = lock.Unlock()
 		return nil, err
 	}
 	if opts.Executable != "" {
 		if err := recordRunningExecutable(opts.Dir, opts.Executable, opts.Version, opts.BuildTime); err != nil {
 			_ = listener.Close()
-			_ = lock.Unlock()
 			return nil, fmt.Errorf("record running executable: %w", err)
 		}
 	}
@@ -87,6 +98,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	d := &Daemon{
 		dir:             opts.Dir,
 		lock:            lock,
+		endLog:          endLog,
 		listener:        listener,
 		log:             logw,
 		agents:          opts.Agents,
@@ -115,6 +127,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		proxy:           opts.Proxy,
 		openSystem:      opts.openSystem,
 		hostFiles:       opts.hostFiles,
+		auditRead:       opts.auditRead,
 		browseRoots:     opts.browseRoots,
 		worktrees:       opts.Worktrees,
 		sizes:           newSizeCache(),
@@ -234,6 +247,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	}
 	d.openAudit(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	accepting := make(chan struct{})
 	// The runner takes its change hook before the first request can reach
 	// it.
 	if d.agents != nil {
@@ -243,7 +257,14 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if eh, ok := d.agents.(AgentEndpointHost); ok {
 			eh.SetEndpoint(endpointURL(d.endpoint, ""))
 		}
-		d.agents.Start(d.agentChanged)
+		if ah, ok := d.agents.(AgentAuditHost); ok {
+			ah.SetAuditSink(d.AuditSink())
+		}
+		if startup, ok := d.agents.(AgentStartupHost); ok {
+			startup.StartForPublication(d.agentChanged, accepting)
+		} else {
+			d.agents.Start(d.agentChanged)
+		}
 	}
 	if err := writeEndpoint(opts.Dir, d.endpoint); err != nil {
 		// A detached daemon's returned error has no reader; the log does.
@@ -257,7 +278,6 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		_ = listener.Close()
-		_ = lock.Unlock()
 		return nil, fmt.Errorf("write endpoint file: %w", err)
 	}
 	// Read the agents' global settings only now that the endpoint is
@@ -270,7 +290,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	// Read them once more as Serve starts accepting: a writer's notification
 	// is one attempt with a timeout, so one that could not be served before
 	// this point committed before this read, and every later one is served.
-	serving := &servingListener{Listener: listener, first: func() { go d.reloadAgentGlobalConfig() }}
+	serving := &servingListener{Listener: listener, first: func() {
+		close(accepting)
+		go d.reloadAgentGlobalConfig()
+	}}
 	go func() {
 		if err := d.server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(d.log, "dashboard: serve: %v\n", err)
@@ -295,6 +318,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}()
 	}
 	fmt.Fprintf(d.log, "dashboard: version %s listening on %s (lan %v, pid %d)\n", d.endpoint.Version, listener.Addr(), d.lan, d.endpoint.PID)
+	started = true
 	return d, nil
 }
 

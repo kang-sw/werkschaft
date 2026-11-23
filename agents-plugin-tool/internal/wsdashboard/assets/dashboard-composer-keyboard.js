@@ -41,7 +41,7 @@
       // While the file popup shows, it takes Up/Down, Tab and Enter (which
       // pick, never send), and Escape (which closes it without arming
       // Tab-out).
-      if ((mention && mention.key(e)) || (slash && slash.key(e))) { tabOut = false; return; }
+      if ((mention && mention.key(e)) || (slash && slash.key(e)) || (typeof bangHistKey === "function" && bangHistKey(e))) { tabOut = false; return; }
       if (e.key === "Backspace" && cmdSel && !ctext.value) { e.preventDefault(); uncommand(); queueDraft(); return; }
       if (e.key === "Tab") {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -50,10 +50,18 @@
         indentLines(e.shiftKey);
         return;
       }
-      if (e.key === "Escape") { tabOut = true; return; }
+      if (e.key === "Escape") {
+        // In shell mode the first Esc removes the leading `!`; the next one
+        // prepares Tab-out as before.
+        if (bangMode() && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); tabOut = false; bangLeave(); return; }
+        tabOut = true; return;
+      }
       if (e.key !== "Shift") tabOut = false;
       if (e.key !== "Enter") return;
       var mod = e.ctrlKey || e.metaKey;
+      // Ignore auto-repeated Enter/send-chord keydowns (e.g. holding Enter right
+      // after picking a command history entry) so only a fresh press submits.
+      if (e.repeat && (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod)) { e.preventDefault(); return; }
       if (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod) { e.preventDefault(); sendMessage(); }
     });
     // The form script's own listeners have rebuilt the reply line by the

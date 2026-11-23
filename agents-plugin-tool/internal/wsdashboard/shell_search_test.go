@@ -43,7 +43,7 @@ func TestShellSearchButtonClick(t *testing.T) {
 	}
 	runNode(t, "shell search click", `
 var bad = [], handler, sent = [], focused = 0;
-var shown = { el: { focus: function () { focused++; } } }, shOn = shown;
+var shown = { el: { focus: function () { focused++; } } }, shOn = shown, shSettingsEntry = null;
 var shTop = { addEventListener: function (kind, fn) { handler = fn; } };
 function shSend(ent, kind) { sent.push([ent === shown, kind]); }
 `+search+click+`

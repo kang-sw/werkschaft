@@ -12,12 +12,14 @@
   --wb-perm-ink: var(--wb-ph-perm);
   --wb-compact-ink: var(--wb-ph-compact);
   --pv-bg: #e4dcf7; --pv-fg: #3a2c6b; --pv-line: #b9a9e8;
+  --conv-trigger: #0f7a72;
   --wb-ok: #1d7348; --wb-fail: #c0262d;
   --wb-warn: #c27a00; --wb-warn-ink: #a35f00; --wb-hot: #d95d16;
   /* the warning tone on a toast, whose surface is the inverted text colour */
   --wb-toast-warn: #f2c06b;
   --ring-think: #6a4fc4;
   --ring-tool: #0284c7;
+  --d-hud-ring-tool-tip: #38bdf8;
   --ring-hold: #0e7a83;
   --ring-perm: #d97706;
   --ring-fail: #c0262d;
@@ -36,11 +38,13 @@
     --wb-perm-ink: var(--wb-on-ph-perm);
     --wb-compact-ink: var(--wb-on-ph-compact);
     --pv-bg: #3d2f6b; --pv-fg: #ddd3fb; --pv-line: #6a4fc4;
+    --conv-trigger: #6ccbc2;
     --wb-ok: #6cc39a; --wb-fail: #f0797e;
     --wb-warn: #e0a36c; --wb-warn-ink: #e0a36c; --wb-hot: #fb923c;
     --wb-toast-warn: #9a5a00;
     --ring-think: #967af7;
     --ring-tool: #38bdf8;
+    --d-hud-ring-tool-tip: #7dd3fc;
     --ring-hold: #2dd4bf;
     --ring-perm: #f59e0b;
     --ring-fail: #f0797e;
@@ -58,11 +62,13 @@
   --wb-perm-ink: var(--wb-on-ph-perm);
   --wb-compact-ink: var(--wb-on-ph-compact);
   --pv-bg: #3d2f6b; --pv-fg: #ddd3fb; --pv-line: #6a4fc4;
+  --conv-trigger: #6ccbc2;
   --wb-ok: #6cc39a; --wb-fail: #f0797e;
   --wb-warn: #e0a36c; --wb-warn-ink: #e0a36c; --wb-hot: #fb923c;
   --wb-toast-warn: #9a5a00;
   --ring-think: #967af7;
   --ring-tool: #38bdf8;
+  --d-hud-ring-tool-tip: #7dd3fc;
   --ring-hold: #2dd4bf;
   --ring-perm: #f59e0b;
   --ring-fail: #f0797e;
@@ -211,11 +217,17 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .hb[data-h="agy"]::before { content: "Ag"; }
 .hb[data-h="werk"] { background: #2f6f5e; color: #fff; }
 .hb[data-h="werk"]::before { content: "Wk"; }
-@property --hba { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
-.hb .hbr { position: absolute; inset: -2px; box-sizing: border-box; padding: 2px; border-radius: 6.5px; z-index: 2; pointer-events: none; background: conic-gradient(from var(--hba), #d6dde8 0 100deg, transparent 100deg 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: hbspin 1.1s linear infinite; }
+/* Conic ring spinners rotate a static gradient on a pseudo-element (transform
+   only, compositor-side) under the host's static mask; animating an angle custom
+   property inside the gradient re-rasterised every frame on the main thread.
+   The pseudo-element is a fixed square far larger than any ring host (the host
+   mask and paint containment clip it) so every rotation still covers the host,
+   and animation-delay: inherit keeps the host's inline phase stamp working. */
+.hb .hbr { position: absolute; inset: -2px; box-sizing: border-box; padding: 2px; border-radius: 6.5px; z-index: 2; pointer-events: none; contain: paint;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.hb .hbr::before { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; background: conic-gradient(#d6dde8 0 100deg, transparent 100deg 360deg); animation: hbspin 1.1s linear infinite; animation-delay: inherit; }
 .hb.sm .hbr { border-radius: 5.5px; }
-@keyframes hbspin { to { --hba: 360deg; } }
+@keyframes hbspin { to { transform: rotate(360deg); } }
 .host { font-size: 11px; font-weight: 800; letter-spacing: .04em; padding: 1px 7px; border-radius: 4px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
 .top .host { display: inline-flex; align-items: center; box-sizing: border-box; height: 20px; line-height: 1; }
 .host.sm { font-size: 10px; padding: 0 5px; flex: none; }
@@ -305,7 +317,11 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 :root[data-animation-paused] :is(.spin, .pulse, .pibadge, .caret, .ibadge.busy .istop, .rail .drkwork, .hb .hbr, .rail .hb.perm, .rail .sbn, .dskel i, .tk .tk-qspin, .oq-pill.board-updated) { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .spin, .caret, .pulse, .pibadge { animation: none; } }
 :root[data-animation-paused] .hud-node[data-state] .hud-ring { animation-play-state: paused; }
+/* animation-play-state is not inherited: the pseudo-element spinners and pulses pause on their own. */
+:root[data-animation-paused] :is(.hb .hbr, .hud-node[data-state] .hud-ring)::before,
+:root[data-animation-paused] .hud-node[data-state] .hud-ring::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .hud-node[data-state] .hud-ring { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .hud-node[data-state] .hud-ring::before, .hud-node[data-state] .hud-ring::after { animation: none; } }
 .args { font-family: var(--wb-mono); font-size: 12px; color: var(--wb-muted-fg); }
 code.fpath { font-size: 11.5px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
 .empty { margin: 8px 0; padding: 18px 14px; text-align: center; font-size: 13px; color: var(--wb-muted-fg); border: 1px dashed var(--wb-muted-fg); border-radius: var(--wb-radius); }

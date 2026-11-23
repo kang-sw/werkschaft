@@ -85,15 +85,15 @@
 }
 .scope-target-pill > span { flex: none; white-space: nowrap; }
 .scope-target-pill > code { font-size: 10.5px; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.scope-target-pill.repo {
+.scope-target-pill.scope-repo {
   background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card));
   color: var(--wb-warn-ink);
 }
-.scope-target-pill.builtin {
+.scope-target-pill.scope-builtin {
   background: color-mix(in srgb, var(--wb-technical) 15%, var(--wb-card));
   color: var(--wb-technical);
 }
-:root[data-theme="dark"] .scope-target-pill.builtin {
+:root[data-theme="dark"] .scope-target-pill.scope-builtin {
   background: var(--wb-technical);
   color: var(--wb-on-technical);
 }
@@ -950,4 +950,40 @@
     align-self: stretch;
   }
   :root[data-mode="settings"] .rail-ph { display: none; }
+}
+
+
+/* The shell owns the rail and dialog chrome around modal-framed Settings. */
+[data-settings-close] { display: none; }
+:root[data-settings-modal] [data-settings-close] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 22px;
+  cursor: pointer;
+}
+:root[data-settings-modal] [data-settings-close]:hover {
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+}
+:root[data-settings-modal] .top,
+:root[data-settings-modal] .rail-ph { display: none; }
+:root[data-settings-modal] .dbody {
+  display: flex;
+  padding: 0;
+  gap: 0;
+}
+:root[data-settings-modal] .stage {
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  align-self: stretch;
 }

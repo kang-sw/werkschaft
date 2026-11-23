@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -54,11 +55,35 @@ func NewRunner(opts Options) *Runner {
 // SetLiveHost binds the daemon's RAM projection before Start.
 func (r *Runner) SetLiveHost(host wsdashboard.LiveHost) { r.opts.LiveHost = host }
 
+// SetAuditSink binds the daemon's capture sink before Start.
+func (r *Runner) SetAuditSink(sink wsaudit.Sink) { r.opts.AuditSink = sink }
+
 // Start loads every conversation record from the session registry, with no
 // process (lazy resume), and starts serving them. notify is called after
 // each write to a conversation's stores, so the daemon re-reads it. The
 // daemon calls Start once it holds its lock.
 func (r *Runner) Start(notify func(replyID, project string)) {
+	r.start(notify)
+	r.hydrateClosedRows()
+}
+
+// StartForPublication waits for held-session recovery before the daemon
+// publishes its endpoint. Closed presentations hydrate once it accepts requests.
+func (r *Runner) StartForPublication(notify func(replyID, project string), serving <-chan struct{}) {
+	r.start(notify)
+	<-r.rejoined
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		select {
+		case <-serving:
+			r.hydrateClosedRows()
+		case <-r.quit:
+		}
+	}()
+}
+
+func (r *Runner) start(notify func(replyID, project string)) {
 	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()
@@ -132,18 +157,16 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		})
 	}
 	// All records are loaded now, including children sorted after their lead.
-	for _, st := range r.List() {
-		if c := r.conv(st.ID); c != nil {
-			c.do(func() {
-				// Release a persisted HeldTurn whose background work ended
-				// with the previous daemon (open children still hold it).
-				if c.rec.Parent != nil && c.rec.HolderID == "" {
-					c.releaseHeld()
-				}
-				c.spawnDirty = true
-				c.live.writeSnapshot()
-			})
-		}
+	for _, c := range startup {
+		c.do(func() {
+			// Release a persisted HeldTurn whose background work ended
+			// with the previous daemon (open children still hold it).
+			if c.rec.Parent != nil && c.rec.HolderID == "" {
+				c.releaseHeld()
+			}
+			c.spawnDirty = true
+			c.live.writeSnapshot()
+		})
 	}
 	// A child loaded before its parent found no parent to report to.
 	r.deliverPending()
@@ -151,7 +174,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 	if r.opts.Holders == nil {
 		// No holder to wait for.
 		r.markScanned()
-		r.rejoinOnce.Do(func() { close(r.rejoined) })
+		r.finishMCPRejoin()
 		return
 	}
 	r.wg.Add(1)
@@ -160,7 +183,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		r.opts.Holders.Scan()
 		r.markScanned()
 		r.holdersScanned()
-		r.rejoinOnce.Do(func() { close(r.rejoined) })
+		r.finishMCPRejoin()
 	}()
 }
 
@@ -188,11 +211,42 @@ func (r *Runner) loadClosed(rec Record) {
 	defer r.mu.Unlock()
 	r.closed[rec.ReplyID] = rec
 	r.indexChildLocked(rec)
-	st := r.closedState(rec) // prime immutable presentation once at startup
-	if r.closedRows == nil {
-		r.closedRows = map[string]State{}
+}
+
+// Hydration reads retained evidence outside the runner lock. A concurrent
+// reopen, close, or forget owns any newer presentation for the same ID.
+func (r *Runner) hydrateClosedRows() {
+	r.mu.Lock()
+	records := make([]Record, 0, len(r.closed))
+	for id, rec := range r.closed {
+		if _, hydrated := r.closedRows[id]; !hydrated {
+			records = append(records, rec)
+		}
 	}
-	r.closedRows[rec.ReplyID] = st
+	r.mu.Unlock()
+	for _, rec := range records {
+		select {
+		case <-r.quit:
+			return
+		default:
+		}
+		st := r.closedState(rec)
+		r.mu.Lock()
+		current, stillClosed := r.closed[rec.ReplyID]
+		_, hydrated := r.closedRows[rec.ReplyID]
+		publish := stillClosed && !hydrated && current.OpenGen == rec.OpenGen &&
+			current.ClosedAt == rec.ClosedAt && current.HandedOffAt == rec.HandedOffAt
+		if publish {
+			if r.closedRows == nil {
+				r.closedRows = make(map[string]State, len(records))
+			}
+			r.closedRows[rec.ReplyID] = st
+		}
+		r.mu.Unlock()
+		if publish {
+			r.wakeSpawnParents(st)
+		}
+	}
 }
 
 // closeAtStart closes open record rec at Start, with no loop started, and

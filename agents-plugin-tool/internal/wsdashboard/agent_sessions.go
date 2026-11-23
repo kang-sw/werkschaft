@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -38,6 +39,12 @@ type AgentHost interface {
 	InboxChanged(replyID string)
 	// Close ends every conversation's process.
 	Close()
+}
+
+// AgentStartupHost restores held sessions before publication and starts
+// closed-session presentation recovery when the listener accepts requests.
+type AgentStartupHost interface {
+	StartForPublication(notify func(replyID, project string), serving <-chan struct{})
 }
 
 // AgentPageInputHost distinguishes an explicit composer send from passive
@@ -66,6 +73,14 @@ type AgentMCPTokenHost interface {
 	ResolveMCPToken(token string) (hello ProxyHello, void <-chan struct{}, ok bool)
 }
 
+// AgentMCPTokenDiagnostics is an optional AgentMCPTokenHost that reports a
+// reason for a failed resolution. The HTTP route logs the reason locally,
+// so implementations must use fixed messages without request or record data.
+// An empty reason means the token resolved.
+type AgentMCPTokenDiagnostics interface {
+	ResolveMCPTokenWithReason(token string) (hello ProxyHello, void <-chan struct{}, reason string)
+}
+
 // AgentMCPCallHost is an optional AgentMCPTokenHost that counts the tool
 // calls in flight on a session token: MCPCallBegin starts one and returns
 // its end, which the route calls once the call is answered or abandoned
@@ -78,6 +93,11 @@ type AgentMCPCallHost interface {
 // delivered in RAM. The daemon binds it before Start; no wire protocol changes.
 type AgentLiveHost interface {
 	SetLiveHost(LiveHost)
+}
+
+// AgentAuditHost receives the daemon's audit sink before Start.
+type AgentAuditHost interface {
+	SetAuditSink(wsaudit.Sink)
 }
 
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off

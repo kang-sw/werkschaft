@@ -691,6 +691,10 @@ precommit-loss and actual failed-prefix semantics.
 
 Required verification before claiming implementation success:
 
+Pi transport of reasoning summaries retires with the extension per
+`261123-chore-ws-retire-pi-harness`; Pi transport and bundle acceptance
+below are no longer required. Shared intake, history and display checks remain.
+
 - Pin exact 1.5.2 native-extension terminal/hosted OpenAI Responses SSE and Codex
   SSE/WS fixtures; verify host VERSION/override checks in source and shipped
   bundle. 0.84.4, unknown versions/providers, MCP-only fallback, no summary text
@@ -746,7 +750,7 @@ Required verification before claiming implementation success:
   below-answer collapsed/expanded summary. Add no subagent surface or inferred
   height/layout rules; prefix/status qualification stays in that component.
 
-Run applicable Pi tests (`npm test` in `agents-plugin-pi`) and the Go suite
+Run the Go suite
 (`go test ./...` in `agents-plugin-tool`) in MAIN's assigned implementation slot.
 These are future verification obligations, not runs claimed by ticket capture.
 During this ticket-settlement step, use static reads, ticket edits, formatting

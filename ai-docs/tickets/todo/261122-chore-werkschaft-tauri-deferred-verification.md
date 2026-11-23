@@ -46,6 +46,21 @@ item 5). This ticket does not restate them. Record results here.
    and active memory, and the scroll/typing scenario for Tauri against
    Electron. Use the same machine and workload. Run it on a host where
    launching Electron is allowed.
-4. **Re-home.** Move the overlapping reliability and Windows delivery work
-   from `261115-feat-werkschaft-electron-shell` Phases 2-4 to Tauri tickets.
-   The origin gate asks for this after Phase 4.
+4. **Re-home (resolved 2026-11-23).** The owner retired Electron
+   ((1396)=a), and `261115-feat-werkschaft-electron-shell` is dropped.
+   Its Phases 2-3 are already covered by Tauri (Tauri Phase 2 Result
+   `0aeef115b`, Phase 3 Result `64fd7ebf6`). Its Phase 4 carries forward
+   here as a conditional requirement. Only when a new shell-only HTTP
+   authority is needed, grant it as a scoped grant rather than broadening
+   shell authority. Per Decision 8 of
+   `.done/261113-feat-werkschaft-thin-tauri-shell` (owner (798)=a): use a
+   per-launch, short-lived JS-memory scoped grant; revoke on shell exit, with
+   a crash lease/expiry fallback. Keep the endpoint credential native and
+   separate from the grant. Design the bootstrap command and trusted-window
+   ACL when the need arises, and record them before implementation.
+   Verification when activated: daemon recognition of only the scoped
+   authority, authenticated bootstrap and rediscovery after restart, bounded
+   expiry and exit/crash revocation, an exact trusted-window ACL, rejection
+   of external and preview/opaque-frame access, and absence from URLs,
+   persistent storage, logs and general `postMessage`; `/mcp`, lifecycle,
+   master credentials and generic native commands/filesystem stay excluded.

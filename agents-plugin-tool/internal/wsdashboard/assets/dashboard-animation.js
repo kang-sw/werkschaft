@@ -1,6 +1,6 @@
   // A shared clock keeps newly mounted spinners at the phase their predecessors
   // would have reached. Reading CSS duration here would force style resolution.
-  var ANIMATION_PERIOD_MS = { thinking: 1150, tool: 900, holding: 1800, permission: 1150, hbr: 1100, spin: 800 };
+  var ANIMATION_PERIOD_MS = { thinking: 1000, tool: 1000, holding: 1800, permission: 1150, hbr: 1100, spin: 800 };
   function animationPhaseOffset(seedKey, periodMs) {
     if (!seedKey) return 0;
     var hash = 2166136261;

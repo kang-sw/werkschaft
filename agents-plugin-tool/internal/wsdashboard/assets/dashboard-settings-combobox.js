@@ -530,6 +530,11 @@ var WsSettingsCombobox = (function () {
   }
 
   return {
+    closeActive: function () {
+      if (!activeClose) return false;
+      activeClose();
+      return true;
+    },
     attach: attach,
     loadChoices: loadChoices,
     backendOptions: backendOptions,

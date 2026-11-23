@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -37,11 +36,8 @@ func dashboardCommand(args []string) {
 	lan := fs.Bool("lan", false, "listen on every network interface and admit a request from another device only with the LAN access token; the starter (daemon-start, or ws-mcp serve) passes it when the global dashboard.lan_enabled value is on")
 	buildTime := fs.Int64("build-time", 0, "the ws-mcp build time in Unix milliseconds to report in /health; the starter passes the time of the executable it measured, and 0 reads this executable's")
 	lockWait := fs.Duration("lock-wait", wsdashboard.DefaultLockWait, "how long to wait for another daemon to release the single-instance lock")
-	preflight := fs.Bool("desktop-preflight", false, "wait for the desktop starter to authorize startup on stdin")
+	preflight := fs.Bool("desktop-preflight", false, "report pre-lock readiness and wait for the starter's admission")
 	_ = fs.Parse(args)
-	if *preflight && !wsdashboard.AwaitDesktopPreflight(os.Stdin) {
-		return
-	}
 
 	// Before anything reads the environment or spawns from it: the session
 	// that started this daemon is not one it hosts.
@@ -67,8 +63,7 @@ func dashboardCommand(args []string) {
 	configPath, _ := wsconfig.GlobalPath(wsconfig.Options{})
 	logw := openDashboardLog(dir)
 	// Dev assets switch on before the daemon serves its first request. The
-	// notice waits for StartDaemon: the lazy log truncates on first write, and
-	// only the lock holder may do that.
+	// notice waits for StartDaemon to acquire the singleton lock.
 	devRoot, err := wsdashboard.EnableDevAssets(os.Getenv(wsdashboard.DevSourceEnv))
 	if err != nil {
 		fatal("dashboard", err)
@@ -104,13 +99,7 @@ func dashboardCommand(args []string) {
 	// the lock); their holders' records and exits go through execLink.
 	execLink := &hostedExecLink{}
 	cron := &cronHost{}
-	holders := wsholder.New(wsholder.Options{
-		Dir:    filepath.Join(dir, wsholder.DirName),
-		Python: os.Getenv(wsholder.PythonEnv),
-		Log:    logw,
-		OnExit: execLink.onExit(persistHolderExit(dir)),
-	})
-	holders.AddSink(execLink)
+	holders := newDashboardHolders(dir, logw, execLink)
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
 	// The one provider credential store: the daemon's token route and its
@@ -153,18 +142,23 @@ func dashboardCommand(args []string) {
 	if packageErr != nil {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
 	}
+	if *preflight && !wsdashboard.AwaitDesktopPreflight(os.Stdin, os.Stdout) {
+		closeTracker()
+		return
+	}
 	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
-		Dir:         dir,
-		Port:        *port,
-		LAN:         *lan,
-		Version:     version,
-		BuildTime:   *buildTime,
-		ContentHash: contentHash,
-		Executable:  exe,
-		LockWait:    *lockWait,
-		Log:         logw,
-		Proxy:       host,
-		Pprof:       wsdashboard.PprofEnabled(os.Getenv(wsdashboard.PprofEnv)),
+		Dir:          dir,
+		Port:         *port,
+		LAN:          *lan,
+		Version:      version,
+		BuildTime:    *buildTime,
+		ContentHash:  contentHash,
+		Executable:   exe,
+		LockWait:     *lockWait,
+		Log:          logw,
+		LogUnderLock: logw.begin,
+		Proxy:        host,
+		Pprof:        wsdashboard.PprofEnabled(os.Getenv(wsdashboard.PprofEnv)),
 		// User-curated, so beside the config file rather than in the cache.
 		WorkspacesFile: wsdashboard.WorkspacesFilePath(configPath),
 		Sessions:       sessions,
@@ -468,6 +462,18 @@ func credentialStatus(store *wscred.Store) func(provider string) (bool, error) {
 	}
 }
 
+func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *wsholder.Manager {
+	holders := wsholder.New(wsholder.Options{
+		Dir:          filepath.Join(dir, wsholder.DirName),
+		Python:       os.Getenv(wsholder.PythonEnv),
+		Log:          logw,
+		OnExit:       execLink.onExit(persistHolderExit(dir)),
+		AuditChannel: true,
+	})
+	holders.AddSink(execLink)
+	return holders
+}
+
 // newAgentRunner is the daemon's agent runner: the claude and pi backends,
 // ws-mcp's key store for conversation keys, and the plugin's Python launcher
 // for the ws-mcp it attaches to a conversation whose profile allows ws tools.
@@ -538,35 +544,34 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	})
 }
 
-// openDashboardLog returns the daemon's log writer. The file is truncated and
-// opened on the first write, and StartDaemon writes only once it holds the
-// lock, so a daemon that loses the lock never truncates the winner's log.
-func openDashboardLog(dir string) io.Writer {
-	return &lazyLog{path: filepath.Join(dir, "dashboard.log")}
-}
-
-type lazyLog struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
-	err  error
-}
-
-func (l *lazyLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil && l.err == nil {
-		l.file, l.err = os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	}
-	if l.err != nil {
-		return len(p), nil
-	}
-	return l.file.Write(p)
-}
-
 // dashboardSpawner starts a detached daemon process with the given ws-mcp
 // arguments.
 type dashboardSpawner func(args []string) error
+
+type dashboardPreparer func(args []string) (func(bool) error, error)
+
+func dashboardStarters(ctx context.Context, dir string, candidate func() (string, error), strict bool) (dashboardSpawner, dashboardPreparer) {
+	spawn := func(args []string) error {
+		exe, err := candidate()
+		if err != nil {
+			return err
+		}
+		if strict {
+			return wsdashboard.SpawnDetachedStrict(exe, append(args, "--lock-wait", "8s"), dir)
+		}
+		return wsdashboard.SpawnDetached(exe, args, dir)
+	}
+	prepare := func(args []string) (func(bool) error, error) {
+		exe, err := candidate()
+		if err != nil {
+			return nil, err
+		}
+		preflight, cancel := context.WithTimeout(ctx, 2*wsdashboard.DefaultStartWait)
+		defer cancel()
+		return wsdashboard.PrepareDetachedSuccessor(preflight, exe, args, dir, strict)
+	}
+	return spawn, prepare
+}
 
 // startDashboard is the serve-startup hook: with the dashboard key on, it
 // makes sure a daemon at least as new as this ws-mcp runs, in the LAN mode
@@ -574,19 +579,21 @@ type dashboardSpawner func(args []string) error
 // other mode, or from an older build time, is replaced). It never fails or
 // delays serve: the caller runs it on its own goroutine, and every error is
 // a stderr line.
-func startDashboard(ctx context.Context, settings mcp.DashboardSettings, dir string, buildTime int64, contentHash string, spawn dashboardSpawner, logw io.Writer) wsdashboard.Outcome {
+func startDashboard(ctx context.Context, settings mcp.DashboardSettings, dir string, buildTime int64, contentHash string, spawn dashboardSpawner, prepare dashboardPreparer, logw io.Writer) wsdashboard.Outcome {
 	if !settings.Enabled {
 		return ""
 	}
 	outcome, err := wsdashboard.Ensure(ctx, wsdashboard.EnsureOptions{
-		Dir:         dir,
-		Version:     version,
-		BuildTime:   buildTime,
-		ContentHash: contentHash,
-		Port:        settings.Port,
-		LAN:         settings.LAN,
-		Spawn:       spawn,
-		Log:         logw,
+		Dir:                 dir,
+		Version:             version,
+		BuildTime:           buildTime,
+		ContentHash:         contentHash,
+		Port:                settings.Port,
+		LAN:                 settings.LAN,
+		Spawn:               spawn,
+		SpawnBeforeShutdown: true,
+		PrepareSuccessor:    prepare,
+		Log:                 logw,
 	})
 	if err != nil {
 		fmt.Fprintf(logw, "ws-mcp: dashboard unavailable: %v\n", err)
@@ -621,26 +628,24 @@ func serveDashboard(server *mcp.Server) {
 		buildTime = wsdashboard.ExecutableBuildTime(exe)
 		contentHash = wsdashboard.ExecutableContentHash(exe)
 	}
-	spawn := func(args []string) error {
+	ctx := context.Background()
+	candidate := func() (string, error) {
 		exe, err := os.Executable()
 		if err != nil {
-			return err
+			return "", err
 		}
 		exe, err = wsdashboard.DaemonExecutable(exe, dir)
 		if err != nil {
-			return err
+			return "", err
 		}
-		exe, err = wsdashboard.LaunchExecutable(exe, dir)
-		if err != nil {
-			return err
-		}
-		return wsdashboard.SpawnDetached(exe, args, dir)
+		return wsdashboard.LaunchExecutable(exe, dir)
 	}
-	startDashboard(context.Background(), settings, dir, buildTime, contentHash, spawn, os.Stderr)
+	spawn, prepare := dashboardStarters(ctx, dir, candidate, false)
+	startDashboard(ctx, settings, dir, buildTime, contentHash, spawn, prepare, os.Stderr)
 }
 
 // hostedRender is what reg says about text the daemon renders for its
 // hosted lead.
 func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores) mcp.HostedRender {
-	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
+	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ResolveLeadSubagent: reg.ResolveLeadSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
 }

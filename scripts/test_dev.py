@@ -174,7 +174,7 @@ class SeedPackageTest(unittest.TestCase):
                  mock.patch.object(dev, "current_health", side_effect=[({"token": "fake"}, {"pid": 10, "content_hash": old_hash}), ({"token": "new"}, {"pid": 11, "content_hash": digest})]) as health, \
                  mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='{"outcome":"replaced"}', stderr="")) as run, \
                  mock.patch("urllib.request.urlopen", side_effect=AssertionError("no separate HTTP shutdown")):
-                self.assertEqual(dev.rerun_daemon(local=True), 0)
+                self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 0)
                 seed.assert_called_once()
                 stage.assert_called_once()
                 self.assertEqual(health.call_count, 2)
@@ -184,9 +184,12 @@ class SeedPackageTest(unittest.TestCase):
 
     def test_daemon_start_points_rsrc_root_at_checkout_package(self):
         # The daemon resolves the Pi worker launcher as <dir(WS_RSRC_ROOT)>/bin/ws-mcp-launcher.py.
-        stale = {"WS_RSRC_ROOT": "/stale/cache/rsrc", "WS_SKILLS_ROOT": "/stale/cache/skills"}
+        marker = "WS_MCP_LAUNCHER_START_LOCK_HELD"
+        stale = {"WS_RSRC_ROOT": "/stale/cache/rsrc", "WS_SKILLS_ROOT": "/stale/cache/skills", marker: "0"}
         with mock.patch.dict(dev.os.environ, stale),                 mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='{"outcome":"started"}', stderr="")) as run:
             dev.run_daemon_start(self.launcher, self.built, 123)
+            self.assertEqual(os.environ[marker], "0")
+        self.assertEqual(run.call_args.kwargs["env"][marker], "1")
         env = run.call_args.kwargs["env"]
         self.assertEqual(env["WS_RSRC_ROOT"], str(dev.DAEMON_PACKAGE / "rsrc"))
         self.assertEqual(env["WS_SKILLS_ROOT"], str(dev.DAEMON_PACKAGE / "skills"))
@@ -217,9 +220,11 @@ class DevLifecycleTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.binary = self.root / "candidate.bin"  # File IO and identity are mocked too.
         self.digest = "expected-content-hash"
-        self.endpoint = {"port": 1, "token": "test-only", "pid": 12345}
+        self.endpoint = {"port": 1, "pid": 12345}
         self.expected = {"version": "0.50.1-dev", "content_hash": self.digest, "pid": 12345}
-        self.old = dict(self.expected, content_hash="old-build")
+        self.old = dict(self.expected, version="0.50.0-dev", content_hash="old-build", pid=54321)
+        self.previous = {"executable": str(self.root / "previous.bin"), "version": self.old["version"],
+                         "binary_sha256": self.old["content_hash"], "build_time": 123}
         self.now = 0.0
         self.health = self.old
         self.out, self.err = io.StringIO(), io.StringIO()
@@ -241,6 +246,7 @@ class DevLifecycleTest(unittest.TestCase):
         self.seed = patch("dev.seed_packages")
         self.stack.enter_context(mock.patch.object(self.launcher, "sha256_file", return_value=self.digest))
         self.stage = self.stack.enter_context(mock.patch.object(self.launcher, "stage_daemon_binary", return_value=self.binary))
+        self.record = self.stack.enter_context(mock.patch.object(self.launcher, "read_running_executable", return_value=self.previous))
         self.stack.enter_context(mock.patch.object(self.launcher, "read_daemon_endpoint", return_value=self.endpoint))
         self.rest = self.stack.enter_context(mock.patch.object(self.launcher, "daemon_health", side_effect=self.fake_health))
         self.stack.enter_context(mock.patch.object(self.launcher, "endpoint_process_alive", side_effect=AssertionError("no PID query")))
@@ -279,7 +285,8 @@ class DevLifecycleTest(unittest.TestCase):
 
     def successful_start(self, *args, **kwargs):
         self.assert_gate_held()
-        self.health = self.expected
+        self.assertEqual(kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
+        self.health = dict(self.expected, build_time=int(args[0][-1]))
         return self.result()
 
     def assert_gate_held(self):
@@ -299,16 +306,115 @@ class DevLifecycleTest(unittest.TestCase):
         self.assertFalse((self.daemon_dir / "endpoint.json").exists())
 
     def test_explicit_replace_build_outside_gate_and_one_starter(self):
-        self.assertEqual(dev.rerun_daemon(local=False), 0)
+        self.assertEqual(dev.rerun_daemon(local=False, health_window=0), 0)
         self.run.assert_called_once()
         self.assertEqual(self.run.call_args.args[0][:3], [str(self.binary), "daemon-start", "--replace"])
         self.assertIn("--build-time", self.run.call_args.args[0])
-        self.assertEqual(self.run.call_args.kwargs["timeout"], 60)
+        self.assertEqual(self.run.call_args.kwargs["timeout"], dev.START_TIMEOUT_SECONDS)
         env = self.run.call_args.kwargs["env"]
         self.assertEqual(env["WS_RSRC_ROOT"], str(dev.DAEMON_PACKAGE / "rsrc"))
         self.assertEqual(env["WS_SKILLS_ROOT"], str(dev.DAEMON_PACKAGE / "skills"))
         self.seed.assert_called_once()
         self.assertEqual(self.rest.call_count, 2)
+        self.record.assert_not_called()
+        self.assertEqual(self.now, 0)
+        self.assert_gate_released()
+
+    def test_default_window_confirms_through_five_minutes_before_seeding(self):
+        with mock.patch.object(dev, "capture_daemon_process") as capture:
+            self.seed.side_effect = lambda *args: self.assertEqual(self.now, 300)
+            self.assertEqual(dev.rerun_daemon(local=False), 0)
+        self.assertEqual(self.rest.call_count, 17)
+        self.assertEqual(capture.call_args.args[1], self.expected["pid"])
+        capture.return_value.assert_not_called()
+        self.seed.assert_called_once()
+        self.assertIn(self.expected["version"], self.out.getvalue())
+        self.assert_gate_released()
+
+    def test_wedged_replacement_is_stopped_and_previous_build_confirmed(self):
+        def health(port, timeout):
+            if self.now >= 20 and self.run.call_count == 1:
+                raise self.launcher.DaemonHung("wedged")
+            return self.fake_health(port, timeout)
+
+        def start(argv, **kwargs):
+            if argv[0] == self.previous["executable"]:
+                self.assertEqual(argv[-1], "123")
+                self.health = self.old
+                return self.result()
+            return self.successful_start(argv, **kwargs)
+
+        self.rest.side_effect = health
+        self.run.side_effect = start
+        with mock.patch.object(dev, "capture_daemon_process") as capture, \
+             mock.patch.object(self.launcher, "daemon_absence_proven", side_effect=[False, True]):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=40), 1)
+        capture.return_value.assert_called_once_with(15)
+        self.assertEqual(self.run.call_count, 2)
+        self.seed.assert_not_called()
+        self.assertIn(self.binary.name, self.err.getvalue())
+        for call in self.run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], dev.START_TIMEOUT_SECONDS)
+        self.assertIn(f"restored version={self.old['version']}", self.err.getvalue())
+        self.assert_gate_released()
+
+    def test_no_rollback_target_leaves_the_running_daemon_alone(self):
+        self.record.side_effect = FileNotFoundError("record absent")
+        self.assertEqual(dev.main(["rerun", "daemon"]), 1)
+        self.assertIn("rollback target missing", self.err.getvalue())
+        self.stage.assert_not_called()
+        self.run.assert_not_called()
+        self.assert_gate_released()
+
+    def test_failed_window_with_unidentified_process_requires_manual_action(self):
+        self.rest.side_effect = lambda port, timeout: self.fake_health(port, timeout) if self.now == 0 else None
+        with mock.patch.object(dev, "capture_daemon_process", return_value=None), \
+             mock.patch.object(self.launcher, "daemon_absence_proven", return_value=False):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=20), 1)
+        self.assertIn("replacement process could not be identified safely", self.err.getvalue())
+        self.assertIn("manual action is needed", self.err.getvalue())
+        self.run.assert_called_once()
+        self.assert_gate_released()
+
+    def test_failed_window_with_lock_still_held_requires_manual_action(self):
+        self.rest.side_effect = lambda port, timeout: self.fake_health(port, timeout) if self.now == 0 else None
+        with mock.patch.object(dev, "capture_daemon_process", return_value=mock.Mock(return_value=True)), \
+             mock.patch.object(self.launcher, "daemon_absence_proven", return_value=False):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=20), 1)
+        self.assertEqual(self.now, 35)
+        self.assertIn("dashboard lock did not release", self.err.getvalue())
+        self.assertIn("manual action is needed", self.err.getvalue())
+        self.run.assert_called_once()
+        self.assert_gate_released()
+
+    def test_initial_wedge_uses_starter_pid_only_with_matching_running_record(self):
+        def start(argv, **kwargs):
+            if argv[0] == self.previous["executable"]:
+                self.health = self.old
+                return self.result()
+            self.record.return_value = dict(self.previous, binary_sha256=self.digest, build_time=int(argv[-1]))
+            return self.result(1, '{"outcome":"unavailable","pid":12345}')
+
+        self.rest.side_effect = [self.old, self.launcher.DaemonHung("wedged"), self.old]
+        self.run.side_effect = start
+        with mock.patch.object(dev, "capture_daemon_process", return_value=mock.Mock(return_value=True)) as capture, \
+             mock.patch.object(self.launcher, "daemon_absence_proven", return_value=True):
+            self.assertEqual(dev.rerun_daemon(local=True), 1)
+        self.assertEqual(capture.call_args.args[1], self.expected["pid"])
+        capture.return_value.assert_called_once_with(15)
+        self.assertEqual(self.run.call_count, 2)
+        self.assertIn("restored version=", self.err.getvalue())
+        self.assert_gate_released()
+
+    def test_failed_window_with_process_that_does_not_stop_requires_manual_action(self):
+        self.rest.side_effect = lambda port, timeout: self.fake_health(port, timeout) if self.now == 0 else None
+        with mock.patch.object(dev, "capture_daemon_process", return_value=mock.Mock(return_value=False)):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=20), 1)
+        self.assertIn("replacement process did not exit", self.err.getvalue())
+        self.assertIn("manual action is needed", self.err.getvalue())
+        self.run.assert_called_once()
         self.assert_gate_released()
 
     def test_unavailable_recovers_only_expected_hash_and_keeps_diagnostic(self):
@@ -318,9 +424,9 @@ class DevLifecycleTest(unittest.TestCase):
             return self.result(1, 'notice\n{"outcome":"unavailable","pid":0}', "successor not yet ready")
         self.run.side_effect = start
         self.rest.side_effect = lambda port, timeout: self.fake_health(port, timeout) if self.now < 25 else self.expected_while_held()
-        self.assertEqual(dev.rerun_daemon(local=True), 0)
+        self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 0)
         self.assertGreaterEqual(self.now, 25)
-        self.assertLess(self.now, 60)
+        self.assertLess(self.now, dev.START_TIMEOUT_SECONDS)
         self.run.assert_called_once()
         self.assertIn('daemon-start exited 1: notice\n{"outcome":"unavailable","pid":0}', self.out.getvalue())
         self.assertIn("successor not yet ready", self.out.getvalue())
@@ -338,8 +444,8 @@ class DevLifecycleTest(unittest.TestCase):
                 self.health = health
                 self.run.reset_mock()
                 self.run.side_effect = lambda *a, **kw: self.result(1, '{"outcome":"unavailable"}', "original diagnostic")
-                self.assertEqual(dev.rerun_daemon(local=True), 1)
-                self.assertEqual(self.now, 60)
+                self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 1)
+                self.assertEqual(self.now, dev.START_TIMEOUT_SECONDS)
                 self.run.assert_called_once()
                 self.assertIn("lifecycle deadline", self.err.getvalue())
                 self.assertIn("original diagnostic", self.out.getvalue())
@@ -359,7 +465,7 @@ class DevLifecycleTest(unittest.TestCase):
                     return self.result(code, stdout, "preserved failure")
                 self.run.side_effect = start
                 with self.assertRaisesRegex(RuntimeError, "daemon-start") as error:
-                    dev.rerun_daemon(local=True)
+                    dev.rerun_daemon(local=True, health_window=0)
                 self.assertIn(stdout, str(error.exception))
                 self.assertEqual(self.rest.call_count, 1)  # Only the pre-start observation.
                 self.run.assert_called_once()
@@ -367,12 +473,12 @@ class DevLifecycleTest(unittest.TestCase):
                 self.factory.reset_mock()
 
     def test_starter_timeout_or_exception_releases_gate_without_retry(self):
-        for error in (dev.subprocess.TimeoutExpired("mock starter", 60), OSError("starter failed")):
+        for error in (dev.subprocess.TimeoutExpired("mock starter", dev.START_TIMEOUT_SECONDS), OSError("starter failed")):
             with self.subTest(error=error):
                 self.run.reset_mock()
                 self.run.side_effect = error
                 with self.assertRaises(type(error)):
-                    dev.rerun_daemon(local=True)
+                    dev.rerun_daemon(local=True, health_window=0)
                 self.run.assert_called_once()
                 self.assert_gate_released()
                 self.factory.reset_mock()
@@ -383,7 +489,7 @@ class DevLifecycleTest(unittest.TestCase):
                 self.run.reset_mock()
                 self.rest.side_effect = [self.launcher.DaemonHung("wedged")] if before_start else [self.old, self.launcher.DaemonHung("wedged")]
                 with self.assertRaisesRegex(RuntimeError, "running daemon is wedged"):
-                    dev.rerun_daemon(local=True)
+                    dev.rerun_daemon(local=True, health_window=0)
                 self.assertEqual(self.run.call_count, 0 if before_start else 1)
                 self.assert_gate_released()
                 self.factory.reset_mock()
@@ -393,8 +499,8 @@ class DevLifecycleTest(unittest.TestCase):
         self.assertTrue(owner.acquire())
         try:
             with self.assertRaisesRegex(RuntimeError, "deadline expired waiting.*starter lock"):
-                dev.rerun_daemon(local=True)
-            self.assertEqual(self.now, 60)
+                dev.rerun_daemon(local=True, health_window=0)
+            self.assertEqual(self.now, dev.START_TIMEOUT_SECONDS)
             self.run.assert_not_called()
             self.rest.assert_not_called()
             self.assert_gate_held()  # A loser must not release the owner's lock.
@@ -411,14 +517,14 @@ class DevLifecycleTest(unittest.TestCase):
                 owner.close()
                 owner.fd = None
         def start(*args, **kwargs):
-            self.assertLessEqual(kwargs["timeout"], 55)
-            self.advance(50)
+            self.assertLessEqual(kwargs["timeout"], dev.START_TIMEOUT_SECONDS - 5)
+            self.advance(dev.START_TIMEOUT_SECONDS - 10)
             return self.result(1, '{"outcome":"unavailable"}')
         self.sleep.side_effect = sleep
         self.run.side_effect = start
         try:
-            self.assertEqual(dev.rerun_daemon(local=True), 1)
-            self.assertEqual(self.now, 60)  # Not 65 (lock) or 115 (new post-start budget).
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 1)
+            self.assertEqual(self.now, dev.START_TIMEOUT_SECONDS)  # Not 185 (lock) or 355 (new post-start budget).
             self.run.assert_called_once()
         finally:
             if owner.fd is not None:
@@ -431,8 +537,8 @@ class DevLifecycleTest(unittest.TestCase):
             self.advance(kwargs["timeout"])
             return self.result(1, '{"outcome":"unavailable"}')
         self.run.side_effect = start
-        self.assertEqual(dev.rerun_daemon(local=True), 1)
-        self.assertEqual(self.now, 60)
+        self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 1)
+        self.assertEqual(self.now, dev.START_TIMEOUT_SECONDS)
         self.assertEqual(self.rest.call_count, 1)
         self.run.assert_called_once()
         self.assert_gate_released()
@@ -441,22 +547,22 @@ class DevLifecycleTest(unittest.TestCase):
         def health(port, timeout):
             self.fake_health(port, timeout)
             if self.run.called:
-                self.advance(60 - self.now)
+                self.advance(dev.START_TIMEOUT_SECONDS - self.now)
                 return self.expected
             return self.old
         self.rest.side_effect = health
-        self.assertEqual(dev.rerun_daemon(local=True), 1)
-        self.assertEqual(self.now, 60)
+        self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 1)
+        self.assertEqual(self.now, dev.START_TIMEOUT_SECONDS)
         self.run.assert_called_once()
         self.assert_gate_released()
 
     def test_slow_pre_start_health_cannot_reset_deadline_or_invoke_starter(self):
         def health(port, timeout):
-            self.advance(60)
+            self.advance(dev.START_TIMEOUT_SECONDS)
             return self.old
         self.rest.side_effect = health
         with self.assertRaisesRegex(RuntimeError, "deadline expired before daemon-start"):
-            dev.rerun_daemon(local=True)
+            dev.rerun_daemon(local=True, health_window=0)
         self.run.assert_not_called()
         self.assert_gate_released()
 
@@ -480,12 +586,140 @@ class DevLifecycleTest(unittest.TestCase):
             self.assert_gate_held()  # Dev still owns it at publication and report parsing.
             return self.result(1, '{"outcome":"unavailable"}')
         self.run.side_effect = start
-        self.assertEqual(dev.rerun_daemon(local=True), 0)
+        self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 0)
         self.assertTrue(any(20 < seen < 25 for seen in observed))
         self.assertGreaterEqual(self.now, 25)
         self.run.assert_called_once()
         self.stage.assert_called_once()  # Dev staging only, no contender staging.
         self.assert_gate_released()
+
+    def test_start_timeout_budget_is_180_seconds(self):
+        self.assertEqual(dev.START_TIMEOUT_SECONDS, 180.0)
+
+    def test_staged_reuses_existing_binary_without_building_or_staging(self):
+        self.binary.write_bytes(b"staged-binary")
+        with mock.patch.object(dev, "check_built") as check, \
+             mock.patch.object(dev, "capture_daemon_process") as capture:
+            self.seed.side_effect = lambda *args: self.assertEqual(self.now, 300)
+            self.assertEqual(dev.main(["rerun", "daemon", "--staged", str(self.binary)]), 0)
+        self.build.assert_not_called()
+        self.stage.assert_not_called()
+        check.assert_called_once_with(self.launcher, self.binary)
+        self.record.assert_called_once()
+        self.run.assert_called_once()
+        self.assertEqual(self.run.call_args.args[0][:3], [str(self.binary), "daemon-start", "--replace"])
+        self.assertEqual(capture.call_args.args[1], self.expected["pid"])
+        self.seed.assert_called_once_with(self.launcher, self.binary)
+        self.assert_gate_released()
+
+    def test_staged_failed_window_rolls_back_to_previous(self):
+        self.binary.write_bytes(b"staged-binary")
+        def health(port, timeout):
+            if self.now >= 20 and self.run.call_count == 1:
+                raise self.launcher.DaemonHung("wedged")
+            return self.fake_health(port, timeout)
+
+        def start(argv, **kwargs):
+            if argv[0] == self.previous["executable"]:
+                self.health = self.old
+                return self.result()
+            return self.successful_start(argv, **kwargs)
+
+        self.rest.side_effect = health
+        self.run.side_effect = start
+        with mock.patch.object(dev, "capture_daemon_process") as capture, \
+             mock.patch.object(self.launcher, "daemon_absence_proven", side_effect=[False, True]):
+            self.assertEqual(dev.main(["rerun", "daemon", "--staged", str(self.binary), "--health-window", "40"]), 1)
+        self.build.assert_not_called()
+        self.stage.assert_not_called()
+        capture.return_value.assert_called_once_with(15)
+        self.assertEqual(self.run.call_count, 2)
+        self.seed.assert_not_called()
+        for call in self.run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["WS_MCP_LAUNCHER_START_LOCK_HELD"], "1")
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], dev.START_TIMEOUT_SECONDS)
+        self.assertIn(f"restored version={self.old['version']}", self.err.getvalue())
+        self.assert_gate_released()
+
+    def test_staged_missing_binary_and_local_mutual_exclusion(self):
+        missing = self.root / "missing.exe"
+        self.assertEqual(dev.main(["rerun", "daemon", "--staged", str(missing)]), 1)
+        self.assertIn("staged binary does not exist", self.err.getvalue())
+        self.build.assert_not_called()
+        self.stage.assert_not_called()
+        self.run.assert_not_called()
+
+        with self.assertRaises(SystemExit) as exc:
+            dev.main(["rerun", "daemon", "--local", "--staged", str(self.binary)])
+        self.assertEqual(exc.exception.code, 2)
+
+
+class EncodingAndStagedMetadataTest(unittest.TestCase):
+    def setUp(self):
+        self.launcher = dev.load_launcher()
+        self._tmp = tempfile.TemporaryDirectory(prefix="dev-enc-", dir=os.environ.get("DEV_TEST_TMP"))
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+
+    def test_remote_available_uses_utf8_replace_and_survives_non_utf8_bytes(self):
+        sys_lock = self.root / "sys_lock.sh"
+        sys_lock.write_text("# stub\n", encoding="utf-8")
+        # Simulate subprocess.run decoding non-UTF-8/CP949 bytes via encoding="utf-8", errors="replace".
+        def fake_run(argv, **kwargs):
+            self.assertEqual(kwargs.get("encoding"), "utf-8")
+            self.assertEqual(kwargs.get("errors"), "replace")
+            decoded = b"\xb4\xc5\n" + dev.REMOTE.encode("ascii") + b"\n"
+            stdout = decoded.decode(kwargs["encoding"], errors=kwargs["errors"])
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
+
+        with mock.patch.object(dev.os, "name", "nt"), \
+             mock.patch.object(dev, "Path", type(self.root)), \
+             mock.patch.object(dev, "SYS_LOCK", str(sys_lock)), \
+             mock.patch.object(dev.shutil, "which", return_value="bash"), \
+             mock.patch.object(dev.subprocess, "run", side_effect=fake_run):
+            self.assertIsNone(dev.remote_available())
+
+    def test_run_daemon_start_uses_utf8_replace(self):
+        built = self.root / "ws-mcp.exe"
+        built.write_bytes(b"binary")
+        with mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(
+            returncode=0,
+            stdout="\ufffd\n{\"outcome\":\"started\"}\n",
+            stderr="\ufffdstderr",
+        )) as run:
+            report = dev.run_daemon_start(self.launcher, built, 123)
+        self.assertEqual(report, {"outcome": "started"})
+        self.assertEqual(run.call_args.kwargs.get("encoding"), "utf-8")
+        self.assertEqual(run.call_args.kwargs.get("errors"), "replace")
+
+    def test_staged_checks_sibling_metadata_and_compatibility_gate(self):
+        staged = self.root / "ws-mcp-dashboard-test.exe"
+        staged.write_bytes(b"staged-binary")
+        contract_path = self.root / "runtime.json"
+        contract_path.write_text(json.dumps({"plugin_version": "0.51.1"}), encoding="utf-8")
+
+        # Missing sibling metadata fails before starter lock or daemon-start.
+        with mock.patch.object(dev, "load_launcher", return_value=self.launcher), \
+             mock.patch.object(dev, "RUNTIME_CONTRACT", contract_path), \
+             mock.patch.object(dev, "restart_daemon") as restart:
+            with self.assertRaisesRegex(RuntimeError, "no valid hash-bound metadata"):
+                dev.rerun_daemon(staged=staged, health_window=0)
+            restart.assert_not_called()
+
+        # Valid sibling metadata passes check_built and skips staging.
+        self.launcher.write_runtime_metadata(staged, {"version": "0.51.1-dev", "source_commit": "dev"})
+        with mock.patch.dict(os.environ, {"WS_CACHE_HOME": str(self.root / "cache"), "WS_CONFIG_HOME": str(self.root / "config")}), \
+             mock.patch.object(dev, "load_launcher", return_value=self.launcher), \
+             mock.patch.object(dev, "RUNTIME_CONTRACT", contract_path), \
+             mock.patch.object(self.launcher, "stage_daemon_binary", side_effect=AssertionError("must not stage")), \
+             mock.patch.object(dev, "current_health", side_effect=[(None, None), ({"port": 1, "pid": 11}, {"pid": 11, "content_hash": self.launcher.sha256_file(staged)})]), \
+             mock.patch.object(dev, "seed_packages") as seed, \
+             mock.patch.object(dev.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='{"outcome":"started"}', stderr="")) as run:
+            self.assertEqual(dev.rerun_daemon(staged=staged, health_window=0), 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:3], [str(staged), "daemon-start", "--replace"])
+        seed.assert_called_once_with(self.launcher, staged)
 
 
 if __name__ == "__main__":

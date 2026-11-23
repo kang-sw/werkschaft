@@ -3,6 +3,7 @@ package execjob
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,57 @@ func pointAlias(t *testing.T, alias, target string) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(alias) })
+}
+
+func TestReadOnlyHostedLaunchChecksResolvedCwd(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "root")
+	inside := filepath.Join(root, "sub")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{inside, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insideLink := filepath.Join(root, "inside-link")
+	outsideLink := filepath.Join(root, "outside-link")
+	pointAlias(t, insideLink, inside)
+	pointAlias(t, outsideLink, outside)
+
+	for name, build := range map[string]func(cwd string) (HostedLaunch, error){
+		"exec.run": func(cwd string) (HostedLaunch, error) {
+			return ReadOnlyArgvLaunch("lead", "exec.run", root, cwd, []string{"git", "status"}, os.Environ(), nil)
+		},
+		"exec.shell": func(cwd string) (HostedLaunch, error) {
+			return ReadOnlyShellLaunch("lead", "exec.shell", root, cwd, "git status", os.Environ(), nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			outsideReq, err := build(outsideLink)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := fx.launch(context.Background(), nil, outsideReq)
+			var refusal *ErrReadOnlyLaunch
+			if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "outside the worktree root") || v.ID != "" {
+				t.Fatalf("outside cwd: job %q, error %v, want read-only refusal before admission", v.ID, err)
+			}
+
+			insideReq, err := build(insideLink)
+			if err != nil {
+				t.Fatal(err)
+			}
+			insideReq.Async = true
+			v, err = fx.launch(context.Background(), nil, insideReq)
+			if err != nil || v.RealCwd != inside {
+				t.Fatalf("inside cwd: resolved to %q, error %v, want %q", v.RealCwd, err, inside)
+			}
+		})
+	}
 }
 
 // A hosted launch whose working directory is an alias resolved into a plain

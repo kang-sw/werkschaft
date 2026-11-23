@@ -147,15 +147,8 @@ func (r *Runner) memoryClosedState(rec Record) State {
 	return st
 }
 
-// closedState is the state of a record no loop serves: closed, or handed
-// to a terminal. The caller holds r.mu.
+// closedState reads the presentation of a record no loop serves.
 func (r *Runner) closedState(rec Record) State {
-	if rec.ClosedAt != "" {
-		if st, ok := r.closedRows[rec.ReplyID]; ok {
-			st.IsChild = r.isChildRecord(rec)
-			return r.permissionState(st, rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
-		}
-	}
 	st := closedState(rec)
 	st.IsChild = r.isChildRecord(rec)
 	if r.opts.closedSnapshotRead != nil {
@@ -185,12 +178,7 @@ func (r *Runner) closedState(rec Record) State {
 		}
 	}
 	if st.Status == StatusHandedOff {
-		st.ResumeCommand = r.resumeCommand(rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
-	} else {
-		if r.closedRows == nil {
-			r.closedRows = map[string]State{}
-		}
-		r.closedRows[rec.ReplyID] = st
+		st.ResumeCommand = r.resumeCommand(rec, dir)
 	}
 	return r.permissionState(st, rec, dir)
 }

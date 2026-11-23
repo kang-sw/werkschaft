@@ -69,6 +69,10 @@ type DaemonOptions struct {
 	LockWait time.Duration
 	// Log receives diagnostics; nil discards them.
 	Log io.Writer
+
+	// LogUnderLock begins logging after acquiring the singleton lock. Its
+	// returned callback ends logging before unlock, including startup failures.
+	LogUnderLock func() func()
 	// Sessions reads registered sessions' stores for the session index; nil
 	// runs the daemon without one (no polling, and /nudge answers 404).
 	Sessions SessionSource
@@ -178,6 +182,9 @@ type DaemonOptions struct {
 	// handle, for the tests that pin which regions a stream sends.
 	gitRead    func(root string) GitBadge
 	noGitBadge bool
+	// auditRead replaces the audit store for the audit query, set before the
+	// daemon serves so a test's reader needs no later, unsynchronized write.
+	auditRead auditViewer
 	// refreshInterval replaces sseRefreshInterval, so a test drives the
 	// refresh tick; zero is sseRefreshInterval.
 	refreshInterval time.Duration
@@ -377,6 +384,7 @@ type Daemon struct {
 	hireDone   chan struct{}
 	// beforeUnlock is DaemonOptions.BeforeUnlock.
 	beforeUnlock func()
+	endLog       func()
 	// files caches each session root's file list for the files route
 	// (files_route.go).
 	files *fileListCache

@@ -71,6 +71,8 @@
       else sessionStorage.removeItem(key);
     } catch (e) { /* denied storage must not disable the view */ }
   }
+  // The card the reader lands on is the board's current card (anchor).
+  function select(n) { if (window.WsBoardAnchor && n) window.WsBoardAnchor.select(n.closest ? n.closest(ITEM) || n : n); }
   function keep(n, offset) { return o.keep(n, { offset: offset, observe: [o.board] }); }
   function flash(n) {
     n.classList.remove("overview-flash");
@@ -219,7 +221,7 @@
         if (!window.wbPill.apply(land)) return;
         var live = find(key);
         if (live) {
-          keep(live, clearance(live)); flash(live);
+          keep(live, clearance(live)); select(live); flash(live);
           if (!(options && options.keep)) { live.setAttribute("tabindex", "-1"); live.focus({ preventScroll: true }); }
         }
         if (done) done();
@@ -248,6 +250,7 @@
     var complete = function () {
       if (spacer) { spacer.remove(); spacer = null; }
       keep(boardTarget || o.toolbar, offset);
+      if (boardTarget) select(boardTarget);
       if (landed) {
         flash(landed);
         if (!(options && options.keep)) { landed.setAttribute("tabindex", "-1"); landed.focus({ preventScroll: true }); }

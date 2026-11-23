@@ -45,6 +45,16 @@ func pickShell(goos string, environ []string, look func(name string) (string, bo
 	for _, kv := range wsharnessenv.DropForOS(goos, environ) {
 		// Windows lists per-drive working directories as "=C:=C:\dir".
 		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			// Agent sessions use cat to disable paging in their own shells.
+			if strings.TrimSpace(v) == "cat" {
+				name := k
+				if goos == "windows" {
+					name = strings.ToUpper(name)
+				}
+				if name == "PAGER" || name == "GIT_PAGER" {
+					continue
+				}
+			}
 			env[k] = v
 		}
 	}

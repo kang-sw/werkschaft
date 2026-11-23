@@ -271,7 +271,7 @@
       editor.addEventListener(type, function (e) {
         e.stopPropagation();
         if (e.defaultPrevented) return;
-        var forwarded = new KeyboardEvent(type, { key: e.key, code: e.code, keyCode: e.keyCode, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: composing || e.isComposing, bubbles: true, cancelable: true });
+        var forwarded = new KeyboardEvent(type, { key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: composing || e.isComposing, bubbles: true, cancelable: true });
         if (!field.dispatchEvent(forwarded)) { e.preventDefault(); return; }
         if (type !== "keydown" || composing || e.isComposing || e.keyCode === 229) return;
         var sel = offsets(), a = sel[0], b = sel[1];

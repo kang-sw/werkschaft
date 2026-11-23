@@ -16,9 +16,9 @@ import (
 
 // TestAuditViewPhase2Browser exercises Phase 2 hidden-event interleaving,
 // UTC [since, until) history paging, open-below oldest on end:true, SSE after=
-// incremental refresh, 410 reset & 503 retry, kind filter chip persistence,
-// J/K/Enter conversation navigation & Left/Right window stepping, harness
-// badge, and optional 4-shot visual captures (when WS_AUDIT_P2_SHOTS is set).
+// incremental refresh, 410 reset & 503 retry, no filter bar or header
+// harness chip, J/K/Enter conversation navigation & Left/Right window
+// stepping, and optional 4-shot visual captures (when WS_AUDIT_P2_SHOTS is set).
 func TestAuditViewPhase2Browser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE for disposable Chromium acceptance")
@@ -37,7 +37,10 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 	}
 	t.Setenv("WS_MCP_DASHBOARD_DEV_SOURCE", "")
 
-	f := startPageFixture(t, func(o *DaemonOptions) { o.Home = os.Getenv("HOME") })
+	// The reader is handed over before the daemon serves; its events are set later,
+	// under its own lock, so no request races an assignment to the daemon.
+	fx := &fixtureAudit{}
+	f := startPageFixture(t, func(o *DaemonOptions) { o.Home, o.auditRead = os.Getenv("HOME"), fx })
 	ringDir := wslive.RingDir(SessionDir(f.dir, "livesession"))
 
 	tBeforeAll := time.Now().UTC().Add(-2 * time.Second)
@@ -104,7 +107,6 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 
 	f.change(t, "livesession", f.project, "live board text", 5)
 
-	fx := &fixtureAudit{}
 	fx.set("livesession", wsauditstore.View{
 		Events: []wsaudit.Envelope{
 			{
@@ -170,7 +172,12 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 			},
 		},
 	})
-	f.d.auditRead = fx
+
+	// Complete the turn so standalone audit traces have their summary owner.
+	time.Sleep(10 * time.Millisecond)
+	if err := wslive.AppendRing(ringDir, []wslive.RingEntry{{Kind: wslive.RingTurn, Done: 3, DurationMs: 100}}); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

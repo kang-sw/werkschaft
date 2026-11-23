@@ -742,6 +742,7 @@
   var shFrames = [], shOn = null, shWant = null, shLeaving = null, shHeadHtml = null, shSeq = 0, shTrackerRev = null;
   var shIndex = 0, shRestoring = null, shRestoreNav = null, shRestoreTimer = null;
   var shTop = doc.querySelector(".dwrap > .top"), shBody = doc.querySelector(".dwrap > .dbody");
+  var shSettingsDialog = $("workflow-settings"), shSettingsEntry = null;
   var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionEnabled = false;
   function shCompanionTarget(ent, refreshed, switched) {
     if (!shCompanion || shCompanionFrame === ent && !refreshed) return;
@@ -820,7 +821,7 @@
     var u = new URL(href, location.href);
     if (shell) { shOpen(u.href, true); return; }
     if (framed) {
-      if (window.WsShell.framed(u, location.origin)) shPost("nav", { href: u.href });
+      if (window.WsShell.framed(u, location.origin) || window.WsShell.settingsFrame(u, location.origin)) shPost("nav", { href: u.href });
       else window.top.location.href = u.href;
       return;
     }
@@ -837,6 +838,7 @@
     try { u = new URL(a.href, location.href); } catch (x) { return; }
     if (u.protocol !== "http:" && u.protocol !== "https:") return;
     if (u.origin === location.origin && u.pathname === location.pathname && u.search === location.search && u.hash) return;
+    if (shell && shOpenSettings(u, a)) { e.preventDefault(); return; }
     if (shell && !window.WsShell.framed(u, location.origin)) return;
     e.preventDefault();
     go(u.href);
@@ -852,6 +854,50 @@
     m = m || {};
     m.wsShell = kind;
     try { ent.el.contentWindow.postMessage(m, location.origin); } catch (x) { /* unloading */ }
+  }
+  function shBroadcastTheme(theme, except) {
+    shFrames.forEach(function (ent) { if (ent !== except) shSend(ent, "theme", { theme: theme }); });
+    if (shSettingsEntry) shSend(shSettingsEntry, "theme", { theme: theme });
+  }
+  function shOpenSettings(url, opener) {
+    if (!shSettingsDialog) return false;
+    var dest = window.WsShell.settingsFrame(url, location.origin);
+    if (!dest) return false;
+    if (location.pathname === "/settings" && location.pathname + location.search + location.hash !== dest.href) {
+      history.replaceState(history.state, "", dest.href);
+    }
+    if (!shSettingsEntry) {
+      var frame = doc.createElement("iframe");
+      frame.title = shSettingsDialog.getAttribute("aria-label");
+      var focus = rp.kind === "settings" ? railPopBtn() : opener || doc.activeElement;
+      railPopClose(false);
+      var entry = { el: frame, href: dest.href, focus: focus };
+      frame.addEventListener("load", function () {
+        if (shSettingsEntry === entry) shSend(entry, "theme", { theme: root.getAttribute("data-theme") || "" });
+      });
+      shSettingsEntry = entry;
+      frame.src = dest.src;
+      shSettingsDialog.appendChild(frame);
+      shSettingsDialog.showModal();
+    } else if (shSettingsEntry.href !== dest.href) {
+      shSettingsEntry.href = dest.href;
+      // A normal iframe navigation creates a joint session-history entry.
+      shSettingsEntry.el.contentWindow.location.replace(dest.src);
+    }
+    railSettingsMark();
+    return true;
+  }
+  function shCloseSettings() {
+    if (!shSettingsEntry) return;
+    var entry = shSettingsEntry;
+    shSettingsEntry = null;
+    shSettingsDialog.close();
+    entry.el.remove();
+    if (location.pathname === "/settings") history.replaceState(history.state, "", "/");
+    railSettingsMark();
+    var focus = entry.focus;
+    if (!focus || !focus.isConnected || !focus.getClientRects().length) focus = railBtn;
+    if (focus) focus.focus({ preventScroll: true });
   }
   function shEnt(win) { return shFrames.filter(function (x) { return x.el.contentWindow === win; })[0] || null; }
   function shCacheable(ent) {
@@ -899,10 +945,12 @@
   // shOpen shows the page href names (a page the shell frames; any other
   // loads at the top level); push adds a history entry for it.
   function shOpen(href, push) {
+    var u = new URL(href, location.href);
+    if (shOpenSettings(u)) return;
     // history.go is asynchronous; a pick after Stay must wait until Back's
     // position is restored, rather than pushing from its destination entry.
     if (shRestoring !== null) { shRestoreNav = { href: href, push: push }; return; }
-    var u = new URL(href, location.href), f = window.WsShell.framed(u, location.origin);
+    var f = window.WsShell.framed(u, location.origin);
     if (!f) { location.href = u.href; return; }
     if (shLeaving) {
       // An in-progress decision belongs to its original destination. A
@@ -1016,8 +1064,6 @@
   function shRid(id) {
     rid = id;
     root.setAttribute("data-rid", id);
-    if (location.pathname === "/settings") root.setAttribute("data-settings-shell", "");
-    else root.removeAttribute("data-settings-shell");
     railMarks();
   }
   function shShow(ent, from) {
@@ -1071,7 +1117,7 @@
     shLayout(ent);
     shScroll(ent);
     if (ent.title) doc.title = ent.title;
-    try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
+    if (!shSettingsEntry) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
   function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode }); }
@@ -1120,7 +1166,7 @@
     if (shBody) shBody.style.marginTop = "";
   }
   function shSearch() {
-    if (!shOn) return;
+    if (!shOn || shSettingsEntry) return;
     try { shOn.el.focus(); } catch (x) { /* unloading */ }
     shSend(shOn, "search");
   }
@@ -1131,7 +1177,7 @@
   // Keyboard events do not cross the session iframe. The rail forwards to
   // the shown frame; both paths activate the same visible toolbar control.
   doc.addEventListener("keydown", function (e) {
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key || "").toLowerCase() !== "q") return;
+    if (shSettingsEntry || e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key || "").toLowerCase() !== "q") return;
     var t = e.target;
     if (t && (t.isContentEditable || (t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=\"false\"]), .xterm, .tm-host")))) return;
     var b;
@@ -1148,9 +1194,29 @@
     e.preventDefault();
   });
   if (shell && window.WsShell) {
+    if (shSettingsDialog) {
+      shSettingsDialog.addEventListener("cancel", function (e) {
+        e.preventDefault();
+        shCloseSettings();
+      });
+      shSettingsDialog.addEventListener("click", function (e) {
+        if (e.target === shSettingsDialog) shCloseSettings();
+      });
+    }
     window.addEventListener("message", function (e) {
       if (e.origin !== location.origin) return;
-      var m = window.WsShell.message(e.data), ent = m && shEnt(e.source), on = !!ent && ent === shOn;
+      var m = window.WsShell.message(e.data);
+      if (!m) return;
+      if (shSettingsEntry && e.source === shSettingsEntry.el.contentWindow) {
+        if (m.wsShell === "settings-close") shCloseSettings();
+        else if (m.wsShell === "settings-navigate") {
+          var dest;
+          try { dest = new URL(m.href, location.origin); } catch (x) { return; }
+          shOpenSettings(dest);
+        }
+        return;
+      }
+      var ent = shEnt(e.source), on = !!ent && ent === shOn;
       if (!ent) return;
       switch (m.wsShell) {
         case "head":
@@ -1176,10 +1242,10 @@
           break;
         case "layout": ent.pincol = m.pincol; ent.dim = m.dim; ent.popover = m.popover === true; if (on) shLayout(ent); break;
         case "scroll": ent.y = m.y; if (on) shScroll(ent); break;
-        case "hash": if (on && !shLeaving && shRestoring === null && location.hash !== m.hash) history.replaceState(history.state, "", ent.f.path + m.hash); ent.f.hash = m.hash; break;
+        case "hash": if (on && location.pathname !== "/settings" && !shLeaving && shRestoring === null && location.hash !== m.hash) history.replaceState(history.state, "", ent.f.path + m.hash); ent.f.hash = m.hash; break;
         case "theme":
           setTheme(m.theme, true);
-          shFrames.forEach(function (x) { if (x !== ent) shSend(x, "theme", { theme: m.theme }); });
+          shBroadcastTheme(root.getAttribute("data-theme") || "", ent);
           break;
       }
     });
@@ -1190,7 +1256,9 @@
         else shRestoreDone();
         return;
       }
-      shOpen(window.WsShell.pagePath(location) + location.hash, false);
+      if (shOpenSettings(new URL(location.href))) return;
+      shCloseSettings();
+      shOpen(location.pathname + location.hash, false);
     });
     // The shell's hotkeys besides the rail's: the search palette's keys
     // (tracker.js qShortcut) open the shown frame's palette; Ctrl+K,
@@ -1376,7 +1444,10 @@
   // header, in case it posted before this script listened. A frame already
   // loaded fires no load for shAdd to see.
   function shShellInit() {
-    var el = doc.querySelector("#frames > iframe"), f = window.WsShell.framed(new URL(window.WsShell.pagePath(location) + location.hash, location.origin), location.origin);
+    var address = new URL(location.href);
+    var settings = address.pathname === "/settings";
+    var el = doc.querySelector("#frames > iframe");
+    var f = window.WsShell.framed(new URL(settings ? "/" : address.pathname + address.hash, location.origin), location.origin);
     if (!el || !f) return;
     shIndex = shHistoryIndex();
     history.replaceState(Object.assign({}, history.state, { wsShellIndex: shIndex }), "", location.href);
@@ -1392,6 +1463,7 @@
       // No load event will tell this frame it is the shown one.
       shSend(ent, "shown", { shown: true });
     }
+    if (settings) shOpenSettings(address);
   }
 
   if (live || gmenu) {

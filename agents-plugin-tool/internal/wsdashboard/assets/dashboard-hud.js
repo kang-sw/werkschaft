@@ -9,7 +9,8 @@
     permission: "js.hud.state.permission",
     failed: "js.hud.state.failed"
   };
-  var hudRegistry = {}, hudEdges = [], hudHoveredId = "", hudFoldedHovered = false, hudFoldedBtn = null, hudFoldedCount = 0, hudLead = "", hudBound = false, hudRO = null, hudRaf = 0;
+  var HUD_ANIMATION_STATE_KEY = { thinking: "hud-spin", tool: "hud-spin" };
+  var hudRegistry = {}, hudEdges = [], hudHoveredId = "", hudFoldedHovered = false, hudFoldedBtn = null, hudFoldedCount = 0, hudLead = "", hudBound = false, hudRO = null, hudRaf = 0, hudDrawn = "", hudRedraw = true;
 
   function hudCanControl() {
     return typeof root !== "undefined" && root.hasAttribute("data-can-control");
@@ -76,7 +77,7 @@
     btn.setAttribute("aria-label", label + " (" + (HUD_HARNESS_NAME[harness] || harness || "?") + ", " + hudStateText(state) + ")");
     if (harness) emb.setAttribute("data-h", harness); else emb.removeAttribute("data-h");
     emb.textContent = HUD_HARNESS_LABEL[harness] || "??";
-    if (ANIMATION_PERIOD_MS[state]) animationPhaseDelay(ring, ANIMATION_PERIOD_MS[state], node.id || "", state, moved);
+    if (ANIMATION_PERIOD_MS[state]) animationPhaseDelay(ring, ANIMATION_PERIOD_MS[state], node.id || "", HUD_ANIMATION_STATE_KEY[state] || state, moved);
     else if (oldState !== state) { ring.style.animationDelay = ""; ring.wsAnimationStamp = ""; }
     var badge = btn.querySelector(".hud-badge"), badgeClass = state === "permission" ? "perm" : state === "failed" ? "fail" : "";
     if (badgeClass) {
@@ -170,8 +171,14 @@
     if (!agcompact || !island || island.hidden || island.getAttribute("data-mode") !== "compact") return;
     var canvas = agcompact.querySelector(".hud-canvas"), svg = agcompact.querySelector(".hud-lines");
     if (!canvas || !svg || !canvas.getBoundingClientRect) return;
+    // Node positions follow the nodes' order and edges, and the canvas size
+    // (hudRedraw: its observer fired). Reading them forces layout, so an
+    // update that changed none of these draws nothing and reads nothing.
+    var sig = q(".hud-node", canvas).map(function (n) { return n.getAttribute("data-id"); }).join(",") + "|" + hudEdges.join(";");
+    if (!hudRedraw && sig === hudDrawn) return;
     var cRect = canvas.getBoundingClientRect();
     if (!cRect.width || !cRect.height) return;
+    hudRedraw = false; hudDrawn = sig;
     svg.setAttribute("viewBox", "0 0 " + cRect.width + " " + cRect.height);
     svg.setAttribute("width", String(cRect.width));
     svg.setAttribute("height", String(cRect.height));
@@ -213,6 +220,10 @@
       p.setAttribute("d", parts.join(" "));
       svg.appendChild(p);
     }
+  }
+  function hudRedrawConnectors() {
+    hudRedraw = true;
+    hudScheduleConnectors();
   }
   function hudScheduleConnectors() {
     if (hudRaf || typeof requestAnimationFrame !== "function") return;
@@ -510,9 +521,9 @@
       });
       q(".aclose", agpop).forEach(function (el) { if (el.getAttribute("data-reply-id") === rid) el.remove(); });
     });
-    if (window.ResizeObserver && canvas) { hudRO = new ResizeObserver(hudScheduleConnectors); hudRO.observe(canvas); }
+    if (window.ResizeObserver && canvas) { hudRO = new ResizeObserver(hudRedrawConnectors); hudRO.observe(canvas); }
     if (island) island.addEventListener("transitionend", function (e) {
-      if (e.target === island && (e.propertyName === "width" || e.propertyName === "height")) hudScheduleConnectors();
+      if (e.target === island && (e.propertyName === "width" || e.propertyName === "height")) hudRedrawConnectors();
     });
   }
   function hudProject(tree, agcompact, agidle, agpop, agOpenFn) {

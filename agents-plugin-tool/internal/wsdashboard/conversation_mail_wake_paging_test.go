@@ -49,7 +49,7 @@ func TestConversationMailWakePreservesPagingAndTurns(t *testing.T) {
 		t.Fatalf("mail projection moved or duplicated the natural-turn summary: %s", html)
 	}
 	marker := `<span hidden data-entry="` + page.Before + `" data-mail-wake="suppressed" data-at="` + page.Records[0].At.UTC().Format(time.RFC3339Nano) + `"></span>`
-	if !strings.Contains(html, marker) || strings.Count(html, "data-entry=") != 4 || strings.Count(html, `class="mailline recv"`) != 1 || strings.Count(html, `class="mail-block"`) != 1 {
+	if !strings.Contains(html, marker) || strings.Count(html, "data-entry=") != 4 || strings.Count(html, `class="mailline turn-trigger recv"`) != 1 || strings.Count(html, `class="mail-block"`) != 1 {
 		t.Fatalf("suppression lost the oldest paging key or duplicated mail: %s", html)
 	}
 	if strings.Index(html, marker) > strings.Index(html, `class="turnline"`) || strings.Index(html, `class="turnline"`) > strings.Index(html, `class="mail-block"`) {

@@ -55,7 +55,7 @@
         "mouths": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/raster" },
-          "description": "Mouth shapes by name; every value is a raster file name."
+          "description": "Mouth shapes by name; every value is a raster file name. Keys starting with eyeclosed- are reserved: they only register a closed-eye raster for older dashboards and are never drawn as a mouth."
         }
       }
     },
@@ -242,7 +242,15 @@
         "lidLashL": { "$ref": "#/$defs/raster" },
         "lidLashR": { "$ref": "#/$defs/raster" },
         "browL": { "$ref": "#/$defs/raster" },
-        "browR": { "$ref": "#/$defs/raster" }
+        "browR": { "$ref": "#/$defs/raster" },
+        "closedL": {
+          "$ref": "#/$defs/raster",
+          "description": "Optional closed-eye sticker for the left eye, a full-canvas raster. While the eyes blink, the engine hides the sclera, iris, lid covers and lash and draws closedL and closedR instead. Both sides are needed; with one side or none the blink slides the lid."
+        },
+        "closedR": {
+          "$ref": "#/$defs/raster",
+          "description": "Optional closed-eye sticker for the right eye. See closedL."
+        }
       }
     },
     "layer": {

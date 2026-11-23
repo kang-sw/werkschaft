@@ -211,7 +211,7 @@
       style(doc.getElementById("bcol") || board, "--wb-rail-inset", (inset + height + 6) + "px");
       if (scrollBox && scrollBox !== s) scrollBox.style.removeProperty("scroll-padding-top");
       scrollBox = s;
-      style(s, "scroll-padding-top", (inset + height + 10) + "px");
+      style(s, "scroll-padding-top", (inset + height + 6) + "px");
       if (maxed && maxed.files) style(maxed.el, "--files-top", Math.max(52, faceRect.bottom + 8) + "px");
     }
     function queue() { if (!frame) frame = requestAnimationFrame(update); }
@@ -1187,13 +1187,13 @@
     pullEl = el;
     el.setAttribute("data-gal-pull", "");
     el.style.translate = calm() ? "" : "0 " + (-dir * shift).toFixed(1) + "px";
-    var ps = pills || pillEls(), p = ps[dir > 0 ? 1 : 0], q = ps[dir > 0 ? 0 : 1], t = (dir > 0 ? "↓ " : "↑ ") + text, f = Math.round(pct * 100) + "%";
+    var ps = pills || pillEls(), p = ps[dir > 0 ? 1 : 0], q = ps[dir > 0 ? 0 : 1], t = (dir > 0 ? "↓ " : "↑ ") + text, f = "scaleX(" + (Math.round(pct * 100) / 100) + ")";
     q.el.classList.remove("lit", "ready", "damped");
     p.el.classList.add("lit");
     p.el.classList.toggle("damped", state === "damped");
     p.el.classList.toggle("ready", state === "ready");
     if (p.txt.textContent !== t) p.txt.textContent = t;
-    if (p.fill.style.width !== f) p.fill.style.width = f;
+    if (p.fill.style.transform !== f) p.fill.style.transform = f;
     var d = target === null ? null : dotEls[dotKey(target)] || null;
     if (pullDot === d) return;
     if (pullDot) pullDot.classList.remove("pull-target");
@@ -1611,7 +1611,9 @@
     if (opt && opt.reveal) opt.reveal();
     activate(el);
     var calm = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-    if (el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: calm ? "auto" : "smooth" });
+    // An unpinned card is a Main Board card: showing it selects it (anchor).
+    if (window.WsBoardAnchor && window.WsBoardAnchor.select(el, { smooth: true })) { /* aligned */ }
+    else if (el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: calm ? "auto" : "smooth" });
     el.classList.remove("flash");
     void el.offsetWidth;
     el.classList.add("flash");

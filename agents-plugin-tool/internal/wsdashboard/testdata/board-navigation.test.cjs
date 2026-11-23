@@ -36,7 +36,7 @@ function environment(pending) {
     inBoard: n => !!n && Object.values(nodes).includes(n), q: () => [],
     grid: null, live: false, tkApi: null, effectJumpEpoch: 0,
     boardPending: pending ? { T: [{}] } : {}, boardTopHeld: pending ? { T: {} } : {},
-    boardChanges: pending ? [{ names: ['T'] }] : [], boardReleaseFrame: 0, boardRelease: false,
+    boardChanges: pending ? [{ names: ['T'] }] : [], boardReleaseFrame: 0, boardRelease: false, deferred: null, boardDragHeld: null, boardOverviewHeld: null, boardAfterApply: [],
     boardLatest: { hash: 'latest', html: {} }, boardHome() {}, boardFlash() {},
     swap() {
       assert.equal(context.boardRelease, true, 'navigation uses explicit badge apply');
@@ -46,7 +46,7 @@ function environment(pending) {
     loadClosed() { throw Error('applied topic must exist before closed-page lookup'); },
     go() { throw Error('not a session navigation'); }
   });
-  vm.runInContext(['boardPendingNames', 'boardPendingBadge', 'boardApplyPending', 'boardFlushViewed', 'boardJump', 'effectTopic', 'effectJump', 'palettePick', 'focusTopicNote'].map(name => func(dashboard, name)).join('') + '\nboardPendingBadge();', context);
+  vm.runInContext(['boardPendingNames', 'boardPendingBadge', 'boardHeldNow', 'boardApplyPending', 'boardFlushViewed', 'boardJump', 'effectTopic', 'effectJump', 'palettePick', 'focusTopicNote'].map(name => func(dashboard, name)).join('') + '\nboardPendingBadge();', context);
   context.window.wbHistory = { loadTarget(root, id) {
     assert.equal(Object.keys(context.boardPending).length, 0, 'apply before materialization');
     events.push('load:' + id); if (nodes[id]) nodes[id].scrollIntoView(); return nodes[id] || null;
@@ -230,12 +230,12 @@ test('direct Overview target selection applies before landing on its fresh ident
   let holding = true;
   context.window.WsOverview = { holding: () => holding, after: fn => callbacks.push(fn) };
   Object.assign(context, { o: {}, on: true, busy: false, ITEM: 'section.topic', identity: n => n.id,
-    find: id => nodes[id], clearance: () => 0, keep: n => n.scrollIntoView(), flash() {} });
+    find: id => nodes[id], clearance: () => 0, keep: n => n.scrollIntoView(), flash() {}, select: n => events.push('select:' + n.id) });
   vm.runInContext(func(readAssetSource('wsdashboard', 'overview.js'), 'exit'), context);
   context.exit(nodes['topic-aa']);
   assert.deepEqual(events, []); assert.equal(callbacks.length, 1);
   holding = false; context.on = false; callbacks.shift()();
-  assert.deepEqual(events, ['apply', 'scroll:topic-aa', 'focus:topic-aa']);
+  assert.deepEqual(events, ['apply', 'scroll:topic-aa', 'select:topic-aa', 'focus:topic-aa']);
 });
 
 for (const overview of [false, true]) test('pull-in-place button applies without home navigation; overview=' + overview, () => {

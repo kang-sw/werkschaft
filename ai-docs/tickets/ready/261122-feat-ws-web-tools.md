@@ -4,7 +4,8 @@ parent: 261114-epic-ws-common-session-foundation
 blocked-by: 261122-feat-ws-builtin-agent-harness#phase1
 related:
   261122-feat-ws-provider-auth-layer: "API-key provider for search"
-  261122-feat-ws-builtin-agent-harness: "Phase 1 prerequisite; its Phase 3 Pi retirement waits for this ticket's Phase 1"
+  261122-feat-ws-builtin-agent-harness: "Phase 1 prerequisite"
+  261123-chore-ws-retire-pi-harness: "Pi's web tools retire without waiting for this ticket's replacement"
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 66535ecb0e7e66e8

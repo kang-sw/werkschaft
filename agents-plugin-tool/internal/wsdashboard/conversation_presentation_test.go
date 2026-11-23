@@ -127,7 +127,7 @@ func TestConversationPresentationMailKeepsAmbiguousAndRepeatedRecords(t *testing
 			if strings.Contains(html, "<script>") || strings.Contains(html, "wake-card") || strings.Contains(html, `class="delivery-details" open`) {
 				t.Fatalf("unsafe or primary mail wake: %s", html)
 			}
-			if len(records) == 5 && strings.Count(html, `class="mail-notification"`) != 2 {
+			if len(records) == 5 && strings.Count(html, `class="mail-notification turn-trigger"`) != 2 {
 				t.Fatal("ambiguous wakes were hidden")
 			}
 		}
@@ -136,7 +136,7 @@ func TestConversationPresentationMailKeepsAmbiguousAndRepeatedRecords(t *testing
 	// identified by its equal sender/body or envelope's old sent timestamp.
 	ring = append(ring, ringRecord(6, ring[0].RingEntry))
 	html := presentationHTML(t, ring, page, cache)
-	if strings.Count(html, `class="mailline recv"`) != 4 {
+	if strings.Count(html, `class="mailline turn-trigger recv"`) != 4 {
 		t.Fatal("reclaimed/repeated mail collapsed")
 	}
 	after, _ := json.Marshal(ring[:5])
@@ -198,7 +198,7 @@ func TestConversationPresentationSourceLabelsRequireTypedCause(t *testing.T) {
 		ringRecord(4, wslive.RingEntry{Kind: "wake", Cause: "monitor", Text: "[child report] is not proof"}),
 	}
 	html := presentationHTML(t, ring, PageContent{}, nil)
-	for _, want := range []string{`class="msg user" data-entry="` + ring[0].Name, `class="msg user" data-entry="` + ring[1].Name, "owner text\n\n[child report]\nreport &lt;script&gt;not HTML&lt;/script&gt;", `class="mailline recv child-report"`, "Child report", "known report &lt;b&gt;literal&lt;/b&gt;"} {
+	for _, want := range []string{`class="msg user" data-entry="` + ring[0].Name, `class="msg user" data-entry="` + ring[1].Name, "owner text\n\n[child report]\nreport &lt;script&gt;not HTML&lt;/script&gt;", `class="mailline turn-trigger recv child-report"`, "Child report", "known report &lt;b&gt;literal&lt;/b&gt;"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q: %s", want, html)
 		}
@@ -330,6 +330,21 @@ func TestConversationPresentationWhiteboardFoldAndTargets(t *testing.T) {
 		if len(effectPresentation(t, bad).WhiteboardCard().Topics) != 0 {
 			t.Errorf("invalid carrier %s accepted", invalid)
 		}
+	}
+}
+
+func TestConversationPresentationRootOnlyCommandRendersNoEmptyCard(t *testing.T) {
+	floor := wswhiteboard.Effect{Kind: "setting", Field: "id-floor", Before: "10", After: "1411"}
+	log := wswhiteboard.Effect{Kind: "log", Topic: "plan", EntryID: "e7", Field: "text", After: "note"}
+	if card := effectPresentation(t, floor).WhiteboardCard(); len(card.Topics) != 0 {
+		t.Fatalf("root-only setting must yield no topic card: %+v", card)
+	}
+	html := effectHTML(t, floor, log)
+	if n := strings.Count(html, `class="wbupdate-topic"`); n != 1 {
+		t.Fatalf("want exactly the plan topic card, got %d: %s", n, html)
+	}
+	if strings.Contains(html, `<section class="wbupdate-topic"><div class="wbupdate-bar">`) {
+		t.Fatalf("nameless title-only card rendered: %s", html)
 	}
 }
 

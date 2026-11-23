@@ -61,6 +61,37 @@ class LauncherStartContractTest(unittest.TestCase):
                 fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             yield
 
+    def test_start_marker_is_scoped_to_child_under_lock_and_deadline(self):
+        marker = "WS_MCP_LAUNCHER_START_LOCK_HELD"
+        original = dict(self.link.env)
+        state = [False]
+
+        def run(argv, **kwargs):
+            self.assertEqual(kwargs["env"][marker], "1")
+            self.assertEqual(argv[1], "daemon-start")
+            self.assertFalse(any("lock-held" in arg for arg in argv))
+            self.assertGreater(kwargs["timeout"], 0)
+            self.assertLessEqual(kwargs["timeout"], self.m.DAEMON_RETRY_SECONDS)
+            other = self.m.LauncherStartLock(self.link.daemon_dir)
+            try:
+                self.assertFalse(other.acquire())
+            finally:
+                other.close()
+            state[0] = True
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        self.spawns["run"].side_effect = run
+        with mock.patch.object(self.link, "probe", side_effect=lambda timeout:
+                               (self.endpoint, self.health) if state[0] else (None, None)):
+            self.assertEqual(self.link.ensure_healthy(), (self.endpoint, self.health))
+        self.spawns["run"].assert_called_once()
+        self.assertEqual(self.link.env, original)
+        other = self.m.LauncherStartLock(self.link.daemon_dir)
+        try:
+            self.assertTrue(other.acquire())
+        finally:
+            other.close()
+
     def test_lock_is_persistent_noninheritable_and_exclusive(self):
         a = self.m.LauncherStartLock(self.link.daemon_dir)
         b = self.m.LauncherStartLock(self.link.daemon_dir)

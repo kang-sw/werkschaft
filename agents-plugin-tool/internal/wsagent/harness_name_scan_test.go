@@ -174,6 +174,8 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_retries", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.stall_log_check", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.http2_frame_trace", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.prefer_native_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.avoid_agy_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "persisted config key the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "claude.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "pi.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
@@ -262,7 +264,7 @@ var (
 	adapterOwned = []*regexp.Regexp{
 		// Backend implementation files own genuine harness behavior.
 		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi|werk)[a-z0-9_]*\.go$`),
-		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|werk)\.go$`),
+		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|agy|werk)\.go$`),
 		// The builtin harness's hidden subcommand, which the daemon starts.
 		regexp.MustCompile(`^cmd/ws-mcp/werk[a-z0-9_]*\.go$`),
 		// The Pi extension's MCP tool surface and forwarder.

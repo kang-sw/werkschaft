@@ -12,66 +12,43 @@ function funcs(names) {
     return found[0];
   }).join('');
 }
-for (const documentMode of [false, true]) for (const latched of [[], ['T20'], ['T20', 'NEW']]) {
-  test('hand return home keeps all pending signals until apply: ' + (documentMode ? 'document' : 'board') + ', latches=' + (latched.join(',') || 'none'), () => {
+for (const latched of [[], ['T20'], ['T20', 'NEW']]) {
+  test('up-arrow keeps all pending signals until apply, then selects the first topic: latches=' + (latched.join(',') || 'none'), () => {
     const c = vm.createContext({ assert });
     vm.runInContext(`
       var latched = ${JSON.stringify(latched)};
-      var ref = {}, bcol = { scrollTop: 5, querySelector: function () { return ref; } };
-      var doc = { scrollingElement: { scrollTop: 5 } }, scroller = ${documentMode ? 'doc.scrollingElement' : 'bcol'};
-      var jumps = 0, swaps = 0, rendered = 'old';
-      var window = { IntersectionObserver: function () {}, wbPill: { update: function () {} }, wbHistory: {
-        jump: function (node, opt) {
-          jumps++;
-          assert.equal(node, ref); assert.equal(opt.top, 0);
-          opt.prepare();
-        }
-      } };
-      function $(id) { return id === 'bcol' ? bcol : null; }
+      var swaps = 0, rendered = 'old', selected = [], first = { key: 'T01' };
+      var window = { wbPill: { update: function () {} } };
+      var deferred = null, boardDragHeld = null, boardOverviewHeld = null, boardAfterApply = [];
       var flashed = [];
       function boardFlash(names, inView) { flashed.push({ names: names, inView: inView }); }
-      var cancelled = [];
-      function cancelAnimationFrame(id) { cancelled.push(id); }
-      var boardHomeWrites = new WeakSet(), boardReleaseFrame = 7, boardRelease = false;
-      var boardPending = Object.create(null), boardTopHeld = Object.create(null);
+      function topicKey(n) { return n.key; }
+      function anchorCards() { return [{ key: null }, first, { key: 'T20' }]; }
+      function anchorSelect(n, opt) { selected.push(n); return true; }
+      var boardReleaseFrame = 7, boardRelease = false;
+      var boardPending = Object.create(null);
       var boardLatest = { hash: 'latest', html: { content: 'new' } };
-      latched.forEach(function (k) { boardPending[k] = true; boardTopHeld[k] = { node: null }; });
+      latched.forEach(function (k) { boardPending[k] = true; });
       boardPending.T04 = [{}];
-      // Repeated revisions of a topic must still count only once.
       var boardChanges = [{ names: latched.concat('T04') }, { names: latched.slice() }];
-      var pendingBefore = boardPending, heldBefore = boardTopHeld, changesBefore = boardChanges;
       function swap(name, hash, input, still) {
         swaps++;
         assert.equal(boardRelease, true, 'explicit navigation owns the release');
         assert.equal(name, 'board'); assert.equal(hash, 'latest'); assert.equal(still, true);
         rendered = input.content;
-        // Model admission; release and badge bookkeeping use shipped functions.
-        boardPending = Object.create(null); boardTopHeld = Object.create(null);
+        boardPending = Object.create(null);
         boardRecordPending();
       }
-    ` + funcs(['boardPendingNames', 'boardPendingBadge', 'boardApplyPending', 'boardViewedScroll', 'boardHome', 'boardFlushViewed', 'boardRecordPending']) + `
+    ` + funcs(['boardPendingNames', 'boardPendingBadge', 'boardHeldNow', 'boardApplyPending', 'boardApplied', 'boardHome', 'boardFlushViewed', 'boardRecordPending']) + `
       boardPendingBadge(); assert.equal(window.wbPill.pending, latched.length + 1);
-      scroller.scrollTop = 0;
-      boardViewedScroll({ type: 'scroll', target: ${documentMode ? 'doc' : 'bcol'} });
-      assert.equal(window.wbPill.pending, latched.length + 1, 'staged content keeps its full badge count at home');
       assert.deepEqual(boardPendingNames(), latched.concat('T04'));
-      assert.deepEqual(flashed, [], 'nothing flashes as applied while still held');
-      assert.equal(boardChanges, changesBefore, 'scrolling must not silently acknowledge any staged change');
-      assert.equal(boardPending, pendingBefore);
-      assert.equal(boardTopHeld, heldBefore);
-      assert.equal(rendered, 'old'); assert.equal(swaps, 0); assert.equal(jumps, 0, 'raw scroll must not start explicit navigation');
-      assert.equal(boardReleaseFrame, 0); assert.deepEqual(cancelled, [7]);
-      // Repeated top ticks, including a known owner correction, stay harmless.
-      boardHomeWrites.add(scroller);
-      boardViewedScroll({ type: 'scroll', target: scroller });
-      boardViewedScroll({ type: 'scroll', target: scroller });
-      assert.equal(window.wbPill.pending, latched.length + 1);
-      assert.equal(jumps, 0); assert.equal(swaps, 0);
+      assert.equal(window.wbPill.apply, boardApplyPending, 'explicit navigation acknowledges through the same apply');
+      assert.equal(rendered, 'old'); assert.equal(swaps, 0); assert.deepEqual(selected, []);
       window.wbPill.home();
-      assert.equal(jumps, 1); assert.equal(swaps, 1); assert.equal(rendered, 'new');
+      assert.equal(swaps, 1); assert.equal(rendered, 'new');
       assert.equal(window.wbPill.pending, 0, 'badge clears only after applying the snapshot');
       assert.deepEqual(boardPendingNames(), []);
-      assert.deepEqual(Object.keys(boardTopHeld), []);
+      assert.deepEqual(selected, [first], 'the first topic is selected after apply');
       assert.deepEqual(flashed, [{ names: latched.concat('T04'), inView: false }]);
     `, c);
   });
@@ -86,7 +63,7 @@ function returningBoard() {
     function clearTimeout(id) { timers.delete(id); }
     var shHidden = false, doc = { hidden: false, scrollingElement: null }, scroller = { scrollTop: 240 };
     var anchor = 360, captures = 0, corrections = 0, morphs = 0;
-    var el = { firstElementChild: {}, children: [], getAttribute: function () { return this.hash; }, setAttribute: function (k, v) { this.hash = v; } };
+    var el = { firstElementChild: {}, children: [], contains: function (n) { return n === this || n === this.firstElementChild; }, getAttribute: function () { return this.hash; }, setAttribute: function (k, v) { this.hash = v; } };
     function region(name) { return name === 'board' ? el : null; }
     function $(id) { return id === 'bcol' ? scroller : null; }
     function boardBoxes() { return [el]; }
@@ -101,7 +78,7 @@ function returningBoard() {
     function boardHome() { throw Error('return must not navigate home'); }
     function boardFlash() { throw Error('return must not flash'); }
     function topicSeen(n) { return n; }
-    var boardPending = { T: true }, boardTopHeld = { T: { node: 'old' } }, boardTopOrder = ['T'];
+    var boardPending = { T: true }, boardAfterApply = [];
     var boardChanges = [{ names: ['T'] }], boardRelease = false, boardReleaseFrame = 0;
     var boardReturnTimer = 0, boardReturnFresh = false;
     var boardLatest = { hash: 'held-before-leaving', html: { topics: { T: 'before-leaving' }, order: ['T'] } };
@@ -112,7 +89,7 @@ function returningBoard() {
     var TL_REGIONS = {}, tlHeld = {}, sseOn = false;
     function boardStageInput(input) {
       boardPending = {}; boardImmediate = {};
-      var topics = Object.assign({}, input.topics), order = boardStageTop(input, topics, input.order.slice());
+      var topics = Object.assign({}, input.topics), order = input.order.slice();
       // Model a panel the user is reading. The shipped top latch runs too.
       if (!boardRelease) { topics.T = boardRendered.topics.T; boardPending.T = true; }
       boardRendered = { topics: topics, order: order };
@@ -129,7 +106,13 @@ function returningBoard() {
     function scrollState() { return [[scroller, scroller.scrollTop]]; }
     function restoreScroll(saved) { saved.forEach(function (p) { p[0].scrollTop = p[1]; }); }
     function reducedMotion() { return false; }
-    function boardSpots() { assert.equal(boardReturnTimer, 0, 'return must not animate held content'); return null; }
+    function anchorCards() { return []; }
+    function anchorSettle() {}
+    function anchorWatchLast() {}
+    function anchorCurrent() { return null; }
+    function anchorOwner() { return null; }
+    function companionStream() {}
+    var companionRelay = null, companionStreamReady = true;
     function morphBoard() { morphs++; anchor += 35; return []; }
     function bandBoard() {}
     function indexFrames() {}
@@ -151,8 +134,8 @@ function returningBoard() {
     function boardInputPatch(previous, ev) { return ev.next; }
     var handlers;
     function openStream(path, h) { handlers = h; return { close: function () {} }; }
-  ` + funcs(['pageHidden', 'swap', 'boardKeep', 'boardStageTop', 'boardPendingNames', 'boardPendingBadge',
-    'boardApplyPending', 'boardFlushViewed', 'boardRecordPending', 'boardReturnShown', 'boardReturnEnd',
+  ` + funcs(['pageHidden', 'swap', 'boardKeep', 'boardPendingNames', 'boardPendingBadge',
+    'boardHeldNow', 'boardApplyPending', 'boardApplied', 'boardFlushViewed', 'boardRecordPending', 'boardReturnShown', 'boardReturnEnd',
     'boardReturnApply', 'stopMainStream', 'syncMainStream', 'connect', 'showRegions']) + `
     boardPendingBadge();
   `, c);
@@ -170,16 +153,12 @@ for (const restored of [false, true]) test('shell return applies pre-existing an
     shHidden = false; syncMainStream(); showRegions();
     assert.equal(boardRendered.topics.T, ${restored ? "'hidden'" : "'before-leaving'"});
     assert.equal(window.wbPill.pending, 0);
-    assert.deepEqual(Object.keys(boardTopHeld), []);
-    assert.equal(boardTopOrder, null, 'release clears click-only order latch too');
     assert.ok(boardReturnTimer, 'old restore does not consume the reconnect window');
     handlers.events['board-topics']({ hash: 'reconnect', next: { topics: { T: 'current' }, order: ['T'] } });
     assert.equal(boardRendered.topics.T, 'current');
     assert.equal(window.wbPill.pending, 0);
     assert.equal(boardReturnTimer, 0, 'first fresh snapshot ends the exemption');
     assert.equal(timers.size, 0);
-    assert.equal(anchor - scroller.scrollTop, 120, 'existing keep preserves the reading anchor');
-    assert.ok(captures > 0); assert.equal(captures, corrections);
     handlers.events['board-topics']({ hash: 'reading-again', next: { topics: { T: 'later' }, order: ['T'] } });
     assert.equal(boardRendered.topics.T, 'current', 'normal exposure holding resumes immediately');
     assert.equal(window.wbPill.pending, 1);

@@ -221,7 +221,7 @@ func TestHistoryRoutePagesByCursor(t *testing.T) {
 	}
 	// The fixture's own entries render as the live view renders them: the
 	// mail whose body is in the history expands, and its served peer links.
-	for _, want := range []string{"from the board", "mail second line", `href="/s/boardsession"`, `<div class="mailline sent nobody"`} {
+	for _, want := range []string{"from the board", "mail second line", `href="/s/boardsession"`, `<div class="mailline turn-trigger sent nobody"`} {
 		if !strings.Contains(oldest.HTML, want) {
 			t.Errorf("oldest page lacks %q: %s", want, oldest.HTML)
 		}

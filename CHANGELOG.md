@@ -3,12 +3,10 @@
 ## Unreleased
 
 ### Added
-- **Daemon-hosted sessions get a per-session audit record store.** The
-  dashboard daemon keeps the tool calls, tool results and hidden harness
-  events of each session it hosts in an append-only ring of its own under
-  `<daemon state>/audit/`, separate from the conversation history. Hosted
-  Claude and Codex sessions are captured into it; agy and Pi capture is
-  still to come. The dashboard reads the store over
+- **Daemon-hosted Claude and Codex sessions get live audit capture.** The
+  dashboard daemon keeps their tool calls, tool results and hidden harness
+  events in a per-session append-only ring under `<daemon state>/audit/`,
+  separate from the conversation history. The dashboard reads the store over
   `/s/<reply-id>/audit/`, behind the same viewer guard as the session's
   history, and the conversation view interleaves the
   recorded calls, results and hidden events as rows with an inspector and
@@ -32,8 +30,55 @@
   - A session deleted by an older daemon keeps its audit record until the
     retention period runs out, since the older daemon does not know the
     store.
+- **The dashboard searches a whole conversation's audit record.** The audit
+  view's search box scans the stored call inputs and results of the open
+  conversation, newest first, and pages through the hits with More; a
+  scan that finds nothing in one page still offers More while older
+  records remain. The server matches with RE2 and the inspector
+  highlights the same matches, a match in a truncated body never spanning
+  the omitted middle. Search covers the audit records retained for that
+  conversation.
+- **The dashboard shows an exec job HUD above the composer.** Each exec job
+  of the open conversation, whether the agent launched it or the user
+  typed it with `!`, is a chip with its state and elapsed time. A chip
+  opens a peek of the job's output and a running job can be stopped from
+  it. The chips yield space to the subagent badge and the Interrupt button
+  and fold into a `+N` or aggregate chip. The HUD is localhost-only; an
+  older daemon has no HUD routes and the page shows none.
+- **Command slots: a lead registers bash lines the user runs with a click.**
+  `session.register_user_command` and `session.unregister_user_command`
+  (hosted leads only) store a labelled command line per conversation and
+  worktree, shown as buttons beside the composer. A click runs the stored
+  line as one approved run through the same path as a composer `!` command
+  and reports the result to the lead without starting a turn. The click
+  runs the displayed revision; a replaced or withdrawn slot is refused
+  with the fresh list. A daemon older than this release does not know the
+  two tools.
+- **Companion pack sources.** The companion modal adds sources the user
+  chooses (`dashboard.companion_sources`, global setting): a git
+  repository link or a zip with the marketplace JSON, plus Werkschaft's
+  official source. The network is used only when the user lists a source
+  or installs a pack, over HTTPS only, with at most 5 redirects, no
+  credentials, and size caps (64 MiB per source zip, 16 MiB per pack).
+  Each connection is checked when it is dialed and refuses loopback,
+  link-local, unspecified and multicast addresses. Private ranges such as
+  10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 stay reachable, and a
+  request that goes through an HTTP proxy skips the check, because the
+  proxy opens the connection.
 
 ### Changed
+- **A read-only worker's exec launches are limited to read commands.**
+  When a worker runs at the `read-only` authority, `exec.spawn` and the
+  legacy `exec.shell` form (a caller-selected shell) are refused. `exec.run`
+  and the `cmd` form of `exec.shell` still run, but only a command made
+  of allowlisted read programs (for example `git log`, `rg`, `cat`, `ls`,
+  `sort`) with no option that writes a file or runs another program. The
+  command is parsed, not run, and what runs is exactly what was checked.
+  A refused command answers with a permission-denied message and starts
+  nothing. On Windows a `sort` word that starts with `/` is also refused,
+  since the system `sort.exe` would read `/O file` as an output file.
+  Compatibility: T0 - a role-authority refusal, not a call-shape change.
+  Workers at other authority levels are unchanged.
 - **The lead skill surface collapses to five working skills plus
   housekeeping.** Working: `lead-discuss`, `lead-ticket`, `lead-run`,
   `lead-review`, `lead-ship`. Housekeeping and undecided skills survive

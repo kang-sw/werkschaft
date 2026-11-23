@@ -99,21 +99,28 @@
     return '<span class="au-red" title="' + auEsc(wsT("js.audit.redacted.title", rule || "secret", length || 0)) + '">\ud83d\udd12 ' + auEsc(rule || "secret") + " \u00b7 " + auEsc(String(length || 0)) + "B" + auEsc(extra) + "</span>";
   }
 
-  function auBuildSearchMatcher(query, regex, caseSensitive) {
-    if (!query) return null;
-    var q = String(query);
-    if (regex) {
-      try {
-        return { regex: new RegExp(q, caseSensitive ? "g" : "gi") };
-      } catch (e) {
-        return null;
-      }
+  // The inspector's match marks are the server's spans (the event route's
+  // "matches", see dashboard-audit.js): each is {line, start, end} with the
+  // line's number in the server's numbering and start/end in UTF-16 code units
+  // within that line, so this renderer only slices. It runs no matcher of its
+  // own: RE2 syntax, rune width and the stored_trunc seam rule are the
+  // server's.
+  function auSpansByLine(spans) {
+    var byLine = Object.create(null);
+    for (var i = 0; i < (spans ? spans.length : 0); i++) {
+      var sp = spans[i];
+      if (!sp || typeof sp.line !== "number" || typeof sp.start !== "number" || typeof sp.end !== "number" || sp.end <= sp.start) continue;
+      (byLine[sp.line] = byLine[sp.line] || []).push(sp);
     }
-    return { needle: caseSensitive ? q : q.toLowerCase(), caseSensitive: !!caseSensitive };
+    return byLine;
   }
 
-  // Applies highlight matches AND literal redacted markers onto a plain line slice.
-  function auRenderLineText(text, lineStartByte, lineRedactions, queryMatcher, matchState) {
+  // Applies highlight spans AND literal redacted markers onto a plain line.
+  // lineSpans are the server's spans on this line, sorted, in UTF-16 units of
+  // text. A span is drawn around redaction chips, never inside a mask; one
+  // wholly inside a mask draws nothing and is not counted. Pieces of one span
+  // share its hit index.
+  function auRenderLineText(text, lineStartByte, lineRedactions, lineSpans, matchState) {
     // 1. Replace stored "***" redactions whose byte offset falls inside this line,
     // and any inline ⟦REDACTED:rule:len⟧ markers if present.
     var segments = [];
@@ -124,14 +131,14 @@
         var r = sorted[i];
         if (r.localChar < pos || r.localChar >= text.length) continue;
         if (text.slice(r.localChar, r.localChar + 3) === "***") {
-          if (r.localChar > pos) segments.push({ type: "text", value: text.slice(pos, r.localChar) });
+          if (r.localChar > pos) segments.push({ type: "text", value: text.slice(pos, r.localChar), off: pos });
           segments.push({ type: "red", rule: r.rule, length: r.length, count: r.count });
           pos = r.localChar + 3;
         }
       }
-      if (pos < text.length) segments.push({ type: "text", value: text.slice(pos) });
+      if (pos < text.length) segments.push({ type: "text", value: text.slice(pos), off: pos });
     } else {
-      segments.push({ type: "text", value: text });
+      segments.push({ type: "text", value: text, off: 0 });
     }
     // Expand inline ⟦REDACTED:kind:len⟧ tokens if emitted directly.
     var expanded = [];
@@ -142,55 +149,33 @@
       var last = 0, m;
       litRe.lastIndex = 0;
       while ((m = litRe.exec(seg.value)) !== null) {
-        if (m.index > last) expanded.push({ type: "text", value: seg.value.slice(last, m.index) });
+        if (m.index > last) expanded.push({ type: "text", value: seg.value.slice(last, m.index), off: seg.off + last });
         expanded.push({ type: "red", rule: m[1], length: Number(m[2]), count: 1 });
         last = m.index + m[0].length;
       }
-      if (last < seg.value.length) expanded.push({ type: "text", value: seg.value.slice(last) });
+      if (last < seg.value.length) expanded.push({ type: "text", value: seg.value.slice(last), off: seg.off + last });
     }
-    var html = "";
+    var html = "", hitIdx = [], first = 0;
     for (var e = 0; e < expanded.length; e++) {
       var part = expanded[e];
       if (part.type === "red") {
         html += auRedChipHtml(part.rule, part.length, part.count);
         continue;
       }
-      var val = part.value;
-      var matcher = typeof queryMatcher === "string"
-        ? (queryMatcher ? { needle: queryMatcher, caseSensitive: false } : null)
-        : queryMatcher;
-      if (!matcher) { html += auEsc(val); continue; }
-      if (matcher.regex) {
-        var re = matcher.regex;
-        re.lastIndex = 0;
-        var m, rcursor = 0;
-        while ((m = re.exec(val)) !== null) {
-          if (m[0].length === 0) {
-            if (re.lastIndex >= val.length) break;
-            re.lastIndex++;
-            continue;
-          }
-          var mStart = m.index, mEnd = mStart + m[0].length;
-          if (mStart > rcursor) html += auEsc(val.slice(rcursor, mStart));
-          var isCurR = matchState.total === matchState.activeIndex;
-          html += '<mark class="au-hit' + (isCurR ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(m[0]) + "</mark>";
-          matchState.total++;
-          rcursor = mEnd;
+      var val = part.value, from = part.off, to = part.off + val.length, cursor = 0;
+      if (lineSpans && matchState) {
+        while (first < lineSpans.length && lineSpans[first].end <= from) first++;
+        for (var k = first; k < lineSpans.length && lineSpans[k].start < to; k++) {
+          var a = Math.max(lineSpans[k].start, from, from + cursor), b = Math.min(lineSpans[k].end, to);
+          if (b <= a) continue;
+          if (hitIdx[k] == null) hitIdx[k] = matchState.total++;
+          var isCur = hitIdx[k] === matchState.activeIndex;
+          html += auEsc(val.slice(cursor, a - from)) +
+            '<mark class="au-hit' + (isCur ? " au-hit-cur" : "") + '" data-au-hit="' + hitIdx[k] + '">' + auEsc(val.slice(a - from, b - from)) + "</mark>";
+          cursor = b - from;
         }
-        if (rcursor < val.length) html += auEsc(val.slice(rcursor));
-        continue;
       }
-      var hay = matcher.caseSensitive ? val : val.toLowerCase();
-      var needle = matcher.needle;
-      var cursor = 0, idx;
-      while ((idx = hay.indexOf(needle, cursor)) >= 0) {
-        if (idx > cursor) html += auEsc(val.slice(cursor, idx));
-        var isCur = matchState.total === matchState.activeIndex;
-        html += '<mark class="au-hit' + (isCur ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(val.slice(idx, idx + needle.length)) + "</mark>";
-        matchState.total++;
-        cursor = idx + needle.length;
-      }
-      if (cursor < val.length) html += auEsc(val.slice(cursor));
+      html += auEsc(val.slice(cursor));
     }
     return html;
   }
@@ -227,7 +212,7 @@
     return { head: head, tail: tail, omitted: omitted };
   }
 
-  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, queryMatcher, matchState, gap) {
+  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, spansByLine, matchState, gap) {
     var html = gap && gap.line === 0 ? gap.html : "", seenDrawn = false;
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i], no = startLineNo + i;
@@ -244,9 +229,8 @@
         }
       }
       var unseen = wholeUnseen || (seenLocalByte != null && seenLocalByte >= 0 && ln.startByte >= seenLocalByte);
-      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, queryMatcher, matchState);
-      var isTarget = matchState && matchState.targetLine === no;
-      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + (isTarget ? " au-ln-target" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
+      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, spansByLine && spansByLine[no], matchState);
+      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
       if (gap && gap.line === no) html += gap.html;
       if (!seenDrawn && seenLocalByte != null && seenLocalByte > ln.startByte && seenLocalByte <= ln.endByte) {
         html += '<div class="au-seencut">' + auEsc(wsT("js.audit.seen.cut")) + "</div>";
@@ -274,8 +258,11 @@
     }
 
     var reds = auBuildRedactionsIndex(ev, field, storedTrunc);
-    var queryMatcher = auBuildSearchMatcher(opts.search, !!opts.regex, !!opts.caseSensitive);
-    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0, targetLine: typeof opts.targetLine === "number" ? opts.targetLine : 0 };
+    // The server's spans for this body (opts.matches[field]); none while they
+    // are pending, refused or not asked for.
+    var bodyMatches = opts.matches && opts.matches[field];
+    var spansByLine = bodyMatches ? auSpansByLine(bodyMatches.spans) : null;
+    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0 };
     var outHtml = "";
 
     if (!modelSeen) {
@@ -291,8 +278,9 @@
 
     outHtml += '<div class="au-code' + (opts.wrap ? " au-wrap" : "") + '">';
     if (storedTrunc && typeof storedTrunc.head_bytes === "number") {
-      // Match and number the concatenation exactly as the server does, including
-      // a line spanning the stored head/tail seam. Keep the gap as a separate row.
+      // Number the concatenation exactly as the server does, including a line
+      // spanning the stored head/tail seam (the server's spans never cross
+      // it). Keep the gap as a separate row.
       var lines = auSplitLinesWithBytes(body, 0);
       var hb = storedTrunc.head_bytes;
       var seam = auUtf8ByteToCharIndex(body, hb);
@@ -302,11 +290,11 @@
       }));
       var omitted = Math.max(0, (storedTrunc.original_bytes || 0) - hb - (storedTrunc.tail_bytes || 0));
       var gap = '<div class="au-trunc-row"><span>' + auEsc(wsT("js.audit.stored.trunc", auFmtBytes(omitted))) + "</span>" + (modelSeen && seenBound === hb ? '<span class="au-seencut-badge">' + auEsc(wsT("js.audit.seen.cut")) + "</span>" : "") + "</div>";
-      outHtml += auRenderLinesBlock(lines, 1, combinedReds, modelSeen ? seenBound : null, !modelSeen, queryMatcher, matchState, { line: gapLine, html: gap });
+      outHtml += auRenderLinesBlock(lines, 1, combinedReds, modelSeen ? seenBound : null, !modelSeen, spansByLine, matchState, { line: gapLine, html: gap });
       if (!lines.length && hb !== 0) outHtml += gap;
     } else {
       var lines = auSplitLinesWithBytes(body, 0);
-      outHtml += auRenderLinesBlock(lines, 1, reds.head, modelSeen ? seenBound : null, !modelSeen, queryMatcher, matchState);
+      outHtml += auRenderLinesBlock(lines, 1, reds.head, modelSeen ? seenBound : null, !modelSeen, spansByLine, matchState);
     }
     outHtml += "</div>";
 
@@ -316,7 +304,7 @@
         auEsc(wsT("js.audit.loadmore", auFmtBytes(remaining))) + "</button>";
     }
 
-    return { html: outHtml, matchCount: matchState.total, plainText: body };
+    return { html: outHtml, matchCount: matchState.total, matchCapped: !!(bodyMatches && bodyMatches.capped), plainText: body };
   }
 
   function auEnvelopeHasError(ev) {
@@ -383,14 +371,16 @@
     if (ev.kind === "other") {
       var banner = '<div class="au-banner"><strong>' + auEsc(wsT("js.audit.raw.other.title")) + "</strong> " + auEsc(wsT("js.audit.raw.other.sub")) + "</div>";
       var res = auRenderBodyContent(ev, "raw", opts);
-      return { html: banner + res.html, matchCount: res.matchCount, plainText: res.plainText };
+      return { html: banner + res.html, matchCount: res.matchCount, matchCapped: res.matchCapped, plainText: res.plainText };
     }
     var clone = Object.assign({}, ev);
     delete clone.raw;
     var normJson = JSON.stringify(clone, null, 2);
     var synthetic = { in: normJson, model_seen: true };
     var normBanner = '<div class="au-banner"><strong>' + auEsc(wsT("js.audit.raw.normalized.title")) + "</strong> " + auEsc(wsT("js.audit.raw.normalized.sub")) + "</div>";
-    var bodyRes = auRenderBodyContent(synthetic, "in", opts);
+    // The normalized view is built here, not stored: the server has no text to
+    // match, so it carries no marks.
+    var bodyRes = auRenderBodyContent(synthetic, "in", Object.assign({}, opts, { matches: null }));
     return { html: normBanner + bodyRes.html, matchCount: bodyRes.matchCount, plainText: normJson };
   }
 

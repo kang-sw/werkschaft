@@ -1,6 +1,9 @@
-  // --- audit view phase 2: hidden-event rows, (607)/(681) UTC paging, kind chips & keys ---
-  var AU_KIND_STORAGE = "ws.dashboard.auditkinds";
+  // --- audit view phase 2: hidden-event rows, (607)/(681) UTC paging, keys ---
   var AU_EVENT_PAGE_LIMIT = 200;
+  // One interval fetch reads at most this many pages, newest first; a fetch
+  // with no lower bound reads one. The rows follow the loaded history, not the
+  // whole audit store, so a capped fetch reports the floor it reached.
+  var AU_MAX_INTERVAL_PAGES = 10;
   var AU_HIDDEN_KINDS = [
     { kind: "thinking", i18n: "js.audit.kind.thinking" },
     { kind: "hook", i18n: "js.audit.kind.hook" },
@@ -64,43 +67,6 @@
     return ia < ib ? -1 : 1;
   }
 
-  function auDefaultKindsPref() {
-    var out = Object.create(null);
-    for (var i = 0; i < AU_HIDDEN_KINDS.length; i++) {
-      out[AU_HIDDEN_KINDS[i].kind] = true;
-    }
-    return out;
-  }
-
-  function auReadKindsPref(storage, key) {
-    var pref = auDefaultKindsPref();
-    if (!storage || typeof storage.getItem !== "function") return pref;
-    try {
-      var raw = storage.getItem(key || AU_KIND_STORAGE);
-      if (!raw) return pref;
-      var parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        for (var i = 0; i < AU_HIDDEN_KINDS.length; i++) {
-          var k = AU_HIDDEN_KINDS[i].kind;
-          if (typeof parsed[k] === "boolean") pref[k] = parsed[k];
-        }
-      }
-    } catch (e) {}
-    return pref;
-  }
-
-  function auWriteKindsPref(storage, key, pref) {
-    if (!storage || typeof storage.setItem !== "function") return;
-    try {
-      var clean = {};
-      for (var i = 0; i < AU_HIDDEN_KINDS.length; i++) {
-        var k = AU_HIDDEN_KINDS[i].kind;
-        clean[k] = pref[k] !== false;
-      }
-      storage.setItem(key || AU_KIND_STORAGE, JSON.stringify(clean));
-    } catch (e) {}
-  }
-
   function auHiddenKindLabel(kind) {
     var meta = AU_HIDDEN_SET[kind];
     if (meta && typeof wsT === "function") return wsT(meta.i18n);
@@ -120,48 +86,168 @@
     return parts.join(" · ");
   }
 
-  function auInterleavePlan(entries, events, renderedCallIds) {
-    var sorted = (events || []).filter(function (ev) {
-      return ev && ev.id && auIsHiddenAuditKind(ev.kind);
-    }).slice().sort(auCmpAuditEvent);
-    var parsedEntries = (entries || []).map(function (ent) {
-      return { el: ent.el, key: ent.key, at: auParseRFC3339Ns(ent.at) };
-    });
-    var attached = Object.create(null);
-    var standalone = [];
-    for (var i = 0; i < sorted.length; i++) {
-      var ev = sorted[i];
-      if (ev.call_id && renderedCallIds && renderedCallIds[ev.call_id]) {
-        if (!attached[ev.call_id]) attached[ev.call_id] = [];
-        attached[ev.call_id].push(ev);
+  function auEventOwnerKind(ev) {
+    var sub = String(ev.subkind || "");
+    if (ev.kind === "compaction" || sub === "compact_failed") return "compaction";
+    if (sub === "api_retry") return "retry";
+    if (/^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
+    if (ev.kind === "subagent" && sub.indexOf("task_") === 0) return "subagent";
+    return "";
+  }
+
+  function auNearestOwner(owners, ev, boundary, used) {
+    var at = auParseRFC3339Ns(ev.at);
+    var nearest = null, distance = Infinity;
+    for (var i = 0; i < owners.length; i++) {
+      var owner = owners[i];
+      if (owner.kind !== boundary || (used && used.has(owner.el))) continue;
+      if (boundary === "approval" && owner.call && ev.call_id) {
+        if (owner.call === ev.call_id) return owner;
         continue;
       }
-      var evAt = auParseRFC3339Ns(ev.at);
-      var sysStart = auIsSessionStartEvent(ev);
-      var idx = parsedEntries.length;
-      if (evAt) {
-        for (var j = 0; j < parsedEntries.length; j++) {
-          if (!parsedEntries[j].at) continue;
-          var cmp = auCmpNs(parsedEntries[j].at, evAt);
-          if (sysStart ? cmp >= 0 : cmp > 0) {
-            idx = j;
-            break;
-          }
-        }
-      } else if (sysStart) {
-        idx = 0;
+      if (boundary === "compaction" && owner.failed !== (ev.subkind === "compact_failed")) continue;
+      if (!owner.at || !at) continue;
+      var delta = Math.abs(owner.at.ms - at.ms + (owner.at.ns - at.ns) / 1000000);
+      // The wire event and the corresponding ring entry are stamped separately.
+      if (delta <= 2000 && delta < distance) {
+        distance = delta;
+        nearest = owner;
       }
-      standalone.push({ event: ev, sysStart: sysStart, beforeIndex: idx });
     }
-    return { attached: attached, standalone: standalone };
+    return nearest;
+  }
+
+  function auInterleavePlan(entries, events, renderedCallIds, owners) {
+    owners = owners || [];
+    var sorted = events.filter(function (ev) { return ev && ev.id; }).slice().sort(auCmpAuditEvent);
+    var attached = Object.create(null), standalone = [], boundaryItems = new Map(), owned = new Map();
+    var callSummaries = Object.create(null), attachmentCalls = Object.create(null);
+    var completedTasks = Object.create(null), seenBoundaries = new Set();
+    var turnEntries = entries.filter(function (ent) { return ent.turn; });
+    var lastTurnAt = turnEntries.length ? turnEntries[turnEntries.length - 1].at : "";
+    var retry = owners.find(function (owner) { return owner.kind === "retry"; });
+
+    // Associate the active retry with its newest event in this turn. The
+    // phase start is shared with other live states, so it is no retry timestamp.
+    for (var i = sorted.length - 1; i >= 0; i--) {
+      var ev = sorted[i], kind = auEventOwnerKind(ev);
+      if (ev.kind === "tool_call" && ev.call_id) {
+        callSummaries[ev.call_id] = ev;
+        (ev.attached || []).forEach(function (id) { attachmentCalls[id] = ev.call_id; });
+      }
+      var owner = null;
+      if (kind === "approval" || kind === "compaction" || ev.subkind === "task_notification") {
+        owner = auNearestOwner(owners, ev, kind, seenBoundaries);
+      } else if (kind === "retry" && retry && !seenBoundaries.has(retry.el) && (!lastTurnAt || auCmpStrNs(ev.at, lastTurnAt) > 0)) {
+        owner = retry;
+      }
+      if (!owner) continue;
+      owned.set(ev.id, owner);
+      seenBoundaries.add(owner.el);
+      if (kind === "subagent" && ev.agent_id) completedTasks[ev.agent_id] = { owner: owner, at: ev.at };
+    }
+
+    var start = null, turns = new Map(), turnIndex = 0, entryIndex = 0;
+    var turnItems = function (turn) {
+      var footer = turn.footer || turn.el;
+      if (!turns.has(footer)) {
+        var list = [];
+        list.auditCounts = Object.create(null);
+        turns.set(footer, list);
+      }
+      return turns.get(footer);
+    };
+    var attach = function (call, event) {
+      if (!attached[call]) attached[call] = [];
+      attached[call].push(event);
+    };
+
+    for (var j = 0; j < sorted.length; j++) {
+      var row = sorted[j];
+      if (!auIsHiddenAuditKind(row.kind)) continue;
+      while (turnIndex < turnEntries.length && auCmpStrNs(turnEntries[turnIndex].at, row.at) < 0) turnIndex++;
+      var timeline = turnIndex < turnEntries.length ? turnItems(turnEntries[turnIndex]) : null;
+      if (timeline && row.subkind !== "tool_progress") {
+        timeline.auditCounts[row.kind] = (timeline.auditCounts[row.kind] || 0) + 1;
+      }
+      var ownerKind = auEventOwnerKind(row);
+      var target = owned.get(row.id);
+      var task = ownerKind === "subagent" && completedTasks[row.agent_id];
+      if (!target && task && auCmpStrNs(row.at, task.at) <= 0) target = task.owner;
+      if (target) {
+        if (!boundaryItems.has(target.el)) boundaryItems.set(target.el, []);
+        boundaryItems.get(target.el).push(row);
+        continue;
+      }
+      var call = row.call_id || attachmentCalls[row.id] || row.parent_id;
+      if ((!ownerKind || ownerKind === "approval") && call && renderedCallIds[call]) {
+        attach(call, row);
+        continue;
+      }
+      if (row.subkind === "tool_progress") continue;
+      if (!start && auIsSessionStartEvent(row)) {
+        start = row;
+        standalone.unshift({ event: row, sysStart: true, beforeIndex: 0 });
+        continue;
+      }
+      if (timeline) {
+        timeline.push({ event: row, at: row.at, seq: row.seq });
+        continue;
+      }
+      // With no finished turn after this event, leave low-signal events for
+      // the upcoming turn. Other provider events stay available as traces.
+      if (auWaitForTurn(row)) continue;
+      while (entryIndex < entries.length && (!entries[entryIndex].at || auCmpStrNs(entries[entryIndex].at, row.at) <= 0)) entryIndex++;
+      standalone.push({ event: row, sysStart: false, beforeIndex: entryIndex });
+    }
+
+    var pending = [];
+    for (var n = 0; n < entries.length; n++) {
+      var ent = entries[n];
+      if (ent.tools) {
+        ent.tools.forEach(function (tool) {
+          var summary = callSummaries[tool.call];
+          pending.push({ source: tool.el, tool: true, key: tool.key, at: summary ? summary.at : ent.at, seq: summary && summary.seq });
+        });
+      } else if (ent.turn) {
+        var list = turnItems(ent);
+        Array.prototype.push.apply(list, pending);
+        list.sort(auCmpAuditEvent);
+        pending = [];
+      } else if (ent.source) {
+        pending.push({ source: ent.source, key: ent.key, at: ent.at });
+      }
+    }
+    return { attached: attached, standalone: standalone, boundaryItems: boundaryItems, turns: turns };
+  }
+
+  var AU_COUNTED_KINDS = [
+    { kind: "system", i18n: "js.audit.kind.system" },
+    { kind: "hook", i18n: "js.audit.kind.hook" },
+    { kind: "system_reminder", i18n: "js.audit.kind.reminder" },
+    { kind: "thinking", i18n: "js.audit.kind.thinking" },
+    { kind: "subagent", i18n: "js.audit.kind.subagent" },
+    { kind: "compaction", i18n: "js.audit.kind.compaction" },
+    { kind: "other", i18n: "js.audit.kind.unmapped" }
+  ];
+
+  function auWaitForTurn(ev) {
+    return /^(system|hook|system_reminder|thinking)$/.test(ev.kind) ||
+      (ev.kind === "subagent" && /^task_/.test(ev.subkind || ""));
+  }
+
+  function auTurnLabel(items) {
+    var counts = items.auditCounts, parts = [];
+    AU_COUNTED_KINDS.forEach(function (kind) {
+      if (counts[kind.kind]) parts.push(wsT(kind.i18n) + " " + counts[kind.kind]);
+    });
+    return parts.join(" · ");
   }
 
   // Controller active only in a session dashboard with #convo and WsAudit.
   if (typeof doc !== "undefined" && typeof window !== "undefined" && $("convo") && window.WsAudit) {
     var auRowsRid = root.getAttribute("data-rid") || (typeof rid !== "undefined" ? rid : "") || "";
-    var auKindsPref = auReadKindsPref(window.localStorage, AU_KIND_STORAGE);
     var auEventsById = Object.create(null);
-    var auBarEl = null;
     var auCoveredSince = "";
     var auOpenBelowDone = false;
     var auUnboundedDone = false;
@@ -191,189 +277,220 @@
 
     function auRenderedEntries(box) {
       var list = [];
-      if (!box) return list;
       for (var c = box.firstElementChild; c; c = c.nextElementSibling) {
-        if (c.hasAttribute("data-entry")) {
-          list.push({ el: c, key: c.getAttribute("data-entry") || "", at: c.getAttribute("data-at") || "" });
+        var key = c.getAttribute("data-entry");
+        if (!key && c.classList.contains("apanswered")) key = "approval:" + c.getAttribute("data-approval-id");
+        if (!key || c.hasAttribute("hidden")) continue;
+        var footer = c.classList.contains("turnline") ? c : c.querySelector(".turnline");
+        var ent = { el: c, key: key, at: c.getAttribute("data-at") || "", turn: !!footer, footer: footer };
+        if (!footer && c.matches(".msg, .user-batch, .mailline, .mail-block, .mail-notification, .wbeffects, .boundary-badge, .apanswered, .cardref, .cmdrun, .uiline, .input-record")) ent.source = c;
+        if (c.matches(".au-tools, .toolsline")) {
+          var rows = Array.from(c.querySelectorAll(".au-row"));
+          if (!rows.length) rows = Array.from(c.querySelectorAll(".brows .brow:not(.more)"));
+          if (!rows.length) rows = [c.firstElementChild || c];
+          ent.tools = rows.map(function (row, i) {
+            return { el: row, call: row.getAttribute("data-call"), key: key + ":" + i };
+          });
         }
+        list.push(ent);
       }
       return list;
     }
 
     function auRenderedCallMap(box) {
       var map = Object.create(null);
-      if (!box) return map;
       var rows = box.querySelectorAll(".au-row[data-call]");
-      for (var i = 0; i < rows.length; i++) {
-        var cid = rows[i].getAttribute("data-call");
-        if (cid) map[cid] = rows[i];
-      }
+      for (var i = 0; i < rows.length; i++) map[rows[i].getAttribute("data-call")] = rows[i];
       return map;
     }
 
-    function auSyncKindVisibility(rootEl) {
-      var scope = rootEl || auConvo();
-      if (!scope) return;
-      var nodes = scope.querySelectorAll(".au-hid[data-kind], .au-sysrow[data-kind]");
-      for (var i = 0; i < nodes.length; i++) {
-        var k = nodes[i].getAttribute("data-kind");
-        nodes[i].classList.toggle("au-kind-hidden", auKindsPref[k] === false);
+    function auDirectItems(el) {
+      for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+        if (c.classList.contains("conv-audit-items")) return c;
       }
+      return null;
     }
 
-    function auEnsureFilterBar() {
-      var convoEl = auConvo();
-      if (!convoEl) return null;
-      if (auBarEl && auBarEl.isConnected) return auBarEl;
-      var bar = doc.createElement("div");
-      bar.className = "au-bar";
-      bar.setAttribute("role", "toolbar");
-      bar.setAttribute("aria-label", wsT("js.audit.filter.label"));
-      var chips = doc.createElement("div");
-      chips.className = "au-fchips";
-      for (var i = 0; i < AU_HIDDEN_KINDS.length; i++) {
-        var item = AU_HIDDEN_KINDS[i];
-        var btn = doc.createElement("button");
-        btn.type = "button";
-        var on = auKindsPref[item.kind] !== false;
-        btn.className = "au-fchip au-kind-" + item.kind + (on ? " au-on" : "");
-        btn.setAttribute("data-au-kind", item.kind);
-        btn.setAttribute("aria-pressed", on ? "true" : "false");
-        var dot = doc.createElement("i");
-        dot.className = "au-fdot";
-        dot.setAttribute("aria-hidden", "true");
-        btn.appendChild(dot);
-        btn.appendChild(doc.createTextNode(auHiddenKindLabel(item.kind)));
-        chips.appendChild(btn);
-      }
-      bar.appendChild(chips);
-      bar.addEventListener("click", function (e) {
-        var chip = e.target && e.target.closest ? e.target.closest(".au-fchip[data-au-kind]") : null;
-        if (!chip) return;
-        var kind = chip.getAttribute("data-au-kind");
-        if (!kind) return;
-        var nextOn = auKindsPref[kind] === false;
-        auKindsPref[kind] = nextOn;
-        chip.classList.toggle("au-on", nextOn);
-        chip.setAttribute("aria-pressed", nextOn ? "true" : "false");
-        auWriteKindsPref(window.localStorage, AU_KIND_STORAGE, auKindsPref);
-        auSyncKindVisibility();
-        if (auFocusedAuditEl && auFocusedAuditEl.classList.contains("au-kind-hidden")) {
-          auFocusedAuditEl.classList.remove("au-cur");
-          auFocusedAuditEl = null;
-        }
+    function auRenderedOwners(convo) {
+      return Array.from(convo.querySelectorAll("[data-audit-owner]")).map(function (el) {
+        var at = auParseRFC3339Ns(el.getAttribute("data-at"));
+        var kind = el.getAttribute("data-audit-owner"), ms = Number(el.getAttribute("data-at-ms"));
+        if (!at && ms && kind === "compaction") at = { ms: ms, ns: 0 };
+        return { el: el, kind: kind, at: at, call: el.getAttribute("data-approval-call"), failed: el.classList.contains("fail") };
       });
-      convoEl.insertBefore(bar, convoEl.firstChild);
-      auBarEl = bar;
-      return bar;
     }
 
-    function auBuildRowNode(ev, inner, sysStart) {
-      var tag = inner ? "li" : "div";
+    function auText(parent, tag, cls, value) {
       var el = doc.createElement(tag);
-      var kindClass = "au-kind-" + String(ev.kind || "other");
-      el.className = (sysStart ? "au-sysrow " : "au-hid ") + (inner ? "au-inner " : "") + kindClass;
-      if (auKindsPref[ev.kind] === false) el.className += " au-kind-hidden";
+      el.className = cls;
+      el.textContent = value || "";
+      parent.appendChild(el);
+      return el;
+    }
+
+    function auTime(parent, at) {
+      var time = auText(parent, "time", "row-time");
+      var parsed = auParseRFC3339Ns(at);
+      if (!parsed) return;
+      time.setAttribute("datetime", at);
+      time.setAttribute("data-ms", parsed.ms);
+      if (typeof fmtTimes === "function") fmtTimes(parent);
+    }
+
+    function auBuildRowNode(ev) {
+      var el = doc.createElement("div");
+      el.className = "au-hid conv-row au-kind-" + ev.kind;
       el.setAttribute("data-event-id", ev.id);
       el.setAttribute("data-kind", ev.kind);
       if (ev.at) el.setAttribute("data-at", ev.at);
       if (ev.call_id) el.setAttribute("data-call-ref", ev.call_id);
       el.tabIndex = 0;
       el.setAttribute("role", "button");
-
-      if (sysStart) {
-        var lbl = doc.createElement("span");
-        lbl.className = "au-sysrow-lbl";
-        var sysText = wsT("js.audit.sysrow.start");
-        var pvSys = auFormatHiddenPreview(ev, window.WsAudit.fmtBytes);
-        lbl.textContent = pvSys ? sysText + " · " + pvSys : sysText;
-        el.appendChild(lbl);
-        return el;
-      }
-
-      var dot = doc.createElement("span");
-      dot.className = "au-dot-ev";
-      dot.setAttribute("aria-hidden", "true");
-      var badge = doc.createElement("span");
-      badge.className = "au-hbadge";
-      badge.textContent = auHiddenKindLabel(ev.kind);
-      var pv = doc.createElement("span");
-      pv.className = "au-pv";
+      var icon = auText(el, "span", "row-icon au-event-icon");
+      icon.setAttribute("aria-hidden", "true");
+      var icons = { system: "gear", thinking: "chat", hook: "wrench", system_reminder: "clock", compaction: "archive", subagent: "agents" };
+      icon.innerHTML = '<svg class="i"><use href="#i-' + (icons[ev.kind] || "ticket") + '"></use></svg>';
+      var content = auText(el, "span", "row-content trace-content");
+      auText(content, "span", "au-hbadge row-name", auHiddenKindLabel(ev.kind));
       var preview = auFormatHiddenPreview(ev, window.WsAudit.fmtBytes);
-      pv.textContent = preview;
+      var pv = auText(content, "span", "au-pv", preview);
       if (preview) pv.title = preview;
-      el.appendChild(dot);
-      el.appendChild(badge);
-      el.appendChild(pv);
+      auTime(el, ev.at);
+      return el;
+    }
+
+    function auBuildSessionStart(ev) {
+      var el = doc.createElement("details");
+      el.className = "sysline boundary-badge au-sysrow";
+      var sum = auText(el, "summary", "");
+      var icon = auText(sum, "span", "row-icon");
+      icon.innerHTML = '<svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5 3v10l8-5z"/></svg>';
+      var text = wsT("js.audit.sysrow.start"), size = ev.out_bytes || ev.in_bytes;
+      auText(sum, "span", "au-sysrow-lbl", size ? text + " · " + window.WsAudit.fmtBytes(size) : text);
+      auTime(sum, ev.at);
+      auText(el, "div", "conv-audit-items");
+      return el;
+    }
+
+    function auReferenceText(el) {
+      if (el.tagName === "TIME" || el.classList.contains("row-time") || el.classList.contains("conv-audit-items")) return "";
+      if (!el.firstElementChild) return el.textContent || "";
+      var text = [];
+      for (var c = el.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3) text.push(c.nodeValue);
+        else if (c.tagName) text.push(auReferenceText(c));
+      }
+      return text.join(" ");
+    }
+
+    function auBuildTurnReference(item) {
+      var source = item.source;
+      var el = doc.createElement("button");
+      el.type = "button";
+      el.className = "conv-row au-turn-tool";
+      var name = source.querySelector(".au-tool, .bp, .tsl, .mpeer, .nt, .wbupdate-head, .row-content > b, .cra");
+      var preview = source.querySelector(".au-args, .mfirst, .bub, .cmdecho");
+      var meta = item.tool && source.querySelector(".au-dur, .bm");
+      var glyph = source.querySelector(".row-icon use, summary .mk use, .wbupdate-head use");
+      if (source.classList.contains("turn-trigger") || source.querySelector(".turn-trigger")) el.classList.add("au-turn-trigger");
+      if (source.classList.contains("au-fail") || source.classList.contains("fail")) el.classList.add("au-fail");
+      var icon = auText(el, "span", "row-icon");
+      if (glyph) icon.appendChild(glyph.parentNode.cloneNode(true));
+      else icon.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-' + (item.tool ? "hammer" : "chat") + '"></use></svg>';
+      var content = auText(el, "span", "row-content trace-content");
+      if (name) auText(content, "span", "au-tool row-name", auReferenceText(name).trim());
+      if (preview || !name) {
+        var text = auReferenceText(preview || source).trim().replace(/\s+/g, " ");
+        if (text) auText(content, "span", "au-pv", text.slice(0, 200));
+      }
+      if (meta && meta.textContent) auText(content, "span", "au-dur", meta.textContent);
+      auTime(el, item.at);
       return el;
     }
 
     function auReconcileRows() {
       var box = auEntriesContainer();
       if (!box) return;
+      var convo = auConvo(), pin = typeof stick !== "undefined" && stick, changed = false;
       var entries = auRenderedEntries(box);
-      var callMap = auRenderedCallMap(box);
+      var callMap = auRenderedCallMap(convo);
+      var owners = auRenderedOwners(convo);
       var allEvents = Object.keys(auEventsById).map(function (id) { return auEventsById[id]; });
-      var plan = auInterleavePlan(entries, allEvents, callMap);
-
-      // Index existing rendered hidden/sysrow elements to move/reuse cleanly without scroll jitter.
-      var existing = Object.create(null);
-      var oldNodes = box.querySelectorAll(".au-hid[data-event-id], .au-sysrow[data-event-id]");
-      for (var i = 0; i < oldNodes.length; i++) {
-        var eid = oldNodes[i].getAttribute("data-event-id");
-        if (eid && !existing[eid]) existing[eid] = oldNodes[i];
-        else if (oldNodes[i].parentNode) oldNodes[i].parentNode.removeChild(oldNodes[i]);
+      var plan = auInterleavePlan(entries, allEvents, callMap, owners);
+      var existing = new Map(), placements = new Map();
+      Array.from(convo.querySelectorAll("[data-au-row-key]")).forEach(function (el) {
+        existing.set(el.getAttribute("data-au-row-key"), el);
+      });
+      function node(key, build) {
+        var el = existing.get(key);
+        if (el) existing.delete(key);
+        else {
+          el = build();
+          el.setAttribute("data-au-row-key", key);
+        }
+        return el;
       }
-
-      var kept = Object.create(null);
-      // 1. Place attached rows directly beneath each matching .au-row[data-call].
-      var attachedCalls = Object.keys(plan.attached);
-      for (var ac = 0; ac < attachedCalls.length; ac++) {
-        var callId = attachedCalls[ac];
-        var callEl = callMap[callId];
-        if (!callEl || !callEl.parentNode) continue;
-        var list = plan.attached[callId];
-        var anchor = callEl;
-        for (var k = 0; k < list.length; k++) {
-          var aev = list[k];
-          kept[aev.id] = true;
-          var anode = existing[aev.id];
-          if (!anode || anode.tagName !== "LI" || !anode.classList.contains("au-inner")) {
-            if (anode && anode.parentNode) anode.parentNode.removeChild(anode);
-            anode = auBuildRowNode(aev, true, false);
+      function place(parent, el, before) {
+        if (!parent) return;
+        if (!placements.has(parent)) placements.set(parent, []);
+        placements.get(parent).push({ el: el, before: before || null });
+      }
+      function placeEvent(parent, ev, before) {
+        if (parent) place(parent, node("event:" + ev.id, function () { return auBuildRowNode(ev); }), before);
+      }
+      plan.boundaryItems.forEach(function (events, owner) {
+        var body = auDirectItems(owner);
+        events.forEach(function (ev) { placeEvent(body, ev); });
+      });
+      Object.keys(plan.attached).forEach(function (call) {
+        var row = callMap[call];
+        var detail = row.closest(".au-call-details");
+        var body = detail ? auDirectItems(detail) : row.parentNode;
+        plan.attached[call].forEach(function (ev) { placeEvent(body, ev, detail ? null : row.nextElementSibling); });
+      });
+      plan.turns.forEach(function (items, footer) {
+        var counts = footer.querySelector(".turn-audit-counts");
+        if (counts) {
+          var label = auTurnLabel(items);
+          if (counts.textContent !== label) { counts.textContent = label; changed = true; }
+        }
+        var body = auDirectItems(footer);
+        if (!body) return;
+        items.forEach(function (item) {
+          if (item.event) placeEvent(body, item.event);
+          else {
+            var ref = node("turn-ref:" + item.key, function () { return auBuildTurnReference(item); });
+            ref.auSource = item.source;
+            place(body, ref);
           }
-          if (anode.previousElementSibling !== anchor || anode.parentNode !== callEl.parentNode) {
-            callEl.parentNode.insertBefore(anode, anchor.nextSibling);
+        });
+      });
+      plan.standalone.forEach(function (item) {
+        var ev = item.event, before = entries[item.beforeIndex] && entries[item.beforeIndex].el;
+        if (item.sysStart) {
+          var start = node("start:" + ev.id, function () { return auBuildSessionStart(ev); });
+          placeEvent(auDirectItems(start), ev);
+          place(box, start, before);
+        } else placeEvent(box, ev, before);
+      });
+      existing.forEach(function (el) {
+        if (el.parentNode) { el.parentNode.removeChild(el); changed = true; }
+      });
+      placements.forEach(function (list, parent) {
+        var next = null, lastBefore = null;
+        for (var i = list.length - 1; i >= 0; i--) {
+          var item = list[i], el = item.el;
+          if (i === list.length - 1 || item.before !== lastBefore) next = item.before;
+          if (el.parentNode !== parent || el.nextElementSibling !== next) {
+            parent.insertBefore(el, next);
+            changed = true;
           }
-          anchor = anode;
+          next = el;
+          lastBefore = item.before;
         }
-      }
-
-      // 2. Place standalone & session-start rows chronologically inside .centries.
-      for (var s = 0; s < plan.standalone.length; s++) {
-        var item = plan.standalone[s];
-        var sev = item.event;
-        kept[sev.id] = true;
-        var snode = existing[sev.id];
-        if (!snode || snode.tagName === "LI" || snode.classList.contains("au-inner")) {
-          if (snode && snode.parentNode) snode.parentNode.removeChild(snode);
-          snode = auBuildRowNode(sev, false, item.sysStart);
-        }
-        var refEl = item.beforeIndex < entries.length ? entries[item.beforeIndex].el : null;
-        if (snode.parentNode !== box || snode.nextElementSibling !== refEl) {
-          box.insertBefore(snode, refEl);
-        }
-      }
-
-      // 3. Remove any obsolete nodes no longer in plan.
-      var exIds = Object.keys(existing);
-      for (var r = 0; r < exIds.length; r++) {
-        if (!kept[exIds[r]] && existing[exIds[r]].parentNode) {
-          existing[exIds[r]].parentNode.removeChild(existing[exIds[r]]);
-        }
-      }
-      auSyncKindVisibility(box);
-      if (window.WsAudit && window.WsAudit.syncSelection) window.WsAudit.syncSelection();
+      });
+      if (pin && changed && typeof pinConvo === "function") pinConvo();
+      if (window.WsAudit.syncSelection) window.WsAudit.syncSelection();
     }
 
     function auStoreEvents(list) {
@@ -381,7 +498,7 @@
       var changed = false;
       for (var i = 0; i < list.length; i++) {
         var ev = list[i];
-        if (!ev || !ev.id || !auIsHiddenAuditKind(ev.kind)) continue;
+        if (!ev || !ev.id || (!auIsHiddenAuditKind(ev.kind) && ev.kind !== "tool_call")) continue;
         auEventsById[ev.id] = ev;
         changed = true;
       }
@@ -397,11 +514,16 @@
       return "/s/" + encodeURIComponent(auRowsRid) + "/audit/events?" + qs.join("&");
     }
 
+    // since <= at < until, newest page first, bounded: a capped result is ok
+    // with capped=true and floor = the oldest fetched event's time, so the
+    // caller claims coverage only down to there.
     function auFetchInterval(since, until, updateLatestAfter) {
       if (!auRowsRid || !window.fetch) return Promise.resolve({ ok: false });
       var before = "";
       var restarted = false;
       var anyAdded = false;
+      var maxPages = since ? AU_MAX_INTERVAL_PAGES : 1;
+      var pages = 0, floor = "";
       var epoch = auEpoch, candidateAfter = "";
       function step() {
         if (epoch !== auEpoch) return Promise.resolve({ ok: false });
@@ -421,19 +543,29 @@
           return r.json();
         }).then(function (page) {
           if (epoch !== auEpoch) return { ok: false };
-          if (page && page.restart) return step();
-          if (page && Array.isArray(page.events) && auStoreEvents(page.events)) anyAdded = true;
+          if (page && page.restart) { pages = 0; return step(); }
+          pages++;
+          if (page && Array.isArray(page.events) && page.events.length) {
+            if (auStoreEvents(page.events)) anyAdded = true;
+            floor = page.events[0].at || floor;
+          }
           if (updateLatestAfter && !before && page && page.after) candidateAfter = page.after;
-          if (!page || page.end || !page.before) {
+          var more = page && !page.end && page.before;
+          if (!more || pages >= maxPages) {
             if (candidateAfter) auLatestAfter = candidateAfter;
             if (anyAdded) auReconcileRows();
-            return { ok: true, page: page, epoch: epoch };
+            return { ok: true, page: page, epoch: epoch, capped: !!more, floor: more ? floor : "" };
           }
           before = page.before;
           return step();
         });
       }
       return step();
+    }
+
+    // The lower bound a fetch of `wanted` actually covers.
+    function auCoveredFrom(res, wanted) {
+      return res && res.capped && res.floor && auCmpStrNs(res.floor, wanted) > 0 ? res.floor : wanted;
     }
 
     function auRefreshLatestAfter() {
@@ -511,7 +643,8 @@
         auEnqueue(function () {
           return auFetchInterval(oldest, "", true).then(function (res) {
             if (res && res.ok && res.epoch === auEpoch) {
-              if (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0) auCoveredSince = oldest;
+              var cov = auCoveredFrom(res, oldest);
+              if (!auCoveredSince || auCmpStrNs(cov, auCoveredSince) < 0) auCoveredSince = cov;
             }
           });
         });
@@ -530,6 +663,7 @@
       var d = (e && e.detail) || {};
       var box = auEntriesContainer();
       var oldest = d.oldestAt || auFirstDataEntryAt(box);
+      auReconcileRows();
       auEnqueue(function () {
         var p = Promise.resolve({ ok: true, epoch: pageEpoch });
         if (d.empty && d.end && !oldest) {
@@ -543,18 +677,19 @@
         if (oldest && auCoveredSince && auCmpStrNs(oldest, auCoveredSince) < 0) {
           var prevUpper = auCoveredSince;
           p = auFetchInterval(oldest, prevUpper, false).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = auCoveredFrom(res, oldest);
             return res;
           });
         } else if (oldest && !auCoveredSince) {
           p = auFetchInterval(oldest, "", true).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = auCoveredFrom(res, oldest);
             return res;
           });
         }
         if (d.end && oldest && !auOpenBelowDone) {
           p = p.then(function (res) {
-            if (pageEpoch !== auEpoch || !res || !res.ok) return;
+            // A capped span leaves a gap above `oldest`; rows below it wait.
+            if (pageEpoch !== auEpoch || !res || !res.ok || res.capped) return;
             return auFetchInterval("", oldest, false).then(function (res) {
               if (res && res.ok && res.epoch === auEpoch) auOpenBelowDone = true;
             });
@@ -577,7 +712,10 @@
         if (auLatestAfter) return auRefreshLatestAfter();
         if (!d.empty && oldest) {
           return auFetchInterval(auCoveredSince || oldest, "", true).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch && (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0)) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) {
+              var cov = auCoveredFrom(res, oldest);
+              if (!auCoveredSince || auCmpStrNs(cov, auCoveredSince) < 0) auCoveredSince = cov;
+            }
           });
         }
         if (d.empty && !oldest) {
@@ -605,6 +743,77 @@
       if (oldest) auInitialSync();
     });
 
+    function auInlineJSON(url) {
+      return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (response) {
+        if (response.ok) return response.json();
+        return null;
+      });
+    }
+
+    function auInlineCallBody(base, event, part) {
+      if (!event || !event.id || !event[part + "_bytes"]) return Promise.resolve(null);
+      return auInlineJSON(base + "/event/" + encodeURIComponent(event.id) + "?part=" + part + "&len=4096").then(function (range) {
+        return range && range.data ? range.data + (range.end ? "" : "\n…") : null;
+      });
+    }
+
+    doc.addEventListener("toggle", function (e) {
+      var detail = e.target;
+      if (!detail.matches || !detail.matches(".au-call-details[open]") || detail.hasAttribute("data-au-preview")) return;
+      var summary = detail.querySelector(".au-row[data-call]");
+      if (!summary) return;
+      detail.setAttribute("data-au-preview", "");
+      var call = summary.getAttribute("data-call");
+      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit";
+      auInlineJSON(base + "/events?call=" + encodeURIComponent(call)).then(function (bundle) {
+        if (!bundle || !detail.isConnected) return;
+        var result = (bundle.events || []).find(function (ev) { return auIsResultSummary(ev, call); });
+        return Promise.all([auInlineCallBody(base, bundle.call, "in"), auInlineCallBody(base, result, "out")]);
+      }).then(function (parts) {
+        if (!parts || !detail.isConnected) return;
+        var input = detail.querySelector(".au-call-input"), changed = false;
+        if (parts[0]) {
+          if (!input) {
+            input = doc.createElement("pre");
+            input.className = "au-call-input";
+            detail.insertBefore(input, summary.nextSibling);
+          }
+          if (input.textContent !== parts[0]) { input.textContent = parts[0]; changed = true; }
+        }
+        if (parts[1]) {
+          var output = doc.createElement("pre");
+          output.className = "au-call-output";
+          output.textContent = wsT("js.audit.tab.out") + "\n" + parts[1];
+          detail.insertBefore(output, auDirectItems(detail));
+          changed = true;
+        }
+        if (changed && detail.open && typeof stick !== "undefined" && stick && typeof pinConvo === "function") pinConvo();
+      }).catch(function () { detail.removeAttribute("data-au-preview"); });
+    }, true);
+
+    doc.addEventListener("ws-approval-rows-changed", auReconcileRows);
+    var liveRegion = doc.getElementById("r-convlive");
+    if (liveRegion && typeof MutationObserver !== "undefined") {
+      // Only the region's root replacement matters. Audit writes inside it
+      // should not themselves schedule a reconcile.
+      var liveSelector = "[data-audit-owner], .au-row[data-call]";
+      var hadOwners = !!liveRegion.querySelector(liveSelector);
+      function retryAttempt() {
+        var retry = liveRegion.querySelector("[data-retry-attempt]");
+        return retry && retry.getAttribute("data-retry-attempt");
+      }
+      var lastAttempt = retryAttempt();
+      new MutationObserver(function () {
+        var hasOwners = !!liveRegion.querySelector(liveSelector), attempt = retryAttempt();
+        if (hadOwners || hasOwners) auReconcileRows();
+        if (attempt && attempt !== lastAttempt) {
+          auEnqueue(function () { if (auLatestAfter) return auRefreshLatestAfter(); });
+        }
+        hadOwners = hasOwners;
+        lastAttempt = attempt;
+      }).observe(liveRegion, { childList: true });
+    }
+
     // Click and keyboard handling inside conversation pane.
     function auSetCurrentRow(row) {
       if (auFocusedAuditEl && auFocusedAuditEl !== row) auFocusedAuditEl.classList.remove("au-cur");
@@ -631,7 +840,17 @@
     }
 
     doc.addEventListener("click", function (e) {
-      var row = e.target && e.target.closest ? e.target.closest(".au-hid[data-event-id], .au-sysrow[data-event-id]") : null;
+      var target = e.target;
+      if (!target || !target.closest) return;
+      var ref = target.closest(".au-turn-tool");
+      if (ref && ref.auSource && ref.auSource.isConnected) {
+        var source = ref.auSource;
+        var detail = source.closest("details") || source.querySelector("details");
+        if (detail) detail.open = true;
+        source.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      var row = target.closest(".au-hid[data-event-id]");
       if (!row) return;
       var sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed) return;
@@ -644,10 +863,10 @@
       if (!t || !t.closest) return;
       var tag = t.tagName || "";
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
-      // Scope Decision (605): ONLY inside conversation pane (#convo / .au-bar),
+      // Scope Decision (605): ONLY inside conversation pane (#convo),
       // never inside .au-win, #composer, #bcol, #files, #rail, drawers, or dialogs.
       if (t.closest(".au-win, #composer, .composer, #bcol, .bcol, #files, .fpane, #rail, .rail, .rpop, .drawer, .modal, [role='dialog']")) return;
-      if (!t.closest("#convo, .au-bar")) return;
+      if (!t.closest("#convo")) return;
 
       if (e.key === "j" || e.key === "J" || e.key === "k" || e.key === "K") {
         var rows = window.WsAudit.visibleRows ? window.WsAudit.visibleRows() : [];
@@ -674,7 +893,7 @@
           return;
         }
         if (e.key === "Enter" && !t.closest("a, button, summary, details > summary, .d-act")) {
-          var targetRow = auFocusedAuditEl && auFocusedAuditEl.isConnected && !auFocusedAuditEl.classList.contains("au-kind-hidden")
+          var targetRow = auFocusedAuditEl && auFocusedAuditEl.isConnected
             ? auFocusedAuditEl
             : null;
           if (targetRow) {
@@ -685,7 +904,7 @@
       }
     });
 
-    auEnsureFilterBar();
+    auReconcileRows();
     auInitialSync();
     window.WsAuditRows = {
       parseRFC3339Ns: auParseRFC3339Ns,

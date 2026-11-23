@@ -97,6 +97,16 @@ func (a *tokenAgents) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-c
 	return h, nil, ok
 }
 
+// Override the diagnostic resolver too: embedding Runner would otherwise
+// promote its real-token lookup past this fixture's synthetic token map.
+func (a *tokenAgents) ResolveMCPTokenWithReason(token string) (wsdashboard.ProxyHello, <-chan struct{}, string) {
+	h, void, ok := a.ResolveMCPToken(token)
+	if !ok {
+		return h, void, "token unknown"
+	}
+	return h, void, ""
+}
+
 // TestHostedLeadsFirstToolListWaitsForTheUserCommandsAlone: while the daemon's
 // user commands are not settled, a hosted lead's first tool list waits (bounded)
 // and then names the user command tools (only discovery waits; a registration

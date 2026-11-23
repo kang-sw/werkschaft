@@ -399,6 +399,13 @@
       };
     }
 
+    // Closed-eye sticker swap: both sides must pass, so a wink stays rigid.
+    const BLINK_SWAP_AT = 0.5, LID_SHUT_AT = 0.95;
+    function eyeSwap(blink, ex, lid) {
+      return ["L", "R"].every(side =>
+        blink >= BLINK_SWAP_AT || clamp(finite(ex["lid" + side], lid), 0, 1) >= LID_SHUT_AT);
+    }
+
     function expressionPaint(expression, egg) {
       const head = manifest.head;
       const decal = texture(expression?.decal);
@@ -419,10 +426,13 @@
         }
         return ctx => draw(ctx, image);
       }
-      const mouth = texture(own(head?.mouths, ex.mouth) || own(head?.mouths, "idle"));
+      // eyeclosed-* mouth keys only register the closed plates for older binaries.
+      const mouthKey = id => typeof id === "string" && !id.startsWith("eyeclosed-") ? own(head?.mouths, id) : undefined;
+      const mouth = texture(mouthKey(ex.mouth) || mouthKey("idle"));
       const eye = {};
       if (eyes) {
-        for (const key of ["sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR", "lidLashL", "lidLashR", "browL", "browR"]) {
+        for (const key of ["sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR", "lidLashL", "lidLashR", "browL", "browR", "closedL", "closedR"]) {
+          // Closed plates are line-and-fill stickers, drawn as authored.
           const color = key === "irisFill" ? palette.eye : key.startsWith("lidCover") ? palette.skin : null;
           eye[key] = texture(eyes[key], color);
         }
@@ -430,25 +440,35 @@
       const maxPan = point(eyes?.maxPan, [finite(eyes?.maxPanX, 7), finite(eyes?.maxPanY, 4)]);
       const overlay = propLayers(ex.overlay || ex.overlayFx, "fx");
       return (ctx, t, gaze) => {
-        draw(ctx, eye.sclera);
-        if (iris && eye.sclera) {
-          const x = clamp(gaze.x, -1, 1) * maxPan[0], y = clamp(gaze.y, -1, 1) * maxPan[1];
-          iris.clearRect(0, 0, width, height);
-          iris.globalCompositeOperation = "source-over";
-          draw(iris, eye.irisFill, x, y);
-          draw(iris, eye.irisLine, x, y);
-          iris.globalCompositeOperation = "destination-in";
-          draw(iris, eye.sclera);
-          draw(ctx, iris.canvas);
-        }
-        draw(ctx, eye.frameLower);
         const cycle = (t * finite(ex.blinkHz, 0.23)) % 1;
         const blink = Math.max(0, 1 - Math.abs(cycle - 0.82) * 28);
         const lid = finite(ex.lid, finite(ex.lidClose));
+        const shut = eyeSwap(blink, ex, lid);
+        const closed = shut && eye.closedL && eye.closedR;
+        if (!closed) {
+          draw(ctx, eye.sclera);
+          if (iris && eye.sclera) {
+            const x = clamp(gaze.x, -1, 1) * maxPan[0], y = clamp(gaze.y, -1, 1) * maxPan[1];
+            iris.clearRect(0, 0, width, height);
+            iris.globalCompositeOperation = "source-over";
+            draw(iris, eye.irisFill, x, y);
+            draw(iris, eye.irisLine, x, y);
+            iris.globalCompositeOperation = "destination-in";
+            draw(iris, eye.sclera);
+            draw(ctx, iris.canvas);
+          }
+        }
+        draw(ctx, eye.frameLower);
+        if (closed) {
+          draw(ctx, eye.closedL);
+          draw(ctx, eye.closedR);
+        }
         for (const side of ["L", "R"]) {
           const close = clamp(Math.max(blink, finite(ex["lid" + side], lid)), 0, 1);
-          draw(ctx, eye["lidCover" + side], 0, close * height * 0.035);
-          draw(ctx, eye["lidLash" + side], 0, close * height * 0.035);
+          if (!closed) {
+            draw(ctx, eye["lidCover" + side], 0, close * height * 0.035);
+            draw(ctx, eye["lidLash" + side], 0, close * height * 0.035);
+          }
           if (eye["brow" + side]) {
             const bx = width * (side === "L" ? 0.44 : 0.56);
             const by = height * 0.25;

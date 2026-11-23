@@ -168,6 +168,25 @@ func TestOtherTablesHoldEveryEnglishKey(t *testing.T) {
 	}
 }
 
+// The HUD peek's footer names the streams inside its localized template: the
+// page appends nothing to it, so every table carries the whole line.
+func TestExecHUDFooterTemplateNamesTheStreams(t *testing.T) {
+	for _, l := range Languages() {
+		if v := Table(l.Code)["js.xhud.out.tail"]; !strings.Contains(v, "stdout+stderr") {
+			t.Errorf("%s: js.xhud.out.tail %q does not carry the stream label", l.Code, v)
+		}
+	}
+	for _, f := range []string{"../wsdashboard/assets/dashboard-exec-hud-peek.js"} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"stdout+stderr"`) || strings.Contains(string(raw), `" · stdout`) {
+			t.Errorf("%s concatenates the stream label outside the localized template", f)
+		}
+	}
+}
+
 // A translation must keep every placeholder its English text has, and add
 // none, or a call site's arguments land in the wrong place.
 func TestPlaceholdersMatchEnglish(t *testing.T) {

@@ -53,3 +53,4 @@ agents-plugin-tool/internal/wswhiteboard/assets/mermaid/mermaid.min.js linguist-
 **/test/** ws-size-guard=3000
 **/tests/** ws-size-guard=3000
 **/testdata/** ws-size-guard=3000
+/agents-plugin-tool/internal/wsdashboard/assets/terminal.js ws-size-guard=1300

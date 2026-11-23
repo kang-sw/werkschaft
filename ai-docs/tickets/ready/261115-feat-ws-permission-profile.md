@@ -1239,7 +1239,8 @@ its parent's level, `full` included, is Decision 3's exception, not a raise),
 warning/approval correlation,
 fixed capability ceilings and no second input owner. Add optional MCP inputs
 only with discovery gating and unchanged legacy calls. Re-grade every added
-surface T0; existing native approval behavior and Pi/Claude regressions remain.
+surface T0; existing native approval behavior and Claude regressions remain.
+Pi retires per `261123-chore-ws-retire-pi-harness`.
 
 ## Focused Verification Contract
 
@@ -1249,7 +1250,7 @@ is authorized; the new `TestPermission*` names are fixtures to add, not existing
 coverage. Read complete output and reject empty selector runs.
 
 - Existing regression anchors:
-  `go test ./internal/wsagent -count=1 -run '^(TestClaudeArgsAllOffByDefault|TestPiArgsAllOffByDefault|TestLeadControlRoutesTakeTheTrustedGate|TestLeadResumesInTheModeTheHarnessReports|TestPiHeldParentSnapshotNeverInventedOnReattach|TestRecordUnknownMembersRoundTrip)$'`.
+  `go test ./internal/wsagent -count=1 -run '^(TestClaudeArgsAllOffByDefault|TestLeadControlRoutesTakeTheTrustedGate|TestLeadResumesInTheModeTheHarnessReports|TestRecordUnknownMembersRoundTrip)$'`.
 - New Phase 2 fixtures:
   `go test ./internal/wsagent -count=1 -run '^TestPermission(LaunchMatrix|LegacyNoWriteback|SelectionLoweringRecovery|CurrentParentAdmission|MissingParentAdmission|FullUserGate|RouteSupportAndSwap|SidecarOldWriteNewReopen|SidecarLifecycle)$'`.
 - Existing dashboard entry point, extended with permission assertions:

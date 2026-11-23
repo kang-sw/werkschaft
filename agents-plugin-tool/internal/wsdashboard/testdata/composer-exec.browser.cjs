@@ -33,7 +33,18 @@ async function send(view, text) {
   await type(view, text);
   await view.click('#csend');
 }
-const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
+async function attachAdmitted(view) {
+  await view.evaluate(() => {
+    window.__admitted = window.__admitted || [];
+    if (!window.__admittedWired) {
+      window.__admittedWired = true;
+      window.addEventListener('ws:cexec-admitted', e => window.__admitted.push(e.detail));
+    }
+  });
+}
+async function waitAdmitted(view, cmd, count = 1, timeout = 15000) {
+  await view.waitForFunction(({ c, n }) => (window.__admitted || []).filter(e => e.command === c).length >= n, { c: cmd, n: count }, { timeout });
+}
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -53,63 +64,61 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await page.goto(base + '/s/livesession');
       let view = await sessionFrame(page);
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
-      assert.equal(await view.locator('.d-cexec').count(), 0, 'no card before a command');
+      await attachAdmitted(view);
+      assert.equal(await view.locator('.d-cexec, .cbang').count(), 0, 'no inline console or cbang hint before a command');
+      const baseHeight = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
 
-      // done with inline output
-      await send(view, '!echo hi');
-      await card(view, 0).waitFor();
-      await view.waitForSelector('.cexec[data-phase="done"]');
-      assert.equal(await card(view, 0).locator('.cmdout').textContent(), 'hi\n');
-      assert.ok((await card(view, 0).locator('.cexec-state').textContent()).includes(t.exit0));
-      assert.equal(await card(view, 0).locator('code').textContent(), 'echo hi', 'the card shows the command without the bang');
+      // done with inline output (headless admission + 0 px composer height change)
+      await type(view, '!echo hi');
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), baseHeight, '0px height change in bang mode');
+      await view.click('#csend');
+      await waitAdmitted(view, 'echo hi');
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), baseHeight, '0px height change after command admission');
+      assert.equal(await view.locator('.d-cexec, .cbang').count(), 0, 'no inline console after command');
+      assert.equal(await view.evaluate(() => window.__admitted.find(e => e.command === 'echo hi').exec_id), 'exec_hi');
       assert.equal(await draft(view), '', 'the draft goes once the daemon holds the submission');
       assert.ok(posts.every(p => p.endsWith('/composer-exec')), 'a command is never posted as a message: ' + posts);
       await shot('done-inline');
 
-      // submitting/running, then done
+      // slow command, then admitted once Launch completes
       await send(view, '!slow');
-      await view.waitForSelector('.cexec[data-phase="running"]');
-      assert.ok((await view.locator('.cexec[data-phase="running"] .cexec-state').textContent()).includes(t.running));
+      await waitAdmitted(view, 'slow');
+      assert.equal(await view.evaluate(() => window.__admitted.find(e => e.command === 'slow').exec_id), 'exec_slow');
       await shot('running');
-      await view.waitForSelector('.cexec[data-phase="done"] .cmdout:text("slow")');
 
-      // done with an output file link
+      // big output command admitted
       await send(view, '!big');
-      const link = view.locator('.cexec-file a');
-      await link.waitFor();
-      assert.ok((await link.textContent()).startsWith(t.file));
-      assert.match(await link.getAttribute('href'), /^\/s\/livesession\/composer-exec\/cx[0-9a-f]+\/output$/);
-      assert.equal(await view.locator('.cexec-copy').count(), 1);
-      assert.equal(await view.locator('.cexec-copy').textContent(), t.copy);
-      const bytes = await view.evaluate(async href => (await (await fetch(href, { credentials: 'same-origin' })).text()).length, await link.getAttribute('href'));
-      assert.equal(bytes, 6800, 'the file route serves the whole output');
+      await waitAdmitted(view, 'big');
+      assert.equal(await view.evaluate(() => window.__admitted.find(e => e.command === 'big').exec_id), 'exec_big');
       await shot('done-file');
 
-      // async-converted: only the job id, then the card finishes on refresh
+      // async-converted command admitted
       await send(view, '!async');
-      await view.waitForSelector('.cexec[data-phase="async"]');
-      assert.ok((await view.locator('.cexec[data-phase="async"] .cexec-state').textContent()).includes(t.async));
-      assert.ok((await view.locator('.cexec[data-phase="async"] .cmdnote').first().textContent()).includes('exec_async'));
+      await waitAdmitted(view, 'async', 1, 20000);
+      assert.equal(await view.evaluate(() => window.__admitted.find(e => e.command === 'async').exec_id), 'exec_async');
       await shot('async');
-      await view.waitForSelector('.cexec[data-phase="done"] .cmdout:text("later")', { timeout: 20000 });
 
-      // refused
+      // refused command notifies via toast (no inline card)
       await send(view, '!deny');
-      await view.waitForSelector('.cexec[data-phase="refused"]');
-      assert.ok((await view.locator('.cexec[data-phase="refused"] .cexec-state').textContent()).includes(t.refused));
+      await view.waitForFunction(txt => {
+        const el = document.querySelector('.ws-toast, [role=status], #toasts');
+        return !!el && el.innerText.includes(txt);
+      }, t.refused);
       await shot('refused');
 
       // never in the shared transcript: the session page any other viewer
       // gets carries no command or output
       const shared = await (await page.request.get(base + '/s/livesession?frame=1', { headers: { 'Sec-Fetch-Dest': 'iframe' } })).text();
-      assert.ok(!shared.includes('echo hi') && !shared.includes('exec_async') && !shared.includes('class="cmdrun cexec"') && !shared.includes('exec_big') && !shared.includes('exec_slow'), 'the shared page holds no card');
+      assert.ok(!shared.includes('echo hi') && !shared.includes('exec_async') && !shared.includes('d-cexec') && !shared.includes('exec_big') && !shared.includes('exec_slow'), 'the shared page holds no command');
       assert.equal(await view.locator('#r-convlive .cexec, [data-region] .cexec').count(), 0, 'the card is not inside a shared region');
 
-      // a reload keeps the cards by id (the daemon still knows them)
+      // a reload primes the admission token without restoring inline cards
       await page.reload();
       view = await sessionFrame(page);
-      await view.waitForSelector('.d-cexec .cexec');
-      assert.ok(await view.locator('.d-cexec .cexec').count() >= 5, 'cards restored after reload');
+      await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await attachAdmitted(view);
+      await page.waitForTimeout(500);
+      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'no inline cards restored after reload');
 
       // a leading space or a prompt is an ordinary message, not a command
       const before = posts.length;
@@ -126,12 +135,11 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
         document.querySelector('.cfield [contenteditable]').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
       });
       await page.waitForTimeout(400);
-      const cardsBefore = await view.locator('.d-cexec .cexec').count();
       await view.click('#csend');
       await page.waitForTimeout(500);
       assert.ok((await draft(view)).startsWith('!echo with image'), 'the draft is kept');
       assert.ok(await view.locator('#cimgs').evaluate(el => el.children.length > 0), 'the attachment is kept');
-      assert.equal(await view.locator('.d-cexec .cexec').count(), cardsBefore, 'no card for a refused submission');
+      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'no card for a refused submission');
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.attachments), () => false), 'the attachment refusal is shown');
       await shot('attachments');
 
@@ -139,12 +147,12 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       // an inline pick capsule after the bang keeps the first byte intact
       await type(view, '!echo ');
       await view.evaluate(() => document.querySelector('#ctext').wsc.insertCapsule('pick', { label: 'div.x', anchor: '[pick:div.x]', plain: 'div.x', pick: { url: 'http://localhost/page', selector: 'div.x', text: 'x' } }));
-      const beforePick = posts.length, cardsPick = await view.locator('.d-cexec .cexec').count();
+      const beforePick = posts.length;
       await view.click('#csend');
       await page.waitForTimeout(500);
       assert.equal(posts.length, beforePick, 'a command with a pick capsule posts nothing: ' + posts.slice(beforePick));
       assert.ok((await draft(view)).includes('[pick:div.x]'), 'the pick capsule stays in the draft');
-      assert.equal(await view.locator('.d-cexec .cexec').count(), cardsPick, 'no card for a refused submission');
+      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'no card for a refused submission');
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.attachments), () => false), 'the refusal is shown');
       // The refusal keeps the attachment for a regular send: made an ordinary
       // message (a leading space), the same draft goes once, with its pick, and
@@ -173,7 +181,7 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await editor(view).click();
       await view.page().keyboard.press('End');
       await view.page().keyboard.insertText(' typed meanwhile');
-      await view.waitForSelector('.cexec code:text-is("echo slowack")');
+      await waitAdmitted(view, 'echo slowack');
       assert.equal(await draft(view), ' typed meanwhile', 'text typed while the request was pending is kept');
       // a replacement draft that begins with the submitted text, and the same
       // text typed again, are new drafts: the acknowledgement leaves both whole
@@ -181,14 +189,14 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await editor(view).click();
       await view.page().keyboard.press('ControlOrMeta+A');
       await view.page().keyboard.insertText('!echo one more');
-      await view.waitForSelector('.cexec code:text-is("echo one")');
+      await waitAdmitted(view, 'echo one');
       assert.equal(await draft(view), '!echo one more', 'a replacement that begins with the submitted text stays whole');
       await send(view, '!echo two');
       await editor(view).click();
       await view.page().keyboard.press('ControlOrMeta+A');
       await view.page().keyboard.press('Delete');
       await view.page().keyboard.insertText('!echo two');
-      await view.waitForSelector('.cexec code:text-is("echo two")');
+      await waitAdmitted(view, 'echo two');
       assert.equal(await draft(view), '!echo two', 'the same text typed again as a new draft stays');
       await page.unroute('**/composer-exec');
 
@@ -205,24 +213,22 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       assert.equal(await draft(view), '!echo lost-once', 'the draft is kept when the answer was lost');
       assert.equal(await view.evaluate(k => !!window.sessionStorage.getItem(k), 'ws.cexec.attempt.livesession'), true, 'the attempt was recorded before it was sent');
       await view.click('#csend');
-      await view.waitForSelector('.cexec code:text-is("echo lost-once")');
+      await waitAdmitted(view, 'echo lost-once');
       assert.equal(await draft(view), '', 'the retry settles the draft');
       assert.equal(await view.evaluate(k => window.sessionStorage.getItem(k), 'ws.cexec.attempt.livesession'), null, 'the settled attempt is forgotten');
-      assert.equal(await view.locator('.cexec code:text-is("echo lost-once")').count(), 1, 'one card for one submission');
+      assert.equal(await view.evaluate(() => window.__admitted.filter(e => e.command === 'echo lost-once').length), 1, 'one admission event for one submission');
       await page.unroute('**/composer-exec');
 
-      // remembered cards render only after a successful private list read
+      // denied list read leaves no remembered command text
       await page.route('**/composer-exec', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, contentType: 'text/plain', body: 'unknown session' }) : route.continue());
       await page.reload();
       view = await sessionFrame(page);
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await attachAdmitted(view);
       await page.waitForTimeout(700);
-      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'a denied list read renders none of the remembered commands');
+      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'a denied list read renders no commands');
       assert.ok(!(await view.locator('body').innerText()).includes('echo slowack'), 'no remembered command text is shown');
       await page.unroute('**/composer-exec');
-      await page.reload();
-      view = await sessionFrame(page);
-      await view.waitForSelector('.d-cexec .cexec');
 
       // the first private list read answers with good headers but a body that is
       // cut short: the send that needed its token ends (busy clears, the draft is
@@ -231,6 +237,7 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await page.reload();
       view = await sessionFrame(page);
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await attachAdmitted(view);
       await page.waitForTimeout(500);
       const beforeBroken = posts.length;
       await send(view, '!echo nojson');
@@ -242,9 +249,9 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       assert.equal(posts.length, beforeBroken, 'a second click reads again and is not stuck busy');
       await page.unroute('**/composer-exec');
       await view.click('#csend');
-      await view.waitForSelector('.cexec code:text-is("echo nojson")');
+      await waitAdmitted(view, 'echo nojson');
       assert.equal(await draft(view), '', 'the send that follows a working read runs and settles the draft');
-      assert.equal(await view.locator('.cexec code:text-is("echo nojson")').count(), 1, 'the command ran once');
+      assert.equal(await view.evaluate(() => window.__admitted.filter(e => e.command === 'echo nojson').length), 1, 'the command ran once');
 
       // an old daemon: the route is unknown. It fails closed: nothing sent
       // as a prompt, the draft stays.

@@ -526,6 +526,19 @@
   // attention is tab-memory only, independent of the persistent question
   // dot. First observations (including a reconnect's full rail) baseline
   // silently. Replaced rows retain the flag but never replay its flash.
+  // flashDone drops .attn-flash once its three flashes end. Left on, the
+  // delayed breathe overlaps the flash on the same opacity, the browser
+  // refuses to composite it, and the long-lived pulse repaints the gradient on
+  // the main thread each frame. Without the class the breathe starts alone
+  // from the opacity the flash ended on, so the hand-over stays seamless.
+  function flashDone(row) {
+    if (!row.addEventListener) return;
+    row.addEventListener("animationend", function done(e) {
+      if (e.animationName !== "attn-flash" && e.animationName !== "attn-flash-ring") return;
+      row.removeEventListener("animationend", done);
+      row.classList.remove("attn-flash");
+    });
+  }
   function attention() {
     var seen = Object.create(null);
     var asks = rowAsks;
@@ -550,7 +563,7 @@
         // has no .attn class, so an existing flag goes straight to settled.
         if (!on || !row.classList.contains("attn")) row.classList.remove("attn-flash");
         row.classList.toggle("attn", on);
-        if (on && prev.flash) { row.classList.add("attn-flash"); prev.flash = false; }
+        if (on && prev.flash) { row.classList.add("attn-flash"); flashDone(row); prev.flash = false; }
         if (link) { if (on) link.setAttribute("title", hint); else link.removeAttribute("title"); }
       });
     }

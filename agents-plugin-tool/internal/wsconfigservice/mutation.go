@@ -43,7 +43,10 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 		return Mutation{}, ErrScope
 	}
 	harness := op.Selectors["harness"]
-	if len(rule.Harnesses) > 0 && !slices.Contains(rule.Harnesses, harness) {
+	// The preference migration can remove the common value stored before
+	// prompt overrides had harness buckets. A bare reset names that old key.
+	barePreferenceReset := op.Key == "prompt.UserPreferenceSection" && op.Action == "reset" && len(op.Selectors) == 0
+	if len(rule.Harnesses) > 0 && !slices.Contains(rule.Harnesses, harness) && !barePreferenceReset {
 		return Mutation{}, ErrInvalid
 	}
 	for field := range op.Selectors {

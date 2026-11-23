@@ -396,6 +396,35 @@
       s.host.appendChild(mk("div", "tm-note", wsT("js.term.loadfail")));
     });
   }
+  // holdSelection keeps a hidden emulator from redrawing. Every selection
+  // refresh redraws the whole viewport, one a scroll requests with nothing
+  // selected too, and unlike the emulator's other redraws it ignores the
+  // intersection pause. A host with no box (a tab or card under display:
+  // none) reads every glyph's width as zero, which the width cache does not
+  // keep, so each redraw measures each cell again. Such a redraw is held;
+  // release draws the newest one once the host has its box back. A held
+  // "nothing selected" is dropped when none is drawn: the show's own full
+  // refresh covers it.
+  function holdSelection(s) {
+    var rs;
+    try { rs = s.term._core._renderService; } catch (e) { return; }
+    if (!rs || typeof rs.handleSelectionChanged !== "function") return;
+    var draw = rs.handleSelectionChanged, drawn = false;
+    function boxed() { return s.host.clientWidth > 0 && s.host.clientHeight > 0; }
+    function now(a, b, m) {
+      drawn = !!(a && b);
+      draw.call(rs, a, b, m);
+    }
+    rs.handleSelectionChanged = function (a, b, m) {
+      if (boxed()) { s.held = null; now(a, b, m); } else s.held = [a, b, m];
+    };
+    s.release = function () {
+      var h = s.held;
+      if (!h || !boxed()) return;
+      s.held = null;
+      if (drawn || (h[0] && h[1])) now(h[0], h[1], h[2]);
+    };
+  }
   function start(c) {
     var s = c.t, cs = getComputedStyle(root);
     var term = s.term = new window.Terminal({
@@ -410,6 +439,7 @@
     s.fit = new window.FitAddon.FitAddon();
     term.loadAddon(s.fit);
     term.open(s.host);
+    holdSelection(s);
     measure(term);
     if (s.exited) term.options.disableStdin = true;
     // In the maximize sheet Esc returns the terminal to its card (the
@@ -440,7 +470,10 @@
       foldTimer = setTimeout(function () { foldTimer = 0; foldLine(c); }, 100);
     });
     if (window.ResizeObserver) {
-      s.ro = new ResizeObserver(function () { later(c); });
+      s.ro = new ResizeObserver(function () {
+        if (s.release) s.release();
+        later(c);
+      });
       s.ro.observe(s.host);
     }
     fit(c);

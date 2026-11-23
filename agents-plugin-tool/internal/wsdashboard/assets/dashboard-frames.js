@@ -228,6 +228,8 @@
       var t = e.target, was = t.wbSize, box = e.borderBoxSize && e.borderBoxSize[0], h = box ? box.blockSize : e.contentRect.height;
       if (!t.isConnected) { topicRO.unobserve(t); return; }
       t.wbSize = h;
+      // A board card resizes in place: the current card's anchoring and key own placement.
+      if (inBoard(t) && region("board") && region("board").contains(t)) return;
       var banded = topicSettling(t);
       if (!banded || !was || !h || Math.abs(h - was) < 0.5 || t.hasAttribute("data-max")) return;
       var s = topicScroller(t);
@@ -302,7 +304,9 @@
     function reveal() {
       if (unfoldTopic) unfoldTopic(target);
       for (var p = target; p && inBoard(p); p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
-      var w = window.wbHistory;
+      var w = window.wbHistory, anchor = window.WsBoardAnchor, card = anchor && anchor.owner(target);
+      // A board target snaps to its containing card first, then scrolls inside it.
+      if (card) { anchor.select(card, { smooth: true }); if (target === card) return; }
       if (!loaded && w && w.navigate) w.navigate(target);
       else if (!loaded && window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
       // History targets were anchored by the loader; never scroll their clip.

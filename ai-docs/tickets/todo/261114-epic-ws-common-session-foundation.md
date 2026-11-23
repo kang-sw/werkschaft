@@ -36,10 +36,10 @@ Delivery is four stages:
      idea-only future consolidation, not a prerequisite.
    - Move plugin/extension features into the daemon: MCP plus injection,
      playbooks instead of skills, `prompts/list` slash commands.
-   - The Claude CLI plugin is frozen; the Pi extension is retired after hosted
-     parity, each removal separately approved. Pi as a whole (extension and
-     hosted backend) is frozen and retires through the builtin harness's
-     parity and A/B gate (owner (5002)=a, 2026-11-22).
+   - The Claude CLI plugin is frozen. Pi retires independently via
+     `261123-chore-ws-retire-pi-harness` (owner, 2026-11-23), superseding
+     the parity and A/B gate (owner (5002)=a, 2026-11-22). Werk replaces
+     it later without an A/B gate.
 3. **Tier-1 harnesses.** Codex, then Antigravity (02). Each fills the catalog
    values per `harness@version` range and implements its backend. Then our own
    builtin Go harness on a shared provider-auth layer, replacing Pi (owner
@@ -65,7 +65,8 @@ unchosen and may be T2; the owner must settle it separately. Existing session
 keys and historical state are preserved. Removing the Pi extension or any CLI-tier
 feature is not authorized by this map; each concrete removal needs the owner's
 explicit approval (04). Exception: the owner approved retiring Pi (extension and
-backend) behind the builtin harness's Phase 3 gate ((5002)=a, 2026-11-22). The
+backend) independently via `261123-chore-ws-retire-pi-harness` (owner,
+  2026-11-23), superseding the Phase 3 gate ((5002)=a, 2026-11-22). The
 builtin harness is one backend under the common interface, not a replacement
 universal runtime.
 
@@ -139,8 +140,9 @@ Stage 3 (tier-1 harnesses; each prerequisite: the catalog ticket):
   (decision, image, video) use it too (owner (5002)=a, 2026-11-22).
 - `261122-feat-ws-builtin-agent-harness` - our own Go harness, a backend that
   fills the catalog completely, beneath the unchanged daemon application layer,
-  MCP tools, and prompt assembly; worker, then lead; its Phase 3 parity and A/B
-  gate retires Pi. Blocked by `261118-refactor-ws-harness-name-branches`.
+  MCP tools, and prompt assembly; worker, then lead; Pi retires independently via
+  `261123-chore-ws-retire-pi-harness` (owner, 2026-11-23); werk replaces
+  it later without an A/B gate. Blocked by `261118-refactor-ws-harness-name-branches`.
   Supersedes the dropped `261120-feat-ws-pi-common-interface-rebuild` and
   `261118-research-ws-pi-hosted-connector`.
 - `261122-feat-ws-web-tools` - `ws/web.*` for the builtin harness only
@@ -172,7 +174,7 @@ Evidence child:
 
 - `261116-research-ws-hosted-session-first-tier` - the hosted-first research;
   its Open Questions remain open there (injection routing table budget, curated
-  slash list, `prompts/list` probe, Pi extension retirement parity criteria, the
+  slash list, `prompts/list` probe, the
   hosted-lead Claude mod, per-tier spawn idiom routing).
 
 Dropped (history only): `261114-research-ws-clerk-session-role` (research
@@ -203,10 +205,10 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
   the reference implementation (25). Common interface work targets hosted
   sessions.
 - **Non-hosted tiers (04)=a.** The Claude CLI plugin is frozen: keep current
-  features, add none. The Pi extension is retired after hosted parity, per-item
-  approval; Pi remains only as a hosted lead/worker harness. Superseded for Pi
-  by (5002)=a, 2026-11-22: Pi is frozen and retires entirely behind the builtin
-  harness gate.
+  features, add none. Pi retires independently via
+  `261123-chore-ws-retire-pi-harness` (owner, 2026-11-23), superseding
+  the hosted-parity and builtin-harness gate ((5002)=a, 2026-11-22). Werk
+  replaces it later without an A/B gate.
 - **Harness order (25).** Implementation and verification order is Claude, Codex,
   Antigravity, Pi. Pi is driven only with GPT models, so the Pi hosted backend is
   a port of the Codex adapter and catalog profile, not a separate Pi-first design.
@@ -233,8 +235,8 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
 - **MCP transport (24).** Hosted sessions connect by HTTP direct JSON-RPC with a
   per-session token (loopback only, re-issued per process start); no intermediary
   program on the hosted path. The CLI tier keeps the stdio launcher (T0,
-  additive). Whether Pi supports HTTP MCP natively without the extension is
-  verified first, because the Pi extension retirement premise depends on it.
+  additive). Pi retires per `261123-chore-ws-retire-pi-harness`; its
+  retirement does not depend on native HTTP MCP support.
 - **Delegation is always `ws/agent.*` (06)=a, (09)=a, (10)=c, (11), (12).**
   `agent.spawn` / `agent.interrupt` / `agent.list` / `agent.tiers`; no `wait`,
   `transcript` or `agent.send`; a single `mailbox.send`. Child
@@ -292,4 +294,5 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
 - Dropped: the owner drops the direction.
 - Deferred: stage-4 extensions and unscheduled planned children remain proposals,
   not implicit implementation approval or whole-epic prerequisites; removal of
-  the Pi extension or any CLI-tier feature stays per-item.
+  any CLI-tier feature stays per-item; Pi retires per
+  `261123-chore-ws-retire-pi-harness`.

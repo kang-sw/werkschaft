@@ -7,13 +7,23 @@ const hudSrc = readAssetSource('wsdashboard', 'dashboard-hud.js');
 const compSrc = readAssetSource('wsdashboard', 'dashboard.js');
 const code = phaseSrc + '\n' + hudSrc + '\n' + compSrc.slice(compSrc.indexOf('  // --- agents island'), compSrc.indexOf('  function interruptTurn()'));
 assert(code.includes('function hudProject(') && code.includes('function agProject()'));
+// The contract runs twice: without a ResizeObserver (every update measures, the
+// fallback) and with one (an update reads no layout; the observer measures).
+function suite(withRO) {
+const reads = { n: 0 }, watched = [];
+class FakeResizeObserver {
+  constructor(cb) { this.cb = cb; fakeRO.push(this); }
+  observe(el) { watched.push(el); }
+}
+const fakeRO = [];
 
 function node(tag = 'div', cls = '', text = '') {
   const n = {
     tagName: tag.toUpperCase(), className: cls, attrs: {}, children: [], listeners: {},
     style: { setProperty(k, v) { this[k] = v; } }, hidden: false, open: false,
-    offsetWidth: 140, offsetHeight: 56, childNodes: [], parentNode: null, nextElementSibling: null,
-    getBoundingClientRect() { return { left: 100, top: 20, right: 240, bottom: 76, width: 140, height: 56 }; },
+    get offsetWidth() { reads.n++; return 140; }, get offsetHeight() { reads.n++; return 56; }, childNodes: [], parentNode: null, nextElementSibling: null,
+    getClientRects() { reads.n++; return [1]; },
+    getBoundingClientRect() { reads.n++; return { left: 100, top: 20, right: 240, bottom: 76, width: 140, height: 56 }; },
     setAttribute(k, v) { this.attrs[k] = String(v); },
     removeAttribute(k) { delete this.attrs[k]; },
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : ''; },
@@ -101,7 +111,7 @@ const compact = node('div', 'agcompact'), idle = node('div', 'agidle'), badge = 
 const hudCanvas = node('div', 'hud-canvas'), hudLines = node('svg', 'hud-lines'), hudRoots = node('div', 'hud-roots');
 const tooltip = node('div', 'hud-tooltip'), convo = node('div', 'convo');
 tooltip.hidden = true; pop.hidden = true;
-convo.getBoundingClientRect = () => ({ left: 0, top: 0, right: 640, bottom: 480, width: 640, height: 480 });
+convo.getBoundingClientRect = () => { reads.n++; return { left: 0, top: 0, right: 640, bottom: 480, width: 640, height: 480 }; };
 hudCanvas.appendChild(hudLines); hudCanvas.appendChild(hudRoots);
 compact.appendChild(hudCanvas);
 
@@ -144,7 +154,8 @@ const ctx = vm.createContext({
   go(href) { navigated.push(href); },
   syncBadge() { badge.synced = (badge.synced || 0) + 1; },
   save() {}, load() { return '1'; },
-  requestAnimationFrame(fn) { fn(); return 1; }, setTimeout(fn) { fn(); }, Date
+  requestAnimationFrame(fn) { fn(); return 1; }, setTimeout(fn) { fn(); }, Date,
+  ...(withRO ? { ResizeObserver: FakeResizeObserver } : {})
 });
 vm.runInContext(code, ctx);
 
@@ -204,6 +215,28 @@ assert.equal(styleWrites, 0, 'unchanged compact agSwapped does not mutate island
 assert.equal(hudRoots.lastElementChild, foldedBtn, 'unchanged compact tick preserves .hud-folded identity');
 assert.equal(island.attrs['data-sizing'], undefined);
 island.style = { setProperty(k, v) { this[k] = v; }, width: origW, height: origH, transition: origT, '--ag-cw': origW, '--ag-ch': origH };
+if (withRO) {
+  // A routine update reads no layout (the sizes come from the observer's
+  // cache, the connectors redraw only on a change), and the observer's callback
+  // is what re-measures.
+  assert(watched.includes(hudCanvas) && watched.includes(convo), 'the observer watches the HUD canvas and the column');
+  reads.n = 0;
+  ctx.agSwapped(); ctx.agSwapped(); ctx.agSwapped();
+  assert.equal(reads.n, 0, 'unchanged compact updates force no layout');
+  const ro = fakeRO.find(o => o.cb.name === 'agObserved'), widthBefore = island.style.width;
+  hudCanvas.getBoundingClientRect = () => ({ left: 100, top: 20, right: 300, bottom: 76, width: 200, height: 56 });
+  ctx.agSwapped();
+  assert.equal(island.style.width, widthBefore, 'an update alone does not re-measure');
+  ro.cb([{ target: hudCanvas }]);
+  assert.equal(island.style['--ag-cw'], '200px', 'the observer callback measures the new canvas');
+  assert.equal(island.style.width, '200px');
+  hudCanvas.getBoundingClientRect = () => ({ left: 100, top: 20, right: 240, bottom: 76, width: 140, height: 56 });
+  ro.cb([{ target: hudCanvas }]);
+  assert.equal(island.style.width, '140px');
+  reads.n = 0;
+  ro.cb([{ target: pop }]);
+  assert.equal(reads.n, 0, 'a size the compact mode does not depend on is ignored');
+}
 const buttons = [];
 (function walk(el) { if (el.classList?.contains('hud-node')) buttons.push(el); (el.children || []).forEach(walk); })(hudRoots);
 assert.equal(buttons.length, 4);
@@ -351,8 +384,20 @@ assert.notEqual(oldRing.style.animationDelay, oldDelay);
 assert.equal(buttons[1].querySelector('.hud-badge').className, 'hud-badge fail');
 assert.equal(buttons[2].parentNode.querySelector('.hud-overflow'), null);
 const toolDelay = oldRing.style.animationDelay;
+const toolStamp = oldRing.wsAnimationStamp;
 ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, toolDelay, 'running ring is not restamped on an unchanged tick');
+hudPayload.roots[0].state = 'thinking';
+ctx.agSwapped();
+assert.equal(buttons[0].getAttribute('data-state'), 'thinking');
+assert.equal(oldRing.wsAnimationStamp, toolStamp, 'tool -> thinking keeps the shared spin stamp');
+assert.equal(oldRing.style.animationDelay, toolDelay, 'tool -> thinking preserves animationDelay without phase jump');
+hudPayload.roots[0].state = 'tool';
+ctx.agSwapped();
+assert.equal(oldRing.style.animationDelay, toolDelay, 'thinking -> tool preserves animationDelay without phase jump');
+hudPayload.roots[0].state = 'holding';
+ctx.agSwapped();
+assert.notEqual(oldRing.style.animationDelay, toolDelay, 'entering holding from spinning restamps');
 hudPayload.roots[0].state = 'idle';
 ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, '', 'leaving an animated state clears its delay');
@@ -374,7 +419,7 @@ assert.equal(hudRoots.children[0].firstElementChild.firstElementChild, buttons[3
 assert.equal(buttons[3].querySelector('.hud-ring'), movedRing);
 assert.notEqual(movedRing.style.animationDelay, movedDelay, 'moved ring is restamped');
 assert.equal(movedRing.style.animationDelay,
-  (-((700 + ctx.animationPhaseOffset('a4', 1150)) % 1150)).toFixed(1) + 'ms');
+  (-((700 + ctx.animationPhaseOffset('a4', 1000)) % 1000)).toFixed(1) + 'ms');
 assert.equal(oldRing.style.animationDelay, stableDelay, 'unmoved sibling is not restamped');
 
 // Native rows: a dashed native node with its lifecycle in the tooltip; a
@@ -439,4 +484,7 @@ function pill(agent, inSource) { return { closest(s) { return s === '.ag-source'
 const tctx = vm.createContext({ tlRoot: name => name === 'tree' ? { querySelector: () => ({}) } : null, q: () => [pill({}, false), pill(null, true)] });
 vm.runInContext(tlPerms[0], tctx);
 assert.equal(tctx.tlPerms(), 1);
+}
+suite(false);
+suite(true);
 console.log('agents island contract ok');

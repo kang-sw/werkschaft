@@ -71,16 +71,17 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.equal(tok3, '+1.7k', 'c3 in req-2 -> req-3 gets token delta');
     assert.equal(att1, '+2', 'c1 shows attached event count (+2)');
 
-    // Verify fold (+2 more) and uncapped/no-ID static row inside .au-fold
-    const moreBtn = frame.locator('.au-tools .au-more');
-    assert.equal(await frame.locator('.au-row[data-call="c4"]').isVisible(), false);
-    await moreBtn.click();
+    // No group frame: no header line, no fold or "+N more" button. Every call
+    // row (ID'd or not) is rendered visible from the start.
+    assert.equal(await frame.locator('.au-thead, .au-more, .au-fold').count(), 0, 'tool-call frame shell is gone');
     assert.equal(await frame.locator('.au-row[data-call="c4"]').isVisible(), true);
     assert.equal(await frame.locator('.au-tools .au-static').isVisible(), true);
 
     // Click c1 to open floating audit window + verify wide darkroom & shell dim
     console.log('STEP 3: open c1');
     await frame.locator('.au-row[data-call="c1"]').click();
+    assert.equal(await frame.locator('.au-win').count(), 0, 'summary expands without opening the inspector');
+    await frame.locator('.au-row[data-call="c1"]').locator('xpath=..').locator('.au-open-call').click();
     const win = frame.locator('.au-win').first();
     await win.waitFor();
     await win.locator('.au-code').waitFor();
@@ -255,6 +256,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await win.locator('.au-sinp').click();
     await page.keyboard.press('Control+f');
     await win.locator('.au-sinp').fill('needle');
+    // The count is the server's spans, asked for after the debounce.
+    await frame.waitForFunction(() => /^\d+\//.test(document.querySelector('.au-win .au-scnt')?.textContent || ''));
     const scnt = await win.locator('.au-scnt').textContent();
     assert.ok(scnt.startsWith('1/'), `search match count shown: ${scnt}`);
     await page.keyboard.press('Enter');
@@ -278,8 +281,12 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.equal(await win.locator('.au-crumb:not([hidden])').count(), 0);
 
     // Next call via button + ArrowRight / ArrowLeft, plus c3 tool_result failed pill & output, plus kind="other" Raw tab
+    // Next/prev step through visible rows inside expanded owning disclosures.
+    await frame.waitForSelector('.au-call-details .au-hid[data-event-id="e-hook-1"]', { state: 'attached' });
+    assert.equal(await frame.locator('.au-hid[data-event-id="e-hook-1"]').isVisible(), true, 'hook is inside the expanded call');
+    await frame.evaluate(() => { for (const s of document.querySelectorAll('.au-call-details:not([open]) > summary, .turnline:not([open]) > summary, .boundary-badge:not([open]) > summary')) s.click(); });
     await win.locator('.au-next').click();
-    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"].au-sel');
+    await frame.waitForSelector('.au-call-details .au-hid[data-event-id="e-hook-1"].au-sel');
     await win.locator('.au-next').click();
     await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep'));
     await win.locator('.au-whd').click();
@@ -300,7 +307,7 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
 
     // Empty state on c_empty (stepping past c4's attached e-call-4 hidden row first)
     await win.locator('.au-next').click();
-    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-call-4"].au-sel');
+    await frame.waitForSelector('.au-call-details .au-hid[data-event-id="e-call-4"].au-sel');
     await win.locator('.au-next').click();
     await frame.waitForFunction(() => {
       const st = document.querySelector('.au-win .au-state');
@@ -311,7 +318,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     // 410 / 404 / 503 error states via route interception
     for (const [status, want] of [[410, 'Cursor expired'], [404, 'Event not retained'], [503, 'Audit store unavailable']]) {
       await page.route('**/s/livesession/audit/events?call=*', route => route.fulfill({ status, body: 'err' }), { times: 1 });
-      await frame.locator('.au-row[data-call="c1"]').click();
+      await frame.locator('.au-row[data-call="c1"]').evaluate(el => { el.closest('details').open = true; });
+      await frame.locator('.au-row[data-call="c1"]').locator('xpath=..').locator('.au-open-call').click();
       await frame.waitForFunction((text) => document.querySelector('.au-win .au-state')?.textContent.includes(text), want);
     }
     await page.unrouteAll({ behavior: 'ignoreErrors' });
@@ -320,7 +328,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await win.locator('.au-close').click();
     await frame.waitForFunction(() => document.querySelectorAll('.au-win').length === 0);
     await page.route('**/s/livesession/audit/event/e-res-2*', route => route.fulfill({ status: 404, body: 'missing' }), { times: 1 });
-    await frame.locator('.au-row[data-call="c2"]').click();
+    await frame.locator('.au-row[data-call="c2"]').evaluate(el => { el.closest('details').open = true; });
+    await frame.locator('.au-row[data-call="c2"]').locator('xpath=..').locator('.au-open-call').click();
     await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep') && document.querySelector('.au-win .au-code')?.textContent.includes('sessionSecret'));
     await win.locator('[data-au-tab="out"]').click();
     await frame.waitForFunction(() => document.querySelector('.au-win .au-state')?.textContent.includes('Event not retained'));
@@ -328,7 +337,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     assert.ok((await win.locator('.au-code').textContent()).includes('sessionSecret'), 'Input tab stays intact when result envelope returns 404');
 
     // Close unpinned via Escape (must stay inside session, clear shell data-fdim)
-    await frame.locator('.au-row[data-call="c1"]').click();
+    await frame.locator('.au-row[data-call="c1"]').evaluate(el => { el.closest('details').open = true; });
+    await frame.locator('.au-row[data-call="c1"]').locator('xpath=..').locator('.au-open-call').click();
     await win.locator('.au-code').waitFor();
     await win.focus();
     await page.keyboard.press('Escape');
@@ -338,7 +348,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     // Pin cap 4 + 5th pinned window replaces oldest + shows WsToast
     for (let i = 0; i < 5; i++) {
       const cid = i % 2 === 0 ? 'c1' : 'c2';
-      await frame.locator(`.au-row[data-call="${cid}"]`).click();
+      await frame.locator(`.au-row[data-call="${cid}"]`).evaluate(el => { el.closest('details').open = true; });
+      await frame.locator(`.au-open-call[data-call="${cid}"]`).click();
       const wins = frame.locator('.au-win');
       await wins.last().locator('.au-pin').click();
     }
@@ -366,7 +377,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await mPage.goto(base + '/s/livesession');
     const mFrame = await (await mPage.locator('iframe.sframe.on').elementHandle()).contentFrame();
     await mFrame.waitForSelector('.au-row[data-call="c1"]');
-    await mFrame.locator('.au-row[data-call="c1"]').click();
+    await mFrame.locator('.au-row[data-call="c1"]').evaluate(el => { el.closest('details').open = true; });
+    await mFrame.locator('.au-row[data-call="c1"]').locator('xpath=..').locator('.au-open-call').click();
     const mWin = mFrame.locator('.au-win').first();
     await mWin.locator('.au-code').waitFor();
     assert.equal(await mFrame.locator('.au-scrim').isVisible(), false, 'narrow sheet does not activate wide darkroom');
