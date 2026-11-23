@@ -22,15 +22,16 @@ function slice(src, from, to) {
   return src.slice(a, b);
 }
 const pickers = read('dashboard-composer-pickers.js');
-const css = [WB, read('dashboard.css'), read('dashboard-conversation.css')].join('\n');
-const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;padding:24px;width:760px">
-<div id="composer" class="composer" data-cexec="1"><div class="cimgs" id="cimgs"></div><div class="cchips" id="cchips"></div><div class="crow"><div class="cfield"><div class="chl" id="chl"></div><textarea id="ctext" rows="1" placeholder="x"></textarea></div><button type="button" class="csend" id="csend">s</button></div><div class="cfoot"></div></div>
+const css = [WB, read('dashboard.css'), read('dashboard-conversation.css'), read('dashboard-exec-hud.css'), read('dashboard-rail.css')].join('\n');
+const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;padding:340px 24px 24px;width:760px">
+<div id="composer" class="composer" data-cexec="1"><div class="cbadges"><button type="button" class="ibadge" id="ibadge" hidden><span class="istop"></span><span class="ilabel">Stop</span></button><span class="sbwrap"><button type="button" class="sbadge" id="sbadge" hidden><span class="spin"></span><span class="slabel"></span><span class="sword">running</span></button><span class="bgbadge" id="bgbadge" hidden><span class="blabel"></span></span><span class="bgbadge" id="monbadge" hidden><span class="blabel"></span></span></span></div><div class="cimgs" id="cimgs"></div><div class="cchips" id="cchips"></div><div class="crow"><div class="cfield"><div class="chl" id="chl"></div><textarea id="ctext" rows="1" placeholder="x"></textarea></div><button type="button" class="csend" id="csend">s</button></div><div class="cfoot"></div></div>
 <button id="after" type="button">after</button></body></html>`;
 const shim = `
-var doc = document, $ = function (id) { return document.getElementById(id); }, rid = "fx";
+var doc = document, $ = function (id) { return document.getElementById(id); }, q = function (s, r) { return Array.prototype.slice.call((r || doc).querySelectorAll(s)); }, rid = "fx";
 var T = ${JSON.stringify(en)};
 function wsT(k) { var s = T[k] || k; for (var i = 1; i < arguments.length; i++) s = s.replace("{" + (i - 1) + "}", arguments[i]); return s; }
 var composer = $("composer"), ctext = $("ctext"), inputMode = "enter", mention = null, slash = null, cmdSel = null;
+var xhPeekEl = null; function xhPeekOpen() { return false; } function xhPeekId() { return ""; } function xhOpenPeek() {} function xhClosePeek() {} function xhAskStop() {} function xhPeekSync() {} function xhPeekJobsChanged() {} function xhStopSettle() {} function xhPeekDestroy() {}
 if (window.WsCapsules) window.WsCapsules.attach(ctext);
 function grow() {} function clearMentions() {} function saveDraft() {} function queueDraft() {} function noteWarn(m) { window.__warn = m; }
 function copyText() {} function syncMarkers() {} function trackMentions() {} function syncChips() {} function followImgs() {} function inBoard() { return false; } function uncommand() {}
@@ -77,16 +78,18 @@ window.fetch = function (url, o) {
     return res({}, 404);
   }
   if (/files\\?/.test(u)) return res({ items: [{ path: "src/a.go", name: "a.go", dir: "src" }] });
+  if (/exec\\/jobs$/.test(u) && window.__jobs) return res({ rev: 1, jobs: window.__jobs });
   if (/user-commands$/.test(u)) return res(window.__slots);
   return res({}, 404);
 };`;
 
 // pre runs in the page before the composer scripts: a seeded history, or a list-read hook.
-async function open(t, pre) {
+async function open(t, pre, opts) {
   const { chromium } = require(mod);
   const browser = await chromium.launch({ headless: true, ...(process.env.WS_PLAYWRIGHT_EXECUTABLE ? { executablePath: process.env.WS_PLAYWRIGHT_EXECUTABLE } : {}) });
   t.after(() => browser.close());
-  const page = await (await browser.newContext({ viewport: { width: 860, height: 900 }, reducedMotion: 'reduce', colorScheme: 'dark' })).newPage();
+  const ctx = await browser.newContext({ viewport: { width: 860, height: 900 }, reducedMotion: 'reduce', colorScheme: (opts && opts.colorScheme) || 'dark' });
+  const page = await ctx.newPage();
   const errs = [];
   page.on('pageerror', e => errs.push(e.message));
   // A real origin, so sessionStorage works.
@@ -96,12 +99,15 @@ async function open(t, pre) {
   await page.addScriptTag({ content: read('mention.js') });
   await page.addScriptTag({ content: route });
   if (pre) await page.evaluate(pre);
-  const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
-  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { slashToken: slashToken, dropToken: function () { cexecToken = ""; } };})();' });
+  const scriptNames = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js'];
+  if (opts && opts.hud) scriptNames.push('dashboard-exec-hud.js');
+  scriptNames.push('dashboard-composer-keyboard.js');
+  const files = scriptNames.map(read).join('\n');
+  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { slashToken: slashToken, dropToken: function () { cexecToken = ""; }, rootTag: bangRootTag, histTag: bangHistTag, setInputMode: function (m) { inputMode = m; if (typeof bangHistSyncMode === "function") bangHistSyncMode(); }, ucmdApply: function (l) { ucmdApply(l, false); }, xhDismiss: function (id) { if (typeof xhDismissed !== "undefined") { xhDismissed[id] = true; xhSaveDismissed(); xhRender(true); } } };\nif (typeof xhGroupEl === "function" && typeof execWake === "function") execWake(1);})();' });
   const ed = page.locator('.cfield [contenteditable]').first();
   const type = async text => { await ed.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Delete'); await page.keyboard.insertText(text); };
   const state = () => page.evaluate(() => ({ v: ctext.value, bang: composer.hasAttribute('data-bang'), hl: CSS.highlights.has('ws-bang'), sel: [ctext.selectionStart, ctext.selectionEnd] }));
-  return { page, ed, type, state, errs };
+  return { ctx, page, ed, type, state, errs };
 }
 
 test('shell mode flag follows the first character, paints the bang, and keeps 0px height growth', { skip }, async t => {
@@ -372,4 +378,337 @@ window.__hook = function (n) { if (n === 1) return Promise.resolve(${ok(listOld)
   await page.waitForFunction(() => window.__admitted.length === 1);
   assert.equal(await page.evaluate(() => window.__gets), 1, 'primed token was reused for fresh submission');
   assert.deepEqual(errs, []);
+});
+
+function fnv1a32Base36(s) {
+  let h = 0x811c9dc5;
+  for (const b of Buffer.from(s, 'utf8')) {
+    h ^= b;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
+test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, and >2KB skip', { skip }, async t => {
+  const { page, type, errs } = await open(t, `
+    window.__slots = { rev: "1.1.", token: "tok", commands: [] };
+  `);
+  // Unknown binding: #hbadge stays hidden even if data exists elsewhere.
+  assert.equal(await page.evaluate(() => document.getElementById('hbadge').hidden), true);
+  assert.equal(await page.evaluate(() => window.__t.histTag()), '');
+
+  // Verify FNV-1a rootTag parity on POSIX and Windows paths.
+  const tagChecks = await page.evaluate(() => ({
+    posix: window.__t.rootTag('/Users/dev/project/../repo/'),
+    win: window.__t.rootTag('D:/Workspace/Repos/devenv/'),
+    winLower: window.__t.rootTag('d:\\Workspace\\Repos\\devenv'),
+    winUpper: window.__t.rootTag('D:\\Workspace\\Repos\\devenv')
+  }));
+  assert.equal(tagChecks.posix, fnv1a32Base36('/Users/dev/repo'));
+  assert.equal(tagChecks.win, fnv1a32Base36('D:\\Workspace\\Repos\\devenv'));
+  assert.equal(tagChecks.winUpper, tagChecks.win);
+  assert.notEqual(tagChecks.winLower, tagChecks.winUpper, 'Windows drive letter case is preserved as in Go filepath.Clean');
+
+  // Bind worktree to tagChecks.win, seed 200 entries, admit a verified repeat and a >2KB command.
+  const wtPath = 'D:\\Workspace\\Repos\\devenv';
+  const wtTag = fnv1a32Base36(wtPath);
+  await page.evaluate((tag) => {
+    const now = Date.now();
+    const rows = [];
+    for (let i = 0; i < 200; i++) rows.push({ cmd: 'cmd-' + i, ts: now - (i + 1) * 60000, exit: i % 2 });
+    localStorage.setItem('ws.cexec.history.' + tag, JSON.stringify({ v: 1, clearedAt: 0, deleted: {}, rows }));
+    window.__t.ucmdApply({ rev: '1.2.' + tag, token: 'tok', commands: [] });
+  }, wtTag);
+
+  assert.equal(await page.evaluate(() => document.getElementById('hbadge').hidden), false);
+
+  // Repeat cmd-50 through cexec + verified /exec/jobs -> promotes to top, keeps 200 cap.
+  await page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_rep', tool: 'bash', command: 'cmd-50', cwd, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 's1', command: 'cmd-50', exec_id: 'exec_rep', origin: 'cexec' } }));
+  }, wtPath);
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return Array.isArray(s.rows) && s.rows[0] && s.rows[0].cmd === 'cmd-50' && s.rows[0].exit === 0;
+  }, wtTag);
+  const afterRepeat = await page.evaluate((tag) => JSON.parse(localStorage.getItem('ws.cexec.history.' + tag)).rows, wtTag);
+  assert.equal(afterRepeat.length, 200);
+  assert.equal(afterRepeat.filter(r => r.cmd === 'cmd-50').length, 1);
+
+  // New command pushes oldest (cmd-199) out.
+  await page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_new', tool: 'bash', command: 'brand-new', cwd, state: 'exited', exit_code: 2, started_at: Date.now(), ended_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 's2', command: 'brand-new', exec_id: 'exec_new', origin: 'cexec' } }));
+  }, wtPath);
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return s.rows && s.rows[0] && s.rows[0].cmd === 'brand-new';
+  }, wtTag);
+  const afterCap = await page.evaluate((tag) => JSON.parse(localStorage.getItem('ws.cexec.history.' + tag)).rows, wtTag);
+  assert.equal(afterCap.length, 200);
+  assert.equal(afterCap.some(r => r.cmd === 'cmd-199'), false);
+
+  // >2KB UTF-8 command still runs in composer without persisting to localStorage.
+  const hugeCmd = 'echo ' + 'a'.repeat(2100);
+  await page.evaluate((cmd) => {
+    window.__jobs = [{ id: 'exec_done1', tool: 'bash', command: cmd, cwd: 'D:\\Workspace\\Repos\\devenv', state: 'exited', exit_code: 0 }];
+  }, hugeCmd);
+  await type('!' + hugeCmd);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction((cmd) => window.__admitted.some(a => a.command === cmd), hugeCmd);
+  const hugeStored = await page.evaluate(({ tag, cmd }) => JSON.parse(localStorage.getItem('ws.cexec.history.' + tag)).rows.some(r => r.cmd === cmd), { tag: wtTag, cmd: hugeCmd });
+  assert.equal(hugeStored, false, '>2KB command is omitted from localStorage while still running');
+  assert.deepEqual(errs, []);
+});
+
+test('origin verification, ucmd ignore, HUD fade/dismiss resilience, and worktree isolation', { skip }, async t => {
+  const cwdA = '/worktrees/alpha';
+  const cwdB = '/worktrees/beta';
+  const tagA = fnv1a32Base36(cwdA);
+  const tagB = fnv1a32Base36(cwdB);
+  const { page, errs } = await open(t, `
+    window.__slots = { rev: "1.1.${tagA}", token: "tok", commands: [] };
+  `, { hud: true });
+  await page.waitForFunction(() => document.getElementById('hbadge'));
+
+  // 1) origin === 'ucmd' must NOT record.
+  // 2) wrong cwd must NOT record.
+  await page.evaluate(({ cwdB }) => {
+    window.__jobs = [
+      { id: 'exec_uc', tool: 'bash', command: 'make test', cwd: '/worktrees/alpha', state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() },
+      { id: 'exec_wrong', tool: 'bash', command: 'wrong-wt', cwd: cwdB, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() },
+      { id: 'exec_run', tool: 'bash', command: 'npm test', cwd: '/worktrees/alpha', state: 'running', origin: 'user', started_at: Date.now() }
+    ];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'su', command: 'make test', exec_id: 'exec_uc', origin: 'ucmd' } }));
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sw', command: 'wrong-wt', exec_id: 'exec_wrong', origin: 'cexec' } }));
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sr', command: 'npm test', exec_id: 'exec_run', origin: 'cexec' } }));
+  }, { cwdB });
+
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return Array.isArray(s.rows) && s.rows.some(r => r.cmd === 'npm test');
+  }, tagA);
+
+  let rowsA = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tagA);
+  assert.equal(rowsA.some(r => r.cmd === 'make test'), false, 'ucmd ignored');
+  assert.equal(rowsA.some(r => r.cmd === 'wrong-wt'), false, 'mismatched cwd ignored');
+  assert.equal(rowsA[0].exit, undefined, 'running job has no exit yet');
+
+  // Dismiss HUD chip AND switch active worktree to B while exec_run is still tracking!
+  await page.evaluate(({ tagB }) => {
+    window.__t.xhDismiss('exec_run');
+    window.__t.ucmdApply({ rev: '1.2.' + tagB, token: 'tok', commands: [] });
+    window.__jobs = [{ id: 'exec_run', tool: 'bash', command: 'npm test', cwd: '/worktrees/alpha', state: 'exited', exit_code: 1, started_at: Date.now() - 1000, ended_at: Date.now() }];
+  }, { tagB });
+
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return Array.isArray(s.rows) && s.rows[0] && s.rows[0].exit === 1;
+  }, tagA);
+  assert.equal(await page.evaluate((t) => localStorage.getItem('ws.cexec.history.' + t), tagB), null, 'worktree B remained isolated');
+  assert.deepEqual(errs, []);
+});
+
+test('cross-page storage sync prevents stale page from reviving deleted or cleared entries', { skip }, async t => {
+  const cwd = '/worktrees/sync';
+  const tag = fnv1a32Base36(cwd);
+  const a = await open(t, `window.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };`);
+  const pageB = await a.ctx.newPage();
+  await pageB.route('http://fx.test/', r => r.fulfill({ contentType: 'text/html', body: html }));
+  await pageB.goto('http://fx.test/');
+  await pageB.addScriptTag({ content: read('capsules.js') });
+  await pageB.addScriptTag({ content: read('mention.js') });
+  await pageB.addScriptTag({ content: route + `\nwindow.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };` });
+  const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
+  await pageB.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { ucmdApply: function (l) { ucmdApply(l, false); } };})();' });
+
+  // Page A launches running command; Page B deletes it before exit code resolves on A.
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_x', tool: 'bash', command: 'sleep 2', cwd, state: 'running', started_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sx', command: 'sleep 2', exec_id: 'exec_x', origin: 'cexec' } }));
+  }, cwd);
+  await a.page.waitForFunction((t) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}');
+    return s.rows && s.rows.some(r => r.cmd === 'sleep 2');
+  }, tag);
+
+  // Page B deletes via popup UI.
+  await pageB.waitForFunction(() => !document.getElementById('hbadge').hidden);
+  await pageB.click('#hbadge');
+  await pageB.click('.chist-del');
+  await pageB.waitForFunction((t) => (JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows || []).length === 0, tag);
+
+  // Now Page A sees exited job -> must NOT revive 'sleep 2'!
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_x', tool: 'bash', command: 'sleep 2', cwd, state: 'exited', exit_code: 0, started_at: Date.now() - 1000, ended_at: Date.now() }];
+  }, cwd);
+  await a.page.waitForTimeout(1000);
+  const rowsAfter = await a.page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tag);
+  assert.equal(rowsAfter.length, 0, 'deleted row is not revived by in-flight poll');
+  assert.deepEqual(a.errs, []);
+});
+
+test('popup states, fuzzy highlight, keyed reuse, keyboard nav, repeat guard, trigger badge & HUD layout', { skip }, async t => {
+  const cwd = '/worktrees/ui';
+  const tag = fnv1a32Base36(cwd);
+  const now = Date.now();
+  const seed = [
+    { cmd: 'git status -sb', ts: now - 30000, exit: 0 },
+    { cmd: 'go test ./internal/wsdashboard/...', ts: now - 5 * 60000, exit: 1 },
+    { cmd: 'npm run build', ts: now - 2 * 3600000, exit: 0 },
+    { cmd: 'git diff --stat', ts: now - 3 * 3600000 }
+  ];
+  const { page, type, errs } = await open(t, `
+    window.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };
+    window.__jobs = [{ id: 'j_hud', tool: 'bash', command: 'cargo check', cwd: '${cwd}', state: 'running', origin: 'agent', started_at: ${now - 4000} }];
+    localStorage.setItem('ws.cexec.history.${tag}', ${JSON.stringify(JSON.stringify({ v: 1, clearedAt: 0, deleted: {}, rows: seed }))});
+  `, { hud: true });
+
+  await page.waitForSelector('.xgroup .xchip');
+  const h0 = await page.evaluate(() => composer.getBoundingClientRect().height);
+  const badgeRect = await page.evaluate(() => document.getElementById('hbadge').getBoundingClientRect());
+  assert.equal(Math.round(badgeRect.height), 24, '#hbadge height is 24px');
+
+  // Verify #hbadge sits beside .xgroup in .sbwrap and xhLayoutNow subtracts its width cleanly.
+  const layoutInfo = await page.evaluate(() => {
+    const wrap = document.querySelector('.sbwrap');
+    const children = Array.from(wrap.children).map(el => el.className);
+    const xg = wrap.querySelector('.xgroup').getBoundingClientRect();
+    const hb = document.getElementById('hbadge').getBoundingClientRect();
+    return { children, noOverlap: xg.right <= hb.left + 1 };
+  });
+  assert.equal(layoutInfo.children[0].includes('xgroup'), true);
+  assert.equal(layoutInfo.children[1].includes('hbadge'), true);
+  assert.equal(layoutInfo.noOverlap, true, '.xgroup does not overlap #hbadge');
+
+  // State 1: type `!` -> auto-opens popup with 0px composer height growth.
+  await type('!');
+  await page.waitForSelector('.chist:not([hidden])');
+  assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), h0, '0px height growth when popup open');
+  assert.equal(await page.locator('.chist-row').count(), 4);
+  assert.equal(await page.locator('.chist-row').first().locator('.chist-ex.ok').textContent(), '0');
+  assert.equal(await page.locator('.chist-row').nth(3).locator('.chist-ex').isVisible(), false, 'unknown exit omitted');
+
+  // Keep reference to 'git diff --stat' DOM row to check keyed patching (no full list rebuild).
+  await page.evaluate(() => { window.__rowRef = Array.from(document.querySelectorAll('.chist-row')).find(r => r.textContent.includes('git diff')); });
+
+  // State 2: fuzzy query `gd` -> matches git diff & go test / git status etc., highlights <mark>, reuses DOM row, shows N / M.
+  await type('!gd');
+  await page.waitForFunction(() => document.querySelector('.chist-count').textContent.includes('/ 4'));
+  assert.equal(await page.evaluate(() => Array.from(document.querySelectorAll('.chist-row')).some(r => r === window.__rowRef)), true, 'keyed DOM row reused across filter update');
+  assert.ok(await page.locator('.chist-row.sel .chist-cmd mark').count() >= 2, 'fuzzy characters wrapped in <mark>');
+
+  // Ctrl+R advances to next match.
+  const firstSel = await page.locator('.chist-row.sel .chist-cmd').textContent();
+  await page.keyboard.press('Control+r');
+  const secondSel = await page.locator('.chist-row.sel .chist-cmd').textContent();
+  assert.notEqual(secondSel, firstSel, 'Ctrl+R moves selection to next match');
+
+  // State 3: no match -> shows empty state + Enter hint.
+  await type('!zzzz');
+  await page.waitForSelector('.chist-empty:not([hidden])');
+  assert.ok((await page.locator('.chist-count').textContent()).startsWith('0 / 4'));
+  assert.equal(await page.locator('.chist-empty-hint').textContent(), en['js.cexec.hist.empty.enter']);
+
+  // Enter executes typed command in State 3!
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__admitted.some(a => a.command === 'zzzz'));
+
+  // Reopen with `!gs`: plain Enter picks selected row and closes popup WITHOUT executing; held repeat Enter MUST NOT execute!
+  await type('!gs');
+  await page.waitForSelector('.chist-row.sel');
+  const pickedText = await page.locator('.chist-row.sel .chist-cmd').textContent();
+  const admittedBefore = await page.evaluate(() => window.__admitted.length);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+  assert.equal(await page.evaluate(() => ctext.value), '!' + pickedText);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'Enter selection does not immediately run');
+
+  // Simulate held Enter repeat directly into contenteditable -> forwarded with repeat:true and ignored!
+  await page.evaluate(() => {
+    const ed = document.querySelector('.cfield [contenteditable]');
+    ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', repeat: true, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'held repeat Enter does not run');
+
+  // First Esc closes open popup keeping `!`; second Esc removes `!`.
+  await type('!g');
+  await page.waitForSelector('.chist:not([hidden])');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.querySelector('.chist').hidden), true);
+  assert.equal(await page.evaluate(() => ctext.value), '!g');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => ctext.value), 'g');
+
+  // mod mode: Ctrl+Enter picks without running, repeat Ctrl+Enter blocked, fresh Ctrl+Enter runs!
+  await page.evaluate(() => window.__t.setInputMode('mod'));
+  await type('!g');
+  await page.waitForSelector('.chist-row.sel');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'mod send chord selects without running');
+  await page.evaluate(() => {
+    const ed = document.querySelector('.cfield [contenteditable]');
+    ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, repeat: true, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'held repeat Ctrl+Enter does not run');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForFunction((n) => window.__admitted.length === n + 1, admittedBefore);
+
+  // Trigger badge click opens from empty input, closes on non-`!` typing, replaces field on click pick.
+  await type('hello');
+  await page.click('#hbadge');
+  await page.waitForSelector('.chist:not([hidden])');
+  await page.keyboard.insertText('x');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+  await page.click('#hbadge');
+  await page.waitForSelector('.chist-row');
+  await page.locator('.chist-row').first().click();
+  assert.equal(await page.evaluate(() => ctext.value.charAt(0)), '!');
+  assert.equal(await page.evaluate(() => document.querySelector('.chist').hidden), true, 'pick from badge stays closed');
+
+  // Two-step Clear all confirmation (expires after 3s, then deletes on confirm).
+  await type('');
+  await page.click('#hbadge');
+  await page.click('.chist-clear');
+  assert.equal(await page.locator('.chist-clear.chist-armed').count(), 1);
+  assert.equal(await page.locator('.chist-row').count(), 4, 'first click does not wipe history');
+  await page.click('.chist-clear');
+  await page.waitForFunction(() => document.getElementById('hbadge').hidden === true);
+  assert.deepEqual(errs, []);
+});
+
+test('LOOK captures for bang history states and trigger badge', { skip: skip || !process.env.WS_BANG_LOOK_SHOTS }, async t => {
+  const dir = process.env.WS_BANG_LOOK_SHOTS;
+  fs.mkdirSync(dir, { recursive: true });
+  const cwd = '/worktrees/look';
+  const tag = fnv1a32Base36(cwd);
+  const now = Date.now();
+  const seed = [
+    { cmd: 'git status -sb', ts: now - 30000, exit: 0 },
+    { cmd: 'go test ./internal/wsdashboard/...', ts: now - 4 * 60000, exit: 1 },
+    { cmd: 'git diff --stat HEAD~1', ts: now - 15 * 60000, exit: 0 },
+    { cmd: 'npm run build', ts: now - 2 * 3600000, exit: 0 }
+  ];
+  const runShots = async (scheme) => {
+    const { page, type } = await open(t, `
+      window.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };
+      window.__jobs = [{ id: 'j_hud', tool: 'bash', command: 'go test', cwd: '${cwd}', state: 'running', origin: 'user', started_at: ${now - 4000} }];
+      localStorage.setItem('ws.cexec.history.${tag}', ${JSON.stringify(JSON.stringify({ v: 1, clearedAt: 0, deleted: {}, rows: seed }))});
+    `, { hud: true, colorScheme: scheme });
+    await page.waitForSelector('.xgroup .xchip');
+    await type('!');
+    await page.waitForSelector('.chist:not([hidden])');
+    await page.screenshot({ path: path.join(dir, `state1-empty-${scheme}.png`) });
+    await type('!gd');
+    await page.waitForSelector('.chist-row mark');
+    await page.screenshot({ path: path.join(dir, `state2-fuzzy-${scheme}.png`) });
+    await type('!nomatch');
+    await page.waitForSelector('.chist-empty:not([hidden])');
+    await page.screenshot({ path: path.join(dir, `state3-empty-${scheme}.png`) });
+  };
+  await runShots('dark');
+  await runShots('light');
 });

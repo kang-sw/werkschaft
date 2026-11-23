@@ -320,6 +320,7 @@
       }
     }
     bangPaint(on);
+    bangHistSyncInput();
   }
   // bangLeave is the first Esc: it removes the leading `!` through the editing
   // command (undo keeps it, an input event follows) and keeps the caret on the
@@ -329,6 +330,809 @@
     editText(0, 1, "");
     var at = Math.max(0, caret - 1);
     ctext.setSelectionRange(at, at);
+  }
+
+  // --- per-worktree `!` command history -----------------------------------
+  // Stored per worktree in localStorage keyed by rootTag parsed from ucmdRev.
+  // Persistence happens only after an admitted cexec job's cwd in /exec/jobs
+  // hashes to the same rootTag, and exit codes are tracked with a bounded poll
+  // independent of HUD chip dismissal or fading.
+  var BANG_HIST_PREFIX = "ws.cexec.history.", BANG_HIST_MAX = 200, BANG_HIST_BYTES = 2048;
+  var BANG_HIST_POLL_MAX = 20, BANG_HIST_POLL_MS = 30000, BANG_HIST_CLEAR_MS = 3000;
+  var histPending = Object.create(null), histPollInflight = false, histJobsAbsent = false, histClock = 0;
+  var histOpen = false, histManual = false, histSuppressAuto = false;
+  var histSelIdx = -1, histMatches = [], histClearArmed = false, histClearTimer = 0;
+  var histPop = null, histListEl = null, histCountEl = null, histEmptyEl = null, histEmptyHintEl = null, histHintsEl = null, histClearBtn = null;
+  var histBadge = null, histRowMap = Object.create(null), histBoundTag = "";
+
+  function bangHistNow() {
+    var t = Date.now();
+    histClock = t > histClock ? t : histClock + 1;
+    return histClock;
+  }
+  function bangHistTag() {
+    if (typeof ucmdRev !== "string" || !ucmdRev) return "";
+    var parts = ucmdRev.split(".");
+    if (parts.length < 3) return "";
+    return parts.slice(2).join(".");
+  }
+  function bangUtf8Bytes(s) {
+    if (window.TextEncoder) return new TextEncoder().encode(s).length;
+    try { return unescape(encodeURIComponent(s)).length; } catch (e) { return s.length * 3; }
+  }
+  function bangCleanPath(p) {
+    if (typeof p !== "string" || !p) return "";
+    var vol = "", rest = p, isWin = false;
+    var unc = /^(\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)([\s\S]*)$/.exec(p);
+    if (unc) {
+      isWin = true;
+      vol = "\\\\" + unc[2] + "\\" + unc[3];
+      rest = unc[4] || "\\";
+    } else if (/^[A-Za-z]:/.test(p)) {
+      isWin = true;
+      vol = p.slice(0, 2);
+      rest = p.slice(2);
+    } else if (p.indexOf("\\") >= 0) {
+      isWin = true;
+    }
+    var sep = isWin ? "\\" : "/";
+    if (isWin) rest = rest.replace(/\//g, "\\");
+    var rooted = rest.charAt(0) === sep;
+    var raw = rest.split(sep), out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var seg = raw[i];
+      if (!seg || seg === ".") continue;
+      if (seg === "..") {
+        if (out.length && out[out.length - 1] !== "..") out.pop();
+        else if (!rooted) out.push("..");
+      } else out.push(seg);
+    }
+    if (!out.length) {
+      if (rooted) return vol + sep;
+      return vol ? vol + "." : ".";
+    }
+    return vol + (rooted ? sep : "") + out.join(sep);
+  }
+  function bangFnv1a32(s) {
+    var bytes;
+    if (window.TextEncoder) bytes = new TextEncoder().encode(s);
+    else {
+      var enc = unescape(encodeURIComponent(s));
+      bytes = [];
+      for (var i = 0; i < enc.length; i++) bytes.push(enc.charCodeAt(i));
+    }
+    var h = 0x811c9dc5;
+    for (var j = 0; j < bytes.length; j++) {
+      h ^= bytes[j];
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return (h >>> 0).toString(36);
+  }
+  function bangRootTag(cwd) {
+    var c = bangCleanPath(cwd);
+    return c ? bangFnv1a32(c) : "";
+  }
+  function histStorageKey(tag) { return BANG_HIST_PREFIX + tag; }
+  function histNormalizeStore(raw) {
+    var clearedAt = 0, deleted = Object.create(null), list = [];
+    if (Array.isArray(raw)) {
+      list = raw;
+    } else if (raw && typeof raw === "object") {
+      if (typeof raw.clearedAt === "number" && isFinite(raw.clearedAt)) clearedAt = raw.clearedAt;
+      if (raw.deleted && typeof raw.deleted === "object") {
+        Object.keys(raw.deleted).forEach(function (k) {
+          var v = raw.deleted[k];
+          if (typeof v === "number" && isFinite(v) && v > clearedAt) deleted[k] = v;
+        });
+      }
+      if (Array.isArray(raw.rows)) list = raw.rows;
+    }
+    var seen = Object.create(null), rows = [];
+    list.slice().sort(function (a, b) { return ((b && b.ts) || 0) - ((a && a.ts) || 0); }).forEach(function (r) {
+      if (!r || typeof r.cmd !== "string" || !r.cmd || seen[r.cmd]) return;
+      var ts = typeof r.ts === "number" && isFinite(r.ts) ? r.ts : 0;
+      if (!ts) return;
+      var rec = { cmd: r.cmd, ts: ts };
+      if (typeof r.exit === "number" && isFinite(r.exit)) rec.exit = r.exit;
+      if (typeof r.eid === "string" && r.eid) rec.eid = r.eid;
+      if (bangUtf8Bytes(JSON.stringify(rec)) > BANG_HIST_BYTES) return;
+      seen[r.cmd] = true;
+      rows.push(rec);
+    });
+    return { v: 1, clearedAt: clearedAt, deleted: deleted, rows: rows.slice(0, BANG_HIST_MAX) };
+  }
+  function histReadStore(tag) {
+    if (!tag) return { v: 1, clearedAt: 0, deleted: Object.create(null), rows: [] };
+    try {
+      var s = window.localStorage.getItem(histStorageKey(tag));
+      if (!s) return { v: 1, clearedAt: 0, deleted: Object.create(null), rows: [] };
+      return histNormalizeStore(JSON.parse(s));
+    } catch (e) {
+      return { v: 1, clearedAt: 0, deleted: Object.create(null), rows: [] };
+    }
+  }
+  function histWriteStore(tag, store) {
+    if (!tag) return false;
+    var norm = histNormalizeStore(store);
+    var keys = Object.keys(norm.deleted);
+    if (keys.length > BANG_HIST_MAX) {
+      keys.sort(function (a, b) { return norm.deleted[b] - norm.deleted[a]; }).slice(BANG_HIST_MAX).forEach(function (k) { delete norm.deleted[k]; });
+    }
+    try {
+      window.localStorage.setItem(histStorageKey(tag), JSON.stringify(norm));
+      return true;
+    } catch (e) { return false; }
+  }
+  function bangHistRows(tag) {
+    var t = tag || bangHistTag();
+    return t ? histReadStore(t).rows : [];
+  }
+  function histEntryFits(rec) {
+    return bangUtf8Bytes(JSON.stringify(rec)) <= BANG_HIST_BYTES;
+  }
+  function histRecordVerified(tag, entry, exitCode) {
+    var store = histReadStore(tag);
+    if ((store.clearedAt && entry.launchTs <= store.clearedAt) || (store.deleted[entry.cmd] && entry.launchTs <= store.deleted[entry.cmd])) {
+      return false;
+    }
+    var idx = store.rows.findIndex(function (r) { return r.cmd === entry.cmd; });
+    var cur = idx >= 0 ? store.rows[idx] : null;
+    if (cur && cur.eid && cur.eid !== entry.exec_id && cur.ts > entry.launchTs) {
+      return true;
+    }
+    if (!entry.recorded) {
+      var rec = { cmd: entry.cmd, ts: entry.launchTs, eid: entry.exec_id };
+      if (exitCode !== null) rec.exit = exitCode;
+      if (!histEntryFits(rec)) {
+        entry.recorded = true;
+        return true;
+      }
+      if (idx >= 0) store.rows.splice(idx, 1);
+      store.rows.unshift(rec);
+      store.rows = store.rows.slice(0, BANG_HIST_MAX);
+      histWriteStore(tag, store);
+      entry.recorded = true;
+      return true;
+    }
+    if (!cur || cur.eid !== entry.exec_id || cur.ts !== entry.launchTs) {
+      return false;
+    }
+    if (exitCode === null || cur.exit === exitCode) return true;
+    var updated = { cmd: cur.cmd, ts: cur.ts, eid: cur.eid, exit: exitCode };
+    if (!histEntryFits(updated)) return true;
+    store.rows[idx] = updated;
+    histWriteStore(tag, store);
+    return true;
+  }
+  function histCancelPending(tag, cmd) {
+    Object.keys(histPending).forEach(function (eid) {
+      var p = histPending[eid];
+      var pTag = p.verifiedTag || p.launchTag;
+      if (pTag !== tag) return;
+      if (cmd !== undefined && p.cmd !== cmd) return;
+      p.cancelled = true;
+      clearTimeout(p.timer);
+      delete histPending[eid];
+    });
+  }
+  function histJobExit(j) {
+    return j && j.state === "exited" && typeof j.exit_code === "number" && isFinite(j.exit_code) ? j.exit_code : null;
+  }
+  function bangHistOnJobs(jobs) {
+    if (!Array.isArray(jobs)) return;
+    var byId = Object.create(null);
+    jobs.forEach(function (j) { if (j && j.id) byId[j.id] = j; });
+    var dirty = false, now = Date.now();
+    Object.keys(histPending).forEach(function (eid) {
+      var entry = histPending[eid], j = byId[eid];
+      if (!j) {
+        if (entry.polls >= BANG_HIST_POLL_MAX || (now - entry.startedAt) >= BANG_HIST_POLL_MS) {
+          clearTimeout(entry.timer);
+          delete histPending[eid];
+        }
+        return;
+      }
+      if (!entry.verifiedTag) {
+        var cwdTag = bangRootTag(j.cwd);
+        if (!entry.launchTag || !cwdTag || cwdTag !== entry.launchTag) {
+          if (j.state !== "running") {
+            clearTimeout(entry.timer);
+            delete histPending[eid];
+          }
+          return;
+        }
+        entry.verifiedTag = cwdTag;
+      }
+      var kept = histRecordVerified(entry.verifiedTag, entry, histJobExit(j));
+      if (!kept) {
+        entry.cancelled = true;
+        clearTimeout(entry.timer);
+        delete histPending[eid];
+        return;
+      }
+      if (entry.verifiedTag === bangHistTag()) dirty = true;
+      if (j.state !== "running") {
+        entry.finished = true;
+        clearTimeout(entry.timer);
+        delete histPending[eid];
+      }
+    });
+    if (dirty) {
+      histSyncBadge();
+      if (histOpen) histRender();
+    }
+  }
+  function histSchedulePoll(entry) {
+    clearTimeout(entry.timer);
+    if (!entry || entry.finished || entry.cancelled) return;
+    if (entry.polls >= BANG_HIST_POLL_MAX || (Date.now() - entry.startedAt) >= BANG_HIST_POLL_MS) {
+      delete histPending[entry.exec_id];
+      return;
+    }
+    entry.polls++;
+    entry.timer = setTimeout(function () { entry.timer = 0; histFetchJobs(entry.exec_id); }, Math.min(5000, 700 + entry.polls * 400));
+  }
+  function histFetchJobs(triggerId) {
+    if (!cexecEnabled || histJobsAbsent || !Object.keys(histPending).length) return;
+    if (histPollInflight) {
+      if (triggerId && histPending[triggerId]) histSchedulePoll(histPending[triggerId]);
+      return;
+    }
+    histPollInflight = true;
+    fetch("/s/" + rid + "/exec/jobs", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (r.status === 404 || r.status === 403) {
+        histJobsAbsent = true;
+        return null;
+      }
+      return r.ok ? r.json() : null;
+    }, function () { return null; }).then(function (res) {
+      histPollInflight = false;
+      if (histJobsAbsent) {
+        Object.keys(histPending).forEach(function (eid) {
+          clearTimeout(histPending[eid].timer);
+          delete histPending[eid];
+        });
+        return;
+      }
+      if (res && Array.isArray(res.jobs)) bangHistOnJobs(res.jobs);
+      Object.keys(histPending).forEach(function (eid) {
+        var e = histPending[eid];
+        if (!e.finished && !e.cancelled && !e.timer) histSchedulePoll(e);
+      });
+    });
+  }
+  window.addEventListener("ws:cexec-admitted", function (e) {
+    if (!cexecEnabled || histJobsAbsent) return;
+    var d = e && e.detail;
+    if (!d || d.origin !== "cexec" || typeof d.exec_id !== "string" || !d.exec_id || typeof d.command !== "string" || !d.command) return;
+    if (histPending[d.exec_id]) return;
+    var launchTag = bangHistTag();
+    var entry = histPending[d.exec_id] = {
+      exec_id: d.exec_id, cmd: d.command, launchTag: launchTag, verifiedTag: "",
+      recorded: false, finished: false, cancelled: false, launchTs: bangHistNow(),
+      polls: 0, startedAt: Date.now(), timer: 0
+    };
+    if (typeof xhJobs !== "undefined" && Array.isArray(xhJobs) && xhJobs.length) bangHistOnJobs(xhJobs);
+    if (histPending[d.exec_id] && !entry.finished && !entry.cancelled) {
+      histFetchJobs(d.exec_id);
+      if (histPending[d.exec_id] && !entry.timer && !entry.finished && !entry.cancelled) histSchedulePoll(entry);
+    }
+  });
+
+  // --- fuzzy matching & relative formatting -------------------------------
+  function bangFuzzyMatch(cmd, query) {
+    if (!query) return { score: 0, idx: [] };
+    var q = (query.normalize ? query.normalize("NFC") : query).toLowerCase();
+    var c = (cmd.normalize ? cmd.normalize("NFC") : cmd);
+    var cLow = c.toLowerCase();
+    // Map match only on aligned string when normalization kept length; fallback to case-folded cmd.
+    var raw = c.length === cmd.length ? cmd : cmd;
+    var low = cLow.length === cmd.length ? cLow : cmd.toLowerCase();
+    var ql = q.length, cl = low.length;
+    if (!ql) return { score: 0, idx: [] };
+    if (ql > cl) return null;
+    // DP/greedy: find earliest subsequence check, preferring word boundaries and consecutive runs.
+    var pos = [], qi = 0, i;
+    for (i = 0; i < cl && qi < ql; i++) {
+      if (low.charCodeAt(i) === q.charCodeAt(qi)) { pos.push(i); qi++; }
+    }
+    if (qi < ql) return null;
+    // Try aligning each occurrence of the first query char to pick the highest score.
+    var bestScore = -1e9, bestIdx = pos;
+    for (var start = pos[0]; start < cl; start++) {
+      if (low.charCodeAt(start) !== q.charCodeAt(0)) continue;
+      var idx = [start], cur = start + 1, k = 1, ok = true;
+      while (k < ql) {
+        var found = -1;
+        for (; cur < cl; cur++) {
+          if (low.charCodeAt(cur) === q.charCodeAt(k)) { found = cur; break; }
+        }
+        if (found < 0) { ok = false; break; }
+        idx.push(found);
+        cur = found + 1;
+        k++;
+      }
+      if (!ok) break;
+      var sc = 0;
+      for (k = 0; k < idx.length; k++) {
+        var at = idx[k];
+        if (at === 0) sc += 24;
+        else if (/[\s/_.:=-]/.test(raw.charAt(at - 1))) sc += 18;
+        if (k > 0 && at === idx[k - 1] + 1) sc += 20;
+        else if (k > 0) sc -= (at - idx[k - 1] - 1);
+        if (raw.charCodeAt(at) === query.charCodeAt(k)) sc += 2;
+      }
+      sc -= start * 0.5 + (cl - ql) * 0.1;
+      if (sc > bestScore) { bestScore = sc; bestIdx = idx; }
+    }
+    return { score: bestScore, idx: bestIdx };
+  }
+  function bangAgo(ts) {
+    var diff = Math.max(0, Date.now() - ts), m = Math.floor(diff / 60000);
+    if (m < 1) return wsT("js.wb.ago.now");
+    if (m < 60) return wsT("js.wb.ago.min", m);
+    var h = Math.floor(m / 60);
+    if (h < 24) return wsT("js.wb.ago.hour", h);
+    var d = Math.floor(h / 24);
+    if (d < 30) return wsT("js.wb.ago.day", d);
+    if (d < 365) return wsT("js.wb.body.month", Math.floor(d / 30));
+    return wsT("js.wb.body.year", Math.floor(d / 365));
+  }
+  function bangSendKeyLabel() {
+    return typeof inputMode !== "undefined" && inputMode === "mod" ? "Ctrl/Cmd+Enter" : "Enter";
+  }
+
+  // --- trigger badge & popup UI -------------------------------------------
+  function histEnsureBadge() {
+    if (!cexecEnabled || histBadge) return histBadge;
+    var wrap = composer && composer.querySelector(".sbwrap");
+    if (!wrap) return null;
+    histBadge = doc.createElement("button");
+    histBadge.type = "button";
+    histBadge.className = "hbadge";
+    histBadge.id = "hbadge";
+    histBadge.hidden = true;
+    histBadge.title = wsT("js.cexec.hist.badge.title");
+    histBadge.setAttribute("aria-haspopup", "listbox");
+    histBadge.setAttribute("aria-expanded", "false");
+    histBadge.innerHTML = '<svg class="hico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.4-3.5L3 6"/><path d="M3 3v3h3"/><path d="M8 5.2v3l2 1.2"/></svg><span></span>';
+    histBadge.lastChild.textContent = wsT("js.cexec.hist.badge");
+    histBadge.addEventListener("click", function () {
+      if (histOpen) bangHistClose(true);
+      else bangHistOpenManual();
+    });
+    var sb = $("sbadge");
+    wrap.insertBefore(histBadge, sb && sb.parentNode === wrap ? sb : null);
+    if (typeof xhRo !== "undefined" && xhRo) xhRo.observe(histBadge);
+    return histBadge;
+  }
+  function histSyncBadge() {
+    var b = histEnsureBadge();
+    if (!b) return;
+    var tag = bangHistTag(), rows = tag ? bangHistRows(tag) : [];
+    var hide = !tag || !rows.length;
+    if (b.hidden !== hide) {
+      b.hidden = hide;
+      if (typeof xhLayout === "function") xhLayout();
+    }
+    b.setAttribute("aria-expanded", String(histOpen));
+  }
+  function histResetClearConfirm() {
+    clearTimeout(histClearTimer);
+    histClearTimer = 0;
+    histClearArmed = false;
+    if (histClearBtn) {
+      histClearBtn.classList.remove("chist-armed");
+      histClearBtn.textContent = wsT("js.cexec.hist.clear");
+    }
+  }
+  function histRenderCmdNodes(cmdEl, cmd, idx) {
+    var sig = cmd + "\0" + (idx && idx.length ? idx.join(",") : "");
+    if (cmdEl.__sig === sig) return;
+    cmdEl.__sig = sig;
+    cmdEl.textContent = "";
+    if (!idx || !idx.length) {
+      cmdEl.textContent = cmd;
+      return;
+    }
+    var frag = doc.createDocumentFragment(), pos = 0, i = 0;
+    while (i < idx.length) {
+      var s = idx[i], e = s + 1;
+      while (i + 1 < idx.length && idx[i + 1] === e) { i++; e++; }
+      if (s > pos) frag.appendChild(doc.createTextNode(cmd.slice(pos, s)));
+      var mk = doc.createElement("mark");
+      mk.textContent = cmd.slice(s, e);
+      frag.appendChild(mk);
+      pos = e;
+      i++;
+    }
+    if (pos < cmd.length) frag.appendChild(doc.createTextNode(cmd.slice(pos)));
+    cmdEl.appendChild(frag);
+  }
+  function histEnsurePopup() {
+    if (histPop) return histPop;
+    histPop = doc.createElement("div");
+    histPop.className = "chist";
+    histPop.hidden = true;
+    histPop.setAttribute("role", "dialog");
+    histPop.setAttribute("aria-label", wsT("js.cexec.hist.title"));
+
+    var head = doc.createElement("div");
+    head.className = "chist-head";
+    var title = doc.createElement("span");
+    title.className = "chist-title";
+    var bang = doc.createElement("span");
+    bang.className = "chist-bang";
+    bang.setAttribute("aria-hidden", "true");
+    bang.textContent = "!";
+    var titleTxt = doc.createElement("span");
+    titleTxt.textContent = wsT("js.cexec.hist.title");
+    title.appendChild(bang);
+    title.appendChild(titleTxt);
+    histCountEl = doc.createElement("span");
+    histCountEl.className = "chist-count";
+    head.appendChild(title);
+    head.appendChild(histCountEl);
+
+    histListEl = doc.createElement("div");
+    histListEl.className = "chist-list";
+    histListEl.setAttribute("role", "listbox");
+    histListEl.setAttribute("aria-label", wsT("js.cexec.hist.title"));
+
+    histEmptyEl = doc.createElement("div");
+    histEmptyEl.className = "chist-empty";
+    histEmptyEl.hidden = true;
+    var emptyMsg = doc.createElement("span");
+    emptyMsg.textContent = wsT("js.cexec.hist.empty");
+    histEmptyHintEl = doc.createElement("span");
+    histEmptyHintEl.className = "chist-empty-hint";
+    histEmptyEl.appendChild(emptyMsg);
+    histEmptyEl.appendChild(histEmptyHintEl);
+
+    var foot = doc.createElement("div");
+    foot.className = "chist-foot";
+    histHintsEl = doc.createElement("div");
+    histHintsEl.className = "chist-hints";
+    histClearBtn = doc.createElement("button");
+    histClearBtn.type = "button";
+    histClearBtn.className = "chist-clear";
+    histClearBtn.textContent = wsT("js.cexec.hist.clear");
+    foot.appendChild(histHintsEl);
+    foot.appendChild(histClearBtn);
+
+    histPop.appendChild(head);
+    histPop.appendChild(histListEl);
+    histPop.appendChild(histEmptyEl);
+    histPop.appendChild(foot);
+    composer.appendChild(histPop);
+
+    histPop.addEventListener("mousedown", function (e) {
+      if (e.target && e.target.closest && (e.target.closest(".chist-row") || e.target.closest(".chist-clear"))) {
+        e.preventDefault();
+      }
+    });
+    histListEl.addEventListener("click", function (e) {
+      var del = e.target && e.target.closest ? e.target.closest(".chist-del") : null;
+      if (del) {
+        var row = del.closest(".chist-row");
+        if (row && row.__cmd) histDeleteRow(bangHistTag(), row.__cmd);
+        return;
+      }
+      var row = e.target && e.target.closest ? e.target.closest(".chist-row") : null;
+      if (row && row.__cmd) {
+        histPickCmd(row.__cmd);
+      }
+    });
+    histClearBtn.addEventListener("click", function () {
+      var tag = bangHistTag();
+      if (!tag) return;
+      if (!histClearArmed) {
+        histClearArmed = true;
+        histClearBtn.classList.add("chist-armed");
+        histClearBtn.textContent = wsT("js.cexec.hist.clear.confirm");
+        clearTimeout(histClearTimer);
+        histClearTimer = setTimeout(histResetClearConfirm, BANG_HIST_CLEAR_MS);
+        return;
+      }
+      histClearAll(tag);
+    });
+    bangHistSyncMode();
+    return histPop;
+  }
+  function bangHistSyncMode() {
+    if (!histPop) return;
+    var isMod = typeof inputMode !== "undefined" && inputMode === "mod";
+    if (histEmptyHintEl) histEmptyHintEl.textContent = wsT(isMod ? "js.cexec.hist.empty.mod" : "js.cexec.hist.empty.enter");
+    if (histHintsEl) {
+      histHintsEl.textContent = "";
+      [
+        ["↑↓", wsT("js.cexec.hist.hint.move")],
+        ["Tab", wsT("js.cexec.hist.hint.complete")],
+        [bangSendKeyLabel(), wsT("js.cexec.hist.hint.fill")],
+        ["Ctrl+R", wsT("js.cexec.hist.hint.next")],
+        ["Esc", wsT("js.cexec.hist.hint.close")]
+      ].forEach(function (pair) {
+        var wrap = doc.createElement("span");
+        wrap.className = "chist-hint";
+        var k = doc.createElement("kbd");
+        k.textContent = pair[0];
+        wrap.appendChild(k);
+        wrap.appendChild(doc.createTextNode(pair[1]));
+        histHintsEl.appendChild(wrap);
+      });
+    }
+  }
+  function histCreateRowEl(cmd) {
+    var row = doc.createElement("div");
+    row.className = "chist-row";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+    row.__cmd = cmd;
+    var cmdEl = doc.createElement("span");
+    cmdEl.className = "chist-cmd";
+    var exEl = doc.createElement("span");
+    exEl.className = "chist-ex";
+    exEl.hidden = true;
+    var agoEl = doc.createElement("span");
+    agoEl.className = "chist-ago";
+    var delEl = doc.createElement("button");
+    delEl.type = "button";
+    delEl.className = "chist-del";
+    delEl.tabIndex = -1;
+    delEl.title = wsT("js.cexec.hist.del");
+    delEl.setAttribute("aria-label", wsT("js.cexec.hist.del"));
+    delEl.textContent = "×";
+    row.appendChild(cmdEl);
+    row.appendChild(exEl);
+    row.appendChild(agoEl);
+    row.appendChild(delEl);
+    return row;
+  }
+  function histPatchSelection(scrollIntoView) {
+    for (var i = 0; i < histMatches.length; i++) {
+      var el = histRowMap[histMatches[i].row.cmd];
+      if (!el) continue;
+      var sel = i === histSelIdx;
+      el.classList.toggle("sel", sel);
+      el.setAttribute("aria-selected", String(sel));
+      if (sel && scrollIntoView && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+  function histCurrentQuery() {
+    var v = ctext && typeof ctext.value === "string" ? ctext.value : "";
+    return v.charAt(0) === "!" ? v.slice(1) : "";
+  }
+  function histRender() {
+    if (!histOpen) return;
+    var tag = bangHistTag(), rows = tag ? bangHistRows(tag) : [];
+    if (!tag || !rows.length) {
+      bangHistClose(false);
+      return;
+    }
+    var pop = histEnsurePopup();
+    var qStr = histCurrentQuery(), matches = [];
+    for (var i = 0; i < rows.length; i++) {
+      var m = bangFuzzyMatch(rows[i].cmd, qStr);
+      if (m) matches.push({ row: rows[i], score: m.score, idx: m.idx, origIdx: i });
+    }
+    if (qStr) {
+      matches.sort(function (a, b) {
+        return b.score - a.score || b.row.ts - a.row.ts || a.origIdx - b.origIdx;
+      });
+    }
+    histMatches = matches;
+    if (!matches.length) histSelIdx = -1;
+    else if (qStr || histSelIdx < 0 || histSelIdx >= matches.length) histSelIdx = 0;
+
+    histCountEl.textContent = qStr
+      ? wsT("js.cexec.hist.count.match", matches.length, rows.length)
+      : wsT("js.cexec.hist.count.total", rows.length);
+
+    var live = Object.create(null);
+    matches.forEach(function (item) { live[item.row.cmd] = true; });
+    Object.keys(histRowMap).forEach(function (cmd) {
+      if (!live[cmd]) {
+        if (histRowMap[cmd].parentNode) histRowMap[cmd].parentNode.removeChild(histRowMap[cmd]);
+        delete histRowMap[cmd];
+      }
+    });
+
+    for (var j = 0; j < matches.length; j++) {
+      var item = matches[j], r = item.row, el = histRowMap[r.cmd];
+      if (!el) el = histRowMap[r.cmd] = histCreateRowEl(r.cmd);
+      el.__cmd = r.cmd;
+      var cmdEl = el.children[0], exEl = el.children[1], agoEl = el.children[2];
+      histRenderCmdNodes(cmdEl, r.cmd, item.idx);
+      if (typeof r.exit === "number") {
+        exEl.hidden = false;
+        exEl.className = "chist-ex " + (r.exit === 0 ? "ok" : "fail");
+        var exTxt = String(r.exit);
+        if (exEl.textContent !== exTxt) exEl.textContent = exTxt;
+      } else {
+        exEl.hidden = true;
+      }
+      var agoTxt = bangAgo(r.ts);
+      if (agoEl.textContent !== agoTxt) agoEl.textContent = agoTxt;
+      var curNode = histListEl.children[j];
+      if (curNode !== el) histListEl.insertBefore(el, curNode || null);
+    }
+
+    histListEl.hidden = !matches.length;
+    histEmptyEl.hidden = !!matches.length;
+    pop.hidden = false;
+    histPatchSelection(false);
+    histSyncBadge();
+  }
+  function bangHistOpen(manual) {
+    var tag = bangHistTag(), rows = tag ? bangHistRows(tag) : [];
+    if (!tag || !rows.length) return false;
+    histOpen = true;
+    histManual = !!manual;
+    histSelIdx = rows.length ? 0 : -1;
+    histResetClearConfirm();
+    bangHistSyncMode();
+    histRender();
+    return true;
+  }
+  function bangHistOpenManual() {
+    histSuppressAuto = false;
+    if (!bangHistOpen(true)) return;
+    if (ctext) ctext.focus();
+  }
+  function bangHistClose(suppressAuto) {
+    if (!histOpen && !histPop) return;
+    histOpen = false;
+    histManual = false;
+    if (suppressAuto && bangMode()) histSuppressAuto = true;
+    histSelIdx = -1;
+    histMatches = [];
+    histResetClearConfirm();
+    if (histPop) histPop.hidden = true;
+    histSyncBadge();
+  }
+  function histPickCmd(cmd) {
+    histSuppressAuto = true;
+    bangHistClose(true);
+    editText(0, ctext.value.length, "!" + cmd);
+  }
+  function histDeleteRow(tag, cmd) {
+    if (!tag) return;
+    histCancelPending(tag, cmd);
+    var store = histReadStore(tag);
+    var delAt = bangHistNow();
+    store.rows.forEach(function (r) { if (r.cmd === cmd && r.ts > delAt) delAt = r.ts; });
+    store.deleted[cmd] = Math.max(store.deleted[cmd] || 0, delAt);
+    store.rows = store.rows.filter(function (r) { return r.cmd !== cmd; });
+    histWriteStore(tag, store);
+    histSyncBadge();
+    if (histOpen) histRender();
+  }
+  function histClearAll(tag) {
+    if (!tag) return;
+    histCancelPending(tag);
+    var store = histReadStore(tag);
+    var clearAt = bangHistNow();
+    store.rows.forEach(function (r) { if (r.ts > clearAt) clearAt = r.ts; });
+    histWriteStore(tag, { v: 1, clearedAt: clearAt, deleted: {}, rows: [] });
+    bangHistClose(true);
+    histSyncBadge();
+  }
+  function bangHistSyncInput() {
+    if (!cexecEnabled || !ctext) return;
+    var v = typeof ctext.value === "string" ? ctext.value : "";
+    if (v.charAt(0) !== "!") {
+      histSuppressAuto = false;
+      if (histOpen && v.length > 0) bangHistClose(false);
+      else if (histOpen) histRender();
+      return;
+    }
+    var tag = bangHistTag(), rows = tag ? bangHistRows(tag) : [];
+    if (!tag || !rows.length) {
+      if (histOpen) bangHistClose(false);
+      return;
+    }
+    if (histOpen) histRender();
+    else if (!histSuppressAuto) bangHistOpen(false);
+  }
+  function bangHistSyncBinding() {
+    var nextTag = bangHistTag();
+    var changed = nextTag !== histBoundTag;
+    histBoundTag = nextTag;
+    histSyncBadge();
+    if (histOpen) {
+      if (!nextTag || !bangHistRows(nextTag).length || changed) {
+        if (bangMode() && nextTag && bangHistRows(nextTag).length && !histSuppressAuto) histRender();
+        else bangHistClose(false);
+      }
+    } else if (changed && bangMode() && !histSuppressAuto) {
+      bangHistSyncInput();
+    }
+  }
+  function bangHistKey(e) {
+    if (!cexecEnabled) return false;
+    var isCtrlR = e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "r" || e.key === "R");
+    if (!histOpen) {
+      if (isCtrlR && bangMode() && bangHistOpen(false)) { e.preventDefault(); return true; }
+      return false;
+    }
+    if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      bangHistClose(true);
+      return true;
+    }
+    if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (histMatches.length) {
+        histSelIdx = histSelIdx < 0 ? 0 : (histSelIdx + 1) % histMatches.length;
+        histPatchSelection(true);
+      }
+      return true;
+    }
+    if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (histMatches.length) {
+        histSelIdx = histSelIdx <= 0 ? histMatches.length - 1 : histSelIdx - 1;
+        histPatchSelection(true);
+      }
+      return true;
+    }
+    if (isCtrlR) {
+      e.preventDefault();
+      if (histMatches.length) {
+        histSelIdx = histSelIdx < 0 ? 0 : (histSelIdx + 1) % histMatches.length;
+        histPatchSelection(true);
+      }
+      return true;
+    }
+    if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (histMatches.length && histSelIdx >= 0 && histMatches[histSelIdx]) {
+        e.preventDefault();
+        if (!e.repeat) histPickCmd(histMatches[histSelIdx].row.cmd);
+        return true;
+      }
+      return false;
+    }
+    if (e.key === "Enter") {
+      var mod = e.ctrlKey || e.metaKey;
+      var plain = !mod && !e.shiftKey && !e.altKey;
+      var sendChord = typeof inputMode !== "undefined" && inputMode === "mod" ? mod : plain;
+      if ((plain || sendChord) && histMatches.length && histSelIdx >= 0 && histMatches[histSelIdx]) {
+        e.preventDefault();
+        if (!e.repeat) histPickCmd(histMatches[histSelIdx].row.cmd);
+        return true;
+      }
+    }
+    return false;
+  }
+  if (cexecEnabled) {
+    doc.addEventListener("mousedown", function (e) {
+      if (!histOpen) return;
+      if (composer && composer.contains(e.target)) return;
+      bangHistClose(true);
+    });
+    window.addEventListener("storage", function (e) {
+      var tag = bangHistTag();
+      if (!tag) return;
+      if (e.key && e.key !== histStorageKey(tag)) return;
+      var store = histReadStore(tag);
+      var byCmd = Object.create(null);
+      store.rows.forEach(function (r) { byCmd[r.cmd] = r; });
+      Object.keys(histPending).forEach(function (eid) {
+        var p = histPending[eid];
+        if ((p.verifiedTag || p.launchTag) !== tag) return;
+        if ((store.clearedAt && p.launchTs <= store.clearedAt) ||
+            (store.deleted[p.cmd] && p.launchTs <= store.deleted[p.cmd]) ||
+            (p.recorded && (!byCmd[p.cmd] || byCmd[p.cmd].eid !== p.exec_id))) {
+          p.cancelled = true;
+          clearTimeout(p.timer);
+          delete histPending[eid];
+        }
+      });
+      histSyncBadge();
+      if (histOpen) histRender();
+    });
+    histEnsureBadge();
+    bangHistSyncBinding();
   }
   if (cexecEnabled && ctext) ctext.addEventListener("input", bangSync);
   cexecPrime();

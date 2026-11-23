@@ -126,6 +126,7 @@
     ucmdList = list.commands || [];
     ucmdRev = typeof list.rev === "string" ? list.rev : ucmdRev;
     ucmdRender();
+    if (typeof bangHistSyncBinding === "function") bangHistSyncBinding();
   }
   // ucmdRefresh asks for one read: now, or once the one in flight is done.
   function ucmdRefresh() {
@@ -146,7 +147,7 @@
       return r.json();
     }).catch(function () { return null; }).then(function (list) {
       ucmdFetching = false;
-      if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); }
+      if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); if (typeof bangHistSyncBinding === "function") bangHistSyncBinding(); }
       else if (list && Array.isArray(list.commands)) ucmdApply(list, false);
       // A wake that arrived while this read ran is answered with one more read
       // whether this one succeeded or not (never a loop: only a wake sets the
