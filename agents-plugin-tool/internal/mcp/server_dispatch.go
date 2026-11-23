@@ -291,8 +291,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
 		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "fs.read", "fs.grep", "fs.list":
-		if !s.codexReadTools() {
-			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoCodexReadTools))
+		if !s.fsReadTools() {
+			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoFSReadTools))
 		}
 		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":

@@ -103,6 +103,7 @@ var parallelMCP = map[string]bool{
 	"note.query": true, "rationale.query": true, "git.status": true, "git.diff": true, "git.log": true,
 	"git.merge_base": true, "api.list": true, "project_tree": true, "runtime.read": true,
 	"todo.list": true, "todo.read": true, "mailbox.recipients": true,
+	"fs.read": true, "fs.grep": true, "fs.list": true,
 }
 
 // execLaunchTools are the ws tools that start or feed a process. A read-only

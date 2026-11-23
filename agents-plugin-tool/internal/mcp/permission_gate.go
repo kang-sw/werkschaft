@@ -49,6 +49,22 @@ func readOnlyRefusedExecForm(tool string, args map[string]any) bool {
 	return false
 }
 
+func (s *Server) refuseBoundReadOnlyExec(tool string) bool {
+	switch tool {
+	case "exec.run", "exec.shell", "exec.spawn", "exec.write":
+	default:
+		return false
+	}
+	if s.conversation == "" || !s.readOnlyAuthority() {
+		return false
+	}
+	backend := s.execCutover
+	if backend == "" {
+		backend = s.agentAdmissionBackend()
+	}
+	return s.lifecycleOf(backend).ReadOnlyNoExec
+}
+
 // permissionRefusal is why this server refuses tool for its permission
 // level, "" when it does not.
 func (s *Server) permissionRefusal(tool string, args map[string]any) string {
@@ -56,6 +72,9 @@ func (s *Server) permissionRefusal(tool string, args map[string]any) string {
 		return ""
 	}
 	level := strings.TrimSpace(s.getenv(wsagent.EnvPermissionLevel))
+	if s.refuseBoundReadOnlyExec(tool) {
+		return fmt.Sprintf("%s: permission denied: this read-only session cannot start or send input to an exec job", tool)
+	}
 	if readOnlyRefusedExecForm(tool, args) {
 		return fmt.Sprintf("%s: permission denied: this agent runs at authority %s, which the session that spawned it chose, and %s launches a command in a form that is not checked. Use exec.run (exe and args) or exec.shell (cmd) with a read command such as git log or rg.", tool, level, tool)
 	}
