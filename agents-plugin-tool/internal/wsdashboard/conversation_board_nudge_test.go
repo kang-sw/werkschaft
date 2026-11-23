@@ -36,7 +36,7 @@ func TestConversationBoardNudgeWakeRender(t *testing.T) {
 					t.Fatal(err)
 				}
 				html := string(set[regionEntries].HTML)
-				for _, want := range []string{tc.want, `data-entry="` + ring[0].Name + `"`, `class="mail-notification"`, `data-board-nudge="1"`, `data-key="wake-` + ring[0].Name + `"`} {
+				for _, want := range []string{tc.want, `data-entry="` + ring[0].Name + `"`, `class="mail-notification turn-trigger"`, `data-board-nudge="1"`, `data-key="wake-` + ring[0].Name + `"`} {
 					if !strings.Contains(stdhtml.UnescapeString(html), want) {
 						t.Errorf("missing %q: %s", want, html)
 					}
@@ -173,7 +173,7 @@ func TestConversationBoardNudgeTwelveMailBatch(t *testing.T) {
 		if !strings.Contains(plain, "보드 알림 · 차단 해제 12건: Topic <01>, Topic <02> +10") {
 			t.Fatalf("batch summary missing: %s", html)
 		}
-		if strings.Count(html, `class="mail-notification"`) != 1 || strings.Count(html, "<details") != 1 || strings.Count(html, `data-board-nudge="1"`) != 1 || strings.Count(html, `data-mail-wake="suppressed"`) != 11 || strings.Count(html, "data-entry=") != 12 || strings.Count(html, "[ws mailbox]") != 1 {
+		if strings.Count(html, `class="mail-notification turn-trigger"`) != 1 || strings.Count(html, "<details") != 1 || strings.Count(html, `data-board-nudge="1"`) != 1 || strings.Count(html, `data-mail-wake="suppressed"`) != 11 || strings.Count(html, "data-entry=") != 12 || strings.Count(html, "[ws mailbox]") != 1 {
 			t.Fatalf("batch did not render as one row plus keyed markers: %s", html)
 		}
 		if strings.Contains(html, "연결된 메일 없음") || strings.Contains(html, "메일 알림") || strings.Contains(html, "<01>") {
@@ -208,7 +208,7 @@ func TestConversationBoardNudgeMixedBatchAndMalformedMember(t *testing.T) {
 					t.Errorf("missing %q: %s", want, html)
 				}
 			}
-			if strings.Count(html, `class="mail-notification"`) != 3 || strings.Count(html, "<details") != 3 || strings.Count(html, `data-mail-wake="suppressed"`) != 2 || strings.Count(html, "data-entry=") != 5 {
+			if strings.Count(html, `class="mail-notification turn-trigger"`) != 3 || strings.Count(html, "<details") != 3 || strings.Count(html, `data-mail-wake="suppressed"`) != 2 || strings.Count(html, "data-entry=") != 5 {
 				t.Fatalf("unexpected mixed rows: %s", html)
 			}
 			for _, r := range ring {
@@ -268,7 +268,7 @@ func TestConversationBoardNudgeBatchPeerFirstKeepsStoredMail(t *testing.T) {
 		t.Fatalf("multi-message peer pairing changed or headless nudge run missing: %+v", entries)
 	}
 	html := presentationHTML(t, ring, page, nil)
-	if strings.Count(html, `class="mailline recv"`) != 1 || strings.Count(html, `class="mail-notification"`) != 2 || strings.Contains(html, `data-mail-wake="matched"`) || !strings.Contains(html, "Board nudge · Unblocked · 2 messages: One, Two") {
+	if strings.Count(html, `class="mailline turn-trigger recv"`) != 1 || strings.Count(html, `class="mail-notification turn-trigger"`) != 2 || strings.Contains(html, `data-mail-wake="matched"`) || !strings.Contains(html, "Board nudge · Unblocked · 2 messages: One, Two") {
 		t.Fatalf("stored peer mail or batch-head peer wake changed: %s", html)
 	}
 }

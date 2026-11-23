@@ -305,7 +305,7 @@ func TestRenderedCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv := string(set[regionConvLive].HTML)
-	if !strings.Contains(conv, `<div class="sysline compaction running">`) || !strings.Contains(conv, "compacting context…") || !strings.Contains(conv, `data-ms="`+strconv.FormatInt(started, 10)+`"`) {
+	if !strings.Contains(conv, `<details class="sysline boundary-badge compaction running"`) || !strings.Contains(conv, "lead compacting") || !strings.Contains(conv, `data-at-ms="`+strconv.FormatInt(started, 10)+`"`) {
 		t.Errorf("live region lacks the running compaction line: %s", conv)
 	}
 	if strings.Contains(conv, `class="activity"`) {
@@ -317,10 +317,10 @@ func TestRenderedCompaction(t *testing.T) {
 	entries := string(set[regionEntries].HTML)
 	atAttr := ` data-at="` + now.UTC().Format(time.RFC3339Nano) + `"`
 	for _, want := range []string{
-		`<div class="sysline compaction" data-entry="20261107T000000.000000001Z-a1.json"` + atAttr + `><span class="mk">✓</span>context compacted (auto)`,
-		`<div class="sysline compaction" data-entry="20261107T000000.000000002Z-a2.json"` + atAttr + `><span class="mk">✓</span>context compacted (manual)`,
-		`<div class="sysline compaction fail" data-entry="20261107T000000.000000003Z-a3.json"` + atAttr + `><span class="mk">✗</span><span class="nt">context compaction failed</span><time`,
-		`<div class="sysline compaction fail" data-entry="20261107T000000.000000004Z-a4.json"` + atAttr + `><span class="mk">✗</span><span class="nt">context compaction failed: Conversation too long</span><time`,
+		`<details data-audit-owner="compaction" class="sysline boundary-badge compaction" data-entry="20261107T000000.000000001Z-a1.json"` + atAttr + `><summary><span class="mk">✓</span>context compacted (auto)`,
+		`<details data-audit-owner="compaction" class="sysline boundary-badge compaction" data-entry="20261107T000000.000000002Z-a2.json"` + atAttr + `><summary><span class="mk">✓</span>context compacted (manual)`,
+		`<details data-audit-owner="compaction" class="sysline boundary-badge compaction fail" data-entry="20261107T000000.000000003Z-a3.json"` + atAttr + `><summary><span class="mk">✗</span><span class="nt">context compaction failed</span><time`,
+		`<details data-audit-owner="compaction" class="sysline boundary-badge compaction fail" data-entry="20261107T000000.000000004Z-a4.json"` + atAttr + `><summary><span class="mk">✗</span><span class="nt">context compaction failed: Conversation too long</span><time`,
 	} {
 		if !strings.Contains(entries, want) {
 			t.Errorf("entries region lacks %q: %s", want, entries)

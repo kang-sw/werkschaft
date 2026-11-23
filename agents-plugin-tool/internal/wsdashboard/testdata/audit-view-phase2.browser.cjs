@@ -6,11 +6,10 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const base = process.env.AUDIT_BASE;
 const shots = process.env.AUDIT_P2_SHOTS || '';
 
-// Hook/thinking/system/reminder rows start folded behind a per-run summary line.
-// Click every collapsed summary so the rows below it become interactive.
+// Expand owning call, turn, and boundary disclosures for keyboard navigation.
 async function expandRuns(f) {
   await f.evaluate(() => {
-    for (const s of document.querySelectorAll('.au-run[aria-expanded="false"]')) s.click();
+    for (const s of document.querySelectorAll('.au-call-details:not([open]) > summary, .turnline:not([open]) > summary, .boundary-badge:not([open]) > summary')) s.click();
   });
 }
 
@@ -47,26 +46,20 @@ async function expandRuns(f) {
     assert.ok(atCount >= 40, `rendered ConvEntry elements carry data-at (got ${atCount})`);
 
     // Wait for initial interleaved rows (attached hook inside c1, reminder, subagent, compaction, other)
-    // Hook/thinking/system/reminder rows start folded behind a summary line, so they are only attached.
-    await frame.waitForSelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]', { state: 'attached' });
-    await frame.waitForSelector('.au-hid[data-event-id="p2-other"]');
-    await frame.waitForSelector('.au-hid[data-event-id="p2-orphan-hook"]:not(.au-inner)', { state: 'attached' });
+    // Call and turn disclosures own their audit traces.
+    await frame.waitForSelector('.au-call-details .au-hid[data-event-id="p2-attach-hook"]', { state: 'attached' });
+    await frame.waitForSelector('.au-hid[data-event-id="p2-other"]', { state: 'attached' });
+    await frame.waitForSelector('.turnline .au-hid[data-event-id="p2-orphan-hook"]', { state: 'attached' });
 
-    // Collapsed by default: one muted summary per run, unmapped/subagent/compaction rows never fold.
-    assert.ok(await frame.locator('#convo .au-run').count() >= 1, 'low-signal rows fold behind a summary line');
-    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').evaluate(el => el.hidden), true, 'attached hook starts collapsed');
-    assert.equal(await frame.locator('.au-hid[data-event-id="p2-other"]').evaluate(el => el.hidden), false, 'unmapped rows are not collapsed');
+    // Audit traces start inside collapsed owning disclosures.
+    assert.equal(await frame.locator('#convo .au-run').count(), 0, 'turn summaries own low-signal rows');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').isVisible(), false, 'attached hook starts collapsed');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-other"]').isVisible(), false, 'standalone audit traces start inside the turn summary');
     await expandRuns(frame);
-    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').evaluate(el => el.hidden), false, 'clicking the summary expands the run in place');
+    assert.equal(await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').isVisible(), true, 'expanding the call reveals its trace');
 
-    // Check attached hook is positioned directly below p2-c1 (a run summary may sit between them)
-    const hookPrevCall = await frame.evaluate(() => {
-      const h = document.querySelector('.au-hid.au-inner[data-event-id="p2-attach-hook"]');
-      let p = h && h.previousElementSibling;
-      while (p && p.classList.contains('au-run')) p = p.previousElementSibling;
-      return p ? p.getAttribute('data-call') : null;
-    });
-    assert.equal(hookPrevCall, 'p2-c1', 'attached hidden event sits directly below its matching call row');
+    const hookCall = await frame.locator('.au-hid[data-event-id="p2-attach-hook"]').evaluate(el => el.closest('.au-call-details')?.querySelector('[data-call]')?.getAttribute('data-call'));
+    assert.equal(hookCall, 'p2-c1', 'attached event belongs to its matching call expansion');
 
     // Scroll to top to load older /history (with end:true) -> triggers [T_oldest, T_prev) + open-below [, T_oldest)
     await frame.evaluate(() => {
@@ -74,7 +67,7 @@ async function expandRuns(f) {
       c.scrollTop = 0;
       c.dispatchEvent(new Event('scroll'));
     });
-    await frame.waitForSelector('.au-sysrow[data-event-id="p2-sys-start"]');
+    await frame.waitForSelector('.boundary-badge.au-sysrow');
     await frame.waitForSelector('.au-hid[data-event-id="p2-think-hist"]', { state: 'attached' });
     assert.ok(eventsRequests.some(u => u.includes('since=') && u.includes('until=')), 'history page issued half-open [since, until) query');
     assert.ok(eventsRequests.some(u => !u.includes('since=') && u.includes('until=')), 'end:true issued open-below until= query');
@@ -82,7 +75,7 @@ async function expandRuns(f) {
     // Verify open-below sysrow is placed at very top of .centries
     const firstIsSysrow = await frame.evaluate(() => {
       const first = document.querySelector('#r-entries .centries > :first-child');
-      return first ? first.getAttribute('data-event-id') : null;
+      return first?.querySelector('.au-hid')?.getAttribute('data-event-id');
     });
     assert.equal(firstIsSysrow, 'p2-sys-start', 'session_start system event renders centered at very top');
 

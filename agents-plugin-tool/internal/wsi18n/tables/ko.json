@@ -2130,6 +2130,7 @@
   "js.lead.close": "삭제",
   "js.lead.close.note": "대화와 프로세스를 종료하고 메일 깨우기를 중지합니다. 레일에서 다시 열 수 있습니다.",
   "js.lead.close.confirm": "이 세션을 삭제할까요? 프로세스가 종료됩니다. 레일에서 세션을 다시 열 수 있습니다.",
+  "js.ap.answered": "승인됨",
   "js.ap.title": "승인 요청",
   "js.ap.agent": "서브에이전트",
   "js.ap.readonly": "대시보드 PC의 브라우저에서만 답할 수 있습니다.",

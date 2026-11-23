@@ -45,7 +45,7 @@ const reportOnly = process.env.AUDIT_BOUND_EXPECT === 'report';
 
     const m = await frame.evaluate(() => {
       const box = document.querySelector('#r-entries .centries');
-      const visible = el => !el.hidden && !el.closest('[hidden]');
+      const visible = el => !!el.getClientRects().length;
       return {
         entries: box.querySelectorAll(':scope > [data-entry]').length,
         eventRows: box.querySelectorAll('.au-hid, .au-sysrow').length,
@@ -67,6 +67,7 @@ const reportOnly = process.env.AUDIT_BOUND_EXPECT === 'report';
       assert.ok(m.eventRequests <= 4, `bounded audit fetch (${m.eventRequests} requests)`);
       assert.ok(m.eventRows <= 240, `rows follow the loaded span plus one page (${m.eventRows})`);
       assert.ok(pinnedGap <= 24, `rows arriving under a bottom-pinned view keep it pinned (${pinnedGap}px off)`);
+      assert.equal(m.foldRows, 0, 'no detached audit run summaries');
       assert.ok(m.banners <= 1, `one session banner (${m.banners})`);
       assert.ok(m.visibleEventRows <= 3, `noise rows are folded (${m.visibleEventRows} visible)`);
     }

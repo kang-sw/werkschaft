@@ -27,20 +27,20 @@ func TestUIEntryRendersTheCommandLine(t *testing.T) {
 	}
 	html := string(set[regionEntries].HTML)
 	for _, want := range []string{
-		`<div class="sysline uiline" data-entry="` + ring[1].Name + `" data-ui-op="focus" data-ui-arg="ada.c89-3" data-ui-comment="ada.c89-7"`,
-		`opened ada.c89-3 at comment ada.c89-7</div>`,
+		`<div class="sysline uiline conv-row" data-entry="` + ring[1].Name + `" data-ui-op="focus" data-ui-arg="ada.c89-3" data-ui-comment="ada.c89-7"`,
+		`opened ada.c89-3 at comment ada.c89-7</span>`,
 		`data-ui-op="search" data-ui-arg="&lt;b&gt;&#34;sync&#34;&lt;/b&gt;" title=`,
-		`searched items for “&lt;b&gt;&#34;sync&#34;&lt;/b&gt;”</div>`,
+		`searched items for “&lt;b&gt;&#34;sync&#34;&lt;/b&gt;”</span>`,
 		`data-ui-op="scope" data-ui-arg="team" title=`,
-		`items scope: team</div>`,
+		`items scope: team</span>`,
 		`data-ui-op="view" data-ui-arg="kanban" title=`,
-		`items view: kanban</div>`,
+		`items view: kanban</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("ui entries lack %q:\n%s", want, html)
 		}
 	}
-	if strings.Count(html, `class="sysline uiline"`) != 4 {
+	if strings.Count(html, `class="sysline uiline conv-row"`) != 4 {
 		t.Errorf("want one line per ui entry:\n%s", html)
 	}
 }

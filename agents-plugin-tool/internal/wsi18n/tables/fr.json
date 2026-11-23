@@ -2130,6 +2130,7 @@
   "js.lead.close": "Fermer",
   "js.lead.close.note": "Termine la conversation et le processus, et arrête les réveils par e-mail. Elle peut être rouverte depuis le rail.",
   "js.lead.close.confirm": "Fermer cette session ? Son processus s'arrête et la conversation ne peut pas être poursuivie.",
+  "js.ap.answered": "Répondu",
   "js.ap.title": "Demande d'approbation",
   "js.ap.agent": "sous-agent",
   "js.ap.readonly": "Seul un navigateur sur le PC du tableau de bord peut y répondre.",

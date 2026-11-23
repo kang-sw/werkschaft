@@ -1159,3 +1159,15 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
   }
   :root[data-settings-shell] #rscrim { display: none; }
 }
+
+/* Hosted decisions use the conversation trace grammar after the card is answered. */
+.apcard .aph.conv-row { display: grid; }
+.apcard .row-content code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apcard .row-time { color: var(--wb-muted-fg); }
+.apanswered { font-size: 13px; color: var(--wb-muted-fg); }
+.apanswered .row-content { flex-wrap: wrap; }
+.apanswered .row-content code { font: 12px var(--wb-mono); overflow-wrap: anywhere; }
+.apanswered .row-details { background: none; box-shadow: none; border: 0; padding: 4px 26px 8px 36px; }
+.apanswered .apin { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--wb-mono); }
+.apanswered > .conv-audit-items { margin-left: 36px; }
+.apanswered:not([open]) > .conv-audit-items { display: none; }

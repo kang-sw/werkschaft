@@ -173,6 +173,12 @@ func TestAuditViewPhase2Browser(t *testing.T) {
 		},
 	})
 
+	// Complete the turn so standalone audit traces have their summary owner.
+	time.Sleep(10 * time.Millisecond)
+	if err := wslive.AppendRing(ringDir, []wslive.RingEntry{{Kind: wslive.RingTurn, Done: 3, DurationMs: 100}}); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, "testdata/audit-view-phase2.browser.cjs")

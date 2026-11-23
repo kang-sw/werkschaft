@@ -2130,6 +2130,7 @@
   "js.lead.close": "Delete",
   "js.lead.close.note": "Ends the conversation and process, and stops mail wake-ups. It can be reopened from the rail.",
   "js.lead.close.confirm": "Delete this session? Its process ends. You can reopen the session from the rail.",
+  "js.ap.answered": "Answered",
   "js.ap.title": "Approval request",
   "js.ap.agent": "subagent",
   "js.ap.readonly": "Only a browser on the dashboard PC can answer this.",

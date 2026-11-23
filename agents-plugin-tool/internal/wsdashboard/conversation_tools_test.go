@@ -286,7 +286,7 @@ func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
 		`data-call="c3"`,
 		`data-call="c4"`,
 		`<ol class="au-calls">`,
-		`<li class="au-row au-done au-static">`,
+		`<summary class="conv-row au-row au-done au-static">`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("audit call rows lack %q:\n%s", want, html)

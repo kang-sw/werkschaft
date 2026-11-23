@@ -2130,6 +2130,7 @@
   "js.lead.close": "閉じる",
   "js.lead.close.note": "会話とプロセスを終了し、メールによる起動を停止します。レールから再び開けます。",
   "js.lead.close.confirm": "このセッションを閉じますか？プロセスが終了し、会話は続けられなくなります。",
+  "js.ap.answered": "回答済み",
   "js.ap.title": "承認リクエスト",
   "js.ap.agent": "サブエージェント",
   "js.ap.readonly": "これに回答できるのはダッシュボード PC 上のブラウザだけです。",

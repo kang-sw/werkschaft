@@ -23,7 +23,7 @@ func TestChildReportFoldedMailboxRow(t *testing.T) {
 				Caption: tc.caption, Text: tc.text, Truncated: tc.truncated,
 			})}
 			html := presentationHTML(t, ring, PageContent{}, newEntryCache())
-			start := `<details class="mailline recv child-report" data-entry="` + ring[0].Name + `" data-key="wake-` + ring[0].Name + `" data-at="` + ring[0].At.UTC().Format(time.RFC3339Nano) + `"><summary class="conv-row"`
+			start := `<details class="mailline turn-trigger recv child-report" data-audit-owner="subagent" data-entry="` + ring[0].Name + `" data-key="wake-` + ring[0].Name + `" data-at="` + ring[0].At.UTC().Format(time.RFC3339Nano) + `"><summary class="conv-row"`
 			_, row, ok := strings.Cut(html, start)
 			if !ok {
 				t.Fatalf("missing closed, stably keyed mailbox disclosure: %s", html)
@@ -35,7 +35,7 @@ func TestChildReportFoldedMailboxRow(t *testing.T) {
 			if strings.Contains(summary, "wake-caption") || strings.Contains(summary, "wake-body") || strings.Contains(summary, "mbody") || strings.Contains(html, "mail-icon") || strings.Contains(summary, "wake-body") || strings.Contains(html, "wake-card") || strings.Contains(html, "data-mail-wake=") {
 				t.Fatalf("report leaked body, mail icon or mail association into folded row: %s", html)
 			}
-			if !strings.HasPrefix(body, `<div class="row-details"><div class="mbody">`) || !strings.Contains(body, "</div></div></details>") {
+			if !strings.HasPrefix(body, `<div class="row-details"><div class="mbody">`) || !strings.Contains(body, `</div></div><div class="conv-audit-items"></div></details>`) {
 				t.Fatalf("report body must remain inside the disclosure: %s", html)
 			}
 			if tc.caption != "" && !strings.Contains(body, `<span class="wake-caption">`) {
