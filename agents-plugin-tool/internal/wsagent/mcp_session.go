@@ -180,11 +180,20 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		default:
 		}
 		c.mu.Lock()
-		defer c.mu.Unlock()
 		if c.closed || c.proc == nil {
+			c.mu.Unlock()
 			return ""
 		}
-		return wsfs.Authority(c.workerPermissionLevel)
+		current, workerLevel := c.rec, c.workerPermissionLevel
+		c.mu.Unlock()
+		if current.Lead {
+			level, _, err := c.r.leadPermission(current, c.dir)
+			if err != nil {
+				return ""
+			}
+			return wsfs.Authority(level)
+		}
+		return wsfs.Authority(workerLevel)
 	}
 	files := &wsfs.FileWriteSession{
 		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),

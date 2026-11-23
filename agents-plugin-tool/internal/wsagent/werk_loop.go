@@ -27,7 +27,12 @@ type werkLoop struct {
 	agent  *werk.Agent
 }
 
+var errWerkLead = errors.New("werk backend: the lead role is unavailable")
+
 func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
+	if err := validateWerkStart(spec); err != nil {
+		return nil, err
+	}
 	endpoint, err := b.loopResponder()
 	if err != nil {
 		return nil, err
@@ -57,17 +62,29 @@ func (b WerkBackend) loopResponder() (*werk.Client, error) {
 	}, nil
 }
 
-func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder) (*werkLoop, error) {
+func validateWerkStart(spec StartSpec) error {
 	if spec.Lead != nil {
-		return nil, errWerkLead
+		return errWerkLead
 	}
 	if strings.TrimSpace(spec.Model) == "" {
-		return nil, errors.New("werk backend: a tier model is required")
+		return errors.New("werk backend: a tier model is required")
+	}
+	switch spec.PermissionLevel {
+	case PermissionReadOnly, PermissionWorkdirWrite, PermissionFull:
+	default:
+		return errors.New("werk backend: a worker authority is required")
+	}
+	if s := spec.MCPSession; s == nil || s.URL == "" || s.Token == "" {
+		return errors.New("werk backend: an authenticated MCP session is required")
+	}
+	return nil
+}
+
+func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder) (*werkLoop, error) {
+	if err := validateWerkStart(spec); err != nil {
+		return nil, err
 	}
 	session := spec.MCPSession
-	if session == nil || session.URL == "" || session.Token == "" {
-		return nil, errors.New("werk backend: an authenticated MCP session is required")
-	}
 	ctx, cancel := context.WithCancel(ctx)
 	p := &werkLoop{
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
@@ -78,10 +95,9 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
 		Model: spec.Model, Effort: spec.Effort, Instructions: spec.Instructions,
-		MCPFilesOnly: true,
-		Endpoint:     endpoint,
-		WS:           &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
-		Emit:         p.emit,
+		Endpoint: endpoint,
+		WS:       &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
+		Emit:     p.emit,
 	})
 	if err != nil {
 		cancel()

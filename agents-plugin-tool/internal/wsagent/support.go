@@ -59,6 +59,7 @@ type ModelChoice struct {
 // its availability is checked against, and its models and effort levels. A
 // backend without it is available whenever registered, with no choices.
 type ChoiceLister interface {
+	// Executable is empty for a harness that runs inside the daemon.
 	Executable() string
 	// Choices lists the models and the effort levels, lowest first. A
 	// listing failure still returns the efforts it knows.
@@ -274,8 +275,8 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 		return false, fmt.Sprintf("backend %q is not available in this daemon", name)
 	}
 	if cl, ok := backend.(ChoiceLister); ok {
-		if _, err := lookPath(cl.Executable()); err != nil {
-			return false, fmt.Sprintf("%s is not installed: %v", cl.Executable(), err)
+		if err := choiceExecutableError(cl); err != "" {
+			return false, err
 		}
 	}
 	if setup, ok := backend.(workerSetup); ok {
@@ -284,6 +285,15 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+func choiceExecutableError(lister ChoiceLister) string {
+	if exe := lister.Executable(); exe != "" {
+		if _, err := lookPath(exe); err != nil {
+			return fmt.Sprintf("%s is not installed: %v", exe, err)
+		}
+	}
+	return ""
 }
 
 // listChoices fills each available harness's models and efforts, from the
@@ -570,8 +580,8 @@ func (s *Support) pickers(skip map[string]bool) (out []SupportHarness, pending b
 		reg := s.opts.Runner.opts.Backends[name]
 		lister := reg.Backend.(ChoiceLister)
 		h := SupportHarness{Harness: name, Available: true, Models: []ModelChoice{}, Efforts: []string{}}
-		if _, err := lookPath(lister.Executable()); err != nil {
-			h.Available, h.Error = false, fmt.Sprintf("%s is not installed: %v", lister.Executable(), err)
+		if err := choiceExecutableError(lister); err != "" {
+			h.Available, h.Error = false, err
 		}
 		c, ok := s.pickerListing(name, lister)
 		if !ok {

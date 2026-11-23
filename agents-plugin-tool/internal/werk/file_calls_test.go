@@ -31,7 +31,7 @@ func TestFileCallRecordsOnlyMatchingIntentBeforeMutation(t *testing.T) {
 			target := filepath.Join(dir, "changed.txt")
 			args := json.RawMessage(`{"path":"changed.txt","content":"new"}`)
 			tool := &correlatedFileFixture{}
-			a, err := New(Config{Dir: dir, Authority: AuthorityWorkdirWrite, MCPFilesOnly: true, WS: tool,
+			a, err := New(Config{Dir: dir, Authority: AuthorityWorkdirWrite, WS: tool,
 				Endpoint: &scripted{}, BeforeAppend: func(raw json.RawMessage) error {
 					var line fileIntentLine
 					if rejectWrite && json.Unmarshal(raw, &line) == nil && line.K == "file_intent" {

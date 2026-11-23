@@ -24,14 +24,6 @@ import (
 // release, so a ws upgrade never moves a recorded catalog range.
 const ProtocolVersion = "1.0.0"
 
-// Environment names a werk process reads. The session URL and token are the
-// daemon's HTTP MCP route and the per-session bearer; the daemon's provider
-// token route is derived from the URL (wscred.DaemonBaseURL).
-const (
-	EnvSessionURL   = "WS_MCP_SESSION_URL"
-	EnvSessionToken = "WS_MCP_SESSION_TOKEN"
-)
-
 // Authority is the filesystem permission assigned to a session.
 type Authority = wsfs.Authority
 

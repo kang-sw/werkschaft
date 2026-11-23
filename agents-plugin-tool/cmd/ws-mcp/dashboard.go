@@ -510,6 +510,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return agentMCPCommand(root, version)
 		},
+		DaemonMCP: agentDaemonMCP,
 		// A hosted lead's launch appends its workflow manual to its prompt,
 		// and a lead without ws skills runs the package's lead playbooks as
 		// dashboard commands whose turn carries the playbook body.

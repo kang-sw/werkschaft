@@ -1,4 +1,4 @@
-package werk
+package wsfs
 
 import (
 	"context"
@@ -13,10 +13,11 @@ import (
 func call(t *testing.T, f *Files, tool string, args any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	for _, tl := range f.Tools(nil) {
-		if tl.Def.Name == tool {
-			return tl.Run(context.Background(), raw)
-		}
+	switch tool {
+	case "edit":
+		return f.Edit(context.Background(), raw)
+	case "write":
+		return f.Write(context.Background(), raw)
 	}
 	t.Fatalf("no tool %s", tool)
 	return "", nil
@@ -34,36 +35,11 @@ func newTree(t *testing.T) (root string) {
 	return root
 }
 
-func must(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Authority tests, one per tool: read, grep and glob are open at every level;
-// edit and write are refused read-only, confined to the worktree for
-// workdir-write, and open for full.
+// The daemon's shared file mutation code enforces every authority level.
 func TestAuthorityPerTool(t *testing.T) {
 	root := newTree(t)
 	outside := t.TempDir()
 	must(t, os.WriteFile(filepath.Join(outside, "o.txt"), []byte("outside\n"), 0o644))
-
-	for _, level := range []Authority{AuthorityReadOnly, AuthorityWorkdirWrite, AuthorityFull} {
-		f := &Files{Root: root, Cwd: root, Authority: level}
-		t.Run(string(level)+"/reads", func(t *testing.T) {
-			// Reads are not confined, whatever the level.
-			if out, err := call(t, f, "read", map[string]any{"path": filepath.Join(outside, "o.txt")}); err != nil || !strings.Contains(out, "outside") {
-				t.Errorf("read outside = %q, %v", out, err)
-			}
-			if out, err := call(t, f, "grep", map[string]any{"pattern": "gamma", "path": filepath.Join(root, "src")}); err != nil || !strings.Contains(out, "deep/b.txt:3:gamma") {
-				t.Errorf("grep = %q, %v", out, err)
-			}
-			if out, err := call(t, f, "glob", map[string]any{"pattern": "**/*.go"}); err != nil || strings.TrimSpace(out) != "src/a.go" {
-				t.Errorf("glob = %q, %v", out, err)
-			}
-		})
-	}
 
 	t.Run("read-only refuses edit and write", func(t *testing.T) {
 		f := &Files{Root: root, Cwd: root, Authority: AuthorityReadOnly}
@@ -210,92 +186,6 @@ func TestEditPreservesCRLF(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != "uno\r\ndos\r\nthree\r\n" {
 		t.Errorf("file = %q", b)
-	}
-}
-
-func TestReadPagesAndRefusesBinary(t *testing.T) {
-	root := t.TempDir()
-	var lines []string
-	for i := 1; i <= 10; i++ {
-		lines = append(lines, "line"+string(rune('a'+i-1)))
-	}
-	must(t, os.WriteFile(filepath.Join(root, "t.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644))
-	must(t, os.WriteFile(filepath.Join(root, "b.bin"), []byte{1, 2, 0, 3}, 0o644))
-	f := &Files{Root: root, Cwd: root, Authority: AuthorityReadOnly}
-	out, err := call(t, f, "read", map[string]any{"path": "t.txt", "offset": 3, "limit": 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "     3\tlinec\n     4\tlined\n") || !strings.Contains(out, "pass offset 5 to continue") {
-		t.Errorf("read = %q", out)
-	}
-	if _, err := call(t, f, "read", map[string]any{"path": "b.bin"}); err == nil || !strings.Contains(err.Error(), "binary") {
-		t.Errorf("binary err = %v", err)
-	}
-	if _, err := call(t, f, "read", map[string]any{"path": "missing.txt"}); err == nil {
-		t.Error("missing file read succeeded")
-	}
-}
-
-func TestGrepAndGlobFilters(t *testing.T) {
-	root := newTree(t)
-	must(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
-	must(t, os.WriteFile(filepath.Join(root, ".git", "config"), []byte("func hidden\n"), 0o644))
-	f := &Files{Root: root, Cwd: root, Authority: AuthorityReadOnly}
-	out, err := call(t, f, "grep", map[string]any{"pattern": "func", "glob": "**/*.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "src/a.go:3:") || strings.Contains(out, "hidden") {
-		t.Errorf("grep = %q", out)
-	}
-	if out, _ := call(t, f, "grep", map[string]any{"pattern": "ONE", "ignoreCase": true}); !strings.Contains(out, "src/a.go:3:") {
-		t.Errorf("ignoreCase grep = %q", out)
-	}
-	if out, _ := call(t, f, "grep", map[string]any{"pattern": "nothing-here"}); out != "no matches" {
-		t.Errorf("no-match grep = %q", out)
-	}
-	if out, _ := call(t, f, "grep", map[string]any{"pattern": "func", "limit": 1}); !strings.Contains(out, "stopped at 1 matches") {
-		t.Errorf("limited grep = %q", out)
-	}
-	if _, err := call(t, f, "grep", map[string]any{"pattern": "("}); err == nil {
-		t.Error("a bad pattern was accepted")
-	}
-	if out, _ := call(t, f, "glob", map[string]any{"pattern": "src/*.go"}); strings.TrimSpace(out) != "src/a.go" {
-		t.Errorf("glob = %q", out)
-	}
-	if out, _ := call(t, f, "glob", map[string]any{"pattern": "**/*.{go,txt}"}); strings.TrimSpace(out) != "src/a.go\nsrc/deep/b.txt" {
-		t.Errorf("alternation glob = %q", out)
-	}
-}
-
-func TestToolsAllowlist(t *testing.T) {
-	f := &Files{Authority: AuthorityReadOnly}
-	var names []string
-	for _, tl := range f.Tools([]string{"Read", "grep"}) {
-		names = append(names, tl.Def.Name)
-	}
-	if strings.Join(names, ",") != "read,grep" {
-		t.Errorf("allowlisted tools = %v", names)
-	}
-	if n := len(f.Tools(nil)); n != 5 {
-		t.Errorf("default tools = %d", n)
-	}
-}
-
-func TestTruncateOutputKeepsHeadAndTail(t *testing.T) {
-	s := strings.Repeat("a", 100) + strings.Repeat("é", 100) + strings.Repeat("z", 100)
-	out, cut := TruncateOutput(s, 120)
-	if !cut || !strings.Contains(out, "bytes of output omitted") || !strings.HasPrefix(out, "aaa") || !strings.HasSuffix(out, "zzz") {
-		t.Errorf("out = %q", out)
-	}
-	for _, r := range out {
-		if r == '�' {
-			t.Fatalf("a rune was split: %q", out)
-		}
-	}
-	if same, cut := TruncateOutput("short", 120); cut || same != "short" {
-		t.Errorf("short = %q, %v", same, cut)
 	}
 }
 

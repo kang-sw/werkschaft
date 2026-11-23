@@ -1,21 +1,23 @@
 package wsagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsconfig"
-	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -78,142 +80,134 @@ func (w *werkWS) Call(_ context.Context, name string, _ json.RawMessage) (werk.C
 	return werk.CallResult{Text: "ran " + name}, nil
 }
 
-// werkFleet runs the real werk loop in-process behind a fake holder: a spawn
-// starts an Agent from the spawn's own argv, the holder's input feeds the
-// agent's standard input, and its output lines become the holder's records.
-// The child outlives a runner, as a held process outlives its daemon.
-type werkFleet struct {
-	t     *testing.T
-	host  *fakeHolders
+type werkFixtureBackend struct {
+	WerkBackend
 	model *werkModel
-	ws    *werkWS
-
-	mu     sync.Mutex
-	argv   map[string][]string
-	env    map[string]map[string]string
-	pipes  map[string]*io.PipeWriter
-	agents map[string]*werk.Agent
 }
 
-func newWerkFleet(t *testing.T, host *fakeHolders, model *werkModel) *werkFleet {
-	t.Helper()
-	f := &werkFleet{t: t, host: host, model: model, ws: &werkWS{}, argv: map[string][]string{}, env: map[string]map[string]string{},
-		pipes: map[string]*io.PipeWriter{}, agents: map[string]*werk.Agent{}}
-	host.onSpawn = f.spawn
-	host.onInput = f.input
-	t.Cleanup(func() {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		for _, pw := range f.pipes {
-			pw.Close()
-		}
-	})
-	return f
-}
-
-// flagValue reads --name from argv.
-func argValue(argv []string, name string) string {
-	for i, a := range argv {
-		if a == name && i+1 < len(argv) {
-			return argv[i+1]
-		}
+func (b werkFixtureBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
+	if spec.Holder != nil || len(spec.Env) != 0 {
+		return nil, errors.New("daemon loop got child launch context")
 	}
-	return ""
+	return startWerkLoop(ctx, spec, b.model)
 }
 
-type lineSink struct {
-	emit func(string)
-	buf  bytes.Buffer
+type werkFixture struct {
+	runner   atomic.Pointer[Runner]
+	endpoint string
+	tools    []werk.MCPTool
+	calls    chan string
+	bindings chan wsdashboard.ProxyHello
 }
 
-func (l *lineSink) Write(p []byte) (int, error) {
-	l.buf.Write(p)
-	for {
-		raw := l.buf.Bytes()
-		i := bytes.IndexByte(raw, '\n')
-		if i < 0 {
-			break
-		}
-		line := string(raw[:i])
-		l.buf.Next(i + 1)
-		l.emit(line)
-	}
-	return len(p), nil
-}
-
-func (f *werkFleet) spawn(id string, spec wsholder.SpawnSpec) {
-	argv := spec.Argv
-	agent, err := werk.New(werk.Config{
-		Dir: argValue(argv, "--dir"), Root: argValue(argv, "--root"), Cwd: argValue(argv, "--cwd"),
-		Authority: werk.Authority(argValue(argv, "--authority")), Model: argValue(argv, "--model"),
-		Effort: argValue(argv, "--effort"), Session: argValue(argv, "--session"),
-		LocalTools: strings.Split(argValue(argv, "--tools"), ","),
-		Endpoint:   f.model, WS: f.ws,
-		Out:   &lineSink{emit: func(line string) { f.host.out(id, line) }},
-		Sleep: func(context.Context, time.Duration) error { return nil },
-	})
-	if err != nil {
-		f.t.Errorf("start the werk loop: %v", err)
+func (f *werkFixture) serve(w http.ResponseWriter, req *http.Request) {
+	bearer := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	hello, _, ok := f.runner.Load().ResolveMCPToken(bearer)
+	if !ok || hello.FileWrites == nil || hello.Conversation == "" {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	pr, pw := io.Pipe()
-	f.mu.Lock()
-	f.argv[id], f.env[id], f.pipes[id], f.agents[id] = argv, spec.Env, pw, agent
-	f.mu.Unlock()
-	go func() {
-		_ = agent.Serve(context.Background(), pr)
-		agent.Close()
-	}()
-}
-
-func (f *werkFleet) input(id string, data []byte, eof bool) {
-	f.mu.Lock()
-	pw := f.pipes[id]
-	f.mu.Unlock()
-	if pw == nil {
+	var call struct {
+		Method string
+		ID     json.RawMessage
+		Params struct{ Name string }
+	}
+	if err := json.NewDecoder(req.Body).Decode(&call); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if len(data) > 0 {
-		_, _ = pw.Write(data)
+	var result any
+	switch call.Method {
+	case "initialize":
+		f.bindings <- hello
+		result = map[string]any{}
+	case "notifications/initialized":
+		w.WriteHeader(http.StatusAccepted)
+		return
+	case "tools/list":
+		tools := slices.Clone(f.tools)
+		if hello.FileWrites.CurrentAuthority() != wsfs.AuthorityReadOnly {
+			tools = append(tools, werk.MCPTool{Name: "fs.write"}, werk.MCPTool{Name: "fs.edit"})
+		}
+		result = map[string]any{"tools": tools}
+	case "tools/call":
+		f.calls <- call.Params.Name
+		result = map[string]any{"content": []map[string]string{{"type": "text", "text": "ran " + call.Params.Name}}}
+	default:
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
-	if eof {
-		pw.Close()
-	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": call.ID, "result": result})
 }
 
-// werkHarness is a runner harness with the werk registration and a configured
-// small tier.
-func werkHarness(t *testing.T, model *werkModel, configured bool) (*leadHarness, *werkFleet, *reports) {
+func (f *werkFixture) start(h *leadHarness) {
+	h.runner = NewRunner(h.opts)
+	h.runner.SetEndpoint(f.endpoint)
+	h.runner.ExpectExecJobs()
+	f.runner.Store(h.runner)
+	h.runner.Start(nil)
+	h.runner.BindExecJobs(h.execJobs)
+	h.t.Cleanup(h.runner.Close)
+}
+
+func werkHarness(t *testing.T, model *werkModel) (*leadHarness, *werkFixture, *reports) {
 	t.Helper()
 	h := newLeadHarness(t)
 	got := &reports{}
 	h.opts.Report = got.add
-	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
-	_, reg := WerkBackend{Command: fakeHarness("ws-mcp")}.registration()
-	h.opts.Backends[BackendWerk] = reg
-	// The hosted exec jobs are open, as in a daemon: a werk worker has no
-	// native shell, so it runs under the exec cutover and lists the ws exec
-	// tools.
-	h.execJobs = newFakeExecJobs()
-	fleet := newWerkFleet(t, h.holders, model)
-	if configured {
-		if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "vendor/some-model", BackendWerk, "medium"); err != nil {
-			t.Fatal(err)
-		}
+	h.opts.WSMCP = func(string) (MCPCommand, error) {
+		return MCPCommand{}, errors.New("daemon loop attempted to resolve a launcher")
 	}
-	h.startAt("http://127.0.0.1:1")
-	return h, fleet, got
+	h.opts.DaemonMCP = func(string) (MCPCommand, error) { return MCPCommand{}, nil }
+	_, reg := (WerkBackend{}).registration()
+	if reg.ProcessKind != ProcessDurable {
+		t.Fatal("the production registration did not select the daemon loop")
+	}
+	reg.Backend = werkFixtureBackend{model: model}
+	h.opts.Backends[BackendWerk] = reg
+	h.execJobs = newFakeExecJobs()
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "vendor/some-model", BackendWerk, "medium"); err != nil {
+		t.Fatal(err)
+	}
+	f := &werkFixture{
+		tools: []werk.MCPTool{{Name: "git.status"}, {Name: "fs.read"}, {Name: "fs.grep"}, {Name: "fs.list"}},
+		calls: make(chan string, 8), bindings: make(chan wsdashboard.ProxyHello, 8),
+	}
+	server := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(server.Close)
+	f.endpoint = server.URL
+	f.start(h)
+	return h, f, got
 }
 
-func spawnWerk(t *testing.T, h *leadHarness, authority string) (id, holder string) {
+func (f *werkFixture) nextBinding(t *testing.T) wsdashboard.ProxyHello {
+	t.Helper()
+	select {
+	case hello := <-f.bindings:
+		return hello
+	default:
+		t.Fatal("no authenticated MCP binding reached the fixture")
+		return wsdashboard.ProxyHello{}
+	}
+}
+
+func spawnWerk(t *testing.T, h *leadHarness, authority string) string {
 	t.Helper()
 	caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
 	res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "do the work", Tier: BackendWerk + ".small", Authority: authority})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id = agentID(res.Address)
-	return id, h.holder(id)
+	return agentID(res.Address)
+}
+
+func werkRecord(t *testing.T, h *leadHarness, id string) Record {
+	t.Helper()
+	c := h.runner.conv(id)
+	if c == nil {
+		t.Fatal("no live durable conversation")
+	}
+	return c.record()
 }
 
 func TestWerkWorkerRunsATurnAndReportsItThroughTheRunner(t *testing.T) {
@@ -224,145 +218,98 @@ func TestWerkWorkerRunsATurnAndReportsItThroughTheRunner(t *testing.T) {
 		},
 		werkMessage("all done: clean tree"),
 	}}
-	h, fleet, got := werkHarness(t, model, true)
-	fleet.ws.tools = []werk.MCPTool{{Name: "git.status", Description: "status"}}
-	id, holder := spawnWerk(t, h, "workdir-write")
+	h, fleet, got := werkHarness(t, model)
+	id := spawnWerk(t, h, "workdir-write")
 
 	eventually(t, "the worker's report", func() bool { return len(got.list()) == 1 })
 	rep := got.list()[0]
 	if rep.Result.Status != TurnDone || rep.Result.Message != "all done: clean tree" || rep.Result.ID != id {
 		t.Fatalf("report = %+v", rep)
 	}
-	if calls := fleet.ws.calls; len(calls) != 1 || calls[0] != "git.status" {
-		t.Errorf("ws tool calls = %v", calls)
-	}
-
-	rec := h.record(id)
-	if rec.Backend != BackendWerk || rec.SessionID == "" || rec.Model != "vendor/some-model" || rec.Effort != "medium" {
-		t.Errorf("record = backend %q session %q model %q effort %q", rec.Backend, rec.SessionID, rec.Model, rec.Effort)
-	}
-	if rec.MCPToken == "" || rec.MCPHolder != holder {
-		t.Errorf("the worker's MCP tuple was not persisted: %+v", rec)
-	}
-	// The worker started under the exec cutover with no version gate (the
-	// harness has no native process tool, so the removal is the absence of
-	// the tool): its connection lists the exec tools, and the record keeps the
-	// holder it was started under, as a rejoin reads it.
-	if rec.ExecCutoverHolder != holder {
-		t.Errorf("exec cutover holder = %q, want %q", rec.ExecCutoverHolder, holder)
-	}
-	if hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken); !ok || hello.ExecCutover != BackendWerk {
-		t.Errorf("the worker's token is not marked for the exec cutover: %+v %v", hello, ok)
-	}
-
-	// The spawn: the ws binary's hidden subcommand, authority and model in
-	// its argv; the bearer and route in its environment, never its argv; no
-	// provider credential anywhere.
-	argv, env := fleet.argv[holder], fleet.env[holder]
-	if len(argv) < 2 || argv[0] != fakeHarness("ws-mcp") || argv[1] != WerkSubcommand {
-		t.Fatalf("argv = %v", argv)
-	}
-	for flag, want := range map[string]string{"--authority": "workdir-write", "--model": "vendor/some-model", "--effort": "medium", "--tools": "read,edit,write,grep,glob"} {
-		if got := argValue(argv, flag); got != want {
-			t.Errorf("%s = %q, want %q", flag, got, want)
+	select {
+	case name := <-fleet.calls:
+		if name != "git.status" {
+			t.Errorf("called %q, want git.status", name)
 		}
+	default:
+		t.Error("the model's tool did not use authenticated HTTP")
 	}
-	if env[EnvMCPSessionToken] == "" || env[EnvMCPSessionToken] != rec.MCPToken || env[EnvMCPSessionURL] == "" {
-		t.Errorf("session route not in the child's environment: %v", env)
+	binding := fleet.nextBinding(t)
+	if binding.Conversation != id || binding.ExecCutover != BackendWerk || binding.OwnerPID != 0 ||
+		binding.FileWrites.Authority != wsfs.AuthorityWorkdirWrite || binding.FileWrites.Record == nil {
+		t.Fatal("the daemon process did not get its trusted tool authority")
 	}
-	for _, a := range argv {
-		if strings.Contains(a, rec.MCPToken) {
-			t.Error("the bearer is in argv")
-		}
+	rec := werkRecord(t, h, id)
+	if rec.Backend != BackendWerk || rec.SessionID == "" || rec.Model != "vendor/some-model" || rec.Effort != "medium" ||
+		rec.HolderID != "" || rec.MCPToken != "" || h.holders.opCount("spawn") != 0 {
+		t.Fatal("daemon worker did not keep its stable identity without a holder")
 	}
-	for name := range env {
-		if strings.Contains(strings.ToLower(name), "openrouter") || strings.Contains(strings.ToLower(name), "api_key") {
-			t.Errorf("a provider credential variable reached the child: %s", name)
-		}
-	}
-
 }
 
 func TestWerkReadOnlyWorkerIsOfferedTheReadingTools(t *testing.T) {
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){werkMessage("looked")}}
-	h, fleet, got := werkHarness(t, model, true)
-	_, holder := spawnWerk(t, h, "read-only")
+	h, fleet, got := werkHarness(t, model)
+	id := spawnWerk(t, h, "read-only")
 	eventually(t, "the report", func() bool { return len(got.list()) == 1 })
-	if tools := argValue(fleet.argv[holder], "--tools"); tools != "read,grep,glob" {
-		t.Errorf("read-only tools = %q", tools)
+	binding := fleet.nextBinding(t)
+	if binding.Conversation != id || binding.FileWrites.Authority != wsfs.AuthorityReadOnly {
+		t.Fatal("read-only worker did not bind its admitted permission")
 	}
-	if lvl := argValue(fleet.argv[holder], "--authority"); lvl != "read-only" {
-		t.Errorf("authority = %q", lvl)
-	}
-	reqs := model.reqs
+	model.mu.Lock()
+	defer model.mu.Unlock()
 	var names []string
-	for _, d := range reqs[0].Tools {
-		names = append(names, d.Name)
+	for _, tool := range model.reqs[0].Tools {
+		names = append(names, tool.Name)
 	}
-	if slices.Contains(names, "edit") || slices.Contains(names, "write") {
+	for _, name := range []string{"fs_read", "fs_grep", "fs_list"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("missing %s in %v", name, names)
+		}
+	}
+	if slices.Contains(names, "fs_edit") || slices.Contains(names, "fs_write") {
 		t.Errorf("a read-only worker was offered %v", names)
 	}
 }
 
-// A daemon replacement while the model request is in flight: the holder and
-// its child survive, the successor attaches and replays, and the one report
-// of the finished turn reaches the parent once, from the same process.
-func TestWerkHolderSurvivesADaemonReplaceMidTurn(t *testing.T) {
-	gate := make(chan struct{})
+func TestWerkResumesActiveTurnAcrossRunnerReplacement(t *testing.T) {
+	first := make(chan struct{}, 1)
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
-		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
-			<-gate
-			return werkMessage("survived the swap")(ctx, req)
+		func(ctx context.Context, _ werk.Request) (*werk.Response, error) {
+			first <- struct{}{}
+			<-ctx.Done()
+			return nil, ctx.Err()
 		},
+		werkMessage("resumed the request"),
 	}}
-	h, fleet, got := werkHarness(t, model, true)
-	id, holder := spawnWerk(t, h, "workdir-write")
-	eventually(t, "the model request", func() bool { return model.requestCount() == 1 })
-	before := h.record(id)
-	if before.HolderID != holder || !before.TurnOpen {
-		t.Fatalf("worker is not mid-turn under its holder: %+v", before)
+	h, fleet, got := werkHarness(t, model)
+	id := spawnWerk(t, h, "workdir-write")
+	select {
+	case <-first:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no initial request")
 	}
-
+	before := werkRecord(t, h, id)
+	if before.DurableTurn == nil {
+		t.Fatal("the initial request lacked a durable turn")
+	}
 	h.runner.Close()
-	if h.holders.opCount("stop") != 0 {
-		t.Fatalf("the runner's shutdown stopped the worker: %v", h.holders.opList())
+	if len(got.list()) != 0 {
+		t.Fatal("replacement reported an interrupted model request")
 	}
-	h.holders.restart()
-	close(gate)
-	h.startAt("http://127.0.0.1:1")
 
-	eventually(t, "the report after the replacement", func() bool { return len(got.list()) == 1 })
-	if rep := got.list()[0]; rep.Result.Status != TurnDone || rep.Result.Message != "survived the swap" {
-		t.Fatalf("report = %+v", rep)
+	fleet.start(h)
+	eventually(t, "the resumed turn report", func() bool { return len(got.list()) == 1 })
+	after := werkRecord(t, h, id)
+	if after.SessionID != before.SessionID || after.ReportID != before.DurableTurn.ID || after.DurableTurn != nil ||
+		after.LastTurn.Result.Message != "resumed the request" || h.holders.opCount("spawn") != 0 {
+		t.Fatal("the replacement lost the original logical turn")
 	}
-	after := h.record(id)
-	if after.HolderID != holder || after.HostPID != before.HostPID || after.TurnOpen || after.LastTurn == nil || after.LastTurn.Result.Status != TurnDone {
-		t.Fatalf("rejoin lost the holder or the turn: before %+v, after %+v", before, after)
-	}
-	if after.MCPToken != before.MCPToken || after.MCPURL != before.MCPURL {
-		t.Errorf("the MCP tuple changed: %+v / %+v", before, after)
-	}
-	if h.holders.opCount("launch") != 1 || h.holders.opCount("spawn") != 1 || h.holders.opCount("stop") != 0 {
-		t.Fatalf("the replacement changed the physical process: %v", h.holders.opList())
-	}
-	if len(got.list()) != 1 {
-		t.Fatalf("more than one report: %+v", got.list())
-	}
-	if n := len(fleet.agents); n != 1 {
-		t.Errorf("agents started = %d", n)
-	}
-	// The successor drives the same child: a second prompt reaches it and
-	// the turn runs on the conversation the first one built.
 	model.mu.Lock()
-	model.steps = append(model.steps, werkMessage("second turn"))
-	model.mu.Unlock()
-	h.send(id, "again")
-	eventually(t, "the second request", func() bool { return model.requestCount() == 2 })
-	model.mu.Lock()
-	second := model.reqs[1].Input
-	model.mu.Unlock()
-	if len(second) != 3 {
-		t.Errorf("the second request carries %d items, want the first turn's user and reply plus the second user", len(second))
+	defer model.mu.Unlock()
+	if len(model.reqs) != 2 || !slices.EqualFunc(model.reqs[0].Input, model.reqs[1].Input, func(x, y json.RawMessage) bool {
+		return string(x) == string(y)
+	}) {
+		t.Fatal("the interrupted model input changed or was duplicated")
 	}
 }
 
@@ -376,8 +323,8 @@ func TestWerkInterruptAbortsTheTurnAndTheSessionStays(t *testing.T) {
 		},
 		werkMessage("after the interrupt"),
 	}}
-	h, _, got := werkHarness(t, model, true)
-	id, _ := spawnWerk(t, h, "workdir-write")
+	h, _, got := werkHarness(t, model)
+	id := spawnWerk(t, h, "workdir-write")
 	<-started
 	if _, err := h.runner.AgentInterrupt(LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config), "id:"+id); err != nil {
 		t.Fatal(err)
@@ -399,48 +346,26 @@ func TestWerkInterruptAbortsTheTurnAndTheSessionStays(t *testing.T) {
 }
 
 func TestWerkRefusesAWorkerWithoutAModelOrAuthority(t *testing.T) {
-	host := newFakeHolders()
 	mk := func(level PermissionLevel, model string) StartSpec {
 		return StartSpec{
 			Root: t.TempDir(), Dir: t.TempDir(), Model: model, PermissionLevel: level,
 			MCPSession: &MCPSession{URL: "http://127.0.0.1:1/mcp/session", Token: "tok"},
-			Holder:     &holderChild{host: host, table: &holderTable{}, session: holderSession{Kind: holderKindAgentWorker, Backend: BackendWerk}},
 		}
 	}
-	b := WerkBackend{Command: fakeHarness("ws-mcp")}
-	if _, err := b.Start(context.Background(), mk("", "vendor/m")); err == nil || !strings.Contains(err.Error(), "needs an authority") {
+	b := WerkBackend{}
+	if _, err := b.Start(context.Background(), mk("", "vendor/m")); err == nil || !strings.Contains(err.Error(), "authority is required") {
 		t.Errorf("no authority: %v", err)
 	}
-	if _, err := b.Start(context.Background(), mk(PermissionFull, "")); err == nil || !strings.Contains(err.Error(), "no tier model is configured") || !strings.Contains(err.Error(), "agents.tier") {
+	if _, err := b.Start(context.Background(), mk(PermissionFull, "")); err == nil || !strings.Contains(err.Error(), "tier model is required") {
 		t.Errorf("no model: %v", err)
 	}
-	if _, err := b.Start(context.Background(), StartSpec{Lead: &LeadSpec{}, Holder: &holderChild{}}); !errors.Is(err, errWerkLead) {
+	if _, err := b.Start(context.Background(), StartSpec{Lead: &LeadSpec{}}); !errors.Is(err, errWerkLead) {
 		t.Errorf("a lead: %v", err)
 	}
-	noHolder := mk(PermissionFull, "vendor/m")
-	noHolder.Holder = nil
-	if _, err := b.Start(context.Background(), noHolder); err == nil || !strings.Contains(err.Error(), "session holder") {
-		t.Errorf("no holder: %v", err)
-	}
-	if n := host.opCount("launch"); n != 0 {
-		t.Errorf("a refused start launched %d holders", n)
-	}
-}
-
-func TestWerkAttachSendsNothing(t *testing.T) {
-	host := newFakeHolders()
-	id := host.add(holderSession{Kind: holderKindAgentWorker, Backend: BackendWerk, ReplyID: "worker"})
-	host.Scan()
-	proc, err := WerkBackend{Command: fakeHarness("ws-mcp")}.Start(context.Background(), StartSpec{
-		Root: t.TempDir(), Dir: t.TempDir(), SessionID: "existing",
-		Holder: &holderChild{host: host, table: &holderTable{}, id: id},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { proc.(interface{ Detach() bool }).Detach() })
-	if ops, inputs := host.opList(), host.inputs(id, ""); len(ops) != 0 || len(inputs) != 0 {
-		t.Fatalf("attach launched or sent to a process: ops %v, inputs %v", ops, inputs)
+	spec := mk(PermissionFull, "vendor/m")
+	spec.MCPSession = nil
+	if _, err := b.Start(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "authenticated MCP session is required") {
+		t.Errorf("no MCP binding: %v", err)
 	}
 }
 
@@ -449,7 +374,7 @@ func TestWerkAttachSendsNothing(t *testing.T) {
 func TestWerkAvailabilityNamesWhatIsMissing(t *testing.T) {
 	configured := false
 	h := newLeadHarness(t)
-	_, reg := WerkBackend{Command: fakeHarness("ws-mcp"), credentialStatus: func(string) (bool, error) { return configured, nil }}.registration()
+	_, reg := WerkBackend{credentialStatus: func(string) (bool, error) { return configured, nil }}.registration()
 	h.opts.Backends[BackendWerk] = reg
 	h.startAt("http://127.0.0.1:1")
 	lead := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
@@ -564,206 +489,82 @@ func TestWerkCatalogGradesEveryItemForBothRoles(t *testing.T) {
 
 // Mapper fixtures: one line per kind of the loop's protocol.
 func TestWerkMapperMapsEveryLineKind(t *testing.T) {
-	line := func(l werk.Line) []byte {
-		l.At = 1_700_000_000_000
-		raw, _ := json.Marshal(l)
-		return raw
-	}
 	m := newWerkMapper("")
-	var answered []string
-	replies := repliesFunc{onAnswer: func(id string, a controlAnswer) { answered = append(answered, id) }}
 
-	if evs := m.mapLine(line(werk.Line{T: werk.LineInit, Session: "abc123", Version: werk.ProtocolVersion}), replies); len(evs) != 2 || evs[0].SessionID != "abc123" || evs[1].Harness == nil || evs[1].Harness.Version != werk.ProtocolVersion {
+	if evs := m.mapEvent(werk.Line{T: werk.LineInit, Session: "abc123", Version: werk.ProtocolVersion}); len(evs) != 2 || evs[0].SessionID != "abc123" || evs[1].Harness == nil || evs[1].Harness.Version != werk.ProtocolVersion {
 		t.Errorf("init = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineTurnStart, Turn: 1}), replies); len(evs) != 1 || !evs[0].TurnStart {
+	if evs := m.mapEvent(werk.Line{T: werk.LineTurnStart, Turn: 1}); len(evs) != 1 || !evs[0].TurnStart {
 		t.Errorf("turn_start = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineReply, Turn: 1, Item: "m1", Text: "partial"}), replies); len(evs) != 1 || evs[0].Live.Kind != wslive.KindReply || evs[0].Live.Final || evs[0].Live.Source != "" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineReply, Turn: 1, Item: "m1", Text: "partial"}); len(evs) != 1 || evs[0].Live.Kind != wslive.KindReply || evs[0].Live.Final || evs[0].Live.Source != "" {
 		t.Errorf("streamed reply = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineReply, Turn: 1, Item: "m1", Text: "whole", Final: true}), replies); len(evs) != 1 || !evs[0].Live.Final || evs[0].Live.Source != "werk/abc123/1/m1" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineReply, Turn: 1, Item: "m1", Text: "whole", Final: true}); len(evs) != 1 || !evs[0].Live.Final || evs[0].Live.Source != "werk/abc123/1/m1" {
 		t.Errorf("final reply = %+v", evs)
 	}
 	cost := 0.5
 	cost2 := 0.25
-	evs := m.mapLine(line(werk.Line{T: werk.LineUsage, Turn: 1, InputTokens: 1000, CachedTokens: 800, OutputTokens: 50, Context: 1050, Window: 10500, CostUSD: &cost}), replies)
+	evs := m.mapEvent(werk.Line{T: werk.LineUsage, Turn: 1, InputTokens: 1000, CachedTokens: 800, OutputTokens: 50, Context: 1050, Window: 10500, CostUSD: &cost})
 	if len(evs) != 1 || evs[0].Live.Kind != wslive.KindStatus || *evs[0].Live.Context.Tokens != 1050 || *evs[0].Live.Context.Percent != 10 || *evs[0].Live.Context.CacheHit != 80 || evs[0].Live.Cost.USD != 0.5 {
 		t.Errorf("usage = %+v", evs[0].Live)
 	}
-	m.mapLine(line(werk.Line{T: werk.LineToolStart, Turn: 1, Call: "c1", Name: "exec_shell", Args: `{"cmd":"ls"}`}), replies)
-	evs = m.mapLine(line(werk.Line{T: werk.LineToolEnd, Turn: 1, Call: "c1", Name: "exec_shell", Output: "x"}), replies)
+	m.mapEvent(werk.Line{T: werk.LineToolStart, Turn: 1, Call: "c1", Name: "exec_shell", Args: `{"cmd":"ls"}`})
+	evs = m.mapEvent(werk.Line{T: werk.LineToolEnd, Turn: 1, Call: "c1", Name: "exec_shell", Output: "x"})
 	if len(evs) != 1 || !evs[0].ToolBoundary || evs[0].Live.Kind != wslive.KindAgent || len(evs[0].Live.Batches) != 1 {
 		t.Errorf("tool_end = %+v", evs)
 	}
-	evs = m.mapLine(line(werk.Line{T: werk.LineUsage, Turn: 1, InputTokens: 10, CostUSD: &cost2}), replies)
+	evs = m.mapEvent(werk.Line{T: werk.LineUsage, Turn: 1, InputTokens: 10, CostUSD: &cost2})
 	if evs[0].Live.Cost.USD != 0.75 {
 		t.Errorf("cost does not accumulate over responses: %+v", evs[0].Live.Cost)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineRetry, Attempt: 2, MaxRetries: 5, Status: 429, Error: "slow down"}), replies); len(evs) != 1 || evs[0].Retry == nil || evs[0].Retry.Attempt != 2 || evs[0].Retry.Status != 429 {
+	if evs := m.mapEvent(werk.Line{T: werk.LineRetry, Attempt: 2, MaxRetries: 5, Status: 429, Error: "slow down"}); len(evs) != 1 || evs[0].Retry == nil || evs[0].Retry.Attempt != 2 || evs[0].Retry.Status != 429 {
 		t.Errorf("retry = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineSteerAck, ID: "s1"}), replies); len(evs) != 1 || evs[0].SteerAnswer == nil || evs[0].SteerAnswer.Refusal != "" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineSteerAck, ID: "s1"}); len(evs) != 1 || evs[0].SteerAnswer == nil || evs[0].SteerAnswer.Refusal != "" {
 		t.Errorf("steer ack = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineSteerAck, ID: "s2", Refusal: "no turn is running"}), replies); evs[0].SteerAnswer.Refusal != "no turn is running" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineSteerAck, ID: "s2", Refusal: "no turn is running"}); evs[0].SteerAnswer.Refusal != "no turn is running" {
 		t.Errorf("steer refusal = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineUserTaken, Text: "also X"}), replies); len(evs) != 1 || evs[0].UserTaken != "also X" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineUserTaken, Text: "also X"}); len(evs) != 1 || evs[0].UserTaken != "also X" {
 		t.Errorf("user_taken = %+v", evs)
 	}
-	if evs := m.mapLine(line(werk.Line{T: werk.LineNotice, Text: "careful"}), replies); len(evs) != 1 || evs[0].Notice != "careful" {
+	if evs := m.mapEvent(werk.Line{T: werk.LineNotice, Text: "careful"}); len(evs) != 1 || evs[0].Notice != "careful" {
 		t.Errorf("notice = %+v", evs)
 	}
-	m.mapLine(line(werk.Line{T: werk.LineStatus, ID: "wsc/status/1"}), replies)
-	if len(answered) != 1 || answered[0] != "wsc/status/1" {
-		t.Errorf("status answers = %v", answered)
-	}
 	for _, quiet := range []werk.Line{{T: werk.LineUser, Text: "hi"}, {T: werk.LineReasoning, Text: "thinking"}} {
-		if evs := m.mapLine(line(quiet), replies); len(evs) != 0 {
+		if evs := m.mapEvent(quiet); len(evs) != 0 {
 			t.Errorf("%s mapped to %+v", quiet.T, evs)
 		}
 	}
-	if evs := m.mapLine([]byte("not json"), replies); evs != nil {
-		t.Errorf("junk = %+v", evs)
-	}
 
 	// An open batch is finished by the turn end, which names its reason.
-	m.mapLine(line(werk.Line{T: werk.LineToolStart, Turn: 2, Call: "c9", Name: "read"}), replies)
-	evs = m.mapLine(line(werk.Line{T: werk.LineTurnEnd, Turn: 2, Reason: werk.ReasonAborted}), replies)
+	m.mapEvent(werk.Line{T: werk.LineToolStart, Turn: 2, Call: "c9", Name: "read"})
+	evs = m.mapEvent(werk.Line{T: werk.LineTurnEnd, Turn: 2, Reason: werk.ReasonAborted})
 	last := evs[len(evs)-1]
 	if len(evs) != 3 || !last.TurnEnd || last.TurnReason != wslive.TurnAborted || last.TurnError != "" || !evs[1].RetryEnd {
 		t.Errorf("aborted turn end = %+v", evs)
 	}
-	evs = m.mapLine(line(werk.Line{T: werk.LineTurnEnd, Turn: 3, Reason: werk.ReasonError, Error: "the model response failed (server_error)"}), replies)
+	evs = m.mapEvent(werk.Line{T: werk.LineTurnEnd, Turn: 3, Reason: werk.ReasonError, Error: "the model response failed (server_error)"})
 	if last := evs[len(evs)-1]; !last.TurnEnd || last.TurnError != "the model response failed (server_error)" {
 		t.Errorf("error turn end = %+v", evs)
 	}
-	evs = m.mapLine(line(werk.Line{T: werk.LineTurnEnd, Turn: 4, Reason: werk.ReasonDone}), replies)
+	evs = m.mapEvent(werk.Line{T: werk.LineTurnEnd, Turn: 4, Reason: werk.ReasonDone})
 	if last := evs[len(evs)-1]; !last.TurnEnd || last.TurnError != "" || last.TurnReason != "" {
 		t.Errorf("done turn end = %+v", evs)
 	}
 }
 
-type repliesFunc struct {
-	onAnswer func(id string, a controlAnswer)
-}
-
-func (r repliesFunc) answer(id string, a controlAnswer) { r.onAnswer(id, a) }
-func (r repliesFunc) send(any)                          {}
-
-// The records of a turn that ended while no daemon was attached left the
-// ring before the successor replayed them: the successor asks the process
-// (the status command) and settles the turn from its answer, once.
-func TestWerkRecoversATurnWhoseRecordsLeftTheRing(t *testing.T) {
-	gate := make(chan struct{})
-	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
-		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
-			<-gate
-			return werkMessage("finished while the daemon was away")(ctx, req)
-		},
-	}}
-	h, _, got := werkHarness(t, model, true)
-	id, holder := spawnWerk(t, h, "workdir-write")
-	eventually(t, "the model request", func() bool { return model.requestCount() == 1 })
-	h.runner.Close()
-	h.holders.restart()
-	close(gate)
-	eventually(t, "the child's turn end", func() bool {
-		for _, line := range holderOutputs(h.holders, holder) {
-			if strings.Contains(line, `"t":"turn_end"`) {
-				return true
-			}
-		}
-		return false
-	})
-	// Only the last record is still in the ring.
-	h.holders.trim(holder, h.holders.records(holder)-1)
-	h.startAt("http://127.0.0.1:1")
-
-	eventually(t, "the recovered report", func() bool { return len(got.list()) == 1 })
-	rep := got.list()[0]
-	if rep.Result.Status != TurnDone || rep.Result.Message != "finished while the daemon was away" || rep.Result.ID != id {
-		t.Fatalf("report = %+v", rep.Result)
-	}
-	if n := len(h.holders.inputs(holder, "status")); n != 1 {
-		t.Errorf("status asks = %d", n)
-	}
-	if len(got.list()) != 1 {
-		t.Fatalf("reports = %+v", got.list())
-	}
-}
-
-// holderOutputs are the output records the holder's child wrote, oldest first.
-func holderOutputs(f *fakeHolders, id string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []string
-	for _, ev := range f.holders[id].ring {
-		if ev.Event == "output" {
-			out = append(out, string(ev.Data))
-		}
-	}
-	return out
-}
-
-// A process started for a conversation that has a backend session resumes it:
-// the recorded session id and the composed instruction file go on the command
-// line, and the effort only when there is one.
-func TestWerkArgsResumeTheRecordedSession(t *testing.T) {
-	spec := StartSpec{
-		Root: "/work/tree", Dir: "/sessions/s1", Cwd: "/work/tree/sub", Model: "vendor/m", PermissionLevel: PermissionWorkdirWrite,
-		SessionID: "0123456789abcdef0123", Instructions: "/sessions/s1/instructions.md",
-	}
-	args, err := werkArgs(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for flag, want := range map[string]string{
-		"--session": "0123456789abcdef0123", "--instructions": "/sessions/s1/instructions.md", "--dir": "/sessions/s1",
-		"--root": "/work/tree", "--cwd": "/work/tree/sub", "--authority": "workdir-write", "--model": "vendor/m",
-	} {
-		if got := argValue(args, flag); got != want {
-			t.Errorf("%s = %q, want %q", flag, got, want)
-		}
-	}
-	if slices.Contains(args, "--effort") {
-		t.Errorf("an empty effort was passed: %v", args)
-	}
-	spec.SessionID, spec.Instructions, spec.Effort = "", "", "high"
-	args, _ = werkArgs(spec)
-	if slices.Contains(args, "--session") || slices.Contains(args, "--instructions") || argValue(args, "--effort") != "high" {
-		t.Errorf("a new session's args = %v", args)
-	}
-	// A profile's own Tools allowlist narrows the file tools.
-	spec.Profile.Tools = []string{"Read", "grep"}
-	if got := argValue(mustArgs(t, spec), "--tools"); got != "read,grep" {
-		t.Errorf("tools = %q", got)
-	}
-}
-
-func mustArgs(t *testing.T, spec StartSpec) []string {
-	t.Helper()
-	args, err := werkArgs(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return args
-}
-
-// A worker whose process was stopped (an idle stop, or the user's) and is
-// woken by a message starts a new process on the recorded backend session: the
-// loop reads the conversation file and the next request carries the earlier
-// turn, so the worker keeps its context across the restart.
 func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		werkMessage("first answer"),
 		werkMessage("second answer"),
 	}}
-	h, fleet, got := werkHarness(t, model, true)
-	id, holder := spawnWerk(t, h, "workdir-write")
+	h, _, got := werkHarness(t, model)
+	id := spawnWerk(t, h, "workdir-write")
 	eventually(t, "the first report", func() bool { return len(got.list()) == 1 })
-	session := h.record(id).SessionID
+	session := werkRecord(t, h, id).SessionID
 	if session == "" {
 		t.Fatal("the process reported no session id")
 	}
@@ -777,48 +578,13 @@ func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
 	if rep := got.list()[1]; rep.Result.Status != TurnDone || rep.Result.Message != "second answer" {
 		t.Fatalf("second report = %+v", rep.Result)
 	}
-	// The second process was started on the same session and read the log.
-	var woken string
-	fleet.mu.Lock()
-	for hid, argv := range fleet.argv {
-		if hid != holder {
-			woken = argValue(argv, "--session")
-		}
-	}
-	fleet.mu.Unlock()
-	if woken != session {
-		t.Errorf("the woken process was started with session %q, want %q", woken, session)
+	if woken := werkRecord(t, h, id).SessionID; woken != session || h.holders.opCount("spawn") != 0 {
+		t.Fatal("the woken daemon loop changed sessions or launched a holder")
 	}
 	model.mu.Lock()
 	second := model.reqs[1].Input
 	model.mu.Unlock()
 	if len(second) != 3 || !strings.Contains(string(second[1]), "first answer") {
 		t.Errorf("the second request lost the first turn: %s", second)
-	}
-}
-
-// The daemon's own environment may hold a provider key; the child gets none
-// of it (it asks the token route per request, and a shell it starts must not
-// find a key to read).
-func TestWerkEnvDropsProviderKeys(t *testing.T) {
-	env := werkEnv(StartSpec{Env: []string{
-		"PATH=/usr/bin", "HOME=/h",
-		"OPENROUTER_API_KEY=sk-or-v1-secret", "openrouter_api_key=sk-or-v1-lower", "OPENROUTER_BASE_URL=http://x",
-	}})
-	var names []string
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		names = append(names, name)
-		if strings.Contains(kv, "sk-or-") {
-			t.Errorf("a provider key reached the child: %s", name)
-		}
-	}
-	for _, want := range []string{"PATH", "HOME"} {
-		if !slices.Contains(names, want) {
-			t.Errorf("%s was dropped: %v", want, names)
-		}
-	}
-	if len(names) != 2 {
-		t.Errorf("environment = %v", names)
 	}
 }

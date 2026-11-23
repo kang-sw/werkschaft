@@ -30,7 +30,7 @@ func TestDurableTurnResumesModelRequestAndReusesFinishedResult(t *testing.T) {
 	open := func(model Responder, before func(json.RawMessage) error) *Agent {
 		t.Helper()
 		a, err := New(Config{Dir: dir, Session: session, Endpoint: model, Authority: AuthorityReadOnly,
-			MCPFilesOnly: true, Emit: func(l Line) { lines = append(lines, l) }, BeforeAppend: before,
+			Emit: func(l Line) { lines = append(lines, l) }, BeforeAppend: before,
 		})
 		must(t, err)
 		t.Cleanup(func() { _ = a.Close() })
@@ -126,7 +126,7 @@ func TestDurableTurnRecoversPendingReadsAndFileEvidence(t *testing.T) {
 
 	ws := &fakeWS{tools: []MCPTool{{Name: "fs_read"}, {Name: "fs_write"}}}
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("done"))}}
-	a, err := New(Config{Dir: dir, Session: session, Endpoint: model, Authority: AuthorityWorkdirWrite, MCPFilesOnly: true, WS: ws})
+	a, err := New(Config{Dir: dir, Session: session, Endpoint: model, Authority: AuthorityWorkdirWrite, WS: ws})
 	must(t, err)
 	defer a.Close()
 	ctx := context.Background()

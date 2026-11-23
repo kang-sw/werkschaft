@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 // agent.go is the model loop: request, tool calls, tool results, repeat,
@@ -29,6 +31,9 @@ import (
 //     one after the other, in the order the model wrote them.
 //   - Output items go back to the provider as received, in order (reasoning
 //     included); the harness adds nothing between them.
+
+// Provider is the model provider used by this harness during worker operation.
+const Provider = wscred.ProviderOpenRouter
 
 // Responder is the model endpoint (*Client).
 type Responder interface {
@@ -60,10 +65,6 @@ type Config struct {
 	// Instructions is the instruction text composed for the session, added to
 	// the harness's own preamble.
 	Instructions string
-	// LocalTools names the file tools the profile offers; empty offers all.
-	LocalTools []string
-	// MCPFilesOnly uses the daemon's file tools for all file operations.
-	MCPFilesOnly bool
 	Endpoint     Responder
 	WS           WSTools
 	Out          io.Writer
@@ -133,7 +134,6 @@ func launchesProcess(modelName string) bool {
 }
 
 type toolEntry struct {
-	local *Tool
 	// ws is the daemon-side name of a ws tool.
 	ws       string
 	readOnly bool
@@ -142,7 +142,6 @@ type toolEntry struct {
 // Agent is one session's loop.
 type Agent struct {
 	cfg   Config
-	files *Files
 	store *Store
 	log   *writer
 	out   *emitter
@@ -222,7 +221,6 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a := &Agent{
 		cfg:   cfg,
-		files: &Files{Root: cfg.Root, Cwd: cfg.Cwd, Authority: cfg.Authority},
 		store: store,
 		out:   &emitter{out: cfg.Out, emit: cfg.Emit, now: now},
 		now:   now,
@@ -778,9 +776,8 @@ func (a *Agent) instructions() string {
 	return b.String()
 }
 
-// loadTools lists the tools once: the profile's file tools and the daemon's
-// ws tools. A failed listing leaves the file tools and is tried again on the
-// next turn.
+// loadTools lists the daemon's ws tools. A failed listing is tried again
+// on the next turn.
 func (a *Agent) loadTools(ctx context.Context) error {
 	a.mu.Lock()
 	done := a.toolsDone
@@ -790,13 +787,6 @@ func (a *Agent) loadTools(ctx context.Context) error {
 	}
 	tools := map[string]toolEntry{}
 	var defs []ToolDef
-	if !a.cfg.MCPFilesOnly {
-		for _, t := range a.files.Tools(a.cfg.LocalTools) {
-			t := t
-			tools[t.Def.Name] = toolEntry{local: &t, readOnly: t.ReadOnly}
-			defs = append(defs, t.Def)
-		}
-	}
 	var listErr error
 	if a.cfg.WS != nil {
 		listed, err := a.cfg.WS.ListTools(ctx)
@@ -962,20 +952,10 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	if !json.Valid(args) {
 		return "Error: the tool arguments are not valid JSON", true
 	}
-	if e.local != nil {
-		out, err := e.local.Run(ctx, args)
-		if err != nil {
-			if ctx.Err() != nil {
-				return interruptedOutput, true
-			}
-			return "Error: " + err.Error(), true
-		}
-		return out, false
-	}
 	var res CallResult
 	var err error
 	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
-		if tool := canonicalFileTool(e.ws); a.cfg.MCPFilesOnly && tool != "" {
+		if tool := canonicalFileTool(e.ws); tool != "" {
 			end, err := a.beginFileCall(ctx, c.CallID, tool, args)
 			if err != nil {
 				return "Error: " + err.Error(), true

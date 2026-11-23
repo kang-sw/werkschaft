@@ -128,11 +128,8 @@ func runWerkSession(t *testing.T, steps ...func(context.Context, werk.Request) (
 	return strings.Split(strings.TrimSpace(out.String()), "\n")
 }
 
-// TestWerkAuditCapturesARecordedSessionThroughTheTap feeds the lines of a
-// session the real loop wrote through the capture tap, as a holder record
-// each: reasoning, tool calls and results, hidden events and usage land in
-// the audit sink; the visible conversation (user, assistant text) stays out
-// of the capture scope; nothing lands as other.
+// TestWerkAuditCapturesARecordedSessionThroughTheTap checks the daemon
+// capture's handling of tool calls, reasoning and chained usage records.
 func TestWerkAuditCapturesARecordedSessionThroughTheTap(t *testing.T) {
 	reasoning := `{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"plan"}],"encrypted_content":"OPAQUE"}`
 	lines := runWerkSession(t,
@@ -147,11 +144,14 @@ func TestWerkAuditCapturesARecordedSessionThroughTheTap(t *testing.T) {
 		},
 	)
 	sink := &memSink{}
-	r := newAuditRigWith(t, sink, "h1", newWerkMapper(""), werkProtocol{})
+	tap := &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedChild}, Sink: sink}
+	harness, adapter := newWerkMapper("").newAudit(tap.Session.ID)
+	capture := newAuditCapture(tap, harness, "capture", adapter)
 	for _, line := range lines {
-		r.kept(line)
+		capture.line([]byte(line), 0, false)
 	}
-	r.end()
+	capture.close()
+	<-capture.done
 	evs := sink.events()
 	for _, k := range []wsaudit.Kind{wsaudit.KindThinking, wsaudit.KindToolCall, wsaudit.KindToolResult, wsaudit.KindSystem} {
 		if len(find(evs, ofKind(k))) == 0 {

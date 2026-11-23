@@ -1,31 +1,12 @@
 package wsagent
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
-
-// werkProtocol writes the loop's commands (werk.Command) as JSON lines.
-type werkProtocol struct{}
-
-func (werkProtocol) userLine(text string) any {
-	return werk.Command{Type: werk.CmdUser, Text: text}
-}
-
-// requestLine sends a command that the process answers with a line carrying
-// the same id (the status ask).
-func (werkProtocol) requestLine(id string, request map[string]any) any {
-	typ, _ := request["type"].(string)
-	return werk.Command{Type: typ, ID: id}
-}
 
 // werkMapper turns the loop's output lines (werk.Line) into events of the
 // common contract. It keeps only what a replay rebuilds from the lines
@@ -40,8 +21,7 @@ func (werkProtocol) requestLine(id string, request map[string]any) any {
 //   - tool_start, tool_end: the batch list, one batch per model response;
 //   - usage: the context figure and the session's accumulated cost;
 //   - retry: the request retry the dashboard shows;
-//   - steer_ack, user_taken: the answers a worker's steered reports need;
-//   - status: the answer to a status ask (recovery after a ring gap).
+//   - steer_ack, user_taken: the answers a worker's steered reports need.
 //
 // user, reasoning and notice lines are not conversation content: the runner
 // shows user messages itself, and the provider-exposed summary is Phase 2's
@@ -79,18 +59,6 @@ func lineTime(l werk.Line) int64 {
 		return l.At
 	}
 	return time.Now().UnixMilli()
-}
-
-func (m *werkMapper) mapLine(raw []byte, replies lineReplies) []Event {
-	l, err := werk.ParseLine(raw)
-	if err != nil || l.T == "" {
-		return nil
-	}
-	if l.T == werk.LineStatus {
-		replies.answer(l.ID, controlAnswer{ok: true, body: json.RawMessage(raw)})
-		return nil
-	}
-	return m.mapEvent(l)
 }
 
 func (m *werkMapper) mapEvent(l werk.Line) []Event {
@@ -182,113 +150,4 @@ func (m *werkMapper) usage(l werk.Line) []Event {
 		ev.Cost = &wslive.UsageCost{USD: m.cost}
 	}
 	return []Event{{Live: &ev}}
-}
-
-// werkProcess is a worker's process under its holder.
-type werkProcess struct {
-	*streamProcess
-	m      *werkMapper
-	seq    atomic.Uint64
-	model  string
-	effort string
-
-	// asked is the answer to the status ask a rejoin's TurnRunning made, which
-	// the recoveryReply right after it reads instead of asking again.
-	askedMu sync.Mutex
-	asked   *werk.Line
-}
-
-func (p *werkProcess) processControls() processControls {
-	return processControls{Process: p, steer: p, reports: p, turns: p, recovery: p}
-}
-
-func (p *werkProcess) Send(text string) error {
-	return p.writeLine(werk.Command{Type: werk.CmdUser, Text: text})
-}
-
-// Steer queues text for the running turn; the process answers with a
-// steer_ack line (the next unanswered steer, in order), and a user_taken line
-// when a request took it.
-func (p *werkProcess) Steer(text string) error {
-	id := "wsc/steer/" + strconv.FormatUint(p.seq.Add(1), 10)
-	return p.writeLine(werk.Command{Type: werk.CmdSteer, ID: id, Text: text})
-}
-
-// ClearSteered drops the steered messages no request took, so the runner can
-// send them as a turn instead.
-func (p *werkProcess) ClearSteered() error {
-	return p.writeLine(werk.Command{Type: werk.CmdClearSteered})
-}
-
-func (p *werkProcess) Interrupt() error {
-	return p.writeLine(werk.Command{Type: werk.CmdInterrupt})
-}
-
-func (p *werkProcess) SetModel(model string) error {
-	if model == "" {
-		return ErrUnsupported
-	}
-	p.model = model
-	return p.writeLine(werk.Command{Type: werk.CmdSet, Model: model})
-}
-
-func (p *werkProcess) SetEffort(effort string) error {
-	if effort == "" {
-		return ErrUnsupported
-	}
-	p.effort = effort
-	return p.writeLine(werk.Command{Type: werk.CmdSet, Effort: &effort})
-}
-
-// werkStatusTimeout bounds the wait for the process's answer to a status ask.
-var werkStatusTimeout = 10 * time.Second
-
-// status asks the process whether a turn runs and what its last turn ended
-// with.
-func (p *werkProcess) status() (werk.Line, error) {
-	id := "wsc/status/" + strconv.FormatUint(p.seq.Add(1), 10)
-	body, err := p.requestBodyID(id, "status", map[string]any{"type": werk.CmdStatus}, werkStatusTimeout)
-	if err != nil {
-		return werk.Line{}, err
-	}
-	l, err := werk.ParseLine(body)
-	if err != nil {
-		return werk.Line{}, fmt.Errorf("the status answer is unreadable: %w", err)
-	}
-	return l, nil
-}
-
-// TurnRunning asks the process, which knows, after a rejoin whose replay lost
-// records.
-func (p *werkProcess) TurnRunning() (bool, error) {
-	l, err := p.status()
-	if err != nil {
-		return false, err
-	}
-	p.askedMu.Lock()
-	p.asked = &l
-	p.askedMu.Unlock()
-	return l.Running, nil
-}
-
-// recoveryReply is what the last turn ended with, which a rejoin that lost
-// the turn's records reports in their place.
-func (p *werkProcess) recoveryReply(int64) (message, turnErr string, taken []string, err error) {
-	p.askedMu.Lock()
-	asked := p.asked
-	p.asked = nil
-	p.askedMu.Unlock()
-	var l werk.Line
-	if asked != nil {
-		l = *asked
-	} else if l, err = p.status(); err != nil {
-		return "", "", nil, err
-	}
-	if l.Running {
-		return "", "", nil, errors.New("the process reports a turn running")
-	}
-	if l.Reason == werk.ReasonError {
-		turnErr = l.Error
-	}
-	return l.Text, turnErr, l.Taken, nil
 }

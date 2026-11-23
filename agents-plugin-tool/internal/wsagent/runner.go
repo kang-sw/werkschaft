@@ -145,6 +145,9 @@ type Options struct {
 	// WSMCP is the stdio ws-mcp command serving root, without the runner's
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)
+	// DaemonMCP provides hosted-package MCP environment without a launcher.
+	// Tests or standalone callers may supply the environment through WSMCP.
+	DaemonMCP func(root string) (MCPCommand, error)
 	// LeadManual renders the workflow manual of a hosted lead for its lead
 	// key, from the selected package: backend is the lead's harness, dir
 	// its working directory. LeadSessionState supplies the mutable state.

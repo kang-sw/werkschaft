@@ -863,3 +863,44 @@ func TestDurableWorkerStartsWithAuthenticatedMCPAndNoChild(t *testing.T) {
 		t.Fatal("the durable process's end left its bearer valid")
 	}
 }
+
+func TestDurableLeadStartsWithAuthenticatedMCPAndNoChild(t *testing.T) {
+	h := newLeadHarness(t)
+	backend := &fakeBackend{}
+	reg := h.opts.Backends[BackendClaude]
+	reg.Backend = durableStartFixture{fakeBackend: backend}
+	reg.ProcessKind = ProcessDurable
+	reg.Lifecycle.FileWriteTools = true
+	h.opts.Backends[BackendClaude] = reg
+	h.opts.Holders = nil
+	h.opts.WSMCP = func(string) (MCPCommand, error) {
+		return MCPCommand{}, errors.New("the child launcher was selected")
+	}
+	h.opts.DaemonMCP = func(string) (MCPCommand, error) {
+		return MCPCommand{Env: map[string]string{"FIXTURE_PACKAGE": "active"}}, nil
+	}
+	h.startAt("http://127.0.0.1:1")
+	st := h.lead(BackendClaude, LeadOptions{})
+	h.send(st.ID, "hello")
+	spec := backend.waitProcStart(t, 0)
+	if spec.Lead == nil || spec.MCPSession == nil || spec.Holder != nil || len(spec.Env) != 0 ||
+		len(spec.Lead.Env) != 0 || spec.Lead.Spawned != nil || spec.Lead.WSMCP != nil {
+		t.Fatal("durable lead should use the MCP binding without a child launcher")
+	}
+	hello, void, ok := h.runner.ResolveMCPToken(spec.MCPSession.Token)
+	if !ok || hello.Conversation != st.ID || hello.OwnerPID != 0 ||
+		hello.Env["FIXTURE_PACKAGE"] != "active" || hello.Env[EnvHostedSessionKey] == "" ||
+		hello.FileWrites == nil || hello.FileWrites.Record == nil {
+		t.Fatal("durable lead did not publish the installed process's MCP binding")
+	}
+	if got := hello.FileWrites.CurrentAuthority(); got != wsfs.Authority(spec.PermissionLevel) {
+		t.Errorf("MCP authority = %q, launch permission = %q", got, spec.PermissionLevel)
+	}
+	if rec := h.record(st.ID); rec.HolderID != "" || rec.MCPToken != "" {
+		t.Fatal("lead history projection retained child launch state")
+	}
+	backend.proc(0).exit()
+	if !isClosed(void) {
+		t.Fatal("the durable lead's end left its bearer valid")
+	}
+}

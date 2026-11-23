@@ -3,51 +3,21 @@ package wsagent
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"slices"
-	"strings"
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
-	"github.com/kang-sw/devenv/internal/wsharnessenv"
 )
 
-// WerkSubcommand is the ws binary's hidden subcommand that runs the loop
-// (cmd/ws-mcp registers it); a session holder keeps that process.
-const WerkSubcommand = "werk-run"
-
-// BackendWerk is the builtin Go agent harness (ticket
-// 261122-feat-ws-builtin-agent-harness): a worker backend that runs the model
-// loop in a subcommand of the ws binary itself, under a session holder like
-// every other agent.spawn worker, so it survives a daemon replacement.
-//
-// The daemon side is this file's backend and process, the line mapper
-// (werk_mapper.go) and the audit adapter (audit_werk.go); the loop, the file
-// tools and the Responses client are internal/werk. The two speak the line
-// protocol of werk/protocol.go over the child's standard input and output.
-//
-//   - ws tools reach the loop over the daemon's HTTP MCP route with the
-//     per-session bearer in the child's environment (EnvMCPSessionURL,
-//     EnvMCPSessionToken), never its argv.
-//   - The provider credential is never in the child's argument or environment:
-//     each model request asks the daemon's provider token route
-//     (wscred.RouteClient), which admits the session through
-//     BackendRegistration.ProviderCredentials.
-//   - There is no default model. A tier is usable only once the user sets its
-//     model (agents.tier, harness werk), and the harness is unavailable, with
-//     the reason, until an OpenRouter key is configured.
+// BackendWerk is the daemon's builtin Go agent harness. Its model loop
+// recovers from the session log and calls ws tools through authenticated
+// loopback MCP.
 const BackendWerk = "werk"
 
 // WerkBackend starts the builtin harness's process for one worker.
 type WerkBackend struct {
-	// Command is the ws binary that runs the loop; empty is this process's own
-	// executable, which a daemon launches from its retained copy.
-	Command string
 	// credentialStatus reports whether provider has a credential configured,
 	// from the daemon's credential store. nil means the daemon cannot tell,
 	// which blocks nothing: the first request then fails with the auth
@@ -72,15 +42,14 @@ func init() {
 func (b WerkBackend) registration() (string, BackendRegistration) {
 	return BackendWerk, BackendRegistration{
 		Backend:             b,
+		ProcessKind:         ProcessDurable,
 		WorkerCapable:       true,
 		WorkerProfile:       AgentWorkerProfile(BackendWerk),
-		WorkerHTTPMCP:       true,
 		Catalog:             WerkCatalog(),
 		BuiltinProfilesOnly: true,
 		// A provider's function names admit no dot, so the model sees ws's
 		// tools spelled exec_shell, agent_spawn (werk.ModelToolName).
-		ToolNameScheme:      ToolNameSchemeSanitize,
-		ProviderCredentials: true,
+		ToolNameScheme: ToolNameSchemeSanitize,
 		Lifecycle: LifecyclePolicy{
 			// The common ws/compact lifecycle is Phase 2.
 			NoWorkerCompactionSteer: true,
@@ -105,26 +74,8 @@ func (b WerkBackend) withProviderCredentials(source wscred.Source, status func(p
 	return b
 }
 
-// executable is the ws binary the loop runs from.
-func (b WerkBackend) executable() (string, error) {
-	if b.Command != "" {
-		return b.Command, nil
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("find the ws executable: %w", err)
-	}
-	return exe, nil
-}
-
-// Executable is the command availability is checked against: the ws binary.
-func (b WerkBackend) Executable() string {
-	exe, err := b.executable()
-	if err != nil {
-		return "ws-mcp"
-	}
-	return exe
-}
+// Executable is empty for the in-daemon harness.
+func (b WerkBackend) Executable() string { return "" }
 
 type credentialAware interface {
 	withProviderCredentials(source wscred.Source, status func(provider string) (bool, error)) Backend
@@ -173,130 +124,7 @@ func (b WerkBackend) workerTierGap(tiers map[string]wsconfig.AgentTier) string {
 	return fmt.Sprintf(werkNoModelFmt, BackendWerk, BackendWerk)
 }
 
-// werkEnv is the child's environment: the daemon's without the parent
-// harness sessions' variables, plus the session route and bearer.
-func werkEnv(spec StartSpec) []string {
-	set := map[string]string{}
-	if spec.MCPSession != nil {
-		set[werk.EnvSessionURL] = spec.MCPSession.URL
-		set[werk.EnvSessionToken] = spec.MCPSession.Token
-	}
-	drop := []string{"CLAUDE", "CODEX_", "PI_", "ORCA_", "WS_PI_"}
-	env := harnessEnv(wsharnessenv.Drop(spec.Env), drop, nil, set)
-	return withoutProviderKeys(env)
-}
-
-// withoutProviderKeys removes the provider key variables the daemon's own
-// environment may hold (OPENROUTER_API_KEY and the auth layer's names for the
-// provider): the worker takes its credential from the token route per
-// request, and a shell it starts must not find one in its environment.
-// Names match case-insensitively (Windows), and any OPENROUTER_ variable goes.
-func withoutProviderKeys(env []string) []string {
-	var names []string
-	if p, ok := wscred.Lookup(werk.Provider); ok {
-		for _, n := range p.EnvKeys {
-			names = append(names, strings.ToUpper(n))
-		}
-	}
-	prefix := strings.ToUpper(string(werk.Provider)) + "_"
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		up := strings.ToUpper(name)
-		if strings.HasPrefix(up, prefix) || slices.Contains(names, up) {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-// werkToolList is the file tools a launch offers: a read-only worker is
-// offered the reading tools only (the tools refuse a write at every level
-// regardless), and a profile's own Tools allowlist narrows the rest.
-func werkToolList(spec StartSpec) []string {
-	all := []string{"read", "edit", "write", "grep", "glob"}
-	if spec.PermissionLevel == PermissionReadOnly {
-		all = []string{"read", "grep", "glob"}
-	}
-	if len(spec.Profile.Tools) == 0 {
-		return all
-	}
-	var out []string
-	for _, name := range all {
-		if slices.ContainsFunc(spec.Profile.Tools, func(t string) bool { return strings.EqualFold(strings.TrimSpace(t), name) }) {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// werkArgs is the child's command line after the ws binary.
-func werkArgs(spec StartSpec) ([]string, error) {
-	level := spec.PermissionLevel
-	if !slices.Contains(LeadPermissionLevels(), level) {
-		return nil, fmt.Errorf("a worker needs an authority (read-only, workdir-write or full); got %q", level)
-	}
-	if strings.TrimSpace(spec.Model) == "" {
-		return nil, fmt.Errorf(werkNoModelFmt, BackendWerk, BackendWerk)
-	}
-	args := []string{WerkSubcommand,
-		"--dir", spec.Dir, "--root", spec.Root, "--cwd", spec.workDir(),
-		"--authority", string(level), "--model", spec.Model,
-		"--tools", strings.Join(werkToolList(spec), ","),
-	}
-	if spec.Effort != "" {
-		args = append(args, "--effort", spec.Effort)
-	}
-	if spec.SessionID != "" {
-		args = append(args, "--session", spec.SessionID)
-	}
-	if spec.Instructions != "" {
-		args = append(args, "--instructions", spec.Instructions)
-	}
-	return args, nil
-}
-
-// errWerkLead refuses a lead: the lead role is Phase 2.
-var errWerkLead = errors.New("werk backend: the builtin harness has no lead role yet")
-
-// Start launches the loop under a session holder, or attaches to the one a
-// replaced daemon left running (spec.Holder.id set): an attach sends nothing,
-// since the replay of the holder's ring rebuilds the mapper and the runner
-// alone decides when to deliver input.
-func (b WerkBackend) Start(_ context.Context, spec StartSpec) (Process, error) {
-	if spec.Lead != nil {
-		return nil, errWerkLead
-	}
-	if spec.Holder == nil {
-		return nil, errors.New("werk backend: a worker runs under a session holder, so it survives a daemon replacement; none was given")
-	}
-	attach := spec.Holder.id != ""
-	if !attach && spec.MCPSession == nil {
-		return nil, errors.New("werk backend: the daemon's HTTP MCP route is required; no session was started without ws tools")
-	}
-	command, err := b.executable()
-	if err != nil {
-		return nil, fmt.Errorf("werk backend: %w", err)
-	}
-	var args []string
-	if !attach {
-		if args, err = werkArgs(spec); err != nil {
-			return nil, fmt.Errorf("werk backend: %w", err)
-		}
-	}
-	cmd := exec.Command(command, args...)
-	cmd.Dir = spec.workDir()
-	cmd.Env = werkEnv(spec)
-	mapper := newWerkMapper(spec.SessionID)
-	stream, err := startChild(spec, cmd, mapper, werkProtocol{})
-	if err != nil {
-		return nil, err
-	}
-	p := &werkProcess{streamProcess: stream, m: mapper, model: spec.Model, effort: spec.Effort}
-	if session := spec.MCPSession; session != nil && session.Started != nil {
-		_, pid, _ := stream.HolderInfo()
-		session.Started(cmd.Env, pid)
-	}
-	return p, nil
+// Start opens the daemon loop for a backend supplied directly to a runner.
+func (b WerkBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	return b.startLoop(ctx, spec)
 }

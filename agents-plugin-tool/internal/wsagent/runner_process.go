@@ -250,7 +250,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// The mapper needs the original ws tool surface, not a new bridge.
 		spec.WSMCP = &MCPCommand{}
 	} else if len(def.WSTools) > 0 {
-		cmd, err := c.r.opts.WSMCP(rec.Root)
+		cmd, err := c.r.mcpCommand(durable)(rec.Root)
 		if err != nil {
 			return fmt.Errorf("ws-mcp command: %w", err)
 		}
