@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,24 @@ import (
 	"os"
 	"path/filepath"
 )
+
+// FileCall correlates the daemon's recovery evidence with the model request
+// that authorized the mutation. Only the intent is retained on disk.
+type FileCall struct {
+	ID, Tool  string
+	Arguments json.RawMessage
+	Intent    FileIntent
+}
+
+// FileWriteSession is the daemon-issued session binding for file calls.
+// CurrentAuthority returns the live level, or empty after revocation. Record
+// validates the active model call and persists its intent before it returns.
+type FileWriteSession struct {
+	Root, Cwd        string
+	Authority        Authority
+	CurrentAuthority func() Authority
+	Record           func(context.Context, FileCall) error
+}
 
 // FileIntent is the durable recovery evidence for one admitted file mutation.
 // A nil Prior explicitly represents an absent file.

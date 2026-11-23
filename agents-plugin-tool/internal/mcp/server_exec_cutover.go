@@ -34,7 +34,13 @@ func (s *Server) execToolsListed() bool {
 // fsReadTools requires a trusted cutover binding to a backend that declares
 // the daemon read tools. A supplied session key cannot grant this surface.
 func (s *Server) fsReadTools() bool {
-	return s.conversation != "" && s.execCutover != "" && s.lifecycleOf(s.execCutover).ExecReadTools
+	if s.conversation == "" {
+		return false
+	}
+	if s.fileWrites != nil && s.fileWrites.CurrentAuthority != nil {
+		return s.fileWrites.CurrentAuthority().Valid() && s.lifecycleOf(s.agentAdmissionBackend()).ExecReadTools
+	}
+	return s.execCutover != "" && s.lifecycleOf(s.execCutover).ExecReadTools
 }
 
 // cutoverListed reports whether a tool permanentlyHiddenTool hides is

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 func rawFileToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
@@ -44,7 +45,7 @@ func TestFileWriteToolsRequireTrustedWerkWriteAuthority(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			binding := &FileWriteSession{Root: root, Authority: tc.authority}
+			binding := &FileWriteSession{Root: root, Authority: wsfs.Authority(tc.authority)}
 			if tc.recorder {
 				binding.Record = func(_ context.Context, call FileWriteCall) error {
 					want, err := filepath.EvalSymlinks(root)
@@ -85,7 +86,7 @@ func TestFileWriteToolsResolveWorkingDirectoryAndRefuseUnrecordedCalls(t *testin
 		t.Fatal(err)
 	}
 	mustWrite(t, cwd, "edit.txt", "old\n")
-	binding := &FileWriteSession{Root: root, Cwd: cwd, Authority: wsagent.PermissionWorkdirWrite}
+	binding := &FileWriteSession{Root: root, Cwd: cwd, Authority: wsfs.AuthorityWorkdirWrite}
 	binding.Record = func(_ context.Context, call FileWriteCall) error {
 		if call.ID != "okay" || call.Tool != "fs.edit" {
 			return errors.New("no pending call")
@@ -111,5 +112,41 @@ func TestFileWriteToolsResolveWorkingDirectoryAndRefuseUnrecordedCalls(t *testin
 	target := filepath.Join(outside, "escaped")
 	if text, failed := rawFileToolCall(t, s, "fs.write", "okay", map[string]any{"path": target, "content": "forbidden"}); !failed || !strings.Contains(text, "outside the session's worktree") {
 		t.Fatalf("write outside = %v, %s", failed, text)
+	}
+}
+
+func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
+	root := t.TempDir()
+	level := wsfs.AuthorityFull
+	files := &FileWriteSession{
+		Root: root, Cwd: root, Authority: wsfs.AuthorityFull,
+		CurrentAuthority: func() wsfs.Authority { return level },
+		Record:           func(context.Context, FileWriteCall) error { return nil },
+	}
+	s := NewServerWithOptions(ServerOptions{
+		Root: root, Version: "test", Env: []string{},
+		Conversation: "bound", ExecCutover: wsagent.BackendWerk, FileWrites: files,
+		CallerBinding: boundCallers{backends: map[string]string{"bound": wsagent.BackendWerk}},
+	})
+	if !s.fsReadTools() || !s.fileWriteTools() {
+		t.Fatal("full authority did not admit daemon reads and writes")
+	}
+	level = wsfs.AuthorityWorkdirWrite
+	if s.fileWriteTools() {
+		t.Fatal("a connection admitted at full still uses that permission after a downgrade")
+	}
+	level = wsfs.AuthorityReadOnly
+	if !s.fsReadTools() || s.fileWriteTools() || !s.refuseBoundReadOnlyExec("exec.run") {
+		t.Fatal("the bound connection did not become read-only")
+	}
+	if text, failed := rawFileToolCall(t, s, "fs.write", "fixture-call", map[string]any{"path": "test.txt", "content": "new"}); !failed {
+		t.Fatalf("the old connection accepted a direct write: %s", text)
+	}
+	if _, err := os.Stat(filepath.Join(root, "test.txt")); !os.IsNotExist(err) {
+		t.Fatalf("read-only call touched the target: %v", err)
+	}
+	level = ""
+	if s.fsReadTools() || s.fileWriteTools() {
+		t.Fatal("revoked connection still admits filesystem tools")
 	}
 }

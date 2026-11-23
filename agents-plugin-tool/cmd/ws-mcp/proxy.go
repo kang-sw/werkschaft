@@ -210,6 +210,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
+		opts.FileWrites = hello.FileWrites
 		server := mcp.NewServerWithOptions(opts)
 		h.applyLANChange(server)
 		return &proxyMCPSession{server: server}, nil

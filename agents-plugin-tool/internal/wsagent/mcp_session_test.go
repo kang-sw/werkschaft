@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // shortStartWait bounds a token's wait for its process's start for one
@@ -744,4 +745,110 @@ func TestClaudeLeadRejoinBrokenMCPCurrentRouteWaitsForIdlePoint(t *testing.T) {
 		st := h.state(id)
 		return st.Process && h.holder(id) != holder
 	})
+}
+
+type recordingMCPProcess struct {
+	Process
+	fileCalls int
+}
+
+func (p *recordingMCPProcess) recordFileCall(context.Context, wsfs.FileCall) error {
+	p.fileCalls++
+	return nil
+}
+
+func TestDurableMCPFileBindingTracksLiveAuthorityAndRevocation(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	r := NewRunner(Options{Dir: t.TempDir(), Backends: map[string]BackendRegistration{
+		"fixture": {ProcessKind: ProcessDurable, ProviderCredentials: true, Lifecycle: LifecyclePolicy{FileWriteTools: true}},
+	}})
+	r.SetEndpoint("http://127.0.0.1:1")
+	rec := Record{ReplyID: "child", Backend: "fixture", Root: root, Cwd: cwd}
+	proc := &recordingMCPProcess{}
+	c := &conv{r: r, rec: rec, proc: proc, workerPermissionLevel: PermissionFull}
+	ctx := context.Background()
+
+	previous := r.attachMCP(rec.ReplyID, "", nil, cwd, 0, rec.Backend)
+	previous.Started(nil, 0)
+	external, _, ok := r.ResolveMCPToken(previous.Token)
+	if !ok || external.FileWrites != nil {
+		t.Fatal("an ordinary process token gained the durable file binding")
+	}
+
+	session := r.attachMCP(rec.ReplyID, "", nil, cwd, 0, rec.Backend)
+	c.bindDurableMCP(session, rec, proc, PermissionFull)
+	session.Started(nil, 0)
+	hello, void, ok := r.ResolveMCPToken(session.Token)
+	if !ok || hello.Conversation != rec.ReplyID || hello.FileWrites == nil {
+		t.Fatal("the session's bearer did not resolve to its file binding")
+	}
+	if creds, ok := r.ResolveCredentialToken(session.Token); !ok || creds.Permitted {
+		t.Fatal("the in-process model's MCP token grants provider credentials")
+	}
+	files := hello.FileWrites
+	if files.Root != root || files.Cwd != cwd || files.CurrentAuthority() != wsfs.AuthorityFull || files.Record == nil {
+		t.Fatal("the binding did not keep the trusted worktree and authority")
+	}
+	if err := files.Record(ctx, wsfs.FileCall{}); err != nil || proc.fileCalls != 1 {
+		t.Fatalf("admitted file call = %v, recorder called %d times", err, proc.fileCalls)
+	}
+
+	c.setStatus(func() { c.workerPermissionLevel = PermissionWorkdirWrite })
+	if files.CurrentAuthority() != wsfs.AuthorityWorkdirWrite {
+		t.Fatal("the binding hid the new authority")
+	}
+	if err := files.Record(ctx, wsfs.FileCall{}); err == nil || proc.fileCalls != 1 {
+		t.Fatal("the old full-authority binding accepted a new file intent")
+	}
+
+	r.revokeToken(rec.ReplyID)
+	if !isClosed(void) || files.CurrentAuthority() != "" {
+		t.Fatal("revocation did not void the binding")
+	}
+	if err := files.Record(ctx, wsfs.FileCall{}); err == nil || proc.fileCalls != 1 {
+		t.Fatal("the revoked binding accepted a new file intent")
+	}
+}
+
+type durableStartFixture struct{ *fakeBackend }
+
+func (b durableStartFixture) Start(context.Context, StartSpec) (Process, error) {
+	return nil, errors.New("the external start was selected")
+}
+
+func (b durableStartFixture) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
+	p, err := b.fakeBackend.Start(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &recordingMCPProcess{Process: p}, nil
+}
+
+func TestDurableWorkerStartsWithAuthenticatedMCPAndNoChild(t *testing.T) {
+	h := newHarness(t, map[string]string{"chat": `{"backend":"claude","ws_tools":["tickets.query"]}`})
+	h.runner.Close()
+	reg := h.config.Backends[suiteBackend]
+	reg.Backend = durableStartFixture{h.backend}
+	reg.ProcessKind = ProcessDurable
+	reg.Lifecycle.FileWriteTools = true
+	h.config.Backends[suiteBackend] = reg
+	h.endpoint = "http://127.0.0.1:1"
+	h.start()
+	st := h.create("chat")
+	if _, err := h.runner.Send(st.ID, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	spec := h.backend.waitProcStart(t, 0)
+	if spec.Holder != nil || len(spec.Env) != 0 || spec.MCPSession == nil {
+		t.Fatal("start needs a bearer and no child launch context")
+	}
+	hello, void, ok := h.runner.ResolveMCPToken(spec.MCPSession.Token)
+	if !ok || hello.OwnerPID != 0 || hello.Conversation != st.ID || hello.FileWrites == nil ||
+		hello.FileWrites.Record == nil || hello.Env[EnvAllowedTools] != "tickets.query,compact" {
+		t.Fatal("durable start did not publish the installed process's MCP binding")
+	}
+	h.backend.proc(0).exit()
+	if !isClosed(void) {
+		t.Fatal("the durable process's end left its bearer valid")
+	}
 }

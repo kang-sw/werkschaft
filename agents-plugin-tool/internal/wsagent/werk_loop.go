@@ -10,6 +10,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // werkLoop runs a session in the daemon and delivers typed events to the
@@ -23,6 +24,7 @@ type werkLoop struct {
 	mapper *werkMapper
 	audit  *auditCapture
 	steer  uint64
+	agent  *werk.Agent
 }
 
 func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
@@ -91,8 +93,16 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		// distinct source even when it resumes an existing conversation.
 		p.audit = newAuditCapture(spec.audit, harness, werk.NewSessionID(), adapter)
 	}
+	p.agent = a
 	go p.run(a)
 	return p, nil
+}
+
+func (p *werkLoop) recordFileCall(ctx context.Context, call wsfs.FileCall) error {
+	if err := p.ctx.Err(); err != nil {
+		return err
+	}
+	return p.agent.RecordFileCall(ctx, call)
 }
 
 func (p *werkLoop) run(a *werk.Agent) {

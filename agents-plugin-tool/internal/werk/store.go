@@ -14,6 +14,8 @@ import (
 	"sync"
 
 	"github.com/gofrs/flock"
+
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // store.go is the conversation's persistence. The live transcript is the
@@ -24,7 +26,7 @@ import (
 // back by replay): one JSONL file per session, opened once and held, one
 // write() per change, never read again after startup. The first line is a
 // header, so a segment is self-describing. Each later line is a transcript
-// item or one complete model response. Recovery discards a torn tail so it
+// item, a complete model response, or recovery evidence for a mutation. Recovery discards a torn tail so it
 // cannot mistake part of a response for committed model output.
 
 // storeDirName is the directory under a session's directory that holds the
@@ -68,15 +70,22 @@ type responseLine struct {
 	Response *Response `json:"response"`
 }
 
+type fileIntentLine struct {
+	K      string           `json:"k"`
+	CallID string           `json:"call_id"`
+	Intent *wsfs.FileIntent `json:"intent"`
+}
+
 // Store is one session's conversation file.
 type Store struct {
-	mu      sync.Mutex
-	dir     string
-	session string
-	path    string
-	f       *os.File
-	lock    *flock.Flock
-	now     func() int64
+	mu          sync.Mutex
+	dir         string
+	session     string
+	path        string
+	f           *os.File
+	lock        *flock.Flock
+	now         func() int64
+	fileIntents map[string]wsfs.FileIntent
 }
 
 func segmentPath(dir, session string) string {
@@ -116,7 +125,8 @@ func OpenStore(dir, session string, now func() int64) (*Store, []json.RawMessage
 
 func openStore(dir, session, path string, now func() int64) (*Store, []json.RawMessage, error) {
 	s := &Store{dir: dir, session: session, path: path, now: now}
-	items, keep, err := readSegment(path, session)
+	s.fileIntents = make(map[string]wsfs.FileIntent)
+	items, keep, err := readSegment(path, session, s.fileIntents)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -146,7 +156,7 @@ func openStore(dir, session, path string, now func() int64) (*Store, []json.RawM
 
 // readSegment returns the items of the file at path and the length of its
 // whole-line prefix (-1 when the file does not exist).
-func readSegment(path, session string) ([]json.RawMessage, int64, error) {
+func readSegment(path, session string, fileIntents map[string]wsfs.FileIntent) ([]json.RawMessage, int64, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, -1, nil
@@ -178,7 +188,7 @@ func readSegment(path, session string) ([]json.RawMessage, int64, error) {
 			first = false
 		} else {
 			var l struct {
-				K        string          `json:"k"`
+				fileIntentLine
 				Item     json.RawMessage `json:"item"`
 				Response *Response       `json:"response"`
 			}
@@ -190,6 +200,8 @@ func readSegment(path, session string) ([]json.RawMessage, int64, error) {
 				items = append(items, l.Item)
 			case l.K == "response" && l.Response != nil:
 				items = append(items, l.Response.Output...)
+			case l.K == "file_intent" && l.CallID != "" && l.Intent != nil:
+				fileIntents[l.CallID] = *l.Intent
 			default:
 				return items, good, nil
 			}
@@ -228,6 +240,19 @@ func (s *Store) AppendResponse(response *Response) error {
 		return errors.New("the conversation store is closed")
 	}
 	return s.writeLocked(responseLine{K: "response", Response: response})
+}
+
+// appendFileIntent commits the ordered log prefix before the target can change.
+func (s *Store) appendFileIntent(intent fileIntentLine) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return errors.New("the conversation store is closed")
+	}
+	if err := s.writeLocked(intent); err != nil {
+		return err
+	}
+	return s.f.Sync()
 }
 
 // Rotate starts a new segment holding items as its snapshot and deletes the

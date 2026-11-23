@@ -39,8 +39,9 @@ type writer struct {
 }
 
 type logAppend struct {
-	item     json.RawMessage
-	response *Response
+	item       json.RawMessage
+	response   *Response
+	fileIntent *fileIntentLine
 }
 
 func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
@@ -59,14 +60,22 @@ func (w *writer) AddResponse(response *Response) {
 	w.enqueue(logAppend{response: response})
 }
 
-func (w *writer) enqueue(record logAppend) {
+func (w *writer) addFileIntent(intent fileIntentLine) error {
+	return w.enqueue(logAppend{fileIntent: &intent})
+}
+
+func (w *writer) enqueue(record logAppend) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || w.err != nil {
-		return
+	if w.err != nil {
+		return w.err
+	}
+	if w.closed {
+		return errors.New("the conversation writer is closed")
 	}
 	w.queue = append(w.queue, record)
 	w.cond.Broadcast()
+	return nil
 }
 
 func (w *writer) run() {
@@ -111,6 +120,18 @@ func (w *writer) append(record logAppend) (err error) {
 			err = errors.New("the werk log writer failed unexpectedly")
 		}
 	}()
+	if record.fileIntent != nil {
+		if w.before != nil {
+			raw, err := json.Marshal(record.fileIntent)
+			if err != nil {
+				return err
+			}
+			if err := w.before(raw); err != nil {
+				return err
+			}
+		}
+		return w.store.appendFileIntent(*record.fileIntent)
+	}
 	if record.response != nil {
 		if w.before != nil {
 			for _, item := range record.response.Output {

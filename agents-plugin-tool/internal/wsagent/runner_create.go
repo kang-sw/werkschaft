@@ -3,6 +3,7 @@ package wsagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -408,7 +409,15 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 		}
 		spec.audit = &auditTap{Session: wsaudit.Session{ID: c.rec.ReplyID, Class: class}, Sink: sink, Log: c.r.opts.Log}
 	}
-	proc, err := backend.Start(context.Background(), spec)
+	start := backend.Start
+	if c.r.durableProcess(c.rec.Backend) {
+		durable, ok := backend.(durableStarter)
+		if !ok {
+			return nil, categorized(ErrLaunchFailed, errors.New("the backend has no durable process"))
+		}
+		start = durable.startLoop
+	}
+	proc, err := start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
 }
 

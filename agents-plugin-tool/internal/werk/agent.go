@@ -148,6 +148,9 @@ type Agent struct {
 	out   *emitter
 	now   func() time.Time
 
+	fileMu   sync.Mutex
+	fileCall *activeFileCall
+
 	mu         sync.Mutex
 	model      string
 	effort     string
@@ -929,6 +932,13 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	var res CallResult
 	var err error
 	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
+		if a.cfg.MCPFilesOnly && (e.ws == "fs.write" || e.ws == "fs.edit") {
+			end, err := a.beginFileCall(ctx, c.CallID, e.ws, args)
+			if err != nil {
+				return "Error: " + err.Error(), true
+			}
+			defer end()
+		}
 		res, err = correlated.CallCorrelated(ctx, e.ws, args, c.CallID)
 	} else {
 		res, err = a.cfg.WS.Call(ctx, e.ws, args)

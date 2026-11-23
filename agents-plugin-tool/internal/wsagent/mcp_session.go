@@ -1,15 +1,18 @@
 package wsagent
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // mcp_session.go is the hosted path's ws-mcp attachment over HTTP: a
@@ -86,7 +89,8 @@ type mcpToken struct {
 	connected chan struct{}
 	// cutover is the backend of a process started under the exec cutover
 	// (markMCPCutover), "" otherwise.
-	cutover string
+	cutover    string
+	fileWrites *wsfs.FileWriteSession
 }
 
 // newMCPToken draws a token, or "" when no random source answers.
@@ -151,6 +155,58 @@ func (r *Runner) attachMCP(id, token string, env map[string]string, cwd string, 
 	}
 }
 
+type durableStarter interface {
+	startLoop(context.Context, StartSpec) (Process, error)
+}
+
+type fileCallRecorder interface {
+	recordFileCall(context.Context, wsfs.FileCall) error
+}
+
+// bindDurableMCP binds a just-installed daemon process before the token
+// becomes ready. The connection may outlive its admission, so each call
+// checks the token and the stored permission again.
+func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, level PermissionLevel) {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	t := c.r.mcpTokens[session.Token]
+	if t == nil || t.id != rec.ReplyID {
+		return
+	}
+	authority := func() wsfs.Authority {
+		select {
+		case <-t.void:
+			return ""
+		default:
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed || c.proc == nil {
+			return ""
+		}
+		return wsfs.Authority(c.workerPermissionLevel)
+	}
+	files := &wsfs.FileWriteSession{
+		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),
+		CurrentAuthority: authority,
+	}
+	if recorder, ok := proc.(fileCallRecorder); ok && c.r.lifecycle(rec.Backend).FileWriteTools {
+		files.Record = func(ctx context.Context, call wsfs.FileCall) error {
+			if authority() != files.Authority {
+				return errors.New("the file call's session authority changed")
+			}
+			if err := recorder.recordFileCall(ctx, call); err != nil {
+				return err
+			}
+			if authority() != files.Authority {
+				return errors.New("the file call's session authority changed")
+			}
+			return nil
+		}
+	}
+	t.fileWrites = files
+}
+
 // voidMCPLocked voids conversation id's token, if any; r.mu is held.
 func (r *Runner) voidMCPLocked(id string) {
 	token, ok := r.mcpTokenOf[id]
@@ -197,7 +253,7 @@ func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSes
 	default:
 	}
 	reg, known := r.opts.Backends[hello.Harness]
-	session := wsdashboard.CredentialSession{Conversation: hello.Conversation, Harness: hello.Harness, Permitted: known && reg.ProviderCredentials}
+	session := wsdashboard.CredentialSession{Conversation: hello.Conversation, Harness: hello.Harness, Permitted: known && reg.ProcessKind != ProcessDurable && reg.ProviderCredentials}
 	if c := r.conv(hello.Conversation); c != nil {
 		c.mu.Lock()
 		session.Lead = c.rec.Lead
@@ -279,6 +335,7 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 	// The token is the binding: only this resolution names the conversation.
 	hello.Conversation = t.id
 	hello.ExecCutover = t.cutover
+	hello.FileWrites = t.fileWrites
 	return hello, t.void, ""
 }
 

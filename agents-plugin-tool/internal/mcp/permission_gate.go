@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // permission_gate.go enforces a spawned agent's authority on its ws tools.
@@ -31,6 +32,10 @@ func readOnlyRefusedTool(name string, args map[string]any) bool {
 // readOnlyAuthority reports whether this server's caller is a read-only
 // worker, whose exec launches the allowlist gate restricts.
 func (s *Server) readOnlyAuthority() bool {
+	if s.fileWrites != nil && s.fileWrites.CurrentAuthority != nil {
+		level := s.fileWrites.CurrentAuthority()
+		return level != wsfs.AuthorityFull && level != wsfs.AuthorityWorkdirWrite
+	}
 	return wsagent.PermissionLevel(strings.TrimSpace(s.getenv(wsagent.EnvPermissionLevel))) == wsagent.PermissionReadOnly
 }
 
