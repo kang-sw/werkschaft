@@ -6,14 +6,182 @@
   // (cards.js) as they stand.
   var doc = document, root = doc.documentElement, o = null, on = false, busy = false;
   var entry = null, spacer = null, tabs = new Map(), callbacks = [], releaseCallbacks = [];
+  var preview = null, previewTimer = 0, previewHoverTarget = null, previewLocked = false;
+  var midHandled = false, midTimer = 0;
+  var PREVIEW_DELAY = 120;
   var ITEM = "section.topic[data-topic], .bcard[data-card]";
+  var SLOT = ITEM + ", .overview-placeholder";
   function all(sel, box) { return Array.prototype.slice.call((box || doc).querySelectorAll(sel)); }
   function identity(n) { return n && (n.hasAttribute("data-card") ? { card: n.getAttribute("data-card") } : { topic: n.getAttribute("data-topic") }); }
+  function matchesKey(n, key) {
+    if (!n || !key) return false;
+    return key.card ? n.getAttribute("data-card") === key.card : n.getAttribute("data-topic") === key.topic;
+  }
   function find(key) {
     if (!key) return null;
-    return all(ITEM, o.board).filter(function (n) {
-      return key.card ? n.getAttribute("data-card") === key.card : n.getAttribute("data-topic") === key.topic;
-    })[0] || null;
+    if (preview && preview.node && matchesKey(preview.node, key)) return preview.node;
+    return all(ITEM, o.board).filter(function (n) { return matchesKey(n, key); })[0] || null;
+  }
+  function resolveTarget(el) {
+    if (!el || !el.closest) return null;
+    if (preview && preview.placeholder && (el === preview.placeholder || preview.placeholder.contains(el))) return preview.node;
+    return el.closest(ITEM);
+  }
+  function moveNode(parent, node, before) {
+    if (!parent || !node) return;
+    if (typeof parent.moveBefore === "function") {
+      try { parent.moveBefore(node, before || null); return; } catch (e) {}
+    }
+    parent.insertBefore(node, before || null);
+  }
+  function clearPreviewTimer() {
+    if (previewTimer) { clearTimeout(previewTimer); previewTimer = 0; }
+  }
+  function canPreview() {
+    if (!o || !o.board) return false;
+    if ((window.innerWidth || 0) < 1600) return false;
+    var grid = doc.querySelector(".dgrid");
+    if (grid && grid.getAttribute("data-layout") === "tabs") return false;
+    return !!doc.getElementById("bgal");
+  }
+  function buildPlaceholder(node, height) {
+    var ph = doc.createElement("div");
+    ph.className = "overview-placeholder overview-previewing" + (node.classList.contains("overview-here") ? " overview-here" : "");
+    ph.setAttribute("data-overview-placeholder", "");
+    if (node.hasAttribute("data-topic")) ph.setAttribute("data-overview-target-topic", node.getAttribute("data-topic"));
+    if (node.hasAttribute("data-card")) ph.setAttribute("data-overview-target-card", node.getAttribute("data-card"));
+    if (height > 0) ph.style.height = height + "px";
+    ph.setAttribute("tabindex", node.getAttribute("tabindex") === "0" ? "0" : "-1");
+    var head = doc.createElement("div");
+    head.className = "overview-placeholder-head";
+    var titleEl = doc.createElement("span");
+    titleEl.className = "overview-placeholder-title";
+    var badgeText = "", titleText = "", recapText = "";
+    if (node.hasAttribute("data-topic")) {
+      var tn = node.querySelector(":scope > .tophead > .tbar .tname, :scope > .tophead > .tbar h2, :scope > .tophead > .tbar .t-title");
+      titleText = (tn ? tn.textContent : node.getAttribute("data-topic") || "").trim();
+      var sb = node.querySelector(":scope > .tophead > .tbar .tstate, :scope > .tophead > .tbar .badge");
+      if (sb) badgeText = sb.textContent.trim();
+      var rc = node.querySelector(".trecap .rtext");
+      if (rc) recapText = rc.textContent.trim();
+    } else {
+      var nm = node.querySelector(".bc-nm");
+      var sub = node.querySelector(".bc-sub");
+      var kd = node.querySelector(".bc-kind");
+      titleText = (nm ? nm.textContent : node.getAttribute("data-card") || "").trim();
+      if (kd) badgeText = kd.textContent.trim();
+      if (sub) recapText = sub.textContent.trim();
+    }
+    titleEl.textContent = titleText;
+    head.appendChild(titleEl);
+    if (badgeText) {
+      var bEl = doc.createElement("span");
+      bEl.className = "overview-placeholder-badge";
+      bEl.textContent = badgeText;
+      head.appendChild(bEl);
+    }
+    ph.appendChild(head);
+    if (recapText) {
+      var rEl = doc.createElement("div");
+      rEl.className = "overview-placeholder-recap";
+      rEl.textContent = recapText;
+      ph.appendChild(rEl);
+    }
+    return ph;
+  }
+  function ensurePreviewHost() {
+    if (preview && preview.host && preview.host.isConnected) return preview;
+    var gal = doc.getElementById("bgal");
+    if (!gal) return null;
+    var host = doc.createElement("div");
+    host.className = "overview-preview";
+    host.setAttribute("role", "region");
+    host.setAttribute("aria-label", typeof wsT === "function" ? wsT("js.board.toolbar.overview") : "Overview");
+    var stage = doc.createElement("div");
+    stage.className = "overview-preview-stage";
+    host.appendChild(stage);
+    host.addEventListener("pointerenter", function () {
+      previewLocked = true;
+      clearPreviewTimer();
+      previewHoverTarget = null;
+    });
+    var galWasHidden = gal.hidden;
+    gal.hidden = false;
+    var vp = gal.querySelector(":scope > .gal-viewport");
+    var rail = gal.querySelector(":scope > .gal-rail");
+    if (vp) { vp.inert = true; vp.setAttribute("aria-hidden", "true"); }
+    if (rail) { rail.inert = true; rail.setAttribute("aria-hidden", "true"); }
+    gal.appendChild(host);
+    root.setAttribute("data-overview-preview", "");
+    preview = {
+      node: null, placeholder: null, host: host, stage: stage,
+      gal: gal, galWasHidden: galWasHidden, dockedViewport: vp, dockedRail: rail
+    };
+    return preview;
+  }
+  function restorePreviewNode() {
+    if (!preview || !preview.node) return;
+    var node = preview.node, ph = preview.placeholder;
+    node.removeAttribute("data-overview-live");
+    if (ph && ph.parentNode) {
+      var wasFocused = doc.activeElement === ph;
+      var phTab = ph.getAttribute("tabindex");
+      moveNode(ph.parentNode, node, ph);
+      ph.remove();
+      if (on && phTab !== null) node.setAttribute("tabindex", phTab);
+      if (on && wasFocused) node.focus({ preventScroll: true });
+    }
+    preview.node = null;
+    preview.placeholder = null;
+  }
+  function teardownPreview() {
+    clearPreviewTimer();
+    previewLocked = false;
+    previewHoverTarget = null;
+    if (!preview) {
+      root.removeAttribute("data-overview-preview");
+      return;
+    }
+    restorePreviewNode();
+    if (preview.dockedViewport) {
+      preview.dockedViewport.inert = false;
+      preview.dockedViewport.removeAttribute("aria-hidden");
+    }
+    if (preview.dockedRail) {
+      preview.dockedRail.inert = false;
+      preview.dockedRail.removeAttribute("aria-hidden");
+    }
+    if (preview.host && preview.host.parentNode) preview.host.remove();
+    if (preview.gal) preview.gal.hidden = preview.galWasHidden;
+    root.removeAttribute("data-overview-preview");
+    preview = null;
+  }
+  function showPreview(slot) {
+    if (!on || !slot || !canPreview()) return;
+    if (preview && (slot === preview.placeholder || slot === preview.node)) return;
+    var node = resolveTarget(slot);
+    if (!node || !node.parentNode || node.hasAttribute("data-state-filtered")) return;
+    if (!ensurePreviewHost()) return;
+    restorePreviewNode();
+    var h = Math.round(node.getBoundingClientRect().height);
+    var wasFocused = doc.activeElement === node;
+    var ph = buildPlaceholder(node, h);
+    node.parentNode.insertBefore(ph, node);
+    moveNode(preview.stage, node, null);
+    node.setAttribute("data-overview-live", "");
+    preview.node = node;
+    preview.placeholder = ph;
+    if (wasFocused) ph.focus({ preventScroll: true });
+    if (o.onPreview) o.onPreview(node);
+  }
+  function canMiddleToggle(t) {
+    if (!o || !o.board || busy || !t || !t.closest) return false;
+    var col = doc.getElementById("bcol") || o.board.parentElement;
+    if (!col || !col.contains(t)) return false;
+    if (t.closest("a[href], .xterm, .tm-host, .tpop, [popover]:popover-open, dialog[open], [data-max], .board-toolbar")) return false;
+    if (root.hasAttribute("data-board-max")) return false;
+    if (doc.querySelector("#tkqpop[open], dialog[open], .tpop:not([hidden]), [popover]:popover-open, .bcard[data-max], section.topic[data-max], details.entry-panel[data-max]")) return false;
+    return true;
   }
   function scroller(n) {
     for (var p = n.parentElement; p && p !== doc.body && p !== root; p = p.parentElement) {
@@ -37,7 +205,7 @@
     var padding = s === doc.scrollingElement || s === root ? 0 : parseFloat(style.paddingTop) || 0;
     return Math.max(pad, rail + padding);
   }
-  function items() { return all(ITEM, o.board).filter(function (n) { return !n.hasAttribute("data-state-filtered"); }); }
+  function items() { return all(typeof SLOT !== "undefined" ? SLOT : ITEM, o.board).filter(function (n) { return !n.hasAttribute("data-state-filtered"); }); }
   function anchor(list, toolbar, bounds, floating) {
     if (!floating && toolbar.bottom > bounds.top && toolbar.top < bounds.bottom) return null;
     var top = floating ? Math.max(bounds.top, toolbar.bottom) : bounds.top;
@@ -45,10 +213,11 @@
   }
   function classify(t) {
     if (!t || !t.closest) return "outside";
+    if (typeof preview !== "undefined" && preview && preview.host && preview.host.contains(t)) return "preview";
     if (t.closest(".board-toolbar")) return "toolbar";
     if (t.closest(".tpop:not([hidden]), [popover]:popover-open")) return "popover";
     if (t.closest("#tkqpop, #tkqs, #shandle, dialog[open], .tk-iwin-back:not([hidden]), .d-tm-back")) return "palette";
-    if (t.closest(ITEM) && o.board.contains(t)) return "item";
+    if (t.closest(typeof SLOT !== "undefined" ? SLOT : ITEM) && o.board.contains(t)) return "item";
     return "outside";
   }
   function layer() {
@@ -114,6 +283,7 @@
   function filter(run) {
     if (busy) { callbacks.push(function () { filter(run); }); return; }
     if (!on) { run(); return; }
+    teardownPreview();
     var before = all(ITEM, o.board), list = items(), current = list.filter(function (n) { return n.getAttribute("tabindex") === "0"; })[0];
     var index = before.indexOf(current), v = view(scroller(o.toolbar)), face = o.toolbar.firstChild.getBoundingClientRect();
     var top = o.toolbar.hasAttribute("data-floating") ? Math.max(v.top, face.bottom) : v.top;
@@ -127,6 +297,7 @@
     if (row) keep(row.n, row.r.top - v.top);
     else if (list.length) keep(list[0], clearance(list[0]));
     else keep(o.toolbar, Math.max(0, toolbarOffset));
+    if (next && canPreview()) showPreview(next);
     save();
   }
   function calm() { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
@@ -189,6 +360,9 @@
   function enter(state) {
     if (!o || on || busy || doc.querySelector(".bcard[data-max], section.topic[data-max], details.entry-panel[data-max]")) return;
     var s = scroller(o.toolbar), v = view(s), n = anchor(items(), o.toolbar.firstChild.getBoundingClientRect(), v, o.toolbar.hasAttribute("data-floating"));
+    if (!n && window.WsBoardAnchor && window.WsBoardAnchor.bounded && window.WsBoardAnchor.bounded()) {
+      n = o.board.querySelector("section.topic[data-current], .bcard[data-current]");
+    }
     entry = state || { key: identity(n), offset: (n || o.toolbar).getBoundingClientRect().top - v.top };
     if (state && entry.key && !find(entry.key)) entry = { key: null, offset: 0 };
     n = find(entry.key);
@@ -210,17 +384,24 @@
     if (o.restoreFrames) o.restoreFrames(h);
     o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "true");
     save(); changed();
-    var complete = function () { rove(n || items()[0]); finish(); if (!state) hint(); };
+    var complete = function () {
+      var initial = n || items()[0];
+      rove(initial);
+      if (initial && canPreview()) showPreview(initial);
+      finish();
+      if (!state) hint();
+    };
     if (before) motion(before, true, n || o.toolbar, entry.offset, shown, complete);
     else { keep(n || o.toolbar, shown); complete(); }
   }
   function exit(target, done, options) {
     if (!o || !on) { if (done) done(); return; }
     if (busy) { if (done) callbacks.push(done); return; }
-    if (target && window.wbPill && window.wbPill.apply) {
+    var resolved = target ? resolveTarget(target) : null;
+    if (resolved && window.wbPill && window.wbPill.apply) {
       // Leave the holding view before explicit apply, then resolve the live
       // target. Without pending updates the ordinary exit motion is unchanged.
-      var key = identity(target.closest(ITEM));
+      var key = identity(resolved);
       var land = function () {
         if (!window.wbPill.apply(land)) return;
         var live = find(key);
@@ -232,7 +413,8 @@
       };
       if (!window.wbPill.apply(land)) return;
     }
-    var n = target && target.closest ? target.closest(ITEM) : null;
+    teardownPreview();
+    var n = resolved;
     if (n && n.hasAttribute("data-state-filtered")) n = null;
     var h = o.frames ? o.frames() : null;
     var restore = find(entry.key);
@@ -306,9 +488,17 @@
     if (!on && !busy) return;
     if (busy) { swallow(e); return; }
     var c = classify(e.target);
-    if (c === "toolbar" || c === "popover" || c === "palette") return;
+    if (c === "toolbar" || c === "popover" || c === "palette" || c === "preview") return;
     swallow(e);
     exit(c === "item" ? e.target : null);
+  }
+  function previewKeepsKey(e) {
+    var t = e.target;
+    if (!t) return false;
+    if (t.isContentEditable) return true;
+    if (t.closest && t.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), .xterm, .tm-host')) return true;
+    if (e.key === "Enter" && t.closest && t.closest("button, a[href], summary, label")) return true;
+    return false;
   }
   function key(e) {
     if (!on && !busy) return;
@@ -319,8 +509,16 @@
     if (layer() !== "overview") return;
     if (e.key === "Escape") { swallow(e); if (!busy) exit(null); return; }
     if (busy) { if (e.key === "Enter") swallow(e); return; }
-    if (classify(e.target) === "toolbar") return;
+    var cls = classify(e.target);
+    if (cls === "toolbar") return;
+    if (cls === "preview" && typeof previewKeepsKey === "function" && previewKeepsKey(e)) return;
     var list = items(), i = list.indexOf(doc.activeElement);
+    if (i < 0 && typeof preview !== "undefined" && preview && preview.placeholder) i = list.indexOf(preview.placeholder);
+    if (i < 0) {
+      for (var k = 0; k < list.length; k++) {
+        if (list[k].getAttribute("tabindex") === "0") { i = k; break; }
+      }
+    }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       swallow(e);
       var next = list[Math.max(0, Math.min(list.length - 1, i < 0 ? 0 : i + (e.key === "ArrowDown" ? 1 : -1)))];
@@ -328,22 +526,86 @@
       if (next) {
         var r = next.getBoundingClientRect(), v = view(scroller(next)), pad = clearance(next);
         if (r.top < v.top + pad || r.bottom > v.bottom) keep(next, r.top < v.top + pad ? pad : Math.max(pad, v.height - r.height));
+        if (typeof canPreview === "function" && canPreview()) { previewLocked = false; clearPreviewTimer(); showPreview(next); }
       }
     } else if (e.key === "Enter" && i >= 0) { swallow(e); exit(list[i]); }
+  }
+  function boardPointerMove(e) {
+    if (!on || busy || !canPreview()) return;
+    previewLocked = false;
+    var slot = e.target && e.target.closest && e.target.closest(SLOT);
+    if (!slot || !o.board.contains(slot)) {
+      clearPreviewTimer();
+      previewHoverTarget = null;
+      return;
+    }
+    if (preview && (slot === preview.placeholder || slot === preview.node)) {
+      clearPreviewTimer();
+      previewHoverTarget = null;
+      return;
+    }
+    if (slot === previewHoverTarget) return;
+    previewHoverTarget = slot;
+    clearPreviewTimer();
+    previewTimer = setTimeout(function () {
+      previewTimer = 0;
+      if (!on || busy || previewLocked || previewHoverTarget !== slot) return;
+      showPreview(slot);
+    }, PREVIEW_DELAY);
   }
   window.WsOverview = {
     mount: function (options) {
       o = options;
       doc.addEventListener("click", click, true);
-      // Prevent mousedown focusing the dimmed control before its click is
-      // captured. Do not exit until click, or that click could activate it.
-      doc.addEventListener("mousedown", function (e) { if ((on || busy) && (busy || classify(e.target) === "outside" || classify(e.target) === "item")) e.preventDefault(); }, true);
+      // Middle-click toggles Overview in #bcol (suppressing autoscroll on both
+      // mousedown and auxclick). Left-click mousedown during Overview prevents
+      // focusing dimmed controls before click is captured; preview stays native.
+      doc.addEventListener("mousedown", function (e) {
+        if (e.button === 1) {
+          if (canMiddleToggle(e.target)) {
+            e.preventDefault();
+            midHandled = true;
+            clearTimeout(midTimer);
+            midTimer = setTimeout(function () { midHandled = false; }, 600);
+            if (on) exit(null); else enter(null);
+          }
+          return;
+        }
+        if ((on || busy) && (busy || classify(e.target) === "outside" || classify(e.target) === "item")) e.preventDefault();
+      }, true);
+      doc.addEventListener("auxclick", function (e) {
+        if (e.button !== 1) return;
+        if (e.target && e.target.closest && e.target.closest("a[href], .xterm, .tm-host")) {
+          midHandled = false;
+          clearTimeout(midTimer);
+          return;
+        }
+        if (midHandled) {
+          e.preventDefault();
+          midHandled = false;
+          clearTimeout(midTimer);
+          return;
+        }
+        if (canMiddleToggle(e.target)) e.preventDefault();
+      }, true);
       doc.addEventListener("keydown", key, true);
+      if (o.board && o.board.addEventListener) o.board.addEventListener("pointermove", boardPointerMove, { passive: true });
+      if (window.addEventListener) window.addEventListener("resize", function () {
+        if (on && preview && !canPreview()) teardownPreview();
+      });
       var state = stored();
       if (state) requestAnimationFrame(function () { if (o.reveal) o.reveal(); enter(state); });
     },
     active: function () { return on; },
     holding: function () { return on || busy; },
+    inPreview: function (el) { return !!(preview && preview.host && el && preview.host.contains(el)); },
+    previewNode: function () { return preview ? preview.node : null; },
+    replacePreviewNode: function (oldNode, newNode) {
+      if (!preview || preview.node !== oldNode || !newNode) return;
+      oldNode.removeAttribute("data-overview-live");
+      newNode.setAttribute("data-overview-live", "");
+      preview.node = newNode;
+    },
     toggle: function () { if (on) exit(null); else enter(null); },
     exit: exit,
     after: function (fn) { if (on) exit(null, fn); else if (busy) callbacks.push(fn); else fn(); },

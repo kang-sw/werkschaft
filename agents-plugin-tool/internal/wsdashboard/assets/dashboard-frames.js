@@ -411,6 +411,9 @@
   // eases from is its set height (style.height), 0 when it has none, as the
   // stylesheet's iframe.doc-frame starts it, so nothing reads layout.
   var frameSizes = new Map(), frameSizeFrame = 0, frameOverviewWait = false;
+  function frameInOverviewPreview(f) {
+    return !!(f && window.WsOverview && window.WsOverview.inPreview && window.WsOverview.inPreview(f));
+  }
   function queueFrameHeight(f, h) {
     if (shHidden) return;
     frameSizes.set(f, h);
@@ -422,29 +425,40 @@
           if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
         });
       }
-      return;
+      if (!frameInOverviewPreview(f)) return;
     }
     if (!frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
   }
   function applyFrameHeights() {
     if (shHidden) { frameSizes.clear(); frameSizeFrame = 0; return; }
-    // While overview is active or transitioning, board frames are inside
-    // display:none containers and report collapsed heights. Defer with a
-    // one-shot release listener so Overview holds zero idle rAF frames.
-    if (window.WsOverview && window.WsOverview.holding()) {
+    // While overview is active or transitioning, off-preview board frames are
+    // inside display:none containers and report collapsed heights; defer them
+    // with a one-shot release listener while sizing Quick Look preview frames
+    // immediately.
+    var holding = !!(window.WsOverview && window.WsOverview.holding());
+    var batch;
+    if (holding) {
+      batch = new Map();
+      frameSizes.forEach(function (h, f) {
+        if (frameInOverviewPreview(f)) {
+          batch.set(f, h);
+          frameSizes.delete(f);
+        }
+      });
       frameSizeFrame = 0;
-      if (!frameOverviewWait && window.WsOverview.onRelease) {
+      if (frameSizes.size && !frameOverviewWait && window.WsOverview.onRelease) {
         frameOverviewWait = true;
         window.WsOverview.onRelease(function () {
           frameOverviewWait = false;
           if (!shHidden && frameSizes.size && !frameSizeFrame) frameSizeFrame = requestAnimationFrame(applyFrameHeights);
         });
       }
-      return;
+      if (!batch.size) return;
+    } else {
+      batch = frameSizes;
+      frameSizes = new Map();
+      frameSizeFrame = 0;
     }
-    var batch = frameSizes;
-    frameSizes = new Map();
-    frameSizeFrame = 0;
     // Every height applies at once, under one capture per actual scroller,
     // including old frames and independent pinned columns. A frame's srcdoc
     // never changes, so its height reports are the rendering of content the
@@ -537,6 +551,14 @@
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
     } else if (m.wbDoc === "wheel") {
       if (window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) window.WsBoardAnchor.onFrameWheel(f, num(m.dy), num(m.dx), num(m.mode));
+    } else if (m.wbDoc === "middleclick") {
+      var ma = navigator.userActivation, col = $("bcol");
+      if (shHidden || !col || !col.contains(f)) return;
+      if (f.closest && f.closest("[data-max], .bgal")) return;
+      if (root.hasAttribute("data-board-max")) return;
+      if (doc.querySelector("#tkqpop[open], dialog[open], .tpop:not([hidden]), [popover]:popover-open")) return;
+      if (ma && !ma.isActive) return;
+      if (window.WsOverview && window.WsOverview.toggle) window.WsOverview.toggle();
     }
   });
   // A swap re-creates a changed topic's frame (or loads its next one beside
