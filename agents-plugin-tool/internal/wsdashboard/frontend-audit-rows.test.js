@@ -880,3 +880,20 @@ test('per-turn init events keep one session banner; later ones and subagent task
   assert.equal(after[0].getAttribute('data-event-id'), 'init0');
   assert.equal(rowById(f.dom, 'init1').hasAttribute('hidden'), true);
 });
+
+test('rows added under a bottom-pinned conversation re-pin it; no-op reconciles and unpinned views do not move it', () => {
+  for (const stick of [true, false]) {
+    const f = runCollapseFixture();
+    let pins = 0;
+    f.ctx.stick = stick;
+    f.ctx.pinConvo = () => { pins++; };
+    f.add('t1', 1, 'thinking', '2026-11-20T10:00:05Z');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 1 : 0, 'rows arriving re-pin only a pinned view');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 1 : 0, 'an unchanged reconcile does not touch the scroll');
+    f.add('t2', 2, 'hook', '2026-11-20T10:00:06Z');
+    f.ctx.auReconcileRows();
+    assert.equal(pins, stick ? 2 : 0);
+  }
+});

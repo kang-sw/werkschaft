@@ -301,7 +301,7 @@
       }
       if (pending) orphans.push(pending);
       for (var o = 0; o < orphans.length; o++) {
-        if (orphans[o].parentNode) orphans[o].parentNode.removeChild(orphans[o]);
+        if (orphans[o].parentNode) { auWrites++; orphans[o].parentNode.removeChild(orphans[o]); }
       }
       for (var r = 0; r < runs.length; r++) {
         var rows = runs[r].rows, sum = runs[r].sum, expanded = false, kinds = [];
@@ -319,7 +319,7 @@
           lbl.className = "au-run-lbl";
           sum.appendChild(lbl);
         }
-        if (sum.nextElementSibling !== rows[0] || sum.parentNode !== container) container.insertBefore(sum, rows[0]);
+        if (sum.nextElementSibling !== rows[0] || sum.parentNode !== container) { auWrites++; container.insertBefore(sum, rows[0]); }
         var text = auRunLabel(kinds);
         var lblEl = sum.firstElementChild;
         if (lblEl && lblEl.textContent !== text) lblEl.textContent = text;
@@ -330,7 +330,7 @@
             var rowId = rows[j].getAttribute("data-event-id");
             if (rowId) auExpandedRows[rowId] = true;
           }
-          if (rows[j].hasAttribute("hidden") === expanded) rows[j].toggleAttribute("hidden", !expanded);
+          if (rows[j].hasAttribute("hidden") === expanded) { auWrites++; rows[j].toggleAttribute("hidden", !expanded); }
         }
       }
     }
@@ -355,9 +355,16 @@
       if (!expand && auFocusedAuditEl && auFocusedAuditEl.hasAttribute("hidden")) auSetCurrentRow(null);
     }
 
+    // Counts the reconcile's DOM writes that can change the conversation's height.
+    var auWrites = 0;
+
     function auReconcileRows() {
       var box = auEntriesContainer();
       if (!box) return;
+      // Rows land after the view was pinned (a session shown again, a page that
+      // came back late): a bottom-pinned conversation follows what they add.
+      // The pin flag is read before any write; nothing is measured here.
+      var pin = typeof stick !== "undefined" && stick, writes0 = auWrites;
       var entries = auRenderedEntries(box);
       var callMap = auRenderedCallMap(box);
       var allEvents = Object.keys(auEventsById).map(function (id) { return auEventsById[id]; });
@@ -369,7 +376,7 @@
       for (var i = 0; i < oldNodes.length; i++) {
         var eid = oldNodes[i].getAttribute("data-event-id");
         if (eid && !existing[eid]) existing[eid] = oldNodes[i];
-        else if (oldNodes[i].parentNode) oldNodes[i].parentNode.removeChild(oldNodes[i]);
+        else if (oldNodes[i].parentNode) { auWrites++; oldNodes[i].parentNode.removeChild(oldNodes[i]); }
       }
 
       var kept = Object.create(null);
@@ -386,10 +393,11 @@
           kept[aev.id] = true;
           var anode = existing[aev.id];
           if (!anode || anode.tagName !== "LI" || !anode.classList.contains("au-inner")) {
-            if (anode && anode.parentNode) anode.parentNode.removeChild(anode);
+            if (anode && anode.parentNode) { auWrites++; anode.parentNode.removeChild(anode); }
             anode = auBuildRowNode(aev, true, false);
           }
           if (auPrevRowEl(anode) !== anchor || anode.parentNode !== callEl.parentNode) {
+            auWrites++;
             callEl.parentNode.insertBefore(anode, anchor.nextSibling);
           }
           anchor = anode;
@@ -406,7 +414,7 @@
         kept[sev.id] = true;
         var snode = existing[sev.id];
         if (!snode || snode.tagName === "LI" || snode.classList.contains("au-inner") || snode.classList.contains("au-sysrow") !== !!item.sysStart) {
-          if (snode && snode.parentNode) snode.parentNode.removeChild(snode);
+          if (snode && snode.parentNode) { auWrites++; snode.parentNode.removeChild(snode); }
           snode = auBuildRowNode(sev, false, item.sysStart);
         }
         snodes.push(snode);
@@ -417,6 +425,7 @@
         var refEl = item2.beforeIndex < entries.length ? entries[item2.beforeIndex].el : null;
         var wantNext = (s2 + 1 < snodes.length && plan.standalone[s2 + 1].beforeIndex === item2.beforeIndex) ? snodes[s2 + 1] : refEl;
         if (snodes[s2].parentNode !== box || auNextRowEl(snodes[s2]) !== wantNext) {
+          auWrites++;
           box.insertBefore(snodes[s2], wantNext);
         }
       }
@@ -425,10 +434,12 @@
       var exIds = Object.keys(existing);
       for (var r = 0; r < exIds.length; r++) {
         if (!kept[exIds[r]] && existing[exIds[r]].parentNode) {
+          auWrites++;
           existing[exIds[r]].parentNode.removeChild(existing[exIds[r]]);
         }
       }
       auApplyRuns(box);
+      if (pin && auWrites !== writes0 && typeof pinConvo === "function") pinConvo();
       if (window.WsAudit && window.WsAudit.syncSelection) window.WsAudit.syncSelection();
     }
 
