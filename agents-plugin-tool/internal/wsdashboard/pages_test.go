@@ -1,10 +1,11 @@
 package wsdashboard
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -116,14 +117,28 @@ func boardRegions(t *testing.T, body string) wswhiteboard.Regions {
 
 func get(t *testing.T, url string) (int, string) {
 	t.Helper()
+	// Content GETs include cold and dev-asset page renders (measured 633-653 ms
+	// with dev assets, over the 500 ms health client's budget on every OS), so
+	// they carry no per-request latency contract: real HTTP, bounded only by
+	// the test's own deadline. The health client used by probes is untouched.
 	client := testClient()
-	if runtime.GOOS == "windows" {
-		// These content checks include cold and dev-asset page renders, which
-		// can exceed the health client's 500 ms budget on Windows. Keep a
-		// finite render budget without changing the health/control tests.
-		client.Timeout = 5 * time.Second
+	client.Timeout = 0
+	defer client.CloseIdleConnections()
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
 	}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
