@@ -437,17 +437,14 @@ async function run(browser, { lang, scheme, full }) {
   await v.waitForSelector('.xpeek', { state: 'hidden' });
   assert.equal(await v.evaluate(() => document.activeElement.classList.contains('xchip')), true, 'focus returns to a chip');
 
-  // 10. jump to the `!` command's card.
+  // 10. user commands carry no jump-to-card button in the peek header.
   await post('/jobs', [J('exec_hi', 'echo hi', { origin: 'user', state: 'exited', exit_code: 0, ended_at: Date.now() - 1000, started_at: Date.now() - 2000 })]);
-  await sendLine(v, '!echo hi');
-  await v.waitForSelector('.cexec[data-phase="done"]');
   await post('/bump');
   await v.waitForSelector('.xchip[data-xid="exec_hi"]');
   await v.click('.xchip[data-xid="exec_hi"]');
-  await v.waitForSelector('.xpeek [data-xact="jump"]');
-  assert.equal(await v.locator('.xpeek [data-xact="jump"]').isDisabled(), false, 'the card is there');
-  await v.click('.xpeek [data-xact="jump"]');
-  await v.waitForSelector('.cexec.xflash');
+  await v.waitForSelector('.xpeek');
+  assert.equal(await v.locator('.xpeek [data-xact="jump"]').count(), 0, 'no jump-to-card action in peek');
+  await page.keyboard.press('Escape');
   await v.waitForSelector('.xpeek', { state: 'hidden' });
 
   // 11. reduced motion and the motion it removes.

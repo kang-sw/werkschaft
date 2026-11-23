@@ -9,7 +9,6 @@
 @keyframes xh-spin { to { transform: rotate(360deg); } }
 @keyframes xh-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .34; } }
 @keyframes xh-blink { 50% { opacity: 0; } }
-@keyframes xh-flash { 0% { box-shadow: 0 0 0 3px var(--wb-primary); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @keyframes xh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .sbwrap > .sbadge { flex: none; max-width: none; }
 .xgroup[hidden], .xgroup [hidden] { display: none !important; }
@@ -161,8 +160,7 @@
 .xgroup.fresh { visibility: hidden; }
 .xmore[hidden], .xagg[hidden] { display: none; }
 .xpeek[hidden], .xtoast[hidden], .xtip[hidden] { display: none; }
-.cexec.xflash { animation: xh-flash .9s ease-out 2; }
 @media (max-width: 560px) { .xpeek { right: -4px; width: calc(100% + 8px); } .xpeek .xbtn .lbl-long { display: none; } }
 :root[data-animation-paused] .xring::before,
 :root[data-animation-paused] :is(.xring, .xspinr, .xp-dot, .xp-foot .xlive::before, .xout.live::after) { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { .xgroup *, .xpeek, .xpeek *, .xtoast, .xchip, .cexec.xflash { animation: none !important; transition: none !important; } [data-st="running"] .xring, [data-st="running"] .xring::before { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .xgroup *, .xpeek, .xpeek *, .xtoast, .xchip { animation: none !important; transition: none !important; } [data-st="running"] .xring, [data-st="running"] .xring::before { animation: none !important; } }

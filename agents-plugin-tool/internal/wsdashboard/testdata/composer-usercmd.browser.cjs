@@ -52,6 +52,13 @@ async function agent(step, tag) {
       await page.goto(base + '/s/livesession');
       let view = await sessionFrame(page);
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await view.evaluate(() => {
+        window.__admitted = window.__admitted || [];
+        if (!window.__admittedWired) {
+          window.__admittedWired = true;
+          window.addEventListener('ws:cexec-admitted', e => window.__admitted.push(e.detail));
+        }
+      });
       await page.waitForTimeout(500);
       assert.equal(await view.locator('.d-ucmd:not([hidden]) .ucmd').count(), 0, 'no strip without commands');
 
@@ -70,14 +77,15 @@ async function agent(step, tag) {
       assert.equal(await view.locator('.ucmd[data-ucmd="test"] .ucmd-line').textContent(), 'make test\n./run --verbose', 'a multiline command is shown whole');
       await shot('buttons');
 
-      // a click runs the stored line through the composer's route as a slot-run card
+      // a click runs the stored line through the composer's route and emits headless admission
+      const hWithSlots = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
       await build.locator('.ucmd-run').click();
-      await view.waitForSelector('.cexec[data-phase="done"]');
-      const c0 = view.locator('.d-cexec .cexec').first();
-      assert.equal(await c0.locator('.cexec-label').textContent(), 'Build');
-      assert.equal(await c0.locator('code').textContent(), 'make all');
-      assert.equal(await c0.locator('.cmdout').textContent(), 'hi\n');
-      assert.ok((await c0.locator('.cexec-state').textContent()).includes(t.exit0));
+      await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'make all'));
+      const buildAdmit = await view.evaluate(() => window.__admitted.find(e => e.command === 'make all'));
+      assert.equal(buildAdmit.origin, 'ucmd');
+      assert.ok(buildAdmit.exec_id, 'admitted event carries exec_id');
+      assert.equal(await view.locator('.d-cexec').count(), 0, 'no inline console card for slot run');
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), hWithSlots, '0px height growth on slot run');
       const runs = posts.filter(p => p.path.endsWith('/user-commands/build/run'));
       assert.equal(runs.length, 1);
       const body = JSON.parse(runs[0].body);
@@ -87,6 +95,7 @@ async function agent(step, tag) {
 
       // an agent replacement the page has not heard of yet (its refetch is held
       // back): the click is stale, runs nothing, warns, and the strip refreshes
+      const admittedBeforeStale = await view.evaluate(() => window.__admitted.length);
       await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.abort() : route.continue());
       await agent('replace-build', lang);
       await page.waitForTimeout(400);
@@ -94,7 +103,7 @@ async function agent(step, tag) {
       await build.locator('.ucmd-run').click();
       await view.locator('.ucmd[data-ucmd="build"] .ucmd-line:text-is("make clean all")').waitFor({ timeout: 10000 });
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.stale), () => false), 'the stale rejection is shown');
-      assert.equal(await view.locator('.d-cexec .cexec').count(), 1, 'a stale click made no card');
+      assert.equal(await view.evaluate(() => window.__admitted.length), admittedBeforeStale, 'a stale click triggered no admission');
       await shot('stale');
       await page.unroute('**/user-commands');
 
@@ -115,7 +124,7 @@ async function agent(step, tag) {
       assert.equal(await ctor.isDisabled(), false, 'a command named "constructor" is runnable');
       const runsOf = id => posts.filter(p => p.path.endsWith('/user-commands/' + id + '/run')).length;
       await ctor.click();
-      await view.waitForSelector('.cexec:has(code:text-is("echo ctor"))', { timeout: 10000 });
+      await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'echo ctor'), null, { timeout: 10000 });
       assert.equal(runsOf('constructor'), 1);
       await page.waitForTimeout(900);
       assert.equal(await ctor.isDisabled(), false, 'it is runnable again once the guard passes');
@@ -125,16 +134,16 @@ async function agent(step, tag) {
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
       // two rapid separate clicks, the second one after the first one's
-      // acknowledgement was answered and its card rendered (no click count tells
-      // them apart), are one run
+      // acknowledgement was tracked and emitted (no click count tells them
+      // apart), are one run
       await page.waitForTimeout(300);
-      const dblCards = () => view.locator('.cexec:has(code:text-is("echo dbl"))').count();
-      const cardsBefore = await dblCards();
+      const dblAdmitted = () => view.evaluate(() => (window.__admitted || []).filter(e => e.command === 'echo dbl').length);
+      const dblBefore = await dblAdmitted();
       const acked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/user-commands/dbl/run'));
       await dbl.evaluate(el => el.click());
       await acked;
-      for (let i = 0; i < 200 && (await dblCards()) <= cardsBefore; i++) await page.waitForTimeout(25);
-      assert.equal(await dblCards(), cardsBefore + 1, 'the acknowledgement was rendered as a card before the second click');
+      for (let i = 0; i < 200 && (await dblAdmitted()) <= dblBefore; i++) await page.waitForTimeout(25);
+      assert.equal(await dblAdmitted(), dblBefore + 1, 'the acknowledgement was tracked before the second click');
       await dbl.evaluate(el => el.click());
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');

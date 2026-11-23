@@ -156,7 +156,7 @@
     var tabs = xhPeekJobs(), st = xhSt(j);
     // A job that ended under an open confirmation: there is nothing left to stop.
     if (xhPk.confirm && xhEnded(j)) { xhPk.confirm = ""; clearInterval(xhConfT); }
-    var sig = [xhPk.id, st, j.stop_notice || "", xhPk.confirm, xhPk.pinned, xhPk.cmdOpen, !!xhNoticeBusy[j.id], xhCardFor(j) ? 1 : 0, tabs.map(function (x) { return x.id + ":" + xhSt(x); }).join(",")].join("|");
+    var sig = [xhPk.id, st, j.stop_notice || "", xhPk.confirm, xhPk.pinned, xhPk.cmdOpen, !!xhNoticeBusy[j.id], tabs.map(function (x) { return x.id + ":" + xhSt(x); }).join(",")].join("|");
     xhPeekEl.hidden = false;
     xhPeekEl.setAttribute("aria-label", wsT("js.xhud.pk.label") + " — " + xhCmdHead(j.command));
     if (sig !== xhPk.sig || forceOut || !xhOutEl) {
@@ -221,11 +221,6 @@
     if (!ended) elE.setAttribute("data-xsince", String(j.started_at));
     meta.appendChild(elE);
     meta.appendChild(xhEl("span", "xgrow"));
-    if (j.origin === "user") {
-      var jb = xhBtn("xbtn", "jump", "↑ " + wsT("js.xhud.pk.jump"));
-      if (!xhCardFor(j)) { jb.disabled = true; jb.title = wsT("js.xhud.pk.jump.none"); }
-      meta.appendChild(jb);
-    }
     meta.appendChild(xhBtn("xbtn", "copy", wsT("js.xhud.pk.copy")));
     if (ended) {
       var db = xhBtn("xbtn", "dismiss", wsT("js.xhud.dismiss"));
@@ -716,12 +711,7 @@
     var t = xhToastText(j);
     if (tx.textContent !== t) tx.textContent = t;
   }
-  // --- jump to the `!` command's card, copy, clicks ---------------------------------
-  function xhCardFor(j) {
-    if (j.origin !== "user" || typeof cexecCards === "undefined") return null;
-    for (var i = 0; i < cexecCards.length; i++) if (cexecCards[i].card && cexecCards[i].card.exec_id === j.id && cexecCards[i].el && cexecCards[i].el.isConnected) return cexecCards[i];
-    return null;
-  }
+  // --- copy, clicks -----------------------------------------------------------------
   // dismissFromPeek: the keyboard's way to clear an ended job when the strip is
   // folded to its aggregate. The panel moves to the neighbouring tab, or closes
   // when it was the last one.
@@ -774,14 +764,4 @@
         xhCopiedT = setTimeout(function () { a.textContent = old; }, 1400);
       });
     } else if (act === "dismiss") xhDismissFromPeek(j.id);
-    else if (act === "jump") {
-      var c = xhCardFor(j);
-      if (!xhPk.pinned) xhClosePeek(false);
-      if (c && c.el) {
-        c.el.classList.remove("xflash");
-        void c.el.offsetWidth;
-        c.el.classList.add("xflash");
-        c.el.scrollIntoView({ block: "nearest" });
-      }
-    }
   }

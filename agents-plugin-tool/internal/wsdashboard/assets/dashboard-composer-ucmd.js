@@ -39,8 +39,8 @@
     ucmdBody.setAttribute("aria-label", wsT("js.ucmd.aria"));
     ucmdBox.appendChild(ucmdSum);
     ucmdBox.appendChild(ucmdBody);
-    // Above the result cards when they exist, else where they will go.
-    composer.insertBefore(ucmdBox, cexecBox || composer.querySelector(".cimgs") || composer.firstChild);
+    // Where the slot blocks sit above the attachments and draft.
+    composer.insertBefore(ucmdBox, composer.querySelector(".cimgs") || composer.firstChild);
     return ucmdBox;
   }
   function ucmdRender() {
@@ -194,10 +194,10 @@
           if (body && typeof body.token === "string" && body.token) cexecToken = body.token;
           settled();
           if (body && body.unknown) {
-            cexecAdd(id, c.line, { id: id, command: c.line, label: c.label, phase: "done", unknown: true });
+            cexecTrackSubmission(id, c.line, { id: id, command: c.line, label: c.label, phase: "done", unknown: true }, "ucmd");
             return;
           }
-          cexecAdd(id, c.line, body && body.id === id ? body : null);
+          cexecTrackSubmission(id, c.line, body && body.id === id ? body : null, "ucmd");
           return;
         }
         if (r.status === 409 && body && Array.isArray(body.commands)) {
