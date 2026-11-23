@@ -181,6 +181,28 @@ Uses only data the cards already carry: exit code, byte count, job ID, state,
 Deferred: everything in Phases 2 and 3. Verification boundary: LOOK check plus
 touched Node tests. This phase has no backend dependency and ships first (T0).
 
+### Result (e2e3d30) - 2026-11-23
+
+Landed (7d4394053, e2e3d3094): `!` shell mode (`data-bang`, amber `!` via the CSS
+Highlight API `ws-bang`, `bash` badge + Esc/Backspace hint, green Run), `@`/`/`
+popups off in `!` mode, Esc rule (first removes `!`, second arms Tab-out), one
+dark scrollback console (prompt line, output, `✓ exit 0 · bytes · job` status,
+folds to one line when idle/restored, console-level clear through `cexec-x`),
+dark `$` slot blocks with keycap button and full stored line, terminal surfaces
+dark in light theme, strings in all 11 locales (lite review caught missing
+zh-Hans/zh-Hant; fixed).
+
+Verification: `node --test testdata/composer-bang.test.cjs` 5/5 pass. LOOK
+compared en/ko x dark/light captures vs the mockup (match; minor: no glyph in
+bash badge, slots are rows, extra Collapse toggle, no cwd/time/red stderr/caret =
+Phase 3). Captures: `D:/Temp/composer-bang-look/`. Go and the Go-run browser
+fixtures were not run (hard rule); `composer-exec.browser.cjs` reload waits were
+changed to `state: 'attached'` because restored history is folded.
+
+Decisions: the idle fold applies to restored history and user toggle; a fresh or
+active run keeps the console open. Restore never folds over a run added before
+the restore answer arrived (review finding).
+
 ### Phase 2: Additive server fields (backend: Codex)
 
 Self-contained; independent of Phase 1 and may land before or after it. Owns all
