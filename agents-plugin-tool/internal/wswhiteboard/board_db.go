@@ -11,9 +11,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wssqlite"
 )
 
 const (
@@ -397,7 +398,7 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, boardDBName)
-	db, err := sql.Open("sqlite", boardSQLiteURI(path))
+	db, err := sql.Open("sqlite", wssqlite.FileURI(path))
 	if err != nil {
 		return nil, err
 	}
@@ -438,33 +439,4 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, fmt.Errorf("migrate board sqlite: %w", err)
 	}
 	return b, nil
-}
-
-// boardSQLiteURI is path as a literal SQLite file: URI. The driver splits a
-// plain DSN at its first '?', so a worktree path containing one would open
-// another file; percent-encoding every byte outside the unreserved set keeps
-// '?', '#' and '%' literal.
-func boardSQLiteURI(path string) string {
-	// A file: URI path is absolute, so a relative root must resolve against
-	// the working directory exactly as the stat, lock and sentinel paths do.
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	p := filepath.ToSlash(path)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p // C:/x becomes /C:/x, which SQLite's Windows VFS accepts
-	} else if strings.HasPrefix(p, "//") {
-		p = "//" + p // a UNC path keeps an empty URI authority
-	}
-	var b strings.Builder
-	b.WriteString("file:")
-	for i := 0; i < len(p); i++ {
-		c := p[i]
-		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-._~/:", c) >= 0 {
-			b.WriteByte(c)
-			continue
-		}
-		fmt.Fprintf(&b, "%%%02X", c)
-	}
-	return b.String()
 }
