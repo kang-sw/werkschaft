@@ -19,8 +19,8 @@ related:
   261123-chore-ws-retire-pi-harness: "its Phase 1 owns the pi.* to werk.* redirect on the harness integration track (Decisions 1 and 9)"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-completeness-reviewed: cca7a6b1be82a939
-sage-review-design-reviewed: cca7a6b1be82a939
+sage-review-completeness-reviewed: 74a3370f8da1e035
+sage-review-design-reviewed: 74a3370f8da1e035
 ---
 
 # Builtin Go agent harness
