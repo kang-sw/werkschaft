@@ -268,6 +268,18 @@ its single rotation.
 - Tests: a restart keeps the previous lines, the cap rotates exactly once
   into `.1`, and a pre-lock error leaves the existing log untouched.
 
+### Result (fc37e29a0) - 2026-11-23
+
+The singleton owner appends to the dashboard log and keeps one rotated
+generation at an 8 MiB limit. It closes the writer before releasing the
+lock. Pre-lock, late, and file-error diagnostics use stderr. Tests cover
+restart retention, lock contention, startup failure and repeated rotation.
+
+Source-level log operations are two on open (open and stat), one per
+ordinary append, three on rotation (close, atomic replace and open), one
+on shutdown and zero for a lock loser. Counts exclude transient Windows
+retries. Older executables retain their truncating writer.
+
 ### Phase 3: Closed-session restore after publication
 
 Publish the endpoint and serve once held sessions have rejoined and
@@ -284,6 +296,22 @@ and observed metadata in the background.
 - Measure startup-to-endpoint time and file operations before and after
   on a state dir with retained history. Record both in the Result.
 
+### Result (0d42713ac) - 2026-11-23
+
+The dashboard finishes the initial holder scan and registers closed-session
+identities before publishing the endpoint. It reads closed snapshots,
+observations and permission history in the background. Tests confirm that
+a held worker's bearer and a closed owner's command slot survive startup,
+health answers while presentation reads are blocked, and the child rail
+receives the hydrated observations.
+
+Five macOS trials with 256 retained closed sessions and two evidence files
+each measured median startup to endpoint publication at 42.44 ms before
+and 12.23 ms after. Counted file-wrapper operations before publication fell
+from 1,800 to 264 per trial, including file reads from 768 to 256 and
+directory checks from 259 to 3. The fixture gated deferred reads during
+the measurement. Windows scanner overhead was outside this measurement.
+
 ### Phase 4: Successor before shutdown on every replace path
 
 Route `dev.py rerun`, the plugin upgrade, and the direct-serve and
@@ -297,6 +325,30 @@ LAN-change hooks through the gated-child path.
     `dev.py` runs do not stall on a second acquisition.
 - Verify the dev swap end to end with `python3 scripts/dev.py rerun daemon
   --local` and record the observed no-health window.
+
+### Result (8f59ff63d) - 2026-11-23
+
+Dev rerun, plugin upgrade, direct serve and LAN-change replacement use the
+gated successor. The starter receives the readiness byte after the child's
+pre-lock initialization, rechecks the predecessor, requests shutdown and
+admits the child. It confirms a healthy successor with the expected
+version, LAN mode and content hash when available. Direct and LAN command
+tests assert the readiness diagnostic and successor health (eedaaa171).
+
+The Python callers hold the starter lock through confirmation and signal
+ownership with a scoped child environment marker (74c3bd124). This is T0
+because retained executables ignore the marker. Unmarked Go entry points
+acquire the lock themselves. The readiness pipe uses no file-system I/O.
+The predecessor identity recheck adds two endpoint reads and one health
+request to the successful replacement path.
+
+On isolated macOS state, `python3 scripts/dev.py rerun daemon --local
+--no-seed --health-window 0` kept the dedicated port and showed a sampled
+no-health interval of 123.2–145.9 ms. A separate first-party Python launcher
+upgrade via `DaemonLink.ensure_healthy` measured 123.5–148.8 ms on its own
+dedicated port. Both swapped 0.51.1 for 0.51.2-dev and logged readiness
+before drain. The timing bounds are from one run per entry with roughly
+10 ms polling.
 
 ### Phase 5: Worker MCP route after replacement
 
@@ -317,3 +369,59 @@ This phase ends at diagnosis. It is complete when:
 
 The fix itself is a later phase, appended to this ticket once the lead and
 owner settle the proposal.
+
+### Result (6691d3b59) - 2026-11-23
+
+Worker rejoin records restoration, a stale saved route, or a missed rejoin
+wait correlated with later restoration. Timeout correlation uses a bounded
+table of digests in memory until rejoin completes. The HTTP route and the
+dashboard access guard record local reasons for 401s and preserve the
+existing wire responses. Bearer credentials and saved URLs stay out of
+these diagnostics. The HTTP test fixture version was aligned in a53b57c63.
+The access guard follow-up (1a0a04f73) passed the targeted race tests.
+Independent lite review of the phase implementation found no actionable
+correctness or test-integrity findings.
+
+`TestHeldClaudeWorkerMCPAcrossDashboardReplacement` ran three times with
+two successive authenticated handoffs on disposable state. It used
+production dashboard, runner, Claude backend and holder-manager code with
+a deterministic Claude stream-JSON executable and an MCP response fixture.
+The same holder and subprocess survived both handoffs. On the original
+port, `tools/list` returned 200 after rejoin. When the successor moved to a
+different port, the old port was released and the saved bearer returned
+401 at the new endpoint. The relevant log lines, with the worker ID
+replaced by a placeholder, were
+
+~~~text
+agent <worker>: worker MCP rejoin: restored
+agent <worker>: worker MCP rejoin: URL mismatch
+dashboard: /mcp/session 401: token unknown
+~~~
+
+A controlled in-process test also exhausted the wait and logged
+`missed wait before restoration` after unblocking the scan. The dashboard
+fixture had completed startup rejoin by publication. The observed
+changed-port failure came from the saved URL mismatch.
+
+Candidate fix for owner and lead decision. Preserve the existing loopback
+port on automatic replacements when a held MCP worker still uses it.
+Define what to do when the port is unavailable or the user explicitly
+changes it before adding the fix in a later phase.
+
+Targeted Go tests, the full wsagent package, and the launcher, dev and
+wsflow Python suites passed. The exact dashboard package run failed for
+eight frontend fixtures also failing at the branch-point develop revision
+(4e5cc3b4b).
+
+- `TestBoardTopicResizeKeepsTheView`
+- `TestBoardFrameHeightsBatch`
+- `TestBoardKeepUnderNode`
+- `TestToolbarFloatingGeometry`
+- `TestInlineCapsulesBehavior`
+- `TestFreshSessionLoadClient`
+- `TestSlashPickerListsAndPicks`
+- `TestBoardHistoryHooksSurroundSSESwap`
+
+All eight passed as a group on updated develop (f9efb4180). An earlier
+dashboard run also hit the intermittent clock assertion in
+`TestAgentsIslandBehavior`, reproduced on both develop revisions.
