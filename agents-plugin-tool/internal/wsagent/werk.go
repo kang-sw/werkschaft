@@ -70,11 +70,12 @@ func init() {
 
 func (b WerkBackend) registration() (string, BackendRegistration) {
 	return BackendWerk, BackendRegistration{
-		Backend:       b,
-		WorkerCapable: true,
-		WorkerProfile: AgentWorkerProfile(BackendWerk),
-		WorkerHTTPMCP: true,
-		Catalog:       WerkCatalog(),
+		Backend:             b,
+		WorkerCapable:       true,
+		WorkerProfile:       AgentWorkerProfile(BackendWerk),
+		WorkerHTTPMCP:       true,
+		Catalog:             WerkCatalog(),
+		BuiltinProfilesOnly: true,
 		// A provider's function names admit no dot, so the model sees ws's
 		// tools spelled exec_shell, agent_spawn (werk.ModelToolName).
 		ToolNameScheme:      ToolNameSchemeSanitize,

@@ -209,6 +209,8 @@ func TestConfigTuneTierRoutingRefusesInvalidGraphs(t *testing.T) {
 		{"reserved name", map[string]any{"nodes": map[string]any{"opus": map[string]any{}}}, "a tier spelling"},
 		{"nine-hop chain", map[string]any{"nodes": nineHops}, "hops"},
 		{"unknown harness", map[string]any{"nodes": map[string]any{"review": map[string]any{"*": "nosuch.*"}}}, `unknown harness "nosuch"`},
+		{"werk target", map[string]any{"nodes": map[string]any{"review": map[string]any{"*": "werk.*"}}}, "direct tiers only"},
+		{"werk bundle", map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "werk", "model": "m"}}}, "direct tiers only"},
 		{"unlaunchable bundle model", map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "claude", "model": "two words"}}}, "must match"},
 		{"unlaunchable bundle effort", map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "claude", "model": "m", "effort": "HIGH"}}}, "lowercase word"},
 	}
@@ -411,9 +413,15 @@ func TestDashboardCatalogTierRoutingMutation(t *testing.T) {
 		}
 	}
 
-	// Every built-in harness validates, installed or not.
 	for _, h := range wsagent.BuiltinHarnessNames() {
-		if _, err := catalog.Validate(wsconfig.ScopeGlobal, op("set", map[string]any{"nodes": map[string]any{"mine": map[string]any{"*": h + ".*"}}})); err != nil {
+		_, err := catalog.Validate(wsconfig.ScopeGlobal, op("set", map[string]any{"nodes": map[string]any{"mine": map[string]any{"*": h + ".*"}}}))
+		if h == wsagent.BackendWerk {
+			if err == nil || !strings.Contains(err.Error(), "direct tiers only") {
+				t.Errorf("werk graph target error = %v", err)
+			}
+			continue
+		}
+		if err != nil {
 			t.Errorf("built-in harness %s refused: %v", h, err)
 		}
 	}

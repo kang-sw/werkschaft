@@ -316,6 +316,17 @@ func (g *TierGraph) knownHarness(h string) bool {
 	return g.harness == nil || g.harness[h]
 }
 
+// Older daemons reject the entire saved graph if a target names werk.
+func (g *TierGraph) validateStoredHarness(harness string) error {
+	if harness == "werk" {
+		return fmt.Errorf("harness %q is available through direct tiers only", harness)
+	}
+	if !g.knownHarness(harness) {
+		return fmt.Errorf("unknown harness %q", harness)
+	}
+	return nil
+}
+
 // validate checks names, targets, acyclicity over every pointer edge of any
 // selector, and the hop limit at all four sizes from every node. Legacy
 // aliases are ignored: they only shorten a path, and the graph must stay
@@ -335,8 +346,8 @@ func (g *TierGraph) validate() error {
 		if _, isNode := g.nodes[name]; isNode {
 			return fmt.Errorf("%s: bundle %q has a node's name", ItemAgentTierRouting, name)
 		}
-		if h := g.bundles[name].Harness; !g.knownHarness(h) {
-			return fmt.Errorf("%s: bundle %q names unknown harness %q", ItemAgentTierRouting, name, h)
+		if err := g.validateStoredHarness(g.bundles[name].Harness); err != nil {
+			return fmt.Errorf("%s: bundle %q: %w", ItemAgentTierRouting, name, err)
 		}
 	}
 	names := sortedKeys(g.nodes)
@@ -353,8 +364,8 @@ func (g *TierGraph) validate() error {
 					return fmt.Errorf("%s: node %q selector %q points to unknown node %q", ItemAgentTierRouting, name, selector, target.name)
 				}
 			case tierTargetHarness:
-				if !g.knownHarness(target.name) {
-					return fmt.Errorf("%s: node %q selector %q points to unknown harness %q", ItemAgentTierRouting, name, selector, target.name)
+				if err := g.validateStoredHarness(target.name); err != nil {
+					return fmt.Errorf("%s: node %q selector %q: %w", ItemAgentTierRouting, name, selector, err)
 				}
 			case tierTargetBundle:
 				if _, ok := g.bundles[target.name]; !ok {
