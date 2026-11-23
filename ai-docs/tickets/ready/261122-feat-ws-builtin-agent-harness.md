@@ -176,9 +176,17 @@ gathered for it (read-only, 2026-11-23):
    `pi.<tier>` call resolves to `werk.<tier>` only, runs werk's availability
    check, and while werk is unavailable is refused with werk's actionable
    reason instead of a silent substitute.
-10. **Compatibility.** Every werk addition is T0 (Phase 1 Result), except the
-    configured-werk downgrade path of Phase 1 Edition a0b7dc391, held in the
-    Open Decision Queue as (14). Each later phase states its tier per changed
+10. **Compatibility: T0, with werk kept out of tier routing and saved
+    profiles until a minor (owner (14)=a).** Every werk addition is T0 (Phase 1
+    Result). The configured-werk downgrade path of Phase 1 Edition a0b7dc391
+    (an older binary refuses a whole `agent.tier_routing` graph or profile
+    family that names werk, `wsconfig/tier_routing.go` `NewTierGraph`,
+    `wsagent/profile.go` `ResolveProfiles`) is closed by refusing `werk`
+    targets in the tier routing graph and `werk` as a saved custom profile's
+    backend until a minor release; werk stays reachable through `werk.<tier>`
+    names and the `pi.*` redirect, so nothing an older binary reads names
+    werk. Rejected: allowing them with a minor bump at the release that ships
+    werk ((14) option b). Each later phase states its tier per changed
     surface in its Result.
 11. **Harness ID `werk` (owner (5014)=b).** The ID used for tier names
     (`werk.small` ... `werk.xlarge`), config keys, and the dashboard label.
@@ -226,24 +234,6 @@ gathered for it (read-only, 2026-11-23):
 16. **No A/B gate (technical (18)).** The former Phase 3 A/B gate existed to
     decide Pi's retirement, which (05)=b settled; the catalog parity
     checklist stays as Phase 6.
-
-## Open Decision Queue
-
-Last ID: (18)
-
-(14) [open] [policy] Keep werk out of `agent.tier_routing` and saved custom profiles until a minor release, so the configured-werk downgrade path stays T0
-- Phase 1 Edition a0b7dc391: once a user puts a `werk` target into the
-  global tier routing graph or saves a profile naming the `werk` backend, an
-  older binary refuses the whole value (`wsconfig/tier_routing.go`
-  `NewTierGraph` validation, `wsagent/profile.go` `ResolveProfiles`), which
-  is a T3 boundary under `release-compatibility.md`, not T1.
-- alternative a: refuse `werk` targets in those two surfaces until a minor
-  release; werk stays reachable through `werk.<tier>` names and the `pi.*`
-  redirect, so nothing an older binary reads ever names werk (T0).
-- alternative b: allow them and take the T3 boundary with a minor bump at
-  the release that ships werk.
-> a: keeps the release a patch and costs only the routing-graph convenience
-> until a minor that bumps anyway.
 
 ## Constraints
 
@@ -644,14 +634,16 @@ Runs next after Phase 1, before Phase 2; on its own branch based on
 - Worker compaction per Decision 14, so `ws/compact` on a werk worker
   queues and completes; catalog compaction graded to match.
 - The tier value's `provider` field (Decision 8).
-- The outcome of (14).
+- The tier routing and saved-profile refusal of Decision 10.
 - Verification: the Phase 1 werk tests ported to the in-daemon loop; a
   daemon replace during a model request (the request is resent), during an
   exec job (rejoined), and during an `fs.edit` for each verdict (applied, not
   applied, unknown); a panicking session leaves other sessions running;
   `fs.*` authority per tool and level through MCP; `fs.edit` and `fs.write`
   absent from `tools/list` for non-werk sessions; no process started per werk
-  session other than exec jobs; worker compaction fixtures; the live
+  session other than exec jobs; a werk target in the tier routing graph and
+  a saved profile with backend `werk` are refused with a reason; worker
+  compaction fixtures; the live
   OpenRouter worker run in Phase 1 Result's steps, recorded in the Result.
   The branch then merges per Decision 15.
 
