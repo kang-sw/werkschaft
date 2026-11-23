@@ -2,7 +2,7 @@
 title: "whiteboard 에이전트 카드: 종속 hosted 세션과 공유 대화 셸"
 blocked-by: 261115-feat-ws-worker-profile-session-spawn#phase1
 related:
-  261115-feat-ws-permission-profile: "prerequisite: Phase 2 supplies reusable permission controls and Claude/Pi launch admission"
+  261115-feat-ws-permission-profile: "prerequisite: Phase 2 supplies reusable permission controls and Claude launch admission"
   261115-feat-ws-worker-profile-session-spawn: "prerequisite: Phase 1 follows permission Phase 2 and supplies worker controls/restrictions; cards use the specific child-lead amendment below"
   261114-refactor-ws-common-session-interface: "owner 1072 permits the bounded T0 card authority exception now; Phase 2 later absorbs the controls without changing identity/input ownership"
   261114-epic-ws-common-session-foundation: "context only; no whole-epic dependency"
@@ -69,8 +69,8 @@ autonomously by the lead after fact population; they are not new owner-board IDs
 6. **Permission truthfulness and admission.** Consume
    `permission_level: read-only | workdir-write | full` and
    `permission_enforcement: enforced | partial | advisory` from the permission
-   producer, keeping native `permission_mode` separate. Pi is not blocked
-   solely because read-only intent is unenforceable. Use the producer nudge:
+   producer, keeping native `permission_mode` separate. Pi retires per
+   `261123-chore-ws-retire-pi-harness`. Use the producer nudge:
    `Permission <level> is <quality> on <harness>: <limit>.`
    Recompute actual-parent current permission on every launch/revive/restart;
    missing required parent state yields visible admission-pending/error, not
@@ -300,7 +300,7 @@ provider launches or theme/width matrix.
 - Convention: ai-docs/manuals/release-compatibility.md (declared for `agents-plugin-tool/internal/`)
 - Convention: ai-docs/manuals/ws-mcp.md (declared for `agents-plugin-tool/internal/mcp/`)
 - Convention: ai-docs/manuals/skill-authoring.md for authored bootstrap/manual/prompt text; ai-docs/manuals/wsflow-mirroring.md for mirrored package surfaces.
-- Scope is current Claude/Pi and current Runner/backend/holder/mail owners.
+- Scope is current Claude and current Runner/backend/holder/mail owners.
   No new provider, universal runtime, peer session, own board, hire-approval
   flow, global permission configuration or retroactive session migration.
 - Preserve one message/mail delivery owner, approval correlation, holder
@@ -433,7 +433,7 @@ compatibility through current owners.
 Reuse producer controls in an in-flow creation form opened by the toolbar
 button right of Files. Include role selection, default read-only worker,
 remembered role/permission/harness/model and truthful permission quality.
-Create an actual hosted Claude/Pi child with fixed actual parent, private
+Create an actual hosted Claude child with fixed actual parent, private
 binding, host-board prompt context, reachable mailbox/introduction and revive.
 Add the host rail icon/count and subagent-style list popup, host navigation and
 card focus, confirmed row deletion and in-card deletion. Keep no independent
@@ -460,7 +460,8 @@ and browser fixtures cover:
   host-only card query/update and unchanged unrelated-parented ordinary denial.
 - Reachable reply-id, default-worker introduction to host, non-peer/list
   projection, single mail/input owner, current-parent admission, durable
-  lowering, full warning, saved-choice validation and Pi nudge-and-launch.
+  lowering, full warning and saved-choice validation. Pi retires per
+  `261123-chore-ws-retire-pi-harness`.
 - Every directional matrix row: pin old/intermediate exact tool/path refusal
   with zero writes and no fallback, old callers unchanged, old scans/shutdown,
   canonical-byte retention/new reopen and no ordinary agent.json creation from

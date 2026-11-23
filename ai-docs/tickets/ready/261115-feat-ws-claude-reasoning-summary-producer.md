@@ -252,7 +252,7 @@ new side and its directional fixtures
 remain delivery targets, not completed acceptance tests. The design grades are
 settled in Decision 7; their runtime acceptance remains required.
 
-- **Old producer to new receiver, T0 target:** preserve ordinary Claude/Pi
+- **Old producer to new receiver, T0 target:** preserve ordinary Claude
   events and calls. The current Claude mod sends adapter `claude` and negotiates
   optional fields only from answered `accepts:` evidence
   (`agents-plugin/hooks/claude-mod/dashboard.ts#L94-L117`,
@@ -389,7 +389,7 @@ Depends on a successful Phase 1 Result and settlement of its exact source
 contract. Implement the confirmed per-session activation path and external lead
 summary observation through the existing mod/intake owners. Admit only the
 verified source/provenance and actual lead slot/registration generation. Keep
-ordinary Claude/Pi traffic unchanged. Never accept a summary merely because a
+ordinary Claude traffic unchanged. Never accept a summary merely because a
 caller supplied a source label or a model produced a thinking chunk.
 
 Carry bounded current-turn projections through the existing live reducer and
@@ -408,7 +408,8 @@ late/retired producer data and observed disconnect/reconnect. Receiver fixtures
 cover actual owner/slot/turn fencing, single-event admission, legacy in-flight
 write barriers, no replay/recount, RAM-only live data, immutable natural history,
 old-source history readers/appenders and new reopen. Extend existing display
-fallback tests; existing Pi source admission and display must remain unchanged.
+fallback tests. Pi live intake retires per `261123-chore-ws-retire-pi-harness`;
+historical Pi summaries remain readable.
 Show each observed public summary paragraph in existing live activity and
 retained history after reload, within the retained bounds. Explicit tests must
 assert no summary row and unchanged ordinary activity for omitted summary
@@ -471,7 +472,7 @@ partial/final deduplication, request/attempt boundaries, abort/failure/gaps,
 retired holders, current turn ownership and no duplicate input/producer. Verify
 useful live and retained output, including interrupted prefixes, natural-turn
 commit, reopen and old/new source compatibility. Re-run the relevant external
-and Pi regression selectors. MAIN owns final merge/swap and owner live-screen
+regression selectors. MAIN owns final merge/swap and owner live-screen
 acceptance; the worker neither swaps a shared daemon nor calls the flag alone
 acceptance.
 

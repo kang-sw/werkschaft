@@ -527,7 +527,7 @@ provider/service checks. These were outside Phase 1 or prohibited by the caller.
     `agents-plugin-tool/internal/wsdashboard/assets/dashboard-leads.js#L42-L200`.
     `leadRows` already shares model/permission/effort rows with hosted settings;
     the harness segment is inline in `rpLeadMake`, not a standalone control.
-    Defaults are Claude (Pi if Claude unavailable), empty model/effort,
+    Defaults are Claude, empty model/effort,
     permission mode `auto` and plugin isolation `default`. The request body
     helper is `WsRail.leadBody`
     (`agents-plugin-tool/internal/wsdashboard/assets/rail.js#L609-L619`).
@@ -555,6 +555,6 @@ provider/service checks. These were outside Phase 1 or prohibited by the caller.
   - the roster and 782 allocation;
   - keeping strengths in the agenda (788=d).
 
-  Wording stays downstream-neutral and is mirrored to wsflow and Pi through
-  the existing pipelines.
+  Wording stays downstream-neutral and is mirrored to wsflow through
+  the existing pipelines. Pi retires per `261123-chore-ws-retire-pi-harness`.
 - Verification: manifest/mirror tests and product-mode playbook checks.
