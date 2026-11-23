@@ -81,6 +81,7 @@
   A refused command answers with a permission-denied message and starts
   nothing. On Windows a `sort` word that starts with `/` is also refused,
   since the system `sort.exe` would read `/O file` as an output file.
+  Compatibility: T0 - a role-authority refusal, not a call-shape change.
   Workers at other authority levels are unchanged.
 - **The lead skill surface collapses to five working skills plus
   housekeeping.** Working: `lead-discuss`, `lead-ticket`, `lead-run`,
