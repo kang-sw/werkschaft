@@ -242,6 +242,16 @@
     "261112-research-ws-daemon-extension-protocol-chat-adapter": {
       "registered_at": "2026-11-12T14:01:09Z"
     },
+    "261113-bug-ws-pi-completion-mail-lost-when-held-message-starts-next-turn": {
+      "registered_at": "2026-11-23T20:35:29Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:35:29Z"
+      }
+    },
     "261113-feat-ws-configurable-per-turn-lead-reminder": {
       "registered_at": "2026-11-13T04:59:31Z"
     },
