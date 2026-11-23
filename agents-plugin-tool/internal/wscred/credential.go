@@ -65,8 +65,8 @@ type Credential struct {
 type Request struct {
 	Provider ProviderID
 	// AgentSession marks a request from an agent harness running a session
-	// for the signed-in user. Only the daemon's token route sets it, from
-	// the session's own registration, never from what the caller claims.
+	// for the signed-in user. The daemon derives it from its in-process
+	// session or the authenticated registration on the token route.
 	AgentSession bool
 	// Background marks that session as one the user does not drive
 	// directly (a worker), which a restricted provider admits only with

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/werk"
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 // werkLoop runs a session in the daemon and delivers typed events to the
@@ -22,6 +23,36 @@ type werkLoop struct {
 	mapper *werkMapper
 	audit  *auditCapture
 	steer  uint64
+}
+
+func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
+	endpoint, err := b.loopResponder()
+	if err != nil {
+		return nil, err
+	}
+	return startWerkLoop(ctx, spec, endpoint)
+}
+
+func (b WerkBackend) loopResponder() (*werk.Client, error) {
+	if b.credentials == nil {
+		return nil, errors.New("werk backend: the provider credential source is unavailable")
+	}
+	provider, ok := wscred.Lookup(werk.Provider)
+	if !ok {
+		return nil, wscred.ErrUnknownProvider
+	}
+	return &werk.Client{
+		BaseURL: provider.BaseURL,
+		Token: func(ctx context.Context) (string, error) {
+			cred, err := b.credentials.Credential(ctx, wscred.Request{
+				Provider: provider.ID, AgentSession: true, Background: true,
+			})
+			if err != nil {
+				return "", err
+			}
+			return cred.Secret.Reveal(), nil
+		},
+	}, nil
 }
 
 func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder) (*werkLoop, error) {

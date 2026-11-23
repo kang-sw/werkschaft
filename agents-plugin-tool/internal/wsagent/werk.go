@@ -53,6 +53,7 @@ type WerkBackend struct {
 	// which blocks nothing: the first request then fails with the auth
 	// layer's own refusal.
 	credentialStatus func(provider string) (configured bool, err error)
+	credentials      wscred.Source
 	// modelsURL and httpClient stand in for OpenRouter's model list endpoint
 	// and its client; a test sets them, a daemon never does.
 	modelsURL  string
@@ -98,9 +99,8 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 	}
 }
 
-// withCredentialStatus is credentialAware: the daemon hands the backend the
-// credential store's status function.
-func (b WerkBackend) withCredentialStatus(status func(provider string) (bool, error)) Backend {
+func (b WerkBackend) withProviderCredentials(source wscred.Source, status func(provider string) (bool, error)) Backend {
+	b.credentials = source
 	b.credentialStatus = status
 	return b
 }
@@ -126,23 +126,16 @@ func (b WerkBackend) Executable() string {
 	return exe
 }
 
-// credentialAware is implemented by a backend whose readiness reads the
-// provider credential store; the daemon wires the store in once, through
-// WithCredentialStatus, without naming a backend.
 type credentialAware interface {
-	withCredentialStatus(status func(provider string) (bool, error)) Backend
+	withProviderCredentials(source wscred.Source, status func(provider string) (bool, error)) Backend
 }
 
-// WithCredentialStatus gives every registered backend that reads provider
-// credentials (credentialAware) the daemon's status function. It returns
-// registrations as given when status is nil.
-func WithCredentialStatus(registrations map[string]BackendRegistration, status func(provider string) (bool, error)) map[string]BackendRegistration {
-	if status == nil {
-		return registrations
-	}
+// WithProviderCredentials binds the daemon's source and status lookup to
+// registered backends that use provider credentials.
+func WithProviderCredentials(registrations map[string]BackendRegistration, source wscred.Source, status func(provider string) (bool, error)) map[string]BackendRegistration {
 	for name, reg := range registrations {
 		if aware, ok := reg.Backend.(credentialAware); ok {
-			reg.Backend = aware.withCredentialStatus(status)
+			reg.Backend = aware.withProviderCredentials(source, status)
 			registrations[name] = reg
 		}
 	}

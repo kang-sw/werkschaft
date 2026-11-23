@@ -3,6 +3,8 @@ package wsagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/mcpframe"
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -281,5 +284,68 @@ func TestWerkLoopCloseWaitsForAuditDrain(t *testing.T) {
 		return e.Kind == wsaudit.KindSystem && e.Subkind == werk.LineUsage
 	}) {
 		t.Error("Close lost the queued usage record")
+	}
+}
+
+type testCredentialSource func(context.Context, wscred.Request) (wscred.Credential, error)
+
+func (s testCredentialSource) Credential(ctx context.Context, req wscred.Request) (wscred.Credential, error) {
+	return s(ctx, req)
+}
+
+func TestWerkLoopReadsProviderCredentialsInProcessForEachRequest(t *testing.T) {
+	refusal := errors.New("credential withdrawn")
+	keys := []string{"sk-or-v1-fixture-first", "sk-or-v1-fixture-second"}
+	calls := 0
+	source := testCredentialSource(func(_ context.Context, req wscred.Request) (wscred.Credential, error) {
+		if req != (wscred.Request{Provider: werk.Provider, AgentSession: true, Background: true}) {
+			t.Errorf("provider request = %+v", req)
+		}
+		calls++
+		if calls > len(keys) {
+			return wscred.Credential{}, refusal
+		}
+		return wscred.Credential{Provider: req.Provider, Secret: wscred.NewSecret(keys[calls-1])}, nil
+	})
+	name, reg := (WerkBackend{}).registration()
+	regs := WithProviderCredentials(map[string]BackendRegistration{name: reg}, source, func(provider string) (bool, error) {
+		return provider == string(werk.Provider), nil
+	})
+	backend := regs[name].Backend.(WerkBackend)
+	client, err := backend.loopResponder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider, _ := wscred.Lookup(werk.Provider); client.BaseURL != provider.BaseURL {
+		t.Errorf("provider endpoint = %q", client.BaseURL)
+	}
+	got := make(chan string, len(keys))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		got <- header
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = fmt.Fprintf(w, "rejected %s", header)
+	}))
+	defer srv.Close()
+	client.BaseURL = srv.URL
+
+	for _, key := range keys {
+		_, err := client.Respond(context.Background(), werk.Request{Model: "fixture-model"}, werk.StreamHandler{})
+		var httpErr *werk.HTTPError
+		if !errors.As(err, &httpErr) || strings.Contains(err.Error(), key) {
+			t.Fatalf("unexpected or unredacted provider error: %v", err)
+		}
+		select {
+		case header := <-got:
+			if header != "Bearer "+key {
+				t.Error("request did not use the current credential")
+			}
+		default:
+			t.Fatal("request did not reach the provider")
+		}
+	}
+	_, err = client.Respond(context.Background(), werk.Request{Model: "fixture-model"}, werk.StreamHandler{})
+	if !errors.Is(err, refusal) || calls != 3 {
+		t.Errorf("after credential withdrawal: %v, %d source calls", err, calls)
 	}
 }
