@@ -334,7 +334,8 @@ function buildBootstrapScript(savedCards) {
 }
 
 async function openHarness(browser, opts = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1720, height: 960 } });
+  // Band 4 (true 4-column, >=2441px) so Overview Quick Look preview is active.
+  const ctx = await browser.newContext({ viewport: opts.viewport || { width: 2560, height: 960 } });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));

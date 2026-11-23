@@ -336,9 +336,8 @@
 
   function virtualIsNearNode(sec) {
     if (!sec || !anchorSized.bounded) return true;
-    if (virtualNearSet.has(sec)) return true;
-    if (sec.hasAttribute && sec.hasAttribute("data-wb-virtual")) return false;
-    if (virtualIsItemExempt(virtualDescribeNode(sec))) return true;
+    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing;
+    if (!scrubbing && virtualNearSet.has(sec)) return true;
     var list = anchorCards();
     if (!list.length) return true;
     var idx = list.indexOf(sec);
@@ -346,7 +345,8 @@
     var cur = anchorCurrent() || list[0];
     var curIdx = cur ? list.indexOf(cur) : 0;
     if (curIdx < 0) curIdx = 0;
-    return Math.abs(idx - curIdx) <= virtualNearSlots;
+    if (Math.abs(idx - curIdx) <= virtualNearSlots) return true;
+    return virtualIsItemExempt(virtualDescribeNode(sec));
   }
 
   function virtualStashUpdate(liveSec, incomingSec) {
