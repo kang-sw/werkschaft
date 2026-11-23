@@ -71,6 +71,44 @@ test('off-screen terminal delays backlog; near folded cards keep their preview',
   assert(terminal.includes('s.last ? s.last + 1 : 0'), 'fresh emulators still replay from zero');
 });
 
+test('hidden terminal holds selection redraws and draws the newest on show', () => {
+  const drawn = [];
+  const rs = {handleSelectionChanged(a, b, m) { drawn.push([a, b, m]); }};
+  const s = {term: {_core: {_renderService: rs}}, host: {clientWidth: 0, clientHeight: 0}};
+  const c = vm.createContext({});
+  vm.runInContext(fn(terminal, 'holdSelection'), c);
+  c.holdSelection(s);
+  assert.equal(typeof s.release, 'function');
+  rs.handleSelectionChanged(undefined, undefined, false);
+  rs.handleSelectionChanged([1, 2], [5, 2], false);
+  rs.handleSelectionChanged([3, 4], [6, 4], true);
+  s.release();
+  assert.deepEqual(drawn, [], 'no box: nothing reaches the renderer, release waits');
+  s.host.clientWidth = 640; s.host.clientHeight = 420;
+  s.release();
+  assert.deepEqual(drawn, [[[3, 4], [6, 4], true]], 'the newest held selection is drawn once on show');
+  s.release();
+  assert.equal(drawn.length, 1, 'nothing held, nothing drawn');
+  rs.handleSelectionChanged([1, 1], [2, 1], false);
+  assert.equal(drawn.length, 2, 'a boxed host draws at once');
+  s.host.clientWidth = 0;
+  rs.handleSelectionChanged(undefined, undefined, false);
+  s.host.clientWidth = 640;
+  s.release();
+  assert.equal(drawn.length, 3, 'a selection cleared while hidden is drawn clear on show');
+  assert.deepEqual(drawn[2], [undefined, undefined, false]);
+  s.host.clientWidth = 0;
+  rs.handleSelectionChanged(undefined, undefined, false);
+  s.host.clientWidth = 640;
+  s.release();
+  assert.equal(drawn.length, 3, 'held "nothing selected" with nothing drawn is dropped; the show refresh covers it');
+  const bare = {term: {}, host: {clientWidth: 0, clientHeight: 0}};
+  c.holdSelection(bare);
+  assert.equal(bare.release, undefined, 'an emulator without the render service is left alone');
+  assert(/term\.open\(s\.host\);\s+holdSelection\(s\);/.test(terminal), 'installed right after the emulator opens');
+  assert(/if \(s\.release\) s\.release\(\);\s+later\(c\);/.test(terminal), 'a resize of the host releases a held redraw');
+});
+
 function scrollFixture(storage = {}, pathname = '/s/a', hash = '') {
   const frames = [], listeners = {}, placements = [];
   const node = (top = 0) => ({scrollTop: top, shown: true, clientTop: 2, clientHeight: 100, scrollHeight: 400,
