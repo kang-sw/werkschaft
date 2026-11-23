@@ -226,6 +226,7 @@
 .tk .tk-dr-in { position: relative; max-width: var(--tkmaxw, 1680px); margin: 0 auto 0 var(--tkml, auto); }
 .tk .tk-dr-clip { position: absolute; top: var(--tktop); left: var(--dpad, 16px); right: var(--dpad, 16px); height: 0; overflow: hidden; pointer-events: auto; visibility: hidden; border-radius: 0 0 var(--wb-radius) var(--wb-radius); box-shadow: var(--wb-shadow-hi); transition: height .18s ease-out, visibility 0s linear .18s; }
 .tk.tk-drawer.open .tk-dr-clip { height: var(--tkh); visibility: visible; transition: height .18s ease-out, visibility 0s; }
+.tk.tk-drawer:not(.open) .tk-dr-clip *, .tk.tk-drawer:not(.open) .tk-dr-clip *::before, .tk.tk-drawer:not(.open) .tk-dr-clip *::after { animation-play-state: paused !important; }
 .tk .tk-dr-sheet { position: absolute; left: 0; right: 0; bottom: 0; height: var(--tkh); background: var(--wb-bg); border-top: 1px solid var(--wb-muted); display: flex; flex-direction: column; }
 .tk .tk-dr-body { flex: 1 1 0; min-height: 0; overflow: hidden; padding: 10px; display: flex; flex-direction: column; }
 .tk .tk-dr-body > * { flex: none; }

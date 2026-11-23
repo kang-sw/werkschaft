@@ -116,6 +116,30 @@ test('conic spinners rotate a pseudo-element by transform and every pseudo anima
   assert.match(base, /\.hud-node\[data-state\] \.hud-ring::before, \.hud-node\[data-state\] \.hud-ring::after \{ animation: none; \}/);
 });
 
+test('continuous motion stays off the main thread: hidden subtrees pause and no bar animates width', () => {
+  const rail = read(dashboard, 'dashboard-rail.css');
+  const drawer = read(dashboard, 'dashboard-drawer.css');
+  const tracker = read(dashboard, 'tracker.css');
+  const conversation = read(dashboard, 'dashboard-conversation.css');
+  const diff = read(whiteboard, 'page-panel-diff.css');
+  // An animation under a visibility: hidden target cannot be composited and ticks every frame.
+  const pause = ' { animation-play-state: paused !important; }';
+  assert(rail.includes(':root:not(.rail-open) .rail *::after' + pause), 'closed rail drawer pauses');
+  assert(drawer.includes('.drawer:not(.open) .dr-clip *::after' + pause), 'closed drawer pauses');
+  assert(tracker.includes('.tk.tk-drawer:not(.open) .tk-dr-clip *::after' + pause), 'closed tracker drawer pauses');
+  assert(conversation.includes('.agisland:not([data-mode="compact"]) > .agcompact *::after,'), 'hidden compact HUD pauses');
+  assert(conversation.includes('.agisland:not([data-mode="full"]) > .agpop *::after' + pause), 'hidden full popover pauses');
+  const media = rail.indexOf('@media (max-width: 1599.98px) {');
+  assert(media >= 0 && rail.indexOf(':root:not(.rail-open) .rail *,', media) > media, 'the rail pauses only where it is a hidden drawer');
+  // Bars and fills grow by transform, never by an animated width or left.
+  assert.match(rail, /\.gal-pullfill \{[^}]*width: 100%;[^}]*transform: scaleX\(0\);[^}]*transition: transform \.06s linear;/);
+  assert.match(diff, /\.pdg-bar \{[^}]*transition: transform \.1s;/);
+  assert.match(diff, /\.pdg-hit:hover \.pdg-bar[^{]*\{ transform: scaleX\(1\.6667\); \}/);
+  assert.doesNotMatch(diff + rail + conversation, /transition: [^;}]*\b(width|left) \.(06|1|12)s/);
+  assert.doesNotMatch(conversation.match(/\.sb-bar \.fill \{[^}]*\}/)[0], /transition/);
+  assert.match(read(dashboard, 'cards.js'), /fill\.style\.transform = f/);
+});
+
 test('HUD node animations pause when hidden and disable under reduced motion', () => {
   const base = read(dashboard, 'dashboard.css');
   const conversation = read(dashboard, 'dashboard-conversation.css');

@@ -1187,13 +1187,13 @@
     pullEl = el;
     el.setAttribute("data-gal-pull", "");
     el.style.translate = calm() ? "" : "0 " + (-dir * shift).toFixed(1) + "px";
-    var ps = pills || pillEls(), p = ps[dir > 0 ? 1 : 0], q = ps[dir > 0 ? 0 : 1], t = (dir > 0 ? "↓ " : "↑ ") + text, f = Math.round(pct * 100) + "%";
+    var ps = pills || pillEls(), p = ps[dir > 0 ? 1 : 0], q = ps[dir > 0 ? 0 : 1], t = (dir > 0 ? "↓ " : "↑ ") + text, f = "scaleX(" + (Math.round(pct * 100) / 100) + ")";
     q.el.classList.remove("lit", "ready", "damped");
     p.el.classList.add("lit");
     p.el.classList.toggle("damped", state === "damped");
     p.el.classList.toggle("ready", state === "ready");
     if (p.txt.textContent !== t) p.txt.textContent = t;
-    if (p.fill.style.width !== f) p.fill.style.width = f;
+    if (p.fill.style.transform !== f) p.fill.style.transform = f;
     var d = target === null ? null : dotEls[dotKey(target)] || null;
     if (pullDot === d) return;
     if (pullDot) pullDot.classList.remove("pull-target");

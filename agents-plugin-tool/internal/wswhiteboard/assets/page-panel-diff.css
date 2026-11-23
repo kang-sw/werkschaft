@@ -26,12 +26,13 @@ del.pdg-w, .pdg-pop del { color: color-mix(in srgb, var(--pdg-del) 80%, var(--wb
 .pdg-layer { position: relative; height: 0; }
 .pdg-hit { position: absolute; width: 14px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .pdg-hit:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; border-radius: 2px; }
-.pdg-bar { position: absolute; left: 5.5px; top: 1px; bottom: 1px; width: 3px; border-radius: 2px; background: var(--k); transition: width .1s, left .1s; pointer-events: none; }
+.pdg-bar { position: absolute; left: 5.5px; top: 1px; bottom: 1px; width: 3px; border-radius: 2px; background: var(--k); transition: transform .1s; pointer-events: none; }
 .pdg-hit.new { --k: var(--pdg-new); }
 .pdg-hit.mod { --k: var(--pdg-mod); }
 .pdg-hit.del, .pdg-hit.delblock { --k: var(--pdg-del); }
-.pdg-hit:hover .pdg-bar, .pdg-hit.hot .pdg-bar, .pdg-hit:focus-visible .pdg-bar { left: 4.5px; width: 5px; }
-.pdg-hit.del .pdg-bar { left: 6px; top: 50%; bottom: auto; width: 0; height: 0; margin-top: -4.5px; border-radius: 0; background: none; border-left: 6px solid var(--pdg-del); border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent; transform-origin: left center; transition: transform .1s; }
+/* the 3px bar widens to 5px about its centre; a scale, not width/left, keeps it on the compositor */
+.pdg-hit:hover .pdg-bar, .pdg-hit.hot .pdg-bar, .pdg-hit:focus-visible .pdg-bar { transform: scaleX(1.6667); }
+.pdg-hit.del .pdg-bar { left: 6px; top: 50%; bottom: auto; width: 0; height: 0; margin-top: -4.5px; border-radius: 0; background: none; border-left: 6px solid var(--pdg-del); border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent; transform: none; transform-origin: left center; transition: transform .1s; }
 .pdg-hit.del:hover .pdg-bar, .pdg-hit.del.hot .pdg-bar { left: 6px; width: 0; transform: scale(1.45); }
 .pdg-chip { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border: 0; border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 1px var(--wb-line); font: 600 10.5px/16px var(--wb-sans); color: var(--wb-muted-fg); cursor: pointer; font-variant-numeric: tabular-nums; }
 .pdg-chip:hover { background: var(--wb-wash); color: var(--wb-fg); }
