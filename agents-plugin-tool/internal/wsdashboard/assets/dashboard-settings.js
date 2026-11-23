@@ -841,7 +841,7 @@ var wsSettingsChoiceLabels = {
       var combo = cb.attach(input, {
         getOptions: function () {
           if (field === "backend") return cb.backendOptions();
-          var backendVal = inputs[0] ? inputs[0].value : value.backend;
+          var backendVal = (inputs[0] ? inputs[0].value : value.backend) || entry.selectors.harness;
           return field === "model"
             ? cb.modelOptions(backendVal)
             : cb.effortOptions(backendVal);
@@ -888,7 +888,10 @@ var wsSettingsChoiceLabels = {
     if (canEdit) {
       save = button("save-btn", tr("js.settings.save"), function () {
         var next = Object.fromEntries(fields.map(function (field, i) { return [field, inputs[i].value]; }));
-        Object.assign(next, cb.modelSelection(next.model, value.provider));
+        var backend = next.backend.trim().toLowerCase() || entry.selectors.harness;
+        var selection = cb.modelSelection(next.model, value.provider);
+        if (entry.selectors.harness !== "werk" || backend !== "werk") selection.provider = "";
+        Object.assign(next, selection);
         submit("set", next).then(syncSecondary, syncSecondary);
       });
       save.disabled = true;

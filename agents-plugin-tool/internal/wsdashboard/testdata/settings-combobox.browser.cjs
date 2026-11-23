@@ -177,6 +177,22 @@ const CHOICES = {
     await mediumRow.locator('.save-btn').click();
     assert.equal((await saveResp).status(), 200);
 
+    const activeBucket = await frame().locator('[data-bucket-key="agents.tier"][aria-pressed="true"]').getAttribute('data-settings-bucket');
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="werk"]').click();
+    const werkRow = frame().locator('tbody.tier-entry[data-settings-tier=small]');
+    const werkInputs = werkRow.locator('input.scb-inp');
+    assert.equal(await werkInputs.nth(1).inputValue(), 'local/desk same');
+    await werkInputs.nth(0).fill('claude');
+    await werkInputs.nth(1).fill('sonnet');
+    const switched = page.waitForResponse(r => r.url().endsWith('/api/config/set') && r.request().method() === 'POST');
+    await werkRow.locator('.save-btn').click();
+    const switchedResponse = await switched;
+    assert.equal(switchedResponse.status(), 200);
+    const switchedValue = switchedResponse.request().postDataJSON().value;
+    assert.equal(switchedValue.model, 'sonnet');
+    assert.equal(switchedValue.provider, '');
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="' + activeBucket + '"]').click();
+
     // Bundle modal in dark theme: popup mounts inside <dialog> on top of top-layer modal!
     await frame().locator('[data-id="b:deep-design"]').click();
     const modal = frame().locator('dialog[data-tier-modal=bundle]');
