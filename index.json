@@ -537,6 +537,9 @@
     "261123-bug-ws-daemon-replace-gap-older-daemon": {
       "registered_at": "2026-11-22T20:54:14Z"
     },
+    "261123-bug-ws-dashboard-card-note-typing-lag": {
+      "registered_at": "2026-11-23T07:07:21Z"
+    },
     "261123-bug-ws-dashboard-renderer-native-memory-growth": {
       "registered_at": "2026-11-23T02:06:44Z",
       "lease": {
