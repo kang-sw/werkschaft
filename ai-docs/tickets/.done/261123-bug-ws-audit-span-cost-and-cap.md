@@ -2,6 +2,7 @@
 title: "감사 검사기 일치 위치 계산 비용·상한·UTF-8 경계 수정 (재스윕 71e875ecf..dbc990805 수정)"
 related:
   261123-bug-ws-audit-inspector-matching: "introduced the server spans this ticket repairs"
+completed: 2026-11-23
 ---
 
 # Audit inspector span cost, cap and UTF-8 boundary (re-sweep repair)
@@ -88,3 +89,25 @@ Implement the Decisions. Tests:
 Run the targeted wsdashboard audit Go tests (also under `-race`), the
 combined Node audit suites, the audit-view browser tests, and
 `GOOS=windows go vet ./internal/wsdashboard/`.
+
+### Result (84b3a0db8) - 2026-11-23
+
+Landed in `agents-plugin-tool/internal/wsdashboard/`:
+
+- `audit_span_scan.go` (new) replaces `seamMatcher.all`, `findAll` and `lineMatches`: `eachLineMatch` streams matches to a callback. A window is copied once; a resume reads the same text from the character before the resume point (its real context, a substring, no copy), so a resume costs the distance to the next match. Matches are read in batches of 64. A match that touches a sentinel is replaced by the first match by shape (`shapeFirst`: an unbounded form that stops at the match, the bounded form only when the match reaches the right sentinel). Assertion-free patterns resume on the rest of the window without context. Scanning ends when `bodySpans`' callback stops it.
+- `audit_query.go`: `bodySpans` skips empty matches (they never count) and marks `capped` when a visible span beyond `auditSpansMax` exists.
+- `audit_routes.go`: the implicit `through_*` is `len(headUTF8(body, auditBodyMax))`, the envelope's own backward clip.
+- Tests (`audit_spans_test.go`): boundary matches on a retained side (9,000 and 10,500 words, spans checked against constructed offsets, 3 s bound); 10,001 digits plus a letter with `\p{L}*` (and the same across a seam, and empties between visible spans at the cap); a character crossing the 8 MiB cutoff (`end` kept, the emoji and what follows absent, `through` = envelope prefix); empty match at a seam window's end.
+
+Decisions / deviations:
+
+- `capped` stays "a further visible span exists beyond 10,000", not "at least 10,000": the existing `TestAuditEventSpansAreCapped` pins exactly 10,000 spans as uncapped and had to pass unchanged. The Decisions' wording "at least 10,000 visible spans exist" should be read that way (answer holds 10,000 spans and more exist).
+- The old scan panicked (`slice bounds out of range`) on an empty match at the end of a seam window (`\w*`, `b*`, `$`, `\b` with a seam); the rewrite does not, and a test pins it.
+- Route Facts were absent from the ticket; implemented on the lead's explicit instruction.
+
+Verification:
+
+- The new tests fail on the previous code (8.9 s and 13.7 s stalls, a slice-bounds panic) and pass now.
+- A scratch differential test (not committed) compared the new scan with the old seam matcher over 143,068 random line/seam/pattern cases: identical nonempty spans (the old code panicked on 6,932 of them).
+- `go test -run Audit ./internal/wsdashboard/` ok; `-race` on the span/search/seam tests ok; `TestAuditViewBrowser`, `Phase2Browser`, `Phase3Browser` pass; `frontend-audit*.test.js` (11, 19, 11 pass, 0 fail); `GOOS=windows go vet ./internal/wsdashboard/` clean.
+- Lite review: no Critical or Important findings; three minor observations (capped wording, unexercised bounded `shapeFirst` under a long run, generous timing bound).
