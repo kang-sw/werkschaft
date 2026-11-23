@@ -2,8 +2,10 @@
 title: "컴패니언 눈 깜빡임을 닫힌 눈 스티커 2프레임 교체로 전환"
 related:
   261122-feat-ws-companion-engine-v2: engine and pack grammar this extends
-sage-review-design: required
-sage-review-completeness: required
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: f1326b323104afba
+sage-review-design-reviewed: f1326b323104afba
 ---
 
 # 컴패니언 눈 깜빡임을 닫힌 눈 스티커 2프레임 교체로 전환
