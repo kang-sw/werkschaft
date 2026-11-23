@@ -191,7 +191,14 @@
       }
     },
     "261108-bug-pi-esc-drops-queued-mail-batches": {
-      "registered_at": "2026-11-07T15:11:11Z"
+      "registered_at": "2026-11-07T15:11:11Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:35:21Z"
+      }
     },
     "261108-bug-tracker-reregister-second-member-same-machine-key": {
       "registered_at": "2026-11-08T10:52:59Z"
