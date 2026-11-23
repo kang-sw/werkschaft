@@ -167,6 +167,7 @@
       anchorSettle(anchored);
       anchorWatchLast();
       boardRecordPending(); boardPendingBadge(); boardHoldIndicators();
+      if (typeof boardDialSync === "function") boardDialSync();
       if (!boardRelease) boardReturnApply();
       boardApplied();
     }

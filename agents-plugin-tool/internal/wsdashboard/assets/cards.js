@@ -828,7 +828,8 @@
         pageCapsule(b, refs);
         label = (p + 1) + ": " + refs.map(refName).join(" + ");
       }
-      b.title = label;
+      if (window.WsGalPreview) b.removeAttribute("title");
+      else b.title = label;
       b.setAttribute("aria-label", label);
       if (p === pos) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
       if (dotsEl.children[i] !== b) dotsEl.insertBefore(b, dotsEl.children[i] || null);
@@ -854,6 +855,7 @@
     }
     away(rail && narrow && pos >= 0);
     homeWheel(rail && narrow && n > 0);
+    if (window.WsGalPreview && window.WsGalPreview.sync) window.WsGalPreview.sync();
   }
   // away stands the narrow view's Main Board (Page 0) off the view while a
   // docked page shows over it, as slide does an inactive page: the root's
@@ -914,6 +916,7 @@
   function show(pos, dir) {
     var narrow = !!(lay && lay.narrow), cur = G.position(gal, narrow), g = G.activate(gal, pos, narrow);
     if (g === gal) return false;
+    if (window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
     gal = g;
     if (pullEl) { pullOff(); gate.clear(); }
     paintGallery(dir === undefined ? (pos > cur ? 1 : -1) : dir);
@@ -976,6 +979,79 @@
       rg = { id: e.pointerId, x0: e.clientX, y0: e.clientY, from: G.position(gal, !!(lay && lay.narrow)), on: false,
         dot: b && p >= 0 && p < gal.pages.length ? p : null, onDot: !!b, target: null };
     });
+    if (window.WsGalPreview && window.WsGalPreview.attach) {
+      window.WsGalPreview.attach({
+        railEl: railEl,
+        dotsEl: dotsEl,
+        t: wsT,
+        isOverview: function () { return overviewOn; },
+        isDragging: function () { return !!(dg && dg.on); },
+        getState: function () {
+          var narrow = !!(lay && lay.narrow);
+          return { gal: gal, narrow: narrow, pos: G.position(gal, narrow) };
+        },
+        getLeafInfo: function (ref) {
+          var icon = pageIcon(ref);
+          if (ref.slice(0, 2) === "t:") {
+            var name = ref.slice(2), topic = topics[name], el = topic && topic.el;
+            var tnEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar .tname");
+            var title = (tnEl && tnEl.textContent ? tnEl.textContent.trim() : "") || name;
+            var rtextEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tsub .trecap .rtext");
+            var subEl = rtextEl || (el && el.querySelector && el.querySelector(":scope > .tophead > .tsub"));
+            var askChip = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar > .chip.policy");
+            var asks = el ? (el.hasAttribute("data-open-asks") ? el.getAttribute("data-open-asks") === "true" : !!askChip) : false;
+            var asksCount = askChip && askChip.textContent ? askChip.textContent.trim() : "";
+            var closed = !!(el && el.classList.contains("closed"));
+            var rawState = el ? (el.getAttribute("data-state") || "") : "";
+            var state = closed ? "closed" : rawState;
+            var stateMap = {
+              implementing: ["impl", "js.wb.state.implementing"],
+              researching: ["research", "js.wb.state.researching"],
+              discussing: ["discuss", "js.wb.state.discussing"],
+              waiting: ["wait", "js.wb.state.waiting"],
+              "awaiting-confirmation": ["confirm", "js.wb.state.awaiting-confirmation"],
+              closed: ["closed", "js.board.filter.closed"]
+            };
+            var sm = stateMap[state];
+            var stateCode = sm ? sm[0] : "";
+            var stateLabel = "";
+            if (sm) {
+              var tr = wsT(sm[1]);
+              stateLabel = tr && tr !== sm[1] ? tr : (state === "closed" ? "Closed" : state);
+            }
+            return {
+              title: title,
+              iconHref: icon.href,
+              iconState: icon.state,
+              state: state,
+              stateCode: stateCode,
+              stateLabel: stateLabel,
+              sub: subEl && subEl.textContent ? subEl.textContent.trim() : "",
+              asks: asks,
+              asksCount: asksCount,
+              closed: closed,
+              kind: "topic"
+            };
+          }
+          var c = cards.filter(function (x) { return "c:" + x.id === ref; })[0];
+          var folded = c && c.k && typeof c.k.folded === "function" ? String(c.k.folded(c) || "").trim() : "";
+          if (!folded && c && c.sub && c.sub.textContent) folded = c.sub.textContent.trim();
+          var badge = c && c.badge && c.badge.textContent ? c.badge.textContent.trim() : "";
+          return {
+            title: refName(ref),
+            iconHref: icon.href,
+            iconState: icon.state,
+            state: "card",
+            stateCode: "card",
+            stateLabel: badge,
+            sub: folded,
+            asks: false,
+            closed: false,
+            kind: c ? c.kind : "card"
+          };
+        }
+      });
+    }
   }
   // The rail's press: past SLOP px a press on a page dot drags it (dropped
   // on another page's dot, the page moves there), a press elsewhere on the
@@ -1052,6 +1128,7 @@
     if (!el) return;
     hover.over(el, clock());
     el.classList.add("spring");
+    if (window.WsGalPreview && window.WsGalPreview.springStart) window.WsGalPreview.springStart(el, G.C.SPRING_MS);
     springT = setTimeout(sprung, G.C.SPRING_MS);
   }
   function unspring() {
@@ -1059,6 +1136,7 @@
     springT = 0;
     if (hover.target) hover.target.classList.remove("spring");
     hover.clear();
+    if (window.WsGalPreview && window.WsGalPreview.springStop) window.WsGalPreview.springStop();
   }
   // sprung fires the hover: the page shows, and the drop under the
   // pointer is read again (over otherwise runs on a pointer move only).
@@ -1069,6 +1147,7 @@
     if (!hover.fire(now)) { springT = setTimeout(sprung, Math.max(1, hover.since + hover.ms - now)); return; }
     el.classList.remove("spring");
     if (!dg || !dg.on) return;
+    if (window.WsGalPreview && window.WsGalPreview.sprung) window.WsGalPreview.sprung(el);
     show(+el.getAttribute("data-pos"));
     over(dg.x, dg.y);
   }
@@ -1178,7 +1257,7 @@
   }
   function pullName(p) {
     var b = dotEls[dotKey(p)];
-    return p >= gal.pages.length ? G.PLUS : b ? b.title : "";
+    return p >= gal.pages.length ? G.PLUS : b ? (b.title || b.getAttribute("aria-label") || "") : "";
   }
   function gateArm() {
     clearTimeout(gateT);
@@ -1788,6 +1867,7 @@
     if (maxed) {
       var was = maxed;
       maxed = null;
+      doc.documentElement.removeAttribute("data-board-max");
       scrim.hidden = true;
       clearSheetWidth(was);
       if (was.files) {
@@ -1821,6 +1901,7 @@
     }
     scrim.hidden = false;
     maxed = c;
+    doc.documentElement.setAttribute("data-board-max", "");
     if (c.files) {
       // The page owns this explorer independently of the conversation tab.
       c.el.hidden = false;
@@ -2095,7 +2176,9 @@
       to = d.unit.pinned ? { gal: "unpin" } : null;
     }
     d.to = to;
-    spring(hit && hit.el.classList.contains("gal-dot") ? hit : null);
+    var hitDot = hit && hit.el && hit.el.classList.contains("gal-dot") ? hit : null;
+    spring(hitDot);
+    if (window.WsGalPreview && window.WsGalPreview.dragOver) window.WsGalPreview.dragOver(hitDot ? hitDot.el : null, to);
     markDrop(lightEl);
     drawZone(to && to.gal === "place" ? to : null);
     drawLine(to && to.line);
@@ -2175,6 +2258,7 @@
     markDrop(null);
     drawZone(null);
     unspring();
+    if (window.WsGalPreview && window.WsGalPreview.dragEnd) window.WsGalPreview.dragEnd();
     dragged = true;
     setTimeout(function () { dragged = false; }, 0);
     var to = d.to;
@@ -2444,7 +2528,11 @@
     toolbar: function () { return toolbar; },
     // Overview's view state and interactions live elsewhere; the gallery
     // stays as it stands meanwhile.
-    overview: function (on) { overviewOn = !!on; if (board) arrange(null); },
+    overview: function (on) {
+      overviewOn = !!on;
+      if (overviewOn && window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
+      if (board) arrange(null);
+    },
     // pinnedTopic tells whether a topic name is docked on this page (its
     // node stands in a pane).
     pinnedTopic: function (name) { var r = topics[name]; return !!(r && r.pinned && r.el); },

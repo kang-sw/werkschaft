@@ -24,6 +24,7 @@
 .dgrid.worktree > .thead { grid-column: 1; grid-row: 1; border-radius: var(--wb-radius) var(--wb-radius) 0 0; box-shadow: var(--wb-shadow); }
 .dgrid.worktree > .fpane { grid-column: 1; grid-row: 2; display: flex; border-top-left-radius: 0; border-top-right-radius: 0; }
 .dgrid.worktree > .bcol { grid-column: 2; grid-row: 1 / -1; overflow: auto; overflow-anchor: auto; padding: 2px 4px 0 2px; }
+.dgrid.worktree > .d-board-dial { grid-column: 2; grid-row: 1 / -1; justify-self: end; align-self: center; }
 .worktree-branch { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .worktree-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root[data-sysopen] .wthd { cursor: pointer; }
@@ -31,19 +32,22 @@
 @media (max-width: 760px) {
   .dgrid.worktree { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(180px, 2fr) minmax(220px, 3fr); gap: 0; }
   .dgrid.worktree > .bcol { grid-column: 1; grid-row: 3; margin-top: 10px; }
+  .dgrid.worktree > .d-board-dial { grid-column: 1; grid-row: 3; margin-top: 10px; }
   .worktree-path { display: none; }
 }
 .dgrid.history { flex: 1 1 0; min-height: 0; display: grid; gap: 10px 16px; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 .dgrid.history > * { min-width: 0; min-height: 0; }
 .dgrid.history > .tabbar { grid-column: 1 / -1; }
 .dgrid.history > .convo, .dgrid.history > .bcol { grid-column: 1; grid-row: 2; overflow: auto; }
+.dgrid.history > .d-board-dial { grid-column: 1; grid-row: 2; justify-self: end; align-self: center; }
 .dgrid.history > .bcol { overflow-anchor: auto; }
-.dgrid.history[data-tab="board"] > .convo, .dgrid.history:not([data-tab="board"]) > .bcol { display: none; }
+.dgrid.history[data-tab="board"] > .convo, .dgrid.history:not([data-tab="board"]) > .bcol, .dgrid.history:not([data-tab="board"]) > .d-board-dial { display: none; }
 @media (min-width: 1100px) {
   .dgrid.history { grid-template-columns: minmax(320px, 5fr) minmax(0, 7fr); grid-template-rows: minmax(0, 1fr); }
   .dgrid.history > .tabbar { display: none; }
   .dgrid.history[data-tab] > .convo, .dgrid.history[data-tab] > .bcol { display: block; grid-row: 1; }
-  .dgrid.history > .bcol { grid-column: 2; }
+  .dgrid.history[data-tab] > .d-board-dial { display: flex; grid-row: 1; }
+  .dgrid.history > .bcol, .dgrid.history > .d-board-dial { grid-column: 2; }
 }
 .wbeffects { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--wb-line); border-radius: 8px; min-width: 0; }
 .wbeffects > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
@@ -105,7 +109,8 @@
    Fixed outside the board flow so the badge itself changes no reading geometry. */
 /* The board column anchors natively, scoped to the current card (dashboard-board.css); inner owned scrollers use manual anchoring (wbHistory.keep). */
 .dgrid.live > .bcol { grid-column: 1; grid-row: chead-start / convo-end; overflow: auto; overflow-anchor: auto; padding: 2px 4px 0 2px; }
-.dgrid.live[data-tab="board"] > .convo, .dgrid.live:not([data-tab="board"]) > .bcol { display: none; }
+.dgrid.live > .d-board-dial { grid-column: 1; grid-row: chead-start / convo-end; justify-self: end; align-self: center; }
+.dgrid.live[data-tab="board"] > .convo, .dgrid.live:not([data-tab="board"]) > .bcol, .dgrid.live:not([data-tab="board"]) > .d-board-dial { display: none; }
 /* The conversation panel's header (chead) carries its own tabs (ctabs):
    "Conversation | Files". Under the Files tab the Files pane takes the
    conversation's place below the header, while the conversation is hidden
@@ -140,6 +145,7 @@
   .dgrid.live[data-layout="split"] > .tabbar { display: none; }
   .dgrid.live[data-layout="split"] > .convo, .dgrid.live[data-layout="split"] > .bcol { display: block; }
   .dgrid.live[data-layout="split"] > .bcol { grid-area: board; }
+  .dgrid.live[data-layout="split"] > .d-board-dial { display: flex; grid-area: board; }
   .dgrid.live[data-layout="split"] > .chead { display: flex; }
   .dgrid.live[data-layout="split"][data-ctab="files"] > .fpane { display: flex; }
   .dgrid.live[data-layout="split"][data-ctab="files"] > .convo { display: none; }
@@ -153,6 +159,7 @@
   .dgrid.live:not([data-layout="tabs"]) > .tabbar { display: none; }
   .dgrid.live:not([data-layout="tabs"]) > .convo, .dgrid.live:not([data-layout="tabs"]) > .bcol { display: block; }
   .dgrid.live:not([data-layout="tabs"]) > .bcol { grid-area: board; }
+  .dgrid.live:not([data-layout="tabs"]) > .d-board-dial { display: flex; grid-area: board; }
   .dgrid.live:not([data-layout="tabs"]) > .chead { display: flex; }
   .dgrid.live:not([data-layout="tabs"])[data-ctab="files"] > .fpane { display: flex; }
   .dgrid.live:not([data-layout="tabs"])[data-ctab="files"] > .convo { display: none; }
@@ -180,6 +187,7 @@ body:has(#toolbar-files[data-max][data-docked]) .board-toolbar .sheet-width { di
 .file-preview-body .pv-img img { max-height: 100%; }
 .file-preview-body > .pv-sand, .file-preview-body > .pv-pdf { height: 100%; }
 :root[data-file-preview] .dgrid.live > .bcol,
+:root[data-file-preview] .dgrid.live > .d-board-dial,
 :root[data-file-preview] .dgrid.live > .dcv-edge,
 :root[data-file-preview] .bgal { visibility: hidden; }
 

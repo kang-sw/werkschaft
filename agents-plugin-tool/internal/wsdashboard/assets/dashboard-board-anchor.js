@@ -78,6 +78,7 @@
     if (n) n.setAttribute("data-current", "");
     anchorKey = n ? anchorId(n) : null;
     anchorStore();
+    if (typeof boardDialMark === "function") boardDialMark(n);
   }
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
@@ -272,7 +273,7 @@
     var col = $("bcol");
     if (!col) return;
     anchorObserveAux(col);
-    var face = anchorFaceEl, reply = anchorReplyEl, insetChanged = false;
+    var face = anchorFaceEl, reply = anchorReplyEl, insetChanged = false, prevBounded = anchorSized.bounded;
     entries.forEach(function (e) {
       var box = e.contentBoxSize && e.contentBoxSize[0], bb = e.borderBoxSize && e.borderBoxSize[0];
       if (e.target === col) {
@@ -292,6 +293,7 @@
       }
     });
     anchorApplySizes(col);
+    if (anchorSized.bounded !== prevBounded && typeof boardDialSync === "function") boardDialSync();
     if (insetChanged && anchorProg) anchorRealign(false);
   }
   var anchorLastCard = null;
@@ -393,5 +395,17 @@
     col.wbScrollOwner = true;
     anchorSettle(null);
     anchorWatchLast();
-    window.WsBoardAnchor = { restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); }, select: anchorSelect, step: anchorStep, owner: anchorOwner, key: function () { return anchorKey; }, cards: anchorCards, settle: function () { anchorSettle(null); anchorWatchLast(); } };
+    if (typeof boardDialInit === "function") boardDialInit();
+    window.WsBoardAnchor = {
+      restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); },
+      select: anchorSelect,
+      step: anchorStep,
+      owner: anchorOwner,
+      key: function () { return anchorKey; },
+      cards: anchorCards,
+      settle: function () { anchorSettle(null); anchorWatchLast(); if (typeof boardDialSync === "function") boardDialSync(); },
+      scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
+      dialWindow: typeof boardDialWindow === "function" ? boardDialWindow : null,
+      dialTier: typeof boardDialTier === "function" ? boardDialTier : null
+    };
   }

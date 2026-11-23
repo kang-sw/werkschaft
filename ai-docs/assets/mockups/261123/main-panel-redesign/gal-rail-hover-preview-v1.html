@@ -1,0 +1,1397 @@
+<div class="gpv-root" data-mode="idle">
+<style>
+  .gpv-root {
+    --gpv-bg: #141518;
+    --gpv-surface: #191b1f;
+    --gpv-card: #1e2024;
+    --gpv-card-hi: #24272d;
+    --gpv-muted: #2b2d32;
+    --gpv-fg: #e7e7e4;
+    --gpv-muted-fg: #a2a6ad;
+    --gpv-primary: #7aa2ff;
+    --gpv-line: rgba(231, 231, 228, 0.10);
+    --gpv-line-hi: rgba(231, 231, 228, 0.18);
+    --gpv-home: #3fa853;
+    --gpv-discuss: #ffb36b;
+    --gpv-impl: #8db8ff;
+    --gpv-layout: #c6a5f7;
+    --gpv-teal: #2dd4bf;
+    --gpv-spring: #e0a84a;
+    --gpv-ok: #6cc39a;
+    --gpv-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    --gpv-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --gpv-shadow: 0 2px 6px rgba(0, 0, 0, 0.48), 0 10px 28px rgba(0, 0, 0, 0.52);
+
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 460px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    border: 1px solid var(--gpv-line);
+    background: var(--gpv-bg);
+    color: var(--gpv-fg);
+    font: 400 12.5px/1.45 var(--gpv-sans);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .gpv-root *, .gpv-root *::before, .gpv-root *::after {
+    box-sizing: border-box;
+  }
+
+  /* Top header bar */
+  .gpv-top {
+    flex: none;
+    height: 38px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--gpv-surface);
+    border-bottom: 1px solid var(--gpv-line);
+  }
+  .gpv-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--gpv-fg);
+    white-space: nowrap;
+  }
+  .gpv-brand-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--gpv-primary);
+    box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.22);
+  }
+  .gpv-hint-pill {
+    font-size: 11px;
+    color: var(--gpv-muted-fg);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--gpv-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gpv-spacer { flex: 1 1 auto; }
+  .gpv-pin-toggle {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid var(--gpv-line-hi);
+    background: var(--gpv-card);
+    color: var(--gpv-muted-fg);
+    font: 600 11px/1 var(--gpv-sans);
+    cursor: pointer;
+    transition: border-color .14s, color .14s, background .14s;
+  }
+  .gpv-pin-toggle:hover {
+    color: var(--gpv-fg);
+    border-color: rgba(122, 162, 255, 0.45);
+  }
+  .gpv-pin-toggle[aria-pressed="true"] {
+    background: rgba(122, 162, 255, 0.16);
+    border-color: rgba(122, 162, 255, 0.55);
+    color: var(--gpv-primary);
+  }
+  .gpv-pin-led {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.75;
+  }
+
+  /* Main workspace */
+  .gpv-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 10px 12px;
+    display: flex;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  /* Left .gal-rail replica */
+  .gpv-rail {
+    flex: none;
+    width: 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--gpv-bg) 55%, var(--gpv-card));
+    border: 1px solid var(--gpv-line);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    position: relative;
+    z-index: 3;
+  }
+  .gpv-rail-sep {
+    width: 18px;
+    height: 1px;
+    background: var(--gpv-line-hi);
+    margin: 1px 0;
+  }
+
+  /* Circular badges (.gal-dot) */
+  .gpv-dot {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 999px;
+    border: 1.5px solid var(--gpv-muted-fg);
+    background: var(--gpv-card);
+    color: var(--gpv-muted-fg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    outline: none;
+    transition: transform .13s cubic-bezier(.22, 1, .36, 1),
+                background .13s,
+                border-color .13s,
+                box-shadow .13s,
+                color .13s;
+  }
+  .gpv-dot:hover,
+  .gpv-dot:focus-visible,
+  .gpv-dot.is-hover {
+    transform: scale(1.09);
+  }
+  .gpv-dot svg.gpv-ico {
+    width: 15px;
+    height: 15px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.85;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+  .gpv-dot-cnt {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--gpv-bg);
+    border: 1px solid currentColor;
+    font: 700 8.5px/11px var(--gpv-mono);
+    color: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  /* Individual badge colors */
+  .gpv-dot[data-id="home"] {
+    border-color: var(--gpv-home);
+    color: var(--gpv-home);
+    background: rgba(63, 168, 83, 0.12);
+  }
+  .gpv-dot[data-id="home"].is-active {
+    background: var(--gpv-home);
+    color: #0b1910;
+    box-shadow: 0 0 0 3px rgba(63, 168, 83, 0.28);
+  }
+
+  .gpv-dot[data-id="p1"] {
+    border-color: rgba(255, 179, 107, 0.78);
+    color: var(--gpv-discuss);
+    background: rgba(255, 179, 107, 0.12);
+  }
+  .gpv-dot[data-id="p1"].is-active {
+    background: rgba(255, 179, 107, 0.24);
+    border-color: var(--gpv-discuss);
+    box-shadow: 0 0 0 3px rgba(255, 179, 107, 0.26);
+  }
+
+  .gpv-dot[data-id="p2"] {
+    border-color: rgba(141, 184, 255, 0.78);
+    color: var(--gpv-impl);
+    background: rgba(141, 184, 255, 0.12);
+  }
+  .gpv-dot[data-id="p2"].is-active {
+    background: rgba(141, 184, 255, 0.24);
+    border-color: var(--gpv-impl);
+    box-shadow: 0 0 0 3px rgba(141, 184, 255, 0.26);
+  }
+
+  .gpv-dot[data-id="p3"] {
+    border-color: rgba(198, 165, 247, 0.78);
+    color: var(--gpv-layout);
+    background: rgba(198, 165, 247, 0.12);
+  }
+  .gpv-dot[data-id="p3"].is-active {
+    background: rgba(198, 165, 247, 0.24);
+    border-color: var(--gpv-layout);
+    box-shadow: 0 0 0 3px rgba(198, 165, 247, 0.26);
+  }
+
+  .gpv-dot[data-id="plus"] {
+    border-style: dashed;
+    border-color: rgba(162, 166, 173, 0.65);
+    background: transparent;
+    color: var(--gpv-muted-fg);
+  }
+  .gpv-dot[data-id="plus"]:hover,
+  .gpv-dot[data-id="plus"].is-hover {
+    border-color: var(--gpv-primary);
+    color: var(--gpv-primary);
+    background: rgba(122, 162, 255, 0.10);
+  }
+  .gpv-dot[data-id="plus"].is-active {
+    border-style: solid;
+    border-color: var(--gpv-primary);
+    color: var(--gpv-primary);
+    background: rgba(122, 162, 255, 0.16);
+    box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.24);
+  }
+
+  /* Drag-hover & spring-load ring */
+  .gpv-dot.is-dragover {
+    transform: scale(1.16);
+    box-shadow: 0 0 0 5px rgba(224, 168, 74, 0.22);
+  }
+  .gpv-ring {
+    position: absolute;
+    inset: -5px;
+    width: 40px;
+    height: 40px;
+    pointer-events: none;
+    transform: rotate(-90deg);
+    opacity: 0;
+    transition: opacity .1s;
+  }
+  .gpv-dot.is-dragover .gpv-ring {
+    opacity: 1;
+  }
+  .gpv-ring-track {
+    fill: none;
+    stroke: rgba(224, 168, 74, 0.22);
+    stroke-width: 2.5;
+  }
+  .gpv-ring-fill {
+    fill: none;
+    stroke: var(--gpv-spring);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 106.8;
+    stroke-dashoffset: 106.8;
+  }
+  .gpv-dot.is-springing .gpv-ring-fill {
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 300ms linear;
+  }
+  .gpv-dot.is-sprung .gpv-ring-fill {
+    stroke: var(--gpv-ok);
+    stroke-dashoffset: 0;
+    transition: stroke .14s ease;
+  }
+
+  /* Right demo stage */
+  .gpv-stage {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+  }
+
+  /* Draggable sample card header bar */
+  .gpv-dragbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    background: linear-gradient(90deg, rgba(122, 162, 255, 0.14), rgba(30, 32, 36, 0.96) 55%);
+    border: 1px solid rgba(122, 162, 255, 0.34);
+    cursor: grab;
+    touch-action: none;
+    transition: border-color .14s, background .14s, opacity .14s, transform .14s;
+  }
+  .gpv-dragbar:hover {
+    border-color: rgba(122, 162, 255, 0.62);
+    background: linear-gradient(90deg, rgba(122, 162, 255, 0.20), rgba(36, 39, 45, 0.98) 55%);
+  }
+  .gpv-root[data-mode="drag"] .gpv-dragbar {
+    opacity: 0.42;
+    cursor: grabbing;
+  }
+  .gpv-grip {
+    flex: none;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--gpv-primary);
+    letter-spacing: -1px;
+  }
+  .gpv-dragbar-txt {
+    min-width: 0;
+    flex: 1 1 auto;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--gpv-fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gpv-dragbar-txt em {
+    font-style: normal;
+    color: var(--gpv-primary);
+    font-weight: 700;
+  }
+  .gpv-dragbar-tag {
+    flex: none;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--gpv-primary);
+    border: 1px solid rgba(122, 162, 255, 0.30);
+  }
+
+  /* Active stage canvas */
+  .gpv-canvas {
+    flex: 1 1 0;
+    min-height: 0;
+    border-radius: 10px;
+    border: 1px solid var(--gpv-line);
+    background: var(--gpv-surface);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+  .gpv-canvas-hd {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--gpv-muted-fg);
+  }
+  .gpv-canvas-title {
+    font-weight: 700;
+    color: var(--gpv-fg);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .gpv-canvas-badge {
+    font: 700 10px/1 var(--gpv-mono);
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--gpv-muted);
+    color: var(--gpv-muted-fg);
+  }
+  .gpv-canvas-body {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* Stage cards (simplified active page representation) */
+  .gpv-st-split {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+  .gpv-st-split.col { flex-direction: column; }
+  .gpv-st-split.row { flex-direction: row; }
+  .gpv-st-div {
+    flex: none;
+    background: transparent;
+    position: relative;
+  }
+  .gpv-st-split.col > .gpv-st-div { height: 7px; }
+  .gpv-st-split.row > .gpv-st-div { width: 7px; }
+  .gpv-st-div::after {
+    content: "";
+    position: absolute;
+    border-radius: 999px;
+    background: rgba(231, 231, 228, 0.14);
+  }
+  .gpv-st-split.col > .gpv-st-div::after { left: 16%; right: 16%; top: 3px; height: 1px; }
+  .gpv-st-split.row > .gpv-st-div::after { top: 16%; bottom: 16%; left: 3px; width: 1px; }
+
+  .gpv-st-card {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 8px;
+    border: 1px solid var(--gpv-line);
+    background: var(--gpv-card);
+    padding: 9px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    overflow: hidden;
+  }
+  .gpv-st-card.is-term {
+    background: #14171c;
+    border-color: rgba(141, 184, 255, 0.22);
+  }
+  .gpv-st-card.is-empty {
+    border: 1.5px dashed rgba(162, 166, 173, 0.34);
+    background: rgba(30, 32, 36, 0.35);
+    align-items: center;
+    justify-content: center;
+    color: var(--gpv-muted-fg);
+    text-align: center;
+    gap: 4px;
+  }
+  .gpv-st-hd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .gpv-st-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--gpv-fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .gpv-st-recap {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--gpv-muted-fg);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+  .gpv-st-shell {
+    font: 500 10.5px/1.45 var(--gpv-mono);
+    color: #9ec5ff;
+    background: rgba(10, 12, 16, 0.65);
+    border: 1px solid rgba(141, 184, 255, 0.14);
+    border-radius: 6px;
+    padding: 6px 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .gpv-st-shell .gpv-out {
+    display: block;
+    color: var(--gpv-ok);
+    margin-top: 2px;
+  }
+
+  /* Bottom status strip */
+  .gpv-status {
+    flex: none;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 7px;
+    background: var(--gpv-surface);
+    border: 1px solid var(--gpv-line);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--gpv-muted-fg);
+    overflow: hidden;
+  }
+  .gpv-status-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--gpv-ok);
+  }
+  .gpv-status.is-drag .gpv-status-dot { background: var(--gpv-spring); }
+  .gpv-status.is-drop .gpv-status-dot { background: var(--gpv-primary); }
+  .gpv-status-txt {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ===== Single Reused Floating Preview Popover ===== */
+  .gpv-pop {
+    position: absolute;
+    left: 64px;
+    top: 0;
+    z-index: 20;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate3d(-4px, var(--pop-y, 80px), 0) scale(0.97);
+    transform-origin: left center;
+    transition: transform .16s cubic-bezier(.22, 1, .36, 1),
+                opacity .13s ease;
+    will-change: transform, opacity;
+  }
+  .gpv-pop.is-open {
+    opacity: 1;
+    transform: translate3d(0, var(--pop-y, 80px), 0) scale(1);
+  }
+
+  /* Popover caret pointing to hovered dot */
+  .gpv-pop-caret {
+    position: absolute;
+    left: -5px;
+    top: var(--caret-y, 16px);
+    width: 9px;
+    height: 9px;
+    background: var(--gpv-card-hi);
+    border-left: 1px solid var(--gpv-line-hi);
+    border-bottom: 1px solid var(--gpv-line-hi);
+    transform: translateY(-50%) rotate(45deg);
+    transition: top .14s cubic-bezier(.22, 1, .36, 1);
+  }
+
+  /* Compact pill popover (Home / +) */
+  .gpv-pill-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: var(--gpv-card-hi);
+    border: 1px solid var(--gpv-line-hi);
+    box-shadow: var(--gpv-shadow);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--gpv-fg);
+    white-space: nowrap;
+  }
+  .gpv-pill-box.is-drop-home {
+    border-color: rgba(63, 168, 83, 0.65);
+    background: color-mix(in srgb, var(--gpv-home) 16%, var(--gpv-card-hi));
+    color: #b8f1c3;
+  }
+  .gpv-pill-box.is-drop-plus {
+    border-color: rgba(122, 162, 255, 0.65);
+    background: color-mix(in srgb, var(--gpv-primary) 18%, var(--gpv-card-hi));
+    color: #d6e4ff;
+  }
+  .gpv-pill-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* Mini-card popover container (Page 1, 2, 3) */
+  .gpv-card-box {
+    width: 304px;
+    border-radius: 11px;
+    background: var(--gpv-card-hi);
+    border: 1px solid var(--gpv-line-hi);
+    box-shadow: var(--gpv-shadow);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .gpv-card-box.is-wide {
+    width: 344px;
+  }
+
+  /* Docked-layout-matched mini-pane tree */
+  .gpv-mini-frame {
+    height: 158px;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 8px;
+    background: var(--gpv-bg);
+    padding: 4px;
+    border: 1px solid rgba(231, 231, 228, 0.07);
+  }
+  .gpv-mini-frame.is-single {
+    height: 112px;
+  }
+  .gpv-mini-split {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+  .gpv-mini-split.col { flex-direction: column; }
+  .gpv-mini-split.row { flex-direction: row; }
+  .gpv-mini-div {
+    flex: none;
+    position: relative;
+  }
+  .gpv-mini-split.col > .gpv-mini-div { height: 5px; }
+  .gpv-mini-split.row > .gpv-mini-div { width: 5px; }
+  .gpv-mini-div::after {
+    content: "";
+    position: absolute;
+    border-radius: 999px;
+    background: rgba(122, 162, 255, 0.34);
+  }
+  .gpv-mini-split.col > .gpv-mini-div::after { left: 10px; right: 10px; top: 2px; height: 1px; }
+  .gpv-mini-split.row > .gpv-mini-div::after { top: 10px; bottom: 10px; left: 2px; width: 1px; }
+
+  .gpv-mini-pane {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 6px;
+    border: 1px solid var(--gpv-line);
+    background: var(--gpv-card);
+    padding: 6px 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow: hidden;
+  }
+  .gpv-mini-pane.is-term {
+    background: #13161b;
+    border-color: rgba(141, 184, 255, 0.24);
+  }
+  .gpv-mp-hd {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .gpv-sdot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  .gpv-sdot.discuss { background: var(--gpv-discuss); }
+  .gpv-sdot.impl { background: var(--gpv-impl); }
+  .gpv-sdot.research { background: var(--gpv-layout); }
+  .gpv-sdot.confirm { background: var(--gpv-ok); }
+  .gpv-term-ico {
+    flex: none;
+    font: 800 9.5px/1 var(--gpv-mono);
+    color: var(--gpv-impl);
+    padding: 1px 3px;
+    border-radius: 3px;
+    background: rgba(141, 184, 255, 0.14);
+  }
+  .gpv-mp-title {
+    min-width: 0;
+    flex: 1 1 auto;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--gpv-fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gpv-spill {
+    flex: none;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .gpv-spill.discuss { background: rgba(255, 179, 107, 0.16); color: var(--gpv-discuss); }
+  .gpv-spill.impl { background: rgba(141, 184, 255, 0.16); color: var(--gpv-impl); }
+  .gpv-spill.research { background: rgba(198, 165, 247, 0.16); color: var(--gpv-layout); }
+  .gpv-spill.confirm { background: rgba(108, 195, 154, 0.16); color: var(--gpv-ok); }
+  .gpv-mp-body {
+    font-size: 10px;
+    line-height: 1.38;
+    color: var(--gpv-muted-fg);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+  .gpv-mp-body.clamp-2 {
+    -webkit-line-clamp: 2;
+  }
+  .gpv-mp-cmd {
+    font: 500 9.5px/1.35 var(--gpv-mono);
+    color: #a9ccff;
+    background: rgba(8, 10, 14, 0.72);
+    border-radius: 4px;
+    padding: 4px 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Drop-target hint banner inside popover during drag */
+  .gpv-drop-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 7px;
+    background: rgba(224, 168, 74, 0.15);
+    border: 1px dashed rgba(224, 168, 74, 0.65);
+    color: #f6d59a;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+  .gpv-drop-spring {
+    font: 600 9.5px/1 var(--gpv-mono);
+    color: var(--gpv-spring);
+  }
+
+  /* Floating pointer drag ghost */
+  .gpv-ghost {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 40;
+    pointer-events: none;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    max-width: 240px;
+    padding: 5px 9px;
+    border-radius: 8px;
+    background: rgba(30, 32, 36, 0.96);
+    border: 1.5px solid var(--gpv-primary);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+    color: var(--gpv-fg);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gpv-ghost.is-show {
+    display: inline-flex;
+  }
+</style>
+
+  <!-- Top bar -->
+  <div class="gpv-top">
+    <div class="gpv-brand">
+      <span class="gpv-brand-dot"></span>
+      <span>도킹 레일 호버 · 드래그 미리보기</span>
+    </div>
+    <span class="gpv-hint-pill">배지에 마우스를 올리거나 타이틀을 끌어 올려보세요</span>
+    <span class="gpv-spacer"></span>
+    <button type="button" class="gpv-pin-toggle" aria-pressed="true" data-gpv-pin>
+      <span class="gpv-pin-led"></span>
+      <span>미리보기 고정</span>
+    </button>
+  </div>
+
+  <!-- Main workspace -->
+  <div class="gpv-body" data-gpv-body>
+    <!-- Left .gal-rail -->
+    <nav class="gpv-rail" aria-label="고정 갤러리 레일" data-gpv-rail>
+      <!-- Home -->
+      <button type="button" class="gpv-dot is-active" data-id="home" aria-label="홈">
+        <svg class="gpv-ico" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 7.4 8 2.7l5.5 4.7"/>
+          <path d="M4.2 6.8v6.2h7.6V6.8"/>
+        </svg>
+        <svg class="gpv-ring" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="gpv-ring-track" cx="20" cy="20" r="17"/>
+          <circle class="gpv-ring-fill" cx="20" cy="20" r="17"/>
+        </svg>
+      </button>
+
+      <span class="gpv-rail-sep" aria-hidden="true"></span>
+
+      <!-- Page 1: single discuss topic -->
+      <button type="button" class="gpv-dot" data-id="p1" aria-label="페이지 1 (단일 토픽)">
+        <svg class="gpv-ico" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.8 4.2a1.7 1.7 0 0 1 1.7-1.7h7a1.7 1.7 0 0 1 1.7 1.7v5a1.7 1.7 0 0 1-1.7 1.7H6.6L3.6 13.4v-2.5h-.1a1.7 1.7 0 0 1-.7-1.7z"/>
+        </svg>
+        <svg class="gpv-ring" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="gpv-ring-track" cx="20" cy="20" r="17"/>
+          <circle class="gpv-ring-fill" cx="20" cy="20" r="17"/>
+        </svg>
+      </button>
+
+      <!-- Page 2: 2-pane vertical col split -->
+      <button type="button" class="gpv-dot" data-id="p2" aria-label="페이지 2 (상하 2분할)">
+        <svg class="gpv-ico" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8.5" r="5"/>
+          <path d="M8 5.8v2.9l2 1.2M6.2 2.2h3.6"/>
+        </svg>
+        <span class="gpv-dot-cnt">2</span>
+        <svg class="gpv-ring" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="gpv-ring-track" cx="20" cy="20" r="17"/>
+          <circle class="gpv-ring-fill" cx="20" cy="20" r="17"/>
+        </svg>
+      </button>
+
+      <!-- Page 3: 3-pane row + nested col split -->
+      <button type="button" class="gpv-dot" data-id="p3" aria-label="페이지 3 (3분할 복합 레이아웃)">
+        <svg class="gpv-ico" viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.3" y="2.6" width="11.4" height="10.8" rx="1.6"/>
+          <path d="M8.3 2.6v10.8M8.3 8h5.4"/>
+        </svg>
+        <span class="gpv-dot-cnt">3</span>
+        <svg class="gpv-ring" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="gpv-ring-track" cx="20" cy="20" r="17"/>
+          <circle class="gpv-ring-fill" cx="20" cy="20" r="17"/>
+        </svg>
+      </button>
+
+      <span class="gpv-rail-sep" aria-hidden="true"></span>
+
+      <!-- Plus: new page -->
+      <button type="button" class="gpv-dot" data-id="plus" aria-label="새 페이지">
+        <svg class="gpv-ico" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 3.5v9M3.5 8h9"/>
+        </svg>
+        <svg class="gpv-ring" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="gpv-ring-track" cx="20" cy="20" r="17"/>
+          <circle class="gpv-ring-fill" cx="20" cy="20" r="17"/>
+        </svg>
+      </button>
+    </nav>
+
+    <!-- Single reused floating preview popover -->
+    <div class="gpv-pop" role="tooltip" data-gpv-pop>
+      <div class="gpv-pop-caret" data-gpv-caret></div>
+      <div data-gpv-pop-content></div>
+    </div>
+
+    <!-- Right stage -->
+    <div class="gpv-stage">
+      <!-- Draggable sample card header bar -->
+      <div class="gpv-dragbar" data-gpv-dragbar title="클릭 후 좌측 레일 위로 드래그하세요">
+        <span class="gpv-grip" aria-hidden="true">⠿</span>
+        <span class="gpv-dragbar-txt">이 타이틀을 끌어 좌측 레일에 올려보세요 — <em>[우측 주인공 패널 뷰 개선 재논의]</em></span>
+        <span class="gpv-dragbar-tag">드래그 테스트</span>
+      </div>
+
+      <!-- Active page preview canvas -->
+      <div class="gpv-canvas">
+        <div class="gpv-canvas-hd">
+          <span class="gpv-canvas-title" data-gpv-stage-title>홈 · 메인 보드</span>
+          <span class="gpv-canvas-badge" data-gpv-stage-meta>PAGE 0</span>
+        </div>
+        <div class="gpv-canvas-body" data-gpv-stage-body></div>
+      </div>
+
+      <!-- Status strip -->
+      <div class="gpv-status" data-gpv-status>
+        <span class="gpv-status-dot"></span>
+        <span class="gpv-status-txt" data-gpv-status-txt>기본 미리보기 표시 중: 페이지 2 (상하 55% / 45% 분할) · 다른 배지에 올리면 즉시 전환됩니다</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drag ghost -->
+  <div class="gpv-ghost" data-gpv-ghost>
+    <span class="gpv-grip" aria-hidden="true">⠿</span>
+    <span>우측 주인공 패널 뷰 개선 재논의</span>
+  </div>
+
+<script>
+(function () {
+  var root = (document.currentScript && document.currentScript.closest('.gpv-root'))
+    || document.querySelector('.gpv-root:not([data-gpv-init])');
+  if (!root || root.dataset.gpvInit) return;
+  root.dataset.gpvInit = '1';
+
+  var bodyEl = root.querySelector('[data-gpv-body]');
+  var railEl = root.querySelector('[data-gpv-rail]');
+  var popEl = root.querySelector('[data-gpv-pop]');
+  var caretEl = root.querySelector('[data-gpv-caret]');
+  var popContentEl = root.querySelector('[data-gpv-pop-content]');
+  var pinBtn = root.querySelector('[data-gpv-pin]');
+  var dragBar = root.querySelector('[data-gpv-dragbar]');
+  var ghostEl = root.querySelector('[data-gpv-ghost]');
+  var stageTitleEl = root.querySelector('[data-gpv-stage-title]');
+  var stageMetaEl = root.querySelector('[data-gpv-stage-meta]');
+  var stageBodyEl = root.querySelector('[data-gpv-stage-body]');
+  var statusEl = root.querySelector('[data-gpv-status]');
+  var statusTxtEl = root.querySelector('[data-gpv-status-txt]');
+  var dots = Array.prototype.slice.call(railEl.querySelectorAll('.gpv-dot'));
+
+  var DRAG_CARD_TITLE = '우측 주인공 패널 뷰 개선 재논의';
+
+  var PAGES = {
+    home: {
+      id: 'home',
+      kind: 'pill',
+      label: '홈',
+      dropLabel: '홈으로 언독',
+      stageTitle: '홈 · 메인 보드',
+      stageMeta: 'PAGE 0 · 보드 흐름',
+      renderStage: function () {
+        return '' +
+          '<div class="gpv-st-card">' +
+            '<div class="gpv-st-hd">' +
+              '<span class="gpv-sdot discuss"></span>' +
+              '<span class="gpv-st-name">메인 보드 활성 토픽 흐름</span>' +
+              '<span class="gpv-spill discuss">논의중</span>' +
+            '</div>' +
+            '<div class="gpv-st-recap">도킹되지 않은 토픽과 보드 카드가 시간순으로 쌓이는 기본 뷰입니다. 좌측 레일 배지를 클릭하면 해당 고정 페이지로 전환되고, 위 타이틀 바를 끌어 배지에 올리면 300ms 스프링-로드와 드롭 미리보기를 확인할 수 있습니다.</div>' +
+          '</div>';
+      }
+    },
+    p1: {
+      id: 'p1',
+      kind: 'single',
+      label: '페이지 1',
+      layoutTag: '단일 1패널',
+      stageTitle: '페이지 1 · 고정 토픽',
+      stageMeta: '1 PANE · SINGLE',
+      renderPopover: function (isDrag) {
+        return '' +
+          '<div class="gpv-card-box">' +
+            '<div class="gpv-mini-frame is-single">' +
+              '<div class="gpv-mini-pane">' +
+                '<div class="gpv-mp-hd">' +
+                  '<span class="gpv-sdot discuss"></span>' +
+                  '<span class="gpv-mp-title">레일 호버 프리뷰 디자인 방향</span>' +
+                  '<span class="gpv-spill discuss">논의중</span>' +
+                '</div>' +
+                '<div class="gpv-mp-body">배지 호버 시 단일 재사용 팝오버를 translateY로 정렬해 깜빡임 없이 표시하고, 드래그 중에는 300ms 스프링-로드 링과 분할 드롭 힌트를 함께 제공합니다.</div>' +
+              '</div>' +
+            '</div>' +
+            (isDrag ? '<div class="gpv-drop-banner"><span>이 페이지 아래에 분할 추가</span><span class="gpv-drop-spring">300ms 전환</span></div>' : '') +
+          '</div>';
+      },
+      renderStage: function () {
+        return '' +
+          '<div class="gpv-st-card">' +
+            '<div class="gpv-st-hd">' +
+              '<span class="gpv-sdot discuss"></span>' +
+              '<span class="gpv-st-name">레일 호버 프리뷰 디자인 방향</span>' +
+              '<span class="gpv-spill discuss">논의중</span>' +
+            '</div>' +
+            '<div class="gpv-st-recap">단일 고정 토픽이 전체 뷰포트를 차지하는 1패널 페이지입니다. 배지 호버 시 이 카드의 상태 점·제목·상태 필과 2~3줄 요약이 컴팩트 미니카드로 표시됩니다.</div>' +
+          '</div>';
+      }
+    },
+    p2: {
+      id: 'p2',
+      kind: 'split',
+      label: '페이지 2',
+      layoutTag: 'col 55 / 45',
+      stageTitle: '페이지 2 · 상하 분할 (55% / 45%)',
+      stageMeta: '2 PANES · COL 55:45',
+      renderPopover: function (isDrag) {
+        return '' +
+          '<div class="gpv-card-box">' +
+            '<div class="gpv-mini-frame">' +
+              '<div class="gpv-mini-split col">' +
+                '<div class="gpv-mini-pane" style="flex:55 1 0">' +
+                  '<div class="gpv-mp-hd">' +
+                    '<span class="gpv-sdot impl"></span>' +
+                    '<span class="gpv-mp-title">갤러리 도킹 상태 동기화 구현</span>' +
+                    '<span class="gpv-spill impl">구현중</span>' +
+                  '</div>' +
+                  '<div class="gpv-mp-body clamp-2">split tree의 axis/ratio 비율을 그대로 읽어 미니카드 분할선에 반영합니다.</div>' +
+                '</div>' +
+                '<div class="gpv-mini-div"></div>' +
+                '<div class="gpv-mini-pane is-term" style="flex:45 1 0">' +
+                  '<div class="gpv-mp-hd">' +
+                    '<span class="gpv-term-ico">&gt;_</span>' +
+                    '<span class="gpv-mp-title">wsdashboard 테스트</span>' +
+                    '<span class="gpv-spill confirm">실행 완료</span>' +
+                  '</div>' +
+                  '<div class="gpv-mp-cmd">$ go test ./internal/wsdashboard -run TestGal</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            (isDrag ? '<div class="gpv-drop-banner"><span>이 페이지 아래에 분할 추가</span><span class="gpv-drop-spring">300ms 전환</span></div>' : '') +
+          '</div>';
+      },
+      renderStage: function () {
+        return '' +
+          '<div class="gpv-st-split col">' +
+            '<div class="gpv-st-card" style="flex:55 1 0">' +
+              '<div class="gpv-st-hd">' +
+                '<span class="gpv-sdot impl"></span>' +
+                '<span class="gpv-st-name">갤러리 도킹 상태 동기화 구현</span>' +
+                '<span class="gpv-spill impl">구현중</span>' +
+              '</div>' +
+              '<div class="gpv-st-recap">상단 55% 토픽 패널. 호버 미리보기도 동일한 55:45 세로 분할 비율로 표시됩니다.</div>' +
+            '</div>' +
+            '<div class="gpv-st-div"></div>' +
+            '<div class="gpv-st-card is-term" style="flex:45 1 0">' +
+              '<div class="gpv-st-hd">' +
+                '<span class="gpv-term-ico">&gt;_</span>' +
+                '<span class="gpv-st-name">wsdashboard 테스트</span>' +
+                '<span class="gpv-spill confirm">실행 완료</span>' +
+              '</div>' +
+              '<div class="gpv-st-shell">$ go test ./internal/wsdashboard -run TestGal<span class="gpv-out">ok  ws/internal/wsdashboard  0.42s</span></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    p3: {
+      id: 'p3',
+      kind: 'complex',
+      label: '페이지 3',
+      layoutTag: 'row 54/46 + col 50/50',
+      stageTitle: '페이지 3 · 3패널 복합 분할',
+      stageMeta: '3 PANES · ROW + COL',
+      renderPopover: function (isDrag) {
+        return '' +
+          '<div class="gpv-card-box is-wide">' +
+            '<div class="gpv-mini-frame">' +
+              '<div class="gpv-mini-split row">' +
+                '<div class="gpv-mini-pane" style="flex:54 1 0">' +
+                  '<div class="gpv-mp-hd">' +
+                    '<span class="gpv-sdot research"></span>' +
+                    '<span class="gpv-mp-title">패널 트리 직렬화</span>' +
+                    '<span class="gpv-spill research">조사중</span>' +
+                  '</div>' +
+                  '<div class="gpv-mp-body">중첩 split 노드의 axis와 ratio를 유지해 복합 레이아웃을 한눈에 식별합니다.</div>' +
+                '</div>' +
+                '<div class="gpv-mini-div"></div>' +
+                '<div class="gpv-mini-split col" style="flex:46 1 0">' +
+                  '<div class="gpv-mini-pane" style="flex:50 1 0">' +
+                    '<div class="gpv-mp-hd">' +
+                      '<span class="gpv-sdot confirm"></span>' +
+                      '<span class="gpv-mp-title">호환성 체크</span>' +
+                      '<span class="gpv-spill confirm">확인</span>' +
+                    '</div>' +
+                    '<div class="gpv-mp-body clamp-2">T0 유지 · 기존 상태 보존</div>' +
+                  '</div>' +
+                  '<div class="gpv-mini-div"></div>' +
+                  '<div class="gpv-mini-pane is-term" style="flex:50 1 0">' +
+                    '<div class="gpv-mp-hd">' +
+                      '<span class="gpv-term-ico">&gt;_</span>' +
+                      '<span class="gpv-mp-title">로그 모니터</span>' +
+                    '</div>' +
+                    '<div class="gpv-mp-cmd">$ tail -f ws-ui.log</div>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            (isDrag ? '<div class="gpv-drop-banner"><span>이 페이지 아래에 분할 추가</span><span class="gpv-drop-spring">300ms 전환</span></div>' : '') +
+          '</div>';
+      },
+      renderStage: function () {
+        return '' +
+          '<div class="gpv-st-split row">' +
+            '<div class="gpv-st-card" style="flex:54 1 0">' +
+              '<div class="gpv-st-hd">' +
+                '<span class="gpv-sdot research"></span>' +
+                '<span class="gpv-st-name">패널 트리 직렬화 조사</span>' +
+                '<span class="gpv-spill research">조사중</span>' +
+              '</div>' +
+              '<div class="gpv-st-recap">좌측 54% 주 패널. 우측은 50:50 상하 분할로 체크리스트 토픽과 로그 터미널이 배치되어 있습니다.</div>' +
+            '</div>' +
+            '<div class="gpv-st-div"></div>' +
+            '<div class="gpv-st-split col" style="flex:46 1 0">' +
+              '<div class="gpv-st-card" style="flex:50 1 0">' +
+                '<div class="gpv-st-hd">' +
+                  '<span class="gpv-sdot confirm"></span>' +
+                  '<span class="gpv-st-name">호환성 체크리스트</span>' +
+                  '<span class="gpv-spill confirm">확인</span>' +
+                '</div>' +
+                '<div class="gpv-st-recap">T0 유지 확인 완료</div>' +
+              '</div>' +
+              '<div class="gpv-st-div"></div>' +
+              '<div class="gpv-st-card is-term" style="flex:50 1 0">' +
+                '<div class="gpv-st-hd">' +
+                  '<span class="gpv-term-ico">&gt;_</span>' +
+                  '<span class="gpv-st-name">로그 모니터</span>' +
+                '</div>' +
+                '<div class="gpv-st-shell">$ tail -f ws-ui.log</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    plus: {
+      id: 'plus',
+      kind: 'pill',
+      label: '새 페이지',
+      dropLabel: '새 페이지에 도킹',
+      stageTitle: '새 페이지 · 빈 도킹 슬롯',
+      stageMeta: 'NEW PAGE',
+      renderStage: function () {
+        return '' +
+          '<div class="gpv-st-card is-empty">' +
+            '<div style="font-size:13px;font-weight:700;color:var(--gpv-fg)">+ 새 페이지</div>' +
+            '<div style="font-size:11px">토픽이나 카드 타이틀을 이곳 또는 좌측 + 배지에 놓아 새 고정 페이지를 만듭니다.</div>' +
+          '</div>';
+      }
+    }
+  };
+
+  var state = {
+    activeId: 'home',
+    previewId: 'p2',
+    pinned: true,
+    dragging: false,
+    dragOverId: null,
+    springTimer: null
+  };
+
+  function setStatus(text, tone) {
+    statusTxtEl.textContent = text;
+    statusEl.classList.remove('is-drag', 'is-drop');
+    if (tone === 'drag') statusEl.classList.add('is-drag');
+    if (tone === 'drop') statusEl.classList.add('is-drop');
+  }
+
+  function renderStage(id) {
+    var page = PAGES[id] || PAGES.home;
+    state.activeId = page.id;
+    stageTitleEl.textContent = page.stageTitle;
+    stageMetaEl.textContent = page.stageMeta;
+    stageBodyEl.innerHTML = page.renderStage();
+    dots.forEach(function (d) {
+      d.classList.toggle('is-active', d.dataset.id === page.id);
+    });
+  }
+
+  function renderPopover(id, isDrag) {
+    var page = PAGES[id];
+    if (!page) return;
+    state.previewId = id;
+
+    if (page.kind === 'pill') {
+      var cls = 'gpv-pill-box';
+      var txt = page.label;
+      if (isDrag) {
+        txt = page.dropLabel;
+        cls += id === 'home' ? ' is-drop-home' : ' is-drop-plus';
+      }
+      popContentEl.innerHTML =
+        '<div class="' + cls + '">' +
+          '<span class="gpv-pill-dot"></span>' +
+          '<span>' + txt + '</span>' +
+        '</div>';
+    } else {
+      popContentEl.innerHTML = page.renderPopover(isDrag);
+    }
+
+    dots.forEach(function (d) {
+      d.classList.toggle('is-hover', d.dataset.id === id);
+    });
+
+    positionPopover(id);
+    popEl.classList.add('is-open');
+  }
+
+  function positionPopover(id) {
+    var dot = railEl.querySelector('.gpv-dot[data-id="' + id + '"]');
+    if (!dot) return;
+    var bodyRect = bodyEl.getBoundingClientRect();
+    var dotRect = dot.getBoundingClientRect();
+    var popRect = popEl.getBoundingClientRect();
+    var popH = popRect.height || 40;
+    var dotCenterY = (dotRect.top - bodyRect.top) + (dotRect.height / 2);
+
+    var minY = 8;
+    var maxY = Math.max(minY, bodyRect.height - popH - 8);
+    var desiredY = dotCenterY - (popH / 2);
+    var clampedY = Math.max(minY, Math.min(maxY, desiredY));
+    var caretY = Math.max(12, Math.min(popH - 12, dotCenterY - clampedY));
+
+    popEl.style.setProperty('--pop-y', Math.round(clampedY) + 'px');
+    caretEl.style.setProperty('--caret-y', Math.round(caretY) + 'px');
+  }
+
+  function hidePopover() {
+    popEl.classList.remove('is-open');
+    dots.forEach(function (d) { d.classList.remove('is-hover'); });
+  }
+
+  function clearSpring() {
+    if (state.springTimer) {
+      clearTimeout(state.springTimer);
+      state.springTimer = null;
+    }
+    dots.forEach(function (d) {
+      d.classList.remove('is-dragover', 'is-springing', 'is-sprung');
+    });
+  }
+
+  function startSpring(dot) {
+    clearSpring();
+    if (!dot) return;
+    var id = dot.dataset.id;
+    dot.classList.add('is-dragover');
+    // Restart 300ms CSS stroke animation cleanly
+    void dot.offsetWidth;
+    dot.classList.add('is-springing');
+
+    state.springTimer = setTimeout(function () {
+      state.springTimer = null;
+      if (!state.dragging || state.dragOverId !== id) return;
+      dot.classList.add('is-sprung');
+      renderStage(id);
+      var targetName = PAGES[id].label;
+      setStatus('스프링-로드 완료(300ms): ' + targetName + ' 활성화 · 놓으면 바로 적용됩니다', 'drag');
+    }, 300);
+  }
+
+  // Rail hover & click interactions
+  dots.forEach(function (dot) {
+    dot.addEventListener('mouseenter', function () {
+      if (state.dragging) return;
+      var id = dot.dataset.id;
+      renderPopover(id, false);
+      setStatus('호버 미리보기: ' + PAGES[id].label + (PAGES[id].layoutTag ? ' (' + PAGES[id].layoutTag + ')' : ''), 'idle');
+    });
+
+    dot.addEventListener('focus', function () {
+      if (state.dragging) return;
+      renderPopover(dot.dataset.id, false);
+    });
+
+    dot.addEventListener('click', function () {
+      var id = dot.dataset.id;
+      renderStage(id);
+      renderPopover(id, false);
+      setStatus('페이지 전환됨: ' + PAGES[id].stageTitle, 'idle');
+    });
+  });
+
+  railEl.addEventListener('mouseleave', function () {
+    if (state.dragging) return;
+    if (!state.pinned) {
+      hidePopover();
+      setStatus('호버 해제됨 · 배지에 마우스를 올리면 미리보기가 표시됩니다', 'idle');
+    }
+  });
+
+  // Pin toggle button
+  pinBtn.addEventListener('click', function () {
+    state.pinned = !state.pinned;
+    pinBtn.setAttribute('aria-pressed', state.pinned ? 'true' : 'false');
+    if (state.pinned) {
+      renderPopover(state.previewId || 'p2', false);
+      setStatus('미리보기 고정 켜짐 · 다른 배지에 마우스를 올리면 실시간으로 전환됩니다', 'idle');
+    } else {
+      hidePopover();
+      setStatus('미리보기 고정 꺼짐 · 배지에 마우스를 올릴 때만 팝오버가 표시됩니다', 'idle');
+    }
+  });
+
+  // Pointer-based Title Drag-Hover Simulation
+  function hitTestDot(clientX, clientY) {
+    for (var i = 0; i < dots.length; i++) {
+      var r = dots[i].getBoundingClientRect();
+      // Slightly generous hit slop (+6px) for smooth rail targeting
+      if (clientX >= r.left - 8 && clientX <= r.right + 8 &&
+          clientY >= r.top - 6 && clientY <= r.bottom + 6) {
+        return dots[i];
+      }
+    }
+    return null;
+  }
+
+  function moveGhost(clientX, clientY) {
+    var rootRect = root.getBoundingClientRect();
+    var gx = Math.max(6, Math.min(rootRect.width - 180, clientX - rootRect.left + 12));
+    var gy = Math.max(6, Math.min(rootRect.height - 34, clientY - rootRect.top - 14));
+    ghostEl.style.transform = 'translate3d(' + Math.round(gx) + 'px, ' + Math.round(gy) + 'px, 0)';
+  }
+
+  dragBar.addEventListener('pointerdown', function (ev) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    state.dragging = true;
+    state.dragOverId = null;
+    root.dataset.mode = 'drag';
+    ghostEl.classList.add('is-show');
+    moveGhost(ev.clientX, ev.clientY);
+    if (!state.pinned) hidePopover();
+    setStatus('드래그 중: [' + DRAG_CARD_TITLE + '] — 좌측 레일 배지 위에 올려보세요', 'drag');
+
+    try { dragBar.setPointerCapture(ev.pointerId); } catch (_) {}
+  });
+
+  dragBar.addEventListener('pointermove', function (ev) {
+    if (!state.dragging) return;
+    moveGhost(ev.clientX, ev.clientY);
+
+    var hit = hitTestDot(ev.clientX, ev.clientY);
+    var hitId = hit ? hit.dataset.id : null;
+    if (hitId !== state.dragOverId) {
+      state.dragOverId = hitId;
+      if (hit) {
+        renderPopover(hitId, true);
+        startSpring(hit);
+        var hint = hitId === 'home' ? '홈으로 언독' :
+                   hitId === 'plus' ? '새 페이지에 도킹' :
+                   PAGES[hitId].label + ' 아래에 분할 추가';
+        setStatus('드래그 호버: ' + hint + ' (300ms 유지 시 스프링-로드)', 'drag');
+      } else {
+        clearSpring();
+        if (!state.pinned) hidePopover();
+        setStatus('드래그 중: 좌측 레일 배지 위로 이동해 놓으세요', 'drag');
+      }
+    }
+  });
+
+  function finishDrag(cancelled) {
+    if (!state.dragging) return;
+    var dropId = cancelled ? null : state.dragOverId;
+    state.dragging = false;
+    state.dragOverId = null;
+    root.dataset.mode = 'idle';
+    ghostEl.classList.remove('is-show');
+    clearSpring();
+
+    if (dropId && PAGES[dropId]) {
+      renderStage(dropId);
+      if (dropId === 'home') {
+        setStatus('적용됨: [' + DRAG_CARD_TITLE + '] → 홈으로 언독되었습니다', 'drop');
+      } else if (dropId === 'plus') {
+        setStatus('적용됨: [' + DRAG_CARD_TITLE + '] → 새 페이지에 도킹되었습니다', 'drop');
+      } else {
+        setStatus('적용됨: [' + DRAG_CARD_TITLE + '] → ' + PAGES[dropId].label + ' 아래에 분할 추가되었습니다', 'drop');
+      }
+      if (state.pinned) {
+        renderPopover(dropId, false);
+      } else {
+        hidePopover();
+      }
+    } else {
+      setStatus('드래그 취소됨 · 좌측 레일 배지 위에서 놓으면 도킹 동작을 시뮬레이션합니다', 'idle');
+      if (state.pinned) {
+        renderPopover(state.previewId || 'p2', false);
+      } else {
+        hidePopover();
+      }
+    }
+  }
+
+  dragBar.addEventListener('pointerup', function () { finishDrag(false); });
+  dragBar.addEventListener('pointercancel', function () { finishDrag(true); });
+
+  // Initial render: Home active in stage, Page 2 preview open by default
+  renderStage('home');
+  requestAnimationFrame(function () {
+    renderPopover('p2', false);
+  });
+})();
+</script>
+</div>
