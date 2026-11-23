@@ -726,7 +726,7 @@ func TestWerkReconcilesSettlementAcrossDaemonReplacement(t *testing.T) {
 		{name: "before terminal commit", beforeCommit: true},
 		{name: "after terminal commit"},
 		{name: "before held commit", beforeCommit: true, held: true},
-		{name: "after held commit", held: true},
+		{name: "after held release commit", held: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			started, finish := make(chan struct{}), make(chan struct{})
@@ -753,6 +753,16 @@ func TestWerkReconcilesSettlementAcrossDaemonReplacement(t *testing.T) {
 				}
 				return nil
 			}
+			stoppedBeforeReport := make(chan Record, 1)
+			if !tc.beforeCommit {
+				h.opts.suppressReportDelivery = func(rec Record) bool {
+					select {
+					case stoppedBeforeReport <- rec:
+					default:
+					}
+					return true
+				}
+			}
 			fleet.start(h)
 			id := spawnWerk(t, h, "read-only")
 			select {
@@ -770,24 +780,41 @@ func TestWerkReconcilesSettlementAcrossDaemonReplacement(t *testing.T) {
 				h.runner.ExecJobsChanged()
 			}
 			close(finish)
-			eventually(t, "the selected settlement boundary", func() bool {
-				rec := werkRecord(t, h, id)
-				switch {
-				case tc.beforeCommit:
-					return attempts.Load() >= 2 && rec.DurableTurn != nil
-				case tc.held:
-					return rec.DurableHeldReportID == turnID
-				default:
-					return rec.LastReportedTurn == turnID
+			if tc.beforeCommit {
+				eventually(t, "an unsuccessful settlement", func() bool {
+					return attempts.Load() >= 2 && werkRecord(t, h, id).DurableTurn != nil
+				})
+			} else if tc.held {
+				eventually(t, "the durable report hold", func() bool {
+					return werkRecord(t, h, id).DurableHeldReportID == turnID && h.state(id).Holding
+				})
+				if len(reports.list()) != 0 {
+					t.Fatal("the runner reported before the held job ended")
 				}
-			})
-			if (tc.beforeCommit || tc.held) && len(reports.list()) != 0 {
-				t.Fatal("the turn reported before settlement was eligible")
+				jobs.set(id, 0)
+				h.runner.ExecJobsChanged()
+			}
+			var settled Record
+			if !tc.beforeCommit {
+				select {
+				case settled = <-stoppedBeforeReport:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the settled turn did not reach report delivery")
+				}
+				if settled.DurableTurn != nil || settled.HeldTurn != nil || settled.DurableHeldReportID != "" ||
+					settled.ReportID != turnID || settled.LastReportedTurn != "" ||
+					settled.LastTurn == nil || settled.LastTurn.Result.Message != answer {
+					t.Fatal("report delivery reached the wrong settlement boundary")
+				}
+			}
+			if len(reports.list()) != 0 {
+				t.Fatal("the first runner delivered a report")
 			}
 			h.runner.Close()
 			h.opts.beforeDurableWrite = nil
+			h.opts.suppressReportDelivery = nil
 			fleet.start(h)
-			if tc.held {
+			if tc.held && tc.beforeCommit {
 				eventually(t, "the successor's report hold", func() bool {
 					r := werkRecord(t, h, id)
 					return r.DurableHeldReportID == turnID && h.state(id).Holding
@@ -801,6 +828,24 @@ func TestWerkReconcilesSettlementAcrossDaemonReplacement(t *testing.T) {
 			eventually(t, "one original report", func() bool {
 				return werkRecord(t, h, id).LastReportedTurn == turnID
 			})
+			restored := werkRecord(t, h, id)
+			if restored.ReportID != turnID || restored.LastTurn == nil {
+				t.Fatal("replacement changed the report identity")
+			}
+			if settled.LastTurn != nil {
+				// Compare the persisted fields, excluding the loop's local turn counters.
+				before, err := json.Marshal(settled.LastTurn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				after, err := json.Marshal(restored.LastTurn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(before) != string(after) {
+					t.Fatal("replacement changed the committed turn result")
+				}
+			}
 			h.runner.Close()
 			got := reports.list()
 			if len(got) != 1 || got[0].Result.Message != answer || model.requestCount() != 1 {

@@ -410,6 +410,9 @@ func (c *conv) reportLast() {
 	if last == nil || c.rec.Parent == nil || c.rec.ReportID == "" || c.rec.ReportID == c.rec.LastReportedTurn {
 		return
 	}
+	if suppress := c.r.opts.suppressReportDelivery; suppress != nil && suppress(c.record()) {
+		return
+	}
 	if report := c.r.opts.Report; report != nil {
 		report(TurnReport{Parent: *c.rec.Parent, Child: c.state(), Result: last.Result})
 	}

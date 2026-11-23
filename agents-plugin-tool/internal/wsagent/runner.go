@@ -277,6 +277,8 @@ type Options struct {
 	sendAdmitting func(string)
 	// beforeDurableWrite injects a failed private record write in tests.
 	beforeDurableWrite func(Record) error
+	// suppressReportDelivery simulates loss after settlement commits in tests.
+	suppressReportDelivery func(Record) bool
 }
 
 // Runner hosts the agent conversations of one dashboard daemon.
