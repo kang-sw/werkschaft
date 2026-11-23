@@ -91,7 +91,8 @@ func TestMissingFileIsNotConfiguredAndReadTouchesNoFile(t *testing.T) {
 		t.Fatalf("not-configured error says nothing actionable: %v", err)
 	}
 	status, err := s.Status()
-	if err != nil || len(status) != 1 || status[0].Configured || status[0].Masked != "" {
+	if err != nil || len(status) != 2 || status[0].Configured || status[0].Masked != "" ||
+		status[1].Provider != ProviderOpenAI || status[1].Kind != KindSIWC || status[1].Configured {
 		t.Fatalf("Status = %+v, %v", status, err)
 	}
 	if _, err := os.Stat(filepath.Dir(s.Path())); !errors.Is(err, os.ErrNotExist) {

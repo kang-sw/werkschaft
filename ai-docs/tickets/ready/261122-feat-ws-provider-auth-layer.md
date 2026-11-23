@@ -254,6 +254,65 @@ Verification:
   refusal; one owner-run live sign-in recorded in the Result (no token in the
   record).
 
+### Result (39dbe7359) - 2026-11-24
+
+Landed Phase 2 on `impl/track/harness/shack-coma-jimmy`. The
+`internal/wscred` OpenAI provider uses system-browser loopback PKCE and
+OpenID verification for dynamic registration and reauthorization.
+The owner-only credential file stores the stable host ID and separate
+registrations, including the active account and each account's explicit
+background-consent answer. The in-process source gates builtin harness
+sessions, serializes refresh rotation, clears a revoked grant while
+retaining its registration, and returns the ordered list of visible models
+from that account's catalog. The external harness token route refuses SIWC.
+Dashboard sign-in and the consent prompt are Phase 3.
+
+Compatibility stays T0. The Phase 1 reader at `ebcf1c4fc` keeps provider
+entries as raw JSON in `decodeDocument` and rewrites only the selected
+API-key entry in `Store.Apply`. This phase retains schema 1 and reloads the
+OpenAI entry in `Store.useDocumentLocked`. Routine credential reads use
+memory. The first registration writes the host ID before opening the browser
+and writes the account after validation. A returning sign-in, changed
+consent, or refresh rotation each uses one atomic file replacement.
+
+OpenAI documentation revision used: public pages retrieved on 2026-11-24
+(the pages display no revision stamp), with SIWC Terms effective 2026-11-04.
+[Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+[accounts and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions),
+[token reference](https://developers.openai.com/siwc/token-sharing-open-source/token-reference),
+[refresh recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery),
+[models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference),
+[OpenID configuration](https://auth.openai.com/.well-known/openid-configuration),
+[SIWC Terms](https://openai.com/policies/sign-in-with-chatgpt-terms/).
+
+Verification:
+
+- `go test -race ./internal/wscred -count=1` and the credential tests in
+  `./internal/wsdashboard` and `./cmd/ws-mcp` passed. The fixtures cover
+  registration and returning sign-in, PKCE and identity refusals, per-account
+  consent and revocation, rotation and persistence retry, revoked refresh,
+  and the filtered catalog.
+- `go test -timeout 45m ./internal/mcp` passed with generated workflow assets.
+- The full `./internal/wsagent` and `./cmd/ws-mcp` suites passed. The
+  CLI suite required generating the embedded workflow assets. The full
+  dashboard suite hit two failures also reproduced on `ebcf1c4fc`
+  with the same Node version: `TestAgentsIslandBehavior` (intermittent
+  animation timestamp) and `TestBoardToolbarPlacementAndCounts`
+  (fixture JSON parse).
+- `go build ./...` and native and Windows-targeted `go vet` over
+  `./internal/wscred ./internal/wsdashboard ./cmd/ws-mcp` passed.
+- Independent lite review found no Critical or Important findings.
+
+Owner-run live verification is pending. From the repository root, run this
+with the system browser available. The temporary cache isolates the
+credential file from the running daemon. A successful check prints
+`Signed in to OpenAI with ChatGPT plan usage enabled.` Record the outcome
+only.
+
+```sh
+env -i HOME="$HOME" PATH="$PATH" WS_CACHE_HOME="$(mktemp -d)" go -C agents-plugin-tool run ./cmd/ws-mcp credential sign-in openai
+```
+
 ### Phase 3: Dashboard sign-in and key management
 
 - Dashboard settings rows to add/remove the OpenRouter key and to sign in to
