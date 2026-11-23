@@ -339,10 +339,11 @@ func writeDashboardTestManifest(t *testing.T, enabled bool) string {
 // startServe starts `ws-mcp serve --stdio`, sends initialize and tools/list,
 // and returns once tools/list has answered. Closing the returned stdin ends
 // the serve.
-func startServe(t *testing.T, bin string, env []string) (*exec.Cmd, io.WriteCloser) {
+func startServe(t *testing.T, bin string, env []string, stderr io.Writer) (*exec.Cmd, io.WriteCloser) {
 	t.Helper()
 	serve := exec.Command(bin, "serve", "--stdio", "--root", t.TempDir())
 	serve.Env = env
+	serve.Stderr = stderr
 	stdin, err := serve.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +397,8 @@ func TestServeReplacesAnOlderDaemonThatThenOutlivesServe(t *testing.T) {
 	oldEp := waitForEndpoint(t, dir, "0.0.1", 10*time.Second)
 
 	serveEnv := append(env, "WS_MCP_CONFIG_MANIFESTS="+writeDashboardTestManifest(t, true))
-	serve, stdin := startServe(t, newBin, serveEnv)
+	var diagnostics bytes.Buffer
+	serve, stdin := startServe(t, newBin, serveEnv, &diagnostics)
 	newEp := waitForEndpoint(t, dir, version, 20*time.Second)
 	if newEp.Token == oldEp.Token || newEp.PID == oldEp.PID {
 		t.Fatalf("endpoint not replaced: %+v", newEp)
@@ -408,6 +410,9 @@ func TestServeReplacesAnOlderDaemonThatThenOutlivesServe(t *testing.T) {
 	_ = stdin.Close()
 	if err := waitExit(t, serve, 10*time.Second); err != nil {
 		t.Fatalf("serve exit: %v", err)
+	}
+	if !strings.Contains(diagnostics.String(), "ready; requesting shutdown of daemon 0.0.1") {
+		t.Fatal("direct serve did not report successor readiness before requesting drain")
 	}
 	if info, err := wsdashboard.Health(context.Background(), dashboardTestClient, newEp); err != nil || info.Version != version {
 		t.Fatalf("daemon after serve exited: %+v, %v", info, err)
@@ -441,7 +446,7 @@ func TestServeKeepsAnOlderBuildOfTheSameVersion(t *testing.T) {
 	}
 
 	serveEnv := append(env, "WS_MCP_CONFIG_MANIFESTS="+writeDashboardTestManifest(t, true))
-	serve, stdin := startServe(t, newBin, serveEnv)
+	serve, stdin := startServe(t, newBin, serveEnv, nil)
 	if ep, err := wsdashboard.ReadEndpoint(dir); err != nil || ep.PID != oldEp.PID || ep.Token != oldEp.Token {
 		t.Fatalf("same-version daemon was replaced during serve: %+v, %v", ep, err)
 	}
@@ -490,7 +495,7 @@ func TestServeAnswersToolsWithoutADaemon(t *testing.T) {
 			if tc.cache != "" {
 				env = append(env, "WS_CACHE_HOME="+tc.cache)
 			}
-			serve, stdin := startServe(t, bin, env)
+			serve, stdin := startServe(t, bin, env, nil)
 			_ = stdin.Close()
 			if err := waitExit(t, serve, 10*time.Second); err != nil {
 				t.Fatalf("serve exit: %v", err)
@@ -536,7 +541,7 @@ func TestServeKeepsASameContentDaemonOfAnOlderBuild(t *testing.T) {
 	}
 
 	serveEnv := append(env, "WS_MCP_CONFIG_MANIFESTS="+writeDashboardTestManifest(t, true))
-	serve, stdin := startServe(t, newBin, serveEnv)
+	serve, stdin := startServe(t, newBin, serveEnv, nil)
 	// startServe returned once the serve answered tools/list, after its
 	// Ensure ran; the daemon it found is the one it keeps.
 	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
