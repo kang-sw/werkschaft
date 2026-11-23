@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wscompact"
+	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 func compactProseReply(value string) string {
@@ -151,11 +153,19 @@ func TestLeadCheckpointUsesFreshStateAndBoundedEvidence(t *testing.T) {
 
 	must(t, os.WriteFile(filepath.Join(root, "small.txt"), []byte("small file text"), 0o600))
 	must(t, os.WriteFile(filepath.Join(root, "too-large.txt"), []byte(strings.Repeat("x", rereadBytes)), 0o600))
+	t.Setenv("WS_CACHE_HOME", filepath.Join(root, "cache"))
+	credential, err := wscred.DefaultPath("")
+	must(t, err)
+	must(t, os.MkdirAll(filepath.Dir(credential), 0o700))
+	must(t, os.WriteFile(credential, []byte("PROTECTED-CREDENTIAL-FIXTURE"), 0o600))
 	endpoint := &scripted{}
 	var cp Line
 	var states []time.Time
 	cfg := Config{Dir: dir, Root: root, Cwd: root, Session: session, Lead: true, Model: "fixture",
 		Authority: AuthorityReadOnly, Endpoint: endpoint, Emit: func(line Line) { cp = line },
+		RereadFiles: func(paths []string, maxBytes int64) map[string]string {
+			return wsdashboard.ReadWorktreeTextFiles(root, paths, maxBytes)
+		},
 		CompactionState: func(since time.Time) CompactionState {
 			states = append(states, since)
 			if since.IsZero() {
@@ -167,7 +177,7 @@ func TestLeadCheckpointUsesFreshStateAndBoundedEvidence(t *testing.T) {
 	a, err := New(cfg)
 	must(t, err)
 	t.Cleanup(func() { _ = a.Close() })
-	fields := map[string]any{"reread": []string{"too-large.txt", "small.txt", "missing.txt"}}
+	fields := map[string]any{"reread": []string{"too-large.txt", "small.txt", "missing.txt", credential}}
 	for _, field := range wscompact.ProseFields() {
 		fields[field.Key] = "lead prose for " + field.Key
 	}
@@ -194,7 +204,7 @@ func TestLeadCheckpointUsesFreshStateAndBoundedEvidence(t *testing.T) {
 			t.Errorf("checkpoint did not contain %q", want)
 		}
 	}
-	for _, stale := range []string{"OLD-DIALOG", "PRIVATE-TOOL-RESULT", "old child", "old job", strings.Repeat("x", 64)} {
+	for _, stale := range []string{"OLD-DIALOG", "PRIVATE-TOOL-RESULT", "old child", "old job", "PROTECTED-CREDENTIAL-FIXTURE", strings.Repeat("x", 64)} {
 		if strings.Contains(cp.Text, stale) {
 			t.Errorf("checkpoint retained %q", stale)
 		}

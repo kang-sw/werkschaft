@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,31 @@ import (
 func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 	started, release, third := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	next := make(chan werk.Request, 1)
+	var reads atomic.Int32
+	continuation := func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+		raw, err := json.Marshal(req.Input)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case bytes.Contains(raw, []byte("continue the fixture")):
+			return werkMessage("continued")(ctx, req)
+		case bytes.Contains(raw, []byte("interrupt this")):
+			close(third)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case bytes.Contains(raw, []byte("steer this input")):
+			next <- req
+			resp, err := werkMessage("steer received")(ctx, req)
+			resp.Output = append([]json.RawMessage{json.RawMessage(`{"type":"reasoning","id":"reason","encrypted_content":"opaque","summary":[{"text":"Provider summary"}]}`)}, resp.Output...)
+			return resp, err
+		default:
+			// The durable record is committed before the steer is handed to the
+			// loop. Keep the turn at tool boundaries while that handoff completes.
+			id := fmt.Sprintf("read-%d", reads.Add(1))
+			return &werk.Response{Output: []json.RawMessage{json.RawMessage(werkCall(id, "fs_read", `{"path":"fixture"}`))}}, nil
+		}
+	}
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
 			close(started)
@@ -25,19 +52,10 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 			}
 			return &werk.Response{Output: []json.RawMessage{json.RawMessage(werkCall("read", "fs_read", `{"path":"fixture"}`))}}, nil
 		},
-		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
-			next <- req
-			resp, err := werkMessage("steer received")(ctx, req)
-			resp.Output = append([]json.RawMessage{json.RawMessage(`{"type":"reasoning","id":"reason","encrypted_content":"opaque","summary":[{"text":"Provider summary"}]}`)}, resp.Output...)
-			return resp, err
-		},
-		func(ctx context.Context, _ werk.Request) (*werk.Response, error) {
-			close(third)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		},
-		werkMessage("continued"),
 	}}
+	for range 16 {
+		model.steps = append(model.steps, continuation)
+	}
 	h, ws, _ := werkHarness(t, model)
 	st, err := h.runner.CreateLead(BackendWerk, h.root, LeadOptions{Model: "vendor/fixture", PermissionLevel: PermissionReadOnly, permissionUser: true})
 	if err != nil {
@@ -93,6 +111,9 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "interrupted lead idle", func() bool { return h.state(st.ID).Status == StatusIdle })
-	h.send(st.ID, "continue")
-	eventually(t, "lead continued", func() bool { return model.requestCount() == 4 && h.state(st.ID).Status == StatusIdle })
+	h.send(st.ID, "continue the fixture")
+	result, err := h.runner.Wait(context.Background(), st.ID, 4*time.Second)
+	if err != nil || result.Status != TurnDone || result.Message != "continued" {
+		t.Fatalf("lead did not continue after interrupt: %s, %v", result.Status, err)
+	}
 }

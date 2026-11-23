@@ -113,17 +113,23 @@
   // arrives.
   // A list read here is stamped with the connection epoch it was read in;
   // only a list of the current epoch can offer common permission levels.
-  function leadChoices(done, refresh) {
-    var held = !!supChoices && !supChoices.error, epoch = permEpoch, retries = 0;
+  function leadChoices(done, refresh, active) {
+    var held = !!supChoices && !supChoices.error;
+    // The daemon bounds one catalog listing at 15 seconds. Leave time for
+    // the final publication, and keep polling light on a slow provider.
+    var deadline = Date.now() + 18000, delay = 250;
     if (held) done();
     function loadChoices() {
+      if (active && !active()) return;
+      var epoch = permEpoch;
       tkFetch("/support/choices", undefined, function (status, v) {
-        if (status === 200 && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
+        if (status === 200 && v && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
         else if (supChoices) supChoices.wsEpoch = -1;
         if (!held) { held = true; done(); }
         else if (refresh) refresh();
-        if (status === 200 && v.pickers_pending && refresh && ++retries < 6 && epoch === permEpoch) {
-          setTimeout(loadChoices, 250 * retries);
+        if (status === 200 && v && v.pickers_pending && refresh && Date.now() < deadline) {
+          setTimeout(loadChoices, delay);
+          delay = Math.min(delay * 2, 2000);
         }
       });
     }
@@ -876,7 +882,7 @@
         railPopPlace();
       }, function () {
         if (rpLive(P, gen)) choicesArrived();
-      });
+      }, function () { return rpLive(P, gen); });
     };
     // choicesArrived shows a newer choices list over a form the user may
     // have edited. A re-read never changes the form on its own: the harness,
@@ -901,7 +907,7 @@
       var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
       var arrived = function () { if (live()) choicesArrived(); };
       if (live()) { permDraw(); sync(); railPopPlace(); }
-      if (read) leadChoices(arrived, arrived);
+      if (read) leadChoices(arrived, arrived, live);
     };
     P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
     P.close = function () { permFullDrop(); };
@@ -1153,7 +1159,7 @@
       }
       P.draw();
       var redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
-      leadChoices(redraw, redraw);
+      leadChoices(redraw, redraw, function () { return P.live(gen); });
       P.fetch();
     };
     // permDraw shows st's permission state and, for a lead whose harness
@@ -1184,7 +1190,7 @@
     P.permSync = function (read) {
       var gen = P.gen, redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
       redraw();
-      if (read) leadChoices(redraw, redraw);
+      if (read) leadChoices(redraw, redraw, function () { return P.live(gen); });
     };
     P.focus = function () { rows.model.focus(); };
     P.close = function () {
@@ -1711,7 +1717,7 @@
       composerPop.slot = slot;
       btn.setAttribute("aria-expanded", "true");
       composerDrawPop();
-      leadChoices(composerDrawPop, composerDrawPop);
+      leadChoices(composerDrawPop, composerDrawPop, function () { return composerPop.slot === slot; });
     });
     doc.addEventListener("click", function (e) {
       if (!composerPop.slot) return;

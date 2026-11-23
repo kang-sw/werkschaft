@@ -200,11 +200,15 @@ func viewableText(data []byte) bool {
 // readViewable reads the opened file f, with info its stat, when the file
 // view would show it as text: at most fileViewMax and viewableText.
 func readViewable(f io.Reader, info os.FileInfo) ([]byte, bool) {
-	if info.Size() > fileViewMax {
+	return readWholeText(f, info, fileViewMax)
+}
+
+func readWholeText(f io.Reader, info os.FileInfo, maxBytes int64) ([]byte, bool) {
+	if info.Size() > maxBytes {
 		return nil, false
 	}
-	data, err := io.ReadAll(io.LimitReader(f, fileViewMax+1))
-	if err != nil || len(data) > fileViewMax || !viewableText(data) {
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil || int64(len(data)) > maxBytes || !viewableText(data) {
 		return nil, false
 	}
 	return data, true

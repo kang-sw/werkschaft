@@ -16,6 +16,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 )
@@ -126,6 +127,11 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	}
 	if spec.compactState != nil {
 		cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
+	}
+	if cfg.Lead {
+		cfg.RereadFiles = func(paths []string, maxBytes int64) map[string]string {
+			return wsdashboard.ReadWorktreeTextFiles(spec.Root, paths, maxBytes)
+		}
 	}
 	cfg.ContextWindow = spec.modelContextWindow
 	a, err := werk.New(cfg)

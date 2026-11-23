@@ -71,6 +71,8 @@ type Config struct {
 	// CompactionState snapshots the current child and exec records. A zero
 	// time asks for all finished children.
 	CompactionState func(since time.Time) CompactionState
+	// RereadFiles supplies bounded text from the current worktree at compaction.
+	RereadFiles func(paths []string, maxBytes int64) map[string]string
 	// SummarySecrets adds session-specific credentials to the usual summary
 	// redaction.
 	SummarySecrets []string
