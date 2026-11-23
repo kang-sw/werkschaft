@@ -311,6 +311,7 @@ func (h *proxyHost) applyLANChange(server *mcp.Server) {
 			LAN:                 settings.LAN,
 			Spawn:               spawn,
 			SpawnBeforeShutdown: true,
+			JoinStarterLock:     true,
 			PrepareSuccessor:    prepare,
 			Log:                 h.logw,
 		})
@@ -487,8 +488,7 @@ func desktopPredecessor(input io.Reader) (*wsdashboard.DaemonIdentity, error) {
 }
 
 func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboard.EnsureOptions) (wsdashboard.Outcome, error)) {
-	// A new launcher may invoke a retained older daemon, so convey the
-	// already-held lock without adding a flag the old runtime would reject.
+	// Consume the launcher's ownership marker before spawning a successor.
 	const inheritedLock = "WS_MCP_LAUNCHER_START_LOCK_HELD"
 	inherited := os.Getenv(inheritedLock) == "1"
 	_ = os.Unsetenv(inheritedLock)
@@ -542,6 +542,8 @@ func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboa
 	if *buildTime <= 0 {
 		*buildTime = wsdashboard.ExecutableBuildTime(exe)
 	}
+	// The desktop flags identify direct starters. Plain daemon-start can
+	// come from an older launcher that holds the lock without the marker.
 	strict := *independent || *desktop
 	candidate := func() (string, error) {
 		if strict {
@@ -551,22 +553,22 @@ func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboa
 	}
 	spawn, prepare := dashboardStarters(ctx, dir, candidate, strict)
 	opts := wsdashboard.EnsureOptions{
-		Dir:                  dir,
-		Version:              version,
-		BuildTime:            *buildTime,
-		ContentHash:          wsdashboard.ExecutableContentHash(exe),
-		Replace:              *replace,
-		SpawnBeforeShutdown:  true,
-		InheritedStarterLock: inherited,
-		PrepareSuccessor:     prepare,
-		PreserveRunningLAN:   *independent || *desktop,
-		DesktopStart:         *desktop,
-		Predecessor:          predecessor,
-		Port:                 settings.Port,
-		LAN:                  lan,
-		Spawn:                spawn,
-		StartWait:            *startWait,
-		Log:                  os.Stderr,
+		Dir:                 dir,
+		Version:             version,
+		BuildTime:           *buildTime,
+		ContentHash:         wsdashboard.ExecutableContentHash(exe),
+		Replace:             *replace,
+		SpawnBeforeShutdown: true,
+		JoinStarterLock:     strict && !inherited,
+		PrepareSuccessor:    prepare,
+		PreserveRunningLAN:  *independent || *desktop,
+		DesktopStart:        *desktop,
+		Predecessor:         predecessor,
+		Port:                settings.Port,
+		LAN:                 lan,
+		Spawn:               spawn,
+		StartWait:           *startWait,
+		Log:                 os.Stderr,
 	}
 	outcome, err := ensure(ctx, opts)
 	if err != nil {

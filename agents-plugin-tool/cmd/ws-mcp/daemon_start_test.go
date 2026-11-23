@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -52,6 +53,36 @@ func TestDaemonStartReplaceFlagWiring(t *testing.T) {
 	}
 }
 
+func TestDaemonStartStartsUnderLegacyLauncherLock(t *testing.T) {
+	bin := buildDashboardTestBin(t, "")
+	env, dir := dashboardTestEnv(t)
+	env = append(env, "WS_MCP_CONFIG_MANIFESTS="+writeProxyTestManifest(t, true))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(dir, "launcher-start.lock"))
+	if ok, err := lock.TryLock(); err != nil || !ok {
+		t.Fatalf("fixture launcher lock: %v, %v", ok, err)
+	}
+	defer lock.Close()
+
+	// The v0.51.1 launcher waits for daemon-start with the lock still held
+	// and passes no ownership marker.
+	ctx, cancel := context.WithTimeout(context.Background(), wsdashboard.DefaultStartWait)
+	defer cancel()
+	start := exec.CommandContext(ctx, bin, "daemon-start", "--build-time", "123")
+	start.Env = env
+	out, err := start.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"outcome":"started"`) {
+		t.Fatalf("daemon-start with legacy launcher lock: %v\n%s", err, out)
+	}
+	if ep, err := wsdashboard.ReadEndpoint(dir); err != nil {
+		t.Fatalf("read daemon endpoint: %v", err)
+	} else if _, err := wsdashboard.Health(ctx, dashboardTestClient, ep); err != nil {
+		t.Fatalf("started daemon is unhealthy: %v", err)
+	}
+}
+
 func TestDaemonStartStarterLockOwnership(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WS_CACHE_HOME", filepath.Join(root, "cache"))
@@ -72,27 +103,19 @@ func TestDaemonStartStarterLockOwnership(t *testing.T) {
 	defer lock.Close()
 
 	const marker = "WS_MCP_LAUNCHER_START_LOCK_HELD"
-	for name, value := range map[string]string{"direct": "", "inherited": "1"} {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv(marker, value)
-			daemonStartWithEnsure(nil, func(ctx context.Context, opts wsdashboard.EnsureOptions) (wsdashboard.Outcome, error) {
-				if _, present := os.LookupEnv(marker); present {
-					t.Fatal("starter marker would leak to the child")
-				}
-				ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-				defer cancel()
-				outcome, err := wsdashboard.Ensure(ctx, opts)
-				if value == "" {
-					if outcome != wsdashboard.OutcomeUnavailable || err == nil || !strings.Contains(err.Error(), "launcher start lock") {
-						t.Fatalf("direct Go entry bypassed the held lock: %s, %v", outcome, err)
-					}
-				} else if outcome != wsdashboard.OutcomeRunning || err != nil {
-					t.Fatalf("inherited Go entry tried to take the lock again: %s, %v", outcome, err)
-				}
-				return wsdashboard.OutcomeRunning, nil
-			})
-		})
-	}
+	t.Setenv(marker, "1")
+	daemonStartWithEnsure(nil, func(ctx context.Context, opts wsdashboard.EnsureOptions) (wsdashboard.Outcome, error) {
+		if _, present := os.LookupEnv(marker); present {
+			t.Fatal("starter marker would leak to the child")
+		}
+		ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		outcome, err := wsdashboard.Ensure(ctx, opts)
+		if outcome != wsdashboard.OutcomeRunning || err != nil {
+			t.Fatalf("inherited Go entry tried to take the lock again: %s, %v", outcome, err)
+		}
+		return outcome, nil
+	})
 }
 
 func TestDaemonStartStrictLifetimeFlagWiring(t *testing.T) {
@@ -103,7 +126,7 @@ func TestDaemonStartStrictLifetimeFlagWiring(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(root, "cache"))
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(root, "config"))
 	daemonStartWithEnsure([]string{"--require-independent-lifetime", "--replace"}, func(_ context.Context, opts wsdashboard.EnsureOptions) (wsdashboard.Outcome, error) {
-		if !opts.SpawnBeforeShutdown || !opts.PreserveRunningLAN || !opts.Replace {
+		if !opts.SpawnBeforeShutdown || !opts.JoinStarterLock || !opts.PreserveRunningLAN || !opts.Replace {
 			t.Fatalf("strict options = %+v", opts)
 		}
 		return wsdashboard.OutcomeRunning, nil

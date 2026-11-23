@@ -254,7 +254,7 @@ func TestEnsureElectronPreflightAndFreshHealth(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 		defer cancel()
 		opts := ensureOpts(dir, "0.48.0", func([]string) error { t.Fatal("unexpected spawn"); return nil })
-		opts.SpawnBeforeShutdown = true
+		opts.SpawnBeforeShutdown, opts.JoinStarterLock = true, true
 		outcome, err := Ensure(ctx, opts)
 		if outcome != OutcomeUnavailable || err == nil {
 			t.Fatalf("Ensure = %s, %v", outcome, err)

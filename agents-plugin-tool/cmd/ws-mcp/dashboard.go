@@ -568,6 +568,7 @@ func startDashboard(ctx context.Context, settings mcp.DashboardSettings, dir str
 		LAN:                 settings.LAN,
 		Spawn:               spawn,
 		SpawnBeforeShutdown: true,
+		JoinStarterLock:     true,
 		PrepareSuccessor:    prepare,
 		Log:                 logw,
 	})
