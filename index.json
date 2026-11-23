@@ -570,7 +570,14 @@
       "registered_at": "2026-11-23T00:31:15Z"
     },
     "261123-feat-review-sweep-advisory-cadence": {
-      "registered_at": "2026-11-23T02:51:18Z"
+      "registered_at": "2026-11-23T02:51:18Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T06:19:19Z"
+      }
     },
     "261123-feat-ws-agy-subagent-config-overrides": {
       "registered_at": "2026-11-23T06:14:58Z"
