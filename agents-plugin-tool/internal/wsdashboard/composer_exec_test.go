@@ -505,8 +505,9 @@ func TestComposerAsyncConvertedCardFinishesOnRefresh(t *testing.T) {
 	}
 	f.svc.mu.Unlock()
 	composerPost(f.d, "sub-async-0002", "!sleep 60")
-	waitCard(t, f.d, "sub-async-0002", "async")
-	// Nobody polls: the loop retires the card itself, as finished.
+	// The job is unknown to the service, so the loop may retire the card the
+	// moment it converts: the async phase is not reliably observable, only
+	// the retirement is. Nobody polls: the loop retires the card itself.
 	waitFor(t, "the pruned card retires without a poll", func() bool {
 		c := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/sub-async-0002"))
 		return c.Phase == "done" && strings.Contains(c.Error, "no longer queryable")
