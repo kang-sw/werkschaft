@@ -74,7 +74,7 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		"batchArgs":        batchArgs,
 		"argsList":         batchArgsList,
 		"toolsHasCallIDs":  toolsHasCallIDs,
-		"auditCallRows":    func(s *wslive.ToolSummary) auditCallGroup { return buildAuditCallRows(lang, s) },
+		"auditCallRows":    func(s *wslive.ToolSummary) []auditCallRow { return buildAuditCallRows(lang, s) },
 		"auditTools":       makeAuditToolsCtx,
 		"atRFC":            formatAtRFC,
 		"phaseWord":        func(phase string) string { return phaseWord(lang, phase) },
@@ -358,17 +358,10 @@ type auditCallRow struct {
 	IsSummary     bool
 }
 
-type auditCallGroup struct {
-	Visible     []auditCallRow
-	Hidden      []auditCallRow
-	HiddenCount int
-}
-
 type auditToolsCtx struct {
 	Entry string
 	AtUTC string
 	Tools *wslive.ToolSummary
-	Live  bool
 }
 
 func formatAtRFC(ms int64, rfc string) string {
@@ -381,8 +374,8 @@ func formatAtRFC(ms int64, rfc string) string {
 	return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
 }
 
-func makeAuditToolsCtx(entry string, at int64, atRFC string, tools *wslive.ToolSummary, live bool) auditToolsCtx {
-	return auditToolsCtx{Entry: entry, AtUTC: formatAtRFC(at, atRFC), Tools: tools, Live: live}
+func makeAuditToolsCtx(entry string, at int64, atRFC string, tools *wslive.ToolSummary) auditToolsCtx {
+	return auditToolsCtx{Entry: entry, AtUTC: formatAtRFC(at, atRFC), Tools: tools}
 }
 
 // toolsHasCallIDs reports whether any carried call carries an audit call ID.
@@ -401,12 +394,13 @@ func toolsHasCallIDs(s *wslive.ToolSummary) bool {
 	return false
 }
 
-const auditVisibleCallCap = 3
-
-func buildAuditCallRows(lang string, s *wslive.ToolSummary) auditCallGroup {
-	var group auditCallGroup
+// buildAuditCallRows flattens the summary into one row per call. Every row is
+// always shown; there is no group frame or fold. Rows with a call ID open the
+// per-command popup, the rest are static summary rows.
+func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
+	var rows []auditCallRow
 	if s == nil {
-		return group
+		return rows
 	}
 	for _, b := range s.Batches {
 		if len(b.CallArgs) > 0 {
@@ -428,24 +422,18 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) auditCallGroup {
 					row.Duration = batchSpanText(singleDur)
 					row.DurationTitle = wsi18n.T(lang, "batch.duration", commafy(singleDur))
 				}
-				if c.ID != "" && len(group.Visible) < auditVisibleCallCap {
-					group.Visible = append(group.Visible, row)
-				} else {
-					if c.ID == "" {
-						row.IsSummary = true
-					}
-					group.Hidden = append(group.Hidden, row)
-					group.HiddenCount++
+				if c.ID == "" {
+					row.IsSummary = true
 				}
+				rows = append(rows, row)
 			}
 			if rest := b.Calls - len(b.CallArgs); rest > 0 {
 				label := wsi18n.Plural(lang, "batch.calls", rest)
-				group.Hidden = append(group.Hidden, auditCallRow{
+				rows = append(rows, auditCallRow{
 					Name:      label,
 					ShortName: label,
 					IsSummary: true,
 				})
-				group.HiddenCount += rest
 			}
 			continue
 		}
@@ -469,23 +457,21 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) auditCallGroup {
 			} else {
 				short = short + " · " + wsi18n.Plural(lang, "batch.calls", b.Calls)
 			}
-			group.Hidden = append(group.Hidden, auditCallRow{
+			rows = append(rows, auditCallRow{
 				Name:      short,
 				ShortName: short,
 				Failed:    b.Failed > 0 && b.Failed >= b.Calls,
 				IsSummary: true,
 			})
-			group.HiddenCount += b.Calls
 		}
 	}
 	if s.BatchesOmitted > 0 {
 		label := wsi18n.T(lang, "tools.more", s.BatchesOmitted)
-		group.Hidden = append(group.Hidden, auditCallRow{
+		rows = append(rows, auditCallRow{
 			Name:      label,
 			ShortName: label,
 			IsSummary: true,
 		})
-		group.HiddenCount += s.BatchesOmitted
 	}
-	return group
+	return rows
 }

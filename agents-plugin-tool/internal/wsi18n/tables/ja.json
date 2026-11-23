@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "閉じる",
   "js.cexec.attachments": "コマンドには添付を含められません: 添付を外すか、先頭に空白を付けてメッセージとして送信してください。",
   "js.cexec.unsupported": "このデーモンではここで ! コマンドを実行できません(ws を更新するか、このマシンでダッシュボードを開いてください)。何も送信されていません。先頭に空白を付けるとメッセージとして送れます。",
-  "js.audit.calls.more": "件表示",
-  "js.audit.calls.less": "折りたたむ",
   "js.audit.window.title": "監査イベント",
   "js.audit.nav.prev": "前の呼び出し",
   "js.audit.nav.next": "次の呼び出し",

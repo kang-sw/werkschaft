@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "Chiudi",
   "js.cexec.attachments": "Un comando non porta allegati: rimuovili, oppure invia il testo come messaggio con uno spazio iniziale.",
   "js.cexec.unsupported": "Questo daemon non può eseguire comandi ! qui (aggiorna ws, o apri la dashboard su questa macchina). Non è stato inviato nulla; inizia con uno spazio per inviare il testo come messaggio.",
-  "js.audit.calls.more": "altri",
-  "js.audit.calls.less": "Mostra meno",
   "js.audit.window.title": "Evento di audit",
   "js.audit.nav.prev": "Chiamata precedente",
   "js.audit.nav.next": "Chiamata successiva",

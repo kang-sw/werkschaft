@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "关闭",
   "js.cexec.attachments": "命令不能附带附件：请移除附件，或在开头加空格后作为消息发送。",
   "js.cexec.unsupported": "此守护进程无法在此运行 ! 命令（请更新 ws，或在本机打开仪表板）。未发送任何内容；以空格开头即可作为消息发送。",
-  "js.audit.calls.more": "更多",
-  "js.audit.calls.less": "收起",
   "js.audit.window.title": "审计事件",
   "js.audit.nav.prev": "上一次调用",
   "js.audit.nav.next": "下一次调用",

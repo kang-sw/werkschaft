@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "Schließen",
   "js.cexec.attachments": "Ein Befehl trägt keine Anhänge: Entferne sie oder sende den Text mit einem führenden Leerzeichen als Nachricht.",
   "js.cexec.unsupported": "Dieser Daemon kann hier keine !-Befehle ausführen (ws aktualisieren oder das Dashboard auf diesem Rechner öffnen). Nichts wurde gesendet; mit einem Leerzeichen beginnen, um den Text als Nachricht zu senden.",
-  "js.audit.calls.more": "mehr",
-  "js.audit.calls.less": "Weniger",
   "js.audit.window.title": "Audit-Ereignis",
   "js.audit.nav.prev": "Vorheriger Aufruf",
   "js.audit.nav.next": "Nächster Aufruf",

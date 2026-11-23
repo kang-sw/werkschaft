@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "Dismiss",
   "js.cexec.attachments": "A command takes no attachments: remove them, or send the text as a message with a leading space.",
   "js.cexec.unsupported": "This daemon cannot run ! commands here (update ws, or open the dashboard on this machine). Nothing was sent; start with a space to send the text as a message.",
-  "js.audit.calls.more": "more",
-  "js.audit.calls.less": "Show fewer",
   "js.audit.window.title": "Audit event",
   "js.audit.nav.prev": "Previous call",
   "js.audit.nav.next": "Next call",

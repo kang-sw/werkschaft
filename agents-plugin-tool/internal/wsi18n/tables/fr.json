@@ -3229,8 +3229,6 @@
   "js.cexec.dismiss": "Fermer",
   "js.cexec.attachments": "Une commande ne porte pas de pièces jointes : retirez-les, ou envoyez le texte comme message avec une espace en tête.",
   "js.cexec.unsupported": "Ce démon ne peut pas exécuter de commandes ! ici (mettez ws à jour, ou ouvrez le tableau de bord sur cette machine). Rien n'a été envoyé ; commencez par une espace pour envoyer le texte comme message.",
-  "js.audit.calls.more": "de plus",
-  "js.audit.calls.less": "Réduire",
   "js.audit.window.title": "Événement d’audit",
   "js.audit.nav.prev": "Appel précédent",
   "js.audit.nav.next": "Appel suivant",

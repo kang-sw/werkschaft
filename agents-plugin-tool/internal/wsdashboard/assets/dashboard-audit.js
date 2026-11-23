@@ -49,18 +49,6 @@
 
   function auRevealCallRow(row) {
     if (!row) return;
-    var tools = row.closest(".au-tools");
-    if (tools) {
-      var fold = tools.querySelector(".au-fold");
-      var btn = tools.querySelector(".au-more");
-      if (fold && fold.hidden) {
-        fold.hidden = false;
-        if (btn) {
-          btn.setAttribute("aria-expanded", "true");
-          btn.textContent = btn.getAttribute("data-less-label") || btn.textContent;
-        }
-      }
-    }
     if (typeof row.scrollIntoView === "function") {
       try { row.scrollIntoView({ block: "nearest" }); } catch (e) {}
     }
@@ -1121,18 +1109,6 @@
   // --- Event delegation on #convo, keyboard scope & layout sync ---
   doc.addEventListener("click", function (e) {
     var t = e.target;
-    var moreBtn = t && t.closest ? t.closest(".au-more") : null;
-    if (moreBtn) {
-      var tools = moreBtn.closest(".au-tools");
-      var fold = tools ? tools.querySelector(".au-fold") : null;
-      if (fold) {
-        var open = fold.hidden;
-        fold.hidden = !open;
-        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-        moreBtn.textContent = moreBtn.getAttribute(open ? "data-less-label" : "data-more-label") || moreBtn.textContent;
-      }
-      return;
-    }
     var row = t && t.closest ? t.closest(".au-row[data-call]") : null;
     if (row && $("convo") && $("convo").contains(row)) {
       var sel = window.getSelection && window.getSelection();
