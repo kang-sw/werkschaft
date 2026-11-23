@@ -223,6 +223,12 @@ func (a *claudeAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelop
 		}
 		ev.Out = compactJSON(line)
 		return true, []wsaudit.Envelope{ev}
+	case "tool_progress":
+		ev := a.env(wsaudit.KindSystem, at)
+		ev.Subkind = "tool_progress"
+		ev.CallID = l.ToolUseID
+		ev.Out = compactJSON(line)
+		return true, []wsaudit.Envelope{ev}
 	case "result":
 		a.carry(at)
 		ev := a.env(wsaudit.KindSystem, at)

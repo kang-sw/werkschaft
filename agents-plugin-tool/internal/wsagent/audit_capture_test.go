@@ -1458,3 +1458,23 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestClaudeAuditToolProgress covers the SDKToolProgressMessage wire shape,
+// including a missing call reference so unattached progress remains foldable.
+func TestClaudeAuditToolProgress(t *testing.T) {
+	for _, callID := range []string{"toolu_abc123", ""} {
+		t.Run(callID, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"type":"tool_progress","tool_use_id":%q,"tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":5.2,"uuid":"progress-1","session_id":"cli-session"}`, callID)
+			at := time.Now()
+			recognized, mapped := newClaudeAudit("s1").mapOwn([]byte(raw), at)
+			events := wsaudit.CaptureLine(wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, BackendClaude, at, raw, recognized, mapped)
+			if !recognized || len(events) != 1 {
+				t.Fatalf("recognized=%v events=%+v", recognized, events)
+			}
+			ev := events[0]
+			if ev.Kind != wsaudit.KindSystem || ev.Subkind != "tool_progress" || ev.CallID != callID || ev.Out != raw || ev.Raw != "" {
+				t.Fatalf("progress envelope = %+v", ev)
+			}
+		})
+	}
+}
