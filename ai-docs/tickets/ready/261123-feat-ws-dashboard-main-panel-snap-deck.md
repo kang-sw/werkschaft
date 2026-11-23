@@ -175,6 +175,19 @@ Convert the Main Panel List (`⌂` / `#bcol`) from variable-height short-card st
      - Playwright test maximizing a `details.entry-panel` inside a snap slot verifying it fills the viewport unclipped by `contain: strict` (alongside maximized topic/card overlays);
      - `#bcol` drag cancels cleanly on `#bcol` drop while `#bgal` docking succeeds, `.bc-grip` is hidden in `#bcol`, and `persist()` preserves `cards[].h`/`at` unchanged.
 
+### Result (4d6cf00b0) - 2026-11-23
+
+Phase 1 implemented on `impl/develop/main-panel-snap-deck` (rebased onto `develop@31e1755b3`, commits `90d5edba2` + `4d6cf00b0`):
+
+- **Snap-deck CSS, scrollbar removal & slot containment (`dashboard-board.css`, `dashboard-board-anchor.js`):** Configured `#bcol` with `scroll-snap-type: y mandatory`, `scroll-snap-stop: normal`, and hidden outer scrollbar; gave bounded `section.topic[data-topic]:not([data-max])` and `.bcard[data-card]:not([data-max]) > .bc-in` fixed `var(--board-usable)` slot height with `scroll-snap-align: start`; added `contain: strict` / `contain: layout style` with `:not([data-max]):not(:has(details.entry-panel[data-max]))` and `:root[data-overview]` lifts; flex-filled `.bcard > .bc-in > .bc-body` inside `#bcol` while preserving `overflow: hidden` on `terminal`/`web` cards; aligned `button[data-closed-next]` (`scroll-snap-align: end`) without CSS class collision; aligned Card 0 (`[data-anchor-cap="0"]`, `scroll-margin-top: 160px`), first railed card after non-rail Slot 0 (`[data-anchor-cap="rail0"]`, `var(--board-pad-top)`), Card 1 (`[data-anchor-cap="1"]`, `24px + padTop`), and Card 2+ (`44px + padTop`) in `WsBoardAnchor`, exporting `settle`.
+- **2-level jump navigation (`stream-navigation.js`, `dashboard-frames.js`, `dashboard-composer-references.js`, `dashboard-conversation.js`, `dashboard-tracker.js`, `pill.js`, `panel-diff.js`, `card-find.js`):** Snapped outer `#bcol` via `WsBoardAnchor.select(card, ...)` before inner topic/panel scrolling across `wbHistory.navigate`/`loadTarget` and direct callers (`.oq-pill`, `effectJump`, `palettePick`, `focusTopicNote`, `panel-diff`, `card-find`).
+- **Narrow end-of-deck `Gate`, Hero restore & surgical drag/grip retirement (`cards.js`, `dashboard-board.css`):** Engaged narrow `Gate` forward flip only at the bottom boundary of the last visible `anchorCards()` panel (using `[data-state-filtered]` and short-circuiting non-last panels before layout reads) while preserving native inner scrolling, top micro-bounce, `OWN` widget wheel handling (`.bc-hd`/`.tbar`/rail/`doc-frame` chaining exits), wide 4-col independence, Hero Panel restore on `away(false)`, retired `#bcol` `.bdrop` flow-reorder targets in `over()`/`drop()` while preserving `cards[].h`/`at` (`T0`), and hid `#bcol .bc-grip`.
+- **Verification (rebased on `develop@31e1755b3`, after final edit):**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py`: clean.
+  - `node --test` (`board-anchor.test.cjs`, `gallery-wheel.test.cjs`, `board-navigation.test.cjs`, `gallery-model.test.cjs`, `board-scroll-p1-fixes.browser.cjs`): 76/76 PASS (including non-rail Slot 0 -> `rail0` transition, `details.entry-panel[data-max]` unclipped viewport rect, `web` `overflow: hidden`).
+  - `go test ./internal/wswhiteboard/...`: PASS.
+  - `go test ./internal/wsdashboard` targeted unit + Playwright suites (`TestBoardHistoryHooksSurroundSSESwap`, `TestBoardFrameHeightsBatch`, `TestBoardTopicUnits*`, `TestBoardOverviewShortcut*`, `TestBoardChatSmallUX*`, `TestBoardToolbarCollapse*`, `TestBoardNoteTyping*`, `TestBoardPanelFrameReuseBrowser`, `TestBoardStateFilterBrowser`, `TestGalleryBrowser` incl. narrow `OWN` last-panel exit & `overflow: hidden`, `TestCSSClassesDoNotCollideAcrossModules`): PASS.
+
 ### Phase 2: Right-Side Outer Circle-Chain Dial (`· • ○ ● ○ • ·`)
 
 Add a compact spatial position indicator and rapid scrubber along `#bcol`'s right edge.
