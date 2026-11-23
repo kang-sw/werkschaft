@@ -47,7 +47,11 @@ var readOnlyGitSubcommands = map[string]bool{
 // gitRefusedOptions are long options that write a file or run a helper;
 // git accepts any unambiguous prefix of a long option, so a prefix of one
 // of these names (or an extension of one) is refused as well.
-var gitRefusedOptions = []string{"output", "ext-diff", "open-files-in-pager", "textconv", "filters"}
+var gitRefusedOptions = []string{"output", "ext-diff", "open-files-in-pager", "textconv", "filters", "show-signature"}
+
+var gitPrettySignature = regexp.MustCompile(`%[+ -]?G`)
+var gitRefSignature = regexp.MustCompile(`%\(\*?signature[:)]`)
+var gitSortSignature = regexp.MustCompile(`^-?(v:|version:)?\*?signature(:|$)`)
 
 var readOnlySedScript = regexp.MustCompile(`^(\d+|\$)(,(\d+|\$))?p$`)
 
@@ -110,8 +114,8 @@ func checkReadOnlyArgv(argv []string) error {
 		}
 	case "tree":
 		for _, a := range args {
-			if shortHas(a, "o") || longMatches(a, "output") {
-				return refuse("tree %s writes a file", a)
+			if shortHas(a, "oR") || longMatches(a, "output") {
+				return refuse("tree %s writes files or runs a program", a)
 			}
 		}
 	case "file":
@@ -119,10 +123,19 @@ func checkReadOnlyArgv(argv []string) error {
 			if shortHas(a, "Cp") || longMatches(a, "compile", "preserve-date") {
 				return refuse("file %s writes a file or file metadata", a)
 			}
+			if shortHas(a, "zZ") || longMatches(a, "uncompress", "uncompress-noreport") {
+				return refuse("file %s can run a decompression program", a)
+			}
+		}
+	case "diff":
+		for _, a := range args {
+			if shortHas(a, "l") || longMatches(a, "paginate") {
+				return refuse("diff %s runs a pagination program", a)
+			}
 		}
 	case "rg":
 		for _, a := range args {
-			if shortHas(a, "z") || longExact(a, "pre", "pre-glob", "search-zip") {
+			if shortHas(a, "z") || longExact(a, "pre", "pre-glob", "search-zip", "hostname-bin") {
 				return refuse("rg %s runs a program", a)
 			}
 		}
@@ -238,15 +251,30 @@ func checkGit(args []string) error {
 		if sub == "describe" && longMatches(a, "dirty", "broken") {
 			return refuse("git describe %s refreshes the index", a)
 		}
-		if n := longName(a); n != "" && strings.HasPrefix("diff-merges", n) {
-			value, hasValue := "", strings.Contains(a, "=")
-			if hasValue {
-				_, value, _ = strings.Cut(a, "=")
-			} else if j+1 < len(rest) {
-				value = rest[j+1]
+		n := longName(a)
+		if n == "" {
+			continue
+		}
+		_, value, hasValue := strings.Cut(a, "=")
+		if !hasValue && j+1 < len(rest) {
+			value = rest[j+1]
+		}
+		if strings.HasPrefix("diff-merges", n) && (value == "r" || (value != "" && strings.HasPrefix("remerge", value))) {
+			return refuse("git %s %s writes objects into the repository", sub, a)
+		}
+		if strings.HasPrefix("submodule", n) && hasValue && value == "diff" {
+			return refuse("git %s %s can run helpers during an inline submodule diff", sub, a)
+		}
+		// The pretty and ref format languages can start a signature verifier
+		// even without --show-signature. Check both inline and separate values.
+		switch sub {
+		case "log", "show", "rev-list", "shortlog":
+			if (strings.HasPrefix("format", n) || strings.HasPrefix("pretty", n) || (sub == "shortlog" && strings.HasPrefix("group", n))) && gitPrettySignature.MatchString(value) {
+				return refuse("git %s signature formats run a verifier", sub)
 			}
-			if value == "r" || (value != "" && strings.HasPrefix("remerge", value)) {
-				return refuse("git %s %s writes objects into the repository", sub, a)
+		case "for-each-ref":
+			if (strings.HasPrefix("format", n) && gitRefSignature.MatchString(value)) || (strings.HasPrefix("sort", n) && gitSortSignature.MatchString(value)) {
+				return refuse("git %s signature fields run a verifier", sub)
 			}
 		}
 	}
@@ -549,7 +577,7 @@ func ReadOnlyShellLaunch(owner, tool, root, cwdArg, line string, environ []strin
 	if base := strings.ToLower(filepath.Base(shellArgv[0])); strings.HasPrefix(base, "bash") {
 		shellArgv = append([]string{shellArgv[0], "--noprofile", "--norc"}, shellArgv[1:]...)
 	}
-	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: shellArgv, Display: line, Command: line, Shell: shellArgv[0]}, nil
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, ReadOnly: true, Environ: env, Argv: shellArgv, Display: line, Command: line, Shell: shellArgv[0]}, nil
 }
 
 // ReadOnlyArgvLaunch is the exec.run launch of a read-only worker: argv's
@@ -568,5 +596,5 @@ func ReadOnlyArgvLaunch(owner, tool, root, cwd string, argv []string, environ []
 		return HostedLaunch{}, err
 	}
 	run := append([]string{bin}, argv[1:]...)
-	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: run}, nil
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, ReadOnly: true, Environ: env, Argv: run}, nil
 }

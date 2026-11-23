@@ -3,6 +3,7 @@
 package execjob
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -265,6 +266,12 @@ func TestFenceMatchesAJobBelowATrailingSpaceWorktree(t *testing.T) {
 	realRoot, realCwd, err := admittedPlaces(other, into)
 	if err != nil || realCwd != sub {
 		t.Fatalf("admittedPlaces(other, junction to %q) = %q, %q, %v, want it admitted", sub, realRoot, realCwd, err)
+	}
+	fx := newHostedFixture(t, 0)
+	_, err = fx.launch(context.Background(), nil, HostedLaunch{Root: other, Cwd: into, ReadOnly: true})
+	var refusal *ErrReadOnlyLaunch
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "outside the worktree root") {
+		t.Fatalf("read-only launch through outside junction: %v, want a read-only refusal", err)
 	}
 	if !placesIn(rootForms(checkout), []string{realRoot, realCwd}) {
 		t.Fatalf("a job at %q is outside the forms %q of the worktree it runs in", realCwd, rootForms(checkout))

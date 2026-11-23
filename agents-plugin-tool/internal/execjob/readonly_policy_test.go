@@ -134,10 +134,72 @@ func TestReadOnlyShellReserialization(t *testing.T) {
 	}
 }
 
+func TestReadOnlyExternalHelperOptions(t *testing.T) {
+	for _, tc := range []struct {
+		argv    []string
+		refused bool
+	}{
+		{[]string{"rg", "--hostname-bin", "helper", "pattern"}, true},
+		{[]string{"rg", "--hostname-bin=helper", "pattern"}, true},
+		{[]string{"rg", "--pre", "helper", "pattern"}, true},
+		{[]string{"rg", "--pre=helper", "pattern"}, true},
+		{[]string{"rg", "--pre-glob", "*.txt", "pattern"}, true},
+		{[]string{"rg", "--pre-glob=*.txt", "pattern"}, true},
+		{[]string{"rg", "-z", "pattern"}, true},
+		{[]string{"rg", "-nz", "pattern"}, true},
+		{[]string{"rg", "-zn", "pattern"}, true},
+		{[]string{"rg", "--search-zip", "pattern"}, true},
+		{[]string{"rg", "--search-zip=true", "pattern"}, true},
+		{[]string{"rg", "--no-config", "--no-pre", "--no-search-zip", "-n", "pattern"}, false},
+		{[]string{"diff", "-l", "old", "new"}, true},
+		{[]string{"diff", "-ul", "old", "new"}, true},
+		{[]string{"diff", "--paginate", "old", "new"}, true},
+		{[]string{"diff", "--pagin", "old", "new"}, true},
+		{[]string{"diff", "-u", "old", "new"}, false},
+		{[]string{"file", "-z", "file.txt.gz"}, true},
+		{[]string{"file", "-Z", "file.txt.gz"}, true},
+		{[]string{"file", "-bSz", "file.txt.gz"}, true},
+		{[]string{"file", "--uncompress", "file.txt.gz"}, true},
+		{[]string{"file", "--uncompress-noreport", "file.txt.gz"}, true},
+		{[]string{"file", "--uncompress-norep", "file.txt.gz"}, true},
+		{[]string{"file", "-b", "file.txt.gz"}, false},
+		{[]string{"tree", "-R", "."}, true},
+		{[]string{"tree", "-aR", "."}, true},
+		{[]string{"tree", "-L1R", "."}, true},
+		{[]string{"tree", "-L1", "."}, false},
+		{[]string{"git", "log", "--show-signature"}, true},
+		{[]string{"git", "show", "--show-signat"}, true},
+		{[]string{"git", "log", "--pretty=format:%GG"}, true},
+		{[]string{"git", "show", "--format=%+GS"}, true},
+		{[]string{"git", "rev-list", "--format=%-GK", "HEAD"}, true},
+		{[]string{"git", "shortlog", "--group=format:% G?", "HEAD"}, true},
+		{[]string{"git", "for-each-ref", "--format=%(signature)"}, true},
+		{[]string{"git", "for-each-ref", "--format", "%(*signature:grade)"}, true},
+		{[]string{"git", "for-each-ref", "--sort=signature:grade"}, true},
+		{[]string{"git", "for-each-ref", "--sort", "-version:*signature"}, true},
+		{[]string{"git", "diff", "--submodule=diff"}, true},
+		{[]string{"git", "diff", "--submod=diff"}, true},
+		{[]string{"git", "diff", "--submodule=log"}, false},
+		{[]string{"git", "log", "--no-show-signature", "--format=%h %s"}, false},
+		{[]string{"git", "log", "--", "literal%GG"}, false},
+		{[]string{"git", "shortlog", "--group=format:%ae", "HEAD"}, false},
+		{[]string{"git", "for-each-ref", "--sort=-version:refname", "--format=%(refname:short)"}, false},
+	} {
+		err := checkReadOnlyArgv(tc.argv)
+		if tc.refused {
+			if _, ok := err.(*ErrReadOnlyLaunch); !ok {
+				t.Errorf("%q: got %v, want a read-only refusal", tc.argv, err)
+			}
+		} else if err != nil {
+			t.Errorf("%q: got %v, want read-only admission", tc.argv, err)
+		}
+	}
+}
+
 func TestReadOnlyEnvironmentIsAllowlisted(t *testing.T) {
-	in := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "BASH_ENV=/x", "ENV=/x", "GIT_EXTERNAL_DIFF=x", "GIT_PAGER=less", "PAGER=less", "LD_PRELOAD=x", "DYLD_INSERT_LIBRARIES=x", "WS_MCP_SESSION_TOKEN=t", "FOO=1", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=sh", "GIT_CONFIG_GLOBAL=/x"}
+	in := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "BASH_ENV=/x", "ENV=/x", "GIT_EXTERNAL_DIFF=x", "GIT_PAGER=less", "PAGER=less", "LD_PRELOAD=x", "DYLD_INSERT_LIBRARIES=x", "WS_MCP_SESSION_TOKEN=t", "FOO=1", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=sh", "GIT_CONFIG_GLOBAL=/x", "RIPGREP_CONFIG_PATH=/x", "ripgrep_config_path=/y"}
 	got := strings.Join(readOnlyEnvironment(in), "\n")
-	for _, bad := range []string{"BASH_ENV", "ENV=", "GIT_EXTERNAL_DIFF", "less", "LD_PRELOAD", "DYLD_", "WS_MCP", "FOO", "core.pager", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_GLOBAL"} {
+	for _, bad := range []string{"BASH_ENV", "ENV=", "GIT_EXTERNAL_DIFF", "less", "LD_PRELOAD", "DYLD_", "WS_MCP", "FOO", "core.pager", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_GLOBAL", "RIPGREP_CONFIG_PATH", "ripgrep_config_path"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("environment keeps %s:\n%s", bad, got)
 		}
