@@ -63,7 +63,7 @@ function returningBoard() {
     function clearTimeout(id) { timers.delete(id); }
     var shHidden = false, doc = { hidden: false, scrollingElement: null }, scroller = { scrollTop: 240 };
     var anchor = 360, captures = 0, corrections = 0, morphs = 0;
-    var el = { firstElementChild: {}, children: [], getAttribute: function () { return this.hash; }, setAttribute: function (k, v) { this.hash = v; } };
+    var el = { firstElementChild: {}, children: [], contains: function (n) { return n === this || n === this.firstElementChild; }, getAttribute: function () { return this.hash; }, setAttribute: function (k, v) { this.hash = v; } };
     function region(name) { return name === 'board' ? el : null; }
     function $(id) { return id === 'bcol' ? scroller : null; }
     function boardBoxes() { return [el]; }

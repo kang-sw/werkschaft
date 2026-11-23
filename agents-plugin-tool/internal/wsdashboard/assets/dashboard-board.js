@@ -865,10 +865,11 @@
     if (!w || !w.keep) return null;
     var cur = anchorCurrent(), main = region("board");
     var list = nodes || boardBoxes().filter(function (b) { return b !== main; }).map(function (b) { return b.firstElementChild || b; })
-      .concat(cur ? [cur.firstElementChild || cur] : []);
+      .concat(cur ? [cur.firstElementChild || cur] : main && !nodes && main.firstElementChild ? [main.firstElementChild] : []);
+    var fallback = !cur && main && !nodes ? main.firstElementChild || null : null;
     var lookup = w.snapshot && w.snapshot();
     list.forEach(function (n) {
-      if (main && main.contains(n) && anchorOwner(n) !== cur) return;
+      if (main && main.contains(n) && n !== fallback && anchorOwner(n) !== cur) return;
       if (!(lookup && lookup.rendered ? lookup.rendered(n) : !w.rendered || w.rendered(n))) return;
       var s = lookup ? lookup.scroller(n) : w.keep(n, { capture: false }).scroller;
       resolved.set(n, s);

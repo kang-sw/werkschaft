@@ -366,3 +366,35 @@ test('counts: board updates read nothing outside the current card', () => {
   const head = ['update', 'outerRect', 'outerTop', 'chkVis', 'cmpStyle', 'otherRect', 'curRect', 'keeps', 'rendered', 'domOps'];
   console.log('board anchor counts (40 topics + 3 cards, current = T20)\n' + [head].concat(rows).map(r => r.map((x, i) => String(x).padEnd(i ? 10 : 32)).join('')).join('\n'));
 });
+
+test('step past the last card scrolls #bcol to its end, key unchanged', () => {
+  const w = world([T('A'), T('B')]);
+  w.select('t:B');
+  w.bcol.scrollHeight = 1234; let to = null; w.bcol.scrollTo = o => { to = o; };
+  assert.equal(w.c.anchorStep(1), false); assert.equal(w.cur(), 't:B');
+  assert.equal(to.top, 1234, 'the tail (Show more) is reachable');
+  to = null; w.select('t:A');
+  assert.equal(w.c.anchorStep(-1), false); assert.equal(to, null, 'past the first card nothing scrolls');
+});
+
+test('native scroll end re-selects the nearest card', () => {
+  const w = world([T('A'), T('B'), T('C')]);
+  w.select('t:A');
+  const tops = { 't:A': -700, 't:B': 40, 't:C': 700 };
+  Object.keys(tops).forEach(k => { w.node(k).getBoundingClientRect = () => ({ top: tops[k] }); });
+  w.bcol.getBoundingClientRect = () => ({ top: 0 });
+  w.c.anchorScrollEnd({ target: w.board });
+  assert.equal(w.cur(), 't:A', 'other targets are ignored');
+  w.c.anchorScrollEnd({ target: w.bcol });
+  assert.equal(w.cur(), 't:B'); assert.ok(w.node('t:B').hasAttribute('data-current')); assert.ok(!w.node('t:A').hasAttribute('data-current'));
+});
+
+test('boardKeep without a current card keeps the main box first child; with one it does not', () => {
+  const w = world([T('A'), T('B')], { history: true });
+  assert.equal(w.cur(), null);
+  w.c.boardKeep();
+  assert.deepEqual(w.C.d.keep, [w.board.firstElementChild], 'fallback keeps the main box first child');
+  w.C.reset(); w.select('t:B');
+  w.c.boardKeep();
+  assert.ok(w.C.d.keep.length === 1 && w.node('t:B').contains(w.C.d.keep[0]), 'only the current card inside the main board');
+});
