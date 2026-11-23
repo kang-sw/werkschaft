@@ -484,6 +484,7 @@
     q(".gmenu [data-input]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-input") === inputMode)); });
     var t = $("ctext");
     if (t) { t.placeholder = HINT[inputMode]; growCtext(); }
+    if (typeof bangHistSyncMode === "function") bangHistSyncMode();
   }
   function setTab(t) {
     grid.setAttribute("data-tab", t);
