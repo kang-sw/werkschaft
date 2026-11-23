@@ -188,6 +188,11 @@ Phase 1 implemented on `impl/develop/main-panel-snap-deck` (rebased onto `develo
   - `go test ./internal/wswhiteboard/...`: PASS.
   - `go test ./internal/wsdashboard` targeted unit + Playwright suites (`TestBoardHistoryHooksSurroundSSESwap`, `TestBoardFrameHeightsBatch`, `TestBoardTopicUnits*`, `TestBoardOverviewShortcut*`, `TestBoardChatSmallUX*`, `TestBoardToolbarCollapse*`, `TestBoardNoteTyping*`, `TestBoardPanelFrameReuseBrowser`, `TestBoardStateFilterBrowser`, `TestGalleryBrowser` incl. narrow `OWN` last-panel exit & `overflow: hidden`, `TestCSSClassesDoNotCollideAcrossModules`): PASS.
 
+#### Edition (5d29126ce) - 2026-11-24
+
+- Fixed `.wb-rail-ghost` stranding over `.tsub` (with the real `.tbar` stuck at `opacity: 0`) caught during Phase 1 Chromium screenshot review when mandatory scroll-snap or toolbar-float `anchorRealign()` shifted `#bcol` immediately after a `cap -> bar` morph began (`agents-plugin-tool/internal/wswhiteboard/assets/rail.js`): tracked `{ els, into, isBarTarget, toTop, hide }` in `ghosts[edge]`, cancelled `g.hide` in `dropGhost()`, called `dropGhost()` on `reflow()`, and detected stale `cap -> bar` targets (`> 2px` shift or disconnected) in `run()`'s read phase before dropping them in `draw()`'s write phase (zero steady-state cost when `ghosts[e]` is `null` and preserving `TestRailLayoutReadsBeforeWrites`).
+- Added `TestRailGhostDropsOnReflowAndTargetMove` (`agents-plugin-tool/internal/wswhiteboard/rail_motion_test.go`) and re-verified `generate-package-assets.py`, `go test ./internal/wswhiteboard/...`, and `go test ./internal/wsdashboard` Playwright acceptance suites (`TestBoardPanelFrameReuseBrowser`, `TestBoardStateFilterBrowser`, `TestGalleryBrowser`, `TestCSSClassesDoNotCollideAcrossModules`, `TestBoardOverviewShortcut*`): all PASS.
+
 ### Phase 2: Right-Side Outer Circle-Chain Dial (`· • ○ ● ○ • ·`)
 
 Add a compact spatial position indicator and rapid scrubber along `#bcol`'s right edge.
