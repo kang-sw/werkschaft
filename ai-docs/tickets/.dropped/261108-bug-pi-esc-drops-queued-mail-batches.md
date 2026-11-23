@@ -1,5 +1,6 @@
 ---
 title: "Pi에서 Esc 입력 시 대기 중인 mailbox 푸시 배치가 유실되는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi Esc drops queued mailbox push batches
@@ -24,3 +25,8 @@ Track push batches the run has not taken and re-deliver them after an abort
 (for example as `deliverAs: "nextTurn"`), or return them to the mailbox. The
 interrupt ticket's Pi decision (board (269)) may build the same tracking;
 share it if so.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

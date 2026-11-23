@@ -2,6 +2,7 @@
 title: "Windows에서 python3가 Microsoft Store 스텁일 때 릴리스 ws-on-Pi 실행 실패"
 related:
   261008-bug-windows-mailbox-wait-outlives-pi-host: discovered during its native-Windows probe
+dropped: 2026-11-24
 ---
 
 # Release ws-on-Pi fails on Windows when python3 is the Microsoft Store stub
@@ -38,3 +39,8 @@ run release ws-on-Pi at all.
   would orphan `python.exe` as well as ws-mcp under the current kill path, so
   this choice interacts with 261008-bug-windows-mailbox-wait-outlives-pi-host.
 - Whether the Claude/Codex `.mcp.json` launch shape has the same exposure.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

@@ -1,5 +1,6 @@
 ---
 title: "미러링 문서에 세 번째 커밋 미러로 agents-plugin-pi 명시"
+dropped: 2026-11-24
 ---
 
 # Name agents-plugin-pi as the third committed mirror in mirroring docs
@@ -48,3 +49,8 @@ byte-identical mirror (guarded by `TestPiMirrorUpToDate`, resynced by
 short note in `wsflow-mirroring.md` (or a sibling manual) that the rsrc mirror is
 three-way, not two-way. Keep it descriptive of existing enforcement; introduce no
 new per-edit obligation beyond what the guard test already imposes.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

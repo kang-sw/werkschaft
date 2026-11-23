@@ -1,5 +1,6 @@
 ---
 title: "hosted Pi 세션 키가 획득한 worktree에서의 lead 컨텍스트 설정을 막는 문제"
+dropped: 2026-11-24
 ---
 
 # Hosted Pi session key prevents lead context setup in an acquired worktree
@@ -38,3 +39,8 @@ covers lead-owned review and promotion in another worktree. If one exists,
 correct its discoverability; otherwise return a minimal proposal for approval.
 Include regression coverage for original-root identity preservation and correct
 cross-root authority, without silently rebinding the primary session.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

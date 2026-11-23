@@ -1,5 +1,6 @@
 ---
 title: "Pi 소스 트리 테스트가 릴리스 ws-mcp를 가져와 runtime.json 도구 추가 시 실제 자식 테스트가 깨지는 문제"
+dropped: 2026-11-24
 ---
 
 ## Observation (2026-11-07, dogfood)
@@ -32,3 +33,8 @@ launcher build from source under test (a test-only local-devenv seam), have the
 Pi test harness build and inject a matching runtime, or accept a dev-suffixed
 server version when the contract tools match. Also note the stale
 `captured tool set exactly matches the bundled 65-tool contract` check (now 70).
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

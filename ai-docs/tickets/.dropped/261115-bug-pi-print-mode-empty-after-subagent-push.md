@@ -1,5 +1,6 @@
 ---
 title: "최종 응답 이후 ws-spawned 자식이 종료될 때 pi print 모드가 아무것도 출력하지 않는 문제"
+dropped: 2026-11-24
 ---
 
 # pi -p prints nothing when a ws-spawned explorer settles after the final answer
@@ -74,3 +75,8 @@ aborted ("This operation was aborted", `agent_settled` with
 exited with no final message. Workaround in use: exclude `ws-compact` from
 headless runs (`--exclude-tools`).
 
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

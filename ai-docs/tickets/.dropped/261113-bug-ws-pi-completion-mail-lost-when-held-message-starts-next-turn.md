@@ -1,5 +1,6 @@
 ---
 title: "대기 메시지가 다음 턴을 시작할 때 Pi 완료 메일이 유실되는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi completion mail lost when a held message starts the next turn
@@ -46,3 +47,8 @@ Add a regression test for "steer arrives after the last tool boundary".
 - Was the mail dropped, overwritten (same mail key per subagent), or never
   produced?
 - Does the daemon swap matter, or is the held `pi.send` the only trigger?
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

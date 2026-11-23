@@ -2,6 +2,7 @@
 title: "pi mailbox waiter epoch-race 가드에 회귀 테스트 누락 (수명주기 하네스 부재)"
 related:
   260917-feat-ws-pi-mailbox-waiter-slug-wake: origin — the guard this ticket wants to test
+dropped: 2026-11-24
 ---
 
 # pi mailbox waiter epoch-race guard has no regression test (lifecycle harness missing)
@@ -53,3 +54,8 @@ was recorded as not performed.
   built independently in `cmd/ws-mcp/mailbox.go` and `internal/mcp/playbook_tools.go`
   with no shared helper; both are test-covered but could drift. A future
   consolidation into `internal/wsmailbox` would remove the hand-sync.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

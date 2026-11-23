@@ -2,6 +2,7 @@
 title: "릴리스 버전 상승 시 네이티브 Pi 페이로드가 구버전으로 남고 프로듀서가 로케일에 민감한 문제"
 related:
   261114-bug-ws-installed-plugin-missing-native-pi-payload: "closed packaging prerequisite; Forward in 44a8688cd requires this release-flow follow-up"
+dropped: 2026-11-24
 ---
 
 # Release bumps stale the native Pi payload and its producer is locale-sensitive
@@ -71,3 +72,8 @@ Verify version-only bumps, real source/dependency changes, CP949 versus UTF-8,
 missing esbuild, and package-only ws/wsflow freshness without a downstream npm
 requirement. Record exact before/after checks during authorized implementation.
 No builds, tests or payload generation are performed by this capture.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

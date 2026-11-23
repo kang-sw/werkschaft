@@ -1,5 +1,6 @@
 ---
 title: "Pi wait: 제한된 타임아웃이 간헐적으로 전송 계층 스타일의 context-canceled 오류를 반환하는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi wait: bounded timeout sometimes returns a transport-style context-canceled error
@@ -34,3 +35,8 @@ not hide genuine connectivity failures.
 Investigate the wait endpoint/client deadline interaction and add a focused
 regression distinguishing timeout, caller cancellation and unreachable daemon.
 This idea grants no authority to restart or replace a shared daemon.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

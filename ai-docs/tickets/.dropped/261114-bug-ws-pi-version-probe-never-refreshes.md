@@ -2,6 +2,7 @@
 title: "데몬이 런처의 PATH를 상속하고 프로세스당 한 번만 Pi를 프로브해 pi.spawn이 구버전 Pi로 거부되는 문제"
 related:
   261114-bug-ws-shared-daemon-restarts-without-a-swap: "the unannounced daemon replacement that carried the npm PATH in; its Evidence section has the process chain"
+dropped: 2026-11-24
 ---
 
 # pi.spawn refuses with a stale Pi version
@@ -42,3 +43,8 @@ Evidence (ps, VERIFIED):
      re-probe once before failing, or the cache could expire.
 - A fix would touch daemon start or launcher env handling, and the Pi probe.
   Compatibility is likely T0 (behaviour only).
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

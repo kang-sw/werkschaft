@@ -3,6 +3,7 @@ title: "hosted Pi EXEC이 사설 CLI 브리지 없이는 run-worker 라우팅을
 related:
   261114-bug-design-review-requires-unavailable-researcher-spawn: "related missing-delegation capability, but reviewer-depth admission differs from this peer-lead incident"
   261115-bug-ws-pi-bootstrap-elides-undelivered-manual: "inspect native-versus-fallback capabilities without assuming the same cause"
+dropped: 2026-11-24
 ---
 
 # Hosted Pi EXEC cannot follow run-worker routing without a private CLI bridge
@@ -62,3 +63,8 @@ admission or routing without weakening authority/depth ceilings. Future isolated
 verification covers root versus peer lead, native versus fallback extension,
 missing spawn, rejected escalation, key binding and bounded worker completion.
 No worker, bridge, test or executable probe is launched by this docs capture.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

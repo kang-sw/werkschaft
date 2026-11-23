@@ -1,5 +1,6 @@
 ---
 title: "종료된 Pi executor가 소유한 세션 홈을 사용할 수 없어 재개할 수 없는 문제"
+dropped: 2026-11-24
 ---
 
 # Settled Pi executor cannot resume because its owned session home is unavailable
@@ -61,3 +62,8 @@ EXEC 1 instead successfully sent command-text preparation to the same retained i
 ### Phase 1: Diagnose owned-home lifetime after normal settlement
 
 Trace the settled executor's retained registry and owned session-home lifecycle. Determine whether cleanup, relocation, ownership validation, or recovery caused the refusal. Define the smallest repair and a regression test for normal settle, park, and same-agent continuation before implementation approval.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

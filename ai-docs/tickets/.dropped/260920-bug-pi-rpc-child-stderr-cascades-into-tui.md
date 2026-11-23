@@ -3,6 +3,7 @@ title: "중첩 Pi RPC 자식 stderr가 프레이밍 없이 부모 TUI로 전파�
 related:
   260920-bug-pi-mailbox-wait-stderr-leaks-into-tui: same user-visible terminal contamination through a different producer and routing path
   260920-bug-pi-concurrent-skill-regeneration-race: observed native crash whose raw stderr exposed this transport behavior
+dropped: 2026-11-24
 ---
 
 # Nested Pi RPC child stderr cascades unframed into the parent TUI
@@ -47,3 +48,8 @@ Verification must cover direct-child and grandchild stderr, prove that each
 diagnostic is surfaced at most once with origin context, preserve JSONL stdout
 integrity, and demonstrate that native crash output no longer appears as raw TUI
 text.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

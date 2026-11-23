@@ -2,6 +2,7 @@
 title: "agents-plugin-pi TS 테스트 스위트가 릴리스 CI 밖에 있어 계약 테스트 부식이 감지되지 않는 문제"
 related:
   260915-feat-ws-rationale-query-and-prior-decisions: the tool addition that pushed the stale bridge.test.ts contract from 56 to 57
+dropped: 2026-11-24
 ---
 
 # agents-plugin-pi TS suite is outside release CI, so its contract tests rot unnoticed
@@ -66,3 +67,8 @@ setting the rot aside.
 ## Status (2026-11-08)
 
 The `bridge.test.ts` tool-count drift (65 vs 72 in `runtime.json`) is fixed: the hard-coded count is gone and the snapshot carries the missing tools. CI wiring for the pi suite and the environment-only `web-startup` test thread remain open.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

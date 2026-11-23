@@ -1,5 +1,6 @@
 ---
 title: "Pi 도구 호출의 실행 시간 제한 및 하위 프로세스 트리 정리 필요"
+dropped: 2026-11-24
 ---
 
 # Pi tool calls need bounded execution and subprocess-tree cleanup
@@ -51,3 +52,8 @@ neither the direct process nor its descendants remain. Cover explicit agent/tool
 cancellation through the same cleanup boundary and retain ordinary unbounded
 behavior when the caller does not request a timeout, unless later compatibility
 evidence settles a safe default.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

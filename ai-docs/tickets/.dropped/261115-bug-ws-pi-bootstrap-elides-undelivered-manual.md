@@ -1,5 +1,6 @@
 ---
 title: "Pi 부트스트랩이 전달되지 않은 workflow manual을 생략할 수 있는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi bootstrap and manual-elision readiness
@@ -46,3 +47,8 @@ These are static source observations, not executed bootstrap/fallback acceptance
 Implement the confirmed readiness invariant using the actual native bootstrap and inherited-prompt paths, then make MCP-only degradation visible without deleting the fallback or pretending it provides native capabilities. Settle exact mechanism/status presentation and actual compatibility effects before ready promotion. Preserve role gating, hosted identity adoption, immutable inherited prompts and full manual recovery on uncertain readiness.
 
 Verification: isolated fixtures for full success, each independent thrown/error/empty snapshot outcome, both failures, fresh lead versus valid inherited fork, worker/explorer exclusion and later manual reads. Assert that no result says the manual is in the system prompt when absent, and that already-present instructions still support safe elision/dedup without losing mutable state. Cover missing-extension fallback status and retained key/MCP access. Separately retain the report's successful native samples and inferred defect; no live reproduction or equivalent-Claude claim follows from fixtures. Account-backed/live acceptance and daemon delivery require separate authorization and exact source/served pins.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

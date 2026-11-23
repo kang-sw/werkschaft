@@ -1,5 +1,6 @@
 ---
 title: "한국어 설정 상태에서 에이전트 배치 요약이 일본어로 출력되는 현상 조사"
+dropped: 2026-11-24
 ---
 
 # Investigate Japanese agent batch summaries with Korean language configured
@@ -17,3 +18,8 @@ Follow-up: prompt hardening was merged to `develop` in `3aee21d69` (implementati
 ### Phase 1: Establish the language-drift cause
 
 Unsettled idea: trace the effective language and request construction for batch summaries, distinguish generated text from fallback text, and obtain a minimal live reproduction before settling any implementation change. Check `agents-plugin-pi/src/batch-summary.ts` and its owner-lead wiring in `src/index.ts`; compare with display-summary language/style handling. Verification and implementation scope remain to be settled before promotion.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

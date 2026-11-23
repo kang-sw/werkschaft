@@ -1,5 +1,6 @@
 ---
 title: "Pi fork 계보가 revive key 인계 후에도 부트스트랩 키를 유지하는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi fork lineage keeps the bootstrap key after revive adoption
@@ -34,3 +35,8 @@ Likely pass `registerLeadBootstrap` the same getter over
 `handle.defaultSessionKeyRef`, and test that a fork after adoption carries
 the adopted key. Check whether an already-captured prompt from before the
 adoption should be re-keyed or left as recorded.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

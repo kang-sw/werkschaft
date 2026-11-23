@@ -1,5 +1,6 @@
 ---
 title: "디스패치 전에 Pi 리뷰어 spawn 쓰기 범위 요구 사항 노출"
+dropped: 2026-11-24
 ---
 
 # Expose the Pi reviewer spawn write-scope requirement before dispatch
@@ -23,3 +24,8 @@ The refused calls returned no agent ID. Reserving one report path per reviewer w
 Verify the role-specific enforcement and relevant tool schema, lead-review playbook, and tests. Make the required single report-path allocation and file grant discoverable before a reviewer spawn. Preserve read-only source access and existing permission checks. Add focused contract coverage for successful bounded dispatch and actionable refusal of missing or multiple grants. Changes to shipped workflow guidance require the applicable authoring/boundary manuals and approval rules.
 
 Verification boundary: test the dispatch contract without building or swapping the shared daemon. Do not treat the sweep's successful retry as implementation acceptance.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

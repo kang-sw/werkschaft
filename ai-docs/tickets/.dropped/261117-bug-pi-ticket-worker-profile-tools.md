@@ -7,6 +7,7 @@ related:
   261030-bug-workflow-manual-sentinel-mints-lead-key-for-subagents: origin of the workflow_manual profile bar
   261116-feat-ws-subagent-worktree-lease: landing-order; edits the same builtin.go profile lists and fixtures
   261116-feat-orchestration-profile-foundation: same track; changes workflow_manual file selection by profile
+dropped: 2026-11-24
 ---
 
 # Pi ticket worker가 ticket-worker playbook 도구를 갖고 spawn되게 하기
@@ -123,3 +124,8 @@ Acceptance:
 
 Verification: Go tests run on remote w5090 only, never locally on the
 Windows PC.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

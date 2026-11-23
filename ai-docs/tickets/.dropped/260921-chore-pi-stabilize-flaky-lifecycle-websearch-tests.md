@@ -1,5 +1,6 @@
 ---
 title: "불안정한 pi 실제 프로세스 및 타이밍 테스트 안정화"
+dropped: 2026-11-24
 ---
 
 # Stabilize flaky pi real-process and timing tests
@@ -38,3 +39,8 @@ wait on the actual lifecycle event/condition rather than a scheduling-dependent
 window. Verify by running the full `agents-plugin-pi` suite repeatedly (e.g. a
 handful of back-to-back runs) with zero flaky failures; do not merely rerun until
 green. Do not delete or skip the tests to hide the flake.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.

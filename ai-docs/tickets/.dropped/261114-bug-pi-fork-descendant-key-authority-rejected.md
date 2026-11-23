@@ -1,5 +1,6 @@
 ---
 title: "Pi fork가 읽기 전용 호출에서 새로 발급된 하위(descendant) 키 권한을 거부하는 문제"
+dropped: 2026-11-24
 ---
 
 # Pi fork rejects its freshly minted descendant key on read-only calls
@@ -35,3 +36,8 @@ No harness fix, permission bypass, authority widening, protocol/API change or li
 ### Phase 1: Verify descendant-key admission against the recorded caller contract
 
 Read the exact successful mint and rejected read-only calls, establish expected authority from existing contracts, and report any missing policy decision to MAIN before proposing a correction.
+
+
+## Resolution (2026-11-24)
+
+The Pi distribution is retired by `261123-chore-ws-retire-pi-harness`. This ticket covers only the retired harness.
