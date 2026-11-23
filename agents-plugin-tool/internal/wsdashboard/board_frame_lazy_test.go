@@ -312,6 +312,8 @@ var bad = [];
 function check(what, ok) { if (!ok) bad.push(what); }
 var raf = [], queries = 0, themes = 0, shHidden = false;
 var main = {wbScrollOwner:true}, pins = {wbScrollOwner:true};
+function anchorCurrent() { return null; }
+function anchorOwner() { return null; }
 function requestAnimationFrame(fn) { raf.push(fn); return raf.length; }
 function num(v) { return typeof v === "number" && isFinite(v) ? v : 0; }
 function str(v) { return typeof v === "string" ? v : ""; }

@@ -246,12 +246,15 @@ func TestBoardHistoryHooksSurroundSSESwap(t *testing.T) {
 	runNode(t, "board and tree swap ordering", animationFrameHarness+`
 var bad = [], log = [];
 function syncSpinnerPhases() {}
+function anchorCards() { return []; }
+function anchorCurrent() { return null; }
+function anchorOwner() { return null; }
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); }
 var main = {scrollTop:400, wbScrollOwner:true}, pins = {scrollTop:500, wbScrollOwner:true}, outer = {scrollTop:40}, treePane = {scrollTop:80};
 var oldMain = {name:"old-main", scroller:main}, oldPin = {name:"old-pin", scroller:pins};
 var boxes = [{name:"board", firstElementChild:oldMain}, {name:"pins", firstElementChild:oldPin}];
 var topic = {name:"topic"}, pinTopic = {name:"pin-topic"}, row = {name:"row"};
-function box(name) { return {name:name, getAttribute:function(){return "old";}, setAttribute:function(){log.push("hash:"+name);}}; }
+function box(name) { return {name:name, contains:function(){return false;}, getAttribute:function(){return "old";}, setAttribute:function(){log.push("hash:"+name);}}; }
 var boardEl = box("board"), treeEl = box("tree");
 Object.defineProperty(treeEl, "innerHTML", {set:function(){log.push("tree-replace");}});
 var focus = {isConnected:true, focus:function(opt){check("tree focus avoids scrolling",opt,{preventScroll:true});doc.activeElement=focus;log.push("focus");}};

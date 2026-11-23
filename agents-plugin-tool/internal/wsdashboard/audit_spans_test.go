@@ -353,6 +353,28 @@ func TestAuditEventSpansStayWithinTheReturnedPrefix(t *testing.T) {
 	}
 }
 
+// auditScanTime amortizes coarse platform clock ticks over a measurable batch.
+// Take the best of three batches to limit scheduler noise in the ratio checks.
+func auditScanTime(run func()) time.Duration {
+	best := time.Duration(1<<63 - 1)
+	for range 3 {
+		n := 1
+		for {
+			started := time.Now()
+			for range n {
+				run()
+			}
+			elapsed := time.Since(started)
+			if elapsed >= 50*time.Millisecond {
+				best = min(best, elapsed/time.Duration(n))
+				break
+			}
+			n *= 2
+		}
+	}
+	return best
+}
+
 // TestAuditSpanScanWork checks the full scan below and above the response cap.
 // In each case a more preferred branch looks far ahead before losing to ".".
 func TestAuditSpanScanWork(t *testing.T) {
@@ -375,10 +397,8 @@ func TestAuditSpanScanWork(t *testing.T) {
 				if tc.seamed {
 					seam = n
 				}
-				best := time.Duration(1<<63 - 1)
-				for range 3 {
+				return auditScanTime(func() {
 					count := 0
-					started := time.Now()
 					s.eachLineMatch(line, seam, func(start, end int) bool {
 						if start != count || end != count+1 {
 							t.Fatalf("match %d = [%d,%d)", count, start, end)
@@ -386,12 +406,10 @@ func TestAuditSpanScanWork(t *testing.T) {
 						count++
 						return false
 					})
-					best = min(best, time.Since(started))
 					if count != len(line) {
 						t.Fatalf("got %d matches, want %d", count, len(line))
 					}
-				}
-				return best
+				})
 			}
 			small, large := run(8000), run(16000)
 			t.Logf("8k: %v, 16k: %v", small, large)
@@ -409,16 +427,12 @@ func TestAuditSpanScanStopsAtResponseCap(t *testing.T) {
 	}
 	run := func(n int) time.Duration {
 		line := strings.Repeat("a", n)
-		best := time.Duration(1<<63 - 1)
-		for range 3 {
-			started := time.Now()
+		return auditScanTime(func() {
 			got := s.bodySpans(line, -1, len(line))
-			best = min(best, time.Since(started))
 			if !got.Capped || len(got.Spans) != auditSpansMax || got.Spans[auditSpansMax-1] != (auditSpan{1, auditSpansMax - 1, auditSpansMax}) {
 				t.Fatalf("size %d: got %d spans, capped %v", n, len(got.Spans), got.Capped)
 			}
-		}
-		return best
+		})
 	}
 	short, long := run(auditSpansMax+1), run(100*auditSpansMax)
 	t.Logf("near cap: %v, 1M: %v", short, long)
