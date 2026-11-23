@@ -2,12 +2,14 @@ package wsdashboard
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -330,7 +332,17 @@ func decodeReply(t *testing.T, body string) rpcReply {
 const initializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"claude-code","version":"2"}}}`
 
 func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
-	d, h, a := startHTTPProxyDaemon(t)
+	logFile, err := os.CreateTemp(t.TempDir(), "mcp-log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logFile.Close() })
+	h, a := &rpcHandler{}, &tokenAgents{}
+	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Home: t.TempDir(), Version: "1.2.3", Proxy: h, Agents: a, Log: logFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
 	a.issue("tok-a", httpTestHello("claude"))
 	if status, body, _ := mcpPost(t, context.Background(), d, http.MethodPost, "tok-a", initializeBody); status != http.StatusOK {
 		t.Fatalf("valid token: %d %s", status, body)
@@ -344,10 +356,54 @@ func TestProxyHTTPRouteRefusesAMissingUnknownOrVoidToken(t *testing.T) {
 	if h.count() != 1 {
 		t.Fatalf("sessions accepted = %d, want 1", h.count())
 	}
+	raw, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(raw)
+	for _, reason := range []string{"missing or malformed bearer", "token rejected", "token void"} {
+		if strings.Count(log, "dashboard: /mcp/session 401: "+reason+"\n") != 1 {
+			t.Errorf("expected one 401 log for %q", reason)
+		}
+	}
+	if strings.Contains(log, "tok-a") || strings.Contains(log, "tok-x") {
+		t.Fatal("401 diagnostics exposed a bearer")
+	}
 	// The route exists only with a token host.
 	plain := startProxyTestDaemon(t, &echoHandler{})
 	if status, _, _ := mcpPost(t, context.Background(), plain, http.MethodPost, "tok-a", initializeBody); status != http.StatusNotFound {
 		t.Fatalf("without a token host: status %d, want 404", status)
+	}
+}
+
+func TestProxyHTTPAccessGuardLogs401(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		lan          bool
+	}{
+		{"loopback-only", "dashboard login required", false},
+		{"LAN", "missing or invalid LAN access token", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var log bytes.Buffer
+			d := &Daemon{dir: t.TempDir(), lan: tt.lan, log: &log}
+			req := httptest.NewRequest(http.MethodPost, ProxyHTTPPath, nil)
+			req.RemoteAddr = "192.0.2.1:50000"
+			req.Header.Set("Authorization", "Bearer fixture-bearer")
+			rec := httptest.NewRecorder()
+			d.accessGuard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("the access guard admitted a non-loopback request without dashboard credentials")
+			})).ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("access guard returned %d, want 401", rec.Code)
+			}
+			if strings.Count(log.String(), "dashboard: /mcp/session 401: "+tt.reason+"\n") != 1 {
+				t.Errorf("expected one 401 log for %q", tt.reason)
+			}
+			if strings.Contains(log.String(), "fixture-bearer") {
+				t.Fatal("401 diagnostics exposed a bearer")
+			}
+		})
 	}
 }
 

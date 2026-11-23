@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -39,7 +40,7 @@ func SpawnDetached(exe string, args []string, dir string) error {
 // prestart path. Electron may explicitly retry with job lifetime after a numeric
 // access-denied signal; the retry keeps the same drain/compatibility ordering.
 func SpawnDetachedStrict(exe string, args []string, dir string) error {
-	cmd, err := startDetachedStrict(exe, args, dir, nil)
+	cmd, err := startDetachedWithPipes(exe, args, dir, nil, nil, true)
 	if err != nil {
 		return err
 	}
@@ -47,36 +48,67 @@ func SpawnDetachedStrict(exe string, args []string, dir string) error {
 	return nil
 }
 
-// PrepareDetachedSuccessor starts a process with an anonymous stdin pipe. It
-// cannot start serving until the caller releases it after the authenticated
-// drain. Closing the writer denies admission, including when the starter exits.
-func PrepareDetachedSuccessor(exe string, args []string, dir string) (func(bool) error, error) {
-	reader, writer, err := os.Pipe()
+// PrepareDetachedSuccessor launches a detached dashboard and waits for its
+// pre-lock readiness byte. Closing the admission pipe denies startup when
+// the predecessor cannot be drained or the starter exits.
+func PrepareDetachedSuccessor(ctx context.Context, exe string, args []string, dir string, strict bool) (func(bool) error, error) {
+	input, admit, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	cmd, err := startDetachedStrict(exe, args, dir, reader)
-	_ = reader.Close()
+	ready, output, err := os.Pipe()
 	if err != nil {
-		_ = writer.Close()
+		input.Close()
+		admit.Close()
+		return nil, err
+	}
+	defer ready.Close()
+	args = append(args, "--lock-wait", "8s", "--desktop-preflight")
+	cmd, err := startDetachedWithPipes(exe, args, dir, input, output, strict)
+	input.Close()
+	output.Close()
+	if err != nil {
+		admit.Close()
 		return nil, err
 	}
 	go func() { _ = cmd.Wait() }()
+	result := make(chan error, 1)
+	go func() {
+		var signal [1]byte
+		_, err := io.ReadFull(ready, signal[:])
+		if err == nil && signal[0] != 1 {
+			err = fmt.Errorf("unexpected successor readiness byte %d", signal[0])
+		}
+		result <- err
+	}()
+	select {
+	case err = <-result:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	if err != nil {
+		admit.Close()
+		return nil, fmt.Errorf("wait for successor readiness: %w", err)
+	}
 	return func(allow bool) error {
-		defer writer.Close()
+		defer admit.Close()
 		if allow {
-			_, err := writer.Write([]byte{1})
+			_, err := admit.Write([]byte{1})
 			return err
 		}
 		return nil
 	}, nil
 }
 
-// AwaitDesktopPreflight runs before a gated dashboard touches shared state.
-func AwaitDesktopPreflight(input io.Reader) bool {
-	var ready [1]byte
-	_, err := io.ReadFull(input, ready[:])
-	return err == nil && ready[0] == 1
+// AwaitDesktopPreflight reports completed pre-lock setup before waiting for
+// admission to take dashboard.lock.
+func AwaitDesktopPreflight(input io.Reader, output io.Writer) bool {
+	if _, err := output.Write([]byte{1}); err != nil {
+		return false
+	}
+	var admit [1]byte
+	_, err := io.ReadFull(input, admit[:])
+	return err == nil && admit[0] == 1
 }
 
 // DaemonExecutable returns a retained copy outside the starter's installation.

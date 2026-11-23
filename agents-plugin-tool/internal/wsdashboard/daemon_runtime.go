@@ -201,8 +201,11 @@ func (d *Daemon) Close() {
 			d.beforeUnlock()
 		}
 		removeEndpointIfOwned(d.dir, d.endpoint.Token)
-		_ = d.lock.Unlock()
 		fmt.Fprintf(d.log, "dashboard: stopped (pid %d)\n", d.endpoint.PID)
+		if d.endLog != nil {
+			d.endLog()
+		}
+		_ = d.lock.Unlock()
 		close(d.done)
 	})
 }

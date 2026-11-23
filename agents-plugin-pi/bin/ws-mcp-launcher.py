@@ -1793,6 +1793,8 @@ class DaemonLink:
         # The daemon starts session holders with the interpreter this launcher
         # runs under; PATH python3 may be missing or, on Windows, a Store alias.
         env = daemon_start_env(self.env, os.getcwd())
+        # ensure_healthy owns the starter lock through health confirmation.
+        env["WS_MCP_LAUNCHER_START_LOCK_HELD"] = "1"
         if not env.get("WS_MCP_HOLDER_PYTHON") and sys.executable:
             env["WS_MCP_HOLDER_PYTHON"] = sys.executable
         try:

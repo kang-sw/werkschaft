@@ -479,6 +479,10 @@ func TestHostedConnectionSeeingALANChangeReplacesTheDaemon(t *testing.T) {
 		successor = ep
 		return true
 	})
+	diagnostics, err := os.ReadFile(filepath.Join(h.dir, "dashboard.log"))
+	if err != nil || !strings.Contains(string(diagnostics), "ready; requesting shutdown of daemon "+version) {
+		t.Fatalf("LAN change did not report successor readiness before requesting drain: %v", err)
+	}
 	for name, c := range map[string]*hostedConn{"before": before, "trigger": trigger} {
 		if _, ok := c.readLine(wsdashboard.DefaultLockWait); ok {
 			t.Fatalf("%s: a line instead of the drained stream's end", name)

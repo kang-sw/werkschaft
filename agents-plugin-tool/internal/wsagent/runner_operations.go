@@ -19,7 +19,7 @@ func (r *Runner) Get(id string) (State, error) {
 	rec, closed := r.closed[id]
 	var st State
 	if closed && !open {
-		st = r.closedState(rec)
+		st = r.memoryClosedState(rec)
 	}
 	r.mu.Unlock()
 	switch {
@@ -30,7 +30,10 @@ func (r *Runner) Get(id string) (State, error) {
 		}
 		return c.state(), nil
 	case closed:
-		return st, nil
+		if st.Status == StatusHandedOff {
+			return r.closedState(rec), nil
+		}
+		return r.permissionState(st, rec, wsdashboard.SessionDir(r.opts.Dir, id)), nil
 	}
 	return State{}, errUnknown
 }
