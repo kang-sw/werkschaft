@@ -69,6 +69,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		if req.UserApproved {
 			// The user's own request is this invocation's approval.
 			explicit = true
+		} else if req.ApproveModel != nil && req.BindJob != nil {
+			if err := req.ApproveModel(ctx, call); err != nil {
+				return HostedView{}, err
+			}
+			explicit = true
 		} else if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
 			return HostedView{}, err
 		}
@@ -130,6 +135,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		return h.failStart(j, "", errors.New("exec: the daemon is stopping"))
 	default:
 	}
+	if req.BindJob != nil {
+		if err := req.BindJob(id); err != nil {
+			h.mu.Lock()
+			j.holderPinned = false
+			h.mu.Unlock()
+			return h.failStart(j, "", fmt.Errorf("record the model call's job: %w", err))
+		}
+	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, RingCeilingBytes: hostedHolderRingCeiling, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
@@ -175,7 +188,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		}
 	}
 	h.mu.Lock()
-	if j.stopping || h.ownerFences[owner.ID] {
+	if j.row.Terminal() || j.stopping || h.ownerFences[owner.ID] {
 		// Its owner closed (or the job was stopped) while it waited for
 		// approval: the process never starts. A stop already ended the job
 		// and its holder (stop); a fence alone fails the start here.
@@ -195,7 +208,31 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	defer release()
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
-	h.mu.Unlock()
+	if req.BindJob != nil {
+		// The successor must recognize this holder even if the daemon
+		// exits before Spawn returns and the running snapshot is saved.
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		if err := h.save(j, row, rev); err != nil {
+			return h.failStart(j, holder, fmt.Errorf("save the job before start: %w", err))
+		}
+		h.mu.Lock()
+		ended := j.row.Terminal()
+		h.mu.Unlock()
+		if ended {
+			return h.view(j, OutcomeDone), errClosedBeforeStart
+		}
+		select {
+		case <-drain:
+			return h.failStart(j, holder, errors.New("exec: the daemon is stopping"))
+		default:
+		}
+		if err := ctx.Err(); err != nil {
+			return h.failStart(j, holder, err)
+		}
+	} else {
+		h.mu.Unlock()
+	}
 	// realCwd is in the ordinary spelling, never the extended-length form:
 	// CreateProcess refuses \\?\ as a current directory. A Windows cwd past
 	// MAX_PATH fails at process start, as it did before admission resolved
@@ -244,8 +281,13 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	case <-drain:
 		return h.convert(j, req.OnConvert), nil
 	case <-ctx.Done():
-		h.stop(j, false)
-		return h.view(j, OutcomeDone), ctx.Err()
+		select {
+		case <-drain:
+			return h.convert(j, req.OnConvert), nil
+		default:
+			h.stop(j, false)
+			return h.view(j, OutcomeDone), ctx.Err()
+		}
 	}
 }
 

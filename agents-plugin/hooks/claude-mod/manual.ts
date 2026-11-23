@@ -632,8 +632,8 @@ export function createManual(): Manual {
   }
 
   /**
-   * Adopt the key a main-thread `workflow_manual` call revived with (as pi
-   * does) or the sentinel's result carries: re-log in with it, make it the
+   * Adopt the key a main-thread `workflow_manual` call revived with
+   * or the sentinel's result carries: re-log in with it, make it the
    * conversation's key (the push follows through the listener), and rewrite
    * the key entry so a later resume re-logs in with it. The adoption notice,
    * or undefined; never throws.

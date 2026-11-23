@@ -16,11 +16,11 @@ func TestSupportChoicesListNamedTiers(t *testing.T) {
 	if ans := s.Choices(context.Background()); ans.Tiers == nil || len(ans.Tiers) != 0 || ans.TiersError != "" {
 		t.Fatalf("no routing: tiers %#v, error %q", ans.Tiers, ans.TiersError)
 	}
-	setTierRouting(t, h.config.Config, `{"bundles":{"discussion":{"harness":"pi","model":"prov/thinking","effort":"high"},"agy-deep":{"harness":"agy","model":"claude-opus-4-6-thinking"}}}`)
+	setTierRouting(t, h.config.Config, `{"bundles":{"discussion":{"harness":"codex","model":"codex-thinking","effort":"high"},"agy-deep":{"harness":"agy","model":"claude-opus-4-6-thinking"}}}`)
 	ans := s.Choices(context.Background())
 	want := []SupportTier{
 		{Name: "agy-deep", Trace: "agy-deep", Harness: "agy", Model: "claude-opus-4-6-thinking"},
-		{Name: "discussion", Trace: "discussion", Harness: "pi", Model: "prov/thinking", Effort: "high"},
+		{Name: "discussion", Trace: "discussion", Harness: "codex", Model: "codex-thinking", Effort: "high"},
 	}
 	if ans.TiersError != "" || !reflect.DeepEqual(ans.Tiers, want) {
 		t.Fatalf("tiers = %#v (error %q), want %#v", ans.Tiers, ans.TiersError, want)

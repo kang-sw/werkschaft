@@ -731,10 +731,10 @@ func TestConfigPromptSetEndToEnd(t *testing.T) {
 // TestConfigPromptSetForPiHarness is a condensed version of
 // TestConfigPromptSetEndToEnd proving harness "pi" is a first-class,
 // independently-stored prompt-override bucket (not folded into "all"):
-// config.tune(key: "prompt.<point>", harness: "pi", ...) must report
-// "prompt override set: <point>/pi", and a subsequent render must pick up the
-// stored pi-bucket text.
-func TestConfigPromptSetForPiHarness(t *testing.T) {
+// config.tune(key: "prompt.<point>", harness: "claude", ...) must report
+// "prompt override set: <point>/claude", and a subsequent render must pick up the
+// stored claude-bucket text.
+func TestConfigPromptSetForClaudeHarness(t *testing.T) {
 	useLeadProfile(t)
 
 	rsrcRoot := filepath.Join("..", "..", "..", "agents-plugin", "rsrc")
@@ -747,30 +747,30 @@ func TestConfigPromptSetForPiHarness(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 
 	s := NewServer(root, "test")
-	s.observeHarness("test", "pi")
+	s.observeHarness("test", "claude")
 
 	key, _ := parseLoginResponse(t, callLogin(t, s, 910200, root, nil))
 
-	const overrideText = "Pi-specific status update preference."
+	const overrideText = "Claude-specific status update preference."
 
 	setResp := callToolOnce(t, s, 1, "config.tune", map[string]any{
 		"session_key": key,
 		"key":         "prompt.UserPreferenceSection",
-		"harness":     "pi",
+		"harness":     "claude",
 		"value":       overrideText,
 		"scope":       "session",
 	})
 	setText := toolText(t, setResp)
-	if !strings.Contains(setText, "prompt override set: UserPreferenceSection/pi") {
-		t.Fatalf("config.tune prompt-set (pi) confirmation missing: %s", setText)
+	if !strings.Contains(setText, "prompt override set: UserPreferenceSection/claude") {
+		t.Fatalf("config.tune prompt-set (claude) confirmation missing: %s", setText)
 	}
 
 	body, _, err := printPlaybook(s, os.DirFS(rsrcRoot), "lead-workflow-manual", nil, isolatedPlaybookConfigOptions(t), "", mustOverrideLookup(t, s, key))
 	if err != nil {
-		t.Fatalf("printPlaybook (pi override): %v", err)
+		t.Fatalf("printPlaybook (claude override): %v", err)
 	}
 	if !strings.Contains(body, overrideText) {
-		t.Errorf("config.prompt.set (pi): stored override must appear in render:\n%s", body)
+		t.Errorf("config.prompt.set (claude): stored override must appear in render:\n%s", body)
 	}
 }
 
@@ -892,7 +892,7 @@ func TestConfigPromptSetRejectsUnresolvedEmptyHarness(t *testing.T) {
 		t.Fatalf("expected isError:true for unresolved empty harness, got: %s", resp)
 	}
 	msg := toolText(t, resp)
-	if !strings.Contains(msg, `harness must be one of claude, codex, pi, agy, *; got ""`) {
+	if !strings.Contains(msg, `harness must be one of claude, codex, agy, werk, *; got ""`) {
 		t.Fatalf("error message must name the full per-key enum for an unresolved empty harness: %q", msg)
 	}
 }
@@ -1040,14 +1040,14 @@ func TestConfigPromptListEnumeratesDeclaredPoints(t *testing.T) {
 	}
 }
 
-// TestConfigPromptListShowsPiHarnessOverride is a review-relay regression
+// TestConfigPromptListShowsAgyHarnessOverride is a review-relay regression
 // test for harnessBuckets (config_registry.go): a prompt override
-// stored for harness "pi" via config.tune must appear in config.list's
+// stored for harness "agy" via config.tune must appear in config.list's
 // tuning catalog, not just resolve correctly at render time. Before the fix,
 // the bucket list was still {"claude", "codex", "all"} — the
-// resolver was never queried for "prompt.<point>.pi", so a Pi lead's own
+// resolver was never queried for "prompt.<point>.agy", so a Agy lead's own
 // override read back as unset.
-func TestConfigPromptListShowsPiHarnessOverride(t *testing.T) {
+func TestConfigPromptListShowsAgyHarnessOverride(t *testing.T) {
 	useLeadProfile(t)
 
 	rsrcRoot := buildOverrideTestTree(t)
@@ -1059,19 +1059,19 @@ func TestConfigPromptListShowsPiHarnessOverride(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 
 	s := NewServer(root, "test")
-	s.observeHarness("test", "pi")
+	s.recordHarness("test", "agy")
 
 	key, _ := parseLoginResponse(t, callLogin(t, s, 900210, root, nil))
 
 	setResp := callToolOnce(t, s, 1, "config.tune", map[string]any{
 		"session_key": key,
 		"key":         "prompt.SeedSection",
-		"harness":     "pi",
-		"value":       "pi-specific seeded override",
+		"harness":     "agy",
+		"value":       "agy-specific seeded override",
 		"scope":       "session",
 	})
-	if setText := toolText(t, setResp); !strings.Contains(setText, "prompt override set: SeedSection/pi") {
-		t.Fatalf("config.tune prompt-set (pi) confirmation missing: %s", setText)
+	if setText := toolText(t, setResp); !strings.Contains(setText, "prompt override set: SeedSection/agy") {
+		t.Fatalf("config.tune prompt-set (agy) confirmation missing: %s", setText)
 	}
 
 	catalog := parseTuningCatalogResponse(t, callToolOnce(t, s, 2, "config.list", map[string]any{
@@ -1081,8 +1081,8 @@ func TestConfigPromptListShowsPiHarnessOverride(t *testing.T) {
 
 	seed := requireTuningKnob(t, catalog, "prompt.SeedSection")
 	cur := mustMarshalJSON(t, seed.Current)
-	if !strings.Contains(cur, `"harness":"pi"`) || !strings.Contains(cur, `"value":"pi-specific seeded override"`) {
-		t.Errorf("config.list must show the stored pi-harness override in prompt.SeedSection's current value: %s", cur)
+	if !strings.Contains(cur, `"harness":"agy"`) || !strings.Contains(cur, `"value":"agy-specific seeded override"`) {
+		t.Errorf("config.list must show the stored agy-harness override in prompt.SeedSection's current value: %s", cur)
 	}
 }
 
@@ -1183,7 +1183,7 @@ func TestConfigTuningCatalogProjectsPromptAndSchemaKnobs(t *testing.T) {
 	text := toolText(t, textResp)
 	for _, want := range []string{
 		"prompt.SeedSection",
-		"harness[claude|codex|pi|agy|*]",
+		"harness[claude|codex|agy|werk|*]",
 		"scope[session|project|repo|global]",
 		`"scope":"session"`,
 	} {
@@ -1199,7 +1199,7 @@ func TestConfigTuningCatalogProjectsPromptAndSchemaKnobs(t *testing.T) {
 	if promptKnob.Reset == nil || promptKnob.Reset.Tool != "config.tune" || promptKnob.Reset.FixedArguments["key"] != "prompt.SeedSection" || promptKnob.Reset.FixedArguments["reset"] != "true" {
 		t.Fatalf("prompt knob reset mismatch: %+v", promptKnob.Reset)
 	}
-	assertFieldEnum(t, promptKnob.SelectorFields, "harness", []string{"claude", "codex", "pi", "agy", "*"})
+	assertFieldEnum(t, promptKnob.SelectorFields, "harness", []string{"claude", "codex", "agy", "werk", "*"})
 	assertFieldEnum(t, promptKnob.SelectorFields, "scope", []string{"session", "project", "repo", "global"})
 	assertFieldRequired(t, promptKnob.ValueFields, "prompt", true)
 	if !strings.Contains(mustMarshalJSON(t, promptKnob.Current), `"scope":"session"`) {
@@ -1269,7 +1269,7 @@ func TestConfigTuningCatalogProjectsPromptAndSchemaKnobs(t *testing.T) {
 	agentsKnob := requireTuningKnob(t, catalog, "agents.tier")
 	assertFieldEnum(t, agentsKnob.ValueFields, "tier", []string{"small", "medium", "large", "xlarge"})
 	assertFieldNoEnum(t, agentsKnob.ValueFields, "effort")
-	assertFieldEnum(t, agentsKnob.SelectorFields, "harness", []string{"claude", "codex", "pi", "agy", "default"})
+	assertFieldEnum(t, agentsKnob.SelectorFields, "harness", []string{"claude", "codex", "agy", "werk", "default"})
 	assertFieldEnum(t, agentsKnob.SelectorFields, "scope", []string{"project", "global"})
 }
 
@@ -1409,7 +1409,7 @@ func TestConfigTuningCatalogNoAgentShape(t *testing.T) {
 	agentsKnob := requireTuningKnob(t, catalog, "agents.tier")
 	assertFieldEnum(t, agentsKnob.ValueFields, "tier", []string{"small", "medium", "large", "xlarge"})
 	assertFieldNoEnum(t, agentsKnob.ValueFields, "effort")
-	assertFieldEnum(t, agentsKnob.SelectorFields, "harness", []string{"claude", "codex", "pi", "agy", "default"})
+	assertFieldEnum(t, agentsKnob.SelectorFields, "harness", []string{"claude", "codex", "agy", "werk", "default"})
 	assertFieldEnum(t, agentsKnob.SelectorFields, "scope", []string{"project", "global"})
 }
 

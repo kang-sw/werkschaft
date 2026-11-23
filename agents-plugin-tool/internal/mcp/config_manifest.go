@@ -177,6 +177,7 @@ func parseConfigManifest(path string, builtinKeys map[string]struct{}, namespace
 	return parseConfigManifestBytes(path, data, builtinKeys, namespaces)
 }
 
+// Retained name check: retired manifest keys from old packages (TestRetiredPiManifestKeysAreIgnored).
 func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]struct{}, namespaces map[string]string) (string, []declaredConfigKey, error) {
 	var file configManifestFile
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -190,6 +191,10 @@ func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]s
 	namespace := file.Namespace
 	if !manifestNamespacePattern.MatchString(namespace) {
 		return "", nil, fmt.Errorf("namespace %q must be one lowercase segment ending in a dot, e.g. \"example.\"", namespace)
+	}
+	// Older launchers can still supply the retired Pi manifest.
+	if namespace == "pi." {
+		return namespace, nil, nil
 	}
 	for _, reserved := range reservedConfigPrefixes {
 		if namespace == reserved {
@@ -210,6 +215,9 @@ func parseConfigManifestBytes(path string, data []byte, builtinKeys map[string]s
 	seen := map[string]struct{}{}
 	keys := make([]declaredConfigKey, 0, len(file.Keys))
 	for _, raw := range file.Keys {
+		if namespace == "dashboard." && raw.Key == "dashboard.pi_spawn_enabled" {
+			continue
+		}
 		key, err := validateManifestKey(raw, namespace)
 		if err != nil {
 			return "", nil, err

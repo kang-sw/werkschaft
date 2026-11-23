@@ -11,7 +11,7 @@ import (
 )
 
 type ambientRefreshProbe struct {
-	PiAgents
+	AgentHost
 	calls int
 }
 
@@ -39,7 +39,7 @@ func TestConfigTuneWorkflowLangRefreshAmbient(t *testing.T) {
 				s.agentBackendSource = probe
 			}
 			if wiring != "backend source" {
-				s.pi.agents = probe
+				s.agents = probe
 			}
 			key, _ := parseLoginResponse(t, callLogin(t, s, 900702, root, nil))
 			checkCalls := func(want int) {

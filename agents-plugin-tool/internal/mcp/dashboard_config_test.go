@@ -12,27 +12,23 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-// Each package (ws, wsflow, Pi) ships a "dashboard."-namespace manifest beside
-// its own manifest and lists both in WS_MCP_CONFIG_MANIFESTS. The three
-// declare the same keys and may differ only in dashboard.enabled's and
-// dashboard.pi_spawn_enabled's defaults (today all three default the first
-// on; ws and Pi default the second on).
+// Each package (ws and wsflow) ships a "dashboard."-namespace manifest beside
+// its own manifest and lists both in WS_MCP_CONFIG_MANIFESTS. Both
+// declare the same keys and may differ only in dashboard.enabled's default (today every package defaults it on).
 
 var dashboardPackages = []struct {
 	name      string
 	own       string // the package's existing manifest
 	dashboard string
 	enabled   bool
-	piSpawn   bool
 }{
-	{"ws", claudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin", "dashboard-config-manifest.json"), true, true},
-	{"wsflow", wsflowClaudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin-wsflow", "dashboard-config-manifest.json"), true, false},
-	{"pi", filepath.Join("..", "..", "..", "agents-plugin-pi", "config-manifest.json"), filepath.Join("..", "..", "..", "agents-plugin-pi", "dashboard-config-manifest.json"), true, true},
+	{"ws", claudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin", "dashboard-config-manifest.json"), true},
+	{"wsflow", wsflowClaudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin-wsflow", "dashboard-config-manifest.json"), true},
 }
 
 // perPackageDefault is a dashboard key whose default differs by package.
 func perPackageDefault(key any) bool {
-	return key == DashboardEnabledKey || key == DashboardPiSpawnKey
+	return key == DashboardEnabledKey
 }
 
 // dashboardOffManifest writes a copy of the ws dashboard manifest whose
@@ -78,8 +74,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+22 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 22 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+21 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 21 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, pattern string
@@ -117,9 +113,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 			if !ok || enabled.DefaultValue != pkg.enabled {
 				t.Fatalf("%s = %+v (declared %v), want default %v", DashboardEnabledKey, enabled.DefaultValue, ok, pkg.enabled)
 			}
-			piSpawn, ok := declared.lookup(DashboardPiSpawnKey)
-			if !ok || piSpawn.DefaultValue != pkg.piSpawn {
-				t.Fatalf("%s = %+v (declared %v), want default %v", DashboardPiSpawnKey, piSpawn.DefaultValue, ok, pkg.piSpawn)
+			if _, ok := declared.lookup("dashboard.pi_spawn_enabled"); ok {
+				t.Fatal("retired dashboard setting is still declared")
 			}
 			port, ok := declared.lookup(DashboardPortKey)
 			if !ok || port.DefaultValue != int64(wsdashboard.DefaultPort) {

@@ -14,11 +14,12 @@ func registerFixtureAgentBackends(s *Server) {
 	// Real runner metadata, no process start. The extra backend exists only
 	// in this fixture's private config; production's builtin lead and worker
 	// profiles must all resolve.
-	s.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: map[string]wsagent.BackendRegistration{
+	s.agents = wsagent.NewRunner(wsagent.Options{Backends: map[string]wsagent.BackendRegistration{
 		wsagent.BackendClaude: {LeadProfile: wsagent.LeadProfileClaude, PermissionModes: wsagent.LeadPermissionModes},
 		wsagent.BackendPi:     {LeadProfile: wsagent.LeadProfilePi},
 		wsagent.BackendAgy:    {LeadProfile: wsagent.LeadProfileAgy, PermissionModes: wsagent.AgyPermissionModes},
 		wsagent.BackendCodex:  {LeadProfile: wsagent.LeadProfileCodex, PermissionModes: wsagent.CodexPermissionModes},
+		wsagent.BackendWerk:   {LeadProfile: wsagent.LeadProfileWerk},
 		"fixture":             {LeadProfile: "fixture-lead", PermissionModes: []string{"review"}},
 	}})
 }
@@ -64,7 +65,7 @@ func TestConfigRegisteredAgentProfile(t *testing.T) {
 	}
 	for _, knob := range catalog.Knobs {
 		if knob.ID == "agent.profile.<name>" {
-			if knob.Error != "" || !reflect.DeepEqual(knob.ValueSchema.Properties.Backend.Enum, []string{"agy", "claude", "codex", "fixture", "pi"}) {
+			if knob.Error != "" || !reflect.DeepEqual(knob.ValueSchema.Properties.Backend.Enum, []string{"agy", "claude", "codex", "fixture", "pi", "werk"}) {
 				t.Fatalf("registered catalog = %+v", knob)
 			}
 			return
@@ -80,7 +81,7 @@ func TestConfigRegisteredAgentProfileRefusesAbsentBackend(t *testing.T) {
 		"key": "agent.profile.fixture-lead", "scope": "project",
 		"value": map[string]any{"backend": "unregistered", "lead": true, "permission_mode": "review"},
 	})
-	want := `config.tune: agent.profile.fixture-lead backend must be "agy" or "claude" or "codex" or "fixture" or "pi"; got "unregistered"`
+	want := `config.tune: agent.profile.fixture-lead backend must be "agy" or "claude" or "codex" or "fixture" or "pi" or "werk"; got "unregistered"`
 	if !toolIsError(t, resp) || toolText(t, resp) != want {
 		t.Fatalf("unregistered profile write = %s, want refusal %q", resp, want)
 	}
@@ -139,7 +140,7 @@ func TestPlaybookRegisteredAgentBackendProfileFallback(t *testing.T) {
 	}
 	f.record(t, key, wsagent.Record{Backend: wsagent.BackendPi, Profile: "fixture-worker"})
 	rp, err := wsagent.ResolveProfile(f.s.configOptions(), f.root, "fixture-worker", f.s.agentBackends()...)
-	if err != nil || rp.Definition.Backend != "fixture" || wsagent.PiMCPOnly(wsagent.Record{Backend: wsagent.BackendPi, Root: f.root}, &rp.Definition) {
+	if err != nil || rp.Definition.Backend != "fixture" {
 		t.Fatalf("registered fallback profile = %+v, %v", rp, err)
 	}
 	if f.s.callerDaemonAgents(key) {

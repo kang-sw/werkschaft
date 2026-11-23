@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -327,6 +328,21 @@ func TestTierRoutingValidation(t *testing.T) {
 	// Without a known-harness list, any harness name stays valid.
 	if err := NewTierGraph(testTierRoles, mustRouting(t, `{"nodes":{"review":{"*":"future.*"}}}`), nil, nil).Err(); err != nil {
 		t.Fatalf("unknown harness with no list: %v", err)
+	}
+}
+
+func TestWerkTiersResolveDirectlyButCannotBeSavedAsGraphTargets(t *testing.T) {
+	for _, raw := range []string{
+		`{"nodes":{"review":{"*":"werk.*"}}}`,
+		`{"bundles":{"b":{"harness":"werk","model":"m"}}}`,
+	} {
+		graph := NewTierGraph(testTierRoles, mustRouting(t, raw), nil, append(slices.Clone(testHarnesses), "werk"))
+		if err := graph.Err(); err == nil || !strings.Contains(err.Error(), "direct tiers only") {
+			t.Fatalf("graph %s: %v", raw, err)
+		}
+		if got, err := graph.Resolve("werk.small", "claude"); err != nil || got.Harness != "werk" || got.Size != "small" {
+			t.Fatalf("direct tier = %+v, %v", got, err)
+		}
 	}
 }
 

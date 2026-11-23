@@ -32,15 +32,15 @@ func TestPolicyReadsDoNotCloneTheRegistry(t *testing.T) {
 	reg := &policyLookupRegistry{regs: wsagent.BuiltinBackendRegistrations()}
 	s := &Server{agentBackendSource: reg, conversation: "conv", execCutover: wsagent.BackendCodex}
 	for i := 0; i < 3; i++ {
-		if !s.codexReadTools() {
+		if !s.fsReadTools() {
 			t.Fatal("a Codex cutover connection must list the fs.* read tools")
 		}
 	}
 	if s.lifecycleOf("unregistered") != wsagent.BuiltinLifecycle("unregistered") {
 		t.Error("an unregistered name must read the built-in floor")
 	}
-	if got := s.connectionOf(wsagent.BackendPi); got.BridgeClientName == "" {
-		t.Error("the Pi registration's connection declaration was not read")
+	if got := s.connectionOf(wsagent.BackendCodex); !got.NamedClient {
+		t.Error("the Codex registration's connection declaration was not read")
 	}
 	if reg.clones != 0 {
 		t.Errorf("the policy reads copied the whole registry %d time(s)", reg.clones)

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -308,55 +307,6 @@ func TestDaemonExitReportsTheCutTurnAsInterrupted(t *testing.T) {
 	}
 }
 
-func TestPiProcessGoneIsIdleAndSendStartsNewTurn(t *testing.T) {
-	h, got := spawnHarness(t)
-	id := h.spawn("previous turn", leadParent).ID
-	first := h.backend.waitProc(t, 0)
-	first.nextSent(t)
-	first.reply("previous result")
-	if res, err := h.runner.Wait(context.Background(), id, time.Second); err != nil || res.Status != TurnDone {
-		t.Fatalf("previous turn: %+v, %v", res, err)
-	}
-	if _, err := h.runner.Send(id, "cut turn"); err != nil {
-		t.Fatal(err)
-	}
-	first.nextSent(t)
-	eventually(t, "the cut turn persisted", func() bool {
-		rec, _ := readRecord(wsdashboard.SessionDir(h.dir, id))
-		return rec.TurnOpen
-	})
-	h.runner.Close()
-	h.start()
-	res, err := h.runner.Wait(context.Background(), id, time.Second)
-	if err != nil || res.Status != TurnInterrupted || res.Error == "" {
-		t.Fatalf("wait after process loss: %+v, %v", res, err)
-	}
-	st := h.runner.Children(leadParent)[0]
-	if st.Status != StatusIdle || st.Process || st.Error != res.Error {
-		t.Fatalf("list after interrupted wait: %+v", st)
-	}
-	if _, err := h.runner.Send(id, "new turn"); err != nil {
-		t.Fatal(err)
-	}
-	p := h.backend.waitProc(t, 1)
-	if text := p.nextSent(t); text != h.envelope("new turn") {
-		t.Fatalf("follow-up actually submitted = %q", text)
-	}
-	p.reply("recovered")
-	res, err = h.runner.Wait(context.Background(), id, time.Second)
-	if err != nil || res.Status != TurnDone || res.Message != "recovered" {
-		t.Fatalf("follow-up wait: %+v, %v", res, err)
-	}
-	h.runner.Close()
-	h.start()
-	if res, _ := h.runner.Wait(context.Background(), id, time.Second); res.Status != TurnDone {
-		t.Fatalf("a settled record gets no synthetic interruption: %+v", res)
-	}
-	if n := len(got.list()); n != 3 {
-		t.Fatalf("one interruption and two completions, got %+v", got.list())
-	}
-}
-
 func TestChildrenAreScopedToTheParent(t *testing.T) {
 	h, _ := spawnHarness(t)
 	other := ParentRef{Kind: ParentLead, ReplyID: "otherreplyid"}
@@ -370,33 +320,6 @@ func TestChildrenAreScopedToTheParent(t *testing.T) {
 	}
 	if len(ids) != 2 || !(ids[0] == a && ids[1] == b || ids[0] == b && ids[1] == a) {
 		t.Fatalf("Children = %v, want %s and %s", ids, a, b)
-	}
-}
-
-func TestVersionAtLeast(t *testing.T) {
-	for v, want := range map[string]bool{"1.0.4": true, "v1.0": true, "2.3.1": true, "1.1.0": true, "0.9.9": false, "0.72.1": false, "": false, "pi": false} {
-		if got := VersionAtLeast(v, 1, 0); got != want {
-			t.Errorf("VersionAtLeast(%q, 1, 0) = %v", v, got)
-		}
-	}
-}
-
-func TestPiVersionRunsPi(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a shell script stands in for pi")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pi"), []byte("#!/bin/sh\necho \"pi 1.0.4\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir)
-	got, err := PiVersion(context.Background())
-	if err != nil || got != "1.0.4" {
-		t.Fatalf("PiVersion = %q, %v", got, err)
-	}
-	t.Setenv("PATH", t.TempDir())
-	if _, err := PiVersion(context.Background()); err == nil {
-		t.Fatalf("a missing pi fails")
 	}
 }
 

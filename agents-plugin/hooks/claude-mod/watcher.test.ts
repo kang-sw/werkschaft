@@ -1205,7 +1205,7 @@ describe('pure helpers', () => {
     expect('deny' in checkWatchCall(undefined, '')).toBe(true)
   })
 
-  test('exit-code mapping matches the pi adapter', () => {
+  test('maps mailbox wait exit codes', () => {
     expect(mapWaitExit(0, false)).toBe('mail')
     expect(mapWaitExit(3, false)).toBe('timeout')
     expect(mapWaitExit(130, false)).toBe('error')
@@ -1243,7 +1243,7 @@ describe('pure helpers', () => {
   test('system labels render consistently without becoming reply addresses', () => {
     const mail = { label: 'pi:childone', content: 'Reply with pi.send(id: childone), not mailbox.send.\nall green', sent_at: '2026-01-02T03:04:05Z' }
     expect(parseRecvText(JSON.stringify([mail]))).toEqual([mail])
-    // Same literal as the Go and Pi adapter suites.
+    // A legacy sender label and reply instruction pass through verbatim.
     expect(formatEnvelope(mail)).toBe('mail from pi:childone (2026-01-02T03:04:05Z):\nReply with pi.send(id: childone), not mailbox.send.\nall green')
     expect(mailItems([mail])).toEqual([{ from: 'pi:childone', body: mail.content }])
     expect(batchLine('ws mailbox', [mail])).toBe('[ws mailbox] 1 message from pi:childone')

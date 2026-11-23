@@ -440,7 +440,7 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	if d.config.Changed != nil {
 		d.config.Changed(mutation.Key)
 	}
-	if mutation.Key == wsconfig.ItemAgentKeepAwakeDuringTurns {
+	if isAgentGlobalConfigKey(mutation.Key) {
 		d.reloadAgentGlobalConfig()
 	}
 	if IsCompanionConfigKey(mutation.Key) {

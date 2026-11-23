@@ -175,6 +175,16 @@ closes its store to changes, and lets a change already in flight finish,
 before it releases the lock; a change that arrives later is answered as a
 drain, so the sender retries against the successor.
 
+Run the local `ws-mcp credential sign-in openai` binary command with the
+dashboard daemon stopped to authorize ChatGPT plan usage in the system
+browser. The command holds the daemon's writer lock during sign-in.
+`credential show openai` lists saved registrations. Use `--new-account`
+to register another account, `--account <client-id>` to reauthorize a
+saved registration, or `--enable-plan` to request plan consent again.
+The builtin harness uses the daemon's in-process store for its account
+catalog and access token. The store serializes refresh rotation and
+requires explicit consent on that registration before background use.
+
 A hosted harness obtains a credential from `POST /auth/provider/token` with
 its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
 tool. Only a session whose backend registration sets `ProviderCredentials`
@@ -204,8 +214,7 @@ under `<cache root>/dashboard/`:
   start is needed. Older daemons ignore it; settled binaries remain available.
   The retired `hosted-plugin-roots.json` registry is ignored, not migrated.
 - `hosted-packages/<ws|wsflow>/<hash>/` - retained launcher plus that package's
-  five embedded manifests. Native Pi's separate content-addressed input stage
-  supplies its workflow skills, resources and package-owner manifest.
+  five embedded manifests.
 - `dashboard.lock` - the single-instance OS file lock; `endpoint.json` - port,
   pid, version, and the shutdown token; `launcher-start.lock` - the persistent
   advisory lock updated Python launchers hold across a necessary daemon start;
@@ -258,10 +267,10 @@ under `<cache root>/dashboard/`:
   index only reads this registry; ws-mcp prunes entries unseen for 7 days,
   except an agent conversation (an `agent` registration, or a directory
   holding `agent.json`), whose lifetime is the runner's while it may serve
-  it: it heartbeats only while the daemon runs. A closed or handed-off lead
-  and a closed spawned Pi child age from their last registry row write;
-  pruning removes the session directory and its files. A handed-off Pi lead
-  whose session file lives inside that directory is kept for its terminal.
+  it: it heartbeats only while the daemon runs. Ended records age from their
+  last registry row write. Pruning removes the session directory and its
+  files. A legacy Pi lead handed off with its session file in that directory
+  keeps the file for the terminal process.
 - `sessions/<reply-id>/snapshot.json` and `sessions/<reply-id>/ring/` - the
   session's live snapshot (current lead and subagent activity, served from
   daemon RAM for slotted sessions and flushed for recovery on turn end, close,
@@ -375,14 +384,15 @@ under `<cache root>/dashboard/`:
   and only when it is unchanged since the check read it. A crash can
   therefore lose a nudge but never double one, and two checks never both
   send.
-- `sessions/<reply-id>/agent.json`, `instructions.md`, and `pi/` - an agent
+- `sessions/<reply-id>/agent.json` and `instructions.md` - an agent
   runner conversation's own files (`internal/wsagent`): the owner-only
   record a process start needs after a daemon restart (profile, backend,
   working root, backend session id, model and effort, the conversation's ws
   session key), the composed instruction file appended to the harness's
   system prompt (owner-only; it carries the session key when the profile
   allows ws tools, and a Claude lead's file always carries the key and the
-  `workflow_manual` instruction), and for the pi backend its session file and MCP bridge.
+  `workflow_manual` instruction). A legacy Pi record can still refer to the
+  session file under its `pi/` directory.
   The daemon reads the conversation from its live stores alone, since no
   ws-mcp serves it and it has no session record.
 - `sessions/<reply-id>/permission.json` - a hosted lead's explicit common
@@ -584,23 +594,15 @@ when it is refused (primary, pooled, missing, locked, a live session or
 terminal), needs force the submit did not carry, or was forced on a stale
 token; else it runs `git worktree remove [--force]` from the primary and
 keeps the branch. A viewer elsewhere gets 404.
-Ended sessions fold apart under each worktree and stay listed as long as
-the index holds them (their registry directory and session record exist),
-past the index page's 24-hour window: on a daemon that hosts lead sessions
-an ended row carries how it comes back (`RailRow.Revive`): `reopen` for a
-closed hosted session, `takeover` for a claude or pi session a terminal ran
-in a repository (shown disabled while its key record names no harness
-conversation), nothing for a plain-folder session. Whether a terminal
-harness has exited is asked when the entry is used (the **Moves** bullet
-of the hosted lead sessions below). `PruneRegistrations` spares an agent runner's directory
-while the runner may serve it; a lead whose record is closed or handed off,
-or a closed spawned Pi child, ages by its last registry row write like any
-ended session. After 7 days unseen, pruning removes its session directory,
-including the Pi child's session file needed to reopen it. Open children and
-other agent records (the tracker's support agent) keep the runner's lifetime.
-One retired lead is never pruned: a handed-off pi session whose session file is inside its
-session directory (the daemon started it), since the terminal's pi runs on
-that file from the hand-off on.
+Ended sessions fold apart under each worktree while their registry directory
+and session record exist, including beyond the index page's 24-hour window.
+An eligible closed hosted lead offers `reopen` and an eligible Claude terminal
+session offers `takeover` (`RailRow.Revive`). The takeover route checks whether
+the terminal harness has exited. A retired Pi row opens its history without
+a revival action. `PruneRegistrations` spares the directory while the runner
+may serve it. Ended rows normally age out after 7 days unseen. A legacy Pi
+lead handed off with its session file inside its directory keeps the file for
+its terminal process.
 
 On the served board and in the conversation's lead
 replies, a file link renders as an action link (`data-wl="file"`, titled with
@@ -772,19 +774,14 @@ runs resolve the git executable once per `PATH`. Both pages' SSE streams send `e
 tracker` with `{"rev": N}` when it differs from what that stream last sent
 (once on connect too), and the page re-reads.
 
-The daemon also hosts headless agent conversations (the agent runner,
-`internal/wsagent`, wired in by `cmd/ws-mcp/dashboard.go`): a Claude Code or
-Pi process per conversation, started from a named profile in the
-`agent.profile.<name>` config family (a whole-object structured value at
-project, repo, or global scope, resolved through the conversation's working
-root; repo scope may not set `mcp_servers` or `plugins`; `agent.` is a
-reserved prefix no adapter manifest may claim). Two profiles are built in,
-`tracker-support-claude` and `tracker-support-pi` (one per harness, since a
-profile fixes its backend; a project or global profile of the same name
-replaces one whole); their `instructions` value `builtin:tracker-support`
-names a text embedded in the binary instead of a file under the working
-root, and `builtin:<name>` accepts only the embedded names. The Claude one
-allows the `Agent` tool as its only built-in tool, so it may spawn
+The daemon also hosts headless agent conversations (`internal/wsagent`, wired
+in by `cmd/ws-mcp/dashboard.go`). Each conversation starts from a named profile
+in `agent.profile.<name>`. The whole object resolves through the conversation's
+working root at project, repo, or global scope. Repo scope may set neither
+`mcp_servers` nor `plugins`. The built-in `tracker-support-claude` profile
+can be replaced as a whole by a profile of the same name. Its
+`instructions` value `builtin:tracker-support` names embedded text.
+The profile allows the `Agent` tool as its only built-in tool, so it may spawn
 subagents: Claude applies the launch's `--tools` and dontAsk allowlist to
 them too (a subagent type whose every tool is outside it is refused), and
 its system/init reports the tool as `Task`, which the init check accepts
@@ -814,7 +811,7 @@ package's staged `bin/ws-mcp-launcher.py serve --stdio`, never the daemon's
 staged executable as a stdio server.
 The built-in global-only `hosted.plugin_package` key (`config.tune`, values
 `ws` or `wsflow`, fixed default `wsflow`, visible with no-agent) selects the
-whole package for hosted Claude/Pi leads and this attached MCP. Each process
+whole package for hosted Claude leads and this attached MCP. Each process
 start reads the setting; running and holder-reattached processes stay unchanged.
 Both packages come from the daemon's embedded inputs (or its explicit process
 source override), never a connected plugin root or registry. An invalid
@@ -824,7 +821,7 @@ when known, else `python3` on PATH (Windows: `py -3` fallback). The conversation
 root overrides `WS_MCP_PROJECT_ROOT` in that command's environment, keeping
 proxy mode's exact arguments and preventing the daemon's lead root leaking
 into the worker. A proxy-hosted worker still uses its capability token for
-nested `agent.*` calls (and legacy `pi.*`), not the daemon's lead runner handle.
+nested `agent.*` calls and authorized legacy Pi history reads.
 
 A spawned conversation (`internal/wsagent/spawn.go`) is a non-lead
 conversation another session opens with its first message (`Runner.Spawn`:
@@ -835,7 +832,7 @@ once: done, failed (the harness's error, its process ending under it, or a
 process that could not start or take the message), or interrupted (an open
 turn the next daemon cannot recover because its holder/process is gone,
 or it ran without a holder; the record's `turn_open` marks it). A daemon
-replace alone does not interrupt a holder-backed Pi turn. A settle of a
+replace lets a surviving holder continue its turn. A settle of a
 conversation with a parent goes to the runner's `Options.Report`; closing
 one settles nothing.
 `Runner.Wait` waits for a turn that took every message sent before the
@@ -844,73 +841,29 @@ a slash command's turn covers none of the text drained behind it); the
 last reported turn is kept in the record (`last_turn`), so after a daemon
 restart a wait on a conversation that settled before it answers at once.
 `Runner.Watch` reports each change of a conversation with a parent.
-The built-in `pi-worker` profile is Pi's coding tools plus ws's
-`git.status`, `git.diff`, `git.log`, `git.merge_base`, `git.commit`,
-`git.resolve_impl_branch`, `tickets.create_empty`, `tickets.verify`, and
-`agent.spawn`, `agent.interrupt`, `agent.list`, `agent.tiers`, with no instruction file. The built-in `pi-mini-lead`
-adds `tickets.query/acquire/release/close/move/checklist`, read-only
-`note.query`, `playbook.read`, `playbook.render`, `path.generate`, and
-`route.resolve_implement`. It keeps a delegate key, not lead authority, and
-adds no note, whiteboard, or tracker writes. A spawn records its `tier`
-(`SpawnSpec.Tier`, `Record.tier`; an unknown name is refused).
+A spawn records its `tier` (`SpawnSpec.Tier`, `Record.tier`).
 
-The hidden compatibility `pi.*` handlers (`internal/mcp/pi_tools.go`, lead-only)
-retain these calls for older sessions: `pi.spawn {prompt, tier, profile?, cwd?, label?}` (model and effort from the
-tier's entry in the `pi` harness bucket of `agents.tier`, which only the
-user's `config.tune` sets; an unset tier is refused with that key named;
-`cwd` relative to the session's root; `profile` names any resolvable non-lead
-Pi `agent.profile.<name>`, default `pi-worker`), `pi.send` (a running child's native
-Pi steer at the next tool boundary; with no turn running, a new turn at once;
-a sleeping child resumes on the same session file, keeping its id, cwd, model,
-effort, and label; reopening a retired child refuses a missing, inaccessible,
-or non-regular session file), `pi.list` (the caller's own children, with MCP-only
-`sleep` and `deleted` labels; `deleted` means a retired child's session file is
-unavailable, not a complete resume-admission check), `pi.stop` (ends the process
-and closes its descendants; the record stays resumable by `pi.send`; a child
-already closed answers as stopped), `pi.transcript`, and
-`pi.wait` (default 300 s, at most 1800 s, for the turn after the last
-send; on a closed child, its last reported turn when that turn took every
-message sent). The daemon mails each settled turn to the parent lead's reply-id
-queue with the display-only label `agent:<subagent id>` (no reply address) and
-wakes the mailbox waits; the first body line directs replies to the child's
-address through `mailbox.send`, and the report head reads `[subagent
-id:<id> ...]`. For other senderless system mail without a label,
-`mailbox.recv` still shows `system`. For Pi completion reports, a steered message belongs to the turn that takes it, whose completion
-mail covers it without an extra turn. A steer refused or not taken before
-the turn ends is cleared from Pi's queue and sent as the next turn instead.
-The compatibility stop itself mails nothing; a turn started by a later `pi.send`
-reports as usual. New callers use `agent.spawn`, `agent.interrupt`, `agent.list`,
-and `agent.tiers`, and send follow-ups through `mailbox.send`; `agent.stop` is
-not a tool. Interrupt ends the turn without closing the conversation.
-Pi subagents run under session holders, not as the daemon's own
-child processes: a running Pi turn survives a daemon restart or replace.
-The successor rejoins the same process and replays its output, including a
-completion produced while no daemon ran; completion mail follows the ordinary
-settled-turn path, not an interruption report. `pi.list` keeps an open turn
-`running` during rejoin, then reflects its recovered settlement. A `pi.send`
-accepted during rejoin waits in the inbox until replay finishes, then steers
-the still-running turn or starts the next one; already-taken steers retain
-their turn coverage across the swap.
+#### Legacy Pi compatibility
 
-This needs a surviving holder and child, and a successor using the same state
-directory that can reattach. A live but unreachable or incompatible holder
-leaves input waiting; `running` during rejoin is not proof of fresh progress.
-If replay has gaps, Pi RPC recovery reconciles the turn; a failed recovery
-ends the process and reports failure. A process crash or an explicit stop
-ends the running turn, and a Windows holder marked not restart-safe may die
-with its starter's job object. A runner without a holder manager cannot
-preserve the process; a configured holder that fails to start refuses the
-launch rather than falling back to an unheld child. If the process is gone, a later `pi.send` resumes the saved Pi session
-through the ordinary lazy-start path; no second spawn or record is needed.
-The parent's reply-id is derived from its session key, so restarting a lead
-with the same key keeps its children addressable.
-`tools/list` never shows the tools: `agent.*` and mailbox routing
-replace them, and the handlers stay for sessions started on an older plugin
-until the next minor deletes them. A call answers only when
-`dashboard.pi_spawn_enabled` is on (ws on, wsflow and Pi off), the server is
-hosted by the daemon (`ServerOptions.Agents` is the daemon's runner; a
-legacy standalone ws-mcp has none and a call is refused naming the daemon), and
-`pi --version`, probed once per process, is 1.0 or later.
+The daemon keeps the `ws-pi-bridge` initialization identity and six hidden
+`pi.*` handlers through 0.52. Handler removal is scheduled for 0.53
+(`internal/mcp/pi_tools.go`). Authorized callers
+can use `pi.list` for their own recorded Pi children and `pi.transcript`
+for a child's retained transcript. These reads work without the retired
+`dashboard.pi_spawn_enabled` setting. `pi.spawn`, `pi.send`, `pi.stop`,
+and `pi.wait` return a retirement error. Current worker operations use
+`agent.spawn`, `agent.interrupt`, `agent.list`, `agent.tiers`, and
+`mailbox.send`.
+
+A `pi.<tier>` name resolves to `werk.<tier>` and uses werk's availability
+check. When the werk slot is unset, the resolver uses a stored Pi model
+only if its ID exactly matches the OpenRouter catalog. Stored Pi records,
+profiles, and routing values remain readable. Retired Pi conversations show
+as ended. The startup sweep leaves live legacy holders to exit on their own,
+including orphan holders. Revival, wake, handoff, and new Pi execution are
+retired.
+
+#### Worker mail and delegation
 
 Mail to a spawned child's address (`id:<reply-id>`, as `agent.spawn`
 returns it) is ordinary `mailbox.send` to that reply-id queue in the
@@ -922,15 +875,14 @@ what arrives. Each claimed message's body opens with a `[relation:
 parent|child|peer]` line, computed at claim time from the `Record.Parent`
 lineage (no Envelope field); system mail carries none. A running turn takes
 the mail as a steer when the harness's catalog profile does not grade steer
-`unsupported` and the process has a steer handle (Pi, with no profile: the
-handle alone); a child's steered mail is held like a steered report, so its
-turn's report covers it. Otherwise the mail waits in `Record.Mail` for the
+`unsupported` and the process has a steer handle. A child's steered mail
+is held like a steered report, so its turn's report covers it. Otherwise the mail waits in `Record.Mail` for the
 next turn. Mail to a sleeping child wakes it, ignoring the width cap, and
 resets its waiting clock (`LastActiveAt`); a refused wake keeps the mail and
 tells each sender once (`Options.WakeRefused`, posted as `agent:<id>`
 system mail). Each intake-fed
 server watches the runner and feeds the owning lead's recursive spawn tree
-(`pi:<id>`, `agentKind: "pi"`, linked to the child's page) into its live state;
+(linked to each child's page) into its live state;
 a live session the server creates, or one an adapter resets, gets its open
 descendants' rows again, so they come back after a reconnect. A dashboard-hosted
 lead instead gets those rows from its runner-owned snapshot writer, including
@@ -938,9 +890,8 @@ after daemon replacement; hosted intake remains off. Descendants nest under
 their spawner through ordinary `parentId` links. When a harness also reports the
 same conversation (its reply-id or native conversation id), the snapshot keeps
 one daemon-owned lifecycle row with the harness's activity and telemetry. An
-intake-only session whose dashboard feed is off gets no row. The agents popover
-shows a running Pi row with a blinking `pi` badge in place of the pulse.
-The composer's subagent badge opens that popover over the conversation;
+intake-only session whose dashboard feed is off gets no row.
+The composer's subagent badge opens the agents popover over the conversation;
 it stays visible but muted with no running agents, even on a non-live
 session. Escape or a click outside closes an unpinned popover; a pin is
 browser-local and reopens it on the next load, and close unpins it
@@ -948,15 +899,14 @@ browser-local and reopens it on the next load, and close unpins it
 `assets/dashboard-composer.js:1459-1464,1483-1489,1525-1565`).
 
 A spawned worker delegates through the daemon's capability-token route
-(`internal/wsagent/children.go`, `internal/mcp/agent_tools.go`); the daemon
-owns the whole tree. Current `agent.*` calls and the retained compatibility
-Pi calls share this route; the Pi-specific legacy behavior follows:
+(`internal/wsagent/children.go`, `internal/mcp/agent_tools.go`). The daemon
+owns the tree. Current `agent.*` calls and legacy Pi history reads share
+this route.
 
-- **Token.** A conversation `Runner.Spawn` started with a parent and a
-  recorded tier, whose profile allows an `agent.*` or legacy `pi.*` tool, gets a capability token
-  (`WS_MCP_PI_TOKEN`) and the daemon's loopback base URL
-  (`WS_MCP_PI_ENDPOINT`, set by `ws-mcp dashboard` through
-  `Runner.SetEndpoint` before `Start`) in its attached ws-mcp's environment.
+- **Token.** A spawned conversation with a parent and a recorded tier gets a
+  token when its profile allows delegation tools. The attached ws-mcp reads
+  the token from `WS_MCP_PI_TOKEN` and the daemon's loopback base URL from
+  `WS_MCP_PI_ENDPOINT`. The runner sets the endpoint before start.
   The token is drawn at every actual process launch and void once that
   process ends or the conversation closes. A holder-backed worker keeps it
   in its record; the successor restores it only after checking the recorded
@@ -966,81 +916,17 @@ Pi calls share this route; the Pi-specific legacy behavior follows:
   delegate key: the token authorizes delegation tools alone, so
   every other lead-only tool stays refused.
 - **Forwarding.** A ws-mcp with no runner and both variables set forwards
-  each `pi.*` call (the tools are not listed) to
-  `POST /agents/by-token/<op>` (`spawn`, `list`, `send`, `stop`,
-  `transcript`, `wait`) with the token as a bearer credential; the keyed
-  gate lets a delegate key through for `pi.*` there only. The route answers
-  only this machine (404 otherwise) and 401 for a missing, forged, or void
-  token, and scopes every op to the holder's own children (404 for any other
-  id). `dashboard.pi_spawn_enabled` is checked only at the root, on the
-  lead's `pi.spawn`; the Pi version is the daemon's check on every call
-  (`Options.ChildCheck`, the version probed once per daemon process). The
-  worker's own server checks neither. Forwarded calls rediscover the current
-  daemon endpoint. A disconnected `pi.wait` retries within its deadline;
-  `spawn`, `send`, and `stop` do not automatically retry, since they may have
-  taken effect before the connection broke. A failed call during replacement
-  does not by itself mean the Pi process stopped.
-- **Cwd.** A worker's empty `cwd` is the worker's own working directory
-  (its record's `cwd`, else its root), and a relative one resolves against
-  it, so a worker in a worktree spawns into that worktree. Both a lead's
-  and a worker's spawn bind the Pi child's delegate key and ws MCP cwd to
-  the resolved cwd. The conversation's root stays the caller's root for
-  mail and config. A lead's `pi.spawn` keeps resolving cwd against the
-  lead's root.
-- **Caps.** A spawn records the holder as the child's parent (`parent.kind:
-  "conversation"`). The lead is depth 0, its Pi worker depth 1, and that
-  worker's child depth 2; the depth cap is 4. `agent.spawn` additionally limits
-  width to 99 awake direct children; there is no global concurrent-agent cap.
-  The compatibility Pi
-  child's tier resolves in the `pi` bucket alone and may not rank above the
-  holder's own (`small` < `medium` < `large` < `xlarge`); a holder with no recorded tier
-  is refused.
-- **Profiles.** An omitted `profile` always means `pi-worker`, even for a
-  mini-lead parent. A non-lead parent's child must be a subset of its launched
-  resolved `ws_tools`, `tools`, and `mcp_servers` (including each server's
-  definition); an excess is refused naming both profiles and the tools.
-  Overrides are honored, not ranked by profile name. Each Pi process launch
-  persists the exact checked definition on its record, uses that same copy
-  to launch, and checks again on restart against its parent's launched copy.
-  Widening a parent's config does not widen an already-running parent's
-  ceiling. A still-running process reattaches with its saved definition;
-  older records without one cannot spawn children while reattached, until an
-  actual process launch resolves and snapshots their definition. Lead parents
-  have no subset ceiling.
-- **Reports.** A child's settled turn waits in its record
-  (`pending_reports`) until the runner hands it to the parent. A running
-  parent turn gets it as a Pi `steer`. Otherwise it is kept in the parent's
-  record (`reports`) and sent as the parent's next turn, which starts at
-  once: when the parent is idle or its process stopped, or when the steer
-  was refused or the run ended before taking it (`clear_queue` then drops
-  it from Pi's queue). A parent blocked in `pi.wait` on that child takes
-  the turn as the wait's answer instead, with nothing steered; a wait on a
-  turn whose report was already handed over answers with its status alone
-  (`delivered: true`, no message). A report to a Claude lead still goes by
-  mail.
-- **Holds.** A worker's done turn is not reported upstream (no report, no
-  wait answer) while a child of its own is open: from a message it was sent
-  until its report has reached the worker, or it closes. A failed or
-  interrupted turn goes up at once. Pending and kept reports are in the
-  records, so a daemon restart delivers them. A holder-backed Pi child's
-  running turn survives the restart and reports its eventual result. Only an
-  unrecovered open turn (no surviving holder/process, or no holder manager)
-  reports interruption, which resumes its parent; it settles before the
-  successor sends the input the record kept for the next turn, so that next
-  turn stays open.
-- **Close.** Closing a conversation closes its open descendants first,
-  deepest first; closing a hosted lead also closes the Pi children it
-  spawned. A finished child never auto-closes: its process stops after its
-  idle timeout and its conversation sleeps, waking on mail. A daemon start
-  restores finished children asleep; only an orphan whose conversation parent
-  is closed or gone is closed at startup. Waiting children expire after
-  `agent.child_waiting_days` (default 15), counted from their last activity.
-  A closed Pi child's directory ages out after registry retention, counted
-  from its last row write. Compatibility `pi.send` can reopen a closed Pi child
-  alone on its existing session file; descendants stay closed until sent to
-  themselves. A process stop (the stop route, an idle stop, a settings change)
-  does not cascade, and a child's report resumes the stopped parent. A report
-  to a closed parent stays in the child's record.
+  worker operations and authorized legacy Pi history reads. The token scopes
+  the route to the caller's children. Forwarded calls rediscover the current
+  daemon endpoint.
+- **Cwd and limits.** A nested spawn defaults to the worker's working
+  directory and resolves relative paths there. The lead is depth 0 and the
+  tree is capped at depth 4. `agent.spawn` allows up to 99 awake direct
+  children per spawner.
+- **Close.** Closing a conversation closes open descendants deepest first.
+  A worker's idle timeout stops its process and puts the conversation to sleep.
+  Waiting children expire after `agent.child_waiting_days` (default 15),
+  measured from their last activity.
 - **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on
   (default false), the runner holds one idle-system-sleep assertion while any
   conversation instance has a live turn (`wsagent/keep_awake.go`,
@@ -1057,12 +943,13 @@ Pi calls share this route; the Pi-specific legacy behavior follows:
   Windows, nothing elsewhere. A failed assertion is logged once and retried
   only at the next activation.
 
-The runner also hosts lead sessions: a headless Claude Code, Pi, agy, or Codex
+The runner also hosts lead sessions. A headless Claude Code, agy, or Codex
 process that loads the user's own harness setup (no profile allowlist or
 plugins of the runner's; a Claude lead gets one appended daemon-written
 instruction file with its session key and the `workflow_manual` instruction,
 so a machine that blocks some plugin hooks still teaches it), started from
-the built-in `lead-claude`, `lead-pi`, `lead-agy`, or `lead-codex` profile.
+the corresponding built-in lead profile. The daemon also hosts werk leads
+in process.
 `POST /agents` refuses a lead profile; a lead is spawned
 by `POST /agents/leads {root, harness: <registered lead harness>, model?, effort?,
 permission_mode?, plugin_isolation?}` (201 with the state; `root` must be
@@ -1071,7 +958,7 @@ inside git, since the session key is minted at the canonical root).
 `isolated` (bundled plugins only); a Claude lead ignores it. Differences
 from a support conversation:
 
-- **Process.** The harness runs under a session holder (`internal/wsholder`,
+- **Process.** An external harness runs under a session holder (`internal/wsholder`,
   pipe mode), not as the daemon's child, so it outlives the daemon. The
   record (`agent.json`) keeps the holder id, the harness PID, and the last
   holder record sequence applied. A starting daemon rejoins each lead's
@@ -1079,9 +966,9 @@ from a support conversation:
   only records past the recorded one: no entry is written twice, and a
   permission prompt that waited across the restart waits again. It never
   starts a `--resume` process while the holder's process runs. A lead holder
-  no conversation runs under is ended after the first scan. A daemon that
-  stops is restarted by the hosted session's own launcher at its ws-mcp
-  reconnect (Daemon-Hosted MCP below).
+  no conversation runs under is ended after the first scan, subject to the
+  legacy Pi holder guard. The hosted session's launcher restarts the daemon
+  on ws-mcp reconnect (Daemon-Hosted MCP below).
 - **Identity.** The daemon mints the session's lead key at spawn and writes
   the registration itself (`hosted: true`, `host_pid`), heartbeats it, and
   end-marks it at close. The harness gets `WS_HOSTED_SESSION`,
@@ -1098,9 +985,7 @@ from a support conversation:
   workflow manual the daemon renders for it as of that launch (the daemon's
   `LeadManual`, the same render as `workflow_manual` on the session's own
   connection). A failed render leaves the key sentence alone and is logged.
-  A Pi lead's extension appends its own manual; its bridge fallback appends
-  the daemon's render beside the key. A session under the subagent-removal
-  policy (a lead or an `agent.spawn` worker) whose backend catalog names a
+  A session under the subagent-removal policy (a lead or an `agent.spawn` worker) whose backend catalog names a
   native subagent tool for its role also gets a line never to use that
   tool and to delegate through `agent.spawn`/`mailbox.send`
   (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
@@ -1133,7 +1018,7 @@ from a support conversation:
 - **Backend descriptor.** What differs per harness here is data on the
   backend's `BackendRegistration`, read through the conversation record's
   `Backend`; common code names no backend. `ManualHarness` is the harness the
-  lead's manual renders under (claude, agy, codex; Pi declares none);
+  lead's manual renders under (for example, claude, agy, or codex);
   `PlaybookCommands` is described above. `PreferNativeSubagent` (agy only)
   selects the native-first prompt line above and, for text the hosted lead
   executes itself (`workflow_manual`, `playbook.read`, the playbook-command
@@ -1164,22 +1049,21 @@ from a support conversation:
   sentence of each description. Runtime catalogs omit this conditional
   tool from their default connection surface.
   `ToolNameScheme` is how its connection's `tools/list` spells ws's dotted
-  tool names: agy declares `sanitize` (each `.` becomes `_`, as `tickets_query`:
-  the Pi bridge's character mapping without its `ws__` prefix, since agy adds
-  `mcp_ws_` itself and the Anthropic API refuses dots), every other backend keeps
-  dotted names. A call by alias maps back to the canonical name first in
+  tool names. agy's `sanitize` scheme writes `tickets_query` for
+  `tickets.query`. agy adds `mcp_ws_` itself and the Anthropic API refuses dots.
+  A call by alias maps back to the canonical name first in
   `callTool`, so allowlists, the session-key rule, and dispatch see dotted
   names; the dotted name stays accepted. The alias table refuses a collision
   when it is built. Workers identify their own record with
   `WS_MCP_AGENT_SESSION_KEY` in the attached MCP environment; this selects
   spelling only, without the hosted lead's implicit-key rule or authority.
   `WorkerCapable` and `WorkerProfile` admit worker tiers; `WorkerHTTPMCP`
-  selects HTTP attachment. Claude uses HTTP, Pi keeps its bridge.
+  selects HTTP attachment. Claude uses HTTP.
   **agy workers run for agy callers only** (owner decision (1546),
   2026-11-22, revising (1545)): Antigravity's terms say its login used
   through third-party software can get the account suspended and that
   wrapping its CLI in another coding agent is unsupported on consumer plans,
-  which a Claude, Codex, or Pi session driving an agy worker is; agy-to-agy
+  which a Claude or Codex session driving an agy worker is; agy-to-agy
   use is the owner's accepted risk. The registration option
   `crossHarnessRefusal` (set only for agy, which is `WorkerCapable`) admits
   a worker on that backend only for a caller verified on the same backend,
@@ -1245,8 +1129,8 @@ from a support conversation:
   `internal/mcp/tier_routing.go`). Every daemon-hosted connection gets that
   check (`ServerOptions.CallerBinding`, the runner's read-only memory view),
   a token-forwarding worker's too, which holds no runner handle. agy leads keep peer mail and the
-  watchdog's automatic `continue`, and may spawn Claude, Codex, Pi, or agy
-  workers. The dashboard's hosted lead popover still offers agy and shows a
+  watchdog's automatic `continue` and may spawn available workers, including
+  agy. The dashboard's hosted lead popover still offers agy and shows a
   terms warning while agy is picked.
 - **No ws plugin (Claude).** A Claude lead loads no ws bundle: the installed
   `ws` and `wsflow` plugins are turned off for the launch (`--settings`
@@ -1327,14 +1211,11 @@ from a support conversation:
     one. The daemon finds its lead key by the row's root and reply-id
     (`AgentKeyStore.LeadSession`), keeps that key (no mint), and resumes
     the conversation its key record names on the next input or mail:
-    `--resume <harness_session>` for Claude, `--session <file>` on the
-    session's own file (no `--session-dir`) for Pi, in `harness_cwd`, which
-    the record keeps (`cwd`, `session_file`) for every later start. It is
-    refused (409) while the terminal harness may run: `harness_pid` alive,
-    or no `harness_pid` on a row that is not ended. Also refused: a hosted
-    or agent row, a harness other than claude and pi, a session with no
-    lead key (every plain-folder session), one whose key record names no
-    harness conversation, and a directory or Pi session file that is gone.
+    Claude resumes with `--resume <harness_session>` in `harness_cwd`.
+    The record preserves the working directory for later starts. Takeover
+    refuses with 409 while the terminal harness may run. It requires an
+    eligible terminal harness, a lead key with a recorded conversation,
+    and a working directory that still exists.
     A ws-mcp that outlived the session's harness re-reads the row under
     the lock before each of its row writes and stops writing once the row
     is hosted.
@@ -1342,8 +1223,8 @@ from a support conversation:
     the process ends, the row becomes an ended terminal row (`hosted`,
     `host_pid`, `harness_pid` cleared, `ended_at` set), the record is
     marked `handed_off_at` as in an implicit hand-off, and the state
-    carries `resume_command` (`cd <dir> && claude --resume <id>`, or
-    `cd <dir> && pi --session <file>`), which is answered to a viewer with
+    carries `resume_command` (`cd <dir> && claude --resume <id>` for Claude),
+    which is answered to a viewer with
     `can_control` only. It is refused (409) for a session with no harness
     conversation yet, and fails when the process could not be ended. The
     session's page carries `data-handed` while the row is an ended
@@ -1355,8 +1236,8 @@ from a support conversation:
     session comes back through takeover.
 - **Input.** Every input is the daemon's. A composer message is held in the
   inbox and submitted at the turn's end; a steered one is written to the
-  running process at once (Claude: a user message mid-turn, Pi: RPC
-  `steer`). The daemon watches the lead key's mailbox (`LeadMail`, in
+  running process at once (a mid-turn user message in Claude). The daemon
+  watches the lead key's mailbox (`LeadMail`, in
   `internal/mcp/lead_mail.go`) and claims what arrives: during a turn it is
   steered into the running process like a composer steer, else it goes into
   the record and is submitted as a turn whose text is what the mailbox wait
@@ -1364,13 +1245,9 @@ from a support conversation:
   task's result) and a compaction's replayed assistant line are handled as
   the stream reports them. A page command entry splits the drain: the
   messages before it go as one turn (with the claimed mail), the command
-  runs alone as the next turn (Claude: its bare typed line; Pi: `/compact`
-  as RPC `compact`, any other as a `prompt`, never `steer`), and what was
-  drained after it waits in the record (`queued`) for the turns after,
-  across a daemon restart; a close or hand-off drops it, an interrupt keeps
-  it. The session's command list is Claude's init `slash_commands` (not
-  `terminal_slash_commands`) and Pi's `get_commands` (asked at start and
-  after each turn) with `compact` added.
+  runs alone as the next turn. The text drained after it waits in the record
+  (`queued`) for later turns, across a daemon restart. Close or hand-off drops
+  it. Interrupt keeps it. Claude supplies `slash_commands` at init.
 - **Turns.** With `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` the CLI reports
   `session_state_changed`; once one is seen, only `idle` ends a turn and
   releases held sends (a `result` does not: background work may still run).
@@ -1389,11 +1266,11 @@ from a support conversation:
 - **Settings.** `POST /agents/<id>/settings {model?, effort?,
   permission_mode?}` applies in-stream where the harness has a control
   (Claude: `set_model`, `apply_flag_settings` for effort,
-  `set_permission_mode`; Pi: `set_model`, `set_thinking_level`) and keeps
+  `set_permission_mode`) and keeps
   the process; a restart on the same backend session is the last resort.
   The record holds the current values, and every resume launches with them.
   Native permission modes: `auto` (the default), `default`, `acceptEdits`,
-  `plan`, `dontAsk`, `bypassPermissions`; a Pi lead has none. The legacy
+  `plan`, `dontAsk`, `bypassPermissions`. The legacy
   spawn and settings URLs reject `permission_level` or
   `permission_full_ack` with 400, including explicit nulls. On a
   common-aware backend a native `permission_mode` change that raises the
@@ -1418,15 +1295,15 @@ from a support conversation:
   (`internal/wsagent/http.go:94-106,158-177,183-207,249-271,364-398`,
   `internal/wsagent/permission.go:78-96,180-210`). These are lead-only intent,
   not sandbox guarantees or worker capability changes: Claude maps the
-  levels to `plan`, `acceptEdits`, `bypassPermissions` respectively, while
-  Pi has no native mode mapping. Lead state includes `permission_level`,
+  levels to `plan`, `acceptEdits`, `bypassPermissions` respectively. Lead state
+  includes `permission_level`,
   `permission_source` (`explicit` from `permission.json`, else
   `legacy-derived`), and `permission_enforcement`: `partial` only for
   Claude `read-only` while a running harness reports `plan`, `advisory`
   otherwise. Worker state omits these fields. Without an explicit
   selection, Claude `plan` derives `read-only`, `bypassPermissions` derives
-  `full`, its other admitted modes derive `workdir-write`, and Pi derives
-  `workdir-write` (`internal/wsagent/permission.go:53-75,98-109`).
+  `full`, and its other admitted modes derive `workdir-write`
+  (`internal/wsagent/permission.go:53-75,98-109`).
 - **Recovery and failures.** A Claude lead's init line lists its MCP
   servers. A server reported `failed`, a failed `mcp__*` tool call, or the
   lead's call of a `*__request_mcp_reconnect` tool makes the runner ask the
@@ -1543,9 +1420,8 @@ its last opened app-server process while that report is younger than the
 five-minute choices TTL (a newer report replaces it), else from the CLI's
 `models_cache.json` (read once per TTL window with no account probe on a
 dashboard read: a missing file is an empty list, an unreadable, empty, or
-model-less one an error on the 30 s failure TTL), Pi's models come from `pi --offline --no-approve
---list-models` (`provider/model`, cached five minutes) and its efforts from
-`--thinking`; a listing failure is that harness's `error` alone), `GET
+model-less one an error on the 30 s failure TTL). A listing failure appears
+under that harness's `error`. The support routes also include `GET
 /support/stores/<store>` (`{store, conversation: State|null, selection}`),
 `POST .../send {text}` (opens the conversation with the current selection
 first when none is open), `POST .../new` (closes the open one and opens a
@@ -1557,8 +1433,9 @@ goes through the runner's settings, from the next message; with no open
 conversation it only saves). `<state dir>/support.json` (0600) holds `{last:
 {harness, model, effort}, stores: {<store>: <reply-id>}}`, so a store keeps
 the same conversation across restarts; with no saved choice, or one whose
-harness is unavailable, the selection is the first available harness
-(Claude, then Pi) with the profile's defaults.
+harness is unavailable, the selection is the first available harness with
+the profile's defaults. A saved legacy Pi choice falls back with a retirement
+notice.
 
 The tracker gate admits a support conversation's key like a top-level
 lead when the daemon holds an open agent record for the key's reply-id that
@@ -1750,8 +1627,8 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 
 | Child kind | Owner | Survives graceful replace? | What to do |
 |---|---|---|---|
-| Hosted Claude, Pi, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
-| Claude, Codex, Pi, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Hosted Claude, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Claude, Codex, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
 Healthy held leads and workers can continue through a normal daemon replacement.
@@ -1771,7 +1648,8 @@ behavior is T1. The complete downgrade surface follows owner decision (1855)=a:
 T2 with the explicit exception that a downgrade beyond the 7-day
 `RegistryRetention` may irrecoverably delete the child's session history.
 An old daemon may also release and rewrite a held conversation parent's turn.
-Live legacy `pi-worker` holders retain their unfenced shape and remain adoptable.
+Live legacy `pi-worker` holders keep running while their records open as ended
+history.
 
 On re-upgrade, a fenced open child of a settled conversation parent is silently
 retired only when its nonzero start strictly predates the parent's terminal
@@ -1984,9 +1862,8 @@ Finding and starting the daemon (`DaemonLink` in the launcher):
    `last-running-executable.json`, validates its retained path/content hash,
    and starts that build. Each later restart rereads the record, so a launcher
    surviving replacement never pins its original build. A missing/corrupt record
-   refuses restart rather than falling back to an installed plugin. Native Pi
-   leads carry the same marker for their extension's launcher. External plugin
-   launchers keep their own runtime/repair path.
+   refuses restart. External plugin launchers keep their own runtime and
+   repair path.
 5. The current hello rejects another minor. A newer same-minor daemon is
    used as is, with no mandatory local binary or metadata upgrade. The
    mixed-version guards ticket separately owns cross-minor acceptance,
@@ -2043,10 +1920,7 @@ quick closes, failed starts, refused hellos, and reconnect failures never
 switch to a child server. In-flight calls fail before waiting for recovery;
 calls not yet sent wait within the 75 s budget instead. The stdio proxy stays
 alive even after a `tools/list` wait expires, so later requests can use the
-successor. Pi's runner-generated ws MCP registration allows 1860 s per request
-to cover a maximum forwarded Pi wait with transport margin; it also exceeds
-the launcher's 75 s recovery budget, which Pi's default 60 s timeout would
-cut off. A hosted server for a reconnected session re-registers that session's
+successor. A hosted server for a reconnected session re-registers that session's
 mailbox presence on its first keyed call and keeps the owner pointer and the
 `WS_MAILBOX_AUTO` stem its predecessor published, provided
 that record is still live (its PID alive and `last_seen` within the ten-minute
@@ -2158,8 +2032,7 @@ streaming command (`mailbox wait --stream`) instead sends live stdout in
 `{"stream": "stdout", "data": "..."}` frames before its final frame; ordinary
 one-shot stdout remains buffered. The
 launcher writes them as UTF-8 bytes to its own stderr and stdout and exits
-with `exit_code`, so the mod and the Pi waiter see the same output and codes
-as before; closing the connection (the launcher exits, or the
+with `exit_code`. Closing the connection (the launcher exits, or the
 daemon drains) cancels the wait at once and clears its listening marker
 (`exit_code` 130, "interrupted"). A hosted wait rechecks on an in-process
 signal (a mailbox send by a server the daemon hosts, a board-answer inbox
@@ -2173,10 +2046,10 @@ maintenance. Failed notice delivery retains its 30-second retry cadence.
 keeps its listening marker until interruption, client disconnect, or parent
 death. `--timeout` becomes the unchanged-pending-arrival reminder interval
 (default 10 minutes), not a process deadline; an empty timeout emits nothing.
-The Claude mod and Pi reuse that child across wakes and restart it when board
-flags change. A rejected stream flag (usage/unknown-flag diagnostics, or a
-nonzero exit before any arrival) selects their existing one-shot loop for the
-remaining session. Model-armed waits keep the one-shot contract.
+The Claude mod reuses that child across wakes and restarts it when board flags
+change. A rejected stream flag (usage/unknown-flag diagnostics, or a nonzero
+exit before any arrival) selects the one-shot loop for the remaining session.
+Model-armed waits keep the one-shot contract.
 
 ## Launcher Environment
 
@@ -2197,22 +2070,22 @@ Current launcher inputs:
 | `WS_CODESIGN_IDENTITY` | macOS local dev builds only: code-signing identity name or SHA-1 passed to `codesign --force -s "$WS_CODESIGN_IDENTITY" -i dev.ws.mcp <binary>` before SHA-256 metadata generation; unset leaves builds untouched, and a signing failure aborts the build. |
 | `WS_MCP_LAUNCHER_DIRECT` | Obsolete; ignored. It never enables executable fallback. |
 | `WS_MCP_PROJECT_ROOT` | Project root default for root-aware tools and CLI commands when no higher-priority root exists. |
-| `WS_RSRC_DEV_CHECKOUT` | Explicit daemon-process-only repository checkout for package inputs (rsrc, workflow skills/templates, manifests and native Pi). Uses the package's canonical directory, logs the override, and permits live playbook edits. Never honored from a connection hello. Production embeds always win over `WS_RSRC_ROOT`. |
+| `WS_RSRC_DEV_CHECKOUT` | Explicit daemon-process-only repository checkout for package inputs (rsrc, workflow skills/templates, and manifests). Uses the package's canonical directory, logs the override, and permits live playbook edits. Never honored from a connection hello. Production embeds always win over `WS_RSRC_ROOT`. |
 | `WS_MCP_DASHBOARD_DEV_SOURCE` | Read by `ws-mcp dashboard`: the `agents-plugin-tool` source root the daemon serves dashboard and whiteboard page assets from instead of the embedded copies (see Dashboard daemon, Dev assets). Unset is off. |
 | `WS_MCP_DASHBOARD_PPROF` | Read by `ws-mcp dashboard`: `1`/`true`/`yes`/`on` serves `net/http/pprof` under `/debug/pprof/` to loopback viewers only, never to a LAN-token request (see Dashboard daemon, Profiling). Unset is off: the routes do not exist. |
 | `WS_MCP_HOLDER_PYTHON` | Read by `ws-mcp dashboard`: the Python interpreter that runs session holders (see Dashboard daemon, Session holders). The launcher sets it to its own interpreter on the daemon-start step unless it is already set; unset, the daemon uses `python3` on PATH. |
 | `WS_MCP_NO_AGENT` | Product-mode gate for agentless distributions such as wsflow. |
 | `WS_MCP_NO_DASHBOARD` | `1`/`true`/`yes`/`on` turns the dashboard off for this ws-mcp whatever `dashboard.enabled` resolves: no session registration, no prune (the daemon itself is started by the launcher, never by this ws-mcp). The agent runner sets it on the ws-mcp it attaches to a conversation. |
-| `WS_HOSTED_SESSION` | `1`/`true`/`yes`/`on` marks a session the dashboard daemon hosts; the daemon sets it, with `WS_HOSTED_SESSION_KEY` and `WS_HOSTED_SESSION_ROW`, on the harness it spawns. Every process below that harness inherits the three, so each reader (this ws-mcp, the Claude mod, the Pi extension) honours them only when the row names its own harness process (see `WS_HOSTED_SESSION_ROW`), resolves that once, and never becomes hosted later. Hosted, this ws-mcp neither registers, heartbeats, nor prunes (the daemon writes the session's registration) but still nudges the daemon and names the daemon's page in `whiteboard.update`; `ferrule` returns the hosted key for a parent-less lead bootstrap and refuses a re-login with any other key; every tool call that omits `session_key` runs with the hosted key, and one that passes a key other than the hosted key or a descendant session's (Key rule above) is refused, `workflow_manual` included; child mints are unchanged. Set without a key, it changes nothing here. Unset is off. |
+| `WS_HOSTED_SESSION` | `1`/`true`/`yes`/`on` marks a session the dashboard daemon hosts; the daemon sets it, with `WS_HOSTED_SESSION_KEY` and `WS_HOSTED_SESSION_ROW`, on the harness it spawns. Every process below that harness inherits the three, so each reader (this ws-mcp and the Claude mod) honours them only when the row names its own harness process (see `WS_HOSTED_SESSION_ROW`), resolves that once, and never becomes hosted later. Hosted, this ws-mcp neither registers, heartbeats, nor prunes (the daemon writes the session's registration) but still nudges the daemon and names the daemon's page in `whiteboard.update`; `ferrule` returns the hosted key for a parent-less lead bootstrap and refuses a re-login with any other key; every tool call that omits `session_key` runs with the hosted key, and one that passes a key other than the hosted key or a descendant session's (Key rule above) is refused, `workflow_manual` included; child mints are unchanged. Set without a key, it changes nothing here. Unset is off. |
 | `WS_HOSTED_SESSION_KEY` | The parent-less lead key the daemon minted for the session it hosts, read only while `WS_HOSTED_SESSION` is on; the session's key stays fixed to it. |
-| `WS_HOSTED_SESSION_ROW` | Absolute path of the hosted session's `registration.json`. Its `host_pid` is the one harness process the flag holds for: equal to the reader's harness PID, hosted; another nonzero PID, an ordinary session, silently (a nested harness, a CLI call from the session's shell); 0, absent, or unreadable, read again about every 100 ms for about 3 s, then an ordinary session with one warning. Unset (an older daemon, a stray flag) is not hosted. The harness PID is `WS_MCP_HARNESS_PID` for ws-mcp (with a Windows `cmd.exe` wrapper skipped, see that row), the mod's own process for Claude (read as the parent of a host command; on Windows, when that parent is the `cmd.exe` shell the host command ran through, that shell's parent, by the same one-level rule), and the extension's process for Pi. |
+| `WS_HOSTED_SESSION_ROW` | Absolute path of the hosted session's `registration.json`. Its `host_pid` is the one harness process the flag holds for: equal to the reader's harness PID, hosted; another nonzero PID, an ordinary session, silently (a nested harness, a CLI call from the session's shell); 0, absent, or unreadable, read again about every 100 ms for about 3 s, then an ordinary session with one warning. Unset (an older daemon, a stray flag) is not hosted. The harness PID is `WS_MCP_HARNESS_PID` for ws-mcp (with a Windows `cmd.exe` wrapper skipped, see that row), the mod's own process for Claude (read as the parent of a host command; on Windows, when that parent is the `cmd.exe` shell the host command ran through, that shell's parent, by the same one-level rule). |
 | `WS_MCP_HARNESS_PID` | Set by the launcher on every start to its own parent PID, over any inherited value: the harness that started this ws-mcp. The runtime reads it as that harness's PID, except on Windows when that process is a `cmd.exe` (the wrapper a harness commonly starts a stdio server through): then its parent. Exactly one level is skipped, so a harness nested under another still tells itself from the outer one, and a failed process lookup keeps the PID as set. It reaches the runtime on both paths (the direct child's environment, and the hello's `env` for a daemon-hosted connection, so it is per caller). A ws-mcp started without the launcher has none and is never hosted; `ws-mcp dashboard` drops it, with the three `WS_HOSTED_SESSION*` variables, from its own environment at start, so the conversations it spawns inherit no session's. |
 | `WS_MCP_ALLOWED_TOOLS` | Comma list of ws tool names; when set, `tools/list` advertises and `tools/call` accepts only these. A hosted lead whose descriptor opts into `CallFallback` also gets `call`; naming `call` in an allowlist alone never enables it. Its inner tool still obeys this allowlist and the normal dispatch gates. Fallback discovery applies permission and role gates using its optional `session_key` (implicit on hosted connections); without a known key it hides role-gated tools. The agent runner sets the allowlist to a profile's ws tools. `tracker.show`, `tracker.ui`, and `git.search` are listed and callable only when it names them. |
-| `WS_MCP_PI_TOKEN` | Set by the agent runner on the ws-mcp of a spawned conversation that may spawn Pi subagents: its capability token for the daemon's `POST /agents/by-token/<op>` route, drawn at each process start and void when that process ends. With `WS_MCP_PI_ENDPOINT` and no runner of its own, this ws-mcp forwards `agent.*` and legacy `pi.*` to that route (see Dashboard daemon, the Pi spawn tree). Unset, `pi.*` is lead-only. |
-| `WS_MCP_PI_ENDPOINT` | Set beside `WS_MCP_PI_TOKEN`: the dashboard daemon's loopback base URL, for example `http://127.0.0.1:29417`. |
+| `WS_MCP_PI_TOKEN` | Per-process worker-delegation capability for the daemon's `POST /agents/by-token/<op>` route. With `WS_MCP_PI_ENDPOINT` and no local runner, ws-mcp forwards `agent.*` and authorized legacy Pi history calls to that route. The variable keeps its historical name for installed readers. |
+| `WS_MCP_PI_ENDPOINT` | Set beside `WS_MCP_PI_TOKEN`: the dashboard daemon's loopback base URL. |
 | `WS_MCP_NAMESPACE` | MCP namespace and embedded package identity: `wsflow` selects wsflow assets; empty/unset or a custom display namespace selects ws. |
 | `WS_MCP_SETUP_TOOL` | Advertised setup tool name override; empty or unset defaults to `ws.setup`. |
-| `WS_MCP_CONFIG_MANIFESTS` | Adapter config key manifests, separated by the platform path-list separator (`:` POSIX, `;` Windows); `;` is accepted on every platform, which the static launcher configs use. Declared keys become `config.tune`-writable, cataloged by `config.list`, and typed in `config.get`; a rejected manifest is logged to stderr and listed by `config.list`. The ws and wsflow packages each list three package-local manifests in both launch configs: `config-manifest.json` (namespace `claude.`; the same keys, differing only in `default`, pinned by `TestShippedClaudeManifestsDifferOnlyInDefaults`), `agy-config-manifest.json` (namespace `agy.`; `agy.model_wait_timeout_seconds`, default 120 in ws and 0 in wsflow, `agy.model_wait_retries`, default 3 in both, `agy.stall_log_check`, default on in both, which lets a hosted agy lead's silence timer cut a model request only when agy's own worker log shows it has no response headers, and `agy.http2_frame_trace`, default off in both, which starts agy with `GODEBUG=http2debug=2` and has its holder keep filtered frame summaries in the session's `agy-http2-frames.log`), and `dashboard-config-manifest.json` (namespace `dashboard.`: `dashboard.enabled`, default on in every package; `dashboard.port`, default 29417; `dashboard.lan_enabled`, global-only and default off in every package; `dashboard.pi_spawn_enabled`, which gates legacy `pi.*` calls, default on in ws and off in wsflow and Pi). Codex paths are relative to `cwd: "."` (the plugin root); Claude paths use `${CLAUDE_PLUGIN_ROOT}`. Pi lists its own config and dashboard manifests, joined with the platform separator. A path that does not resolve fails nothing: the keys stay undeclared, so check `config.list` after changing the list. |
+| `WS_MCP_CONFIG_MANIFESTS` | Adapter config key manifests, separated by the platform path-list separator (`:` POSIX, `;` Windows); `;` is accepted on every platform, which the static launcher configs use. Declared keys become `config.tune`-writable, cataloged by `config.list`, and typed in `config.get`; a rejected manifest is logged to stderr and listed by `config.list`. The ws and wsflow packages each list three package-local manifests in both launch configs: `config-manifest.json` (namespace `claude.`; the same keys, differing only in `default`, pinned by `TestShippedClaudeManifestsDifferOnlyInDefaults`), `agy-config-manifest.json` (namespace `agy.`; `agy.model_wait_timeout_seconds`, default 120 in ws and 0 in wsflow, `agy.model_wait_retries`, default 3 in both, `agy.stall_log_check`, default on in both, which lets a hosted agy lead's silence timer cut a model request only when agy's own worker log shows it has no response headers, and `agy.http2_frame_trace`, default off in both, which starts agy with `GODEBUG=http2debug=2` and has its holder keep filtered frame summaries in the session's `agy-http2-frames.log`), and `dashboard-config-manifest.json` (namespace `dashboard.`: `dashboard.enabled`, default on in every package; `dashboard.port`, default 29417; `dashboard.lan_enabled`, global-only and default off in every package). Codex paths are relative to `cwd: "."` (the plugin root); Claude paths use `${CLAUDE_PLUGIN_ROOT}`. A path that does not resolve fails nothing: the keys stay undeclared, so check `config.list` after changing the list. |
 | `WS_MCP_CLI_NAME` | Declared `ws-cli` / `wsflow-cli` shim or Python launcher command used in printed mailbox wait and re-arm guidance when it matches the supported safe form. The launcher sets it unless already set; an absent or unrecognized value uses an illustrative Python launcher path, never the runtime binary. |
 
 Launcher diagnostics must go to stderr. Stdout belongs to the MCP JSON-RPC
@@ -2249,10 +2122,8 @@ agents-plugin-tool/scripts/bump-ws-version.sh <X.Y.Z>
 ```
 
 The helper updates plugin manifests, runtime contracts, Go runtime development
-defaults, release workflow references, build script defaults, selected
-documentation references, and the `agents-plugin-pi/` mirrors (`runtime.json`,
-`bin/ws-mcp-launcher.py`, `rsrc/`, resynced byte-for-byte from `agents-plugin/`,
-plus both `ws-pi-bridge` `package.json` versions). Development binaries such as `0.51.2-dev` satisfy the
+defaults, release workflow references, build script defaults, and selected
+documentation references. Development binaries such as `0.51.2-dev` satisfy the
 plugin version the helper just set; older or newer minor releases are stale. The
 concrete range lives in `runtime.json.required_mcp` — read it there rather than
 restating a version here, which froze at `0.29.2` for seven minor releases
@@ -2405,15 +2276,13 @@ copy it into the plugin cache:
    }
    ```
 
-2. Run `./install.sh update`. The `rsync` step copies the marker into the
+2. Run `./install.sh update`. The snapshot step copies the marker into the
    plugin snapshot and `claude plugin install` carries it into the versioned
    cache, so the next MCP launch can build when no compatible runtime exists.
 
 After setup, edit source and run `python3 scripts/dev.py rerun daemon` at the
 coordinated swap time to build, stage and seed the selected runtime. Reconnecting
-alone reuses it and reports source drift. Pi lead/fork startup follows the same
-reuse policy; its separate child contract-drift guard still rebuilds on a changed
-`runtime.json`. Worker/explore startup remains build-free. To disable local
+alone reuses it and reports source drift. To disable local
 mode, delete the marker and re-run `install.sh update` (the launcher reverts to
 the cache/release path).
 

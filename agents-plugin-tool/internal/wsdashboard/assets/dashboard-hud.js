@@ -1,6 +1,6 @@
   // --- compact horizontal icon org-chart HUD -------------------------------
-  var HUD_HARNESS_LABEL = { claude: "Cl", codex: "Co", agy: "Ag", pi: "Pi" };
-  var HUD_HARNESS_NAME = { claude: "Claude", codex: "Codex", agy: "Antigravity", pi: "Pi" };
+  var HUD_HARNESS_LABEL = { claude: "Cl", codex: "Co", agy: "Ag", werk: "Wk" };
+  var HUD_HARNESS_NAME = { claude: "Claude", codex: "Codex", agy: "Antigravity", werk: "werk" };
   var HUD_STATE_KEYS = {
     thinking: "js.hud.state.thinking",
     tool: "js.hud.state.tool",

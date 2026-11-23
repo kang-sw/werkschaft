@@ -297,7 +297,7 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 		switch harness {
 		case "codex", "agy":
 			return fmt.Sprintf("harness %q is not installed", harness), true
-		case "pi":
+		case "werk":
 			return "", false
 		}
 		return "", true
@@ -349,8 +349,8 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = tierViewRoute(t, tierViewNode(t, view, "review"), "large")
-	if r.Harness != "pi" || r.AvailabilityUnknown == "" || r.Unavailable != "" || view.AvailabilityUnknown["pi"] != r.AvailabilityUnknown || view.Unavailable["pi"] != "" {
-		t.Fatalf("review:large on an unknown pi = %+v (view unknown %v, unavailable %v)", r, view.AvailabilityUnknown, view.Unavailable)
+	if r.Harness != "werk" || r.AvailabilityUnknown == "" || r.Unavailable != "" || view.AvailabilityUnknown["werk"] != r.AvailabilityUnknown || view.Unavailable["werk"] != "" {
+		t.Fatalf("review:large on an unknown werk = %+v (view unknown %v, unavailable %v)", r, view.AvailabilityUnknown, view.Unavailable)
 	}
 	// Without a check, nothing is marked.
 	view, err = dashboardTierRoutingView(rsrc, opts, draft, "claude", nil)

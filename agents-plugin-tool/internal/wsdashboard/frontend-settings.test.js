@@ -992,3 +992,110 @@ test("modal settings iframe owns navigation, close, and Escape precedence", () =
   frame.win.testNavigate("/settings?scope=global");
   assert.equal(frame.messages.pop().message.wsShell, "nav");
 });
+
+test("settings combobox offers the pickers' models beside the harnesses, with their availability", async () => {
+  const { doc, win, FakeEvent } = createFakeDOM();
+  const ctx = {
+    window: win,
+    document: doc,
+    Event: FakeEvent,
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        harnesses: [{ harness: "claude", available: true, models: [{ id: "sonnet" }], efforts: ["low"] }],
+        pickers: [{ harness: "werk", available: false, error: "no key", models: [{ id: "vendor/m", thinking: true }], efforts: ["low", "high"] }]
+      })
+    })
+  };
+  win.window = win;
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
+  const cb = win.WsSettingsCombobox;
+  await cb.loadChoices();
+  assert.equal(JSON.stringify(cb.backendOptions().map(o => o.id)), JSON.stringify(["claude", "werk"]));
+  assert.equal(cb.backendOptions()[1].unavailable, true, "a picker harness that is not available yet says so");
+  assert.equal(JSON.stringify(cb.modelOptions("werk")), JSON.stringify([{ id: "openrouter vendor/m", thinking: true }]));
+  assert.equal(JSON.stringify(cb.effortOptions("werk").map(e => e.id)), JSON.stringify(["low", "high"]));
+});
+
+test("settings combobox asks again when a picker's model list is still being fetched and refreshes the open list", async () => {
+  const { doc, win, FakeEvent } = createFakeDOM();
+  const answers = [
+    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers_pending: true },
+    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers: [{ harness: "werk", available: true, models: [{ id: "vendor/m" }, { id: "vendor/n" }], efforts: ["low"] }] }
+  ];
+  let fetches = 0;
+  const timers = [];
+  const ctx = {
+    window: win,
+    document: doc,
+    Event: FakeEvent,
+    setTimeout: fn => { timers.push(fn); },
+    fetch: async () => ({ ok: true, json: async () => answers[Math.min(fetches++, answers.length - 1)] })
+  };
+  win.window = win;
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
+  const cb = win.WsSettingsCombobox;
+
+  const container = doc.createElement("div");
+  doc.body.appendChild(container);
+  const input = doc.createElement("input");
+  input.className = "inp mono";
+  input.setAttribute("aria-label", "werk · Model");
+  container.appendChild(input);
+  const ctrl = cb.attach(input, { getOptions: () => cb.modelOptions("werk") });
+
+  // The picker is opened while the first, pending answer has no models.
+  ctrl.button.click();
+  await new Promise(r => setImmediate(r));
+  assert.equal(fetches, 1);
+  assert.equal(cb.modelOptions("werk").length, 0, "the first answer has no picker yet");
+  assert.equal(input.getAttribute("aria-expanded"), "false", "nothing to list yet");
+  assert.equal(timers.length, 1, "a pending answer schedules one retry");
+
+  // The retry fires on its own; the open picker re-renders with no further
+  // interaction from the test or the user.
+  timers.shift()();
+  await new Promise(r => setImmediate(r));
+  assert.equal(fetches, 2);
+  assert.equal(input.getAttribute("aria-expanded"), "true", "the open picker opens once its models arrive");
+  assert.deepEqual(ctrl.popup.children.map(li => li.dataset.value), ["openrouter vendor/m", "openrouter vendor/n"]);
+  assert.equal(timers.length, 0, "an answer that is not pending schedules no retry");
+});
+
+
+test("tier models distinguish endpoints and preserve inherited providers", async () => {
+  const win = {};
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), {window: win,
+    fetch: async () => ({ok: true, json: async () => ({harnesses: [{harness: "werk",
+      model_providers: ["openrouter", "openai", "local/office", "local/home"],
+      models: [{id: "same", provider: "local/office"}, {id: "same", provider: "local/home"},
+        {id: "same", provider: "openai"}, {id: "same", provider: "openrouter"}]}]})})});
+  const cb = win.WsSettingsCombobox;
+  await cb.loadChoices();
+  assert.deepEqual(Array.from(cb.modelOptions("werk"), m => m.id),
+    ["local/office same", "local/home same", "openai same", "openrouter same"]);
+  for (const provider of ["local/office", "local/home", "openai", "openrouter"]) {
+    assert.equal(cb.modelSelection(cb.modelKey("same", provider)).provider, provider);
+    assert.equal(cb.modelSelection("edited-model", provider).provider, provider);
+    assert.equal(cb.modelSelection("openrouter same", provider).provider, "openrouter");
+  }
+});
+
+test("lead model picks retain endpoint identity for spawning and active-lead switching", () => {
+  const source = read("dashboard-leads.js");
+  const helpers = source.slice(source.indexOf("  function leadModelKey("), source.indexOf("  function leadEfforts("));
+  const harness = {model_providers: ["openrouter", "local/office", "local/home"], models: [
+    {id: "same"}, {id: "same", provider: "local/office"}, {id: "same", provider: "local/home"}
+  ]};
+  const ctx = {supHarness: () => harness};
+  vm.createContext(ctx);
+  vm.runInContext(helpers, ctx);
+  assert.deepEqual(Array.from(ctx.leadModels("werk", "", true)), ["same", "local/office same", "local/home same"]);
+  for (const provider of ["local/office", "local/home"]) {
+    const chosen = ctx.leadModelPick(ctx.leadModelKey("same", provider));
+    assert.equal(chosen.provider, provider);
+    assert.equal(chosen.model, "same");
+    assert.deepEqual(Array.from(ctx.leadModels("werk", provider, false)), ["same"]);
+    assert.match(ctx.leadModelLabels("werk", "", true)[provider + " same"], new RegExp(provider));
+  }
+});

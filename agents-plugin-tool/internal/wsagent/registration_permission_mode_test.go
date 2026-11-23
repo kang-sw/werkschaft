@@ -62,8 +62,8 @@ func TestRegisteredPermissionModeSetAdmission(t *testing.T) {
 			wantErr: ErrInvalidProfile, wantText: `permission_mode "plan" must be one of review, run`,
 		},
 		{
-			name: "pi unsupported", backend: BackendPi, profile: LeadProfilePi,
-			mode: "plan", wantErr: ErrUnsupported, wantText: "the permission mode applies to a supported lead session only",
+			name: "no permission modes", backend: "fixture", profile: "fixture-lead",
+			mode: "plan", wantErr: ErrInvalidProfile, wantText: `permission_mode "plan" must be one of`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

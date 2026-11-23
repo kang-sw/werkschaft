@@ -3,9 +3,9 @@ package mcp
 import "github.com/kang-sw/devenv/internal/wsagent"
 
 // AgentBackendRegistry exposes the daemon runner's registered backend
-// descriptors without granting the lead runner handle (PiAgents). Worker
+// descriptors without granting the lead runner handle (AgentHost). Worker
 // connections receive this so they can resolve their backend descriptor and
-// profiles while keeping pi.*/agent.* calls on the token-forwarding path.
+// profiles while keeping worker calls on the token-forwarding path.
 type AgentBackendRegistry interface {
 	BackendRegistrations() map[string]wsagent.BackendRegistration
 }
@@ -26,7 +26,7 @@ func (s *Server) policyLookup() backendPolicyLookup {
 		lookup, _ := s.agentBackendSource.(backendPolicyLookup)
 		return lookup
 	}
-	lookup, _ := s.pi.agents.(backendPolicyLookup)
+	lookup, _ := s.agents.(backendPolicyLookup)
 	return lookup
 }
 
@@ -42,7 +42,7 @@ func (s *Server) refreshAgentAmbient() {
 		refresher.RefreshAmbient()
 		return
 	}
-	if refresher, ok := s.pi.agents.(ambientRefresher); ok {
+	if refresher, ok := s.agents.(ambientRefresher); ok {
 		refresher.RefreshAmbient()
 	}
 }
@@ -54,7 +54,7 @@ func (s *Server) agentBackends() []map[string]wsagent.BackendRegistration {
 	if s.agentBackendSource != nil {
 		return []map[string]wsagent.BackendRegistration{s.agentBackendSource.BackendRegistrations()}
 	}
-	if source, ok := s.pi.agents.(AgentBackendRegistry); ok {
+	if source, ok := s.agents.(AgentBackendRegistry); ok {
 		return []map[string]wsagent.BackendRegistration{source.BackendRegistrations()}
 	}
 	return nil

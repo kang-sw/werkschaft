@@ -58,8 +58,14 @@ type Server struct {
 	dashboard dashboardLink
 	// tracker is this process's tracker host (tracker_host.go).
 	tracker trackerLink
-	// pi is the pi.* tools' daemon runner and live feed (pi_tools.go).
-	pi piHost
+	// agents is the dashboard daemon's runner.
+	agents          AgentHost
+	stopWorkerWatch func()
+	workerRowKeys   struct {
+		mu   sync.Mutex
+		keys map[string]string
+	}
+	worktreeChildren WorktreeChildrenReader
 	// exec returns the daemon's hosted exec jobs and conversation is the
 	// hosted conversation this connection's trusted binding names
 	// (server_exec_hosted.go); nil and empty where there is none.
@@ -78,9 +84,11 @@ type Server struct {
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools
 	// exist, only then. Empty elsewhere.
-	execCutover string
+	execCutover      string
+	fileWrites       *FileWriteSession
+	recordExecLaunch func(context.Context, execjob.ModelLaunch) error
 	// agentBackendSource exposes the daemon's registered backend descriptors
-	// independently of pi.agents, so token-forwarding workers resolve their
+	// independently of the agent host, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.
 	agentBackendSource AgentBackendRegistry
 	// callerBinding is the daemon runner's memory-only caller check

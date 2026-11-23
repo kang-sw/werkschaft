@@ -421,7 +421,8 @@ const snapshot = '/api/config/snapshot';
 
     const localSnapshot = await (await page.request.get(base + snapshot)).json();
     const namespaces = localSnapshot.entries.map(e => e.key.split('.')[0]);
-    for (const adapter of ['claude', 'pi', 'agy', 'dashboard']) assert(namespaces.includes(adapter));
+    for (const adapter of ['claude', 'agy', 'dashboard']) assert(namespaces.includes(adapter));
+    assert(!namespaces.includes('pi'));
     await ensureRailOpen();
     await page.locator('#gear').click();
     for (const selector of ['[data-layout=split]', '[data-input=mod]', '[data-theme-set=dark]', '#glang', '#login-copy', 'a[href="/settings"]']) {

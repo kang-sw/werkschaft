@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
+	"time"
 )
 
 func (AgyBackend) sessionChoices() ([]ModelChoice, []string) {
@@ -61,4 +63,15 @@ func parseAgyModels(out []byte) []ModelChoice {
 		models = append(models, ModelChoice{ID: base})
 	}
 	return models
+}
+
+// runListing runs a harness's model listing and returns its stdout; a test
+// replaces it with a fixture.
+var runListing = func(ctx context.Context, command string, args []string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = env
+	// A grandchild that inherited stdout (a Windows launcher shim's) must
+	// not hold the listing, and Support's choicesMu, past ctx's timeout.
+	cmd.WaitDelay = time.Second
+	return cmd.Output()
 }

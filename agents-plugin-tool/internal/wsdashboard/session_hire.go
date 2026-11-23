@@ -52,6 +52,7 @@ type HireCreator interface {
 
 // HireProposal is a daemon-private journal. Launch is an approval intent,
 // persisted before creation; a restart completes it without creating twice.
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 type HireProposal struct {
 	ID        string `json:"id"`
 	Requester string `json:"requester"`
@@ -184,6 +185,7 @@ func (d *Daemon) hireHierarchyReady(replyID string) bool {
 
 // RequestHire is called only after the MCP server authenticates a top-level
 // lead key. There is no model-facing flag setter or approval operation.
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 func (d *Daemon) RequestHire(replyID string, request HireRequest) (HireProposal, error) {
 	if strings.TrimSpace(request.Reason) == "" || strings.TrimSpace(request.RecoveryContext) == "" {
 		return HireProposal{}, errors.New("reason and recovery_context are required")
@@ -196,13 +198,16 @@ func (d *Daemon) RequestHire(replyID string, request HireRequest) (HireProposal,
 		return HireProposal{}, err
 	}
 	request.Label = label
+	if strings.EqualFold(strings.TrimSpace(request.Harness), "pi") {
+		return HireProposal{}, errors.New("the Pi harness is retired; choose an available lead harness")
+	}
 	if request.Harness != "" {
 		admitted, ok := d.agents.(interface{ AdmitsLead(string) bool })
 		if !ok {
 			return HireProposal{}, errors.New("this daemon's agent host cannot admit a lead harness")
 		}
 		if !admitted.AdmitsLead(request.Harness) {
-			return HireProposal{}, errors.New("harness must be claude or pi")
+			return HireProposal{}, errors.New("the requested harness does not support hosted leads")
 		}
 	}
 	d.hireMu.Lock()
@@ -311,6 +316,7 @@ func (d *Daemon) settleHiresLocked(proposals []HireProposal) error {
 	return err
 }
 
+// Retained name check: legacy hire harness request (TestHiringRegistryAdmission).
 func (d *Daemon) settleHiresDeadlineLocked(proposals []HireProposal) (time.Time, error) {
 	var next time.Time
 	arm := func(at time.Time) {

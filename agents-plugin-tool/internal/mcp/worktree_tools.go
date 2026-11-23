@@ -1093,6 +1093,17 @@ type worktreeOccupancy struct {
 
 // worktreeReleaseNotifier is the optional release notice of the daemon-side
 // reader (wsagent.Runner implements it).
+// WorktreeChildrenReader queries the daemon's runner for non-closed
+// conversations bound to a worktree. Set for every daemon-hosted server
+// (including token-forwarding workers) without granting the lead runner handle.
+type WorktreeChildrenReader interface {
+	ActiveChildrenInWorktree(worktree string) []wsagent.BoundWorktreeChild
+}
+
+// HasWorktreeChildrenReader reports whether this server holds a direct
+// daemon-side bound-child reader (for wiring tests).
+func (s *Server) HasWorktreeChildrenReader() bool { return s.worktreeChildren != nil }
+
 type worktreeReleaseNotifier interface {
 	CheckoutReleased(worktree string, releasedAt time.Time, cancelTurns bool) []wsagent.ReleasedConversation
 }
@@ -1104,14 +1115,14 @@ type worktreeReleaseNotifier interface {
 func (s *Server) worktreeOccupancy(ctx context.Context, target string) (worktreeOccupancy, error) {
 	var occ worktreeOccupancy
 	switch {
-	case s.pi.worktreeChildren != nil:
-		occ.Children = s.pi.worktreeChildren.ActiveChildrenInWorktree(target)
+	case s.worktreeChildren != nil:
+		occ.Children = s.worktreeChildren.ActiveChildrenInWorktree(target)
 		return occ, nil
-	case s.piForwards():
+	case s.workerForwards():
 		var answer struct {
 			Children []wsagent.BoundWorktreeChild `json:"children"`
 		}
-		if err := s.piCall(ctx, "worktree.children", map[string]any{"worktree": target}, piForwardTimeout, &answer); err != nil {
+		if err := s.workerCall(ctx, "worktree.children", map[string]any{"worktree": target}, workerForwardTimeout, &answer); err != nil {
 			return occ, err
 		}
 		occ.Children = answer.Children
@@ -1189,7 +1200,7 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 // occupancy read succeeded and listed none, unknown when it did not look or
 // that read failed.
 func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) releaseBindings {
-	if s.pi.worktreeChildren != nil || !s.piForwards() {
+	if s.worktreeChildren != nil || !s.workerForwards() {
 		return releaseBindings{}
 	}
 	occ, err := s.worktreeOccupancy(ctx, target)
@@ -1248,19 +1259,19 @@ func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, rele
 	var convs []wsagent.ReleasedConversation
 	var lines []string
 	switch {
-	case s.pi.worktreeChildren != nil:
-		notifier, ok := s.pi.worktreeChildren.(worktreeReleaseNotifier)
+	case s.worktreeChildren != nil:
+		notifier, ok := s.worktreeChildren.(worktreeReleaseNotifier)
 		if !ok {
 			return worktreeReleaseNotice{Outcome: releaseNoticeNotSent, Lines: []string{worktreeReleaseNoNotice}}
 		}
 		convs = notifier.CheckoutReleased(target, releasedAt, cancelTurns)
-	case s.piForwards():
+	case s.workerForwards():
 		var answer struct {
 			Conversations []wsagent.ReleasedConversation `json:"conversations"`
 			CancelRefused bool                           `json:"cancel_refused"`
 		}
 		body := map[string]any{"worktree": target, "released_at": releasedAt.UTC().Format(time.RFC3339Nano), "cancel_turns": cancelTurns}
-		if err := s.piCall(ctx, "worktree.released", body, piForwardTimeout, &answer); err != nil {
+		if err := s.workerCall(ctx, "worktree.released", body, workerForwardTimeout, &answer); err != nil {
 			return worktreeReleaseNoticeFailure(err, cancelTurns, bindings)
 		}
 		convs = answer.Conversations

@@ -1,19 +1,4 @@
 {
-  "agents-plugin-pi/config-manifest.json#pi.agent_wait_animation": "7897794faa0a1822",
-  "agents-plugin-pi/config-manifest.json#pi.agent_widget_batch_summary_enabled": "ee095327083995a5",
-  "agents-plugin-pi/config-manifest.json#pi.agent_widget_rows": "be0f73421e8ced93",
-  "agents-plugin-pi/config-manifest.json#pi.child_retention_ttl_days": "3e64ab9e5bcee1d7",
-  "agents-plugin-pi/config-manifest.json#pi.compaction_advisory_percent": "155950fc9fcce15a",
-  "agents-plugin-pi/config-manifest.json#pi.compaction_dialog_budget_bytes": "599f3dc93ce862e8",
-  "agents-plugin-pi/config-manifest.json#pi.compaction_hard_percent": "03fc7faf4892aa83",
-  "agents-plugin-pi/config-manifest.json#pi.compaction_reread_budget_bytes": "ff55d6ddfc10a5b6",
-  "agents-plugin-pi/config-manifest.json#pi.context_window_override": "316a582acff694be",
-  "agents-plugin-pi/config-manifest.json#pi.dashboard_enabled": "0d829ef1f2208cf7",
-  "agents-plugin-pi/config-manifest.json#pi.display_summary_effort": "e9372c2c5498976b",
-  "agents-plugin-pi/config-manifest.json#pi.display_summary_model": "9b9227306f7bdd98",
-  "agents-plugin-pi/config-manifest.json#pi.display_summary_style": "6f03e485625d17ee",
-  "agents-plugin-pi/config-manifest.json#pi.runaway_threshold": "ca0d8872c5304328",
-  "agents-plugin-pi/config-manifest.json#pi.settle_delay_ms": "3b7b8299d1216d70",
   "agents-plugin/agy-config-manifest.json#agy.avoid_agy_subagent": "d22870b518caa522",
   "agents-plugin/agy-config-manifest.json#agy.http2_frame_trace": "82ad4cddecc48337",
   "agents-plugin/agy-config-manifest.json#agy.model_wait_retries": "23d56aa8338370b1",
@@ -53,6 +38,5 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.enabled": "c3124db07b520596",
   "agents-plugin/dashboard-config-manifest.json#dashboard.lan_enabled": "cd05a6b51944142e",
   "agents-plugin/dashboard-config-manifest.json#dashboard.mailbox_undelivered_minutes": "df012b3541664716",
-  "agents-plugin/dashboard-config-manifest.json#dashboard.pi_spawn_enabled": "eaa01a4e6e7907c8",
   "agents-plugin/dashboard-config-manifest.json#dashboard.port": "d2acc5be1e2d0838"
 }

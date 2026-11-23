@@ -68,13 +68,7 @@ the rest of Pre-flight in the worktree the lead hands it.
      "release/<version>", target: "develop")` and `git push origin develop`.
 - Conflicts (Merge release target and Merge back) resolve in the release
   worktree. On a line `bump-ws-version.sh` writes, take the higher version.
-  On a generated Pi archive or payload file (`agents-plugin-pi/workflow-bundles/`,
-  `agents-plugin*/native-pi/first-party*`), take either side, then rerun
-  `python3 agents-plugin-pi/scripts/prepare-workflow-bundles.py` and
-  `python3 agents-plugin-pi/scripts/prepare-native-payload.py --first-party-only`
-  after the text conflicts are resolved and stage their output. Hand any other
-  conflict **(lead)** to `ws:lead-delegate` with the worktree
-  path. Commit the merge, then rerun Pre-flight's release-contract check on
+  Hand other conflicts **(lead)** to `ws:lead-delegate` with the worktree path. Commit the merge, then rerun Pre-flight's release-contract check on
   the release branch head. A conflict is never a stop: a restart cuts at the
   same point and meets the same conflict.
 - Stops **(lead)**: every stop after Cut releases the release worktree

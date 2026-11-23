@@ -75,7 +75,7 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
     dismiss() { active = null; p.el.hidden = true; } };
 }
 
-for (const harness of ['claude', 'pi']) {
+for (const harness of ['claude']) {
   const f = fixture(harness);
   f.start.listeners.click();
   assert.equal(f.p.busy, true);
@@ -198,35 +198,29 @@ const optionNames = sel => sel.children.map(n => n.value);
   const modes = ['default', 'auto', 'plan'];
   const f = fixture(null, legacy.map(h => ({ ...h, lead: true,
     ...(h.harness === 'claude' ? { permission_modes: modes } : {}) })));
-  assert.deepEqual(harnessNames(f), ['claude', 'pi']);
+  assert.deepEqual(harnessNames(f), ['claude']);
   assert.equal(f.p.harness, 'claude');
   assert.deepEqual(optionNames(f.mode), modes, 'Claude also renders only descriptor modes');
   assert.equal(f.mode.value, 'auto', 'Claude retains its existing initial mode');
-  f.pick('pi');
-  assert.equal(f.mode.disabled, true, 'new Pi descriptor has no permission control');
-  assert.deepEqual(optionNames(f.mode), []);
-  f.start.listeners.click();
-  assert.equal('permission_mode' in f.requests[0].body, false);
+  assert(!harnessNames(f).includes('pi'), 'a legacy lead descriptor does not offer Pi');
 }
 {
   const f = fixture(null, [...legacy, { ...custom, lead: false }]);
-  assert.deepEqual(harnessNames(f), ['claude', 'pi'], 'without any lead marker retain the fixed controls');
+  assert.deepEqual(harnessNames(f), ['claude'], 'an older daemon still offers Claude');
   assert.equal(f.p.harness, 'claude');
   assert.deepEqual(optionNames(f.mode), ['auto', 'default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions']);
   assert.equal(f.mode.value, 'auto');
-  f.pick('pi');
-  assert.equal(f.mode.disabled, true);
   f.start.listeners.click();
-  assert.equal('permission_mode' in f.requests[0].body, false, 'old Pi request stays mode-free');
+  assert.equal(f.requests[0].body.harness, 'claude');
   assert.equal(f.requests[0].body.plugin_isolation, 'default');
 }
 {
   const f = fixture(null, [{ ...legacy[0], available: false }, legacy[1]]);
-  assert.equal(f.p.harness, 'pi', 'legacy fallback still picks Pi when Claude is unavailable');
+  assert(f.start.disabled, 'a retired Pi descriptor cannot replace unavailable Claude');
 }
 {
   const f = fixture(null, [custom], true);
-  assert.deepEqual(harnessNames(f), ['claude', 'pi']);
+  assert.deepEqual(harnessNames(f), ['claude']);
   f.choicesReady();
   assert.deepEqual(harnessNames(f), ['custom'], 'async choices replace fallback buttons');
   assert.equal(f.p.harness, 'custom');
@@ -361,9 +355,9 @@ const optionNames = sel => sel.children.map(n => n.value);
   assert.equal(f.terms.hidden, true, 'claude shows no agy warning');
   f.pick('agy');
   assert.equal(f.terms.hidden, false);
-  f.pick('pi');
+  f.pick('claude');
   assert.equal(f.terms.hidden, true, 'leaving agy hides the warning');
-  for (const harness of ['claude', 'pi']) {
+  for (const harness of ['claude']) {
     assert.equal(fixture(harness).terms.hidden, true, harness + ' shows no agy warning');
   }
 }

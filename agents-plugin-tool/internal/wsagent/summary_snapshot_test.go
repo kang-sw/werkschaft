@@ -81,65 +81,6 @@ func assertNoSummarySnapshot(t *testing.T, dir string) {
 	}
 }
 
-func TestSummaryRunnerSnapshotIsRAMOnlyUntilNaturalCommit(t *testing.T) {
-	host := &summarySnapshotHost{}
-	h := newLeadHarness(t)
-	h.opts.LiveHost = host
-	h.start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "one")
-	holder := h.holder(id)
-	dir := wsdashboard.SessionDir(h.dir, id)
-	h.holders.out(holder, `{"type":"agent_start"}`, hostedCapabilitiesLine(t, []string{wslive.ReasoningSummaryCapability}), hostedSummaryLine(t, hostedSummaryFixture()))
-	eventually(t, "RAM-only projection", func() bool { snap, ok := host.snapshot(dir); return ok && snap.Lead.ReasoningSummary != nil })
-	h.quiesce(id)
-	assertNoSummarySnapshot(t, dir)
-	for _, row := range h.ring(id) {
-		if row.Kind == wslive.RingTurn || row.SummaryHistory != nil {
-			t.Fatal("progress fabricated retained history")
-		}
-	}
-
-	final := hostedSummaryFixture()
-	final.Revision = 2
-	final.ActiveRequest = nil
-	final.Requests[0].Status = wslive.SummaryFailed
-	final.Requests[0].Parts[0].Status = wslive.SummaryFailed
-	h.holders.out(holder, hostedSummaryLine(t, final), `{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"actual failure"}}`, `{"type":"agent_settled","aborted":false}`)
-	h.idle(id)
-	rows := hostedSummaryRecords(t, h, id)
-	assertNoSummarySnapshot(t, dir)
-	count, name, commit := 0, "", ""
-	for _, row := range rows {
-		if row.SummaryHistory == nil {
-			continue
-		}
-		count++
-		name, commit = row.Name, row.SummaryHistory.Commit
-		if row.SummaryHistory.Requests[0].Parts[0].Text != "received prefix" {
-			t.Fatalf("natural history lost: %+v", row)
-		}
-	}
-	if count != 1 {
-		t.Fatalf("natural summary count = %d", count)
-	}
-	h.restart()
-	count = 0
-	for _, row := range hostedSummaryRecords(t, h, id) {
-		if row.SummaryHistory == nil {
-			continue
-		}
-		count++
-		if row.Name != name || row.SummaryHistory.Commit != commit {
-			t.Fatal("reopen rewrote immutable history")
-		}
-	}
-	if count != 1 {
-		t.Fatal("reopen lost immutable history")
-	}
-	assertNoSummarySnapshot(t, dir)
-}
-
 func TestSummaryRecordWriterReopenBlanksLiveUntilNextEvent(t *testing.T) {
 	dir := t.TempDir()
 	host := &summarySnapshotHost{}
@@ -179,4 +120,7 @@ func TestSummaryRecordWriterReopenBlanksLiveUntilNextEvent(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(dir, "ring")); len(entries) != 0 {
 		t.Fatal("reopen or live event fabricated a natural turn")
 	}
+}
+func hostedSummaryFixture() *wslive.ReasoningSummary {
+	return &wslive.ReasoningSummary{V: 1, Producer: "22222222-2222-4222-8222-222222222222", Turn: 1, Revision: 1, ActiveRequest: &wslive.SummaryPair{Request: 1, Attempt: 1}, Requests: []wslive.SummaryAttempt{{Request: 1, Attempt: 1, Provider: "openai-codex", API: "openai-codex-responses", Model: "model", Status: wslive.SummaryStreaming, Parts: []wslive.SummaryPart{{Text: "received prefix", ObservedBytes: 15, RetainedBytes: 15, Status: wslive.SummaryStreaming}}}}}
 }

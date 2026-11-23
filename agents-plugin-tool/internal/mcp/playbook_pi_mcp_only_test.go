@@ -132,7 +132,7 @@ func renderedBody(t *testing.T, s *Server, key, name string, initialize ...strin
 	return string(body)
 }
 
-func assertPiMCPOnlyBody(t *testing.T, body string) {
+func assertDaemonAgentBody(t *testing.T, body string) {
 	t.Helper()
 	for _, want := range []string{piMCPOnlySpawn, piMCPOnlyExplore, "`" + piMCPOnlyContinue + "`", "`ws/config.resolve_agent(tier)`"} {
 		if !strings.Contains(body, want) {
@@ -141,37 +141,36 @@ func assertPiMCPOnlyBody(t *testing.T, body string) {
 	}
 	for _, banned := range []string{"ws-agent-spawn", "ws-agent-send", "the `explore` researcher", "Agent({", "pi.spawn", "pi.send"} {
 		if strings.Contains(body, banned) {
-			t.Errorf("rendered body names %q, a tool an MCP-only Pi session lacks", banned)
+			t.Errorf("rendered body names %q, a tool a daemon-delegating session lacks", banned)
 		}
 	}
 }
 
-// TestPlaybookRenderPiSpawnedCallerUsesMCPOnlyIdioms: an agent.spawn Pi
-// child (no extension, so its connection is not detected as pi) rendering
-// the elevated worker playbook is told agent.spawn with the resolved tier.
-func TestPlaybookRenderPiSpawnedCallerUsesMCPOnlyIdioms(t *testing.T) {
+func assertRetiredPiBody(t *testing.T, body string) {
+	t.Helper()
+	for _, retired := range []string{"agent.spawn", "pi.spawn", "pi.send", "ws-agent-spawn", "ws-agent-send"} {
+		if strings.Contains(body, retired) {
+			t.Errorf("retired Pi caller received %q guidance", retired)
+		}
+	}
+}
+
+func TestPlaybookRenderRetiredPiWorkerDoesNotDelegate(t *testing.T) {
 	f := newPiRecordFixture(t)
 	key := f.spawnedKey(t, &wsagent.Profile{Backend: wsagent.BackendPi, WSTools: []string{"agent.spawn", "mailbox.send"}})
-	assertPiMCPOnlyBody(t, renderedBody(t, f.s, key, "ticket-worker-elevated"))
+	assertRetiredPiBody(t, renderedBody(t, f.s, key, "ticket-worker-elevated"))
 }
 
-// TestPlaybookRenderPiSpawnedCallerWithoutSnapshotResolvesProfile: a record
-// written before the launched-profile snapshot falls back to its profile
-// name, whose builtin Pi agent worker loads no extension.
-func TestPlaybookRenderPiSpawnedCallerWithoutSnapshotResolvesProfile(t *testing.T) {
+func TestPlaybookRenderRetiredPiWorkerWithoutProfileSnapshot(t *testing.T) {
 	f := newPiRecordFixture(t)
 	key := f.spawnedKey(t, nil)
-	assertPiMCPOnlyBody(t, renderedBody(t, f.s, key, "ticket-worker-elevated"))
+	assertRetiredPiBody(t, renderedBody(t, f.s, key, "ticket-worker-elevated"))
 }
 
-// TestPlaybookRenderHostedPiLeadSwitchesOnBridgeFallback: a hosted Pi lead
-// on the MCP bridge gets the MCP-only row, and the same lead on its bundled
-// extension (connection detected as pi through the extension's clientInfo)
-// keeps the native row.
-func TestPlaybookRenderHostedPiLeadSwitchesOnBridgeFallback(t *testing.T) {
+func TestPlaybookRenderRetiredPiLeadIgnoresBridgeFallback(t *testing.T) {
 	f := newPiRecordFixture(t)
 	f.record(t, f.leadKey, wsagent.Record{Backend: wsagent.BackendPi, Lead: true, PluginWarning: "Bundled Pi extension unavailable (missing); using the ws MCP bridge instead."})
-	assertPiMCPOnlyBody(t, renderedBody(t, f.s, f.leadKey, "ticket-worker-elevated"))
+	assertRetiredPiBody(t, renderedBody(t, f.s, f.leadKey, "ticket-worker-elevated"))
 
 	f.record(t, f.leadKey, wsagent.Record{Backend: wsagent.BackendPi, Lead: true})
 	body := renderedBody(t, f.s, f.leadKey, "ticket-worker-elevated",
@@ -200,14 +199,12 @@ func TestPlaybookRenderUnrecordedCallerKeepsHarnessRow(t *testing.T) {
 	}
 }
 
-// TestPlaybookReadPiSpawnedCallerUsesMCPOnlyIdioms: playbook.read carries the
-// caller key to the terminology switch as playbook.render does.
-func TestPlaybookReadPiSpawnedCallerUsesMCPOnlyIdioms(t *testing.T) {
+func TestPlaybookReadRetiredPiWorkerDoesNotDelegate(t *testing.T) {
 	f := newPiRecordFixture(t)
 	key := f.spawnedKey(t, &wsagent.Profile{Backend: wsagent.BackendPi, WSTools: []string{"agent.spawn", "mailbox.send"}})
 	resp := callToolOnce(t, f.s, 2, "playbook.read", map[string]any{"name": "ticket-worker-elevated", "session_key": key})
 	if toolIsError(t, resp) {
 		t.Fatalf("playbook.read returned error: %s", resp)
 	}
-	assertPiMCPOnlyBody(t, toolText(t, resp))
+	assertRetiredPiBody(t, toolText(t, resp))
 }

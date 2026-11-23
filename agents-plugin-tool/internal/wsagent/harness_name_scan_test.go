@@ -25,11 +25,11 @@ import (
 // parses each file and fails on
 //
 //   - any use of a constant whose value is a harness name: BackendClaude,
-//     BackendCodex, BackendAgy, BackendPi, PiTierHarness, wslive.AgentKindPi,
+//     BackendCodex, BackendAgy, BackendPi, BackendWerk, PiTierHarness, wslive.AgentKindPi,
 //     and any constant declared that way later (harnessAliases finds them from
 //     their declarations);
 //   - any short string literal (no whitespace, or at most
-//     shortNameLiteral bytes) that names a harness (claude, codex, agy, pi,
+//     shortNameLiteral bytes) that names a harness (claude, codex, agy, pi, werk,
 //     antigravity) as a word or inside a token such as a config key, tool
 //     name, environment variable, path, or provider label;
 //   - any alternation of harness names inside a literal (a pattern); and
@@ -95,12 +95,43 @@ var harnessNameAllowlist = func() []nameSite {
 	const (
 		profileRows = "TestBuiltinBackendRegistrationDefaults"
 		leadRows    = "TestBuiltinLeadProfilesResolve"
-		piTools     = "TestBuiltinPiMiniLeadProfileResolves"
-		piChild     = "TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey"
+		piTools     = "TestRetiredPiProfileRemainsReadable"
+		piChild     = "TestCapabilityTokenGoesToSpawnedWorkersOnly"
 		compactKeys = "TestCompactionConfigGetTuneAndLegacy"
 		detect      = "TestDetectHarnessFromRawKeepsExternalMarkers"
 		history     = "TestPlanUsageHistoryValidatorsKeepPersistedNames"
 		credentials = "TestFSLocalDeniedProviderCredentials"
+	)
+
+	// Pi retirement compatibility paths.
+	add(
+		site("internal/mcp/server_harness.go", "ws-pi-bridge", 1, classExternal, "legacy exact MCP client name", "TestDetectHarnessFromInitializeParamsPrecedence"),
+		site("internal/mcp/server_harness.go", "BackendPi", 1, classExternal, "legacy exact MCP client identity", "TestDetectHarnessFromInitializeParamsPrecedence"),
+		site("internal/wsagent/agent_tools.go", "BackendPi", 2, classPersisted, "stored tier routing can still name Pi", "TestRetiredPiTierRedirectsToWerk"),
+		site("internal/wsagent/agent_tools.go", "BackendWerk", 1, classPersisted, "the effective backend for a stored Pi tier", "TestRetiredPiTierRedirectsToWerk"),
+		site("internal/mcp/config_manifest.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
+		site("internal/mcp/config_manifest.go", "pi.", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
+		site("internal/mcp/session_hire.go", "pi", 1, classPersisted, "legacy hire requests", "TestRetiredPiHireRefuses"),
+		site("internal/mcp/tier_routing.go", "BackendPi", 4, classPersisted, "stored tier routing harness aliases", "TestDashboardTierRoutingViewReportsHarnessAvailability"),
+		site("internal/wsagent/children.go", "BackendPi", 3, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),
+		site("internal/wsagent/children.go", "pi.list", 1, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),
+		site("internal/wsagent/children.go", "pi.transcript", 2, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),
+		site("internal/wsagent/handoff.go", "BackendPi", 3, classPersisted, "retained Pi records and handoff requests", "TestRetiredPiHoldersKeepRunning"),
+		site("internal/wsagent/permission.go", "pi.list", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/permission.go", "pi.send", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/permission.go", "pi.spawn", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/permission.go", "pi.stop", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/permission.go", "pi.transcript", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/permission.go", "pi.wait", 1, classPersisted, "legacy tool names in stored profiles", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/retired_pi_tiers.go", "BackendPi", 2, classPersisted, "stored Pi tier alias to werk", "TestRetiredPiTierRedirectsToWerk"),
+		site("internal/wsagent/retired_pi_tiers.go", "BackendWerk", 4, classPersisted, "stored Pi tier alias to werk", "TestRetiredPiTierRedirectsToWerk"),
+		site("internal/wsagent/runner_create.go", "BackendPi", 2, classPersisted, "legacy profile and record backend", "TestRetiredPiProfileRemainsReadable"),
+		site("internal/wsagent/runner_startup.go", "BackendPi", 2, classPersisted, "retained holder descriptors", "TestRetiredPiRealHolderSurvivesStartup"),
+		site("internal/wsagent/runner_state.go", "BackendPi", 1, classPersisted, "ended state of retained Pi records", "TestRetiredPiHoldersKeepRunning"),
+		site("internal/wsagent/support.go", "BackendPi", 2, classPersisted, "old support selection and response notice", "TestRetiredPiSupportSelectionFallsBackWithoutRewriting"),
+		site("internal/wsagent/support.go", "json:\"retired_pi,omitempty\"", 1, classPersisted, "old support selection and response notice", "TestRetiredPiSupportSelectionFallsBackWithoutRewriting"),
+		site("internal/wsdashboard/pageview.go", "pi", 1, classPersisted, "persisted snapshot worker kind and Pi harness", "TestRetiredPiAgentRowEndsAndLinks"),
+		site("internal/wsdashboard/session_hire.go", "pi", 1, classPersisted, "legacy hire harness request", "TestHiringRegistryAdmission"),
 	)
 
 	// internal/wsagent
@@ -111,7 +142,7 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsagent/profile.go", "BackendClaude", 1, classDeclarative, "the registration name constants", profileRows),
 		site("internal/wsagent/profile.go", "BackendCodex", 1, classDeclarative, "the registration name constants", profileRows),
 		site("internal/wsagent/profile.go", "BackendAgy", 1, classDeclarative, "the registration name constants", profileRows),
-		site("internal/wsagent/profile.go", "BackendPi", 1, classDeclarative, "the registration name constants", profileRows),
+		site("internal/wsagent/profile.go", "BackendPi", 3, classDeclarative, "the registration name constants", profileRows),
 		site("internal/wsagent/profile.go", "claude", 1, classDeclarative, "the registration name constants", profileRows),
 		site("internal/wsagent/profile.go", "codex", 1, classDeclarative, "the registration name constants", profileRows),
 		site("internal/wsagent/profile.go", "agy", 1, classDeclarative, "the registration name constants", profileRows),
@@ -124,31 +155,15 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsagent/builtin.go", "lead-pi", 1, classDeclarative, "built-in profile row name", leadRows),
 		site("internal/wsagent/builtin.go", "lead-agy", 1, classDeclarative, "built-in profile row name", leadRows),
 		site("internal/wsagent/builtin.go", "lead-codex", 1, classDeclarative, "built-in profile row name", leadRows),
-		site("internal/wsagent/builtin.go", "pi-worker", 1, classDeclarative, "built-in profile row name", "TestBuiltinAgentWorkerProfiles"),
-		site("internal/wsagent/builtin.go", "pi-mini-lead", 1, classDeclarative, "built-in profile row name", piTools),
 		site("internal/wsagent/builtin.go", "agent-worker-agy", 1, classDeclarative, "built-in profile row name", "TestBuiltinAgentWorkerProfiles"),
 		site("internal/wsagent/builtin.go", "agent-worker-codex", 1, classDeclarative, "built-in profile row name", "TestBuiltinAgentWorkerProfiles"),
-		site("internal/wsagent/builtin.go", "pi.spawn", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.send", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.list", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.stop", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.transcript", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.wait", 1, classExternal, "the Pi extension's own MCP tool names in the Pi worker allowlist", piTools),
-		site("internal/wsagent/builtin.go", "pi.", 1, classExternal, "the Pi tool-name prefix that keeps the Pi child tools out of the agent worker allowlist", "TestAgentWSToolsListSageGateAndStamp"),
 		site("internal/wsagent/catalog.go", "claude.compaction_advisory_percent", 1, classPersisted, "legacy config key a user's config may still hold", compactKeys),
 		site("internal/wsagent/catalog.go", "claude.compaction_advisory_enabled", 1, classPersisted, "config key a user's config may hold", compactKeys),
-		site("internal/wsagent/catalog.go", "pi.compaction_advisory_percent", 1, classPersisted, "legacy config key a user's config may still hold", compactKeys),
-		site("internal/wsagent/catalog.go", "pi.compaction_hard_percent", 1, classPersisted, "legacy config key a user's config may still hold", compactKeys),
 		site("internal/wsagent/children.go", "WS_MCP_PI_TOKEN", 1, classExternal, "environment variable the bundled Pi extension reads", piChild),
 		site("internal/wsagent/children.go", "WS_MCP_PI_ENDPOINT", 1, classExternal, "environment variable the bundled Pi extension reads", piChild),
-		site("internal/wsagent/children.go", "pi", 1, classPersisted, "PiTierHarness: the harness bucket stored in tier routing and the legacy pi.spawn tier rule", "TestPiSpawnResolvesThePiTierAndCwd"),
-		site("internal/wsagent/children.go", "PiTierHarness", 3, classPersisted, "the constant's declaration and its two reads: the stored agents.tier bucket of a Pi spawn", "TestPiSpawnResolvesThePiTierAndCwd"),
 		site("internal/wsagent/record.go", "AgentKindPi", 1, classPersisted, "a Pi child row's agent kind, the persisted marker of a row the daemon's runner owns", "TestLiveWriterEndAgentsLeavesPiChildRows"),
 		site("internal/wsagent/spawn_live.go", "AgentKindPi", 1, classPersisted, "the agent kind stamped on a Pi child row in snapshots", "TestAgentSpawnHostedWorkerRows"),
-		site("internal/wsagent/children.go", "pi.", 3, classExternal, "the pi.* tool-name prefix of the Pi extension's calls", piChild),
-		site("internal/wsagent/children.go", "pi.spawn", 1, classExternal, "the Pi extension's spawn tool name", piChild),
 		site("internal/wsagent/holder.go", "pi-worker", 1, classPersisted, "holder kind an older daemon wrote into a still-running holder's descriptor", "TestWorkerHolderOwnership"),
-		site("internal/wsagent/worker_rejoin.go", "BackendPi", 2, classPersisted, "a legacy pi-worker holder keeps its absent backend across rejoin", "TestWorkerHolderOwnership"),
 		site("internal/wsagent/hosted_plugins.go", ".claude-plugin/plugin.json", 1, classExternal, "the shipped package manifest path, a build-owned file layout", "TestHostedPluginEnvironmentUsesNativeTemplatePaths"),
 		site("internal/wsagent/hosted_plugins.go", "${CLAUDE_PLUGIN_ROOT}", 2, classExternal, "the root placeholder shipped manifests carry", "TestHostedPluginEnvironmentUsesNativeTemplatePaths"),
 		site("internal/wsagent/record.go", `json:"agy_bypass,omitempty"`, 1, classPersisted, "Record.AgyBypass, a persisted record member older daemons wrote", "TestAgyBypassScopeAndLegacyRecordRewrite"),
@@ -163,28 +178,19 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/mcp/compaction.go", "pi.compaction_advisory_percent", 1, classPersisted, "config keys a user's config may hold", compactKeys),
 		site("internal/mcp/compaction.go", "pi.compaction_hard_percent", 1, classPersisted, "config keys a user's config may hold", compactKeys),
 		site("internal/mcp/dashboard_settings_config.go", "claude.status_band_enabled", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.runaway_threshold", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.settle_delay_ms", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_advisory_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_hard_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.context_window_override", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_dialog_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_reread_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_timeout_seconds", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_retries", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.stall_log_check", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.http2_frame_trace", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.prefer_native_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "agy.avoid_agy_subagent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "persisted config key the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/dashboard_settings_config.go", "claude.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
-		site("internal/mcp/server_dispatch.go", "pi.spawn", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.send", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.list", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.stop", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.transcript", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
-		site("internal/mcp/server_dispatch.go", "pi.wait", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
+		site("internal/mcp/server_dispatch.go", "pi.spawn", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.send", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.list", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.stop", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.transcript", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
+		site("internal/mcp/server_dispatch.go", "pi.wait", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestRetiredPiExecutionToolsAreHiddenAndRefuse"),
 		site("internal/mcp/server_harness.go", "x-codex-turn-metadata", 2, classExternal, "Codex's own request metadata key and its raw marker", detect),
 		site("internal/mcp/server_harness.go", "codex", 3, classExternal, "historical raw initialize substring and its precedence over claude", detect),
 		site("internal/mcp/server_harness.go", "claude", 2, classExternal, "historical raw initialize substring", detect),
@@ -199,12 +205,8 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/fs_outside.go", ".claude/.credentials.json", 1, classExternal, "the provider's credential file", credentials),
 		site("internal/wsdashboard/conversation_presentation.go", `^\[(?:ws|wsflow) note: from a peer lead session \((?:(?:claude|codex|pi), )?not a worker\), with the same authority as yours\]$`, 1, classPersisted,
 			"stored peer-lead mail text written by earlier versions, which labeled only claude, codex, and pi", "TestConversationPresentationPeerNoteIsDisplayOnly"),
-		site("internal/wsdashboard/page_reader.go", "pi", 1, classPersisted, "the Pi session file location inside a session directory, watched for child revival", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
-		site("internal/wsdashboard/pageview.go", "AgentKindPi", 1, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestPiSpawnDisplayStatus"),
-		site("internal/wsdashboard/pageview_session.go", "AgentKindPi", 1, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestPiSpawnDisplayRefreshesAfterSessionRemoval"),
-		site("internal/wsdashboard/pageview_hud.go", "AgentKindPi", 1, classPersisted, "the historical Pi agent-kind marker of a live agent with no harness name", "TestHUDHarnessLegacyPiAgentKind"),
-		site("internal/wsdashboard/pageview_hud.go", "pi", 1, classPersisted, "the historical Pi agent-kind marker of a live agent with no harness name", "TestHUDHarnessLegacyPiAgentKind"),
-		site("internal/wsdashboard/registry.go", "pi", 2, classPersisted, "the Pi record backend and session file location protected from retirement deletion", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
+		site("internal/wsdashboard/pageview.go", "AgentKindPi", 2, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestRetiredPiRowOpensAsEndedHistory"),
+		site("internal/wsdashboard/registry.go", "pi", 1, classPersisted, "the Pi record backend and session file location protected from retirement deletion", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claude"`, 2, classPersisted, "the plan-usage file's claude member", history),
 		site("internal/wsdashboard/plan_usage.go", "claude", 3, classPersisted, "persisted history harness label", history),
 		site("internal/wsdashboard/plan_usage.go", "codex", 1, classPersisted, "persisted history harness label", history),
@@ -213,9 +215,7 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage.go", ".claude", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
-		site("internal/wsdashboard/plan_usage.go", ".pi", 1, classExternal, "the Pi credential directory", "TestPlanUsageCodexCredentials"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claudeAiOauth"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
-		site("internal/wsdashboard/plan_usage.go", `json:"openai-codex"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
 		site("internal/wsdashboard/plan_usage.go", "codexFiveHourHistory", 1, classPersisted, "the plan-usage response member the page reads", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
 		site("internal/wsdashboard/plan_usage_history.go", "plan-usage-codex-history.json", 1, classPersisted, "the persisted five-hour history file name", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
 		site("internal/wsdashboard/plan_usage_history.go", "codex", 2, classPersisted, "persisted history validators accept the labels earlier writers wrote", history),
@@ -224,16 +224,10 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage_history.go", "via Pi", 2, classPersisted, "persisted history source label", history),
 		site("internal/wsdashboard/plan_usage_history.go", "Claude push", 1, classPersisted, "persisted history source label", history),
 		site("internal/wsdashboard/plan_usage_probe.go", "via Codex CLI", 1, classPersisted, "persisted history source label", history),
-		site("internal/wsdashboard/plan_usage_probe.go", "via Pi", 2, classPersisted, "persisted history source label", history),
 		site("internal/wsdashboard/plan_usage_probe.go", "codex", 1, classPersisted, "persisted history harness label", history),
 		site("internal/wsdashboard/plan_usage_probe.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage_probe.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
-		site("internal/wsdashboard/plan_usage_probe.go", ".pi", 1, classExternal, "the Pi credential directory", "TestPlanUsageCodexCredentials"),
-		site("internal/wsdashboard/plan_usage_probe.go", `json:"openai-codex"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
-		site("internal/wsdashboard/plan_usage_probe.go", "codex_cli_rs", 1, classExternal, "the provider's usage endpoint originator header", "TestPlanUsageCodexRESTWindows"),
-		site("internal/wsdashboard/plan_usage_probe.go", "codex-cli", 1, classExternal, "the provider's usage endpoint client header", "TestPlanUsageCodexRESTWindows"),
-		site("internal/wsdashboard/plan_usage_probe.go", "codex-1", 1, classExternal, "the provider's usage endpoint beta header", "TestPlanUsageCodexRESTWindows"),
-		site("internal/wsdashboard/plan_usage_probe.go", "Codex Desktop", 1, classExternal, "the provider's usage endpoint originator header", "TestPlanUsageCodexRESTWindows"),
+		site("internal/wsdashboard/plan_usage_probe.go", "codex_cli_rs", 1, classExternal, "the provider's usage endpoint originator header", "TestPlanUsageIgnoresPiLogin"),
 	)
 
 	// cmd/ws-mcp
@@ -263,17 +257,19 @@ var aliasRoots = []string{"..", "../../cmd"}
 var (
 	adapterOwned = []*regexp.Regexp{
 		// Backend implementation files own genuine harness behavior.
-		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi)[a-z0-9_]*\.go$`),
-		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|agy)\.go$`),
+		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi|werk)[a-z0-9_]*\.go$`),
+		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|agy|werk)\.go$`),
+		// The builtin harness's hidden subcommand, which the daemon starts.
+		regexp.MustCompile(`^cmd/ws-mcp/werk[a-z0-9_]*\.go$`),
 		// The Pi extension's MCP tool surface and forwarder.
 		regexp.MustCompile(`^internal/mcp/pi_[a-z0-9_]*\.go$`),
 		// The Agy usage provider.
 		regexp.MustCompile(`^internal/wsdashboard/plan_usage_agy\.go$`),
 	}
-	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])pi([^a-z0-9]|$)`)
-	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi)$`)
-	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi)\b|\b(claude|codex|agy|pi)\|`)
-	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi)$`)
+	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])(pi|werk)([^a-z0-9]|$)`)
+	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi|werk)$`)
+	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi|werk)\b|\b(claude|codex|agy|pi|werk)\|`)
+	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi|Werk)$`)
 
 	// decisionCalls are the strings functions whose literal argument is a
 	// comparison operand: a long product name there is a branch, not prose.
@@ -669,7 +665,7 @@ func scanOffender(t *testing.T, src string) scanResult {
 // come from the constants' own declarations, not from a list kept here.
 func TestHarnessNameScanFindsConstantAliases(t *testing.T) {
 	aliases := harnessAliases(t)
-	for _, name := range []string{"BackendClaude", "BackendCodex", "BackendAgy", "BackendPi", "PiTierHarness", "AgentKindPi", "piHarness"} {
+	for _, name := range []string{"BackendClaude", "BackendCodex", "BackendAgy", "BackendPi", "AgentKindPi"} {
 		if !aliases[name] {
 			t.Errorf("%s is not discovered as a harness-name constant", name)
 		}
@@ -678,13 +674,13 @@ func TestHarnessNameScanFindsConstantAliases(t *testing.T) {
 
 func branch(h string) bool {
 	switch h {
-	case wsagent.PiTierHarness:
+	case wsagent.BackendPi:
 		return true
 	}
 	return h == wslive.AgentKindPi
 }
 `)
-	for _, name := range []string{"PiTierHarness", "AgentKindPi"} {
+	for _, name := range []string{"BackendPi", "AgentKindPi"} {
 		if res.found[foundSite{"internal/mcp/offender.go", name}] != 1 {
 			t.Errorf("a use of %s was not gated: %v", name, res.found)
 		}

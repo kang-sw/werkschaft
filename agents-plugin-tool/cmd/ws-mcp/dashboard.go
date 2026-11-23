@@ -102,20 +102,22 @@ func dashboardCommand(args []string) {
 	holders := newDashboardHolders(dir, logw, execLink)
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
-	// The hosted exec jobs bind after the runner starts (openHostedExec):
-	// until then no held report is released and no session sleeps.
-	agents.ExpectExecJobs()
-	labels.agents.Store(agents)
-	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	// The one provider credential store: the daemon's token route and its
-	// change route serve it, and hosted `credential` commands apply to it.
+	// change route serve it, and hosted `credential` commands apply to it. The
+	// runner uses the status for availability and supplies the in-process
+	// source to backends that request a model credential.
 	var credentials *wscred.Store
 	if credPath, err := wscred.DefaultPath(""); err != nil {
 		fmt.Fprintf(logw, "dashboard: credential store unavailable: %v\n", err)
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
+	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label, credentials)
+	// The hosted exec jobs bind after the runner starts (openHostedExec):
+	// until then no held report is released and no session sleeps.
+	agents.ExpectExecJobs()
+	labels.agents.Store(agents)
+	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	userCmdsReady := make(chan struct{})
 	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
@@ -438,6 +440,28 @@ func (l *mailLabels) label(replyID string) string {
 	return ""
 }
 
+// credentialStatus is the provider credential store's status as the agent
+// runner reads it: whether a provider has a credential configured. It never
+// returns a key. A nil store (unavailable) answers nothing, so no harness is
+// held back by it.
+func credentialStatus(store *wscred.Store) func(provider string) (bool, error) {
+	if store == nil {
+		return nil
+	}
+	return func(provider string) (bool, error) {
+		statuses, err := store.Status()
+		if err != nil {
+			return false, err
+		}
+		for _, st := range statuses {
+			if string(st.Provider) == provider {
+				return st.Configured, nil
+			}
+		}
+		return false, nil
+	}
+}
+
 func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *wsholder.Manager {
 	holders := wsholder.New(wsholder.Options{
 		Dir:          filepath.Join(dir, wsholder.DirName),
@@ -456,7 +480,7 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // trackerChanged runs after a conversation's successful tracker write;
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
-func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc) *wsagent.Runner {
+func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -464,8 +488,14 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	}
 	keys := mcp.NewAgentKeyStore(boards)
 	backends := wsagent.BuiltinBackendRegistrations()
+	var loadProviderConfig func(wsconfig.Options) error
+	if credentials != nil {
+		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
+		loadProviderConfig = credentials.LoadLocalEndpoints
+	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{
+		LoadProviderConfig:         loadProviderConfig,
 		Dir:                        dir,
 		DaemonVersion:              version,
 		AgyModelWaitTimeoutSeconds: &modelWaitSeconds,
@@ -483,6 +513,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return agentMCPCommand(root, version)
 		},
+		DaemonMCP: agentDaemonMCP,
 		// A hosted lead's launch appends its workflow manual to its prompt,
 		// and a lead without ws skills runs the package's lead playbooks as
 		// dashboard commands whose turn carries the playbook body.
@@ -500,14 +531,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		Log:            logw,
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
-		// A spawned Pi subagent's settled turns go to its lead's mailbox.
-		Report: mcp.PiTurnReporter(logw),
-		// A Pi subagent's own pi.* calls (the token route) need a usable
-		// Pi, as a lead's do.
-		ChildCheck: mcp.PiReady,
-		// The dashboard's tier routing view asks availability without
-		// running pi --version (Runner.HarnessAvailability).
-		ChildCheckKnown: mcp.PiReadyKnown,
+		Report:         mcp.AgentTurnReporter(logw),
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.
 		TierRoles: mcp.PackagedTierRoles,

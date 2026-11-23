@@ -215,6 +215,8 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .hb[data-h="codex"]::before { content: "Co"; }
 .hb[data-h="agy"] { background: #3b7be8; color: #fff; }
 .hb[data-h="agy"]::before { content: "Ag"; }
+.hb[data-h="werk"] { background: #2f6f5e; color: #fff; }
+.hb[data-h="werk"]::before { content: "Wk"; }
 /* Conic ring spinners rotate a static gradient on a pseudo-element (transform
    only, compositor-side) under the host's static mask; animating an angle custom
    property inside the gradient re-rasterised every frame on the main thread.
@@ -308,12 +310,11 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; display: inline-block; animation: dash-pulse 1.6s steps(4) infinite; }
 @keyframes dash-pulse { 50% { opacity: .3; } }
 /* A running Pi subagent's mark: a "pi" tag blinking as the pulse does. */
-.pibadge { flex: none; display: inline-block; font: 800 9px/1 var(--wb-mono); padding: 1px 2px; border: 1px solid currentColor; border-radius: 3px; animation: dash-pulse 1.6s steps(4) infinite; }
 /* The drawer skeleton and tracker search spinner live in their own sheets. */
 :root .dskel i { animation-timing-function: steps(4); }
 :root .tk .tk-qspin { animation-timing-function: steps(12); }
-:root[data-animation-paused] :is(.spin, .pulse, .pibadge, .caret, .ibadge.busy .istop, .rail .drkwork, .hb .hbr, .rail .hb.perm, .rail .sbn, .dskel i, .tk .tk-qspin, .oq-pill.board-updated) { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { .spin, .caret, .pulse, .pibadge { animation: none; } }
+:root[data-animation-paused] :is(.spin, .pulse, .caret, .ibadge.busy .istop, .rail .drkwork, .hb .hbr, .rail .hb.perm, .rail .sbn, .dskel i, .tk .tk-qspin, .oq-pill.board-updated) { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .spin, .caret, .pulse { animation: none; } }
 :root[data-animation-paused] .hud-node[data-state] .hud-ring { animation-play-state: paused; }
 /* animation-play-state is not inherited: the pseudo-element spinners and pulses pause on their own. */
 :root[data-animation-paused] :is(.hb .hbr, .hud-node[data-state] .hud-ring)::before,

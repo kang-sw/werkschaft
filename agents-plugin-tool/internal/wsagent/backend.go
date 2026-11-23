@@ -48,8 +48,9 @@ type StartSpec struct {
 	Profile Profile
 	// Model and Effort are the conversation's current values; empty leaves
 	// the harness default.
-	Model  string
-	Effort string
+	Model    string
+	Effort   string
+	Provider string
 	// SessionID is the backend session to resume; empty starts a new one.
 	SessionID string
 	// Cwd is the child's working directory when it is not Root, and
@@ -96,8 +97,12 @@ type StartSpec struct {
 	// RecoveredSteers are the unconsumed worker steers persisted before a
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
-	RecoveredSteers []string
-	restoredUsage   *wslive.Usage
+	RecoveredSteers    []string
+	recoverExec        func(context.Context, string) (string, error)
+	restoredUsage      *wslive.Usage
+	compactState       func(time.Time) compactionState
+	sessionSecret      string
+	modelContextWindow func(string) int64
 
 	// reattachedPromptAfter is the holder sequence before the worker's
 	// outstanding daemon-sent prompt. Nil means there is no such prompt.
@@ -377,6 +382,8 @@ type Event struct {
 	// completion, a compaction, a pushed batch); the runner starts one
 	// unless its own send already did.
 	TurnStart bool
+	// TurnID correlates a durable boundary or reply to its admitted input.
+	TurnID string
 	// Approval is a tool permission prompt now waiting; ApprovalDone names
 	// one (by request id) that is settled: withdrawn by the harness, or its
 	// tool call returned.
@@ -396,6 +403,8 @@ type Event struct {
 	// CommandError reports a refused command without settling the active
 	// run. It updates State.Error, not the conversation or typed failure.
 	CommandError string
+	// A compaction control can settle without a model turn of its own.
+	compactCommandDone bool
 	// BackgroundTasks is the harness's aggregate background task count. A
 	// whole-list update also replaces the optional split counts: nil means
 	// the stream could not classify every task. The aggregate still includes
@@ -436,10 +445,6 @@ type Event struct {
 	// ReasoningSummary is a validated lead-only widget projection, never an
 	// extension-supplied lifecycle/usage/key command.
 	ReasoningSummary *wslive.ReasoningSummary
-	// summaryCapability is the hosted bundle's explicit process-local opt-in,
-	// consumed by piMapper, never stored or inferred from a summary payload.
-	summaryCapability   *bool
-	piCompactCapability *bool
 	// Card is a tracker card the lead showed: a successful tracker.show call
 	// of the attached ws-mcp whose result opens with its card line.
 	Card *wslive.CardRef
@@ -486,6 +491,7 @@ type Event struct {
 	// (a prompt, or a steered message it worked in).
 	SteerAnswer       *SteerAnswer
 	UserTaken         string
+	durableSteerID    string
 	compactSteerReply *compactSteerReply
 }
 
@@ -498,7 +504,6 @@ type SteerAnswer struct {
 // compactSteerReply acknowledges guidance without accounting for a report.
 type compactSteerReply struct {
 	id, refusal string
-	piNumeric   bool
 }
 
 // harnessEnv returns env without the variables a parent harness session

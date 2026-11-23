@@ -873,7 +873,7 @@ func TestRenderKeyBlockWordingFollowsCallerAndRole(t *testing.T) {
 		"sub-pb/sub-pb.md":   subleadPlaybookContent,
 		"impl-pb/impl-pb.md": implementerPlaybookContent,
 	}))
-	f := newPiRecordFixture(t)
+	f := daemonRenderFixture(t)
 
 	const single = "Use this key in all ws tool calls."
 	const split = "Your system prompt's spawn key is your session key for every ws call; use this lead-scoped key only for a lead-only tool the spawn key is refused (for example `tickets.sage_stamp`)."
@@ -881,10 +881,10 @@ func TestRenderKeyBlockWordingFollowsCallerAndRole(t *testing.T) {
 		name, playbook, initialize, want, notWant string
 		scope                                     toolRole
 	}{
-		{"daemon worker", "role-pb", piInitDaemon, split, single, roleLead},
-		{"native worker", "role-pb", piInitNative, single, "spawn key", roleLead},
-		{"daemon sublead", "sub-pb", piInitDaemon, single, "spawn key", roleLead},
-		{"daemon implementer", "impl-pb", piInitDaemon, single, "spawn key", roleDelegate},
+		{"daemon worker", "role-pb", codexInitDaemon, split, single, roleLead},
+		{"native worker", "role-pb", codexInitNative, single, "spawn key", roleLead},
+		{"daemon sublead", "sub-pb", codexInitDaemon, single, "spawn key", roleLead},
+		{"daemon implementer", "impl-pb", codexInitDaemon, single, "spawn key", roleDelegate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := renderedBody(t, f.s, f.leadKey, tc.playbook, tc.initialize)

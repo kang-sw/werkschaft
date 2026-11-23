@@ -392,6 +392,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .hud-emblem[data-h="codex"]  { background: #f2f2f2; color: #18181b; box-shadow: inset 0 0 0 1px rgb(24 24 27 / .18); }
 .hud-emblem[data-h="agy"]    { background: #3b7be8; color: #ffffff; }
 .hud-emblem[data-h="pi"]     { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
+.hud-emblem[data-h="werk"]   { background: #2f6f5e; color: #ffffff; }
 @property --d-hud-ring-arc { syntax: "<color>"; inherits: true; initial-value: transparent; }
 @property --d-hud-ring-tip { syntax: "<color>"; inherits: true; initial-value: transparent; }
 .hud-ring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; z-index: 2; transition: background-color 0.5s ease, --d-hud-ring-arc 0.5s ease, --d-hud-ring-tip 0.5s ease; }

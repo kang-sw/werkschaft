@@ -197,37 +197,11 @@ func roundTrip(t *testing.T, v any) json.RawMessage {
 
 // A Pi worker under the cutover drops its built-in shell; its other tools
 // and its ws tools stay.
-func TestPiWorkerExecCutoverDropsBash(t *testing.T) {
-	spec := StartSpec{Root: t.TempDir(), Dir: t.TempDir(), Profile: builtinProfile(t, PiWorkerProfile), WSMCP: &MCPCommand{Command: "/bin/ws-mcp"}}
-	tools := func() []string {
-		v, _ := flagValue(piArgs(spec, "/bridge.mjs"), "--tools")
-		return strings.Split(v, ",")
-	}
-	if got := tools(); !slices.Contains(got, "bash") || !slices.Contains(got, "mcp__ws__exec_shell") {
-		t.Fatalf("pi worker tools = %v", got)
-	}
-	spec.ExecCutover = true
-	got := tools()
-	if slices.Contains(got, "bash") {
-		t.Fatalf("cutover pi worker keeps bash: %v", got)
-	}
-	for _, name := range []string{"read", "edit", "write", "grep", "find", "ls", "mcp__ws__exec_shell", "mcp__ws__git_commit"} {
-		if !slices.Contains(got, name) {
-			t.Fatalf("cutover pi worker lost %s: %v", name, got)
-		}
-	}
-	// A lead passes no --tools at all: it would filter the extension's.
-	lead := StartSpec{Dir: t.TempDir(), Lead: &LeadSpec{}, ExecCutover: true}
-	if _, ok := flagValue(piLeadArgs(lead), "--tools"); ok {
-		t.Fatal("a pi lead launch carries --tools")
-	}
-}
-
 // The exec tools are on every worker allowlist before any native tool is
 // removed, and Codex's read tools on the agent.spawn child's.
 func TestExecToolsOnWorkerAllowlists(t *testing.T) {
 	for _, name := range ExecWSTools {
-		for list, tools := range map[string][]string{"PiWorkerWSTools": PiWorkerWSTools, "PiMiniLeadWSTools": PiMiniLeadWSTools, "AgentWSTools": AgentWSTools} {
+		for list, tools := range map[string][]string{"AgentWSTools": AgentWSTools} {
 			if !slices.Contains(tools, name) {
 				t.Fatalf("%s misses %s", list, name)
 			}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/mcpframe"
 )
 
 // execToolNames are every exec tool callExec dispatches.
@@ -147,6 +148,9 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 	if stdin, ok := args["stdin"].(string); ok {
 		req.Stdin, req.StdinSet = []byte(stdin), true
 	}
+	if err := s.bindExecLaunch(ctx, &req, args, meta); err != nil {
+		return toolTextResponse(id, "", err)
+	}
 	v, err := jobs.Launch(ctx, s.drainContext().Done(), req)
 	if err != nil {
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", name, err))
@@ -179,7 +183,10 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 	switch name {
 	case "exec.spawn", "exec.shell":
 		if s.hostedExec() {
-			return s.hostedLegacyLaunch(ctx, id, name, root, args)
+			return s.hostedLegacyLaunch(ctx, id, name, root, args, meta)
+		}
+		if s.recordExecLaunch != nil {
+			return toolTextResponse(id, "", errNoHostedExec)
 		}
 		workingDir, _ := args["working_dir"].(string)
 		stdin, _ := args["stdin"].(string)
@@ -257,7 +264,7 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 // hostedLegacyLaunch runs a legacy exec.spawn or exec.shell launch as a
 // hosted job: the daemon's approval and execution window, the legacy key
 // and reply, and a finite stdin (closed after the given text, or at once).
-func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, name, root string, args map[string]any) response {
+func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, name, root string, args, meta map[string]any) response {
 	jobs := s.execJobs()
 	workingDir, _ := args["working_dir"].(string)
 	cwd, err := execjob.ResolveWorkingDir(root, workingDir)
@@ -285,6 +292,9 @@ func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, nam
 		req.Argv = execjob.LegacyShellArgv(shell, command)
 		req.Display, req.Command, req.Shell = command, command, req.Argv[0]
 	}
+	if err := s.bindExecLaunch(ctx, &req, args, meta); err != nil {
+		return execResponse(id, execjob.Response{}, err, true)
+	}
 	v, err := jobs.Launch(ctx, s.drainContext().Done(), req)
 	if err != nil && v.ID == "" {
 		return execResponse(id, execjob.Response{}, err, true)
@@ -294,6 +304,32 @@ func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, nam
 	}
 	// A start failure answers as the legacy launch did: a failed record.
 	return execResponse(id, jobs.LegacyResponse(v, v.Outcome == execjob.OutcomeDone), nil, true)
+}
+
+// bindExecLaunch takes call identity only from the authenticated model
+// binding. The launch cannot proceed if it lacks a matching pending call.
+func (s *Server) bindExecLaunch(ctx context.Context, req *execjob.HostedLaunch, args, meta map[string]any) error {
+	if s.recordExecLaunch == nil {
+		return nil
+	}
+	callID, _ := meta[mcpframe.ToolCallIDMeta].(string)
+	if callID == "" {
+		return errors.New("the exec launch requires a model call identity")
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	tool := req.Tool
+	if s.fileWrites != nil && s.fileWrites.LiveAuthority {
+		req.ApproveModel = func(ctx context.Context, preview execjob.HostedCall) error {
+			return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, Approval: &preview})
+		}
+	}
+	req.BindJob = func(jobID string) error {
+		return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, JobID: jobID})
+	}
+	return nil
 }
 
 // mergeDone returns a context that ends when either a or b does.

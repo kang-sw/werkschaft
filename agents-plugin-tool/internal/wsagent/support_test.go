@@ -36,12 +36,12 @@ func stubLookPath(t *testing.T, missing ...string) {
 	t.Cleanup(func() { lookPath = old })
 }
 
-// supportHarness is a runner with fake claude and pi backends, two tracker
+// supportHarness is a runner with a fake Claude backend, two tracker
 // stores, and a Support over the runner's directory.
 type supportHarness struct {
 	*harness
-	claude, pi *fakeBackend
-	stores     map[string]string
+	claude *fakeBackend
+	stores map[string]string
 	// rootErr, when set, is what storeRoot answers for an unlisted store
 	// in place of ErrStoreUnregistered: a registry that cannot be read.
 	rootErr error
@@ -55,12 +55,11 @@ func newSupportHarness(t *testing.T) *supportHarness {
 	sh := &supportHarness{
 		harness: h,
 		claude:  &fakeBackend{exe: "fake-claude"},
-		pi:      &fakeBackend{exe: "fake-pi"},
 		stores:  map[string]string{"alpha": t.TempDir(), "beta": t.TempDir()},
 		now:     time.Date(2026, 11, 15, 9, 35, 42, 0, time.UTC),
 	}
 	h.config.Now = func() time.Time { return sh.now }
-	h.config.Backends = map[string]BackendRegistration{BackendClaude: {Backend: sh.claude, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}, BackendPi: {Backend: sh.pi, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}}
+	h.config.Backends = map[string]BackendRegistration{BackendClaude: {Backend: sh.claude, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}}
 	stubLookPath(t)
 	sh.restart()
 	return sh
@@ -252,32 +251,6 @@ func TestSupportCloseUnregisteredEndsARemovedStoresConversation(t *testing.T) {
 	}
 }
 
-func TestSupportHarnessSwitchReplacesTheConversation(t *testing.T) {
-	sh := newSupportHarness(t)
-	old := sh.send("alpha", "hello")
-	ans := sh.choose("alpha", selectRequest{Harness: strp(BackendPi), Model: strp("openrouter/~anthropic/claude-fable-latest")})
-	if ans.Conversation == nil || ans.Conversation.ID == old.ID {
-		t.Fatalf("harness switch answered %+v", ans.Conversation)
-	}
-	if c := ans.Conversation; c.Profile != SupportProfilePi || c.Backend != BackendPi || c.Model != "openrouter/~anthropic/claude-fable-latest" || c.Effort != "" {
-		t.Fatalf("switched conversation = %+v", c)
-	}
-	if want := (Selection{Harness: BackendPi, Model: "openrouter/~anthropic/claude-fable-latest"}); ans.Selection != want {
-		t.Fatalf("selection = %+v, want %+v", ans.Selection, want)
-	}
-	if st := sh.state(old.ID); st.Status != StatusClosed {
-		t.Fatalf("old conversation status %s, want closed", st.Status)
-	}
-	if c := sh.storeConv("alpha"); c == nil || c.ID != ans.Conversation.ID {
-		t.Fatalf("store maps %+v", c)
-	}
-	// A switch resets model and effort the request does not give.
-	back := sh.choose("alpha", selectRequest{Harness: strp(BackendClaude)})
-	if back.Selection != (Selection{Harness: BackendClaude}) || back.Conversation.Model != "" || back.Conversation.Backend != BackendClaude {
-		t.Fatalf("switch back = %+v", back)
-	}
-}
-
 func TestSupportModelAndEffortChangeKeepTheConversation(t *testing.T) {
 	sh := newSupportHarness(t)
 	conv := sh.send("alpha", "hello")
@@ -310,7 +283,7 @@ func TestSupportLastChoiceIsTheDefaultAndPersists(t *testing.T) {
 	if ans, _ := sh.support.Store("alpha"); ans.Selection != (Selection{Harness: BackendClaude}) {
 		t.Fatalf("default selection = %+v, want claude with defaults", ans.Selection)
 	}
-	ans := sh.choose("alpha", selectRequest{Harness: strp(BackendPi), Effort: strp("high")})
+	ans := sh.choose("alpha", selectRequest{Harness: strp(BackendClaude), Effort: strp("high")})
 	if ans.Conversation != nil {
 		t.Fatalf("select with no conversation opened %+v", ans.Conversation)
 	}
@@ -318,7 +291,7 @@ func TestSupportLastChoiceIsTheDefaultAndPersists(t *testing.T) {
 		t.Fatalf("select with no conversation must only save the choice")
 	}
 	conv := sh.send("beta", "hello")
-	if conv.Backend != BackendPi || conv.Profile != SupportProfilePi || conv.Effort != "high" {
+	if conv.Backend != BackendClaude || conv.Profile != SupportProfileClaude || conv.Effort != "high" {
 		t.Fatalf("another store's first conversation = %+v, want the last choice", conv)
 	}
 
@@ -331,7 +304,7 @@ func TestSupportLastChoiceIsTheDefaultAndPersists(t *testing.T) {
 	}
 
 	sh.restart()
-	want := Selection{Harness: BackendPi, Effort: "high"}
+	want := Selection{Harness: BackendClaude, Effort: "high"}
 	if got := sh.support.Choices(context.Background()).Last; got != want {
 		t.Fatalf("last choice after restart = %+v, want %+v", got, want)
 	}
@@ -340,11 +313,34 @@ func TestSupportLastChoiceIsTheDefaultAndPersists(t *testing.T) {
 	}
 }
 
+func TestRetiredPiSupportSelectionFallsBackWithoutRewriting(t *testing.T) {
+	sh := newSupportHarness(t)
+	path := filepath.Join(sh.dir, supportFileName)
+	raw := []byte(`{"schema_version":1,"last":{"harness":"pi","model":"provider/legacy","effort":"high"},"stores":{}}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sh.restart()
+	got, err := sh.support.Store("alpha")
+	if err != nil || !got.RetiredPi || got.Selection != (Selection{Harness: BackendClaude}) {
+		t.Fatalf("legacy selection = %+v, %v", got, err)
+	}
+	if choices := sh.support.Choices(context.Background()); len(choices.Harnesses) != 1 || choices.Harnesses[0].Harness != BackendClaude {
+		t.Fatalf("support choices = %+v", choices.Harnesses)
+	}
+	if saved, err := os.ReadFile(path); err != nil || string(saved) != string(raw) {
+		t.Fatalf("stored selection changed: %q, %v", saved, err)
+	}
+	if st := sh.send("alpha", "hello"); st.Backend != BackendClaude || st.Model == "provider/legacy" {
+		t.Fatalf("fallback conversation = %+v", st)
+	}
+}
+
 func TestSupportDefaultSkipsAnUnavailableHarness(t *testing.T) {
 	sh := newSupportHarness(t)
 	stubLookPath(t, "fake-claude")
-	if ans, _ := sh.support.Store("alpha"); ans.Selection != (Selection{Harness: BackendPi}) {
-		t.Fatalf("default with claude missing = %+v, want pi", ans.Selection)
+	if ans, _ := sh.support.Store("alpha"); ans.Selection != (Selection{}) {
+		t.Fatalf("default with claude missing = %+v, want no harness", ans.Selection)
 	}
 	if _, err := sh.support.Select("alpha", selectRequest{Harness: strp(BackendClaude)}); err == nil {
 		t.Fatal("an unavailable harness must be refused")
@@ -352,66 +348,50 @@ func TestSupportDefaultSkipsAnUnavailableHarness(t *testing.T) {
 	if _, err := sh.support.Select("alpha", selectRequest{Harness: strp("codex")}); err == nil {
 		t.Fatal("an unknown harness must be refused")
 	}
-	stubLookPath(t, "fake-claude", "fake-pi")
 	var re *requestError
 	if _, err := sh.support.Send("alpha", "hello"); !errors.As(err, &re) || re.status != http.StatusServiceUnavailable {
 		t.Fatalf("send with no harness = %v, want 503", err)
 	}
 }
 
-const piListing = `provider      model                                               context  max-out  thinking  images
-openai-codex  gpt-5.3-codex-spark                                 128K     128K     yes       no
-openai-codex  gpt-plain                                           128K     16K      no        no
-openrouter    ~anthropic/claude-fable-latest                      1M       128K     yes       yes
-openrouter    ~anthropic/claude-fable-latest                      1M       128K     yes       yes
-`
-
-// listingStub replaces runListing; it counts calls.
-type listingStub struct {
-	mu    sync.Mutex
-	calls int
-	args  []string
-	out   string
-	err   error
-	// during, when set, runs inside each listing (a listing that takes time).
+type supportListingFixture struct {
+	ClaudeBackend
+	mu     sync.Mutex
+	calls  int
+	err    error
 	during func()
 }
 
-func stubListing(t *testing.T, out string, err error) *listingStub {
-	t.Helper()
-	s := &listingStub{out: out, err: err}
-	old := runListing
-	runListing = func(ctx context.Context, command string, args, _ []string) ([]byte, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.calls++
-		s.args = append([]string{command}, args...)
-		if s.during != nil {
-			s.during()
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err // as an exec under a done context fails
-		}
-		return []byte(s.out), s.err
+func (f *supportListingFixture) Choices(ctx context.Context) ([]ModelChoice, []string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.during != nil {
+		f.during()
 	}
-	t.Cleanup(func() { runListing = old })
-	return s
+	if err := ctx.Err(); err != nil {
+		return nil, claudeagents.Levels, err
+	}
+	if f.err != nil {
+		return nil, claudeagents.Levels, f.err
+	}
+	return f.ClaudeBackend.Choices(ctx)
 }
 
-func (s *listingStub) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
+func (f *supportListingFixture) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
-// realChoices is a Support over the real claude and pi backends.
-func realChoices(t *testing.T, now *time.Time) *Support {
+func supportChoices(t *testing.T, now *time.Time, backend Backend) *Support {
 	t.Helper()
 	r := NewRunner(Options{
 		Dir:      t.TempDir(),
-		Backends: map[string]BackendRegistration{BackendClaude: {Backend: ClaudeBackend{Command: "claude-x"}}, BackendPi: {Backend: PiBackend{Command: "pi-x"}}},
+		Backends: map[string]BackendRegistration{BackendClaude: {Backend: backend}},
 		Config:   testConfig(t),
 	})
+	t.Cleanup(r.Close)
 	return NewSupport(SupportOptions{Runner: r, Dir: t.TempDir(), StoreRoot: func(string) (string, error) { return "", errors.New("none") }, Now: func() time.Time { return *now }})
 }
 
@@ -426,12 +406,12 @@ func harnessByName(t *testing.T, ans ChoicesAnswer, name string) SupportHarness 
 
 func TestSupportChoicesListEachHarness(t *testing.T) {
 	stubLookPath(t)
-	listing := stubListing(t, piListing, nil)
+	listing := &supportListingFixture{ClaudeBackend: ClaudeBackend{Command: "claude-x"}}
 	now := time.Now()
-	s := realChoices(t, &now)
+	s := supportChoices(t, &now, listing)
 	ans := s.Choices(context.Background())
-	if len(ans.Harnesses) != 2 || ans.Harnesses[0].Harness != BackendClaude || ans.Harnesses[1].Harness != BackendPi {
-		t.Fatalf("harnesses = %+v, want claude then pi", ans.Harnesses)
+	if len(ans.Harnesses) != 1 || ans.Harnesses[0].Harness != BackendClaude {
+		t.Fatalf("harnesses = %+v, want claude then claude", ans.Harnesses)
 	}
 	if ans.Last != (Selection{Harness: BackendClaude}) {
 		t.Fatalf("last = %+v", ans.Last)
@@ -449,21 +429,6 @@ func TestSupportChoicesListEachHarness(t *testing.T) {
 		t.Fatalf("claude harness = %+v", claude)
 	}
 
-	pi := harnessByName(t, ans, BackendPi)
-	if !pi.Available || pi.Error != "" || pi.Profile != SupportProfilePi {
-		t.Fatalf("pi harness = %+v", pi)
-	}
-	if !reflect.DeepEqual(pi.Efforts, []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}) {
-		t.Fatalf("pi efforts = %v", pi.Efforts)
-	}
-	raw, _ := json.Marshal(pi.Models)
-	if want := `[{"id":"openai-codex/gpt-5.3-codex-spark","thinking":true},{"id":"openai-codex/gpt-plain","thinking":false},{"id":"openrouter/~anthropic/claude-fable-latest","thinking":true}]`; string(raw) != want {
-		t.Fatalf("pi models = %s\nwant %s", raw, want)
-	}
-	if want := []string{"/usr/local/bin/pi-x", "--offline", "--no-approve", "--list-models"}; !reflect.DeepEqual(listing.args, want) {
-		t.Fatalf("listing ran %v, want %v", listing.args, want)
-	}
-
 	// The listing is cached for a while.
 	s.Choices(context.Background())
 	if listing.count() != 1 {
@@ -477,46 +442,40 @@ func TestSupportChoicesListEachHarness(t *testing.T) {
 }
 
 func TestSupportChoicesMarkAMissingBinaryUnavailable(t *testing.T) {
-	stubLookPath(t, "pi-x")
-	listing := stubListing(t, piListing, nil)
+	stubLookPath(t, "claude-x")
+	listing := &supportListingFixture{ClaudeBackend: ClaudeBackend{Command: "claude-x"}}
 	now := time.Now()
-	ans := realChoices(t, &now).Choices(context.Background())
-	pi := harnessByName(t, ans, BackendPi)
-	if pi.Available || pi.Error == "" || len(pi.Models) != 0 {
-		t.Fatalf("pi with no binary = %+v, want unavailable", pi)
+	ans := supportChoices(t, &now, listing).Choices(context.Background())
+	claude := harnessByName(t, ans, BackendClaude)
+	if claude.Available || claude.Error == "" || len(claude.Models) != 0 {
+		t.Fatalf("claude with no binary = %+v, want unavailable", claude)
 	}
 	if listing.count() != 0 {
 		t.Fatal("an unavailable harness must not be listed")
 	}
-	if claude := harnessByName(t, ans, BackendClaude); !claude.Available || len(claude.Models) != 4 {
-		t.Fatalf("claude = %+v", claude)
-	}
 }
 
-func TestSupportChoicesListingErrorIsPerHarness(t *testing.T) {
+func TestSupportChoicesCachesListingErrors(t *testing.T) {
 	stubLookPath(t)
-	listing := stubListing(t, "", errors.New("exit status 1"))
+	listing := &supportListingFixture{err: errors.New("listing failed")}
 	now := time.Now()
-	s := realChoices(t, &now)
+	s := supportChoices(t, &now, listing)
 	ans := s.Choices(context.Background())
-	pi := harnessByName(t, ans, BackendPi)
-	if !pi.Available || !strings.Contains(pi.Error, "exit status 1") || len(pi.Models) != 0 || len(pi.Efforts) != 7 {
-		t.Fatalf("pi with a failed listing = %+v", pi)
-	}
-	if claude := harnessByName(t, ans, BackendClaude); claude.Error != "" || len(claude.Models) != 4 {
-		t.Fatalf("claude = %+v", claude)
+	claude := harnessByName(t, ans, BackendClaude)
+	if !claude.Available || !strings.Contains(claude.Error, "listing failed") || len(claude.Models) != 0 || len(claude.Efforts) != len(claudeagents.Levels) {
+		t.Fatalf("claude with a failed listing = %+v", claude)
 	}
 	// A failure is cached briefly: the next request answers it again without
 	// listing, and one past choicesFailTTL lists again.
 	listing.mu.Lock()
-	listing.err, listing.out = nil, piListing
+	listing.err = nil
 	listing.mu.Unlock()
-	if pi := harnessByName(t, s.Choices(context.Background()), BackendPi); !strings.Contains(pi.Error, "exit status 1") || len(pi.Efforts) != 7 || listing.count() != 1 {
-		t.Fatalf("pi inside the failure window = %+v after %d listings", pi, listing.count())
+	if claude := harnessByName(t, s.Choices(context.Background()), BackendClaude); !strings.Contains(claude.Error, "listing failed") || len(claude.Efforts) != len(claudeagents.Levels) || listing.count() != 1 {
+		t.Fatalf("claude inside the failure window = %+v after %d listings", claude, listing.count())
 	}
 	now = now.Add(choicesFailTTL)
-	if pi := harnessByName(t, s.Choices(context.Background()), BackendPi); pi.Error != "" || len(pi.Models) != 3 || listing.count() != 2 {
-		t.Fatalf("pi after the listing recovered = %+v after %d listings", pi, listing.count())
+	if claude := harnessByName(t, s.Choices(context.Background()), BackendClaude); claude.Error != "" || len(claude.Models) != 4 || listing.count() != 2 {
+		t.Fatalf("claude after the listing recovered = %+v after %d listings", claude, listing.count())
 	}
 }
 
@@ -525,19 +484,19 @@ func TestSupportChoicesListingErrorIsPerHarness(t *testing.T) {
 // ended, not from when it began.
 func TestSupportChoicesFailureWindowStartsWhenTheListingEnds(t *testing.T) {
 	stubLookPath(t)
-	listing := stubListing(t, "", errors.New("exit status 1"))
+	listing := &supportListingFixture{err: errors.New("listing failed")}
 	now := time.Now()
 	listing.during = func() { now = now.Add(choicesTimeout) }
-	s := realChoices(t, &now)
-	if pi := harnessByName(t, s.Choices(context.Background()), BackendPi); !strings.Contains(pi.Error, "exit status 1") {
-		t.Fatalf("pi with a failed listing = %+v", pi)
+	s := supportChoices(t, &now, listing)
+	if claude := harnessByName(t, s.Choices(context.Background()), BackendClaude); !strings.Contains(claude.Error, "listing failed") {
+		t.Fatalf("claude with a failed listing = %+v", claude)
 	}
 	listing.mu.Lock()
 	listing.during = nil
 	listing.mu.Unlock()
 	now = now.Add(choicesFailTTL - time.Second)
-	if pi := harnessByName(t, s.Choices(context.Background()), BackendPi); !strings.Contains(pi.Error, "exit status 1") || listing.count() != 1 {
-		t.Fatalf("pi just inside the failure window = %+v after %d listings", pi, listing.count())
+	if claude := harnessByName(t, s.Choices(context.Background()), BackendClaude); !strings.Contains(claude.Error, "listing failed") || listing.count() != 1 {
+		t.Fatalf("claude just inside the failure window = %+v after %d listings", claude, listing.count())
 	}
 }
 
@@ -546,25 +505,16 @@ func TestSupportChoicesFailureWindowStartsWhenTheListingEnds(t *testing.T) {
 // next request does not list again.
 func TestSupportChoicesListingOutlivesACanceledRequest(t *testing.T) {
 	stubLookPath(t)
-	listing := stubListing(t, piListing, nil)
+	listing := &supportListingFixture{ClaudeBackend: ClaudeBackend{Command: "claude-x"}}
 	now := time.Now()
-	s := realChoices(t, &now)
+	s := supportChoices(t, &now, listing)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if pi := harnessByName(t, s.Choices(ctx), BackendPi); pi.Error != "" || len(pi.Models) != 3 {
-		t.Fatalf("pi under a canceled request = %+v", pi)
+	if claude := harnessByName(t, s.Choices(ctx), BackendClaude); claude.Error != "" || len(claude.Models) != 4 {
+		t.Fatalf("claude under a canceled request = %+v", claude)
 	}
-	if pi := harnessByName(t, s.Choices(context.Background()), BackendPi); pi.Error != "" || len(pi.Models) != 3 || listing.count() != 1 {
-		t.Fatalf("pi on the next request = %+v after %d listings", pi, listing.count())
-	}
-}
-
-func TestParsePiModelsRefusesAnUnknownTable(t *testing.T) {
-	if _, err := parsePiModels([]byte("No models available.\n")); err == nil {
-		t.Fatal("output with no model table must be an error")
-	}
-	if models, err := parsePiModels(nil); err != nil || len(models) != 0 {
-		t.Fatalf("empty output = %v, %v", models, err)
+	if claude := harnessByName(t, s.Choices(context.Background()), BackendClaude); claude.Error != "" || len(claude.Models) != 4 || listing.count() != 1 {
+		t.Fatalf("claude on the next request = %+v after %d listings", claude, listing.count())
 	}
 }
 
@@ -602,7 +552,7 @@ func TestSupportRoutesEndToEnd(t *testing.T) {
 
 	r := d.do(http.MethodGet, "/support/choices", "", "", nil)
 	var choices ChoicesAnswer
-	if r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &choices) != nil || len(choices.Harnesses) != 2 {
+	if r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &choices) != nil || len(choices.Harnesses) != 1 {
 		t.Fatalf("choices: %d %s", r.status, r.body)
 	}
 	r = d.do(http.MethodGet, "/support/stores/alpha", "", "", nil)
@@ -625,9 +575,9 @@ func TestSupportRoutesEndToEnd(t *testing.T) {
 	if json.Unmarshal([]byte(r.body), &store) != nil || store.Conversation == nil || store.Conversation.ID != id {
 		t.Fatalf("store after send: %s", r.body)
 	}
-	r = d.post("/support/stores/alpha/select", map[string]string{"harness": BackendPi})
+	r = d.post("/support/stores/alpha/select", map[string]string{"harness": BackendClaude, "effort": "high"})
 	var sel SelectAnswer
-	if r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &sel) != nil || sel.Conversation == nil || sel.Conversation.Backend != BackendPi {
+	if r.status != http.StatusOK || json.Unmarshal([]byte(r.body), &sel) != nil || sel.Conversation == nil || sel.Conversation.Backend != BackendClaude || sel.Conversation.Effort != "high" {
 		t.Fatalf("select: %d %s", r.status, r.body)
 	}
 	r = d.post("/support/stores/alpha/new", nil)

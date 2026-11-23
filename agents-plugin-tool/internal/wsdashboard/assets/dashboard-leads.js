@@ -25,7 +25,7 @@
     plan: "js.lead.mode.plan", dontAsk: "js.lead.mode.dontask", bypassPermissions: "js.lead.mode.bypass"
   };
   // The effort levels when the daemon's choices name none.
-  var LEAD_EFFORTS = { claude: ["low", "medium", "high", "xhigh", "max"], pi: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] };
+  var LEAD_EFFORTS = { claude: ["low", "medium", "high", "xhigh", "max"] };
   // lead is the viewed hosted session: its last read state, the read in
   // flight, the permission line the state was last read for, and the
   // approval cards by request id.
@@ -113,15 +113,27 @@
   // arrives.
   // A list read here is stamped with the connection epoch it was read in;
   // only a list of the current epoch can offer common permission levels.
-  function leadChoices(done, refresh) {
-    var held = !!supChoices && !supChoices.error, epoch = permEpoch;
+  function leadChoices(done, refresh, active) {
+    var held = !!supChoices && !supChoices.error;
+    // The daemon bounds one catalog listing at 15 seconds. Leave time for
+    // the final publication, and keep polling light on a slow provider.
+    var deadline = Date.now() + 18000, delay = 250;
     if (held) done();
-    tkFetch("/support/choices", undefined, function (status, v) {
-      if (status === 200 && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
-      else if (supChoices) supChoices.wsEpoch = -1;
-      if (!held) done();
-      else if (refresh) refresh();
-    });
+    function loadChoices() {
+      if (active && !active()) return;
+      var epoch = permEpoch;
+      tkFetch("/support/choices", undefined, function (status, v) {
+        if (status === 200 && v && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
+        else if (supChoices) supChoices.wsEpoch = -1;
+        if (!held) { held = true; done(); }
+        else if (refresh) refresh();
+        if (status === 200 && v && v.pickers_pending && refresh && Date.now() < deadline) {
+          setTimeout(loadChoices, delay);
+          delay = Math.min(delay * 2, 2000);
+        }
+      });
+    }
+    loadChoices();
   }
 
   // --- common permission level ------------------------------------------------
@@ -146,7 +158,7 @@
     codex: { "read-only": "read-only", "workdir-write": "workspace-write", full: "danger-full-access" }
   };
   var permEpoch = 0, permDlg = null;
-  function permHarness(k) { return k === "claude" ? "Claude" : k === "pi" ? "Pi" : k; }
+  function permHarness(k) { return k === "claude" ? "Claude" : k; }
   // permLevels is harness's offered levels in order: null while unknown (no
   // list of the current epoch), empty when the daemon offers none.
   function permLevels(harness) {
@@ -182,13 +194,9 @@
   }
   // permMap fills el with how harness carries level: the native mode it
   // runs in (mode; for no level the native pick) and the quality to expect.
-  // Pi has no native mode, so every level is advisory there.
   function permMap(el, harness, level, mode, change) {
     el.textContent = "";
-    if (harness === "pi") {
-      el.appendChild(mk("span", null, wsT("js.perm.map.pi", permHarness(harness))));
-      el.appendChild(permQ("advisory"));
-    } else if (PERM_NATIVE[harness] && mode) {
+    if (PERM_NATIVE[harness] && mode) {
       permCoded(el, wsT(!level ? "js.perm.map.default" : change ? "js.perm.map.switch" : "js.perm.map.run", "\u0001"), harness, mode);
       if (level) {
         el.appendChild(mk("span", null, "·"));
@@ -344,36 +352,54 @@
     if (q === "pending" || q === "partial" || q === "advisory") v.appendChild(mk("span", "pmsrc", wsT(why, permHarness(harness))));
     if (note) box.appendChild(mk("p", "pmnote", note));
   }
-  // Older daemons have no lead markers; retain their Claude/Pi controls.
+  // An older daemon may omit lead markers.
   function leadHarnesses() {
-    var hs = ((supChoices && supChoices.harnesses) || []).filter(function (h) { return h.lead === true; });
-    return hs.length ? hs : [supHarness("claude") || { harness: "claude" }, supHarness("pi") || { harness: "pi" }];
+    var hs = ((supChoices && supChoices.harnesses) || []).filter(function (h) { return h.lead === true && h.harness !== "pi"; });
+    return hs.length ? hs : [supHarness("claude") || { harness: "claude" }];
   }
   function leadModes(harness) {
     var h = supHarness(harness);
     if (leadHarnesses().some(function (x) { return x.lead === true; })) return h && Array.isArray(h.permission_modes) ? h.permission_modes : [];
     return harness === "claude" ? LEAD_MODES : [];
   }
-  function leadModels(harness) {
-    var h = supHarness(harness);
-    return ((h && h.models) || []).map(function (m) { return String(m.id); });
+  function leadModelKey(id, provider) { return provider && provider !== "openrouter" && id ? provider + " " + id : id; }
+  function leadModelPick(key) {
+    var match = /^(openai|openrouter|local\/[a-z0-9-]+) (.+)$/.exec(key);
+    return match ? { model: match[2], provider: match[1] } : { model: key, provider: "" };
+  }
+  function leadModelEntries(harness, provider, spawn) {
+    var h = supHarness(harness), entries = ((h && h.models) || []);
+    if (harness !== "werk") return entries;
+    if (!spawn) return entries.filter(function (m) { return (m.provider || "openrouter") === (provider || "openrouter"); });
+    var providers = (h && h.model_providers) || [];
+    return entries.filter(function (m) { return providers.indexOf(m.provider || "openrouter") >= 0; });
+  }
+  function leadModels(harness, provider, spawn) {
+    return leadModelEntries(harness, provider, spawn).map(function (m) { return spawn ? leadModelKey(String(m.id), m.provider) : String(m.id); });
+  }
+  function leadModelLabels(harness, provider, spawn) {
+    var labels = Object.create(null);
+    leadModelEntries(harness, provider, spawn).forEach(function (m) {
+      labels[spawn ? leadModelKey(String(m.id), m.provider) : String(m.id)] = (m.display_name || String(m.id)) + (spawn && m.provider && m.provider !== "openrouter" ? " · " + (m.provider === "openai" ? "OpenAI" : m.provider) : "");
+    });
+    return labels;
   }
   function leadEfforts(harness) {
     var h = supHarness(harness);
-    return h && Array.isArray(h.efforts) && h.efforts.length ? h.efforts.map(String) : (harness === "claude" || harness === "pi" ? LEAD_EFFORTS[harness] : []);
+    return h && Array.isArray(h.efforts) && h.efforts.length ? h.efforts.map(String) : (harness === "claude" ? LEAD_EFFORTS.claude : []);
   }
   // leadOptions lists "default" and list in sel with cur picked (added when
   // the list lacks it). An unchanged list is left alone, so a redraw never
   // closes an open select.
-  function leadOptions(sel, list, cur) {
+  function leadOptions(sel, list, cur, labels) {
     var all = list.slice();
     if (cur && all.indexOf(cur) < 0) all.push(cur);
-    var sig = all.join("\n");
+    var sig = JSON.stringify(all.map(function (v) { return [v, labels && labels[v]]; }));
     if (sel.wsSig !== sig) {
       sel.wsSig = sig;
       sel.textContent = "";
       sel.appendChild(mk("option", null, wsT("js.sup.default"))).value = "";
-      all.forEach(function (v) { sel.appendChild(mk("option", null, v)).value = v; });
+      all.forEach(function (v) { sel.appendChild(mk("option", null, labels && labels[v] || v)).value = v; });
     }
     if (sel.value !== (cur || "")) sel.value = cur || "";
   }
@@ -433,10 +459,10 @@
     };
     // set shows harness's choices with v's model, effort, and mode picked.
     R.set = function (harness, v) {
-      var h = supHarness(harness), models = leadModels(harness), efforts = leadEfforts(harness), modes = leadModes(harness);
+      var h = supHarness(harness), models = leadModels(harness, v.provider, keep), efforts = leadEfforts(harness), modes = leadModes(harness);
       own = ownNote = extra = "";
       cur.modes = modes;
-      leadOptions(m.sel, models, v.model);
+      leadOptions(m.sel, models, v.model, leadModelLabels(harness, v.provider, keep));
       leadOptions(e.sel, efforts, v.effort);
       var sig = modes.join("\n");
       if (p.sel.wsSig !== sig) {
@@ -463,10 +489,10 @@
       var claude = harness === "claude", mode = p.sel.value;
       cur.harness = harness;
       cur.active = active || "";
-      pd.hidden = !mode && harness !== "pi";
-      pd.textContent = own ? ownNote : (!mode ? (harness === "pi" ? wsT("js.lead.mode.pi") : "") : (claude && LEAD_MODE_NOTE[mode] ? wsT(LEAD_MODE_NOTE[mode]) : mode) + (active && active !== mode ? " " + wsT("js.lead.mode.active", active) : "")) + (extra && !own ? " " + extra : "");
+      pd.hidden = !mode;
+      pd.textContent = own ? ownNote : (!mode ? "" : (claude && LEAD_MODE_NOTE[mode] ? wsT(LEAD_MODE_NOTE[mode]) : mode) + (active && active !== mode ? " " + wsT("js.lead.mode.active", active) : "")) + (extra && !own ? " " + extra : "");
       pd.classList.toggle("warn", !own && claude && mode === "bypassPermissions");
-      ed.textContent = e.sel.value ? (claude ? "--effort " : harness === "pi" ? "--thinking " : "") + e.sel.value : wsT("js.lead.effort.default");
+      ed.textContent = e.sel.value ? (claude ? "--effort " : "") + e.sel.value : wsT("js.lead.effort.default");
     };
     return R;
   }
@@ -498,13 +524,17 @@
       return v && typeof v === "object" && !Array.isArray(v) ? v : {};
     }
     function showPick(k) {
-      var v = pick(k), models = leadModels(k), efforts = leadEfforts(k);
-      rows.set(k, { model: models.indexOf(v.model) >= 0 ? v.model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
+      var v = pick(k), models = leadModels(k, "", true), model = leadModelKey(v.model, v.provider), efforts = leadEfforts(k);
+      rows.set(k, { model: models.indexOf(model) >= 0 ? model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
       P.iso = v.iso === "isolated" ? "isolated" : "default";
       permDraw();
     }
     function currentPick() {
-      return { model: rows.model.disabled ? "" : rows.model.value, mode: rows.free(), effort: rows.effort.disabled ? "" : rows.effort.value, iso: P.iso };
+      var chosen = leadModelPick(rows.model.disabled ? "" : rows.model.value);
+      chosen.mode = rows.free();
+      chosen.effort = rows.effort.disabled ? "" : rows.effort.value;
+      chosen.iso = P.iso;
+      return chosen;
     }
     var el = P.el = rpPop(wsT("js.lead.title"));
     el.appendChild(mk("div", "sphd", wsT("js.lead.title")));
@@ -556,7 +586,7 @@
     var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
     var rows = leadRows(opts, edited, adv, true);
     // Plugin isolation: which plugins the hosted session loads. The pick goes
-    // out as plugin_isolation; Pi's standalone binary supports only isolated.
+    // out as plugin_isolation.
     var isec = el.appendChild(mk("div", "spsec"));
     isec.appendChild(mk("div", "splbl", wsT("js.lead.iso")));
     var iseg = isec.appendChild(mk("div", "spseg"));
@@ -664,8 +694,8 @@
       });
       hwarn.hidden = P.harness !== "agy";
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
-      idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint") + (P.harness === "pi" ? " " + wsT("js.lead.iso.pi") : "");
-      start.disabled = P.busy || P.loading || off(P.harness);
+      idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
+      start.disabled = P.busy || P.loading || off(P.harness) || (P.harness === "werk" && !rows.model.value);
       tierPick.busy = P.busy || !!P.loading;
       tierPick.draw();
     }
@@ -714,10 +744,11 @@
     // legacy route, as before), ack (the full warning's grant), and the pick
     // stored for the harness once the spawn succeeds.
     function launchSnap(level, ack) {
+      var chosen = currentPick();
       return {
         harness: P.harness,
-        chosen: currentPick(),
-        form: { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
+        chosen: chosen,
+        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
       };
     }
     // launch spawns exactly snap's request.
@@ -848,7 +879,7 @@
         railPopPlace();
       }, function () {
         if (rpLive(P, gen)) choicesArrived();
-      });
+      }, function () { return rpLive(P, gen); });
     };
     // choicesArrived shows a newer choices list over a form the user may
     // have edited. A re-read never changes the form on its own: the harness,
@@ -873,7 +904,7 @@
       var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
       var arrived = function () { if (live()) choicesArrived(); };
       if (live()) { permDraw(); sync(); railPopPlace(); }
-      if (read) leadChoices(arrived, arrived);
+      if (read) leadChoices(arrived, arrived, live);
     };
     P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
     P.close = function () { permFullDrop(); };
@@ -1090,7 +1121,7 @@
       }
       if (!st) return;
       var text = failed || (st.error ? String(st.error) : "");
-      rows.set(String(st.backend || ""), { model: String(st.model || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
+      rows.set(String(st.backend || ""), { model: String(st.model || ""), provider: String(st.provider || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
       permDraw(st);
       rows.disable(P.busy);
       stop.b.disabled = P.busy || !st.process;
@@ -1125,7 +1156,7 @@
       }
       P.draw();
       var redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
-      leadChoices(redraw, redraw);
+      leadChoices(redraw, redraw, function () { return P.live(gen); });
       P.fetch();
     };
     // permDraw shows st's permission state and, for a lead whose harness
@@ -1156,7 +1187,7 @@
     P.permSync = function (read) {
       var gen = P.gen, redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
       redraw();
-      if (read) leadChoices(redraw, redraw);
+      if (read) leadChoices(redraw, redraw, function () { return P.live(gen); });
     };
     P.focus = function () { rows.model.focus(); };
     P.close = function () {
@@ -1548,7 +1579,6 @@
     if (k === "claude") return "Claude";
     if (k === "codex") return "Codex";
     if (k === "agy") return "AGY";
-    if (k === "pi") return "Pi";
     return k || "";
   }
   function composerCurrent(slot) {
@@ -1596,10 +1626,12 @@
     var slot = composerPop.slot;
     if (!slot || !composerPills) return;
     var pop = composerEnsurePortal(), harness = composerHarness(), cur = composerCurrent(slot);
-    var list = slot === "model" ? leadModels(harness) : leadEfforts(harness);
+    var provider = lead.st && lead.st.provider;
+    var list = slot === "model" ? leadModels(harness, provider) : leadEfforts(harness);
+    var labels = slot === "model" ? leadModelLabels(harness, provider, false) : {};
     var all = list.slice();
     if (cur && all.indexOf(cur) < 0) all.push(cur);
-    var sig = [slot, harness, cur].concat(all).join("\n");
+    var sig = JSON.stringify([slot, harness, cur, all, labels]);
     if (!pop.hidden && pop.getAttribute("data-sig") === sig) {
       composerPlacePop();
       return;
@@ -1608,7 +1640,7 @@
     pop.textContent = "";
     var hdText = (composerHarnessLabel(harness) ? composerHarnessLabel(harness) + " " : "") + wsT(slot === "model" ? "js.sup.model" : "js.sup.effort");
     pop.appendChild(mk("div", "fpop-hd", hdText));
-    var opts = [{ val: "", label: wsT("js.sup.default") }].concat(all.map(function (v) { return { val: v, label: v }; }));
+    var opts = (slot === "model" && harness === "werk" ? [] : [{ val: "", label: wsT("js.sup.default") }]).concat(all.map(function (v) { return { val: v, label: labels[v] || v }; }));
     opts.forEach(function (o) {
       var opt = mk("button", "fpop-opt");
       opt.type = "button";
@@ -1681,7 +1713,7 @@
       composerPop.slot = slot;
       btn.setAttribute("aria-expanded", "true");
       composerDrawPop();
-      leadChoices(composerDrawPop, composerDrawPop);
+      leadChoices(composerDrawPop, composerDrawPop, function () { return composerPop.slot === slot; });
     });
     doc.addEventListener("click", function (e) {
       if (!composerPop.slot) return;

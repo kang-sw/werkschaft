@@ -61,7 +61,7 @@ func TestHostedAgyLeadSpawnsACodexWorker(t *testing.T) {
 		t.Fatal("the hosted agy connection has no tool aliases")
 	}
 	agents := newFakePiAgents()
-	s.pi.agents = agents
+	s.agents = agents
 	raw := callToolOnce(t, s, 1, "agent_spawn", map[string]any{"prompt": "review", "tier": "codex.small", "authority": "read-only", "format": "json"})
 	if toolIsError(t, raw) {
 		t.Fatal(raw)

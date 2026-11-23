@@ -32,7 +32,7 @@ func registryServer(t *testing.T, regs map[string]wsagent.BackendRegistration) *
 }
 
 // TestInitializeDetectionAcrossHarnesses: clientInfo detection for all four
-// built-in harnesses and unknown clients, on a server with no daemon registry
+// supported harnesses, the legacy bridge, and unknown clients, on a server with no daemon registry
 // (a terminal harness's stdio server) and with the full built-in registry.
 func TestInitializeDetectionAcrossHarnesses(t *testing.T) {
 	servers := map[string]*Server{
@@ -50,7 +50,7 @@ func TestInitializeDetectionAcrossHarnesses(t *testing.T) {
 		{name: "pi bridge", raw: `{"clientInfo":{"name":"ws-pi-bridge"}}`, want: "pi"},
 		{name: "pi bridge padded", raw: `{"clientInfo":{"name":"  ws-pi-bridge "}}`, want: "pi"},
 		{name: "pi bridge is case-exact", raw: `{"clientInfo":{"name":"WS-PI-BRIDGE"}}`, want: ""},
-		{name: "pi by name", raw: `{"clientInfo":{"name":"Pi"}}`, want: "pi"},
+		{name: "retired native name", raw: `{"clientInfo":{"name":"Pi"}}`, want: ""},
 		{name: "claude by name", raw: `{"clientInfo":{"name":"claude"}}`, want: "claude"},
 		{name: "claude cli", raw: `{"clientInfo":{"name":"claude-code","version":"2"}}`, want: "claude"},
 		{name: "codex by name", raw: `{"clientInfo":{"name":"codex"}}`, want: "codex"},
@@ -132,7 +132,7 @@ func TestConnectionDeclarationDrivesCapabilities(t *testing.T) {
 		t.Fatal("an unregistered name declares nothing")
 	}
 	bare := &Server{}
-	for harness, want := range map[string]bool{"pi": true, "claude": false, "codex": false, "agy": false, "": false} {
+	for harness, want := range map[string]bool{"pi": false, "claude": false, "codex": false, "agy": false, "": false} {
 		if got := bare.connectionOf(harness).ClientDaemonAgents; got != want {
 			t.Errorf("no registry: %q opts in to daemon agents = %v, want %v", harness, got, want)
 		}

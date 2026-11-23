@@ -23,9 +23,9 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 		compaction    CompactionProtocol
 	}{
 		{BackendClaude, LeadProfileClaude, []string{SupportProfileClaude, AgentWorkerProfile(BackendClaude), SearchAnswerProfileClaude, LeadProfileClaude}, true, ClaudeCatalog().Compaction},
-		{BackendPi, LeadProfilePi, []string{SupportProfilePi, PiWorkerProfile, PiMiniLeadProfile, AgentWorkerProfile(BackendPi), ExploreProfile, SearchAnswerProfilePi, LeadProfilePi}, false, *PiCompaction()},
 		{BackendCodex, LeadProfileCodex, []string{AgentWorkerProfile(BackendCodex), LeadProfileCodex}, true, CodexCatalog().Compaction},
 		{BackendAgy, LeadProfileAgy, []string{AgentWorkerProfile(BackendAgy), LeadProfileAgy}, true, AgyCatalog().Compaction},
+		{BackendWerk, LeadProfileWerk, []string{AgentWorkerProfile(BackendWerk), LeadProfileWerk}, true, WerkCatalog().Compaction},
 	}
 	for _, want := range wants {
 		t.Run(want.backend, func(t *testing.T) {
@@ -51,7 +51,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	if got := BuiltinCompaction("unknown"); got != (CompactionProtocol{}) {
 		t.Errorf("unknown harness compaction = %+v", got)
 	}
-	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendPi, BackendAgy}) {
+	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendAgy, BackendWerk}) {
 		t.Errorf("builtin harness order = %v", names)
 	}
 }
@@ -65,15 +65,12 @@ func TestBuiltinBackendRegistrationsDefensiveCopies(t *testing.T) {
 			entry.Values[0] = "changed"
 		}
 	}
-	changed[BackendPi].NativeCompaction.PromptPersists = false
 	fresh := BuiltinBackendRegistrations()
 	if got := fresh[BackendClaude]; got.Profiles[0].Definition.Tools[0] != "Agent" ||
 		got.PermissionModes[0] != "auto" || !reflect.DeepEqual(got.Catalog, ClaudeCatalog()) {
 		t.Errorf("caller changed the builtin Claude descriptor: %+v", got)
 	}
-	if got := fresh[BackendPi].NativeCompaction; *got != *PiCompaction() {
-		t.Errorf("caller changed the builtin Pi compaction descriptor: %+v", got)
-	}
+
 }
 
 func TestPermissionModesLegacyFallback(t *testing.T) {
@@ -109,7 +106,10 @@ func TestPermissionModesLegacyFallback(t *testing.T) {
 }
 
 func TestRegisteredBackendAdmission(t *testing.T) {
-	backends := map[string]BackendRegistration{"fixture": {Backend: &fakeBackend{}, LeadProfile: "fixture-lead", PermissionModes: []string{"review"}}}
+	backends := map[string]BackendRegistration{
+		"fixture":      {Backend: &fakeBackend{}, LeadProfile: "fixture-lead", PermissionModes: []string{"review"}},
+		"builtin-only": {BuiltinProfilesOnly: true, PermissionModes: []string{"hosted-only"}},
+	}
 	for _, raw := range []string{`{"backend":"fixture"}`, `{"backend":"fixture","lead":true,"permission_mode":"review"}`} {
 		if _, err := ParseProfile(json.RawMessage(raw), backends); err != nil {
 			t.Fatal(err)
@@ -134,9 +134,9 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 	}
 	production := map[string]BackendRegistration{
 		BackendClaude: {LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes},
-		BackendPi:     {LeadProfile: LeadProfilePi},
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
+		BackendWerk:   {BuiltinProfilesOnly: true},
 	}
 	if !reflect.DeepEqual(ProfileValueSchema(), ProfileValueSchema(production)) {
 		t.Fatal("production profile schema changed from the builtin-only contract")
@@ -150,7 +150,7 @@ func TestRegisteredLeadOverrideChecksResolvedBackend(t *testing.T) {
 	}{
 		{"worker-only override", "fixture", "", false},
 		{"lead-capable extension override", "fixture", "fixture-lead", true},
-		{"builtin cross-backend override", BackendPi, LeadProfilePi, true},
+		{"builtin cross-backend override", BackendCodex, LeadProfileCodex, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newLeadHarness(t)
@@ -195,7 +195,7 @@ func TestRunnerRegistrationErrorsAtBoundary(t *testing.T) {
 		{"unavailable backend", func() error { _, err := h.runner.Create("unavailable", h.root); return err }, ErrBackendUnavailable, 400, "is not available in this daemon"},
 		{"launch failure", func() error { _, err := c.startBackend(StartSpec{}); return err }, ErrLaunchFailed, 500, launchCause.Error()},
 		{"absent mode", func() error { return controlsFor(&fakeProc{}).setPermissionMode("review") }, ErrUnsupported, 500, ErrUnsupported.Error()},
-		{"absent model form", func() error { return controlsFor(&piProcess{}).SetModel("ambiguous") }, ErrUnsupported, 500, ErrUnsupported.Error()},
+		{"absent model form", func() error { return controlsFor(&fakeProc{noModel: true}).SetModel("ambiguous") }, ErrUnsupported, 500, ErrUnsupported.Error()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.run()

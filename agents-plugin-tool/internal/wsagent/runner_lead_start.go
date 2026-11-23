@@ -20,6 +20,10 @@ import (
 // reads it early waits rather than misreading an older PID.
 func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	life := c.r.lifecycle(rec.Backend)
+	durable := c.r.durableProcess(rec.Backend)
+	if durable && attach {
+		return errors.New("a durable lead cannot attach to a holder")
+	}
 	c.loadCompaction()
 	c.loadModelWait()
 	// Each agy process writes its own worker log: locate it afresh.
@@ -45,8 +49,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s\n", rec.ReplyID, diagnostic)
 		}
 	}
-	host := c.r.opts.Holders
-	holder := &holderChild{host: host, table: &c.r.holders, session: holderSession{Kind: holderKindLead, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Label: rec.Profile}}
+	var holder *holderChild
+	if !durable {
+		holder = &holderChild{host: c.r.opts.Holders, table: &c.r.holders, session: holderSession{Kind: holderKindLead, Backend: rec.Backend, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Label: rec.Profile}}
+	}
 	instructions := ""
 	if attach {
 		holder.id, holder.skipTo = rec.HolderID, rec.HolderSeq
@@ -91,12 +97,12 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		Dir:          c.dir,
 		Profile:      def,
 		Model:        rec.Model,
+		Provider:     rec.Provider,
 		Effort:       rec.Effort,
 		SessionID:    rec.SessionID,
 		Cwd:          rec.Cwd,
 		SessionFile:  rec.SessionFile,
 		Instructions: instructions,
-		Env:          environ(),
 		Holder:       holder,
 		// A hosted lead delegates through agent.spawn only. A rejoin builds
 		// no command line; the replayed init's shape shows whether the
@@ -116,10 +122,11 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				}
 			},
 			WSMCP: func() (MCPCommand, error) {
-				if c.r.opts.WSMCP == nil {
+				mcp := c.r.mcpCommand(durable)
+				if mcp == nil {
 					return MCPCommand{}, errors.New("bundled ws-mcp launcher unavailable")
 				}
-				cmd, err := c.r.opts.WSMCP(rec.workDir())
+				cmd, err := mcp(rec.workDir())
 				if err != nil {
 					return MCPCommand{}, err
 				}
@@ -153,9 +160,27 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			},
 		},
 	}
+	if !durable {
+		spec.Env = environ()
+	}
 	c.mcpStale = false
 	var mcpEnv map[string]string
 	switch {
+	case durable:
+		cmd, err := spec.Lead.WSMCP()
+		if err != nil {
+			c.spawning = false
+			c.writeRegistration()
+			return fmt.Errorf("load the durable lead's MCP environment: %w", err)
+		}
+		mcpEnv = cmd.Env
+		spec.Lead.Env, spec.Lead.Spawned, spec.Lead.WSMCP = nil, nil, nil
+		spec.MCPSession = c.r.attachMCP(rec.ReplyID, "", mcpEnv, rec.workDir(), 0, rec.Backend)
+		if spec.MCPSession == nil {
+			c.spawning = false
+			c.writeRegistration()
+			return errors.New("a durable lead requires an authenticated MCP session")
+		}
 	case attach && rec.MCPToken != "" && rec.MCPHolder != "" && rec.MCPHolder != rec.HolderID:
 		// The process was started again since its token was drawn, by a
 		// daemon that keeps the record's members without knowing them: it
@@ -203,6 +228,9 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
 	}
 	cutover = spec.ExecCutover
+	if durable {
+		spec.PermissionLevel = level
+	}
 	if source == "explicit" {
 		spec.PermissionLevel = level
 		if mode := c.r.permissionPolicy(rec.Backend).nativeMode(level); mode != "" {
@@ -242,15 +270,23 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	if ok {
 		id, pid, held = hp.HolderInfo()
 	}
-	if !held {
+	if !held && !durable {
 		_ = proc.Close()
 		c.r.revokeToken(rec.ReplyID)
 		return fmt.Errorf("the %s backend did not start the process under a session holder", rec.Backend)
 	}
 	// A process-scoped observation cannot carry into a new process or holder
 	// attach. Replay/open reports repopulate it; silence stays unknown.
-	c.setStatus(func() { c.proc, c.activeMode = proc, "" })
+	activeMode := ""
+	if live, ok := proc.(liveLeadMode); ok {
+		activeMode = live.activePermissionMode()
+	}
+	c.setStatus(func() { c.proc, c.activeMode = proc, activeMode })
 	c.events = proc.Events()
+	if durable {
+		c.bindDurableMCP(spec.MCPSession, rec, proc, level)
+		spec.MCPSession.Started(nil, 0)
+	}
 	c.idleAfter = def.IdleTimeout()
 	if attach {
 		c.replaying, c.seq = true, rec.HolderSeq
@@ -270,7 +306,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = id, pid, 0
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
-		if s := spec.MCPSession; s != nil {
+		if s := spec.MCPSession; s != nil && !durable {
 			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
 		}
 	})

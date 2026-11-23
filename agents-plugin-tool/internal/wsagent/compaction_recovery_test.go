@@ -10,8 +10,8 @@ import (
 )
 
 func TestReplayCompactionOnlyRestoresCrossingFrontier(t *testing.T) {
-	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendPi: {NativeCompaction: PiCompaction()}}})
-	c := &conv{r: r, rec: Record{Backend: BackendPi, WSKey: "key"}}
+	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendClaude: {NativeCompaction: fixtureCompaction()}}})
+	c := &conv{r: r, rec: Record{Backend: BackendClaude, WSKey: "key"}}
 	start := wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart}
 	end := wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}
 	c.replayCompaction(start)
@@ -135,16 +135,5 @@ func TestRejoinQueriesClaudeUsage(t *testing.T) {
 			}
 		}
 		return false
-	})
-}
-
-func TestRejoinQueriesPiUsage(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	child, holder := spawnRecoveryWorker(t, h)
-	before := len(h.holders.inputs(holder, "get_session_stats"))
-	h.restart()
-	wait(t, "rejoin", h.runner.rejoined)
-	eventually(t, "Pi recovery query", func() bool {
-		return h.runner.conv(child.ID) != nil && len(h.holders.inputs(holder, "get_session_stats")) > before
 	})
 }

@@ -20,20 +20,7 @@ const (
 	ConfigManifestFile          = "config-manifest.json"
 	AgYConfigManifestFile       = "agy-config-manifest.json"
 	DashboardConfigManifestFile = "dashboard-config-manifest.json"
-	PiConfigManifestFile        = "pi-config-manifest.json"
 )
-
-type devPackage struct {
-	root fs.FS
-	pi   fs.FS
-}
-
-func (p devPackage) Open(name string) (fs.File, error) {
-	if name == PiConfigManifestFile {
-		return p.pi.Open(ConfigManifestFile)
-	}
-	return p.root.Open(name)
-}
 
 //go:embed all:generated
 var assets embed.FS
@@ -84,7 +71,7 @@ func Open(name string) (fs.FS, error) {
 		if _, loaded := logged.LoadOrStore(root, true); !loaded {
 			log.Printf("workflow package %s: explicit %s dev override: %s", name, EnvDevCheckout, root)
 		}
-		return devPackage{root: os.DirFS(root), pi: os.DirFS(filepath.Join(checkout, "agents-plugin-pi"))}, nil
+		return os.DirFS(root), nil
 	}
 	return Embedded(name)
 }

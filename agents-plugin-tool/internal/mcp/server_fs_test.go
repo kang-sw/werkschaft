@@ -45,15 +45,15 @@ func listedNames(s *Server) []string {
 	return names
 }
 
-// The fs.* tools exist only on a trusted binding to a Codex conversation
-// launched under the cutover: absent from every other inventory, and a
-// direct call from elsewhere is refused.
-func TestFSToolsOnlyInACutoverCodexSession(t *testing.T) {
+// File reads require a trusted cutover binding with the fs read policy.
+func TestFSReadsRequireAnAdmittedCutoverSession(t *testing.T) {
 	for _, tc := range []struct {
 		name, conversation, cutover string
 		want                        bool
 	}{
 		{"cutover codex", "lead", "codex", true},
+		{"cutover werk", "lead", "werk", true},
+		{"werk outside the cutover", "lead", "", false},
 		{"cutover claude", "lead", "claude", false},
 		{"cutover agy", "lead", "agy", false},
 		{"codex outside the cutover", "lead", "", false},
@@ -69,7 +69,7 @@ func TestFSToolsOnlyInACutoverCodexSession(t *testing.T) {
 				fx.key, _ = parseLoginResponse(t, callLogin(t, fx.s, 900003, fx.root, nil))
 			}
 			names := listedNames(fx.s)
-			for _, tool := range codexReadToolNames {
+			for _, tool := range fsReadToolNames {
 				if got := slices.Contains(names, tool); got != tc.want {
 					t.Fatalf("%s listed = %v, want %v", tool, got, tc.want)
 				}
@@ -81,7 +81,7 @@ func TestFSToolsOnlyInACutoverCodexSession(t *testing.T) {
 				}
 				return
 			}
-			if !isErr || !strings.Contains(text, "runs only in a dashboard-hosted Codex session") {
+			if !isErr || !strings.Contains(text, "requires a dashboard-hosted session with daemon file tools enabled") {
 				t.Fatalf("fs.read outside a cutover Codex session = %v %q", isErr, text)
 			}
 		})

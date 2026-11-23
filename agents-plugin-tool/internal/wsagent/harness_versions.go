@@ -155,6 +155,9 @@ func harnessBinaryOf(reg BackendRegistration) string {
 		return "-"
 	}
 	exe := lister.Executable()
+	if exe == "" {
+		return "-"
+	}
 	prog, pre, err := harnessCommand(exe, exe)
 	if err != nil {
 		return harnessUnresolved + exe

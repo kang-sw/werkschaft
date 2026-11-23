@@ -62,7 +62,6 @@ func TestSettingsGitHubLinkMatchesReleaseDestinations(t *testing.T) {
 	for _, path := range []string{
 		"agents-plugin/runtime.json",
 		"agents-plugin-wsflow/runtime.json",
-		"agents-plugin-pi/runtime.json",
 	} {
 		raw, err := os.ReadFile(filepath.Join(repoRoot, path))
 		if err != nil {

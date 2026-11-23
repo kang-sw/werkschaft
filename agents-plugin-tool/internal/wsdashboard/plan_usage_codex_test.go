@@ -168,55 +168,6 @@ func TestPlanUsageCodexHomeSelection(t *testing.T) {
 	}
 }
 
-func TestPlanUsageCodexRESTWindows(t *testing.T) {
-	for _, seconds := range []int{17999, 18000, 18001, 604799, 604800, 604801, 604859, 604860, 300, 0, -604800} {
-		for _, slot := range []string{"primary_window", "secondary_window"} {
-			t.Run(fmt.Sprintf("%s-%d", slot, seconds), func(t *testing.T) {
-				s := usageTestStore(t)
-				setCodexUsageAuth(t, s, `{"auth_mode":"chatgpt","tokens":{"access_token":"fake-access"}}`)
-				s.client.Transport = usageRoundTrip(func(r *http.Request) (*http.Response, error) {
-					body := fmt.Sprintf(`{"rate_limit":{%q:{"used_percent":31,"limit_window_seconds":%d,"reset_at":2100000000}}}`, slot, seconds)
-					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
-				})
-				e, err := s.queryCodex(context.Background())
-				switch seconds {
-				case 18000:
-					if err != nil || len(e.Windows) != 1 || e.Windows[0].Kind != "five_hour" || e.Windows[0].ResetsAt != 2100000000000 {
-						t.Fatal("five_hour window not mapped")
-					}
-				case 604800:
-					if err != nil || len(e.Windows) != 1 || e.Windows[0].Kind != "seven_day" || e.Windows[0].ResetsAt != 2100000000000 {
-						t.Fatal("weekly window not mapped")
-					}
-				default:
-					if err != errPlanUsage {
-						t.Fatal("non-exact duration mapped as codex quota")
-					}
-				}
-			})
-		}
-	}
-	// Both 5h and 7d windows order five_hour before seven_day regardless of slot order.
-	sBoth := usageTestStore(t)
-	setCodexUsageAuth(t, sBoth, `{"auth_mode":"chatgpt","tokens":{"access_token":"fake-access"}}`)
-	sBoth.client.Transport = usageRoundTrip(func(r *http.Request) (*http.Response, error) {
-		body := `{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":41,"limit_window_seconds":604800,"reset_at":2100000000},"secondary_window":{"used_percent":18,"limit_window_seconds":18000,"reset_at":2099000000}}}`
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
-	})
-	if e, err := sBoth.queryCodex(context.Background()); err != nil || len(e.Windows) != 2 || e.Windows[0].Kind != "five_hour" || e.Windows[1].Kind != "seven_day" {
-		t.Fatalf("both windows ordering failed: %+v %v", e, err)
-	}
-	// The existing Pi path deliberately truncates seconds to minutes.
-	s := usageTestStore(t)
-	setPiUsageAuth(t, s, time.Now().Add(time.Hour).UnixMilli())
-	s.client.Transport = usageRoundTrip(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(strings.ReplaceAll(weeklyUsageBody, "604800", "604859")))}, nil
-	})
-	if e, err := s.queryPi(context.Background()); err != nil || len(e.Windows) != 1 {
-		t.Fatal("Pi duration semantics changed")
-	}
-}
-
 func TestPlanUsageCodexHTTPFailuresRetainHistoryAndNoLeaks(t *testing.T) {
 	for _, tc := range []struct {
 		name, body     string
@@ -237,7 +188,6 @@ func TestPlanUsageCodexHTTPFailuresRetainHistoryAndNoLeaks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := usageTestStore(t)
 			setCodexUsageAuth(t, s, `{"auth_mode":"chatgpt","tokens":{"access_token":"fake-codex-secret","account_id":"fake-account-secret","refresh_token":"fake-refresh-secret"}}`)
-			setPiUsageAuth(t, s, time.Now().Add(time.Hour).UnixMilli())
 			at := time.Now().Add(-time.Minute).UnixMilli()
 			s.gpt = planUsageEntry{Harness: "codex", Plan: "old-plan", Source: "via Pi", AsOf: at, Windows: []planUsageWindow{{Kind: "seven_day", Percent: 37, ResetsAt: 2100000000000, AsOf: at}}}
 			s.appendHistoryLocked(usageSamples(s.gpt), at)
@@ -246,7 +196,7 @@ func TestPlanUsageCodexHTTPFailuresRetainHistoryAndNoLeaks(t *testing.T) {
 			s.client.Transport = usageRoundTrip(func(r *http.Request) (*http.Response, error) {
 				calls++
 				if r.Header.Get("Authorization") != "Bearer fake-codex-secret" {
-					t.Error("selected Codex fell back to Pi")
+					t.Error("Codex probe used the wrong access token")
 				}
 				if tc.transportError {
 					return nil, &url.Error{Op: "GET", URL: "https://fake-codex-secret.example", Err: errors.New("fake-private-body")}

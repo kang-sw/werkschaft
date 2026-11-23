@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -244,7 +243,7 @@ func (p Profile) validate(registries ...map[string]BackendRegistration) error {
 	if p.Backend == "" {
 		return fmt.Errorf("backend is required: %s", backendAlternatives(names))
 	}
-	if !slices.Contains(names, p.Backend) {
+	if p.Backend != BackendPi && !slices.Contains(names, p.Backend) {
 		return fmt.Errorf("backend must be %s; got %q", backendAlternatives(names), p.Backend)
 	}
 	if p.Model != "" && !modelPattern.MatchString(p.Model) {
@@ -303,7 +302,7 @@ func (p Profile) validate(registries ...map[string]BackendRegistration) error {
 		}
 	}
 	if p.Lead {
-		if len(registries) > 0 && registries[0][p.Backend].LeadProfile == "" {
+		if p.Backend != BackendPi && len(registries) > 0 && registries[0][p.Backend].LeadProfile == "" {
 			return fmt.Errorf("backend %q cannot host a lead profile", p.Backend)
 		}
 		if len(p.Tools) > 0 || len(p.WSTools) > 0 || len(p.MCPServers) > 0 || len(p.Plugins) > 0 || p.Skills || p.Instructions != "" || p.ListInIndex {
@@ -329,12 +328,16 @@ func validateToolEntry(entry string) error {
 	return nil
 }
 
-// CheckProfileScope refuses a committed (repo-scope) profile that starts
+// CheckProfileScope enforces saved-profile compatibility and refuses a
+// committed (repo-scope) profile that starts
 // programs. The repo file comes with a checkout anyone with push access
 // writes, and a conversation at that root runs as the daemon's user, so the
 // fields that run a command without the model (MCP servers, plugin
 // directories with their hooks) belong to the machine-local scopes.
-func CheckProfileScope(p Profile, scope wsconfig.Scope) error {
+func CheckProfileScope(p Profile, scope wsconfig.Scope, registries ...map[string]BackendRegistration) error {
+	if scope != wsconfig.ScopeBuiltin && builtinProfilesOnly(p.Backend, registries) {
+		return fmt.Errorf("backend %q is available through builtin profiles only", p.Backend)
+	}
 	if scope != wsconfig.ScopeRepo {
 		return nil
 	}
@@ -429,43 +432,12 @@ func resolvedValue(v wsconfig.StructuredValue, registries ...map[string]BackendR
 	}
 	p, err := ParseProfile(v.Value, registries...)
 	if err == nil {
-		err = CheckProfileScope(p, v.Scope)
+		err = CheckProfileScope(p, v.Scope, registries...)
 	}
 	if err != nil {
 		return ResolvedProfile{}, fmt.Errorf("invalid agent profile key %q in %s: %w", v.Key, where, err)
 	}
 	return ResolvedProfile{Name: name, Scope: v.Scope, Source: v.Source, Definition: p}, nil
-}
-
-// excessProfileTools compares resolved Pi capabilities, not profile ranks.
-// A same-named MCP server must also have the same definition: changing its
-// command or environment can expose an entirely different tool surface.
-func excessProfileTools(child, parent Profile) []string {
-	var excess []string
-	for _, pair := range []struct {
-		name          string
-		child, parent []string
-	}{{"ws_tools", child.WSTools, parent.WSTools}, {"tools", child.Tools, parent.Tools}} {
-		for _, tool := range pair.child {
-			// Compact is available independently of the parent's profile.
-			// A profile snapshot from before that grant may omit it.
-			if pair.name == "ws_tools" && tool == "compact" {
-				continue
-			}
-			if !slices.Contains(pair.parent, tool) {
-				excess = append(excess, pair.name+"."+tool)
-			}
-		}
-	}
-	for name, value := range child.MCPServers {
-		var childServer, parentServer any
-		parentValue, ok := parent.MCPServers[name]
-		if !ok || json.Unmarshal(value, &childServer) != nil || json.Unmarshal(parentValue, &parentServer) != nil || !reflect.DeepEqual(childServer, parentServer) {
-			excess = append(excess, "mcp_servers."+name)
-		}
-	}
-	sort.Strings(excess)
-	return excess
 }
 
 // ProfileValueSchema is the JSON Schema config.list publishes for the
@@ -481,7 +453,7 @@ func ProfileValueSchema(registries ...map[string]BackendRegistration) map[string
 		"required":             []string{"backend"},
 		"properties": map[string]any{
 			"description": map[string]any{"type": "string"},
-			"backend":     map[string]any{"enum": profileBackends(registries), "description": "The harness the conversation runs in."},
+			"backend":     map[string]any{"enum": savedProfileBackends(registries), "description": "The harness the conversation runs in."},
 			"model":       map[string]any{"type": "string", "pattern": modelPattern.String(), "description": "Starting model; absent leaves the harness default."},
 			"effort":      map[string]any{"type": "string", "pattern": effortPattern.String(), "description": "Starting reasoning effort; absent leaves the harness default."},
 			"tools":       stringList("Built-in tool allowlist: tool names, or claude permission rules such as \"Bash(git status)\". Absent allows none; everything not listed is denied without a prompt."),

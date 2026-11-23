@@ -993,54 +993,6 @@ func TestCheckoutReleaseCrossingAutomaticCompactionInput(t *testing.T) {
 // nested pi.spawn through the token route and a lead's root Pi spawn, take
 // the worktree's release reservation like agent.spawn, so a release holding
 // it refuses them and no child binds; once it is free they bind.
-func TestWorktreeReleaseRefusesPiSpawnsIntoIt(t *testing.T) {
-	h, _ := childHarness(t)
-	wt := releaseTestWorktree(t, h.root)
-	sub := filepath.Join(wt, "sub")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	starts := h.backend.startCount()
-	h.spawnWorker("large")
-	token := h.token(starts)
-	if token == "" {
-		t.Fatal("the worker has no capability token")
-	}
-	lock, err := wsgit.WorktreeReleaseLock(context.Background(), wsgit.ExecRunner{}, wt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := lock.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	code, out := h.tokenCall(token, "spawn", map[string]any{"prompt": "nested", "tier": "small", "cwd": sub})
-	if code != http.StatusConflict || !strings.Contains(out, "currently being released") {
-		t.Fatalf("a nested pi.spawn into a worktree being released must be refused: %d %s", code, out)
-	}
-	for _, spec := range []SpawnSpec{
-		{Profile: PiWorkerProfile, Root: h.root, Cwd: sub, Prompt: "root by cwd", Tier: "small", Parent: &leadParent},
-		{Profile: PiWorkerProfile, Root: wt, Prompt: "root by root", Tier: "small", Parent: &leadParent},
-	} {
-		_, err := h.runner.Spawn(spec)
-		agentRefused(t, err, http.StatusConflict, "currently being released")
-	}
-	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
-		t.Fatalf("refused Pi spawns left bound children: %+v", got)
-	}
-	if err := lock.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	if code, out := h.tokenCall(token, "spawn", map[string]any{"prompt": "nested", "tier": "small", "cwd": sub}); code != http.StatusCreated {
-		t.Fatalf("a nested pi.spawn with the reservation free = %d %s", code, out)
-	}
-	if _, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Cwd: sub, Prompt: "root by cwd", Tier: "small", Parent: &leadParent}); err != nil {
-		t.Fatal(err)
-	}
-	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 2 {
-		t.Fatalf("bound Pi children = %+v, want 2", got)
-	}
-}
-
 // TestCheckoutReleaseReachesALegacyRecordWithoutCwd: a record written before
 // it carried a cwd runs in its root (Record.workDir). Rooted in a nested repo
 // of a released worktree, such a child is bound to that worktree by the rule

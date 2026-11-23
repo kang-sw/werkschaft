@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -310,5 +311,32 @@ func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
 	}
 	if after := snapshot(); strings.Join(before, "\n") != strings.Join(after, "\n") {
 		t.Fatalf("a read-only merge diff changed .git/objects:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+func TestWerkReadOnlyCannotLaunchOrWriteExec(t *testing.T) {
+	w := newWorkerFixture(t, wsagent.BackendWerk, wsagent.PermissionReadOnly)
+	w.worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
+	calls := []struct {
+		name string
+		args map[string]any
+	}{
+		{"exec.run", map[string]any{"exe": "git", "args": []string{"status"}}},
+		{"exec.shell", map[string]any{"cmd": "git status"}},
+		{"exec.spawn", map[string]any{"cmd": "git", "args": []string{"status"}}},
+		{"exec.write", map[string]any{"exec_id": "fixture", "data": ""}},
+	}
+	for _, cutover := range []string{wsagent.BackendWerk, ""} {
+		w.worker.execCutover = cutover
+		names := listedNames(w.worker)
+		for _, call := range calls {
+			if slices.Contains(names, call.name) || slices.Contains(names, strings.ReplaceAll(call.name, ".", "_")) {
+				t.Errorf("read-only listing includes %s", call.name)
+			}
+			text, failed := w.call(call.name, call.args)
+			if !failed || !strings.Contains(text, "this read-only session cannot start or send input") {
+				t.Errorf("cutover %q, %s = %v %q", cutover, call.name, failed, text)
+			}
+		}
 	}
 }

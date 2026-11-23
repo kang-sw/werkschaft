@@ -39,6 +39,7 @@ func TestConfigTuneAgentProfile(t *testing.T) {
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "pi", "plugins": []any{"ext.ts"}}, "scope": "repo"}, "may not start programs"},
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "claude", "ws_tools": []any{"ferrule"}}, "scope": "repo"}, "lead session key"},
 		{map[string]any{"key": "agent.profile.triage", "value": "{}", "scope": "repo"}, "must be a profile object"},
+		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "werk"}, "scope": "repo"}, "builtin profiles only"},
 		{map[string]any{"key": "agent.profile.triage", "scope": "repo"}, "value is required"},
 	}
 	for i, tc := range rejects {
@@ -158,7 +159,7 @@ func TestConfigListAgentProfileKnob(t *testing.T) {
 		byName[p.Name] = p
 	}
 	triage := byName["triage"]
-	builtins := []string{wsagent.SupportProfileClaude, wsagent.SupportProfilePi, wsagent.PiWorkerProfile, wsagent.PiMiniLeadProfile, wsagent.LeadProfileClaude, wsagent.LeadProfilePi, wsagent.LeadProfileAgy, wsagent.LeadProfileCodex, wsagent.SearchAnswerProfileClaude, wsagent.SearchAnswerProfilePi, wsagent.ExploreProfile, wsagent.AgentWorkerProfile(wsagent.BackendClaude), wsagent.AgentWorkerProfile(wsagent.BackendPi), wsagent.AgentWorkerProfile(wsagent.BackendAgy), wsagent.AgentWorkerProfile(wsagent.BackendCodex)}
+	builtins := []string{wsagent.SupportProfileClaude, wsagent.LeadProfileClaude, wsagent.LeadProfileAgy, wsagent.LeadProfileCodex, wsagent.LeadProfileWerk, wsagent.SearchAnswerProfileClaude, wsagent.AgentWorkerProfile(wsagent.BackendClaude), wsagent.AgentWorkerProfile(wsagent.BackendAgy), wsagent.AgentWorkerProfile(wsagent.BackendCodex), wsagent.AgentWorkerProfile(wsagent.BackendWerk)}
 	if len(profiles) != len(builtins)+1 || triage.Scope != wsconfig.ScopeRepo || triage.Source != filepath.Join(root, ".ws-workflow", "config.json") {
 		t.Fatalf("current profiles = %+v, want triage from the repo file and builtin profiles %v", profiles, builtins)
 	}

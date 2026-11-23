@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 )
@@ -39,7 +37,7 @@ func (b *isolationBackend) next(t *testing.T) StartSpec {
 }
 
 func TestLeadIsolationRequestAndRelaunch(t *testing.T) {
-	for _, harness := range []string{BackendClaude, BackendPi} {
+	for _, harness := range []string{BackendClaude} {
 		for _, isolation := range []string{"", "default", "isolated"} {
 			t.Run(harness+"/"+isolation, func(t *testing.T) {
 				h := newLeadHarness(t)
@@ -95,7 +93,7 @@ func TestLeadIsolationRequestAndRelaunch(t *testing.T) {
 func TestLeadIsolationRejectsUnknownValue(t *testing.T) {
 	h := newLeadHarness(t).start()
 	response := h.route(localBrowser, http.MethodPost, "/agents/leads", map[string]any{
-		"root": h.root, "harness": BackendPi, "plugin_isolation": "all",
+		"root": h.root, "harness": BackendClaude, "plugin_isolation": "all",
 	})
 	if response.status != http.StatusBadRequest || len(h.runner.List()) != 0 {
 		t.Fatalf("invalid isolation = %d %s", response.status, response.body)
@@ -105,9 +103,9 @@ func TestLeadIsolationRejectsUnknownValue(t *testing.T) {
 func TestLegacyLeadIsolationDefaultsAtLaunch(t *testing.T) {
 	h := newLeadHarness(t)
 	backend := &isolationBackend{starts: make(chan StartSpec, 1)}
-	h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}
+	h.opts.Backends[BackendClaude] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}
 	h.start()
-	st := h.lead(BackendPi, LeadOptions{})
+	st := h.lead(BackendClaude, LeadOptions{})
 	_, err := h.runner.act(st.ID, func(c *conv) error {
 		c.update(func(rec *Record) { rec.PluginIsolation = "" })
 		return nil
@@ -119,119 +117,5 @@ func TestLegacyLeadIsolationDefaultsAtLaunch(t *testing.T) {
 	h.send(st.ID, "resume legacy")
 	if spec := backend.next(t); spec.Lead.PluginIsolation != "default" {
 		t.Fatalf("legacy launch isolation = %q", spec.Lead.PluginIsolation)
-	}
-}
-
-// piLaunchBackend runs the real Pi lead launch decision against a fixture Pi
-// and reports it, without starting a process.
-type piLaunchBackend struct {
-	command string
-	starts  chan piLaunch
-}
-
-type piLaunch struct {
-	command string
-	args    []string
-	err     error
-}
-
-func (b *piLaunchBackend) Start(_ context.Context, spec StartSpec) (Process, error) {
-	command, args, err := piLeadLaunch(b.command, nil, spec)
-	// As with isolationBackend, a retry must not wait for the test to drain
-	// its first launch observation: h.send waits for this loop to quiesce.
-	select {
-	case b.starts <- piLaunch{command, args, err}:
-	default:
-	}
-	return nil, errors.New("test launch stopped")
-}
-
-func TestIsolationBackendRetriesDoNotBlock(t *testing.T) {
-	spec, root := piLeadFixture(t)
-	piLeadBundle(t, root)
-	spec.Lead.PluginIsolation = "isolated"
-	spec.Lead.PluginWarning = func(string) {}
-	isolation := &isolationBackend{starts: make(chan StartSpec, 1)}
-	pi := &piLaunchBackend{command: "fixture-pi", starts: make(chan piLaunch, 1)}
-	for name, backend := range map[string]Backend{"isolation": isolation, "pi launch": pi} {
-		t.Run(name, func(t *testing.T) {
-			returns(t, "rejected launch retries with a full observation channel", func() {
-				for range 3 {
-					if _, err := backend.Start(context.Background(), spec); err == nil {
-						t.Error("fixture launch must fail so input stays held")
-					}
-				}
-			})
-		})
-	}
-	if len(isolation.starts) != 1 || len(pi.starts) != 1 {
-		t.Fatal("retries must retain the pending launch observation")
-	}
-	if got := <-pi.starts; got.err != nil || got.command != "fixture-pi" {
-		t.Fatalf("Pi launch observation = %+v", got)
-	}
-}
-
-// A legacy lead record (no isolation field) on a Pi without its JavaScript SDK
-// starts isolated with a recorded warning, and its record keeps the legacy
-// value; a Pi with the SDK still starts in default mode.
-func TestLegacyPiLeadWithoutSDKStartsIsolated(t *testing.T) {
-	for _, withSDK := range []bool{false, true} {
-		t.Run(map[bool]string{false: "standalone", true: "sdk"}[withSDK], func(t *testing.T) {
-			h := newLeadHarness(t)
-			bundle := filepath.Join(t.TempDir(), "agents-plugin")
-			piLeadFile(t, filepath.Join(bundle, ".claude-plugin", "plugin.json"), `{"name":"ws"}`)
-			restore := piHostedPackage
-			piHostedPackage = func() (string, string, error) { return "ws", "", nil }
-			t.Cleanup(func() { piHostedPackage = restore })
-			entry := piLeadBundle(t, filepath.Join(filepath.Dir(bundle), "agents-plugin-pi"))
-			usePreparedPiFixture(t, filepath.Dir(bundle), filepath.Join(filepath.Dir(bundle), "agents-plugin-pi"))
-			command := filepath.Join(t.TempDir(), "pi")
-			if withSDK {
-				pkg := filepath.Join(t.TempDir(), "host-pi")
-				command = filepath.Join(pkg, "dist", "cli.js")
-				piLeadFile(t, filepath.Join(pkg, "package.json"), `{"name":"@earendil-works/pi-coding-agent"}`)
-				piLeadFile(t, filepath.Join(pkg, "dist", "index.js"), "")
-			}
-			piLeadFile(t, command, "")
-			backend := &piLaunchBackend{command: command, starts: make(chan piLaunch, 1)}
-			h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}
-			h.start()
-			st := h.lead(BackendPi, LeadOptions{})
-			if _, err := h.runner.act(st.ID, func(c *conv) error {
-				c.update(func(rec *Record) { rec.PluginIsolation = "" })
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			h.restart()
-			h.send(st.ID, "resume legacy")
-			var got piLaunch
-			select {
-			case got = <-backend.starts:
-			case <-time.After(5 * time.Second):
-				t.Fatal("timed out waiting for lead launch")
-			}
-			if got.err != nil {
-				t.Fatalf("launch error: %v", got.err)
-			}
-			// Default mode runs the resolver adapter in front of the CLI;
-			// isolated mode runs the Pi command itself with the bundled entry.
-			adapter := len(got.args) > 0 && filepath.Base(got.args[0]) == "ws-lead.mjs"
-			isolated := got.command == command && !adapter && slices.Contains(got.args, entry)
-			rec := h.record(st.ID)
-			if rec.PluginIsolation != "" {
-				t.Fatalf("record isolation rewritten to %q", rec.PluginIsolation)
-			}
-			if withSDK {
-				if !adapter || isolated || rec.PluginWarning != "" {
-					t.Fatalf("SDK Pi must start in default mode: %+v, warning %q", got, rec.PluginWarning)
-				}
-				return
-			}
-			if got.command != command || !isolated || rec.PluginWarning != piNoSDKWarning {
-				t.Fatalf("standalone Pi must start isolated: %+v, warning %q", got, rec.PluginWarning)
-			}
-		})
 	}
 }

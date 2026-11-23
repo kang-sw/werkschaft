@@ -28,7 +28,7 @@ import (
 func TestCallFallbackRegistrationAndRenderDescriptor(t *testing.T) {
 	holders := wsholder.New(wsholder.Options{Dir: t.TempDir()})
 	defer holders.Close()
-	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil)
+	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil, nil)
 	defer runner.Close()
 	for name, reg := range runner.BackendRegistrations() {
 		if reg.CallFallback != (name == wsagent.BackendAgy) {
@@ -145,7 +145,7 @@ func TestAgentMCPHostedWorkerKeepsTokenForwarding(t *testing.T) {
 	}
 	holders := wsholder.New(wsholder.Options{Dir: t.TempDir()})
 	defer holders.Close()
-	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil)
+	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil, nil)
 	defer runner.Close()
 	host := &proxyHost{agents: runner, logw: io.Discard}
 	session, err := host.Accept(wsdashboard.ProxyHello{
@@ -231,7 +231,7 @@ func TestAgentMCPHostedWorkerDescriptorThroughProxy(t *testing.T) {
 
 			holders := wsholder.New(wsholder.Options{Dir: t.TempDir()})
 			defer holders.Close()
-			runner := newAgentRunner(dashDir, io.Discard, nil, nil, holders, nil, nil)
+			runner := newAgentRunner(dashDir, io.Discard, nil, nil, holders, nil, nil, nil)
 			defer runner.Close()
 			host := &proxyHost{agents: runner, logw: io.Discard}
 			session, err := host.Accept(wsdashboard.ProxyHello{
@@ -431,7 +431,7 @@ func TestAgentMCPPythonResolution(t *testing.T) {
 func TestAgentRunnerCatalogs(t *testing.T) {
 	holders := wsholder.New(wsholder.Options{Dir: t.TempDir()})
 	defer holders.Close()
-	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil)
+	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil, nil)
 	defer runner.Close()
 	regs := runner.BackendRegistrations()
 	if !reflect.DeepEqual(regs[wsagent.BackendClaude].Catalog, wsagent.ClaudeCatalog()) {
@@ -449,14 +449,18 @@ func TestAgentRunnerCatalogs(t *testing.T) {
 	if !reflect.DeepEqual(regs[wsagent.BackendAgy].Catalog, wsagent.AgyCatalog()) {
 		t.Error("agy must retain its lead and worker catalog")
 	}
+	if !reflect.DeepEqual(regs[wsagent.BackendWerk].Catalog, wsagent.WerkCatalog()) ||
+		!reflect.DeepEqual(regs[wsagent.BackendWerk].PermissionLevels, wsagent.LeadPermissionLevels()) {
+		t.Error("werk must expose independent lead and worker catalogs and common permission levels")
+	}
 	for _, want := range []struct {
 		backend, lead, worker string
 		capable, http, auto   bool
 	}{
 		{wsagent.BackendClaude, wsagent.LeadProfileClaude, wsagent.AgentWorkerProfile(wsagent.BackendClaude), true, true, false},
-		{wsagent.BackendPi, wsagent.LeadProfilePi, wsagent.AgentWorkerProfile(wsagent.BackendPi), true, false, false},
 		{wsagent.BackendAgy, wsagent.LeadProfileAgy, wsagent.AgentWorkerProfile(wsagent.BackendAgy), true, true, true},
 		{wsagent.BackendCodex, wsagent.LeadProfileCodex, wsagent.AgentWorkerProfile(wsagent.BackendCodex), true, true, true},
+		{wsagent.BackendWerk, wsagent.LeadProfileWerk, wsagent.AgentWorkerProfile(wsagent.BackendWerk), true, false, false},
 	} {
 		reg := regs[want.backend]
 		if reg.LeadProfile != want.lead || reg.WorkerProfile != want.worker || reg.WorkerCapable != want.capable || reg.WorkerHTTPMCP != want.http || reg.WorkerAutoApprove != want.auto {

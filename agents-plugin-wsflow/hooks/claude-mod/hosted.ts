@@ -13,7 +13,7 @@
  * that harness process. Every process below the harness inherits them (a
  * second harness the session starts from its shell, say), so the mode holds
  * only in the process the registration names: see resolveHostedMode. The
- * same variables gate the Pi extension and ws-mcp.
+ * same variables also gate ws-mcp.
  */
 
 /** Set to a truthy value (`1`, `true`, `yes`, `on`) by the daemon on a session it hosts. */

@@ -63,10 +63,8 @@ func (r *Runner) List() []State {
 }
 
 // Send holds text as the conversation's next user message. It is submitted
-// now when no turn runs. A spawned Pi worker takes it as a native steer
-// during a running turn; other conversations hold it until that turn ends.
-// A closed spawned Pi child is reopened on its existing session file;
-// other closed conversations still refuse sends.
+// now when no turn runs and otherwise waits for the current turn to end.
+// Ended conversations refuse sends.
 // It reports whether the message is still held.
 //
 // Send returns once the message is in the conversation's inbox: it neither
@@ -81,33 +79,9 @@ func (r *Runner) Send(id, text string) (State, error) {
 	if strings.TrimSpace(text) == "" {
 		return State{}, badRequest("text is empty")
 	}
-	st, err := r.send(id, text)
-	if err != errClosed {
-		return st, err
-	}
-	if rec, ok := r.recordOf(id); ok && !rec.Lead && rec.Parent != nil && r.lifecycle(rec.Backend).NativeChildren {
-		// A close may land between the open check and the inbox write.
-		// Once that close is done (resumeMu), a second try reopens it as
-		// any closed Pi child.
-		r.resumeMu.Lock()
-		r.resumeMu.Unlock()
-		st, err = r.send(id, text)
-	}
-	return st, err
-}
-
-func (r *Runner) send(id, text string) (State, error) {
 	c, err := r.open(id)
 	if err != nil {
-		// Keep revival and admission in one fence against explicit close.
-		// Open sends do not take resumeMu, so a slow manual close still
-		// refuses them promptly rather than blocking behind its cascade.
-		r.resumeMu.Lock()
-		defer r.resumeMu.Unlock()
-		c, err = r.resumePiChild(id)
-		if err != nil {
-			return State{}, err
-		}
+		return State{}, err
 	}
 	if r.opts.sendAdmitting != nil {
 		r.opts.sendAdmitting(id)
@@ -120,8 +94,7 @@ func (r *Runner) send(id, text string) (State, error) {
 		c.mu.Unlock()
 		return State{}, err
 	}
-	steer := c.rec.Parent != nil && r.lifecycle(c.rec.Backend).NativeChildren && !c.rec.Lead
-	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Steer: steer}, r.opts.Now())
+	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose
 		// drain counted this send holds its message (Wait). These rec
@@ -370,8 +343,8 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 
 // CloseConversation ends the conversation: its process stops, held
 // messages are dropped, and its session directory stays readable. A spawned
-// Pi child can be reopened by Send; other closed conversations refuse it.
-// Its open descendants through conversation parents, and a lead's Pi
+// closed conversation refuses Send. Open descendants through conversation
+// parents and a lead's hosted
 // children (children.go), close first, deepest first. A conversation parent
 // whose done turn waited for this child's report is released. A
 // conversation whose retiring holder could not be ended stays open and
@@ -411,7 +384,7 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 		if _, err := r.closeOne(d); err != nil {
 			// A descendant whose failed retirement stop left its holder
 			// running refuses the close of every conversation above it.
-			if errors.Is(err, errHolderNotEnded) {
+			if errors.Is(err, errHolderNotEnded) || errors.Is(err, errDurableClose) {
 				for _, rest := range order[i:] {
 					r.unfenceExec(rest)
 				}
@@ -472,7 +445,11 @@ func (r *Runner) SetSettings(id string, model, effort *string) (State, error) {
 		return State{}, badRequest("effort %q must be a lowercase word", *effort)
 	}
 	return r.act(id, func(c *conv) error {
-		return c.setSettings(model, effort)
+		if err := c.checkModelSetting(model); err != nil {
+			return err
+		}
+		c.setSettings(model, effort)
+		return nil
 	})
 }
 

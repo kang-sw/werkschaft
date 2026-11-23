@@ -76,7 +76,7 @@ func agyLeadConnections(t *testing.T) (off, on *Server, f *hostedKeyFixture) {
 	t.Helper()
 	off, f = hostedBackendConnection(t, wsagent.BackendAgy, agyRegistrations(false))
 	on = f.connect(t)
-	on.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: agyRegistrations(true)})
+	on.agents = wsagent.NewRunner(wsagent.Options{Backends: agyRegistrations(true)})
 	return off, on, f
 }
 
@@ -281,7 +281,7 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 	defer runner.Close()
 	// The token binding of the agy lead's connection: the runner holds
 	// its conversation open, loaded from the record.
-	s.pi.agents, s.callerBinding, s.conversation = runner, runner, rec.ReplyID
+	s.agents, s.callerBinding, s.conversation = runner, runner, rec.ReplyID
 
 	out := callToolWithKey(t, s, 2, f.hosted, "playbook.render", map[string]any{"name": "explore"})
 	lines := strings.Split(strings.TrimSpace(out), "\n")

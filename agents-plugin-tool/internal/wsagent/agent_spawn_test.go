@@ -100,13 +100,13 @@ func TestAgentSpawnResolvesTiers(t *testing.T) {
 	h, _ := agentHarness(t, func(o *Options) {
 		o.Backends["codex"] = BackendRegistration{Backend: o.Backends[BackendClaude].Backend}
 	})
-	setTierAliases(t, h.config.Config, "quick=pi.small big=pi.xlarge far=agy.large")
+	setTierAliases(t, h.config.Config, "quick=werk.small big=werk.xlarge far=agy.large")
 	lead := h.leadCaller()
 	for _, tc := range []struct{ tier, backend, model string }{
 		{"medium", BackendClaude, "claude-medium"},
-		{"pi.small", BackendPi, "prov/small-model"},
+		{"werk.small", BackendWerk, "prov/small-model"},
 		{"CLAUDE.Large", BackendClaude, "claude-large"},
-		{"quick", BackendPi, "prov/small-model"},
+		{"quick", BackendWerk, "prov/small-model"},
 	} {
 		id := h.agentSpawn(lead, AgentSpawnRequest{Prompt: "x", Tier: tc.tier, Authority: "read-only"})
 		if st := h.state(id); st.Backend != tc.backend || st.Model != tc.model {
@@ -122,10 +122,10 @@ func TestAgentSpawnResolvesTiers(t *testing.T) {
 	}{
 		{lead, "", "tier is required"},
 		{lead, "huge", `tier "huge" is neither a tier, <harness>.<tier>, nor an alias`},
-		{lead, "pi.xlarge", "pi.xlarge has no model in agents.tier"},
-		{lead, "pi.huge", "names no tier"},
+		{lead, "werk.xlarge", "werk.xlarge has no usable model"},
+		{lead, "werk.huge", "names no tier"},
 		{lead, "agy.large", `harness "agy" is not registered in this daemon`},
-		{lead, "big", "pi.xlarge has no model"},
+		{lead, "big", "werk.xlarge has no usable model"},
 		{lead, "far", `harness "agy" is not registered`},
 		{codex, "small", `harness "codex" is registered for hosted leads only`},
 		{lead, "codex.small", `harness "codex" is registered for hosted leads only`},
@@ -133,7 +133,7 @@ func TestAgentSpawnResolvesTiers(t *testing.T) {
 		_, err := h.runner.AgentSpawn(tc.caller, AgentSpawnRequest{Prompt: "x", Tier: tc.tier, Authority: "read-only"})
 		agentRefused(t, err, http.StatusBadRequest, tc.why, "valid tiers: ")
 		msg := err.Error()
-		for _, want := range []string{"claude.small", "claude.large", "pi.small", "pi.large", "quick"} {
+		for _, want := range []string{"claude.small", "claude.large", "werk.small", "werk.large", "quick"} {
 			if !strings.Contains(msg, want) {
 				t.Fatalf("tier %q: the valid list lacks %s: %s", tc.tier, want, msg)
 			}
@@ -153,7 +153,7 @@ func TestAgentSpawnResolvesTiers(t *testing.T) {
 
 func TestAgentTiersListsNativeExtAndAliases(t *testing.T) {
 	h, _ := agentHarness(t, nil)
-	setTierAliases(t, h.config.Config, "quick=pi.small big=pi.xlarge far=agy.large")
+	setTierAliases(t, h.config.Config, "quick=werk.small big=werk.xlarge far=agy.large")
 	got, err := h.runner.AgentTiers(h.leadCaller())
 	if err != nil {
 		t.Fatal(err)
@@ -170,40 +170,42 @@ func TestAgentTiersListsNativeExtAndAliases(t *testing.T) {
 		got.Native[1] != (AgentTierEntry{Tier: "medium", Model: "claude-medium", Effort: "high"}) {
 		t.Fatalf("native = %+v", got)
 	}
-	if !slices.Equal(tierNames(got.Ext), []string{"claude.small", "claude.medium", "claude.large", "claude.xlarge", "pi.small", "pi.medium", "pi.large"}) ||
-		got.Ext[4] != (AgentTierEntry{Tier: "pi.small", Model: "prov/small-model", Effort: "low"}) {
+	if !slices.Equal(tierNames(got.Ext), []string{"claude.small", "claude.medium", "claude.large", "claude.xlarge", "werk.small", "werk.medium", "werk.large"}) ||
+		got.Ext[4] != (AgentTierEntry{Tier: "werk.small", Model: "prov/small-model", Effort: "low", Provider: "openrouter"}) {
 		t.Fatalf("ext = %+v", got.Ext)
 	}
 	wantAliases := []AgentAliasEntry{
-		{Alias: "big", Target: "pi.xlarge", Error: `tier "xlarge" is not set for pi`},
-		{Alias: "far", Target: "agy.large", Error: `harness "agy" has no spawnable tier now`},
-		{Alias: "quick", Target: "pi.small", Model: "prov/small-model", Effort: "low"},
+		{Alias: "big", Target: "werk.xlarge", Error: `tier "xlarge" is not set for werk`},
+		{Alias: "far", Target: "agy.large", Error: `harness "agy" is not registered in this daemon`},
+		{Alias: "quick", Target: "werk.small", Model: "prov/small-model", Effort: "low"},
 	}
 	if !slices.Equal(got.Aliases, wantAliases) || len(got.Unavailable) != 0 {
 		t.Fatalf("aliases = %+v, unavailable = %v", got.Aliases, got.Unavailable)
 	}
-	// On a Pi caller the bare tiers are Pi's.
-	pi, err := h.runner.AgentTiers(LeadCaller(leadParent.ReplyID, h.root, BackendPi, h.config.Config))
-	if err != nil || !slices.Equal(tierNames(pi.Native), []string{"small", "medium", "large"}) || pi.Native[0].Model != "prov/small-model" {
-		t.Fatalf("a pi caller's tiers = %+v, %v", pi, err)
+	// On a werk caller the bare tiers are werk's.
+	werk, err := h.runner.AgentTiers(LeadCaller(leadParent.ReplyID, h.root, BackendWerk, h.config.Config))
+	if err != nil || !slices.Equal(tierNames(werk.Native), []string{"small", "medium", "large"}) || werk.Native[0].Model != "prov/small-model" {
+		t.Fatalf("a werk caller's tiers = %+v, %v", werk, err)
 	}
 
 	// A worker harness that cannot spawn now is named, with why, and its
 	// tiers leave the lists.
-	h.config.ChildCheck = func() error { return errors.New("pi helper missing") }
 	h.runner.Close()
+	reg := h.config.Backends[BackendWerk]
+	reg.Backend = &unavailableWerkFixture{h.backend}
+	h.config.Backends[BackendWerk] = reg
 	h.start()
 	got, err = h.runner.AgentTiers(h.leadCaller())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got.Unavailable, []string{"pi: pi helper missing"}) || !slices.Equal(tierNames(got.Ext), []string{"claude.small", "claude.medium", "claude.large", "claude.xlarge"}) ||
+	if !slices.Equal(got.Unavailable, []string{"werk: OpenRouter fixture credential missing"}) || !slices.Equal(tierNames(got.Ext), []string{"claude.small", "claude.medium", "claude.large", "claude.xlarge"}) ||
 		got.Aliases[2].Error == "" {
-		t.Fatalf("tiers with pi unavailable = %+v", got)
+		t.Fatalf("tiers with werk unavailable = %+v", got)
 	}
-	_, err = h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{Prompt: "x", Tier: "pi.small", Authority: "read-only"})
-	agentRefused(t, err, http.StatusBadRequest, "pi helper missing", "valid tiers: small, medium, large, xlarge, claude.small, claude.medium, claude.large, claude.xlarge")
-	if strings.Contains(err.Error(), "pi.small,") || strings.Contains(err.Error(), "quick") {
+	_, err = h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{Prompt: "x", Tier: "werk.small", Authority: "read-only"})
+	agentRefused(t, err, http.StatusBadRequest, "OpenRouter fixture credential missing", "valid tiers: small, medium, large, xlarge, claude.small, claude.medium, claude.large, claude.xlarge")
+	if strings.Contains(err.Error(), "werk.small,") || strings.Contains(err.Error(), "quick") {
 		t.Fatalf("an unavailable harness's tiers are listed: %v", err)
 	}
 
@@ -220,48 +222,6 @@ func TestAgentTiersListsNativeExtAndAliases(t *testing.T) {
 // HarnessAvailability is SpawnableHarness for the dashboard view: the same
 // refusals, but the Pi child check answers only from ChildCheckKnown and is
 // unknown (never run) while that needs a probe.
-func TestHarnessAvailabilityNeverRunsTheChildCheck(t *testing.T) {
-	h, _ := agentHarness(t, nil)
-	ran := 0
-	h.config.ChildCheck = func() error { ran++; return errors.New("pi helper missing") }
-	h.runner.Close()
-	h.start()
-	if why, known := h.runner.HarnessAvailability(BackendClaude, BackendPi); why != "" || known {
-		t.Fatalf("pi without ChildCheckKnown = %q, %v; want unknown", why, known)
-	}
-	if why, known := h.runner.HarnessAvailability(BackendClaude, "claude"); why != "" || !known {
-		t.Fatalf("claude = %q, %v", why, known)
-	}
-	if why, known := h.runner.HarnessAvailability(BackendClaude, "nosuch"); !strings.Contains(why, "not registered") || !known {
-		t.Fatalf("an unregistered harness = %q, %v", why, known)
-	}
-	answer := struct {
-		known bool
-		err   error
-	}{}
-	h.config.ChildCheckKnown = func() (bool, error) { return answer.known, answer.err }
-	h.runner.Close()
-	h.start()
-	if why, known := h.runner.HarnessAvailability(BackendClaude, BackendPi); why != "" || known {
-		t.Fatalf("pi before a probe = %q, %v; want unknown", why, known)
-	}
-	answer.known, answer.err = true, errors.New("pi 0.1 is installed")
-	if why, known := h.runner.HarnessAvailability(BackendClaude, BackendPi); why != "pi 0.1 is installed" || !known {
-		t.Fatalf("pi with a known refusal = %q, %v", why, known)
-	}
-	answer.err = nil
-	if why, known := h.runner.HarnessAvailability(BackendClaude, BackendPi); why != "" || !known {
-		t.Fatalf("pi known usable = %q, %v", why, known)
-	}
-	if ran != 0 {
-		t.Fatalf("HarnessAvailability ran ChildCheck %d times", ran)
-	}
-	// Spawn's own check still runs it.
-	if why := h.runner.SpawnableHarness(BackendClaude, BackendPi); why != "pi helper missing" || ran != 1 {
-		t.Fatalf("SpawnableHarness(pi) = %q after %d checks", why, ran)
-	}
-}
-
 func TestAgentSystemPromptReachesEveryStart(t *testing.T) {
 	h, _ := agentHarness(t, nil)
 	lead := h.leadCaller()
@@ -324,3 +284,15 @@ func TestAgentSystemPromptReachesEveryStart(t *testing.T) {
 	_, err = h.runner.AgentSpawn(lead, AgentSpawnRequest{Prompt: "x", Tier: "small", Authority: "read-only", SystemPromptPath: "prompts/probe.md"})
 	agentRefused(t, err, http.StatusBadRequest, "system_prompt_path")
 }
+
+type unavailableWerkFixture struct{ *fakeBackend }
+
+func (*unavailableWerkFixture) workerCredentialGap() string {
+	return "OpenRouter fixture credential missing"
+}
+
+func (b *unavailableWerkFixture) workerProviderGap(string) string {
+	return b.workerCredentialGap()
+}
+
+func (*unavailableWerkFixture) workerTierGap(map[string]wsconfig.AgentTier) string { return "" }

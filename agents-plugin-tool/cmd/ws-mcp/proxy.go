@@ -68,7 +68,7 @@ type proxyHost struct {
 	// agents is the daemon's agent runner, where a hosted session's pi.*
 	// tools spawn its Pi subagents (mcp.ServerOptions.Agents); nil leaves
 	// them refusing.
-	agents mcp.PiAgents
+	agents mcp.AgentHost
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
 	exec atomic.Pointer[execjob.Hosted]
@@ -210,6 +210,8 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
+		opts.FileWrites = hello.FileWrites
+		opts.RecordExecLaunch = hello.RecordExecLaunch
 		server := mcp.NewServerWithOptions(opts)
 		h.applyLANChange(server)
 		return &proxyMCPSession{server: server}, nil

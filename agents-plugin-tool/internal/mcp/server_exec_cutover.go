@@ -15,15 +15,14 @@ import (
 // launch and reader names stay callable everywhere but are never listed.
 var cutoverExecTools = []string{"exec.run", "exec.shell", "exec.stop", "exec.tail", "exec.list", "exec.write"}
 
-// codexReadToolNames are the read-only fs.* tools that stand in for a
-// cutover Codex session's shell reads.
-var codexReadToolNames = []string{"fs.read", "fs.grep", "fs.list"}
+// fsReadToolNames are the read-only fs.* tools offered to cutover sessions
+// whose backend supplies this read surface.
+var fsReadToolNames = []string{"fs.read", "fs.grep", "fs.list"}
 
-// isCodexReadTool reports whether name is one of the fs.* read tools.
-func isCodexReadTool(name string) bool { return slices.Contains(codexReadToolNames, name) }
+// isFSReadTool reports whether name is one of the fs.* read tools.
+func isFSReadTool(name string) bool { return slices.Contains(fsReadToolNames, name) }
 
-// errNoCodexReadTools refuses an fs.* call outside a cutover Codex session.
-var errNoCodexReadTools = errors.New("this read tool runs only in a dashboard-hosted Codex session whose shell tool is replaced by the ws exec tools; use the harness's own file tools here")
+var errNoFSReadTools = errors.New("this read tool requires a dashboard-hosted session with daemon file tools enabled; use your harness's file tools here")
 
 // execToolsListed reports whether this connection lists the exec tools: a
 // trusted binding to a conversation that launched under the cutover, on a
@@ -32,23 +31,28 @@ func (s *Server) execToolsListed() bool {
 	return s.hostedExec() && s.execCutover != ""
 }
 
-// codexReadTools reports whether this connection lists and admits the
-// fs.* read tools: a trusted binding to a conversation of a backend that declares
-// them (LifecyclePolicy.ExecReadTools, Codex) that
-// launched under the cutover. A supplied session_key or hello field never stands in
-// for that binding.
-func (s *Server) codexReadTools() bool {
-	return s.conversation != "" && s.execCutover != "" && s.lifecycleOf(s.execCutover).ExecReadTools
+// fsReadTools requires a trusted cutover binding to a backend that declares
+// the daemon read tools. A supplied session key cannot grant this surface.
+func (s *Server) fsReadTools() bool {
+	if s.conversation == "" {
+		return false
+	}
+	if s.fileWrites != nil && s.fileWrites.CurrentAuthority != nil {
+		return s.fileWrites.CurrentAuthority().Valid() && s.lifecycleOf(s.agentAdmissionBackend()).ExecReadTools
+	}
+	return s.execCutover != "" && s.lifecycleOf(s.execCutover).ExecReadTools
 }
 
 // cutoverListed reports whether a tool permanentlyHiddenTool hides is
 // listed on this connection anyway.
 func (s *Server) cutoverListed(name string) bool {
 	switch {
-	case isCodexReadTool(name):
-		return s.codexReadTools()
+	case isFSWriteTool(name):
+		return s.fileWriteTools()
+	case isFSReadTool(name):
+		return s.fsReadTools()
 	case slices.Contains(cutoverExecTools, name):
-		return s.execToolsListed()
+		return s.execToolsListed() && !s.refuseBoundReadOnlyExec(name)
 	}
 	return false
 }

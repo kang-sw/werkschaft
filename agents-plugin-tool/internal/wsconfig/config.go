@@ -74,10 +74,14 @@ type ScopedItem struct {
 	RepoScope bool `json:"repo_scope"`
 }
 
+// WerkDefaultProvider is used when a saved werk tier omits its provider.
+const WerkDefaultProvider = "openrouter"
+
 type AgentTier struct {
-	Backend string `json:"backend,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
 }
 
 func Load(opts Options) (Config, error) {
@@ -153,6 +157,12 @@ func effectiveAgentConfig(layers ...Config) Config {
 	storedAliases := cfg.Agents.ModelAliases
 	cfg.Agents.ModelAliases = defaultModelAliases(aliasTiers)
 	mergeAgentConfig(&cfg, Config{Agents: AgentsConfig{ModelAliases: storedAliases}})
+	for _, aliases := range cfg.Agents.ModelAliases {
+		if mapping, ok := aliases["werk"]; ok && mapping.Provider == "" {
+			mapping.Provider = WerkDefaultProvider
+			aliases["werk"] = mapping
+		}
+	}
 	return cfg
 }
 
@@ -273,7 +283,7 @@ func SetAgentsTier(opts Options, tier, backend, model string, effortValues ...st
 
 // SetAgentsTierForHarness writes one tier/harness leaf to project scope.
 func SetAgentsTierForHarness(opts Options, tier, backend, model, harness string, effortValues ...string) (Config, error) {
-	cfg, err := setAgentsTierForHarness(opts, false, tier, backend, model, harness, effortValues...)
+	cfg, err := setAgentsTierForHarness(opts, false, tier, backend, model, harness, "", effortValues...)
 	if err != nil {
 		return Config{}, err
 	}
@@ -284,7 +294,7 @@ func SetAgentsTierForHarness(opts Options, tier, backend, model, harness string,
 // global config. It stays separate from the resolver because AgentTier is a
 // structured value, not a resolver override string.
 func SetGlobalAgentsTierForHarness(opts Options, tier, backend, model, harness string, effortValues ...string) (Config, error) {
-	cfg, err := setAgentsTierForHarness(opts, true, tier, backend, model, harness, effortValues...)
+	cfg, err := setAgentsTierForHarness(opts, true, tier, backend, model, harness, "", effortValues...)
 	if err != nil {
 		return Config{}, err
 	}
@@ -359,7 +369,16 @@ func HasProjectAgentsTierLeaf(opts Options, tier, harness string) (bool, error) 
 	return exists, nil
 }
 
-func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, harness string, effortValues ...string) (Config, error) {
+// SetAgentTierValue is the shared structured tier writer for MCP and the dashboard.
+func SetAgentTierValue(opts Options, global bool, tier, harness string, value AgentTier) (Config, error) {
+	cfg, err := setAgentsTierForHarness(opts, global, tier, value.Backend, value.Model, harness, value.Provider, value.Effort)
+	if err != nil {
+		return Config{}, err
+	}
+	return presentationAgentConfig(effectiveAgentConfig(cfg)), nil
+}
+
+func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, harness, provider string, effortValues ...string) (Config, error) {
 	tier = normalizedTier(tier)
 	if tier == "" {
 		return Config{}, fmt.Errorf("tier must be small, medium, large, or xlarge")
@@ -378,6 +397,10 @@ func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, ha
 
 	key, err := aliasTargetKey(harness)
 	if err != nil {
+		return Config{}, err
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if err := ValidateTierProvider(key, provider); err != nil {
 		return Config{}, err
 	}
 	path, err := agentsConfigPath(opts, global)
@@ -419,6 +442,9 @@ func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, ha
 			mapping.Effort = effort
 		} else {
 			mapping.Effort = ""
+		}
+		if provider != "" {
+			mapping.Provider = provider
 		}
 		stored.Agents.ModelAliases[tier][key] = mapping
 		return nil
@@ -509,6 +535,21 @@ func ResolveAgentTierForHarness(opts Options, tier, harness string) (backend, mo
 	return backend, model, effort, source, nil
 }
 
+// ValidateTierProvider checks the explicitly configured provider against the
+// providers this version can launch for that harness.
+func ValidateTierProvider(harness, provider string) error {
+	if provider == "" {
+		return nil
+	}
+	if normalizedHarness(harness) != "werk" {
+		return fmt.Errorf("provider is available only for werk tiers")
+	}
+	if provider != WerkDefaultProvider && provider != "openai" && !IsLocalWerkProvider(provider) {
+		return fmt.Errorf("unsupported werk provider %q; use %s, openai or a configured local/<name>", provider, WerkDefaultProvider)
+	}
+	return nil
+}
+
 // HarnessTiers is the tiers harness's own bucket sets (a model given), by
 // tier, after the builtin < global < project overlay, with no fallback to
 // another harness's bucket: a tier the bucket leaves unset is absent.
@@ -527,6 +568,11 @@ func HarnessTiers(opts Options, harness string) (map[string]AgentTier, error) {
 		mapping.Backend = strings.TrimSpace(mapping.Backend)
 		mapping.Model = strings.TrimSpace(mapping.Model)
 		mapping.Effort = strings.TrimSpace(mapping.Effort)
+		if key == "werk" {
+			if err := ValidateTierProvider(key, mapping.Provider); err != nil {
+				return nil, fmt.Errorf("tier %s.%s: %w", key, tier, err)
+			}
+		}
 		tiers[tier] = mapping
 	}
 	return tiers, nil
@@ -724,6 +770,8 @@ func normalizedHarness(value string) string {
 		return "pi"
 	case "agy":
 		return "agy"
+	case "werk":
+		return "werk"
 	default:
 		return ""
 	}
@@ -737,7 +785,7 @@ func aliasTargetKey(harness string) (string, error) {
 	if key := normalizedHarness(value); key != "" {
 		return key, nil
 	}
-	return "", fmt.Errorf("harness must be codex, claude, pi, agy, or default")
+	return "", fmt.Errorf("harness must be codex, claude, pi, agy, werk, or default")
 }
 
 func normalizeOptionalEffort(values ...string) (string, bool, error) {

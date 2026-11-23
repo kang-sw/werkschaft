@@ -118,6 +118,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		Root:               root,
 		Cwd:                cwd,
 		Model:              mapping.Model,
+		provider:           mapping.Provider,
 		Effort:             mapping.Effort,
 		Tier:               bare,
 		Prompt:             req.Prompt,

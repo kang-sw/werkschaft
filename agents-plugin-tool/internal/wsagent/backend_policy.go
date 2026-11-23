@@ -1,6 +1,10 @@
 package wsagent
 
-import "maps"
+import (
+	"maps"
+
+	"github.com/kang-sw/devenv/internal/wsconfig"
+)
 
 // The runner never branches on a harness name. What differs between harnesses
 // is declared here: data on the backend's BackendRegistration (PermissionPolicy,
@@ -73,14 +77,6 @@ func (p PermissionPolicy) quality(level PermissionLevel, active string) string {
 // that differs between harnesses. Every field is runtime-only registration
 // data; the zero value asks for none of it.
 type LifecyclePolicy struct {
-	// NativeChildren marks a backend whose hosted sessions spawn native child
-	// conversations of their own (the Pi extension's pi.spawn), not only
-	// agent.spawn workers. Such a child binds its ws key to its working
-	// directory, takes input as a native steer, revives when a send finds it
-	// closed, is a descendant of the lead that spawned it, is cleaned up with
-	// a vanished parent, keeps the launched definition its parent's ceiling is
-	// checked against, and spawns through Options.ChildCheck.
-	NativeChildren bool
 	// TerminalSummaries marks a backend whose hosted lead publishes reasoning
 	// summaries from its terminal bridge: the runner starts and projects them,
 	// and a terminal session's ws-mcp accepts the summaries its bridge pushes.
@@ -112,10 +108,15 @@ type LifecyclePolicy struct {
 	// state and background tasks (StartSpec.SessionState), so a task it still
 	// runs keeps it from idling.
 	WorkerSessionState bool
-	// ExecReadTools marks a backend whose shell is also its read surface: a
-	// worker's exec cutover needs the ws fs.* read tools beside exec.shell
-	// (CodexReadWSTools), and its cutover session lists them.
+	// ExecReadTools supplies the ws fs.* read tools to a cutover session.
+	// A worker's profile must include them before its exec cutover.
 	ExecReadTools bool
+	// FileWriteTools admits daemon file mutations when the session supplies
+	// a durable recorder for them.
+	FileWriteTools bool
+	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
+	// worker of this backend, including calls made outside the cutover.
+	ReadOnlyNoExec bool
 	// ExecOptIn is the config key and label of an opt-in a backend's exec
 	// cutover needs beyond the rollout switch: off unless the key says on, and
 	// off when config cannot be read. Zero: the rollout switch alone decides.
@@ -181,28 +182,30 @@ type terminalSession interface {
 	adoptTerminalSession(rec *Record, session string)
 }
 
-// leadCompactionBridge is implemented by a backend whose hosted lead's
-// compaction runs through its own extension bridge rather than the daemon's
-// native command, for the conversations rec describes.
-type leadCompactionBridge interface {
-	bridgesLeadCompaction(rec Record) bool
-}
-
 // nativeModeAdmitter is implemented by a backend that reserves a native
 // permission mode to the user (admitNativeMode); an error refuses the request.
 type nativeModeAdmitter interface {
 	admitNativeMode(rec Record, mode string, user bool) error
 }
 
-func (r *Runner) permissionPolicy(backend string) PermissionPolicy {
-	return r.opts.Backends[backend].Permission
+// workerSetup is implemented by a backend whose workers need setup beyond an
+// installed executable: the daemon reports each gap as the harness's
+// unavailability, with the reason, in agent.tiers and the dashboard. Neither
+// method runs a process or reads a credential's value.
+type workerSetup interface {
+	// workerCredentialGap is why no worker can start for lack of a provider
+	// credential; "" when one is configured, or none is needed.
+	workerCredentialGap() string
+	// workerProviderGap checks one tier's provider without refreshing tokens.
+	workerProviderGap(provider string) string
+	// workerTierGap is why no tier of the harness is usable given the tier
+	// models the user configured (none: a harness that ships no default
+	// model); "" when it is.
+	workerTierGap(tiers map[string]wsconfig.AgentTier) string
 }
 
-// bridgedLeadCompaction reports whether rec is a lead whose backend compacts
-// through its extension bridge (leadCompactionBridge).
-func (r *Runner) bridgedLeadCompaction(rec Record) bool {
-	b, _ := r.opts.Backends[rec.Backend].Backend.(leadCompactionBridge)
-	return rec.Lead && b != nil && b.bridgesLeadCompaction(rec)
+func (r *Runner) permissionPolicy(backend string) PermissionPolicy {
+	return r.opts.Backends[backend].Permission
 }
 
 // heldInternalWorker reports whether rec is a held worker of a backend whose

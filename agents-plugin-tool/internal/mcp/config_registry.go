@@ -431,6 +431,21 @@ var configRegistry = []configKeyEntry{
 		ResolverBacked:        true,
 	},
 	{
+		Key:        wsconfig.ItemWerkEndpoints,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "JSON object mapping endpoint names to {base_url, kind}, with kind vllm or ollama. Store optional API keys with credential set local/<name>.",
+		}},
+		RequiresLeadAuthority: true,
+		ResolverBacked:        true,
+		Normalize: func(value string) (string, error) {
+			_, err := wsconfig.ParseWerkEndpoints(value)
+			return value, err
+		},
+	},
+	{
 		// Free-form like agent.git_search_roots, checked by the parser
 		// agent.spawn reads it with.
 		Key:        wsconfig.ItemAgentTierAliases,
@@ -630,6 +645,10 @@ var configRegistry = []configKeyEntry{
 			{
 				Name:        "model",
 				Description: "Concrete model for this alias.",
+			},
+			{
+				Name:        "provider",
+				Description: "Optional provider for a werk tier: openrouter (default), openai (Sign in with ChatGPT, with background consent), or local/<name> from agent.werk_endpoints.",
 			},
 			{
 				Name:        "effort",

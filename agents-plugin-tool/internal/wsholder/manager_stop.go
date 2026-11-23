@@ -108,6 +108,18 @@ type StopAllResult struct {
 // a complete stop launches stay refused, since the caller closes the
 // manager next; with any holder remaining they are allowed again.
 func (m *Manager) StopAll() StopAllResult {
+	return m.stopAll(false)
+}
+
+// StopAllFenced holds the launch fence even after a partial holder stop.
+// The Full Quit caller serializes attempts and releases the fence only
+// when it keeps the daemon running.
+func (m *Manager) StopAllFenced() (StopAllResult, func()) {
+	result := m.stopAll(true)
+	return result, func() { m.setStopping(false) }
+}
+
+func (m *Manager) stopAll(keepFence bool) StopAllResult {
 	// Set before the wait, so a launch queued behind a running one is
 	// refused, and again after it: a concurrent StopAll that left holders
 	// may have allowed launches meanwhile.
@@ -167,7 +179,9 @@ func (m *Manager) StopAll() StopAllResult {
 	}
 	sort.Strings(result.Stopped)
 	if len(result.Remaining) > 0 {
-		m.setStopping(false)
+		if !keepFence {
+			m.setStopping(false)
+		}
 		m.logf("full stop incomplete: %d holder(s) remain", len(result.Remaining))
 	}
 	return result

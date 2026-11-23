@@ -69,10 +69,9 @@ type ServerOptions struct {
 	// snapshot file only for recovery (live_snapshot.go). nil is the direct
 	// path, a ws-mcp in its own process, which writes the file and nudges.
 	Live wsdashboard.LiveHost
-	// Agents is the dashboard daemon's agent runner, where the pi.* tools
-	// spawn the session's Pi subagents (pi_tools.go); nil on the direct
-	// path, where they refuse.
-	Agents PiAgents
+	// Agents is the dashboard daemon's runner for spawning and reading
+	// conversations. It is nil on the direct path.
+	Agents AgentHost
 	// AgentBackends exposes the dashboard daemon's registered backend
 	// descriptors without granting the lead runner handle (Agents). Set for
 	// every daemon-hosted connection, including token-forwarding workers, so
@@ -114,6 +113,10 @@ type ServerOptions struct {
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
 	// session_key grants a root, never ownership.
 	Conversation string
+	// FileWrites is the bound session's filesystem context and durable
+	// intent recorder. A launcher hello never supplies it.
+	FileWrites       *FileWriteSession
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error
 	// ExecCutover is the bound conversation's harness when its process
 	// launched under the exec cutover (wsdashboard.ProxyHello.ExecCutover);
 	// empty otherwise and on every launcher connection.
@@ -217,12 +220,17 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	if opts.Harness != "" {
 		s.observeHarness("hello", opts.Harness)
 	}
-	s.pi.agents = opts.Agents
+	s.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.recordExecLaunch = opts.RecordExecLaunch
+		if opts.FileWrites != nil {
+			binding := *opts.FileWrites
+			s.fileWrites = &binding
+		}
 	}
 	s.callerBinding = opts.CallerBinding
 	if s.callerBinding == nil && opts.Agents != nil {
@@ -230,13 +238,13 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.callerBinding = binding
 		}
 	}
-	s.pi.worktreeChildren = opts.WorktreeChildren
-	if s.pi.worktreeChildren == nil && opts.Agents != nil {
+	s.worktreeChildren = opts.WorktreeChildren
+	if s.worktreeChildren == nil && opts.Agents != nil {
 		if reader, ok := opts.Agents.(WorktreeChildrenReader); ok {
-			s.pi.worktreeChildren = reader
+			s.worktreeChildren = reader
 		}
 	}
-	s.startPiFeed()
+	s.startWorkerFeed()
 	return s
 }
 
@@ -549,8 +557,8 @@ func (s *Server) Drain(ctx context.Context) bool {
 // must release them itself, or every ended session keeps its Server alive
 // for the daemon's lifetime. Call it after ServeStdio has returned.
 func (s *Server) Close() {
-	if stop := s.pi.stopWatch; stop != nil {
-		stop()
+	if s.stopWorkerWatch != nil {
+		s.stopWorkerWatch()
 	}
 	s.live.close()
 	d := &s.dashboard

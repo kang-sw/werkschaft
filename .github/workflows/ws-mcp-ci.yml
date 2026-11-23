@@ -16,7 +16,6 @@ on:
       - "agents-plugin-tool/**"
       - "agents-plugin/**"
       - "agents-plugin-wsflow/**"
-      - "agents-plugin-pi/**"
   workflow_dispatch:
     inputs:
       long_tests:
@@ -79,10 +78,6 @@ jobs:
         with:
           go-version-file: agents-plugin-tool/go.mod
           cache-dependency-path: agents-plugin-tool/go.sum
-
-      - name: Check workflow bundle freshness
-        if: runner.os == 'Linux'
-        run: python3 ../agents-plugin-pi/scripts/prepare-workflow-bundles.py --check
 
       - name: Generate and verify embedded workflow packages
         run: |

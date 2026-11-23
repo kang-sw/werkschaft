@@ -203,7 +203,7 @@ func TestHostedTranscriptUsesSlotNotFullNotify(t *testing.T) {
 	h.opts.LiveHost = &summarySnapshotHost{}
 	h.opts.heartbeat = time.Hour
 	h.start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
+	id := h.lead(BackendClaude, LeadOptions{}).ID
 	h.send(id, "one")
 	c := h.runner.conv(id)
 	h.quiesce(id)
@@ -220,7 +220,7 @@ func TestHostedTranscriptUsesSlotNotFullNotify(t *testing.T) {
 }
 
 func TestTranscriptShutdownFlushesDeferredSendsAndConsumedSnapshot(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendPi} {
+	for _, backend := range []string{BackendClaude} {
 		for _, consumed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/consumed=%v", backend, consumed), func(t *testing.T) {
 				h := newLeadHarness(t)
@@ -378,7 +378,7 @@ func TestHostedLeadPhase2HotPathZeroRingReadDir(t *testing.T) {
 	h.opts.heartbeat = time.Hour
 	h.start()
 
-	id := h.lead(BackendPi, LeadOptions{}).ID
+	id := h.lead(BackendClaude, LeadOptions{}).ID
 	dir := wsdashboard.SessionDir(h.dir, id)
 	unpin := wslive.PinRing(wslive.RingDir(dir))
 	defer unpin()
@@ -448,7 +448,7 @@ func TestCloseSlotConcurrentWakeNoRaceOrPanic(t *testing.T) {
 		h.opts.heartbeat = time.Hour
 		h.start()
 
-		id := h.lead(BackendPi, LeadOptions{}).ID
+		id := h.lead(BackendClaude, LeadOptions{}).ID
 		c := h.runner.conv(id)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -484,7 +484,7 @@ func TestCloseSlotRetriesPreviouslyFailedSummaryCommit(t *testing.T) {
 	h.opts.heartbeat = time.Hour
 	h.start()
 
-	id := h.lead(BackendPi, LeadOptions{}).ID
+	id := h.lead(BackendClaude, LeadOptions{}).ID
 	dir := wsdashboard.SessionDir(h.dir, id)
 	ringDir := wslive.RingDir(dir)
 	c := h.runner.conv(id)

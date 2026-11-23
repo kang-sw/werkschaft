@@ -75,7 +75,7 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 		if tier == "" || wsconfig.NormalizedTier(tier) != tier {
 			return Mutation{}, ErrInvalid
 		}
-		if op.Action == "set" && !validTierObject(op.Value, tier) {
+		if op.Action == "set" && !validTierObject(op.Value, tier, harness) {
 			return Mutation{}, ErrInvalid
 		}
 		return m, nil
@@ -114,7 +114,7 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 	return m, nil
 }
 
-func validTierObject(value any, tier string) bool {
+func validTierObject(value any, tier, harness string) bool {
 	fields, ok := value.(map[string]any)
 	if !ok || len(fields) == 0 {
 		return false
@@ -130,6 +130,10 @@ func validTierObject(value any, tier string) bool {
 				return false
 			}
 		case "backend", "model", "effort":
+		case "provider":
+			if wsconfig.ValidateTierProvider(harness, strings.ToLower(strings.TrimSpace(s))) != nil {
+				return false
+			}
 		default:
 			return false
 		}

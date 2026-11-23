@@ -35,12 +35,16 @@ func TestSettingsComboboxBrowser(t *testing.T) {
 	if out, err := exec.Command("git", "init", "-q", "-b", "develop", root).CombinedOutput(); err != nil {
 		t.Fatalf("initialize session worktree: %v\n%s", err, out)
 	}
+	opts := wsconfig.Options{CacheHome: cache, ConfigHome: home}
 	seed := `{"overrides":{"workflow.lang":"English"},"structured_overrides":{"agent.tier_routing":{"bundles":{"deep-design":{"harness":"claude","model":"claude-opus-4-6","effort":"high"}}}}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := wsconfig.SetAgentTierValue(opts, true, "small", "werk", wsconfig.AgentTier{Backend: "werk", Model: "same", Provider: "local/desk"}); err != nil {
+		t.Fatal(err)
+	}
 	source := mcp.NewDashboardSessionSource()
-	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{CacheHome: cache, ConfigHome: home}, source, nil, nil)
+	backend, err := mcp.DashboardConfigBackend("ws", opts, source, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

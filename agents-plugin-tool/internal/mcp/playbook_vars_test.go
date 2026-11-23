@@ -126,7 +126,8 @@ func TestPlaybookPrintModelAliasPiHarnessWhenSet(t *testing.T) {
 	rsrcRoot := buildTestRsrcTree(t, map[string]string{
 		"model-pb/model-pb.md": modelAliasPlaybookContent,
 	})
-	s := newTestServerWithHarness(t, "pi")
+	s := newTestServerWithHarness(t, "")
+	s.recordHarness("initialize", "pi")
 
 	cacheHome := t.TempDir()
 	uniqueModel := "test-pi-model-xyz-7777"
@@ -151,7 +152,8 @@ func TestPlaybookPrintModelAliasPiHarnessFallsBackToDefault(t *testing.T) {
 	rsrcRoot := buildTestRsrcTree(t, map[string]string{
 		"model-pb/model-pb.md": modelAliasPlaybookContent,
 	})
-	s := newTestServerWithHarness(t, "pi")
+	s := newTestServerWithHarness(t, "")
+	s.recordHarness("initialize", "pi")
 
 	cacheHome := t.TempDir()
 

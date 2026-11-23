@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -47,6 +49,7 @@ type compactRequest struct {
 	auto     bool
 	crossing bool
 	err      error
+	lead     *wscompact.LeadSummary
 }
 
 type compactionNudge struct {
@@ -66,6 +69,11 @@ type CompactResult struct {
 // The presented key is the authority on child connections, as for mailbox
 // control; no key or lineage changes during compaction.
 func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
+	return r.CompactWithSummary(callerKey, target, resume, nil)
+}
+
+// CompactWithSummary queues a checkpoint with prose supplied by its own lead.
+func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *wscompact.LeadSummary) CompactResult {
 	target = strings.TrimSpace(target)
 	var own, dest *conv
 	r.mu.Lock()
@@ -105,11 +113,18 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 			out = CompactResult{"error", "compaction requires a running harness"}
 			return
 		}
+		if lead != nil {
+			_, accepts := dest.proc.(leadSummaryCompactor)
+			if dest != own || !dest.rec.Lead || !accepts {
+				out = CompactResult{"error", "lead_summary is only available for a builtin lead compacting itself"}
+				return
+			}
+		}
 		if dest.compactPending != nil || dest.compacting || dest.compactCommand {
 			out = CompactResult{"queued", "compaction already pending"}
 			return
 		}
-		req := &compactRequest{resume: again, internal: dest.compactInternalTurn, crossing: dest.aboveCompactHard()}
+		req := &compactRequest{resume: again, internal: dest.compactInternalTurn, crossing: dest.aboveCompactHard(), lead: lead}
 		dest.compactPending = req
 		dest.publishCompaction(false)
 		out = CompactResult{"queued", "native compaction waits for the idle boundary"}
@@ -378,6 +393,13 @@ func (c *conv) compactIdle() bool {
 		}
 	}
 	if req := c.compactPending; req != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			release, err := c.r.admitDurableTransition()
+			if err != nil {
+				return true
+			}
+			defer release()
+		}
 		if c.proc == nil {
 			c.compactPending = nil
 			c.setStatus(func() { c.lastErr = "compaction requires a running harness" })
@@ -393,15 +415,23 @@ func (c *conv) compactIdle() bool {
 		}
 		c.compactOrigin = trigger
 		cmd := wsinbox.Command{Name: "compact"}
-		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
-			cmd.Args = piDaemonAutoCompact
-		}
 		// The compaction starts with its command, behind the last release
 		// check: a refused one leaves no started compaction to unwind.
 		err := c.sendStandalonePrompt(false, func() error {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
-			return c.runCommand(cmd)
+			if req.lead == nil {
+				return c.runCommand(cmd)
+			}
+			p, ok := c.proc.(leadSummaryCompactor)
+			if !ok {
+				return errors.New("lead summary requires a running builtin lead")
+			}
+			err := p.compactWithSummary(req.lead)
+			if err == nil {
+				c.armCompactWatchdog()
+			}
+			return err
 		})
 		if checkout, ok := releasedInput(err); ok {
 			req.err = err
@@ -424,6 +454,9 @@ func (c *conv) compactIdle() bool {
 		return true
 	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			return c.compactDurableContinue()
+		}
 		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
@@ -490,6 +523,10 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		}
 		return
 	}
+	// A durable worker has finished and journaled this turn before the
+	// checkpoint. Automatically compact its next input without extending
+	// the finished turn. An explicit resume request still opens new input.
+	resume = resume && (c.rec.Lead || !c.r.durableProcess(c.rec.Backend))
 	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
 	c.publishCompaction(false)
 }
@@ -499,12 +536,6 @@ func (c *conv) compactionStateInstruction() string {
 		return "Put the state needed to resume in your report."
 	}
 	return "Save the state needed to resume in your agenda."
-}
-
-// bridgedLeadCompaction reports whether this lead's backend compacts through
-// its extension bridge (leadCompactionBridge) rather than the daemon's command.
-func (c *conv) bridgedLeadCompaction() bool {
-	return c.r.bridgedLeadCompaction(c.record())
 }
 
 func (c *conv) canSteerCompaction() bool {
@@ -530,21 +561,17 @@ func (c *conv) steerCompaction(boundary bool) {
 	var text string
 	if c.compactHardSteered {
 		text = fmt.Sprintf("Hard %s, +%.0f%% (%s). End your turn for auto-compaction and continuation.", compactTokenCount(hard), (c.compactTokens/hard-1)*100, compactTokenCount(c.compactTokens))
-		if c.bridgedLeadCompaction() {
-			text += " " + piCompactPreparation
-		}
 	} else {
 		text = fmt.Sprintf("Context usage is %s and has reached the hard point of %s. %s Wrap up the current step and end your turn so compaction can run and work can continue.", compactTokenCount(c.compactTokens), compactTokenCount(hard), c.compactionStateInstruction())
-		if c.bridgedLeadCompaction() {
-			text += " You can call ws-compact with your carry-forward details at a safe boundary.\n" + piCompactPreparation
-		}
 	}
 	var id string
 	var err error
 	// canSteerCompaction's release check is a snapshot; the steer is
 	// admitted against it once more, and a refused one is dropped quietly.
 	if checkout := c.admitInput(func() {
-		if advisory, ok := st.(interface{ steerCompaction(string) (string, error) }); ok {
+		if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
+			err = p.submitSteer(c.rec.DurableTurn.ID, durableSteer{ID: newReportID(), Text: text})
+		} else if advisory, ok := st.(interface{ steerCompaction(string) (string, error) }); ok {
 			id, err = advisory.steerCompaction(text)
 		} else {
 			err = st.Steer(text)
@@ -565,33 +592,6 @@ func (c *conv) steerCompaction(boundary bool) {
 }
 
 func (c *conv) compactSteerAnswered(reply compactSteerReply) {
-	if reply.piNumeric {
-		p, ok := c.proc.(*piProcess)
-		if !ok {
-			return
-		}
-		steer := p.takeCompactSteer(reply.id)
-		if steer.id == "" {
-			return
-		}
-		reply.id = steer.id
-		if reply.refusal != "" && c.canSteerCompaction() && c.aboveCompactHard() {
-			fmt.Fprintf(c.r.opts.Log, "agent %s: Pi refused the numeric compaction steer ID (%s). Retrying once with a string ID.\n", c.rec.ReplyID, reply.refusal)
-			var id string
-			var err error
-			if checkout := c.admitInput(func() { id, err = p.fallbackCompactSteer(steer.text) }); checkout != "" {
-				c.dropReleasedInput("compaction guidance retry", checkout)
-				return
-			}
-			if err == nil {
-				if c.compactHardSteerID == reply.id {
-					c.compactHardSteerID = id
-				}
-				return
-			}
-			reply.refusal = err.Error()
-		}
-	}
 	if reply.id == c.compactHardSteerID {
 		c.compactHardSteerID = ""
 		c.compactHardSteered = reply.refusal == ""
@@ -603,9 +603,6 @@ func (c *conv) compactSteerAnswered(reply compactSteerReply) {
 
 func (c *conv) clearCompactionSteerReplies() {
 	c.compactHardSteerID = ""
-	if p, ok := c.proc.(*piProcess); ok {
-		p.compactSteers = nil
-	}
 }
 
 func compactTokenCount(tokens float64) string {
@@ -636,7 +633,8 @@ func (c *conv) stageCompactionNudge(hard float64) {
 		c.compactNudge = compactionNudge{}
 		return
 	}
-	standalone := c.compactUnsupported() == ""
+	supported := c.compactUnsupported() == ""
+	standalone := supported && !c.r.durableProcess(c.rec.Backend)
 	usage := fmt.Sprintf("Context usage is %.0f tokens (%.0f%%); ", c.compactTokens, c.compactTokens/c.compactWindow*100)
 	if c.compactAdvised {
 		usage += fmt.Sprintf("compaction reminder %d/3 (%.0f tokens, hard point %.0f tokens). ", level-1, point, hard)
@@ -645,12 +643,9 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	}
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
-	case c.bridgedLeadCompaction():
-		if !c.compactAdvised && !math.IsInf(hard, 0) {
-			usage += fmt.Sprintf("The hard point is %.0f tokens (%.0f%%). ", hard, hard/c.compactWindow*100)
-		}
-		action = "At a safe boundary, call ws-compact with the carry-forward details requested by the tool.\n" + piCompactPreparation
-	case standalone:
+	case supported && c.rec.Lead && c.r.durableProcess(c.rec.Backend):
+		action = "Write durable state to your agenda, then call ws/compact with the carry-forward fields in lead_summary at a safe boundary."
+	case supported:
 		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
 	}
 	c.compactNudge = compactionNudge{usage + action, level, standalone}

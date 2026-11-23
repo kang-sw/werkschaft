@@ -435,7 +435,7 @@ var suiteBackend = BackendClaude
 
 func otherBackend() string {
 	if suiteBackend == BackendClaude {
-		return BackendPi
+		return BackendCodex
 	}
 	return BackendClaude
 }

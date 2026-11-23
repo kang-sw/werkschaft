@@ -404,7 +404,6 @@ check("a forced delete sends the token", R.deleteBody("/w/r", "/w/feat-x", dirty
 check("defaults send the harness alone", R.leadBody("/w/r", { harness: "claude", model: "", effort: "", mode: "" }), { root: "/w/r", harness: "claude", plugin_isolation: "default" });
 check("picked options", R.leadBody("/w/r", { harness: "claude", model: "opus", effort: "high", mode: "plan" }),
   { root: "/w/r", harness: "claude", plugin_isolation: "default", model: "opus", effort: "high", permission_mode: "plan" });
-check("pi takes no permission mode", R.leadBody("/w/r", { harness: "pi", model: "m", effort: "off", mode: "auto" }), { root: "/w/r", harness: "pi", plugin_isolation: "default", model: "m", effort: "off" });
 
 check("isolation is always sent", [R.leadBody("/w/r", { harness: "pi", isolation: "isolated" }).plugin_isolation, R.leadBody("/w/r", { harness: "pi" }).plugin_isolation], ["isolated", "default"]);
 // A common permission level replaces the native mode (the selection route

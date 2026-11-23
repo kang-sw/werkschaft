@@ -1,7 +1,6 @@
 package wsagent
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -62,109 +61,6 @@ func TestCompactionHardSteersAtParallelBoundariesUntilRequest(t *testing.T) {
 	got = h.userInputs(holder)
 	if len(got) != 5 || !strings.Contains(got[4], "Context was compacted") || !strings.Contains(got[4], "Continue the work") {
 		t.Fatalf("request continuation = %q", got)
-	}
-}
-
-func TestCompactionPiAcceptedLeverTakesIdleBoundary(t *testing.T) {
-	for _, failed := range []bool{false, true} {
-		m := newPiMapper(StartSpec{Lead: &LeadSpec{}})
-		r := nopReplies{}
-		m.mapLine([]byte(`{"type":"agent_start"}`), r)
-		result := `{"type":"tool_execution_end","toolName":"ws-compact","isError":false}`
-		if failed {
-			result = strings.ReplaceAll(result, "false", "true")
-		}
-		m.mapLine([]byte(result), r)
-		got := m.mapLine([]byte(`{"type":"agent_settled","aborted":true}`), r)
-		if len(got) != 1 || !got[0].TurnEnd || got[0].CompactRequested == failed {
-			t.Fatalf("failed=%v, turn end = %+v", failed, got)
-		}
-	}
-}
-
-func TestCompactionSteerRepliesDoNotAcknowledgeWorkerReports(t *testing.T) {
-	const piReply = `{"type":"response","command":"steer","id":-4503599627370496,"success":true}`
-	// The base runner only decodes piLine. Its decoder must discard this
-	// private reply before its worker report acknowledgement path.
-	var base piLine
-	if err := json.Unmarshal([]byte(piReply), &base); err == nil {
-		t.Fatal("base Pi wire shape accepted the compaction-only acknowledgement")
-	}
-	codex := newCodexMapper("sid")
-	codex.worker = true
-	for _, tc := range []struct {
-		name             string
-		m                lineMapper
-		guidance, report string
-	}{
-		{"Pi", newPiMapper(StartSpec{}), piReply, `{"type":"response","command":"steer","success":true}`},
-		{"Codex", codex, `{"id":"wsc/compactSteer/e/1","result":{}}`, `{"id":"wsc/control/e/2","result":{}}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := nopReplies{}
-			if got := tc.m.mapLine([]byte(tc.guidance), r); len(got) != 1 || got[0].compactSteerReply == nil || got[0].SteerAnswer != nil {
-				t.Fatalf("guidance was treated as a report answer: %+v", got)
-			}
-			if got := tc.m.mapLine([]byte(tc.report), r); len(got) != 1 || got[0].SteerAnswer == nil {
-				t.Fatalf("worker report answer = %+v", got)
-			}
-		})
-	}
-	m := newAgyMapper("sid")
-	m.promptSentText("ws-p-e-1", "work")
-	m.promptSentText("ws-p-e-2", "")
-	m.promptSentText("ws-p-e-3", "report")
-	r := nopReplies{}
-	if got := m.mapLine([]byte(`{"jsonrpc":"2.0","id":"ws-p-e-1","result":{"stopReason":"end_turn"}}`), r); len(got) != 0 {
-		t.Fatalf("agy guidance was treated as a report answer: %+v", got)
-	}
-	got := m.mapLine([]byte(`{"jsonrpc":"2.0","id":"ws-p-e-2","result":{"stopReason":"end_turn"}}`), r)
-	if len(got) != 2 || got[0].SteerAnswer == nil || got[1].UserTaken != "report" {
-		t.Fatalf("agy worker report answer = %+v", got)
-	}
-}
-
-func TestCompactionPiNumericSteerFallsBackOnce(t *testing.T) {
-	for _, command := range []string{"steer", "parse"} {
-		t.Run(command, func(t *testing.T) {
-			h, _ := newFakePiRecoveryHarness(t)
-			id := h.lead(BackendPi, LeadOptions{}).ID
-			h.send(id, "work")
-			holder := h.holder(id)
-			c := h.runner.conv(id)
-			c.do(func() { c.handle(compactionUsage(90_000)) })
-			inputs := h.holders.inputs(holder, "steer")
-			if len(inputs) != 1 {
-				t.Fatalf("initial hard steer = %q", inputs)
-			}
-			var first struct {
-				ID      int64
-				Message string
-			}
-			if err := json.Unmarshal([]byte(inputs[0]), &first); err != nil || first.ID > -piCompactSteerIDBase {
-				t.Fatalf("initial hard steer lacks reserved numeric ID: %q", inputs[0])
-			}
-			reply := map[string]any{"type": "response", "command": command, "success": false, "error": "ID must be a string"}
-			if command == "steer" {
-				reply["id"] = first.ID
-			}
-			h.holders.out(holder, jsonLine(reply), jsonLine(reply))
-			eventually(t, "fallback steer", func() bool { return len(h.holders.inputs(holder, "steer")) >= 2 })
-			var fallback struct{ ID, Message string }
-			if err := json.Unmarshal([]byte(h.holders.inputs(holder, "steer")[1]), &fallback); err != nil || !strings.HasPrefix(fallback.ID, piCompactSteerID) || fallback.Message != first.Message {
-				t.Fatalf("fallback did not resend the guidance with a string ID: %+v, %v", fallback, err)
-			}
-			reply["id"], reply["command"] = fallback.ID, "steer"
-			h.holders.out(holder, jsonLine(reply))
-			eventually(t, "fallback refusal consumed", func() bool {
-				var cleared bool
-				c.do(func() { cleared = c.compactHardSteerID == "" })
-				return cleared
-			})
-			if got := h.holders.inputs(holder, "steer"); len(got) != 2 {
-				t.Fatalf("more than one fallback was sent: %q", got)
-			}
-		})
 	}
 }
 
@@ -289,61 +185,6 @@ func TestCompactionHardSteerWorkerRoles(t *testing.T) {
 			}
 			if len(p.steers) != 2 || !strings.Contains(p.steers[0], "in your report") || strings.Contains(p.steers[0], "agenda") {
 				t.Fatalf("read-only guidance = %q", p.steers)
-			}
-		})
-	}
-}
-
-func TestCompactionPiAdvisoryUsesCurrentThresholdsAndLever(t *testing.T) {
-	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendPi: {Backend: PiBackend{}, NativeCompaction: PiCompaction()}}})
-	c := &conv{r: r, rec: Record{Backend: BackendPi, Lead: true}, compactLoaded: true, compactAdvisoryEnabled: true}
-	c.compactAdvisory = wsconfig.Threshold{Percent: 50, Tokens: 200_000}
-	c.compactHard = wsconfig.Threshold{Percent: 80, Tokens: 350_000}
-	c.compactTokens, c.compactWindow = 230_000, 1_000_000
-	c.stageCompactionNudge(c.compactHard.Point(c.compactWindow))
-	text := c.compactNudge.text
-	for _, want := range []string{"advisory point 200000", "hard point is 350000", "call ws-compact", piCompactPreparation} {
-		if !strings.Contains(strings.ToLower(text), want) {
-			t.Fatalf("missing %q from Pi advisory %q", want, text)
-		}
-	}
-	c.rec.PluginWarning = piExtensionFallbackMarker
-	c.stageCompactionNudge(c.compactHard.Point(c.compactWindow))
-	if text := c.compactNudge.text; !strings.Contains(text, "call ws/compact") || strings.Contains(text, piCompactPreparation) {
-		t.Fatalf("MCP-only Pi advisory = %q", text)
-	}
-}
-
-func TestCompactionPiDaemonFallbackChecksBundleCapability(t *testing.T) {
-	for _, tc := range []struct {
-		name, instruction string
-	}{
-		{"legacy", ""},
-		{"capable", "<!-- ws-pi-daemon-auto-compact -->"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newFakePiRecoveryHarness(t)
-			reg := h.runner.opts.Backends[BackendPi]
-			reg.NativeCompaction = PiCompaction()
-			h.runner.opts.Backends[BackendPi] = reg
-			id := h.lead(BackendPi, LeadOptions{}).ID
-			h.send(id, "work")
-			holder := h.holder(id)
-			h.holders.out(holder, `{"type":"agent_start"}`)
-			if tc.instruction != "" {
-				const status = `{"kind":"status","background":0,"monitors":0,"capabilities":["pi_compaction_preparation_v1"]}`
-				h.holders.out(holder, jsonLine(map[string]any{"type": "extension_ui_request", "method": "setWidget", "widgetKey": piEventsWidgetKey, "widgetLines": []string{status}}))
-			}
-			h.holders.out(holder,
-				`{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":90000,"contextWindow":100000}}}`,
-				`{"type":"agent_settled"}`,
-			)
-			eventually(t, "one Pi fallback command", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
-			var command struct {
-				Instructions string `json:"customInstructions"`
-			}
-			if err := json.Unmarshal([]byte(h.holders.inputs(holder, "compact")[0]), &command); err != nil || command.Instructions != tc.instruction {
-				t.Fatalf("Pi fallback command = %+v, err %v", command, err)
 			}
 		})
 	}

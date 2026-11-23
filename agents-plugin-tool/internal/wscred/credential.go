@@ -64,9 +64,11 @@ type Credential struct {
 // to the user's own agent sessions; an API-key provider ignores them.
 type Request struct {
 	Provider ProviderID
+	// BaseURL must match the configured API root for a local endpoint.
+	BaseURL string
 	// AgentSession marks a request from an agent harness running a session
-	// for the signed-in user. Only the daemon's token route sets it, from
-	// the session's own registration, never from what the caller claims.
+	// for the signed-in user. The daemon derives it from its in-process
+	// session or the authenticated registration on the token route.
 	AgentSession bool
 	// Background marks that session as one the user does not drive
 	// directly (a worker), which a restricted provider admits only with
@@ -78,8 +80,8 @@ type Request struct {
 // daemon, a RouteClient in a harness process.
 type Source interface {
 	// Credential returns req.Provider's current credential, or an error
-	// matching ErrUnknownProvider, ErrNotConfigured, ErrConsentRequired, or
-	// (from a RouteClient) ErrNotPermitted or ErrUnauthorized.
+	// matching ErrUnknownProvider, ErrNotConfigured, ErrConsentRequired,
+	// ErrOpenAIPlanDisabled, ErrNotPermitted, or (from a RouteClient) ErrUnauthorized.
 	Credential(ctx context.Context, req Request) (Credential, error)
 }
 
@@ -89,6 +91,8 @@ var (
 	ErrUnknownProvider = errors.New("unknown provider")
 	ErrNotConfigured   = errors.New("provider credential not configured")
 	ErrConsentRequired = errors.New("provider credential needs the user's consent for background use")
+	// ErrOpenAIPlanDisabled means sign-in succeeded without plan permission.
+	ErrOpenAIPlanDisabled = errors.New("ChatGPT plan usage is disabled; enable it with \"credential sign-in openai --enable-plan\"")
 	// ErrNotPermitted is the token route's refusal of a session whose
 	// harness may not obtain provider credentials.
 	ErrNotPermitted = errors.New("this session may not obtain provider credentials")
@@ -106,6 +110,8 @@ type ProviderError struct {
 
 func (e *ProviderError) Error() string {
 	switch {
+	case e.Provider == ProviderOpenAI && errors.Is(e.Err, ErrNotConfigured):
+		return "OpenAI needs sign-in; run \"credential sign-in openai\""
 	case errors.Is(e.Err, ErrNotConfigured):
 		return fmt.Sprintf("provider %q has no credential configured; set it with the CLI command \"credential set %s\"", e.Provider, e.Provider)
 	case errors.Is(e.Err, ErrConsentRequired):

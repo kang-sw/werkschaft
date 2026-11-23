@@ -12,6 +12,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // KeyStore mints and keeps the ws session key of each conversation. The
@@ -118,6 +119,9 @@ var mailboxIdentityEnv = []string{"WS_MAILBOX", "WS_MAILBOX_AUTO"}
 
 // Options configures a Runner.
 type Options struct {
+	// LoadProviderConfig refreshes the daemon's in-memory provider settings.
+	// It runs before session recovery and after a global configuration change.
+	LoadProviderConfig func(wsconfig.Options) error
 	// DaemonVersion bounds hosted package registry roots to this daemon's minor.
 	DaemonVersion string
 	// Dir is the dashboard daemon's state directory; conversations live in
@@ -144,6 +148,9 @@ type Options struct {
 	// WSMCP is the stdio ws-mcp command serving root, without the runner's
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)
+	// DaemonMCP provides hosted-package MCP environment without a launcher.
+	// Tests or standalone callers may supply the environment through WSMCP.
+	DaemonMCP func(root string) (MCPCommand, error)
 	// LeadManual renders the workflow manual of a hosted lead for its lead
 	// key, from the selected package: backend is the lead's harness, dir
 	// its working directory. LeadSessionState supplies the mutable state.
@@ -234,15 +241,6 @@ type Options struct {
 	// LiveHost is the daemon's in-memory snapshot hand-off. The daemon sets
 	// it before Start; nil keeps the legacy file-only projection.
 	LiveHost wsdashboard.LiveHost
-	// ChildCheck, when not nil, is asked before each call of the token
-	// route (children.go): an error refuses the call with its text (no
-	// usable Pi, say).
-	ChildCheck func() error
-	// ChildCheckKnown, when not nil, is ChildCheck's answer without running
-	// a probe: known is false while the answer would need one (a Pi
-	// version not yet probed). HarnessAvailability asks it, never
-	// ChildCheck.
-	ChildCheckKnown func() (known bool, err error)
 	// TierRoles, when not nil, lists the packaged playbook role nodes of
 	// the agent.tier_routing graph agent.spawn and agent.tiers resolve
 	// through. Nil leaves only the built-in groups and user nodes.
@@ -271,12 +269,24 @@ type Options struct {
 	closedSnapshotRead func(string)
 	// sendAdmitting observes the revival admission fence in tests.
 	sendAdmitting func(string)
+	// beforeDurableWrite injects a failed private record write in tests.
+	beforeDurableWrite func(Record) error
+	// suppressReportDelivery simulates loss after settlement commits in tests.
+	suppressReportDelivery func(Record) bool
 }
 
 // Runner hosts the agent conversations of one dashboard daemon.
 type Runner struct {
 	opts   Options
 	notify func(replyID, project string)
+	// Opened during daemon startup under the dashboard lock, then held
+	// until all conversations have drained.
+	durableRecords     *wsmeta.Store
+	durableProjections sync.Map // reply-id -> last published projection digest
+	// Full Quit refuses durable starts and input before draining transitions
+	// that already hold admission.
+	durableStopping    atomic.Bool
+	durableAdmissionMu sync.RWMutex
 	// fixedProfile belongs only to a private one-shot answer runner. Freeze
 	// the checked ceiling so config edits cannot widen it between create
 	// and process start. Ordinary conversations still resolve on every start.

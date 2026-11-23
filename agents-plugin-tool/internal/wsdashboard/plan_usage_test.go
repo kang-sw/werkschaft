@@ -303,17 +303,17 @@ func TestPlanUsageDetection(t *testing.T) {
 		}
 		return ""
 	}
-	if c, x, p := s.detect(); c != "" || x || p {
+	if c, x := s.detect(); c != "" || x {
 		t.Fatal("empty tree detected login")
 	}
 	usageWrite(t, filepath.Join(claude, ".credentials.json"), `{"claudeAiOauth":{"subscriptionType":"max","accessToken":"FAKE-DO-NOT-REPORT"}}`)
 	usageWrite(t, filepath.Join(codex, "auth.json"), `{"auth_mode":"apikey","OPENAI_API_KEY":"FAKE-DO-NOT-REPORT"}`)
 	usageWrite(t, filepath.Join(s.home, ".pi", "agent", "auth.json"), `{"openai-codex":{"type":"oauth","access":"FAKE-DO-NOT-REPORT"}}`)
-	if c, x, p := s.detect(); c != "max" || x || !p {
+	if c, x := s.detect(); c != "max" || x {
 		t.Fatal("override/API-key/Pi detection mismatch")
 	}
 	usageWrite(t, filepath.Join(codex, "auth.json"), `{"auth_mode":"chatgpt","tokens":{}}`)
-	if _, x, _ := s.detect(); !x {
+	if _, x := s.detect(); !x {
 		t.Fatal("ChatGPT login absent")
 	}
 	b, _ := json.Marshal(s.entries())

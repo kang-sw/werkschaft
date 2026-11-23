@@ -83,7 +83,9 @@ func (r *Runner) StartForPublication(notify func(replyID, project string), servi
 	}()
 }
 
+// Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
 func (r *Runner) start(notify func(replyID, project string)) {
+	r.reloadProviderConfig()
 	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()
@@ -92,6 +94,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 	if notify != nil {
 		r.notify = notify
 	}
+	private := r.openDurableAgentRecords()
 	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
 	var all, open []Record
 	for _, e := range entries {
@@ -99,6 +102,11 @@ func (r *Runner) start(notify func(replyID, project string)) {
 			continue
 		}
 		dir := wsdashboard.SessionDir(r.opts.Dir, e.Name())
+		if rec, ok := private[e.Name()]; ok {
+			r.restoreDurableProjection(dir, rec)
+			all = append(all, rec)
+			continue
+		}
 		rec, err := readRecord(dir)
 		if err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
@@ -106,12 +114,28 @@ func (r *Runner) start(notify func(replyID, project string)) {
 			}
 			continue
 		}
+		// The history projection is never an input to the durable scheduler.
+		if r.durableProcess(rec.Backend) {
+			rec = durableHistoryProjection(rec)
+		}
 		all = append(all, rec)
 	}
 	// From the full set, before any record is loaded or rejoined, so a
 	// child read before its parent is admitted from that parent.
 	r.resolveSpawnerBackends(all)
+	retiredPiHolders := map[string]bool{}
 	for _, rec := range all {
+		if rec.Backend == BackendPi {
+			if rec.HolderID != "" {
+				retiredPiHolders[rec.HolderID] = true
+			}
+			if rec.ClosedAt == "" && !rec.handedOff() && r.closeAtStart(rec) {
+				continue
+			}
+			// Even if the record could not be written, never rejoin a Pi process.
+			r.loadClosed(rec)
+			continue
+		}
 		if rec.ClosedAt != "" || rec.handedOff() {
 			// A handed-off session is a terminal harness's: nothing here
 			// writes its row, watches its mail, or starts a process for it.
@@ -130,6 +154,9 @@ func (r *Runner) start(notify func(replyID, project string)) {
 			fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
 			continue
 		}
+		if rec, ok := private[id]; ok {
+			r.deleteDurableRecord(rec)
+		}
 		gone[id] = true
 	}
 	open = slices.DeleteFunc(open, func(rec Record) bool { return gone[rec.ReplyID] })
@@ -147,6 +174,11 @@ func (r *Runner) start(notify func(replyID, project string)) {
 	close(startupLoaded)
 	for _, c := range startup {
 		c.do(func() {
+			if r.durableProcess(c.rec.Backend) {
+				c.kick()
+				c.releaseHeld()
+				return
+			}
 			// Re-run only startup work whose earlier signal may have been
 			// consumed by the all-records-loaded barrier. A held inbox send on
 			// a processless conversation remains lazy until a new wake, as it
@@ -161,7 +193,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		c.do(func() {
 			// Release a persisted HeldTurn whose background work ended
 			// with the previous daemon (open children still hold it).
-			if c.rec.Parent != nil && c.rec.HolderID == "" {
+			if c.rec.Parent != nil && c.rec.HolderID == "" && !r.durableProcess(c.rec.Backend) {
 				c.releaseHeld()
 			}
 			c.spawnDirty = true
@@ -182,7 +214,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		defer r.wg.Done()
 		r.opts.Holders.Scan()
 		r.markScanned()
-		r.holdersScanned()
+		r.holdersScanned(retiredPiHolders)
 		r.finishMCPRejoin()
 	}()
 }
@@ -258,7 +290,7 @@ func (r *Runner) closeAtStart(rec Record) bool {
 	// An orphan's cut-off turn ends here, as close ends a running one.
 	finishActiveTurn(&rec, now.UnixMilli())
 	rec.TurnOpen = false
-	if err := writeRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
+	if err := r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 		return false
 	}
@@ -286,9 +318,10 @@ func (r *Runner) orphansAtStart(open []Record) map[string]bool {
 		for _, rec := range open {
 			id := rec.ReplyID
 			// Legacy direct non-Pi children keep their existing next-launch
-			// admission refusal when a parent disappears. Held workers of
-			// every backend use the former Pi orphan cleanup.
-			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && rec.HolderID == "") {
+			// admission refusal when a parent disappears. Held and durable
+			// workers end during startup when their conversation parent is gone.
+			recoverable := rec.HolderID != "" || r.durableProcess(rec.Backend)
+			if done[id] || rec.Lead || rec.Parent == nil || !recoverable {
 				continue
 			}
 			if rec.Parent.Kind == ParentConversation && !stays(rec.Parent.ReplyID) {
@@ -309,7 +342,8 @@ func (r *Runner) markScanned() {
 // gone), and a lead holder no conversation runs under is ended, so no
 // second process of a session stays behind a crash between a spawn and its
 // record.
-func (r *Runner) holdersScanned() {
+// Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
+func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 	// Listed before the conversations are taken and asked: a conversation
 	// opened after the listing launched no holder in it, and a holder a
 	// start launched meanwhile is in its record by the time the
@@ -351,7 +385,18 @@ func (r *Runner) holdersScanned() {
 	}
 	for _, info := range listed {
 		var meta holderSession
-		if json.Unmarshal(info.Session, &meta) != nil || (meta.Kind != holderKindLead && meta.Kind != holderKindPiWorker && meta.Kind != holderKindAgentWorker) || owned[info.ID] || r.holders.isRejected(info.ID) {
+		if json.Unmarshal(info.Session, &meta) != nil || retiredPiHolders[info.ID] ||
+			meta.Kind == holderKindPiWorker || meta.Backend == BackendPi {
+			// Pi history is closed, but its holders retain ownership of their processes.
+			continue
+		}
+		// Older lead descriptors recorded only the profile name. A custom
+		// profile could have launched Pi, and current config cannot establish
+		// the backend that originally launched an orphaned holder.
+		if meta.Kind == holderKindLead && meta.Backend == "" {
+			continue
+		}
+		if (meta.Kind != holderKindLead && meta.Kind != holderKindAgentWorker) || owned[info.ID] || r.holders.isRejected(info.ID) {
 			continue
 		}
 		fmt.Fprintf(r.opts.Log, "agent: ending conversation holder %s of %s: no open conversation runs under it\n", info.ID, meta.ReplyID)

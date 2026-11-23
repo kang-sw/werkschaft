@@ -4,30 +4,20 @@ import (
 	"testing"
 )
 
-// testProviderHarness is a test-only backend whose registration admits
-// provider credentials, as the builtin harness's will.
+// testProviderHarness exercises the credential route's registration gate.
 const testProviderHarness = "test-provider-harness"
 
-// TestNoCurrentBackendAdmitsProviderCredentials: none of the harnesses ws
-// hosts today may obtain provider credentials; each brings its own login.
-func TestNoCurrentBackendAdmitsProviderCredentials(t *testing.T) {
-	regs := BuiltinBackendRegistrations()
-	if len(regs) == 0 {
-		t.Fatal("no builtin registrations")
-	}
-	for name, reg := range regs {
+func TestBuiltinHarnessesDoNotExposeProviderCredentialsOverMCP(t *testing.T) {
+	for name, reg := range BuiltinBackendRegistrations() {
 		if reg.ProviderCredentials {
-			t.Errorf("backend %s admits provider credentials", name)
+			t.Errorf("backend %s exposes provider credentials through the token route", name)
 		}
 	}
 }
 
-// TestCredentialTokenFollowsTheRegistrationCapability: the token route
-// admits a session only when its backend registration sets
-// ProviderCredentials: every current backend is refused, a test-only
-// registration that sets it is admitted, and an unknown or voided token
-// resolves to nothing. Resolving for credentials is not the harness
-// reaching ws-mcp.
+// TestCredentialTokenFollowsTheRegistrationCapability checks that an
+// explicit registration can use the route, while revoked or unknown
+// tokens are refused. Credential resolution leaves MCP unconnected.
 func TestCredentialTokenFollowsTheRegistrationCapability(t *testing.T) {
 	shortStartWait(t)
 	h := newHarness(t, map[string]string{"chat": chatProfile})

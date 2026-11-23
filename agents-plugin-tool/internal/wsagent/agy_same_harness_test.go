@@ -39,7 +39,7 @@ func TestShippedAgyRegistrationAdmitsSameHarnessWorkersOnly(t *testing.T) {
 	if !reg.WorkerCapable || reg.WorkerProfile != AgentWorkerProfile(BackendAgy) || reg.crossHarnessRefusal != wantAgyCrossHarnessRefusal || reg.LeadProfile != LeadProfileAgy {
 		t.Fatalf("agy registration: worker %v %q, refusal %q, lead %q", reg.WorkerCapable, reg.WorkerProfile, reg.crossHarnessRefusal, reg.LeadProfile)
 	}
-	for _, name := range []string{BackendClaude, BackendCodex, BackendPi} {
+	for _, name := range []string{BackendClaude, BackendCodex} {
 		if other := BuiltinBackendRegistrations()[name]; !other.WorkerCapable || other.crossHarnessRefusal != "" {
 			t.Errorf("%s: worker %v, refusal %q", name, other.WorkerCapable, other.crossHarnessRefusal)
 		}

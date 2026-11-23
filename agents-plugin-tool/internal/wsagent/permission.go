@@ -165,6 +165,10 @@ func appendDiagnostic(existing, diagnostic string) string {
 	return existing + "; " + diagnostic
 }
 
+// legacyPiWorkerTools preserves permission diagnostics for stored allowlists.
+// Retained name check: legacy tool names in stored profiles (TestRetiredPiProfileRemainsReadable).
+var legacyPiWorkerTools = []string{"pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait"}
+
 // A worker projection is used only for the diagnostic. Unknown surfaces remain
 // unresolved and never become an authority ceiling or applied selection.
 func legacyWorkerPermission(def Profile) PermissionLevel {
@@ -187,7 +191,7 @@ func legacyWorkerPermission(def Profile) PermissionLevel {
 		// and it runs at read-only authority: it cannot raise the level.
 		case "git.status", "git.diff", "git.log", "git.merge_base", "compact":
 		default:
-			if slices.Contains(PiWorkerWSTools, tool) || slices.Contains(PiMiniLeadWSTools, tool) {
+			if slices.Contains(workerWorkflowTools, tool) || slices.Contains(legacyPiWorkerTools, tool) {
 				mutable = true
 				continue
 			}
@@ -283,9 +287,11 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 		return err
 	}
 	if rec.Lead {
+		c.dirtyPermission = c.r.durableProcess(rec.Backend)
 		if mode := c.r.permissionPolicy(rec.Backend).nativeMode(level); mode != "" {
 			c.update(func(rec *Record) { rec.PermissionMode = mode })
 			c.dirtyMode, c.reconcileMode = true, false
+			c.applyLiveLeadMode(mode)
 		}
 	} else {
 		c.dirtyPermission = true
@@ -297,7 +303,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 	if !c.turn {
 		c.applySettings()
 	}
-	c.permissionNudge(level, !rec.Lead, "")
+	c.permissionNudge(level, !rec.Lead, c.activeMode)
 	c.recheckExecApprovals()
 	return nil
 }
@@ -342,6 +348,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 	if mode != rec.selectedPermissionMode() {
 		c.update(func(rec *Record) { rec.selectPermissionMode(mode) })
 		c.dirtyMode, c.reconcileMode = true, false
+		c.applyLiveLeadMode(mode)
 		if !c.turn {
 			c.applySettings()
 		}
@@ -350,6 +357,22 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 		c.recheckExecApprovals()
 	}
 	return nil
+}
+
+// liveLeadMode is a mode control that applies synchronously before the next
+// tool, even while its turn is active.
+type liveLeadMode interface {
+	modeSetter
+	activePermissionMode() string
+}
+
+func (c *conv) applyLiveLeadMode(mode string) {
+	proc, ok := c.proc.(liveLeadMode)
+	if !ok || c.replaying || proc.SetPermissionMode(mode) != nil {
+		return
+	}
+	c.dirtyPermission, c.dirtyMode, c.reconcileMode = false, false, false
+	c.setStatus(func() { c.activeMode = proc.activePermissionMode() })
 }
 
 // A holder attach ignores launch flags. After replay, reconstruct delivery from

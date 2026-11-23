@@ -160,6 +160,12 @@ type fakeHolders struct {
 	// errMsg an error answer; ok false leaves it unanswered. It runs
 	// without the lock held, so it may call into the runner.
 	acp func(id, method string, params json.RawMessage) (result, errMsg string, ok bool)
+	// onSpawn runs after a child spawned and onInput after an input was
+	// written to a child (the input is also recorded as usual), both without
+	// the lock held: a test that runs a child in-process (the werk loop)
+	// starts it from the first and feeds it from the second.
+	onSpawn func(id string, spec wsholder.SpawnSpec)
+	onInput func(id string, data []byte, eof bool)
 }
 
 func newFakeHolders() *fakeHolders {
@@ -337,9 +343,13 @@ func (f *fakeHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.ChildS
 	}
 	h.spec = &spec
 	pid := h.pid
+	onSpawn := f.onSpawn
 	f.mu.Unlock()
 	if err := f.call(id, "spawn"); err != nil {
 		return wsholder.ChildStatus{}, err
+	}
+	if onSpawn != nil {
+		onSpawn(id, spec)
 	}
 	return wsholder.ChildStatus{State: "running", PID: pid, Mode: spec.Mode}, nil
 }
@@ -422,7 +432,11 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 		code := 0
 		f.appendLocked(h, wsholder.Event{Event: "exit", ExitCode: &code})
 	}
+	onInput := f.onInput
 	f.mu.Unlock()
+	if onInput != nil {
+		onInput(id, data, eof)
+	}
 	return f.call(id, "input")
 }
 
@@ -879,6 +893,7 @@ func (b *logBuffer) String() string {
 // fake holder host: nothing is executed, and the test writes the harness's
 // output lines itself.
 type leadHarness struct {
+	endpoint string
 	// execJobs, when set, is bound as the hosted exec jobs of every runner
 	// the harness starts.
 	execJobs ExecJobs
@@ -914,13 +929,6 @@ func newLeadHarness(t *testing.T) *leadHarness {
 	// unwrap), which a missing file fails; the holders are fakes, so
 	// nothing ever runs the command.
 	setLookPath(t, func(file string) (string, error) { return file, nil })
-	// Pi resource discovery belongs to its installed SDK; these fake
-	// commands have no SDK and the fake holder never executes them.
-	restorePi := preparePiLeadLaunch
-	preparePiLeadLaunch = func(command string, pre []string, spec StartSpec) (string, []string, error) {
-		return command, append(pre, piLeadArgs(spec)...), nil
-	}
-	t.Cleanup(func() { preparePiLeadLaunch = restorePi })
 	restore := environ
 	environ = func() []string { return slices.Clone(leadDaemonEnv) }
 	t.Cleanup(func() { environ = restore })
@@ -930,7 +938,7 @@ func newLeadHarness(t *testing.T) *leadHarness {
 		DaemonVersion: hostedPluginTestVersion,
 		Now:           func() time.Time { return now },
 		Dir:           h.dir,
-		Backends:      map[string]BackendRegistration{BackendClaude: {Backend: ClaudeBackend{Command: fakeHarness("claude")}, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendClaude), WorkerHTTPMCP: true}, BackendPi: {Backend: PiBackend{Command: fakeHarness("pi")}, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}},
+		Backends:      map[string]BackendRegistration{BackendClaude: {Backend: ClaudeBackend{Command: fakeHarness("claude")}, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendClaude), WorkerHTTPMCP: true}},
 		Keys:          &fakeKeys{},
 		Config:        testConfig(t),
 		Log:           h.log,
@@ -1021,6 +1029,9 @@ func leadLauncherPlugin(t *testing.T, argv []string) string {
 // daemon start does.
 func (h *leadHarness) start() *leadHarness {
 	h.runner = NewRunner(h.opts)
+	if h.endpoint != "" {
+		h.runner.SetEndpoint(h.endpoint)
+	}
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
 	if h.execJobs != nil {
 		h.runner.BindExecJobs(h.execJobs)
@@ -1283,4 +1294,17 @@ func (h *leadHarness) globalProfile(name, raw string) {
 func isConflict(err error) bool {
 	var re *requestError
 	return errors.As(err, &re) && re.status == 409
+}
+
+type recordedReplies struct {
+	answers []string
+	sent    []map[string]any
+}
+
+func (r *recordedReplies) answer(id string, _ controlAnswer) { r.answers = append(r.answers, id) }
+func (r *recordedReplies) send(v any) {
+	raw, _ := json.Marshal(v)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	r.sent = append(r.sent, m)
 }

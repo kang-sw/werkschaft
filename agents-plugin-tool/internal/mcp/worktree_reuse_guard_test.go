@@ -114,7 +114,7 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, base, leadA, leadB := releaseGuardServer(t)
 			occ := &occupancyFake{}
-			s.pi.worktreeChildren = occ
+			s.worktreeChildren = occ
 			candidate := releasedCandidate(t, s, leadA, base)
 			occ.set(candidate, tc.children...)
 			next := acquireForTest(t, s, 3, leadB, base, "impl/test/next")
@@ -226,7 +226,7 @@ func TestWorktreeAcquireClaimExcludesSpawnAndRelease(t *testing.T) {
 func TestWorktreeReleaseIgnoresBindingsFromBeforeTheLastRelease(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
+	s.worktreeChildren = occ
 	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/stale")
 	stale := []wsagent.BoundWorktreeChild{
 		{Address: "id:stale01", State: wsagent.AgentWaiting, BoundBeforeRelease: true},
@@ -283,7 +283,7 @@ func TestWorktreeReleaseForceIsReservedToTheRootLead(t *testing.T) {
 func TestWorktreeForcedReleaseCancelsEarlierTurnsAndReportsOutcomes(t *testing.T) {
 	s, base, leadA, leadB := releaseGuardServer(t)
 	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
+	s.worktreeChildren = occ
 	acq := acquireForTest(t, s, 1, leadB, base, "impl/test/forced")
 	occ.set(acq.Path, wsagent.BoundWorktreeChild{Address: "id:runner01", State: wsagent.AgentRunning, Live: true})
 	occ.outcomes = []wsagent.ReleasedConversation{
@@ -431,7 +431,7 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 func TestWorktreeReleaseFailsAndKeepsTheLeaseWithoutItsBoundary(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
+	s.worktreeChildren = occ
 	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/no-marker")
 	restore := recordWorktreeRelease
 	recordWorktreeRelease = func(string, time.Time) error { return errors.New("disk full") }
@@ -462,7 +462,7 @@ func TestWorktreeReleaseFailsAndKeepsTheLeaseWithoutItsBoundary(t *testing.T) {
 func TestWorktreeReleaseNotifiesAfterTheMarkerUnderTheLock(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
+	s.worktreeChildren = occ
 	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/order")
 	var markerAt time.Time
 	var markerOK, lockHeld, leaseHeld bool
@@ -680,7 +680,7 @@ func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
+	s.worktreeChildren = occ
 	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/lease-stays")
 	restore := removeReleasedWorktreeLease
 	removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
@@ -717,7 +717,7 @@ func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 	// A daemon-side reader that takes no notice: no notice was sent, so the
 	// partial report says no daemon was told (not that one declined it), and
 	// claims the cold-path refusal only of a release-aware daemon.
-	s.pi.worktreeChildren = &fakeWorktreeChildren{}
+	s.worktreeChildren = &fakeWorktreeChildren{}
 	unheard := acquireForTest(t, s, 4, leadA, base, "impl/test/lease-stays-unheard")
 	removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
 	rel = callToolOnce(t, s, 5, "worktree.release", map[string]any{"session_key": leadA, "path": unheard.Path})
@@ -876,7 +876,7 @@ func TestWorktreeReleaseReportsAForwardedNoticeOutcome(t *testing.T) {
 func TestWorktreeReleaseWarnsWhenNoDaemonHearsOfIt(t *testing.T) {
 	s, base, leadA, _ := releaseGuardServer(t)
 	for i, reader := range []WorktreeChildrenReader{&fakeWorktreeChildren{}, nil} {
-		s.pi.worktreeChildren = reader
+		s.worktreeChildren = reader
 		acq := acquireForTest(t, s, 10+2*i, leadA, base, fmt.Sprintf("impl/test/unheard-%d", i))
 		resp := callToolOnce(t, s, 11+2*i, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "format": "json"})
 		if toolIsError(t, resp) {

@@ -190,7 +190,7 @@ func TestForgetClosedReportsPermanentEndOnly(t *testing.T) {
 func TestCronIsNotAChildTool(t *testing.T) {
 	for name, list := range map[string][]string{
 		"ChildSafeWSTools": ChildSafeWSTools, "AgentWSTools": AgentWSTools,
-		"PiMiniLeadWSTools": PiMiniLeadWSTools, "PiWorkerWSTools": PiWorkerWSTools,
+		"workerWorkflowTools": workerWorkflowTools,
 	} {
 		if slices.Contains(list, "cron") {
 			t.Errorf("%s lists cron", name)

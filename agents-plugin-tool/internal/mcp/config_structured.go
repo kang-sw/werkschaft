@@ -77,7 +77,7 @@ func registeredAgentProfileFamily(registries ...map[string]wsagent.BackendRegist
 			if err != nil {
 				return nil, err
 			}
-			return p, wsagent.CheckProfileScope(p, scope)
+			return p, wsagent.CheckProfileScope(p, scope, registries...)
 		},
 		effective: func(resolver *wsconfig.Resolver, name string) (wsconfig.Scope, string, bool, error) {
 			profiles, err := wsagent.ResolveProfiles(resolver, registries...)

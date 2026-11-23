@@ -47,7 +47,8 @@ func TestObservedInternalRowsPersistThroughWatcherReconnectAndLegacyRewrite(t *t
 	child, _ := agents.Spawn(wsagent.SpawnSpec{Root: f.root, Parent: &parent})
 	for i, model := range []string{"physical-A", "physical-B"} {
 		agents.set(child.ID, func(st *wsagent.State) {
-			o := wslive.ModelObservation{ID: model, Model: model, Source: "pi.assistant", At: int64(100 + i)}
+			st.Backend = wsagent.BackendClaude
+			o := wslive.ModelObservation{ID: model, Model: model, Source: "claude.assistant", At: int64(100 + i)}
 			st.Observed = &o
 			st.Observations = append(st.Observations, o)
 		})

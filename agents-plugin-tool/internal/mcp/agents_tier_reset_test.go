@@ -54,30 +54,30 @@ func TestConfigTuneAgentsTierResetAndShadow(t *testing.T) {
 			t.Fatalf("resolve %s: %s, want %s", harness, resp, model)
 		}
 	}
-	if w := tierWarnings(t, write(1, "global", "pi", "global-pi")); len(w) != 0 {
+	if w := tierWarnings(t, write(1, "global", "agy", "global-agy")); len(w) != 0 {
 		t.Fatalf("unshadowed global write warned: %v", w)
 	}
 	write(2, "global", "claude", "global-claude")
-	write(3, "project", "pi", "project-pi")
+	write(3, "project", "agy", "project-agy")
 	write(4, "project", "claude", "project-claude")
-	resolve(5, "pi", "project-pi")
+	resolve(5, "agy", "project-agy")
 	resolve(6, "claude", "project-claude")
-	if w := tierWarnings(t, write(7, "global", "pi", "global-pi-2")); len(w) != 1 || !strings.Contains(w[0].(string), "project scope") {
+	if w := tierWarnings(t, write(7, "global", "agy", "global-agy-2")); len(w) != 1 || !strings.Contains(w[0].(string), "project scope") {
 		t.Fatalf("shadowed global write warnings = %v", w)
 	}
-	if w := tierWarnings(t, reset(8, "project", "pi")); len(w) != 0 {
+	if w := tierWarnings(t, reset(8, "project", "agy")); len(w) != 0 {
 		t.Fatalf("project reset warned: %v", w)
 	}
-	resolve(9, "pi", "global-pi-2")
+	resolve(9, "agy", "global-agy-2")
 	resolve(10, "claude", "project-claude")
-	if w := tierWarnings(t, reset(11, "project", "pi")); len(w) != 1 || !strings.Contains(w[0].(string), "absent") {
+	if w := tierWarnings(t, reset(11, "project", "agy")); len(w) != 1 || !strings.Contains(w[0].(string), "absent") {
 		t.Fatalf("absent reset warnings = %v", w)
 	}
 	if w := tierWarnings(t, reset(12, "global", "claude")); len(w) != 1 || !strings.Contains(w[0].(string), "project scope") {
 		t.Fatalf("shadowed global reset warnings = %v", w)
 	}
 	resolve(13, "claude", "project-claude")
-	if w := tierWarnings(t, reset(14, "global", "pi")); len(w) != 0 {
+	if w := tierWarnings(t, reset(14, "global", "agy")); len(w) != 0 {
 		t.Fatalf("unshadowed global reset warned: %v", w)
 	}
 }
@@ -98,12 +98,12 @@ func TestConfigTuneGlobalTierIgnoresBrokenProjectShadowLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewServer(root, "test")
-	write := tierTune(t, s, 1, map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
-		"value": map[string]any{"tier": "medium", "model": "global-pi"}})
+	write := tierTune(t, s, 1, map[string]any{"key": "agents.tier", "scope": "global", "harness": "agy",
+		"value": map[string]any{"tier": "medium", "model": "global-agy"}})
 	if w := tierWarnings(t, write); len(w) != 1 || !strings.Contains(w[0].(string), "could not check project scope") {
 		t.Fatalf("write should succeed with shadow lookup diagnostic: %v", w)
 	}
-	reset := tierTune(t, s, 2, map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+	reset := tierTune(t, s, 2, map[string]any{"key": "agents.tier", "scope": "global", "harness": "agy",
 		"reset": true, "value": map[string]any{"tier": "medium"}})
 	if w := tierWarnings(t, reset); len(w) != 1 || !strings.Contains(w[0].(string), "could not check project scope") {
 		t.Fatalf("reset should succeed with shadow lookup diagnostic: %v", w)
@@ -131,11 +131,11 @@ func TestConfigTuneAgentsTierResetValidationAndFallbackWarning(t *testing.T) {
 	}
 	tierTune(t, s, 11, map[string]any{"key": "agents.tier", "scope": "project", "harness": "default",
 		"value": map[string]any{"tier": "medium", "model": "project-default"}})
-	if w := tierWarnings(t, tierTune(t, s, 12, map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
-		"value": map[string]any{"tier": "medium", "model": "global-pi"}})); len(w) != 0 {
+	if w := tierWarnings(t, tierTune(t, s, 12, map[string]any{"key": "agents.tier", "scope": "global", "harness": "agy",
+		"value": map[string]any{"tier": "medium", "model": "global-agy"}})); len(w) != 0 {
 		t.Fatalf("harness fallback counted as shadow: %v", w)
 	}
-	if w := tierWarnings(t, tierTune(t, s, 13, map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+	if w := tierWarnings(t, tierTune(t, s, 13, map[string]any{"key": "agents.tier", "scope": "global", "harness": "agy",
 		"reset": true, "value": map[string]any{"tier": "medium"}})); len(w) != 0 {
 		t.Fatalf("harness fallback counted as reset shadow: %v", w)
 	}
@@ -194,5 +194,53 @@ func TestConfigCatalogAgentsTierResetWriter(t *testing.T) {
 	}
 	if !strings.Contains(knob.Description, "value.tier") {
 		t.Fatalf("reset value guidance missing: %+v", knob)
+	}
+}
+
+func TestConfigTuneWerkTierProvider(t *testing.T) {
+	useLeadProfile(t)
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", t.TempDir())
+	s := NewServer(t.TempDir(), "test")
+	for _, tc := range []struct {
+		harness  string
+		provider string
+		want     string
+	}{
+		{"werk", "", ""},
+		{"werk", "openrouter", ""},
+		{"werk", "openai", ""},
+		{"werk", "other", "unsupported werk provider"},
+		{"claude", "openrouter", "only for werk tiers"},
+	} {
+		t.Run(tc.harness+"/"+tc.provider, func(t *testing.T) {
+			value := map[string]any{"tier": "small", "model": "fixture/model"}
+			if tc.provider != "" {
+				value["provider"] = tc.provider
+			}
+			args := map[string]any{"key": "agents.tier", "scope": "global", "harness": tc.harness, "value": value}
+			resp := callToolOnce(t, s, 1, "config.tune", args)
+			if tc.want != "" {
+				if !toolIsError(t, resp) || !strings.Contains(toolText(t, resp), tc.want) {
+					t.Fatalf("write = %s, want %q", resp, tc.want)
+				}
+				return
+			}
+			if toolIsError(t, resp) {
+				t.Fatalf("write = %s", resp)
+			}
+			wantProvider := tc.provider
+			if wantProvider == "" {
+				wantProvider = wsconfig.WerkDefaultProvider
+			}
+			tiers, err := wsconfig.HarnessTiers(wsconfig.Options{}, "werk")
+			if err != nil || tiers["small"].Provider != wantProvider || tiers["small"].Model != "fixture/model" {
+				t.Fatalf("werk.small = %+v, %v", tiers["small"], err)
+			}
+			data, err := os.ReadFile(filepath.Join(os.Getenv("WS_CONFIG_HOME"), "config.json"))
+			if err != nil || strings.Contains(string(data), `"provider"`) != (tc.provider != "") {
+				t.Fatalf("stored provider = %s, %v", data, err)
+			}
+		})
 	}
 }

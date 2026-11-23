@@ -36,7 +36,7 @@ func workerRecoveryHarness(t *testing.T, backend string, autoApprove ...bool) (*
 	// workers are spawned by a verified agy lead (spawnHeldRecoveryWorker).
 	reg.WorkerCapable = true
 	reg.WorkerProfile = AgentWorkerProfile(backend)
-	reg.WorkerHTTPMCP = backend != BackendPi
+	reg.WorkerHTTPMCP = true
 	reg.WorkerAutoApprove = (backend == BackendCodex || backend == BackendAgy) && (len(autoApprove) == 0 || autoApprove[0])
 	h.opts.Backends[backend] = reg
 	model, effort := "claude-small", "high"
@@ -45,8 +45,6 @@ func workerRecoveryHarness(t *testing.T, backend string, autoApprove ...bool) (*
 		model, effort = "synthetic-model", "low"
 	case BackendAgy:
 		model, effort = "gemini-3.8-flash", "medium"
-	case BackendPi:
-		model, effort = "prov/small", "low"
 	}
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", model, backend, effort); err != nil {
 		t.Fatal(err)
@@ -71,8 +69,6 @@ func spawnHeldRecoveryWorker(t *testing.T, h *leadHarness, backend, authority st
 	switch backend {
 	case BackendClaude:
 		h.holders.out(holder, stateLine(HarnessRunning), initLine("claude-s1", "dontAsk"))
-	case BackendPi:
-		h.holders.out(holder, `{"type":"agent_start"}`)
 	case BackendCodex:
 		eventually(t, "the Codex turn", func() bool { return len(h.holders.acpInputs(holder, "turn/start")) == 1 })
 	case BackendAgy:
@@ -97,8 +93,6 @@ func completeRecoveryWorker(t *testing.T, h *leadHarness, backend, holder string
 		h.holders.out(holder,
 			`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"held result"}}}}`,
 			jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompt, "result": map[string]any{"stopReason": "end_turn"}}))
-	case BackendPi:
-		h.holders.out(holder, recoveryPiReply("held result")...)
 	}
 }
 
@@ -252,7 +246,7 @@ func TestCodexAndAgyWorkerMailSteersIntoRunningTurn(t *testing.T) {
 }
 
 func TestHeldWorkersCompleteAcrossRunnerReplacement(t *testing.T) {
-	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
+	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		for _, authority := range []string{"read-only", "workdir-write"} {
 			if backend != BackendCodex && authority == "read-only" {
 				continue
@@ -264,7 +258,7 @@ func TestHeldWorkersCompleteAcrossRunnerReplacement(t *testing.T) {
 				if before.HolderID != holder || before.HostPID <= 0 || before.HandedOffAt == "" {
 					t.Fatalf("new worker is not fenced under its holder: %+v", before)
 				}
-				if backend != BackendPi && (before.MCPToken == "" || before.MCPHolder != holder || before.MCPURL == "" || before.MCPEnv == nil) {
+				if before.MCPToken == "" || before.MCPHolder != holder || before.MCPURL == "" || before.MCPEnv == nil {
 					t.Fatalf("worker MCP tuple was not persisted: %+v", before)
 				}
 				var beforeEnv map[string]string
@@ -446,7 +440,7 @@ func TestHeldWorkerChildLoadsBeforeLowerCeilingParent(t *testing.T) {
 				t.Fatal(err)
 			}
 			parentDir := wsdashboard.SessionDir(h.dir, parentID)
-			parent := Record{ReplyID: parentID, Profile: PiWorkerProfile, Backend: BackendPi, Root: h.root,
+			parent := Record{ReplyID: parentID, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude, Root: h.root,
 				WSKey: "parent-key", CreatedAt: before.CreatedAt, Parent: &leadParent}
 			if tc.lead {
 				parent.Lead, parent.Profile, parent.Backend, parent.Parent = true, LeadProfileClaude, BackendClaude, nil

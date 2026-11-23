@@ -22,6 +22,7 @@ type sessionHireHost interface {
 	RequestHire(string, wsdashboard.HireRequest) (wsdashboard.HireProposal, error)
 }
 
+// Retained name check: legacy hire requests (TestRetiredPiHireRefuses).
 func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[string]any) response {
 	key, _ := args["session_key"].(string)
 	key = strings.TrimSpace(key)
@@ -31,14 +32,17 @@ func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[str
 	}
 	replyID := wsmailbox.ReplyID(key)
 	if name == "session.request_hire" {
-		host, ok := s.live.host.(sessionHireHost)
-		if !ok {
-			return toolTextResponse(id, "", fmt.Errorf("hiring requests require the dashboard daemon"))
-		}
 		request := wsdashboard.HireRequest{}
 		raw, _ := json.Marshal(args)
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return toolTextResponse(id, "", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(request.Harness), "pi") {
+			return toolTextResponse(id, "", fmt.Errorf("the Pi harness is retired; choose an available lead harness"))
+		}
+		host, ok := s.live.host.(sessionHireHost)
+		if !ok {
+			return toolTextResponse(id, "", fmt.Errorf("hiring requests require the dashboard daemon"))
 		}
 		// Open the env-less reply channel before accepting a request. Posting an
 		// outcome alone neither opens the piggyback nor publishes this return id.
@@ -113,6 +117,7 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 	return map[string]any{"type": "object", "properties": properties, "required": required}
 }
 
+// Retained name check: legacy hire requests (TestRetiredPiHireRefuses).
 func sessionHireTools() []map[string]any {
 	return []map[string]any{
 		{"name": "session.request_hire", "description": "Request an owner-approved hosted peer without blocking; only owner-enabled top-level leads may hire. reason is owner-facing; recovery_context (max 16 KiB) aids compaction recovery. Optional harness, model, effort and label prefill owner controls. The peer uses your worktree. Outcomes (approved, rejected, expired after 30 minutes, withdrawn) arrive by mail with recovery_context. A hired peer cannot hire and grants no stop/close authority.", "inputSchema": objectSchema(map[string]any{
@@ -120,7 +125,7 @@ func sessionHireTools() []map[string]any {
 			"reason":           stringProperty("Owner-facing explanation (required)."),
 			"recovery_context": stringProperty("Context to recover this request after compaction; required, at most 16 KiB."),
 			"label":            stringProperty("Suggested session label."),
-			"harness":          stringProperty("Suggested harness: claude or pi; omitted uses the new-session default."),
+			"harness":          stringProperty("Suggested hosted lead harness; omitted uses the new-session default."),
 			"model":            stringProperty("Suggested model; omitted uses the new-session default."),
 			"effort":           stringProperty("Suggested effort; omitted uses the new-session default."),
 			"format":           stringProperty("json for structured output; compact text otherwise."),

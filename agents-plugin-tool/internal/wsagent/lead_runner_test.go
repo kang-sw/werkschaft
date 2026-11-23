@@ -602,39 +602,6 @@ func TestLeadSteeredMessageReachesTheRunningTurn(t *testing.T) {
 
 // TestPiLeadSteeredMessageIsTheSteerCommand: pi takes a steered message as
 // its steer command, not as a prompt, and a refusal is logged.
-func TestPiLeadSteeredMessageIsTheSteerCommand(t *testing.T) {
-	h := newLeadHarness(t).start()
-	id := h.lead(BackendPi, LeadOptions{}).ID
-	h.send(id, "hello")
-	holder := h.holder(id)
-	h.holders.out(holder, `{"type":"agent_start"}`)
-	h.send(id, "now")
-	h.runner.conv(id).do(func() {})
-	if got := h.holders.inputs(holder, "steer"); len(got) != 0 || h.state(id).Held != 1 {
-		t.Fatalf("a message not marked is held: steer lines %q, state %+v", got, h.state(id))
-	}
-	h.steerHeld(id)
-	h.runner.InboxChanged(id)
-	eventually(t, "the steer command", func() bool { return len(h.holders.inputs(holder, "steer")) == 1 })
-	if got := h.holders.inputs(holder, "steer")[0]; !sameJSON(t, json.RawMessage(got), mustJSON(t, map[string]string{"type": "steer", "message": h.envelope("now")})) || len(h.holders.inputs(holder, "prompt")) != 1 {
-		t.Fatalf("steer line = %s, prompts %q", got, h.holders.inputs(holder, "prompt"))
-	}
-	if st := h.state(id); st.Held != 0 || st.Status != StatusRunning {
-		t.Fatalf("after the steer: %+v", st)
-	}
-	if got := ringTexts(h.ring(id), wslive.RingUser); !slices.Equal(got, h.envelopes("hello", "now")) {
-		t.Fatalf("ring user entries = %q", got)
-	}
-	h.holders.out(holder, `{"type":"response","command":"steer","success":true,"data":{"disposition":"queued"}}`)
-	h.holders.out(holder, `{"type":"response","command":"steer","success":false,"error":"no run to steer"}`)
-	eventually(t, "the refusal to be logged", func() bool { return strings.Contains(h.log.String(), "no run to steer") })
-	if st := h.state(id); st.Status != StatusRunning || st.Error != "" {
-		t.Fatalf("a steer's answer ends no turn: %+v", st)
-	}
-	h.holders.out(holder, `{"type":"agent_settled"}`)
-	h.idle(id)
-}
-
 // TestSteeredMessageWaitsInAProfileConversation: steering mid-turn is a
 // lead conversation's; any other conversation keeps a marked message held
 // until its turn ends, as before.

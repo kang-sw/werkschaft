@@ -75,6 +75,8 @@ type SpawnSpec struct {
 	// Model and Effort replace the profile's; empty keeps it.
 	Model  string
 	Effort string
+	// provider is the credential provider from the selected tier binding.
+	provider string
 	// Prompt is the first user message; required.
 	Prompt string
 	// Label is the conversation's one-line name; empty is none.
@@ -127,6 +129,7 @@ func (spec *SpawnSpec) apply(rec *Record) {
 	if spec.Effort != "" {
 		rec.Effort = spec.Effort
 	}
+	rec.Provider = spec.provider
 	rec.Label = spec.Label
 	rec.Tier = spec.Tier
 	rec.SystemPrompt = spec.SystemPrompt != ""
@@ -145,7 +148,7 @@ const labelRunes = 120
 // first send; a launch failure settles the turn as failed.
 func (r *Runner) Spawn(spec SpawnSpec) (State, error) {
 	if strings.TrimSpace(spec.Profile) == "" {
-		spec.Profile = PiWorkerProfile
+		return State{}, badRequest("profile is required")
 	}
 	if strings.TrimSpace(spec.Prompt) == "" {
 		return State{}, badRequest("prompt is empty")
@@ -191,30 +194,6 @@ func (r *Runner) Spawn(spec SpawnSpec) (State, error) {
 	return r.create(spec.Profile, spec.Root, nil, &spec)
 }
 
-// checkChildProfile enforces the parent's launched capability ceiling at
-// creation and every Pi process start. Lead parents are unrestricted.
-func (r *Runner) checkChildProfile(parent *ParentRef, name string, def Profile) error {
-	if !r.lifecycle(def.Backend).NativeChildren || parent == nil || parent.Kind != ParentConversation || isAgentWorkerProfile(name) {
-		// An agent.spawn child's ceiling is its authority (agent_tools.go),
-		// not its parent's tool list.
-		return nil
-	}
-	rec, ok := r.recordOf(parent.ReplyID)
-	if !ok {
-		return badRequest("pi.spawn: parent %s has no launched profile snapshot", parent.ReplyID)
-	}
-	if rec.Lead {
-		return nil
-	}
-	if rec.ResolvedDefinition == nil {
-		return badRequest("pi.spawn: child profile %q cannot be checked against parent profile %q: no launched definition snapshot; restart the parent first", name, rec.Profile)
-	}
-	if excess := excessProfileTools(def, *rec.ResolvedDefinition); len(excess) > 0 {
-		return badRequest("pi.spawn: child profile %q exceeds parent profile %q's launched tools: %s", name, rec.Profile, strings.Join(excess, ", "))
-	}
-	return nil
-}
-
 // cleanLabel is label's first non-blank line, at most labelRunes runes.
 func cleanLabel(label string) string {
 	for _, line := range strings.Split(label, "\n") {
@@ -240,21 +219,6 @@ func (r *Runner) spawned(c *conv, prompt string) (State, error) {
 		_, _ = r.CloseConversation(c.rec.ReplyID)
 		return State{}, err
 	}
-	rec := c.record()
-	if p := rec.Parent; r.lifecycle(rec.Backend).NativeChildren && p != nil && p.Kind == ParentLead {
-		// A hosted lead's close may have snapshotted descendants before
-		// this spawn registered. Re-check under its cascade fence: either
-		// that close sees this child, or we see the completed parent close.
-		// External mailbox leads have no runner record and remain valid.
-		r.resumeMu.Lock()
-		parent, known := r.recordOf(p.ReplyID)
-		parentClosed := known && parent.Lead && parent.ClosedAt != ""
-		r.resumeMu.Unlock()
-		if parentClosed {
-			_, _ = r.CloseConversation(rec.ReplyID)
-			return State{}, errClosed
-		}
-	}
 	c.watched()
 	return st, nil
 }
@@ -279,19 +243,31 @@ func (c *conv) lastError() string {
 // children.go): neither reported nor a wait's answer, until a later turn
 // settles, or releaseHeld finds nothing left to wait for. The loop calls
 // it.
-func (c *conv) settleTurn(status, errText string, mark uint64) {
+func (c *conv) settleTurn(status, errText string, mark uint64) error {
 	res := TurnResult{ID: c.rec.ReplyID, Status: status, Error: errText, mark: mark}
 	if status == TurnDone || status == TurnFailed {
 		res.Message = c.reply
 	}
-	c.reply = ""
 	if status == TurnDone && c.holdsReport() {
-		c.hold(&res)
+		if c.r.durableProcess(c.rec.Backend) {
+			if err := c.holdDurable(res); err != nil {
+				return err
+			}
+		} else {
+			c.hold(&res)
+		}
+		c.reply = ""
 		c.watched()
-		return
+		return nil
 	}
-	c.hold(nil)
-	c.publish(res, false)
+	if !c.r.durableProcess(c.rec.Backend) {
+		c.hold(nil)
+	}
+	if err := c.publish(res, false); err != nil {
+		return err
+	}
+	c.reply = ""
+	return nil
 }
 
 // finishActiveTurn closes a child turn once, including on interruption. Clearing
@@ -327,13 +303,13 @@ func (c *conv) hold(res *TurnResult) {
 // settle, the turn-open mark's clearing, and the pending report are one
 // record update, so a parent never reads its child between them. keepOpen
 // preserves a successor's boundary when reporting a result held earlier.
-func (c *conv) publish(res TurnResult, keepOpen bool) {
-	c.publishWith(res, keepOpen, nil)
+func (c *conv) publish(res TurnResult, keepOpen bool) error {
+	return c.publishWith(res, keepOpen, nil)
 }
 
 // publishWith is publish with also applied to the record in the same write,
 // before the settle: a successor's boundary that must not land without it.
-func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) {
+func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) error {
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
@@ -342,7 +318,13 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 		c.settled = res
 		c.settledReport = ""
 	}
-	if parent == nil && !c.rec.TurnOpen && also == nil {
+	if c.r.durableProcess(c.rec.Backend) {
+		var err error
+		waited, err = c.publishDurableRecord(res, keepOpen, also)
+		if err != nil {
+			return err
+		}
+	} else if parent == nil && !c.rec.TurnOpen && also == nil {
 		c.mu.Lock()
 		settle()
 		c.mu.Unlock()
@@ -374,7 +356,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 	}
 	c.signalSettled()
 	if parent == nil {
-		return
+		return nil
 	}
 	c.reportLast()
 	st := c.state()
@@ -382,6 +364,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 		c.r.deliverLater(c.rec.ReplyID)
 	}
 	c.r.emit(st)
+	return nil
 }
 
 // reportLast uses the existing append/report path. Marking after the callback
@@ -389,6 +372,9 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 func (c *conv) reportLast() {
 	last := c.rec.LastTurn
 	if last == nil || c.rec.Parent == nil || c.rec.ReportID == "" || c.rec.ReportID == c.rec.LastReportedTurn {
+		return
+	}
+	if suppress := c.r.opts.suppressReportDelivery; suppress != nil && suppress(c.record()) {
 		return
 	}
 	if report := c.r.opts.Report; report != nil {

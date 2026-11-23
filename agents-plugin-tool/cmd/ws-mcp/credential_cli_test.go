@@ -53,12 +53,19 @@ func TestCredentialCLIDirectWithNoDaemon(t *testing.T) {
 	if code != 0 || !strings.HasPrefix(out, "openrouter (OpenRouter): sk-or-...0001, updated ") {
 		t.Fatalf("show = %d %q", code, out)
 	}
-	for _, argv := range [][]string{{"credential", "show", "openrouter", "--format", "json"}, {"credential", "show", "--format", "json", "openrouter"}, {"credential", "show", "--format=json"}} {
+	for _, argv := range [][]string{{"credential", "show", "openrouter", "--format", "json"}, {"credential", "show", "--format", "json", "openrouter"}} {
 		out, _, code = runCredentialCLI(t, nil, cache, "", argv...)
 		var statuses []wscred.ProviderStatus
 		if code != 0 || json.Unmarshal([]byte(out), &statuses) != nil || len(statuses) != 1 || !statuses[0].Configured || statuses[0].Masked != "sk-or-...0001" {
 			t.Fatalf("%v = %d %q", argv, code, out)
 		}
+	}
+	out, _, code = runCredentialCLI(t, nil, cache, "", "credential", "show", "--format=json")
+	var all []wscred.ProviderStatus
+	if code != 0 || json.Unmarshal([]byte(out), &all) != nil || len(all) != 2 ||
+		all[0].Provider != wscred.ProviderOpenRouter || !all[0].Configured ||
+		all[1].Provider != wscred.ProviderOpenAI || all[1].Configured {
+		t.Fatal("credential show did not list both providers and their status")
 	}
 	out, _, code = runCredentialCLI(t, nil, cache, "", "credential", "remove", "openrouter", "--format", "json")
 	var result wscred.ChangeResult
@@ -70,7 +77,7 @@ func TestCredentialCLIDirectWithNoDaemon(t *testing.T) {
 		t.Fatalf("repeat remove = %d %q", code, out)
 	}
 	out, _, code = runCredentialCLI(t, nil, cache, "", "credential", "show")
-	if code != 0 || out != "openrouter (OpenRouter): not set\n" {
+	if code != 0 || out != "openrouter (OpenRouter): not set\nopenai (OpenAI): not set\n" {
 		t.Fatalf("show after remove = %d %q", code, out)
 	}
 	if raw, _ := os.ReadFile(credPath); strings.Contains(string(raw), credentialCLIFixtureKey) {
@@ -89,22 +96,25 @@ func TestCredentialCLIRefusals(t *testing.T) {
 		{"key in argv before the flag", "", "stdin", []string{"credential", "set", "openrouter", "--format", "json", credentialCLIFixtureKey}},
 		{"empty stdin", "", "no API key on stdin", []string{"credential", "set", "openrouter"}},
 		{"blank first line", "  \n" + credentialCLIFixtureKey, "no API key on stdin", []string{"credential", "set", "openrouter"}},
-		{"unknown provider", credentialCLIFixtureKey, "known providers: openrouter", []string{"credential", "set", "nonesuch"}},
-		{"unknown provider on show", "", "known providers: openrouter", []string{"credential", "show", "nonesuch"}},
+		{"unknown provider", credentialCLIFixtureKey, "known providers: openrouter, openai", []string{"credential", "set", "nonesuch"}},
+		{"unknown provider on show", "", "known providers: openrouter, openai", []string{"credential", "show", "nonesuch"}},
+		{"openai is not an API key", "", "credential sign-in openai", []string{"credential", "set", "openai"}},
+		{"no credential in sign-in arguments", "", "usage", []string{"credential", "sign-in", "openai", credentialCLIFixtureKey}},
+		{"incompatible registration selectors", "", "usage", []string{"credential", "sign-in", "openai", "--new-account", "--account", credentialCLIFixtureKey}},
 		{"missing provider", "", "usage", []string{"credential", "remove"}},
 		{"unknown subcommand", "", "usage", []string{"credential", "list"}},
 		// A key typed where an argument belongs is never echoed back
 		// (runCredentialCLI fails on any output carrying it).
-		{"key in place of the provider", "", "known providers: openrouter", []string{"credential", "set", credentialCLIFixtureKey}},
-		{"key in place of the provider on show", "", "known providers: openrouter", []string{"credential", "show", credentialCLIFixtureKey}},
-		{"key in place of the provider on remove", "", "known providers: openrouter", []string{"credential", "remove", credentialCLIFixtureKey}},
-		{"key in place of the subcommand", "", "use set, remove, or show", []string{"credential", credentialCLIFixtureKey}},
+		{"key in place of the provider", "", "known providers: openrouter, openai", []string{"credential", "set", credentialCLIFixtureKey}},
+		{"key in place of the provider on show", "", "known providers: openrouter, openai", []string{"credential", "show", credentialCLIFixtureKey}},
+		{"key in place of the provider on remove", "", "known providers: openrouter, openai", []string{"credential", "remove", credentialCLIFixtureKey}},
+		{"key in place of the subcommand", "", "use set, remove, show, or sign-in", []string{"credential", credentialCLIFixtureKey}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out, errOut, code := runCredentialCLI(t, nil, cache, tc.stdin, tc.argv...)
 			if code == 0 || out != "" || !strings.Contains(errOut, tc.want) {
-				t.Fatalf("%v = %d %q %q, want a refusal naming %q", tc.argv, code, out, errOut, tc.want)
+				t.Fatalf("expected a refusal naming %q, got exit code %d", tc.want, code)
 			}
 		})
 	}

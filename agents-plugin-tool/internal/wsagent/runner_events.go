@@ -15,6 +15,11 @@ import (
 )
 
 func (c *conv) handle(ev Event) {
+	if c.r.durableProcess(c.rec.Backend) && (ev.TurnID != "" || ev.TurnStart || ev.TurnEnd) {
+		if c.rec.DurableTurn == nil || c.rec.DurableTurn.ID != ev.TurnID {
+			return
+		}
+	}
 	quiet := ev.Replay
 	c.eventSeq = ev.Seq
 	if ev.Seq > 0 && !ev.Replay {
@@ -50,6 +55,10 @@ func (c *conv) handle(ev Event) {
 	case ev.Harness != nil:
 		c.harnessReported(*ev.Harness, quiet)
 	case ev.Live != nil:
+		if !quiet && ev.compactCommandDone {
+			c.compactCommand = false
+			c.stopCompactWatchdog()
+		}
 		if ev.Live.Kind == wslive.KindCommands {
 			// The list is offered without the commands of unsupported items
 			// and with the lead's playbook commands; the dashboard runs only
@@ -228,6 +237,8 @@ func (c *conv) handle(ev Event) {
 		if !quiet {
 			c.compactSteerAnswered(*ev.compactSteerReply)
 		}
+	case ev.durableSteerID != "":
+		c.acceptDurableSteer(ev.durableSteerID)
 	case ev.UserTaken != "":
 		c.steerTaken(ev.UserTaken)
 	case ev.CommandError != "":
@@ -439,7 +450,13 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		if turnErr != "" {
 			status = TurnFailed
 		}
-		c.settleTurn(status, turnErr, c.turnMark)
+		if err := c.settleTurn(status, turnErr, c.turnMark); err != nil {
+			c.setStatus(func() { c.lastErr = "save turn settlement: " + err.Error() })
+			c.live.writeSnapshot()
+			c.r.notify(c.rec.ReplyID, c.rec.Root)
+			c.retryDurableTurn()
+			return
+		}
 		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
 			c.r.opts.AgyActivity()
 		}
@@ -771,6 +788,7 @@ func (c *conv) processExited() {
 		c.replaying, c.replayAsked = false, false
 		c.kick()
 	}
+	c.retryDurableTurn()
 }
 
 // processGone handles a rejoin whose holder no longer exists: the process
@@ -832,7 +850,7 @@ func (c *conv) processEnded() {
 		// A turn the process took with it. A close settles none (its
 		// parent ended it), and the daemon's exit leaves it to the next
 		// daemon (interrupted).
-		if !c.closed && !c.quitting && !internal && (c.rec.Parent == nil || c.rec.TurnOpen) {
+		if !c.closed && !c.quitting && !internal && c.rec.DurableTurn == nil && (c.rec.Parent == nil || c.rec.TurnOpen) {
 			c.settleTurn(TurnFailed, c.lastError(), c.turnMark)
 		}
 		if internal {
@@ -1113,7 +1131,18 @@ func (c *conv) holdForLever(arm bool) {
 	}
 }
 
-func (c *conv) setSettings(model, effort *string) error {
+func (c *conv) checkModelSetting(model *string) error {
+	if model != nil && c.rec.Lead {
+		if provider, ok := c.r.opts.Backends[c.rec.Backend].Backend.(leadProviderAdmitter); ok {
+			if err := provider.admitLeadProvider(c.rec.Provider, *model); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *conv) setSettings(model, effort *string) {
 	c.update(func(rec *Record) {
 		if model != nil && *model != rec.Model {
 			rec.Model = *model
@@ -1127,7 +1156,6 @@ func (c *conv) setSettings(model, effort *string) error {
 	if !c.turn {
 		c.applySettings()
 	}
-	return nil
 }
 
 // applySettings carries changed settings to the process at a turn
@@ -1147,7 +1175,7 @@ func (c *conv) applySettings() {
 	rec := c.record()
 	restart := false
 	controls := controlsFor(c.proc)
-	if permission && !rec.Lead {
+	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend)) {
 		restart = true
 	}
 	if model && !restart && controls.SetModel(rec.Model) != nil {
@@ -1207,6 +1235,9 @@ func (c *conv) close() error {
 	if err := c.closeRetired(); err != nil {
 		return err
 	}
+	if c.r.durableProcess(c.rec.Backend) {
+		return c.closeDurable()
+	}
 	c.closeIf(nil)
 	return nil
 }
@@ -1229,7 +1260,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()
-	if err := writeRecord(c.dir, rec); err != nil {
+	if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 	}
 	c.wmu.Unlock()

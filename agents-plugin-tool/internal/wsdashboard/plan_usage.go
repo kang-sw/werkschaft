@@ -79,7 +79,7 @@ type planUsageStore struct {
 	agyEnv         []string
 	now            func() time.Time
 	// Request dependencies are private test seams, not configuration knobs.
-	// Production always uses the fixed HTTPS origin below for both readers.
+	// Production always uses the fixed HTTPS origin below.
 	usageURL string
 	client   *http.Client
 	// File-system seams for the history memo and detection reads; nil means
@@ -101,10 +101,10 @@ type usageCredStat struct {
 	modTime int64
 }
 type usageDetectMemo struct {
-	ok        bool
-	stats     [3]usageCredStat
-	plan      string
-	codex, pi bool
+	ok    bool
+	stats [2]usageCredStat
+	plan  string
+	codex bool
 }
 
 func (s *planUsageStore) write(name string, data []byte) error {
@@ -313,20 +313,19 @@ func (s *planUsageStore) configHome(key, fallback string) string {
 }
 
 // Detection decodes only plan/mode/presence, never credential values. Every
-// usage request detects, so the result is memoized by the three files' stats
-// (path, size, mtime): an unchanged set costs three stats and no reads. A
+// usage request detects, so the result is memoized by the two files' stats
+// (path, size, mtime): an unchanged set costs two stats and no reads. A
 // rewrite keeping both size and mtime goes unnoticed until the next change.
 // Stat-confirmed absence is cacheable; a read failure is not, so transient
 // credential access failures remain retryable even without metadata changes.
-func (s *planUsageStore) detect() (claudePlan string, codexLogin, piLogin bool) {
-	paths := [3]string{
+func (s *planUsageStore) detect() (claudePlan string, codexLogin bool) {
+	paths := [2]string{
 		// Retained name check: each provider's own credential location, read to learn
 		// whether the provider is signed in (TestPlanUsageCodexHomeSelection).
 		filepath.Join(s.configHome("CLAUDE_CONFIG_DIR", ".claude"), ".credentials.json"),
 		filepath.Join(s.configHome("CODEX_HOME", ".codex"), "auth.json"),
-		filepath.Join(s.home, ".pi", "agent", "auth.json"),
 	}
-	var stats [3]usageCredStat
+	var stats [2]usageCredStat
 	cacheable := true
 	for i, path := range paths {
 		stats[i].path = path
@@ -344,7 +343,7 @@ func (s *planUsageStore) detect() (claudePlan string, codexLogin, piLogin bool) 
 	m := s.detected
 	s.mu.Unlock()
 	if cacheable && m.ok && m.stats == stats {
-		return m.plan, m.codex, m.pi
+		return m.plan, m.codex
 	}
 	readJSON := func(index int, out any) bool {
 		if stats[index].missing {
@@ -377,16 +376,10 @@ func (s *planUsageStore) detect() (claudePlan string, codexLogin, piLogin bool) 
 	if readJSON(1, &codex) {
 		codexLogin = codex.Mode == "chatgpt" || (codex.Mode == "" && codex.Tokens != nil)
 	}
-	var pi struct {
-		Codex *struct{} `json:"openai-codex"`
-	}
-	if readJSON(2, &pi) {
-		piLogin = pi.Codex != nil
-	}
 	// Stat precedes read, so a replace in between memoizes newer content under
 	// an older stat and costs only one extra read next time.
 	s.mu.Lock()
-	s.detected = usageDetectMemo{ok: cacheable, stats: stats, plan: claudePlan, codex: codexLogin, pi: piLogin}
+	s.detected = usageDetectMemo{ok: cacheable, stats: stats, plan: claudePlan, codex: codexLogin}
 	s.mu.Unlock()
 	return
 }
@@ -411,7 +404,7 @@ func currentUsage(e planUsageEntry, now int64) planUsageEntry {
 // ChatGPT-account reader "codex" (agy labels its own in plan_usage_agy.go).
 // These are persisted names, not behavior branches (1881 survivor).
 func (s *planUsageStore) entries() []planUsageEntry {
-	plan, codex, pi := s.detect()
+	plan, codex := s.detect()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.nowTime().UnixMilli()
@@ -422,7 +415,7 @@ func (s *planUsageStore) entries() []planUsageEntry {
 		c.Plan = plan
 		out = append(out, currentUsage(c, now))
 	}
-	if codex || pi {
+	if codex {
 		x := s.gpt
 		x.Harness = "codex"
 		out = append(out, currentUsage(x, now))

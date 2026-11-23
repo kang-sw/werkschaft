@@ -90,7 +90,7 @@ func preserveObject(original, edited json.RawMessage, depth int) (json.RawMessag
 		}
 	case 3:
 		for key, value := range before {
-			if !jsonNameIs(key, "backend", "model", "effort") {
+			if !jsonNameIs(key, "backend", "model", "effort", "provider") {
 				after[key] = value
 			}
 		}

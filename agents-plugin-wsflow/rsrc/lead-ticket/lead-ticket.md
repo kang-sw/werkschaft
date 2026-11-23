@@ -186,7 +186,7 @@ Handler loop:
    branch to commit on (`revise`: the worker's impl branch); `revise` adds the
    worker's `proposed_resolution:` verbatim and the worker's tier.
    A host whose subagents cannot call the handler's tools or spawn above
-   their own tier (Pi today) → read the rendered prompt and perform it
+   their own tier → read the rendered prompt and perform it
    yourself; its `decisions` and `ask` items go straight to the user.
 3. Act on each report by its `status`:
    - `decisions`: the handler wrote its items into the tickets' queue

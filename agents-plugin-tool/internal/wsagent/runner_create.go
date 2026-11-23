@@ -3,6 +3,7 @@ package wsagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,7 +37,13 @@ var errClosed = &requestError{status: http.StatusConflict, msg: "the conversatio
 var errHandedOff = &requestError{status: http.StatusConflict, msg: "the session was handed to a terminal: it runs there, not in the dashboard"}
 
 // endedError is the refusal of a write to a conversation no loop serves.
+var errPiRetired = &requestError{status: http.StatusConflict, msg: "the Pi harness is retired; its sessions are available as history"}
+
+// Retained name check: legacy profile and record backend (TestRetiredPiProfileRemainsReadable).
 func endedError(rec Record) error {
+	if rec.Backend == BackendPi {
+		return errPiRetired
+	}
 	if rec.ClosedAt == "" && rec.handedOff() {
 		return errHandedOff
 	}
@@ -50,6 +57,7 @@ type LeadOptions struct {
 	HireRequestID   string
 	HireLabel       string
 	Model           string
+	Provider        string
 	Effort          string
 	PermissionMode  string
 	PluginIsolation string
@@ -89,6 +97,13 @@ func (r *Runner) CreateLead(backend, root string, opts LeadOptions) (State, erro
 	}
 	if opts.Effort != "" && !effortPattern.MatchString(opts.Effort) {
 		return State{}, categorized(ErrInvalidProfile, badRequest("effort %q must be a lowercase word", opts.Effort))
+	}
+	if choice, ok := r.opts.Backends[strings.TrimSpace(backend)].Backend.(leadProviderAdmitter); ok {
+		if err := choice.admitLeadProvider(opts.Provider, opts.Model); err != nil {
+			return State{}, categorized(ErrInvalidProfile, err)
+		}
+	} else if opts.Provider != "" {
+		return State{}, badRequest("this harness does not take a provider selection")
 	}
 	modes := permissionModes(strings.TrimSpace(backend), []map[string]BackendRegistration{r.opts.Backends})
 	if opts.PermissionMode != "" && !slices.Contains(modes, opts.PermissionMode) {
@@ -154,12 +169,6 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()
-		if spawn.Tier != "" && !r.lifecycle(rp.Definition.Backend).NativeChildren && !isAgentWorkerProfile(rp.Name) {
-			return State{}, badRequest("pi.spawn: profile %q must be a non-lead Pi profile", rp.Name)
-		}
-		if err := r.checkChildProfile(spawn.Parent, rp.Name, rp.Definition); err != nil {
-			return State{}, err
-		}
 		level, source, err := resolveWorkerPermission(rp.Definition, spawn.PermissionLevel, spawn.PermissionLevel != "", nil)
 		if err != nil {
 			return State{}, err
@@ -190,6 +199,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
+	releaseDurableCreation := func() {}
+	if r.durableProcess(rp.Definition.Backend) {
+		release, err := r.admitDurableTransition()
+		if err != nil {
+			return State{}, err
+		}
+		releaseDurableCreation = sync.OnceFunc(release)
+		defer releaseDurableCreation()
+	}
 	var key string
 	if lead != nil {
 		// A lead key lives at the canonical git root, which is then the
@@ -201,14 +219,10 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, fmt.Errorf("mint the lead session key: %w", err)
 		}
 	} else {
-		keyRoot := root
-		if spawn != nil && r.lifecycle(rp.Definition.Backend).NativeChildren && spawn.Cwd != "" {
-			keyRoot = spawn.Cwd
-		}
 		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
-			key, err = child.MintChild(keyRoot, spawn.policyKey)
+			key, err = child.MintChild(root, spawn.policyKey)
 		} else {
-			key, err = r.opts.Keys.Mint(keyRoot)
+			key, err = r.opts.Keys.Mint(root)
 		}
 		if err != nil {
 			return State{}, fmt.Errorf("mint ws session key: %w", err)
@@ -234,6 +248,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	if lead != nil {
 		rec.Lead = true
+		rec.Provider = lead.Provider
 		rec.PluginIsolation = leadPluginIsolation(lead.PluginIsolation)
 		rec.PermissionMode = rp.Definition.PermissionMode
 		if lead.Model != "" {
@@ -287,7 +302,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
-	if err := writeRecord(dir, rec); err != nil {
+	if err := r.persistAgentRecord(dir, rec); err != nil {
 		return State{}, err
 	}
 	var seed []wslive.SlashCommand
@@ -301,6 +316,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		claimWidth = spawn.claimWidth
 	}
 	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, false)
+	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {
 		return r.spawned(c, spawn.Prompt)
@@ -345,9 +361,17 @@ func (r *Runner) lastCommands(rec Record) []wslive.SlashCommand {
 	return nil
 }
 
+func (r *Runner) mcpCommand(durable bool) func(string) (MCPCommand, error) {
+	if durable && r.opts.DaemonMCP != nil {
+		return r.opts.DaemonMCP
+	}
+	return r.opts.WSMCP
+}
+
 // resolve resolves profile through root and checks everything a launch
 // needs: a backend this daemon has, an existing instruction file, and a
 // ws-mcp command when the profile allows ws tools.
+// Retained name check: legacy profile and record backend (TestRetiredPiProfileRemainsReadable).
 func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 	var rp ResolvedProfile
 	var err error
@@ -362,6 +386,9 @@ func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 	if err != nil {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("%v", err))
 	}
+	if rp.Definition.Backend == BackendPi {
+		return ResolvedProfile{}, errPiRetired
+	}
 	if _, err := r.backend(rp.Name, rp.Definition.Backend); err != nil {
 		return ResolvedProfile{}, err
 	}
@@ -371,13 +398,18 @@ func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 			return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q: instruction file %s does not exist", rp.Name, path))
 		}
 	}
-	if len(rp.Definition.WSTools) > 0 && r.opts.WSMCP == nil {
+	durable := r.durableProcess(rp.Definition.Backend)
+	mcp := r.mcpCommand(durable)
+	if len(rp.Definition.WSTools) > 0 && mcp == nil {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q allows ws tools, but this daemon cannot attach ws-mcp", rp.Name))
 	}
-	if !rp.Definition.Lead && r.opts.WSMCP != nil && !slices.Contains(rp.Definition.WSTools, "compact") {
+	if !rp.Definition.Lead && mcp != nil && !slices.Contains(rp.Definition.WSTools, "compact") {
 		rp.Definition.WSTools = append(slices.Clone(rp.Definition.WSTools), "compact")
 	}
-	if rp.Definition.Lead && (r.opts.Holders == nil || r.opts.LeadKeys == nil) {
+	if rp.Definition.Lead && durable && r.opts.LeadKeys == nil {
+		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q requires a lead key store", rp.Name))
+	}
+	if rp.Definition.Lead && !durable && (r.opts.LeadKeys == nil || r.opts.Holders == nil) {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q is a lead profile, but this daemon runs no session holders", rp.Name))
 	}
 	return rp, nil
@@ -408,7 +440,18 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 		}
 		spec.audit = &auditTap{Session: wsaudit.Session{ID: c.rec.ReplyID, Class: class}, Sink: sink, Log: c.r.opts.Log}
 	}
-	proc, err := backend.Start(context.Background(), spec)
+	start := backend.Start
+	if c.r.durableProcess(c.rec.Backend) {
+		durable, ok := backend.(durableStarter)
+		if !ok {
+			return nil, categorized(ErrLaunchFailed, errors.New("the backend has no durable process"))
+		}
+		start = durable.startLoop
+		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
+		spec.compactState = c.r.compactionState(c.rec.ReplyID)
+		spec.sessionSecret = c.rec.WSKey
+	}
+	proc, err := start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
 }
 

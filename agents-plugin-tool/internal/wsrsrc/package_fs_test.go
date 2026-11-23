@@ -90,13 +90,7 @@ func TestBuildOwnedResourceLoader(t *testing.T) {
 				t.Fatalf("%s/%s: %v", name, file, err)
 			}
 		}
-		if name == "ws" {
-			if _, err := fs.ReadFile(pkg, "native-pi/closure.zip"); err != nil {
-				t.Fatal(err)
-			}
-		} else if _, err := fs.Stat(pkg, "native-pi"); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("payload must be embedded once: %v", err)
-		}
+
 	}
 }
 

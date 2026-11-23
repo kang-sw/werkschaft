@@ -222,6 +222,7 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 			continue
 		}
 		a := n.agent
+		a = endedPiRow(a)
 		harness := resolveHUDHarness(set, a, parentHarness)
 		label := a.Label
 		if label == "" {
@@ -359,19 +360,16 @@ func hudNodeState(a wslive.Agent) string {
 }
 
 // resolveHUDHarness is the harness a HUD row shows: its own registered name,
-// else its parent's, else the one its agent kind implies.
+// or its parent's. Retired Pi rows carry no harness badge.
 func resolveHUDHarness(set HarnessTraitSet, a wslive.Agent, parentHarness string) string {
+	if retiredPiRow(a) {
+		return ""
+	}
 	if h := set.normalize(a.Harness); h != "" {
 		return h
 	}
 	if parentHarness != "" {
 		return parentHarness
-	}
-	// Survivor (1881): rows written before a snapshot row carried a harness
-	// name mark a Pi child only by its agent kind, a persisted marker that
-	// registration data does not describe (TestHUDHarnessLegacyPiAgentKind).
-	if a.AgentKind == wslive.AgentKindPi {
-		return "pi"
 	}
 	return ""
 }

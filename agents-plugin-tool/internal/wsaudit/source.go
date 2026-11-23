@@ -113,6 +113,13 @@ type Recovery struct {
 // identity already retained; capture treats it as success.
 var ErrDuplicateSource = errors.New("wsaudit: source identity already retained")
 
+// CheckpointSink persists a selected model-input boundary before its owner
+// continues. The identity is a sequenced record from a checkpoint-only
+// source. Implementations retain a watermark past ring eviction.
+type CheckpointSink interface {
+	AppendCheckpoint(ctx context.Context, id SourceID, ev Envelope) error
+}
+
 // SourcedSink is a Sink that also keeps source identities, so capture can
 // resume across a daemon restart and a holder replay without duplicating or
 // reordering events. It extends the recovery contract of Sink.Append; like

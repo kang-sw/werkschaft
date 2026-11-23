@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -428,50 +426,6 @@ func TestAdmitCompletionFencedByClose(t *testing.T) {
 // TestAdmitCompletionNeverRevivesAClosedPiChild: ordinary input reopens a
 // closed spawned Pi child, a completion notice does not, and after a manual
 // revival a notice admitted before the close stays out.
-func TestAdmitCompletionNeverRevivesAClosedPiChild(t *testing.T) {
-	h, _ := newFakePiRecoveryHarness(t)
-	cwd := filepath.Join(h.root, "work")
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	worker, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Cwd: cwd, Model: "prov/medium", Effort: "high", Label: "notice target", Prompt: "work", Tier: "medium", Parent: &leadParent})
-	if err != nil {
-		t.Fatal(err)
-	}
-	holder := h.holder(worker.ID)
-	eventually(t, "the initial prompt", func() bool { return len(h.holders.inputs(holder, "prompt")) == 1 })
-	owner, err := h.runner.ExecOwner(worker.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(piSessionFile(wsdashboard.SessionDir(h.opts.Dir, worker.ID)), []byte("persisted conversation\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.runner.CloseConversation(worker.ID); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := h.runner.AdmitCompletion(worker.ID, owner.Gen, "exec:p:exit", "done"); err != nil || out != CompletionSuppressed {
-		t.Fatalf("notice to a closed Pi child = %v, %v", out, err)
-	}
-	if rec := h.record(worker.ID); rec.ClosedAt == "" || rec.HolderID != "" {
-		t.Fatalf("the notice revived the child: %+v", rec)
-	}
-	if st := h.state(worker.ID); st.Status != StatusClosed || st.Process {
-		t.Fatalf("the notice revived the child: %+v", st)
-	}
-	// The user's own message revives it; the earlier notice stays out.
-	if _, err := h.runner.Send(worker.ID, "continue"); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the revived process", func() bool {
-		id := h.record(worker.ID).HolderID
-		return id != "" && id != holder
-	})
-	if out, err := h.runner.AdmitCompletion(worker.ID, owner.Gen, "exec:p:exit", "done"); err != nil || out != CompletionSuppressed {
-		t.Fatalf("pre-close notice after manual revival = %v, %v", out, err)
-	}
-}
-
 // TestAgyNoticeWaitsOutTheInFlightMCPCall: on agy, whose steer replaces the
 // running prompt, a completion notice waits while a ws MCP call is in
 // flight. The call's cancellation releases it once; a late result after the

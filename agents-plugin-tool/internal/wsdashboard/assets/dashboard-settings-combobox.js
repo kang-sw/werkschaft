@@ -1,14 +1,29 @@
 var WsSettingsCombobox = (function () {
   "use strict";
-  var FALLBACK_HARNESSES = ["claude", "codex", "pi", "agy"];
+  var FALLBACK_HARNESSES = ["claude", "codex", "agy", "werk"];
+  var PENDING_RETRY_MS = 1500;
   var choicesPromise = null;
   var choicesData = null;
+  var choicesGeneration = 0;
   var seq = 0;
   var activeClose = null;
   var waiters = [];
+  // refreshHooks re-render the pickers that are open (or waiting to open) when a
+  // retried choices answer lands; each is {gone, refresh}, and one whose picker
+  // left the page is dropped.
+  var refreshHooks = [];
+  var MAX_PENDING_RETRIES = 20;
+  var pendingRetries = 0;
 
   function tr(key) {
     return typeof window !== "undefined" && typeof window.wsT === "function" ? window.wsT(key) : key;
+  }
+
+  function invalidateChoices() {
+    choicesGeneration++;
+    choicesData = null;
+    choicesPromise = null;
+    pendingRetries = 0;
   }
 
   function loadChoices() {
@@ -18,26 +33,57 @@ var WsSettingsCombobox = (function () {
       choicesData = { harnesses: [], failed: true };
       return Promise.resolve(choicesData);
     }
+    var generation = choicesGeneration;
     choicesPromise = fetch("/support/choices", { credentials: "same-origin", cache: "no-store" })
       .then(function (resp) {
         if (!resp || !resp.ok) throw new Error("choices unavailable");
         return resp.json();
       })
       .then(function (json) {
+        if (generation !== choicesGeneration) return;
         if (!json || !Array.isArray(json.harnesses)) throw new Error("invalid choices");
-        choicesData = { harnesses: json.harnesses, failed: false };
+        // pickers are harnesses that list models for this picker but open no
+        // support conversation or lead (a worker-only backend): beside the rest here.
+        choicesData = { harnesses: json.harnesses.concat(Array.isArray(json.pickers) ? json.pickers : []), failed: false };
+        // A picker's model list is fetched in the background and is missing from
+        // this answer: ask again shortly rather than keep the answer for the page.
+        if (json.pickers_pending && typeof setTimeout === "function" && pendingRetries < MAX_PENDING_RETRIES) {
+          pendingRetries++;
+          setTimeout(function () {
+            if (generation !== choicesGeneration) return;
+            choicesData = null;
+            choicesPromise = null;
+            // Fetched here, not left for the next interaction: an open picker
+            // shows the list as soon as it arrives.
+            loadChoices().then(function () {
+              if (generation !== choicesGeneration) return;
+              refreshHooks.slice().forEach(function (hook) {
+                if (!hook.gone()) { try { hook.refresh(); } catch (_) {} }
+              });
+              pruneRefreshHooks();
+            });
+          }, PENDING_RETRY_MS);
+        } else if (!json.pickers_pending) {
+          pendingRetries = 0;
+        }
         return choicesData;
       })
       .catch(function () {
+        if (generation !== choicesGeneration) return;
         choicesData = { harnesses: [], failed: true };
         return choicesData;
       })
       .then(function (resolved) {
+        if (generation !== choicesGeneration) return;
         var list = waiters.splice(0, waiters.length);
         list.forEach(function (fn) { try { fn(resolved); } catch (_) {} });
         return resolved;
       });
     return choicesPromise;
+  }
+
+  function pruneRefreshHooks() {
+    refreshHooks = refreshHooks.filter(function (hook) { return !hook.gone(); });
   }
 
   function onChoicesLoaded(fn) {
@@ -70,12 +116,21 @@ var WsSettingsCombobox = (function () {
     return FALLBACK_HARNESSES.map(function (id) { return { id: id }; });
   }
 
+  function modelKey(model, provider) {
+    return model && provider ? provider + " " + model : model;
+  }
+
+  function modelSelection(key, provider) {
+    var match = /^(openai|openrouter|local\/[a-z0-9-]+) (.+)$/.exec(key);
+    return match ? { model: match[2], provider: match[1] } : { model: key, provider: provider || "" };
+  }
+
   function modelOptions(harnessName) {
     var h = harnessEntry(harnessName);
     if (!h || !Array.isArray(h.models)) return [];
     return h.models
       .filter(function (m) { return m && m.id; })
-      .map(function (m) { return { id: String(m.id), thinking: m.thinking === true }; });
+      .map(function (m) { return { id: modelKey(String(m.id), m.provider || (harnessName === "werk" ? "openrouter" : "")), thinking: m.thinking === true }; });
   }
 
   function effortOptions(harnessName) {
@@ -341,20 +396,36 @@ var WsSettingsCombobox = (function () {
       }
     }
 
+    function onChoicesArrived() {
+      if (!wrap.isConnected || isDisabled()) return;
+      if (isOpen || pendingOpen) {
+        var wantAll = isOpen ? showAll : pendingOpen === "all";
+        if (doc.activeElement === input || wantAll) {
+          showAll = wantAll;
+          renderList();
+        }
+      }
+    }
+
+    // A retried choices answer (a picker's model list that was still being
+    // fetched) re-renders this picker if it is open, without a keystroke.
+    var seen = false;
+    pruneRefreshHooks();
+    refreshHooks.push({
+      // Not gone before it was ever attached: the page builds its pickers
+      // before it inserts them.
+      gone: function () {
+        if (wrap.isConnected) seen = true;
+        return seen && !wrap.isConnected;
+      },
+      refresh: onChoicesArrived
+    });
+
     function open(unfiltered) {
       if (isDisabled()) return;
       showAll = !!unfiltered;
       activeIndex = -1;
-      onChoicesLoaded(function () {
-        if (!wrap.isConnected || isDisabled()) return;
-        if (isOpen || pendingOpen) {
-          var wantAll = isOpen ? showAll : pendingOpen === "all";
-          if (doc.activeElement === input || wantAll) {
-            showAll = wantAll;
-            renderList();
-          }
-        }
-      });
+      onChoicesLoaded(onChoicesArrived);
       loadChoices();
       renderList();
     }
@@ -489,13 +560,15 @@ var WsSettingsCombobox = (function () {
     },
     attach: attach,
     loadChoices: loadChoices,
+    invalidateChoices: invalidateChoices,
     backendOptions: backendOptions,
     modelOptions: modelOptions,
+    modelKey: modelKey,
+    modelSelection: modelSelection,
     effortOptions: effortOptions,
     filterOptions: filterOptions,
     _resetForTest: function () {
-      choicesPromise = null;
-      choicesData = null;
+      invalidateChoices();
       waiters = [];
       if (activeClose) activeClose();
     }

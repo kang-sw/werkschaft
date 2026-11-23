@@ -14,7 +14,7 @@ import (
 )
 
 type compactAccessRunner struct {
-	PiAgents
+	AgentHost
 	caller string
 }
 
@@ -62,7 +62,7 @@ func TestCompactionToolIsListedAndCallableForBuiltinProfiles(t *testing.T) {
 }
 
 func TestCompactionRegistryManifestParity(t *testing.T) {
-	legacy, _ := loadDeclaredConfig(piManifestPath).lookup("pi.compaction_advisory_percent")
+	legacy, _ := loadDeclaredConfig(claudeManifestPath).lookup("claude.compaction_advisory_percent")
 	if legacy.Pattern != wsconfig.ThresholdPattern {
 		t.Fatal("threshold grammar drifted from shipped manifests")
 	}
@@ -89,7 +89,7 @@ func TestCompactionRegistryManifestParity(t *testing.T) {
 
 func TestCompactionConfigGetTuneAndLegacy(t *testing.T) {
 	s, _, key := manifestServer(t)
-	s.observeHarness("test", "pi")
+	s.observeHarness("test", "agy")
 	tune := func(k, v, harness, scope string) {
 		t.Helper()
 		r := keyedCall(t, s, 1, key, "config.tune", map[string]any{"key": k, "value": v, "harness": harness, "scope": scope})
@@ -98,7 +98,7 @@ func TestCompactionConfigGetTuneAndLegacy(t *testing.T) {
 		}
 	}
 	// New harness values remain scalar overrides, including agy.
-	tune("compaction.lead_advisory", "70%", "pi", "global")
+	tune("compaction.lead_advisory", "70%", "agy", "global")
 	tune("compaction.lead_advisory", "40%", "*", "project")
 	result, err := s.resolveConfigGet(key, "compaction.lead_advisory")
 	if err != nil || result.Value != "40%" || result.Scope != "project" {

@@ -49,16 +49,20 @@ const choicesTimeout = 15 * time.Second
 
 // ModelChoice is one model a harness offers, as --model takes it.
 type ModelChoice struct {
-	ID string `json:"id"`
+	ID          string `json:"id"`
+	Provider    string `json:"provider,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 	// Thinking reports whether the model takes a reasoning effort; absent
 	// when the harness does not say.
-	Thinking *bool `json:"thinking,omitempty"`
+	Thinking      *bool `json:"thinking,omitempty"`
+	contextWindow int64
 }
 
 // ChoiceLister is a Backend that can tell what it offers: the executable
 // its availability is checked against, and its models and effort levels. A
 // backend without it is available whenever registered, with no choices.
 type ChoiceLister interface {
+	// Executable is empty for a harness that runs inside the daemon.
 	Executable() string
 	// Choices lists the models and the effort levels, lowest first. A
 	// listing failure still returns the efforts it knows.
@@ -135,12 +139,20 @@ type Support struct {
 	// requests share one.
 	choicesMu sync.Mutex
 	cache     map[string]cachedChoices
+
+	// pickerMu guards pickerCache and pickerBusy: the picker harnesses' listings
+	// run in the background, never under choicesMu, so a slow public endpoint
+	// holds no other harness's choices.
+	pickerMu    sync.Mutex
+	pickerCache map[string]cachedChoices
+	pickerBusy  map[string]bool
 }
 
 type cachedChoices struct {
-	at      time.Time
-	models  []ModelChoice
-	efforts []string
+	revision uint64
+	at       time.Time
+	models   []ModelChoice
+	efforts  []string
 	// err is a failed listing's message; such an entry answers for
 	// choicesFailTTL only.
 	err string
@@ -225,6 +237,7 @@ type SupportHarness struct {
 	Efforts         []string      `json:"efforts"`
 	Lead            bool          `json:"lead,omitempty"`
 	PermissionModes []string      `json:"permission_modes,omitempty"`
+	ModelProviders  []string      `json:"model_providers,omitempty"`
 	// PermissionLevels advertises lead/settings selection only, not workers.
 	PermissionLevels []PermissionLevel `json:"permission_levels,omitempty"`
 }
@@ -233,6 +246,7 @@ type SupportHarness struct {
 // default order, without listing choices. Each profile is resolved through
 // the global and builtin layers; one whose backend another already took is
 // left out.
+// Retained name check: old support selection and response notice (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
 func (s *Support) harnesses() []SupportHarness {
 	var out []SupportHarness
 	seen := map[string]bool{}
@@ -242,7 +256,7 @@ func (s *Support) harnesses() []SupportHarness {
 		if err == nil {
 			h.Harness = rp.Definition.Backend
 		}
-		if seen[h.Harness] {
+		if h.Harness == BackendPi || seen[h.Harness] {
 			continue
 		}
 		seen[h.Harness] = true
@@ -267,11 +281,29 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 		return false, fmt.Sprintf("backend %q is not available in this daemon", name)
 	}
 	if cl, ok := backend.(ChoiceLister); ok {
-		if _, err := lookPath(cl.Executable()); err != nil {
-			return false, fmt.Sprintf("%s is not installed: %v", cl.Executable(), err)
+		if err := choiceExecutableError(cl); err != "" {
+			return false, err
+		}
+	}
+	if lead, ok := backend.(leadProviderAdmitter); ok {
+		if why := lead.leadCredentialGap(); why != "" {
+			return false, why
+		}
+	} else if setup, ok := backend.(workerSetup); ok {
+		if why := setup.workerCredentialGap(); why != "" {
+			return false, why
 		}
 	}
 	return true, ""
+}
+
+func choiceExecutableError(lister ChoiceLister) string {
+	if exe := lister.Executable(); exe != "" {
+		if _, err := lookPath(exe); err != nil {
+			return fmt.Sprintf("%s is not installed: %v", exe, err)
+		}
+	}
+	return ""
 }
 
 // listChoices fills each available harness's models and efforts, from the
@@ -279,11 +311,28 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 // cached briefly too. A listing runs apart from ctx's cancellation, bounded
 // by choicesTimeout alone: a request its caller abandoned still fills the
 // cache for the next one instead of leaving it to list again.
-func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) {
+func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) (pending bool) {
 	s.choicesMu.Lock()
 	defer s.choicesMu.Unlock()
 	for i := range hs {
 		h := &hs[i]
+		backend := s.opts.Runner.opts.Backends[h.Harness].Backend
+		if source, ok := backend.(leadProviderAdmitter); ok {
+			h.ModelProviders = source.leadProviders()
+			c, ready := s.pickerListing(h.Harness, source)
+			if !ready {
+				pending = true
+				continue
+			}
+			if c.models != nil {
+				h.Models = c.models
+			}
+			h.Efforts = c.efforts
+			if h.Error == "" {
+				h.Error = c.err
+			}
+			continue
+		}
 		if !h.Available {
 			continue
 		}
@@ -332,6 +381,7 @@ func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) {
 		}
 		s.cache[h.Harness] = cachedChoices{at: now, models: h.Models, efforts: h.Efforts}
 	}
+	return pending
 }
 
 // findHarness returns the harness named name in hs.
@@ -347,24 +397,26 @@ func findHarness(hs []SupportHarness, name string) (SupportHarness, bool) {
 // selection is the effective selection: the last one when its harness is
 // available, else the first available harness with default model and
 // effort, else the empty selection.
-func (s *Support) selection(hs []SupportHarness) Selection {
+// Retained name check: old support selection and response notice (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
+func (s *Support) selection(hs []SupportHarness) (Selection, bool) {
 	s.mu.Lock()
 	last := s.state.Last
 	s.mu.Unlock()
 	if last != nil {
 		if h, ok := findHarness(hs, last.Harness); ok && h.Available && h.Profile != "" {
-			return *last
+			return *last, false
 		}
 	}
+	retiredPi := last != nil && last.Harness == BackendPi
 	for _, h := range hs {
 		if h.Available && h.Profile != "" {
-			return Selection{Harness: h.Harness}
+			return Selection{Harness: h.Harness}, retiredPi
 		}
 	}
-	return Selection{}
+	return Selection{}, retiredPi
 }
 
-var errNoHarness = &requestError{status: http.StatusServiceUnavailable, msg: "no support harness is available: neither claude nor pi is installed and registered"}
+var errNoHarness = &requestError{status: http.StatusServiceUnavailable, msg: "no support harness is installed and registered"}
 
 // current returns the store's open conversation, if any: the mapped one,
 // still open, at root.
@@ -415,11 +467,13 @@ func (s *Support) open(store, root string, sel Selection, hs []SupportHarness) (
 }
 
 // StoreAnswer is a store's support state.
+// Retained name check: notice for an old stored support selection (TestRetiredPiSupportSelectionFallsBackWithoutRewriting).
 type StoreAnswer struct {
 	Store string `json:"store"`
 	// Conversation is the store's open conversation; null when none is.
 	Conversation *State    `json:"conversation"`
 	Selection    Selection `json:"selection"`
+	RetiredPi    bool      `json:"retired_pi,omitempty"`
 }
 
 // SelectAnswer is a select's answer.
@@ -440,6 +494,14 @@ type ChoicesAnswer struct {
 	// those concrete fields. TiersError says why none can be listed.
 	Tiers      []SupportTier `json:"tiers"`
 	TiersError string        `json:"tiers_error,omitempty"`
+	// Pickers are the harnesses that list models for a picker but run no
+	// support conversation and no lead (a worker-only backend that lists
+	// choices): the settings model picker reads them beside Harnesses, and the
+	// support and lead dialogs, which offer only what they can open, do not.
+	Pickers []SupportHarness `json:"pickers,omitempty"`
+	// PickersPending says a picker's model list is still being fetched in the
+	// background and is left out of Pickers; asking again later returns it.
+	PickersPending bool `json:"pickers_pending,omitempty"`
 }
 
 // SupportTier is one named bundle: its trace and the binding it resolves
@@ -478,8 +540,8 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 			out = append(out, tier)
 			continue
 		}
-		tier.Trace, tier.Harness = res.Trace(), res.Harness
-		if binding, err := RoutedTierBinding(caller.Config, res); err != nil {
+		tier.Trace, tier.Harness = res.Trace(), TierRuntimeHarness(res.Harness)
+		if binding, err := RoutedTierBinding(caller.Config, res, s.opts.Runner.opts.Backends); err != nil {
 			tier.Error = err.Error()
 		} else {
 			tier.Model, tier.Effort = binding.Model, binding.Effort
@@ -521,9 +583,97 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 		h.Available, h.Error = supportBackendAvailability(name, reg.Backend)
 		hs = append(hs, h)
 	}
-	s.listChoices(ctx, hs)
+	leadPending := s.listChoices(ctx, hs)
+	pickers, pending := s.pickers(seen)
 	tiers, tiersErr := s.namedTiers()
-	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr}
+	last, _ := s.selection(hs)
+	return ChoicesAnswer{Harnesses: hs, Last: last, Tiers: tiers, TiersError: tiersErr, Pickers: pickers, PickersPending: pending || leadPending}
+}
+
+// pickers lists the registered worker-only backends that list their choices
+// (no lead, no support profile), which the harnesses above leave out. A
+// listing needs only the executable: the models are public, so a harness that
+// still lacks a setup step (a credential) lists them and says in Error why
+// it is not available yet. skip names the harnesses already listed.
+//
+// The listing is a remote call, so it never runs in the request: a fresh or
+// stale cached list answers at once (a stale one starts a refresh), and a
+// harness never listed is left out and reported pending while a background
+// fetch fills the cache. A choices request for the other harnesses therefore
+// never waits on it.
+func (s *Support) pickers(skip map[string]bool) (out []SupportHarness, pending bool) {
+	var names []string
+	for name, reg := range s.opts.Runner.opts.Backends {
+		if _, ok := reg.Backend.(ChoiceLister); ok && reg.WorkerCapable && reg.LeadProfile == "" && !skip[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		reg := s.opts.Runner.opts.Backends[name]
+		lister := reg.Backend.(ChoiceLister)
+		h := SupportHarness{Harness: name, Available: true, Models: []ModelChoice{}, Efforts: []string{}}
+		if err := choiceExecutableError(lister); err != "" {
+			h.Available, h.Error = false, err
+		}
+		c, ok := s.pickerListing(name, lister)
+		if !ok {
+			pending = true
+			continue
+		}
+		if c.models != nil {
+			h.Models = c.models
+		}
+		if c.efforts != nil {
+			h.Efforts = c.efforts
+		}
+		if c.err != "" {
+			h.Error = c.err
+		}
+		// The listing is done; what the harness still lacks (a credential)
+		// makes it unavailable, whatever the listing said.
+		if ok, why := supportBackendAvailability(name, reg.Backend); !ok {
+			h.Available, h.Error = false, why
+		}
+		out = append(out, h)
+	}
+	return out, pending
+}
+
+// pickerListing returns the picker harness's cached listing and whether there
+// is one; when it is missing or past its time it starts one background fetch
+// (one at a time per harness), detached from any request, bounded by
+// choicesTimeout.
+func (s *Support) pickerListing(name string, lister ChoiceLister) (cachedChoices, bool) {
+	s.pickerMu.Lock()
+	defer s.pickerMu.Unlock()
+	if s.pickerCache == nil {
+		s.pickerCache = map[string]cachedChoices{}
+		s.pickerBusy = map[string]bool{}
+	}
+	var revision uint64
+	if source, ok := lister.(interface{ choiceRevision() uint64 }); ok {
+		revision = source.choiceRevision()
+	}
+	c, have := s.pickerCache[name]
+	have = have && c.revision == revision
+	if (!have || !c.fresh(s.opts.Now())) && !s.pickerBusy[name] {
+		s.pickerBusy[name] = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), choicesTimeout)
+			models, efforts, err := lister.Choices(ctx)
+			cancel()
+			entry := cachedChoices{at: s.opts.Now(), models: models, efforts: efforts, revision: revision}
+			if err != nil {
+				entry.err = err.Error()
+			}
+			s.pickerMu.Lock()
+			s.pickerCache[name] = entry
+			s.pickerBusy[name] = false
+			s.pickerMu.Unlock()
+		}()
+	}
+	return c, have
 }
 
 // Store reads the store's conversation and the current selection, without
@@ -534,7 +684,8 @@ func (s *Support) Store(store string) (StoreAnswer, error) {
 		return StoreAnswer{}, err
 	}
 	hs := s.harnesses()
-	ans := StoreAnswer{Store: store, Selection: s.selection(hs)}
+	sel, retiredPi := s.selection(hs)
+	ans := StoreAnswer{Store: store, Selection: sel, RetiredPi: retiredPi}
 	if st, ok := s.current(store, root); ok {
 		ans.Conversation = &st
 	}
@@ -556,7 +707,8 @@ func (s *Support) Send(store, text string) (State, error) {
 	defer s.lockStore(store)()
 	st, ok := s.current(store, root)
 	if !ok {
-		if st, err = s.open(store, root, s.selection(hs), hs); err != nil {
+		sel, _ := s.selection(hs)
+		if st, err = s.open(store, root, sel, hs); err != nil {
 			return State{}, err
 		}
 	}
@@ -580,7 +732,8 @@ func (s *Support) New(store string) (State, error) {
 			return State{}, err
 		}
 	}
-	return s.open(store, root, s.selection(hs), hs)
+	sel, _ := s.selection(hs)
+	return s.open(store, root, sel, hs)
 }
 
 // CloseUnregistered closes the conversation of every mapped store that is
@@ -663,7 +816,7 @@ func (s *Support) Select(store string, req selectRequest) (SelectAnswer, error) 
 	// The base is the open conversation's own settings, else the last
 	// selection: "same harness" is the conversation's.
 	st, open := s.current(store, root)
-	cur := s.selection(hs)
+	cur, _ := s.selection(hs)
 	if open {
 		cur = Selection{Harness: st.Backend, Model: st.Model, Effort: st.Effort}
 	}

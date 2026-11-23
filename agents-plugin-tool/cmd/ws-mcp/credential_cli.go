@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -18,21 +19,24 @@ import (
 // maxCredentialInput bounds what `credential set` reads from stdin.
 const maxCredentialInput = 64 << 10
 
-// credentialCommand runs `credential set|remove|show`. Inside the daemon
+// credentialCommand runs the provider credential commands. Inside the daemon
 // (c.host != nil) it applies through the daemon's own store; outside it,
 // ApplyCredentialChange writes the file under the daemon lock or forwards
 // the change to the running daemon (single-writer rule). The key is read
 // from stdin only and is never printed.
 func (c *hostedCLI) credentialCommand(args []string) int {
-	const usage = "usage: ws-mcp credential <set|remove|show> [<provider>] [--format json]"
+	const usage = "usage: ws-mcp credential <set|remove|show|sign-in> [<provider>] [--format json]"
 	if len(args) == 0 {
 		return c.failed("credential", errors.New(usage))
 	}
 	sub := args[0]
+	if sub == "sign-in" {
+		return c.credentialSignIn(args[1:])
+	}
 	// An unrecognized argument is never echoed: it may be a key typed in
 	// the wrong place, and an error lands in terminal scrollback and logs.
 	if sub != "set" && sub != "remove" && sub != "show" {
-		return c.failed("credential", fmt.Errorf("unknown subcommand; use set, remove, or show\n%s", usage))
+		return c.failed("credential", fmt.Errorf("unknown subcommand; use set, remove, show, or sign-in\n%s", usage))
 	}
 	name := "credential " + sub
 	fs := c.flags(name)
@@ -59,7 +63,7 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	var id wscred.ProviderID
 	if len(positional) == 1 {
 		id = wscred.ProviderID(positional[0])
-		if _, ok := wscred.Lookup(id); !ok {
+		if _, ok := wscred.Lookup(id); !ok && !wsconfig.IsLocalWerkProvider(string(id)) {
 			return c.failed(name, fmt.Errorf("unknown provider; known providers: %s", knownProviderIDs()))
 		}
 	}
@@ -69,11 +73,65 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	case "remove":
 		return c.credentialApply(name, *format, wscred.Change{Op: wscred.OpRemove, Provider: id})
 	}
+	if p, ok := wscred.Lookup(id); ok && p.Kind != wscred.KindAPIKey {
+		return c.failed(name, errors.New("OpenAI uses ChatGPT sign-in; run \"credential sign-in openai\""))
+	}
 	key, err := c.readKey()
 	if err != nil {
 		return c.failed(name, err)
 	}
 	return c.credentialApply(name, *format, wscred.Change{Op: wscred.OpSet, Provider: id, APIKey: wscred.NewSecret(key)})
+}
+
+func (c *hostedCLI) credentialSignIn(args []string) int {
+	const name = "credential sign-in"
+	const usage = "usage: ws-mcp credential sign-in openai [--new-account | --account <client-id>] [--enable-plan]"
+	if len(args) == 0 || args[0] != string(wscred.ProviderOpenAI) {
+		return c.failed(name, errors.New(usage))
+	}
+	if c.host != nil {
+		return c.failed(name, errors.New("run the ws-mcp binary directly to sign in with ChatGPT"))
+	}
+	var selection wscred.OpenAISignIn
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--enable-plan":
+			selection.EnablePlan = true
+		case "--new-account":
+			selection.NewAccount = true
+		case "--account":
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
+				return c.failed(name, errors.New(usage))
+			}
+			selection.ClientID = args[i]
+		default:
+			return c.failed(name, errors.New(usage))
+		}
+	}
+	if selection.NewAccount && selection.ClientID != "" {
+		return c.failed(name, errors.New(usage))
+	}
+	dir, err := wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome))
+	if err != nil {
+		return c.failed(name, err)
+	}
+	path, err := c.credentialPath()
+	if err != nil {
+		return c.failed(name, err)
+	}
+	statuses, err := wsdashboard.SignInOpenAIOffline(c.ctx, dir, path, selection)
+	if err != nil {
+		return c.failed(name, err)
+	}
+	for _, status := range statuses {
+		if status.Provider == wscred.ProviderOpenAI && status.Configured {
+			fmt.Fprintln(c.stdout, "Signed in to OpenAI with ChatGPT plan usage enabled.")
+			return 0
+		}
+	}
+	fmt.Fprintln(c.stdout, "Signed in to OpenAI. To enable ChatGPT plan usage, run credential sign-in openai --enable-plan.")
+	return 0
 }
 
 func knownProviderIDs() string {
@@ -210,7 +268,10 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 		if dir, err = wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome)); err == nil {
 			if credPath, err = c.credentialPath(); err == nil {
 				if err = wsdashboard.MigrateCredentialFile(dir, credPath); err == nil {
-					statuses, err = wscred.NewStore(credPath).Status()
+					store := wscred.NewStore(credPath)
+					if err = store.LoadLocalEndpoints(wsconfig.Options{ConfigHome: c.getenv(wsconfig.EnvConfigHome)}); err == nil {
+						statuses, err = store.Status()
+					}
 				}
 			}
 		}
@@ -223,9 +284,16 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 			}
 		}
 		statuses = one
+		if len(one) == 0 {
+			err = errors.New("unknown provider; check agent.werk_endpoints")
+		}
 	}
 	var text strings.Builder
 	for _, s := range statuses {
+		if s.Provider == wscred.ProviderOpenAI && len(s.OpenAIAccounts) > 0 {
+			displayOpenAIAccountStatus(&text, s.OpenAIAccounts)
+			continue
+		}
 		if !s.Configured {
 			fmt.Fprintf(&text, "%s (%s): not set\n", s.Provider, s.Name)
 			continue
@@ -233,4 +301,20 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 		fmt.Fprintf(&text, "%s (%s): %s, updated %s\n", s.Provider, s.Name, s.Masked, s.UpdatedAt)
 	}
 	return c.output(name, format, statuses, text.String(), err)
+}
+
+func displayOpenAIAccountStatus(out io.Writer, accounts []wscred.OpenAIAccountStatus) {
+	for _, account := range accounts {
+		state := "sign-in required"
+		if account.SignedIn {
+			state = "ChatGPT plan usage disabled"
+			if account.PlanEnabled {
+				state = "ChatGPT plan usage enabled"
+			}
+		}
+		if account.Active {
+			state += " (active)"
+		}
+		fmt.Fprintf(out, "openai (OpenAI): %q, %s\n", account.ClientID, state)
+	}
 }

@@ -43,7 +43,7 @@ func TestOpenCronRefusesANewerStoreAndLogsIt(t *testing.T) {
 func TestCronHostForgetsASessionOnlyWhenTheRunnerDoes(t *testing.T) {
 	holders := wsholder.New(wsholder.Options{Dir: filepath.Join(t.TempDir(), wsholder.DirName)})
 	t.Cleanup(holders.Close)
-	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil)
+	runner := newAgentRunner(t.TempDir(), io.Discard, nil, nil, holders, nil, nil, nil)
 	host := &cronHost{}
 	host.sessionForgotten(runner, "before-open") // no scheduler yet: nothing to do
 	dir := t.TempDir()
