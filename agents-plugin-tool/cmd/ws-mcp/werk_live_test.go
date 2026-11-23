@@ -127,6 +127,7 @@ type werkLiveTransport struct {
 	model             string
 	proxy             atomic.Value // string
 	callMu            sync.Mutex
+	callUncertain     bool
 	requests          atomic.Int32
 	status            atomic.Int32
 	steps             atomic.Int32
@@ -238,6 +239,10 @@ func (g *werkLiveTransport) call(req *http.Request) (*http.Response, error) {
 	}
 	g.callMu.Lock()
 	defer g.callMu.Unlock()
+	if g.callUncertain {
+		_ = req.Body.Close()
+		return nil, errors.New("fixture stopped calling tools after an uncertain response")
+	}
 	args := call.Params.Arguments
 	stage := g.steps.Load()
 	var want string
@@ -251,6 +256,8 @@ func (g *werkLiveTransport) call(req *http.Request) (*http.Response, error) {
 		_ = req.Body.Close()
 		return nil, errors.New("fixture refused a proxy call outside the three allowed operations")
 	}
+	// Spend the admission before handing the request to the daemon.
+	g.callUncertain = true
 	res, err := g.wrapped.RoundTrip(req)
 	if err != nil {
 		return nil, err
@@ -266,6 +273,7 @@ func (g *werkLiveTransport) call(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("fixture tool call did not succeed")
 	}
 	g.steps.Add(1)
+	g.callUncertain = false
 	res.Body = io.NopCloser(bytes.NewReader(raw))
 	return res, nil
 }
@@ -311,4 +319,44 @@ func TestWerkLiveFixtureWithScriptedProvider(t *testing.T) {
 		})
 	})
 	runWerkLiveFixture(t, f, "vendor/fixture", provider)
+}
+
+func TestWerkLiveFixtureDoesNotRepeatUncertainEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step int32
+		args map[string]string
+	}{
+		{"fs.write", 1, map[string]string{"path": werkLivePath, "content": werkLiveAfter}},
+		{"exec.shell", 2, map[string]string{"cmd": werkLiveCommand, "session_key": "fixture"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			g := &werkLiveTransport{wrapped: werkFixtureRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				_ = req.Body.Close()
+				calls++
+				// The local operation ran. Its response stopped before a JSON-RPC result.
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{"))}, nil
+			})}
+			g.steps.Store(tc.step)
+			wire, err := json.Marshal(map[string]any{
+				"method": "tools/call", "params": map[string]any{"name": tc.name, "arguments": tc.args},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				req, err := http.NewRequest(http.MethodPost, "http://fixture", bytes.NewReader(wire))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := g.call(req); err == nil {
+					t.Fatal("an uncertain operation or its retry passed the gate")
+				}
+			}
+			if calls != 1 || g.steps.Load() != tc.step {
+				t.Fatal("the gate dispatched the effect twice or counted it as verified")
+			}
+		})
+	}
 }
