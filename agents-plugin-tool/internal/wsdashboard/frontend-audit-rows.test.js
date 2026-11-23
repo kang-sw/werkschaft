@@ -641,8 +641,8 @@ function addTurn(dom, key, at) {
   return turn;
 }
 
-function turnFixture(finished = true) {
-  const { ctx, dom } = raceRowsHarness(async () => auditPage({ events: [], end: true }));
+function turnFixture(finished = true, fetch = async () => auditPage({ events: [], end: true })) {
+  const { ctx, dom } = raceRowsHarness(fetch);
   const at = (seconds) => '2026-11-20T10:00:' + String(seconds).padStart(2, '0') + 'Z';
   const tools = new dom.El('DIV');
   tools.className = 'au-tools';
@@ -729,6 +729,64 @@ test('audit counterparts stay in their owning disclosures and the finished turn 
   assert.equal(rowById(f.dom, 'orphan-progress'), null);
   assert.equal(f.dom.centries.querySelectorAll('.au-run').length, 0);
 });
+
+test('Antigravity approval audit requests pair with the live owner by call ID', () => {
+  const f = turnFixture(false);
+  const sameTime = f.owner('approval', 5, 'another-call');
+  const approval = f.owner('approval', 9, 'c1');
+  f.add('agy-request', 1, 'system', 5, {
+    subkind: 'request:session/request_permission', call_id: 'c1'
+  });
+  f.ctx.auReconcileRows();
+
+  assert.equal(sameTime.querySelector('.conv-audit-items').children.length, 0);
+  assert.equal(rowById(f.dom, 'agy-request')?.parentNode, approval.querySelector('.conv-audit-items'));
+});
+
+for (const failedPart of ['bundle', 'body']) {
+  test('reopening the inline audit preview retries a failed HTTP ' + failedPart, async () => {
+    const bundle = '/s/s1/audit/events?call=c1';
+    const body = '/s/s1/audit/event/in1?part=in&len=4096';
+    const calls = [];
+    let finishFailure;
+    const f = turnFixture(false, async url => {
+      calls.push(url);
+      if (!finishFailure && url === (failedPart === 'bundle' ? bundle : body)) {
+        return new Promise(resolve => { finishFailure = resolve; });
+      }
+      if (url === bundle) return auditPage({ call: { id: 'in1', in_bytes: 5 }, events: [] });
+      assert.equal(url, body);
+      return auditPage({ data: 'input', end: true });
+    });
+    function toggle(open) {
+      f.call.toggleAttribute('open', open);
+      f.dom.doc.dispatchEvent({ type: 'toggle', target: f.call });
+    }
+    const settle = () => new Promise(setImmediate);
+
+    toggle(true);
+    await settle();
+    assert.equal(typeof finishFailure, 'function');
+    const beforeRetry = calls.slice();
+    toggle(false);
+    toggle(true);
+    assert.deepEqual(calls, beforeRetry);
+    finishFailure({ ok: false, status: 503 });
+    await settle();
+    assert.equal(f.call.querySelector('.au-call-input'), null);
+
+    toggle(false);
+    toggle(true);
+    await settle();
+    assert.deepEqual(calls, [...beforeRetry, bundle, body]);
+    assert.equal(f.call.querySelector('.au-call-input')?.textContent, 'input');
+
+    toggle(false);
+    toggle(true);
+    await settle();
+    assert.deepEqual(calls, [...beforeRetry, bundle, body]);
+  });
+}
 
 test('retry detail leaves the live badge and counts under the finished turn on recovery', () => {
   const f = turnFixture(false);

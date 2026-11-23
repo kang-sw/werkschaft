@@ -99,6 +99,7 @@ var wsSettingsChoiceLabels = {
   var families = catalog.filter(function (spec) { return spec.key.endsWith(".*"); });
   var extension = window.WsSettingsExtension || {};
   var preferences = window.WsSettingsPreferences;
+  var preferenceEditor;
   var content = view.querySelector("[data-settings-content]");
   var search = view.querySelector("[data-settings-search]");
   var count = view.querySelector("[data-settings-count]");
@@ -602,6 +603,7 @@ var wsSettingsChoiceLabels = {
       } finally {
         inputs.forEach(function (node) { node.disabled = queued && node.classList.contains("save-btn"); });
         row.removeAttribute("aria-busy");
+        if (entry.key === preferences?.legacyKey) preferenceEditor?.sync();
       }
     };
   }
@@ -1097,6 +1099,7 @@ var wsSettingsChoiceLabels = {
   }
 
   function renderContent() {
+    preferenceEditor = null;
     content.replaceChildren();
     if (!snapshot) {
       var note = el("p", "info-note", failure ? statusText(failure) : tr("js.settings.loading"));
@@ -1144,7 +1147,7 @@ var wsSettingsChoiceLabels = {
     }
     var list = el("div", "klist");
     if (activeSection === "prompts" && preferences) {
-      var slots = preferences.render({
+      preferenceEditor = preferences.render({
         selection, entries: () => sectionEntries("prompts"),
         matches: entry => matches(entry, specFor(entry.key)),
         unfiltered: filter === "all" && !search.value.trim(),
@@ -1153,7 +1156,7 @@ var wsSettingsChoiceLabels = {
         drafts: () => extension.operations(selection),
         discard: entry => extension.discard(entry, selection)
       });
-      if (slots) list.append(slots);
+      if (preferenceEditor) list.append(preferenceEditor.card);
     }
     var rowGroup = null;
     function appendRow(node) {
@@ -1167,7 +1170,7 @@ var wsSettingsChoiceLabels = {
       if (spec.section !== (activeSection === "adapters" ? adapter : activeSection)) continue;
       for (var [key, rows] of byKey) {
         if (specFor(key) !== spec) continue;
-        if (preferences && preferences.replaces(key)) continue;
+        if (preferences && preferences.replaces(key, rows)) continue;
         if (spec.control === "tier") {
           if (rows.some(function (entry) { return matches(entry, spec); })) {
             rowGroup = null;
