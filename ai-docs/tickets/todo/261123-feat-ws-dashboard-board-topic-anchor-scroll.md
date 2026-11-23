@@ -46,7 +46,7 @@ Last ID: (1435)
 
 (1433) [open] [technical] The gallery's existing independent scroll and wheel behavior in docked panes over adding board topic snaps inside those panes - each pane already has a body scroller and the gallery owns page transitions.
 
-(1434) [open] [technical] Select the first available topic on a fresh load or asset reload over adding a replacement reload snapshot - this retires the geometry restore without changing persisted state.
+(1434) [open] [technical] Restore the current topic key after a reload or asset reload from tab-scoped sessionStorage (client only; first topic when the key is gone) over always selecting the first topic - the daemon restart reloads the page often, and a single key carries no geometry reads and no server state (T0).
 
 (1435) [open] [technical] Keep existing board tools and standalone cards reachable outside the topic snap sequence over inserting non-topic snap stops - wheel navigation and removal fallback can use one ordered list of topic keys.
 
