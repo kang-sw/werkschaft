@@ -475,8 +475,8 @@
 
   function virtualNodeHasLazyGap(node) {
     if (!node || (node.nodeType !== 1 && node.nodeType !== 11)) return false;
-    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy], template[data-history-topic]")) return true;
-    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy], template[data-history-topic]"));
+    if (node.nodeType === 1 && node.matches && node.matches(".history-gap[data-lazy]")) return true;
+    return !!(node.querySelector && node.querySelector(".history-gap[data-lazy]"));
   }
 
   function virtualFindTopic(key) {

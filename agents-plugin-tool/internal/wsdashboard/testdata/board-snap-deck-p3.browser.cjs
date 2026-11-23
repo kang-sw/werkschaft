@@ -1040,6 +1040,42 @@ test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggl
     assert.equal(band4Up.liveTopic, 'topic-3', 'Quick Look after Band 3 -> Band 4 resize must preview the roved topic');
     assert.equal(band4Up.galHidden, false);
 
+    // Layout mode toggle at 2560px while Overview is open: tabs tears down Quick Look, grid remounts it.
+    const tabsMode = await page.evaluate(() => {
+      const grid = document.querySelector('.dgrid');
+      grid.setAttribute('data-layout', 'tabs');
+      window.WsCards.relayout();
+      const t3 = document.querySelector('#r-board section.topic[data-topic="topic-3"]');
+      return {
+        isFourCol: window.WsCards.isFourCol(),
+        hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+        previewHostCount: document.querySelectorAll('.overview-preview').length,
+        t3InBoard: !!t3,
+        t3HasLiveAttr: !!(t3 && t3.hasAttribute('data-overview-live')),
+      };
+    });
+    assert.equal(tabsMode.isFourCol, false);
+    assert.equal(tabsMode.hasPreviewAttr, false, 'switching to tabs layout at 2560px must tear down Quick Look');
+    assert.equal(tabsMode.previewHostCount, 0);
+    assert.equal(tabsMode.t3InBoard, true);
+    assert.equal(tabsMode.t3HasLiveAttr, false);
+
+    const gridMode = await page.evaluate(() => {
+      const grid = document.querySelector('.dgrid');
+      grid.setAttribute('data-layout', 'grid');
+      window.WsCards.relayout();
+      return {
+        isFourCol: window.WsCards.isFourCol(),
+        hasPreviewAttr: document.documentElement.hasAttribute('data-overview-preview'),
+        previewHostCount: document.querySelectorAll('.overview-preview').length,
+        liveTopic: document.querySelector('.overview-preview-stage > section.topic')?.getAttribute('data-topic'),
+      };
+    });
+    assert.equal(gridMode.isFourCol, true);
+    assert.equal(gridMode.hasPreviewAttr, true, 'switching back to grid layout at 2560px must remount Quick Look');
+    assert.equal(gridMode.previewHostCount, 1);
+    assert.equal(gridMode.liveTopic, 'topic-3');
+
     // Resize DOWN from Band 4 (2560px) to Band 3 (1720px) while Overview is open -> Quick Look tears down cleanly.
     await page.setViewportSize({ width: 1720, height: 960 });
     await page.waitForFunction(() => !document.documentElement.hasAttribute('data-overview-preview'));

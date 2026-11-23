@@ -447,6 +447,7 @@
         if (mode) root.setAttribute("data-gal", mode); else root.removeAttribute("data-gal");
         galNarrow = mode === "narrow";
         if (galNarrow) placeGallery();
+        if (window.WsOverview && window.WsOverview.syncPreview) window.WsOverview.syncPreview();
       },
       closed: function (from, done) {
         if (!window.fetch) { done(null); return; }

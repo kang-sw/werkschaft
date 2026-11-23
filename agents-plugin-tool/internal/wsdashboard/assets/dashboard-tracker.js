@@ -728,7 +728,7 @@
     if (!w || !w.hydrateAll) return;
     w.hydrateAll(doc).then(function (n) { if (n) update(paletteRows()); });
     if (window.WsBoardVirtual && window.WsBoardVirtual.hydrateLazySearch && window.wbHistoryFetch) {
-      window.WsBoardVirtual.hydrateLazySearch(window.wbHistoryFetch).then(function (n) { if (n) update(paletteRows()); });
+      window.WsBoardVirtual.hydrateLazySearch(window.wbHistoryFetch).then(function (n) { if (n) update(paletteRows()); }).catch(function () {});
     }
   }
   function paletteClosed(update) {

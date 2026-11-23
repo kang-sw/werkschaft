@@ -295,7 +295,7 @@ test('Finding #10: WsBoardVirtual.searchRoots / detachedNodes returns detached c
   const roots = ctx.WsBoardVirtual.searchRoots('t8');
   assert.equal(roots.length, 2, 'returns detached .tdoc and .topic-stream');
   assert.equal(nodes[8].children.length, 1, 'live DOM remains untouched after searchRoots');
-  assert.equal(roots[0].querySelector('.doc-body') || roots[0].children[0].textContent, 'UniqueBodyPhrase-8');
+  assert.equal(roots[0].children[0].textContent, 'UniqueBodyPhrase-8');
 
   // After a stashed SSE update on collapsed topic t8, searchRoots returns the stashed section with latest text.
   const incomingV2 = makeTopic('t8', {
