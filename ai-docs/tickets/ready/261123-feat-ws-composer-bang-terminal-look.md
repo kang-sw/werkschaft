@@ -4,8 +4,8 @@ related:
   261121-feat-ws-board-command-slots: shipped composer `!`, command card, slot strip and exec HUD that this restyles
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-design-reviewed: 72e66d63c8e25ff0
-sage-review-completeness-reviewed: 72e66d63c8e25ff0
+sage-review-design-reviewed: 1394877f00c880c1
+sage-review-completeness-reviewed: 1394877f00c880c1
 ---
 
 # Composer `!` terminal look: shell input, console results, slot keycaps
@@ -79,12 +79,84 @@ preview):
   base); Phase 3 renders it. Rejected: a client receive-time stamp in Phase 1;
   client-side `ended_at - started_at` in Phase 1 (duration derivation is
   display data owned by the backend phase).
+- **(1493)=a (owner confirmed 2026-11-23, supersedes Phases 2–3 and the in-flow
+  console/hint layout from (1400)).** Remove the in-flow `.d-cexec` inline
+  console (26px header bar + scrollback card) and the bottom 22px `bash` hint
+  row from the composer so toggling `!` mode and running `!` commands cause
+  **zero vertical composer height growth**. Keep only the `!` shell-mode input
+  styling (mono input, amber `!` via the CSS Custom Highlight API `ws-bang`,
+  green Run button; dark theme palette unchanged and light theme keeps Solarized
+  Light `--tm-*` from `8f3e2ceae` per `(1499)=a`), `@`/`/` popup suppression,
+  first-Esc removes `!` / second-Esc arms Tab-out, and `$` command slot blocks.
+  Unify running status, elapsed time, cwd, and live output into the existing
+  out-of-flow top-right Exec HUD (`.cbadges` / `.xgroup` `.xchip` pills +
+  `xpeek` overlay). Cancel Phases 2 and 3. Compatibility remains **T0**
+  (client-only UI cleanup; server routes, payloads, and stored state are
+  unchanged). Rejected: `(b)` migrating stderr/shell fields to `xpeek`; `(c)`
+  keeping the in-flow `.d-cexec` console and Phases 2–3. Note: the owner also
+  withdrew the Codex/Claude worker split on 2026-11-23 (14:24 KST), so `agy`
+  workers implement remaining work.
+- **(1499)=a (owner confirmed 2026-11-23).** Keep the Solarized Light `--tm-*`
+  palette from `8f3e2ceae` (`dashboard-conversation.css#L117-L120`,
+  `composer-bang.test.cjs#L190-L197`: base3/base2 `#fdf6e3` bg, base01 text,
+  Solarized accents) for light-theme terminal surfaces (`data-bang` input and
+  `.d-ucmd` slots) in Phase 4, while keeping the dark theme palette unchanged.
+  Aligns `(1493)=a` and Phase 4 wording with `8f3e2ceae`. Rejected: `(b)`
+  reverting light-theme `--tm-*` terminal surfaces back to dark `#131417`.
+- **(1500) [announced, confirmed 2026-11-23].** Remove the `xpeek` "Jump
+  to card" control (`xhCardFor` — including its callsite in `xhPeekRender`'s
+  signature array at `dashboard-exec-hud-peek.js#L159` — and `act === "jump"`
+  in `dashboard-exec-hud-peek.js#L224-L228,L720-L724,L777-L786`),
+  `.cexec.xflash` (`dashboard-exec-hud.css#L164`), `js.xhud.pk.jump` /
+  `js.xhud.pk.jump.none` across all 11 locale tables
+  (`agents-plugin-tool/internal/wsi18n/tables/`), and the card-jump assertion in
+  `testdata/exec-hud.browser.cjs#L440-L451`. Direct consequence of `(1493)=a`:
+  once `.d-cexec` DOM cards are removed, no card target exists to jump to and
+  `xpeek` itself is the unified output view.
+- **(1501) [technical, confirmed 2026-11-23].** Headless bounded
+  submission tracking and `noteWarn` toast feedback over removing `cexecPoll`
+  or modifying Go payloads. After removing `.d-cexec` DOM cards and
+  `sessionStorage` card restoration (`cexecCards`/`cexecBox`/`cexecSave`), keep
+  `cexecList` on page load solely to prime `cexecToken`, and keep a lightweight
+  headless bounded poll (`GET /s/<rid>/composer-exec/<submission_id>`) per
+  accepted `202` submission from both `cexecSend` and `ucmdRun` until the
+  server populates `exec_id` or settles the submission:
+  - When `exec_id` arrives: invoke an in-memory admission hook
+    (`submission_id`, `command`, `exec_id`, `origin`) for
+    `261123-feat-ws-dashboard-composer-bang-history` (pinned in `(1505)`),
+    trigger `.xgroup` Exec HUD refresh (`execWake` / `xhFetch`) so the `.xchip`
+    pill appears promptly, and stop polling `composer-exec/<id>` (`.xgroup` +
+    `xpeek` own live status, output, and exit code thereafter).
+  - When `card.unknown === true` (initial `200` or `404` poll, for either
+    `cexecSend` or `ucmdRun`) or post-`202` `phase === "refused"`: display the
+    message via the existing floating `noteWarn` toast (`WsToast`, 0 px
+    composer height change; keep `js.cexec.unknown` and `js.cexec.refused` in
+    all 11 locale tables; leave the draft intact on `cexecSend` `unknown`), and
+    stop polling.
+  - Rejected: removing `cexecPoll` entirely (drops post-`202` non-lead refusal
+    feedback and breaks `submission_id -> exec_id` correlation needed by
+    `261123-feat-ws-dashboard-composer-bang-history`, since `/s/<rid>/exec/jobs`
+    does not carry `submission_id`); adding `submission_id` to Go `execJobView`
+    (violates `(1493)=a`'s client-only T0 scope).
+- **(1505) [technical, auto-confirmed from Sage design & completeness review 2026-11-23].**
+  Dispatch the in-memory admission hook via
+  `window.dispatchEvent(new CustomEvent("ws:cexec-admitted", { detail: { submission_id, command, exec_id, origin } }))`
+  with exact `origin` values `"cexec"` (typed `!` via `cexecSend`) and `"ucmd"`
+  (registered slot click via `ucmdRun`), cap headless `cexecPoll` with an
+  explicit upper poll-count / duration limit (20 polls or 30 s) so repeated
+  transport/5xx errors or stuck states cannot spin indefinitely, and pass
+  immediate `POST 200` retry responses carrying `exec_id` or
+  `phase === "refused"` directly through the same headless admission hook /
+  `.xgroup` HUD wake / `noteWarn` handler as `cexecPoll`. Rejected: an
+  unbounded `cexecPoll` loop; omitting `POST 200` retry payloads from the hook;
+  leaving the hook transport and `origin` strings unspecified across tickets.
 
 ## Constraints
 
 Implementation Conventions rows from `AGENTS.md` matching the touched paths
-(dashboard assets under `agents-plugin-tool/internal/wsdashboard/`; Phase 2
-also touches Go under `agents-plugin-tool/internal/`):
+(dashboard assets under `agents-plugin-tool/internal/wsdashboard/` and all 11
+locale tables under `agents-plugin-tool/internal/wsi18n/tables/`; Phase 2 was
+dropped by `(1493)=a`):
 
 | paths | manual |
 |---|---|
@@ -92,7 +164,7 @@ also touches Go under `agents-plugin-tool/internal/`):
 | `agents-plugin-tool/internal/` | `ai-docs/manuals/release-compatibility.md` |
 | `agents-plugin-tool/` | `ai-docs/manuals/performance.md` |
 
-- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin/, agents-plugin-wsflow/, agents-plugin-tool/)
 - Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
 - Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
 - Read each manual before editing a covered file.
@@ -101,55 +173,61 @@ also touches Go under `agents-plugin-tool/internal/`):
   `en` and `ko`.
 - Server `!` grammar, one-use approval, TrustedWrite routing and the slots'
   full-line display contract are not touched.
-- Performance: the `!`-mode paint reuses the existing mention layer; do not add
-  per-keystroke layout work (a per-line PS2 `>` gutter in the textarea layer
-  is costly and is omitted).
+- Performance: `!`-mode paint is driven from `paintMentions`
+  (`dashboard-composer-pickers.js#L47`) and paints `!` via the CSS Custom
+  Highlight API `CSS.highlights.set("ws-bang", ...)`
+  (`dashboard-composer-exec.js#L484-496`), not `.chl`; do not add per-keystroke
+  layout work (a per-line PS2 `>` gutter in the textarea layer is costly and is
+  omitted).
 
 ## Verification
 
-- LOOK check: capture the running UI for each matrix state and compare
-  side by side with the mockup. UI that must match a mockup goes to a native
-  Claude worker given the mockup path; text-only inspection does not count.
-- Go tests (Phase 2, backend) run only on w5090. No local `go test`, no ws executables,
-  no Electron.
+- LOOK check: capture the running UI for each active state and compare side by
+  side with the mockup (`agy` workers implement remaining work per `(1493)=a`,
+  which withdrew the Codex/Claude split); text-only inspection does not count.
+- Go tests run only on w5090. No local `go test`, no ws executables, no
+  Electron.
 - Run only the Node test files this change touches.
 - Mockup states (legend of `overview.html`): ① idle, ② `!` typed, ③ short
   output done, ④ failure (stderr, exit != 0), ⑤ long output to file, ⑥ async
-  run in progress, ⑦ command slot. Phase 1 covers ①, ②, ③, ④ (without stderr
-  separation), ⑤, ⑥ without live tail, and ⑦; Phase 3 adds the field-dependent
-  parts of ③-⑥ and the ② title.
-- Phase 1 test targets (touched Node/browser fixtures, for example
-  `testdata/composer-exec.browser.cjs` and `testdata/composer-usercmd.browser.cjs`):
+  run in progress, ⑦ command slot. Phase 1 covered ①, ②, ③, ④ (without stderr
+  separation), ⑤, ⑥ without live tail, and ⑦; Phase 2 and Phase 3 were
+  dropped by `(1493)=a`.
+- Phase 1 test targets (`testdata/composer-bang.test.cjs`,
+  `testdata/composer-exec.browser.cjs`, `testdata/composer-usercmd.browser.cjs`):
   first Esc removes the leading `!` and a second Esc arms Tab-exit; the removal
-  keeps caret, mention paint (`.chl`) and draft state consistent, as the
+  keeps caret, `!` highlight (`CSS.highlights` `"ws-bang"` in
+  `dashboard-composer-exec.js#L484-496`) and draft state consistent, as the
   Backspace path does, and does not disturb the send/retry text comparison;
   `@` and `/` popups stay closed in `!` mode; console collapse and clear; the
   failure, running and amber status colors.
 
 ## Prior Decisions
 
-- 261121-feat-ws-board-command-slots (2026-11-22, Result): "Performance, measured on macOS (the probes under `WS_COMPOSER_PERF=1`, `composer_exec_perf_test.go` and `TestComposerExecConversionProbe`; p50 / p95)" — bearing: constrains
-- 11caef15 (2026-11-22, commit): "A LAN viewer typing `!` fails closed (route refused, draft kept, hint to start with a space) rather than sending a command line as a prompt." — bearing: constrains
-- 11caef15 (2026-11-22, commit): "Only a session rendered as a hosted non-child composer sets data-cexec; the server still decides (a non-lead is refused after acceptance with a refused card)." — bearing: constrains
-- ce20146a (2026-11-22, commit): "Retry semantics: only a resend of the same text after an unresolved attempt sets retry; 4xx settles the attempt, a network failure or 5xx leaves it unresolved." — bearing: constrains
-- 0e918e11 (2026-11-23, commit): "JS: ucmdCompare orders a revision against the shown one; ucmdApply(list, post) differs for a read and a write answer; ucmdRefresh funnels a wake or a dropped answer into one read" — bearing: constrains
-- 7d13b55d (2026-05-21, commit): "Captured transcript rendering direction: exec items use terminal-output style, agent items render action-unit blocks" — bearing: supports
+- 261123-feat-ws-dashboard-composer-bang-history (2026-11-23, Decisions (1493)=a alignment): "they read admission results (`exec_id`) from `cexecSend` and monitor job origin and exit status through the existing `.xgroup` Exec HUD (`/s/<rid>/exec/jobs`) list and refresh path." — bearing: constrains
+- 0596b9076 (2026-11-23, commit): "cexecList now hands its failure cause to its own callback (done(list, why)) instead of writing a shared cexecWhy." — bearing: constrains
+- 8f3e2ceae (2026-11-23, commit): "Owner feedback: light theme gets a subtle Solarized Light tint (base3/base2 bg, base01 text, Solarized accents); dark theme palette unchanged." — bearing: constrains
+- 7d4394053 (2026-11-23, commit): "Amber `!` is painted with the CSS Custom Highlight registry (`ws-bang`) over the contenteditable editor, not through `.chl`: the composer always attaches the capsule editor, `.chl` is hidden then" — bearing: constrains
+- 0e918e11f (2026-11-23, commit): "JS: ucmdCompare orders a revision against the shown one; ucmdApply(list, post) differs for a read and a write answer; ucmdRefresh funnels a wake or a dropped answer into one read" — bearing: constrains
+- 444c57b29 (2026-11-23, commit): "Event-driven only: no initial list fetch. An old daemon never sends execjobs, so the page asks for nothing and logs no 404; a 404 on the list (LAN viewer, closed lead) marks the page absent" — bearing: constrains
+- ce20146ad (2026-11-22, commit): "Retry semantics: only a resend of the same text after an unresolved attempt sets retry; 4xx settles the attempt, a network failure or 5xx leaves it unresolved." — bearing: constrains
+- 11caef152 (2026-11-22, commit): "Only a session rendered as a hosted non-child composer sets data-cexec; the server still decides (a non-lead is refused after acceptance with a refused card)." — bearing: constrains
 
 ## Route Facts
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | wsdashboard/assets/dashboard-composer-exec.js, dashboard-composer-ucmd.js, dashboard-composer-keyboard.js, dashboard-conversation.css, dashboard-exec-hud.css; Phase 2 Go under agents-plugin-tool/internal/ |
-| scope.surface | cross-module | Phase 2 adds card/list fields consumed by dashboard JS; Phase 1 is client-only |
-| scope.new_public_symbol | unknown | Phase 2 chooses the field names and records them in its Result; none are fixed yet |
-| scope.new_type_contract | yes | Phase 2 additive card/list fields (times, stream segments, tail, cwd/shell) |
-| scope.test_surface | existing | testdata/composer-exec.browser.cjs, testdata/composer-usercmd.browser.cjs, composer_exec_test.go, composer_usercmd_test.go |
-| complexity.reuse_points | confirmed | mention layer .chl (dashboard-conversation.css#L482), .d-cexec, .d-ucmd, dashboard-composer-keyboard.js Escape/tabOut handler |
-| complexity.side_effect_risk | moderate | Esc handler shares the Tab-out arming; the mention and slash popups are disabled in bang mode |
-| risk.correctness | moderate | first-Esc-removes-bang versus Tab-out arming, plus send/draft/retry logic that depends on the leading bang |
-| risk.fit | moderate | the mockup must be matched across a light theme with dark terminal surfaces |
-| risk.test | moderate | LOOK check needs the running UI and cannot run locally; Go tests run only on w5090 |
-| risk.security_or_contract | moderate | Phase 2 adds wire fields (additive hypothesis, unconfirmed); approval and TrustedWrite routing untouched |
+| scope.span | multi-file | agents-plugin-tool/internal/wsdashboard/assets/dashboard-composer-exec.js, dashboard-composer-ucmd.js, dashboard-exec-hud.js, dashboard-exec-hud-peek.js, dashboard-conversation.css, dashboard-exec-hud.css, agents-plugin-tool/internal/wsi18n/tables/, testdata/composer-bang.test.cjs |
+| scope.surface | internal | client-only JS, CSS, i18n keys, and test cleanup; server routes, payloads, and stored state unchanged per (1493)=a |
+| scope.new_public_symbol | no | none |
+| scope.new_type_contract | no | none |
+| scope.test_surface | existing | agents-plugin-tool/internal/wsdashboard/testdata/composer-bang.test.cjs, composer-exec.browser.cjs, composer-usercmd.browser.cjs, exec-hud.browser.cjs |
+| complexity.reuse_points | confirmed | bangSync/bangMode/cexecSend/cexecList (dashboard-composer-exec.js#L312-514), execWake/xhFetch/.xgroup (dashboard-exec-hud.js#L161-222,L533-575), ::highlight(ws-bang)/[data-bang] (dashboard-conversation.css#L188-199), Escape/tabOut (dashboard-composer-keyboard.js#L34-58) |
+| complexity.side_effect_risk | moderate | removing .d-cexec and .cbang affects ucmdContainer/ucmdRun in dashboard-composer-ucmd.js#L43,L197-200, xhCardFor/jump in dashboard-exec-hud-peek.js#L224-228,L720-724,L777-786, and async refusal/unknown UX |
+| risk.correctness | moderate | must remove console/hint DOM without breaking cexecSend retry/admission tokens, exec_id delivery for bang-history, Esc/bangLeave, or per-read cexecList error reporting |
+| risk.fit | moderate | 0 px vertical composer growth in dark and light themes while keeping Solarized Light `--tm-*` in light theme (`dashboard-conversation.css#L120`, `(1499)=a`) and non-lead refusal/unknown feedback via `noteWarn` toast (`(1501)`) |
+| risk.test | moderate | composer-bang.test.cjs runs via node --test locally, whereas Go-driven Playwright suites (composer-exec.browser.cjs, composer-usercmd.browser.cjs, exec-hud.browser.cjs) and LOOK checks require w5090 |
+| risk.security_or_contract | moderate | must preserve ! grammar, attachments/LAN/non-lead refusal behavior, and private cexecList admission token handling without leaking shell runs into transcript |
 
 ## Phases
 
@@ -203,51 +281,89 @@ Decisions: the idle fold applies to restored history and user toggle; a fresh or
 active run keeps the console open. Restore never folds over a run added before
 the restore answer arrived (review finding).
 
-### Phase 2: Additive server fields (backend: Codex)
+### Phase 2: Additive server fields [dropped]
 
-Self-contained; independent of Phase 1 and may land before or after it. Owns all
-non-rendering work: the server adds additive card fields derived server-side, so
-the client only renders them. The field set is exactly the list below, tied to
-the Phase 3 elements; nothing else is added.
+Dropped by owner decision `(1493)=a` (2026-11-23): command status, elapsed time,
+cwd, and live output are unified into the existing top-right Exec HUD
+(`.xgroup` + `xpeek`), so additive inline-console card fields are no longer
+needed.
 
-- duration and a running-elapsed base (`started_at`/`ended_at` already exist on
-  the card, so only the derived values are new)
-- separate stdout/stderr (stream-tagged segments)
-- a short output tail (preview lines for long output, live tail while running)
-- cwd and shell name (e.g. `bash ~/work/demo`; Git Bash on Windows)
+### Phase 3: Render the new fields [dropped]
 
-This phase picks the exact field names, types and absent-field semantics and
-records them in its Result; Phase 1 does not depend on them and Phase 3 reads
-that Result. Done when each field above is emitted, and omitted (not zero or
-empty) when it does not apply, with Go tests for both paths.
+Dropped by owner decision `(1493)=a` (2026-11-23): the in-flow `.d-cexec`
+console is removed in Phase 4.
 
-Constraints: fields are additive only; the first-byte `!` grammar, approval and
-TrustedWrite routing are unchanged. Applies the Constraints rows above
-(release-compatibility, performance, shipped-surface-boundary).
+### Phase 4: Remove inline `.d-cexec` console and bottom 22px `bash` hint row
 
-Compatibility: expected additive (old client ignores the new fields; an old
-daemon simply omits them). To be confirmed by this phase's own evidence under
-`ai-docs/manuals/release-compatibility.md` (new -> old -> new cycle) before it
-is called additive/T0.
+Remove the in-flow `.d-cexec` console UI (header bar, collapse toggle, scrollback
+card strip) and the bottom 22px `bash` mode hint row from the composer so that
+entering `!` mode and executing `!` commands produce **0 px vertical composer
+height growth**.
 
-Verification: Go tests for the new fields and the absent-field path, run only on
-w5090 (no local `go test`, no ws executables).
+Keep intact:
+- `!` shell-mode input styling (`data-bang` mono input, amber `!` via the
+  CSS Custom Highlight API `ws-bang` (`dashboard-composer-exec.js#L484-496`,
+  `dashboard-conversation.css#L188`), green Run button; dark terminal surfaces
+  in dark theme and the Solarized Light `--tm-*` palette from `8f3e2ceae` in
+  light theme per `(1499)=a`).
+- `@` mention and `/` command popup suppression while in `!` mode, and the Esc
+  rule (first Esc removes leading `!`, second Esc arms Tab-out).
+- Terminal-styled `$` command slot blocks (`.d-ucmd`, dark in dark theme and
+  Solarized Light in light theme per `(1499)=a`) with keycap button and full
+  stored line.
+- `cexecSend` and `ucmdRun` HTTP submission, retry semantics, admission-token
+  priming (`cexecList` on load without restoring `.d-cexec` DOM cards), and
+  non-console refusal/unknown feedback per `(1501)` and `(1505)`: keep a
+  lightweight headless bounded poll (`GET /s/<rid>/composer-exec/<submission_id>`,
+  capped at 20 polls or 30 s so repeated errors or stuck states stop cleanly)
+  per accepted `202` submission (from both `cexecSend` and `ucmdRun`), and pass
+  immediate `POST 200` retry payloads returning `exec_id` or
+  `phase === "refused"` directly through the same headless handler. Once
+  `exec_id` is populated, dispatch
+  `window.dispatchEvent(new CustomEvent("ws:cexec-admitted", { detail: { submission_id, command, exec_id, origin } }))`
+  with `origin: "cexec"` (`cexecSend`) or `origin: "ucmd"` (`ucmdRun`) for
+  `261123-feat-ws-dashboard-composer-bang-history`, trigger the existing
+  `.xgroup` Exec HUD refresh (`execWake` / `xhFetch`) so the running `.xchip`
+  pill appears promptly in `.cbadges` (inside `.sbwrap`,
+  `dashboard.tmpl#L26,279`) and clicking it opens `xpeek`, and stop polling
+  `composer-exec/<id>`. Surface `card.unknown === true` (initial `200` or `404`
+  poll, keeping the draft on `cexecSend`) and `phase === "refused"` (immediate
+  `POST 200` or post-`202` poll) via the floating `noteWarn` toast (`WsToast`,
+  0 px composer height change), retaining `js.cexec.unknown` and
+  `js.cexec.refused` across all 11 locales.
+- Remove unused `.d-cexec` / `bash`-hint DOM markup, `cexecCards` / `cexecBox`
+  / `sessionStorage` card restoration, `ucmdContainer`'s `cexecBox` anchor
+  reference (`dashboard-composer-ucmd.js#L43`), `xpeek` "Jump to card"
+  (`xhCardFor` — including its callsite inside `xhPeekRender`'s signature array
+  at `dashboard-exec-hud-peek.js#L159` — and `act === "jump"` in
+  `dashboard-exec-hud-peek.js#L224-L228,L720-L724,L777-L786`), `.cexec.xflash`
+  (`dashboard-exec-hud.css#L164`), orphaned `.d-cexec` / `bash`-hint /
+  `js.xhud.pk.jump*` CSS rules and i18n keys across all 11 locale tables
+  (`agents-plugin-tool/internal/wsi18n/tables/`), and the card-jump assertion in
+  `testdata/exec-hud.browser.cjs#L440-L451` per `(1500)`. Migrate
+  `testdata/composer-exec.browser.cjs` and `testdata/composer-usercmd.browser.cjs`
+  (alongside `testdata/exec-hud.browser.cjs`) from `.d-cexec .cexec` card
+  assertions to `.xgroup` / `xpeek` / `noteWarn` / `ws:cexec-admitted`
+  assertions.
 
-### Phase 3: Render the new fields (frontend: Claude)
+#### Verification
 
-Blocked on Phase 1's and Phase 2's landed Results. Pure client rendering in the
-element positions Phase 1 already laid out; each element switches on when its
-field exists and stays hidden otherwise (an old daemon leaves them hidden):
-
-- duration/elapsed in the status line, from the Phase 2 derived fields (the
-  Phase 1 status line has no time)
-- red stderr lines with a left rule from the stream-tagged segments
-- preview lines for long output and live tail while running
-- console title with shell name and cwd
-
-Sequencing note: `261115-feat-ws-whiteboard-agent-card` Phase 2 embeds the same
-conversation/composer shell, so whichever lands second checks that `!`-mode
-styling and the exec console still work inside the embedded card.
-
-No server code and no derivation logic beyond display. Verification: LOOK check
-against the mockup states ③–⑥ and ② (title) plus touched Node tests.
+- Run touched standalone Node tests with `node --test`
+  (`testdata/composer-bang.test.cjs`), and run Go-driven Playwright fixtures
+  (`testdata/composer-exec.browser.cjs`, `testdata/composer-usercmd.browser.cjs`,
+  `testdata/exec-hud.browser.cjs`) via `go test` on `w5090`: verify `#composer`
+  height changes by `0 px` when entering/leaving `!` mode and when running a `!`
+  command; verify `!` shell-mode input (dark in dark theme, Solarized Light in
+  light theme per `(1499)=a`) / amber `!` / green Run / `@`+`/` suppression /
+  Esc rule / `$` slot blocks / headless bounded `cexecPoll` (including poll cap
+  and immediate `POST 200` retry payloads) emitting `ws:cexec-admitted` with
+  `origin: "cexec"|"ucmd"` + `.xgroup` HUD refresh / `noteWarn` toast for
+  `unknown` and `refused` (for both `cexecSend` and `ucmdRun`) / removal of
+  `xpeek` Jump-to-card remain working.
+- Capture a before/after LOOK of idle, `!` typed, and active `!` run (with
+  `.xgroup` pill visible in `.cbadges`) in dark and light themes to confirm zero
+  vertical composer growth.
+- Run Go tests on `w5090` (covers embedded asset generation, i18n tables, and Go-driven Playwright fixtures):
+  ```bash
+  bash D:/sys_lock.sh remote w5090 run <who> <min> --sync '<worktree>' -- 'export PATH=$HOME/sdk/go/bin:$PATH; cd agents-plugin-tool && python3 scripts/generate-package-assets.py && go test ./internal/wsdashboard/... ./internal/wsi18n/...'
+  ```
