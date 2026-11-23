@@ -52,16 +52,35 @@ The advisory reaches callers through these paths in
 - **(1439)=a.** Aim for 2–3 sweeps per day at this repo's current pace. Advise
   when first-parent merges reach **25** or net changed lines reach **20,000**,
   whichever happens first. Extend the existing `## Checkpoint Nudge` section
-  in `ai-docs/_review.local.md` with the metric threshold keys. Shipped defaults
-  are open in (1441). Rejected (b): 60 merges / 50,000 lines (roughly once a
-  day). Rejected (c): 5 merges / 5,000 lines / 50 commits (roughly every
-  1–2 hours).
+  in `ai-docs/_review.local.md` with the metric threshold keys.
+  Rejected (b): 60 merges / 50,000 lines (roughly once a day).
+  Rejected (c): 5 merges / 5,000 lines / 50 commits (roughly every 1–2 hours).
+- **(1440) confirmed.** Projects list generated-path exclusions under
+  `## Checkpoint Nudge` in `ai-docs/_review.local.md`. Use those exclusions
+  for both new metrics. Rejected: auto-detect `.gitattributes`
+  `linguist-generated` paths or omit the generated-path filter.
+- **(1441)=b.** The shipped defaults are **10 first-parent merges** or
+  **5,000 net changed lines**. Devenv opts in to **25 merges** or
+  **20,000 lines** in its `ai-docs/_review.local.md`.
+  Rejected (a): ship 25 merges / 20,000 lines for all projects. That pair
+  was calibrated for devenv's pace.
+- **(1442)=a.** Use a single advisory tier. Once either applicable metric
+  reaches its threshold, emit one message recommending a sweep.
+  Rejected (b): add a second, higher tier with stronger wording.
+- **(1443)=a.** With only a valid `staleness: N commits` threshold in local
+  config, preserve the legacy all-ancestry commit-count trigger and present
+  it with the single advisory wording. This preserves its original trigger
+  point, including the effective cutoff at 20 when `N` is higher
+  (`agents-plugin-tool/internal/wsreview/checkpoint.go:74-84`). Valid new
+  threshold keys take precedence and select the merge and line metrics.
+  Rejected (b): immediately apply the new shipped defaults to legacy-only
+  overrides.
 - **Compatibility: T0.** Maintainers can add keys to the optional local
   Markdown file. The current binary reads the file and searches only for the
   known section and `staleness` line, using its default when that line is
   absent or invalid (`agents-plugin-tool/internal/wsreview/config.go:17-58`).
   It ignores the added keys and performs no rewrite. The new reader accepts
-  existing files, applies the precedence selected in (1443), and sees the
+  existing files, applies the precedence in (1443), and sees the
   added keys after switching back from the old binary. Keep the advisory
   read-only and preserve MCP calls and the ledger format
   (`agents-plugin-tool/internal/wsreview/checkpoint.go:21-29,57-87`).
@@ -69,31 +88,6 @@ The advisory reaches callers through these paths in
   hit the older decoder's unknown-field rejection, a T3 boundary
   (`agents-plugin-tool/internal/mcp/config_manifest.go:180-185`,
   `ai-docs/manuals/release-compatibility.md:116`).
-
-## Open Decision Queue
-
-Last ID: (1443)
-
-(1440) [open] [technical] Identify generated paths through project-declared exclusions in `## Checkpoint Nudge`.
-- Prefer an explicit exclude list in `ai-docs/_review.local.md` over `.gitattributes` `linguist-generated` detection or omitting the filter. A local list makes the advisory scope explicit for each project and avoids coupling review scope to language statistics. This repo already marks some generated paths in `.gitattributes:12-21`, but the shipped implementation needs a generic mechanism.
-
-(1441) [open] [policy] Choose the merge and line thresholds for downstream projects without local overrides.
-- Context: 25 merges / 20,000 lines was calibrated for devenv. Downstream projects land work at different rates.
-- Alternative a: Ship 25 merges / 20,000 lines as the default pair for every project.
-- Alternative b: Keep a conservative shipped default policy, agree its thresholds before promotion, and opt devenv into 25 merges / 20,000 lines through `ai-docs/_review.local.md`.
-> Recommendation b. A local opt-in lets this repo use its measured cadence without making that cadence the default for downstream projects.
-
-(1442) [open] [policy] Decide how the hard-coded 20-commit strong advisory tier should carry over.
-- Context: The current strong tier runs first and can override the configured soft threshold. Its commit units do not match the new merge and line metrics.
-- Alternative a: Use one advisory tier for the new metrics and handle any legacy mode under (1443).
-- Alternative b: Keep stronger wording only at separately defined merge or line thresholds above the first advisory.
-> Recommendation a. The first threshold already asks for a sweep, and the calibration gives no basis for a second urgency level.
-
-(1443) [open] [policy] Decide how the new reader honors an existing `staleness: N commits` override.
-- Context: Some projects may already rely on a specific commit threshold. Extending the local file leaves that setting readable by an older binary.
-- Alternative a: Preserve legacy advisory behavior when a valid old key is the only explicit threshold setting. Let valid new threshold keys take precedence when present.
-- Alternative b: Switch existing files to the new metric policy immediately. An old key alone would use the new shipped defaults.
-> Recommendation a. Projects keep their explicit cadence until they opt into the new thresholds.
 
 ## Constraints
 
@@ -114,7 +108,7 @@ Last ID: (1443)
 
 ### Phase 1: Measure reviewable changes and update the advisory
 
-Implement in Codex after settling (1440)–(1443). Reuse `CheckpointNudgeWith`,
+Implement in Codex. Reuse `CheckpointNudgeWith`,
 the injected Git runner, `Frontier`, and `ResolveTrackWith`. Measure eligible
 first-parent merges on the resolved review track and the net diff from the
 frontier comparison base to the track tip. Use the combined added and deleted
@@ -124,16 +118,21 @@ first-parent contribution of each candidate merge. Keep mixed merges eligible
 if they land a reviewable path. Direct commits can contribute to net lines.
 Count each eligible first-parent merge once.
 
-Extend the existing local parser with the settled keys, fallback, and tier
-behavior. The shared advisory reports the threshold reached in merge or line
-units and carries the existing sweep range. Use the existing active emitters
-for that result, including hosted manual rendering.
+Extend the existing local parser with the two metric thresholds and the
+project's generated-path exclude list. Use shipped defaults for thresholds
+without a valid override in metric mode. Give valid new threshold keys
+precedence over the legacy key, and retain the legacy trigger for legacy-only
+overrides. Record the 25-merge / 20,000-line opt-in in devenv's local review
+config during implementation. The shared advisory uses one message in the
+applicable units and carries the existing sweep range through the active
+emitters, including hosted manual rendering.
 
 Update the Go fixtures for first-parent history with merged side-branch work,
 docs-only and generated-only changes, mixed changes, empty direct commits,
-reverted changes, and a non-`develop` review track. Cover quiet below both
-thresholds, equality and independent triggering at each threshold, config
-fallback and precedence, the settled strong-tier behavior, trailing non-clearing
+reverted changes, and a non-`develop` review track. Cover shipped defaults
+and local overrides, quiet below both thresholds, equality and independent
+triggering at each threshold, and one advisory when both thresholds are met.
+Cover the legacy-only trigger and new-key precedence, trailing non-clearing
 ledger entries, baseline without a track, and failure without ledger writes.
 Assert consistent output through the active emitters.
 
