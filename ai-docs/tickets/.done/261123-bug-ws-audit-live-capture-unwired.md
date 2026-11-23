@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: cfa3bee590957a60
 sage-review-completeness-reviewed: cfa3bee590957a60
+completed: 2026-11-23
 ---
 
 # Live audit capture is unwired in the production daemon
@@ -146,3 +147,39 @@ executables off the local PC. The asset generator is at
 ```bash
 bash D:/sys_lock.sh remote w5090 run <who> <min> --sync '<worktree>' -- 'export PATH=$HOME/sdk/go/bin:$PATH; cd agents-plugin-tool && python3 scripts/generate-package-assets.py && go test ./internal/wsdashboard/... ./internal/wsagent/... ./cmd/ws-mcp/...' > D:/Temp/ws-audit-live-capture/go-test.log
 ```
+
+### Result (a6f79dc44) - 2026-11-23
+
+The daemon binds its audit store before the hosted runner starts recovery.
+Hosted Claude and Codex sessions use the existing capture adapters. The
+production holder manager offers the optional audit channel so capable
+Claude lead holders can tee ring-skipped lines. If the store cannot open,
+the daemon and hosted sessions still run. The changelog and MCP runbook
+describe the enabled capture path.
+
+The Type 1 ring uses one writer append per kept event in steady state and
+zero per-event rereads or rewrites. The capture handoff queues in memory.
+Opening the first segment also creates the session directory and segment
+and writes its header. Rotation creates a segment, closes the old handle,
+writes the new header, and removes any whole segments selected for
+eviction. Pending finalize records can share an event's append or take
+one separate idle write. The existing segment format and optional holder
+offer preserve T0 compatibility.
+
+Verification on w5090:
+
+- The unfiltered ticket command passed `wsdashboard` and `cmd/ws-mcp`.
+  Its sole failure was `TestOneShotTimeoutKillsProcessTree` in `wsagent`.
+  A focused run at base `15b49e365` reproduced the same failure.
+- After asset generation, the full three-package check on `981d25b0c`
+  passed with only `TestOneShotTimeoutKillsProcessTree` excluded.
+- Both `TestDashboardHostedAudit` subtests passed. Setting the runner's
+  sink to nil and disabling the holder offer separately each made the
+  live case fail as expected. The blocked-store case passed in both
+  mutation runs.
+- R1 identified two test gaps. Commit `981d25b0c` checks the sink at
+  runner startup and isolates Claude settings. Fixes-only R2 cleared both.
+  The local logs and temporary verification script were removed.
+
+Forward: On w5090, `TestOneShotTimeoutKillsProcessTree` reports a grandchild
+surviving its timeout on both `15b49e365` and the implementation branch.

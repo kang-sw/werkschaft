@@ -244,6 +244,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if eh, ok := d.agents.(AgentEndpointHost); ok {
 			eh.SetEndpoint(endpointURL(d.endpoint, ""))
 		}
+		if ah, ok := d.agents.(AgentAuditHost); ok {
+			ah.SetAuditSink(d.AuditSink())
+		}
 		d.agents.Start(d.agentChanged)
 	}
 	if err := writeEndpoint(opts.Dir, d.endpoint); err != nil {

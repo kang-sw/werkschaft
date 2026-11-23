@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wsaudit"
 )
 
 func testClient() *http.Client {
@@ -816,18 +817,23 @@ func TestEnsureReportsASpawnFailure(t *testing.T) {
 	}
 }
 
-// startOrderAgents is an agent host that records, at Start, whether the
-// daemon could already be reached.
+// startOrderAgents records the daemon state when agent recovery starts.
 type startOrderAgents struct {
-	dir       string
-	reachable bool
-	started   bool
+	dir         string
+	reachable   bool
+	started     bool
+	sink        wsaudit.Sink
+	sinkAtStart wsaudit.Sink
 }
 
 func (a *startOrderAgents) Handler() http.Handler { return http.NotFoundHandler() }
+func (a *startOrderAgents) SetAuditSink(sink wsaudit.Sink) {
+	a.sink = sink
+}
 func (a *startOrderAgents) Start(func(replyID, project string)) {
 	_, err := ReadEndpoint(a.dir)
 	a.started, a.reachable = true, err == nil
+	a.sinkAtStart = a.sink
 }
 func (a *startOrderAgents) InboxChanged(string) {}
 func (a *startOrderAgents) Close()              {}
@@ -845,6 +851,9 @@ func TestAgentHostStartsBeforeTheDaemonIsReachable(t *testing.T) {
 	t.Cleanup(d.Close)
 	if !agents.started || agents.reachable {
 		t.Fatalf("agent host start: started %v, endpoint already written %v", agents.started, agents.reachable)
+	}
+	if d.AuditSink() == nil || agents.sinkAtStart != d.AuditSink() {
+		t.Fatal("agent host started recovery without the daemon's audit sink")
 	}
 }
 

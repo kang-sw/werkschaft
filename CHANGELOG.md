@@ -3,14 +3,10 @@
 ## Unreleased
 
 ### Added
-- **Daemon-hosted sessions get a per-session audit record store.** The
-  dashboard daemon keeps the tool calls, tool results and hidden harness
-  events of each session it hosts in an append-only ring of its own under
-  `<daemon state>/audit/`, separate from the conversation history. The
-  store, its routes and the view ship now; live capture is not wired yet
-  (the daemon does not attach the capture sink to hosted sessions), so the
-  store stays empty until a later release enables it. The dashboard reads
-  the store over
+- **Daemon-hosted Claude and Codex sessions get live audit capture.** The
+  dashboard daemon keeps their tool calls, tool results and hidden harness
+  events in a per-session append-only ring under `<daemon state>/audit/`,
+  separate from the conversation history. The dashboard reads the store over
   `/s/<reply-id>/audit/`, behind the same viewer guard as the session's
   history, and the conversation view interleaves the
   recorded calls, results and hidden events as rows with an inspector and
@@ -40,8 +36,8 @@
   scan that finds nothing in one page still offers More while older
   records remain. The server matches with RE2 and the inspector
   highlights the same matches, a match in a truncated body never spanning
-  the omitted middle. It reads the store described above, so it finds
-  nothing until live capture is enabled.
+  the omitted middle. Search covers the audit records retained for that
+  conversation.
 - **The dashboard shows an exec job HUD above the composer.** Each exec job
   of the open conversation, whether the agent launched it or the user
   typed it with `!`, is a chip with its state and elapsed time. A chip

@@ -104,13 +104,7 @@ func dashboardCommand(args []string) {
 	// the lock); their holders' records and exits go through execLink.
 	execLink := &hostedExecLink{}
 	cron := &cronHost{}
-	holders := wsholder.New(wsholder.Options{
-		Dir:    filepath.Join(dir, wsholder.DirName),
-		Python: os.Getenv(wsholder.PythonEnv),
-		Log:    logw,
-		OnExit: execLink.onExit(persistHolderExit(dir)),
-	})
-	holders.AddSink(execLink)
+	holders := newDashboardHolders(dir, logw, execLink)
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
 	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
@@ -442,6 +436,18 @@ func (l *mailLabels) label(replyID string) string {
 		}
 	}
 	return ""
+}
+
+func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *wsholder.Manager {
+	holders := wsholder.New(wsholder.Options{
+		Dir:          filepath.Join(dir, wsholder.DirName),
+		Python:       os.Getenv(wsholder.PythonEnv),
+		Log:          logw,
+		OnExit:       execLink.onExit(persistHolderExit(dir)),
+		AuditChannel: true,
+	})
+	holders.AddSink(execLink)
+	return holders
 }
 
 // newAgentRunner is the daemon's agent runner: the claude and pi backends,
