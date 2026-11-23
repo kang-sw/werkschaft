@@ -563,6 +563,9 @@
         }
       }
     },
+    "261123-bug-ws-exec-readonly-cwd-escape": {
+      "registered_at": "2026-11-23T04:42:27Z"
+    },
     "261123-bug-ws-exec-readonly-external-exec": {
       "registered_at": "2026-11-23T04:28:09Z",
       "lease": {
