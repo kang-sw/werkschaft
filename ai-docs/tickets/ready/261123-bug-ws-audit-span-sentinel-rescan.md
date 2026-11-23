@@ -153,3 +153,34 @@ Run the targeted wsdashboard audit Go tests (also under `-race`), the
 combined Node audit suites, the audit-view browser tests,
 `go test ./internal/wsdashboard -run TestComposer -count=3`, and
 `GOOS=windows go vet ./internal/wsdashboard/`.
+
+#### Implementation attempt (cd081e97d) - 2026-11-23
+
+The stored Raw counter and composer fixture fixes are in `b5c8892a3`.
+The scanner in `3d7971c47` reuses failed regex states past a match. The R1
+fix in `cd081e97d` stores only reached instructions, reuses scratch across
+lines, and compresses runs of one deferred instruction.
+
+R2 closed the dense-row and repeated short-line allocation findings. It
+retained one Critical on deferred alternative storage. On a long run of
+`a`, `(?:a|b?)+z` defers two alternating instructions per byte before it
+can backtrack. The stack can reach about 64 MiB on a 1 MiB body before
+allocation overhead. The next attempt needs to bound storage for interleaved
+alternatives, preserve RE2 priority, and add an allocation regression for
+this pattern. R1 and R2 artifacts are `66fc2ce5-01-findings.md` and
+`c50ad7a3-01-findings.md` in the worktree's review cache.
+
+At `cd081e97d`, targeted audit Go, the three audit-view Chromium tests,
+`GOOS=windows go vet ./internal/wsdashboard/`, and `go build ./...` passed
+on w5090. Doubling the pathological lines took 1.83–2.06×. Extending the
+capped dense input from 10,001 to 1,000,000 bytes took 1.45×. The 1 MiB
+wide-program and multiline allocation probes used 4,828,784 and 248 bytes.
+The prior snapshot passed the targeted audit race run, the three composer
+suite repeats, the two fixture tests with `-race -cpu 1,2,4 -count=30`,
+and the scratch 150 ms pause with `-cpu 1`. The combined Node audit
+suites passed 42 tests with `--test-isolation=none`. The Chrome capture
+of the production inspector with a fixture span response is
+`D:/Temp/sentinel-rescan/capped-other-raw.png`.
+
+Forward: `TestHostedExecStopEndsTheJobsProcessGroup` is a known w5090
+failure and was excluded from the full suite attempt.
