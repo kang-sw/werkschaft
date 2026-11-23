@@ -535,7 +535,17 @@
       "registered_at": "2026-11-22T08:45:33Z"
     },
     "261123-bug-ws-audit-span-cost-and-cap": {
-      "registered_at": "2026-11-23T01:01:22Z"
+      "registered_at": "2026-11-23T01:01:22Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-23T01:06:57Z",
+        "impl": {
+          "branch": "impl/develop/gooey-booth-tray"
+        }
+      }
     },
     "261123-bug-ws-daemon-replace-gap-older-daemon": {
       "registered_at": "2026-11-22T20:54:14Z"
