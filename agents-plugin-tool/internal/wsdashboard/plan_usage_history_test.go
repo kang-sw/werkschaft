@@ -222,7 +222,7 @@ func TestPlanUsageHistoryClaudeAcceptanceAndCacheRereads(t *testing.T) {
 func TestPlanUsageHistoryGPTAcquisitionAndOptionalAPI(t *testing.T) {
 	s := usageTestStore(t)
 	now := time.Now().UnixMilli()
-	setPiUsageAuth(t, s, now+3600000)
+	setCodexUsageAuth(t, s, fixtureCodexLogin)
 	calls, percent, fail := 0, 40, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
