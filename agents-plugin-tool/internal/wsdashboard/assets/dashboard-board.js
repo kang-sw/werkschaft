@@ -447,6 +447,7 @@
         if (mode) root.setAttribute("data-gal", mode); else root.removeAttribute("data-gal");
         galNarrow = mode === "narrow";
         if (galNarrow) placeGallery();
+        if (window.WsOverview && window.WsOverview.syncPreview) window.WsOverview.syncPreview();
       },
       closed: function (from, done) {
         if (!window.fetch) { done(null); return; }
@@ -496,8 +497,12 @@
       onPreview: function (node) {
         if (!node) return;
         if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(node, { immediate: true });
-        mountFrames(node);
-        q("iframe.doc-frame", node).forEach(function (f) { postDoc(f, { wbDoc: "size" }); });
+        if (boardOverviewHeld && boardOverviewHeld.html) patchOverviewPreview(boardOverviewHeld.html);
+        var cur = (window.WsOverview && window.WsOverview.previewNode && window.WsOverview.previewNode()) || node;
+        if (cur) {
+          mountFrames(cur);
+          q("iframe.doc-frame", cur).forEach(function (f) { postDoc(f, { wbDoc: "size" }); });
+        }
       },
       release: function () {
         var h = boardOverviewHeld;
@@ -514,6 +519,63 @@
     if (window.ResizeObserver) new ResizeObserver(queueGallery).observe($("bcol") || cardBoard);
   }
   boardBoxes().forEach(watchBoard);
+  function capturePreviewFocus(root) {
+    var act = doc.activeElement;
+    if (!act || !root || !root.contains || !root.contains(act)) return null;
+    var info = null;
+    if (act.matches && act.matches(".tnote[data-topic]")) {
+      info = { kind: "tnote", topic: act.getAttribute("data-topic") };
+    } else {
+      var item = act.closest && act.closest(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]");
+      if (item) {
+        var itemId = item.getAttribute("data-id");
+        if (act.matches && act.matches("textarea.note")) info = { kind: "note", itemId: itemId };
+        else if (act.matches && act.matches("label.ack > input, label.ck > input")) info = { kind: "check", itemId: itemId };
+        else if (act.matches && act.matches(".opt[data-opt], .btn[data-v]")) info = { kind: "pick", itemId: itemId, pick: pickKey(act) };
+        else if (act.matches && act.matches("button.no-toggle")) info = { kind: "no", itemId: itemId };
+      }
+    }
+    if (!info && act.id) info = { kind: "id", id: act.id };
+    if (!info) {
+      var list = q("input, textarea, select, button, [contenteditable]", root);
+      var idx = list.indexOf(act);
+      if (idx >= 0) info = { kind: "idx", tag: act.tagName, idx: idx };
+    }
+    if (!info) return null;
+    try {
+      if (typeof act.selectionStart === "number" && typeof act.selectionEnd === "number") {
+        info.start = act.selectionStart;
+        info.end = act.selectionEnd;
+        info.dir = act.selectionDirection || "none";
+      }
+    } catch (e) {}
+    return info;
+  }
+  function restorePreviewFocus(root, info) {
+    if (!root || !info) return;
+    var el = null;
+    if (info.kind === "tnote") {
+      el = q(".tnote[data-topic]", root).filter(function (n) { return n.getAttribute("data-topic") === info.topic; })[0] || null;
+    } else if (info.kind === "note" || info.kind === "check" || info.kind === "pick" || info.kind === "no") {
+      var item = q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", root).filter(function (n) { return n.getAttribute("data-id") === info.itemId; })[0] || null;
+      if (item) {
+        if (info.kind === "note") el = item.querySelector("textarea.note");
+        else if (info.kind === "check") el = item.querySelector("label.ack > input, label.ck > input");
+        else if (info.kind === "pick") el = q(".opt[data-opt], .btn[data-v]", item).filter(function (b) { return pickKey(b) === info.pick; })[0] || null;
+        else if (info.kind === "no") el = item.querySelector("button.no-toggle");
+      }
+    } else if (info.kind === "id") {
+      el = q('[id]', root).filter(function (n) { return n.id === info.id; })[0] || null;
+    } else if (info.kind === "idx") {
+      var list = q("input, textarea, select, button, [contenteditable]", root);
+      if (list[info.idx] && list[info.idx].tagName === info.tag) el = list[info.idx];
+    }
+    if (!el || !el.isConnected || el.hidden) return;
+    el.focus({ preventScroll: true });
+    if (typeof info.start === "number" && typeof info.end === "number" && typeof el.setSelectionRange === "function") {
+      try { el.setSelectionRange(info.start, info.end, info.dir || "none"); } catch (e) {}
+    }
+  }
   // While Overview is open with Quick Look active, admit keyed patches for the
   // actively previewed topic ONLY so live interactions (e.g. answering an ask)
   // reflect immediately without shifting the Overview tile list in #bcol.
@@ -541,6 +603,9 @@
     if (boardSeen[seenKey] === h) return;
     boardSeen[seenKey] = h;
     if (boardRendered && boardRendered.topics) boardRendered.topics[key] = incoming.cloneNode(true);
+    var hadOverviewLive = liveNode.hasAttribute("data-overview-live");
+    var hadOverviewHere = liveNode.classList.contains("overview-here");
+    var focusSaved = capturePreviewFocus(liveNode);
     var answers = readAnswers(liveNode);
     var frameH = frameHeights(liveNode);
     var history = window.wbHistory ? window.wbHistory.capture(liveNode) : null;
@@ -556,6 +621,8 @@
       if (window.WsOverview.replacePreviewNode) window.WsOverview.replacePreviewNode(liveNode, next);
       target = next;
     }
+    if (hadOverviewLive) target.setAttribute("data-overview-live", "");
+    if (hadOverviewHere) target.classList.add("overview-here");
     frameKept(reuse);
     bandBoard(target);
     if (window.wbHistory) { window.wbHistory.init(target); window.wbHistory.restore(target, history); }
@@ -568,10 +635,13 @@
     writeAnswers(target, answers);
     q(".doc-frame", target).forEach(function (f) { f.wbKeep = true; });
     if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
+    if (hadOverviewLive) target.setAttribute("data-overview-live", "");
+    if (hadOverviewHere) target.classList.add("overview-here");
     indexFrames();
     if (window.wbForm) window.wbForm();
     mermaid([target]);
     applySent(true);
+    restorePreviewFocus(target, focusSaved);
     target.scrollTop = scrollTop;
   }
   // morphBoard applies a board region event to el and returns the element
@@ -705,6 +775,7 @@
     });
     window.WsCards.settle(el, plan);
     frameKept(reuse);
+    if (typeof virtualPrune === "function") virtualPrune();
     return ins;
   }
   // --- incremental board inputs ---------------------------------------------
@@ -903,8 +974,12 @@
     if (!same && mounted) frameNext(nf, of);
     for (var i = g.oc.length - 1; i > 0; i--) {
       var oa = g.oc[i], na = g.nc[i], oc = g.oc[i - 1], nc = g.nc[i - 1], before = true;
+      var keepOverviewLive = i === g.oc.length - 1 && oa.hasAttribute("data-overview-live");
+      var keepOverviewHere = i === g.oc.length - 1 && oa.classList.contains("overview-here");
       Array.prototype.slice.call(oa.attributes).forEach(function (a) { if (!na.hasAttribute(a.name)) oa.removeAttribute(a.name); });
       Array.prototype.forEach.call(na.attributes, function (a) { if (oa.getAttribute(a.name) !== a.value) oa.setAttribute(a.name, a.value); });
+      if (keepOverviewLive) oa.setAttribute("data-overview-live", "");
+      if (keepOverviewHere) oa.classList.add("overview-here");
       Array.prototype.slice.call(oa.childNodes).forEach(function (c) { if (c !== oc) oa.removeChild(c); });
       Array.prototype.slice.call(na.childNodes).forEach(function (c) {
         if (c === nc) { before = false; if (c === nf && !same) oa.appendChild(c); }

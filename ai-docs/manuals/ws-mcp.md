@@ -147,7 +147,7 @@ Provider credentials (an OpenRouter API key today; `internal/wscred`) live
 in one owner-only file, `<cache root>/dashboard/auth/credentials.json`:
 POSIX mode 0600 in a 0700 directory, on Windows a protected DACL granting
 the current user alone; never in a project tree. It sits under the daemon's
-state directory because v0.51.1's file preview already denies that whole
+state directory because v0.51.2's file preview already denies that whole
 directory, so a rolled-back daemon cannot show it. A pre-release build kept
 it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
 the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
@@ -1352,8 +1352,8 @@ from a support conversation:
   daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
   before the kept lines a fence releases and never blocks the holder reader
   or the stream mapper. When the audit store opens, the daemon binds it as
-  the runner's `AuditSink` before hosted Claude and Codex sessions can start
-  or reattach. If the store is unavailable, hosted sessions still run.
+  the runner's `AuditSink` before hosted Claude, Codex, and Antigravity sessions can
+  start or reattach. If the store is unavailable, hosted sessions still run.
   The Claude adapter writes `meta.request = {id, prev_id, ctx}` on every
   event from a model request (`wsaudit.RequestChain`): one chain for the lead and one per
   native subagent (`parent_tool_use_id`), advancing once per assistant
@@ -1834,11 +1834,18 @@ Finding and starting the daemon (`DaemonLink` in the launcher):
    `WS_MCP_NO_DASHBOARD=1`) does not decide the LAN mode, the same rule as
    for a hosted session below: a running daemon keeps its mode, and with
    none running the global file's `dashboard.lan_enabled` decides.
-   Updated launchers first serialize on `launcher-start.lock`, recheck health,
-   and hold that lock through repair, staging and a healthy result or bounded
-   failure. Losers poll the network within the 75-second budget. This is
-   separate from the Go daemon-held singleton lock. Old launchers and Electron
-   do not participate; the singleton handles a rare losing Electron starter.
+   Python launchers and `scripts/dev.py` acquire `launcher-start.lock` before
+   invoking the Go starter and hold it through health confirmation or bounded
+   failure. Waiting launchers poll health within the 75-second budget.
+   Plain `daemon-start` leaves this lock to its caller, including same-minor
+   launchers that predate `WS_MCP_LAUNCHER_START_LOCK_HELD=1`. When supplied,
+   the Go starter consumes the marker before spawning a child.
+   Direct `ws-mcp serve` and daemon-initiated LAN changes acquire the lock in
+   Go. Desktop `daemon-start` joins when `--desktop-start` or
+   `--require-independent-lifetime` is set and no ownership marker is present.
+   Electron's macOS `dashboard` command coordinates through the daemon-held
+   singleton `dashboard.lock`. On replacements through `Ensure`, the successor
+   reports readiness before the starter requests an incumbent drain.
    Staging reuses matching hashes and failed copies clean only their own temp
    file. Settled artifacts remain: neither age nor singleton ownership proves
    process exit or accepted/rollback safety, and no retention index exists.
@@ -2057,7 +2064,7 @@ Current launcher inputs:
 | `WS_MCP_BOOTSTRAP_URL` | Download a prebuilt binary when no runtime binary exists. |
 | `WS_MCP_BOOTSTRAP_SHA256` | Optional SHA-256 checksum for `WS_MCP_BOOTSTRAP_URL`. |
 | `WS_MCP_RELEASE_REPOSITORY` | Override the GitHub release repository from `runtime.json`. |
-| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.51.1`. |
+| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.51.2`. |
 | `WS_MCP_RELEASE_BASE_URL` | Override the full release asset base URL; useful for local file or HTTP smoke tests. |
 | `WS_MCP_LAUNCHER_DEBUG` | Print launcher diagnostics to stderr when set to `1`. |
 | `WS_CODESIGN_IDENTITY` | macOS local dev builds only: code-signing identity name or SHA-1 passed to `codesign --force -s "$WS_CODESIGN_IDENTITY" -i dev.ws.mcp <binary>` before SHA-256 metadata generation; unset leaves builds untouched, and a signing failure aborts the build. |
@@ -2116,7 +2123,7 @@ agents-plugin-tool/scripts/bump-ws-version.sh <X.Y.Z>
 
 The helper updates plugin manifests, runtime contracts, Go runtime development
 defaults, release workflow references, build script defaults, and selected
-documentation references. Development binaries such as `0.51.1-dev` satisfy the
+documentation references. Development binaries such as `0.51.2-dev` satisfy the
 plugin version the helper just set; older or newer minor releases are stale. The
 concrete range lives in `runtime.json.required_mcp` — read it there rather than
 restating a version here, which froze at `0.29.2` for seven minor releases
@@ -2324,7 +2331,7 @@ Level 2 validates local release assets:
 
 ```bash
 cd agents-plugin-tool
-scripts/build-release-assets.sh 0.51.1-dev
+scripts/build-release-assets.sh 0.51.2-dev
 python3 ../agents-plugin/bin/ws-mcp-launcher.py version
 cd dist
 shasum -a 256 -c SHA256SUMS

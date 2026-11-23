@@ -615,28 +615,57 @@
       if (label && link) rows.push({ group: 0, kind: "session", title: label.textContent.trim(), href: link.getAttribute("href") });
     });
     boardQ("section.topic[data-topic]").forEach(function (topic) {
-      var name = topic.getAttribute("data-topic"), label = paletteText(topic.querySelector(".tname")) || name;
-      var time = topic.querySelector(".tbar time"), at = time ? Number(time.getAttribute("data-at")) || Date.parse(time.getAttribute("datetime")) || 0 : 0;
+      var name = topic.getAttribute("data-topic");
+      var vRoots = topic.hasAttribute("data-wb-virtual") && window.WsBoardVirtual && window.WsBoardVirtual.searchRoots
+        ? window.WsBoardVirtual.searchRoots(name)
+        : null;
+      var stashedRoot = vRoots && vRoots.length === 1 && vRoots[0] && vRoots[0].tagName === "SECTION" && vRoots[0].hasAttribute("data-topic")
+        ? vRoots[0]
+        : null;
+      var headRoot = stashedRoot || topic;
+      var scanRoots = stashedRoot ? [stashedRoot] : vRoots && vRoots.length ? [topic].concat(vRoots) : [topic];
+      var label = paletteText(headRoot.querySelector(".tname")) || paletteText(topic.querySelector(".tname")) || name;
+      var time = headRoot.querySelector(".tbar time") || topic.querySelector(".tbar time"), at = time ? Number(time.getAttribute("data-at")) || Date.parse(time.getAttribute("datetime")) || 0 : 0;
       rows.push({ group: 1, kind: "board-topic", topic: name, title: label, at: at });
       // Only the topic-owned fold can supply a body, never a stream panel.
-      var body = topic.querySelector(":scope > .tdoc > .doc-body"), text = paletteBodyText(body);
-      var recap = paletteText(topic.querySelector(".rtext"));
+      var body = null;
+      for (var bi = 0; bi < scanRoots.length && !body; bi++) {
+        var r = scanRoots[bi];
+        if (!r || r.nodeType !== 1) continue;
+        if (r.tagName === "SECTION" && r.hasAttribute("data-topic")) body = r.querySelector(":scope > .tdoc > .doc-body");
+        else if (r.classList && r.classList.contains("tdoc")) body = r.querySelector(":scope > .doc-body");
+      }
+      var text = paletteBodyText(body);
+      var recap = paletteText(headRoot.querySelector(".rtext"));
       text = (recap + " " + text).trim();
       if (body && text) rows.push({ group: 2, kind: "board-body", topic: name, title: text, hint: label });
+      var seenEntries = Object.create(null);
       function entries(root) {
         q("article.wb-entry", root).forEach(function (entry) {
+          if (entry.id && seenEntries[entry.id]) return;
+          if (entry.id) seenEntries[entry.id] = true;
           var clock = q("time.entry-at", entry).filter(function (n) { return n.closest(".wb-entry") === entry; })[0];
           rows.push({ group: 5, kind: "board-entry", topic: name, entry: entry.id,
             title: paletteEntryText(entry), hint: label + (clock ? " · " + paletteText(clock) : "") });
         });
       }
-      q(".topic-stream", topic).forEach(function (stream) {
+      var seenStreams = new Set();
+      function scanStream(stream) {
+        if (!stream || seenStreams.has(stream)) return;
+        seenStreams.add(stream);
         entries(stream);
         q("template[data-history-page], template[data-history-gap]", stream).forEach(function (page) { entries(page.content); });
+      }
+      scanRoots.forEach(function (r) {
+        if (!r || r.nodeType !== 1) return;
+        if (r.classList && r.classList.contains("topic-stream")) scanStream(r);
+        q(".topic-stream", r).forEach(scanStream);
       });
-      q('[id^="item-"]', topic).forEach(function (item) {
+      var seenItems = Object.create(null);
+      function scanItem(item) {
         var id = /^item-(\d+)$/.exec(item.id);
-        if (!id) return;
+        if (!id || seenItems[id[1]]) return;
+        seenItems[id[1]] = true;
         var title = paletteText(item.querySelector(".title, .stext > b"));
         rows.push({ group: 3, kind: "board-item", topic: name, id: id[1], title: title, hint: label, at: at });
         var answer = q(".pick, .ans, .quote, .stamp, .said", item).map(paletteText).join(" ");
@@ -645,6 +674,11 @@
           if (draft) answer += " " + draft.answer + " " + draft.note;
         }
         if (answer.trim()) rows.push({ group: 4, kind: "board-answer", topic: name, id: id[1], title: answer.trim(), hint: label + " · " + title });
+      }
+      scanRoots.forEach(function (r) {
+        if (!r || r.nodeType !== 1) return;
+        if (r.id && /^item-\d+$/.test(r.id)) scanItem(r);
+        q('[id^="item-"]', r).forEach(scanItem);
       });
     });
     return rows;
@@ -693,6 +727,9 @@
     var w = window.wbHistory;
     if (!w || !w.hydrateAll) return;
     w.hydrateAll(doc).then(function (n) { if (n) update(paletteRows()); });
+    if (window.WsBoardVirtual && window.WsBoardVirtual.hydrateLazySearch && window.wbHistoryFetch) {
+      window.WsBoardVirtual.hydrateLazySearch(window.wbHistoryFetch).then(function (n) { if (n) update(paletteRows()); }).catch(function () {});
+    }
   }
   function paletteClosed(update) {
     var more = boardQ("button.closed-more[data-closed-next]")[0];
@@ -712,8 +749,12 @@
     // Look the target up again: an SSE board swap may have replaced its node
     // while the palette was open. Open every enclosing fold before scrolling.
     var topic = boardQ("section.topic[data-topic]").filter(function (n) { return n.getAttribute("data-topic") === row.topic; })[0];
+    if (!topic) return;
+    if (topic.hasAttribute("data-wb-virtual") && window.WsBoardAnchor && window.WsBoardAnchor.hydrate) {
+      window.WsBoardAnchor.hydrate(topic, { immediate: true });
+    }
     var target = row.id ? $("item-" + row.id) : topic;
-    if (!target || !topic) return;
+    if (!target) return;
     function prepare(owner) {
       if (window.WsCards) window.WsCards.unfoldTopic(owner);
       if (doc.body.classList.contains("tk-paged") && tkApi) tkApi.leavePage();
@@ -726,6 +767,9 @@
       // the live topic again rather than navigating a detached history tree.
       var owner = boardQ("section.topic[data-topic]").filter(function (n) { return n.getAttribute("data-topic") === row.topic; })[0];
       if (!owner) return;
+      if (owner.hasAttribute("data-wb-virtual") && window.WsBoardAnchor && window.WsBoardAnchor.hydrate) {
+        window.WsBoardAnchor.hydrate(owner, { immediate: true });
+      }
       var prepared = false;
       var entry = window.wbHistory && window.wbHistory.loadTarget(owner, row.entry, function () {
         if (prepared) return;

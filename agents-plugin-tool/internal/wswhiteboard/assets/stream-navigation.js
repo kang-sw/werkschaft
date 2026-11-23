@@ -125,7 +125,7 @@
         entries: Array.from(h.querySelectorAll('.wb-entry')).map(function (n) { return n.id; }),
         systems: Array.from(h.querySelectorAll('.system-run .wb-entry')).map(function (n) { return [n.id, n.closest('.system-run').open]; }),
         loaded: Array.from(h.querySelectorAll('.timeline-row')).filter(function (n) { return loadedRows.has(n); }).map(function (n) { return n.getAttribute('data-row'); }),
-        pending: h._wbHistoryPending.map(function (p) {
+        pending: (h._wbHistoryPending || []).map(function (p) {
           var list = p.gap && payload(p.gap).children, next = list && (p.direction === 'up' ? list[list.length - 1] : list[0]);
           var before = p.fallback && payload(p.fallback).children, edge = before && before[before.length - 1];
           return { row: p.row && p.row.getAttribute('data-row'), next: next && next.getAttribute('data-row'), before: edge && edge.getAttribute('data-row'), direction: p.direction, height: p.height, loaded: !!p.loaded };

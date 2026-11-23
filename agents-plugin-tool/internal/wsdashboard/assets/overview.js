@@ -7,7 +7,7 @@
   var doc = document, root = doc.documentElement, o = null, on = false, busy = false;
   var entry = null, spacer = null, tabs = new Map(), callbacks = [], releaseCallbacks = [];
   var preview = null, previewTimer = 0, previewHoverTarget = null, previewLocked = false;
-  var previewLeaveCleanup = null;
+  var previewLeaveCleanup = null, previewSyncPending = false, previewSyncing = false;
   var pendingLandKey = null, pendingLandNode = null;
   var midHandled = false, midTimer = 0;
   var PREVIEW_DELAY = 120;
@@ -58,7 +58,7 @@
   }
   function canPreview() {
     if (!o || !o.board) return false;
-    if ((window.innerWidth || 0) < 1600) return false;
+    if (!(window.WsCards && typeof window.WsCards.isFourCol === "function" && window.WsCards.isFourCol())) return false;
     var grid = doc.querySelector(".dgrid");
     if (grid && grid.getAttribute("data-layout") === "tabs") return false;
     return !!doc.getElementById("bgal");
@@ -294,6 +294,10 @@
   function finish() {
     busy = false;
     if (!on && o.release) o.release();
+    if (previewSyncPending) {
+      previewSyncPending = false;
+      if (on) syncPreview();
+    }
     var c = callbacks.splice(0);
     c.forEach(function (fn) { fn(); });
     if (!on && releaseCallbacks.length) {
@@ -600,6 +604,26 @@
       showPreview(slot);
     }, PREVIEW_DELAY);
   }
+  function syncPreview() {
+    if (!on) { previewSyncPending = false; return; }
+    if (busy) { previewSyncPending = true; return; }
+    if (previewSyncing) return;
+    previewSyncPending = false;
+    previewSyncing = true;
+    try {
+      if (preview && !canPreview()) {
+        teardownPreview();
+      } else if (!preview && canPreview()) {
+        var list = items();
+        var target = list.filter(function (n) { return n.getAttribute("tabindex") === "0"; })[0]
+          || (o && o.board && o.board.querySelector(".overview-here"))
+          || list[0];
+        if (target) showPreview(target);
+      }
+    } finally {
+      previewSyncing = false;
+    }
+  }
   window.WsOverview = {
     mount: function (options) {
       o = options;
@@ -637,9 +661,7 @@
       }, true);
       doc.addEventListener("keydown", key, true);
       if (o.board && o.board.addEventListener) o.board.addEventListener("pointermove", boardPointerMove, { passive: true });
-      if (window.addEventListener) window.addEventListener("resize", function () {
-        if (on && preview && !canPreview()) teardownPreview();
-      });
+      if (window.addEventListener) window.addEventListener("resize", syncPreview);
       var state = stored();
       if (state) requestAnimationFrame(function () { if (o.reveal) o.reveal(); enter(state); });
     },
@@ -647,6 +669,7 @@
     holding: function () { return on || busy; },
     inPreview: function (el) { return !!(preview && preview.host && el && preview.host.contains(el)); },
     previewNode: function () { return preview ? preview.node : null; },
+    syncPreview: syncPreview,
     replacePreviewNode: function (oldNode, newNode) {
       if (!preview || preview.node !== oldNode || !newNode) return;
       oldNode.removeAttribute("data-overview-live");

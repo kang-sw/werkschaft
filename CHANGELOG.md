@@ -3,8 +3,8 @@
 ## Unreleased
 
 ### Added
-- **Daemon-hosted Claude and Codex sessions get live audit capture.** The
-  dashboard daemon keeps their tool calls, tool results and hidden harness
+- **Daemon-hosted Claude, Codex and Antigravity sessions get live audit
+  capture.** The dashboard daemon keeps their tool calls, tool results and hidden harness
   events in a per-session append-only ring under `<daemon state>/audit/`,
   separate from the conversation history. The dashboard reads the store over
   `/s/<reply-id>/audit/`, behind the same viewer guard as the session's
@@ -30,14 +30,12 @@
   - A session deleted by an older daemon keeps its audit record until the
     retention period runs out, since the older daemon does not know the
     store.
-- **The dashboard searches a whole conversation's audit record.** The audit
-  view's search box scans the stored call inputs and results of the open
-  conversation, newest first, and pages through the hits with More; a
-  scan that finds nothing in one page still offers More while older
-  records remain. The server matches with RE2 and the inspector
-  highlights the same matches, a match in a truncated body never spanning
-  the omitted middle. Search covers the audit records retained for that
-  conversation.
+- **The audit inspector searches each event's body.** Its search field
+  supports literal and RE2 regular-expression matching, case sensitivity,
+  and navigation between matches in the inspected event. Matches in a
+  truncated body never span the omitted middle. The server retains the
+  paginated `/s/<reply-id>/audit/search` endpoint for searching a
+  conversation's whole retained audit record, newest first.
 - **The dashboard shows an exec job HUD above the composer.** Each exec job
   of the open conversation, whether the agent launched it or the user
   typed it with `!`, is a chip with its state and elapsed time. A chip

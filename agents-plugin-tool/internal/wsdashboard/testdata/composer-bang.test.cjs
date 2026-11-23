@@ -475,6 +475,41 @@ test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, mu
   assert.deepEqual(errs, []);
 });
 
+test('exec jobs history retries a rejected fetch and JSON body', { skip }, async t => {
+  const cwd = '/worktrees/alpha';
+  const tag = fnv1a32Base36(cwd);
+  const { page, errs } = await open(t, `
+    window.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };
+    window.__jobsReads = 0;
+    const fixtureFetch = window.fetch;
+    window.fetch = function (url, options) {
+      if (!String(url).endsWith("/exec/jobs")) return fixtureFetch(url, options);
+      switch (++window.__jobsReads) {
+      case 1:
+        return Promise.reject(new TypeError("network failed"));
+      case 2:
+        return Promise.resolve(new Response("not JSON"));
+      default:
+        return Promise.resolve(Response.json({ jobs: [{
+          id: "exec_retried", command: "retry-test", cwd: ${JSON.stringify(cwd)},
+          state: "exited", exit_code: 0, started_at: Date.now(), ended_at: Date.now()
+        }] }));
+      }
+    };
+  `);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: {
+      submission_id: 'retry-test', command: 'retry-test', exec_id: 'exec_retried', origin: 'cexec'
+    } }));
+  });
+  await page.waitForFunction(key => {
+    const { rows } = JSON.parse(localStorage.getItem('ws.cexec.history.' + key) || '{}');
+    return rows?.some(row => row.cmd === 'retry-test' && row.exit === 0);
+  }, tag, { timeout: 8000 });
+  assert.equal(await page.evaluate(() => window.__jobsReads), 3);
+  assert.deepEqual(errs, []);
+});
+
 test('origin verification, refusal/unknown/retry, binding switches, missing HUD job, and worktree isolation', { skip }, async t => {
   const cwdA = '/worktrees/alpha';
   const cwdB = '/worktrees/beta';

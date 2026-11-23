@@ -58,9 +58,8 @@ type EnsureOptions struct {
 	Replace bool
 	// SpawnBeforeShutdown waits for a gated successor's readiness before drain.
 	SpawnBeforeShutdown bool
-	// InheritedStarterLock means the calling launcher holds launcher-start.lock
-	// until this invocation exits.
-	InheritedStarterLock bool
+	// JoinStarterLock serializes starters whose caller does not hold launcher-start.lock.
+	JoinStarterLock bool
 	// PreserveRunningLAN uses each fresh healthy observation, not an earlier probe.
 	PreserveRunningLAN bool
 	// DesktopStart limits the starter to one handoff of the shell's observed
@@ -160,8 +159,7 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	if logw == nil {
 		logw = io.Discard
 	}
-	// Join the persistent launcher lock unless our caller owns it.
-	if opts.SpawnBeforeShutdown && !opts.InheritedStarterLock {
+	if opts.JoinStarterLock {
 		lock := flock.New(filepath.Join(opts.Dir, "launcher-start.lock"))
 		ok, err := lock.TryLockContext(ctx, 50*time.Millisecond)
 		if err != nil {

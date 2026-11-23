@@ -88,6 +88,38 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     await frame.locator('[data-settings-section=prompts]').click();
     const legacy = frame.locator('.preferences-legacy');
     const defaultSlot = frame.locator('[data-preference-slot=default] textarea');
+    assert.equal(await defaultSlot.inputValue(), 'Shared legacy preference.');
+    assert.match(await frame.locator('.preferences-preview-rows').textContent(), /Shared legacy preference\./);
+    assert.equal(await legacy.locator('button').count(), 0, 'migration would mask the Codex preference');
+
+    await frame.locator('[data-settings-prompt-point="prompt.UserPreferenceSection"]').click();
+    const legacyPrompt = row('prompt.UserPreferenceSection');
+    await legacyPrompt.locator('[data-settings-bucket=codex]').click();
+    const legacyEditor = legacyPrompt.locator('[data-settings-prompt-editor]');
+    assert.equal(await legacyEditor.inputValue(), 'Codex-only legacy preference.');
+    await legacyEditor.fill('Updated Codex-only legacy preference.');
+    assert.match(await legacyPrompt.locator('[data-settings-prompt-diff]').textContent(), /\+ Updated Codex-only legacy preference\./);
+    mutation = page.waitForResponse(r => r.url() === api + 'set');
+    await legacyPrompt.locator('button[type=submit]').click();
+    assert.equal((await mutation).status(), 200);
+    const withHarnessPreference = await get('global');
+    assert.equal(withHarnessPreference.find(e => e.key === 'prompt.UserPreferenceSection' && e.selectors.harness === 'codex').value,
+      'Updated Codex-only legacy preference.');
+    assert.equal(withHarnessPreference.find(e => e.key === 'prompt.UserPreferenceSection' && e.selectors.harness === '*').value,
+      'Shared legacy preference.');
+    assert.equal(withHarnessPreference.find(e => e.key === 'preference.default')?.layers
+      .find(layer => layer.scope === 'global').selected, undefined);
+
+    await legacyPrompt.locator('[data-settings-bucket="*"]').click();
+    mutation = page.waitForResponse(r => r.url() === api + 'reset');
+    await legacyPrompt.locator('.reset-btn').click();
+    assert.equal((await mutation).status(), 200);
+    await legacyPrompt.locator('[data-settings-bucket=codex]').click();
+    mutation = page.waitForResponse(r => r.url() === api + 'reset');
+    await legacyPrompt.locator('.reset-btn').click();
+    assert.equal((await mutation).status(), 200);
+    await frame.locator('[data-settings-prompt-point="preference.*"]').click();
+    await legacy.locator('button').waitFor();
     assert.equal(await defaultSlot.inputValue(), 'A preference saved before harness buckets.');
     mutation = page.waitForResponse(r => r.url() === api + 'reset');
     await legacy.locator('button').click();

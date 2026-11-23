@@ -592,7 +592,7 @@
         return null;
       }
       return r.ok ? r.json() : null;
-    }, function () { return null; }).then(function (res) {
+    }).catch(function () { return null; }).then(function (res) {
       histPollInflight = false;
       if (histJobsAbsent) {
         Object.keys(histPending).forEach(function (eid) {

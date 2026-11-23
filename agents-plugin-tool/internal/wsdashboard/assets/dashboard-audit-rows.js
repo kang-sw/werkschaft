@@ -90,7 +90,8 @@
     var sub = String(ev.subkind || "");
     if (ev.kind === "compaction" || sub === "compact_failed") return "compaction";
     if (sub === "api_retry") return "retry";
-    if (/^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
+    if (sub === "request:session/request_permission" ||
+        /^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
     if (ev.kind === "subagent" && sub.indexOf("task_") === 0) return "subagent";
     return "";
   }
@@ -745,8 +746,8 @@
 
     function auInlineJSON(url) {
       return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (response) {
-        if (response.ok) return response.json();
-        return null;
+        if (!response.ok) throw new Error("Audit preview HTTP " + response.status);
+        return response.json();
       });
     }
 
@@ -757,12 +758,14 @@
       });
     }
 
+    var auInlinePending = new WeakSet();
     doc.addEventListener("toggle", function (e) {
       var detail = e.target;
-      if (!detail.matches || !detail.matches(".au-call-details[open]") || detail.hasAttribute("data-au-preview")) return;
+      if (!detail.matches || !detail.matches(".au-call-details[open]") ||
+          detail.hasAttribute("data-au-preview") || auInlinePending.has(detail)) return;
       var summary = detail.querySelector(".au-row[data-call]");
       if (!summary) return;
-      detail.setAttribute("data-au-preview", "");
+      auInlinePending.add(detail);
       var call = summary.getAttribute("data-call");
       var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit";
       auInlineJSON(base + "/events?call=" + encodeURIComponent(call)).then(function (bundle) {
@@ -787,8 +790,11 @@
           detail.insertBefore(output, auDirectItems(detail));
           changed = true;
         }
+        detail.setAttribute("data-au-preview", "");
         if (changed && detail.open && typeof stick !== "undefined" && stick && typeof pinConvo === "function") pinConvo();
-      }).catch(function () { detail.removeAttribute("data-au-preview"); });
+      }).catch(function () {
+        // A later open retries a failed bundle or body.
+      }).finally(function () { auInlinePending.delete(detail); });
     }, true);
 
     doc.addEventListener("ws-approval-rows-changed", auReconcileRows);

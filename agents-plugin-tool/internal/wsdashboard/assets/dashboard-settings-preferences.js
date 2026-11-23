@@ -14,8 +14,17 @@
   };
   const tr = (...args) => window.wsT(...args);
 
-  function replaces(key) {
-    return key.startsWith(prefix) || key === legacyKey;
+  function hasHarnessLegacy(entries, exceptValue) {
+    return entries.some(entry => {
+      if (entry.key !== legacyKey) return false;
+      const harness = entry.selectors.harness;
+      return harness && harness !== "*" &&
+        entry.layers.some(layer => layer.bucket === harness && layer.value && layer.value !== exceptValue);
+    });
+  }
+
+  function replaces(key, entries = []) {
+    return key.startsWith(prefix) || (key === legacyKey && !hasHarnessLegacy(entries));
   }
 
   function nameError(name, keys) {
@@ -50,6 +59,11 @@
     const legacy = scope === "builtin" ? undefined :
       legacyLayers.find(layer => layer.bucket === "all") || legacyLayers[0];
     const legacyHere = legacyLayers.find(layer => layer.scope === scope && layer.own);
+    // A default slot would take precedence over every legacy harness bucket.
+    const canMoveLegacy = legacyHere && !hasHarnessLegacy(entries, legacyHere.value) &&
+      !operations.some(operation => operation.key === legacyKey && operation.selectors.harness &&
+        operation.selectors.harness !== "*" && operation.action === "set" &&
+        operation.value && operation.value !== legacyHere.value);
     const fallback = legacy ? {...legacy, legacy: true} :
       common?.seed ? {scope: "builtin", value: common.seed, present: true} : undefined;
     const entriesByKey = new Map(entries.filter(entry => entry.key.startsWith(prefix)).map(entry => [entry.key, entry]));
@@ -81,7 +95,7 @@
       const stored = layers.filter(layer => layer.present && layer.scope !== "builtin");
       const own = layers.find(layer => layer.scope === scope)?.selected;
       if (stored.length) keys.add(key);
-      if (key === defaultKey && legacyHere && (own === undefined || own === legacyHere.value)) {
+      if (key === defaultKey && canMoveLegacy && (own === undefined || own === legacyHere.value)) {
         move = {value: legacyHere.value, selectors: legacyHere.selectors, copied: own !== undefined};
       }
       const winner = (scope === "builtin" ? undefined : stored[0]) || base;
@@ -385,8 +399,10 @@
         if (move) {
           const detail = append(node("div"), node("strong", "", tr("js.settings.preference.legacy_title")),
             node("p", "", tr(move.copied ? "js.settings.preference.legacy_retry" : "js.settings.preference.legacy_help", legacyKey)));
-          notice.append(detail, button(tr(move.copied ? "js.settings.preference.finish_move" : "js.settings.preference.move"), "", () =>
-            change(migrationOperations(move.value, move.selectors, move.copied), selection)));
+          notice.append(detail, button(tr(move.copied ? "js.settings.preference.finish_move" : "js.settings.preference.move"), "", () => {
+            const current = model().move;
+            if (current) change(migrationOperations(current.value, current.selectors, current.copied), selection);
+          }));
         }
       }
       notice.hidden = !move;
@@ -465,8 +481,8 @@
     }
 
     sync();
-    return card;
+    return {card, sync};
   }
 
-  window.WsSettingsPreferences = {replaces, render, nameError, slotOperation, migrationOperations, slotModel};
+  window.WsSettingsPreferences = {legacyKey, replaces, render, nameError, slotOperation, migrationOperations, slotModel};
 })();
