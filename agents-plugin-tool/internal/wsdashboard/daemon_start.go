@@ -45,9 +45,22 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		return nil, ErrLocked
 	}
 
+	var endLog func()
+	if opts.LogUnderLock != nil {
+		endLog = opts.LogUnderLock()
+	}
+	started := false
+	defer func() {
+		if !started {
+			if endLog != nil {
+				endLog()
+			}
+			_ = lock.Unlock()
+		}
+	}()
+
 	listener, err := listen(bindHostFor(opts), portCandidates(opts.Dir, opts.Port))
 	if err != nil {
-		_ = lock.Unlock()
 		return nil, err
 	}
 	logw := opts.Log
@@ -62,13 +75,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	token, err := newToken()
 	if err != nil {
 		_ = listener.Close()
-		_ = lock.Unlock()
 		return nil, err
 	}
 	if opts.Executable != "" {
 		if err := recordRunningExecutable(opts.Dir, opts.Executable, opts.Version, opts.BuildTime); err != nil {
 			_ = listener.Close()
-			_ = lock.Unlock()
 			return nil, fmt.Errorf("record running executable: %w", err)
 		}
 	}
@@ -87,6 +98,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	d := &Daemon{
 		dir:             opts.Dir,
 		lock:            lock,
+		endLog:          endLog,
 		listener:        listener,
 		log:             logw,
 		agents:          opts.Agents,
@@ -261,7 +273,6 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		_ = listener.Close()
-		_ = lock.Unlock()
 		return nil, fmt.Errorf("write endpoint file: %w", err)
 	}
 	// Read the agents' global settings only now that the endpoint is
@@ -299,6 +310,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}()
 	}
 	fmt.Fprintf(d.log, "dashboard: version %s listening on %s (lan %v, pid %d)\n", d.endpoint.Version, listener.Addr(), d.lan, d.endpoint.PID)
+	started = true
 	return d, nil
 }
 

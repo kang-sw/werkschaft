@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -67,8 +66,7 @@ func dashboardCommand(args []string) {
 	configPath, _ := wsconfig.GlobalPath(wsconfig.Options{})
 	logw := openDashboardLog(dir)
 	// Dev assets switch on before the daemon serves its first request. The
-	// notice waits for StartDaemon: the lazy log truncates on first write, and
-	// only the lock holder may do that.
+	// notice waits for StartDaemon to acquire the singleton lock.
 	devRoot, err := wsdashboard.EnableDevAssets(os.Getenv(wsdashboard.DevSourceEnv))
 	if err != nil {
 		fatal("dashboard", err)
@@ -146,17 +144,18 @@ func dashboardCommand(args []string) {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
 	}
 	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
-		Dir:         dir,
-		Port:        *port,
-		LAN:         *lan,
-		Version:     version,
-		BuildTime:   *buildTime,
-		ContentHash: contentHash,
-		Executable:  exe,
-		LockWait:    *lockWait,
-		Log:         logw,
-		Proxy:       host,
-		Pprof:       wsdashboard.PprofEnabled(os.Getenv(wsdashboard.PprofEnv)),
+		Dir:          dir,
+		Port:         *port,
+		LAN:          *lan,
+		Version:      version,
+		BuildTime:    *buildTime,
+		ContentHash:  contentHash,
+		Executable:   exe,
+		LockWait:     *lockWait,
+		Log:          logw,
+		LogUnderLock: logw.begin,
+		Proxy:        host,
+		Pprof:        wsdashboard.PprofEnabled(os.Getenv(wsdashboard.PprofEnv)),
 		// User-curated, so beside the config file rather than in the cache.
 		WorkspacesFile: wsdashboard.WorkspacesFilePath(configPath),
 		Sessions:       sessions,
@@ -518,32 +517,6 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// bound there never reaches it; its sender hears why.
 		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
 	})
-}
-
-// openDashboardLog returns the daemon's log writer. The file is truncated and
-// opened on the first write, and StartDaemon writes only once it holds the
-// lock, so a daemon that loses the lock never truncates the winner's log.
-func openDashboardLog(dir string) io.Writer {
-	return &lazyLog{path: filepath.Join(dir, "dashboard.log")}
-}
-
-type lazyLog struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
-	err  error
-}
-
-func (l *lazyLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil && l.err == nil {
-		l.file, l.err = os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	}
-	if l.err != nil {
-		return len(p), nil
-	}
-	return l.file.Write(p)
 }
 
 // dashboardSpawner starts a detached daemon process with the given ws-mcp
