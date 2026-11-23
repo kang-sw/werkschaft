@@ -44,6 +44,7 @@ func TestComposerInteractivePathsTouchNoFiles(t *testing.T) {
 	zero := 0
 	big := []byte(strings.Repeat("p", 6000))
 	f.svc.mu.Lock()
+	f.svc.jobs["exec_async_p"] = ComposerJob{ExecID: "exec_async_p", Gen: 4, State: "running", Async: true}
 	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
 		if strings.HasPrefix(req.Line, "async") {
 			return ComposerJob{ExecID: "exec_async_p", Gen: 4, State: "running", Async: true}, nil

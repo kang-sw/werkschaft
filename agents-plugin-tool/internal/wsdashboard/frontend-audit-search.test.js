@@ -29,7 +29,7 @@ function loadAuditWindowHelpers() {
     Error
   };
   vm.runInNewContext(
-    snippet + "\nglobalThis.__exports = { auRenderBodyContent, auRenderLineText, auSplitLinesWithBytes, auSpansByLine, auBuildSearchMatcher: typeof auBuildSearchMatcher === 'undefined' ? undefined : 1, auTranslateRe2: typeof auTranslateRe2 === 'undefined' ? undefined : 1 };",
+    snippet + "\nglobalThis.__exports = { auRenderBodyContent, auRenderRawTab, auRenderLineText, auSplitLinesWithBytes, auSpansByLine, auBuildSearchMatcher: typeof auBuildSearchMatcher === 'undefined' ? undefined : 1, auTranslateRe2: typeof auTranslateRe2 === 'undefined' ? undefined : 1 };",
     sandbox
   );
   return sandbox.__exports;
@@ -494,6 +494,30 @@ test("inspector asks the server for spans: request shape, loaded prefix, only se
   assert.equal(urls.length,before);
   c.api.spansFor(spanWin({tab:"raw"}),{id:"o1",kind:"other",raw:"{}"});
   assert.equal(urls.length,before+1,"an other event's stored raw body is searched");
+});
+
+test("stored other Raw tab shows the capped count in the inspector", async () => {
+  const spans = Array.from({ length: 10000 }, (_, i) => ({ line: 1, start: i, end: i + 1 }));
+  const c = loadSpansController(async () => jsonResp(200, { matches: { raw: { spans, capped: true } } }));
+  const ev = { id: "capped-raw", kind: "other", raw: "a".repeat(10001) };
+  const counter = { classList: { toggle() {} }, removeAttribute() {} };
+  const panel = { querySelector: () => null };
+  const elements = { ".au-scnt": counter, ".au-panel": panel };
+  const win = spanWin({
+    tab: "raw", search: "a", regex: false, activeMatch: 0,
+    activeEnvelope: ev, el: { isConnected: true, querySelector: (selector) => elements[selector] }
+  });
+  const src = fs.readFileSync(path.join(__dirname, "assets", "dashboard-audit.js"), "utf8");
+  Object.assign(c.sandbox, {
+    auDisplayedEnvelope: (w) => w.activeEnvelope,
+    auSyncWindowHeader() {},
+    auHooks: {},
+    auRenderRawTab: winHelpers.auRenderRawTab
+  });
+  vm.runInNewContext(src.slice(src.indexOf("  function auRenderWindowBody("), src.indexOf("  function auIsResultSummary(")), c.sandbox);
+  c.sandbox.auRenderWindowBody(win);
+  await flushPromises();
+  assert.equal(counter.textContent, "1/10000+");
 });
 
 test("inspector spans: find box requests are debounced and the latest request wins", async () => {
