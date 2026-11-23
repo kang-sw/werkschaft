@@ -325,7 +325,14 @@
       }
     },
     "261114-bug-ws-pi-settled-executor-resume-home-unavailable": {
-      "registered_at": "2026-11-14T06:22:54Z"
+      "registered_at": "2026-11-14T06:22:54Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:35:50Z"
+      }
     },
     "261114-bug-ws-pi-version-probe-never-refreshes": {
       "registered_at": "2026-11-13T16:28:48Z"
