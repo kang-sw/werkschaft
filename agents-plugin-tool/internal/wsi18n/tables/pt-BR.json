@@ -500,8 +500,6 @@
   "js.term.loadfail": "Não foi possível carregar o emulador de terminal",
   "js.board.toolbar.label": "Ações do quadro",
   "js.board.toolbar.overview": "Visão geral",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Visão geral (Ctrl+Q)",
   "js.board.toolbar.download": "Baixar",
   "js.board.toolbar.download.title": "Baixar este quadro como zip",

@@ -500,8 +500,6 @@
   "js.term.loadfail": "Не удалось загрузить эмулятор терминала",
   "js.board.toolbar.label": "Действия доски",
   "js.board.toolbar.overview": "Обзор",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Обзор (Ctrl+Q)",
   "js.board.toolbar.download": "Скачать",
   "js.board.toolbar.download.title": "Скачать эту доску в виде zip",

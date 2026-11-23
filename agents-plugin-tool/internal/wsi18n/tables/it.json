@@ -500,8 +500,6 @@
   "js.term.loadfail": "Impossibile caricare l'emulatore di terminale",
   "js.board.toolbar.label": "Azioni della bacheca",
   "js.board.toolbar.overview": "Panoramica",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Panoramica (Ctrl+Q)",
   "js.board.toolbar.download": "Scarica",
   "js.board.toolbar.download.title": "Scarica questa bacheca come zip",

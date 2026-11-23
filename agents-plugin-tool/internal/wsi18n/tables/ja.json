@@ -500,8 +500,6 @@
   "js.term.loadfail": "ターミナルエミュレーターを読み込めませんでした",
   "js.board.toolbar.label": "ボード操作",
   "js.board.toolbar.overview": "一覧表示",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "一覧表示 (Ctrl+Q)",
   "js.board.toolbar.download": "ダウンロード",
   "js.board.toolbar.download.title": "このボードをzipでダウンロード",

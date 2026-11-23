@@ -1,12 +1,16 @@
 // Offline contracts for the Main Board card anchor: shipped dashboard-board-anchor.js,
 // dashboard-board.js and dashboard-frames.js functions in node:vm over a fake DOM.
 // The fake swap models only DOM replacement; staging, settling, apply and home are shipped.
+const fs = require('node:fs');
+const path = require('node:path');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { readAssetSource } = require('./asset-source.cjs');
 const G = require('../assets/gallery.js');
 const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
+const cssSrc = readAssetSource('wsdashboard', 'dashboard-board.css');
+const railSrc = readAssetSource('wswhiteboard', 'rail.js');
 const boardSrc = readAssetSource('wsdashboard', 'dashboard-board.js');
 const framesSrc = readAssetSource('wsdashboard', 'dashboard-frames.js');
 function funcs(source, names) {
@@ -23,9 +27,11 @@ function vars(source, names) {
     return found[0];
   }).join('');
 }
-const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'anchorKey', 'anchorBtns', 'anchorLastCard', 'ANCHOR_OWN', 'anchorBurst']) +
-  funcs(anchorSrc, ['anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorSelect', 'anchorStep', 'anchorFallback',
-    'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorControls', 'anchorMount', 'anchorSize', 'anchorCanScroll', 'anchorWheel', 'anchorScrollEnd', 'anchorWatchLast', 'anchorInit']) +
+const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT', 'ANCHOR_BOT_MARGIN', 'anchorKey', 'anchorLast', 'anchorLastCard', 'anchorProg']) +
+  funcs(anchorSrc, ['anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
+    'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
+    'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
+    'anchorSize', 'anchorWatchLast', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -54,7 +60,11 @@ function world(spec, opt = {}) {
       this.tagName = tag.toUpperCase(); this.nodeType = 1; this.children = []; this.parentNode = null; this.attrs = Object.assign({}, o.attrs);
       this.cls = new Set(o.cls || []); this.hidden = !!o.hidden; this.name = o.name || tag; this.listeners = {}; this.st = 0;
       this.scrollHeight = 0; this.clientHeight = 0; this.clientTop = 0; this.disabled = false;
-      this.style = { setProperty() { C.d.ops++; } };
+      this.props = new Map();
+      this.style = {
+        setProperty: (k, v) => { C.d.ops++; this.props.set(k, String(v)); },
+        getPropertyValue: k => this.props.get(k) || '',
+      };
       const self = this;
       this.classList = { contains: k => self.cls.has(k), add: k => self.cls.add(k), remove: k => self.cls.delete(k), toggle() {} };
     }
@@ -79,7 +89,7 @@ function world(spec, opt = {}) {
     querySelector(sel) { for (const ch of this.children) { if (matches(ch, sel)) return ch; const r = ch.querySelector(sel); if (r) return r; } return null; }
     addEventListener(t, fn) { this.listeners[t] = fn; }
     scrollIntoView() { C.d.into++; }
-    scrollTo() { C.d.scrollTo++; }
+    scrollTo(o) { C.d.scrollTo++; if (o && typeof o.top === 'number') this.st = o.top; }
     getBoundingClientRect() { C.d.rect[kind(this)]++; return { top: 0, bottom: 600, left: 0, right: 800, height: 600, width: 800 }; }
     checkVisibility() { C.d.vis++; return true; }
   }
@@ -170,11 +180,6 @@ function world(spec, opt = {}) {
       c.swap('board', 'h' + (++seq), { topics, order: c.boardLatest.html.order.slice() });
     },
     select: key => c.anchorSelect(w.node(key), { still: true }),
-    wheel(target, dy) {
-      const e = { target, deltaY: dy, deltaMode: 0, ctrlKey: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
-      c.anchorWheel(e);
-      return e;
-    },
   };
   return w;
 }
@@ -209,72 +214,97 @@ test('removal of the current card falls back to the next card, else the previous
   assert.equal(w.cur(), 't:C', 'a card that leaves the order (hidden) hands over too');
 });
 
-test('wheel: a scrollable card body consumes the wheel until its edge', () => {
+test('no wheel trap, no overscroll-behavior contain, no scroll-margin-top, and no .board-step buttons or i18n keys', () => {
+  assert.doesNotMatch(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior:\s*contain/);
+  assert.doesNotMatch(cssSrc, /scroll-margin-top:/);
+  assert.doesNotMatch(cssSrc, /\.board-step\b/);
+  assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["'][^)]*passive\s*:\s*false/);
+  assert.doesNotMatch(anchorSrc, /e\.preventDefault\(/);
   const w = world([T('A'), T('B')]);
-  w.select('t:A');
-  const body = w.node('t:A').children[0];
-  body.scrollHeight = 500; body.clientHeight = 200; body.overflowY = 'auto'; body.st = 100;
-  const e = w.wheel(body, 50);
-  assert.equal(e.defaultPrevented, false, 'body keeps its native scroll'); assert.equal(w.cur(), 't:A');
-  w.clock.now += 1000; body.st = 300; // at the bottom edge
-  const e2 = w.wheel(body, 50);
-  assert.equal(e2.defaultPrevented, true); assert.equal(w.cur(), 't:A', 'the first gesture at the edge stops');
-  w.clock.now += G.C.INERTIA_MS + 1;
-  w.wheel(body, 50);
-  assert.equal(w.cur(), 't:B', 'a new same-direction gesture moves one card');
+  w.c.anchorInit();
+  assert.equal(w.bar.children[0].children.length, 0, 'anchorInit mounts no .board-step toolbar buttons');
+  const i18nDir = path.join(__dirname, '..', '..', 'wsi18n', 'tables');
+  const tables = fs.readdirSync(i18nDir).filter(f => f.endsWith('.json'));
+  assert.equal(tables.length, 11);
+  for (const f of tables) {
+    const data = JSON.parse(fs.readFileSync(path.join(i18nDir, f), 'utf8'));
+    assert.equal('js.board.step.prev' in data, false, f + ' must omit js.board.step.prev');
+    assert.equal('js.board.step.next' in data, false, f + ' must omit js.board.step.next');
+  }
 });
 
-test('wheel: gap >= INERTIA_MS opens a new gesture; opposite direction and bursts never move', () => {
-  const w = world([T('A'), T('B'), T('C')]);
-  w.select('t:B');
-  const at = dy => w.wheel(w.node(w.cur()), dy);
-  at(50); assert.equal(w.cur(), 't:B', 'first gesture only stops');
-  w.clock.now += G.C.INERTIA_MS - 1; at(50);
-  assert.equal(w.cur(), 't:B', 'inside the inertia window it is the same gesture');
-  w.clock.now += G.C.INERTIA_MS; at(-50);
-  assert.equal(w.cur(), 't:B', 'the opposite direction restarts at a stop');
-  w.clock.now += G.C.INERTIA_MS; at(-50);
-  assert.equal(w.cur(), 't:A', 'previous card after a new gesture');
-  // a continuous burst starting at an edge never moves, however long
-  const b = world([T('A'), T('B')]); b.select('t:A');
-  b.clock.now += 5000;
-  for (let i = 0; i < 60; i++) { b.clock.now += 16; b.wheel(b.node('t:A'), 40); }
-  assert.equal(b.cur(), 't:A', 'burst of 60 events (~1s) never moves');
-  b.clock.now += G.C.INERTIA_MS + 1; b.wheel(b.node('t:A'), 40);
-  assert.equal(b.cur(), 't:B');
-  b.clock.now += G.C.INERTIA_MS + 1; b.wheel(b.node('t:B'), 40);
-  assert.equal(b.cur(), 't:B', 'wheel right after a move is locked out (LOCK_MS)');
-});
-
-test('toolbar step buttons move both ways across an interleaved sequence', () => {
+test('WsBoardAnchor.step navigates both ways across an interleaved sequence and past the tail', () => {
   const w = world([T('A'), Cd('term'), T('B'), Cd('web'), Cd('preview'), T('C')]);
   w.c.anchorInit();
-  const group = w.bar.children[0].children[0], [prev, next] = group.children;
-  assert.equal(w.cur(), 't:A', 'first card taken'); assert.equal(prev.disabled, true); assert.equal(next.disabled, false);
+  assert.equal(w.cur(), 't:A', 'first card taken');
   const seen = [];
-  for (let i = 0; i < 5; i++) { next.listeners.click(); seen.push(w.cur()); }
+  for (let i = 0; i < 5; i++) { w.c.anchorStep(1); seen.push(w.cur()); }
   assert.deepEqual(seen, ['c:term', 't:B', 'c:web', 'c:preview', 't:C']);
-  assert.equal(next.disabled, true); assert.equal(prev.disabled, false);
-  const before = w.C.d.scrollTo; next.listeners.click();
-  assert.equal(w.cur(), 't:C', 'past the last card only the board tail is reached'); assert.equal(w.C.d.scrollTo, before + 1);
+  w.bcol.scrollHeight = 1234;
+  const before = w.C.d.scrollTo;
+  assert.equal(w.c.anchorStep(1), false);
+  assert.equal(w.cur(), 't:C', 'past the last card only the board tail is reached');
+  assert.equal(w.C.d.scrollTo, before + 1);
   const back = [];
-  for (let i = 0; i < 5; i++) { prev.listeners.click(); back.push(w.cur()); }
+  for (let i = 0; i < 5; i++) { w.c.anchorStep(-1); back.push(w.cur()); }
   assert.deepEqual(back, ['c:preview', 'c:web', 't:B', 'c:term', 't:A']);
-  prev.listeners.click(); assert.equal(w.cur(), 't:A');
-  assert.equal(w.node('t:A').hasAttribute('data-current'), true); assert.equal(w.node('t:C').hasAttribute('data-current'), false);
+  assert.equal(w.c.anchorStep(-1), false);
+  assert.equal(w.cur(), 't:A');
+  assert.equal(w.node('t:A').hasAttribute('data-current'), true);
+  assert.equal(w.node('t:C').hasAttribute('data-current'), false);
+});
+
+test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches top line', () => {
+  const w = world([T('A'), T('B'), T('C')]);
+  w.bcol.style.setProperty('--wb-rail-inset', '34px');
+  w.c.anchorSized.padTop = 2;
+  w.c.anchorLastCard = w.node('t:C');
+  w.c.anchorSize([
+    { target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 800 }], contentRect: { width: 900, height: 800 } },
+    { target: w.c.anchorLastCard, borderBoxSize: [{ blockSize: 500 }], contentRect: { height: 500 } },
+  ]);
+  // topSpace = 34 + capH(2)=44 = 78; botSpace = BOT(55) + margin(8) = 63 => usable = 800 - 78 - 63 = 659
+  assert.equal(w.bcol.props.get('--board-usable'), '659px');
+  // runway = 800 - 78 - 500 = 222
+  assert.equal(w.bcol.props.get('--board-runway'), '222px');
+});
+
+test('anchorSelect aligns to rail landing line and shields programmatic jump from short preceding card snap-back', () => {
+  const w = world([T('A'), T('B'), T('C')]);
+  w.bcol.style.setProperty('--wb-rail-inset', '34px');
+  w.bcol.clientHeight = 800; w.bcol.scrollHeight = 2000;
+  w.bcol.getBoundingClientRect = () => ({ top: 100, bottom: 900, left: 0, right: 800, height: 800, width: 800 });
+  w.node('t:A').getBoundingClientRect = () => ({ top: 20, bottom: 70, height: 50, left: 0, right: 800, width: 800 });
+  // Folded/short preceding card B sits near the landing line; target C is at 900 before scrollTo
+  w.node('t:B').getBoundingClientRect = () => ({ top: 110, bottom: 148, height: 38, left: 0, right: 800, width: 800 });
+  w.node('t:C').getBoundingClientRect = () => ({ top: 900 - w.bcol.st, bottom: 1300 - w.bcol.st, height: 400, left: 0, right: 800, width: 800 });
+  w.c.anchorSelect(w.node('t:C'), { smooth: false });
+  // Target top = col.top(100) + inset(34) + capH(2)(44) = 178 => st = 900 - 178 = 722
+  assert.equal(w.cur(), 't:C');
+  assert.equal(w.bcol.st, 722);
+  // Fire scrollend right away: guard preserves t:C instead of snapping back to short card B
+  w.c.anchorScrollEnd({ target: w.bcol });
+  assert.equal(w.cur(), 't:C');
+});
+
+test('rail.js jump re-resolves disconnected bcard and routes #bcol clicks through WsBoardAnchor.select', () => {
+  assert.match(railSrc, /resolveTopic\(t\)/);
+  assert.match(railSrc, /data-rail/);
+  assert.match(railSrc, /window\.WsBoardAnchor\.select/);
 });
 
 test('restore: key-only sessionStorage for a topic and an unpinned card; first card when the key is gone', () => {
   const key = 'ws.dashboard.board-card./s/x';
   for (const saved of ['t:C', 'c:u2']) {
     const w = world([T('A'), Cd('u1'), T('C'), Cd('u2')], { store: { [key]: saved } });
+    w.node(saved).getBoundingClientRect = () => ({ top: 800, bottom: 1200, left: 0, right: 800, height: 400, width: 800 });
     w.c.anchorInit();
-    assert.equal(w.cur(), saved); assert.equal(w.C.d.into, 1, 'aligned once');
+    assert.equal(w.cur(), saved); assert.equal(w.C.d.scrollTo, 1, 'aligned once');
   }
   const w = world([T('A'), T('B')], { store: { [key]: 't:gone' } });
   w.c.anchorInit();
   assert.equal(w.cur(), 't:A', 'first card');
-  assert.equal(w.store.get(key), 't:A'); assert.equal(w.C.d.into, 0, 'fallback does not scroll the board');
+  assert.equal(w.store.get(key), 't:A'); assert.equal(w.C.d.scrollTo, 0, 'fallback does not scroll the board');
   w.select('t:B'); assert.equal(w.store.get(key), 't:B', 'selection persists the key only');
 });
 
@@ -377,11 +407,11 @@ test('step past the last card scrolls #bcol to its end, key unchanged', () => {
   assert.equal(w.c.anchorStep(-1), false); assert.equal(to, null, 'past the first card nothing scrolls');
 });
 
-test('native scroll end re-selects the nearest card', () => {
+test('native scroll end re-selects the nearest active card', () => {
   const w = world([T('A'), T('B'), T('C')]);
   w.select('t:A');
-  const tops = { 't:A': -700, 't:B': 40, 't:C': 700 };
-  Object.keys(tops).forEach(k => { w.node(k).getBoundingClientRect = () => ({ top: tops[k] }); });
+  const tops = { 't:A': [-700, -100], 't:B': [10, 500], 't:C': [700, 1200] };
+  Object.keys(tops).forEach(k => { w.node(k).getBoundingClientRect = () => ({ top: tops[k][0], bottom: tops[k][1], height: tops[k][1] - tops[k][0] }); });
   w.bcol.getBoundingClientRect = () => ({ top: 0 });
   w.c.anchorScrollEnd({ target: w.board });
   assert.equal(w.cur(), 't:A', 'other targets are ignored');

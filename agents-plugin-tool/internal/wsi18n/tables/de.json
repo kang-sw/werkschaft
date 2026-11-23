@@ -500,8 +500,6 @@
   "js.term.loadfail": "Der Terminal-Emulator konnte nicht geladen werden",
   "js.board.toolbar.label": "Board-Aktionen",
   "js.board.toolbar.overview": "Übersicht",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "Übersicht (Ctrl+Q)",
   "js.board.toolbar.download": "Herunterladen",
   "js.board.toolbar.download.title": "Dieses Board als Zip herunterladen",

@@ -500,8 +500,6 @@
   "js.term.loadfail": "无法加载终端模拟器",
   "js.board.toolbar.label": "看板操作",
   "js.board.toolbar.overview": "概览",
-  "js.board.step.prev": "Previous card",
-  "js.board.step.next": "Next card",
   "js.board.toolbar.overview.title": "概览 (Ctrl+Q)",
   "js.board.toolbar.download": "下载",
   "js.board.toolbar.download.title": "将此看板下载为 zip",
