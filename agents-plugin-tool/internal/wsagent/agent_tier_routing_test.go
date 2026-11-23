@@ -22,8 +22,21 @@ var testPackagedRoles = []wsconfig.TierRole{
 
 func routingHarness(t *testing.T) *harness {
 	t.Helper()
+	return routingHarnessWithRoles(t, testPackagedRoles)
+}
+
+func routingHarnessWithRoles(t *testing.T, roles []wsconfig.TierRole) *harness {
+	t.Helper()
 	h, _ := agentHarness(t, func(o *Options) {
-		o.TierRoles = func() ([]wsconfig.TierRole, error) { return testPackagedRoles, nil }
+		o.Backends[BackendCodex] = BackendRegistration{
+			Backend: o.Backends[BackendClaude].Backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex),
+		}
+		o.TierRoles = func() ([]wsconfig.TierRole, error) { return roles, nil }
+		for _, tier := range []string{"small", "large"} {
+			if _, err := wsconfig.SetGlobalAgentsTierForHarness(o.Config, tier, "", "codex-"+tier, BackendCodex, "low"); err != nil {
+				t.Fatal(err)
+			}
+		}
 	})
 	return h
 }
@@ -84,8 +97,8 @@ func TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers(t *testing.T) {
 func TestAgentSpawnRoutesRoleTiersAndBundles(t *testing.T) {
 	h := routingHarness(t)
 	setTierRouting(t, h.config.Config, `{
-		"nodes":{"review":{"*":"werk.*","medium":"discussion"},"implement":{"large":"claude.small"}},
-		"bundles":{"discussion":{"harness":"werk","model":"prov/thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
+		"nodes":{"review":{"*":"codex.*","medium":"discussion"},"implement":{"large":"claude.small"}},
+		"bundles":{"discussion":{"harness":"codex","model":"codex-thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
 	}`)
 	lead := h.leadCaller()
 	for _, tc := range []struct {
@@ -93,13 +106,13 @@ func TestAgentSpawnRoutesRoleTiersAndBundles(t *testing.T) {
 		want spawnBinding
 	}{
 		// A group mapping moves the role to another harness.
-		{"ticket-reviewer-design:small", spawnBinding{BackendWerk, "prov/small-model", "low", "small"}},
+		{"ticket-reviewer-design:small", spawnBinding{BackendCodex, "codex-small", "low", "small"}},
 		// A per-size exception routes to a bundle, keeping the routed size.
-		{"ticket-reviewer-design:medium", spawnBinding{BackendWerk, "prov/thinking", "high", "medium"}},
+		{"ticket-reviewer-design:medium", spawnBinding{BackendCodex, "codex-thinking", "high", "medium"}},
 		// A pinned target changes the size.
 		{"ticket-worker:large", spawnBinding{BackendClaude, "claude-small", "high", "small"}},
 		// A bare bundle name supplies no size and records xlarge.
-		{"discussion", spawnBinding{BackendWerk, "prov/thinking", "high", "xlarge"}},
+		{"discussion", spawnBinding{BackendCodex, "codex-thinking", "high", "xlarge"}},
 		// An explicit target wins over every mapping.
 		{"claude.medium", spawnBinding{BackendClaude, "claude-medium", "high", "medium"}},
 	} {
@@ -194,7 +207,7 @@ func TestAgentTiersRoutingSection(t *testing.T) {
 	h := routingHarness(t)
 	setTierAliases(t, h.config.Config, "discussion=werk.small")
 	setTierRouting(t, h.config.Config, `{
-		"nodes":{"review":{"*":"werk.*"},"mine":{}},
+		"nodes":{"review":{"*":"codex.*"},"legacy":{"*":"pi.*"},"mine":{}},
 		"bundles":{"discussion":{"harness":"claude","model":"claude-thinking","effort":"high"},"faraway":{"harness":"agy","model":"m"}}
 	}`)
 	got, err := h.runner.AgentTiers(h.leadCaller())
@@ -212,13 +225,13 @@ func TestAgentTiersRoutingSection(t *testing.T) {
 	if e := routes["ticket-worker:medium"]; e.Trace != "ticket-worker:medium -> implement:medium -> medium -> claude.medium" || e.Model != "claude-medium" || e.Error != "" {
 		t.Fatalf("role route = %+v", e)
 	}
-	if e := routes["ticket-reviewer-design:large"]; e.Trace != "ticket-reviewer-design:large -> review:large -> werk.large" || e.Model != "prov/large-model" {
+	if e := routes["ticket-reviewer-design:large"]; e.Trace != "ticket-reviewer-design:large -> review:large -> codex.large" || e.Model != "codex-large" {
 		t.Fatalf("mapped role route = %+v", e)
 	}
 	if _, listed := routes["ticket-worker:large"]; listed {
 		t.Fatal("a role is listed at a size its playbook does not declare")
 	}
-	if e := routes["review:xlarge"]; e.Error != `tier "xlarge" is not set for werk` {
+	if e := routes["legacy:xlarge"]; e.Error != `tier "xlarge" is not set for werk` {
 		t.Fatalf("unset slot route = %+v", e)
 	}
 	if e := routes["mine:small"]; e.Trace != "mine:small -> small -> claude.small" {
@@ -327,10 +340,7 @@ func shippedRoutingHarness(t *testing.T) (*harness, []wsrsrc.PlaybookTierRole) {
 	for _, d := range declared {
 		roles = append(roles, wsconfig.TierRole{Name: d.Role, Parent: d.Parent, Size: wsconfig.NormalizedTier(d.Size)})
 	}
-	h, _ := agentHarness(t, func(o *Options) {
-		o.TierRoles = func() ([]wsconfig.TierRole, error) { return roles, nil }
-	})
-	return h, declared
+	return routingHarnessWithRoles(t, roles), declared
 }
 
 // The recommendation a daemon-agent render returns for a shipped playbook is
@@ -348,11 +358,11 @@ func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T)
 	}
 
 	setTierRouting(t, h.config.Config, `{"nodes":{
-		"review":{"*":"werk.*"},
+		"review":{"*":"codex.*"},
 		"explore":{"*":"claude.*"},
 		"ticket-worker-elevated":{"*":"claude.small"}
 	}}`)
-	werk := func(size string) spawnBinding { return h.spawnBinding(lead, "werk."+size) }
+	codex := func(size string) spawnBinding { return h.spawnBinding(lead, "codex."+size) }
 	claude := func(size string) spawnBinding { return h.spawnBinding(lead, "claude."+size) }
 	for _, d := range declared {
 		got := h.spawnBinding(lead, d.Role+":"+d.Size)
@@ -361,7 +371,7 @@ func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T)
 		case d.Role == "ticket-worker-elevated":
 			want = spawnBinding{claude("small").Backend, claude("small").Model, claude("small").Effort, "small"}
 		case strings.HasPrefix(d.Parent, "review:"):
-			want = werk(d.Size)
+			want = codex(d.Size)
 		case strings.HasPrefix(d.Parent, "explore:"):
 			want = claude(d.Size)
 		default:

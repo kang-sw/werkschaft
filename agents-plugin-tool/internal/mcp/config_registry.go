@@ -632,6 +632,10 @@ var configRegistry = []configKeyEntry{
 				Description: "Concrete model for this alias.",
 			},
 			{
+				Name:        "provider",
+				Description: "Optional provider for a werk tier. Defaults to openrouter, the supported provider.",
+			},
+			{
 				Name:        "effort",
 				Description: "Optional reasoning effort label for this alias. Empty, omitted, or none leaves backend effort unset; provider support is checked at launch.",
 			},

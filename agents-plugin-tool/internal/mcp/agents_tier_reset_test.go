@@ -196,3 +196,46 @@ func TestConfigCatalogAgentsTierResetWriter(t *testing.T) {
 		t.Fatalf("reset value guidance missing: %+v", knob)
 	}
 }
+
+func TestConfigTuneWerkTierProvider(t *testing.T) {
+	useLeadProfile(t)
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", t.TempDir())
+	s := NewServer(t.TempDir(), "test")
+	for _, tc := range []struct {
+		harness  string
+		provider string
+		want     string
+	}{
+		{"werk", "", ""},
+		{"werk", "openrouter", ""},
+		{"werk", "openai", "unsupported werk provider"},
+		{"claude", "openrouter", "only for werk tiers"},
+	} {
+		t.Run(tc.harness+"/"+tc.provider, func(t *testing.T) {
+			value := map[string]any{"tier": "small", "model": "fixture/model"}
+			if tc.provider != "" {
+				value["provider"] = tc.provider
+			}
+			args := map[string]any{"key": "agents.tier", "scope": "global", "harness": tc.harness, "value": value}
+			resp := callToolOnce(t, s, 1, "config.tune", args)
+			if tc.want != "" {
+				if !toolIsError(t, resp) || !strings.Contains(toolText(t, resp), tc.want) {
+					t.Fatalf("write = %s, want %q", resp, tc.want)
+				}
+				return
+			}
+			if toolIsError(t, resp) {
+				t.Fatalf("write = %s", resp)
+			}
+			tiers, err := wsconfig.HarnessTiers(wsconfig.Options{}, "werk")
+			if err != nil || tiers["small"].Provider != wsconfig.WerkDefaultProvider || tiers["small"].Model != "fixture/model" {
+				t.Fatalf("werk.small = %+v, %v", tiers["small"], err)
+			}
+			data, err := os.ReadFile(filepath.Join(os.Getenv("WS_CONFIG_HOME"), "config.json"))
+			if err != nil || strings.Contains(string(data), `"provider"`) != (tc.provider != "") {
+				t.Fatalf("stored provider = %s, %v", data, err)
+			}
+		})
+	}
+}

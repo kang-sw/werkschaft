@@ -378,6 +378,13 @@ func (c *conv) compactIdle() bool {
 		}
 	}
 	if req := c.compactPending; req != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			release, err := c.r.admitDurableTransition()
+			if err != nil {
+				return true
+			}
+			defer release()
+		}
 		if c.proc == nil {
 			c.compactPending = nil
 			c.setStatus(func() { c.lastErr = "compaction requires a running harness" })
@@ -421,6 +428,9 @@ func (c *conv) compactIdle() bool {
 		return true
 	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
+		if c.r.durableProcess(c.rec.Backend) {
+			return c.compactDurableContinue()
+		}
 		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
@@ -487,6 +497,10 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		}
 		return
 	}
+	// A durable worker has finished and journaled this turn before the
+	// checkpoint. Automatically compact its next input without extending
+	// the finished turn. An explicit resume request still opens new input.
+	resume = resume && !c.r.durableProcess(c.rec.Backend)
 	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
 	c.publishCompaction(false)
 }
@@ -591,7 +605,8 @@ func (c *conv) stageCompactionNudge(hard float64) {
 		c.compactNudge = compactionNudge{}
 		return
 	}
-	standalone := c.compactUnsupported() == ""
+	supported := c.compactUnsupported() == ""
+	standalone := supported && !c.r.durableProcess(c.rec.Backend)
 	usage := fmt.Sprintf("Context usage is %.0f tokens (%.0f%%); ", c.compactTokens, c.compactTokens/c.compactWindow*100)
 	if c.compactAdvised {
 		usage += fmt.Sprintf("compaction reminder %d/3 (%.0f tokens, hard point %.0f tokens). ", level-1, point, hard)
@@ -600,7 +615,7 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	}
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
-	case standalone:
+	case supported:
 		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
 	}
 	c.compactNudge = compactionNudge{usage + action, level, standalone}

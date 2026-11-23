@@ -95,7 +95,7 @@ var (
 // Info is one holder as the daemon sees it.
 type Info struct {
 	ID  string `json:"id"`
-	PID int    `json:"pid"`
+	PID int    `json:"pid,omitempty"`
 	// Attached reports that this daemon holds the holder's attach slot;
 	// Cause says why not otherwise.
 	Attached bool  `json:"attached"`

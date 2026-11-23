@@ -549,6 +549,10 @@ func (c *conv) steerWorker() {
 	if c.holdsNotices(ctl) {
 		return
 	}
+	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
+		c.steerDurableWorker(p)
+		return
+	}
 	// Every Runner.Send to this worker is marked for steering. Serialize
 	// the drain and its coverage against Send, as kick does for prompts.
 	c.mu.Lock()
@@ -581,6 +585,23 @@ func (c *conv) takeReport(text string) {
 }
 
 func (c *conv) takeSteer(text string, mark uint64) {
+	if c.r.durableProcess(c.rec.Backend) {
+		if p, ok := c.proc.(durableSteerProcess); ok && c.turn && c.rec.DurableTurn != nil && !c.rec.Lead &&
+			!c.wrapHold && !c.compacting && !c.compactCommand && !c.compactInternalTurn {
+			queued := false
+			c.admitInput(func() {
+				queued = c.queueDurableSteer(p, durableSteer{Text: text, Mark: mark}, nil,
+					wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
+			})
+			if queued {
+				return
+			}
+		}
+		c.update(func(rec *Record) { rec.Reports = append(rec.Reports, text) })
+		c.kick()
+		c.changed(false)
+		return
+	}
 	if st := controlsFor(c.proc).reports; st != nil && c.turn && !c.rec.Lead && !c.replaying && !c.wrapHold && !c.compacting && !c.compactCommand && !c.compactInternalTurn {
 		// Persist before the backend write. A holder can accept the steer and
 		// outlive this daemon before its acknowledgement reaches the runner.
@@ -758,7 +779,9 @@ func (c *conv) releaseHeld() {
 		return
 	}
 	res := *c.heldRes
-	c.hold(nil)
+	if !c.r.durableProcess(c.rec.Backend) {
+		c.hold(nil)
+	}
 	c.publish(res, false)
 }
 

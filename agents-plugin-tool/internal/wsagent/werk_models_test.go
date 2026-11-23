@@ -75,7 +75,7 @@ func TestWerkIsListedForThePickerOnly(t *testing.T) {
 	defer srv.Close()
 	configured := false
 	sh := newSupportHarness(t)
-	_, reg := WerkBackend{Command: fakeHarness("ws-mcp"), modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return configured, nil }}.registration()
+	_, reg := WerkBackend{modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return configured, nil }}.registration()
 	sh.runner.opts.Backends[BackendWerk] = reg
 
 	answer := choicesWithPickers(t, sh.support)
@@ -143,7 +143,7 @@ func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
 		}
 	}()
 	sh := newSupportHarness(t)
-	_, reg := WerkBackend{Command: fakeHarness("ws-mcp"), modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return true, nil }}.registration()
+	_, reg := WerkBackend{modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return true, nil }}.registration()
 	sh.runner.opts.Backends[BackendWerk] = reg
 
 	start := time.Now()

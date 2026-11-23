@@ -28,15 +28,43 @@ import (
 
 // HolderHost is the session holder manager the daemon runs
 // (*wsholder.Manager). Run scans at once and rescans until Close; Close
-// detaches from every holder and ends none. StopAll ends every holder for
-// the full stop route (handleShutdownAll), refusing launches meanwhile, and
-// reports the ones whose process still runs.
+// detaches from every holder and ends none. StopAllFenced ends every holder for
+// the full stop route (handleShutdownAll), holding its launch fence until
+// the daemon shuts down or the caller releases it after a partial stop.
 type HolderHost interface {
 	Run()
 	Close()
 	List() wsholder.Listing
 	Stop(id string) error
-	StopAll() wsholder.StopAllResult
+	StopAllFenced() (wsholder.StopAllResult, func())
+}
+
+// DurableSessionHost is the agent runner's Full Quit surface. A durable
+// session has a lifetime in the runner even if its loop is asleep.
+type DurableSessionHost interface {
+	DurableSessions() []DurableSession
+	StopDurableSession(id string) error
+	FenceDurableStarts() (resume func())
+}
+
+// DurableSession carries only the identity and availability of a live session.
+type DurableSession struct {
+	ID          string
+	Unavailable bool
+}
+
+var ErrUnknownDurableSession = errors.New("unknown durable session")
+
+// The dot cannot occur in a process holder ID.
+const durableHolderPrefix = "durable."
+
+func (d *Daemon) durableSessionHost() DurableSessionHost {
+	host, _ := d.agents.(DurableSessionHost)
+	return host
+}
+
+func durableHolderInfo(session DurableSession) wsholder.Info {
+	return wsholder.Info{ID: durableHolderPrefix + session.ID, Attached: !session.Unavailable, RestartSafe: true}
 }
 
 // holderList is the holders route's answer.
@@ -56,11 +84,21 @@ func (d *Daemon) handleHolders(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(holderList{Listing: d.holders.List(), CanStop: localViewer(r)})
+		listing := wsholder.Listing{Holders: []wsholder.Info{}, Failures: []wsholder.StartFailure{}}
+		if d.holders != nil {
+			listing = d.holders.List()
+		}
+		if host := d.durableSessionHost(); host != nil {
+			for _, session := range host.DurableSessions() {
+				listing.Holders = append(listing.Holders, durableHolderInfo(session))
+			}
+		}
+		_ = json.NewEncoder(w).Encode(holderList{Listing: listing, CanStop: localViewer(r)})
 		return
 	}
 	id, ok := strings.CutSuffix(rest, "/stop")
-	if !ok || !wsholder.ValidID(id) || !localViewer(r) {
+	sessionID, durable := strings.CutPrefix(id, durableHolderPrefix)
+	if !ok || !localViewer(r) || (durable && !ValidReplyID(sessionID)) || (!durable && !wsholder.ValidID(id)) {
 		http.NotFound(w, r)
 		return
 	}
@@ -72,14 +110,26 @@ func (d *Daemon) handleHolders(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	switch err := d.holders.Stop(id); {
+	var err error
+	if durable {
+		if host := d.durableSessionHost(); host != nil {
+			err = host.StopDurableSession(sessionID)
+		} else {
+			err = ErrUnknownDurableSession
+		}
+	} else if d.holders != nil {
+		err = d.holders.Stop(id)
+	} else {
+		err = wsholder.ErrUnknownHolder
+	}
+	switch {
 	case err == nil:
-		if d.terminals != nil {
+		if !durable && d.terminals != nil {
 			// A stopped terminal's viewers learn of it now.
 			d.terminals.sync()
 		}
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, wsholder.ErrUnknownHolder):
+	case errors.Is(err, wsholder.ErrUnknownHolder), errors.Is(err, ErrUnknownDurableSession):
 		http.NotFound(w, r)
 	default:
 		http.Error(w, err.Error(), http.StatusConflict)

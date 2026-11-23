@@ -392,7 +392,9 @@ type Daemon struct {
 	support http.Handler
 	// holders is the session holder manager, nil without the routes
 	// (holders.go).
-	holders HolderHost
+	holders          HolderHost
+	fullStopMu       sync.Mutex
+	fullStopAccepted bool
 	// terminals are the shells on holder PTYs the session pages show, nil
 	// unless the holder manager can host them (terminals.go); shell picks a
 	// new one's shell.

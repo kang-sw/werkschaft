@@ -71,6 +71,7 @@ type jobKind int
 
 const (
 	jobAppend jobKind = iota
+	jobCheckpoint
 	jobFinalize
 	jobLoss
 	jobTouch
@@ -306,6 +307,17 @@ func (s *Store) AppendSourced(_ context.Context, id, rec wsaudit.SourceID, ev ws
 		return wsaudit.ErrDuplicateSource
 	}
 	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id, rec: rec}, true)
+}
+
+// AppendCheckpoint places a completed input replacement behind preceding audit
+// events. It is never dropped for queue depth, and waits for the writer.
+func (s *Store) AppendCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	id = normalizeSourceID(id)
+	if ev.Kind != wsaudit.KindCompaction || id.Source == "" || id.Seq == 0 || id.Tee || id.Key != "" {
+		return errors.New("invalid audit checkpoint")
+	}
+	_, err := s.call(ctx, job{kind: jobCheckpoint, session: ev.Session, ev: ev, id: &id, rec: id})
+	return err
 }
 
 // enqueue appends j to the writer's queue in call order. A droppable job

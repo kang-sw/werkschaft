@@ -70,8 +70,7 @@ func fsSize(n int64) string {
 // errFSBinary is fs.read's refusal of a binary file.
 var errFSBinary = errors.New("binary file (a NUL byte in its first 8 KiB); fs.read reads text files only")
 
-// callFS runs the fs.* read tools for a cutover Codex session; the caller
-// has checked codexReadTools.
+// callFS runs the admitted fs.* read tools for a bound session.
 func (s *Server) callFS(id json.RawMessage, name string, args, meta map[string]any) response {
 	root, err := s.resolveToolRoot(args, meta)
 	if err != nil {

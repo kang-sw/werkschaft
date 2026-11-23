@@ -180,6 +180,21 @@ func TestResolveProfileThroughWorkingRoot(t *testing.T) {
 	}
 }
 
+func TestWerkRejectsSavedProfilesAndKeepsItsBuiltin(t *testing.T) {
+	opts := testConfig(t)
+	root := t.TempDir()
+	writeStructured(t, filepath.Join(opts.ConfigHome, "config.json"), map[string]string{
+		ProfilePrefix + "custom": `{"backend":"werk"}`,
+	})
+	if _, err := ResolveProfile(opts, root, "custom"); err == nil || !strings.Contains(err.Error(), "builtin profiles only") {
+		t.Fatalf("saved profile error = %v", err)
+	}
+	got, err := ResolveProfile(opts, root, AgentWorkerProfile(BackendWerk))
+	if err != nil || got.Scope != wsconfig.ScopeBuiltin || got.Definition.Backend != BackendWerk {
+		t.Fatalf("builtin profile = %+v, %v", got, err)
+	}
+}
+
 // TestRepoProfileMayNotStartPrograms: a committed profile that sets MCP
 // servers or plugin directories never resolves, so no conversation launches
 // from it; the same profile in a machine-local scope does.

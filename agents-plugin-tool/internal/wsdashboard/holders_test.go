@@ -2,8 +2,10 @@ package wsdashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,7 +50,7 @@ func (f *fakeHolders) Close() {
 
 // StopAll ends every listed holder whose stop the test did not fail; those
 // it did stay listed and are answered as remaining with their error.
-func (f *fakeHolders) StopAll() wsholder.StopAllResult {
+func (f *fakeHolders) StopAllFenced() (wsholder.StopAllResult, func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stopall")
@@ -64,7 +66,7 @@ func (f *fakeHolders) StopAll() wsholder.StopAllResult {
 		out.Stopped = append(out.Stopped, h.ID)
 	}
 	f.listing.Holders = kept
-	return out
+	return out, func() {}
 }
 
 func (f *fakeHolders) callOrder() []string {
@@ -305,5 +307,77 @@ func TestHoldersCardInTheDrawer(t *testing.T) {
 	bare := startPageFixture(t)
 	if _, page := get(t, bare.base+"/s/livesession?frame=1"); strings.Contains(page, `id="p-holders"`) {
 		t.Errorf("a daemon without a holder host: holders card present")
+	}
+}
+
+// durableAgentsStub isolates the HTTP compatibility shape and origin gate.
+type durableAgentsStub struct {
+	sessions []DurableSession
+	stopped  []string
+}
+
+func (*durableAgentsStub) Handler() http.Handler      { return http.NotFoundHandler() }
+func (*durableAgentsStub) Start(func(string, string)) {}
+func (*durableAgentsStub) InboxChanged(string)        {}
+func (*durableAgentsStub) Close()                     {}
+func (*durableAgentsStub) FenceDurableStarts() func() { return func() {} }
+
+func (s *durableAgentsStub) DurableSessions() []DurableSession { return s.sessions }
+
+func (s *durableAgentsStub) StopDurableSession(id string) error {
+	for i, session := range s.sessions {
+		if session.ID != id {
+			continue
+		}
+		if session.Unavailable {
+			return errors.New("the durable session record is unavailable")
+		}
+		s.stopped = append(s.stopped, id)
+		s.sessions = slices.Delete(s.sessions, i, i+1)
+		return nil
+	}
+	return ErrUnknownDurableSession
+}
+
+func TestHolderListingAndStopIncludeDurableSessions(t *testing.T) {
+	holders := newFakeHolders()
+	holders.listing = holderFixtureListing()
+	agents := &durableAgentsStub{sessions: []DurableSession{{ID: "idle"}, {ID: "unavailable", Unavailable: true}}}
+	f := startPageFixture(t, lanMode, withHolders(holders), func(o *DaemonOptions) { o.Agents = agents })
+	local := viewer{peer: "127.0.0.1:50000", host: "127.0.0.1:" + strconv.Itoa(f.d.Endpoint().Port), localCookie: true}
+	rec := serve(f.d, local, http.MethodGet, "/holders", "")
+	list := decodeHolderList(t, rec)
+	var wire struct{ Holders []map[string]json.RawMessage }
+	if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Holders) != 5 || list.Holders[0].PID != 4100 ||
+		list.Holders[3].ID != "durable.idle" || !list.Holders[3].Attached ||
+		list.Holders[4].ID != "durable.unavailable" || list.Holders[4].Attached {
+		t.Fatalf("holders = %+v, want original holders and two live durable lifetimes", list.Holders)
+	}
+	if wire.Holders[3]["pid"] != nil || wire.Holders[4]["pid"] != nil {
+		t.Fatal("a durable list entry carried process identity")
+	}
+	const stop = "/holders/durable.idle/stop"
+	remote := viewer{peer: "192.168.7.30:50000", host: "192.168.7.20:" + strconv.Itoa(f.d.Endpoint().Port), cookie: readLANToken(t, f.dir)}
+	if rec := postFrom(f.d, remote, stop, "http://"+remote.host); rec.Code != http.StatusNotFound {
+		t.Fatalf("LAN stop = %d, want 404", rec.Code)
+	}
+	if rec := postFrom(f.d, local, stop, "http://evil.example"); rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin stop = %d, want 403", rec.Code)
+	}
+	origin := "http://" + local.host
+	if rec := postFrom(f.d, local, "/holders/durable.unavailable/stop", origin); rec.Code != http.StatusConflict {
+		t.Fatalf("unavailable durable stop = %d, want 409", rec.Code)
+	}
+	if rec := postFrom(f.d, local, stop, origin); rec.Code != http.StatusNoContent {
+		t.Fatalf("local durable stop = %d, want 204", rec.Code)
+	}
+	if !slices.Equal(agents.stopped, []string{"idle"}) || len(holders.stops()) != 0 {
+		t.Fatalf("stopped durable %v and holders %v", agents.stopped, holders.stops())
+	}
+	if rec := postFrom(f.d, local, stop, origin); rec.Code != http.StatusNotFound {
+		t.Fatalf("closed durable stop = %d, want 404", rec.Code)
 	}
 }

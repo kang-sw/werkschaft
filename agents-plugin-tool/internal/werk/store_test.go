@@ -47,22 +47,31 @@ func TestStoreAppendsOneLinePerItemAndRecovers(t *testing.T) {
 func TestStoreTrimsATornLastLine(t *testing.T) {
 	dir := t.TempDir()
 	session := NewSessionID()
-	s, _, _ := OpenStore(dir, session, nil)
-	_ = s.Append(json.RawMessage(`{"a":1}`))
-	s.Close()
-	f, _ := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(`{"k":"item","item":{"torn`)
-	f.Close()
+	s, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	must(t, s.Append(json.RawMessage(`{"a":1}`)))
+	must(t, s.Close())
+	f, err := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = f.WriteString(`{"k":"item","item":{"torn`)
+	closeErr := f.Close()
+	must(t, err)
+	must(t, closeErr)
 
 	s2, items, err := OpenStore(dir, session, nil)
-	if err != nil || len(items) != 1 {
-		t.Fatalf("open = %v, %d items", err, len(items))
+	must(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+	if len(items) != 1 {
+		t.Fatalf("after trim: %d items, want 1", len(items))
 	}
-	_ = s2.Append(json.RawMessage(`{"b":2}`))
-	s2.Close()
-	_, items, err = OpenStore(dir, session, nil)
-	if err != nil || len(items) != 2 || string(items[1]) != `{"b":2}` {
-		t.Fatalf("after the torn line: %v, %s", err, items)
+	must(t, s2.Append(json.RawMessage(`{"b":2}`)))
+	must(t, s2.Close())
+	reopened, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, reopened.Close())
+	if len(items) != 2 || string(items[1]) != `{"b":2}` {
+		t.Fatalf("after the torn line: %s", items)
 	}
 }
 
@@ -101,12 +110,67 @@ func TestStoreRotateStartsASnapshotSegmentAndDropsTheOldOne(t *testing.T) {
 	}
 	_ = s.Append(json.RawMessage(`{"after":1}`))
 	s.Close()
-	entries, _ := os.ReadDir(filepath.Dir(segmentPath(dir, session)))
-	if len(entries) != 1 {
-		t.Errorf("segments left = %d", len(entries))
+	segments, err := filepath.Glob(filepath.Join(filepath.Dir(segmentPath(dir, session)), "*.jsonl"))
+	if err != nil || len(segments) != 1 {
+		t.Errorf("segments left = %d, %v", len(segments), err)
 	}
-	_, items, err := OpenStore(dir, session, nil)
+	reopened, items, err := OpenStore(dir, session, nil)
 	if err != nil || len(items) != 2 || string(items[0]) != `{"summary":1}` || string(items[1]) != `{"after":1}` {
 		t.Fatalf("after rotate: %v, %s", err, items)
+	}
+	defer reopened.Close()
+}
+
+func TestStoreResponseIsRecoveredAsAUnit(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	s, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, s.Append(json.RawMessage(userItem("question"))))
+	first := &Response{ID: "committed", Output: []json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","id":"r"}`),
+		json.RawMessage(callOf("c", "read", "{}")),
+	}}
+	must(t, s.AppendResponse(first))
+	must(t, s.Close())
+	tail, err := os.OpenFile(segmentPath(dir, session), os.O_APPEND|os.O_WRONLY, 0)
+	must(t, err)
+	_, err = tail.WriteString(`{"k":"response","response":{"id":"torn","output":[{"type":"message"}`)
+	must(t, err)
+	must(t, tail.Close())
+
+	reopened, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	defer reopened.Close()
+	if len(items) != 3 || string(items[1]) != string(first.Output[0]) || string(items[2]) != string(first.Output[1]) {
+		t.Fatalf("replayed %s", items)
+	}
+}
+
+func TestStoreKeepsTheWriterLeaseAcrossRotation(t *testing.T) {
+	dir, session := t.TempDir(), NewSessionID()
+	writer, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	assertBusy := func() {
+		t.Helper()
+		second, _, err := OpenStore(dir, session, nil)
+		if err == nil {
+			_ = second.Close()
+			t.Fatal("the same session admitted another writer")
+		}
+		if !strings.Contains(err.Error(), "already has a writer") {
+			t.Fatal(err)
+		}
+	}
+	assertBusy()
+	must(t, writer.Rotate(nil))
+	assertBusy()
+	must(t, writer.Append(json.RawMessage(`{"step":"committed"}`)))
+	must(t, writer.Close())
+	successor, items, err := OpenStore(dir, session, nil)
+	must(t, err)
+	t.Cleanup(func() { _ = successor.Close() })
+	if len(items) != 1 || string(items[0]) != `{"step":"committed"}` {
+		t.Errorf("successor's transcript = %s", items)
 	}
 }

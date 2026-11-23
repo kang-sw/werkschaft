@@ -104,15 +104,15 @@ func dashboardCommand(args []string) {
 	labels := &mailLabels{}
 	// The one provider credential store: the daemon's token route and its
 	// change route serve it, and hosted `credential` commands apply to it. The
-	// runner reads its status (never a key) to report a harness that needs a
-	// provider credential as unavailable until one is configured.
+	// runner uses the status for availability and supplies the in-process
+	// source to backends that request a model credential.
 	var credentials *wscred.Store
 	if credPath, err := wscred.DefaultPath(""); err != nil {
 		fmt.Fprintf(logw, "dashboard: credential store unavailable: %v\n", err)
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label, credentialStatus(credentials))
+	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label, credentials)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -480,14 +480,17 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // trackerChanged runs after a conversation's successful tracker write;
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
-func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials func(provider string) (bool, error)) *wsagent.Runner {
+func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
 		modelWaitSeconds = 0
 	}
 	keys := mcp.NewAgentKeyStore(boards)
-	backends := wsagent.WithCredentialStatus(wsagent.BuiltinBackendRegistrations(), credentials)
+	backends := wsagent.BuiltinBackendRegistrations()
+	if credentials != nil {
+		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
+	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{
 		Dir:                        dir,
@@ -507,6 +510,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return agentMCPCommand(root, version)
 		},
+		DaemonMCP: agentDaemonMCP,
 		// A hosted lead's launch appends its workflow manual to its prompt,
 		// and a lead without ws skills runs the package's lead playbooks as
 		// dashboard commands whose turn carries the playbook body.

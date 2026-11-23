@@ -84,7 +84,9 @@ type Server struct {
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools
 	// exist, only then. Empty elsewhere.
-	execCutover string
+	execCutover      string
+	fileWrites       *FileWriteSession
+	recordExecLaunch func(context.Context, execjob.ModelLaunch) error
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of the agent host, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.

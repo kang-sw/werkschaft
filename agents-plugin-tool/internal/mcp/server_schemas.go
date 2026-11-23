@@ -314,6 +314,16 @@ func tools() []map[string]any {
 			"inputSchema": fsListSchema(),
 		},
 		{
+			"name":        "fs.edit",
+			"description": "Apply unique, non-overlapping exact text replacements to a file and return a unified diff.",
+			"inputSchema": fsEditSchema(),
+		},
+		{
+			"name":        "fs.write",
+			"description": "Create a file and any missing parent directories, or replace an existing file's entire contents.",
+			"inputSchema": fsWriteSchema(),
+		},
+		{
 			"name":        "exec.status",
 			"description": "Return lifecycle status and stream sizes for a durable exec job.",
 			"inputSchema": execKeySchema(),
@@ -1605,4 +1615,24 @@ func fsListSchema() map[string]any {
 		"path": fsPathProperty("The directory to list."),
 		"glob": stringProperty("Optional name pattern (for example *.md) an entry's name must match."),
 	}, "required": []string{"path"}}
+}
+
+func fsEditSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": stringProperty("File to edit, absolute or relative to your working directory."),
+		"edits": map[string]any{
+			"type": "array", "minItems": 1,
+			"items": map[string]any{"type": "object", "properties": map[string]any{
+				"oldText": stringProperty("Text to replace, occurring exactly once in the original file."),
+				"newText": stringProperty("Replacement text."),
+			}, "required": []string{"oldText", "newText"}},
+		},
+	}, "required": []string{"path", "edits"}}
+}
+
+func fsWriteSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path":    stringProperty("File to write, absolute or relative to your working directory."),
+		"content": stringProperty("Complete file contents."),
+	}, "required": []string{"path", "content"}}
 }

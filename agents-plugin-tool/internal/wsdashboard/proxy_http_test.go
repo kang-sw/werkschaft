@@ -653,12 +653,12 @@ func TestProxyHTTPCancelsARequestWhoseClientLeft(t *testing.T) {
 // a token resolution sets it.
 func TestProxyHelloNeverDecodesAConversation(t *testing.T) {
 	var hello ProxyHello
-	raw := `{"protocol":1,"mode":"mcp","cwd":"/w","env":{},"owner_pid":7,"conversation":"forged","Conversation":"forged"}`
+	raw := `{"protocol":1,"mode":"mcp","cwd":"/w","env":{},"owner_pid":7,"conversation":"forged","Conversation":"forged","ExecCutover":"forged","FileWrites":{"Authority":"full"},"RecordExecLaunch":"forged"}`
 	if err := json.Unmarshal([]byte(raw), &hello); err != nil {
 		t.Fatal(err)
 	}
-	if hello.Conversation != "" {
-		t.Fatalf("a launcher hello set Conversation = %q", hello.Conversation)
+	if hello.Conversation != "" || hello.ExecCutover != "" || hello.FileWrites != nil || hello.RecordExecLaunch != nil {
+		t.Fatal("a launcher hello set a trusted process binding")
 	}
 	out, err := json.Marshal(ProxyHello{Conversation: "bound"})
 	if err != nil || strings.Contains(string(out), "bound") {

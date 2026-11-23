@@ -3,6 +3,7 @@ package wsagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -190,6 +191,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
+	releaseDurableCreation := func() {}
+	if r.durableProcess(rp.Definition.Backend) {
+		release, err := r.admitDurableTransition()
+		if err != nil {
+			return State{}, err
+		}
+		releaseDurableCreation = sync.OnceFunc(release)
+		defer releaseDurableCreation()
+	}
 	var key string
 	if lead != nil {
 		// A lead key lives at the canonical git root, which is then the
@@ -283,7 +293,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
-	if err := writeRecord(dir, rec); err != nil {
+	if err := r.persistAgentRecord(dir, rec); err != nil {
 		return State{}, err
 	}
 	var seed []wslive.SlashCommand
@@ -297,6 +307,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		claimWidth = spawn.claimWidth
 	}
 	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, false)
+	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {
 		return r.spawned(c, spawn.Prompt)
@@ -341,6 +352,13 @@ func (r *Runner) lastCommands(rec Record) []wslive.SlashCommand {
 	return nil
 }
 
+func (r *Runner) mcpCommand(durable bool) func(string) (MCPCommand, error) {
+	if durable && r.opts.DaemonMCP != nil {
+		return r.opts.DaemonMCP
+	}
+	return r.opts.WSMCP
+}
+
 // resolve resolves profile through root and checks everything a launch
 // needs: a backend this daemon has, an existing instruction file, and a
 // ws-mcp command when the profile allows ws tools.
@@ -371,13 +389,18 @@ func (r *Runner) resolve(profile, root string) (ResolvedProfile, error) {
 			return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q: instruction file %s does not exist", rp.Name, path))
 		}
 	}
-	if len(rp.Definition.WSTools) > 0 && r.opts.WSMCP == nil {
+	durable := r.durableProcess(rp.Definition.Backend)
+	mcp := r.mcpCommand(durable)
+	if len(rp.Definition.WSTools) > 0 && mcp == nil {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q allows ws tools, but this daemon cannot attach ws-mcp", rp.Name))
 	}
-	if !rp.Definition.Lead && r.opts.WSMCP != nil && !slices.Contains(rp.Definition.WSTools, "compact") {
+	if !rp.Definition.Lead && mcp != nil && !slices.Contains(rp.Definition.WSTools, "compact") {
 		rp.Definition.WSTools = append(slices.Clone(rp.Definition.WSTools), "compact")
 	}
-	if rp.Definition.Lead && (r.opts.Holders == nil || r.opts.LeadKeys == nil) {
+	if rp.Definition.Lead && durable && r.opts.LeadKeys == nil {
+		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q requires a lead key store", rp.Name))
+	}
+	if rp.Definition.Lead && !durable && (r.opts.LeadKeys == nil || r.opts.Holders == nil) {
 		return ResolvedProfile{}, categorized(ErrInvalidProfile, badRequest("agent profile %q is a lead profile, but this daemon runs no session holders", rp.Name))
 	}
 	return rp, nil
@@ -408,7 +431,18 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 		}
 		spec.audit = &auditTap{Session: wsaudit.Session{ID: c.rec.ReplyID, Class: class}, Sink: sink, Log: c.r.opts.Log}
 	}
-	proc, err := backend.Start(context.Background(), spec)
+	start := backend.Start
+	if c.r.durableProcess(c.rec.Backend) {
+		durable, ok := backend.(durableStarter)
+		if !ok {
+			return nil, categorized(ErrLaunchFailed, errors.New("the backend has no durable process"))
+		}
+		start = durable.startLoop
+		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
+		spec.compactState = c.r.compactionState(c.rec.ReplyID)
+		spec.sessionSecret = c.rec.WSKey
+	}
+	proc, err := start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
 }
 

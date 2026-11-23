@@ -19,6 +19,44 @@ import (
 // agentMCPCommand uses the configured hosted package, not the daemon's staged
 // executable or the worker's project directory. The starter supplies Python.
 func agentMCPCommand(root, _ string) (wsagent.MCPCommand, error) {
+	cmd, err := hostedMCPCommand(root)
+	if err != nil {
+		return wsagent.MCPCommand{}, err
+	}
+	launcher := filepath.Join(cmd.Plugin, "bin", "ws-mcp-launcher.py")
+	python, prefix, err := agentMCPPython(os.Getenv(wsholder.PythonEnv), goruntime.GOOS == "windows", exec.LookPath)
+	if err != nil {
+		return wsagent.MCPCommand{}, err
+	}
+	cmd.Command = python
+	// --root would disable the launcher's exact serve --stdio proxy
+	// match. Override the daemon's inherited project root in env instead.
+	cmd.Args = append(prefix, launcher, "serve", "--stdio")
+	return cmd, nil
+}
+
+// agentDaemonMCP supplies the hosted bundle and the daemon's stores.
+func agentDaemonMCP(root string) (wsagent.MCPCommand, error) {
+	cmd, err := hostedMCPCommand(root)
+	if err != nil {
+		return wsagent.MCPCommand{}, err
+	}
+	// The in-process caller does not inherit the daemon environment.
+	// Its MCP server must resolve the session key and policy in the same
+	// stores that the runner used to mint and configure the session.
+	for _, key := range []string{"WS_CACHE_HOME", "WS_CONFIG_HOME"} {
+		if value := os.Getenv(key); value != "" {
+			path, err := filepath.Abs(value)
+			if err != nil {
+				return wsagent.MCPCommand{}, fmt.Errorf("resolve %s for hosted MCP: %w", key, err)
+			}
+			cmd.Env[key] = path
+		}
+	}
+	return cmd, nil
+}
+
+func hostedMCPCommand(root string) (wsagent.MCPCommand, error) {
 	name, warning, err := wsagent.ResolveHostedPackage()
 	if err != nil {
 		return wsagent.MCPCommand{}, fmt.Errorf("cannot resolve ws-mcp launcher: %w", err)
@@ -31,11 +69,6 @@ func agentMCPCommand(root, _ string) (wsagent.MCPCommand, error) {
 	if err != nil {
 		return wsagent.MCPCommand{}, fmt.Errorf("cannot stage ws-mcp launcher: %w", err)
 	}
-	launcher := filepath.Join(plugin, "bin", "ws-mcp-launcher.py")
-	python, prefix, err := agentMCPPython(os.Getenv(wsholder.PythonEnv), goruntime.GOOS == "windows", exec.LookPath)
-	if err != nil {
-		return wsagent.MCPCommand{}, err
-	}
 	env, err := wsagent.HostedPluginEnvironment(name, plugin)
 	if err != nil {
 		return wsagent.MCPCommand{}, err
@@ -43,13 +76,9 @@ func agentMCPCommand(root, _ string) (wsagent.MCPCommand, error) {
 	env["WS_MCP_PROJECT_ROOT"] = root
 	env["WS_MCP_HOSTED_PACKAGE"] = "1"
 	return wsagent.MCPCommand{
-		Command:       python,
 		PluginWarning: warning,
 		Plugin:        plugin,
-		// --root would disable the launcher's exact serve --stdio proxy
-		// match. Override the daemon's inherited project root in env instead.
-		Args: append(prefix, launcher, "serve", "--stdio"),
-		Env:  env,
+		Env:           env,
 	}, nil
 }
 

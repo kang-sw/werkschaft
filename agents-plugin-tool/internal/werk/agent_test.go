@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // scripted is a model endpoint that answers each request from the next step.
@@ -144,6 +146,36 @@ func (s *syncBuf) lines() []Line {
 	return out
 }
 
+type fileToolFixture struct{ files wsfs.Files }
+
+func (fileToolFixture) ListTools(context.Context) ([]MCPTool, error) {
+	return []MCPTool{{Name: "fs.read"}, {Name: "fs.write"}}, nil
+}
+
+func (f fileToolFixture) Call(ctx context.Context, name string, args json.RawMessage) (CallResult, error) {
+	switch name {
+	case "fs.read":
+		var in struct{ Path string }
+		if err := json.Unmarshal(args, &in); err != nil {
+			return CallResult{}, err
+		}
+		data, err := os.ReadFile(filepath.Join(f.files.Cwd, in.Path))
+		return CallResult{Text: string(data)}, err
+	case "fs.write":
+		text, err := f.files.Write(ctx, args)
+		return CallResult{Text: text}, err
+	default:
+		return CallResult{}, fmt.Errorf("unexpected file tool %q", name)
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 type rig struct {
 	t      *testing.T
 	agent  *Agent
@@ -170,6 +202,9 @@ func newRig(t *testing.T, cfg Config) *rig {
 	}
 	if cfg.Model == "" {
 		cfg.Model = "vendor/model"
+	}
+	if cfg.WS == nil {
+		cfg.WS = fileToolFixture{files: wsfs.Files{Root: cfg.Root, Cwd: cfg.Cwd, Authority: cfg.Authority}}
 	}
 	out := &syncBuf{}
 	cfg.Out = out
@@ -245,7 +280,7 @@ func TestLoopRunsToolsAndReplaysReasoningUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	reasoning := `{"type":"reasoning","id":"rs_9","summary":[{"type":"summary_text","text":"plan"}],"encrypted_content":"AAAA=="}`
-	call := callOf("call_a", "read", `{"path":"a.txt"}`)
+	call := callOf("call_a", "fs_read", `{"path":"a.txt"}`)
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
 		reply(reasoning, call),
 		reply(msgItem("the file says hello")),
@@ -297,11 +332,10 @@ func TestLoopRunsToolsAndReplaysReasoningUnchanged(t *testing.T) {
 	// The conversation is on disk: a process that resumes the session finds
 	// the same items.
 	r.stop()
-	r.agent.Close()
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.agent.Close())
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != 5 || string(recovered[1]) != reasoning {
 		t.Errorf("recovered %d items: %s", len(recovered), recovered)
 	}
@@ -498,7 +532,7 @@ func TestSteerIsTakenAtTheNextRequestAndRefusedWhenIdle(t *testing.T) {
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
 		func(ctx context.Context, req Request, h StreamHandler) (*Response, error) {
 			<-gate
-			return reply(callOf("c1", "read", `{"path":"x"}`))(ctx, req, h)
+			return reply(callOf("c1", "fs_read", `{"path":"x"}`))(ctx, req, h)
 		},
 		reply(msgItem("noted")),
 	}}
@@ -540,7 +574,7 @@ func TestUntakenSteerIsDroppedAtTurnEnd(t *testing.T) {
 	r.waitTurnEnd(1)
 	// A steer that no request took does not leak into a later turn.
 	r.agent.mu.Lock()
-	r.agent.steers = []string{"stale"}
+	r.agent.steers = []Steer{{Text: "stale"}}
 	r.agent.mu.Unlock()
 	r.send(Command{Type: CmdClearSteered})
 	r.user("two")
@@ -624,7 +658,7 @@ func TestWSToolNamesAreSanitizedAndUnknownToolsFail(t *testing.T) {
 	r := newRig(t, Config{Endpoint: model, WS: ws})
 	r.user("hi")
 	r.waitTurnEnd(1)
-	if got, _ := peeked.Load().(string); got != "read,edit,write,grep,glob,exec_shell,agent_spawn" {
+	if got, _ := peeked.Load().(string); got != "exec_shell,agent_spawn" {
 		t.Errorf("offered tools = %q", got)
 	}
 	end := r.waitFor("tool_end", func(l Line) bool { return l.T == LineToolEnd })
@@ -693,6 +727,7 @@ func TestReadOnlyWorkerHasNoExecLaunchTools(t *testing.T) {
 	tools := []MCPTool{
 		{Name: "exec.shell"}, {Name: "exec.run"}, {Name: "exec.spawn"}, {Name: "exec.write"},
 		{Name: "exec.list"}, {Name: "exec.tail"}, {Name: "git.status"},
+		{Name: "fs.read"}, {Name: "fs.grep"}, {Name: "fs.list"},
 	}
 	offered := func(req Request) map[string]bool {
 		m := map[string]bool{}
@@ -717,7 +752,7 @@ func TestReadOnlyWorkerHasNoExecLaunchTools(t *testing.T) {
 			t.Errorf("a read-only worker is offered %s", n)
 		}
 	}
-	for _, n := range []string{"read", "grep", "glob", "git_status", "exec_list", "exec_tail"} {
+	for _, n := range []string{"fs_read", "fs_grep", "fs_list", "git_status", "exec_list", "exec_tail"} {
 		if !got[n] {
 			t.Errorf("a read-only worker lost %s", n)
 		}
@@ -761,10 +796,11 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(release) })
 	var mu sync.Mutex
 	var written []string
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-		reply(callOf("c1", "read", `{"path":"a.txt"}`), callOf("c2", "read", `{"path":"a.txt"}`)),
+		reply(callOf("c1", "fs_read", `{"path":"a.txt"}`), callOf("c2", "fs_read", `{"path":"a.txt"}`)),
 		reply(msgItem("done")),
 	}}
 	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) error {
@@ -774,6 +810,7 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}})
+	t.Cleanup(releaseWriter)
 	r.user("go")
 	// The writer is held at its first item; the loop still makes both model
 	// requests and runs its reads. Only the turn's end waits: it is reported
@@ -797,7 +834,7 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 	}
 	mu.Unlock()
 
-	close(release)
+	releaseWriter()
 	if end := r.waitTurnEnd(1); end.Reason != ReasonDone {
 		t.Fatalf("turn end %+v", end)
 	}
@@ -816,10 +853,9 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 			t.Errorf("item %d out of order or changed:\n written %s\n memory  %s", i, written[i], transcript[i])
 		}
 	}
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != len(transcript) {
 		t.Errorf("recovered %d items, want %d", len(recovered), len(transcript))
 	}
@@ -838,8 +874,8 @@ func TestMutatingCallWaitsForDurableCallIntent(t *testing.T) {
 	open := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(open)
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-		reply(callOf("c1", "read", `{"path":"a.txt"}`)),
-		reply(callOf("c2", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(callOf("c1", "fs_read", `{"path":"a.txt"}`)),
+		reply(callOf("c2", "fs_write", `{"path":"b.txt","content":"x"}`)),
 		reply(msgItem("done")),
 	}}
 	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error { <-release; return nil }})
@@ -873,7 +909,7 @@ func TestMutatingCallIsRefusedWhenTheLogFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-		reply(callOf("c1", "read", `{"path":"a.txt"}`), callOf("c2", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(callOf("c1", "fs_read", `{"path":"a.txt"}`), callOf("c2", "fs_write", `{"path":"b.txt","content":"x"}`)),
 		reply(msgItem("done")),
 	}}
 	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error {
@@ -922,7 +958,7 @@ func TestInterruptWhileWaitingForTheLogDoesNotRunTheMutation(t *testing.T) {
 	open := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(open)
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-		reply(callOf("c1", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(callOf("c1", "fs_write", `{"path":"b.txt","content":"x"}`)),
 		reply(msgItem("must not be asked")),
 	}}
 	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error { <-release; return nil }})
@@ -958,7 +994,7 @@ func TestParallelResultsKeepLogOrder(t *testing.T) {
 	}
 	var calls []string
 	for i := 0; i < 24; i++ {
-		calls = append(calls, callOf(fmt.Sprintf("c%02d", i), "read", `{"path":"a.txt"}`))
+		calls = append(calls, callOf(fmt.Sprintf("c%02d", i), "fs_read", `{"path":"a.txt"}`))
 	}
 	var mu sync.Mutex
 	var written []string
@@ -1011,10 +1047,9 @@ func TestInterruptedTurnFlushesTheLog(t *testing.T) {
 	if err := r.agent.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reopened, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	must(t, reopened.Close())
 	if len(recovered) != 1 {
 		t.Errorf("recovered %d items, want the user message", len(recovered))
 	}
@@ -1047,5 +1082,133 @@ func TestRetryAfterAboveTheCapEndsTheTurn(t *testing.T) {
 	r2.user("hi")
 	if end := r2.waitTurnEnd(1); end.Reason != ReasonDone || len(slept) != 1 || slept[0] != MaxRetryAfter {
 		t.Fatalf("at the cap: end %+v slept %v", end, slept)
+	}
+}
+
+func TestTypedLoopIsolatesModelAndToolPanics(t *testing.T) {
+	panickingModel := func(context.Context, Request, StreamHandler) (*Response, error) {
+		panic("model failure detail")
+	}
+	ws := &fakeWS{
+		tools: []MCPTool{{Name: "git.status"}, {Name: "git.log"}},
+		byName: map[string]func(context.Context, json.RawMessage) (CallResult, error){
+			"git.status": func(context.Context, json.RawMessage) (CallResult, error) {
+				panic("tool failure detail")
+			},
+		},
+	}
+	faults := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		panickingModel,
+		reply(callOf("c1", "git_status", "{}"), callOf("c2", "git_log", "{}")),
+		reply(msgItem("after panic")),
+	}}
+	unaffected := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(msgItem("other session")),
+	}}
+	faultCommands, faultEvents := startTypedLoop(t, faults, ws)
+	otherCommands, otherEvents := startTypedLoop(t, unaffected, nil)
+	faultCommands <- Command{Type: CmdUser, Text: "model panic"}
+	otherCommands <- Command{Type: CmdUser, Text: "parallel healthy turn"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonError || end.Error != "the werk turn failed unexpectedly" {
+		t.Fatalf("panicked model turn = %+v", end)
+	}
+	if end := nextTypedTurnEnd(t, otherEvents); end.Reason != ReasonDone {
+		t.Fatalf("other session = %+v", end)
+	}
+	faultCommands <- Command{Type: CmdUser, Text: "tool panic"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonError || end.Error != "a werk tool failed unexpectedly" {
+		t.Fatalf("panicked tool turn = %+v", end)
+	}
+	faultCommands <- Command{Type: CmdUser, Text: "next turn"}
+	if end := nextTypedTurnEnd(t, faultEvents); end.Reason != ReasonDone {
+		t.Fatalf("next turn = %+v", end)
+	}
+}
+
+func startTypedLoop(t *testing.T, endpoint Responder, ws WSTools) (chan<- Command, <-chan Line) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Line, 64)
+	a, err := New(Config{
+		Dir: t.TempDir(), Authority: AuthorityFull, Model: "vendor/model", Endpoint: endpoint, WS: ws,
+		Emit: func(line Line) {
+			select {
+			case events <- line:
+			case <-ctx.Done():
+			}
+		},
+	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	commands, done := make(chan Command, 8), make(chan struct{})
+	go func() {
+		defer close(done)
+		a.ServeCommands(ctx, commands)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		a.Close()
+	})
+	return commands, events
+}
+
+func nextTypedTurnEnd(t *testing.T, events <-chan Line) Line {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case l := <-events:
+			if strings.Contains(l.Error+l.Output+l.Text, "failure detail") {
+				t.Fatalf("panic payload reached the event stream: %+v", l)
+			}
+			if l.T == LineTurnEnd {
+				return l
+			}
+		case <-timer.C:
+			t.Fatal("typed loop did not finish the turn")
+		}
+	}
+}
+
+func TestPartialModelResponseLogFailureKeepsAValidPrefix(t *testing.T) {
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(`{"type":"reasoning","id":"r"}`, callOf("c1", "fs_read", `{"path":"a.txt"}`)),
+		reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Endpoint: model, BeforeAppend: func(item json.RawMessage) error {
+		if strings.Contains(string(item), `"type":"function_call"`) {
+			return errors.New("fixture response commit failed")
+		}
+		return nil
+	}})
+	r.user("go")
+	r.waitTurnEnd(1)
+	r.stop()
+	must(t, r.agent.Close())
+	reopened, items, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	must(t, err)
+	defer reopened.Close()
+	if len(items) != 1 || string(items[0]) != string(userItem("go")) {
+		t.Fatalf("recovered %s; want only the user input", items)
+	}
+}
+
+func TestTruncateOutputKeepsHeadAndTail(t *testing.T) {
+	s := strings.Repeat("a", 100) + strings.Repeat("é", 100) + strings.Repeat("z", 100)
+	out, cut := TruncateOutput(s, 120)
+	if !cut || !strings.Contains(out, "bytes of output omitted") || !strings.HasPrefix(out, "aaa") || !strings.HasSuffix(out, "zzz") {
+		t.Errorf("out = %q", out)
+	}
+	for _, r := range out {
+		if r == '�' {
+			t.Fatalf("a rune was split: %q", out)
+		}
+	}
+	if same, cut := TruncateOutput("short", 120); cut || same != "short" {
+		t.Errorf("short = %q, %v", same, cut)
 	}
 }

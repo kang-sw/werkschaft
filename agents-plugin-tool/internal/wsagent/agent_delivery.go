@@ -222,11 +222,12 @@ func (r *Runner) expire(id string) bool {
 
 var _ wsdashboard.AgentForgetter = (*Runner)(nil)
 
-// ForgetClosed drops closed or handed-off conversation id from the runner's
-// in-memory state without touching disk or notifying the daemon, for a caller
-// that is purging the session directory itself.
+// ForgetClosed drops a closed or handed-off conversation and any private
+// record. The caller owns removal of the session directory.
 func (r *Runner) ForgetClosed(id string) {
-	r.forgetClosed(id)
+	if rec, ok := r.forgetClosed(id); ok {
+		r.deleteDurableRecord(rec)
+	}
 }
 
 func (r *Runner) forgetClosed(id string) (Record, bool) {
@@ -265,6 +266,8 @@ func (r *Runner) forget(id string) {
 	wslive.DropRing(wslive.RingDir(sessionDir))
 	if err := os.RemoveAll(sessionDir); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
+	} else {
+		r.deleteDurableRecord(rec)
 	}
 	r.notify(id, rec.Root)
 }

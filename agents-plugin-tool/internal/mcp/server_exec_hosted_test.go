@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -221,6 +223,45 @@ func TestHostedExecNeedsTheTrustedBinding(t *testing.T) {
 	// A mixed call is refused before any handler.
 	if text, isErr := fx.call("exec.shell", map[string]any{"cmd": "true", "command": "true"}); !isErr || !strings.Contains(text, "mixed argument forms") {
 		t.Fatalf("mixed exec.shell = %v %s", isErr, text)
+	}
+}
+
+func TestHostedExecModelLaunchRequiresCorrelationAndAuthority(t *testing.T) {
+	fx := newHostedExecFixture(t, 5*time.Second)
+	level := wsfs.AuthorityWorkdirWrite
+	fx.s.execCutover = wsagent.BackendWerk
+	fx.s.fileWrites = &FileWriteSession{CurrentAuthority: func() wsfs.Authority { return level }}
+	var recorded []execjob.ModelLaunch
+	fx.s.recordExecLaunch = func(_ context.Context, call execjob.ModelLaunch) error {
+		if call.ID != "fixture-call" {
+			return errors.New("no matching pending call")
+		}
+		recorded = append(recorded, call)
+		return nil
+	}
+	args := map[string]any{"cmd": "echo correlated", "session_key": fx.key}
+	if out, failed := rawCorrelatedToolCall(t, fx.s, "exec.shell", "", args); !failed || !strings.Contains(out, "requires a model call identity") {
+		t.Fatalf("uncorrelated call = %v, %s", failed, out)
+	}
+	if out, failed := rawCorrelatedToolCall(t, fx.s, "exec.shell", "unmatched", args); !failed || !strings.Contains(out, "no matching pending call") {
+		t.Fatalf("unmatched call = %v, %s", failed, out)
+	}
+	level = wsfs.AuthorityReadOnly
+	if out, failed := rawCorrelatedToolCall(t, fx.s, "exec.shell", "fixture-call", args); !failed || !strings.Contains(out, "read-only") {
+		t.Fatalf("read-only call = %v, %s", failed, out)
+	}
+	if len(recorded) != 0 || len(fx.manager.List().Holders) != 0 {
+		t.Fatal("a refused launch recorded an intent or allocated a holder")
+	}
+	level = wsfs.AuthorityWorkdirWrite
+	out, failed := rawCorrelatedToolCall(t, fx.s, "exec.shell", "fixture-call", args)
+	if failed || !strings.Contains(out, "correlated") || len(recorded) != 1 {
+		t.Fatalf("correlated call = %v, %s, recorded %d times", failed, out, len(recorded))
+	}
+	call := recorded[0]
+	if call.JobID != lineValue(t, execIDLine, out) || call.Tool != "exec.shell" ||
+		!strings.Contains(string(call.Arguments), `"cmd":"echo correlated"`) {
+		t.Fatal("the recorder did not receive the launched job and arguments")
 	}
 }
 

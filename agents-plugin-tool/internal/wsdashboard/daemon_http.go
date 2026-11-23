@@ -4,6 +4,7 @@ package wsdashboard
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -94,7 +95,7 @@ func (d *Daemon) Handler() http.Handler {
 		mux.Handle(SupportRoutePrefix, d.support)
 		mux.Handle(SupportRoutePrefix+"/", d.support)
 	}
-	if d.holders != nil {
+	if d.holders != nil || d.durableSessionHost() != nil {
 		mux.HandleFunc("/holders", d.handleHolders)
 		mux.HandleFunc("/holders/", d.handleHolders)
 	}
@@ -188,25 +189,17 @@ func (d *Daemon) endpointBearer(r *http.Request) bool {
 // FullStopPath is the full stop route (handleShutdownAll).
 const FullStopPath = "/shutdown/all"
 
-// FullStopResult is the full stop route's answer. ShuttingDown is true only
-// when no holder remains and the daemon stops; Remaining lists every holder
-// whose process still runs, with why.
+// FullStopResult lists each stopped or remaining session under the holder
+// response shape. ShuttingDown is true only after all sessions have ended.
 type FullStopResult struct {
 	ShuttingDown bool `json:"shutting_down"`
 	wsholder.StopAllResult
 }
 
-// handleShutdownAll is the full stop: with /shutdown's bearer credential
-// (and its access exemption, access.go), it ends every session holder
-// (HolderHost.StopAll: every hosted session, worker, and terminal, with
-// new launches refused meanwhile) and only then the daemon. It answers 202
-// with shutting_down once no holder remains, and 409 with the remaining
-// holders otherwise, when the daemon keeps running and launches are
-// allowed again; 503 when the daemon is already stopping, so its holders
-// are left as they are. A Close that starts while the holders stop (another
-// /shutdown, a signal) may end the process before the answer: the caller
-// treats a lost answer as an incomplete stop. A daemon without a holder
-// host has none to stop and simply stops.
+// handleShutdownAll uses the endpoint bearer to stop both process holders
+// and durable sessions. A partial stop leaves the daemon serving and
+// reopens admission. A Close from another source can still cut the response
+// short, which the caller treats as an incomplete stop.
 func (d *Daemon) handleShutdownAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -214,6 +207,12 @@ func (d *Daemon) handleShutdownAll(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.endpointBearer(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	d.fullStopMu.Lock()
+	defer d.fullStopMu.Unlock()
+	if d.fullStopAccepted {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shutting_down"})
 		return
 	}
 	select {
@@ -224,20 +223,58 @@ func (d *Daemon) handleShutdownAll(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(d.log, "dashboard: full stop requested\n")
 	result := FullStopResult{StopAllResult: wsholder.StopAllResult{Stopped: []string{}, Remaining: []wsholder.StopFailure{}}}
+	host := d.durableSessionHost()
+	var resumeDurable, resumeHolders func()
+	if host != nil {
+		resumeDurable = host.FenceDurableStarts()
+	}
 	if d.holders != nil {
-		result.StopAllResult = d.holders.StopAll()
+		result.StopAllResult, resumeHolders = d.holders.StopAllFenced()
 		if d.terminals != nil {
 			// The stopped terminals' viewers learn of it now.
 			d.terminals.sync()
 		}
 	}
+	if host != nil {
+		sessions := host.DurableSessions()
+		failures := make(map[string]error)
+		for _, session := range sessions {
+			if err := host.StopDurableSession(session.ID); err != nil && !errors.Is(err, ErrUnknownDurableSession) {
+				failures[session.ID] = err
+			}
+		}
+		// A cascade or an overlapping individual stop may have ended a
+		// session after its earlier attempt failed. Report the survivors.
+		remaining := host.DurableSessions()
+		live := make(map[string]bool, len(remaining))
+		for _, session := range remaining {
+			live[session.ID] = true
+			message := "the durable session is still open"
+			if err := failures[session.ID]; err != nil {
+				message = err.Error()
+			}
+			result.Remaining = append(result.Remaining, wsholder.StopFailure{Info: durableHolderInfo(session), Error: message})
+		}
+		for _, session := range sessions {
+			if !live[session.ID] {
+				result.Stopped = append(result.Stopped, durableHolderPrefix+session.ID)
+			}
+		}
+	}
 	if len(result.Remaining) > 0 {
-		fmt.Fprintf(d.log, "dashboard: full stop incomplete: %d holder(s) stopped, %d remain; the daemon keeps running\n", len(result.Stopped), len(result.Remaining))
+		if resumeHolders != nil {
+			resumeHolders()
+		}
+		if resumeDurable != nil {
+			resumeDurable()
+		}
+		fmt.Fprintf(d.log, "dashboard: full stop incomplete: %d session(s) stopped, %d remain; the daemon keeps running\n", len(result.Stopped), len(result.Remaining))
 		writeJSON(w, http.StatusConflict, result)
 		return
 	}
+	d.fullStopAccepted = true
 	result.ShuttingDown = true
-	fmt.Fprintf(d.log, "dashboard: full stop: %d holder(s) stopped; shutting down\n", len(result.Stopped))
+	fmt.Fprintf(d.log, "dashboard: full stop: %d session(s) stopped; shutting down\n", len(result.Stopped))
 	writeJSON(w, http.StatusAccepted, result)
 	go d.Close()
 }

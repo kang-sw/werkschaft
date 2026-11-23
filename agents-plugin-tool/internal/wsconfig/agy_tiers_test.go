@@ -90,7 +90,7 @@ func TestTierWritesPreserveUnknownHarnessBuckets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := setAgentsTierForHarness(opts, global, "medium", "claude", "sonnet", "claude", "high"); err != nil {
+			if _, err := setAgentsTierForHarness(opts, global, "medium", "claude", "sonnet", "claude", "", "high"); err != nil {
 				t.Fatal(err)
 			}
 			if _, removed, err := unsetAgentsTierForHarness(opts, global, "medium", "claude"); err != nil || !removed {

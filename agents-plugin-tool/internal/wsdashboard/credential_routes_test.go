@@ -153,6 +153,10 @@ func TestProviderTokenRouteAdmitsOnlyPermittedSessions(t *testing.T) {
 	if _, err := routeCredential(t, cd, tokenWorker); err != nil {
 		t.Fatalf("permitted worker = %v", err)
 	}
+	client := wscred.NewRouteClient(cd.base, wscred.NewSecret(tokenPermitted), plainClient())
+	if _, err := client.Credential(context.Background(), wscred.Request{Provider: wscred.ProviderOpenAI}); !errors.Is(err, wscred.ErrNotPermitted) {
+		t.Fatalf("the external token route accepted SIWC: %v", err)
+	}
 	spy.mu.Lock()
 	reqs := append([]wscred.Request(nil), spy.reqs...)
 	spy.mu.Unlock()
@@ -295,6 +299,19 @@ func TestOfflineCredentialChangeTakesTheDaemonLock(t *testing.T) {
 	cd := startCredentialDaemon(t, dir, credPath, nil)
 	if cred, err := routeCredential(t, cd, tokenPermitted); err != nil || cred.Secret.Reveal() != credFixtureKey {
 		t.Fatalf("the next daemon = %+v, %v", cred, err)
+	}
+}
+
+func TestOfflineOpenAISignInRefusesRunningDaemon(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(t.TempDir(), "auth", wscred.FileName)
+	startCredentialDaemon(t, dir, credPath, nil)
+	_, err := SignInOpenAIOffline(context.Background(), dir, credPath, wscred.OpenAISignIn{})
+	if err == nil || !strings.Contains(err.Error(), "dashboard daemon is running") {
+		t.Fatalf("offline sign-in with the daemon lock held = %v", err)
+	}
+	if _, err := os.Stat(credPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused sign-in accessed the credential file: %v", err)
 	}
 }
 

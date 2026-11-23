@@ -2,6 +2,7 @@ package werk
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 )
 
@@ -25,16 +26,22 @@ type writer struct {
 	// the write); an error from it is a failed write, and the item is not
 	// appended.
 	before func(json.RawMessage) error
-	// onErr reports the first failed write; the writer goes on.
+	// onErr reports the first failed write. The durable log remains a prefix.
 	onErr func(error)
 
 	mu       sync.Mutex
 	cond     *sync.Cond
-	queue    []json.RawMessage
+	queue    []logAppend
 	inflight bool
 	closed   bool
 	err      error // the first failed write; sticky
 	done     chan struct{}
+}
+
+type logAppend struct {
+	item     json.RawMessage
+	response *Response
+	barrier  any
 }
 
 func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
@@ -46,13 +53,37 @@ func newWriter(store *Store, before func(json.RawMessage) error, onErr func(erro
 
 // Add queues an item behind those already queued.
 func (w *writer) Add(item json.RawMessage) {
+	w.enqueue(logAppend{item: item})
+}
+
+func (w *writer) AddResponse(response *Response) {
+	w.enqueue(logAppend{response: response})
+}
+
+// commit appends a journal record and flushes the log through that record.
+func (w *writer) commit(record any) error {
+	if err := w.addBarrier(record); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+func (w *writer) addBarrier(record any) error {
+	return w.enqueue(logAppend{barrier: record})
+}
+
+func (w *writer) enqueue(record logAppend) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed {
-		return
+	if w.err != nil {
+		return w.err
 	}
-	w.queue = append(w.queue, item)
+	if w.closed {
+		return errors.New("the conversation writer is closed")
+	}
+	w.queue = append(w.queue, record)
 	w.cond.Broadcast()
+	return nil
 }
 
 func (w *writer) run() {
@@ -71,24 +102,16 @@ func (w *writer) run() {
 		w.inflight = true
 		w.mu.Unlock()
 
-		for _, item := range batch {
-			var err error
-			if w.before != nil {
-				err = w.before(item)
-			}
-			if err == nil {
-				err = w.store.Append(item)
-			}
-			if err != nil {
+		for _, record := range batch {
+			if err := w.append(record); err != nil {
 				w.mu.Lock()
-				first := w.err == nil
-				if first {
-					w.err = err
-				}
+				w.err = err
+				w.queue = nil
 				w.mu.Unlock()
-				if first && w.onErr != nil {
+				if w.onErr != nil {
 					w.onErr(err)
 				}
+				break
 			}
 		}
 
@@ -97,6 +120,42 @@ func (w *writer) run() {
 		w.cond.Broadcast()
 		w.mu.Unlock()
 	}
+}
+
+func (w *writer) append(record logAppend) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("the werk log writer failed unexpectedly")
+		}
+	}()
+	if record.barrier != nil {
+		if w.before != nil {
+			raw, err := json.Marshal(record.barrier)
+			if err != nil {
+				return err
+			}
+			if err := w.before(raw); err != nil {
+				return err
+			}
+		}
+		return w.store.appendBarrier(record.barrier)
+	}
+	if record.response != nil {
+		if w.before != nil {
+			for _, item := range record.response.Output {
+				if err := w.before(item); err != nil {
+					return err
+				}
+			}
+		}
+		return w.store.AppendResponse(record.response)
+	}
+	if w.before != nil {
+		if err := w.before(record.item); err != nil {
+			return err
+		}
+	}
+	return w.store.Append(record.item)
 }
 
 // Flush returns once every item added before it has been written. It returns

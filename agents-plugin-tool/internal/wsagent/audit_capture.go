@@ -122,15 +122,17 @@ const (
 	auditItemFence
 	auditItemAttached
 	auditItemDetached
+	auditItemCheckpoint
 )
 
 type auditItem struct {
-	kind   auditItemKind
-	data   []byte
-	at     time.Time
-	seq    uint64
-	replay bool
-	ev     wsholder.Event
+	kind       auditItemKind
+	data       []byte
+	at         time.Time
+	seq        uint64
+	replay     bool
+	ev         wsholder.Event
+	checkpoint *auditCheckpoint
 }
 
 // auditInterval is the tee lines skipped after the kept line anchor, with
@@ -250,6 +252,58 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 // daemon applied. It never blocks.
 func (c *auditCapture) line(data []byte, seq uint64, replay bool) {
 	c.enqueue(auditItem{kind: auditItemLine, data: bytes.Clone(data), seq: seq, replay: replay, at: time.Now()})
+}
+
+type auditCheckpoint struct {
+	id   wsaudit.SourceID
+	ev   wsaudit.Envelope
+	done chan error
+}
+
+// commitCheckpoint is used only at the quiescent compaction boundary. It
+// waits behind prior capture without using the droppable line queue.
+func (c *auditCapture) commitCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	if !wsaudit.ShouldCapture(c.session, ev.Kind) {
+		return nil
+	}
+	cut := &auditCheckpoint{id: id, ev: ev, done: make(chan error, 1)}
+	select {
+	case c.in <- auditItem{kind: auditItemCheckpoint, checkpoint: cut}:
+	case <-c.done:
+		return errors.New("the audit capture is closed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-cut.done:
+		return err
+	case <-c.done:
+		return errors.New("the audit capture is closed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *auditCapture) writeCheckpoint(cut *auditCheckpoint) error {
+	ev := cut.ev
+	ev.ID, ev.Seq = cut.id.String(), c.nextSeq
+	ctx, cancel := context.WithTimeout(context.Background(), auditSinkTimeout)
+	defer cancel()
+	var err error
+	if sink, ok := c.sink.(wsaudit.CheckpointSink); ok {
+		err = sink.AppendCheckpoint(ctx, cut.id, ev)
+	} else if c.sourced != nil {
+		err = c.sourced.AppendSourced(ctx, cut.id, cut.id, ev)
+	} else {
+		err = c.sink.Append(ctx, ev)
+	}
+	if errors.Is(err, wsaudit.ErrDuplicateSource) {
+		return nil
+	}
+	if err == nil {
+		c.nextSeq++
+	}
+	return err
 }
 
 // holderEvent hands one audit channel event to capture. It never blocks.
@@ -477,6 +531,8 @@ func (c *auditCapture) handle(it auditItem) {
 		c.noteLate()
 	}
 	switch it.kind {
+	case auditItemCheckpoint:
+		it.checkpoint.done <- c.writeCheckpoint(it.checkpoint)
 	case auditItemLine:
 		if it.seq == 0 {
 			c.localSeq++

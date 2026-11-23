@@ -84,6 +84,31 @@ func MigrateCredentialFile(dir, credPath string) error {
 	return wscred.NewStore(credPath).MigrateLegacy()
 }
 
+// SignInOpenAIOffline runs the local owner's browser flow under the daemon's
+// writer lock. Dashboard sign-in uses the running daemon's Store directly.
+func SignInOpenAIOffline(ctx context.Context, dir, credPath string, selection wscred.OpenAISignIn) ([]wscred.ProviderStatus, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	lock := flock.New(filepath.Join(dir, lockFileName))
+	defer func() { _ = lock.Close() }()
+	locked, err := lock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("dashboard lock: %w", err)
+	}
+	if !locked {
+		return nil, errors.New("the dashboard daemon is running; stop it before signing in from the CLI")
+	}
+	store := wscred.NewStore(credPath)
+	if err := store.MigrateLegacy(); err != nil {
+		return nil, err
+	}
+	if err := store.SignInOpenAI(ctx, selection, systemOpen); err != nil {
+		return nil, err
+	}
+	return store.Status()
+}
+
 // AgentCredentialHost is an AgentHost whose hosted sessions may ask the
 // token route for provider credentials.
 type AgentCredentialHost interface {

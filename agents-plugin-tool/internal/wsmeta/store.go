@@ -317,6 +317,15 @@ var schema = []string{
 		PRIMARY KEY(reply_id, holder_id)
 	)`,
 
+	// Durable runner records are private to the daemon that understands
+	// their process kind. Import and the legacy agent.json projection
+	// manage the common records independently.
+	`CREATE TABLE IF NOT EXISTS durable_agent_records (
+		reply_id TEXT PRIMARY KEY,
+		backend TEXT NOT NULL,
+		record_json BLOB NOT NULL
+	)`,
+
 	// (1993) Explicit permission selections. 'invalid' keeps an existing
 	// unusable selection (fail closed) apart from absence (no row).
 	`CREATE TABLE IF NOT EXISTS permissions (

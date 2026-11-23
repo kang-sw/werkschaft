@@ -306,7 +306,7 @@ func namespaceValue(value any, namespace string) any {
 // tools and the fs.* read tools, which only a cutover session's connection
 // lists (cutoverListed).
 func permanentlyHiddenTool(name string) bool {
-	return strings.HasPrefix(name, "exec.") || isCodexReadTool(name)
+	return strings.HasPrefix(name, "exec.") || isFSReadTool(name) || isFSWriteTool(name)
 }
 
 func noAgentHiddenTool(name string) bool {
