@@ -55,8 +55,8 @@ func TestBuiltinSupportProfilesResolve(t *testing.T) {
 	}
 	resolver := wsconfig.NewResolver(opts, nil, nil, nil)
 	all, err := ResolveProfiles(&resolver)
-	if err != nil || len(all) != 16 {
-		t.Fatalf("ResolveProfiles with no config should list all sixteen builtin profiles: %+v, %v", all, err)
+	if err != nil || len(all) != 17 {
+		t.Fatalf("ResolveProfiles with no config should list all seventeen builtin profiles: %+v, %v", all, err)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestBuiltinPiMiniLeadProfileResolves(t *testing.T) {
 func TestBuiltinLeadProfilesResolve(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
-	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendPi: LeadProfilePi, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy} {
+	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendPi: LeadProfilePi, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy, BackendWerk: LeadProfileWerk} {
 		if LeadProfileFor(backend) != name {
 			t.Fatalf("LeadProfileFor(%s) = %q, want %q", backend, LeadProfileFor(backend), name)
 		}

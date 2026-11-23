@@ -772,6 +772,7 @@
   // permission_full_ack only for "full" with the warning's grant (f.ack).
   function leadBody(root, f) {
     var body = { root: root, harness: String(f.harness || ""), plugin_isolation: f.isolation === "isolated" ? "isolated" : "default" };
+    if (f.provider) body.provider = String(f.provider);
     if (f.model) body.model = String(f.model);
     if (f.effort) body.effort = String(f.effort);
     if (f.level) {

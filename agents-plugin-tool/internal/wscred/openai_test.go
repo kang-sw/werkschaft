@@ -258,7 +258,7 @@ func TestOpenAIRegistrationConsentCatalogAndReauthorization(t *testing.T) {
 		t.Fatalf("background catalog before consent: %v", err)
 	}
 	models, err := s.OpenAIModels(ctx, openAIRequest(false))
-	if err != nil || len(models) != 2 || models[0] != (OpenAIModel{"model-z", "Model Z"}) || models[1].Slug != "model-a" {
+	if err != nil || len(models) != 2 || models[0] != (OpenAIModel{Slug: "model-z", DisplayName: "Model Z"}) || models[1].Slug != "model-a" {
 		t.Fatalf("catalog did not preserve visible model order: %v", err)
 	}
 	if err := s.SetOpenAIBackgroundConsent(firstClient, false); err != nil {

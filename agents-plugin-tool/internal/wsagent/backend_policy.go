@@ -211,6 +211,8 @@ type workerSetup interface {
 	// workerCredentialGap is why no worker can start for lack of a provider
 	// credential; "" when one is configured, or none is needed.
 	workerCredentialGap() string
+	// workerProviderGap checks one tier's provider without refreshing tokens.
+	workerProviderGap(provider string) string
 	// workerTierGap is why no tier of the harness is usable given the tier
 	// models the user configured (none: a harness that ships no default
 	// model); "" when it is.

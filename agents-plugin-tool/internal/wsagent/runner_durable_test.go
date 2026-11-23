@@ -214,7 +214,7 @@ func TestDurableSettlementCommitsBeforeWaitAndReport(t *testing.T) {
 			}
 			nextText := strings.Join(c.rec.Reports, "\n\n")
 			startNext := func() (bool, error) {
-				return c.admitDurableTurn(nextText, nil, 3, r.opts.Now().UnixMilli(), false, true, false)
+				return c.admitDurableTurn(nextText, nil, 3, r.opts.Now().UnixMilli(), false, true, false, false)
 			}
 			if held {
 				if accepted, err := startNext(); err == nil || accepted {

@@ -49,7 +49,9 @@ const choicesTimeout = 15 * time.Second
 
 // ModelChoice is one model a harness offers, as --model takes it.
 type ModelChoice struct {
-	ID string `json:"id"`
+	ID          string `json:"id"`
+	Provider    string `json:"provider,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 	// Thinking reports whether the model takes a reasoning effort; absent
 	// when the harness does not say.
 	Thinking      *bool `json:"thinking,omitempty"`
@@ -234,6 +236,7 @@ type SupportHarness struct {
 	Efforts         []string      `json:"efforts"`
 	Lead            bool          `json:"lead,omitempty"`
 	PermissionModes []string      `json:"permission_modes,omitempty"`
+	ModelProviders  []string      `json:"model_providers,omitempty"`
 	// PermissionLevels advertises lead/settings selection only, not workers.
 	PermissionLevels []PermissionLevel `json:"permission_levels,omitempty"`
 }
@@ -280,7 +283,11 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 			return false, err
 		}
 	}
-	if setup, ok := backend.(workerSetup); ok {
+	if lead, ok := backend.(leadProviderAdmitter); ok {
+		if why := lead.leadCredentialGap(); why != "" {
+			return false, why
+		}
+	} else if setup, ok := backend.(workerSetup); ok {
 		if why := setup.workerCredentialGap(); why != "" {
 			return false, why
 		}
@@ -302,11 +309,28 @@ func choiceExecutableError(lister ChoiceLister) string {
 // cached briefly too. A listing runs apart from ctx's cancellation, bounded
 // by choicesTimeout alone: a request its caller abandoned still fills the
 // cache for the next one instead of leaving it to list again.
-func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) {
+func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) (pending bool) {
 	s.choicesMu.Lock()
 	defer s.choicesMu.Unlock()
 	for i := range hs {
 		h := &hs[i]
+		backend := s.opts.Runner.opts.Backends[h.Harness].Backend
+		if source, ok := backend.(leadProviderAdmitter); ok {
+			h.ModelProviders = source.leadProviders()
+			c, ready := s.pickerListing(h.Harness, source)
+			if !ready {
+				pending = true
+				continue
+			}
+			if c.models != nil {
+				h.Models = c.models
+			}
+			h.Efforts = c.efforts
+			if h.Error == "" {
+				h.Error = c.err
+			}
+			continue
+		}
 		if !h.Available {
 			continue
 		}
@@ -355,6 +379,7 @@ func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) {
 		}
 		s.cache[h.Harness] = cachedChoices{at: now, models: h.Models, efforts: h.Efforts}
 	}
+	return pending
 }
 
 // findHarness returns the harness named name in hs.
@@ -552,10 +577,10 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 		h.Available, h.Error = supportBackendAvailability(name, reg.Backend)
 		hs = append(hs, h)
 	}
-	s.listChoices(ctx, hs)
+	leadPending := s.listChoices(ctx, hs)
 	pickers, pending := s.pickers(seen)
 	tiers, tiersErr := s.namedTiers()
-	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr, Pickers: pickers, PickersPending: pending}
+	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr, Pickers: pickers, PickersPending: pending || leadPending}
 }
 
 // pickers lists the registered worker-only backends that list their choices

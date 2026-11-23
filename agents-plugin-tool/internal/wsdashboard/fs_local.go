@@ -79,6 +79,30 @@ func (s *denySet) openLocal(root, path string) (*os.File, string, os.FileInfo, b
 	}, s.opened)
 }
 
+// ReadWorktreeTextFiles returns whole UTF-8 files from one worktree. A fresh
+// deny set protects provider credentials and daemon state for each read batch.
+func ReadWorktreeTextFiles(root string, paths []string, maxBytes int64) map[string]string {
+	deny := newDenySet()
+	out := make(map[string]string)
+	seen := make(map[string]bool)
+	for _, path := range paths {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		file, _, info, ok := deny.openLocal(root, path)
+		if !ok {
+			continue
+		}
+		data, ok := readWholeText(file, info, maxBytes)
+		_ = file.Close()
+		if ok {
+			out[path] = string(data)
+		}
+	}
+	return out
+}
+
 // ownRootFile prevents local symlink escapes from gaining an in-root HTML
 // capability or markdown link rules. Outside browsing remains source-only.
 func ownRootFile(root, path string) bool {

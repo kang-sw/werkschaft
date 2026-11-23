@@ -6,15 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscompact"
+	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 func compactProseReply(value string) string {
-	fields := make(map[string]string, len(compactProse))
-	for _, field := range compactProse {
-		fields[field.key] = value
+	fields := make(map[string]string, len(wscompact.ProseFields()))
+	for _, field := range wscompact.ProseFields() {
+		fields[field.Key] = value
 	}
 	raw, _ := json.Marshal(fields)
 	return msgItem(string(raw))
@@ -47,7 +52,7 @@ func TestCheckpointSelectsOnlySummaryAndDeltasAfterReopen(t *testing.T) {
 			ChildrenInFlight: []string{"in-flight child"}, ChildrenFinished: []string{"finished child"}, ExecJobs: []string{"running job"},
 		}
 	}
-	a.reportCompaction(ctx)
+	a.reportCompaction(ctx, nil)
 	cp := lines[len(lines)-1]
 	if cp.T != LineCheckpoint || !ValidSessionID(cp.ID) || cp.Replayed {
 		t.Fatalf("unexpected checkpoint event: %+v", cp)
@@ -58,9 +63,9 @@ func TestCheckpointSelectsOnlySummaryAndDeltasAfterReopen(t *testing.T) {
 			t.Errorf("checkpoint missing %q", want)
 		}
 	}
-	for _, field := range compactProse {
-		if !strings.Contains(cp.Text, "## "+field.heading+"\nReview the worker's changes.") {
-			t.Errorf("checkpoint missing prose for %q", field.heading)
+	for _, field := range wscompact.ProseFields() {
+		if !strings.Contains(cp.Text, "## "+field.Heading+"\nReview the worker's changes.") {
+			t.Errorf("checkpoint missing prose for %q", field.Heading)
 		}
 	}
 	requests := model.requests()
@@ -133,6 +138,96 @@ func TestCheckpointSelectsOnlySummaryAndDeltasAfterReopen(t *testing.T) {
 	}
 }
 
+func TestLeadCheckpointUsesFreshStateAndBoundedEvidence(t *testing.T) {
+	ctx := context.Background()
+	dir, root, session := t.TempDir(), t.TempDir(), NewSessionID()
+	const newest = "NEWEST-DIALOG"
+	store, _, err := OpenStore(dir, session, nil)
+	must(t, err)
+	must(t, store.Append(json.RawMessage(callOf("book", "playbook_read", `{"name":"implement","ticket_stem":"261122-feat-fixture","phase":2}`))))
+	must(t, store.Append(userItem("OLD-DIALOG"+strings.Repeat("a", dialogBytes/2))))
+	must(t, store.Append(userItem(strings.Repeat("b", dialogBytes/2))))
+	must(t, store.Append(userItem(newest)))
+	must(t, store.Append(json.RawMessage(`{"type":"function_call_output","call_id":"book","output":"PRIVATE-TOOL-RESULT"}`)))
+	must(t, store.Close())
+
+	must(t, os.WriteFile(filepath.Join(root, "small.txt"), []byte("small file text"), 0o600))
+	must(t, os.WriteFile(filepath.Join(root, "too-large.txt"), []byte(strings.Repeat("x", rereadBytes)), 0o600))
+	t.Setenv("WS_CACHE_HOME", filepath.Join(root, "cache"))
+	credential, err := wscred.DefaultPath("")
+	must(t, err)
+	must(t, os.MkdirAll(filepath.Dir(credential), 0o700))
+	must(t, os.WriteFile(credential, []byte("PROTECTED-CREDENTIAL-FIXTURE"), 0o600))
+	endpoint := &scripted{}
+	var cp Line
+	var states []time.Time
+	cfg := Config{Dir: dir, Root: root, Cwd: root, Session: session, Lead: true, Model: "fixture",
+		Authority: AuthorityReadOnly, Endpoint: endpoint, Emit: func(line Line) { cp = line },
+		RereadFiles: func(paths []string, maxBytes int64) map[string]string {
+			return wsdashboard.ReadWorktreeTextFiles(root, paths, maxBytes)
+		},
+		CompactionState: func(since time.Time) CompactionState {
+			states = append(states, since)
+			if since.IsZero() {
+				return CompactionState{ChildrenInFlight: []string{"old child"}, ExecJobs: []string{"old job"}}
+			}
+			return CompactionState{ChildrenFinished: []string{"finished child"}, ExecJobs: []string{"current job"}}
+		},
+	}
+	a, err := New(cfg)
+	must(t, err)
+	t.Cleanup(func() { _ = a.Close() })
+	fields := map[string]any{"reread": []string{"too-large.txt", "small.txt", "missing.txt", credential}}
+	for _, field := range wscompact.ProseFields() {
+		fields[field.Key] = "lead prose for " + field.Key
+	}
+	raw, err := json.Marshal(fields)
+	must(t, err)
+	lead, err := wscompact.ParseLeadSummary(raw)
+	must(t, err)
+	a.reportCompaction(ctx, lead)
+	first := cp
+	a.reportCompaction(ctx, lead)
+	if first.T != LineCheckpoint || cp.T != LineCheckpoint || first.ID == cp.ID ||
+		len(states) != 2 || !states[0].IsZero() || states[1].UnixMilli() != first.At {
+		t.Fatal("compaction did not pass the previous checkpoint boundary")
+	}
+	for _, field := range wscompact.ProseFields() {
+		if !strings.Contains(cp.Text, "## "+field.Heading+"\nlead prose for "+field.Key) {
+			t.Errorf("missing lead prose for %s", field.Key)
+		}
+	}
+	for _, want := range []string{"Compacted lead conversation", "261122-feat-fixture, phase 2", "Active playbook: implement",
+		"finished child", "current job", newest, "werk/" + session + ".jsonl",
+		"<file path=\"small.txt\">\nsmall file text\n</file>", "- too-large.txt\n- missing.txt"} {
+		if !strings.Contains(cp.Text, want) {
+			t.Errorf("checkpoint did not contain %q", want)
+		}
+	}
+	for _, stale := range []string{"OLD-DIALOG", "PRIVATE-TOOL-RESULT", "old child", "old job", "PROTECTED-CREDENTIAL-FIXTURE", strings.Repeat("x", 64)} {
+		if strings.Contains(cp.Text, stale) {
+			t.Errorf("checkpoint retained %q", stale)
+		}
+	}
+	_, dialog, ok := strings.Cut(cp.Text, "## Dialog\n")
+	_, dialog, okPath := strings.Cut(dialog, "\n")
+	if !ok || !okPath || len(dialog) > dialogBytes || len(endpoint.requests()) != 0 {
+		t.Fatal("supplied prose used an extra request or overflowed the dialog budget")
+	}
+	must(t, a.Close())
+	raw, err = os.ReadFile(segmentPath(dir, session))
+	must(t, err)
+	if !bytes.Contains(raw, []byte("PRIVATE-TOOL-RESULT")) || !bytes.Contains(raw, []byte("OLD-DIALOG")) {
+		t.Fatal("compaction discarded raw evidence")
+	}
+	b, err := New(cfg)
+	must(t, err)
+	defer b.Close()
+	if selected := b.Transcript(); len(selected) != 1 || !bytes.Equal(selected[0], userItem(cp.Text)) {
+		t.Fatal("reopen did not select just the latest lead checkpoint")
+	}
+}
+
 func TestCheckpointFailureLeavesInputIntact(t *testing.T) {
 	for _, mode := range []string{"endpoint", "malformed", "append", "active turn"} {
 		t.Run(mode, func(t *testing.T) {
@@ -164,7 +259,7 @@ func TestCheckpointFailureLeavesInputIntact(t *testing.T) {
 				}})
 			must(t, err)
 			t.Cleanup(func() { _ = a.Close() })
-			a.reportCompaction(context.Background())
+			a.reportCompaction(context.Background(), nil)
 			if last.T != LineCompactFailed {
 				t.Fatalf("expected a failed compaction event: %+v", last)
 			}

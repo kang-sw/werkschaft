@@ -370,8 +370,9 @@ func (s *Store) writeOpenAIStateLocked(state openAIState) error {
 
 // OpenAIModel is one model in the account catalog, in the provider's order.
 type OpenAIModel struct {
-	Slug        string `json:"slug"`
-	DisplayName string `json:"display_name"`
+	Slug          string `json:"slug"`
+	DisplayName   string `json:"display_name"`
+	ContextWindow int64  `json:"context_window,omitempty"`
 }
 
 // OpenAIModels returns the account's displayable models. The same session

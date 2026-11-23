@@ -8,13 +8,9 @@ import "github.com/kang-sw/devenv/internal/werk"
 // guaranteed range is exactly the one release the recorded fixtures cover
 // (testdata is the fake Responses server of the werk tests); a ws release
 // never moves it.
-//
-// Phase 1 of 261122-feat-ws-builtin-agent-harness ships the worker role. Every
-// item is stated for both roles: the lead role is Phase 2, so each lead entry
-// says what the worker's wiring would be and that no lead is registered yet.
 func WerkCatalog() *HarnessProfile {
 	p := &HarnessProfile{
-		Compaction: CompactionProtocol{WorkerCommand: true, Lifecycle: true, PromptPersists: true},
+		Compaction: CompactionProtocol{LeadCommand: true, WorkerCommand: true, Lifecycle: true, PromptPersists: true},
 		Oldest:     werk.ProtocolVersion,
 		Newest:     werk.ProtocolVersion,
 		Entries: []CapabilityEntry{
@@ -42,16 +38,25 @@ func WerkCatalog() *HarnessProfile {
 			{Item: ItemResume, Role: RoleWorker, Grade: GradeNative,
 				Source: "the runner reopens the same model history and resumes the active turn from the committed log (werk.OpenStore, Agent.runDurableTurn)"},
 			{Item: ItemReasoningStream, Role: RoleWorker, Grade: GradeUnsupported,
-				Source: "provider-exposed summaries are replayed and captured for audit but not shown; the live reasoning summary is Phase 2's lead surface"},
+				Source: "provider-exposed summaries are replayed and captured for audit"},
 			{Item: ItemUsageQuery, Role: RoleWorker, Grade: GradeNative,
 				Source: "each completed response reports its tokens, context and the provider's cost figure (werkMapper usage)"},
 		},
 	}
 	for _, entry := range append([]CapabilityEntry(nil), p.Entries...) {
 		entry.Role = RoleLead
-		entry.Grade = GradeUnsupported
-		entry.Values = nil
-		entry.Source = "no werk lead is registered: the harness ships the worker role first and the lead role later"
+		switch entry.Item {
+		case ItemSkillList, ItemSkillInjection:
+			entry.Source = "the composed lead instructions advertise ws playbook commands"
+		case ItemApproval:
+			entry.Grade = GradeSubstitute
+			entry.Source = "daemon-owned exec asks use the common lead approval path"
+		case ItemReasoningStream:
+			entry.Grade = GradeSubstitute
+			entry.Source = "the common reasoning projection displays completed provider-exposed summaries"
+		case ItemCompaction:
+			entry.Source = "ws/compact accepts the lead's carry-forward prose and commits a checkpoint at idle"
+		}
 		p.Entries = append(p.Entries, entry)
 	}
 	return p

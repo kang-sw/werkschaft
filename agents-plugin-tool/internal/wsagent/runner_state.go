@@ -35,6 +35,7 @@ type State struct {
 	Hidden    bool                         `json:"hidden,omitempty"`
 	Lifecycle wsdashboard.SessionLifecycle `json:"lifecycle,omitempty"`
 	Model     string                       `json:"model,omitempty"`
+	Provider  string                       `json:"provider,omitempty"`
 	Effort    string                       `json:"effort,omitempty"`
 	// Observed is this conversation's own response evidence, not its settings
 	// or a descendant's output. It remains available when the turn ends.
@@ -184,7 +185,7 @@ func (r *Runner) closedState(rec Record) State {
 }
 
 func closedState(rec Record) State {
-	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Effort: rec.Effort, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
+	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
 	if rec.Lead {
 		if rec.ClosedAt != "" {
 			st.Lifecycle = wsdashboard.SessionPendingDeletion

@@ -125,6 +125,10 @@ func (r *Runner) lockSummaryOwner(replyID string, want *conv) (unlock func(), ok
 }
 
 func (c *conv) summaryStart(ev Event) {
+	if c.rec.Lead && c.r.durableProcess(c.rec.Backend) && ev.TurnID != "" {
+		c.live.summarySource = "durable/" + ev.TurnID
+		return
+	}
 	if !c.rec.Lead || !c.r.lifecycle(c.rec.Backend).TerminalSummaries || c.live.summarySource != "" || c.summaryGap || ev.Seq == 0 || c.rec.HolderID == "" {
 		return
 	}
@@ -132,6 +136,13 @@ func (c *conv) summaryStart(ev Event) {
 }
 
 func (c *conv) summaryProjection(ev Event, quiet bool) {
+	if c.rec.Lead && c.r.durableProcess(c.rec.Backend) {
+		if c.turn && ev.TurnID != "" && c.live.summarySource == "durable/"+ev.TurnID &&
+			wslive.ValidateReasoningSummary(ev.ReasoningSummary) == nil {
+			c.apply(wslive.Event{Kind: wslive.KindAgent, ReasoningSummary: ev.ReasoningSummary}, quiet)
+		}
+		return
+	}
 	if !c.rec.Lead || !c.r.lifecycle(c.rec.Backend).TerminalSummaries || !c.turn || c.summaryGap || c.live.summarySource == "" || ev.Seq == 0 || ev.ReasoningSummary == nil {
 		return
 	}

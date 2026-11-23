@@ -68,7 +68,7 @@ func TestWerkChoicesReportAFailedListing(t *testing.T) {
 // The picker lists werk's models beside the support harnesses without making
 // it a support or lead choice, and says why it is unavailable until a key is
 // set, while still listing the public models.
-func TestWerkIsListedForThePickerOnly(t *testing.T) {
+func TestWerkLeadChoicesKeepThePublicTierCatalog(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[{"id":"vendor/m","supported_parameters":["tools"]}]}`)
 	}))
@@ -79,25 +79,17 @@ func TestWerkIsListedForThePickerOnly(t *testing.T) {
 	sh.runner.opts.Backends[BackendWerk] = reg
 
 	answer := choicesWithPickers(t, sh.support)
-	for _, h := range answer.Harnesses {
-		if h.Harness == BackendWerk {
-			t.Fatalf("werk is a support/lead choice: %+v", h)
-		}
-	}
-	if len(answer.Pickers) != 1 || answer.Pickers[0].Harness != BackendWerk {
-		t.Fatalf("pickers = %+v", answer.Pickers)
-	}
-	p := answer.Pickers[0]
+	p := harnessByName(t, answer, BackendWerk)
 	if p.Available || !strings.Contains(p.Error, "credential set openrouter") || len(p.Models) != 1 || p.Models[0].ID != "vendor/m" || len(p.Efforts) == 0 {
 		t.Errorf("without a key: %+v", p)
 	}
-	if p.Lead || p.Profile != "" {
-		t.Errorf("a picker entry claims a lead or a profile: %+v", p)
+	if !p.Lead || p.Profile != "" || len(p.ModelProviders) != 0 || len(p.PermissionLevels) != 3 {
+		t.Errorf("werk must be a lead choice without a tracker support profile: %+v", p)
 	}
 
 	configured = true
 	answer = choicesWithPickers(t, sh.support)
-	if p := answer.Pickers[0]; !p.Available || p.Error != "" || len(p.Models) != 1 {
+	if p := harnessByName(t, answer, BackendWerk); !p.Available || p.Error != "" || len(p.Models) != 1 {
 		t.Errorf("with a key: %+v", p)
 	}
 }
@@ -169,8 +161,8 @@ func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
 
 	close(release)
 	answer = choicesWithPickers(t, sh.support)
-	if len(answer.Pickers) != 1 || len(answer.Pickers[0].Models) != 1 || answer.Pickers[0].Models[0].ID != "vendor/m" {
-		t.Fatalf("pickers after the listing = %+v", answer.Pickers)
+	if p := harnessByName(t, answer, BackendWerk); len(p.Models) != 1 || p.Models[0].ID != "vendor/m" {
+		t.Fatalf("werk after the listing = %+v", p)
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("model list requests = %d after landing, want 1 (served from the cache)", n)

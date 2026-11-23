@@ -8,6 +8,7 @@ package werk
 import (
 	"encoding/json"
 
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
@@ -56,13 +57,15 @@ type Steer struct {
 
 // Command is a request from the daemon to the session loop.
 type Command struct {
-	Type   string  `json:"type"`
-	TurnID string  `json:"-"`
-	ID     string  `json:"id,omitempty"`
-	Text   string  `json:"text,omitempty"`
-	Model  string  `json:"model,omitempty"`
-	Effort *string `json:"effort,omitempty"`
-	Steers []Steer `json:"-"`
+	Interactive bool                   `json:"-"`
+	Type        string                 `json:"type"`
+	TurnID      string                 `json:"-"`
+	ID          string                 `json:"id,omitempty"`
+	Text        string                 `json:"text,omitempty"`
+	Model       string                 `json:"model,omitempty"`
+	Effort      *string                `json:"effort,omitempty"`
+	Steers      []Steer                `json:"-"`
+	LeadSummary *wscompact.LeadSummary `json:"-"`
 }
 
 // Line types, process to daemon.

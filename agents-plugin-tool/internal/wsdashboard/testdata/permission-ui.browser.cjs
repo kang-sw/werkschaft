@@ -17,7 +17,10 @@ function choices(levels, claude = {}) {
   const extra = levels ? { permission_levels: LEVELS } : {};
   return { harnesses: [
     { harness: 'claude', lead: true, available: true, models: [{ id: 'opus-4.7' }, { id: 'sonnet-4.6' }], efforts: ['low', 'medium', 'high', 'max'], permission_modes: MODES, ...extra, ...claude },
-    { harness: 'pi', lead: true, available: true, models: [{ id: 'gpt-5.5' }], efforts: ['off', 'low', 'medium', 'high'], permission_modes: [], ...extra }
+    { harness: 'pi', lead: true, available: true, models: [{ id: 'gpt-5.5' }], efforts: ['off', 'low', 'medium', 'high'], permission_modes: [], ...extra },
+    { harness: 'werk', lead: true, available: true, model_providers: ['openrouter', 'openai'],
+      models: [{ id: 'vendor/fixture' }, { id: 'vendor/fixture', provider: 'openai', display_name: 'Account fixture' }],
+      efforts: ['low', 'high'], permission_modes: [], permission_levels: ['read-only', 'workdir-write', 'full'], ...extra }
   ], last: {} };
 }
 const lead = extra => ({ id: 'livesession', lead: true, backend: 'claude', can_control: true, status: 'idle', model: 'opus-4.7', effort: 'high', held: 0, page: '/s/livesession', created_at: '2026-11-21T00:00:00Z', ...extra });
@@ -43,7 +46,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
     for (const theme of ['dark', 'light']) {
       for (const width of [1440, 420]) {
         if (process.env.PMUI_ONLY && process.env.PMUI_ONLY !== theme + ':' + width) continue;
-        const S = { choices: choices(true), state: STATES.derived, posts: [], answer: () => ({ status: 404, body: 'not found' }) };
+        const S = { choices: choices(true), state: STATES.derived, posts: [], catalogAt: 0, catalogPolls: [], answer: () => ({ status: 404, body: 'not found' }) };
         const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, locale: 'ko-KR', serviceWorkers: 'block' });
         await context.addInitScript(saved => {
           try { localStorage.setItem('ws.dashboard.newSession', JSON.stringify(saved)); } catch (_) {}
@@ -52,7 +55,13 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           const req = route.request(), url = new URL(req.url());
           if (url.origin !== base) return route.abort();
           if (url.pathname === '/rail/usage') return route.fulfill({ json: { entries: [], warnPercent: 80, critPercent: 95 } });
-          if (url.pathname === '/support/choices') return route.fulfill({ json: S.choices, headers: { 'Cache-Control': 'no-store' } });
+          if (url.pathname === '/support/choices') {
+            if (S.catalogAt) S.catalogPolls.push(Date.now() - S.catalogAt);
+            const listing = Date.now() < S.catalogAt
+              ? { ...S.choices, pickers_pending: true, harnesses: S.choices.harnesses.map(h => h.harness === 'werk' ? { ...h, models: [] } : h) }
+              : S.choices;
+            return route.fulfill({ json: listing, headers: { 'Cache-Control': 'no-store' } });
+          }
           if (url.pathname.startsWith('/agents/') || url.pathname === '/agents') {
             if (req.method() === 'GET' && url.pathname === '/agents/livesession') return route.fulfill({ json: S.state });
             if (req.method() === 'POST') {
@@ -157,6 +166,31 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           await page.waitForFunction(() => true);
           await page.waitForTimeout(400);
           assert.deepEqual(S.posts.map(p => [p.path, p.body.permission_level, p.body.permission_full_ack, 'permission_mode' in p.body]), [['/agents/leads/permission', 'full', true, false]]);
+          await closePop();
+        });
+
+        if (width === 1440) await step('Werk provider and permission', async () => {
+          await load(STATES.derived);
+          S.answer = () => ({ status: 500, body: 'fixture: no runner' });
+          S.catalogAt = Date.now() + 4600;
+          const pop = await create();
+          await pop.locator('.spseg [data-harness="werk"]').click();
+          const model = pop.getByLabel('모델', { exact: true });
+          assert.equal(await pop.locator('.sprow .pbtn.go').isDisabled(), true);
+          try {
+            await model.selectOption({ label: 'Account fixture · OpenAI' }, { timeout: 10000 });
+          } catch (e) {
+            throw new Error('model unavailable after catalog polls at offsets ' + S.catalogPolls.join(', ') + ': ' + e.message);
+          }
+          S.catalogAt = 0;
+          assert.equal(await model.locator('option[value="vendor/fixture"]').textContent(), 'vendor/fixture');
+          await pop.locator('.pmseg [data-level="read-only"]').click();
+          const created = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/agents/leads/permission');
+          await pop.locator('.sprow .pbtn.go').click();
+          await created;
+          assert.deepEqual(S.posts.map(p => [p.path, p.body.harness, p.body.provider, p.body.model, p.body.permission_level]), [
+            ['/agents/leads/permission', 'werk', 'openai', 'vendor/fixture', 'read-only']
+          ]);
           await closePop();
         });
 

@@ -544,8 +544,8 @@ func ValidateTierProvider(harness, provider string) error {
 	if normalizedHarness(harness) != "werk" {
 		return fmt.Errorf("provider is available only for werk tiers")
 	}
-	if provider != WerkDefaultProvider {
-		return fmt.Errorf("unsupported werk provider %q; use %s", provider, WerkDefaultProvider)
+	if provider != WerkDefaultProvider && provider != "openai" {
+		return fmt.Errorf("unsupported werk provider %q; use %s or openai", provider, WerkDefaultProvider)
 	}
 	return nil
 }

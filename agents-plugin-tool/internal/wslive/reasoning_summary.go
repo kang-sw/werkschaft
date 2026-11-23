@@ -115,7 +115,7 @@ func validateSummaryAttempts(requests []SummaryAttempt, activeRequest *SummaryPa
 		if activeRequest != nil && pair == *activeRequest {
 			active = true
 		}
-		if !((a.Provider == "openai" && a.API == "openai-responses") || (a.Provider == "openai-codex" && a.API == "openai-codex-responses")) || a.Model == "" || len(a.Model) > ModelRunes*4 || utf8.RuneCountInString(a.Model) > ModelRunes || !utf8.ValidString(a.Model) || !summaryStatus(a.Status) {
+		if !((a.Provider == "openai" && a.API == "openai-responses") || (a.Provider == "openai-codex" && a.API == "openai-codex-responses") || (a.Provider == "openrouter" && a.API == "openai-responses")) || a.Model == "" || len(a.Model) > ModelRunes*4 || utf8.RuneCountInString(a.Model) > ModelRunes || !utf8.ValidString(a.Model) || !summaryStatus(a.Status) {
 			return fmt.Errorf("invalid reasoning summary source or status")
 		}
 		var output, part int64 = -1, -1

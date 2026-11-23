@@ -449,6 +449,10 @@ func TestAgentRunnerCatalogs(t *testing.T) {
 	if !reflect.DeepEqual(regs[wsagent.BackendAgy].Catalog, wsagent.AgyCatalog()) {
 		t.Error("agy must retain its lead and worker catalog")
 	}
+	if !reflect.DeepEqual(regs[wsagent.BackendWerk].Catalog, wsagent.WerkCatalog()) ||
+		!reflect.DeepEqual(regs[wsagent.BackendWerk].PermissionLevels, wsagent.LeadPermissionLevels()) {
+		t.Error("werk must expose independent lead and worker catalogs and common permission levels")
+	}
 	for _, want := range []struct {
 		backend, lead, worker string
 		capable, http, auto   bool
@@ -457,6 +461,7 @@ func TestAgentRunnerCatalogs(t *testing.T) {
 		{wsagent.BackendPi, wsagent.LeadProfilePi, wsagent.AgentWorkerProfile(wsagent.BackendPi), true, false, false},
 		{wsagent.BackendAgy, wsagent.LeadProfileAgy, wsagent.AgentWorkerProfile(wsagent.BackendAgy), true, true, true},
 		{wsagent.BackendCodex, wsagent.LeadProfileCodex, wsagent.AgentWorkerProfile(wsagent.BackendCodex), true, true, true},
+		{wsagent.BackendWerk, wsagent.LeadProfileWerk, wsagent.AgentWorkerProfile(wsagent.BackendWerk), true, false, false},
 	} {
 		reg := regs[want.backend]
 		if reg.LeadProfile != want.lead || reg.WorkerProfile != want.worker || reg.WorkerCapable != want.capable || reg.WorkerHTTPMCP != want.http || reg.WorkerAutoApprove != want.auto {
