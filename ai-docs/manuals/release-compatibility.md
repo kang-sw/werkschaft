@@ -84,6 +84,7 @@ new value survives intervening old writes.
   Reconnection cannot repair a removed call or argument. Removal without a
   working alias is T3 because old clients break; retain the alias through any
   patch and require the minor boundary and approval for its removal.
+  Refusing a call for the caller's role authority (e.g. read-only), with tool, arguments, schema and stored data unchanged and the refusal raised before any write, is a permission policy, not a removal: T0.
 - A hello/protocol bump that refuses old connections is T3. Store or tracker
   event changes take their tier from the actual reader/writer behavior, not
   from being called a protocol change.

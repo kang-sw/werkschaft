@@ -266,3 +266,34 @@ func TestWindowsWordRefusal(t *testing.T) {
 		}
 	}
 }
+
+// Windows' native sort.exe reads /O file as an output file (a write through a
+// read-only launch) when System32 precedes Git's usr\bin on PATH. The policy
+// decision is a pure argument check, so it runs here on every platform
+// without starting sort.exe.
+func TestWindowsSortRefusal(t *testing.T) {
+	for _, args := range [][]string{
+		{"/O", "out.txt"}, {"/o", "out.txt"}, {"/OUTPUT", "out.txt"}, {"/Output", "out.txt"}, {"/output:out.txt"},
+		{"/Oout.txt"}, {"names.txt", "/O", "out.txt"}, {"/T", "tmp"}, {"/R", "/O", "x"}, {"/tmp/names.txt"},
+	} {
+		if err := windowsSortRefusal(args); err == nil {
+			t.Errorf("sort %q passed", args)
+		}
+	}
+	for _, args := range [][]string{{}, {"-r"}, {"-r", "names.txt"}, {"names.txt"}, {"a/o"}, {"C:/o.txt"}, {"-"}} {
+		if err := windowsSortRefusal(args); err != nil {
+			t.Errorf("sort %q refused: %v", args, err)
+		}
+	}
+	if goruntime.GOOS != "windows" {
+		return
+	}
+	// Both builders apply it to a sort launch on Windows.
+	root := t.TempDir()
+	if _, err := ReadOnlyArgvLaunch("w", "exec.run", root, root, []string{"sort", "/O", "out.txt"}, os.Environ(), nil); err == nil {
+		t.Error("exec.run: sort /O passed")
+	}
+	if _, err := readOnlyLine(t, "sort /OUTPUT out.txt"); err == nil {
+		t.Error("exec.shell: sort /OUTPUT passed")
+	}
+}
