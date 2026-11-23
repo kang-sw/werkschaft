@@ -34,18 +34,36 @@ func reviewNudgeTestCommit(t *testing.T, root, label string) string {
 	return strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "HEAD")))
 }
 
-// reviewNudgeSeedStaleMarker stamps a pass entry at current HEAD, then adds
-// aheadCommits more commits so the ledger marker is stale by that many
-// commits over whatever branch is current at call time.
+// reviewNudgeSeedStaleMarker stamps a pass entry at current HEAD, then lands
+// a qualifying reviewable change past the shipped metric threshold so the
+// ledger marker is stale over whatever branch is current at call time.
 func reviewNudgeSeedStaleMarker(t *testing.T, root string, aheadCommits int) {
 	t.Helper()
 	head := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "HEAD")))
 	if err := wsreview.Append(root, wsreview.Entry{Base: head, Head: head, Verdict: wsreview.VerdictPass}); err != nil {
 		t.Fatalf("seed review ledger: %v", err)
 	}
-	for i := 0; i < aheadCommits; i++ {
-		reviewNudgeTestCommit(t, root, fmt.Sprintf("c%d", i))
+	var b strings.Builder
+	lines := 5000
+	if aheadCommits > 0 && aheadCommits > lines {
+		lines = aheadCommits
 	}
+	for i := 0; i < lines; i++ {
+		fmt.Fprintf(&b, "line-%05d\n", i)
+	}
+	mustWrite(t, root, "stale-change.txt", b.String())
+	runGit(t, root, "add", "stale-change.txt")
+	runGit(t, root, "commit", "-m", "qualifying stale change")
+}
+
+func reviewNudgeMergeCommit(t *testing.T, root, track, branch, relPath, content string) {
+	t.Helper()
+	runGit(t, root, "checkout", "-b", branch, track)
+	mustWrite(t, root, relPath, content)
+	runGit(t, root, "add", relPath)
+	runGit(t, root, "commit", "-m", branch)
+	runGit(t, root, "checkout", track)
+	runGit(t, root, "merge", "--no-ff", branch, "-m", "merge "+branch)
 }
 
 // reviewNudgeRestamp appends a fresh pass entry at current HEAD, simulating a
@@ -494,5 +512,96 @@ func TestServeStdioReviewStampRejectsBlockVerdictWithoutRef(t *testing.T) {
 	}
 	if !strings.Contains(toolText(t, resp), "requires a non-empty Ref") {
 		t.Fatalf("review.stamp block-without-ref error message unexpected: %s", toolText(t, resp))
+	}
+}
+
+// TestReviewWatermarkAdvisoryParityAcrossActiveEmitters verifies that all
+// active review-watermark checkpoint emitters — workflow_manual FRESH-with-root,
+// workflow_manual CONTINUE, hosted RenderLeadManual, route.resolve_implement,
+// and tickets.close — surface the exact same single-tier advisory computed from
+// the new metric + exclusion contract and go quiet together when thresholds are
+// not met.
+func TestReviewWatermarkAdvisoryParityAcrossActiveEmitters(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	reviewNudgeTestRepo(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	t.Setenv("WS_RSRC_ROOT", filepath.Join("..", "..", "..", "agents-plugin", "rsrc"))
+
+	frontierHead := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "HEAD")))
+	if err := wsreview.Append(root, wsreview.Entry{Base: frontierHead, Head: frontierHead, Verdict: wsreview.VerdictPass}); err != nil {
+		t.Fatalf("seed review ledger: %v", err)
+	}
+
+	// Land 2 eligible merges plus 1 ai-docs-only merge and 1 excluded generated
+	// merge so metric filtering is exercised across every emitter.
+	reviewNudgeMergeCommit(t, root, "main", "feat-1", "pkg/one.txt", "one\n")
+	reviewNudgeMergeCommit(t, root, "main", "docs-only", filepath.Join("ai-docs", "note.md"), "docs\n")
+	reviewNudgeMergeCommit(t, root, "main", "gen-only", filepath.Join("generated", "bundle.js"), strings.Repeat("x\n", 6000))
+	reviewNudgeMergeCommit(t, root, "main", "feat-2", "pkg/two.txt", "two\n")
+
+	mustWrite(t, root, filepath.Join("ai-docs", "_review.local.md"), "## Checkpoint Nudge\nmerges: 2\nlines: 5000\nexclude: generated/**\n")
+
+	wantAdvisory := fmt.Sprintf(
+		"review watermark is 2 merges, 2 net lines behind main (thresholds: 2 merges / 5000 lines); consider running a sweep (lead-review range: %s..main).",
+		frontierHead,
+	)
+
+	stemStale := "260101-feat-review-watermark-parity-stale"
+	mustWrite(t, root, filepath.Join("ai-docs", "tickets", "todo", stemStale+".md"), "---\ntitle: Parity Stale\n---\n\nBody.\n")
+	stemQuiet := "260101-feat-review-watermark-parity-quiet"
+	mustWrite(t, root, filepath.Join("ai-docs", "tickets", "todo", stemQuiet+".md"), "---\ntitle: Parity Quiet\n---\n\nBody.\n")
+
+	server := NewServer(root, "test")
+	key, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+
+	freshResp := callToolWithKey(t, server, 2, freshBootstrapKey, "workflow_manual", map[string]any{"root": root})
+	continueResp := callToolWithKey(t, server, 3, key, "workflow_manual", nil)
+	hostedResp, err := RenderLeadManual(os.Environ(), root, HostedRender{Harness: "codex"}, key)
+	if err != nil {
+		t.Fatalf("RenderLeadManual: %v", err)
+	}
+	closeResp := callToolWithKey(t, server, 4, key, "tickets.close", map[string]any{"stem": stemStale, "status": "done"})
+
+	runGit(t, root, "switch", "-c", "feature/parity")
+	routeResp := callToolWithKey(t, server, 5, key, "route.resolve_implement", implementReadyArgs("text"))
+
+	for name, body := range map[string]string{
+		"workflow_manual FRESH":    freshResp,
+		"workflow_manual CONTINUE": continueResp,
+		"hosted RenderLeadManual":  hostedResp,
+		"route.resolve_implement":  routeResp,
+		"tickets.close":            closeResp,
+	} {
+		if !strings.Contains(body, wantAdvisory) {
+			t.Fatalf("%s missing expected advisory %q\nbody:\n%s", name, wantAdvisory, body)
+		}
+	}
+
+	// Raising the local merge threshold above 2 (while keeping generated/**
+	// excluded so the 6000-line generated merge does not trip the line threshold)
+	// must quiet every active emitter simultaneously.
+	mustWrite(t, root, filepath.Join("ai-docs", "_review.local.md"), "## Checkpoint Nudge\nmerges: 3\nlines: 5000\nexclude: generated/**\n")
+
+	freshQuiet := callToolWithKey(t, server, 6, freshBootstrapKey, "workflow_manual", map[string]any{"root": root})
+	continueQuiet := callToolWithKey(t, server, 7, key, "workflow_manual", nil)
+	hostedQuiet, err := RenderLeadManual(os.Environ(), root, HostedRender{Harness: "codex"}, key)
+	if err != nil {
+		t.Fatalf("RenderLeadManual quiet: %v", err)
+	}
+	routeQuiet := callToolWithKey(t, server, 8, key, "route.resolve_implement", implementReadyArgs("text"))
+	closeQuiet := callToolWithKey(t, server, 9, key, "tickets.close", map[string]any{"stem": stemQuiet, "status": "done"})
+
+	for name, body := range map[string]string{
+		"workflow_manual FRESH":    freshQuiet,
+		"workflow_manual CONTINUE": continueQuiet,
+		"hosted RenderLeadManual":  hostedQuiet,
+		"route.resolve_implement":  routeQuiet,
+		"tickets.close":            closeQuiet,
+	} {
+		if strings.Contains(body, "review watermark is") {
+			t.Fatalf("%s should stay quiet once threshold is raised above 2 merges:\n%s", name, body)
+		}
 	}
 }

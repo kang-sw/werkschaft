@@ -276,7 +276,7 @@ func TestHostedToolsRunGitOnTheConnectionPATH(t *testing.T) {
 		{"tickets.query", map[string]any{"ticket_stem": "260101-feat-alpha"}, []string{sparseScope}},
 		{"tickets.sage_gate", map[string]any{"stem": "260102-epic-beta", "landing": "todo"}, []string{"log --follow"}},
 		{"review.marker", map[string]any{"bootstrap": true}, []string{"rev-parse HEAD"}},
-		{"workflow_manual", nil, []string{"symbolic-ref --short refs/remotes/origin/HEAD", "rev-list --count", "--git-common-dir"}},
+		{"workflow_manual", nil, []string{"symbolic-ref --short refs/remotes/origin/HEAD", "log --first-parent --merges", "diff --raw --numstat", "--git-common-dir"}},
 		// The rest resolve the worktree identity through wsstate.Ensure, which
 		// remembers it per top level after the first resolution above (and
 		// revalidates it by a stat of .git), so they run no further git for

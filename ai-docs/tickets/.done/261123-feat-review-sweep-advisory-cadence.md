@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 717de70a2a75dbbb
 sage-review-completeness-reviewed: 717de70a2a75dbbb
+completed: 2026-11-23
 ---
 
 # Tune the review-sweep advisory cadence
@@ -229,3 +230,25 @@ remote result in the phase result.
 ```bash
 bash D:/sys_lock.sh remote w5090 run <who> <min> --sync '<worktree>' -- 'export PATH=$HOME/sdk/go/bin:$PATH; cd agents-plugin-tool && python3 scripts/generate-package-assets.py && go test ./internal/wsreview/... ./internal/mcp/...'
 ```
+
+### Result (a317e7465) - 2026-11-23
+
+- **Changes (`a317e7465`)**:
+  - Extended `agents-plugin-tool/internal/wsreview/config.go` (`## Checkpoint Nudge` parser) with `merges: <N>`, `lines: <N>`, and repeated `exclude: <pathspec>` keys (positive repo-relative Git pathspecs), applying shipped defaults (`10 merges` / `5,000 net lines`) in metric mode and preserving the legacy all-ancestry commit-count trigger (capped at 20) only when a valid `staleness: <N> commits` key is present without valid new threshold keys (T0, no new Go public symbols).
+  - Replaced the metric-mode commit-count proxy in `agents-plugin-tool/internal/wsreview/checkpoint.go` (`CheckpointNudgeWith`) with two O(1)-subprocess local-only Git queries (`GIT_NO_LAZY_FETCH=1`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`) over `<merge-base>..<track>` excluding `ai-docs/` and configured pathspecs: (1) batched `git log --first-parent --merges --first-parent -m --raw -z` counting distinct merges that touch at least one eligible path (including binary, mode-only, and gitlink-only deltas), and (2) `git diff --raw --numstat -z` summing added+deleted text lines while contributing 0 for binary, mode-only, and gitlink (`160000`) paths. Emits a single advisory tier carrying `(lead-review range: <entry.Head>..<track>)`, and fails open on missing partial-clone objects without advisory or ledger writes.
+  - Updated unit, fixture, and emitter-parity tests in `agents-plugin-tool/internal/wsreview/config_test.go`, `agents-plugin-tool/internal/wsreview/checkpoint_test.go`, `agents-plugin-tool/internal/mcp/review_watermark_checkpoint_test.go` (`TestReviewWatermarkAdvisoryParityAcrossActiveEmitters` covering `workflow_manual` FRESH/CONTINUE, hosted `RenderLeadManual`, `route.resolve_implement`, and `tickets.close`), and `agents-plugin-tool/internal/mcp/hosted_env_paths_test.go` (`TestHostedToolsRunGitOnTheConnectionPATH`).
+- **Deviations**: Executed in Antigravity using `agy.medium` for `code-review-lite` per owner policy (superseding the ticket's stale "Implement in Codex" wording). No behavioral deviations from settled Decisions.
+- **Verification (remote `w5090`)**:
+  - `python3 scripts/generate-package-assets.py && go vet ./internal/wsreview/... ./internal/mcp/... && go test -count=1 ./internal/wsreview/... && go test -v -count=1 -run ReviewWatermark ./internal/mcp/... && go test -v -count=1 -run TestHostedToolsRunGitOnTheConnectionPATH ./internal/mcp/...` — PASS (`internal/wsreview` `1.957s`, `ReviewWatermark` 7/7 `0.546s`, `TestHostedToolsRunGitOnTheConnectionPATH` `0.17s`).
+  - Full `go test ./internal/mcp/...` run on `w5090` prior to the 2-file `hosted_env_paths_test.go` fix passed all suites except that updated git-shim assertion and the known pre-existing `TestHostedExecStopEndsTheJobsProcessGroup` timeout (recorded in `12fef0223`).
+- **Local devenv opt-in (`D:/Workspace/Repos/devenv/ai-docs/_review.local.md`)**:
+  - Created gitignored local config with `merges: 25`, `lines: 20000`, and 8 explicit `.gitattributes` generated/vendored `exclude:` pathspecs. Verified absent from `git status --short`, matching 42 tracked generated/vendored files (`0` remaining after `:(top,exclude)`).
+  - Measured exclusion impact on `develop`: current frontier `ddf6d78bf..develop` = 19 eligible merges (1 docs/generated-only filtered out of 20) and 7,824 net lines (`12,155` raw minus `4,283` `ai-docs/` minus `48` generated; quiet under `25 / 20000`); wider range `develop~100..develop` (`a6058ea3f..develop`) = 57 eligible merges and 46,371 net lines (`55,279` raw minus `8,784` `ai-docs/` minus `124` generated).
+- **Performance baseline (`D:/Workspace/Repos/devenv`, Windows, 5 runs each via Win32 `GetProcessIoCounters` + wall clock)**:
+  - Ordinary range (`ddf6d78bf..develop`):
+    - Before: 2 Git subprocesses (`merge-base`, `rev-list --count`), 3 Go file reads, 290 Win32 kernel I/O ops (64 read / 0 write / 226 other), median 142.1 ms (120.4–169.8 ms).
+    - After: 3 Git subprocesses (`merge-base`, batched `log --first-parent --merges`, net `diff --raw --numstat`), 3 Go file reads, 435 Win32 kernel I/O ops (96 read / 0 write / 339 other), median 390.4 ms (332.4–465.2 ms).
+  - Many-merges range (`develop~100..develop`, 57 eligible merges / 331 commits):
+    - Before: 2 Git subprocesses, 3 Go file reads, 290 Win32 kernel I/O ops (64 read / 0 write / 226 other), median 149.0 ms (137.6–204.1 ms).
+    - After: 3 Git subprocesses (O(1), unchanged from ordinary range), 3 Go file reads, 435 Win32 kernel I/O ops (96 read / 0 write / 339 other, flat), median 464.7 ms (456.3–484.8 ms).
+- **Review**: `code-review-lite` over `1a3f9f9819e9f490363cc6cad8ad67205f074ea2..a317e7465308b70de94c3ff7da8a7bddfff3c59f` (`id:viabilitydevaluemoistencreole`) returned `clean` (Remaining: none).
