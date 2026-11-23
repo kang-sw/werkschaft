@@ -471,4 +471,44 @@ test('anchorSlotCaps stamps rail0 on first railed card when slot 0 is a non-rail
   assert.equal(w.node('t:A').getAttribute('data-anchor-bot'), null);
   assert.equal(w.node('t:B').getAttribute('data-anchor-bot'), '1');
   assert.equal(w.node('t:C').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('t:C').getAttribute('data-anchor-last'), '1');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), null);
+});
+
+test('anchorSlotCaps isolates data-anchor-last to the trailing non-rail .bcard', () => {
+  const w = world([T('A'), T('B'), Cd('u1')]);
+  w.c.anchorSettle(null);
+  // Both t:B and trailing non-rail c:u1 have 0 bottom rail capsules (data-anchor-bot="0"),
+  // but only c:u1 is the actual last visible card (data-anchor-last="1") so t:B keeps its inter-card gap.
+  assert.equal(w.node('t:B').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), null);
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-bot'), '0');
+  assert.equal(w.node('c:u1').getAttribute('data-anchor-last'), '1');
+  // Removing trailing card moves data-anchor-last cleanly onto t:B.
+  const u1 = w.node('c:u1');
+  u1.remove();
+  w.c.anchorSettle(null);
+  assert.equal(u1.getAttribute('data-anchor-last'), null);
+  assert.equal(w.node('t:B').getAttribute('data-anchor-last'), '1');
+});
+
+test('anchorOnWheel ignores wheel events inside .tpop, open popover, or dialog[open]', () => {
+  const w = world([T('A'), T('B')]);
+  w.bcol.overflowY = 'auto';
+  w.c.anchorInit();
+  w.select('t:A');
+  for (const hit of ['.tpop', '[popover]:popover-open', 'dialog[open]']) {
+    let prevented = false;
+    w.c.anchorOnWheel({
+      defaultPrevented: false,
+      ctrlKey: false,
+      deltaY: 120,
+      deltaX: 0,
+      deltaMode: 1,
+      target: { closest: sel => sel.includes(hit) ? {} : null },
+      preventDefault: () => { prevented = true; }
+    });
+    assert.equal(prevented, false, 'wheel inside ' + hit + ' must not be intercepted');
+    assert.equal(w.cur(), 't:A', 'wheel inside ' + hit + ' must not change current card');
+  }
 });

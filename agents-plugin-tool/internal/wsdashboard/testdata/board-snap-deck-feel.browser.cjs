@@ -25,6 +25,7 @@ const dashCss = [
   readAssetSource('wsdashboard', 'dashboard-layout.css'),
   readAssetSource('wsdashboard', 'dashboard-board.css'),
   readAssetSource('wsdashboard', 'dashboard-rail.css'),
+  readAssetSource('wsdashboard', 'dashboard-shell.css'),
   readAssetSource('wsdashboard', 'dashboard-menus.css'),
 ].join('\n');
 
@@ -75,7 +76,7 @@ function buildFixtureHtml(opts = {}) {
         '<div class="bc-body"><div style="height:600px;padding:12px">Unpinned preview card body</div></div>' +
       '</div>' +
     '</div>';
-  return '<!doctype html><html data-theme="' + theme + '"><head><meta charset="utf-8"><style>' +
+  return '<!doctype html><html data-theme="' + theme + '"' + (opts.framed ? ' data-frame' : '') + '><head><meta charset="utf-8"><style>' +
     wbCss + '\n' + dashCss +
     '\nhtml,body{margin:0;height:100%;overflow:hidden}' +
     '.dwrap{height:100vh;width:100vw;display:flex;flex-direction:column}' +
@@ -183,7 +184,8 @@ async function assertSheetAboveScrim(page, selector, label) {
     const target = document.querySelector(sel);
     const scrim = document.querySelector('.bc-scrim');
     if (!target || !scrim) return { ok: false, reason: 'missing target or scrim', hasTarget: !!target, hasScrim: !!scrim };
-    const r = target.getBoundingClientRect();
+    const sheet = target.classList.contains('bcard') ? (target.querySelector(':scope > .bc-in') || target) : target;
+    const r = sheet.getBoundingClientRect();
     const cx = Math.round(r.left + r.width / 2);
     const cy = Math.round(r.top + Math.min(r.height / 2, 160));
     const topEl = document.elementFromPoint(cx, cy);
@@ -191,16 +193,31 @@ async function assertSheetAboveScrim(page, selector, label) {
     const targetIdx = stack.findIndex(el => el === target || target.contains(el));
     const scrimIdx = stack.indexOf(scrim);
     const hitsScrim = topEl === scrim;
+    const scrimZ = getComputedStyle(scrim).zIndex;
+    const sheetZ = getComputedStyle(sheet).zIndex;
+    const bg = getComputedStyle(sheet).backgroundColor;
+    // Parse rgb(...) or rgba(r, g, b, a) / color(srgb ... / a)
+    let alpha = 1;
+    const rgba = bg.match(/rgba?\([^)]+\)/);
+    if (bg === 'transparent') alpha = 0;
+    else if (rgba) {
+      const parts = rgba[0].replace(/rgba?\(|\)/g, '').split(/[\s,/]+/).filter(Boolean);
+      if (parts.length >= 4) alpha = parseFloat(parts[3]);
+    }
     return {
-      ok: !hitsScrim && targetIdx >= 0 && (scrimIdx < 0 || targetIdx < scrimIdx),
+      ok: !hitsScrim && targetIdx >= 0 && (scrimIdx < 0 || targetIdx < scrimIdx) && scrimZ === '69' && sheetZ === '70' && alpha === 1,
       hitsScrim,
       targetIdx,
       scrimIdx,
+      scrimZ,
+      sheetZ,
+      bg,
+      alpha,
       topTag: topEl ? topEl.tagName + '.' + topEl.className : null,
       rect: { top: r.top, left: r.left, width: r.width, height: r.height }
     };
   }, selector);
-  assert.equal(res.ok, true, label + ' must paint strictly above .bc-scrim: ' + JSON.stringify(res));
+  assert.equal(res.ok, true, label + ' must paint opaque (z=70) strictly above .bc-scrim (z=69): ' + JSON.stringify(res));
 }
 
 test('Part 1 & 2: wheel virtualization + per-edge 100% full-span height + 0px next-card peek', async () => {
@@ -342,17 +359,25 @@ test('Part 3: Overview fast exit (0 data-overview-motion tags) + 0 idle rAF whil
       await page.evaluate(() => { window.__motionTagged = 0; });
       // Exit Overview onto Topic 6
       await page.evaluate(() => window.WsOverview.pick(document.getElementById('topic-6')));
+      await page.waitForTimeout(220);
       await waitFrames(page, 6);
-      const afterExit = await page.evaluate(() => ({
-        active: window.WsOverview.active(),
-        hasAttr: document.documentElement.hasAttribute('data-overview'),
-        key: window.WsBoardAnchor.key(),
-        motionTagged: window.__motionTagged
-      }));
+      const afterExit = await page.evaluate(() => {
+        const card = document.getElementById('topic-6');
+        const topStack = document.querySelector('.wb-rail-wrap.up .wb-rail-stack');
+        const topBot = topStack && !topStack.hidden ? topStack.getBoundingClientRect().bottom : 0;
+        return {
+          active: window.WsOverview.active(),
+          hasAttr: document.documentElement.hasAttribute('data-overview'),
+          key: window.WsBoardAnchor.key(),
+          motionTagged: window.__motionTagged,
+          topDelta: +(card.getBoundingClientRect().top - topBot).toFixed(2)
+        };
+      });
       assert.equal(afterExit.active, false);
       assert.equal(afterExit.hasAttr, false);
       assert.equal(afterExit.key, 't:topic-6');
       assert.equal(afterExit.motionTagged, 0, 'snap-deck Overview exit must never tag cards with data-overview-motion');
+      assert.ok(Math.abs(afterExit.topDelta) <= 2, 'non-first card must land with 0px misalignment after fast Overview exit: ' + JSON.stringify(afterExit));
     } finally {
       await ctx.close();
     }
@@ -375,15 +400,19 @@ test('Part 4: assertSheetAboveScrim across #bcol & #bgal, wide & narrow, standal
       await waitFrames(page, 3);
 
       // #bcol details.entry-panel[data-max] + explicit data-has-panel-max lifecycle
+      // Set inline translate: 0px on .r-board beforehand (as gallery pull does) to verify :root[data-board-max] clears it!
+      await page.evaluate(() => { document.querySelector('.r-board').style.translate = '0px'; });
       await page.click('#topic-0 details.entry-panel .d-max');
       await waitFrames(page, 3);
       const hostFlagsOn = await page.evaluate(() => ({
         topic: document.getElementById('topic-0').hasAttribute('data-has-panel-max'),
-        body: document.querySelector('#topic-0 > .tbody').hasAttribute('data-has-panel-max')
+        body: document.querySelector('#topic-0 > .tbody').hasAttribute('data-has-panel-max'),
+        boardTranslate: getComputedStyle(document.querySelector('.r-board')).translate
       }));
-      assert.deepEqual(hostFlagsOn, { topic: true, body: true }, 'data-has-panel-max must be set on topic + body child');
+      assert.deepEqual(hostFlagsOn, { topic: true, body: true, boardTranslate: 'none' }, 'data-has-panel-max must be set on topic + body child and .r-board translate cleared');
       await assertSheetAboveScrim(page, 'details.entry-panel[data-max]', 'wide #bcol details.entry-panel[data-max]');
       await page.click('#topic-0 details.entry-panel .d-min');
+      await page.evaluate(() => { document.querySelector('.r-board').style.translate = ''; });
       await waitFrames(page, 3);
       const hostFlagsOff = await page.evaluate(() => ({
         topic: document.getElementById('topic-0').hasAttribute('data-has-panel-max'),
@@ -443,27 +472,68 @@ test('Part 4: assertSheetAboveScrim across #bcol & #bgal, wide & narrow, standal
       await page.click('.bgal section.topic[data-topic="topic-1"] > .tophead .d-max', { timeout: 4000 });
       await waitFrames(page, 3);
       await assertSheetAboveScrim(page, '.bgal section.topic[data-max]', 'narrow .bgal section.topic[data-max]');
+      // Verify data-gal="drag" and wide sticky (.dash.board) stacking contexts too
+      await page.evaluate(() => { document.documentElement.setAttribute('data-gal', 'drag'); });
+      await waitFrames(page, 2);
+      await assertSheetAboveScrim(page, '.bgal section.topic[data-max]', 'drag .bgal section.topic[data-max]');
+      await page.setViewportSize({ width: 1920, height: 900 });
+      await page.evaluate(() => {
+        document.body.classList.remove('live');
+        document.body.classList.add('board');
+        document.documentElement.setAttribute('data-gal', 'col');
+      });
+      await waitFrames(page, 2);
+      await assertSheetAboveScrim(page, '.bgal section.topic[data-max]', 'wide sticky .bgal section.topic[data-max]');
+      await page.evaluate(() => {
+        document.body.classList.remove('board');
+        document.body.classList.add('live');
+        document.documentElement.setAttribute('data-gal', 'narrow');
+      });
+      await page.setViewportSize({ width: 900, height: 800 });
+      await waitFrames(page, 2);
       await page.click('.bgal section.topic[data-topic="topic-1"] > .tophead .d-min', { timeout: 4000 });
       await waitFrames(page, 3);
 
       await page.click('.bgal section.topic[data-topic="topic-1"] details.entry-panel .d-max', { timeout: 4000 });
       await waitFrames(page, 3);
       await assertSheetAboveScrim(page, '.bgal details.entry-panel[data-max]', 'narrow .bgal details.entry-panel[data-max]');
+      // Verify .wb-chg-hit pointer-events inside dimmed vs maximized .bgal
+      const chgPE = await page.evaluate(() => {
+        const gal = document.querySelector('.bgal');
+        const dimmedHit = document.createElement('div');
+        dimmedHit.className = 'wb-chg-hit';
+        gal.querySelector('.gal-rail').appendChild(dimmedHit);
+        const maxHit = document.createElement('div');
+        maxHit.className = 'wb-chg-hit';
+        gal.querySelector('[data-max]').appendChild(maxHit);
+        const res = {
+          dimmed: getComputedStyle(dimmedHit).pointerEvents,
+          maximized: getComputedStyle(maxHit).pointerEvents
+        };
+        dimmedHit.remove();
+        maxHit.remove();
+        return res;
+      });
+      assert.deepEqual(chgPE, { dimmed: 'none', maximized: 'auto' }, '.wb-chg-hit must be disabled in dimmed .bgal and enabled inside [data-max]');
       await page.click('.bgal section.topic[data-topic="topic-1"] details.entry-panel .d-min', { timeout: 4000 });
       await waitFrames(page, 3);
     } finally {
       await ctx.close();
     }
 
-    // 2. Shell iframe host: verify maximize inside an embedded iframe
+    // 2. Shell iframe host (data-shell outer + data-frame inner): verify maximize inside an embedded iframe
     const { ctx: shellCtx, page: shellPage } = await (async () => {
       const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const p = await c.newPage();
       p.on('pageerror', err => { throw err; });
-      await p.setContent('<!doctype html><html><body style="margin:0;height:100vh"><iframe id="dash" style="width:100%;height:100%;border:0"></iframe></body></html>');
+      await p.setContent(
+        '<!doctype html><html data-shell data-fdim><head><style>' +
+        readAssetSource('wsdashboard', 'dashboard-shell.css') +
+        '</style></head><body style="margin:0;height:100vh"><div class="frames"><iframe id="dash" class="on"></iframe></div></body></html>'
+      );
       const frame = p.frameLocator('#dash');
       const childFrame = p.frames()[1];
-      await childFrame.setContent(buildFixtureHtml({ topics: 4, theme: 'dark' }), { waitUntil: 'load' });
+      await childFrame.setContent(buildFixtureHtml({ topics: 4, theme: 'dark', framed: true }), { waitUntil: 'load' });
       for (const content of buildScripts()) await childFrame.addScriptTag({ content });
       await waitFrames(childFrame, 8);
       return { ctx: c, page: childFrame, frame };

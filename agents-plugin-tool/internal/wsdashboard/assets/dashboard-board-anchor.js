@@ -13,7 +13,7 @@
   var ANCHOR_BOT_0 = 6, ANCHOR_BOT_1 = 27, ANCHOR_BOT_2 = 47, ANCHOR_CARD_GAP_EXTRA = 12;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, last: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorFaceEl = null, anchorReplyEl = null;
-  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [];
+  var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
   var anchorProg = null, anchorProgSeq = 0, anchorGlideAnim = null, anchorWheelCtrl = null;
   var WHEEL_DEFAULTS = {
     threshold: 52,
@@ -54,8 +54,9 @@
     function step(ev) {
       if (!ev) return { action: "ignore" };
       var dy = +ev.dy || 0, dx = +ev.dx || 0;
-      if (ev.deltaMode === 1) dy *= 40;
-      else if (ev.deltaMode === 2) dy *= 800;
+      var scale = ev.deltaMode === 1 ? 40 : ev.deltaMode === 2 ? 800 : 1;
+      dy *= scale;
+      dx *= scale;
       if (!dy || Math.abs(dy) < 0.01) return { action: "ignore" };
       if (Math.abs(dx) > Math.abs(dy) * 1.15) return { action: "ignore" };
       var now = typeof ev.now === "number" ? ev.now : Date.now();
@@ -365,6 +366,10 @@
       if (!node.getAttribute || node.getAttribute("data-anchor-bot") !== val) node.setAttribute("data-anchor-bot", val);
     });
     anchorBotNodes = nextBots;
+    var lastNode = cards.length ? cards[cards.length - 1] : null;
+    if (anchorLastNode && anchorLastNode !== lastNode) anchorLastNode.removeAttribute("data-anchor-last");
+    if (lastNode && (!lastNode.getAttribute || lastNode.getAttribute("data-anchor-last") !== "1")) lastNode.setAttribute("data-anchor-last", "1");
+    anchorLastNode = lastNode;
   }
   function anchorSettle(before) {
     var list = anchorCards(), n = anchorNode(anchorKey);
@@ -573,7 +578,7 @@
   function anchorOnWheel(e) {
     if (e.defaultPrevented || e.ctrlKey) return;
     var t = e.target;
-    if (t && t.closest && t.closest(WHEEL_OWN)) return;
+    if (t && t.closest && (t.closest(WHEEL_OWN) || t.closest(".tpop, [popover]:popover-open, dialog[open]"))) return;
     var card = t && t.closest ? t.closest("section.topic[data-topic], .bcard[data-card]") : null;
     anchorHandleWheel(t, card, e.deltaY, e.deltaX, e.deltaMode, function () { e.preventDefault(); });
   }

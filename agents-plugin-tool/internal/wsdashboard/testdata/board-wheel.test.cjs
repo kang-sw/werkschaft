@@ -125,6 +125,9 @@ test('discrete mouse wheel commits immediately on first notch', () => {
 test('deck boundaries return edge without committing; horizontal gestures are ignored', () => {
   const { ctrl } = makeWheel();
   assert.equal(ctrl.step({ dy: 4, dx: 20, deltaMode: 0, now: 1000, canInnerScroll: false, atFirst: false, atLast: false }).action, 'ignore');
+  // Line-mode horizontal wheel must scale dx by deltaMode alongside dy
+  assert.equal(ctrl.step({ dy: 1, dx: 2, deltaMode: 1, now: 1050, canInnerScroll: false, atFirst: false, atLast: false }).action, 'ignore');
+  assert.equal(ctrl.step({ dy: 1, dx: 2, deltaMode: 2, now: 1060, canInnerScroll: false, atFirst: false, atLast: false }).action, 'ignore');
   const topEdge = ctrl.step({ dy: -60, dx: 0, deltaMode: 0, now: 1100, canInnerScroll: false, atFirst: true, atLast: false });
   assert.equal(topEdge.action, 'edge');
   assert.equal(topEdge.dir, -1);

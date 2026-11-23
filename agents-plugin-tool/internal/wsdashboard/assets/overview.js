@@ -249,12 +249,13 @@
       var targetFast = landedFast || restore || items()[0] || null;
       o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "false");
       save(); changed();
+      if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
       if (targetFast) window.WsBoardAnchor.select(targetFast, { keep: true, still: false, smooth: false });
       else keep(o.toolbar, entry.offset);
       if (targetFast && !calm() && targetFast.animate) {
         try {
           targetFast.animate(
-            [{ transform: "translate3d(0,12px,0)", opacity: 0.72 }, { transform: "translate3d(0,0,0)", opacity: 1 }],
+            [{ opacity: 0.86 }, { opacity: 1 }],
             { duration: 160, easing: "cubic-bezier(.22, 1, .36, 1)", fill: "none" }
           );
         } catch (e) {}
@@ -264,7 +265,6 @@
         if (!(options && options.keep)) { landedFast.setAttribute("tabindex", "-1"); landedFast.focus({ preventScroll: true }); }
       } else if (!(options && options.keep)) o.toolbar.querySelector(".board-overview").focus({ preventScroll: true });
       all(".overview-here", o.board).forEach(function (x) { x.classList.remove("overview-here"); });
-      if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
       var colEl = doc.getElementById("bcol");
       if (colEl) colEl.dispatchEvent(new Event("scroll"));
       finish();
