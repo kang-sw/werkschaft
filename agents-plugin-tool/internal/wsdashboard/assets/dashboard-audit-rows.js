@@ -1,5 +1,9 @@
   // --- audit view phase 2: hidden-event rows, (607)/(681) UTC paging, keys ---
   var AU_EVENT_PAGE_LIMIT = 200;
+  // One interval fetch reads at most this many pages, newest first; a fetch
+  // with no lower bound reads one. The rows follow the loaded history, not the
+  // whole audit store, so a capped fetch reports the floor it reached.
+  var AU_MAX_INTERVAL_PAGES = 10;
   var AU_HIDDEN_KINDS = [
     { kind: "thinking", i18n: "js.audit.kind.thinking" },
     { kind: "hook", i18n: "js.audit.kind.hook" },
@@ -91,6 +95,9 @@
     });
     var attached = Object.create(null);
     var standalone = [];
+    // The harness repeats its init once per turn: only the oldest loaded
+    // session-start event is the banner, later ones are ordinary system rows.
+    var bannerSeen = false;
     for (var i = 0; i < sorted.length; i++) {
       var ev = sorted[i];
       if (ev.call_id && renderedCallIds && renderedCallIds[ev.call_id]) {
@@ -99,7 +106,8 @@
         continue;
       }
       var evAt = auParseRFC3339Ns(ev.at);
-      var sysStart = auIsSessionStartEvent(ev);
+      var sysStart = !bannerSeen && auIsSessionStartEvent(ev);
+      if (sysStart) bannerSeen = true;
       var idx = parsedEntries.length;
       if (evAt) {
         for (var j = 0; j < parsedEntries.length; j++) {
@@ -124,12 +132,21 @@
     { kind: "system", i18n: "js.audit.kind.system" },
     { kind: "thinking", i18n: "js.audit.kind.thinking" },
     { kind: "hook", i18n: "js.audit.kind.hook" },
-    { kind: "system_reminder", i18n: "js.audit.kind.reminder" }
+    { kind: "system_reminder", i18n: "js.audit.kind.reminder" },
+    { kind: "subagent", i18n: "js.audit.kind.subagent" }
   ];
 
   function auIsRunKind(kind) {
     for (var i = 0; i < AU_RUN_KINDS.length; i++) if (AU_RUN_KINDS[i].kind === kind) return true;
     return false;
+  }
+
+  // The fold kind of an event, or "": the run kinds, plus a subagent's task
+  // lifecycle rows (its own text and tool rows are content and stay visible).
+  function auRunKindOf(ev) {
+    if (!ev) return "";
+    if (ev.kind === "subagent") return String(ev.subkind || "").indexOf("task_") === 0 ? "subagent" : "";
+    return auIsRunKind(ev.kind) ? ev.kind : "";
   }
 
   // "System 4 · Thinking 1" for rows given as kind strings, in fixed kind order
@@ -206,6 +223,8 @@
       el.className = (sysStart ? "au-sysrow " : "au-hid ") + (inner ? "au-inner " : "") + kindClass;
       el.setAttribute("data-event-id", ev.id);
       el.setAttribute("data-kind", ev.kind);
+      var runKind = sysStart ? "" : auRunKindOf(ev);
+      if (runKind) el.setAttribute("data-run", runKind);
       if (ev.at) el.setAttribute("data-at", ev.at);
       if (ev.call_id) el.setAttribute("data-call-ref", ev.call_id);
       el.tabIndex = 0;
@@ -252,7 +271,7 @@
     }
 
     function auIsRunRow(el) {
-      return el.classList.contains("au-hid") && auIsRunKind(el.getAttribute("data-kind"));
+      return el.classList.contains("au-hid") && !!el.getAttribute("data-run");
     }
 
     // Patches by key: an existing summary is reused and only its label text,
@@ -289,7 +308,7 @@
         for (var i = 0; i < rows.length; i++) {
           var eid = rows[i].getAttribute("data-event-id");
           if (eid && auExpandedRows[eid]) expanded = true;
-          kinds.push(rows[i].getAttribute("data-kind"));
+          kinds.push(rows[i].getAttribute("data-run"));
         }
         if (!sum) {
           sum = doc.createElement(tag);
@@ -386,7 +405,7 @@
         var sev = item.event;
         kept[sev.id] = true;
         var snode = existing[sev.id];
-        if (!snode || snode.tagName === "LI" || snode.classList.contains("au-inner")) {
+        if (!snode || snode.tagName === "LI" || snode.classList.contains("au-inner") || snode.classList.contains("au-sysrow") !== !!item.sysStart) {
           if (snode && snode.parentNode) snode.parentNode.removeChild(snode);
           snode = auBuildRowNode(sev, false, item.sysStart);
         }
@@ -434,11 +453,16 @@
       return "/s/" + encodeURIComponent(auRowsRid) + "/audit/events?" + qs.join("&");
     }
 
+    // since <= at < until, newest page first, bounded: a capped result is ok
+    // with capped=true and floor = the oldest fetched event's time, so the
+    // caller claims coverage only down to there.
     function auFetchInterval(since, until, updateLatestAfter) {
       if (!auRowsRid || !window.fetch) return Promise.resolve({ ok: false });
       var before = "";
       var restarted = false;
       var anyAdded = false;
+      var maxPages = since ? AU_MAX_INTERVAL_PAGES : 1;
+      var pages = 0, floor = "";
       var epoch = auEpoch, candidateAfter = "";
       function step() {
         if (epoch !== auEpoch) return Promise.resolve({ ok: false });
@@ -458,19 +482,29 @@
           return r.json();
         }).then(function (page) {
           if (epoch !== auEpoch) return { ok: false };
-          if (page && page.restart) return step();
-          if (page && Array.isArray(page.events) && auStoreEvents(page.events)) anyAdded = true;
+          if (page && page.restart) { pages = 0; return step(); }
+          pages++;
+          if (page && Array.isArray(page.events) && page.events.length) {
+            if (auStoreEvents(page.events)) anyAdded = true;
+            floor = page.events[0].at || floor;
+          }
           if (updateLatestAfter && !before && page && page.after) candidateAfter = page.after;
-          if (!page || page.end || !page.before) {
+          var more = page && !page.end && page.before;
+          if (!more || pages >= maxPages) {
             if (candidateAfter) auLatestAfter = candidateAfter;
             if (anyAdded) auReconcileRows();
-            return { ok: true, page: page, epoch: epoch };
+            return { ok: true, page: page, epoch: epoch, capped: !!more, floor: more ? floor : "" };
           }
           before = page.before;
           return step();
         });
       }
       return step();
+    }
+
+    // The lower bound a fetch of `wanted` actually covers.
+    function auCoveredFrom(res, wanted) {
+      return res && res.capped && res.floor && auCmpStrNs(res.floor, wanted) > 0 ? res.floor : wanted;
     }
 
     function auRefreshLatestAfter() {
@@ -548,7 +582,8 @@
         auEnqueue(function () {
           return auFetchInterval(oldest, "", true).then(function (res) {
             if (res && res.ok && res.epoch === auEpoch) {
-              if (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0) auCoveredSince = oldest;
+              var cov = auCoveredFrom(res, oldest);
+              if (!auCoveredSince || auCmpStrNs(cov, auCoveredSince) < 0) auCoveredSince = cov;
             }
           });
         });
@@ -580,18 +615,19 @@
         if (oldest && auCoveredSince && auCmpStrNs(oldest, auCoveredSince) < 0) {
           var prevUpper = auCoveredSince;
           p = auFetchInterval(oldest, prevUpper, false).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = auCoveredFrom(res, oldest);
             return res;
           });
         } else if (oldest && !auCoveredSince) {
           p = auFetchInterval(oldest, "", true).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = auCoveredFrom(res, oldest);
             return res;
           });
         }
         if (d.end && oldest && !auOpenBelowDone) {
           p = p.then(function (res) {
-            if (pageEpoch !== auEpoch || !res || !res.ok) return;
+            // A capped span leaves a gap above `oldest`; rows below it wait.
+            if (pageEpoch !== auEpoch || !res || !res.ok || res.capped) return;
             return auFetchInterval("", oldest, false).then(function (res) {
               if (res && res.ok && res.epoch === auEpoch) auOpenBelowDone = true;
             });
@@ -614,7 +650,10 @@
         if (auLatestAfter) return auRefreshLatestAfter();
         if (!d.empty && oldest) {
           return auFetchInterval(auCoveredSince || oldest, "", true).then(function (res) {
-            if (res && res.ok && res.epoch === auEpoch && (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0)) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) {
+              var cov = auCoveredFrom(res, oldest);
+              if (!auCoveredSince || auCmpStrNs(cov, auCoveredSince) < 0) auCoveredSince = cov;
+            }
           });
         }
         if (d.empty && !oldest) {
