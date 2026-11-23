@@ -413,7 +413,14 @@
       "registered_at": "2026-11-15T02:27:46Z"
     },
     "261115-bug-ws-pi-bootstrap-elides-undelivered-manual": {
-      "registered_at": "2026-11-14T15:17:10Z"
+      "registered_at": "2026-11-14T15:17:10Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "track/harness",
+        "phase": "closed",
+        "touched_at": "2026-11-23T20:36:20Z"
+      }
     },
     "261115-bug-ws-selection-note-repeated-click-chip-count": {
       "registered_at": "2026-11-14T15:49:56Z"
