@@ -52,7 +52,7 @@ function fixture(scrollerCount, nodesPerScroller, warm) {
   window.wbHistory = { keep: kit.keep, snapshot: kit.snapshot, rendered: kit.rendered, own: kit.own };
   if (warm) { scrollers.forEach(function (s) { kit.keep(s.children && nodes.find(n => n.parentElement.parentElement === s), {}).end(); }); }
   const boardKeep = vm.runInContext('(function(){' + keepSource + '\nreturn boardKeep;})()', Object.assign(context, { boardBoxes() { return []; } }));
-  return { stat, nodes, scrollers, boardKeep, write };
+  return { stat, nodes, scrollers, boardKeep, write, window };
 }
 
 function measure(scrollerCount, nodesPerScroller, warm) {
@@ -71,8 +71,27 @@ test('boardKeep message capture: layout-forcing reads after a DOM write', () => 
   // 156 probes, warm 1 flush / 156 probes. Owners are now created together
   // before any capture read, and each node's visibility and each scroller are
   // probed once per pass instead of per call.
-  assert.ok(cold.flushes <= 2, 'cold flushes ' + cold.flushes + ' (was 7)');
-  assert.ok(warm.flushes <= 1, 'warm flushes ' + warm.flushes);
-  assert.ok(cold.probes <= 140, 'cold probes ' + cold.probes + ' (was 156)');
-  assert.ok(warm.probes <= 140, 'warm probes ' + warm.probes + ' (was 156)');
+  assert.ok(cold.flushes < 7 && cold.flushes <= 2, 'cold flushes ' + cold.flushes + ' (was 7)');
+  assert.equal(warm.flushes, 1, 'warm flushes: only the swap write forces layout');
+  assert.ok(cold.probes <= 132, 'cold probes ' + cold.probes + ' (was 156)');
+  assert.ok(warm.probes <= 132, 'warm probes ' + warm.probes + ' (was 156)');
+});
+
+test('boardKeep keeps parity: one capture per scroller, hidden nodes skipped, owners first, fallback without own', () => {
+  const f = fixture(3, 4, false);
+  const hidden = f.nodes[1]; hidden.checkVisibility = () => false;
+  const order = [];
+  const w = f.window.wbHistory, keep = w.keep, own = w.own;
+  w.own = function (list) { order.push('own:' + list.length); return own(list); };
+  w.keep = function (n, opt) { if (!(opt && opt.capture === false)) order.push('keep'); return keep(n, opt); };
+  const kept = f.boardKeep(f.nodes);
+  assert.deepEqual(order, ['own:3', 'keep', 'keep', 'keep'], 'owners are created before the first capture, one capture per scroller');
+  assert.equal(kept.scroller(f.nodes[0]), f.scrollers[0]);
+  assert.equal(kept.scroller(f.nodes[5]), f.scrollers[1]);
+  assert.equal(kept.scroller(hidden), undefined, 'a non-rendered node is not resolved');
+  const g = fixture(2, 2, false); delete g.window.wbHistory.own;
+  const calls = []; const gkeep = g.window.wbHistory.keep;
+  g.window.wbHistory.keep = function (n, opt) { calls.push(!!(opt && opt.scroller)); return gkeep(n, opt); };
+  assert.ok(g.boardKeep(g.nodes), 'works without own');
+  assert.equal(calls.filter(Boolean).length, 2);
 });

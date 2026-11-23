@@ -1107,6 +1107,8 @@
   // A staging pass reads exposure through one wbHistory.snapshot: nothing
   // writes the DOM inside it, so each scroller's viewport (a scan of every
   // sticky head) is measured once rather than once per node checked.
+  // The snapshot also freezes rendered() per node for the pass, so nothing
+  // inside may hide a node or toggle a details.
   function boardWithSnap(fn) {
     var outer = boardSnap, w = window.wbHistory;
     if (!outer && w && w.snapshot) boardSnap = w.snapshot();
