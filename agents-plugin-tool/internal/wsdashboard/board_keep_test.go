@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// The dashboard consumes short owner transactions without selecting another
-// reference after the morph, and never numerically restores an owned scroller.
+// The board swap captures only inner scrollers (docked panes and the current
+// card), applies them once after the morph, then settles the card anchor; it
+// never numerically restores an owned scroller.
 func TestBoardKeepWiring(t *testing.T) {
 	data, err := dashboardTestAsset("assets/dashboard.js")
 	if err != nil {
@@ -17,14 +18,15 @@ func TestBoardKeepWiring(t *testing.T) {
 	swap := dashboardFuncs(t, "swap")
 	order := []string{
 		"html = boardStageInput(boardLatest.html || html);",
+		"var anchored = board ? anchorCards() : null;",
 		"var kept = board ? boardKeep() : null",
-		"ins = morphBoard(el, html, boardFrozen, boardPagedEdits);",
-		"boardPagedEdits = [];",
+		"ins = morphBoard(el, html);",
 		"window.wbHistory.sweep();",
 		"window.wbHistory.restore(n, history);",
 		"watchBoard(n);",
 		"restoreScroll(scroll);",
 		"if (kept) kept.h.apply();",
+		"anchorSettle(anchored);",
 	}
 	at := 0
 	for _, s := range order {
@@ -60,7 +62,7 @@ func TestBoardKeepWiring(t *testing.T) {
 }
 
 func TestBoardKeepUnderNode(t *testing.T) {
-	src := dashboardFuncs(t, "boardKeep", "watchBoard", "boardViewedExposure") + dashboardJSBlock(t, "\n  var scrollRestore =", "\n  [\"wheel\"")
+	src := dashboardFuncs(t, "boardKeep", "watchBoard") + dashboardJSBlock(t, "\n  var scrollRestore =", "\n  [\"wheel\"")
 	runNode(t, "board owner captures", animationFrameHarness+`
 var bad = [], log = [], owned = null, convo = null, stick = false;
 function check(what, ok) { if (!ok) bad.push(what); }
@@ -75,7 +77,12 @@ var window = {wbHistory:{
  watch:function(n){log.push("watch:"+n.name);return {};},
  keeping:function(n){return n===owned ? {} : null;}
 }};
-function boardBoxes(){return [{firstElementChild:a},{firstElementChild:b}];}
+var inner = {name:"card", scroller:{scrollTop:1, wbScrollOwner:true}}, cardEl = {firstElementChild:inner}, mainBox = {contains:function(n){return n===inner || n===other2;}};
+var other2 = {name:"other-card"}, cur = cardEl;
+function region(){return mainBox;}
+function anchorCurrent(){return cur;}
+function anchorOwner(n){return n===inner ? cardEl : null;}
+function boardBoxes(){return [mainBox,{firstElementChild:a},{firstElementChild:b}];}
 function q(sel,root){return root.kids || [];}
 `+src+`
 var kept = boardKeep([a,b,c]);
@@ -83,7 +90,9 @@ check("pre-capture every actual scroller once",log.join() === "capture:a,capture
 kept.h.apply();
 check("both independent captures apply once",log.join() === "capture:a,capture:b,apply:a,apply:b");
 log=[]; boardKeep().h.end();
-check("all boardBoxes participate",log.join() === "capture:a,capture:b,end:a,end:b");
+check("docked panes and the current card participate; the main board does not",log.join() === "capture:a,capture:b,capture:card,end:a,end:b,end:card");
+log=[]; boardKeep([other2]);
+check("a node of another board card is not captured",log.length === 0);
 var section={name:"topic",nodeType:1,matches:function(){return true;}};
 log=[];watchBoard(section);watchBoard(section);
 check("watch once",log.join() === "watch:topic");
