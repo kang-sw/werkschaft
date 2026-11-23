@@ -12,8 +12,8 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-// Each package (ws, wsflow, Pi) ships a "dashboard."-namespace manifest beside
-// its own manifest and lists both in WS_MCP_CONFIG_MANIFESTS. The three
+// Each package (ws and wsflow) ships a "dashboard."-namespace manifest beside
+// its own manifest and lists both in WS_MCP_CONFIG_MANIFESTS. Both
 // declare the same keys and may differ only in dashboard.enabled's default (today every package defaults it on).
 
 var dashboardPackages = []struct {
@@ -24,7 +24,6 @@ var dashboardPackages = []struct {
 }{
 	{"ws", claudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin", "dashboard-config-manifest.json"), true},
 	{"wsflow", wsflowClaudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin-wsflow", "dashboard-config-manifest.json"), true},
-	{"pi", filepath.Join("..", "..", "..", "agents-plugin-pi", "config-manifest.json"), filepath.Join("..", "..", "..", "agents-plugin-pi", "dashboard-config-manifest.json"), true},
 }
 
 // perPackageDefault is a dashboard key whose default differs by package.

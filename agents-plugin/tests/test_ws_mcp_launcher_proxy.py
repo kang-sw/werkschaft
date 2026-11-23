@@ -968,7 +968,7 @@ class LauncherProxyTest(unittest.TestCase):
             self.assertTrue(ended.wait(2))
 
     def test_mailbox_wait_success_reaches_the_caller_as_exit_zero(self):
-        # A wait that a mail wakes exits 0; the mod and the Pi waiter treat
+        # A wait that a mail wakes exits 0; the mod treats
         # any code but 0 and 3 as an error and never push the mail. A final
         # frame with the code written out, and one from a daemon that
         # omitted the zero, both read as success.

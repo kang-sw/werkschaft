@@ -32,18 +32,6 @@ Before editing any full ws lead skill or shared lead playbook:
    verification, or the exclusion rationale need updates.
 5. Keep wsflow distributed text non-ws-aware. Users should see wsflow names,
    wsflow skill invocations, and wsflow MCP notation.
-6. Any change under `agents-plugin/rsrc/`, `skills/`, or `hooks/`, or to a
-   config manifest (`config-manifest.json`, `agy-config-manifest.json`,
-   `dashboard-config-manifest.json`, in either package), also regenerates the
-   Pi archives in the same push:
-   `python3 agents-plugin-pi/scripts/prepare-workflow-bundles.py` and
-   `python3 agents-plugin-pi/scripts/prepare-native-payload.py --first-party-only`,
-   output staged with the change. A change under `agents-plugin/rsrc/` first
-   resyncs the Pi rsrc mirror (`rsync -a --delete agents-plugin/rsrc/
-   agents-plugin-pi/rsrc/`; `TestPiMirrorUpToDate` guards it). The `wsrsrc`
-   mirror tests pass without the archives; `TestPiGeneratedBundlesMatchTheirSources`
-   (in `internal/wsagent`) and CI's workflow bundle freshness step catch a stale
-   archive.
 
 ## Shipped wsflow Skills
 
@@ -116,17 +104,16 @@ drift, and it is the one exception to "wsflow ships no wsflow-only skills":
 - Wrap a shim's `# Title` heading and own-playbook read prose in a
   `<ws-preload playbook="<lead-name>">` ... `</ws-preload>` block, in both
   packages; the heading must match the playbook's own first heading, which
-  replaces it. The Claude mod and the Pi adapter replace the block with that
-  playbook's body when the skill is expanded for the model (only for their own
-  plugin's skills, only while holding a ws session key), or with a pointer
+  replaces it. The Claude mod replaces the block with that
+  playbook's body when the skill is expanded for the model (for its own
+  plugin's skills while holding a ws session key), or with a pointer
   when an identical copy of that playbook is already visible; anywhere else
   the block stays and the prose inside is the fallback. The attribute must
   name the shim's own skill, or the block stays a model read. No block:
   `lead-revive` (inline) and the `lead-proceed` alias (it reads another
   skill's playbook). `lead-use-mailbox` has a block although its playbook
   body carries a key-specific wait command: the Claude mod replaces every
-  occurrence of the key in an expanded body with `<your key>`, and Pi keeps
-  its own exclusion and passes the block through. Both packages' skill tests
+  occurrence of the key in an expanded body with `<your key>`. Both packages' skill tests
   pin this (`EXPECTED_PRELOAD_EXCLUDED`, now empty, here). The tag
   keeps its `ws-` name in wsflow: it is the shared mod's marker contract, and
   it matches none of the forbidden patterns below.

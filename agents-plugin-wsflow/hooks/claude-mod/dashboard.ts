@@ -554,13 +554,11 @@ export function contextTokensOf(t: TokenUsage): number {
 }
 
 /**
- * One agent's output decode rate (tokens per second), following the Pi
- * adapter's output-rate tracker on its branch for usage without a reasoning
- * breakdown (Claude reports none): per model request, every output token over the
- * summed span of every content block (text, thinking, a tool call with its
- * argument chunks), so latency before the first block and gaps between blocks
- * never count; token-weighted over the last OUTPUT_RATE_WINDOW eligible
- * requests, the window starting over when the answering model changes.
+ * One agent's output decode rate (tokens per second). For each model
+ * request, divide all output tokens by the summed span of its text, thinking,
+ * and tool-call content blocks. Latency before or between blocks is excluded.
+ * The rate is token-weighted across the last OUTPUT_RATE_WINDOW eligible
+ * requests. The window starts over when the answering model changes.
  *
  * The hooks stream chunks but no block start or end, so a block's span is
  * estimated from its first and last chunk's arrival. That leaves out the

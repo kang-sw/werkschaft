@@ -226,12 +226,8 @@ func TestAgentMCPSelectedPackageNeedsNoInstalledCopy(t *testing.T) {
 // expose and validate agy.model_wait_retries and agy.model_wait_timeout_seconds
 // from their own package manifests.
 func TestSharedDaemonExposesAgyTuneRegardlessOfStarterHarness(t *testing.T) {
-	// Simulate a daemon started by Pi (two manifests, no agy manifest).
-	piRoot, err := filepath.Abs(filepath.Join("..", "..", "..", "agents-plugin-pi"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("WS_MCP_CONFIG_MANIFESTS", filepath.Join(piRoot, "config-manifest.json")+";"+filepath.Join(piRoot, "dashboard-config-manifest.json"))
+	// Simulate a daemon started with no adapter manifests in its environment.
+	t.Setenv("WS_MCP_CONFIG_MANIFESTS", "")
 	host := &proxyHost{dir: t.TempDir(), logw: io.Discard}
 
 	for _, tc := range []struct {

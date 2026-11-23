@@ -3,7 +3,7 @@ import type { InboxCommand, InboxItem } from './dashboard'
 
 /**
  * Pure mailbox-push controller for the Claude Code mod in register.ts; the
- * Claude counterpart of the pi adapter's mailbox waiter.
+ * Background mailbox waiter for Claude leads.
  *
  * `mailbox wait` only PEEKS: streaming emits JSONL arrivals; the one-shot
  * fallback exits 0 for mail, 3 for timeout, 130 for interruption, or another
@@ -285,7 +285,7 @@ export function nextBackoff(prev: number): number {
   return prev <= 0 ? BACKOFF_MIN_MS : Math.min(prev * 2, BACKOFF_MAX_MS)
 }
 
-/** Map a finished `mailbox wait` child to an outcome (the pi adapter's mapMailboxWaitExit). */
+/** Map a finished `mailbox wait` child to an outcome. */
 export function mapWaitExit(code: number | null, aborted: boolean): WaitOutcome {
   if (aborted) return 'stopped'
   if (code === 0) return 'mail'
@@ -423,7 +423,7 @@ export function recvResultMail(text: string | undefined): DrainedMail[] {
 
 const field = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
-/** One envelope as the pi adapter frames it: `mail from <handle> (<sent_at>):` then the body. */
+/** One envelope as the mailbox frames it: `mail from <handle> (<sent_at>):` then the body. */
 export function formatEnvelope(m: DrainedMail): string {
   if (!('content' in m)) return `unparsed mailbox recv output:\n${m.raw}`
   const handle = field(m.from) || field(m.reply_to) || field(m.label) || 'unknown'

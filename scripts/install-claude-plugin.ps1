@@ -50,24 +50,21 @@ function Invoke-Py([string]$Code, [string[]]$PyArgs) {
     if ($LASTEXITCODE -ne 0) { throw "python3 step failed (exit $LASTEXITCODE)" }
 }
 
-# --- 1-2. validate, stage snapshot + marketplace, then publish -----------------
+# --- 1-2. stage snapshot + marketplace, then publish -----------------
 Info 'Syncing ws plugin snapshot and marketplace...'
 $snapshotCode = @'
-import json, shutil, subprocess, sys, tempfile
+import json, shutil, sys, tempfile
 from pathlib import Path
 
 repo, cache = map(Path, sys.argv[1:3])
 go = sys.argv[3]
 source = repo / "agents-plugin"
-helper = source / "bin/ws-pi-payload.py"
-subprocess.run([sys.executable, str(helper), "--plugin", str(source), "--check-source", str(repo), "--allow-stale-source"], check=True)
 cache.parent.mkdir(parents=True, exist_ok=True)
 stage = Path(tempfile.mkdtemp(prefix=".ws-snapshot-", dir=cache.parent))
 backup = stage / "previous"
 try:
     shutil.copytree(source, stage / "ws")
-    subprocess.run([sys.executable, str(stage / "ws/bin/ws-pi-payload.py"), "--plugin", str(stage / "ws")], check=True)
-    # Deliberate ws-only dogfood marker, never part of the native archive.
+    # Local dogfood marker for the ws snapshot.
     (stage / "ws/.local-devenv-runtime").write_bytes((json.dumps({
         "schema_version": 1, "source_root": str(repo),
         "tool_dir": str(repo / "agents-plugin-tool"), "go": go,
