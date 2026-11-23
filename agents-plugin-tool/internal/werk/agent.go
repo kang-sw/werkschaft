@@ -65,6 +65,8 @@ type Config struct {
 	// Instructions is the instruction text composed for the session, added to
 	// the harness's own preamble.
 	Instructions string
+	Skills       []Skill
+	Approve      func(context.Context, string, json.RawMessage) error
 	Endpoint     Responder
 	WS           WSTools
 	RecoverExec  func(context.Context, string) (string, error)
@@ -154,28 +156,32 @@ type toolEntry struct {
 
 // Agent is one session's loop.
 type Agent struct {
-	cfg   Config
-	store *Store
-	log   *writer
-	out   *emitter
-	now   func() time.Time
+	cfg           Config
+	store         *Store
+	log           *writer
+	out           *emitter
+	now           func() time.Time
+	skills        map[string]Skill
+	skillPrompt   string
+	leadAuthority atomic.Pointer[Authority]
 
 	mutationMu   sync.Mutex
 	mutationCall *activeMutationCall
 
-	mu         sync.Mutex
-	model      string
-	effort     string
-	session    string
-	transcript []json.RawMessage
-	steers     []Steer
-	turn       int
-	journal    turnJournal
-	tools      map[string]toolEntry
-	defs       []ToolDef
-	toolsDone  bool
-	resumed    int
-	repaired   int
+	mu             sync.Mutex
+	model          string
+	effort         string
+	session        string
+	transcript     []json.RawMessage
+	steers         []Steer
+	turn           int
+	journal        turnJournal
+	tools          map[string]toolEntry
+	defs           []ToolDef
+	toolsDone      bool
+	toolsAuthority Authority
+	resumed        int
+	repaired       int
 
 	// The last turn's account, for a status ask: whether a turn runs, the
 	// final reply and end of the last one, and the steers it took.
@@ -241,6 +247,11 @@ func New(cfg Config) (*Agent, error) {
 		transcript: items, resumed: len(items),
 		journal: store.turnJournal, turn: store.turnJournal.number,
 	}
+	a.skills = make(map[string]Skill, len(cfg.Skills))
+	for _, skill := range cfg.Skills {
+		a.skills[skill.Name] = skill
+	}
+	a.skillPrompt = skillInstructions(cfg.Skills)
 	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
 		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
 	})
@@ -587,12 +598,17 @@ func (a *Agent) endTurn(turn int, reason, errText string) {
 
 // loop runs model requests and tool calls until the model asks for no more.
 func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durableEnd, error) {
-	if err := a.loadTools(ctx); err != nil {
-		a.out.line(Line{T: LineNotice, Text: "the ws tools are not available: " + err.Error()})
-	}
+	var listed Authority
 	for {
 		if ctx.Err() != nil {
 			return durableEnd{Reason: ReasonAborted}, nil
+		}
+		authority := a.Authority()
+		if authority != listed {
+			listed = authority
+			if err := a.loadTools(ctx); err != nil {
+				a.out.line(Line{T: LineNotice, Text: "the ws tools are not available: " + err.Error()})
+			}
 		}
 		if err := a.takeSteers(turnID); err != nil {
 			return durableEnd{}, err
@@ -623,6 +639,7 @@ func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durabl
 }
 
 type functionCall struct {
+	reask                       bool
 	ID, CallID, Name, Arguments string
 }
 
@@ -825,7 +842,8 @@ func (a *Agent) instructions() string {
 	if a.cfg.Cwd != "" {
 		fmt.Fprintf(&b, "Your working directory is %s. ", a.cfg.Cwd)
 	}
-	switch a.cfg.Authority {
+	authority := a.Authority()
+	switch authority {
 	case AuthorityReadOnly:
 		b.WriteString("Your authority is read-only: you may read and search files but not edit or write them. ")
 	case AuthorityWorkdirWrite:
@@ -833,7 +851,7 @@ func (a *Agent) instructions() string {
 	case AuthorityFull:
 		b.WriteString("Your authority is full. ")
 	}
-	if a.cfg.Authority == AuthorityReadOnly {
+	if authority == AuthorityReadOnly {
 		b.WriteString("You have no shell: read and search files with the file tools.")
 	} else {
 		b.WriteString("Run shell commands with the ws exec tools (exec_shell, exec_run); read and change files with the file tools.")
@@ -842,6 +860,7 @@ func (a *Agent) instructions() string {
 		b.WriteString("\n\n")
 		b.WriteString(t)
 	}
+	b.WriteString(a.skillPrompt)
 	return b.String()
 }
 
@@ -849,7 +868,8 @@ func (a *Agent) instructions() string {
 // on the next turn.
 func (a *Agent) loadTools(ctx context.Context) error {
 	a.mu.Lock()
-	done := a.toolsDone
+	authority := a.Authority()
+	done := a.toolsDone && a.toolsAuthority == authority
 	a.mu.Unlock()
 	if done {
 		return nil
@@ -857,6 +877,10 @@ func (a *Agent) loadTools(ctx context.Context) error {
 	tools := map[string]toolEntry{}
 	var defs []ToolDef
 	var listErr error
+	if len(a.skills) > 0 {
+		tools[loadSkillTool] = toolEntry{readOnly: true}
+		defs = append(defs, skillToolDefinition)
+	}
 	if a.cfg.WS != nil {
 		listed, err := a.cfg.WS.ListTools(ctx)
 		if err != nil {
@@ -867,7 +891,7 @@ func (a *Agent) loadTools(ctx context.Context) error {
 			if _, dup := tools[name]; dup || name == "" {
 				continue
 			}
-			if a.cfg.Authority == AuthorityReadOnly && launchesProcess(name) {
+			if authority == AuthorityReadOnly && (launchesProcess(name) || (a.cfg.Approve != nil && approvalTool(mt.Name) != "")) {
 				continue
 			}
 			tools[name] = toolEntry{ws: mt.Name, readOnly: parallelMCP[name]}
@@ -877,6 +901,7 @@ func (a *Agent) loadTools(ctx context.Context) error {
 	a.mu.Lock()
 	a.tools, a.defs = tools, defs
 	a.toolsDone = listErr == nil
+	a.toolsAuthority = authority
 	a.mu.Unlock()
 	return listErr
 }
@@ -1007,7 +1032,7 @@ func (a *Agent) invokeMutating(ctx context.Context, tools map[string]toolEntry, 
 
 // invoke runs the tool a call names and returns the text the model sees.
 func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functionCall) (string, bool) {
-	if a.cfg.Authority == AuthorityReadOnly && launchesProcess(c.Name) {
+	if a.Authority() == AuthorityReadOnly && launchesProcess(c.Name) {
 		return execLaunchRefusal, true
 	}
 	e, ok := tools[c.Name]
@@ -1021,15 +1046,29 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	if !json.Valid(args) {
 		return "Error: the tool arguments are not valid JSON", true
 	}
+	if c.Name == loadSkillTool && e.ws == "" {
+		return a.loadSkill(args)
+	}
+	correlated, hasCorrelation := a.cfg.WS.(correlatedWSTools)
+	// The hosted launch resolves the program and working directory before
+	// asking the loop for approval. Other effects are gated before dispatch.
+	if !hasCorrelation || canonicalExecLaunch(e.ws) == "" {
+		if err := a.permitMutation(ctx, c, approvalTool(e.ws), args); err != nil {
+			if ctx.Err() != nil {
+				return interruptedOutput, true
+			}
+			return "Error: " + err.Error(), true
+		}
+	}
 	var res CallResult
 	var err error
-	if correlated, ok := a.cfg.WS.(correlatedWSTools); ok {
+	if hasCorrelation {
 		tool := canonicalFileTool(e.ws)
 		if tool == "" {
 			tool = canonicalExecLaunch(e.ws)
 		}
 		if tool != "" {
-			end, err := a.beginMutationCall(ctx, c.CallID, tool, args)
+			end, err := a.beginMutationCall(ctx, c.CallID, tool, args, c.reask)
 			if err != nil {
 				return "Error: " + err.Error(), true
 			}

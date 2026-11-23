@@ -198,19 +198,24 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		}
 		return wsfs.Authority(workerLevel)
 	}
+	_, liveModes := proc.(liveLeadMode)
 	files := &wsfs.FileWriteSession{
 		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),
-		CurrentAuthority: authority,
+		CurrentAuthority: authority, LiveAuthority: rec.Lead && liveModes,
 	}
 	if recorder, ok := proc.(fileCallRecorder); ok && c.r.lifecycle(rec.Backend).FileWriteTools {
 		files.Record = func(ctx context.Context, call wsfs.FileCall) error {
-			if authority() != files.Authority {
+			expected := files.Authority
+			if files.LiveAuthority {
+				expected = call.Authority
+			}
+			if expected == "" || authority() != expected {
 				return errors.New("the file call's session authority changed")
 			}
 			if err := recorder.recordFileCall(ctx, call); err != nil {
 				return err
 			}
-			if authority() != files.Authority {
+			if authority() != expected {
 				return errors.New("the file call's session authority changed")
 			}
 			return nil

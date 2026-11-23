@@ -69,6 +69,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		if req.UserApproved {
 			// The user's own request is this invocation's approval.
 			explicit = true
+		} else if req.ApproveModel != nil && req.BindJob != nil {
+			if err := req.ApproveModel(ctx, call); err != nil {
+				return HostedView{}, err
+			}
+			explicit = true
 		} else if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
 			return HostedView{}, err
 		}

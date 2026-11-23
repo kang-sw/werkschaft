@@ -277,7 +277,11 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	// A process-scoped observation cannot carry into a new process or holder
 	// attach. Replay/open reports repopulate it; silence stays unknown.
-	c.setStatus(func() { c.proc, c.activeMode = proc, "" })
+	activeMode := ""
+	if live, ok := proc.(liveLeadMode); ok {
+		activeMode = live.activePermissionMode()
+	}
+	c.setStatus(func() { c.proc, c.activeMode = proc, activeMode })
 	c.events = proc.Events()
 	if durable {
 		c.bindDurableMCP(spec.MCPSession, rec, proc, level)

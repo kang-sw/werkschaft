@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
@@ -24,15 +25,19 @@ import (
 // werkLoop runs a session in the daemon and delivers typed events to the
 // conversation owner. Only the runner sends commands and consumes events.
 type werkLoop struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	cmds   chan werk.Command
-	events chan Event
-	mapper *werkMapper
-	audit  *auditCapture
-	steer  uint64
-	agent  *werk.Agent
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	cmds            chan werk.Command
+	events          chan Event
+	mapper          *werkMapper
+	lead            bool
+	approvalMu      sync.Mutex
+	pendingApproval *werkApproval
+	secrets         []string
+	audit           *auditCapture
+	steer           uint64
+	agent           *werk.Agent
 }
 
 func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
@@ -115,7 +120,8 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	p := &werkLoop{
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		cmds: make(chan werk.Command, 32), events: make(chan Event, 256),
-		mapper: newWerkMapper(spec.SessionID),
+		mapper: newWerkMapper(spec.SessionID), lead: spec.Lead != nil,
+		secrets: []string{spec.sessionSecret, session.Token},
 	}
 	if spec.Lead != nil {
 		p.mapper.provider = spec.Provider
@@ -128,15 +134,17 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
 		Lead:  spec.Lead != nil,
 		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
+		Skills:   discoverWerkSkills(spec),
 		Endpoint: endpoint, RecoverExec: spec.recoverExec,
 		WS:             &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
-		SummarySecrets: []string{spec.sessionSecret, session.Token},
+		SummarySecrets: p.secrets,
 		Emit:           p.emit,
 	}
 	if spec.compactState != nil {
 		cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
 	}
 	if cfg.Lead {
+		cfg.Approve = p.requestApproval
 		cfg.RereadFiles = func(paths []string, maxBytes int64) map[string]string {
 			return wsdashboard.ReadWorktreeTextFiles(spec.Root, paths, maxBytes)
 		}
@@ -172,6 +180,17 @@ type execLaunchRecorder interface {
 func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) error {
 	if err := p.ctx.Err(); err != nil {
 		return err
+	}
+	if call.Approval != nil {
+		preview := call.Approval
+		input, _, err := execApprovalInput(ExecApproval{
+			Tool: preview.Tool, Command: preview.Command, Cwd: preview.Cwd, Program: preview.Program,
+			Env: preview.Env, Stdin: preview.Stdin, StdinBytes: preview.StdinBytes,
+		})
+		if err != nil {
+			return err
+		}
+		return p.agent.ApproveExecLaunch(ctx, call, input)
 	}
 	return p.agent.RecordExecLaunch(ctx, call)
 }
@@ -310,5 +329,9 @@ func (p *werkLoop) Close() error {
 }
 
 func (p *werkLoop) processControls() processControls {
-	return processControls{Process: p, steer: p, reports: p, commands: p}
+	ctl := processControls{Process: p, steer: p, reports: p, commands: p}
+	if p.lead {
+		ctl.approval, ctl.mode = p, p
+	}
+	return ctl
 }

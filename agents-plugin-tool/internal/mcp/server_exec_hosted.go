@@ -321,6 +321,11 @@ func (s *Server) bindExecLaunch(ctx context.Context, req *execjob.HostedLaunch, 
 		return err
 	}
 	tool := req.Tool
+	if s.fileWrites != nil && s.fileWrites.LiveAuthority {
+		req.ApproveModel = func(ctx context.Context, preview execjob.HostedCall) error {
+			return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, Approval: &preview})
+		}
+	}
 	req.BindJob = func(jobID string) error {
 		return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, JobID: jobID})
 	}

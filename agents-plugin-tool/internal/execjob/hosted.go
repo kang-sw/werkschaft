@@ -1,6 +1,7 @@
 package execjob
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -910,6 +911,9 @@ type HostedLaunch struct {
 	// approval, and the agent's approval policy is neither asked nor changed.
 	// Only in-process callers set it; no tool argument reaches it.
 	UserApproved bool
+	// ApproveModel is the originating harness's one-use approval, paired
+	// with BindJob so the exact model invocation is recorded before launch.
+	ApproveModel func(context.Context, HostedCall) error
 	// OnConvert runs once when a still-running job converts to async, before
 	// the job owes its completion notice, so a caller can make the exec id
 	// visible ahead of the first notice admission: the job is not eligible for

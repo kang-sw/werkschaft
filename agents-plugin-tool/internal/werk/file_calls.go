@@ -36,13 +36,13 @@ func canonicalExecLaunch(tool string) string {
 }
 
 type activeMutationCall struct {
-	ctx      context.Context
-	id, tool string
-	args     map[string]any
-	recorded bool
+	ctx                                  context.Context
+	id, tool                             string
+	args                                 map[string]any
+	recorded, reask, approving, approved bool
 }
 
-func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json.RawMessage) (func(), error) {
+func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json.RawMessage, reask bool) (func(), error) {
 	var args map[string]any
 	if id == "" || json.Unmarshal(raw, &args) != nil || args == nil {
 		return nil, errors.New("the mutation needs an identity and object arguments")
@@ -52,7 +52,7 @@ func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json
 	if a.mutationCall != nil {
 		return nil, errors.New("another mutating call is active")
 	}
-	a.mutationCall = &activeMutationCall{ctx: ctx, id: id, tool: tool, args: args}
+	a.mutationCall = &activeMutationCall{ctx: ctx, id: id, tool: tool, args: args, reask: reask}
 	return func() {
 		a.mutationMu.Lock()
 		a.mutationCall = nil
@@ -83,7 +83,8 @@ func (a *Agent) recordMutation(ctx context.Context, id, tool string, raw json.Ra
 	}
 	a.mutationMu.Lock()
 	active := a.mutationCall
-	if active == nil || active.id != id || active.tool != tool || !reflect.DeepEqual(active.args, args) || active.recorded {
+	if active == nil || active.id != id || active.tool != tool || !reflect.DeepEqual(active.args, args) || active.recorded ||
+		(a.cfg.Approve != nil && canonicalExecLaunch(tool) != "" && !active.approved) {
 		a.mutationMu.Unlock()
 		return errors.New("no matching unrecorded mutation is active")
 	}

@@ -85,17 +85,18 @@ type execJobLine struct {
 
 // Store is one session's conversation file.
 type Store struct {
-	mu          sync.Mutex
-	dir         string
-	session     string
-	path        string
-	f           *os.File
-	lock        *flock.Flock
-	now         func() int64
-	fileIntents map[string]wsfs.FileIntent
-	execJobs    map[string]string
-	turnJournal turnJournal
-	checkpoint  *checkpointLine
+	mu              sync.Mutex
+	dir             string
+	session         string
+	path            string
+	f               *os.File
+	lock            *flock.Flock
+	now             func() int64
+	fileIntents     map[string]wsfs.FileIntent
+	execJobs        map[string]string
+	pendingApproval map[string]bool
+	turnJournal     turnJournal
+	checkpoint      *checkpointLine
 }
 
 func segmentPath(dir, session string) string {
@@ -221,6 +222,7 @@ func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, 
 				items = append(items, l.Item)
 				archive.observe(l.Item)
 			case l.K == "response" && l.Response != nil:
+				clear(s.pendingApproval)
 				items = append(items, l.Response.Output...)
 				for _, item := range l.Response.Output {
 					archive.observe(item)
@@ -236,6 +238,7 @@ func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, 
 				s.turnJournal = turnJournal{id: l.TurnID, number: s.turnJournal.number + 1, input: len(items), user: l.User}
 				clear(s.fileIntents)
 				clear(s.execJobs)
+				clear(s.pendingApproval)
 				items = append(items, l.User)
 				archive.observe(l.User)
 			case l.K == "turn_steer" && l.SteerID != "" && len(l.User) > 0:
@@ -259,6 +262,14 @@ func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, 
 				s.turnJournal.selectCheckpoint()
 				clear(s.fileIntents)
 				clear(s.execJobs)
+				clear(s.pendingApproval)
+			case l.K == "approval_pending" && l.CallID != "":
+				if s.pendingApproval == nil {
+					s.pendingApproval = make(map[string]bool)
+				}
+				s.pendingApproval[l.CallID] = true
+			case l.K == "approval_dispatch" && l.CallID != "":
+				delete(s.pendingApproval, l.CallID)
 			case l.K == "file_intent" && l.CallID != "" && l.Intent != nil:
 				s.fileIntents[l.CallID] = *l.Intent
 			case l.K == "exec_job" && l.CallID != "" && l.JobID != "":

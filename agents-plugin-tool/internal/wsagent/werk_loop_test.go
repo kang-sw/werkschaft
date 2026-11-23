@@ -103,14 +103,15 @@ func nextWerkLoopEvent(t *testing.T, loop Process, match func(Event) bool) Event
 	}
 }
 
-func TestWerkLoopUsesOnlyDaemonToolsAndMapsTheTurn(t *testing.T) {
+func TestWerkLoopUsesDaemonToolsAndMapsTheTurn(t *testing.T) {
 	called := make(chan string, 1)
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		func(_ context.Context, req werk.Request) (*werk.Response, error) {
 			if req.Model != "next-model" || req.Effort != "high" {
 				t.Errorf("model options: %q, %+v", req.Model, req.Effort)
 			}
-			if len(req.Tools) != 1 || req.Tools[0].Name != "fs_read" {
+			wantTools := slices.DeleteFunc(slices.Clone(req.Tools), func(tool werk.ToolDef) bool { return tool.Name == "load_skill" })
+			if len(wantTools) != 1 || wantTools[0].Name != "fs_read" {
 				t.Errorf("tools = %+v", req.Tools)
 			}
 			return &werk.Response{ID: "read-response", Output: []json.RawMessage{

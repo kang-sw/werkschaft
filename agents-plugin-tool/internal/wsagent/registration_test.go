@@ -106,7 +106,10 @@ func TestPermissionModesLegacyFallback(t *testing.T) {
 }
 
 func TestRegisteredBackendAdmission(t *testing.T) {
-	backends := map[string]BackendRegistration{"fixture": {Backend: &fakeBackend{}, LeadProfile: "fixture-lead", PermissionModes: []string{"review"}}}
+	backends := map[string]BackendRegistration{
+		"fixture":      {Backend: &fakeBackend{}, LeadProfile: "fixture-lead", PermissionModes: []string{"review"}},
+		"builtin-only": {BuiltinProfilesOnly: true, PermissionModes: []string{"hosted-only"}},
+	}
 	for _, raw := range []string{`{"backend":"fixture"}`, `{"backend":"fixture","lead":true,"permission_mode":"review"}`} {
 		if _, err := ParseProfile(json.RawMessage(raw), backends); err != nil {
 			t.Fatal(err)
