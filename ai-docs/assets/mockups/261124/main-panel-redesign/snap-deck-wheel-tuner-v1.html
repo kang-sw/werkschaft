@@ -1,0 +1,2175 @@
+<div class="swt-root" id="swtRoot">
+<style>
+  .swt-root {
+    --swt-bg: var(--wb-bg, #f4f6f9);
+    --swt-card: var(--wb-card, #ffffff);
+    --swt-surface: rgba(15, 23, 42, 0.035);
+    --swt-surface-strong: rgba(15, 23, 42, 0.065);
+    --swt-ink: var(--wb-ink, #0f172a);
+    --swt-muted: var(--wb-muted, #64748b);
+    --swt-line: var(--wb-line, rgba(15, 23, 42, 0.12));
+    --swt-accent: var(--wb-accent, #2563eb);
+    --swt-accent-soft: rgba(37, 99, 235, 0.12);
+    --swt-ok: #059669;
+    --swt-ok-soft: rgba(5, 150, 105, 0.13);
+    --swt-warn: #d97706;
+    --swt-warn-soft: rgba(217, 119, 6, 0.14);
+    --swt-violet: #7c3aed;
+    --swt-violet-soft: rgba(124, 58, 237, 0.14);
+    --swt-cyan: #0891b2;
+    --swt-cyan-soft: rgba(8, 145, 178, 0.14);
+    --swt-shadow: 0 10px 28px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
+    --swt-radius: 14px;
+
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Segoe UI", Roboto, sans-serif;
+    color: var(--swt-ink);
+    background: var(--swt-bg);
+    border: 1px solid var(--swt-line);
+    border-radius: 16px;
+    padding: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+    max-width: 100%;
+  }
+
+  .swt-root *, .swt-root *::before, .swt-root *::after {
+    box-sizing: border-box;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .swt-root {
+      --swt-bg: var(--wb-bg, #0d1117);
+      --swt-card: var(--wb-card, #161b22);
+      --swt-surface: rgba(248, 250, 252, 0.05);
+      --swt-surface-strong: rgba(248, 250, 252, 0.09);
+      --swt-ink: var(--wb-ink, #e6edf3);
+      --swt-muted: var(--wb-muted, #8b949e);
+      --swt-line: var(--wb-line, rgba(240, 246, 252, 0.12));
+      --swt-accent: var(--wb-accent, #58a6ff);
+      --swt-accent-soft: rgba(88, 166, 255, 0.16);
+      --swt-ok: #34d399;
+      --swt-ok-soft: rgba(52, 211, 153, 0.16);
+      --swt-warn: #fbbf24;
+      --swt-warn-soft: rgba(251, 191, 36, 0.16);
+      --swt-violet: #a78bfa;
+      --swt-violet-soft: rgba(167, 139, 250, 0.18);
+      --swt-cyan: #22d3ee;
+      --swt-cyan-soft: rgba(34, 211, 238, 0.16);
+      --swt-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  :root[data-theme="dark"] .swt-root,
+  [data-theme="dark"] .swt-root {
+    --swt-bg: var(--wb-bg, #0d1117);
+    --swt-card: var(--wb-card, #161b22);
+    --swt-surface: rgba(248, 250, 252, 0.05);
+    --swt-surface-strong: rgba(248, 250, 252, 0.09);
+    --swt-ink: var(--wb-ink, #e6edf3);
+    --swt-muted: var(--wb-muted, #8b949e);
+    --swt-line: var(--wb-line, rgba(240, 246, 252, 0.12));
+    --swt-accent: var(--wb-accent, #58a6ff);
+    --swt-accent-soft: rgba(88, 166, 255, 0.16);
+    --swt-ok: #34d399;
+    --swt-ok-soft: rgba(52, 211, 153, 0.16);
+    --swt-warn: #fbbf24;
+    --swt-warn-soft: rgba(251, 191, 36, 0.16);
+    --swt-violet: #a78bfa;
+    --swt-violet-soft: rgba(167, 139, 250, 0.18);
+    --swt-cyan: #22d3ee;
+    --swt-cyan-soft: rgba(34, 211, 238, 0.16);
+    --swt-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  :root[data-theme="light"] .swt-root,
+  [data-theme="light"] .swt-root {
+    --swt-bg: var(--wb-bg, #f4f6f9);
+    --swt-card: var(--wb-card, #ffffff);
+    --swt-surface: rgba(15, 23, 42, 0.035);
+    --swt-surface-strong: rgba(15, 23, 42, 0.065);
+    --swt-ink: var(--wb-ink, #0f172a);
+    --swt-muted: var(--wb-muted, #64748b);
+    --swt-line: var(--wb-line, rgba(15, 23, 42, 0.12));
+    --swt-accent: var(--wb-accent, #2563eb);
+    --swt-accent-soft: rgba(37, 99, 235, 0.12);
+    --swt-shadow: 0 10px 28px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
+  }
+
+  /* Top toolbar */
+  .swt-topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--swt-card);
+    border: 1px solid var(--swt-line);
+    border-radius: 12px;
+  }
+
+  .swt-presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .swt-preset-btn {
+    appearance: none;
+    border: 1px solid var(--swt-line);
+    background: var(--swt-surface);
+    color: var(--swt-ink);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 90ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    line-height: 1.25;
+  }
+
+  .swt-preset-btn:hover {
+    background: var(--swt-surface-strong);
+  }
+
+  .swt-preset-btn:active {
+    transform: scale(0.98);
+  }
+
+  .swt-preset-btn.is-active {
+    background: var(--swt-accent-soft);
+    border-color: var(--swt-accent);
+    color: var(--swt-accent);
+  }
+
+  .swt-preset-tag {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: var(--swt-accent);
+    color: #fff;
+  }
+
+  .swt-top-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .swt-seg {
+    display: inline-flex;
+    background: var(--swt-surface);
+    border: 1px solid var(--swt-line);
+    border-radius: 999px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .swt-seg-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--swt-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+  }
+
+  .swt-seg-btn.is-active {
+    background: var(--swt-card);
+    color: var(--swt-ink);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  }
+
+  .swt-icon-btn {
+    appearance: none;
+    border: 1px solid var(--swt-line);
+    background: var(--swt-surface);
+    color: var(--swt-ink);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 5px 9px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  .swt-icon-btn:hover {
+    background: var(--swt-surface-strong);
+  }
+
+  .swt-icon-btn.is-accent {
+    background: var(--swt-accent);
+    border-color: var(--swt-accent);
+    color: #fff;
+  }
+
+  .swt-icon-btn.is-accent:hover {
+    filter: brightness(1.06);
+  }
+
+  /* Main body layout */
+  .swt-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 268px;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .swt-body.is-controls-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .swt-body.is-controls-hidden .swt-panel {
+    display: none;
+  }
+
+  @media (max-width: 820px) {
+    .swt-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* Deck stage */
+  .swt-stage {
+    position: relative;
+    height: 540px;
+    background: var(--swt-surface);
+    border: 1px solid var(--swt-line);
+    border-radius: var(--swt-radius);
+    padding: 10px 44px 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    overflow: hidden;
+    outline: none;
+    overscroll-behavior: contain;
+  }
+
+  .swt-stage:focus-visible {
+    box-shadow: 0 0 0 2px var(--swt-accent);
+  }
+
+  /* Capsule strips */
+  .swt-capsules {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 28px;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .swt-capsule {
+    appearance: none;
+    width: 100%;
+    border: 1px solid var(--swt-line);
+    background: var(--swt-card);
+    color: var(--swt-ink);
+    border-radius: 9px;
+    padding: 5px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+    transition: transform 140ms ease, opacity 140ms ease, border-color 140ms ease, background 140ms ease;
+  }
+
+  .swt-capsule:hover {
+    border-color: var(--swt-accent);
+    background: var(--swt-card);
+  }
+
+  .swt-capsule.is-far {
+    opacity: 0.58;
+    transform: scale(0.975);
+    padding-top: 3px;
+    padding-bottom: 3px;
+    font-size: 11px;
+  }
+
+  .swt-capsule-left {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .swt-capsule-num {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--swt-muted);
+    flex-shrink: 0;
+  }
+
+  .swt-capsule-title {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .swt-capsule-kind {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+
+  .swt-capsule-kind.is-tall {
+    background: var(--swt-cyan-soft);
+    color: var(--swt-cyan);
+  }
+
+  .swt-capsule-kind.is-short {
+    background: var(--swt-surface-strong);
+    color: var(--swt-muted);
+  }
+
+  .swt-capsule-empty {
+    font-size: 11px;
+    color: var(--swt-muted);
+    text-align: center;
+    padding: 4px 0;
+    opacity: 0.65;
+  }
+
+  /* Main card viewport */
+  .swt-viewport-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    border-radius: 12px;
+  }
+
+  .swt-viewport {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 12px;
+    background: transparent;
+  }
+
+  .swt-track {
+    width: 100%;
+    height: 100%;
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .swt-slot {
+    width: 100%;
+    height: 100%;
+    padding: 2px;
+  }
+
+  .swt-card {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: var(--swt-card);
+    border: 1px solid var(--swt-line);
+    border-radius: 12px;
+    box-shadow: var(--swt-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: border-color 140ms ease;
+  }
+
+  .swt-card.is-charging {
+    border-color: var(--swt-accent);
+  }
+
+  .swt-card.is-wall {
+    border-color: var(--swt-warn);
+  }
+
+  .swt-card-head {
+    padding: 11px 14px 9px;
+    border-bottom: 1px solid var(--swt-line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    background: var(--swt-card);
+  }
+
+  .swt-card-head-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .swt-card-idx {
+    font-size: 11px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: var(--swt-accent-soft);
+    color: var(--swt-accent);
+    flex-shrink: 0;
+  }
+
+  .swt-card-title {
+    font-size: 14.5px;
+    font-weight: 700;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .swt-card-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+
+  .swt-card-badge.is-tall {
+    background: var(--swt-cyan-soft);
+    color: var(--swt-cyan);
+  }
+
+  .swt-card-badge.is-short {
+    background: var(--swt-surface-strong);
+    color: var(--swt-muted);
+  }
+
+  /* Inner scroll progress bar */
+  .swt-inner-bar-track {
+    height: 3px;
+    width: 100%;
+    background: var(--swt-surface);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .swt-inner-bar-fill {
+    height: 100%;
+    width: 100%;
+    background: var(--swt-cyan);
+    transform-origin: left center;
+    transform: scaleX(0);
+    will-change: transform;
+  }
+
+  .swt-card-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 13px 15px 16px;
+    user-select: text;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .swt-card-scroll.is-short {
+    overflow-y: hidden;
+  }
+
+  .swt-card-scroll p {
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--swt-ink);
+  }
+
+  .swt-card-scroll h4 {
+    margin: 14px 0 6px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--swt-accent);
+    letter-spacing: -0.01em;
+  }
+
+  .swt-card-scroll h4:first-child {
+    margin-top: 0;
+  }
+
+  .swt-muted {
+    color: var(--swt-muted);
+    font-size: 12px;
+  }
+
+  .swt-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 10px 0 12px;
+  }
+
+  .swt-kpi {
+    background: var(--swt-surface);
+    border: 1px solid var(--swt-line);
+    border-radius: 9px;
+    padding: 8px 10px;
+  }
+
+  .swt-kpi-label {
+    font-size: 10.5px;
+    color: var(--swt-muted);
+    margin-bottom: 3px;
+  }
+
+  .swt-kpi-val {
+    font-size: 14px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .swt-block {
+    background: var(--swt-surface);
+    border: 1px solid var(--swt-line);
+    border-radius: 9px;
+    padding: 9px 11px;
+    margin-bottom: 9px;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  .swt-block-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .swt-list {
+    margin: 4px 0 10px;
+    padding-left: 18px;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+
+  .swt-list li {
+    margin-bottom: 4px;
+  }
+
+  .swt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 8px 0 12px;
+  }
+
+  .swt-table th, .swt-table td {
+    border: 1px solid var(--swt-line);
+    padding: 5px 8px;
+    text-align: left;
+  }
+
+  .swt-table th {
+    background: var(--swt-surface-strong);
+    font-weight: 700;
+    font-size: 11px;
+  }
+
+  .swt-scroll-hint {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-top: 1px solid var(--swt-line);
+    background: var(--swt-surface);
+    color: var(--swt-muted);
+    flex-shrink: 0;
+  }
+
+  .swt-edge-pill {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--swt-surface-strong);
+    color: var(--swt-muted);
+  }
+
+  .swt-edge-pill.is-boundary {
+    background: var(--swt-warn-soft);
+    color: var(--swt-warn);
+  }
+
+  .swt-edge-pill.is-ready {
+    background: var(--swt-accent-soft);
+    color: var(--swt-accent);
+  }
+
+  /* Edge feedback overlays on viewport */
+  .swt-edge-glow {
+    pointer-events: none;
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--swt-accent);
+    opacity: 0;
+    transform: scaleX(0.15);
+    transition: opacity 110ms ease;
+    z-index: 5;
+  }
+
+  .swt-edge-glow.is-top { top: 4px; }
+  .swt-edge-glow.is-bottom { bottom: 4px; }
+  .swt-edge-glow.is-wall { background: var(--swt-warn); }
+
+  /* Right-side mini circle-chain dial */
+  .swt-dial {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    z-index: 6;
+    padding: 7px 4px;
+    border-radius: 999px;
+    background: var(--swt-card);
+    border: 1px solid var(--swt-line);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+
+  .swt-dial-count {
+    font-size: 9.5px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--swt-muted);
+    margin-bottom: 2px;
+  }
+
+  .swt-dial-chain {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .swt-dial-chain::before {
+    content: "";
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    width: 1.5px;
+    background: var(--swt-line);
+    z-index: 0;
+  }
+
+  .swt-dial-dot {
+    position: relative;
+    z-index: 1;
+    appearance: none;
+    border: 1.5px solid var(--swt-muted);
+    background: var(--swt-card);
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    padding: 0;
+    cursor: pointer;
+    transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, height 140ms ease;
+  }
+
+  .swt-dial-dot.is-tall {
+    border-color: var(--swt-cyan);
+  }
+
+  .swt-dial-dot:hover {
+    transform: scale(1.25);
+  }
+
+  .swt-dial-dot.is-active {
+    height: 18px;
+    background: var(--swt-accent);
+    border-color: var(--swt-accent);
+  }
+
+  /* Side slider panel */
+  .swt-panel {
+    background: var(--swt-card);
+    border: 1px solid var(--swt-line);
+    border-radius: var(--swt-radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 540px;
+    overflow-y: auto;
+  }
+
+  .swt-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding-bottom: 7px;
+    border-bottom: 1px solid var(--swt-line);
+  }
+
+  .swt-panel-title {
+    font-size: 13px;
+    font-weight: 800;
+    margin: 0;
+  }
+
+  .swt-preset-desc {
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--swt-muted);
+    background: var(--swt-surface);
+    border: 1px solid var(--swt-line);
+    border-radius: 8px;
+    padding: 7px 9px;
+  }
+
+  .swt-slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .swt-slider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .swt-slider-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+
+  .swt-slider-val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: var(--swt-accent);
+    font-size: 11.5px;
+  }
+
+  .swt-slider-sub {
+    font-size: 10px;
+    color: var(--swt-muted);
+    line-height: 1.3;
+  }
+
+  .swt-range {
+    width: 100%;
+    margin: 2px 0 0;
+    accent-color: var(--swt-accent);
+    cursor: pointer;
+  }
+
+  .swt-panel-actions {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--swt-line);
+  }
+
+  .swt-btn-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .swt-kbd-hint {
+    font-size: 10.5px;
+    color: var(--swt-muted);
+    line-height: 1.4;
+    text-align: center;
+  }
+
+  /* Telemetry bar */
+  .swt-telemetry {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 11px;
+    background: var(--swt-card);
+    border: 1px solid var(--swt-line);
+    border-radius: 11px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .swt-tel-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .swt-state-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 104px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    background: var(--swt-surface-strong);
+    color: var(--swt-muted);
+  }
+
+  .swt-state-badge[data-state="INNER"] { background: var(--swt-cyan-soft); color: var(--swt-cyan); }
+  .swt-state-badge[data-state="WALL_ABSORB"] { background: var(--swt-warn-soft); color: var(--swt-warn); }
+  .swt-state-badge[data-state="CHARGING"] { background: var(--swt-accent-soft); color: var(--swt-accent); }
+  .swt-state-badge[data-state="COAST_ABSORB"] { background: var(--swt-violet-soft); color: var(--swt-violet); }
+  .swt-state-badge[data-state="CHAIN_GLIDE"] { background: var(--swt-ok-soft); color: var(--swt-ok); }
+
+  .swt-tel-metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--swt-muted);
+  }
+
+  .swt-tel-metric strong {
+    color: var(--swt-ink);
+    font-weight: 700;
+    min-width: 44px;
+    display: inline-block;
+    text-align: right;
+  }
+
+  .swt-accum-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .swt-accum-bar {
+    width: 84px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--swt-surface-strong);
+    overflow: hidden;
+  }
+
+  .swt-accum-fill {
+    width: 100%;
+    height: 100%;
+    background: var(--swt-accent);
+    transform-origin: left center;
+    transform: scaleX(0);
+    will-change: transform;
+  }
+
+  .swt-tel-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--swt-muted);
+  }
+
+  .swt-tel-right strong {
+    color: var(--swt-ink);
+  }
+</style>
+
+  <!-- Top Preset & Mode Bar -->
+  <div class="swt-topbar">
+    <div class="swt-presets" id="swtPresets" role="group" aria-label="트랙패드 프리셋">
+      <button type="button" class="swt-preset-btn is-active" data-preset="instant">
+        A. 즉각 글라이드 <span class="swt-preset-tag">추천</span>
+      </button>
+      <button type="button" class="swt-preset-btn" data-preset="magnetic">
+        B. 자석 피크 + 스냅
+      </button>
+      <button type="button" class="swt-preset-btn" data-preset="fast">
+        C. 고속 연속 스와이프
+      </button>
+      <button type="button" class="swt-preset-btn" data-preset="cardFirst">
+        D. 카드 내부 우선
+      </button>
+    </div>
+
+    <div class="swt-top-right">
+      <div class="swt-seg" id="swtModeToggle" role="group" aria-label="전환 방식">
+        <button type="button" class="swt-seg-btn is-active" data-mode="slide">슬라이드 (translate3d)</button>
+        <button type="button" class="swt-seg-btn" data-mode="scrollTop">스크롤 트윈 (scrollTop)</button>
+      </div>
+      <button type="button" class="swt-icon-btn" id="swtTogglePanelBtn" title="슬라이더 패널 접기/펼치기">튜너 접기</button>
+    </div>
+  </div>
+
+  <!-- Main Interactive Body -->
+  <div class="swt-body" id="swtBody">
+    <!-- Deck Stage -->
+    <div class="swt-stage" id="swtStage" tabindex="0" aria-label="스냅 덱 트랙패드 테스트 영역">
+      <div class="swt-capsules" id="swtTopCapsules"></div>
+
+      <div class="swt-viewport-wrap">
+        <div class="swt-edge-glow is-top" id="swtEdgeTop"></div>
+        <div class="swt-edge-glow is-bottom" id="swtEdgeBottom"></div>
+        <div class="swt-viewport" id="swtViewport">
+          <div class="swt-track" id="swtTrack"></div>
+        </div>
+      </div>
+
+      <div class="swt-capsules" id="swtBottomCapsules"></div>
+
+      <!-- Right Mini Circle-Chain Dial -->
+      <div class="swt-dial" id="swtDial" aria-label="카드 다이얼">
+        <div class="swt-dial-count" id="swtDialCount">1/8</div>
+        <div class="swt-dial-chain" id="swtDialChain"></div>
+      </div>
+    </div>
+
+    <!-- Compact Live Slider Controls -->
+    <aside class="swt-panel" id="swtPanel" aria-label="휠 튜닝 컨트롤">
+      <div class="swt-panel-head">
+        <h3 class="swt-panel-title">트랙패드 감각 튜너</h3>
+        <span class="swt-muted" id="swtPresetLabel">프리셋 A</span>
+      </div>
+
+      <div class="swt-preset-desc" id="swtPresetDesc">
+        딜레이 없이 경쾌하게 넘어가는 기본값. 짧은 임계치(52px)와 360ms 체인 글라이드로 연속 이동이 자연스럽습니다.
+      </div>
+
+      <div class="swt-slider-group">
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>전환 임계치 (Threshold)</span>
+            <span class="swt-slider-val" id="swtValThreshold">52 px</span>
+          </span>
+          <input class="swt-range" id="swtInThreshold" type="range" min="24" max="140" step="2" value="52">
+          <span class="swt-slider-sub">경계 도달 후 다음 카드로 넘기기 위해 필요한 누적 델타</span>
+        </label>
+
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>경계 피크 (Edge Peek)</span>
+            <span class="swt-slider-val" id="swtValPeek">0 px</span>
+          </span>
+          <input class="swt-range" id="swtInPeek" type="range" min="0" max="24" step="1" value="0">
+          <span class="swt-slider-sub">커밋 직전 카드가 살짝 당겨지는 자석 저항감 (0 = 즉각 반응)</span>
+        </label>
+
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>벽 관성 가드 (Wall Guard)</span>
+            <span class="swt-slider-val" id="swtValWall">140 ms</span>
+          </span>
+          <input class="swt-range" id="swtInWall" type="range" min="0" max="260" step="10" value="140">
+          <span class="swt-slider-sub">긴 카드 바닥/상단에 닿은 직후 잔여 관성을 흡수하는 시간</span>
+        </label>
+
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>체인 글라이드 창 (Chain Window)</span>
+            <span class="swt-slider-val" id="swtValChain">360 ms</span>
+          </span>
+          <input class="swt-range" id="swtInChain" type="range" min="0" max="700" step="20" value="360">
+          <span class="swt-slider-sub">커밋 직후 같은 방향 재스와이프 시 긴 카드에 갇히지 않고 연속 이동</span>
+        </label>
+
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>최소 스텝 간격 (Min Step)</span>
+            <span class="swt-slider-val" id="swtValMinStep">165 ms</span>
+          </span>
+          <input class="swt-range" id="swtInMinStep" type="range" min="80" max="300" step="5" value="165">
+          <span class="swt-slider-sub">한 번의 강한 플릭이 의도치 않게 2장 이상 건너뛰는 현상 방지</span>
+        </label>
+
+        <label class="swt-slider-row">
+          <span class="swt-slider-label">
+            <span>전환 애니메이션 (Anim Duration)</span>
+            <span class="swt-slider-val" id="swtValAnim">220 ms</span>
+          </span>
+          <input class="swt-range" id="swtInAnim" type="range" min="100" max="380" step="10" value="220">
+          <span class="swt-slider-sub">카드 전환 이징 시간 (중간 리타겟팅 시 부드럽게 이어받음)</span>
+        </label>
+      </div>
+
+      <div class="swt-panel-actions">
+        <button type="button" class="swt-icon-btn is-accent" id="swtCopyBtn">현재 설정값 복사</button>
+        <div class="swt-btn-row">
+          <button type="button" class="swt-icon-btn" id="swtResetBtn">프리셋 초기화</button>
+          <button type="button" class="swt-icon-btn" id="swtTopBtn">1번 카드로</button>
+        </div>
+        <div class="swt-kbd-hint">
+          포커스 후 ↑/↓, PgUp/PgDn 이동 가능 · 캡슐/다이얼 클릭 지원
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Compact Live Telemetry Strip -->
+  <div class="swt-telemetry" aria-live="off">
+    <div class="swt-tel-left">
+      <span class="swt-state-badge" id="swtTelState" data-state="IDLE">IDLE</span>
+      <span class="swt-tel-metric">dY <strong id="swtTelDy">0.0</strong></span>
+      <span class="swt-tel-metric">dt <strong id="swtTelDt">0 ms</strong></span>
+      <span class="swt-accum-wrap">
+        <span class="swt-muted">충전</span>
+        <span class="swt-accum-bar"><span class="swt-accum-fill" id="swtTelAccumBar"></span></span>
+        <strong id="swtTelAccumTxt">0/52</strong>
+      </span>
+    </div>
+    <div class="swt-tel-right">
+      <span>카드 <strong id="swtTelCard">1 / 8</strong></span>
+      <span>누적 스텝 <strong id="swtTelSteps">0</strong></span>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var root = document.getElementById("swtRoot");
+  if (!root || root.dataset.swtInit === "1") return;
+  root.dataset.swtInit = "1";
+
+  var PRESETS = {
+    instant: {
+      id: "instant",
+      label: "프리셋 A",
+      name: "A-instant",
+      desc: "딜레이 없이 경쾌하게 넘어가는 기본값. 짧은 임계치(52px)와 360ms 체인 글라이드로 연속 이동이 자연스럽습니다.",
+      threshold: 52,
+      peekPx: 0,
+      wallGuardMs: 140,
+      chainWindowMs: 360,
+      minStepMs: 165,
+      animMs: 220,
+      mode: "slide"
+    },
+    magnetic: {
+      id: "magnetic",
+      label: "프리셋 B",
+      name: "B-magnetic",
+      desc: "경계에서 최대 14px까지 살짝 당겨지며 전환 직전의 텐션을 시각화합니다. 실수 전환을 줄이고 싶을 때 적합합니다.",
+      threshold: 76,
+      peekPx: 14,
+      wallGuardMs: 150,
+      chainWindowMs: 300,
+      minStepMs: 180,
+      animMs: 240,
+      mode: "slide"
+    },
+    fast: {
+      id: "fast",
+      label: "프리셋 C",
+      name: "C-fast-glide",
+      desc: "낮은 임계치(40px)와 넉넉한 체인 창(520ms)으로 여러 카드를 연속 스와이프하며 훑어볼 때 가장 빠릅니다.",
+      threshold: 40,
+      peekPx: 6,
+      wallGuardMs: 120,
+      chainWindowMs: 520,
+      minStepMs: 130,
+      animMs: 190,
+      mode: "slide"
+    },
+    cardFirst: {
+      id: "cardFirst",
+      label: "프리셋 D",
+      name: "D-card-first",
+      desc: "체인 글라이드를 끄고(0ms) 새로 도착한 긴 카드가 즉시 내부 스크롤을 우선합니다. 문서 정독 중심 워크플로용.",
+      threshold: 64,
+      peekPx: 10,
+      wallGuardMs: 180,
+      chainWindowMs: 0,
+      minStepMs: 180,
+      animMs: 230,
+      mode: "slide"
+    }
+  };
+
+  var CARDS = [
+    {
+      num: "01",
+      title: "요약 브리프 · Snap Deck 휠 튜닝 목표",
+      tall: false,
+      badge: "짧은 카드 · 내부 스크롤 없음",
+      html:
+        "<p>이 목업은 <strong>실제 macOS 트랙패드</strong>에서 <code>WsBoardWheel</code> 상태 머신의 손맛을 바로 비교하기 위해 제작되었습니다. 카드 영역 위에서 두 손가락 스크롤을 시도해도 바깥 화이트보드 페이지는 흔들리지 않습니다.</p>" +
+        "<div class='swt-kpi-grid'>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>덱 구성</div><div class='swt-kpi-val'>짧음 4 · 김 4</div></div>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>핵심 가드</div><div class='swt-kpi-val'>WALL + COAST</div></div>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>연속 탐색</div><div class='swt-kpi-val'>CHAIN GLIDE</div></div>" +
+        "</div>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>추천 테스트 순서</span><span class='swt-muted'>약 30초</span></div>" +
+          "1) 아래로 1칸 내려가 <strong>02번 긴 카드</strong> 내부를 끝까지 빠르게 굴려 <code>WALL_ABSORB</code>가 바닥 관성을 잡아주는지 확인하세요.<br>" +
+          "2) <strong>04 → 05번(연속 긴 카드)</strong> 구간에서 짧은 간격으로 두 번 스와이프해 <code>CHAIN_GLIDE</code> 체감을 비교해 보세요." +
+        "</div>"
+    },
+    {
+      num: "02",
+      title: "트랙패드 관성 분석 · 왜 2단계 흡수가 필요한가",
+      tall: true,
+      badge: "긴 카드 · 내부 스크롤 ~2.5x",
+      html:
+        "<h4>1. macOS 관성 이벤트의 실제 패턴</h4>" +
+        "<p>macOS 트랙패드는 손가락을 뗀 뒤에도 약 400~900ms 동안 <code>wheel</code> 이벤트를 60~120Hz로 계속 방출합니다. 이때 <code>deltaY</code> 크기는 지수적으로 감소하며, 브라우저 네이티브 스크롤은 경계에 닿는 순간 남은 관성을 부모 스크롤 컨테이너로 흘려보내는 성향이 있습니다.</p>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>WALL_ABSORB (내부 벽 충돌 가드)</span><span class='swt-muted'>wallGuardMs</span></div>" +
+          "내부 스크롤이 가능한 상태에서 바닥 또는 상단에 막 도달한 직후(<code>canScroll → boundary</code>), 감쇠 중인 관성 꼬리가 곧바로 다음 카드 전환으로 오인되지 않도록 <code>wallGuardMs</code> 동안 흡수합니다." +
+        "</div>" +
+        "<h4>2. 커밋 직후의 COAST_ABSORB</h4>" +
+        "<p>카드가 한 장 넘어간 직후에도 이전 플릭의 관성 꼬리가 남아 있습니다. 단순한 고정 쿨다운(예: 500ms 차단)을 걸면 사용자가 의도적으로 다시 빠르게 밀었을 때 먹통처럼 느껴집니다.</p>" +
+        "<ul class='swt-list'>" +
+          "<li><strong>감쇠 꼬리 추적:</strong> 커밋 시점 이후 관측된 최소 <code>|deltaY|</code>(<code>minAbs</code>)를 기록하며, 단조 감쇠 구간만 조용히 흡수합니다.</li>" +
+          "<li><strong>즉시 해제 조건 1 (휴지):</strong> 이벤트 간격 <code>dt ≥ 140ms</code>이면 관성이 끝난 것으로 보고 즉시 잠금을 해제합니다.</li>" +
+          "<li><strong>즉시 해제 조건 2 (방향 반전):</strong> 반대 방향 입력이 들어오면 지연 없이 즉시 반응합니다.</li>" +
+          "<li><strong>즉시 해제 조건 3 (속도 스파이크):</strong> <code>|dy| &gt; max(minAbs × 1.8, minAbs + 10)</code>이고 <code>minStepMs</code>가 지났으면 새 스와이프로 판정합니다.</li>" +
+        "</ul>" +
+        "<h4>3. 실측 체크포인트 (여기까지 스크롤해 보세요)</h4>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>하단 경계 도달 테스트</span><span class='swt-muted'>바닥 근처</span></div>" +
+          "지금 빠르게 아래로 플릭해서 이 카드의 바닥에 부딪혀 보세요. 하단 텔레메트리의 상태 배지가 <code>INNER</code> → <code>WALL_ABSORB</code>로 바뀌며 03번 카드로 튕겨 넘어가지 않고 깔끔하게 멈춰야 합니다." +
+        "</div>" +
+        "<p>멈춘 뒤 다시 한 번 아래로 살짝 밀면 <code>CHARGING</code> 충전 바가 차오르며 03번 카드로 전환됩니다. 만약 <strong>프리셋 B(자석 피크)</strong>를 켰다면 전환 직전에 카드가 살짝 당겨지는 피드백을 확인할 수 있습니다.</p>" +
+        "<p class='swt-muted'>— 02번 카드 끝 · 한 번 더 아래로 밀어 03번 카드로 이동 —</p>"
+    },
+    {
+      num: "03",
+      title: "상태 머신 요약 · 6개 상태 전이 구조",
+      tall: false,
+      badge: "짧은 카드 · 내부 스크롤 없음",
+      html:
+        "<p>짧은 카드는 내부 스크롤이 없으므로 <code>INNER</code>를 거치지 않고 바로 <code>CHARGING</code> 또는 <code>CHAIN_GLIDE</code>로 진입합니다.</p>" +
+        "<table class='swt-table'>" +
+          "<thead><tr><th>상태</th><th>진입 조건</th><th>역할</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><strong>IDLE</strong></td><td>입력 휴지 ≥ 140ms</td><td>대기 상태, 피크 오프셋 복귀</td></tr>" +
+            "<tr><td><strong>INNER</strong></td><td>활성 카드 내부 스크롤 가능</td><td>네이티브 스크롤 허용 (<code>contain</code>)</td></tr>" +
+            "<tr><td><strong>WALL_ABSORB</strong></td><td>내부 스크롤 → 경계 도달</td><td>벽 충돌 직후 관성 꼬리 흡수</td></tr>" +
+            "<tr><td><strong>CHARGING</strong></td><td>경계에서 동일 방향 누적</td><td>임계치까지 누적 + 선택적 Edge Peek</td></tr>" +
+            "<tr><td><strong>COAST_ABSORB</strong></td><td>카드 전환 커밋 직후</td><td>감쇠 관성 흡수, 스파이크/반전 시 즉시 해제</td></tr>" +
+            "<tr><td><strong>CHAIN_GLIDE</strong></td><td><code>chainWindowMs</code> 내 재스와이프</td><td>새 긴 카드에 갇히지 않고 연속 스텝</td></tr>" +
+          "</tbody>" +
+        "</table>"
+    },
+    {
+      num: "04",
+      title: "컴포넌트 레이아웃 명세 · 캡슐·뷰포트·다이얼",
+      tall: true,
+      badge: "긴 카드 · 내부 스크롤 ~3.0x",
+      html:
+        "<h4>1. 상단/하단 캡슐 스트립 (Contextual Stack)</h4>" +
+        "<p>활성 카드 위아래로 최대 2개씩 이웃 카드의 캡슐을 표시합니다. 바로 인접한 카드는 선명하게, 두 칸 떨어진 카드는 살짝 축소(<code>scale(0.975)</code>) 및 투명도 처리로 깊이감을 부여합니다.</p>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>클릭 점프 동작</span><span class='swt-muted'>즉시 리타겟팅</span></div>" +
+          "캡슐을 클릭하면 휠 상태 머신의 <code>CHARGING</code>/<code>COAST_ABSORB</code>를 정리하고 해당 카드로 부드럽게 슬라이드합니다." +
+        "</div>" +
+        "<h4>2. 중앙 뷰포트와 높이 예산</h4>" +
+        "<p>화이트보드 패널 내부에서 스크롤 충돌 없이 편안하게 조작하려면 스테이지 전체 높이를 약 <code>540px</code> 선으로 유지하는 것이 이상적입니다. 상/하 캡슐 높이를 제외한 중앙 뷰포트가 약 360~410px를 확보합니다.</p>" +
+        "<table class='swt-table'>" +
+          "<thead><tr><th>영역</th><th>높이/폭</th><th>비고</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td>상단 캡슐 스트립</td><td>최대 2줄 (~58px)</td><td>1번 카드에서는 경계 안내 표시</td></tr>" +
+            "<tr><td>중앙 카드 뷰포트</td><td>가변 flex: 1</td><td>긴 카드 상단에 3px 진행 바 표시</td></tr>" +
+            "<tr><td>하단 캡슐 스트립</td><td>최대 2줄 (~58px)</td><td>8번 카드에서는 마지막 카드 안내</td></tr>" +
+            "<tr><td>우측 미니 다이얼</td><td>폭 26px 플로팅</td><td>활성 점 세로 확장 + 전체 인덱스</td></tr>" +
+          "</tbody>" +
+        "</table>" +
+        "<h4>3. 우측 미니 서클 체인 다이얼</h4>" +
+        "<p>카드 수가 8장 이상 늘어나도 현재 위치와 긴/짧은 카드 분포를 한눈에 파악할 수 있도록 우측에 수직 체인 다이얼을 배치했습니다. 시안 테두리는 긴 카드, 회색 테두리는 짧은 카드를 의미합니다.</p>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>외부 화이트보드 스크롤 차단 규칙</span><span class='swt-muted'>Critical</span></div>" +
+          "포인터가 스테이지 위에 있을 때 <code>INNER</code> 상태를 제외한 모든 경우(<code>WALL_ABSORB</code>, <code>CHARGING</code>, <code>COAST_ABSORB</code>, <code>CHAIN_GLIDE</code> 및 카드 경계)에서 <code>e.preventDefault()</code>를 호출해 바깥 문서가 밀리지 않도록 고정합니다." +
+        "</div>" +
+        "<h4>4. 다음 카드(05번)도 긴 카드입니다</h4>" +
+        "<p>04번과 05번은 의도적으로 <strong>긴 카드 → 긴 카드</strong> 연속 구간으로 배치했습니다. 바닥에 닿은 뒤 두 번 연속으로 아래로 스와이프해 보면, 프리셋 A/C에서는 05번 내부에 갇히지 않고 06번까지 매끄럽게 글라이드하는 반면 프리셋 D에서는 05번 내부 스크롤이 먼저 잡히는 차이를 바로 체감할 수 있습니다.</p>" +
+        "<p class='swt-muted'>— 04번 카드 끝 · 아래로 스와이프하여 05번 긴 카드로 이동 —</p>"
+    },
+    {
+      num: "05",
+      title: "전환 애니메이션 비교 · translate3d vs scrollTop",
+      tall: true,
+      badge: "긴 카드 · 내부 스크롤 ~2.2x",
+      html:
+        "<h4>1. 슬라이드 모드 (translate3d)</h4>" +
+        "<p>트랙 전체를 GPU 합성 레이어의 <code>transform: translate3d(0, -y, 0)</code>으로 이동합니다. 레이아웃 재계산이 전혀 발생하지 않아 120Hz ProMotion 디스플레이에서도 찢어짐 없이 매우 깔끔합니다.</p>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>중간 리타겟팅 (Mid-flight Retargeting)</span><span class='swt-muted'>rAF 기반</span></div>" +
+          "이전 220ms 전환이 끝나기 전에 두 번째 스텝이 들어오면, 현재 진행 중인 정확한 Y 픽셀 위치에서 새 목표 Y로 이징을 즉시 이어받습니다. 깜빡임이나 transform 고착이 발생하지 않습니다." +
+        "</div>" +
+        "<h4>2. 스크롤 트윈 모드 (scrollTop)</h4>" +
+        "<p>상단 토글에서 <strong>스크롤 트윈 (scrollTop)</strong>으로 전환하면 동일한 rAF 큐빅 베지어 곡선(<code>0.22, 1, 0.36, 1</code>)으로 뷰포트의 <code>scrollTop</code>을 직접 보간합니다. 네이티브 스크롤 감각과 비교해 보세요.</p>" +
+        "<ul class='swt-list'>" +
+          "<li><strong>일관된 곡선:</strong> 두 모드 모두 동일한 이징과 <code>animMs</code>를 사용하므로 순수하게 렌더링 방식의 차이만 비교할 수 있습니다.</li>" +
+          "<li><strong>모드 전환 시 위치 유지:</strong> 실행 중에 모드를 바꿔도 현재 카드 위치가 튀지 않고 즉시 동기화됩니다.</li>" +
+          "<li><strong>피크 저항감:</strong> <code>peekPx &gt; 0</code>일 때 두 모드 모두 충전 비율에 따라 부드러운 감쇠 피크가 적용됩니다.</li>" +
+        "</ul>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>비교 팁</span><span class='swt-muted'>상단 토글 사용</span></div>" +
+          "<code>animMs</code>를 160ms, 220ms, 300ms로 바꿔가며 슬라이드 모드와 스크롤 트윈 모드의 시각적 잔상과 경쾌함을 비교해 보세요." +
+        "</div>" +
+        "<p class='swt-muted'>— 05번 카드 끝 · 아래로 이동하여 프리셋 기준표 확인 —</p>"
+    },
+    {
+      num: "06",
+      title: "4가지 프리셋 기준표 · 어떤 손맛이 가장 자연스러운가",
+      tall: false,
+      badge: "짧은 카드 · 내부 스크롤 없음",
+      html:
+        "<p>상단 4개 프리셋은 트랙패드 주 사용자 성향에 맞춰 핵심 파라미터 조합을 분리했습니다.</p>" +
+        "<table class='swt-table'>" +
+          "<thead><tr><th>프리셋</th><th>임계치</th><th>피크</th><th>체인 창</th><th>체감 특징</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><strong>A. 즉각 글라이드</strong></td><td>52px</td><td>0px</td><td>360ms</td><td>지연 없는 깔끔한 표준 감각</td></tr>" +
+            "<tr><td><strong>B. 자석 피크</strong></td><td>76px</td><td>14px</td><td>300ms</td><td>당겨지는 저항감 후 확실한 스냅</td></tr>" +
+            "<tr><td><strong>C. 고속 연속</strong></td><td>40px</td><td>6px</td><td>520ms</td><td>여러 카드를 빠르게 훑기에 최적</td></tr>" +
+            "<tr><td><strong>D. 카드 내부 우선</strong></td><td>64px</td><td>10px</td><td>0ms</td><td>도착한 긴 카드를 즉시 읽기 시작</td></tr>" +
+          "</tbody>" +
+        "</table>" +
+        "<p class='swt-muted'>우측 슬라이더로 세부 값을 미세 조정한 뒤 <strong>현재 설정값 복사</strong> 버튼으로 바로 공유할 수 있습니다.</p>"
+    },
+    {
+      num: "07",
+      title: "QA 시나리오 & 엣지 케이스 체크리스트",
+      tall: true,
+      badge: "긴 카드 · 내부 스크롤 ~2.6x",
+      html:
+        "<h4>1. 트랙패드 핵심 시나리오</h4>" +
+        "<ul class='swt-list'>" +
+          "<li><strong>강한 바닥 플릭:</strong> 긴 카드 상단에서 아래로 강하게 튕겼을 때 바닥에 닿으며 <code>WALL_ABSORB</code>로 정지하고 다음 카드로 넘어가지 않아야 합니다.</li>" +
+          "<li><strong>빠른 3연속 스와이프:</strong> 03 → 04 → 05 → 06을 짧은 간격으로 연속 밀었을 때 중간 긴 카드에 발목 잡히지 않고 리타겟팅되며 부드럽게 통과해야 합니다.</li>" +
+          "<li><strong>즉시 방향 반전:</strong> 아래로 한 장 넘긴 직후 80ms 안에 위로 스와이프하면 <code>COAST_ABSORB</code>가 즉시 풀리고 이전 카드로 되돌아가야 합니다.</li>" +
+          "<li><strong>미세 흔들림 취소:</strong> <code>peekPx &gt; 0</code> 상태에서 임계치의 절반만 밀고 손을 떼면 140ms 후 피크가 0px로 부드럽게 복귀해야 합니다.</li>" +
+        "</ul>" +
+        "<h4>2. 마우스 휠(노치) & 키보드 시나리오</h4>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>이산 마우스 휠 감지</span><span class='swt-muted'>deltaMode !== 0 또는 |dy| ≥ 48 &amp; dt ≥ 60ms</span></div>" +
+          "일반 마우스 휠의 1노치 클릭은 누적 충전을 기다리지 않고 경계에서 즉시 1장 커밋됩니다." +
+        "</div>" +
+        "<ul class='swt-list'>" +
+          "<li><strong>키보드 탐색:</strong> 스테이지 클릭 후 <code>ArrowDown</code> / <code>ArrowUp</code> / <code>PageDown</code> / <code>PageUp</code>으로 즉시 이동합니다.</li>" +
+          "<li><strong>덱 양 끝 경계:</strong> 01번 상단이나 08번 하단에서 바깥으로 밀어도 화이트보드 스크롤이 새지 않습니다.</li>" +
+        "</ul>" +
+        "<h4>3. 성능 & 레이아웃 안정성</h4>" +
+        "<p>하단 텔레메트리 바의 충전 게이지와 긴 카드 상단의 진행 바는 모두 <code>transform: scaleX(...)</code>만 갱신하여 휠 이벤트 도중 레이아웃 스래싱을 일으키지 않습니다.</p>" +
+        "<p class='swt-muted'>— 07번 카드 끝 · 마지막 08번 카드로 이동 —</p>"
+    },
+    {
+      num: "08",
+      title: "결정 & 다음 단계 · 최적값 복사하기",
+      tall: false,
+      badge: "짧은 카드 · 내부 스크롤 없음",
+      html:
+        "<p>가장 손에 잘 맞는 프리셋을 고르거나 우측 슬라이더로 미세 조정을 마치셨나요?</p>" +
+        "<div class='swt-block'>" +
+          "<div class='swt-block-title'><span>원클릭 설정 공유</span><span class='swt-muted'>JSON 1줄 복사</span></div>" +
+          "우측 하단의 <strong>현재 설정값 복사</strong> 버튼을 누르면 현재 프리셋·모드·6개 수치가 한 줄 JSON으로 복사됩니다. 그대로 대화창에 붙여넣어 주시면 Phase 2 실제 구현에 정확히 반영하겠습니다." +
+        "</div>" +
+        "<div class='swt-kpi-grid'>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>현재 위치</div><div class='swt-kpi-val'>마지막 카드</div></div>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>복귀 방법</div><div class='swt-kpi-val'>위로 스와이프</div></div>" +
+          "<div class='swt-kpi'><div class='swt-kpi-label'>빠른 점프</div><div class='swt-kpi-val'>다이얼 1 클릭</div></div>" +
+        "</div>"
+    }
+  ];
+
+  // DOM references
+  var elPresets = root.querySelector("#swtPresets");
+  var elModeToggle = root.querySelector("#swtModeToggle");
+  var elTogglePanelBtn = root.querySelector("#swtTogglePanelBtn");
+  var elBody = root.querySelector("#swtBody");
+  var elStage = root.querySelector("#swtStage");
+  var elTopCapsules = root.querySelector("#swtTopCapsules");
+  var elBottomCapsules = root.querySelector("#swtBottomCapsules");
+  var elViewport = root.querySelector("#swtViewport");
+  var elTrack = root.querySelector("#swtTrack");
+  var elEdgeTop = root.querySelector("#swtEdgeTop");
+  var elEdgeBottom = root.querySelector("#swtEdgeBottom");
+  var elDialCount = root.querySelector("#swtDialCount");
+  var elDialChain = root.querySelector("#swtDialChain");
+  var elPresetLabel = root.querySelector("#swtPresetLabel");
+  var elPresetDesc = root.querySelector("#swtPresetDesc");
+
+  var inThreshold = root.querySelector("#swtInThreshold");
+  var inPeek = root.querySelector("#swtInPeek");
+  var inWall = root.querySelector("#swtInWall");
+  var inChain = root.querySelector("#swtInChain");
+  var inMinStep = root.querySelector("#swtInMinStep");
+  var inAnim = root.querySelector("#swtInAnim");
+
+  var valThreshold = root.querySelector("#swtValThreshold");
+  var valPeek = root.querySelector("#swtValPeek");
+  var valWall = root.querySelector("#swtValWall");
+  var valChain = root.querySelector("#swtValChain");
+  var valMinStep = root.querySelector("#swtValMinStep");
+  var valAnim = root.querySelector("#swtValAnim");
+
+  var btnCopy = root.querySelector("#swtCopyBtn");
+  var btnReset = root.querySelector("#swtResetBtn");
+  var btnTop = root.querySelector("#swtTopBtn");
+
+  var telState = root.querySelector("#swtTelState");
+  var telDy = root.querySelector("#swtTelDy");
+  var telDt = root.querySelector("#swtTelDt");
+  var telAccumBar = root.querySelector("#swtTelAccumBar");
+  var telAccumTxt = root.querySelector("#swtTelAccumTxt");
+  var telCard = root.querySelector("#swtTelCard");
+  var telSteps = root.querySelector("#swtTelSteps");
+
+  // Mutable config
+  var activePresetId = "instant";
+  var cfg = {
+    threshold: 52,
+    peekPx: 0,
+    wallGuardMs: 140,
+    chainWindowMs: 360,
+    minStepMs: 165,
+    animMs: 220,
+    mode: "slide"
+  };
+
+  // Deck state
+  var activeIndex = 0;
+  var stepCount = 0;
+  var cardRefs = [];
+  var dialDots = [];
+
+  // Animation state (supports smooth mid-flight retargeting)
+  var currentY = 0;
+  var targetY = 0;
+  var animStartY = 0;
+  var animStartTime = 0;
+  var animDuration = 220;
+  var animRaf = 0;
+
+  var peekOffset = 0;
+  var peekReturnRaf = 0;
+
+  // Build cards & dial
+  function buildDeck() {
+    elTrack.innerHTML = "";
+    elDialChain.innerHTML = "";
+    cardRefs = [];
+    dialDots = [];
+
+    CARDS.forEach(function (card, idx) {
+      var slot = document.createElement("div");
+      slot.className = "swt-slot";
+
+      var cardEl = document.createElement("article");
+      cardEl.className = "swt-card";
+      cardEl.dataset.index = String(idx);
+
+      var head = document.createElement("div");
+      head.className = "swt-card-head";
+      head.innerHTML =
+        "<div class='swt-card-head-left'>" +
+          "<span class='swt-card-idx'>" + card.num + "</span>" +
+          "<h3 class='swt-card-title'>" + card.title + "</h3>" +
+        "</div>" +
+        "<span class='swt-card-badge " + (card.tall ? "is-tall" : "is-short") + "'>" + card.badge + "</span>";
+
+      var barTrack = document.createElement("div");
+      barTrack.className = "swt-inner-bar-track";
+      var barFill = document.createElement("div");
+      barFill.className = "swt-inner-bar-fill";
+      barTrack.appendChild(barFill);
+
+      var scrollEl = document.createElement("div");
+      scrollEl.className = "swt-card-scroll" + (card.tall ? "" : " is-short");
+      scrollEl.innerHTML = card.html;
+
+      var foot = document.createElement("div");
+      foot.className = "swt-scroll-hint";
+      var hintLeft = document.createElement("span");
+      hintLeft.textContent = card.tall ? "내부 스크롤 0%" : "단일 뷰포트 카드 · 바로 덱 전환";
+      var edgePill = document.createElement("span");
+      edgePill.className = "swt-edge-pill";
+      edgePill.textContent = card.tall ? "상단 경계" : "즉시 전환 가능";
+      foot.appendChild(hintLeft);
+      foot.appendChild(edgePill);
+
+      cardEl.appendChild(head);
+      if (card.tall) cardEl.appendChild(barTrack);
+      cardEl.appendChild(scrollEl);
+      cardEl.appendChild(foot);
+      slot.appendChild(cardEl);
+      elTrack.appendChild(slot);
+
+      var ref = {
+        index: idx,
+        tall: card.tall,
+        cardEl: cardEl,
+        scrollEl: scrollEl,
+        barFill: barFill,
+        hintLeft: hintLeft,
+        edgePill: edgePill
+      };
+      cardRefs.push(ref);
+
+      if (card.tall) {
+        scrollEl.addEventListener("scroll", function () {
+          updateInnerProgress(ref);
+        }, { passive: true });
+      }
+
+      // Dial dot
+      var dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "swt-dial-dot" + (card.tall ? " is-tall" : "");
+      dot.title = card.num + " · " + card.title;
+      dot.setAttribute("aria-label", card.num + "번 카드: " + card.title);
+      dot.addEventListener("click", function () {
+        jumpToCard(idx, true);
+      });
+      elDialChain.appendChild(dot);
+      dialDots.push(dot);
+    });
+  }
+
+  function updateInnerProgress(ref) {
+    if (!ref.tall) return;
+    var el = ref.scrollEl;
+    var maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
+    var ratio = Math.max(0, Math.min(1, el.scrollTop / maxScroll));
+    ref.barFill.style.transform = "scaleX(" + ratio.toFixed(4) + ")";
+    ref.hintLeft.textContent = "내부 스크롤 " + Math.round(ratio * 100) + "%";
+    if (el.scrollTop <= 1) {
+      ref.edgePill.textContent = "상단 경계";
+      ref.edgePill.className = "swt-edge-pill is-boundary";
+    } else if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) {
+      ref.edgePill.textContent = "하단 경계 · 다음 카드 준비";
+      ref.edgePill.className = "swt-edge-pill is-ready";
+    } else {
+      ref.edgePill.textContent = "내부 스크롤 중";
+      ref.edgePill.className = "swt-edge-pill";
+    }
+  }
+
+  function renderCapsulesAndDial() {
+    // Top capsules: up to 2 above activeIndex
+    elTopCapsules.innerHTML = "";
+    var topIndices = [];
+    if (activeIndex >= 2) topIndices.push(activeIndex - 2);
+    if (activeIndex >= 1) topIndices.push(activeIndex - 1);
+
+    if (topIndices.length === 0) {
+      var topEmpty = document.createElement("div");
+      topEmpty.className = "swt-capsule-empty";
+      topEmpty.textContent = "▲ 덱의 첫 번째 카드입니다";
+      elTopCapsules.appendChild(topEmpty);
+    } else {
+      topIndices.forEach(function (idx) {
+        elTopCapsules.appendChild(makeCapsule(idx, activeIndex - idx === 2));
+      });
+    }
+
+    // Bottom capsules: up to 2 below activeIndex
+    elBottomCapsules.innerHTML = "";
+    var botIndices = [];
+    if (activeIndex + 1 < CARDS.length) botIndices.push(activeIndex + 1);
+    if (activeIndex + 2 < CARDS.length) botIndices.push(activeIndex + 2);
+
+    if (botIndices.length === 0) {
+      var botEmpty = document.createElement("div");
+      botEmpty.className = "swt-capsule-empty";
+      botEmpty.textContent = "▼ 덱의 마지막 카드입니다";
+      elBottomCapsules.appendChild(botEmpty);
+    } else {
+      botIndices.forEach(function (idx) {
+        elBottomCapsules.appendChild(makeCapsule(idx, idx - activeIndex === 2));
+      });
+    }
+
+    // Dial
+    elDialCount.textContent = (activeIndex + 1) + "/" + CARDS.length;
+    telCard.textContent = (activeIndex + 1) + " / " + CARDS.length;
+    for (var i = 0; i < dialDots.length; i++) {
+      dialDots[i].classList.toggle("is-active", i === activeIndex);
+    }
+  }
+
+  function makeCapsule(idx, isFar) {
+    var c = CARDS[idx];
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "swt-capsule" + (isFar ? " is-far" : "");
+    btn.innerHTML =
+      "<span class='swt-capsule-left'>" +
+        "<span class='swt-capsule-num'>" + c.num + "</span>" +
+        "<span class='swt-capsule-title'>" + c.title + "</span>" +
+      "</span>" +
+      "<span class='swt-capsule-kind " + (c.tall ? "is-tall" : "is-short") + "'>" + (c.tall ? "긴 카드" : "짧은 카드") + "</span>";
+    btn.addEventListener("click", function () {
+      jumpToCard(idx, true);
+    });
+    return btn;
+  }
+
+  // Cubic-bezier(0.22, 1, 0.36, 1) approximation (fast out, silky settle)
+  function easeOutQuinticBezier(t) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    // Newton-Raphson on cubic-bezier(0.22, 1, 0.36, 1)
+    var x = t;
+    var cx = 3 * 0.22;
+    var bx = 3 * (0.36 - 0.22) - cx;
+    var ax = 1 - cx - bx;
+    for (var i = 0; i < 4; i++) {
+      var curX = ((ax * x + bx) * x + cx) * x - t;
+      var dX = (3 * ax * x + 2 * bx) * x + cx;
+      if (Math.abs(dX) < 1e-5) break;
+      x -= curX / dX;
+      if (x < 0) x = 0;
+      if (x > 1) x = 1;
+    }
+    var cy = 3 * 1.0;
+    var by = 3 * (1.0 - 1.0) - cy;
+    var ay = 1 - cy - by;
+    return ((ay * x + by) * x + cy) * x;
+  }
+
+  function getSlotHeight() {
+    return elViewport.clientHeight || 380;
+  }
+
+  function applyTrackPosition() {
+    if (cfg.mode === "slide") {
+      if (elViewport.scrollTop !== 0) elViewport.scrollTop = 0;
+      var ty = -currentY + peekOffset;
+      elTrack.style.transform = "translate3d(0, " + ty.toFixed(2) + "px, 0)";
+    } else {
+      elViewport.scrollTop = currentY;
+      elTrack.style.transform = peekOffset ? "translate3d(0, " + peekOffset.toFixed(2) + "px, 0)" : "translate3d(0, 0, 0)";
+    }
+  }
+
+  function animateToIndex(nextIdx) {
+    var slotH = getSlotHeight();
+    targetY = nextIdx * slotH;
+    animStartY = currentY;
+    animStartTime = performance.now();
+    animDuration = cfg.animMs;
+
+    if (animRaf) cancelAnimationFrame(animRaf);
+    function tick(now) {
+      var elapsed = now - animStartTime;
+      var p = animDuration <= 0 ? 1 : Math.min(1, elapsed / animDuration);
+      var eased = easeOutQuinticBezier(p);
+      currentY = animStartY + (targetY - animStartY) * eased;
+      applyTrackPosition();
+      if (p < 1) {
+        animRaf = requestAnimationFrame(tick);
+      } else {
+        currentY = targetY;
+        animRaf = 0;
+        applyTrackPosition();
+      }
+    }
+    animRaf = requestAnimationFrame(tick);
+  }
+
+  function setPeek(px) {
+    if (peekReturnRaf) {
+      cancelAnimationFrame(peekReturnRaf);
+      peekReturnRaf = 0;
+    }
+    peekOffset = px;
+    applyTrackPosition();
+  }
+
+  function springBackPeek() {
+    if (Math.abs(peekOffset) < 0.2) {
+      peekOffset = 0;
+      applyTrackPosition();
+      return;
+    }
+    if (peekReturnRaf) cancelAnimationFrame(peekReturnRaf);
+    var startPeek = peekOffset;
+    var startAt = performance.now();
+    var dur = 150;
+    function step(now) {
+      var p = Math.min(1, (now - startAt) / dur);
+      var eased = easeOutQuinticBezier(p);
+      peekOffset = startPeek * (1 - eased);
+      applyTrackPosition();
+      if (p < 1) {
+        peekReturnRaf = requestAnimationFrame(step);
+      } else {
+        peekOffset = 0;
+        peekReturnRaf = 0;
+        applyTrackPosition();
+      }
+    }
+    peekReturnRaf = requestAnimationFrame(step);
+  }
+
+  function setEdgeGlow(dir, ratio, isWall) {
+    var clamped = Math.max(0, Math.min(1, ratio));
+    if (dir > 0) {
+      elEdgeBottom.classList.toggle("is-wall", !!isWall);
+      elEdgeBottom.style.opacity = clamped > 0.02 ? String(Math.min(1, 0.25 + clamped * 0.75)) : "0";
+      elEdgeBottom.style.transform = "scaleX(" + (0.15 + clamped * 0.85).toFixed(3) + ")";
+      elEdgeTop.style.opacity = "0";
+    } else if (dir < 0) {
+      elEdgeTop.classList.toggle("is-wall", !!isWall);
+      elEdgeTop.style.opacity = clamped > 0.02 ? String(Math.min(1, 0.25 + clamped * 0.75)) : "0";
+      elEdgeTop.style.transform = "scaleX(" + (0.15 + clamped * 0.85).toFixed(3) + ")";
+      elEdgeBottom.style.opacity = "0";
+    } else {
+      elEdgeTop.style.opacity = "0";
+      elEdgeBottom.style.opacity = "0";
+    }
+  }
+
+  function clearCardStatusClasses() {
+    for (var i = 0; i < cardRefs.length; i++) {
+      cardRefs[i].cardEl.classList.remove("is-charging", "is-wall");
+    }
+  }
+
+  function jumpToCard(idx, resetScroll) {
+    var clamped = Math.max(0, Math.min(CARDS.length - 1, idx));
+    if (clamped === activeIndex && !resetScroll) return;
+    var prevIdx = activeIndex;
+    activeIndex = clamped;
+    if (resetScroll && cardRefs[activeIndex] && cardRefs[activeIndex].tall) {
+      cardRefs[activeIndex].scrollEl.scrollTop = 0;
+      updateInnerProgress(cardRefs[activeIndex]);
+    }
+    if (clamped !== prevIdx) {
+      stepCount += 1;
+      telSteps.textContent = String(stepCount);
+    }
+    setPeek(0);
+    setEdgeGlow(0, 0, false);
+    clearCardStatusClasses();
+    renderCapsulesAndDial();
+    animateToIndex(activeIndex);
+  }
+
+  // =========================================================
+  // WsBoardWheel State Machine
+  // =========================================================
+  var IDLE_GAP_MS = 140;
+  var wheelState = "IDLE";
+  var lastEventAt = 0;
+  var lastDir = 0;
+  var wasInnerScrolling = false;
+  var lastInnerAt = 0;
+  var wallAbsorbUntil = 0;
+  var wallDir = 0;
+  var wallMinAbs = Infinity;
+  var chargeAccum = 0;
+  var chargeDir = 0;
+  var commitAt = 0;
+  var commitDir = 0;
+  var coastMinAbs = Infinity;
+  var idleTimer = 0;
+
+  function updateTelemetry(stateName, dy, dt, accum) {
+    wheelState = stateName;
+    telState.textContent = stateName;
+    telState.dataset.state = stateName;
+    if (dy !== null) telDy.textContent = (dy > 0 ? "+" : "") + dy.toFixed(1);
+    if (dt !== null) telDt.textContent = (dt >= 999 ? "999+" : Math.round(dt)) + " ms";
+    var acc = Math.max(0, Math.round(accum));
+    var ratio = Math.min(1, acc / Math.max(1, cfg.threshold));
+    telAccumBar.style.transform = "scaleX(" + ratio.toFixed(4) + ")";
+    telAccumTxt.textContent = acc + "/" + cfg.threshold;
+
+    clearCardStatusClasses();
+    var activeRef = cardRefs[activeIndex];
+    if (activeRef) {
+      if (stateName === "CHARGING") activeRef.cardEl.classList.add("is-charging");
+      else if (stateName === "WALL_ABSORB") activeRef.cardEl.classList.add("is-wall");
+    }
+  }
+
+  function scheduleIdleReset() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () {
+      idleTimer = 0;
+      chargeAccum = 0;
+      chargeDir = 0;
+      wasInnerScrolling = false;
+      setEdgeGlow(0, 0, false);
+      springBackPeek();
+      updateTelemetry("IDLE", 0, IDLE_GAP_MS, 0);
+    }, IDLE_GAP_MS + 25);
+  }
+
+  function getInnerScrollInfo(ref) {
+    if (!ref || !ref.tall) {
+      return { canScroll: false, atTop: true, atBottom: true };
+    }
+    var el = ref.scrollEl;
+    var canScroll = el.scrollHeight > el.clientHeight + 2;
+    var atTop = !canScroll || el.scrollTop <= 1;
+    var atBottom = !canScroll || (el.scrollTop + el.clientHeight >= el.scrollHeight - 2);
+    return { canScroll: canScroll, atTop: atTop, atBottom: atBottom };
+  }
+
+  function canInnerScrollDir(ref, dir) {
+    var info = getInnerScrollInfo(ref);
+    if (!info.canScroll) return false;
+    return dir > 0 ? !info.atBottom : !info.atTop;
+  }
+
+  function commitStep(dir, now, absDy, nextState) {
+    var nextIdx = activeIndex + dir;
+    if (nextIdx < 0 || nextIdx >= CARDS.length) {
+      chargeAccum = 0;
+      setEdgeGlow(dir, 0.35, true);
+      springBackPeek();
+      updateTelemetry("IDLE", dir * absDy, now - lastEventAt, 0);
+      return false;
+    }
+
+    // Prepare destination card inner scroll cleanly
+    var destRef = cardRefs[nextIdx];
+    if (destRef && destRef.tall) {
+      if (dir > 0) {
+        // Arriving from above -> ensure we start at top
+        if (destRef.scrollEl.scrollTop + destRef.scrollEl.clientHeight >= destRef.scrollEl.scrollHeight - 4) {
+          destRef.scrollEl.scrollTop = 0;
+        }
+      }
+      updateInnerProgress(destRef);
+    }
+
+    activeIndex = nextIdx;
+    stepCount += 1;
+    telSteps.textContent = String(stepCount);
+
+    commitAt = now;
+    commitDir = dir;
+    coastMinAbs = absDy;
+    chargeAccum = 0;
+    chargeDir = 0;
+    wasInnerScrolling = false;
+
+    setPeek(0);
+    setEdgeGlow(0, 0, false);
+    renderCapsulesAndDial();
+    animateToIndex(activeIndex);
+    updateTelemetry(nextState, dir * absDy, now - lastEventAt, 0);
+    return true;
+  }
+
+  function onStageWheel(e) {
+    // Normalize deltaY
+    var dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 32;
+    else if (e.deltaMode === 2) dy *= 360;
+
+    // Ignore horizontal-only gestures
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.6 && Math.abs(e.deltaY) < 4) {
+      return;
+    }
+    if (Math.abs(dy) < 0.05) {
+      e.preventDefault();
+      return;
+    }
+
+    var now = performance.now();
+    var dt = lastEventAt ? (now - lastEventAt) : 999;
+    var absDy = Math.abs(dy);
+    var dir = dy > 0 ? 1 : -1;
+    var isDiscrete = (e.deltaMode !== 0) || (absDy >= 48 && dt >= 60);
+
+    var activeRef = cardRefs[activeIndex];
+    var pointerInInner = activeRef && activeRef.tall && activeRef.scrollEl.contains(e.target);
+    var innerCanMove = pointerInInner && canInnerScrollDir(activeRef, dir);
+
+    scheduleIdleReset();
+
+    // 1. Handle active COAST_ABSORB / CHAIN_GLIDE post-commit state
+    if (wheelState === "COAST_ABSORB" || wheelState === "CHAIN_GLIDE") {
+      var sinceCommit = now - commitAt;
+      var isIdleBreak = dt >= IDLE_GAP_MS;
+      var isReversed = dir !== commitDir;
+      var isSpike = (absDy > Math.max(coastMinAbs * 1.8, coastMinAbs + 10)) && (sinceCommit >= cfg.minStepMs);
+      var isDiscreteStep = isDiscrete && (sinceCommit >= cfg.minStepMs);
+
+      if (isIdleBreak || isReversed) {
+        // Unlock immediately and fall through to fresh gesture handling
+        wheelState = "IDLE";
+        coastMinAbs = Infinity;
+      } else if (isSpike || isDiscreteStep) {
+        // Fresh push in same direction
+        if (cfg.chainWindowMs > 0 && sinceCommit <= cfg.chainWindowMs) {
+          e.preventDefault();
+          commitStep(dir, now, absDy, "CHAIN_GLIDE");
+          lastEventAt = now;
+          lastDir = dir;
+          return;
+        }
+        // chainWindowMs == 0 or expired: unlock so tall card can scroll natively or charge
+        wheelState = "IDLE";
+        coastMinAbs = Infinity;
+      } else {
+        // Still decaying coast tail -> absorb cleanly
+        e.preventDefault();
+        if (absDy < coastMinAbs) coastMinAbs = absDy;
+        if (absDy <= coastMinAbs + 6 || (absDy < 20 && dt < IDLE_GAP_MS)) {
+          updateTelemetry("COAST_ABSORB", dy, dt, 0);
+          lastEventAt = now;
+          lastDir = dir;
+          return;
+        }
+        // Small bump before minStepMs -> still absorb
+        if (sinceCommit < cfg.minStepMs) {
+          updateTelemetry("COAST_ABSORB", dy, dt, 0);
+          lastEventAt = now;
+          lastDir = dir;
+          return;
+        }
+      }
+    }
+
+    // 2. Fresh swipe within chainWindowMs after an idle break (same direction)
+    if (
+      wheelState === "IDLE" &&
+      cfg.chainWindowMs > 0 &&
+      commitAt > 0 &&
+      dir === commitDir &&
+      (now - commitAt) <= cfg.chainWindowMs &&
+      (now - commitAt) >= cfg.minStepMs &&
+      (isDiscrete || absDy >= 14)
+    ) {
+      e.preventDefault();
+      commitStep(dir, now, absDy, "CHAIN_GLIDE");
+      lastEventAt = now;
+      lastDir = dir;
+      return;
+    }
+
+    // 3. Inner scrolling vs boundary transition (WALL_ABSORB)
+    if (innerCanMove && wheelState !== "CHARGING") {
+      // Allow native inner scrolling inside the tall card (overscroll-behavior-y: contain)
+      wasInnerScrolling = true;
+      lastInnerAt = now;
+      chargeAccum = 0;
+      chargeDir = 0;
+      setPeek(0);
+      setEdgeGlow(0, 0, false);
+      updateTelemetry("INNER", dy, dt, 0);
+      lastEventAt = now;
+      lastDir = dir;
+      return;
+    }
+
+    // From here on, we are NOT natively scrolling the card -> lock outer whiteboard scroll!
+    e.preventDefault();
+
+    // Check WALL_ABSORB entry: transitioned from inner scrolling to boundary within wallGuardMs
+    if (
+      cfg.wallGuardMs > 0 &&
+      wasInnerScrolling &&
+      (now - lastInnerAt) <= cfg.wallGuardMs &&
+      dir === lastDir &&
+      !isDiscrete
+    ) {
+      wasInnerScrolling = false;
+      wallAbsorbUntil = now + cfg.wallGuardMs;
+      wallDir = dir;
+      wallMinAbs = absDy;
+      setEdgeGlow(dir, 0.55, true);
+      updateTelemetry("WALL_ABSORB", dy, dt, 0);
+      lastEventAt = now;
+      lastDir = dir;
+      return;
+    }
+
+    // Check active WALL_ABSORB continuation
+    if (wheelState === "WALL_ABSORB") {
+      var wallExpired = now >= wallAbsorbUntil || dt >= IDLE_GAP_MS || dir !== wallDir;
+      var wallSpike = absDy > Math.max(wallMinAbs * 1.8, wallMinAbs + 12);
+      if (!wallExpired && !wallSpike && !isDiscrete) {
+        if (absDy < wallMinAbs) wallMinAbs = absDy;
+        setEdgeGlow(dir, 0.45, true);
+        updateTelemetry("WALL_ABSORB", dy, dt, 0);
+        lastEventAt = now;
+        lastDir = dir;
+        return;
+      }
+      // Wall guard finished or deliberate push broke through
+      setEdgeGlow(0, 0, false);
+    }
+
+    wasInnerScrolling = false;
+
+    // Deck outer boundary check (before first card or after last card)
+    if ((activeIndex === 0 && dir < 0) || (activeIndex === CARDS.length - 1 && dir > 0)) {
+      chargeAccum = 0;
+      setEdgeGlow(dir, 0.35, true);
+      if (cfg.peekPx > 0) {
+        setPeek(-dir * Math.min(cfg.peekPx * 0.35, absDy * 0.12));
+      }
+      updateTelemetry("IDLE", dy, dt, 0);
+      lastEventAt = now;
+      lastDir = dir;
+      return;
+    }
+
+    // 4. Discrete mouse wheel -> immediate 1-card commit
+    if (isDiscrete) {
+      commitStep(dir, now, absDy, "COAST_ABSORB");
+      lastEventAt = now;
+      lastDir = dir;
+      return;
+    }
+
+    // 5. Continuous trackpad CHARGING
+    if (chargeDir !== dir || dt >= IDLE_GAP_MS) {
+      chargeAccum = 0;
+      chargeDir = dir;
+    }
+    chargeAccum += absDy;
+    var chargeRatio = Math.min(1, chargeAccum / Math.max(1, cfg.threshold));
+
+    setEdgeGlow(dir, chargeRatio, false);
+    if (cfg.peekPx > 0) {
+      var damped = 1 - Math.pow(1 - chargeRatio, 2);
+      setPeek(-dir * cfg.peekPx * damped);
+    }
+
+    if (chargeAccum >= cfg.threshold) {
+      commitStep(dir, now, absDy, "COAST_ABSORB");
+    } else {
+      updateTelemetry("CHARGING", dy, dt, chargeAccum);
+    }
+
+    lastEventAt = now;
+    lastDir = dir;
+  }
+
+  elStage.addEventListener("wheel", onStageWheel, { passive: false });
+
+  // Keyboard navigation when stage is focused
+  elStage.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown" || e.key === "PageDown") {
+      e.preventDefault();
+      jumpToCard(activeIndex + 1, false);
+    } else if (e.key === "ArrowUp" || e.key === "PageUp") {
+      e.preventDefault();
+      jumpToCard(activeIndex - 1, false);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      jumpToCard(0, true);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      jumpToCard(CARDS.length - 1, true);
+    }
+  });
+
+  // Sync UI controls <-> cfg
+  function syncSlidersFromCfg() {
+    inThreshold.value = String(cfg.threshold);
+    inPeek.value = String(cfg.peekPx);
+    inWall.value = String(cfg.wallGuardMs);
+    inChain.value = String(cfg.chainWindowMs);
+    inMinStep.value = String(cfg.minStepMs);
+    inAnim.value = String(cfg.animMs);
+
+    valThreshold.textContent = cfg.threshold + " px";
+    valPeek.textContent = cfg.peekPx + " px";
+    valWall.textContent = cfg.wallGuardMs + " ms";
+    valChain.textContent = cfg.chainWindowMs + " ms";
+    valMinStep.textContent = cfg.minStepMs + " ms";
+    valAnim.textContent = cfg.animMs + " ms";
+
+    telAccumTxt.textContent = Math.round(chargeAccum) + "/" + cfg.threshold;
+
+    var modeBtns = elModeToggle.querySelectorAll(".swt-seg-btn");
+    for (var i = 0; i < modeBtns.length; i++) {
+      modeBtns[i].classList.toggle("is-active", modeBtns[i].dataset.mode === cfg.mode);
+    }
+  }
+
+  function applyPreset(presetId) {
+    var p = PRESETS[presetId];
+    if (!p) return;
+    activePresetId = presetId;
+    cfg.threshold = p.threshold;
+    cfg.peekPx = p.peekPx;
+    cfg.wallGuardMs = p.wallGuardMs;
+    cfg.chainWindowMs = p.chainWindowMs;
+    cfg.minStepMs = p.minStepMs;
+    cfg.animMs = p.animMs;
+    cfg.mode = p.mode;
+
+    elPresetLabel.textContent = p.label;
+    elPresetDesc.textContent = p.desc;
+
+    var btns = elPresets.querySelectorAll(".swt-preset-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("is-active", btns[i].dataset.preset === presetId);
+    }
+    syncSlidersFromCfg();
+    applyTrackPosition();
+  }
+
+  function markCustomIfModified() {
+    var p = PRESETS[activePresetId];
+    if (!p) return;
+    var isExact =
+      cfg.threshold === p.threshold &&
+      cfg.peekPx === p.peekPx &&
+      cfg.wallGuardMs === p.wallGuardMs &&
+      cfg.chainWindowMs === p.chainWindowMs &&
+      cfg.minStepMs === p.minStepMs &&
+      cfg.animMs === p.animMs;
+    elPresetLabel.textContent = isExact ? p.label : p.label + " (수정됨)";
+  }
+
+  elPresets.addEventListener("click", function (e) {
+    var btn = e.target.closest(".swt-preset-btn");
+    if (!btn) return;
+    applyPreset(btn.dataset.preset);
+  });
+
+  elModeToggle.addEventListener("click", function (e) {
+    var btn = e.target.closest(".swt-seg-btn");
+    if (!btn) return;
+    cfg.mode = btn.dataset.mode;
+    syncSlidersFromCfg();
+    applyTrackPosition();
+  });
+
+  elTogglePanelBtn.addEventListener("click", function () {
+    var hidden = elBody.classList.toggle("is-controls-hidden");
+    elTogglePanelBtn.textContent = hidden ? "튜너 펼치기" : "튜너 접기";
+    // Re-sync track position after width change
+    requestAnimationFrame(function () {
+      currentY = activeIndex * getSlotHeight();
+      targetY = currentY;
+      applyTrackPosition();
+    });
+  });
+
+  function bindSlider(inputEl, key, unit, valEl) {
+    inputEl.addEventListener("input", function () {
+      cfg[key] = Number(inputEl.value);
+      valEl.textContent = cfg[key] + " " + unit;
+      if (key === "threshold") {
+        telAccumTxt.textContent = Math.round(chargeAccum) + "/" + cfg.threshold;
+      }
+      markCustomIfModified();
+    });
+  }
+
+  bindSlider(inThreshold, "threshold", "px", valThreshold);
+  bindSlider(inPeek, "peekPx", "px", valPeek);
+  bindSlider(inWall, "wallGuardMs", "ms", valWall);
+  bindSlider(inChain, "chainWindowMs", "ms", valChain);
+  bindSlider(inMinStep, "minStepMs", "ms", valMinStep);
+  bindSlider(inAnim, "animMs", "ms", valAnim);
+
+  btnReset.addEventListener("click", function () {
+    applyPreset(activePresetId);
+  });
+
+  btnTop.addEventListener("click", function () {
+    jumpToCard(0, true);
+  });
+
+  btnCopy.addEventListener("click", function () {
+    var p = PRESETS[activePresetId];
+    var payload = JSON.stringify({
+      preset: p ? p.name : "custom",
+      mode: cfg.mode,
+      threshold: cfg.threshold,
+      peekPx: cfg.peekPx,
+      wallGuardMs: cfg.wallGuardMs,
+      chainWindowMs: cfg.chainWindowMs,
+      minStepMs: cfg.minStepMs,
+      animMs: cfg.animMs
+    });
+
+    function showCopied() {
+      var orig = btnCopy.textContent;
+      btnCopy.textContent = "복사됨! 붙여넣기 가능";
+      setTimeout(function () {
+        btnCopy.textContent = orig;
+      }, 1500);
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(payload).then(showCopied, function () {
+        fallbackCopy(payload, showCopied);
+      });
+    } else {
+      fallbackCopy(payload, showCopied);
+    }
+  });
+
+  function fallbackCopy(text, onDone) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (_) {}
+    document.body.removeChild(ta);
+    onDone();
+  }
+
+  // Keep track aligned on resize
+  if (typeof ResizeObserver !== "undefined") {
+    var ro = new ResizeObserver(function () {
+      if (!animRaf) {
+        currentY = activeIndex * getSlotHeight();
+        targetY = currentY;
+        applyTrackPosition();
+      }
+      for (var i = 0; i < cardRefs.length; i++) {
+        if (cardRefs[i].tall) updateInnerProgress(cardRefs[i]);
+      }
+    });
+    ro.observe(elViewport);
+  }
+
+  // Init
+  buildDeck();
+  applyPreset("instant");
+  renderCapsulesAndDial();
+  currentY = 0;
+  targetY = 0;
+  applyTrackPosition();
+  for (var i = 0; i < cardRefs.length; i++) {
+    if (cardRefs[i].tall) updateInnerProgress(cardRefs[i]);
+  }
+})();
+</script>
+</div>

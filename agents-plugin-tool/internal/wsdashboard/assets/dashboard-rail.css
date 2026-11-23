@@ -198,6 +198,17 @@
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }
   :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }
 }
+/* When a board sheet ([data-max]) is open, lift stacking contexts on gallery
+   containers (fixed in narrow/drag, sticky in board-first) and active slide
+   transforms so [data-max] (z-index: --z-modal) always paints above
+   body > .bc-scrim (calc(--z-modal - 1)) while outside clicks still reach
+   the scrim to close. Non-maximized gallery panes are dimmed by .bgal::before
+   rather than visibility/opacity so gallery iframes stay alive. */
+:root[data-board-max="gal"] .bgal:not([hidden]) { z-index: var(--z-modal) !important; pointer-events: none !important; }
+:root[data-board-max="gal"] .bgal:not([hidden])::before { content: ""; position: absolute; inset: 0; background: var(--scrim); z-index: calc(var(--z-modal) - 1); pointer-events: none; }
+:root[data-board-max="gal"] .bgal:not([hidden]) > :is(.gal-rail, .gal-viewport) { pointer-events: none !important; background: transparent !important; }
+:root[data-board-max="gal"] .bgal [data-max] { pointer-events: auto; }
+:root[data-board-max] :is(.r-board, .gal-page[data-active]) { translate: none !important; transform: none !important; }
 /* An empty board (no topic or card in it; the placeholder may follow a future toolbar card) is a quiet dashed placeholder. In the live page it fills its column (.bcol), a scroll box with its own offsets (padding, the .top-classed pill wrapper's margin, the rail wrappers' margins), so it is pinned to the column's padding box rather than sized by height: 100%, which overflowed by those offsets. Elsewhere (no sized column) it stays a short strip. */
 .r-board:not(:has(> .topic, > .bcard)) > .empty { box-sizing: border-box; min-height: 54px; margin: 0; display: grid; place-items: center; border: 2px dashed color-mix(in srgb, var(--wb-muted-fg) 40%, transparent); font-weight: 700; }
 .dgrid.live > .bcol:has(> .r-board > .empty) { position: relative; }

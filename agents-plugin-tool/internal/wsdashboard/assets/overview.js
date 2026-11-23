@@ -5,7 +5,7 @@
   // the board region only: docked units stay in the docking gallery
   // (cards.js) as they stand.
   var doc = document, root = doc.documentElement, o = null, on = false, busy = false;
-  var entry = null, spacer = null, tabs = new Map(), callbacks = [];
+  var entry = null, spacer = null, tabs = new Map(), callbacks = [], releaseCallbacks = [];
   var ITEM = "section.topic[data-topic], .bcard[data-card]";
   function all(sel, box) { return Array.prototype.slice.call((box || doc).querySelectorAll(sel)); }
   function identity(n) { return n && (n.hasAttribute("data-card") ? { card: n.getAttribute("data-card") } : { topic: n.getAttribute("data-topic") }); }
@@ -105,6 +105,10 @@
     if (!on && o.release) o.release();
     var c = callbacks.splice(0);
     c.forEach(function (fn) { fn(); });
+    if (!on && releaseCallbacks.length) {
+      var r = releaseCallbacks.splice(0);
+      r.forEach(function (fn) { fn(); });
+    }
   }
   // Unlike after(), a filter waits for motion without requesting an exit.
   function filter(run) {
@@ -230,9 +234,44 @@
     }
     var n = target && target.closest ? target.closest(ITEM) : null;
     if (n && n.hasAttribute("data-state-filtered")) n = null;
-    var h = o.frames ? o.frames() : null, before = !calm() ? snapshot() : null;
+    var h = o.frames ? o.frames() : null;
     var restore = find(entry.key);
     if (restore && restore.hasAttribute("data-state-filtered")) { restore = null; if (!n) n = items()[0] || null; }
+    var fastSnap = !!(window.WsBoardAnchor && window.WsBoardAnchor.bounded && window.WsBoardAnchor.bounded());
+    if (fastSnap) {
+      on = false;
+      root.removeAttribute("data-overview");
+      unrove();
+      o.place(false);
+      if (o.restoreFrames) o.restoreFrames(h);
+      if (spacer) { spacer.remove(); spacer = null; }
+      var landedFast = n && n.isConnected ? n : null;
+      var targetFast = landedFast || restore || items()[0] || null;
+      o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "false");
+      save(); changed();
+      if (targetFast) window.WsBoardAnchor.select(targetFast, { keep: true, still: false, smooth: false });
+      else keep(o.toolbar, entry.offset);
+      if (targetFast && !calm() && targetFast.animate) {
+        try {
+          targetFast.animate(
+            [{ transform: "translate3d(0,12px,0)", opacity: 0.72 }, { transform: "translate3d(0,0,0)", opacity: 1 }],
+            { duration: 160, easing: "cubic-bezier(.22, 1, .36, 1)", fill: "none" }
+          );
+        } catch (e) {}
+      }
+      if (landedFast) {
+        flash(landedFast);
+        if (!(options && options.keep)) { landedFast.setAttribute("tabindex", "-1"); landedFast.focus({ preventScroll: true }); }
+      } else if (!(options && options.keep)) o.toolbar.querySelector(".board-overview").focus({ preventScroll: true });
+      all(".overview-here", o.board).forEach(function (x) { x.classList.remove("overview-here"); });
+      if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
+      var colEl = doc.getElementById("bcol");
+      if (colEl) colEl.dispatchEvent(new Event("scroll"));
+      finish();
+      if (done) done();
+      return;
+    }
+    var before = !calm() ? snapshot() : null;
     var planned = n || restore;
     var from = (planned || o.toolbar).getBoundingClientRect().top - view(scroller(planned || o.toolbar)).top;
     busy = !!before;
@@ -308,6 +347,7 @@
     toggle: function () { if (on) exit(null); else enter(null); },
     exit: exit,
     after: function (fn) { if (on) exit(null, fn); else if (busy) callbacks.push(fn); else fn(); },
+    onRelease: function (fn) { if (!on && !busy) fn(); else releaseCallbacks.push(fn); },
     filter: filter,
     pick: function (n, options) { if (!on) return false; exit(n, null, options); return true; }
   };

@@ -358,4 +358,10 @@
   d.addEventListener("pointermove", function () { setHover(true); }, { passive: true });
   d.addEventListener("pointerleave", function () { setHover(false); });
   window.addEventListener("blur", function () { setHover(false); });
+  // Forward wheel deltas passively so the host's snap-deck wheel controller
+  // sees boundary gestures while native 120Hz inner card scroll stays unblocked.
+  d.addEventListener("wheel", function (e) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    post({ wbDoc: "wheel", dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode });
+  }, { passive: true });
 })();

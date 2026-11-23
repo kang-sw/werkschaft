@@ -54,7 +54,7 @@ function buildFixtureHtml() {
     .doc-body { padding: 8px 14px; }
     .log-line { padding: 4px 0; border-bottom: 1px solid rgba(120,130,150,.15); }
     .last-line { font-weight: 700; color: #1f5fd6; padding-bottom: 10px; }
-  </style></head><body><div class="doc-body">${makeLines('DocFrame', 42, 'IFRAME END LINE 042 — FULLY VISIBLE ABOVE BOTTOM RAIL')}</div></body></html>`;
+  </style></head><body><div class="doc-body">${makeLines('DocFrame', 42, 'IFRAME END LINE 042 — FULLY VISIBLE ABOVE BOTTOM RAIL')}</div><script>document.addEventListener('wheel',function(e){if(!e.defaultPrevented&&!e.ctrlKey)window.parent.postMessage({wbDoc:'wheel',dy:e.deltaY,dx:e.deltaX,mode:e.deltaMode},'*');},{passive:true});</script></body></html>`;
   const escapedIframeDoc = iframeDoc.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
   const topicHtml = (idx, title, opts = {}) => {
@@ -193,6 +193,16 @@ function buildBootstrapScript() {
         });
       }
       anchorInit();
+      window.addEventListener("message", function (e) {
+        if (!e.data || e.data.wbDoc !== "wheel") return;
+        var frames = doc.querySelectorAll("iframe.doc-frame");
+        for (var i = 0; i < frames.length; i++) {
+          if (frames[i].contentWindow === e.source && window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) {
+            window.WsBoardAnchor.onFrameWheel(frames[i], e.data.dy, e.data.dx, e.data.mode);
+            break;
+          }
+        }
+      });
     })();`,
     railJs,
   ];
@@ -257,13 +267,13 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     const stepBtnCount = await page.locator('.board-step, .board-step-prev, .board-step-next').count();
     assert.equal(stepBtnCount, 0, 'redundant .board-step chevron buttons must be removed');
 
-    // Verify no overscroll-behavior: contain or scroll-margin-top on section.topic
+    // Verify wheel-virtualized CSS: overscroll-behavior-y: contain on inner scroller, no scroll-margin-top
     const topicCss = await page.locator('section.topic[data-topic="topic-4"]').evaluate(el => {
       const cs = getComputedStyle(el);
       return { overscrollY: cs.overscrollBehaviorY, scrollMarginTop: cs.scrollMarginTop, overflowAnchor: cs.overflowAnchor };
     });
-    assert.equal(topicCss.overscrollY, 'auto', 'section.topic must allow scroll chaining');
-    assert.equal(topicCss.scrollMarginTop, '46px', 'topic 2+ must carry padTop(2px) + 44px capsule-aligned scroll-margin-top');
+    assert.equal(topicCss.overscrollY, 'contain', 'section.topic must contain inner overscroll');
+    assert.equal(topicCss.scrollMarginTop, '0px', 'wheel-virtualized deck uses no CSS scroll-margin-top');
     assert.equal(topicCss.overflowAnchor, 'none', 'non-current card must keep overflow-anchor: none');
 
     // Bug 3 + Bug 4 toolbar-float transition: select Topic 4 from scrollTop=0
@@ -310,7 +320,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.equal(t4TopMetrics.key, 't:topic-4');
     assert.equal(t4TopMetrics.currentAttr, true);
     assert.equal(t4TopMetrics.overflowAnchor, 'auto', 'current card keeps overflow-anchor: auto');
-    assert.equal(t4TopMetrics.floating, true, 'toolbar floats when scrolled to topic-4');
+    assert.equal(t4TopMetrics.floating, false, 'toolbar stays non-floating in bounded snap-deck mode');
     assert.equal(t4TopMetrics.topCaps.length, 2, '2-row top rail bars visible');
     const topGap = t4TopMetrics.cardTop - t4TopMetrics.topStackBottom;
     assert.ok(topGap >= -1 && topGap <= 3, `expected <=3px gap below 2-row top rail, got ${topGap.toFixed(2)}px`);
@@ -363,12 +373,14 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     await waitFrames(page, 2);
     await page.mouse.move(hitPoint.x, hitPoint.y);
 
-    // Wheel down enough to finish Topic 4 inner scroll (~1050px) and chain into #bcol
-    for (let i = 0; i < 8; i++) {
+    // Wheel down enough to finish Topic 4 inner scroll, then pause past wallGuardMs and step to next card
+    for (let i = 0; i < 9; i++) {
       await page.mouse.wheel(0, 260);
       await page.waitForTimeout(35);
     }
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(260);
     const afterDownChain = await page.evaluate(() => ({
       t4Top: document.getElementById('topic-4').scrollTop,
       bcolTop: document.getElementById('bcol').scrollTop,
@@ -376,37 +388,44 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     }));
     assert.ok(afterDownChain.t4Top > 100, `wheel over iframe.doc-frame must scroll topic-4 internally first (got ${afterDownChain.t4Top})`);
     assert.ok(afterDownChain.bcolTop > hitPoint.bcolTop + 100,
-      `wheel over iframe.doc-frame must chain from topic-4 into #bcol (${hitPoint.bcolTop} -> ${afterDownChain.bcolTop})`);
-    assert.notEqual(afterDownChain.key, 't:topic-4', `scrollend must advance anchorKey off topic-4 (got ${afterDownChain.key})`);
+      `wheel over iframe.doc-frame must step from topic-4 into next card (${hitPoint.bcolTop} -> ${afterDownChain.bcolTop})`);
+    assert.notEqual(afterDownChain.key, 't:topic-4', `wheel step must advance anchorKey off topic-4 (got ${afterDownChain.key})`);
 
-    // Now scroll UP aggressively over visible board area to confirm upward chaining also works
+    // Now pause past idleGapMs, ensure current card is at top, and wheel UP to confirm upward deck step also works
+    await page.evaluate(() => {
+      const cur = document.querySelector('section.topic[data-current]');
+      if (cur) cur.scrollTop = 0;
+    });
+    await page.waitForTimeout(200);
     await page.mouse.move(hitPoint.x, hitPoint.y);
-    for (let i = 0; i < 8; i++) {
-      await page.mouse.wheel(0, -320);
-      await page.waitForTimeout(35);
-    }
-    await page.waitForTimeout(300);
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(260);
     const afterUpChain = await page.evaluate(() => ({
       bcolTop: document.getElementById('bcol').scrollTop,
       key: window.WsBoardAnchor.key(),
     }));
-    assert.ok(afterUpChain.bcolTop < afterDownChain.bcolTop, 'upward wheel must chain back up #bcol');
+    assert.ok(afterUpChain.bcolTop < afterDownChain.bcolTop, 'upward wheel must step back up #bcol');
 
-    // Bug 4 (part B): From scrollTop=0 (toolbar un-floated), click bottom .wb-cap for Topic 3 (after folded Topic 2)
+    // Bug 4 (part B): From Topic 1 (with full-span cards, Topic 2 & Topic 3 sit in bottom rail), click bottom .wb-cap for Topic 3 (after folded Topic 2)
     await page.evaluate(() => {
-      document.getElementById('bcol').scrollTop = 0;
+      window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
     });
     await page.waitForTimeout(120);
     await waitFrames(page, 4);
 
     // Click bottom or top cap matching Topic 3 (scrolls down if in bottom rail; verify which capsule holds Topic 3)
-    const clickedTopic3 = await page.evaluate(() => {
+    const capState = await page.evaluate(() => {
+      const caps = Array.from(document.querySelectorAll('.wb-cap')).map(b => ({
+        hidden: b.hidden,
+        stackHidden: b.parentElement.hidden,
+        id: b.wbTopic && b.wbTopic.id,
+        text: b.textContent.trim()
+      }));
       const cap = Array.from(document.querySelectorAll('.wb-cap')).find(b => !b.hidden && b.wbTopic && b.wbTopic.id === 'topic-3');
-      if (!cap) return false;
-      cap.click();
-      return true;
+      if (cap) cap.click();
+      return { clicked: !!cap, caps };
     });
-    assert.equal(clickedTopic3, true, 'Topic 3 must appear in rail capsules from scrollTop=0');
+    assert.equal(capState.clicked, true, 'Topic 3 must appear in rail capsules from scrollTop=0: ' + JSON.stringify(capState.caps));
     await waitForScrollSettle(page);
 
     const t3Landed = await page.evaluate(() => {
@@ -530,10 +549,12 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       ep.className = 'entry-panel';
       ep.setAttribute('data-max', '');
       t4.appendChild(ep);
+      t4.setAttribute('data-has-panel-max', '');
       const t4ContainMax = getComputedStyle(t4).contain;
       const epRect = ep.getBoundingClientRect();
       const vw = window.innerWidth, vh = window.innerHeight;
       ep.remove();
+      t4.removeAttribute('data-has-panel-max');
       // Verify terminal/web .bc-body preserves overflow: hidden inside #bcol
       const origKind = card.getAttribute('data-kind');
       card.setAttribute('data-kind', 'web');
@@ -563,22 +584,22 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         bodyFlexGrow: getComputedStyle(body).flexGrow,
       };
     });
-    assert.equal(snapDeck.snapType, 'y mandatory', '#bcol uses mandatory y snap');
+    assert.equal(snapDeck.snapType, 'none', '#bcol uses wheel-virtualized deck (no CSS scroll-snap)');
     assert.equal(snapDeck.scrollbarWidth, 'none', '#bcol hides outer scrollbar');
-    assert.ok(Math.abs(snapDeck.t1H - snapDeck.usable) <= 1.5, `topic height (${snapDeck.t1H}) matches --board-usable (${snapDeck.usable})`);
-    assert.equal(snapDeck.cardScrollMarginTop, '160px', 'slot 0 aligns scroll-margin-top to 160px (snaps to scrollTop=0)');
-    assert.equal(snapDeck.t1ScrollMarginTop, '26px', 'slot 1 aligns scroll-margin-top to padTop + 24px (26px)');
+    assert.ok(snapDeck.t1H >= snapDeck.usable - 1.5, `topic height (${snapDeck.t1H}) is at least --board-usable (${snapDeck.usable})`);
+    assert.equal(snapDeck.cardScrollMarginTop, '0px', 'wheel-virtualized slot 0 uses no CSS scroll-margin-top');
+    assert.equal(snapDeck.t1ScrollMarginTop, '0px', 'wheel-virtualized slot 1 uses no CSS scroll-margin-top');
     assert.equal(snapDeck.t4Contain, 'strict', 'normal topic uses contain: strict');
-    assert.equal(snapDeck.t4ContainMax, 'none', 'entry-panel[data-max] lifts contain: strict');
+    assert.equal(snapDeck.t4ContainMax, 'none', 'entry-panel[data-max] lifts contain: strict via data-has-panel-max');
     assert.ok(Math.abs(snapDeck.epRect.top - 52) <= 1 && Math.abs(snapDeck.epRect.left - 16) <= 1 &&
       Math.abs(snapDeck.epRect.width - (snapDeck.vw - 32)) <= 2 && Math.abs(snapDeck.epRect.height - (snapDeck.vh - 64)) <= 2 &&
       snapDeck.epRect.height > snapDeck.usable + 50,
       `entry-panel[data-max] fills viewport unclipped by #bcol / contain: strict: ${JSON.stringify(snapDeck.epRect)} vs ${snapDeck.vw}x${snapDeck.vh}`);
     assert.equal(snapDeck.webBodyOverflow, 'hidden', 'web .bcard .bc-body preserves overflow: hidden inside #bcol');
-    assert.equal(snapDeck.ovSnap, 'none', 'overview lifts scroll-snap-type');
+    assert.equal(snapDeck.ovSnap, 'none', 'overview keeps scroll-snap-type: none');
     assert.equal(snapDeck.ovContain, 'none', 'overview lifts containment');
-    assert.equal(snapDeck.cardSnap, 'start', '.bcard snaps to start');
-    assert.ok(Math.abs(snapDeck.cardInH - snapDeck.usable) <= 1.5, `.bcard > .bc-in height (${snapDeck.cardInH}) fills --board-usable (${snapDeck.usable})`);
+    assert.equal(snapDeck.cardSnap, 'none', '.bcard uses wheel virtualization (no CSS scroll-snap-align)');
+    assert.ok(snapDeck.cardInH >= snapDeck.usable - 1.5, `.bcard > .bc-in height (${snapDeck.cardInH}) is at least --board-usable (${snapDeck.usable})`);
     assert.equal(snapDeck.gripDisplay, 'none', 'in-board .bcard hides .bc-grip');
     assert.equal(snapDeck.bodyFlexGrow, '1', 'in-board .bcard > .bc-in > .bc-body flex-grows');
 
