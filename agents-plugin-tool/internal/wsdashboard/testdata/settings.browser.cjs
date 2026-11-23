@@ -22,14 +22,14 @@ const snapshot = '/api/config/snapshot';
     const errors = [];
     page.setDefaultTimeout(10000);
     page.on('pageerror', error => errors.push(error.message));
-    const frame = () => page.frameLocator('iframe.sframe.on');
+    const frame = () => page.frameLocator('#workflow-settings[open] > iframe');
     const row = key => frame().locator('[data-config-key=' + JSON.stringify(key) + ']');
     const gear = (scope, target) => page.locator('[data-scope-entry=' + scope + ']' + (target ? '[data-settings-target=' + JSON.stringify(target) + ']' : ''));
     const scopeButton = name => frame().locator('[data-settings-precedence] [data-settings-scope=' + name + ']');
     const proposal = name => frame().locator('[data-settings-proposal-action=' + name + ']');
     const show = async (scope, target, worktree, sid) => {
       const wanted = new URL(endpoint(scope, target, worktree, sid));
-      await page.waitForURL(url => url.pathname === '/settings' &&
+      await (await (await page.locator('#workflow-settings > iframe').elementHandle()).contentFrame()).waitForURL(url => url.pathname === '/settings' &&
         (url.searchParams.get('scope') || 'global') === scope &&
         ['target','worktree','session'].every(key => url.searchParams.get(key) === wanted.searchParams.get(key)));
       await row('workflow.lang').waitFor();
@@ -49,6 +49,10 @@ const snapshot = '/api/config/snapshot';
       await frame().locator('[data-settings-section=' + name + ']').click();
     }
     async function ensureRailOpen() {
+      if (await page.locator('#workflow-settings[open]').count()) {
+        await frame().locator('[data-settings-close]').click();
+        await page.locator('#workflow-settings').waitFor({state: 'hidden'});
+      }
       const btn = page.locator('#railbtn');
       const opened = await page.locator('html').evaluate(el => el.classList.contains('rail-open'));
       if (await btn.isVisible() && !opened) {
@@ -74,38 +78,8 @@ const snapshot = '/api/config/snapshot';
         assert.equal(await frame().locator('[data-settings-modes]').count(), 0);
         assert.match(await frame().locator('[data-settings-precedence] .prec-hint').textContent(), /\S/);
 
-        // Verify <=1599.98px rail contract: overlay drawer closed on load, full stage width, zero overflow.
-        const railClosed = await page.evaluate(() => {
-          const rail = document.getElementById('rail');
-          const cs = getComputedStyle(rail);
-          return {
-            position: cs.position,
-            visibility: cs.visibility,
-            overflowX: document.documentElement.scrollWidth > window.innerWidth
-          };
-        });
-        assert.equal(railClosed.position, 'fixed');
-        assert.equal(railClosed.visibility, 'hidden');
-        assert.equal(railClosed.overflowX, false);
-        const stageRect = await frame().locator('[data-settings-view]').boundingBox();
-        assert(stageRect && Math.abs(stageRect.width - 1280) <= 2, 'expected capped 1280px stage width on 1440x960, got ' + JSON.stringify(stageRect));
-        assert(Math.abs((stageRect.x + stageRect.width / 2) - 720) <= 2, 'expected centered stage on 1440x960, got ' + JSON.stringify(stageRect));
-
-        await ensureRailOpen();
-        const railOpenRect = await page.locator('#rail').boundingBox();
-        assert(railOpenRect && railOpenRect.width >= 335, 'expected 340px overlay rail on 1440x960, got ' + JSON.stringify(railOpenRect));
-
-        const repoGear = gear('repo', root);
-        assert.equal(await repoGear.evaluate(el => getComputedStyle(el).opacity), '0');
-        await page.locator('.wthd', { has: repoGear }).hover();
-        assert(Number(await repoGear.evaluate(el => getComputedStyle(el).opacity)) >= 0.7);
-        if (theme === 'dark') {
-          await page.screenshot({path: path.join(captures, 'mbp-1440-dark-rail-open.png')});
-          await page.mouse.move(720, 480);
-          assert.equal(await repoGear.evaluate(el => getComputedStyle(el).opacity), '0');
-        }
-        await closeRailIfOpen();
-        await gear('repo', linked).waitFor({ state: 'attached' });
+        assert.equal(await page.locator('#frames > iframe[src^="/settings"]').count(), 0);
+        assert.equal(await frame().locator('.top').isVisible(), false);
         await row('workflow.whiteboard_enabled').locator('[data-settings-bucket=claude]').click();
         assert.equal(await row('workflow.whiteboard_enabled').locator('[data-settings-bucket=claude]').getAttribute('data-bucket-override'), 'other');
         await row('workflow.profile').locator('[data-settings-bucket=claude]').click();
@@ -182,7 +156,8 @@ const snapshot = '/api/config/snapshot';
           assert(docked.width >= 335, 'expected >=335px (340px) docked rail on 1680x1050, got ' + docked.width);
           assert.equal(docked.overflowX, false);
           const wideStage = await frame().locator('[data-settings-view]').boundingBox();
-          assert(wideStage && Math.abs(wideStage.width - 1280) <= 2, 'expected capped 1280px stage width on 1680x1050, got ' + JSON.stringify(wideStage));
+          const modalBox = await page.locator('#workflow-settings > iframe').boundingBox();
+          assert(wideStage && modalBox && Math.abs(wideStage.width - (modalBox.width - 32)) <= 2, 'stage fills modal iframe');
           await page.screenshot({path: path.join(captures, 'wide-1680-dark-workflow.png')});
           await page.setViewportSize({ width: 1440, height: 960 });
         }
@@ -222,6 +197,52 @@ const snapshot = '/api/config/snapshot';
         await proposal('clear').click();
       }
       await reference.close();
+    }
+    // Both UI entry points preserve the session, URL, and focus.
+    for (const width of [1200, 760]) {
+      await page.setViewportSize({width, height: 960});
+      for (const entry of ['global', 'rail']) {
+        await page.goto(base + '/s/' + session);
+        await page.frameLocator('iframe.sframe.on').locator('#grid').waitFor();
+        const sessionFrame = page.frames().find(f => new URL(f.url()).pathname === '/s/' + session);
+        await sessionFrame.evaluate(() => {
+          window.settingsVisibilityMessages = [];
+          addEventListener('message', e => {
+            if (e.data && e.data.wsShell === 'shown') settingsVisibilityMessages.push(e.data.shown);
+          });
+        });
+        const before = page.url();
+        await ensureRailOpen();
+        const opener = entry === 'global' ? page.locator('#gmenu a[href="/settings"]') : gear('repo', root);
+        if (entry === 'global') await page.locator('#gear').click();
+        await opener.click();
+        await show(entry === 'global' ? 'global' : 'repo', entry === 'global' ? null : root, entry === 'global' ? null : root);
+        assert.equal(page.url(), before);
+        assert.equal(await sessionFrame.evaluate(() => settingsVisibilityMessages.includes(false)), false);
+        assert.equal(await page.locator('#frames iframe.sframe.on').count(), 1);
+
+        if (process.env.WS_CONFIG_SETTINGS_CAPTURES) {
+          await page.screenshot({path: path.join(captures, entry + '-' + width + '.png')});
+        }
+        if (width === 760) {
+          await pickSection('prompts');
+          await row('prompt.UserPreferenceSection').waitFor();
+          await pickSection('workflow');
+        }
+        const search = frame().locator('[data-settings-search]');
+        await search.fill('workflow');
+        await search.press('Escape');
+        assert.equal(await search.inputValue(), '');
+        assert.equal(await page.locator('#workflow-settings[open]').count(), 1);
+        await search.press('Escape');
+        await page.locator('#workflow-settings').waitFor({state: 'hidden'});
+        assert.equal(page.url(), before);
+        if (entry === 'global') await page.locator('#gear').click();
+        await opener.click();
+        await show(entry === 'global' ? 'global' : 'repo', entry === 'global' ? null : root, entry === 'global' ? null : root);
+        await page.mouse.click(2, 2);
+        await page.locator('#workflow-settings').waitFor({state: 'hidden'});
+      }
     }
     await capturePairs();
     const direct = await page.goto(base + '/settings');
@@ -264,7 +285,11 @@ const snapshot = '/api/config/snapshot';
     assert.equal(await frame().locator('[data-settings-target-display] code').textContent(), projectPath);
     await scopeButton('builtin').click();
     await show('builtin');
-    assert.equal(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('project'), workspace);
+    assert.equal(new URLSearchParams(new URL(page.frames().find(f => f.url().includes('modal=1')).url()).hash.slice(1)).get('project'), workspace);
+    await page.goto(endpoint('project', workspace));
+    await show('project', workspace);
+    await scopeButton('builtin').click();
+    await show('builtin');
     await page.reload();
     await show('builtin');
     await scopeButton('global').click();
@@ -278,7 +303,7 @@ const snapshot = '/api/config/snapshot';
     await scopeButton('builtin').click();
     await show('builtin', null, root, session);
     assert(await row('workflow.lang').locator('input').isDisabled());
-    await page.goBack();
+    await scopeButton('session').click();
     await show('session', session, root, session);
 
     await ensureRailOpen();
@@ -321,8 +346,9 @@ const snapshot = '/api/config/snapshot';
     assert.match(await frame().locator('.proposal-patch').textContent(), /Second draft/);
     assert.doesNotMatch(await frame().locator('.proposal-patch').textContent(), /First draft/);
     await scopeButton('builtin').click();
-    await page.locator('dialog[open], [role=alertdialog]').first().waitFor();
-    await page.keyboard.press('Escape');
+    await show('builtin', null, root);
+    assert.equal(await page.locator('.ws-confirm').count(), 0);
+    await scopeButton('repo').click();
     await show('repo', root, root);
 
     const sent = page.waitForResponse(r => r.url().endsWith('/api/config/proposal'));
@@ -338,7 +364,7 @@ const snapshot = '/api/config/snapshot';
     await proposal('send').click();
     assert.equal((await noLead).status(), 409);
     await frame().locator('[data-settings-proposal-status=no_active_lead]').waitFor();
-    const current = await (await page.locator('iframe.sframe.on').elementHandle()).contentFrame();
+    const current = await (await page.locator('#workflow-settings[open] > iframe').elementHandle()).contentFrame();
     await current.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: {writeText: () => Promise.reject(Error('denied for test'))}
     }));
@@ -350,18 +376,19 @@ const snapshot = '/api/config/snapshot';
     await proposal('copy').waitFor({ state:'hidden' });
     assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'cleared repo proposal releases native close');
 
-    // The shell keeps a staged proposal after the Settings frame is gone; a
-    // ready session frame must not let the native close skip its prompt.
+    // Closing the modal silently retains staged proposals in the shell.
     await setLanguage('Staged before leaving', null, false);
+    await frame().locator('[data-settings-close]').click();
+    await page.locator('#workflow-settings').waitFor({state: 'hidden'});
+    assert.equal(await page.locator('.ws-confirm').count(), 0);
+    assert.equal(await page.evaluate(() => [...window.wsSettingsRepoDrafts.values()].some(d => d.size > 0)), true);
     await ensureRailOpen();
-    await page.locator('.rs[data-rid=' + JSON.stringify(session) + '] .rl').click();
-    await page.locator('.ws-confirm button', { hasText: '나가기' }).click();
-    await page.waitForFunction(() => document.querySelector('iframe.sframe.on') && !document.querySelector('iframe.sframe[src^="/settings"]'));
-    await page.frameLocator('iframe.sframe.on').locator('#grid:not([inert])').waitFor();
-    assert.equal(await page.evaluate(() => [...window.wsSettingsRepoDrafts.values()].some(d => d.size > 0)), true, 'the shell still holds the staged proposal');
-    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), false, 'a staged proposal holds native close after leaving Settings');
+    await gear('repo', linked).click();
+    await show('repo', linked, linked);
+    await proposal('toggle').click();
+    assert.match(await frame().locator('.proposal-patch').textContent(), /Staged before leaving/);
+    await frame().locator('[data-settings-close]').click();
     await page.evaluate(() => window.wsSettingsRepoDrafts.clear());
-    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'the ready session frame alone lets native close go');
 
     assert.deepEqual(errors, []);
     console.log('Verified settings scopes, navigation, authorization, mutations, profiles, prompt diff, proposals and 8 visual captures.');
