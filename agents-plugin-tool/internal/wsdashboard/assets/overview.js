@@ -151,6 +151,7 @@
     }
     preview.node = null;
     preview.placeholder = null;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.reconcile) window.WsBoardAnchor.reconcile();
   }
   function teardownPreview() {
     clearPreviewTimer();

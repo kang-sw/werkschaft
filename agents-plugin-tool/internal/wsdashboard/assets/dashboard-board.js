@@ -169,7 +169,6 @@
     if (kept) kept.h.apply();
     if (board) {
       anchorSettle(anchored);
-      anchorWatchLast();
       boardRecordPending(); boardPendingBadge(); boardHoldIndicators();
       if (typeof boardDialSync === "function") boardDialSync();
       if (!boardRelease) boardReturnApply();
@@ -486,6 +485,7 @@
       changed: function () { doc.dispatchEvent(new Event("ws-overview")); },
       onPreview: function (node) {
         if (!node) return;
+        if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(node, { immediate: true });
         mountFrames(node);
         q("iframe.doc-frame", node).forEach(function (f) { postDoc(f, { wbDoc: "size" }); });
       },
@@ -601,7 +601,10 @@
       // forgotten here, and later toggles are kept again.
       if (live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed")) { forgetOpen(live[key]); forgetOpen(n); }
       if (live[key] && boardSeen[key] === h) { want.push(live[key]); delete live[key]; }
-      else {
+      else if (live[key] && live[key].hasAttribute("data-wb-virtual") && !window.WsCards.isDocked(live[key]) && typeof virtualStashUpdate === "function" && virtualStashUpdate(live[key], n)) {
+        want.push(live[key]); delete live[key];
+      } else {
+        if (live[key] && live[key].hasAttribute("data-wb-virtual") && typeof virtualDropCollapsed === "function") virtualDropCollapsed(k);
         // A docked topic's live section wraps its body (cards.js wrap): the
         // incoming one takes the same wrapper first, so the graft's paths
         // match and its body frame stays live.

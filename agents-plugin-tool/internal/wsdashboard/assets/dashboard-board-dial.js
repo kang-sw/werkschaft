@@ -296,6 +296,7 @@
       if (commit && Object.keys(boardPending).length) {
         boardFlushViewed(true);
       }
+      if (typeof virtualReconcile === "function") virtualReconcile();
       boardDialSync();
     }
     dialHideTip();

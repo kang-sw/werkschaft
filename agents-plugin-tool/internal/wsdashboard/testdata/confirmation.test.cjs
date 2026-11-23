@@ -146,7 +146,7 @@ test('card framework preserves the close veto while the hook is pending', async 
     return new Promise(resolve => { answer = resolve; });
   } }, close: () => removed++ };
   h.context.c = c;
-  vm.runInContext(block('cards.js', '    c.closeBtn.addEventListener("click"', '    c.wireGrip();'), h.context);
+  vm.runInContext(block('cards.js', '    c.closeBtn.addEventListener("click"', '    c.paint();'), h.context);
   button.click();
   assert.equal(removed, 0);
   answer(false);
