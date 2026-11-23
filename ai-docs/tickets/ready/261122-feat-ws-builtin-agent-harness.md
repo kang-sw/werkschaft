@@ -842,6 +842,22 @@ Windows host. From `agents-plugin-tool`, run `go test -timeout 45m
 'Test(FileIntent|FileMutation|PinnedMutation|FileWrite|AuthorityPerTool|Edit|DanglingSymlinkWriteBoundary|RelativeLinkThroughDirectoryLinkAndDotDot)'
 -count=1`.
 
+#### Edition (6f012576c0) - 2026-11-24
+
+- Three loop tests and the torn-line recovery test now close the stores
+  they reopen for replay. The daemon already waits for the writer to drain
+  before closing the segment and its lease. The slow-writer fixture also
+  releases its gate on early failure so cleanup can join the writer.
+- New checkpoints record the raw log reference as `werk/<id>.jsonl` on
+  every platform. `internal/werk/compaction.go:88` normalizes the reference
+  when building the summary. On replay, `internal/werk/store.go:253`
+  accepts either separator as part of the stored summary text.
+- Windows runtime verification passed on Go 1.26.2 (windows/amd64) from
+  `agents-plugin-tool`.
+  - `go test ./internal/werk -count=1` passed the full package.
+  - `go test ./internal/wsagent -run "Durable|Werk|FullQuit|FullStop|Steer" -count=1`
+    passed the selected tests.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 Runs after Phase 4.
