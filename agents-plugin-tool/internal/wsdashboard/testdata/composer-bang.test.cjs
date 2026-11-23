@@ -69,7 +69,7 @@ window.fetch = function (url, o) {
   if (/composer-exec$/.test(u) && !body && window.__hook) { var held = window.__hook(window.__gets = (window.__gets || 0) + 1); if (held) return held; }
   if (/composer-exec$/.test(u) && !body && window.__get) { if (window.__get === "net") return Promise.reject(new TypeError("x")); return Promise.resolve({ ok: false, status: window.__get, json: function () { return Promise.reject(0); }, text: function () { return Promise.resolve(window.__getText + " "); } }); }
   if (/composer-exec$/.test(u) && !body) return res({ token: "tok", cards: [] });
-  if (/composer-exec$/.test(u) && body) { var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.done), cmd === "pending" ? 202 : 200); }
+  if (/composer-exec$/.test(u) && body) { if (window.__cexecPost) { var custom = window.__cexecPost(body, res); if (custom) return custom; } var cmd = body.text.slice(1); return res(Object.assign({ id: body.submission_id, command: cmd, token: "tok" }, J[cmd] || J.done), cmd === "pending" ? 202 : 200); }
   if (/user-commands\\/[^/]+\\/run$/.test(u) && body) { return res(Object.assign({ id: body.submission_id, command: "make test\\n./run --verbose", token: "tok" }, window.__ucmdReply || { phase: "running" }), window.__ucmdStatus || 202); }
   if (/composer-exec\\/([^/]+)$/.test(u)) {
     var pid = RegExp.$1;
@@ -94,20 +94,24 @@ async function open(t, pre, opts) {
   page.on('pageerror', e => errs.push(e.message));
   // A real origin, so sessionStorage works.
   await page.route('http://fx.test/', r => r.fulfill({ contentType: 'text/html', body: html }));
+  const mount = async (afterReloadPre) => {
+    await page.addScriptTag({ content: read('capsules.js') });
+    await page.addScriptTag({ content: read('mention.js') });
+    await page.addScriptTag({ content: route });
+    const hook = afterReloadPre !== undefined ? afterReloadPre : pre;
+    if (hook) await page.evaluate(hook);
+    const scriptNames = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js'];
+    if (opts && opts.hud) scriptNames.push('dashboard-exec-hud.js');
+    scriptNames.push('dashboard-composer-keyboard.js');
+    const files = scriptNames.map(read).join('\n');
+    await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { slashToken: slashToken, dropToken: function () { cexecToken = ""; }, rootTag: bangRootTag, histTag: bangHistTag, setInputMode: function (m) { inputMode = m; if (typeof bangHistSyncMode === "function") bangHistSyncMode(); }, ucmdApply: function (l) { ucmdApply(l, false); }, xhDismiss: function (id) { if (typeof xhDismissed !== "undefined") { xhDismissed[id] = true; xhSaveDismissed(); xhRender(true); } } };\nif (typeof xhGroupEl === "function" && typeof execWake === "function") execWake(1);})();' });
+  };
   await page.goto('http://fx.test/');
-  await page.addScriptTag({ content: read('capsules.js') });
-  await page.addScriptTag({ content: read('mention.js') });
-  await page.addScriptTag({ content: route });
-  if (pre) await page.evaluate(pre);
-  const scriptNames = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js'];
-  if (opts && opts.hud) scriptNames.push('dashboard-exec-hud.js');
-  scriptNames.push('dashboard-composer-keyboard.js');
-  const files = scriptNames.map(read).join('\n');
-  await page.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { slashToken: slashToken, dropToken: function () { cexecToken = ""; }, rootTag: bangRootTag, histTag: bangHistTag, setInputMode: function (m) { inputMode = m; if (typeof bangHistSyncMode === "function") bangHistSyncMode(); }, ucmdApply: function (l) { ucmdApply(l, false); }, xhDismiss: function (id) { if (typeof xhDismissed !== "undefined") { xhDismissed[id] = true; xhSaveDismissed(); xhRender(true); } } };\nif (typeof xhGroupEl === "function" && typeof execWake === "function") execWake(1);})();' });
+  await mount();
   const ed = page.locator('.cfield [contenteditable]').first();
   const type = async text => { await ed.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Delete'); await page.keyboard.insertText(text); };
   const state = () => page.evaluate(() => ({ v: ctext.value, bang: composer.hasAttribute('data-bang'), hl: CSS.highlights.has('ws-bang'), sel: [ctext.selectionStart, ctext.selectionEnd] }));
-  return { ctx, page, ed, type, state, errs };
+  return { ctx, page, ed, type, state, errs, mount };
 }
 
 test('shell mode flag follows the first character, paints the bang, and keeps 0px height growth', { skip }, async t => {
@@ -389,8 +393,8 @@ function fnv1a32Base36(s) {
   return h.toString(36);
 }
 
-test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, and >2KB skip', { skip }, async t => {
-  const { page, type, errs } = await open(t, `
+test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, multibyte >2KB skip, and reload persistence', { skip }, async t => {
+  const { page, type, errs, mount } = await open(t, `
     window.__slots = { rev: "1.1.", token: "tok", commands: [] };
   `);
   // Unknown binding: #hbadge stays hidden even if data exists elsewhere.
@@ -409,7 +413,7 @@ test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, an
   assert.equal(tagChecks.winUpper, tagChecks.win);
   assert.notEqual(tagChecks.winLower, tagChecks.winUpper, 'Windows drive letter case is preserved as in Go filepath.Clean');
 
-  // Bind worktree to tagChecks.win, seed 200 entries, admit a verified repeat and a >2KB command.
+  // Bind worktree to tagChecks.win, seed 200 entries, admit a verified repeat and a >2KB multibyte command.
   const wtPath = 'D:\\Workspace\\Repos\\devenv';
   const wtTag = fnv1a32Base36(wtPath);
   await page.evaluate((tag) => {
@@ -448,39 +452,64 @@ test('FNV-1a rootTag parity, unknown binding unavailable, 200 cap, promotion, an
   assert.equal(afterCap.length, 200);
   assert.equal(afterCap.some(r => r.cmd === 'cmd-199'), false);
 
-  // >2KB UTF-8 command still runs in composer without persisting to localStorage.
-  const hugeCmd = 'echo ' + 'a'.repeat(2100);
+  // Multibyte UTF-8 command with .length <= 2048 but UTF-8 byte size > 2KB still runs without persisting.
+  const hugeUtf8 = 'echo ' + '한'.repeat(700);
+  assert.ok(hugeUtf8.length < 1000 && Buffer.byteLength(hugeUtf8, 'utf8') > 2048);
   await page.evaluate((cmd) => {
     window.__jobs = [{ id: 'exec_done1', tool: 'bash', command: cmd, cwd: 'D:\\Workspace\\Repos\\devenv', state: 'exited', exit_code: 0 }];
-  }, hugeCmd);
-  await type('!' + hugeCmd);
+  }, hugeUtf8);
+  await type('!' + hugeUtf8);
   await page.keyboard.press('Enter');
-  await page.waitForFunction((cmd) => window.__admitted.some(a => a.command === cmd), hugeCmd);
-  const hugeStored = await page.evaluate(({ tag, cmd }) => JSON.parse(localStorage.getItem('ws.cexec.history.' + tag)).rows.some(r => r.cmd === cmd), { tag: wtTag, cmd: hugeCmd });
-  assert.equal(hugeStored, false, '>2KB command is omitted from localStorage while still running');
+  await page.waitForFunction((cmd) => window.__admitted.some(a => a.command === cmd), hugeUtf8);
+  const hugeStored = await page.evaluate(({ tag, cmd }) => JSON.parse(localStorage.getItem('ws.cexec.history.' + tag)).rows.some(r => r.cmd === cmd), { tag: wtTag, cmd: hugeUtf8 });
+  assert.equal(hugeStored, false, 'multibyte >2KB command is omitted from localStorage while still running');
+
+  // Real page reload preserves history and popup rows.
+  await page.reload();
+  await mount(`window.__slots = { rev: "1.3.${wtTag}", token: "tok", commands: [] };`);
+  await page.waitForFunction(() => document.getElementById('hbadge') && !document.getElementById('hbadge').hidden);
+  await type('!');
+  await page.waitForSelector('.chist-row');
+  assert.equal(await page.locator('.chist-row').first().locator('.chist-cmd').textContent(), 'brand-new');
+  assert.equal(await page.locator('.chist-row').first().locator('.chist-ex.fail').textContent(), '2');
   assert.deepEqual(errs, []);
 });
 
-test('origin verification, ucmd ignore, HUD fade/dismiss resilience, and worktree isolation', { skip }, async t => {
+test('origin verification, refusal/unknown/retry, binding switches, missing HUD job, and worktree isolation', { skip }, async t => {
   const cwdA = '/worktrees/alpha';
   const cwdB = '/worktrees/beta';
   const tagA = fnv1a32Base36(cwdA);
   const tagB = fnv1a32Base36(cwdB);
-  const { page, errs } = await open(t, `
+  const { page, type, errs } = await open(t, `
     window.__slots = { rev: "1.1.${tagA}", token: "tok", commands: [] };
   `, { hud: true });
   await page.waitForFunction(() => document.getElementById('hbadge'));
 
-  // 1) origin === 'ucmd' must NOT record.
-  // 2) wrong cwd must NOT record.
+  // 1) Refusal (400 / refused phase) and unknown result MUST NOT create a history row.
+  await type('!refused');
+  await page.keyboard.press('Enter');
+  await type('!unk');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => {
+    window.__cexecPost = (body, res) => body.text === '!http400' ? res('bad args', 400) : null;
+  });
+  await type('!http400');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate((t) => localStorage.getItem('ws.cexec.history.' + t), tagA), null, 'refused/unknown/400 leave no history');
+
+  // 2) origin === 'ucmd' ignored; cwdB records ONLY under verified launch worktree tagB (not tagA); missing/no-cwd jobs stay unrecorded.
   await page.evaluate(({ cwdB }) => {
     window.__jobs = [
       { id: 'exec_uc', tool: 'bash', command: 'make test', cwd: '/worktrees/alpha', state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() },
       { id: 'exec_wrong', tool: 'bash', command: 'wrong-wt', cwd: cwdB, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() },
+      { id: 'exec_nocwd', tool: 'bash', command: 'no-cwd', cwd: '', state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() },
       { id: 'exec_run', tool: 'bash', command: 'npm test', cwd: '/worktrees/alpha', state: 'running', origin: 'user', started_at: Date.now() }
     ];
     window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'su', command: 'make test', exec_id: 'exec_uc', origin: 'ucmd' } }));
     window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sw', command: 'wrong-wt', exec_id: 'exec_wrong', origin: 'cexec' } }));
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sm', command: 'missing-job', exec_id: 'exec_missing', origin: 'cexec' } }));
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sn', command: 'no-cwd', exec_id: 'exec_nocwd', origin: 'cexec' } }));
     window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sr', command: 'npm test', exec_id: 'exec_run', origin: 'cexec' } }));
   }, { cwdB });
 
@@ -490,11 +519,14 @@ test('origin verification, ucmd ignore, HUD fade/dismiss resilience, and worktre
   }, tagA);
 
   let rowsA = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tagA);
+  let rowsB = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}').rows || [], tagB);
   assert.equal(rowsA.some(r => r.cmd === 'make test'), false, 'ucmd ignored');
-  assert.equal(rowsA.some(r => r.cmd === 'wrong-wt'), false, 'mismatched cwd ignored');
+  assert.equal(rowsA.some(r => r.cmd === 'wrong-wt'), false, 'cwdB job not placed in tagA');
+  assert.equal(rowsB.some(r => r.cmd === 'wrong-wt'), true, 'cwdB job recorded under verified tagB');
+  assert.equal(rowsA.some(r => r.cmd === 'missing-job' || r.cmd === 'no-cwd'), false, 'missing or unusable-cwd HUD job stays unrecorded');
   assert.equal(rowsA[0].exit, undefined, 'running job has no exit yet');
 
-  // Dismiss HUD chip AND switch active worktree to B while exec_run is still tracking!
+  // 3) Dismiss HUD chip AND switch active worktree to B while exec_run is still tracking!
   await page.evaluate(({ tagB }) => {
     window.__t.xhDismiss('exec_run');
     window.__t.ucmdApply({ rev: '1.2.' + tagB, token: 'tok', commands: [] });
@@ -505,11 +537,59 @@ test('origin verification, ucmd ignore, HUD fade/dismiss resilience, and worktre
     const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
     return Array.isArray(s.rows) && s.rows[0] && s.rows[0].exit === 1;
   }, tagA);
-  assert.equal(await page.evaluate((t) => localStorage.getItem('ws.cexec.history.' + t), tagB), null, 'worktree B remained isolated');
+
+  // 4) Binding change BEFORE server admission: submit on tagA, switch ucmd to tagB before poll admits exec_pa -> records ONLY under cwdA (tagA)!
+  await page.evaluate(({ tagA, cwdA }) => {
+    window.__t.ucmdApply({ rev: '1.3.' + tagA, token: 'tok', commands: [] });
+    window.__jobs = [
+      { id: 'exec_pa', tool: 'bash', command: 'pre-admit', cwd: cwdA, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() }
+    ];
+    window.__cexecPost = (body, res) => {
+      if (body.text === '!pre-admit') return res({ id: body.submission_id, command: 'pre-admit', phase: 'running', token: 'tok' }, 202);
+      return null;
+    };
+    window.__onPoll = (pid, _n, res) => res({ id: pid, command: 'pre-admit', phase: 'running', exec_id: 'exec_pa', token: 'tok' });
+  }, { tagA, cwdA });
+  await type('!pre-admit');
+  await page.keyboard.press('Enter');
+  await page.evaluate((tB) => window.__t.ucmdApply({ rev: '1.4.' + tB, token: 'tok', commands: [] }), tagB);
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return s.rows && s.rows.some(r => r.cmd === 'pre-admit' && r.exit === 0);
+  }, tagA);
+  rowsB = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}').rows || [], tagB);
+  assert.equal(rowsB.some(r => r.cmd === 'pre-admit'), false, 'pre-admission switch still records only under verified cwdA');
+
+  // 5) Binding change BEFORE retry (500 -> immediate POST 200 retry): single row under verified cwdA (tagA), NOT duplicated!
+  await page.evaluate(({ tagA, cwdA }) => {
+    window.__t.ucmdApply({ rev: '1.5.' + tagA, token: 'tok', commands: [] });
+    window.__retrySeen = 0;
+    window.__jobs = [{ id: 'exec_rt', tool: 'bash', command: 'retry-wt', cwd: cwdA, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() }];
+    window.__cexecPost = (body, res) => {
+      if (body.text !== '!retry-wt') return null;
+      window.__retrySeen++;
+      if (!body.retry) return res('temp error', 500);
+      return res({ id: body.submission_id, command: 'retry-wt', phase: 'running', exec_id: 'exec_rt', token: 'tok' }, 200);
+    };
+  }, { tagA, cwdA });
+  await type('!retry-wt');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__retrySeen === 1);
+  // Switch binding to B before pressing Enter to retry.
+  await page.evaluate((tB) => window.__t.ucmdApply({ rev: '1.6.' + tB, token: 'tok', commands: [] }), tagB);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction((tag) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + tag) || '{}');
+    return s.rows && s.rows.filter(r => r.cmd === 'retry-wt').length === 1;
+  }, tagA);
+  rowsA = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tagA);
+  rowsB = await page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}').rows || [], tagB);
+  assert.equal(rowsA.filter(r => r.cmd === 'retry-wt').length, 1, 'POST 200 retry creates single row under verified cwdA');
+  assert.equal(rowsB.some(r => r.cmd === 'retry-wt'), false, 'retry switch does not leak into tagB');
   assert.deepEqual(errs, []);
 });
 
-test('cross-page storage sync prevents stale page from reviving deleted or cleared entries', { skip }, async t => {
+test('cross-page storage sync prevents stale page from reviving deleted/cleared entries or overwriting newer runs', { skip }, async t => {
   const cwd = '/worktrees/sync';
   const tag = fnv1a32Base36(cwd);
   const a = await open(t, `window.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };`);
@@ -522,7 +602,7 @@ test('cross-page storage sync prevents stale page from reviving deleted or clear
   const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
   await pageB.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { ucmdApply: function (l) { ucmdApply(l, false); } };})();' });
 
-  // Page A launches running command; Page B deletes it before exit code resolves on A.
+  // 1) Page A launches running command; Page B deletes it before exit code resolves on A.
   await a.page.evaluate((cwd) => {
     window.__jobs = [{ id: 'exec_x', tool: 'bash', command: 'sleep 2', cwd, state: 'running', started_at: Date.now() }];
     window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sx', command: 'sleep 2', exec_id: 'exec_x', origin: 'cexec' } }));
@@ -532,19 +612,63 @@ test('cross-page storage sync prevents stale page from reviving deleted or clear
     return s.rows && s.rows.some(r => r.cmd === 'sleep 2');
   }, tag);
 
-  // Page B deletes via popup UI.
   await pageB.waitForFunction(() => !document.getElementById('hbadge').hidden);
   await pageB.click('#hbadge');
   await pageB.click('.chist-del');
   await pageB.waitForFunction((t) => (JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows || []).length === 0, tag);
 
-  // Now Page A sees exited job -> must NOT revive 'sleep 2'!
   await a.page.evaluate((cwd) => {
     window.__jobs = [{ id: 'exec_x', tool: 'bash', command: 'sleep 2', cwd, state: 'exited', exit_code: 0, started_at: Date.now() - 1000, ended_at: Date.now() }];
   }, cwd);
-  await a.page.waitForTimeout(1000);
-  const rowsAfter = await a.page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tag);
+  await a.page.waitForTimeout(900);
+  let rowsAfter = await a.page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tag);
   assert.equal(rowsAfter.length, 0, 'deleted row is not revived by in-flight poll');
+
+  // 2) Newer repeat run on Page B must NOT be overwritten by late older completion on Page A!
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_old', tool: 'bash', command: 'rep-cmd', cwd, state: 'running', started_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 's_old', command: 'rep-cmd', exec_id: 'exec_old', origin: 'cexec' } }));
+  }, cwd);
+  await a.page.waitForFunction((t) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}');
+    return s.rows && s.rows.some(r => r.eid === 'exec_old');
+  }, tag);
+  await pageB.waitForTimeout(25);
+  await pageB.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_new2', tool: 'bash', command: 'rep-cmd', cwd, state: 'exited', exit_code: 0, started_at: Date.now(), ended_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 's_new2', command: 'rep-cmd', exec_id: 'exec_new2', origin: 'cexec' } }));
+  }, cwd);
+  await pageB.waitForFunction((t) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}');
+    return s.rows && s.rows[0] && s.rows[0].eid === 'exec_new2' && s.rows[0].exit === 0;
+  }, tag);
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_old', tool: 'bash', command: 'rep-cmd', cwd, state: 'exited', exit_code: 1, started_at: Date.now() - 2000, ended_at: Date.now() }];
+  }, cwd);
+  await a.page.waitForTimeout(900);
+  rowsAfter = await a.page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tag);
+  assert.equal(rowsAfter[0].eid, 'exec_new2');
+  assert.equal(rowsAfter[0].exit, 0, 'late older failure does not overwrite newer run exit 0');
+
+  // 3) Clear all on Page B prevents stale in-flight job on Page A from reviving.
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_clr', tool: 'bash', command: 'clr-cmd', cwd, state: 'running', started_at: Date.now() }];
+    window.dispatchEvent(new CustomEvent('ws:cexec-admitted', { detail: { submission_id: 'sc', command: 'clr-cmd', exec_id: 'exec_clr', origin: 'cexec' } }));
+  }, cwd);
+  await pageB.waitForFunction((t) => {
+    const s = JSON.parse(localStorage.getItem('ws.cexec.history.' + t) || '{}');
+    return s.rows && s.rows.some(r => r.cmd === 'clr-cmd');
+  }, tag);
+  await pageB.click('#hbadge');
+  await pageB.click('.chist-clear');
+  await pageB.click('.chist-clear.chist-armed');
+  await pageB.waitForFunction((t) => (JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows || []).length === 0, tag);
+  await a.page.evaluate((cwd) => {
+    window.__jobs = [{ id: 'exec_clr', tool: 'bash', command: 'clr-cmd', cwd, state: 'exited', exit_code: 0, started_at: Date.now() - 1000, ended_at: Date.now() }];
+  }, cwd);
+  await a.page.waitForTimeout(900);
+  rowsAfter = await a.page.evaluate((t) => JSON.parse(localStorage.getItem('ws.cexec.history.' + t)).rows, tag);
+  assert.equal(rowsAfter.length, 0, 'late completion after Clear all does not revive row');
   assert.deepEqual(a.errs, []);
 });
 
@@ -610,15 +734,22 @@ test('popup states, fuzzy highlight, keyed reuse, keyboard nav, repeat guard, tr
   assert.ok((await page.locator('.chist-count').textContent()).startsWith('0 / 4'));
   assert.equal(await page.locator('.chist-empty-hint').textContent(), en['js.cexec.hist.empty.enter']);
 
-  // Enter executes typed command in State 3!
+  // Enter executes typed command in State 3 AND closes the popup!
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__admitted.some(a => a.command === 'zzzz'));
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+
+  // Backspacing `!` to empty closes auto-opened popup.
+  await type('!');
+  await page.waitForSelector('.chist:not([hidden])');
+  await page.keyboard.press('Backspace');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
 
   // Reopen with `!gs`: plain Enter picks selected row and closes popup WITHOUT executing; held repeat Enter MUST NOT execute!
   await type('!gs');
   await page.waitForSelector('.chist-row.sel');
   const pickedText = await page.locator('.chist-row.sel .chist-cmd').textContent();
-  const admittedBefore = await page.evaluate(() => window.__admitted.length);
+  let admittedBefore = await page.evaluate(() => window.__admitted.length);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
   assert.equal(await page.evaluate(() => ctext.value), '!' + pickedText);
@@ -631,6 +762,27 @@ test('popup states, fuzzy highlight, keyed reuse, keyboard nav, repeat guard, tr
   });
   await page.waitForTimeout(80);
   assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'held repeat Enter does not run');
+
+  // In enter mode, Ctrl+Enter and Meta+Enter with a row selected also pick without running; repeat blocked; fresh chord runs!
+  await type('!g');
+  await page.waitForSelector('.chist-row.sel');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'enter mode Ctrl+Enter picks without running');
+  await page.evaluate(() => {
+    const ed = document.querySelector('.cfield [contenteditable]');
+    ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, repeat: true, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'enter mode held repeat Ctrl+Enter does not run');
+  await type('!g');
+  await page.waitForSelector('.chist-row.sel');
+  await page.keyboard.press('Meta+Enter');
+  await page.waitForFunction(() => document.querySelector('.chist').hidden === true);
+  assert.equal(await page.evaluate(() => window.__admitted.length), admittedBefore, 'enter mode Meta+Enter picks without running');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForFunction((n) => window.__admitted.length === n + 1, admittedBefore);
+  admittedBefore = await page.evaluate(() => window.__admitted.length);
 
   // First Esc closes open popup keeping `!`; second Esc removes `!`.
   await type('!g');
@@ -675,7 +827,11 @@ test('popup states, fuzzy highlight, keyed reuse, keyboard nav, repeat guard, tr
   await page.click('.chist-clear');
   assert.equal(await page.locator('.chist-clear.chist-armed').count(), 1);
   assert.equal(await page.locator('.chist-row').count(), 4, 'first click does not wipe history');
+  await page.waitForTimeout(3200);
+  assert.equal(await page.locator('.chist-clear.chist-armed').count(), 0, 'armed Clear all expires after 3s');
+  assert.equal(await page.locator('.chist-row').count(), 4, 'timeout expiry leaves history intact');
   await page.click('.chist-clear');
+  await page.click('.chist-clear.chist-armed');
   await page.waitForFunction(() => document.getElementById('hbadge').hidden === true);
   assert.deepEqual(errs, []);
 });

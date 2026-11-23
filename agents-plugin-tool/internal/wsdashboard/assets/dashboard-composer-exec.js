@@ -20,14 +20,14 @@
   // daemon for that id's submission state and never starts the command again.
   function cexecSaveAttempt(a) {
     try {
-      if (a) window.sessionStorage.setItem(cexecAttemptKey, JSON.stringify({ id: a.id, text: a.text }));
+      if (a) window.sessionStorage.setItem(cexecAttemptKey, JSON.stringify({ id: a.id, text: a.text, tag: a.tag || "" }));
       else window.sessionStorage.removeItem(cexecAttemptKey);
     } catch (e) {}
   }
   function cexecLoadAttempt() {
     try {
       var a = JSON.parse(window.sessionStorage.getItem(cexecAttemptKey) || "null");
-      return a && typeof a.id === "string" && typeof a.text === "string" ? a : null;
+      return a && typeof a.id === "string" && typeof a.text === "string" ? { id: a.id, text: a.text, tag: typeof a.tag === "string" ? a.tag : "" } : null;
     } catch (e) { return null; }
   }
   cexecPending = cexecEnabled ? cexecLoadAttempt() : null;
@@ -42,6 +42,7 @@
       sub.settled = true;
       clearTimeout(sub.timer);
       delete cexecSubs[sub.id];
+      if (typeof histSubTags !== "undefined") delete histSubTags[sub.id];
       noteWarn(wsT("js.cexec.unknown"));
       return;
     }
@@ -49,6 +50,7 @@
       sub.settled = true;
       clearTimeout(sub.timer);
       delete cexecSubs[sub.id];
+      if (typeof histSubTags !== "undefined") delete histSubTags[sub.id];
       noteWarn(wsT("js.cexec.refused", card.error || ""));
       return;
     }
@@ -63,6 +65,7 @@
             detail: { submission_id: sub.id, command: sub.command, exec_id: card.exec_id, origin: sub.origin }
           }));
         } catch (e) {}
+        if (typeof histSubTags !== "undefined") delete histSubTags[sub.id];
         if (typeof execWake === "function") execWake();
         else if (typeof xhFetch === "function") xhFetch();
       }
@@ -72,6 +75,7 @@
       sub.settled = true;
       clearTimeout(sub.timer);
       delete cexecSubs[sub.id];
+      if (typeof histSubTags !== "undefined") delete histSubTags[sub.id];
       return;
     }
     cexecWatch(sub);
@@ -202,6 +206,7 @@
     } else {
       ctext.value = now.slice(text.length); grow();
     }
+    if (typeof bangHistClose === "function") bangHistClose(false);
     bangSync();
     saveDraft();
   }
@@ -217,8 +222,9 @@
     // not to run); anything else is a fresh submission. The attempt is
     // recorded before the request goes out.
     var retry = !!(cexecPending && cexecPending.text === text);
-    if (!retry) cexecPending = { id: cexecNewID(), text: text };
+    if (!retry) cexecPending = { id: cexecNewID(), text: text, tag: typeof bangHistTag === "function" ? bangHistTag() : "" };
     var attempt = cexecPending;
+    if (typeof histSubTags !== "undefined") histSubTags[attempt.id] = attempt.tag || "";
     cexecSaveAttempt(attempt);
     cexecBusy = true;
     // The draft revision this send acknowledges, tracked from here on.
@@ -335,11 +341,12 @@
   // --- per-worktree `!` command history -----------------------------------
   // Stored per worktree in localStorage keyed by rootTag parsed from ucmdRev.
   // Persistence happens only after an admitted cexec job's cwd in /exec/jobs
-  // hashes to the same rootTag, and exit codes are tracked with a bounded poll
-  // independent of HUD chip dismissal or fading.
+  // hashes to its verified launch worktree rootTag, and exit codes are tracked
+  // with a bounded poll independent of HUD chip dismissal or fading.
   var BANG_HIST_PREFIX = "ws.cexec.history.", BANG_HIST_MAX = 200, BANG_HIST_BYTES = 2048;
   var BANG_HIST_POLL_MAX = 20, BANG_HIST_POLL_MS = 30000, BANG_HIST_CLEAR_MS = 3000;
-  var histPending = Object.create(null), histPollInflight = false, histJobsAbsent = false, histClock = 0;
+  var histPending = Object.create(null), histSubTags = Object.create(null), histPollInflight = false, histJobsAbsent = false, histClock = 0;
+  if (cexecPending && cexecPending.id) histSubTags[cexecPending.id] = cexecPending.tag || "";
   var histOpen = false, histManual = false, histSuppressAuto = false;
   var histSelIdx = -1, histMatches = [], histClearArmed = false, histClearTimer = 0;
   var histPop = null, histListEl = null, histCountEl = null, histEmptyEl = null, histEmptyHintEl = null, histHintsEl = null, histClearBtn = null;
@@ -534,7 +541,7 @@
       }
       if (!entry.verifiedTag) {
         var cwdTag = bangRootTag(j.cwd);
-        if (!entry.launchTag || !cwdTag || cwdTag !== entry.launchTag) {
+        if (!cwdTag) {
           if (j.state !== "running") {
             clearTimeout(entry.timer);
             delete histPending[eid];
@@ -606,7 +613,9 @@
     var d = e && e.detail;
     if (!d || d.origin !== "cexec" || typeof d.exec_id !== "string" || !d.exec_id || typeof d.command !== "string" || !d.command) return;
     if (histPending[d.exec_id]) return;
-    var launchTag = bangHistTag();
+    var subTag = typeof d.submission_id === "string" && histSubTags[d.submission_id] ? histSubTags[d.submission_id] : "";
+    if (typeof d.submission_id === "string") delete histSubTags[d.submission_id];
+    var launchTag = subTag || bangHistTag();
     var entry = histPending[d.exec_id] = {
       exec_id: d.exec_id, cmd: d.command, launchTag: launchTag, verifiedTag: "",
       recorded: false, finished: false, cancelled: false, launchTs: bangHistNow(),
@@ -615,7 +624,6 @@
     if (typeof xhJobs !== "undefined" && Array.isArray(xhJobs) && xhJobs.length) bangHistOnJobs(xhJobs);
     if (histPending[d.exec_id] && !entry.finished && !entry.cancelled) {
       histFetchJobs(d.exec_id);
-      if (histPending[d.exec_id] && !entry.timer && !entry.finished && !entry.cancelled) histSchedulePoll(entry);
     }
   });
 
@@ -625,9 +633,15 @@
     var q = (query.normalize ? query.normalize("NFC") : query).toLowerCase();
     var c = (cmd.normalize ? cmd.normalize("NFC") : cmd);
     var cLow = c.toLowerCase();
-    // Map match only on aligned string when normalization kept length; fallback to case-folded cmd.
-    var raw = c.length === cmd.length ? cmd : cmd;
+    // Keep 1:1 UTF-16 alignment with cmd so <mark> offsets match cmd.slice().
     var low = cLow.length === cmd.length ? cLow : cmd.toLowerCase();
+    if (low.length !== cmd.length) {
+      low = "";
+      for (var ci = 0; ci < cmd.length; ci++) {
+        var ch = cmd.charAt(ci).toLowerCase();
+        low += ch.length === 1 ? ch : cmd.charAt(ci);
+      }
+    }
     var ql = q.length, cl = low.length;
     if (!ql) return { score: 0, idx: [] };
     if (ql > cl) return null;
@@ -657,10 +671,10 @@
       for (k = 0; k < idx.length; k++) {
         var at = idx[k];
         if (at === 0) sc += 24;
-        else if (/[\s/_.:=-]/.test(raw.charAt(at - 1))) sc += 18;
+        else if (/[\s/_.:=-]/.test(cmd.charAt(at - 1))) sc += 18;
         if (k > 0 && at === idx[k - 1] + 1) sc += 20;
         else if (k > 0) sc -= (at - idx[k - 1] - 1);
-        if (raw.charCodeAt(at) === query.charCodeAt(k)) sc += 2;
+        if (cmd.charCodeAt(at) === query.charCodeAt(k)) sc += 2;
       }
       sc -= start * 0.5 + (cl - ql) * 0.1;
       if (sc > bestScore) { bestScore = sc; bestIdx = idx; }
@@ -1022,7 +1036,7 @@
     var v = typeof ctext.value === "string" ? ctext.value : "";
     if (v.charAt(0) !== "!") {
       histSuppressAuto = false;
-      if (histOpen && v.length > 0) bangHistClose(false);
+      if (histOpen && (!histManual || v.length > 0)) bangHistClose(false);
       else if (histOpen) histRender();
       return;
     }
@@ -1093,10 +1107,9 @@
       return false;
     }
     if (e.key === "Enter") {
-      var mod = e.ctrlKey || e.metaKey;
-      var plain = !mod && !e.shiftKey && !e.altKey;
-      var sendChord = typeof inputMode !== "undefined" && inputMode === "mod" ? mod : plain;
-      if ((plain || sendChord) && histMatches.length && histSelIdx >= 0 && histMatches[histSelIdx]) {
+      var mod = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
+      var plain = !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
+      if ((plain || mod) && histMatches.length && histSelIdx >= 0 && histMatches[histSelIdx]) {
         e.preventDefault();
         if (!e.repeat) histPickCmd(histMatches[histSelIdx].row.cmd);
         return true;
@@ -1111,15 +1124,20 @@
       bangHistClose(true);
     });
     window.addEventListener("storage", function (e) {
-      var tag = bangHistTag();
-      if (!tag) return;
-      if (e.key && e.key !== histStorageKey(tag)) return;
-      var store = histReadStore(tag);
+      var eventTag = "";
+      if (e && typeof e.key === "string" && e.key) {
+        if (e.key.indexOf(BANG_HIST_PREFIX) !== 0) return;
+        eventTag = e.key.slice(BANG_HIST_PREFIX.length);
+      } else {
+        eventTag = bangHistTag();
+      }
+      if (!eventTag) return;
+      var store = histReadStore(eventTag);
       var byCmd = Object.create(null);
       store.rows.forEach(function (r) { byCmd[r.cmd] = r; });
       Object.keys(histPending).forEach(function (eid) {
         var p = histPending[eid];
-        if ((p.verifiedTag || p.launchTag) !== tag) return;
+        if ((p.verifiedTag || p.launchTag) !== eventTag) return;
         if ((store.clearedAt && p.launchTs <= store.clearedAt) ||
             (store.deleted[p.cmd] && p.launchTs <= store.deleted[p.cmd]) ||
             (p.recorded && (!byCmd[p.cmd] || byCmd[p.cmd].eid !== p.exec_id))) {
@@ -1128,8 +1146,10 @@
           delete histPending[eid];
         }
       });
-      histSyncBadge();
-      if (histOpen) histRender();
+      if (eventTag === bangHistTag()) {
+        histSyncBadge();
+        if (histOpen) histRender();
+      }
     });
     histEnsureBadge();
     bangHistSyncBinding();
