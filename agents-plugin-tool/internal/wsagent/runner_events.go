@@ -1221,6 +1221,9 @@ func (c *conv) close() error {
 	if err := c.closeRetired(); err != nil {
 		return err
 	}
+	if c.r.durableProcess(c.rec.Backend) {
+		return c.closeDurable()
+	}
 	c.closeIf(nil)
 	return nil
 }

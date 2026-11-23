@@ -224,7 +224,7 @@
       age.title = wsT("js.hd.started", wtStamp(h.started_at));
       row.appendChild(age);
     }
-    meta.appendChild(mk("span", null, wsT("js.hd.pid", h.pid)));
+    if (h.pid) meta.appendChild(mk("span", null, wsT("js.hd.pid", h.pid)));
     if (!h.attached) meta.appendChild(mk("span", "hdcause", wsT(HD_CAUSE[h.cause] || "js.hd.cause.unknown", h.protocol)));
     if (h.restart_safe === false) {
       var rs = mk("span", "hdunsafe", wsT("js.hd.unsafe"));

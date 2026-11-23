@@ -191,6 +191,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
+	releaseDurableCreation := func() {}
+	if r.durableProcess(rp.Definition.Backend) {
+		r.durableCreateMu.RLock()
+		releaseDurableCreation = sync.OnceFunc(r.durableCreateMu.RUnlock)
+		defer releaseDurableCreation()
+		if r.durableStopping.Load() {
+			return State{}, errDurableStopping
+		}
+	}
 	var key string
 	if lead != nil {
 		// A lead key lives at the canonical git root, which is then the
@@ -302,6 +311,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		claimWidth = spawn.claimWidth
 	}
 	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, false)
+	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {
 		return r.spawned(c, spawn.Prompt)

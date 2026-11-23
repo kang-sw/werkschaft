@@ -834,7 +834,7 @@ mod tests {
         let cache = Cache::new();
         let token = "e".repeat(64);
         let health = r#"{"service":"ws-dashboard","pid":12,"started_at":"start"}"#.to_string();
-        let listing = r#"{"holders":[{"id":"h1","attached":true},{"id":"h2","attached":false,"cause":"no_answer"},{"id":"h3"}],"failures":[],"can_stop":true}"#;
+        let listing = r#"{"holders":[{"id":"h1","attached":true},{"id":"h2","attached":false,"cause":"no_answer"},{"id":"h3"},{"id":"durable.idle","attached":true,"restart_safe":true},{"id":"durable.unavailable","attached":false,"restart_safe":true}],"failures":[],"can_stop":true}"#;
         let (port, server) = scripted(vec![
             ("GET /health ", "200 OK", health.clone()),
             ("GET /health ", "200 OK", health.clone()),
@@ -847,7 +847,7 @@ mod tests {
         ]);
         cache.write(format!(r#"{{"port":{port},"pid":12,"token":"{token}"}}"#).as_bytes());
         let daemon = discover_at(&cache.0).unwrap();
-        assert_eq!(daemon.running_sessions().unwrap(), 3);
+        assert_eq!(daemon.running_sessions().unwrap(), 5);
         let requests = server.join().unwrap();
         let holders = &requests[3];
         assert!(holders.contains("cookie: ws_local=cookie-value"));

@@ -1695,7 +1695,7 @@ type nativeLaunchForgetter interface {
 // goes alone once nothing is queued.
 func (c *conv) canKick() bool {
 	durable := c.r.durableProcess(c.rec.Backend)
-	if durable && (!c.r.startupReady() || c.r.exec.deferred.Load() && !c.r.exec.bound.Load()) {
+	if durable && (c.r.durableStopping.Load() || !c.r.startupReady() || c.r.exec.deferred.Load() && !c.r.exec.bound.Load()) {
 		return false
 	}
 	return !c.closed && !c.hidden && !c.quitting && !c.turn && !c.replaying &&

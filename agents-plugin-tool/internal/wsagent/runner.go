@@ -287,6 +287,10 @@ type Runner struct {
 	// until all conversations have drained.
 	durableRecords     *wsmeta.Store
 	durableProjections sync.Map // reply-id -> last published projection digest
+	// Full Quit refuses new durable starts and wakes before waiting for
+	// any already admitted creation to publish its record and conversation.
+	durableStopping atomic.Bool
+	durableCreateMu sync.RWMutex
 	// fixedProfile belongs only to a private one-shot answer runner. Freeze
 	// the checked ceiling so config edits cannot widen it between create
 	// and process start. Ordinary conversations still resolve on every start.

@@ -411,7 +411,7 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 		if _, err := r.closeOne(d); err != nil {
 			// A descendant whose failed retirement stop left its holder
 			// running refuses the close of every conversation above it.
-			if errors.Is(err, errHolderNotEnded) {
+			if errors.Is(err, errHolderNotEnded) || errors.Is(err, errDurableClose) {
 				for _, rest := range order[i:] {
 					r.unfenceExec(rest)
 				}
