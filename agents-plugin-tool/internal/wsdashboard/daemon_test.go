@@ -288,7 +288,7 @@ func (s *inProcessSpawner) spawn(args []string) error {
 	n := len(s.calls)
 	s.calls = append(s.calls, append([]string(nil), args...))
 	s.mu.Unlock()
-	port, lan, buildTime, ok := parseSpawnArgs(args)
+	port, lan, buildTime, intent, belowFloor, ok := parseSpawnArgs(args)
 	if !ok {
 		s.t.Errorf("spawn args = %v", args)
 		return errors.New("bad args")
@@ -299,7 +299,7 @@ func (s *inProcessSpawner) spawn(args []string) error {
 		wait = 2 * time.Second
 	}
 	go func() {
-		d, err := StartDaemon(DaemonOptions{Dir: s.dir, Port: port, Version: version, LockWait: wait, LAN: lan, BuildTime: buildTime, bindHost: "127.0.0.1"})
+		d, err := StartDaemon(DaemonOptions{Dir: s.dir, Port: port, Version: version, StartIntent: intent, BelowFloor: belowFloor, LockWait: wait, LAN: lan, BuildTime: buildTime, bindHost: "127.0.0.1"})
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if err != nil {
@@ -311,30 +311,45 @@ func (s *inProcessSpawner) spawn(args []string) error {
 	return nil
 }
 
-// parseSpawnArgs reads the `dashboard --port N [--lan] [--build-time MS]`
-// argument list DaemonArgs builds.
-func parseSpawnArgs(args []string) (port int, lan bool, buildTime int64, ok bool) {
+// parseSpawnArgs reads the `dashboard --port N [--lan] [--build-time MS]
+// [--start-intent INTENT] [--below-floor]` argument list ensureDaemonArgs builds.
+func parseSpawnArgs(args []string) (port int, lan bool, buildTime int64, intent StartIntent, belowFloor bool, ok bool) {
 	if len(args) < 3 || args[0] != "dashboard" || args[1] != "--port" {
-		return 0, false, 0, false
+		return 0, false, 0, "", false, false
 	}
 	port, err := strconv.Atoi(args[2])
 	if err != nil {
-		return 0, false, 0, false
+		return 0, false, 0, "", false, false
 	}
 	rest := args[3:]
-	if len(rest) > 0 && rest[0] == "--lan" {
-		lan, rest = true, rest[1:]
-	}
-	switch {
-	case len(rest) == 0:
-	case len(rest) == 2 && rest[0] == "--build-time":
-		if buildTime, err = strconv.ParseInt(rest[1], 10, 64); err != nil {
-			return 0, false, 0, false
+	for len(rest) > 0 {
+		switch rest[0] {
+		case "--lan":
+			lan, rest = true, rest[1:]
+		case "--build-time":
+			if len(rest) < 2 {
+				return 0, false, 0, "", false, false
+			}
+			if buildTime, err = strconv.ParseInt(rest[1], 10, 64); err != nil {
+				return 0, false, 0, "", false, false
+			}
+			rest = rest[2:]
+		case "--start-intent":
+			if len(rest) < 2 {
+				return 0, false, 0, "", false, false
+			}
+			intent, err = ParseStartIntent(rest[1])
+			if err != nil {
+				return 0, false, 0, "", false, false
+			}
+			rest = rest[2:]
+		case "--below-floor":
+			belowFloor, rest = true, rest[1:]
+		default:
+			return 0, false, 0, "", false, false
 		}
-	default:
-		return 0, false, 0, false
 	}
-	return port, lan, buildTime, true
+	return port, lan, buildTime, intent, belowFloor, true
 }
 
 func (s *inProcessSpawner) closeAll() {
@@ -449,7 +464,7 @@ func TestEnsureHandoffAppliesAChangedLANMode(t *testing.T) {
 			t.Fatalf("lan %v: Ensure = %s, %v", lan, outcome, err)
 		}
 		waitDone(t, old)
-		if want := DaemonArgs(0, lan, 0); len(sp.calls) != 1 || strings.Join(sp.calls[0], " ") != strings.Join(want, " ") {
+		if want := ensureDaemonArgs(0, lan, 0, StartIntentReplace, false); len(sp.calls) != 1 || strings.Join(sp.calls[0], " ") != strings.Join(want, " ") {
 			t.Fatalf("lan %v: spawn calls = %v, want one %v", lan, sp.calls, want)
 		}
 		ep, _ := ReadEndpoint(dir)

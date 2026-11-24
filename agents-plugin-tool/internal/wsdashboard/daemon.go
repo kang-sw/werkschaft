@@ -51,6 +51,13 @@ type DaemonOptions struct {
 	LAN bool
 	// Version is reported by /health and written to the endpoint file.
 	Version string
+	// StartIntent records why the starter invoked this daemon (absence,
+	// upgrade, or replace) so StartDaemon applies the same minor-floor
+	// admission rule under the singleton lock. Empty defaults to absence.
+	StartIntent StartIntent
+	// BelowFloor admits a candidate below dir's daemon-minor-floor and lowers
+	// the floor to this daemon's minor under the singleton lock.
+	BelowFloor bool
 	// BuildTime is reported by /health (ExecutableBuildTime); zero is
 	// unknown and is omitted.
 	BuildTime int64

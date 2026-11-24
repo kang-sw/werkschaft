@@ -159,3 +159,78 @@ func TestDaemonStartLANFollowsTheApplyRule(t *testing.T) {
 		}
 	}
 }
+
+func TestDaemonStartBelowFloorFlagWiring(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WS_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(root, "config"))
+	for _, below := range []bool{false, true} {
+		args := []string{"--build-time", "123"}
+		if below {
+			args = append(args, "--below-floor")
+		}
+		called := false
+		daemonStartWithEnsure(args, func(_ context.Context, opts wsdashboard.EnsureOptions) (wsdashboard.Outcome, error) {
+			called = true
+			if opts.BelowFloor != below {
+				t.Fatalf("BelowFloor = %v, want %v", opts.BelowFloor, below)
+			}
+			return wsdashboard.OutcomeRunning, nil
+		})
+		if !called {
+			t.Fatal("Ensure not called")
+		}
+	}
+}
+
+func TestDaemonStartBinaryMinorFloorRefusalAndRollback(t *testing.T) {
+	bin := buildDashboardTestBin(t, "")
+	env, dir := dashboardTestEnv(t)
+	env = append(env, "WS_MCP_CONFIG_MANIFESTS="+writeProxyTestManifest(t, true))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	floorPath := filepath.Join(dir, wsdashboard.MinorFloorFile)
+	if err := os.WriteFile(floorPath, []byte("99.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), wsdashboard.DefaultStartWait)
+	defer cancel()
+
+	// Without --below-floor: refused, names update path, floor stays 99.0.
+	refuse := exec.CommandContext(ctx, bin, "daemon-start")
+	refuse.Env = env
+	refuseOut, refuseErr := refuse.CombinedOutput()
+	if refuseErr == nil {
+		t.Fatalf("daemon-start admitted below floor:\n%s", refuseOut)
+	}
+	if !strings.Contains(string(refuseOut), "update this plugin") {
+		t.Fatalf("refusal missing update path:\n%s", refuseOut)
+	}
+	if raw, err := os.ReadFile(floorPath); err != nil || string(raw) != "99.0\n" {
+		t.Fatalf("floor changed after refusal: %q (%v)", string(raw), err)
+	}
+
+	// With --below-floor: admitted, daemon starts, floor lowers to binary minor.
+	rollback := exec.CommandContext(ctx, bin, "daemon-start", "--below-floor")
+	rollback.Env = env
+	rollbackOut, rollbackErr := rollback.CombinedOutput()
+	if rollbackErr != nil || !strings.Contains(string(rollbackOut), `"outcome":"started"`) {
+		t.Fatalf("daemon-start --below-floor: %v\n%s", rollbackErr, rollbackOut)
+	}
+	ep, err := wsdashboard.ReadEndpoint(dir)
+	if err != nil {
+		t.Fatalf("read endpoint: %v", err)
+	}
+	if _, err := wsdashboard.Health(ctx, dashboardTestClient, ep); err != nil {
+		t.Fatalf("rolled-back daemon unhealthy: %v", err)
+	}
+	floor, exists, err := wsdashboard.ReadMinorFloor(dir)
+	if err != nil || !exists {
+		t.Fatalf("ReadMinorFloor = (%v, %v, %v)", floor, exists, err)
+	}
+	if !wsdashboard.SameMinor(floor.String()+".0", version) {
+		t.Fatalf("floor after rollback = %s, want minor of %s", floor, version)
+	}
+}
