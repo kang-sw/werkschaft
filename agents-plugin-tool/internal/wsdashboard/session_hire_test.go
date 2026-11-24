@@ -288,11 +288,11 @@ func TestHiringLifecycle(t *testing.T) {
 			t.Fatalf("approval gate %d %s", res.Code, res.Body)
 		}
 	}
-	res := hirePost(f.d, hireRoute+"/"+p.ID+"/approve", `{"harness":"pi","model":"owner-model","effort":"high","label":"owner label","root":"/must/not/be/used"}`)
+	res := hirePost(f.d, hireRoute+"/"+p.ID+"/approve", `{"harness":"werk","provider":"openai","model":"owner-model","effort":"high","label":"owner label","root":"/must/not/be/used"}`)
 	if res.Code != 200 {
 		t.Fatalf("approve: %d %s", res.Code, res.Body)
 	}
-	if creator.created != 1 || creator.root != f.project || creator.launches[0].Model != "owner-model" || creator.launches[0].Harness != "pi" {
+	if creator.created != 1 || creator.root != f.project || creator.launches[0].Model != "owner-model" || creator.launches[0].Harness != "werk" || creator.launches[0].Provider != "openai" {
 		t.Fatalf("creation: %+v", creator)
 	}
 	if f.d.hireParent("hiredsession") != "livesession" {
@@ -551,6 +551,36 @@ func TestHiringApprovalIntentRecoversOnStartup(t *testing.T) {
 	creator.mu.Unlock()
 	if count != 1 || d.hireParent(id) != p.Requester {
 		t.Fatalf("recovered creation count %d, parent %s", count, d.hireParent(id))
+	}
+}
+
+func TestHiringApprovalReplaysSelectedWerkProvider(t *testing.T) {
+	creator := &hireFake{}
+	f := startPageFixture(t, func(o *DaemonOptions) { creator.dir = o.Dir; o.Agents = creator })
+	f.src.setPage("hiredsession", PageContent{HasBoard: true})
+	enableHiring(t, f.d, "livesession")
+	p := requestHiring(t, f.d, "livesession")
+	f.d.Close()
+	// The daemon stopped after saving the owner's selection and before creating the lead.
+	proposals, err := f.d.readHires()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposals[0].Launch = &HireLaunch{Harness: "werk", Model: "owner-model", Provider: "openai"}
+	if err := f.d.saveHires(proposals); err != nil {
+		t.Fatal(err)
+	}
+	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	waitFor(t, "provider selection replay", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
+	assertHireMail(t, d, p, "approved")
+	creator.mu.Lock()
+	defer creator.mu.Unlock()
+	if len(creator.launches) != 1 || creator.launches[0].Provider != "openai" {
+		t.Fatalf("replayed launch: %+v", creator.launches)
 	}
 }
 

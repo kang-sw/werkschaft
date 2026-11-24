@@ -30,7 +30,7 @@ func (r *Runner) CreateHireLead(requestID, root string, launch wsdashboard.HireL
 		return rec.ReplyID, nil
 	}
 	st, err := r.CreateLead(launch.Harness, root, LeadOptions{
-		Model: launch.Model, Effort: launch.Effort, PermissionMode: launch.PermissionMode,
+		Model: launch.Model, Provider: launch.Provider, Effort: launch.Effort, PermissionMode: launch.PermissionMode,
 		PluginIsolation: launch.PluginIsolation, HireRequestID: requestID, HireLabel: launch.Label,
 	})
 	return st.ID, err
