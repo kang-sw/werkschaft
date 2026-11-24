@@ -36,13 +36,13 @@ func canonicalExecLaunch(tool string) string {
 }
 
 type activeMutationCall struct {
-	ctx                                  context.Context
-	id, tool                             string
-	args                                 map[string]any
-	recorded, reask, approving, approved bool
+	ctx                                                context.Context
+	id, tool                                           string
+	args                                               map[string]any
+	recorded, reask, approving, explicit, execAdmitted bool
 }
 
-func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json.RawMessage, reask bool) (func(), error) {
+func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json.RawMessage, reask, explicit bool) (func(), error) {
 	var args map[string]any
 	if id == "" || json.Unmarshal(raw, &args) != nil || args == nil {
 		return nil, errors.New("the mutation needs an identity and object arguments")
@@ -52,7 +52,7 @@ func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json
 	if a.mutationCall != nil {
 		return nil, errors.New("another mutating call is active")
 	}
-	a.mutationCall = &activeMutationCall{ctx: ctx, id: id, tool: tool, args: args, reask: reask}
+	a.mutationCall = &activeMutationCall{ctx: ctx, id: id, tool: tool, args: args, reask: reask, explicit: explicit}
 	return func() {
 		a.mutationMu.Lock()
 		a.mutationCall = nil
@@ -63,17 +63,17 @@ func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json
 // RecordFileCall is called from the authenticated MCP handler while it
 // holds the target. It accepts one intent for the active model call.
 func (a *Agent) RecordFileCall(ctx context.Context, call wsfs.FileCall) error {
-	return a.recordMutation(ctx, call.ID, call.Tool, call.Arguments, fileIntentLine{K: "file_intent", CallID: call.ID, Intent: &call.Intent})
+	return a.recordMutation(ctx, call.ID, call.Tool, call.Arguments, fileIntentLine{K: "file_intent", CallID: call.ID, Intent: &call.Intent}, call.Authority)
 }
 
 func (a *Agent) RecordExecLaunch(ctx context.Context, call execjob.ModelLaunch) error {
 	if call.JobID == "" || canonicalExecLaunch(call.Tool) == "" {
 		return errors.New("the exec launch needs a hosted job")
 	}
-	return a.recordMutation(ctx, call.ID, call.Tool, call.Arguments, execJobLine{K: "exec_job", CallID: call.ID, JobID: call.JobID})
+	return a.recordMutation(ctx, call.ID, call.Tool, call.Arguments, execJobLine{K: "exec_job", CallID: call.ID, JobID: call.JobID}, "")
 }
 
-func (a *Agent) recordMutation(ctx context.Context, id, tool string, raw json.RawMessage, row any) error {
+func (a *Agent) recordMutation(ctx context.Context, id, tool string, raw json.RawMessage, row any, fileAuthority wsfs.Authority) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -83,14 +83,33 @@ func (a *Agent) recordMutation(ctx context.Context, id, tool string, raw json.Ra
 	}
 	a.mutationMu.Lock()
 	active := a.mutationCall
-	if active == nil || active.id != id || active.tool != tool || !reflect.DeepEqual(active.args, args) || active.recorded ||
-		(a.cfg.Approve != nil && canonicalExecLaunch(tool) != "" && !active.approved) {
+	if active == nil || active.id != id || active.tool != tool || !reflect.DeepEqual(active.args, args) || active.recorded || active.approving ||
+		(a.cfg.Approve != nil && canonicalExecLaunch(tool) != "" && !active.execAdmitted) {
 		a.mutationMu.Unlock()
 		return errors.New("no matching unrecorded mutation is active")
 	}
 	if err := active.ctx.Err(); err != nil {
 		a.mutationMu.Unlock()
 		return err
+	}
+	// A file dispatched under full access can reach MCP after a downgrade.
+	// The pinned scoped mutation then needs the same explicit approval as
+	// a call that began under workspace-write.
+	if a.cfg.Approve != nil && !active.explicit && fileAuthority == wsfs.AuthorityWorkdirWrite {
+		active.approving = true
+		a.mutationMu.Unlock()
+		explicit, err := a.permitMutation(ctx, functionCall{CallID: id, reask: active.reask}, tool, raw, true)
+		a.mutationMu.Lock()
+		active.approving = false
+		if err != nil {
+			a.mutationMu.Unlock()
+			return err
+		}
+		if a.mutationCall != active || active.ctx.Err() != nil || ctx.Err() != nil {
+			a.mutationMu.Unlock()
+			return errors.New("the file call is no longer active")
+		}
+		active.explicit = explicit
 	}
 	active.recorded = true
 	err := a.log.addBarrier(row)

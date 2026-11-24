@@ -118,7 +118,7 @@ type dashboardTierBundle struct {
 // harness that admits only same-harness callers is available in its own
 // preview alone), and marks every route ending on an unavailable harness,
 // as agent.spawn would refuse it. Nil skips it.
-func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(caller, harness string) (string, bool)) (dashboardTierView, error) {
+func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(caller, harness string) (string, bool), registries ...map[string]wsagent.BackendRegistration) (dashboardTierView, error) {
 	roles, err := packagedTierRoles(rsrc)
 	if err != nil {
 		return dashboardTierView{}, err
@@ -218,6 +218,7 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes = append(view.Nodes, node)
 	}
+	resolver := wsagent.NewTierBindingResolver(opts, registries...)
 	depths := map[int]int{}
 	for i := range view.Nodes {
 		if refs := inbound[view.Nodes[i].Name]; refs != nil {
@@ -225,11 +226,11 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes[i].Depth = tierNodeDepth(view.Nodes, index, i, map[int]bool{}, depths)
 		for _, size := range wsconfig.TierSizes {
-			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness, check, unknown))
+			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, resolver, view.Nodes[i].Name+":"+size, size, harness, check, unknown))
 		}
 	}
 	for _, name := range sortedKeys(bundles) {
-		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, opts, name, "", harness, check, unknown)}
+		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, resolver, name, "", harness, check, unknown)}
 		if refs := inbound[name]; refs != nil {
 			b.Inbound = refs
 		}
@@ -290,7 +291,7 @@ func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen 
 // the terminal harness cannot launch now, which agent.spawn checks before
 // the harness's tier slot. A harness check cannot answer yet keeps its
 // binding and carries unknown's note.
-func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, token, size, harness string, check func(string) (string, bool), unknown func(string) string) dashboardTierRoute {
+func dashboardTierResolve(graph *wsconfig.TierGraph, resolver *wsagent.TierBindingResolver, token, size, harness string, check func(string) (string, bool), unknown func(string) string) dashboardTierRoute {
 	route := dashboardTierRoute{Token: token, Size: size}
 	res, err := graph.Resolve(token, harness)
 	if err != nil {
@@ -307,9 +308,11 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, toke
 	if !known {
 		route.AvailabilityUnknown = unknown(route.Harness)
 	}
-	binding, err := wsagent.RoutedTierBinding(opts, res)
+	binding, err := resolver.Routed(res)
 	if err != nil {
 		route.BindingError = err.Error()
+	} else if why := resolver.ProviderGap(route.Harness, binding.Provider); why != "" {
+		route.Unavailable, route.BindingError = why, why
 	} else {
 		route.Model, route.Effort = binding.Model, binding.Effort
 	}

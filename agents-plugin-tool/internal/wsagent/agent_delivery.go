@@ -75,7 +75,7 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			}
 		}
 	}
-	st, err := r.Send(id, d.Text)
+	st, err := r.send(id, d.Text, false)
 	if err != nil {
 		return st, err
 	}

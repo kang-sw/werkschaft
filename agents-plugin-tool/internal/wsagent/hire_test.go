@@ -111,3 +111,21 @@ func TestHiringCreationUsesOwnerLeadAndSurvivesRetry(t *testing.T) {
 		t.Fatalf("requester close without owner Origin: %+v", out)
 	}
 }
+
+func TestHiringCreationPersistsSelectedWerkProvider(t *testing.T) {
+	h, _, _ := werkHarness(t, &werkModel{})
+	id, err := h.runner.CreateHireLead("werk-provider", h.root, wsdashboard.HireLaunch{
+		Harness: BackendWerk, Model: "test-model", Provider: "openai",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.restart()
+	c, err := h.runner.open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider := c.record().Provider; provider != "openai" {
+		t.Fatalf("recovered provider = %q", provider)
+	}
+}

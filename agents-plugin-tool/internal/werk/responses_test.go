@@ -390,3 +390,32 @@ func TestErrorBodyIsCapped(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestReadStreamRejectsOversizedEventAndResponse(t *testing.T) {
+	item := ev("response.output_item.done", `{"output_index":0,"item":`+callItem+`}`)
+	finished := ev("response.completed", `{"response":{"id":"r","output":[]}}`)
+	valid := sse(item, finished)
+	tests := []struct {
+		name          string
+		wire          string
+		responseLimit int
+	}{
+		{"oversized-event", "event: response.created\ndata: {\n" + strings.Repeat("data:         \n", 30) + "data: }\n\n" + valid, 4096},
+		{"oversized-response", sse(item, item, item, finished), len(valid)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := readStream(strings.NewReader(tt.wire), StreamHandler{}, func() {}, 256, tt.responseLimit)
+			if !errors.Is(err, errResponseTooLarge) || resp != nil {
+				t.Fatalf("oversized stream returned response = %v, error = %v", resp, err)
+			}
+			if _, retry := Retryable(err); retry {
+				t.Fatal("oversized stream was retryable")
+			}
+		})
+	}
+	resp, err := readStream(strings.NewReader(valid), StreamHandler{}, func() {}, 256, len(valid))
+	if err != nil || len(resp.Output) != 1 || string(resp.Output[0]) != callItem {
+		t.Fatalf("bounded stream response = %v, error = %v", resp, err)
+	}
+}

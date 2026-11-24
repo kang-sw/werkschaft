@@ -92,7 +92,7 @@ type mcpToken struct {
 	// (markMCPCutover), "" otherwise.
 	cutover          string
 	fileWrites       *wsfs.FileWriteSession
-	recordExecLaunch func(context.Context, execjob.ModelLaunch) error
+	recordExecLaunch func(context.Context, execjob.ModelLaunch) (bool, error)
 }
 
 // newMCPToken draws a token, or "" when no random source answers.
@@ -222,25 +222,30 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		}
 	}
 	t.fileWrites = files
-	t.recordExecLaunch = func(ctx context.Context, call execjob.ModelLaunch) error {
-		canLaunch := func() bool {
-			level := authority()
-			return level == wsfs.AuthorityWorkdirWrite || level == wsfs.AuthorityFull
-		}
-		if !canLaunch() {
-			return errors.New("the session cannot launch exec jobs with its current authority")
+	t.recordExecLaunch = func(ctx context.Context, call execjob.ModelLaunch) (bool, error) {
+		level := files.AuthorityForCall()
+		if level != wsfs.AuthorityWorkdirWrite && level != wsfs.AuthorityFull {
+			return false, errors.New("the session cannot launch exec jobs with its current authority")
 		}
 		recorder, ok := proc.(execLaunchRecorder)
 		if !ok {
-			return errors.New("the session has no durable exec job recorder")
+			return false, errors.New("the session has no durable exec job recorder")
 		}
-		if err := recorder.recordExecLaunch(ctx, call); err != nil {
-			return err
+		if call.Approval != nil && level == wsfs.AuthorityWorkdirWrite {
+			call.RequireExplicit = true
 		}
-		if !canLaunch() {
-			return errors.New("the exec launch's authority changed")
+		explicit, err := recorder.recordExecLaunch(ctx, call)
+		if err != nil {
+			return false, err
 		}
-		return nil
+		current := files.AuthorityForCall()
+		if current != wsfs.AuthorityWorkdirWrite && current != wsfs.AuthorityFull {
+			return false, errors.New("the exec launch's authority changed")
+		}
+		if call.Approval == nil && current != level {
+			return false, errors.New("the exec launch's authority changed")
+		}
+		return explicit, nil
 	}
 }
 

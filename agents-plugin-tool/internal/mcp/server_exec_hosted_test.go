@@ -230,14 +230,14 @@ func TestHostedExecModelLaunchRequiresCorrelationAndAuthority(t *testing.T) {
 	fx := newHostedExecFixture(t, 5*time.Second)
 	level := wsfs.AuthorityWorkdirWrite
 	fx.s.execCutover = wsagent.BackendWerk
-	fx.s.fileWrites = &FileWriteSession{CurrentAuthority: func() wsfs.Authority { return level }}
+	fx.s.fileWrites = &FileWriteSession{Authority: wsfs.AuthorityWorkdirWrite, CurrentAuthority: func() wsfs.Authority { return level }}
 	var recorded []execjob.ModelLaunch
-	fx.s.recordExecLaunch = func(_ context.Context, call execjob.ModelLaunch) error {
+	fx.s.recordExecLaunch = func(_ context.Context, call execjob.ModelLaunch) (bool, error) {
 		if call.ID != "fixture-call" {
-			return errors.New("no matching pending call")
+			return false, errors.New("no matching pending call")
 		}
 		recorded = append(recorded, call)
-		return nil
+		return false, nil
 	}
 	args := map[string]any{"cmd": "echo correlated", "session_key": fx.key}
 	if out, failed := rawCorrelatedToolCall(t, fx.s, "exec.shell", "", args); !failed || !strings.Contains(out, "requires a model call identity") {

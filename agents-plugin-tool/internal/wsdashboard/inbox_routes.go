@@ -457,7 +457,7 @@ func (d *Daemon) messageWrite(dir, replyID string, raw []byte, local bool, now t
 		}
 		defer unlock() // send and steer both use inbox -> incarnation order
 	}
-	status, answer := d.sendMessage(dir, req, images, now)
+	status, answer := d.sendMessage(dir, req, images, local, now)
 	if status == http.StatusOK && hasBoardAnswer(req) {
 		if d.answerPending == nil {
 			d.answerPending = make(map[string]bool)
@@ -486,7 +486,7 @@ func (d *Daemon) sendCommand(dir, replyID string, req messageRequest, local bool
 	if !slices.ContainsFunc(snap.Commands, func(c wslive.SlashCommand) bool { return c.Name == req.Command }) {
 		return http.StatusBadRequest, fmt.Sprintf("/%s is not a command this session runs", req.Command)
 	}
-	entry := wsinbox.Entry{Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Command: &wsinbox.Command{Name: req.Command, Args: req.Args}, UTCOffsetMinutes: req.UTCOffsetMinutes}
+	entry := wsinbox.Entry{Operator: true, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Command: &wsinbox.Command{Name: req.Command, Args: req.Args}, UTCOffsetMinutes: req.UTCOffsetMinutes}
 	d.inboxMu.Lock()
 	name, _, err := wsinbox.Send(dir, entry, now)
 	d.inboxMu.Unlock()
@@ -530,7 +530,7 @@ func decodeImage(up imageUpload) (decodedImage, int, string) {
 // other than those, writes the new images, and sends. The image cap is the
 // message's own (messageWrite checks it), since a send never joins a held
 // entry. A refusal after files were written deletes them.
-func (d *Daemon) sendMessage(dir string, req messageRequest, images []decodedImage, now time.Time) (int, any) {
+func (d *Daemon) sendMessage(dir string, req messageRequest, images []decodedImage, operator bool, now time.Time) (int, any) {
 	attachDir := wsinbox.AttachmentsDir(dir)
 	if len(req.RefNums) != 0 && len(req.RefNums) != len(req.Refs) {
 		return http.StatusBadRequest, fmt.Sprintf("%d image numbers for %d attachments", len(req.RefNums), len(req.Refs))
@@ -564,7 +564,7 @@ func (d *Daemon) sendMessage(dir string, req messageRequest, images []decodedIma
 		fmt.Fprintf(d.log, "dashboard: write attachments: %v\n", err)
 		return http.StatusInternalServerError, "could not store the images"
 	}
-	entry := wsinbox.Entry{Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes}
+	entry := wsinbox.Entry{Operator: operator, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes}
 	var name string
 	var merged bool
 	if hasBoardAnswer(req) {

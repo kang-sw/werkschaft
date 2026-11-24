@@ -62,7 +62,7 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &werk.Client{
+	client := &werk.Client{
 		BaseURL:  provider.BaseURL,
 		Provider: provider.ID,
 		Dialect:  provider.Dialect,
@@ -70,7 +70,17 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 		Token: func(ctx context.Context) (string, error) {
 			return b.providerToken(ctx, provider, !werk.InteractiveTurn(ctx))
 		},
-	}, nil
+	}
+	if provider.ID == wscred.ProviderOpenAI {
+		if source, ok := b.credentials.(interface {
+			BeginOpenAIPlanRequest(context.Context, bool) (wscred.OpenAIPlanRequest, error)
+		}); ok {
+			client.PlanToken = func(ctx context.Context) (wscred.OpenAIPlanRequest, error) {
+				return source.BeginOpenAIPlanRequest(ctx, !werk.InteractiveTurn(ctx))
+			}
+		}
+	}
+	return client, nil
 }
 
 func (b WerkBackend) providerToken(ctx context.Context, provider wscred.Provider, background bool) (string, error) {
@@ -176,12 +186,12 @@ func (p *werkLoop) recordFileCall(ctx context.Context, call wsfs.FileCall) error
 }
 
 type execLaunchRecorder interface {
-	recordExecLaunch(context.Context, execjob.ModelLaunch) error
+	recordExecLaunch(context.Context, execjob.ModelLaunch) (bool, error)
 }
 
-func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) error {
+func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) (bool, error) {
 	if err := p.ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if call.Approval != nil {
 		preview := call.Approval
@@ -190,11 +200,11 @@ func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunc
 			Env: preview.Env, Stdin: preview.Stdin, StdinBytes: preview.StdinBytes,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		return p.agent.ApproveExecLaunch(ctx, call, input)
 	}
-	return p.agent.RecordExecLaunch(ctx, call)
+	return false, p.agent.RecordExecLaunch(ctx, call)
 }
 
 func (p *werkLoop) run(a *werk.Agent) {

@@ -32,7 +32,7 @@ func Normalize(e Entry) (Entry, error) {
 	if e.Cron != nil {
 		return normalizeCron(e)
 	}
-	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Steer: e.Steer, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
+	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Operator: e.Operator, Steer: e.Steer, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
 	size, selectionMentions := 0, 0
 	for _, p := range e.Parts {
 		p = strings.TrimSpace(p)
@@ -219,7 +219,7 @@ func normalizeCommand(e Entry) (Entry, error) {
 	if len(e.Chips) > 0 || len(e.Topics) > 0 || len(e.Mentions) > 0 || len(e.CloseRequests) > 0 || len(e.Picks) > 0 || len(e.Consoles) > 0 || len(e.Images) > 0 || e.Steer || e.Interrupt {
 		return Entry{}, fmt.Errorf("%w: a command carries no answers, mentions, close requests, picks, console blocks, or images", ErrInvalid)
 	}
-	return Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, UTCOffsetMinutes: e.UTCOffsetMinutes, Command: &c}, nil
+	return Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, UTCOffsetMinutes: e.UTCOffsetMinutes, Operator: e.Operator, Command: &c}, nil
 }
 
 // putChip replaces the chip for c.ID in place, or appends c.

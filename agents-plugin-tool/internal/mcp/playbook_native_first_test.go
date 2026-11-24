@@ -301,7 +301,8 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 
 	// The role tier's default route: the packaged chain falls through to
 	// the caller's own slot, agy's.
-	route, binding, err := s.routedBinding("playbook-explore:small", wsagent.BackendAgy, cfg)
+	resolver := wsagent.NewTierBindingResolver(cfg, s.agentBackends()...)
+	route, binding, err := s.routedBinding("playbook-explore:small", wsagent.BackendAgy, cfg, resolver)
 	if err != nil || !route.CallerFallthrough || route.Harness != wsagent.BackendAgy || route.Size != "small" || binding.Model != "agy-small" {
 		t.Fatalf("default route of the explore role = %+v (%s), binding %+v, %v", route, route.Trace(), binding, err)
 	}

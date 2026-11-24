@@ -63,7 +63,7 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 		return false, err
 	}
 	defer release()
-	input := &durableTurnInput{ID: newReportID(), Text: text}
+	input := &durableTurnInput{ID: newReportID(), Text: text, Operator: interactive}
 	stage := func(rec *Record) {
 		rec.DurableTurn, rec.DurableInboxClaims = input, nil
 		rec.Queued = rest
@@ -87,7 +87,7 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 	if err != nil {
 		return false, err
 	}
-	return true, c.submitDurableTurn(input, interactive)
+	return true, c.submitDurableTurn(input)
 }
 
 // compactDurableContinue admits a requested, separate continuation through
@@ -133,7 +133,7 @@ func (c *conv) compactDurableContinue() bool {
 	return true
 }
 
-func (c *conv) submitDurableTurn(input *durableTurnInput, interactive bool) error {
+func (c *conv) submitDurableTurn(input *durableTurnInput) error {
 	p, ok := c.proc.(durableTurnProcess)
 	if !ok {
 		return errors.New("the backend does not accept durable turn input")
@@ -143,7 +143,7 @@ func (c *conv) submitDurableTurn(input *durableTurnInput, interactive bool) erro
 	c.turnMark, c.reply = c.rec.TurnMark, ""
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	c.syncAwake()
-	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers, interactive); err != nil {
+	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers, input.Operator); err != nil {
 		c.setStatus(func() { c.turn = false })
 		return err
 	}
@@ -178,7 +178,7 @@ func (c *conv) resumeDurableTurn() {
 			return
 		}
 		defer release()
-		err = c.submitDurableTurn(c.rec.DurableTurn, false)
+		err = c.submitDurableTurn(c.rec.DurableTurn)
 	})
 	if refused != "" {
 		c.refuseStart(checkoutReleasedRefusal(refused))
