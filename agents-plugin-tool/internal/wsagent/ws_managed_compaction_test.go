@@ -719,6 +719,48 @@ func TestDashboardCompactFailureDeliversQueuedPrompt(t *testing.T) {
 	})
 }
 
+func TestStage1NativeCutSatisfiesDashboardCompact(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.signalInbox()
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "Stage 1 prompt", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+	})
+
+	p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart}}
+	p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}}
+	p.events <- Event{TurnEnd: true}
+	if _, err := runner.Send(id, "work after native cut"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "prompt after the native cut", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 3 && strings.Contains(sends[2], "work after native cut")
+	})
+	_, commands := p.sent()
+	st, err := runner.Get(id)
+	if len(commands) != 0 || err != nil || st.Compactions != 1 {
+		t.Fatalf("native cut must satisfy Stage 1: commands=%v state=%+v err=%v", commands, st, err)
+	}
+}
+
 func TestTwoStageFallbackDashboardSlashCompact(t *testing.T) {
 	root := t.TempDir()
 	runner, b, id := newWSCompactTestRunner(t, root, BackendClaude, wsconfig.CompactionModeWS, nil)

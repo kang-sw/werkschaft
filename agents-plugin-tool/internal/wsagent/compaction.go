@@ -1012,6 +1012,15 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			// Native compaction already handled the queued request's crossing.
 			c.compactPending = nil
 		}
+		if c.compactStage1Active {
+			// The harness supplied the cut while Stage 1 was running. The
+			// terminal event still settles the internal prompt.
+			if c.compactPending == nil {
+				c.compactResume = c.compactStage1Resume
+				c.compactResumeInternal = c.compactStage1Resume && c.compactStage1Internal
+			}
+			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+		}
 		c.compactHardHandled = c.compactHardHandled || c.compactHardAtStart || c.aboveCompactHard()
 		c.compactHardAtStart = false
 		// A stats answer queued before compaction may still carry old tokens.
