@@ -236,6 +236,73 @@ func TestAgyAuditThoughtAssemblyLossAndFlush(t *testing.T) {
 	}
 }
 
+func TestAgyAuditThoughtCaptureCap(t *testing.T) {
+	thought := func(text string) string {
+		return agyAuditLine(fmt.Sprintf(`{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":%q}}`, text))
+	}
+	boundary := agyAuditLine(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"reply"}}`)
+	third := agyThoughtCaptureBytes / 3
+	for _, tc := range []struct {
+		name     string
+		chunks   []int
+		overflow int
+	}{
+		{"across_finalized_intervals", []int{third, third, agyThoughtCaptureBytes - 2*third, 1, 4}, 3},
+		{"single_oversized_chunk", []int{agyThoughtCaptureBytes + 1, 4}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := newBoundarySink()
+			r := newAuditRigWith(t, sink, "h1", newAgyMapper("acp-id"), agyProtocol{})
+			adapter := r.p.audit.adapter.(*agyAudit)
+			r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+			for i, size := range tc.chunks {
+				r.tee(thought(strings.Repeat("x", size)))
+				var dropped uint64
+				if i > tc.overflow {
+					dropped = 1
+				}
+				seq := r.keptRun(agyRingPulse, 1, dropped)
+				waitUntil(t, "activity pulse finalized", func() bool {
+					return sink.Recover("s1", "h1").Boundary >= seq
+				})
+				// Finalize synchronizes this inspection with the capture
+				// goroutine while it waits for the next interval.
+				th := adapter.thought
+				if th == nil || cap(th.body) > agyThoughtCaptureBytes || i >= tc.overflow && th.body != nil {
+					t.Fatalf("chunk %d retained state exceeds its budget or kept a discarded body", i)
+				}
+				want := 0
+				if i >= tc.overflow {
+					want = 1
+				}
+				if got := len(sink.events()); got != want {
+					t.Fatalf("chunk %d recorded %d events, want %d", i, got, want)
+				}
+			}
+			r.keptRun(boundary, 0, 0)
+			r.tee(thought("normal thought"))
+			r.keptRun(agyRingPulse, 1, 0)
+			r.keptRun(boundary, 0, 0)
+			r.end()
+
+			events := sink.events()
+			if want := []wsaudit.Kind{wsaudit.KindThinking, wsaudit.KindThinking}; !slices.Equal(kindsOf(events), want) {
+				t.Fatalf("captured event kinds = %v, want %v", kindsOf(events), want)
+			}
+			marker := events[0]
+			if marker.Out != "" || marker.In != "" || marker.Raw != "" ||
+				marker.Meta[wsaudit.MetaLossReason] != wsaudit.LossCaptureCap ||
+				marker.Meta[wsaudit.MetaIncomplete] != true || marker.Meta[wsaudit.MetaAssembled] != true {
+				t.Fatalf("capture-cap marker has body lengths (%d, %d, %d) and metadata %+v",
+					len(marker.Out), len(marker.In), len(marker.Raw), marker.Meta)
+			}
+			if ev := events[1]; ev.Out != "normal thought" || ev.Meta[wsaudit.MetaIncomplete] != nil {
+				t.Fatalf("next thought = %+v", ev)
+			}
+		})
+	}
+}
+
 func TestAgyAuditCapturesEveryKindFromRecordings(t *testing.T) {
 	names := []string{
 		"agy-1.5.10-hosted-lead.jsonl",
