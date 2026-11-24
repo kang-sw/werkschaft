@@ -210,22 +210,61 @@ func (c *conv) loadCompaction() {
 }
 
 func (c *conv) wsManagedLeadCompaction() bool {
-	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactLeadMode == wsconfig.CompactionModeWS
+	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.rec) == wsconfig.CompactionModeWS
+}
+
+// LeadCompactionMode reports the effective mode of an authenticated open
+// hosted lead. Discovery needs only the in-memory binding and mode cache.
+func (r *Runner) LeadCompactionMode(conversation string) string {
+	c := r.conv(conversation)
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	rec, openLead := c.rec, c.rec.Lead && !c.closed
+	c.mu.Unlock()
+	if !openLead {
+		return ""
+	}
+	return c.leadCompactionMode(rec)
+}
+
+func (c *conv) leadCompactionMode(rec Record) string {
+	c.compactModeMu.Lock()
+	defer c.compactModeMu.Unlock()
+	gen := compactionConfigGen.Load()
+	if c.compactLeadMode != "" && c.compactModeGen == gen {
+		return c.compactLeadMode
+	}
+	var raw string
+	if !LeadCompactionWSOnly(rec.Backend, c.r.opts.Backends) {
+		resolver := c.compactionResolver(rec)
+		if value, _, err := resolver.Compaction(rec.WSKey, wsconfig.ItemCompactionLeadMode, rec.Backend, ""); err == nil {
+			raw = value.Value
+		}
+	}
+	c.compactLeadMode = EffectiveLeadCompactionMode(rec.Backend, raw, c.r.opts.Backends)
+	c.compactModeGen = gen
+	return c.compactLeadMode
+}
+
+func (c *conv) compactionResolver(rec Record) wsconfig.Resolver {
+	cfg := c.r.opts.Config
+	cfg.RepoRoot = rec.Root
+	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+		if root, found := roots.Root(rec.WSKey); found {
+			cfg.RepoRoot = root
+		}
+	}
+	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
+	return wsconfig.NewResolver(cfg, nil, reader, nil)
 }
 
 func (c *conv) loadCompactionThresholds() {
 	// Capture generation before reading config so a concurrent tune during the
 	// read leaves compactGen behind and triggers one more reload next check.
 	gen := compactionConfigGen.Load()
-	cfg := c.r.opts.Config
-	cfg.RepoRoot = c.rec.Root
-	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
-		if root, found := roots.Root(c.rec.WSKey); found {
-			cfg.RepoRoot = root
-		}
-	}
-	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
-	r := wsconfig.NewResolver(cfg, nil, reader, nil)
+	r := c.compactionResolver(c.rec)
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	role := "worker"
 	if c.rec.Lead {
@@ -249,16 +288,6 @@ func (c *conv) loadCompactionThresholds() {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", c.rec.ReplyID, key, err)
 			*slot.to = wsconfig.Threshold{}
 		}
-	}
-	if c.rec.Lead {
-		v, _, err := r.Compaction(c.rec.WSKey, wsconfig.ItemCompactionLeadMode, c.rec.Backend, "")
-		rawMode := ""
-		if err == nil {
-			rawMode = v.Value
-		}
-		c.compactLeadMode = EffectiveLeadCompactionMode(c.rec.Backend, rawMode, c.r.opts.Backends)
-	} else {
-		c.compactLeadMode = wsconfig.CompactionModeNative
 	}
 	c.compactGen = gen
 }
@@ -666,10 +695,8 @@ func stage1CompactionPrompt() string {
 }
 
 // rotateExternalLead executes ws-managed compaction for an external hosted lead:
-// builds the checkpoint, emits CompactStart, commits an explicit non-estimated
-// wsaudit.KindCompaction on the old process before closing it, retires the old
-// holder, clears rec.SessionID/SessionFile, starts a fresh native session via
-// startLead, emits CompactEnd, and queues RestoreCompaction + checkpoint.
+// builds the checkpoint, replaces the holder, and records the explicit audit
+// cut before sending any input to the replacement.
 func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, error) {
 	rec := c.record()
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
@@ -704,53 +731,40 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		Dialog:       dialogRes.Dialog,
 	})
 
+	at := time.Now()
+	if c.r.opts.Now != nil {
+		at = c.r.opts.Now()
+	}
+	cut, err := wsaudit.NewEnvelope(rec.ReplyID, rec.Backend, at, wsaudit.KindCompaction)
+	if err != nil {
+		return false, fmt.Errorf("build compaction audit envelope: %w", err)
+	}
+	cut.Subkind, cut.Out = trigger, checkpoint
+	cut.Meta = map[string]any{"mode": wsconfig.CompactionModeWS, "trigger": trigger}
+
 	err = c.sendStandalonePrompt(false, func() error {
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
 
-		if committer, ok := c.proc.(auditCheckpointCommitter); ok {
-			at := time.Now()
-			if c.r != nil && c.r.opts.Now != nil {
-				at = c.r.opts.Now()
-			}
-			ev, err := wsaudit.NewEnvelope(rec.ReplyID, rec.Backend, at, wsaudit.KindCompaction)
-			if err != nil {
-				return fmt.Errorf("build compaction audit envelope: %w", err)
-			}
-			ev.Subkind = trigger
-			ev.Out = checkpoint
-			ev.Meta = map[string]any{
-				"mode":    wsconfig.CompactionModeWS,
-				"trigger": trigger,
-			}
-			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
-			if err := committer.commitAuditCheckpoint(context.Background(), id, ev); err != nil {
-				return fmt.Errorf("commit compaction audit checkpoint: %w", err)
-			}
-		}
-
-		oldProc := c.proc
-		c.setStatus(func() { c.proc = nil })
-		c.events = nil
-		if oldProc != nil {
-			_ = oldProc.Close()
-			c.releaseHolder(oldProc)
-		}
-		if err := c.retireHolder(); err != nil {
+		if err := c.retireCompactionProcess(); err != nil {
 			return fmt.Errorf("retire session holder: %w", err)
 		}
 
-		prevSessionID, prevSessionFile := rec.SessionID, rec.SessionFile
-		c.update(func(r *Record) {
-			r.SessionID = ""
-			r.SessionFile = ""
-		})
-		if err := c.startLead(c.record(), rp.Definition, false); err != nil {
-			c.update(func(r *Record) {
-				r.SessionID = prevSessionID
-				r.SessionFile = prevSessionFile
-			})
+		// Only the launch uses an empty native binding. Retain the last
+		// known ID on disk until the replacement reports its own.
+		fresh := c.record()
+		fresh.SessionID, fresh.SessionFile = "", ""
+		noteBefore := c.compactNote
+		if err := c.startLead(fresh, rp.Definition, false); err != nil {
 			return fmt.Errorf("start fresh session: %w", err)
+		}
+
+		if committer, ok := c.proc.(auditCheckpointCommitter); ok {
+			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
+			if err := committer.commitAuditCheckpoint(context.Background(), id, cut); err != nil {
+				c.compactNote = noteBefore
+				return errors.Join(fmt.Errorf("commit compaction audit checkpoint: %w", err), c.retireCompactionProcess())
+			}
 		}
 
 		c.compactOrigin = trigger
@@ -770,6 +784,21 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		return false, err
 	}
 	return true, nil
+}
+
+func (c *conv) retireCompactionProcess() error {
+	proc := c.proc
+	c.setStatus(func() { c.proc = nil })
+	c.events = nil
+	c.clearProcessMCP()
+	if proc != nil {
+		_ = proc.Close()
+		if audited, ok := proc.(interface{ waitForAudit() }); ok {
+			audited.waitForAudit()
+		}
+		c.releaseHolder(proc)
+	}
+	return c.retireHolder()
 }
 
 func (c *conv) compactionStateInstruction() string {
@@ -1011,6 +1040,15 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		if c.compactPending != nil && c.compactPending.crossing {
 			// Native compaction already handled the queued request's crossing.
 			c.compactPending = nil
+		}
+		if c.compactStage1Active {
+			// The harness supplied the cut while Stage 1 was running. The
+			// terminal event still settles the internal prompt.
+			if c.compactPending == nil {
+				c.compactResume = c.compactStage1Resume
+				c.compactResumeInternal = c.compactStage1Resume && c.compactStage1Internal
+			}
+			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 		}
 		c.compactHardHandled = c.compactHardHandled || c.compactHardAtStart || c.aboveCompactHard()
 		c.compactHardAtStart = false

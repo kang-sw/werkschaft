@@ -180,8 +180,15 @@ func (p *streamProcess) recordAuditEvent(key string, ev wsaudit.Envelope) {
 	}
 }
 
-// auditCheckpointCommitter is implemented by a process whose audit capture can
-// durably commit an explicit compaction checkpoint before the process rotates.
+// waitForAudit drains the retired process's capture before the replacement
+// writes a cut to the same audit stream.
+func (p *streamProcess) waitForAudit() {
+	if p.audit != nil {
+		<-p.audit.done
+	}
+}
+
+// auditCheckpointCommitter commits the replacement's cut before its first turn.
 type auditCheckpointCommitter interface {
 	commitAuditCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error
 }

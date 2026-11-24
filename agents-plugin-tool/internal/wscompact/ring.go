@@ -46,6 +46,13 @@ func BuildRingDialog(records []wslive.RingRecord, ringRef string, secrets ...str
 			lines = lines[1:]
 		}
 	}
+	appendDialog := func(role string, e wslive.RingEntry) {
+		body := strings.TrimSpace(e.Text)
+		if body != "" && e.Truncated {
+			body += " [truncated]"
+		}
+		appendLine(role, body)
+	}
 	observeText := func(text string, checkSkill bool) {
 		if checkSkill {
 			if skill := SkillRE.FindStringSubmatch(text); len(skill) > 0 {
@@ -64,14 +71,10 @@ func BuildRingDialog(records []wslive.RingRecord, ringRef string, secrets ...str
 		switch e.Kind {
 		case wslive.RingUser:
 			observeText(e.Text, true)
-			appendLine("user", e.Text)
+			appendDialog("user", e)
 		case wslive.RingReply:
 			observeText(e.Text, false)
-			text := strings.TrimSpace(e.Text)
-			if text != "" && e.Truncated {
-				text += " [truncated]"
-			}
-			appendLine("assistant", text)
+			appendDialog("assistant", e)
 		case wslive.RingTools:
 			if summary := formatRingTools(e.Tools); summary != "" {
 				observeText(summary, false)

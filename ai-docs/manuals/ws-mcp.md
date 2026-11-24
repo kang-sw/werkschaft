@@ -1685,8 +1685,11 @@ same-origin fetch metadata when present; it is rate-limited and returns no
 credential. Unavailable native writers hide the
 action, while runtime write failures allow retry. Nothing reads or writes the
 clipboard on page load. Settings and the desktop Connection menu provide
-additional explicit login-link paths. Electron sets its native cookie
-before navigation. A same-origin status probe recovers a Strict-cookie browser
+additional explicit login-link paths. Tauri requests the browser cookie through
+the native endpoint bridge (`agents-plugin-tool/desktop/src/endpoint.rs`,
+`browser_cookie`) and sets it before navigation
+(`agents-plugin-tool/desktop/src/shell.rs`, `attach`).
+A same-origin status probe recovers a Strict-cookie browser
 that followed a cross-site link, retaining the requested fragment.
 
 LAN mode (`dashboard.lan_enabled`, global-only, passed as `dashboard --lan`)
@@ -2073,8 +2076,9 @@ Finding and starting the daemon (`DaemonLink` in the launcher):
    Direct `ws-mcp serve` and daemon-initiated LAN changes acquire the lock in
    Go. Desktop `daemon-start` joins when `--desktop-start` or
    `--require-independent-lifetime` is set and no ownership marker is present.
-   Electron's macOS `dashboard` command coordinates through the daemon-held
-   singleton `dashboard.lock`. On replacements through `Ensure`, the successor
+   Tauri invokes `daemon-start --desktop-start` through its native starter
+   (`agents-plugin-tool/desktop/src/daemon.rs`, `launch`).
+   On replacements through `Ensure`, the successor
    reports readiness before the starter requests an incumbent drain.
    Staging reuses matching hashes and failed copies clean only their own temp
    file. Settled artifacts remain: neither age nor singleton ownership proves

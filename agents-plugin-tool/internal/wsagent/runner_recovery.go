@@ -119,6 +119,13 @@ func (c *conv) mcpReported(servers []MCPServer, quiet bool) {
 	}
 }
 
+// clearProcessMCP forgets checks and server state owned by a retired process.
+// mcpRestarted survives so automatic restarts still have their retry bound.
+func (c *conv) clearProcessMCP() {
+	c.setStatus(func() { c.mcpBroken = nil })
+	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
+}
+
 // mcpConnected marks server connected in this process.
 func (c *conv) mcpConnected(server string) {
 	if c.mcpSeen == nil {
@@ -252,6 +259,11 @@ func (c *conv) mcpRestartDue() bool {
 // idle point with no background task, and reports whether a new process
 // runs; a failed start leaves none, with its error on the session.
 func (c *conv) restartIfDue() bool {
+	// The idle kick settles accepted compaction work before a process stop
+	// can clear it. A dispatched compaction or continuation holds idle.
+	if c.compactPending != nil || c.compactResume {
+		return false
+	}
 	storeGone := c.cutoverStoreGone()
 	if !(c.mcpStale || storeGone || c.mcpRestartDue()) || c.proc == nil || !c.idleNow() {
 		return false

@@ -67,7 +67,7 @@ func TestBuildRingDialogSlicesAfterLastSuccessfulCompact(t *testing.T) {
 	records := []wslive.RingRecord{
 		{RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: "before compact 260101-feat-old"}},
 		{RingEntry: wslive.RingEntry{Kind: wslive.RingCompact, CompactFailed: false}, At: compactAt},
-		{RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: `<skill name="ws:lead-run"> work on 261124-feat-ws-managed-compaction`}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: `<skill name="ws:lead-run"> work on 261124-feat-ws-managed-compaction`, Truncated: true}},
 		{RingEntry: wslive.RingEntry{Kind: wslive.RingCompact, CompactFailed: true, Text: "failed attempt"}},
 		{RingEntry: wslive.RingEntry{Kind: wslive.RingReply, Text: "partial reply", Truncated: true}},
 		{RingEntry: wslive.RingEntry{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
@@ -101,7 +101,7 @@ func TestBuildRingDialogSlicesAfterLastSuccessfulCompact(t *testing.T) {
 		t.Fatalf("playbook = %q, want lead-run", res.Playbook)
 	}
 	for _, want := range []string{
-		"user: <skill name=\"ws:lead-run\">",
+		"user: <skill name=\"ws:lead-run\"> work on 261124-feat-ws-managed-compaction [truncated]",
 		"assistant: partial reply [truncated]",
 		"tools: read_file(a.go)",
 		"mail: recv id:worker1: done: all green",

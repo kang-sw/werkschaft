@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { fixture, sha } = require('./daemon-fixture.cjs');
-const { selectDaemon, SETTING } = require('../daemon-selection');
 test('bundled and explicit dev roots bind matching binary, contract, resources and skills without executing bytes', t => {
   const f = fixture(t);
   const bundled = f.select();
@@ -20,27 +19,6 @@ test('bundled and explicit dev roots bind matching binary, contract, resources a
   assert.equal(selected.env.WS_SKILLS_ROOT, path.join(f.dev.root, 'skills'));
   assert.equal(fs.existsSync(path.join(f.userData, 'update-state.json')), false);
 });
-test('checkout fallback is unpackaged only, preserves bundle and explicit selection precedence', t => {
-  for (const platform of ['win32', 'darwin']) {
-    const f = fixture(t, platform);
-    const appRoot = path.join(f.base, 'agents-plugin-tool', 'desktop-electron');
-    fs.mkdirSync(path.dirname(appRoot), { recursive: true });
-    fs.renameSync(f.appRoot, appRoot);
-    const repoRoot = path.join(f.base, 'agents-plugin-wsflow');
-    fs.renameSync(f.dev.root, repoRoot);
-    const select = packaged => selectDaemon({ appRoot, userData: f.userData, platform, packaged });
-    assert.equal(select(false).root, path.join(appRoot, 'daemon'));
-    fs.rmSync(path.join(appRoot, 'daemon'), { recursive: true });
-    assert.equal(select(false).root, repoRoot);
-    assert.equal(select(false).source, 'development');
-    assert.throws(() => select(true), /Cannot use bundled daemon/);
-    f.choose({ schema_version: 1, root: path.join(f.base, 'missing') });
-    assert.throws(() => select(false), /Cannot use development daemon/);
-    fs.rmSync(path.join(f.userData, SETTING));
-    fs.rmSync(path.join(repoRoot, path.basename(f.dev.binary)));
-    assert.throws(() => select(false), /ws-mcp.*assemble-daemon-input/s);
-  }
-});
 test('validation hashes binary bytes and normalized text through path reads, never a direct fd open', t => {
   const f = fixture(t);
   const bytes = Buffer.alloc(1024 * 1024 + 7, 0xff);
@@ -49,7 +27,7 @@ test('validation hashes binary bytes and normalized text through path reads, nev
   const readFile = fs.readFileSync, open = fs.openSync, paths = new Set();
   let readingByPath = false;
   t.mock.method(fs, 'readFileSync', function (file, ...args) {
-    assert.equal(typeof file, 'string', 'no fd reads (Electron would have extracted the file already)');
+    assert.equal(typeof file, 'string', 'hash files by path');
     paths.add(file);
     readingByPath = true;
     try { return readFile.call(this, file, ...args); }
@@ -62,34 +40,6 @@ test('validation hashes binary bytes and normalized text through path reads, nev
   assert.equal(f.select().metadata.binary_sha256, sha(bytes));
   for (const file of [f.bundled.binary, path.join(f.bundled.root, 'rsrc/hello/hello.md'),
     path.join(f.bundled.root, 'skills/hello/SKILL.md')]) assert(paths.has(file), file);
-});
-test('ASAR bundles select physical unpacked input, fail closed if absent, and preserve explicit dev selection', t => {
-  for (const platform of ['win32', 'darwin']) {
-    const f = fixture(t, platform);
-    const appRoot = path.join(f.base, 'app.asar'), unpacked = appRoot + '.unpacked';
-    fs.renameSync(f.appRoot, unpacked);
-    fs.writeFileSync(appRoot, 'not an archive: Node must never read daemon inputs here');
-    const select = () => selectDaemon({ appRoot, userData: f.userData, platform });
-    assert.equal(select().root, path.join(unpacked, 'daemon'));
-    assert.equal(select().binary, path.join(unpacked, 'daemon', path.basename(f.bundled.binary)));
-    fs.renameSync(path.join(unpacked, 'daemon'), path.join(unpacked, 'missing'));
-    assert.throws(select, /Cannot use bundled daemon/, 'never fall back to packed input');
-    f.choose({ schema_version: 1, root: f.dev.root });
-    assert.equal(select().root, f.dev.root);
-    assert.equal(select().source, 'development');
-  }
-});
-test('selection is shell-local and fails closed on malformed, relative or missing dev input', t => {
-  const f = fixture(t, 'darwin');
-  for (const value of [{ root: f.dev.root }, { schema_version: 1, root: '../selected' },
-    { schema_version: 1, root: f.dev.root, accepted: true }, { schema_version: 2, root: f.dev.root }]) {
-    f.choose(value); assert.throws(f.select, /Invalid daemon selection/);
-  }
-  fs.writeFileSync(path.join(f.userData, SETTING), '{');
-  assert.throws(f.select, /Invalid daemon selection/);
-  f.choose({ schema_version: 1, root: path.join(f.base, 'missing') });
-  assert.throws(f.select, /Cannot use development daemon/);
-  assert(fs.existsSync(f.bundled.binary), 'a bad dev selection cannot silently fall back to bundled');
 });
 test('binary hash, version, optional protocol and inventory gates match the launcher', t => {
   const f = fixture(t);

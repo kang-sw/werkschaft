@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { selectDaemon, SETTING } = require('../daemon-selection');
+const { validateDaemonRoot } = require('./daemon-selection.cjs');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function fixture(t, platform = 'win32') {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'werkschaft-daemon-input-'));
@@ -43,8 +43,9 @@ function fixture(t, platform = 'win32') {
   }
   const bundled = make(path.join(appRoot, 'daemon'));
   const dev = make(path.join(base, 'selected'), '0.50.3-dev');
-  const choose = value => fs.writeFileSync(path.join(userData, SETTING), JSON.stringify(value));
-  const select = () => selectDaemon({ appRoot, userData, platform });
+  let root = bundled.root, source = 'bundled';
+  const choose = value => { root = value.root; source = 'development'; };
+  const select = () => validateDaemonRoot(root, source, platform);
   return { base, appRoot, userData, bundled, dev, choose, select };
 }
 module.exports = { fixture, sha };

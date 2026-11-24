@@ -64,6 +64,12 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 			rule.ValidateHarnessValue = func(harness, value string) error {
 				return validateCompactionLeadModeTarget(entry.Key, harness, value)
 			}
+			rule.FixedHarnessValue = func(harness string) string {
+				if wsagent.LeadCompactionWSOnly(harness) {
+					return wsconfig.CompactionModeWS
+				}
+				return ""
+			}
 		}
 		if entry.Key == wsconfig.ItemAgentTierRouting {
 			// The one exact-key structured setting: no name part, validated as
