@@ -1686,8 +1686,9 @@ credential. Unavailable native writers hide the
 action, while runtime write failures allow retry. Nothing reads or writes the
 clipboard on page load. Settings and the desktop Connection menu provide
 additional explicit login-link paths. Tauri requests the browser cookie through
-the native endpoint bridge and sets it before navigation (`agents-plugin-tool/desktop/src/endpoint.rs`,
-`browser_cookie`; `agents-plugin-tool/desktop/src/shell.rs`, `attach`).
+the native endpoint bridge (`agents-plugin-tool/desktop/src/endpoint.rs`,
+`browser_cookie`) and sets it before navigation
+(`agents-plugin-tool/desktop/src/shell.rs`, `attach`).
 A same-origin status probe recovers a Strict-cookie browser
 that followed a cross-site link, retaining the requested fragment.
 

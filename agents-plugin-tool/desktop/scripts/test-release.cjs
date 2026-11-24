@@ -33,11 +33,13 @@ test('verifies the Tauri signature and binds the claimed version', () => {
     hash('test'), '2.0.1'), /verify/);
 });
 
-test('accepts exact stable and canary versions without migration assets', () => {
+test('requires exact stable and canary versions for release manifests', async () => {
+  assert.equal(releaseVersion('0.50.8').channel, 'stable');
+  assert.equal(releaseVersion('0.50.8-canary.0').channel, 'canary');
   for (const version of ['0.50.8-dev', 'v0.50.8', '0.050.8', '0.50.8-canary.01', '0.50.8+21', '0.50.8\n', '9007199254740992.0.0', '0.1.0-canary.9007199254740992']) {
     assert.throws(() => releaseVersion(version), /exact version/);
   }
-
+  await assert.rejects(writePlatformManifest('', 'darwin', '0.50.8-dev', key), /exact version/);
 });
 
 test('combines and independently verifies the complete stable release with Tauri payloads', async t => {

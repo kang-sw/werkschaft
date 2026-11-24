@@ -48,8 +48,8 @@ Both runs retain `ws-mcp-assets` and the combined `werkschaft-tauri-assets`.
 Both channels contain the three packages listed below, their `.sig` files,
 and `werkschaft-tauri-update.json`. `tauri_dry_run=true` vetoes native and
 Tauri publication, including a dispatch on a tag. Supply an explicit numeric
-checkout version or that version with `-canary.N`; the default development
-version is rejected.
+checkout version or that version with `-canary.N`. The workflow rejects the
+default development version.
 
 ## Local signed packages
 
@@ -141,9 +141,8 @@ retain native-only behavior. Check the complete workflow and confirm
 [release procedure](../../ai-docs/ship/ws.md) for CI, approval, and tagging.
 
 Updater signatures authenticate update payloads. Apple Developer ID signing
-and notarization and Windows Authenticode signing remain deferred; Electron
-retirement does not approve new OS signing. Gatekeeper or SmartScreen may
-prompt during native acceptance.
+and notarization and Windows Authenticode signing remain deferred.
+Gatekeeper or SmartScreen may prompt during native acceptance.
 
 Existing Electron users must manually install Tauri from the release page.
 Releases no longer include Electron migration ZIPs or desktop SHA256SUMS.
@@ -176,6 +175,6 @@ A same-core canary also exercises the MSI equal-core version replacement.
    failure and verify retry or reinstall with the retained profile.
 4. On disposable machines with old Electron installations, manually install
    the Tauri app or installer from the release page. Confirm first launch,
-   connection, and default Tauri Settings. Electron's retained profile is not
-   imported. Record Gatekeeper or SmartScreen prompts and reinstall recovery
-   on the authorized native test hosts.
+   connection, and default Tauri Settings in a fresh WebView profile. Record
+   Gatekeeper or SmartScreen prompts and reinstall recovery on the authorized
+   native test hosts.

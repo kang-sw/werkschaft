@@ -3,16 +3,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { parseArgs } = require('node:util');
-function parseVersion(value) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-canary\.(\d+))?$/.exec(String(value ?? '').trim());
-  if (!match) return null;
-  const numbers = match.slice(1).map(part => part == null ? null : Number(part));
-  if (numbers.some(part => part != null && !Number.isSafeInteger(part))) return null;
-  const core = numbers.slice(0, 3), canary = numbers[3];
-  return { core, channel: canary == null ? 'stable' : 'canary', canary,
-    version: `${core.join('.')}${canary == null ? '' : `-canary.${canary}`}` };
-}
-
 const { publicKey, verifySignature } = require('./release-signature.cjs');
 
 const FEED = 'werkschaft-tauri-update.json';
@@ -23,6 +13,16 @@ const PLATFORMS = {
     'windows-x86_64-msi': 'Werkschaft-win32-x64.msi' } },
 };
 
+function parseVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-canary\.(\d+))?$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const numbers = match.slice(1).map(part => part == null ? null : Number(part));
+  if (numbers.some(part => part != null && !Number.isSafeInteger(part))) return null;
+  const core = numbers.slice(0, 3), canary = numbers[3];
+  return { core, channel: canary == null ? 'stable' : 'canary', canary,
+    version: `${core.join('.')}${canary == null ? '' : `-canary.${canary}`}` };
+}
+
 function releaseVersion(version) {
   const parsed = parseVersion(version);
   if (typeof version !== 'string' || parsed?.version !== version) {
@@ -31,19 +31,19 @@ function releaseVersion(version) {
   return parsed;
 }
 
-async function measure(file, signed = false) {
+async function measure(file) {
   if (!fs.lstatSync(file).isFile()) throw new Error(`Expected a regular release asset: ${file}`);
   const sha = createHash('sha256');
-  const blake = signed && createHash('blake2b512');
+  const blake = createHash('blake2b512');
   let size = 0;
   for await (const chunk of fs.createReadStream(file)) {
     size += chunk.length;
-    if (signed && size > MAX_PAYLOAD) throw new Error(`Updater payload exceeds the download limit: ${file}`);
+    if (size > MAX_PAYLOAD) throw new Error(`Updater payload exceeds the download limit: ${file}`);
     sha.update(chunk);
-    if (blake) blake.update(chunk);
+    blake.update(chunk);
   }
   if (size === 0) throw new Error(`Empty release asset: ${file}`);
-  return { sha256: sha.digest('hex'), size, digest: blake ? blake.digest() : undefined };
+  return { sha256: sha.digest('hex'), size, digest: blake.digest() };
 }
 
 function writeJSON(file, value) {
@@ -54,7 +54,7 @@ async function inspectAssets(dir, platform, version, key) {
   const assets = {};
   const entries = {};
   for (const [target, name] of Object.entries(PLATFORMS[platform].assets)) {
-    const { digest, ...data } = await measure(path.join(dir, name), true);
+    const { digest, ...data } = await measure(path.join(dir, name));
     const signature = fs.readFileSync(path.join(dir, `${name}.sig`), 'utf8');
     if (signature.length > 4096) throw new Error(`Updater signature exceeds the feed limit: ${name}`);
     verifySignature(key, signature, digest, version);
@@ -73,13 +73,13 @@ function checkNames(dir, expected) {
   }
 }
 
-function assetFiles(platform, version) {
-  const files = Object.values(PLATFORMS[platform].assets).flatMap(name => [name, `${name}.sig`]);
-  return files;
+function assetFiles(platform) {
+  return Object.values(PLATFORMS[platform].assets).flatMap(name => [name, `${name}.sig`]);
 }
 
 async function writePlatformManifest(dir, platform, version, key) {
-  checkNames(dir, assetFiles(platform, version));
+  releaseVersion(version);
+  checkNames(dir, assetFiles(platform));
   const { assets } = await inspectAssets(dir, platform, version, key);
   writeJSON(path.join(dir, 'platform.json'), { version, assets });
 }
@@ -90,7 +90,7 @@ async function combine(input, output, version, key) {
   try {
     for (const [platform, { arch }] of Object.entries(PLATFORMS)) {
       const source = path.join(input, `tauri-${platform}-${arch}`);
-      const files = assetFiles(platform, version);
+      const files = assetFiles(platform);
       checkNames(source, [...files, 'platform.json']);
       for (const file of files) fs.copyFileSync(path.join(source, file), path.join(output, file));
     }
@@ -118,7 +118,7 @@ async function describeRelease(dir, version, key, input) {
 }
 
 async function verifyRelease(dir, version, key) {
-  const files = [FEED, ...Object.keys(PLATFORMS).flatMap(platform => assetFiles(platform, version))];
+  const files = [FEED, ...Object.keys(PLATFORMS).flatMap(platform => assetFiles(platform))];
   releaseVersion(version);
   checkNames(dir, files);
   const { feed } = await describeRelease(dir, version, key);
@@ -143,4 +143,4 @@ async function main() {
 if (require.main === module) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
-module.exports = { PLATFORMS, releaseVersion, measure, writePlatformManifest, combine, verifyRelease };
+module.exports = { PLATFORMS, releaseVersion, writePlatformManifest, combine, verifyRelease };

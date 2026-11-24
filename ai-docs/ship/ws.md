@@ -167,19 +167,18 @@ fetched state.
   `agents-plugin-tool/desktop/scripts/assemble-daemon-input.cjs` and run
   `desktop/scripts/package.cjs --release` without launching the app. The
   validated daemon metadata sets the app version.
-- Both channels retain `werkschaft-tauri-assets`: `Werkschaft-darwin-arm64.app.tar.gz`,
-  `Werkschaft-win32-x64-setup.exe`, `Werkschaft-win32-x64.msi`, their three
-  `.sig` files, and `werkschaft-tauri-update.json`. The combine job verifies
-  hashes, sizes, signatures and the feed. Stable tags publish native and Tauri
-  assets together; exact `vX.Y.Z-canary.N` tags add Tauri assets to the native
-  prerelease. Other tags retain native-only behavior.
+- The combined `werkschaft-tauri-assets` artifact contains
+  `Werkschaft-darwin-arm64.app.tar.gz`, `Werkschaft-win32-x64-setup.exe`,
+  `Werkschaft-win32-x64.msi`, their three `.sig` files, and
+  `werkschaft-tauri-update.json` for both channels. The combine job verifies
+  hashes, sizes, and signatures before writing the updater feed. Stable tags
+  publish native and Tauri assets together. Exact `vX.Y.Z-canary.N` tags add
+  Tauri assets to the native prerelease. Other tags publish native assets.
 - Updater signing uses the configured Tauri keys. Apple Developer ID signing
-  and notarization and Windows Authenticode signing remain deferred; retirement
-  does not approve new OS signing. Gatekeeper or SmartScreen may prompt. A
-  green packaging job does not establish installed-app or platform acceptance.
+  and notarization and Windows Authenticode signing remain deferred.
+  Gatekeeper or SmartScreen may prompt during native acceptance.
 - Wait for all `Tauri desktop` package, combine and publish jobs. Existing
-  Electron users reinstall Tauri manually; migration ZIPs and desktop
-  SHA256SUMS are retired.
+  Electron users reinstall Tauri manually from the release page.
 
 ### Desktop dry run before shipping
 
@@ -204,7 +203,8 @@ version is rejected. For a canary dry run, pass `version="$core-canary.1"`
 and verify with that same version. Configure the evaluation keys and follow
 [desktop release packaging](../../agents-plugin-tool/desktop/RELEASE.md)
 for the two-channel feed and native acceptance checks. Keep this verification
-before the tag push; Publish's CI gate and packaged-app acceptance still apply.
+before the tag push and follow the Publish CI gate and packaged-app
+acceptance procedures.
 
 ## Tag
 

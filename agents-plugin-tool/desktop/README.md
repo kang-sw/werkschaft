@@ -189,8 +189,8 @@ ordering.
 If download or verification fails, check again from Settings and retry.
 If installation fails, reopen Werkschaft and retry the staged update or
 reinstall from the release page. Existing Electron users must manually install
-Tauri from the release page; automatic Electron migration is retired. Tauri
-uses its own WebView profile and starts with default window settings.
+Tauri from the release page. Tauri uses its own WebView profile and starts
+with default window settings.
 
 On a disposable smoke host, point the signed evaluation builds at the
 downloaded dry-run artifacts with:
