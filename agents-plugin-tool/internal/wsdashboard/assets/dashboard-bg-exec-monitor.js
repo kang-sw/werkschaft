@@ -23,7 +23,7 @@
   var bgRows = new Map(), bgListDivider = null, bgListEmpty = null;
   var bgDockJob = "", bgDockHead = null, bgDockMeta = null, bgDockMetaKey = "";
   var bgSplitEl = null, bgCountsEl = null, bgStopBtn = null, bgStopHold = null;
-  var bgListFetching = false, bgListDirty = false, bgListAC = null;
+  var bgListRequest = null, bgListDirty = false;
   var bgTailState = null, bgTailTimer = 0, bgTailGen = 0, bgTailAC = null;
   var bgTickTimer = 0, bgCopyTimer = 0;
 
@@ -179,12 +179,14 @@
     function bgOnVisibility() {
       if (!bgSt.open) return;
       if (bgPageHidden()) {
+        if (bgListRequest) { bgListDirty = true; bgAbortList(); }
         bgStopTick();
         clearTimeout(bgTailTimer);
         bgTailTimer = 0;
         if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
         if (bgTailState) bgTailState.busy = false;
       } else {
+        if (bgListDirty) bgExecFetchList();
         bgSyncTick();
         if (bgTailState && !bgTailState.drained && !bgTailState.busy) bgTailSchedule(0);
       }
@@ -237,8 +239,7 @@
     bgSt.open = false;
     bgStopTick();
     bgTailStop();
-    if (bgListAC) { try { bgListAC.abort(); } catch (e) {} bgListAC = null; }
-    bgListFetching = false;
+    bgAbortList();
     bgListDirty = false;
     bgClearStop();
     clearTimeout(bgCopyTimer);
@@ -280,22 +281,27 @@
     bgExecFetchList();
   }
 
+  function bgAbortList() {
+    var request = bgListRequest;
+    bgListRequest = null;
+    if (request && request.controller) request.controller.abort();
+  }
+
   function bgExecFetchList() {
     if (!bgSt.open || !rid) return;
-    if (bgListFetching) { bgListDirty = true; return; }
-    bgListFetching = true;
+    if (bgPageHidden() || bgListRequest) { bgListDirty = true; return; }
     bgListDirty = false;
-    var ac = window.AbortController ? new AbortController() : null;
-    bgListAC = ac;
+    var request = { controller: window.AbortController ? new AbortController() : null };
+    bgListRequest = request;
     var opts = { credentials: "same-origin", cache: "no-store" };
-    if (ac) opts.signal = ac.signal;
+    if (request.controller) opts.signal = request.controller.signal;
     fetch("/s/" + rid + "/exec/bg/jobs", opts).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (data) {
-      if (bgListAC === ac) bgListAC = null;
-      bgListFetching = false;
-      if (!bgSt.open) return;
+      if (bgListRequest !== request) return;
+      bgListRequest = null;
+      if (bgPageHidden()) { bgListDirty = true; return; }
       bgSt.loading = false;
       bgSt.error = false;
       bgSt.rev = typeof data.rev === "number" ? data.rev : bgSt.rev;
@@ -332,13 +338,15 @@
       }
       if (bgListDirty && bgSt.open) bgExecFetchList();
     }, function (err) {
-      if (bgListAC === ac) bgListAC = null;
-      bgListFetching = false;
-      if (!bgSt.open || (err && err.name === "AbortError")) return;
+      if (bgListRequest !== request) return;
+      bgListRequest = null;
+      if (bgPageHidden()) { bgListDirty = true; return; }
+      if (err && err.name === "AbortError") return;
       bgSt.loading = false;
       bgSt.error = true;
       bgRenderAll();
       bgPosition();
+      if (bgListDirty) bgExecFetchList();
     });
   }
 

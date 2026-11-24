@@ -262,6 +262,40 @@ async function main() {
       { timeout: 5000 },
     );
 
+    // Browser-hidden tabs keep the main revision stream open but defer the popup's job list.
+    await view.evaluate(() => {
+      const fetchList = window.fetch;
+      window.listFetches = 0;
+      window.listAborted = false;
+      window.fetch = function (url, opts) {
+        if (!String(url).endsWith('/exec/bg/jobs')) return fetchList.call(this, url, opts);
+        if (++window.listFetches !== 1) return fetchList.call(this, url, opts);
+        return new Promise((_, reject) => opts.signal.addEventListener('abort', () => {
+          window.listAborted = true;
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, { once: true }));
+      };
+    });
+    await ctlPost('/syncsnap');
+    await view.waitForFunction(() => window.listFetches === 1);
+    await view.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    assert.equal(await view.evaluate(() => window.listAborted), true, 'hiding the tab aborts its pending list request');
+    await ctlPost('/syncsnap');
+    await ctlPost('/syncsnap');
+    await sleep(300);
+    assert.equal(await view.evaluate(() => window.listFetches), 1, 'hidden browser tab does not fetch after job revisions');
+    const showList = page.waitForResponse((r) => r.url().endsWith('/exec/bg/jobs') && r.ok());
+    await view.evaluate(() => {
+      delete document.hidden;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await (await showList).finished();
+    await sleep(300);
+    assert.equal(await view.evaluate(() => window.listFetches), 2, 'showing the tab refreshes the latest revision once');
+
     // 12. Evicted output footer formats written & trimmed sizes cleanly with no duplicate "bytes" unit.
     await context.route('**/exec/bg/exec_lead_run/output*', async (route) => {
       const resp = await route.fetch();
