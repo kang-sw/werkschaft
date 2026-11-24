@@ -388,6 +388,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 		if turnErr == "" && c.summaryReason != wslive.TurnAborted && p.CommandEndConfirms && (compactCommand || c.turn) {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd})
+			c.recordInferredCompaction(wslive.TriggerManual, "command_end", 0, 0)
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: wslive.TriggerManual})
 		} else {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})

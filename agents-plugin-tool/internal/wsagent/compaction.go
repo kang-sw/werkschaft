@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
@@ -373,6 +374,43 @@ func (c *conv) checkUsageDropCompaction(ev wslive.Event) {
 	if !c.compactCommand {
 		c.stopCompactWatchdog()
 	}
+}
+
+// recordInferredCompaction records a daemon-inferred compaction boundary in the
+// process's audit capture with meta.estimated = true (Decision 6). It never
+// blocks and is a no-op when audit capture is inactive.
+func (c *conv) recordInferredCompaction(trigger, inferredBy string, preTokens, postTokens int64) {
+	if c.proc == nil {
+		return
+	}
+	rec, ok := c.proc.(auditSyntheticRecorder)
+	if !ok {
+		return
+	}
+	at := time.Now()
+	if c.r != nil && c.r.opts.Now != nil {
+		at = c.r.opts.Now()
+	}
+	ev, err := wsaudit.NewEnvelope(c.rec.ReplyID, c.rec.Backend, at, wsaudit.KindCompaction)
+	if err != nil {
+		return
+	}
+	ev.Subkind = trigger
+	meta := map[string]any{
+		wsaudit.MetaEstimated: true,
+		"inferred_by":         inferredBy,
+	}
+	if trigger != "" {
+		meta["trigger"] = trigger
+	}
+	if preTokens > 0 {
+		meta["pre_tokens"] = preTokens
+	}
+	if postTokens > 0 {
+		meta["post_tokens"] = postTokens
+	}
+	ev.Meta = meta
+	rec.recordAuditEvent("", ev)
 }
 
 // compactIdle precedes inbox reads. All crossing/lifecycle state is in memory.

@@ -873,3 +873,29 @@ func TestAuditIDsRoundTripVerbatim(t *testing.T) {
 		t.Fatalf("call lookup = %+v", c)
 	}
 }
+
+func TestAuditSummaryEstimatedCompaction(t *testing.T) {
+	think := auditEv(1, wsaudit.KindThinking, auditBase)
+	est := auditEv(2, wsaudit.KindCompaction, auditBase.Add(time.Second))
+	est.Subkind = "auto"
+	est.Meta = map[string]any{wsaudit.MetaEstimated: true, "inferred_by": "usage_drop"}
+	explicit := auditEv(3, wsaudit.KindCompaction, auditBase.Add(2*time.Second))
+	explicit.Subkind = "auto"
+
+	fx := &fixtureAudit{}
+	fx.set("sess", wsauditstore.View{Events: []wsaudit.Envelope{think, est, explicit}})
+	d := auditDaemon(fx)
+	p := auditJSON[pageOut](t, d, "/s/sess/audit/events", 200)
+	if len(p.Events) != 3 {
+		t.Fatalf("events = %d, want 3", len(p.Events))
+	}
+	if _, ok := p.Events[0]["estimated"]; ok {
+		t.Errorf("thinking summary should omit estimated: %v", p.Events[0])
+	}
+	if got, ok := p.Events[1]["estimated"].(bool); !ok || !got {
+		t.Errorf("estimated compaction summary = %v, want estimated=true", p.Events[1])
+	}
+	if _, ok := p.Events[2]["estimated"]; ok {
+		t.Errorf("explicit compaction summary should omit estimated: %v", p.Events[2])
+	}
+}

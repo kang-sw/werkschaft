@@ -844,7 +844,7 @@ func newAgyMapper(sessionID string) *agyMapper {
 		pendingTools:   map[string]bool{},
 		openBg:         map[string]bool{},
 		bgCalls:        map[string]bool{},
-		batches:        newBatchTracker("agy"),
+		batches:        batchTracker{epoch: newBatchTracker("agy").epoch, callIDs: true},
 		approvals:      map[string]*agyApproval{},
 		approvalOf:     map[string]string{},
 		requested:      map[string]bool{},
