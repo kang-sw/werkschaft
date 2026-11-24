@@ -363,6 +363,10 @@ type Runner struct {
 	startupMu     sync.RWMutex
 	startupLoaded chan struct{}
 	serving       <-chan struct{}
+	// onDeferKick, when non-nil in tests, runs between deferKickIfUnpublished's
+	// initial !publicationReady() check and kickDeferred.Store(true) to exercise
+	// the store-then-recheck boundary deterministically.
+	onDeferKick func()
 	// playbookCmds is Options.PlaybookCommands' list, read once
 	// (playbookCommands) under playbookMu.
 	playbookMu     sync.Mutex

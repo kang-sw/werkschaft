@@ -153,6 +153,11 @@ type entry struct {
 	// audit is the attached connection's EventAuditAttached when it
 	// negotiated the audit channel (AuditAttach).
 	audit Event
+	// everAttached reports whether AttachWith ever succeeded for this entry.
+	// Entries created only to record a failed attach attempt during Scan (such
+	// as a dead holder whose PID was reused) never attached, so cleanup does
+	// not synthesize an exit for them; consumers observe absence after Scan.
+	everAttached bool
 	// exitDelivered records whether an "exit" event (from the holder's
 	// protocol stream or a dead-holder cleanup synthesis) has already been
 	// delivered to sinks for this entry, ensuring at-most-once delivery.

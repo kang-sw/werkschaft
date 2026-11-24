@@ -179,33 +179,41 @@ func (m *Manager) cleanup(desc Descriptor, fallback string) error {
 		m.logf("holder %s: remove directory: %v", desc.ID, err)
 		return err
 	}
-	// If the holder died abruptly without delivering a protocol "exit" frame,
-	// emit a synthetic exit once before forgetting the entry so consumers
-	// settle instead of staying wedged as running. Never emit during Close.
+	// If an attached holder died abruptly without delivering a protocol "exit"
+	// frame, emit a synthetic exit once before forgetting the entry so consumers
+	// settle instead of staying wedged as running. Never emit during Close,
+	// never emit for an entry that never completed attach (e.g. a reused-PID
+	// attach failure during Scan, which post-scan absence handling settles),
+	// and dispatch asynchronously so opMu / Scan / Stop never deadlock on a
+	// sink waiting for post-scan replay admission (e.g. attachReady).
 	var sinks []Sink
+	var ev Event
 	emitExit := false
 	m.mu.Lock()
 	if !m.closed {
-		if e := m.entries[desc.ID]; e != nil && !e.exitDelivered {
+		if e := m.entries[desc.ID]; e != nil && e.everAttached && !e.exitDelivered {
 			e.exitDelivered = true
 			e.child.State, e.child.ExitCode, e.child.Signal = "exited", exit.ExitCode, exit.Signal
 			sinks = m.sinks
+			ev = Event{
+				Event:    "exit",
+				ExitCode: exit.ExitCode,
+				Signal:   exit.Signal,
+				Reason:   exit.Reason,
+			}
 			emitExit = true
 		}
 	}
 	m.mu.Unlock()
-	if emitExit {
-		ev := Event{
-			Event:    "exit",
-			ExitCode: exit.ExitCode,
-			Signal:   exit.Signal,
-			Reason:   exit.Reason,
-		}
-		for _, sink := range sinks {
-			sink.HolderEvent(desc.ID, ev)
-		}
-	}
 	m.forget(desc.ID)
+	if emitExit && len(sinks) > 0 {
+		id := desc.ID
+		go func() {
+			for _, sink := range sinks {
+				sink.HolderEvent(id, ev)
+			}
+		}()
+	}
 	return nil
 }
 
@@ -330,7 +338,7 @@ func (m *Manager) attach(desc Descriptor) error {
 		client.Close()
 		return ErrDetached
 	}
-	e.client, e.cause, e.child = client, "", info.Child
+	e.client, e.cause, e.child, e.everAttached = client, "", info.Child, true
 	e.audit = Event{}
 	if info.Audit > 0 {
 		e.audit = Event{Event: EventAuditAttached, Next: info.NextSeq, Conn: info.Conn}

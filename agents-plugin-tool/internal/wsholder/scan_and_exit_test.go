@@ -28,6 +28,7 @@ type fakeHolderServer struct {
 	conns      []net.Conn
 	attachGate chan struct{} // when non-nil, Attach blocks until closed
 	sendExit   bool          // when true, Replay emits a protocol "exit" frame
+	onStop     func()        // optional callback invoked on protocol "stop"
 }
 
 func startFakeHolderServer(t *testing.T, holdersDir, id string, pid int, attachGate chan struct{}, sendExit bool) *fakeHolderServer {
@@ -141,6 +142,12 @@ func (s *fakeHolderServer) handleConn(c net.Conn) {
 					"next_seq":  0,
 				})
 			}
+		case "stop":
+			_ = enc.Encode(map[string]any{"reply": req.ID, "ok": true})
+			if s.onStop != nil {
+				s.onStop()
+			}
+			return
 		default:
 			_ = enc.Encode(map[string]any{"reply": req.ID, "ok": true})
 		}
@@ -395,5 +402,224 @@ func TestManagerProtocolExitFollowedByCleanupDoesNotDoubleEmit(t *testing.T) {
 
 	if got := countExitEvents(col, srv.desc.ID); got != 1 {
 		t.Fatalf("total exit events = %d, want 1 (must not double-emit): %s", got, fmt.Sprint(col.snapshot(srv.desc.ID)))
+	}
+}
+
+type blockingSink struct {
+	targetID string
+	ready    <-chan struct{}
+	entered  chan struct{}
+	done     chan struct{}
+	once     sync.Once
+
+	mu     sync.Mutex
+	events []Event
+}
+
+func (s *blockingSink) HolderEvent(id string, ev Event) {
+	if id != s.targetID {
+		return
+	}
+	s.once.Do(func() {
+		if s.entered != nil {
+			close(s.entered)
+		}
+	})
+	<-s.ready
+	s.mu.Lock()
+	s.events = append(s.events, ev)
+	s.mu.Unlock()
+	if s.done != nil {
+		select {
+		case <-s.done:
+		default:
+			close(s.done)
+		}
+	}
+}
+
+func (s *blockingSink) countExits() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, ev := range s.events {
+		if ev.Event == "exit" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestManagerScanReusedPIDCleanupDoesNotDeadlockBlockedSink verifies that a
+// dead holder whose PID was reused before Scan() does not emit a synchronous
+// synthetic exit or deadlock a sink gated on post-scan attachReady admission.
+func TestManagerScanReusedPIDCleanupDoesNotDeadlockBlockedSink(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), DirName)
+	id := "reused-pid-1"
+
+	// Reserve a closed port so attach fails immediately with CauseNoAnswer.
+	srv := startFakeHolderServer(t, dir, id, 44200, nil, false)
+	srv.closeAll()
+
+	attachReady := make(chan struct{})
+	var closeReady sync.Once
+	unlockReady := func() { closeReady.Do(func() { close(attachReady) }) }
+	defer unlockReady()
+
+	sink := &blockingSink{
+		targetID: id,
+		ready:    attachReady,
+	}
+	m := New(Options{
+		Dir:            dir,
+		Sink:           sink,
+		RescanInterval: time.Hour,
+		alive:          func(int) bool { return true },
+		procStart: func(int) (time.Time, error) {
+			// Mismatched start time -> ErrStartTimeMismatch in sameProcess.
+			return time.Now().Add(-time.Hour), nil
+		},
+	})
+	defer m.Close()
+
+	scanDone := make(chan struct{})
+	go func() {
+		m.Scan()
+		close(scanDone)
+	}()
+
+	select {
+	case <-scanDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Scan deadlocked on reused-PID cleanup with blocked sink")
+	}
+	if _, err := os.Stat(srv.dir); !os.IsNotExist(err) {
+		t.Fatalf("reused-PID dead holder directory still exists: %v", err)
+	}
+	unlockReady()
+	time.Sleep(50 * time.Millisecond)
+	if got := sink.countExits(); got != 0 {
+		t.Fatalf("never-attached reused-PID cleanup emitted %d synthetic exit(s), want 0", got)
+	}
+}
+
+// TestManagerPostAttachDisconnectCleanupDoesNotDeadlockStopOrBlockedSink
+// simulates the ABBA lock graph where a holder attaches during Scan() and dies
+// abruptly before post-scan admission closes attachReady, while another caller
+// invokes Stop() (needing opMu). Cleanup must dispatch the synthetic exit
+// outside opMu so neither Scan() nor Stop() deadlocks, and once attachReady
+// opens the synthetic exit still settles the consumer.
+func TestManagerPostAttachDisconnectCleanupDoesNotDeadlockStopOrBlockedSink(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), DirName)
+	const (
+		pidLive = 44201
+		pidDead = 44202
+	)
+	var alive1, alive2 atomic.Bool
+	alive1.Store(true)
+	alive2.Store(true)
+
+	srv1 := startFakeHolderServer(t, dir, "post-attach-h1", pidLive, nil, false)
+	srv1.onStop = func() {
+		alive1.Store(false)
+		srv1.closeAll()
+	}
+	srv2 := startFakeHolderServer(t, dir, "post-attach-h2", pidDead, nil, false)
+
+	attachReady := make(chan struct{})
+	var closeReady sync.Once
+	unlockReady := func() { closeReady.Do(func() { close(attachReady) }) }
+	defer unlockReady()
+
+	sink := &blockingSink{
+		targetID: srv2.desc.ID,
+		ready:    attachReady,
+		entered:  make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	m := New(Options{
+		Dir:            dir,
+		Sink:           sink,
+		RescanInterval: time.Hour,
+		alive: func(pid int) bool {
+			switch pid {
+			case pidLive:
+				return alive1.Load()
+			case pidDead:
+				return alive2.Load()
+			default:
+				return false
+			}
+		},
+		kill: func(pid int) error {
+			if pid == pidLive {
+				alive1.Store(false)
+				srv1.closeAll()
+			}
+			return nil
+		},
+		procStart: func(int) (time.Time, error) {
+			return time.Now(), nil
+		},
+	})
+	defer m.Close()
+
+	m.Scan()
+	if m.Client(srv1.desc.ID) == nil || m.Client(srv2.desc.ID) == nil {
+		t.Fatal("holders did not attach during initial Scan")
+	}
+
+	// Kill h2 abruptly while attachReady is still closed (simulating death
+	// before holdersScanned reaches h2's conversation).
+	alive2.Store(false)
+	srv2.closeAll()
+
+	// Wait until handleDisconnect removes h2's dir and the async synthetic exit
+	// goroutine is actively blocked inside sink.HolderEvent on <-attachReady.
+	waitFor(t, "abruptly dead h2 directory removed", func() bool {
+		_, err := os.Stat(srv2.dir)
+		return os.IsNotExist(err)
+	})
+	select {
+	case <-sink.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("synthetic exit goroutine did not enter sink")
+	}
+
+	// While sink.HolderEvent is still blocked on <-attachReady, Stop(h1) and
+	// Scan() must both acquire opMu and complete promptly without deadlocking.
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- m.Stop(srv1.desc.ID)
+	}()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop(h1) failed while h2 sink was blocked: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop(h1) deadlocked on opMu while h2 sink was blocked on attachReady")
+	}
+
+	scanDone := make(chan struct{})
+	go func() {
+		m.Scan()
+		close(scanDone)
+	}()
+	select {
+	case <-scanDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Scan() deadlocked on opMu while h2 sink was blocked on attachReady")
+	}
+
+	// Opening attachReady unblocks the async synthetic exit cleanly.
+	unlockReady()
+	select {
+	case <-sink.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked sink did not finish after attachReady closed")
+	}
+	if got := sink.countExits(); got != 1 {
+		t.Fatalf("synthetic exit count for h2 = %d, want 1", got)
 	}
 }

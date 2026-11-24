@@ -421,8 +421,8 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 				// defer pending kicks until kickAfterServing wakes them.
 				if r.publicationReady() {
 					c.kick()
-				} else if c.hasPendingKick() {
-					c.kickDeferred.Store(true)
+				} else if c.hasPendingKick() && !c.deferKickIfUnpublished() {
+					c.kick()
 				}
 			}
 			if id := c.rec.HolderID; id != "" {

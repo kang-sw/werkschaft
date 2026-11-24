@@ -1728,9 +1728,27 @@ func (c *conv) hasPendingKick() bool {
 		c.rec.DurableTurn != nil || c.kickDeferred.Load()
 }
 
+// deferKickIfUnpublished defers a processless start kick until
+// StartForPublication's serving channel closes. Storing kickDeferred before
+// re-checking publicationReady prevents a missed wakeup when close(serving) +
+// kickAfterServing runs between the first check and the store.
+func (c *conv) deferKickIfUnpublished() bool {
+	if c.r.publicationReady() {
+		return false
+	}
+	if hook := c.r.onDeferKick; hook != nil {
+		hook()
+	}
+	c.kickDeferred.Store(true)
+	if c.r.publicationReady() {
+		c.kickDeferred.Store(false)
+		return false
+	}
+	return true
+}
+
 func (c *conv) kick() {
-	if c.proc == nil && !c.r.publicationReady() {
-		c.kickDeferred.Store(true)
+	if c.proc == nil && c.deferKickIfUnpublished() {
 		return
 	}
 	if !c.canKick() {

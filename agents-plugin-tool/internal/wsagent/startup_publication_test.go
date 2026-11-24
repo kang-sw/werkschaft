@@ -275,3 +275,92 @@ func TestHolderChildSettlesOnSyntheticExit(t *testing.T) {
 		t.Fatalf("fatal event = %v, want holder exited (unknown)", gotFatal)
 	}
 }
+
+// TestKickStoreThenRecheckPreventsMissedWakeupOnServingClose exercises the
+// exact TOCTOU window where close(serving) and kickAfterServing() run between
+// conv.kick()'s initial !publicationReady() check and kickDeferred.Store(true).
+// The store-then-recheck in deferKickIfUnpublished must detect that serving is
+// now open and launch the backend instead of stranding the kick.
+func TestKickStoreThenRecheckPreventsMissedWakeupOnServingClose(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	id := "1122334455667788"
+	sessDir := wsdashboard.SessionDir(dir, id)
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := Record{
+		ReplyID:   id,
+		WSKey:     "recheck-conv-key",
+		Backend:   BackendCodex,
+		Profile:   "chat",
+		Root:      root,
+		CreatedAt: now,
+	}
+	if err := writeRecord(sessDir, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	serving := make(chan struct{})
+	startedCh := make(chan string, 4)
+	var armed atomic.Bool
+	var hookOnce sync.Once
+	var r *Runner
+	r = NewRunner(Options{
+		Dir:     dir,
+		Keys:    startupTestKeys{},
+		Holders: &startupGateHolders{},
+		Log:     io.Discard,
+		Backends: map[string]BackendRegistration{
+			BackendCodex: {
+				Backend: &startupTestBackend{
+					onStart: func(spec StartSpec) (Process, error) {
+						startedCh <- filepath.Base(spec.Dir)
+						return newStartupTestProc(), nil
+					},
+				},
+			},
+		},
+	})
+	r.fixedProfile = &ResolvedProfile{Name: "chat", Definition: Profile{Backend: BackendCodex}}
+	r.onDeferKick = func() {
+		if !armed.Load() {
+			return
+		}
+		hookOnce.Do(func() {
+			// Simulate the worst-case TOCTOU interleaving: serving closes and
+			// kickAfterServing sweeps (seeing kickDeferred == false) right
+			// before conv.kick() stores kickDeferred = true.
+			close(serving)
+			r.kickAfterServing()
+		})
+	}
+	defer r.Close()
+
+	r.StartForPublication(nil, serving)
+
+	// Arm the hook and enqueue a message so conv.kick() enters
+	// deferKickIfUnpublished() while serving is still open.
+	armed.Store(true)
+	if _, _, err := wsinbox.Send(wsinbox.Dir(sessDir), wsinbox.Entry{Parts: []string{"wake across boundary"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	c := r.convs[id]
+	r.mu.Unlock()
+	if c == nil {
+		t.Fatal("conversation not loaded")
+	}
+	c.signalInbox()
+
+	select {
+	case got := <-startedCh:
+		if got != id {
+			t.Fatalf("started conversation = %s, want %s", got, id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("missed wakeup: kick stranded after serving closed between check and Store(true)")
+	}
+}
