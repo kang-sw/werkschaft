@@ -110,6 +110,7 @@ func linkMailWakes(entries []ConvEntry, self string) {
 		wake, mail := entries[i], entries[j]
 		mail.Key, mail.At = wake.Key, wake.At
 		mail.Cause, mail.Source, mail.Caption, mail.Text = wake.Cause, wake.Source, wake.Caption, wake.Text
+		mail.BodyBytes = max(mail.BodyBytes, wake.BodyBytes)
 		entries[i] = mail
 		entries[j].MailWakeSuppressed = true
 	}
@@ -154,8 +155,10 @@ func collapseBoardNudges(entries []ConvEntry) {
 		first := &entries[run]
 		if len(first.BoardNudgeMails) == 0 {
 			first.BoardNudgeMails = []string{first.Text}
+			first.BoardNudgeBytes = max(first.BodyBytes, len(first.Text))
 		}
 		first.BoardNudgeMails = append(first.BoardNudgeMails, e.Text)
+		first.BoardNudgeBytes += max(e.BodyBytes, len(e.Text))
 		e.MailWakeSuppressed = true
 	}
 }
@@ -293,4 +296,37 @@ func (e ConvEntry) MailDeliveryText() string {
 		return e.Text
 	}
 	return e.Body
+}
+
+// MailBytes returns the payload byte count for a mail or mail-wake row,
+// combining persisted BodyBytes, hydrated Body, matched delivery text, and
+// summed collapsed board-nudge payloads.
+func (e ConvEntry) MailBytes() int {
+	if e.Kind == wslive.RingMail {
+		return max(e.BodyBytes, len(e.Body), len(e.MailDeliveryText()))
+	}
+	if e.MailWake() {
+		if e.BoardNudgeBytes > 0 {
+			return e.BoardNudgeBytes
+		}
+		return max(e.BodyBytes, len(e.WakeText()))
+	}
+	return 0
+}
+
+// MailTokText formats the added-context token estimate ("+N") for mail and
+// mail-wake rows using the same formula as tool/activity rows.
+func (e ConvEntry) MailTokText() string {
+	return estContextText(0, e.MailBytes())
+}
+
+// MailTokTitle formats the single-payload tooltip ("~N tok (X B)") for mail
+// and mail-wake rows.
+func (e ConvEntry) MailTokTitle() string {
+	b := e.MailBytes()
+	est := estContextTokens(0, b)
+	if est <= 0 {
+		return ""
+	}
+	return "~" + compactTokens(est) + " tok (" + fmtBytes(int64(b)) + ")"
 }
