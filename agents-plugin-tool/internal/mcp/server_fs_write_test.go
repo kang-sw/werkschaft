@@ -12,7 +12,9 @@ import (
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 func rawCorrelatedToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
@@ -189,5 +191,44 @@ func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
 	level = ""
 	if s.fsReadTools() || s.fileWriteTools() {
 		t.Fatal("revoked connection still admits filesystem tools")
+	}
+}
+
+func TestModelFileToolsKeepOperatorSessionStateReadOnly(t *testing.T) {
+	fx := newFSFixture(t, wsagent.BackendWerk)
+	dir, err := wsdashboard.Dir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := wsdashboard.SessionDir(dir, fx.s.conversation)
+	fx.s.callerBinding = boundCallers{backends: map[string]string{fx.s.conversation: wsagent.BackendWerk}}
+	fx.s.fileWrites = &FileWriteSession{Authority: wsfs.AuthorityReadOnly}
+	f := NewServerWithOptions(ServerOptions{
+		Root: fx.root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk,
+		FileWrites: &FileWriteSession{Root: fx.root, Authority: wsfs.AuthorityFull,
+			Record: func(context.Context, FileWriteCall) error {
+				t.Error("a model write to daemon session state reached mutation admission")
+				return nil
+			}},
+	})
+	for _, path := range []string{
+		filepath.Join(session, "agent.json"),
+		filepath.Join(wsinbox.Dir(session), "entry.json"),
+	} {
+		const prior = `{"operator":false}`
+		mustWrite(t, filepath.Dir(path), filepath.Base(path), prior)
+		if text, failed := fx.call("fs.read", map[string]any{"path": path}); failed || !strings.Contains(text, prior) {
+			t.Fatalf("read-only session state = %v, %s", failed, text)
+		}
+		if text, failed := rawCorrelatedToolCall(t, f, "fs.write", "write", map[string]any{"path": path, "content": `{"operator":true}`}); !failed || !strings.Contains(text, "session state is read-only") {
+			t.Fatalf("session-state write = %v, %s", failed, text)
+		}
+		edit := map[string]any{"path": path, "edits": []map[string]string{{"oldText": "false", "newText": "true"}}}
+		if text, failed := rawCorrelatedToolCall(t, f, "fs.edit", "edit", edit); !failed || !strings.Contains(text, "session state is read-only") {
+			t.Fatalf("session-state edit = %v, %s", failed, text)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != prior {
+			t.Fatalf("trusted state = %s, %v", got, err)
+		}
 	}
 }
