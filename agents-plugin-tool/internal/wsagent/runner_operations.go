@@ -4,6 +4,7 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"sort"
 	"strings"
@@ -166,7 +167,21 @@ func (r *Runner) Interrupt(id string) (State, []string, error) {
 // Stop ends the conversation's process; held messages stay held, and the
 // next send resumes the backend session.
 func (r *Runner) Stop(id string) (State, error) {
+	return r.stop(id, false)
+}
+
+func (r *Runner) stop(id string, safeOnly bool) (State, error) {
 	return r.act(id, func(c *conv) error {
+		if safeOnly {
+			// Admit inside the conversation loop so an earlier turn event
+			// can make the stop unsafe before we touch the process.
+			c.mu.Lock()
+			selfSafe, lead := c.safeStopSelfLocked(), c.rec.Lead
+			c.mu.Unlock()
+			if !selfSafe || !r.descendantsAllowSafeStop(id, lead) {
+				return &requestError{status: http.StatusConflict, msg: "session no longer safe to stop"}
+			}
+		}
 		c.stopProcess("")
 		return nil
 	})

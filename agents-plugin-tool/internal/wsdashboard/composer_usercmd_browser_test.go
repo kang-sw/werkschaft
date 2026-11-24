@@ -43,6 +43,16 @@ func TestUserCommandBrowser(t *testing.T) {
 			set("test", "Test", "run the suite", "make test\n./run --verbose")
 		},
 		"replace-build": func() { set("build", "Build", "compile everything", "make clean all") },
+		"hold-slot": func() {
+			if _, _, err := f.users.reg.Set("livesession", f.users.root, wsusercmd.Input{
+				ID: "hold", Label: "Hold", Line: "echo old", Prompt: "  Keep the first line.\r\nAnd the second.  ",
+			}); err != nil {
+				t.Error(err)
+			}
+		},
+		"hold-run":    func() { set("hold", "Hold", "", "echo changed run") },
+		"hold-ask":    func() { set("hold", "Hold", "", "echo changed ask") },
+		"hold-delete": func() { set("hold", "Hold", "", "echo changed delete") },
 		"unregister-test": func() {
 			if err := f.users.reg.Remove("livesession", f.users.root, "test"); err != nil {
 				t.Error(err)

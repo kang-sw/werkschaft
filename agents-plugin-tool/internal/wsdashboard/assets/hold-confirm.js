@@ -99,7 +99,7 @@
   function finishHold(h) {
     active = null;
     clearVisuals(h);
-    if (h.opts && typeof h.opts.onConfirm === "function") h.opts.onConfirm(h.el);
+    if (h.opts && typeof h.opts.onConfirm === "function") h.opts.onConfirm(h.el, true);
   }
 
   if (typeof window !== "undefined") {
@@ -209,7 +209,7 @@
       return;
     }
     e.preventDefault();
-    if (typeof opts.onConfirm === "function") opts.onConfirm(el);
+    if (typeof opts.onConfirm === "function") opts.onConfirm(el, false);
   }
 
   function attach(el, opts) {

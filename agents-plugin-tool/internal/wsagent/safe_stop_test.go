@@ -1,6 +1,9 @@
 package wsagent
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,4 +174,41 @@ func TestSafeStopStatesAndSessionMeta(t *testing.T) {
 			t.Fatalf("direct fakeProc worker SessionMeta = %+v, %v; want HasProcess=true SafeStop=false", meta, ok)
 		}
 	})
+}
+
+func TestSafeOnlyStopChecksStateAtAdmission(t *testing.T) {
+	h := newLeadHarness(t)
+	h.opts.Trusted = func(*http.Request) (bool, bool) { return true, true }
+	h.start()
+	id, holder := h.settledLead()
+	if st := h.state(id); !st.SafeStop {
+		t.Fatalf("idle session should advertise safe Stop: %+v", st)
+	}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/agents/"+id+"/stop", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		out := httptest.NewRecorder()
+		h.runner.Handler().ServeHTTP(out, req)
+		return out
+	}
+
+	h.send(id, "work after the browser read idle")
+	h.holders.out(holder, stateLine(HarnessRunning))
+	eventually(t, "new turn running", func() bool { return h.state(id).Status == StatusRunning })
+	if out := post(`{"safe_only":true}`); out.Code != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("busy safe-only stop: status %d, body %s", out.Code, out.Body)
+	}
+
+	h.holders.out(holder, replyLine("u2", "done"), resultLine(), stateLine(HarnessIdle))
+	h.idle(id)
+	if out := post(`{"safe_only":true}`); out.Code != http.StatusOK || h.state(id).Process {
+		t.Fatalf("idle safe-only stop: status %d, body %s", out.Code, out.Body)
+	}
+
+	h.send(id, "wake for a legacy stop")
+	eventually(t, "new process running", func() bool { return h.state(id).Process })
+	if out := post(""); out.Code != http.StatusOK || h.state(id).Process {
+		t.Fatalf("legacy stop: status %d, body %s", out.Code, out.Body)
+	}
 }

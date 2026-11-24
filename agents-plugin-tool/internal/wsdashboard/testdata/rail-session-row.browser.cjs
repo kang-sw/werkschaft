@@ -42,6 +42,30 @@ async function openMenu(page, id, keyboard = false) {
   } else await page.locator(row(id) + ' .rid').click({ button: 'right' });
   await page.locator(menu).waitFor();
 }
+async function checkStaleSafeStop(page, control) {
+  const posts = [];
+  const routeName = '**/agents/plainrow/stop';
+  await page.route(routeName, route => {
+    posts.push(route.request().postDataJSON());
+    return posts.length === 1
+      ? route.fulfill({ status: 409, body: 'session no longer safe to stop' })
+      : route.fulfill({ status: 200, json: { id: 'plainrow', can_control: true, process: false } });
+  });
+  await control.and(page.locator('[data-safe="1"]')).waitFor();
+  await control.click();
+  await until(() => posts.length > 0, 'safe Stop sent');
+  assert.deepEqual(posts[0], { safe_only: true }, 'single-click Stop requests a safe-only admission');
+  await control.and(page.locator('[data-safe="0"]')).waitFor();
+  await control.focus();
+  await page.keyboard.press('Space');
+  assert.equal(posts.length, 1, 'single press after refusal sends nothing');
+  await page.keyboard.down('Space');
+  await control.and(page.locator('[data-hold-state="ready"]')).waitFor();
+  await page.keyboard.up('Space');
+  await until(() => posts.length > 1, 'confirmed Stop sent');
+  assert.deepEqual(posts, [{ safe_only: true }, {}], 'only a completed hold can stop the now-busy session');
+  await page.unroute(routeName);
+}
 async function toggle(page, id, on, keyboard = false) {
   await openMenu(page, id, keyboard);
   const item = page.locator(menu).getByRole('menuitem', { name: on ? '즐겨찾기에 추가' : '즐겨찾기 해제', exact: true });
@@ -90,6 +114,19 @@ async function editing(page, id, wide) {
       page.on('pageerror', e => { errors.push(theme + ': ' + e.message); console.error('PAGE ERROR:', e.message); });
       await page.goto(base + '/s/plainrow');
       await showRail(page);
+      if (theme === 'light') {
+        const stop = page.locator(row('plainrow') + ' .drstop');
+        await page.locator(row('plainrow') + ' .rid').hover();
+        await checkStaleSafeStop(page, stop);
+      }
+      if (theme === 'dark') {
+        await page.route('**/agents/plainrow', route => route.fulfill({
+          status: 200, json: { id: 'plainrow', can_control: true, process: true, safe_stop: true }
+        }));
+        await openMenu(page, 'plainrow');
+        await checkStaleSafeStop(page, page.locator(menu + ' .rmsess .spact[data-safe]'));
+        await page.unroute('**/agents/plainrow');
+      }
       assert.equal(await page.locator('#r-rail button.star').count(), 0, 'no inline favorite button');
       assert.equal(await page.locator('#r-rail .drinp, #r-head .sinp').count(), 0, 'opening an existing session does not rename');
       // Saved ordering and grouping still come from the existing layout route.

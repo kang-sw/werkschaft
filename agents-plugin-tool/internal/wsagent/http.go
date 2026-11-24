@@ -278,7 +278,13 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		writeAnswer(w, http.StatusOK, interruptAnswer{State: view(st), Returned: returned}, err)
 	case action == "stop":
-		st, err := r.Stop(id)
+		var body struct {
+			SafeOnly bool `json:"safe_only"`
+		}
+		if !decode(w, req, &body) {
+			return
+		}
+		st, err := r.stop(id, body.SafeOnly)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "hide" || action == "unhide":
 		st, err := r.SetHidden(id, action == "hide")

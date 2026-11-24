@@ -15,6 +15,7 @@
   var railRendered = null; // last applied canonical server input, not client-marked DOM
   var railAttention = WsRail ? WsRail.attention() : null;
   var memoPad = railEl && $("memo-pad") && window.WsMemo ? window.WsMemo.mount(doc, railEl, $("memo-pad"), function (open) { railOpen(open === true); }) : null;
+  var stopNeedsHold = new Set();
   var railStore = { load: load, save: save }, railSets = WsRail ? WsRail.state(railStore) : null;
   var colSet = railSets && railSets.collapsed, kidSet = railSets && railSets.kids;
   // rdrag is the press or drag in the rail (the drag block below);
@@ -93,7 +94,16 @@
     });
     q(".drstop", r).forEach(function (b) {
       var row = b.closest(".rs");
-      b.classList.toggle("busy", !!stopBusy && !!row && row.getAttribute("data-rid") === stopBusy);
+      var id = row && row.getAttribute("data-rid");
+      b.classList.toggle("busy", !!stopBusy && id === stopBusy);
+      if (stopNeedsHold.has(id) && b.getAttribute("data-safe") === "1") {
+        b.setAttribute("data-safe", "0");
+        b.classList.replace("d-stop-safe", "d-stop-unsafe");
+        var hint = wsT("js.lead.stop") + " · " + wsT("js.hold.hint");
+        b.title = hint;
+        b.setAttribute("aria-label", hint);
+        b.replaceChildren(gIcon("stop"));
+      }
     });
     if (usageGutter) usageGutter.sync();
     admissionSync();
@@ -541,7 +551,7 @@
         mode: "radial",
         shouldHold: function (el) { return el.getAttribute("data-safe") !== "1"; },
         canStart: function (el) { return !el.disabled && !el.classList.contains("busy") && root.hasAttribute("data-sysopen"); },
-        onConfirm: function (el) { railStop(el); railRelease(); },
+        onConfirm: function (el, held) { railStop(el, held); railRelease(); },
         onCancel: function () { railRelease(); }
       });
     }

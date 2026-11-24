@@ -991,9 +991,10 @@
     var archive = actBtn("archive", "", wsT("js.lead.archive")), archT = archive.b.lastChild.firstChild;
     var close = actBtn("power", " danger", wsT("js.lead.close"));
     function holdHintNote(base) { return base + " · " + wsT("js.hold.hint"); }
+    function canClickStop(st) { return st && st.safe_stop && !stopNeedsHold.has(P.rid); }
     function drawStopNote(st) {
       if (!st || !st.process) { stop.note.textContent = wsT("js.lead.stopped"); return; }
-      stop.note.textContent = st.safe_stop ? wsT("js.lead.stop.note") : holdHintNote(wsT("js.lead.stop.note"));
+      stop.note.textContent = canClickStop(st) ? wsT("js.lead.stop.note") : holdHintNote(wsT("js.lead.stop.note"));
     }
     function drawArchiveNote(st) {
       archive.note.textContent = st && st.hidden ? wsT("js.lead.unarchive.note") : holdHintNote(wsT("js.lead.archive.note"));
@@ -1020,9 +1021,20 @@
         leadActions.delete(target);
         if (P.rid === target) P.busy = false;
         if (st === 200 && v.id) {
+          if (action === "stop") {
+            stopNeedsHold.delete(target);
+            if (body.safe_only && P.live(gen)) railPopClose(false);
+          }
           if (inRow && gen === P.gen) P.st = v;
           if (rid === target && (hostedPage || handedPage)) lead.st = v;
           P.redraw();
+          return;
+        }
+        if (action === "stop" && body.safe_only && st === 409) {
+          stopNeedsHold.add(target);
+          railMarks();
+          if (P.live(gen)) P.draw();
+          else toast(wsT("js.hold.hint"));
           return;
         }
         var msg = action === "hide" || action === "unhide" ? archErr(action, st, s) : leadErr(st, s);
@@ -1113,7 +1125,7 @@
           canStart: opts.canStart,
           onReady: function () { noteEl.textContent = wsT("js.hold.release"); },
           onCancel: function () { restoreNote(state()); if (typeof railRelease === "function") railRelease(); },
-          onConfirm: function () { opts.onConfirm(); if (typeof railRelease === "function") railRelease(); }
+          onConfirm: function (el, held) { opts.onConfirm(held); if (typeof railRelease === "function") railRelease(); }
         });
       }
       button.addEventListener("click", function () {
@@ -1122,12 +1134,12 @@
       return { sync: function () {}, cancel: function () {} };
     }
     var stopHold = bindHold(stop.b, stop.note, drawStopNote, {
-      shouldHold: function () { var st = state(); return !(st && st.safe_stop); },
+      shouldHold: function () { return !canClickStop(state()); },
       canStart: function () { return canActOn(stop.b, function (st) { return !!st.process; }); },
-      onConfirm: function () {
+      onConfirm: function (held) {
         if (!canActOn(stop.b, function (st) { return !!st.process; })) return;
-        railPopClose(false);
-        act("stop", {});
+        if (held) railPopClose(false);
+        act("stop", held ? {} : { safe_only: true });
       }
     });
     var archiveHold = bindHold(archive.b, archive.note, drawArchiveNote, {
@@ -1173,12 +1185,13 @@
       permDraw(st);
       rows.disable(P.busy);
       stop.b.disabled = P.busy || !st.process;
-      var stopSig = (st.process ? "1" : "0") + ":" + (st.safe_stop ? "1" : "0");
+      var safeStop = canClickStop(st);
+      var stopSig = (st.process ? "1" : "0") + ":" + (safeStop ? "1" : "0");
       if (stop.b.getAttribute("data-stop-sig") !== stopSig) {
         stop.b.setAttribute("data-stop-sig", stopSig);
-        stop.b.setAttribute("data-safe", st.safe_stop ? "1" : "0");
-        stop.b.classList.toggle("danger", !!(st.process && !st.safe_stop));
-        stop.b.replaceChild(gIcon(st.process && st.safe_stop ? "moon" : "stop"), stop.b.firstChild);
+        stop.b.setAttribute("data-safe", safeStop ? "1" : "0");
+        stop.b.classList.toggle("danger", !!(st.process && !safeStop));
+        stop.b.replaceChild(gIcon(st.process && safeStop ? "moon" : "stop"), stop.b.firstChild);
         stopHold.sync();
       }
       if (stop.b.getAttribute("data-hold-state") !== "ready") drawStopNote(st);
