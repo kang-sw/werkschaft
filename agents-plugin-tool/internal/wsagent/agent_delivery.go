@@ -183,6 +183,11 @@ func (c *conv) expireIfDue() {
 	if at.IsZero() || c.r.opts.Now().Sub(at) < c.r.childWaitingExpiry() {
 		return
 	}
+	// The expiry walk needs every open descendant registered before it can
+	// decide whether closing the ancestor is safe.
+	if !c.r.startupReady() {
+		return
+	}
 	c.expiring = true
 	c.r.expireLater(rec.ReplyID)
 }

@@ -3,6 +3,7 @@ package wsagent
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -176,6 +177,94 @@ func TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop(t *testing.T) {
 	}
 }
 
+func expiryRecordWriter(h *harness, clk *testClock) func(string, ParentRef, time.Duration, bool, bool) {
+	now := clk.Now()
+	old := now.Add(-3 * day).Format(time.RFC3339)
+	return func(id string, parent ParentRef, age time.Duration, closed, turnOpen bool) {
+		h.t.Helper()
+		rec := Record{
+			ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
+			SpawnerBackend: BackendClaude, Parent: &parent,
+			Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
+			LastActiveAt: now.Add(-age).Format(time.RFC3339),
+		}
+		if closed {
+			rec.ClosedAt = old
+		}
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+}
+
+// writeExpiryBridge seeds an open worker, its closed child and, optionally,
+// an open grandchild. The caller starts a new runner over these records.
+func writeExpiryBridge(h *harness, clk *testClock, ancestorAge, leafAge time.Duration, turnOpen bool) {
+	h.t.Helper()
+	write := expiryRecordWriter(h, clk)
+	write("ancestor", leadParent, ancestorAge, false, false)
+	write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, 3*day, true, false)
+	if leafAge != 0 {
+		write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, leafAge, false, turnOpen)
+	}
+}
+
+type expiryStartupHost struct {
+	leafOpening chan struct{}
+	resume      chan struct{}
+}
+
+func (h expiryStartupHost) OpenHostedSlot(dir string) (wsdashboard.HostedSlot, bool) {
+	if filepath.Base(dir) == "leaf" {
+		close(h.leafOpening)
+		<-h.resume
+	}
+	return nil, false
+}
+
+func TestHeartbeatExpiryWaitsForStartupRegistration(t *testing.T) {
+	h, clk := expiryHarness(t)
+	h.runner.Close()
+	writeExpiryBridge(h, clk, 3*day, time.Hour, false)
+
+	host := expiryStartupHost{leafOpening: make(chan struct{}), resume: make(chan struct{})}
+	h.config.LiveHost = host
+	h.config.heartbeat = time.Hour
+	h.runner = NewRunner(h.config)
+	t.Cleanup(h.runner.Close)
+	started := make(chan struct{})
+	go func() {
+		h.runner.Start(nil)
+		close(started)
+	}()
+	defer func() {
+		close(host.resume)
+		wait(t, "runner startup", started)
+	}()
+
+	wait(t, "startup to reach the leaf", host.leafOpening)
+	ancestor := h.runner.conv("ancestor")
+	if ancestor == nil || h.runner.conv("leaf") != nil {
+		t.Fatal("expected the ancestor to be registered before the leaf")
+	}
+	var scheduled bool
+	ancestor.do(func() {
+		ancestor.heartbeat()
+		scheduled = ancestor.expiring
+	})
+	if scheduled {
+		eventually(t, "the premature expiry to delete the ancestor", func() bool { return gone(h, "ancestor") })
+		t.Fatal("heartbeat deleted the ancestor before startup registered the leaf")
+	}
+	t.Cleanup(func() {
+		for _, id := range []string{"ancestor", "bridge", "leaf"} {
+			if _, err := readRecord(wsdashboard.SessionDir(h.dir, id)); err != nil {
+				t.Errorf("%s did not survive startup: %v", id, err)
+			}
+		}
+	})
+}
+
 func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -189,22 +278,7 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, clk := expiryHarness(t)
 			h.runner.Close()
-			old := clk.Now().Add(-3 * day).Format(time.RFC3339)
-			write := func(id string, parent ParentRef, age time.Duration, closed, turnOpen bool) {
-				t.Helper()
-				rec := Record{
-					ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
-					SpawnerBackend: BackendClaude, Parent: &parent,
-					Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
-					LastActiveAt: clk.Now().Add(-age).Format(time.RFC3339),
-				}
-				if closed {
-					rec.ClosedAt = old
-				}
-				if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
-					t.Fatal(err)
-				}
-			}
+			write := expiryRecordWriter(h, clk)
 			write("ancestor", leadParent, 3*day, false, false)
 			write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, 3*day, true, false)
 			if tc.leafAge != 0 {
