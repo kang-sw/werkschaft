@@ -219,8 +219,8 @@ func TestSafeOnlyStopRefusesOverlappingDescendantTransitions(t *testing.T) {
 	h.start()
 	id, _ := h.settledLead()
 	parent := &ParentRef{Kind: ParentLead, ReplyID: id}
-	a := &conv{rec: Record{ReplyID: "child-a", Parent: parent}}
-	b := &conv{rec: Record{ReplyID: "child-b", Parent: parent}, turn: true}
+	a := &conv{r: h.runner, rec: Record{ReplyID: "child-a", Parent: parent}, lastReg: h.opts.Now()}
+	b := &conv{r: h.runner, rec: Record{ReplyID: "child-b", Parent: parent}, lastReg: h.opts.Now(), turn: true}
 	h.runner.mu.Lock()
 	h.runner.convs[a.rec.ReplyID], h.runner.convs[b.rec.ReplyID] = a, b
 	h.runner.mu.Unlock()
