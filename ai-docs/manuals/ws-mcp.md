@@ -1545,6 +1545,18 @@ roots of non-agent dashboard registrations seen within the registry
 retention, plus `agent.git_search_roots` (a global-only path list that needs
 lead authority); without `repo` it lists the roots.
 
+Before a worktree read, `git.search` checks the protected credential files,
+including any retiring generation, for extra hard links. Worktree reads
+include `grep` outside the index or a revision, all `blame`, `ls-files`
+modes and format fields that inspect the worktree, and `log` or `show`
+with mailmap enabled or a mailmap-aware format. Index and revision reads
+that do not inspect the worktree continue normally. If a protected file has
+an extra link, the tool answers:
+
+> git.search: worktree search refused because a provider credential file has
+> an extra hard link; remove the extra link while keeping the store's file,
+> then retry
+
 Pages render in one language end to end, chosen by the server from the first
 byte: the `ws_dashboard_lang` cookie when it names an available language (the
 gear menu's language `<select>` writes it; no cookie, or the empty choice,
