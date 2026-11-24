@@ -65,6 +65,10 @@
   proxy opens the connection.
 
 ### Changed
+- **Claude tier defaults in ws and wsflow target cheaper plans.** Small stays
+  Haiku with high effort; medium uses Sonnet with medium effort; large uses
+  Sonnet with high effort; xlarge uses Opus with high effort. User and project
+  tier overrides keep precedence. Compatibility: T0; stored shapes are unchanged.
 - **A read-only worker's exec launches are limited to read commands.**
   When a worker runs at the `read-only` authority, `exec.spawn` and the
   legacy `exec.shell` form (a caller-selected shell) are refused. `exec.run`

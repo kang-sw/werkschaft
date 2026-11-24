@@ -669,7 +669,7 @@ func TestWithRecommendedRenderBinding(t *testing.T) {
 		{
 			name:    "default claude model and effort",
 			harness: "claude",
-			want:    "path\nrecommended-tier: medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high",
+			want:    "path\nrecommended-tier: medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: medium",
 		},
 		{
 			name:    "resolver failure preserves tier",

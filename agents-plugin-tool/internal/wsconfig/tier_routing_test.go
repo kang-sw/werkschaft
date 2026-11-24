@@ -465,3 +465,40 @@ func TestLoadTierGraphReadsGlobalOnlyAndKeepsLegacyTokensOnAParseError(t *testin
 		t.Fatalf("alias on malformed graph = %+v", res)
 	}
 }
+
+func TestClaudeDefaultsRetainRoutingAndTierOverrides(t *testing.T) {
+	opts := Options{ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+	r := NewResolver(opts, nil, nil, nil)
+	if err := r.SetStructured(ItemAgentTierRouting, json.RawMessage(`{"nodes":{"implement":{"*":"claude.xlarge"}},"bundles":{"custom":{"harness":"claude","model":"owner-model","effort":"low"}}}`), ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadTierGraph(opts, testTierRoles, testHarnesses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := mustResolve(t, g, "custom", "claude"); res.Model != "owner-model" || res.Effort != "low" {
+		t.Fatalf("bundle override = %+v", res)
+	}
+	res := mustResolve(t, g, "ticket-worker:medium", "claude")
+	if res.Harness != "claude" || res.Size != "xlarge" {
+		t.Fatalf("routing override = %+v", res)
+	}
+	for _, project := range []bool{false, true} {
+		model := "global-model"
+		if project {
+			model = "project-model"
+		}
+		if project {
+			_, err = SetAgentsTierForHarness(opts, res.Size, "claude", model, "claude", "low")
+		} else {
+			_, err = SetGlobalAgentsTierForHarness(opts, res.Size, "claude", model, "claude", "low")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend, got, effort, _, err := ResolveAgentTierForHarness(opts, res.Size, res.Harness)
+		if err != nil || backend != "claude" || got != model || effort != "low" {
+			t.Fatalf("project=%v: %s/%s/%s, %v", project, backend, got, effort, err)
+		}
+	}
+}
