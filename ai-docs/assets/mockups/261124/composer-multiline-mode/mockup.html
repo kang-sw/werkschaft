@@ -1,0 +1,437 @@
+<style>
+.cm-mock {
+  --bg: #141518;
+  --card: #1e2024;
+  --muted: #2b2d32;
+  --fg: #e7e7e4;
+  --muted-fg: #a2a6ad;
+  --primary: #7aa2ff;
+  --amber: #e0a84a;
+  --green: #6cc39a;
+  --line: rgba(231, 231, 228, 0.14);
+  --wash: rgba(231, 231, 228, 0.06);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cm-mock * { box-sizing: border-box; }
+.cm-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.cm-sec-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.14);
+  color: var(--primary);
+}
+.cm-tag.amber {
+  background: rgba(224, 168, 74, 0.14);
+  color: var(--amber);
+}
+.cm-tag.muted {
+  background: var(--wash);
+  color: var(--muted-fg);
+}
+.cm-sub {
+  font-size: 11.5px;
+  color: var(--muted-fg);
+}
+.cm-composer {
+  position: relative;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.55), 0 8px 22px rgba(0,0,0,.4);
+  border: 1px solid rgba(231, 231, 228, 0.08);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cm-composer.has-top-badge {
+  margin-top: 12px;
+}
+.cm-cbadges {
+  position: absolute;
+  top: -12px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.cm-top-pill {
+  pointer-events: auto;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-shadow: inset 0 0 0 1.5px rgba(122, 162, 255, 0.65), 0 2px 6px rgba(0,0,0,.45);
+  color: var(--primary);
+}
+.cm-top-pill.hbadge {
+  box-shadow: inset 0 0 0 1.5px rgba(224, 168, 74, 0.55), 0 2px 6px rgba(0,0,0,.45);
+  color: var(--amber);
+}
+.cm-crow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.cm-cfield {
+  background: var(--muted);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  min-height: 38px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  outline: 1.5px solid transparent;
+  transition: outline-color .15s ease;
+}
+.cm-cfield.focused {
+  outline-color: var(--primary);
+}
+.cm-cfield textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font: 13.5px/1.45 var(--sans);
+  resize: none;
+  display: block;
+  min-height: 22px;
+  max-height: 120px;
+  padding: 0;
+}
+.cm-cfield textarea::placeholder {
+  color: var(--muted-fg);
+}
+.cm-csend {
+  width: 34px;
+  border: none;
+  border-radius: 10px;
+  color: var(--primary);
+  background: rgba(122, 162, 255, 0.14);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.cm-csend:hover { background: rgba(122, 162, 255, 0.24); }
+.cm-csend.multiline {
+  background: rgba(122, 162, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(122, 162, 255, 0.45);
+}
+.cm-cfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+.cm-fpills {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.cm-fpill {
+  min-height: 22px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-fg);
+  font: 500 11px/1.2 var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cm-mode-badge {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(122, 162, 255, 0.36);
+  background: rgba(122, 162, 255, 0.13);
+  color: var(--primary);
+  font: 600 11px/1 var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+  transition: background .12s ease, border-color .12s ease;
+}
+.cm-mode-badge:hover {
+  background: rgba(122, 162, 255, 0.22);
+  border-color: rgba(122, 162, 255, 0.6);
+}
+.cm-mode-badge .cm-kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(122, 162, 255, 0.18);
+  color: #cfe0ff;
+}
+.cm-mode-badge .cm-x {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.65;
+  margin-left: 1px;
+}
+.cm-mode-badge:hover .cm-x { opacity: 1; }
+.cm-enter-hint {
+  font-size: 11px;
+  color: var(--muted-fg);
+  opacity: 0.72;
+  white-space: nowrap;
+}
+.cm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 12px;
+}
+.cm-card-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cm-toast {
+  font-size: 11px;
+  color: var(--green);
+  min-height: 16px;
+}
+</style>
+
+<div class="cm-mock">
+  <div>
+    <div class="cm-sec-head">
+      <span class="cm-sec-title">인터랙티브 미리보기 (A안 · 추천: <code style="font-family:var(--mono);font-size:11px;color:#cfe0ff">.cfoot</code> 우측 배치)</span>
+      <span class="cm-tag">직접 입력 체험 가능</span>
+    </div>
+    <div class="cm-sub" style="margin-bottom:8px;">
+      아래 입력창에서 <b>Shift+Enter</b>를 한 번 눌러 보세요 → 자동으로 멀티라인 모드(<b>Enter = 줄바꿈, Ctrl+Enter = 전송</b>)로 전환되고 우측 하단에 뱃지가 뜹니다. 뱃지를 클릭하거나 <b>Ctrl+Enter</b>로 보내면 원래 <b>Enter 전송</b> 모드로 복귀합니다.
+    </div>
+    <div class="cm-composer">
+      <div class="cm-crow">
+        <div class="cm-cfield focused" id="cm-demo-wrap">
+          <textarea id="cm-demo-ta" rows="1" placeholder="Enter로 전송, Shift+Enter로 줄바꿈 (줄바꿈 시 자동 Ctrl+Enter 모드 전환)"></textarea>
+        </div>
+        <button type="button" class="cm-csend" id="cm-demo-send" title="보내기 (Enter)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </div>
+      <div class="cm-cfoot">
+        <div class="cm-fpills">
+          <span class="cm-fpill">◆ gemini-4-neon ▾</span>
+          <span class="cm-fpill">⚡ high ▾</span>
+        </div>
+        <span class="cm-enter-hint" id="cm-demo-hint">Enter로 전송</span>
+        <button type="button" class="cm-mode-badge" id="cm-demo-badge" hidden title="클릭하면 Enter 전송 모드로 되돌립니다">
+          <span class="cm-kbd">Ctrl+Enter</span><span>로 보내기</span><span class="cm-x">×</span>
+        </button>
+      </div>
+    </div>
+    <div class="cm-toast" id="cm-demo-log"></div>
+  </div>
+
+  <div class="cm-grid">
+    <div class="cm-card-box">
+      <div class="cm-sec-head">
+        <span class="cm-sec-title">1. 단일 행 (기본 상태)</span>
+        <span class="cm-tag muted">Enter 전송</span>
+      </div>
+      <div class="cm-composer">
+        <div class="cm-crow">
+          <div class="cm-cfield">git pull 후 맥락 복구 바랍니다.</div>
+          <button type="button" class="cm-csend" aria-label="전송">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <div class="cm-cfoot">
+          <div class="cm-fpills">
+            <span class="cm-fpill">◆ gemini-4-neon ▾</span>
+            <span class="cm-fpill">⚡ high ▾</span>
+          </div>
+          <span class="cm-enter-hint">Enter로 전송</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-card-box">
+      <div class="cm-sec-head">
+        <span class="cm-sec-title">2. Shift+Enter 이후 (A안: .cfoot 우측)</span>
+        <span class="cm-tag">추천</span>
+      </div>
+      <div class="cm-composer">
+        <div class="cm-crow">
+          <div class="cm-cfield focused">1. 가변 폭 높이는 유지
+2. 스크롤 높이 정합성은 포기
+3. 우측 도트 스크롤바 유지</div>
+          <button type="button" class="cm-csend multiline" title="보내기 (Ctrl+Enter)" aria-label="전송">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <div class="cm-cfoot">
+          <div class="cm-fpills">
+            <span class="cm-fpill">◆ gemini-4-neon ▾</span>
+            <span class="cm-fpill">⚡ high ▾</span>
+          </div>
+          <button type="button" class="cm-mode-badge" title="클릭하면 Enter 전송 모드로 복귀">
+            <span class="cm-kbd">Ctrl+Enter</span><span>로 보내기</span><span class="cm-x">×</span>
+          </button>
+        </div>
+      </div>
+      <div class="cm-sub">상단 HUD 칩과 폭 경쟁 없음 · 전송 버튼 바로 아래 배치 · 1클릭 수동 복귀</div>
+    </div>
+  </div>
+
+  <div class="cm-card-box">
+    <div class="cm-sec-head">
+      <span class="cm-sec-title">비교 · B안: 상단 <code style="font-family:var(--mono);font-size:11px;color:#cfe0ff">.cbadges</code> 플로팅 뱃지 배치</span>
+      <span class="cm-tag amber">대안</span>
+    </div>
+    <div class="cm-composer has-top-badge">
+      <div class="cm-cbadges">
+        <span class="cm-top-pill hbadge">! 실행 이력</span>
+        <span class="cm-top-pill">⏎ Ctrl+Enter로 보내기 ×</span>
+      </div>
+      <div class="cm-crow">
+        <div class="cm-cfield focused">1. 가변 폭 높이는 유지
+2. 스크롤 높이 정합성은 포기</div>
+        <button type="button" class="cm-csend multiline" aria-label="전송">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </div>
+      <div class="cm-cfoot">
+        <div class="cm-fpills">
+          <span class="cm-fpill">◆ gemini-4-neon ▾</span>
+          <span class="cm-fpill">⚡ high ▾</span>
+        </div>
+      </div>
+    </div>
+    <div class="cm-sub">시인성은 높지만 상단 `.cbadges`에 중단·실행 HUD 칩·`!` 이력이 함께 올라올 때 가로 공간이 경합합니다.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ta = document.getElementById("cm-demo-ta");
+  var badge = document.getElementById("cm-demo-badge");
+  var hint = document.getElementById("cm-demo-hint");
+  var sendBtn = document.getElementById("cm-demo-send");
+  var log = document.getElementById("cm-demo-log");
+  if (!ta || !badge || !hint || !sendBtn) return;
+
+  var isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  if (isMac) {
+    var kbd = badge.querySelector(".cm-kbd");
+    if (kbd) kbd.textContent = "⌘+Enter";
+  }
+  var autoMultiline = false;
+
+  function sync() {
+    ta.style.height = "auto";
+    ta.style.height = Math.min(120, Math.max(22, ta.scrollHeight)) + "px";
+    badge.hidden = !autoMultiline;
+    hint.hidden = autoMultiline;
+    sendBtn.classList.toggle("multiline", autoMultiline);
+    sendBtn.title = autoMultiline ? (isMac ? "보내기 (⌘+Enter)" : "보내기 (Ctrl+Enter)") : "보내기 (Enter)";
+  }
+
+  function doSend() {
+    if (!ta.value.trim()) return;
+    var lines = ta.value.split("\n").length;
+    log.textContent = "✓ 전송됨 (" + lines + "줄, " + (autoMultiline ? "멀티라인 Ctrl+Enter 모드" : "기본 Enter 모드") + ") → 기본 Enter 모드로 복귀";
+    ta.value = "";
+    autoMultiline = false;
+    sync();
+    ta.focus();
+  }
+
+  ta.addEventListener("keydown", function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== "Enter") return;
+    var mod = e.ctrlKey || e.metaKey;
+    if (!autoMultiline) {
+      if (e.shiftKey && !mod && !e.altKey) {
+        autoMultiline = true;
+        log.textContent = "↳ Shift+Enter 감지 → 멀티라인 모드 자동 전환 (이제 Enter는 줄바꿈, Ctrl+Enter로 전송)";
+        setTimeout(sync, 0);
+        return;
+      }
+      if (!e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        doSend();
+      }
+    } else {
+      if (mod) {
+        e.preventDefault();
+        doSend();
+      }
+    }
+  });
+
+  ta.addEventListener("input", function () {
+    if (autoMultiline && !ta.value) {
+      autoMultiline = false;
+      log.textContent = "↺ 입력창이 비워져 기본 Enter 모드로 자동 복귀";
+    } else if (!autoMultiline && ta.value.indexOf("\n") !== -1) {
+      autoMultiline = true;
+      log.textContent = "↳ 여러 줄 붙여넣기 감지 → 멀티라인 모드 자동 전환";
+    }
+    sync();
+  });
+
+  badge.addEventListener("click", function () {
+    autoMultiline = false;
+    log.textContent = "↺ 뱃지 클릭 → 기본 Enter 전송 모드로 수동 복귀";
+    sync();
+    ta.focus();
+  });
+
+  sendBtn.addEventListener("click", doSend);
+  sync();
+})();
+</script>
