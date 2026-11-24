@@ -37,10 +37,10 @@ All visible strings are Korean. The implementation adds them as
 
 | Group | States |
 |---|---|
-| OpenRouter | not set (`미설정`); key entry; prefix warning (key does not start with `sk-or-`, saving still allowed); verifying with OpenRouter (`확인 중`); rejected by OpenRouter (invalid key, nothing saved); format rejected by the daemon (422 from `validateKey`); daemon not answering (drain or restart, with retry); saved and verified (`OpenRouter에서 유효한 키로 확인했습니다`); key set (`키 설정됨 sk-or-...a1b2`); replace entry; remove with a 1.5 s hold-to-confirm |
+| OpenRouter | not set (`미설정`); key entry; prefix warning (key does not start with `sk-or-`, saving still allowed); verifying with OpenRouter (`확인 중`); rejected by OpenRouter (invalid key, nothing saved); format rejected by the daemon (422 from `validateKey`); daemon not answering (drain or restart, with retry); saved and verified (`OpenRouter에서 유효한 키로 확인했습니다`); saved but not verified (`저장됨 · 확인 못 함`, with the reason and `다시 확인`, which re-runs the check); key set (`키 설정됨 sk-or-...a1b2`); replace entry; remove with a 1.5 s hold-to-confirm |
 | OpenAI (Sign in with ChatGPT) | signed out; viewed from another device (sign-in button disabled with a one-line hint); browser flow pending (spinner and cancel, 5-minute timeout); sign-in failed or timed out; signed in with the verified email; signed in without an email; plan usage not granted (sign in again to grant it); refresh refused, so sign-in is needed again; sign out with hold-to-confirm, which deletes the account record |
 | Background consent | dashboard-wide request banner with 허용 / 허용 안 함 / close (×) and a link to the OpenAI row; not yet answered (banner closed); allowed; denied or revoked. The settled answer is a toggle in a sub-row under the OpenAI row. It is disabled, with its value kept, while the account needs sign-in again or plan usage is off |
-| Local endpoints | none; list (name with `local/<name>`, base URL, kind, and the backend mask `...9f3c` for a key); add; edit with a changed URL (the old key is deleted on save); validation errors (name pattern, URL scheme and query); delete with hold-to-confirm, which also deletes the stored key; read-only "저장 형식(JSON) 보기" |
+| Local endpoints | none; list (name with `local/<name>`, base URL, kind, and the backend mask `...9f3c` for a key); add; edit with a changed URL (the key field is empty and warns that the stored key is deleted on save); validation errors (name pattern, URL scheme and query); delete with hold-to-confirm, which also deletes the stored key; read-only "저장 형식(JSON) 보기" |
 | Tier links | every provider row has `Werk 티어에서 … 모델 선택 →`. It scrolls to the existing tier matrix, keeps the Werk tab selected, and highlights the tiers that use that provider |
 | Theme | dark and light, in both files |
 
@@ -59,6 +59,9 @@ Checked with headless Chromium (cached Playwright 1.60):
 Screenshots are not committed.
 
 ## Settled (lead, 2026-11-24)
+
+Items 1 to 8 settled the first round of questions, and items 9 and 10 the
+second.
 
 1. **Consent banner: 허용 / 허용 안 함 plus a close (×). No "나중에".**
    Closing hides the banner until the next refused background request raises
@@ -90,11 +93,25 @@ Screenshots are not committed.
    other sign-in buttons (the plan-disabled and re-sign-in states) are
    disabled the same way.
 7. **Deleting a local endpoint also deletes its stored key.** This makes
-   backend gap 8 an implementation item. The same reasoning covers a URL edit
-   (derived here, see open questions): the key is bound to the old URL and can
-   never be used again, so the mockup says it is deleted on save.
+   backend gap 7 an implementation item.
 8. **The backend's mask is shown as-is** (`sk-or-...a1b2`, or `...9f3c` for
    an endpoint key without a prefix), consistent with `credential show`.
+9. **When OpenRouter cannot be reached, the key is saved and marked
+   unverified.** A network error, a 5xx, or a 429 from the key-info endpoint
+   saves the key and shows `저장됨 · 확인 못 함` with a short reason
+   (`연결 실패` for a network error, `일시 오류` for a 5xx or 429) and a
+   `다시 확인` button. Only a definitive rejection (401 or 403) refuses to
+   save, which is the existing `OpenRouter 거부` state. A moment offline or a
+   rate limit must not block setup. The prefix check is soft anyway, and the
+   first real call reports an auth failure regardless. A transient failure is
+   not evidence that the key is bad.
+10. **Changing an endpoint's URL deletes the old URL's key, as an announced
+    default.** The key ID is the SHA-256 of the base URL, so the old key no
+    longer applies. Keeping it would leave an orphan secret on disk, and
+    carrying it over would send a secret to a host the user never entered it
+    for. Once the URL differs from the stored one, the key field stays empty
+    and says, before save, `URL이 바뀌면 저장된 키가 삭제됩니다. 새 URL용 키를
+    다시 입력하세요.` Saving deletes the old key.
 
 ## Design notes
 
@@ -151,9 +168,14 @@ Screenshots are not committed.
    for an empty key, the length, and the character set (`store.go:558`).
    `KeyPrefix` is used only for masking (`provider.go:71`, `provider.go:97`).
    The daemon, not the browser, should call OpenRouter's key-info endpoint
-   (`/api/v1/key`) and store the key only on success.
+   (`/api/v1/key`). It refuses to store only on 401 or 403 and stores the key
+   unverified on a network error, 5xx, or 429 (settlement 9). The stored
+   record needs a verified flag and timestamp, and the status route must
+   report `verified`, `unverified` (with the reason), or, for the save
+   response, `rejected` (never stored). A re-check call for a stored key is
+   needed for `다시 확인`.
 7. **Endpoint keys are bound to the URL and are never cleaned up**
-   (settlement 7, now an implementation item). `Provider.keyID` hashes the
+   (settlements 7 and 10, now implementation items). `Provider.keyID` hashes the
    base URL (`local_endpoints.go:69`). Deleting an endpoint, renaming it, or
    changing its URL in config must also remove the old key entry. Nothing
    does that today.
@@ -170,9 +192,4 @@ Screenshots are not committed.
 
 ## Open questions
 
-1. **OpenRouter unreachable during verification** (network error, 5xx, 429).
-   Should the daemon refuse to save and offer a retry, or save the key marked
-   "not verified"? The mockup shows only the valid and invalid outcomes.
-2. **Old key on a URL edit.** The mockup deletes the old URL's key on save,
-   extending settlement 7. Please confirm, or keep the key until the
-   endpoint is deleted.
+None. Both questions from the second round are settled (items 9 and 10).

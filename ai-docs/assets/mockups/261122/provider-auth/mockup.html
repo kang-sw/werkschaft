@@ -289,6 +289,7 @@
     <button type="button" class="mk-btn" data-v="rejected">형식 거부</button>
     <button type="button" class="mk-btn" data-v="down">데몬 응답 없음</button>
     <button type="button" class="mk-btn" data-v="saved">저장·확인됨</button>
+    <button type="button" class="mk-btn" data-v="unverified">저장·확인 못 함</button>
     <button type="button" class="mk-btn" data-v="set">설정됨</button>
     <button type="button" class="mk-btn" data-v="replace">교체 입력</button>
   </div>
@@ -382,11 +383,20 @@
   function openRouterRow() {
     var st = S.or, pill, ctl = "", drawer = "", note = "", cls = "srow";
     var editing = ["entry", "prefix", "verifying", "invalid", "rejected", "down", "replace"].indexOf(st) >= 0;
-    var hasKey = st === "set" || st === "saved" || st === "replace";
+    var hasKey = st === "set" || st === "saved" || st === "replace" || st === "unverified" || st === "rechecking";
     if (hasKey) {
-      pill = '<span class="origin-pill ok" title="2026-11-22 저장">' + IC.check + '<span class="lbl">키 설정됨</span><span class="tail">' + OR_MASK + '</span></span>';
       cls += " overridden";
-      if (st !== "replace") ctl = '<button type="button" class="btn" data-act="or-replace">교체</button>' + holdBtn("or-remove", "OpenRouter 키 삭제");
+      if (st === "unverified") {
+        pill = '<span class="origin-pill unset" title="2026-11-24 저장 · OpenRouter 확인 못 함"><span class="lbl">저장됨 · 확인 못 함</span><span class="tail">' + OR_MASK + '</span></span>';
+        note = '<span class="hint warn">연결 실패: OpenRouter에 연결하지 못해 키를 확인하지 못했습니다. 키는 저장되었습니다.</span>';
+      } else if (st === "rechecking") {
+        pill = '<span class="origin-pill busy"><span class="pa-spin" aria-hidden="true"></span><span class="lbl">확인 중…</span><span class="tail">' + OR_MASK + '</span></span>';
+      } else {
+        pill = '<span class="origin-pill ok" title="2026-11-22 저장">' + IC.check + '<span class="lbl">키 설정됨</span><span class="tail">' + OR_MASK + '</span></span>';
+      }
+      if (st === "unverified") ctl = '<button type="button" class="btn" data-act="or-recheck">다시 확인</button>';
+      if (st === "rechecking") ctl = '<button type="button" class="btn" disabled><span class="pa-spin" aria-hidden="true"></span>다시 확인</button>';
+      if (st !== "replace") ctl += '<button type="button" class="btn" data-act="or-replace"' + (st === "rechecking" ? " disabled" : "") + '>교체</button>' + holdBtn("or-remove", "OpenRouter 키 삭제");
       if (st === "saved") note = '<span class="hint ok">OpenRouter에서 유효한 키로 확인했습니다.</span>';
     } else {
       pill = '<span class="origin-pill unset"><span class="lbl">미설정</span></span>';
@@ -521,8 +531,8 @@
     }
     if (mode === "edit") {
       name = "lab-vllm"; url = "https://vllm2.lab.internal:8000/v1"; kind = "vllm"; urlCls += " soft";
-      keyLabel = "API 키"; keyPh = "새 주소용 키 입력"; keyHint = '<span class="hint">비워 두면 키 없이 연결합니다</span>';
-      urlWarn = '<div class="inline-warn">주소가 바뀌었습니다. 기존 키(<span class="tail">...9f3c</span>)는 새 주소로 보내지 않고 저장할 때 삭제합니다. 새 주소에 키가 필요하면 입력하세요.</div>';
+      keyLabel = "API 키 (새 URL용)"; keyPh = "없으면 비워 두세요"; keyHint = '<span class="hint warn">URL이 바뀌면 저장된 키가 삭제됩니다. 새 URL용 키를 다시 입력하세요.</span>';
+      urlWarn = '<div class="inline-warn">기존 키(<span class="tail">...9f3c</span>)는 이전 URL에만 쓰이므로 새 URL로 보내지 않고, 저장할 때 삭제합니다.</div>';
     }
     var seg = '<div class="seg" role="group" aria-label="종류">' +
       '<button type="button" data-act="ep-kind" aria-pressed="' + (kind === "vllm") + '">vllm</button>' +
@@ -630,6 +640,11 @@
   var ACT = {
     "or-entry": function () { S.or = "entry"; },
     "or-replace": function () { S.or = "replace"; },
+    "or-recheck": function () {
+      S.or = "rechecking";
+      clearTimeout(verifyTimer);
+      verifyTimer = setTimeout(function () { if (S.or === "rechecking") { S.or = "saved"; render(); } }, 1200);
+    },
     "or-cancel": function () { S.or = (S.or === "replace") ? "set" : "unset"; },
     "or-save": function () {
       var v = ($("[data-or-key]") || {}).value || "";
