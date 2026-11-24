@@ -301,7 +301,15 @@
       });
       h.addEventListener('click', function (e) {
         var button = e.target.closest && e.target.closest('[data-load]');
-        if (!button || button.hidden || button.closest('.wb-history') !== h) return;
+        if (button) {
+          if (button.hidden || button.closest('.wb-history') !== h) return;
+        } else {
+          var hit = e.target.closest && e.target.closest('.history-gap');
+          if (!hit || hit.closest('.wb-history') !== h) return;
+          var visible = Array.from(hit.querySelectorAll('[data-load]')).filter(function (b) { return !b.hidden; });
+          if (visible.length !== 1) return;
+          button = visible[0];
+        }
         var gap = button.closest('.history-gap'), direction = button.getAttribute('data-load');
         if (lazy(gap)) {
           hydrateTopic(h.closest('.topic')).then(function () { if (!lazy(gap) && gap.isConnected) load(h, gap, direction, null, true); });
