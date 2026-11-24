@@ -110,6 +110,61 @@ func TestAtomicReplaceFileWindowsWaitsOutAReader(t *testing.T) {
 	}
 }
 
+func TestReadFileCachedWindowsWaitsOutExclusiveOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	const content = "persisted\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := os.NewFile(uintptr(handle), path)
+	defer hold.Close()
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	before := readCacheReads()
+	go func() {
+		data, err := ReadFileCached(path)
+		done <- result{data, err}
+	}()
+
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	// Keep the handle open until a second read proves the first was blocked.
+	for readCacheReads()-before < 2 {
+		select {
+		case got := <-done:
+			t.Fatalf("cached read returned before retrying: %v", got.err)
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("cached read did not retry")
+		}
+	}
+	if err := hold.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || string(got.data) != content {
+			t.Fatalf("cached read = %q, %v, want %q", got.data, got.err, content)
+		}
+	case <-deadline.C:
+		t.Fatal("cached read did not finish after the handle closed")
+	}
+}
+
 // TestRemoveFileWindowsWaitsOutAReader: a plain Go reader holding the file
 // fails os.Remove on Windows; RemoveFile retries until the reader closes.
 func TestRemoveFileWindowsWaitsOutAReader(t *testing.T) {
