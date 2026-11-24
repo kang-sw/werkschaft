@@ -133,7 +133,9 @@ const route = '/w/' + root.replace(/^\//, '').split('/').map(encodeURIComponent)
     await page.evaluate(() => {
       const a = document.createElement('a'); a.textContent = 'Board file link'; a.href = '/s/livesession/fs/view?path=worktree_page.go';
       a.setAttribute('data-wl', 'file'); a.setAttribute('data-rel', 'worktree_page.go');
-      a.id = 'fixture-board-link'; document.querySelector('[data-region="board"]').appendChild(a);
+      const body = document.createElement('div'); body.className = 'tbody';
+      a.id = 'fixture-board-link'; body.appendChild(a);
+      document.querySelector('[data-region="board"] section.topic').appendChild(body);
     });
     await page.locator('#fixture-board-link').click();
     const boardPreview = await wait('worktree_page.go', 'preview');
