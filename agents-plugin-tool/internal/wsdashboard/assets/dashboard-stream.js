@@ -649,6 +649,7 @@
     function onExecJobs(ev) {
       if (!ev || typeof ev.rev !== "number" || !rid) return;
       if (typeof execWake === "function") execWake(ev.rev);
+      if (typeof bgExecWake === "function") bgExecWake(ev.rev);
     }
     // A frame the shell hides reads the tracker once it shows (shShown).
     function onTracker(ev) {

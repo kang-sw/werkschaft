@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +52,19 @@ func (r *Runner) recoverModelExec(owner string, gen uint64) func(context.Context
 	}
 }
 
+// agentExecJobs is an optional extension of ExecJobs that counts only
+// agent-origin running jobs (excluding user-origin composer `!` commands).
+type agentExecJobs interface {
+	RunningAgentOwners() map[string]int
+}
+
+func agentExecCounts(src ExecJobs, fallback map[string]int) map[string]int {
+	if a, ok := src.(agentExecJobs); ok {
+		return a.RunningAgentOwners()
+	}
+	return fallback
+}
+
 // execState is the runner's view of the hosted exec jobs: the source once
 // the daemon binds it, and the running-job counts by owner its last change
 // signal read. Until BindExecJobs runs on a runner that expects jobs
@@ -60,11 +75,12 @@ type execState struct {
 	// mu orders each read of the counts with its store, so a slower
 	// reader never stores an older snapshot over a newer one; the source's
 	// own lock is taken under it, never the other way round.
-	mu       sync.Mutex
-	src      atomic.Pointer[ExecJobs]
-	live     atomic.Pointer[map[string]int]
-	bound    atomic.Bool
-	deferred atomic.Bool
+	mu        sync.Mutex
+	src       atomic.Pointer[ExecJobs]
+	live      atomic.Pointer[map[string]int]
+	liveAgent atomic.Pointer[map[string]int]
+	bound     atomic.Bool
+	deferred  atomic.Bool
 	// boundC, under boundMu, is closed when the jobs bind: an explicit
 	// close that arrives before waits on it (awaitExecBound).
 	boundMu sync.Mutex
@@ -139,11 +155,14 @@ func (r *Runner) ExpectExecJobs() { r.exec.deferred.Store(true) }
 func (r *Runner) BindExecJobs(src ExecJobs) {
 	r.exec.mu.Lock()
 	next := map[string]int{}
+	nextAgent := map[string]int{}
 	if src != nil {
 		r.exec.src.Store(&src)
 		next = src.RunningOwners()
+		nextAgent = agentExecCounts(src, next)
 	}
 	r.exec.live.Store(&next)
+	r.exec.liveAgent.Store(&nextAgent)
 	r.exec.bound.Store(true)
 	r.exec.mu.Unlock()
 	r.exec.boundMu.Lock()
@@ -175,16 +194,22 @@ func (r *Runner) execJobs() ExecJobs {
 
 // ExecJobsChanged rereads the running-job counts after a job started or
 // ended, and has every conversation whose count changed reconsider its
-// held report and its sleep. It never waits on a conversation's loop.
+// held report, its sleep, and its ancestors' live bg exec badge counts.
+// It never waits on a conversation's loop.
 func (r *Runner) ExecJobsChanged() {
 	r.exec.mu.Lock()
 	next := map[string]int{}
+	nextAgent := map[string]int{}
 	if src := r.execJobs(); src != nil {
 		next = src.RunningOwners()
+		nextAgent = agentExecCounts(src, next)
 	}
-	var prev map[string]int
+	var prev, prevAgent map[string]int
 	if p := r.exec.live.Swap(&next); p != nil {
 		prev = *p
+	}
+	if p := r.exec.liveAgent.Swap(&nextAgent); p != nil {
+		prevAgent = *p
 	}
 	r.exec.mu.Unlock()
 	changed := map[string]bool{}
@@ -198,29 +223,167 @@ func (r *Runner) ExecJobsChanged() {
 			changed[id] = true
 		}
 	}
+	for id, n := range nextAgent {
+		if prevAgent[id] != n {
+			changed[id] = true
+		}
+	}
+	for id := range prevAgent {
+		if _, ok := nextAgent[id]; !ok {
+			changed[id] = true
+		}
+	}
 	r.execReconsider(changed)
 }
 
 // execReconsider has each conversation of ids reconsider its held report
-// and its sleep, and wakes its spawn parents.
+// and its sleep, and wakes its spawn parents up to the root lead.
 func (r *Runner) execReconsider(ids map[string]bool) {
 	for id := range ids {
 		c := r.conv(id)
-		if c == nil {
-			continue
+		var parent *ParentRef
+		if c != nil {
+			r.releaseLater(id)
+			select {
+			case c.spawnC <- struct{}{}:
+			default:
+			}
+			c.mu.Lock()
+			parent = c.rec.Parent
+			c.mu.Unlock()
+		} else if rec, ok := r.recordOf(id); ok {
+			parent = rec.Parent
 		}
-		r.releaseLater(id)
-		select {
-		case c.spawnC <- struct{}{}:
-		default:
-		}
-		c.mu.Lock()
-		st := c.rec.Parent
-		c.mu.Unlock()
-		if st != nil {
-			r.wakeSpawnParents(State{ID: id, Parent: st})
+		if parent != nil {
+			r.wakeSpawnParents(State{ID: id, Parent: parent})
 		}
 	}
+}
+
+// SubtreeNode describes one conversation in a session's in-memory subtree
+// (depth 0 = root itself, 1 = direct child, 2+ = deeper descendant).
+type SubtreeNode struct {
+	ID    string
+	Label string
+	Depth int
+	// Path holds display labels from the direct child down to this node;
+	// nil/empty for depth 0 (self).
+	Path []string
+}
+
+// Subtree returns rootID (depth 0) and all of its recursive in-memory
+// descendants (open or closed), cycle-safe and in deterministic BFS order.
+// Memory only: never reads disk. On the lazy childrenIndex == nil fallback it
+// reads c.record() under r.mu (safe because no wsagent path acquires r.mu while
+// holding c.mu).
+func (r *Runner) Subtree(rootID string) []SubtreeNode {
+	if r == nil || rootID == "" {
+		return nil
+	}
+	type rawEdge struct {
+		id        string
+		conv      *conv
+		closedRec Record
+		hasClosed bool
+		parentID  string
+		depth     int
+	}
+	r.mu.Lock()
+	if r.childrenIndex == nil {
+		r.childrenIndex = map[ParentRef]map[string]bool{}
+		for _, c := range r.convs {
+			r.indexChildLocked(c.record())
+		}
+		for _, rec := range r.closed {
+			r.indexChildLocked(rec)
+		}
+	}
+	seen := map[string]bool{rootID: true}
+	rootNode := rawEdge{id: rootID}
+	if c := r.convs[rootID]; c != nil {
+		rootNode.conv = c
+	} else if rec, ok := r.closed[rootID]; ok {
+		rootNode.closedRec = rec
+		rootNode.hasClosed = true
+	}
+	ordered := []rawEdge{rootNode}
+	for i := 0; i < len(ordered); i++ {
+		cur := ordered[i]
+		var childIDs []string
+		for _, kind := range []string{ParentLead, ParentConversation} {
+			for cid := range r.childrenIndex[ParentRef{Kind: kind, ReplyID: cur.id}] {
+				if seen[cid] {
+					continue
+				}
+				seen[cid] = true
+				childIDs = append(childIDs, cid)
+			}
+		}
+		sort.Strings(childIDs)
+		for _, cid := range childIDs {
+			e := rawEdge{id: cid, parentID: cur.id, depth: cur.depth + 1}
+			if c := r.convs[cid]; c != nil {
+				e.conv = c
+			} else if rec, ok := r.closed[cid]; ok {
+				e.closedRec = rec
+				e.hasClosed = true
+			}
+			ordered = append(ordered, e)
+		}
+	}
+	r.mu.Unlock()
+
+	pathByID := make(map[string][]string, len(ordered))
+	out := make([]SubtreeNode, 0, len(ordered))
+	for _, e := range ordered {
+		var label string
+		if e.conv != nil {
+			label = e.conv.record().Label
+		} else if e.hasClosed {
+			label = e.closedRec.Label
+		}
+		if label == "" {
+			label = e.id
+		}
+		var path []string
+		if e.depth > 0 {
+			parentPath := pathByID[e.parentID]
+			path = make([]string, len(parentPath)+1)
+			copy(path, parentPath)
+			path[len(parentPath)] = label
+			pathByID[e.id] = path
+		}
+		out = append(out, SubtreeNode{
+			ID:    e.id,
+			Label: label,
+			Depth: e.depth,
+			Path:  slices.Clone(path),
+		})
+	}
+	return out
+}
+
+// BgExecCounts returns the running agent-origin hosted ws/exec job counts for
+// rootID itself and for all of its recursive descendants. Memory only.
+func (r *Runner) BgExecCounts(rootID string) (self, desc int) {
+	if r == nil || rootID == "" {
+		return 0, 0
+	}
+	p := r.exec.liveAgent.Load()
+	if p == nil || len(*p) == 0 {
+		return 0, 0
+	}
+	counts := *p
+	self = counts[rootID]
+	if len(counts) == 1 && self > 0 {
+		return self, 0
+	}
+	for _, node := range r.Subtree(rootID) {
+		if node.Depth > 0 {
+			desc += counts[node.ID]
+		}
+	}
+	return self, desc
 }
 
 // execLive counts conversation id's live exec jobs; before the daemon
