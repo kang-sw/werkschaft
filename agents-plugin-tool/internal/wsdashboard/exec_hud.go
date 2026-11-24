@@ -38,6 +38,35 @@ type ExecJobsService interface {
 	StopByUser(owner, id string) (execjob.HostedSummary, error)
 }
 
+// ExecTreeNode describes one conversation in a session's in-memory subtree
+// (depth 0 = self, 1 = direct child, 2+ = deeper descendant).
+type ExecTreeNode struct {
+	ID    string
+	Label string
+	Depth int
+	Path  []string
+}
+
+// ExecTreeService is an optional extension of ExecJobsService for recursive
+// self+descendant agent-origin hosted ws/exec monitoring (/s/<id>/exec/bg/...).
+type ExecTreeService interface {
+	// OpenTree reports whether replyID is an open hosted conversation (lead or
+	// spawned worker). Memory only.
+	OpenTree(replyID string) error
+	// Subtree returns replyID (depth 0) and all of its recursive in-memory
+	// descendants, cycle-safe.
+	Subtree(replyID string) []ExecTreeNode
+	// AgentJobsForOwners returns all origin=="agent" jobs owned by any
+	// conversation in owners, sorted running-first.
+	AgentJobsForOwners(owners map[string]bool) []execjob.HostedSummary
+	// ReadAgentOutput reads output of an origin=="agent" job owned by any
+	// conversation in owners.
+	ReadAgentOutput(owners map[string]bool, id string, from int64, limit int) (execjob.HostedOutput, error)
+	// StopAgentByUser stops a running origin=="agent" job owned by any
+	// conversation in owners.
+	StopAgentByUser(owners map[string]bool, id string) (execjob.HostedSummary, error)
+}
+
 // SetExecJobs binds the service the HUD routes run on; before it they answer
 // 404, which the page reads as "no HUD".
 func (d *Daemon) SetExecJobs(svc ExecJobsService) {
@@ -54,20 +83,24 @@ var execJobID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,96}$`)
 
 // execJobView is a job as the HUD reads it.
 type execJobView struct {
-	ID            string `json:"id"`
-	Tool          string `json:"tool"`
-	Command       string `json:"command"`
-	Cwd           string `json:"cwd,omitempty"`
-	State         string `json:"state"`
-	Error         string `json:"error,omitempty"`
-	Origin        string `json:"origin"`
-	ExitCode      *int   `json:"exit_code,omitempty"`
-	Signal        *int   `json:"signal,omitempty"`
-	StartedAt     int64  `json:"started_at,omitempty"`
-	EndedAt       int64  `json:"ended_at,omitempty"`
-	Written       int64  `json:"written"`
-	StoppedByUser bool   `json:"stopped_by_user,omitempty"`
-	StopNotice    string `json:"stop_notice,omitempty"`
+	ID            string   `json:"id"`
+	Tool          string   `json:"tool"`
+	Command       string   `json:"command"`
+	Cwd           string   `json:"cwd,omitempty"`
+	State         string   `json:"state"`
+	Error         string   `json:"error,omitempty"`
+	Origin        string   `json:"origin"`
+	ExitCode      *int     `json:"exit_code,omitempty"`
+	Signal        *int     `json:"signal,omitempty"`
+	StartedAt     int64    `json:"started_at,omitempty"`
+	EndedAt       int64    `json:"ended_at,omitempty"`
+	Written       int64    `json:"written"`
+	StoppedByUser bool     `json:"stopped_by_user,omitempty"`
+	StopNotice    string   `json:"stop_notice,omitempty"`
+	OwnerID       string   `json:"owner_id,omitempty"`
+	OwnerLabel    string   `json:"owner_label,omitempty"`
+	OwnerDepth    *int     `json:"owner_depth,omitempty"`
+	OwnerPath     []string `json:"owner_path,omitempty"`
 }
 
 func execJobViewOf(s execjob.HostedSummary) execJobView {
@@ -76,6 +109,23 @@ func execJobViewOf(s execjob.HostedSummary) execJobView {
 		ExitCode: s.ExitCode, Signal: s.Signal, StartedAt: s.StartedAt, EndedAt: s.EndedAt, Written: s.Written,
 		StoppedByUser: s.StoppedByUser, StopNotice: s.StopNotice,
 	}
+}
+
+func execTreeJobViewOf(s execjob.HostedSummary, nodes map[string]ExecTreeNode) execJobView {
+	v := execJobViewOf(s)
+	if node, ok := nodes[s.Owner]; ok {
+		v.OwnerID = node.ID
+		v.OwnerLabel = node.Label
+		depth := node.Depth
+		v.OwnerDepth = &depth
+		if len(node.Path) > 0 {
+			v.OwnerPath = append([]string(nil), node.Path...)
+		}
+	} else if s.Owner != "" {
+		v.OwnerID = s.Owner
+		v.OwnerLabel = s.Owner
+	}
+	return v
 }
 
 // execSegmentView is one stream-attributed run of output text. Stream is
@@ -104,13 +154,18 @@ type execOutputView struct {
 // HUD never mounts), a write needs the daemon's own Origin, a read a
 // non-cross-site fetch. The session must be an open hosted lead right now.
 func (d *Daemon) handleExecJobs(w http.ResponseWriter, r *http.Request, replyID, rest string) {
+	rest = strings.TrimPrefix(rest, "/")
+	write := r.Method == http.MethodPost
+	bgRoute := rest == "bg" || strings.HasPrefix(rest, "bg/")
 	local, own := TrustedWrite(r)
 	if !local {
+		if bgRoute && write {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
-	rest = strings.TrimPrefix(rest, "/")
-	write := r.Method == http.MethodPost
 	if write && !own {
 		http.Error(w, "cross-origin request refused", http.StatusForbidden)
 		return
@@ -133,6 +188,19 @@ func (d *Daemon) handleExecJobs(w http.ResponseWriter, r *http.Request, replyID,
 		return
 	}
 	svc := *svcp
+	if bgRoute {
+		treeSvc, ok := svc.(ExecTreeService)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if err := treeSvc.OpenTree(replyID); err != nil {
+			http.Error(w, "unknown session", http.StatusNotFound)
+			return
+		}
+		d.handleExecBg(w, r, treeSvc, replyID, strings.TrimPrefix(rest, "bg/"), write, local)
+		return
+	}
 	// The live authority, for reads as for writes: a closed lead's jobs are
 	// no longer served.
 	if _, err := svc.Open(replyID); err != nil {
@@ -143,13 +211,140 @@ func (d *Daemon) handleExecJobs(w http.ResponseWriter, r *http.Request, replyID,
 	switch {
 	case rest == "jobs" && !write:
 		d.execJobsList(w, svc, replyID)
-	case id != "jobs" && execJobID.MatchString(id) && tail == "output" && !write:
+	case id != "jobs" && id != "bg" && execJobID.MatchString(id) && tail == "output" && !write:
 		execJobOutput(w, r, svc, replyID, id)
-	case id != "jobs" && execJobID.MatchString(id) && tail == "stop" && write:
+	case id != "jobs" && id != "bg" && execJobID.MatchString(id) && tail == "stop" && write:
 		execJobStop(w, svc, replyID, id)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (d *Daemon) handleExecBg(w http.ResponseWriter, r *http.Request, svc ExecTreeService, replyID, rest string, write, canControl bool) {
+	id, tail, _ := strings.Cut(rest, "/")
+	switch {
+	case rest == "jobs" && !write:
+		d.execBgJobsList(w, svc, replyID, canControl)
+	case id != "jobs" && execJobID.MatchString(id) && tail == "output" && !write:
+		execBgJobOutput(w, r, svc, replyID, id)
+	case id != "jobs" && execJobID.MatchString(id) && tail == "stop" && write:
+		execBgJobStop(w, svc, replyID, id)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func execSubtreeLookup(svc ExecTreeService, replyID string) (map[string]bool, map[string]ExecTreeNode) {
+	nodes := svc.Subtree(replyID)
+	owners := make(map[string]bool, len(nodes))
+	byID := make(map[string]ExecTreeNode, len(nodes))
+	for _, n := range nodes {
+		if n.ID == "" {
+			continue
+		}
+		owners[n.ID] = true
+		byID[n.ID] = n
+	}
+	if len(owners) == 0 && replyID != "" {
+		owners[replyID] = true
+		byID[replyID] = ExecTreeNode{ID: replyID, Label: replyID, Depth: 0}
+	}
+	return owners, byID
+}
+
+func (d *Daemon) execBgJobsList(w http.ResponseWriter, svc ExecTreeService, replyID string, canControl bool) {
+	rev := d.execRev.Load()
+	owners, byID := execSubtreeLookup(svc, replyID)
+	jobs := svc.AgentJobsForOwners(owners)
+	views := make([]execJobView, 0, len(jobs))
+	var selfRunning, descRunning, totalFinished int
+	for _, s := range jobs {
+		if s.Origin == execjob.OriginUser {
+			continue
+		}
+		views = append(views, execTreeJobViewOf(s, byID))
+		if !s.Terminal() {
+			if node, ok := byID[s.Owner]; ok && node.Depth > 0 {
+				descRunning++
+			} else {
+				selfRunning++
+			}
+		} else {
+			totalFinished++
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rev":                rev,
+		"can_control":        canControl,
+		"self_running":       selfRunning,
+		"descendant_running": descRunning,
+		"total_running":      selfRunning + descRunning,
+		"total_finished":     totalFinished,
+		"jobs":               views,
+	})
+}
+
+func execBgJobOutput(w http.ResponseWriter, r *http.Request, svc ExecTreeService, replyID, id string) {
+	var from int64
+	if v := r.URL.Query().Get("from"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			http.Error(w, "bad offset", http.StatusBadRequest)
+			return
+		}
+		from = n
+	}
+	limit := execjob.HostedOutputLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			http.Error(w, "bad limit", http.StatusBadRequest)
+			return
+		}
+		if n < limit {
+			limit = n
+		}
+	}
+	owners, byID := execSubtreeLookup(svc, replyID)
+	out, err := svc.ReadAgentOutput(owners, id, from, limit)
+	if err != nil {
+		execJobError(w, err)
+		return
+	}
+	view := execOutputView{
+		Job:      execTreeJobViewOf(out.Job, byID),
+		From:     out.From,
+		Next:     out.Next,
+		Written:  out.Written,
+		Evicted:  out.Evicted,
+		Gap:      out.Gap,
+		Segments: decodeExecSegments(out.Segments),
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, view)
+}
+
+func execBgJobStop(w http.ResponseWriter, svc ExecTreeService, replyID, id string) {
+	owners, byID := execSubtreeLookup(svc, replyID)
+	sum, err := svc.StopAgentByUser(owners, id)
+	if err != nil {
+		var status int
+		if errors.Is(err, execjob.ErrExecNotFound) {
+			status = http.StatusNotFound
+		} else {
+			status = http.StatusBadGateway
+		}
+		if sum.ID != "" && status != http.StatusNotFound {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, status, map[string]any{"error": err.Error(), "job": execTreeJobViewOf(sum, byID)})
+			return
+		}
+		execJobError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"job": execTreeJobViewOf(sum, byID)})
 }
 
 func (d *Daemon) execJobsList(w http.ResponseWriter, svc ExecJobsService, replyID string) {

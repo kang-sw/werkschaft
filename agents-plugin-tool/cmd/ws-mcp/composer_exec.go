@@ -123,6 +123,60 @@ func (c composerExec) StopByUser(owner, id string) (execjob.HostedSummary, error
 	return c.hosted.StopByUser(owner, id)
 }
 
+type execTreeRunner interface {
+	ExecOwner(id string) (wsagent.ExecOwner, error)
+	Subtree(rootID string) []wsagent.SubtreeNode
+}
+
+// OpenTree reports whether replyID is an open hosted conversation (lead or
+// spawned worker), for recursive agent background exec monitoring.
+func (c composerExec) OpenTree(replyID string) error {
+	if tr, ok := c.runner.(execTreeRunner); ok {
+		_, err := tr.ExecOwner(replyID)
+		return err
+	}
+	_, err := c.runner.ComposerOpen(replyID)
+	return err
+}
+
+// Subtree returns replyID (depth 0) and all of its recursive in-memory
+// descendants, cycle-safe.
+func (c composerExec) Subtree(replyID string) []wsdashboard.ExecTreeNode {
+	tr, ok := c.runner.(execTreeRunner)
+	if !ok {
+		return []wsdashboard.ExecTreeNode{{ID: replyID, Label: replyID, Depth: 0}}
+	}
+	nodes := tr.Subtree(replyID)
+	out := make([]wsdashboard.ExecTreeNode, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, wsdashboard.ExecTreeNode{
+			ID:    n.ID,
+			Label: n.Label,
+			Depth: n.Depth,
+			Path:  n.Path,
+		})
+	}
+	return out
+}
+
+// AgentJobsForOwners returns all origin=="agent" jobs owned by any
+// conversation in owners, sorted running-first.
+func (c composerExec) AgentJobsForOwners(owners map[string]bool) []execjob.HostedSummary {
+	return c.hosted.JobsForOwners(owners, execjob.OriginAgent)
+}
+
+// ReadAgentOutput reads output of an origin=="agent" job owned by any
+// conversation in owners.
+func (c composerExec) ReadAgentOutput(owners map[string]bool, id string, from int64, limit int) (execjob.HostedOutput, error) {
+	return c.hosted.ReadOutputForOwners(owners, execjob.OriginAgent, id, from, limit)
+}
+
+// StopAgentByUser stops a running origin=="agent" job owned by any
+// conversation in owners.
+func (c composerExec) StopAgentByUser(owners map[string]bool, id string) (execjob.HostedSummary, error) {
+	return c.hosted.StopByUserForOwners(owners, execjob.OriginAgent, id)
+}
+
 func (c composerExec) Hand(replyID string, gen uint64, execID, text string) error {
 	if execID == "" {
 		return errors.New("no exec id")
@@ -146,4 +200,5 @@ func composerJob(v execjob.HostedView) wsdashboard.ComposerJob {
 var (
 	_ wsdashboard.ComposerExecService = composerExec{}
 	_ wsdashboard.ExecJobsService     = composerExec{}
+	_ wsdashboard.ExecTreeService     = composerExec{}
 )

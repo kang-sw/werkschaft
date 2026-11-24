@@ -101,3 +101,45 @@ func TestFailedCompactionKeepsItsError(t *testing.T) {
 		t.Fatalf("ended compaction: %+v", res.Ring)
 	}
 }
+
+// TestHostBgExecCountsMemoryOnlyForDisk verifies that BgExecCount/Self/Desc
+// are preserved in memory snapshots (and clamped to >= 0), trigger SetHost
+// change detection, and are stripped by Snapshot.ForDisk() without mutating
+// the in-memory snapshot so live exec badge changes never rewrite disk files.
+func TestHostBgExecCountsMemoryOnlyForDisk(t *testing.T) {
+	st := NewState(ownerKey)
+	if !st.SetHost(&Host{BgExecCount: 3, BgExecSelf: 1, BgExecDesc: 2}) {
+		t.Fatal("setting bg exec counts must report a change")
+	}
+	if st.SetHost(&Host{BgExecCount: 3, BgExecSelf: 1, BgExecDesc: 2}) {
+		t.Fatal("identical bg exec counts must report no change")
+	}
+	mem := st.Snapshot(10)
+	if mem.Host == nil || mem.Host.BgExecCount != 3 || mem.Host.BgExecSelf != 1 || mem.Host.BgExecDesc != 2 {
+		t.Fatalf("memory snapshot host = %+v", mem.Host)
+	}
+	disk := mem.ForDisk()
+	if disk.Host != nil {
+		t.Fatalf("ForDisk should drop host when only bg_exec_* fields were set, got %+v", disk.Host)
+	}
+	if mem.Host.BgExecCount != 3 {
+		t.Fatalf("ForDisk must not mutate memory snapshot, got %+v", mem.Host)
+	}
+
+	// When Host also has persisted fields (e.g. BackgroundTasks), ForDisk keeps
+	// those fields and zeroes only BgExec*.
+	st.SetHost(&Host{BackgroundTasks: 1, BgExecCount: 2, BgExecSelf: 0, BgExecDesc: 2})
+	mem2 := st.Snapshot(20)
+	disk2 := mem2.ForDisk()
+	if disk2.Host == nil || disk2.Host.BackgroundTasks != 1 || disk2.Host.BgExecCount != 0 || disk2.Host.BgExecSelf != 0 || disk2.Host.BgExecDesc != 0 {
+		t.Fatalf("ForDisk with BackgroundTasks = %+v", disk2.Host)
+	}
+	if mem2.Host.BgExecCount != 2 {
+		t.Fatalf("ForDisk mutated mem2 host = %+v", mem2.Host)
+	}
+	// Negative values clamp to zero.
+	st.SetHost(&Host{BgExecCount: -1, BgExecSelf: -2, BgExecDesc: -3})
+	if st.Snapshot(30).Host != nil {
+		t.Fatalf("negative bg exec counts should clamp to empty host, got %+v", st.Snapshot(30).Host)
+	}
+}

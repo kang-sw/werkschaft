@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // execJobsFake is an ExecJobsService over a fixed set of jobs, recording the
@@ -361,5 +362,285 @@ func TestExecHUDOutputKeepsACharacterSplitAcrossInterleavedStreams(t *testing.T)
 	tail := decodeExecSegments([]execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("x\xe2\x82")}, {Stream: execjob.StreamStderr, Data: []byte("\xff")}})
 	if len(tail) != 3 || tail[0].Text != "x" || tail[1].Text != "�" || tail[2].Text != "��" {
 		t.Fatalf("tail = %+v", tail)
+	}
+}
+
+// execTreeFake extends execJobsFake with ExecTreeService for testing
+// /s/<reply-id>/exec/bg/... routes across a 3-level hierarchy.
+type execTreeFake struct {
+	*execJobsFake
+	trees map[string][]ExecTreeNode
+}
+
+func (f *execTreeFake) OpenTree(replyID string) error {
+	_, err := f.Open(replyID)
+	return err
+}
+
+func (f *execTreeFake) Subtree(replyID string) []ExecTreeNode {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ExecTreeNode(nil), f.trees[replyID]...)
+}
+
+func (f *execTreeFake) AgentJobsForOwners(owners map[string]bool) []execjob.HostedSummary {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []execjob.HostedSummary
+	for owner := range owners {
+		for _, j := range f.jobs[owner] {
+			if j.Origin == execjob.OriginUser {
+				continue
+			}
+			j.Owner = owner
+			out = append(out, j)
+		}
+	}
+	// Mirror execjob.Hosted.JobsForOwners order: running newest first, then finished newest first.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			a, b := out[i], out[j]
+			swap := false
+			at, bt := a.Terminal(), b.Terminal()
+			switch {
+			case at != bt:
+				swap = at && !bt
+			case !at:
+				swap = b.StartedAt > a.StartedAt || (b.StartedAt == a.StartedAt && b.ID < a.ID)
+			default:
+				swap = b.EndedAt > a.EndedAt || (b.EndedAt == a.EndedAt && b.ID < a.ID)
+			}
+			if swap {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func (f *execTreeFake) ReadAgentOutput(owners map[string]bool, id string, from int64, limit int) (execjob.HostedOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.froms = append(f.froms, from)
+	f.limits = append(f.limits, limit)
+	for owner := range owners {
+		for _, j := range f.jobs[owner] {
+			if j.ID == id && j.Origin != execjob.OriginUser {
+				out := f.out[id]
+				out.Job.Owner = owner
+				return out, nil
+			}
+		}
+	}
+	return execjob.HostedOutput{}, execjob.ErrExecNotFound
+}
+
+func (f *execTreeFake) StopAgentByUser(owners map[string]bool, id string) (execjob.HostedSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for owner := range owners {
+		for _, j := range f.jobs[owner] {
+			if j.ID == id && j.Origin != execjob.OriginUser {
+				j.Owner = owner
+				j.State = execjob.HostedStopped
+				j.StoppedByUser = true
+				j.StopNotice = execjob.StopNoticeSent
+				return j, nil
+			}
+		}
+	}
+	return execjob.HostedSummary{}, execjob.ErrExecNotFound
+}
+
+// TestExecBgTreeRoutesHierarchyIsolationAndSeparation verifies:
+//   - 3-level hierarchy (Lead -> Child -> Grandchild) recursive listing,
+//     owner_depth (0/1/2), owner_path, running-first sorting, and strict
+//     exclusion of origin=="user" jobs.
+//   - Cross-session isolation: Lead A cannot list/tail/stop Lead B's jobs;
+//     Child A1 cannot list/tail/stop Parent Lead A's jobs.
+//   - Non-controllable viewer (remoteAddr != loopback) gets 403 on POST stop
+//     and cannot read tree exec jobs.
+func TestExecBgTreeRoutesHierarchyIsolationAndSeparation(t *testing.T) {
+	f := startComposerFixture(t)
+	// Register a child worker session in the dashboard index so /s/childa1/... resolves.
+	childReg, err := ReadRegistration(f.dir, "livesession")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childReg.ReplyID = "childa1"
+	childReg.Hosted = true
+	if err := WriteRegistration(f.dir, childReg); err != nil {
+		t.Fatal(err)
+	}
+	f.d.Index().Refresh()
+	waitFor(t, "childa1 registration", func() bool {
+		s, ok := f.d.Index().Session("childa1")
+		return ok && s.Hosted
+	})
+
+	zero := 0
+	base := &execJobsFake{
+		jobs: map[string][]execjob.HostedSummary{
+			"livesession": {
+				{ID: "exec_lead_run", Tool: "exec.shell", Command: "go test ./...", State: execjob.HostedRunning, Origin: execjob.OriginAgent, StartedAt: 100, Written: 20},
+				{ID: "exec_lead_user", Tool: "exec.shell", Command: "! ls", State: execjob.HostedRunning, Origin: execjob.OriginUser, StartedAt: 300, Written: 5},
+			},
+			"childa1": {
+				{ID: "exec_child_done", Tool: "exec.shell", Command: "npm run build", State: execjob.HostedExited, ExitCode: &zero, Origin: execjob.OriginAgent, StartedAt: 50, EndedAt: 90, Written: 10},
+			},
+			"granda2": {
+				{ID: "exec_grand_run", Tool: "exec.shell", Command: "node verify.mjs", State: execjob.HostedRunning, Origin: execjob.OriginAgent, StartedAt: 200, Written: 30},
+			},
+			"boardsession": {
+				{ID: "exec_peer_run", Tool: "exec.shell", Command: "secret-peer", State: execjob.HostedRunning, Origin: execjob.OriginAgent, StartedAt: 400, Written: 1},
+			},
+		},
+		out: map[string]execjob.HostedOutput{
+			"exec_lead_run":  {Job: execjob.HostedSummary{ID: "exec_lead_run", State: execjob.HostedRunning, Origin: execjob.OriginAgent}, Segments: []execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("lead-out")}}, Next: 8},
+			"exec_grand_run": {Job: execjob.HostedSummary{ID: "exec_grand_run", State: execjob.HostedRunning, Origin: execjob.OriginAgent}, Segments: []execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("grand-out")}}, Next: 9},
+			"exec_peer_run":  {Job: execjob.HostedSummary{ID: "exec_peer_run", State: execjob.HostedRunning, Origin: execjob.OriginAgent}, Segments: []execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("peer-out")}}, Next: 8},
+		},
+	}
+	svc := &execTreeFake{
+		execJobsFake: base,
+		trees: map[string][]ExecTreeNode{
+			"livesession": {
+				{ID: "livesession", Label: "root-lead", Depth: 0},
+				{ID: "childa1", Label: "quota-p1-p2", Depth: 1, Path: []string{"quota-p1-p2"}},
+				{ID: "granda2", Label: "verify-chromium", Depth: 2, Path: []string{"quota-p1-p2", "verify-chromium"}},
+			},
+			"childa1": {
+				{ID: "childa1", Label: "quota-p1-p2", Depth: 0},
+				{ID: "granda2", Label: "verify-chromium", Depth: 1, Path: []string{"verify-chromium"}},
+			},
+			"boardsession": {
+				{ID: "boardsession", Label: "peer-lead", Depth: 0},
+			},
+		},
+	}
+	f.d.SetExecJobs(svc)
+	post := func(path string) *httptest.ResponseRecorder {
+		return composerHTTP(f.d, http.MethodPost, path, "", "http://127.0.0.1", "127.0.0.1:1234", nil)
+	}
+
+	// 1. Lead A lists its 3-level subtree: 2 running (grand newest, then lead) + 1 finished (child); user job excluded.
+	res := hudGet(f, "/s/livesession/exec/bg/jobs")
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET bg/jobs status = %d: %s", res.Code, res.Body)
+	}
+	var list struct {
+		Rev               int64         `json:"rev"`
+		CanControl        bool          `json:"can_control"`
+		SelfRunning       int           `json:"self_running"`
+		DescendantRunning int           `json:"descendant_running"`
+		TotalRunning      int           `json:"total_running"`
+		TotalFinished     int           `json:"total_finished"`
+		Jobs              []execJobView `json:"jobs"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode bg/jobs: %v (%s)", err, res.Body)
+	}
+	if !list.CanControl || list.SelfRunning != 1 || list.DescendantRunning != 1 || list.TotalRunning != 2 || list.TotalFinished != 1 {
+		t.Fatalf("counts = %+v", list)
+	}
+	if len(list.Jobs) != 3 {
+		t.Fatalf("jobs len = %d, want 3: %+v", len(list.Jobs), list.Jobs)
+	}
+	// Order: running newest first (grand StartedAt=200, lead StartedAt=100), then finished (child EndedAt=90).
+	if list.Jobs[0].ID != "exec_grand_run" || list.Jobs[0].OwnerID != "granda2" || list.Jobs[0].OwnerDepth == nil || *list.Jobs[0].OwnerDepth != 2 || !reflect.DeepEqual(list.Jobs[0].OwnerPath, []string{"quota-p1-p2", "verify-chromium"}) {
+		t.Fatalf("job[0] = %+v", list.Jobs[0])
+	}
+	if list.Jobs[1].ID != "exec_lead_run" || list.Jobs[1].OwnerID != "livesession" || list.Jobs[1].OwnerDepth == nil || *list.Jobs[1].OwnerDepth != 0 || len(list.Jobs[1].OwnerPath) != 0 {
+		t.Fatalf("job[1] = %+v", list.Jobs[1])
+	}
+	if list.Jobs[2].ID != "exec_child_done" || list.Jobs[2].OwnerID != "childa1" || list.Jobs[2].OwnerDepth == nil || *list.Jobs[2].OwnerDepth != 1 || !reflect.DeepEqual(list.Jobs[2].OwnerPath, []string{"quota-p1-p2"}) {
+		t.Fatalf("job[2] = %+v", list.Jobs[2])
+	}
+
+	// 2. Lead A can tail & stop grandchild's job, with owner metadata enriched.
+	res = hudGet(f, "/s/livesession/exec/bg/exec_grand_run/output?from=0&limit=4096")
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET grandchild output status = %d: %s", res.Code, res.Body)
+	}
+	var out execOutputView
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	if out.Job.OwnerID != "granda2" || out.Job.OwnerDepth == nil || *out.Job.OwnerDepth != 2 || len(out.Segments) != 1 || out.Segments[0].Text != "grand-out" {
+		t.Fatalf("grandchild output = %+v", out)
+	}
+	if gotLimit := svc.limits[len(svc.limits)-1]; gotLimit != 4096 {
+		t.Fatalf("limit forwarded = %d, want 4096", gotLimit)
+	}
+
+	res = post("/s/livesession/exec/bg/exec_grand_run/stop")
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST stop grandchild status = %d: %s", res.Code, res.Body)
+	}
+	var stopped struct{ Job execJobView }
+	if err := json.Unmarshal(res.Body.Bytes(), &stopped); err != nil || stopped.Job.State != execjob.HostedStopped || stopped.Job.OwnerID != "granda2" {
+		t.Fatalf("stopped = %+v, err = %v", stopped, err)
+	}
+
+	// 3. Cross-session isolation: Lead A cannot tail/stop peer Lead B's job or its own user-origin job.
+	for _, forbidden := range []string{"exec_peer_run", "exec_lead_user"} {
+		if r := hudGet(f, "/s/livesession/exec/bg/"+forbidden+"/output"); r.Code != http.StatusNotFound {
+			t.Fatalf("GET %s from lead A = %d, want 404", forbidden, r.Code)
+		}
+		if r := post("/s/livesession/exec/bg/" + forbidden + "/stop"); r.Code != http.StatusNotFound {
+			t.Fatalf("POST stop %s from lead A = %d, want 404", forbidden, r.Code)
+		}
+	}
+
+	// 4. Child A1 cannot tail/stop Parent Lead A's job, but can tail its own grandchild's job.
+	if r := hudGet(f, "/s/childa1/exec/bg/exec_lead_run/output"); r.Code != http.StatusNotFound {
+		t.Fatalf("Child A1 GET parent job = %d, want 404", r.Code)
+	}
+	if r := post("/s/childa1/exec/bg/exec_lead_run/stop"); r.Code != http.StatusNotFound {
+		t.Fatalf("Child A1 POST stop parent job = %d, want 404", r.Code)
+	}
+	if r := hudGet(f, "/s/childa1/exec/bg/exec_grand_run/output"); r.Code != http.StatusOK {
+		t.Fatalf("Child A1 GET grandchild job = %d, want 200", r.Code)
+	}
+
+	// 5. Non-controllable viewers: LAN peer gets 401; missing/foreign Origin on POST stop gets 403.
+	if r := composerHTTP(f.d, http.MethodPost, "/s/livesession/exec/bg/exec_lead_run/stop", "", "http://127.0.0.1", "192.0.2.9:4321", nil); r.Code != http.StatusUnauthorized {
+		t.Fatalf("LAN POST stop = %d, want 401", r.Code)
+	}
+	if r := composerHTTP(f.d, http.MethodGet, "/s/livesession/exec/bg/jobs", "", "", "192.0.2.9:4321", nil); r.Code != http.StatusUnauthorized {
+		t.Fatalf("LAN GET bg/jobs = %d, want 401", r.Code)
+	}
+	if r := composerHTTP(f.d, http.MethodPost, "/s/livesession/exec/bg/exec_lead_run/stop", "", "http://evil.test", "127.0.0.1:1234", nil); r.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST stop = %d, want 403", r.Code)
+	}
+}
+
+// TestBgExecLiveMarkupOnConvLive verifies that Host.BgExecCount/Self/Desc
+// render as additive data-bg-exec* attributes on r-convlive when non-zero
+// and are omitted when zero.
+func TestBgExecLiveMarkupOnConvLive(t *testing.T) {
+	now := time.Now()
+	v := buildSessionView(pageInputs{
+		Session: Session{Registration: Registration{ReplyID: "lead1", Hosted: true}},
+		Now:     now,
+		Snapshot: &wslive.Snapshot{
+			Adapter:   "claude",
+			UpdatedAt: now.UnixMilli(),
+			Host:      &wslive.Host{BgExecCount: 3, BgExecSelf: 1, BgExecDesc: 2},
+		},
+	})
+	if v.BgExecCount != 3 || v.BgExecSelf != 1 || v.BgExecDesc != 2 {
+		t.Fatalf("SessionView bg exec = %d/%d/%d, want 3/1/2", v.BgExecCount, v.BgExecSelf, v.BgExecDesc)
+	}
+	vZero := buildSessionView(pageInputs{
+		Session: Session{Registration: Registration{ReplyID: "lead1", Hosted: true}},
+		Now:     now,
+		Snapshot: &wslive.Snapshot{
+			Adapter:   "claude",
+			UpdatedAt: now.UnixMilli(),
+		},
+	})
+	if vZero.BgExecCount != 0 || vZero.BgExecSelf != 0 || vZero.BgExecDesc != 0 {
+		t.Fatalf("SessionView zero bg exec = %d/%d/%d, want 0/0/0", vZero.BgExecCount, vZero.BgExecSelf, vZero.BgExecDesc)
 	}
 }

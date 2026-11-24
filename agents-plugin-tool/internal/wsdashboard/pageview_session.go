@@ -311,6 +311,11 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Commands = in.Snapshot.Commands
 	v.Host = in.Snapshot.Host
 	v.Background, v.Monitors = taskBadgeCounts(in.Snapshot)
+	if h := in.Snapshot.Host; h != nil {
+		v.BgExecCount = max(0, h.BgExecCount)
+		v.BgExecSelf = max(0, h.BgExecSelf)
+		v.BgExecDesc = max(0, h.BgExecDesc)
+	}
 	v.Tree.Agents = agentTree(in.Snapshot.Agents, lookup)
 	markNativeAgents(v.Tree.Agents, v.Harness, lookup.harnesses)
 	for _, a := range in.Snapshot.Agents {

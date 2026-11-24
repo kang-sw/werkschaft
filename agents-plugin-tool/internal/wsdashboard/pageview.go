@@ -119,6 +119,10 @@ type SessionView struct {
 	Host *wslive.Host
 	// Background and Monitors are the separately reported badge counts.
 	Background, Monitors int
+	// BgExecCount, BgExecSelf, and BgExecDesc are the running agent-origin
+	// hosted ws/exec job counts across this session and its recursive
+	// descendants (from Host, memory-only).
+	BgExecCount, BgExecSelf, BgExecDesc int
 	// Git is the drawer's git handle for Project; nil shows none. Set per
 	// request from the daemon's own read (gitbadge.go), never by the
 	// builders.

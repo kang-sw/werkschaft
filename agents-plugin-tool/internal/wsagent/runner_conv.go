@@ -897,6 +897,7 @@ func (c *conv) loop() {
 			if c.compactResume && c.r.durableProcess(c.rec.Backend) {
 				c.kick()
 			}
+			c.syncHost(true)
 			c.spawnDirty = true
 			c.live.writeSnapshot()
 			if c.live.currentSlot() == nil {
