@@ -455,7 +455,15 @@
   min-width: 0;
   transition: color .14s;
 }
-.ucm2-pop-sub.is-holding {
+.ucm2-pop-sub.is-holding-run {
+  color: var(--wb-primary-ink);
+  font-weight: 600;
+}
+.ucm2-pop-sub.is-holding-ask {
+  color: #b7b4ff;
+  font-weight: 600;
+}
+.ucm2-pop-sub.is-holding-del {
   color: var(--wb-fail);
   font-weight: 600;
 }
@@ -773,30 +781,70 @@
   flex: none;
   transition: background-color .12s, color .12s, transform .08s;
 }
-.ucm2-ibtn:active:not(.is-hold-del) { transform: scale(.95); }
+.ucm2-ibtn:active:not(.is-hold) { transform: scale(.95); }
 .ucm2-ibtn svg { display: block; position: relative; z-index: 1; pointer-events: none; }
 
-/* ▶ Run Now */
+/* Shared 1.5s hold-to-confirm inside-out radial fill for ▶, ↗, × */
+.ucm2-ibtn.is-hold {
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+.ucm2-ibtn.is-hold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .12s ease-out, opacity .12s ease-out;
+}
+.ucm2-ibtn.is-hold:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 70%, transparent);
+}
+.ucm2-ibtn.is-hold.is-holding {
+  color: #141518;
+}
+.ucm2-ibtn.is-hold.is-holding::before {
+  transform: scale(1.55);
+  opacity: .95;
+  transition: transform 1500ms linear, opacity 120ms ease-out;
+}
+
+/* ▶ Run Now (1.5s hold — primary blue fill) */
 .ucm2-ibtn-run {
   background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
   color: var(--wb-primary-ink);
 }
+.ucm2-ibtn-run::before { background: #5b9bf0; }
 .ucm2-ibtn-run:hover {
   background: color-mix(in srgb, var(--wb-primary) 26%, transparent);
   color: #dce7ff;
 }
+.ucm2-ibtn-run.is-holding {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #5b9bf0 80%, transparent);
+}
 
-/* ↗ Ask Agent */
+/* ↗ Ask Agent (1.5s hold — calm violet fill) */
 .ucm2-ibtn-ask {
-  background: color-mix(in srgb, var(--wb-fg) 8%, transparent);
-  color: #d5d7dc;
+  background: color-mix(in srgb, #8b88f8 14%, transparent);
+  color: #c8c6ff;
 }
+.ucm2-ibtn-ask::before { background: #8b88f8; }
 .ucm2-ibtn-ask:hover {
-  background: color-mix(in srgb, var(--wb-fg) 15%, transparent);
-  color: var(--wb-fg);
+  background: color-mix(in srgb, #8b88f8 24%, transparent);
+  color: #e2e1ff;
+}
+.ucm2-ibtn-ask.is-holding {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b88f8 80%, transparent);
 }
 
-/* 💾 Save to template (visible ONLY when dirty) */
+/* 💾 Save to template (instant click, visible ONLY when dirty) */
 .ucm2-ibtn-save {
   display: none;
   background: color-mix(in srgb, var(--wb-ok) 16%, transparent);
@@ -810,40 +858,18 @@
   color: #b7ebd1;
 }
 
-/* × Hold-to-Delete (1.5s inside-out radial red fill) */
+/* × Hold-to-Delete (1.5s hold — danger red fill) */
 .ucm2-ibtn-del {
   background: transparent;
   color: var(--wb-dim);
-  overflow: hidden;
-  user-select: none;
-  touch-action: none;
 }
-.ucm2-ibtn-del::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--wb-fail);
-  transform: scale(0);
-  opacity: 0;
-  pointer-events: none;
-  transition: transform .12s ease-out, opacity .12s ease-out;
-}
+.ucm2-ibtn-del::before { background: var(--wb-fail); }
 .ucm2-ibtn-del:hover {
   background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
   color: var(--wb-fail);
 }
 .ucm2-ibtn-del.is-holding {
-  color: #141518;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 75%, transparent);
-}
-.ucm2-ibtn-del.is-holding::before {
-  transform: scale(1.55);
-  opacity: .95;
-  transition: transform 1500ms linear, opacity 120ms ease-out;
 }
 
 /* Line 2 & Line 3: Always-editable recessed borderless inline bars */
@@ -1045,7 +1071,7 @@
           <span>유저 커맨드</span>
           <span class="ucm2-count" data-el="pop-count">0</span>
         </span>
-        <span class="ucm2-pop-sub" data-el="pop-sub">인라인 수정 후 Enter로 실행 · × 1.5초 길게 눌러 삭제</span>
+        <span class="ucm2-pop-sub" data-el="pop-sub">▶ · ↗ · × 1.5초 길게 눌러 확인 · 💾 / ↺ 즉시 반영</span>
         <button type="button" class="ucm2-add-btn" data-act="toggle-add">+ 커맨드 등록</button>
         <button type="button" class="ucm2-close-btn" data-act="close-pop" title="닫기" aria-label="닫기">×</button>
       </div>
@@ -1116,8 +1142,25 @@
   if (!root || root.dataset.ucm2Init) return;
   root.dataset.ucm2Init = '1';
 
-  var DEFAULT_POP_SUB = '인라인 수정 후 Enter로 실행 · × 1.5초 길게 눌러 삭제';
+  var DEFAULT_POP_SUB = '▶ · ↗ · × 1.5초 길게 눌러 확인 · 💾 / ↺ 즉시 반영';
   var HOLD_MS = 1500;
+  var HOLD_META = {
+    run: {
+      hint: '즉시 실행 확인 중… 1.5초 유지',
+      cls: 'is-holding-run',
+      earlyMsg: '즉시 실행하려면 ▶ 버튼을 1.5초 길게 누르세요.'
+    },
+    ask: {
+      hint: '실행 요청 확인 중… 1.5초 유지',
+      cls: 'is-holding-ask',
+      earlyMsg: '실행 요청을 보내려면 ↗ 버튼을 1.5초 길게 누르세요.'
+    },
+    del: {
+      hint: '삭제 확인 중… 1.5초 유지',
+      cls: 'is-holding-del',
+      earlyMsg: '삭제하려면 × 버튼을 1.5초 길게 누르세요.'
+    }
+  };
 
   var SEED_COMMANDS = [
     {
@@ -1413,39 +1456,49 @@
   function cancelHold(notifyEarly) {
     if (!holdState) return;
     var elapsed = Date.now() - holdState.startedAt;
+    var meta = HOLD_META[holdState.act];
     clearTimeout(holdState.timer);
     if (holdState.btn) holdState.btn.classList.remove('is-holding');
     elPopSub.textContent = DEFAULT_POP_SUB;
-    elPopSub.classList.remove('is-holding');
+    elPopSub.classList.remove('is-holding-run', 'is-holding-ask', 'is-holding-del');
     var completed = holdState.completed;
     holdState = null;
-    if (notifyEarly && !completed && elapsed > 40 && elapsed < HOLD_MS) {
-      showToast('삭제하려면 × 버튼을 1.5초 길게 누르세요.', 'warn');
+    if (notifyEarly && !completed && elapsed > 40 && elapsed < HOLD_MS && meta) {
+      showToast(meta.earlyMsg, 'warn');
     }
   }
 
-  function startHold(btn, id) {
+  function startHold(btn, act, id) {
     if (holdState) cancelHold(false);
     var cmd = getCmd(id);
-    if (!cmd) return;
+    var meta = HOLD_META[act];
+    if (!cmd || !meta) return;
     btn.classList.add('is-holding');
-    elPopSub.textContent = '삭제 확인 중… 1.5초 유지 ("' + cmd.label + '")';
-    elPopSub.classList.add('is-holding');
+    elPopSub.textContent = meta.hint + ' ("' + cmd.label + '")';
+    elPopSub.classList.remove('is-holding-run', 'is-holding-ask', 'is-holding-del');
+    elPopSub.classList.add(meta.cls);
     holdState = {
       btn: btn,
+      act: act,
       id: id,
       startedAt: Date.now(),
       completed: false,
       timer: setTimeout(function () {
-        if (!holdState || holdState.id !== id) return;
+        if (!holdState || holdState.id !== id || holdState.act !== act) return;
         holdState.completed = true;
         var target = getCmd(id);
         cancelHold(false);
         if (!target) return;
-        state.commands = state.commands.filter(function (c) { return c.id !== id; });
-        delete state.drafts[id];
-        render();
-        showToast('"' + target.label + '" 커맨드를 삭제했습니다.', 'fail');
+        if (act === 'run') {
+          runLocal(target);
+        } else if (act === 'ask') {
+          askAgent(target);
+        } else if (act === 'del') {
+          state.commands = state.commands.filter(function (c) { return c.id !== id; });
+          delete state.drafts[id];
+          render();
+          showToast('"' + target.label + '" 커맨드를 삭제했습니다.', 'fail');
+        }
       }, HOLD_MS)
     };
   }
@@ -1469,16 +1522,16 @@
           (cmd.cwd ? '<span class="ucm2-cwd" title="작업 폴더: ' + esc(cmd.cwd) + '">' + esc(cmd.cwd) + '</span>' : '') +
         '</div>' +
         '<div class="ucm2-acts">' +
-          '<button type="button" class="ucm2-ibtn ucm2-ibtn-run" data-act="run-cmd" data-id="' + esc(cmd.id) + '" title="즉시 실행 (내 셸에서 바로 실행)" aria-label="즉시 실행">' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-run is-hold" data-hold-act="run" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 즉시 실행 (내 셸에서 바로 실행)" aria-label="1.5초 길게 눌러 즉시 실행">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>' +
           '</button>' +
-          '<button type="button" class="ucm2-ibtn ucm2-ibtn-ask" data-act="ask-cmd" data-id="' + esc(cmd.id) + '" title="에이전트에게 실행 요청 (커맨드 + 프롬프트 전달)" aria-label="에이전트에게 실행 요청">' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-ask is-hold" data-hold-act="ask" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 에이전트에게 실행 요청 (커맨드 + 프롬프트 전달)" aria-label="1.5초 길게 눌러 에이전트에게 실행 요청">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg>' +
           '</button>' +
           '<button type="button" class="ucm2-ibtn ucm2-ibtn-save" data-act="save-tpl" data-id="' + esc(cmd.id) + '" title="수정된 내용을 템플릿에 영구 반영" aria-label="템플릿에 영구 반영">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' +
           '</button>' +
-          '<button type="button" class="ucm2-ibtn ucm2-ibtn-del is-hold-del" data-hold-del="' + esc(cmd.id) + '" title="삭제 (1.5초 길게 누르기)" aria-label="삭제 (1.5초 길게 누르기)">' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-del is-hold" data-hold-act="del" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 삭제" aria-label="1.5초 길게 눌러 삭제">' +
             '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
           '</button>' +
         '</div>' +
@@ -1487,7 +1540,7 @@
       /* Line 2: Always-Editable Command Bar + Right-side ↺ Revert */
       '<div class="ucm2-inline-bar ' + (cmdDirty ? 'is-dirty' : '') + '" data-bar="command">' +
         '<span class="ucm2-glyph" aria-hidden="true">$</span>' +
-        '<input type="text" class="ucm2-inline-input is-cmd" data-inline-field="command" data-id="' + esc(cmd.id) + '" value="' + esc(draft.command) + '" spellcheck="false" autocomplete="off" title="실행 명령어 (Enter로 즉시 실행)" aria-label="실행 명령어">' +
+        '<input type="text" class="ucm2-inline-input is-cmd" data-inline-field="command" data-id="' + esc(cmd.id) + '" value="' + esc(draft.command) + '" spellcheck="false" autocomplete="off" title="실행 명령어 (Enter 시 ▶ 버튼으로 포커스 이동)" aria-label="실행 명령어">' +
         '<button type="button" class="ucm2-rev-btn ' + (cmdDirty ? 'is-dirty' : '') + '" data-act="revert-cmd" data-id="' + esc(cmd.id) + '" title="임시 수정 되돌리기 (템플릿 원복)" aria-label="명령어 되돌리기"' + (cmdDirty ? '' : ' disabled') + '>' +
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>' +
         '</button>' +
@@ -1498,7 +1551,7 @@
         '<span class="ucm2-glyph is-prompt" aria-hidden="true">' +
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' +
         '</span>' +
-        '<input type="text" class="ucm2-inline-input is-prompt" data-inline-field="prompt" data-id="' + esc(cmd.id) + '" value="' + esc(draft.prompt) + '" placeholder="에이전트에게 함께 보낼 프롬프트 입력 (선택)..." autocomplete="off" title="에이전트 실행 요청 프롬프트 (Enter로 실행 요청)" aria-label="에이전트 실행 요청 프롬프트">' +
+        '<input type="text" class="ucm2-inline-input is-prompt" data-inline-field="prompt" data-id="' + esc(cmd.id) + '" value="' + esc(draft.prompt) + '" placeholder="에이전트에게 함께 보낼 프롬프트 입력 (선택)..." autocomplete="off" title="에이전트 실행 요청 프롬프트 (Enter 시 ↗ 버튼으로 포커스 이동)" aria-label="에이전트 실행 요청 프롬프트">' +
         '<button type="button" class="ucm2-rev-btn ' + (promptDirty ? 'is-dirty' : '') + '" data-act="revert-prompt" data-id="' + esc(cmd.id) + '" title="프롬프트 임시 수정 되돌리기" aria-label="프롬프트 되돌리기"' + (promptDirty ? '' : ' disabled') + '>' +
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>' +
         '</button>' +
@@ -1569,13 +1622,13 @@
     render();
   }
 
-  /* Hold-to-delete pointer & keyboard handlers */
+  /* Hold-to-confirm (1.5s) pointer & keyboard handlers for ▶, ↗, × */
   root.addEventListener('pointerdown', function (ev) {
     if (ev.button !== 0) return;
-    var delBtn = ev.target.closest('[data-hold-del]');
-    if (!delBtn) return;
+    var holdBtn = ev.target.closest('[data-hold-act]');
+    if (!holdBtn) return;
     ev.preventDefault();
-    startHold(delBtn, delBtn.getAttribute('data-hold-del'));
+    startHold(holdBtn, holdBtn.getAttribute('data-hold-act'), holdBtn.getAttribute('data-id'));
   });
   root.addEventListener('pointerup', function () { cancelHold(true); });
   root.addEventListener('pointercancel', function () { cancelHold(false); });
@@ -1583,20 +1636,20 @@
     if (holdState && ev.target === holdState.btn) cancelHold(false);
   }, true);
   root.addEventListener('keydown', function (ev) {
-    var delBtn = ev.target.closest('[data-hold-del]');
-    if (delBtn && (ev.key === ' ' || ev.key === 'Enter')) {
+    var holdBtn = ev.target.closest('[data-hold-act]');
+    if (holdBtn && (ev.key === ' ' || ev.key === 'Enter')) {
       ev.preventDefault();
-      if (!ev.repeat) startHold(delBtn, delBtn.getAttribute('data-hold-del'));
+      if (!ev.repeat) startHold(holdBtn, holdBtn.getAttribute('data-hold-act'), holdBtn.getAttribute('data-id'));
       return;
     }
     var field = ev.target.getAttribute && ev.target.getAttribute('data-inline-field');
     if (field && ev.key === 'Enter') {
       ev.preventDefault();
       var id = ev.target.getAttribute('data-id');
-      var cmd = getCmd(id);
-      if (!cmd) return;
-      if (field === 'command') runLocal(cmd);
-      else if (field === 'prompt') askAgent(cmd);
+      var targetAct = field === 'command' ? 'run' : 'ask';
+      var targetBtn = root.querySelector('[data-cmd-card="' + id + '"] [data-hold-act="' + targetAct + '"]');
+      if (targetBtn) targetBtn.focus();
+      showToast('▶ / ↗ 버튼을 1.5초 길게 눌러 실행하세요.', 'warn');
     }
   });
   root.addEventListener('keyup', function (ev) {
@@ -1662,11 +1715,7 @@
     if (!cmd) return;
     var draft = ensureDraft(cmd);
 
-    if (act === 'run-cmd') {
-      runLocal(cmd);
-    } else if (act === 'ask-cmd') {
-      askAgent(cmd);
-    } else if (act === 'save-tpl') {
+    if (act === 'save-tpl') {
       persistDraft(cmd, draft);
       syncCardDirtyDOM(id);
       showToast('"' + cmd.label + '" 수정 내용을 템플릿에 영구 반영했습니다.');
