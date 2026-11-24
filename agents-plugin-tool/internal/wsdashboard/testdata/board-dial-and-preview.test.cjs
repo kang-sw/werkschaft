@@ -261,6 +261,10 @@ function buildDialContext(cardSpecs, opts = {}) {
         hd.appendChild(badge);
       }
       el.appendChild(hd);
+      if (spec.pvDiff) {
+        const pv = new dom.El('div', ['pv-diff']);
+        el.appendChild(pv);
+      }
     } else {
       el.attrs['data-topic'] = spec.topic;
       if (spec.state) el.attrs['data-state'] = spec.state;
@@ -337,7 +341,7 @@ function buildDialContext(cardSpecs, opts = {}) {
   return { dom, grid, bcol, board, cards, ctx, setCur: c => { curCard = c; } };
 }
 
-test('dial sliding window and tier math for <=18 and >18 cards', () => {
+test('dial sliding window, tier, and vernier vtier math for <=18 and >18 cards', () => {
   const { ctx } = buildDialContext([{ topic: 't1' }, { topic: 't2' }]);
   const plain = v => JSON.parse(JSON.stringify(v));
   assert.deepEqual(plain(ctx.boardDialWindow(5, 2, 18)), { start: 0, end: 5, moreUp: false, moreDown: false });
@@ -348,9 +352,18 @@ test('dial sliding window and tier math for <=18 and >18 cards', () => {
   assert.equal(ctx.boardDialTier(4, 5), 1);
   assert.equal(ctx.boardDialTier(7, 5), 2);
   assert.equal(ctx.boardDialTier(1, 5), 3);
+  assert.equal(ctx.boardDialVtier(0), 0);
+  assert.equal(ctx.boardDialVtier(0.49), 0);
+  assert.equal(ctx.boardDialVtier(0.5), 1);
+  assert.equal(ctx.boardDialVtier(-1.4), 1);
+  assert.equal(ctx.boardDialVtier(2), 2);
+  assert.equal(ctx.boardDialVtier(3), 3);
+  assert.equal(ctx.boardDialVtier(4), 4);
+  assert.equal(ctx.boardDialVtier(5), 5);
+  assert.equal(ctx.boardDialVtier(-9), 5);
 });
 
-test('dial never mounts on unbounded .dgrid.board and costs 0 writes on unchanged sync', () => {
+test('dial rotary vernier structure, card-kind SVGs, smooth scroll, and 0-write unchanged sync', () => {
   const unbounded = buildDialContext([{ topic: 'a' }, { topic: 'b' }], { bounded: false, gridClass: 'board' });
   assert.equal(unbounded.dom.html.hasAttribute('data-board-dial'), false);
   assert.equal(unbounded.grid.children.length, 1);
@@ -359,13 +372,26 @@ test('dial never mounts on unbounded .dgrid.board and costs 0 writes on unchange
     { topic: 'a', title: 'Alpha Human Title', state: 'discussing', openAsks: true },
     { topic: 'b', openAsks: false, bodyPolicyCard: true, held: true },
     { topic: 'c', closed: true },
-    { card: 'term-1', title: 'Terminal', kind: 'terminal', badge: 'TERM' }
+    { card: 'term-1', title: 'Terminal', kind: 'terminal', badge: 'TERM' },
+    { card: 'file-1', title: 'README.md', kind: 'preview', badge: 'MD' },
+    { card: 'diff-1', title: 'patch.go', kind: 'preview', badge: 'CODE', pvDiff: true },
+    { card: 'web-1', title: 'Docs', kind: 'web', badge: 'WEB' },
+    { card: 'dir-1', title: 'Workspace', kind: 'explorer', badge: 'FILES' },
+    { card: 'misc-1', title: 'Scratch', kind: 'note', badge: 'NOTE' }
   ]);
   assert.equal(bounded.dom.html.hasAttribute('data-board-dial'), true);
   const dial = bounded.grid.children[1];
   assert.equal(dial.id, 'bdial');
-  const dots = dial.firstChild.children;
-  assert.equal(dots.length, 4);
+  assert.ok(dial.querySelector('.d-board-dial-reticle'), 'fixed center reticle mounted');
+  const mask = dial.querySelector('.d-board-dial-mask');
+  const track = dial.querySelector('.d-board-dial-track');
+  assert.ok(mask && track && track.parentNode === mask, 'masked rotary track mounted');
+  const dots = track.children;
+  assert.equal(dots.length, 9);
+  // GPU translate3d starts at active 0 and slots sit at idx * 22px
+  assert.equal(track.style.transform, 'translate3d(0, 0.00px, 0)');
+  assert.equal(dots[0].style.top, '0px');
+  assert.equal(dots[3].style.top, '66px');
   // Human titles from .tname (topic) and .bc-nm (bcard)
   assert.equal(dots[0].getAttribute('aria-label'), 'Alpha Human Title');
   assert.equal(dots[1].getAttribute('aria-label'), 'b');
@@ -376,40 +402,70 @@ test('dial never mounts on unbounded .dgrid.board and costs 0 writes on unchange
   assert.equal(dots[1].getAttribute('data-held'), '1');
   assert.equal(dots[2].getAttribute('data-closed'), '1');
   assert.equal(dots[3].getAttribute('data-kind'), 'card');
+  // Distinct SVG icon classification across all board card kinds
+  assert.deepEqual(
+    dots.map(d => d.getAttribute('data-icon')),
+    ['topic', 'topic', 'closed', 'terminal', 'file', 'diff', 'web', 'explorer', 'note']
+  );
+  for (const d of dots) {
+    assert.ok(d.querySelector('.d-board-dial-ic svg'), 'each slot renders an inline SVG icon');
+    assert.ok(d.querySelector('.d-board-dial-tick'), 'each slot carries an outer vernier tick');
+  }
+  assert.deepEqual(
+    dots.map(d => d.getAttribute('data-vtier')),
+    ['0', '1', '2', '3', '4', '5', '5', '5', '5']
+  );
 
-  // Hover tooltip renders human title + state/kind badge
+  // Hover tooltip renders #index + human title + state/kind badge
   dial.dispatch('pointerover', { target: dots[0] });
   const tip = bounded.dom.body.children.find(ch => ch.cls.has('d-board-dial-tip'));
   assert.ok(tip && !tip.hidden);
+  assert.equal(tip.querySelector('.d-board-dial-tip-idx').textContent, '#01');
   assert.equal(tip.querySelector('.d-board-dial-tip-title').textContent, 'Alpha Human Title');
   assert.equal(tip.querySelector('.d-board-dial-tip-state').getAttribute('data-state'), 'discuss');
   dial.dispatch('pointerover', { target: dots[3] });
+  assert.equal(tip.querySelector('.d-board-dial-tip-idx').textContent, '#04');
   assert.equal(tip.querySelector('.d-board-dial-tip-title').textContent, 'Terminal');
   assert.equal(tip.querySelector('.d-board-dial-tip-state').textContent, 'TERM');
   dial.dispatch('pointerleave', {});
   assert.equal(tip.hidden, true);
 
-  // Performance rule 6: unchanged boardDialSync writes 0 DOM attributes and queues 0 idle rAF
+  // Smooth fractional scroll sync updates translate3d and vtiers with zero layout reads
+  bounded.dom.stats.reads = 0;
+  bounded.dom.stats.rafs = 0;
+  bounded.ctx.boardDialScroll(2.5);
+  assert.equal(bounded.dom.stats.reads, 0, 'boardDialScroll performs 0 layout reads');
+  assert.equal(bounded.dom.stats.rafs, 0, 'boardDialScroll queues 0 idle rAF');
+  assert.equal(track.style.transform, 'translate3d(0, -55.00px, 0)');
+  assert.equal(dots[2].getAttribute('data-vtier'), '1');
+  assert.equal(dots[3].getAttribute('data-vtier'), '1');
+  assert.equal(dots[0].getAttribute('data-vtier'), '3');
+
+  // Re-sync back to active 0, then verify unchanged boardDialSync writes 0 DOM attributes and 0 idle rAF
+  bounded.ctx.boardDialSync();
   bounded.dom.stats.writes = 0;
   bounded.dom.stats.rafs = 0;
   bounded.ctx.boardDialSync();
   assert.equal(bounded.dom.stats.writes, 0);
   assert.equal(bounded.dom.stats.rafs, 0);
 
-  // O(1) boardDialMark updates only adjacent tiers, zero DOM rebuild
+  // O(1) boardDialMark updates only adjacent tiers/vtiers + translate3d, zero DOM rebuild
   bounded.dom.stats.writes = 0;
   bounded.ctx.boardDialMark(bounded.cards[1]);
-  assert.ok(bounded.dom.stats.writes > 0 && bounded.dom.stats.writes <= 10);
+  assert.ok(bounded.dom.stats.writes > 0 && bounded.dom.stats.writes <= 16);
   assert.equal(dots[1].getAttribute('data-tier'), '0');
+  assert.equal(dots[1].getAttribute('data-vtier'), '0');
   assert.equal(dots[1].getAttribute('aria-current'), 'true');
   assert.equal(dots[0].getAttribute('data-tier'), '1');
+  assert.equal(dots[0].getAttribute('data-vtier'), '1');
+  assert.equal(track.style.transform, 'translate3d(0, -22.00px, 0)');
 });
 
 test('dial scrub >18 freezes window, throttles aligns to 1 rAF/frame, defers flush to pointerup', () => {
   const specs = Array.from({ length: 24 }, (_, i) => ({ topic: 't' + i }));
-  const { dom, grid, ctx } = buildDialContext(specs, { active: 10, pending: true });
+  const { dom, grid } = buildDialContext(specs, { active: 10, pending: true });
   const dial = grid.children[1];
-  const dots = dial.firstChild.children;
+  const dots = dial.querySelector('.d-board-dial-track').children;
   assert.equal(dots.length, 18);
   const initialFirstIdx = dots[0].getAttribute('data-idx');
 
@@ -418,8 +474,8 @@ test('dial scrub >18 freezes window, throttles aligns to 1 rAF/frame, defers flu
   dom.stats.selects.length = 0;
 
   dial.dispatch('pointerdown', { pointerId: 1, button: 0, clientY: 100, target: dots[9] });
-  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 114, preventDefault() {} });
-  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 142, preventDefault() {} });
+  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 116, preventDefault() {} });
+  dom.doc.dispatch('pointermove', { pointerId: 1, clientY: 148, preventDefault() {} });
   assert.equal(dom.stats.rafs, 1, 'at most 1 rAF queued across multiple moves in a frame');
   assert.equal(dom.stats.flushes, 0, 'boardFlushViewed deferred while scrubbing');
   assert.equal(dots[0].getAttribute('data-idx'), initialFirstIdx, 'sliding window frozen during scrub');

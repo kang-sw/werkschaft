@@ -1379,13 +1379,13 @@
   // (or, once the user widens the board, the unresized default fits Band 4).
   function canFitFourCol(vw, tabs) {
     if (tabs || !(vw >= G.C.WIDE)) return false;
-    var stageW = vw - 32 - 356, gap = 16;
+    var stageW = vw - 32 - 348, gap = 8;
     var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
     var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
     function fitMetrics(bw, cw) {
       var gridW, boardW;
       if (worktree) {
-        gridW = bw || 1292;
+        gridW = bw || 1300;
         boardW = (gridW - gap) * 7 / 12;
       } else if (!split) {
         boardW = bw || 900;
@@ -1394,7 +1394,7 @@
         boardW = bw;
         gridW = (cw || (bw * 5 / 7)) + gap + boardW;
       } else {
-        gridW = 1292;
+        gridW = 1300;
         boardW = cw ? (gridW - gap - Math.max(CONVW_MIN, Math.min(cw, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
       }
       return stageW - gridW - gap >= boardW;

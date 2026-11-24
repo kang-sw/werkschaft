@@ -1300,6 +1300,15 @@
     if (needSlide) {
       freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list });
     }
+    if (typeof boardDialScroll === "function" && nextNode) {
+      var yCur = freePos.get(nextNode);
+      if (yCur !== undefined) {
+        var curTopY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
+        var span = Math.max(1, freeCachedHeight(nextNode) + FREE_CARD_GAP);
+        var frac = Math.max(0, Math.min(0.999, (curTopY - yCur) / span));
+        boardDialScroll(Math.max(0, Math.min(list.length - 1, nextAnchor + frac)));
+      }
+    }
     freeFlushScrolledOutHeld();
   }
   function freeIdleRecenter() {

@@ -31,10 +31,10 @@ func TestPinnedColumnFillsTheWindowRightOfTheBoard(t *testing.T) {
 }`,
 		".dash { --tkml: 0px; }",
 		".dash.index { --tkmaxw: 1080px; --tkml: auto; }",
-		":root { --pbw: calc(1680px - 32px - 356px); }",
+		":root { --pbw: calc(1680px - 32px - 348px); }",
 		".dash { --stagew: var(--pbw); }",
 		".dash.board { --pbw: 900px; }",
-		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 852px)), 100% - 652px)) minmax(280px, 1fr); }`,
+		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }`,
 		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),`,
 	} {
 		if !strings.Contains(css, want) {
@@ -110,7 +110,7 @@ func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 // canFitFourCol + dashboard.js galMode + layout hook over WsGallery.layout)
 // under node: Bands 1-3 keep narrow/fused gallery (no overlay rail from
 // 1600px); Band 4 opens the 4th column iff !tabs && vw >= 1600 &&
-// spareRight >= boardW (e.g. >= 2441px on default 5:7 live pages, >= 2204px
+// spareRight >= boardW (e.g. >= 2442px on default 5:7 live pages, >= 2188px
 // on 900px board-first pages).
 func TestGalleryLayoutModes(t *testing.T) {
 	js := mustAsset(t, "dashboard.js")
@@ -158,16 +158,16 @@ check("Band 1 1599px, a page: the narrow view", at(1599, 1, false), ["narrow", f
 check("Band 1 1599px, a drag with no page: the narrow rail", at(1599, 0, true), ["narrow", false, false]);
 check("Band 2 1640px, a page: fused narrow, no overlay rail", at(1640, 1, false), ["narrow", false, false]);
 check("Band 3 1920px, a page: fused narrow, no overlay rail", at(1920, 1, false), ["narrow", false, false]);
-check("Band 3 2440px live default, a page: still Band 3 (744 < 744.33)", at(2440, 1, false), ["narrow", false, false]);
-check("Band 4 2441px live default, no page: idle empty slot in Col 3", at(2441, 0, false), ["empty", false, false]);
+check("Band 3 2441px live default, a page: still Band 3 (753 < 753.67)", at(2441, 1, false), ["narrow", false, false]);
+check("Band 4 2442px live default, no page: idle empty slot in Col 3", at(2442, 0, false), ["empty", false, false]);
 check("Band 4 2560px live default, a page: 4-col gallery with rail docked", at(2560, 1, false), ["col", true, false]);
 check("Band 4 2560px, a drag with no page: drag slot in Col 3, no pincol", at(2560, 0, true), ["drag", false, false]);
 opt.split = null;
-check("Band 3 2203px board-first, no page: still fused narrow", at(2203, 0, false), [null, false, false]);
-check("Band 4 2204px board-first, no page: idle empty slot in Col 3", at(2204, 0, false), ["empty", false, false]);
+check("Band 3 2187px board-first, no page: still fused narrow", at(2187, 0, false), [null, false, false]);
+check("Band 4 2188px board-first, no page: idle empty slot in Col 3", at(2188, 0, false), ["empty", false, false]);
 board = { closest: function (selector) { return selector === ".dgrid.worktree" ? {} : null; } };
-check("worktree 2204px keeps gallery fused while its 744px board would not fit", at(2204, 1, false), ["narrow", false, false]);
-check("worktree 2441px fits the board beside its gallery", at(2441, 1, false), ["col", true, false]);
+check("worktree 2188px keeps gallery fused while its 753.67px board would not fit", at(2188, 1, false), ["narrow", false, false]);
+check("worktree 2442px fits the board beside its gallery", at(2442, 1, false), ["col", true, false]);
 board = null;
 opt.split = {};
 check("tabs at 2560px, a page: the narrow view", at(2560, 1, false, true), ["narrow", false, false]);
@@ -207,17 +207,21 @@ process.stdout.write(bad.join("\n"));
 func TestConversationSplitHandle(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
-		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 16px; }",
+		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 8px; }",
 		":root[data-convow] .dgrid.live { --dgrid-cols: minmax(320px, min(var(--convow), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }",
-		".dgrid.live > .dcv-edge { display: none; grid-area: board; justify-self: start; position: relative; z-index: 2; width: 9px; margin-left: -12px; cursor: col-resize; touch-action: none; }",
+		".dgrid.live > .dcv-edge { display: none; grid-area: board; justify-self: start; position: relative; z-index: 2; width: 8px; margin-left: -8px; cursor: col-resize; touch-action: none; }",
 		`  .dgrid.live[data-layout="split"] > .dcv-edge { display: block; }`,
 		`  .dgrid.live:not([data-layout="tabs"]) > .dcv-edge { display: block; }`,
-		`.bp-edge::after, .dcv-edge::after { content: "";`,
-		".bp-edge:hover::after, .bp-edge.drag::after, .dcv-edge:hover::after, .dcv-edge.drag::after { background: var(--wb-primary); }",
+		`.bp-edge { position: absolute; top: 0; bottom: 0; left: -8px; width: 8px; cursor: col-resize; touch-action: none; z-index: 2; outline: none; }`,
+		`.bp-edge::after, .dcv-edge::after { content: ""; position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px; transform: translateX(-50%); border-radius: 999px; background: transparent; transition: background .14s ease; }`,
+		".bp-edge:hover::after, .bp-edge.drag::after, .bp-edge:focus-visible::after, .dcv-edge:hover::after, .dcv-edge.drag::after, .dcv-edge:focus-visible::after { background: var(--wb-primary); }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("dashboard.css lacks %q", want)
 		}
+	}
+	if strings.Contains(css, ":root[data-board-dial] .dgrid:is(.live, .history, .worktree) > #bcol { padding-right: 26px; }") {
+		t.Errorf("dashboard.css still reserves 26px dead zone on #bcol for the board dial")
 	}
 	if want := `split: grid && grid.classList.contains("live") ? grid : null,`; !strings.Contains(mustAsset(t, "dashboard.js"), want) {
 		t.Errorf("dashboard.js lacks %q", want)
@@ -231,7 +235,7 @@ func TestConversationSplitHandle(t *testing.T) {
 // pinned column on the live page: once a board width is set (data-boardw,
 // the board's own column there, cards.js TestColumnGrabsPush), the board's
 // cell is the conversation's width (--cvw: --convow, else the 5:7 share of
-// the board), the grid's 16px gap and the board's, clamped as the cell was,
+// the board), the grid's 8px gap and the board's, clamped as the cell was,
 // so each handle moves only the panel on its left and the column takes the
 // difference; the grid gives the conversation its width and the board the
 // rest. Other pages keep --boardw as the whole cell.
@@ -239,9 +243,9 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		".dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
-		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }`,
+		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }`,
 		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
-		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 16px; }",
+		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 8px; }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("dashboard.css lacks %q", want)
