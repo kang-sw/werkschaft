@@ -499,19 +499,6 @@
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
     },
-    "261124-feat-ws-dashboard-board-designated-y-virtual-scroll": {
-      "registered_at": "2026-11-24T00:49:52Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "active",
-        "touched_at": "2026-11-24T02:35:20Z",
-        "impl": {
-          "branch": "impl/develop/film-fifty-rope"
-        }
-      }
-    },
     "261124-feat-ws-managed-compaction": {
       "registered_at": "2026-11-24T05:12:49Z"
     }
