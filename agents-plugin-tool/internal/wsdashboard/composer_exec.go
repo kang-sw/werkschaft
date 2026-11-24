@@ -78,6 +78,8 @@ type ComposerLaunch struct {
 	// Root, when set, is the worktree a user command's line was read for: the
 	// launch is refused when the lead's bound worktree is another by then.
 	Root string
+	// Cwd, when set, is a worktree-fenced working directory inside Root.
+	Cwd  string
 	Line string
 	// Window is the wait before conversion.
 	Window time.Duration
@@ -304,12 +306,20 @@ type composerSub struct {
 	// root is the worktree the slot's line was read for (empty for a typed
 	// line): the launch refuses to run it in another.
 	root string
+	// cwd is the validated working directory inside root (empty for root).
+	cwd string
 }
 
-// composerSlot names the user command revision a submission ran.
+// composerSlot names the user command revision and any one-off overrides a
+// submission ran.
 type composerSlot struct {
-	id, label string
-	revision  int64
+	source       string
+	id, label    string
+	revision     int64
+	hasLine      bool
+	lineOverride string
+	hasCwd       bool
+	cwdOverride  string
 }
 
 var composerSubmissionID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
@@ -408,12 +418,16 @@ func (d *Daemon) handleComposerExec(w http.ResponseWriter, r *http.Request, repl
 // a non-cross-site fetch for reads, a hosted session, a bound service, and the
 // live open-lead authority. It answers the refusal itself and returns ok false.
 func (d *Daemon) composerGate(w http.ResponseWriter, r *http.Request, replyID string) (svc ComposerExecService, gen uint64, write, ok bool) {
+	return d.composerGateMethod(w, r, replyID, false)
+}
+
+func (d *Daemon) composerGateMethod(w http.ResponseWriter, r *http.Request, replyID string, allowPut bool) (svc ComposerExecService, gen uint64, write, ok bool) {
 	local, own := TrustedWrite(r)
 	if !local {
 		http.NotFound(w, r)
 		return nil, 0, false, false
 	}
-	write = r.Method == http.MethodPost
+	write = r.Method == http.MethodPost || (allowPut && r.Method == http.MethodPut)
 	if write && !own {
 		http.Error(w, "cross-origin request refused", http.StatusForbidden)
 		return nil, 0, false, false
@@ -552,9 +566,17 @@ func (d *Daemon) composerAnswer(w http.ResponseWriter, svc ComposerExecService, 
 		sub.mu.Lock()
 		same := sub.line == line
 		if slot != nil {
-			// A click maps to its card by the command revision it named, not by
-			// the command's current text (the command may have changed since).
-			same = sub.slot != nil && sub.slot.id == slot.id && sub.slot.revision == slot.revision
+			// A click maps to its card by the exact scope, command revision,
+			// and one-off overrides it named, not by the command's current text
+			// (the command may have changed since).
+			same = sub.slot != nil &&
+				sub.slot.source == slot.source &&
+				sub.slot.id == slot.id &&
+				sub.slot.revision == slot.revision &&
+				sub.slot.hasLine == slot.hasLine &&
+				sub.slot.lineOverride == slot.lineOverride &&
+				sub.slot.hasCwd == slot.hasCwd &&
+				sub.slot.cwdOverride == slot.cwdOverride
 		} else if sub.slot != nil {
 			same = false
 		}
@@ -624,7 +646,7 @@ func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool,
 // the read and the claim, which does not exclude registry writers; it makes a
 // second request with the same id wait for the first and get the first one's
 // card instead of its own refusal.
-func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot, resolve func() (line, root string, ok bool)) (*composerSub, composerAdmission) {
+func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot, resolve func() (line, root, cwd string, ok bool)) (*composerSub, composerAdmission) {
 	key := replyID + "\x00" + id
 	c := &d.composer
 	c.ensure()
@@ -639,10 +661,10 @@ func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry b
 	if _, ok := c.fence[key]; ok || retry || !c.currentLocked(token) {
 		return nil, composerUnknown
 	}
-	var root string
+	var root, cwd string
 	if resolve != nil {
 		var ok bool
-		if line, root, ok = resolve(); !ok {
+		if line, root, cwd, ok = resolve(); !ok {
 			return nil, composerRefused
 		}
 	}
@@ -655,7 +677,7 @@ func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry b
 		c.fenceQ = c.fenceQ[1:]
 	}
 	c.wg.Add(1)
-	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen, slot: slot, root: root}
+	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen, slot: slot, root: root, cwd: cwd}
 	c.subs[key] = sub
 	c.order[replyID] = append(c.order[replyID], key)
 	// Keep the newest cards; the fence outlives the card.
@@ -734,7 +756,7 @@ func (d *Daemon) composerFind(replyID, id string) *composerSub {
 // in the background and the dashboard hands nothing more, whatever state the
 // job reached since.
 func (d *Daemon) composerRun(svc ComposerExecService, sub *composerSub) {
-	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Gen: sub.gen, Root: sub.root, Line: sub.line, Window: ComposerWindow})
+	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Gen: sub.gen, Root: sub.root, Cwd: sub.cwd, Line: sub.line, Window: ComposerWindow})
 	sub.mu.Lock()
 	if job.ExecID == "" {
 		sub.phase, sub.err = "refused", composerErrorText(err)

@@ -180,7 +180,7 @@
     xhBindGroup(xhGroup);
     if (window.ResizeObserver) {
       xhRo = new ResizeObserver(function () { xhLayout(); });
-      [composer.querySelector(".cbadges"), $("ibadge"), $("sbadge"), $("bgbadge"), $("monbadge"), $("hbadge")].forEach(function (n) { if (n) xhRo.observe(n); });
+      [composer.querySelector(".cbadges"), $("ibadge"), $("sbadge"), $("bgbadge"), $("monbadge"), $("hbadge"), $("ucmdbadge")].forEach(function (n) { if (n) xhRo.observe(n); });
     }
     if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(function () { xhLayout(); });
     return xhGroup;
@@ -310,7 +310,7 @@
     xhAgg.hidden = false;
     // Read phase: the one width snapshot.
     var cb = composer.querySelector(".cbadges"), ib = $("ibadge"), sib = 0, cnt = 0;
-    [$("bgbadge"), $("monbadge"), $("sbadge"), $("hbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
+    [$("bgbadge"), $("monbadge"), $("sbadge"), $("hbadge"), $("ucmdbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
     var avail = (cb ? cb.clientWidth : composer.clientWidth) - (ib ? ib.offsetWidth + 8 : 0) - sib - cnt * XH_GAP;
     var w = xhSlots.map(function (s) { return s.el.offsetWidth; });
     var mw = quiet ? 0 : xhMore.offsetWidth, narrow = composer.clientWidth <= XH_NARROW_PX;

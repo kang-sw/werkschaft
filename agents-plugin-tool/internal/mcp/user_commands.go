@@ -110,7 +110,13 @@ func (s *Server) handleUserCommandTool(id json.RawMessage, name string, args map
 		return toolTextResponse(id, fmt.Sprintf("id: %s\nstatus: unregistered\n", commandID), nil)
 	}
 	in := wsusercmd.Input{ID: commandID}
-	for key, dst := range map[string]*string{"label": &in.Label, "description": &in.Description, "command": &in.Line} {
+	for key, dst := range map[string]*string{
+		"label":       &in.Label,
+		"description": &in.Description,
+		"command":     &in.Line,
+		"prompt":      &in.Prompt,
+		"cwd":         &in.Cwd,
+	} {
 		if *dst, err = text(key); err != nil {
 			return toolTextResponse(id, "", err)
 		}
@@ -127,12 +133,14 @@ func (s *Server) handleUserCommandTool(id json.RawMessage, name string, args map
 
 func userCommandTools() []map[string]any {
 	return []map[string]any{
-		{"name": registerUserCommandTool, "description": fmt.Sprintf("Register a bash command line as a button the user can click in this session's dashboard chat, so they need not type `!<line>`. Hosted lead sessions only. Upserts by id (a stable id you choose: letters, digits, '.', '_', '-', at most 64) and returns the stored revision; registering the same definition again changes nothing. The click runs exactly the displayed line in your worktree root as the user's own one-use approval; its result reaches your next turn as a receipt without starting or steering one, and a command still running after 10 s continues as an ordinary exec job. The line is shown to the user as written: keep it self-explanatory. Limits: %d commands per worktree, label at most %d characters, description at most %d characters, command at most 4 KiB; the commands are kept for this session and worktree across restarts.", wsusercmd.MaxPerScope, wsusercmd.MaxLabel, wsusercmd.MaxDescription), "inputSchema": objectSchema(map[string]any{
+		{"name": registerUserCommandTool, "description": fmt.Sprintf("Register a bash command line as a reusable command card in this session's dashboard chat, so the user can run it directly or ask the agent to run it with an optional prompt. Hosted lead sessions only. Upserts by id (a stable id you choose: letters, digits, '.', '_', '-', at most 64) and returns the stored revision; registering the same definition again changes nothing. Running executes the displayed line in your worktree root (or optional subdirectory cwd inside the worktree) as the user's own one-use approval; its result reaches your next turn as a receipt without starting or steering one, and a command still running after 10 s continues as an ordinary exec job. The line is shown to the user as written: keep it self-explanatory. Limits: %d commands per worktree, label at most %d characters, description at most %d characters, command and prompt at most 4 KiB each, cwd at most %d bytes inside the worktree root; the commands are kept for this session and worktree across restarts.", wsusercmd.MaxPerScope, wsusercmd.MaxLabel, wsusercmd.MaxDescription, wsusercmd.MaxCwd), "inputSchema": objectSchema(map[string]any{
 			"session_key": stringProperty("Caller's lead session key."),
 			"id":          stringProperty("Stable command id (required)."),
 			"label":       stringProperty("Button label (required)."),
-			"description": stringProperty("Optional one-line explanation shown beside the button."),
+			"description": stringProperty("Optional one-line explanation for the command."),
 			"command":     stringProperty("The bash line to run (required); a multiline script runs as one."),
+			"prompt":      stringProperty("Optional default prompt instruction shown when asking the agent to run the command."),
+			"cwd":         stringProperty("Optional working directory relative to (or inside) the session worktree root."),
 			"format":      stringProperty("json for structured output; compact text otherwise."),
 		}, "session_key", "id", "label", "command")},
 		{"name": unregisterUserCommandTool, "description": "Withdraw a user command registered with session.register_user_command, by id. Hosted lead sessions only. The user's button disappears; a click already running is unaffected.", "inputSchema": objectSchema(map[string]any{

@@ -51,17 +51,17 @@
     if (h.row) h.row.classList.remove("d-holding");
   }
 
-  function cancelActive(fromPointer) {
+  function cancelActive(fromPointer, reason) {
     if (!active) return;
     var h = active;
     active = null;
     if (fromPointer) lastPointerCancelAt = Date.now();
     clearVisuals(h);
-    if (h.opts && typeof h.opts.onCancel === "function") h.opts.onCancel(h.el);
+    if (h.opts && typeof h.opts.onCancel === "function") h.opts.onCancel(h.el, reason || "cancel");
   }
 
   function startHold(el, opts, meta) {
-    cancelActive(false);
+    cancelActive(false, "replaced");
     var dur = typeof opts.duration === "number" && opts.duration >= 0 ? opts.duration : DEFAULT_DURATION;
     var row = el.closest ? el.closest(".rs") : null;
     var h = {
@@ -86,7 +86,7 @@
       if (active !== h) return;
       h.timer = 0;
       if (!el.isConnected || !(opts.canStart || defaultCanStart)(el)) {
-        cancelActive(h.source === "pointer");
+        cancelActive(h.source === "pointer", "detached");
         return;
       }
       h.ready = true;
@@ -108,7 +108,7 @@
       if (active.pointerId !== undefined && e.pointerId !== undefined && e.pointerId !== active.pointerId) return;
       var canStart = active.opts.canStart || defaultCanStart;
       if (!active.el.isConnected || !canStart(active.el) || !isInside(active.el, e.clientX, e.clientY)) {
-        cancelActive(true);
+        cancelActive(true, "leave");
       }
     }, true);
 
@@ -117,25 +117,26 @@
       if (active.pointerId !== undefined && e.pointerId !== undefined && e.pointerId !== active.pointerId) return;
       var h = active;
       var canStart = h.opts.canStart || defaultCanStart;
+      var inside = h.el.isConnected && canStart(h.el) && isInside(h.el, e.clientX, e.clientY);
       suppressClick(h.el);
-      if (h.ready && h.el.isConnected && canStart(h.el) && isInside(h.el, e.clientX, e.clientY)) {
+      if (h.ready && inside) {
         finishHold(h);
       } else {
-        cancelActive(true);
+        cancelActive(true, !h.ready && inside ? "early-release" : "leave");
       }
     }, true);
 
     window.addEventListener("pointercancel", function (e) {
       if (!active || active.source !== "pointer") return;
       if (active.pointerId !== undefined && e.pointerId !== undefined && e.pointerId !== active.pointerId) return;
-      cancelActive(true);
+      cancelActive(true, "cancel");
     }, true);
 
     window.addEventListener("keydown", function (e) {
       if (!active || e.key !== "Escape") return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      cancelActive(false);
+      cancelActive(false, "escape");
     }, true);
 
     window.addEventListener("keyup", function (e) {
@@ -143,25 +144,26 @@
       e.preventDefault();
       var h = active;
       var canStart = h.opts.canStart || defaultCanStart;
+      var alive = h.el.isConnected && canStart(h.el);
       suppressClick(h.el);
-      if (h.ready && h.el.isConnected && canStart(h.el)) {
+      if (h.ready && alive) {
         finishHold(h);
       } else {
-        cancelActive(false);
+        cancelActive(false, !h.ready && alive ? "early-release" : "cancel");
       }
     }, true);
 
     window.addEventListener("blur", function () {
-      if (active) cancelActive(false);
+      if (active) cancelActive(false, "blur");
     });
   }
 
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", function () {
-      if (active && document.hidden) cancelActive(false);
+      if (active && document.hidden) cancelActive(false, "hidden");
     });
     document.addEventListener("blur", function (e) {
-      if (active && e.target === active.el) cancelActive(false);
+      if (active && e.target === active.el) cancelActive(false, "blur");
     }, true);
   }
 
@@ -220,7 +222,7 @@
     }
     function onPointerDown(e) { handlePointerDown(el, opts, e); }
     function onPointerLeave() {
-      if (active && active.el === el && active.source === "pointer") cancelActive(true);
+      if (active && active.el === el && active.source === "pointer") cancelActive(true, "leave");
     }
     function onKeyDown(e) { handleKeyDown(el, opts, e); }
     function onClick(e) { handleClick(el, opts, e); }
@@ -257,7 +259,7 @@
       if (!active || active.source !== "pointer") return;
       var el = findTarget(e.target);
       if (!el || el !== active.el) return;
-      if (!e.relatedTarget || !el.contains(e.relatedTarget)) cancelActive(true);
+      if (!e.relatedTarget || !el.contains(e.relatedTarget)) cancelActive(true, "leave");
     }
     function onKeyDown(e) {
       var el = findTarget(e.target);
