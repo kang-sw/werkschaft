@@ -695,9 +695,14 @@ func TestProxyHTTPCountsToolCallsInFlightOnce(t *testing.T) {
 	}
 	cancel()
 	<-done
-	// The session answers the cancelled call late; the route dropped it.
+	// The session answers the cancelled call late; the route dropped it. The
+	// route ends the call when its handler sees the client leave, which can
+	// trail the client's return, so wait for both.
 	deadline := time.Now().Add(2 * time.Second)
-	for s.inflight.Load() > 0 && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		if _, ended := a.calls("tok-a"); ended == 2 && s.inflight.Load() == 0 {
+			break
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	if begun, ended := a.calls("tok-a"); begun != 2 || ended != 2 {

@@ -433,12 +433,16 @@ func TestStoreV2InPlaceUpgradeKeepsSchemaVersionTwo(t *testing.T) {
 		`CREATE TABLE user_commands (reply TEXT NOT NULL, root TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL, description TEXT NOT NULL, line TEXT NOT NULL, revision INTEGER NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (reply, root, id))`,
 		`CREATE TABLE meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)`,
 		`INSERT INTO meta VALUES ('revision', 12)`,
-		`INSERT INTO user_commands VALUES ('lead', '/w', 'a', 'A', 'desc', 'echo a', 12, 1)`,
 		`PRAGMA user_version=2`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Stored roots are normRoot output (writers normalize before insert), so
+	// seed the legacy row the same way; a raw "/w" never matches on Windows.
+	if _, err := db.Exec(`INSERT INTO user_commands VALUES ('lead', ?, 'a', 'A', 'desc', 'echo a', 12, 1)`, normRoot("/w")); err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
