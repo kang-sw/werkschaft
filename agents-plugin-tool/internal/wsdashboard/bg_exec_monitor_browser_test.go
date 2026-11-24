@@ -366,6 +366,16 @@ func TestBgExecMonitorBrowser(t *testing.T) {
 		svc.mu.Unlock()
 		reply(w, "ok")
 	})
+	ctl.HandleFunc("/peer-job", func(w http.ResponseWriter, r *http.Request) {
+		svc.mu.Lock()
+		svc.jobs = append(svc.jobs, &bgExecBrowserJob{
+			Owner: "otherlead", ID: "exec_peer", Tool: "exec.shell",
+			State: execjob.HostedRunning, Origin: execjob.OriginAgent,
+		})
+		svc.mu.Unlock()
+		f.d.ExecJobsChanged()
+		reply(w, "ok")
+	})
 	ctl.HandleFunc("/syncsnap", func(w http.ResponseWriter, r *http.Request) {
 		writeSnap()
 		f.d.ExecJobsChanged()

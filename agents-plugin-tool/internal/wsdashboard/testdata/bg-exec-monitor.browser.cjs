@@ -170,7 +170,27 @@ async function main() {
     const box = await stopBtn.boundingBox();
     assert.ok(box, 'stop button must have bounding box');
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await stopBtn.focus();
+    await view.evaluate(() => {
+      const pop = document.getElementById('bgpop');
+      window.stopBeforePeer = pop.querySelector('.bgp-stop');
+      window.rowsBeforePeer = [...pop.querySelectorAll('.bgp-row')];
+      window.rowMutations = 0;
+      new MutationObserver((records) => { window.rowMutations += records.length; })
+        .observe(pop.querySelector('.bgp-list'), { childList: true, subtree: true });
+    });
     await page.mouse.down();
+    const peerList = page.waitForResponse((r) => r.url().endsWith('/exec/bg/jobs') && r.ok(), { timeout: 1250 });
+    await ctlPost('/peer-job');
+    await (await peerList).finished();
+    await view.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await view.evaluate(() => {
+      const pop = document.getElementById('bgpop');
+      return window.stopBeforePeer === pop.querySelector('.bgp-stop') &&
+        window.stopBeforePeer === document.activeElement &&
+        window.rowsBeforePeer.every((row, i) => row === pop.querySelectorAll('.bgp-row')[i]) &&
+        window.rowMutations === 0;
+    }), true, 'a peer tree revision must preserve the active Stop hold and leave its rows untouched');
     await sleep(1750);
     await page.mouse.up();
 
