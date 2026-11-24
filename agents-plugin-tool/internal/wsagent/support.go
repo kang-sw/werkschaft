@@ -526,6 +526,7 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 	if err := graph.Err(); err != nil {
 		return out, err.Error()
 	}
+	resolver := NewTierBindingResolver(caller.Config, s.opts.Runner.opts.Backends)
 	bundles := graph.Bundles()
 	names := make([]string, 0, len(bundles))
 	for name := range bundles {
@@ -541,7 +542,7 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 			continue
 		}
 		tier.Trace, tier.Harness = res.Trace(), TierRuntimeHarness(res.Harness)
-		if binding, err := RoutedTierBinding(caller.Config, res, s.opts.Runner.opts.Backends); err != nil {
+		if binding, err := resolver.Routed(res); err != nil {
 			tier.Error = err.Error()
 		} else {
 			tier.Model, tier.Effort = binding.Model, binding.Effort

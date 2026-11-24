@@ -71,7 +71,7 @@ func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, config
 // v0.51.0 daemon's agent.spawn also accepts for the same target. v0.51.0
 // reads only a bare size (the caller's harness), <harness>.<size>, or an
 // exact legacy alias, and launches that harness's own agents.tier slot, the
-// slot RoutedTierBinding reads; it refuses a role tier. So a walk whose
+// slot TierBindingResolver.Routed reads; it refuses a role tier. So a walk whose
 // terminal is a slot has an equivalent old-readable form: the bare size when
 // the walk fell through to the caller's harness, else <harness>.<size>. A
 // bundle terminal (its own model and effort) has none, and compat is "" for
@@ -135,7 +135,7 @@ func (e callerRefusal) Is(target error) bool { return target == errCallerRefused
 
 // routedBinding resolves a routed agent.spawn tier the way the spawn does:
 // the graph walk, the terminal harness's own agents.tier slot with no
-// cross-harness fallback (wsagent.RoutedTierBinding), and the terminal's
+// cross-harness fallback (wsagent.TierBindingResolver.Routed), and the terminal's
 // refusal of this server's verified caller backend (agentAdmissionBackend;
 // harness, the walk's caller, only selects the fallthrough) on every
 // daemon-hosted connection, forwarding workers included, plus, where this
@@ -164,7 +164,7 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 		}
 	}
-	binding, err := wsagent.RoutedTierBinding(configOpts, res, s.agentBackends()...)
+	binding, err := wsagent.NewTierBindingResolver(configOpts, s.agentBackends()...).Routed(res)
 	if err != nil {
 		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
 	}

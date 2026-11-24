@@ -3,6 +3,7 @@ package wsagent
 import (
 	"context"
 	"slices"
+	"sync"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
@@ -18,16 +19,33 @@ func TierRuntimeHarness(harness string) string {
 	return harness
 }
 
+// TierBindingResolver shares one lazily fetched OpenRouter catalog within a
+// resolution or listing. Keep it local to the operation so later reads can
+// observe a changed catalog.
+type TierBindingResolver struct {
+	config wsconfig.Options
+	models func() ([]ModelChoice, error)
+}
+
+func NewTierBindingResolver(cfg wsconfig.Options, registries ...map[string]BackendRegistration) *TierBindingResolver {
+	return &TierBindingResolver{
+		config: cfg,
+		models: sync.OnceValues(func() ([]ModelChoice, error) {
+			return werkOpenRouterChoices(werkChoiceLister(registries))
+		}),
+	}
+}
+
 // Retained name check: stored Pi tier alias to werk (TestRetiredPiTierRedirectsToWerk).
-func tierBindings(cfg wsconfig.Options, harness, size string, registries ...map[string]BackendRegistration) (map[string]wsconfig.AgentTier, error) {
-	tiers, err := wsconfig.HarnessTiers(cfg, harness)
+func (r *TierBindingResolver) tierBindings(harness, size string) (map[string]wsconfig.AgentTier, error) {
+	tiers, err := wsconfig.HarnessTiers(r.config, harness)
 	if err != nil || harness != BackendWerk {
 		return tiers, err
 	}
 	if _, explicit := tiers[size]; explicit {
 		return tiers, nil
 	}
-	legacy, err := wsconfig.HarnessTiers(cfg, BackendPi)
+	legacy, err := wsconfig.HarnessTiers(r.config, BackendPi)
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +57,7 @@ func tierBindings(cfg wsconfig.Options, harness, size string, registries ...map[
 	if len(legacy) == 0 {
 		return tiers, nil
 	}
-	lister := werkChoiceLister(registries)
-	models, err := werkOpenRouterChoices(lister)
+	models, err := r.models()
 	if err != nil {
 		// Discovery errors leave the unset slots unset. The caller reports
 		// werk's setup instructions and can still use explicit werk slots.
@@ -81,8 +98,8 @@ func werkOpenRouterChoices(lister ChoiceLister) ([]ModelChoice, error) {
 	return models, err
 }
 
-func hasExactModel(lister ChoiceLister, model string) bool {
-	models, err := werkOpenRouterChoices(lister)
+func (r *TierBindingResolver) hasExactModel(model string) bool {
+	models, err := r.models()
 	return err == nil && modelListed(models, model)
 }
 
