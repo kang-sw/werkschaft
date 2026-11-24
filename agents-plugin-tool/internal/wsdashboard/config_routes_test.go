@@ -300,3 +300,79 @@ func TestSettingsSessionGearBindsContainingFolder(t *testing.T) {
 		t.Fatalf("unindexed project worktree = %d %s, want 400 invalid_context", result.Code, result.Body)
 	}
 }
+
+func TestSettingsSnapshotSessionHarnessAndUnconfiguredWerk(t *testing.T) {
+	catalog, err := wsconfigservice.NewCatalog([]wsconfigservice.Rule{
+		{Key: "agents.tier", Harnesses: []string{"claude", "codex", "agy", "werk", "default"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &ConfigBackend{
+		Catalog: catalog,
+		Options: wsconfig.Options{
+			CacheHome:  filepath.Join(t.TempDir(), "cache"),
+			ConfigHome: filepath.Join(t.TempDir(), "global"),
+		},
+		Session: func(reg Registration) (wsconfigservice.SessionLayer, wsconfig.SessionWriter, string, bool) {
+			return wsconfigservice.SessionLayer{}, nil, "", true
+		},
+	}
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(backend.Options, "small", "default", "default-small", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	f := startPageFixture(t, func(o *DaemonOptions) { o.Config = backend })
+	worktree := settingsID("worktree", f.project)
+
+	noSess := settingsRequest(t, f.d, http.MethodGet, "/api/config/snapshot", "", "")
+	if noSess.Code != 200 {
+		t.Fatalf("snapshot without session = %d %s", noSess.Code, noSess.Body)
+	}
+	if strings.Contains(noSess.Body.String(), `"session_harness"`) {
+		t.Errorf("snapshot without session should omit session_harness: %s", noSess.Body)
+	}
+
+	withSess := settingsRequest(t, f.d, http.MethodGet, "/api/config/snapshot?scope=builtin&worktree="+worktree+"&session=livesession", "", "")
+	if withSess.Code != 200 {
+		t.Fatalf("snapshot with session = %d %s", withSess.Code, withSess.Body)
+	}
+	var view configSnapshot
+	if err := json.Unmarshal(withSess.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.SessionHarness != "claude" {
+		t.Errorf("SessionHarness = %q, want %q", view.SessionHarness, "claude")
+	}
+
+	var sawWerk, sawCodex bool
+	for _, e := range view.Entries {
+		if e.Key != "agents.tier" || e.Selectors["tier"] != "small" {
+			continue
+		}
+		switch e.Selectors["harness"] {
+		case "werk":
+			sawWerk = true
+			if val, _ := e.Value.(map[string]any); len(val) != 0 {
+				t.Errorf("unconfigured werk Value = %#v, want empty object", e.Value)
+			}
+			if def, _ := e.Default.(map[string]any); len(def) != 0 {
+				t.Errorf("unconfigured werk Default = %#v, want empty object", e.Default)
+			}
+			for _, layer := range e.Layers {
+				if layer.Scope == wsconfig.ScopeBuiltin {
+					if layer.Present == nil || *layer.Present {
+						t.Errorf("unconfigured werk builtin layer Present = %v, want false", layer.Present)
+					}
+				}
+			}
+		case "codex":
+			sawCodex = true
+			if val, _ := e.Value.(map[string]any); val["model"] != "default-small" {
+				t.Errorf("codex Value = %#v, want default-small fallback", e.Value)
+			}
+		}
+	}
+	if !sawWerk || !sawCodex {
+		t.Fatalf("missing expected tier entries: sawWerk=%v sawCodex=%v", sawWerk, sawCodex)
+	}
+}

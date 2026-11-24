@@ -50,9 +50,10 @@ type configSelection struct {
 
 type configSnapshot struct {
 	configSelection
-	Path      *string                 `json:"path"`
-	Entries   []wsconfigservice.Entry `json:"entries"`
-	Companion CompanionConfig         `json:"companion"`
+	Path           *string                 `json:"path"`
+	SessionHarness string                  `json:"session_harness,omitempty"`
+	Entries        []wsconfigservice.Entry `json:"entries"`
+	Companion      CompanionConfig         `json:"companion"`
 }
 
 type configRequest struct {
@@ -354,7 +355,13 @@ func (d *Daemon) handleConfigSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeConfigError(w, failure)
 		return
 	}
-	writeJSON(w, http.StatusOK, configSnapshot{configSelection: sel, Path: resolved.path, Entries: d.config.Catalog.Entries(sel.Scope, layers), Companion: d.companion.current().config})
+	writeJSON(w, http.StatusOK, configSnapshot{
+		configSelection: sel,
+		Path:            resolved.path,
+		SessionHarness:  strings.ToLower(strings.TrimSpace(resolved.session.Harness)),
+		Entries:         d.config.Catalog.Entries(sel.Scope, layers),
+		Companion:       d.companion.current().config,
+	})
 }
 
 func decodeConfigRequest(w http.ResponseWriter, r *http.Request, target any) bool {
