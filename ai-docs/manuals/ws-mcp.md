@@ -161,6 +161,19 @@ whose `schema_version` is newer is read but never rewritten. There is no
 environment-variable source: the daemon's environment reaches every hosted
 session and exec subprocess.
 
+On update, the writer stages the new file beside `credentials.json`. It
+adds a store-owned retiring hard link to the current generation and opens
+that file for scrubbing before atomically publishing the replacement. A
+successful update truncates the retiring file and removes the store's link,
+so existing aliases to that generation read empty. If publication fails,
+the writer removes the retiring link and leaves the current bytes intact.
+On recovery, a retiring link with the same identity as the current file is
+removed with its bytes intact. A different retiring generation and any
+staged file are truncated and removed. On Windows, replacement requires
+native POSIX rename and unlink support. A volume without that support or
+a reader that blocks opening the retiring handle causes the update to
+fail before publication.
+
 Use `credential set openrouter` for an OpenRouter key. For vLLM or Ollama,
 add a name, `base_url`, and `kind` to the global `agent.werk_endpoints`
 map and select `local/<name>` as the provider. If the endpoint requires
@@ -197,8 +210,10 @@ hosted harness with a per-session bearer (`WS_MCP_SESSION_TOKEN`) and a
 backend registration that enables `ProviderCredentials`. Current external
 harnesses use their own logins. Werk uses the credential store in process,
 and the route refuses `openai` (Sign in with ChatGPT). The dashboard file
-browser and daemon file tools deny the credential directory. Keys and
-tokens are never logged.
+browser and daemon file tools protect the credential directory and its
+current, staged, and retiring files by path and file identity. The guards
+also cover the default and legacy store locations. Keys and tokens are
+never logged.
 
 Trust boundary: the token route's answer to an admitted session is the only
 response that carries a secret; no ws tool output returns one. Processes
