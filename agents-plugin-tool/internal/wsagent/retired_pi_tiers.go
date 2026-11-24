@@ -23,13 +23,19 @@ func TierRuntimeHarness(harness string) string {
 // resolution or listing. Keep it local to the operation so later reads can
 // observe a changed catalog.
 type TierBindingResolver struct {
-	config wsconfig.Options
-	models func() ([]ModelChoice, error)
+	config   wsconfig.Options
+	backends map[string]BackendRegistration
+	models   func() ([]ModelChoice, error)
 }
 
 func NewTierBindingResolver(cfg wsconfig.Options, registries ...map[string]BackendRegistration) *TierBindingResolver {
+	var backends map[string]BackendRegistration
+	if len(registries) != 0 {
+		backends = registries[0]
+	}
 	return &TierBindingResolver{
-		config: cfg,
+		config:   cfg,
+		backends: backends,
 		models: sync.OnceValues(func() ([]ModelChoice, error) {
 			return werkOpenRouterChoices(werkChoiceLister(registries))
 		}),
@@ -107,4 +113,23 @@ func modelListed(models []ModelChoice, id string) bool {
 	return id != "" && slices.ContainsFunc(models, func(model ModelChoice) bool {
 		return model.ID == id && (model.Provider == "" || model.Provider == string(wscred.ProviderOpenRouter))
 	})
+}
+
+// RequiresOwnBinding reports whether this harness's tier must use its own
+// slot and provider admission. A standalone resolver uses the built-in
+// capability to resolve the slot even without a live credentials source.
+func (r *TierBindingResolver) RequiresOwnBinding(harness string) bool {
+	harness = TierRuntimeHarness(harness)
+	backend := r.backends[harness].Backend
+	if backend == nil {
+		backend = builtinRegistration(harness).Backend
+	}
+	_, ok := backend.(workerSetup)
+	return ok
+}
+
+// ProviderGap applies the provider admission used by agent.spawn to a
+// resolved binding. A standalone server has no live credentials to check.
+func (r *TierBindingResolver) ProviderGap(harness, provider string) string {
+	return workerProviderGap(r.backends, harness, provider)
 }

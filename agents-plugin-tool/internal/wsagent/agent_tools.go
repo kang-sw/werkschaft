@@ -616,7 +616,11 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 }
 
 func (r *Runner) workerProviderGap(harness, provider string) string {
-	if setup, ok := r.opts.Backends[harness].Backend.(workerSetup); ok {
+	return workerProviderGap(r.opts.Backends, harness, provider)
+}
+
+func workerProviderGap(backends map[string]BackendRegistration, harness, provider string) string {
+	if setup, ok := backends[harness].Backend.(workerSetup); ok {
 		return setup.workerProviderGap(provider)
 	}
 	return ""

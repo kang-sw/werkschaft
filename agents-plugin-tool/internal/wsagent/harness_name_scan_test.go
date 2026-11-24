@@ -112,7 +112,6 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/mcp/config_manifest.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
 		site("internal/mcp/config_manifest.go", "pi.", 1, classPersisted, "retired manifest keys from old packages", "TestRetiredPiManifestKeysAreIgnored"),
 		site("internal/mcp/session_hire.go", "pi", 1, classPersisted, "legacy hire requests", "TestRetiredPiHireRefuses"),
-		site("internal/mcp/tier_routing.go", "BackendPi", 4, classPersisted, "stored tier routing harness aliases", "TestDashboardTierRoutingViewReportsHarnessAvailability"),
 		site("internal/wsagent/children.go", "BackendPi", 3, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),
 		site("internal/wsagent/children.go", "pi.list", 1, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),
 		site("internal/wsagent/children.go", "pi.transcript", 2, classPersisted, "legacy Pi history and wire tool names", "TestRetiredPiListUsesCallerOwnership"),

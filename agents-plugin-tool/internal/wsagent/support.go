@@ -544,6 +544,8 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 		tier.Trace, tier.Harness = res.Trace(), TierRuntimeHarness(res.Harness)
 		if binding, err := resolver.Routed(res); err != nil {
 			tier.Error = err.Error()
+		} else if why := resolver.ProviderGap(tier.Harness, binding.Provider); why != "" {
+			tier.Error = why
 		} else {
 			tier.Model, tier.Effort = binding.Model, binding.Effort
 		}

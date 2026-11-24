@@ -63,8 +63,14 @@ func (s *Server) tierGraph(configOpts wsconfig.Options) (*wsconfig.TierGraph, er
 // (routedBinding). ok is false when the tier does not resolve or, past the
 // fallthrough, the spawn could not launch it.
 func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort string, ok bool) {
-	model, effort, _, ok = s.renderTierBindingCompat(walkHarness, bareHarness, tier, configOpts)
+	resolver := wsagent.NewTierBindingResolver(configOpts, s.agentBackends()...)
+	model, effort, _, ok = s.renderTierBindingCompat(walkHarness, bareHarness, tier, configOpts, resolver)
 	return model, effort, ok
+}
+
+func isProviderTier(tier string, resolver *wsagent.TierBindingResolver) bool {
+	harness, _, dotted := strings.Cut(strings.ToLower(strings.TrimSpace(tier)), ".")
+	return dotted && resolver.RequiresOwnBinding(harness)
 }
 
 // renderTierBindingCompat is renderTierBinding plus the recommendation a
@@ -76,15 +82,17 @@ func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, config
 // the walk fell through to the caller's harness, else <harness>.<size>. A
 // bundle terminal (its own model and effort) has none, and compat is "" for
 // it, for a token that is not routed, and when the binding does not resolve.
-// Retained name check: stored tier routing harness aliases (TestDashboardTierRoutingViewReportsHarnessAvailability).
-func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort, compat string, ok bool) {
+func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options, resolver *wsagent.TierBindingResolver) (model, effort, compat string, ok bool) {
 	tier = strings.TrimSpace(tier)
-	if !wsconfig.IsRoutedTierToken(tier) {
+	if size := wsconfig.NormalizedTier(tier); size != "" && resolver.RequiresOwnBinding(bareHarness) {
+		tier = bareHarness + "." + size
+	}
+	if !wsconfig.IsRoutedTierToken(tier) && !isProviderTier(tier, resolver) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, tier, "", "", bareHarness)
 		return model, effort, "", err == nil
 	}
-	res, binding, err := s.routedBinding(tier, walkHarness, configOpts)
-	if res.CallerFallthrough && res.Harness != wsagent.BackendPi && !errors.Is(err, errCallerRefused) {
+	res, binding, err := s.routedBinding(tier, walkHarness, configOpts, resolver)
+	if res.CallerFallthrough && !resolver.RequiresOwnBinding(res.Harness) && !errors.Is(err, errCallerRefused) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, res.Size, "", "", bareHarness)
 		return model, effort, res.Size, err == nil
 	}
@@ -143,7 +151,7 @@ func (e callerRefusal) Is(target error) bool { return target == errCallerRefused
 // cross-harness refusal, checked first, matches errCallerRefused. The resolution is returned whenever the walk succeeded,
 // even when the binding fails, so a caller can tell a caller-fallthrough
 // terminal apart.
-func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options) (wsconfig.TierResolution, wsconfig.AgentTier, error) {
+func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options, resolver *wsagent.TierBindingResolver) (wsconfig.TierResolution, wsconfig.AgentTier, error) {
 	graph, err := s.tierGraph(configOpts)
 	if err != nil {
 		return wsconfig.TierResolution{}, wsconfig.AgentTier{}, err
@@ -164,9 +172,12 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 		}
 	}
-	binding, err := wsagent.NewTierBindingResolver(configOpts, s.agentBackends()...).Routed(res)
+	binding, err := resolver.Routed(res)
 	if err != nil {
 		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
+	}
+	if why := resolver.ProviderGap(runtimeHarness, binding.Provider); why != "" {
+		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 	}
 	return res, binding, nil
 }
@@ -179,10 +190,11 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 // harness would. A slot terminal is recommended as the bare size or
 // <harness>.<size> that a v0.51.0 spawn also accepts.
 func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, configOpts wsconfig.Options) string {
-	if !wsconfig.IsRoutedTierToken(tier) {
+	resolver := wsagent.NewTierBindingResolver(configOpts, s.agentBackends()...)
+	if !wsconfig.IsRoutedTierToken(tier) && !isProviderTier(tier, resolver) && !resolver.RequiresOwnBinding(harness) {
 		return withRecommendedRenderBinding(payload, harness, tier, configOpts)
 	}
-	model, effort, compat, ok := s.renderTierBindingCompat(s.playbookHarness(), harness, tier, configOpts)
+	model, effort, compat, ok := s.renderTierBindingCompat(s.playbookHarness(), harness, tier, configOpts, resolver)
 	if !ok {
 		return withRecommendedTier(payload, tier)
 	}
@@ -213,11 +225,12 @@ func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, 
 // bare token does (the fallback chain for harness, the default bucket when
 // harness is empty), so an unmapped role tier answers what its bare size
 // answers, plus the trace.
-// Retained name check: stored tier routing harness aliases (TestDashboardTierRoutingViewReportsHarnessAvailability).
 func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult, error) {
 	opts := s.configOptions()
-	if size := wsconfig.NormalizedTier(tier); size != "" && strings.EqualFold(strings.TrimSpace(harness), wsagent.BackendPi) {
-		tier = wsagent.BackendPi + "." + size
+	resolver := wsagent.NewTierBindingResolver(opts, s.agentBackends()...)
+	harness = strings.ToLower(strings.TrimSpace(harness))
+	if size := wsconfig.NormalizedTier(tier); size != "" && resolver.RequiresOwnBinding(harness) {
+		tier = harness + "." + size
 	}
 	if wsconfig.NormalizedTier(tier) != "" {
 		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(opts, tier, harness)
@@ -234,8 +247,8 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 		// trace readable, as config.tune's traces show it.
 		walk = "<caller>"
 	}
-	res, binding, err := s.routedBinding(tier, walk, opts)
-	if res.CallerFallthrough && res.Harness != wsagent.BackendPi && !errors.Is(err, errCallerRefused) {
+	res, binding, err := s.routedBinding(tier, walk, opts, resolver)
+	if res.CallerFallthrough && !resolver.RequiresOwnBinding(res.Harness) && !errors.Is(err, errCallerRefused) {
 		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(opts, res.Size, harness)
 		if err != nil {
 			return resolveAgentTierResult{}, err

@@ -118,7 +118,7 @@ type dashboardTierBundle struct {
 // harness that admits only same-harness callers is available in its own
 // preview alone), and marks every route ending on an unavailable harness,
 // as agent.spawn would refuse it. Nil skips it.
-func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(caller, harness string) (string, bool)) (dashboardTierView, error) {
+func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(caller, harness string) (string, bool), registries ...map[string]wsagent.BackendRegistration) (dashboardTierView, error) {
 	roles, err := packagedTierRoles(rsrc)
 	if err != nil {
 		return dashboardTierView{}, err
@@ -218,7 +218,7 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes = append(view.Nodes, node)
 	}
-	resolver := wsagent.NewTierBindingResolver(opts)
+	resolver := wsagent.NewTierBindingResolver(opts, registries...)
 	depths := map[int]int{}
 	for i := range view.Nodes {
 		if refs := inbound[view.Nodes[i].Name]; refs != nil {
@@ -311,6 +311,8 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, resolver *wsagent.TierBindi
 	binding, err := resolver.Routed(res)
 	if err != nil {
 		route.BindingError = err.Error()
+	} else if why := resolver.ProviderGap(route.Harness, binding.Provider); why != "" {
+		route.Unavailable, route.BindingError = why, why
 	} else {
 		route.Model, route.Effort = binding.Model, binding.Effort
 	}
