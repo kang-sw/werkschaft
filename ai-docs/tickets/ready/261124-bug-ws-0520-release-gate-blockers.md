@@ -221,6 +221,49 @@ Important:
 
 All paths above are under `agents-plugin-tool/` unless shown otherwise.
 
+### Result (7f663bc27) - 2026-11-24
+
+The Phase 1 slices landed in `049a963ef` (file boundary), `616f8fbf7`
+(runner lifecycle), and `7f663bc27` (werk, auth, and exec).
+
+| Item | Implementation | Regression evidence |
+|---|---|---|
+| C1 | `7b77fad54` refuses multiply linked destinations on the verified handle under scoped authority | `TestScopedFileToolsLeaveExternalHardLinkUnchanged` |
+| C2 | `77c670c82` persists and reconciles intentional turn close | `TestWerkCloseDuringRequestAllowsNewTurnInSameConversation`, `TestWerkResumesActiveTurnAcrossRunnerReplacement` |
+| C3 | `bf9171679` tracks grant origin and rechecks current authority at dispatch | `TestHostedModelLaunchRequiresApprovalAfterPostureDowngrade`, `TestWerkFileCallRequiresApprovalAfterPostureDowngrade` |
+| C4 | `e43298476` archives before retirement and restores the session directory after a rollback prune | `TestRetiredPiHistorySurvivesPruneAndRollback`, `TestPruneRegistrationsAgesRetiredLeadsByTheirRow`, `TestPruneRegistrationsAgesClosedSpawnedChildrenByTheirRow` |
+| C5 | `e357a7879` counts live retired Pi holders in worktree occupancy until exit | `TestWorktreeGuardsRefuseLiveRetiredPiHolder`, `TestRetiredPiHolderBlocksWorktreeUntilExit` |
+| C6 | `bffb02ba6` protects provider credential paths and rechecks file identity at the mutation boundary | `TestFileToolsProtectProviderCredentials`, `TestFileEditRechecksCredentialIdentityAfterIntent` |
+| C7 | `11b6fd53c` requires positive operator provenance through queued and recovered input | `TestWerkOperatorProvenanceAtCredentialBoundary`, `TestAnswerCheckNudgesOnceForAnOpenAnsweredItem`, `TestMessageRouteHoldsEachSendAsItsOwnEntry` |
+| I1 | `c2943ba1d` fences durable reopen during Full Quit | `TestFullQuitRefusesConcurrentDurableReopen` |
+| I2 | `5c4b5e79c` honors and restores the werk lead's skill isolation | `TestWerkLeadSkillIsolationSurvivesReopen` |
+| I3 | `0343649a8` restores accumulated usage when the werk loop restarts | `TestWerkCostAccumulatesAcrossIdleWakeAndRunnerReplacement` |
+| I4 | `3af07d9cc` preserves line endings outside the replacement | `TestEditPreservesMixedLineEndingsOutsideReplacements` |
+| I6 | `ed2ad04f4` resolves legacy tier bindings from one OpenRouter catalog snapshot | `TestRetiredPiTierListingSharesOpenRouterCatalogSnapshot` |
+| I7 | `7e47e37be` checks the binding's selected provider on all tier resolution surfaces | `TestLegacyWerkTierResolutionRequiresItsProvider` |
+| I8 | `a324b2c8c` pauses plan use per account on the provider's usage-limit code and permits an operator re-probe | `TestWerkPlanPauseReprobesOnlyForOperator`, `TestOpenAIPlanPauseLivesInMemoryAndPrecedesRefresh` |
+| I9 | `c98a8dd4a` surfaces the plan reconsent remedy | `TestWerkPickerAndTierReportPlanReconsent` |
+| I10 | `4aeb6c73b` uses a valid key ID in the invalid-signature fixture | `TestOpenAIRejectsInvalidIdentityOrCallback` |
+| I15 | `54eb47433` scopes the bump script to current-version examples | `test_updates_current_examples_without_rewriting_history` in `scripts/test_bump_ws_version.py` |
+| I16 | `77c670c82` discards staged inbox claims across close and reopen | `TestWerkCloseReopenDiscardsInterruptedInboxClaim` |
+| I17 | `7b25c874f` preserves the selected provider through hire approval, persistence, and create | `TestHiringApprovalReplaysSelectedWerkProvider`, `TestHiringCreationPersistsSelectedWerkProvider` |
+| I18 | `3d012ddc5` bounds decoded events and complete Responses streams | `TestReadStreamRejectsOversizedEventAndResponse` |
+
+For the C4 rail follow-up, `2c36ad94f`, `861a53d53`, and `b067af333` omit
+the deletion countdown for retained Pi leads, workers, and handed-off rows.
+The rail uses the registry's persisted Pi check and existing in-memory runner
+metadata. `TestRailRetiredPiHasNoDeletionCountdown` also checks that an
+unrelated terminal row still expires. `TestRailFourStateBrowser` verifies
+the rendered ended row and ordinary expiry warning.
+
+An early C7 fixture matched the wrong host. The corrected
+fixture intercepts the configured host and rejects other non-loopback
+traffic.
+
+The release-gate review also found that `git.search` can read a pre-existing
+credential hard link inside an admitted worktree through Git
+(`internal/mcp/git_search.go:221,744,760–772`). That finding is outside this ticket's scope.
+
 ### Phase 2: 0.52 docs and release procedure
 
 Depends on Phase 1 (C4's recovery path and the close/Full Quit behavior are
@@ -255,6 +298,63 @@ run for C1, I4 and C6 identity checks; a Phase 2 read-through confirms the
 creation contract, T3 upgrade, retained-history recovery, and Full Quit text
 match the final Phase 1 behavior. The lead then re-reviews
 `b4d28c185..<fix head>`.
+
+### Result (8e8316e40) - 2026-11-24
+
+- **I5** `ws-mcp.md` hosted lead creation now documents the werk provider
+  selector, required model, defaults, skill isolation, and in-daemon binding.
+- **I11** `CHANGELOG.md` has a v0.52.0 entry covering werk, Pi execution and
+  distribution retirement, plugin update and session restart, retained
+  history, and the 0.53 handler schedule.
+- **I12** `ws-mcp.md`, **Legacy Pi compatibility**, documents the T3 health
+  and versioned hello refusals, recovery sequence, and affected Pi calls.
+- **I13** `ai-docs/ship/ws.md`, **Version Strategy** and **Publish**, records
+  the 0.52.0 cut and the owner's live-provider checks before publish.
+- **I14** `ws-mcp.md` Full Quit, **Daemon replacement and process
+  ownership**, and holder listing describe the durable admission fence,
+  holder-free 409, survivor IDs, listing, and replacement recovery.
+- **C4 and minor items** `ws-mcp.md` retention guidance and
+  **Retired Pi history** describe archive, rollback, recovery, and purge.
+  `release-compatibility.md`, **Scenario Sheet** row 2, records T2
+  rollback recovery alongside the T3 launcher boundary, health refusal
+  and Pi initialization pin. **Provider credential store** documents the
+  named local endpoint selector, key command, and token route.
+  The `config_registry.go` and `server_config.go` alias examples use
+  `werk.large`.
+
+Read-through passed against the integrated source. The creation contract
+matches provider/model admission and the in-process tool binding. The
+upgrade steps match the v0.51.2 launcher's health refusal
+(`agents-plugin/bin/ws-mcp-launcher.py:1882–1889,2100–2102` at
+`v0.51.2`), 0.52 hello guard and legacy dispatch. The retained-history
+procedure matches archive-before-close, the tagged rollback pruner,
+missing-directory restore, and explicit purge. The Full Quit text matches
+the stop path, durable admission and reopen fence, and survivor listing.
+
+Integrated verification at `b067af333` passed on both platforms.
+Package assets were generated before each run.
+
+- On macOS, `go build ./... && go vet ./...` and
+  `go test ./internal/mcp/ -count=1 -timeout 45m` (702.272 s) passed.
+  The requested `wsagent`, `werk`, `wsfs`, `execjob`, `wsinbox`,
+  and `cmd/ws-mcp` package run passed with `-count=1`.
+  `go test ./internal/wscred/ -race -count=1` passed.
+  The targeted dashboard suites passed, including Chromium
+  `TestRailFourStateBrowser`, the retention, hire, nudge, and Full Quit
+  cases, and the incremental rail tests. The version bump script
+  regression passed against its temporary fixture.
+- On Windows, `go test ./internal/wsfs/ ./internal/wsagent/ ./cmd/ws-mcp/ -count=1 -timeout 40m`
+  passed. The three targeted C1/C6 MCP regressions and the I4 `wsfs`
+  regression all passed without skips.
+
+The initial integrated runner tests caught a harness-name scan failure in
+the rail change. The rail now shares the registry's persisted Pi check.
+The Chromium fixture uses an ordinary ended row to check the expiry warning
+and a Pi row to check that retained history has no countdown. The final
+integrated and Chromium reruns passed.
+
+The version bump and owner live-provider checks remain for the release cut.
+The release lead owns the re-review and ticket closure.
 
 ## Sage Review Round 1 (2026-11-24)
 
