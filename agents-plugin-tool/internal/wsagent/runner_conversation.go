@@ -14,6 +14,13 @@ import (
 func (r *Runner) Close() {
 	r.once.Do(func() { close(r.quit) })
 	r.wg.Wait()
+	r.piPurgeMu.Lock()
+	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords {
+		if err := r.piPurgeStore.Close(); err != nil {
+			fmt.Fprintf(r.opts.Log, "agent: close retired Pi purge store: %v\n", err)
+		}
+	}
+	r.piPurgeMu.Unlock()
 	if r.durableRecords != nil {
 		if err := r.durableRecords.Close(); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent: close durable records: %v\n", err)

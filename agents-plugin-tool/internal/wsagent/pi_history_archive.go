@@ -26,6 +26,16 @@ var retiredPiSessionFile = filepath.Join("pi", "session.jsonl")
 // entire directory. Publish a complete backup beside sessions/ before close
 // can make a Pi record eligible for that sweeper.
 func (r *Runner) archiveRetiredPiHistory(rec Record) error {
+	if r.piArchiveIDs == nil {
+		r.piArchiveIDs = make(map[string]bool)
+	}
+	r.piArchiveIDs[rec.ReplyID] = true
+	if err := r.loadRetiredPiPurges(); err != nil {
+		return err
+	}
+	if _, purging := r.piPurges[rec.ReplyID]; purging {
+		return nil
+	}
 	root := filepath.Join(r.opts.Dir, retiredPiHistoryDir)
 	dest := filepath.Join(root, rec.ReplyID)
 	source := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
@@ -59,13 +69,30 @@ func (r *Runner) restoreRetiredPiHistory() {
 		return
 	}
 	ids := make(map[string]bool, len(entries))
+	r.piArchiveIDs = make(map[string]bool, len(entries))
 	for _, e := range entries {
-		id := strings.TrimSuffix(e.Name(), previousPiHistorySuffix)
-		if e.IsDir() && wsdashboard.ValidReplyID(id) {
+		id := strings.TrimSuffix(strings.TrimSuffix(e.Name(), previousPiHistorySuffix), stagedPiHistorySuffix)
+		if !wsdashboard.ValidReplyID(id) {
+			continue
+		}
+		r.piArchiveIDs[id] = true
+		if e.IsDir() && !strings.HasSuffix(e.Name(), stagedPiHistorySuffix) {
 			ids[id] = true
 		}
 	}
+	if err := r.loadRetiredPiPurges(); err != nil {
+		fmt.Fprintf(r.opts.Log, "agent: load retired Pi deletions: %v\n", err)
+		return
+	}
+	for id := range r.piPurges {
+		if !r.piArchiveIDs[id] {
+			r.finishRetiredPiPurge(id)
+		}
+	}
 	for id := range ids {
+		if _, purging := r.piPurges[id]; purging {
+			continue
+		}
 		source := filepath.Join(root, id)
 		if err := recoverRetiredPiArchive(source); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent %s: recover retired Pi archive: %v\n", id, err)
@@ -109,16 +136,6 @@ func recoverRetiredPiArchive(dest string) error {
 		return errors.New("the retired Pi history path is not a directory")
 	}
 	return os.RemoveAll(previous)
-}
-
-func (r *Runner) discardRetiredPiHistory(rec Record) {
-	if rec.Backend != BackendPi {
-		return
-	}
-	archive := filepath.Join(r.opts.Dir, retiredPiHistoryDir, rec.ReplyID)
-	if err := errors.Join(os.RemoveAll(archive+stagedPiHistorySuffix), os.RemoveAll(archive+previousPiHistorySuffix), os.RemoveAll(archive)); err != nil {
-		fmt.Fprintf(r.opts.Log, "agent %s: delete retired Pi history: %v\n", rec.ReplyID, err)
-	}
 }
 
 func retiredPiHistoryFiles() []string {

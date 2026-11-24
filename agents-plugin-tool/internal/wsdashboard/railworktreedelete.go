@@ -559,9 +559,10 @@ func (d *Daemon) handleWorktreeDeletePreview(w http.ResponseWriter, r *http.Requ
 // needs force the submit did not carry, or was forced on a token the
 // worktree no longer matches; 409 with text while another git action of the
 // repository runs; 404 as the preview does; 502 with git's line when the
-// check or git failed. Once git removed the worktree it discards ended
-// sessions held by it, answers 200 with a worktreeDeleteAnswer, and the
-// rail reads the repository's worktrees again.
+// check or git failed. Retired-history archive removal can return 503
+// before Git runs. Once git removed the worktree it discards ended sessions
+// held by it, answers 200 with a worktreeDeleteAnswer, and the rail reads
+// the repository's worktrees again.
 func (d *Daemon) handleWorktreeDelete(w http.ResponseWriter, r *http.Request) {
 	var req worktreeDeleteRequest
 	if !worktreeDeleteBody(w, r, &req) {
@@ -607,6 +608,14 @@ func (d *Daemon) handleWorktreeDelete(w http.ResponseWriter, r *http.Request) {
 	if d.index != nil {
 		endedBefore = worktreeEndedSessions(c.Path, realTarget, d.index.Sessions(), time.Now())
 	}
+	purger, _ := d.agents.(AgentHistoryPurger)
+	if purger != nil {
+		if err := purger.PrepareWorktreeHistoryPurge(realTarget, endedBefore); err != nil {
+			fmt.Fprintf(d.log, "dashboard: prepare worktree history purge: %v\n", err)
+			http.Error(w, "Worktree history could not be purged. Retry deleting the worktree.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	args := []string{"worktree", "remove"}
 	if c.Force {
 		args = append(args, "--force")
@@ -617,6 +626,9 @@ func (d *Daemon) handleWorktreeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(d.log, "dashboard: deleted the worktree %s (force %t)\n", c.Path, c.Force)
 	d.purgeWorktreeSessions(c.Path, realTarget, endedBefore, time.Now())
+	if purger != nil {
+		purger.CompleteWorktreeHistoryPurge(realTarget)
+	}
 	if err := d.layout.dropWorktreeOrder(root, c.Path, realTarget); err != nil {
 		fmt.Fprintf(d.log, "dashboard: drop worktree order for %s: %v\n", c.Path, err)
 	}
