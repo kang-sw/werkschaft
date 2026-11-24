@@ -12,6 +12,9 @@ import (
 
 var _ auditSource = (*agyMapper)(nil)
 
+// Bound the unredacted assembly even when every individual fence fits.
+const agyThoughtCaptureBytes = 1 << 20
+
 func (*agyMapper) newAudit(sessionID string) (string, auditAdapter) {
 	return BackendAgy, &agyAudit{session: sessionID, openTools: make(map[string]string)}
 }
@@ -30,7 +33,7 @@ type agyAudit struct {
 
 type agyAuditThought struct {
 	at        time.Time
-	body      strings.Builder
+	body      []byte
 	lost      uint64
 	lossKnown bool
 	reason    string
@@ -97,6 +100,9 @@ func (a *agyAudit) update(params json.RawMessage, at time.Time) (bool, []auditEv
 		// tee'd; never break an open thought assembly on it.
 		return true, nil, nil
 	case "agent_thought_chunk":
+		if a.thought != nil && a.thought.reason == wsaudit.LossCaptureCap {
+			return true, nil, nil
+		}
 		var c struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -107,7 +113,19 @@ func (a *agyAudit) update(params json.RawMessage, at time.Time) (bool, []auditEv
 		if a.thought == nil {
 			a.thought = &agyAuditThought{at: at}
 		}
-		a.thought.body.WriteString(c.Text)
+		th := a.thought
+		if len(c.Text) > agyThoughtCaptureBytes-len(th.body) {
+			th.body, th.reason, th.lossKnown = nil, wsaudit.LossCaptureCap, false
+			return true, nil, a.thoughtEvent(th)
+		}
+		needed := len(th.body) + len(c.Text)
+		if needed > cap(th.body) {
+			// Keep the retained allocation within the same budget as the text.
+			body := make([]byte, len(th.body), min(agyThoughtCaptureBytes, max(needed, 2*cap(th.body))))
+			copy(body, th.body)
+			th.body = body
+		}
+		th.body = append(th.body, c.Text...)
 		return true, nil, nil
 	case "user_message_chunk", "agent_message_chunk":
 		return true, a.finishThought(false), nil
@@ -215,15 +233,18 @@ func (a *agyAudit) finishThought(ending bool) []auditEvent {
 		return nil
 	}
 	a.thought = nil
-	lost := th.reason != ""
+	if th.reason == wsaudit.LossCaptureCap {
+		return nil // the overflow already emitted this thought's marker
+	}
 	if ending && th.reason == "" {
 		th.reason = wsaudit.LossStreamEnd
 	}
-	if th.body.Len() == 0 && !lost && !ending {
-		return nil
-	}
+	return a.thoughtEvent(th)
+}
+
+func (a *agyAudit) thoughtEvent(th *agyAuditThought) []auditEvent {
 	ev := a.env(wsaudit.KindThinking, th.at)
-	ev.Out = th.body.String()
+	ev.Out = string(th.body)
 	setMeta(&ev, wsaudit.MetaAssembled, true)
 	if th.reason != "" {
 		setMeta(&ev, wsaudit.MetaIncomplete, true)
@@ -239,6 +260,9 @@ func (a *agyAudit) markLoss(n uint64, reason string) bool {
 	th := a.thought
 	if th == nil {
 		return false
+	}
+	if th.reason == wsaudit.LossCaptureCap {
+		return true
 	}
 	if th.reason == "" {
 		th.lossKnown = true
