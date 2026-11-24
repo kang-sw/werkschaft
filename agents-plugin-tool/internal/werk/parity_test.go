@@ -86,7 +86,7 @@ func TestWerkRecoversPendingExecApprovalButNeverDispatchesTwice(t *testing.T) {
 				})
 				must(t, err)
 				ws.launch = func(ctx context.Context, call execjob.ModelLaunch) (CallResult, error) {
-					if err := a.ApproveExecLaunch(ctx, call, json.RawMessage(`{"program":"printf"}`)); err != nil {
+					if _, err := a.ApproveExecLaunch(ctx, call, json.RawMessage(`{"program":"printf"}`)); err != nil {
 						return CallResult{}, err
 					}
 					call.JobID = "fixture-job"

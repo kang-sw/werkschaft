@@ -35,63 +35,66 @@ func approvalTool(tool string) string {
 
 // permitMutation records that a lead is waiting before asking. The second
 // barrier closes the replay window before a grant can reach the daemon.
-func (a *Agent) permitMutation(ctx context.Context, call functionCall, tool string, args json.RawMessage) error {
+func (a *Agent) permitMutation(ctx context.Context, call functionCall, tool string, args json.RawMessage, requireExplicit bool) (bool, error) {
 	if a.cfg.Approve == nil || tool == "" {
-		return nil
+		return false, nil
 	}
 	level := a.Authority()
 	if level == AuthorityReadOnly {
-		return errors.New("this read-only lead cannot run " + tool)
+		return false, errors.New("this read-only lead cannot run " + tool)
 	}
-	if level == AuthorityFull && !call.reask {
-		return nil
+	if level == AuthorityFull && !call.reask && !requireExplicit {
+		return false, nil
 	}
 	if call.CallID == "" {
-		return errors.New("the tool call needs an identity for approval")
+		return false, errors.New("the tool call needs an identity for approval")
 	}
 	if !call.reask {
 		if err := a.writeApproval("approval_pending", call.CallID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := a.cfg.Approve(ctx, tool, args); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if a.Authority() == AuthorityReadOnly {
-		return errors.New("the lead became read-only while the tool was waiting")
+		return false, errors.New("the lead became read-only while the tool was waiting")
 	}
-	return a.writeApproval("approval_dispatch", call.CallID)
+	err := a.writeApproval("approval_dispatch", call.CallID)
+	return err == nil, err
 }
 
 // ApproveExecLaunch handles the resolved preview of the active MCP launch.
-func (a *Agent) ApproveExecLaunch(ctx context.Context, call execjob.ModelLaunch, preview json.RawMessage) error {
+func (a *Agent) ApproveExecLaunch(ctx context.Context, call execjob.ModelLaunch, preview json.RawMessage) (bool, error) {
 	var args map[string]any
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		return errors.New("invalid exec launch arguments")
+		return false, errors.New("invalid exec launch arguments")
 	}
 	a.mutationMu.Lock()
 	active := a.mutationCall
 	if a.cfg.Approve == nil || active == nil || active.id != call.ID || active.tool != call.Tool ||
-		!reflect.DeepEqual(active.args, args) || active.approving || active.ctx.Err() != nil || ctx.Err() != nil {
+		!reflect.DeepEqual(active.args, args) || active.approving || active.explicit || active.ctx.Err() != nil || ctx.Err() != nil {
 		a.mutationMu.Unlock()
-		return errors.New("no matching exec launch is waiting for approval")
+		return false, errors.New("no matching exec launch is waiting for approval")
 	}
 	active.approving = true
 	a.mutationMu.Unlock()
 
-	if err := a.permitMutation(ctx, functionCall{CallID: active.id, reask: active.reask}, active.tool, preview); err != nil {
-		return err
-	}
+	explicit, err := a.permitMutation(ctx, functionCall{CallID: active.id, reask: active.reask}, active.tool, preview, call.RequireExplicit)
 	a.mutationMu.Lock()
 	defer a.mutationMu.Unlock()
-	if a.mutationCall != active || active.ctx.Err() != nil || ctx.Err() != nil {
-		return errors.New("the exec launch is no longer active")
+	active.approving = false
+	if err != nil {
+		return false, err
 	}
-	active.approved = true
-	return nil
+	if a.mutationCall != active || active.ctx.Err() != nil || ctx.Err() != nil {
+		return false, errors.New("the exec launch is no longer active")
+	}
+	active.execAdmitted, active.explicit = true, explicit
+	return explicit, nil
 }
 
 func (a *Agent) writeApproval(kind, callID string) error {

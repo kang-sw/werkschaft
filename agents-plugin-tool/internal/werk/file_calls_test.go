@@ -110,7 +110,7 @@ func TestExecLaunchRecordsOnlyMatchingCall(t *testing.T) {
 	if a.RecordExecLaunch(ctx, call) == nil {
 		t.Fatal("an unsolicited call was recorded")
 	}
-	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false)
+	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false, false)
 	must(t, err)
 	for _, wrong := range []execjob.ModelLaunch{
 		{ID: "wrong", Tool: call.Tool, JobID: call.JobID, Arguments: call.Arguments},
@@ -155,10 +155,10 @@ func TestWerkExecLaunchRequiresMatchingLiveApproval(t *testing.T) {
 	must(t, err)
 	defer a.Close()
 	call := execjob.ModelLaunch{ID: "c", Tool: "exec.run", JobID: "job", Arguments: json.RawMessage(`{"exe":"printf","args":["hello"]}`)}
-	if a.ApproveExecLaunch(ctx, call, preview) == nil {
+	if _, err := a.ApproveExecLaunch(ctx, call, preview); err == nil {
 		t.Fatal("unsolicited preview was accepted")
 	}
-	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false)
+	done, err := a.beginMutationCall(ctx, call.ID, call.Tool, call.Arguments, false, false)
 	must(t, err)
 	if a.RecordExecLaunch(ctx, call) == nil {
 		t.Fatal("job was bound before the matching approval")
@@ -168,23 +168,81 @@ func TestWerkExecLaunchRequiresMatchingLiveApproval(t *testing.T) {
 		{ID: call.ID, Tool: "exec.shell", Arguments: call.Arguments},
 		{ID: call.ID, Tool: call.Tool, Arguments: json.RawMessage(`{"exe":"printf","args":["changed"]}`)},
 	} {
-		if a.ApproveExecLaunch(ctx, wrong, preview) == nil {
+		if _, err := a.ApproveExecLaunch(ctx, wrong, preview); err == nil {
 			t.Fatal("mismatched preview was accepted")
 		}
 	}
-	must(t, a.ApproveExecLaunch(ctx, call, preview))
+	explicit, err := a.ApproveExecLaunch(ctx, call, preview)
+	must(t, err)
+	if !explicit {
+		t.Fatal("the approval answer lost its explicit origin")
+	}
 	must(t, a.RecordExecLaunch(ctx, call))
-	if a.ApproveExecLaunch(ctx, call, preview) == nil || a.RecordExecLaunch(ctx, call) == nil || prompts != 1 {
+	if _, err := a.ApproveExecLaunch(ctx, call, preview); err == nil || a.RecordExecLaunch(ctx, call) == nil || prompts != 1 {
 		t.Fatal("approval or job binding could be reused")
 	}
 	done()
 
 	stale := execjob.ModelLaunch{ID: "cancelled", Tool: call.Tool, JobID: "other-job", Arguments: call.Arguments}
-	end, err := a.beginMutationCall(ctx, stale.ID, stale.Tool, stale.Arguments, false)
+	end, err := a.beginMutationCall(ctx, stale.ID, stale.Tool, stale.Arguments, false, false)
 	must(t, err)
 	defer end()
 	cancel()
-	if a.ApproveExecLaunch(context.Background(), stale, preview) == nil || a.RecordExecLaunch(context.Background(), stale) == nil {
+	if _, err := a.ApproveExecLaunch(context.Background(), stale, preview); err == nil || a.RecordExecLaunch(context.Background(), stale) == nil {
 		t.Fatal("a cancelled call accepted a preview or bound a job")
+	}
+}
+
+func TestWerkFileCallRequiresApprovalAfterPostureDowngrade(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		name := "deny"
+		if allow {
+			name = "allow"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "changed.txt")
+			tool := &correlatedFileFixture{}
+			prompts := 0
+			a, err := New(Config{Dir: dir, Lead: true, Authority: AuthorityFull, WS: tool,
+				Endpoint: &scripted{}, Approve: func(context.Context, string, json.RawMessage) error {
+					prompts++
+					if _, err := os.Stat(target); !os.IsNotExist(err) {
+						t.Fatal("the file changed before approval")
+					}
+					if !allow {
+						return errors.New("operator denied fixture")
+					}
+					return nil
+				},
+			})
+			must(t, err)
+			defer a.Close()
+			tool.call = func(ctx context.Context, call wsfs.FileCall) (CallResult, error) {
+				if prompts != 0 {
+					t.Fatal("the initial full-access dispatch asked for approval")
+				}
+				// The MCP boundary observes the downgrade before the model
+				// loop's permission callback reaches this process.
+				call.Authority = wsfs.AuthorityWorkdirWrite
+				files := wsfs.Files{Root: dir, Authority: call.Authority, RecordMutation: func(ctx context.Context, intent wsfs.FileIntent) error {
+					call.Intent = intent
+					return a.RecordFileCall(ctx, call)
+				}}
+				text, err := files.Write(ctx, call.Arguments)
+				return CallResult{Text: text}, err
+			}
+			args := `{"path":"changed.txt","content":"new"}`
+			a.append(json.RawMessage(`{"type":"function_call","call_id":"c","name":"fs_write"}`))
+			_, failed := a.invokeMutating(context.Background(), map[string]toolEntry{"fs_write": {ws: "fs_write"}},
+				functionCall{CallID: "c", Name: "fs_write", Arguments: args})
+			if failed == allow || prompts != 1 {
+				t.Fatalf("failed = %v, prompts = %d", failed, prompts)
+			}
+			data, err := os.ReadFile(target)
+			if allow && (err != nil || string(data) != "new") || !allow && !os.IsNotExist(err) {
+				t.Fatalf("result = %q, %v", data, err)
+			}
+		})
 	}
 }

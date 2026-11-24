@@ -86,7 +86,7 @@ type Server struct {
 	// exist, only then. Empty elsewhere.
 	execCutover      string
 	fileWrites       *FileWriteSession
-	recordExecLaunch func(context.Context, execjob.ModelLaunch) error
+	recordExecLaunch func(context.Context, execjob.ModelLaunch) (bool, error)
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of the agent host, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.

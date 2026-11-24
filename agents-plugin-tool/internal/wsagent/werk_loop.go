@@ -184,12 +184,12 @@ func (p *werkLoop) recordFileCall(ctx context.Context, call wsfs.FileCall) error
 }
 
 type execLaunchRecorder interface {
-	recordExecLaunch(context.Context, execjob.ModelLaunch) error
+	recordExecLaunch(context.Context, execjob.ModelLaunch) (bool, error)
 }
 
-func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) error {
+func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunch) (bool, error) {
 	if err := p.ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if call.Approval != nil {
 		preview := call.Approval
@@ -198,11 +198,11 @@ func (p *werkLoop) recordExecLaunch(ctx context.Context, call execjob.ModelLaunc
 			Env: preview.Env, Stdin: preview.Stdin, StdinBytes: preview.StdinBytes,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		return p.agent.ApproveExecLaunch(ctx, call, input)
 	}
-	return p.agent.RecordExecLaunch(ctx, call)
+	return false, p.agent.RecordExecLaunch(ctx, call)
 }
 
 func (p *werkLoop) run(a *werk.Agent) {

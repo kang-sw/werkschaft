@@ -124,3 +124,50 @@ func TestHostedModelLaunchReplacementBeforeSpawn(t *testing.T) {
 		t.Fatal("replacement kept a running job hold or started a command")
 	}
 }
+
+func TestHostedModelLaunchRequiresApprovalAfterPostureDowngrade(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		name := "deny"
+		if allow {
+			name = "allow"
+		}
+		t.Run(name, func(t *testing.T) {
+			fx := newHostedFixture(t, time.Hour)
+			full := true
+			var decisions []bool
+			fx.store.failPut = func(row HostedJobRow) bool {
+				if row.HolderID != "" && !row.Terminal() {
+					full = false
+				}
+				return false
+			}
+			view, err := fx.launch(context.Background(), nil, HostedLaunch{
+				Async: true, BindJob: func(string) error { return nil },
+				ModelAuthority: func() (bool, error) { return full, nil },
+				ApproveModel: func(_ context.Context, _ HostedCall, requireExplicit bool) (bool, error) {
+					decisions = append(decisions, requireExplicit)
+					if !requireExplicit {
+						return false, nil
+					}
+					if full || len(fx.holders.spawned) != 0 {
+						t.Fatal("approval did not happen between downgrade and dispatch")
+					}
+					if !allow {
+						return false, errors.New("operator denied fixture")
+					}
+					return true, nil
+				},
+			})
+			if len(decisions) != 2 || decisions[0] || !decisions[1] {
+				t.Fatalf("grant decisions = %v", decisions)
+			}
+			if allow {
+				if err != nil || view.State != HostedRunning || len(fx.holders.spawned) != 1 {
+					t.Fatalf("approved launch = %+v, %v", view, err)
+				}
+			} else if err == nil || view.State != HostedFailed || len(fx.holders.spawned) != 0 {
+				t.Fatalf("refused launch = %+v, %v", view, err)
+			}
+		})
+	}
+}
