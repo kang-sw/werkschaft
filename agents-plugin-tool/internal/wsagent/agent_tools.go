@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
@@ -584,7 +585,7 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 				if err != nil {
 					return "", "", mapping, badRequest("tier %q (%s): %v", tier, res.Trace(), err)
 				}
-				if why := r.workerProviderGap(harness, binding.Provider); why != "" {
+				if why := r.workerStartProviderGap(harness, binding.Provider); why != "" {
 					return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
 				}
 				return harness, res.Rank(), binding, nil
@@ -610,10 +611,20 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	if err != nil {
 		return "", "", mapping, err
 	}
-	if why := r.workerProviderGap(harness, mapping.Provider); why != "" {
+	if why := r.workerStartProviderGap(harness, mapping.Provider); why != "" {
 		return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: %s", tier, why))
 	}
 	return harness, bare, mapping, nil
+}
+
+// Worker discovery also checks provider readiness. Only an actual spawn
+// refused for a provider can ask for background consent.
+func (r *Runner) workerStartProviderGap(harness, provider string) string {
+	why := r.workerProviderGap(harness, provider)
+	if why != "" && provider == string(wscred.ProviderOpenAI) {
+		requestPlanBackgroundConsent(r.opts.Backends[harness].Backend)
+	}
+	return why
 }
 
 func (r *Runner) workerProviderGap(harness, provider string) string {

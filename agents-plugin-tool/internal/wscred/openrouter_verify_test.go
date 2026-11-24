@@ -25,11 +25,17 @@ func routerResponse(t *testing.T, code int) *http.Response {
 }
 func TestOpenRouterVerificationOutcomes(t *testing.T) {
 	for _, tc := range []struct {
-		code   int
-		state  string
-		reject bool
+		code          int
+		state, reason string
+		reject        bool
 	}{
-		{200, "verified", false}, {401, "", true}, {403, "", true}, {429, "unverified", false}, {503, "unverified", false}, {302, "unverified", false}, {0, "unverified", false},
+		{200, "verified", "", false},
+		{401, "", "", true},
+		{403, "", "", true},
+		{429, "unverified", "temporary", false},
+		{503, "unverified", "temporary", false},
+		{302, "unverified", "temporary", false},
+		{0, "unverified", "network", false},
 	} {
 		t.Run(http.StatusText(tc.code), func(t *testing.T) {
 			s := testStore(t)
@@ -53,7 +59,8 @@ func TestOpenRouterVerificationOutcomes(t *testing.T) {
 					t.Fatal("rejection wrote file")
 				}
 			} else {
-				if err != nil || result.Status.Verification.State != tc.state || result.Status.Verification.CheckedAt == "" {
+				if err != nil || result.Status.Verification.State != tc.state ||
+					result.Status.Verification.Reason != tc.reason || result.Status.Verification.CheckedAt == "" {
 					t.Fatalf("%+v %v", result, err)
 				}
 				raw, _ := json.Marshal(result)
@@ -62,7 +69,7 @@ func TestOpenRouterVerificationOutcomes(t *testing.T) {
 				}
 				reopened := NewStore(s.path)
 				statuses, err := reopened.Status()
-				if err != nil || statuses[0].Verification.State != tc.state {
+				if err != nil || statuses[0].Verification.State != tc.state || statuses[0].Verification.Reason != tc.reason {
 					t.Fatalf("%+v %v", statuses, err)
 				}
 			}

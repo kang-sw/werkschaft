@@ -63,14 +63,19 @@ func ParseWerkEndpoints(raw string) (map[string]WerkEndpoint, error) {
 func LocalWerkProviderID(name string) string { return localWerkProviderPrefix + name }
 
 // UpdateWerkEndpoint mutates one endpoint under the shared global config lock.
-func UpdateWerkEndpoint(opts Options, name string, endpoint *WerkEndpoint) error {
+// prepare sees the same starting state the mutation will replace.
+func UpdateWerkEndpoint(opts Options, name string, endpoint *WerkEndpoint, prepare func(map[string]WerkEndpoint) error) (map[string]WerkEndpoint, error) {
 	path, err := GlobalPath(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var result map[string]WerkEndpoint
 	_, err = updateConfigFile(path, func(cfg *Config) error {
 		endpoints, err := ParseWerkEndpoints(cfg.Overrides[ItemWerkEndpoints])
 		if err != nil {
+			return err
+		}
+		if err := prepare(endpoints); err != nil {
 			return err
 		}
 		if endpoints == nil {
@@ -89,6 +94,7 @@ func UpdateWerkEndpoint(opts Options, name string, endpoint *WerkEndpoint) error
 		if err != nil {
 			return err
 		}
+		result = normalized
 		raw, _ = json.Marshal(normalized)
 		if cfg.Overrides == nil {
 			cfg.Overrides = map[string]string{}
@@ -99,5 +105,5 @@ func UpdateWerkEndpoint(opts Options, name string, endpoint *WerkEndpoint) error
 		cfg.Overrides[ItemWerkEndpoints] = string(raw)
 		return nil
 	})
-	return err
+	return result, err
 }

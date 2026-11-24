@@ -69,6 +69,7 @@ type OpenAIAccountStatus struct {
 	Active            bool   `json:"active"`
 	SignedIn          bool   `json:"signed_in"`
 	PlanEnabled       bool   `json:"plan_enabled"`
+	PlanPaused        bool   `json:"plan_paused,omitempty"`
 	BackgroundConsent *bool  `json:"background_consent,omitempty"`
 }
 
@@ -105,6 +106,9 @@ func (s *Store) SignInOpenAI(ctx context.Context, selection OpenAISignIn, openBr
 	}
 	ctx, cancel := context.WithTimeout(ctx, openAISignInWait)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hostID, previous, err := s.prepareOpenAISignIn(selection)
 	if err != nil {
 		return err
@@ -121,7 +125,7 @@ func (s *Store) SignInOpenAI(ctx context.Context, selection OpenAISignIn, openBr
 	if err != nil {
 		return err
 	}
-	return s.finishOpenAISignIn(previous, account)
+	return s.finishOpenAISignIn(ctx, previous, account)
 }
 
 func (s *Store) prepareOpenAISignIn(selection OpenAISignIn) (string, openAIAccount, error) {
@@ -153,7 +157,7 @@ func (s *Store) prepareOpenAISignIn(selection OpenAISignIn) (string, openAIAccou
 	return state.HostID, account, nil
 }
 
-func (s *Store) finishOpenAISignIn(previous, account openAIAccount) error {
+func (s *Store) finishOpenAISignIn(ctx context.Context, previous, account openAIAccount) error {
 	s.openAIMu.Lock()
 	defer s.openAIMu.Unlock()
 	s.mu.Lock()
@@ -166,6 +170,12 @@ func (s *Store) finishOpenAISignIn(previous, account openAIAccount) error {
 	}
 	state := s.doc.openAIState()
 	current := state.account(account.ClientID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if previous.ClientID != "" && current.ClientID == "" {
+		return ErrOpenAIAccountChanged
+	}
 	if previous.ClientID != "" && previous.ClientID != account.ClientID ||
 		current.ClientID != "" && (current.Subject != account.Subject || current.Issuer != account.Issuer) {
 		return errors.New("the signed-in OpenAI account does not match the selected registration")
@@ -178,6 +188,10 @@ func (s *Store) finishOpenAISignIn(previous, account openAIAccount) error {
 // SetOpenAIBackgroundConsent records the user's explicit answer for the
 // selected registration. A false answer also revokes a previous grant.
 func (s *Store) SetOpenAIBackgroundConsent(clientID string, allowed bool) error {
+	return s.setOpenAIBackgroundConsent(clientID, 0, false, allowed)
+}
+
+func (s *Store) setOpenAIBackgroundConsent(clientID string, prompt uint64, activeOnly, allowed bool) error {
 	s.openAIMu.Lock()
 	defer s.openAIMu.Unlock()
 	s.mu.Lock()
@@ -189,6 +203,9 @@ func (s *Store) SetOpenAIBackgroundConsent(clientID string, allowed bool) error 
 		return err
 	}
 	state := s.doc.openAIState()
+	if activeOnly && (clientID != "" && clientID != state.Active || prompt != 0 && prompt != s.openAIConsent.pending) {
+		return ErrOpenAIAccountChanged
+	}
 	if clientID == "" {
 		clientID = state.Active
 	}
@@ -196,11 +213,41 @@ func (s *Store) SetOpenAIBackgroundConsent(clientID string, allowed bool) error 
 	if a.ClientID == "" {
 		return openAIProviderError(ErrNotConfigured)
 	}
+	if activeOnly && (a.IDToken == "" || !a.planEnabled()) {
+		return openAIProviderError(ErrNotConfigured)
+	}
 	if a.Consent != nil && *a.Consent == allowed {
 		return nil
 	}
 	a.Consent = &allowed
 	return s.writeOpenAIAccountLocked(state, a)
+}
+
+// SignOutOpenAI deletes the displayed active registration and its consent.
+func (s *Store) SignOutOpenAI(clientID string) error {
+	s.openAIMu.Lock()
+	defer s.openAIMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
+	}
+	state := s.doc.openAIState()
+	if clientID == "" || state.Active != clientID {
+		return ErrOpenAIAccountChanged
+	}
+	delete(state.Accounts, clientID)
+	state.Active = ""
+	err := s.writeOpenAIStateLocked(state)
+	// Retirement can report an error after the replacement was published.
+	// In either published case, an old in-memory grant must stay retired.
+	if s.openAIAccount.ClientID != clientID {
+		delete(s.openAIPlanPauses, clientID)
+		if s.pendingOpenAIRefresh != nil && s.pendingOpenAIRefresh.ClientID == clientID {
+			s.pendingOpenAIRefresh = nil
+		}
+	}
+	return err
 }
 
 func openAIProviderError(err error) error {
@@ -275,6 +322,7 @@ func (s *Store) openAICurrentLocked(req Request) (Credential, openAIAccount, boo
 	case !account.planEnabled():
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrOpenAIPlanDisabled)
 	case req.Background && (account.Consent == nil || !*account.Consent):
+		s.requestOpenAIConsentLocked()
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrConsentRequired)
 	case account.AccessToken == "" || account.RefreshToken == "":
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrNotConfigured)

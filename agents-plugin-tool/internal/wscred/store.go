@@ -130,6 +130,7 @@ func (s *Store) MigrateLegacy() error {
 type Store struct {
 	localProviders       atomic.Pointer[[]Provider]
 	localRevision        atomic.Uint64
+	openAIRevision       atomic.Uint64
 	openRouterGeneration uint64            // guarded by mu; changes on key and verification publication
 	openRouterTransport  http.RoundTripper // tests only; production uses the fixed HTTPS transport
 	path                 string
@@ -142,6 +143,7 @@ type Store struct {
 	openAIAccount        openAIAccount
 	pendingOpenAIRefresh *openAIAccount
 	openAIPlanPauses     map[string]*openAIPlanPause // guarded by mu
+	openAIConsent        openAIConsentPrompt         // guarded by mu
 
 	mu        sync.Mutex
 	recovered bool
@@ -377,7 +379,13 @@ func (s *Store) recoverLocked() error {
 func (s *Store) useDocumentLocked(doc document) {
 	s.doc, s.keys = doc, doc.apiKeys()
 	openAI := doc.openAIState()
-	s.openAIAccount = openAI.account(openAI.Active)
+	current := openAI.account(openAI.Active)
+	previous := s.openAIAccount
+	if current.ClientID != previous.ClientID || current.IDToken != previous.IDToken || current.planEnabled() != previous.planEnabled() {
+		s.openAIRevision.Add(1)
+	}
+	s.openAIAccount = current
+	s.syncOpenAIConsentPromptLocked()
 }
 
 // Credential returns req.Provider's current credential (Source).
@@ -426,6 +434,9 @@ func (s *Store) statusLocked(p Provider) ProviderStatus {
 		account := s.openAIAccount
 		status.Configured = account.planEnabled() && account.IDToken != "" && account.AccessToken != "" && account.RefreshToken != ""
 		status.OpenAIAccounts = s.doc.openAIState().status()
+		for i := range status.OpenAIAccounts {
+			status.OpenAIAccounts[i].PlanPaused = s.openAIPlanPauses[status.OpenAIAccounts[i].ClientID] != nil
+		}
 		if !account.UpdatedAt.IsZero() {
 			status.UpdatedAt = account.UpdatedAt.Format(time.RFC3339)
 		}
@@ -566,17 +577,22 @@ func trimKey(key string) string {
 
 func isSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\r' || b == '\n' }
 
+// InvalidKeyError reports why a key failed local format validation.
+type InvalidKeyError string
+
+func (e InvalidKeyError) Error() string { return string(e) }
+
 // validateKey checks a key's shape without quoting it.
 func validateKey(key string) error {
 	switch {
 	case key == "":
-		return errors.New("the API key is empty")
+		return InvalidKeyError("the API key is empty")
 	case len(key) > maxKeyBytes:
-		return fmt.Errorf("the API key is longer than %d bytes", maxKeyBytes)
+		return InvalidKeyError(fmt.Sprintf("the API key is longer than %d bytes", maxKeyBytes))
 	}
 	for i := 0; i < len(key); i++ {
 		if c := key[i]; c <= ' ' || c >= 0x7f {
-			return errors.New("the API key holds whitespace, control, or non-ASCII characters")
+			return InvalidKeyError("the API key holds whitespace, control, or non-ASCII characters")
 		}
 	}
 	return nil

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
@@ -283,6 +284,20 @@ func TestAgentSystemPromptReachesEveryStart(t *testing.T) {
 	agentRefused(t, err, http.StatusBadRequest, "not both")
 	_, err = h.runner.AgentSpawn(lead, AgentSpawnRequest{Prompt: "x", Tier: "small", Authority: "read-only", SystemPromptPath: "prompts/probe.md"})
 	agentRefused(t, err, http.StatusBadRequest, "system_prompt_path")
+}
+
+func TestWerkWorkerAdmissionAsksForConsentOnlyOnStart(t *testing.T) {
+	prompt := make(chan struct{}, 1)
+	r := &Runner{opts: Options{Backends: map[string]BackendRegistration{
+		BackendWerk: {Backend: WerkBackend{credentials: cronPlanStatus{prompt: prompt}}},
+	}}}
+	provider := string(wscred.ProviderOpenAI)
+	if why := r.workerProviderGap(BackendWerk, provider); why == "" || len(prompt) != 0 {
+		t.Fatal("worker discovery did not report consent-required without prompting")
+	}
+	if why := r.workerStartProviderGap(BackendWerk, provider); why == "" || len(prompt) != 1 {
+		t.Fatal("worker admission did not report consent-required and prompt")
+	}
 }
 
 type unavailableWerkFixture struct{ *fakeBackend }

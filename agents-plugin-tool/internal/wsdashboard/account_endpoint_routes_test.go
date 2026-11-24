@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -13,23 +14,34 @@ import (
 )
 
 func TestEndpointMachineRouteAndRedaction(t *testing.T) {
-	t.Setenv(wsconfig.EnvConfigHome, t.TempDir())
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	configPath, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := net.JoinHostPort(net.IPv4(127, 0, 0, 1).String(), "1234")
+	remote := net.JoinHostPort(net.IPv4(192, 0, 2, 10).String(), "1234")
 	store := wscred.NewStore(filepath.Join(t.TempDir(), "credentials.json"))
-	d := &Daemon{credentials: store, endpoint: Endpoint{Token: "fixture-token"}}
+	d := &Daemon{credentials: store, endpoint: Endpoint{Token: "fixture-token"}, config: &ConfigBackend{Options: opts}}
 	for _, test := range []struct {
 		body, remote, origin string
+		wrongConfig          bool
 		want                 int
 	}{
-		{body: `{"op":"set","name":"desk","base_url":"http://example.invalid/v1","kind":"ollama","key":"fake-endpoint-secret"}`, remote: "127.0.0.1:1234", want: 200},
-		{body: `{"op":"set","name":"desk","base_url":"http://secret:password@example.invalid","kind":"ollama","key":"fake-endpoint-secret"}`, remote: "127.0.0.1:1234", want: 400},
-		{body: `{"op":"remove","name":"desk"} {}`, remote: "127.0.0.1:1234", want: 400},
-		{body: `{"op":"remove","name":"desk"}`, remote: "192.0.2.10:1234", want: 401},
-		{body: `{"op":"remove","name":"desk"}`, remote: "127.0.0.1:1234", origin: "http://localhost", want: 401},
-		{body: `{"op":"remove","name":"desk"}`, remote: "127.0.0.1:1234", want: 200},
+		{body: `{"op":"set","name":"desk","base_url":"http://example.invalid/v1","kind":"ollama","key":"fake-endpoint-secret"}`, remote: local, want: 200},
+		{body: `{"op":"set","name":"desk","base_url":"http://secret:password@example.invalid","kind":"ollama","key":"fake-endpoint-secret"}`, remote: local, want: 400},
+		{body: `{"op":"remove","name":"desk"} {}`, remote: local, want: 400},
+		{body: `{"op":"remove","name":"desk"}`, remote: remote, want: 401},
+		{body: `{"op":"remove","name":"desk"}`, remote: local, origin: "http://localhost", want: 401},
+		{body: `{"op":"remove","name":"desk"}`, remote: local, wrongConfig: true, want: 409},
+		{body: `{"op":"remove","name":"desk"}`, remote: local, want: 200},
 	} {
 		req := httptest.NewRequest("POST", "http://localhost"+EndpointChangePath, strings.NewReader(test.body))
 		req.RemoteAddr = test.remote
 		req.Header.Set("Authorization", "Bearer fixture-token")
+		if !test.wrongConfig {
+			req.Header.Set(endpointConfigHeader, companionConfigID(configPath))
+		}
 		if test.origin != "" {
 			req.Header.Set("Origin", test.origin)
 		}
@@ -58,14 +70,16 @@ func TestEndpointOfflineMutation(t *testing.T) {
 }
 
 func TestEndpointMachineExemptionIsExact(t *testing.T) {
+	local := net.JoinHostPort(net.IPv4(127, 0, 0, 1).String(), "1234")
+	remote := net.JoinHostPort(net.IPv4(192, 0, 2, 1).String(), "1234")
 	for _, test := range []struct {
 		method, path, remote string
 		want                 bool
 	}{
-		{"POST", EndpointChangePath, "127.0.0.1:1234", true},
-		{"GET", EndpointChangePath, "127.0.0.1:1234", false},
-		{"POST", EndpointChangePath + "/extra", "127.0.0.1:1234", false},
-		{"POST", EndpointChangePath, "192.0.2.1:1234", false},
+		{"POST", EndpointChangePath, local, true},
+		{"GET", EndpointChangePath, local, false},
+		{"POST", EndpointChangePath + "/extra", local, false},
+		{"POST", EndpointChangePath, remote, false},
 	} {
 		req := httptest.NewRequest(test.method, "http://localhost"+test.path, nil)
 		req.RemoteAddr = test.remote

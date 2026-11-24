@@ -18,14 +18,7 @@ import (
 func (s *Store) LoadLocalEndpoints(opts wsconfig.Options) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadLocalEndpointsLocked(opts)
-}
 
-func (s *Store) loadLocalEndpointsLocked(opts wsconfig.Options) error {
-	return s.reconcileLocalEndpointsLocked(opts, nil)
-}
-
-func (s *Store) reconcileLocalEndpointsLocked(opts wsconfig.Options, change *LocalEndpointChange) error {
 	overrides, err := wsconfig.GlobalOverrides(opts)
 	if err != nil {
 		return err
@@ -34,6 +27,10 @@ func (s *Store) reconcileLocalEndpointsLocked(opts wsconfig.Options, change *Loc
 	if err != nil {
 		return err
 	}
+	return s.reconcileLocalEndpointsLocked(endpoints, nil)
+}
+
+func (s *Store) reconcileLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint, change *LocalEndpointChange) error {
 	providers := make([]Provider, 0, len(endpoints))
 	for _, name := range slices.Sorted(maps.Keys(endpoints)) {
 		endpoint := endpoints[name]
@@ -42,16 +39,16 @@ func (s *Store) reconcileLocalEndpointsLocked(opts wsconfig.Options, change *Loc
 			Kind: KindAPIKey, BaseURL: endpoint.BaseURL, Dialect: endpoint.Kind,
 		})
 	}
-	// Read credentials only during startup/global-write maintenance, never on
-	// catalog reads. A failed cleanup is retried against the persisted config.
-	if err := s.prepareWriteLocked(); err != nil {
-		return err
-	}
 	previous := s.localProviders.Swap(&providers)
 	if previous == nil || !slices.EqualFunc(*previous, providers, func(a, b Provider) bool {
 		return a.ID == b.ID && a.BaseURL == b.BaseURL && a.Dialect == b.Dialect
 	}) {
 		s.localRevision.Add(1)
+	}
+	// Recover against the configured endpoints during startup and global
+	// writes. Publish the routing even if credential cleanup must be retried.
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
 	}
 	next := s.doc.clone()
 	valid := map[string]bool{}
@@ -95,6 +92,9 @@ func (s *Store) reconcileLocalEndpointsLocked(opts wsconfig.Options, change *Loc
 
 // LocalRevision changes when an endpoint definition or API key changes.
 func (s *Store) LocalRevision() uint64 { return s.localRevision.Load() }
+
+// ProviderRevision also invalidates model catalogs when the OpenAI account or grant changes.
+func (s *Store) ProviderRevision() uint64 { return s.LocalRevision() + s.openAIRevision.Load() }
 
 // LocalProviders returns the configured custom API-key providers.
 func (s *Store) LocalProviders() []Provider {
@@ -168,16 +168,16 @@ func (s *Store) ApplyLocalEndpoint(opts wsconfig.Options, change LocalEndpointCh
 	defer s.mu.Unlock()
 	// Finish any prior failed cleanup against the still-current config before
 	// accepting another edit. This prevents restoring a retired URL's key.
-	if err := s.loadLocalEndpointsLocked(opts); err != nil {
-		return nil, err
-	}
-	if err := wsconfig.UpdateWerkEndpoint(opts, change.Name, endpoint); err != nil {
+	endpoints, err := wsconfig.UpdateWerkEndpoint(opts, change.Name, endpoint, func(current map[string]wsconfig.WerkEndpoint) error {
+		return s.reconcileLocalEndpointsLocked(current, nil)
+	})
+	if err != nil {
 		return nil, err
 	}
 	if endpoint != nil {
 		change.BaseURL = endpoint.BaseURL
 	}
-	if err := s.reconcileLocalEndpointsLocked(opts, &change); err != nil {
+	if err := s.reconcileLocalEndpointsLocked(endpoints, &change); err != nil {
 		return nil, err
 	}
 	result := []LocalEndpointStatus{}

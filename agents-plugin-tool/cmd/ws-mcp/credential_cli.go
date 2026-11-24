@@ -347,6 +347,12 @@ func (c *hostedCLI) credentialEndpoint(args []string) int {
 		if c.host.credentials == nil {
 			return c.failed(name, errors.New("credential store unavailable"))
 		}
+		if c.host.configPath != "" {
+			path, err := wsconfig.GlobalPath(opts)
+			if err != nil || path != c.host.configPath {
+				return c.failed(name, errors.New("the daemon uses a different global configuration"))
+			}
+		}
 		endpoints, err = c.host.credentials.ApplyLocalEndpoint(opts, change)
 	} else {
 		dir, e := wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome))

@@ -18,6 +18,8 @@ import (
 
 const EndpointChangePath = "/auth/provider/endpoint"
 
+const endpointConfigHeader = "X-WS-Endpoint-Config"
+
 type endpointWriter interface {
 	ApplyLocalEndpoint(wsconfig.Options, wscred.LocalEndpointChange) ([]wscred.LocalEndpointStatus, error)
 }
@@ -39,11 +41,23 @@ func (d *Daemon) handleEndpointChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 405, credentialChangeRefusal{Error: "method_not_allowed"})
 		return
 	}
-	if !d.machineAuth(r) {
+	if !localViewer(r) || !d.machineAuth(r) {
 		writeJSON(w, 401, credentialChangeRefusal{Error: "unauthorized"})
 		return
 	}
+	configPath, err := wsconfig.GlobalPath(d.endpointConfigOptions())
+	if err != nil || r.Header.Get(endpointConfigHeader) != companionConfigID(configPath) {
+		accountError(w, http.StatusConflict, "endpoint_config_mismatch")
+		return
+	}
 	d.handleAccountEndpoint(w, r, d.credentials)
+}
+
+func (d *Daemon) endpointConfigOptions() wsconfig.Options {
+	if d.config != nil {
+		return d.config.Options
+	}
+	return wsconfig.Options{}
 }
 
 // handleAccountEndpoint is called after the Account route's local browser guard.
@@ -55,13 +69,13 @@ func (d *Daemon) handleAccountEndpoint(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	var body endpointBody
-	dec := json.NewDecoder(io.LimitReader(r.Body, 128<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
 	dec.DisallowUnknownFields()
 	if dec.Decode(&body) != nil || dec.Decode(new(any)) != io.EOF {
 		writeJSON(w, 400, credentialChangeRefusal{Error: "invalid_endpoint"})
 		return
 	}
-	endpoints, err := writer.ApplyLocalEndpoint(wsconfig.Options{}, wscred.LocalEndpointChange{Op: body.Op, Name: body.Name, BaseURL: body.BaseURL, Kind: body.Kind, Key: wscred.NewSecret(body.Key)})
+	endpoints, err := writer.ApplyLocalEndpoint(d.endpointConfigOptions(), wscred.LocalEndpointChange{Op: body.Op, Name: body.Name, BaseURL: body.BaseURL, Kind: body.Kind, Key: wscred.NewSecret(body.Key)})
 	switch {
 	case errors.Is(err, wscred.ErrInvalidEndpoint):
 		writeJSON(w, 400, credentialChangeRefusal{Error: "invalid_endpoint"})
@@ -76,12 +90,17 @@ func (d *Daemon) handleAccountEndpoint(w http.ResponseWriter, r *http.Request, s
 
 // ApplyLocalEndpointChange uses the daemon when running, otherwise its writer lock.
 func ApplyLocalEndpointChange(ctx context.Context, dir, credPath string, opts wsconfig.Options, change wscred.LocalEndpointChange) ([]wscred.LocalEndpointStatus, error) {
+	configPath, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
 	lock := flock.New(filepath.Join(dir, lockFileName))
 	defer lock.Close()
 	deadline := time.Now().Add(credentialChangeWait)
+	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for {
 		locked, err := lock.TryLock()
 		if err != nil {
@@ -96,7 +115,6 @@ func ApplyLocalEndpointChange(ctx context.Context, dir, credPath string, opts ws
 			return store.ApplyLocalEndpoint(opts, change)
 		}
 		if ep, err := ReadEndpoint(dir); err == nil {
-			client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 			if _, err := Health(ctx, client, ep); err == nil {
 				raw, _ := json.Marshal(endpointBody{Op: change.Op, Name: change.Name, BaseURL: change.BaseURL, Kind: change.Kind, Key: change.Key.Reveal()})
 				req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL(ep, EndpointChangePath), bytes.NewReader(raw))
@@ -105,6 +123,7 @@ func ApplyLocalEndpointChange(ctx context.Context, dir, credPath string, opts ws
 				}
 				req.Header.Set("Authorization", "Bearer "+ep.Token)
 				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set(endpointConfigHeader, companionConfigID(configPath))
 				resp, err := client.Do(req)
 				if err == nil {
 					var result endpointResult

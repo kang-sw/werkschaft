@@ -49,7 +49,7 @@ var openRouterHTTPTransport = &http.Transport{
 }
 
 func (s *Store) checkOpenRouter(ctx context.Context, key string) OpenRouterVerificationStatus {
-	v := OpenRouterVerificationStatus{State: "unverified", Reason: "unavailable"}
+	v := OpenRouterVerificationStatus{State: "unverified", Reason: "network"}
 	transport := s.openRouterTransport
 	if transport == nil {
 		transport = openRouterHTTPTransport
@@ -60,6 +60,7 @@ func (s *Store) checkOpenRouter(ctx context.Context, key string) OpenRouterVerif
 	resp, err := client.Do(req)
 	if err == nil {
 		resp.Body.Close()
+		v.Reason = "temporary"
 		switch {
 		case resp.StatusCode >= 200 && resp.StatusCode < 300:
 			v.State, v.Reason = "verified", ""
@@ -121,7 +122,11 @@ func (s *Store) RecheckOpenRouterKey(ctx context.Context) (ChangeResult, error) 
 }
 func (s *Store) publishOpenRouter(key string, v OpenRouterVerificationStatus) (ChangeResult, error) {
 	next := s.doc.clone()
-	entry := apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: s.now().UTC().Format(time.RFC3339),
+	updatedAt := s.now().UTC().Format(time.RFC3339)
+	if current, ok := s.keys[ProviderOpenRouter]; ok && current.APIKey == key {
+		updatedAt = current.UpdatedAt
+	}
+	entry := apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: updatedAt,
 		Verification: &openRouterVerification{OpenRouterVerificationStatus: v, Fingerprint: keyFingerprint(key)}}
 	raw, err := mergeEntry(next.providers[string(ProviderOpenRouter)], entry)
 	if err != nil {

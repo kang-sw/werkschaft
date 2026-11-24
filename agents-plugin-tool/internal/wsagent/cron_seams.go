@@ -157,6 +157,7 @@ func planInputClaims(queue []QueuedInput, pending, held []wsinbox.Record) (take 
 // settlePlanCronRefusal keeps a denied prompt out of the model log, where
 // a later interactive request would pick it up as conversation history.
 func (c *conv) settlePlanCronRefusal(claim string, mark uint64) {
+	requestPlanBackgroundConsent(c.r.opts.Backends[c.rec.Backend].Backend)
 	message := (&wscred.ProviderError{Provider: wscred.ProviderOpenAI, Err: wscred.ErrConsentRequired}).Error()
 	var err error
 	refused := c.admitInput(func() {
