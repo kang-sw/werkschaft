@@ -7,11 +7,23 @@ import (
 	"os"
 )
 
-func openMutationTemp(*os.File, string) (*os.File, error) { return nil, errors.ErrUnsupported }
+type mutationPermissions struct{}
 
-func setMutationTempMode(*os.File, os.FileMode) error { return errors.ErrUnsupported }
+func readMutationPermissions(*os.File, os.FileInfo) (*mutationPermissions, error) {
+	return nil, errors.ErrUnsupported
+}
 
-func publishMutationTemp(*os.File, *os.File, string, bool) error { return errors.ErrUnsupported }
+func (*mutationPermissions) prepare(*os.File) error { return errors.ErrUnsupported }
+
+func (*mutationPermissions) verify(*os.File, os.FileInfo) error { return errors.ErrUnsupported }
+
+func openMutationTemp(*os.File, string, *mutationPermissions) (*os.File, error) {
+	return nil, errors.ErrUnsupported
+}
+
+func publishMutationTemp(*os.File, *os.File, *os.File, string, bool) error {
+	return errors.ErrUnsupported
+}
 
 func discardMutationTemp(*os.File, *os.File) {}
 

@@ -44,7 +44,8 @@ type Files struct {
 	Protection func() FileProtection
 	// RecordMutation persists the admitted target and content states before
 	// the file is touched.
-	RecordMutation func(context.Context, FileIntent) error
+	RecordMutation         func(context.Context, FileIntent) error
+	beforeReplacementWrite func(*os.File)
 }
 
 // FileProtection checks the selected path and the actual handles used for it.
