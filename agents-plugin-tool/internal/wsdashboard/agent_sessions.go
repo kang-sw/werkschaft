@@ -106,6 +106,13 @@ type AgentForgetter interface {
 	ForgetClosed(replyID string)
 }
 
+// AgentHistoryPurger prepares archive deletion before Git removes the
+// worktree and completes it after the corresponding history is removed.
+type AgentHistoryPurger interface {
+	PrepareWorktreeHistoryPurge(worktree string, ended map[string]bool) error
+	CompleteWorktreeHistoryPurge(worktree string)
+}
+
 // AgentSessionMeta holds a runner conversation's in-memory metadata for
 // dashboard rendering without touching disk.
 type AgentSessionMeta struct {

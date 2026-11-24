@@ -227,7 +227,6 @@ var _ wsdashboard.AgentForgetter = (*Runner)(nil)
 func (r *Runner) ForgetClosed(id string) {
 	if rec, ok := r.forgetClosed(id); ok {
 		r.deleteDurableRecord(rec)
-		r.discardRetiredPiHistory(rec)
 	}
 }
 
@@ -269,7 +268,6 @@ func (r *Runner) forget(id string) {
 		fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
 	} else {
 		r.deleteDurableRecord(rec)
-		r.discardRetiredPiHistory(rec)
 	}
 	r.notify(id, rec.Root)
 }

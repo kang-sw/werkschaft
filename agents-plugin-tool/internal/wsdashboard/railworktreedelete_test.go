@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,12 +45,20 @@ type deleteFixture struct {
 
 func newDeleteFixture(t *testing.T, pools ...string) deleteFixture {
 	t.Helper()
+	return newDeleteFixtureWithAgents(t, nil, pools...)
+}
+
+func newDeleteFixtureWithAgents(t *testing.T, agents AgentHost, pools ...string) deleteFixture {
+	t.Helper()
 	base, root := worktreeRepo(t)
 	var roots []string
 	for _, p := range pools {
 		roots = append(roots, filepath.Join(base, p))
 	}
-	f := startPageFixture(t, withWorkspaces(t), func(o *DaemonOptions) { o.Worktrees = poolSource{pools: roots} })
+	f := startPageFixture(t, withWorkspaces(t), func(o *DaemonOptions) {
+		o.Worktrees = poolSource{pools: roots}
+		o.Agents = agents
+	})
 	if _, err := f.d.workspaces.add(root, false); err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +266,10 @@ type deleteForgetAgents struct {
 	forgotten map[string]bool
 }
 
-func (a *deleteForgetAgents) Handler() http.Handler        { return http.NotFoundHandler() }
-func (a *deleteForgetAgents) Start(func(string, string))   {}
-func (a *deleteForgetAgents) InboxChanged(string)          {}
-func (a *deleteForgetAgents) Close()                       {}
+func (a *deleteForgetAgents) Handler() http.Handler      { return http.NotFoundHandler() }
+func (a *deleteForgetAgents) Start(func(string, string)) {}
+func (a *deleteForgetAgents) InboxChanged(string)        {}
+func (a *deleteForgetAgents) Close()                     {}
 func (a *deleteForgetAgents) ForgetClosed(replyID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -273,6 +283,56 @@ func (a *deleteForgetAgents) forgot(replyID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.forgotten[replyID]
+}
+
+type deleteRetryAgents struct {
+	deleteForgetAgents
+	prepare func(string) error
+	done    atomic.Bool
+}
+
+func (a *deleteRetryAgents) PrepareWorktreeHistoryPurge(worktree string, _ map[string]bool) error {
+	return a.prepare(worktree)
+}
+
+func (a *deleteRetryAgents) CompleteWorktreeHistoryPurge(string) { a.done.Store(true) }
+
+func TestWorktreeDeleteRetriesHistoryPurgeBeforeRemovingCheckout(t *testing.T) {
+	var attempts atomic.Int32
+	agents := &deleteRetryAgents{prepare: func(worktree string) error {
+		switch attempts.Add(1) {
+		case 1:
+			return errors.New("archive removal blocked")
+		case 2:
+			// A newly dirty checkout makes Git refuse removal after the
+			// archive was prepared and the route's check passed.
+			return os.WriteFile(filepath.Join(worktree, "late-draft"), []byte("late draft\n"), 0o600)
+		}
+		return nil
+	}}
+	f := newDeleteFixtureWithAgents(t, agents)
+	wt := filepath.Join(f.tmp, "retrypurge")
+	gitRun(t, f.root, "worktree", "add", "-q", "-b", "retrypurge", wt)
+	req := worktreeDeleteRequest{Path: wt}
+	if code, body := f.post(t, worktreeDeleteRoute, req); code != http.StatusServiceUnavailable || !strings.Contains(body, "Retry") {
+		t.Fatalf("archive removal failure = %d %q", code, body)
+	}
+	if !pathExists(wt) || agents.done.Load() {
+		t.Fatal("archive failure removed the checkout or completed the purge")
+	}
+	if code, body := f.post(t, worktreeDeleteRoute, req); code != http.StatusBadGateway {
+		t.Fatalf("Git removal failure after archive removal = %d %q", code, body)
+	}
+	if !pathExists(wt) || agents.done.Load() {
+		t.Fatal("Git failure removed the checkout or completed the purge")
+	}
+	if err := os.Remove(filepath.Join(wt, "late-draft")); err != nil {
+		t.Fatal(err)
+	}
+	f.deleted(t, req)
+	if !agents.done.Load() || attempts.Load() != 3 {
+		t.Fatal("the retry did not complete the prepared purge")
+	}
 }
 
 // TestWorktreeDeletePurgesEndedSessions pins the regression where deleting a

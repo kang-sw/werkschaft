@@ -325,6 +325,10 @@ var schema = []string{
 		backend TEXT NOT NULL,
 		record_json BLOB NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS retired_pi_purges (
+		reply_id TEXT PRIMARY KEY,
+		worktree TEXT NOT NULL
+	)`,
 
 	// (1993) Explicit permission selections. 'invalid' keeps an existing
 	// unusable selection (fail closed) apart from absence (no row).
