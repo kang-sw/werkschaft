@@ -232,8 +232,8 @@ func TestAgyMapperQuotaClassificationAndWatchdogExclusion(t *testing.T) {
 			proc:                &fakeWatchdogProc{},
 		}
 		c.onModelFailure(failure)
-		if !c.modelWaitFailureExcluded || c.modelWaitFailure != "" {
-			t.Fatalf("expected quota failure excluded from watchdog drain, got excluded=%v failure=%q", c.modelWaitFailureExcluded, c.modelWaitFailure)
+		if !c.modelWaitFailureExcluded || c.modelWaitFailure != failure {
+			t.Fatalf("expected quota failure tracked without short-backoff retry, got excluded=%v failure=%q", c.modelWaitFailureExcluded, c.modelWaitFailure)
 		}
 		if c.interceptModelWaitTurnEnd(Event{TurnEnd: true, ModelFailure: failure}) {
 			t.Fatalf("expected interceptModelWaitTurnEnd to return false for quota failure")

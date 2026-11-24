@@ -401,13 +401,14 @@ func (c *conv) onModelFailure(failure string) {
 		c.resetModelWaitTimer()
 		return
 	}
-	if !c.turn || c.proc == nil || c.modelWaitPending > 0 || len(c.approvals) > 0 || isAgyQuotaText(failure) {
+	if !c.turn || c.proc == nil || c.modelWaitPending > 0 || len(c.approvals) > 0 {
 		c.modelWaitFailureExcluded = true
 		c.stopModelWaitTimer()
 		c.stopModelFailureDrain()
 		return
 	}
-	c.modelWaitFailureExcluded = false
+	// Quota failures get a terminal drain but never a short-backoff retry.
+	c.modelWaitFailureExcluded = isAgyQuotaText(failure)
 	c.modelWaitFailure = failure
 	c.stopModelWaitTimer()
 	c.resetModelFailureDrain(modelFailureDrainDuration(failure))
@@ -434,6 +435,12 @@ func (c *conv) modelFailureDrainTimedOut() {
 		return
 	}
 	if c.modelWaitPending > 0 || len(c.approvals) > 0 {
+		return
+	}
+	if isAgyQuotaText(c.modelWaitFailure) {
+		failure := c.modelWaitFailure
+		c.alert(wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: failure}, false, false)
+		c.failModelWaitImmediately(agyTerminalFailureError(failure, ""))
 		return
 	}
 	if c.modelWaitRetries < c.modelWaitMaxRetries {
