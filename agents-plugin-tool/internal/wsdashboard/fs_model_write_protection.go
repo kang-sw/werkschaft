@@ -131,6 +131,7 @@ func (p *modelFileWriteProtection) loadRootIdentity() error {
 	return nil
 }
 
+// Retained name check for the persisted journal directory under each session.
 func (p *modelFileWriteProtection) loadFileIdentities() error {
 	add := func(path string) error {
 		info, err := os.Stat(path)
