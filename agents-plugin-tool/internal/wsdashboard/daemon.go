@@ -22,6 +22,12 @@ var ErrLocked = errors.New("another dashboard daemon holds the lock")
 // holder still alive after it is left running.
 const DefaultLockWait = 5 * time.Second
 
+// SuccessorLockWait bounds how long a detached replacement successor waits for
+// the single-instance lock while a busy predecessor drains sessions and flushes
+// stores before unlocking. Kept separate from DefaultLockWait so proxy drain
+// and credential budgets derived from DefaultLockWait stay tight.
+const SuccessorLockWait = 30 * time.Second
+
 const (
 	lockRetryDelay   = 50 * time.Millisecond
 	shutdownDeadline = 3 * time.Second
@@ -263,8 +269,9 @@ type Daemon struct {
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
 	// director is the companion agent director (companion_director.go).
-	director companionDirector
-	agents   AgentHost
+	director      companionDirector
+	agents        AgentHost
+	agentStarting atomic.Bool
 	// composer is the chat composer's `!` command state (composer_exec.go).
 	composer composerExec
 	// userCmds is the user commands' service (composer_usercmd.go), nil until bound.

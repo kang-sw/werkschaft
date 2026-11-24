@@ -27,8 +27,8 @@ func TestBoardDialAndPreviewContracts(t *testing.T) {
 	runNodeTestSuite(t, "testdata/board-dial-and-preview.test.cjs")
 }
 
-func TestBoardWheelStateMachine(t *testing.T) {
-	runNodeTestSuite(t, "testdata/board-wheel.test.cjs")
+func TestBoardFreeCanvasContracts(t *testing.T) {
+	runNodeTestSuite(t, "testdata/board-free-canvas.test.cjs")
 }
 
 func TestBoardVirtualizeContracts(t *testing.T) {

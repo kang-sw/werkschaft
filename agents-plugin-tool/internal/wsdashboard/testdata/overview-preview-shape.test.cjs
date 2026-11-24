@@ -411,6 +411,16 @@ test('dashboard-board.css Overview summary card geometry and inset ring contract
   assert.doesNotMatch(boardCSS, /\.overview-placeholder-(head|title|badge|recap)/, 'obsolete plain-text placeholder classes removed');
 });
 
+test('dashboard-board.css Overview free-canvas reset keeps position: relative containing block on cards', () => {
+  const resetRuleMatch = boardCSS.match(
+    /:root\[data-overview\] \.dgrid:is\(\.live, \.history, \.worktree\) > #bcol \.r-board :is\(section\.topic\[data-topic\], \.bcard\[data-card\]\) \{([^}]*)\}/
+  );
+  assert.ok(resetRuleMatch, 'found Overview free-canvas card reset rule');
+  const resetBody = resetRuleMatch[1];
+  assert.match(resetBody, /\bposition:\s*relative;/, 'Overview free-canvas reset must keep position: relative for ::after / .overview-here::before containing block');
+  assert.doesNotMatch(resetBody, /\bposition:\s*static\b/, 'Overview free-canvas reset must not set position: static');
+});
+
 test('folded topic placeholder keeps <section> selector match for folded CSS and preserves accessible name with inert controls', () => {
   const { El, body, doc } = makeMiniDom();
   const grid = new El('main', { class: 'dgrid live' });

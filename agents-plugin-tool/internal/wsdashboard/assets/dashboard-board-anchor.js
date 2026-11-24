@@ -1,141 +1,42 @@
-  // --- board card anchor ------------------------------------------------------
-  // The Main Board scrolls by card, not by pixel. One card is the topic section
-  // (section.topic[data-topic]) or an unpinned card (.bcard[data-card]) the
-  // reader stands on: its key ("t:" topic, "c:" id) is the whole outer scroll
-  // state, its top aligned with wswhiteboard/rail.js's active landing line
-  // (--wb-rail-inset + capH(min(2, prev))). Cards keep their content
-  // height up to --board-usable and scroll inside themselves; overflow
-  // anchoring is scoped to the current card (dashboard-board.css), so a size
-  // change of any card reads and writes nothing on the outer board. Geometry
-  // is read only by an explicit user move (selecting, a native scroll's end).
+  // --- board card anchor & Designated-Y free-canvas virtual scroll ------------
+  // The Main Board (#bcol) scrolls natively over a bounded free-canvas runway
+  // (#r-board, position: relative) with only an active window of cards around
+  // the current anchor positioned at absolute Y coordinates (radiating downward
+  // below the anchor and upward above it). Cards keep their natural variable
+  // heights and sticky headers; off-window ordinary topics take
+  // data-wb-offwindow="hidden" + body eviction while exempt live cards park at
+  // data-wb-offwindow="parked" + inert (never display: none).
   var ANCHOR_STORE = "ws.dashboard.board-card." + location.pathname + location.search;
   var ANCHOR_CAP = 17, ANCHOR_GAP = 3, ANCHOR_PAD = 4;
   var ANCHOR_BOT_0 = 6, ANCHOR_BOT_1 = 27, ANCHOR_BOT_2 = 47, ANCHOR_CARD_GAP_EXTRA = 12;
+  var FREE_RUNWAY_MID = 50000;
+  var FREE_RUNWAY_HEIGHT = 2 * FREE_RUNWAY_MID;
+  var FREE_RUNWAY_MARGIN = 10000;
+  var FREE_IDLE_RECENTER_MS = 150;
+  var FREE_BASE_WINDOW = 3;
+  var FREE_MAX_WINDOW = 8;
+  var FREE_VIEWPORT_COVERAGE = 1.5;
+  var FREE_CARD_GAP = 16;
+  var FREE_FALLBACK_H = 320;
+  var FREE_RESIZE_EPS = 0.5;
+  var FREE_BOT_PAD = 48;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorBoardMO = null, anchorFaceEl = null, anchorReplyEl = null, anchorCache = null;
   var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
-  var anchorProg = null, anchorProgSeq = 0, anchorGlideAnim = null, anchorWheelCtrl = null;
-  var WHEEL_DEFAULTS = {
-    threshold: 52,
-    peekPx: 0,
-    wallGuardMs: 140,
-    chainWindowMs: 360,
-    minStepMs: 165,
-    animMs: 220,
-    idleGapMs: 140,
-    discretePx: 48,
-    discreteGapMs: 60
-  };
-  var WHEEL_OWN = '.xterm, .tm-host, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
-  // Pure wheel-virtualized deck state machine (Preset A: Crisp Instant Glide).
-  // Exposed as window.WsBoardWheel for deterministic unit testing without DOM.
-  function createBoardWheel(opts) {
-    var cfg = {};
-    Object.keys(WHEEL_DEFAULTS).forEach(function (k) {
-      cfg[k] = opts && opts[k] !== undefined ? opts[k] : WHEEL_DEFAULTS[k];
-    });
-    var state = "IDLE", accum = 0, minAbs = Infinity;
-    var lastEvtAt = 0, lastCommitAt = -1e9, lastDir = 0;
-    var coastDir = 0, wallDir = 0, lastInnerAt = -1e9, lastInnerDir = 0;
-    function reset() {
-      state = "IDLE"; accum = 0; minAbs = Infinity;
-      lastEvtAt = 0; lastCommitAt = -1e9; lastDir = 0;
-      coastDir = 0; wallDir = 0; lastInnerAt = -1e9; lastInnerDir = 0;
-    }
-    function commit(dir, now, abs) {
-      state = "COAST_ABSORB";
-      coastDir = dir;
-      lastDir = dir;
-      lastCommitAt = now;
-      minAbs = abs;
-      accum = 0;
-      return { action: "commit", dir: dir };
-    }
-    function step(ev) {
-      if (!ev) return { action: "ignore" };
-      var dy = +ev.dy || 0, dx = +ev.dx || 0;
-      var scale = ev.deltaMode === 1 ? 40 : ev.deltaMode === 2 ? 800 : 1;
-      dy *= scale;
-      dx *= scale;
-      if (!dy || Math.abs(dy) < 0.01) return { action: "ignore" };
-      if (Math.abs(dx) > Math.abs(dy) * 1.15) return { action: "ignore" };
-      var now = typeof ev.now === "number" ? ev.now : Date.now();
-      var dir = dy > 0 ? 1 : -1, abs = Math.abs(dy);
-      var dt = lastEvtAt ? now - lastEvtAt : 9999;
-      lastEvtAt = now;
-      var isDiscrete = (ev.deltaMode !== 0 && ev.deltaMode != null) || (abs >= cfg.discretePx && dt >= cfg.discreteGapMs);
-      if (dt >= cfg.idleGapMs) {
-        if (state === "WALL_ABSORB" || state === "COAST_ABSORB") {
-          state = "IDLE"; minAbs = Infinity;
-        }
-        accum = 0;
-      }
-      var inChain = (now - lastCommitAt) <= cfg.chainWindowMs && dir === lastDir;
-      if (state === "WALL_ABSORB" && dir !== wallDir) {
-        state = "IDLE"; accum = 0; minAbs = Infinity;
-      }
-      if (state === "COAST_ABSORB") {
-        if (dir !== coastDir) {
-          state = "IDLE"; accum = 0; minAbs = Infinity;
-        } else {
-          if (abs < minAbs) minAbs = abs;
-          var spiked = (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 10)) && (now - lastCommitAt >= cfg.minStepMs);
-          if (!spiked) return { action: "absorb", reason: "coast" };
-          state = "IDLE"; accum = 0; minAbs = Infinity;
-        }
-      }
-      if (ev.canInnerScroll && !inChain) {
-        lastInnerAt = now;
-        lastInnerDir = dir;
-        state = "IDLE";
-        accum = 0;
-        return { action: "inner" };
-      }
-      if (state === "IDLE" && !inChain && !isDiscrete && (now - lastInnerAt) <= cfg.wallGuardMs && dir === lastInnerDir) {
-        state = "WALL_ABSORB";
-        wallDir = dir;
-        minAbs = abs;
-        accum = 0;
-        return { action: "absorb", reason: "wall" };
-      }
-      if (state === "WALL_ABSORB") {
-        if (abs < minAbs) minAbs = abs;
-        if (isDiscrete || abs > Math.max(minAbs * 1.8, minAbs + 12)) {
-          state = "IDLE"; accum = 0; minAbs = Infinity;
-        } else {
-          return { action: "absorb", reason: "wall" };
-        }
-      }
-      if ((dir < 0 && ev.atFirst) || (dir > 0 && ev.atLast)) {
-        accum = 0;
-        return { action: "edge", dir: dir };
-      }
-      if (isDiscrete) {
-        if (now - lastCommitAt >= cfg.minStepMs || dir !== lastDir) return commit(dir, now, abs);
-        return { action: "absorb", reason: "rate" };
-      }
-      if ((accum > 0 && dir < 0) || (accum < 0 && dir > 0)) accum = 0;
-      accum += dy;
-      var effThreshold = inChain ? Math.round(cfg.threshold * 0.65) : cfg.threshold;
-      if (Math.abs(accum) >= effThreshold) return commit(dir, now, abs);
-      return { action: "charge", dir: dir, progress: Math.min(1, Math.abs(accum) / effThreshold) };
-    }
-    return {
-      step: step,
-      reset: reset,
-      config: function () { return Object.assign({}, cfg); },
-      state: function () { return state; }
-    };
-  }
-  window.WsBoardWheel = { defaults: Object.assign({}, WHEEL_DEFAULTS), create: createBoardWheel };
+  var anchorProg = null, anchorProgSeq = 0;
+  var freeActive = false, freeSuspended = false;
+  var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
+  var freePos = new Map(), freeHeightCache = new Map();
+  var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
+  var freeScrollRaf = 0, freeIdleTimer = 0;
 
-  // --- windowed O(1) topic slot virtualization (±2 around anchorCurrent) ---
-  // Far section.topic bodies outside ±virtualNearSlots around anchorCurrent()
-  // are detached into memory while keeping their fixed-height outer snap shell
-  // and .tophead mounted (0px layout shift, intact Overview tiles & dial).
-  // Strict exemptions: .bcard widgets, #bgal-docked panes, Overview Quick Look
-  // previewed panels, maximized panels, .xterm/.tm-host PTYs, and topics with
-  // active focus/edits/selection are never evicted.
+  // --- windowed O(1) topic body virtualization --------------------------------
+  // Far section.topic bodies outside the active free-canvas window (or
+  // ±virtualNearSlots when reconciled standalone) are detached into memory
+  // while keeping their outer shell and .tophead mounted (intact Overview
+  // tiles & #bdial). Strict exemptions: .bcard widgets, #bgal-docked panes,
+  // Overview Quick Look previewed panels, maximized panels, .xterm/.tm-host
+  // PTYs, and topics with active focus/edits/selection are never evicted.
   var VIRTUAL_NEAR_DEFAULT = 2;
   var virtualNearSlots = VIRTUAL_NEAR_DEFAULT;
   var virtualStore = new Map();
@@ -156,7 +57,7 @@
   }
   var VIRTUAL_ASK_SEL = '.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])';
   var VIRTUAL_KEEP_ATTRS = {
-    "data-wb-virtual": true, "data-current": true, "data-anchor-cap": true,
+    "data-wb-virtual": true, "data-wb-offwindow": true, "data-current": true, "data-anchor-cap": true,
     "data-anchor-bot": true, "data-anchor-last": true, "data-state-filtered": true,
     "data-size": true, "tabindex": true, "data-overview-live": true,
     "data-max": true, "data-has-panel-max": true
@@ -639,8 +540,17 @@
       return changed;
     }
 
-    var lo = list.length ? Math.max(0, activeIdx - virtualNearSlots) : 0;
-    var hi = list.length ? Math.min(list.length - 1, activeIdx + virtualNearSlots) : -1;
+    var lo, hi;
+    if (opts && opts.window && typeof opts.window.start === "number" && typeof opts.window.end === "number") {
+      lo = list.length ? Math.max(0, Math.min(list.length - 1, opts.window.start)) : 0;
+      hi = list.length ? Math.max(-1, Math.min(list.length - 1, opts.window.end)) : -1;
+    } else if (typeof freeActive !== "undefined" && freeActive && freeWinEnd >= freeWinStart && list.length) {
+      lo = Math.max(0, Math.min(list.length - 1, freeWinStart));
+      hi = Math.min(list.length - 1, freeWinEnd);
+    } else {
+      lo = list.length ? Math.max(0, activeIdx - virtualNearSlots) : 0;
+      hi = list.length ? Math.min(list.length - 1, activeIdx + virtualNearSlots) : -1;
+    }
     var nextNear = new Set();
     for (var ni = lo; ni <= hi; ni++) {
       virtualStats.slotVisits++;
@@ -653,11 +563,25 @@
       virtualLastBounded = true;
       virtualLastNearSlots = virtualNearSlots;
       var items = list.map(virtualDescribeNode);
-      var plan = planBoardVirtualWindow(items, activeIdx, {
-        nearSlots: virtualNearSlots,
-        enabled: true,
-        scrubbing: false
-      });
+      var useExplicitWindow = !!(opts && opts.window) || (typeof freeActive !== "undefined" && freeActive && freeWinEnd >= freeWinStart);
+      var plan;
+      if (useExplicitWindow) {
+        plan = {
+          skip: false,
+          actions: items.map(function (it, idx) {
+            if (!it || !it.isTopic) return { index: idx, key: it && it.key || null, action: "exempt" };
+            var inWindow = idx >= lo && idx <= hi;
+            if (inWindow || virtualIsItemExempt(it)) return { index: idx, key: it.key, action: it.collapsed ? "hydrate" : "keep" };
+            return { index: idx, key: it.key, action: it.collapsed ? "keep-collapsed" : "collapse" };
+          })
+        };
+      } else {
+        plan = planBoardVirtualWindow(items, activeIdx, {
+          nearSlots: virtualNearSlots,
+          enabled: true,
+          scrubbing: false
+        });
+      }
       if (plan.skip) return false;
       virtualNearSet = nextNear;
       virtualExemptSet = new Set();
@@ -698,6 +622,15 @@
             return;
           }
           if (virtualExemptSet.has(exNode) && candidates.indexOf(exNode) < 0) candidates.push(exNode);
+        });
+      }
+      if (freeDeferredCollapse.size) {
+        Array.from(freeDeferredCollapse).forEach(function (dn) {
+          freeDeferredCollapse.delete(dn);
+          virtualStats.slotVisits++;
+          if (!dn || !dn.isConnected || nextNear.has(dn)) return;
+          if (dn.hasAttribute && dn.hasAttribute("data-wb-virtual")) return;
+          if (candidates.indexOf(dn) < 0) candidates.push(dn);
         });
       }
       virtualNearSet = nextNear;
@@ -785,45 +718,6 @@
     var base = n === 0 ? ANCHOR_BOT_0 : n === 1 ? ANCHOR_BOT_1 : ANCHOR_BOT_2;
     return base + (anchorSized.reply ? anchorSized.reply + 14 : 0);
   }
-  var anchorGlideRealign = false;
-  function anchorCancelGlide() {
-    anchorGlideRealign = false;
-    if (anchorGlideAnim) {
-      try { anchorGlideAnim.cancel(); } catch (e) {}
-      anchorGlideAnim = null;
-    }
-  }
-  function anchorGlide(n, dir) {
-    anchorCancelGlide();
-    if (!n || !dir || !n.animate || reducedMotion()) return;
-    if (doc.documentElement.hasAttribute("data-board-max") || doc.documentElement.hasAttribute("data-overview")) return;
-    var dist = Math.min(72, Math.max(32, Math.round((anchorSized.h || 600) * 0.08)));
-    var y0 = dir > 0 ? dist : -dist;
-    try {
-      var anim = n.animate(
-        [{ transform: "translate3d(0," + y0 + "px,0)" }, { transform: "translate3d(0,0,0)" }],
-        { duration: WHEEL_DEFAULTS.animMs, easing: "cubic-bezier(.22, 1, .36, 1)", fill: "none" }
-      );
-      anchorGlideAnim = anim;
-      var finish = function () {
-        if (anchorGlideAnim !== anim) return;
-        anchorGlideAnim = null;
-        if (anchorGlideRealign) { anchorGlideRealign = false; anchorRealign(true); }
-      };
-      var cancel = function () {
-        if (anchorGlideAnim !== anim) return;
-        anchorGlideAnim = null;
-        anchorGlideRealign = false;
-      };
-      if (anim.addEventListener) {
-        anim.addEventListener("finish", finish);
-        anim.addEventListener("cancel", cancel);
-      } else {
-        anim.onfinish = finish;
-        anim.oncancel = cancel;
-      }
-    } catch (e) {}
-  }
   function anchorCardCap(n, list) {
     if (!n || !(n.hasAttribute("data-topic") || n.hasAttribute("data-rail"))) return 0;
     if (!list || (anchorCache && list === anchorCache.list)) {
@@ -842,10 +736,10 @@
     var k = n && n.nodeType === 1 ? topicKey(n) : null;
     return k !== null ? "t:" + k : n && n.nodeType === 1 && n.hasAttribute("data-card") ? "c:" + n.getAttribute("data-card") : null;
   }
-  // The snap order: the board region's cards in board order, fetched closed
-  // pages (nested in one another) in place, filtered ones left out. Docked
-  // topics stand in the gallery and have their own pages. Maintained as a
-  // keyed cache rebuilt only on structural updates (settle, board mutations,
+  // The canonical card order: the board region's cards in board order, fetched
+  // closed pages (nested in one another) in place, filtered ones left out.
+  // Docked topics stand in the gallery and have their own pages. Maintained as
+  // a keyed cache rebuilt only on structural updates (settle, board mutations,
   // full reconcile) so steady-state navigation stays strictly O(1).
   function anchorRecordsAffectOrder(records) {
     if (!records || !records.length) return false;
@@ -879,7 +773,7 @@
   function anchorCards(rebuild) {
     if (!rebuild && typeof anchorDrainMutations === "function") anchorDrainMutations();
     if (!rebuild && anchorCache) return anchorCache.list;
-    var b = region("board"), out = [], byKey = new Map(), indexByNode = new Map(), railBefore = [], railCount = 0;
+    var b = region("board"), out = [], byKey = new Map(), indexByNode = new Map(), railBefore = [], railList = [], railCount = 0;
     if (b) {
       (function walk(box) {
         Array.prototype.forEach.call(box.children, function (n) {
@@ -891,14 +785,17 @@
               indexByNode.set(n, out.length);
               byKey.set(id, n);
               railBefore.push(railCount);
-              if (n.hasAttribute("data-topic") || n.hasAttribute("data-rail")) railCount++;
+              if (n.hasAttribute("data-topic") || n.hasAttribute("data-rail")) {
+                railList.push(n);
+                railCount++;
+              }
               out.push(n);
             }
           }
         });
       })(b);
     }
-    anchorCache = { list: out, byKey: byKey, indexByNode: indexByNode, railBefore: railBefore };
+    anchorCache = { list: out, byKey: byKey, indexByNode: indexByNode, railBefore: railBefore, railList: railList, railCount: railCount };
     return out;
   }
   function anchorNode(key) {
@@ -930,10 +827,563 @@
     anchorKey = n ? anchorId(n) : null;
     anchorStore();
     if (typeof boardDialMark === "function") boardDialMark(n);
-    if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) {
+    if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) {
       virtualReconcile(opts && opts.full ? { full: true } : undefined);
     }
   }
+
+  // --- Designated-Y free-canvas virtual scroll engine -------------------------
+  function freeEnabled(col, list) {
+    if (freeSuspended || !anchorSized.bounded || !col || !list || !list.length) return false;
+    if (doc.documentElement && doc.documentElement.hasAttribute("data-overview")) return false;
+    return true;
+  }
+  function freeTopPad(board) {
+    if (!board) return 0;
+    var tb = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
+    if (!tb || !board.contains || !board.contains(tb)) {
+      tb = board.querySelector ? board.querySelector(".board-toolbar") : null;
+    }
+    if (!tb || tb.hidden) return 0;
+    var h = tb.offsetHeight || (tb.getBoundingClientRect ? tb.getBoundingClientRect().height : 0);
+    return h > 0 ? Math.ceil(h) + FREE_CARD_GAP : 0;
+  }
+  function freeMeasureHeight(n) {
+    if (!n) return FREE_FALLBACK_H;
+    var key = anchorId(n), h = 0;
+    if (!n.hasAttribute || !n.hasAttribute("data-wb-offwindow")) {
+      h = n.offsetHeight || 0;
+      if (!(h > 0) && n.getBoundingClientRect) {
+        var r = n.getBoundingClientRect();
+        h = r && r.height > 0 ? r.height : 0;
+      }
+    }
+    if (h > 0) {
+      if (key !== null) freeHeightCache.set(key, h);
+      return h;
+    }
+    if (key !== null && freeHeightCache.has(key)) return freeHeightCache.get(key);
+    return FREE_FALLBACK_H;
+  }
+  function freeCachedHeight(n) {
+    var key = anchorId(n);
+    if (key !== null && freeHeightCache.has(key)) return freeHeightCache.get(key);
+    return FREE_FALLBACK_H;
+  }
+  function freeSetOffWindow(n, mode) {
+    if (!n || n.nodeType !== 1) return;
+    if (mode === null) {
+      if (n.hasAttribute && n.hasAttribute("data-wb-offwindow")) n.removeAttribute("data-wb-offwindow");
+      if (freeParkedByUs.has(n)) {
+        n.inert = false;
+        if (n.removeAttribute) n.removeAttribute("inert");
+        freeParkedByUs.delete(n);
+      }
+      return;
+    }
+    if (mode === "hidden") {
+      if (!n.getAttribute || n.getAttribute("data-wb-offwindow") !== "hidden") n.setAttribute("data-wb-offwindow", "hidden");
+      if (freeParkedByUs.has(n)) {
+        n.inert = false;
+        if (n.removeAttribute) n.removeAttribute("inert");
+        freeParkedByUs.delete(n);
+      }
+      return;
+    }
+    if (mode === "parked") {
+      if (!n.getAttribute || n.getAttribute("data-wb-offwindow") !== "parked") n.setAttribute("data-wb-offwindow", "parked");
+      if (!n.inert) {
+        n.inert = true;
+        if (n.setAttribute) n.setAttribute("inert", "");
+        freeParkedByUs.add(n);
+      }
+    }
+  }
+  function freeClearNode(n) {
+    if (!n || n.nodeType !== 1) return;
+    freeSetOffWindow(n, null);
+    freeDeferredCollapse.delete(n);
+    if (n.style && n.style.top) n.style.top = "";
+    if (freeCardRO && freeObserved.has(n)) {
+      try { freeCardRO.unobserve(n); } catch (e) {}
+      freeObserved.delete(n);
+    }
+    freePos.delete(n);
+  }
+  function freeCancelTimers() {
+    if (freeScrollRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeScrollRaf);
+    freeScrollRaf = 0;
+    if (freeIdleTimer) clearTimeout(freeIdleTimer);
+    freeIdleTimer = 0;
+  }
+  function freeSuspend() {
+    freeCancelTimers();
+    freeDeferredCollapse.clear();
+    if (freeCardRO) {
+      freeObserved.forEach(function (n) { try { freeCardRO.unobserve(n); } catch (e) {} });
+      freeObserved.clear();
+    }
+    var col = $("bcol"), board = region("board");
+    if (col && col.removeAttribute && col.hasAttribute && col.hasAttribute("data-board-free")) {
+      col.removeAttribute("data-board-free");
+    }
+    if (board && board.style && board.style.minHeight) board.style.minHeight = "";
+    var list = anchorCards();
+    for (var i = 0; i < list.length; i++) freeClearNode(list[i]);
+    freePos.forEach(function (_, n) { freeClearNode(n); });
+    freePos.clear();
+    if (board && board.querySelector) {
+      var moreBtn = board.querySelector("button.closed-more");
+      if (moreBtn) {
+        if (moreBtn.removeAttribute) moreBtn.removeAttribute("data-wb-offwindow");
+        if (moreBtn.style && moreBtn.style.top) moreBtn.style.top = "";
+      }
+    }
+    freeActive = false;
+    freeWinStart = 0;
+    freeWinEnd = -1;
+  }
+  function freeSuspendForOverview() {
+    freeSuspended = true;
+    freeSuspend();
+  }
+  function freeResumeFromOverview() {
+    freeSuspended = false;
+  }
+  function freeComputeWindow(list, anchorIdx, viewH) {
+    var n = list.length;
+    if (!n) return { start: 0, end: -1 };
+    var a = Math.max(0, Math.min(n - 1, anchorIdx));
+    var need = Math.max(1, viewH) * FREE_VIEWPORT_COVERAGE;
+    var start = Math.max(0, a - FREE_BASE_WINDOW);
+    var end = Math.min(n - 1, a + FREE_BASE_WINDOW);
+    var aboveH = 0;
+    for (var i = a - 1; i >= start; i--) aboveH += freeCachedHeight(list[i]) + FREE_CARD_GAP;
+    while (start > 0 && (a - start) < FREE_MAX_WINDOW && aboveH < need) {
+      start--;
+      aboveH += freeCachedHeight(list[start]) + FREE_CARD_GAP;
+    }
+    var belowH = 0;
+    for (var j = a + 1; j <= end; j++) belowH += freeCachedHeight(list[j]) + FREE_CARD_GAP;
+    while (end < n - 1 && (end - a) < FREE_MAX_WINDOW && belowH < need) {
+      end++;
+      belowH += freeCachedHeight(list[end]) + FREE_CARD_GAP;
+    }
+    return { start: start, end: end };
+  }
+  function freeSyncRO(list, start, end) {
+    if (!window.ResizeObserver) return;
+    if (!freeCardRO) freeCardRO = new ResizeObserver(freeOnCardResize);
+    var want = new Set();
+    for (var i = start; i <= end; i++) {
+      var n = list[i];
+      if (n && (!n.hasAttribute || (!n.hasAttribute("data-wb-offwindow") && !n.hasAttribute("data-max")))) want.add(n);
+    }
+    freeObserved.forEach(function (n) {
+      if (!want.has(n)) {
+        try { freeCardRO.unobserve(n); } catch (e) {}
+        freeObserved.delete(n);
+      }
+    });
+    want.forEach(function (n) {
+      if (!freeObserved.has(n)) {
+        freeCardRO.observe(n);
+        freeObserved.add(n);
+      }
+    });
+  }
+  function freeFindTopVisibleIdx(list, col, viewTopY) {
+    if (!list.length || freeWinEnd < freeWinStart) return Math.max(0, Math.min(list.length - 1, freeAnchorIdx));
+    var s = Math.max(0, freeWinStart), e = Math.min(list.length - 1, freeWinEnd);
+    var best = -1, closest = s, closestDist = Infinity;
+    for (var i = s; i <= e; i++) {
+      var n = list[i], y = freePos.get(n);
+      if (y === undefined) continue;
+      var h = freeCachedHeight(n);
+      if (y + h > viewTopY + 0.5) {
+        best = i;
+        break;
+      }
+      var d = Math.abs(y + h - viewTopY);
+      if (d < closestDist) { closestDist = d; closest = i; }
+    }
+    return best >= 0 ? best : closest;
+  }
+  function freeApplyOffWindow(node, scrubbing) {
+    if (!node || (node.hasAttribute && node.hasAttribute("data-max"))) return;
+    if (freeCardRO && freeObserved.has(node)) {
+      try { freeCardRO.unobserve(node); } catch (e) {}
+      freeObserved.delete(node);
+    }
+    freePos.delete(node);
+    var desc = virtualDescribeNode(node);
+    if (virtualIsItemExempt(desc)) {
+      freeSetOffWindow(node, "parked");
+      if (desc.isTopic) virtualExemptSet.add(node);
+    } else {
+      freeSetOffWindow(node, "hidden");
+      virtualExemptSet.delete(node);
+      if (!desc.collapsed) {
+        if (scrubbing) freeDeferredCollapse.add(node);
+        else {
+          freeDeferredCollapse.delete(node);
+          virtualCollapse(node, desc);
+        }
+      }
+    }
+  }
+  function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd) {
+    var moreBtn = board && board.querySelector ? board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])") : null;
+    var stageH = FREE_RUNWAY_HEIGHT;
+    if (winEnd === list.length - 1) {
+      var lastBottom = yEnd + hEnd;
+      if (moreBtn) {
+        if (moreBtn.hasAttribute && moreBtn.hasAttribute("data-wb-offwindow")) moreBtn.removeAttribute("data-wb-offwindow");
+        var moreTop = Math.round(lastBottom + FREE_CARD_GAP);
+        if (moreBtn.style.top !== moreTop + "px") moreBtn.style.top = moreTop + "px";
+        var moreH = moreBtn.offsetHeight || (moreBtn.getBoundingClientRect ? moreBtn.getBoundingClientRect().height : 0) || 36;
+        lastBottom = moreTop + moreH;
+      }
+      stageH = Math.ceil(lastBottom + FREE_BOT_PAD);
+    } else {
+      if (moreBtn) {
+        if (!moreBtn.getAttribute || moreBtn.getAttribute("data-wb-offwindow") !== "hidden") moreBtn.setAttribute("data-wb-offwindow", "hidden");
+        if (moreBtn.style.top) moreBtn.style.top = "";
+      }
+      stageH = Math.max(FREE_RUNWAY_HEIGHT, Math.ceil(yEnd + hEnd + FREE_BOT_PAD));
+    }
+    if (board && board.style && board.style.minHeight !== stageH + "px") {
+      board.style.minHeight = stageH + "px";
+    }
+    return stageH;
+  }
+  function freeLayout(opts) {
+    opts = opts || {};
+    var col = $("bcol"), board = region("board");
+    var list = opts.list || anchorCards();
+    if (!freeEnabled(col, list)) {
+      if (freeActive || (col && col.hasAttribute && col.hasAttribute("data-board-free"))) freeSuspend();
+      return false;
+    }
+    var wasActive = freeActive;
+    var prevStart = freeWinStart, prevEnd = freeWinEnd;
+    if (!col.hasAttribute || !col.hasAttribute("data-board-free")) col.setAttribute("data-board-free", "");
+    freeActive = true;
+    var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
+    var aIdx = typeof opts.anchorIdx === "number" ? Math.max(0, Math.min(list.length - 1, opts.anchorIdx)) : 0;
+    var aNode = list[aIdx];
+    var aY = typeof opts.anchorY === "number" ? opts.anchorY : (freePos.has(aNode) ? freePos.get(aNode) : FREE_RUNWAY_MID);
+    var scrubbing = typeof dialScrubbing !== "undefined" && !!dialScrubbing;
+    var win = freeComputeWindow(list, aIdx, viewH);
+    var start = win.start, end = win.end;
+
+    // Phase A: mount & hydrate in-window cards.
+    function mountSlot(idx) {
+      var node = list[idx];
+      if (!node) return;
+      freeSetOffWindow(node, null);
+      freeDeferredCollapse.delete(node);
+      virtualExemptSet.delete(node);
+      if (node.hasAttribute && node.hasAttribute("data-wb-virtual") && !scrubbing) {
+        virtualHydrate(node, { immediate: idx === aIdx });
+      }
+    }
+    for (var mi = start; mi <= end; mi++) mountSlot(mi);
+
+    // Measure actual heights and expand up to FREE_MAX_WINDOW if measured
+    // cards are shorter than cached/fallback heights and cover < 1.5*viewH.
+    var heights = Object.create(null);
+    for (var hi = start; hi <= end; hi++) heights[hi] = freeMeasureHeight(list[hi]);
+    var need = Math.max(1, viewH) * FREE_VIEWPORT_COVERAGE;
+    var aboveH = 0;
+    for (var ai = aIdx - 1; ai >= start; ai--) aboveH += heights[ai] + FREE_CARD_GAP;
+    while (start > 0 && (aIdx - start) < FREE_MAX_WINDOW && aboveH < need) {
+      start--;
+      mountSlot(start);
+      heights[start] = freeMeasureHeight(list[start]);
+      aboveH += heights[start] + FREE_CARD_GAP;
+    }
+    var belowH = 0;
+    for (var bi = aIdx + 1; bi <= end; bi++) belowH += heights[bi] + FREE_CARD_GAP;
+    while (end < list.length - 1 && (end - aIdx) < FREE_MAX_WINDOW && belowH < need) {
+      end++;
+      mountSlot(end);
+      heights[end] = freeMeasureHeight(list[end]);
+      belowH += heights[end] + FREE_CARD_GAP;
+    }
+
+    // Mark off-window cards ("hidden" + body eviction vs "parked" + inert).
+    var fullPass = !wasActive || !!opts.forceFull;
+    if (fullPass) {
+      freePos.forEach(function (_, fn) {
+        if (!anchorCache || !anchorCache.indexByNode.has(fn)) freePos.delete(fn);
+      });
+      for (var oi = 0; oi < list.length; oi++) {
+        if (oi >= start && oi <= end) continue;
+        freeApplyOffWindow(list[oi], scrubbing);
+      }
+    } else {
+      // O(1) delta: process cards leaving the previous window plus any dirty
+      // far exempt topics or newly unpositioned cards.
+      for (var pi = prevStart; pi <= prevEnd; pi++) {
+        if (pi < 0 || pi >= list.length || (pi >= start && pi <= end)) continue;
+        freeApplyOffWindow(list[pi], scrubbing);
+      }
+      if (virtualExemptDirty.size) {
+        Array.from(virtualExemptDirty).forEach(function (dn) {
+          virtualExemptDirty.delete(dn);
+          var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
+          if (di >= 0 && (di < start || di > end)) freeApplyOffWindow(dn, scrubbing);
+        });
+      }
+    }
+    if (!scrubbing && freeDeferredCollapse.size) {
+      Array.from(freeDeferredCollapse).forEach(function (dn) {
+        freeDeferredCollapse.delete(dn);
+        if (!dn || !dn.isConnected) return;
+        var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
+        if (di >= 0 && (di < start || di > end)) freeApplyOffWindow(dn, false);
+      });
+    }
+
+    // Keep WsBoardVirtual's near set aligned with the active free-canvas window.
+    var nextNear = new Set();
+    for (var ni = start; ni <= end; ni++) nextNear.add(list[ni]);
+    virtualNearSet = nextNear;
+    virtualInitialized = true;
+    virtualLastBounded = true;
+
+    // Phase B: radiate Designated-Y downward from aIdx and upward from aIdx.
+    var ys = Object.create(null);
+    ys[aIdx] = aY;
+    for (var di2 = aIdx + 1; di2 <= end; di2++) {
+      ys[di2] = ys[di2 - 1] + heights[di2 - 1] + FREE_CARD_GAP;
+    }
+    for (var ui = aIdx - 1; ui >= start; ui--) {
+      ys[ui] = ys[ui + 1] - FREE_CARD_GAP - heights[ui];
+    }
+
+    // Phase C: top boundary clamp (y_0 = topPad) & bottom clamp / runway minHeight.
+    if (start === 0) {
+      var topPad = freeTopPad(board);
+      var shift = topPad - ys[0];
+      if (Math.abs(shift) >= FREE_RESIZE_EPS) {
+        for (var si = start; si <= end; si++) ys[si] += shift;
+        if ((!opts.jump || opts.smooth) && wasActive) col.scrollTop = Math.max(0, col.scrollTop + shift);
+      }
+    }
+    var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end]);
+
+    // Write style.top only when changed; never mutate width/height.
+    for (var wi = start; wi <= end; wi++) {
+      var card = list[wi];
+      freePos.set(card, ys[wi]);
+      if (!card.hasAttribute || !card.hasAttribute("data-max")) {
+        var topStr = Math.round(ys[wi]) + "px";
+        if (card.style && card.style.top !== topStr) card.style.top = topStr;
+      }
+    }
+    freeWinStart = start;
+    freeWinEnd = end;
+    freeAnchorIdx = aIdx;
+
+    // Phase D: single shared ResizeObserver strictly on mounted window.
+    freeSyncRO(list, start, end);
+
+    // Phase E: synchronous jump positioning (center short/medium, top-align tall).
+    if (opts.jump) {
+      var topClear = anchorSized.padTop + anchorRailInset(col) + anchorCardCap(list[aIdx], list);
+      var botClear = anchorBotReserve(Math.min(2, Math.max(0, list.length - 1 - aIdx)));
+      var usableH = Math.max(120, viewH - topClear - botClear);
+      var targetH = heights[aIdx];
+      var targetScroll;
+      if (opts.centerJump !== false && targetH < usableH) {
+        targetScroll = ys[aIdx] - topClear - (usableH - targetH) / 2;
+      } else {
+        targetScroll = ys[aIdx] - topClear;
+      }
+      var maxScroll = Math.max(0, stageH - viewH);
+      targetScroll = Math.max(0, Math.min(maxScroll, Math.round(targetScroll)));
+      if (opts.smooth && !reducedMotion() && col.scrollTo) {
+        col.scrollTo({ top: targetScroll, behavior: "smooth" });
+      } else {
+        col.scrollTop = targetScroll;
+      }
+    }
+    return true;
+  }
+  function freeOnCardResize(entries) {
+    if (!freeActive || freeSuspended || !entries || !entries.length) return;
+    var col = $("bcol"), board = region("board"), list = anchorCards();
+    if (!col || !board || !list.length || freeWinEnd < freeWinStart) return;
+    var viewTopY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
+    var anchor = freeFindTopVisibleIdx(list, col, viewTopY);
+    var mutated = false;
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i], card = e && e.target;
+      if (!card || !anchorCache || !anchorCache.indexByNode.has(card)) continue;
+      if (card.hasAttribute && (card.hasAttribute("data-wb-offwindow") || card.hasAttribute("data-max"))) continue;
+      var k = anchorCache.indexByNode.get(card);
+      if (k < freeWinStart || k > freeWinEnd) continue;
+      var bb = e.borderBoxSize && e.borderBoxSize[0];
+      var newH = (bb ? bb.blockSize : 0) || card.offsetHeight || (e.contentRect ? e.contentRect.height : 0);
+      if (!(newH > 0)) continue;
+      var key = anchorId(card);
+      var oldH = key !== null && freeHeightCache.has(key) ? freeHeightCache.get(key) : newH;
+      var dh = newH - oldH;
+      if (Math.abs(dh) < FREE_RESIZE_EPS) continue;
+      if (key !== null) freeHeightCache.set(key, newH);
+      mutated = true;
+      if (k < anchor) {
+        // Above-anchor resize grows upward from y_anchor: 0px shift on anchor & visible cards.
+        for (var u = freeWinStart; u <= k; u++) {
+          var nu = list[u], yu = freePos.get(nu);
+          if (yu !== undefined) freePos.set(nu, yu - dh);
+        }
+      } else {
+        // Anchor or below-anchor resize pushes cards below k downward.
+        for (var d = k + 1; d <= freeWinEnd; d++) {
+          var nd = list[d], yd = freePos.get(nd);
+          if (yd !== undefined) freePos.set(nd, yd + dh);
+        }
+      }
+    }
+    if (!mutated) return;
+    if (freeWinStart === 0) {
+      var y0 = freePos.get(list[0]);
+      if (y0 !== undefined) {
+        var shift = freeTopPad(board) - y0;
+        if (Math.abs(shift) >= FREE_RESIZE_EPS) {
+          for (var si = freeWinStart; si <= freeWinEnd; si++) {
+            var ns = list[si], ys = freePos.get(ns);
+            if (ys !== undefined) freePos.set(ns, ys + shift);
+          }
+          col.scrollTop = Math.max(0, col.scrollTop + shift);
+        }
+      }
+    }
+    for (var wi = freeWinStart; wi <= freeWinEnd; wi++) {
+      var wc = list[wi], wy = freePos.get(wc);
+      if (wy === undefined || (wc.hasAttribute && wc.hasAttribute("data-max"))) continue;
+      var topStr = Math.round(wy) + "px";
+      if (wc.style && wc.style.top !== topStr) wc.style.top = topStr;
+    }
+    if (freeWinEnd === list.length - 1) {
+      var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
+      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeCachedHeight(lastCard));
+    }
+  }
+  function freeFlushScrolledOutHeld() {
+    if (typeof boardPending === "undefined" || !Object.keys(boardPending).length) return;
+    if (typeof boardGuards !== "function" || typeof boardFlushViewed !== "function") return;
+    var guarded = boardGuards();
+    if (Object.keys(boardPending).some(function (k) { return guarded.indexOf(k) < 0; })) {
+      boardFlushViewed(false);
+    }
+  }
+  function freeScrollTick() {
+    freeScrollRaf = 0;
+    if (!freeActive || freeSuspended) return;
+    var col = $("bcol"), list = anchorCards();
+    if (!col || !list.length || freeWinEnd < freeWinStart) return;
+    var viewTopY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
+    var nextAnchor = freeFindTopVisibleIdx(list, col, viewTopY);
+    var nextNode = list[nextAnchor];
+    if (nextNode && nextNode !== anchorLast) anchorMark(nextNode, { skipVirtual: true });
+    var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
+    var yFirst = freePos.get(list[freeWinStart]);
+    var lastCard = list[freeWinEnd];
+    var yLastBottom = (freePos.get(lastCard) || 0) + freeCachedHeight(lastCard);
+    var needSlide = nextAnchor !== freeAnchorIdx ||
+      (freeWinStart > 0 && yFirst !== undefined && (col.scrollTop - yFirst) < viewH * 0.75) ||
+      (freeWinEnd < list.length - 1 && (yLastBottom - (col.scrollTop + viewH)) < viewH * 0.75);
+    if (needSlide) {
+      freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list });
+    }
+    freeFlushScrolledOutHeld();
+  }
+  function freeIdleRecenter() {
+    freeIdleTimer = 0;
+    if (!freeActive || freeSuspended) return;
+    if (typeof dialScrubbing !== "undefined" && dialScrubbing) return;
+    var col = $("bcol"), board = region("board"), list = anchorCards();
+    if (!col || !board || !list.length || freeWinEnd < freeWinStart) return;
+    freeFlushScrolledOutHeld();
+    if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
+    var yFirst = freePos.get(list[freeWinStart]);
+    var lastNode = list[freeWinEnd];
+    var yLast = freePos.get(lastNode);
+    if (yFirst === undefined || yLast === undefined) return;
+    var yLastBottom = yLast + freeCachedHeight(lastNode);
+    var stageH = parseFloat(board.style.minHeight) || FREE_RUNWAY_HEIGHT;
+    if (yFirst >= FREE_RUNWAY_MARGIN && yLastBottom <= stageH - FREE_RUNWAY_MARGIN) return;
+    var anchorNodeCur = list[freeAnchorIdx];
+    var yAnchor = freePos.get(anchorNodeCur);
+    if (yAnchor === undefined) return;
+    var delta = FREE_RUNWAY_MID - yAnchor;
+    if (Math.abs(delta) < 1) return;
+    for (var i = freeWinStart; i <= freeWinEnd; i++) {
+      var c = list[i], ny = freePos.get(c) + delta;
+      freePos.set(c, ny);
+      if (!c.hasAttribute || !c.hasAttribute("data-max")) {
+        var topStr = Math.round(ny) + "px";
+        if (c.style && c.style.top !== topStr) c.style.top = topStr;
+      }
+    }
+    col.scrollTop = col.scrollTop + delta;
+  }
+  function freeOnScroll() {
+    if (!freeActive || freeSuspended) return;
+    if (freeIdleTimer) clearTimeout(freeIdleTimer);
+    freeIdleTimer = setTimeout(freeIdleRecenter, FREE_IDLE_RECENTER_MS);
+    if (!freeScrollRaf && typeof requestAnimationFrame === "function") {
+      freeScrollRaf = requestAnimationFrame(freeScrollTick);
+    }
+  }
+  function freeWindowInfo() {
+    var list = anchorCards();
+    return {
+      active: !!freeActive,
+      start: freeWinStart,
+      end: freeWinEnd,
+      anchorIdx: freeAnchorIdx,
+      list: list,
+      railBefore: anchorCache ? anchorCache.railBefore : [],
+      railList: anchorCache ? anchorCache.railList : [],
+      railTotal: anchorCache ? anchorCache.railCount : 0,
+      indexOf: function (n) {
+        if (!n || !anchorCache) return -1;
+        var idx = anchorCache.indexByNode.get(n);
+        return idx === undefined ? -1 : idx;
+      },
+      posOf: function (n) { return freePos.has(n) ? freePos.get(n) : undefined; },
+      heightOf: function (n) { return freeCachedHeight(n); }
+    };
+  }
+  function anchorVisibleCards() {
+    if (!freeActive) {
+      var cur = anchorCurrent();
+      return cur ? [cur] : [];
+    }
+    var col = $("bcol"), list = anchorCards();
+    if (!col || !list.length || freeWinEnd < freeWinStart) return [];
+    var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
+    var topY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
+    var botY = col.scrollTop + viewH - anchorBotReserve(0);
+    var out = [];
+    for (var i = Math.max(0, freeWinStart); i <= Math.min(list.length - 1, freeWinEnd); i++) {
+      var c = list[i], y = freePos.get(c);
+      if (y === undefined) continue;
+      var h = freeCachedHeight(c);
+      if (y + h > topY + 0.5 && y < botY - 0.5) out.push(c);
+    }
+    if (!out.length) {
+      var curCard = anchorCurrent();
+      if (curCard) out.push(curCard);
+    }
+    return out;
+  }
+
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
     var delta, target;
@@ -959,19 +1409,46 @@
       anchorRealign(true);
     });
   }
-  // select makes node n the current card and aligns it directly to rail.js's
-  // top-capsule landing line. Marking current first activates overflow-anchor
-  // and unskips containment before measuring the target card alone; no non-
-  // current card geometry is read. Leaving a card with staged updates admits
-  // the newest revision first.
+  // select makes node n the current card, synchronously un-hiding/hydrating and
+  // positioning it in free-canvas mode (centered for short/medium cards,
+  // top-aligned for tall cards) so 2-level jump callers can measure immediately.
   function anchorSelect(n, opt) {
     if (!n || !n.isConnected) return false;
     var col = $("bcol");
     if (!col || !col.contains(n)) return false;
     var key = anchorId(n);
     if (key === null) return false;
-    var prevNode = anchorLast;
     var left = anchorKey !== null && anchorKey !== key;
+    if (freeEnabled(col, anchorCards())) {
+      var wasMounted = freeActive && freePos.has(n) && (!n.hasAttribute || !n.hasAttribute("data-wb-offwindow"));
+      var prevMountedY = wasMounted ? freePos.get(n) : undefined;
+      freeSetOffWindow(n, null);
+      var isScrub = typeof dialScrubbing !== "undefined" && !!dialScrubbing;
+      if (!isScrub && typeof virtualHydrate === "function" && n.hasAttribute && n.hasAttribute("data-wb-virtual")) {
+        virtualHydrate(n, { immediate: true });
+      }
+      if (anchorKey !== key || anchorLast !== n) anchorMark(n, { skipVirtual: true });
+      if (left && !(opt && opt.keep) && Object.keys(boardPending).length) {
+        boardFlushViewed(true);
+        n = anchorNode(key) || n;
+      }
+      var list = anchorCards();
+      var idx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
+      if (idx < 0) return false;
+      var still = !!(opt && opt.still);
+      var anchorY = wasMounted ? (freePos.has(n) ? freePos.get(n) : prevMountedY) : FREE_RUNWAY_MID;
+      var wantSmooth = !still && wasMounted && !!(opt && opt.smooth);
+      freeLayout({
+        anchorIdx: idx,
+        anchorY: anchorY,
+        jump: !still,
+        centerJump: !(opt && opt.alignTop),
+        smooth: wantSmooth,
+        forceFull: !!(opt && opt.fullVirtual) || !freeActive,
+        list: list
+      });
+      return true;
+    }
     if (typeof virtualHydrate === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing) && n.hasAttribute && n.hasAttribute("data-wb-virtual")) {
       virtualHydrate(n, { immediate: true });
     }
@@ -982,24 +1459,14 @@
     }
     if (!(opt && opt.still)) {
       var calm = reducedMotion(), wantSmooth = !!(opt && opt.smooth && !calm);
-      var glideDir = opt && opt.glide ? opt.glide : 0;
-      if (anchorSized.bounded && !glideDir && wantSmooth && prevNode && prevNode !== n) {
-        var list = anchorCards();
-        var fromIdx = anchorCache && anchorCache.indexByNode.has(prevNode) ? anchorCache.indexByNode.get(prevNode) : list.indexOf(prevNode);
-        var toIdx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
-        if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) glideDir = toIdx > fromIdx ? 1 : -1;
-      }
-      var smooth = anchorSized.bounded ? false : wantSmooth;
       var bar = window.WsCards && window.WsCards.toolbar && window.WsCards.toolbar();
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
-      anchorCancelGlide();
-      anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
-      var moved = anchorAlign(col, n, smooth);
-      if (glideDir && !calm) anchorGlide(n, glideDir);
+      anchorProg = { key: key, id: pid, smooth: wantSmooth, until: Date.now() + (wantSmooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
+      var moved = anchorAlign(col, n, wantSmooth);
       if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
-      if (!smooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
+      if (!wantSmooth) anchorWaitFrames(pid, anchorProg.waitFloat ? 5 : 2);
     }
     return true;
   }
@@ -1023,14 +1490,8 @@
     for (var j = at - 1; j >= 0; j--) if (list.indexOf(before[j]) >= 0) return before[j];
     return list[0] || null;
   }
-  // settle keeps the selection consistent after a board change: the current
-  // key is retained across insertion and reorder (the browser's anchoring
-  // holds its place), the saved or first card is taken when none is current,
-  // and a card that left the order hands over to a neighbour.
-  // Only slot 0 and the first two rail-bearing slots carry explicit cap
-  // offsets; rail slot 2+ use the CSS default (padTop + 44px) so non-current
-  // updates touch no DOM. When slot 0 is a non-rail .bcard, the first railed
-  // slot carries "rail0" (padTop + 0px) instead of falling through to 44px.
+  // settle keeps selection and Designated-Y coordinates consistent after any
+  // board mutation (morphBoard, loadClosed, dock/undock, maximize/unmaximize).
   function anchorSlotCaps(list) {
     var cards = list || anchorCards(), next0 = null, nextR0 = null, next1 = null, seen = 0;
     for (var i = 0; i < cards.length; i++) {
@@ -1051,8 +1512,6 @@
     anchorCap0 = next0;
     anchorCapR0 = nextR0;
     anchorCap1 = next1;
-    // Stamp data-anchor-bot="0|1" on trailing edge cards (O(1) DOM writes)
-    // so each card spans down to its actual bottom capsule stack (0, 1, or 2).
     var nextBots = [], botMap = new Map(), afterRail = 0;
     for (var k = cards.length - 1; k >= 0; k--) {
       var ck = cards[k];
@@ -1080,14 +1539,30 @@
     anchorLastNode = lastNode;
   }
   function anchorSettle(before) {
-    var list = anchorCards(true), n = anchorNode(anchorKey);
+    if (freeSuspended && !(doc.documentElement && doc.documentElement.hasAttribute("data-overview"))) {
+      freeSuspended = false;
+    }
+    var list = anchorCards(true), n = anchorNode(anchorKey), col = $("bcol");
     anchorSlotCaps(list);
+    if (!list.length) {
+      if (freeActive || (col && col.hasAttribute && col.hasAttribute("data-board-free"))) freeSuspend();
+      anchorMark(null, { full: true });
+      return;
+    }
     if (n) {
+      if (freeEnabled(col, list)) {
+        var idx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
+        var prevY = freePos.has(n) ? freePos.get(n)
+          : (anchorLast && anchorId(anchorLast) === anchorKey && freePos.has(anchorLast) ? freePos.get(anchorLast) : null);
+        if (n !== anchorLast) anchorMark(n, { skipVirtual: true });
+        var curY = prevY !== null ? prevY : (idx === 0 ? freeTopPad(region("board")) : FREE_RUNWAY_MID);
+        freeLayout({ anchorIdx: Math.max(0, idx), anchorY: curY, jump: false, forceFull: true, list: list });
+        return;
+      }
       if (n !== anchorLast) anchorMark(n, { full: true });
       else if (typeof virtualReconcile === "function" && (typeof dialScrubbing === "undefined" || !dialScrubbing)) virtualReconcile({ full: true });
       return;
     }
-    if (!list.length) { anchorMark(null, { full: true }); return; }
     var saved = null;
     if (anchorKey === null) try { saved = window.sessionStorage.getItem(ANCHOR_STORE); } catch (e) {}
     var key = saved !== null ? saved : null, next = key !== null ? anchorNode(key) : null;
@@ -1104,36 +1579,54 @@
     }
     return null;
   }
-  // Exposure of a node for staging: inside the current card, clipped to the
-  // card and to the usable board scrollport below the sticky toolbar. The
-  // view is measured once per staging pass (the board snapshot carries it).
+  // Exposure of a node for staging: in free-canvas mode, any card intersecting
+  // #bcol's visible viewport is exposed (not only anchorCurrent()). Outside
+  // free-canvas mode, retains the current-card viewport clip.
   function anchorView() {
     var snap = boardSnap;
     if (snap && snap.anchorView !== undefined) return snap.anchorView;
-    var col = $("bcol"), cur = anchorCurrent(), v = null;
-    if (col && cur) {
-      var c = col.getBoundingClientRect(), r = cur.getBoundingClientRect();
-      v = { card: cur, top: Math.max(anchorLandingTop(col, c, cur), r.top), bottom: Math.min(c.bottom - anchorBotReserve(), r.bottom, window.innerHeight || Infinity),
-        left: Math.max(c.left, r.left), right: Math.min(c.right, r.right) };
+    var col = $("bcol"), v = null;
+    if (col) {
+      var c = col.getBoundingClientRect();
+      if (freeActive) {
+        v = {
+          card: null,
+          free: true,
+          top: c.top + (col.clientTop || 0) + anchorSized.padTop + anchorRailInset(col),
+          bottom: Math.min(c.bottom - anchorBotReserve(0), window.innerHeight || Infinity),
+          left: c.left,
+          right: c.right
+        };
+      } else {
+        var cur = anchorCurrent();
+        if (cur) {
+          var r = cur.getBoundingClientRect();
+          v = { card: cur, top: Math.max(anchorLandingTop(col, c, cur), r.top), bottom: Math.min(c.bottom - anchorBotReserve(), r.bottom, window.innerHeight || Infinity),
+            left: Math.max(c.left, r.left), right: Math.min(c.right, r.right) };
+        }
+      }
     }
     if (snap) snap.anchorView = v;
     return v;
   }
   function anchorExposed(n) {
     var v = anchorView(), w = window.wbHistory;
-    if (!v || !(n === v.card || v.card.contains(n))) return false;
+    if (!v) return false;
+    if (v.free) {
+      var card = anchorOwner(n);
+      if (!card || (card.hasAttribute && card.hasAttribute("data-wb-offwindow"))) return false;
+    } else if (!v.card || !(n === v.card || v.card.contains(n))) {
+      return false;
+    }
     if (w && w.rendered && !(boardSnap && boardSnap.rendered ? boardSnap.rendered(n) : w.rendered(n))) return false;
     var r = n.getBoundingClientRect();
     return r.height > 0 && Math.min(v.bottom, r.bottom) - Math.max(v.top, r.top) >= 1 && Math.min(v.right, r.right) - Math.max(v.left, r.left) >= 1;
   }
   // --- sizes: the usable scrollport ---------------------------------------------
-  // ResizeObserver entries carry the sizes, so no layout is forced to read
-  // them; --board-usable clears both top 2-row rail stack and bottom 2-row
-  // rail stack (+ reply bar when visible).
   function anchorSetVar(s, k, v) { if (!s.getPropertyValue || s.getPropertyValue(k) !== v) s.setProperty(k, v); }
   function anchorApplySizes(col) {
     var inset = anchorRailInset(col), topSpace = inset + anchorCapH(2);
-    var bot0 = anchorBotReserve(0), bot1 = anchorBotReserve(1), bot2 = anchorBotReserve(2);
+    var bot2 = anchorBotReserve(2);
     anchorSized.inset = inset;
     var s = col.style;
     anchorSetVar(s, "--board-toolbar", topSpace + "px");
@@ -1142,28 +1635,13 @@
       if (col.removeAttribute) col.removeAttribute("data-board-bounded");
       if (s.removeProperty) {
         s.removeProperty("--board-h");
-        s.removeProperty("--board-top-0");
-        s.removeProperty("--board-top-rail0");
-        s.removeProperty("--board-top-1");
-        s.removeProperty("--board-top-2");
-        s.removeProperty("--board-bot-0");
-        s.removeProperty("--board-bot-1");
-        s.removeProperty("--board-bot-2");
-        s.removeProperty("--board-card-gap");
         s.removeProperty("--board-usable");
       }
+      if (freeActive || (col.hasAttribute && col.hasAttribute("data-board-free"))) freeSuspend();
       return;
     }
     if (col.setAttribute && (!col.hasAttribute || !col.hasAttribute("data-board-bounded"))) col.setAttribute("data-board-bounded", "");
     anchorSetVar(s, "--board-h", anchorSized.h + "px");
-    anchorSetVar(s, "--board-top-0", (inset + 4) + "px");
-    anchorSetVar(s, "--board-top-rail0", inset + "px");
-    anchorSetVar(s, "--board-top-1", (inset + anchorCapH(1)) + "px");
-    anchorSetVar(s, "--board-top-2", topSpace + "px");
-    anchorSetVar(s, "--board-bot-0", bot0 + "px");
-    anchorSetVar(s, "--board-bot-1", bot1 + "px");
-    anchorSetVar(s, "--board-bot-2", bot2 + "px");
-    anchorSetVar(s, "--board-card-gap", (bot2 + ANCHOR_CARD_GAP_EXTRA) + "px");
     var usable = Math.max(120, anchorSized.h - topSpace - bot2);
     anchorSetVar(s, "--board-usable", usable + "px");
   }
@@ -1185,7 +1663,6 @@
   function anchorRealign(fromInsetOrFrame) {
     var p = anchorProg;
     if (!p || p.key !== anchorKey || Date.now() > p.until) { anchorProg = null; return; }
-    if (anchorGlideAnim) { anchorGlideRealign = true; return; }
     var col = $("bcol"), n = anchorNode(p.key);
     if (!col || !n || !n.isConnected) return;
     var moved = anchorAlign(col, n, !p.scrollDone && p.smooth);
@@ -1199,7 +1676,7 @@
     var col = $("bcol");
     if (!col) return;
     anchorObserveAux(col);
-    var face = anchorFaceEl, reply = anchorReplyEl, insetChanged = false, prevBounded = anchorSized.bounded;
+    var face = anchorFaceEl, reply = anchorReplyEl, insetChanged = false, prevBounded = anchorSized.bounded, prevH = anchorSized.h;
     entries.forEach(function (e) {
       var box = e.contentBoxSize && e.contentBoxSize[0], bb = e.borderBoxSize && e.borderBoxSize[0];
       if (e.target === col) {
@@ -1217,124 +1694,50 @@
       }
     });
     anchorApplySizes(col);
-    if (anchorSized.bounded !== prevBounded) {
-      if (typeof virtualReconcile === "function") virtualReconcile({ full: true });
+    if (anchorSized.bounded !== prevBounded || (anchorSized.bounded && Math.abs(anchorSized.h - prevH) >= 1) || (insetChanged && freeActive && freeWinStart === 0)) {
+      if (anchorSized.bounded) anchorSettle(null);
+      else if (typeof virtualReconcile === "function") virtualReconcile({ full: true });
       if (typeof boardDialSync === "function") boardDialSync();
     }
     if (insetChanged && anchorProg) anchorRealign(false);
   }
   function anchorCancelProg() { anchorProg = null; }
-  function anchorCanReach(el, dy) {
-    if (!el || el.scrollHeight <= el.clientHeight + 2) return false;
-    return dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1.5 : el.scrollTop > 1.5;
-  }
-  function anchorCanInnerScroll(target, card, dy) {
-    if (!card) return false;
-    for (var n = target; n && n.nodeType === 1; n = n.parentNode) {
-      if (n === card) {
-        if (card.hasAttribute("data-topic")) return anchorCanReach(card, dy);
-        var body = card.querySelector ? card.querySelector(":scope > .bc-in > .bc-body") : null;
-        return anchorCanReach(body, dy);
-      }
-      if (n.classList && n.classList.contains("bc-body")) return anchorCanReach(n, dy);
-      if (n.scrollHeight > n.clientHeight + 2) {
-        var cs = getComputedStyle(n);
-        if (/auto|scroll/.test(cs.overflowY)) {
-          if (anchorCanReach(n, dy)) return true;
-          if (/contain|none/.test(cs.overscrollBehaviorY)) return false;
-        }
-      }
-    }
-    return false;
-  }
-  function anchorHandleWheel(target, card, rawDy, rawDx, deltaMode, prevent) {
-    anchorProg = null;
-    if (!anchorSized.bounded) return false;
-    if (doc.documentElement.hasAttribute("data-overview") || doc.documentElement.hasAttribute("data-board-max")) return false;
-    var list = anchorCards();
-    if (!list.length) return false;
-    var cur = anchorCurrent() || list[0];
-    var at = anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : -1;
-    if (at < 0) at = 0;
-    if (!card || !(anchorCache && anchorCache.indexByNode.has(card))) card = cur;
-    var dy = +rawDy || 0;
-    if (deltaMode === 1) dy *= 40;
-    else if (deltaMode === 2) dy *= 800;
-    var canInner = anchorCanInnerScroll(target || card, card, dy);
-    if (!anchorWheelCtrl) anchorWheelCtrl = createBoardWheel();
-    var now = window.performance && window.performance.now ? window.performance.now() : Date.now();
-    var res = anchorWheelCtrl.step({
-      dy: rawDy,
-      dx: rawDx,
-      deltaMode: deltaMode,
-      now: now,
-      canInnerScroll: canInner,
-      atFirst: at <= 0,
-      atLast: at >= list.length - 1
-    });
-    if (res.action === "ignore" || res.action === "inner" || res.action === "edge") return false;
-    if (prevent) prevent();
-    if (res.action === "commit") {
-      var next = list[at + res.dir];
-      if (next) anchorSelect(next, { smooth: false, glide: res.dir });
-    }
-    return true;
-  }
-  function anchorOnWheel(e) {
-    if (e.defaultPrevented || e.ctrlKey) return;
-    var t = e.target;
-    if (t && t.closest && (t.closest(WHEEL_OWN) || t.closest(".tpop, [popover]:popover-open, dialog[open]"))) return;
-    var card = t && t.closest ? t.closest("section.topic[data-topic], .bcard[data-card]") : null;
-    anchorHandleWheel(t, card, e.deltaY, e.deltaX, e.deltaMode, function () { e.preventDefault(); });
-  }
-  function anchorOnFrameWheel(frame, dy, dx, mode) {
-    if (!frame || !frame.isConnected) return false;
-    var col = $("bcol");
-    if (!col || !col.contains(frame)) return false;
-    var card = frame.closest ? frame.closest("section.topic[data-topic], .bcard[data-card]") : null;
-    return anchorHandleWheel(frame, card, dy, dx, mode || 0, null);
-  }
   function anchorOnKey(e) {
     var k = e && e.key;
     if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorProg = null;
   }
-  // A native scroll (wheel chaining across cards, touch, keys, the scrollbar)
-  // ends on the active rail card, matching rail.js's cur band. Programmatic
-  // anchorSelect runs are guarded so toolbar float settling never snaps back
-  // to an earlier short or folded card.
   function anchorScrollEnd(e) {
     var col = $("bcol");
     if (e.target !== col) return;
+    if (freeActive) {
+      freeScrollTick();
+      return;
+    }
     var p = anchorProg;
     if (p && p.key === anchorKey && Date.now() <= p.until) {
       if (!p.smooth && Math.abs(col.scrollTop - p.target) > 120) { anchorProg = null; }
       else {
-      var targetNode = anchorNode(p.key) || anchorLast;
-      if (anchorGlideAnim) {
+        var targetNode = anchorNode(p.key) || anchorLast;
+        if (targetNode && targetNode.isConnected) {
+          var err = 0, canMove = false;
+          if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
+            err = -col.scrollTop;
+            canMove = col.scrollTop > 1;
+          } else {
+            var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
+            err = r.top - anchorLandingTop(col, c, targetNode);
+            canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
+          }
+          if (Math.abs(err) > 1.5 && canMove && p.tries < 2) {
+            p.tries++;
+            anchorAlign(col, targetNode, false);
+            return;
+          }
+        }
         p.scrollDone = true;
-        anchorGlideRealign = true;
+        if (!p.waitFloat) anchorProg = null;
+        else anchorWaitFrames(p.id, 3);
         return;
-      }
-      if (targetNode && targetNode.isConnected) {
-        var err = 0, canMove = false;
-        if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
-          err = -col.scrollTop;
-          canMove = col.scrollTop > 1;
-        } else {
-          var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
-          err = r.top - anchorLandingTop(col, c, targetNode);
-          canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
-        }
-        if (Math.abs(err) > 1.5 && canMove && p.tries < 2) {
-          p.tries++;
-          anchorAlign(col, targetNode, false);
-          return;
-        }
-      }
-      p.scrollDone = true;
-      if (!p.waitFloat) anchorProg = null;
-      else anchorWaitFrames(p.id, 3);
-      return;
       }
     }
     anchorProg = null;
@@ -1363,9 +1766,9 @@
     var colCs = getComputedStyle(col);
     anchorSized.padTop = parseFloat(colCs.paddingTop) || 0;
     anchorSized.bounded = /auto|scroll/.test(colCs.overflowY);
+    anchorSized.h = anchorSized.bounded ? (col.clientHeight || window.innerHeight || 0) : 0;
     anchorSized.inset = anchorRailInset(col);
-    anchorWheelCtrl = createBoardWheel();
-    col.addEventListener("wheel", anchorOnWheel, { passive: false, capture: true });
+    col.addEventListener("scroll", freeOnScroll, { passive: true });
     col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
     col.addEventListener("touchstart", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
@@ -1381,6 +1784,10 @@
         if (nextInset === anchorSized.inset) return;
         anchorSized.inset = nextInset;
         anchorApplySizes(col);
+        if (freeActive && freeWinStart === 0) {
+          var moList = anchorCards(), moNode = moList[freeAnchorIdx];
+          freeLayout({ anchorIdx: freeAnchorIdx, anchorY: moNode && freePos.has(moNode) ? freePos.get(moNode) : undefined, list: moList });
+        }
         if (anchorProg) anchorRealign(true);
       });
       anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });
@@ -1401,8 +1808,9 @@
       boardEl.addEventListener("click", onBoardExemptEvt, { passive: true });
     }
     col.wbScrollOwner = true;
+    anchorApplySizes(col);
     anchorSettle(null);
-    if (typeof virtualReconcile === "function") virtualReconcile({ full: true });
+    if (!freeActive && typeof virtualReconcile === "function") virtualReconcile({ full: true });
     if (typeof boardDialInit === "function") boardDialInit();
     window.WsBoardAnchor = {
       restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); },
@@ -1412,12 +1820,15 @@
       key: function () { return anchorKey; },
       cards: anchorCards,
       bounded: function () { return !!anchorSized.bounded; },
-      cancelGlide: anchorCancelGlide,
-      wheel: anchorWheelCtrl,
-      onFrameWheel: anchorOnFrameWheel,
+      free: function () { return !!freeActive; },
+      windowInfo: freeWindowInfo,
+      visibleCards: anchorVisibleCards,
+      releaseNode: freeClearNode,
+      suspendForOverview: freeSuspendForOverview,
+      resumeFromOverview: freeResumeFromOverview,
       settle: function (opts) {
         anchorSettle(null);
-        if (!(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile({ full: true });
+        if (!freeActive && !(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile({ full: true });
         if (typeof boardDialSync === "function") boardDialSync();
       },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },

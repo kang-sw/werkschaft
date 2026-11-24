@@ -614,7 +614,21 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 	if extraFound {
 		extraDisk, _ = json.Marshal(extra)
 	}
+	var lastSnapshot []byte
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
+		if prev.HolderSeq != nil {
+			// Seed lastSnapshot from the raw disk snapshot before overlaying
+			// extra scales so unchanged startup projections publish to RAM
+			// without rewriting snapshot.json on boot; legacy pre-coverage
+			// files (HolderSeq == nil) still rewrite on first flush to upgrade.
+			diskPrev := prev.ForDisk()
+			diskPrev.UpdatedAt = 0
+			diskPrev.HolderID = ""
+			diskPrev.HolderSeq = nil
+			if b, err := json.Marshal(diskPrev); err == nil {
+				lastSnapshot = b
+			}
+		}
 		restored = restoredAgyNativeOf(prev, st.ReplyID())
 		restored.erased = restored.readable && !restored.covered && extra.Coverage
 		// Rows an older writer seeded without their scale take it back.
@@ -643,6 +657,7 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		restored:          restored,
 		extra:             extra,
 		extraDisk:         extraDisk,
+		lastSnapshot:      lastSnapshot,
 	}
 }
 

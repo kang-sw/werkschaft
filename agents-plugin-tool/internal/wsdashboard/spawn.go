@@ -11,6 +11,18 @@ import (
 	"strings"
 )
 
+// appendLockWaitIfMissing appends "--lock-wait <wait>" to a copy of args unless
+// args already specifies --lock-wait.
+func appendLockWaitIfMissing(args []string, wait string) []string {
+	out := append([]string(nil), args...)
+	for _, a := range out {
+		if a == "--lock-wait" || strings.HasPrefix(a, "--lock-wait=") {
+			return out
+		}
+	}
+	return append(out, "--lock-wait", wait)
+}
+
 // stagedBinDir holds retained, content-addressed daemon executables.
 const stagedBinDir = "bin"
 
@@ -63,7 +75,8 @@ func PrepareDetachedSuccessor(ctx context.Context, exe string, args []string, di
 		return nil, err
 	}
 	defer ready.Close()
-	args = append(args, "--lock-wait", "8s", "--desktop-preflight")
+	args = appendLockWaitIfMissing(args, SuccessorLockWait.String())
+	args = append(args, "--desktop-preflight")
 	cmd, err := startDetachedWithPipes(exe, args, dir, input, output, strict)
 	input.Close()
 	output.Close()
