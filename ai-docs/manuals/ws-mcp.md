@@ -1756,12 +1756,24 @@ of `absence`, `upgrade`, or `replace` to the child), Go `StartDaemon` (under
 the singleton lock, before side effects, using that same intent), and the
 Python launchers (after candidate selection and before staging, including the
 hosted launcher's `last-running-executable.json` restart). Live newer daemons
-are still protected by `keepRunning` / never-downgrade; the floor closes the
-cold-start window when no healthy daemon answers. Deliberate rollback uses
-`daemon-start --below-floor` (through the launcher or Go binary): the launcher
-precheck admits and forwards the flag, and `StartDaemon` lowers the floor to
-that candidate's minor under the singleton lock before endpoint publication. No
-other path lowers the floor.
+are still protected by `keepRunning`. The floor also applies when no healthy
+daemon answers.
+
+To roll back from 0.52 to a matched v0.51.2 plugin and daemon:
+
+1. End sessions that use the 0.52 plugin so their launchers stop reconnecting,
+   and stop the newer daemon. The desktop app's Full Quit also closes hosted
+   sessions.
+2. Install v0.51.2 in each affected harness and start a fresh harness session
+   with that plugin. With the daemon stopped, the v0.51.2 plugin launcher
+   cold-starts its own verified v0.51.2 binary.
+3. Verify the daemon reports v0.51.2 at `/health` before resuming work.
+
+The v0.51.2 pair predates the floor. It leaves the floor file in place and
+starts with its normal arguments. For a floor-aware rollback candidate, use
+that candidate's `daemon-start --below-floor` after stopping the newer
+daemon. Its launcher admits and forwards the flag, and `StartDaemon` lowers
+the floor under the singleton lock before publishing the endpoint.
 
 Session holders: a holder is a small Python process (standard library only,
 3.10 or newer) that owns one child process, over pipes or a PTY (ConPTY on
