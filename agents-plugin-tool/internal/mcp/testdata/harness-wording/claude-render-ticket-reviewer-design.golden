@@ -84,8 +84,8 @@ bindings in `omitted:`.
 | tier | model | reasoning effort |
 |---|---|---|
 | small | haiku | high |
-| medium | sonnet | high |
-| large | opus | high |
+| medium | sonnet | medium |
+| large | sonnet | high |
 
 Give each explorer the ticket path, a bounded question, relevant artifacts, and
 a read-only boundary. Keep exploration within the ticket and cross-ticket

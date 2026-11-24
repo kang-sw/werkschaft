@@ -694,19 +694,19 @@ func defaultModelAliases(tiers map[string]AgentTier) map[string]map[string]Agent
 		"medium": {
 			"default": tierOrDefault(tiers, "medium", AgentTier{Backend: "codex", Model: "gpt-6.1-terra", Effort: "high"}),
 			"codex":   tierOrDefault(tiers, "medium", AgentTier{Backend: "codex", Model: "gpt-6.1-terra", Effort: "high"}),
-			"claude":  {Backend: "claude", Model: "sonnet", Effort: "high"},
+			"claude":  {Backend: "claude", Model: "sonnet", Effort: "medium"},
 			"agy":     {Backend: "agy", Model: "gemini-4-hydrogen", Effort: "high"},
 		},
 		"large": {
 			"default": tierOrDefault(tiers, "large", AgentTier{Backend: "codex", Model: "gpt-6.2-sol", Effort: "high"}),
 			"codex":   tierOrDefault(tiers, "large", AgentTier{Backend: "codex", Model: "gpt-6.2-sol", Effort: "high"}),
-			"claude":  {Backend: "claude", Model: "opus", Effort: "high"},
+			"claude":  {Backend: "claude", Model: "sonnet", Effort: "high"},
 			"agy":     {Backend: "agy", Model: "gemini-4-neon", Effort: "high"},
 		},
 		"xlarge": {
 			"default": tierOrDefault(tiers, "xlarge", AgentTier{Backend: "codex", Model: "gpt-6.2-sol", Effort: "xhigh"}),
 			"codex":   tierOrDefault(tiers, "xlarge", AgentTier{Backend: "codex", Model: "gpt-6.2-sol", Effort: "xhigh"}),
-			"claude":  {Backend: "claude", Model: "opus", Effort: "xhigh"},
+			"claude":  {Backend: "claude", Model: "opus", Effort: "high"},
 			"agy":     {Backend: "agy", Model: "gemini-4-neon", Effort: "xhigh"},
 		},
 	}
