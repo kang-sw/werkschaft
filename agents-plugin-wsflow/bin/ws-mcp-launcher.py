@@ -967,7 +967,7 @@ PROXY_PATH = "/mcp"
 PROXY_UPGRADE = "ws-mcp"
 PROXY_PROTOCOL = 1
 PROXY_REPLAY_ID_PREFIX = "ws-mcp-launcher-replay-"
-DAEMON_DEFAULT_START_WAIT = 10.0  # wsdashboard.DefaultStartWait, seconds
+DAEMON_DEFAULT_START_WAIT = 45.0  # wsdashboard.DefaultStartWait, seconds
 PROXY_LOST_REQUEST_CODE = -32000
 # One bounded wait for requests not yet sent, shared by MCP and CLI forwarding.
 DAEMON_RETRY_SECONDS = 75.0

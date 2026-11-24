@@ -1445,9 +1445,9 @@ class LauncherProxyTest(unittest.TestCase):
         ensure_src = (tool / "ensure.go").read_text(encoding="utf-8")
         import re
 
-        lock = re.search(r"DefaultLockWait = (\d+) \* time\.Second", daemon_src)
-        extra = re.search(r"DefaultStartWait = DefaultLockWait \+ (\d+)\*time\.Second", ensure_src)
-        self.assertIsNotNone(lock, "DefaultLockWait not found in daemon.go")
+        lock = re.search(r"SuccessorLockWait = (\d+) \* time\.Second", daemon_src)
+        extra = re.search(r"DefaultStartWait = SuccessorLockWait \+ (\d+)\*time\.Second", ensure_src)
+        self.assertIsNotNone(lock, "SuccessorLockWait not found in daemon.go")
         self.assertIsNotNone(extra, "DefaultStartWait not found in ensure.go")
         self.assertEqual(self.launcher.DAEMON_DEFAULT_START_WAIT, float(int(lock.group(1)) + int(extra.group(1))))
 
