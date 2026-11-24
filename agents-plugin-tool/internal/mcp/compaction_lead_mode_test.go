@@ -67,6 +67,47 @@ func TestCompactionLeadModeConfigResolutionAndWSOnlyGuard(t *testing.T) {
 	}
 }
 
+func TestDashboardCompactionModeProjectsHarnessPolicy(t *testing.T) {
+	catalog, err := DashboardConfigCatalog("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		layers     wsconfigservice.Layers
+		werkSource wsconfig.Scope
+	}{
+		{name: "builtin", werkSource: wsconfig.ScopeBuiltin},
+		{name: "wildcard native", layers: wsconfigservice.Layers{
+			Files: map[wsconfig.Scope]wsconfig.Config{
+				wsconfig.ScopeGlobal: {Overrides: map[string]string{wsconfig.ItemCompactionLeadMode: wsconfig.CompactionModeNative}},
+			},
+		}, werkSource: wsconfig.ScopeGlobal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := catalog.KeyEntries(wsconfig.ItemCompactionLeadMode, wsconfig.ScopeGlobal, tc.layers)
+			found := false
+			for _, entry := range entries {
+				switch entry.Selectors["harness"] {
+				case wsagent.BackendWerk:
+					found = true
+					if entry.Default != wsconfig.CompactionModeWS || entry.Value != wsconfig.CompactionModeWS ||
+						len(entry.Enum) != 1 || entry.Enum[0] != wsconfig.CompactionModeWS || entry.SourceScope != tc.werkSource {
+						t.Fatalf("Werk compaction setting = %+v", entry)
+					}
+				case wsagent.BackendClaude, "*":
+					if entry.Default != wsconfig.CompactionModeNative || entry.Value != wsconfig.CompactionModeNative || len(entry.Enum) != 2 {
+						t.Fatalf("unlocked compaction setting = %+v", entry)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing Werk compaction setting")
+			}
+		})
+	}
+}
+
 type compactSchemaRunner struct {
 	AgentHost
 	state       wsagent.State

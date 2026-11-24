@@ -38,15 +38,17 @@ type Rule struct {
 	// Editable marks a structured key the settings page edits with its own
 	// control (the agent.tier_routing graph editor) instead of inspecting it
 	// read-only like a profile.
-	Editable        bool
-	Structured      bool
-	Compaction      bool
+	Editable             bool
+	Structured           bool
+	Compaction           bool
 	Normalize            func(string) (string, error)
 	ValidateHarnessValue func(harness, value string) error
-	Decode               func(string) (any, error)
-	ValidateName    func(string) error
-	NormalizeObject func(any, wsconfig.Scope) (json.RawMessage, error)
-	LegacyKey       func(harness string) string
+	// FixedHarnessValue supplies the only supported value for a selector.
+	FixedHarnessValue func(harness string) string
+	Decode            func(string) (any, error)
+	ValidateName      func(string) error
+	NormalizeObject   func(any, wsconfig.Scope) (json.RawMessage, error)
+	LegacyKey         func(harness string) string
 }
 
 type Catalog struct {
