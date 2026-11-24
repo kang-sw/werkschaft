@@ -106,3 +106,33 @@ func TestRetiredPiRealHolderSurvivesStartup(t *testing.T) {
 		})
 	}
 }
+
+func TestRetiredPiHolderBlocksWorktreeUntilExit(t *testing.T) {
+	dir, checkout := t.TempDir(), t.TempDir()
+	holders := newFakeHolders()
+	const session = "boundpihistory"
+	holder := holders.add(holderSession{Kind: holderKindPiWorker, ReplyID: session})
+	rec := Record{
+		ReplyID: session, Backend: BackendPi, HolderID: holder,
+		Root: t.TempDir(), Cwd: checkout, WSKey: "fixture", Profile: "custom-profile", Parent: &leadParent,
+	}
+	if err := writeRecord(wsdashboard.SessionDir(dir, session), rec); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(Options{Dir: dir, Holders: holders})
+	t.Cleanup(r.Close)
+	r.Start(nil)
+	wait(t, "holder scan", r.rejoined)
+	if st, err := r.Get(session); err != nil || st.Status != StatusClosed {
+		t.Fatalf("retired history = %+v, %v", st, err)
+	}
+	bound := r.ActiveChildrenInWorktree(checkout)
+	if len(bound) != 1 || bound[0].Address != AgentAddress(session) ||
+		!bound[0].Live || bound[0].State == AgentClosed || bound[0].BoundBeforeRelease {
+		t.Fatalf("release and reuse guard inputs for the live holder = %+v", bound)
+	}
+	holders.exit(holder, 0)
+	if bound := r.ActiveChildrenInWorktree(checkout); len(bound) != 0 {
+		t.Fatalf("exited holder still occupies the worktree: %+v", bound)
+	}
+}

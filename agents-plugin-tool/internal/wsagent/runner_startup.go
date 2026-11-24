@@ -128,6 +128,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		if rec.Backend == BackendPi {
 			if rec.HolderID != "" {
 				retiredPiHolders[rec.HolderID] = true
+				r.rememberRetiredPiBinding(rec)
 			}
 			if rec.ClosedAt == "" && !rec.handedOff() && r.closeAtStart(rec) {
 				continue

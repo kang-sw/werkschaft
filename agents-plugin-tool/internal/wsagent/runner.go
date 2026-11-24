@@ -329,6 +329,9 @@ type Runner struct {
 	// closedRows caches immutable closed states under mu, until reopened.
 	// Handed-off snapshots still belong to a terminal and are not cached.
 	closedRows map[string]State
+	// Retired Pi process bindings are independent of the ended history rows.
+	// The holder manager supplies their liveness. Guarded by mu.
+	retiredPiBindings []retiredPiBinding
 	// resumeMu serializes Pi child revival with close cascades without
 	// holding mu over store writes or conversation startup.
 	resumeMu sync.Mutex

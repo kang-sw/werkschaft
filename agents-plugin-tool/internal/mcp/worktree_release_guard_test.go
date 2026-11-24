@@ -10,13 +10,67 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
+	"github.com/kang-sw/devenv/internal/wsholder"
 )
+
+type retiredPiGuardHolder struct {
+	wsagent.HolderHost
+	exited atomic.Bool
+}
+
+func (*retiredPiGuardHolder) AddSink(wsholder.Sink) {}
+func (*retiredPiGuardHolder) Scan()                 {}
+
+func (h *retiredPiGuardHolder) List() wsholder.Listing {
+	state := "running"
+	if h.exited.Load() {
+		state = "exited"
+	}
+	return wsholder.Listing{Holders: []wsholder.Info{{ID: "heldpi", Child: &wsholder.ChildStatus{State: state}}}}
+}
+
+func TestWorktreeGuardsRefuseLiveRetiredPiHolder(t *testing.T) {
+	dir, checkout := t.TempDir(), t.TempDir()
+	const id = "retiredworker"
+	raw, err := json.Marshal(wsagent.Record{ReplyID: id, Backend: wsagent.BackendPi, HolderID: "heldpi", Root: checkout, WSKey: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := wsdashboard.SessionDir(dir, id)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, wsdashboard.AgentRecordFileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	holder := &retiredPiGuardHolder{}
+	runner := wsagent.NewRunner(wsagent.Options{Dir: dir, Holders: holder})
+	t.Cleanup(runner.Close)
+	runner.Start(nil)
+	s := &Server{worktreeChildren: runner}
+	ctx := context.Background()
+	if err := s.checkWorktreeBoundChildren(ctx, checkout); err == nil || !strings.Contains(err.Error(), id) {
+		t.Fatalf("release with live retired holder = %v", err)
+	}
+	if !s.worktreeBusy(ctx, checkout) {
+		t.Fatal("acquire could reuse the checkout while its retired holder runs")
+	}
+	holder.exited.Store(true)
+	if err := s.checkWorktreeBoundChildren(ctx, checkout); err != nil {
+		t.Fatalf("release after holder exit = %v", err)
+	}
+	if s.worktreeBusy(ctx, checkout) {
+		t.Fatal("the exited holder still blocks checkout reuse")
+	}
+}
 
 // releaseGuardServer is a worktree server with a second lead key on the same
 // root, the shape of two lead sessions sharing one worktree pool.
