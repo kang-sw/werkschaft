@@ -280,11 +280,11 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 			if starts[1].SessionID != "" {
 				t.Fatalf("rotated StartSpec.SessionID = %q, want empty (fresh native session)", starts[1].SessionID)
 			}
-			// Verify audit commit happened BEFORE old process Close and BEFORE new Start.
+			// Only a successfully started replacement can establish the cut.
 			auditIdx, closeIdx, start2Idx := -1, -1, -1
 			for i, step := range order {
 				switch {
-				case step == "audit:1":
+				case step == "audit:2":
 					auditIdx = i
 				case step == "close:1":
 					closeIdx = i
@@ -292,14 +292,21 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 					start2Idx = i
 				}
 			}
-			if !(auditIdx >= 0 && closeIdx > auditIdx && start2Idx > closeIdx) {
-				t.Fatalf("unexpected rotation ordering %v (want audit:1 < close:1 < start:2)", order)
+			if !(closeIdx >= 0 && start2Idx > closeIdx && auditIdx > start2Idx) {
+				t.Fatalf("unexpected rotation ordering %v (want close:1 < start:2 < audit:2)", order)
 			}
+			if retained, err := ReadRecord(runner.opts.Dir, id); err != nil || retained.SessionID != "native-sid-1" {
+				t.Fatalf("durable native binding before replacement reports ID = %q, err=%v", retained.SessionID, err)
+			}
+			procs[1].events <- Event{SessionID: "native-sid-2"}
+			waitWSCompact(t, "replacement's persisted native ID", func() bool {
+				retained, err := ReadRecord(runner.opts.Dir, id)
+				return err == nil && retained.SessionID == "native-sid-2" && retained.WSKey == recBefore.WSKey
+			})
 
-			// Verify explicit non-estimated wsaudit.KindCompaction on old process.
-			ids, evs := procs[0].audits()
+			ids, evs := procs[1].audits()
 			if len(evs) != 1 || evs[0].Kind != wsaudit.KindCompaction {
-				t.Fatalf("audit events on old proc = %+v, want 1 KindCompaction", evs)
+				t.Fatalf("audit events on replacement = %+v, want 1 KindCompaction", evs)
 			}
 			if _, est := evs[0].Meta[wsaudit.MetaEstimated]; est {
 				t.Fatalf("ws-managed compaction audit must not be marked estimated: %+v", evs[0].Meta)
@@ -362,34 +369,47 @@ func TestWSManagedRotationFailurePreservesSessionIdentity(t *testing.T) {
 		return ok && rec.SessionID == "keep-sid" && err == nil && st.Status == StatusIdle
 	})
 
-	// 1. Audit commit failure aborts cleanly before closing old proc or clearing SessionID.
 	b.mu.Lock()
-	b.failAuditErr = errors.New("audit disk full")
+	b.failStartAt = 2
 	b.mu.Unlock()
 	rec, _ := runner.recordOf(id)
 	res := runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
-	if res.Status != "error" {
-		t.Fatalf("expected error on audit commit failure, got %+v", res)
-	}
-	recAfter, _ := runner.recordOf(id)
-	st, _ := runner.Get(id)
-	if recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
-		t.Fatalf("audit failure corrupted state: sid=%q compactions=%d", recAfter.SessionID, st.Compactions)
-	}
-
-	// 2. startLead failure restores previous SessionID and does not increment Compactions.
-	b.mu.Lock()
-	b.failAuditErr = nil
-	b.failStartAt = 2
-	b.mu.Unlock()
-	res = runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
-	if res.Status != "error" {
+	if res.Status != "error" || !strings.Contains(res.Reason, "start fresh session") {
 		t.Fatalf("expected error on startLead failure, got %+v", res)
 	}
-	recAfter, _ = runner.recordOf(id)
+	if _, events := p1.audits(); wsaudit.FindModelSeenCut(events).HasCompaction {
+		t.Fatalf("failed launch left an audit cut: %+v", events)
+	}
+	recAfter, err := ReadRecord(runner.opts.Dir, id)
+	st, _ := runner.Get(id)
+	if err != nil || recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
+		t.Fatalf("startLead failure corrupted state: sid=%q compactions=%d err=%v", recAfter.SessionID, st.Compactions, err)
+	}
+
+	b.mu.Lock()
+	b.failStartAt = 0
+	b.failAuditErr = errors.New("audit disk full")
+	b.mu.Unlock()
+	if _, err := runner.Send(id, "wake after failed rotation"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "resumed old native session", func() bool {
+		starts, _, _ := b.snapshot()
+		return len(starts) == 2 && starts[1].SessionID == "keep-sid"
+	})
+	b.latest().events <- Event{TurnEnd: true}
+	waitWSCompact(t, "idle on previous native session", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Status == StatusIdle
+	})
+	res = runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
+	if res.Status != "error" || !strings.Contains(res.Reason, "audit disk full") {
+		t.Fatalf("expected error on audit commit failure, got %+v", res)
+	}
+	recAfter, err = ReadRecord(runner.opts.Dir, id)
 	st, _ = runner.Get(id)
-	if recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
-		t.Fatalf("startLead failure corrupted state: sid=%q compactions=%d", recAfter.SessionID, st.Compactions)
+	if err != nil || recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
+		t.Fatalf("audit failure corrupted state: sid=%q compactions=%d err=%v", recAfter.SessionID, st.Compactions, err)
 	}
 }
 

@@ -695,10 +695,8 @@ func stage1CompactionPrompt() string {
 }
 
 // rotateExternalLead executes ws-managed compaction for an external hosted lead:
-// builds the checkpoint, emits CompactStart, commits an explicit non-estimated
-// wsaudit.KindCompaction on the old process before closing it, retires the old
-// holder, clears rec.SessionID/SessionFile, starts a fresh native session via
-// startLead, emits CompactEnd, and queues RestoreCompaction + checkpoint.
+// builds the checkpoint, replaces the holder, and records the explicit audit
+// cut before sending any input to the replacement.
 func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, error) {
 	rec := c.record()
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
@@ -733,54 +731,40 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		Dialog:       dialogRes.Dialog,
 	})
 
+	at := time.Now()
+	if c.r.opts.Now != nil {
+		at = c.r.opts.Now()
+	}
+	cut, err := wsaudit.NewEnvelope(rec.ReplyID, rec.Backend, at, wsaudit.KindCompaction)
+	if err != nil {
+		return false, fmt.Errorf("build compaction audit envelope: %w", err)
+	}
+	cut.Subkind, cut.Out = trigger, checkpoint
+	cut.Meta = map[string]any{"mode": wsconfig.CompactionModeWS, "trigger": trigger}
+
 	err = c.sendStandalonePrompt(false, func() error {
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
 
-		if committer, ok := c.proc.(auditCheckpointCommitter); ok {
-			at := time.Now()
-			if c.r != nil && c.r.opts.Now != nil {
-				at = c.r.opts.Now()
-			}
-			ev, err := wsaudit.NewEnvelope(rec.ReplyID, rec.Backend, at, wsaudit.KindCompaction)
-			if err != nil {
-				return fmt.Errorf("build compaction audit envelope: %w", err)
-			}
-			ev.Subkind = trigger
-			ev.Out = checkpoint
-			ev.Meta = map[string]any{
-				"mode":    wsconfig.CompactionModeWS,
-				"trigger": trigger,
-			}
-			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
-			if err := committer.commitAuditCheckpoint(context.Background(), id, ev); err != nil {
-				return fmt.Errorf("commit compaction audit checkpoint: %w", err)
-			}
-		}
-
-		oldProc := c.proc
-		c.setStatus(func() { c.proc = nil })
-		c.events = nil
-		c.clearProcessMCP()
-		if oldProc != nil {
-			_ = oldProc.Close()
-			c.releaseHolder(oldProc)
-		}
-		if err := c.retireHolder(); err != nil {
+		if err := c.retireCompactionProcess(); err != nil {
 			return fmt.Errorf("retire session holder: %w", err)
 		}
 
-		prevSessionID, prevSessionFile := rec.SessionID, rec.SessionFile
-		c.update(func(r *Record) {
-			r.SessionID = ""
-			r.SessionFile = ""
-		})
-		if err := c.startLead(c.record(), rp.Definition, false); err != nil {
-			c.update(func(r *Record) {
-				r.SessionID = prevSessionID
-				r.SessionFile = prevSessionFile
-			})
+		// Only the launch uses an empty native binding. Retain the last
+		// known ID on disk until the replacement reports its own.
+		fresh := c.record()
+		fresh.SessionID, fresh.SessionFile = "", ""
+		noteBefore := c.compactNote
+		if err := c.startLead(fresh, rp.Definition, false); err != nil {
 			return fmt.Errorf("start fresh session: %w", err)
+		}
+
+		if committer, ok := c.proc.(auditCheckpointCommitter); ok {
+			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
+			if err := committer.commitAuditCheckpoint(context.Background(), id, cut); err != nil {
+				c.compactNote = noteBefore
+				return errors.Join(fmt.Errorf("commit compaction audit checkpoint: %w", err), c.retireCompactionProcess())
+			}
 		}
 
 		c.compactOrigin = trigger
@@ -800,6 +784,21 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		return false, err
 	}
 	return true, nil
+}
+
+func (c *conv) retireCompactionProcess() error {
+	proc := c.proc
+	c.setStatus(func() { c.proc = nil })
+	c.events = nil
+	c.clearProcessMCP()
+	if proc != nil {
+		_ = proc.Close()
+		if audited, ok := proc.(interface{ waitForAudit() }); ok {
+			audited.waitForAudit()
+		}
+		c.releaseHolder(proc)
+	}
+	return c.retireHolder()
 }
 
 func (c *conv) compactionStateInstruction() string {
