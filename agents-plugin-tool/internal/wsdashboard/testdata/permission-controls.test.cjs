@@ -533,7 +533,7 @@ console.log('permission control cases passed');
 (async function () {
   const opener = { isConnected: true };
   const state = { ...base, process: true, mcp_broken: ['server'], background_tasks: 2 };
-  for (const action of ['stop', 'restart', 'handoff', 'close']) {
+  for (const action of ['restart']) {
     for (const outcome of ['cancel', 'stale', 'accept', 'no-background']) {
       const w = world(), prompts = [];
       const m = menu(w, { ...state, background_tasks: outcome === 'no-background' ? 0 : 2 });

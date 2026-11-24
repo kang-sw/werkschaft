@@ -989,8 +989,7 @@
     // archive hides the session from the rail (no process, mail held until
     // unarchive); on an archived session it is unarchive (back to asleep).
     var archive = actBtn("archive", "", wsT("js.lead.archive")), archT = archive.b.lastChild.firstChild;
-    var handoff = actBtn(luIcon("square-terminal"), "", wsT("js.lead.handoff")), close = actBtn("power", " danger", wsT("js.lead.close"));
-    handoff.note.textContent = wsT("js.lead.handoff.note");
+    var close = actBtn("power", " danger", wsT("js.lead.close"));
     function holdHintNote(base) { return base + " · " + wsT("js.hold.hint"); }
     function drawStopNote(st) {
       if (!st || !st.process) { stop.note.textContent = wsT("js.lead.stopped"); return; }
@@ -1156,10 +1155,6 @@
       var n = bgTasks();
       confirmAction("restart", restart.b, n > 0 ? wsTn("js.lead.restart.confirm", n) : "", n);
     });
-    handoff.b.addEventListener("click", function () {
-      var n = bgTasks();
-      confirmAction("handoff", handoff.b, n > 0 ? wsTn("js.lead.handoff.confirm", n) : "", n);
-    });
     // draw shows the session's state; it runs when the menu opens and after
     // every read of the state while it is open.
     P.draw = function () {
@@ -1191,9 +1186,7 @@
       var broken = Array.isArray(st.mcp_broken) ? st.mcp_broken.map(String) : [];
       restart.b.hidden = !broken.length;
       restart.b.disabled = P.busy;
-      handoff.b.hidden = !!st.is_child;
       archive.b.hidden = !!st.is_child;
-      handoff.b.disabled = P.busy;
       archive.b.disabled = P.busy;
       if (archive.b.getAttribute("data-hidden") !== String(!!st.hidden)) {
         archive.b.setAttribute("data-hidden", String(!!st.hidden));

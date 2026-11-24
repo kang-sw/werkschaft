@@ -80,6 +80,8 @@ func (*claudeMapper) newAudit(sessionID string) (string, auditAdapter) {
 
 var _ terminalSession = ClaudeBackend{}
 
+// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+// removal in 261124-refactor-remove-terminal-handoff.
 func (ClaudeBackend) terminalResume(rec Record, _ string) string {
 	if rec.SessionID == "" {
 		return ""
