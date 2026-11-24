@@ -453,7 +453,7 @@ var configRegistry = []configKeyEntry{
 		ResetTool:  "config.tune",
 		ValueFields: []tuningField{{
 			Name:        "value",
-			Description: "Whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=pi.large quick=claude.small\"; tier is small, medium, large, or xlarge, and a name has no dot. Omit when reset is true.",
+			Description: "Whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\"; tier is small, medium, large, or xlarge, and a name has no dot. Omit when reset is true.",
 		}},
 		NoAgentVisible:        true,
 		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentTierAliases),

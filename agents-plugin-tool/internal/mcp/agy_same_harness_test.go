@@ -111,7 +111,8 @@ func TestRoutedBindingReturnsNoBindingAfterACrossHarnessRefusal(t *testing.T) {
 	const tier = "playbook-explore:small"
 	claude, _ := hostedBackendConnection(t, wsagent.BackendClaude, shippedAgyRegistrations())
 	opts := claude.configOptions()
-	res, _, err := claude.routedBinding(tier, wsagent.BackendAgy, opts)
+	resolver := wsagent.NewTierBindingResolver(opts, claude.agentBackends()...)
+	res, _, err := claude.routedBinding(tier, wsagent.BackendAgy, opts, resolver)
 	if !res.CallerFallthrough || res.Harness != wsagent.BackendAgy || err == nil || !strings.Contains(err.Error(), agyCrossHarnessText) {
 		t.Fatalf("routed binding = %+v, %v; want the agy fallthrough refused", res, err)
 	}

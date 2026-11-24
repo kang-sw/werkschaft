@@ -74,6 +74,8 @@ type Request struct {
 	// directly (a worker), which a restricted provider admits only with
 	// the user's stored consent.
 	Background bool
+	// An inference request pins the registration admitted by the plan gate.
+	openAIAccount string
 }
 
 // Source is what a consumer asks for credentials: the daemon's Store in the

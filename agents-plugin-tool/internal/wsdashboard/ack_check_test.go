@@ -326,6 +326,10 @@ func TestAnswerCheckNudgesOnceForAnOpenAnsweredItem(t *testing.T) {
 	_, start := f.batch(ackID, 7, "")
 	f.d.checkAnswers(ackID)
 	f.wantNudge(ackID, "(07)")
+	held, err := wsinbox.Held(f.inbox(ackID))
+	if err != nil || len(held) != 1 || held[0].Entry.Operator {
+		t.Fatalf("automatic nudge provenance = %+v, %v", held, err)
+	}
 	f.wantThrough(ackID, start)
 
 	f.d.checkAnswers(ackID)

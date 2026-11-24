@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -123,5 +124,37 @@ func TestRetiredPiProfileRemainsReadable(t *testing.T) {
 	t.Cleanup(r.Close)
 	if _, err := r.resolve("old-pi", t.TempDir()); !errors.Is(err, errPiRetired) {
 		t.Fatalf("opening an old Pi profile = %v", err)
+	}
+}
+
+func TestRetiredPiTierListingSharesOpenRouterCatalogSnapshot(t *testing.T) {
+	var requests atomic.Int32
+	models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		io.WriteString(w, `{"data":[{"id":"vendor/a"},{"id":"vendor/b"}]}`)
+	}))
+	defer models.Close()
+	_, reg := (WerkBackend{modelsURL: models.URL, httpClient: models.Client()}).registration()
+	cfg := wsconfig.Options{ConfigHome: t.TempDir()}
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(cfg, "small", "", "vendor/a", BackendPi, ""); err != nil {
+		t.Fatal(err)
+	}
+	setTierRouting(t, cfg, `{"nodes":{"legacy-route":{"*":"legacy-one"}},"bundles":{"legacy-one":{"harness":"pi","model":"vendor/a"},"legacy-two":{"harness":"pi","model":"vendor/b"}}}`)
+	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendWerk: reg}})
+	t.Cleanup(r.Close)
+	caller := LeadCaller("fixture", t.TempDir(), BackendClaude, cfg)
+	for want := int32(1); want <= 2; want++ {
+		tiers, err := r.AgentTiers(caller)
+		if err != nil || len(tiers.Ext) != 1 || tiers.Routing.Error != "" || len(tiers.Routing.Bundles) != 2 {
+			t.Fatalf("legacy tier listing = %+v, %v", tiers, err)
+		}
+		for _, bundle := range tiers.Routing.Bundles {
+			if bundle.Model == "" || bundle.Error != "" {
+				t.Fatalf("legacy bundle = %+v", bundle)
+			}
+		}
+		if count := requests.Load(); count != want {
+			t.Fatalf("after %d listings the catalog was requested %d times", want, count)
+		}
 	}
 }

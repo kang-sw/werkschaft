@@ -7,6 +7,10 @@ import (
 	"os"
 )
 
+func hasSingleLink(*os.File, os.FileInfo) (bool, error) {
+	return false, errors.ErrUnsupported
+}
+
 func openMutationDir(_ *os.File, _ string, _ bool) (*os.File, error) {
 	return nil, errors.ErrUnsupported
 }

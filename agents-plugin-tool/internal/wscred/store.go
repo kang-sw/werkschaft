@@ -135,6 +135,7 @@ type Store struct {
 	openAI               openAIOAuth
 	openAIAccount        openAIAccount
 	pendingOpenAIRefresh *openAIAccount
+	openAIPlanPauses     map[string]*openAIPlanPause // guarded by mu
 
 	mu      sync.Mutex
 	loaded  bool

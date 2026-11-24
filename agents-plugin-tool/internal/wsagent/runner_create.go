@@ -430,7 +430,8 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.r.lifecycle(c.rec.Backend).RestoreUsage && spec.Holder != nil && spec.Holder.id != "" {
+	if c.r.lifecycle(c.rec.Backend).RestoreUsage &&
+		(c.r.durableProcess(c.rec.Backend) || spec.Holder != nil && spec.Holder.id != "") {
 		spec.restoredUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
 	}
 	if sink := c.r.opts.AuditSink; sink != nil {
@@ -447,6 +448,7 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 			return nil, categorized(ErrLaunchFailed, errors.New("the backend has no durable process"))
 		}
 		start = durable.startLoop
+		spec.closedTurnID = c.rec.DurableClosedTurnID
 		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
 		spec.compactState = c.r.compactionState(c.rec.ReplyID)
 		spec.sessionSecret = c.rec.WSKey

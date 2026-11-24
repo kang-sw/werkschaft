@@ -10,6 +10,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -87,7 +88,9 @@ type Client struct {
 	Dialect string
 	// Token returns the credential to send, asked for on every request.
 	Token func(ctx context.Context) (string, error)
-	HTTP  *http.Client
+	// PlanToken admits a request against the signed-in account's pause.
+	PlanToken func(context.Context) (wscred.OpenAIPlanRequest, error)
+	HTTP      *http.Client
 	// StallTimeout cuts a stream that delivers nothing for this long; zero
 	// is DefaultStallTimeout.
 	StallTimeout time.Duration
@@ -106,6 +109,13 @@ const DefaultHeaderTimeout = 2 * time.Minute
 // maxStreamLine bounds one server-sent line: an encrypted reasoning item can
 // be large.
 const maxStreamLine = 64 << 20
+
+// The event cap also covers multiline data, and the response cap covers all
+// fragments, including text already delivered to a streaming callback.
+const maxStreamEvent = maxStreamLine
+const maxStreamResponse = 128 << 20
+
+var errResponseTooLarge = errors.New("the model response exceeds the size limit")
 
 // maxErrorBody bounds the error body read from a refused request.
 const maxErrorBody = 64 << 10
@@ -161,11 +171,28 @@ type TransientError struct{ Err error }
 func (e *TransientError) Error() string { return e.Err.Error() }
 func (e *TransientError) Unwrap() error { return e.Err }
 
+type planProbeError struct{ error }
+
+func (e planProbeError) Unwrap() error { return e.error }
+
+const openAIPlanLimitCode = "subscription_sharing_usage_limit_exceeded"
+
+func planLimitExceeded(err error) bool {
+	var h *HTTPError
+	var f *FailedError
+	return (errors.As(err, &h) && h.Code == openAIPlanLimitCode) ||
+		(errors.As(err, &f) && f.Code == openAIPlanLimitCode)
+}
+
 // Retryable reports whether err is worth another request and how long to wait
 // before it: delay is the endpoint's own Retry-After when it sent one, else
 // zero (the caller's backoff). A refused credential, a bad request and a
 // context end are not retryable.
 func Retryable(err error) (delay time.Duration, ok bool) {
+	var probe planProbeError
+	if errors.As(err, &probe) || planLimitExceeded(err) {
+		return 0, false
+	}
 	var tr *TransientError
 	if errors.As(err, &tr) {
 		return 0, true
@@ -269,10 +296,30 @@ func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
 }
 
 // Respond sends req and reads the streamed response to its terminal event.
-func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Response, error) {
+func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (out *Response, err error) {
 	var token string
-	var err error
-	if c.Token != nil {
+	if c.PlanToken != nil {
+		plan, admitErr := c.PlanToken(ctx)
+		if admitErr != nil {
+			return nil, admitErr
+		}
+		token = plan.Credential.Secret.Reveal()
+		defer func() {
+			outcome := wscred.OpenAIPlanUnchanged
+			switch {
+			case planLimitExceeded(err):
+				outcome = wscred.OpenAIPlanLimitExceeded
+				err = wscred.ErrOpenAIPlanPaused
+			case err == nil && out != nil:
+				outcome = wscred.OpenAIPlanSucceeded
+			case plan.Probe && err != nil && ctx.Err() == nil:
+				// A probe is one provider request. Give the operator its
+				// failure and keep the account paused until a later success.
+				err = planProbeError{err}
+			}
+			plan.Finish(outcome)
+		}()
+	} else if c.Token != nil {
 		token, err = c.Token(ctx)
 		if err != nil {
 			return nil, err
@@ -330,7 +377,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
-	out, err := readStream(resp.Body, h, func() { timer.Reset(stall) })
+	out, err = readStream(resp.Body, h, func() { timer.Reset(stall) }, maxStreamEvent, maxStreamResponse)
 	var failed *FailedError
 	if errors.As(err, &failed) {
 		failed.Message = Scrub(failed.Message, secret)
@@ -399,15 +446,17 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 
 // streamState assembles one response from its events.
 type streamState struct {
-	items map[int]json.RawMessage
-	order []int
+	maxOutput int
+	items     map[int]json.RawMessage
+	order     []int
 	// args accumulates a function call's argument deltas by item id, for a
 	// provider whose done item leaves them out.
 	args map[string]*strings.Builder
 }
 
-func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
-	st := &streamState{items: map[int]json.RawMessage{}, args: map[string]*strings.Builder{}}
+func readStream(r io.Reader, h StreamHandler, touch func(), eventLimit, responseLimit int) (*Response, error) {
+	st := &streamState{maxOutput: responseLimit, items: map[int]json.RawMessage{}, args: map[string]*strings.Builder{}}
+	remaining := responseLimit
 	br := bufio.NewReaderSize(r, 64<<10)
 	var event string
 	var data bytes.Buffer
@@ -422,7 +471,11 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 		return st.handle(ev, bytes.TrimSpace(data.Bytes()), h)
 	}
 	for {
-		line, err := readLine(br)
+		line, err := readLine(br, min(eventLimit, remaining))
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, err
+		}
+		remaining -= len(line)
 		if len(line) > 0 || err == nil {
 			touch()
 		}
@@ -445,10 +498,14 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 		case strings.HasPrefix(text, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(text, "event:"))
 		case strings.HasPrefix(text, "data:"):
+			part := strings.TrimPrefix(strings.TrimPrefix(text, "data:"), " ")
 			if data.Len() > 0 {
 				data.WriteByte('\n')
 			}
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(text, "data:"), " "))
+			if len(part) > eventLimit-data.Len() {
+				return nil, errResponseTooLarge
+			}
+			data.WriteString(part)
 		}
 		if err != nil {
 			if resp, done, ferr := flush(); done {
@@ -462,15 +519,15 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 	}
 }
 
-// readLine reads one line of any length up to maxStreamLine.
-func readLine(br *bufio.Reader) ([]byte, error) {
+// readLine reads one line without growing its buffer past the limit.
+func readLine(br *bufio.Reader, limit int) ([]byte, error) {
 	var out []byte
 	for {
 		chunk, err := br.ReadSlice('\n')
-		out = append(out, chunk...)
-		if len(out) > maxStreamLine {
-			return nil, fmt.Errorf("a stream line exceeds %d bytes", maxStreamLine)
+		if len(chunk) > limit-len(out) {
+			return nil, errResponseTooLarge
 		}
+		out = append(out, chunk...)
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
@@ -626,7 +683,9 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 			resp.Output = append(resp.Output, s.items[idx])
 		}
 	}
-	resp.Output = s.fillArguments(resp.Output)
+	if err := s.fillArguments(resp.Output); err != nil {
+		return nil, err
+	}
 	if u := d.Response.Usage; u != nil {
 		cacheWrite := u.InputTokensDetails.CacheWriteTokens
 		if cacheWrite == nil {
@@ -642,24 +701,21 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 }
 
 func (s *streamState) sortedIndexes() []int {
-	idx := append([]int(nil), s.order...)
-	for i := 1; i < len(idx); i++ {
-		for j := i; j > 0 && idx[j-1] > idx[j]; j-- {
-			idx[j-1], idx[j] = idx[j], idx[j-1]
-		}
-	}
-	return idx
+	slices.Sort(s.order)
+	return s.order
 }
 
 // fillArguments gives a function call item that arrived with no arguments the
 // ones its deltas carried; every other item is returned as it came.
-func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
+func (s *streamState) fillArguments(items []json.RawMessage) error {
 	if len(s.args) == 0 {
-		return items
+		return nil
 	}
-	out := make([]json.RawMessage, len(items))
+	remaining := s.maxOutput
+	for _, raw := range items {
+		remaining -= len(raw)
+	}
 	for i, raw := range items {
-		out[i] = raw
 		var probe struct {
 			Type      string `json:"type"`
 			ID        string `json:"id"`
@@ -672,6 +728,9 @@ func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
 		if b == nil || b.Len() == 0 {
 			continue
 		}
+		if b.Len() > remaining {
+			return errResponseTooLarge
+		}
 		var m map[string]json.RawMessage
 		if json.Unmarshal(raw, &m) != nil {
 			continue
@@ -679,8 +738,12 @@ func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
 		args, _ := json.Marshal(b.String())
 		m["arguments"] = args
 		if patched, err := json.Marshal(m); err == nil {
-			out[i] = patched
+			remaining -= len(patched) - len(raw)
+			if remaining < 0 {
+				return errResponseTooLarge
+			}
+			items[i] = patched
 		}
 	}
-	return out
+	return nil
 }

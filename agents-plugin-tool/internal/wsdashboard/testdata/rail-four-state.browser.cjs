@@ -99,6 +99,8 @@ async function behaviour(browser) {
     const del = await page.locator(row('release49') + ' time.when.del').textContent();
     assert.match(del, /^6일 후 삭제$/, 'pending-deletion time: ' + del);
     assert.equal(await page.locator(row('hotfixprobe') + ' time.when.del.soon').count(), 1, 'under a day is warned');
+    assert.equal(await where(page, 'execsecond'), 'del', 'retired Pi history stays in the ended fold');
+    assert.equal(await page.locator(row('execsecond') + ' time.when.del').count(), 0, 'retired Pi history has no deletion countdown');
     await half(page, 'del');
     // Active, asleep, archived, and deleted keep their styling.
     assert.deepEqual(await page.evaluate(() => ['mainlead', 'reviewer', 'docaudit', 'release49'].map((id) => document.querySelector('#r-rail .rs[data-rid="' + id + '"]').className)),

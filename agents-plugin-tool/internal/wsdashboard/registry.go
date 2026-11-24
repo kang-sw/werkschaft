@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -377,12 +376,12 @@ func RemoveRegistration(dir, replyID string) error {
 // retention would otherwise lose its record, held sends, and backend
 // session before the runner re-registers it. The exception is a lead
 // session the runner no longer serves (its record is closed, or handed to
-// a terminal), or a closed spawned Pi child: its row is no longer the
+// a terminal), or a closed spawned child: its row is no longer the
 // runner's to refresh, so it ages as any ended session's, measured from the
-// row the close wrote last. A handed-off session
-// whose harness conversation lives in the directory itself is kept all the
-// same (agentRecordEnd.terminalConversation). Every other agent record
-// (the tracker's support agent among them) keeps the runner's lifetime.
+// row the close wrote last. Pi history keeps its session directory across
+// retirement, including the copy restored after a rollback. Every other
+// agent record (the tracker's support agent among them) keeps the runner's
+// lifetime.
 func PruneRegistrations(dir string, now time.Time, retention time.Duration) int {
 	entries, err := wsstate.ReadDir(filepath.Join(dir, sessionsDirName))
 	if err != nil {
@@ -395,7 +394,7 @@ func PruneRegistrations(dir string, now time.Time, retention time.Duration) int 
 		}
 		sessionDir := SessionDir(dir, entry.Name())
 		record, hosted := readAgentRecordEnd(sessionDir)
-		if hosted && (!record.retired() || record.terminalConversation(sessionDir)) {
+		if hosted && (retainsPiHistory(record.Backend) || !record.retired()) {
 			continue
 		}
 		last := time.Time{}
@@ -427,6 +426,13 @@ func PruneRegistrations(dir string, now time.Time, retention time.Duration) int 
 	return pruned
 }
 
+// retainsPiHistory shares the retirement exemption between the registry and rail.
+// Retained name check: legacy history records and registrations
+// (TestPruneRegistrationsAgesRetiredLeadsByTheirRow, TestRailRetiredPiHasNoDeletionCountdown).
+func retainsPiHistory(harness string) bool {
+	return harness == "pi"
+}
+
 // agentRecordEnd is what the registry reads of the agent runner's record
 // (AgentRecordFileName, written by internal/wsagent): whether it is a lead
 // session's, and whether the runner still serves it.
@@ -438,31 +444,10 @@ type agentRecordEnd struct {
 	Backend     string `json:"backend"`
 	Model       string `json:"model"`
 	Effort      string `json:"effort"`
-	SessionFile string `json:"session_file"`
 	Parent      *struct {
 		Kind    string `json:"kind"`
 		ReplyID string `json:"reply_id"`
 	} `json:"parent"`
-}
-
-// terminalConversation reports a session handed to a terminal whose
-// harness conversation is a file inside sessionDir, the session's
-// directory: a pi session the daemon started, which names no session_file
-// or, once taken over again, names the one in its directory (a session a
-// terminal started names its own file elsewhere). The terminal resumes on
-// that file, so from the hand-off on the directory holds a conversation
-// the user's terminal harness owns, and deleting it would delete that
-// conversation. A claude conversation lives in the harness's own store.
-//
-// The "pi" record backend and the pi/session.jsonl location are persisted
-// bytes the Pi adapter wrote under the daemon's session directory (1881
-// survivor); no registration describes where a stored conversation lives
-// (TestPruneRegistrationsAgesRetiredLeadsByTheirRow).
-func (r agentRecordEnd) terminalConversation(sessionDir string) bool {
-	if !r.Lead || r.HandedOffAt == "" || r.Backend != "pi" {
-		return false
-	}
-	return r.SessionFile == "" || strings.HasPrefix(filepath.Clean(r.SessionFile), filepath.Clean(sessionDir)+string(filepath.Separator))
 }
 
 // retired reports a lead session the runner serves no more (closed, or

@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 // The model list for the dashboard picker: OpenRouter's public list, minus the
@@ -166,5 +168,36 @@ func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("model list requests = %d after landing, want 1 (served from the cache)", n)
+	}
+}
+
+type werkPlanDisabledSource struct{ wscred.Source }
+
+func (werkPlanDisabledSource) Status() ([]wscred.ProviderStatus, error) {
+	return []wscred.ProviderStatus{{Provider: wscred.ProviderOpenAI, OpenAIAccounts: []wscred.OpenAIAccountStatus{
+		{Active: true, SignedIn: true},
+	}}}, nil
+}
+
+func TestWerkPickerAndTierReportPlanReconsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"id":"vendor/m"}]}`)
+	}))
+	defer srv.Close()
+	sh := newSupportHarness(t)
+	_, reg := (WerkBackend{
+		modelsURL: srv.URL, httpClient: srv.Client(), credentials: werkPlanDisabledSource{},
+		credentialStatus: func(string) (bool, error) { return false, nil },
+	}).registration()
+	sh.runner.opts.Backends[BackendWerk] = reg
+	answer := choicesWithPickers(t, sh.support)
+	if picker := harnessByName(t, answer, BackendWerk); picker.Available || !strings.Contains(picker.Error, "credential sign-in openai --enable-plan") {
+		t.Fatalf("picker availability = %+v", picker)
+	}
+	r := sh.runner
+	caller := LeadCaller("fixture", t.TempDir(), BackendClaude, r.opts.Config)
+	_, _, _, err := r.resolveTier(caller, "werk.small")
+	if err == nil || !strings.Contains(err.Error(), "credential sign-in openai --enable-plan") {
+		t.Fatalf("tier refusal = %v", err)
 	}
 }

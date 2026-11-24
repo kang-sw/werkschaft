@@ -89,6 +89,7 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 		d.railInputs.sessions = map[string]cachedRailInput{}
 	}
 	seen := map[string]bool{}
+	agentMeta, _ := d.agents.(AgentSessionMetaHost)
 	for _, s := range d.index.Sessions() {
 		if s.Unlisted {
 			continue
@@ -129,6 +130,7 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 			in.Snapshot = &snap
 		}
 		in.Session, in.CanRevive = s, d.agents != nil
+		in.AgentMeta = agentMeta
 		in.Harnesses = d.harnesses
 		in.ExecJobs = railExecJobs(jobs, reg.Project)
 		in.OwnExecJobs = owned[reg.ReplyID]

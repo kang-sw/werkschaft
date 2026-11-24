@@ -72,6 +72,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			// Durable compaction waits for a quiescent boundary.
 			ComposedLeadInstructions: true,
 			LeadHTTPMCP:              true,
+			RestoreUsage:             true,
 			NoWorkerCompactionSteer:  true,
 			ExecReadTools:            true,
 			FileWriteTools:           true,
@@ -152,6 +153,21 @@ func (b WerkBackend) providerGap(id wscred.ProviderID) string {
 		return "the provider credential store could not be read: " + err.Error()
 	} else if !configured {
 		if id == wscred.ProviderOpenAI {
+			if store, ok := b.credentials.(interface {
+				Status() ([]wscred.ProviderStatus, error)
+			}); ok {
+				statuses, err := store.Status()
+				if err != nil {
+					return "the provider credential store could not be read: " + err.Error()
+				}
+				for _, status := range statuses {
+					for _, account := range status.OpenAIAccounts {
+						if account.Active && account.SignedIn && !account.PlanEnabled {
+							return wscred.ErrOpenAIPlanDisabled.Error()
+						}
+					}
+				}
+			}
 			return werkSIWCReason
 		}
 		return werkNoKeyReason
@@ -187,10 +203,14 @@ func (b WerkBackend) leadProviders() []string {
 }
 
 func (b WerkBackend) leadCredentialGap() string {
-	if openRouter := b.providerGap(wscred.ProviderOpenRouter); openRouter != "" && b.providerGap(wscred.ProviderOpenAI) != "" && len(b.localProviders()) == 0 {
-		return openRouter + ", or " + werkSIWCReason
+	openRouter, openAI := b.providerGap(wscred.ProviderOpenRouter), b.providerGap(wscred.ProviderOpenAI)
+	if openRouter == "" || openAI == "" || len(b.localProviders()) > 0 {
+		return ""
 	}
-	return ""
+	if openRouter == openAI {
+		return openRouter
+	}
+	return openRouter + ", or " + openAI
 }
 
 // Reasons werk reports itself unavailable, in the words a user acts on.

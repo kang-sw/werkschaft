@@ -11,6 +11,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // execToolNames are every exec tool callExec dispatches.
@@ -322,12 +323,22 @@ func (s *Server) bindExecLaunch(ctx context.Context, req *execjob.HostedLaunch, 
 	}
 	tool := req.Tool
 	if s.fileWrites != nil && s.fileWrites.LiveAuthority {
-		req.ApproveModel = func(ctx context.Context, preview execjob.HostedCall) error {
-			return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, Approval: &preview})
+		req.ApproveModel = func(ctx context.Context, preview execjob.HostedCall, requireExplicit bool) (bool, error) {
+			return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, Approval: &preview, RequireExplicit: requireExplicit})
+		}
+	}
+	if s.fileWrites != nil {
+		req.ModelAuthority = func() (bool, error) {
+			level := s.fileWrites.AuthorityForCall()
+			if level != wsfs.AuthorityFull && level != wsfs.AuthorityWorkdirWrite {
+				return false, errors.New("the session cannot launch exec jobs with its current authority")
+			}
+			return !s.fileWrites.LiveAuthority || level == wsfs.AuthorityFull, nil
 		}
 	}
 	req.BindJob = func(jobID string) error {
-		return s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, JobID: jobID})
+		_, err := s.recordExecLaunch(ctx, execjob.ModelLaunch{ID: callID, Tool: tool, Arguments: raw, JobID: jobID})
+		return err
 	}
 	return nil
 }

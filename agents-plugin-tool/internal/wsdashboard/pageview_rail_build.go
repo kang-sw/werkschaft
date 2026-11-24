@@ -27,6 +27,8 @@ type railInput struct {
 	// CanRevive reports a daemon that hosts lead sessions: an ended row
 	// then carries how it comes back (railRevive).
 	CanRevive bool
+	// AgentMeta identifies retained runner records after terminal handoff.
+	AgentMeta AgentSessionMetaHost
 	// Harnesses declares which harnesses' ended terminal sessions can be
 	// taken over (DaemonOptions.Harnesses).
 	Harnesses HarnessTraitSet

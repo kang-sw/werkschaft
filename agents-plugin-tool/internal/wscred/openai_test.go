@@ -218,6 +218,15 @@ func (f *openAIFixture) identityToken() string {
 	if err != nil {
 		f.t.Error("could not sign fixture identity")
 	}
+	if f.badIdentity == "invalid-signature" {
+		// Keep the published kid and alter the first byte of the signed value.
+		signature := strings.LastIndexByte(raw, '.') + 1
+		replacement := "A"
+		if raw[signature] == 'A' {
+			replacement = "B"
+		}
+		raw = raw[:signature] + replacement + raw[signature+1:]
+	}
 	return raw
 }
 
@@ -437,7 +446,7 @@ func TestOpenAIRejectsInvalidIdentityOrCallback(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	f := newOpenAIFixture(t, s)
-	for _, mode := range []string{"issuer", "audience", "expiration", "nonce", "signature"} {
+	for _, mode := range []string{"issuer", "audience", "expiration", "nonce", "signature", "invalid-signature"} {
 		t.Run(mode, func(t *testing.T) {
 			f.badIdentity = mode
 			if err := s.SignInOpenAI(ctx, OpenAISignIn{}, f.browser); err == nil || !strings.Contains(err.Error(), "validate") || strings.Contains(err.Error(), f.priorID) {
@@ -476,4 +485,41 @@ func TestOpenAIRejectsInvalidIdentityOrCallback(t *testing.T) {
 	if cred, err := s.Credential(ctx, openAIRequest(false)); err != nil || cred.Secret.Reveal() != access {
 		t.Fatal("failed reauthorization changed the active credential")
 	}
+}
+
+func TestOpenAIPlanPauseLivesInMemoryAndPrecedesRefresh(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{EnablePlan: true})
+	if err := s.SetOpenAIBackgroundConsent(f.clientID, true); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	call, err := s.BeginOpenAIPlanRequest(ctx, false)
+	if err != nil || call.Probe {
+		t.Fatalf("initial request: probe %v, error %v", call.Probe, err)
+	}
+	call.Finish(OpenAIPlanLimitExceeded)
+	f.now = f.now.Add(time.Hour)
+	if _, err := s.BeginOpenAIPlanRequest(ctx, true); !errors.Is(err, ErrOpenAIPlanPaused) || f.refreshes != 0 {
+		t.Fatalf("paused request reached refresh: %v, refreshes %d", err, f.refreshes)
+	}
+	probe, err := s.BeginOpenAIPlanRequest(ctx, false)
+	if err != nil || !probe.Probe || f.refreshes != 1 {
+		t.Fatalf("operator probe: probe %v, error %v, refreshes %d", probe.Probe, err, f.refreshes)
+	}
+	if _, err := s.BeginOpenAIPlanRequest(ctx, false); !errors.Is(err, ErrOpenAIPlanPaused) {
+		t.Fatalf("a second probe entered concurrently: %v", err)
+	}
+	probe.Finish(OpenAIPlanLimitExceeded)
+	if _, err := s.BeginOpenAIPlanRequest(ctx, true); !errors.Is(err, ErrOpenAIPlanPaused) {
+		t.Fatalf("quota probe cleared the pause: %v", err)
+	}
+	reopened := NewStore(s.Path())
+	reopened.now = s.now
+	resumed, err := reopened.BeginOpenAIPlanRequest(ctx, true)
+	if err != nil || resumed.Probe {
+		t.Fatalf("a new store retained the pause: probe %v, error %v", resumed.Probe, err)
+	}
+	resumed.Finish(OpenAIPlanSucceeded)
 }

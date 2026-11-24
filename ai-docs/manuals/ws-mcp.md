@@ -143,8 +143,9 @@ fresh key is the recovery.
 
 ### Provider credential store
 
-Provider credentials (an OpenRouter API key today; `internal/wscred`) live
-in one owner-only file, `<cache root>/dashboard/auth/credentials.json`:
+Provider credentials for OpenRouter, Sign in with ChatGPT, and optional keys
+for named local endpoints (`internal/wscred`) live in one owner-only file,
+`<cache root>/dashboard/auth/credentials.json`:
 POSIX mode 0600 in a 0700 directory, on Windows a protected DACL granting
 the current user alone; never in a project tree. It sits under the daemon's
 state directory because v0.51.2's file preview already denies that whole
@@ -159,6 +160,12 @@ file's only writer. A writer keeps members it does not know, and a file
 whose `schema_version` is newer is read but never rewritten. There is no
 environment-variable source: the daemon's environment reaches every hosted
 session and exec subprocess.
+
+Use `credential set openrouter` for an OpenRouter key. For vLLM or Ollama,
+add a name, `base_url`, and `kind` to the global `agent.werk_endpoints`
+map and select `local/<name>` as the provider. If the endpoint requires
+an API key, use `credential set local/<name>`. The local key is bound to
+that endpoint's configured API root.
 
 `credential set <provider>` (the key on stdin, never in argv),
 `credential show [<provider>]` (masked), and `credential remove <provider>`
@@ -185,12 +192,13 @@ The builtin harness uses the daemon's in-process store for its account
 catalog and access token. The store serializes refresh rotation and
 requires explicit consent on that registration before background use.
 
-A hosted harness obtains a credential from `POST /auth/provider/token` with
-its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
-tool. Only a session whose backend registration sets `ProviderCredentials`
-passes, and no current backend does: the external harnesses bring their own
-logins. The dashboard's file browser denies the credential directory. Keys
-and tokens are never logged.
+`POST /auth/provider/token` is an internal HTTP route for an external
+hosted harness with a per-session bearer (`WS_MCP_SESSION_TOKEN`) and a
+backend registration that enables `ProviderCredentials`. Current external
+harnesses use their own logins. Werk uses the credential store in process,
+and the route refuses `openai` (Sign in with ChatGPT). The dashboard file
+browser and daemon file tools deny the credential directory. Keys and
+tokens are never logged.
 
 Trust boundary: the token route's answer to an admitted session is the only
 response that carries a secret; no ws tool output returns one. Processes
@@ -269,8 +277,8 @@ under `<cache root>/dashboard/`:
   holding `agent.json`), whose lifetime is the runner's while it may serve
   it: it heartbeats only while the daemon runs. Ended records age from their
   last registry row write. Pruning removes the session directory and its
-  files. A legacy Pi lead handed off with its session file in that directory
-  keeps the file for the terminal process.
+  files. Retired Pi runner records keep their session directory and recovery
+  archive (see [Retired Pi history](#retired-pi-history)).
 - `sessions/<reply-id>/snapshot.json` and `sessions/<reply-id>/ring/` - the
   session's live snapshot (current lead and subagent activity, served from
   daemon RAM for slotted sessions and flushed for recovery on turn end, close,
@@ -599,10 +607,9 @@ and session record exist, including beyond the index page's 24-hour window.
 An eligible closed hosted lead offers `reopen` and an eligible Claude terminal
 session offers `takeover` (`RailRow.Revive`). The takeover route checks whether
 the terminal harness has exited. A retired Pi row opens its history without
-a revival action. `PruneRegistrations` spares the directory while the runner
-may serve it. Ended rows normally age out after 7 days unseen. A legacy Pi
-lead handed off with its session file inside its directory keeps the file for
-its terminal process.
+a revival action or deletion countdown. `PruneRegistrations` spares the
+directory while the runner may serve it. Other ended rows normally age out
+after 7 days unseen.
 
 On the served board and in the conversation's lead
 replies, a file link renders as an action link (`data-wl="file"`, titled with
@@ -845,6 +852,15 @@ A spawn records its `tier` (`SpawnSpec.Tier`, `Record.tier`).
 
 #### Legacy Pi compatibility
 
+0.52 is a T3 upgrade. A 0.51.2 launcher reading the shared 0.52 daemon's
+`/health` refuses the newer minor and tells the operator to update the
+plugin and restart the session. The daemon also checks the protocol and
+major.minor on a versioned `/mcp` hello before accepting the connection.
+Update the installed `ws` or `wsflow` plugin in each affected harness to
+0.52, then restart each affected harness session so its launcher and skill
+shims load the update. A reconnect from the old session still uses its
+older launcher.
+
 The daemon keeps the `ws-pi-bridge` initialization identity and six hidden
 `pi.*` handlers through 0.52. Handler removal is scheduled for 0.53
 (`internal/mcp/pi_tools.go`). Authorized callers
@@ -862,6 +878,23 @@ profiles, and routing values remain readable. Retired Pi conversations show
 as ended. The startup sweep leaves live legacy holders to exit on their own,
 including orphan holders. Revival, wake, handoff, and new Pi execution are
 retired.
+
+##### Retired Pi history
+
+Before retiring a Pi record, 0.52 commits a copy to
+`<daemon state>/retired-pi-history/<reply-id>/`. It preserves `agent.json`
+and, when present, `registration.json`, `snapshot.json`, `ring/`, and the
+daemon-owned `pi/session.jsonl`. The archived JSONL keeps later appends via
+a hard link where supported. Otherwise it holds the retirement-time bytes.
+
+If you roll back with a matching v0.51.2 plugin and daemon, its registry
+pruner walks `sessions/` only and can remove an aged, closed Pi directory
+(v0.51.2 `internal/wsdashboard/registry.go:386–425,471–472`). At startup,
+0.52 restores a missing `sessions/<reply-id>/` from the archive and applies
+retirement again to restored open metadata. An existing partial session
+directory needs manual recovery from the archive. Both directories are
+exempt from the 0.52 seven-day sweep. An explicit 0.52 history purge removes
+both.
 
 #### Worker mail and delegation
 
@@ -951,12 +984,25 @@ so a machine that blocks some plugin hooks still teaches it), started from
 the corresponding built-in lead profile. The daemon also hosts werk leads
 in process.
 `POST /agents` refuses a lead profile; a lead is spawned
-by `POST /agents/leads {root, harness: <registered lead harness>, model?, effort?,
+by `POST /agents/leads {root, harness: <registered lead harness>, provider?, model?, effort?,
 permission_mode?, plugin_isolation?}` (201 with the state; `root` must be
 inside git, since the session key is minted at the canonical root).
 `plugin_isolation` accepts `default` (the default, replace ws only) or
-`isolated` (bundled plugins only); a Claude lead ignores it. Differences
-from a support conversation:
+`isolated` (bundled plugins only); a Claude lead ignores it.
+
+For `harness: "werk"`, supply a `model` ID for the selected provider. The
+`provider` selector defaults to `openrouter` and also accepts `openai`
+(Sign in with ChatGPT) or a configured `local/<name>` (see [Provider
+credential store](#provider-credential-store)). Omit `effort` to use the
+built-in profile's unset reasoning effort. The default permission mode is
+`workspace-write`; `read-only` and `full-access` are also supported.
+Werk's `default` isolation loads the normal skill roots. `isolated` uses
+only enabled bundled skills, including on reopen. The daemon mints the
+lead key at the canonical root and binds the tool session to the werk
+conversation, its working directory, and its authority in process. A werk
+lead has no harness PID or OS holder.
+
+Differences from a support conversation:
 
 - **Process.** An external harness runs under a session holder (`internal/wsholder`,
   pipe mode), not as the daemon's child, so it outlives the daemon. The
@@ -971,7 +1017,7 @@ from a support conversation:
   on ws-mcp reconnect (Daemon-Hosted MCP below).
 - **Identity.** The daemon mints the session's lead key at spawn and writes
   the registration itself (`hosted: true`, `host_pid`), heartbeats it, and
-  end-marks it at close. The harness gets `WS_HOSTED_SESSION`,
+  end-marks it at close. An external harness gets `WS_HOSTED_SESSION`,
   `WS_HOSTED_SESSION_KEY`, and `WS_HOSTED_SESSION_ROW` (Environment below);
   a Claude lead's appended instruction file (`instructions.md`) is a second
   route for the key; the daemon's own `CLAUDE*`, `WS_MAILBOX*`, `WS_MCP_*`, `WS_RSRC*`,
@@ -1537,20 +1583,24 @@ once, then closes its session streams; a git commit or merge in flight is
 not cut midway, and the sessions' launchers reconnect to the successor.
 The session holders outlive that stop and attach to the next daemon.
 
-`POST /shutdown/all` is the full stop (the desktop app's full quit). It takes
-the same endpoint bearer as `/shutdown` and first stops every session holder:
-from the call on no holder launches, a launch already running finishes and is
-stopped too, and every holder, found by a rescan of the holders directory,
-gets the protocol stop or the start-time-guarded kill in parallel. The daemon
-answers `202 {"shutting_down": true, "stopped": [...], "remaining": []}` and
-drains as above only when no holder process remains. Otherwise it answers
-`409` with each remaining holder and why, keeps running, and allows launches
-again. A daemon already stopping answers `503 {"error": "shutting_down"}` and
-stops nothing. An older daemon answers the full stop with its access guard's
-`401 {"error": "login_required"}`, because its exemption names only
-`/shutdown`; a caller treats that and a `404` as unsupported, distinct from
-the route's own `401 unauthorized`. An MCP client still running afterwards may
-start a fresh, empty daemon through its launcher's normal recovery.
+`POST /shutdown/all` is the desktop app's Full Quit. It takes the same
+endpoint bearer as `/shutdown`. The daemon fences holder launches and
+durable starts, wakes, and reopens. An admitted start finishes before the
+stop pass. The daemon rescans the holders directory, stops holders in
+parallel via the protocol or a start-time-guarded kill, and closes the
+open durable sessions, including sleeping ones, through normal close.
+
+Full Quit counts holder processes and durable sessions separately. It
+answers `202 {"shutting_down": true, "stopped": [...], "remaining": []}`
+and drains when both sets are clear. It can answer `409` with no OS holder
+left if a durable session remains open. On `409` the daemon reports the
+survivors and reasons in `remaining`, stays running, and reopens admission.
+Durable IDs use `durable.<reply-id>` in `stopped`, `remaining`, and
+`GET /holders`. A daemon already stopping answers
+`503 {"error": "shutting_down"}`. An older daemon can answer `401` with
+`login_required` or `404` for an unsupported route. The route itself uses
+`401 unauthorized` for a bad bearer. A still-running MCP client can start
+a fresh daemon through its launcher's normal recovery.
 
 Dev assets: with `WS_MCP_DASHBOARD_DEV_SOURCE=<repo>/agents-plugin-tool` in the
 environment of `ws-mcp dashboard`, the daemon serves the dashboard and
@@ -1628,6 +1678,7 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 | Child kind | Owner | Survives graceful replace? | What to do |
 |---|---|---|---|
 | Hosted Claude, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Durable werk lead or worker | Daemon (`internal/wsagent/runner_durable.go`) | The loop stops and the successor recovers the conversation and its recoverable turn from the journal | Replace to keep durable sessions open. Use Full Quit to close them. |
 | Claude, Codex, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
@@ -1650,6 +1701,11 @@ T2 with the explicit exception that a downgrade beyond the 7-day
 An old daemon may also release and rewrite a held conversation parent's turn.
 Live legacy `pi-worker` holders keep running while their records open as ended
 history.
+
+Closing a werk conversation records the intentional turn close before
+cancelling its execution and discards staged inbox claims at that boundary.
+Reopen can accept a new turn in the same conversation. A normal replacement
+leaves the recovery state for the next daemon.
 
 On re-upgrade, a fenced open child of a settled conversation parent is silently
 retired only when its nonzero start strictly predates the parent's terminal
@@ -1745,7 +1801,9 @@ live holder stays unattached for one of three causes: its endpoint does not
 answer, its protocol is neither the daemon's version nor the one before it,
 or it refuses the token. `GET /holders` lists every holder with its state
 and cause, the recent holder start failures, and whether the viewer may
-stop one; the drawer's holders card shows the unattached holders, the ones
+stop one. It also lists open durable sessions as `durable.<reply-id>` with
+`restart_safe` and an `attached` flag that reflects whether the private
+record is available. The drawer's holders card shows the unattached holders, the ones
 marked not restart-safe (a Windows holder that could not leave its
 starter's job object), and the start failures, with a stop button on each
 unattached one. `POST /holders/<id>/stop`
@@ -1757,7 +1815,8 @@ on Linux the process's start in boot-clock ticks must equal the recorded
 `start_ticks`, because the creation time Linux reports is derived from the
 boot clock and moves with every wall-clock step; elsewhere the OS creation
 time must be within 2 seconds of the recorded wall-clock start. The stop route answers only a browser on this
-machine that sends the daemon's own Origin; a LAN viewer sees the card
+machine that sends the daemon's own Origin. For a durable ID, it uses the
+conversation's close path. A LAN viewer sees the card
 without the stop button. Closing the daemon detaches and ends no holder.
 
 The interpreter is `WS_MCP_HOLDER_PYTHON`, which the launcher sets to its

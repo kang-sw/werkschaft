@@ -451,7 +451,9 @@ func TestRenderedTierSurvivesDaemonRollbackBeforeSpawn(t *testing.T) {
 				t.Fatalf("recommended-tier = %q, want %q (%v)", tier, tc.wantTier, lines)
 			}
 			// What the candidate's own role walk launches.
-			res, want, err := f.s.routedBinding("ticket-worker:medium", callerHarness, f.s.configOptions())
+			opts := f.s.configOptions()
+			resolver := wsagent.NewTierBindingResolver(opts, f.s.agentBackends()...)
+			res, want, err := f.s.routedBinding("ticket-worker:medium", callerHarness, opts, resolver)
 			if err != nil {
 				t.Fatalf("candidate walk: %v", err)
 			}
@@ -481,5 +483,43 @@ func TestRenderedTierSurvivesDaemonRollbackBeforeSpawn(t *testing.T) {
 	// The pre-fix behavior this replaces: v0.51.0 refuses the raw role tier.
 	if _, _, err := legacyV0510ResolveTier(f.s.configOptions(), callerHarness, "ticket-worker:medium"); err == nil {
 		t.Fatal("v0.51.0 fixture accepted a role tier; it no longer models the old refusal")
+	}
+}
+
+func TestLegacyWerkTierResolutionRequiresItsProvider(t *testing.T) {
+	f := daemonRenderFixture(t)
+	backends := wsagent.WithProviderCredentials(wsagent.BuiltinBackendRegistrations(), nil, func(provider string) (bool, error) {
+		return provider == "openai", nil
+	})
+	runner := wsagent.NewRunner(wsagent.Options{Backends: backends})
+	t.Cleanup(runner.Close)
+	f.s.agentBackendSource = runner
+	opts := f.s.configOptions()
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(opts, "small", "", "vendor/model", wsagent.BackendWerk, "low"); err != nil {
+		t.Fatal(err)
+	}
+	setRouting(t, f.s, `{"nodes":{"legacy-role":{"*":"pi.*"}}}`)
+	const reason = "no OpenRouter API key"
+	for _, tc := range []struct{ tier, harness string }{
+		{"pi.small", "claude"},
+		{"legacy-role:small", "claude"},
+		{"small", "pi"},
+		{"small", "werk"},
+	} {
+		if res, err := f.s.resolveAgentTier(tc.tier, tc.harness); err == nil || !strings.Contains(err.Error(), reason) || res.Model != "" {
+			t.Errorf("resolve %s from %s = %+v, %v", tc.tier, tc.harness, res, err)
+		}
+		if model, _, ok := f.s.renderTierBinding(tc.harness, tc.harness, tc.tier, opts); ok || model != "" {
+			t.Errorf("render %s from %s supplied %q", tc.tier, tc.harness, model)
+		}
+	}
+	rsrc, _ := dashboardTierFixture(t)
+	view, err := dashboardTierRoutingView(rsrc, opts, nil, "claude", runner.HarnessAvailability, backends)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := tierViewRoute(t, tierViewNode(t, view, "legacy-role"), "small")
+	if !strings.Contains(route.BindingError, reason) || route.Model != "" {
+		t.Fatalf("config preview = %+v", route)
 	}
 }

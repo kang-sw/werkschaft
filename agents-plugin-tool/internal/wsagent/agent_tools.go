@@ -400,6 +400,10 @@ func tierEntries(prefix string, tiers map[string]wsconfig.AgentTier) []AgentTier
 
 // AgentTiers lists what caller may pass as agent.spawn's tier.
 func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
+	return r.agentTiers(caller, NewTierBindingResolver(caller.Config, r.opts.Backends))
+}
+
+func (r *Runner) agentTiers(caller AgentCaller, resolver *TierBindingResolver) (AgentTiers, error) {
 	out := AgentTiers{Harness: caller.Harness, Native: []AgentTierEntry{}, Ext: []AgentTierEntry{}, Aliases: []AgentAliasEntry{}}
 	usable := map[string]map[string]wsconfig.AgentTier{}
 	for _, h := range r.workerHarnesses() {
@@ -407,7 +411,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 			out.Unavailable = append(out.Unavailable, h+": "+why)
 			continue
 		}
-		tiers, err := tierBindings(caller.Config, h, "", r.opts.Backends)
+		tiers, err := resolver.tierBindings(h, "")
 		if err != nil {
 			return AgentTiers{}, fmt.Errorf("read agents.tier: %w", err)
 		}
@@ -459,7 +463,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		}
 		out.Aliases = append(out.Aliases, entry)
 	}
-	routing, err := r.agentRouting(caller, usable)
+	routing, err := r.agentRouting(caller, usable, resolver)
 	if err != nil {
 		return AgentTiers{}, err
 	}
@@ -471,7 +475,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 // at the size its playbook declares, and each group and user node at all
 // four sizes, with the binding each spawns with given usable (the
 // spawnable harnesses' tiers).
-func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]wsconfig.AgentTier) (*AgentRouting, error) {
+func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]wsconfig.AgentTier, resolver *TierBindingResolver) (*AgentRouting, error) {
 	graph, err := r.tierGraph(caller)
 	if err != nil {
 		return &AgentRouting{Supported: true, Error: err.Error(), Bundles: []AgentRouteEntry{}, Routes: []AgentRouteEntry{}}, nil
@@ -493,7 +497,7 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 		case !ok:
 			e.Error = r.unusableHarnessError(caller.VerifiedBackend, harness)
 		case res.Bundle != "":
-			binding, err := RoutedTierBinding(caller.Config, res, r.opts.Backends)
+			binding, err := resolver.Routed(res)
 			if err != nil {
 				e.Error = err.Error()
 			} else if why := r.workerProviderGap(harness, binding.Provider); why != "" {
@@ -542,9 +546,10 @@ func tierAliases(cfg wsconfig.Options) (map[string]string, error) {
 // tier rank the child records: the routed size, or xlarge for a bare bundle
 // name, which supplies its model and effort directly.
 func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare string, mapping wsconfig.AgentTier, err error) {
+	resolver := NewTierBindingResolver(caller.Config, r.opts.Backends)
 	raw := strings.ToLower(strings.TrimSpace(tier))
 	if raw == "" {
-		return "", "", mapping, r.tierRefusal(caller, "tier is required")
+		return "", "", mapping, r.tierRefusal(caller, resolver, "tier is required")
 	}
 	switch h, t, dotted := strings.Cut(raw, "."); {
 	case dotted:
@@ -567,19 +572,19 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 			}
 			res, rerr := graph.Resolve(raw, caller.Harness)
 			if rerr != nil {
-				return "", "", mapping, r.tierRefusal(caller, rerr.Error())
+				return "", "", mapping, r.tierRefusal(caller, resolver, rerr.Error())
 			}
 			if res.Bundle != "" {
 				harness := TierRuntimeHarness(res.Harness)
 				if why := r.spawnableHarness(caller.VerifiedBackend, harness); why != "" {
-					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
+					return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
 				}
-				binding, err := RoutedTierBinding(caller.Config, res, r.opts.Backends)
+				binding, err := resolver.Routed(res)
 				if err != nil {
 					return "", "", mapping, badRequest("tier %q (%s): %v", tier, res.Trace(), err)
 				}
 				if why := r.workerProviderGap(harness, binding.Provider); why != "" {
-					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
+					return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
 				}
 				return harness, res.Rank(), binding, nil
 			}
@@ -590,28 +595,32 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 		harness, bare = h, t
 	}
 	if bare == "" {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q names no tier (small, medium, large, xlarge)", tier))
+		return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q names no tier (small, medium, large, xlarge)", tier))
 	}
 	harness = TierRuntimeHarness(harness)
 	if why := r.spawnableHarness(caller.VerifiedBackend, harness); why != "" {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
+		return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: %s", tier, why))
 	}
-	mapping, err = harnessSlot(caller.Config, harness, bare, r.opts.Backends)
+	mapping, err = resolver.harnessSlot(harness, bare)
 	var noSlot noTierSlotError
 	if errors.As(err, &noSlot) {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %v", tier, err))
+		return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: %v", tier, err))
 	}
 	if err != nil {
 		return "", "", mapping, err
 	}
 	if why := r.workerProviderGap(harness, mapping.Provider); why != "" {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
+		return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: %s", tier, why))
 	}
 	return harness, bare, mapping, nil
 }
 
 func (r *Runner) workerProviderGap(harness, provider string) string {
-	if setup, ok := r.opts.Backends[harness].Backend.(workerSetup); ok {
+	return workerProviderGap(r.opts.Backends, harness, provider)
+}
+
+func workerProviderGap(backends map[string]BackendRegistration, harness, provider string) string {
+	if setup, ok := backends[harness].Backend.(workerSetup); ok {
 		return setup.workerProviderGap(provider)
 	}
 	return ""
@@ -630,8 +639,8 @@ func (e noTierSlotError) Error() string {
 
 // harnessSlot is the agents.tier model agent.spawn launches for harness at
 // bare: the harness's own slot, with no cross-harness fallback.
-func harnessSlot(cfg wsconfig.Options, harness, bare string, registries ...map[string]BackendRegistration) (wsconfig.AgentTier, error) {
-	tiers, err := tierBindings(cfg, harness, bare, registries...)
+func (r *TierBindingResolver) harnessSlot(harness, bare string) (wsconfig.AgentTier, error) {
+	tiers, err := r.tierBindings(harness, bare)
 	if err != nil {
 		return wsconfig.AgentTier{}, fmt.Errorf("read agents.tier: %w", err)
 	}
@@ -642,21 +651,21 @@ func harnessSlot(cfg wsconfig.Options, harness, bare string, registries ...map[s
 	return mapping, nil
 }
 
-// RoutedTierBinding is the binding agent.spawn launches for a routing-graph
+// Routed returns the binding agent.spawn launches for a routing-graph
 // resolution, before harness availability: a bundle's own fields, else the
 // resolved harness's agents.tier slot at the resolved size. It never falls
 // back to another harness's slot, so a surface that reports it (render,
 // config.resolve_agent) names what the spawn uses or fails as it does.
 // Retained name check: stored tiers can still name Pi (TestRetiredPiTierRedirectsToWerk).
-func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution, registries ...map[string]BackendRegistration) (wsconfig.AgentTier, error) {
+func (r *TierBindingResolver) Routed(res wsconfig.TierResolution) (wsconfig.AgentTier, error) {
 	harness := TierRuntimeHarness(res.Harness)
 	if res.Bundle != "" {
-		if res.Harness == BackendPi && !hasExactModel(werkChoiceLister(registries), res.Model) {
+		if res.Harness == BackendPi && !r.hasExactModel(res.Model) {
 			return wsconfig.AgentTier{}, fmt.Errorf("bundle %q needs an exact OpenRouter model ID for werk; update its model in agent.tier_routing", res.Bundle)
 		}
 		return wsconfig.AgentTier{Backend: harness, Model: res.Model, Effort: res.Effort}, nil
 	}
-	return harnessSlot(cfg, harness, res.Size, registries...)
+	return r.harnessSlot(harness, res.Size)
 }
 
 // SpawnableHarness reports why agent.spawn cannot launch harness now for a
@@ -712,9 +721,9 @@ func (r *Runner) HarnessAvailability(caller, harness string) (why string, known 
 }
 
 // tierRefusal is a 400 naming why and every tier caller may spawn now.
-func (r *Runner) tierRefusal(caller AgentCaller, why string) error {
+func (r *Runner) tierRefusal(caller AgentCaller, resolver *TierBindingResolver, why string) error {
 	valid := []string{}
-	if list, err := r.AgentTiers(caller); err == nil {
+	if list, err := r.agentTiers(caller, resolver); err == nil {
 		for _, e := range list.Native {
 			valid = append(valid, e.Tier)
 		}

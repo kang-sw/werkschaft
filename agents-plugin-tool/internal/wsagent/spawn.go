@@ -211,7 +211,7 @@ func cleanLabel(label string) string {
 // closes the conversation again, so a spawn that fails leaves nothing
 // open.
 func (r *Runner) spawned(c *conv, prompt string) (State, error) {
-	st, err := r.Send(c.rec.ReplyID, prompt)
+	st, err := r.send(c.rec.ReplyID, prompt, false)
 	c.mu.Lock()
 	c.spawnPending = false
 	c.mu.Unlock()

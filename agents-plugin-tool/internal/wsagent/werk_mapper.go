@@ -49,6 +49,12 @@ func newWerkMapper(session string) *werkMapper {
 	return &werkMapper{session: session, batches: batchTracker{epoch: newBatchTracker("werk").epoch, callIDs: true}}
 }
 
+func (m *werkMapper) restoreUsage(usage *wslive.Usage) {
+	if usage != nil && usage.Cost != nil {
+		m.cost, m.hasCost = usage.Cost.USD, true
+	}
+}
+
 // werkReplySource is the dedup key of a final reply: the session, the turn
 // and the message item.
 func (m *werkMapper) replySource(l werk.Line) string {

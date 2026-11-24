@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -12,6 +13,62 @@ import (
 
 	"github.com/kang-sw/devenv/internal/werk"
 )
+
+func TestWerkLeadSkillIsolationSurvivesReopen(t *testing.T) {
+	for _, isolation := range []string{"default", "isolated"} {
+		t.Run(isolation, func(t *testing.T) {
+			codex, claude := t.TempDir(), t.TempDir()
+			writeWerkSkill(t, filepath.Join(codex, "skills", ".system", "bundled"), "bundled", "release fixture bundled", "body")
+			codexPlugin := filepath.Join(codex, "plugins", "cache", "market", "codex-extra", "1.0.0")
+			writeWerkSkillFixture(t, filepath.Join(codex, "config.toml"), "[plugins.\"codex-extra@market\"]\nenabled = true\n")
+			writeWerkSkillFixture(t, filepath.Join(codexPlugin, ".codex-plugin", "plugin.json"), `{"name":"codex-extra"}`)
+			writeWerkSkill(t, filepath.Join(codexPlugin, "skills", "deploy"), "deploy", "release fixture codex", "body")
+			claudePlugin := filepath.Join(claude, "plugins", "cache", "market", "claude-extra", "1.0.0")
+			writeWerkSkillFixture(t, filepath.Join(claude, "settings.json"), `{"enabledPlugins":{"claude-extra@market":true}}`)
+			writeWerkSkillFixture(t, filepath.Join(claude, "plugins", "installed_plugins.json"),
+				fmt.Sprintf(`{"version":2,"plugins":{"claude-extra@market":[{"scope":"user","installPath":%q}]}}`, claudePlugin))
+			writeWerkSkillFixture(t, filepath.Join(claudePlugin, ".claude-plugin", "plugin.json"), `{"name":"claude-extra"}`)
+			writeWerkSkill(t, filepath.Join(claudePlugin, "skills", "deploy"), "deploy", "release fixture claude", "body")
+
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+				werkMessage("first"), werkMessage("second"),
+			}}
+			h, fleet, _ := werkHarness(t, model)
+			environ = func() []string {
+				return []string{"HOME=" + codex, "USERPROFILE=" + codex, "CODEX_HOME=" + codex, "CLAUDE_CONFIG_DIR=" + claude}
+			}
+			writeWerkSkill(t, filepath.Join(h.root, ".agents", "skills", "local"), "local", "release fixture local", "body")
+			st := h.lead(BackendWerk, LeadOptions{Model: "vendor/some-model", PluginIsolation: isolation})
+			h.send(st.ID, "first")
+			eventually(t, "first request settled", func() bool {
+				rec := werkRecord(t, h, st.ID)
+				return rec.LastTurn != nil && rec.LastTurn.Result.Message == "first"
+			})
+			if _, err := h.runner.CloseConversation(st.ID); err != nil {
+				t.Fatal(err)
+			}
+			h.runner.Close()
+			fleet.start(h)
+			if reopened, err := h.runner.Reopen(st.ID); err != nil || reopened.PluginIsolation != isolation {
+				t.Fatalf("reopen = %+v, %v", reopened, err)
+			}
+			h.send(st.ID, "second")
+			eventually(t, "second request reached the model", func() bool { return model.requestCount() == 2 })
+			model.mu.Lock()
+			defer model.mu.Unlock()
+			for i, req := range model.reqs {
+				if !strings.Contains(req.Instructions, "release fixture bundled") {
+					t.Errorf("request %d omitted the bundled skill", i+1)
+				}
+				for _, name := range []string{"codex", "claude", "local"} {
+					if found := strings.Contains(req.Instructions, "release fixture "+name); found != (isolation == "default") {
+						t.Errorf("request %d in %s: %s skill present = %v", i+1, isolation, name, found)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestWerkDiscoverSkillsRootsAndCollisions(t *testing.T) {
 	spec, home, codex, claude := werkSkillFixture(t)

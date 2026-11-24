@@ -34,6 +34,7 @@ type HireRequest struct {
 // request or approval body. It always comes from the requester's registration.
 type HireLaunch struct {
 	Harness         string `json:"harness"`
+	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model,omitempty"`
 	Effort          string `json:"effort,omitempty"`
 	Label           string `json:"label,omitempty"`
