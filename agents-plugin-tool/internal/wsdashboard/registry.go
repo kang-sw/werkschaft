@@ -382,7 +382,6 @@ func RemoveRegistration(dir, replyID string) error {
 // retirement, including the copy restored after a rollback. Every other
 // agent record (the tracker's support agent among them) keeps the runner's
 // lifetime.
-// Retained name check: legacy history records (TestPruneRegistrationsAgesRetiredLeadsByTheirRow).
 func PruneRegistrations(dir string, now time.Time, retention time.Duration) int {
 	entries, err := wsstate.ReadDir(filepath.Join(dir, sessionsDirName))
 	if err != nil {
@@ -395,7 +394,7 @@ func PruneRegistrations(dir string, now time.Time, retention time.Duration) int 
 		}
 		sessionDir := SessionDir(dir, entry.Name())
 		record, hosted := readAgentRecordEnd(sessionDir)
-		if hosted && (record.Backend == "pi" || !record.retired()) {
+		if hosted && (retainsPiHistory(record.Backend) || !record.retired()) {
 			continue
 		}
 		last := time.Time{}
@@ -425,6 +424,13 @@ func PruneRegistrations(dir string, now time.Time, retention time.Duration) int 
 		}
 	}
 	return pruned
+}
+
+// retainsPiHistory shares the retirement exemption between the registry and rail.
+// Retained name check: legacy history records and registrations
+// (TestPruneRegistrationsAgesRetiredLeadsByTheirRow, TestRailRetiredPiHasNoDeletionCountdown).
+func retainsPiHistory(harness string) bool {
+	return harness == "pi"
 }
 
 // agentRecordEnd is what the registry reads of the agent runner's record
