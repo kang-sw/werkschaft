@@ -75,6 +75,8 @@ type HUDNode struct {
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
 	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
 	OwnRow bool `json:"-"`
+	// HoldingShell distinguishes shell-only waits while retaining the holding state.
+	HoldingShell bool `json:"holdingShell,omitempty"`
 }
 
 type hudRawNode struct {
@@ -229,13 +231,14 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 			label = shortID(a.ID)
 		}
 		an := AgentNode{Agent: a}
+		state := hudNodeState(a)
 		node := HUDNode{
 			ID:          a.ID,
 			ReplyID:     a.ReplyID,
 			Linked:      n.linked,
 			Label:       label,
 			Harness:     harness,
-			State:       hudNodeState(a),
+			State:       state,
 			CloseActive: a.Status == wslive.StatusRunning || a.Holding || a.Permission != nil,
 			Model:       an.DisplayModel(),
 			Effort:      a.Effort,
@@ -245,6 +248,7 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 			Task:        hudNodeTask(a),
 			OwnRow:      n.ownRow,
 		}
+		node.HoldingShell = a.HoldingShell && state == "holding"
 		node.setContext(a, n.usage)
 		node.Compacting, node.Compactions, node.CompactOrigin = a.Compacting, max(a.Compactions, 0), a.CompactOrigin
 		if n.native {

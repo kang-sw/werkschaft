@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "思考中",
   "js.hud.state.tool": "工具呼叫",
   "js.hud.state.holding": "等待子節點",
+  "js.hud.state.holding_shell": "等待 Shell 結束",
   "js.hud.state.idle": "閒置（存活）",
   "js.hud.state.permission": "需要核准",
   "js.hud.state.failed": "失敗",

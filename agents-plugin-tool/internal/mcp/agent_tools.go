@@ -383,6 +383,20 @@ func AgentWakeRefused(log io.Writer) func(from, id, reason string) {
 	}
 }
 
+// AgentWakeUndeliverable reports a permanently refused worker wake.
+func AgentWakeUndeliverable(log io.Writer) func(from, id, reason string) {
+	return func(from, id, reason string) {
+		content := fmt.Sprintf("Your message did not reach agent %s because its wake was permanently refused: %s", wsagent.AgentAddress(id), reason)
+		if err := (wsmailbox.Paths{}).Store().PostSystem(from, "agent:"+id, content, time.Now()); err != nil {
+			if log != nil {
+				fmt.Fprintf(log, "agent %s: undeliverable message to %s: %v\n", id, from, err)
+			}
+			return
+		}
+		wswake.Mailbox.Wake()
+	}
+}
+
 // AgentCheckoutReleased is the daemon runner's Options.CheckoutReleased: it
 // tells the sender of a message for an agent whose worktree was released
 // after the agent was bound there, with one system mail naming that

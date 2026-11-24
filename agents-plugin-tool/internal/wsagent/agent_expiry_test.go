@@ -202,7 +202,7 @@ func TestExpiredAtStartPicksQuietExpiredSubtrees(t *testing.T) {
 		{ReplyID: "card", CreatedAt: old},
 		{ReplyID: "leadconv", Lead: true, CreatedAt: old},
 	}
-	if got := r.expiredAtStart(open); !slices.Equal(got, []string{"b", "a", "e"}) {
+	if got := r.expiredAtStart(open, nil); !slices.Equal(got, []string{"b", "a", "e"}) {
 		t.Fatalf("expiredAtStart = %v, want [b a e]", got)
 	}
 }

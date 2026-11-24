@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Réflexion",
   "js.hud.state.tool": "Appel outil",
   "js.hud.state.holding": "En attente d’enfants",
+  "js.hud.state.holding_shell": "En attente du shell",
   "js.hud.state.idle": "Inactif (actif)",
   "js.hud.state.permission": "Autorisation",
   "js.hud.state.failed": "Échoué",

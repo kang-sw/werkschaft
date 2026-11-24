@@ -403,6 +403,9 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 	for _, binding := range retired {
 		matches = append(matches, match{createdAt: binding.createdAt, child: binding.child})
 	}
+	for _, binding := range r.boundDeadProcesses(target, release) {
+		matches = append(matches, match{createdAt: binding.createdAt, child: binding.child})
+	}
 	for _, c := range r.boundConvs(target) {
 		st := c.memoryState()
 		c.mu.Lock()

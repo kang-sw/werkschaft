@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Denkt",
   "js.hud.state.tool": "Tool-Aufruf",
   "js.hud.state.holding": "Wartet auf Subagents",
+  "js.hud.state.holding_shell": "Wartet auf Shell",
   "js.hud.state.idle": "Leerlauf (aktiv)",
   "js.hud.state.permission": "Freigabe",
   "js.hud.state.failed": "Fehlgeschlagen",

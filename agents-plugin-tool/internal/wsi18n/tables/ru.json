@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Размышление",
   "js.hud.state.tool": "Вызов инструмента",
   "js.hud.state.holding": "Ожидание дочерних",
+  "js.hud.state.holding_shell": "Ожидание оболочки",
   "js.hud.state.idle": "Простой (активен)",
   "js.hud.state.permission": "Разрешение",
   "js.hud.state.failed": "Ошибка",

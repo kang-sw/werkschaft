@@ -282,68 +282,36 @@ func TestAgyCrossHarnessRefusesProfileCreation(t *testing.T) {
 	}
 }
 
-// An agy worker record with no spawner stamp and no parent record (a Claude
-// lead's, made before the refusal) stays listable, but a message, a continue
-// from its parent, and a resume after a daemon restart are each refused with
-// the cross-harness text instead of waking it.
-func TestAgyWorkerRecordRefusesMessageContinueAndResume(t *testing.T) {
-	refusals := &wakeRefusals{}
+// A permanent cross-harness refusal closes the historical row at startup.
+func TestAgyWorkerRecordClosesAtStartup(t *testing.T) {
 	h, got := agentHarness(t, func(o *Options) {
 		o.Backends[BackendAgy] = BackendRegistration{Backend: o.Backends[BackendClaude].Backend, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
-		o.WakeRefused = refusals.add
 	})
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.config.Config, "small", "", "gemini-small", BackendAgy, "medium"); err != nil {
 		t.Fatal(err)
 	}
 	lead := h.leadCaller()
 	id, p := h.agentRunning(lead, AgentSpawnRequest{Prompt: "work", Tier: "agy.small", Authority: "read-only"})
-	p.reply("done")
+	p.reply("retained reply")
 	eventually(t, "the agy worker's report", func() bool { return len(got.list()) == 1 })
 	h.asleep(id)
-	if rec := h.record(id); rec.SpawnerBackend != "" {
-		t.Fatalf("fixture: an unverified caller stamped %q", rec.SpawnerBackend)
-	}
-
-	// The daemon now carries the shipped cross-harness refusal.
 	h.runner.Close()
 	reg := h.config.Backends[BackendAgy]
 	reg.crossHarnessRefusal = agyCrossHarnessRefusal
 	h.config.Backends[BackendAgy] = reg
 	h.start()
 	starts := h.backend.startCount()
-	refused := func(what string) {
-		t.Helper()
-		eventually(t, what+" refused", func() bool { return h.state(id).Error == wantAgyCrossHarnessRefusal })
-		st := h.state(id)
-		if st.Process || st.Status == StatusClosed || h.backend.startCount() != starts {
-			t.Fatalf("%s woke the agy worker: %+v, starts %d (was %d)", what, st, h.backend.startCount(), starts)
-		}
-		if child := findAgent(t, h.runner.AgentList(lead), id); child.Tier != "agy.small" || child.State == AgentClosed {
-			t.Fatalf("%s: the record is not listed as kept: %+v", what, child)
-		}
+	if st := h.state(id); st.Process || st.Status != StatusClosed {
+		t.Fatalf("dead worker = %+v", st)
 	}
-
-	if _, err := h.runner.Send(id, "message"); err != nil {
-		t.Fatal(err)
+	if child := findAgent(t, h.runner.AgentList(lead), id); child.Tier != "agy.small" || child.State != AgentClosed {
+		t.Fatalf("listed closed child = %+v", child)
 	}
-	refused("a message")
-
-	if _, err := h.runner.Deliver(id, Delivery{From: leadParent.ReplyID, Text: "continue"}); err != nil {
-		t.Fatal(err)
+	if _, err := h.runner.Send(id, "resume"); err != errClosed || h.backend.startCount() != starts {
+		t.Fatalf("closed send = %v, starts = %d, want %d", err, h.backend.startCount(), starts)
 	}
-	refused("a continue")
-	if want := [3]string{leadParent.ReplyID, id, wantAgyCrossHarnessRefusal}; !slices.Contains(refusals.list(), want) {
-		t.Fatalf("wake refusals = %q, want %q", refusals.list(), want)
-	}
-
-	h.runner.Close()
-	h.start()
-	if _, err := h.runner.Send(id, "resume"); err != nil {
-		t.Fatal(err)
-	}
-	refused("a resume")
-	if rec := h.record(id); rec.Backend != BackendAgy || rec.Profile != AgentWorkerProfile(BackendAgy) {
-		t.Fatalf("record changed: %+v", rec)
+	if rec := h.record(id); rec.ClosedAt == "" || rec.Backend != BackendAgy || rec.LastTurn == nil || rec.LastTurn.Result.Message != "retained reply" {
+		t.Fatalf("closed history = %+v", rec)
 	}
 }
 
@@ -390,8 +358,8 @@ func TestAgyParentedWorkerRecordWakesStampedOrFromItsParent(t *testing.T) {
 
 // A held cross-harness agy worker whose holder kept running is not
 // reattached: the first scan ends its holder through the ordinary stop, its
-// open turn settles failed with the cross-harness text, and the record stays
-// listed, stopped, with that text.
+// open turn settles failed with the cross-harness text, and the closed
+// historical record stays listed with the refusal.
 func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 	h, got := workerRecoveryHarness(t, BackendAgy)
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
@@ -403,13 +371,13 @@ func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("report = %+v", rep.Result)
 	}
-	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen })
+	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" })
 	st := h.state(id)
-	if st.Process || st.Status == StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
+	if st.Process || st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("state = %+v", st)
 	}
 	caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
-	if child := findAgent(t, h.runner.AgentList(caller), id); child.State == AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
+	if child := findAgent(t, h.runner.AgentList(caller), id); child.State != AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("listed child = %+v", child)
 	}
 	if h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
@@ -454,10 +422,10 @@ func TestAgyWorkerRejoinRetriesAFailedStopFromTheHeartbeat(t *testing.T) {
 	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("report = %+v", rep.Result)
 	}
-	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen })
+	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" })
 	stops := h.holders.opCount("stop " + holder)
 	time.Sleep(200 * time.Millisecond) // several heartbeats
-	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status == StatusClosed {
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
 		t.Fatalf("state = %+v", st)
 	}
 	if h.holders.opCount("stop "+holder) != stops || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
@@ -525,13 +493,13 @@ func TestAgyWorkerUserStopDuringAFailedRetirementStopsTheHolder(t *testing.T) {
 		t.Fatal("the retry is still armed after the holder ended")
 	}
 	c.do(c.heartbeat)
-	if _, err := h.runner.Stop(id); err != nil {
-		t.Fatal(err)
+	if _, err := h.runner.Stop(id); !errors.Is(err, errClosed) {
+		t.Fatalf("Stop after retirement = %v", err)
 	}
 	if stops() != 4 || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
 		t.Fatalf("retired twice or relaunched: stops %d, reports %+v, ops %v", stops(), got.list(), h.holders.opList())
 	}
-	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status == StatusClosed {
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
 		t.Fatalf("state = %+v", st)
 	}
 }
@@ -624,11 +592,46 @@ func TestAgyWorkerRetirementCrashSettlesWithTheAgyReason(t *testing.T) {
 	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("report = %+v", rep.Result)
 	}
-	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status == StatusClosed {
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
 		t.Fatalf("state = %+v", st)
 	}
 	if rec := h.record(id); rec.TurnOpen || rec.LastTurn == nil || rec.LastTurn.Result.Status != TurnFailed {
 		t.Fatalf("record = %+v", rec)
+	}
+}
+
+func TestAgyWorkerRejoinWaitsForCompleteHolderAbsence(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
+	h.holders.vanish(holder)
+	h.holders.set(func() { h.holders.incomplete = true })
+	h.opts.heartbeat = time.Hour
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "incomplete holder scan", h.runner.rejoined)
+	if rec := h.record(id); rec.ClosedAt != "" || rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("incomplete scan changed the holder record: %+v", rec)
+	}
+	if len(got.list()) != 0 {
+		t.Fatalf("incomplete scan settled a turn: %+v", got.list())
+	}
+
+	h.holders.set(func() { h.holders.incomplete = false })
+	c := h.runner.conv(id)
+	if c == nil || !c.do(c.heartbeat) {
+		t.Fatal("worker did not survive the incomplete scan")
+	}
+	if st := h.state(id); st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("complete holder scan left state %+v", st)
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.ClosedAt == "" || rec.TurnOpen {
+		t.Fatalf("complete holder scan left record %+v", rec)
+	}
+	if reports := got.list(); len(reports) != 1 || reports[0].Result.Status != TurnFailed || reports[0].Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("reports = %+v", reports)
+	}
+	if h.holders.opCount("stop") != 0 {
+		t.Fatalf("an absent holder was stopped: %v", h.holders.opList())
 	}
 }
 
@@ -745,16 +748,16 @@ func TestAgyWorkerRejoinNeverStopsAHolderThatFailsOwnership(t *testing.T) {
 			}
 			release()
 			wait(t, "holder scan", h.runner.rejoined)
-			eventually(t, "the association dropped", func() bool { return h.record(id).HolderID == "" })
+			eventually(t, "the association dropped", func() bool { rec := h.record(id); return rec.HolderID == "" && rec.ClosedAt != "" })
 			eventually(t, "the agy reason", func() bool { return h.state(id).Error == wantAgyCrossHarnessRefusal })
 			if h.holders.opCount("stop") != 0 {
 				t.Fatalf("a holder that failed ownership was stopped: %v", h.holders.opList())
 			}
-			if st := h.state(id); st.Process || st.Status == StatusClosed {
+			if st := h.state(id); st.Process || st.Status != StatusClosed {
 				t.Fatalf("state = %+v", st)
 			}
 			caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
-			if child := findAgent(t, h.runner.AgentList(caller), id); child.State == AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
+			if child := findAgent(t, h.runner.AgentList(caller), id); child.State != AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
 				t.Fatalf("listed child = %+v", child)
 			}
 			if h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
@@ -765,8 +768,8 @@ func TestAgyWorkerRejoinNeverStopsAHolderThatFailsOwnership(t *testing.T) {
 }
 
 // Retirement stamps the record's activity, so a record whose last activity
-// is older than the whole child expiry interval is not deleted at the next
-// sweep: it stays one interval with the agy reason visible.
+// is older than the whole child expiry interval keeps its history and its
+// retirement time, and no longer enters the open-child expiry sweep.
 func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
 	h, _ := workerRecoveryHarness(t, BackendAgy)
 	id, holder := idleHeldAgyWorker(t, h)
@@ -775,21 +778,17 @@ func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
 	rewriteRecord(t, h, id, func(rec *Record) { rec.LastActiveAt = old.Format(time.RFC3339) })
 	h.startAt("http://127.0.0.1:1")
 	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
-	eventually(t, "the record to forget the holder", func() bool { return h.record(id).HolderID == "" })
-	c := h.runner.conv(id)
-	c.do(func() {}) // the retirement's loop step has finished
+	eventually(t, "the record to forget the holder", func() bool {
+		rec := h.record(id)
+		return rec.HolderID == "" && rec.ClosedAt != "" && h.state(id).Status == StatusClosed
+	})
 	if at := lastActive(h.record(id)); time.Since(at) > time.Hour {
 		t.Fatalf("last activity %v was not stamped at retirement", at)
 	}
-	expiring := true
-	c.do(func() {
-		c.expireIfDue()
-		expiring = c.expiring
-	})
-	if expiring {
-		t.Fatal("the retired record is due for deletion at once")
+	if h.runner.conv(id) != nil {
+		t.Fatal("the historical record is still eligible for an open child's expiry sweep")
 	}
-	if st := h.state(id); st.Status == StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
+	if st := h.state(id); st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("state = %+v", st)
 	}
 }
@@ -820,23 +819,20 @@ func TestAgyWorkerRefusalReasonSurvivesARestart(t *testing.T) {
 			}
 			h.startAt("http://127.0.0.1:1")
 			eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
-			eventually(t, "the retirement", func() bool { return h.record(id).HolderID == "" })
+			eventually(t, "the retirement", func() bool { rec := h.record(id); return rec.HolderID == "" && rec.ClosedAt != "" })
 			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal {
 				t.Fatalf("after retirement: state error = %q", st.Error)
 			}
 			h.runner.Close()
 			h.holders.restart()
 			h.startAt("http://127.0.0.1:1")
-			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Status == StatusClosed {
+			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Status != StatusClosed {
 				t.Fatalf("after the next restart: state = %+v", st)
 			}
 		})
 	}
 }
 
-// A legacy custom agy worker is refused on its record's backend and lead
-// flag, before its profile is read: a removed profile, or one that now names
-// another backend or a lead, cannot mask the agy reason or fail the turn.
 func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
 	for _, tc := range []struct{ name, profile string }{
 		{name: "profile removed"},
@@ -858,16 +854,10 @@ func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
 			h.config.Backends[BackendAgy] = shippedAgyRegistration(h.backend)
 			h.start()
 			starts := h.backend.startCount()
-			if _, err := h.runner.Send(id, "hello"); err != nil {
-				t.Fatal(err)
+			if _, err := h.runner.Send(id, "hello"); err != errClosed {
+				t.Fatalf("send to closed worker: %v", err)
 			}
-			c := h.runner.conv(id)
-			eventually(t, "the refused wake", func() bool {
-				refused := false
-				c.do(func() { refused = c.wakeRefused })
-				return refused
-			})
-			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status == StatusClosed || h.backend.startCount() != starts {
+			if st := h.state(id); st.Process || st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal || h.backend.startCount() != starts {
 				t.Fatalf("state = %+v, starts %d (was %d)", st, h.backend.startCount(), starts)
 			}
 		})
