@@ -158,22 +158,7 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 			}
 		}
 	}
-	gone := map[string]bool{}
-	for _, id := range r.expiredAtStart(open, dead) {
-		// Deepest first: a child waiting past its expiry is deleted with
-		// its descendants, as the heartbeat would (expire).
-		sessionDir := wsdashboard.SessionDir(r.opts.Dir, id)
-		wslive.DropRing(wslive.RingDir(sessionDir))
-		if err := os.RemoveAll(sessionDir); err != nil {
-			fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
-			continue
-		}
-		if rec, ok := private[id]; ok {
-			r.deleteDurableRecord(rec)
-		}
-		gone[id] = true
-	}
-	open = slices.DeleteFunc(open, func(rec Record) bool { return gone[rec.ReplyID] })
+	open = r.expireBeforeServing(open, dead)
 	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
 	for _, rec := range open {
@@ -305,12 +290,55 @@ func (r *Runner) kickAfterServing() {
 	}
 }
 
+// expireBeforeServing applies the purge guard before any open record starts
+// a loop. A descendant that could not be deleted still protects its ancestors.
+func (r *Runner) expireBeforeServing(open []Record, dead map[string]*admissionRefusal) []Record {
+	expired := r.expiredAtStart(open, dead)
+	if len(expired) == 0 {
+		return open
+	}
+	startupOpen := make(map[string]Record, len(open))
+	r.mu.Lock()
+	for _, rec := range open {
+		startupOpen[rec.ReplyID] = rec
+		r.indexChildLocked(rec)
+	}
+	r.mu.Unlock()
+	for _, id := range expired {
+		rec := startupOpen[id]
+		r.mu.Lock()
+		retain := r.hasLiveDescendantsLocked(safeStopParent(id, rec.Lead), startupOpen)
+		r.mu.Unlock()
+		if retain || !r.deleteSessionRecord(rec) {
+			continue
+		}
+		delete(startupOpen, id)
+		r.mu.Lock()
+		r.unindexChildLocked(rec)
+		r.mu.Unlock()
+	}
+	return slices.DeleteFunc(open, func(rec Record) bool {
+		_, keep := startupOpen[rec.ReplyID]
+		return !keep
+	})
+}
+
 // loadClosed lists closed (or handed-off) record rec at Start.
 func (r *Runner) loadClosed(rec Record) {
+	closure := rec.DeadBindingClosure
+	dead := rec.ClosedAt != "" && closure != nil && closure.Reason != ""
+	if dead && rec.HolderID != "" {
+		// A retained release closure can reach disk while its detached
+		// holder still owns the running process. Leave it to the holder.
+		r.holders.reject(rec.HolderID)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed[rec.ReplyID] = rec
 	r.indexChildLocked(rec)
+	if dead {
+		r.rememberDeadRefusalLocked(rec.ReplyID, &admissionRefusal{reason: closure.Reason, checkout: closure.Checkout})
+	}
 }
 
 // Hydration reads retained evidence outside the runner lock. A concurrent

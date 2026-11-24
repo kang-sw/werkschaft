@@ -103,6 +103,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-menus.css",
 	"dashboard-rail.css",
 	"dashboard-shell.css",
+	"dashboard-account-consent.css",
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
 	"dashboard-exec-hud.css",
@@ -380,41 +381,41 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		return nil, lerr
 	}
 	a := &dashboardAssets{data: pageAssetsData{
-		CSS:              template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
-		Script:           template.JS(get("dashboard.js")),
-		Sprite:           template.HTML(strings.TrimSpace(get("sprite.svg"))),
-		TrackerCSS:       template.CSS(get("tracker.css")),
-		TrackerScript:    template.JS(get("tracker.js")),
-		MentionScript:    template.JS(get("mention.js") + "\n" + get("capsules.js")),
+		CSS:               template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
+		Script:            template.JS(get("dashboard.js")),
+		Sprite:            template.HTML(strings.TrimSpace(get("sprite.svg"))),
+		TrackerCSS:        template.CSS(get("tracker.css")),
+		TrackerScript:     template.JS(get("tracker.js")),
+		MentionScript:     template.JS(get("mention.js") + "\n" + get("capsules.js")),
 		ToastScript:       template.JS(get("toast.js")),
 		ConfirmScript:     template.JS(get("confirm.js")),
 		HoldConfirmScript: template.JS(get("hold-confirm.js")),
-		RailScript:       template.JS(get("rail.js")),
-		MemoScript:       template.JS(get("memo.js")),
-		UsageScript:      template.JS(get("usage.js")),
-		ShellScript:      template.JS(get("shell.js")),
-		CompanionScript:  template.JS(get("dashboard-companion.js")),
-		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
-		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css")),
-		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings.js")),
-		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
-		OverviewScript:   template.JS(get("overview.js")),
-		CardsScript:      template.JS(get("gallery.js") + "\n;\n" + get("gal-rail-preview.js") + "\n;\n" + get("cards.js")),
-		PreviewScript:    template.JS(get("preview.js")),
-		FilesScript:      template.JS(get("files.js")),
-		TerminalScript:   template.JS(get("terminal.js")),
-		WebScript:        template.JS(get("webcard.js")),
-		XtermCSS:         xtermStyle(),
-		LucideSprite:     lucide,
-		Logo:             template.HTML(`<span class="dlogo-d">` + strings.TrimSpace(get("brand/werkschaft-dark.svg")) + `</span><span class="dlogo-l">` + strings.TrimSpace(get("brand/werkschaft-light.svg")) + `</span>`),
-		WhiteboardCSS:    wb.CSS,
-		WhiteboardSprite: wb.Sprite,
-		FormScript:       wb.FormScript,
-		AnswersScript:    wb.AnswersScript,
-		MermaidInit:      wb.MermaidInit,
-		MermaidFile:      mermaidName,
-		ViewerScript:     wb.ViewerScript,
-		SelectAllScript:  wb.SelectAllScript,
+		RailScript:        template.JS(get("rail.js")),
+		MemoScript:        template.JS(get("memo.js")),
+		UsageScript:       template.JS(get("usage.js")),
+		ShellScript:       template.JS(get("shell.js")),
+		CompanionScript:   template.JS(get("dashboard-companion.js")),
+		CompanionCSS:      template.CSS(get("dashboard-companion.css")),
+		SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css")),
+		SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings.js")),
+		SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
+		OverviewScript:    template.JS(get("overview.js")),
+		CardsScript:       template.JS(get("gallery.js") + "\n;\n" + get("gal-rail-preview.js") + "\n;\n" + get("cards.js")),
+		PreviewScript:     template.JS(get("preview.js")),
+		FilesScript:       template.JS(get("files.js")),
+		TerminalScript:    template.JS(get("terminal.js")),
+		WebScript:         template.JS(get("webcard.js")),
+		XtermCSS:          xtermStyle(),
+		LucideSprite:      lucide,
+		Logo:              template.HTML(`<span class="dlogo-d">` + strings.TrimSpace(get("brand/werkschaft-dark.svg")) + `</span><span class="dlogo-l">` + strings.TrimSpace(get("brand/werkschaft-light.svg")) + `</span>`),
+		WhiteboardCSS:     wb.CSS,
+		WhiteboardSprite:  wb.Sprite,
+		FormScript:        wb.FormScript,
+		AnswersScript:     wb.AnswersScript,
+		MermaidInit:       wb.MermaidInit,
+		MermaidFile:       mermaidName,
+		ViewerScript:      wb.ViewerScript,
+		SelectAllScript:   wb.SelectAllScript,
 	}}
 	source := get("dashboard.tmpl")
 	if err != nil {
@@ -470,16 +471,17 @@ func assetID(data pageAssetsData, source string) string {
 type settingsGear struct{ Scope, Target, Worktree string }
 
 type settingsPageData struct {
-	Assets pageAssetsData
-	Theme  string
+	Assets     pageAssetsData
+	Theme      string
+	HasAccount bool
 }
 
-func renderSettingsPage(lang, theme string) (string, error) {
+func renderSettingsPage(lang, theme string, hasAccount bool) (string, error) {
 	assets, err := loadDashboardAssets()
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{assets.data, theme})
+	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{Assets: assets.data, Theme: theme, HasAccount: hasAccount})
 	return buf.String(), err
 }

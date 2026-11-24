@@ -140,6 +140,9 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
+	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// for a freshly started process that already received composed instructions.
+	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
 	// (Compacting, Compactions, CompactOrigin) under mu, as the loop-owned
 	// fields above are not readable there.
@@ -152,6 +155,7 @@ type conv struct {
 	compactInternalTurn, compactResumeInternal bool
 
 	compactAdvisory, compactHard                                                                                   wsconfig.Threshold
+	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64
 	compactGen                                                                                                     uint64
@@ -161,6 +165,7 @@ type conv struct {
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
+	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -1927,7 +1932,6 @@ func (c *conv) kickInput() {
 	}
 	// Under mu, as Send writes: count the sends covered by the drain
 	// (Wait's turn marks).
-	separateCron := durable && c.separatesPlanCron()
 	var isolatedCron bool
 	c.mu.Lock()
 	covered := c.sends
@@ -1938,7 +1942,10 @@ func (c *conv) kickInput() {
 		held, err = wsinbox.Held(c.inbox)
 		if err == nil {
 			c.held = len(held)
-			if separateCron {
+			c.withCronClaimConsent(pending, held, func(disposition wsinbox.CronClaimDisposition) {
+				if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
+					return
+				}
 				take, cron := planInputClaims(c.rec.Queued, pending, held)
 				if take != nil {
 					isolatedCron = cron
@@ -1951,8 +1958,8 @@ func (c *conv) kickInput() {
 						covered = c.drained
 					}
 				}
-			}
-			recs, err = wsinbox.ClaimInputs(c.inbox, held)
+				recs, err = wsinbox.ClaimInputs(c.inbox, held)
+			})
 		}
 	} else {
 		recs, _ = wsinbox.Drain(c.inbox)
@@ -2008,6 +2015,21 @@ func (c *conv) kickInput() {
 		return
 	}
 	cmd, parts, rest := nextTurn(queue)
+	if !durable && cmd != nil && cmd.Name == "compact" {
+		c.refreshCompaction()
+		if c.wsManagedLeadCompaction() {
+			c.update(func(rec *Record) {
+				rec.Queued = rest
+				rec.Drained, rec.Voided = c.drained, c.voided
+			})
+			if c.compactPending == nil && !c.compacting && !c.compactCommand && !c.compactStage1Active {
+				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, stage1: true}
+				c.publishCompaction(false)
+			}
+			c.compactIdle()
+			return
+		}
+	}
 	if cmd != nil {
 		mail, reports = nil, nil
 	}

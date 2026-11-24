@@ -523,3 +523,36 @@ func TestOpenAIPlanPauseLivesInMemoryAndPrecedesRefresh(t *testing.T) {
 	}
 	resumed.Finish(OpenAIPlanSucceeded)
 }
+
+func TestOpenAIBackgroundConsentHoldsThroughUse(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{})
+	if err := s.SetOpenAIBackgroundConsent(f.clientID, true); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	revoked := make(chan error, 1)
+	s.WithOpenAIBackgroundConsent(func(allowed bool) {
+		if !allowed {
+			t.Error("did not see the grant before claiming input")
+		}
+		go func() {
+			close(started)
+			revoked <- s.SetOpenAIBackgroundConsent(f.clientID, false)
+		}()
+		<-started
+		if s.mu.TryLock() {
+			s.mu.Unlock()
+			t.Error("credential publication could acquire the lock before input claim finished")
+		}
+	})
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+	s.WithOpenAIBackgroundConsent(func(allowed bool) {
+		if allowed {
+			t.Error("consent stayed on after revocation completed")
+		}
+	})
+}

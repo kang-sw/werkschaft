@@ -74,6 +74,22 @@ func TestCompactionRegistryManifestParity(t *testing.T) {
 		if builtinConfigDefaults()[key] != def {
 			t.Fatal(key)
 		}
+		if key == wsconfig.ItemCompactionLeadMode {
+			if def != wsconfig.CompactionModeNative {
+				t.Fatalf("%s default = %q, want %q", key, def, wsconfig.CompactionModeNative)
+			}
+			for _, v := range []string{wsconfig.CompactionModeNative, wsconfig.CompactionModeWS} {
+				if _, err := normalizeTuneScalar(e, v, true); err != nil {
+					t.Fatalf("%s rejected %s: %v", key, v, err)
+				}
+			}
+			for _, v := range []string{"auto", "off", "50%", ""} {
+				if _, err := normalizeTuneScalar(e, v, true); err == nil {
+					t.Fatalf("%s accepted %s", key, v)
+				}
+			}
+			continue
+		}
 		for _, v := range thresholdAccepted {
 			if _, err := e.Normalize(v); err != nil {
 				t.Fatalf("%s rejected %s", key, v)

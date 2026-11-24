@@ -57,6 +57,9 @@ func (c *conv) syncHost(quiet bool) {
 // and the session's failure state until a turn succeeds.
 func (c *conv) alert(n wslive.Notice, quiet bool) {
 	c.alerted = true
+	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
+		c.compactStage1UsageLimited = true
+	}
 	c.setStatus(func() { c.failure = &n })
 	if !quiet {
 		c.live.notice(n)

@@ -235,8 +235,9 @@ func (c Command) Line() string {
 
 // Record is an entry read from disk with its file name.
 type Record struct {
-	Name  string
-	Entry Entry
+	Name      string
+	Entry     Entry
+	CronClaim CronClaimDisposition
 }
 
 // ID is the record's entry ID: its file name without the extension.

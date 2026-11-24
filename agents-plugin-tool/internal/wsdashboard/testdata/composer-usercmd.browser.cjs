@@ -39,6 +39,7 @@ async function openPop(view) {
 }
 
 async function holdButton(page, locator, ms = 1600) {
+  await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   assert.ok(box, 'hold target must have a bounding box');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -132,6 +133,90 @@ async function holdButton(page, locator, ms = 1600) {
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.stale), () => false), 'stale rejection shown');
       assert.equal(await view.evaluate(() => window.__admitted.length), admittedBeforeStale);
       await page.unroute('**/user-commands');
+
+      if (lang === 'en') {
+        await agent('hold-slot', 'presses');
+        const entry = view.locator('.ucmd-card[data-ucmd="hold"]');
+        const line = entry.locator('.is-cmd');
+        await entry.waitFor();
+        for (const [action, step, key] of [
+          ['run', 'hold-run', null], ['ask', 'hold-ask', 'Space'], ['del', 'hold-delete', 'Enter'],
+        ]) {
+          const button = entry.locator('.ucmd-ibtn-' + action);
+          const before = posts.length;
+          if (key) {
+            await button.focus();
+            await page.keyboard.down(key);
+          } else {
+            await button.hover();
+            await page.mouse.down();
+          }
+          await button.and(view.locator('[data-hold-state="ready"]')).waitFor();
+          await agent(step, 'presses');
+          await view.waitForFunction(expected => document.querySelector('.ucmd-card[data-ucmd="hold"] .is-cmd').value === expected, 'echo changed ' + step.split('-')[1]);
+          assert.equal(await button.getAttribute('data-hold-state'), null, action + ' hold canceled on refresh');
+          if (key) await page.keyboard.up(key);
+          else await page.mouse.up();
+          assert.equal(posts.length, before, action + ' did not submit a refreshed command');
+        }
+
+        await agent('hold-slot', 'multiline');
+        const prompt = entry.locator('.is-prompt.ucmd-inline-input');
+        const original = '  Keep the first line.\r\nAnd the second.  ';
+        await view.waitForFunction(() => document.querySelector('.ucmd-card[data-ucmd="hold"] .is-prompt.ucmd-inline-input').value.includes('Keep the first line.'));
+        assert.equal(await prompt.inputValue(), original.replace('\r\n', '\n'), 'prompt editor displays both lines');
+        assert.equal(await entry.evaluate(e => e.classList.contains('is-dirty')), false, 'textarea normalization stays clean');
+        await prompt.fill('Draft line one\nDraft line two');
+        await entry.locator('.ucmd-inline-input.is-prompt + .ucmd-rev-btn').click();
+        assert.equal(await prompt.inputValue(), original.replace('\r\n', '\n'), 'revert restores the multiline prompt');
+
+        let admitSave;
+        const saveArrived = new Promise(resolve => { admitSave = resolve; });
+        let releaseSave;
+        const saveBlocked = new Promise(resolve => { releaseSave = resolve; });
+        const savePath = '**/user-commands/hold';
+        await page.route(savePath, async route => {
+          admitSave(route.request().postDataJSON());
+          await saveBlocked;
+          await route.continue();
+        });
+        await line.fill('echo edited');
+        await entry.locator('.ucmd-ibtn-save').click();
+        const patch = await saveArrived;
+        try {
+          assert.equal(patch.line, 'echo edited');
+          assert.equal(Object.hasOwn(patch, 'prompt'), false, 'patch omits the untouched prompt');
+          assert.equal(await prompt.evaluate(e => e.readOnly), true, 'prompt is read-only during Save');
+          assert.equal(await line.evaluate(e => e.readOnly), true, 'command line is read-only during Save');
+          await line.focus();
+          await page.keyboard.press('End');
+          await page.keyboard.type(' cannot edit');
+          assert.equal(await line.inputValue(), 'echo edited');
+        } finally {
+          releaseSave();
+        }
+        await entry.locator('.ucmd-ibtn-save:enabled').waitFor({ state: 'attached' });
+        await page.unroute(savePath);
+        const saved = await (await page.request.get(base + '/s/livesession/user-commands')).json();
+        assert.equal(saved.commands.find(c => c.id === 'hold').prompt, original, 'unrelated Save leaves the stored prompt byte-for-byte intact');
+
+        let asked;
+        await page.route('**/s/livesession/message', route => {
+          asked = route.request().postDataJSON().text;
+          return route.fulfill({ status: 200, body: '{}' });
+        });
+        const ask = entry.locator('.ucmd-ibtn-ask');
+        await ask.focus();
+        await page.keyboard.down('Space');
+        await ask.and(view.locator('[data-hold-state="ready"]')).waitFor({ timeout: 5000 });
+        await page.keyboard.up('Space');
+        await view.waitForSelector('.ucmd-pop', { state: 'hidden', timeout: 5000 });
+        assert.ok(asked.endsWith('\n' + original), 'Ask sends the exact stored prompt');
+        await page.unroute('**/s/livesession/message');
+        await openPop(view);
+        await holdButton(page, entry.locator('.ucmd-ibtn-del'));
+        await entry.waitFor({ state: 'detached' });
+      }
 
       // Agent unregisters "test" -> card disappears.
       await agent('unregister-test', lang);

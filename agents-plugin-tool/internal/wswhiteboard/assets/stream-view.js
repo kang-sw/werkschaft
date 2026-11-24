@@ -257,13 +257,17 @@
     // keep() transactions own the scroller again. Writes go through the scroll
     // owner so they are not taken for user input.
     var pins = new Set(), PIN_MS = 1500;
+    function boardPinning(scroller) {
+      var anchor = win.WsBoardAnchor;
+      return scroller.id === 'bcol' && anchor && anchor.pinning && anchor.pinning();
+    }
     function pin(ref) {
       var scroller = scrollerOf(ref), o = owner(scroller), top = layoutTop(ref, scroller);
       if (o.pin) o.pin.end();
       var p = { done: false, ro: null, cap: 0 };
       p.apply = function () {
         if (p.done) return;
-        if (!ref.isConnected) { p.end(); return; }
+        if (!ref.isConnected || boardPinning(scroller)) { p.end(); return; }
         var delta = layoutTop(ref, scroller) - top;
         if (Math.abs(delta) >= 0.5) scroller.scrollTop += delta;
         o.wrote = scroller.scrollTop;
@@ -294,6 +298,7 @@
       var scroller = opt.scroller || scrollerOf(node), o = owner(scroller), s = sessions.get(scroller);
       var inspect = { scroller: scroller, visible: function (n) { return exposed(n, scroller); }, viewport: function () { return viewport(scroller); }, apply: function () {}, end: function () {} };
       if (opt.capture === false) return inspect;
+      if (boardPinning(scroller)) return inspect;
       if (scroller && scroller.hasAttribute && scroller.hasAttribute('data-board-free') &&
           win.WsBoardAnchor && win.WsBoardAnchor.windowInfo && node && node !== scroller) {
         var wi = win.WsBoardAnchor.windowInfo();
@@ -347,8 +352,32 @@
       return jump(node, { offset: opt && typeof opt.offset === 'number' ? opt.offset : 0,
         readingOffset: opt && opt.readingOffset, behavior: 'instant' });
     }
+    function centeredTop(scroller, r, clip, clearance) {
+      var view = viewport(scroller, function () { return clip; }, true);
+      var edge = clip ? clip.top + (scroller.clientTop || 0) : 0;
+      var top = Math.max(view.top, edge + clearance);
+      var height = Math.max(0, view.bottom - top);
+      var desired = r.height > height ? top : top + (height - r.height) / 2;
+      return Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + r.top - desired));
+    }
     function jump(node, opt) {
       var scroller = scrollerOf(node), s = sessions.get(scroller);
+      var anchor = win.WsBoardAnchor;
+      if (opt && opt.centerVisible && scroller.id === 'bcol' && anchor && anchor.land && anchor.free()) {
+        var clearance = typeof opt.clearance === 'function' ? opt.clearance() : opt.clearance || 0;
+        var r = node.getBoundingClientRect(), clip = scroller.getBoundingClientRect();
+        var offset = r.top - clip.top - (scroller.clientTop || 0);
+        var recheck = typeof opt.clearance === 'function' ? function () {
+          var destination = opt.clearance();
+          if (Math.abs(destination - clearance) >= 0.5) {
+            return centeredTop(scroller, node.getBoundingClientRect(), scroller.getBoundingClientRect(), destination);
+          }
+        } : null;
+        if (anchor.land(node, centeredTop(scroller, r, clip, clearance), opt.behavior === 'smooth', offset, recheck)) {
+          if (s && s.cancel) s.cancel();
+          return keep(node, { scroller: scroller, capture: false });
+        }
+      }
       if (opt && opt.prepare && s) {
         if (s.cancel) s.cancel(); else s.handle.end();
         s = null;
@@ -416,13 +445,7 @@
         function measure() {
           if (typeof opt.top === 'number') return opt.top;
           var r = node.getBoundingClientRect();
-          if (opt.centerVisible) {
-            var view = viewport(scroller, null, true);
-            var top = Math.max(view.top, scrollerTop(scroller) + clearance());
-            var height = Math.max(0, view.bottom - top);
-            var desired = r.height > height ? top : top + (height - r.height) / 2;
-            return Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + r.top - desired));
-          }
+          if (opt.centerVisible) return centeredTop(scroller, r, main ? null : scroller.getBoundingClientRect(), clearance());
           var offset = typeof opt.readingOffset === 'number' ? viewport(scroller).top + 1 - scrollerTop(scroller) + opt.readingOffset :
             typeof opt.offset === 'number' ? opt.offset : block === "center" ? (scroller.clientHeight - r.height) / 2 : 0;
           return r.top - scrollerTop(scroller) + scroller.scrollTop - offset;

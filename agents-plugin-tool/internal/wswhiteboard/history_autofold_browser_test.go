@@ -14,8 +14,9 @@ import (
 
 // History an owner loaded above a fold folds back into the gap once the whole
 // topic card has left the viewport, while the visible line below stays put;
-// the fold row loads again afterwards. Also pins the load control as a filled,
-// outline-free capsule in both themes. Needs WS_PLAYWRIGHT_MODULE.
+// the fold row loads again afterwards. Also pins the dedicated GitLab-diff
+// tonal gap band, left gutter, and right-aligned borderless load action in
+// both themes. Needs WS_PLAYWRIGHT_MODULE.
 func TestHistoryAutoFoldBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to run Chromium acceptance")

@@ -7,8 +7,9 @@ related:
   261112-research-ws-ade-desktop-shell-and-rename: "zero-install built-in agent; (495)=a (bundled Pi) is superseded by the builtin harness, see the epic"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-design-reviewed: 78ec6832f92dea6f
-sage-review-completeness-reviewed: 78ec6832f92dea6f
+sage-review-design-reviewed: 426b912f0778c416
+sage-review-completeness-reviewed: 426b912f0778c416
+completed: 2026-11-25
 ---
 
 # Provider authentication layer
@@ -119,10 +120,81 @@ Verified external facts (read-only research, 2026-11-22, official sources):
    the dashboard (Phase 3). Rejected: an env fallback scrubbed from child
    environments - one more leak path to keep closed for a convenience the
    CLI already gives.
-9. **Compatibility tier T0 ((5012)).** New file, new internal route, new
+9. **Phase 1 and 2 compatibility tier T0 ((5012)).** New file, new internal route, new
    config keys; old binaries never read them.
+10. **Phase 3 follows the approved mockup (owner (52), (54)).** The
+    [v4 mockup](../../assets/mockups/261122/provider-auth/mockup.html), its
+    [whiteboard fragment](../../assets/mockups/261122/provider-auth/board.html),
+    and the [README](../../assets/mockups/261122/provider-auth/README.md) are
+    the visual and behavioral reference. Follow the README's Settled items
+    and close its backend gaps as amended by this decision and Decision 12.
+    The dashboard-wide background-consent banner has allow, deny, close,
+    and a link to the OpenAI row for local viewers. The account section uses
+    one active OpenAI account and sign-out deletes its account record and
+    consent locally. OpenRouter key verification uses the key-info endpoint.
+    Prefix mismatch is a soft warning. Definitive 401/403 refuses the key,
+    while network errors, 5xx, and 429 save it as unverified with a re-check
+    action. Display the backend mask for saved keys. Credit display is out
+    of scope. Deleting an endpoint or changing its base URL deletes the
+    retired endpoint key.
+    **LAN access ((5019), lead settlement).** Keep Settings, the account
+    status route, and its mutations on the existing local dashboard access
+    boundary. Require the dashboard's own Origin for browser mutations.
+    When the consent banner appears on the authenticated LAN dashboard,
+    keep the message and replace allow, deny, and the OpenAI link with a
+    one-line hint to open the dashboard on the daemon's machine. This
+    supersedes the non-loopback hint placement in mockup Settled 6.
+    Rejected: provider rows inside the agents section (v1-v3 placement) and
+    a LAN Account view, which adds a credential-state surface.
+
+11. **A separate global-only 계정 (Account) settings section (owner (52),
+    (53)=a).** Provider credentials and local endpoints live in their own
+    settings section, beside the agents section, which keeps only the tier
+    picker and links to the account section for an unusable provider. The
+    section has no scope switcher; it shows a fixed "this whole machine"
+    target (mockup Settled 11). Credentials stay one machine-wide file
+    (Decision 5). Rejected: per-project credentials (machine-local, project
+    over global) - the owner chose global only; repo-scoped credentials - the
+    repo scope is the committed `.ws-workflow/config.json`, so a secret there
+    would be published.
+12. **Remove `agent.werk_endpoints` from agent discovery ((5018), announced
+    default).** Hide it from `config.list` and the lead-tune flow per the
+    owner's (52) direction. The tier provider description directs readers
+    to the Account section. Keep the stored value and dashboard projection
+    for the Account editor, alongside the owner CLI. Preserve direct
+    `config.get` and lead-authorized `config.tune` set/reset with their
+    0.52.0 behavior. This supersedes the direct-call withdrawal in mockup
+    Settled 12 and backend gap 11.
+    **Patch compatibility:** T1 for discovery, where an old client sees one
+    fewer listed setting and that omission changes no data. T0 for stored
+    values and direct calls, which continue through the existing read and
+    write paths
+    (`agents-plugin-tool/internal/mcp/config_manifest.go:553-567`,
+    `server_dispatch.go:371-399,493-499`). Rejected for now: withdrawing
+    direct MCP access is T3 and requires a separately approved minor
+    boundary (`ai-docs/manuals/release-compatibility.md:72-91,129-145`).
+    Credential keys, tokens, and consent stay in the credential store,
+    outside config.
+
+13. **Bind OpenRouter verification to the exact saved key ((5020), technical).**
+    Store the verification result and timestamp with the key's fingerprint in
+    the owner-only credential record. Keep the fingerprint inside the store.
+    Treat a missing or mismatched fingerprint as unverified. Publish a re-check
+    result only while the checked key record is still current. The 0.52.0
+    baseline's `Store.Apply` replaces the key while preserving unknown fields
+    (`agents-plugin-tool/internal/wscred/store.go:460-470,519-541`).
+    On re-upgrade, unchanged keys retain their result and keys replaced by the
+    old writer are unverified. Rejected: a standalone verified flag and
+    timestamp, which the old writer carries onto a replacement key.
 
 ## Constraints
+
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for `agents-plugin/`, `agents-plugin-wsflow/`, `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for `agents-plugin-tool/internal/mcp/`)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for `agents-plugin-tool/internal/`)
+- Convention: ai-docs/manuals/performance.md (declared for `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/config-settings-ui.md (declared for `agents-plugin-tool/internal/mcp/config_registry.go`, `agents-plugin/config-manifest.json`, `agents-plugin/agy-config-manifest.json`, `agents-plugin/dashboard-config-manifest.json`, `agents-plugin-tool/internal/wsdashboard/config_routes.go`, `agents-plugin-tool/internal/wsdashboard/config_proposals.go`, `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*`)
+- Convention: ai-docs/manuals/dashboard-style.md (declared for `agents-plugin-tool/internal/wsdashboard/assets/`, `agents-plugin-tool/internal/wswhiteboard/assets/`, `ai-docs/assets/mockups/`)
 
 - `ai-docs/manuals/performance.md`: the credential file is read once into
   daemon memory at first use and rewritten only when a credential changes
@@ -131,6 +203,8 @@ Verified external facts (read-only research, 2026-11-22, official sources):
 - `ai-docs/manuals/release-compatibility.md`, `ai-docs/manuals/ws-mcp.md`,
   `ai-docs/manuals/shipped-surface-boundary.md`,
   `ai-docs/manuals/config-settings-ui.md` (Phase 3 settings rows).
+- Phase 3 ships in a 0.52.x patch (owner (51)=b, recorded in `59fda372e`);
+  affected storage and call paths must stay within T0-T2.
 - Never log, trace, or capture (audit ring, transcripts, dashboard live feed)
   a token, key, or authorization header. Tests assert redaction.
 - The app name presented to OpenAI is the product's real name.
@@ -139,29 +213,27 @@ Verified external facts (read-only research, 2026-11-22, official sources):
 
 ## Prior Decisions
 
-- 261122-feat-ws-builtin-agent-harness (2026-11-22, Decisions): "Credentials only from the provider auth layer. The harness fetches tokens per `261122-feat-ws-provider-auth-layer` Decision 6 and never reads the credential file itself." — bearing: supports
-- 261122-feat-ws-web-tools (2026-11-22, Decisions): "Search is the provider's server tool; fetch is a ws MCP tool ((5017), technical). `ws/web.search` is realized by attaching the provider's server-side search tool to the builtin harness's model requests" — bearing: supports
-- be7e3a76 (2026-11-22, commit): "External research (official docs, 2026-11-22): OpenRouter and OpenAI Sign in with ChatGPT both accept stateless Responses, so one wire adapter serves both; SIWC Terms forbid exposing the token as a general API" — bearing: supports
-- 261117-feat-ws-harness-capability-catalog (2026-11-17, commit 4e8add8d): "An older daemon rejoining an HTTP lead answers its ws calls 401 until the process restarts: no data loss, functional degradation" — bearing: constrains
-- 261118-feat-ws-agy-tool-names-and-worker-role (2026-11-18, commit b3e2e5e6): "Worker tokens never enter the record and are revoked on stop/shutdown; lead holder behavior stays unchanged." — bearing: constrains
-- 261113-feat-ws-dashboard-rail-usage-gutter (2026-11-13, Decisions): "Codex/GPT data is a live query ((133)=b, (137)=c): primary source is a short-lived `codex app-server` process ... fallback is a `wham/usage` HTTP query with Pi's stored `openai-codex`" — bearing: constrains
-- 261119-feat-ws-audit-policy-event-envelope (2026-11-22, Resolution): "Phase 1 landed in agents-plugin-tool/internal/wsaudit: v1 harness-neutral Envelope, 11-kind set, pure model-seen compaction cut, daemon-hosted capture policy gate, and Sink interface" — bearing: constrains
+- 261122-feat-ws-builtin-agent-harness (2026-11-22, Decisions): "**Providers are profiles over one Responses adapter (technical (16)).** A profile holds the endpoint, the auth source, the request fields the server refuses" — bearing: supports
+- 992f0db8 (2026-11-24, commit): "Provider readiness still controls selectable models. Carry the ChatGPT plan remedy as a separate optional picker notice so an available OpenRouter or local model does not hide it." — bearing: constrains
+- d211cd80 (2026-11-23, commit): "Legacy werk tiers resolve to OpenRouter with no write to their stored leaf. The shared tier writer accepts the explicit provider and refuses unlaunchable values before saving." — bearing: constrains
+- 261122-feat-ws-web-tools (2026-11-22, Decisions): "**Builtin harness only (owner (5001) note).** Claude, Codex, and agy keep their native web capability; `ws/web.*` is not offered to them." — bearing: supports
+- be7e3a76 (2026-11-22, commit): "External research (official docs, 2026-11-22): OpenRouter and OpenAI Sign in with ChatGPT both accept stateless Responses, so one wire adapter serves both" — bearing: supports
 
 ## Route Facts
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | the ticket names no code path; its phases need a new credential package, a ws-mcp CLI subcommand (agents-plugin-tool/cmd/ws-mcp/main.go dispatches serve, dashboard, daemon-start, mailbox), an internal daemon route, and dashboard settings rows |
-| scope.surface | cross-module | new provider registry interface, CLI subcommand, internal token route, config keys and dashboard rows (Phase 1-3) |
-| scope.new_public_symbol | yes | provider registry Go interface and typed not-configured / consent-required errors (Phase 1); new CLI subcommand |
-| scope.new_type_contract | yes | credential-for-provider interface with typed errors, the credential file shape, and the token route request/response (Phase 1); searched agents-plugin-tool and agents-plugin-pi/src at HEAD: no openrouter or provider-registry code exists |
-| scope.test_surface | new-files | the ticket lists new unit, fixture and fake-authorization-server tests; no existing provider-auth tests (git grep openrouter at HEAD finds only Pi code and an unrelated wsagent/support_test.go mention) |
-| complexity.reuse_points | unconfirmed | per-session bearer channel exists (agents-plugin-tool/internal/wsagent/mcp_session.go, EnvMCPSessionToken) and wsstate.CacheRoot gives a per-user root (internal/wsstate/paths.go#L91), but the route's builtin-harness session check depends on the unlanded 261122-feat-ws-builtin-agent-harness |
-| complexity.side_effect_risk | high | new secret store and daemon route; refresh rotation is daemon-global and a leak reaches logs, audit ring, transcripts, dashboard feed |
-| risk.correctness | high | OAuth refresh-token rotation, atomic replace, revoked refresh, consent state, and a Windows ACL path |
-| risk.fit | moderate | credential file is storage type 5 per Decision 5, a deliberate exception to the type-2 SQLite default in ai-docs/manuals/performance.md |
-| risk.test | moderate | Phase 2 needs a fake authorization server and an owner-run live sign-in; Phase 3 needs a mockup capture comparison; Windows ACL cannot be tested on this host |
-| risk.security_or_contract | high | holds user credentials under SIWC Terms constraints (local storage, no token exposure, express background consent) and adds a route that must refuse non-harness bearers |
+| scope.span | multi-file | Next unfinished phase is Phase 3 only: agents-plugin-tool/internal/wsdashboard, internal/wscred, internal/mcp/config_registry.go, cmd/ws-mcp, settings assets and i18n; approved reference: ai-docs/assets/mockups/261122/provider-auth/README.md |
+| scope.surface | cross-module | Phase 3 adds browser credential routes, sign-in lifecycle and CLI endpoint commands; changes discovery while preserving direct MCP calls and dashboard projection (Decision 12) |
+| scope.new_public_symbol | yes | New browser status / set / remove / consent and sign-in start / progress / cancel routes, plus credential endpoint set/remove CLI commands (Phase 3; mockup README backend gaps 1-3, 13) |
+| scope.new_type_contract | yes | Browser-safe credential status, loopback-peer and pending-consent signals, sign-in lifecycle, verified/unverified key metadata, and registry visibility flag are Phase 3 additions; existing OpenAIAccountStatus is at agents-plugin-tool/internal/wscred/openai_store.go#L66-L87 |
+| scope.test_surface | existing | Extend agents-plugin-tool/internal/wsdashboard/credential_routes_test.go, dashboard_settings_ui_catalog_test.go, internal/wscred/store_test.go and openai_test.go; Phase 3 also requires route secrecy, LAN banner and access checks, legacy MCP calls and four visual captures |
+| complexity.reuse_points | confirmed | Read Store.Status / Apply (agents-plugin-tool/internal/wscred/store.go#L404-L465), OpenAI status and SignInOpenAI contract (openai_store.go#L66-L102), credentialStore interface (internal/wsdashboard/credential_routes.go#L42-L50), and URL-bound local provider keyID (internal/wscred/local_endpoints.go#L65-L74); Phases 1-2 and the builtin harness have landed |
+| complexity.side_effect_risk | high | Browser mutations persist machine-wide credentials and consent; sign-out and endpoint URL changes delete secrets; daemon-side key validation makes outbound requests (Phase 3; Decisions 10-12) |
+| risk.correctness | high | Sign-in cancellation and progress, definitive rejection versus unverified key saves, consent signaling, endpoint key cleanup and global-only scope must agree with approved mockup v4 as amended by Decisions 10 and 12 |
+| risk.fit | moderate | New account section spans settings catalog, i18n, agents links and CLI; discovery filtering preserves direct MCP calls, dashboard config projection, and existing picker remedies (config_registry.go#L434-L447; prior commit 992f0db8) |
+| risk.test | high | Phase 3 requires secret-free route bodies and LAN access checks plus catalog and direct-call checks and 1280/390 px dark/light captures; existing tests predate these browser flows |
+| risk.security_or_contract | high | Browser access to credential mutations and loopback-only SIWC initiation must protect secrets and consent; owner limits Phase 3 to a 0.52.x patch, T0-T2 only; new metadata must preserve old-reader writes and new-reader recovery (store.go#L233-L286, L521-L534) |
 
 ## Phases
 
@@ -315,8 +387,117 @@ env -i HOME="$HOME" PATH="$PATH" WS_CACHE_HOME="$(mktemp -d)" go -C agents-plugi
 
 ### Phase 3: Dashboard sign-in and key management
 
-- Dashboard settings rows to add/remove the OpenRouter key and to sign in to
-  or out of OpenAI, plus the background-consent prompt. A text mockup under
-  `ai-docs/assets/mockups/261122/provider-auth/` is approved by the owner
-  before implementation; verification compares a capture of the result with
-  it side by side.
+- Build the global-only 계정 settings section with OpenRouter, OpenAI and
+  its consent sub-row, the structured local-endpoint editor, the
+  dashboard-wide consent banner, and the agents-section links. Follow the
+  [approved v4 mockup](../../assets/mockups/261122/provider-auth/mockup.html)
+  and the amendments in Decisions 10 and 12.
+- Close the
+  [README backend gaps](../../assets/mockups/261122/provider-auth/README.md#backend-facts-the-ui-needs-that-do-not-exist-yet)
+  with those amendments. Add local browser status, set, remove, and consent
+  routes with secret-free responses, and sign-in start, progress, and
+  cancel. Keep the loopback-peer flag in local status. Use existing
+  dashboard viewer access to render the authenticated LAN consent banner
+  independently of Account status. Sign-out deletes the account record
+  and its consent. Add the pending consent signal and OpenRouter key
+  verification on save and re-check, with exact-key metadata per
+  Decision 13. Clean up endpoint keys on endpoint removal or base-URL
+  change.
+- Filter `agent.werk_endpoints` from config discovery and lead-tune,
+  preserve direct legacy reads and lead-authorized set/reset, and keep the
+  dashboard projection for the Account editor. Add the Account section to
+  the catalog, manual, and i18n. Add CLI endpoint set/remove and point
+  provider error texts at Account.
+- Verification: exercise each new route, including redaction on success
+  and error, LAN refusal of Account reads and mutations including sign-in
+  start, and same-origin enforcement for local mutations. Verify the LAN
+  banner shows the message and hint with credential actions confined to
+  local viewers. Cover config discovery and lead-tune omission, continued
+  direct get/set/reset behavior, and catalog drift. Run the 0.52.0
+  old-writer/new-reader key replacement and concurrent re-check tests from
+  Decision 13. Compare headless-browser captures of the Account section
+  against the linked mockup side by side at 1280 px and 390 px in both
+  dark and light, and capture the LAN banner hint per Decision 10.
+
+### Result (9f1a0fe14) - 2026-11-25
+
+Settings → Account is machine-wide. It manages OpenRouter verification,
+OpenAI sign-in and plan consent, and named vLLM and Ollama endpoints. The
+Werk tier links lead to Account while retaining the selected workflow
+scope. The Settings catalog and manual include the section, and Account
+strings cover all 11 supported locales.
+
+The browser API uses the dashboard viewer cookie and requires a loopback
+peer and Host. Mutations also require the dashboard Origin. Responses
+carry masks and fixed error codes. OpenAI sign-in supports progress and
+cancellation. Sign-out deletes the displayed active registration and its
+consent locally per Decision 10. The Account row uses a generic ChatGPT
+plan label and reports authorization and pause state. When a signed-in
+account with plan access has no consent choice, a background refusal
+opens the dashboard prompt. The local prompt supplies
+allow, deny, close and an Account link. An authenticated LAN viewer gets
+the message and on-machine hint.
+
+OpenRouter verification checks the key-info endpoint on the daemon. A
+rejected replacement leaves the saved key intact. Transient HTTP and
+connection failures save it as unverified with a re-check action.
+Endpoint writes share the global configuration lock and retire a key
+when its endpoint is removed or changes API root. The daemon also
+reconciles stale keys on startup and global reload. Standalone credential
+status reads use a read-only endpoint catalog. The owner CLI uses
+`credential endpoint set` and `credential endpoint remove` with the same
+retirement logic.
+
+**Patch compatibility**
+
+- T1 for discovery. `internal/mcp/server_config.go:294-308` drops the
+  endpoint key from the discovery view used by config.list and lead-tune.
+  T0 for stored settings and direct calls. The old config.get/config.tune
+  dispatch (`f74ed1b74:agents-plugin-tool/internal/mcp/server_dispatch.go:360,589`)
+  and the existing endpoint JSON shape still serve direct reads and
+  lead-authorized set/reset. The Account editor uses the global dashboard
+  projection.
+- T0 for the credential document. The 0.52.0-compatible writer at
+  `f74ed1b74:agents-plugin-tool/internal/wscred/store.go:466,521-541`
+  replaces known key fields and preserves raw unknown members. The new
+  status reader at `internal/wscred/openrouter_verify.go:32-39` uses the
+  private fingerprint to recover metadata for an unchanged key and show
+  unverified after an old writer replaces it. Re-check publication also
+  checks the record generation at lines 99-121. The file schema remains
+  version 1.
+
+**Verification**
+
+- Full race suites passed for `internal/wscred`, `internal/wsconfig`,
+  `internal/wsagent`, and `cmd/ws-mcp`. The dashboard Go suite passed
+  1,542 tests with `TestBoardFrameBands` excluded. Its unsupported fake
+  DOM selector fails on the unmodified `f74ed1b74` base too.
+- The full MCP suite passed 1,528 tests. The i18n and package suites
+  passed, including Settings catalog and locale coverage.
+- `go build ./...`, the generated-package asset check, and scoped native and
+  Windows cross-vet passed. The wsagent vet
+  runs disabled the version analyzer because the existing
+  `werk_lead_test.go:62` uses `testing.Context` in a Go 1.23 module.
+- The isolated integration preview over `develop` at `7053c78de` had
+  no textual conflicts. Focused race tests passed with
+  `TestWerkCronSteeringRecoversClaimAfterConsentRevocation` excluded after
+  the same failure reproduced on that develop commit alone.
+- Focused race tests covered Account route redaction, loopback and origin
+  enforcement, key verification and legacy-writer recovery, sign-in
+  cancellation, consent and SSE, endpoint cleanup and CLI ownership.
+- Six Settings Chromium suites and 195 frontend Node tests passed. The
+  combobox suite edited through the real Account endpoint and observed
+  model picker refresh. Mock Account responses and a simulated LAN SSE
+  stream drove the visual and lifecycle captures.
+- Compared `compare-1280-dark.png` and `compare-1280-light.png` with
+  `ai-docs/assets/mockups/261122/provider-auth/mockup.html` at 1280 px.
+  The Account hierarchy, actions, and themes matched. At 390 px,
+  `compare-390-dark.png` and `compare-390-light.png` showed the endpoint
+  rows below the initial viewport due to drawer chrome and row spacing.
+  `account-endpoints-390-dark.png` and `account-endpoints-390-light.png`
+  show the endpoints after scrolling. `lan-consent-390-light.png`
+  showed the on-machine hint with the message.
+- The independent lite review of `f74ed1b74..9f1a0fe14` found no
+  actionable correctness or test-integrity issues.
+- Credential and OAuth checks used fake values and isolated fixtures.
+  The owner-run live sign-in check is recorded under Phase 2.

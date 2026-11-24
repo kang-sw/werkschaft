@@ -32,10 +32,14 @@ func (r *Runner) loadRetiredPiPurges() error {
 	return r.piPurgeLoadErr
 }
 
-// PrepareWorktreeHistoryPurge removes retired Pi archives before the
-// dashboard removes the checkout. Failed archive deletion remains pending
+// PrepareWorktreeHistoryPurge persists closures that need the released
+// checkout's marker and removes retired Pi archives before checkout deletion.
+// Failed archive deletion remains pending
 // even if an older daemon prunes the associated registry row before retry.
 func (r *Runner) PrepareWorktreeHistoryPurge(worktree string, ended map[string]bool) error {
+	if err := r.persistRetainedReleaseClosures(worktree, ended); err != nil {
+		return err
+	}
 	r.piPurgeMu.Lock()
 	defer r.piPurgeMu.Unlock()
 	if r.piPurgeLoadErr != nil {

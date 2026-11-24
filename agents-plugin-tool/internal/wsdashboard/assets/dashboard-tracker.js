@@ -726,9 +726,10 @@
   function paletteHistory(update) {
     var w = window.wbHistory;
     if (!w || !w.hydrateAll) return;
-    w.hydrateAll(doc).then(function (n) { if (n) update(paletteRows()); });
-    if (window.WsBoardVirtual && window.WsBoardVirtual.hydrateLazySearch && window.wbHistoryFetch) {
-      window.WsBoardVirtual.hydrateLazySearch(window.wbHistoryFetch).then(function (n) { if (n) update(paletteRows()); }).catch(function () {});
+    var virtual = window.WsBoardVirtual;
+    w.hydrateAll(doc, virtual && virtual.searchRoots).then(function (n) { if (n) update(paletteRows()); });
+    if (virtual && virtual.hydrateLazySearch && window.wbHistoryFetch) {
+      virtual.hydrateLazySearch().then(function (n) { if (n) update(paletteRows()); }).catch(function () {});
     }
   }
   function paletteClosed(update) {

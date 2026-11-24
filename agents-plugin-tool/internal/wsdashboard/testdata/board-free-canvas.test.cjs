@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const { readAssetSource } = require('./asset-source.cjs');
 
 const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
+const selectionsSrc = readAssetSource('wsdashboard', 'dashboard-composer-selections.js');
 const overviewSrc = readAssetSource('wsdashboard', 'overview.js');
 const convSrc = readAssetSource('wsdashboard', 'dashboard-conversation.js');
 const cardsSrc = readAssetSource('wsdashboard', 'cards.js');
@@ -393,6 +394,24 @@ function makeFreeCanvasWorld(spec, opts = {}) {
     },
   };
 }
+
+test('releasing a composer mention lets the next scroll evict its parked topic', () => {
+  const spec = Array.from({ length: 30 }, (_, i) => ({ topic: `t${i}`, height: 450 }));
+  const { ctx, nodes, bcol } = makeFreeCanvasWorld(spec);
+  vm.runInContext(selectionsSrc.match(/^  function hideMention\(keep, keepImages\) \{[\s\S]*?^  \}/m)[0], ctx);
+  const source = nodes[4];
+  const frame = makeEl('iframe', { cls: ['doc-frame'] });
+  ctx.WsBoardAnchor.select(source, { smooth: false });
+  source.querySelector('.tdoc').appendChild(frame);
+  Object.assign(ctx, { mpend: { frame }, mnote: null, mbtn: null, cimgs: null });
+  ctx.WsBoardAnchor.select(nodes[16], { smooth: false });
+  assert.equal(source.getAttribute('data-wb-offwindow'), 'parked');
+  ctx.hideMention();
+  bcol.scrollTop += 12;
+  ctx.freeScrollTick();
+  assert.equal(source.getAttribute('data-wb-offwindow'), 'hidden');
+  assert.equal(source.contains(frame), false);
+});
 
 test('1. Designated-Y upward/downward placement and ResizeObserver 0px viewport shift on k < anchor vs k >= anchor', () => {
   const spec = Array.from({ length: 20 }, (_, i) => ({ topic: `t${i}`, height: 300 + (i % 3) * 80 }));
@@ -947,7 +966,7 @@ test('6. Smooth select (mounted vs off-window), anchorMO inset preserve, and pos
   // 6b-2: Smooth select to an OFF-WINDOW card (Card 20) sets scrollTop synchronously (never smooth-scrolls across 50000px blank runway).
   scrollToCalls.length = 0;
   h.ctx.WsBoardAnchor.select(h.nodes[20], { smooth: true });
-  assert.equal(scrollToCalls.length, 0, 'off-window jump to RUNWAY_MID never uses smooth scrollTo');
+  assert.deepEqual(scrollToCalls.map(call => call.behavior), ['instant'], 'off-window jump cancels the outstanding smooth scroll');
   assert.ok(h.bcol.scrollTop > 40000, 'off-window jump synchronously moves scrollTop to Card 20 near 50000px');
   assert.equal(h.ctx.WsBoardAnchor.windowInfo().anchorIdx, 20, 'anchorIdx is 20 after off-window jump');
 

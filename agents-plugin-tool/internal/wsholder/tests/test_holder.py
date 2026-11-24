@@ -1395,50 +1395,56 @@ class WindowsPriorityQoSTest(unittest.TestCase):
         holder_mod._clear_windows_eco_qos(None)
         holder_mod._clear_windows_eco_qos(0)
 
-    def test_pipe_child_windows_creationflags_and_eco_qos(self):
-        fake_proc = mock.MagicMock()
-        fake_proc.pid = 9001
-        fake_proc._handle = 0x5555
-        fake_job = mock.MagicMock()
-        fake_job.assign.return_value = True
+    def test_pipe_child_assigns_qos_before_resuming_or_runs_without_it(self):
+        import ctypes
 
-        with (
-            mock.patch.object(holder_mod, "WINDOWS", True),
-            mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
-            mock.patch.object(holder_mod.subprocess, "Popen", return_value=fake_proc) as mock_popen,
-            mock.patch.object(holder_mod, "_clear_windows_eco_qos") as mock_clear,
-            mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", return_value=fake_job),
-        ):
-            child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
+        for attach in ("success", "assign fails", "create fails"):
+            with self.subTest(attach=attach):
+                calls = mock.Mock()
+                calls.create.return_value = (0x5555, 0x4444, 9001, 11)
+                calls.resume.return_value = 1
+                job = mock.Mock()
+                job.assign = calls.assign
+                job.close = calls.close_job
+                calls.assign.return_value = attach == "success"
+                calls.start_job.return_value = None if attach == "create fails" else job
+                winapi = mock.Mock(CreateProcess=calls.create, CloseHandle=calls.close_handle)
+                kernel = mock.Mock(ResumeThread=calls.resume)
+                msvcrt = mock.Mock(get_osfhandle=lambda fd: fd)
+                with (
+                    mock.patch.dict(sys.modules, {"_winapi": winapi, "msvcrt": msvcrt}),
+                    mock.patch.object(holder_mod, "WINDOWS", True),
+                    mock.patch.object(holder_mod.os, "set_handle_inheritable", create=True) as inherit,
+                    mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
+                    mock.patch.object(holder_mod.subprocess, "STARTF_USESTDHANDLES", 0x100, create=True),
+                    mock.patch.object(holder_mod.subprocess, "STARTUPINFO", create=True) as startup,
+                    mock.patch.object(ctypes, "WinDLL", return_value=kernel, create=True),
+                    mock.patch.object(holder_mod, "_clear_windows_eco_qos", calls.clear),
+                    mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", calls.start_job),
+                ):
+                    child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
 
-        self.assertEqual(child.pid, 9001)
-        _, kwargs = mock_popen.call_args
-        self.assertEqual(kwargs["creationflags"], 0x00000200 | 0x00000020)
-        mock_clear.assert_called_once_with(0x5555)
-        fake_job.assign.assert_called_once_with(0x5555)
-        child.after_exit()
-        child.close()
-        fake_job.close.assert_called_once_with()
-
-    def test_pipe_child_closes_qos_job_if_assign_fails(self):
-        fake_proc = mock.MagicMock()
-        fake_proc.pid = 9002
-        fake_proc._handle = 0x5556
-        fake_job = mock.MagicMock()
-        fake_job.assign.return_value = False
-
-        with (
-            mock.patch.object(holder_mod, "WINDOWS", True),
-            mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
-            mock.patch.object(holder_mod.subprocess, "Popen", return_value=fake_proc),
-            mock.patch.object(holder_mod, "_clear_windows_eco_qos"),
-            mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", return_value=fake_job),
-        ):
-            child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
-
-        fake_job.assign.assert_called_once_with(0x5556)
-        fake_job.close.assert_called_once_with()
-        self.assertIsNone(child._qos_job)
+                self.assertEqual(child.pid, 9001)
+                args = calls.create.call_args.args
+                self.assertEqual(args[4:6], (True, 0x00000200 | 0x00000020 | 0x00000004))
+                self.assertIs(args[-1], startup.return_value)
+                pipes = startup.call_args.kwargs
+                handles = [pipes["hStdInput"], pipes["hStdOutput"], pipes["hStdError"]]
+                self.assertEqual(pipes["lpAttributeList"], {"handle_list": handles})
+                self.assertEqual(inherit.call_args_list, [mock.call(handle, True) for handle in handles])
+                order = [call[0] for call in calls.mock_calls]
+                expected = ["create", "clear", "start_job"]
+                if attach != "create fails":
+                    expected.append("assign")
+                if attach == "assign fails":
+                    expected.append("close_job")
+                self.assertEqual(order, expected + ["resume", "close_handle"])
+                calls.resume.assert_called_once_with(0x4444)
+                calls.close_handle.assert_called_once_with(0x4444)
+                self.assertEqual(child._qos_job is not None, attach == "success")
+                child.after_exit()
+                child.close()
+                self.assertEqual(calls.close_job.call_count, int(attach != "create fails"))
 
     def test_conpty_child_creationflags_and_eco_qos(self):
         import ctypes

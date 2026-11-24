@@ -270,6 +270,7 @@ func TestAgentListProjectsChildActivity(t *testing.T) {
 			} else {
 				r.convs = map[string]*conv{id: {r: r, rec: tc.rec, lastErr: tc.stateError}}
 			}
+			r.indexChildLocked(tc.rec)
 			child := findAgent(t, r.AgentList(AgentCaller{Parent: parent}), id)
 			if child.Activity == nil || *child.Activity != tc.want || child.CreatedAt != created {
 				t.Errorf("activity = %+v, want %+v", child.Activity, tc.want)

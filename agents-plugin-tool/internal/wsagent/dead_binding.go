@@ -30,8 +30,14 @@ func stampClosed(rec *Record, now time.Time) {
 	rec.TurnOpen = false
 }
 
-func closeDeadRecord(rec *Record, now time.Time) {
+type deadBindingClosure struct {
+	Reason   string `json:"reason"`
+	Checkout string `json:"checkout,omitempty"`
+}
+
+func closeDeadRecord(rec *Record, now time.Time, refusal *admissionRefusal) {
 	stampClosed(rec, now)
+	rec.DeadBindingClosure = &deadBindingClosure{Reason: refusal.reason, Checkout: refusal.checkout}
 	if rec.DurableTurn != nil {
 		rec.DurableClosedTurnID = rec.DurableTurn.ID
 	}
@@ -61,7 +67,7 @@ func (c *conv) closeDeadAfterRefusal(refusal *admissionRefusal) {
 func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	c.wmu.Lock()
 	rec := c.record()
-	closeDeadRecord(&rec, c.r.opts.Now())
+	closeDeadRecord(&rec, c.r.opts.Now(), refusal)
 	if rec.HolderID == "" {
 		if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
 			c.wmu.Unlock()
@@ -69,8 +75,8 @@ func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 		}
 	}
 	// A predecessor daemon's orphan sweep protects open records only. Keep
-	// the old disk record until the holder is known gone, and re-derive the
-	// in-memory close from the release marker or agy admission on startup.
+	// the old disk record while it can still protect the holder. Startup can
+	// re-derive the close until checkout deletion removes the release marker.
 	c.r.rememberDeadBinding(rec, c.canonRoot, c.canonCwd, refusal, c.proc != nil)
 	c.mu.Lock()
 	proc, events, turn := c.proc, c.events, c.turn
@@ -142,6 +148,7 @@ func (c *conv) drainClosedProcess(events <-chan Event) {
 type deadBindingOccupancy struct {
 	rec                 Record
 	root, cwd, checkout string
+	closurePersisted    bool
 }
 
 // DrainDeadBindingMail handles mail queued across or after an automatic
@@ -168,10 +175,7 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.deadRefusals == nil {
-		r.deadRefusals = make(map[string]*admissionRefusal)
-	}
-	r.deadRefusals[rec.ReplyID] = refusal
+	r.rememberDeadRefusalLocked(rec.ReplyID, refusal)
 	if rec.HolderID == "" && !process {
 		return
 	}
@@ -179,6 +183,13 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 		r.deadBindings = make(map[string]deadBindingOccupancy)
 	}
 	r.deadBindings[rec.ReplyID] = deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout}
+}
+
+func (r *Runner) rememberDeadRefusalLocked(id string, refusal *admissionRefusal) {
+	if r.deadRefusals == nil {
+		r.deadRefusals = make(map[string]*admissionRefusal)
+	}
+	r.deadRefusals[id] = refusal
 }
 
 func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []retiredPiBinding {
@@ -252,7 +263,7 @@ func (r *Runner) discardDeadClaims(inbox string, rec Record) {
 
 func (r *Runner) closeDeadAtStart(rec Record, refusal *admissionRefusal, binding resolvedAgentBinding) {
 	now := r.opts.Now()
-	closeDeadRecord(&rec, now)
+	closeDeadRecord(&rec, now, refusal)
 	r.rememberDeadBinding(rec, binding.root, binding.cwd, refusal, false)
 	r.loadClosed(rec)
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
@@ -281,6 +292,39 @@ func (r *Runner) closeDeadAtStart(rec Record, refusal *admissionRefusal, binding
 	r.notify(rec.ReplyID, rec.Root)
 }
 
+// persistRetainedReleaseClosures makes a holder-backed release durable
+// before deleting its marker. The ended rows that can be purged do not need
+// an extra record write.
+func (r *Runner) persistRetainedReleaseClosures(worktree string, ended map[string]bool) error {
+	r.deadClosureMu.Lock()
+	defer r.deadClosureMu.Unlock()
+	var retained []Record
+	r.mu.Lock()
+	for id, binding := range r.deadBindings {
+		rec := binding.rec
+		if rec.HolderID == "" || binding.closurePersisted || !worktreePathContains(worktree, binding.checkout) {
+			continue
+		}
+		if ended[id] && !r.hasLiveDescendantsLocked(safeStopParent(id, rec.Lead), nil) {
+			continue
+		}
+		retained = append(retained, rec)
+	}
+	r.mu.Unlock()
+	for _, rec := range retained {
+		id := rec.ReplyID
+		if err := r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec); err != nil {
+			return fmt.Errorf("session %s: persist released checkout closure: %w", id, err)
+		}
+		r.mu.Lock()
+		binding := r.deadBindings[id]
+		binding.closurePersisted = true
+		r.deadBindings[id] = binding
+		r.mu.Unlock()
+	}
+	return nil
+}
+
 // finalizeDeadHolders runs on a complete startup inventory. An attached or
 // incomplete inventory leaves the predecessor's open record recoverable.
 func (r *Runner) deadHolderRecords() []Record {
@@ -296,6 +340,8 @@ func (r *Runner) deadHolderRecords() []Record {
 }
 
 func (r *Runner) finalizeDeadHolders(records []Record, listed []wsholder.Info) {
+	r.deadClosureMu.Lock()
+	defer r.deadClosureMu.Unlock()
 	present := make(map[string]bool, len(listed))
 	for _, info := range listed {
 		present[info.ID] = true

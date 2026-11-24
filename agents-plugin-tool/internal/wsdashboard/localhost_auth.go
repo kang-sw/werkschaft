@@ -105,7 +105,7 @@ func accessExempt(r *http.Request) bool {
 		return loopbackExemptCaller(r) // any method: the route answers 405 itself
 	case "/shutdown", FullStopPath, "/nudge", companionChangedPath:
 		return r.Method == http.MethodPost && loopbackExemptCaller(r)
-	case wscred.TokenRoutePath, credentialChangePath:
+	case wscred.TokenRoutePath, credentialChangePath, EndpointChangePath:
 		// The token route checks the session bearer, the change route the
 		// endpoint token (credential_routes.go).
 		return r.Method == http.MethodPost && loopbackExemptCaller(r)

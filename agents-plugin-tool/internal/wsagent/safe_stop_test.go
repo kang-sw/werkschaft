@@ -1,9 +1,20 @@
 package wsagent
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -171,4 +182,450 @@ func TestSafeStopStatesAndSessionMeta(t *testing.T) {
 			t.Fatalf("direct fakeProc worker SessionMeta = %+v, %v; want HasProcess=true SafeStop=false", meta, ok)
 		}
 	})
+}
+
+func TestSafeOnlyStopChecksStateAtAdmission(t *testing.T) {
+	h := newLeadHarness(t)
+	h.opts.Trusted = func(*http.Request) (bool, bool) { return true, true }
+	h.start()
+	id, holder := h.settledLead()
+	if st := h.state(id); !st.SafeStop {
+		t.Fatalf("idle session should advertise safe Stop: %+v", st)
+	}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/agents/"+id+"/stop", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		out := httptest.NewRecorder()
+		h.runner.Handler().ServeHTTP(out, req)
+		return out
+	}
+
+	h.send(id, "work after the browser read idle")
+	h.holders.out(holder, stateLine(HarnessRunning))
+	eventually(t, "new turn running", func() bool { return h.state(id).Status == StatusRunning })
+	if out := post(`{"safe_only":true}`); out.Code != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("busy safe-only stop: status %d, body %s", out.Code, out.Body)
+	}
+
+	h.holders.out(holder, replyLine("u2", "done"), resultLine(), stateLine(HarnessIdle))
+	h.idle(id)
+	if out := post(`{"safe_only":true}`); out.Code != http.StatusOK || h.state(id).Process {
+		t.Fatalf("idle safe-only stop: status %d, body %s", out.Code, out.Body)
+	}
+
+	h.send(id, "wake for a legacy stop")
+	eventually(t, "new process running", func() bool { return h.state(id).Process })
+	if out := post(""); out.Code != http.StatusOK || h.state(id).Process {
+		t.Fatalf("legacy stop: status %d, body %s", out.Code, out.Body)
+	}
+}
+
+func TestSafeOnlyStopRefusesOverlappingDescendantTransitions(t *testing.T) {
+	h := newLeadHarness(t)
+	h.opts.Trusted = func(*http.Request) (bool, bool) { return true, true }
+	h.start()
+	id, _ := h.settledLead()
+	parent := &ParentRef{Kind: ParentLead, ReplyID: id}
+	a := &conv{r: h.runner, rec: Record{ReplyID: "child-a", Parent: parent}, lastReg: h.opts.Now()}
+	b := &conv{r: h.runner, rec: Record{ReplyID: "child-b", Parent: parent}, lastReg: h.opts.Now(), turn: true}
+	h.runner.mu.Lock()
+	h.runner.convs[a.rec.ReplyID], h.runner.convs[b.rec.ReplyID] = a, b
+	h.runner.indexChildLocked(a.rec)
+	h.runner.indexChildLocked(b.rec)
+	h.runner.mu.Unlock()
+	defer func() {
+		h.runner.mu.Lock()
+		delete(h.runner.convs, a.rec.ReplyID)
+		delete(h.runner.convs, b.rec.ReplyID)
+		h.runner.mu.Unlock()
+	}()
+
+	// B has work while A is idle. Keep B locked while A accepts work and
+	// B settles, so there is no point at which both descendants are safe.
+	b.mu.Lock()
+	a.mu.Lock()
+	a.turn = true
+	b.turn = false
+	a.mu.Unlock()
+	out := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/agents/"+id+"/stop", strings.NewReader(`{"safe_only":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.runner.Handler().ServeHTTP(rec, req)
+		out <- rec
+	}()
+	select {
+	case rec := <-out:
+		b.mu.Unlock()
+		if rec.Code != http.StatusConflict || !h.state(id).Process {
+			t.Fatalf("contended safe-only stop: status %d, body %s", rec.Code, rec.Body)
+		}
+	case <-time.After(2 * time.Second):
+		b.mu.Unlock()
+		<-out
+		t.Fatal("safe Stop waited for a descendant transition instead of refusing admission")
+	}
+}
+
+func TestSafeOnlyStopAllowsUnrelatedLeadContention(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, _ := h.settledLead()
+	otherID, _ := h.settledLead()
+	other := h.runner.conv(otherID)
+	other.mu.Lock()
+	out := make(chan reply, 1)
+	var advisorySafe bool
+	go func() {
+		advisorySafe = h.state(id).SafeStop
+		out <- h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+	}()
+	select {
+	case res := <-out:
+		other.mu.Unlock()
+		if !advisorySafe || res.status != http.StatusOK || h.state(id).Process || !h.state(otherID).Process {
+			t.Fatalf("safe-only stop with a separate lead locked: advisory safe_stop=%v, status %d, body %s",
+				advisorySafe, res.status, res.body)
+		}
+	case <-time.After(2 * time.Second):
+		other.mu.Unlock()
+		<-out
+		t.Fatal("safe Stop waited on a separate lead")
+	}
+}
+
+// releaseNotifyingRunner can pause the release loop immediately after the ended
+// registration becomes visible to the dashboard's index.
+type releaseNotifyingRunner struct {
+	*Runner
+	afterNotify func(string)
+}
+
+func (r releaseNotifyingRunner) StartForPublication(notify func(string, string), serving <-chan struct{}) {
+	r.Runner.StartForPublication(func(id, project string) {
+		notify(id, project)
+		r.afterNotify(id)
+	}, serving)
+}
+
+func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
+	testReleasedWorkerDelete(t, false, false)
+}
+
+func TestDeadBindingCheckoutDeleteSurvivesReplacement(t *testing.T) {
+	testReleasedWorkerDelete(t, true, false)
+}
+
+func TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow(t *testing.T) {
+	testReleasedWorkerDelete(t, true, true)
+}
+
+func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
+	t.Helper()
+	h, _ := configureHeldWorkerHarness(t)
+	mail, refusals := newFakeMail(), &wakeRefusals{}
+	if restart {
+		h.opts.Mail = mail
+		h.opts.WakeRefused = refusals.add
+	}
+	worktree, err := filepath.EvalSymlinks(releaseTestWorktree(t, h.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.runner = NewRunner(h.opts)
+	opts := wsdashboard.DaemonOptions{
+		Dir: h.dir, Home: t.TempDir(), Agents: h.runner, Sessions: leadSessions{},
+		WorkspacesFile: filepath.Join(t.TempDir(), "workspaces.json"),
+	}
+	var pauseID atomic.Pointer[string]
+	ended, resume := make(chan struct{}), make(chan struct{})
+	var paused, resumed sync.Once
+	unpause := func() { resumed.Do(func() { close(resume) }) }
+	if pauseRelease {
+		opts.Agents = releaseNotifyingRunner{h.runner, func(id string) {
+			if target := pauseID.Load(); target == nil || id != *target {
+				return
+			}
+			row, err := wsdashboard.ReadRegistration(h.dir, id)
+			if err == nil && !row.Live(time.Now()) {
+				paused.Do(func() { close(ended); <-resume })
+			}
+		}}
+	}
+	d, err := wsdashboard.StartDaemon(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	t.Cleanup(h.holders.drain)
+	defer unpause()
+	base := fmt.Sprintf("http://127.0.0.1:%d", d.Endpoint().Port)
+	cookie := daemonCookieForTest(t, d)
+	post := func(path string, body any) reply {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, base+path, bytes.NewReader(raw))
+		req.RemoteAddr = localBrowser.remote
+		req.Header.Set("Origin", base)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		res := httptest.NewRecorder()
+		d.Handler().ServeHTTP(res, req)
+		return reply{res.Code, res.Body.String()}
+	}
+	if res := post("/rail/workspaces/add", map[string]string{"path": h.root}); res.status != http.StatusOK {
+		t.Fatalf("add workspace: status %d, body %s", res.status, res.body)
+	}
+	leadID, _ := h.settledLead()
+	lead := ParentRef{Kind: ParentLead, ReplyID: leadID}
+	spawn := func(parent ParentRef, root, prompt string) (string, string) {
+		t.Helper()
+		st, err := h.runner.Spawn(SpawnSpec{
+			Profile:            AgentWorkerProfile(BackendClaude),
+			PermissionLevel:    PermissionWorkdirWrite,
+			delegatedAuthority: true,
+			Root:               root,
+			Prompt:             prompt,
+			Tier:               "small",
+			Parent:             &parent,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		holder := h.holder(st.ID)
+		h.holders.out(holder, stateLine(HarnessRunning), initLine(prompt, "dontAsk"))
+		eventually(t, prompt+" running", func() bool { return h.state(st.ID).Status == StatusRunning })
+		return st.ID, holder
+	}
+	middleID, middleHolder := spawn(lead, worktree, "middle")
+	middleKey := h.record(middleID).WSKey
+	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
+	assertHolderRunning := func(when string) {
+		t.Helper()
+		for _, holder := range h.holders.List().Holders {
+			if holder.ID == middleHolder && holder.Child != nil && holder.Child.State == "running" {
+				return
+			}
+		}
+		t.Errorf("released worker's holder is no longer running %s", when)
+	}
+	if st := h.state(leadID); !st.Process || st.SafeStop {
+		t.Fatalf("lead before checkout release = %+v, want a process and unsafe Stop", st)
+	}
+
+	clock := newTestClock()
+	setClock(clock, h.opts.Now())
+	at := releaseAfterBindings(t, clock, worktree)
+	outcome := make(chan []ReleasedConversation, 1)
+	release := func() { outcome <- h.runner.CheckoutReleased(worktree, at, true) }
+	checkRelease := func() {
+		t.Helper()
+		var released []ReleasedConversation
+		select {
+		case released = <-outcome:
+		case <-time.After(5 * time.Second):
+			t.Fatal("release did not finish")
+		}
+		if len(released) != 1 || released[0].Address != AgentAddress(middleID) || released[0].State != AgentClosed {
+			t.Fatalf("release outcomes = %+v, want only the middle worker closed", released)
+		}
+	}
+	checkTree := func(r *Runner) {
+		t.Helper()
+		rows := SpawnTree(lead, r.Children)
+		if len(rows) != 2 || rows[0].ID != middleID || rows[0].Status != StatusClosed ||
+			rows[1].ID != leafID || rows[1].Parent == nil || rows[1].Parent.ReplyID != middleID {
+			t.Fatalf("spawn tree = %+v, want the closed middle worker and its grandchild", rows)
+		}
+	}
+	if pauseRelease {
+		pauseID.Store(&middleID)
+		go release()
+		wait(t, "ended registration", ended)
+		if h.runner.conv(middleID) == nil {
+			t.Fatal("release moved the worker out of the conversation registry before delete")
+		}
+	} else {
+		release()
+		checkRelease()
+		checkTree(h.runner)
+		if st := h.state(leafID); st.Status != StatusRunning {
+			t.Fatalf("grandchild after release = %+v, want running", st)
+		}
+	}
+	if restart {
+		assertHolderRunning("before deletion")
+	}
+
+	stop := func() reply {
+		return post("/agents/"+leadID+"/stop", map[string]bool{"safe_only": true})
+	}
+	assertStopRefused := func(when string) {
+		t.Helper()
+		st := h.state(leadID)
+		meta, ok := h.runner.SessionMeta(leadID)
+		res := stop()
+		if !st.Process || st.SafeStop || !ok || !meta.HasProcess || meta.SafeStop ||
+			res.status != http.StatusConflict || !h.state(leadID).Process {
+			t.Fatalf("%s: advisory safe_stop=%v, metadata safe_stop=%v, Stop status=%d, body=%s",
+				when, st.SafeStop, meta.SafeStop, res.status, res.body)
+		}
+	}
+	if !pauseRelease {
+		assertStopRefused("busy grandchild before checkout delete")
+	}
+
+	d.Index().Refresh()
+	if s, ok := d.Index().Session(middleID); !ok || s.Registration.Live(time.Now()) {
+		t.Fatalf("dashboard session for the released worker = %+v, present=%v, want ended", s, ok)
+	}
+	if res := post("/rail/worktrees/delete", map[string]string{"workspace": h.root, "path": worktree}); res.status != http.StatusOK {
+		t.Fatalf("delete checkout: status %d, body %s", res.status, res.body)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("deleted checkout: stat error = %v, want missing directory", err)
+	}
+	if pauseRelease {
+		unpause()
+		checkRelease()
+	}
+	if restart {
+		_, dirErr := os.Stat(wsdashboard.SessionDir(h.dir, middleID))
+		d.Close()
+		h.holders.restart()
+		h.runner = NewRunner(h.opts)
+		opts.Agents = h.runner
+		successor, err := wsdashboard.StartDaemon(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(successor.Close)
+		if dirErr != nil {
+			t.Errorf("retained session directory after checkout delete: %v", dirErr)
+		}
+		if c := h.runner.conv(middleID); c != nil {
+			t.Errorf("released worker rejoined after checkout deletion under holder %s", c.record().HolderID)
+		}
+		wait(t, "successor holder sweep", h.runner.rejoined)
+		assertHolderRunning("after the replacement daemon's holder sweep")
+		mail.deliverFrom(middleKey, leadID, "mail for the released worker")
+		h.runner.DrainDeadBindingMail(middleID)
+		if got := refusals.list(); len(got) != 1 || got[0][0] != leadID || got[0][1] != middleID || !strings.Contains(got[0][2], worktree) {
+			t.Errorf("mail after replacement produced notices %v, want a release refusal naming %s", got, worktree)
+		}
+		checkTree(h.runner)
+		return
+	}
+	assertStopRefused("busy grandchild after checkout delete")
+	if _, err := readRecord(wsdashboard.SessionDir(h.dir, middleID)); err != nil {
+		t.Fatalf("session record for restart after checkout delete: %v", err)
+	}
+
+	h.holders.out(leafHolder, recoveryWorkerReply("done")...)
+	h.idle(leafID)
+	if st := h.state(leadID); !st.SafeStop {
+		t.Fatalf("lead with idle grandchild and closed middle worker = %+v, want safe Stop", st)
+	}
+	if res := stop(); res.status != http.StatusOK || h.state(leadID).Process {
+		t.Fatalf("safe-only Stop after the grandchild settled: status %d, body %s", res.status, res.body)
+	}
+}
+
+// execPublishingHolder publishes a new immutable count snapshot at the
+// holder check inside the Stop admission.
+type execPublishingHolder struct {
+	Process
+	holderProcess
+	publish func()
+	once    sync.Once
+}
+
+func (p *execPublishingHolder) HolderInfo() (string, int, bool) {
+	p.once.Do(p.publish)
+	return p.holderProcess.HolderInfo()
+}
+
+func TestSafeOnlyStopScopesExecPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target bool
+		status int
+	}{
+		{name: "separate lead", status: http.StatusOK},
+		{name: "target lead", target: true, status: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLeadHarness(t).start()
+			id, _ := h.settledLead()
+			owner, _ := h.settledLead()
+			if tc.target {
+				owner = id
+			}
+			root := h.runner.conv(id)
+			counts := map[string]int{owner: 1}
+			if !root.do(func() {
+				root.mu.Lock()
+				defer root.mu.Unlock()
+				root.proc = &execPublishingHolder{
+					Process: root.proc, holderProcess: root.proc.(holderProcess),
+					publish: func() { h.runner.exec.live.Store(&counts) },
+				}
+			}) {
+				t.Fatal("target conversation exited before Stop")
+			}
+			res := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+			if res.status != tc.status || h.runner.execLive(owner) != 1 || h.state(id).Process != tc.target {
+				t.Fatalf("safe-only stop with a new exec count for %s: status %d, body %s", owner, res.status, res.body)
+			}
+		})
+	}
+}
+
+func TestSafeOnlyStopRefusesPendingDescendantSpawn(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, _ := h.settledLead()
+	parent := &ParentRef{Kind: ParentLead, ReplyID: id}
+	child := &conv{r: h.runner, rec: Record{ReplyID: "child", Parent: parent}, lastReg: h.opts.Now()}
+	h.runner.mu.Lock()
+	h.runner.convs[child.rec.ReplyID] = child
+	h.runner.indexChildLocked(child.rec)
+	h.runner.mu.Unlock()
+	defer func() {
+		h.runner.mu.Lock()
+		delete(h.runner.convs, child.rec.ReplyID)
+		delete(h.runner.closed, child.rec.ReplyID)
+		h.runner.mu.Unlock()
+	}()
+
+	_, release, err := h.runner.reserveSpawnWidth(ParentRef{Kind: ParentConversation, ReplyID: child.rec.ReplyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	post := func() reply {
+		return h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+	}
+	if res := post(); res.status != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("safe-only stop during a pending grandchild spawn: status %d, body %s", res.status, res.body)
+	}
+
+	// Retain the middle row after close while its spawn is still in flight.
+	h.runner.mu.Lock()
+	delete(h.runner.convs, child.rec.ReplyID)
+	h.runner.closed[child.rec.ReplyID] = child.rec
+	h.runner.mu.Unlock()
+	if st := h.state(id); st.SafeStop {
+		t.Fatal("pending grandchild spawn behind a closed worker advertised safe Stop")
+	}
+	if res := post(); res.status != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("safe-only stop during a pending spawn behind a closed worker: status %d, body %s", res.status, res.body)
+	}
+	release()
+	if res := post(); res.status != http.StatusOK || h.state(id).Process {
+		t.Fatalf("safe-only stop after releasing spawn reservation: status %d, body %s", res.status, res.body)
+	}
 }

@@ -6,13 +6,10 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wscompact"
 )
 
-type compactionState struct {
-	ChildrenInFlight []string
-	ChildrenFinished []string
-	ExecJobs         []string
-}
+type compactionState = wscompact.CompactionState
 
 type compactionExecLister interface {
 	List(owner string) ([]execjob.HostedView, int)

@@ -1,0 +1,51 @@
+.account-banner {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 12px 8px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-primary) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-primary) 8%, var(--wb-card));
+  box-shadow: inset 3px 0 var(--wb-primary), var(--wb-shadow);
+  color: var(--wb-fg);
+  font-size: 12px;
+}
+.account-banner[hidden] { display: none; }
+:root:has(> body > .dwrap > .account-banner:not([hidden])) { --account-banner-space: calc(var(--account-banner-height, 0px) + 8px); }
+:root[data-shell] .frames { inset-block-start: var(--account-banner-space, 0px); }
+:root[data-shell]:not([data-fdim]) .account-banner { pointer-events: auto; }
+@media (min-width: 1600px) {
+  .account-banner { margin-inline-start: calc(348px + var(--sh-stage-side, 0px)); }
+  .dwrap:has(> .account-banner:not([hidden])) .dbody > .rail {
+    margin-block-start: calc(-1 * (var(--toph) + var(--account-banner-space, 0px)));
+  }
+}
+.account-banner-copy { flex: 1 1 420px; min-width: 0; }
+.account-banner-copy strong { font-size: 13px; }
+.account-banner-copy p { margin: 3px 0 0; line-height: 1.45; }
+.account-banner .account-link { display: inline-block; margin-top: 3px; color: var(--wb-primary); font-weight: 700; }
+.account-banner-local { color: var(--wb-muted-fg); }
+.account-banner-error { color: var(--wb-fail); }
+.account-banner-controls { margin-inline-start: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.account-banner-controls .btn {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font: 700 11.5px var(--wb-sans);
+  cursor: pointer;
+}
+.account-banner-controls .btn:hover:not(:disabled) { background: var(--wb-muted); }
+.account-banner-controls .btn.pri {
+  border-color: var(--wb-primary);
+  background: var(--wb-primary);
+  color: var(--wb-primary-fg);
+}
+.account-banner-controls .btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.account-banner-controls .btn:disabled { opacity: .48; cursor: not-allowed; }
+.account-banner-controls .account-banner-close { padding: 0; width: 28px; font-size: 16px; }

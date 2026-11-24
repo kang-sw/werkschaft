@@ -365,6 +365,48 @@ test('a newly mounted tail keeps the runway through a scroll reversal while card
   }
 });
 
+test('a smooth topic jump holds its resting offset when a frame resizes in flight', async () => {
+  const browser = await launchBrowser();
+  try {
+    async function jump(grow) {
+      const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 12 });
+      try {
+        const nativeEnd = await page.evaluate(grow => new Promise(resolve => {
+          const col = document.getElementById('bcol');
+          const target = document.getElementById('topic-1');
+          if (grow) {
+            col.addEventListener('scroll', () => {
+              window.__queueFrameHeight(document.querySelector('#topic-0 iframe'), 180);
+            }, { once: true });
+          }
+          col.addEventListener('scrollend', () => resolve(col.scrollTop), { once: true });
+          window.WsBoardAnchor.select(target, { smooth: true });
+        }), grow);
+        await waitFrames(page);
+        const final = await page.evaluate(() => {
+          const col = document.getElementById('bcol');
+          const target = document.getElementById('topic-1');
+          return {
+            top: col.scrollTop,
+            offset: target.getBoundingClientRect().top - col.getBoundingClientRect().top,
+          };
+        });
+        return { nativeEnd, ...final };
+      } finally {
+        await ctx.close();
+      }
+    }
+    const control = await jump(false);
+    const resized = await jump(true);
+    assert.ok(control.nativeEnd > 200, 'the control reaches a distinct target');
+    assert.ok(Math.abs(control.nativeEnd - resized.nativeEnd) <= 3, 'layout leaves the in-flight native destination alone');
+    assert.ok(resized.top > resized.nativeEnd + 130, 'layout correction runs after the smooth scroll finishes');
+    assert.ok(Math.abs(control.offset - resized.offset) <= 3, 'the topic holds the original resting offset');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('Part 3: Overview fast exit (0 data-overview-motion tags) + 0 idle rAF while open', async () => {
   const browser = await launchBrowser();
   try {

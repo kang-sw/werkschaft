@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -119,6 +121,7 @@ func TestDeliverCronSteersMidTurnAndDrainsWhenIdle(t *testing.T) {
 
 type cronPlanStatus struct {
 	allowed bool
+	live    *atomic.Bool
 }
 
 func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Credential, error) {
@@ -126,6 +129,9 @@ func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Cred
 }
 
 func (s cronPlanStatus) Status() ([]wscred.ProviderStatus, error) {
+	if s.live != nil {
+		s.allowed = s.live.Load()
+	}
 	return []wscred.ProviderStatus{{Provider: wscred.ProviderOpenAI, OpenAIAccounts: []wscred.OpenAIAccountStatus{{
 		Active: true, SignedIn: true, PlanEnabled: true, BackgroundConsent: &s.allowed,
 	}}}}, nil
@@ -165,6 +171,18 @@ func waitForCronConsentRefusal(t *testing.T, h *leadHarness, id string) {
 	})
 }
 
+type cronPlanPromptStatus struct {
+	cronPlanStatus
+	prompt chan struct{}
+}
+
+func (s cronPlanPromptStatus) RequestOpenAIBackgroundConsent() {
+	select {
+	case s.prompt <- struct{}{}:
+	default:
+	}
+}
+
 func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -198,7 +216,9 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 				},
 				reply, reply, reply,
 			}}
-			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{allowed: tc.allowed}})
+			prompt := make(chan struct{}, 1)
+			credentials := cronPlanPromptStatus{cronPlanStatus: cronPlanStatus{allowed: tc.allowed}, prompt: prompt}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: credentials})
 			id := h.lead(BackendWerk, LeadOptions{Provider: string(tc.provider), Model: "fixture-model"}).ID
 			h.send(id, "operator prompt")
 			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator prompt") {
@@ -223,8 +243,10 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 			if !c.do(c.steer) {
 				t.Fatal("the conversation stopped before steering")
 			}
-			if ids := h.runner.CronHeld(id); (len(ids) == 0) != tc.steers {
-				t.Fatalf("held cron during operator turn = %v, steer expected %v", ids, tc.steers)
+			pending, err := wsinbox.PendingClaims(c.inbox, nil)
+			if err != nil || tc.steers && len(pending) != 0 ||
+				!tc.steers && (len(pending) != 1 || pending[0].CronClaim != wsinbox.CronClaimRefused) {
+				t.Fatalf("pending cron during operator turn = %+v, %v, steer expected %v", pending, err, tc.steers)
 			}
 			close(release)
 			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator steer") || req.contains(cronConsentPrompt) != tc.steers {
@@ -232,9 +254,15 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 			}
 			if tc.steers {
 				h.idle(id)
+				if len(prompt) != 0 {
+					t.Fatal("an admitted cron entry asked for consent")
+				}
 				return
 			}
 			waitForCronConsentRefusal(t, h, id)
+			if len(prompt) != 1 {
+				t.Fatal("a refused cron entry did not ask for consent")
+			}
 			assertNextOperator := func(text string) {
 				t.Helper()
 				h.send(id, text)
@@ -278,7 +306,8 @@ func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
 			}
 		},
 	}}
-	h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{}})
+	var consent atomic.Bool
+	h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
 	var failed atomic.Bool
 	h.opts.beforeDurableWrite = func(rec Record) error {
 		if rec.LastTurn != nil && rec.LastTurn.Result.Status == TurnFailed && len(rec.DurableInboxClaims) > 0 && !failed.Swap(true) {
@@ -314,6 +343,7 @@ func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
 		t.Fatalf("operator settlement covered the deferred send: %+v", rec.LastTurn)
 	}
 	h.runner.Close()
+	consent.Store(true)
 	fleet.start(h)
 	waitForCronConsentRefusal(t, h, id)
 	if count := model.requestCount(); count != 1 {
@@ -633,5 +663,338 @@ func TestForgetClosedRemovesAHostedLeadsStoredSchedules(t *testing.T) {
 	}
 	if got := rows(); got != 0 {
 		t.Fatalf("a refused add wrote %d rows", got)
+	}
+}
+
+func TestWerkCronSteeringRecoversClaimAfterConsentRevocation(t *testing.T) {
+	for _, tc := range []struct{ operator, authorized bool }{
+		{true, true}, {true, false}, {false, true}, {false, false},
+	} {
+		t.Run(fmt.Sprintf("operator=%t/authorized=%t", tc.operator, tc.authorized), func(t *testing.T) {
+			requests := make(chan cronModelRequest, 4)
+			var consent, restarting atomic.Bool
+			consent.Store(true)
+			block := func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+				requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){block, block}}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
+			h.opts.beforeDurableWrite = func(rec Record) error {
+				if len(rec.DurableSteers) > 0 && !restarting.Load() {
+					return errors.New("simulated interruption before committing cron steer")
+				}
+				return nil
+			}
+			h.runner.Close()
+			fleet.start(h)
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+			if _, err := h.runner.send(id, "original turn input", tc.operator); err != nil {
+				t.Fatal(err)
+			}
+			if req := nextCronModelRequest(t, requests); req.interactive != tc.operator {
+				t.Fatalf("original turn interactive = %v, want %v", req.interactive, tc.operator)
+			}
+			c := h.runner.conv(id)
+			original := c.record().DurableTurn.ID
+			if tc.authorized {
+				if ok, err := h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt); !ok || err != nil {
+					t.Fatalf("DeliverCron = %v, %v", ok, err)
+				}
+				eventually(t, "steer commit interrupted", func() bool { return strings.Contains(h.state(id).Error, "save steering") })
+			} else {
+				// Simulate a crash just after the initial rename, before
+				// evidence was recorded.
+				if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{
+					Parts: []string{cronConsentPrompt}, Steer: true, Cron: &cronConsentMark,
+				}, h.opts.Now()); err != nil {
+					t.Fatal(err)
+				}
+				held, err := wsinbox.Held(c.inbox)
+				if err != nil || len(held) != 1 {
+					t.Fatalf("held = %+v, %v", held, err)
+				}
+				if claims, err := wsinbox.ClaimInputs(c.inbox, held); err != nil || len(claims) != 1 {
+					t.Fatalf("claim = %+v, %v", claims, err)
+				}
+			}
+			h.runner.Close()
+			consent.Store(false)
+			restarting.Store(true)
+			fleet.start(h)
+			req := nextCronModelRequest(t, requests)
+			if req.interactive != tc.operator || req.contains(cronConsentPrompt) != tc.authorized {
+				t.Fatalf("resumed request interactive=%v, scheduled text=%v, want %v and %v",
+					req.interactive, req.contains(cronConsentPrompt), tc.operator, tc.authorized)
+			}
+			recovered := h.runner.conv(id).record()
+			if recovered.DurableTurn == nil || recovered.DurableTurn.ID != original || recovered.DurableTurn.Operator != tc.operator {
+				t.Fatalf("resumed turn = %+v", recovered.DurableTurn)
+			}
+			if !tc.authorized {
+				if len(recovered.DurableSteers) != 0 {
+					t.Fatalf("unclassified steer became interactive: %+v", recovered.DurableSteers)
+				}
+				pending, err := wsinbox.PendingClaims(c.inbox, nil)
+				if err != nil || len(pending) != 1 || pending[0].CronClaim != wsinbox.CronClaimRefused {
+					t.Fatalf("recovered refusal = %+v, %v", pending, err)
+				}
+			}
+		})
+	}
+}
+
+type cronClaimStore struct {
+	*wscred.Store
+	atClaim func(func(bool))
+}
+
+func (s cronClaimStore) WithOpenAIBackgroundConsent(claim func(bool)) {
+	s.atClaim(claim)
+}
+
+func newCronClaimStore(t *testing.T) *wscred.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "auth", wscred.FileName)
+	// Use the credential writer to create the owner-only file on both Unix
+	// and Windows. Seed a registration before opening the test's store.
+	_, err := wscred.NewStore(path).Apply(wscred.Change{
+		Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret("fixture"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schema_version":1,"providers":{"openai":{"kind":"siwc","active":"fixture","accounts":{"fixture":{"client_id":"fixture","issuer":"fixture","subject":"fixture","background_consent":true}}}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return wscred.NewStore(path)
+}
+
+func TestWerkCronClaimSerializesWithConsentRevocation(t *testing.T) {
+	for _, tc := range []struct{ active, claimFirst bool }{
+		{false, false}, {false, true}, {true, false}, {true, true},
+	} {
+		t.Run(fmt.Sprintf("active=%t/claim-first=%t", tc.active, tc.claimFirst), func(t *testing.T) {
+			store := newCronClaimStore(t)
+			atClaim := make(chan struct{})
+			proceed := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(proceed) })
+			defer unblock()
+			type evidence struct {
+				pending []wsinbox.Record
+				err     error
+			}
+			claimed := make(chan evidence, 1)
+			var entered atomic.Bool
+			var inbox string
+			credentials := cronClaimStore{Store: store, atClaim: func(claim func(bool)) {
+				if entered.Swap(true) {
+					store.WithOpenAIBackgroundConsent(claim)
+					return
+				}
+				pause := func() {
+					close(atClaim)
+					<-proceed
+				}
+				if !tc.claimFirst {
+					pause()
+				}
+				store.WithOpenAIBackgroundConsent(func(allowed bool) {
+					if tc.claimFirst {
+						pause()
+					}
+					claim(allowed)
+					pending, err := wsinbox.PendingClaims(inbox, nil)
+					claimed <- evidence{pending, err}
+				})
+			}}
+			requests := make(chan cronModelRequest, 4)
+			finishActive := make(chan struct{})
+			respond := func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+				requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+				return werkMessage("completed")(ctx, req)
+			}
+			steps := []func(context.Context, werk.Request) (*werk.Response, error){respond, respond}
+			if tc.active {
+				steps = append([]func(context.Context, werk.Request) (*werk.Response, error){
+					func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+						requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+						select {
+						case <-finishActive:
+							if !tc.claimFirst {
+								return nil, errors.New("failed background request")
+							}
+							return werkMessage("completed")(ctx, req)
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+					},
+				}, steps...)
+			}
+			model := &werkModel{steps: steps}
+			h, _, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: credentials})
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+			inbox = h.runner.conv(id).inbox
+			if tc.active {
+				if _, err := h.runner.send(id, "active background prompt", false); err != nil {
+					t.Fatal(err)
+				}
+				if req := nextCronModelRequest(t, requests); req.interactive {
+					t.Fatal("the running turn must be a background turn")
+				}
+			}
+			if ok, err := h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt); !ok || err != nil {
+				t.Fatalf("DeliverCron = %v, %v", ok, err)
+			}
+			select {
+			case <-atClaim:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the runner bypassed the credential lock at the cron claim")
+			}
+			revoking, revoked := make(chan struct{}), make(chan error, 1)
+			go func() {
+				close(revoking)
+				revoked <- store.SetOpenAIBackgroundConsent("", false)
+			}()
+			<-revoking
+			waitRevocation := func() {
+				t.Helper()
+				select {
+				case err := <-revoked:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("revocation did not complete")
+				}
+			}
+			want := wsinbox.CronClaimRefused
+			if tc.claimFirst {
+				want = wsinbox.CronClaimAuthorized
+			} else {
+				waitRevocation()
+			}
+			unblock()
+			select {
+			case got := <-claimed:
+				if got.err != nil || len(got.pending) != 1 || got.pending[0].CronClaim != want {
+					t.Fatalf("claim at the credential boundary = %+v, %v, want %q", got.pending, got.err, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the runner did not publish claim evidence")
+			}
+			if tc.claimFirst {
+				waitRevocation()
+			}
+			if tc.active {
+				// Let the steer or refusal finish crossing into the runner's
+				// durable state before ending the current model request.
+				h.runner.conv(id).do(func() {})
+				close(finishActive)
+			}
+			if tc.claimFirst {
+				if req := nextCronModelRequest(t, requests); req.interactive || !req.contains(cronConsentPrompt) {
+					t.Fatalf("authorized scheduled input did not reach the background request: %+v", req)
+				}
+				return
+			}
+			waitForCronConsentRefusal(t, h, id)
+			h.send(id, "operator after revocation")
+			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator after revocation") || req.contains(cronConsentPrompt) {
+				t.Fatalf("refused scheduled input was not isolated: %+v", req)
+			}
+		})
+	}
+}
+
+func TestWerkCronIdleBatchRecoversClaimAfterConsentRevocation(t *testing.T) {
+	for _, authorized := range []bool{true, false} {
+		t.Run(fmt.Sprintf("authorized=%t", authorized), func(t *testing.T) {
+			requests := make(chan cronModelRequest, 4)
+			var consent, restarting atomic.Bool
+			consent.Store(true)
+			const operator = "operator waiting at restart"
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+				func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+					requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+					return werkMessage("completed")(ctx, req)
+				},
+			}}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
+			h.opts.beforeDurableWrite = func(rec Record) error {
+				if !restarting.Load() && len(rec.DurableInboxClaims) > 0 && len(rec.Queued) > 0 {
+					return errors.New("simulated interruption before committing the idle batch")
+				}
+				return nil
+			}
+			h.runner.Close()
+			fleet.start(h)
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+			c := h.runner.conv(id)
+			if authorized {
+				var scheduled bool
+				var cronErr, sendErr error
+				c.do(func() {
+					scheduled, cronErr = h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt)
+					_, sendErr = h.runner.Send(id, operator)
+				})
+				if !scheduled || cronErr != nil || sendErr != nil {
+					t.Fatalf("enqueue batch: cron=%v, cron error=%v, operator error=%v", scheduled, cronErr, sendErr)
+				}
+				eventually(t, "idle claim commit interrupted", func() bool {
+					return strings.Contains(h.state(id).Error, "save queued input")
+				})
+				h.runner.Close()
+			} else {
+				h.runner.Close()
+				// Recreate the interrupted rename and a waiting operator entry.
+				_, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{
+					Parts: []string{cronConsentPrompt}, Cron: &cronConsentMark, Steer: true,
+				}, h.opts.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				held, err := wsinbox.Held(c.inbox)
+				if err != nil || len(held) != 1 {
+					t.Fatalf("held = %+v, %v", held, err)
+				}
+				if claims, err := wsinbox.ClaimInputs(c.inbox, held); err != nil || len(claims) != 1 {
+					t.Fatalf("claim = %+v, %v", claims, err)
+				}
+				if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{operator}, Operator: true}, h.opts.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			consent.Store(false)
+			restarting.Store(true)
+			fleet.start(h)
+			req := nextCronModelRequest(t, requests)
+			var count int
+			for _, item := range req.input {
+				count += strings.Count(string(item), cronConsentPrompt)
+			}
+			want := 0
+			if authorized {
+				want = 1
+			}
+			if !req.interactive || !req.contains(operator) || count != want {
+				t.Fatalf("recovered interactive=%v, operator=%v, scheduled count=%d, want %d", req.interactive, req.contains(operator), count, want)
+			}
+			if authorized {
+				h.idle(id)
+			} else {
+				waitForCronConsentRefusal(t, h, id)
+			}
+			drained, err := wsinbox.Drained(c.inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ticks := slices.DeleteFunc(drained, func(rec wsinbox.Record) bool { return !isCronInput(rec) })
+			if len(ticks) != 1 || model.requestCount() != 1 {
+				t.Fatalf("recovery delivered %d scheduled entries with %d model requests, want one of each", len(ticks), model.requestCount())
+			}
+		})
 	}
 }

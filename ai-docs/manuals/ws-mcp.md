@@ -153,13 +153,14 @@ since v0.51.1, so a rolled-back daemon cannot show it. A pre-release build kept
 it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
 the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
 not a SQLite row, so the offline CLI can write it and nothing that copies
-the state databases copies a secret. The daemon reads it once, at the first
-credential use, serves every later read from memory, and rewrites it by
-atomic replace only when a credential changes; while it runs it is the
-file's only writer. A writer keeps members it does not know, and a file
-whose `schema_version` is newer is read but never rewritten. There is no
-environment-variable source: the daemon's environment reaches every hosted
-session and exec subprocess.
+the state databases copies a secret. At startup the daemon reads the file
+while reconciling saved endpoint keys with the machine configuration. It
+serves later reads from memory. While running, the daemon is the file's
+only writer and atomically replaces it when a credential changes. A writer
+keeps members it does not know and leaves files with a newer
+`schema_version` untouched. The daemon's environment reaches every hosted
+session and exec subprocess, so credentials are read from the credential
+file.
 
 On update, the writer stages the new file beside `credentials.json`. It
 adds a store-owned retiring hard link to the current generation and opens
@@ -174,11 +175,25 @@ native POSIX rename and unlink support. A volume without that support or
 a reader that blocks opening the retiring handle causes the update to
 fail before publication.
 
-Use `credential set openrouter` for an OpenRouter key. For vLLM or Ollama,
-add a name, `base_url`, and `kind` to the global `agent.werk_endpoints`
-map and select `local/<name>` as the provider. If the endpoint requires
-an API key, use `credential set local/<name>`. The local key is bound to
-that endpoint's configured API root.
+On the machine running the dashboard, open Settings → Account to manage
+provider credentials and named vLLM or Ollama endpoints. The OpenRouter row
+checks a new key with OpenRouter and shows its saved mask and verification
+result. A rejected key leaves the previous key in place. Connection and
+temporary errors leave the new key available for a re-check.
+
+The OpenAI row runs Sign in with ChatGPT in the system browser and shows the
+active registration and its background-use consent. Sign-out deletes that
+local registration and its consent. When a background request first needs
+an answer, the dashboard shows a prompt. Use the Account toggle to change
+the answer later.
+
+To edit a named endpoint from the CLI, use
+`credential endpoint set <name> --base-url <url> --kind <vllm|ollama>`
+or `credential endpoint remove <name>`. Select `local/<name>` as the
+Werk tier provider. Use `credential set local/<name>` if the endpoint
+requires a key. Removing an endpoint or changing its API root deletes the
+retired root's key. The machine's endpoint map stays in the global
+`agent.werk_endpoints` setting.
 
 `credential set <provider>` (the key on stdin, never in argv),
 `credential show [<provider>]` (masked), and `credential remove <provider>`
@@ -215,32 +230,31 @@ with more than one hard link is also compared by identity against
 `metadata.sqlite` and its `-wal`, `-shm`, and `-journal` sidecars, and against
 the session files the daemon reads back as authority (`agent.json`,
 `registration.json`, `permission.json`, `system_prompt.md`, `snapshot.json`,
-and held or claimed inbox entries), so an external hard link cannot bypass
-the path check. If the state directory cannot be resolved, model writes fail
-closed. Model reads of that state still follow normal file-read permissions.
+hosted Werk journals, and held or claimed inbox entries), so an external
+hard link cannot bypass the path check. If the state directory cannot be
+resolved, model writes fail closed. Model reads of that state still follow
+normal file-read permissions.
 Project-scoped workflow paths outside it are unaffected.
 
-Background consent also covers scheduled prompts. While consent is off, a
-`ws/cron` prompt for a durable Werk lead on a ChatGPT plan is never steered
-into an interactive turn or batched with operator input. It waits for the
-turn to finish, then settles on its own with the consent-required error,
-with its inbox claim and send coverage recorded. The refused text stays out
-of the model history, including across daemon restarts. With consent on,
-cron prompts steer into the running turn as before. Consent is checked when
-the entry is claimed: a claim accepted while consent was on stays
-authorized if consent is revoked before an interrupted turn resumes. Other
-providers keep their harness's delivery rules.
+Background consent also covers scheduled prompts. A durable Werk lead on a
+ChatGPT plan records the consent decision when it claims a `ws/cron` entry,
+whether the lead is idle or already in a turn. An authorized claim can steer
+the running turn and keeps its authorization across restart. A refused claim
+settles separately with the consent-required error, after any running turn
+ends. Its text stays out of the model history, including across restart.
+Recovery checks current consent for any interrupted claim without a recorded
+decision. Other providers keep their harness's delivery rules.
 
 Scoped file replacement (`fs.write`/`fs.edit` over an existing file) never
 lets the staging file hold new bytes with wider access than the destination.
 On Linux and macOS the staging file is created exclusively at `0600` and,
 before the first byte, takes the destination's mode, owner, group, and
 access ACL, read from the verified destination handle; both are rechecked
-before the rename. On macOS, where inherited ACL entries are not masked by
-the mode, staging happens inside a locked `0700` child directory
-`.ws-stage-<sha256 of the destination name>` whose inherited ACL is removed
-first; the next replacement of the same file reclaims a stage an
-interrupted write left behind. On Windows the staging file is created with
+before the rename. On macOS the replacement holds an exclusive lock on the
+destination inode through publication. Each write exclusively creates a
+fresh `0700` child directory (`.ws-write-<random hex>`) and clears its inherited
+ACL before creating the staging file. A later write leaves any stage from an
+interrupted write in place. On Windows the staging file is created with
 the destination's DACL, protection flag, owner, and integrity label, and the
 result is verified before writing and again before publication. Metadata
 that cannot be reproduced, or any mismatch, aborts the write without
@@ -292,30 +306,36 @@ under `<cache root>/dashboard/`:
   daemon binds this port before an OS-assigned one, so a restart keeps its
   origin (page localStorage, LAN bookmark); a free `dashboard.port` always
   wins.
-- `user-commands.db` - the user commands ("command slots") a hosted lead
-  registered with `session.register_user_command` and withdrew with
-  `session.unregister_user_command`: a database of its own (storage type 2:
-  held connection, WAL, one commit per changed command, none for an unchanged
-  registration, read once at start into the memory model every list and page
-  read serves). A command is a stable id, label, optional description, raw
-  bash line and a revision, scoped to the lead's reply-id and the worktree it
-  is bound to (32 per scope; label 64 and description 256 characters, line
-  4 KiB). The tools are listed only to an authenticated open hosted lead
-  (the connection's token-resolved conversation, never a supplied session key
-  or reply-id). The lead's chat shows the commands to a browser on this machine
-  only (`GET /s/<reply-id>/user-commands`, with Run and remove under it behind
-  the composer's localhost gate); a click names the command and the revision it
-  displayed and runs the stored line through the composer's `!` path, so a stale
-  revision or a withdrawn command runs nothing (the revision check and the
-  claim of the click are one step). The user's remove control also names the
-  displayed revision and removes only that one; the agent's unregister tool
-  removes by id. A revision is never issued twice: the store keeps the highest
-  one ever issued, raised in the same commit as every change and withdrawal.
-  The lead's worktree is read from the runner's memory, never from the key
-  record file. A change reaches an open page as the opaque `usercmd` stream
-  event, which makes it refetch the list. The database is unknown to an older daemon, which neither reads nor overwrites it;
-  the daemon that reopens restores the commands, and drops those of a
-  conversation the runner no longer knows.
+- `user-commands.db` stores dashboard user commands in two scopes. Agent
+  commands belong to a hosted lead's reply-id and worktree root. The lead
+  registers and unregisters them through `session.register_user_command`
+  and `session.unregister_user_command`. The command stays with that
+  conversation while it is known to the runner, including while its process
+  sleeps. Commands created by the user belong to the worktree root. Leads
+  in that root share them, and they outlive any one conversation.
+  The store keeps a held SQLite connection and a WAL (storage type 2), loads
+  into memory at startup, and commits one transaction per changed command.
+  Each change or withdrawal advances the durable revision high-water mark.
+  An opaque `usercmd` stream event prompts affected pages to refetch.
+  The registering tools are listed to authenticated open hosted leads and
+  resolve the scope from the calling conversation. The dashboard's localhost
+  composer routes list both scopes (`GET /s/<reply-id>/user-commands`),
+  create root commands (`POST` to the list), and edit either scope
+  (`PUT .../<id>`) or delete a command (`POST .../<id>/remove`).
+  Commands carry a label, optional description, bash line, optional
+  multiline Ask prompt, optional cwd, and a revision. PUT accepts field
+  patches, including prompt and cwd. Ask sends a conversation message.
+  Run (`POST .../<id>/run`) executes through the composer's `!` path and
+  accepts a one-off line or cwd override without changing the command.
+  The effective cwd must resolve to an existing directory under the
+  worktree root. Run and Delete check the displayed revision at admission.
+  The v1 daemon already loads and updates agent-scope rows. Its SQL leaves
+  the root table and the agent prompt and cwd columns intact on an update
+  (`bbdbba130^`, `internal/wsusercmd/store.go:173,204–206`).
+  Root rows are invisible to v1 and reappear with v2 (T0). Agent prompt and
+  cwd are omitted by v1 and restored when v2 reloads the surviving rows (T1,
+  `internal/wsusercmd/store.go:263–289`). Withdrawing an agent command
+  still deletes that row in either version.
 - `sessions/<reply-id>/registration.json` - one entry per top-level lead
   session whose `dashboard.enabled` resolves on (session scope included),
   written by the serving ws-mcp at its first keyed call and heartbeated every
