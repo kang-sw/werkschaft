@@ -39,9 +39,18 @@ type Files struct {
 	// Cwd is the directory a relative path resolves against.
 	Cwd       string
 	Authority Authority
+	// Protection gives the caller a fresh path and handle policy for each
+	// inspection and again immediately before mutation.
+	Protection func() FileProtection
 	// RecordMutation persists the admitted target and content states before
 	// the file is touched.
 	RecordMutation func(context.Context, FileIntent) error
+}
+
+// FileProtection checks the selected path and the actual handles used for it.
+type FileProtection interface {
+	CheckPath(string) error
+	CheckOpened(os.FileInfo) error
 }
 
 // ResolvePath normalizes a path relative to the caller's working directory.
@@ -101,23 +110,34 @@ func realPath(p string) (string, error) {
 }
 
 // writable resolves path for a write and enforces the authority.
-func (f *Files) writable(path string) (string, error) {
+func (f *Files) writable(path string, protection FileProtection) (string, error) {
 	switch f.Authority {
 	case AuthorityReadOnly:
 		return "", errors.New("this session is read-only: it may not edit or write files")
-	case AuthorityWorkdirWrite:
-	case AuthorityFull:
-		target, err := f.ResolvePath(path)
-		if err != nil {
-			return "", err
-		}
-		return realPath(target)
+	case AuthorityWorkdirWrite, AuthorityFull:
 	default:
 		return "", fmt.Errorf("this session has no write authority (%q)", string(f.Authority))
 	}
 	p, err := f.ResolvePath(path)
 	if err != nil {
 		return "", err
+	}
+	if protection != nil {
+		if err := protection.CheckPath(p); err != nil {
+			return "", err
+		}
+	}
+	realTarget, err := realPath(p)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %v", path, err)
+	}
+	if protection != nil && realTarget != p {
+		if err := protection.CheckPath(realTarget); err != nil {
+			return "", err
+		}
+	}
+	if f.Authority == AuthorityFull {
+		return realTarget, nil
 	}
 	root := f.Root
 	if root == "" {
@@ -126,10 +146,6 @@ func (f *Files) writable(path string) (string, error) {
 	realRoot, err := realPath(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve the worktree root: %v", err)
-	}
-	realTarget, err := realPath(p)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %v", path, err)
 	}
 	if !within(realRoot, realTarget) {
 		return "", fmt.Errorf("%s is outside the session's worktree; workdir-write may write inside it only", path)
@@ -167,24 +183,20 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("edit arguments: %v", err)
 	}
-	p, err := f.writable(a.Path)
-	if err != nil {
-		return "", err
-	}
 	if len(a.Edits) == 0 {
 		return "", errors.New("edits is empty")
 	}
-	target, err := pinMutationTarget(p)
+	target, protection, err := f.pinForWrite(a.Path)
 	if err != nil {
 		return "", err
 	}
 	defer target.close()
-	prior, data, err := target.inspect(true)
+	prior, data, err := target.inspect(true, protection)
 	if err != nil {
 		return "", err
 	}
 	if prior.info == nil {
-		return "", &os.PathError{Op: "read", Path: p, Err: fs.ErrNotExist}
+		return "", &os.PathError{Op: "read", Path: target.path, Err: fs.ErrNotExist}
 	}
 	if IsBinary(data) {
 		return "", fmt.Errorf("%s is a binary file", a.Path)
@@ -307,16 +319,12 @@ func (f *Files) Write(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("write arguments: %v", err)
 	}
-	p, err := f.writable(a.Path)
-	if err != nil {
-		return "", err
-	}
-	target, err := pinMutationTarget(p)
+	target, protection, err := f.pinForWrite(a.Path)
 	if err != nil {
 		return "", err
 	}
 	defer target.close()
-	prior, _, err := target.inspect(false)
+	prior, _, err := target.inspect(false, protection)
 	if err != nil {
 		return "", err
 	}

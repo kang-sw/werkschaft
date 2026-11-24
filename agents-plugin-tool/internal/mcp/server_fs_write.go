@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
@@ -46,6 +47,7 @@ func (s *Server) callFSWrite(ctx context.Context, id json.RawMessage, name strin
 	authority := binding.AuthorityForCall()
 	files := wsfs.Files{
 		Root: binding.Root, Cwd: binding.Cwd, Authority: authority,
+		Protection: func() wsfs.FileProtection { return wsdashboard.NewProviderCredentialProtection() },
 		RecordMutation: func(ctx context.Context, intent wsfs.FileIntent) error {
 			return binding.Record(ctx, FileWriteCall{ID: callID, Tool: name, Arguments: raw, Authority: authority, Intent: intent})
 		},

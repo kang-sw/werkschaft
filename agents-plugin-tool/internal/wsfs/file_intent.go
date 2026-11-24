@@ -65,7 +65,7 @@ func (i FileIntent) Outcome() string {
 		return "outcome unknown"
 	}
 	defer target.close()
-	current, _, err := target.inspect(false)
+	current, _, err := target.inspect(false, nil)
 	if err != nil || target.checkParent() != nil {
 		return "outcome unknown"
 	}
@@ -87,7 +87,7 @@ type fileSnapshot struct {
 	digest *string
 }
 
-func (t *mutationTarget) inspect(keepData bool) (fileSnapshot, []byte, error) {
+func (t *mutationTarget) inspect(keepData bool, protection FileProtection) (fileSnapshot, []byte, error) {
 	if len(t.missing) != 0 {
 		return fileSnapshot{}, nil, nil
 	}
@@ -102,6 +102,11 @@ func (t *mutationTarget) inspect(keepData bool) (fileSnapshot, []byte, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return fileSnapshot{}, nil, err
+	}
+	if protection != nil {
+		if err := protection.CheckOpened(info); err != nil {
+			return fileSnapshot{}, nil, err
+		}
 	}
 	if !info.Mode().IsRegular() {
 		return fileSnapshot{}, nil, fmt.Errorf("%s is not a regular file", t.path)
@@ -158,6 +163,18 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 	if err := target.checkParent(); err != nil {
 		return err
 	}
+	var protection FileProtection
+	if f.Protection != nil {
+		// The credential file may have been linked or replaced while the
+		// durable mutation intent was recorded.
+		protection = f.Protection()
+		if err := protection.CheckPath(target.path); err != nil {
+			return err
+		}
+		if err := target.checkProtectedParent(protection); err != nil {
+			return err
+		}
+	}
 	flags := os.O_WRONLY
 	if prior.info == nil {
 		if err := target.createParents(); err != nil {
@@ -174,6 +191,11 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 		info, err := verifyFile(file, prior.info)
 		if err != nil {
 			return err
+		}
+		if protection != nil {
+			if err := protection.CheckOpened(info); err != nil {
+				return err
+			}
 		}
 		if *prior.digest == expected {
 			return nil
