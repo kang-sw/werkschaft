@@ -524,7 +524,7 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 
 type interactiveTurnKey struct{}
 
-// InteractiveTurn reports whether a request is part of a fresh operator send.
+// InteractiveTurn reports whether a request is part of an operator-originated turn.
 func InteractiveTurn(ctx context.Context) bool {
 	interactive, _ := ctx.Value(interactiveTurnKey{}).(bool)
 	return interactive

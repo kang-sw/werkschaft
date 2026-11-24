@@ -103,7 +103,7 @@ func TestMessageRouteHoldsEachSendAsItsOwnEntry(t *testing.T) {
 	if merged {
 		t.Fatal("first send merged")
 	}
-	if held := f.held(t); len(held) != 1 || held[0].ID() != first || inboxBody(t, held[0].Entry) != "<wb:answers>\n03=a\n04=ok\n</wb:answers>\n\nfirst send" {
+	if held := f.held(t); len(held) != 1 || held[0].ID() != first || !held[0].Entry.Operator || inboxBody(t, held[0].Entry) != "<wb:answers>\n03=a\n04=ok\n</wb:answers>\n\nfirst send" {
 		t.Fatalf("held after one send = %+v", held)
 	}
 	second, merged := f.send(t, `{"text":"second send","chips":[{"id":"03","answer":"b","note":"changed my mind"}]}`)

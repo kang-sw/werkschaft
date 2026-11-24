@@ -755,9 +755,9 @@ type recordingMCPProcess struct {
 	submitted chan<- durableTurnInput
 }
 
-func (p *recordingMCPProcess) submitTurn(id, text string, _ []durableSteer, _ bool) error {
+func (p *recordingMCPProcess) submitTurn(id, text string, _ []durableSteer, operator bool) error {
 	if p.submitted != nil {
-		p.submitted <- durableTurnInput{ID: id, Text: text}
+		p.submitted <- durableTurnInput{ID: id, Text: text, Operator: operator}
 	}
 	return p.Send(text)
 }

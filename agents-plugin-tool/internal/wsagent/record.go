@@ -310,9 +310,9 @@ type ParentRef struct {
 // QueuedInput is one drained dashboard input waiting for its turn: a
 // message's text, or a slash command.
 type QueuedInput struct {
-	Interactive bool             `json:"interactive,omitempty"`
-	Text        string           `json:"text,omitempty"`
-	Command     *wsinbox.Command `json:"command,omitempty"`
+	Operator bool             `json:"operator,omitempty"`
+	Text     string           `json:"text,omitempty"`
+	Command  *wsinbox.Command `json:"command,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

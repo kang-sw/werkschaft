@@ -17,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
@@ -250,6 +251,75 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWerkOperatorProvenanceAtCredentialBoundary(t *testing.T) {
+	f := newWerkDaemonFixture(t)
+	source := werkLeadCredential{requests: make(chan wscred.Request, 8)}
+	f.credential = source
+	f.configured = func(id string) (bool, error) { return id == "openai", nil }
+	var requests atomic.Int32
+	installWerkFixtureTransport(t, func(wrapped http.RoundTripper) http.RoundTripper {
+		return werkFixtureRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Hostname() == "127.0.0.1" {
+				return wrapped.RoundTrip(req)
+			}
+			if req.URL.Host != "api.openai.com" {
+				return nil, fmt.Errorf("unexpected fixture request to %s", req.URL.Host)
+			}
+			req.Body.Close()
+			if requests.Add(1) == 1 {
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			return werkReplacementResponse(map[string]any{
+				"type": "message", "id": "provider-response", "role": "assistant",
+				"content": []map[string]string{{"type": "output_text", "text": "recovered"}},
+			})
+		})
+	})
+
+	open := f.open(nil)
+	st, err := open.runner.CreateLead(wsagent.BackendWerk, f.root, wsagent.LeadOptions{Provider: "openai", Model: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := wsinbox.Dir(wsdashboard.SessionDir(f.state, st.ID))
+	if _, _, err := wsinbox.Send(inbox, wsinbox.Entry{Parts: []string{"Automatic answer-check nudge"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	open.runner.InboxChanged(st.ID)
+	if req := awaitWerkFixture(t, source.requests, "nudge credential request"); !req.Background {
+		t.Fatal("an automatic nudge acquired an interactive credential")
+	}
+	waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
+		return st.Status == wsagent.StatusIdle && st.Error != ""
+	})
+	if requests.Load() != 0 {
+		t.Fatal("an automatic nudge reached the model without consent")
+	}
+
+	if _, err := open.runner.Send(st.ID, "Operator prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if req := awaitWerkFixture(t, source.requests, "operator credential request"); req.Background {
+		t.Fatal("operator input lost credential admission")
+	}
+	waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool { return requests.Load() == 1 })
+	if _, err := open.runner.Send(st.ID, "Queued operator prompt"); err != nil {
+		t.Fatal(err)
+	}
+	open.daemon.Close()
+	open = f.open(nil)
+	if req := awaitWerkFixture(t, source.requests, "recovered operator credential request"); req.Background {
+		t.Fatal("recovered operator input lost credential admission")
+	}
+	if req := awaitWerkFixture(t, source.requests, "queued operator credential request"); req.Background {
+		t.Fatal("queued operator input lost credential admission")
+	}
+	waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
+		return st.Status == wsagent.StatusIdle && requests.Load() == 3
+	})
 }
 
 func TestWerkLeadApprovalHonorsLivePermissionAndCommitsOnce(t *testing.T) {
