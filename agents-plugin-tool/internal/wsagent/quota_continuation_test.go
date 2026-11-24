@@ -554,7 +554,7 @@ func TestQuotaContinuationDueDuringNativeCompact(t *testing.T) {
 			p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}, compactCommandDone: true}
 			sent := p.nextSend(t)
 			if resume {
-				if !strings.Contains(sent.Text, "scheduled retry interval has elapsed") {
+				if !strings.Contains(sent.Text, "scheduled retry interval has elapsed") || !strings.Contains(sent.Text, "Context was compacted.") {
 					t.Fatalf("want quota continuation with compaction restore, got %+v", sent)
 				}
 				p.events <- Event{TurnEnd: true, TurnID: sent.TurnID}

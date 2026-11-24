@@ -1894,7 +1894,7 @@ func (c *conv) kickInput() {
 	// Checked before anything is sent: a released binding gets no
 	// compaction nudge, and no new turn or start below.
 	released := c.released()
-	if released == "" && c.sendCompactionNudge() {
+	if released == "" && !c.quotaInjecting && c.sendCompactionNudge() {
 		return
 	}
 	c.mu.Lock()

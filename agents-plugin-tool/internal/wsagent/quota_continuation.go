@@ -401,7 +401,8 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		c.quotaCancelFence.Store(quotaFencePending)
 		return true
 	}
-	if !c.canKick() || c.rec.DurableTurn != nil || c.compacting || c.compactCommand {
+	if !c.canKick() || c.rec.DurableTurn != nil || c.compacting || c.compactCommand ||
+		(!c.r.startupReady() && (strings.HasPrefix(c.compactNote, compactionRestoreMarker) || strings.HasPrefix(c.compactNote, restartRestoreMarker))) {
 		c.quotaPendingFire = true
 		c.quotaCancelFence.Store(quotaFencePending)
 		return true
