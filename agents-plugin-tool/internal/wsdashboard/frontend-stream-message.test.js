@@ -9,7 +9,7 @@ const path = require('node:path');
 const viewSource = fs.readFileSync(path.join(__dirname, '../wswhiteboard/assets/stream-view.js'), 'utf8');
 const boardSource = fs.readFileSync(path.join(__dirname, 'assets/dashboard-board.js'), 'utf8');
 const keepStart = boardSource.indexOf('  function boardKeep(nodes) {');
-const keepEnd = boardSource.indexOf('  // Asset reloads cross a document boundary.');
+const keepEnd = boardSource.indexOf('\n  }', keepStart) + '\n  }'.length;
 assert.ok(keepStart >= 0 && keepEnd > keepStart, 'boardKeep source located');
 const keepSource = boardSource.slice(keepStart, keepEnd);
 
@@ -51,7 +51,7 @@ function fixture(scrollerCount, nodesPerScroller, warm) {
   const kit = window.kit;
   window.wbHistory = { keep: kit.keep, snapshot: kit.snapshot, rendered: kit.rendered, own: kit.own };
   if (warm) { scrollers.forEach(function (s) { kit.keep(s.children && nodes.find(n => n.parentElement.parentElement === s), {}).end(); }); }
-  const boardKeep = vm.runInContext('(function(){' + keepSource + '\nreturn boardKeep;})()', Object.assign(context, { boardBoxes() { return []; } }));
+  const boardKeep = vm.runInContext('(function(){' + keepSource + '\nreturn boardKeep;})()', Object.assign(context, { boardBoxes() { return []; }, anchorCurrent() { return null; }, region() { return null; } }));
   return { stat, nodes, scrollers, boardKeep, write, window };
 }
 
