@@ -43,6 +43,10 @@ const (
 	// AgentRecordFileName is the agent runner's conversation record in a
 	// session directory; its presence marks the directory as the runner's.
 	AgentRecordFileName = "agent.json"
+	// SessionPermissionFileName stores the session's explicit authority and provenance.
+	SessionPermissionFileName = "permission.json"
+	// SessionSystemPromptFileName stores the system prompt supplied at spawn.
+	SessionSystemPromptFileName = "system_prompt.md"
 
 	// HeartbeatInterval is how often a ws-mcp refreshes the heartbeat of each
 	// session it still serves.
