@@ -191,6 +191,7 @@ proceed fact normalizes to `n/a`.
 | `agents-plugin-tool/internal/` | `ai-docs/manuals/release-compatibility.md` |
 | `agents-plugin-tool/` | `ai-docs/manuals/performance.md` |
 | `agents-plugin-tool/internal/mcp/config_registry.go`, `agents-plugin/config-manifest.json`, `agents-plugin/agy-config-manifest.json`, `agents-plugin/dashboard-config-manifest.json`, `agents-plugin-tool/internal/wsdashboard/config_routes.go`, `agents-plugin-tool/internal/wsdashboard/config_proposals.go`, `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*` | `ai-docs/manuals/config-settings-ui.md` |
+| `agents-plugin-tool/internal/wsdashboard/assets/`, `agents-plugin-tool/internal/wswhiteboard/assets/`, `ai-docs/assets/mockups/` | `ai-docs/manuals/dashboard-style.md` |
 
 Each row's manual is read before editing a file its `paths` cover. This is a
 live obligation, not a pointer list: the worker playbook reads every matching
@@ -262,6 +263,7 @@ not stage it unless explicitly requested.
 - Codex behavior notes: `ai-docs/manuals/codex-integration.md`
 - MCP operational runbook: `ai-docs/manuals/ws-mcp.md`
 - Release compatibility tiers: `ai-docs/manuals/release-compatibility.md`
+- Dashboard & mockup visual style guide: `ai-docs/manuals/dashboard-style.md`
 - Tracked archive of retired material: `ai-docs/.old/`
 
 There is no spec or mental-model layer. Caller-visible behavior is the test
