@@ -236,6 +236,10 @@ type Options struct {
 	// (epoch ms) from daemon memory for (backend, model) when a usage-limit
 	// alert arrives with ResetsAt == 0. Must not perform disk or network I/O.
 	QuotaResetAt func(backend, model string) int64
+	// QuotaContinuationJitter, when not nil, returns the jitter duration added
+	// past ResetsAt + buffer when scheduling a quota continuation (clamped to
+	// [0, max]). Nil uses bounded random jitter.
+	QuotaContinuationJitter func(max time.Duration) time.Duration
 	// Report, when not nil, receives each settled turn of a conversation
 	// with a parent (Runner.Spawn): a turn's end, a failed start, a process
 	// lost mid-turn, and, when the next daemon loads the record, a turn

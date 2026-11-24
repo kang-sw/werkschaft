@@ -184,7 +184,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		return st
 	}
-	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
+	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || action == "quota-continuation" || action == "quota-continuation/cancel" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
 		if !local {
 			http.Error(w, "unknown agent route", http.StatusNotFound)
 			return
@@ -348,6 +348,12 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 	case action == "reopen":
 		st, err := r.Reopen(id)
 		writeAnswer(w, http.StatusOK, view(st), err)
+	case action == "quota-continuation":
+		st, err := r.ScheduleQuotaContinuation(id)
+		writeAnswer(w, http.StatusOK, view(st), err)
+	case action == "quota-continuation/cancel":
+		st, err := r.CancelQuotaContinuation(id)
+		writeAnswer(w, http.StatusOK, view(st), err)
 	case strings.HasPrefix(action, "approvals/"):
 		var body approvalRequest
 		if !decode(w, req, &body) {
@@ -367,7 +373,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 // leadControl reports whether action is one of a lead session's control
 // writes, which take the trusted gate; send and interrupt do not.
 func leadControl(action string) bool {
-	return action == "stop" || action == "restart" || action == "close" || action == "settings" || strings.HasPrefix(action, "approvals/")
+	return action == "stop" || action == "restart" || action == "close" || action == "settings" || action == "quota-continuation" || action == "quota-continuation/cancel" || strings.HasPrefix(action, "approvals/")
 }
 
 // leadMove reports whether action moves a lead session between the daemon

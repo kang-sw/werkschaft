@@ -376,6 +376,34 @@ var configRegistry = []configKeyEntry{
 		ResolverBacked:        true,
 	},
 	{
+		Key:        wsconfig.ItemAgentQuotaContinuation,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{
+			{
+				Name:        "harness",
+				Description: "Harness bucket the value applies to. When omitted, defaults to the current session's detected harness. Use * explicitly for every harness (all).",
+				Enum:        promptHarnessEnum,
+			},
+			{
+				Name:        "scope",
+				Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+				Enum:        wsconfig.ScopeSchemaEnum(),
+			},
+		},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "off keeps post-usage-limit continuation manual per session; auto schedules a continuation turn automatically after a hosted lead hits a usage limit. Omit when reset is true.",
+			Enum:        []string{"off", "auto"},
+		}},
+		HarnessApplicable: true,
+		NoAgentVisible:    true,
+		// A lead-only knob: it controls whether hosted lead sessions
+		// automatically schedule continuation turns after usage limits.
+		RequiresLeadAuthority: true,
+		ResolverBacked:        true,
+	},
+	{
 		Key:        wsconfig.ItemWorkflowProfile,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",

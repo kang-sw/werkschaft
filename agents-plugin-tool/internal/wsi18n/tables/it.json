@@ -3093,6 +3093,8 @@
   "js.settings.key.agent.child_waiting_days.description": "Giorni prima di rimuovere gli agenti figli in attesa e i loro discendenti.",
   "js.settings.key.agent.keep_awake_during_turns.label": "Mantieni attivo durante i turni",
   "js.settings.key.agent.keep_awake_during_turns.description": "Impedisce la sospensione per inattività mentre è in corso un turno di agente (macOS e Windows). Lo spegnimento dello schermo e la chiusura del coperchio restano validi.",
+  "js.settings.key.agent.quota_continuation.label": "Continuazione dopo limite di quota",
+  "js.settings.key.agent.quota_continuation.description": "Controlla se le sessioni lead ospitate pianificano automaticamente un turno di continuazione dopo un limite di utilizzo (off: manuale per sessione, auto: pianificazione automatica).",
   "js.settings.key.agent.git_search_roots.label": "Percorsi aggiuntivi di ricerca Git",
   "js.settings.key.agent.git_search_roots.description": "Directory assolute leggibili dagli agenti ospitati tramite la ricerca Git.",
   "js.settings.key.compaction.lead_advisory.label": "Soglia di avviso di compattazione del responsabile",

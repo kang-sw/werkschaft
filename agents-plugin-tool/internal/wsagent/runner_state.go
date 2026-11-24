@@ -109,6 +109,9 @@ type State struct {
 	// Failure is the typed failure (a login needed, a model unavailable, a
 	// usage limit) the harness last reported, until a turn succeeds.
 	Failure *wslive.Notice `json:"failure,omitempty"`
+	// QuotaContinuation is the hosted lead's post-usage-limit resume state,
+	// when scheduled, in flight, or exhausted.
+	QuotaContinuation *QuotaContinuation `json:"quota_continuation,omitempty"`
 	// MCPBroken names the harness's MCP servers whose connection broke and
 	// did not come back in-stream; a restart (Restart) is the way back.
 	MCPBroken []string `json:"mcp_broken,omitempty"`

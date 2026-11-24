@@ -60,6 +60,7 @@ func (c *conv) reattach() {
 				c.setStatus(func() { c.turn = false })
 				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
 			}
+			c.settleQuotaInFlightAfterReplay()
 			// No replay will fold the recovery file's evidence: fold it
 			// now (rows it showed running end unknown at its write time)
 			// and let the file be replaced.
@@ -243,6 +244,7 @@ func (c *conv) replayDone(lost bool) {
 		return
 	}
 	if !c.turn {
+		c.settleQuotaInFlightAfterReplay()
 		c.applySettings()
 		c.kick()
 		if !c.turn {

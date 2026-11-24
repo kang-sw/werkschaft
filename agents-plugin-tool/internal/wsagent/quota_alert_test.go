@@ -271,7 +271,7 @@ func TestConvAlertUsesQuotaResetAtFallback(t *testing.T) {
 		rec:  Record{ReplyID: "lead-1", Backend: BackendAgy, Model: "gemini-2.5-pro", Lead: true},
 		live: newLiveWriter(t.TempDir(), "", "lead-1", func() time.Time { return now }, r.opts.Log),
 	}
-	c.alert(wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "quota exceeded"}, false)
+	c.alert(wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "quota exceeded"}, false, false)
 	if gotBackend != BackendAgy || gotModel != "gemini-2.5-pro" {
 		t.Fatalf("QuotaResetAt called with (%q, %q)", gotBackend, gotModel)
 	}

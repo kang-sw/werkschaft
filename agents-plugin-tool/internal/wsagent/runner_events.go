@@ -303,7 +303,7 @@ func (c *conv) handle(ev Event) {
 			}
 		}
 	case ev.Alert != nil:
-		c.alert(*ev.Alert, quiet)
+		c.alert(*ev.Alert, ev.AlertManualOnly, quiet)
 	case ev.Retry != nil || ev.RetryEnd:
 		c.retry = ev.Retry
 		c.syncHost(quiet)
@@ -1105,6 +1105,9 @@ func (c *conv) checkInterrupt() {
 // failure leads to is the caller's: the page's interrupt stops the process,
 // a forced worktree release only reports it. It runs in the loop.
 func (c *conv) cancelTurn() (bool, error) {
+	if c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
+	}
 	if c.modelWaitBackoffC != nil {
 		c.cancelModelWaitBackoff()
 		return true, nil
@@ -1260,6 +1263,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	// The completion fence (AdmitCompletion): a notice admitted under an
 	// earlier generation never reaches the conversation again, revived or not.
 	c.rec.OpenGen++
+	c.rec.QuotaContinuation = nil
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()
@@ -1274,6 +1278,7 @@ func (c *conv) closeIf(done func() bool) bool {
 // finishClose is the rest of a close, once the conversation is marked
 // closed. It runs in the loop.
 func (c *conv) finishClose() {
+	c.stopQuotaTimer()
 	c.stopProcess("")
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
