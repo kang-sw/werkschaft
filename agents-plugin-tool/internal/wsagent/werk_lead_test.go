@@ -59,7 +59,9 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 	h, ws, _ := werkHarness(t, model)
 	// Drain MCP tool observations so the HTTP handler can respond while the
 	// model keeps calling tools until the steer arrives.
-	drainCtx := t.Context()
+	// go.mod targets Go 1.23, which lacks testing.T.Context.
+	drainCtx, cancelDrain := context.WithCancel(context.Background())
+	t.Cleanup(cancelDrain)
 	go func() {
 		for {
 			select {
