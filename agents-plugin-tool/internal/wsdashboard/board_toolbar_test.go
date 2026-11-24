@@ -232,7 +232,7 @@ function styles(){var p={};return {getPropertyValue:function(k){return p[k]||"";
 var listeners={}, observed=[], resize, boardTop=0, compact=false, faceHeight=50, handles=[];
 function action(y){return {getBoundingClientRect:function(){var h=compact?28:44;return {top:y-h/2,bottom:y+h/2,height:h};}};}
 var row={children:[action(25),action(25),action(25)]}, face={firstChild:row,getClientRects:function(){return [1];},getBoundingClientRect:function(){return {width:700,height:faceHeight,bottom:faceHeight};}};
-var toolbar={firstChild:face,style:styles(),attrs:{},hasAttribute:function(k){return k in this.attrs;},toggleAttribute:function(k,on){if(on)this.attrs[k]="";else delete this.attrs[k];}};
+var toolbar={firstChild:face,style:styles(),attrs:{},getAttribute:function(k){return this.attrs[k] ?? null;},hasAttribute:function(k){return k in this.attrs;},toggleAttribute:function(k,on){if(on)this.attrs[k]="";else delete this.attrs[k];}};
 var board={getBoundingClientRect:function(){return {top:boardTop};}}, col={style:styles(),clientTop:0,getBoundingClientRect:function(){return {top:0};}}, documentScroller={style:styles()}, active=col;
 var doc={scrollingElement:documentScroller,querySelectorAll:function(){return handles;},getElementById:function(){return col;},addEventListener:function(k,fn){listeners[k]=fn;}}, window={addEventListener:function(k,fn){listeners[k]=fn;},ResizeObserver:function(fn){resize=fn;this.observe=function(n){observed.push(n);};}};
 var maxed=null;
@@ -267,6 +267,13 @@ check("document rail and arrivals include handle clearance",[col.style.getProper
 handles=[];
 boardTop=0;compact=false;faceHeight=100;resize();flushAnimationFrames();
 check("return restores original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"100px"]);
+["dropdown", "tight"].forEach(function (fit) {
+  toolbar.attrs["data-toolbar-fit"]=fit;
+  row.children=[action(17),action(17),action(17)];faceHeight=34;boardTop=0;resize();flushAnimationFrames();
+  check(fit+" resting slot",toolbar.style.getPropertyValue("--toolbar-reserved"),"34px");
+  boardTop=-100;listeners.scroll();flushAnimationFrames();
+  check(fit+" floating slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"34px"]);
+});
 process.stdout.write(bad.join("\n"));
 `)
 }

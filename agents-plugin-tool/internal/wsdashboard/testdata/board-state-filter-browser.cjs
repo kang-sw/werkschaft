@@ -239,7 +239,13 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         assert.deepEqual(await page.locator('.board-state-option:not([data-filter="asks"]) .board-state-label').allTextContents(), labels, '.board-state-option Korean labels follow values');
         await select('discussing');
         const inlineCurrent = () => page.locator('.board-state-radio[aria-checked="true"]');
-        for (const [key, value] of [['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['Home', 'all'], ['ArrowLeft', 'tickets'], ['ArrowUp', 'cards'], ['ArrowLeft', 'closed'], ['ArrowRight', 'cards'], ['ArrowDown', 'tickets'], ['ArrowRight', 'all'], ['End', 'tickets'], ['ArrowDown', 'all'], ['ArrowUp', 'tickets']]) {
+        for (const [key, value] of [
+          ['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'],
+          ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'tickets'],
+          ['ArrowLeft', 'cards'], ['ArrowLeft', 'closed'], ['ArrowLeft', 'asks'], ['ArrowRight', 'closed'],
+          ['Home', 'all'], ['ArrowLeft', 'awaiting-confirmation'], ['ArrowRight', 'all'],
+          ['End', 'awaiting-confirmation'], ['ArrowDown', 'all'], ['ArrowUp', 'awaiting-confirmation'],
+        ]) {
           await inlineCurrent().press(key);
           assert.equal(await inlineCurrent().getAttribute('data-filter'), value);
           assert.equal(await inlineCurrent().evaluate(n => document.activeElement === n), true);

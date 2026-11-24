@@ -231,7 +231,8 @@ body:has(#toolbar-files[data-max][data-docked]) .board-toolbar .sheet-width { di
 body:has(.fpane[data-max]) .dgrid.live > .fpane,
 body:has(.fpane[data-max]) .chead .fsum .froot { visibility: hidden; }
 .board-toolbar[data-files] { z-index: calc(var(--z-modal) + 1); }
-.board-toolbar[data-files] .board-toolbar-face { pointer-events: none; }
+.board-toolbar[data-files] .board-toolbar-face,
+.board-toolbar[data-files] :is(.board-state-meta, .board-state-pipeline, .board-state-trigger, .board-state-pop) { pointer-events: none; }
 .board-toolbar[data-files] .board-files, .board-toolbar[data-files] .sheet-width { pointer-events: auto; }
 body:has(.fpane[data-max]) > .fmenu { z-index: calc(var(--z-modal) + 2); }
 @media (max-width: 640px) { .fpane[data-max] { left: 8px; right: 8px; bottom: 8px; } }

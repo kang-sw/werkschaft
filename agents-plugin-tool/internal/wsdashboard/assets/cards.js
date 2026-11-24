@@ -212,12 +212,14 @@
       var keys = Object.keys(rows), reserved = 6 + Math.max(0, keys.length - 1) * 6;
       keys.forEach(function (key) { reserved += rows[key]; });
       var height = faceRect.height;
+      var fit = toolbar.getAttribute("data-toolbar-fit");
+      var narrow = fit === "dropdown" || fit === "tight";
       // All geometry above, all writes below; ResizeObserver settles a face
       // whose dimensions change when floating or wrapping changes.
       style(toolbar, "--toolbar-top", inset + "px");
       if (toolbar.hasAttribute("data-floating") !== floating) toolbar.toggleAttribute("data-floating", floating);
       if (toolbar.hasAttribute("data-wrapped-actions") !== wrapped) toolbar.toggleAttribute("data-wrapped-actions", wrapped);
-      style(toolbar, "--toolbar-reserved", (floating ? reserved : height) + "px");
+      style(toolbar, "--toolbar-reserved", (floating && !narrow ? reserved : height) + "px");
       // The rail already exposes a host inset; include the lower hit extension.
       style(doc.getElementById("bcol") || board, "--wb-rail-inset", (inset + height + 6) + "px");
       if (scrollBox && scrollBox !== s) scrollBox.style.removeProperty("scroll-padding-top");
@@ -277,14 +279,15 @@
       b.appendChild(mk("span", "board-state-count"));
       b.addEventListener("click", function () { selectFilter(value, b, isPop); });
       b.addEventListener("keydown", function (e) {
-        var index = filterValues.indexOf(stateFilter), next;
-        if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % filterValues.length;
-        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (index + filterValues.length - 1) % filterValues.length;
+        var radios = group.querySelectorAll('[role="radio"]');
+        var index = Array.prototype.indexOf.call(radios, b), next;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % radios.length;
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (index + radios.length - 1) % radios.length;
         else if (e.key === "Home") next = 0;
-        else if (e.key === "End") next = filterValues.length - 1;
+        else if (e.key === "End") next = radios.length - 1;
         if (next === undefined) return;
         e.preventDefault(); e.stopPropagation();
-        selectFilter(filterValues[next], group.querySelector('[data-filter="' + filterValues[next] + '"]'), false);
+        selectFilter(radios[next].getAttribute("data-filter"), radios[next], false);
       });
       container.appendChild(b);
       stateUI.radios.push(b);

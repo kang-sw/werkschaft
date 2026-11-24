@@ -98,22 +98,48 @@ async function checkDestinationClearance(browser) {
   const tab = await browser.newPage({ viewport: { width: 1440, height: 950 }, reducedMotion: 'reduce' });
   try {
     await tab.goto(base + '/s/livesession');
-    const topic = tab.frameLocator('iframe.sframe.on').locator('section.topic[data-topic="Topic 10"]');
-    const result = await topic.evaluate(sec => {
-      window.WsBoardAnchor.select(sec, { smooth: false });
-      const col = sec.closest('#bcol'), panel = sec.querySelector('#p2');
-      col.scrollTop += 180;
-      const samples = [];
-      window.wbHistory.jump(panel, { centerVisible: true, behavior: 'instant', clearance() {
-        samples.push(col.scrollTop);
-        return samples.length === 1 ? 0 : 300;
-      } });
-      return { samples, top: col.scrollTop, pin: window.WsBoardAnchor.pinning() };
+    const page = tab.frameLocator('iframe.sframe.on');
+    const board = page.locator('#bcol');
+    const target = board.locator('section.topic[data-topic="Topic 10"] #p2');
+    await board.evaluate(col => {
+      const first = window.WsBoardAnchor.windowInfo().list[0];
+      window.WsBoardAnchor.select(first, { smooth: false });
+      const card = document.createElement('section');
+      card.className = 'wbupdate-topic';
+      card.dataset.wbTopic = col.querySelector('section.topic[data-topic="Topic 10"]').id;
+      card.innerHTML = '<a href="#p2" data-wb-jump="p2">#p2</a>';
+      document.querySelector('#r-entries .centries').prepend(card);
     });
-    assert.equal(result.samples.length, 2, 'measure clearance once at departure and once at the destination');
-    assert.ok(Math.abs(result.samples[1] - result.samples[0]) > 3, 'the second sample uses the landed scroll offset');
-    assert.ok(result.samples[1] - result.top > 30, 'destination clearance adjusts the landing');
-    assert.equal(result.pin, true, 'the corrected destination is pinned');
+    const rail = () => board.evaluate(col => {
+      const head = col.querySelector('.tophead.wb-stuck');
+      const pill = col.querySelector('.oq-wrap.wb-oq-top');
+      return {
+        stack: col.querySelectorAll('.wb-rail-wrap.up .wb-cap:not([hidden])').length,
+        headBottom: head?.getBoundingClientRect().bottom,
+        pillBottom: pill?.querySelector('.oq-pill').getBoundingClientRect().bottom,
+      };
+    });
+    const departure = await rail();
+    assert.equal(departure.stack, 0, 'departure card has no upper rail capsules');
+    // Give the incoming history panel a tall payload before the real click.
+    await board.evaluate(col => {
+      const topic = col.querySelector('section.topic[data-topic="Topic 10"]');
+      const panel = topic.querySelector('#p2') || window.WsBoardVirtual.searchRoots(topic)
+        .map(root => root.querySelector('#p2')).find(Boolean);
+      panel.style.minHeight = innerHeight + 'px';
+    });
+    await page.locator('#convo a[data-wb-jump="p2"]').click();
+    await board.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+    const destination = await rail();
+    const landed = await target.evaluate(el => ({
+      top: el.getBoundingClientRect().top,
+      pin: window.WsBoardAnchor.pinning(),
+      focused: document.activeElement === el,
+    }));
+    assert.equal(destination.stack, 2, 'destination card has two upper rail capsules');
+    assert.ok(landed.focused && landed.pin, 'conversation navigation focuses and pins the destination');
+    assert.ok(landed.top >= Math.max(destination.headBottom, destination.pillBottom) - 2,
+      'tall panel lands below the destination controls: ' + JSON.stringify({ departure, destination, landed }));
   } finally {
     await tab.close();
   }
