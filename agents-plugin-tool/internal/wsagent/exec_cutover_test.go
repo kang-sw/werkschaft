@@ -238,15 +238,14 @@ func cutoverHarness(t *testing.T) *leadHarness {
 	h.execJobs = newFakeExecJobs()
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
-	writeClaudeOptIn(t, h, nil)
+	writeClaudeCutoverConfig(t, h, nil)
 	return h
 }
 
-// writeClaudeOptIn writes h's global config with the Claude cutover opt-in
-// on and values besides it.
-func writeClaudeOptIn(t *testing.T, h *leadHarness, values map[string]string) {
+// writeClaudeCutoverConfig writes h's global config overrides.
+func writeClaudeCutoverConfig(t *testing.T, h *leadHarness, values map[string]string) {
 	t.Helper()
-	all := map[string]string{wsconfig.ItemClaudeExecCutoverEnabled: "true"}
+	all := map[string]string{}
 	for k, v := range values {
 		all[k] = v
 	}
@@ -329,7 +328,7 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	}
 
 	// The per-harness switch reverts new starts.
-	writeClaudeOptIn(t, h, map[string]string{
+	writeClaudeCutoverConfig(t, h, map[string]string{
 		wsconfig.ItemExecNativeToolRemoval + ".claude": "off",
 	})
 	off := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
@@ -349,7 +348,7 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if !strings.Contains(h.log.String(), "keeps its native process tools: "+wsconfig.ItemExecNativeToolRemoval+" is off for claude") {
 		t.Fatalf("log: %s", h.log.String())
 	}
-	writeClaudeOptIn(t, h, map[string]string{
+	writeClaudeCutoverConfig(t, h, map[string]string{
 		wsconfig.ItemExecNativeToolRemoval + ".all":    "off",
 		wsconfig.ItemExecNativeToolRemoval + ".claude": "on",
 	})
@@ -357,7 +356,7 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if _, rec = leadLaunch(t, h, on.ID); rec.ExecCutoverHolder == "" {
 		t.Fatal("the harness bucket's on does not win over all's off")
 	}
-	writeClaudeOptIn(t, h, nil)
+	writeClaudeCutoverConfig(t, h, nil)
 
 	// A harness version older than the verified one keeps native tools.
 	claudeBinary := harnessBinaryOf(h.opts.Backends[BackendClaude])
@@ -398,13 +397,9 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	}
 }
 
-// The Claude cutover is opt-in (owner tier 2161=b): with every other
-// condition met, a Claude lead whose claude.exec_cutover_enabled is unset or
-// false starts on the legacy path. It keeps its native shell, records the
-// plain ws-mcp route (an older daemon rejoins it as before), and its token
-// carries no cutover, so its commands never depend on the session route's
-// exec tools. Turned on, the next start cuts over. Codex ignores the knob.
-func TestClaudeExecCutoverIsOptIn(t *testing.T) {
+// Claude cuts over by default, while explicit opt-out and config read errors
+// preserve native tools. Codex ignores the Claude switch.
+func TestClaudeExecCutoverDefaultsOn(t *testing.T) {
 	h := cutoverHarness(t)
 	legacy := func(label string) {
 		t.Helper()
@@ -427,9 +422,10 @@ func TestClaudeExecCutoverIsOptIn(t *testing.T) {
 		label  string
 		values map[string]string
 	}{
-		{"unset", map[string]string{}},
 		{"false", map[string]string{wsconfig.ItemClaudeExecCutoverEnabled: "false"}},
-		{"rollout on alone", map[string]string{wsconfig.ItemExecNativeToolRemoval + ".claude": "on"}},
+		{"off", map[string]string{wsconfig.ItemClaudeExecCutoverEnabled: "off"}},
+		{"zero", map[string]string{wsconfig.ItemClaudeExecCutoverEnabled: "0"}},
+		{"no", map[string]string{wsconfig.ItemClaudeExecCutoverEnabled: "no"}},
 	} {
 		writeOverrides(t, filepath.Join(h.opts.Config.ConfigHome, "config.json"), tc.values)
 		legacy(tc.label)
@@ -438,24 +434,31 @@ func TestClaudeExecCutoverIsOptIn(t *testing.T) {
 		t.Fatalf("log: %s", h.log.String())
 	}
 
+	writeClaudeCutoverConfig(t, h, nil)
 	c := h.runner.conv(h.lead(BackendClaude, LeadOptions{PermissionMode: "default"}).ID)
+	if err := os.WriteFile(filepath.Join(h.opts.Config.ConfigHome, "config.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if on, why := c.execRolloutOn(c.record()); on || !strings.Contains(why, "could not be read") {
+		t.Fatalf("config read error: on=%v, reason=%q", on, why)
+	}
 	codex := c.record()
 	codex.Backend = BackendCodex
 	if on, why := c.execCutoverFor(codex, Profile{}, execCutoverInputs{binding: true, binary: harnessBinaryOf(h.opts.Backends[BackendCodex])}); !on {
-		t.Fatalf("the Claude opt-in gates Codex: %s", why)
+		t.Fatalf("the Claude switch gates Codex: %s", why)
 	}
 
-	writeClaudeOptIn(t, h, nil)
+	writeClaudeCutoverConfig(t, h, nil)
 	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
 	argv, rec := leadLaunch(t, h, st.ID)
 	if got, _ := flagValue(argv, "--disallowedTools"); !strings.Contains(got, "Bash,PowerShell,Monitor,TaskStop") {
-		t.Fatalf("opted-in lead --disallowedTools = %q", got)
+		t.Fatalf("default lead --disallowedTools = %q", got)
 	}
 	if rec.ExecCutoverHolder == "" || rec.MCPURL != h.runner.mcpURL() {
-		t.Fatalf("opted-in lead: cutover holder %q, route %q", rec.ExecCutoverHolder, rec.MCPURL)
+		t.Fatalf("default lead: cutover holder %q, route %q", rec.ExecCutoverHolder, rec.MCPURL)
 	}
 	if hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken); !ok || hello.ExecCutover != BackendClaude {
-		t.Fatalf("opted-in token hello = %+v %v", hello, ok)
+		t.Fatalf("default token hello = %+v %v", hello, ok)
 	}
 }
 
@@ -562,7 +565,7 @@ func TestExecCutoverBinaryChangeUnverifiesTheVersion(t *testing.T) {
 	h.execJobs = newFakeExecJobs()
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
-	writeClaudeOptIn(t, h, nil)
+	writeClaudeCutoverConfig(t, h, nil)
 	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
 	if _, rec := leadLaunch(t, h, st.ID); rec.ExecCutoverHolder == "" {
 		t.Fatalf("the reported binary's lead kept its native tools; log: %s", h.log.String())
@@ -648,7 +651,7 @@ func TestExecRolloutReadsTheConfigOnce(t *testing.T) {
 		t.Fatalf("the rollout check took %d file operations; one resolution takes %d", got, one)
 	}
 	if on, why := c.execRolloutOn(rec); !on {
-		t.Fatalf("the opted-in Claude rollout is off: %s", why)
+		t.Fatalf("the default Claude rollout is off: %s", why)
 	}
 }
 

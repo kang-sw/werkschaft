@@ -910,6 +910,11 @@ restart a wait on a conversation that settled before it answers at once.
 `Runner.Watch` reports each change of a conversation with a parent.
 A spawn records its `tier` (`SpawnSpec.Tier`, `Record.tier`).
 
+In 0.52, `claude.exec_cutover_enabled` defaults to true in both ws and wsflow
+for hosted Claude leads and spawned workers. Set false to opt out. The native
+removal switch, verified Claude Code version, trusted binding, and worker
+`exec.shell` allowlist conditions still apply; config read errors keep native tools.
+
 #### Legacy Pi compatibility
 
 0.52 is a T3 upgrade. A 0.51.2 launcher reading the shared 0.52 daemon's

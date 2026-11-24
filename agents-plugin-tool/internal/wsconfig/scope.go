@@ -238,12 +238,10 @@ const (
 	// reads it at its start.
 	ItemExecNativeToolRemoval = "exec.native_tool_removal"
 
-	// ItemClaudeExecCutoverEnabled is the Claude opt-in to the exec cutover
-	// (owner tier decision 2161=b): a hosted Claude process starts under the
-	// cutover only when it is true, on top of every other condition. Both
-	// Claude package manifests (ws and wsflow) default it to false, so the
-	// default Claude path never depends on the ws-mcp session route for
-	// commands, which a daemon older than 0.51 refuses.
+	// ItemClaudeExecCutoverEnabled controls the Claude exec cutover for hosted
+	// leads and spawned workers. Both packages default it to true in 0.52;
+	// unset means on, explicit false/off/0/no opts out, and config read errors
+	// keep native tools. Every other cutover condition still applies.
 	ItemClaudeExecCutoverEnabled = "claude.exec_cutover_enabled"
 )
 
