@@ -168,8 +168,9 @@
         statEl.hidden = false;
       } else if (win.callSummary || win.activeEnvelope || (!win.inspectEventId && win.resultEnvelope)) {
         var err = auEnvelopeHasError(win.activeEnvelope) || (!win.inspectEventId && auEnvelopeHasError(win.resultEnvelope));
-        statEl.textContent = err ? wsT("js.audit.status.failed") : wsT("js.audit.status.ok");
-        statEl.className = "au-wstatus " + (err ? "au-err" : "au-ok");
+        var est = !err && win.activeEnvelope && win.activeEnvelope.kind === "compaction" && !!(win.activeEnvelope.meta && win.activeEnvelope.meta.estimated);
+        statEl.textContent = err ? wsT("js.audit.status.failed") : (est ? wsT("js.audit.compaction.estimated") : wsT("js.audit.status.ok"));
+        statEl.className = "au-wstatus " + (err ? "au-err" : (est ? "au-est" : "au-ok"));
         statEl.hidden = false;
       } else {
         statEl.hidden = true;

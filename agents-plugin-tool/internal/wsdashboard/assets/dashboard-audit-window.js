@@ -249,9 +249,14 @@
     var seenBound = field === "in" ? (ev && ev.seen && ev.seen.in) : field === "out" ? (ev && ev.seen && ev.seen.out) : null;
     if (seenBound != null && typeof seenBound !== "number") seenBound = null;
 
+    var isEstimatedCompaction = !!(ev && ev.kind === "compaction" && ev.meta && ev.meta.estimated);
+    var estBanner = isEstimatedCompaction
+      ? '<div class="au-banner"><strong>' + auEsc(wsT("js.audit.compaction.estimated.title")) + "</strong> " + auEsc(wsT("js.audit.compaction.estimated.note")) + "</div>"
+      : "";
+
     if (!body && !storedTrunc && !rangeInfo) {
       return {
-        html: '<div class="au-state"><strong>' + auEsc(wsT("js.audit.part.empty")) + "</strong></div>",
+        html: estBanner + '<div class="au-state"><strong>' + auEsc(wsT("js.audit.part.empty")) + "</strong></div>",
         matchCount: 0,
         plainText: ""
       };
@@ -263,7 +268,7 @@
     var bodyMatches = opts.matches && opts.matches[field];
     var spansByLine = bodyMatches ? auSpansByLine(bodyMatches.spans) : null;
     var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0 };
-    var outHtml = "";
+    var outHtml = estBanner;
 
     if (!modelSeen) {
       outHtml += '<div class="au-banner"><strong>' + auEsc(wsT("js.audit.unseen.title")) + "</strong> " + auEsc(wsT("js.audit.unseen.note")) + "</div>";
@@ -347,10 +352,11 @@
       });
     }
     if (mergedMeta.signature_only != null) push(wsT("js.audit.meta.sigonly"), String(mergedMeta.signature_only));
+    if (mergedMeta.estimated != null) push(wsT("js.audit.meta.estimated"), mergedMeta.estimated ? wsT("js.audit.meta.yes") : wsT("js.audit.meta.no"));
     var keys = Object.keys(mergedMeta).sort();
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
-      if (k === "signature_only") continue;
+      if (k === "signature_only" || k === "estimated") continue;
       var val = mergedMeta[k];
       push("meta." + k, typeof val === "object" ? JSON.stringify(val) : String(val));
     }

@@ -66,6 +66,7 @@ type auditSummary struct {
 	ParentID  string       `json:"parent_id"`
 	AgentID   string       `json:"agent_id"`
 	ModelSeen bool         `json:"model_seen"`
+	Estimated bool         `json:"estimated,omitempty"`
 	Title     string       `json:"title"`
 	InBytes   int          `json:"in_bytes"`
 	OutBytes  int          `json:"out_bytes"`
@@ -283,6 +284,10 @@ func summarize(evs []wsaudit.Envelope, idx []int) []auditSummary {
 			Kind: ev.Kind, Subkind: ev.Subkind, CallID: ev.CallID, ParentID: ev.ParentID, AgentID: ev.AgentID,
 			ModelSeen: ev.ModelSeen, Title: auditTitle(ev), InBytes: len(ev.In), OutBytes: len(ev.Out),
 			Attached: []string{},
+		}
+		if ev.Kind == wsaudit.KindCompaction {
+			est, _ := ev.Meta[wsaudit.MetaEstimated].(bool)
+			out[k].Estimated = est
 		}
 		if isAuditCall(ev) {
 			calls[ev.CallID] = true
