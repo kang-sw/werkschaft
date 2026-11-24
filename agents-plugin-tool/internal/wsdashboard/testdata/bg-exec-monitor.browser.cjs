@@ -137,6 +137,12 @@ async function main() {
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
     assert.equal(clipboard, 'checking viewport 1180x820 <script>alert(1)</script>\nstderr: retrying font metrics check\nok: 0 horizontal overflow detected\n');
 
+    await view.waitForFunction(() => document.querySelector('#bgpop .bgp-act')?.textContent === 'Copied');
+    await page.keyboard.press('Escape');
+    await view.locator('#bgbadge').click();
+    assert.equal(await view.locator('#bgpop .bgp-act').textContent(), 'Copy', 'reopening resets the Copy feedback');
+    await view.locator('#bgpop .bgp-tail .bgp-line').first().waitFor();
+
     // Capture AFTER screenshot 1: dark desktop popover open with live tail + user HUD chip.
     if (shotsDir) {
       await page.screenshot({ path: path.join(shotsDir, 'after-dark-popover-open.png') });

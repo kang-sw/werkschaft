@@ -240,6 +240,7 @@
     bgAbortList();
     bgListDirty = false;
     bgClearStop();
+    bgDockJob = "";
     clearTimeout(bgCopyTimer);
     bgCopyTimer = 0;
     if (bgPop) bgPop.hidden = true;
@@ -532,6 +533,7 @@
         var text = bgCopyText(current && current.command || "");
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(function () {
+            if (!bgSt.open || !copyBtn.isConnected) return;
             copyBtn.textContent = wsT("js.bgexec.copied");
             clearTimeout(bgCopyTimer);
             bgCopyTimer = setTimeout(function () { copyBtn.textContent = wsT("js.bgexec.copy"); }, 1400);
