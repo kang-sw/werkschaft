@@ -5,6 +5,7 @@ related:
   261117-feat-ws-harness-capability-catalog: "its compaction item grade and Decision 6 name the ws-substitute"
   261117-feat-ws-single-session-holder: "reattach after daemon restart would target the newest harness-session segment"
   261114-epic-ws-common-session-foundation: "parent epic of the compaction lifecycle ticket"
+dropped: 2026-11-24
 ---
 
 # New-session compaction and segment chain
@@ -54,3 +55,8 @@ and are kept as the starting point if this is revived:
   new segment created, ws key inherited, agenda/whiteboard/lineage intact,
   children reachable, resume after daemon restart lands on the newest segment,
   overflow fallback.
+
+
+## Resolution (2026-11-24)
+
+Superseded by `261124-feat-ws-managed-compaction` per owner decision `(1552)=b`: in-place `Record.SessionID` native session rotation with continuous `wslive` ring and `wsaudit` stream eliminates the persisted harness segment chain while remaining T0 transparent.
