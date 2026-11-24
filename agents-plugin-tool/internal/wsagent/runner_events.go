@@ -908,7 +908,7 @@ func (c *conv) processEnded() {
 		}
 	}
 	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
-	c.retry, c.alerted, c.quotaUsageLimitAlerted = nil, false, false
+	c.retry, c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled = nil, false, false, false
 	c.syncHost(true)
 	// A replay the process's end cut short still resolves what it staged of
 	// agy native rows and what the restored recovery file held (dropping

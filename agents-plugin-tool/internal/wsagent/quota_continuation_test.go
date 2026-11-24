@@ -773,6 +773,30 @@ func TestQuotaContinuationRestartRecoveryAndNonDoubleFire(t *testing.T) {
 	}
 }
 
+func TestQuotaContinuationReplayAlertPreservesReservationThroughLiveEnd(t *testing.T) {
+	env := newQuotaEnv(t, map[string]string{wsconfig.ItemAgentQuotaContinuation + ".claude": "auto"}, 0)
+	id := env.createLead(BackendClaude)
+	if _, err := env.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := env.backend.proc(t, 0)
+	first := p.nextSend(t)
+	resumeAt := env.currentNow().Add(time.Hour).UnixMilli()
+	c := env.runner.conv(id)
+	c.do(func() {
+		// The predecessor persisted the reservation before recording its
+		// holder cursor, so the alert arrives again during replay.
+		c.setQuotaContinuation(&QuotaContinuation{Status: QuotaContinuationScheduled, ResumeAt: resumeAt}, env.currentNow())
+		c.alert(wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit"}, false, true)
+	})
+	p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+	env.waitIdle(id)
+	st, _ := env.runner.Get(id)
+	if qc := st.QuotaContinuation; qc == nil || qc.ResumeAt != resumeAt {
+		t.Fatalf("reservation after replayed alert and live settlement = %+v", qc)
+	}
+}
+
 func TestQuotaContinuationQuietReplayIgnoredAndWorkerNonParticipation(t *testing.T) {
 	env := newQuotaEnv(t, map[string]string{
 		wsconfig.ItemAgentQuotaContinuation + ".all": "auto",

@@ -63,8 +63,7 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 		}
 	}
 	c.alerted = true
-	firstUsageLimit := !quiet && n.Kind == wslive.NoticeUsageLimit && !c.quotaUsageLimitAlerted
-	if firstUsageLimit {
+	if n.Kind == wslive.NoticeUsageLimit {
 		c.quotaUsageLimitAlerted = true
 	}
 	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
@@ -75,7 +74,8 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 		c.live.notice(n)
 	}
 	// A harness can report the same failure both before and during settlement.
-	if firstUsageLimit {
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && !c.quotaUsageLimitHandled {
+		c.quotaUsageLimitHandled = true
 		c.handleUsageLimitAlert(n, manualOnly)
 	}
 	c.syncHost(quiet)
@@ -87,7 +87,7 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 func (c *conv) turnSettled(turnErr string, quiet, compactCommand bool) {
 	alerted := c.alerted
 	usageLimitAlerted := c.quotaUsageLimitAlerted
-	c.alerted, c.quotaUsageLimitAlerted, c.retry = false, false, nil
+	c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled, c.retry = false, false, false, nil
 	if turnErr == "" && !alerted && c.failure != nil {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)

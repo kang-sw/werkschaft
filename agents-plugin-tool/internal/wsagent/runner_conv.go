@@ -211,6 +211,7 @@ type conv struct {
 	quotaC                 <-chan time.Time
 	quotaStop              func()
 	quotaUsageLimitAlerted bool
+	quotaUsageLimitHandled bool
 	quotaInjecting         bool
 	quotaPendingFire       bool
 	quotaCancelFence       atomic.Uint32
