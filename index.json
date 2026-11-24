@@ -484,9 +484,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-24T16:21:02Z",
+        "touched_at": "2026-11-24T16:44:47Z",
         "impl": {
-          "branch": "impl/develop/0520-p7-purge-ancestry"
+          "branch": "impl/develop/0520-p8-restart-safe-purge"
         }
       }
     },
