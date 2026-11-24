@@ -331,7 +331,7 @@ type Runner struct {
 	closedRows map[string]State
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
-	retiredPiBindings []retiredPiBinding
+	retiredPiBindings map[string]retiredPiBinding
 	// resumeMu serializes Pi child revival with close cascades without
 	// holding mu over store writes or conversation startup.
 	resumeMu sync.Mutex

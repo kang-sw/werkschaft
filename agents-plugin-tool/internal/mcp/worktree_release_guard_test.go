@@ -23,7 +23,8 @@ import (
 
 type retiredPiGuardHolder struct {
 	wsagent.HolderHost
-	exited atomic.Bool
+	session json.RawMessage
+	exited  atomic.Bool
 }
 
 func (*retiredPiGuardHolder) AddSink(wsholder.Sink) {}
@@ -34,13 +35,30 @@ func (h *retiredPiGuardHolder) List() wsholder.Listing {
 	if h.exited.Load() {
 		state = "exited"
 	}
-	return wsholder.Listing{Holders: []wsholder.Info{{ID: "heldpi", Child: &wsholder.ChildStatus{State: state}}}}
+	return wsholder.Listing{Holders: []wsholder.Info{{ID: "heldpi", Session: h.session, Child: &wsholder.ChildStatus{State: state}}}}
 }
 
 func TestWorktreeGuardsRefuseLiveRetiredPiHolder(t *testing.T) {
+	t.Run("saved holder ID", func(t *testing.T) { testWorktreeGuardsRefuseLiveRetiredPiHolder(t, true) })
+	t.Run("interrupted startup descriptor", func(t *testing.T) { testWorktreeGuardsRefuseLiveRetiredPiHolder(t, false) })
+}
+
+func testWorktreeGuardsRefuseLiveRetiredPiHolder(t *testing.T, saved bool) {
+	t.Helper()
 	dir, checkout := t.TempDir(), t.TempDir()
 	const id = "retiredworker"
-	raw, err := json.Marshal(wsagent.Record{ReplyID: id, Backend: wsagent.BackendPi, HolderID: "heldpi", Root: checkout, WSKey: "fixture"})
+	rec := wsagent.Record{ReplyID: id, Backend: wsagent.BackendPi, Root: t.TempDir(), WSKey: "fixture"}
+	holder := &retiredPiGuardHolder{}
+	if saved {
+		rec.HolderID, rec.Cwd = "heldpi", checkout
+	} else {
+		cwd := filepath.Join(checkout, "nested")
+		if err := os.Mkdir(cwd, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		holder.session, _ = json.Marshal(map[string]string{"kind": "lead", "backend": wsagent.BackendPi, "reply_id": id, "cwd": cwd})
+	}
+	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +69,12 @@ func TestWorktreeGuardsRefuseLiveRetiredPiHolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sessionDir, wsdashboard.AgentRecordFileName), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	holder := &retiredPiGuardHolder{}
 	runner := wsagent.NewRunner(wsagent.Options{Dir: dir, Holders: holder})
 	t.Cleanup(runner.Close)
 	runner.Start(nil)
+	if state, err := runner.Get(id); err != nil || state.Status != wsagent.StatusClosed {
+		t.Fatalf("retired history = %+v, %v", state, err)
+	}
 	s := &Server{worktreeChildren: runner}
 	ctx := context.Background()
 	if err := s.checkWorktreeBoundChildren(ctx, checkout); err == nil || !strings.Contains(err.Error(), id) {

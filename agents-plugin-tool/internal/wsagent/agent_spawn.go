@@ -2,6 +2,7 @@
 package wsagent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -311,18 +311,21 @@ type BoundWorktreeChild struct {
 }
 
 type retiredPiBinding struct {
-	holder, root, cwd, createdAt string
-	child                        BoundWorktreeChild
+	root, cwd, createdAt string
+	child                BoundWorktreeChild
 }
 
 func (r *Runner) rememberRetiredPiBinding(rec Record) {
 	root, cwd := canonicalBinding(rec)
 	r.mu.Lock()
-	r.retiredPiBindings = append(r.retiredPiBindings, retiredPiBinding{
-		holder: rec.HolderID, root: root, cwd: cwd, createdAt: rec.CreatedAt,
+	if r.retiredPiBindings == nil {
+		r.retiredPiBindings = make(map[string]retiredPiBinding)
+	}
+	r.retiredPiBindings[rec.HolderID] = retiredPiBinding{
+		root: root, cwd: cwd, createdAt: rec.CreatedAt,
 		// Occupancy describes the process. The historical record stays ended.
 		child: BoundWorktreeChild{Address: AgentAddress(rec.ReplyID), State: AgentRunning, Cwd: rec.Cwd, Live: true},
-	})
+	}
 	r.mu.Unlock()
 }
 
@@ -331,26 +334,45 @@ func (r *Runner) boundRetiredPiHolders(target string) []retiredPiBinding {
 		return nil
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	complete := r.scanDone()
+	listed := r.opts.Holders.List()
+	complete = complete && !listed.Incomplete
+	alive := make(map[string]bool, len(listed.Holders))
+	for _, info := range listed.Holders {
+		alive[info.ID] = info.Child == nil || info.Child.State != "exited"
+		if !alive[info.ID] {
+			continue
+		}
+		if _, known := r.retiredPiBindings[info.ID]; known {
+			continue
+		}
+		var meta holderSession
+		if json.Unmarshal(info.Session, &meta) != nil || !meta.retiredPi() ||
+			!wsdashboard.ValidReplyID(meta.ReplyID) || !filepath.IsAbs(meta.Cwd) {
+			continue
+		}
+		if r.retiredPiBindings == nil {
+			r.retiredPiBindings = make(map[string]retiredPiBinding)
+		}
+		r.retiredPiBindings[info.ID] = retiredPiBinding{
+			cwd:       canonicalWorktreePath(meta.Cwd),
+			createdAt: time.UnixMilli(info.StartedAt).UTC().Format(time.RFC3339),
+			child:     BoundWorktreeChild{Address: AgentAddress(meta.ReplyID), State: AgentRunning, Cwd: meta.Cwd, Live: true},
+		}
+	}
 	var matches []retiredPiBinding
-	for _, binding := range r.retiredPiBindings {
+	for id, binding := range r.retiredPiBindings {
+		live, known := alive[id]
+		if !live && (known || complete) {
+			delete(r.retiredPiBindings, id)
+			continue
+		}
 		if worktreePathContains(target, binding.root) || worktreePathContains(target, binding.cwd) {
 			matches = append(matches, binding)
 		}
 	}
-	r.mu.Unlock()
-	if len(matches) == 0 {
-		return nil
-	}
-	scanned := r.scanDone()
-	listed := r.opts.Holders.List()
-	alive := make(map[string]bool, len(listed.Holders))
-	for _, info := range listed.Holders {
-		alive[info.ID] = info.Child == nil || info.Child.State != "exited"
-	}
-	return slices.DeleteFunc(matches, func(binding retiredPiBinding) bool {
-		live, known := alive[binding.holder]
-		return !live && (known || scanned && !listed.Incomplete)
-	})
+	return matches
 }
 
 // ActiveChildrenInWorktree returns every conversation in the runner whose
