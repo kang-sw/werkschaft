@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: e427bdcec26223dc
 sage-review-completeness-reviewed: e427bdcec26223dc
+completed: 2026-11-24
 ---
 
 # 0.52 release-gate re-review blockers (permissions, credentials, Pi history, git.search)
@@ -355,3 +356,8 @@ and timed out during `TestExecHUDBrowser`. That test passed in the
   subtest and provider replay. This commit changes only test code.
 
 The lead's range re-review and live-provider publish gates remain pending.
+
+
+## Resolution (2026-11-24)
+
+Both phases landed with the integrated macOS and Windows verification recorded in the Results. Phase 2 also fixed a C4 partial-refresh loss found in the source read-through (5cdc60426) and repaired pre-existing dashboard test fixtures with the release lead's approval. Seven Chromium dashboard tests that fail identically on develop are handed to the dashboard owner and are outside this ticket.
