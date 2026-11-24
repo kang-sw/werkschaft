@@ -101,6 +101,7 @@ func (c *conv) closeDurable() error {
 		rec.TurnOpen, rec.DurableTurn, rec.DurableSteers = false, nil, nil
 		rec.HeldTurn, rec.DurableHeldReportID = nil, ""
 		rec.Queued, rec.Mail, rec.Reports, rec.DurableInboxClaims = nil, nil, nil, nil
+		rec.QuotaContinuation = nil
 		rec.Capability = ""
 		rec.forgetMCP()
 	}, func() {

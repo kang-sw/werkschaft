@@ -1091,8 +1091,9 @@ type agyMessage struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data,omitempty"`
 	} `json:"error"`
 }
 
@@ -1527,7 +1528,115 @@ func (m *agyMapper) endTurn(msg agyMessage, now int64) []Event {
 	case r.StopReason != "" && r.StopReason != "end_turn":
 		ev.TurnError = "agy stopped the turn: " + r.StopReason
 	}
+	if alert := agyUsageLimitAlert(msg, modelFailure, now); alert != nil {
+		out = append(out, Event{Alert: alert})
+	}
 	return append(out, ev)
+}
+
+// isAgyQuotaText reports whether an ACP error payload or anchored in-band
+// model-failure line indicates a quota or rate-limit exhaustion rather than a
+// transient transport/capacity stall.
+func isAgyQuotaText(text string) bool {
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "resource_exhausted"),
+		strings.Contains(lower, "usage limit"),
+		strings.Contains(lower, "usage_limit"),
+		strings.Contains(lower, "rate limit"),
+		strings.Contains(lower, "rate_limit"),
+		strings.Contains(lower, "too many requests"),
+		strings.Contains(lower, "quota"),
+		strings.Contains(lower, "exhausted your capacity"),
+		hasHTTPStatus429(lower):
+		return true
+	}
+	return false
+}
+
+// hasHTTPStatus429 matches HTTP/API status-code 429 shapes while avoiding false
+// positives on unrelated numbers such as line numbers or ports ("line 1429", "port 4290").
+func hasHTTPStatus429(lower string) bool {
+	if strings.TrimSpace(lower) == "429" {
+		return true
+	}
+	for _, pat := range []string{
+		"http 429", "http/1.1 429", "http/2 429",
+		"status 429", "status: 429", "status=429",
+		"code 429", "code: 429", "code=429",
+		"error 429", "error: 429",
+		"429 too many", "(429)", "[429]",
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// agyUsageLimitAlert classifies an ACP prompt error or anchored in-band model
+// failure into a common NoticeUsageLimit alert.
+func agyUsageLimitAlert(msg agyMessage, modelFailure string, now int64) *wslive.Notice {
+	if msg.Error != nil {
+		dataText := string(msg.Error.Data)
+		if msg.Error.Code == 429 || msg.Error.Code == 8 || isAgyQuotaText(msg.Error.Message) || isAgyQuotaText(dataText) {
+			text := strings.TrimSpace(msg.Error.Message)
+			if text == "" {
+				text = "usage limit reached"
+			}
+			return &wslive.Notice{
+				Kind:     wslive.NoticeUsageLimit,
+				Text:     "agy: " + text,
+				ResetsAt: parseAgyErrorResetTime(msg.Error.Data, now),
+			}
+		}
+	}
+	if modelFailure != "" && isAgyQuotaText(modelFailure) {
+		return &wslive.Notice{
+			Kind: wslive.NoticeUsageLimit,
+			Text: modelFailure,
+		}
+	}
+	return nil
+}
+
+// parseAgyErrorResetTime extracts a future reset timestamp (epoch ms) from an
+// optional ACP error.data JSON object when present.
+func parseAgyErrorResetTime(raw json.RawMessage, now int64) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return 0
+	}
+	for _, key := range []string{"resetsAt", "resets_at", "reset_time", "resetTime"} {
+		val, ok := obj[key]
+		if !ok || len(val) == 0 {
+			continue
+		}
+		var s string
+		if json.Unmarshal(val, &s) == nil && s != "" {
+			if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s)); err == nil {
+				if ms := t.UnixMilli(); ms > now {
+					return ms
+				}
+			}
+		}
+		var n float64
+		if json.Unmarshal(val, &n) == nil && n > 0 {
+			if n < 1e12 {
+				n *= 1000
+			}
+			if ms := int64(n); ms > now {
+				return ms
+			}
+		}
+	}
+	return 0
 }
 
 // agyMCPToolName is a tool's current name under agy's MCP naming: the

@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "較早的輸出已被截斷。",
   "js.bgexec.tail.evicted": "{0}（已截斷 {1}）",
   "js.bgexec.hint": "↑/↓ 選擇 · Esc 關閉",
-  "js.bgexec.readonly": "唯讀檢視"
+  "js.bgexec.readonly": "唯讀檢視",
+  "js.settings.key.agent.quota_continuation.label": "配額耗盡後續行",
+  "js.settings.key.agent.quota_continuation.description": "控制託管主工作階段在達到使用量上限後是否自動預約續行回合（off：依工作階段手動預約，auto：自動預約）。",
+  "quota.chip.scheduled": "已預約繼續",
+  "quota.chip.exhausted": "重試已用盡",
+  "js.quota.title.ready": "已達到使用限額",
+  "js.quota.title.scheduled": "已預約繼續執行",
+  "js.quota.title.exhausted": "繼續執行重試已用盡",
+  "js.quota.resume_at": "預計恢復:",
+  "js.quota.resets_at": "重設時間:",
+  "js.quota.fallback_hourly": "每小時重試（最多 {0} 次）",
+  "js.quota.attempt": "第 {0}/{1} 次嘗試",
+  "js.quota.exhausted_hint": "在 {0}/{1} 次嘗試後自動重試已停止。請重新預約或傳送訊息以繼續。",
+  "js.quota.ready_hint": "可預約在使用限額重設後自動繼續執行。",
+  "js.quota.schedule": "預約繼續",
+  "js.quota.cancel": "取消預約",
+  "js.quota.scheduled_toast": "已預約繼續執行。",
+  "js.quota.cancelled_toast": "已取消預約的繼續執行。"
 }

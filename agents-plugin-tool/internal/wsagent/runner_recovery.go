@@ -31,15 +31,16 @@ func (c *conv) syncHost(quiet bool) {
 	var h *wslive.Host
 	if c.rec.Lead {
 		h = &wslive.Host{
-			BackgroundTasks: c.bgTasks,
-			Background:      copyCount(c.background),
-			Monitors:        copyCount(c.monitors),
-			BgExecCount:     totalExec,
-			BgExecSelf:      selfExec,
-			BgExecDesc:      descExec,
-			Failure:         c.failure,
-			MCPBroken:       c.mcpBroken,
-			Retry:           c.retry,
+			BackgroundTasks:   c.bgTasks,
+			Background:        copyCount(c.background),
+			Monitors:          copyCount(c.monitors),
+			BgExecCount:       totalExec,
+			BgExecSelf:        selfExec,
+			BgExecDesc:        descExec,
+			Failure:           c.failure,
+			MCPBroken:         c.mcpBroken,
+			Retry:             c.retry,
+			QuotaContinuation: toLiveQuotaContinuation(c.rec.QuotaContinuation),
 		}
 	} else if totalExec > 0 {
 		h = &wslive.Host{
@@ -55,8 +56,16 @@ func (c *conv) syncHost(quiet bool) {
 
 // alert takes a typed failure the harness reported: a conversation line,
 // and the session's failure state until a turn succeeds.
-func (c *conv) alert(n wslive.Notice, quiet bool) {
+func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && n.ResetsAt <= 0 && c.r.opts.QuotaResetAt != nil {
+		if at := c.r.opts.QuotaResetAt(c.rec.Backend, c.rec.Model); at > c.r.opts.Now().UnixMilli() {
+			n.ResetsAt = at
+		}
+	}
 	c.alerted = true
+	if n.Kind == wslive.NoticeUsageLimit {
+		c.quotaUsageLimitAlerted = true
+	}
 	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
 		c.compactStage1UsageLimited = true
 	}
@@ -64,6 +73,7 @@ func (c *conv) alert(n wslive.Notice, quiet bool) {
 	if !quiet {
 		c.live.notice(n)
 	}
+	c.handleUsageLimitAlert(n, manualOnly, quiet)
 	c.syncHost(quiet)
 	c.changed(quiet)
 }
@@ -72,10 +82,14 @@ func (c *conv) alert(n wslive.Notice, quiet bool) {
 // the failure state once a turn ended with no failure of any kind.
 func (c *conv) turnSettled(turnErr string, quiet bool) {
 	alerted := c.alerted
-	c.alerted, c.retry = false, nil
+	usageLimitAlerted := c.quotaUsageLimitAlerted
+	c.alerted, c.quotaUsageLimitAlerted, c.retry = false, false, nil
 	if turnErr == "" && !alerted && c.failure != nil {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)
+	}
+	if !quiet && !usageLimitAlerted && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(quiet)
 	}
 	c.syncHost(quiet)
 }

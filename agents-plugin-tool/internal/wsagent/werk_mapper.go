@@ -124,6 +124,17 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 			if end.TurnError == "" {
 				end.TurnError = "the model request failed"
 			}
+			if l.UsageLimit {
+				out = append(out, Event{
+					Alert: &wslive.Notice{
+						Kind:     wslive.NoticeUsageLimit,
+						Text:     end.TurnError,
+						ResetsAt: l.ResetsAt,
+					},
+					AlertManualOnly: l.PlanPaused,
+					TurnID:          l.TurnID,
+				})
+			}
 		}
 		return append(out, Event{RetryEnd: true}, end)
 	case werk.LineSteerAck:

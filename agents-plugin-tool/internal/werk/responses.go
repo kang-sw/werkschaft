@@ -129,6 +129,9 @@ type HTTPError struct {
 	// RetryAfter is the delay the endpoint asked for (Retry-After); zero
 	// when it named none.
 	RetryAfter time.Duration
+	// ResetsAt is the latest future rate-limit reset time parsed from
+	// response headers (epoch milliseconds), or 0 when unavailable.
+	ResetsAt int64
 }
 
 func (e *HTTPError) Error() string {
@@ -399,7 +402,12 @@ func httpFailure(resp *http.Response, secret string, stall time.Duration, cancel
 	timer := time.AfterFunc(stall, cancel)
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	timer.Stop()
-	e := &HTTPError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
+	now := time.Now()
+	e := &HTTPError{
+		Status:     resp.StatusCode,
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), now),
+		ResetsAt:   parseRateLimitReset(resp.Header, now),
+	}
 	var wrap struct {
 		Error struct {
 			Message string          `json:"message"`
@@ -443,6 +451,52 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 		}
 	}
 	return 0
+}
+
+// parseRateLimitReset extracts the maximum future reset timestamp (epoch ms)
+// across standard provider rate-limit headers:
+//   - Retry-After (seconds or HTTP-date)
+//   - x-ratelimit-reset-requests / x-ratelimit-reset-tokens (Go-style relative durations)
+//   - anthropic-ratelimit-*-reset (RFC3339 timestamps)
+//
+// Past or unparseable values are ignored; returns 0 when no future reset time is present.
+func parseRateLimitReset(h http.Header, now time.Time) int64 {
+	if len(h) == 0 {
+		return 0
+	}
+	nowMs := now.UnixMilli()
+	var best int64
+	consider := func(ms int64) {
+		if ms > nowMs && ms > best {
+			best = ms
+		}
+	}
+	if d := parseRetryAfter(h.Get("Retry-After"), now); d > 0 {
+		consider(now.Add(d).UnixMilli())
+	}
+	for _, key := range []string{"X-Ratelimit-Reset-Requests", "X-Ratelimit-Reset-Tokens"} {
+		if v := strings.TrimSpace(h.Get(key)); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				consider(now.Add(d).UnixMilli())
+			}
+		}
+	}
+	for k, vals := range h {
+		lk := strings.ToLower(k)
+		if !strings.HasPrefix(lk, "anthropic-ratelimit-") || !strings.HasSuffix(lk, "-reset") {
+			continue
+		}
+		for _, v := range vals {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+				consider(t.UnixMilli())
+			}
+		}
+	}
+	return best
 }
 
 // streamState assembles one response from its events.

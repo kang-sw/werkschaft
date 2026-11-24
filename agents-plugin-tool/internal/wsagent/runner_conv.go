@@ -207,6 +207,19 @@ type conv struct {
 	// returns; pending -> firing commits the automatic continue instead.
 	modelWaitBackoffFence atomic.Uint32
 
+	// Hosted-lead quota continuation scheduler state (quota_continuation.go).
+	quotaC                 <-chan time.Time
+	quotaStop              func()
+	quotaUsageLimitAlerted bool
+	quotaInjecting         bool
+	quotaPendingFire       bool
+	quotaCancelFence       atomic.Uint32
+	quotaInputGen          atomic.Uint64
+	quotaArmedInputGen     uint64
+	// Test-only hooks for quotaContinuationTimedOut race windows (nil in production).
+	onQuotaAfterFence func()
+	onQuotaBeforeSend func()
+
 	// loop-owned, except registration timing below.
 	events          <-chan Event
 	idle            *time.Timer
@@ -569,6 +582,9 @@ func (c *conv) mailChanged() {
 		// the page.
 		c.r.notify(rec.ReplyID, rec.Root)
 	}
+	if (len(mail) > 0 || len(c.rec.Mail) > 0) && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
+	}
 	// Mail claimed earlier and not yet delivered (a start that failed, a
 	// daemon that ended) goes with it: nothing else would submit it.
 	if len(c.rec.Mail) > 0 {
@@ -729,8 +745,14 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
 	c.cutoverInstructionGone()
-	if c.modelWaitBackoffC != nil && c.held > 0 {
+	c.mu.Lock()
+	held := c.held
+	c.mu.Unlock()
+	if c.modelWaitBackoffC != nil && held > 0 {
 		c.cancelModelWaitBackoff()
+	}
+	if !c.quotaInjecting && held > 0 && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
 	}
 	c.checkInterrupt()
 	c.steer()
@@ -820,6 +842,7 @@ func (c *conv) loop() {
 		c.stopCompactWatchdog()
 		c.stopModelWaitTimer()
 		c.stopModelWaitBackoff()
+		c.stopQuotaTimer()
 		if c.spawnTimer != nil {
 			c.spawnTimer.Stop()
 		}
@@ -856,18 +879,20 @@ func (c *conv) loop() {
 	// A rejoined child whose record shows its turn open runs it under a
 	// trusted holder: publish that before the replay settles it.
 	c.publishAwake(c.wantAwake())
+	c.restoreQuotaContinuation()
 	if c.refreshShellHold() {
 		c.watched()
 	}
 	for {
 		c.syncLoopBusy()
-		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
+		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, quotaC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
 		compactC = c.compactC
 		modelWaitC = c.modelWaitC
 		modelWaitDrainC = c.modelWaitDrainC
 		modelWaitCancelC = c.modelWaitCancelC
 		modelWaitBackoffC = c.modelWaitBackoffC
+		quotaC = c.quotaC
 		if c.spawnTimer != nil {
 			spawnC = c.spawnTimer.C
 		}
@@ -954,6 +979,8 @@ func (c *conv) loop() {
 			c.modelWaitCancelTimedOut()
 		case <-modelWaitBackoffC:
 			c.modelWaitBackoffTimedOut()
+		case <-quotaC:
+			c.quotaContinuationTimedOut()
 		case <-beat.C:
 			c.heartbeat()
 		case <-c.r.quit:
@@ -1111,6 +1138,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 			f := *c.failure
 			st.Failure = &f
 		}
+		st.QuotaContinuation = cloneQuotaContinuation(c.rec.QuotaContinuation)
 		st.MCPBroken = slices.Clone(c.mcpBroken)
 	}
 	if c.caps != nil {
@@ -1344,11 +1372,14 @@ func (c *conv) release() {
 			mail = nil
 		}
 	}
+	c.stopQuotaTimer()
 	c.update(func(rec *Record) {
 		rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 		rec.Mail = mail
+		rec.QuotaContinuation = nil
 		c.closed = true
 	})
+	c.syncHost(false)
 	c.dropHeld()
 	c.live.setAdapter("")
 	rec := c.record()
@@ -1787,7 +1818,7 @@ func (c *conv) hasPendingKick() bool {
 	held := c.held
 	c.mu.Unlock()
 	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
-		c.rec.DurableTurn != nil || c.kickDeferred.Load()
+		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire
 }
 
 // deferKickIfUnpublished defers a processless start kick until
@@ -1815,6 +1846,11 @@ func (c *conv) kick() {
 	}
 	if !c.canKick() {
 		return
+	}
+	if c.quotaPendingFire {
+		if c.quotaContinuationTimedOut() {
+			return
+		}
 	}
 	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
 		c.resumeDurableTurn()

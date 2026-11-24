@@ -76,6 +76,20 @@ type Host struct {
 	MCPBroken []string `json:"mcpBroken,omitempty"`
 	// Retry is the API request retry under way; nil when none.
 	Retry *Retry `json:"retry,omitempty"`
+	// QuotaContinuation is a hosted lead's post-usage-limit resume state; nil
+	// when no continuation is scheduled, in flight, or exhausted.
+	QuotaContinuation *QuotaContinuation `json:"quotaContinuation,omitempty"`
+}
+
+// QuotaContinuation is a hosted lead's post-usage-limit continuation status
+// projected into the live snapshot.
+type QuotaContinuation struct {
+	Status      string `json:"status"`
+	ResumeAt    int64  `json:"resumeAt,omitempty"`
+	Attempts    int    `json:"attempts,omitempty"`
+	MaxAttempts int    `json:"maxAttempts,omitempty"`
+	Manual      bool   `json:"manual,omitempty"`
+	NoticeText  string `json:"noticeText,omitempty"`
 }
 
 // Retry is an API request the harness retries: attempt N of MaxRetries
@@ -116,6 +130,12 @@ func (st *State) SetHost(h *Host) bool {
 			r.Error = cleanLine(st.scrub.scrub(r.Error), RetryErrorRunes)
 			c.Retry = &r
 		}
+		if c.QuotaContinuation != nil {
+			qc := *c.QuotaContinuation
+			qc.ResumeAt = max(qc.ResumeAt, 0)
+			qc.NoticeText = cleanLine(st.scrub.scrub(qc.NoticeText), NoticeTextRunes)
+			c.QuotaContinuation = &qc
+		}
 		if !reflect.DeepEqual(c, Host{}) {
 			next = &c
 		}
@@ -141,6 +161,10 @@ func (h *Host) clone() *Host {
 	if h.Retry != nil {
 		r := *h.Retry
 		c.Retry = &r
+	}
+	if h.QuotaContinuation != nil {
+		qc := *h.QuotaContinuation
+		c.QuotaContinuation = &qc
 	}
 	return &c
 }

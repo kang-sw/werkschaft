@@ -134,7 +134,7 @@ func startDashboardAuditFixture(t *testing.T, blocked bool) (*wsdashboard.Daemon
 		}
 	}
 	holders := newDashboardHolders(dir, io.Discard, &hostedExecLink{})
-	runner := newAgentRunner(dir, io.Discard, nil, nil, holders, nil, nil, nil)
+	runner := newAgentRunner(dir, io.Discard, nil, nil, nil, holders, nil, nil, nil)
 	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
 		Dir: dir, Home: t.TempDir(), Agents: runner, Holders: holders,
 	})

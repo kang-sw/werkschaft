@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "La sortie précédente a été tronquée.",
   "js.bgexec.tail.evicted": "{0} ({1} tronqués)",
   "js.bgexec.hint": "↑/↓ sélectionner · Esc fermer",
-  "js.bgexec.readonly": "Lecture seule"
+  "js.bgexec.readonly": "Lecture seule",
+  "js.settings.key.agent.quota_continuation.label": "Reprise après limite de quota",
+  "js.settings.key.agent.quota_continuation.description": "Définit si les sessions principales hébergées planifient automatiquement un tour de reprise après une limite d'utilisation (off : manuel par session, auto : planification automatique).",
+  "quota.chip.scheduled": "Reprise planifiée",
+  "quota.chip.exhausted": "Tentatives épuisées",
+  "js.quota.title.ready": "Limite d'utilisation atteinte",
+  "js.quota.title.scheduled": "Poursuite planifiée",
+  "js.quota.title.exhausted": "Tentatives de poursuite épuisées",
+  "js.quota.resume_at": "Reprise à",
+  "js.quota.resets_at": "Réinitialisation",
+  "js.quota.fallback_hourly": "Nouvel essai toutes les heures (max. {0})",
+  "js.quota.attempt": "Tentative {0}/{1}",
+  "js.quota.exhausted_hint": "Les tentatives automatiques se sont arrêtées après {0}/{1} essais. Planifiez à nouveau ou envoyez un message pour continuer.",
+  "js.quota.ready_hint": "Planifiez une poursuite pour reprendre après la réinitialisation de la limite d'utilisation.",
+  "js.quota.schedule": "Planifier la poursuite",
+  "js.quota.cancel": "Annuler",
+  "js.quota.scheduled_toast": "Poursuite planifiée.",
+  "js.quota.cancelled_toast": "Poursuite planifiée annulée."
 }
