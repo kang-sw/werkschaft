@@ -4,7 +4,6 @@
 package wsinbox
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -13,11 +12,6 @@ import (
 	"time"
 	"unicode"
 )
-
-// ErrNotSteerable reports a steer of an entry that never steers: a scheduled
-// prompt waits for the turn end like any follow-up, so a dashboard steer
-// cannot turn it into a mid-turn injection.
-var ErrNotSteerable = errors.New("a scheduled prompt cannot be steered")
 
 // Cron marks an entry a schedule sent: the schedule's id and name and the
 // matched cron minute, RFC 3339 in the schedule's offset. The marker is the
@@ -85,8 +79,8 @@ func entryFileName(stamp, suffix string, e Entry) string {
 }
 
 // provenCron settles an entry read from path: only a scheduler-named file
-// keeps its marker (and is never steered); a cron-named file without one does
-// not read; any other file loses a marker it carries.
+// keeps its marker; a cron-named file without one does not read; any other
+// file loses a marker it carries.
 func provenCron(path string, e Entry) (Entry, error) {
 	if !isCronFile(path) {
 		e.Cron = nil
@@ -95,7 +89,6 @@ func provenCron(path string, e Entry) (Entry, error) {
 	if e.Cron == nil {
 		return Entry{}, fmt.Errorf("parse inbox entry: %s carries no schedule marker", filepath.Base(path))
 	}
-	e.Steer = false
 	return e, nil
 }
 
@@ -112,18 +105,18 @@ func cleanCronMark(c Cron) (Cron, error) {
 	return c, nil
 }
 
-// normalizeCron checks a scheduled prompt: its marker, its text alone (no
-// answers, mentions, images or the like), and never steered.
+// normalizeCron checks a scheduled prompt: its marker and its text alone (no
+// answers, mentions, images or the like).
 func normalizeCron(e Entry) (Entry, error) {
 	mark, err := cleanCronMark(*e.Cron)
 	if err != nil {
 		return Entry{}, err
 	}
-	if e.Steer || e.Interrupt || e.Command != nil || len(e.Chips) > 0 || len(e.Topics) > 0 || len(e.Mentions) > 0 ||
+	if e.Interrupt || e.Command != nil || len(e.Chips) > 0 || len(e.Topics) > 0 || len(e.Mentions) > 0 ||
 		len(e.CloseRequests) > 0 || len(e.Picks) > 0 || len(e.Consoles) > 0 || len(e.Images) > 0 {
-		return Entry{}, fmt.Errorf("%w: a scheduled prompt carries text alone and is never steered", ErrInvalid)
+		return Entry{}, fmt.Errorf("%w: a scheduled prompt carries text alone", ErrInvalid)
 	}
-	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, UTCOffsetMinutes: e.UTCOffsetMinutes, Cron: &mark}
+	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, UTCOffsetMinutes: e.UTCOffsetMinutes, Steer: e.Steer, Cron: &mark}
 	size := 0
 	for _, p := range e.Parts {
 		if p = strings.TrimSpace(p); p != "" {

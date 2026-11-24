@@ -727,12 +727,12 @@ func (c *conv) steer() {
 	if st == nil {
 		return
 	}
-	// A system notice waits out the ws MCP calls in flight on a harness
-	// whose steer replaces the running turn (holdsNotices); the user's own
-	// steered messages still go.
+	// A system notice or scheduled prompt waits out the ws MCP calls in flight
+	// on a harness whose steer replaces the running turn (holdsNotices); the
+	// user's own steered messages still go.
 	var take func(wsinbox.Entry) bool
 	if c.holdsNotices(ctl) {
-		take = func(e wsinbox.Entry) bool { return e.EventID == "" }
+		take = func(e wsinbox.Entry) bool { return e.EventID == "" && e.Cron == nil }
 	}
 	c.mu.Lock()
 	recs, _ := wsinbox.DrainSteerWhere(c.inbox, take)

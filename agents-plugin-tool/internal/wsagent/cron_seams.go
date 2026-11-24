@@ -78,11 +78,13 @@ func (r *Runner) CronHeld(id string) []string {
 	return out
 }
 
-// DeliverCron holds one scheduled prompt as a non-steered, never-merged
-// entry in lead conversation id's inbox: the next turn takes it, and a turn
-// running now does not see it. It reports false when the conversation is
-// closed, handed off, not a lead or unknown, with nothing written. Its send
-// counters and record write are Runner.send's, as AdmitCompletion keeps them.
+// DeliverCron holds one scheduled prompt as a steered, never-merged entry in
+// lead conversation id's inbox: a running turn takes it mid-turn when the
+// harness steers (after any in-flight ws MCP call on a replacesTurn harness),
+// and an idle lead starts a turn with it. It reports false when the
+// conversation is closed, handed off, not a lead or unknown, with nothing
+// written. Its send counters and record write are Runner.send's, as
+// AdmitCompletion keeps them.
 func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accepted bool, err error) {
 	c, err := r.open(id)
 	if err != nil {
@@ -95,7 +97,7 @@ func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accep
 		c.mu.Unlock()
 		return false, nil
 	}
-	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{prompt}, Cron: &mark}, r.opts.Now()); err != nil {
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{prompt}, Steer: true, Cron: &mark}, r.opts.Now()); err != nil {
 		c.mu.Unlock()
 		return false, err
 	}
