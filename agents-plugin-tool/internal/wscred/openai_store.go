@@ -240,7 +240,7 @@ func (s *Store) setOpenAIBackgroundConsent(clientID string, prompt uint64, activ
 	if a.ClientID == "" {
 		return openAIProviderError(ErrNotConfigured)
 	}
-	if activeOnly && (a.IDToken == "" || !a.planEnabled()) {
+	if activeOnly && allowed && (a.IDToken == "" || !a.planEnabled()) {
 		return openAIProviderError(ErrNotConfigured)
 	}
 	if a.Consent != nil && *a.Consent == allowed {
