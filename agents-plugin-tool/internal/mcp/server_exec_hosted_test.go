@@ -303,12 +303,50 @@ func TestHostedExecRunAndShellForms(t *testing.T) {
 	}
 }
 
+func TestHostedExecStdinModes(t *testing.T) {
+	fx := newHostedExecFixture(t, 3*time.Second)
+	for _, tc := range []struct {
+		tool string
+		arg  string
+	}{
+		{"exec.run", "exe"},
+		{"exec.shell", "cmd"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			text, isErr := fx.call(tc.tool, map[string]any{tc.arg: "cat"})
+			if isErr || !strings.Contains(text, "status: exited 0") {
+				t.Fatalf("cat without stdin = %v %s", isErr, text)
+			}
+			id := lineValue(t, execIDLine, text)
+			text, isErr = fx.call("exec.write", map[string]any{"exec_id": id, "data": "late"})
+			if !isErr || !strings.Contains(text, "no open stdin") || !strings.Contains(text, "stdin_open: true") {
+				t.Fatalf("write to default-closed stdin = %v %s", isErr, text)
+			}
+
+			text, isErr = fx.call(tc.tool, map[string]any{tc.arg: "cat", "stdin": "given\n", "stdin_open": false})
+			if isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "given\n") {
+				t.Fatalf("cat with stdin = %v %s", isErr, text)
+			}
+			for _, stdin := range []string{"given\n", ""} {
+				text, isErr = fx.call(tc.tool, map[string]any{tc.arg: "cat", "stdin": stdin, "stdin_open": true})
+				if !isErr || !strings.Contains(text, "stdin_open: true cannot be used with stdin") {
+					t.Fatalf("cat with both stdin options = %v %s", isErr, text)
+				}
+			}
+		})
+	}
+	text, isErr := fx.call("exec.shell", map[string]any{"command": "cat", "stdin_open": true})
+	if !isErr || !strings.Contains(text, "mixed argument forms") || !strings.Contains(text, "stdin_open") {
+		t.Fatalf("legacy shell with stdin_open = %v %s", isErr, text)
+	}
+}
+
 // TestHostedExecAsyncWriteTailListStopAndNotice: async answers at once,
 // exec.write feeds an open stdin until eof, the tail and listing show the
 // job, the end sends one notice, and exec.stop ends a running job's group.
 func TestHostedExecAsyncWriteTailListStopAndNotice(t *testing.T) {
 	fx := newHostedExecFixture(t, 10*time.Second)
-	text, isErr := fx.call("exec.run", map[string]any{"exe": "cat", "async": true})
+	text, isErr := fx.call("exec.run", map[string]any{"exe": "cat", "async": true, "stdin_open": true})
 	if isErr || !strings.Contains(text, "started async, exec id") || !strings.Contains(text, "status: running") {
 		t.Fatalf("async cat = %v %s", isErr, text)
 	}

@@ -75,8 +75,8 @@ func (w *werkReplacementTransport) RoundTrip(req *http.Request) (*http.Response,
 			if !ok || key == "" {
 				return nil, fmt.Errorf("the worker has no session key in its instructions")
 			}
-			args, err := json.Marshal(map[string]string{
-				"cmd": "printf 'started\n'; read value; printf 'finished\n'", "session_key": key,
+			args, err := json.Marshal(map[string]any{
+				"cmd": "printf 'started\n'; read value; printf 'finished\n'", "session_key": key, "stdin_open": true,
 			})
 			if err != nil {
 				return nil, err
