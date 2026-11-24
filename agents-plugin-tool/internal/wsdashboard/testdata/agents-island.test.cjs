@@ -397,7 +397,9 @@ ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, toolDelay, 'thinking -> tool preserves animationDelay without phase jump');
 hudPayload.roots[0].state = 'holding';
 ctx.agSwapped();
-assert.notEqual(oldRing.style.animationDelay, toolDelay, 'entering holding from spinning restamps');
+// Compare the stamp, not the delay: the delay is derived from the live clock
+// and can coincide across the two periods by chance.
+assert.notEqual(oldRing.wsAnimationStamp, toolStamp, 'entering holding from spinning restamps');
 hudPayload.roots[0].state = 'idle';
 ctx.agSwapped();
 assert.equal(oldRing.style.animationDelay, '', 'leaving an animated state clears its delay');
