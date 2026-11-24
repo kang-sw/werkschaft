@@ -507,7 +507,17 @@
       "registered_at": "2026-11-23T00:31:15Z"
     },
     "261124-bug-ws-0520-release-gate-blockers": {
-      "registered_at": "2026-11-23T23:52:17Z"
+      "registered_at": "2026-11-23T23:52:17Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-24T00:22:04Z",
+        "impl": {
+          "branch": "impl/develop/cleft-sandy-crook"
+        }
+      }
     },
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
