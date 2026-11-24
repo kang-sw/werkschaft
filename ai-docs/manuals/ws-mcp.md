@@ -906,9 +906,11 @@ Before retiring a Pi record, 0.52 commits a copy to
 `<daemon state>/retired-pi-history/<reply-id>/`. It preserves `agent.json`
 and, when present, `registration.json`, `snapshot.json`, `ring/`, and the
 daemon-owned `pi/session.jsonl`. On startup, 0.52 refreshes changed archives
-from surviving sessions, keeping a complete copy recoverable during refresh.
-The archived JSONL also keeps later appends through a hard link where
-supported. Other filesystems keep a copy from the last archive snapshot.
+from surviving sessions and keeps archived components missing from the
+live directory. It combines archived and surviving ring entries within
+the existing ring retention limit. A complete copy stays recoverable
+during refresh. The archived JSONL keeps later appends through a hard link
+where supported. Other filesystems keep a copy from the last archive snapshot.
 
 During a matched v0.51.2 rollback, the old pruner walks only `sessions/`
 and can remove aged, retired sessions that lack a terminal owner (v0.51.2
