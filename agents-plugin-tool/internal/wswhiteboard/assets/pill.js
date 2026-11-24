@@ -391,11 +391,23 @@
     return false;
   }
   function update() {
-    var rt = 0, rb = window.innerHeight;
-    if (root) { var rr = root.getBoundingClientRect(); rt = rr.top; rb = rr.bottom; }
+    var rt = 0, rb = window.innerHeight, boardVisible = true;
+    if (root) { var rr = root.getBoundingClientRect(); rt = rr.top; rb = rr.bottom; boardVisible = !!(rr.width || rr.height); }
+    var freeInfo = (host.hasAttribute && host.hasAttribute("data-board-free") && window.WsBoardAnchor && window.WsBoardAnchor.windowInfo) ? window.WsBoardAnchor.windowInfo() : null;
+    if (freeInfo && !freeInfo.active) freeInfo = null;
     var above = [], below = [], topics = new Map();
     items.forEach(function (el) {
-      var topic = el.closest("section.topic"), tr = topic && topics.get(topic);
+      var topic = el.closest("section.topic");
+      if (topic && topic.hasAttribute && topic.hasAttribute("data-wb-offwindow")) {
+        if (!boardVisible || topic.hidden || topic.hasAttribute("data-state-filtered") || folded(el, topic)) return;
+        if (freeInfo) {
+          var idx = freeInfo.indexOf(topic);
+          if (idx >= 0 && idx < freeInfo.start) above.push(el);
+          else if (idx > freeInfo.end) below.push(el);
+        }
+        return;
+      }
+      var tr = topic && topics.get(topic);
       if (topic && !tr) { tr = topic.getBoundingClientRect(); topics.set(topic, tr); }
       if (tr && (tr.bottom <= rt || tr.top >= rb)) {
         if ((tr.width || tr.height) && !folded(el, topic)) (tr.bottom <= rt ? above : below).push(el);

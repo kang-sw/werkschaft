@@ -1157,13 +1157,15 @@
     return { source: partial, external: true };
   }
   function boardStageInput(input) { return boardWithSnap(function () { return boardStageSnap(input); }); }
-  // Staging is per card, not per interval: only the current card (and a card
-  // holding an active editor) keeps its previous bytes while a change to it is
-  // pending. Every other card, and the canonical order, is admitted at once.
+  // Staging is viewport-scoped: every card intersecting #bcol's visible
+  // viewport (plus any card holding an active editor) keeps its previous bytes
+  // while a change to it is pending. Off-viewport buffer cards and the
+  // canonical order are admitted at once.
   function boardGuards() {
-    var keys = [], cur = anchorCurrent(), a = editing() ? doc.activeElement : null;
+    var keys = [], visible = typeof anchorVisibleCards === "function" ? anchorVisibleCards() : [anchorCurrent()];
+    var a = editing() ? doc.activeElement : null;
     var ed = a && a.closest ? a.closest("section.topic[data-topic]") : null;
-    [cur, ed].forEach(function (n) {
+    visible.concat(ed ? [ed] : []).forEach(function (n) {
       var k = n && topicKey(n);
       if (k && keys.indexOf(k) < 0) keys.push(k);
     });
@@ -1331,14 +1333,15 @@
       boardPendingBadge();
     } finally { boardRelease = false; }
   }
-  // A card held for an active editor releases when the editor leaves it; the
-  // current card's staged update waits for the reader to leave the card.
+  // A card held for an active editor releases when the editor leaves it;
+  // visible cards' staged updates wait until they leave the viewport.
   doc.addEventListener("focusout", function () {
     if (!Object.keys(boardPending).length) return;
     setTimeout(function () {
-      var cur = anchorCurrent(), ck = cur && topicKey(cur);
-      if (editing() || !Object.keys(boardPending).some(function (k) { return k !== ck; })) return;
-      boardFlushViewed(true);
+      if (editing()) return;
+      var guarded = boardGuards();
+      if (!Object.keys(boardPending).some(function (k) { return guarded.indexOf(k) < 0; })) return;
+      boardFlushViewed(false);
     }, 0);
   });
   // Exposure no longer gates release, so nothing watches the board's units.

@@ -582,9 +582,8 @@
       var gal = window.WsCards && window.WsCards.gallery && window.WsCards.gallery();
       if (gal && gal.contains(f)) {
         if (window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);
-      } else {
-        var anchored = window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel && window.WsBoardAnchor.onFrameWheel(f, wdy, wdx, wmode);
-        if (!anchored && window.WsCards && window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);
+      } else if (window.WsCards && window.WsCards.onFrameWheel) {
+        window.WsCards.onFrameWheel(f, wdy, wdx, wmode);
       }
     } else if (m.wbDoc === "middleclick") {
       var ma = navigator.userActivation, col = $("bcol");

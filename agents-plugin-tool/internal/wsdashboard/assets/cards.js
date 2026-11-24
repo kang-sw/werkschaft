@@ -605,6 +605,15 @@
   // arrange puts the cards and topics in their places. moved is the one
   // unit whose place changed: it alone moves, with its state kept where the
   // browser can keep it.
+  function releaseFreeNode(n) {
+    if (!n || n.nodeType !== 1) return;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.releaseNode) {
+      window.WsBoardAnchor.releaseNode(n);
+    } else {
+      if (n.style && n.style.top) n.style.top = "";
+      if (n.removeAttribute) n.removeAttribute("data-wb-offwindow");
+    }
+  }
   function arrange(moved) {
     if (!board) return;
     relayout();
@@ -617,6 +626,7 @@
       if (moved.el.nextSibling !== ref) put(board, moved.el, ref);
     }
     place(p, function (n) { return n === toolbar; });
+    if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
   }
   // place puts the docked nodes into their panes, then settles the board
   // (fixed: what the board's settle never moves): a node docked from the
@@ -624,6 +634,7 @@
   // moves out of its pane into the board. What the gallery no longer holds
   // goes last, so nothing the board takes is detached on its way.
   function place(p, fixed) {
+    p.pins.forEach(releaseFreeNode);
     var built = buildGallery(p.pins);
     settle(board, p.board, fixed, new Set(p.pins));
     sweepGallery(built);
@@ -1223,15 +1234,18 @@
       bound = panel || homeScr;
       can = panel ? canScroll(target, panel, dy, null) : false;
       if (!can) {
-        if (dy < 0) can = reach(homeScr, dy);
-        else if (reach(homeScr, dy)) {
-          var anchor = window.WsBoardAnchor, list = anchor && anchor.cards ? anchor.cards() : [];
-          var last = list.length ? list[list.length - 1] : null;
+        var anchor = window.WsBoardAnchor, list = anchor && anchor.cards ? anchor.cards() : [];
+        var first = list.length ? list[0] : null, last = list.length ? list[list.length - 1] : null;
+        if (dy < 0) {
+          can = (first && first.hasAttribute && first.hasAttribute("data-wb-offwindow")) || reach(homeScr, dy);
+        } else if (last && last.hasAttribute && last.hasAttribute("data-wb-offwindow")) {
+          can = true;
+        } else if (reach(homeScr, dy)) {
           if (!last || (panel && panel !== last)) can = true;
           else {
             var more = board && board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])");
             var colRect = homeScr.getBoundingClientRect();
-            if (more && more.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS) can = true;
+            if (more && (!more.hasAttribute || !more.hasAttribute("data-wb-offwindow")) && more.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS) can = true;
             else can = last.getBoundingClientRect().bottom > colRect.bottom + G.C.EPS;
           }
         }
@@ -1776,7 +1790,8 @@
     cards.splice(i, 1);
     if (this.k.close) this.k.close(this);
     if (this.el.parentNode) this.el.parentNode.removeChild(this.el);
-    if (this.pinned) { gal = G.undock(gal, refOf(this)); sync(); arrange(null); } else countTopics();
+    if (this.pinned) { gal = G.undock(gal, refOf(this)); sync(); arrange(null); }
+    else { countTopics(); if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle(); }
     persist();
   };
 
@@ -1892,16 +1907,17 @@
         was.el.removeAttribute("data-float");
         was.el.style.height = "";
         was.sized();
+        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
         if (was.maxBtn.isConnected) was.maxBtn.focus();
       } else {
         // The focus comes back without scrolling: the node's place is where
         // it was left.
         var back = shrink(was);
+        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
         if (back) back.focus({ preventScroll: true });
       }
     }
     if (!c) return;
-    if (window.WsBoardAnchor && window.WsBoardAnchor.cancelGlide) window.WsBoardAnchor.cancelGlide();
     c.normalWidth = floatOn ? 1100 : sheetWidth(c);
     c.extended = false;
     if (!scrim) {
@@ -1932,6 +1948,7 @@
       if (m) m.focus({ preventScroll: true });
       return;
     }
+    releaseFreeNode(c.el);
     c.el.style.height = c.el.getBoundingClientRect().height + "px";
     c.el.setAttribute("data-max", "");
     if (floatOn) c.el.setAttribute("data-float", "");
@@ -1978,7 +1995,10 @@
     syncBoardMaxAttr(n);
     sizeSheet(t);
     if (n.hasAttribute("data-max")) return;
-    if (t.topic && window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(n, { immediate: true });
+    if (t.topic) {
+      releaseFreeNode(n);
+      if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(n, { immediate: true });
+    }
     if (t.topic) {
       if (!t.scroll) {
         t.scroll = [];

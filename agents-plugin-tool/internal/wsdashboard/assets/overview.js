@@ -206,6 +206,7 @@
     if (!node || !node.parentNode || node.hasAttribute("data-state-filtered")) return;
     if (!ensurePreviewHost()) return;
     restorePreviewNode();
+    if (window.WsBoardAnchor && window.WsBoardAnchor.releaseNode) window.WsBoardAnchor.releaseNode(node);
     var h = Math.round(node.getBoundingClientRect().height);
     var wasFocused = doc.activeElement === node;
     var ph = buildPlaceholder(node, h);
@@ -415,8 +416,10 @@
     n = find(entry.key);
     if (n && n.hasAttribute("data-state-filtered")) { n = items()[0] || null; entry = { key: identity(n), offset: 0 }; }
     var shown = n ? Math.max(entry.offset, clearance(n)) : entry.offset;
-    var h = o.frames ? o.frames() : null, before = !state && !calm() ? snapshot() : null;
+    var freeBoard = !!(window.WsBoardAnchor && window.WsBoardAnchor.bounded && window.WsBoardAnchor.bounded());
+    var h = o.frames ? o.frames() : null, before = !state && !calm() && !freeBoard ? snapshot() : null;
     busy = !!before;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.suspendForOverview) window.WsBoardAnchor.suspendForOverview();
     // Keep enough tail to reach even a partly-visible last topic's negative
     // offset. Added before folding, removed only after unfolding inside keep.
     spacer = doc.createElement("div");
@@ -490,6 +493,7 @@
       var targetFast = landedFast || restore || items()[0] || null;
       o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "false");
       save(); changed();
+      if (window.WsBoardAnchor && window.WsBoardAnchor.resumeFromOverview) window.WsBoardAnchor.resumeFromOverview();
       if (targetFast && window.WsBoardAnchor && window.WsBoardAnchor.select) {
         window.WsBoardAnchor.select(targetFast, { keep: true, still: false, smooth: false });
       }
@@ -534,6 +538,7 @@
     var offset = landed && boardTarget === landed ? arrival : boardTarget && restore === boardTarget ? entry.offset : entry.key ? arrival : entry.offset;
     o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "false");
     save(); changed();
+    if (window.WsBoardAnchor && window.WsBoardAnchor.resumeFromOverview) window.WsBoardAnchor.resumeFromOverview();
     var complete = function () {
       if (spacer) { spacer.remove(); spacer = null; }
       keep(boardTarget || o.toolbar, offset);

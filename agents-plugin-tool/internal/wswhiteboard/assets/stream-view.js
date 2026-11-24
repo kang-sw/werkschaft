@@ -294,6 +294,17 @@
       var scroller = opt.scroller || scrollerOf(node), o = owner(scroller), s = sessions.get(scroller);
       var inspect = { scroller: scroller, visible: function (n) { return exposed(n, scroller); }, viewport: function () { return viewport(scroller); }, apply: function () {}, end: function () {} };
       if (opt.capture === false) return inspect;
+      if (scroller && scroller.hasAttribute && scroller.hasAttribute('data-board-free') &&
+          win.WsBoardAnchor && win.WsBoardAnchor.windowInfo && node && node !== scroller) {
+        var wi = win.WsBoardAnchor.windowInfo();
+        if (wi && wi.active) {
+          var ownerCard = win.WsBoardAnchor.owner ? win.WsBoardAnchor.owner(node) : (node.closest && node.closest('section.topic[data-topic], .bcard[data-card]'));
+          if (ownerCard) {
+            var cardIdx = wi.indexOf(ownerCard);
+            if (cardIdx >= 0 && cardIdx !== wi.anchorIdx) return inspect;
+          }
+        }
+      }
       if (s && s.follow) return s.handle;
       if (!o.ready()) return inspect;
       var t = o.transaction;

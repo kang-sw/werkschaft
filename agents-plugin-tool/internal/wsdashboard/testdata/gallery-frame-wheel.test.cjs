@@ -9,7 +9,6 @@ const { readAssetSource } = require('./asset-source.cjs');
 
 const cardsSrc = readAssetSource('wsdashboard', 'cards.js');
 const framesSrc = readAssetSource('wsdashboard', 'dashboard-frames.js');
-const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
 
 function extractVar(src, name) {
   const m = src.match(new RegExp('\\n  var ' + name + '\\b[^\\n]*\\n'));
@@ -23,9 +22,10 @@ function extractFunc(src, name) {
 }
 
 // Verify dashboard-frames.js routes wbDoc === "wheel" to WsCards for #bgal
-// and falls through from WsBoardAnchor to WsCards for narrow Page 0.
+// and narrow-mode Page 0 without snap-deck WsBoardAnchor wheel interception.
 const frameWheelBranch = framesSrc.match(/\} else if \(m\.wbDoc === "wheel"\) \{[\s\S]*?(?=\n    \} else if \()/);
 assert.ok(frameWheelBranch, 'missing wbDoc === "wheel" branch in dashboard-frames.js');
+assert.doesNotMatch(frameWheelBranch[0], /onFrameWheel\s*\(\s*f[\s\S]*WsBoardAnchor|WsBoardAnchor[\s\S]*onFrameWheel/);
 
 const shippedCards =
   extractVar(cardsSrc, 'OWN') +
@@ -35,14 +35,6 @@ const shippedCards =
   extractFunc(cardsSrc, 'gateWheelInput') +
   extractFunc(cardsSrc, 'gateWheel') +
   extractFunc(cardsSrc, 'onFrameWheel');
-
-const shippedAnchor =
-  anchorSrc.match(/\n  var WHEEL_DEFAULTS = \{[\s\S]*?\n  \};\n/)[0] +
-  extractFunc(anchorSrc, 'createBoardWheel') +
-  extractFunc(anchorSrc, 'anchorCanReach') +
-  extractFunc(anchorSrc, 'anchorCanInnerScroll') +
-  extractFunc(anchorSrc, 'anchorHandleWheel') +
-  extractFunc(anchorSrc, 'anchorOnFrameWheel');
 
 // Minimal DOM selector matcher supporting the selectors used by cards.js and
 // dashboard-board-anchor.js (including :not(.doc-frame), [data-max] *, :scope).
@@ -245,33 +237,19 @@ function makeHarness(opts = {}) {
     gateArm: () => {},
     // Anchor state for #bcol
     $: id => id === 'bcol' ? bcol : null,
-    anchorProg: null,
-    anchorSized: { bounded: true },
-    anchorWheelCtrl: null,
-    anchorCurrentCard: opts.anchorCurrent === 'B' ? bTopicB : bTopicA,
-    anchorCache: { indexByNode: new Map([[bTopicA, 0], [bTopicB, 1]]) },
     anchorCards: () => [bTopicA, bTopicB],
-    anchorCurrent: () => ctx.anchorCurrentCard,
-    anchorSelect: (n, o) => {
-      events.anchorSelects.push({ topic: n.getAttribute('data-topic'), glide: o && o.glide });
-      ctx.anchorCurrentCard = n;
-    },
     num: v => Number(v) || 0
   });
   ctx.window.performance = { now: () => now };
 
-  vm.runInContext(shippedCards + '\n' + shippedAnchor, ctx);
+  vm.runInContext(shippedCards, ctx);
 
   ctx.window.WsCards = {
     gallery: () => galEl,
     onFrameWheel: ctx.onFrameWheel
   };
   ctx.window.WsBoardAnchor = {
-    cards: ctx.anchorCards,
-    onFrameWheel: (f, dy, dx, mode) => {
-      events.anchorCalls.push({ f, dy, dx, mode });
-      return ctx.anchorOnFrameWheel(f, dy, dx, mode);
-    }
+    cards: ctx.anchorCards
   };
 
   // Run the exact shipped wheel routing branch from dashboard-frames.js.
@@ -400,24 +378,35 @@ test('horizontal-dominant wheel deltas are ignored', () => {
   assert.equal(h.events.flips.length, 0);
 });
 
-test('narrow-mode Page 0: #bcol intermediate card is consumed by WsBoardAnchor without double-handling, while last card edge falls through to WsCards', () => {
-  // Intermediate card (boardA of [boardA, boardB]): WsBoardAnchor steps to boardB,
-  // WsCards must NOT charge tension.
-  const h = makeHarness({ narrowHome: true, anchorCurrent: 'A' });
-  h.bcol.scrollTop = 0;
-  h.send(h.bFrameA, 100);
-  assert.equal(h.events.anchorCalls.length, 1);
-  assert.deepEqual(h.events.anchorSelects, [{ topic: 'boardB', glide: 1 }], 'WsBoardAnchor steps from boardA to boardB');
-  assert.equal(h.events.pulls.length, 0, 'consumed #bcol wheel must not also drive WsCards gate');
+test('narrow-mode Page 0: off-window Card N-1 blocks premature Page 0 -> Page 1 flip, while mounted Card N-1 at bottom edge flips to Page 1', () => {
+  // While last card (boardB) is off-window, gateWheelInput must report canDown = true
+  // even if #bcol looks like it is near the bottom of its runway, preventing premature flip.
+  const h = makeHarness({ narrowHome: true });
+  h.bcol.scrollTop = 500; // would look at bottom if not for off-window guard
+  h.bTopicB.attrs['data-wb-offwindow'] = 'hidden';
+  h.send(h.bFrameA, 125);
+  h.tick(30);
+  h.send(h.bFrameA, 125);
+  h.tick(30);
+  h.send(h.bFrameA, 125);
+  assert.equal(h.events.pulls.length, 0, 'off-window Card N-1 must never charge Page 0 -> Page 1 tension');
   assert.equal(h.events.flips.length, 0);
 
-  // Now on last card (boardB) at bottom edge of #bcol: WsBoardAnchor returns false (edge),
-  // so dashboard-frames.js falls through to WsCards.onFrameWheel and flips Page 0 -> Page 1.
+  // Similarly, if Card 0 is off-window, upward wheel does not treat #bcol as at top boundary.
+  h.bcol.scrollTop = 0;
+  h.bTopicA.attrs['data-wb-offwindow'] = 'hidden';
+  delete h.bTopicB.attrs['data-wb-offwindow'];
+  h.tick(500);
+  h.send(h.bFrameB, -125);
+  assert.equal(h.events.pulls.length, 0, 'off-window Card 0 must not charge top-edge tension');
+
+  // Once Card N-1 (boardB) is mounted and #bcol is at its bottom edge, wheel charges tension and flips Page 0 -> Page 1.
+  delete h.bTopicA.attrs['data-wb-offwindow'];
   h.bcol.scrollTop = 500; // at bottom: 500 + 500 === 1000
   h.bTopicB.rect = { top: 0, bottom: 500, height: 500 };
-  h.tick(500); // past idleGapMs
+  h.tick(500);
   h.send(h.bFrameB, 125);
-  assert.equal(h.events.pulls.length, 1, 'last card edge falls through to WsCards tension');
+  assert.equal(h.events.pulls.length, 1, 'mounted last card at bottom edge charges WsCards tension');
   assert.equal(h.events.pulls[0].el, h.board);
   assert.equal(h.events.pulls[0].target, 0);
   h.tick(30);
