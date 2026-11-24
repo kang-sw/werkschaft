@@ -106,19 +106,20 @@ type AgentForgetter interface {
 	ForgetClosed(replyID string)
 }
 
-// AgentSessionMeta holds a runner conversation's in-memory child and settings
-// metadata for SessionView rendering without touching disk.
+// AgentSessionMeta holds a runner conversation's in-memory metadata for
+// dashboard rendering without touching disk.
 type AgentSessionMeta struct {
 	Hosted  bool
 	IsChild bool
 	Closed  bool
 	Active  bool
+	Backend string
 	Model   string
 	Effort  string
 }
 
-// AgentSessionMetaHost is an optional AgentHost that exposes in-memory child
-// and settings metadata for SessionView.
+// AgentSessionMetaHost is an optional AgentHost that exposes in-memory
+// metadata for the session view and rail.
 type AgentSessionMetaHost interface {
 	SessionMeta(replyID string) (AgentSessionMeta, bool)
 }

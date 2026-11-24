@@ -8,16 +8,31 @@ import (
 	"time"
 )
 
+type railHistoryMeta map[string]AgentSessionMeta
+
+func (m railHistoryMeta) SessionMeta(replyID string) (AgentSessionMeta, bool) {
+	meta, found := m[replyID]
+	return meta, found
+}
+
 func TestRailRetiredPiHasNoDeletionCountdown(t *testing.T) {
-	ended := stampFor(testNow.Add(-time.Hour))
+	endedAt := testNow.Add(-time.Hour)
+	ended := stampFor(endedAt)
+	meta := railHistoryMeta{"handedoff": {Backend: "pi"}}
 	for _, reg := range []Registration{
 		{ReplyID: "retiredlead", Harness: "pi", Hosted: true, HeartbeatAt: ended, EndedAt: ended},
 		{ReplyID: "retiredworker", Harness: "pi", Agent: true, HeartbeatAt: ended, EndedAt: ended},
+		{ReplyID: "handedoff", Harness: "pi", HeartbeatAt: ended, EndedAt: ended},
 	} {
-		row := railRow(railInput{Session: Session{Registration: reg}}, false, testNow)
+		row := railRow(railInput{Session: Session{Registration: reg}, AgentMeta: meta}, false, testNow)
 		if row.DeleteAt != 0 {
 			t.Errorf("%s has deletion deadline %d, want none for retained Pi history", row.ReplyID, row.DeleteAt)
 		}
+	}
+	standalone := Registration{ReplyID: "standalone", Harness: "pi", HeartbeatAt: ended, EndedAt: ended}
+	row := railRow(railInput{Session: Session{Registration: standalone}, AgentMeta: meta}, false, testNow)
+	if want := endedAt.Add(RegistryRetention).UnixMilli(); row.DeleteAt != want {
+		t.Errorf("standalone terminal deletion deadline = %d, want %d", row.DeleteAt, want)
 	}
 }
 

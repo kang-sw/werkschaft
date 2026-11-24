@@ -286,7 +286,7 @@ func (r *Runner) IsChild(id string) bool {
 	return r.opts.CardBound != nil && r.opts.CardBound(id)
 }
 
-// SessionMeta returns in-memory composer control metadata for replyID without
+// SessionMeta returns in-memory dashboard metadata for replyID without
 // touching disk (wsdashboard.AgentSessionMetaHost).
 func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool) {
 	r.mu.Lock()
@@ -308,6 +308,7 @@ func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool
 		IsChild: r.isChildRecord(rec),
 		Closed:  closed,
 		Active:  active,
+		Backend: rec.Backend,
 		Model:   rec.Model,
 		Effort:  rec.Effort,
 	}, true
