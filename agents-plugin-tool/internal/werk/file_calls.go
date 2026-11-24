@@ -60,6 +60,47 @@ func (a *Agent) beginMutationCall(ctx context.Context, id, tool string, raw json
 	}, nil
 }
 
+// ApproveFileCall obtains or confirms the operator grant for the active
+// scoped call before MCP enters its permission admission guard.
+func (a *Agent) ApproveFileCall(ctx context.Context, call wsfs.FileCall) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a.cfg.Approve == nil {
+		return nil
+	}
+	var args map[string]any
+	if json.Unmarshal(call.Arguments, &args) != nil {
+		return errors.New("invalid mutation arguments")
+	}
+	a.mutationMu.Lock()
+	active := a.mutationCall
+	if active == nil || active.id != call.ID || active.tool != call.Tool || !reflect.DeepEqual(active.args, args) ||
+		active.recorded || active.approving || active.ctx.Err() != nil {
+		a.mutationMu.Unlock()
+		return errors.New("no matching file call is waiting for approval")
+	}
+	if active.explicit {
+		a.mutationMu.Unlock()
+		return nil
+	}
+	active.approving = true
+	a.mutationMu.Unlock()
+
+	explicit, err := a.permitMutation(ctx, functionCall{CallID: call.ID, reask: active.reask}, call.Tool, call.Arguments, true)
+	a.mutationMu.Lock()
+	defer a.mutationMu.Unlock()
+	active.approving = false
+	if err != nil {
+		return err
+	}
+	if a.mutationCall != active || active.ctx.Err() != nil || ctx.Err() != nil {
+		return errors.New("the file call is no longer active")
+	}
+	active.explicit = explicit
+	return nil
+}
+
 // RecordFileCall is called from the authenticated MCP handler while it
 // holds the target. It accepts one intent for the active model call.
 func (a *Agent) RecordFileCall(ctx context.Context, call wsfs.FileCall) error {
@@ -92,24 +133,9 @@ func (a *Agent) recordMutation(ctx context.Context, id, tool string, raw json.Ra
 		a.mutationMu.Unlock()
 		return err
 	}
-	// A file dispatched under full access can reach MCP after a downgrade.
-	// The pinned scoped mutation then needs the same explicit approval as
-	// a call that began under workspace-write.
 	if a.cfg.Approve != nil && !active.explicit && fileAuthority == wsfs.AuthorityWorkdirWrite {
-		active.approving = true
 		a.mutationMu.Unlock()
-		explicit, err := a.permitMutation(ctx, functionCall{CallID: id, reask: active.reask}, tool, raw, true)
-		a.mutationMu.Lock()
-		active.approving = false
-		if err != nil {
-			a.mutationMu.Unlock()
-			return err
-		}
-		if a.mutationCall != active || active.ctx.Err() != nil || ctx.Err() != nil {
-			a.mutationMu.Unlock()
-			return errors.New("the file call is no longer active")
-		}
-		active.explicit = explicit
+		return errors.New("the scoped file call needs operator approval")
 	}
 	active.recorded = true
 	err := a.log.addBarrier(row)

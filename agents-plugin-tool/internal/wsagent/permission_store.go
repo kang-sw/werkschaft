@@ -14,8 +14,8 @@ import (
 
 type permissionSelection struct {
 	mu sync.Mutex
-	// admission serializes a session's permission changes with descendant
-	// creation/start checks that use this session as their current parent.
+	// admission orders permission changes with file and exec admission and
+	// with descendant creation/start checks that use this session as parent.
 	admission sync.RWMutex
 
 	loaded    bool

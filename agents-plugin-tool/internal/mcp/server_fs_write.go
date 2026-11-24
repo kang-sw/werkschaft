@@ -44,12 +44,18 @@ func (s *Server) callFSWrite(ctx context.Context, id json.RawMessage, name strin
 		return toolTextResponse(id, "", err)
 	}
 	binding := s.fileWrites
-	authority := binding.AuthorityForCall()
+	call := FileWriteCall{ID: callID, Tool: name, Arguments: raw}
+	release, err := admitFileWrite(ctx, binding, &call)
+	if err != nil {
+		return toolTextResponse(id, "", fmt.Errorf("%s: %w", name, err))
+	}
+	defer release()
 	files := wsfs.Files{
-		Root: binding.Root, Cwd: binding.Cwd, Authority: authority,
-		Protection: func() wsfs.FileProtection { return wsdashboard.NewProviderCredentialProtection() },
+		Root: binding.Root, Cwd: binding.Cwd, Authority: call.Authority,
+		Protection: func() wsfs.FileProtection { return wsdashboard.NewModelFileWriteProtection() },
 		RecordMutation: func(ctx context.Context, intent wsfs.FileIntent) error {
-			return binding.Record(ctx, FileWriteCall{ID: callID, Tool: name, Arguments: raw, Authority: authority, Intent: intent})
+			call.Intent = intent
+			return binding.Record(ctx, call)
 		},
 	}
 	var text string
@@ -62,4 +68,27 @@ func (s *Server) callFSWrite(ctx context.Context, id json.RawMessage, name strin
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", name, err))
 	}
 	return toolTextResponse(id, text, nil)
+}
+
+func admitFileWrite(ctx context.Context, binding *FileWriteSession, call *FileWriteCall) (func(), error) {
+	release := func() {}
+	if binding.HoldAuthority != nil {
+		release = binding.HoldAuthority()
+	}
+	call.Authority = binding.AuthorityForCall()
+	if call.Authority == wsfs.AuthorityWorkdirWrite && binding.Approve != nil {
+		release()
+		if err := binding.Approve(ctx, *call); err != nil {
+			return nil, err
+		}
+		if binding.HoldAuthority != nil {
+			release = binding.HoldAuthority()
+		}
+		call.Authority = binding.AuthorityForCall()
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }

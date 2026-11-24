@@ -178,6 +178,13 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	return p, nil
 }
 
+func (p *werkLoop) approveFileCall(ctx context.Context, call wsfs.FileCall) error {
+	if err := p.ctx.Err(); err != nil {
+		return err
+	}
+	return p.agent.ApproveFileCall(ctx, call)
+}
+
 func (p *werkLoop) recordFileCall(ctx context.Context, call wsfs.FileCall) error {
 	if err := p.ctx.Err(); err != nil {
 		return err

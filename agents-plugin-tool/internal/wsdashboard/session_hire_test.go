@@ -570,7 +570,7 @@ func TestHiringApprovalReplaysSelectedWerkProvider(t *testing.T) {
 	if err := f.d.saveHires(proposals); err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
+	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Version: f.d.Endpoint().Version, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

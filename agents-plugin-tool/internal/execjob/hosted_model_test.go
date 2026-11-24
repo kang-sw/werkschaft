@@ -171,3 +171,85 @@ func TestHostedModelLaunchRequiresApprovalAfterPostureDowngrade(t *testing.T) {
 		})
 	}
 }
+
+func TestHostedModelLaunchHoldsPostureThroughSpawn(t *testing.T) {
+	fx := newHostedFixture(t, time.Hour)
+	guard := &fx.sessions.authority
+	full := true
+	atSpawn := make(chan struct{})
+	transitioning := make(chan struct{})
+	downgraded := make(chan struct{})
+	go func() {
+		<-atSpawn
+		close(transitioning)
+		guard.Lock()
+		full = false
+		guard.Unlock()
+		close(downgraded)
+	}()
+	fx.holders.beforeSpawn = func(string) {
+		close(atSpawn)
+		<-transitioning
+		if guard.TryLock() {
+			guard.Unlock()
+			t.Error("the posture could change during holder spawn")
+		}
+		if !full {
+			t.Error("the downgrade took effect before spawn")
+		}
+	}
+	view, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Async: true, BindJob: func(string) error { return nil },
+		ModelAuthority: func() (bool, error) {
+			if guard.TryLock() {
+				guard.Unlock()
+				t.Error("the final authority check ran outside the posture guard")
+			}
+			return full, nil
+		},
+		ApproveModel: func(context.Context, HostedCall, bool) (bool, error) { return false, nil },
+	})
+	<-downgraded
+	if err != nil || view.State != HostedRunning {
+		t.Fatalf("launch admitted before downgrade = %+v, %v", view, err)
+	}
+}
+
+func TestHostedModelLaunchRechecksPostureAfterOperatorGrant(t *testing.T) {
+	fx := newHostedFixture(t, time.Hour)
+	guard := &fx.sessions.authority
+	readOnly := false
+	var granted bool
+	fx.store.failPut = func(row HostedJobRow) bool {
+		if row.HolderID != "" && !row.Terminal() {
+			guard.Lock()
+			readOnly = true
+			guard.Unlock()
+		}
+		return false
+	}
+	view, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Async: true, BindJob: func(string) error { return nil },
+		ModelAuthority: func() (bool, error) {
+			if readOnly {
+				if guard.TryLock() {
+					guard.Unlock()
+					t.Error("the grant was rechecked outside the posture guard")
+				}
+				return false, errors.New("fixture session is read-only")
+			}
+			return false, nil
+		},
+		ApproveModel: func(_ context.Context, _ HostedCall, _ bool) (bool, error) {
+			if !guard.TryLock() {
+				t.Fatal("operator approval was awaited under the posture guard")
+			}
+			guard.Unlock()
+			granted = true
+			return true, nil
+		},
+	})
+	if !granted || err == nil || view.State != HostedFailed || len(fx.holders.spawned) != 0 {
+		t.Fatalf("grant before read-only downgrade = %+v, %v, granted %v", view, err, granted)
+	}
+}

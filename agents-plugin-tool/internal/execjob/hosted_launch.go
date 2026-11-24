@@ -76,14 +76,25 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		}
 		return h.opts.Sessions.Immediate(owner.ID)
 	}
-	recheckApproval := func() error {
+	acquireSpawnAuthority := func() (func(), error) {
 		for {
+			release, err := h.opts.Sessions.LockExecAuthority(owner.ID)
+			if err != nil {
+				return nil, err
+			}
+			if explicit && req.ModelAuthority == nil {
+				return release, nil
+			}
 			ok, err := immediate()
-			if err != nil || explicit || ok {
-				return err
+			if err == nil && (explicit || ok) {
+				return release, nil
+			}
+			release()
+			if err != nil {
+				return nil, err
 			}
 			if explicit, err = approve(true); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -156,12 +167,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	}
 	if req.BindJob != nil {
 		if modelApproval {
-			if err := recheckApproval(); err != nil {
+			release, err := acquireSpawnAuthority()
+			if err != nil {
 				h.mu.Lock()
 				j.holderPinned = false
 				h.mu.Unlock()
 				return h.failStart(j, "", err)
 			}
+			release()
 		}
 		if err := req.BindJob(id); err != nil {
 			h.mu.Lock()
@@ -217,13 +230,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	} else {
 		h.mu.Unlock()
 	}
-	// The live mode decides the start: an allow by role or mode that no
-	// longer holds asks the user now.
-	if !explicit || req.ModelAuthority != nil {
-		if err := recheckApproval(); err != nil {
-			return h.failStart(j, holder, err)
-		}
+	// Keep the posture stable from the final check through holder spawn.
+	// A posture grant alone can expire. Await a new grant outside the guard.
+	unlockAuthority, err := acquireSpawnAuthority()
+	if err != nil {
+		return h.failStart(j, holder, err)
 	}
+	unlockAuthority = sync.OnceFunc(unlockAuthority)
+	defer unlockAuthority()
 	h.mu.Lock()
 	if j.row.Terminal() || j.stopping || h.ownerFences[owner.ID] {
 		// Its owner closed (or the job was stopped) while it waited for
@@ -231,9 +245,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		// and its holder (stop); a fence alone fails the start here.
 		if j.row.Terminal() {
 			h.mu.Unlock()
+			unlockAuthority()
 			return h.view(j, OutcomeDone), errClosedBeforeStart
 		}
 		h.mu.Unlock()
+		unlockAuthority()
 		return h.failStart(j, holder, errClosedBeforeStart)
 	}
 	// From here a stop waits for the hand-over and then ends the process.
@@ -249,10 +265,12 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if req.BindJob != nil {
 		select {
 		case <-drain:
+			unlockAuthority()
 			return h.failStart(j, holder, errors.New("exec: the daemon is stopping"))
 		default:
 		}
 		if err := ctx.Err(); err != nil {
+			unlockAuthority()
 			return h.failStart(j, holder, err)
 		}
 	}
@@ -261,6 +279,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// MAX_PATH fails at process start, as it did before admission resolved
 	// it (the path reached the same CreateProcess).
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	unlockAuthority()
 	if err != nil {
 		if st.PID != 0 {
 			// The child started and only its remaining input failed.
