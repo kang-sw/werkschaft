@@ -121,6 +121,43 @@ Verified external facts (read-only research, 2026-11-22, official sources):
    CLI already gives.
 9. **Compatibility tier T0 ((5012)).** New file, new internal route, new
    config keys; old binaries never read them.
+10. **Phase 3 follows the approved mockup (owner (52), (54)).** The text
+    mockup at `ai-docs/assets/mockups/261122/provider-auth/` (v4:
+    `mockup.html`, the whiteboard fragment `board.html`, and `README.md`) is
+    the visual and behavioral reference. Its README `Settled` items 1-12 are
+    binding (owner-approved with the mockup); its `Backend gaps` list is the
+    backend work Phase 3 must close. The settled items a worker must not
+    re-decide: background-consent banner with allow / deny / close (no
+    "later"), dashboard-wide, linking to the OpenAI row; one active OpenAI
+    account, no switcher; sign-out deletes the account record including
+    consent, no remote revoke; `sk-or-` prefix mismatch is a soft warning;
+    saving an OpenRouter key verifies it with OpenRouter's key-info endpoint,
+    refuses to save only on a definitive 401/403, and on a network error, 5xx,
+    or 429 saves it marked unverified with a re-check action; no credit
+    display; sign-in is disabled when the dashboard is viewed from a
+    non-loopback peer; deleting an endpoint, or changing its base URL,
+    deletes its stored key; keys show only the backend mask. Rejected: the
+    provider rows inside the agents settings section (v1-v3 placement).
+11. **A separate global-only 계정 (Account) settings section (owner (52),
+    (53)=a).** Provider credentials and local endpoints live in their own
+    settings section, beside the agents section, which keeps only the tier
+    picker and links to the account section for an unusable provider. The
+    section has no scope switcher; it shows a fixed "this whole machine"
+    target (mockup Settled 11). Credentials stay one machine-wide file
+    (Decision 5). Rejected: per-project credentials (machine-local, project
+    over global) - the owner chose global only; repo-scoped credentials - the
+    repo scope is the committed `.ws-workflow/config.json`, so a secret there
+    would be published.
+12. **`agent.werk_endpoints` is hidden from agent tools (auto-confirmed,
+    technical; mockup Settled 12).** It stays the stored config value, edited
+    only in the account section and the CLI; `config.list`, `config.get`,
+    `config.tune`, and the lead-tune flow no longer show or write it. Hidden
+    over agent-visible - changing where worker traffic goes is an
+    owner-level action; endpoint keys are URL-bound, so this closes no leak,
+    it removes an agent write path. The key first ships in 0.52, so hiding it
+    in a 0.52.x patch is T0 for data (no stored value changes) and drops no
+    long-standing agent capability. Credential keys, tokens, and consent were
+    never config values and stay out of every config surface.
 
 ## Constraints
 
@@ -320,3 +357,24 @@ env -i HOME="$HOME" PATH="$PATH" WS_CACHE_HOME="$(mktemp -d)" go -C agents-plugi
   `ai-docs/assets/mockups/261122/provider-auth/` is approved by the owner
   before implementation; verification compares a capture of the result with
   it side by side.
+- The mockup is approved (v4, owner (54)); Decisions 10-12 carry its binding
+  parts. Build the 계정 settings section with OpenRouter, OpenAI (with the
+  consent sub-row), and the structured local-endpoint editor, the
+  dashboard-wide consent banner, and the agents-section links, per the
+  mockup's states.
+- Close every item in the mockup README's `Backend gaps` list, including:
+  browser-callable status / set / remove / consent routes that never return
+  a key or token; a dashboard sign-in start / progress / cancel flow and a
+  loopback-peer flag in status; OpenAI sign-out deleting the account record;
+  a pending background-consent request signal; OpenRouter key verification
+  on save with a verified / unverified / rejected status and a re-check;
+  endpoint key cleanup on endpoint delete and base-URL change; the registry
+  flag hiding `agent.werk_endpoints` from agent tools (Decision 12) while the
+  dashboard keeps it; the account section in the settings catalog, manual,
+  and i18n; the CLI endpoint set/remove subcommand; error texts that point at
+  the account section.
+- Verification: unit tests for each new route (including a test that no
+  response body carries a key or token, and that a non-loopback peer cannot
+  start sign-in), the registry-hiding test, the catalog drift test, and a
+  headless-browser capture of the account section compared side by side
+  with the mockup at 1280 px and 390 px, dark and light.
