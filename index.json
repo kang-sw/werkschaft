@@ -429,19 +429,6 @@
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
     },
-    "261122-feat-ws-provider-auth-layer": {
-      "registered_at": "2026-11-22T08:45:21Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-24T14:28:20Z",
-        "impl": {
-          "branch": "impl/develop/shack-coma-jimmy"
-        }
-      }
-    },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
     },
@@ -477,19 +464,6 @@
     "261123-chore-werkschaft-electron-retirement": {
       "registered_at": "2026-11-23T00:31:15Z"
     },
-    "261124-bug-ws-0520-release-gate-last-blockers": {
-      "registered_at": "2026-11-24T14:00:23Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-24T17:03:12Z",
-        "impl": {
-          "branch": "impl/develop/0520-p8b-fix-forward"
-        }
-      }
-    },
     "261124-bug-ws-git-search-credential-hardlink": {
       "registered_at": "2026-11-24T01:13:52Z"
     },
@@ -506,18 +480,11 @@
         "touched_at": "2026-11-24T12:30:22Z"
       }
     },
-    "261124-feat-ws-managed-compaction": {
-      "registered_at": "2026-11-24T05:12:49Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "active",
-        "touched_at": "2026-11-24T15:31:43Z"
-      }
-    },
     "261124-refactor-remove-terminal-handoff": {
       "registered_at": "2026-11-24T07:52:19Z"
+    },
+    "261125-feat-ws-exec-completion-chat-row": {
+      "registered_at": "2026-11-24T21:27:32Z"
     }
   }
 }
