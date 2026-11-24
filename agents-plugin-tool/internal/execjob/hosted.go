@@ -913,7 +913,9 @@ type HostedLaunch struct {
 	UserApproved bool
 	// ApproveModel is the originating harness's one-use approval, paired
 	// with BindJob so the exact model invocation is recorded before launch.
-	ApproveModel func(context.Context, HostedCall) error
+	ApproveModel func(context.Context, HostedCall, bool) (explicit bool, err error)
+	// ModelAuthority checks the live model binding before a recorded launch.
+	ModelAuthority func() (immediate bool, err error)
 	// OnConvert runs once when a still-running job converts to async, before
 	// the job owes its completion notice, so a caller can make the exec id
 	// visible ahead of the first notice admission: the job is not eligible for

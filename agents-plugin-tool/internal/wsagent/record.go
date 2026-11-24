@@ -134,10 +134,13 @@ type Record struct {
 	// when that process is gone.
 	TurnOpen bool `json:"turn_open,omitempty"`
 	// Active durable state belongs to the private runner store.
-	DurableSteers       []durableSteer    `json:"durable_steers,omitempty"`
-	DurableTurn         *durableTurnInput `json:"durable_turn,omitempty"`
-	DurableInboxClaims  []string          `json:"durable_inbox_claims,omitempty"`
-	DurableHeldReportID string            `json:"durable_held_report_id,omitempty"`
+	DurableSteers []durableSteer    `json:"durable_steers,omitempty"`
+	DurableTurn   *durableTurnInput `json:"durable_turn,omitempty"`
+	// DurableClosedTurnID is the journal turn abandoned by explicit close.
+	// Only the private scheduler record carries this recovery disposition.
+	DurableClosedTurnID string   `json:"durable_closed_turn_id,omitempty"`
+	DurableInboxClaims  []string `json:"durable_inbox_claims,omitempty"`
+	DurableHeldReportID string   `json:"durable_held_report_id,omitempty"`
 	// Tier is the capability tier its spawner chose (small, medium, large,
 	// or xlarge); a conversation it spawns may ask for no higher one.
 	// Empty for a conversation spawned without one, which spawns none.
@@ -310,9 +313,9 @@ type ParentRef struct {
 // QueuedInput is one drained dashboard input waiting for its turn: a
 // message's text, or a slash command.
 type QueuedInput struct {
-	Interactive bool             `json:"interactive,omitempty"`
-	Text        string           `json:"text,omitempty"`
-	Command     *wsinbox.Command `json:"command,omitempty"`
+	Operator bool             `json:"operator,omitempty"`
+	Text     string           `json:"text,omitempty"`
+	Command  *wsinbox.Command `json:"command,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

@@ -755,9 +755,9 @@ type recordingMCPProcess struct {
 	submitted chan<- durableTurnInput
 }
 
-func (p *recordingMCPProcess) submitTurn(id, text string, _ []durableSteer, _ bool) error {
+func (p *recordingMCPProcess) submitTurn(id, text string, _ []durableSteer, operator bool) error {
 	if p.submitted != nil {
-		p.submitted <- durableTurnInput{ID: id, Text: text}
+		p.submitted <- durableTurnInput{ID: id, Text: text, Operator: operator}
 	}
 	return p.Send(text)
 }
@@ -767,9 +767,9 @@ func (p *recordingMCPProcess) recordFileCall(context.Context, wsfs.FileCall) err
 	return nil
 }
 
-func (p *recordingMCPProcess) recordExecLaunch(context.Context, execjob.ModelLaunch) error {
+func (p *recordingMCPProcess) recordExecLaunch(context.Context, execjob.ModelLaunch) (bool, error) {
 	p.execCalls++
-	return nil
+	return false, nil
 }
 
 func TestDurableMCPExecBindingTracksAuthorityAndRevocation(t *testing.T) {
@@ -791,16 +791,16 @@ func TestDurableMCPExecBindingTracksAuthorityAndRevocation(t *testing.T) {
 
 	ctx := context.Background()
 	launch := execjob.ModelLaunch{ID: "call", Tool: "exec.run", JobID: "job"}
-	if err := hello.RecordExecLaunch(ctx, launch); err != nil || proc.execCalls != 1 {
+	if _, err := hello.RecordExecLaunch(ctx, launch); err != nil || proc.execCalls != 1 {
 		t.Fatalf("admitted launch = %v, recorder called %d times", err, proc.execCalls)
 	}
 	c.setStatus(func() { c.workerPermissionLevel = PermissionReadOnly })
-	if err := hello.RecordExecLaunch(ctx, launch); err == nil || proc.execCalls != 1 {
+	if _, err := hello.RecordExecLaunch(ctx, launch); err == nil || proc.execCalls != 1 {
 		t.Fatal("the read-only session recorded a launch")
 	}
 	c.setStatus(func() { c.workerPermissionLevel = PermissionWorkdirWrite })
 	r.revokeToken(rec.ReplyID)
-	if err := hello.RecordExecLaunch(ctx, launch); !isClosed(void) || err == nil || proc.execCalls != 1 {
+	if _, err := hello.RecordExecLaunch(ctx, launch); !isClosed(void) || err == nil || proc.execCalls != 1 {
 		t.Fatal("the revoked session recorded a launch")
 	}
 }

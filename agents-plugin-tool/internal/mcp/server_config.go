@@ -437,7 +437,7 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 	appendKnob(tierAliasesEntry, tuningKnob{
 		ID:          tierAliasesEntry.Key,
 		Kind:        "workflow_preference",
-		Description: "Your own names for agent.spawn tiers: whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=pi.large quick=claude.small\", with tier small, medium, large, or xlarge. agent.spawn takes an alias as its tier, and agent.tiers lists each alias with the model it resolves to now. A name has no dot; a write that does not parse is refused. Unset (builtin) defines none. Global-only.",
+		Description: "Your own names for agent.spawn tiers: whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\", with tier small, medium, large, or xlarge. agent.spawn takes an alias as its tier, and agent.tiers lists each alias with the model it resolves to now. A name has no dot; a write that does not parse is refused. Unset (builtin) defines none. Global-only.",
 		Writer:      tuningWriter{Tool: tierAliasesEntry.WriterTool, FixedArguments: map[string]string{"key": tierAliasesEntry.Key}},
 		Reset: &tuningWriter{
 			Tool:           tierAliasesEntry.ResetTool,

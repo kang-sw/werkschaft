@@ -125,6 +125,24 @@
   point was the retired routing skill, and no shipped skill or playbook calls
   it. `route.resolve_implement` keeps the shared fact-parsing helpers.
 
+## v0.52.0
+
+- **Werk replaces Pi for hosted leads and workers.** The daemon runs werk
+  in process with durable turn recovery, lead compaction, skills, and
+  permission modes. Choose OpenRouter, Sign in with ChatGPT, or a named
+  vLLM or Ollama endpoint. Werk uses daemon file and exec tools. Hosted
+  exec jobs use session holders so they can rejoin after daemon replacement.
+- **Pi distribution and execution are retired.** The ws and wsflow packages
+  drop the native Pi payload and the Pi install, CI, and release paths.
+  Update your installed plugin to 0.52, then restart affected harness
+  sessions. The 0.51 launcher refuses a shared 0.52 daemon.
+- **Pi history remains readable.** Retired conversations open as ended
+  history and are exempt from the seven-day sweep. 0.52 restores a missing
+  session directory from the retirement archive after a matched 0.51.2
+  rollback prune. The six hidden `pi.*` handlers stay through 0.52 and are
+  scheduled for removal in 0.53. Authorized `pi.list` and `pi.transcript`
+  still read retained history. Use `agent.*` for current worker operations.
+
 ## v0.42.0 - 2026-08-23
 
 ### Changed

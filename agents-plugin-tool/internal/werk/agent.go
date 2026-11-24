@@ -62,6 +62,8 @@ type Config struct {
 	Effort    string
 	// Session resumes that session's conversation; empty starts a new one.
 	Session string
+	// ClosedTurnID marks a turn the host intentionally abandoned on close.
+	ClosedTurnID string
 	// Instructions is the instruction text composed for the session, added to
 	// the harness's own preamble.
 	Instructions string
@@ -255,7 +257,12 @@ func New(cfg Config) (*Agent, error) {
 	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
 		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
 	})
-	if a.journal.id == "" {
+	if cfg.ClosedTurnID != "" && a.journal.id == cfg.ClosedTurnID && a.journal.end == nil {
+		if err := a.reconcileClosedTurn(); err != nil {
+			_ = a.Close()
+			return nil, err
+		}
+	} else if a.journal.id == "" {
 		a.repaired = a.repairPending()
 	}
 	return a, nil
@@ -524,7 +531,7 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 
 type interactiveTurnKey struct{}
 
-// InteractiveTurn reports whether a request is part of a fresh operator send.
+// InteractiveTurn reports whether a request is part of an operator-originated turn.
 func InteractiveTurn(ctx context.Context) bool {
 	interactive, _ := ctx.Value(interactiveTurnKey{}).(bool)
 	return interactive
@@ -1052,8 +1059,11 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 	correlated, hasCorrelation := a.cfg.WS.(correlatedWSTools)
 	// The hosted launch resolves the program and working directory before
 	// asking the loop for approval. Other effects are gated before dispatch.
+	var explicit bool
+	var err error
 	if !hasCorrelation || canonicalExecLaunch(e.ws) == "" {
-		if err := a.permitMutation(ctx, c, approvalTool(e.ws), args); err != nil {
+		explicit, err = a.permitMutation(ctx, c, approvalTool(e.ws), args, false)
+		if err != nil {
 			if ctx.Err() != nil {
 				return interruptedOutput, true
 			}
@@ -1061,14 +1071,13 @@ func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functi
 		}
 	}
 	var res CallResult
-	var err error
 	if hasCorrelation {
 		tool := canonicalFileTool(e.ws)
 		if tool == "" {
 			tool = canonicalExecLaunch(e.ws)
 		}
 		if tool != "" {
-			end, err := a.beginMutationCall(ctx, c.CallID, tool, args, c.reask)
+			end, err := a.beginMutationCall(ctx, c.CallID, tool, args, c.reask, explicit)
 			if err != nil {
 				return "Error: " + err.Error(), true
 			}

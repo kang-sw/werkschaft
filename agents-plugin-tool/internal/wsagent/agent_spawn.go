@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -309,12 +310,56 @@ type BoundWorktreeChild struct {
 	Live               bool   `json:"live,omitempty"`
 }
 
+type retiredPiBinding struct {
+	holder, root, cwd, createdAt string
+	child                        BoundWorktreeChild
+}
+
+func (r *Runner) rememberRetiredPiBinding(rec Record) {
+	root, cwd := canonicalBinding(rec)
+	r.mu.Lock()
+	r.retiredPiBindings = append(r.retiredPiBindings, retiredPiBinding{
+		holder: rec.HolderID, root: root, cwd: cwd, createdAt: rec.CreatedAt,
+		// Occupancy describes the process. The historical record stays ended.
+		child: BoundWorktreeChild{Address: AgentAddress(rec.ReplyID), State: AgentRunning, Cwd: rec.Cwd, Live: true},
+	})
+	r.mu.Unlock()
+}
+
+func (r *Runner) boundRetiredPiHolders(target string) []retiredPiBinding {
+	if r.opts.Holders == nil {
+		return nil
+	}
+	r.mu.Lock()
+	var matches []retiredPiBinding
+	for _, binding := range r.retiredPiBindings {
+		if worktreePathContains(target, binding.root) || worktreePathContains(target, binding.cwd) {
+			matches = append(matches, binding)
+		}
+	}
+	r.mu.Unlock()
+	if len(matches) == 0 {
+		return nil
+	}
+	scanned := r.scanDone()
+	listed := r.opts.Holders.List()
+	alive := make(map[string]bool, len(listed.Holders))
+	for _, info := range listed.Holders {
+		alive[info.ID] = info.Child == nil || info.Child.State != "exited"
+	}
+	return slices.DeleteFunc(matches, func(binding retiredPiBinding) bool {
+		live, known := alive[binding.holder]
+		return !live && (known || scanned && !listed.Incomplete)
+	})
+}
+
 // ActiveChildrenInWorktree returns every conversation in the runner whose
 // canonical root equals worktree or whose canonical working directory is
 // worktree or within it, oldest first then by address: each non-closed one,
-// and a closed one whose process the runner still holds (a close marks the
-// conversation closed before it stops the process). It reads memory only,
-// apart from worktree's release marker.
+// a closed one whose process the runner still holds (a close marks the
+// conversation closed before it stops the process), and surviving holders
+// of retired Pi conversations. It reads memory only, apart from worktree's
+// release marker.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {
@@ -326,6 +371,9 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 		child     BoundWorktreeChild
 	}
 	var matches []match
+	for _, binding := range r.boundRetiredPiHolders(target) {
+		matches = append(matches, match{createdAt: binding.createdAt, child: binding.child})
+	}
 	for _, c := range r.boundConvs(target) {
 		st := c.memoryState()
 		c.mu.Lock()

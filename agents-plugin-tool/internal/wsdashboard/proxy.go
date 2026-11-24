@@ -93,7 +93,7 @@ type ProxyHello struct {
 	// live in-daemon process by its own token resolution.
 	FileWrites *wsfs.FileWriteSession `json:"-"`
 	// RecordExecLaunch comes from the same trusted in-daemon binding.
-	RecordExecLaunch func(context.Context, execjob.ModelLaunch) error `json:"-"`
+	RecordExecLaunch func(context.Context, execjob.ModelLaunch) (bool, error) `json:"-"`
 }
 
 // ProxyAccept is the daemon's one-line answer to the hello: accepted, and

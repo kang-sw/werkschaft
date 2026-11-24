@@ -120,6 +120,7 @@ type ModelLaunch struct {
 	ID, Tool, JobID string
 	Arguments       json.RawMessage
 	Approval        *HostedCall
+	RequireExplicit bool
 }
 
 // HostedCall is one launch as its approval shows it: everything the call

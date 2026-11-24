@@ -10,6 +10,10 @@ import (
 
 func claimDir(dir string) string { return filepath.Join(dir, "runner-claims") }
 
+// DiscardClaims drops staging for a closed conversation. The runner must
+// acknowledge committed claims first and stop admitting claims before this.
+func DiscardClaims(dir string) error { return os.RemoveAll(claimDir(dir)) }
+
 // PendingClaims reads inbox entries a durable runner took before it could
 // commit their input queue. The private queue record lists the names from
 // its last committed claim, which are already represented in that queue.

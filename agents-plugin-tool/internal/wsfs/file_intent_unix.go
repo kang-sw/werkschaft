@@ -3,12 +3,22 @@
 package wsfs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+func hasSingleLink(_ *os.File, info os.FileInfo) (bool, error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, errors.ErrUnsupported
+	}
+	return stat.Nlink == 1, nil
+}
 
 func openMutationDir(parent *os.File, name string, create bool) (*os.File, error) {
 	if create {

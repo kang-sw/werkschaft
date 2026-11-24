@@ -63,18 +63,37 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// nothing asks for approval.
 	var call HostedCall
 	explicit := false
+	modelApproval := req.ApproveModel != nil && req.BindJob != nil
+	approve := func(requireExplicit bool) (bool, error) {
+		if modelApproval {
+			return req.ApproveModel(ctx, call, requireExplicit)
+		}
+		return h.opts.Sessions.Approve(ctx, owner.ID, call)
+	}
+	immediate := func() (bool, error) {
+		if req.ModelAuthority != nil {
+			return req.ModelAuthority()
+		}
+		return h.opts.Sessions.Immediate(owner.ID)
+	}
+	recheckApproval := func() error {
+		for {
+			ok, err := immediate()
+			if err != nil || explicit || ok {
+				return err
+			}
+			if explicit, err = approve(true); err != nil {
+				return err
+			}
+		}
+	}
 	if lookErr == nil {
 		argv[0] = bin
 		call = approvalCall(req, bin)
 		if req.UserApproved {
 			// The user's own request is this invocation's approval.
 			explicit = true
-		} else if req.ApproveModel != nil && req.BindJob != nil {
-			if err := req.ApproveModel(ctx, call); err != nil {
-				return HostedView{}, err
-			}
-			explicit = true
-		} else if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+		} else if explicit, err = approve(false); err != nil {
 			return HostedView{}, err
 		}
 	}
@@ -136,6 +155,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	default:
 	}
 	if req.BindJob != nil {
+		if modelApproval {
+			if err := recheckApproval(); err != nil {
+				h.mu.Lock()
+				j.holderPinned = false
+				h.mu.Unlock()
+				return h.failStart(j, "", err)
+			}
+		}
 		if err := req.BindJob(id); err != nil {
 			h.mu.Lock()
 			j.holderPinned = false
@@ -172,18 +199,28 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.holderPinned = false
 	j.row.HolderID = holder
 	h.byHolder[holder] = j
-	h.mu.Unlock()
+	if req.BindJob != nil {
+		// Publish the holder for recovery before the child can start. Leave
+		// the job in its starting state so it can still be stopped while
+		// the final permission check waits for an operator.
+		j.row.StartedAt = h.opts.Now().UnixMilli()
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		if err := h.save(j, row, rev); err != nil {
+			return h.failStart(j, holder, fmt.Errorf("save the job before start: %w", err))
+		}
+		select {
+		case <-j.done:
+			return h.view(j, OutcomeDone), errClosedBeforeStart
+		default:
+		}
+	} else {
+		h.mu.Unlock()
+	}
 	// The live mode decides the start: an allow by role or mode that no
 	// longer holds asks the user now.
-	for !explicit {
-		ok, err := h.opts.Sessions.Immediate(owner.ID)
-		if err != nil {
-			return h.failStart(j, holder, err)
-		}
-		if ok {
-			break
-		}
-		if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+	if !explicit || req.ModelAuthority != nil {
+		if err := recheckApproval(); err != nil {
 			return h.failStart(j, holder, err)
 		}
 	}
@@ -208,20 +245,8 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	defer release()
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
+	h.mu.Unlock()
 	if req.BindJob != nil {
-		// The successor must recognize this holder even if the daemon
-		// exits before Spawn returns and the running snapshot is saved.
-		row, rev := h.snapLocked(j)
-		h.mu.Unlock()
-		if err := h.save(j, row, rev); err != nil {
-			return h.failStart(j, holder, fmt.Errorf("save the job before start: %w", err))
-		}
-		h.mu.Lock()
-		ended := j.row.Terminal()
-		h.mu.Unlock()
-		if ended {
-			return h.view(j, OutcomeDone), errClosedBeforeStart
-		}
 		select {
 		case <-drain:
 			return h.failStart(j, holder, errors.New("exec: the daemon is stopping"))
@@ -230,8 +255,6 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		if err := ctx.Err(); err != nil {
 			return h.failStart(j, holder, err)
 		}
-	} else {
-		h.mu.Unlock()
 	}
 	// realCwd is in the ordinary spelling, never the extended-length form:
 	// CreateProcess refuses \\?\ as a current directory. A Windows cwd past

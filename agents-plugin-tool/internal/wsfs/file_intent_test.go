@@ -158,7 +158,7 @@ func TestPinnedMutationOpenUsesTheOriginalDirectoryAfterReplacement(t *testing.T
 	must(t, os.Mkdir(parent, 0o755))
 	must(t, os.WriteFile(filepath.Join(parent, "target"), []byte("replacement"), 0o644))
 
-	_, data, err := target.inspect(true)
+	_, data, err := target.inspect(true, nil)
 	must(t, err)
 	if string(data) != "original" {
 		t.Errorf("pinned read followed the replacement: %q", data)

@@ -161,7 +161,7 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 // available is agent.spawn's harness availability check without probes
 // (wsagent Runner.HarnessAvailability) the tier routing view reports at each
 // terminal, for the view's simulated caller harness; nil reports none.
-func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(caller, harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
+func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(caller, harness string) (why string, known bool), registries ...map[string]wsagent.BackendRegistration) (*wsdashboard.ConfigBackend, error) {
 	catalog, err := DashboardConfigCatalog(packageName)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	// The graph view reads the backend's options at call time, the same
 	// config the snapshot and writes use.
 	backend.TierRouting = func(draft json.RawMessage, harness string) (any, error) {
-		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available)
+		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available, registries...)
 	}
 	return backend, nil
 }

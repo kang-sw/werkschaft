@@ -1853,12 +1853,12 @@ func (c *conv) kickInput() {
 	queue := slices.Clone(c.rec.Queued)
 	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
-		interactive := durable && c.rec.Lead && rec.Entry.EventID == "" && rec.Entry.Cron == nil
+		operator := durable && c.rec.Lead && rec.Entry.Operator
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
-			queue = append(queue, QueuedInput{Command: &cmd, After: from, Interactive: interactive})
+			queue = append(queue, QueuedInput{Command: &cmd, After: from, Operator: operator})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			queue = append(queue, QueuedInput{Text: text, After: from, Interactive: interactive})
+			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -1928,7 +1928,7 @@ func (c *conv) kickInput() {
 			if ordinary {
 				text = c.turnInput(text)
 			}
-			interactive := c.rec.Lead && slices.ContainsFunc(queue[:len(queue)-len(rest)], func(input QueuedInput) bool { return input.Interactive })
+			interactive := c.rec.Lead && slices.ContainsFunc(queue[:len(queue)-len(rest)], func(input QueuedInput) bool { return input.Operator })
 			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false, interactive)
 			return
 		}

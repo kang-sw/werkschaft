@@ -143,8 +143,9 @@ func (r *Runner) deleteDurableRecord(rec Record) {
 // durableTurnInput is the prompt already admitted for the one active turn.
 // The process uses the same ID in its input and result journal.
 type durableTurnInput struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Operator bool   `json:"operator,omitempty"`
 }
 
 // commitDurableRecord makes a private transition visible only after its

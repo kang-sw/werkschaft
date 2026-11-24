@@ -213,6 +213,22 @@ func approvalWait(reg Registration, snap *wslive.Snapshot) *ApprovalWait {
 	return wait
 }
 
+func railRetainsHistory(in railInput) bool {
+	reg := in.Session.Registration
+	if !retainsPiHistory(reg.Harness) {
+		return false
+	}
+	if reg.Hosted || reg.Agent {
+		return true
+	}
+	// A terminal handoff clears Hosted but keeps the runner's history record.
+	if in.AgentMeta == nil {
+		return false
+	}
+	meta, found := in.AgentMeta.SessionMeta(reg.ReplyID)
+	return found && retainsPiHistory(meta.Backend)
+}
+
 // railRow is one session's row.
 func railRow(in railInput, live bool, now time.Time) RailRow {
 	reg := in.Session.Registration
@@ -240,7 +256,7 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)
 	}
-	if lifecycle == SessionPendingDeletion {
+	if lifecycle == SessionPendingDeletion && !railRetainsHistory(in) {
 		if seen := reg.LastSeen(); !seen.IsZero() {
 			row.DeleteAt = seen.Add(RegistryRetention).UnixMilli()
 		}

@@ -268,7 +268,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		if !decode(w, req, &body) {
 			return
 		}
-		st, err := r.Send(id, body.Text)
+		st, err := r.send(id, body.Text, local && own)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "interrupt":
 		st, returned, err := r.Interrupt(id)

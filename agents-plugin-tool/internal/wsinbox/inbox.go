@@ -161,6 +161,8 @@ type Chip struct {
 // Entry is one held message.
 type Entry struct {
 	SchemaVersion int `json:"schemaVersion"`
+	// Operator is set by a trusted operator send before the entry is stored.
+	Operator bool `json:"operator,omitempty"`
 	// Parts holds the send's text, including server-serialized selections
 	// (selections.go). An older combined entry may hold several parts,
 	// each kept as its own paragraph; no new stored field is needed.

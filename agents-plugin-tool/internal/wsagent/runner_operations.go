@@ -67,7 +67,7 @@ func (r *Runner) List() []State {
 // Ended conversations refuse sends.
 // It reports whether the message is still held.
 //
-// Send returns once the message is in the conversation's inbox: it neither
+// Send accepts operator input and returns once it is in the conversation's inbox: it neither
 // waits for the loop nor starts the process, which the loop does on its
 // signal (inboxChanged), so a busy loop or a slow start never holds the
 // caller. A start failure reaches the conversation's State.Error, not this
@@ -76,6 +76,10 @@ func (r *Runner) List() []State {
 // as it drops every held message) or is refused, never written into a
 // closed conversation's inbox that nothing reads.
 func (r *Runner) Send(id, text string) (State, error) {
+	return r.send(id, text, true)
+}
+
+func (r *Runner) send(id, text string, operator bool) (State, error) {
 	if strings.TrimSpace(text) == "" {
 		return State{}, badRequest("text is empty")
 	}
@@ -94,7 +98,7 @@ func (r *Runner) Send(id, text string) (State, error) {
 		c.mu.Unlock()
 		return State{}, err
 	}
-	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}}, r.opts.Now())
+	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Operator: operator && c.rec.Lead}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose
 		// drain counted this send holds its message (Wait). These rec
@@ -282,7 +286,7 @@ func (r *Runner) IsChild(id string) bool {
 	return r.opts.CardBound != nil && r.opts.CardBound(id)
 }
 
-// SessionMeta returns in-memory composer control metadata for replyID without
+// SessionMeta returns in-memory dashboard metadata for replyID without
 // touching disk (wsdashboard.AgentSessionMetaHost).
 func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool) {
 	r.mu.Lock()
@@ -304,6 +308,7 @@ func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool
 		IsChild: r.isChildRecord(rec),
 		Closed:  closed,
 		Active:  active,
+		Backend: rec.Backend,
 		Model:   rec.Model,
 		Effort:  rec.Effort,
 	}, true
