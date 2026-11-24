@@ -100,6 +100,7 @@ type StartSpec struct {
 	RecoveredSteers    []string
 	recoverExec        func(context.Context, string) (string, error)
 	restoredUsage      *wslive.Usage
+	closedTurnID       string
 	compactState       func(time.Time) compactionState
 	sessionSecret      string
 	modelContextWindow func(string) int64

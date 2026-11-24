@@ -72,6 +72,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			// Durable compaction waits for a quiescent boundary.
 			ComposedLeadInstructions: true,
 			LeadHTTPMCP:              true,
+			RestoreUsage:             true,
 			NoWorkerCompactionSteer:  true,
 			ExecReadTools:            true,
 			FileWriteTools:           true,

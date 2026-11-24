@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 var errDurableStopping = conflict("durable sessions are stopping for Full Quit")
@@ -84,11 +85,19 @@ func (r *Runner) StopDurableSession(id string) error {
 }
 
 func (c *conv) closeDurable() error {
+	// Committed claims already belong to the drained history. Only the
+	// staged remainder is discarded after the close has committed.
+	if err := c.ackInboxClaims(); err != nil {
+		return fmt.Errorf("%w: acknowledge input: %w", errDurableClose, err)
+	}
 	now := c.r.opts.Now()
 	err := c.commitDurableRecord(func(rec *Record) {
 		rec.ClosedAt = now.UTC().Format(time.RFC3339)
 		rec.OpenGen++
 		finishActiveTurn(rec, now.UnixMilli())
+		if rec.DurableTurn != nil {
+			rec.DurableClosedTurnID = rec.DurableTurn.ID
+		}
 		rec.TurnOpen, rec.DurableTurn, rec.DurableSteers = false, nil, nil
 		rec.HeldTurn, rec.DurableHeldReportID = nil, ""
 		rec.Queued, rec.Mail, rec.Reports, rec.DurableInboxClaims = nil, nil, nil, nil
@@ -99,6 +108,10 @@ func (c *conv) closeDurable() error {
 	})
 	if err != nil {
 		return fmt.Errorf("%w: %w", errDurableClose, err)
+	}
+	if err := wsinbox.DiscardClaims(c.inbox); err != nil {
+		// Reopen retries before the closed record can admit input again.
+		fmt.Fprintf(c.r.opts.Log, "agent %s: discard closed inbox claims: %v\n", c.rec.ReplyID, err)
 	}
 	c.finishClose()
 	return nil

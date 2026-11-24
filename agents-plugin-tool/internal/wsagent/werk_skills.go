@@ -63,7 +63,6 @@ func discoverWerkSkills(spec StartSpec) []werk.Skill {
 	}
 	vars := werkSkillEnv(env)
 	cwd := werkSkillAnchor(spec.workDir())
-	project := werkSkillProjectDirs(cwd, werkSkillAnchor(spec.Root))
 	homeKey := "HOME"
 	if runtime.GOOS == "windows" {
 		homeKey = "USERPROFILE"
@@ -74,6 +73,15 @@ func discoverWerkSkills(spec StartSpec) []werk.Skill {
 	}
 	home = werkSkillAnchor(home)
 	codex := werkSkillConfigDir(vars["CODEX_HOME"], ".codex", home, cwd)
+	plugins, bundled := readWerkCodexConfig(codex.join("config.toml"))
+	bundledRoot := werkSkillRoot{codex.join("skills", ".system"), "", false}
+	if spec.Lead != nil && spec.Lead.PluginIsolation == "isolated" {
+		if !bundled {
+			return nil
+		}
+		return indexWerkSkillRoots([]werkSkillRoot{bundledRoot})
+	}
+	project := werkSkillProjectDirs(cwd, werkSkillAnchor(spec.Root))
 	claude := werkSkillConfigDir(vars["CLAUDE_CONFIG_DIR"], ".claude", home, cwd)
 	managed := werkClaudeManagedDir(vars)
 
@@ -93,14 +101,13 @@ func discoverWerkSkills(spec StartSpec) []werk.Skill {
 	} else {
 		roots = append(roots, werkClaudeInstalledSkills(claude, managed, project)...)
 	}
-	plugins, bundled := readWerkCodexConfig(codex.join("config.toml"))
 	roots = append(roots, werkCodexInstalledSkills(codex, plugins, spec.Lead != nil)...)
 	if runtime.GOOS != "windows" {
 		roots = append(roots, werkSkillRoot{werkSkillLocation{werkSkillAnchor("/etc"), filepath.Join("codex", "skills")}, "", false})
 	}
 	roots = append(roots, werkSkillRoot{managed.join(".claude", "skills"), "", true})
 	if bundled {
-		roots = append(roots, werkSkillRoot{codex.join("skills", ".system"), "", false})
+		roots = append(roots, bundledRoot)
 	}
 	return indexWerkSkillRoots(roots)
 }

@@ -62,6 +62,8 @@ type Config struct {
 	Effort    string
 	// Session resumes that session's conversation; empty starts a new one.
 	Session string
+	// ClosedTurnID marks a turn the host intentionally abandoned on close.
+	ClosedTurnID string
 	// Instructions is the instruction text composed for the session, added to
 	// the harness's own preamble.
 	Instructions string
@@ -255,7 +257,12 @@ func New(cfg Config) (*Agent, error) {
 	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
 		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
 	})
-	if a.journal.id == "" {
+	if cfg.ClosedTurnID != "" && a.journal.id == cfg.ClosedTurnID && a.journal.end == nil {
+		if err := a.reconcileClosedTurn(); err != nil {
+			_ = a.Close()
+			return nil, err
+		}
+	} else if a.journal.id == "" {
 		a.repaired = a.repairPending()
 	}
 	return a, nil

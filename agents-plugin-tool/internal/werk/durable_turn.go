@@ -54,6 +54,18 @@ func (j *turnJournal) selectCheckpoint() {
 	j.response, j.steers = nil, nil
 }
 
+func (a *Agent) reconcileClosedTurn() error {
+	// Preserve history and complete outstanding tool pairs without invoking
+	// their tools. The same end row used by a normal abort makes replay safe.
+	a.repaired = a.repairPending()
+	end := durableEnd{Reason: ReasonAborted}
+	if err := a.log.commit(turnEndRecord{K: "turn_end", TurnID: a.journal.id, End: end}); err != nil {
+		return fmt.Errorf("save the closed durable turn: %w", err)
+	}
+	a.journal.end = &end
+	return nil
+}
+
 func (a *Agent) beginDurableTurn(cmd Command) (resumed bool, err error) {
 	item := userItem(cmd.Text)
 	if a.journal.id == cmd.TurnID {

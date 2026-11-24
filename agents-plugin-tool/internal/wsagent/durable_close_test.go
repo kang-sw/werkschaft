@@ -94,6 +94,37 @@ func TestFullQuitDrainsAdmittedWakeBeforeReturningFence(t *testing.T) {
 	}
 }
 
+func TestFullQuitRefusesConcurrentDurableReopen(t *testing.T) {
+	h, _, _ := werkHarness(t, &werkModel{})
+	st := h.lead(BackendWerk, LeadOptions{Model: "vendor/some-model"})
+	if _, err := h.runner.CloseConversation(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Hold an admitted transition so Full Quit stays inside its fence
+	// while the concurrent reopen reaches the same admission check.
+	release, err := h.runner.admitDurableTransition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release = sync.OnceFunc(release)
+	defer release()
+	fenced := make(chan func(), 1)
+	go func() { fenced <- h.runner.FenceDurableStarts() }()
+	eventually(t, "Full Quit has fenced durable starts", h.runner.durableStopping.Load)
+	if _, err := h.runner.Reopen(st.ID); !errors.Is(err, errDurableStopping) {
+		t.Errorf("reopen during Full Quit = %v, want a refusal", err)
+	}
+	release()
+	resume := <-fenced
+	if sessions := h.runner.DurableSessions(); len(sessions) != 0 {
+		t.Errorf("Full Quit saw an open durable session: %+v", sessions)
+	}
+	resume()
+	if reopened, err := h.runner.Reopen(st.ID); err != nil || reopened.ID != st.ID {
+		t.Fatalf("reopen after lifting the fence = %+v, %v", reopened, err)
+	}
+}
+
 func TestFullQuitDurableCloseFailureFencesStartsAndWakes(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
