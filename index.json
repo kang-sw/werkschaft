@@ -480,6 +480,9 @@
     "261123-chore-werkschaft-electron-retirement": {
       "registered_at": "2026-11-23T00:31:15Z"
     },
+    "261124-bug-ws-0520-final-dashboard-fixes": {
+      "registered_at": "2026-11-24T04:02:35Z"
+    },
     "261124-bug-ws-0520-release-gate-final-blockers": {
       "registered_at": "2026-11-24T03:50:38Z"
     },
