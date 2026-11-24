@@ -240,27 +240,32 @@ func (r *Runner) expire(id string) bool {
 var _ wsdashboard.AgentForgetter = (*Runner)(nil)
 
 // ForgetClosed drops a closed or handed-off conversation and any private
-// record. The caller owns removal of the session directory.
-func (r *Runner) ForgetClosed(id string) {
-	if rec, ok := r.forgetClosed(id); ok {
+// record. It returns whether the caller may remove the session directory.
+func (r *Runner) ForgetClosed(id string) bool {
+	rec, purge := r.forgetClosed(id)
+	if purge && rec.ReplyID != "" {
 		r.deleteDurableRecord(rec)
 	}
+	return purge
 }
 
 func (r *Runner) forgetClosed(id string) (Record, bool) {
-	rec, ok := r.dropClosed(id)
+	rec, purge := r.dropClosed(id)
 	// Gone from the runner for good (not merely closed, and not open under
 	// the same id): its scheduled prompts go with it.
-	if !r.CronKnown(id) {
+	if purge && !r.CronKnown(id) {
 		r.cronGone(id)
 	}
-	return rec, ok
+	return rec, purge
 }
 
 func (r *Runner) dropClosed(id string) (Record, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.closed[id]
+	if ok && r.hasLiveDescendantsLocked(rec) {
+		return Record{}, false
+	}
 	delete(r.closed, id)
 	delete(r.closedRows, id)
 	delete(r.deadRefusals, id)
@@ -270,14 +275,40 @@ func (r *Runner) dropClosed(id string) (Record, bool) {
 			delete(r.childrenIndex, *rec.Parent)
 		}
 	}
-	return rec, ok
+	return rec, true
+}
+
+// hasLiveDescendantsLocked follows retained closed ancestry under r.mu.
+// Either an open descendant or a reserved spawn still needs this record.
+func (r *Runner) hasLiveDescendantsLocked(rec Record) bool {
+	queue := []ParentRef{safeStopParent(rec.ReplyID, rec.Lead)}
+	visited := map[string]bool{rec.ReplyID: true}
+	for i := 0; i < len(queue); i++ {
+		parent := queue[i]
+		if r.pendingSpawns[parent] > 0 {
+			return true
+		}
+		for id := range r.childrenIndex[parent] {
+			if visited[id] {
+				continue
+			}
+			visited[id] = true
+			if r.convs[id] != nil {
+				return true
+			}
+			if child, ok := r.closed[id]; ok {
+				queue = append(queue, safeStopParent(id, child.Lead))
+			}
+		}
+	}
+	return false
 }
 
 // forget drops closed conversation id from the runner and deletes its
 // session directory.
 func (r *Runner) forget(id string) {
-	rec, ok := r.forgetClosed(id)
-	if !ok {
+	rec, purge := r.forgetClosed(id)
+	if !purge || rec.ReplyID == "" {
 		return
 	}
 	sessionDir := wsdashboard.SessionDir(r.opts.Dir, id)

@@ -101,9 +101,10 @@ type AgentAuditHost interface {
 }
 
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off
-// conversation when the daemon purges its session directory.
+// conversation when the daemon purges its session directory. ForgetClosed
+// returns whether the daemon may remove the directory.
 type AgentForgetter interface {
-	ForgetClosed(replyID string)
+	ForgetClosed(replyID string) bool
 }
 
 // AgentHistoryPurger prepares archive deletion before Git removes the
