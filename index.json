@@ -493,6 +493,9 @@
     "261123-chore-werkschaft-electron-retirement": {
       "registered_at": "2026-11-23T00:31:15Z"
     },
+    "261124-bug-ws-0520-release-gate-rereview-blockers": {
+      "registered_at": "2026-11-24T01:19:15Z"
+    },
     "261124-bug-ws-git-search-credential-hardlink": {
       "registered_at": "2026-11-24T01:13:52Z"
     },
