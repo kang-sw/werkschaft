@@ -499,6 +499,9 @@
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
     },
+    "261124-feat-ws-harness-quota-continuation": {
+      "registered_at": "2026-11-24T06:09:28Z"
+    },
     "261124-feat-ws-managed-compaction": {
       "registered_at": "2026-11-24T05:12:49Z"
     }
