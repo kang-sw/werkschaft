@@ -186,7 +186,7 @@ func (s *denySet) identities() []os.FileInfo {
 		if networkPath(base) || deviceElement(base) {
 			continue
 		}
-		if info, err := stat(base); err == nil {
+		if info, err := stat(base); err == nil && info != nil {
 			s.ids = append(s.ids, info)
 			s.idPaths = append(s.idPaths, base)
 		}

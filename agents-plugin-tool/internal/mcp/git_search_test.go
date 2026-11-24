@@ -442,6 +442,26 @@ func TestGitSearchRefusesWorktreeReadsWithCredentialHardLinks(t *testing.T) {
 	}
 }
 
+func TestGitSearchRefusesWorktreeReadWithLinkedCredentialName(t *testing.T) {
+	f := newGitSearchFixture(t)
+	current := gitSearchCredentialFixture(t, "synthetic-provider-key-for-git-search")
+	target := filepath.Join(f.repo, "linked-credential.txt")
+	if err := os.Rename(current, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, current); err != nil {
+		t.Skipf("file symlink unavailable: %v", err)
+	}
+	args := map[string]any{"repo": f.repo, "command": "grep", "pattern": "hello"}
+	if text, failed := f.search(t, args); !failed || !strings.Contains(text, "credential filename is a symbolic link or reparse point") {
+		t.Fatalf("worktree search with a linked credential name = %v, %q", failed, text)
+	}
+	args["options"] = []string{"--cached"}
+	if got := f.mustSearch(t, args); got != "a.txt:hello\n" {
+		t.Errorf("index search with a linked credential name = %q", got)
+	}
+}
+
 func TestGitSearchCountsRetiringCredentialLinks(t *testing.T) {
 	f := newGitSearchFixture(t)
 	current := gitSearchCredentialFixture(t, "synthetic-provider-key-for-git-search")

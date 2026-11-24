@@ -51,7 +51,7 @@ type Files struct {
 // FileProtection checks the selected path and the actual handles used for it.
 type FileProtection interface {
 	CheckPath(string) error
-	CheckOpened(os.FileInfo) error
+	CheckOpened(*os.File, os.FileInfo) error
 }
 
 // ResolvePath normalizes a path relative to the caller's working directory.

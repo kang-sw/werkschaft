@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -338,11 +339,13 @@ func (s *Store) loadLocked(retry bool) error {
 	}
 	s.loaded, s.loadErr = true, nil
 	s.failedAt = stampOf(s.path)
-	raw, err := wsstate.ReadFile(s.path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		raw = nil
-	case err != nil:
+	file, _, err := OpenCredentialFileForRead(s.path)
+	var raw []byte
+	if err == nil && file != nil {
+		raw, err = io.ReadAll(file)
+		_ = file.Close()
+	}
+	if err != nil {
 		s.loadErr = fmt.Errorf("read the credential file: %w", err)
 		return s.loadErr
 	}

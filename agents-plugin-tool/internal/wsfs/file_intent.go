@@ -110,7 +110,7 @@ func (t *mutationTarget) inspect(keepData bool, protection FileProtection) (file
 		return fileSnapshot{}, nil, err
 	}
 	if protection != nil {
-		if err := protection.CheckOpened(info); err != nil {
+		if err := protection.CheckOpened(file, info); err != nil {
 			return fileSnapshot{}, nil, err
 		}
 	}
@@ -219,7 +219,7 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 func verifyMutationDestination(file *os.File, prior fs.FileInfo, protection FileProtection) (fs.FileInfo, error) {
 	info, err := verifyFile(file, prior)
 	if err == nil && protection != nil {
-		err = protection.CheckOpened(info)
+		err = protection.CheckOpened(file, info)
 	}
 	return info, err
 }

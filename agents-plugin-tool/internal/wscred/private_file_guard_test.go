@@ -69,13 +69,14 @@ func TestProviderCredentialProtectionDuringReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 		info, err := file.Stat()
-		_ = file.Close()
 		if err != nil {
+			_ = file.Close()
 			t.Fatal(err)
 		}
-		if err := p.CheckOpened(info); err == nil {
+		if err := p.CheckOpened(file, info); err == nil {
 			t.Errorf("read from %s allowed by identity", filepath.Base(path))
 		}
+		_ = file.Close()
 		raw, err := json.Marshal(map[string]string{"path": path, "content": "replacement"})
 		if err != nil {
 			t.Fatal(err)

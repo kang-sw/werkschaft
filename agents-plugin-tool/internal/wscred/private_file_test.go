@@ -6,8 +6,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
+
+func TestCredentialLoadsThroughLinkedName(t *testing.T) {
+	target := testStore(t)
+	setKey(t, target, fixtureKey)
+	linked := filepath.Join(t.TempDir(), FileName)
+	if err := os.Symlink(target.Path(), linked); err != nil {
+		t.Skipf("file symlink unavailable: %v", err)
+	}
+	store := NewStore(linked)
+	if cred, err := openrouter(store); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("load linked credential: %v", err)
+	}
+	if err := os.Remove(target.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openrouter(NewStore(linked)); err == nil || !strings.Contains(err.Error(), "read the credential file") {
+		t.Fatalf("load dangling credential: %v", err)
+	}
+}
 
 func TestCredentialReplacementScrubsPreviousGeneration(t *testing.T) {
 	s := testStore(t)
