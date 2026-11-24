@@ -713,3 +713,34 @@ func TestHarnessBinaryResolvesABareCommandOnPath(t *testing.T) {
 		t.Fatalf("an unresolved harness command: %v %s", on, why)
 	}
 }
+
+// werk has no native shell tools (ExecCutoverSupport.NoNativeTools), so
+// exec.native_tool_removal.werk=off, .all=off, or a bare =off override on disk
+// never disables its ws/exec cutover at runtime.
+func TestWerkExecCutoverIgnoresRolloutOff(t *testing.T) {
+	h := newLeadHarness(t)
+	_, werkReg := WerkBackend{}.registration()
+	h.opts.Backends[BackendWerk] = werkReg
+	h.execJobs = newFakeExecJobs()
+	h.start()
+	h.runner.SetEndpoint("http://127.0.0.1:1")
+
+	cases := []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{"werk off", map[string]string{wsconfig.ItemExecNativeToolRemoval + ".werk": "off"}},
+		{"all off", map[string]string{wsconfig.ItemExecNativeToolRemoval + ".all": "off"}},
+		{"bare off", map[string]string{wsconfig.ItemExecNativeToolRemoval: "off"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeOverrides(t, filepath.Join(h.opts.Config.ConfigHome, "config.json"), tc.overrides)
+			c := &conv{r: h.runner, rec: Record{ReplyID: "werk-" + tc.name, Backend: BackendWerk, Root: h.root, Lead: true}}
+			on, why := c.execCutoverFor(c.rec, Profile{}, execCutoverInputs{binding: true})
+			if !on {
+				t.Fatalf("werk cutover disabled under %s: %s", tc.name, why)
+			}
+		})
+	}
+}

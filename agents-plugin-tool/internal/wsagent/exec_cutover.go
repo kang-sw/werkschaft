@@ -35,6 +35,10 @@ const envNoAgent = "WS_MCP_NO_AGENT"
 // on. A last reported version older than Since keeps native tools.
 type ExecCutoverSupport struct {
 	Since string
+	// NoNativeTools marks a harness that has no native process tools at all:
+	// it always runs commands through the ws exec tools, so rollout off
+	// switches (including all=off) never disable its cutover.
+	NoNativeTools bool
 	// LaunchMode, when set, is the native permission mode a cutover lead
 	// runs in whatever mode the user saved: launch, live settings changes,
 	// in-stream reports and reconciliation all return to it, and the saved
@@ -44,11 +48,20 @@ type ExecCutoverSupport struct {
 	// refuses for a cutover session, live or replayed, ahead of bypass and
 	// worker auto-approval: the harness cannot drop them at launch.
 	RejectTools []string
+	// AutoApprove, when set, reports whether a non-rejected permission prompt
+	// in a cutover session is answered allow by the daemon (for example,
+	// restoring saved auto or accept-edits behavior for non-exec tools while
+	// the process stays in LaunchMode).
+	AutoApprove func(rec Record, req ApprovalRequest) bool
 	// Instruction is appended to a cutover session's system prompt at
 	// session creation, and sent once as a prompt at the end of a turn in
 	// which a RejectTools request was refused, or such a tool ran without
 	// a request (Event.UnrequestedCommand). Empty sends nothing.
 	Instruction string
+	// UnrequestedCommandWarning is the user-visible session advisory surfaced
+	// when a native process tool runs without a permission request under the
+	// exec cutover. Empty falls back to a generic notice.
+	UnrequestedCommandWarning string
 }
 
 // execCutoverInputs is what a start's cutover decision reads besides the
@@ -112,8 +125,10 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 	if envFlagOn(in.mcpEnv[envNoAgent]) || (in.mcpEnv[envNoAgent] == "" && envFlagOn(envValue(environ(), envNoAgent))) {
 		return false, "agentless ws-mcp has no exec tools"
 	}
-	if on, why := c.execRolloutOn(rec); !on {
-		return false, why
+	if !reg.ExecCutover.NoNativeTools {
+		if on, why := c.execRolloutOn(rec); !on {
+			return false, why
+		}
 	}
 	return true, ""
 }
@@ -217,7 +232,7 @@ func (c *conv) decideExecCutover(rec Record, def Profile, spec *StartSpec, mcpEn
 	}
 	on, why := c.execCutoverFor(rec, def, in)
 	spec.ExecCutover = on
-	c.setStatus(func() { c.execCutover, c.launchBinary = on, in.binary })
+	c.setStatus(func() { c.execCutover, c.launchBinary, c.unrequestedCmdWarn = on, in.binary, "" })
 	c.cutoverInstructed = 0
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
@@ -232,7 +247,7 @@ func (c *conv) rejoinExecCutover(rec Record) bool {
 	on := rec.ExecCutoverHolder != "" && rec.ExecCutoverHolder == rec.HolderID
 	// The binary a process this daemon did not launch ran from is unknown:
 	// its version report is not kept.
-	c.setStatus(func() { c.execCutover, c.launchBinary = on, "" })
+	c.setStatus(func() { c.execCutover, c.launchBinary, c.unrequestedCmdWarn = on, "", "" })
 	c.cutoverInstructed = 0
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
@@ -375,6 +390,13 @@ func (c *conv) cutoverRejects(tool string) bool {
 	return s != nil && slices.Contains(s.RejectTools, tool)
 }
 
+// cutoverAutoApproves reports whether a non-rejected permission request is
+// auto-approved by the backend's cutover policy for rec.
+func (c *conv) cutoverAutoApproves(rec Record, a ApprovalRequest) bool {
+	s := c.cutoverSupport()
+	return s != nil && s.AutoApprove != nil && !c.cutoverRejects(a.Tool) && s.AutoApprove(rec, a)
+}
+
 // rejectCutoverRequest refuses a's permission request (reject_once) and
 // owes the turn its instruction prompt. It reports whether a was such a
 // request; one the process cannot be told about stays pending for the
@@ -424,13 +446,34 @@ func (c *conv) oweCutoverInstruction(trigger string) {
 
 // unrequestedCommand handles a native process tool that ran with no
 // permission request (a rule the user's own harness settings allow, say):
-// a warning, and the same single instruction at the turn's end.
+// a log warning, a user-visible session advisory, and the same single
+// instruction at the turn's end.
 func (c *conv) unrequestedCommand(toolCallID string, quiet bool) {
-	if c.cutoverSupport() == nil {
+	s := c.cutoverSupport()
+	if s == nil {
 		return
 	}
 	if !quiet {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: warning: a native command ran without a permission request (%s) under the exec cutover\n", c.rec.ReplyID, toolCallID)
+		warn := s.UnrequestedCommandWarning
+		if warn == "" {
+			warn = "A native command ran without a permission request under the exec cutover."
+		}
+		c.setStatus(func() { c.unrequestedCmdWarn = warn })
+		c.changed(false)
+	}
+	c.oweCutoverInstruction(toolCallID)
+}
+
+// unrequestedSubagent handles a native subagent tool call observed in a
+// cutover session whose policy does not prefer native subagents: a log
+// warning and the same single turn-end instruction redirect.
+func (c *conv) unrequestedSubagent(toolCallID string, quiet bool) {
+	if c.cutoverSupport() == nil {
+		return
+	}
+	if !quiet {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: warning: a native subagent tool ran (%s) under the exec cutover\n", c.rec.ReplyID, toolCallID)
 	}
 	c.oweCutoverInstruction(toolCallID)
 }

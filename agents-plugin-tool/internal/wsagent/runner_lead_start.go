@@ -92,6 +92,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	var spawned bool
 	// cutover is this start's exec cutover, settled below before the start.
 	var cutover bool
+	leadSubagent := c.r.leadSubagentPolicy(rec)
 	spec := StartSpec{
 		Root:         rec.Root,
 		Dir:          c.dir,
@@ -109,9 +110,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		// running process was started without the tool.
 		RemoveSubagents: RemovesSubagents(rec),
 		Lead: &LeadSpec{
-			DaemonVersion:   c.r.opts.DaemonVersion,
-			PermissionMode:  rec.launchPermissionMode(),
-			PluginIsolation: leadPluginIsolation(rec.PluginIsolation),
+			DaemonVersion:        c.r.opts.DaemonVersion,
+			PermissionMode:       rec.launchPermissionMode(),
+			PluginIsolation:      leadPluginIsolation(rec.PluginIsolation),
+			PreferNativeSubagent: leadSubagent.Active && leadSubagent.PreferNativeSubagent,
 			PluginWarning: func(warning string) {
 				c.update(func(rec *Record) { rec.PluginWarning = warning })
 				if warning != "" {

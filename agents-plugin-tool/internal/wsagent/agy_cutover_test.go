@@ -1,8 +1,12 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +25,8 @@ func newAgyCutoverHarness(t *testing.T) (*leadHarness, *agyFake) {
 	agy := h.opts.Backends[BackendAgy]
 	_, real := AgyBackend{}.registration()
 	agy.ExecCutover = real.ExecCutover
+	agy.PreferNativeSubagent = real.PreferNativeSubagent
+	agy.ResolveLeadSubagent = real.ResolveLeadSubagent
 	agy.WorkerAutoApprove = true
 	h.opts.Backends[BackendAgy] = agy
 	seedHarnessVersions(t, h, map[string]string{BackendAgy: real.ExecCutover.Since})
@@ -201,8 +207,14 @@ func TestAgyCutoverUnrequestedCommandWarnsAndInstructsOnce(t *testing.T) {
 	if strings.Contains(h.log.String(), "(u0)") {
 		t.Fatal("a refused call's empty failure counted as a run")
 	}
+	if errText := h.state(id).Error; !strings.Contains(errText, "~/.gemini") {
+		t.Fatalf("session state lacks user-visible always-allow warning: %q", errText)
+	}
 	h.holders.out(holder, agyEndTurn(h, holder, 1))
 	h.idle(id)
+	if errText := h.state(id).Error; !strings.Contains(errText, "~/.gemini") {
+		t.Fatalf("user-visible always-allow warning was cleared by the follow-up instruction turn: %q", errText)
+	}
 
 	// A daemon restart replays the ring: the turns are seen again, and
 	// the instruction is not sent a second time.
@@ -507,4 +519,299 @@ func TestAgyCutoverInstructionHoldEndsWhenTheDashboardRemovesIt(t *testing.T) {
 			eventually(t, "the hold to end", func() bool { return !instructing() })
 		})
 	}
+}
+
+func agyPermissionRequest(rpcID, callID, name, kind string, args map[string]any) string {
+	tc := map[string]any{
+		"toolCallId": callID,
+		"name":       name,
+		"title":      name,
+	}
+	if kind != "" {
+		tc["kind"] = kind
+	}
+	if args != nil {
+		tc["args"] = args
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "session/request_permission",
+		"id":      rpcID,
+		"params": map[string]any{
+			"sessionId": "agy-s1",
+			"toolCall":  tc,
+			"options": []map[string]string{
+				{"optionId": "allow", "kind": "allow_once"},
+				{"optionId": "deny", "kind": "reject_once"},
+			},
+		},
+	})
+	return string(raw)
+}
+
+// Under saved mode auto, a cutover agy lead runs in native default so
+// run_command is still intercepted and rejected, auto-approves non-exec ACP
+// requests (edits, reads, MCP calls), and still prompts on the dashboard for
+// ws/exec calls via ApproveExec.
+func TestAgyCutoverAutoModeApprovesNonExecAndPromptsWsExec(t *testing.T) {
+	h, f := newAgyCutoverHarness(t)
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{PermissionMode: "auto"}).ID
+	f.replyID = id
+	h.send(id, "hello")
+	holder := h.holder(id)
+	eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	h.holders.out(holder,
+		agyPermissionRequest("10", "mcp1", "call_mcp_tool", "read", map[string]any{"name": "ws_git_status"}),
+		agyPermissionRequest("11", "ed1", "write_to_file", "edit", map[string]any{"TargetFile": outside}),
+	)
+	h.holders.out(holder, agyRunCommandRequest("12", "cmd1")...)
+	eventually(t, "auto answers", func() bool {
+		return agyAnswered(h, holder, "10", "allow") &&
+			agyAnswered(h, holder, "11", "allow") &&
+			agyAnswered(h, holder, "12", "deny")
+	})
+	if agyAnswered(h, holder, "12", "allow") {
+		t.Fatal("auto mode allowed run_command")
+	}
+	if st := h.state(id); len(st.Approvals) != 0 {
+		t.Fatalf("auto-approved or rejected ACP requests remained pending: %+v", st.Approvals)
+	}
+
+	// ws/exec still prompts via ApproveExec (auto is not bypass/full).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.runner.ApproveExec(ctx, id, ExecApproval{Tool: "exec.shell", Command: "echo hi"})
+		done <- err
+	}()
+	eventually(t, "ws/exec approval prompt", func() bool { return len(h.state(id).Approvals) == 1 })
+	select {
+	case err := <-done:
+		t.Fatalf("ApproveExec resolved immediately under saved auto mode: %v", err)
+	default:
+	}
+	cancel()
+	<-done
+}
+
+// Under saved mode accept-edits, a cutover agy lead auto-approves only
+// edit-kind ACP requests whose target path(s) resolve strictly inside the
+// worktree root; edits outside root (including symlink escapes and sibling
+// prefix dirs), edits with missing paths, and non-edit requests still prompt,
+// while run_command is still rejected.
+func TestAgyCutoverAcceptEditsApprovesInRootEditsOnly(t *testing.T) {
+	h, f := newAgyCutoverHarness(t)
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{PermissionMode: "accept-edits"}).ID
+	f.replyID = id
+	h.send(id, "hello")
+	holder := h.holder(id)
+	eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+
+	inRootNew := filepath.Join(h.root, "sub", "new.go")
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "out.go")
+	siblingFile := h.root + "2" + string(filepath.Separator) + "sib.go"
+
+	h.holders.out(holder,
+		agyPermissionRequest("20", "ed-in", "write_to_file", "edit", map[string]any{"TargetFile": inRootNew}),
+		agyPermissionRequest("21", "ed-out", "write_to_file", "edit", map[string]any{"TargetFile": outsideFile}),
+		agyPermissionRequest("22", "ed-sib", "write_to_file", "edit", map[string]any{"TargetFile": siblingFile}),
+		agyPermissionRequest("23", "ed-missing", "write_to_file", "edit", map[string]any{}),
+		agyPermissionRequest("24", "non-edit", "call_mcp_tool", "read", map[string]any{"TargetFile": inRootNew}),
+	)
+	h.holders.out(holder, agyRunCommandRequest("25", "cmd-ae")...)
+
+	if runtime.GOOS != "windows" {
+		linkPath := filepath.Join(h.root, "escape-link")
+		if err := os.Symlink(outsideDir, linkPath); err != nil {
+			t.Fatal(err)
+		}
+		h.holders.out(holder, agyPermissionRequest("26", "ed-symlink", "write_to_file", "edit", map[string]any{"TargetFile": filepath.Join(linkPath, "pwn.go")}))
+	}
+
+	wantPending := 4
+	if runtime.GOOS != "windows" {
+		wantPending = 5
+	}
+	eventually(t, "accept-edits decisions", func() bool {
+		return agyAnswered(h, holder, "20", "allow") &&
+			agyAnswered(h, holder, "25", "deny") &&
+			len(h.state(id).Approvals) == wantPending
+	})
+	for _, rpc := range []string{"21", "22", "23", "24", "26"} {
+		if agyAnswered(h, holder, rpc, "allow") {
+			t.Errorf("accept-edits auto-approved ineligible request rpc %s", rpc)
+		}
+	}
+	if agyAnswered(h, holder, "25", "allow") {
+		t.Fatal("accept-edits allowed run_command")
+	}
+}
+
+func TestPathWithinRootOS(t *testing.T) {
+	cases := []struct {
+		name    string
+		target  string
+		root    string
+		windows bool
+		want    bool
+	}{
+		{"posix child", "/work/sub/a.go", "/work", false, true},
+		{"posix exact root", "/work", "/work", false, true},
+		{"posix sibling prefix", "/work2/a.go", "/work", false, false},
+		{"posix parent traversal", "/work/../other/a.go", "/work", false, false},
+		{"posix slash root", "/a/b", "/", false, true},
+		{"windows case-insensitive child", `C:\Work\Sub\a.go`, `c:\work`, true, true},
+		{"windows mixed separators", `c:/work/sub/a.go`, `C:\Work`, true, true},
+		{"windows exact root", `C:\Work`, `c:\work`, true, true},
+		{"windows different drive", `D:\Work\a.go`, `C:\Work`, true, false},
+		{"windows sibling prefix", `C:\Work2\a.go`, `C:\Work`, true, false},
+		{"windows parent traversal", `C:\Work\..\Other\a.go`, `C:\Work`, true, false},
+		{"windows drive root", `C:\file.go`, `c:\`, true, true},
+		{"windows unc child", `\\srv\share\dir\a.go`, `\\SRV\SHARE\dir`, true, true},
+		{"windows unc sibling share", `\\srv\share2\a.go`, `\\srv\share`, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pathWithinRootOS(tc.root, tc.target, tc.windows); got != tc.want {
+				t.Fatalf("pathWithinRootOS(%q, %q, windows=%v) = %v, want %v", tc.root, tc.target, tc.windows, got, tc.want)
+			}
+		})
+	}
+}
+
+// Transitioning a cutover agy lead from default -> accept-edits -> auto via
+// live SetPermissionMode immediately drains eligible pending ACP prompts at
+// each step while leaving ineligible ACP prompts and pending ws/exec prompts
+// untouched.
+func TestAgyCutoverLiveSetPermissionModeDrainsEligiblePending(t *testing.T) {
+	h, f := newAgyCutoverHarness(t)
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{PermissionMode: "default"}).ID
+	f.replyID = id
+	h.send(id, "hello")
+	holder := h.holder(id)
+	eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+
+	inRoot := filepath.Join(h.root, "in.go")
+	outside := filepath.Join(t.TempDir(), "out.go")
+	h.holders.out(holder,
+		agyPermissionRequest("30", "p-in", "write_to_file", "edit", map[string]any{"TargetFile": inRoot}),
+		agyPermissionRequest("31", "p-out", "write_to_file", "edit", map[string]any{"TargetFile": outside}),
+		agyPermissionRequest("32", "p-read", "call_mcp_tool", "read", map[string]any{"name": "ws_git_status"}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := h.runner.ApproveExec(ctx, id, ExecApproval{Tool: "exec.shell", Command: "echo hi"})
+		execDone <- err
+	}()
+	eventually(t, "all 4 prompts pending", func() bool { return len(h.state(id).Approvals) == 4 })
+
+	// default -> accept-edits: only the in-root edit drains.
+	if _, err := h.runner.SetPermissionMode(id, "accept-edits"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "in-root edit drained", func() bool {
+		return agyAnswered(h, holder, "30", "allow") && len(h.state(id).Approvals) == 3
+	})
+	if agyAnswered(h, holder, "31", "allow") || agyAnswered(h, holder, "32", "allow") {
+		t.Fatal("accept-edits drained an out-of-root edit or non-edit prompt")
+	}
+
+	// accept-edits -> auto: remaining ACP prompts drain, ws/exec stays pending.
+	if _, err := h.runner.SetPermissionMode(id, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "remaining ACP prompts drained", func() bool {
+		return agyAnswered(h, holder, "31", "allow") &&
+			agyAnswered(h, holder, "32", "allow") &&
+			len(h.state(id).Approvals) == 1
+	})
+	if got := h.state(id).Approvals[0].Tool; got != "exec.shell" {
+		t.Fatalf("remaining approval = %q, want exec.shell", got)
+	}
+	select {
+	case err := <-execDone:
+		t.Fatalf("ApproveExec resolved on transition to auto: %v", err)
+	default:
+	}
+	cancel()
+	<-execDone
+}
+
+// Cutover agy instructions explicitly forbid delegating shell commands to
+// invoke_subagent; post-hoc detection warns and redirects at turn end for
+// cutover workers and cutover leads with agy.prefer_native_subagent=false,
+// while leaving cutover leads with agy.prefer_native_subagent=true (default)
+// undisturbed.
+func TestAgyCutoverInvokeSubagentPolicy(t *testing.T) {
+	if !strings.Contains(agyExecCutoverInstruction, "invoke_subagent") {
+		t.Fatalf("agyExecCutoverInstruction lacks invoke_subagent prohibition: %q", agyExecCutoverInstruction)
+	}
+
+	subagentLine := func(callID string) string {
+		return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"tool_call","toolCallId":"` + callID + `","name":"invoke_subagent","status":"in_progress","args":{"Prompt":"run tests"}}}}`
+	}
+
+	t.Run("worker warns and redirects", func(t *testing.T) {
+		h, got, _, holder := startAgyCutoverWorker(t, nil)
+		h.holders.out(holder, subagentLine("sub-w1"), agyEndTurn(h, holder, 0))
+		eventually(t, "worker redirect prompt", func() bool { return countInstruction(agyCutoverPrompts(t, h, holder)) == 1 })
+		if !strings.Contains(h.log.String(), "a native subagent tool ran (sub-w1)") {
+			t.Fatalf("worker log missing native subagent warning: %s", h.log.String())
+		}
+		if len(got.list()) != 0 {
+			t.Fatalf("worker reported before follow-up turn: %+v", got.list())
+		}
+		h.holders.out(holder,
+			`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"used ws exec"}}}}`,
+			agyEndTurn(h, holder, 1),
+		)
+		eventually(t, "worker report", func() bool { return len(got.list()) == 1 })
+	})
+
+	t.Run("lead with prefer_native_subagent=false warns and redirects", func(t *testing.T) {
+		h, f := newAgyCutoverHarness(t)
+		writeOverrides(t, filepath.Join(h.opts.Config.ConfigHome, "config.json"), map[string]string{
+			wsconfig.ItemAgyPreferNativeSubagent: "false",
+		})
+		h.startAt("http://127.0.0.1:1")
+		id := h.lead(BackendAgy, LeadOptions{}).ID
+		f.replyID = id
+		h.send(id, "hello")
+		holder := h.holder(id)
+		eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+		h.holders.out(holder, subagentLine("sub-l1"), agyEndTurn(h, holder, 0))
+		eventually(t, "lead redirect prompt", func() bool { return countInstruction(agyCutoverPrompts(t, h, holder)) == 1 })
+		if !strings.Contains(h.log.String(), "a native subagent tool ran (sub-l1)") {
+			t.Fatalf("lead log missing native subagent warning: %s", h.log.String())
+		}
+		h.holders.out(holder, agyEndTurn(h, holder, 1))
+		h.idle(id)
+	})
+
+	t.Run("lead with prefer_native_subagent=true has no warning or redirect", func(t *testing.T) {
+		h, f := newAgyCutoverHarness(t)
+		h.startAt("http://127.0.0.1:1")
+		id := h.lead(BackendAgy, LeadOptions{}).ID
+		f.replyID = id
+		h.send(id, "hello")
+		holder := h.holder(id)
+		eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+		h.holders.out(holder, subagentLine("sub-l2"), agyEndTurn(h, holder, 0))
+		h.idle(id)
+		if n := countInstruction(agyCutoverPrompts(t, h, holder)); n != 0 {
+			t.Fatalf("lead with prefer_native_subagent=true got %d redirect prompts, want 0", n)
+		}
+		if strings.Contains(h.log.String(), "a native subagent tool ran") {
+			t.Fatalf("lead with prefer_native_subagent=true logged warning: %s", h.log.String())
+		}
+	})
 }

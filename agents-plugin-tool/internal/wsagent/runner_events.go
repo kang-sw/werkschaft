@@ -275,6 +275,8 @@ func (c *conv) handle(ev Event) {
 		}
 	case ev.UnrequestedCommand != "":
 		c.unrequestedCommand(ev.UnrequestedCommand, quiet)
+	case ev.UnrequestedSubagent != "":
+		c.unrequestedSubagent(ev.UnrequestedSubagent, quiet)
 	case ev.BackgroundTasks != nil:
 		if n := *ev.BackgroundTasks; n != c.bgTasks || !sameCount(c.background, ev.Background) || !sameCount(c.monitors, ev.Monitors) {
 			prev := c.bgTasks
@@ -509,7 +511,7 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		// auto-approval: nobody decides it.
 		return
 	}
-	if !quiet && c.record().agyBypass() && !c.replaying && !c.cutoverRejects(a.Tool) {
+	if rec := c.record(); !quiet && !c.replaying && !c.cutoverRejects(a.Tool) && (rec.agyBypass() || c.cutoverAutoApproves(rec, a)) {
 		// Bypass answers before the prompt is published: the page must not
 		// see a modal, a pending row or a wake for a request nobody decides.
 		// Without an answerer, or with no answer the process could build
@@ -708,7 +710,7 @@ func (c *conv) sendApproval(answerer approvalAnswerer, req ApprovalRequest, allo
 			rec.Answered = append(rec.Answered, req.ID)
 		}
 	}
-	if c.record().agyBypass() {
+	if rec := c.record(); rec.agyBypass() || c.cutoverAutoApproves(rec, req) {
 		c.setStatus(func() { track(&c.rec) })
 	} else {
 		c.update(track)

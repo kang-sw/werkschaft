@@ -74,6 +74,10 @@ type conv struct {
 	// exec cutover (exec_cutover.go): its native process tools removed in
 	// favour of the ws exec tools. Set at each start and rejoin.
 	execCutover bool
+	// unrequestedCmdWarn records a user-visible advisory when a native command
+	// ran without a permission request under the exec cutover; cleared when a
+	// new process starts.
+	unrequestedCmdWarn string
 	// launchBinary fingerprints the binary the current process launched
 	// from (harnessBinaryOf), "" for one this daemon did not launch or a
 	// backend without a cutover mechanism. Set with execCutover.
@@ -1049,6 +1053,9 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	}
 	st.Held = c.held + len(c.rec.Mail) + len(c.rec.Queued) + len(c.rec.Reports)
 	st.Error = c.lastErr
+	if c.unrequestedCmdWarn != "" {
+		st.Error = appendDiagnostic(st.Error, c.unrequestedCmdWarn)
+	}
 	if c.rejoinKeyPending && checkKey {
 		if err := c.r.opts.LeadKeys.EnsureLead(c.rec.Root, c.rec.WSKey); err != nil {
 			st.Error = appendDiagnostic(st.Error, "rejoin ws session key (advisory): "+err.Error())

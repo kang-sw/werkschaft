@@ -1,5 +1,10 @@
 package wsconfig
 
+import (
+	"errors"
+	"strings"
+)
+
 // Scope identifies which config layer holds a value. The resolution order is:
 // session > project > repo > global > builtin (highest to lowest precedence).
 type Scope string
@@ -265,6 +270,13 @@ func init() {
 	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
 	}
+	RegisterSetCheck([]string{ItemExecNativeToolRemoval + ".werk"}, func(overrides map[string]string) error {
+		switch strings.ToLower(strings.TrimSpace(overrides[ItemExecNativeToolRemoval+".werk"])) {
+		case "off", "false", "0", "no":
+			return errors.New("exec.native_tool_removal.werk cannot be set to off: werk has no native shell tools and always runs commands through ws exec tools")
+		}
+		return nil
+	})
 	// workflow.profile is the same cross-project habit, so it takes the same
 	// global default on the bare key and every bucket key.
 	RegisterDefaultScope(ItemWorkflowProfile, ScopeGlobal)

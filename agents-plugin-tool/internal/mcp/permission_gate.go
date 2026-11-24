@@ -63,6 +63,15 @@ func (s *Server) refuseBoundReadOnlyExec(tool string) bool {
 	if s.conversation == "" || !s.readOnlyAuthority() {
 		return false
 	}
+	// An active immutable read-only worker gets daemon-side read-only allowlist
+	// exec parity (exec.run and new exec.shell checked by execjob; exec.spawn
+	// and legacy exec.shell refused by readOnlyRefusedExecForm). Read-only
+	// leads (LiveAuthority) and downgraded/revoked workers stay fail-closed.
+	if s.fileWrites != nil && !s.fileWrites.LiveAuthority &&
+		s.fileWrites.Authority == wsfs.AuthorityReadOnly &&
+		s.fileWrites.AuthorityForCall() == wsfs.AuthorityReadOnly {
+		return false
+	}
 	backend := s.execCutover
 	if backend == "" {
 		backend = s.agentAdmissionBackend()

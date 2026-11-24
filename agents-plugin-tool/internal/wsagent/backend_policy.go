@@ -114,7 +114,8 @@ type LifecyclePolicy struct {
 	// a durable recorder for them.
 	FileWriteTools bool
 	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
-	// worker of this backend, including calls made outside the cutover.
+	// lead with live authority, including calls made outside the cutover.
+	// Immutable read-only workers use the daemon's read-only exec allowlist.
 	ReadOnlyNoExec bool
 	// ExecOptIn is the config key and label of an opt-in a backend's exec
 	// cutover needs beyond the rollout switch: off unless the key says on, and

@@ -194,6 +194,22 @@ func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
 	if s.fsReadTools() || s.fileWriteTools() {
 		t.Fatal("revoked connection still admits filesystem tools")
 	}
+
+	// An immutable read-only worker (LiveAuthority == false) is not blocked by
+	// the lead read-only no-exec gate; its launches go through the read-only
+	// allowlist instead.
+	worker := NewServerWithOptions(ServerOptions{
+		Root: root, Version: "test", Env: []string{},
+		Conversation: "worker", ExecCutover: wsagent.BackendWerk,
+		FileWrites: &FileWriteSession{
+			Root: root, Cwd: root, Authority: wsfs.AuthorityReadOnly,
+			CurrentAuthority: func() wsfs.Authority { return wsfs.AuthorityReadOnly },
+		},
+		CallerBinding: boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}},
+	})
+	if worker.refuseBoundReadOnlyExec("exec.run") || worker.refuseBoundReadOnlyExec("exec.shell") {
+		t.Fatal("an immutable read-only worker was blocked by the lead no-exec gate")
+	}
 }
 
 func TestModelFileToolsKeepOperatorSessionStateReadOnly(t *testing.T) {
