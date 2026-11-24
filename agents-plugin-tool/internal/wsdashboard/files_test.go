@@ -93,7 +93,7 @@ func TestFilesExplorerInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture, err := os.ReadFile("testdata/files-explorer.test.cjs")
+	fixture, err := os.ReadFile("testdata/files-explorer.fixture.cjs")
 	if err != nil {
 		t.Fatal(err)
 	}
