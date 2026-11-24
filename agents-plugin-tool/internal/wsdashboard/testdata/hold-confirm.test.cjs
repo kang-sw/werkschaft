@@ -412,6 +412,7 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
   P.rid = 's1';
   P.st = { id: 's1', backend: 'claude', status: 'running', can_control: true, process: true, safe_stop: true, hidden: false };
   P.draw();
+  assert.equal(findAction(P.el, 'js.lead.handoff'), null, 'deprecated handoff button is omitted from session menu');
   const stopBtn = findAction(P.el, 'js.lead.stop');
   assert(stopBtn, 'stop button exists');
   assert.equal(stopBtn.firstChild.getAttribute('data-icon'), 'moon');

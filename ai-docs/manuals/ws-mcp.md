@@ -1301,17 +1301,25 @@ Differences from a support conversation:
     A ws-mcp that outlived the session's harness re-reads the row under
     the lock before each of its row writes and stops writing once the row
     is hosted.
-  - `POST /agents/<id>/handoff` hands a hosted session to the terminal:
-    the process ends, the row becomes an ended terminal row (`hosted`,
-    `host_pid`, `harness_pid` cleared, `ended_at` set), the record is
-    marked `handed_off_at` as in an implicit hand-off, and the state
+  - `POST /agents/<id>/handoff` **(Deprecated — scheduled for removal in
+    `261124-refactor-remove-terminal-handoff`)** hands a hosted session to
+    the terminal: the process ends, the row becomes an ended terminal row
+    (`hosted`, `host_pid`, `harness_pid` cleared, `ended_at` set), the record
+    is marked `handed_off_at` as in an implicit hand-off, and the state
     carries `resume_command` (`cd <dir> && claude --resume <id>` for Claude),
-    which is answered to a viewer with
-    `can_control` only. It is refused (409) for a session with no harness
-    conversation yet, and fails when the process could not be ended. The
-    session's page carries `data-handed` while the row is an ended
-    terminal row and the record is handed off, and then reads the command
-    from `GET /agents/<id>`.
+    which is answered to a viewer with `can_control` only. It is refused
+    (409) for a session with no harness conversation yet, and fails when the
+    process could not be ended. The session's page carries `data-handed`
+    while the row is an ended terminal row and the record is handed off, and
+    then reads the command from `GET /agents/<id>`. UI entry points are
+    hidden; `POST /agents/<id>/handoff`, `Runner.HandOff`,
+    `terminalSession.terminalResume`, and `State.ResumeCommand` remain
+    working for T0 compatibility until Phase 2 removal. **New harnesses do
+    not need to implement terminal handoff (`terminalResume`).** Implicit
+    terminal re-login (`conv.release()`, `handed_off_at`, `StatusHandedOff`)
+    and reverse `POST /agents/<id>/takeover` (`TakeOver`,
+    `checkTerminalSession`, `adoptTerminalSession`) remain active and are not
+    deprecated.
   - `POST /agents/<id>/reopen` opens a closed hosted session again under
     its key, conversation, and settings. It is refused (409) once the
     session's row is a terminal's, and for a handed-off record; such a

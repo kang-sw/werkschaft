@@ -22,8 +22,9 @@ import (
 //   - TakeOver: a session a terminal harness ran becomes a hosted one,
 //     resuming the harness conversation its key record names, once that
 //     harness has exited.
-//   - HandOff: a hosted session's process ends and its row becomes a
-//     terminal's; the state then carries the command that resumes it.
+//   - HandOff (Deprecated: see 261124-refactor-remove-terminal-handoff):
+//     a hosted session's process ends and its row becomes a terminal's;
+//     the state then carries the command that resumes it.
 //   - Reopen: a closed hosted session is open again.
 //
 // A terminal login that finds a hosted session stopped takes its row by
@@ -207,6 +208,11 @@ func (r *Runner) TakeOver(id string) (State, error) {
 // command that resumes the conversation there (State.ResumeCommand). It is
 // refused for a session with no harness conversation yet, and when the
 // session's process could not be ended.
+//
+// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+// removal in 261124-refactor-remove-terminal-handoff. Retained in Phase 1
+// for T0 compatibility. Implicit terminal re-login (conv.release) and
+// reverse TakeOver remain active.
 func (r *Runner) HandOff(id string) (State, error) {
 	return r.act(id, func(c *conv) error { return c.handOff() })
 }

@@ -36,7 +36,8 @@ import (
 //	POST /agents/<id>/approvals/<request-id>
 //	                              {behavior: "allow"|"deny", message?}
 //	                              answers a waiting tool permission prompt
-//	POST /agents/<id>/handoff     hands the session to the terminal: its
+//	POST /agents/<id>/handoff     (Deprecated: see 261124-refactor-remove-terminal-handoff)
+//	                              hands the session to the terminal: its
 //	                              process ends and the answer carries the
 //	                              command that resumes it there
 //	POST /agents/<id>/takeover    makes the terminal lead session <id> a
@@ -336,6 +337,9 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "handoff":
+		// Deprecated: Terminal handoff is deprecated and hidden from the UI
+		// (261124-refactor-remove-terminal-handoff). Kept working for T0
+		// compatibility until Phase 2 removal.
 		st, err := r.HandOff(id)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "takeover":
