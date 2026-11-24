@@ -205,6 +205,12 @@ The builtin harness uses the daemon's in-process store for its account
 catalog and access token. The store serializes refresh rotation and
 requires explicit consent on that registration before background use.
 
+Werk carries the operator flag from trusted lead input through the daemon's
+inbox, queue, and turn replay. Automatic nudges run as background input.
+Model file tools refuse writes under `<daemon state>/sessions/`, where the
+daemon keeps the session state it uses for operator provenance. Model reads
+of that state still follow normal file-read permissions.
+
 `POST /auth/provider/token` is an internal HTTP route for an external
 hosted harness with a per-session bearer (`WS_MCP_SESSION_TOKEN`) and a
 backend registration that enables `ProviderCredentials`. Current external
