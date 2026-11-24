@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 9945626b6197e20d
 sage-review-completeness-reviewed: 9945626b6197e20d
+completed: 2026-11-25
 ---
 
 # Harness quota continuation for hosted leads
@@ -247,3 +248,19 @@ Depends on Phase 2 (HTTP endpoints and `wslive.Host.QuotaContinuation` projectio
     - Non-controllable (LAN) viewers see status/scheduled time read-only with no action buttons.
 - **Localization:** Add all new capsule/status/button/toast strings to all 11 locale tables under `internal/wsi18n/tables/*.json` (with Korean labels `"이어서 진행 예약"` and `"예약 취소"` matching the owner UX directive).
 - **Verification boundary:** Remote `w5090` Go template/render/i18n tests (`./internal/wsdashboard/...`, `./internal/wsi18n/...`, `./internal/mcp/...`) plus dashboard JS/browser unit tests verifying schedule click, scheduled-time display, cancel click, exhausted rendering, auto-cancel on composer send, and zero idle frame/DOM churn.
+
+### Result (6a3697b2) - 2026-11-25
+
+- Implemented the hosted-lead quota-continuation dashboard UI, 11-locale i18n, and Go SSR + Playwright Chromium browser tests:
+  - **Template & SSE regions (`internal/wsdashboard/assets/dashboard.tmpl`):** Added `#qcbox` (per-viewer interactive container sibling of `#apbox` outside viewer-agnostic cached SSE regions), read-only `.qc-chip` status chips in `r-head` (using static `<time class="t" data-ms="..." data-f="dt">` when scheduled; hidden when `in_flight`), and `data-qc-*` change-detection attributes on `#r-convlive .clive`.
+  - **Client JS (`internal/wsdashboard/assets/dashboard-leads.js`):** Added `quotaDraw(st)` and `quotaAction("schedule"|"cancel")` posting to `POST /agents/<id>/quota-continuation` and `/quota-continuation/cancel` via `railPost`, using pure DOM helpers (`mk`, `gIcon`, `rpBtn`, `textContent`; zero `innerHTML`/`outerHTML`/`insertAdjacentHTML`), static `<time class="t" data-ms="..." data-f="dt">` formatted once by `fmtTimes(box)` (zero per-second countdown timers), and complete omission of `<button>` elements when `!st.can_control` (LAN read-only).
+  - **Styles (`internal/wsdashboard/assets/dashboard-rail.css`):** Added borderless Material tonal surface styles using canonical `--wb-*` tokens and `color-mix()` washes in dark and light themes, with `font-variant-numeric: tabular-nums` and zero idle CSS animations.
+  - **11-locale i18n (`internal/wsi18n/tables/*.json`):** Added all 15 downstream-neutral quota-continuation UI keys across `de`, `en`, `es`, `fr`, `it`, `ja`, `ko`, `pt-BR`, `ru`, `zh-Hans`, `zh-Hant` (with Korean labels `"이어서 진행 예약"` and `"예약 취소"`).
+  - **Tests (`internal/wsdashboard/quota_continuation_test.go`, `quota_continuation_browser_test.go`):** Added Go SSR region/template tests and headless Chromium Playwright tests covering manual schedule CTA, scheduled state with static `<time>` (verified 0 animations via `getAnimations({subtree:true})` and zero text mutation over 1.2s), light theme, cancel CTA, `in_flight` hiding, exhausted state + re-schedule CTA, and LAN read-only (`can_control=false`) with zero buttons.
+- Verified with `go test -race -count=1 ./internal/wsagent -run 'TestQuota'`, `go test -count=1 ./internal/wsi18n/...`, `go test -count=1 ./internal/mcp -run 'TestConfig|Settings|Manifest'`, `go test -count=1 ./internal/wsdashboard -run 'TestQuotaContinuation|TestPageViewConversation|TestHostedSessionMarks|Settings|Manifest|Locale|I18n'` (with Playwright Chromium), `GOOS=windows go vet -stdversion=false ./internal/wsagent/... ./internal/wsdashboard/... ./internal/wsi18n/...`, `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, and `python3 -m unittest discover agents-plugin-wsflow/tests`.
+- Visually verified BEFORE/AFTER Chromium screenshots (dark manual CTA, dark scheduled, light scheduled, dark exhausted, dark read-only).
+
+
+## Resolution (2026-11-25)
+
+All three phases (unified 4-harness NoticeUsageLimit extraction, hosted-lead quota-continuation scheduler + config knob + HTTP control API, and dashboard UI + 11-locale i18n + Chromium visual/browser verification) are implemented and verified.
