@@ -1337,5 +1337,135 @@ class DescriptorTest(HolderTestCase):
             self.assertEqual(os.stat(os.path.join(holder.dir, holder_mod.EXIT_NAME)).st_mode & 0o777, 0o600)
 
 
+class WindowsPriorityQoSTest(unittest.TestCase):
+    def test_lift_qos_default_win32_sets_normal_priority_and_clears_eco_qos(self):
+        import ctypes
+
+        calls = {}
+
+        class FakeFunc:
+            def __init__(self, fn):
+                self._fn = fn
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self._fn(*args)
+
+        class FakeKernel32:
+            def __init__(self):
+                self.GetCurrentProcess = FakeFunc(lambda: 0xABCDEF)
+                self.SetPriorityClass = FakeFunc(self._set_priority)
+                self.SetProcessInformation = FakeFunc(self._set_proc_info)
+
+            def _set_priority(self, handle, priority):
+                calls["priority"] = (handle, priority)
+                return 1
+
+            def _set_proc_info(self, handle, info_class, state_ptr, size):
+                state = state_ptr._obj
+                calls["eco_qos"] = (handle, info_class, state.Version, state.ControlMask, state.StateMask, size)
+                return 1
+
+        fake_k32 = FakeKernel32()
+        with (
+            mock.patch.object(holder_mod.sys, "platform", "win32"),
+            mock.patch.object(ctypes, "WinDLL", return_value=fake_k32, create=True) as mock_windll,
+        ):
+            holder_mod.lift_qos_default()
+
+        mock_windll.assert_called_once_with("kernel32", use_last_error=True)
+        self.assertEqual(calls["priority"], (0xABCDEF, 0x00000020))
+        self.assertEqual(calls["eco_qos"], (0xABCDEF, 4, 1, 1, 0, 12))
+        self.assertEqual(len(fake_k32.SetPriorityClass.argtypes), 2)
+        self.assertEqual(len(fake_k32.SetProcessInformation.argtypes), 4)
+
+    def test_clear_windows_eco_qos_guards_missing_proc_and_exceptions(self):
+        import ctypes
+
+        class OldKernel32:
+            pass
+
+        with mock.patch.object(ctypes, "WinDLL", return_value=OldKernel32(), create=True):
+            holder_mod._clear_windows_eco_qos(0x1234)
+
+        with mock.patch.object(ctypes, "WinDLL", side_effect=OSError("no kernel32"), create=True):
+            holder_mod._clear_windows_eco_qos(0x1234)
+
+        holder_mod._clear_windows_eco_qos(None)
+        holder_mod._clear_windows_eco_qos(0)
+
+    def test_pipe_child_windows_creationflags_and_eco_qos(self):
+        fake_proc = mock.MagicMock()
+        fake_proc.pid = 9001
+        fake_proc._handle = 0x5555
+
+        with (
+            mock.patch.object(holder_mod, "WINDOWS", True),
+            mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
+            mock.patch.object(holder_mod.subprocess, "Popen", return_value=fake_proc) as mock_popen,
+            mock.patch.object(holder_mod, "_clear_windows_eco_qos") as mock_clear,
+        ):
+            child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
+
+        self.assertEqual(child.pid, 9001)
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs["creationflags"], 0x00000200 | 0x00000020)
+        mock_clear.assert_called_once_with(0x5555)
+
+    def test_conpty_child_creationflags_and_eco_qos(self):
+        import ctypes
+
+        captured = {}
+
+        class FakeFunc:
+            def __init__(self, fn=None):
+                self._fn = fn or (lambda *args: 1)
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self._fn(*args)
+
+        class FakeKernel32:
+            def __init__(self):
+                self.CreatePipe = FakeFunc(lambda *args: 1)
+                self.CreatePseudoConsole = FakeFunc(lambda *args: 0)
+                self.ResizePseudoConsole = FakeFunc(lambda *args: 0)
+                self.ClosePseudoConsole = FakeFunc(lambda *args: None)
+                self.InitializeProcThreadAttributeList = FakeFunc(lambda *args: 1)
+                self.UpdateProcThreadAttribute = FakeFunc(lambda *args: 1)
+                self.DeleteProcThreadAttributeList = FakeFunc(lambda *args: None)
+                self.CreateProcessW = FakeFunc(self._create_process)
+                self.ReadFile = FakeFunc(lambda *args: 1)
+                self.WriteFile = FakeFunc(lambda *args: 1)
+                self.WaitForSingleObject = FakeFunc(lambda *args: 0)
+                self.GetExitCodeProcess = FakeFunc(lambda *args: 1)
+                self.TerminateProcess = FakeFunc(lambda *args: 1)
+                self.CloseHandle = FakeFunc(lambda *args: 1)
+                self.SetProcessInformation = FakeFunc(self._set_proc_info)
+
+            def _create_process(self, app, cmdline, pa, ta, inherit, flags, env, cwd, si, pi_ref):
+                captured["flags"] = flags
+                pi = pi_ref._obj
+                pi.hProcess = 0x7777
+                pi.hThread = 0x8888
+                pi.dwProcessId = 4242
+                return 1
+
+            def _set_proc_info(self, handle, info_class, state_ptr, size):
+                state = state_ptr._obj
+                captured["eco_qos"] = (handle, info_class, state.Version, state.ControlMask, state.StateMask, size)
+                return 1
+
+        fake_k32 = FakeKernel32()
+        with mock.patch.object(ctypes, "WinDLL", return_value=fake_k32, create=True):
+            child = holder_mod.ConPtyChild({"argv": ["cmd.exe"], "cwd": ".", "env": None, "cols": 80, "rows": 24})
+
+        self.assertEqual(child.pid, 4242)
+        self.assertEqual(captured["flags"], 0x00080000 | 0x00000400 | 0x00000020)
+        self.assertEqual(captured["eco_qos"], (0x7777, 4, 1, 1, 0, 12))
+
+
 if __name__ == "__main__":
     unittest.main()

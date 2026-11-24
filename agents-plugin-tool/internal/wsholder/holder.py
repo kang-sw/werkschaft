@@ -561,7 +561,7 @@ class PipeChild:
     mode = "pipe"
 
     def __init__(self, spec: dict) -> None:
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if WINDOWS else 0
+        flags = (subprocess.CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS) if WINDOWS else 0
         self.proc = subprocess.Popen(
             spec["argv"],
             stdin=subprocess.PIPE,
@@ -573,6 +573,10 @@ class PipeChild:
             creationflags=flags,
         )
         self.pid = self.proc.pid
+        if WINDOWS:
+            handle = getattr(self.proc, "_handle", None)
+            if handle:
+                _clear_windows_eco_qos(handle)
 
     def outputs(self):
         return [("stdout", self.proc.stdout.fileno()), ("stderr", self.proc.stderr.fileno())]
@@ -851,9 +855,9 @@ class ConPtyChild:
                     "".join(f"{k}={v}\0" for k, v in spec["env"].items()) + "\0"
                 )
             cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(spec["argv"]))
-            # EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT
+            # EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | NORMAL_PRIORITY_CLASS
             if not k32.CreateProcessW(
-                None, cmdline, None, None, False, 0x00080000 | 0x00000400, env_block, spec["cwd"],
+                None, cmdline, None, None, False, 0x00080000 | 0x00000400 | NORMAL_PRIORITY_CLASS, env_block, spec["cwd"],
                 ctypes.byref(startup), ctypes.byref(info),
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
@@ -865,6 +869,7 @@ class ConPtyChild:
         finally:
             k32.DeleteProcThreadAttributeList(startup.lpAttributeList)
         k32.CloseHandle(info.hThread)
+        _clear_windows_eco_qos(info.hProcess, k32=k32)
         self.process = info.hProcess
         self.pid = info.dwProcessId
 
@@ -1804,20 +1809,78 @@ def _file_sha256(path: str) -> str:
         return ""
 
 
-def lift_qos_default() -> None:
-    """On macOS, raise this thread to the DEFAULT QoS class (0x15).
+NORMAL_PRIORITY_CLASS = 0x00000020
+PROCESS_POWER_THROTTLING = 4
+PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1
+PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
 
-    A holder started under a utility-clamped ancestor would otherwise pass that
-    clamp to every child it spawns and run them on efficiency cores. Threads
-    and children created after this call inherit the class. Best effort: any
-    failure, and every other OS, is a no-op.
-    """
-    if sys.platform != "darwin":
+
+def _clear_windows_eco_qos(handle, k32=None) -> None:
+    """Best-effort opt out of Windows EcoQoS (efficiency-core throttling) on handle."""
+    if not handle:
         return
     try:
         import ctypes
+        from ctypes import wintypes
 
-        ctypes.CDLL(None).pthread_set_qos_class_self_np(0x15, 0)
+        class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+            _fields_ = [
+                ("Version", wintypes.DWORD),
+                ("ControlMask", wintypes.DWORD),
+                ("StateMask", wintypes.DWORD),
+            ]
+
+        if k32 is None:
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        set_proc_info = getattr(k32, "SetProcessInformation", None)
+        if set_proc_info is None:
+            return
+        set_proc_info.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        set_proc_info.restype = wintypes.BOOL
+        state = PROCESS_POWER_THROTTLING_STATE(
+            PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            0,
+        )
+        set_proc_info(handle, PROCESS_POWER_THROTTLING, ctypes.byref(state), ctypes.sizeof(state))
+    except Exception:
+        pass
+
+
+def lift_qos_default() -> None:
+    """Escape inherited E-core QoS / priority clamping on macOS and Windows.
+
+    On macOS, raise this thread to the DEFAULT QoS class (0x15).
+    On Windows, set NORMAL_PRIORITY_CLASS and clear EcoQoS
+    (PROCESS_POWER_THROTTLING_EXECUTION_SPEED) on the current process.
+
+    A holder started under a throttled ancestor would otherwise pass that
+    clamp to every child it spawns and run them on efficiency cores. Threads
+    and children created after this call inherit the lifted state. Best
+    effort: any failure, and every other OS, is a no-op.
+    """
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+
+            ctypes.CDLL(None).pthread_set_qos_class_self_np(0x15, 0)
+        except Exception:
+            pass
+        return
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.argtypes = []
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k32.SetPriorityClass.restype = wintypes.BOOL
+        handle = k32.GetCurrentProcess()
+        k32.SetPriorityClass(handle, NORMAL_PRIORITY_CLASS)
+        _clear_windows_eco_qos(handle, k32=k32)
     except Exception:
         pass
 

@@ -48,6 +48,9 @@ func dashboardCommand(args []string) {
 	// Before anything reads the environment or spawns from it: the session
 	// that started this daemon is not one it hosts.
 	mcp.DropHarnessSessionEnv()
+	// Escape inherited low priority / EcoQoS throttling on Windows before
+	// spawning holders or children.
+	wsdashboard.LiftProcessPriority()
 	dir, err := wsdashboard.Dir("")
 	if err != nil {
 		fatal("dashboard", err)
