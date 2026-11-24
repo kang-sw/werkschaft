@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -355,44 +356,282 @@ func TestAgyParentedWorkerRecordWakesStampedOrFromItsParent(t *testing.T) {
 	}
 }
 
-// Startup closes the cross-harness row without stopping or rejoining its holder.
-func TestAgyWorkerCrossHarnessCloseRetainsTheHolder(t *testing.T) {
-	h, _ := workerRecoveryHarness(t, BackendAgy)
+// A held cross-harness agy worker whose holder kept running is not
+// reattached: the first scan ends its holder through the ordinary stop, its
+// open turn settles failed with the cross-harness text, and the closed
+// historical record stays listed with the refusal.
+func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 	crossHarnessAgyNextDaemon(t, h, id)
 	h.startAt("http://127.0.0.1:1")
-	wait(t, "holder reconciliation", h.runner.rejoined)
-	if st := h.state(id); st.Process || st.Status != StatusClosed {
+
+	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" })
+	st := h.state(id)
+	if st.Process || st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("state = %+v", st)
 	}
-	if rec, ok := h.runner.recordOf(id); !ok || rec.HolderID != holder || rec.ClosedAt == "" || rec.TurnOpen || rec.MCPToken != "" || rec.Capability != "" {
-		t.Fatalf("in-memory closed record = %+v, found %v", rec, ok)
+	caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
+	if child := findAgent(t, h.runner.AgentList(caller), id); child.State != AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("listed child = %+v", child)
 	}
-	if rec := h.record(id); rec.ClosedAt != "" || rec.HolderID != holder {
-		t.Fatalf("the old daemon's holder ownership record must stay open: %+v", rec)
+	if h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("a cross-harness rejoin launched a process: %v", h.holders.opList())
 	}
-	if h.holders.opCount("stop "+holder) != 0 || h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
-		t.Fatalf("an automatic close altered a live holder: %v", h.holders.opList())
+	if rec := h.record(id); rec.MCPToken != "" || rec.Capability != "" {
+		t.Fatalf("the ended worker kept its credentials: %+v", rec)
 	}
+	if len(got.list()) != 1 {
+		t.Fatalf("more than one report: %+v", got.list())
+	}
+}
 
-	h.runner.Close()
-	h.holders.restart()
+// A refused holder stop keeps the holder in the record, says why, publishes
+// nothing, and starts no process. The same daemon's heartbeat retries the
+// stop until it succeeds; the turn then settles failed with the agy reason,
+// reported once.
+func TestAgyWorkerRejoinRetriesAFailedStopFromTheHeartbeat(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
 	h.startAt("http://127.0.0.1:1")
-	wait(t, "holder reconciliation after restart", h.runner.rejoined)
-	if st := h.state(id); st.Status != StatusClosed || h.holders.opCount("stop "+holder) != 0 {
-		t.Fatalf("the next daemon must re-derive the closed row without stopping the holder: %+v, %v", st, h.holders.opList())
+	wait(t, "holder scan", h.runner.rejoined)
+
+	// The heartbeat retries while the stop keeps failing.
+	eventually(t, "a heartbeat retry", func() bool { return h.holders.opCount("stop "+holder) >= 2 })
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("a failed stop forgot the holder: %+v", rec)
+	}
+	// The process still runs under its holder (Process), detached: nothing
+	// is submitted to it.
+	if st := h.state(id); !strings.HasPrefix(st.Error, wantAgyCrossHarnessRefusal+"; ") || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state = %+v", st)
+	}
+	if len(got.list()) != 0 || h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("a failed stop published or launched: reports %+v, ops %v", got.list(), h.holders.opList())
 	}
 
-	h.runner.Close()
+	h.holders.set(func() { h.holders.stopErr = nil })
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" })
+	stops := h.holders.opCount("stop " + holder)
+	time.Sleep(200 * time.Millisecond) // several heartbeats
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+	if h.holders.opCount("stop "+holder) != stops || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("retired twice or relaunched: stops %d (was %d), reports %+v, ops %v", h.holders.opCount("stop "+holder), stops, got.list(), h.holders.opList())
+	}
+}
+
+// A user's Stop while a failed retirement retries goes through the holder's
+// own stop, not the detached stream's Close. A failed stop keeps the holder,
+// shows the error, and leaves the heartbeat retry armed; a successful one
+// clears everything and reports the turn once.
+func TestAgyWorkerUserStopDuringAFailedRetirementStopsTheHolder(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
+	h.opts.heartbeat = time.Hour // the test drives each retry
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "holder scan", h.runner.rejoined)
+	eventually(t, "the failed retirement stop", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	c := h.runner.conv(id)
+	armed := func() bool {
+		ok := false
+		c.do(func() { ok = c.crossHarnessRetiring && c.replaying && c.proc != nil })
+		return ok
+	}
+	stops := func() int { return h.holders.opCount("stop " + holder) }
+
+	st, err := h.runner.Stop(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 2 {
+		t.Fatalf("the user's Stop did not stop the holder: %v", h.holders.opList())
+	}
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("a failed user Stop forgot the holder: %+v", rec)
+	}
+	if !strings.HasPrefix(st.Error, wantAgyCrossHarnessRefusal+"; ") || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state error = %q", st.Error)
+	}
+	if !armed() || len(got.list()) != 0 {
+		t.Fatalf("a failed user Stop disarmed the retry or published: armed %v, reports %+v", armed(), got.list())
+	}
+	c.do(c.heartbeat)
+	if stops() != 3 {
+		t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+	}
+
+	h.holders.set(func() { h.holders.stopErr = nil })
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 4 {
+		t.Fatalf("the user's Stop did not stop the holder: %v", h.holders.opList())
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.TurnOpen || rec.MCPToken != "" || rec.Capability != "" {
+		t.Fatalf("the stopped worker kept its holder or turn: %+v", rec)
+	}
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if armed() {
+		t.Fatal("the retry is still armed after the holder ended")
+	}
+	c.do(c.heartbeat)
+	if _, err := h.runner.Stop(id); !errors.Is(err, errClosed) {
+		t.Fatalf("Stop after retirement = %v", err)
+	}
+	if stops() != 4 || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("retired twice or relaunched: stops %d, reports %+v, ops %v", stops(), got.list(), h.holders.opList())
+	}
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// A close while a failed retirement retries stops the holder first. A failed
+// stop refuses the close: the conversation stays open in the runner with its
+// holder and the heartbeat retry, so the live holder keeps both. A later
+// close that ends the holder closes the conversation once.
+func TestAgyWorkerCloseDuringAFailedRetirementKeepsTheConversation(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
+	h.opts.heartbeat = time.Hour // the test drives each retry
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "holder scan", h.runner.rejoined)
+	eventually(t, "the failed retirement stop", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	c := h.runner.conv(id)
+	armed := func() bool {
+		ok := false
+		c.do(func() { ok = c.crossHarnessRetiring && c.replaying && c.proc != nil && !c.closed })
+		return ok
+	}
+	stops := func() int { return h.holders.opCount("stop " + holder) }
+
+	_, err := h.runner.CloseConversation(id)
+	if !errors.Is(err, errHolderNotEnded) || !strings.HasSuffix(err.Error(), "close it again to retry") || !strings.Contains(err.Error(), "holder busy") {
+		t.Fatalf("close error = %v", err)
+	}
+	if stops() != 2 {
+		t.Fatalf("the close did not stop the holder: %v", h.holders.opList())
+	}
+	if h.runner.conv(id) == nil {
+		t.Fatal("a refused close dropped the conversation from the runner")
+	}
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen || rec.ClosedAt != "" {
+		t.Fatalf("a refused close forgot the holder or closed: %+v", rec)
+	}
+	if !armed() || len(got.list()) != 0 {
+		t.Fatalf("a refused close disarmed the retry or published: armed %v, reports %+v", armed(), got.list())
+	}
+	if st := h.state(id); st.Status == StatusClosed || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state = %+v", st)
+	}
+	c.do(c.heartbeat)
+	if stops() != 3 {
+		t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+	}
+
+	h.holders.set(func() { h.holders.stopErr = nil })
+	st, err := h.runner.CloseConversation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 4 || st.Status != StatusClosed || h.runner.conv(id) != nil {
+		t.Fatalf("the close did not end the holder and close: stops %v, state %+v", h.holders.opList(), st)
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.TurnOpen || rec.ClosedAt == "" || rec.MCPToken != "" || rec.Capability != "" {
+		t.Fatalf("the closed worker kept its holder or turn: %+v", rec)
+	}
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if _, err := h.runner.CloseConversation(id); err == nil {
+		t.Fatal("a closed conversation closed again")
+	}
+	if stops() != 4 || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("closed twice or relaunched: stops %d, reports %+v, ops %v", stops(), got.list(), h.holders.opList())
+	}
+}
+
+// A daemon that died after the retirement cleared the holder but before the
+// open turn settled leaves an open turn and no holder. The next load settles
+// it failed with the agy reason, not the generic interrupted one.
+func TestAgyWorkerRetirementCrashSettlesWithTheAgyReason(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
+	rewriteRecord(t, h, id, func(rec *Record) {
+		rec.HolderID, rec.HostPID, rec.HolderSeq, rec.HandedOffAt = "", 0, 0, ""
+		rec.Capability = ""
+		rec.forgetMCP()
+	})
+	if !h.record(id).TurnOpen {
+		t.Fatal("fixture: the turn is not open")
+	}
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the settled report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Process || st.Status != StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+	if rec := h.record(id); rec.TurnOpen || rec.LastTurn == nil || rec.LastTurn.Result.Status != TurnFailed {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
+func TestAgyWorkerRejoinWaitsForCompleteHolderAbsence(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	crossHarnessAgyNextDaemon(t, h, id)
 	h.holders.vanish(holder)
-	h.holders.restart()
+	h.holders.set(func() { h.holders.incomplete = true })
+	h.opts.heartbeat = time.Hour
 	h.startAt("http://127.0.0.1:1")
-	wait(t, "complete holder inventory", h.runner.rejoined)
-	if rec := h.record(id); rec.ClosedAt == "" || rec.HolderID != "" || rec.TurnOpen {
-		t.Fatalf("the finished holder's closure must now be durable: %+v", rec)
+	wait(t, "incomplete holder scan", h.runner.rejoined)
+	if rec := h.record(id); rec.ClosedAt != "" || rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("incomplete scan changed the holder record: %+v", rec)
 	}
-	if h.holders.opCount("stop "+holder) != 0 {
-		t.Fatalf("startup signalled the holder: %v", h.holders.opList())
+	if len(got.list()) != 0 {
+		t.Fatalf("incomplete scan settled a turn: %+v", got.list())
+	}
+
+	h.holders.set(func() { h.holders.incomplete = false })
+	c := h.runner.conv(id)
+	if c == nil || !c.do(c.heartbeat) {
+		t.Fatal("worker did not survive the incomplete scan")
+	}
+	if st := h.state(id); st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("complete holder scan left state %+v", st)
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.ClosedAt == "" || rec.TurnOpen {
+		t.Fatalf("complete holder scan left record %+v", rec)
+	}
+	if reports := got.list(); len(reports) != 1 || reports[0].Result.Status != TurnFailed || reports[0].Result.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("reports = %+v", reports)
+	}
+	if h.holders.opCount("stop") != 0 {
+		t.Fatalf("an absent holder was stopped: %v", h.holders.opList())
 	}
 }
 
@@ -470,6 +709,130 @@ func rewriteRecord(t *testing.T, h *leadHarness, id string, edit func(*Record)) 
 	}
 }
 
+// A cross-harness rejoin runs the ownership match every held worker passes. It
+// never stops a holder that fails the match: one whose descriptor names
+// another directory, one that is a hosted lead's holder, or one already
+// rejected. The record still drops the association and shows the agy
+// reason.
+func TestAgyWorkerRejoinNeverStopsAHolderThatFailsOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		edit   func(*holderSession)
+		reject bool
+	}{
+		{name: "foreign directory", edit: func(m *holderSession) { m.Cwd = "/foreign" }},
+		{name: "lead holder", edit: func(m *holderSession) { m.Kind = holderKindLead }},
+		{name: "rejected holder", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := workerRecoveryHarness(t, BackendAgy)
+			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			crossHarnessAgyNextDaemon(t, h, id)
+			if tc.edit != nil {
+				h.holders.set(func() {
+					var meta holderSession
+					if err := json.Unmarshal(h.holders.holders[holder].session, &meta); err != nil {
+						t.Fatal(err)
+					}
+					tc.edit(&meta)
+					raw, _ := json.Marshal(meta)
+					h.holders.holders[holder].session = raw
+				})
+			}
+			entered, release := h.gateScan()
+			defer release()
+			h.startAt("http://127.0.0.1:1")
+			wait(t, "blocked scan", entered)
+			if tc.reject {
+				h.runner.holders.reject(holder)
+			}
+			release()
+			wait(t, "holder scan", h.runner.rejoined)
+			eventually(t, "the association dropped", func() bool { rec := h.record(id); return rec.HolderID == "" && rec.ClosedAt != "" })
+			eventually(t, "the agy reason", func() bool { return h.state(id).Error == wantAgyCrossHarnessRefusal })
+			if h.holders.opCount("stop") != 0 {
+				t.Fatalf("a holder that failed ownership was stopped: %v", h.holders.opList())
+			}
+			if st := h.state(id); st.Process || st.Status != StatusClosed {
+				t.Fatalf("state = %+v", st)
+			}
+			caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
+			if child := findAgent(t, h.runner.AgentList(caller), id); child.State != AgentClosed || child.Error != wantAgyCrossHarnessRefusal {
+				t.Fatalf("listed child = %+v", child)
+			}
+			if h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
+				t.Fatalf("a cross-harness rejoin launched a process: %v", h.holders.opList())
+			}
+		})
+	}
+}
+
+// Retirement stamps the record's activity, so a record whose last activity
+// is older than the whole child expiry interval keeps its history and its
+// retirement time, and no longer enters the open-child expiry sweep.
+func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendAgy)
+	id, holder := idleHeldAgyWorker(t, h)
+	crossHarnessAgyNextDaemon(t, h, id)
+	old := time.Now().Add(-(time.Duration(DefaultChildWaitingDays)*24*time.Hour + time.Hour)).UTC()
+	rewriteRecord(t, h, id, func(rec *Record) { rec.LastActiveAt = old.Format(time.RFC3339) })
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	eventually(t, "the record to forget the holder", func() bool {
+		rec := h.record(id)
+		return rec.HolderID == "" && rec.ClosedAt != "" && h.state(id).Status == StatusClosed
+	})
+	if at := lastActive(h.record(id)); time.Since(at) > time.Hour {
+		t.Fatalf("last activity %v was not stamped at retirement", at)
+	}
+	if h.runner.conv(id) != nil {
+		t.Fatal("the historical record is still eligible for an open child's expiry sweep")
+	}
+	if st := h.state(id); st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// The refusal is derived from the record's backend and spawner stamp on every
+// load, with no stored reason, so it survives the restart after the
+// retirement. This holds
+// for a parentless worker retired while a user turn runs (a profile-created
+// worker can run one; its record persists the start time but no TurnOpen and
+// no last turn) and for an idle parented one (a done last turn).
+func TestAgyWorkerRefusalReasonSurvivesARestart(t *testing.T) {
+	for _, parentless := range []bool{true, false} {
+		t.Run(fmt.Sprintf("parentless=%v", parentless), func(t *testing.T) {
+			h, _ := workerRecoveryHarness(t, BackendAgy)
+			var id, holder string
+			if parentless {
+				// The holder's process is mid-turn when the daemon exits.
+				id, holder = spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			} else {
+				id, holder = idleHeldAgyWorker(t, h)
+			}
+			crossHarnessAgyNextDaemon(t, h, id)
+			if parentless {
+				rewriteRecord(t, h, id, func(rec *Record) { rec.Parent, rec.TurnOpen, rec.LastTurn = nil, false, nil })
+				if h.record(id).TurnStartedAt == 0 {
+					t.Fatal("fixture: no running user turn")
+				}
+			}
+			h.startAt("http://127.0.0.1:1")
+			eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+			eventually(t, "the retirement", func() bool { rec := h.record(id); return rec.HolderID == "" && rec.ClosedAt != "" })
+			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal {
+				t.Fatalf("after retirement: state error = %q", st.Error)
+			}
+			h.runner.Close()
+			h.holders.restart()
+			h.startAt("http://127.0.0.1:1")
+			if st := h.state(id); st.Error != wantAgyCrossHarnessRefusal || st.Status != StatusClosed {
+				t.Fatalf("after the next restart: state = %+v", st)
+			}
+		})
+	}
+}
+
 func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
 	for _, tc := range []struct{ name, profile string }{
 		{name: "profile removed"},
@@ -494,7 +857,7 @@ func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
 			if _, err := h.runner.Send(id, "hello"); err != errClosed {
 				t.Fatalf("send to closed worker: %v", err)
 			}
-			if st := h.state(id); st.Process || st.Status != StatusClosed || h.backend.startCount() != starts {
+			if st := h.state(id); st.Process || st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal || h.backend.startCount() != starts {
 				t.Fatalf("state = %+v, starts %d (was %d)", st, h.backend.startCount(), starts)
 			}
 		})

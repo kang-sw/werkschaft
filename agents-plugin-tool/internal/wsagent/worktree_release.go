@@ -313,7 +313,7 @@ func (r *Runner) CheckoutReleased(worktree string, releasedAt time.Time, cancelT
 		entry := ReleasedConversation{Address: AgentAddress(rec.ReplyID)}
 		var cancelErr, closeErr error
 		ran := c.do(func() {
-			if c.closed {
+			if c.closed || c.crossHarnessRejoin && c.rec.HolderID != "" {
 				return
 			}
 			if cancelTurns {
@@ -330,10 +330,11 @@ func (r *Runner) CheckoutReleased(worktree string, releasedAt time.Time, cancelT
 		if closeErr != nil {
 			fmt.Fprintf(r.opts.Log, "agent %s: %v\n", rec.ReplyID, closeErr)
 		}
-		if ran && closeErr == nil {
+		state := c.memoryState()
+		if ran && closeErr == nil && state.Status == StatusClosed {
 			r.releaseParent(rec.ReplyID)
 		}
-		entry.State = AgentStatus(c.memoryState())
+		entry.State = AgentStatus(state)
 		out = append(out, entry)
 	}
 	return out

@@ -43,6 +43,9 @@ func closeDeadRecord(rec *Record, now time.Time) {
 }
 
 func (c *conv) closeDeadAfterRefusal(refusal *admissionRefusal) {
+	if c.closed || c.crossHarnessRejoin && c.rec.HolderID != "" {
+		return
+	}
 	if err := c.closeDeadBinding(refusal); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %v\n", c.rec.ReplyID, err)
 		return

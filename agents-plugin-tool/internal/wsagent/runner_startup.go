@@ -178,11 +178,14 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	startup := make([]*conv, 0, len(open))
 	for _, rec := range open {
 		binding := bindings[rec.ReplyID]
-		if refusal := dead[rec.ReplyID]; refusal != nil {
+		refusal := dead[rec.ReplyID]
+		// A cross-harness worker must finish the existing rejoin and
+		// retirement path, including settlement of a cut-off turn.
+		if refusal != nil && r.admitWorkerRecord(rec) == nil {
 			r.closeDeadAtStart(rec, refusal, binding)
 			continue
 		}
-		if orphans[rec.ReplyID] && r.closeAtStart(rec) {
+		if refusal == nil && orphans[rec.ReplyID] && r.closeAtStart(rec) {
 			continue
 		}
 		// A lead whose process may still run under its holder rejoins
@@ -193,6 +196,10 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	close(startupLoaded)
 	for _, c := range startup {
 		c.do(func() {
+			if refusal := dead[c.rec.ReplyID]; refusal != nil && c.proc == nil && c.rec.HolderID == "" {
+				c.closeDeadAfterRefusal(refusal)
+				return
+			}
 			if r.durableProcess(c.rec.Backend) {
 				c.kick()
 				c.releaseHeld()

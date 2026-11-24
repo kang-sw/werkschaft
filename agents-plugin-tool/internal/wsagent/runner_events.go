@@ -814,7 +814,9 @@ func (c *conv) processGone() {
 	c.replaying, c.replayAsked = false, false
 	c.interrupted()
 	c.processEnded()
-	c.kick()
+	if !c.crossHarnessRejoin {
+		c.kick()
+	}
 }
 
 // processEnded settles what ends with a process: its turn, its waiting
@@ -1238,6 +1240,9 @@ func (c *conv) stopIdle() {
 func (c *conv) close() error {
 	if err := c.closeRetired(); err != nil {
 		return err
+	}
+	if c.closed {
+		return nil
 	}
 	if c.r.durableProcess(c.rec.Backend) {
 		return c.closeDurable()

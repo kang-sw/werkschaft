@@ -154,15 +154,12 @@ func (r *Runner) memoryClosedState(rec Record) State {
 		st.IsChild = r.isChildRecord(rec)
 		return st
 	}
-	st := closedState(rec)
-	st.IsChild = r.isChildRecord(rec)
-	return st
+	return r.closedRecordState(rec)
 }
 
 // closedState reads the presentation of a record no loop serves.
 func (r *Runner) closedState(rec Record) State {
-	st := closedState(rec)
-	st.IsChild = r.isChildRecord(rec)
+	st := r.closedRecordState(rec)
 	if r.opts.closedSnapshotRead != nil {
 		r.opts.closedSnapshotRead(rec.ReplyID)
 	}
@@ -193,6 +190,17 @@ func (r *Runner) closedState(rec Record) State {
 		st.ResumeCommand = r.resumeCommand(rec, dir)
 	}
 	return r.permissionState(st, rec, dir)
+}
+
+func (r *Runner) closedRecordState(rec Record) State {
+	st := closedState(rec)
+	st.IsChild = r.isChildRecord(rec)
+	if st.Status == StatusClosed {
+		if refusal := r.admitWorkerRecord(rec); refusal != nil {
+			st.Error = refusal.Error()
+		}
+	}
+	return st
 }
 
 // Retained name check: ended state of retained Pi records (TestRetiredPiHoldersKeepRunning).
