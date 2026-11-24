@@ -521,6 +521,9 @@
     },
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
+    },
+    "261124-feat-ws-dashboard-board-designated-y-virtual-scroll": {
+      "registered_at": "2026-11-24T00:49:52Z"
     }
   }
 }
