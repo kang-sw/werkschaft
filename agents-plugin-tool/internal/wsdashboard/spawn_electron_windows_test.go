@@ -38,7 +38,7 @@ func TestElectronBreakawaySignalAndJobLifetimeMode(t *testing.T) {
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("error = %v, want %v", err, tc.err)
 			}
-			base := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP)
+			base := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP | windows.NORMAL_PRIORITY_CLASS)
 			wantFlags := base
 			if !tc.jobLifetime {
 				wantFlags |= windows.CREATE_BREAKAWAY_FROM_JOB
@@ -77,11 +77,14 @@ func TestWindowsStrictBreakawayDoesNotFallback(t *testing.T) {
 		if flags[0]&windows.CREATE_BREAKAWAY_FROM_JOB == 0 {
 			t.Fatal("first attempt must request breakaway")
 		}
+		if flags[0]&windows.NORMAL_PRIORITY_CLASS == 0 {
+			t.Fatalf("first attempt flags %#x must include NORMAL_PRIORITY_CLASS", flags[0])
+		}
 		if tc.strict {
 			if !errors.Is(err, refused) {
 				t.Fatalf("strict refusal = %v", err)
 			}
-		} else if err != nil || flags[1]&windows.CREATE_BREAKAWAY_FROM_JOB != 0 {
+		} else if err != nil || flags[1]&windows.CREATE_BREAKAWAY_FROM_JOB != 0 || flags[1]&windows.NORMAL_PRIORITY_CLASS == 0 {
 			t.Fatalf("default fallback = %v, flags %v", err, flags)
 		}
 	}

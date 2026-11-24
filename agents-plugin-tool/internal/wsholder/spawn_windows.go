@@ -13,6 +13,14 @@ import (
 // starter's job object; only Windows has one.
 const breakawayApplies = true
 
+func windowsDetachedCreationFlags(breakaway bool) uint32 {
+	flags := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP | windows.NORMAL_PRIORITY_CLASS)
+	if breakaway {
+		flags |= windows.CREATE_BREAKAWAY_FROM_JOB
+	}
+	return flags
+}
+
 // startDetached starts exe in its own process group with its own hidden
 // console (CREATE_NO_WINDOW, as the daemon's own start does, so the holder's
 // children open no window and share a console a control event can reach)
@@ -21,10 +29,7 @@ const breakawayApplies = true
 // does not take the holder with it; a job that forbids breakaway refuses
 // that start, and the caller starts again without it.
 func startDetached(exe string, args []string, dir string, breakaway bool) (*exec.Cmd, error) {
-	flags := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP)
-	if breakaway {
-		flags |= windows.CREATE_BREAKAWAY_FROM_JOB
-	}
+	flags := windowsDetachedCreationFlags(breakaway)
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags, HideWindow: true}
