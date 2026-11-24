@@ -293,6 +293,14 @@ func (r *Runner) Reopen(id string) (State, error) {
 		unlock()
 		return State{}, conflict("the session runs in a terminal now. Use Take over on its rail row after the terminal session exits")
 	}
+	if r.durableProcess(rec.Backend) {
+		release, err := r.admitDurableTransition()
+		if err != nil {
+			unlock()
+			return State{}, err
+		}
+		defer release()
+	}
 	r.mu.Lock()
 	if _, still := r.closed[id]; !still {
 		r.mu.Unlock()
