@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "절전 · 유휴 세션, 클릭하여 프로세스 중지",
   "rail.stop.unsafe": "중지 · 길게 눌러 실행 중인 프로세스 종료",
   "js.hold.hint": "길게 눌러 실행",
-  "js.hold.release": "놓으면 실행"
+  "js.hold.release": "놓으면 실행",
+  "quota.chip.scheduled": "이어서 진행 예약됨",
+  "quota.chip.exhausted": "자동 재시도 종료",
+  "js.quota.title.ready": "사용 한도 도달",
+  "js.quota.title.scheduled": "이어서 진행 예약됨",
+  "js.quota.title.exhausted": "이어서 진행 재시도 종료",
+  "js.quota.resume_at": "재개 예정:",
+  "js.quota.resets_at": "초기화:",
+  "js.quota.fallback_hourly": "1시간 간격 재시도 (최대 {0}회)",
+  "js.quota.attempt": "시도 {0}/{1}",
+  "js.quota.exhausted_hint": "{0}/{1}회 시도 후 자동 재시도가 종료되었습니다. 다시 예약하거나 메시지를 보내 이어서 진행하세요.",
+  "js.quota.ready_hint": "사용 한도 초기화 후 이어서 진행할 턴을 예약할 수 있습니다.",
+  "js.quota.schedule": "이어서 진행 예약",
+  "js.quota.cancel": "예약 취소",
+  "js.quota.scheduled_toast": "이어서 진행이 예약되었습니다.",
+  "js.quota.cancelled_toast": "예약된 이어서 진행이 취소되었습니다."
 }

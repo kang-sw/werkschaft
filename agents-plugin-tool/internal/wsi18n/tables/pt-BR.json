@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "Suspender · sessão ociosa; clique para parar o processo",
   "rail.stop.unsafe": "Parar · mantenha pressionado para encerrar o processo ativo",
   "js.hold.hint": "Mantenha pressionado para confirmar",
-  "js.hold.release": "Solte para confirmar"
+  "js.hold.release": "Solte para confirmar",
+  "quota.chip.scheduled": "Retomada agendada",
+  "quota.chip.exhausted": "Tentativas esgotadas",
+  "js.quota.title.ready": "Limite de uso atingido",
+  "js.quota.title.scheduled": "Continuação agendada",
+  "js.quota.title.exhausted": "Tentativas de continuação esgotadas",
+  "js.quota.resume_at": "Retomar em",
+  "js.quota.resets_at": "Redefine em",
+  "js.quota.fallback_hourly": "Tentativa a cada hora (máx. {0})",
+  "js.quota.attempt": "Tentativa {0}/{1}",
+  "js.quota.exhausted_hint": "As tentativas automáticas pararam após {0}/{1} tentativas. Agende novamente ou envie uma mensagem para continuar.",
+  "js.quota.ready_hint": "Agende uma continuação para retomar após o limite de uso ser redefinido.",
+  "js.quota.schedule": "Agendar continuação",
+  "js.quota.cancel": "Cancelar",
+  "js.quota.scheduled_toast": "Continuação agendada.",
+  "js.quota.cancelled_toast": "Continuação agendada cancelada."
 }

@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "Sospendi · sessione inattiva; fai clic per arrestare il processo",
   "rail.stop.unsafe": "Arresta · tieni premuto per terminare il processo attivo",
   "js.hold.hint": "Tieni premuto per confermare",
-  "js.hold.release": "Rilascia per confermare"
+  "js.hold.release": "Rilascia per confermare",
+  "quota.chip.scheduled": "Ripresa programmata",
+  "quota.chip.exhausted": "Tentativi esauriti",
+  "js.quota.title.ready": "Limite di utilizzo raggiunto",
+  "js.quota.title.scheduled": "Continuazione programmata",
+  "js.quota.title.exhausted": "Tentativi di continuazione esauriti",
+  "js.quota.resume_at": "Ripresa alle",
+  "js.quota.resets_at": "Ripristino",
+  "js.quota.fallback_hourly": "Riprova ogni ora (max {0})",
+  "js.quota.attempt": "Tentativo {0}/{1}",
+  "js.quota.exhausted_hint": "I tentativi automatici si sono fermati dopo {0}/{1} prove. Programma di nuovo o invia un messaggio per continuare.",
+  "js.quota.ready_hint": "Programma una continuazione per riprendere dopo il ripristino del limite di utilizzo.",
+  "js.quota.schedule": "Programma continuazione",
+  "js.quota.cancel": "Annulla",
+  "js.quota.scheduled_toast": "Continuazione programmata.",
+  "js.quota.cancelled_toast": "Continuazione programmata annullata."
 }

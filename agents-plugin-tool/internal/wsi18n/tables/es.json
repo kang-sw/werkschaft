@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "Suspender · sesión inactiva; haz clic para detener el proceso",
   "rail.stop.unsafe": "Detener · mantén pulsado para finalizar el proceso activo",
   "js.hold.hint": "Mantén pulsado para confirmar",
-  "js.hold.release": "Suelta para confirmar"
+  "js.hold.release": "Suelta para confirmar",
+  "quota.chip.scheduled": "Reanudación programada",
+  "quota.chip.exhausted": "Reintentos agotados",
+  "js.quota.title.ready": "Límite de uso alcanzado",
+  "js.quota.title.scheduled": "Continuación programada",
+  "js.quota.title.exhausted": "Reintentos de continuación agotados",
+  "js.quota.resume_at": "Reanudar a las",
+  "js.quota.resets_at": "Se restablece",
+  "js.quota.fallback_hourly": "Reintento cada hora (máx. {0})",
+  "js.quota.attempt": "Intento {0}/{1}",
+  "js.quota.exhausted_hint": "Los reintentos automáticos se detuvieron tras {0}/{1} intentos. Programa de nuevo o envía un mensaje para continuar.",
+  "js.quota.ready_hint": "Programa una continuación para reanudar cuando se restablezca el límite de uso.",
+  "js.quota.schedule": "Programar continuación",
+  "js.quota.cancel": "Cancelar",
+  "js.quota.scheduled_toast": "Continuación programada.",
+  "js.quota.cancelled_toast": "Continuación programada cancelada."
 }

@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "休眠 · 空闲会话，点击停止进程",
   "rail.stop.unsafe": "停止 · 长按结束运行中的进程",
   "js.hold.hint": "长按以确认",
-  "js.hold.release": "松开以确认"
+  "js.hold.release": "松开以确认",
+  "quota.chip.scheduled": "已预约继续",
+  "quota.chip.exhausted": "重试已用尽",
+  "js.quota.title.ready": "已达到使用限额",
+  "js.quota.title.scheduled": "已预约继续执行",
+  "js.quota.title.exhausted": "继续执行重试已用尽",
+  "js.quota.resume_at": "预计恢复:",
+  "js.quota.resets_at": "重置时间:",
+  "js.quota.fallback_hourly": "每小时重试（最多 {0} 次）",
+  "js.quota.attempt": "第 {0}/{1} 次尝试",
+  "js.quota.exhausted_hint": "在 {0}/{1} 次尝试后自动重试已停止。请重新预约或发送消息以继续。",
+  "js.quota.ready_hint": "可预约在使用限额重置后自动继续执行。",
+  "js.quota.schedule": "预约继续",
+  "js.quota.cancel": "取消预约",
+  "js.quota.scheduled_toast": "已预约继续执行。",
+  "js.quota.cancelled_toast": "已取消预约的继续执行。"
 }

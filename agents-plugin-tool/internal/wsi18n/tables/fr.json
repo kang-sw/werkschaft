@@ -3476,5 +3476,20 @@
   "rail.stop.safe": "Veille · session inactive ; cliquer pour arrêter le processus",
   "rail.stop.unsafe": "Arrêter · maintenir enfoncé pour terminer le processus actif",
   "js.hold.hint": "Maintenir pour confirmer",
-  "js.hold.release": "Relâcher pour confirmer"
+  "js.hold.release": "Relâcher pour confirmer",
+  "quota.chip.scheduled": "Reprise planifiée",
+  "quota.chip.exhausted": "Tentatives épuisées",
+  "js.quota.title.ready": "Limite d'utilisation atteinte",
+  "js.quota.title.scheduled": "Poursuite planifiée",
+  "js.quota.title.exhausted": "Tentatives de poursuite épuisées",
+  "js.quota.resume_at": "Reprise à",
+  "js.quota.resets_at": "Réinitialisation",
+  "js.quota.fallback_hourly": "Nouvel essai toutes les heures (max. {0})",
+  "js.quota.attempt": "Tentative {0}/{1}",
+  "js.quota.exhausted_hint": "Les tentatives automatiques se sont arrêtées après {0}/{1} essais. Planifiez à nouveau ou envoyez un message pour continuer.",
+  "js.quota.ready_hint": "Planifiez une poursuite pour reprendre après la réinitialisation de la limite d'utilisation.",
+  "js.quota.schedule": "Planifier la poursuite",
+  "js.quota.cancel": "Annuler",
+  "js.quota.scheduled_toast": "Poursuite planifiée.",
+  "js.quota.cancelled_toast": "Poursuite planifiée annulée."
 }
