@@ -43,7 +43,8 @@ func TestMain(m *testing.M) {
 	os.Exit(runTestMain(m))
 }
 
-// scrubInheritedWSEnv prevents hosted-session WS_* values from reaching the live daemon.
+// scrubInheritedWSEnv removes hosted-session WS_* values while retaining
+// explicit exemptions and test-fixture regeneration controls.
 func scrubInheritedWSEnv(exempt ...string) {
 	keep := make(map[string]struct{}, len(exempt))
 	for _, key := range exempt {
@@ -51,7 +52,7 @@ func scrubInheritedWSEnv(exempt ...string) {
 	}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "WS_") {
+		if strings.HasPrefix(key, "WS_") && !strings.HasPrefix(key, "WS_REGEN_") {
 			if _, ok := keep[key]; !ok {
 				_ = os.Unsetenv(key)
 			}
