@@ -67,14 +67,15 @@ type wsCompactProc struct {
 	holderID string
 	events   chan Event
 
-	mu          sync.Mutex
-	sends       []string
-	commands    []wsinbox.Command
-	auditEvents []wsaudit.Envelope
-	auditIDs    []wsaudit.SourceID
-	closed      bool
-	failSend    bool
-	failCommand bool
+	mu           sync.Mutex
+	sends        []string
+	commands     []wsinbox.Command
+	auditEvents  []wsaudit.Envelope
+	auditIDs     []wsaudit.SourceID
+	closed       bool
+	failSend     bool
+	failCommand  bool
+	mcpReconnect func()
 }
 
 func (p *wsCompactProc) Events() <-chan Event { return p.events }
@@ -97,6 +98,20 @@ func (p *wsCompactProc) RunCommand(cmd wsinbox.Command) error {
 	}
 	return nil
 }
+func (p *wsCompactProc) MCPStatus() ([]MCPServer, error) {
+	return []MCPServer{{Name: "ws", Status: MCPConnected}}, nil
+}
+
+func (p *wsCompactProc) ReconnectMCP(string) error {
+	p.mu.Lock()
+	reconnect := p.mcpReconnect
+	p.mu.Unlock()
+	if reconnect != nil {
+		reconnect()
+	}
+	return nil
+}
+
 func (p *wsCompactProc) Interrupt() error       { return nil }
 func (p *wsCompactProc) SetModel(string) error  { return nil }
 func (p *wsCompactProc) SetEffort(string) error { return nil }
@@ -717,6 +732,114 @@ func TestDashboardCompactFailureDeliversQueuedPrompt(t *testing.T) {
 		return len(commands) == 1 && commands[0].Name == "compact" &&
 			len(sends) == 2 && strings.Contains(sends[1], "continue after failed compact")
 	})
+}
+
+func TestRotationResetsInFlightMCPCheck(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	old := b.latest()
+	old.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "idle", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Status == StatusIdle
+	})
+
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	old.mu.Lock()
+	old.mcpReconnect = func() {
+		close(started)
+		<-release
+	}
+	old.mu.Unlock()
+	c := runner.conv(id)
+	c.do(func() { c.checkMCP([]string{"ws"}) })
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old process did not start its MCP check")
+	}
+
+	resume := false
+	if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+		t.Fatalf("rotation: %+v", result)
+	}
+	replacement := b.latest()
+	if replacement == old {
+		t.Fatal("replacement process did not start")
+	}
+	newStarted := make(chan struct{})
+	replacement.mu.Lock()
+	replacement.mcpReconnect = func() { close(newStarted) }
+	replacement.mu.Unlock()
+	c.do(func() {
+		c.mcpChecked(old, nil, map[string]bool{"ws": false}, nil)
+		c.checkMCP([]string{"ws"})
+	})
+	select {
+	case <-newStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replacement MCP check waited behind the retired process")
+	}
+}
+
+func TestMCPRecoveryWaitsForAcceptedCompaction(t *testing.T) {
+	for _, withSummary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("summary=%t", withSummary), func(t *testing.T) {
+			runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+			if _, err := runner.Send(id, "work"); err != nil {
+				t.Fatal(err)
+			}
+			waitWSCompact(t, "first prompt", func() bool {
+				p := b.latest()
+				if p == nil {
+					return false
+				}
+				sends, _ := p.sent()
+				return len(sends) == 1
+			})
+			p := b.latest()
+			c := runner.conv(id)
+			if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			c.signalInbox()
+			p.events <- Event{TurnEnd: true}
+			waitWSCompact(t, "Stage 1 prompt", func() bool {
+				sends, _ := p.sent()
+				return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+			})
+			c.do(func() { c.mcpChecked(p, nil, map[string]bool{"ws": false}, nil) })
+			if withSummary {
+				resume := false
+				if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+					t.Fatalf("Stage 1 summary: %+v", result)
+				}
+			}
+			p.events <- Event{TurnEnd: true}
+			if withSummary {
+				waitWSCompact(t, "summary rotation", func() bool {
+					state, err := runner.Get(id)
+					return err == nil && state.Compactions == 1 && b.latest() != p
+				})
+			} else {
+				waitWSCompact(t, "Stage 2 dispatch on the original process", func() bool {
+					_, commands := p.sent()
+					return len(commands) == 1 && commands[0].Name == "compact"
+				})
+			}
+		})
+	}
 }
 
 func TestStage1NativeCutSatisfiesDashboardCompact(t *testing.T) {

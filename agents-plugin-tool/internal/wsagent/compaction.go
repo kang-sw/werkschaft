@@ -732,6 +732,7 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		oldProc := c.proc
 		c.setStatus(func() { c.proc = nil })
 		c.events = nil
+		c.clearProcessMCP()
 		if oldProc != nil {
 			_ = oldProc.Close()
 			c.releaseHolder(oldProc)

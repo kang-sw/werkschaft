@@ -487,8 +487,12 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	// goes as the next one (children.go).
 	c.unsteer()
 	c.applySettings()
+	compactionFirst := c.compactPending != nil || c.compactResume
 	c.restartIfDue()
 	c.kick()
+	if compactionFirst {
+		c.restartIfDue()
+	}
 	c.releaseHeld()
 	c.flushRecord()
 	if !c.turn && !c.compacting && !c.compactCommand {
@@ -893,9 +897,10 @@ func (c *conv) processEnded() {
 	c.checkAction(false)
 	hadBackgroundTasks := c.bgTasks != 0
 	c.setStatus(func() {
-		c.activeMode, c.bgTasks, c.mcpBroken = "", 0, nil
+		c.activeMode, c.bgTasks = "", 0
 		c.background, c.monitors = nil, nil
 	})
+	c.clearProcessMCP()
 	if hadBackgroundTasks || hadBgGrace || c.heldRes != nil {
 		// A child's held background turn settles and its parent's idle
 		// timer re-arms once the process exits and clears background work
@@ -907,7 +912,6 @@ func (c *conv) processEnded() {
 			c.watched()
 		}
 	}
-	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
 	// A replay the process's end cut short still resolves what it staged of
