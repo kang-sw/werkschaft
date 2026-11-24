@@ -1727,16 +1727,19 @@
     if (pin) pinConvo();
   }
   // leadKey is the conversation's live host/permission state as the state
-  // follows it: permission slot and quota-continuation attributes.
+  // follows it: permission slot, quota state, and turn activity while a
+  // usage-limit alert can expose manual scheduling.
   function leadKey() {
     var c = region("convlive"), clive = c && c.querySelector(".clive");
+    var quotaFailure = clive && clive.getAttribute("data-qc-fail") || "";
     var slot = c && c.querySelector(".apslot");
     var t = slot && slot.querySelector("time[data-ms]"), code = slot && slot.querySelector("code"), args = slot && slot.querySelector(".args");
     var parts = [
       t ? t.getAttribute("data-ms") : "",
       code ? code.title : "",
       args ? args.textContent : "",
-      clive ? (clive.getAttribute("data-qc-fail") || "") : "",
+      quotaFailure,
+      quotaFailure === "usage_limit" && clive.hasAttribute("data-turn") ? "running" : "",
       clive ? (clive.getAttribute("data-qc-reset") || "") : "",
       clive ? (clive.getAttribute("data-qc-status") || "") : "",
       clive ? (clive.getAttribute("data-qc-resume") || "") : "",
