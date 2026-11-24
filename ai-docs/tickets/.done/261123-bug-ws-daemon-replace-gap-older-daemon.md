@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 5001442a4f9b77f1
 sage-review-design-reviewed: 5001442a4f9b77f1
+completed: 2026-11-24
 ---
 
 # Daemon replacement gap: refuse older-minor autostart, shorten the gap
@@ -260,6 +261,52 @@ points above.
     it through the launcher entry as well as the Go binary.
 - Update `ai-docs/manuals/ws-mcp.md` replacement section with the floor.
 
+### Result (22bc12a63) - 2026-11-24
+
+Added `<daemon-state-dir>/daemon-minor-floor` (plain `major.minor`, storage
+type 5) with aligned enforcement across Go `Ensure`, Go `StartDaemon`, and the
+byte-identical `ws` and `wsflow` Python launchers (including hosted
+`last-running-executable.json` restarts). `Ensure` checks the floor before any
+drain or spawn and passes `--start-intent` (`absence`, `upgrade`, `replace`)
+and `--below-floor` to the child; `StartDaemon` rechecks under `dashboard.lock`
+before side effects and updates the floor atomically after `agents.Start` and
+before `endpoint.json` publication. Absent floors admit legacy state, malformed
+or unreadable floors fail closed (even with `--below-floor`), ordinary starts
+advance the floor only upward, and explicit `daemon-start --below-floor`
+(forwarded by the launcher precheck) admits a lower candidate and lowers the
+floor to its minor without draining a healthy newer daemon. Updated
+`ai-docs/manuals/ws-mcp.md` with the floor contract and rollback flag.
+
+File operations on `daemon-minor-floor` per action (`performance.md`):
+- Interactive MCP/CLI and healthy keep: 0 reads, 0 writes.
+- Go `Ensure` cold start or replacement admission: 1 read, 0 writes (refusal
+  stops before drain or spawn).
+- Go `StartDaemon` under `dashboard.lock`: 1 read at lock entry; 0 extra reads
+  at publish; 0 writes on refusal or equal-minor start; 1 atomic write
+  (`writePrivateFile`: 5 file ops — temp create, write, close, chmod, atomic
+  replace) when absent, advancing upward, or rolling back via `--below-floor`.
+- Python launcher (`ws` and `wsflow`, external and hosted) on cold start or
+  replacement: 1 read, 0 writes; refusal stops before binary staging or
+  `daemon-start` spawn (0 staging ops).
+
+Verification on `w5090` (Go `-race` and cross-compile, Python suites) and local
+git-tracked check:
+- `go test -race -v -run ^TestMinorFloor ./internal/wsdashboard` (PASS),
+  `^TestEnsure` (PASS), `^TestDaemonArgs` (PASS),
+  `^TestAgentHostStartsBefore` (PASS).
+- `go test -race -v -run ^TestDaemonStart ./cmd/ws-mcp` (PASS),
+  `^TestDesktopPredecessor` (PASS), `^TestLauncher` (PASS, including end-to-end
+  Python launcher + Go binary floor refusal and `--below-floor` rollback).
+- `GOOS=windows go test -c ./internal/wsdashboard` and `./cmd/ws-mcp` (PASS).
+- `WS_LAUNCHER_PROCESS_TESTS=1 python3 -m unittest agents-plugin/tests/test_ws_mcp_launcher_start.py -v` (25/25 OK),
+  `agents-plugin/tests/test_ws_mcp_launcher_hosted.py` (6/6 OK),
+  `agents-plugin/tests/test_ws_mcp_launcher_proxy.py` (54/54 OK),
+  `agents-plugin-wsflow/tests` (20 OK, 2 Windows-only skipped),
+  `scripts/test_dev.py` (39/39 OK), and local
+  `agents-plugin/tests/test_shipped_surfaces_downstream_neutral.py` (7/7 OK).
+- Independent `code-review-lite` over `fb90908..22bc12a63` returned clean
+  (0 critical, 0 important, 0 minor).
+
 ### Phase 2: Append-and-rotate dashboard log
 
 Replace the truncating lazy writer with the append-after-lock writer and
@@ -425,3 +472,8 @@ eight frontend fixtures also failing at the branch-point develop revision
 All eight passed as a group on updated develop (f9efb4180). An earlier
 dashboard run also hit the intermittent clock assertion in
 `TestAgentsIslandBehavior`, reproduced on both develop revisions.
+
+
+## Resolution (2026-11-24)
+
+All five phases (Phase 1 minor floor, Phase 2 append-and-rotate dashboard log, Phase 3 closed-session restore after publication, Phase 4 successor before shutdown on every replace path, and Phase 5 worker MCP route diagnosis) are recorded with Results and verified. Phase 1 merges into develop after 0.51.2 for the 0.52.0 minor boundary per owner decision (5019).
