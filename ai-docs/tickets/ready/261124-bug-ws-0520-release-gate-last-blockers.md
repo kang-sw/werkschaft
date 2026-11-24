@@ -434,6 +434,51 @@ directive; the earlier Decisions stay authoritative. Work splits into 4a
   in the file-identity inventory and describes the macOS destination-inode
   lock with exclusive per-write stages that are preserved, not reclaimed.
 
+#### Result (4a)
+
+2026-11-25 · `c3ac9121d`, `c8663d440`
+
+- C2. Active steering and pre-resume recovery use the idle path's credential
+  lock and claim dispositions. Refusals remain staged for idle settlement,
+  without advancing send coverage or passing their text to the runner's
+  steer queue, fallback reports, or Werk journal. Tests exercise both
+  revocation orders at the real idle and active credential boundary and
+  recover authorized and unclassified claims in operator and background
+  turns. The restart regression checks the resumed model request for
+  authorized text because the steer receipt can clear the durable queue
+  before the test reads it.
+- I6. The Stop gate pins the registry and conversation states at admission,
+  includes pending descendant spawns, and checks the published exec snapshot
+  for changes. A contended or inconsistent view returns the existing 409.
+  The HTTP regression covers overlapping descendant transitions.
+- Runbook. The file-identity inventory includes hosted Werk journals. The
+  macOS section records the destination-inode lock, exclusive per-write
+  staging, and preservation of stages left by interrupted writes.
+- T0. The active path writes the existing `runnerCronClaim` values consumed by
+  `wsinbox.PendingClaims`. Safe-only Stop uses the existing request and
+  conflict response. No stored shape, tool schema, or configuration changed.
+
+Independent lite review found no issues in `7f949ef1d..c8663d440`
+(`ca619837-01-findings.md`). Verification from `agents-plugin-tool/`:
+
+- Pass — `go build ./cmd/...`.
+- Pass — `go test -race ./internal/wsagent -timeout 3m -parallel 1 -run '^Test(WerkCron|SafeStop|SafeOnlyStop)' -count=3`.
+  The background restart and descendant contention regressions failed as
+  expected with the two implementation files overlaid from `7f949ef1d`.
+- Pass — `go test -race ./internal/wsagent -timeout 3m -run '^TestWerkCronSteeringRecoversClaimAfterConsentRevocation$' -count=8`.
+- Pass — `go test ./internal/werk ./internal/wsinbox ./internal/wscred -timeout 5m -count=1`.
+- Pass — `go test ./internal/mcp -timeout 5m -run '^Test(CronTool|DashboardInboxDrainDescriptionNamesTheCronEnvelopeInBothProducts|MailboxSendChecksDeadBindingAfterEnqueue|MailboxReplyIDFixedSessionsAcrossRestart|MailboxToolBoundaryErrors)' -count=1`.
+- The serial `go test ./internal/wsagent -timeout 15m -parallel 1 -skip '^(TestAgyWorkerRetirementRestartsTheExpiryClock|TestCompactionStateClosedChildKeepsItsCountAcrossARestart)$' -count=1`
+  passed with the implementation commit. A rerun after the fixture-only
+  commit failed at `TestAgyParentedWorkerRecordWakesStampedOrFromItsParent`
+  (`no turn was sent`). The same assertion failed in a focused
+  `-count=10` run on the branch and a focused `-count=300` run with the
+  implementation files overlaid from `7f949ef1d`. The focused race run
+  verified the final fixture.
+
+Routing suggested a branch rename. The ticket lease recorded
+`impl/develop/0520-p4-backend`, and the commits stayed on that branch.
+
 #### 4b: Dashboard (I11 completion, compact toolbar from `ed838422a`)
 
 - I11: the exact-jump destination clearance recheck runs after the
