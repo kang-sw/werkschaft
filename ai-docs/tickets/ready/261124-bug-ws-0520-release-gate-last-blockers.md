@@ -600,3 +600,25 @@ record formats are unchanged.
   `testing.Context` version diagnostic at `werk_lead_test.go:62`.
   `GOOS=windows go vet -stdversion=false ./internal/wsagent` passed.
 - Independent lite review of `a01aeb62d` found no actionable issues.
+
+### Phase 6: Walk closed workers as ancestry links in safe Stop
+
+Added after the fourth re-review of `41e81115c..442086e77` blocked on one
+Important (the Phase 5 unrelated-lock refusal is verified fixed). Lead
+decision under the owner's overnight directive.
+
+- I6 ancestry: when a middle worker closes alone (for example a linked
+  checkout release through `CheckoutReleased(..., true)`) while its child
+  still runs, the closed middle row stays in `childrenIndex` and SpawnTree
+  still lists the busy grandchild, but both `admitsSafeStop` and the advisory
+  `descendantsAllowSafeStop` (`runner_operations.go`) stop at the closed row
+  (it is not in `r.convs`), so the advisory reports safe and safe-only Stop
+  returns 200 and stops the lead. Walk retained closed rows (`r.closed`) as
+  ancestry links in both paths: a closed node is not itself busy, but its
+  live descendants are locked and checked like any other tree member, and its
+  pending spawns still refuse.
+- Tests: the reviewer's topology (lead, closed middle worker, running
+  grandchild) refuses over the real HTTP route and reports advisory unsafe;
+  the Phase 5 unrelated-lock case still returns 200.
+- Rejected: treating a closed middle row as busy (would block Stop forever
+  after any mid-tree close even when every live descendant is idle).
