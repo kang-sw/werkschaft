@@ -137,6 +137,7 @@ test('pointer hold requires full duration and release inside bounds, and suppres
   const row = h.makeEl('div', 'rs');
   const btn = row.appendChild(h.makeEl('button', 'spact'));
   let starts = 0, readies = 0, confirms = 0, cancels = 0;
+  const cancelReasons = [];
 
   h.api.attach(btn, {
     mode: 'bar',
@@ -144,7 +145,7 @@ test('pointer hold requires full duration and release inside bounds, and suppres
     onStart: () => starts++,
     onReady: () => readies++,
     onConfirm: () => confirms++,
-    onCancel: () => cancels++
+    onCancel: (_el, reason) => { cancels++; cancelReasons.push(reason); }
   });
 
   // Early release before 1500ms cancels without confirming.
@@ -158,6 +159,7 @@ test('pointer hold requires full duration and release inside bounds, and suppres
   h.fire(h.window, 'pointerup', { pointerId: 1, clientX: 50, clientY: 20 });
   assert.equal(confirms, 0);
   assert.equal(cancels, 1);
+  assert.deepEqual(cancelReasons, ['early-release']);
   assert.equal(h.api.isHolding(), false);
   assert.equal(h.api.wasJustCancelled(), true);
   assert.equal(row.classList.contains('d-holding'), false);

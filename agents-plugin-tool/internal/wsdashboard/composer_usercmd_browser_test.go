@@ -108,10 +108,9 @@ func TestUserCommandBrowser(t *testing.T) {
 	for _, l := range f.svc.launches {
 		runs[l.Line]++
 	}
-	// Per language: one "make all", one "echo ctor", and "echo dbl" twice (a real
-	// double click is one run, two rapid clicks another); the stale click ran
-	// nothing.
-	if runs["make all"] != 2 || runs["echo ctor"] != 2 || runs["echo dbl"] != 4 || len(f.svc.launches) != 8 {
-		t.Fatalf("launches %v, want one \"make all\", one \"echo ctor\" and two \"echo dbl\" per language and nothing else", runs)
+	// Per language: one "make all" and one "echo ctor"; quick clicks and stale
+	// holds ran nothing.
+	if runs["make all"] != 2 || runs["echo ctor"] != 2 || len(f.svc.launches) != 4 {
+		t.Fatalf("launches %v, want one \"make all\" and one \"echo ctor\" per language and nothing else", runs)
 	}
 }

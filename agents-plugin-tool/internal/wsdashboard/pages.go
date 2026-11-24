@@ -105,6 +105,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
 	"dashboard-exec-hud.css",
+	"dashboard-composer-ucmd.css",
 }
 
 var trackerScriptFiles = []string{

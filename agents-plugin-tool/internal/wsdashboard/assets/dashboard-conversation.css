@@ -114,23 +114,6 @@
 .composer { --tm-bg: #fdf6e3; --tm-bg2: #eee8d5; --tm-line: #d9d0b4; --tm-fg: #586e75; --tm-dim: #7b8d91; --tm-green: #6f7f00; --tm-green-bg: #e4e6bd; --tm-blue: #268bd2; --tm-red: #dc322f; --tm-amber: #b58900; --tm-code: #073642; --tm-hover: #073642; --tm-key-shadow: #d3cab0; --tm-run-bg: #d3e5ee; --tm-label-bg: #e6e3f2; --tm-label-fg: #6c71c4; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; --tm-code: #e6e6e6; --tm-hover: #fff; --tm-key-shadow: #0b0c0e; --tm-run-bg: #1f3550; --tm-label-bg: #33264d; --tm-label-fg: #a57bf0; } }
 :root[data-theme="dark"] .composer { --tm-bg: #131417; --tm-bg2: #1a1b1f; --tm-line: #34373d; --tm-fg: #d9dbdf; --tm-dim: #9ea2a9; --tm-green: #5cc46a; --tm-green-bg: #1d3b24; --tm-blue: #5b9bf0; --tm-red: #f0797e; --tm-amber: #e0a84a; --tm-code: #e6e6e6; --tm-hover: #fff; --tm-key-shadow: #0b0c0e; --tm-run-bg: #1f3550; --tm-label-bg: #33264d; --tm-label-fg: #a57bf0; }
-/* The lead's user commands ("command slots"): a strip over the composer's
-   attachments, one block per command with its exact stored line, localhost-only. */
-.d-ucmd { padding: 4px 0 0; font-size: 12px; }
-.d-ucmd[hidden] { display: none; }
-.d-ucmd > summary { cursor: pointer; color: var(--wb-muted-fg); font-size: 11.5px; padding: 2px 0; user-select: none; }
-.d-ucmd-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 8px; max-height: 30vh; overflow: auto; }
-.ucmd { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border-radius: 10px; background: var(--tm-bg); color: var(--tm-fg); box-shadow: inset 0 0 0 1px var(--tm-line); }
-.ucmd-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ucmd-run { cursor: pointer; border: 0; border-radius: 7px; padding: 3px 10px 4px; font: inherit; font-weight: 700; background: var(--tm-green-bg); color: var(--tm-green); box-shadow: 0 2px 0 var(--tm-key-shadow), inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ucmd-run:hover:not(:disabled) { color: var(--tm-hover); }
-.ucmd-run:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 0 var(--tm-key-shadow), inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 35%, transparent); }
-.ucmd-run:disabled { opacity: .7; cursor: progress; color: var(--tm-blue); background: var(--tm-run-bg); }
-.ucmd-desc { color: var(--tm-dim); min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
-.ucmd-x { margin-left: auto; cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--tm-dim); flex: none; }
-.ucmd-run:focus-visible, .ucmd-x:focus-visible, .d-ucmd > summary:focus-visible { outline: 2px solid var(--wb-primary); }
-.ucmd-line { display: block; padding: 0; font-family: var(--wb-mono); font-size: 12.5px; font-weight: 600; line-height: 1.5; color: var(--tm-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
-.ucmd-line::before { content: "$ "; color: var(--tm-green); font-weight: 800; }
 /* Shell mode: the composer's first character is `!`. The input turns into a
    terminal-tinted mono field, the `!` is painted amber by the highlight
    registry, and the send button becomes a green Run, with no height change. */
