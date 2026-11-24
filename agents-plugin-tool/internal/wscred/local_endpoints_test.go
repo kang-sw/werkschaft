@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -61,9 +64,9 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 		t.Fatalf("new URL inherited prior key: %v", err)
 	}
 	configure(original + "/")
-	cred, err := store.Credential(context.Background(), Request{Provider: id, BaseURL: original})
-	if err != nil || cred.Secret.Reveal() != key {
-		t.Fatalf("return to original URL did not recover key: %v", err)
+	_, err = store.Credential(context.Background(), Request{Provider: id, BaseURL: original})
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("return to original URL revived retired key: %v", err)
 	}
 	if _, err := store.Credential(context.Background(), Request{Provider: id}); !errors.Is(err, ErrNotPermitted) {
 		t.Fatalf("lookup without matching URL = %v", err)
@@ -72,4 +75,132 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkStatus(false)
+}
+
+func TestLocalEndpointMutationCleanupRetryAndConcurrency(t *testing.T) {
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	store := NewStore(path)
+	set := func(base, key string) error {
+		_, err := store.ApplyLocalEndpoint(opts, LocalEndpointChange{Op: OpSet, Name: "desk", BaseURL: base, Kind: "ollama", Key: NewSecret(key)})
+		return err
+	}
+	const first = "http://example.invalid/one"
+	if err := set(first, "fake-retired-key"); err != nil {
+		t.Fatal(err)
+	}
+	// Force failure at replacement, after the key-removal bytes were staged.
+	// Retrying must finish cleanup without restoring the retired key.
+	_, _, staged := GenerationPaths(path)
+	store.writeStep = func(step credentialWriteStep) {
+		if step == credentialLinked {
+			if err := os.Remove(staged); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := set("http://example.invalid/two", ""); err == nil {
+		t.Fatal("expected write failure")
+	}
+	if got := store.LocalProviders(); len(got) != 1 || got[0].BaseURL != "http://example.invalid/two" {
+		t.Fatal("failed cleanup left stale catalog")
+	}
+	if err := set(first, ""); err == nil {
+		t.Fatal("accepted URL restoration before retrying cleanup")
+	}
+	store.writeStep = nil
+	// Restart before retrying: recovery must reconcile the saved URL first.
+	store = NewStore(path)
+	if err := set(first, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := set("http://example.invalid/two", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := set(first, ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "fake-retired-key") {
+		t.Fatal("retired key persisted")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := store.ApplyLocalEndpoint(opts, LocalEndpointChange{Op: OpSet, Name: fmt.Sprintf("endpoint-%d", i), BaseURL: first, Kind: "vllm"})
+			if err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if len(store.LocalProviders()) != 9 {
+		t.Fatal("concurrent edits lost endpoints")
+	}
+	if err := set(first, "fake-delete-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyLocalEndpoint(opts, LocalEndpointChange{Op: OpRemove, Name: "desk"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "fake-delete-key") {
+		t.Fatal("removed endpoint key persisted")
+	}
+}
+
+func TestLocalEndpointMutationRejectsSensitiveInput(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "credentials.json"))
+	for _, change := range []LocalEndpointChange{
+		{Op: OpSet, Name: "desk", BaseURL: "http://secret:password@example.invalid", Kind: "ollama"},
+		{Op: OpSet, Name: "desk", BaseURL: "http://example.invalid", Kind: "ollama", Key: NewSecret("secret with whitespace")},
+		{Op: OpRemove, Name: "secret/name"},
+	} {
+		if _, err := store.ApplyLocalEndpoint(wsconfig.Options{ConfigHome: t.TempDir()}, change); !errors.Is(err, ErrInvalidEndpoint) {
+			t.Fatalf("error = %v", err)
+		}
+	}
+}
+
+func TestLocalEndpointConfigWriteFailurePreservesCurrentKey(t *testing.T) {
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	store := NewStore(filepath.Join(t.TempDir(), "credentials.json"))
+	change := LocalEndpointChange{Op: OpSet, Name: "desk", BaseURL: "http://example.invalid/one", Kind: "ollama", Key: NewSecret("fake-preserved-key")}
+	if _, err := store.ApplyLocalEndpoint(opts, change); err != nil {
+		t.Fatal(err)
+	}
+	configPath, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the config writer's lock open to fail, while reads remain valid.
+	if err := os.Remove(configPath + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-parent", "lock"), configPath+".lock"); err != nil {
+		t.Skipf("symlink failure fixture unavailable: %v", err)
+	}
+	change.BaseURL = "http://example.invalid/two"
+	change.Key = NewSecret("")
+	if _, err := store.ApplyLocalEndpoint(opts, change); err == nil {
+		t.Fatal("expected config write failure")
+	}
+	credential, err := store.Credential(context.Background(), Request{Provider: "local/desk", BaseURL: "http://example.invalid/one"})
+	if err != nil || credential.Secret.Reveal() != "fake-preserved-key" {
+		t.Fatalf("config write failure lost current key: %v", err)
+	}
+	if err := os.Remove(configPath + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyLocalEndpoint(opts, change); err != nil {
+		t.Fatal(err)
+	}
 }

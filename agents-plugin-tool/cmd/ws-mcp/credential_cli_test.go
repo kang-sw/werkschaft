@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
@@ -254,5 +255,35 @@ func TestCredentialCLIShowMovesTheCandidateFile(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(credPath); err != nil || string(raw) != body {
 		t.Fatalf("the moved file = %q, %v", raw, err)
+	}
+}
+
+func TestCredentialCLIEndpointEdits(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv(wsconfig.EnvConfigHome, configHome)
+	cache := t.TempDir()
+	out, stderr, code := runCredentialCLI(t, nil, cache, "", "credential", "endpoint", "set", "desk", "--base-url", "http://example.invalid/v1", "--kind", "ollama")
+	if code != 0 || out != "Endpoint updated.\n" {
+		t.Fatalf("set: %d %q %q", code, out, stderr)
+	}
+	values, err := wsconfig.GlobalOverrides(wsconfig.Options{ConfigHome: configHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints, err := wsconfig.ParseWerkEndpoints(values[wsconfig.ItemWerkEndpoints])
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("endpoints: %v %v", endpoints, err)
+	}
+	_, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "endpoint", "remove", "desk")
+	if code != 0 {
+		t.Fatalf("remove: %d %q", code, stderr)
+	}
+	values, err = wsconfig.GlobalOverrides(wsconfig.Options{ConfigHome: configHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints, err = wsconfig.ParseWerkEndpoints(values[wsconfig.ItemWerkEndpoints])
+	if err != nil || len(endpoints) != 0 {
+		t.Fatalf("endpoints after removal: %v %v", endpoints, err)
 	}
 }

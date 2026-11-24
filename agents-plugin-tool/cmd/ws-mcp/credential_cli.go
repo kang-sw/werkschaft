@@ -25,11 +25,14 @@ const maxCredentialInput = 64 << 10
 // the change to the running daemon (single-writer rule). The key is read
 // from stdin only and is never printed.
 func (c *hostedCLI) credentialCommand(args []string) int {
-	const usage = "usage: ws-mcp credential <set|remove|show|sign-in> [<provider>] [--format json]"
+	const usage = "usage: ws-mcp credential <set|remove|show|sign-in|endpoint> [<provider>] [--format json]"
 	if len(args) == 0 {
 		return c.failed("credential", errors.New(usage))
 	}
 	sub := args[0]
+	if sub == "endpoint" {
+		return c.credentialEndpoint(args[1:])
+	}
 	if sub == "sign-in" {
 		return c.credentialSignIn(args[1:])
 	}
@@ -317,4 +320,44 @@ func displayOpenAIAccountStatus(out io.Writer, accounts []wscred.OpenAIAccountSt
 		}
 		fmt.Fprintf(out, "openai (OpenAI): %q, %s\n", account.ClientID, state)
 	}
+}
+
+func (c *hostedCLI) credentialEndpoint(args []string) int {
+	const name = "credential endpoint"
+	const usage = "usage: ws-mcp credential endpoint <set|remove> <name> [--base-url <url> --kind vllm|ollama]"
+	if len(args) < 2 || (args[0] != "set" && args[0] != "remove") {
+		return c.failed(name, errors.New(usage))
+	}
+	change := wscred.LocalEndpointChange{Op: wscred.ChangeOp(args[0]), Name: args[1]}
+	fs := c.flags(name)
+	baseURL := fs.String("base-url", "", "API root")
+	kind := fs.String("kind", "", "vllm or ollama")
+	format := fs.String("format", "text", "output format")
+	if err := fs.Parse(args[2:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || (change.Op == wscred.OpRemove && (*baseURL != "" || *kind != "")) {
+		return c.failed(name, errors.New(usage))
+	}
+	change.BaseURL, change.Kind = *baseURL, *kind
+	opts := wsconfig.Options{ConfigHome: c.getenv(wsconfig.EnvConfigHome)}
+	var endpoints []wscred.LocalEndpointStatus
+	var err error
+	if c.host != nil {
+		if c.host.credentials == nil {
+			return c.failed(name, errors.New("credential store unavailable"))
+		}
+		endpoints, err = c.host.credentials.ApplyLocalEndpoint(opts, change)
+	} else {
+		dir, e := wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome))
+		if e != nil {
+			return c.failed(name, e)
+		}
+		path, e := c.credentialPath()
+		if e != nil {
+			return c.failed(name, e)
+		}
+		endpoints, err = wsdashboard.ApplyLocalEndpointChange(c.ctx, dir, path, opts, change)
+	}
+	return c.output(name, *format, endpoints, "Endpoint updated.\n", err)
 }
