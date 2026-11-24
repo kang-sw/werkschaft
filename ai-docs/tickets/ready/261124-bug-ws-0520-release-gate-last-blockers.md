@@ -247,3 +247,43 @@ daemon's safe-only admission.
 
 I8 through I14. Verify with the Board, Anchor and Gallery browser tests,
 the dashboard and whiteboard Node suites, and `TestBoardFrameBands`.
+
+### Result (e052a133e) - 2026-11-24
+
+- I8. The palette routes lazy replies to the topic's live or detached content
+  at arrival. Both directions have browser coverage.
+- I9. Closing the composer mention marks its former frame's topic dirty.
+  The next scroll reconciles the parked topic. Browser coverage presses
+  Escape in the visible editor. The Node test isolates the scroll from
+  unrelated layout changes.
+- I10. Sent-row updates and removals update the index through observers.
+  Conversation swaps replace only changed sent boxes in the index. Scoped
+  hydration reads indexed records, with browser coverage for the mutations
+  and unrelated row reads.
+- I11. Exact centered jumps read clearance again at the destination and
+  pin the corrected offset.
+- I12. A replacement jump cancels native smooth scrolling even when the
+  replacement lands at the current scroll offset.
+- I13. Chromium covers late frame heights after replacement, native scroll,
+  and target removal, alongside wheel and timeout release.
+- I14. `TestBoardFrameBands` runs the production function and exercises the
+  fullscreen retention selector through all three attributes in its mock.
+
+The implementation is in `b1136efb5`. The independent lite review found no
+issues in `bbcd42ec9..b1136efb5`. Commit `e052a133e` adds the isolated I9
+regression. I8–I12 regressions reproduced on the starting revision and
+passed with the repair.
+
+- `go test ./internal/wsdashboard -run TestBoardFrameBands` passed.
+- `go test ./internal/wsdashboard ./internal/wswhiteboard -run 'Test(BoardFrameBands|BoardPanelFullscreenBrowser|BoardSnapDeck0512Browser|BoardAnchorContracts|GalleryBrowser|HistoryLoadAnchorBrowser)$' -count=1` passed with cached Playwright and Chromium.
+- `go test ./internal/wswhiteboard -count=1` passed.
+- The dashboard and whiteboard Node suites passed 689 tests with
+  `composer-bang.test.cjs` excluded. The unfiltered run reproduced the four
+  known composer-bang failures. Its additional canvas assertion was updated
+  to verify the intended instant cancellation and passed on rerun.
+- The pooled checkout lacked `internal/wspackage/generated/inventory.json`
+  and the generated `ws/` and `wsflow/` package trees. The package generator
+  restored them locally and its `--check` passed.
+
+The route suggested renaming the explicitly assigned board branch. The
+ticket lease recorded the assigned branch, and all Phase 3 commits use it.
