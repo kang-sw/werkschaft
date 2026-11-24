@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -177,6 +178,19 @@ func (p *streamProcess) recordAuditEvent(key string, ev wsaudit.Envelope) {
 	if p != nil && p.audit != nil {
 		p.audit.synthetic(key, ev)
 	}
+}
+
+// auditCheckpointCommitter is implemented by a process whose audit capture can
+// durably commit an explicit compaction checkpoint before the process rotates.
+type auditCheckpointCommitter interface {
+	commitAuditCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error
+}
+
+func (p *streamProcess) commitAuditCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	if p == nil || p.audit == nil {
+		return nil
+	}
+	return p.audit.commitCheckpoint(ctx, id, ev)
 }
 
 // startStreamProcess starts cmd as the daemon's own child.

@@ -3202,6 +3202,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Запрещает переход в сон при простое, пока идёт ход агента (macOS и Windows). Отключение экрана и закрытие крышки работают как обычно.",
   "js.settings.key.agent.git_search_roots.label": "Дополнительные пути поиска Git",
   "js.settings.key.agent.git_search_roots.description": "Абсолютные каталоги, которые размещённые агенты могут читать через поиск Git.",
+  "js.settings.key.compaction.lead_mode.label": "Режим сжатия ведущего",
+  "js.settings.key.compaction.lead_mode.description": "Определяет, используют ли размещённые ведущие встроенное сжатие среды (native) или управляемые ws контрольные точки с ротацией сессии (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Порог рекомендации сжатия ведущему",
   "js.settings.key.compaction.lead_advisory.description": "Объём контекста, при котором ведущему рекомендуют сжать его на безопасной границе.",
   "js.settings.key.compaction.lead_hard.label": "Порог принудительного сжатия ведущего",

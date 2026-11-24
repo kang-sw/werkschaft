@@ -60,6 +60,11 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		if rule.Compaction {
 			rule.LegacyKey = func(harness string) string { return wsagent.BuiltinCompaction(harness).LegacyKey(entry.Key) }
 		}
+		if entry.Key == wsconfig.ItemCompactionLeadMode {
+			rule.ValidateHarnessValue = func(harness, value string) error {
+				return validateCompactionLeadModeTarget(entry.Key, harness, value)
+			}
+		}
 		if entry.Key == wsconfig.ItemAgentTierRouting {
 			// The one exact-key structured setting: no name part, validated as
 			// a whole graph against the package's roles and the built-in

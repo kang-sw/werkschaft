@@ -8,10 +8,20 @@ import (
 	"strings"
 )
 
+const (
+	// ItemCompactionLeadMode selects whether hosted leads use native or ws-managed compaction.
+	ItemCompactionLeadMode = "compaction.lead_mode"
+	CompactionModeNative   = "native"
+	CompactionModeWS       = "ws"
+)
+
 // CompactionDefaults are shared by every hosted harness and both readers.
 var CompactionDefaults = map[string]string{
-	"compaction.lead_advisory": "50%", "compaction.lead_hard": "80%",
-	"compaction.worker_advisory": "50%", "compaction.worker_hard": "80%",
+	ItemCompactionLeadMode:       CompactionModeNative,
+	"compaction.lead_advisory":   "50%",
+	"compaction.lead_hard":       "80%",
+	"compaction.worker_advisory": "50%",
+	"compaction.worker_hard":     "80%",
 }
 
 // ThresholdPattern is the existing percent/token/whichever-first grammar.

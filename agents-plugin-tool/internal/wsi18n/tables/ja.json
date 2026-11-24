@@ -3202,6 +3202,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "エージェントのターン実行中はアイドル時のシステムスリープを防ぎます（macOS と Windows）。画面のスリープと蓋を閉じた場合は従来どおりです。",
   "js.settings.key.agent.git_search_roots.label": "Git の追加検索先",
   "js.settings.key.agent.git_search_roots.description": "ホスト型エージェントが Git 検索で読める絶対パスを指定します。",
+  "js.settings.key.compaction.lead_mode.label": "リード圧縮モード",
+  "js.settings.key.compaction.lead_mode.description": "ホストされたリードセッションでハーネス固有の圧縮（native）を使うか、ws管理のチェックポイントとセッションローテーション（ws）を使うかを選択します。",
   "js.settings.key.compaction.lead_advisory.label": "リード圧縮の勧告しきい値",
   "js.settings.key.compaction.lead_advisory.description": "安全な区切りで圧縮を勧めるコンテキスト使用量です。",
   "js.settings.key.compaction.lead_hard.label": "リード強制圧縮のしきい値",

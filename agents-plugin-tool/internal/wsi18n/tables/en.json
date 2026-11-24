@@ -3202,6 +3202,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Prevent idle system sleep while any agent turn runs (macOS and Windows). Display sleep and closing the lid still apply.",
   "js.settings.key.agent.git_search_roots.label": "Additional Git search roots",
   "js.settings.key.agent.git_search_roots.description": "Absolute directories that hosted agents may read through Git search.",
+  "js.settings.key.compaction.lead_mode.label": "Lead compaction mode",
+  "js.settings.key.compaction.lead_mode.description": "Whether hosted leads compact with the harness's native compaction (native) or ws-managed checkpoints and session rotation (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Lead compaction advisory threshold",
   "js.settings.key.compaction.lead_advisory.description": "Context usage at which the lead is advised to compact at a safe boundary.",
   "js.settings.key.compaction.lead_hard.label": "Lead hard compaction threshold",

@@ -140,6 +140,9 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
+	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// for a freshly started process that already received composed instructions.
+	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
 	// (Compacting, Compactions, CompactOrigin) under mu, as the loop-owned
 	// fields above are not readable there.
@@ -152,6 +155,7 @@ type conv struct {
 	compactInternalTurn, compactResumeInternal bool
 
 	compactAdvisory, compactHard                                                                                   wsconfig.Threshold
+	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64
 	compactGen                                                                                                     uint64
@@ -161,6 +165,7 @@ type conv struct {
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
+	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -2009,6 +2014,21 @@ func (c *conv) kickInput() {
 		return
 	}
 	cmd, parts, rest := nextTurn(queue)
+	if !durable && cmd != nil && cmd.Name == "compact" {
+		c.refreshCompaction()
+		if c.wsManagedLeadCompaction() {
+			c.update(func(rec *Record) {
+				rec.Queued = rest
+				rec.Drained, rec.Voided = c.drained, c.voided
+			})
+			if c.compactPending == nil && !c.compacting && !c.compactCommand && !c.compactStage1Active {
+				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, stage1: true}
+				c.publishCompaction(false)
+			}
+			c.compactIdle()
+			return
+		}
+	}
 	if cmd != nil {
 		mail, reports = nil, nil
 	}

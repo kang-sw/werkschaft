@@ -556,6 +556,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if err != nil {
 				return toolTextResponse(req.ID, "", err)
 			}
+			if err := validateCompactionLeadModeTarget(entry.Key, harness, value, s.agentBackends()...); err != nil {
+				return toolTextResponse(req.ID, "", err)
+			}
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
 			if err := resolver.Set(storeKey, value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))

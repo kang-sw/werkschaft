@@ -262,6 +262,7 @@ const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep whil
 // family is not represented here — it is generated per discovered override
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
 var configRegistry = []configKeyEntry{
+	compactionLeadModeEntry(),
 	compactionKeyEntry("compaction.lead_advisory"),
 	compactionKeyEntry("compaction.lead_hard"),
 	compactionKeyEntry("compaction.worker_advisory"),
