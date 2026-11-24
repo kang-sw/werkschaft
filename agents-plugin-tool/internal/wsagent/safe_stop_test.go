@@ -324,6 +324,11 @@ func TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow(t *testing.T) {
 func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 	t.Helper()
 	h, _ := configureHeldWorkerHarness(t)
+	mail, refusals := newFakeMail(), &wakeRefusals{}
+	if restart {
+		h.opts.Mail = mail
+		h.opts.WakeRefused = refusals.add
+	}
 	worktree, err := filepath.EvalSymlinks(releaseTestWorktree(t, h.root))
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +402,17 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 		return st.ID, holder
 	}
 	middleID, middleHolder := spawn(lead, worktree, "middle")
+	middleKey := h.record(middleID).WSKey
 	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
+	assertHolderRunning := func(when string) {
+		t.Helper()
+		for _, holder := range h.holders.List().Holders {
+			if holder.ID == middleHolder && holder.Child != nil && holder.Child.State == "running" {
+				return
+			}
+		}
+		t.Errorf("released worker's holder is no longer running %s", when)
+	}
 	if st := h.state(leadID); !st.Process || st.SafeStop {
 		t.Fatalf("lead before checkout release = %+v, want a process and unsafe Stop", st)
 	}
@@ -443,13 +458,7 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 		}
 	}
 	if restart {
-		alive := false
-		for _, holder := range h.holders.List().Holders {
-			alive = alive || holder.ID == middleHolder && holder.Child != nil && holder.Child.State == "running"
-		}
-		if !alive {
-			t.Fatal("released worker's holder must still be running before deletion")
-		}
+		assertHolderRunning("before deletion")
 	}
 
 	stop := func() reply {
@@ -500,6 +509,13 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 		}
 		if c := h.runner.conv(middleID); c != nil {
 			t.Errorf("released worker rejoined after checkout deletion under holder %s", c.record().HolderID)
+		}
+		wait(t, "successor holder sweep", h.runner.rejoined)
+		assertHolderRunning("after the replacement daemon's holder sweep")
+		mail.deliverFrom(middleKey, leadID, "mail for the released worker")
+		h.runner.DrainDeadBindingMail(middleID)
+		if got := refusals.list(); len(got) != 1 || got[0][0] != leadID || got[0][1] != middleID || !strings.Contains(got[0][2], worktree) {
+			t.Errorf("mail after replacement produced notices %v, want a release refusal naming %s", got, worktree)
 		}
 		checkTree(h.runner)
 		return
