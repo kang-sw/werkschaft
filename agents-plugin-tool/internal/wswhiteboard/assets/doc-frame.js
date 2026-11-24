@@ -335,11 +335,14 @@
   });
   // Like the session document, leave editing, terminal and IME input native.
   d.addEventListener("keydown", function (e) {
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key || "").toLowerCase() !== "q") return;
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    var k = (e.key || "").toLowerCase();
+    var kind = k === "q" ? "overview" : k === "g" ? "git" : k === "b" ? "ticketmap" : k === "e" ? "files" : "";
+    if (!kind) return;
     var t = e.target;
     if (t && (t.isContentEditable || (t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=\"false\"]), .xterm, .tm-host")))) return;
     e.preventDefault();
-    post({ wbDoc: "overview" });
+    post({ wbDoc: kind });
   });
   // Ctrl/Cmd+F inside a framed card opens the host's in-card find bar.
   d.addEventListener("keydown", function (e) {

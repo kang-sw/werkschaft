@@ -565,9 +565,9 @@
       // it alone, with no user key press, opens nothing.
       var sa = navigator.userActivation;
       if (!sa || sa.isActive) tkSearch();
-    } else if (m.wbDoc === "overview") {
-      var oa = navigator.userActivation, b = !shHidden && overviewButton(doc);
-      if (b && (!oa || oa.isActive)) b.click();
+    } else if (m.wbDoc === "overview" || m.wbDoc === "git" || m.wbDoc === "ticketmap" || m.wbDoc === "files") {
+      var oa = navigator.userActivation;
+      if (!shHidden && (!oa || oa.isActive)) runGlobalShortcut(m.wbDoc);
     } else if (m.wbDoc === "find-open") {
       var fa = navigator.userActivation;
       if ((!fa || fa.isActive) && window.wbCardFind && window.wbCardFind.openFor) window.wbCardFind.openFor(f);

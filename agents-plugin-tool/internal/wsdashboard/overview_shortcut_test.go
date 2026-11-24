@@ -58,3 +58,7 @@ check("unavailable frame", fire(), [false, 0, 0]);
 process.stdout.write(bad.join("\n"));
 `)
 }
+
+func TestDashboardGlobalShortcuts(t *testing.T) {
+	runNodeTestSuite(t, "testdata/global-shortcuts.test.cjs")
+}
