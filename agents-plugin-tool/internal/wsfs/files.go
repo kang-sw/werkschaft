@@ -190,11 +190,7 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("%s is a binary file", a.Path)
 	}
 	orig := string(data)
-	crlf := strings.Contains(orig, "\r\n")
-	text := orig
-	if crlf {
-		text = strings.ReplaceAll(orig, "\r\n", "\n")
-	}
+	text, crlfOffsets := editMatchText(orig)
 	type span struct{ start, end int }
 	spans := make([]span, len(a.Edits))
 	for i, e := range a.Edits {
@@ -202,7 +198,7 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 			return "", fmt.Errorf("edit %d: newText is required", i+1)
 		}
 		old := e.Old
-		if crlf {
+		if len(crlfOffsets) != 0 {
 			old = strings.ReplaceAll(old, "\r\n", "\n")
 		}
 		if old == "" {
@@ -230,20 +226,25 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	var out strings.Builder
 	last := 0
 	for _, i := range order {
-		out.WriteString(text[last:spans[i].start])
-		new := *a.Edits[i].New
-		if crlf {
-			new = strings.ReplaceAll(new, "\r\n", "\n")
+		match := spans[i]
+		start := match.start + sort.SearchInts(crlfOffsets, match.start)
+		end := match.end + sort.SearchInts(crlfOffsets, match.end)
+		out.WriteString(orig[last:start])
+		replacement := *a.Edits[i].New
+		if len(crlfOffsets) != 0 {
+			replacement = strings.ReplaceAll(replacement, "\r\n", "\n")
+			if replacement == text[match.start:match.end] {
+				replacement = orig[start:end]
+			} else if editLineUsesCRLF(orig, start) {
+				replacement = strings.ReplaceAll(replacement, "\n", "\r\n")
+			}
 		}
-		out.WriteString(new)
-		last = spans[i].end
+		out.WriteString(replacement)
+		last = end
 	}
-	out.WriteString(text[last:])
+	out.WriteString(orig[last:])
 	result := out.String()
-	diff := unifiedDiff(a.Path, text, result)
-	if crlf {
-		result = strings.ReplaceAll(result, "\n", "\r\n")
-	}
+	diff := unifiedDiff(a.Path, orig, result)
 	if err := f.commitFile(ctx, target, prior, []byte(result)); err != nil {
 		return "", err
 	}
@@ -251,6 +252,38 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 		return fmt.Sprintf("edited %s (no change)", a.Path), nil
 	}
 	return diff, nil
+}
+
+// editMatchText normalizes CRLF for matching and records each removed CR at
+// its corresponding LF's offset in the normalized text. The number of removed
+// CRs strictly before a match boundary maps it back to the original bytes.
+func editMatchText(orig string) (string, []int) {
+	var offsets []int
+	for start := 0; ; {
+		index := strings.Index(orig[start:], "\r\n")
+		if index < 0 {
+			break
+		}
+		index += start
+		offsets = append(offsets, index-len(offsets))
+		start = index + 2
+	}
+	if len(offsets) == 0 {
+		return orig, nil
+	}
+	return strings.ReplaceAll(orig, "\r\n", "\n"), offsets
+}
+
+// New lines use the edited line's terminator, or the preceding one for an
+// unterminated last line.
+func editLineUsesCRLF(orig string, start int) bool {
+	end := strings.IndexByte(orig[start:], '\n')
+	if end >= 0 {
+		end += start
+	} else {
+		end = strings.LastIndexByte(orig[:start], '\n')
+	}
+	return end > 0 && orig[end-1] == '\r'
 }
 
 func countMatches(text, match string) int {
