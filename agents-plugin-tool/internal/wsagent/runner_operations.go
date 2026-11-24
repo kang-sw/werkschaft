@@ -510,25 +510,51 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // fails the close (errHolderNotEnded); a descendant that does stops the
 // cascade before its ancestors close, so closing id again retries it.
 func (r *Runner) CloseConversation(id string) (State, error) {
+	st, _, err := r.closeConversation(id, false)
+	return st, err
+}
+
+// closeConversation returns the deepest-first order on success, or a nil
+// order if the expiry is deferred or the cascade fails.
+func (r *Runner) closeConversation(id string, expiry bool) (State, []string, error) {
 	// The jobs a predecessor left are known only once bound: a close
 	// before that would close over jobs it cannot stop. The wait holds no
 	// lock.
 	if err := r.awaitExecBound(); err != nil {
-		return State{}, fmt.Errorf("close %s: %w", id, err)
+		return State{}, nil, fmt.Errorf("close %s: %w", id, err)
 	}
 	r.resumeMu.Lock()
 	defer r.resumeMu.Unlock()
 	if _, err := r.open(id); err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
-	descendants := r.descendants(id)
+	var descendants []string
+	if expiry {
+		// Close exactly the descendants whose ancestry and quiet state
+		// allowed expiry. A fresh open-only walk could lose a released bridge.
+		var quiet bool
+		descendants, quiet = r.liveExpiryDescendants(safeStopParent(id, false))
+		if !quiet {
+			return State{}, nil, nil
+		}
+	} else {
+		descendants = r.descendants(id)
+	}
+	order := append(descendants, id)
+	st, err := r.closeCascade(id, order)
+	if err != nil {
+		return st, nil, err
+	}
+	return st, order, nil
+}
+
+func (r *Runner) closeCascade(id string, order []string) (State, error) {
 	// New exec jobs are refused before anything closes; each conversation's
 	// jobs end (whole process groups, no notice) before it closes, deepest
 	// first. A job that does not stop keeps its conversation and every
 	// ancestor of it open, and lifts their fences: nothing closes over a
 	// job that may still run. A conversation whose close fails keeps
 	// running, so it may own jobs again.
-	order := append(slices.Clone(descendants), id)
 	r.fenceExec(order)
 	for i, d := range order {
 		if err := r.stopExec(d); err != nil {
