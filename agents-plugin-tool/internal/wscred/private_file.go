@@ -16,10 +16,45 @@ func GenerationPaths(path string) (current, retiring, staged string) {
 	return path, path + ".retiring", path + ".staged"
 }
 
-// OpenCredentialFile opens a credential generation for inspection.
+// OpenCredentialFile opens a credential generation without following its final link.
 // On Windows the handle permits concurrent reads, writes, and replacement.
 func OpenCredentialFile(path string) (*os.File, error) {
-	return openCredentialFile(path, false)
+	return openCredentialFile(path, false, false)
+}
+
+// OpenCredentialFileForRead follows a committed credential name to a regular
+// file and verifies its identity against the opened handle. A missing name
+// returns nil values. An existing link with a missing target returns an error.
+func OpenCredentialFileForRead(path string) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if CredentialNameIsLink(before) {
+		before, err = os.Stat(path)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if !before.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("credential target is not a regular file")
+	}
+	file, err := openCredentialFile(path, false, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := regularCredentialIdentity(file)
+	if err == nil && !os.SameFile(before, info) {
+		err = fmt.Errorf("credential target changed while opening")
+	}
+	if err != nil {
+		file.Close()
+		return nil, nil, err
+	}
+	return file, info, nil
 }
 
 type credentialWriteStep int
@@ -100,7 +135,7 @@ func writePrivateFile(path string, data []byte, replace func(string, string) err
 }
 
 func openCredentialForScrub(path string) (*os.File, error) {
-	file, err := openCredentialFile(path, true)
+	file, err := openCredentialFile(path, true, false)
 	if err != nil {
 		return nil, err
 	}

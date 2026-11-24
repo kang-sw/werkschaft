@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,19 +13,19 @@ import (
 )
 
 func providerCredentialBases(cacheHome string) []string {
-	dirs, files := providerCredentialPaths(cacheHome)
+	dirs, files, _ := providerCredentialPaths(cacheHome)
 	return append(dirs, files...)
 }
 
-func providerCredentialPaths(cacheHome string) (dirs, files []string) {
+func providerCredentialPaths(cacheHome string) (dirs, files []string, err error) {
 	path, err := wscred.DefaultPath(cacheHome)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	current := filepath.Dir(path)
 	legacy := filepath.Join(filepath.Dir(filepath.Dir(current)), filepath.Base(current))
 	committed, retiring, staged := wscred.GenerationPaths(path)
-	return []string{current, legacy}, []string{committed, retiring, staged, filepath.Join(legacy, wscred.FileName)}
+	return []string{current, legacy}, []string{committed, retiring, staged, filepath.Join(legacy, wscred.FileName)}, nil
 }
 
 var errProviderCredentialPath = errors.New("the provider credential store is protected")
@@ -34,27 +35,44 @@ var errProviderCredentialPath = errors.New("the provider credential store is pro
 type ProviderCredentialProtection struct {
 	deny            *denySet
 	credentialFiles []string
+	identityErr     error
 }
 
 func NewProviderCredentialProtection() *ProviderCredentialProtection {
 	deny := &denySet{loaded: true}
-	bases, files := providerCredentialPaths("")
+	bases, files, err := providerCredentialPaths("")
+	p := &ProviderCredentialProtection{deny: deny, identityErr: err}
 	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
-		homeDirs, homeFiles := providerCredentialPaths(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
+		homeDirs, homeFiles, homeErr := providerCredentialPaths(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
+		if homeErr != nil && p.identityErr == nil {
+			p.identityErr = homeErr
+		}
 		bases = append(bases, homeDirs...)
 		files = append(files, homeFiles...)
 	}
-	p := &ProviderCredentialProtection{deny: deny}
 	fileSet := make(map[string]bool)
 	for _, path := range files {
 		if !fileSet[path] {
 			p.credentialFiles = append(p.credentialFiles, path)
 			fileSet[path] = true
+			if (networkPath(path) || deviceElement(path)) && p.identityErr == nil {
+				p.identityErr = errors.New("credential location is not a local file path")
+			}
 		}
 	}
 	deny.stat = func(path string) (os.FileInfo, error) {
 		if !fileSet[path] {
 			return os.Stat(path)
+		}
+		if filepath.Base(path) == wscred.FileName {
+			file, info, err := wscred.OpenCredentialFileForRead(path)
+			if err != nil && p.identityErr == nil {
+				p.identityErr = err
+			}
+			if file != nil {
+				_ = file.Close()
+			}
+			return info, err
 		}
 		file, err := wscred.OpenCredentialFile(path)
 		if err != nil {
@@ -92,43 +110,81 @@ func (p *ProviderCredentialProtection) CheckPath(path string) error {
 	if identities := p.deny.identities(); len(identities) > 0 && p.deny.aboveDenied(filepath.Clean(path), identities) {
 		return errProviderCredentialPath
 	}
-	return nil
+	return p.checkIdentityError()
 }
 
 func (p *ProviderCredentialProtection) CheckOpened(info os.FileInfo) error {
 	if p.deny.opened(info) {
 		return errProviderCredentialPath
 	}
+	return p.checkIdentityError()
+}
+
+func (p *ProviderCredentialProtection) checkIdentityError() error {
+	if p.identityErr != nil {
+		return fmt.Errorf("cannot verify provider credential identity: %w", p.identityErr)
+	}
 	return nil
 }
 
-// HasLinkedCredentialFiles inspects only the store's regular credential
-// generations, including the link held while the previous generation retires.
-func (p *ProviderCredentialProtection) HasLinkedCredentialFiles() (bool, error) {
+// CheckGitWorktreeCredentials checks for links Git's own worktree reads
+// could follow, including links to a generation being retired.
+func (p *ProviderCredentialProtection) CheckGitWorktreeCredentials() error {
+	unverified := errors.New("cannot verify provider credential hard links before reading the worktree; retry when the credential store is accessible")
+	if p.identityErr != nil {
+		return unverified
+	}
 	for _, path := range p.credentialFiles {
-		if networkPath(path) || deviceElement(path) {
-			return false, errProviderCredentialPath
+		linked, err := providerCredentialLinkType(path)
+		if err != nil {
+			return unverified
 		}
-		linked, err := providerCredentialHasMultipleLinks(path)
-		if linked || err != nil {
-			return linked, err
+		switch linked {
+		case credentialNameLink:
+			return errors.New("worktree search refused because a provider credential filename is a symbolic link or reparse point; restore a regular credential file, then retry")
+		case credentialHardLink:
+			return errors.New("worktree search refused because a provider credential file has an extra hard link; remove the extra link while keeping the store's file, then retry")
 		}
 	}
-	return false, nil
+	return nil
 }
 
-func providerCredentialHasMultipleLinks(path string) (bool, error) {
-	file, err := wscred.OpenCredentialFile(path)
+type credentialLinkType int
+
+const (
+	credentialNoLink credentialLinkType = iota
+	credentialNameLink
+	credentialHardLink
+)
+
+func providerCredentialLinkType(path string) (credentialLinkType, error) {
+	name, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return credentialNoLink, nil
 	}
 	if err != nil {
-		return false, err
+		return credentialNoLink, err
+	}
+	if wscred.CredentialNameIsLink(name) {
+		return credentialNameLink, nil
+	}
+	file, err := wscred.OpenCredentialFile(path)
+	if err != nil {
+		return credentialNoLink, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return false, err
+	if err != nil {
+		return credentialNoLink, err
 	}
-	return wsfs.HasMultipleLinks(file, info)
+	if wscred.CredentialNameIsLink(info) {
+		return credentialNameLink, nil
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(name, info) {
+		return credentialNoLink, errors.New("credential file identity could not be verified")
+	}
+	if linked, err := wsfs.HasMultipleLinks(file, info); linked || err != nil {
+		return credentialHardLink, err
+	}
+	return credentialNoLink, nil
 }

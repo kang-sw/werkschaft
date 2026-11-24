@@ -8,6 +8,9 @@ import (
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
+// CredentialNameIsLink checks a credential name for a symbolic link.
+func CredentialNameIsLink(info os.FileInfo) bool { return info.Mode()&os.ModeSymlink != 0 }
+
 // restrictFile makes the still-empty temp file f mode 0600 (creation
 // already does; this states it rather than relying on that).
 func restrictFile(f *os.File, _ string) error { return f.Chmod(0o600) }
