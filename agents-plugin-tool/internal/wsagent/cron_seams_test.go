@@ -717,3 +717,93 @@ func TestWerkCronSteeringRecoversClaimAfterConsentRevocation(t *testing.T) {
 		})
 	}
 }
+
+func TestWerkCronIdleBatchRecoversClaimAfterConsentRevocation(t *testing.T) {
+	for _, authorized := range []bool{true, false} {
+		t.Run(fmt.Sprintf("authorized=%t", authorized), func(t *testing.T) {
+			requests := make(chan cronModelRequest, 4)
+			var consent, restarting atomic.Bool
+			consent.Store(true)
+			const operator = "operator waiting at restart"
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+				func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+					requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+					return werkMessage("completed")(ctx, req)
+				},
+			}}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
+			h.opts.beforeDurableWrite = func(rec Record) error {
+				if !restarting.Load() && len(rec.DurableInboxClaims) > 0 && len(rec.Queued) > 0 {
+					return errors.New("simulated interruption before committing the idle batch")
+				}
+				return nil
+			}
+			h.runner.Close()
+			fleet.start(h)
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+			c := h.runner.conv(id)
+			if authorized {
+				var scheduled bool
+				var cronErr, sendErr error
+				c.do(func() {
+					scheduled, cronErr = h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt)
+					_, sendErr = h.runner.Send(id, operator)
+				})
+				if !scheduled || cronErr != nil || sendErr != nil {
+					t.Fatalf("enqueue batch: cron=%v, cron error=%v, operator error=%v", scheduled, cronErr, sendErr)
+				}
+				eventually(t, "idle claim commit interrupted", func() bool {
+					return strings.Contains(h.state(id).Error, "save queued input")
+				})
+				h.runner.Close()
+			} else {
+				h.runner.Close()
+				// Recreate the interrupted rename and a waiting operator entry.
+				_, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{
+					Parts: []string{cronConsentPrompt}, Cron: &cronConsentMark, Steer: true,
+				}, h.opts.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				held, err := wsinbox.Held(c.inbox)
+				if err != nil || len(held) != 1 {
+					t.Fatalf("held = %+v, %v", held, err)
+				}
+				if claims, err := wsinbox.ClaimInputs(c.inbox, held); err != nil || len(claims) != 1 {
+					t.Fatalf("claim = %+v, %v", claims, err)
+				}
+				if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{operator}, Operator: true}, h.opts.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			consent.Store(false)
+			restarting.Store(true)
+			fleet.start(h)
+			req := nextCronModelRequest(t, requests)
+			var count int
+			for _, item := range req.input {
+				count += strings.Count(string(item), cronConsentPrompt)
+			}
+			want := 0
+			if authorized {
+				want = 1
+			}
+			if !req.interactive || !req.contains(operator) || count != want {
+				t.Fatalf("recovered interactive=%v, operator=%v, scheduled count=%d, want %d", req.interactive, req.contains(operator), count, want)
+			}
+			if authorized {
+				h.idle(id)
+			} else {
+				waitForCronConsentRefusal(t, h, id)
+			}
+			drained, err := wsinbox.Drained(c.inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ticks := slices.DeleteFunc(drained, func(rec wsinbox.Record) bool { return !isCronInput(rec) })
+			if len(ticks) != 1 || model.requestCount() != 1 {
+				t.Fatalf("recovery delivered %d scheduled entries with %d model requests, want one of each", len(ticks), model.requestCount())
+			}
+		})
+	}
+}
