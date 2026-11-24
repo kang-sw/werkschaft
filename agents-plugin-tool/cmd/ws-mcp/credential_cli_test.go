@@ -274,6 +274,18 @@ func TestCredentialCLIEndpointEdits(t *testing.T) {
 	if err != nil || len(endpoints) != 1 {
 		t.Fatalf("endpoints: %v %v", endpoints, err)
 	}
+	if _, stderr, code = runCredentialCLI(t, nil, cache, credentialCLIFixtureKey, "credential", "set", "local/desk"); code != 0 {
+		t.Fatalf("set endpoint key: %d %q", code, stderr)
+	}
+	t.Setenv(wsconfig.EnvConfigHome, t.TempDir())
+	if _, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "show"); code != 0 {
+		t.Fatalf("show from another config home: %d %q", code, stderr)
+	}
+	t.Setenv(wsconfig.EnvConfigHome, configHome)
+	out, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "show", "local/desk")
+	if code != 0 || !strings.HasPrefix(out, "local/desk (desk): ...0001, updated ") {
+		t.Fatalf("show after alternate config read: %d %q %q", code, out, stderr)
+	}
 	_, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "endpoint", "remove", "desk")
 	if code != 0 {
 		t.Fatalf("remove: %d %q", code, stderr)

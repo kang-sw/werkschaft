@@ -13,9 +13,18 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
-// LoadLocalEndpoints replaces the machine-scoped endpoint registry. The
-// daemon calls it before recovery and on global configuration changes.
+// LoadLocalEndpoints reads the machine-scoped registry for a credential lookup.
 func (s *Store) LoadLocalEndpoints(opts wsconfig.Options) error {
+	return s.loadLocalEndpoints(opts, false)
+}
+
+// ReconcileLocalEndpoints loads the registry and prunes retired keys under the
+// daemon's credential writer ownership.
+func (s *Store) ReconcileLocalEndpoints(opts wsconfig.Options) error {
+	return s.loadLocalEndpoints(opts, true)
+}
+
+func (s *Store) loadLocalEndpoints(opts wsconfig.Options, reconcile bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -27,10 +36,14 @@ func (s *Store) LoadLocalEndpoints(opts wsconfig.Options) error {
 	if err != nil {
 		return err
 	}
-	return s.reconcileLocalEndpointsLocked(endpoints, nil)
+	if reconcile {
+		return s.reconcileLocalEndpointsLocked(endpoints, nil)
+	}
+	s.publishLocalEndpointsLocked(endpoints)
+	return nil
 }
 
-func (s *Store) reconcileLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint, change *LocalEndpointChange) error {
+func (s *Store) publishLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint) []Provider {
 	providers := make([]Provider, 0, len(endpoints))
 	for _, name := range slices.Sorted(maps.Keys(endpoints)) {
 		endpoint := endpoints[name]
@@ -45,8 +58,12 @@ func (s *Store) reconcileLocalEndpointsLocked(endpoints map[string]wsconfig.Werk
 	}) {
 		s.localRevision.Add(1)
 	}
-	// Recover against the configured endpoints during startup and global
-	// writes. Publish the routing even if credential cleanup must be retried.
+	return providers
+}
+
+func (s *Store) reconcileLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint, change *LocalEndpointChange) error {
+	// Keep routing current even if credential cleanup must be retried.
+	providers := s.publishLocalEndpointsLocked(endpoints)
 	if err := s.prepareWriteLocked(); err != nil {
 		return err
 	}

@@ -28,7 +28,7 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 		if err := resolver.Set(wsconfig.ItemWerkEndpoints, raw, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.LoadLocalEndpoints(opts); err != nil {
+		if err := store.ReconcileLocalEndpoints(opts); err != nil {
 			t.Fatal(err)
 		}
 	}
