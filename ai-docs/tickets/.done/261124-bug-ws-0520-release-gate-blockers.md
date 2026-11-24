@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 685e2fa8e26cd405
 sage-review-completeness-reviewed: 685e2fa8e26cd405
+completed: 2026-11-24
 ---
 
 # 0.52 release-gate blocker fixes (werk, Pi retirement, auth)
@@ -371,3 +372,8 @@ The release lead owns the re-review and ticket closure.
 | # | Title | Severity |
 |---|-------|----------|
 | 1 | Phase 2 lacks an explicit documentation acceptance check | minor |
+
+
+## Resolution (2026-11-24)
+
+Both phases landed and were verified on macOS and Windows at b067af333. The owner's live OpenRouter, OpenAI SIWC, and vLLM checks remain gates for the 0.52.0 publish, owned by the release lead. The git.search credential hard-link exposure is a separate finding outside this ticket.
