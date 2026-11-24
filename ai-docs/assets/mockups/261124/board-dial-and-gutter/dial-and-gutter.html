@@ -267,6 +267,11 @@
     box-shadow: inset 0 0 0 1px rgb(91 155 240 / .75);
   }
 
+  #bdg-mockup .bdg-leg-swatch.pad-z {
+    background: rgb(56 189 248 / .22);
+    box-shadow: inset 0 0 0 1px rgb(56 189 248 / .72);
+  }
+
   #bdg-mockup .bdg-leg-swatch.hit-z {
     background: rgb(224 168 74 / .24);
     box-shadow: inset 0 0 0 1px rgb(224 168 74 / .75);
@@ -287,7 +292,7 @@
     height: 610px;
     min-height: 480px;
     width: 100%;
-    overflow: hidden;
+    overflow: visible;
   }
 
   #bdg-mockup.bdg-dragging,
@@ -544,7 +549,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
   }
 
   #bdg-mockup .bdg-bcol {
@@ -662,7 +667,7 @@
     align-items: center;
     gap: 7px;
     min-height: 32px;
-    padding: 5px 24px 5px 12px;
+    padding: 5px 10px 5px 12px;
     background: var(--bdg-header);
     font-size: 12.5px;
     min-width: 0;
@@ -776,7 +781,7 @@
   }
 
   #bdg-mockup .bdg-card-body {
-    padding: 10px 24px 12px 12px;
+    padding: 10px 20px 12px 14px;
     font-size: 12.5px;
     color: color-mix(in srgb, var(--bdg-fg) 88%, var(--bdg-muted-fg));
     line-height: 1.5;
@@ -837,19 +842,58 @@
     opacity: 1;
   }
 
-  /* ===== Dial Overlay Guide Zone ===== */
-  #bdg-mockup .bdg-dial-guide {
+  /* #bcol right padding guide (4px in After, 26px in Before) */
+  #bdg-mockup .bdg-bcol-pad-guide {
     display: none;
     position: absolute;
     top: 44px;
     bottom: 10px;
+    right: 0;
+    width: var(--bdg-bcol-pr);
+    background: rgb(56 189 248 / .16);
+    box-shadow: inset 1px 0 0 rgb(56 189 248 / .72);
+    pointer-events: none;
+    z-index: 3;
+    transition: width .24s cubic-bezier(.22, 1, .36, 1);
+  }
+
+  #bdg-mockup[data-guides="on"] .bdg-bcol-pad-guide {
+    display: block;
+  }
+
+  #bdg-mockup .bdg-bcol-pad-lbl {
+    position: absolute;
+    bottom: 6px;
+    right: calc(100% + 6px);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgb(20 21 24 / .92);
+    color: #7dd3fc;
+    font: 700 9.5px/1.2 var(--bdg-mono);
+    white-space: nowrap;
+    box-shadow: 0 0 0 1px rgb(56 189 248 / .48);
+  }
+
+  /* ===== Dial Overlay Guide Zone ===== */
+  #bdg-mockup .bdg-dial-guide {
+    display: none;
+    position: absolute;
+    top: 50%;
+    height: 292px;
+    transform: translateY(-50%);
+    right: -4px;
+    width: 18px;
+    border-radius: 9px;
+    background: rgb(91 155 240 / .16);
+    box-shadow: inset 0 0 0 1px rgb(91 155 240 / .68);
+    pointer-events: none;
+    z-index: 7;
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-dial-guide {
     right: 2px;
     width: 22px;
     border-radius: 11px;
-    background: rgb(91 155 240 / .13);
-    box-shadow: inset 0 0 0 1px rgb(91 155 240 / .58);
-    pointer-events: none;
-    z-index: 3;
   }
 
   #bdg-mockup[data-guides="on"] .bdg-dial-guide {
@@ -858,8 +902,8 @@
 
   #bdg-mockup .bdg-dial-guide-lbl {
     position: absolute;
-    top: 6px;
-    right: 26px;
+    top: -22px;
+    right: 0;
     padding: 2px 6px;
     border-radius: 4px;
     background: rgb(20 21 24 / .92);
@@ -924,22 +968,27 @@
   #bdg-mockup .bdg-ldot[data-ask="1"][data-held="1"] .bdg-lpip { box-shadow: 0 0 0 2px var(--bdg-warn), 0 0 0 3.5px var(--bdg-primary); }
   #bdg-mockup .bdg-ldot:hover .bdg-lpip { opacity: 1; background: var(--bdg-primary); border-color: var(--bdg-primary); }
 
-  /* ===== AFTER MODE: Center-Locked Rotary Vernier Dial ===== */
+  /* ===== AFTER MODE: Center-Locked Rotary Vernier Dial =====
+     At rest: slim 18px frameless strip at right: -4px straddling #bcol's
+     4px right padding / card right edge (zero card inner padding change,
+     zero intrusion into 20px body text; .bp-edge keeps 4px beside + full
+     height above/below). On hover/scrub: right edge stays pinned at -4px
+     while the translucent dark capsule blooms smoothly leftward to 28px. */
   #bdg-mockup .bdg-dial-vernier {
     position: absolute;
-    right: 2px;
+    right: -4px;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 5;
+    z-index: 8;
     display: none;
-    width: 24px;
-    height: 300px;
-    border-radius: 12px;
+    width: 18px;
+    height: 292px;
+    border-radius: 9px;
     background: transparent;
     cursor: ns-resize;
     touch-action: none;
     user-select: none;
-    transition: background .16s ease, box-shadow .16s ease;
+    transition: width .16s cubic-bezier(.22, 1, .36, 1), border-radius .16s ease, background .16s ease, box-shadow .16s ease;
   }
 
   #bdg-mockup[data-mode="after"] .bdg-dial-vernier {
@@ -948,10 +997,25 @@
 
   #bdg-mockup .bdg-dial-vernier:hover,
   #bdg-mockup .bdg-dial-vernier[data-scrub="1"] {
-    background: rgb(20 21 24 / .74);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    box-shadow: inset 0 0 0 1px rgb(231 231 228 / .10), 0 4px 16px rgb(0 0 0 / .45);
+    width: 28px;
+    border-radius: 13px;
+    background: rgb(20 21 24 / .80);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: inset 0 0 0 1px rgb(231 231 228 / .12), 0 4px 18px rgb(0 0 0 / .50);
+  }
+
+  #bdg-mockup .bdg-dial-vernier:hover .bdg-reticle::before,
+  #bdg-mockup .bdg-dial-vernier[data-scrub="1"] .bdg-reticle::before {
+    inset: 1px 3px;
+    border-radius: 7px;
+  }
+
+  #bdg-mockup .bdg-dial-vernier:hover .bdg-reticle::after,
+  #bdg-mockup .bdg-dial-vernier[data-scrub="1"] .bdg-reticle::after {
+    right: 0;
+    width: 3px;
+    height: 12px;
   }
 
   /* Fixed center reticle at exact vertical center (y = 0) */
@@ -969,24 +1033,24 @@
   #bdg-mockup .bdg-reticle::before {
     content: "";
     position: absolute;
-    inset: 1px 2px;
-    border-radius: 7px;
-    background: color-mix(in srgb, var(--bdg-primary) 16%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-primary) 42%, transparent);
+    inset: 2px 1px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bdg-primary) 17%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-primary) 46%, transparent);
   }
 
   /* Crisp primary reticle tick on right rim */
   #bdg-mockup .bdg-reticle::after {
     content: "";
     position: absolute;
-    right: 0;
+    right: -1px;
     top: 50%;
-    width: 3px;
-    height: 12px;
+    width: 2.5px;
+    height: 11px;
     transform: translateY(-50%);
     border-radius: 999px;
     background: var(--bdg-primary);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--bdg-primary) 75%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--bdg-primary) 78%, transparent);
   }
 
   /* Masked viewport for the GPU-translated rotary strip */
@@ -1028,15 +1092,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
     transition: color .12s ease;
   }
 
   #bdg-mockup .bdg-vslot-ic svg {
-    width: 13px;
-    height: 13px;
+    width: 12px;
+    height: 12px;
     display: block;
     fill: none;
     stroke: currentColor;
@@ -1121,19 +1185,19 @@
 
   #bdg-mockup .bdg-vslot[data-vtier="3"] .bdg-vslot-tick {
     display: block;
-    width: 9px;
+    width: 7px;
     opacity: .56;
   }
 
   #bdg-mockup .bdg-vslot[data-vtier="4"] .bdg-vslot-tick {
     display: block;
-    width: 6px;
+    width: 5px;
     opacity: .38;
   }
 
   #bdg-mockup .bdg-vslot[data-vtier="5"] .bdg-vslot-tick {
     display: block;
-    width: 4px;
+    width: 3px;
     opacity: .24;
   }
 
@@ -1160,7 +1224,7 @@
   #bdg-mockup .bdg-tip {
     position: absolute;
     top: 0;
-    right: 34px;
+    right: 32px;
     z-index: 15;
     pointer-events: none;
     display: inline-flex;
@@ -1178,6 +1242,10 @@
     transform: translate3d(6px, 0, 0);
     transition: opacity .12s ease;
     will-change: transform, opacity;
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-tip {
+    right: 30px;
   }
 
   #bdg-mockup .bdg-tip[data-show="1"] {
@@ -1369,10 +1437,11 @@
 
 <!-- Margin / Hit-zone Legend (shown when guides ON) -->
 <div class="bdg-guide-legend">
-  <span class="bdg-leg-item"><span class="bdg-leg-swatch card-m"></span>카드 우측 내부 여백 (20px — 본문 텍스트 안전선)</span>
-  <span class="bdg-leg-item"><span class="bdg-leg-swatch dial-z"></span>다이얼 오버레이 존 (right: 2px, 폭 22px)</span>
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch card-m"></span>카드 우측 내부 여백 (20px — 기존 유지, 무변경)</span>
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch pad-z"></span>#bcol 우측 패딩 (4px / 이전 26px)</span>
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch dial-z"></span>다이얼 (폭 18px, right: -4px — 우측 경계 걸침)</span>
   <span class="bdg-leg-item"><span class="bdg-leg-swatch hit-z"></span>컬럼 리사이즈 히트 존 (.dcv-edge / .bp-edge)</span>
-  <span class="bdg-leg-note">텍스트 겹침 0px · .bp-edge 포인터 충돌 0px</span>
+  <span class="bdg-leg-note">카드 여백 변경 0px · 텍스트 겹침 0px · .bp-edge 충돌 없음</span>
 </div>
 
 <!-- Interactive 3-Column Mini-Workspace -->
@@ -1441,9 +1510,12 @@
       <div class="bdg-cards" data-cards></div>
     </div>
 
-    <!-- Margin Guide Highlight for Dial Zone -->
+    <!-- Margin Guide Highlights for #bcol Right Padding & Straddling Dial Zone -->
+    <div class="bdg-bcol-pad-guide" aria-hidden="true">
+      <span class="bdg-bcol-pad-lbl" data-pad-guide-lbl>#bcol pr: 4px</span>
+    </div>
     <div class="bdg-dial-guide" aria-hidden="true">
-      <span class="bdg-dial-guide-lbl">dial right:2px</span>
+      <span class="bdg-dial-guide-lbl" data-dial-guide-lbl>dial 18px (right:-4px)</span>
     </div>
 
     <!-- BEFORE: Old Static Dot Strip -->
@@ -1486,12 +1558,12 @@
           <div class="bdg-gal-kv"><span>대화 / 보드 / 갤러리</span><b data-gal-cols>—</b></div>
         </div>
         <div class="bdg-gal-box">
-          <span style="color:#a2a6ad">// (1580)=a · (1581)=a</span><br>
-          • 평상시 프레임 없는 투명 다이얼<br>
-          • 현재 카드 y=0 중앙 고정<br>
-          • GPU translate3d 회전<br>
-          • 스플리터 평상시 완전 비가시<br>
-          • hover/drag 시 2px #5b9bf0 라인
+          <span style="color:#a2a6ad">// (1580)=a · (1581)=a · 우측 경계 걸침</span><br>
+          • 카드 자체 여백 무변경 (20px 유지)<br>
+          • 평상시 18px (right:-4px, 우측 경계 걸침)<br>
+          • 호버 캡슐 시 우측 고정 + 좌측 28px 부드럽게 확장<br>
+          • .bp-edge 상하 전구간 + 우측 4px 상시 드래그<br>
+          • GPU translate3d 중앙 고정 회전
         </div>
       </div>
     </div>
@@ -1525,6 +1597,8 @@
   var splitBp = root.querySelector('[data-split="bp"]');
   var tagCv = root.querySelector("[data-split-tag-cv]");
   var tagBp = root.querySelector("[data-split-tag-bp]");
+  var padGuideLbl = root.querySelector("[data-pad-guide-lbl]");
+  var dialGuideLbl = root.querySelector("[data-dial-guide-lbl]");
 
   var mPad = root.querySelector("[data-m-pad]");
   var mGap = root.querySelector("[data-m-gap]");
@@ -1683,6 +1757,8 @@
     if (gCols) gCols.textContent = Math.round(convoW) + " / " + bw + " / " + Math.round(galW);
     if (tagCv) tagCv.textContent = isAfter ? "8px" : "16px";
     if (tagBp) tagBp.textContent = isAfter ? "8px" : "16px";
+    if (padGuideLbl) padGuideLbl.textContent = isAfter ? "#bcol pr: 4px" : "#bcol pr: 26px";
+    if (dialGuideLbl) dialGuideLbl.textContent = isAfter ? "dial 18px (right:-4px)" : "dial 22px (거터)";
   }
 
   function computeScrollPos() {
