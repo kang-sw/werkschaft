@@ -105,9 +105,17 @@ agents_md = re.sub(r"agents-plugin-wsflow/` \(`wsflow@[0-9]+\.[0-9]+\.[0-9]+`\)"
 write_text("AGENTS.md", agents_md)
 
 ws_mcp_ref = read_text("ai-docs/manuals/ws-mcp.md")
-ws_mcp_ref = re.sub(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag, ws_mcp_ref)
-ws_mcp_ref = re.sub(r"[0-9]+\.[0-9]+\.[0-9]+-dev", dev_version, ws_mcp_ref)
-ws_mcp_ref = re.sub(r"[0-9]+\.[0-9]+\.x", f"{major}.{minor}.x", ws_mcp_ref)
+# Only the launcher override and development examples track the current cut.
+ws_mcp_ref = re.sub(
+    r"(?m)^(\| `WS_MCP_RELEASE_TAG` \| Override the release tag from `runtime\.json`, for example `)v[0-9]+\.[0-9]+\.[0-9]+",
+    rf"\g<1>{release_tag}",
+    ws_mcp_ref,
+)
+ws_mcp_ref = re.sub(
+    r"(?m)^(documentation references\. Development binaries such as `|scripts/build-release-assets\.sh )[0-9]+\.[0-9]+\.[0-9]+-dev",
+    rf"\g<1>{dev_version}",
+    ws_mcp_ref,
+)
 write_text("ai-docs/manuals/ws-mcp.md", ws_mcp_ref)
 
 print(f"ws version set to {version}")
