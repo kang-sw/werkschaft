@@ -393,9 +393,13 @@ func TestWSManagedRotationFailurePreservesSessionIdentity(t *testing.T) {
 	if _, err := runner.Send(id, "wake after failed rotation"); err != nil {
 		t.Fatal(err)
 	}
-	waitWSCompact(t, "resumed old native session", func() bool {
-		starts, _, _ := b.snapshot()
-		return len(starts) == 2 && starts[1].SessionID == "keep-sid"
+	waitWSCompact(t, "prompt sent on the resumed native session", func() bool {
+		starts, _, procs := b.snapshot()
+		if len(starts) != 2 || starts[1].SessionID != "keep-sid" {
+			return false
+		}
+		sends, _ := procs[1].sent()
+		return len(sends) == 1
 	})
 	b.latest().events <- Event{TurnEnd: true}
 	waitWSCompact(t, "idle on previous native session", func() bool {
