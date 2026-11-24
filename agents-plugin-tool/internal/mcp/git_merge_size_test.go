@@ -131,8 +131,11 @@ func TestMergeSizeWarningRules(t *testing.T) {
 		if !ok || d.Code != code || d.Classification != "advisory" {
 			t.Fatalf("%s: want %s advisory, got %+v (all %+v)", file, code, d, r.Diagnostics)
 		}
-		if !strings.Contains(d.Resolution, "Do not split this file on your own") || !strings.Contains(d.Resolution, "Ask the user whether refactoring this project is permitted and whether to do it now") {
+		if !strings.Contains(d.Resolution, "Do not split this file on your own") || !strings.Contains(d.Resolution, "Ask the user to choose") {
 			t.Fatalf("%s: resolution lacks the ask-the-user instruction: %q", file, d.Resolution)
+		}
+		if !strings.Contains(d.Resolution, "refactor/split now") || !strings.Contains(d.Resolution, "ignore this warning for now") || !strings.Contains(d.Resolution, "make no .gitattributes change") {
+			t.Fatalf("%s: resolution lacks refactor or ignore-without-gitattributes options: %q", file, d.Resolution)
 		}
 		if !strings.Contains(d.Resolution, "/"+file+" ws-size-guard=100") || !strings.Contains(d.Resolution, "/"+file+" -ws-size-guard") {
 			t.Fatalf("%s: resolution lacks the .gitattributes lines: %q", file, d.Resolution)
