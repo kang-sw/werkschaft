@@ -64,6 +64,17 @@ type ObservedFoldSlot interface {
 	FoldsObserved()
 }
 
+// InProcessLiveSlot is optional on a HostedSlot. An in-process hosted runner
+// (wsagent) whose conversation loop runs in this daemon process calls
+// KeepAliveInProcess before its first Publish: while this slot owns the
+// session's in-memory snapshot and names a non-empty Adapter, the daemon keeps
+// that RAM copy live regardless of UpdatedAt age, with zero disk I/O, so a
+// slow runner operation (>90s) never flips the browser out of live mode.
+// Publishing an empty Adapter or closing the slot ends liveness immediately.
+type InProcessLiveSlot interface {
+	KeepAliveInProcess()
+}
+
 // LiveSlotOwner is optional: only a daemon-owned generation can admit summary
 // mutations and ring writes. Publish suppression alone cannot fence disk writes.
 // The release must run before Publish, RingAppended, or Close.
@@ -196,15 +207,19 @@ func (d *Daemon) OpenHostedSlot(sessionDir string) (HostedSlot, bool) {
 }
 
 type daemonLiveSlot struct {
-	d       *Daemon
-	replyID string
-	id      uint64
-	closed  atomic.Bool
-	folded  atomic.Bool // ObservedFoldSlot
+	d         *Daemon
+	replyID   string
+	id        uint64
+	closed    atomic.Bool
+	folded    atomic.Bool // ObservedFoldSlot
+	keepAlive atomic.Bool // InProcessLiveSlot
 }
 
 // FoldsObserved implements ObservedFoldSlot.
 func (s *daemonLiveSlot) FoldsObserved() { s.folded.Store(true) }
+
+// KeepAliveInProcess implements InProcessLiveSlot.
+func (s *daemonLiveSlot) KeepAliveInProcess() { s.keepAlive.Store(true) }
 
 // LockOwner holds this session's ownership mutex, not the daemon-wide mu,
 // through the caller's write: one session's stalled ring I/O blocks only a
@@ -224,6 +239,7 @@ func (s *daemonLiveSlot) LockOwner() (func(), bool) {
 
 func (s *daemonLiveSlot) Publish(snap wslive.Snapshot) {
 	d := s.d
+	snap.InProcessLive = s.keepAlive.Load() && snap.Adapter != ""
 	d.live.mu.Lock()
 	if s.closed.Load() || d.live.owners[s.replyID] != s.id {
 		d.live.mu.Unlock()
