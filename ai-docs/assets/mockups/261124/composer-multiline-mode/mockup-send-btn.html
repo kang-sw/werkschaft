@@ -1,0 +1,505 @@
+<style>
+.cm2-mock {
+  --bg: #141518;
+  --card: #1e2024;
+  --muted: #2b2d32;
+  --fg: #e7e7e4;
+  --muted-fg: #a2a6ad;
+  --primary: #7aa2ff;
+  --amber: #e0a84a;
+  --green: #6cc39a;
+  --line: rgba(231, 231, 228, 0.14);
+  --wash: rgba(231, 231, 228, 0.06);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cm2-mock * { box-sizing: border-box; }
+.cm2-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.cm2-sec-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm2-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.14);
+  color: var(--primary);
+}
+.cm2-tag.amber { background: rgba(224, 168, 74, 0.14); color: var(--amber); }
+.cm2-tag.muted { background: var(--wash); color: var(--muted-fg); }
+.cm2-sub { font-size: 11.5px; color: var(--muted-fg); line-height: 1.45; }
+
+.cm2-tabs {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--card);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.cm2-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted-fg);
+  font: 600 11px/1 var(--sans);
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cm2-tab.active {
+  background: rgba(122, 162, 255, 0.2);
+  color: #dbe8ff;
+}
+
+.cm2-composer {
+  position: relative;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.55), 0 8px 22px rgba(0,0,0,.4);
+  border: 1px solid rgba(231, 231, 228, 0.08);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cm2-crow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.cm2-cfield {
+  background: var(--muted);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  min-height: 38px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  outline: 1.5px solid transparent;
+}
+.cm2-cfield.focused { outline-color: var(--primary); }
+.cm2-cfield textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font: 13.5px/1.45 var(--sans);
+  resize: none;
+  display: block;
+  min-height: 22px;
+  max-height: 120px;
+  padding: 0;
+}
+.cm2-cfield textarea::placeholder { color: var(--muted-fg); }
+
+.cm2-cfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+.cm2-fpills { display: flex; align-items: center; gap: 2px; }
+.cm2-fpill {
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--muted-fg);
+  font: 500 11px/1.2 var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cm2-reserved {
+  font: 500 10.5px/1 var(--mono);
+  color: rgba(162, 166, 173, 0.45);
+  border: 1px dashed rgba(231, 231, 228, 0.12);
+  border-radius: 6px;
+  padding: 3px 7px;
+}
+
+/* Base send button */
+.cm2-csend {
+  min-width: 34px;
+  border: none;
+  border-radius: 10px;
+  color: var(--primary);
+  background: rgba(122, 162, 255, 0.14);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0 9px;
+  transition: background .12s ease, box-shadow .12s ease, padding .12s ease;
+}
+.cm2-csend:hover { background: rgba(122, 162, 255, 0.24); }
+.cm2-csend.multiline {
+  background: rgba(122, 162, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(122, 162, 255, 0.48);
+}
+
+/* Variant A: Split button [Ctrl+↵ × | ✈] */
+.cm2-split {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(122, 162, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(122, 162, 255, 0.45);
+}
+.cm2-split-mode {
+  border: none;
+  background: rgba(122, 162, 255, 0.10);
+  color: #cfe0ff;
+  font: 700 10.5px/1 var(--mono);
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border-right: 1px solid rgba(122, 162, 255, 0.30);
+  white-space: nowrap;
+}
+.cm2-split-mode:hover { background: rgba(122, 162, 255, 0.24); }
+.cm2-split-mode .cm2-x { opacity: 0.65; font-family: var(--sans); font-size: 12px; }
+.cm2-split-mode:hover .cm2-x { opacity: 1; }
+.cm2-split-send {
+  width: 34px;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.cm2-split-send:hover { background: rgba(122, 162, 255, 0.22); }
+
+/* Variant B: Vertical stack inside Send button + corner revert */
+.cm2-stack-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.cm2-csend-stack {
+  width: 48px;
+  padding: 5px 4px;
+  flex-direction: column;
+  gap: 4px;
+}
+.cm2-kbd-mini {
+  font: 700 9.5px/1.1 var(--mono);
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(122, 162, 255, 0.22);
+  color: #dbe8ff;
+  white-space: nowrap;
+}
+.cm2-stack-x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(122, 162, 255, 0.65);
+  background: var(--card);
+  color: #cfe0ff;
+  font: 700 10px/1 var(--sans);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 5px rgba(0,0,0,.5);
+}
+.cm2-stack-x:hover { background: rgba(122, 162, 255, 0.3); }
+
+/* Variant C: Floating shoulder pill anchored to top-right of Send button */
+.cm2-shoulder-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.cm2-shoulder-pill {
+  position: absolute;
+  top: -11px;
+  right: -2px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(122, 162, 255, 0.65);
+  background: #1b2232;
+  color: #dbe8ff;
+  font: 700 10px/1 var(--mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,.55);
+  z-index: 2;
+}
+.cm2-shoulder-pill:hover { background: #26334d; }
+
+.cm2-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.cm2-card-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cm2-toast { font-size: 11px; color: var(--green); min-height: 16px; }
+</style>
+
+<div class="cm2-mock">
+  <div>
+    <div class="cm2-sec-head">
+      <span class="cm2-sec-title">인터랙티브 비교 (보내기 버튼 부착 뱃지 · 우하단 `.cfoot` 비움 유지)</span>
+      <div class="cm2-tabs" id="cm2-tabs">
+        <button type="button" class="cm2-tab active" data-v="a">A안 · 스플릿 버튼</button>
+        <button type="button" class="cm2-tab" data-v="b">B안 · 버튼 내부 2단</button>
+        <button type="button" class="cm2-tab" data-v="c">C안 · 버튼 상단 알약</button>
+      </div>
+    </div>
+    <div class="cm2-sub" style="margin-bottom:8px;">
+      입력창에서 <b>Shift+Enter</b>(또는 여러 줄 붙여넣기)를 누르면 선택한 방식의 뱃지가 보내기 버튼에 나타납니다. `×` 또는 뱃지 클릭 시 즉시 <b>Enter 전송</b>으로 복귀합니다.
+    </div>
+    <div class="cm2-composer" style="margin-top:8px;">
+      <div class="cm2-crow">
+        <div class="cm2-cfield focused">
+          <textarea id="cm2-demo-ta" rows="1" placeholder="Shift+Enter로 멀티라인 전환 테스트 (우하단 .cfoot은 비워둠)"></textarea>
+        </div>
+        <div id="cm2-demo-btn-slot" style="display:inline-flex;align-items:stretch;"></div>
+      </div>
+      <div class="cm2-cfoot">
+        <div class="cm2-fpills">
+          <span class="cm2-fpill">◆ gemini-4-neon ▾</span>
+          <span class="cm2-fpill">⚡ high ▾</span>
+        </div>
+        <span class="cm2-reserved">우하단 향후 예약 공간</span>
+      </div>
+    </div>
+    <div class="cm2-toast" id="cm2-demo-log"></div>
+  </div>
+
+  <div class="cm2-grid">
+    <div class="cm2-card-box">
+      <div class="cm2-sec-head">
+        <span class="cm2-sec-title">A안 · 전송 버튼 좌측 스플릿 필</span>
+        <span class="cm2-tag">추천</span>
+      </div>
+      <div class="cm2-composer">
+        <div class="cm2-crow">
+          <div class="cm2-cfield focused">1. 가변 폭 높이는 유지
+2. 스크롤 높이 정합성은 포기</div>
+          <div class="cm2-split">
+            <button type="button" class="cm2-split-mode" title="클릭하면 Enter 전송 모드로 복귀">Ctrl+↵ <span class="cm2-x">×</span></button>
+            <button type="button" class="cm2-split-send" title="보내기 (Ctrl+Enter)" aria-label="전송">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cm2-cfoot">
+          <div class="cm2-fpills"><span class="cm2-fpill">◆ gemini-4-neon ▾</span></div>
+          <span class="cm2-reserved">예약 공간</span>
+        </div>
+      </div>
+      <div class="cm2-sub">전송(`✈`)과 모드 복귀(`Ctrl+↵ ×`) 클릭 영역이 완전히 분리되고, 1줄로 줄어들어도 레이아웃이 깨지지 않으며 상단 `.cbadges`와도 겹치지 않습니다.</div>
+    </div>
+
+    <div class="cm2-card-box">
+      <div class="cm2-sec-head">
+        <span class="cm2-sec-title">B안 · 전송 버튼 내부 2단 + 모서리 `×`</span>
+        <span class="cm2-tag amber">컴팩트</span>
+      </div>
+      <div class="cm2-composer">
+        <div class="cm2-crow">
+          <div class="cm2-cfield focused">1. 가변 폭 높이는 유지
+2. 스크롤 높이 정합성은 포기</div>
+          <div class="cm2-stack-wrap">
+            <button type="button" class="cm2-csend multiline cm2-csend-stack" title="보내기 (Ctrl+Enter)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+              <span class="cm2-kbd-mini">Ctrl+↵</span>
+            </button>
+            <button type="button" class="cm2-stack-x" title="Enter 전송으로 복귀">×</button>
+          </div>
+        </div>
+        <div class="cm2-cfoot">
+          <div class="cm2-fpills"><span class="cm2-fpill">◆ gemini-4-neon ▾</span></div>
+          <span class="cm2-reserved">예약 공간</span>
+        </div>
+      </div>
+      <div class="cm2-sub">가로 폭 증가가 가장 적습니다(34→48px). 다만 1줄로 지웠을 때 버튼 세로 공간이 38px로 빡빡하고 `×` 버튼이 작습니다.</div>
+    </div>
+
+    <div class="cm2-card-box">
+      <div class="cm2-sec-head">
+        <span class="cm2-sec-title">C안 · 전송 버튼 상단 어깨 알약</span>
+        <span class="cm2-tag muted">오버레이</span>
+      </div>
+      <div class="cm2-composer" style="margin-top:6px;">
+        <div class="cm2-crow">
+          <div class="cm2-cfield focused">1. 가변 폭 높이는 유지
+2. 스크롤 높이 정합성은 포기</div>
+          <div class="cm2-shoulder-wrap">
+            <button type="button" class="cm2-shoulder-pill" title="Enter 전송으로 복귀">Ctrl+↵ ×</button>
+            <button type="button" class="cm2-csend multiline" style="width:34px;" title="보내기 (Ctrl+Enter)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cm2-cfoot">
+          <div class="cm2-fpills"><span class="cm2-fpill">◆ gemini-4-neon ▾</span></div>
+          <span class="cm2-reserved">예약 공간</span>
+        </div>
+      </div>
+      <div class="cm2-sub">입력창 폭 변화가 0px이지만, 컴포저 상단 `.cbadges`(중단/실행 HUD 칩)가 우측에 뜰 때 수직으로 근접할 수 있습니다.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ta = document.getElementById("cm2-demo-ta");
+  var slot = document.getElementById("cm2-demo-btn-slot");
+  var log = document.getElementById("cm2-demo-log");
+  var tabs = document.getElementById("cm2-tabs");
+  if (!ta || !slot || !tabs) return;
+
+  var isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  var keyLabel = isMac ? "⌘+↵" : "Ctrl+↵";
+  var fullKey = isMac ? "⌘+Enter" : "Ctrl+Enter";
+  var variant = "a";
+  var autoMultiline = true;
+  ta.value = "1. 가변 폭 높이는 유지\n2. 스크롤 높이 정합성은 포기";
+
+  var sendSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>';
+
+  function renderBtn() {
+    if (!autoMultiline) {
+      slot.innerHTML = '<button type="button" class="cm2-csend" style="width:34px;" title="보내기 (Enter)">' + sendSvg + '</button>';
+      slot.querySelector("button").addEventListener("click", doSend);
+      return;
+    }
+    if (variant === "a") {
+      slot.innerHTML =
+        '<div class="cm2-split">' +
+          '<button type="button" class="cm2-split-mode" title="클릭하면 Enter 전송 모드로 복귀">' + keyLabel + ' <span class="cm2-x">×</span></button>' +
+          '<button type="button" class="cm2-split-send" title="보내기 (' + fullKey + ')">' + sendSvg + '</button>' +
+        '</div>';
+      slot.querySelector(".cm2-split-mode").addEventListener("click", revert);
+      slot.querySelector(".cm2-split-send").addEventListener("click", doSend);
+    } else if (variant === "b") {
+      slot.innerHTML =
+        '<div class="cm2-stack-wrap">' +
+          '<button type="button" class="cm2-csend multiline cm2-csend-stack" title="보내기 (' + fullKey + ')">' + sendSvg + '<span class="cm2-kbd-mini">' + keyLabel + '</span></button>' +
+          '<button type="button" class="cm2-stack-x" title="Enter 전송으로 복귀">×</button>' +
+        '</div>';
+      slot.querySelector(".cm2-csend-stack").addEventListener("click", doSend);
+      slot.querySelector(".cm2-stack-x").addEventListener("click", revert);
+    } else {
+      slot.innerHTML =
+        '<div class="cm2-shoulder-wrap">' +
+          '<button type="button" class="cm2-shoulder-pill" title="Enter 전송으로 복귀">' + keyLabel + ' ×</button>' +
+          '<button type="button" class="cm2-csend multiline" style="width:34px;" title="보내기 (' + fullKey + ')">' + sendSvg + '</button>' +
+        '</div>';
+      slot.querySelector(".cm2-shoulder-pill").addEventListener("click", revert);
+      slot.querySelector(".cm2-csend").addEventListener("click", doSend);
+    }
+  }
+
+  function sync() {
+    ta.style.height = "auto";
+    ta.style.height = Math.min(120, Math.max(22, ta.scrollHeight)) + "px";
+    renderBtn();
+  }
+
+  function revert() {
+    autoMultiline = false;
+    log.textContent = "↺ 뱃지 클릭 → 기본 Enter 전송 모드로 수동 복귀";
+    sync();
+    ta.focus();
+  }
+
+  function doSend() {
+    if (!ta.value.trim()) return;
+    var lines = ta.value.split("\n").length;
+    log.textContent = "✓ 전송됨 (" + lines + "줄, " + (autoMultiline ? "멀티라인 " + fullKey : "기본 Enter") + ") → 기본 Enter 모드로 복귀";
+    ta.value = "";
+    autoMultiline = false;
+    sync();
+    ta.focus();
+  }
+
+  tabs.addEventListener("click", function (e) {
+    var btn = e.target.closest(".cm2-tab");
+    if (!btn) return;
+    variant = btn.getAttribute("data-v");
+    tabs.querySelectorAll(".cm2-tab").forEach(function (el) { el.classList.toggle("active", el === btn); });
+    sync();
+  });
+
+  ta.addEventListener("keydown", function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== "Enter") return;
+    var mod = e.ctrlKey || e.metaKey;
+    if (!autoMultiline) {
+      if (e.shiftKey && !mod && !e.altKey) {
+        autoMultiline = true;
+        log.textContent = "↳ Shift+Enter 감지 → 멀티라인 모드 자동 전환 (" + fullKey + "로 전송)";
+        setTimeout(sync, 0);
+        return;
+      }
+      if (!e.shiftKey && !e.altKey) { e.preventDefault(); doSend(); }
+    } else if (mod) {
+      e.preventDefault();
+      doSend();
+    }
+  });
+
+  ta.addEventListener("input", function () {
+    if (autoMultiline && !ta.value) {
+      autoMultiline = false;
+      log.textContent = "↺ 입력창 비움 → 기본 Enter 모드로 자동 복귀";
+    } else if (!autoMultiline && ta.value.indexOf("\n") !== -1) {
+      autoMultiline = true;
+      log.textContent = "↳ 여러 줄 붙여넣기 감지 → 멀티라인 모드 자동 전환";
+    }
+    sync();
+  });
+
+  sync();
+})();
+</script>
