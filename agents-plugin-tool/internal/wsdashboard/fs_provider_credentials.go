@@ -66,13 +66,17 @@ func NewProviderCredentialProtection() *ProviderCredentialProtection {
 		}
 		if filepath.Base(path) == wscred.FileName {
 			file, info, err := wscred.OpenCredentialFileForRead(path)
-			if err != nil && p.identityErr == nil {
-				p.identityErr = err
+			if err != nil {
+				if p.identityErr == nil {
+					p.identityErr = err
+				}
+				return nil, err
 			}
-			if file != nil {
-				_ = file.Close()
+			if file == nil {
+				return nil, os.ErrNotExist
 			}
-			return info, err
+			_ = file.Close()
+			return info, nil
 		}
 		file, err := wscred.OpenCredentialFile(path)
 		if err != nil {
