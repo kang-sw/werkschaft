@@ -521,6 +521,7 @@
   "js.wb.state.eta.max": "/{0}m",
   "js.wb.state.estimate.short": "~{0}m",
   "js.board.filter.asks": "Темы с открытыми запросами",
+  "js.board.filter.asks.short": "Открытые",
   "js.board.filter.label": "Фильтр по состоянию темы",
   "js.board.filter.all": "Все",
   "js.board.filter.confirm": "Ожидают подтверждения",

@@ -48,7 +48,9 @@ check("separate count removed", bar.querySelector(".board-count"), null);
 first("toolbar first on a narrow board");
 check("the gallery stands outside the board", [gal.parentNode === page.dbody, page.board.contains(gal)], [true, false]);
 check("not a card or rail item", [page.W.is(bar), bar.hasAttribute("data-rail"), bar.querySelectorAll(".tpin, .bc-hd").length], [false, false, 0]);
-check("button order and terminal slot", bar.querySelector(".board-tools").children.map(function (n) { return n.className; }), ["board-action board-overview", "board-term-slot", "board-web-slot", "board-action board-download", "board-action board-files", "board-state-filter"]);
+check("2-row shell order (full-height overview anchor + right stack)", bar.querySelector(".board-tools").children.map(function (n) { return n.className; }), ["board-action board-overview", "board-stack"]);
+check("Row 1 actions and divider order", bar.querySelector(".board-acts").children.map(function (n) { return n.className; }), ["board-term-slot", "board-web-slot", "board-action board-download", "board-action board-files", "board-acts-vdiv"]);
+check("stack holds actions and state filter", bar.querySelector(".board-stack").children.map(function (n) { return n.className; }), ["board-acts", "board-state-filter"]);
 check("overview starts unpressed", bar.querySelector(".board-overview").getAttribute("aria-pressed"), "false");
 ["overview", "download", "files"].forEach(function (name) { bar.querySelector(".board-" + name).fire("click", {}); });
 check("overview and download use mount callbacks; Files without an explorer is inert", calls, ["overview", "download"]);
@@ -227,9 +229,9 @@ func TestToolbarFloatingGeometry(t *testing.T) {
 var bad=[];
 function check(name,got,want){if(JSON.stringify(got)!==JSON.stringify(want))bad.push(name+": "+JSON.stringify(got));}
 function styles(){var p={};return {getPropertyValue:function(k){return p[k]||"";},setProperty:function(k,v){p[k]=v;},removeProperty:function(k){delete p[k];}};}
-var listeners={}, observed=[], resize, boardTop=0, compact=false, faceHeight=46, handles=[];
-function action(y){return {getBoundingClientRect:function(){var h=compact?24:30;return {top:y-h/2,bottom:y+h/2,height:h};}};}
-var row={children:[action(23),action(23),action(23)]}, face={firstChild:row,getClientRects:function(){return [1];},getBoundingClientRect:function(){return {width:700,height:faceHeight,bottom:faceHeight};}};
+var listeners={}, observed=[], resize, boardTop=0, compact=false, faceHeight=50, handles=[];
+function action(y){return {getBoundingClientRect:function(){var h=compact?28:44;return {top:y-h/2,bottom:y+h/2,height:h};}};}
+var row={children:[action(25),action(25),action(25)]}, face={firstChild:row,getClientRects:function(){return [1];},getBoundingClientRect:function(){return {width:700,height:faceHeight,bottom:faceHeight};}};
 var toolbar={firstChild:face,style:styles(),attrs:{},hasAttribute:function(k){return k in this.attrs;},toggleAttribute:function(k,on){if(on)this.attrs[k]="";else delete this.attrs[k];}};
 var board={getBoundingClientRect:function(){return {top:boardTop};}}, col={style:styles(),clientTop:0,getBoundingClientRect:function(){return {top:0};}}, documentScroller={style:styles()}, active=col;
 var doc={scrollingElement:documentScroller,querySelectorAll:function(){return handles;},getElementById:function(){return col;},addEventListener:function(k,fn){listeners[k]=fn;}}, window={addEventListener:function(k,fn){listeners[k]=fn;},ResizeObserver:function(fn){resize=fn;this.observe=function(n){observed.push(n);};}};
@@ -240,31 +242,31 @@ floatToolbar();
 check("initial layout is deferred",toolbar.style.getPropertyValue("--toolbar-reserved"),"");
 flushAnimationFrames();
 check("observe the face and board without extra targets",observed.length===2 && observed[0]===face && observed[1]===board,true);
-check("top reserves original",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"46px"]);
-boardTop=-100;compact=true;faceHeight=28;row.children=[action(14),action(14),action(14)];listeners.scroll();
+check("top reserves original",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"50px"]);
+boardTop=-100;compact=true;faceHeight=34;row.children=[action(17),action(17),action(17)];listeners.scroll();
 check("scroll coalesces layout",animationFrames.size,1);
 flushAnimationFrames();
-check("compact keeps original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"46px"]);
-check("face drives rail and arrivals",[col.style.getPropertyValue("--wb-rail-inset"),col.style.getPropertyValue("scroll-padding-top")],["34px","34px"]);
+check("compact keeps original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"50px"]);
+check("face drives rail and arrivals",[col.style.getPropertyValue("--wb-rail-inset"),col.style.getPropertyValue("scroll-padding-top")],["40px","40px"]);
 // The filter is a direct row child just like an action. A filter-only wrap
 // reserves a second full original row even while the live face is compact.
-row.children=[action(14),action(14),action(46)];faceHeight=60;resize();flushAnimationFrames();
-check("filter-only wrap",[toolbar.hasAttribute("data-wrapped-actions"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"82px"]);
-boardTop=0;compact=false;faceHeight=82;resize();flushAnimationFrames();
-boardTop=-200;compact=true;faceHeight=60;resize();flushAnimationFrames();
-check("original filter row survives floating",toolbar.style.getPropertyValue("--toolbar-reserved"),"82px");
-row.children=[action(14),action(46),action(46)];resize();flushAnimationFrames();
-check("wrapped actions reserve two original action rows",[toolbar.hasAttribute("data-wrapped-actions"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"82px"]);
+row.children=[action(17),action(17),action(55)];faceHeight=68;resize();flushAnimationFrames();
+check("filter-only wrap",[toolbar.hasAttribute("data-wrapped-actions"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"100px"]);
+boardTop=0;compact=false;faceHeight=100;resize();flushAnimationFrames();
+boardTop=-200;compact=true;faceHeight=68;resize();flushAnimationFrames();
+check("original filter row survives floating",toolbar.style.getPropertyValue("--toolbar-reserved"),"100px");
+row.children=[action(17),action(55),action(55)];resize();flushAnimationFrames();
+check("wrapped actions reserve two original action rows",[toolbar.hasAttribute("data-wrapped-actions"),toolbar.style.getPropertyValue("--toolbar-reserved")],[true,"100px"]);
 active=documentScroller;resize();flushAnimationFrames();
-check("scroller handoff clears old padding",[col.style.getPropertyValue("scroll-padding-top"),documentScroller.style.getPropertyValue("scroll-padding-top")],["","66px"]);
+check("scroller handoff clears old padding",[col.style.getPropertyValue("scroll-padding-top"),documentScroller.style.getPropertyValue("scroll-padding-top")],["","74px"]);
 maxed={files:true,el:{style:styles()}};resize();flushAnimationFrames();
-check("Files clears the live face",maxed.el.style.getPropertyValue("--files-top"),"68px");
+check("Files clears the live face",maxed.el.style.getPropertyValue("--files-top"),"76px");
 handles=[{getClientRects:function(){return [1];},getBoundingClientRect:function(){return {top:0,bottom:34};}}];resize();flushAnimationFrames();
 check("document face clears fixed handles",toolbar.style.getPropertyValue("--toolbar-top"),"38px");
-check("document rail and arrivals include handle clearance",[col.style.getPropertyValue("--wb-rail-inset"),documentScroller.style.getPropertyValue("scroll-padding-top")],["104px","104px"]);
+check("document rail and arrivals include handle clearance",[col.style.getPropertyValue("--wb-rail-inset"),documentScroller.style.getPropertyValue("scroll-padding-top")],["112px","112px"]);
 handles=[];
-boardTop=0;compact=false;faceHeight=82;resize();flushAnimationFrames();
-check("return restores original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"82px"]);
+boardTop=0;compact=false;faceHeight=100;resize();flushAnimationFrames();
+check("return restores original slot",[toolbar.hasAttribute("data-floating"),toolbar.style.getPropertyValue("--toolbar-reserved")],[false,"100px"]);
 process.stdout.write(bad.join("\n"));
 `)
 }

@@ -477,11 +477,13 @@
       var tools = window.WsCards.toolbar().querySelector(".board-tools"), explorer = doc.createElement("button");
       q(".board-overview, .board-state-filter", tools).forEach(function (n) { n.remove(); });
       explorer.type = "button"; explorer.className = "board-action board-explorer";
+      explorer.setAttribute("aria-label", wsT("js.worktree.explorer"));
+      explorer.title = wsT("js.worktree.explorer");
       explorer.innerHTML = window.WsCards.icon("folder-open");
       var label = doc.createElement("span"); label.className = "board-label";
       label.textContent = wsT("js.worktree.explorer"); explorer.appendChild(label);
       explorer.addEventListener("click", function () { window.WsFiles.open({ root: worktree, dir: "" }); });
-      tools.appendChild(explorer);
+      (tools.querySelector(".board-acts") || tools).appendChild(explorer);
     }
     // wbForm creates wbHistory near the end of page startup. Mount overview
     // after that, not here while only the card framework exists.

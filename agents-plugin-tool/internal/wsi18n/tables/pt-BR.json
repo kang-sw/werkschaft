@@ -521,6 +521,7 @@
   "js.wb.state.eta.max": "/{0}m",
   "js.wb.state.estimate.short": "~{0}m",
   "js.board.filter.asks": "Tópicos com solicitações pendentes",
+  "js.board.filter.asks.short": "Pendentes",
   "js.board.filter.label": "Filtrar por estado do tópico",
   "js.board.filter.all": "Todos",
   "js.board.filter.confirm": "Aguardando confirmação",
