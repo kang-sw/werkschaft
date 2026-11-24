@@ -10,16 +10,20 @@ into it afterwards, which keeps `main` an ancestor of `develop`.
 
 ## Version Strategy
 
-Each ship owns exactly one patch-version bump, and a version counts as claimed
-only once its `v<version>` tag exists on origin. Read the version on the
-release branch after Release Branch's Cut and Merge release target steps, so a
+The Pi retirement cut uses **0.52.0**, the approved T3 minor for the launcher
+and tool boundary. The release lead applies that bump at the cut. For other
+cuts, use the patch strategy below unless an approved T3 boundary specifies
+the minor. A version counts as claimed once its `v<version>` tag exists on
+origin. Read the version on the release branch after the Cut and Merge
+release target steps, so a
 merged `main` brings in the previous release's version: read
 `agents-plugin/runtime.json` `.plugin_version` and run
 `git ls-remote --tags origin v<current>`:
 
-- Non-empty (the normal case: the previous ship tagged it): increment the patch
-  component and run `agents-plugin-tool/scripts/bump-ws-version.sh
-  <next-version>`. Commit the script-generated version edits on the release
+- Non-empty (the previous ship tagged it): choose the version required for
+  this cut, normally the next patch, and run
+  `agents-plugin-tool/scripts/bump-ws-version.sh <next-version>`. Commit the
+  script-generated version edits on the release
   branch before testing or tagging.
 - Empty (an earlier bump reached the cut point but its tag was never pushed):
   reuse `<current>` as this ship's version. No bump script run, no new version
@@ -216,6 +220,9 @@ main is promoted to it. Push: yes (covered by Publish's single final-gate
 approval).
 
 ## Publish
+
+Before the 0.52.0 publish gate, the owner verifies live OpenRouter, Sign in
+with ChatGPT, and vLLM. Record those results with the gate evidence.
 
 Order is deliberate: publish the release branch first, let `ws-mcp CI`
 (`.github/workflows/ws-mcp-ci.yml`, ubuntu + sharded windows matrix, plus the
