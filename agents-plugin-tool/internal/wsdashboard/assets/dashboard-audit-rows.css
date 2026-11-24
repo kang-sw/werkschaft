@@ -31,6 +31,21 @@
   min-width: 0;
 }
 
+.au-est-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--wb-warn) 55%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-warn) 12%, transparent);
+  color: var(--wb-warn-ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .au-turn-tool.au-fail { color: var(--wb-fail); }
 
 /* Native calls and audit events share the trace grid. */

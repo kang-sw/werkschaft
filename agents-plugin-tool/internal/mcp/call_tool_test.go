@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -355,4 +357,112 @@ func TestCallDefinitionSize(t *testing.T) {
 		}
 	}
 	t.Fatal("call is missing from tools/list")
+}
+
+func TestCallForwardsOuterSessionKey(t *testing.T) {
+	s, f := hostedBackendConnection(t, wsagent.BackendAgy, descriptorRegistrations())
+	defer s.Close()
+
+	worktreeRoot := t.TempDir()
+	initGit(t, worktreeRoot)
+	worktreeKey, err := s.sessions.mint(worktreeRoot, roleDelegate, f.hosted)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertTicketCreatedIn := func(t *testing.T, root, absentRoot, stemSuffix string) {
+		t.Helper()
+		matches, err := filepath.Glob(filepath.Join(root, "ai-docs", "tickets", "idea", "*-"+stemSuffix+".md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("expected ticket %s under %s, found %v", stemSuffix, root, matches)
+		}
+		absent, err := filepath.Glob(filepath.Join(absentRoot, "ai-docs", "tickets", "idea", "*-"+stemSuffix+".md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(absent) != 0 {
+			t.Fatalf("ticket %s must not be created under %s, found %v", stemSuffix, absentRoot, absent)
+		}
+		if _, err := os.Stat(matches[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. Omitted, nil, and blank inner session_key forward outer worktreeKey
+	//    (including through underscore aliases) and resolve to worktreeRoot.
+	for _, tc := range []struct {
+		name      string
+		innerArgs map[string]any
+		stem      string
+	}{
+		{"omitted", map[string]any{"stem": "feat-outer-omitted", "initial_state": "idea"}, "feat-outer-omitted"},
+		{"nil", map[string]any{"session_key": nil, "stem": "feat-outer-nil", "initial_state": "idea"}, "feat-outer-nil"},
+		{"blank", map[string]any{"session_key": " \t ", "stem": "feat-outer-blank", "initial_state": "idea"}, "feat-outer-blank"},
+	} {
+		t.Run("forward_"+tc.name, func(t *testing.T) {
+			resp := callToolOnce(t, s, 1, "call", map[string]any{
+				"session_key": worktreeKey,
+				"tool":        "tickets_create_empty",
+				"arguments":   tc.innerArgs,
+			})
+			if toolIsError(t, resp) {
+				t.Fatalf("call(%s) failed: %s", tc.name, resp)
+			}
+			assertTicketCreatedIn(t, worktreeRoot, f.root, tc.stem)
+			if _, present := tc.innerArgs["session_key"]; tc.name == "omitted" && present {
+				t.Fatal("caller's arguments map was mutated")
+			}
+		})
+	}
+
+	// 2. Explicit inner session_key wins over outer hosted key.
+	t.Run("inner_wins", func(t *testing.T) {
+		resp := callToolOnce(t, s, 2, "call", map[string]any{
+			"session_key": f.hosted,
+			"tool":        "tickets_create_empty",
+			"arguments": map[string]any{
+				"session_key":   worktreeKey,
+				"stem":          "feat-inner-wins",
+				"initial_state": "idea",
+			},
+		})
+		if toolIsError(t, resp) {
+			t.Fatalf("call(inner_wins) failed: %s", resp)
+		}
+		assertTicketCreatedIn(t, worktreeRoot, f.root, "feat-inner-wins")
+	})
+
+	// 3. Foreign outer session_key is still refused by hostedSessionKeyRule.
+	t.Run("foreign_outer_refused", func(t *testing.T) {
+		resp := callToolOnce(t, s, 3, "call", map[string]any{
+			"session_key": f.peer,
+			"tool":        "tickets_create_empty",
+			"arguments": map[string]any{
+				"stem":          "feat-foreign-refused",
+				"initial_state": "idea",
+			},
+		})
+		if !toolIsError(t, resp) {
+			t.Fatalf("foreign outer session_key should be refused: %s", resp)
+		}
+		text := toolText(t, resp)
+		if !strings.Contains(text, f.peer) || !strings.Contains(text, "descendant sessions") {
+			t.Fatalf("unexpected refusal text: %s", text)
+		}
+	})
+
+	// 4. Non-session-key tool does not receive injected session_key.
+	t.Run("no_session_key_tool", func(t *testing.T) {
+		resp := callToolOnce(t, s, 4, "call", map[string]any{
+			"session_key": worktreeKey,
+			"tool":        "runtime_read",
+			"arguments":   map[string]any{"format": "json"},
+		})
+		if toolIsError(t, resp) {
+			t.Fatalf("non-session-key tool should not receive session_key: %s", resp)
+		}
+	})
 }

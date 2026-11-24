@@ -92,7 +92,7 @@
     if (sub === "api_retry") return "retry";
     if (sub === "request:session/request_permission" ||
         /^control_request:can_use_tool$|^request:.*requestApproval/i.test(sub)) return "approval";
-    if (ev.kind === "subagent" && sub.indexOf("task_") === 0) return "subagent";
+    if (ev.kind === "subagent" && (sub.indexOf("task_") === 0 || sub.indexOf("launch_") === 0)) return "subagent";
     return "";
   }
 
@@ -137,7 +137,7 @@
         (ev.attached || []).forEach(function (id) { attachmentCalls[id] = ev.call_id; });
       }
       var owner = null;
-      if (kind === "approval" || kind === "compaction" || ev.subkind === "task_notification") {
+      if (kind === "approval" || kind === "compaction" || ev.subkind === "task_notification" || ev.subkind === "launch_completed" || ev.subkind === "launch_failed") {
         owner = auNearestOwner(owners, ev, kind, seenBoundaries);
       } else if (kind === "retry" && retry && !seenBoundaries.has(retry.el) && (!lastTurnAt || auCmpStrNs(ev.at, lastTurnAt) > 0)) {
         owner = retry;
@@ -234,7 +234,7 @@
 
   function auWaitForTurn(ev) {
     return /^(system|hook|system_reminder|thinking)$/.test(ev.kind) ||
-      (ev.kind === "subagent" && /^task_/.test(ev.subkind || ""));
+      (ev.kind === "subagent" && /^(task_|launch_)/.test(ev.subkind || ""));
   }
 
   function auTurnLabel(items) {
@@ -340,7 +340,7 @@
 
     function auBuildRowNode(ev) {
       var el = doc.createElement("div");
-      el.className = "au-hid conv-row au-kind-" + ev.kind;
+      el.className = "au-hid conv-row au-kind-" + ev.kind + (ev.kind === "compaction" && ev.estimated ? " au-estimated" : "");
       el.setAttribute("data-event-id", ev.id);
       el.setAttribute("data-kind", ev.kind);
       if (ev.at) el.setAttribute("data-at", ev.at);
@@ -353,6 +353,10 @@
       icon.innerHTML = '<svg class="i"><use href="#i-' + (icons[ev.kind] || "ticket") + '"></use></svg>';
       var content = auText(el, "span", "row-content trace-content");
       auText(content, "span", "au-hbadge row-name", auHiddenKindLabel(ev.kind));
+      if (ev.kind === "compaction" && ev.estimated) {
+        var est = auText(content, "span", "au-est-badge", wsT("js.audit.compaction.estimated"));
+        est.title = wsT("js.audit.compaction.estimated.note");
+      }
       var preview = auFormatHiddenPreview(ev, window.WsAudit.fmtBytes);
       var pv = auText(content, "span", "au-pv", preview);
       if (preview) pv.title = preview;
@@ -442,6 +446,28 @@
       plan.boundaryItems.forEach(function (events, owner) {
         var body = auDirectItems(owner);
         events.forEach(function (ev) { placeEvent(body, ev); });
+      });
+      owners.forEach(function (owner) {
+        if (owner.kind !== "compaction") return;
+        var sum = owner.el.querySelector("summary");
+        if (!sum) return;
+        var evs = plan.boundaryItems.get(owner.el);
+        var est = !!(evs && evs.some(function (ev) { return ev.kind === "compaction" && ev.estimated; }));
+        var cur = sum.querySelector(".au-est-badge");
+        if (est) {
+          if (!cur) {
+            var badge = doc.createElement("span");
+            badge.className = "au-est-badge";
+            badge.textContent = wsT("js.audit.compaction.estimated");
+            badge.title = wsT("js.audit.compaction.estimated.note");
+            var timeEl = sum.querySelector("time");
+            sum.insertBefore(badge, timeEl || null);
+            changed = true;
+          }
+        } else if (cur && cur.parentNode) {
+          cur.parentNode.removeChild(cur);
+          changed = true;
+        }
       });
       Object.keys(plan.attached).forEach(function (call) {
         var row = callMap[call];

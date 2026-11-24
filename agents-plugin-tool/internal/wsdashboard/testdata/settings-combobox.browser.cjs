@@ -179,7 +179,7 @@ const CHOICES = {
     await mediumRow.locator('.save-btn').click();
     assert.equal((await saveResp).status(), 200);
 
-    const activeBucket = await frame().locator('[data-bucket-key="agents.tier"][aria-pressed="true"]').getAttribute('data-settings-bucket');
+    const activeBucket = await frame().locator('[data-bucket-key="agents.tier"][aria-selected="true"]').getAttribute('data-settings-bucket');
     await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="werk"]').click();
     const werkRow = frame().locator('tbody.tier-entry[data-settings-tier=small]');
     const werkInputs = werkRow.locator('input.scb-inp');

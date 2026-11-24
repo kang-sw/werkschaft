@@ -148,7 +148,8 @@ func buildEntry(rule Rule, selectors map[string]string, scope wsconfig.Scope, la
 			layer := layerStatus(rule, s, layers)
 			if layer.Evaluated {
 				if s == wsconfig.ScopeBuiltin {
-					layer.set(harness, tier.Default, true)
+					hasDefault := tier.Default != (wsconfig.AgentTier{})
+					layer.set(harness, tier.Default, hasDefault)
 				} else {
 					layer.set(leaf.Bucket, leaf.Value, present)
 					layer.Legacy = leaf.Legacy

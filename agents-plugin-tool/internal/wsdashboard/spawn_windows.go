@@ -48,8 +48,10 @@ func startDetachedWithPipes(exe string, args []string, dir string, stdin, stdout
 	return startWindowsDetachedWith(false, start)
 }
 
+const windowsDetachedBaseFlags = uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP | windows.NORMAL_PRIORITY_CLASS)
+
 func startElectronDetachedWith(jobLifetime bool, start func(uint32) (*exec.Cmd, error), log func(string)) (*exec.Cmd, error) {
-	flags := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP)
+	flags := windowsDetachedBaseFlags
 	if jobLifetime {
 		log("daemon spawn mode=job-lifetime (daemon may end when the containing job closes)")
 	} else {
@@ -65,7 +67,7 @@ func startElectronDetachedWith(jobLifetime bool, start func(uint32) (*exec.Cmd, 
 }
 
 func startWindowsDetachedWith(strict bool, start func(uint32) (*exec.Cmd, error)) (*exec.Cmd, error) {
-	base := uint32(windows.CREATE_NO_WINDOW | syscall.CREATE_NEW_PROCESS_GROUP)
+	base := windowsDetachedBaseFlags
 	if cmd, err := start(base | windows.CREATE_BREAKAWAY_FROM_JOB); err == nil {
 		return cmd, nil
 	} else if strict {

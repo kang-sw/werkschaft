@@ -240,6 +240,11 @@
   background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
 }
 
+.au-wstatus.au-est {
+  color: var(--wb-warn-ink);
+  background: color-mix(in srgb, var(--wb-warn) 16%, transparent);
+}
+
 .au-wacts {
   flex: none;
   display: inline-flex;

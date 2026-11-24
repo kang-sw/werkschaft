@@ -540,7 +540,7 @@ func TestSuppressedDeliveryIsDroppedAndLoggedOnce(t *testing.T) {
 	}
 }
 
-func TestPendingClearsOnCancelAndSteerIsRefused(t *testing.T) {
+func TestPendingClearsOnCancelSteerDrainAndInterrupt(t *testing.T) {
 	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
 	e.add("lead", "tick", "* * * * *", "")
 	e.clock.Advance(30 * time.Second)
@@ -548,13 +548,14 @@ func TestPendingClearsOnCancelAndSteerIsRefused(t *testing.T) {
 	if len(recs) != 1 {
 		t.Fatalf("held = %+v", recs)
 	}
-	if _, err := wsinbox.Steer(e.sess.inbox("lead"), recs[0].Name); !errors.Is(err, wsinbox.ErrNotSteerable) {
+	steered, err := wsinbox.Steer(e.sess.inbox("lead"), recs[0].Name)
+	if err != nil {
 		t.Fatalf("steer = %v", err)
 	}
 	if !e.info("lead", "tick").Pending {
-		t.Fatal("a refused steer cleared pending")
+		t.Fatal("promoting a held entry to steer cleared pending")
 	}
-	if _, err := wsinbox.Cancel(e.sess.inbox("lead"), recs[0].Name); err != nil {
+	if _, err := wsinbox.Cancel(e.sess.inbox("lead"), steered); err != nil {
 		t.Fatal(err)
 	}
 	if e.info("lead", "tick").Pending {
@@ -563,6 +564,21 @@ func TestPendingClearsOnCancelAndSteerIsRefused(t *testing.T) {
 	e.clock.Advance(time.Minute)
 	if n := len(e.sess.held("lead")); n != 1 {
 		t.Fatalf("after cancel delivered %d, want 1", n)
+	}
+	// A steer drain clears pending so the next minute fires again.
+	recs, _ = wsinbox.Held(e.sess.inbox("lead"))
+	if _, err := wsinbox.Steer(e.sess.inbox("lead"), recs[0].Name); err != nil {
+		t.Fatal(err)
+	}
+	if drained, err := wsinbox.DrainSteer(e.sess.inbox("lead")); err != nil || len(drained) != 1 {
+		t.Fatalf("DrainSteer = %+v, %v", drained, err)
+	}
+	if e.info("lead", "tick").Pending {
+		t.Fatal("steer drain left the schedule pending")
+	}
+	e.clock.Advance(time.Minute)
+	if n := len(e.sess.held("lead")); n != 1 {
+		t.Fatalf("after steer drain delivered %d, want 1", n)
 	}
 	// An interrupt takes the held entry back too.
 	if _, _, err := wsinbox.Interrupt(e.sess.inbox("lead"), e.clock.Now()); err != nil {
