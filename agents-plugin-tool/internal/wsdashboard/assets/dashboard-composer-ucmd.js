@@ -915,6 +915,10 @@
     var key = ucmdKey(c);
     if (ucmdBusy[key]) return;
     var eff = ucmdEffective(c);
+    if (!eff.line.trim()) {
+      noteWarn(wsT("js.ucmd.save.empty"));
+      return;
+    }
     var lines = [wsT("js.ucmd.ask.header") + ": " + (c.label || c.id) + (eff.anyDirty ? " " + wsT("js.ucmd.ask.edited") : "")];
     if (c.cwd) lines.push("cwd: " + c.cwd);
     lines.push("```\n" + eff.line + "\n```");
@@ -954,10 +958,16 @@
     }).then(function (x) {
       delete ucmdBusy[key];
       var parsed = ucmdParseError(x.s, x.r.status);
-      if (parsed.body && Array.isArray(parsed.body.commands)) {
+      if (x.r.ok && parsed.body && Array.isArray(parsed.body.commands)) {
         delete ucmdDrafts[key];
         ucmdApply(parsed.body, true);
-        if (x.r.ok) noteOk(wsT("js.ucmd.deleted", c.label || c.id));
+        noteOk(wsT("js.ucmd.deleted", c.label || c.id));
+        return;
+      }
+      if (x.r.status === 409 && parsed.body && Array.isArray(parsed.body.commands)) {
+        if (parsed.body.error === "withdrawn") delete ucmdDrafts[key];
+        ucmdApply(parsed.body, true);
+        noteWarn(wsT(parsed.body.error === "withdrawn" ? "js.ucmd.withdrawn" : "js.ucmd.stale"));
         return;
       }
       ucmdRender();

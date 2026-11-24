@@ -595,3 +595,81 @@ test('inline + New command form validates required fields, shows 400 error inlin
   assert.equal(h.composer.querySelector('.ucmd-card').getAttribute('data-source'), 'user');
   assert.equal(h.composer.querySelector('.ucmd-cwd').textContent, 'scripts');
 });
+
+test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/withdrawn on delete preserve drafts and warn', async () => {
+  const reqs = [];
+  let delAttempt = 0;
+  const cmds = [
+    { id: 'build', source: 'agent', label: 'Build', line: 'go build ./...', prompt: 'Check errors', cwd: '', revision: 'r1' }
+  ];
+  const h = makeUcmdHarness((url, opts) => {
+    const method = opts.method || 'GET';
+    const body = opts.body ? JSON.parse(opts.body) : null;
+    reqs.push({ url, method, body });
+    if (method === 'GET') return jsonRes({ rev: 'e1.1.r1', token: 'tok1', commands: cmds });
+    if (url.endsWith('/run')) return jsonRes({ id: body.submission_id, command: body.line || 'go build ./...', exec_id: 'ex1', token: 'tok1' });
+    if (url.endsWith('/remove')) {
+      delAttempt++;
+      if (delAttempt === 1) {
+        return jsonRes({
+          error: 'stale',
+          rev: 'e1.2.r1',
+          token: 'tok1',
+          commands: [{ id: 'build', source: 'agent', label: 'Build', line: 'go build ./...', prompt: 'Updated by agent', cwd: '', revision: 'r2' }]
+        }, 409);
+      }
+      return jsonRes({ error: 'withdrawn', rev: 'e1.3.r1', token: 'tok1', commands: [] }, 409);
+    }
+    return jsonRes({}, 404);
+  });
+  await h.flushMicrotasks();
+
+  const badge = h.document.getElementById('ucmdbadge');
+  h.fire(badge, 'click');
+  const card = h.composer.querySelector('.ucmd-card');
+  const cmdIn = card.querySelector('.ucmd-inline-input.is-cmd');
+  const runBtn = card.querySelector('.ucmd-ibtn-run');
+  const askBtn = card.querySelector('.ucmd-ibtn-ask');
+  const delBtn = card.querySelector('.ucmd-ibtn-del');
+
+  // 1) Keyboard Space early release (<1500ms) cancels and emits quick-click toast.
+  runBtn.focus();
+  h.fire(runBtn, 'keydown', { key: ' ', repeat: false });
+  h.advance(300);
+  h.fire(runBtn, 'keyup', { key: ' ' });
+  assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 0);
+  assert.equal(h.warns.at(-1), EN['js.ucmd.hold.early.run']);
+
+  // 2) Keyboard Enter full 1500ms hold + release confirms run.
+  h.fire(runBtn, 'keydown', { key: 'Enter', repeat: false });
+  h.advance(1500);
+  h.fire(runBtn, 'keyup', { key: 'Enter' });
+  await h.flushMicrotasks();
+  assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 1);
+
+  // 3) Empty Line 2 prevents Ask Agent from dispatching POST /message.
+  h.advance(700);
+  h.fire(badge, 'click');
+  cmdIn.value = '   ';
+  h.fire(cmdIn, 'input');
+  h.holdConfirm(askBtn, 1500);
+  assert.equal(h.posts.length, 0, 'empty command line does not send ask message');
+  assert.equal(h.warns.at(-1), EN['js.ucmd.save.empty']);
+
+  // 4) 409 stale on delete keeps unsaved inline command draft and shows stale warning.
+  cmdIn.value = 'go build -race ./...';
+  h.fire(cmdIn, 'input');
+  h.holdConfirm(delBtn, 1500);
+  await h.flushMicrotasks();
+  assert.equal(h.warns.at(-1), EN['js.ucmd.stale']);
+  assert.equal(h.oks.length, 0);
+  const refreshedCard = h.composer.querySelector('.ucmd-card');
+  assert.equal(refreshedCard.querySelector('.ucmd-inline-input.is-cmd').value, 'go build -race ./...', 'stale 409 preserves unsaved inline draft');
+  assert.equal(refreshedCard.classList.contains('is-dirty'), true);
+
+  // 5) 409 withdrawn on delete warns withdrawn and clears card.
+  h.holdConfirm(refreshedCard.querySelector('.ucmd-ibtn-del'), 1500);
+  await h.flushMicrotasks();
+  assert.equal(h.warns.at(-1), EN['js.ucmd.withdrawn']);
+  assert.equal(h.composer.querySelectorAll('.ucmd-card').length, 0);
+});
