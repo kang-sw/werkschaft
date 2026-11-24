@@ -286,6 +286,90 @@ func (r *Runner) IsChild(id string) bool {
 	return r.opts.CardBound != nil && r.opts.CardBound(id)
 }
 
+// isHolderBacked reports whether proc runs under a live holder process rather
+// than directly under the daemon.
+func isHolderBacked(p Process) bool {
+	hp, ok := p.(holderProcess)
+	if !ok {
+		return false
+	}
+	_, _, held := hp.HolderInfo()
+	return held
+}
+
+// descendantsAllowSafeStop reports whether every live descendant conversation
+// of rootID is idle (not keeping its parent awake) and holder-backed if it has
+// a live process. Must not be called while holding any conv.mu (acquires r.mu,
+// then each conv.mu).
+func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	convs := make([]*conv, 0, len(r.convs))
+	for _, c := range r.convs {
+		convs = append(convs, c)
+	}
+	r.mu.Unlock()
+	type node struct {
+		id           string
+		lead         bool
+		parent       *ParentRef
+		keepsAwake   bool
+		hasProc      bool
+		holderBacked bool
+	}
+	nodes := make([]node, 0, len(convs))
+	for _, ch := range convs {
+		ch.mu.Lock()
+		n := node{
+			id:           ch.rec.ReplyID,
+			lead:         ch.rec.Lead,
+			keepsAwake:   ch.keepsAwakeLocked(),
+			hasProc:      !ch.closed && ch.proc != nil,
+			holderBacked: ch.proc != nil && isHolderBacked(ch.proc),
+		}
+		if ch.rec.Parent != nil {
+			p := *ch.rec.Parent
+			n.parent = &p
+		}
+		ch.mu.Unlock()
+		nodes = append(nodes, n)
+	}
+	byParent := make(map[ParentRef][]int, len(nodes))
+	for i := range nodes {
+		if nodes[i].parent != nil {
+			byParent[*nodes[i].parent] = append(byParent[*nodes[i].parent], i)
+		}
+	}
+	rootKind := ParentConversation
+	if rootIsLead {
+		rootKind = ParentLead
+	}
+	queue := []ParentRef{{Kind: rootKind, ReplyID: rootID}}
+	visited := map[string]bool{rootID: true}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, idx := range byParent[cur] {
+			n := nodes[idx]
+			if visited[n.id] {
+				continue
+			}
+			visited[n.id] = true
+			if n.keepsAwake || (n.hasProc && !n.holderBacked) {
+				return false
+			}
+			childKind := ParentConversation
+			if n.lead {
+				childKind = ParentLead
+			}
+			queue = append(queue, ParentRef{Kind: childKind, ReplyID: n.id})
+		}
+	}
+	return true
+}
+
 // SessionMeta returns in-memory dashboard metadata for replyID without
 // touching disk (wsdashboard.AgentSessionMetaHost).
 func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool) {
@@ -294,23 +378,30 @@ func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool
 	rec, closed := r.closed[replyID]
 	r.mu.Unlock()
 	active := false
+	hasProcess := false
+	selfSafe := false
 	if open {
 		c.mu.Lock()
 		rec = c.rec
 		closed = c.closed
 		active = !closed && (c.turn || c.holding || len(c.approvals) != 0)
+		hasProcess = !closed && c.proc != nil
+		selfSafe = c.safeStopSelfLocked()
 		c.mu.Unlock()
 	} else if !closed {
 		return wsdashboard.AgentSessionMeta{}, false
 	}
+	safeStop := selfSafe && r.descendantsAllowSafeStop(replyID, rec.Lead)
 	return wsdashboard.AgentSessionMeta{
-		Hosted:  rec.Lead,
-		IsChild: r.isChildRecord(rec),
-		Closed:  closed,
-		Active:  active,
-		Backend: rec.Backend,
-		Model:   rec.Model,
-		Effort:  rec.Effort,
+		Hosted:     rec.Lead,
+		IsChild:    r.isChildRecord(rec),
+		Closed:     closed,
+		Active:     active,
+		HasProcess: hasProcess,
+		SafeStop:   safeStop,
+		Backend:    rec.Backend,
+		Model:      rec.Model,
+		Effort:     rec.Effort,
 	}, true
 }
 

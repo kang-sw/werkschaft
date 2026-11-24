@@ -18,16 +18,23 @@ async function where(page, id) {
     return fold ? fold.getAttribute('data-k') : 'live';
   }, id);
 }
-// confirmArchive answers the "Archive this session?" dialog.
-async function confirmArchive(page, accept) {
-  const dlg = page.locator('dialog.ws-confirm');
-  await dlg.waitFor();
-  assert.match(await dlg.locator('h2').textContent(), /보관할까요/, 'archive confirm text');
-  if (accept) {
-    assert.equal((await dlg.locator('button.danger').textContent()).trim(), '보관', 'accept label');
-    await dlg.locator('button.danger').click();
-  } else await dlg.locator('button:not(.danger)').click();
-  await dlg.waitFor({ state: 'detached' });
+// holdAction presses and holds a button for holdMs, then releases inside it.
+async function holdAction(page, locator, holdMs) {
+  await locator.waitFor();
+  const box = await locator.boundingBox();
+  assert(box && box.width > 0 && box.height > 0, 'action button has bounds');
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await page.mouse.up();
+}
+async function openRowArchive(page, id) {
+  await page.mouse.move(5, 5);
+  await page.locator(row(id) + ' .rl').click({ button: 'right' });
+  const item = page.locator('.rpop.rmenu .rmsess .spact', { hasText: '보관' }).first();
+  await item.waitFor();
+  return item;
 }
 async function until(page, what, fn, ms = 8000) {
   const end = Date.now() + ms;
@@ -106,23 +113,26 @@ async function behaviour(browser) {
     assert.deepEqual(await page.evaluate(() => ['mainlead', 'reviewer', 'docaudit', 'release49'].map((id) => document.querySelector('#r-rail .rs[data-rid="' + id + '"]').className)),
       ['rs hosted-row', 'rs stopped hosted-row', 'rs ended stopped archived hosted-row', 'rs ended'], 'row classes');
 
-    // Archive by the hover button: the row moves into the archived fold.
-    await page.locator(row('reviewer')).hover();
-    // Cancel leaves the row where it is and returns focus to the button.
-    await page.locator(row('reviewer') + ' .drarch').click();
-    await confirmArchive(page, false);
+    // Live hosted rows show hover stop only when a process is live, never hover archive.
+    assert.equal(await page.locator(row('mainlead') + ' .drstop').count(), 1, 'active hosted row offers hover stop');
+    assert.equal(await page.locator(row('mainlead') + ' .drarch').count(), 0, 'active hosted row has no hover archive');
+    assert.equal(await page.locator(row('reviewer') + ' .drstop').count(), 0, 'asleep hosted row has no hover stop');
+    assert.equal(await page.locator(row('reviewer') + ' .drarch').count(), 0, 'asleep hosted row has no hover archive');
+
+    // Archive from the row menu uses a 1.5s press-and-hold (early release cancels
+    // and keeps the menu open; holding 1.5s confirms and closes the menu).
+    const archItem = await openRowArchive(page, 'reviewer');
+    await holdAction(page, archItem, 300);
     await page.waitForTimeout(400);
-    assert.equal(await where(page, 'reviewer'), 'live', 'cancel does not archive');
-    assert.equal(await page.evaluate((id) => !!document.activeElement.closest('#r-rail .rs[data-rid="' + id + '"]'), 'reviewer'), true, 'cancel returns focus to the row');
-    await page.locator(row('reviewer') + ' .drarch').click();
-    await confirmArchive(page, true);
+    assert.equal(await where(page, 'reviewer'), 'live', 'early release does not archive');
+    await holdAction(page, archItem, 1650);
     await until(page, 'reviewer archived', async () => (await where(page, 'reviewer')) === 'arch');
     assert.equal(await page.locator(`${DEVENV} .rfh[data-k="arch"] .d-n`).textContent(), '4', 'the archived count');
     // It persists across a reload (the daemon's sidecar, not page state).
     await page.reload();
     await showRail(page);
     assert.equal(await where(page, 'reviewer'), 'arch', 'still archived after reload');
-    // Unarchive returns it asleep among the live rows.
+    // Unarchive returns it asleep among the live rows via hover button (immediate click).
     await half(page, 'arch');
     await page.locator(row('reviewer')).hover();
     await page.locator(row('reviewer') + ' .drarch.unarch').click();
@@ -130,34 +140,22 @@ async function behaviour(browser) {
     assert.match(await page.locator(row('reviewer')).getAttribute('class'), /\bstopped\b/, 'unarchived is asleep');
 
     // A 409 archive leaves the row put, says why, and is not retried.
-    await page.locator(row('assettidy')).hover();
-    await page.locator(row('assettidy') + ' .drarch').click();
-    await confirmArchive(page, true);
+    const busyArch = await openRowArchive(page, 'assettidy');
+    await holdAction(page, busyArch, 1650);
     await page.locator('#wstoasts .wstoast', { hasText: '아직 세션 확인 중이라 보관할 수 없습니다' }).waitFor();
     await page.waitForTimeout(1200);
     assert.equal(await where(page, 'assettidy'), 'live', 'a refused archive leaves the row in place');
     // A 500 archive (the holder refused to stop; the runner rolled back)
     // likewise leaves the row put with a short message, and no retry.
-    await page.locator(row('renderer')).hover();
-    await page.locator(row('renderer') + ' .drarch').click();
-    await confirmArchive(page, true);
+    const failArch = await openRowArchive(page, 'renderer');
+    await holdAction(page, failArch, 1650);
     await page.locator('#wstoasts .wstoast', { hasText: '세션을 멈추지 못해 보관하지 못했습니다' }).waitFor();
     await page.waitForTimeout(1200);
     assert.equal(await where(page, 'renderer'), 'live', 'a failed archive leaves the row in place');
 
-    // The row menu's archive entry, then its unarchive entry.
-    await page.mouse.move(5, 5);
-    await page.locator(row('reviewer') + ' .rl').click({ button: 'right' });
-    const archItem = page.locator('.rpop.rmenu .rmsess .spact', { hasText: '보관' });
-    await archItem.first().waitFor();
-    await archItem.first().click();
-    await confirmArchive(page, false);
-    await page.waitForTimeout(400);
-    assert.equal(await where(page, 'reviewer'), 'live', 'cancel from the menu does not archive');
-    await page.locator(row('reviewer') + ' .rl').click({ button: 'right' });
-    await archItem.first().waitFor();
-    await archItem.first().click();
-    await confirmArchive(page, true);
+    // Re-archive via menu hold, then unarchive via menu click.
+    const menuArch = await openRowArchive(page, 'reviewer');
+    await holdAction(page, menuArch, 1650);
     await until(page, 'reviewer archived from the menu', async () => (await where(page, 'reviewer')) === 'arch');
     await page.locator(row('reviewer') + ' .rl').click({ button: 'right' });
     const unItem = page.locator('.rpop.rmenu .rmsess .spact', { hasText: '보관 해제' });

@@ -388,6 +388,9 @@ type conv struct {
 	// prompt's send is in flight.
 	awakeMember  bool
 	awakeSending bool
+	// loopBusy mirrors loop-owned safe-stop blockers (replaying, bgGraceTimer,
+	// compacting, compactCommand) for lock-free reads off the loop.
+	loopBusy atomic.Bool
 
 	// Turn settles (spawn.go). sends counts Runner.Send's messages and
 	// settled is the last settled turn, settleC closed and replaced at each
@@ -443,12 +446,32 @@ type conv struct {
 func (c *conv) do(fn func()) bool {
 	ran := make(chan struct{})
 	select {
-	case c.reqs <- func() { defer close(ran); fn() }:
+	case c.reqs <- func() { defer close(ran); defer c.syncLoopBusy(); fn() }:
 		<-ran
 		return true
 	case <-c.done:
 		return false
 	}
+}
+
+func (c *conv) syncLoopBusy() {
+	c.loopBusy.Store(c.replaying || c.bgGraceTimer != nil || c.compacting || c.compactCommand)
+}
+
+// safeStopSelfLocked reports whether this conversation's own process is safe to
+// stop right now (ignoring descendants, which must be checked without holding
+// c.mu). Caller holds c.mu.
+func (c *conv) safeStopSelfLocked() bool {
+	if c.closed || c.proc == nil || !isHolderBacked(c.proc) {
+		return false
+	}
+	if len(c.approvals) != 0 || c.turn || c.holding || c.bgTasks > 0 || c.cmpActive || c.ownsLiveExec() {
+		return false
+	}
+	if c.loopBusy.Load() || c.live.hasRunningNativeAgents() {
+		return false
+	}
+	return true
 }
 
 // signalInbox tells the loop the inbox changed, without waiting; signals
@@ -812,6 +835,7 @@ func (c *conv) loop() {
 	// trusted holder: publish that before the replay settles it.
 	c.publishAwake(c.wantAwake())
 	for {
+		c.syncLoopBusy()
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
 		compactC = c.compactC
@@ -993,7 +1017,6 @@ func (c *conv) memoryState() State { return c.stateWithKeyCheck(false) }
 
 func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	st := closedState(c.rec)
 	st.Status, st.ClosedAt = StatusIdle, ""
 	if c.turn {
@@ -1010,6 +1033,8 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		}
 	}
 	st.Process = c.proc != nil
+	selfSafe := c.safeStopSelfLocked()
+	replyID, isLead := c.rec.ReplyID, c.rec.Lead
 	st.Holding = c.holding && !c.closed
 	st.Hidden = c.hidden
 	if c.rec.Lead && !c.closed {
@@ -1066,12 +1091,14 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		}
 	}
 	st.IsChild = c.r.isChildRecord(c.rec)
-	if !c.rec.Lead {
-		// The loop refreshes worker permission at startup and every launch or
-		// control change. State/List stay memory-only on the interactive path.
-		return st
+	if c.rec.Lead {
+		st = c.r.permissionState(st, c.rec, c.dir)
 	}
-	return c.r.permissionState(st, c.rec, c.dir)
+	c.mu.Unlock()
+	if selfSafe {
+		st.SafeStop = c.r.descendantsAllowSafeStop(replyID, isLead)
+	}
+	return st
 }
 
 func (c *conv) record() Record {

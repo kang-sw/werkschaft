@@ -415,16 +415,28 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .dracts button { display: inline-grid; place-items: center; width: 20px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--wb-muted-fg); cursor: pointer; }
 .rail .dracts .i { width: 13px; height: 13px; stroke-width: 1.6; }
 .rail .dracts button:hover, .rail .dracts button:focus-visible { color: var(--wb-primary); background: var(--wb-muted); outline: none; }
-/* a hosted lead's third hover button (archive, or unarchive in the archived
-   fold): the time slot widens so nothing moves when the three show */
+/* a hosted lead's third hover button (stop on live rows with a process, or
+   unarchive in the archived fold): the time slot widens so nothing moves
+   when the three show */
 .rail .rs.hosted-row .drslot { min-width: 66px; }
-.rail .drarch.busy { opacity: .55; cursor: progress; }
+.rail .drarch.busy, .rail .drstop.busy { opacity: .55; cursor: progress; }
+.rail .drstop { position: relative; overflow: hidden; isolation: isolate; }
+.rail .drstop .i { position: relative; z-index: 1; }
+.rail .drstop.d-stop-safe { color: var(--wb-muted-fg); }
+.rail .drstop.d-stop-safe:hover, .rail .drstop.d-stop-safe:focus-visible { color: var(--wb-fg); background: var(--wb-muted); }
+.rail .drstop.d-stop-unsafe { color: var(--wb-fail); }
+.rail .drstop.d-stop-unsafe:hover, .rail .drstop.d-stop-unsafe:focus-visible { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
+.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
+.rail .drstop.d-stop-unsafe.d-hold-active::before { opacity: 1; animation: d-hold-radial var(--d-hold-dur, 1500ms) linear forwards; }
+.rail .drstop.d-stop-unsafe.d-hold-ready { color: var(--wb-card); box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
+.rail .drstop.d-stop-unsafe.d-hold-ready::before { background: var(--wb-fail); transform: scale(1); opacity: 1; animation: none; }
+@keyframes d-hold-radial { from { transform: scale(0); } to { transform: scale(1); } }
 @media (hover: hover) {
   .rail .rs:hover .dracts { display: flex; }
   .rail .rs:hover .drslot { visibility: hidden; }
 }
-.rail .rs:focus-within .dracts { display: flex; }
-.rail .rs:focus-within .drslot { visibility: hidden; }
+.rail .rs:focus-within .dracts, .rail .rs.d-holding .dracts { display: flex; }
+.rail .rs:focus-within .drslot, .rail .rs.d-holding .drslot { visibility: hidden; }
 /* a row's rename: the input stands where the name was */
 .rail .drinp { flex: 1 1 0; min-width: 60px; margin: 3px 0; padding: 1px 4px; font: inherit; font-size: 12.5px; color: var(--wb-fg); background: var(--wb-card); border: 1px solid var(--wb-primary); border-radius: 4px; outline: none; -webkit-user-select: text; user-select: text; }
 .rail .rs .s1:has(.drinp) .drtail { flex: none; }
@@ -691,6 +703,7 @@ html:not([data-sysopen]) .rail .rnew { display: none; }
 html:not([data-sysopen]) .rail .rdel { display: none; }
 html:not([data-sysopen]) .rail .rgit { display: none; }
 html:not([data-sysopen]) .rail .drarch { display: none; }
+html:not([data-sysopen]) .rail .drstop { display: none; }
 .rpop .sploc { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: -4px; font-size: 11.5px; color: var(--wb-muted-fg); white-space: nowrap; }
 .rpop .sploc .i { width: 12px; height: 12px; flex: none; }
 .rpop .sploc b { font-family: var(--wb-mono); font-weight: 700; color: var(--wb-fg); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
@@ -711,13 +724,28 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .rpop .spdesc:empty { display: none; }
 .rpop .spsec .spdesc { margin: 4px 0 0; text-align: left; }
 .rpop .spacts { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid var(--wb-muted); }
-.rpop .spact { display: flex; align-items: flex-start; gap: 9px; border: 0; background: transparent; border-radius: 8px; padding: 6px 8px; text-align: left; cursor: pointer; color: inherit; font: inherit; font-size: 13px; }
+.rpop .spact { position: relative; overflow: hidden; isolation: isolate; display: flex; align-items: flex-start; gap: 9px; border: 0; background: transparent; border-radius: 8px; padding: 6px 8px; text-align: left; cursor: pointer; color: inherit; font: inherit; font-size: 13px; }
+.rpop .spact > * { position: relative; z-index: 1; }
 .rpop .spact:hover:not(:disabled) { background: var(--wb-muted); }
 .rpop .spact:disabled { opacity: .45; cursor: default; }
 .rpop .spact:focus-visible { outline: 1.5px solid var(--wb-primary); }
 .rpop .spact .i { width: 14px; height: 14px; flex: none; margin-top: 2px; }
 .rpop .spact .gs { display: block; font-size: 11.5px; color: var(--wb-muted-fg); font-weight: 400; }
 .rpop .spact.danger { color: var(--wb-fail); }
+.rpop .spact.d-hold-btn::before { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--wb-primary) 22%, transparent); transform: scaleX(0); transform-origin: 0 50%; opacity: 0; pointer-events: none; z-index: 0; }
+.rpop .spact.danger.d-hold-btn::before { background: color-mix(in srgb, var(--wb-fail) 24%, transparent); }
+.rpop .spact.d-hold-btn.d-hold-active::before { opacity: 1; animation: d-hold-bar var(--d-hold-dur, 1500ms) linear forwards; }
+.rpop .spact.d-hold-btn.d-hold-ready { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.rpop .spact.danger.d-hold-btn.d-hold-ready { box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
+.rpop .spact.d-hold-btn.d-hold-ready::before { background: color-mix(in srgb, var(--wb-primary) 34%, transparent); transform: scaleX(1); opacity: 1; animation: none; }
+.rpop .spact.danger.d-hold-btn.d-hold-ready::before { background: color-mix(in srgb, var(--wb-fail) 36%, transparent); }
+@keyframes d-hold-bar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .rail .drstop.d-stop-unsafe.d-hold-active::before,
+  .rpop .spact.d-hold-btn.d-hold-active::before { animation: none; transform: scale(1); opacity: .45; }
+  .rail .drstop.d-stop-unsafe.d-hold-ready::before,
+  .rpop .spact.d-hold-btn.d-hold-ready::before { opacity: 1; }
+}
 /* a rail row's menu (dashboard.js, rail row menu): items as the link menu's,
    the "move under" list opening in place below its item, indented, and a
    hosted row's session menu below them; the live line its moves (and the
