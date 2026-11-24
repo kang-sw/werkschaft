@@ -1103,7 +1103,20 @@
     return freePin;
   }
   function freeStartPinWindow() {
-    freePin.until = Date.now() + FREE_PIN_MS;
+    var p = freePinned();
+    if (!p) return;
+    // After the native landing, the destination rail can reserve a different
+    // amount of space. Correct once before holding the measured offset.
+    if (p.recheck) {
+      var top = p.recheck();
+      p.recheck = null;
+      if (top !== undefined) {
+        p.col.scrollTo({ top: top, behavior: "instant" });
+        freeJump.top = p.col.scrollTop;
+        p.offset = freeOffset(p.node, p.col);
+      }
+    }
+    p.until = Date.now() + FREE_PIN_MS;
     freePinTimer = setTimeout(freeReleasePin, FREE_PIN_MS);
   }
   function freeOffset(node, col) {
@@ -1116,7 +1129,8 @@
     if (pin && pin.offset === undefined) pin.offset = freeOffset(pin.node, col);
     if (moving) col.scrollTo({ top: top, behavior: "smooth" });
     else {
-      if (top !== from) col.scrollTop = top;
+      if (freeJump && freeJump.moving && col.scrollTo) col.scrollTo({ top: top, behavior: "instant" });
+      else if (top !== from) col.scrollTop = top;
       top = col.scrollTop;
     }
     freeJump = { top: top, moving: moving };
@@ -1133,11 +1147,12 @@
       else freeStartPinWindow();
     }
   }
-  function freeLandTarget(node, top, smooth, offset) {
+  function freeLandTarget(node, top, smooth, offset, recheck) {
     var col = $("bcol"), card = freeActive && anchorOwner(node);
     if (!col || !card || !freePos.has(card) || !col.contains(node) ||
         card.hasAttribute("data-max") || node.hasAttribute("data-max")) return false;
-    freeLand(col, top === undefined ? col.scrollTop : top, smooth && !reducedMotion(), { node: node, card: card, offset: offset });
+    freeLand(col, top === undefined ? col.scrollTop : top, smooth && !reducedMotion(),
+      { node: node, card: card, offset: offset, recheck: recheck });
     return true;
   }
   function freePinLayout() {
@@ -1391,7 +1406,7 @@
     freeJump.moving = false;
     if (freePin) {
       freeStartPinWindow();
-      if (freePin.dirty) freePinLayout();
+      if (freePin && freePin.dirty) freePinLayout();
     }
   }
   function freeScrollTick() {
@@ -1415,7 +1430,7 @@
     var needSlide = nextAnchor !== freeAnchorIdx ||
       (freeWinStart > 0 && yFirst !== undefined && (col.scrollTop - yFirst) < viewH * 0.75) ||
       (freeWinEnd < list.length - 1 && (yLastBottom - (col.scrollTop + viewH)) < viewH * 0.75);
-    if (!freeJump && needSlide) {
+    if (!freeJump && (needSlide || virtualExemptDirty.size)) {
       freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list });
     }
     if (typeof boardDialScroll === "function" && nextNode) {
