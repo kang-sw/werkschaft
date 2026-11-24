@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: a3fc35d436e825f6
 sage-review-completeness-reviewed: a3fc35d436e825f6
+completed: 2026-11-25
 ---
 
 # Fix the last ws 0.52 release-gate blockers
@@ -845,3 +846,8 @@ operations to startup. The independent lite review of
 
 The ticket stays in `ready/` and the commits stay on the lead-assigned
 `impl/develop/0520-p8b-fix-forward` branch.
+
+
+## Resolution (2026-11-25)
+
+All eight re-review rounds' blockers are repaired (Phases 1-8 and the Phase 8 fix-forward). The 0.52.0 gate cleared 41e81115c..af9578df1 with concern. Two Important follow-ups (interrupted-deletion checkout occupancy, in-process heartbeat expiry through a closed bridge) and two coverage minors are recorded as review follow-ups in 5ce0292ce for 0.52.1.
