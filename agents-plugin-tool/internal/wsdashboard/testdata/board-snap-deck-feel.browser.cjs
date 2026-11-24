@@ -290,6 +290,81 @@ test('Part 1 & 2: Designated-Y free-canvas variable heights + native #bcol wheel
   }
 });
 
+test('wheel reversal takes over a pending board alignment during frame hydration', async () => {
+  const browser = await launchBrowser();
+  try {
+    const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 12 });
+    try {
+      const start = await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        col.scrollTop = 620;
+        const rect = col.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + 170, height: col.scrollHeight };
+      });
+      await waitFrames(page, 4);
+      await page.mouse.move(start.x, start.y);
+      await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        const topic = document.getElementById('topic-0');
+        const frame = topic.querySelector('iframe.doc-frame');
+        window.boardWheelTrace = [];
+        col.addEventListener('wheel', e => window.boardWheelTrace.push(e.deltaY));
+        // Hold a frame's first measured height until both wheel events arrive.
+        new Promise(resolve => { window.releaseFrameHeight = resolve; })
+          .then(() => window.__queueFrameHeight(frame, 180));
+        window.WsBoardAnchor.select(topic, { smooth: true });
+      });
+      await page.mouse.wheel(0, 950);
+      await page.mouse.wheel(0, -300);
+      await page.evaluate(() => window.releaseFrameHeight());
+      await page.waitForFunction(() => document.querySelector('#topic-0 iframe').style.height === '180px');
+      // Chromium's superseded smooth scroll would otherwise keep settling at 0.
+      await page.waitForTimeout(600);
+      const result = await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        return { top: col.scrollTop, height: col.scrollHeight, wheels: window.boardWheelTrace };
+      });
+      assert.deepEqual(result.wheels, [950, -300], 'both native wheel events reached the board');
+      assert.ok(result.top > 200, 'the wheel reversal stays clear of the stale top landing: ' + JSON.stringify(result));
+      assert.equal(result.height, start.height, 'frame hydration keeps the board runway in place');
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a newly mounted tail keeps the runway through a scroll reversal while cards are loading', async () => {
+  const browser = await launchBrowser();
+  try {
+    const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 10 });
+    try {
+      const loading = await page.addStyleTag({ content: '#bcol section.topic { height: 40px; overflow: clip; }' });
+      await page.evaluate(() => window.WsBoardAnchor.settle());
+      const result = await page.evaluate(() => new Promise(resolve => {
+        const col = document.getElementById('bcol');
+        const height = col.scrollHeight;
+        col.addEventListener('scrollend', () => {
+          const info = window.WsBoardAnchor.windowInfo();
+          const tail = { mounted: info.end === info.list.length - 1, height: col.scrollHeight };
+          col.scrollTop -= 300;
+          resolve({ height, tail, top: col.scrollTop });
+        }, { once: true });
+        col.scrollTop = 1100;
+      }));
+      await loading.evaluate(el => el.remove());
+      assert.equal(result.tail.mounted, true, 'the short tail is measured while the reversal is pending');
+      assert.equal(result.tail.height, result.height, 'the loading tail leaves the runway intact');
+      assert.equal(result.top, 800, 'the browser can apply the upward reversal without a clamp');
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test('Part 3: Overview fast exit (0 data-overview-motion tags) + 0 idle rAF while open', async () => {
   const browser = await launchBrowser();
   try {

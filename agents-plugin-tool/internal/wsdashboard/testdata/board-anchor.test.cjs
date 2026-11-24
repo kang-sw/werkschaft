@@ -33,10 +33,10 @@ const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', '
   funcs(anchorSrc, ['anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark',
     'freeEnabled', 'freeTopPad', 'freeMeasureHeight', 'freeCachedHeight', 'freeSetOffWindow', 'freeClearNode', 'freeCancelTimers', 'freeSuspend', 'freeSuspendForOverview', 'freeResumeFromOverview',
-    'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeShiftScroll', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeFinishJump', 'freeScrollTick', 'freeIdleRecenter', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
+    'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeShiftScroll', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeFinishJump', 'freeScrollTick', 'freeIdleRecenter', 'freeScheduleIdle', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
     'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
-    'anchorSize', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
+    'anchorSize', 'anchorCancelProg', 'anchorOnWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -240,7 +240,7 @@ test('Designated-Y free-canvas board: no snap-deck slot height caps or wheel int
   assert.match(cssSrc, /\.overview-preview-stage/);
   assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
-  assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["']/);
+  assert.match(anchorSrc, /addEventListener\("wheel", anchorOnWheel, \{ passive: true \}\)/);
   assert.doesNotMatch(anchorSrc, /WsBoardWheel/);
   const w = world([T('A'), T('B')]);
   w.c.anchorInit();

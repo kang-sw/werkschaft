@@ -23,12 +23,12 @@
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorBoardMO = null, anchorFaceEl = null, anchorReplyEl = null, anchorCache = null;
   var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
-  var anchorProg = null, anchorProgSeq = 0;
+  var anchorProg = null, anchorProgSeq = 0, anchorUserScroll = 0;
   var freeActive = false, freeSuspended = false;
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   var freePos = new Map(), freeHeightCache = new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null;
+  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false;
 
   // --- windowed O(1) topic body virtualization --------------------------------
   // Far section.topic bodies outside the active free-canvas window (or
@@ -929,6 +929,7 @@
   }
   function freeSuspend() {
     freeJump = null;
+    freeStagePending = false;
     freeCancelTimers();
     freeDeferredCollapse.clear();
     if (freeCardRO) {
@@ -1044,7 +1045,7 @@
       }
     }
   }
-  function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd) {
+  function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd, keepRunway) {
     var moreBtn = board && board.querySelector ? board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])") : null;
     var stageH = FREE_RUNWAY_HEIGHT;
     if (winEnd === list.length - 1) {
@@ -1064,7 +1065,11 @@
       }
       stageH = Math.max(FREE_RUNWAY_HEIGHT, Math.ceil(yEnd + hEnd + FREE_BOT_PAD));
     }
-    if (board && board.style && board.style.minHeight !== stageH + "px") {
+    var priorH = parseFloat(board.style.minHeight) || 0;
+    // Keep the browser from clamping scrollTop while a wheel gesture is active.
+    freeStagePending = keepRunway && stageH < priorH;
+    if (freeStagePending) return priorH;
+    if (board.style.minHeight !== stageH + "px") {
       board.style.minHeight = stageH + "px";
     }
     return stageH;
@@ -1190,7 +1195,7 @@
         if ((!opts.jump || opts.smooth) && wasActive) freeShiftScroll(col, shift);
       }
     }
-    var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end]);
+    var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end], !opts.jump && !!freeIdleTimer);
 
     // Write style.top only when changed; never mutate width/height.
     for (var wi = start; wi <= end; wi++) {
@@ -1293,7 +1298,7 @@
     }
     if (freeWinEnd === list.length - 1) {
       var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
-      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeCachedHeight(lastCard));
+      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeCachedHeight(lastCard), !!freeIdleTimer);
     }
   }
   function freeFlushScrolledOutHeld() {
@@ -1353,6 +1358,10 @@
     } else {
       freeFlushScrolledOutHeld();
     }
+    if (freeStagePending) {
+      var tail = list[freeWinEnd], tailY = freePos.get(tail);
+      if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeCachedHeight(tail), false);
+    }
     if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
     var yFirst = freePos.get(list[freeWinStart]);
     var lastNode = list[freeWinEnd];
@@ -1376,10 +1385,17 @@
     }
     freeShiftScroll(col, delta);
   }
+  function freeScheduleIdle(col) {
+    if (freeIdleTimer) clearTimeout(freeIdleTimer);
+    var generation = anchorUserScroll, top = col.scrollTop;
+    freeIdleTimer = setTimeout(function () {
+      freeIdleTimer = 0;
+      if (generation === anchorUserScroll && col.scrollTop === top) freeIdleRecenter();
+    }, FREE_IDLE_RECENTER_MS);
+  }
   function freeOnScroll() {
     if (!freeActive || freeSuspended) return;
-    if (freeIdleTimer) clearTimeout(freeIdleTimer);
-    freeIdleTimer = setTimeout(freeIdleRecenter, FREE_IDLE_RECENTER_MS);
+    freeScheduleIdle($("bcol"));
     if (!freeScrollRaf && typeof requestAnimationFrame === "function") {
       freeScrollRaf = requestAnimationFrame(freeScrollTick);
     }
@@ -1445,6 +1461,7 @@
     if (Math.abs(delta) <= 0.5) return false;
     if (sc.scrollTo) sc.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
     else sc.scrollTop = target;
+    if (anchorProg && !smooth) anchorProg.top = sc.scrollTop;
     return true;
   }
   function anchorWaitFrames(pid, count) {
@@ -1509,7 +1526,7 @@
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
       var bounded = anchorIsBounded(col), sc = anchorScroller(col, bounded);
-      anchorProg = { key: key, id: pid, smooth: wantSmooth, until: Date.now() + (wantSmooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: sc.scrollTop };
+      anchorProg = { key: key, id: pid, scroller: sc, smooth: wantSmooth, until: Date.now() + (wantSmooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: sc.scrollTop, top: sc.scrollTop };
       var moved = anchorAlign(col, n, wantSmooth, bounded);
       if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
@@ -1526,7 +1543,17 @@
     if (to) { anchorSelect(to, { smooth: true }); return true; }
     // Past the last card the board's tail (Show more closed topics, the
     // runway) is reachable; past the first, nothing.
-    if (d > 0) { var col = $("bcol"); if (col) col.scrollTo({ top: col.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" }); }
+    if (d > 0) {
+      var col = $("bcol");
+      if (col) {
+        var height = col.scrollHeight, smooth = !reducedMotion();
+        if (freeActive && smooth) {
+          var target = Math.max(0, height - col.clientHeight);
+          if (Math.abs(col.scrollTop - target) > 1) freeJump = { top: target, moving: true };
+        }
+        col.scrollTo({ top: height, behavior: smooth ? "smooth" : "auto" });
+      }
+    }
     return false;
   }
   // fallback is the card to take when the current one leaves the order: the
@@ -1712,6 +1739,7 @@
     if (!p || p.key !== anchorKey || Date.now() > p.until) { anchorProg = null; return; }
     var col = $("bcol"), n = anchorNode(p.key);
     if (!col || !n || !n.isConnected) return;
+    if (!p.smooth && Math.abs(p.scroller.scrollTop - p.top) > 1) { anchorProg = null; return; }
     var moved = anchorAlign(col, n, !p.scrollDone && p.smooth);
     if (moved) p.scrollDone = false;
     if (fromInsetOrFrame) {
@@ -1750,8 +1778,17 @@
   }
   function anchorCancelProg(e) {
     if (e && e.defaultPrevented) return;
+    anchorUserScroll++;
+    var col = $("bcol"), sc = null;
+    if (freeJump && freeJump.moving) sc = col;
+    else if (anchorProg && anchorProg.smooth && !anchorProg.scrollDone) sc = anchorProg.scroller;
     anchorProg = null;
     freeJump = null;
+    if (sc && sc.scrollTo) sc.scrollTo({ top: sc.scrollTop, behavior: "instant" });
+    if (freeActive && !freeSuspended) freeScheduleIdle(col);
+  }
+  function anchorOnWheel(e) {
+    if (!e.ctrlKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) anchorCancelProg(e);
   }
   function anchorOnKey(e) {
     var k = e && e.key;
@@ -1762,7 +1799,8 @@
     if (!col) return;
     if (freeActive) {
       if (e.target === col) {
-        freeFinishJump(col);
+        // An interrupted native wheel transaction can emit its own scrollend.
+        if (freeJump && Math.abs(col.scrollTop - freeJump.top) <= 1) freeFinishJump(col);
         freeScrollTick();
       }
       return;
@@ -1771,7 +1809,7 @@
     if (e.target !== col && e.target !== sc && !(sc === doc.scrollingElement && (e.target === doc || e.target === doc.documentElement))) return;
     var p = anchorProg;
     if (p && p.key === anchorKey && Date.now() <= p.until) {
-      if (!p.smooth && Math.abs(sc.scrollTop - p.target) > 120) { anchorProg = null; }
+      if (!p.smooth && Math.abs(sc.scrollTop - p.top) > 1) { anchorProg = null; }
       else {
         var targetNode = anchorNode(p.key) || anchorLast;
         if (targetNode && targetNode.isConnected) {
@@ -1824,8 +1862,10 @@
     anchorSized.h = anchorSized.bounded ? (col.clientHeight || window.innerHeight || 0) : 0;
     anchorSized.inset = anchorRailInset(col);
     col.addEventListener("scroll", freeOnScroll, { passive: true });
+    col.addEventListener("wheel", anchorOnWheel, { passive: true });
     col.addEventListener("pointerdown", anchorCancelProg, { passive: true });
     col.addEventListener("touchstart", anchorCancelProg, { passive: true });
+    col.addEventListener("touchmove", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
     col.addEventListener("scrollend", anchorScrollEnd, { passive: true });
     if (doc.addEventListener) doc.addEventListener("scrollend", anchorScrollEnd, { passive: true });
