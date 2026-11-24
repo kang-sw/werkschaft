@@ -97,6 +97,9 @@ func (s *Server) filteredTools() []map[string]any {
 				tool = agentWorkerTool(tool)
 			}
 		}
+		if name == "compact" && !s.compactAdvertisesLeadSummary() {
+			tool = compactToolWithoutLeadSummary(tool)
+		}
 		if s.toolAllowed(name) {
 			definition := publicToolDefinition(tool, descriptor.aliases.advertised(name), namespace)
 			if descriptor.toolsAlwaysLoad {

@@ -153,13 +153,14 @@ since v0.51.1, so a rolled-back daemon cannot show it. A pre-release build kept
 it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
 the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
 not a SQLite row, so the offline CLI can write it and nothing that copies
-the state databases copies a secret. The daemon reads it once, at the first
-credential use, serves every later read from memory, and rewrites it by
-atomic replace only when a credential changes; while it runs it is the
-file's only writer. A writer keeps members it does not know, and a file
-whose `schema_version` is newer is read but never rewritten. There is no
-environment-variable source: the daemon's environment reaches every hosted
-session and exec subprocess.
+the state databases copies a secret. At startup the daemon reads the file
+while reconciling saved endpoint keys with the machine configuration. It
+serves later reads from memory. While running, the daemon is the file's
+only writer and atomically replaces it when a credential changes. A writer
+keeps members it does not know and leaves files with a newer
+`schema_version` untouched. The daemon's environment reaches every hosted
+session and exec subprocess, so credentials are read from the credential
+file.
 
 On update, the writer stages the new file beside `credentials.json`. It
 adds a store-owned retiring hard link to the current generation and opens
@@ -174,11 +175,25 @@ native POSIX rename and unlink support. A volume without that support or
 a reader that blocks opening the retiring handle causes the update to
 fail before publication.
 
-Use `credential set openrouter` for an OpenRouter key. For vLLM or Ollama,
-add a name, `base_url`, and `kind` to the global `agent.werk_endpoints`
-map and select `local/<name>` as the provider. If the endpoint requires
-an API key, use `credential set local/<name>`. The local key is bound to
-that endpoint's configured API root.
+On the machine running the dashboard, open Settings → Account to manage
+provider credentials and named vLLM or Ollama endpoints. The OpenRouter row
+checks a new key with OpenRouter and shows its saved mask and verification
+result. A rejected key leaves the previous key in place. Connection and
+temporary errors leave the new key available for a re-check.
+
+The OpenAI row runs Sign in with ChatGPT in the system browser and shows the
+active registration and its background-use consent. Sign-out deletes that
+local registration and its consent. When a background request first needs
+an answer, the dashboard shows a prompt. Use the Account toggle to change
+the answer later.
+
+To edit a named endpoint from the CLI, use
+`credential endpoint set <name> --base-url <url> --kind <vllm|ollama>`
+or `credential endpoint remove <name>`. Select `local/<name>` as the
+Werk tier provider. Use `credential set local/<name>` if the endpoint
+requires a key. Removing an endpoint or changing its API root deletes the
+retired root's key. The machine's endpoint map stays in the global
+`agent.werk_endpoints` setting.
 
 `credential set <provider>` (the key on stdin, never in argv),
 `credential show [<provider>]` (masked), and `credential remove <provider>`

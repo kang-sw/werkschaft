@@ -46,7 +46,7 @@ func LeadSummarySchema() map[string]any {
 	}
 	return map[string]any{
 		"type": "object", "properties": properties, "required": required, "additionalProperties": false,
-		"description": "Builtin lead self-compaction prose. Use empty strings for sections with nothing to carry forward.",
+		"description": "Hosted lead self-compaction prose. Use empty strings for sections with nothing to carry forward.",
 	}
 }
 

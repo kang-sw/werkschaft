@@ -41,6 +41,7 @@ const HostedOutputLimit = 16 << 10
 // stop marker.
 type HostedSummary struct {
 	ID      string
+	Owner   string
 	Tool    string
 	Command string
 	Cwd     string
@@ -73,12 +74,29 @@ func (h *Hosted) summaryLocked(j *hostedJob) HostedSummary {
 		origin = OriginUser
 	}
 	return HostedSummary{
-		ID: row.ID, Tool: row.Tool, Command: displayCommand(*row), Cwd: row.Cwd, State: row.State, Error: row.Error,
+		ID: row.ID, Owner: row.Owner, Tool: row.Tool, Command: displayCommand(*row), Cwd: row.Cwd, State: row.State, Error: row.Error,
 		Origin: origin, ExitCode: row.ExitCode, Signal: row.Signal, StartedAt: row.StartedAt, EndedAt: row.EndedAt,
 		Written:       j.out.Written(StreamCombined),
 		StoppedByUser: j.userStopped && row.State == HostedStopped,
 		StopNotice:    j.stopNotice,
 	}
+}
+
+func sortHostedSummaries(out []HostedSummary) {
+	sort.Slice(out, func(a, b int) bool {
+		x, y := out[a], out[b]
+		if x.Terminal() != y.Terminal() {
+			return !x.Terminal()
+		}
+		if !x.Terminal() {
+			if x.StartedAt != y.StartedAt {
+				return x.StartedAt > y.StartedAt
+			}
+		} else if x.EndedAt != y.EndedAt {
+			return x.EndedAt > y.EndedAt
+		}
+		return x.ID < y.ID
+	})
 }
 
 // Jobs returns every job owner owns, for the HUD: the running ones first,
@@ -97,21 +115,59 @@ func (h *Hosted) Jobs(owner string) []HostedSummary {
 		}
 	}
 	h.mu.Unlock()
-	sort.Slice(out, func(a, b int) bool {
-		x, y := out[a], out[b]
-		if x.Terminal() != y.Terminal() {
-			return !x.Terminal()
-		}
-		if !x.Terminal() {
-			if x.StartedAt != y.StartedAt {
-				return x.StartedAt > y.StartedAt
-			}
-		} else if x.EndedAt != y.EndedAt {
-			return x.EndedAt > y.EndedAt
-		}
-		return x.ID < y.ID
-	})
+	sortHostedSummaries(out)
 	return out
+}
+
+// JobsForOwners returns every job owned by any conversation in owners,
+// optionally restricted to originFilter (OriginAgent or OriginUser; empty
+// returns both), sorted running-first (newest started first) then finished
+// (newest ended first). Memory only; a nil h or empty owners returns none.
+func (h *Hosted) JobsForOwners(owners map[string]bool, originFilter string) []HostedSummary {
+	if h == nil || len(owners) == 0 {
+		return nil
+	}
+	h.mu.Lock()
+	var out []HostedSummary
+	for _, j := range h.jobs {
+		if !owners[j.row.Owner] {
+			continue
+		}
+		if originFilter != "" {
+			origin := OriginAgent
+			if j.origin == OriginUser {
+				origin = OriginUser
+			}
+			if origin != originFilter {
+				continue
+			}
+		}
+		out = append(out, h.summaryLocked(j))
+	}
+	h.mu.Unlock()
+	sortHostedSummaries(out)
+	return out
+}
+
+func (h *Hosted) ownedByAny(owners map[string]bool, originFilter, id string) (*hostedJob, error) {
+	if h == nil || len(owners) == 0 || id == "" {
+		return nil, ErrExecNotFound
+	}
+	h.mu.Lock()
+	j := h.jobs[id]
+	ok := j != nil && owners[j.row.Owner]
+	if ok && originFilter != "" {
+		origin := OriginAgent
+		if j.origin == OriginUser {
+			origin = OriginUser
+		}
+		ok = origin == originFilter
+	}
+	h.mu.Unlock()
+	if !ok {
+		return nil, ErrExecNotFound
+	}
+	return j, nil
 }
 
 // HostedOutput is one offset read of a job's merged output.
@@ -137,6 +193,20 @@ func (h *Hosted) ReadOutput(owner, id string, from int64, limit int) (HostedOutp
 	if err != nil {
 		return HostedOutput{}, err
 	}
+	return h.readJobOutput(j, from, limit), nil
+}
+
+// ReadOutputForOwners reads combined output for job id when owned by any
+// conversation in owners and matching originFilter (if non-empty).
+func (h *Hosted) ReadOutputForOwners(owners map[string]bool, originFilter, id string, from int64, limit int) (HostedOutput, error) {
+	j, err := h.ownedByAny(owners, originFilter, id)
+	if err != nil {
+		return HostedOutput{}, err
+	}
+	return h.readJobOutput(j, from, limit), nil
+}
+
+func (h *Hosted) readJobOutput(j *hostedJob, from int64, limit int) HostedOutput {
 	if limit <= 0 || limit > HostedOutputLimit {
 		limit = HostedOutputLimit
 	}
@@ -148,7 +218,7 @@ func (h *Hosted) ReadOutput(owner, id string, from int64, limit int) (HostedOutp
 	return HostedOutput{
 		Job: sum, From: read.Start, Next: read.End, Written: read.Written, Evicted: read.Evicted,
 		Gap: from < read.Evicted, Segments: read.Segments,
-	}, nil
+	}
 }
 
 // StopByUser is the user's stop of owner's job id (the HUD's Stop): the
@@ -169,6 +239,20 @@ func (h *Hosted) StopByUser(owner, id string) (HostedSummary, error) {
 	if err != nil {
 		return HostedSummary{}, err
 	}
+	return h.stopJobByUser(j)
+}
+
+// StopByUserForOwners is the user's stop of job id when owned by any
+// conversation in owners and matching originFilter (if non-empty).
+func (h *Hosted) StopByUserForOwners(owners map[string]bool, originFilter, id string) (HostedSummary, error) {
+	j, err := h.ownedByAny(owners, originFilter, id)
+	if err != nil {
+		return HostedSummary{}, err
+	}
+	return h.stopJobByUser(j)
+}
+
+func (h *Hosted) stopJobByUser(j *hostedJob) (HostedSummary, error) {
 	h.mu.Lock()
 	ended := j.row.Terminal()
 	h.mu.Unlock()

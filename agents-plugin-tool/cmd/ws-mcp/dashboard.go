@@ -516,7 +516,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	var loadProviderConfig func(wsconfig.Options) error
 	if credentials != nil {
 		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
-		loadProviderConfig = credentials.LoadLocalEndpoints
+		loadProviderConfig = credentials.ReconcileLocalEndpoints
 	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{

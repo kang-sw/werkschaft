@@ -352,6 +352,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		catalog.Knobs = append(catalog.Knobs, s.declared.knobs(&catalogResolver, sessionKey)...)
+		hideConfigDiscovery(&view, &catalog)
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, configListView{View: view, Knobs: catalog.Knobs, ManifestErrors: s.declared.rejected}, nil)
 		}
@@ -553,6 +554,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			sentValue := value
 			value, err := normalizeTuneScalar(entry, value, hasValue)
 			if err != nil {
+				return toolTextResponse(req.ID, "", err)
+			}
+			if err := validateCompactionLeadModeTarget(entry.Key, harness, value, s.agentBackends()...); err != nil {
 				return toolTextResponse(req.ID, "", err)
 			}
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)

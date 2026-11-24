@@ -17,13 +17,37 @@ import (
 // loop): the session shows it broken until it connects again, and the
 // user may restart by hand (Runner.Restart).
 
-// syncHost writes the lead's host state into its live snapshot (unless
-// quiet, a replayed line: the replay's end writes the snapshot).
+// syncHost writes the conversation's host state into its live snapshot (unless
+// quiet, a replayed line: the replay's end writes the snapshot). Leads carry
+// harness background tasks, failures, MCP status, retries, and recursive
+// agent-origin ws/exec counts; non-lead workers carry host state only while
+// they or their descendants have running agent-origin ws/exec jobs.
 func (c *conv) syncHost(quiet bool) {
-	if !c.rec.Lead {
-		return
+	var selfExec, descExec int
+	if c.r != nil {
+		selfExec, descExec = c.r.BgExecCounts(c.rec.ReplyID)
 	}
-	h := &wslive.Host{BackgroundTasks: c.bgTasks, Background: copyCount(c.background), Monitors: copyCount(c.monitors), Failure: c.failure, MCPBroken: c.mcpBroken, Retry: c.retry}
+	totalExec := selfExec + descExec
+	var h *wslive.Host
+	if c.rec.Lead {
+		h = &wslive.Host{
+			BackgroundTasks: c.bgTasks,
+			Background:      copyCount(c.background),
+			Monitors:        copyCount(c.monitors),
+			BgExecCount:     totalExec,
+			BgExecSelf:      selfExec,
+			BgExecDesc:      descExec,
+			Failure:         c.failure,
+			MCPBroken:       c.mcpBroken,
+			Retry:           c.retry,
+		}
+	} else if totalExec > 0 {
+		h = &wslive.Host{
+			BgExecCount: totalExec,
+			BgExecSelf:  selfExec,
+			BgExecDesc:  descExec,
+		}
+	}
 	if c.live.setHost(h, quiet) && !quiet {
 		c.r.notify(c.rec.ReplyID, c.rec.Root)
 	}
@@ -33,6 +57,9 @@ func (c *conv) syncHost(quiet bool) {
 // and the session's failure state until a turn succeeds.
 func (c *conv) alert(n wslive.Notice, quiet bool) {
 	c.alerted = true
+	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
+		c.compactStage1UsageLimited = true
+	}
 	c.setStatus(func() { c.failure = &n })
 	if !quiet {
 		c.live.notice(n)

@@ -128,6 +128,9 @@ type LifecyclePolicy struct {
 	// WorkerLog marks a backend whose each hosted process writes its own worker
 	// log the daemon locates afresh at every lead start.
 	WorkerLog bool
+	// LeadCompactionWSOnly marks a backend whose hosted leads always run
+	// ws-managed compaction and have no native compaction fallback (werk).
+	LeadCompactionWSOnly bool
 }
 
 // ExecOptIn names an exec-cutover opt-in: the config Key that must say on and
@@ -229,6 +232,32 @@ func (r *Runner) internalPrompt(rec Record) bool {
 
 func (r *Runner) lifecycle(backend string) LifecyclePolicy {
 	return r.opts.Backends[backend].Lifecycle
+}
+
+// LeadCompactionWSOnly reports whether harness's backend descriptor forces
+// ws-managed lead compaction (no native compaction mode).
+func LeadCompactionWSOnly(harness string, registries ...map[string]BackendRegistration) bool {
+	for _, regs := range registries {
+		if reg, ok := regs[harness]; ok {
+			return reg.Lifecycle.LeadCompactionWSOnly
+		}
+	}
+	if reg, ok := BuiltinBackendRegistrations()[harness]; ok {
+		return reg.Lifecycle.LeadCompactionWSOnly
+	}
+	return false
+}
+
+// EffectiveLeadCompactionMode normalizes a resolved compaction.lead_mode value
+// against the harness descriptor's LeadCompactionWSOnly capability.
+func EffectiveLeadCompactionMode(harness, raw string, registries ...map[string]BackendRegistration) string {
+	if LeadCompactionWSOnly(harness, registries...) {
+		return wsconfig.CompactionModeWS
+	}
+	if raw == wsconfig.CompactionModeWS {
+		return wsconfig.CompactionModeWS
+	}
+	return wsconfig.CompactionModeNative
 }
 
 // terminalSessionOf is the registered backend's terminal support, nil when it

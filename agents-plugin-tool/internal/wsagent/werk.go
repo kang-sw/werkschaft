@@ -77,6 +77,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			ExecReadTools:            true,
 			FileWriteTools:           true,
 			ReadOnlyNoExec:           true,
+			LeadCompactionWSOnly:     true,
 		},
 		// The harness has no native process tools: shell goes through the
 		// ws exec tools, so every worker runs under the exec cutover (which
@@ -143,7 +144,7 @@ func (b WerkBackend) localProviders() []wscred.Provider {
 	return nil
 }
 
-const werkSIWCReason = "sign in with ChatGPT using the CLI command \"credential sign-in openai\""
+const werkSIWCReason = "sign in with ChatGPT in dashboard Settings → Account or using the CLI command \"credential sign-in openai\""
 
 func (b WerkBackend) providerGap(id wscred.ProviderID) string {
 	if wsconfig.IsLocalWerkProvider(string(id)) || b.credentialStatus == nil {
@@ -217,7 +218,7 @@ func (b WerkBackend) leadCredentialGap() string {
 
 // Reasons werk reports itself unavailable, in the words a user acts on.
 const (
-	werkNoKeyReason = "no OpenRouter API key is configured; set one with the CLI command \"credential set openrouter\" (or in the dashboard settings)"
+	werkNoKeyReason = "no OpenRouter API key is configured; set one with the CLI command \"credential set openrouter\" (or in dashboard Settings → Account)"
 	werkNoModelFmt  = "no tier model is configured for %s; set one with config.tune key \"agents.tier\" (harness %q, tier small, medium, large or xlarge, and a provider model ID); no default model is shipped"
 )
 
@@ -246,6 +247,18 @@ func (b WerkBackend) workerProviderGap(id string) string {
 		return (&wscred.ProviderError{Provider: provider.ID, Err: wscred.ErrConsentRequired}).Error()
 	}
 	return ""
+}
+
+func requestPlanBackgroundConsent(backend Backend) {
+	if b, ok := backend.(interface{ requestPlanBackgroundConsent() }); ok {
+		b.requestPlanBackgroundConsent()
+	}
+}
+
+func (b WerkBackend) requestPlanBackgroundConsent() {
+	if store, ok := b.credentials.(interface{ RequestOpenAIBackgroundConsent() }); ok {
+		store.RequestOpenAIBackgroundConsent()
+	}
 }
 
 // planBackgroundConsent reads the active registration without acquiring a token.

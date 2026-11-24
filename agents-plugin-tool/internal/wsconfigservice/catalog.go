@@ -41,8 +41,9 @@ type Rule struct {
 	Editable        bool
 	Structured      bool
 	Compaction      bool
-	Normalize       func(string) (string, error)
-	Decode          func(string) (any, error)
+	Normalize            func(string) (string, error)
+	ValidateHarnessValue func(harness, value string) error
+	Decode               func(string) (any, error)
 	ValidateName    func(string) error
 	NormalizeObject func(any, wsconfig.Scope) (json.RawMessage, error)
 	LegacyKey       func(harness string) string

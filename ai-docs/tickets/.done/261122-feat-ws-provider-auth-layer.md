@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 426b912f0778c416
 sage-review-completeness-reviewed: 426b912f0778c416
+completed: 2026-11-25
 ---
 
 # Provider authentication layer
@@ -417,3 +418,86 @@ env -i HOME="$HOME" PATH="$PATH" WS_CACHE_HOME="$(mktemp -d)" go -C agents-plugi
   Decision 13. Compare headless-browser captures of the Account section
   against the linked mockup side by side at 1280 px and 390 px in both
   dark and light, and capture the LAN banner hint per Decision 10.
+
+### Result (9f1a0fe14) - 2026-11-25
+
+Settings → Account is machine-wide. It manages OpenRouter verification,
+OpenAI sign-in and plan consent, and named vLLM and Ollama endpoints. The
+Werk tier links lead to Account while retaining the selected workflow
+scope. The Settings catalog and manual include the section, and Account
+strings cover all 11 supported locales.
+
+The browser API uses the dashboard viewer cookie and requires a loopback
+peer and Host. Mutations also require the dashboard Origin. Responses
+carry masks and fixed error codes. OpenAI sign-in supports progress and
+cancellation. Sign-out deletes the displayed active registration and its
+consent locally per Decision 10. The Account row uses a generic ChatGPT
+plan label and reports authorization and pause state. When a signed-in
+account with plan access has no consent choice, a background refusal
+opens the dashboard prompt. The local prompt supplies
+allow, deny, close and an Account link. An authenticated LAN viewer gets
+the message and on-machine hint.
+
+OpenRouter verification checks the key-info endpoint on the daemon. A
+rejected replacement leaves the saved key intact. Transient HTTP and
+connection failures save it as unverified with a re-check action.
+Endpoint writes share the global configuration lock and retire a key
+when its endpoint is removed or changes API root. The daemon also
+reconciles stale keys on startup and global reload. Standalone credential
+status reads use a read-only endpoint catalog. The owner CLI uses
+`credential endpoint set` and `credential endpoint remove` with the same
+retirement logic.
+
+**Patch compatibility**
+
+- T1 for discovery. `internal/mcp/server_config.go:294-308` drops the
+  endpoint key from the discovery view used by config.list and lead-tune.
+  T0 for stored settings and direct calls. The old config.get/config.tune
+  dispatch (`f74ed1b74:agents-plugin-tool/internal/mcp/server_dispatch.go:360,589`)
+  and the existing endpoint JSON shape still serve direct reads and
+  lead-authorized set/reset. The Account editor uses the global dashboard
+  projection.
+- T0 for the credential document. The 0.52.0-compatible writer at
+  `f74ed1b74:agents-plugin-tool/internal/wscred/store.go:466,521-541`
+  replaces known key fields and preserves raw unknown members. The new
+  status reader at `internal/wscred/openrouter_verify.go:32-39` uses the
+  private fingerprint to recover metadata for an unchanged key and show
+  unverified after an old writer replaces it. Re-check publication also
+  checks the record generation at lines 99-121. The file schema remains
+  version 1.
+
+**Verification**
+
+- Full race suites passed for `internal/wscred`, `internal/wsconfig`,
+  `internal/wsagent`, and `cmd/ws-mcp`. The dashboard Go suite passed
+  1,542 tests with `TestBoardFrameBands` excluded. Its unsupported fake
+  DOM selector fails on the unmodified `f74ed1b74` base too.
+- The full MCP suite passed 1,528 tests. The i18n and package suites
+  passed, including Settings catalog and locale coverage.
+- `go build ./...`, the generated-package asset check, and scoped native and
+  Windows cross-vet passed. The wsagent vet
+  runs disabled the version analyzer because the existing
+  `werk_lead_test.go:62` uses `testing.Context` in a Go 1.23 module.
+- The isolated integration preview over `develop` at `7053c78de` had
+  no textual conflicts. Focused race tests passed with
+  `TestWerkCronSteeringRecoversClaimAfterConsentRevocation` excluded after
+  the same failure reproduced on that develop commit alone.
+- Focused race tests covered Account route redaction, loopback and origin
+  enforcement, key verification and legacy-writer recovery, sign-in
+  cancellation, consent and SSE, endpoint cleanup and CLI ownership.
+- Six Settings Chromium suites and 195 frontend Node tests passed. The
+  combobox suite edited through the real Account endpoint and observed
+  model picker refresh. Mock Account responses and a simulated LAN SSE
+  stream drove the visual and lifecycle captures.
+- Compared `compare-1280-dark.png` and `compare-1280-light.png` with
+  `ai-docs/assets/mockups/261122/provider-auth/mockup.html` at 1280 px.
+  The Account hierarchy, actions, and themes matched. At 390 px,
+  `compare-390-dark.png` and `compare-390-light.png` showed the endpoint
+  rows below the initial viewport due to drawer chrome and row spacing.
+  `account-endpoints-390-dark.png` and `account-endpoints-390-light.png`
+  show the endpoints after scrolling. `lan-consent-390-light.png`
+  showed the on-machine hint with the message.
+- The independent lite review of `f74ed1b74..9f1a0fe14` found no
+  actionable correctness or test-integrity issues.
+- Credential and OAuth checks used fake values and isolated fixtures.
+  The owner-run live sign-in check is recorded under Phase 2.

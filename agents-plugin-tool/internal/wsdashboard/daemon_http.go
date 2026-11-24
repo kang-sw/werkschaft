@@ -58,6 +58,8 @@ func (d *Daemon) Handler() http.Handler {
 	}
 	mux.HandleFunc(wscred.TokenRoutePath, d.handleProviderToken)
 	mux.HandleFunc(credentialChangePath, d.handleProviderChange)
+	mux.HandleFunc(EndpointChangePath, d.handleEndpointChange)
+	mux.HandleFunc(accountPrefix, d.handleAccount)
 	mux.HandleFunc("/nudge", d.handleNudge)
 	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)

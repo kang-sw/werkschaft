@@ -1137,3 +1137,106 @@ func TestFailStartThatFindsAStopsExitRecordMovesTheRevision(t *testing.T) {
 		t.Fatalf("job %+v; the states the revisions saw = %v", sum, seen)
 	}
 }
+
+// TestHostedRunningAgentOwnersAndTreeOps verifies memory-only multi-owner
+// queries, strict OriginAgent vs OriginUser separation, deterministic sorting,
+// and cross-owner isolation for ReadOutputForOwners and StopByUserForOwners.
+func TestHostedRunningAgentOwnersAndTreeOps(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	fx.sessions.mu.Lock()
+	fx.sessions.owners["leadA"] = HostedOwner{ID: "leadA", Gen: 1, Lead: true}
+	fx.sessions.owners["childA1"] = HostedOwner{ID: "childA1", Gen: 1}
+	fx.sessions.owners["leadB"] = HostedOwner{ID: "leadB", Gen: 1, Lead: true}
+	fx.sessions.mu.Unlock()
+
+	// Launch an agent job on lead, an agent job on child, a user job on lead,
+	// and an agent job on an unrelated peer.
+	leadAgent, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Owner: "leadA", Origin: OriginAgent, Async: true, Tool: "exec.shell", Command: "lead-cmd", Display: "lead-cmd",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childAgent, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Owner: "childA1", Origin: OriginAgent, Async: true, Tool: "exec.shell", Command: "child-cmd", Display: "child-cmd",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leadUser, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Owner: "leadA", Origin: OriginUser, Async: true, Tool: "exec.shell", Command: "user-cmd", Display: "user-cmd",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerAgent, err := fx.launch(context.Background(), nil, HostedLaunch{
+		Owner: "leadB", Origin: OriginAgent, Async: true, Tool: "exec.shell", Command: "peer-cmd", Display: "peer-cmd",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// RunningAgentOwners must exclude OriginUser jobs.
+	agentOwners := fx.h.RunningAgentOwners()
+	if agentOwners["leadA"] != 1 || agentOwners["childA1"] != 1 || agentOwners["leadB"] != 1 {
+		t.Fatalf("RunningAgentOwners = %v, want leadA=1 childA1=1 leadB=1", agentOwners)
+	}
+	allOwners := fx.h.RunningOwners()
+	if allOwners["leadA"] != 2 {
+		t.Fatalf("RunningOwners[leadA] = %d, want 2 (1 agent + 1 user)", allOwners["leadA"])
+	}
+
+	// JobsForOwners with OriginAgent over {leadA, childA1} returns only those 2 agent jobs.
+	treeOwners := map[string]bool{"leadA": true, "childA1": true}
+	got := fx.h.JobsForOwners(treeOwners, OriginAgent)
+	if len(got) != 2 {
+		t.Fatalf("JobsForOwners len = %d, want 2: %+v", len(got), got)
+	}
+	seenIDs := map[string]string{}
+	for _, j := range got {
+		if j.Origin == OriginUser {
+			t.Fatalf("JobsForOwners(OriginAgent) leaked user job: %+v", j)
+		}
+		seenIDs[j.ID] = j.Owner
+	}
+	if seenIDs[leadAgent.ID] != "leadA" || seenIDs[childAgent.ID] != "childA1" {
+		t.Fatalf("JobsForOwners owners = %v", seenIDs)
+	}
+
+	// ReadOutputForOwners allows child's agent job, rejects peer's job and user job.
+	if _, err := fx.h.ReadOutputForOwners(treeOwners, OriginAgent, childAgent.ID, 0, 1024); err != nil {
+		t.Fatalf("ReadOutputForOwners(childAgent) = %v, want nil", err)
+	}
+	if _, err := fx.h.ReadOutputForOwners(treeOwners, OriginAgent, peerAgent.ID, 0, 1024); !errors.Is(err, ErrExecNotFound) {
+		t.Fatalf("ReadOutputForOwners(peerAgent) = %v, want ErrExecNotFound", err)
+	}
+	if _, err := fx.h.ReadOutputForOwners(treeOwners, OriginAgent, leadUser.ID, 0, 1024); !errors.Is(err, ErrExecNotFound) {
+		t.Fatalf("ReadOutputForOwners(leadUser) = %v, want ErrExecNotFound", err)
+	}
+
+	// StopByUserForOwners rejects peer's job and user job, succeeds on child's agent job.
+	if _, err := fx.h.StopByUserForOwners(treeOwners, OriginAgent, peerAgent.ID); !errors.Is(err, ErrExecNotFound) {
+		t.Fatalf("StopByUserForOwners(peerAgent) = %v, want ErrExecNotFound", err)
+	}
+	if _, err := fx.h.StopByUserForOwners(treeOwners, OriginAgent, leadUser.ID); !errors.Is(err, ErrExecNotFound) {
+		t.Fatalf("StopByUserForOwners(leadUser) = %v, want ErrExecNotFound", err)
+	}
+	stopped, err := fx.h.StopByUserForOwners(treeOwners, OriginAgent, childAgent.ID)
+	if err != nil || stopped.Owner != "childA1" {
+		t.Fatalf("StopByUserForOwners(childAgent) = %+v, %v", stopped, err)
+	}
+	eventuallyExec(t, "childAgent terminal", func() bool {
+		return fx.h.RunningAgentOwners()["childA1"] == 0
+	})
+
+	// After childAgent stops, running leadAgent sorts before finished childAgent.
+	after := fx.h.JobsForOwners(treeOwners, OriginAgent)
+	if len(after) != 2 || after[0].ID != leadAgent.ID || after[1].ID != childAgent.ID {
+		t.Fatalf("JobsForOwners order after stop = %+v", after)
+	}
+
+	// Cleanup remaining jobs.
+	fx.holders.exit(leadAgent.HolderID, 0)
+	fx.holders.exit(leadUser.HolderID, 0)
+	fx.holders.exit(peerAgent.HolderID, 0)
+}
