@@ -511,6 +511,9 @@
           "branch": "impl/develop/film-fifty-rope"
         }
       }
+    },
+    "261124-feat-ws-managed-compaction": {
+      "registered_at": "2026-11-24T05:12:49Z"
     }
   }
 }
