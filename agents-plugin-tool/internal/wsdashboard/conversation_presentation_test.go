@@ -189,6 +189,44 @@ func TestConversationPresentationPeerNoteIsDisplayOnly(t *testing.T) {
 	}
 }
 
+func TestConversationPeerLeadBadgeUsesRecipientRole(t *testing.T) {
+	const peerID = "recipient"
+	const note = "[ws note: from a peer lead session (codex, not a worker), with the same authority as yours]"
+	body := note + "\nThe preview and body remain readable."
+	ring := []wslive.RingRecord{ringRecord(1, wslive.RingEntry{
+		Kind: wslive.RingMail, Direction: wslive.MailSent, Peer: "id:" + peerID, HistoryKey: "h",
+	})}
+	page := PageContent{MailBodies: map[string]string{"h": body}}
+	self := liveSession("sender", "/proj", testNow)
+	peer := liveSession(peerID, "/proj", testNow)
+	found := true
+	lookup := sessionLookup{session: func(id string) (Session, bool) { return peer, found && id == peerID }}
+	cache := newEntryCache()
+	check := func(wantBadge bool) {
+		t.Helper()
+		view := buildSessionView(pageInputs{Session: self, Ring: ring, Page: page, Lookup: lookup, Now: testNow})
+		set, err := renderSessionRegions(view, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		html := string(set[regionEntries].HTML)
+		if got := strings.Contains(html, `class="src peer-lead"`); got != wantBadge {
+			t.Fatalf("peer-lead badge present = %t, want %t: %s", got, wantBadge, html)
+		}
+		if !strings.Contains(html, note) || !strings.Contains(html, `class="mfirst">The preview and body remain readable.</span>`) {
+			t.Fatalf("missing mail note or preview: %s", html)
+		}
+	}
+	check(true)
+	peer.ParentReplyID = self.ReplyID
+	check(false)
+	peer.ParentReplyID = ""
+	peer.Agent = true
+	check(false)
+	found = false
+	check(false)
+}
+
 func TestConversationPresentationSourceLabelsRequireTypedCause(t *testing.T) {
 	mixed := "owner text\n\n[child report]\nreport <script>not HTML</script>"
 	ring := []wslive.RingRecord{
