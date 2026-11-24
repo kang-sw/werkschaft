@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 9945626b6197e20d
 sage-review-completeness-reviewed: 9945626b6197e20d
+completed: 2026-11-25
 ---
 
 # Harness quota continuation for hosted leads
@@ -191,6 +192,15 @@ Unify `Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text, ResetsAt
 - **Claude:** Verify existing `claude_alerts.go:102-154` tests cover both known and unknown `ResetsAt` on hosted leads.
 - **Verification boundary:** Remote `w5090` `go test ./internal/werk/... ./internal/wsagent/... ./internal/wsdashboard/...` passes with all 4 harnesses emitting normalized `NoticeUsageLimit` alerts (including `ResetsAt` from stream or `QuotaResetAt` fallback).
 
+### Result (8149a3a5) - 2026-11-24
+
+- Unified `NoticeUsageLimit` alert and `ResetsAt` extraction across all four hosted-lead harnesses:
+  - **Codex (`internal/wsagent/codex_mapper.go`, `codex_test.go`):** Converted `codexAlert` to a `*codexMapper` method extracting max future `ResetsAt` from saturated (`Percent >= 100`) `account/rateLimits/updated` windows.
+  - **Werk (`internal/werk/{responses,protocol,agent,durable_turn}.go`, `internal/wsagent/werk_mapper.go`):** Parsed `Retry-After`, `x-ratelimit-reset-*`, and `anthropic-ratelimit-*-reset` headers into `HTTPError.ResetsAt`, added additive `Line` fields (`ErrorCode`, `ResetsAt`, `UsageLimit`, `PlanPaused`), and mapped `LineTurnEnd` to `Event{Alert: ..., AlertManualOnly: line.PlanPaused}` before `TurnEnd`.
+  - **Antigravity (`internal/wsagent/{agy,agy_watchdog,runner,runner_recovery}.go`, `cmd/ws-mcp/dashboard.go`, `internal/wsdashboard/{daemon_runtime,plan_usage,plan_usage_agy}.go`):** Extended `agyMessage.Error` with `Data json.RawMessage`, classified ACP `msg.Error` and anchored in-band `modelFailure` quota errors into `NoticeUsageLimit` while excluding them from `agy_watchdog` short-backoff retries, and wired zero-disk-I/O `Options.QuotaResetAt` through `Daemon.QuotaResetAt`.
+  - **Live `agy` capture follow-up:** No live `agy` ACP quota-exhaustion event was reproducible in local logs during implementation; synthetic recorded ACP fixture tests (`quota_alert_test.go`) cover `msg.Error`/`Data` and anchored in-band `modelFailure` shapes. Capture and cross-check against a real live `agy` quota-exhaustion payload when next observed.
+- Verified with `go test -count=1 ./internal/werk/... ./internal/wsagent/... ./internal/wsdashboard/...` and `GOOS=windows go vet -stdversion=false`.
+
 ### Phase 2: Hosted-lead quota continuation scheduler, persistence, config knob, and HTTP control API
 
 Depends on Phase 1 (normalized `NoticeUsageLimit` alerts across all 4 harnesses).
@@ -211,6 +221,20 @@ Depends on Phase 1 (normalized `NoticeUsageLimit` alerts across all 4 harnesses)
   - Add `POST /agents/<id>/quota-continuation` (schedule for hosted lead in active usage-limit state) and `POST /agents/<id>/quota-continuation/cancel` (cancel/clear), both gated by `writeAllowed` + `leadControl` (local browser only).
 - **Verification boundary:** Remote `w5090` Go tests covering: deterministic fake-timer scheduling for `ResetsAt > 0` (+ buffer/jitter) and `ResetsAt == 0` (exact 6 retries at 1h -> exhausted), `(1556)=b` `werk` OpenAI plan-pause behavior (`AlertManualOnly` suppresses `auto` scheduling; `Manual: true` injects with `Operator: true` to probe/clear a paused `wscred.Store` OpenAI plan, reschedules up to 6 attempts on repeated `ErrOpenAIPlanPaused`, and clears `in_flight` on non-quota `planProbeError`), `in_flight` non-double-fire on daemon restart, non-usage-limit failure clearing stale state, `quiet == true` replay non-scheduling, every auto-cancel trigger (including background mail/child report arrival), worker non-participation, T0 `Record` unknown-field round-trip preservation, HTTP auth/CSRF gating, and `Settings|Manifest` + `wsi18n` parity tests.
 
+### Result (8f1e1016) - 2026-11-24
+
+- Registered `agent.quota_continuation` (`off` default, `ScopeGlobal`, harness-bucketed, enum `["off", "auto"]`) across `internal/wsconfig/scope.go`, `internal/mcp/{server_config,config_registry}.go`, `internal/wsdashboard/assets/dashboard-settings-catalog.json`, and all 11 locale tables in `internal/wsi18n/tables/*.json`.
+- Added T0 `QuotaContinuation` persistence on `wsagent.Record` and projections on `wslive.Host` and `wsagent.State` (persisted only on state transitions; zero idle file I/O).
+- Implemented loop-owned scheduler (`internal/wsagent/quota_continuation.go` and hooks in `runner_conv.go`, `runner_events.go`, `runner_operations.go`, `runner_reattach.go`, `runner_recovery.go`, `visibility.go`, `durable_close.go`) with known-reset (`ResetsAt + 60s + jitter`) and unknown-reset (`1h x 6 -> exhausted`) scheduling, `(1556)=b` `werk` plan-pause rules (`AlertManualOnly` vs `Manual: true`/`Operator: true`), restart recovery without `in_flight` double-fire, and immediate auto-cancel across all input/interrupt/close/release/archive/turn-settlement triggers.
+- Added `POST /agents/<id>/quota-continuation` and `POST /agents/<id>/quota-continuation/cancel` in `internal/wsagent/http.go` gated by `writeAllowed` + `leadControl`.
+- Moved `agy` model-group quota-reset lookup into `internal/wsdashboard/plan_usage_agy.go` so `TestCommonCodeHasNoHarnessNameBranch` passes cleanly.
+- Verified with `go test -count=1 ./internal/wsagent/... ./cmd/ws-mcp/... ./internal/werk/... ./internal/wslive/... ./internal/wsconfig/... ./internal/wsi18n/...`, `go test -count=1 ./internal/mcp -run 'Config|Manifest|Settings|Tune|DashboardSettings'`, `go test -count=1 ./internal/wsdashboard -run 'Settings|Manifest|Locale|I18n|PlanUsage|Quota'`, `GOOS=windows go vet -stdversion=false`, `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, and `python3 -m unittest discover agents-plugin-wsflow/tests`.
+
+#### Edition (4596e03d) - 2026-11-24
+
+- Fixed 3 blocking review findings and nits: (1) added `quotaInputGen` generation re-check under `wmu+mu` before `wsinbox.Send` (with rollback to `nil` + host sync on input race or `wsinbox.Send` error), (2) auto-cancelled `QuotaContinuation` in `conv.mailChanged()` and made `quotaContinuationTimedOut()` return `bool` so `kick()` falls through to `kickInput()` instead of stranding mail, (3) added `c.quotaPendingFire` to `hasPendingKick()` for `StartForPublication` wakeup, tightened HTTP-shaped `429` matching in `isAgyQuotaText()`, and synced host snapshots on close/release.
+- Clarification: the implemented known-reset delay is `ResetsAt + 30s + jitter(0..60s)` matching D2 (correcting the `60s` typo in the summary above).
+
 ### Phase 3: Dashboard usage-limit capsule schedule/cancel UI and end-to-end verification
 
 Depends on Phase 2 (HTTP endpoints and `wslive.Host.QuotaContinuation` projection).
@@ -224,3 +248,19 @@ Depends on Phase 2 (HTTP endpoints and `wslive.Host.QuotaContinuation` projectio
     - Non-controllable (LAN) viewers see status/scheduled time read-only with no action buttons.
 - **Localization:** Add all new capsule/status/button/toast strings to all 11 locale tables under `internal/wsi18n/tables/*.json` (with Korean labels `"이어서 진행 예약"` and `"예약 취소"` matching the owner UX directive).
 - **Verification boundary:** Remote `w5090` Go template/render/i18n tests (`./internal/wsdashboard/...`, `./internal/wsi18n/...`, `./internal/mcp/...`) plus dashboard JS/browser unit tests verifying schedule click, scheduled-time display, cancel click, exhausted rendering, auto-cancel on composer send, and zero idle frame/DOM churn.
+
+### Result (6a3697b2) - 2026-11-25
+
+- Implemented the hosted-lead quota-continuation dashboard UI, 11-locale i18n, and Go SSR + Playwright Chromium browser tests:
+  - **Template & SSE regions (`internal/wsdashboard/assets/dashboard.tmpl`):** Added `#qcbox` (per-viewer interactive container sibling of `#apbox` outside viewer-agnostic cached SSE regions), read-only `.qc-chip` status chips in `r-head` (using static `<time class="t" data-ms="..." data-f="dt">` when scheduled; hidden when `in_flight`), and `data-qc-*` change-detection attributes on `#r-convlive .clive`.
+  - **Client JS (`internal/wsdashboard/assets/dashboard-leads.js`):** Added `quotaDraw(st)` and `quotaAction("schedule"|"cancel")` posting to `POST /agents/<id>/quota-continuation` and `/quota-continuation/cancel` via `railPost`, using pure DOM helpers (`mk`, `gIcon`, `rpBtn`, `textContent`; zero `innerHTML`/`outerHTML`/`insertAdjacentHTML`), static `<time class="t" data-ms="..." data-f="dt">` formatted once by `fmtTimes(box)` (zero per-second countdown timers), and complete omission of `<button>` elements when `!st.can_control` (LAN read-only).
+  - **Styles (`internal/wsdashboard/assets/dashboard-rail.css`):** Added borderless Material tonal surface styles using canonical `--wb-*` tokens and `color-mix()` washes in dark and light themes, with `font-variant-numeric: tabular-nums` and zero idle CSS animations.
+  - **11-locale i18n (`internal/wsi18n/tables/*.json`):** Added all 15 downstream-neutral quota-continuation UI keys across `de`, `en`, `es`, `fr`, `it`, `ja`, `ko`, `pt-BR`, `ru`, `zh-Hans`, `zh-Hant` (with Korean labels `"이어서 진행 예약"` and `"예약 취소"`).
+  - **Tests (`internal/wsdashboard/quota_continuation_test.go`, `quota_continuation_browser_test.go`):** Added Go SSR region/template tests and headless Chromium Playwright tests covering manual schedule CTA, scheduled state with static `<time>` (verified 0 animations via `getAnimations({subtree:true})` and zero text mutation over 1.2s), light theme, cancel CTA, `in_flight` hiding, exhausted state + re-schedule CTA, and LAN read-only (`can_control=false`) with zero buttons.
+- Verified with `go test -race -count=1 ./internal/wsagent -run 'TestQuota'`, `go test -count=1 ./internal/wsi18n/...`, `go test -count=1 ./internal/mcp -run 'TestConfig|Settings|Manifest'`, `go test -count=1 ./internal/wsdashboard -run 'TestQuotaContinuation|TestPageViewConversation|TestHostedSessionMarks|Settings|Manifest|Locale|I18n'` (with Playwright Chromium), `GOOS=windows go vet -stdversion=false ./internal/wsagent/... ./internal/wsdashboard/... ./internal/wsi18n/...`, `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, and `python3 -m unittest discover agents-plugin-wsflow/tests`.
+- Visually verified BEFORE/AFTER Chromium screenshots (dark manual CTA, dark scheduled, light scheduled, dark exhausted, dark read-only).
+
+
+## Resolution (2026-11-25)
+
+All three phases (unified 4-harness NoticeUsageLimit extraction, hosted-lead quota-continuation scheduler + config knob + HTTP control API, and dashboard UI + 11-locale i18n + Chromium visual/browser verification) are implemented and verified.

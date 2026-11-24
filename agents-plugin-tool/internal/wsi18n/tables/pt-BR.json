@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "A saída anterior foi cortada.",
   "js.bgexec.tail.evicted": "{0} ({1} cortados)",
   "js.bgexec.hint": "↑/↓ selecionar · Esc fechar",
-  "js.bgexec.readonly": "Somente leitura"
+  "js.bgexec.readonly": "Somente leitura",
+  "js.settings.key.agent.quota_continuation.label": "Continuação após limite de cota",
+  "js.settings.key.agent.quota_continuation.description": "Controla se sessões principais hospedadas agendam automaticamente um turno de continuação após atingir um limite de uso (off: manual por sessão, auto: agendamento automático).",
+  "quota.chip.scheduled": "Retomada agendada",
+  "quota.chip.exhausted": "Tentativas esgotadas",
+  "js.quota.title.ready": "Limite de uso atingido",
+  "js.quota.title.scheduled": "Continuação agendada",
+  "js.quota.title.exhausted": "Tentativas de continuação esgotadas",
+  "js.quota.resume_at": "Retomar em",
+  "js.quota.resets_at": "Redefine em",
+  "js.quota.fallback_hourly": "Tentativa a cada hora (máx. {0})",
+  "js.quota.attempt": "Tentativa {0}/{1}",
+  "js.quota.exhausted_hint": "As tentativas automáticas pararam após {0}/{1} tentativas. Agende novamente ou envie uma mensagem para continuar.",
+  "js.quota.ready_hint": "Agende uma continuação para retomar após o limite de uso ser redefinido.",
+  "js.quota.schedule": "Agendar continuação",
+  "js.quota.cancel": "Cancelar",
+  "js.quota.scheduled_toast": "Continuação agendada.",
+  "js.quota.cancelled_toast": "Continuação agendada cancelada."
 }

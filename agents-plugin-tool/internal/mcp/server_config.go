@@ -22,6 +22,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemWorkflowWhiteboardEnabled: "off",
 		wsconfig.ItemWorkflowTrackerEnabled:    "off",
 		wsconfig.ItemExecNativeToolRemoval:     "on",
+		wsconfig.ItemAgentQuotaContinuation:    "off",
 		wsconfig.ItemWorkflowProfile:           "direct",
 		wsconfig.ItemSageReview:                "auto",
 		wsconfig.ItemSageReviewDesign:          "off",

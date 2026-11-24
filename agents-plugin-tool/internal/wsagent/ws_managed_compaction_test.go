@@ -562,6 +562,117 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 			t.Fatalf("Stage 2 native /compact should be suppressed on NoticeUsageLimit, got cmds=%+v", cmds)
 		}
 	})
+
+	t.Run("usage_limit_auto_quota_continuation_suppresses_stage2_and_resumes", func(t *testing.T) {
+		root := t.TempDir()
+		cfgOpts := wsconfig.Options{RepoRoot: root, CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+		r := wsconfig.NewResolver(cfgOpts, nil, nil, nil)
+		for k, v := range map[string]string{
+			wsconfig.ItemCompactionLeadMode + "." + BackendClaude: wsconfig.CompactionModeWS,
+			"compaction.lead_advisory." + BackendClaude:           "60%",
+			"compaction.lead_hard." + BackendClaude:               "80%",
+			wsconfig.ItemAgentQuotaContinuation + "." + BackendClaude: "auto",
+		} {
+			if err := r.Set(k, v, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		NotifyCompactionConfigChanged()
+
+		var timerMu sync.Mutex
+		var quotaFire chan time.Time
+		now := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+		b := &wsCompactBackend{}
+		builtin := BuiltinBackendRegistrations()[BackendClaude]
+		runner := NewRunner(Options{
+			Dir:      t.TempDir(),
+			Config:   cfgOpts,
+			Keys:     &fakeKeys{},
+			LeadKeys: &fakeLeadKeys{},
+			Holders:  newFakeHolders(),
+			Log:      os.Stderr,
+			Now:      func() time.Time { return now },
+			Timer: func(time.Duration) (<-chan time.Time, func()) {
+				ch := make(chan time.Time, 1)
+				timerMu.Lock()
+				quotaFire = ch
+				timerMu.Unlock()
+				return ch, func() {}
+			},
+			QuotaContinuationJitter: func(time.Duration) time.Duration { return 0 },
+			Backends: map[string]BackendRegistration{
+				BackendClaude: {
+					Backend:          b,
+					Permission:       builtin.Permission,
+					Lifecycle:        builtin.Lifecycle,
+					Catalog:          builtin.Catalog,
+					NativeCompaction: builtin.NativeCompaction,
+					LeadProfile:      builtin.LeadProfile,
+					PermissionModes:  builtin.PermissionModes,
+					Profiles:         builtin.Profiles,
+				},
+			},
+		})
+		runner.Start(nil)
+		t.Cleanup(runner.Close)
+
+		st, err := runner.CreateLead(BackendClaude, root, LeadOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := st.ID
+		if _, err := runner.Send(id, "work"); err != nil {
+			t.Fatal(err)
+		}
+		waitWSCompact(t, "turn 1", func() bool {
+			p := b.latest()
+			if p == nil {
+				return false
+			}
+			sends, _ := p.sent()
+			return len(sends) == 1
+		})
+		p1 := b.latest()
+		tokens := int64(85000)
+		p1.events <- Event{Live: &wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &tokens, Window: 100000}}}
+		p1.events <- Event{TurnEnd: true}
+		waitWSCompact(t, "stage 1 steer sent", func() bool {
+			sends, _ := p1.sent()
+			return len(sends) == 2
+		})
+
+		// Stage 1 hits NoticeUsageLimit -> Stage 2 suppressed AND auto quota continuation armed.
+		resetsAt := now.Add(5 * time.Minute).UnixMilli()
+		p1.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, ResetsAt: resetsAt, Text: "limit reached"}}
+		p1.events <- Event{TurnEnd: true, TurnError: "quota exhausted"}
+		waitWSCompact(t, "idle with scheduled quota continuation", func() bool {
+			st, err := runner.Get(id)
+			rec, ok := runner.recordOf(id)
+			return err == nil && ok && st.Status == StatusIdle &&
+				rec.QuotaContinuation != nil && rec.QuotaContinuation.Status == QuotaContinuationScheduled
+		})
+		_, cmds := p1.sent()
+		if len(cmds) != 0 {
+			t.Fatalf("Stage 2 native /compact should be suppressed on NoticeUsageLimit, got cmds=%+v", cmds)
+		}
+
+		// Firing the quota continuation timer resumes cleanly without triggering Stage 2.
+		timerMu.Lock()
+		ch := quotaFire
+		timerMu.Unlock()
+		if ch == nil {
+			t.Fatal("expected quota continuation timer to be armed")
+		}
+		ch <- now.Add(6 * time.Minute)
+		waitWSCompact(t, "quota continuation prompt dispatched", func() bool {
+			sends, _ := p1.sent()
+			return len(sends) == 3 && strings.Contains(sends[2], "usage limit was reached")
+		})
+		_, cmds = p1.sent()
+		if len(cmds) != 0 {
+			t.Fatalf("unexpected native /compact command after quota continuation resume: %+v", cmds)
+		}
+	})
 }
 
 func TestTwoStageFallbackDashboardSlashCompact(t *testing.T) {

@@ -98,6 +98,13 @@ func dashboardCommand(args []string) {
 	// runner's daemon callbacks are bound once the daemon exists.
 	var trackerChanged lateFunc
 	var agyActivity lateFunc
+	var quotaResetAt atomic.Pointer[func(backend, model string) int64]
+	callQuotaResetAt := func(backend, model string) int64 {
+		if fn := quotaResetAt.Load(); fn != nil && *fn != nil {
+			return (*fn)(backend, model)
+		}
+		return 0
+	}
 	// Bound once the mailbox sweep runs; Close calls it before releasing
 	// the dashboard lock.
 	var exportMailbox lateFunc
@@ -122,7 +129,7 @@ func dashboardCommand(args []string) {
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label, credentials)
+	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, holders, boards, labels.label, credentials)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -262,6 +269,8 @@ func dashboardCommand(args []string) {
 	}
 	trackerChanged.set(daemon.TrackerChanged)
 	agyActivity.set(daemon.AgyActivity)
+	quotaFn := daemon.QuotaResetAt
+	quotaResetAt.Store(&quotaFn)
 	host.live.Store(daemon)
 	labels.daemon.Store(daemon)
 	execJobsChanged := func() {
@@ -505,7 +514,7 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // trackerChanged runs after a conversation's successful tracker write;
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
-func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
+func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -556,6 +565,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		Log:            logw,
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
+		QuotaResetAt:   quotaResetAt,
 		Report:         mcp.AgentTurnReporter(logw),
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.

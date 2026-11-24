@@ -238,6 +238,13 @@ const (
 	// reads it at its start.
 	ItemExecNativeToolRemoval = "exec.native_tool_removal"
 
+	// ItemAgentQuotaContinuation controls whether a hosted lead session
+	// automatically schedules a continuation turn after hitting a usage limit:
+	// off (builtin default) keeps continuation manual per session, auto
+	// schedules continuation automatically. Stored per harness bucket as
+	// ItemAgentQuotaContinuation+"."+<claude|codex|pi|agy|werk|all>.
+	ItemAgentQuotaContinuation = "agent.quota_continuation"
+
 	// ItemClaudeExecCutoverEnabled controls the Claude exec cutover for hosted
 	// leads and spawned workers. Both packages default it to true in 0.52;
 	// unset means on, explicit false/off/0/no opts out, and config read errors
@@ -267,6 +274,12 @@ func init() {
 	RegisterDefaultScope(ItemExecNativeToolRemoval, ScopeGlobal)
 	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
+	}
+	// agent.quota_continuation is a cross-project hosted-lead preference,
+	// global on the bare key and every bucket key.
+	RegisterDefaultScope(ItemAgentQuotaContinuation, ScopeGlobal)
+	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+		RegisterDefaultScope(ItemAgentQuotaContinuation+"."+bucket, ScopeGlobal)
 	}
 	RegisterSetCheck([]string{ItemExecNativeToolRemoval + ".werk"}, func(overrides map[string]string) error {
 		switch strings.ToLower(strings.TrimSpace(overrides[ItemExecNativeToolRemoval+".werk"])) {

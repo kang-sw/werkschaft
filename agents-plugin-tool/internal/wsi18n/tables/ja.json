@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "古い出力は切り詰められました。",
   "js.bgexec.tail.evicted": "{0} ({1} 切り詰め)",
   "js.bgexec.hint": "↑/↓ 選択 · Esc 閉じる",
-  "js.bgexec.readonly": "読み取り専用"
+  "js.bgexec.readonly": "読み取り専用",
+  "js.settings.key.agent.quota_continuation.label": "クォータ制限後の自動再開",
+  "js.settings.key.agent.quota_continuation.description": "ホストされたリードセッションが使用量上限に達した際、続行ターンを自動予約するかを制御します（off: セッションごとに手動、auto: 自動予約）。",
+  "quota.chip.scheduled": "再開予約済み",
+  "quota.chip.exhausted": "自動再試行終了",
+  "js.quota.title.ready": "使用量上限に到達",
+  "js.quota.title.scheduled": "続行を予約済み",
+  "js.quota.title.exhausted": "続行の再試行上限に到達",
+  "js.quota.resume_at": "再開予定:",
+  "js.quota.resets_at": "リセット:",
+  "js.quota.fallback_hourly": "1時間ごとに再試行（最大{0}回）",
+  "js.quota.attempt": "試行 {0}/{1}",
+  "js.quota.exhausted_hint": "{0}/{1}回の試行後に自動再試行を停止しました。再予約するかメッセージを送信して続行してください。",
+  "js.quota.ready_hint": "使用量上限のリセット後に続行ターンを自動実行するよう予約できます。",
+  "js.quota.schedule": "続行を予約",
+  "js.quota.cancel": "予約をキャンセル",
+  "js.quota.scheduled_toast": "続行を予約しました。",
+  "js.quota.cancelled_toast": "予約された続行をキャンセルしました。"
 }

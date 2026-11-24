@@ -16,8 +16,12 @@ type turnStartRecord struct {
 }
 
 type durableEnd struct {
-	Reason string `json:"reason"`
-	Error  string `json:"error,omitempty"`
+	Reason     string `json:"reason"`
+	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	ResetsAt   int64  `json:"resets_at,omitempty"`
+	UsageLimit bool   `json:"usage_limit,omitempty"`
+	PlanPaused bool   `json:"plan_paused,omitempty"`
 }
 
 type turnEndRecord struct {
@@ -118,7 +122,17 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 		a.mu.Lock()
 		a.running, a.lastReason, a.lastError = false, result.Reason, result.Error
 		a.mu.Unlock()
-		a.out.line(Line{T: LineTurnEnd, Turn: turn, TurnID: cmd.TurnID, Reason: result.Reason, Error: result.Error})
+		a.out.line(Line{
+			T:          LineTurnEnd,
+			Turn:       turn,
+			TurnID:     cmd.TurnID,
+			Reason:     result.Reason,
+			Error:      result.Error,
+			ErrorCode:  result.ErrorCode,
+			ResetsAt:   result.ResetsAt,
+			UsageLimit: result.UsageLimit,
+			PlanPaused: result.PlanPaused,
+		})
 	}()
 
 	a.out.line(Line{T: LineTurnStart, Turn: turn, TurnID: cmd.TurnID})

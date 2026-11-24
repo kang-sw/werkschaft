@@ -72,6 +72,10 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// QuotaContinuation is a hosted lead's persisted post-usage-limit resume
+	// state. Additive top-level member on Record; preserved as unknown by
+	// older daemons (T0).
+	QuotaContinuation *QuotaContinuation `json:"quota_continuation,omitempty"`
 	// PermissionMode is the permission mode the next process launches in.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// AgyBypass is ws-side approval intent; PermissionMode stays native.

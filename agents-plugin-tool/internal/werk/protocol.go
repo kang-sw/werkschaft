@@ -162,8 +162,12 @@ type Line struct {
 	Status     int   `json:"status,omitempty"`
 
 	// turn_end
-	Reason string `json:"reason,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	ResetsAt   int64  `json:"resets_at,omitempty"`
+	UsageLimit bool   `json:"usage_limit,omitempty"`
+	PlanPaused bool   `json:"plan_paused,omitempty"`
 
 	// steer_ack, status
 	ID      string `json:"id,omitempty"`

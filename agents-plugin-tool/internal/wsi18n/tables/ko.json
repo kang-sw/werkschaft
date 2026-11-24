@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "이전 출력이 잘렸습니다.",
   "js.bgexec.tail.evicted": "{0} ({1} 잘림)",
   "js.bgexec.hint": "↑/↓ 선택 · Esc 닫기",
-  "js.bgexec.readonly": "읽기 전용"
+  "js.bgexec.readonly": "읽기 전용",
+  "js.settings.key.agent.quota_continuation.label": "쿼터 소진 후 이어서 진행",
+  "js.settings.key.agent.quota_continuation.description": "호스팅 리드 세션이 사용량 한도에 도달했을 때 이어서 진행 턴을 자동으로 예약할지 설정합니다(off: 세션별 수동 예약, auto: 자동 예약).",
+  "quota.chip.scheduled": "이어서 진행 예약됨",
+  "quota.chip.exhausted": "자동 재시도 종료",
+  "js.quota.title.ready": "사용 한도 도달",
+  "js.quota.title.scheduled": "이어서 진행 예약됨",
+  "js.quota.title.exhausted": "이어서 진행 재시도 종료",
+  "js.quota.resume_at": "재개 예정:",
+  "js.quota.resets_at": "초기화:",
+  "js.quota.fallback_hourly": "1시간 간격 재시도 (최대 {0}회)",
+  "js.quota.attempt": "시도 {0}/{1}",
+  "js.quota.exhausted_hint": "{0}/{1}회 시도 후 자동 재시도가 종료되었습니다. 다시 예약하거나 메시지를 보내 이어서 진행하세요.",
+  "js.quota.ready_hint": "사용 한도 초기화 후 이어서 진행할 턴을 예약할 수 있습니다.",
+  "js.quota.schedule": "이어서 진행 예약",
+  "js.quota.cancel": "예약 취소",
+  "js.quota.scheduled_toast": "이어서 진행이 예약되었습니다.",
+  "js.quota.cancelled_toast": "예약된 이어서 진행이 취소되었습니다."
 }

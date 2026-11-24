@@ -401,8 +401,10 @@ func (c *conv) onModelFailure(failure string) {
 		c.resetModelWaitTimer()
 		return
 	}
-	if !c.turn || c.proc == nil || c.modelWaitPending > 0 || len(c.approvals) > 0 {
+	if !c.turn || c.proc == nil || c.modelWaitPending > 0 || len(c.approvals) > 0 || isAgyQuotaText(failure) {
 		c.modelWaitFailureExcluded = true
+		c.stopModelWaitTimer()
+		c.stopModelFailureDrain()
 		return
 	}
 	c.modelWaitFailureExcluded = false
@@ -516,7 +518,7 @@ func (c *conv) interceptModelWaitTurnEnd(ev Event) bool {
 	if !c.modelWaitArmed || !c.turn || c.proc == nil {
 		return false
 	}
-	if ev.ModelFailure != "" && (c.modelWaitFailureExcluded || c.modelWaitPending > 0 || len(c.approvals) > 0) {
+	if ev.ModelFailure != "" && (c.modelWaitFailureExcluded || c.modelWaitPending > 0 || len(c.approvals) > 0 || isAgyQuotaText(ev.ModelFailure)) {
 		return false
 	}
 	if c.modelWaitCancelling {

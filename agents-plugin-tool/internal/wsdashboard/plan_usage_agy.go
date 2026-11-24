@@ -602,3 +602,31 @@ func (s *planUsageStore) agyHistoryView(entries []planUsageEntry, now int64) jso
 	}
 	return s.historyFileView(&s.agyHist, agyHistorySpec, filtered, now)
 }
+
+func (s *planUsageStore) agyQuotaResetAtLocked(backend, model string, now int64) (int64, bool) {
+	if backend != "agy" {
+		return 0, false
+	}
+	group := agyModelGroupKey(model)
+	for _, g := range s.agyGroups {
+		if g.Group != group {
+			continue
+		}
+		if at := maxPlanReset(g.Windows, now, 100); at > 0 {
+			return at, true
+		}
+		// plan-usage-agy.json is debounced (10m) and may lag live exhaustion;
+		// accept a near-saturated bucket (>= 90%) from the active model group.
+		return maxPlanReset(g.Windows, now, 90), true
+	}
+	return 0, true
+}
+
+func agyModelGroupKey(model string) string {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") ||
+		strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+		return "claude_gpt"
+	}
+	return "gemini"
+}

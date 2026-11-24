@@ -424,6 +424,41 @@ func (s *planUsageStore) entries() []planUsageEntry {
 	return out
 }
 
+func maxPlanReset(windows []planUsageWindow, now int64, minPercent float64) int64 {
+	var best int64
+	for _, w := range windows {
+		if w.ResetsAt <= now {
+			continue
+		}
+		if w.Disabled || w.Percent >= minPercent {
+			if w.ResetsAt > best {
+				best = w.ResetsAt
+			}
+		}
+	}
+	return best
+}
+
+// quotaResetAt returns a cached future quota reset timestamp (epoch ms) from
+// daemon memory for (backend, model), or 0 when unavailable. Zero disk/network I/O.
+func (s *planUsageStore) quotaResetAt(backend, model string) int64 {
+	if s == nil || backend == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.nowTime().UnixMilli()
+	if at, ok := s.agyQuotaResetAtLocked(backend, model, now); ok {
+		return at
+	}
+	for _, entry := range []planUsageEntry{s.claude, s.gpt} {
+		if entry.Harness == backend {
+			return maxPlanReset(entry.Windows, now, 100)
+		}
+	}
+	return 0
+}
+
 // GET is viewer-authorized by the daemon's ordinary access wrapper. Pages
 // request while connected; there is no polling goroutine without viewers.
 func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {

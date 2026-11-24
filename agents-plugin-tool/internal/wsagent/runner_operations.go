@@ -119,6 +119,7 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		c.held++
 		c.rec.Sends = c.sends
 		c.cancelModelWaitBackoffForInput()
+		c.cancelQuotaContinuationForInput()
 		if c.rec.Parent != nil {
 			// Any message resets a spawned child's waiting expiry.
 			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
@@ -158,6 +159,7 @@ func (r *Runner) Interrupt(id string) (State, []string, error) {
 		for _, rec := range held {
 			returned = append(returned, rec.Entry.Text())
 		}
+		c.cancelQuotaContinuation(false)
 		c.checkInterrupt()
 		return nil
 	})

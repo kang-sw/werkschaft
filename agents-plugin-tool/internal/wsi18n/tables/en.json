@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "Older output was trimmed.",
   "js.bgexec.tail.evicted": "{0} ({1} trimmed)",
   "js.bgexec.hint": "↑/↓ select · Esc close",
-  "js.bgexec.readonly": "Read-only view"
+  "js.bgexec.readonly": "Read-only view",
+  "js.settings.key.agent.quota_continuation.label": "Quota continuation",
+  "js.settings.key.agent.quota_continuation.description": "Control whether hosted lead sessions automatically schedule a continuation turn after hitting a usage limit (off: manual per session, auto: schedule automatically).",
+  "quota.chip.scheduled": "Resume scheduled",
+  "quota.chip.exhausted": "Retries exhausted",
+  "js.quota.title.ready": "Usage limit reached",
+  "js.quota.title.scheduled": "Continuation scheduled",
+  "js.quota.title.exhausted": "Continuation retries exhausted",
+  "js.quota.resume_at": "Resume at",
+  "js.quota.resets_at": "Resets",
+  "js.quota.fallback_hourly": "Hourly retry (max {0})",
+  "js.quota.attempt": "Attempt {0}/{1}",
+  "js.quota.exhausted_hint": "Automatic retries stopped after {0}/{1} attempts. Schedule again or send a message to continue.",
+  "js.quota.ready_hint": "Schedule a continuation turn to resume after the usage limit resets.",
+  "js.quota.schedule": "Schedule continuation",
+  "js.quota.cancel": "Cancel",
+  "js.quota.scheduled_toast": "Continuation scheduled.",
+  "js.quota.cancelled_toast": "Scheduled continuation cancelled."
 }

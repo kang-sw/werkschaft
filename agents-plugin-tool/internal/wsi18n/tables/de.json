@@ -3607,5 +3607,22 @@
   "js.bgexec.tail.gap": "Ältere Ausgabe wurde gekürzt.",
   "js.bgexec.tail.evicted": "{0} ({1} gekürzt)",
   "js.bgexec.hint": "↑/↓ wählen · Esc schließen",
-  "js.bgexec.readonly": "Nur-Lesen-Ansicht"
+  "js.bgexec.readonly": "Nur-Lesen-Ansicht",
+  "js.settings.key.agent.quota_continuation.label": "Kontingent-Fortsetzung",
+  "js.settings.key.agent.quota_continuation.description": "Steuert, ob gehostete Lead-Sitzungen nach einem Nutzungslimit automatisch einen Fortsetzungsdurchlauf planen (off: manuell je Sitzung, auto: automatisch planen).",
+  "quota.chip.scheduled": "Fortsetzung geplant",
+  "quota.chip.exhausted": "Wiederholungen erschöpft",
+  "js.quota.title.ready": "Nutzungslimit erreicht",
+  "js.quota.title.scheduled": "Fortsetzung geplant",
+  "js.quota.title.exhausted": "Wiederholungen für Fortsetzung erschöpft",
+  "js.quota.resume_at": "Fortsetzen um",
+  "js.quota.resets_at": "Zurückgesetzt am",
+  "js.quota.fallback_hourly": "Stündlicher Versuch (max. {0})",
+  "js.quota.attempt": "Versuch {0}/{1}",
+  "js.quota.exhausted_hint": "Automatische Wiederholungen wurden nach {0}/{1} Versuchen beendet. Erneut planen oder eine Nachricht senden, um fortzufahren.",
+  "js.quota.ready_hint": "Planen Sie eine Fortsetzung, um nach dem Zurücksetzen des Nutzungslimits weiterzumachen.",
+  "js.quota.schedule": "Fortsetzung planen",
+  "js.quota.cancel": "Abbrechen",
+  "js.quota.scheduled_toast": "Fortsetzung geplant.",
+  "js.quota.cancelled_toast": "Geplante Fortsetzung abgebrochen."
 }
