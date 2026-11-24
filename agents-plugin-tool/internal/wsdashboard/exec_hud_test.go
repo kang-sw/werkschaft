@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -642,5 +643,29 @@ func TestBgExecLiveMarkupOnConvLive(t *testing.T) {
 	})
 	if vZero.BgExecCount != 0 || vZero.BgExecSelf != 0 || vZero.BgExecDesc != 0 {
 		t.Fatalf("SessionView zero bg exec = %d/%d/%d, want 0/0/0", vZero.BgExecCount, vZero.BgExecSelf, vZero.BgExecDesc)
+	}
+	assets, err := loadDashboardAssets()
+	if err != nil {
+		t.Fatalf("loadDashboardAssets: %v", err)
+	}
+	var nonZeroBuf bytes.Buffer
+	if err := assets.tmpl.ExecuteTemplate(&nonZeroBuf, "r-convlive", v); err != nil {
+		t.Fatalf("render r-convlive non-zero: %v", err)
+	}
+	nonZeroHTML := nonZeroBuf.String()
+	for _, want := range []string{`data-bg-exec="3"`, `data-bg-exec-self="1"`, `data-bg-exec-desc="2"`} {
+		if !strings.Contains(nonZeroHTML, want) {
+			t.Fatalf("r-convlive non-zero HTML missing %s: %s", want, nonZeroHTML)
+		}
+	}
+	var zeroBuf bytes.Buffer
+	if err := assets.tmpl.ExecuteTemplate(&zeroBuf, "r-convlive", vZero); err != nil {
+		t.Fatalf("render r-convlive zero: %v", err)
+	}
+	zeroHTML := zeroBuf.String()
+	for _, forbidden := range []string{"data-bg-exec=", "data-bg-exec-self=", "data-bg-exec-desc="} {
+		if strings.Contains(zeroHTML, forbidden) {
+			t.Fatalf("r-convlive zero HTML unexpectedly contains %s: %s", forbidden, zeroHTML)
+		}
 	}
 }

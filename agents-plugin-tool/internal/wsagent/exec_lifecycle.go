@@ -273,7 +273,9 @@ type SubtreeNode struct {
 
 // Subtree returns rootID (depth 0) and all of its recursive in-memory
 // descendants (open or closed), cycle-safe and in deterministic BFS order.
-// Memory only: never reads disk and never acquires conv.mu while holding r.mu.
+// Memory only: never reads disk. On the lazy childrenIndex == nil fallback it
+// reads c.record() under r.mu (safe because no wsagent path acquires r.mu while
+// holding c.mu).
 func (r *Runner) Subtree(rootID string) []SubtreeNode {
 	if r == nil || rootID == "" {
 		return nil

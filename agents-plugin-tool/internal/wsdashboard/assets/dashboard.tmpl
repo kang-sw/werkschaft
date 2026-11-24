@@ -279,7 +279,7 @@ support chat card builds a plain span of it, without the id or a popover,
 in script (supChat). On the session page it is a button that opens the agents
 popover (agpop); there it stays shown while nothing runs, so the popover is
 always reachable. */}}
-{{define "subbadge"}}<span class="sbwrap"><button type="button" class="sbadge" id="sbadge" title="{{t "js.subagents.title"}}" aria-haspopup="dialog" aria-expanded="false" aria-controls="agpop" hidden><span class="spin"></span>{{icon "agents"}}<span class="slabel"></span><span class="sword">{{t "subbadge.running"}}</span></button><span class="bgbadge" id="bgbadge" title="{{t "tree.bg.title"}}" hidden>{{icon "clock"}}<span class="blabel"></span></span><span class="bgbadge" id="monbadge" title="{{t "tasks.monitors.title"}}" hidden>{{icon "clock"}}<span class="blabel"></span></span></span>{{end}}
+{{define "subbadge"}}<span class="sbwrap"><button type="button" class="sbadge" id="sbadge" title="{{t "js.subagents.title"}}" aria-haspopup="dialog" aria-expanded="false" aria-controls="agpop" hidden><span class="spin"></span>{{icon "agents"}}<span class="slabel"></span><span class="sword">{{t "subbadge.running"}}</span></button><button type="button" class="bgbadge" id="bgbadge" title="{{t "tree.bg.title"}}" aria-haspopup="dialog" aria-expanded="false" aria-controls="bgpop" hidden>{{icon "clock"}}<span class="blabel"></span></button><span class="bgbadge" id="monbadge" title="{{t "tasks.monitors.title"}}" hidden>{{icon "clock"}}<span class="blabel"></span></span></span>{{end}}
 
 {{/* agpop is the session's agents popover: the agents region (r-tree) over
 the conversation, above the subagent badge that opens it. Its pin and close
