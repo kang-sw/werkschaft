@@ -29,55 +29,94 @@ async function measureToolbar(page) {
       const r = n.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
     };
+    const cs = getComputedStyle(toolbar);
+    const marginBottom = parseFloat(cs.marginBottom) || 0;
     const face = toolbar.firstElementChild;
     const row = face.firstElementChild;
-    const actions = [...row.querySelectorAll('.board-overview, .tnew, .wnew, .board-download, .board-files')].map(n => {
-      const r = rect(n);
-      const label = n.querySelector('.board-label');
-      return {
-        cls: n.className,
-        rect: r,
-        labelVisible: !!(label && label.getClientRects().length),
-        clipped: n.scrollWidth > n.clientWidth + 1
-      };
-    });
+    const overview = row.querySelector('.board-overview');
+    const overviewRect = overview ? rect(overview) : null;
+    const actButtons = [...row.querySelectorAll('.board-acts .board-action')].map(n => ({
+      cls: n.className,
+      rect: rect(n),
+      clipped: n.scrollWidth > n.clientWidth + 1
+    }));
+    const actions = [
+      ...(overview ? [{ cls: overview.className, rect: overviewRect, clipped: overview.scrollWidth > overview.clientWidth + 1 }] : []),
+      ...actButtons
+    ];
     const filter = row.querySelector('.board-state-filter');
     const inline = row.querySelector('.board-state-inline');
+    const meta = row.querySelector('.board-state-meta');
+    const pipeline = row.querySelector('.board-state-pipeline');
     const trigger = row.querySelector('.board-state-trigger');
     const radios = [...row.querySelectorAll('.board-state-radio')];
+    const isDropdown = !!(trigger && !trigger.hidden);
     const filterLabelsVisible = inline && !inline.hidden
-      ? radios.filter(n => n.dataset.filter !== 'asks' && n.querySelector('.board-state-label').getClientRects().length > 0).length
+      ? radios.filter(n => n.querySelector('.board-state-label') && n.querySelector('.board-state-label').getClientRects().length > 0).length
       : 0;
     const filterVisible = !!(filter && filter.getClientRects().length);
-    const items = [...actions.map(a => a.rect), ...(filterVisible ? [rect(filter)] : [])];
-    const centers = items.map(r => r.y + r.height / 2);
-    const maxDeltaY = centers.length ? Math.max(...centers) - Math.min(...centers) : 0;
-    const wrapped = maxDeltaY > 1;
-    const sorted = items.slice().sort((a, b) => a.x - b.x);
-    let maxOverlap = 0;
-    for (let i = 1; i < sorted.length; i++) {
-      maxOverlap = Math.max(maxOverlap, sorted[i - 1].right - sorted[i].x);
-    }
     const faceRect = rect(face);
-    const overflowRight = Math.max(...items.map(r => r.right)) - faceRect.right;
+
+    // Row 1: .board-acts buttons + (.board-state-meta when inline, else .board-state-trigger).
+    const row1Boxes = [...actButtons.map(a => a.rect)];
+    if (!isDropdown && meta && meta.getClientRects().length) {
+      row1Boxes.push(rect(meta));
+    } else if (isDropdown && trigger && trigger.getClientRects().length) {
+      row1Boxes.push(rect(trigger));
+    }
+    const row1Centers = row1Boxes.map(r => r.y + r.height / 2);
+    const row1DeltaY = row1Centers.length ? Math.max(...row1Centers) - Math.min(...row1Centers) : 0;
+    const row1Sorted = row1Boxes.slice().sort((a, b) => a.x - b.x);
+    let maxOverlap = 0;
+    for (let i = 1; i < row1Sorted.length; i++) {
+      maxOverlap = Math.max(maxOverlap, row1Sorted[i - 1].right - row1Sorted[i].x);
+    }
+    if (overviewRect && row1Sorted.length) {
+      maxOverlap = Math.max(maxOverlap, overviewRect.right - row1Sorted[0].x);
+    }
+
+    // Row 2: interlocking powerline chevrons (only when inline).
+    let row2DeltaY = 0;
+    const segRects = !isDropdown && pipeline && pipeline.getClientRects().length
+      ? [...pipeline.querySelectorAll('.board-state-seg')].map(n => rect(n))
+      : [];
+    if (segRects.length) {
+      const segCenters = segRects.map(r => r.y + r.height / 2);
+      row2DeltaY = Math.max(...segCenters) - Math.min(...segCenters);
+      if (overviewRect) {
+        maxOverlap = Math.max(maxOverlap, overviewRect.right - segRects[0].x);
+      }
+    }
+
+    const allRights = [
+      ...actions.map(a => a.rect.right),
+      ...row1Boxes.map(r => r.right),
+      ...segRects.map(r => r.right)
+    ];
+    const overflowRight = (allRights.length ? Math.max(...allRights) : 0) - faceRect.right;
     const clippedAction = actions.some(a => a.clipped);
-    const clippedRadio = inline && !inline.hidden && radios.some(n => n.scrollWidth > n.clientWidth + 1);
+    const clippedRadio = !isDropdown && radios.some(n => n.scrollWidth > n.clientWidth + 1);
+    const clippedTrigger = isDropdown && trigger && trigger.scrollWidth > trigger.clientWidth + 1;
+    const wrapped = row1DeltaY > 1.5 || row2DeltaY > 1.5;
     return {
       outerWidth: Math.round(rect(toolbar).width * 10) / 10,
       faceWidth: Math.round(faceRect.width * 10) / 10,
       faceHeight: Math.round(faceRect.height * 10) / 10,
+      slotHeight: Math.round((faceRect.height + marginBottom) * 10) / 10,
+      overviewRect: overviewRect ? { width: Math.round(overviewRect.width * 10) / 10, height: Math.round(overviewRect.height * 10) / 10 } : null,
       filterWidth: filterVisible ? Math.round(rect(filter).width * 10) / 10 : 0,
       mode: toolbar.getAttribute('data-toolbar-fit') || 'full',
-      actionLabels: actions.filter(a => a.labelVisible).length,
       actionCount: actions.length,
-      filterMode: trigger && !trigger.hidden ? 'dropdown' : 'inline',
+      filterMode: isDropdown ? 'dropdown' : 'inline',
       filterLabelsVisible,
       wrapped,
-      maxDeltaY: Math.round(maxDeltaY * 10) / 10,
+      row1DeltaY: Math.round(row1DeltaY * 10) / 10,
+      row2DeltaY: Math.round(row2DeltaY * 10) / 10,
       maxOverlap: Math.round(maxOverlap * 10) / 10,
       overflowRight: Math.round(overflowRight * 10) / 10,
       clippedAction,
       clippedRadio,
+      clippedTrigger,
       floating: toolbar.hasAttribute('data-floating')
     };
   });
@@ -101,11 +140,13 @@ async function setExactToolbarWidth(page, target) {
 }
 
 function assertSingleRow(m, label) {
-  assert.equal(m.wrapped, false, `${label} wrapped (deltaY=${m.maxDeltaY}, mode=${m.mode}, filter=${m.filterMode})`);
+  assert.equal(m.wrapped, false, `${label} wrapped (row1DeltaY=${m.row1DeltaY}, row2DeltaY=${m.row2DeltaY}, mode=${m.mode}, filter=${m.filterMode})`);
   assert(m.maxOverlap <= 0.5, `${label} overlap=${m.maxOverlap}`);
   assert(m.overflowRight <= 0.5, `${label} overflowRight=${m.overflowRight}`);
   assert.equal(m.clippedAction, false, `${label} clippedAction`);
   assert.equal(m.clippedRadio, false, `${label} clippedRadio`);
+  assert.equal(m.clippedTrigger, false, `${label} clippedTrigger`);
+  assert(m.faceHeight <= 51, `${label} faceHeight=${m.faceHeight} exceeds compact 2-row budget`);
 }
 
 (async () => {
@@ -138,16 +179,28 @@ function assertSingleRow(m, label) {
       await page.evaluate(() => { document.documentElement.style.setProperty('--pbw', '1900px'); });
       await resetScroll(page);
 
-      // Verify wide width: full labelled bar visible on single row.
+      // Verify wide width: full compact 2-row bar visible with 50px face / 56px slot and 38x44 overview anchor.
       const actualWide = await setExactToolbarWidth(page, wideTarget);
       assert(Math.abs(actualWide - wideTarget) < 1, `${lang} reached ${wideTarget}px toolbar width (got ${actualWide})`);
       await resetScroll(page);
       const wide = await measureToolbar(page);
       assertSingleRow(wide, `${lang} w=${wideTarget}`);
       assert.equal(wide.mode, 'full', `${lang} ${wideTarget} must be in full mode`);
-      assert.equal(wide.actionLabels, 5, `${lang} ${wideTarget} must show all 5 action labels`);
       assert.equal(wide.filterMode, 'inline', `${lang} ${wideTarget} must use inline filter`);
-      assert.equal(wide.filterLabelsVisible, 9, `${lang} ${wideTarget} must show all 9 non-ask filter labels`);
+      assert.equal(wide.filterLabelsVisible, 10, `${lang} ${wideTarget} must show all 10 filter labels`);
+      assert.equal(wide.faceHeight, 50, `${lang} ${wideTarget} faceHeight must be 50px`);
+      assert.equal(wide.slotHeight, 56, `${lang} ${wideTarget} slotHeight must be 56px`);
+      assert.deepEqual(wide.overviewRect, { width: 38, height: 44 }, `${lang} ${wideTarget} overview anchor must be 38x44`);
+
+      // Verify 680px (and 500px for Korean) stays inline with zero overflow/clipping.
+      for (const target of (lang === 'ko' ? [680, 500] : [680])) {
+        await setExactToolbarWidth(page, target);
+        await resetScroll(page);
+        const m = await measureToolbar(page);
+        assertSingleRow(m, `${lang} compact-2row w=${target}`);
+        assert.equal(m.filterMode, 'inline', `${lang} w=${target} must stay inline in 2-row layout`);
+        assert.equal(m.slotHeight, 56, `${lang} w=${target} slotHeight must stay 56px`);
+      }
 
       // Capture requested after screenshots in Korean light theme.
       if (captures && lang === 'ko') {
@@ -169,7 +222,7 @@ function assertSingleRow(m, label) {
         await setExactToolbarWidth(page, w);
         const m = await measureToolbar(page);
         assertSingleRow(m, `${lang} w=${w}`);
-        const sig = `${m.mode}|${m.actionLabels}|${m.filterMode}|${m.filterLabelsVisible}`;
+        const sig = `${m.mode}|${m.filterMode}|${m.filterLabelsVisible}`;
         if (sig !== prevSig) {
           transitions.push({ w, sig, m });
           prevSig = sig;
@@ -196,7 +249,7 @@ function assertSingleRow(m, label) {
         await resetScroll(page);
         const m = await measureToolbar(page);
         assertSingleRow(m, `${lang} report w=${w}`);
-        console.log(`AFTER ${lang} w=${w}: mode=${m.mode} actions=${m.actionLabels}/${m.actionCount} filter=${m.filterMode}(${m.filterLabelsVisible} labels, ${m.filterWidth}px) faceH=${m.faceHeight} wrapped=${m.wrapped}`);
+        console.log(`AFTER ${lang} w=${w}: mode=${m.mode} actions=${m.actionCount} filter=${m.filterMode}(${m.filterLabelsVisible} labels, ${m.filterWidth}px) faceH=${m.faceHeight} slotH=${m.slotHeight} wrapped=${m.wrapped}`);
       }
 
       // Verify longest filter label selected ("awaiting-confirmation") stays single-row down to 360px.

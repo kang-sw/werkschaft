@@ -523,6 +523,7 @@
   "js.board.filter.label": "Topic state filter",
   "js.board.filter.all": "All",
   "js.board.filter.asks": "Topics with open asks",
+  "js.board.filter.asks.short": "Asks",
   "js.board.filter.confirm": "Awaiting confirmation",
   "js.board.filter.researching": "Researching",
   "js.board.filter.discuss": "Discussing",
