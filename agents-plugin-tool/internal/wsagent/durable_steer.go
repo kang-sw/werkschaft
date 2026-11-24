@@ -31,12 +31,16 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 		c.durableTurnError("read claimed steering", err)
 		return
 	}
-	skipSteer := func(rec wsinbox.Record) bool { return !rec.Entry.Steer || rec.Entry.Command != nil }
-	pendingCount := len(pending)
-	pending = slices.DeleteFunc(pending, skipSteer)
 	c.admitInput(func() {
 		c.mu.Lock()
 		held, err := wsinbox.Held(c.inbox)
+		deferCron := c.rec.DurableTurn != nil && c.rec.DurableTurn.Operator &&
+			(slices.ContainsFunc(pending, isCronInput) || slices.ContainsFunc(held, isCronInput)) && c.separatesPlanCron()
+		skipSteer := func(rec wsinbox.Record) bool {
+			return !rec.Entry.Steer || rec.Entry.Command != nil || (deferCron && isCronInput(rec))
+		}
+		pendingCount := len(pending)
+		pending = slices.DeleteFunc(pending, skipSteer)
 		var claimed []wsinbox.Record
 		unclaimed := len(held)
 		if err == nil {
