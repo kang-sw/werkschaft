@@ -3,6 +3,7 @@
 // from the user-spawned `!` exec HUD (.xgroup / /exec/jobs). Zero network
 // requests and zero timers while closed.
   var BG_TAIL_BYTES = 16384, BG_MAX_LINES = 800, BG_POLL_MIN = 500, BG_POLL_MAX = 2500;
+  var bgUTF8 = new TextEncoder();
   var bgSt = {
     open: false,
     loading: false,
@@ -497,6 +498,13 @@
     row.appendChild(right);
   }
 
+  function bgCopyText(command) {
+    var lines = bgTailEl && bgTailEl.querySelectorAll(".bgp-line");
+    if (!lines || !lines.length) return command;
+    var text = Array.prototype.map.call(lines, function (line) { return line.textContent; }).join("\n");
+    return lines[lines.length - 1].bgEndsLine ? text + "\n" : text;
+  }
+
   function bgClearStop() {
     if (bgStopHold) { bgStopHold.destroy(); bgStopHold = null; }
     if (bgStopBtn) { bgStopBtn.remove(); bgStopBtn = null; }
@@ -524,7 +532,7 @@
       copyBtn.type = "button";
       copyBtn.addEventListener("click", function () {
         var current = bgSt.byId[bgDockJob];
-        var text = (bgTailEl && bgTailEl.textContent && !bgTailEl.querySelector(".bgp-tail-empty")) ? bgTailEl.textContent : (current && current.command || "");
+        var text = bgCopyText(current && current.command || "");
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(function () {
             copyBtn.textContent = wsT("js.bgexec.copied");
@@ -659,6 +667,7 @@
       open: false,
       openEl: null,
       openStream: "",
+      retained: 0,
       skipFirstPartial: start > 0,
       gen: bgTailGen
     };
@@ -751,12 +760,15 @@
       }
     }
     var frag = doc.createDocumentFragment();
-    var added = 0;
+    var changed = false;
     if (res.gap) {
-      frag.appendChild(bgEl("span", "bgp-line is-sys", wsT("js.bgexec.tail.gap")));
+      var gap = bgEl("span", "bgp-line is-sys", wsT("js.bgexec.tail.gap"));
+      gap.bgBytes = 1 + bgUTF8.encode(gap.textContent).length;
+      ts.retained += gap.bgBytes;
+      frag.appendChild(gap);
       ts.open = false;
       ts.openEl = null;
-      added++;
+      changed = true;
     }
     segs.forEach(function (s) {
       if (!s || !s.text) return;
@@ -768,26 +780,51 @@
         if (part !== "" || (!last && !ln)) {
           if (!ln) {
             ln = bgEl("span", "bgp-line" + (stream === "stderr" ? " is-err" : ""));
+            ln.bgBytes = 1; // reserve the line boundary too
+            ts.retained++;
+            ln.appendChild(doc.createTextNode(""));
             frag.appendChild(ln);
-            added++;
           }
-          if (part !== "") ln.appendChild(doc.createTextNode(part));
+          if (part !== "") {
+            var size = bgUTF8.encode(part).length;
+            ln.firstChild.appendData(part);
+            ln.bgBytes += size;
+            ts.retained += size;
+          }
+          changed = true;
         }
-        if (!last) { ts.open = false; ts.openEl = null; }
+        if (!last) {
+          if (ln) ln.bgEndsLine = true;
+          ts.open = false;
+          ts.openEl = null;
+        }
         else if (part !== "") { ts.open = true; ts.openEl = ln; ts.openStream = stream; }
       }
     });
-    if (frag.childNodes.length || added) {
-      var emp = bgTailEl.querySelector(".bgp-tail-empty");
-      if (emp && emp.parentNode) emp.parentNode.removeChild(emp);
-      bgTailEl.appendChild(frag);
-      while (bgTailEl.childNodes.length > BG_MAX_LINES) {
-        var first = bgTailEl.firstChild;
+    if (!changed) return;
+    var emp = bgTailEl.querySelector(".bgp-tail-empty");
+    if (emp) emp.remove();
+    if (frag.firstChild) bgTailEl.appendChild(frag);
+    while (bgTailEl.firstChild) {
+      var first = bgTailEl.firstChild;
+      var excess = ts.retained - BG_TAIL_BYTES;
+      if (bgTailEl.childNodes.length > BG_MAX_LINES || (excess > 0 && first.bgBytes <= excess)) {
         if (first === ts.openEl) { ts.open = false; ts.openEl = null; }
-        bgTailEl.removeChild(first);
+        ts.retained -= first.bgBytes;
+        first.remove();
+      } else {
+        if (excess > 0) {
+          var bytes = bgUTF8.encode(first.textContent);
+          // Keep the suffix on a UTF-8 character boundary.
+          while (excess < bytes.length && (bytes[excess] & 0xc0) === 0x80) excess++;
+          first.firstChild.data = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(excess));
+          first.bgBytes -= excess;
+          ts.retained -= excess;
+        }
+        break;
       }
-      if (bgSt.follow) bgTailEl.scrollTop = bgTailEl.scrollHeight;
     }
+    if (bgSt.follow) bgTailEl.scrollTop = bgTailEl.scrollHeight;
   }
 
   function bgStopJob(id) {

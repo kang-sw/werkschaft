@@ -132,6 +132,11 @@ async function main() {
     assert.ok(tailText.includes('<script>alert(1)</script>'), 'literal script text should render safely');
     assert.equal(await view.locator('#bgpop .bgp-tail .bgp-line.is-err').count(), 1, 'stderr line should have .is-err');
 
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    await view.locator('#bgpop .bgp-act').click();
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    assert.equal(clipboard, 'checking viewport 1180x820 <script>alert(1)</script>\nstderr: retrying font metrics check\nok: 0 horizontal overflow detected\n');
+
     // Capture AFTER screenshot 1: dark desktop popover open with live tail + user HUD chip.
     if (shotsDir) {
       await page.screenshot({ path: path.join(shotsDir, 'after-dark-popover-open.png') });
@@ -144,6 +149,21 @@ async function main() {
       null,
       { timeout: 6000 },
     );
+
+    // Keep one line and one text node through repeated carriage-return progress writes.
+    for (let i = 0; i < 6; i++) {
+      const marker = `[progress-${i}]`;
+      await ctlPost('/append', { ID: 'exec_l2_run', Stream: 'stdout', Text: '🟢'.repeat(3000) + '\r' + marker });
+      await view.waitForFunction((mark) => document.querySelector('#bgpop .bgp-tail')?.textContent.endsWith(mark), marker);
+      const retained = await view.locator('#bgpop .bgp-tail').evaluate((el) => ({
+        bytes: new TextEncoder().encode(el.textContent).length,
+        textNodes: el.lastElementChild.childNodes.length,
+        corrupt: el.textContent.includes('�'),
+      }));
+      assert.ok(retained.bytes <= 16384, `tail retained ${retained.bytes} UTF-8 bytes`);
+      assert.equal(retained.textNodes, 1, 'append to the existing open-line text node');
+      assert.equal(retained.corrupt, false, 'trimming must preserve UTF-8 character boundaries');
+    }
 
     // 5. Switch selected row to L1 and verify tail switches cleanly.
     await view.locator('#bgpop .bgp-row[data-bg-id="exec_l1_run"]').click();
