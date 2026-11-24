@@ -470,16 +470,6 @@
     "261124-chore-ws-remove-legacy-pi-handlers": {
       "registered_at": "2026-11-23T20:41:17Z"
     },
-    "261124-feat-ws-harness-quota-continuation": {
-      "registered_at": "2026-11-24T06:09:28Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "active",
-        "touched_at": "2026-11-24T12:30:22Z"
-      }
-    },
     "261124-refactor-remove-terminal-handoff": {
       "registered_at": "2026-11-24T07:52:19Z"
     },
