@@ -468,7 +468,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-24T21:56:17Z"
+        "touched_at": "2026-11-24T21:57:03Z",
+        "impl": {
+          "branch": "impl/develop/rinse-smoky-froth"
+        }
       }
     },
     "261124-bug-ws-git-search-credential-hardlink": {
