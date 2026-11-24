@@ -325,10 +325,15 @@ func TestDeadBindingInterruptedCheckoutDeleteRestoresOccupancy(t *testing.T) {
 	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true})
 }
 
+func TestDeadBindingInterruptedCheckoutDeleteWithChangedCwd(t *testing.T) {
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true, changedCwd: true})
+}
+
 type releasedWorkerDeleteOptions struct {
 	restart         bool
 	pauseRelease    bool
 	interruptDelete bool
+	changedCwd      bool
 }
 
 func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
@@ -392,13 +397,14 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 	}
 	leadID, _ := h.settledLead()
 	lead := ParentRef{Kind: ParentLead, ReplyID: leadID}
-	spawn := func(parent ParentRef, root, prompt string) (string, string) {
+	spawn := func(parent ParentRef, root, cwd, prompt string) (string, string) {
 		t.Helper()
 		st, err := h.runner.Spawn(SpawnSpec{
 			Profile:            AgentWorkerProfile(BackendClaude),
 			PermissionLevel:    PermissionWorkdirWrite,
 			delegatedAuthority: true,
 			Root:               root,
+			Cwd:                cwd,
 			Prompt:             prompt,
 			Tier:               "small",
 			Parent:             &parent,
@@ -411,9 +417,16 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		eventually(t, prompt+" running", func() bool { return h.state(st.ID).Status == StatusRunning })
 		return st.ID, holder
 	}
-	middleID, middleHolder := spawn(lead, worktree, "middle")
+	middleRoot, middleCwd := worktree, ""
+	if test.changedCwd {
+		middleRoot, middleCwd = h.root, filepath.Join(t.TempDir(), "worktree-link")
+		if err := os.Symlink(worktree, middleCwd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	middleID, middleHolder := spawn(lead, middleRoot, middleCwd, "middle")
 	middleKey := h.record(middleID).WSKey
-	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
+	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "", "grandchild")
 	assertHolderRunning := func(when string) {
 		t.Helper()
 		for _, holder := range h.holders.List().Holders {
@@ -523,6 +536,14 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		_, dirErr := os.Stat(wsdashboard.SessionDir(h.dir, middleID))
 		d.Close()
 		h.holders.restart()
+		if test.changedCwd {
+			if err := os.Remove(middleCwd); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(h.root, middleCwd); err != nil {
+				t.Fatal(err)
+			}
+		}
 		h.runner = NewRunner(h.opts)
 		opts.Agents = h.runner
 		successor, err := wsdashboard.StartDaemon(opts)
@@ -547,7 +568,21 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]
 		if test.interruptDelete {
 			if !got.Live || got.State != AgentClosed || !got.BoundBeforeRelease {
-				t.Errorf("released worker occupancy after replacement = %+v, want closed and live", got)
+				t.Fatalf("released worker occupancy after replacement = %+v, want closed and live", got)
+			}
+			h.holders.set(func() { h.holders.incomplete = true })
+			if !boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)].Live {
+				t.Fatal("incomplete holder census hid the live worker")
+			}
+			h.holders.exit(middleHolder, 0)
+			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+				t.Fatalf("exited worker still blocks checkout reuse: %+v", got)
+			}
+			// Cleanup forgets the exited holder while the census is
+			// still incomplete due to an unrelated holder.
+			h.holders.vanish(middleHolder)
+			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+				t.Errorf("checkout reuse blocked after the exited holder was removed: %+v", got)
 			}
 		} else if got.Address != "" {
 			t.Errorf("worker for the deleted checkout occupies it after replacement: %+v", got)
