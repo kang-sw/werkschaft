@@ -11,6 +11,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 var errModelDaemonState = errors.New("daemon state is read-only to model file tools")
@@ -173,6 +174,22 @@ func (p *modelFileWriteProtection) loadFileIdentities() error {
 				SessionSystemPromptFileName, wslive.SnapshotName:
 				if err := add(filepath.Join(dir, entry.Name())); err != nil {
 					return err
+				}
+			case wsstate.WerkJournalDirName:
+				journalDir := filepath.Join(dir, entry.Name())
+				journals, err := os.ReadDir(journalDir)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				for _, journal := range journals {
+					if strings.EqualFold(filepath.Ext(journal.Name()), ".jsonl") {
+						if err := add(filepath.Join(journalDir, journal.Name())); err != nil {
+							return err
+						}
+					}
 				}
 			case filepath.Base(inbox):
 				if err := wsinbox.VisitTurnInputPaths(inbox, add); err != nil {
