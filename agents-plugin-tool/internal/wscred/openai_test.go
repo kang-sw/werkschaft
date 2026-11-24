@@ -218,6 +218,15 @@ func (f *openAIFixture) identityToken() string {
 	if err != nil {
 		f.t.Error("could not sign fixture identity")
 	}
+	if f.badIdentity == "invalid-signature" {
+		// Keep the published kid and alter the first byte of the signed value.
+		signature := strings.LastIndexByte(raw, '.') + 1
+		replacement := "A"
+		if raw[signature] == 'A' {
+			replacement = "B"
+		}
+		raw = raw[:signature] + replacement + raw[signature+1:]
+	}
 	return raw
 }
 
@@ -437,7 +446,7 @@ func TestOpenAIRejectsInvalidIdentityOrCallback(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	f := newOpenAIFixture(t, s)
-	for _, mode := range []string{"issuer", "audience", "expiration", "nonce", "signature"} {
+	for _, mode := range []string{"issuer", "audience", "expiration", "nonce", "signature", "invalid-signature"} {
 		t.Run(mode, func(t *testing.T) {
 			f.badIdentity = mode
 			if err := s.SignInOpenAI(ctx, OpenAISignIn{}, f.browser); err == nil || !strings.Contains(err.Error(), "validate") || strings.Contains(err.Error(), f.priorID) {
