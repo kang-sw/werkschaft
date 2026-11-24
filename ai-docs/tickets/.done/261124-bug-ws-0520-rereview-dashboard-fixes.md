@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: cdf3d25d02c4ab49
 sage-review-completeness-reviewed: cdf3d25d02c4ab49
+completed: 2026-11-24
 ---
 
 # 0.52 release-gate re-review dashboard fixes
@@ -104,3 +105,19 @@ Verification: the named tests, the snap-deck, gallery, composer, Overview
 and rail Chromium suites, `go test ./internal/wsdashboard
 ./internal/wswhiteboard`, and screenshots of Overview Quick Look (folded
 topic, keyboard focus) and the composer after send.
+
+### Result (3a989afe4) - 2026-11-24
+
+All six dashboard/whiteboard findings from the 0.52.0 release-gate re-review (Important #4–#8 and #10; T0 client-side changes, `dashboard-leads.js` untouched) are fixed and verified:
+
+- **Important #4 (Snap-deck whole-board work):** Scoped `virtualHydrate`'s stashed path in `dashboard-board-anchor.js` to `sec` (`WsCards.decorate(sec)` with `scope` forwarded in `cards.js`, `bindCapsuleNotes(sec)` in `dashboard-composer-pickers.js`, `wbBindBoard(sec)` instead of `wbForm()`, and `applySent(true, sec)` via `arguments[1]` in `dashboard-composer-status.js`). Replaced full `virtualExemptSet` scans during delta `virtualReconcile` with dirty-only `virtualExemptDirty` tracking driven by `anchorBoardMO`, passive board `input`/`change`/`focusout`/`click` listeners, and `overview.js` restore hooks. Verified flat O(1) `describes`, `slotVisits`, `frameIndexes`, `fullReconciles === 0`, `prunes === 0`, and scoped-only hydration in Node (`N=12` vs `N=60`, `2` vs `20` far exempt topics) and Chromium (`N=12` vs `N=24`, `2` vs `12` far exempt topics).
+- **Important #5 (Detached history reply race):** Updated `hydrateDetached` in `wswhiteboard/assets/stream.js` to re-resolve live non-virtualized `section.topic[data-topic]` when the async lazy-history reply arrives and route through live `hydrateWith` so panel state, `wbAgo`, `wbBindBoard`, and `wbhistoryload` run on reattached topics. Verified in Chromium (`board-snap-deck-0512.browser.cjs`) that navigating into a topic while a palette lazy-history fetch is in flight runs live admission, clears lazy gaps, and surfaces archived matches in the palette.
+- **Important #6 (Doc-frame wheel):** Updated `onFrameWheel` in `cards.js` to require the frame to belong to the active gallery page (`activePage.contains(frame)`), rejecting delayed wheel messages from previously visible, still-attached inactive pages. Verified in `gallery-frame-wheel.test.cjs` (6/6 pass) and `TestGalleryBrowser`.
+- **Important #7 & #8 (Overview folded geometry & focus name):** Updated `buildPlaceholder` in `overview.js` to create `<section>` for topic placeholders (matching `dashboard-board.css` folded selectors) and set `role="button"` + `aria-label` from `.tname`/`.bc-nm` while keeping cloned headers/controls `inert` and `aria-hidden="true"`. Verified in `overview-preview-shape.test.cjs` (3/3 pass), `board-snap-deck-0512.browser.cjs`, and before/after Chromium screenshots (`/tmp/0520-rereview-dashboard-shots/{before,after}/`: `phTag: DIV -> SECTION`, `tsubDisplay: flex -> none`, `phHeight: 40px` matching folded topic, `tbarPadRight: 12px`, `role: button`, `ariaLabel: "Folded Architecture Topic"`, `ariaSnapshot: - button "Folded Architecture Topic"`).
+- **Important #10 (Composer reset tests):** Updated `composer-multiline.test.cjs` (10/10 pass) to execute production `sendMessage` (`dashboard-composer-delivery.js`) and `cexecAcknowledged` (`dashboard-composer-exec.js`) independently, including ack emptying draft and single-line/multiline remaining drafts. Confirmed via mutation check that removing any of the three production `resetAutoMultiline()` calls independently fails `composer-multiline.test.cjs`.
+- **Verification:** `generate-package-assets.py` clean; 24/24 Node tests pass; `TestBoardSnapDeck0512Browser` (10/10), `TestGallery*`, `TestComposerMultiline*`, `TestOverview*`, `TestBoardOverview*`, `TestSearchPalette*`, `TestBoardAnchor*`, `TestBoardVirtualize*`, `TestBoardToolbar*`, `TestBoardStateFilter*`, `TestCheckRowClientPaths`, `TestCloseRequestComposerLifecycle` all pass; `go test ./internal/wswhiteboard` passes (`wsdashboard` full run had only pre-existing unrelated `TestConversationSendRearmsBottomFollow` and `TestHiring*` failures); `GOOS=windows go test -c ./internal/wsdashboard` and `GOOS=windows go vet ./internal/wsdashboard/... ./internal/wswhiteboard/...` pass.
+
+
+## Resolution (2026-11-24)
+
+Fixed all six 0.52.0 release-gate re-review dashboard/whiteboard findings (Important #4-#8 and #10) in commit 3a989afe4 with Node, Chromium, Go, Windows cross-compile/vet, mutation-proof, and before/after screenshot verification.
