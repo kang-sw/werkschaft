@@ -681,7 +681,7 @@ func TestInterruptEntryIsRefusedByCancelAndSteerAndNeedsAnAdapter(t *testing.T) 
 	}
 }
 
-func TestSteerRouteRefusesAHeldScheduledPrompt(t *testing.T) {
+func TestSteerRoutePromotesAHeldScheduledPrompt(t *testing.T) {
 	f := startPageFixture(t)
 	name, _, err := wsinbox.Send(f.inbox("livesession"), wsinbox.Entry{
 		Parts: []string{"nightly sweep"},
@@ -692,15 +692,26 @@ func TestSteerRouteRefusesAHeldScheduledPrompt(t *testing.T) {
 	}
 	id := wsinbox.Record{Name: name}.ID()
 	code, _, raw := postJSON(t, f.base+"/s/livesession/steer", f.base, `{"id":"`+id+`"}`)
-	if code != http.StatusConflict || !strings.Contains(raw, "scheduled prompt") {
-		t.Fatalf("steer of a scheduled prompt = %d (%s), want 409 naming it", code, raw)
+	var ans struct {
+		ID string `json:"id"`
+	}
+	if code != http.StatusOK || json.Unmarshal([]byte(raw), &ans) != nil || ans.ID == "" || ans.ID == id {
+		t.Fatalf("steer of a legacy scheduled prompt = %d (%s), want 200 with fresh id", code, raw)
 	}
 	held, err := wsinbox.Held(f.inbox("livesession"))
-	if err != nil || len(held) != 1 || held[0].Name != name || held[0].Entry.Steer || held[0].Entry.Cron == nil {
-		t.Fatalf("held after the refused steer = %+v, %v", held, err)
+	if err != nil || len(held) != 1 || held[0].ID() != ans.ID || !held[0].Entry.Steer || held[0].Entry.Cron == nil {
+		t.Fatalf("held after steer = %+v, %v", held, err)
+	}
+	// Steering an already-steered scheduled prompt is a no-op returning the same id.
+	code, _, raw = postJSON(t, f.base+"/s/livesession/steer", f.base, `{"id":"`+ans.ID+`"}`)
+	var again struct {
+		ID string `json:"id"`
+	}
+	if code != http.StatusOK || json.Unmarshal([]byte(raw), &again) != nil || again.ID != ans.ID {
+		t.Fatalf("re-steer of a steered scheduled prompt = %d (%s), want 200 with %s", code, raw, ans.ID)
 	}
 	// Cancel is still allowed: the user may withdraw a held scheduled prompt.
-	if code, _, raw := postJSON(t, f.base+"/s/livesession/cancel", f.base, `{"id":"`+id+`"}`); code != http.StatusOK {
+	if code, _, raw := postJSON(t, f.base+"/s/livesession/cancel", f.base, `{"id":"`+ans.ID+`"}`); code != http.StatusOK {
 		t.Fatalf("cancel = %d: %s", code, raw)
 	}
 }

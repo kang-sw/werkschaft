@@ -70,7 +70,6 @@ func TestParseUserMessagesWithCronEnvelope(t *testing.T) {
 
 func TestCronNormalize(t *testing.T) {
 	for name, e := range map[string]Entry{
-		"steered":  {Parts: []string{"x"}, Steer: true, Cron: &Cron{ID: "a", Name: "b", At: "2026-03-10T09:00:00Z"}},
 		"chips":    {Parts: []string{"x"}, Chips: []Chip{{ID: "1", Answer: "ok"}}, Cron: &Cron{ID: "a", Name: "b", At: "2026-03-10T09:00:00Z"}},
 		"no id":    {Parts: []string{"x"}, Cron: &Cron{Name: "b", At: "2026-03-10T09:00:00Z"}},
 		"ctl name": {Parts: []string{"x"}, Cron: &Cron{ID: "a", Name: "b\nc", At: "2026-03-10T09:00:00Z"}},
@@ -83,19 +82,23 @@ func TestCronNormalize(t *testing.T) {
 	if _, err := Normalize(Entry{Parts: []string{" "}, Cron: &Cron{ID: "a", Name: "b", At: "2026-03-10T09:00:00Z"}}); !errors.Is(err, ErrEmpty) {
 		t.Errorf("blank prompt: %v", err)
 	}
-	// The marker survives normalization and a JSON round trip.
-	e, err := Normalize(cronEntry("x"))
-	if err != nil || e.Cron == nil || e.Cron.ID != "cron-0123abcd" || e.Steer {
-		t.Fatalf("normalized = %+v, %v", e, err)
-	}
-	raw, _ := json.Marshal(e)
-	var back Entry
-	if err := json.Unmarshal(raw, &back); err != nil || back.Cron == nil || *back.Cron != *e.Cron {
-		t.Fatalf("round trip = %+v, %v", back, err)
+	// The marker and Steer flag survive normalization and a JSON round trip.
+	for _, steer := range []bool{false, true} {
+		in := cronEntry("x")
+		in.Steer = steer
+		e, err := Normalize(in)
+		if err != nil || e.Cron == nil || e.Cron.ID != "cron-0123abcd" || e.Steer != steer {
+			t.Fatalf("steer=%v normalized = %+v, %v", steer, e, err)
+		}
+		raw, _ := json.Marshal(e)
+		var back Entry
+		if err := json.Unmarshal(raw, &back); err != nil || back.Cron == nil || *back.Cron != *e.Cron || back.Steer != steer {
+			t.Fatalf("steer=%v round trip = %+v, %v", steer, back, err)
+		}
 	}
 }
 
-func TestCronEntryIsNeverMergedOrSteered(t *testing.T) {
+func TestCronEntryIsNeverMergedAndCanBeSteered(t *testing.T) {
 	dir := Dir(t.TempDir())
 	now := time.Now()
 	cronName, merged, err := Send(dir, cronEntry("tick"), now)
@@ -109,18 +112,29 @@ func TestCronEntryIsNeverMergedOrSteered(t *testing.T) {
 	if err != nil || len(held) != 2 || held[0].Entry.Cron == nil || held[1].Entry.Cron != nil {
 		t.Fatalf("held = %+v, %v", held, err)
 	}
-	if _, err := Steer(dir, cronName); !errors.Is(err, ErrNotSteerable) {
-		t.Fatalf("steer cron: %v", err)
+	steeredName, err := Steer(dir, cronName)
+	if err != nil || steeredName == cronName || !strings.HasSuffix(steeredName, cronNameSuffix) {
+		t.Fatalf("steer cron: %q %v", steeredName, err)
 	}
-	if _, err := SteerWithAdmission(dir, cronName, nil); !errors.Is(err, ErrNotSteerable) {
-		t.Fatalf("steer cron with admission: %v", err)
+	// Steer on an already-steered cron entry is a no-op returning the same name.
+	if same, err := SteerWithAdmission(dir, steeredName, nil); err != nil || same != steeredName {
+		t.Fatalf("re-steer cron with admission: %q %v", same, err)
 	}
 	after, _ := Held(dir)
-	if len(after) != 2 || after[0].Name != cronName || after[0].Entry.Steer {
-		t.Fatalf("a refused steer changed the entry: %+v", after)
+	if len(after) != 2 || after[0].Name != steeredName || !after[0].Entry.Steer || after[0].Entry.Cron == nil {
+		t.Fatalf("held after steer = %+v", after)
 	}
-	if recs, _ := DrainSteer(dir); len(recs) != 0 {
-		t.Fatalf("a steer-only drain took %d entries", len(recs))
+	// DrainSteerWhere with e.Cron == nil leaves the steered cron entry held.
+	if recs, err := DrainSteerWhere(dir, func(e Entry) bool { return e.Cron == nil }); err != nil || len(recs) != 0 {
+		t.Fatalf("DrainSteerWhere excluding cron took %+v, %v", recs, err)
+	}
+	// DrainSteer takes the steered cron entry and leaves the unsteered user entry held.
+	recs, err := DrainSteer(dir)
+	if err != nil || len(recs) != 1 || recs[0].Name != steeredName || !recs[0].Entry.Steer || recs[0].Entry.Cron == nil {
+		t.Fatalf("DrainSteer = %+v, %v", recs, err)
+	}
+	if rem, _ := Held(dir); len(rem) != 1 || rem[0].Entry.Cron != nil {
+		t.Fatalf("remaining held = %+v", rem)
 	}
 }
 
@@ -197,7 +211,8 @@ func TestCronRemovalObserver(t *testing.T) {
 		t.Fatalf("interrupt observed %v", got)
 	}
 
-	// A plain entry and a steer-only drain observe nothing.
+	// A non-steered cron entry stays held across DrainSteer; a steered cron
+	// entry is drained by DrainSteer / DrainSteerWhere and notifies the observer.
 	dir = Dir(t.TempDir())
 	if _, _, err := Send(dir, Entry{Parts: []string{"plain"}, Steer: true}, now); err != nil {
 		t.Fatal(err)
@@ -207,7 +222,44 @@ func TestCronRemovalObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := log.take(); len(got) != 0 {
+		t.Fatalf("steer drain of unsteered cron observed %v", got)
+	}
+	steeredEntry := cronEntry("tick")
+	steeredEntry.Steer = true
+	steeredEntry.Cron.ID = "cron-steered"
+	if _, _, err := Send(dir, steeredEntry, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DrainSteerWhere(dir, func(e Entry) bool { return e.Cron == nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.take(); len(got) != 0 {
+		t.Fatalf("filtered steer drain observed %v", got)
+	}
+	if _, err := DrainSteer(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.take(); len(got) != 1 || got[0] != "cron-steered" {
 		t.Fatalf("steer drain observed %v", got)
+	}
+
+	// ClaimInputs (durable steer path) also notifies the observer.
+	claimDir := Dir(t.TempDir())
+	steeredClaim := cronEntry("tick")
+	steeredClaim.Steer = true
+	steeredClaim.Cron.ID = "cron-claim"
+	if _, _, err := Send(claimDir, steeredClaim, now); err != nil {
+		t.Fatal(err)
+	}
+	held, err := Held(claimDir)
+	if err != nil || len(held) != 1 {
+		t.Fatalf("held for claim = %+v, %v", held, err)
+	}
+	if _, err := ClaimInputs(claimDir, held); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.take(); len(got) != 1 || got[0] != "cron-claim" {
+		t.Fatalf("claim observed %v", got)
 	}
 
 	// Unregistered observers hear nothing.
@@ -251,6 +303,7 @@ func oldNames(t *testing.T, dir string) []string {
 func TestAScheduledPromptIsInvisibleToThePrecedingDaemon(t *testing.T) {
 	dir := Dir(t.TempDir())
 	e := cronEntry("check the board")
+	e.Steer = true
 	name, _, err := Send(dir, e, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -274,27 +327,28 @@ func TestAScheduledPromptIsInvisibleToThePrecedingDaemon(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 		t.Fatal(err)
 	}
-	// The current daemon, on reopening, finds it.
+	// The current daemon, on reopening, finds it with Steer intact.
 	held, err := Held(dir)
-	if err != nil || len(held) != 2 || held[0].Name != name || held[0].Entry.Cron == nil || *held[0].Entry.Cron != *e.Cron {
+	if err != nil || len(held) != 2 || held[0].Name != name || !held[0].Entry.Steer || held[0].Entry.Cron == nil || *held[0].Entry.Cron != *e.Cron {
 		t.Fatalf("held = %+v, %v", held, err)
-	}
-	if recs, err := DrainSteer(dir); err != nil || len(recs) != 0 {
-		t.Fatalf("a steer drain took %+v %v", recs, err)
 	}
 	var log removalLog
 	stop := ObserveCronRemoval(log.add)
 	defer stop()
-	recs, err := Drain(dir)
-	if err != nil || len(recs) != 2 {
-		t.Fatalf("drain = %+v, %v", recs, err)
+	steered, err := DrainSteer(dir)
+	if err != nil || len(steered) != 1 {
+		t.Fatalf("steer drain = %+v, %v", steered, err)
 	}
 	want, _ := Normalize(e)
-	if recs[0].Name != name || recs[0].Entry.Text() != want.Text() {
-		t.Fatalf("delivered %q %q, want %q", recs[0].Name, recs[0].Entry.Text(), want.Text())
+	if steered[0].Name != name || steered[0].Entry.Text() != want.Text() {
+		t.Fatalf("delivered %q %q, want %q", steered[0].Name, steered[0].Entry.Text(), want.Text())
 	}
 	if ids := log.take(); len(ids) != 1 || ids[0] != e.Cron.ID {
 		t.Fatalf("removal observed %v", ids)
+	}
+	recs, err := Drain(dir)
+	if err != nil || len(recs) != 1 || recs[0].Name != plain {
+		t.Fatalf("drain = %+v, %v", recs, err)
 	}
 	// The drained record keeps the name: the current daemon reads its history,
 	// the old one does not list it.
