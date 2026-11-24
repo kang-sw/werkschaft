@@ -182,7 +182,7 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 		}
 	}
 	if f.Authority == AuthorityWorkdirWrite && (prior.digest == nil || *prior.digest != expected) {
-		return target.commitReplacement(ctx, prior, data, protection)
+		return target.commitReplacement(ctx, prior, data, protection, f.beforeReplacementWrite)
 	}
 	flags := os.O_WRONLY
 	if prior.info == nil {
@@ -197,10 +197,13 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 	}
 	defer file.Close()
 	if prior.info != nil {
-		if err := verifyMutationDestination(file, prior.info, protection); err != nil {
+		if _, err := verifyMutationDestination(file, prior.info, protection); err != nil {
 			return err
 		}
 		if *prior.digest == expected {
+			if f.Authority == AuthorityWorkdirWrite {
+				return recoverMutationStage(target.parent, filepath.Base(target.path))
+			}
 			return nil
 		}
 		if err := file.Truncate(0); err != nil {
@@ -213,35 +216,61 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 	return file.Close()
 }
 
-func verifyMutationDestination(file *os.File, prior fs.FileInfo, protection FileProtection) error {
+func verifyMutationDestination(file *os.File, prior fs.FileInfo, protection FileProtection) (fs.FileInfo, error) {
 	info, err := verifyFile(file, prior)
 	if err == nil && protection != nil {
 		err = protection.CheckOpened(info)
 	}
-	return err
+	return info, err
 }
 
 // A scoped mutation publishes a complete new file in the pinned parent.
 // Hard links to the previous entry continue to refer to the previous inode.
-func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapshot, data []byte, protection FileProtection) error {
+func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapshot, data []byte, protection FileProtection, beforeWrite func(*os.File)) error {
 	if err := t.createParents(); err != nil {
 		return err
 	}
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	name := filepath.Base(t.path)
+	var permissions *mutationPermissions
+	if prior.info != nil {
+		file, err := openMutationFile(t.parent, name, os.O_WRONLY)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		info, err := verifyMutationDestination(file, prior.info, protection)
+		if err != nil {
+			return err
+		}
+		permissions, err = readMutationPermissions(file, info)
+		if err != nil {
+			return fmt.Errorf("read replacement permissions for %s: %w", t.path, err)
+		}
+	}
+	stagingParent, tempName, cleanup, err := mutationStagingLocation(t.parent, name, permissions != nil)
+	if err != nil {
 		return err
 	}
-	tmp, err := openMutationTemp(t.parent, ".ws-write-"+hex.EncodeToString(random[:]))
+	defer cleanup()
+	tmp, err := openMutationTemp(stagingParent, tempName, permissions)
 	if err != nil {
 		return err
 	}
 	published := false
 	defer func() {
 		if !published {
-			discardMutationTemp(t.parent, tmp)
+			discardMutationTemp(stagingParent, tmp)
 		}
 		_ = tmp.Close()
 	}()
+	if permissions != nil {
+		if err := permissions.prepare(tmp); err != nil {
+			return fmt.Errorf("prepare replacement permissions for %s: %w", t.path, err)
+		}
+	}
+	if beforeWrite != nil {
+		beforeWrite(tmp)
+	}
 	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
@@ -251,23 +280,34 @@ func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapsh
 	if err := t.checkParent(); err != nil {
 		return err
 	}
-	name := filepath.Base(t.path)
-	if prior.info != nil {
+	if permissions != nil {
+		if err := permissions.verify(tmp, nil); err != nil {
+			return fmt.Errorf("verify staged replacement permissions for %s: %w", t.path, err)
+		}
 		file, err := openMutationFile(t.parent, name, os.O_WRONLY)
 		if err != nil {
 			return err
 		}
 		defer file.Close()
-		if err := verifyMutationDestination(file, prior.info, protection); err != nil {
+		info, err := verifyMutationDestination(file, prior.info, protection)
+		if err != nil {
 			return err
 		}
-		if err := setMutationTempMode(tmp, prior.info.Mode()); err != nil {
-			return err
+		if err := permissions.verify(file, info); err != nil {
+			return fmt.Errorf("recheck destination permissions for %s: %w", t.path, err)
 		}
 	}
-	if err := publishMutationTemp(t.parent, tmp, name, prior.info != nil); err != nil {
+	if err := publishMutationTemp(t.parent, stagingParent, tmp, name, prior.info != nil); err != nil {
 		return err
 	}
 	published = true
 	return tmp.Close()
+}
+
+func siblingMutationStagingLocation(parent *os.File) (*os.File, string, func(), error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return nil, "", nil, err
+	}
+	return parent, ".ws-write-" + hex.EncodeToString(random[:]), func() {}, nil
 }

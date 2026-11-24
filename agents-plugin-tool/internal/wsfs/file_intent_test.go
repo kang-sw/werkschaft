@@ -11,6 +11,15 @@ import (
 	"testing"
 )
 
+func assertReplacementContent(t *testing.T, path, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	must(t, err)
+	if string(data) != want {
+		t.Fatalf("content = %q, want %q", data, want)
+	}
+}
+
 func TestFileIntentRecoversContentState(t *testing.T) {
 	root := t.TempDir()
 	f := &Files{Root: root, Authority: AuthorityWorkdirWrite}
