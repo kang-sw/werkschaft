@@ -201,9 +201,6 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 			return err
 		}
 		if *prior.digest == expected {
-			if f.Authority == AuthorityWorkdirWrite {
-				return recoverMutationStage(target.parent, filepath.Base(target.path))
-			}
 			return nil
 		}
 		if err := file.Truncate(0); err != nil {
@@ -238,6 +235,9 @@ func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapsh
 			return err
 		}
 		defer file.Close()
+		if err := lockMutationDestination(file); err != nil {
+			return err
+		}
 		info, err := verifyMutationDestination(file, prior.info, protection)
 		if err != nil {
 			return err
@@ -247,7 +247,7 @@ func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapsh
 			return fmt.Errorf("read replacement permissions for %s: %w", t.path, err)
 		}
 	}
-	stagingParent, tempName, cleanup, err := mutationStagingLocation(t.parent, name, permissions != nil)
+	stagingParent, tempName, cleanup, err := mutationStagingLocation(t.parent, permissions != nil)
 	if err != nil {
 		return err
 	}
