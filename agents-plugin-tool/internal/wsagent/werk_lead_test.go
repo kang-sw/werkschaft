@@ -37,7 +37,13 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 			return resp, err
 		default:
 			// The durable record is committed before the steer is handed to the
-			// loop. Keep the turn at tool boundaries while that handoff completes.
+			// loop. Keep the turn at tool boundaries while that handoff completes;
+			// pace the rounds so a slow runner's handoff cannot outlast the script.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
 			id := fmt.Sprintf("read-%d", reads.Add(1))
 			return &werk.Response{Output: []json.RawMessage{json.RawMessage(werkCall(id, "fs_read", `{"path":"fixture"}`))}}, nil
 		}
@@ -53,7 +59,7 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 			return &werk.Response{Output: []json.RawMessage{json.RawMessage(werkCall("read", "fs_read", `{"path":"fixture"}`))}}, nil
 		},
 	}}
-	for range 16 {
+	for range 400 {
 		model.steps = append(model.steps, continuation)
 	}
 	h, ws, _ := werkHarness(t, model)

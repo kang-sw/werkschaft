@@ -210,6 +210,10 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 			if tc.leafAge != 0 {
 				write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, tc.leafAge, false, tc.turnOpen)
 			}
+			// This case checks startup selection only. Keep the real-time
+			// heartbeat from expiring the ancestor while the leaf is still
+			// registering; that unfenced in-loop race is tracked separately.
+			h.config.heartbeat = time.Hour
 			h.start()
 			if tc.leafAge == 0 {
 				if !gone(h, "ancestor") || h.runner.conv("ancestor") != nil {
