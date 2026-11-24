@@ -321,36 +321,6 @@ func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
 	}
 }
 
-func TestWerkCronPreviouslyFlattenedQueueKeepsBackgroundInputSeparate(t *testing.T) {
-	requests := make(chan cronModelRequest, 2)
-	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
-		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
-			requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
-			return werkMessage("operator completed")(ctx, req)
-		},
-	}}
-	h, _, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{}})
-	id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
-	c := h.runner.conv(id)
-	var err error
-	if !c.do(func() {
-		err = c.commitDurableRecord(func(rec *Record) {
-			rec.Queued = []QueuedInput{{Text: cronConsentPrompt}, {Text: "queued operator prompt", Operator: true}}
-			rec.Drained, rec.Sends = 2, 2
-		}, func() { c.drained, c.sends = 2, 2 })
-		c.signalInbox()
-	}) || err != nil {
-		t.Fatalf("stage flattened queue: %v", err)
-	}
-	if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("queued operator prompt") || req.contains(cronConsentPrompt) {
-		t.Fatalf("recovered operator request interactive=%v, operator=%v, cron=%v", req.interactive, req.contains("queued operator prompt"), req.contains(cronConsentPrompt))
-	}
-	h.idle(id)
-	if count := model.requestCount(); count != 1 {
-		t.Fatalf("%d requests after processing the flattened queue, want only the operator request", count)
-	}
-}
-
 // TestDeliverCronWaitsOutInFlightMCPCallOnAgy: on agy, whose steer replaces
 // the running prompt, a scheduled prompt waits while a ws MCP call is in
 // flight and steers as soon as that call ends.

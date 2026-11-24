@@ -156,7 +156,7 @@ func planInputClaims(queue []QueuedInput, pending, held []wsinbox.Record) (take 
 
 // settlePlanCronRefusal keeps a denied prompt out of the model log, where
 // a later interactive request would pick it up as conversation history.
-func (c *conv) settlePlanCronRefusal(claim string, rest []QueuedInput, mark uint64) {
+func (c *conv) settlePlanCronRefusal(claim string, mark uint64) {
 	message := (&wscred.ProviderError{Provider: wscred.ProviderOpenAI, Err: wscred.ErrConsentRequired}).Error()
 	var err error
 	refused := c.admitInput(func() {
@@ -167,11 +167,8 @@ func (c *conv) settlePlanCronRefusal(claim string, rest []QueuedInput, mark uint
 		}
 		defer release()
 		err = c.publishWith(TurnResult{ID: c.rec.ReplyID, Status: TurnFailed, Error: message, mark: mark}, false, func(rec *Record) {
-			rec.Queued, rec.TurnMark = rest, mark
-			if claim != "" {
-				// The refusal owns the inbox entry once its settlement commits.
-				rec.Drained, rec.DurableInboxClaims = mark, []string{claim}
-			}
+			// The refusal owns the inbox entry once its settlement commits.
+			rec.Drained, rec.TurnMark, rec.DurableInboxClaims = mark, mark, []string{claim}
 		})
 	})
 	switch {
@@ -182,12 +179,10 @@ func (c *conv) settlePlanCronRefusal(claim string, rest []QueuedInput, mark uint
 	case err != nil:
 		c.durableTurnError("save scheduled input refusal", err)
 	default:
-		if claim != "" {
-			c.drained, c.inboxClaimsAcked = mark, false
-			if err := c.ackInboxClaims(); err != nil {
-				c.durableTurnError("acknowledge scheduled input", err)
-				return
-			}
+		c.drained, c.inboxClaimsAcked = mark, false
+		if err := c.ackInboxClaims(); err != nil {
+			c.durableTurnError("acknowledge scheduled input", err)
+			return
 		}
 		c.setStatus(func() { c.lastErr = message })
 		c.live.writeSnapshot()

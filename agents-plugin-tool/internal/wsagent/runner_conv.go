@@ -1823,9 +1823,6 @@ func (c *conv) kickInput() {
 	// Under mu, as Send writes: count the sends covered by the drain
 	// (Wait's turn marks).
 	separateCron := durable && c.separatesPlanCron()
-	// Previously flattened input has only the operator bit. Keep its
-	// background text out of interactive plan turns as well.
-	splitQueued := separateCron && len(c.rec.Queued) > 0
 	var isolatedCron bool
 	c.mu.Lock()
 	covered := c.sends
@@ -1868,7 +1865,7 @@ func (c *conv) kickInput() {
 	}
 	if isolatedCron {
 		if len(recs) > 0 {
-			c.settlePlanCronRefusal(recs[0].Name, nil, covered)
+			c.settlePlanCronRefusal(recs[0].Name, covered)
 		} else {
 			// A cancellation won the claim. Recheck the deferred entries.
 			c.signalInbox()
@@ -1905,7 +1902,7 @@ func (c *conv) kickInput() {
 		}
 		return
 	}
-	cmd, parts, rest := nextTurn(queue, splitQueued)
+	cmd, parts, rest := nextTurn(queue)
 	if cmd != nil {
 		mail, reports = nil, nil
 	}
@@ -1922,10 +1919,6 @@ func (c *conv) kickInput() {
 	mark := covered
 	if len(rest) > 0 {
 		mark = rest[0].After
-	}
-	if splitQueued && len(queue) > 0 && !queue[0].Operator {
-		c.settlePlanCronRefusal("", rest, mark)
-		return
 	}
 	c.stopIdle()
 	// Read before the send: a request boundary is never later than the
@@ -2152,15 +2145,15 @@ func (c *conv) voidCancelled() {
 	}
 }
 
-// nextTurn takes a leading slash command or the text that precedes the next
-// command. When splitOperator is set, text with different operator provenance
-// also waits for a later turn.
-func nextTurn(queue []QueuedInput, splitOperator bool) (cmd *wsinbox.Command, parts []string, rest []QueuedInput) {
+// nextTurn splits queue at its first slash command: a command at the front
+// is the turn (cmd), else the texts before the first command are (parts).
+// rest is what waits for the turns after it; nil when nothing does.
+func nextTurn(queue []QueuedInput) (cmd *wsinbox.Command, parts []string, rest []QueuedInput) {
 	n := 0
 	if len(queue) > 0 && queue[0].Command != nil {
 		cmd, n = queue[0].Command, 1
 	} else {
-		for n < len(queue) && queue[n].Command == nil && (!splitOperator || queue[n].Operator == queue[0].Operator) {
+		for n < len(queue) && queue[n].Command == nil {
 			parts = append(parts, queue[n].Text)
 			n++
 		}
