@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -119,6 +120,7 @@ func TestDeliverCronSteersMidTurnAndDrainsWhenIdle(t *testing.T) {
 
 type cronPlanStatus struct {
 	allowed bool
+	live    *atomic.Bool
 }
 
 func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Credential, error) {
@@ -126,6 +128,9 @@ func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Cred
 }
 
 func (s cronPlanStatus) Status() ([]wscred.ProviderStatus, error) {
+	if s.live != nil {
+		s.allowed = s.live.Load()
+	}
 	return []wscred.ProviderStatus{{Provider: wscred.ProviderOpenAI, OpenAIAccounts: []wscred.OpenAIAccountStatus{{
 		Active: true, SignedIn: true, PlanEnabled: true, BackgroundConsent: &s.allowed,
 	}}}}, nil
@@ -278,7 +283,8 @@ func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
 			}
 		},
 	}}
-	h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{}})
+	var consent atomic.Bool
+	h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
 	var failed atomic.Bool
 	h.opts.beforeDurableWrite = func(rec Record) error {
 		if rec.LastTurn != nil && rec.LastTurn.Result.Status == TurnFailed && len(rec.DurableInboxClaims) > 0 && !failed.Swap(true) {
@@ -314,6 +320,7 @@ func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
 		t.Fatalf("operator settlement covered the deferred send: %+v", rec.LastTurn)
 	}
 	h.runner.Close()
+	consent.Store(true)
 	fleet.start(h)
 	waitForCronConsentRefusal(t, h, id)
 	if count := model.requestCount(); count != 1 {
@@ -633,5 +640,80 @@ func TestForgetClosedRemovesAHostedLeadsStoredSchedules(t *testing.T) {
 	}
 	if got := rows(); got != 0 {
 		t.Fatalf("a refused add wrote %d rows", got)
+	}
+}
+
+func TestWerkCronSteeringRecoversClaimAfterConsentRevocation(t *testing.T) {
+	for _, authorized := range []bool{true, false} {
+		t.Run(fmt.Sprintf("authorized=%t", authorized), func(t *testing.T) {
+			requests := make(chan cronModelRequest, 4)
+			var consent, restarting atomic.Bool
+			consent.Store(true)
+			block := func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+				requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){block, block}}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{live: &consent}})
+			h.opts.beforeDurableWrite = func(rec Record) error {
+				if len(rec.DurableSteers) > 0 && !restarting.Load() {
+					return errors.New("simulated interruption before committing cron steer")
+				}
+				return nil
+			}
+			h.runner.Close()
+			fleet.start(h)
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+			h.send(id, "original operator input")
+			if req := nextCronModelRequest(t, requests); !req.interactive {
+				t.Fatal("the original turn was not interactive")
+			}
+			c := h.runner.conv(id)
+			original := c.record().DurableTurn.ID
+			if authorized {
+				if ok, err := h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt); !ok || err != nil {
+					t.Fatalf("DeliverCron = %v, %v", ok, err)
+				}
+				eventually(t, "steer commit interrupted", func() bool { return strings.Contains(h.state(id).Error, "save steering") })
+			} else {
+				// Simulate a crash just after the initial rename, before
+				// evidence was recorded.
+				if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{
+					Parts: []string{cronConsentPrompt}, Steer: true, Cron: &cronConsentMark,
+				}, h.opts.Now()); err != nil {
+					t.Fatal(err)
+				}
+				held, err := wsinbox.Held(c.inbox)
+				if err != nil || len(held) != 1 {
+					t.Fatalf("held = %+v, %v", held, err)
+				}
+				if claims, err := wsinbox.ClaimInputs(c.inbox, held); err != nil || len(claims) != 1 {
+					t.Fatalf("claim = %+v, %v", claims, err)
+				}
+			}
+			h.runner.Close()
+			consent.Store(false)
+			restarting.Store(true)
+			fleet.start(h)
+			nextCronModelRequest(t, requests)
+			recovered := h.runner.conv(id).record()
+			if recovered.DurableTurn == nil || recovered.DurableTurn.ID != original || !recovered.DurableTurn.Operator {
+				t.Fatalf("resumed turn = %+v", recovered.DurableTurn)
+			}
+			if authorized {
+				if len(recovered.DurableSteers) != 1 || !strings.Contains(recovered.DurableSteers[0].Text, cronConsentPrompt) {
+					t.Fatalf("authorized steer did not resume: %+v", recovered.DurableSteers)
+				}
+			} else {
+				if len(recovered.DurableSteers) != 0 {
+					t.Fatalf("unclassified steer became interactive: %+v", recovered.DurableSteers)
+				}
+				pending, err := wsinbox.PendingClaims(c.inbox, nil)
+				if err != nil || len(pending) != 1 || pending[0].CronClaim != wsinbox.CronClaimRefused {
+					t.Fatalf("recovered refusal = %+v, %v", pending, err)
+				}
+			}
+		})
 	}
 }

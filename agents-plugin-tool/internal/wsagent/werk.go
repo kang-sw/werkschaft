@@ -269,6 +269,17 @@ func (b WerkBackend) planBackgroundConsent() (allowed, known bool, err error) {
 	return false, false, nil
 }
 
+func (b WerkBackend) withPlanBackgroundConsent(use func(bool)) {
+	if store, ok := b.credentials.(interface {
+		WithOpenAIBackgroundConsent(func(bool))
+	}); ok {
+		store.WithOpenAIBackgroundConsent(use)
+		return
+	}
+	allowed, _, err := b.planBackgroundConsent()
+	use(err == nil && allowed)
+}
+
 // workerTierGap is workerSetup: tiers start empty, so a harness with no tier
 // model has nothing to spawn.
 func (b WerkBackend) workerTierGap(tiers map[string]wsconfig.AgentTier) string {

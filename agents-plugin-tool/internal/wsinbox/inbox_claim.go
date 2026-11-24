@@ -1,12 +1,25 @@
 package wsinbox
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
+
+// CronClaimDisposition records the background decision for a staged input.
+type CronClaimDisposition string
+
+const (
+	CronClaimAuthorized CronClaimDisposition = "authorized"
+	CronClaimRefused    CronClaimDisposition = "refused"
+)
+
+const cronClaimField = "runnerCronClaim"
 
 func claimDir(dir string) string { return filepath.Join(dir, "runner-claims") }
 
@@ -38,13 +51,95 @@ func DiscardClaims(dir string) error { return os.RemoveAll(claimDir(dir)) }
 // commit their input queue. The private queue record lists the names from
 // its last committed claim, which are already represented in that queue.
 func PendingClaims(dir string, committed []string) ([]Record, error) {
-	records, err := readAll(claimDir(dir))
+	claims := claimDir(dir)
+	names, err := Names(claims)
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(records, func(rec Record) bool {
-		return slices.Contains(committed, rec.Name)
-	}), nil
+	var records []Record
+	for _, name := range names {
+		if slices.Contains(committed, name) {
+			continue
+		}
+		path := filepath.Join(claims, name)
+		raw, err := readFile(path)
+		if err != nil {
+			continue
+		}
+		var body struct {
+			Entry
+			Disposition CronClaimDisposition `json:"runnerCronClaim"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			continue
+		}
+		entry, err := provenCron(path, body.Entry)
+		if err != nil {
+			continue
+		}
+		rec := Record{Name: name, Entry: entry}
+		if entry.Cron != nil {
+			switch body.Disposition {
+			case CronClaimAuthorized, CronClaimRefused:
+				rec.CronClaim = body.Disposition
+			}
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+// RecordCronClaim atomically augments the claimed entry before the runner
+// commits it. A crash before publication leaves an unclassified claim.
+func RecordCronClaim(dir string, rec Record) error {
+	if rec.Entry.Cron == nil || !entryNamePattern.MatchString(rec.Name) || !isCronFile(rec.Name) ||
+		(rec.CronClaim != CronClaimAuthorized && rec.CronClaim != CronClaimRefused) {
+		return ErrInvalid
+	}
+	claims := claimDir(dir)
+	path := filepath.Join(claims, rec.Name)
+	raw, err := readFile(path)
+	if err != nil {
+		return err
+	}
+	var entry map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return err
+	}
+	if entry == nil {
+		return ErrInvalid
+	}
+	admission, err := json.Marshal(rec.CronClaim)
+	if err != nil {
+		return err
+	}
+	entry[cronClaimField] = admission
+	raw, err = json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	tmp, err := wsstate.CreateTemp(claims, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = remove(tmp.Name())
+		}
+	}()
+	_, err = tmp.Write(raw)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if err = errors.Join(err, tmp.Close()); err != nil {
+		return err
+	}
+	if err := wsstate.AtomicReplaceFile(tmp.Name(), path); err != nil {
+		return err
+	}
+	published = true
+	return syncInboxDir(claims)
 }
 
 // ClaimInputs moves held messages into the durable runner's staging area.
@@ -69,6 +164,11 @@ func ClaimInputs(dir string, held []Record) ([]Record, error) {
 		switch {
 		case err == nil:
 			out = append(out, rec)
+			if rec.CronClaim != "" {
+				if err := RecordCronClaim(dir, rec); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
 		case !errors.Is(err, fs.ErrNotExist) && firstErr == nil:
 			firstErr = err
 		}

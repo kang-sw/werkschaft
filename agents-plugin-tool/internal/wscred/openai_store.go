@@ -203,6 +203,19 @@ func (s *Store) SetOpenAIBackgroundConsent(clientID string, allowed bool) error 
 	return s.writeOpenAIAccountLocked(state, a)
 }
 
+// WithOpenAIBackgroundConsent holds the active registration stable through use.
+func (s *Store) WithOpenAIBackgroundConsent(use func(allowed bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	allowed := false
+	if s.loadLocked(false) == nil {
+		if consent := s.openAIAccount.Consent; consent != nil {
+			allowed = *consent
+		}
+	}
+	use(allowed)
+}
+
 func openAIProviderError(err error) error {
 	return &ProviderError{Provider: ProviderOpenAI, Err: err}
 }

@@ -31,25 +31,41 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 		c.durableTurnError("read claimed steering", err)
 		return
 	}
+	if p == nil && len(pending) == 0 {
+		return
+	}
 	c.admitInput(func() {
 		c.mu.Lock()
-		held, err := wsinbox.Held(c.inbox)
-		deferCron := c.rec.DurableTurn != nil && c.rec.DurableTurn.Operator &&
-			(slices.ContainsFunc(pending, isCronInput) || slices.ContainsFunc(held, isCronInput)) && c.separatesPlanCron()
-		skipSteer := func(rec wsinbox.Record) bool {
-			return !rec.Entry.Steer || rec.Entry.Command != nil || (deferCron && isCronInput(rec))
+		var held []wsinbox.Record
+		if p != nil {
+			held, err = wsinbox.Held(c.inbox)
 		}
 		pendingCount := len(pending)
-		pending = slices.DeleteFunc(pending, skipSteer)
 		var claimed []wsinbox.Record
 		unclaimed := len(held)
-		if err == nil {
+		claim := func(disposition wsinbox.CronClaimDisposition) {
+			if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
+				return
+			}
+			skipSteer := func(rec wsinbox.Record) bool {
+				return !rec.Entry.Steer || rec.Entry.Command != nil || refusedCron(rec)
+			}
+			pending = slices.DeleteFunc(pending, skipSteer)
 			claimed, err = wsinbox.ClaimInputs(c.inbox, slices.DeleteFunc(held, skipSteer))
-			c.held = unclaimed - len(claimed)
+			if p != nil {
+				c.held = unclaimed - len(claimed)
+			}
+		}
+		if err == nil {
+			if c.rec.DurableTurn != nil && c.rec.DurableTurn.Operator {
+				c.withCronClaimConsent(pending, held, claim)
+			} else {
+				claim("")
+			}
 		}
 		// Send coverage is a prefix. A manually promoted message can
 		// overtake a held follow-up, so only advance when no input is left.
-		covered := c.turnMark
+		covered := c.rec.TurnMark
 		if c.held == 0 && pendingCount == len(pending) && len(c.rec.Queued) == 0 {
 			covered = c.sends
 		}
@@ -101,7 +117,7 @@ func (c *conv) queueDurableSteer(p durableSteerProcess, steer durableSteer, clai
 	if err := c.ackInboxClaims(); err != nil {
 		c.durableTurnError("acknowledge steering", err)
 	}
-	if steer.Text != "" {
+	if steer.Text != "" && p != nil {
 		if err := p.submitSteer(c.rec.DurableTurn.ID, steer); err != nil {
 			c.durableTurnError("send steering", err)
 		} else {
