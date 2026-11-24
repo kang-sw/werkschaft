@@ -20,6 +20,9 @@ import (
 
 const fixtureWorkerSummary = `{"user_preferences":"","working_practices":"","unrecorded_decisions":"","current_work":"carry forward","next_step":"","mood_rapport":"","residual_details":""}`
 
+// These tests wait for durable writes and model callbacks on loaded runners.
+const werkCompactionWait = 30 * time.Second
+
 type unavailableCutSink struct{ *storeSink }
 
 func (s unavailableCutSink) AppendCheckpoint(context.Context, wsaudit.SourceID, wsaudit.Envelope) error {
@@ -112,9 +115,18 @@ func TestWerkCompactionCommitsAtBoundaryAndRestoresAuditCut(t *testing.T) {
 			}
 			h.opts.AuditSink = sink
 			fleet.start(h)
-			h.send(id, "follow-up")
-			eventually(t, "the follow-up report", func() bool { return len(reports.list()) == 2 })
+			if _, err := h.runner.Send(id, "follow-up"); err != nil {
+				t.Fatal(err)
+			}
+			result, err := h.runner.Wait(ctx, id, werkCompactionWait)
+			if err != nil || result.Status != TurnDone {
+				t.Fatalf("waiting for the follow-up turn: %+v, %v", result, err)
+			}
+			// The turn's settlement wakes Wait before the report callback.
 			h.runner.Close()
+			if got := len(reports.list()); got != 2 {
+				t.Fatalf("got %d reports after the follow-up, want 2", got)
+			}
 			model.mu.Lock()
 			last := model.reqs[len(model.reqs)-1]
 			model.mu.Unlock()
@@ -279,8 +291,8 @@ func TestWerkCompactionResumeUsesSeparateDurableTurn(t *testing.T) {
 			!strings.Contains(string(req.Input[1]), "Continue the work that was pending") {
 			t.Fatal("the continuation did not use the summary and its own prompt")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("compaction never opened its continuation")
+	case <-time.After(werkCompactionWait):
+		t.Fatalf("compaction never opened its continuation (%d model requests)", model.requestCount())
 	}
 	second := werkRecord(t, h, id)
 	if second.DurableTurn == nil || second.DurableTurn.ID == first.DurableTurn.ID || len(reports.list()) != 1 {
