@@ -1847,13 +1847,11 @@ func (c *conv) kick() {
 	if !c.canKick() {
 		return
 	}
-	if c.quotaPendingFire {
-		if c.quotaContinuationTimedOut() {
-			return
-		}
-	}
 	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
 		c.resumeDurableTurn()
+		return
+	}
+	if c.quotaPendingFire && !c.compacting && !c.compactCommand && c.quotaContinuationTimedOut() {
 		return
 	}
 	// A released binding gets no compaction command, continuation or restore

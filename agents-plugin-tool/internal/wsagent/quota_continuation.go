@@ -385,7 +385,7 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		hook()
 	}
 	qc := cloneQuotaContinuation(c.rec.QuotaContinuation)
-	if !c.rec.Lead || c.closed || c.hidden || c.isForeign() || c.turn || qc == nil || qc.Status != QuotaContinuationScheduled {
+	if !c.rec.Lead || c.closed || c.hidden || c.isForeign() || qc == nil || qc.Status != QuotaContinuationScheduled {
 		c.quotaCancelFence.Store(quotaFenceIdle)
 		return false
 	}
@@ -401,7 +401,7 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		c.quotaCancelFence.Store(quotaFencePending)
 		return true
 	}
-	if !c.canKick() {
+	if !c.canKick() || c.rec.DurableTurn != nil || c.compacting || c.compactCommand {
 		c.quotaPendingFire = true
 		c.quotaCancelFence.Store(quotaFencePending)
 		return true
@@ -456,6 +456,8 @@ func (c *conv) quotaContinuationTimedOut() bool {
 	defer func() { c.quotaInjecting = false }()
 	c.inboxMutated(1)
 	c.recordDirty = true
-	c.kick()
+	// The admitted inbox turn carries the compaction restore note itself.
+	// Dispatch it before compactIdle can open a separate resume turn.
+	c.kickInput()
 	return true
 }

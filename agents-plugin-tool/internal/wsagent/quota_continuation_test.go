@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -186,18 +187,21 @@ func (e *quotaEnv) startRunner(jitter time.Duration, serving <-chan struct{}) {
 	keys := &fakeKeys{}
 	leadKeys := &fakeLeadKeys{}
 	r := NewRunner(Options{
-		Dir:      e.dir,
-		Keys:     keys,
-		LeadKeys: leadKeys,
-		Mail:     e.mail,
-		Config:   wsconfig.Options{ConfigHome: e.home, RepoRoot: e.root},
+		Dir:       e.dir,
+		Keys:      keys,
+		LeadKeys:  leadKeys,
+		Mail:      e.mail,
+		Config:    wsconfig.Options{ConfigHome: e.home, RepoRoot: e.root},
 		WSMCP:     func(string) (MCPCommand, error) { return MCPCommand{Command: "ws-mcp"}, nil },
 		DaemonMCP: func(string) (MCPCommand, error) { return MCPCommand{}, nil },
 		Backends: map[string]BackendRegistration{
-			BackendClaude: {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-claude", PermissionModes: []string{"auto", "default"}},
-			BackendCodex:  {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-codex", PermissionModes: []string{"auto", "default"}},
-			BackendAgy:    {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-agy", PermissionModes: []string{"auto", "default"}},
-			BackendWerk:   {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-werk", PermissionModes: []string{"auto", "default"}},
+			BackendClaude: {
+				Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-claude", PermissionModes: []string{"auto", "default"},
+				NativeCompaction: &CompactionProtocol{LeadCommand: true, Lifecycle: true, PromptPersists: true},
+			},
+			BackendCodex: {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-codex", PermissionModes: []string{"auto", "default"}},
+			BackendAgy:   {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-agy", PermissionModes: []string{"auto", "default"}},
+			BackendWerk:  {Backend: e.backend, ProcessKind: ProcessDurable, LeadProfile: "lead-werk", PermissionModes: []string{"auto", "default"}},
 		},
 		Now:                     e.currentNow,
 		Timer:                   e.timers.start,
@@ -491,6 +495,103 @@ func TestQuotaContinuationCodexDuplicateAlertsExhaustSixRetries(t *testing.T) {
 	if nextIdx, _ := env.lastTimer(); nextIdx != timerIdx && env.timers.durs[nextIdx] == time.Hour {
 		t.Fatalf("armed a 7th 1h quota timer after exhaustion (idx %d -> %d)", timerIdx, nextIdx)
 	}
+}
+
+func TestQuotaContinuationDueBeforeTurnEnd(t *testing.T) {
+	env := newQuotaEnv(t, map[string]string{wsconfig.ItemAgentQuotaContinuation + ".claude": "auto"}, 0)
+	id := env.createLead(BackendClaude)
+	if _, err := env.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := env.backend.proc(t, 0)
+	first := p.nextSend(t)
+	p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+	p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit"}, TurnID: first.TurnID}
+	fireQuotaDuringWork(t, env, id)
+	select {
+	case send := <-p.sends:
+		t.Fatalf("started quota continuation before turn end: %+v", send)
+	default:
+	}
+	p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+	if sent := p.nextSend(t); !strings.Contains(sent.Text, "scheduled retry interval has elapsed") {
+		t.Fatalf("post-settlement prompt = %+v", sent)
+	}
+}
+
+func TestQuotaContinuationDueDuringNativeCompact(t *testing.T) {
+	for _, name := range []string{"compaction resume", "operator input"} {
+		t.Run(name, func(t *testing.T) {
+			env := newQuotaEnv(t, map[string]string{wsconfig.ItemAgentQuotaContinuation + ".claude": "auto"}, 0)
+			id := env.createLead(BackendClaude)
+			if _, err := env.runner.Send(id, "work"); err != nil {
+				t.Fatal(err)
+			}
+			p := env.backend.proc(t, 0)
+			first := p.nextSend(t)
+			p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit"}, TurnID: first.TurnID}
+			p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+			env.waitIdle(id)
+			resume := name == "compaction resume"
+			if result := env.runner.Compact(env.recordOf(id).WSKey, "", &resume); result.Status != "queued" {
+				t.Fatalf("compact result = %+v", result)
+			}
+			if sent := p.nextSend(t); sent.Text != "/compact" {
+				t.Fatalf("compact command = %+v", sent)
+			}
+
+			fireQuotaDuringWork(t, env, id)
+			st, _ := env.runner.Get(id)
+			if qc := st.QuotaContinuation; qc == nil || qc.Status != QuotaContinuationScheduled || qc.Attempts != 0 {
+				t.Fatalf("continuation while compacting = %+v, want scheduled with zero attempts", qc)
+			}
+			if !resume {
+				if _, err := env.runner.Send(id, "operator input"); err != nil {
+					t.Fatal(err)
+				}
+				env.quiesce(id)
+			}
+			p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}, compactCommandDone: true}
+			sent := p.nextSend(t)
+			if resume {
+				if !strings.Contains(sent.Text, "scheduled retry interval has elapsed") {
+					t.Fatalf("want quota continuation with compaction restore, got %+v", sent)
+				}
+				p.events <- Event{TurnEnd: true, TurnID: sent.TurnID}
+				env.waitIdle(id)
+				select {
+				case duplicate := <-p.sends:
+					t.Fatalf("separate compaction continuation followed quota continuation: %+v", duplicate)
+				default:
+				}
+			} else if !strings.Contains(sent.Text, "operator input") || strings.Contains(sent.Text, "scheduled retry interval") {
+				t.Fatalf("want operator input alone, got %+v", sent)
+			}
+		})
+	}
+}
+
+func fireQuotaDuringWork(t *testing.T, env *quotaEnv, id string) {
+	t.Helper()
+	eventually(t, "quota timer armed", func() bool {
+		env.timers.mu.Lock()
+		defer env.timers.mu.Unlock()
+		return slices.Contains(env.timers.durs, quotaFallbackDelay)
+	})
+	done := make(chan struct{})
+	c := env.runner.conv(id)
+	c.do(func() { c.onQuotaAfterFence = func() { close(done) } })
+	env.timers.mu.Lock()
+	idx := slices.Index(env.timers.durs, quotaFallbackDelay)
+	env.timers.mu.Unlock()
+	env.advance(time.Hour)
+	env.timers.fire(t, idx)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("quota timer did not fire")
+	}
+	c.do(func() { c.onQuotaAfterFence = nil })
 }
 
 func TestQuotaContinuationDefaultOffAndWerkPlanPauseRules(t *testing.T) {

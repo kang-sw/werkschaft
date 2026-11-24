@@ -84,7 +84,7 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 
 // turnSettled clears what a turn's end settles: a retry still shown, and
 // the failure state once a turn ended with no failure of any kind.
-func (c *conv) turnSettled(turnErr string, quiet bool) {
+func (c *conv) turnSettled(turnErr string, quiet, compactCommand bool) {
 	alerted := c.alerted
 	usageLimitAlerted := c.quotaUsageLimitAlerted
 	c.alerted, c.quotaUsageLimitAlerted, c.retry = false, false, nil
@@ -92,7 +92,9 @@ func (c *conv) turnSettled(turnErr string, quiet bool) {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)
 	}
-	if !quiet && !usageLimitAlerted && c.hasQuotaContinuation() {
+	// A native compaction command settles independently of the work that
+	// owns a quota reservation.
+	if !quiet && !compactCommand && !usageLimitAlerted && c.hasQuotaContinuation() {
 		c.cancelQuotaContinuation(quiet)
 	}
 	c.syncHost(quiet)
