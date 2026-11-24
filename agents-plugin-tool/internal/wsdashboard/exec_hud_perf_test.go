@@ -1,9 +1,14 @@
 package wsdashboard
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +78,128 @@ func TestExecHUDRoutesTouchNoFilesBeyondTheRequestGuard(t *testing.T) {
 	t.Logf("stop route (service fake): %d file ops/request (baseline %d), p50 %v", ops, baseOps, latency)
 	if ops != baseOps {
 		t.Fatalf("stop made %d file ops per request, the guard alone %d", ops, baseOps)
+	}
+}
+
+// TestBgExecOutputStreamAvoidsPerSampleAuthIO drives the same production
+// handler with HTTP snapshots and with one authenticated output stream.
+func TestBgExecOutputStreamAvoidsPerSampleAuthIO(t *testing.T) {
+	f, fake := startHUDFixture(t)
+	f.d.SetExecJobs(&execTreeFake{execJobsFake: fake})
+	const jobID = "exec_a-b-c"
+	const samples = 4
+	url := f.base + "/s/livesession/exec/bg/" + jobID + "/output?from=0&limit=16384"
+	cookie := localhostTestCookie(t, f.d)
+	backdateSecret(t, filepath.Join(f.dir, localhostSecretFile), time.Hour)
+	client := &http.Client{Timeout: 10 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+
+	get := func(accept string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(cookie)
+		req.Header.Set("Accept", accept)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	snapshot := func() {
+		t.Helper()
+		res := get("application/json")
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("snapshot status = %d", res.StatusCode)
+		}
+		if _, err := io.Copy(io.Discard, res.Body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot() // warm the cookie cache
+	reads, stats := secretCacheIO()
+	var elapsed []time.Duration
+	for i := 0; i < samples; i++ {
+		start := time.Now()
+		snapshot()
+		elapsed = append(elapsed, time.Since(start))
+	}
+	pollReads, pollStats := secretCacheIO()
+	if pollReads != reads || pollStats-stats != samples {
+		t.Fatalf("%d snapshot requests used %d reads and %d stats, want 0 and %d", samples, pollReads-reads, pollStats-stats, samples)
+	}
+
+	setOutput := func(n int, state string) {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		view := fake.out[jobID]
+		view.From, view.Next, view.Written, view.Job.State = int64(n-1), int64(n), int64(n), state
+		view.Segments = []execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("a")}}
+		fake.out[jobID] = view
+	}
+	setOutput(1, execjob.HostedRunning)
+	start := time.Now()
+	stream := get("text/event-stream")
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK || stream.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("stream response = %d %q", stream.StatusCode, stream.Header.Get("Content-Type"))
+	}
+	scanner := bufio.NewScanner(stream.Body)
+	readEvent := func(want int) {
+		t.Helper()
+		for scanner.Scan() {
+			raw, ok := strings.CutPrefix(scanner.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var view execOutputView
+			if err := json.Unmarshal([]byte(raw), &view); err != nil || view.Next != int64(want) || len(view.Segments) != 1 || view.Segments[0].Text != "a" {
+				t.Fatalf("output event %d = %s, err %v", want, raw, err)
+			}
+			return
+		}
+		t.Fatalf("stream ended before event %d: %v", want, scanner.Err())
+	}
+	readEvent(1)
+	connectLatency := time.Since(start)
+	connectReads, connectStats := secretCacheIO()
+	for n := 2; n <= samples; n++ {
+		state := execjob.HostedRunning
+		if n == samples {
+			state = execjob.HostedExited
+		}
+		setOutput(n, state)
+		readEvent(n)
+	}
+	for scanner.Scan() {
+		if scanner.Text() != "" {
+			t.Fatalf("unexpected data after terminal sample: %s", scanner.Text())
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	streamReads, streamStats := secretCacheIO()
+	if connectReads != pollReads || connectStats-pollStats != 1 || streamReads != connectReads || streamStats != connectStats {
+		t.Fatalf("stream connect used %d reads and %d stats, follow-up samples used %d reads and %d stats", connectReads-pollReads, connectStats-pollStats, streamReads-connectReads, streamStats-connectStats)
+	}
+	t.Logf("%d authenticated samples: JSON polls %d reads/%d stats (p50 %v), SSE %d reads/%d stats (first sample %v), zero auth file operations after connect",
+		samples, pollReads-reads, pollStats-stats, median(elapsed), streamReads-pollReads, streamStats-pollStats, connectLatency)
+
+	fresh, err := newToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(f.dir, localhostSecretFile, []byte(fresh+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	res := get("text/event-stream")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("stream opened with a rotated cookie: %d", res.StatusCode)
 	}
 }
 

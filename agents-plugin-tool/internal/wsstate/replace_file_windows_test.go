@@ -110,7 +110,7 @@ func TestAtomicReplaceFileWindowsWaitsOutAReader(t *testing.T) {
 	}
 }
 
-func TestReadFileCachedWindowsWaitsOutExclusiveOpen(t *testing.T) {
+func TestReadFileCachedWindowsFailsFastDuringExclusiveOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state")
 	const content = "persisted\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -127,14 +127,24 @@ func TestReadFileCachedWindowsWaitsOutExclusiveOpen(t *testing.T) {
 	hold := os.NewFile(uintptr(handle), path)
 	defer hold.Close()
 
+	before := readCacheReads()
+	if _, err := ReadFileCached(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("cached read under exclusive open = %v, want sharing violation", err)
+	}
+	if attempts := readCacheReads() - before; attempts != 1 {
+		t.Fatalf("cached read made %d attempts, want 1", attempts)
+	}
+
+	// An uncached background read still waits out the publication hold.
+
 	type result struct {
 		data []byte
 		err  error
 	}
 	done := make(chan result, 1)
-	before := readCacheReads()
+	before = FileIOCounters()["file_io_read_file"]
 	go func() {
-		data, err := ReadFileCached(path)
+		data, err := ReadFile(path)
 		done <- result{data, err}
 	}()
 
@@ -143,13 +153,13 @@ func TestReadFileCachedWindowsWaitsOutExclusiveOpen(t *testing.T) {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	// Keep the handle open until a second read proves the first was blocked.
-	for readCacheReads()-before < 2 {
+	for FileIOCounters()["file_io_read_file"]-before < 2 {
 		select {
 		case got := <-done:
-			t.Fatalf("cached read returned before retrying: %v", got.err)
+			t.Fatalf("uncached read returned before retrying: %v", got.err)
 		case <-tick.C:
 		case <-deadline.C:
-			t.Fatal("cached read did not retry")
+			t.Fatal("uncached read did not retry")
 		}
 	}
 	if err := hold.Close(); err != nil {
@@ -158,10 +168,10 @@ func TestReadFileCachedWindowsWaitsOutExclusiveOpen(t *testing.T) {
 	select {
 	case got := <-done:
 		if got.err != nil || string(got.data) != content {
-			t.Fatalf("cached read = %q, %v, want %q", got.data, got.err, content)
+			t.Fatalf("uncached read = %q, %v, want %q", got.data, got.err, content)
 		}
 	case <-deadline.C:
-		t.Fatal("cached read did not finish after the handle closed")
+		t.Fatal("uncached read did not finish after the handle closed")
 	}
 }
 

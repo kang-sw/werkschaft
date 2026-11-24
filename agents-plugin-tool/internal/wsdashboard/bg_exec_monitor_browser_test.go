@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ type bgExecBrowserJob struct {
 	StopNotice    string `json:"stop_notice"`
 	segs          []execjob.Segment
 	written       int64
+	evicted       int64
 }
 
 type bgExecBrowserSvc struct {
@@ -163,8 +165,10 @@ func (s *bgExecBrowserSvc) readLocked(owners map[string]bool, id string, from in
 	if from > j.written {
 		from = j.written
 	}
-	out := execjob.HostedOutput{Job: s.summary(j), From: from, Next: from, Written: j.written}
-	var pos int64
+	gap := from < j.evicted
+	from = max(from, j.evicted)
+	out := execjob.HostedOutput{Job: s.summary(j), From: from, Next: from, Written: j.written, Evicted: j.evicted, Gap: gap}
+	pos := j.evicted
 	for _, seg := range j.segs {
 		end := pos + int64(len(seg.Data))
 		if end > from && out.Next-from < int64(limit) {
@@ -225,8 +229,12 @@ func TestBgExecMonitorBrowser(t *testing.T) {
 			{Stream: execjob.StreamStdout, Data: []byte("=== RUN   TestBgExecMonitor\n")},
 			{Stream: execjob.StreamStdout, Data: []byte("connecting session stream...\n")},
 		},
+		evicted: 512,
 	}
-	leadJob.written = int64(len(leadJob.segs[0].Data) + len(leadJob.segs[1].Data))
+	const leadWritten = 2048
+	padding := leadWritten - int(leadJob.evicted) - len(leadJob.segs[0].Data) - len(leadJob.segs[1].Data)
+	leadJob.segs = append(leadJob.segs, execjob.Segment{Stream: execjob.StreamStdout, Data: []byte(strings.Repeat(".", padding))})
+	leadJob.written = leadWritten
 
 	l1Job := &bgExecBrowserJob{
 		Owner: "childa1", ID: "exec_l1_run", Tool: "exec.shell",
@@ -295,7 +303,7 @@ func TestBgExecMonitorBrowser(t *testing.T) {
 			}
 			if j.Owner == "livesession" {
 				selfRun++
-			} else {
+			} else if j.Owner == "childa1" || j.Owner == "granda2" {
 				descRun++
 			}
 		}

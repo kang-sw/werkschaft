@@ -25,7 +25,7 @@
   var bgDockJob = "", bgDockHead = null, bgDockMeta = null, bgDockMetaKey = "";
   var bgSplitEl = null, bgCountsEl = null, bgStopBtn = null, bgStopHold = null;
   var bgListRequest = null, bgListDirty = false;
-  var bgTailState = null, bgTailTimer = 0, bgTailGen = 0, bgTailAC = null;
+  var bgTailState = null, bgTailTimer = 0, bgTailAC = null;
   var bgTickTimer = 0, bgCopyTimer = 0;
 
   function bgExecOpen() { return bgSt.open; }
@@ -182,14 +182,11 @@
       if (bgPageHidden()) {
         if (bgListRequest) { bgListDirty = true; bgAbortList(); }
         bgStopTick();
-        clearTimeout(bgTailTimer);
-        bgTailTimer = 0;
-        if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
-        if (bgTailState) bgTailState.busy = false;
+        bgTailPause();
       } else {
         if (bgListDirty) bgExecFetchList();
         bgSyncTick();
-        if (bgTailState && !bgTailState.drained && !bgTailState.busy) bgTailSchedule(0);
+        bgTailSchedule(0);
       }
     }
     doc.addEventListener("visibilitychange", bgOnVisibility);
@@ -640,12 +637,17 @@
     bgTailFootEl.appendChild(bgEl("span", "bgp-foot-r", sizeText + " \u00b7 " + wsT("js.bgexec.hint")));
   }
 
-  // --- live tail reading (only while open) -----------------------------------
-  function bgTailStop() {
+  // --- authenticated live tail (only while visible) --------------------------
+  function bgTailPause() {
     clearTimeout(bgTailTimer);
     bgTailTimer = 0;
-    bgTailGen++;
-    if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
+    var ac = bgTailAC;
+    bgTailAC = null;
+    if (ac) ac.abort();
+  }
+
+  function bgTailStop() {
+    bgTailPause();
     bgTailState = null;
   }
 
@@ -663,85 +665,86 @@
       evicted: j.evicted || 0,
       delay: BG_POLL_MIN,
       drained: false,
-      busy: false,
       open: false,
       openEl: null,
       openStream: "",
       retained: 0,
-      skipFirstPartial: start > 0,
-      gen: bgTailGen
+      skipFirstPartial: start > 0
     };
     bgTailSchedule(0);
   }
 
   function bgTailSchedule(ms) {
     clearTimeout(bgTailTimer);
-    if (!bgSt.open || !bgTailState || bgTailState.drained || bgPageHidden()) return;
-    var gen = bgTailState.gen;
-    bgTailTimer = setTimeout(function () {
-      bgTailTimer = 0;
-      if (!bgSt.open || !bgTailState || bgTailState.gen !== gen || bgTailState.busy || bgPageHidden()) return;
-      bgTailFetch(gen);
-    }, ms);
+    if (!bgSt.open || !bgTailState || bgTailState.drained || bgTailAC || bgPageHidden()) return;
+    bgTailTimer = setTimeout(bgTailConnect, ms);
   }
 
-  function bgTailFetch(gen) {
+  async function bgTailConnect() {
+    bgTailTimer = 0;
     var ts = bgTailState;
-    if (!ts || ts.gen !== gen || !bgSt.open || !rid || bgPageHidden()) return;
-    ts.busy = true;
-    var ac = window.AbortController ? new AbortController() : null;
+    if (!ts || ts.drained || bgTailAC || !bgSt.open || !rid || bgPageHidden()) return;
+    var ac = new AbortController();
     bgTailAC = ac;
-    var url = "/s/" + rid + "/exec/bg/" + encodeURIComponent(ts.id) + "/output?from=" + encodeURIComponent(String(ts.next)) + "&limit=" + BG_TAIL_BYTES;
-    var opts = { credentials: "same-origin", cache: "no-store" };
-    if (ac) opts.signal = ac.signal;
-    fetch(url, opts).then(function (r) {
-      if (!r.ok) {
-        var e = new Error("HTTP " + r.status);
-        e.status = r.status;
-        throw e;
-      }
-      return r.json();
-    }).then(function (res) {
-      if (bgTailAC === ac) bgTailAC = null;
-      if (!bgTailState || bgTailState.gen !== gen || !bgSt.open) return;
-      ts.busy = false;
-      var advanced = typeof res.next === "number" && res.next > ts.next;
-      if (typeof res.next === "number") ts.next = res.next;
-      if (typeof res.written === "number") ts.written = res.written;
-      if (typeof res.evicted === "number") ts.evicted = res.evicted;
-      bgTailAppend(res);
-      var j = bgSt.byId[ts.id];
-      var wasRunning = j && j.state === "running";
-      if (res.job && j) {
-        j.state = res.job.state || j.state;
-        j.exit_code = res.job.exit_code;
-        j.signal = res.job.signal;
-        j.written = ts.written;
-        j.evicted = ts.evicted;
-      }
-      if (j) bgRenderTailFoot(j);
-      var stillRunning = res.job ? res.job.state === "running" : (j && j.state === "running");
-      if (wasRunning && !stillRunning) bgSyncTick();
-      if (!stillRunning && !advanced) {
+    var url = "/s/" + rid + "/exec/bg/" + encodeURIComponent(ts.id) + "/output?from=" + ts.next + "&limit=" + BG_TAIL_BYTES;
+    try {
+      var response = await fetch(url, {
+        credentials: "same-origin", cache: "no-store", headers: { Accept: "text/event-stream" }, signal: ac.signal
+      });
+      if (bgTailAC !== ac) return;
+      if (response.status === 404 || response.status === 403 || response.status === 401) {
         ts.drained = true;
-        bgSyncTick();
-        return;
+        if (response.status === 404) bgExecFetchList();
+      } else if (response.ok) {
+        var reader = response.body.getReader(), decoder = new TextDecoder(), buffered = "";
+        while (!ts.drained && bgTailAC === ac) {
+          var chunk = await reader.read();
+          if (chunk.done || bgTailAC !== ac) break;
+          buffered += decoder.decode(chunk.value, { stream: true });
+          var end;
+          while ((end = buffered.indexOf("\n\n")) >= 0) {
+            var frame = buffered.slice(0, end);
+            buffered = buffered.slice(end + 2);
+            var prefix = "event: output\ndata: ";
+            if (frame.startsWith(prefix)) bgTailApply(ts, JSON.parse(frame.slice(prefix.length)));
+          }
+        }
       }
-      ts.delay = advanced ? BG_POLL_MIN : Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.5));
-      bgTailSchedule(stillRunning ? ts.delay : 100);
-    }, function (err) {
-      if (bgTailAC === ac) bgTailAC = null;
-      if (!bgTailState || bgTailState.gen !== gen || !bgSt.open) return;
-      ts.busy = false;
-      if (err && err.name === "AbortError") return;
-      if (err && (err.status === 404 || err.status === 403)) {
-        ts.drained = true;
-        if (err.status === 404) bgExecFetchList();
-        return;
-      }
-      ts.delay = Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.6));
+    } catch (err) {
+      // A disconnected stream can resume from the last rendered offset.
+    }
+    if (bgTailAC !== ac) return;
+    bgTailPause();
+    if (!ts.drained) {
       bgTailSchedule(ts.delay);
-    });
+      ts.delay = Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.6));
+    }
+  }
+
+  function bgTailApply(ts, res) {
+    ts.delay = BG_POLL_MIN;
+    if (typeof res.next === "number") ts.next = res.next;
+    if (typeof res.written === "number") ts.written = res.written;
+    if (typeof res.evicted === "number") ts.evicted = res.evicted;
+    bgTailAppend(res);
+    var j = bgSt.byId[ts.id];
+    var wasRunning = j && j.state === "running";
+    if (res.job && j) {
+      j.state = res.job.state || j.state;
+      j.exit_code = res.job.exit_code;
+      j.signal = res.job.signal;
+      j.written = ts.written;
+      j.evicted = ts.evicted;
+    }
+    var running = res.job ? res.job.state === "running" : (j && j.state === "running");
+    ts.drained = !running && ts.next >= ts.written;
+    if (wasRunning && !running) {
+      bgRenderList();
+      bgRenderDock();
+      bgSyncTick();
+    } else if (j) {
+      bgRenderTailFoot(j);
+    }
   }
 
   function bgTailAppend(res) {
