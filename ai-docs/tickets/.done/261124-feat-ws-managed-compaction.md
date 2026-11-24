@@ -219,6 +219,14 @@ Delivered opt-in ws-managed compaction for hosted leads across `claude`, `codex`
 - **External-harness rotation, explicit audit checkpoint, and two-stage fallback:** Lifted the `leadSummaryCompactor`-only gate in `Runner.CompactWithSummary` for hosted leads; added `rotateExternalLead` and `auditCheckpointCommitter` (`stream.go`) so `CompactStart` -> explicit non-estimated `wsaudit.KindCompaction` on the old `streamProcess` -> close/retire holder -> clear `rec.SessionID` (preserving `ReplyID`, `WSKey`, `ring/`, `wsaudit`, children, permissions) -> fresh `startLead` -> `RestoreCompaction` + checkpoint tail (deduplicating `## Direct Children` when `RestoreBundle` is present) -> `CompactEnd` execute in order with clean `CompactFailed` rollback. Implemented two-stage fallback for hard threshold and dashboard `/compact` (`kickInput` intercept before `runCommand`) with Stage 1 inline 7-field steer, Stage 2 native `/compact` fallback, `NoticeUsageLimit` Stage 2 suppression, and direct no-arg `ws/compact` bypass straight to native `/compact`.
 - **Verification:** Passed `go test -race` on `internal/wscompact`, `internal/werk`, `internal/wsconfig`, and `internal/wsagent`; `internal/mcp` (`TestCompact|TestConfig|Settings|Manifest|TestListedToolSchemasFitByteCap` + new `compaction_lead_mode_test.go`); `internal/wsi18n/...`; `internal/wsdashboard` (`Settings|Manifest|Locale|I18n|Compact|Inbox`); `GOOS=windows go vet -stdversion=false` across all touched packages; `generate-package-assets.py --check`; and `python3 -m unittest discover agents-plugin-wsflow/tests`.
 
+#### Edition (d2da12c29) - 2026-11-25
+
+Addressed review feedback from `managed-compaction-p1-review`:
+- Fixed Stage 1 `ws/compact(lead_summary)` in `wsagent/compaction.go` to propagate `compactStage1Internal` and `compactStage1Auto` (preventing `compactInternalTurn=true` from leaking onto the post-rotation continuation turn), with a regression test verifying the resumed reply is preserved in the ring.
+- Populated `RingDialogResult.LastCompactAt` from the newest successful `RingCompact` record in `wscompact/ring.go` and passed it to `compactionState(rec.ReplyID)`.
+- Cleared `compactOrigin` on `CompactFailed`, skipped duplicate `leadManual` append on rotation when `startLead` already embedded composed lead instructions, and removed the dead `var sessionKey` local in `mcp/compaction.go`.
+- Re-verified with `go test -race ./internal/wscompact/... ./internal/wsagent/...`, `go test ./internal/mcp -run 'TestCompact|TestConfig|Settings|Manifest'`, and `GOOS=windows go vet -stdversion=false`.
+
 
 ## Resolution (2026-11-25)
 
