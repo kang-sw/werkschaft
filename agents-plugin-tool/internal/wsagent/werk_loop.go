@@ -123,6 +123,7 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		mapper: newWerkMapper(spec.SessionID), lead: spec.Lead != nil,
 		secrets: []string{spec.sessionSecret, session.Token},
 	}
+	p.mapper.restoreUsage(spec.restoredUsage)
 	if spec.Lead != nil {
 		p.mapper.provider = spec.Provider
 		if p.mapper.provider == "" {

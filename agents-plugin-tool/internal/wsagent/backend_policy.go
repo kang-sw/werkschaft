@@ -93,9 +93,8 @@ type LifecyclePolicy struct {
 	// without it has no fallback, so a start whose token was never recorded
 	// restarts at a known idle point after a daemon rejoin.
 	LeadStdioFallback bool
-	// RestoreUsage marks a backend whose reattached holder process hands its
-	// mapper the usage and limits the live state last observed
-	// (StartSpec.restoredUsage), because its replay does not repeat them.
+	// RestoreUsage gives a reattached holder or durable loop's mapper the
+	// usage and limits the live state last observed (StartSpec.restoredUsage).
 	RestoreUsage bool
 	// TurnActivity marks a backend whose settled hosted turn signals
 	// Options.AgyActivity (a usage refresh), outside replay and compaction.

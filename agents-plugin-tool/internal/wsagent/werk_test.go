@@ -339,6 +339,40 @@ func TestWerkResumesActiveTurnAcrossRunnerReplacement(t *testing.T) {
 	}
 }
 
+func TestWerkCostAccumulatesAcrossIdleWakeAndRunnerReplacement(t *testing.T) {
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		werkMessage("first"), werkMessage("second"), werkMessage("third"),
+	}}
+	h, fleet, _ := werkHarness(t, model)
+	id := h.lead(BackendWerk, LeadOptions{Model: "vendor/some-model"}).ID
+	turn := func(message string, want float64) {
+		t.Helper()
+		h.send(id, message)
+		eventually(t, message+" settled", func() bool {
+			rec := werkRecord(t, h, id)
+			return rec.LastTurn != nil && rec.LastTurn.Result.Message == message
+		})
+		var usage *wslive.Usage
+		c := h.runner.conv(id)
+		c.do(func() { usage = c.live.st.Snapshot(c.r.opts.Now().UnixMilli()).Usage })
+		if usage == nil || usage.Cost == nil || usage.Cost.USD != want {
+			t.Fatalf("cost after %s = %+v, want %f", message, usage, want)
+		}
+	}
+	turn("first", 0.0042)
+	c := h.runner.conv(id)
+	c.do(func() {
+		c.idleAfter = time.Millisecond
+		c.armIdle()
+	})
+	eventually(t, "werk went idle", func() bool { return !h.state(id).Process })
+	turn("second", 0.0042+0.0042)
+	h.runner.Close()
+	fleet.start(h)
+	perResponse := 0.0042
+	turn("third", perResponse+perResponse+perResponse)
+}
+
 func TestWerkResumesPendingSteerOnTheOriginalTurn(t *testing.T) {
 	started := make(chan struct{})
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){

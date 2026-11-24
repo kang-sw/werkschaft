@@ -430,7 +430,8 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.r.lifecycle(c.rec.Backend).RestoreUsage && spec.Holder != nil && spec.Holder.id != "" {
+	if c.r.lifecycle(c.rec.Backend).RestoreUsage &&
+		(c.r.durableProcess(c.rec.Backend) || spec.Holder != nil && spec.Holder.id != "") {
 		spec.restoredUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
 	}
 	if sink := c.r.opts.AuditSink; sink != nil {
