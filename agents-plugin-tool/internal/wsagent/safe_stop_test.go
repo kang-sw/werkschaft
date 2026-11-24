@@ -130,7 +130,8 @@ func TestSafeStopStatesAndSessionMeta(t *testing.T) {
 
 		// Settle the child; both child (non-lead!) and parent become safe_stop.
 		h.holders.out(childHolder, recoveryWorkerReply("done")...)
-		eventually(t, "child idle", func() bool { return h.state(childSt.ID).Status == StatusIdle })
+		// The idle status becomes visible before the loop settles the child's input.
+		h.idle(childSt.ID)
 		if st := h.state(childSt.ID); !st.Process || !st.SafeStop {
 			t.Fatalf("idle holder-backed child state = %+v, want Process=true SafeStop=true", st)
 		}
