@@ -1315,18 +1315,20 @@ func TestCompactionLiveReloadAndSteadyStateMemoryOnly(t *testing.T) {
 		}
 	})
 
-	// Steady-state observations after loadCompaction must perform zero file I/O.
-	before := wsstate.FileIOCounters()
-	c.do(func() {
+	// An idle heartbeat can persist holder progress while the caller waits for
+	// the loop. Sample the counters on the loop around the observations.
+	c.doT(t, func(failf func(string, ...any)) {
+		before := wsstate.FileIOCounters()
 		for i := 0; i < 1000; i++ {
 			c.observeCompaction(wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &tokens, Window: 100000}})
 		}
-	})
-	for site, count := range wsstate.FileIOCounters() {
-		if count != before[site] {
-			t.Fatalf("steady-state observation touched files: %s +%d", site, count-before[site])
+		for site, count := range wsstate.FileIOCounters() {
+			if count != before[site] {
+				failf("steady-state observation touched files: %s +%d", site, count-before[site])
+				return
+			}
 		}
-	}
+	})
 
 	// Lower advisory to 50% at global scope and notify in memory without restarting.
 	if err := resolver.Set("compaction.lead_advisory", "50%", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
