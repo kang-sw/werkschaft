@@ -146,6 +146,7 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 		}
 	}
 	req.Async = boolArgument(args["async"])
+	req.StdinOpen = boolArgument(args["stdin_open"])
 	if stdin, ok := args["stdin"].(string); ok {
 		req.Stdin, req.StdinSet = []byte(stdin), true
 	}
