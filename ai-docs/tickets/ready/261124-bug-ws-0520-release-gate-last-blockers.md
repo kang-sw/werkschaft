@@ -543,3 +543,29 @@ for browser runs:
 
 The route suggested renaming the assigned dashboard branch. The ticket
 lease recorded the assigned branch.
+
+### Phase 5: Scope safe Stop admission to the target tree
+
+Added after the third re-review of `41e81115c..f43655571` blocked on one
+Important regression (all other gate findings verified fixed). Lead decision
+under the owner's overnight directive.
+
+- I6 scope: the Phase 4a gate `admitsSafeStop`
+  (`runner_operations.go:337-358`) TryLocks every conversation in the
+  registry and compares the daemon-wide exec count, so a mutex held by an
+  unrelated lead or worker (a normal Send holds it across inbox I/O,
+  `runner_operations.go:98-127`) or an unrelated exec publication returns
+  409 for an idle, safe target and the rail falls back to hold-to-stop
+  (`dashboard-rail-popovers.js:498-504`). Keep the consistent root and
+  descendant check, including pending descendant spawns, but pin only the
+  target's conversation tree: resolve the tree from parent edges under the
+  registry mutex (`runner.go:304-308`, `spawn.go:457-502`), TryLock only
+  those conversations, and validate only the exec state relevant to that
+  tree. Contention inside the tree still refuses with 409.
+- Tests: an independent-tree contention case (a separate holder-backed lead
+  holding its mutex, and an unrelated exec publication) expects the safe
+  Stop to succeed over the real HTTP route; the existing overlapping
+  descendant transition and pending-spawn cases keep refusing.
+- Rejected: dropping the consistency check (reopens the Phase 4a defect);
+  retrying the whole-registry TryLock (still fails under sustained unrelated
+  holds).
