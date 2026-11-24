@@ -1166,11 +1166,12 @@
   // event); nb the neighbors of the model nbOf in the view nbNarrow.
   var gate = new G.Gate(), gateT = 0, pullEl = null, pullDot = null, pills = null, homeEl = null, homeScr = null;
   var gateIn = { dy: 0, now: 0, canUp: false, canDown: false, prev: null, next: null }, nb = null, nbOf = null, nbNarrow = null;
-  // OWN is what takes its own wheel events: a terminal, a frame, a canvas
-  // or media, a maximized sheet, and the bodies of terminal and web cards
-  // (a preview card's body is an ordinary scroller; its frames and media
-  // are OWN themselves).
-  var OWN = '.xterm, .tm-host, iframe, canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
+  // OWN is what takes its own wheel events: a terminal, a non-doc-frame
+  // iframe, a canvas or media, a maximized sheet, and the bodies of terminal
+  // and web cards (a preview card's body is an ordinary scroller; its frames
+  // and media are OWN themselves; a topic's .doc-frame forwards its wheel to
+  // the gate).
+  var OWN = '.xterm, .tm-host, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
   var PANE_BODY = ':scope > section.topic > .gal-pbody, :scope > .bcard > .bc-in > .bc-body';
   function reach(s, dy) {
     return dy > 0 ? s.scrollTop + s.clientHeight < s.scrollHeight - G.C.EPS : s.scrollTop > G.C.EPS;
@@ -1198,24 +1199,29 @@
     }
     return !any && !!fall && reach(fall, dy);
   }
-  // gateWheel runs wheel event e through the gate; home: it comes from the
-  // narrow view's Main Board. The scroller is the nearest one under the
+  // gateWheelInput runs a wheel delta (from a native WheelEvent or a
+  // forwarded doc-frame wheel message) through the gate; home: it comes from
+  // the narrow view's Main Board. The scroller is the nearest one under the
   // pointer that still scrolls that way, within its pane or, on Page 0,
-  // within the board's scroller (canScroll). An event that a widget took
-  // (defaultPrevented) or that stands in one (OWN) never charges, nor
-  // does a pinch (ctrlKey) or anything while the overview runs.
-  function gateWheel(e, home) {
-    if (e.defaultPrevented || e.ctrlKey || overviewOn || !lay || !e.target || !e.target.closest) return;
+  // within the board's scroller (canScroll). Predominantly horizontal swipes,
+  // events inside OWN widgets, or anything while the overview runs never
+  // charge.
+  function gateWheelInput(target, rawDy, rawDx, deltaMode, home, prevent) {
+    if (overviewOn || !lay || !target || !target.closest) return;
     var narrow = !!lay.narrow, pos = G.position(gal, narrow);
-    if (home ? pos >= 0 || galEl.contains(e.target) : pos < 0) return;
-    var dy = +e.deltaY || 0;
-    if (e.deltaMode === 1) dy *= 40; else if (e.deltaMode === 2) dy *= 800;
-    if (e.target.closest(OWN)) return;
+    if (home ? pos >= 0 || (galEl && galEl.contains(target)) : pos < 0) return;
+    var dy = +rawDy || 0, dx = +rawDx || 0;
+    var scale = deltaMode === 1 ? 40 : deltaMode === 2 ? 800 : 1;
+    dy *= scale;
+    dx *= scale;
+    if (Math.abs(dx) > Math.abs(dy) * 1.15) return;
+    if (target.closest(OWN)) return;
     var bound, fall = null, can;
     if (home) {
-      var panel = e.target.closest("section.topic[data-topic], .bcard[data-card]");
+      if (!homeScr) return;
+      var panel = target.closest("section.topic[data-topic], .bcard[data-card]");
       bound = panel || homeScr;
-      can = panel ? canScroll(e.target, panel, dy, null) : false;
+      can = panel ? canScroll(target, panel, dy, null) : false;
       if (!can) {
         if (dy < 0) can = reach(homeScr, dy);
         else if (reach(homeScr, dy)) {
@@ -1231,9 +1237,9 @@
         }
       }
     } else {
-      bound = e.target.closest(".gal-pane, .gal-page") || viewEl;
+      bound = target.closest(".gal-pane, .gal-page") || viewEl;
       if (bound && bound.classList.contains("gal-pane")) fall = bound.querySelector(PANE_BODY);
-      can = canScroll(e.target, bound, dy, fall);
+      can = canScroll(target, bound, dy, fall);
     }
     var w = gateIn;
     // The model is replaced, never changed, on every change: its
@@ -1248,13 +1254,33 @@
     var r = gate.wheel(w);
     if (r.kind === "none") return;
     if (r.kind === "pass") { if (r.reset) pullOff(); gateArm(); return; }
-    e.preventDefault();
+    if (prevent) prevent();
     var el = home ? board : pos >= gal.pages.length ? plusEl : pageEls[gal.pages[pos].id], to = pos + (r.dir || 0);
     if (r.kind === "reset") pullOff();
     else if (r.kind === "micro") pullShow(el, r.dir, r.shift, 0, "damped", wsT(r.edge ? "js.pins.edge" : "js.pins.wait"), null);
     else if (r.kind === "pull") pullShow(el, r.dir, r.shift, r.pct, r.ready ? "ready" : "", pullName(to) + " (" + Math.round(r.pct * 100) + "%)", to);
     else if (r.kind === "flip") { pullOff(); show(to, r.dir); }
     gateArm();
+  }
+  // gateWheel runs native wheel event e through the gate; an event that a
+  // widget took (defaultPrevented) or a pinch (ctrlKey) never charges.
+  function gateWheel(e, home) {
+    if (e.defaultPrevented || e.ctrlKey) return;
+    gateWheelInput(e.target, e.deltaY, e.deltaX, e.deltaMode, home, function () { e.preventDefault(); });
+  }
+  // onFrameWheel handles passive wheel deltas forwarded from a topic's
+  // .doc-frame iframe (which cannot bubble across the iframe boundary).
+  function onFrameWheel(frame, dy, dx, mode) {
+    if (!frame || !frame.isConnected) return false;
+    if (galEl && galEl.contains(frame)) {
+      gateWheelInput(frame, dy, dx, mode || 0, false, null);
+      return true;
+    }
+    if (homeEl && homeEl.contains(frame)) {
+      gateWheelInput(frame, dy, dx, mode || 0, true, null);
+      return true;
+    }
+    return false;
   }
   function pullName(p) {
     var b = dotEls[dotKey(p)];
@@ -2498,6 +2524,7 @@
     decorate: function () { if (board) decorate(); },
     unfoldTopic: unfoldTopic,
     revealTopic: revealTopic,
+    onFrameWheel: onFrameWheel,
     is: isCard
   };
 })();

@@ -79,8 +79,9 @@ Frame identity sentinel for %s.</wb:body><wb:panel recap="%s panel">Panel payloa
 // wheel bounce-snap gate on the hovered pane of a split page, at the
 // narrow Main Board's top and rendered bottom (inert with no docked page),
 // the damped micro-bounce at the first page's top and +'s bottom, the
-// refractory lock and the idle spring-back, terminals and frames never
-// charging it, touch scrolling never charging it, a docked explorer's
+// refractory lock and the idle spring-back, terminals and non-doc frames never
+// charging it (while docked topic doc-frames forward to the gate), touch
+// scrolling never charging it, a docked explorer's
 // own list scrolling natively before its end pulls, the narrow board
 // drag kept on the board after the last page went while + showed, and
 // the wheel handler's cost. The

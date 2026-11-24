@@ -578,7 +578,14 @@
     } else if (m.wbDoc === "hover") {
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
     } else if (m.wbDoc === "wheel") {
-      if (window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) window.WsBoardAnchor.onFrameWheel(f, num(m.dy), num(m.dx), num(m.mode));
+      var wdy = num(m.dy), wdx = num(m.dx), wmode = num(m.mode);
+      var gal = window.WsCards && window.WsCards.gallery && window.WsCards.gallery();
+      if (gal && gal.contains(f)) {
+        if (window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);
+      } else {
+        var anchored = window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel && window.WsBoardAnchor.onFrameWheel(f, wdy, wdx, wmode);
+        if (!anchored && window.WsCards && window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);
+      }
     } else if (m.wbDoc === "middleclick") {
       var ma = navigator.userActivation, col = $("bcol");
       if (shHidden || !col || !col.contains(f)) return;
