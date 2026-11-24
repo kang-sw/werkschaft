@@ -147,7 +147,7 @@ func (c *SnapshotCache) lastKnown(stateDir, replyID string) *wslive.Snapshot {
 }
 
 func snapshotStaleAt(snap *wslive.Snapshot) time.Time {
-	if snap == nil {
+	if snap == nil || snap.InProcessLive {
 		return time.Time{}
 	}
 	beat := snap.HeartbeatMs
@@ -181,6 +181,7 @@ func (c *SnapshotCache) setLive(stateDir, replyID string, snap wslive.Snapshot, 
 		return false
 	}
 	p.folded = folded
+	p.snap.InProcessLive = snap.InProcessLive
 	dir := SessionDir(stateDir, replyID)
 	c.outputRates.Remember(dir, p.snap.Lead.OutputRate)
 	path := wslive.SnapshotPath(dir)
@@ -191,7 +192,7 @@ func (c *SnapshotCache) setLive(stateDir, replyID string, snap wslive.Snapshot, 
 		c.live = map[string]parsedSnapshot{}
 	}
 	c.live[path] = p
-	return !had || !prev.docOK || !p.docOK || !bytes.Equal(prev.canonical, p.canonical)
+	return !had || !prev.docOK || !p.docOK || !bytes.Equal(prev.canonical, p.canonical) || prev.snap.InProcessLive != p.snap.InProcessLive
 }
 
 // ClearLive drops session replyID's in-memory copy under stateDir, so its
