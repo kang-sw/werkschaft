@@ -421,7 +421,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		c.setStatus(func() { c.turn = false })
 		c.apply(wslive.Event{Kind: wslive.KindTurnEnd, Reason: c.summaryReason}, quiet)
 	}
-	c.turnSettled(turnErr, quiet)
+	c.turnSettled(turnErr, quiet, compactCommand)
 	internalPrompt := c.clearAgyInternalPrompt()
 	if c.replaying && c.rec.Parent != nil {
 		c.replayTurnError = turnErr
@@ -912,7 +912,7 @@ func (c *conv) processEnded() {
 			c.watched()
 		}
 	}
-	c.retry, c.alerted = nil, false
+	c.retry, c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled = nil, false, false, false
 	c.syncHost(true)
 	// A replay the process's end cut short still resolves what it staged of
 	// agy native rows and what the restored recovery file held (dropping

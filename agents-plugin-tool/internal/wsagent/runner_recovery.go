@@ -73,22 +73,28 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 	if !quiet {
 		c.live.notice(n)
 	}
-	c.handleUsageLimitAlert(n, manualOnly, quiet)
+	// A harness can report the same failure both before and during settlement.
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && !c.quotaUsageLimitHandled {
+		c.quotaUsageLimitHandled = true
+		c.handleUsageLimitAlert(n, manualOnly)
+	}
 	c.syncHost(quiet)
 	c.changed(quiet)
 }
 
 // turnSettled clears what a turn's end settles: a retry still shown, and
 // the failure state once a turn ended with no failure of any kind.
-func (c *conv) turnSettled(turnErr string, quiet bool) {
+func (c *conv) turnSettled(turnErr string, quiet, compactCommand bool) {
 	alerted := c.alerted
 	usageLimitAlerted := c.quotaUsageLimitAlerted
-	c.alerted, c.quotaUsageLimitAlerted, c.retry = false, false, nil
+	c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled, c.retry = false, false, false, nil
 	if turnErr == "" && !alerted && c.failure != nil {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)
 	}
-	if !quiet && !usageLimitAlerted && c.hasQuotaContinuation() {
+	// A native compaction command settles independently of the work that
+	// owns a quota reservation.
+	if !quiet && !compactCommand && !usageLimitAlerted && c.hasQuotaContinuation() {
 		c.cancelQuotaContinuation(quiet)
 	}
 	c.syncHost(quiet)

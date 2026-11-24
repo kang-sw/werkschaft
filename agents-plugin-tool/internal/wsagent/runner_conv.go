@@ -214,6 +214,7 @@ type conv struct {
 	quotaC                 <-chan time.Time
 	quotaStop              func()
 	quotaUsageLimitAlerted bool
+	quotaUsageLimitHandled bool
 	quotaInjecting         bool
 	quotaPendingFire       bool
 	quotaCancelFence       atomic.Uint32
@@ -1850,13 +1851,11 @@ func (c *conv) kick() {
 	if !c.canKick() {
 		return
 	}
-	if c.quotaPendingFire {
-		if c.quotaContinuationTimedOut() {
-			return
-		}
-	}
 	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
 		c.resumeDurableTurn()
+		return
+	}
+	if c.quotaPendingFire && !c.compacting && !c.compactCommand && c.quotaContinuationTimedOut() {
 		return
 	}
 	// A released binding gets no compaction command, continuation or restore
@@ -1899,7 +1898,7 @@ func (c *conv) kickInput() {
 	// Checked before anything is sent: a released binding gets no
 	// compaction nudge, and no new turn or start below.
 	released := c.released()
-	if released == "" && c.sendCompactionNudge() {
+	if released == "" && !c.quotaInjecting && c.sendCompactionNudge() {
 		return
 	}
 	c.mu.Lock()

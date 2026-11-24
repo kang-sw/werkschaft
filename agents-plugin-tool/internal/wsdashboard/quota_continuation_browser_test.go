@@ -28,6 +28,7 @@ type fakeQuotaAgents struct {
 	resumeAt     int64
 	scheduleHits int
 	cancelHits   int
+	messageHits  int
 	slot         HostedSlot
 }
 
@@ -47,12 +48,17 @@ func (a *fakeQuotaAgents) publishLocked() {
 			host.QuotaContinuation = &q
 		}
 	}
+	var lead wslive.Lead
+	if a.status == "running" {
+		lead.TurnStartedAt = 1
+	}
 	a.slot.Publish(wslive.Snapshot{
 		SchemaVersion: 1,
 		Adapter:       "claude",
 		UpdatedAt:     time.Now().UnixMilli(),
 		HeartbeatMs:   30000,
 		Host:          host,
+		Lead:          lead,
 	})
 }
 
@@ -146,10 +152,21 @@ func (a *fakeQuotaAgents) Handler() http.Handler {
 	})
 }
 
-func (a *fakeQuotaAgents) SetAuditSink(wsaudit.Sink)        {}
+func (a *fakeQuotaAgents) SetAuditSink(wsaudit.Sink)           {}
 func (a *fakeQuotaAgents) Start(func(replyID, project string)) {}
-func (a *fakeQuotaAgents) InboxChanged(string)              {}
-func (a *fakeQuotaAgents) Close()                           {}
+func (a *fakeQuotaAgents) InboxChanged(string)                 {}
+func (a *fakeQuotaAgents) PageInput(id string, write func() bool) error {
+	if id == a.replyID && write() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.messageHits++
+		a.qc = nil
+		a.status = "running"
+		a.publishLocked()
+	}
+	return nil
+}
+func (a *fakeQuotaAgents) Close() {}
 
 // TestQuotaContinuationUIBrowser verifies the Phase 3 quota-continuation UI
 // end-to-end in Chromium: manual schedule CTA, scheduled static <time data-f="dt">
@@ -177,7 +194,7 @@ func TestQuotaContinuationUIBrowser(t *testing.T) {
 	agents := &fakeQuotaAgents{
 		replyID:    "livesession",
 		canControl: true,
-		status:     "idle",
+		status:     "running",
 		resetsAt:   resetsAt,
 		resumeAt:   resumeAt,
 		failure: &wslive.Notice{
@@ -265,7 +282,12 @@ async function setState(targetFrame, payload) {
     await page.goto(base + '/s/livesession', { waitUntil: 'networkidle' });
     const frame = await (await page.locator('iframe.sframe.on').elementHandle()).contentFrame();
 
-    // 1. Manual CTA state (dark)
+    // 1. The quota alert is visible in the live region while the lead is
+    // running. Settlement alone should make manual scheduling available.
+    await frame.waitForSelector('.clive[data-qc-fail="usage_limit"][data-turn]');
+    assert.equal(await frame.locator('#qcbox button[data-qc-act="schedule"]').count(), 0);
+    await setState(frame, { status: 'idle' });
+    await frame.waitForSelector('.clive[data-qc-fail="usage_limit"]:not([data-turn])');
     await frame.waitForSelector('#qcbox .qccard[data-qc-mode="ready"]', { timeout: 10000 });
     const schedBtn = frame.locator('#qcbox button[data-qc-act="schedule"]');
     assert.equal(await schedBtn.count(), 1, 'schedule button rendered');
@@ -302,6 +324,17 @@ async function setState(targetFrame, payload) {
     // 4. Click "Cancel" -> returns to manual CTA state
     await frame.locator('#qcbox button[data-qc-act="cancel"]').click();
     await frame.waitForSelector('#qcbox .qccard[data-qc-mode="ready"]', { timeout: 10000 });
+
+    // Sending an operator message through the composer's ordinary
+    // message route removes the scheduled UI through the live update.
+    await schedBtn.click();
+    await frame.waitForSelector('#qcbox .qccard[data-qc-mode="scheduled"]');
+    await frame.locator('#ctext + .wsc-editor').fill('Continue with this new input');
+    const sent = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/message'));
+    await frame.locator('#csend').click();
+    assert.equal((await sent).status(), 200, 'composer message accepted');
+    await frame.waitForSelector('#qcbox .qccard[data-qc-mode="scheduled"]', { state: 'hidden' });
+    assert.equal(await frame.locator('#qcbox button[data-qc-act="cancel"]').count(), 0);
 
     // 5. in_flight hides #qcbox and header qc-chip
     await setState(frame, { qc: { status: 'in_flight' } });
@@ -345,10 +378,10 @@ async function setState(targetFrame, payload) {
 		t.Fatalf("quota continuation browser test failed: %v\n%s", err, string(out))
 	}
 	agents.mu.Lock()
-	sh, ch := agents.scheduleHits, agents.cancelHits
+	sh, ch, mh := agents.scheduleHits, agents.cancelHits, agents.messageHits
 	agents.mu.Unlock()
-	if sh != 1 || ch != 1 {
-		t.Fatalf("expected 1 schedule and 1 cancel POST, got schedule=%d cancel=%d", sh, ch)
+	if sh != 2 || ch != 1 || mh != 1 {
+		t.Fatalf("expected 2 schedule, 1 cancel and 1 composer POST, got schedule=%d cancel=%d composer=%d", sh, ch, mh)
 	}
 	if shots != "" {
 		for _, name := range []string{

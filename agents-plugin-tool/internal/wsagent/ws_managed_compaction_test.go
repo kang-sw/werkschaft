@@ -689,34 +689,36 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 			return len(sends) == 2
 		})
 
-		// Stage 1 hits NoticeUsageLimit -> Stage 2 suppressed AND auto quota continuation armed.
+		// The timer becomes due while Stage 1 still owns the conversation.
+		fired := make(chan struct{})
+		c := runner.conv(id)
+		c.do(func() { c.onQuotaAfterFence = func() { close(fired) } })
 		resetsAt := now.Add(5 * time.Minute).UnixMilli()
 		p1.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, ResetsAt: resetsAt, Text: "limit reached"}}
-		p1.events <- Event{TurnEnd: true, TurnError: "quota exhausted"}
-		waitWSCompact(t, "idle with scheduled quota continuation", func() bool {
-			st, err := runner.Get(id)
-			rec, ok := runner.recordOf(id)
-			return err == nil && ok && st.Status == StatusIdle &&
-				rec.QuotaContinuation != nil && rec.QuotaContinuation.Status == QuotaContinuationScheduled
+		var ch chan time.Time
+		waitWSCompact(t, "Stage 1 quota timer armed", func() bool {
+			timerMu.Lock()
+			ch = quotaFire
+			timerMu.Unlock()
+			return ch != nil
 		})
-		_, cmds := p1.sent()
-		if len(cmds) != 0 {
-			t.Fatalf("Stage 2 native /compact should be suppressed on NoticeUsageLimit, got cmds=%+v", cmds)
+		ch <- now.Add(6 * time.Minute)
+		select {
+		case <-fired:
+		case <-time.After(3 * time.Second):
+			t.Fatal("quota timer did not fire during Stage 1")
+		}
+		c.do(func() { c.onQuotaAfterFence = nil })
+		if sends, cmds := p1.sent(); len(sends) != 2 || len(cmds) != 0 {
+			t.Fatalf("Stage 1 still owns the turn: sends=%+v commands=%+v", sends, cmds)
 		}
 
-		// Firing the quota continuation timer resumes cleanly without triggering Stage 2.
-		timerMu.Lock()
-		ch := quotaFire
-		timerMu.Unlock()
-		if ch == nil {
-			t.Fatal("expected quota continuation timer to be armed")
-		}
-		ch <- now.Add(6 * time.Minute)
+		p1.events <- Event{TurnEnd: true, TurnError: "quota exhausted"}
 		waitWSCompact(t, "quota continuation prompt dispatched", func() bool {
 			sends, _ := p1.sent()
 			return len(sends) == 3 && strings.Contains(sends[2], "usage limit was reached")
 		})
-		_, cmds = p1.sent()
+		_, cmds := p1.sent()
 		if len(cmds) != 0 {
 			t.Fatalf("unexpected native /compact command after quota continuation resume: %+v", cmds)
 		}
