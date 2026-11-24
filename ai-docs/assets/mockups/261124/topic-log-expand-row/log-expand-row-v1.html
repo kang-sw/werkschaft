@@ -1,0 +1,1035 @@
+<style>
+.tle-wrap {
+  --tle-bg: #141518;
+  --tle-card: #1e2024;
+  --tle-hover: #25272c;
+  --tle-muted: #2b2d32;
+  --tle-recessed: #16181c;
+  --tle-fg: #e7e7e4;
+  --tle-muted-fg: #a2a6ad;
+  --tle-primary: #7aa2ff;
+  --tle-policy: #e0a36c;
+  --tle-line: rgba(231, 231, 228, .10);
+  --tle-line-soft: rgba(231, 231, 228, .07);
+  --tle-wash: rgba(231, 231, 228, .06);
+  --tle-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --tle-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --tle-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 16px 14px 20px;
+  background: var(--tle-bg);
+  color: var(--tle-fg);
+  font-family: var(--tle-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.tle-wrap *, .tle-wrap *::before, .tle-wrap *::after {
+  box-sizing: border-box;
+}
+
+/* Top intro header */
+.tle-intro {
+  margin-bottom: 16px;
+}
+.tle-intro-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--tle-fg);
+  letter-spacing: -.01em;
+}
+.tle-intro-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tle-muted-fg);
+  line-height: 1.55;
+}
+
+/* Variant section wrapper */
+.tle-sec {
+  margin-bottom: 18px;
+}
+.tle-sec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  margin: 0 2px 7px;
+}
+.tle-sec-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 750;
+  color: var(--tle-fg);
+}
+.tle-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  background: var(--tle-muted);
+  color: var(--tle-muted-fg);
+}
+.tle-badge-a {
+  background: rgba(122, 162, 255, .14);
+  color: var(--tle-primary);
+}
+.tle-badge-b {
+  background: rgba(108, 195, 154, .13);
+  color: #6cc39a;
+}
+.tle-badge-c {
+  background: rgba(224, 163, 108, .14);
+  color: var(--tle-policy);
+}
+.tle-sec-note {
+  font-size: 11.5px;
+  color: var(--tle-muted-fg);
+}
+
+/* Realistic topic history card */
+.tle-card {
+  background: var(--tle-card);
+  border-radius: 12px;
+  box-shadow: var(--tle-shadow);
+  overflow: hidden;
+  padding: 10px 0 12px;
+}
+.tle-mhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0 14px 6px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid var(--tle-line-soft);
+  font-size: 11.5px;
+  color: var(--tle-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.tle-mtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 750;
+  color: var(--tle-muted-fg);
+  white-space: nowrap;
+}
+.tle-mtitle svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  opacity: .85;
+}
+.tle-mmeta {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tle-muted-fg);
+  opacity: .88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Log rows inside the card (matching live page-stream.css) */
+.tle-rows {
+  padding: 4px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--tle-fg);
+  min-width: 0;
+}
+.tle-row-hl {
+  background: rgba(231, 231, 228, .045);
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.tle-gutter-col {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  width: 66px;
+  padding-top: 2px;
+}
+.tle-tri {
+  width: 0;
+  height: 0;
+  border-left: 4.5px solid var(--tle-muted-fg);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  opacity: .75;
+  flex: none;
+}
+.tle-tri-blank {
+  width: 4.5px;
+  flex: none;
+}
+.tle-evi {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+.tle-evi-p {
+  background: rgba(224, 163, 108, .18);
+  color: var(--tle-policy);
+}
+.tle-evi-l {
+  background: rgba(122, 162, 255, .16);
+  color: var(--tle-primary);
+}
+.tle-time {
+  font-family: var(--tle-mono);
+  font-size: 10.5px;
+  color: var(--tle-muted-fg);
+  opacity: .85;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tle-body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tle-qid {
+  color: var(--tle-muted-fg);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+.tle-qtag {
+  color: var(--tle-muted-fg);
+  font-size: 11px;
+  margin-right: 5px;
+}
+.tle-qlink {
+  color: var(--tle-fg);
+  font-weight: 650;
+}
+
+/* System event collapsed row */
+.tle-sys {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--tle-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.tle-sys-rule {
+  flex: none;
+  width: 24px;
+  margin-left: 10px;
+  border-top: 1px dotted rgba(231, 231, 228, .28);
+}
+.tle-sys-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* =========================================================
+   BASELINE (Current inline faint .history-gap)
+   ========================================================= */
+.tle-base-gap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  margin: 2px 14px;
+  padding: 2px 6px 2px 32px;
+  font-size: 11.5px;
+  line-height: 20px;
+  color: var(--tle-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.tle-base-lbl {
+  font-weight: 500;
+  opacity: .78;
+}
+.tle-base-rng {
+  font-family: var(--tle-mono);
+  font-size: 11px;
+  opacity: .78;
+}
+.tle-base-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 10px;
+  height: 20px;
+  background: var(--tle-muted);
+  color: var(--tle-fg);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tle-base-btn:hover {
+  background: #35383f;
+}
+
+/* =========================================================
+   OPTION A: GitHub Diff Gutter + Quiet Primary Tint Band
+   ========================================================= */
+.tle-a-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  padding: 0;
+  background: rgba(122, 162, 255, .065);
+  color: var(--tle-fg);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .14s ease;
+  font-variant-numeric: tabular-nums;
+}
+.tle-a-row:hover,
+.tle-a-row.tle-is-hover {
+  background: rgba(122, 162, 255, .12);
+}
+.tle-a-row-top {
+  border-top: 1px solid rgba(122, 162, 255, .10);
+  border-bottom: 1px solid rgba(122, 162, 255, .10);
+  margin-bottom: 4px;
+}
+.tle-a-row-bot {
+  border-top: 1px solid rgba(122, 162, 255, .10);
+  border-bottom: 1px solid rgba(122, 162, 255, .10);
+  margin-top: 4px;
+}
+.tle-a-gutter {
+  flex: none;
+  width: 82px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(122, 162, 255, .13);
+  color: var(--tle-primary);
+  transition: background .14s ease;
+}
+.tle-a-row:hover .tle-a-gutter,
+.tle-a-row.tle-is-hover .tle-a-gutter {
+  background: rgba(122, 162, 255, .21);
+}
+.tle-a-gutter svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.tle-a-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 10px;
+  padding: 4px 16px 4px 12px;
+}
+.tle-a-label {
+  font-weight: 600;
+  color: #9bbaff;
+  letter-spacing: -.005em;
+}
+.tle-a-row:hover .tle-a-label,
+.tle-a-row.tle-is-hover .tle-a-label {
+  color: #b5ccff;
+}
+.tle-a-meta {
+  font-size: 11px;
+  color: var(--tle-muted-fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tle-a-time {
+  font-family: var(--tle-mono);
+  font-size: 10.5px;
+  opacity: .88;
+}
+
+/* =========================================================
+   OPTION B: GitLab Diff Neutral Slate Band + Right Action
+   ========================================================= */
+.tle-b-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  border-top: 1px solid var(--tle-line-soft);
+  border-bottom: 1px solid var(--tle-line-soft);
+  padding: 0;
+  background: #24272e;
+  color: var(--tle-fg);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease;
+  font-variant-numeric: tabular-nums;
+}
+.tle-b-row-top {
+  margin-bottom: 4px;
+}
+.tle-b-row-bot {
+  margin-top: 4px;
+}
+.tle-b-row:hover,
+.tle-b-row.tle-is-hover {
+  background: rgba(122, 162, 255, .10);
+  border-color: rgba(122, 162, 255, .14);
+}
+.tle-b-gutter {
+  flex: none;
+  width: 82px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(231, 231, 228, .035);
+  color: var(--tle-muted-fg);
+  transition: background .14s ease, color .14s ease;
+}
+.tle-b-row:hover .tle-b-gutter,
+.tle-b-row.tle-is-hover .tle-b-gutter {
+  background: rgba(122, 162, 255, .14);
+  color: var(--tle-primary);
+}
+.tle-b-gutter svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.tle-b-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 10px;
+  padding: 4px 16px 4px 12px;
+}
+.tle-b-info {
+  font-size: 11.5px;
+  color: var(--tle-muted-fg);
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.tle-b-info strong {
+  font-weight: 600;
+  color: #c8cbd2;
+}
+.tle-b-time {
+  font-family: var(--tle-mono);
+  font-size: 10.5px;
+  opacity: .85;
+}
+.tle-b-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tle-primary);
+  white-space: nowrap;
+}
+.tle-b-row:hover .tle-b-act,
+.tle-b-row.tle-is-hover .tle-b-act {
+  color: #a9c4ff;
+}
+
+/* =========================================================
+   OPTION C: Centered Fold Bridge + Directional Edge Line
+   ========================================================= */
+.tle-c-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 26px;
+  border: 0;
+  padding: 3px 16px;
+  background: #23262d;
+  color: var(--tle-muted-fg);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+  font-variant-numeric: tabular-nums;
+}
+.tle-c-row-top {
+  box-shadow: inset 0 2px 0 rgba(122, 162, 255, .32), inset 0 -1px 0 var(--tle-line-soft);
+  margin-bottom: 4px;
+}
+.tle-c-row-bot {
+  box-shadow: inset 0 -2px 0 rgba(122, 162, 255, .32), inset 0 1px 0 var(--tle-line-soft);
+  margin-top: 4px;
+}
+.tle-c-row:hover,
+.tle-c-row.tle-is-hover {
+  background: rgba(122, 162, 255, .10);
+  color: var(--tle-fg);
+}
+.tle-c-row-top:hover,
+.tle-c-row-top.tle-is-hover {
+  box-shadow: inset 0 2px 0 rgba(122, 162, 255, .58), inset 0 -1px 0 rgba(122, 162, 255, .14);
+}
+.tle-c-row-bot:hover,
+.tle-c-row-bot.tle-is-hover {
+  box-shadow: inset 0 -2px 0 rgba(122, 162, 255, .58), inset 0 1px 0 rgba(122, 162, 255, .14);
+}
+.tle-c-rail {
+  flex: 1 1 24px;
+  height: 1px;
+  background: repeating-linear-gradient(
+    to right,
+    rgba(231, 231, 228, .18) 0 4px,
+    transparent 4px 8px
+  );
+  min-width: 12px;
+}
+.tle-c-row:hover .tle-c-rail,
+.tle-c-row.tle-is-hover .tle-c-rail {
+  background: repeating-linear-gradient(
+    to right,
+    rgba(122, 162, 255, .36) 0 4px,
+    transparent 4px 8px
+  );
+}
+.tle-c-center {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.tle-c-act {
+  font-weight: 600;
+  color: #a6c1ff;
+}
+.tle-c-row:hover .tle-c-act,
+.tle-c-row.tle-is-hover .tle-c-act {
+  color: #c2d5ff;
+}
+.tle-c-sep {
+  opacity: .55;
+}
+.tle-c-time {
+  font-family: var(--tle-mono);
+  font-size: 10.5px;
+  color: var(--tle-muted-fg);
+}
+
+/* Hover state preview strip under each card */
+.tle-hover-demo {
+  margin-top: 6px;
+  background: var(--tle-recessed);
+  border-radius: 8px;
+  overflow: hidden;
+  padding-top: 4px;
+}
+.tle-hover-cap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 12px 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--tle-muted-fg);
+}
+.tle-hover-tag {
+  font-family: var(--tle-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(122, 162, 255, .13);
+  color: var(--tle-primary);
+}
+.tle-hover-demo .tle-a-row,
+.tle-hover-demo .tle-b-row,
+.tle-hover-demo .tle-c-row {
+  margin: 0;
+}
+
+/* Comparison table */
+.tle-cmp {
+  margin-top: 20px;
+  background: var(--tle-card);
+  border-radius: 12px;
+  box-shadow: var(--tle-shadow);
+  padding: 12px 14px 14px;
+}
+.tle-cmp-title {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 750;
+  color: var(--tle-fg);
+}
+.tle-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  table-layout: fixed;
+}
+.tle-tbl th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  font-weight: 750;
+  color: var(--tle-muted-fg);
+  border-bottom: 1px solid var(--tle-line);
+}
+.tle-tbl td {
+  padding: 7px 8px;
+  vertical-align: top;
+  color: var(--tle-fg);
+  border-bottom: 1px solid var(--tle-line-soft);
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+.tle-tbl tr:last-child td {
+  border-bottom: 0;
+}
+.tle-tbl .tle-col-opt {
+  width: 18%;
+  font-weight: 700;
+}
+.tle-tbl .tle-col-num {
+  width: 14%;
+  font-variant-numeric: tabular-nums;
+}
+.tle-tbl .tle-col-rec {
+  width: 26%;
+  color: var(--tle-muted-fg);
+}
+.tle-mid-note {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--tle-recessed);
+  font-size: 11.5px;
+  color: var(--tle-muted-fg);
+  line-height: 1.5;
+}
+.tle-mid-note strong {
+  color: var(--tle-fg);
+  font-weight: 650;
+}
+
+@media (max-width: 540px) {
+  .tle-wrap {
+    padding: 12px 10px 16px;
+  }
+  .tle-a-gutter,
+  .tle-b-gutter {
+    width: 44px;
+  }
+  .tle-a-main,
+  .tle-b-main {
+    padding: 4px 10px;
+  }
+  .tle-c-row {
+    padding: 4px 10px;
+    gap: 6px;
+  }
+  .tle-c-center {
+    white-space: normal;
+  }
+  .tle-tbl {
+    font-size: 11px;
+  }
+  .tle-tbl th,
+  .tle-tbl td {
+    padding: 6px 5px;
+  }
+}
+</style>
+
+<div class="tle-wrap">
+  <div class="tle-intro">
+    <h2 class="tle-intro-title">토픽 기록 — 코드 Diff 스타일 ‘더 불러오기’ 전용 행 비교</h2>
+    <p class="tle-intro-sub">
+      현재 인라인 갭 행을 GitHub / GitLab 코드 Diff의 접힌 영역 확장 행처럼 독립된 가로 밴드로 분리한 3가지 시안입니다.
+      상단(<code>위쪽 더 불러오기</code>)과 하단(<code>아래쪽 더 불러오기</code>) 대칭 구조 및 <code>:hover</code> 반응을 함께 비교할 수 있습니다.
+    </p>
+  </div>
+
+  <!-- ================= BASELINE ================= -->
+  <section class="tle-sec">
+    <div class="tle-sec-head">
+      <h3 class="tle-sec-title">
+        <span class="tle-badge">기준선</span>
+        현재 스타일 — 인라인 흐린 갭 + 캡슐 버튼
+      </h3>
+      <span class="tle-sec-note">행 구분이 약해 로그 본문 사이에 묻히기 쉬움</span>
+    </div>
+
+    <div class="tle-card">
+      <div class="tle-mhead">
+        <span class="tle-mtitle">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
+          <span>기록</span>
+          <span>194</span>
+        </span>
+        <span class="tle-mmeta">패널 15 · 버전 16 · 로그 178줄</span>
+      </div>
+
+      <div class="tle-base-gap">
+        <span class="tle-base-lbl">⋯ 150개 로그 항목</span>
+        <span class="tle-base-rng">20:59–10:13</span>
+        <button type="button" class="tle-base-btn">▲ 위쪽 더 불러오기</button>
+      </div>
+
+      <div class="tle-rows">
+        <div class="tle-row">
+          <span class="tle-gutter-col"><span class="tle-tri"></span><span class="tle-evi tle-evi-p">P</span><span class="tle-time">10:13</span></span>
+          <span class="tle-body"><span class="tle-qid">(46)</span><span class="tle-qtag">원래 질문</span><span class="tle-qlink">0.52 출시 전에 vLLM/Ollama 로컬 엔드포인트도 실측할까요?</span></span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 1개 · 10:13</span>
+        </div>
+        <div class="tle-row tle-row-hl">
+          <span class="tle-gutter-col"><span class="tle-tri-blank"></span><span class="tle-evi tle-evi-l">L</span><span class="tle-time">10:40</span></span>
+          <span class="tle-body">0.52 재리뷰에서 차단 결함이 다시 나와 메인 lead가 새 티켓을 냄. Codex 작업자 3명이 영역별로 나눠 수정 시작: 파일·자격 증명·git.search(C1·C6), 권한(C3·C7·I9·I18), Pi 기록(C4·삭제·C5)</span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 2개 · 10:40–11:01</span>
+        </div>
+      </div>
+
+      <div class="tle-base-gap">
+        <span class="tle-base-lbl">⋯ 18개 로그 항목</span>
+        <span class="tle-base-rng">11:05–12:40</span>
+        <button type="button" class="tle-base-btn">▼ 아래쪽 더 불러오기</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OPTION A ================= -->
+  <section class="tle-sec">
+    <div class="tle-sec-head">
+      <h3 class="tle-sec-title">
+        <span class="tle-badge tle-badge-a">A안</span>
+        GitHub Diff 거터 + 틴트 밴드
+      </h3>
+      <span class="tle-sec-note">가장 직관적인 Diff 확장 행 · 좌측 거터 정렬</span>
+    </div>
+
+    <div class="tle-card">
+      <div class="tle-mhead">
+        <span class="tle-mtitle">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
+          <span>기록</span>
+          <span>194</span>
+        </span>
+        <span class="tle-mmeta">패널 15 · 버전 16 · 로그 178줄</span>
+      </div>
+
+      <button type="button" class="tle-a-row tle-a-row-top">
+        <span class="tle-a-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10"/><path d="M8 13V6"/><path d="M5 8.5L8 5.5l3 3"/></svg>
+        </span>
+        <span class="tle-a-main">
+          <span class="tle-a-label">위쪽 더 불러오기</span>
+          <span class="tle-a-meta"><span>150개 로그</span><span>·</span><span class="tle-a-time">20:59–10:13</span></span>
+        </span>
+      </button>
+
+      <div class="tle-rows">
+        <div class="tle-row">
+          <span class="tle-gutter-col"><span class="tle-tri"></span><span class="tle-evi tle-evi-p">P</span><span class="tle-time">10:13</span></span>
+          <span class="tle-body"><span class="tle-qid">(46)</span><span class="tle-qtag">원래 질문</span><span class="tle-qlink">0.52 출시 전에 vLLM/Ollama 로컬 엔드포인트도 실측할까요?</span></span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 1개 · 10:13</span>
+        </div>
+        <div class="tle-row tle-row-hl">
+          <span class="tle-gutter-col"><span class="tle-tri-blank"></span><span class="tle-evi tle-evi-l">L</span><span class="tle-time">10:40</span></span>
+          <span class="tle-body">0.52 재리뷰에서 차단 결함이 다시 나와 메인 lead가 새 티켓을 냄. Codex 작업자 3명이 영역별로 나눠 수정 시작: 파일·자격 증명·git.search(C1·C6), 권한(C3·C7·I9·I18), Pi 기록(C4·삭제·C5)</span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 2개 · 10:40–11:01</span>
+        </div>
+      </div>
+
+      <button type="button" class="tle-a-row tle-a-row-bot">
+        <span class="tle-a-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h10"/><path d="M8 3v7"/><path d="M5 7.5L8 10.5l3-3"/></svg>
+        </span>
+        <span class="tle-a-main">
+          <span class="tle-a-label">아래쪽 더 불러오기</span>
+          <span class="tle-a-meta"><span>18개 로그</span><span>·</span><span class="tle-a-time">11:05–12:40</span></span>
+        </span>
+      </button>
+    </div>
+
+    <div class="tle-hover-demo">
+      <div class="tle-hover-cap">
+        <span>인터랙션 미리보기</span>
+        <span class="tle-hover-tag">:hover 상태</span>
+      </div>
+      <div class="tle-a-row tle-is-hover">
+        <span class="tle-a-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10"/><path d="M8 13V6"/><path d="M5 8.5L8 5.5l3 3"/></svg>
+        </span>
+        <span class="tle-a-main">
+          <span class="tle-a-label">위쪽 더 불러오기</span>
+          <span class="tle-a-meta"><span>150개 로그</span><span>·</span><span class="tle-a-time">20:59–10:13</span></span>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OPTION B ================= -->
+  <section class="tle-sec">
+    <div class="tle-sec-head">
+      <h3 class="tle-sec-title">
+        <span class="tle-badge tle-badge-b">B안</span>
+        GitLab Diff 뉴트럴 톤 거터 + 우측 액션
+      </h3>
+      <span class="tle-sec-note">평소 무채색으로 시선 간섭 최소 · 호버 시 블루 워시</span>
+    </div>
+
+    <div class="tle-card">
+      <div class="tle-mhead">
+        <span class="tle-mtitle">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
+          <span>기록</span>
+          <span>194</span>
+        </span>
+        <span class="tle-mmeta">패널 15 · 버전 16 · 로그 178줄</span>
+      </div>
+
+      <button type="button" class="tle-b-row tle-b-row-top">
+        <span class="tle-b-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.5L8 6l3.5 3.5"/><path d="M4.5 13L8 9.5l3.5 3.5"/></svg>
+        </span>
+        <span class="tle-b-main">
+          <span class="tle-b-info">숨겨진 로그 <strong>150개</strong> · <span class="tle-b-time">20:59–10:13</span></span>
+          <span class="tle-b-act">▲ 위쪽 더 불러오기</span>
+        </span>
+      </button>
+
+      <div class="tle-rows">
+        <div class="tle-row">
+          <span class="tle-gutter-col"><span class="tle-tri"></span><span class="tle-evi tle-evi-p">P</span><span class="tle-time">10:13</span></span>
+          <span class="tle-body"><span class="tle-qid">(46)</span><span class="tle-qtag">원래 질문</span><span class="tle-qlink">0.52 출시 전에 vLLM/Ollama 로컬 엔드포인트도 실측할까요?</span></span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 1개 · 10:13</span>
+        </div>
+        <div class="tle-row tle-row-hl">
+          <span class="tle-gutter-col"><span class="tle-tri-blank"></span><span class="tle-evi tle-evi-l">L</span><span class="tle-time">10:40</span></span>
+          <span class="tle-body">0.52 재리뷰에서 차단 결함이 다시 나와 메인 lead가 새 티켓을 냄. Codex 작업자 3명이 영역별로 나눠 수정 시작: 파일·자격 증명·git.search(C1·C6), 권한(C3·C7·I9·I18), Pi 기록(C4·삭제·C5)</span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 2개 · 10:40–11:01</span>
+        </div>
+      </div>
+
+      <button type="button" class="tle-b-row tle-b-row-bot">
+        <span class="tle-b-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3L8 6.5 11.5 3"/><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>
+        </span>
+        <span class="tle-b-main">
+          <span class="tle-b-info">숨겨진 로그 <strong>18개</strong> · <span class="tle-b-time">11:05–12:40</span></span>
+          <span class="tle-b-act">▼ 아래쪽 더 불러오기</span>
+        </span>
+      </button>
+    </div>
+
+    <div class="tle-hover-demo">
+      <div class="tle-hover-cap">
+        <span>인터랙션 미리보기</span>
+        <span class="tle-hover-tag">:hover 상태</span>
+      </div>
+      <div class="tle-b-row tle-is-hover">
+        <span class="tle-b-gutter" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.5L8 6l3.5 3.5"/><path d="M4.5 13L8 9.5l3.5 3.5"/></svg>
+        </span>
+        <span class="tle-b-main">
+          <span class="tle-b-info">숨겨진 로그 <strong>150개</strong> · <span class="tle-b-time">20:59–10:13</span></span>
+          <span class="tle-b-act">▲ 위쪽 더 불러오기</span>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OPTION C ================= -->
+  <section class="tle-sec">
+    <div class="tle-sec-head">
+      <h3 class="tle-sec-title">
+        <span class="tle-badge tle-badge-c">C안</span>
+        중앙 접힘 브리지 + 방향성 엣지 라인
+      </h3>
+      <span class="tle-sec-note">2px 방향성 경계선 + 점선 레일로 접힘 경계감 극대화</span>
+    </div>
+
+    <div class="tle-card">
+      <div class="tle-mhead">
+        <span class="tle-mtitle">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
+          <span>기록</span>
+          <span>194</span>
+        </span>
+        <span class="tle-mmeta">패널 15 · 버전 16 · 로그 178줄</span>
+      </div>
+
+      <button type="button" class="tle-c-row tle-c-row-top">
+        <span class="tle-c-rail" aria-hidden="true"></span>
+        <span class="tle-c-center">
+          <span class="tle-c-act">▲ 위쪽 150개 더 불러오기</span>
+          <span class="tle-c-sep">·</span>
+          <span class="tle-c-time">20:59–10:13</span>
+        </span>
+        <span class="tle-c-rail" aria-hidden="true"></span>
+      </button>
+
+      <div class="tle-rows">
+        <div class="tle-row">
+          <span class="tle-gutter-col"><span class="tle-tri"></span><span class="tle-evi tle-evi-p">P</span><span class="tle-time">10:13</span></span>
+          <span class="tle-body"><span class="tle-qid">(46)</span><span class="tle-qtag">원래 질문</span><span class="tle-qlink">0.52 출시 전에 vLLM/Ollama 로컬 엔드포인트도 실측할까요?</span></span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 1개 · 10:13</span>
+        </div>
+        <div class="tle-row tle-row-hl">
+          <span class="tle-gutter-col"><span class="tle-tri-blank"></span><span class="tle-evi tle-evi-l">L</span><span class="tle-time">10:40</span></span>
+          <span class="tle-body">0.52 재리뷰에서 차단 결함이 다시 나와 메인 lead가 새 티켓을 냄. Codex 작업자 3명이 영역별로 나눠 수정 시작: 파일·자격 증명·git.search(C1·C6), 권한(C3·C7·I9·I18), Pi 기록(C4·삭제·C5)</span>
+        </div>
+        <div class="tle-sys">
+          <span class="tle-sys-rule"></span>
+          <span class="tle-sys-lbl"><span class="tle-tri"></span>시스템 이벤트 2개 · 10:40–11:01</span>
+        </div>
+      </div>
+
+      <button type="button" class="tle-c-row tle-c-row-bot">
+        <span class="tle-c-rail" aria-hidden="true"></span>
+        <span class="tle-c-center">
+          <span class="tle-c-act">▼ 아래쪽 18개 더 불러오기</span>
+          <span class="tle-c-sep">·</span>
+          <span class="tle-c-time">11:05–12:40</span>
+        </span>
+        <span class="tle-c-rail" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <div class="tle-hover-demo">
+      <div class="tle-hover-cap">
+        <span>인터랙션 미리보기</span>
+        <span class="tle-hover-tag">:hover 상태</span>
+      </div>
+      <div class="tle-c-row tle-c-row-top tle-is-hover">
+        <span class="tle-c-rail" aria-hidden="true"></span>
+        <span class="tle-c-center">
+          <span class="tle-c-act">▲ 위쪽 150개 더 불러오기</span>
+          <span class="tle-c-sep">·</span>
+          <span class="tle-c-time">20:59–10:13</span>
+        </span>
+        <span class="tle-c-rail" aria-hidden="true"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= COMPARISON TABLE ================= -->
+  <section class="tle-cmp">
+    <h3 class="tle-cmp-title">시안 비교 요약</h3>
+    <table class="tle-tbl">
+      <thead>
+        <tr>
+          <th class="tle-col-opt">시안</th>
+          <th>시인성(발견성)</th>
+          <th>시선 분산도(차분함)</th>
+          <th class="tle-col-num">행 높이</th>
+          <th>클릭 영역</th>
+          <th class="tle-col-rec">추천 상황</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tle-col-opt">A안<br><span style="font-weight:500;color:var(--tle-muted-fg);font-size:10.5px;">GitHub Diff</span></td>
+          <td>높음 — 좌측 거터 틴트로 단번에 확장 행 인식</td>
+          <td>보통~낮음 — 6.5% 블루 워시로 절제되나 약한 색감 존재</td>
+          <td class="tle-col-num">28px</td>
+          <td>전체 가로 행 (100%)</td>
+          <td class="tle-col-rec">“더 불러오기”를 가장 직관적인 Diff 확장 컨트롤로 드러내고 싶을 때</td>
+        </tr>
+        <tr>
+          <td class="tle-col-opt">B안<br><span style="font-weight:500;color:var(--tle-muted-fg);font-size:10.5px;">GitLab Diff</span></td>
+          <td>중상 — 독립 밴드와 우측 블루 액션으로 명확</td>
+          <td>매우 낮음 — 평상시 완전 무채색(#24272e), 호버 시에만 블루 전환</td>
+          <td class="tle-col-num">28px</td>
+          <td>전체 가로 행 (100%)</td>
+          <td class="tle-col-rec">본문 가독성을 최우선으로 두면서 차분하게 경계만 분리하고 싶을 때</td>
+        </tr>
+        <tr>
+          <td class="tle-col-opt">C안<br><span style="font-weight:500;color:var(--tle-muted-fg);font-size:10.5px;">접힘 브리지</span></td>
+          <td>높음 — 2px 방향성 엣지 + 중앙 점선 레일로 연속성 강조</td>
+          <td>낮음 — 무채색 바탕 + 32% 저채도 엣지 라인</td>
+          <td class="tle-col-num">26px</td>
+          <td>전체 가로 행 (100%)</td>
+          <td class="tle-col-rec">세로 높이를 최소화하면서 “이 방향으로 기록이 더 이어짐”을 강조할 때</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tle-mid-note">
+      <strong>중간 갭(양방향) 참고:</strong> 실제 <code>.history-gap</code>은 딥링크 등으로 중간에 접힌 구간이 생기면 <code>위쪽 더 불러오기</code>와 <code>아래쪽 더 불러오기</code>가 동시에 활성화됩니다. A·B·C안 모두 중간 갭에서는 동일 행 우측/중앙에 양방향 트리거 2개를 나란히 배치하거나(B·C안), 상·하 2단 분할 행(A안)으로 자연스럽게 확장할 수 있습니다.
+    </div>
+  </section>
+</div>
