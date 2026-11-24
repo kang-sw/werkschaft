@@ -204,8 +204,8 @@ func (c *conv) cancelQuotaContinuation(quiet bool) {
 
 // handleUsageLimitAlert updates QuotaContinuation state on a live hosted-lead
 // NoticeUsageLimit alert. Runs in the loop before syncHost.
-func (c *conv) handleUsageLimitAlert(n wslive.Notice, manualOnly, quiet bool) {
-	if quiet || !c.rec.Lead || n.Kind != wslive.NoticeUsageLimit || c.closed || c.hidden || c.isForeign() {
+func (c *conv) handleUsageLimitAlert(n wslive.Notice, manualOnly bool) {
+	if !c.rec.Lead || c.closed || c.hidden || c.isForeign() {
 		return
 	}
 	now := c.r.opts.Now()

@@ -63,7 +63,8 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 		}
 	}
 	c.alerted = true
-	if n.Kind == wslive.NoticeUsageLimit {
+	firstUsageLimit := !quiet && n.Kind == wslive.NoticeUsageLimit && !c.quotaUsageLimitAlerted
+	if firstUsageLimit {
 		c.quotaUsageLimitAlerted = true
 	}
 	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
@@ -73,7 +74,10 @@ func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
 	if !quiet {
 		c.live.notice(n)
 	}
-	c.handleUsageLimitAlert(n, manualOnly, quiet)
+	// A harness can report the same failure both before and during settlement.
+	if firstUsageLimit {
+		c.handleUsageLimitAlert(n, manualOnly)
+	}
 	c.syncHost(quiet)
 	c.changed(quiet)
 }

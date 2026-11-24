@@ -417,22 +417,36 @@ func TestQuotaContinuationPastResetClampsToBufferAndJitter(t *testing.T) {
 	}
 }
 
-func TestQuotaContinuationUnknownResetSixRetriesThenExhausted(t *testing.T) {
+func TestQuotaContinuationCodexDuplicateAlertsExhaustSixRetries(t *testing.T) {
 	env := newQuotaEnv(t, map[string]string{
-		wsconfig.ItemAgentQuotaContinuation + ".agy": "auto",
+		wsconfig.ItemAgentQuotaContinuation + ".codex": "auto",
 	}, 0)
-	id := env.createLead(BackendAgy)
+	id := env.createLead(BackendCodex)
 	if _, err := env.runner.Send(id, "start"); err != nil {
 		t.Fatal(err)
 	}
 	p := env.backend.proc(t, 0)
 	first := p.nextSend(t)
 
-	// Initial unknown-reset usage limit -> scheduled (Attempts: 0, MaxAttempts: 6).
-	p.events <- Event{TurnStart: true, TurnID: first.TurnID}
-	p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "quota exceeded"}, TurnID: first.TurnID}
-	p.events <- Event{TurnEnd: true, TurnError: "quota exceeded", TurnID: first.TurnID}
-	env.waitIdle(id)
+	// Codex reports the same failure first as an error and then on completion.
+	mapper := newCodexMapper("sess-quota")
+	mapper.now = func() int64 { return env.currentNow().UnixMilli() }
+	failTurn := func(turnID string) {
+		t.Helper()
+		const quotaError = `{"message":"usage limit exceeded","codexErrorInfo":"usageLimitExceeded"}`
+		for _, line := range []string{
+			`{"method":"turn/started","params":{"threadId":"sess-quota","turn":{"id":"` + turnID + `"}}}`,
+			`{"method":"error","params":{"threadId":"sess-quota","turnId":"` + turnID + `","error":` + quotaError + `}}`,
+			`{"method":"turn/completed","params":{"threadId":"sess-quota","turn":{"id":"` + turnID + `","status":"failed","error":` + quotaError + `}}}`,
+		} {
+			for _, ev := range mapper.mapLine([]byte(line), nopReplies{}) {
+				ev.TurnID = turnID
+				p.events <- ev
+			}
+		}
+		env.waitIdle(id)
+	}
+	failTurn(first.TurnID)
 
 	st, _ := env.runner.Get(id)
 	if st.QuotaContinuation == nil || st.QuotaContinuation.Status != QuotaContinuationScheduled || st.QuotaContinuation.Attempts != 0 || st.QuotaContinuation.MaxAttempts != 6 {
@@ -455,10 +469,7 @@ func TestQuotaContinuationUnknownResetSixRetriesThenExhausted(t *testing.T) {
 			t.Fatalf("attempt %d in_flight = %+v", attempt, st.QuotaContinuation)
 		}
 
-		p.events <- Event{TurnStart: true, TurnID: retry.TurnID}
-		p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "still limited"}, TurnID: retry.TurnID}
-		p.events <- Event{TurnEnd: true, TurnError: "still limited", TurnID: retry.TurnID}
-		env.waitIdle(id)
+		failTurn(retry.TurnID)
 
 		st, _ = env.runner.Get(id)
 		if attempt < 6 {
