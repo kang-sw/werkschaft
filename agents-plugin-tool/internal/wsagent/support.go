@@ -238,6 +238,7 @@ type SupportHarness struct {
 	Lead            bool          `json:"lead,omitempty"`
 	PermissionModes []string      `json:"permission_modes,omitempty"`
 	ModelProviders  []string      `json:"model_providers,omitempty"`
+	ModelNotice     string        `json:"model_notice,omitempty"`
 	// PermissionLevels advertises lead/settings selection only, not workers.
 	PermissionLevels []PermissionLevel `json:"permission_levels,omitempty"`
 }
@@ -318,7 +319,7 @@ func (s *Support) listChoices(ctx context.Context, hs []SupportHarness) (pending
 		h := &hs[i]
 		backend := s.opts.Runner.opts.Backends[h.Harness].Backend
 		if source, ok := backend.(leadProviderAdmitter); ok {
-			h.ModelProviders = source.leadProviders()
+			h.ModelProviders, h.ModelNotice = source.leadProviders()
 			c, ready := s.pickerListing(h.Harness, source)
 			if !ready {
 				pending = true

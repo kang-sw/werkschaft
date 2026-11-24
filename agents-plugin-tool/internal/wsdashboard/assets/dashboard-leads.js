@@ -422,6 +422,12 @@
       return { row: r, sel: s };
     }
     var m = row(wsT("js.sup.model"), "mono");
+    var modelNote = keep && box.appendChild(mk("p", "spdesc"));
+    if (modelNote) {
+      modelNote.id = rpId();
+      modelNote.hidden = true;
+      m.sel.setAttribute("aria-describedby", modelNote.id);
+    }
     var p = row(wsT("js.lead.mode"));
     var pd = box.appendChild(mk("p", "spdesc"));
     var e = row(wsT("js.sup.effort"));
@@ -463,6 +469,11 @@
       own = ownNote = extra = "";
       cur.modes = modes;
       leadOptions(m.sel, models, v.model, leadModelLabels(harness, v.provider, keep));
+      if (modelNote) {
+        var notice = h && h.model_notice || "";
+        if (modelNote.textContent !== notice) modelNote.textContent = notice;
+        modelNote.hidden = !notice;
+      }
       leadOptions(e.sel, efforts, v.effort);
       var sig = modes.join("\n");
       if (p.sel.wsSig !== sig) {

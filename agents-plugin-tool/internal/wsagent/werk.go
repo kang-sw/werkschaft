@@ -116,7 +116,7 @@ func WithProviderCredentials(registrations map[string]BackendRegistration, sourc
 
 type leadProviderAdmitter interface {
 	ChoiceLister
-	leadProviders() []string
+	leadProviders() (available []string, notice string)
 	admitLeadProvider(provider, model string) error
 	leadCredentialGap() string
 }
@@ -189,17 +189,19 @@ func (b WerkBackend) admitLeadProvider(id, model string) error {
 	return nil
 }
 
-func (b WerkBackend) leadProviders() []string {
-	var ready []string
+func (b WerkBackend) leadProviders() (available []string, notice string) {
 	for _, id := range []wscred.ProviderID{wscred.ProviderOpenRouter, wscred.ProviderOpenAI} {
-		if b.providerGap(id) == "" {
-			ready = append(ready, string(id))
+		gap := b.providerGap(id)
+		if gap == "" {
+			available = append(available, string(id))
+		} else if id == wscred.ProviderOpenAI && gap == wscred.ErrOpenAIPlanDisabled.Error() {
+			notice = gap
 		}
 	}
 	for _, provider := range b.localProviders() {
-		ready = append(ready, string(provider.ID))
+		available = append(available, string(provider.ID))
 	}
-	return ready
+	return available, notice
 }
 
 func (b WerkBackend) leadCredentialGap() string {
