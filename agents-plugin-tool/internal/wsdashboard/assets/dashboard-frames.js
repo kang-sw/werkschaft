@@ -337,13 +337,17 @@
       if (unfoldTopic) unfoldTopic(target);
       for (var p = target; p && inBoard(p); p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
       var w = window.wbHistory, anchor = window.WsBoardAnchor, card = anchor && anchor.owner(target);
-      // A board target snaps to its containing card first, then scrolls inside it.
-      if (card) { anchor.select(card, { smooth: target === card }); if (target === card) return; }
+      // loadTarget has already navigated to an exact history target.
+      if (!loaded && card === target) { anchor.select(card, { smooth: true }); return; }
       if (!loaded && w && w.navigate) w.navigate(target);
       else if (!loaded && window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
       // History targets were anchored by the loader; never scroll their clip.
       if (!target.closest(".wb-history")) {
-        if (!loaded && (!w || !w.navigate)) target.scrollIntoView({ block: "start" });
+        if (!loaded && (!w || !w.navigate)) {
+          if (card) anchor.select(card);
+          target.scrollIntoView({ block: "start" });
+          if (card && anchor.land) anchor.land(target);
+        }
         if (w && w.bands && w.keep) w.keep(target);
       }
     }
@@ -503,9 +507,11 @@
       if (Math.abs(Math.ceil(h) - (parseFloat(f.style.height) || 0)) >= 1) f.wbKeep = false;
     });
     var kept = batch.size ? boardKeep(Array.from(batch.keys())) : null;
+    var pinLayout = false;
     batch.forEach(function (h, f) {
       var from = parseFloat(f.style.height) || 0, to = Math.ceil(h);
       f.style.height = to + "px";
+      if (from !== to && typeof freePin !== "undefined" && freePin && freePin.col.contains(f)) pinLayout = true;
       // A frame the bands mounted (wbFirst, mountFrame) resizes its topic
       // by the bands' doing once, when its first height changes it.
       if (f.wbFirst) {
@@ -526,6 +532,7 @@
       postTheme(f);
     });
     if (kept) kept.h.apply();
+    if (pinLayout) freePinLayout();
   }
   window.wbCardFindFrame = { post: postDoc };
   window.addEventListener("message", function (e) {
