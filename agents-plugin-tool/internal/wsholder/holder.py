@@ -562,21 +562,36 @@ class PipeChild:
 
     def __init__(self, spec: dict) -> None:
         flags = (subprocess.CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS) if WINDOWS else 0
-        self.proc = subprocess.Popen(
-            spec["argv"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=spec["cwd"],
-            env=spec["env"],
-            bufsize=0,
-            creationflags=flags,
-        )
+        self._qos_job = _WindowsDescendantQoSJob.start() if WINDOWS else None
+        try:
+            self.proc = subprocess.Popen(
+                spec["argv"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=spec["cwd"],
+                env=spec["env"],
+                bufsize=0,
+                creationflags=flags,
+            )
+        except BaseException:
+            self._close_qos_job()
+            raise
         self.pid = self.proc.pid
         if WINDOWS:
             handle = getattr(self.proc, "_handle", None)
             if handle:
                 _clear_windows_eco_qos(handle)
+                if self._qos_job is not None and not self._qos_job.assign(handle):
+                    self._close_qos_job()
+            else:
+                self._close_qos_job()
+
+    def _close_qos_job(self) -> None:
+        job = self._qos_job
+        self._qos_job = None
+        if job is not None:
+            job.close()
 
     def outputs(self):
         return [("stdout", self.proc.stdout.fileno()), ("stderr", self.proc.stderr.fileno())]
@@ -615,9 +630,10 @@ class PipeChild:
         return _exit_fields(self.proc.wait())
 
     def after_exit(self) -> None:
-        pass
+        self._close_qos_job()
 
     def close(self) -> None:
+        self._close_qos_job()
         for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             try:
                 f.close()
@@ -807,6 +823,8 @@ class ConPtyChild:
         k32.GetExitCodeProcess.restype = BOOL
         k32.TerminateProcess.argtypes = [HANDLE, ctypes.c_uint]
         k32.TerminateProcess.restype = BOOL
+        k32.ResumeThread.argtypes = [HANDLE]
+        k32.ResumeThread.restype = DWORD
         k32.CloseHandle.argtypes = [HANDLE]
         k32.CloseHandle.restype = BOOL
 
@@ -818,6 +836,7 @@ class ConPtyChild:
 
         self.lock = threading.Lock()
         self.closed = False
+        self._qos_job = None
         in_read, self.in_write = pipe()
         self.out_read, out_write = pipe()
         self.hpc = HANDLE()
@@ -855,10 +874,18 @@ class ConPtyChild:
                     "".join(f"{k}={v}\0" for k, v in spec["env"].items()) + "\0"
                 )
             cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(spec["argv"]))
-            # EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | NORMAL_PRIORITY_CLASS
+            # EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED
             if not k32.CreateProcessW(
-                None, cmdline, None, None, False, 0x00080000 | 0x00000400 | NORMAL_PRIORITY_CLASS, env_block, spec["cwd"],
-                ctypes.byref(startup), ctypes.byref(info),
+                None,
+                cmdline,
+                None,
+                None,
+                False,
+                0x00080000 | 0x00000400 | NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED,
+                env_block,
+                spec["cwd"],
+                ctypes.byref(startup),
+                ctypes.byref(info),
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
         except BaseException:
@@ -868,8 +895,17 @@ class ConPtyChild:
             raise
         finally:
             k32.DeleteProcThreadAttributeList(startup.lpAttributeList)
-        k32.CloseHandle(info.hThread)
-        _clear_windows_eco_qos(info.hProcess, k32=k32)
+        try:
+            _clear_windows_eco_qos(info.hProcess, k32=k32)
+            qos_job = _WindowsDescendantQoSJob.start(k32=k32)
+            if qos_job is not None:
+                if qos_job.assign(info.hProcess):
+                    self._qos_job = qos_job
+                else:
+                    qos_job.close()
+        finally:
+            k32.ResumeThread(info.hThread)
+            k32.CloseHandle(info.hThread)
         self.process = info.hProcess
         self.pid = info.dwProcessId
 
@@ -914,7 +950,14 @@ class ConPtyChild:
         self.k32.GetExitCodeProcess(self.process, ctypes.byref(code))
         return {"exit_code": code.value, "signal": None}
 
+    def _close_qos_job(self) -> None:
+        job = self._qos_job
+        self._qos_job = None
+        if job is not None:
+            job.close()
+
     def after_exit(self) -> None:
+        self._close_qos_job()
         # The output pipe reaches its end only once the pseudoconsole is
         # closed; the reader thread keeps draining meanwhile, which closing
         # needs on older Windows builds.
@@ -1810,9 +1853,15 @@ def _file_sha256(path: str) -> str:
 
 
 NORMAL_PRIORITY_CLASS = 0x00000020
+CREATE_SUSPENDED = 0x00000004
 PROCESS_POWER_THROTTLING = 4
 PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1
 PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
+PROCESS_SET_INFORMATION = 0x0200
+JOB_OBJECT_ASSOCIATE_COMPLETION_PORT_INFORMATION = 7
+JOB_OBJECT_MSG_NEW_PROCESS = 6
+_JOB_COMPLETION_KEY = 1
+_JOB_STOP_KEY = 2
 
 
 def _clear_windows_eco_qos(handle, k32=None) -> None:
@@ -1825,9 +1874,9 @@ def _clear_windows_eco_qos(handle, k32=None) -> None:
 
         class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
             _fields_ = [
-                ("Version", wintypes.DWORD),
-                ("ControlMask", wintypes.DWORD),
-                ("StateMask", wintypes.DWORD),
+                ("Version", ctypes.c_uint32),
+                ("ControlMask", ctypes.c_uint32),
+                ("StateMask", ctypes.c_uint32),
             ]
 
         if k32 is None:
@@ -1847,6 +1896,202 @@ def _clear_windows_eco_qos(handle, k32=None) -> None:
         pass
 
 
+class _WindowsDescendantQoSJob:
+    """Clears EcoQoS on every descendant spawned inside a child's Job Object.
+
+    On Windows 11, PriorityClass inherits across CreateProcess, but
+    ProcessPowerThrottling does not. Associating an anonymous Job Object with an
+    I/O Completion Port delivers JOB_OBJECT_MSG_NEW_PROCESS for every descendant
+    without polling or disk I/O. Neither kill-on-close nor breakaway limits are
+    set, so holder stop semantics stay unchanged and nested jobs remain tracked.
+    """
+
+    def __init__(self, k32, job, iocp, set_proc_info, throttle_state) -> None:
+        self._k32 = k32
+        self._job = job
+        self._iocp = iocp
+        self._set_proc_info = set_proc_info
+        self._throttle_state = throttle_state
+        self._lock = threading.Lock()
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._pump,
+            name="ws-holder-qos-iocp",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @classmethod
+    def start(cls, k32=None):
+        """Create a Job Object + IOCP watcher; return None on any failure."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            if k32 is None:
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            set_proc_info = getattr(k32, "SetProcessInformation", None)
+            if set_proc_info is None:
+                return None
+
+            HANDLE = wintypes.HANDLE
+            DWORD = wintypes.DWORD
+            BOOL = wintypes.BOOL
+            LPVOID = ctypes.c_void_p
+            ULONG_PTR = ctypes.c_size_t
+
+            class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+                _fields_ = [
+                    ("Version", ctypes.c_uint32),
+                    ("ControlMask", ctypes.c_uint32),
+                    ("StateMask", ctypes.c_uint32),
+                ]
+
+            class JOBOBJECT_ASSOCIATE_COMPLETION_PORT(ctypes.Structure):
+                _fields_ = [
+                    ("CompletionKey", LPVOID),
+                    ("CompletionPort", HANDLE),
+                ]
+
+            set_proc_info.argtypes = [HANDLE, DWORD, LPVOID, DWORD]
+            set_proc_info.restype = BOOL
+            k32.CreateJobObjectW.argtypes = [LPVOID, wintypes.LPCWSTR]
+            k32.CreateJobObjectW.restype = HANDLE
+            k32.CreateIoCompletionPort.argtypes = [HANDLE, HANDLE, ULONG_PTR, DWORD]
+            k32.CreateIoCompletionPort.restype = HANDLE
+            k32.SetInformationJobObject.argtypes = [HANDLE, DWORD, LPVOID, DWORD]
+            k32.SetInformationJobObject.restype = BOOL
+            k32.AssignProcessToJobObject.argtypes = [HANDLE, HANDLE]
+            k32.AssignProcessToJobObject.restype = BOOL
+            k32.GetQueuedCompletionStatus.argtypes = [
+                HANDLE,
+                ctypes.POINTER(DWORD),
+                ctypes.POINTER(ULONG_PTR),
+                ctypes.POINTER(LPVOID),
+                DWORD,
+            ]
+            k32.GetQueuedCompletionStatus.restype = BOOL
+            k32.PostQueuedCompletionStatus.argtypes = [HANDLE, DWORD, ULONG_PTR, LPVOID]
+            k32.PostQueuedCompletionStatus.restype = BOOL
+            k32.OpenProcess.argtypes = [DWORD, BOOL, DWORD]
+            k32.OpenProcess.restype = HANDLE
+            k32.CloseHandle.argtypes = [HANDLE]
+            k32.CloseHandle.restype = BOOL
+
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                return None
+            iocp = k32.CreateIoCompletionPort(HANDLE(-1), None, 0, 1)
+            if not iocp:
+                k32.CloseHandle(job)
+                return None
+            assoc = JOBOBJECT_ASSOCIATE_COMPLETION_PORT(LPVOID(_JOB_COMPLETION_KEY), iocp)
+            if not k32.SetInformationJobObject(
+                job,
+                JOB_OBJECT_ASSOCIATE_COMPLETION_PORT_INFORMATION,
+                ctypes.byref(assoc),
+                ctypes.sizeof(assoc),
+            ):
+                k32.CloseHandle(iocp)
+                k32.CloseHandle(job)
+                return None
+            throttle_state = PROCESS_POWER_THROTTLING_STATE(
+                PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                0,
+            )
+            return cls(k32, job, iocp, set_proc_info, throttle_state)
+        except Exception:
+            return None
+
+    def assign(self, proc_handle) -> bool:
+        if not proc_handle:
+            return False
+        with self._lock:
+            if self._closed or not self._job:
+                return False
+            job = self._job
+        try:
+            return bool(self._k32.AssignProcessToJobObject(job, proc_handle))
+        except Exception:
+            return False
+
+    def _pump(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        transferred = wintypes.DWORD(0)
+        comp_key = ctypes.c_size_t(0)
+        overlapped = ctypes.c_void_p(0)
+        state_ref = ctypes.byref(self._throttle_state)
+        state_size = ctypes.sizeof(self._throttle_state)
+        iocp = self._iocp
+        k32 = self._k32
+        set_proc_info = self._set_proc_info
+        while True:
+            try:
+                ok = k32.GetQueuedCompletionStatus(
+                    iocp,
+                    ctypes.byref(transferred),
+                    ctypes.byref(comp_key),
+                    ctypes.byref(overlapped),
+                    0xFFFFFFFF,
+                )
+            except Exception:
+                break
+            if not ok:
+                break
+            key = comp_key.value
+            if key == _JOB_STOP_KEY:
+                break
+            if key == _JOB_COMPLETION_KEY and transferred.value == JOB_OBJECT_MSG_NEW_PROCESS:
+                pid = overlapped.value
+                if pid:
+                    try:
+                        h = k32.OpenProcess(PROCESS_SET_INFORMATION, False, pid & 0xFFFFFFFF)
+                        if h:
+                            try:
+                                set_proc_info(h, PROCESS_POWER_THROTTLING, state_ref, state_size)
+                            finally:
+                                k32.CloseHandle(h)
+                    except Exception:
+                        pass
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            iocp = self._iocp
+            job = self._job
+            thread = self._thread
+        posted = False
+        if iocp:
+            try:
+                posted = bool(self._k32.PostQueuedCompletionStatus(iocp, 0, _JOB_STOP_KEY, None))
+            except Exception:
+                pass
+        if posted and thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        with self._lock:
+            iocp = self._iocp
+            job = self._job
+            self._iocp = None
+            self._job = None
+        if job:
+            try:
+                self._k32.CloseHandle(job)
+            except Exception:
+                pass
+        if iocp:
+            try:
+                self._k32.CloseHandle(iocp)
+            except Exception:
+                pass
+        if not posted and thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+
 def lift_qos_default() -> None:
     """Escape inherited E-core QoS / priority clamping on macOS and Windows.
 
@@ -1855,9 +2100,11 @@ def lift_qos_default() -> None:
     (PROCESS_POWER_THROTTLING_EXECUTION_SPEED) on the current process.
 
     A holder started under a throttled ancestor would otherwise pass that
-    clamp to every child it spawns and run them on efficiency cores. Threads
-    and children created after this call inherit the lifted state. Best
-    effort: any failure, and every other OS, is a no-op.
+    clamp to every child it spawns and run them on efficiency cores. On
+    Windows 11, PriorityClass inherits across CreateProcess while
+    ProcessPowerThrottling does not, so PipeChild and ConPtyChild also track
+    descendants through _WindowsDescendantQoSJob. Best effort: any failure,
+    and every other OS, is a no-op.
     """
     if sys.platform == "darwin":
         try:
