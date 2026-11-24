@@ -287,7 +287,6 @@ func (c *conv) handle(ev Event) {
 			c.syncHost(quiet)
 			c.changed(quiet)
 			if !quiet {
-				c.watched()
 				if n > 0 {
 					c.stopBgGrace()
 				} else if n == 0 && !c.turn {
@@ -300,6 +299,8 @@ func (c *conv) handle(ev Event) {
 						c.kickCompactionNudge()
 					}
 				}
+				c.refreshShellHold()
+				c.watched()
 			}
 		}
 	case ev.Alert != nil:

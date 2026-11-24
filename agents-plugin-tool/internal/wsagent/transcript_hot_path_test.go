@@ -189,7 +189,7 @@ func TestRefusedWakePersistsSendCoverageBeforeCrashRecovery(t *testing.T) {
 	}
 	clk.advance(3 * day)
 	checker := NewRunner(Options{Now: clk.Now, ChildWaitingDays: 2})
-	if expired := checker.expiredAtStart([]Record{rec}); len(expired) != 0 {
+	if expired := checker.expiredAtStart([]Record{rec}, nil); len(expired) != 0 {
 		t.Fatalf("crash recovery would delete unread input with child %v", expired)
 	}
 	held, err := wsinbox.Held(c.inbox)

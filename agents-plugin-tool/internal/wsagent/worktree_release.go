@@ -158,12 +158,17 @@ func (r *Runner) releasedBy(rec Record, checkouts []string, of func(string) chec
 	return ""
 }
 
-// loadReleasedCheckout resolves rec's checkouts and reports, from their
-// markers, the one whose release ended its binding: the load-time check of a
-// record with no conversation yet (a Pi child's resume).
-func (r *Runner) loadReleasedCheckout(rec Record) string {
+type resolvedAgentBinding struct {
+	root, cwd, released string
+	checkouts           []string
+}
+
+// resolveAgentBinding loads the paths and release evidence once per lifetime.
+// Startup reuses it for both reconciliation and serving wakeable records.
+func (r *Runner) resolveAgentBinding(rec Record) resolvedAgentBinding {
 	root, cwd := canonicalBinding(rec)
-	return r.releasedOnDisk(rec, resolveCheckouts(rec, root, cwd))
+	checkouts := resolveCheckouts(rec, root, cwd)
+	return resolvedAgentBinding{root: root, cwd: cwd, checkouts: checkouts, released: r.releasedOnDisk(rec, checkouts)}
 }
 
 // checkoutReleasedRefusal is the start refusal of a conversation whose
@@ -213,8 +218,9 @@ func (c *conv) noteReleased(checkout string) {
 		return
 	}
 	c.inputMu.Lock()
-	defer c.inputMu.Unlock()
 	c.setStatus(func() { c.releasedCheckout = checkout })
+	c.inputMu.Unlock()
+	c.watched()
 }
 
 // admitInput runs write, the step that hands a turn or a steer to the
@@ -276,9 +282,9 @@ type ReleasedConversation struct {
 // CheckoutReleased is worktree.release's notice, after it recorded worktree's
 // release marker at releasedAt (zero: read the marker, for a notice that does
 // not carry it). The runner keeps that release in memory, and every
-// non-closed spawned conversation bound to worktree before it is marked
-// released, so it takes no further input there even while its process
-// lives. With cancelTurns (a forced release by a root lead) each such
+// non-closed spawned conversation bound to worktree before it is closed,
+// so it takes no further input there even while its process lives. With
+// cancelTurns (a forced release by a root lead) each such
 // conversation's running turn is interrupted through the turn-cancellation
 // path; an interrupt error is reported, never answered by stopping the
 // process.
@@ -305,18 +311,27 @@ func (r *Runner) CheckoutReleased(worktree string, releasedAt time.Time, cancelT
 		}
 		c.noteReleased(target)
 		entry := ReleasedConversation{Address: AgentAddress(rec.ReplyID)}
-		if cancelTurns {
-			var cancelErr error
-			ran := c.do(func() {
+		var cancelErr, closeErr error
+		ran := c.do(func() {
+			if c.closed {
+				return
+			}
+			if cancelTurns {
 				entry.Cancelled, cancelErr = c.cancelTurn()
-			})
-			if !ran {
-				cancelErr = errClosed
+				if cancelErr != nil {
+					entry.Cancelled = false
+				}
 			}
-			if cancelErr != nil {
-				entry.Cancelled = false
-				entry.Error = cancelErr.Error()
-			}
+			closeErr = c.closeDeadBinding(checkoutReleasedRefusal(target))
+		})
+		if cancelErr != nil {
+			entry.Error = cancelErr.Error()
+		}
+		if closeErr != nil {
+			fmt.Fprintf(r.opts.Log, "agent %s: %v\n", rec.ReplyID, closeErr)
+		}
+		if ran && closeErr == nil {
+			r.releaseParent(rec.ReplyID)
 		}
 		entry.State = AgentStatus(c.memoryState())
 		out = append(out, entry)

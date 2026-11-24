@@ -209,7 +209,7 @@ func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
 		t.Fatalf("the report went out while the job ran: %+v", res)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if st := h.state(worker.ID); st.Status != StatusIdle {
+	if st := h.state(worker.ID); st.Status != StatusIdle || !st.Holding || !st.HoldingShell {
 		t.Fatalf("worker state %+v", st)
 	}
 	c := h.runner.conv(worker.ID)

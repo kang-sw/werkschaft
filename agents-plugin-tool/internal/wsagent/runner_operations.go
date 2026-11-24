@@ -80,6 +80,10 @@ func (r *Runner) Send(id, text string) (State, error) {
 }
 
 func (r *Runner) send(id, text string, operator bool) (State, error) {
+	return r.sendFrom(id, text, operator, "")
+}
+
+func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State, error) {
 	if strings.TrimSpace(text) == "" {
 		return State{}, badRequest("text is empty")
 	}
@@ -98,13 +102,19 @@ func (r *Runner) send(id, text string, operator bool) (State, error) {
 		c.mu.Unlock()
 		return State{}, err
 	}
-	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Operator: operator && c.rec.Lead}, r.opts.Now())
+	name, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Operator: operator && c.rec.Lead}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose
 		// drain counted this send holds its message (Wait). These rec
 		// stamps come from outside the loop, so the loop copies the whole
 		// record under mu (conv.record), never as a bare c.rec value.
 		c.sends++
+		if sender != "" {
+			if c.deliverySenders == nil {
+				c.deliverySenders = map[uint64]pendingDelivery{}
+			}
+			c.deliverySenders[c.sends] = pendingDelivery{name: name, sender: sender}
+		}
 		c.held++
 		c.rec.Sends = c.sends
 		c.cancelModelWaitBackoffForInput()

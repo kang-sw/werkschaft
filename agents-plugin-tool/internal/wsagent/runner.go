@@ -251,6 +251,9 @@ type Options struct {
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
 	WakeRefused func(from, id, reason string)
+	// WakeUndeliverable tells the sender when a permanent admission refusal
+	// closes the worker. Nil falls back to WakeRefused.
+	WakeUndeliverable func(from, id, reason string)
 	// CheckoutReleased, when not nil, tells the sender of a message for a
 	// spawned conversation whose checkout was released after it was bound
 	// (from: the sender's reply-id, id: the conversation, checkout: the
@@ -338,6 +341,9 @@ type Runner struct {
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
 	retiredPiBindings map[string]retiredPiBinding
+	// Closed dead children can still occupy their checkout while a process lives.
+	deadBindings map[string]deadBindingOccupancy
+	deadRefusals map[string]*admissionRefusal
 	// resumeMu serializes Pi child revival with close cascades without
 	// holding mu over store writes or conversation startup.
 	resumeMu sync.Mutex

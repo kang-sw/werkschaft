@@ -204,6 +204,13 @@ func (s *Server) deliverMailboxCopyAt(sessionKey string, entry sessionEntry, sen
 	if werr != nil {
 		return mailboxDelivery{}, werr
 	}
+	if addr.Kind == wsmailbox.AddressReplyID {
+		if runner, ok := s.agents.(interface{ DrainDeadBindingMail(string) }); ok {
+			// The close drains after publishing its dead binding. A send that
+			// commits after that drain gets the same notice through this path.
+			runner.DrainDeadBindingMail(addr.ReplyID)
+		}
+	}
 	return mailboxDelivery{from: from, replyTo: replyTo, history: sent[:len(historyNames)], historyNames: historyNames}, nil
 }
 

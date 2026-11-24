@@ -37,6 +37,40 @@ func mailboxLogin(t *testing.T, s *Server, id int, root string) string {
 	return key
 }
 
+type deadBindingMailboxHost struct {
+	AgentHost
+	drain func(string)
+}
+
+func (h deadBindingMailboxHost) DrainDeadBindingMail(id string) { h.drain(id) }
+
+func TestMailboxSendChecksDeadBindingAfterEnqueue(t *testing.T) {
+	setupMailboxTestEnv(t)
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key := mailboxLogin(t, s, 1, root)
+	replyID := wsmailbox.ReplyID(mailboxLogin(t, s, 2, root))
+	var calls int
+	s.agents = deadBindingMailboxHost{drain: func(id string) {
+		calls++
+		registry, err := s.mailboxPaths().Store().LoadReply()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending := registry.Queues[id]
+		if id != replyID || len(pending) != 1 || !strings.Contains(pending[0].Content, "check the queue") {
+			t.Fatalf("post-send check for %q saw %v", id, pending)
+		}
+	}}
+	resp := callToolWithKey(t, s, 3, key, "mailbox.send", map[string]any{
+		"to": wsmailbox.ReplyIDPrefix + replyID, "content": "check the queue",
+	})
+	if calls != 1 || !strings.Contains(resp, "sent to "+wsmailbox.ReplyIDPrefix+replyID) {
+		t.Fatalf("post-send check called %d times, response %s", calls, resp)
+	}
+}
+
 // TestMailboxInertByDefault verifies Decision 1's inert-by-default contract:
 // with neither WS_MAILBOX nor WS_MAILBOX_AUTO set, and the session having
 // neither sent nor self-looked-up, ordinary tool traffic gets no piggyback

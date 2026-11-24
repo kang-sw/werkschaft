@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -525,5 +526,49 @@ func TestHUDNodeCompactionState(t *testing.T) {
 	neg.Compactions = -4
 	if n := run(neg); n.Compactions != 0 {
 		t.Fatalf("negative count = %+v", n)
+	}
+}
+
+func TestHUDHoldingShellProjection(t *testing.T) {
+	now := time.UnixMilli(1_000_000)
+	for _, tc := range []struct {
+		name  string
+		agent wslive.Agent
+		state string
+		shell bool
+	}{
+		{"shell", wslive.Agent{Status: wslive.StatusDone, Holding: true, HoldingShell: true}, "holding", true},
+		{"children", wslive.Agent{Status: wslive.StatusDone, Holding: true}, "holding", false},
+		{"permission", wslive.Agent{Status: wslive.StatusDone, Holding: true, HoldingShell: true}, "permission", false},
+		{"running", wslive.Agent{Status: wslive.StatusRunning, Holding: true, HoldingShell: true}, "thinking", false},
+		{"failed", wslive.Agent{Status: wslive.StatusFailed, HoldingShell: true}, "failed", false},
+		{"idle", wslive.Agent{Status: wslive.StatusDone, HoldingShell: true, Alive: true}, "idle", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := tc.agent
+			a.ID = "child"
+			if tc.name == "permission" {
+				a.Permission = &wslive.Permission{}
+			}
+			v := buildSessionView(pageInputs{Session: liveSession("self", "/p", now), Snapshot: liveSnap(now, wslive.Lead{}, a), Now: now, Lookup: lookupOf(nil, nil)})
+			// Keep idle ancestors visible by giving them a live descendant.
+			if tc.state == "idle" {
+				v = buildSessionView(pageInputs{Session: liveSession("self", "/p", now), Snapshot: liveSnap(now, wslive.Lead{}, a, wslive.Agent{ID: "grandchild", ParentID: "child", Status: wslive.StatusRunning}), Now: now, Lookup: lookupOf(nil, nil)})
+			}
+			if len(v.Tree.HUD.Roots) != 1 {
+				t.Fatalf("roots = %+v", v.Tree.HUD.Roots)
+			}
+			n := v.Tree.HUD.Roots[0]
+			if n.State != tc.state || n.HoldingShell != tc.shell {
+				t.Fatalf("node = %+v", n)
+			}
+			raw, err := json.Marshal(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "\"holdingShell\"") != tc.shell {
+				t.Fatalf("optional flag: %s", raw)
+			}
+		})
 	}
 }

@@ -95,14 +95,10 @@ func (r *Runner) summaryOwner(replyID string) *conv {
 // list the first snapshot shows (lastCommands); a process's own list
 // replaces it.
 func (r *Runner) startConv(rec Record, seed []wslive.SlashCommand) *conv {
-	return r.startConvWith(rec, seed, false, nil, false)
+	return r.startConvWith(rec, seed, false, nil, nil)
 }
 
-func (r *Runner) startConvAtStartup(rec Record, seed []wslive.SlashCommand) *conv {
-	return r.startConvWith(rec, seed, false, nil, true)
-}
-
-func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPending bool, claimWidth func(), startupRestore bool) *conv {
+func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPending bool, claimWidth func(), loaded *resolvedAgentBinding) *conv {
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	c := &conv{
 		r:            r,
@@ -123,15 +119,14 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	// Its root and effective working directory never change after this:
 	// resolved once here, they serve every occupancy scan (boundConvs) from
 	// memory.
-	c.canonRoot, c.canonCwd = canonicalBinding(rec)
-	if releaseBound(rec) {
-		// The checkouts it is bound to are settled here, once, and whether
-		// a release already ended that binding is read from their markers
-		// before any mail claim or rejoin can ask, so those can answer from
-		// memory; a process start reads the markers again.
-		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
-		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
+	binding := resolvedAgentBinding{}
+	if loaded != nil {
+		binding = *loaded
+	} else {
+		binding = r.resolveAgentBinding(rec)
 	}
+	c.canonRoot, c.canonCwd = binding.root, binding.cwd
+	c.checkouts, c.releasedCheckout = binding.checkouts, binding.released
 	// Derived from the record's immutable backend on every load, with no
 	// stored field, and before any profile or config read.
 	refusal := r.admitWorkerRecord(rec)
@@ -143,7 +138,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			c.lastErr = appendDiagnostic(c.lastErr, "worker permission selection: "+err.Error())
 		}
 	}
-	if startupRestore && r.opts.RestoreBundle != nil {
+	if loaded != nil && r.opts.RestoreBundle != nil {
 		// Install the marker before the loop or any inbox/mail signal can
 		// kick. canKick's scan/replay gates then order delivery after holder
 		// reconciliation without admitting sessions spawned during the scan.

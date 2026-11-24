@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Thinking",
   "js.hud.state.tool": "Tool Call",
   "js.hud.state.holding": "Waiting Kids",
+  "js.hud.state.holding_shell": "Waiting for shell",
   "js.hud.state.idle": "Idle (alive)",
   "js.hud.state.permission": "Permission",
   "js.hud.state.failed": "Failed",
