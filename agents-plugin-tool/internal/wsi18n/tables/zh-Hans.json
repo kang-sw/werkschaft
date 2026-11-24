@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "任一智能体轮次运行期间阻止系统空闲睡眠（macOS 和 Windows）。屏幕关闭和合上盖子仍照常生效。",
   "js.settings.key.agent.git_search_roots.label": "额外的 Git 搜索目录",
   "js.settings.key.agent.git_search_roots.description": "托管智能体可通过 Git 搜索读取的绝对目录。",
+  "js.settings.key.compaction.lead_mode.label": "主会话压缩模式",
+  "js.settings.key.compaction.lead_mode.description": "选择托管主会话使用宿主原生压缩（native）还是由 ws 管理的检查点与会话轮换（ws）。",
   "js.settings.key.compaction.lead_advisory.label": "主会话压缩建议阈值",
   "js.settings.key.compaction.lead_advisory.description": "建议主会话在安全节点压缩的上下文用量。",
   "js.settings.key.compaction.lead_hard.label": "主会话强制压缩阈值",

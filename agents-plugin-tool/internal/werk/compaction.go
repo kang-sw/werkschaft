@@ -6,24 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
-const dialogBytes = 40 << 10
+const dialogBytes = wscompact.DialogBytes
 
 // CompactionState describes current scheduler state supplied by the owner at
 // the quiescent boundary. Entries are text pointers to durable records.
-type CompactionState struct {
-	ChildrenInFlight []string
-	ChildrenFinished []string
-	ExecJobs         []string
-}
+type CompactionState = wscompact.CompactionState
 
 type checkpointLine struct {
 	K        string `json:"k"`
@@ -192,8 +186,8 @@ type compactArchive struct {
 	playbook string
 }
 
-var ticketRefRE = regexp.MustCompile(`ai-docs/tickets/[A-Za-z._-]+/[0-9]{6}-[a-z0-9][a-z0-9-]*\.md|\b[0-9]{6}-[a-z]+-[a-z0-9][a-z0-9-]*\b`)
-var skillRE = regexp.MustCompile(`^<skill name="([^"]+)"`)
+var ticketRefRE = wscompact.TicketRefRE
+var skillRE = wscompact.SkillRE
 
 func (a *compactArchive) observe(raw json.RawMessage) {
 	if a == nil {
@@ -278,11 +272,8 @@ func (a *compactArchive) observeCall(name, raw string) {
 }
 
 func (a *compactArchive) notePlaybook(name string) {
-	if _, suffix, found := strings.Cut(name, ":"); found {
-		name = suffix
-	}
-	if name != "" && name != "lead-revive" {
-		a.playbook = boundedText(Scrub(name), 128)
+	if pb := wscompact.NormalizePlaybook(name); pb != "" {
+		a.playbook = pb
 	}
 }
 
@@ -292,52 +283,19 @@ func (a *compactArchive) dialog(path string) string {
 }
 
 func (a *compactArchive) summary(state CompactionState, prose []string, dialog string, lead bool, rereads string) string {
-	var out strings.Builder
-	role := "worker"
-	if lead {
-		role = "lead"
-	}
-	fmt.Fprintf(&out, "Compacted %s conversation. Use the ticket and ws tooling for durable state.\n\n## Session", role)
-	ticket, playbook := a.ticket, a.playbook
-	if ticket == "" {
-		ticket = "(none recorded)"
-	}
-	if a.phase != "" {
-		ticket += ", phase " + boundedText(Scrub(a.phase), 128)
-	}
-	if playbook == "" {
-		playbook = "(none recorded)"
-	}
-	fmt.Fprintf(&out, "\n- Active ticket: %s\n- Active playbook: %s\n", ticket, playbook)
-	for i, field := range wscompact.ProseFields() {
-		fmt.Fprintf(&out, "\n## %s\n%s\n", field.Heading, prose[i])
-	}
-	writeCompactSection(&out, "Child agents in flight", state.ChildrenInFlight)
-	writeCompactSection(&out, "Child agents finished since the previous compaction", state.ChildrenFinished)
-	writeCompactSection(&out, "Exec jobs", state.ExecJobs)
-	out.WriteString(rereads)
-	out.WriteString("\n")
-	out.WriteString(dialog)
-	return out.String()
-}
-
-func writeCompactSection(out *strings.Builder, heading string, entries []string) {
-	fmt.Fprintf(out, "\n## %s\n", heading)
-	if len(entries) == 0 {
-		out.WriteString("(none)\n")
-	}
-	for _, entry := range entries[:min(len(entries), 32)] {
-		fmt.Fprintf(out, "- %s\n", boundedText(Scrub(entry), 256))
-	}
+	return wscompact.BuildCheckpoint(wscompact.CheckpointInput{
+		Lead:     lead,
+		Ticket:   a.ticket,
+		Phase:    a.phase,
+		Playbook: a.playbook,
+		State:    state,
+		Prose:    prose,
+		Rereads:  rereads,
+		Dialog:   dialog,
+		Secrets:  a.secrets,
+	})
 }
 
 func boundedText(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	text = text[:limit-len("…")]
-	for !utf8.ValidString(text) {
-		text = text[:len(text)-1]
-	}
-	return text + "…"
+	return wscompact.BoundedText(text, limit)
 }

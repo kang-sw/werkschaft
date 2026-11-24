@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Evita la suspensión por inactividad mientras se ejecuta un turno de agente (macOS y Windows). El apagado de pantalla y cerrar la tapa siguen aplicándose.",
   "js.settings.key.agent.git_search_roots.label": "Rutas adicionales de búsqueda Git",
   "js.settings.key.agent.git_search_roots.description": "Directorios absolutos que los agentes alojados pueden leer mediante búsquedas Git.",
+  "js.settings.key.compaction.lead_mode.label": "Modo de compactación del responsable",
+  "js.settings.key.compaction.lead_mode.description": "Define si los responsables alojados usan la compactación nativa del entorno (native) o puntos de control y rotación de sesión gestionados por ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Umbral de aviso de compactación del responsable",
   "js.settings.key.compaction.lead_advisory.description": "Uso de contexto a partir del cual se recomienda compactar en un punto seguro.",
   "js.settings.key.compaction.lead_hard.label": "Umbral forzado de compactación del responsable",

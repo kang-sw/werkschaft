@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Empêche la mise en veille pour inactivité tant qu'un tour d'agent s'exécute (macOS et Windows). La veille de l'écran et la fermeture du capot s'appliquent toujours.",
   "js.settings.key.agent.git_search_roots.label": "Chemins supplémentaires de recherche Git",
   "js.settings.key.agent.git_search_roots.description": "Répertoires absolus accessibles aux agents hébergés via la recherche Git.",
+  "js.settings.key.compaction.lead_mode.label": "Mode de compactage du responsable",
+  "js.settings.key.compaction.lead_mode.description": "Détermine si les responsables hébergés utilisent le compactage natif du harnais (native) ou les points de contrôle et la rotation de session gérés par ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Seuil d’avis de compactage du responsable",
   "js.settings.key.compaction.lead_advisory.description": "Utilisation du contexte à partir de laquelle un compactage est conseillé à un point sûr.",
   "js.settings.key.compaction.lead_hard.label": "Seuil de compactage forcé du responsable",

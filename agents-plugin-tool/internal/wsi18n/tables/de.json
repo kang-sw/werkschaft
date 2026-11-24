@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Verhindert den Ruhezustand bei Inaktivität, solange ein Agenten-Turn läuft (macOS und Windows). Bildschirm-Ruhezustand und Zuklappen gelten weiter.",
   "js.settings.key.agent.git_search_roots.label": "Zusätzliche Git-Suchpfade",
   "js.settings.key.agent.git_search_roots.description": "Absolute Verzeichnisse, die gehostete Agenten bei der Git-Suche lesen dürfen.",
+  "js.settings.key.compaction.lead_mode.label": "Lead-Kompaktierungsmodus",
+  "js.settings.key.compaction.lead_mode.description": "Legt fest, ob gehostete Leads die native Kompaktierung des Harness (native) oder von ws verwaltete Checkpoints mit Sitzungsrotation (ws) nutzen.",
   "js.settings.key.compaction.lead_advisory.label": "Schwelle für Lead-Kompaktierungshinweis",
   "js.settings.key.compaction.lead_advisory.description": "Kontextverbrauch, ab dem dem Lead eine Kompaktierung an einem sicheren Übergang empfohlen wird.",
   "js.settings.key.compaction.lead_hard.label": "Schwelle für erzwungene Lead-Kompaktierung",

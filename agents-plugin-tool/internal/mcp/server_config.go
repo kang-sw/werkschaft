@@ -447,6 +447,23 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		Current:     currentWorkflowPreference(resolver, sessionKey, tierAliasesEntry.Key),
 	})
 
+	{
+		entry := registryEntryByKey(wsconfig.ItemCompactionLeadMode)
+		rv, _, _ := resolveCompactionValue(resolver, sessionKey, entry.Key, harness, registries...)
+		def := wsconfig.CompactionDefaults[entry.Key]
+		appendKnob(entry, tuningKnob{
+			ID:             entry.Key,
+			Kind:           "workflow_preference",
+			Description:    "Hosted lead compaction mode: native uses the harness's built-in compaction; ws uses ws-managed checkpoints and native session rotation. Backends without native compaction always run ws.",
+			Writer:         tuningWriter{Tool: "config.tune", FixedArguments: map[string]string{"key": entry.Key}},
+			Reset:          &tuningWriter{Tool: "config.tune", FixedArguments: map[string]string{"key": entry.Key, "reset": "true"}},
+			SelectorFields: entry.SelectorFields,
+			ValueFields:    entry.ValueFields,
+			Current:        tuningScopedValue{Value: rv.Value, Scope: string(rv.Scope)},
+			Default:        &def,
+		})
+	}
+
 	for _, key := range []string{"compaction.lead_advisory", "compaction.lead_hard", "compaction.worker_advisory", "compaction.worker_hard"} {
 		entry := registryEntryByKey(key)
 		rv, _, _ := resolveCompactionValue(resolver, sessionKey, key, harness, registries...)

@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "에이전트 턴이 도는 동안 유휴 시스템 절전을 막습니다(macOS, Windows). 화면 꺼짐과 덮개 닫기는 그대로 적용됩니다.",
   "js.settings.key.agent.git_search_roots.label": "git.search 추가 검색 경로",
   "js.settings.key.agent.git_search_roots.description": "호스팅 에이전트의 읽기 전용 git.search가 최근 세션 루트 외에 추가로 읽을 수 있는 절대 디렉터리 목록.",
+  "js.settings.key.compaction.lead_mode.label": "리드 컴팩션 모드",
+  "js.settings.key.compaction.lead_mode.description": "호스트된 리드 세션이 하네스 기본 컴팩션(native)을 사용할지, ws 관리 체크포인트와 세션 회전(ws)을 사용할지 선택합니다.",
   "js.settings.key.compaction.lead_advisory.label": "리드 컴팩션 권고 임계치",
   "js.settings.key.compaction.lead_advisory.description": "리드 세션이 다음 안전한 경계에서 compact 호출을 권고받는 컨텍스트 사용량(퍼센트, 토큰, 또는 | 조합).",
   "js.settings.key.compaction.lead_hard.label": "리드 강제 컴팩션 임계치",

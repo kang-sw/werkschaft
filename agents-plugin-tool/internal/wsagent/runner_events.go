@@ -436,7 +436,21 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		c.clearCompactionSteerReplies()
 		c.compactContinueAtIdle = turnErr == "" && c.summaryReason != wslive.TurnAborted
 		c.compactIdleInternal = c.compactInternalTurn
-		c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+		if c.compactStage1Active {
+			resume, internal, auto, usageLimited := c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited
+			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+			if c.compactPending != nil {
+				// Lead queued ws/compact during Stage 1; kick() below runs it.
+			} else if usageLimited {
+				// Quota exhausted during Stage 1: suppress immediate Stage 2
+				// native /compact so quota continuation can recover cleanly.
+			} else if c.proc != nil {
+				c.compactPending = &compactRequest{resume: resume, internal: internal, auto: auto, crossing: auto}
+				c.publishCompaction(false)
+			}
+		} else {
+			c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+		}
 	}
 	// Observers must see the terminal diagnostic in the same emission as
 	// the settled lifecycle, including mapped Pi agent_settled failures.
@@ -746,6 +760,7 @@ func (c *conv) processExited() {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
@@ -963,6 +978,7 @@ func (c *conv) stopProcess(reason string) {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false

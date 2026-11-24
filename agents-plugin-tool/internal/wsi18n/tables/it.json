@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "Impedisce la sospensione per inattività mentre è in corso un turno di agente (macOS e Windows). Lo spegnimento dello schermo e la chiusura del coperchio restano validi.",
   "js.settings.key.agent.git_search_roots.label": "Percorsi aggiuntivi di ricerca Git",
   "js.settings.key.agent.git_search_roots.description": "Directory assolute leggibili dagli agenti ospitati tramite la ricerca Git.",
+  "js.settings.key.compaction.lead_mode.label": "Modalità di compattazione del responsabile",
+  "js.settings.key.compaction.lead_mode.description": "Sceglie se i responsabili ospitati usano la compattazione nativa dell'harness (native) o checkpoint e rotazione di sessione gestiti da ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Soglia di avviso di compattazione del responsabile",
   "js.settings.key.compaction.lead_advisory.description": "Uso del contesto oltre il quale si consiglia di compattare a un punto sicuro.",
   "js.settings.key.compaction.lead_hard.label": "Soglia di compattazione forzata del responsabile",

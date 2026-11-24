@@ -3097,6 +3097,8 @@
   "js.settings.key.agent.keep_awake_during_turns.description": "任一代理程式回合執行期間防止系統閒置睡眠（macOS 與 Windows）。螢幕關閉與闔上上蓋仍照常生效。",
   "js.settings.key.agent.git_search_roots.label": "額外的 Git 搜尋目錄",
   "js.settings.key.agent.git_search_roots.description": "託管代理程式可透過 Git 搜尋讀取的絕對目錄。",
+  "js.settings.key.compaction.lead_mode.label": "主工作階段壓縮模式",
+  "js.settings.key.compaction.lead_mode.description": "選擇託管主工作階段使用宿主原生壓縮（native）或由 ws 管理的檢查點與工作階段輪換（ws）。",
   "js.settings.key.compaction.lead_advisory.label": "主工作階段壓縮建議臨界值",
   "js.settings.key.compaction.lead_advisory.description": "建議主工作階段在安全節點壓縮的內容用量。",
   "js.settings.key.compaction.lead_hard.label": "主工作階段強制壓縮臨界值",
