@@ -507,7 +507,14 @@
       }
     },
     "261124-feat-ws-managed-compaction": {
-      "registered_at": "2026-11-24T05:12:49Z"
+      "registered_at": "2026-11-24T05:12:49Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-24T15:31:43Z"
+      }
     },
     "261124-refactor-remove-terminal-handoff": {
       "registered_at": "2026-11-24T07:52:19Z"
