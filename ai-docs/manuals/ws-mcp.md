@@ -884,17 +884,30 @@ retired.
 Before retiring a Pi record, 0.52 commits a copy to
 `<daemon state>/retired-pi-history/<reply-id>/`. It preserves `agent.json`
 and, when present, `registration.json`, `snapshot.json`, `ring/`, and the
-daemon-owned `pi/session.jsonl`. The archived JSONL keeps later appends via
-a hard link where supported. Otherwise it holds the retirement-time bytes.
+daemon-owned `pi/session.jsonl`. On startup, 0.52 refreshes changed archives
+from surviving sessions, keeping a complete copy recoverable during refresh.
+The archived JSONL also keeps later appends through a hard link where
+supported. Other filesystems keep a copy from the last archive snapshot.
 
-If you roll back with a matching v0.51.2 plugin and daemon, its registry
-pruner walks `sessions/` only and can remove an aged, closed Pi directory
-(v0.51.2 `internal/wsdashboard/registry.go:386–425,471–472`). At startup,
-0.52 restores a missing `sessions/<reply-id>/` from the archive and applies
-retirement again to restored open metadata. An existing partial session
-directory needs manual recovery from the archive. Both directories are
-exempt from the 0.52 seven-day sweep. An explicit 0.52 history purge removes
-both.
+During a matched v0.51.2 rollback, the old pruner walks only `sessions/`
+and can remove aged, retired sessions that lack a terminal owner (v0.51.2
+`internal/wsdashboard/registry.go:386–425,461–472`). On return, 0.52 can
+recover the Pi history it last saw before rollback. History written by
+v0.51.2 during rollback follows v0.51.2 retention. On startup, 0.52 restores
+missing session directories from the archive and retires restored open
+metadata again. Recover an existing partial session directory manually from
+the archive, or explicitly purge it. The 0.52 seven-day sweep leaves
+retired Pi session directories and archives in place.
+
+When you delete a checkout from the dashboard, 0.52 commits pending Pi
+history deletions before removing their archives and running
+`git worktree remove`. If archive removal fails, the dashboard returns
+HTTP 503. Retry deletion on the same checkout, even if its session row has
+disappeared. Startup honors the committed deletion and skips restoring or
+refreshing that archive. If Git fails after archive removal, the live
+session directory and pending deletion stay available for retry. Successful
+purge removes the live session directory and clears the pending state once
+both copies are gone.
 
 #### Worker mail and delegation
 
