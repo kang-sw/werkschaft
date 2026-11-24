@@ -103,9 +103,9 @@ type composerFixture struct {
 	svc *composerFake
 }
 
-func startComposerFixture(t *testing.T) *composerFixture {
+func startComposerFixture(t *testing.T, options ...func(*DaemonOptions)) *composerFixture {
 	t.Helper()
-	f := startPageFixture(t)
+	f := startPageFixture(t, options...)
 	reg, err := ReadRegistration(f.dir, "livesession")
 	if err != nil {
 		t.Fatal(err)

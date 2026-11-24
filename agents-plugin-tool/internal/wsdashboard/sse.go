@@ -806,10 +806,7 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		}
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no")
-	sink := &sseSink{w: w, rc: http.NewResponseController(w), flusher: flusher, timeout: wsWriteTimeout, done: r.Context().Done()}
+	sink := newSSESink(w, r, flusher)
 	// A deadline left on the connection would cut the next response of a
 	// reused keep-alive connection: the server sets none of its own.
 	defer func() { _ = sink.rc.SetWriteDeadline(time.Time{}) }()
@@ -898,6 +895,13 @@ type sseSink struct {
 	flusher http.Flusher
 	timeout time.Duration
 	done    <-chan struct{}
+}
+
+func newSSESink(w http.ResponseWriter, r *http.Request, flusher http.Flusher) *sseSink {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	return &sseSink{w: w, rc: http.NewResponseController(w), flusher: flusher, timeout: wsWriteTimeout, done: r.Context().Done()}
 }
 
 // arm sets the write deadline for the next write. A writer without deadline

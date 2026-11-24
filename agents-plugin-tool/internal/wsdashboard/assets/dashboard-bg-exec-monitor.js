@@ -3,6 +3,7 @@
 // from the user-spawned `!` exec HUD (.xgroup / /exec/jobs). Zero network
 // requests and zero timers while closed.
   var BG_TAIL_BYTES = 16384, BG_MAX_LINES = 800, BG_POLL_MIN = 500, BG_POLL_MAX = 2500;
+  var bgUTF8 = new TextEncoder();
   var bgSt = {
     open: false,
     loading: false,
@@ -20,9 +21,11 @@
     rev: -1
   };
   var bgPop = null, bgListEl = null, bgDockEl = null, bgTailEl = null, bgTailFootEl = null;
+  var bgRows = new Map(), bgListDivider = null, bgListEmpty = null;
+  var bgDockJob = "", bgDockHead = null, bgDockMeta = null, bgDockMetaKey = "";
   var bgSplitEl = null, bgCountsEl = null, bgStopBtn = null, bgStopHold = null;
-  var bgListFetching = false, bgListDirty = false, bgListAC = null;
-  var bgTailState = null, bgTailTimer = 0, bgTailGen = 0, bgTailAC = null;
+  var bgListRequest = null, bgListDirty = false;
+  var bgTailState = null, bgTailTimer = 0, bgTailAC = null;
   var bgTickTimer = 0, bgCopyTimer = 0;
 
   function bgExecOpen() { return bgSt.open; }
@@ -177,14 +180,13 @@
     function bgOnVisibility() {
       if (!bgSt.open) return;
       if (bgPageHidden()) {
+        if (bgListRequest) { bgListDirty = true; bgAbortList(); }
         bgStopTick();
-        clearTimeout(bgTailTimer);
-        bgTailTimer = 0;
-        if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
-        if (bgTailState) bgTailState.busy = false;
+        bgTailPause();
       } else {
+        if (bgListDirty) bgExecFetchList();
         bgSyncTick();
-        if (bgTailState && !bgTailState.drained && !bgTailState.busy) bgTailSchedule(0);
+        bgTailSchedule(0);
       }
     }
     doc.addEventListener("visibilitychange", bgOnVisibility);
@@ -235,10 +237,10 @@
     bgSt.open = false;
     bgStopTick();
     bgTailStop();
-    if (bgListAC) { try { bgListAC.abort(); } catch (e) {} bgListAC = null; }
-    bgListFetching = false;
+    bgAbortList();
     bgListDirty = false;
-    if (bgStopHold) { bgStopHold.destroy(); bgStopHold = null; }
+    bgClearStop();
+    bgDockJob = "";
     clearTimeout(bgCopyTimer);
     bgCopyTimer = 0;
     if (bgPop) bgPop.hidden = true;
@@ -278,22 +280,27 @@
     bgExecFetchList();
   }
 
+  function bgAbortList() {
+    var request = bgListRequest;
+    bgListRequest = null;
+    if (request && request.controller) request.controller.abort();
+  }
+
   function bgExecFetchList() {
     if (!bgSt.open || !rid) return;
-    if (bgListFetching) { bgListDirty = true; return; }
-    bgListFetching = true;
+    if (bgPageHidden() || bgListRequest) { bgListDirty = true; return; }
     bgListDirty = false;
-    var ac = window.AbortController ? new AbortController() : null;
-    bgListAC = ac;
+    var request = { controller: window.AbortController ? new AbortController() : null };
+    bgListRequest = request;
     var opts = { credentials: "same-origin", cache: "no-store" };
-    if (ac) opts.signal = ac.signal;
+    if (request.controller) opts.signal = request.controller.signal;
     fetch("/s/" + rid + "/exec/bg/jobs", opts).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (data) {
-      if (bgListAC === ac) bgListAC = null;
-      bgListFetching = false;
-      if (!bgSt.open) return;
+      if (bgListRequest !== request) return;
+      bgListRequest = null;
+      if (bgPageHidden()) { bgListDirty = true; return; }
       bgSt.loading = false;
       bgSt.error = false;
       bgSt.rev = typeof data.rev === "number" ? data.rev : bgSt.rev;
@@ -330,13 +337,15 @@
       }
       if (bgListDirty && bgSt.open) bgExecFetchList();
     }, function (err) {
-      if (bgListAC === ac) bgListAC = null;
-      bgListFetching = false;
-      if (!bgSt.open || (err && err.name === "AbortError")) return;
+      if (bgListRequest !== request) return;
+      bgListRequest = null;
+      if (bgPageHidden()) { bgListDirty = true; return; }
+      if (err && err.name === "AbortError") return;
       bgSt.loading = false;
       bgSt.error = true;
       bgRenderAll();
       bgPosition();
+      if (bgListDirty) bgExecFetchList();
     });
   }
 
@@ -370,6 +379,9 @@
 
   function bgRenderHeader() {
     if (!bgSplitEl || !bgCountsEl) return;
+    var key = [bgSt.selfRunning, bgSt.descRunning, bgSt.totalRunning, bgSt.totalFinished].join("/");
+    if (bgCountsEl.bgKey === key) return;
+    bgCountsEl.bgKey = key;
     if (bgSt.descRunning > 0) {
       bgSplitEl.hidden = false;
       bgSplitEl.textContent = wsT("js.bgexec.split", String(bgSt.selfRunning), String(bgSt.descRunning));
@@ -388,164 +400,208 @@
 
   function bgRenderList() {
     if (!bgListEl) return;
-    bgListEl.textContent = "";
-    if (bgSt.loading && !bgSt.jobs.length) {
-      bgListEl.appendChild(bgEl("div", "bgp-empty", wsT("js.bgexec.loading")));
-      return;
-    }
-    if (bgSt.error && !bgSt.jobs.length) {
-      bgListEl.appendChild(bgEl("div", "bgp-empty is-err", wsT("js.bgexec.error")));
-      return;
-    }
+    bgRows.forEach(function (row, id) {
+      if (bgSt.byId[id]) return;
+      row.remove();
+      bgRows.delete(id);
+    });
     if (!bgSt.jobs.length) {
-      bgListEl.appendChild(bgEl("div", "bgp-empty", wsT("js.bgexec.empty")));
+      if (bgListDivider) bgListDivider.remove();
+      var emptyKey = bgSt.loading ? "loading" : (bgSt.error ? "error" : "empty");
+      if (bgListEmpty && bgListEmpty.bgKey === emptyKey) return;
+      if (bgListEmpty) bgListEmpty.remove();
+      bgListEmpty = bgEl("div", "bgp-empty" + (bgSt.error ? " is-err" : ""), wsT("js.bgexec." + emptyKey));
+      bgListEmpty.bgKey = emptyKey;
+      bgListEl.appendChild(bgListEmpty);
       return;
     }
-    var now = Date.now(), hadRun = false, addedDiv = false;
-    var frag = doc.createDocumentFragment();
+    if (bgListEmpty) { bgListEmpty.remove(); bgListEmpty = null; }
+    var now = Date.now(), hadRun = false, hasDivider = false;
+    var next = bgListEl.firstChild, focused = doc.activeElement;
+    function place(node) {
+      if (node !== next) bgListEl.insertBefore(node, next);
+      next = node.nextSibling;
+    }
     bgSt.jobs.forEach(function (j) {
       var running = j.state === "running";
       if (running) hadRun = true;
-      if (!running && hadRun && !addedDiv) {
-        addedDiv = true;
-        frag.appendChild(bgEl("div", "bgp-div", wsT("js.bgexec.recent")));
+      if (!running && hadRun && !hasDivider) {
+        hasDivider = true;
+        if (!bgListDivider) bgListDivider = bgEl("div", "bgp-div", wsT("js.bgexec.recent"));
+        place(bgListDivider);
       }
       var selected = j.id === bgSt.selId;
-      var row = bgEl("button", "bgp-row" + (selected ? " is-selected" : "") + (!running ? " is-done" : ""));
-      row.type = "button";
-      row.setAttribute("role", "option");
-      row.setAttribute("aria-selected", selected ? "true" : "false");
-      row.setAttribute("data-bg-id", j.id);
-
-      row.appendChild(bgEl("span", "bgp-dot " + bgDotClass(j)));
-
-      var main = bgEl("div", "bgp-main");
-      var cmd = bgEl("span", "bgp-cmd", j.command || j.tool || j.id);
-      cmd.title = j.command || j.id;
-      main.appendChild(cmd);
-
-      var sub = bgEl("span", "bgp-sub");
-      var own = bgOwnerParts(j);
-      var dep = bgEl("span", "bgp-depth" + (own.depth === 0 ? " is-self" : ""), own.badge);
-      dep.title = own.full;
-      sub.appendChild(dep);
-      if (own.crumb) {
-        var anc = bgEl("span", "bgp-anc", own.crumb);
-        anc.title = own.full;
-        sub.appendChild(anc);
+      var row = bgRows.get(j.id);
+      if (!row) {
+        row = bgEl("button", "bgp-row");
+        row.type = "button";
+        row.setAttribute("role", "option");
+        row.setAttribute("data-bg-id", j.id);
+        bgRows.set(j.id, row);
       }
-      if (j.cwd) {
-        var cwdEl = bgEl("span", "bgp-cwd", (own.crumb ? "\u00b7 " : "") + bgShortCwd(j.cwd));
-        cwdEl.title = j.cwd;
-        sub.appendChild(cwdEl);
+      var flag = selected ? "true" : "false";
+      if (row.getAttribute("aria-selected") !== flag) {
+        row.setAttribute("aria-selected", flag);
+        row.classList.toggle("is-selected", selected);
       }
-      main.appendChild(sub);
-      row.appendChild(main);
-
-      var right;
-      if (running) {
-        right = bgEl("span", "bgp-el", j.started_at ? bgFmtElapsed(now - j.started_at) : "0s");
-        if (j.started_at) right.setAttribute("data-bg-since", String(j.started_at));
-      } else {
-        var st = bgJobState(j);
-        var txt = st === "ok" ? "0" : (st === "failed" && j.exit_code != null ? String(j.exit_code) : bgStateText(j));
-        right = bgEl("span", "bgp-el is-st " + bgDotClass(j), txt);
-        right.title = bgStateText(j);
-      }
-      row.appendChild(right);
-      frag.appendChild(row);
+      bgRenderRow(row, j, now);
+      place(row);
     });
-    bgListEl.appendChild(frag);
+    if (!hasDivider && bgListDivider) bgListDivider.remove();
+    if (bgListEl.contains(focused) && focused !== doc.activeElement) focused.focus({ preventScroll: true });
+  }
+
+  function bgRenderRow(row, j, now) {
+    var running = j.state === "running";
+    var own = bgOwnerParts(j);
+    var key = JSON.stringify([j.command, j.tool, j.cwd, own.full, own.crumb, j.started_at, bgStateText(j), bgDotClass(j), j.exit_code]);
+    if (row.bgKey === key) return;
+    row.bgKey = key;
+    row.classList.toggle("is-done", !running);
+    row.textContent = "";
+    row.appendChild(bgEl("span", "bgp-dot " + bgDotClass(j)));
+
+    var main = bgEl("div", "bgp-main");
+    var cmd = bgEl("span", "bgp-cmd", j.command || j.tool || j.id);
+    cmd.title = j.command || j.id;
+    main.appendChild(cmd);
+
+    var sub = bgEl("span", "bgp-sub");
+    var dep = bgEl("span", "bgp-depth" + (own.depth === 0 ? " is-self" : ""), own.badge);
+    dep.title = own.full;
+    sub.appendChild(dep);
+    if (own.crumb) {
+      var anc = bgEl("span", "bgp-anc", own.crumb);
+      anc.title = own.full;
+      sub.appendChild(anc);
+    }
+    if (j.cwd) {
+      var cwdEl = bgEl("span", "bgp-cwd", (own.crumb ? "\u00b7 " : "") + bgShortCwd(j.cwd));
+      cwdEl.title = j.cwd;
+      sub.appendChild(cwdEl);
+    }
+    main.appendChild(sub);
+    row.appendChild(main);
+
+    var right;
+    if (running) {
+      right = bgEl("span", "bgp-el", j.started_at ? bgFmtElapsed(now - j.started_at) : "0s");
+      if (j.started_at) right.setAttribute("data-bg-since", String(j.started_at));
+    } else {
+      var st = bgJobState(j);
+      var txt = st === "ok" ? "0" : (st === "failed" && j.exit_code != null ? String(j.exit_code) : bgStateText(j));
+      right = bgEl("span", "bgp-el is-st " + bgDotClass(j), txt);
+      right.title = bgStateText(j);
+    }
+    row.appendChild(right);
+  }
+
+  function bgCopyText(command) {
+    var lines = bgTailEl && bgTailEl.querySelectorAll(".bgp-line");
+    if (!lines || !lines.length) return command;
+    var text = Array.prototype.map.call(lines, function (line) { return line.textContent; }).join("\n");
+    return lines[lines.length - 1].bgEndsLine ? text + "\n" : text;
+  }
+
+  function bgClearStop() {
+    if (bgStopHold) { bgStopHold.destroy(); bgStopHold = null; }
+    if (bgStopBtn) { bgStopBtn.remove(); bgStopBtn = null; }
   }
 
   function bgRenderDock() {
     if (!bgDockEl) return;
     var j = bgSt.byId[bgSt.selId];
-    if (!j) {
-      if (bgStopHold) { bgStopHold.destroy(); bgStopHold = null; }
-      bgStopBtn = null;
-      bgDockEl.hidden = true;
-      return;
+    if (!j || j.id !== bgDockJob) {
+      bgClearStop();
+      bgDockEl.textContent = "";
+      bgDockJob = j ? j.id : "";
+      bgDockHead = bgDockMeta = bgTailEl = bgTailFootEl = null;
+      bgDockMetaKey = "";
     }
-    bgDockEl.hidden = false;
-    var sameTail = bgTailEl && bgTailState && bgTailState.id === j.id;
-    var prevTail = sameTail ? bgTailEl : null;
+    bgDockEl.hidden = !j;
+    if (!j) return;
 
-    if (bgStopHold) { bgStopHold.destroy(); bgStopHold = null; }
-    bgStopBtn = null;
-
-    Array.prototype.slice.call(bgDockEl.children).forEach(function (ch) {
-      if (ch !== prevTail) bgDockEl.removeChild(ch);
-    });
-
-    var anchor = prevTail || null;
-    function addBeforeTail(node) {
-      if (anchor) bgDockEl.insertBefore(node, anchor);
-      else bgDockEl.appendChild(node);
+    var command = j.command || j.id;
+    if (!bgDockHead) {
+      bgDockHead = bgEl("div", "bgp-dock-hd");
+      bgDockHead.appendChild(bgEl("span", "bgp-dot"));
+      bgDockHead.appendChild(bgEl("span", "bgp-dock-cmd"));
+      var copyBtn = bgEl("button", "bgp-act", wsT("js.bgexec.copy"));
+      copyBtn.type = "button";
+      copyBtn.addEventListener("click", function () {
+        var current = bgSt.byId[bgDockJob];
+        var text = bgCopyText(current && current.command || "");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            if (!bgSt.open || !copyBtn.isConnected) return;
+            copyBtn.textContent = wsT("js.bgexec.copied");
+            clearTimeout(bgCopyTimer);
+            bgCopyTimer = setTimeout(function () { copyBtn.textContent = wsT("js.bgexec.copy"); }, 1400);
+          }, function () {});
+        }
+      });
+      bgDockHead.appendChild(copyBtn);
+      bgDockEl.appendChild(bgDockHead);
     }
-
-    // Dock header: status dot + full command + copy + hold-to-stop
-    var dhd = bgEl("div", "bgp-dock-hd");
-    dhd.appendChild(bgEl("span", "bgp-dot " + bgDotClass(j)));
-    var dcmd = bgEl("span", "bgp-dock-cmd", j.command || j.id);
-    dcmd.title = j.command || j.id;
-    dhd.appendChild(dcmd);
-
-    var copyBtn = bgEl("button", "bgp-act", wsT("js.bgexec.copy"));
-    copyBtn.type = "button";
-    copyBtn.addEventListener("click", function () {
-      var text = (bgTailEl && bgTailEl.textContent && !bgTailEl.querySelector(".bgp-tail-empty")) ? bgTailEl.textContent : (j.command || "");
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function () {
-          copyBtn.textContent = wsT("js.bgexec.copied");
-          clearTimeout(bgCopyTimer);
-          bgCopyTimer = setTimeout(function () { copyBtn.textContent = wsT("js.bgexec.copy"); }, 1400);
-        }, function () {});
-      }
-    });
-    dhd.appendChild(copyBtn);
+    var dot = bgDockHead.firstChild, dcmd = dot.nextSibling;
+    var dotClass = "bgp-dot " + bgDotClass(j);
+    if (dot.className !== dotClass) dot.className = dotClass;
+    if (dcmd.title !== command) { dcmd.textContent = command; dcmd.title = command; }
 
     if (j.state === "running" && bgSt.canControl) {
       var stopping = !!bgSt.stopping[j.id];
-      var sbtn = bgEl("button", "bgp-stop" + (stopping ? " is-busy" : ""));
-      sbtn.type = "button";
-      sbtn.disabled = stopping;
-      sbtn.setAttribute("data-bg-stop", j.id);
-      sbtn.setAttribute("aria-label", wsT("js.bgexec.stop.aria", j.command || j.id));
-      sbtn.appendChild(bgEl("span", "bgp-stop-sq"));
-      sbtn.appendChild(bgEl("span", "bgp-stop-lbl", stopping ? wsT("js.bgexec.stopping") : wsT("js.bgexec.stop.hold")));
-      dhd.appendChild(sbtn);
-      bgStopBtn = sbtn;
-      if (!stopping && window.WsHoldConfirm && typeof window.WsHoldConfirm.attach === "function") {
-        bgStopHold = window.WsHoldConfirm.attach(sbtn, {
-          duration: 1500,
-          mode: "bar",
-          canStart: function () { return bgSt.open && bgSt.canControl && !bgSt.stopping[j.id] && j.state === "running"; },
-          onConfirm: function () { bgStopJob(j.id); }
-        });
+      if (!bgStopBtn || bgStopBtn.disabled !== stopping) {
+        bgClearStop();
+        var sbtn = bgEl("button", "bgp-stop" + (stopping ? " is-busy" : ""));
+        sbtn.type = "button";
+        sbtn.disabled = stopping;
+        sbtn.setAttribute("data-bg-stop", j.id);
+        sbtn.appendChild(bgEl("span", "bgp-stop-sq"));
+        sbtn.appendChild(bgEl("span", "bgp-stop-lbl", stopping ? wsT("js.bgexec.stopping") : wsT("js.bgexec.stop.hold")));
+        bgDockHead.appendChild(sbtn);
+        bgStopBtn = sbtn;
+        if (!stopping && window.WsHoldConfirm && typeof window.WsHoldConfirm.attach === "function") {
+          bgStopHold = window.WsHoldConfirm.attach(sbtn, {
+            duration: 1500,
+            mode: "bar",
+            canStart: function () {
+              var current = bgSt.byId[j.id];
+              return bgSt.open && bgSt.selId === j.id && bgSt.canControl && !bgSt.stopping[j.id] && current && current.state === "running";
+            },
+            onConfirm: function () { bgStopJob(j.id); }
+          });
+        }
       }
+      var stopLabel = wsT("js.bgexec.stop.aria", command);
+      if (bgStopBtn.getAttribute("aria-label") !== stopLabel) bgStopBtn.setAttribute("aria-label", stopLabel);
+    } else {
+      bgClearStop();
     }
-    addBeforeTail(dhd);
 
-    // Dock meta: owner breadcrumb, cwd, state pill, read-only chip
-    var meta = bgEl("div", "bgp-dock-meta");
     var own = bgOwnerParts(j);
-    var ownEl = bgEl("span", "bgp-meta-own", own.full);
-    ownEl.title = own.full;
-    meta.appendChild(ownEl);
-    if (j.cwd) {
-      var cwdCode = bgEl("code", "bgp-meta-cwd", j.cwd);
-      cwdCode.title = j.cwd;
-      meta.appendChild(cwdCode);
+    var metaKey = JSON.stringify([own.full, j.cwd, j.state, bgSt.canControl, dotClass, bgStateText(j)]);
+    if (bgDockMetaKey !== metaKey) {
+      bgDockMetaKey = metaKey;
+      var meta = bgEl("div", "bgp-dock-meta");
+      var ownEl = bgEl("span", "bgp-meta-own", own.full);
+      ownEl.title = own.full;
+      meta.appendChild(ownEl);
+      if (j.cwd) {
+        var cwdCode = bgEl("code", "bgp-meta-cwd", j.cwd);
+        cwdCode.title = j.cwd;
+        meta.appendChild(cwdCode);
+      }
+      meta.appendChild(bgEl("span", "bgp-spacer"));
+      if (!bgSt.canControl && j.state === "running") {
+        meta.appendChild(bgEl("span", "bgp-stpill is-stop", wsT("js.bgexec.readonly")));
+      }
+      meta.appendChild(bgEl("span", "bgp-stpill " + bgDotClass(j), bgStateText(j)));
+      if (bgDockMeta) bgDockMeta.replaceWith(meta);
+      else bgDockEl.appendChild(meta);
+      bgDockMeta = meta;
     }
-    meta.appendChild(bgEl("span", "bgp-spacer"));
-    if (!bgSt.canControl && j.state === "running") {
-      meta.appendChild(bgEl("span", "bgp-stpill is-stop", wsT("js.bgexec.readonly")));
-    }
-    meta.appendChild(bgEl("span", "bgp-stpill " + bgDotClass(j), bgStateText(j)));
-    addBeforeTail(meta);
 
-    if (!prevTail) {
+    if (!bgTailEl) {
       bgTailEl = bgEl("pre", "bgp-tail");
       bgTailEl.setAttribute("role", "log");
       bgTailEl.setAttribute("aria-live", "off");
@@ -559,32 +615,41 @@
       bgDockEl.appendChild(bgTailEl);
     }
 
-    bgTailFootEl = bgEl("div", "bgp-dock-foot");
-    bgDockEl.appendChild(bgTailFootEl);
+    if (!bgTailFootEl) {
+      bgTailFootEl = bgEl("div", "bgp-dock-foot");
+      bgDockEl.appendChild(bgTailFootEl);
+    }
     bgRenderTailFoot(j);
   }
 
   function bgRenderTailFoot(j) {
     if (!bgTailFootEl || !j) return;
-    bgTailFootEl.textContent = "";
     var running = j.state === "running";
+    var written = Math.max(j.written || 0, bgTailState && bgTailState.id === j.id ? bgTailState.written : 0);
+    var evicted = Math.max(j.evicted || 0, bgTailState && bgTailState.id === j.id ? bgTailState.evicted : 0);
+    var sizeText = evicted > 0 ? wsT("js.bgexec.tail.evicted", bgFmtBytes(written), bgFmtBytes(evicted)) : bgFmtBytes(written);
+    var key = JSON.stringify([running, j.id, sizeText]);
+    if (bgTailFootEl.bgKey === key) return;
+    bgTailFootEl.bgKey = key;
+    bgTailFootEl.textContent = "";
     var left = bgEl("span", "bgp-foot-l");
     left.appendChild(bgEl("span", "bgp-dot " + (running ? "is-ok" : "is-stop")));
     left.appendChild(doc.createTextNode((running ? wsT("js.bgexec.tail.live") : wsT("js.bgexec.tail.ended")) + " \u00b7 " + j.id));
     bgTailFootEl.appendChild(left);
-
-    var written = Math.max(j.written || 0, bgTailState && bgTailState.id === j.id ? bgTailState.written : 0);
-    var evicted = Math.max(j.evicted || 0, bgTailState && bgTailState.id === j.id ? bgTailState.evicted : 0);
-    var sizeText = evicted > 0 ? wsT("js.bgexec.tail.evicted", bgFmtBytes(written), bgFmtBytes(evicted)) : bgFmtBytes(written);
     bgTailFootEl.appendChild(bgEl("span", "bgp-foot-r", sizeText + " \u00b7 " + wsT("js.bgexec.hint")));
   }
 
-  // --- live tail reading (only while open) -----------------------------------
-  function bgTailStop() {
+  // --- authenticated live tail (only while visible) --------------------------
+  function bgTailPause() {
     clearTimeout(bgTailTimer);
     bgTailTimer = 0;
-    bgTailGen++;
-    if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
+    var ac = bgTailAC;
+    bgTailAC = null;
+    if (ac) ac.abort();
+  }
+
+  function bgTailStop() {
+    bgTailPause();
     bgTailState = null;
   }
 
@@ -602,84 +667,86 @@
       evicted: j.evicted || 0,
       delay: BG_POLL_MIN,
       drained: false,
-      busy: false,
       open: false,
       openEl: null,
       openStream: "",
-      skipFirstPartial: start > 0,
-      gen: bgTailGen
+      retained: 0,
+      skipFirstPartial: start > 0
     };
     bgTailSchedule(0);
   }
 
   function bgTailSchedule(ms) {
     clearTimeout(bgTailTimer);
-    if (!bgSt.open || !bgTailState || bgTailState.drained || bgPageHidden()) return;
-    var gen = bgTailState.gen;
-    bgTailTimer = setTimeout(function () {
-      bgTailTimer = 0;
-      if (!bgSt.open || !bgTailState || bgTailState.gen !== gen || bgTailState.busy || bgPageHidden()) return;
-      bgTailFetch(gen);
-    }, ms);
+    if (!bgSt.open || !bgTailState || bgTailState.drained || bgTailAC || bgPageHidden()) return;
+    bgTailTimer = setTimeout(bgTailConnect, ms);
   }
 
-  function bgTailFetch(gen) {
+  async function bgTailConnect() {
+    bgTailTimer = 0;
     var ts = bgTailState;
-    if (!ts || ts.gen !== gen || !bgSt.open || !rid || bgPageHidden()) return;
-    ts.busy = true;
-    var ac = window.AbortController ? new AbortController() : null;
+    if (!ts || ts.drained || bgTailAC || !bgSt.open || !rid || bgPageHidden()) return;
+    var ac = new AbortController();
     bgTailAC = ac;
-    var url = "/s/" + rid + "/exec/bg/" + encodeURIComponent(ts.id) + "/output?from=" + encodeURIComponent(String(ts.next)) + "&limit=" + BG_TAIL_BYTES;
-    var opts = { credentials: "same-origin", cache: "no-store" };
-    if (ac) opts.signal = ac.signal;
-    fetch(url, opts).then(function (r) {
-      if (!r.ok) {
-        var e = new Error("HTTP " + r.status);
-        e.status = r.status;
-        throw e;
-      }
-      return r.json();
-    }).then(function (res) {
-      if (bgTailAC === ac) bgTailAC = null;
-      if (!bgTailState || bgTailState.gen !== gen || !bgSt.open) return;
-      ts.busy = false;
-      var advanced = typeof res.next === "number" && res.next > ts.next;
-      if (typeof res.next === "number") ts.next = res.next;
-      if (typeof res.written === "number") ts.written = res.written;
-      if (typeof res.evicted === "number") ts.evicted = res.evicted;
-      bgTailAppend(res);
-      var j = bgSt.byId[ts.id];
-      var wasRunning = j && j.state === "running";
-      if (res.job && j) {
-        j.state = res.job.state || j.state;
-        j.exit_code = res.job.exit_code;
-        j.signal = res.job.signal;
-        j.written = ts.written;
-        j.evicted = ts.evicted;
-      }
-      if (j) bgRenderTailFoot(j);
-      var stillRunning = res.job ? res.job.state === "running" : (j && j.state === "running");
-      if (wasRunning && !stillRunning) bgSyncTick();
-      if (!stillRunning && !advanced) {
+    var url = "/s/" + rid + "/exec/bg/" + encodeURIComponent(ts.id) + "/output?from=" + ts.next + "&limit=" + BG_TAIL_BYTES;
+    try {
+      var response = await fetch(url, {
+        credentials: "same-origin", cache: "no-store", headers: { Accept: "text/event-stream" }, signal: ac.signal
+      });
+      if (bgTailAC !== ac) return;
+      if (response.status === 404 || response.status === 403 || response.status === 401) {
         ts.drained = true;
-        bgSyncTick();
-        return;
+        if (response.status === 404) bgExecFetchList();
+      } else if (response.ok) {
+        var reader = response.body.getReader(), decoder = new TextDecoder(), buffered = "";
+        while (!ts.drained && bgTailAC === ac) {
+          var chunk = await reader.read();
+          if (chunk.done || bgTailAC !== ac) break;
+          buffered += decoder.decode(chunk.value, { stream: true });
+          var end;
+          while ((end = buffered.indexOf("\n\n")) >= 0) {
+            var frame = buffered.slice(0, end);
+            buffered = buffered.slice(end + 2);
+            var prefix = "event: output\ndata: ";
+            if (frame.startsWith(prefix)) bgTailApply(ts, JSON.parse(frame.slice(prefix.length)));
+          }
+        }
       }
-      ts.delay = advanced ? BG_POLL_MIN : Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.5));
-      bgTailSchedule(stillRunning ? ts.delay : 100);
-    }, function (err) {
-      if (bgTailAC === ac) bgTailAC = null;
-      if (!bgTailState || bgTailState.gen !== gen || !bgSt.open) return;
-      ts.busy = false;
-      if (err && err.name === "AbortError") return;
-      if (err && (err.status === 404 || err.status === 403)) {
-        ts.drained = true;
-        if (err.status === 404) bgExecFetchList();
-        return;
-      }
-      ts.delay = Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.6));
+    } catch (err) {
+      // A disconnected stream can resume from the last rendered offset.
+    }
+    if (bgTailAC !== ac) return;
+    bgTailPause();
+    if (!ts.drained) {
       bgTailSchedule(ts.delay);
-    });
+      ts.delay = Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.6));
+    }
+  }
+
+  function bgTailApply(ts, res) {
+    ts.delay = BG_POLL_MIN;
+    if (typeof res.next === "number") ts.next = res.next;
+    if (typeof res.written === "number") ts.written = res.written;
+    if (typeof res.evicted === "number") ts.evicted = res.evicted;
+    bgTailAppend(res);
+    var j = bgSt.byId[ts.id];
+    var wasRunning = j && j.state === "running";
+    if (res.job && j) {
+      j.state = res.job.state || j.state;
+      j.exit_code = res.job.exit_code;
+      j.signal = res.job.signal;
+      j.written = ts.written;
+      j.evicted = ts.evicted;
+    }
+    var running = res.job ? res.job.state === "running" : (j && j.state === "running");
+    ts.drained = !running && ts.next >= ts.written;
+    if (wasRunning && !running) {
+      bgRenderList();
+      bgRenderDock();
+      bgSyncTick();
+    } else if (j) {
+      bgRenderTailFoot(j);
+    }
   }
 
   function bgTailAppend(res) {
@@ -698,12 +765,15 @@
       }
     }
     var frag = doc.createDocumentFragment();
-    var added = 0;
+    var changed = false;
     if (res.gap) {
-      frag.appendChild(bgEl("span", "bgp-line is-sys", wsT("js.bgexec.tail.gap")));
+      var gap = bgEl("span", "bgp-line is-sys", wsT("js.bgexec.tail.gap"));
+      gap.bgBytes = 1 + bgUTF8.encode(gap.textContent).length;
+      ts.retained += gap.bgBytes;
+      frag.appendChild(gap);
       ts.open = false;
       ts.openEl = null;
-      added++;
+      changed = true;
     }
     segs.forEach(function (s) {
       if (!s || !s.text) return;
@@ -715,26 +785,51 @@
         if (part !== "" || (!last && !ln)) {
           if (!ln) {
             ln = bgEl("span", "bgp-line" + (stream === "stderr" ? " is-err" : ""));
+            ln.bgBytes = 1; // reserve the line boundary too
+            ts.retained++;
+            ln.appendChild(doc.createTextNode(""));
             frag.appendChild(ln);
-            added++;
           }
-          if (part !== "") ln.appendChild(doc.createTextNode(part));
+          if (part !== "") {
+            var size = bgUTF8.encode(part).length;
+            ln.firstChild.appendData(part);
+            ln.bgBytes += size;
+            ts.retained += size;
+          }
+          changed = true;
         }
-        if (!last) { ts.open = false; ts.openEl = null; }
+        if (!last) {
+          if (ln) ln.bgEndsLine = true;
+          ts.open = false;
+          ts.openEl = null;
+        }
         else if (part !== "") { ts.open = true; ts.openEl = ln; ts.openStream = stream; }
       }
     });
-    if (frag.childNodes.length || added) {
-      var emp = bgTailEl.querySelector(".bgp-tail-empty");
-      if (emp && emp.parentNode) emp.parentNode.removeChild(emp);
-      bgTailEl.appendChild(frag);
-      while (bgTailEl.childNodes.length > BG_MAX_LINES) {
-        var first = bgTailEl.firstChild;
+    if (!changed) return;
+    var emp = bgTailEl.querySelector(".bgp-tail-empty");
+    if (emp) emp.remove();
+    if (frag.firstChild) bgTailEl.appendChild(frag);
+    while (bgTailEl.firstChild) {
+      var first = bgTailEl.firstChild;
+      var excess = ts.retained - BG_TAIL_BYTES;
+      if (bgTailEl.childNodes.length > BG_MAX_LINES || (excess > 0 && first.bgBytes <= excess)) {
         if (first === ts.openEl) { ts.open = false; ts.openEl = null; }
-        bgTailEl.removeChild(first);
+        ts.retained -= first.bgBytes;
+        first.remove();
+      } else {
+        if (excess > 0) {
+          var bytes = bgUTF8.encode(first.textContent);
+          // Keep the suffix on a UTF-8 character boundary.
+          while (excess < bytes.length && (bytes[excess] & 0xc0) === 0x80) excess++;
+          first.firstChild.data = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(excess));
+          first.bgBytes -= excess;
+          ts.retained -= excess;
+        }
+        break;
       }
-      if (bgSt.follow) bgTailEl.scrollTop = bgTailEl.scrollHeight;
     }
+    if (bgSt.follow) bgTailEl.scrollTop = bgTailEl.scrollHeight;
   }
 
   function bgStopJob(id) {
@@ -758,7 +853,7 @@
     });
   }
 
-  if (bgbadge) {
+  if (bgbadge && bgbadge.tagName === "BUTTON") {
     bgbadge.addEventListener("click", function () {
       bgExecToggle();
     });

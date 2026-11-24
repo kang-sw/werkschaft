@@ -2,17 +2,19 @@
 // hosted lead's own hosted exec jobs, listed, read and stopped through three
 // localhost-only routes, plus the opaque revision the page stream sends when
 // the job set changes. Commands, working directories and output never ride
-// the stream or a region (every viewer shares those): the page learns that
+// the shared page stream or a region (every viewer shares those): the page learns that
 // something changed and refetches the list here.
 package wsdashboard
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/execjob"
@@ -226,7 +228,7 @@ func (d *Daemon) handleExecBg(w http.ResponseWriter, r *http.Request, svc ExecTr
 	case rest == "jobs" && !write:
 		d.execBgJobsList(w, svc, replyID, canControl)
 	case id != "jobs" && execJobID.MatchString(id) && tail == "output" && !write:
-		execBgJobOutput(w, r, svc, replyID, id)
+		d.execBgJobOutput(w, r, svc, replyID, id)
 	case id != "jobs" && execJobID.MatchString(id) && tail == "stop" && write:
 		execBgJobStop(w, svc, replyID, id)
 	default:
@@ -285,7 +287,7 @@ func (d *Daemon) execBgJobsList(w http.ResponseWriter, svc ExecTreeService, repl
 	})
 }
 
-func execBgJobOutput(w http.ResponseWriter, r *http.Request, svc ExecTreeService, replyID, id string) {
+func (d *Daemon) execBgJobOutput(w http.ResponseWriter, r *http.Request, svc ExecTreeService, replyID, id string) {
 	var from int64
 	if v := r.URL.Query().Get("from"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -306,23 +308,89 @@ func execBgJobOutput(w http.ResponseWriter, r *http.Request, svc ExecTreeService
 			limit = n
 		}
 	}
-	owners, byID := execSubtreeLookup(svc, replyID)
-	out, err := svc.ReadAgentOutput(owners, id, from, limit)
+	read := func(from int64) (execOutputView, error) {
+		owners, byID := execSubtreeLookup(svc, replyID)
+		out, err := svc.ReadAgentOutput(owners, id, from, limit)
+		if err != nil {
+			return execOutputView{}, err
+		}
+		return execOutputView{
+			Job:      execTreeJobViewOf(out.Job, byID),
+			From:     out.From,
+			Next:     out.Next,
+			Written:  out.Written,
+			Evicted:  out.Evicted,
+			Gap:      out.Gap,
+			Segments: decodeExecSegments(out.Segments),
+		}, nil
+	}
+	view, err := read(from)
 	if err != nil {
 		execJobError(w, err)
 		return
 	}
-	view := execOutputView{
-		Job:      execTreeJobViewOf(out.Job, byID),
-		From:     out.From,
-		Next:     out.Next,
-		Written:  out.Written,
-		Evicted:  out.Evicted,
-		Gap:      out.Gap,
-		Segments: decodeExecSegments(out.Segments),
+	if r.Method == http.MethodGet && r.Header.Get("Accept") == "text/event-stream" {
+		d.streamExecBgOutput(w, r, view, read, func() error { return svc.OpenTree(replyID) })
+		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, view)
+}
+
+// The guard authenticates this connection like the main page stream. Each
+// sample rechecks the live tree and reads job output from memory. Any new
+// connection goes through the guard again, including after cookie rotation.
+func (d *Daemon) streamExecBgOutput(w http.ResponseWriter, r *http.Request, view execOutputView, read func(int64) (execOutputView, error), openTree func() error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unavailable", http.StatusInternalServerError)
+		return
+	}
+	sink := newSSESink(w, r, flusher)
+	defer func() { _ = sink.rc.SetWriteDeadline(time.Time{}) }()
+
+	const minWait, maxWait = 500 * time.Millisecond, 2500 * time.Millisecond
+	timer := time.NewTimer(minWait)
+	defer timer.Stop()
+	delay := minWait
+	send := true
+	for {
+		if send {
+			data, err := json.Marshal(view)
+			if err != nil || sink.event("output", data) != nil || sink.flush() != nil {
+				return
+			}
+		}
+		if view.Job.State != execjob.HostedRunning && view.Next >= view.Written {
+			return
+		}
+		select {
+		case <-d.stop:
+			return
+		case <-sink.gone():
+			return
+		case <-timer.C:
+		}
+		if openTree() != nil {
+			return
+		}
+		next, err := read(view.Next)
+		if err != nil {
+			return
+		}
+		send = next.Next != view.Next || next.Written != view.Written || next.Evicted != view.Evicted || next.Job.State != view.Job.State
+		view = next
+		if send {
+			delay = minWait
+		} else {
+			delay = min(maxWait, delay+delay/2)
+		}
+		if view.Next < view.Written && send {
+			timer.Reset(100 * time.Millisecond)
+		} else {
+			timer.Reset(delay)
+		}
+	}
 }
 
 func execBgJobStop(w http.ResponseWriter, svc ExecTreeService, replyID, id string) {
