@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -156,30 +156,31 @@ func retiredPiHistoryChanged(source, archive string) (bool, error) {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	changed := errors.New("retired Pi ring changed")
 	ring := wslive.RingDir(source)
-	err := filepath.WalkDir(ring, func(path string, entry fs.DirEntry, err error) error {
-		if path == ring && errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		name, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		if differs, err := retiredPiFileChanged(source, archive, name); err != nil {
-			return err
-		} else if differs {
-			return changed
-		}
-		return nil
-	})
-	if err == changed {
-		return true, nil
+	info, err := os.Lstat(ring)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return false, nil
 	}
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	current, err := wslive.RingNames(ring)
+	if err != nil || len(current) == 0 {
+		return false, err
+	}
+	saved, err := wslive.RingNames(wslive.RingDir(archive))
+	if err != nil {
+		return false, err
+	}
+	for _, name := range current {
+		if len(saved) == wslive.RingHistoryCap && name < saved[0] {
+			continue
+		}
+		if _, exists := slices.BinarySearch(saved, name); !exists {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func retiredPiFileChanged(source, archive, name string) (bool, error) {
@@ -201,7 +202,13 @@ func retiredPiFileChanged(source, archive, name string) (bool, error) {
 	if err != nil || os.SameFile(current, prior) {
 		return false, err
 	}
-	if !prior.Mode().IsRegular() || current.Size() != prior.Size() {
+	if !prior.Mode().IsRegular() {
+		return true, nil
+	}
+	if name == retiredPiSessionFile && current.Size() < prior.Size() {
+		return false, nil
+	}
+	if current.Size() != prior.Size() {
 		return true, nil
 	}
 	live, err := os.Open(from)
@@ -240,33 +247,29 @@ func stageRetiredPiHistory(source, dest string, refresh bool) error {
 		return err
 	}
 	defer os.RemoveAll(stage)
+	var prior string
+	if refresh {
+		if err := recoverRetiredPiArchive(dest); err != nil {
+			return err
+		}
+		prior = dest
+	}
 	for _, name := range retiredPiHistoryFiles() {
-		if err := copyRetiredPiFile(source, stage, name, false); err != nil {
+		if err := copyRetiredPiFile(source, prior, stage, name, false); err != nil {
 			return err
 		}
 	}
 	if _, err := os.Stat(recordPath(stage)); err != nil {
 		return err
 	}
-	if ring, err := os.Lstat(wslive.RingDir(source)); err == nil && ring.IsDir() {
-		if err := os.CopyFS(wslive.RingDir(stage), os.DirFS(wslive.RingDir(source))); err != nil {
-			return err
-		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := copyRetiredPiRing(source, prior, stage); err != nil {
 		return err
 	}
-	if pi, err := os.Lstat(filepath.Join(source, "pi")); err == nil && pi.IsDir() {
-		if err := copyRetiredPiFile(source, stage, retiredPiSessionFile, true); err != nil {
-			return err
-		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := copyRetiredPiJSONL(source, prior, stage); err != nil {
 		return err
 	}
 	if !refresh {
 		return os.Rename(stage, dest)
-	}
-	if err := recoverRetiredPiArchive(dest); err != nil {
-		return err
 	}
 	previous := dest + previousPiHistorySuffix
 	if err := os.Rename(dest, previous); err != nil {
@@ -278,9 +281,61 @@ func stageRetiredPiHistory(source, dest string, refresh bool) error {
 	return os.RemoveAll(previous)
 }
 
-func copyRetiredPiFile(source, dest, name string, link bool) error {
+func copyRetiredPiRing(source, prior, dest string) error {
+	live, stage := wslive.RingDir(source), wslive.RingDir(dest)
+	info, err := os.Lstat(live)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil && info.IsDir() {
+		if prior != "" {
+			return wslive.CopyRingUnion(stage, wslive.RingDir(prior), live)
+		}
+		return os.CopyFS(stage, os.DirFS(live))
+	}
+	if prior == "" {
+		return nil
+	}
+	saved := wslive.RingDir(prior)
+	if _, err := os.Lstat(saved); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return os.CopyFS(stage, os.DirFS(saved))
+}
+
+func copyRetiredPiJSONL(source, prior, dest string) error {
+	pi, err := os.Lstat(filepath.Join(source, "pi"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil && pi.IsDir() {
+		return copyRetiredPiFile(source, prior, dest, retiredPiSessionFile, true)
+	}
+	if prior != "" {
+		return copyRetiredPiFile(prior, "", dest, retiredPiSessionFile, true)
+	}
+	return nil
+}
+
+func copyRetiredPiFile(source, prior, dest, name string, link bool) error {
 	from, to := filepath.Join(source, name), filepath.Join(dest, name)
 	info, err := os.Lstat(from)
+	// A partial prune can leave valid metadata beside missing history.
+	if prior != "" && errors.Is(err, os.ErrNotExist) {
+		from = filepath.Join(prior, name)
+		info, err = os.Lstat(from)
+	} else if prior != "" && err == nil && link {
+		// Prefer the complete copy when the live JSONL is shorter.
+		saved := filepath.Join(prior, name)
+		savedInfo, savedErr := os.Lstat(saved)
+		if savedErr == nil && savedInfo.Size() > info.Size() {
+			from, info = saved, savedInfo
+		} else if savedErr != nil && !errors.Is(savedErr, os.ErrNotExist) {
+			return savedErr
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

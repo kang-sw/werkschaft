@@ -118,6 +118,88 @@ func TestRetiredPiHistorySurvivesPruneAndRollback(t *testing.T) {
 	}
 }
 
+func TestRetiredPiArchiveSurvivesPartialRollbackPrune(t *testing.T) {
+	const id = "partialpihistory"
+	dir := t.TempDir()
+	session := wsdashboard.SessionDir(dir, id)
+	ring := wslive.RingDir(session)
+	archive := filepath.Join(dir, retiredPiHistoryDir, id)
+	rec := Record{ReplyID: id, Backend: BackendPi, Lead: true, Root: dir, WSKey: "fixture"}
+	if err := writeRecord(session, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := wslive.AppendRing(ring, []wslive.RingEntry{{Kind: "reply", Text: "retired output"}, {Kind: "reply", Text: "more archived output"}}); err != nil {
+		t.Fatal(err)
+	}
+	start := func() *Runner {
+		r := NewRunner(Options{Dir: dir})
+		t.Cleanup(r.Close)
+		r.Start(nil)
+		state, err := r.Get(id)
+		if err != nil || state.Status != StatusClosed {
+			t.Fatalf("retired Pi state = %+v, %v", state, err)
+		}
+		return r
+	}
+	const raw = "{\"type\":\"session\"}\n"
+	if err := os.MkdirAll(filepath.Join(session, "pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(session, retiredPiSessionFile), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start().Close()
+
+	// Model a v0.51.2 prune interrupted after removing the ring but before
+	// removing the record that 0.52 closed after taking the first archive.
+	if err := os.RemoveAll(ring); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(session, "pi")); err != nil {
+		t.Fatal(err)
+	}
+	r := start()
+	if _, err := os.Stat(ring); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("startup should leave a partial session for manual recovery: %v", err)
+	}
+	savedRing := wslive.RingDir(archive)
+	saved, err := wslive.ReadRing(savedRing)
+	if err != nil || len(saved) != 2 || saved[0].Text != "retired output" || saved[1].Text != "more archived output" {
+		t.Fatalf("archived ring after interrupted prune = %+v, %v", saved, err)
+	}
+	if saved, err := os.ReadFile(filepath.Join(archive, retiredPiSessionFile)); err != nil || string(saved) != raw {
+		t.Fatalf("archived Pi JSONL after interrupted prune = %q, %v", saved, err)
+	}
+	r.Close()
+
+	// Manually restore the missing ring and check the normal history reader.
+	if err := os.CopyFS(ring, os.DirFS(savedRing)); err != nil {
+		t.Fatal(err)
+	}
+	r = start()
+	history, err := r.Transcript(id)
+	if err != nil || len(history) != 2 || history[0].Text != "retired output" {
+		t.Fatalf("manually recovered history = %+v, %v", history, err)
+	}
+	r.Close()
+
+	// A surviving ring can be shorter and still contain rollback-era output.
+	if err := os.RemoveAll(ring); err != nil {
+		t.Fatal(err)
+	}
+	if err := wslive.AppendRing(ring, []wslive.RingEntry{{Kind: "reply", Text: "surviving rollback output"}}); err != nil {
+		t.Fatal(err)
+	}
+	start().Close()
+	saved, err = wslive.ReadRing(savedRing)
+	if err != nil || len(saved) != 3 || saved[0].Text != "retired output" || saved[2].Text != "surviving rollback output" {
+		t.Fatalf("archived union of ring entries = %+v, %v", saved, err)
+	}
+	if changed, err := retiredPiHistoryChanged(session, archive); err != nil || changed {
+		t.Fatalf("archived union already covers the live history, changed=%t, %v", changed, err)
+	}
+}
+
 func TestRetiredPiPurgeFailureSurvivesRestartAndRetry(t *testing.T) {
 	const id = "pihistorypurge"
 	dir, checkout := t.TempDir(), t.TempDir()
