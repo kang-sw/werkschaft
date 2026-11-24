@@ -30,6 +30,9 @@ type endpointBody struct {
 	Kind    string          `json:"kind,omitempty"`
 	Key     string          `json:"key,omitempty"`
 }
+
+const endpointKeyRetiredCode = "endpoint_key_retired"
+
 type endpointResult struct {
 	Endpoints []wscred.LocalEndpointStatus `json:"endpoints"`
 	Changed   bool                         `json:"changed"`
@@ -60,6 +63,60 @@ func (d *Daemon) endpointConfigOptions() wsconfig.Options {
 	return wsconfig.Options{}
 }
 
+// EndpointConfigHost applies a hosted MCP caller's legacy whole-map edit
+// through the same writer as Account.
+type EndpointConfigHost interface {
+	SetLocalEndpointOverride(wsconfig.Options, *string) error
+}
+
+func (d *Daemon) SetLocalEndpointOverride(opts wsconfig.Options, value *string) error {
+	writer, ok := d.credentials.(interface {
+		SetLocalEndpointOverride(wsconfig.Options, *string, bool) error
+	})
+	if !ok {
+		return errors.New("credential store unavailable")
+	}
+	path, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		return err
+	}
+	daemonPath, err := wsconfig.GlobalPath(d.endpointConfigOptions())
+	if err != nil {
+		return err
+	}
+	return writer.SetLocalEndpointOverride(opts, value, companionConfigID(path) == companionConfigID(daemonPath))
+}
+
+// SetOfflineLocalEndpointOverride is the bare-binary legacy writer. Launcher
+// connections already run inside the daemon and use its in-process writer.
+func SetOfflineLocalEndpointOverride(opts wsconfig.Options, value *string) error {
+	dir, err := Dir(opts.CacheHome)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	lock := flock.New(filepath.Join(dir, lockFileName))
+	defer lock.Close()
+	locked, err := lock.TryLock()
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return errors.New("endpoint configuration change was not applied because the daemon owns the credential store. Retry through the launcher or with the daemon stopped")
+	}
+	credPath, err := wscred.DefaultPath(opts.CacheHome)
+	if err != nil {
+		return err
+	}
+	store := wscred.NewStore(credPath)
+	if err := store.MigrateLegacy(); err != nil {
+		return err
+	}
+	return store.SetLocalEndpointOverride(opts, value, false)
+}
+
 // handleAccountEndpoint is called after the Account route's local browser guard.
 func (d *Daemon) handleAccountEndpoint(w http.ResponseWriter, r *http.Request, store credentialStore) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -79,6 +136,8 @@ func (d *Daemon) handleAccountEndpoint(w http.ResponseWriter, r *http.Request, s
 	switch {
 	case errors.Is(err, wscred.ErrInvalidEndpoint):
 		writeJSON(w, 400, credentialChangeRefusal{Error: "invalid_endpoint"})
+	case errors.Is(err, wscred.ErrEndpointKeyRetired):
+		writeJSON(w, 500, credentialChangeRefusal{Error: endpointKeyRetiredCode})
 	case errors.Is(err, wscred.ErrStoreClosed):
 		writeJSON(w, 503, credentialChangeRefusal{Error: "shutting_down"})
 	case err != nil:
@@ -126,11 +185,21 @@ func ApplyLocalEndpointChange(ctx context.Context, dir, credPath string, opts ws
 				req.Header.Set(endpointConfigHeader, companionConfigID(configPath))
 				resp, err := client.Do(req)
 				if err == nil {
-					var result endpointResult
-					decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 128<<10)).Decode(&result)
-					resp.Body.Close()
-					if resp.StatusCode == 200 && decodeErr == nil {
-						return result.Endpoints, nil
+					decoder := json.NewDecoder(io.LimitReader(resp.Body, 128<<10))
+					if resp.StatusCode == 200 {
+						var result endpointResult
+						decodeErr := decoder.Decode(&result)
+						resp.Body.Close()
+						if decodeErr == nil {
+							return result.Endpoints, nil
+						}
+					} else {
+						var refusal credentialChangeRefusal
+						decodeErr := decoder.Decode(&refusal)
+						resp.Body.Close()
+						if decodeErr == nil && refusal.Error == endpointKeyRetiredCode {
+							return nil, wscred.ErrEndpointKeyRetired
+						}
 					}
 					if resp.StatusCode != 503 && resp.StatusCode != 401 {
 						return nil, errors.New("endpoint_update_failed")

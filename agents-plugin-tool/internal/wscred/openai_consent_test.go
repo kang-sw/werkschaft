@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAIConsentPromptAndSignOut(t *testing.T) {
@@ -96,6 +97,69 @@ func TestOpenAIConsentPromptAndSignOut(t *testing.T) {
 	}
 	if _, err := next.Credential(ctx, openAIRequest(false)); !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("credential after sign-out: %v", err)
+	}
+}
+
+func TestOpenAIConsentPromptRejectsPreviousStoreActions(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{})
+	s.RequestOpenAIBackgroundConsent()
+	previous, _ := s.OpenAIConsentPrompt()
+	if previous == 0 {
+		t.Fatal("missing prompt in first store")
+	}
+	s.DismissOpenAIConsentPrompt(previous)
+
+	reopened := NewStore(s.Path())
+	if _, err := reopened.Status(); err != nil {
+		t.Fatal(err)
+	}
+	reopened.RequestOpenAIBackgroundConsent()
+	current, _ := reopened.OpenAIConsentPrompt()
+	if current == 0 || current == previous || current >= 1<<53 {
+		t.Fatalf("successor prompt ID %d cannot replace dismissed prompt %d", current, previous)
+	}
+	reopened.DismissOpenAIConsentPrompt(previous)
+	if got, _ := reopened.OpenAIConsentPrompt(); got != current {
+		t.Fatal("stale dismiss cleared the successor's prompt")
+	}
+	if err := reopened.SetActiveOpenAIBackgroundConsent("", previous, true); !errors.Is(err, ErrOpenAIAccountChanged) {
+		t.Fatalf("stale answer applied to successor: %v", err)
+	}
+	if err := reopened.SetActiveOpenAIBackgroundConsent("", current, false); err != nil {
+		t.Fatalf("valid successor prompt: %v", err)
+	}
+}
+
+func TestOpenAIConsentCanBeRevokedAfterRefreshFailure(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{})
+	if err := s.SetActiveOpenAIBackgroundConsent(f.clientID, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Hour)
+	f.revoke = true
+	ctx := context.Background()
+	if _, err := s.Credential(ctx, openAIRequest(true)); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("revoked refresh: %v", err)
+	}
+	if err := s.SetActiveOpenAIBackgroundConsent(f.clientID, 0, true); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("grant without usable sign-in: %v", err)
+	}
+	if err := s.SetActiveOpenAIBackgroundConsent("stale-registration", 0, false); !errors.Is(err, ErrOpenAIAccountChanged) {
+		t.Fatalf("revocation for stale account: %v", err)
+	}
+	if err := s.SetActiveOpenAIBackgroundConsent(f.clientID, 0, false); err != nil {
+		t.Fatalf("revoke after lost grant: %v", err)
+	}
+	reopened := NewStore(s.Path())
+	reopened.now, reopened.openAI = s.now, s.openAI
+	f.revoke, f.priorID = false, ""
+	signInFixture(t, reopened, f, OpenAISignIn{})
+	if _, err := reopened.Credential(ctx, openAIRequest(true)); !errors.Is(err, ErrConsentRequired) {
+		t.Fatalf("sign-in revived revoked consent: %v", err)
 	}
 }
 

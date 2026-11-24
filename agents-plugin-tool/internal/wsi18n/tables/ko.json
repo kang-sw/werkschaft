@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "{0}개",
   "js.settings.account.endpoints_failed": "로컬 엔드포인트를 불러오지 못했습니다.",
   "js.settings.account.endpoints_empty": "등록된 로컬 엔드포인트가 없습니다.",
+  "js.settings.account.endpoint_key_retired": "엔드포인트 설정은 변경되지 않았습니다. 이전 키는 삭제되었습니다.",
   "js.settings.account.invalid_endpoint": "데몬이 엔드포인트를 거부했습니다. 이름, URL, 종류, 선택 키를 확인하세요.",
   "js.settings.account.add_endpoint": "+ 엔드포인트",
   "js.settings.account.base_url": "기본 URL",

@@ -149,5 +149,5 @@ func updateRepoConfigFile(path string, mutate func(overrides map[string]string, 
 			return nil, fmt.Errorf("encode repo ws config: %w", err)
 		}
 		return append(payload, '\n'), nil
-	})
+	}, nil)
 }

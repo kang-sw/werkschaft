@@ -9,6 +9,19 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
+func (s *Server) writeScalarTune(resolver *wsconfig.Resolver, opts wsconfig.Options, key string, value *string, setOpts wsconfig.SetOptions) error {
+	if key == wsconfig.ItemWerkEndpoints && (setOpts.ExplicitScope == "" || setOpts.ExplicitScope == wsconfig.ScopeGlobal) {
+		if host, ok := s.live.host.(wsdashboard.EndpointConfigHost); ok {
+			return host.SetLocalEndpointOverride(opts, value)
+		}
+		return wsdashboard.SetOfflineLocalEndpointOverride(opts, value)
+	}
+	if value == nil {
+		return resolver.Unset(key, setOpts)
+	}
+	return resolver.Set(key, *value, setOpts)
+}
+
 func (s *Server) notifyScalarTune(key string, opts wsconfig.Options) {
 	notifyCompactionTune(key)
 	if key == wsconfig.ItemWorkflowLang {

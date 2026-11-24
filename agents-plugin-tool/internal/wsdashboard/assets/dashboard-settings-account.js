@@ -42,6 +42,7 @@
         invalid_key: "js.settings.account.invalid_key",
         key_rejected: "js.settings.account.key_rejected",
         invalid_endpoint: "js.settings.account.invalid_endpoint",
+        endpoint_key_retired: "js.settings.account.endpoint_key_retired",
         credential_changed: "js.settings.account.credential_changed"
       };
       return t(Object.hasOwn(errors, code) ? errors[code] : fallback);
@@ -694,6 +695,7 @@
         }
       } catch (error) {
         const notice = errorText(error.code);
+        if (error.code === "endpoint_key_retired") await refreshStatus();
         if (editor && epForm === editor) {
           editor.error.hidden = false;
           editor.error.textContent = notice;
