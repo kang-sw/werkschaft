@@ -682,7 +682,14 @@ func ShellLaunch(owner, tool, root, cwdArg, line string, environ []string, overl
 func ShellArgv(line string, environ []string) ([]string, error) {
 	if goruntime.GOOS == "windows" {
 		if git, err := wsgit.LookPathEnv("git", environ); err == nil {
-			// <Git>\cmd\git.exe or <Git>\bin\git.exe -> <Git>\bin\bash.exe
+			// <Git>\cmd\git.exe or <Git>\bin\git.exe -> <Git>\bin\bash.exe.
+			// Keep bin\bash.exe rather than jumping directly to usr\bin\bash.exe:
+			// Git for Windows' bin\bash.exe launcher prepends <Git>\mingw64\bin and
+			// <Git>\usr\bin to PATH and sets MSYSTEM; invoking usr\bin\bash.exe
+			// directly under a default Windows PATH (only <Git>\cmd) drops Unix
+			// tools (ls, cygpath, awk, sed) and resolves find to System32\find.exe.
+			// Descendant EcoQoS opt-out is handled by holder.py's Job Object + IOCP
+			// watcher across the full process tree.
 			bash := filepath.Join(filepath.Dir(filepath.Dir(git)), "bin", "bash.exe")
 			if info, statErr := os.Stat(bash); statErr == nil && !info.IsDir() {
 				return []string{bash, "-c", line}, nil
