@@ -10,6 +10,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -106,6 +107,13 @@ const DefaultHeaderTimeout = 2 * time.Minute
 // maxStreamLine bounds one server-sent line: an encrypted reasoning item can
 // be large.
 const maxStreamLine = 64 << 20
+
+// The event cap also covers multiline data, and the response cap covers all
+// fragments, including text already delivered to a streaming callback.
+const maxStreamEvent = maxStreamLine
+const maxStreamResponse = 128 << 20
+
+var errResponseTooLarge = errors.New("the model response exceeds the size limit")
 
 // maxErrorBody bounds the error body read from a refused request.
 const maxErrorBody = 64 << 10
@@ -330,7 +338,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
-	out, err := readStream(resp.Body, h, func() { timer.Reset(stall) })
+	out, err := readStream(resp.Body, h, func() { timer.Reset(stall) }, maxStreamEvent, maxStreamResponse)
 	var failed *FailedError
 	if errors.As(err, &failed) {
 		failed.Message = Scrub(failed.Message, secret)
@@ -399,15 +407,17 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 
 // streamState assembles one response from its events.
 type streamState struct {
-	items map[int]json.RawMessage
-	order []int
+	maxOutput int
+	items     map[int]json.RawMessage
+	order     []int
 	// args accumulates a function call's argument deltas by item id, for a
 	// provider whose done item leaves them out.
 	args map[string]*strings.Builder
 }
 
-func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
-	st := &streamState{items: map[int]json.RawMessage{}, args: map[string]*strings.Builder{}}
+func readStream(r io.Reader, h StreamHandler, touch func(), eventLimit, responseLimit int) (*Response, error) {
+	st := &streamState{maxOutput: responseLimit, items: map[int]json.RawMessage{}, args: map[string]*strings.Builder{}}
+	remaining := responseLimit
 	br := bufio.NewReaderSize(r, 64<<10)
 	var event string
 	var data bytes.Buffer
@@ -422,7 +432,11 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 		return st.handle(ev, bytes.TrimSpace(data.Bytes()), h)
 	}
 	for {
-		line, err := readLine(br)
+		line, err := readLine(br, min(eventLimit, remaining))
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, err
+		}
+		remaining -= len(line)
 		if len(line) > 0 || err == nil {
 			touch()
 		}
@@ -445,10 +459,14 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 		case strings.HasPrefix(text, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(text, "event:"))
 		case strings.HasPrefix(text, "data:"):
+			part := strings.TrimPrefix(strings.TrimPrefix(text, "data:"), " ")
 			if data.Len() > 0 {
 				data.WriteByte('\n')
 			}
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(text, "data:"), " "))
+			if len(part) > eventLimit-data.Len() {
+				return nil, errResponseTooLarge
+			}
+			data.WriteString(part)
 		}
 		if err != nil {
 			if resp, done, ferr := flush(); done {
@@ -462,15 +480,15 @@ func readStream(r io.Reader, h StreamHandler, touch func()) (*Response, error) {
 	}
 }
 
-// readLine reads one line of any length up to maxStreamLine.
-func readLine(br *bufio.Reader) ([]byte, error) {
+// readLine reads one line without growing its buffer past the limit.
+func readLine(br *bufio.Reader, limit int) ([]byte, error) {
 	var out []byte
 	for {
 		chunk, err := br.ReadSlice('\n')
-		out = append(out, chunk...)
-		if len(out) > maxStreamLine {
-			return nil, fmt.Errorf("a stream line exceeds %d bytes", maxStreamLine)
+		if len(chunk) > limit-len(out) {
+			return nil, errResponseTooLarge
 		}
+		out = append(out, chunk...)
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
@@ -626,7 +644,9 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 			resp.Output = append(resp.Output, s.items[idx])
 		}
 	}
-	resp.Output = s.fillArguments(resp.Output)
+	if err := s.fillArguments(resp.Output); err != nil {
+		return nil, err
+	}
 	if u := d.Response.Usage; u != nil {
 		cacheWrite := u.InputTokensDetails.CacheWriteTokens
 		if cacheWrite == nil {
@@ -642,24 +662,21 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 }
 
 func (s *streamState) sortedIndexes() []int {
-	idx := append([]int(nil), s.order...)
-	for i := 1; i < len(idx); i++ {
-		for j := i; j > 0 && idx[j-1] > idx[j]; j-- {
-			idx[j-1], idx[j] = idx[j], idx[j-1]
-		}
-	}
-	return idx
+	slices.Sort(s.order)
+	return s.order
 }
 
 // fillArguments gives a function call item that arrived with no arguments the
 // ones its deltas carried; every other item is returned as it came.
-func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
+func (s *streamState) fillArguments(items []json.RawMessage) error {
 	if len(s.args) == 0 {
-		return items
+		return nil
 	}
-	out := make([]json.RawMessage, len(items))
+	remaining := s.maxOutput
+	for _, raw := range items {
+		remaining -= len(raw)
+	}
 	for i, raw := range items {
-		out[i] = raw
 		var probe struct {
 			Type      string `json:"type"`
 			ID        string `json:"id"`
@@ -672,6 +689,9 @@ func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
 		if b == nil || b.Len() == 0 {
 			continue
 		}
+		if b.Len() > remaining {
+			return errResponseTooLarge
+		}
 		var m map[string]json.RawMessage
 		if json.Unmarshal(raw, &m) != nil {
 			continue
@@ -679,8 +699,12 @@ func (s *streamState) fillArguments(items []json.RawMessage) []json.RawMessage {
 		args, _ := json.Marshal(b.String())
 		m["arguments"] = args
 		if patched, err := json.Marshal(m); err == nil {
-			out[i] = patched
+			remaining -= len(patched) - len(raw)
+			if remaining < 0 {
+				return errResponseTooLarge
+			}
+			items[i] = patched
 		}
 	}
-	return out
+	return nil
 }
