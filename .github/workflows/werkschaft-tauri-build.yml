@@ -73,11 +73,13 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test packaging and release contracts
-        run: node --test scripts/test-package.cjs scripts/test-release.cjs scripts/test-notify-bridge.cjs
+        run: >-
+          node --test scripts/test-package.cjs scripts/test-release.cjs scripts/test-notify-bridge.cjs
+          scripts/assemble-daemon-input.test.js scripts/daemon-selection.test.js scripts/daemon-stage.test.js
 
       - name: Assemble and validate the wsflow daemon input without executing it
         run: >-
-          node ../desktop-electron/scripts/assemble-daemon-input.cjs
+          node scripts/assemble-daemon-input.cjs
           --binary "${{ runner.temp }}/ws-mcp-assets/${{ matrix.binary }}"
           --out "${{ runner.temp }}/tauri-daemon-input"
           --platform "${{ matrix.platform }}" --package wsflow

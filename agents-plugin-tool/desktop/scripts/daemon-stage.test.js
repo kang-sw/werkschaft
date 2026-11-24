@@ -13,7 +13,7 @@ for (const platform of ['darwin', 'win32']) test('copies and validates the entir
   assert(fs.existsSync(path.join(destination, 'bin/ws-mcp-launcher.py')));
   assert.throws(() => copyPackage(f.bundled.root, destination, 'bundled', platform), /not an empty directory/);
   const link = path.join(f.bundled.root, 'extra-link');
-  fs.symlinkSync(f.bundled.binary, link);
+  fs.symlinkSync(f.bundled.root, link, 'junction');
   assert.throws(() => copyPackage(f.bundled.root, path.join(f.base, 'linked'), 'bundled', platform), /link or special/);
   assert.equal(fs.existsSync(path.join(f.base, 'linked')), false);
 });
