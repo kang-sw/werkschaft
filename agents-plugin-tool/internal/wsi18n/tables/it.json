@@ -550,6 +550,8 @@
   "js.term.state.wait": "riconnessione…",
   "js.hint.enter": "Scrivi a questa sessione. Invio invia, Shift+Enter va a capo. Le risposte della lavagna e le immagini incollate vengono allegate. Inizia con ! per un comando bash.",
   "js.hint.mod": "Scrivi a questa sessione. Ctrl/Cmd+Enter invia, Invio va a capo. Le risposte della lavagna e le immagini incollate vengono allegate.",
+  "js.composer.send.key": "Invia ({0})",
+  "js.composer.multiline.revert": "Torna all’invio con Invio",
   "js.img.big": "{0} supera 10 MiB",
   "js.img.max": "un messaggio contiene al massimo {0} immagini",
   "js.img.readfail": "Impossibile leggere {0}.",

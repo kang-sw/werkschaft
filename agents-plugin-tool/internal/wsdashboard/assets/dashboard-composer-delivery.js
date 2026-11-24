@@ -77,6 +77,7 @@
     var inlineBack = inlineEditor() ? { text: ctext.value, capsules: inlineEditor().snapshot(), selections: bselections.map(function (s) { return { key: s.key, mentions: s.mentions, comment: s.comment, images: s.images }; }) } : null;
     pics.forEach(dropImg);
     ctext.value = ""; grow(); clearMentions();
+    if (typeof resetAutoMultiline === "function") resetAutoMultiline();
     list.forEach(function (c) { dropChip(c.id); });
     list.forEach(function (c) { setItem(c.id, null); });
     bmentions = []; bselections = []; closeRequests = []; wpicks = []; wconsoles = [];

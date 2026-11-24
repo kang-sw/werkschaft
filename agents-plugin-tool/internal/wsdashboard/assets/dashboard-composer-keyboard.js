@@ -28,7 +28,9 @@
   if (ctext) {
     var csend = $("csend");
     if (csend) csend.addEventListener("click", function () { sendMessage(); ctext.focus(); });
-    ctext.addEventListener("input", function () { grow(); syncMarkers(); trackMentions(); paintMentions(); });
+    var crevert = $("csend-revert");
+    if (crevert) crevert.addEventListener("click", function () { if (typeof revertAutoMultiline === "function") revertAutoMultiline(); });
+    ctext.addEventListener("input", function () { grow(); syncMarkers(); trackMentions(); paintMentions(); if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue(); });
     // Tab indents rather than leaving the composer; Escape, then Tab,
     // leaves it (the keyboard way out).
     var tabOut = false;
@@ -59,10 +61,13 @@
       if (e.key !== "Shift") tabOut = false;
       if (e.key !== "Enter") return;
       var mod = e.ctrlKey || e.metaKey;
+      var effMode = typeof effectiveInputMode === "function" ? effectiveInputMode() : inputMode;
+      var isSend = effMode === "enter" ? !e.shiftKey && !e.altKey : mod;
       // Ignore auto-repeated Enter/send-chord keydowns (e.g. holding Enter right
       // after picking a command history entry) so only a fresh press submits.
-      if (e.repeat && (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod)) { e.preventDefault(); return; }
-      if (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod) { e.preventDefault(); sendMessage(); }
+      if (e.repeat && isSend) { e.preventDefault(); return; }
+      if (isSend) { e.preventDefault(); sendMessage(); return; }
+      if (inputMode === "enter" && !e.repeat && e.shiftKey && !mod && !e.altKey && typeof setAutoMultiline === "function") setAutoMultiline(true);
     });
     // The form script's own listeners have rebuilt the reply line by the
     // time an event bubbles here.

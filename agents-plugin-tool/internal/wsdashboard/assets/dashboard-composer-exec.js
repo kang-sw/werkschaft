@@ -203,8 +203,11 @@
     if (!track || !track.intact || now.indexOf(text) !== 0) return;
     if (now === text) {
       ctext.value = ""; grow(); clearMentions();
+      if (typeof resetAutoMultiline === "function") resetAutoMultiline();
     } else {
       ctext.value = now.slice(text.length); grow();
+      if (typeof resetAutoMultiline === "function") resetAutoMultiline();
+      if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue();
     }
     if (typeof bangHistClose === "function") bangHistClose(false);
     bangSync();
@@ -322,7 +325,8 @@
         if (csendBtn) { csendBtn.title = wsT("js.cexec.bang.send"); csendBtn.setAttribute("aria-label", wsT("js.cexec.bang.send")); }
       } else {
         if (bangDesc !== null) ctext.setAttribute("aria-description", bangDesc);
-        if (csendBtn) { csendBtn.title = wsT("composer.send"); csendBtn.setAttribute("aria-label", wsT("composer.send")); }
+        if (typeof syncSendButtonLabel === "function") syncSendButtonLabel();
+        else if (csendBtn) { csendBtn.title = wsT("composer.send"); csendBtn.setAttribute("aria-label", wsT("composer.send")); }
       }
     }
     bangPaint(on);
@@ -693,7 +697,8 @@
     return wsT("js.wb.body.year", Math.floor(d / 365));
   }
   function bangSendKeyLabel() {
-    return typeof inputMode !== "undefined" && inputMode === "mod" ? "Ctrl/Cmd+Enter" : "Enter";
+    var m = typeof effectiveInputMode === "function" ? effectiveInputMode() : (typeof inputMode !== "undefined" ? inputMode : "enter");
+    return m === "mod" ? "Ctrl/Cmd+Enter" : "Enter";
   }
 
   // --- trigger badge & popup UI -------------------------------------------
@@ -855,7 +860,7 @@
   }
   function bangHistSyncMode() {
     if (!histPop) return;
-    var isMod = typeof inputMode !== "undefined" && inputMode === "mod";
+    var isMod = (typeof effectiveInputMode === "function" ? effectiveInputMode() : (typeof inputMode !== "undefined" ? inputMode : "enter")) === "mod";
     if (histEmptyHintEl) histEmptyHintEl.textContent = wsT(isMod ? "js.cexec.hist.empty.mod" : "js.cexec.hist.empty.enter");
     if (histHintsEl) {
       histHintsEl.textContent = "";

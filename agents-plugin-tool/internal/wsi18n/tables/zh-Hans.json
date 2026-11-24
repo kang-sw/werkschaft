@@ -550,6 +550,8 @@
   "js.term.state.wait": "正在重新连接…",
   "js.hint.enter": "向此会话发送消息。Enter 发送，Shift+Enter 换行。白板回答和粘贴的图片会一并附上。以 ! 开头则为 bash 命令。",
   "js.hint.mod": "向此会话发送消息。Ctrl/Cmd+Enter 发送，Enter 换行。白板回答和粘贴的图片会一并附上。",
+  "js.composer.send.key": "发送 ({0})",
+  "js.composer.multiline.revert": "恢复 Enter 发送模式",
   "js.img.big": "{0} 大于 10 MiB",
   "js.img.max": "一条消息最多包含 {0} 张图片",
   "js.img.readfail": "无法读取 {0}。",
