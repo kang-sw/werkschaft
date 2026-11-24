@@ -229,6 +229,11 @@ Depends on Phase 1 (normalized `NoticeUsageLimit` alerts across all 4 harnesses)
 - Moved `agy` model-group quota-reset lookup into `internal/wsdashboard/plan_usage_agy.go` so `TestCommonCodeHasNoHarnessNameBranch` passes cleanly.
 - Verified with `go test -count=1 ./internal/wsagent/... ./cmd/ws-mcp/... ./internal/werk/... ./internal/wslive/... ./internal/wsconfig/... ./internal/wsi18n/...`, `go test -count=1 ./internal/mcp -run 'Config|Manifest|Settings|Tune|DashboardSettings'`, `go test -count=1 ./internal/wsdashboard -run 'Settings|Manifest|Locale|I18n|PlanUsage|Quota'`, `GOOS=windows go vet -stdversion=false`, `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, and `python3 -m unittest discover agents-plugin-wsflow/tests`.
 
+#### Edition (4596e03d) - 2026-11-24
+
+- Fixed 3 blocking review findings and nits: (1) added `quotaInputGen` generation re-check under `wmu+mu` before `wsinbox.Send` (with rollback to `nil` + host sync on input race or `wsinbox.Send` error), (2) auto-cancelled `QuotaContinuation` in `conv.mailChanged()` and made `quotaContinuationTimedOut()` return `bool` so `kick()` falls through to `kickInput()` instead of stranding mail, (3) added `c.quotaPendingFire` to `hasPendingKick()` for `StartForPublication` wakeup, tightened HTTP-shaped `429` matching in `isAgyQuotaText()`, and synced host snapshots on close/release.
+- Clarification: the implemented known-reset delay is `ResetsAt + 30s + jitter(0..60s)` matching D2 (correcting the `60s` typo in the summary above).
+
 ### Phase 3: Dashboard usage-limit capsule schedule/cancel UI and end-to-end verification
 
 Depends on Phase 2 (HTTP endpoints and `wslive.Host.QuotaContinuation` projection).
