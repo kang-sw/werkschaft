@@ -367,7 +367,13 @@
         var clearance = typeof opt.clearance === 'function' ? opt.clearance() : opt.clearance || 0;
         var r = node.getBoundingClientRect(), clip = scroller.getBoundingClientRect();
         var offset = r.top - clip.top - (scroller.clientTop || 0);
-        if (anchor.land(node, centeredTop(scroller, r, clip, clearance), opt.behavior === 'smooth', offset)) {
+        var recheck = typeof opt.clearance === 'function' ? function () {
+          var destination = opt.clearance();
+          if (Math.abs(destination - clearance) >= 0.5) {
+            return centeredTop(scroller, node.getBoundingClientRect(), scroller.getBoundingClientRect(), destination);
+          }
+        } : null;
+        if (anchor.land(node, centeredTop(scroller, r, clip, clearance), opt.behavior === 'smooth', offset, recheck)) {
           if (s && s.cancel) s.cancel();
           return keep(node, { scroller: scroller, capture: false });
         }

@@ -351,6 +351,7 @@ function buildBootstrapScript(savedCards) {
         paletteRows: paletteRows,
         paletteHistory: paletteHistory,
         palettePick: palettePick,
+        applySent: applySent,
         effectJump: effectJump,
         hasOverviewHeld: function () { return !!boardOverviewHeld; },
       };
@@ -851,7 +852,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           });
         }).join('\n');
 
-        const result = await page.evaluate(({ tid, itemId, initHtml, html, farExemptCount, sentRowCount }) => {
+        const result = await page.evaluate(async ({ tid, itemId, initHtml, html, farExemptCount, sentRowCount }) => {
           // Establish baseline boardRendered hash and flush initial viewed hold before adding drafts/SSE update.
           window.__testApi.swapBoard('h-init', initHtml);
           const allTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
@@ -989,6 +990,25 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           window.WsBoardAnchor.select(targetSec);
           const marksAfterAppend = targetSec.querySelectorAll(`#item-${itemId} .sentmark`).length;
 
+          // Observer maintenance runs before the next frame's topic hydration.
+          const first = sentBox.querySelector(`i[data-id="${itemId}"]`);
+          const unrelated = sentBox.querySelector('i[data-id^="9"]');
+          let unrelatedReads = 0;
+          const read = unrelated.getAttribute;
+          unrelated.getAttribute = function (name) { unrelatedReads++; return read.call(this, name); };
+          first.remove();
+          extra.setAttribute('data-answer', 'updated');
+          await Promise.resolve();
+          window.__testApi.applySent(true, targetSec);
+          const texts = () => Array.from(targetSec.querySelectorAll(`#item-${itemId} .sentmark`), el => el.textContent);
+          const marksAfterEdit = texts();
+          const replacement = sentBox.cloneNode(false);
+          replacement.innerHTML = `<i data-id="${itemId}" data-state="sent" data-answer="replacement"></i>`;
+          sentBox.replaceWith(replacement);
+          window.__testApi.applySent(false);
+          window.__testApi.applySent(true, targetSec);
+          const marksAfterReplace = texts();
+
           document.querySelector = origDocQS;
           document.querySelectorAll = origDocQSA;
           document.getElementsByClassName = origDocClass;
@@ -1002,6 +1022,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             hydratedItemHasSentClass: !!(hydratedItem && hydratedItem.classList.contains('sent-sent')),
             sentMarkText: sentMark ? sentMark.textContent : null,
             marksAfterAppend,
+            marksAfterEdit,
+            marksAfterReplace,
+            unrelatedReads,
             wholeBoardSentScans,
             docSentScans,
             parkedDrafts,
@@ -1027,6 +1050,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
         assert.equal(result.hydratedItemHasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
         assert.equal(result.sentMarkText, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
         assert.equal(result.marksAfterAppend, 2, 'incremental .sentdata append updates scoped sentIndex on next hydration');
+        assert.deepEqual(result.marksAfterEdit, ['held · updated'], 'scoped hydration sees both the removal and attribute update');
+        assert.deepEqual(result.marksAfterReplace, ['sent · replacement'], 'scoped hydration reads the replacement conversation box');
+        assert.equal(result.unrelatedReads, 0, 'editing or replacing a sent box never rereads unrelated old rows');
         assert.equal(result.decorateWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board WsCards.decorate()');
         assert.equal(result.decorateScoped, 1, 'hydrating one stashed topic calls scoped WsCards.decorate(sec) exactly once');
         assert.ok(result.bindBoardScoped >= 1, 'hydrating one stashed topic calls scoped wbBindBoard(sec)');
@@ -1119,6 +1145,34 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.equal(afterResolve.remainingLazyGaps, 0, 'all lazy gaps on live reattached topic were filled');
     assert.equal(afterResolve.hasGap1Match, true, 'gap 1 archived match appears in search palette');
     assert.equal(afterResolve.hasGap2Match, true, 'gap 2 archived match appears in search palette');
+  });
+
+  await t.test('a palette reply fills a topic evicted after the live request starts', async () => {
+    const { ctx, page, errors } = await openHarness(browser, { topicCount: 30 });
+    t.after(() => ctx.close());
+    const id = topicHexId(13);
+    const result = await page.evaluate(async ([id, far, html]) => {
+      const sec = document.getElementById(id);
+      window.WsBoardAnchor.select(sec, { smooth: false });
+      const live = !sec.hasAttribute('data-wb-virtual') && !!sec.querySelector('.history-gap[data-lazy]');
+      let finish;
+      window.wbHistoryFetch = query => new URLSearchParams(query).getAll('name').includes(id)
+        ? new Promise(resolve => { finish = resolve; })
+        : Promise.resolve([]);
+      let updated;
+      window.__testApi.paletteHistory(rows => { updated = rows; });
+      await Promise.resolve();
+      if (!finish) throw new Error('The live palette request did not include the target topic');
+      window.WsBoardAnchor.select(document.getElementById(far), { smooth: false });
+      const evicted = sec.hasAttribute('data-wb-virtual');
+      finish([{ name: id, html }]);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return { live, evicted, entry: updated?.some(row => row.topic === id && row.entry === 'e1304'),
+        stillEvicted: sec.hasAttribute('data-wb-virtual') };
+
+    }, [id, topicHexId(29), buildTopicHtml(13, { twoGaps: true })]);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(result, { live: true, evicted: true, entry: true, stillEvicted: true });
   });
 
   await t.test('Important #7 & #8 (Chromium): Overview Quick Look folded placeholder matches folded geometry and exposes accessible name with inert controls', async () => {

@@ -307,71 +307,78 @@
   // the open-question pill's class observer.
   var sentSig = null;
   var sentLive = doc.getElementsByClassName ? doc.getElementsByClassName("sentdata") : null;
-  var sentIndex = null;
-  var sentIndexDirty = true;
-  var sentIndexBoxes = [];
-  var sentIndexObs = null;
-  function sentIndexAdd(el) {
-    if (!el || el.nodeType !== 1 || el.tagName !== "I") return false;
+  var sentIndex = new Map();
+  var sentIndexBoxes = new Map();
+  function sentIndexAdd(rows, el) {
+    if (el.tagName !== "I") return;
     var id = el.getAttribute("data-id");
-    if (!id) return true;
-    var list = sentIndex.get(id);
-    if (!list) { list = []; sentIndex.set(id, list); }
-    list.push({
+    if (!id) return;
+    var rec = {
+      el: el, id: id,
       state: el.getAttribute("data-state") || "",
       answer: el.getAttribute("data-answer") || "",
       note: el.getAttribute("data-note") || ""
+    };
+    rows.set(el, rec);
+    var list = sentIndex.get(id);
+    if (!list) { list = []; sentIndex.set(id, list); }
+    var after = list.findIndex(function (other) { return el.compareDocumentPosition(other.el) & 4; });
+    if (after < 0) list.push(rec);
+    else list.splice(after, 0, rec);
+  }
+  function sentIndexRemove(rows, el) {
+    var rec = rows.get(el);
+    if (!rec) return;
+    rows.delete(el);
+    var list = sentIndex.get(rec.id);
+    list.splice(list.indexOf(rec), 1);
+    if (!list.length) sentIndex.delete(rec.id);
+  }
+  function sentIndexApplyRecords(box, rows, records) {
+    var changed = new Set();
+    records.forEach(function (record) {
+      if (record.type === "attributes") changed.add(record.target);
+      else if (record.target === box) {
+        record.removedNodes.forEach(function (el) { changed.add(el); });
+        record.addedNodes.forEach(function (el) { changed.add(el); });
+      }
     });
-    return true;
+    changed.forEach(function (el) {
+      sentIndexRemove(rows, el);
+      if (el.parentNode === box) sentIndexAdd(rows, el);
+    });
   }
-  function sentIndexApplyRecords(records) {
-    if (!records || !records.length) return;
-    if (sentIndexDirty || !sentIndex) return;
-    for (var r = 0; r < records.length; r++) {
-      var rec = records[r];
-      if (rec.type !== "childList" || (rec.removedNodes && rec.removedNodes.length)) {
-        sentIndexDirty = true;
-        return;
+  // Conversation swaps reconcile sent boxes here. The observers handle row
+  // edits between swaps, so hydrating a topic only reads the index.
+  function sentIndexRefresh() {
+    var boxes = new Set(sentLive || q(".sentdata"));
+    sentIndexBoxes.forEach(function (entry, box) {
+      if (!boxes.has(box)) {
+        if (entry.observer) entry.observer.disconnect();
+        entry.rows.forEach(function (_, el) { sentIndexRemove(entry.rows, el); });
+        sentIndexBoxes.delete(box);
       }
-      var added = rec.addedNodes;
-      for (var a = 0; a < added.length; a++) {
-        if (!sentIndexAdd(added[a])) { sentIndexDirty = true; return; }
-      }
-    }
-  }
-  function sentBoxesChanged() {
-    if (!sentLive) return true;
-    if (sentLive.length !== sentIndexBoxes.length) return true;
-    for (var k = 0; k < sentLive.length; k++) {
-      if (sentLive[k] !== sentIndexBoxes[k]) return true;
-    }
-    return false;
-  }
-  function sentIndexRebuild() {
-    sentIndex = new Map();
-    sentIndexBoxes = [];
-    if (sentIndexObs) sentIndexObs.disconnect();
-    if (!sentIndexObs && window.MutationObserver) {
-      sentIndexObs = new MutationObserver(sentIndexApplyRecords);
-    }
-    var boxes = sentLive ? Array.prototype.slice.call(sentLive) : q(".sentdata");
-    for (var b = 0; b < boxes.length; b++) {
-      var box = boxes[b];
-      sentIndexBoxes.push(box);
-      if (sentIndexObs) sentIndexObs.observe(box, { childList: true, attributes: true, subtree: true });
-      var kids = box.children;
-      if (kids) {
-        for (var c = 0; c < kids.length; c++) sentIndexAdd(kids[c]);
+    });
+    boxes.forEach(function (box) {
+      var entry = sentIndexBoxes.get(box);
+      if (!entry) {
+        var rows = new Map();
+        var observer = window.MutationObserver && new MutationObserver(function (records) {
+          sentIndexApplyRecords(box, rows, records);
+        });
+        sentIndexBoxes.set(box, { rows: rows, observer: observer });
+        if (observer) observer.observe(box, {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ["data-id", "data-state", "data-answer", "data-note"]
+        });
+        Array.prototype.forEach.call(box.children, function (el) { sentIndexAdd(rows, el); });
+      } else if (entry.observer) {
+        sentIndexApplyRecords(box, entry.rows, entry.observer.takeRecords());
       } else {
-        q("i[data-id]", box).forEach(sentIndexAdd);
+        entry.rows.forEach(function (_, el) { sentIndexRemove(entry.rows, el); });
+        Array.prototype.forEach.call(box.children, function (el) { sentIndexAdd(entry.rows, el); });
       }
-    }
-    sentIndexDirty = false;
-  }
-  function sentIndexGet() {
-    if (sentIndexObs && sentIndexObs.takeRecords) sentIndexApplyRecords(sentIndexObs.takeRecords());
-    if (sentIndexDirty || !sentIndex || sentBoxesChanged()) sentIndexRebuild();
-    return sentIndex;
+    });
   }
   function applySent(force) {
     var scope = arguments[1];
@@ -387,8 +394,9 @@
       head.insertBefore(m, idEl ? idEl.nextSibling : head.firstChild);
     }
     var index;
-    if (typeof sentIndexGet === "function") {
-      index = sentIndexGet();
+    if (typeof sentIndexRefresh === "function") {
+      if (!scope) sentIndexRefresh();
+      index = sentIndex;
     } else {
       index = new Map();
       q(".sentdata i[data-id]").forEach(function (n) {

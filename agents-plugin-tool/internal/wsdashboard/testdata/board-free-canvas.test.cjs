@@ -947,7 +947,7 @@ test('6. Smooth select (mounted vs off-window), anchorMO inset preserve, and pos
   // 6b-2: Smooth select to an OFF-WINDOW card (Card 20) sets scrollTop synchronously (never smooth-scrolls across 50000px blank runway).
   scrollToCalls.length = 0;
   h.ctx.WsBoardAnchor.select(h.nodes[20], { smooth: true });
-  assert.equal(scrollToCalls.length, 0, 'off-window jump to RUNWAY_MID never uses smooth scrollTo');
+  assert.deepEqual(scrollToCalls.map(call => call.behavior), ['instant'], 'off-window jump cancels the outstanding smooth scroll');
   assert.ok(h.bcol.scrollTop > 40000, 'off-window jump synchronously moves scrollTop to Card 20 near 50000px');
   assert.equal(h.ctx.WsBoardAnchor.windowInfo().anchorIdx, 20, 'anchorIdx is 20 after off-window jump');
 

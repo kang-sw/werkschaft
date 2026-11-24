@@ -94,6 +94,8 @@
   function hideMention(keep, keepImages) {
     var p = mpend;
     mpend = null;
+    var virtual = window.WsBoardVirtual;
+    if (p && p.frame && virtual && virtual.markExemptDirty) virtual.markExemptDirty(p.frame);
     if (p && !keep) (p.images || []).forEach(function (n) {
       if (p.edit && p.edit.images.indexOf(n) >= 0) return;
       var it = imgs.filter(function (it) { return it.n === n; })[0];

@@ -26,6 +26,9 @@ func TestBoardFrameBands(t *testing.T) {
 	src := dashboardFuncs(t, "boardBands", "frameInOverviewPreview", "frameNear", "bandBoard", "bandTopic", "topicBand", "unmountFrames", "unmountFrame",
 		"frameShown", "mountFrame", "mountFrames", "mountFramesPaced", "mountSlice", "frameToggle", "cvWatch")
 	runNode(t, "viewport bands", frameDOM+src+`
+SEL["[data-overview-live], [data-max], [data-has-panel-max]"] = function (n) {
+  return ["data-overview-live", "data-max", "data-has-panel-max"].some(function (attr) { return n.hasAttribute(attr); });
+};
 var root = { away: false, hasAttribute: function (k) { return k === "data-gal-away" && root.away; } };
 var mountList = [], mountTask = false, NEAR = "100% 0px", FAR = "400% 0px", topicNear = {}, topicRO = null, frameSizes = new Map(), mpend = null, cvRO = null;
 var clock = 0, timers = [];
@@ -97,6 +100,15 @@ check("a frame mounted again is marked for its first height", pa1.wbUnmounted ==
 var P1 = frame("topic:p"); P1.style.height = "50px";
 check("a frame mounted at a height a swap gave it is not", !mountFrame(P1).wbFirst);
 check("the frame mounted again takes the swap's first-height marks", el(pa1).wbKeep === true && el(pa2).wbGrow === true);
+
+["data-overview-live", "data-max", "data-has-panel-max"].forEach(function (attr) {
+  var retained = el(pa1);
+  A.setAttribute(attr, "");
+  report(A, NEAR, false); report(A, FAR, false);
+  check(attr + " keeps far frames mounted", retained.parentNode === A);
+  A.removeAttribute(attr);
+  report(A, NEAR, true);
+});
 
 // Frames the page holds stay mounted.
 var held = [el(pa1), el(pa2), el(C1)];
