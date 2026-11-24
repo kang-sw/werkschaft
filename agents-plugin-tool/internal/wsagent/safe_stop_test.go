@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,6 +224,8 @@ func TestSafeOnlyStopRefusesOverlappingDescendantTransitions(t *testing.T) {
 	b := &conv{r: h.runner, rec: Record{ReplyID: "child-b", Parent: parent}, lastReg: h.opts.Now(), turn: true}
 	h.runner.mu.Lock()
 	h.runner.convs[a.rec.ReplyID], h.runner.convs[b.rec.ReplyID] = a, b
+	h.runner.indexChildLocked(a.rec)
+	h.runner.indexChildLocked(b.rec)
 	h.runner.mu.Unlock()
 	defer func() {
 		h.runner.mu.Lock()
@@ -256,5 +259,110 @@ func TestSafeOnlyStopRefusesOverlappingDescendantTransitions(t *testing.T) {
 		b.mu.Unlock()
 		<-out
 		t.Fatal("safe Stop waited for a descendant transition instead of refusing admission")
+	}
+}
+
+func TestSafeOnlyStopAllowsUnrelatedLeadContention(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, _ := h.settledLead()
+	otherID, _ := h.settledLead()
+	other := h.runner.conv(otherID)
+	other.mu.Lock()
+	out := make(chan reply, 1)
+	go func() {
+		out <- h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+	}()
+	select {
+	case res := <-out:
+		other.mu.Unlock()
+		if res.status != http.StatusOK || h.state(id).Process || !h.state(otherID).Process {
+			t.Fatalf("safe-only stop with a separate lead locked: status %d, body %s", res.status, res.body)
+		}
+	case <-time.After(2 * time.Second):
+		other.mu.Unlock()
+		<-out
+		t.Fatal("safe Stop waited on a separate lead")
+	}
+}
+
+// execPublishingHolder publishes a new immutable count snapshot at the
+// holder check inside the Stop admission.
+type execPublishingHolder struct {
+	Process
+	holderProcess
+	publish func()
+	once    sync.Once
+}
+
+func (p *execPublishingHolder) HolderInfo() (string, int, bool) {
+	p.once.Do(p.publish)
+	return p.holderProcess.HolderInfo()
+}
+
+func TestSafeOnlyStopScopesExecPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target bool
+		status int
+	}{
+		{name: "separate lead", status: http.StatusOK},
+		{name: "target lead", target: true, status: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLeadHarness(t).start()
+			id, _ := h.settledLead()
+			owner, _ := h.settledLead()
+			if tc.target {
+				owner = id
+			}
+			root := h.runner.conv(id)
+			counts := map[string]int{owner: 1}
+			if !root.do(func() {
+				root.mu.Lock()
+				defer root.mu.Unlock()
+				root.proc = &execPublishingHolder{
+					Process: root.proc, holderProcess: root.proc.(holderProcess),
+					publish: func() { h.runner.exec.live.Store(&counts) },
+				}
+			}) {
+				t.Fatal("target conversation exited before Stop")
+			}
+			res := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+			if res.status != tc.status || h.runner.execLive(owner) != 1 || h.state(id).Process != tc.target {
+				t.Fatalf("safe-only stop with a new exec count for %s: status %d, body %s", owner, res.status, res.body)
+			}
+		})
+	}
+}
+
+func TestSafeOnlyStopRefusesPendingDescendantSpawn(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, _ := h.settledLead()
+	parent := &ParentRef{Kind: ParentLead, ReplyID: id}
+	child := &conv{r: h.runner, rec: Record{ReplyID: "child", Parent: parent}, lastReg: h.opts.Now()}
+	h.runner.mu.Lock()
+	h.runner.convs[child.rec.ReplyID] = child
+	h.runner.indexChildLocked(child.rec)
+	h.runner.mu.Unlock()
+	defer func() {
+		h.runner.mu.Lock()
+		delete(h.runner.convs, child.rec.ReplyID)
+		h.runner.mu.Unlock()
+	}()
+
+	_, release, err := h.runner.reserveSpawnWidth(ParentRef{Kind: ParentConversation, ReplyID: child.rec.ReplyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	post := func() reply {
+		return h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
+	}
+	if res := post(); res.status != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("safe-only stop during a pending grandchild spawn: status %d, body %s", res.status, res.body)
+	}
+	release()
+	if res := post(); res.status != http.StatusOK || h.state(id).Process {
+		t.Fatalf("safe-only stop after releasing spawn reservation: status %d, body %s", res.status, res.body)
 	}
 }
