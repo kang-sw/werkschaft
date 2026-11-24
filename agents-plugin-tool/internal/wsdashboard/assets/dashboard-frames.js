@@ -111,7 +111,7 @@
     if (frameInOverviewPreview(f)) return true;
     var t = f.parentNode ? f.parentNode.closest("section.topic[data-topic]") : null;
     if (!t) return true;
-    if (t.hasAttribute("data-overview-live") || t.hasAttribute("data-max")) return true;
+    if (t.matches("[data-overview-live], [data-max], [data-has-panel-max]")) return true;
     if (window.WsBoardVirtual && window.WsBoardVirtual.isNear && window.WsBoardVirtual.isNear(t)) return true;
     bandTopic(t);
     var near = t.wbNear !== undefined ? t.wbNear : topicNear[t.getAttribute("data-topic")] === true;
@@ -169,12 +169,16 @@
   // topicBand takes a band report for topic t. A report with no box (a
   // hidden board column, a topic taken off the page) tells no distance. A
   // docked topic (cards.js) on a gallery page not shown reports far, but
-  // stays mounted: switching pages never reloads a frame. So does a board
-  // topic while the narrow view's Main Board stands off the view behind a
-  // docked page (the root's data-gal-away).
+  // stays mounted: switching pages never reloads a frame. Keep frames for a
+  // fullscreen topic or panel, and on the Main Board behind a docked page.
   function topicBand(t, r, near) {
     if (!r.rect || (!r.rect.width && !r.rect.height)) return;
-    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !t.hasAttribute("data-overview-live") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
+    if (!near) {
+      if (!r.visible && !root.hasAttribute("data-gal-away")
+          && !t.matches("[data-overview-live], [data-max], [data-has-panel-max]")
+          && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t);
+      return;
+    }
     t.wbNear = r.visible;
     topicNear[t.getAttribute("data-topic")] = r.visible;
     if (r.visible && !t.hasAttribute("data-wb-virtual")) mountFramesPaced(t);

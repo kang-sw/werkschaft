@@ -1023,7 +1023,8 @@
     return best >= 0 ? best : closest;
   }
   function freeApplyOffWindow(node, scrubbing) {
-    if (!node || (node.hasAttribute && node.hasAttribute("data-max"))) return;
+    // Parking a panel's topic would also hide and disable its fixed sheet.
+    if (!node || (node.hasAttribute && (node.hasAttribute("data-max") || node.hasAttribute("data-has-panel-max")))) return;
     if (freeCardRO && freeObserved.has(node)) {
       try { freeCardRO.unobserve(node); } catch (e) {}
       freeObserved.delete(node);
