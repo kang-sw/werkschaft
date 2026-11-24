@@ -106,6 +106,9 @@
     new MutationObserver(attrs).observe(field, { attributes: true }); attrs();
     // Reading the editable DOM emits canonical text, never the displayed label.
     // Block boundaries also handle native IME/undo mutations without rewriting them.
+    function isMeaningful(node) { return node.nodeType === 1 || (node.nodeType === 3 && node.nodeValue.length > 0); }
+    function prevMeaningful(node) { for (var s = node.previousSibling; s; s = s.previousSibling) if (isMeaningful(s)) return s; return null; }
+    function nextMeaningful(node) { for (var s = node.nextSibling; s; s = s.nextSibling) if (isMeaningful(s)) return s; return null; }
     function read(root, endpoint) {
       var out = "", marks = [], units = [], position = 0;
       function walk(n) {
@@ -128,12 +131,13 @@
           units.push({ node: n, start: start, end: out.length, atomic: true }); return;
         }
         if (n.nodeName === "BR") {
-          // A final BR is the native caret filler, not another blank line.
-          if (!n.nextSibling && (n.parentNode === root || /^(DIV|P)$/.test(n.parentNode.nodeName))) return;
+          // A trailing BR (with no meaningful following sibling) is the native caret filler, not another blank line.
+          if (!nextMeaningful(n) && (n.parentNode === root || /^(DIV|P)$/.test(n.parentNode.nodeName))) return;
           out += "\n"; units.push({ node: n, start: start, end: out.length, atomic: true }); return;
         }
         var block = n !== root && /^(DIV|P)$/.test(n.nodeName);
-        if (block && n.previousSibling && (/^(DIV|P)$/.test(n.previousSibling.nodeName) || !out || out.slice(-1) !== "\n")) {
+        var prev = block ? prevMeaningful(n) : null;
+        if (block && prev && (/^(DIV|P)$/.test(prev.nodeName) || (out && out.slice(-1) !== "\n"))) {
           var boundary = out.length; out += "\n";
           units.push({ node: n, start: boundary, end: out.length, atomic: true, boundary: true });
         }
@@ -142,7 +146,8 @@
           walk(child);
         });
         if (endpoint && endpoint.node === n && endpoint.offset === n.childNodes.length) position = out.length;
-        if (block && n.nextSibling && !/^(DIV|P)$/.test(n.nextSibling.nodeName) && out.slice(-1) !== "\n") out += "\n";
+        var next = block ? nextMeaningful(n) : null;
+        if (block && next && !/^(DIV|P)$/.test(next.nodeName) && out.slice(-1) !== "\n") out += "\n";
       }
       walk(root); return { text: out, ranges: valid(out, marks), units: units, position: position };
     }
@@ -189,7 +194,9 @@
         editor.appendChild(doc.createTextNode(text.slice(at, r.start)));
         editor.appendChild(capsule(r.kind, r.id, r.label, r.key, r.payload)); at = r.end;
       });
-      editor.appendChild(doc.createTextNode(text.slice(at))); select(selection[0], selection[1]);
+      var tail = text.slice(at);
+      if (tail || ranges.length) editor.appendChild(doc.createTextNode(tail));
+      select(selection[0], selection[1]);
     }
     function changed(before, action) {
       var after = valid(text, ranges), left = before.slice(), added = [], removed = [], updated = [];
@@ -251,9 +258,19 @@
     field.focus = function () { attrs(); if (!field.hidden && !field.disabled) { if (doc.activeElement === editor) offsets(); seenCaret = true; editor.focus(); select(selection[0], selection[1]); } };
     field.blur = function () { editor.blur(); };
     field.select = function () { field.focus(); select(0, text.length); };
+    editor.addEventListener("beforeinput", function (e) {
+      e.stopPropagation();
+      if (e.defaultPrevented) return;
+      var forward = new Event("beforeinput", { bubbles: true, cancelable: true });
+      Object.defineProperty(forward, "inputType", { value: e.inputType });
+      Object.defineProperty(forward, "data", { value: e.data });
+      Object.defineProperty(forward, "isComposing", { value: composing || !!e.isComposing });
+      if (!field.dispatchEvent(forward)) e.preventDefault();
+    });
     editor.addEventListener("input", function (e) {
       e.stopPropagation(); var before = valid(text, ranges), state = read(editor); text = state.text; ranges = state.ranges;
-      if (editor.childNodes.length === 1 && editor.firstChild.nodeName === "BR") text = "";
+      var meaningful = Array.prototype.filter.call(editor.childNodes, isMeaningful);
+      if (meaningful.length === 1 && meaningful[0].nodeName === "BR") text = "";
       offsets(); notify(before);
     });
     editor.addEventListener("compositionstart", function () { composing = true; field.dispatchEvent(new Event("compositionstart")); });

@@ -159,6 +159,84 @@ f.wsc.editor.textContent = 'first'; f.wsc.editor.appendChild(new El('br')); f.ws
 f.wsc.editor.dispatchEvent(new Evt('input')); assert.equal(f.value, 'first\n');
 f.setSelectionRange(6, 6); assert.equal(f.selectionStart, 6, 'caret offsets use the original DOM, not a truncated filler-break clone');
 
+// Phantom newline regression: trailing empty text nodes after caret-filler BR,
+// leading empty text before DIV/P blocks, and empty render() DOM hygiene.
+const emptyField = make('');
+assert.equal(emptyField.wsc.editor.childNodes.length, 0, 'empty render leaves editor childless for :empty::before placeholder');
+emptyField.value = 'abc';
+assert.equal(emptyField.wsc.editor.childNodes.length, 1);
+emptyField.value = '';
+assert.equal(emptyField.wsc.editor.childNodes.length, 0, 'clearing text leaves editor childless again');
+
+// [BR, Text("")] and [Text(""), BR] read as "".
+emptyField.wsc.editor.textContent = '';
+emptyField.wsc.editor.appendChild(new El('br'));
+emptyField.wsc.editor.appendChild(textNode(''));
+emptyField.wsc.editor.dispatchEvent(new Evt('input'));
+assert.equal(emptyField.value, '', '[BR, Text("")] reads as empty string');
+
+emptyField.wsc.editor.textContent = '';
+emptyField.wsc.editor.appendChild(textNode(''));
+emptyField.wsc.editor.appendChild(new El('br'));
+emptyField.wsc.editor.dispatchEvent(new Evt('input'));
+assert.equal(emptyField.value, '', '[Text(""), BR] reads as empty string');
+
+// [Text("foo"), BR, Text("")] reads as "foo", not "foo\n".
+emptyField.wsc.editor.textContent = '';
+emptyField.wsc.editor.appendChild(textNode('foo'));
+emptyField.wsc.editor.appendChild(new El('br'));
+emptyField.wsc.editor.appendChild(textNode(''));
+emptyField.wsc.editor.dispatchEvent(new Evt('input'));
+assert.equal(emptyField.value, 'foo', '[Text("foo"), BR, Text("")] does not produce phantom newline');
+
+// [Text(""), <div>hello</div>] and [Text(""), <p>hello</p>] read as "hello", not "\nhello".
+for (const tag of ['div', 'p']) {
+  emptyField.wsc.editor.textContent = '';
+  emptyField.wsc.editor.appendChild(textNode(''));
+  const blk = emptyField.wsc.editor.appendChild(new El(tag));
+  blk.appendChild(textNode('hello'));
+  emptyField.wsc.editor.dispatchEvent(new Evt('input'));
+  assert.equal(emptyField.value, 'hello', `[Text(""), <${tag}>hello</${tag}>] does not produce leading phantom newline`);
+}
+
+// [<div>hello</div>, Text("")] reads as "hello", not "hello\n".
+emptyField.wsc.editor.textContent = '';
+const trailingBlk = emptyField.wsc.editor.appendChild(new El('div'));
+trailingBlk.appendChild(textNode('hello'));
+emptyField.wsc.editor.appendChild(textNode(''));
+emptyField.wsc.editor.dispatchEvent(new Evt('input'));
+assert.equal(emptyField.value, 'hello', '[<div>hello</div>, Text("")] does not produce trailing phantom newline');
+
+// Trailing empty text node IS preserved after a capsule chip, and [chip, BR, Text("")] reads cleanly without phantom "\n".
+const chipField = make('/lrv'); chipField.focus();
+chipField.wsc.insert('skill', 'lead-review', 'lead-review', { start: 0, end: 4 });
+chipField.value = 'lead-review';
+assert.equal(chipField.wsc.editor.childNodes.at(-1).nodeType, 3, 'trailing text node kept after capsule chip');
+assert.equal(chipField.wsc.editor.childNodes.at(-1).nodeValue, '', 'trailing text node after capsule chip is empty');
+const trailingEmpty = chipField.wsc.editor.childNodes.pop();
+chipField.wsc.editor.appendChild(new El('br'));
+chipField.wsc.editor.appendChild(trailingEmpty);
+chipField.wsc.editor.dispatchEvent(new Evt('input'));
+assert.equal(chipField.value, 'lead-review', '[chip, BR, Text("")] reads cleanly without phantom newline');
+
+// beforeinput forwarding from editor to backing field preserves inputType/data/isComposing and preventDefault().
+const seenBeforeInput = [];
+emptyField.addEventListener('beforeinput', e => {
+  seenBeforeInput.push({ inputType: e.inputType, data: e.data, isComposing: e.isComposing });
+  if (e.inputType === 'insertParagraph') e.preventDefault();
+});
+const bi1 = new Evt('beforeinput', { inputType: 'insertParagraph', data: null, isComposing: false, bubbles: true, cancelable: true });
+emptyField.wsc.editor.dispatchEvent(bi1);
+assert.equal(bi1.propagationStopped, true, 'native editor beforeinput stops propagation');
+assert.equal(bi1.defaultPrevented, true, 'canceling forwarded beforeinput cancels native editor beforeinput');
+const bi2 = new Evt('beforeinput', { inputType: 'insertCompositionText', data: '녕', isComposing: true, bubbles: true, cancelable: true });
+emptyField.wsc.editor.dispatchEvent(bi2);
+assert.equal(bi2.defaultPrevented, false, 'non-prevented beforeinput remains allowed');
+assert.deepEqual(seenBeforeInput, [
+  { inputType: 'insertParagraph', data: null, isComposing: false },
+  { inputType: 'insertCompositionText', data: '녕', isComposing: true },
+]);
+
 // Topics and image-marker removal retain surrounding references and identities.
 const imgText = '[Image #1] [a] [Image #2] [b]';
 const rs = [{ start: 11, end: 14, kind: 'topic', id: 'a', label: 'A' }, { start: 26, end: 29, kind: 'topic', id: 'b', label: 'B' }];

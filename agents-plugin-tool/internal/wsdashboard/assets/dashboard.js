@@ -477,7 +477,8 @@
   // Input mode: which key sends. "enter" (the default) sends on Enter and
   // adds a line on Shift+Enter; "mod" sends on Ctrl/Cmd+Enter and Enter adds
   // a line. In "enter" mode, Shift+Enter or multiline input temporarily
-  // switches to multiline send (Ctrl/Cmd+Enter) until send, empty, or revert.
+  // switches to multiline send (Ctrl/Cmd+Enter) until send, single-line/empty,
+  // or revert.
   var INPUT_KEY = "ws.dashboard.input", inputMode = "enter";
   var autoMultiline = false, autoMultilineReverted = false;
   var isMacPlatform = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
@@ -531,16 +532,12 @@
       return;
     }
     var v = typeof ctext !== "undefined" && ctext && typeof ctext.value === "string" ? ctext.value : "";
-    if (!v) {
+    if (!v || v.indexOf("\n") === -1) {
       autoMultilineReverted = false;
       if (autoMultiline) setAutoMultiline(false);
       return;
     }
-    if (v.indexOf("\n") === -1) {
-      autoMultilineReverted = false;
-      return;
-    }
-    if (!autoMultiline && !autoMultilineReverted) setAutoMultiline(true);
+    if (!autoMultiline && !autoMultilineReverted && v.replace(/^\n+|\n+$/g, "").indexOf("\n") !== -1) setAutoMultiline(true);
   }
   function setInput(v) {
     inputMode = v === "mod" ? "mod" : "enter";
