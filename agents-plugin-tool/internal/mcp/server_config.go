@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,6 +287,24 @@ type tuningAgentTierCurrent struct {
 	Backend  string `json:"backend,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+}
+
+// hideConfigDiscovery applies the same visibility to the resolved view and
+// its tuning catalog. lead-tune draws its entries from the latter.
+func hideConfigDiscovery(view *wsconfig.View, catalog *tuningCatalog) {
+	for _, entry := range configRegistry {
+		if !entry.HideFromDiscovery {
+			continue
+		}
+		delete(view.Config.Overrides, entry.Key)
+		delete(view.Config.StructuredOverrides, entry.Key)
+		view.ResolvedOverrides = slices.DeleteFunc(view.ResolvedOverrides, func(item wsconfig.ScopedItem) bool {
+			return item.Key == entry.Key
+		})
+		catalog.Knobs = slices.DeleteFunc(catalog.Knobs, func(knob tuningKnob) bool {
+			return knob.ID == entry.Key
+		})
+	}
 }
 
 // harness selects the bucket a harness-bucketed knob's current value is
