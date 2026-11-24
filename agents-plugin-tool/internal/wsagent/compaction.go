@@ -127,11 +127,17 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			out = CompactResult{"queued", "compaction already pending"}
 			return
 		}
+		internal := dest.compactInternalTurn
+		crossing := dest.aboveCompactHard()
+		if dest.compactStage1Active {
+			internal = dest.compactStage1Internal
+			crossing = crossing || dest.compactStage1Auto
+		}
 		req := &compactRequest{
 			resume:   again,
-			internal: dest.compactInternalTurn,
+			internal: internal,
 			auto:     dest.compactStage1Active && dest.compactStage1Auto,
-			crossing: dest.aboveCompactHard(),
+			crossing: crossing,
 			lead:     lead,
 		}
 		dest.compactPending = req
@@ -670,16 +676,13 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("resolve profile: %w", err)
 	}
-	var entries []wslive.RingEntry
+	var records []wslive.RingRecord
 	if c.dir != "" {
 		if recs, err := wslive.ReadRing(filepath.Join(c.dir, "ring")); err == nil {
-			entries = make([]wslive.RingEntry, len(recs))
-			for i, r := range recs {
-				entries[i] = r.RingEntry
-			}
+			records = recs
 		}
 	}
-	dialogRes := wscompact.BuildRingDialog(entries, "ring")
+	dialogRes := wscompact.BuildRingDialog(records, "ring")
 	prose := make([]string, len(req.lead.Prose))
 	for i, text := range req.lead.Prose {
 		prose[i] = wscompact.BoundedText(wscompact.Scrub(text), wscompact.ProseFieldBytes)
@@ -689,7 +692,7 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		files := wsdashboard.ReadWorktreeTextFiles(rec.Root, req.lead.Paths, wscompact.RereadBytes)
 		rereads = wscompact.FormatRereads(req.lead.Paths, files)
 	}
-	state := c.r.compactionState(rec.ReplyID)(time.Time{})
+	state := c.r.compactionState(rec.ReplyID)(dialogRes.LastCompactAt)
 	checkpoint := wscompact.BuildCheckpoint(wscompact.CheckpointInput{
 		Lead:         true,
 		Ticket:       dialogRes.Ticket,
@@ -752,7 +755,9 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 
 		c.compactOrigin = trigger
 		c.compactCommand = false
+		c.compactRotated = true
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
+		c.compactRotated = false
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		if strings.TrimSpace(c.compactNote) != "" {
 			c.compactNote += "\n\n" + checkpoint
@@ -990,6 +995,7 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compacting, c.compactResume = false, false
 		c.compactResumeInternal = false
 		c.compactHardAtStart = false
+		c.compactOrigin = ""
 	case wslive.CompactEnd:
 		// Duplicate ends carry neither a second note nor another continue turn.
 		if !c.compacting {
@@ -1016,7 +1022,11 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.queueRestore(RestoreCompaction)
 		if !c.r.opts.Backends[c.rec.Backend].CompactionProtocol().PromptPersists {
 			if c.rec.Lead {
-				c.compactNote += c.leadManual(c.record())
+				// Rotation starts a fresh process via startLead, which already
+				// embeds composeLeadInstructions (including leadManual).
+				if !c.compactRotated || !c.r.lifecycle(c.rec.Backend).ComposedLeadInstructions {
+					c.compactNote += c.leadManual(c.record())
+				}
 			} else {
 				if c.systemPrompt == "" && c.rec.SystemPrompt && c.dir != "" {
 					if raw, err := os.ReadFile(filepath.Join(c.dir, systemPromptFile)); err == nil {

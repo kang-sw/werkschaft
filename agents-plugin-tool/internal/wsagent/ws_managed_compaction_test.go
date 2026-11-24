@@ -454,6 +454,48 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 		if st.Compactions != 1 || st.CompactOrigin != wslive.TriggerAuto {
 			t.Fatalf("expected auto compaction count=1, got (%d, %q)", st.Compactions, st.CompactOrigin)
 		}
+
+		// Verify the post-rotation continuation turn is sent with compactInternalTurn == false
+		// (Stage 1's internal flag must NOT leak onto the resumed continuation turn) and its
+		// reply is preserved in the ring rather than dropped as internal.
+		p2 := b.latest()
+		waitWSCompact(t, "post-rotation continuation turn sent", func() bool {
+			sends2, _ := p2.sent()
+			return len(sends2) == 1
+		})
+		runner.mu.Lock()
+		c := runner.convs[id]
+		runner.mu.Unlock()
+		var internalDuring bool
+		var dir string
+		c.do(func() {
+			internalDuring = c.compactInternalTurn
+			dir = c.dir
+		})
+		if internalDuring {
+			t.Fatal("compactInternalTurn leaked true onto post-rotation continuation turn")
+		}
+		p2.events <- Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: "resumed work cleanly"}}
+		p2.events <- Event{TurnEnd: true}
+		waitWSCompact(t, "continuation turn reply written to ring", func() bool {
+			recs, err := wslive.ReadRing(filepath.Join(dir, "ring"))
+			if err != nil {
+				return false
+			}
+			for _, r := range recs {
+				if r.Kind == wslive.RingReply && strings.Contains(r.Text, "resumed work cleanly") {
+					return true
+				}
+			}
+			return false
+		})
+		var internalAfter bool
+		c.do(func() {
+			internalAfter = c.compactInternalTurn
+		})
+		if internalAfter {
+			t.Fatal("compactInternalTurn remained true after post-rotation continuation turn")
+		}
 	})
 
 	t.Run("lead_misses_falls_back_to_native", func(t *testing.T) {

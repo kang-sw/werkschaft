@@ -17,15 +17,16 @@ type RingDialogResult struct {
 	LastCompactAt time.Time
 }
 
-// BuildRingDialog projects wslive ring entries (oldest first) into the
+// BuildRingDialog projects wslive ring records (oldest first) into the
 // bounded ## Dialog section for a ws-managed compaction checkpoint, starting
-// strictly after the newest successful RingCompact entry.
-func BuildRingDialog(entries []wslive.RingEntry, ringRef string, secrets ...string) RingDialogResult {
+// strictly after the newest successful RingCompact record.
+func BuildRingDialog(records []wslive.RingRecord, ringRef string, secrets ...string) RingDialogResult {
 	var out RingDialogResult
 	start := 0
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Kind == wslive.RingCompact && !entries[i].CompactFailed {
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].Kind == wslive.RingCompact && !records[i].CompactFailed {
 			start = i + 1
+			out.LastCompactAt = records[i].At
 			break
 		}
 	}
@@ -58,7 +59,8 @@ func BuildRingDialog(entries []wslive.RingEntry, ringRef string, secrets ...stri
 		}
 	}
 
-	for _, e := range entries[start:] {
+	for _, rec := range records[start:] {
+		e := rec.RingEntry
 		switch e.Kind {
 		case wslive.RingUser:
 			observeText(e.Text, true)

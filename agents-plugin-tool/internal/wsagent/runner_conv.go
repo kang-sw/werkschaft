@@ -140,6 +140,9 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
+	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// for a freshly started process that already received composed instructions.
+	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
 	// (Compacting, Compactions, CompactOrigin) under mu, as the loop-owned
 	// fields above are not readable there.

@@ -122,7 +122,6 @@ func (s *Server) compactAdvertisesLeadSummary() bool {
 	if s.conversation == "" || s.workerForwards() {
 		return false
 	}
-	var sessionKey string
 	harness := s.playbookHarness()
 	leadConfirmed := false
 	if getter, ok := s.agents.(interface {
@@ -150,7 +149,8 @@ func (s *Server) compactAdvertisesLeadSummary() bool {
 			harness = b
 		}
 	}
-	if sessionKey == "" && s.env != nil {
+	sessionKey := ""
+	if s.env != nil {
 		sessionKey = strings.TrimSpace(s.env.get(wsagent.EnvHostedSessionKey))
 	}
 	resolver := s.sessionResolver(sessionKey, s.declared.withDefaults(builtinConfigDefaults()))

@@ -3,6 +3,7 @@ package wscompact
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -62,30 +63,34 @@ func TestFormatRereadsBudgetAndEscaping(t *testing.T) {
 }
 
 func TestBuildRingDialogSlicesAfterLastSuccessfulCompact(t *testing.T) {
-	entries := []wslive.RingEntry{
-		{Kind: wslive.RingUser, Text: "before compact 260101-feat-old"},
-		{Kind: wslive.RingCompact, CompactFailed: false},
-		{Kind: wslive.RingUser, Text: `<skill name="ws:lead-run"> work on 261124-feat-ws-managed-compaction`},
-		{Kind: wslive.RingCompact, CompactFailed: true, Text: "failed attempt"},
-		{Kind: wslive.RingReply, Text: "partial reply", Truncated: true},
-		{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
+	compactAt := time.Date(2026, 11, 25, 1, 30, 0, 0, time.UTC)
+	records := []wslive.RingRecord{
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: "before compact 260101-feat-old"}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingCompact, CompactFailed: false}, At: compactAt},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: `<skill name="ws:lead-run"> work on 261124-feat-ws-managed-compaction`}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingCompact, CompactFailed: true, Text: "failed attempt"}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingReply, Text: "partial reply", Truncated: true}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
 			Calls: 2,
 			Tools: []wslive.ToolTally{{Name: "read_file", Calls: 2}},
 			Batches: []wslive.ToolBatch{{
 				Calls:    2,
 				CallArgs: []wslive.ToolCallArgs{{Name: "read_file", ArgsPreview: "a.go"}},
 			}},
-		}},
-		{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "id:worker1", Title: "done", Text: "all green"},
-		{Kind: wslive.RingWake, Cause: "mail", Source: "id:worker1", Caption: "report"},
-		{Kind: wslive.RingCommand, Command: "/status", Text: "ok"},
-		{Kind: wslive.RingTurn, Done: 1},
-		{Kind: wslive.RingUI, UI: &wslive.UICommand{}},
-		{Kind: wslive.RingCard, Card: &wslive.CardRef{}},
-		{Kind: wslive.RingWhiteboardEffects, Text: "wb"},
+		}}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "id:worker1", Title: "done", Text: "all green"}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingWake, Cause: "mail", Source: "id:worker1", Caption: "report"}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingCommand, Command: "/status", Text: "ok"}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingTurn, Done: 1}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingUI, UI: &wslive.UICommand{}}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingCard, Card: &wslive.CardRef{}}},
+		{RingEntry: wslive.RingEntry{Kind: wslive.RingWhiteboardEffects, Text: "wb"}},
 	}
 
-	res := BuildRingDialog(entries, "ring", "secret-token-12345")
+	res := BuildRingDialog(records, "ring", "secret-token-12345")
+	if !res.LastCompactAt.Equal(compactAt) {
+		t.Fatalf("LastCompactAt = %v, want %v", res.LastCompactAt, compactAt)
+	}
 	if strings.Contains(res.Dialog, "before compact") {
 		t.Fatalf("dialog should slice strictly after newest successful RingCompact:\n%s", res.Dialog)
 	}
@@ -114,14 +119,19 @@ func TestBuildRingDialogSlicesAfterLastSuccessfulCompact(t *testing.T) {
 
 func TestBuildRingDialogTailTruncationAndScrub(t *testing.T) {
 	secret := "super-secret-value-999"
-	var entries []wslive.RingEntry
+	var records []wslive.RingRecord
 	for i := 0; i < 60; i++ {
-		entries = append(entries, wslive.RingEntry{
-			Kind: wslive.RingUser,
-			Text: strings.Repeat("a", 1024) + " " + secret,
+		records = append(records, wslive.RingRecord{
+			RingEntry: wslive.RingEntry{
+				Kind: wslive.RingUser,
+				Text: strings.Repeat("a", 1024) + " " + secret,
+			},
 		})
 	}
-	res := BuildRingDialog(entries, "ring", secret)
+	res := BuildRingDialog(records, "ring", secret)
+	if !res.LastCompactAt.IsZero() {
+		t.Fatalf("expected zero LastCompactAt when no prior compact, got %v", res.LastCompactAt)
+	}
 	if len(res.Dialog) > DialogBytes+256 {
 		t.Fatalf("dialog exceeded budget: %d bytes", len(res.Dialog))
 	}
