@@ -550,6 +550,8 @@
   "js.term.state.wait": "正在重新連線…",
   "js.hint.enter": "傳送訊息給此工作階段。Enter 傳送，Shift+Enter 換行。白板回答與貼上的圖片會一併附上。以 ! 開頭則為 bash 指令。",
   "js.hint.mod": "傳送訊息給此工作階段。Ctrl/Cmd+Enter 傳送，Enter 換行。白板回答與貼上的圖片會一併附上。",
+  "js.composer.send.key": "傳送 ({0})",
+  "js.composer.multiline.revert": "恢復 Enter 傳送模式",
   "js.img.big": "{0} 大於 10 MiB",
   "js.img.max": "一則訊息最多包含 {0} 張圖片",
   "js.img.readfail": "無法讀取 {0}。",

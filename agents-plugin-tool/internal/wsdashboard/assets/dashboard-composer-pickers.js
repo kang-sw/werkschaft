@@ -182,7 +182,7 @@
   function submitCommand(name, args, clearText) {
     saveDraft();
     if (cmdSel) clearCommand();
-    if (clearText) { ctext.value = ""; grow(); clearMentions(); }
+    if (clearText) { ctext.value = ""; grow(); clearMentions(); if (typeof resetAutoMultiline === "function") resetAutoMultiline(); }
     var typed = "/" + name + (args ? " " + args : "");
     outboxAdd({ body: { command: name, args: args }, pics: [], own: [],
       back: { text: typed, command: { name: name, args: args } } });

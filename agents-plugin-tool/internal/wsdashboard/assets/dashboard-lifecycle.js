@@ -662,6 +662,7 @@
         named += "\n" + s.text;
         grow();
         paintMentions();
+        if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue();
         if (Array.isArray(d.sel)) { try { ctext.setSelectionRange(d.sel[0], d.sel[1]); } catch (e) { /* out of range */ } }
       }
       if (ctext) {

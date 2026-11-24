@@ -140,8 +140,12 @@
 .composer[data-bang] textarea + .wsc-editor { font: 13px/1.5 var(--wb-mono); color: var(--tm-fg); background: var(--tm-bg); caret-color: var(--tm-green); padding: 9px 10px; }
 .composer[data-bang] textarea + .wsc-editor:focus { outline-color: var(--tm-green); }
 .composer[data-bang] .csend { background: var(--tm-green-bg); color: var(--tm-green); }
+.composer[data-bang] .csend.is-multiline { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tm-green) 48%, transparent); }
 .composer[data-bang] .csend svg { display: none; }
 .composer[data-bang] .csend::after { content: "\25B6"; font-size: 14px; line-height: 1; }
+.composer[data-bang] .csend.is-multiline::after { font-size: 12px; }
+.composer[data-bang] .csend-kbd { background: color-mix(in srgb, var(--tm-green) 22%, transparent); color: var(--tm-green); }
+.composer[data-bang] .csend-revert { border-color: color-mix(in srgb, var(--tm-green) 65%, transparent); color: var(--tm-green); }
 /* Command history trigger badge (inside .sbwrap beside .xgroup) and popup above .composer */
 .hbadge { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px 0 8px; border: 0; border-radius: 999px; white-space: nowrap; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--wb-fg); background: var(--wb-card); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--tm-amber) 45%, transparent), var(--wb-shadow-hi); animation: ibadge-rise .16s ease-out; }
 .hbadge[hidden] { display: none; }
@@ -556,11 +560,22 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .ccmd-name { white-space: nowrap; }
 .ccmd-args { min-width: 0; font-weight: 400; color: var(--wb-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ccmd-args[hidden] { display: none; }
+.csend-wrap { position: relative; display: inline-flex; align-items: stretch; }
 .csend, .wbmention button { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; cursor: pointer; color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); }
-.csend { width: 34px; padding: 0; }
+.csend { width: 34px; padding: 0; box-sizing: border-box; }
 .csend:hover, .wbmention button:hover { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); }
 .csend:focus-visible, .wbmention button:focus-visible { outline: 1.5px solid var(--wb-primary); }
 .csend .i, .wbmention button .i { width: 17px; height: 17px; }
+/* Variant B temporary multiline send button: 2-row stack + sibling corner revert */
+.csend.is-multiline { width: 48px; padding: 3px 3px; flex-direction: column; gap: 2px; background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 48%, transparent); }
+.csend.is-multiline:hover { background: color-mix(in srgb, var(--wb-primary) 30%, var(--wb-card)); }
+.csend.is-multiline .i { width: 14px; height: 14px; flex: none; }
+.csend-kbd { order: 1; font: 700 9.5px/1.1 var(--wb-mono); padding: 1.5px 3.5px; border-radius: 4px; background: color-mix(in srgb, var(--wb-primary) 22%, transparent); color: color-mix(in srgb, var(--wb-primary) 25%, var(--wb-fg)); white-space: nowrap; }
+.csend-kbd[hidden] { display: none; }
+.csend-revert { position: absolute; top: -5px; right: -5px; z-index: 2; width: 16px; height: 16px; padding: 0; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--wb-primary) 65%, transparent); background: var(--wb-card); color: var(--wb-primary); font: 700 10px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 5px rgb(0 0 0 / .35); }
+.csend-revert[hidden] { display: none; }
+.csend-revert:hover { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); }
+.csend-revert:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
 .cchips { display: flex; flex-wrap: wrap; gap: 5px; }
 /* sends the daemon has not answered yet, one dimmed line each, above the message box; none is a conversation bubble until the daemon holds it */
 .d-outbox { display: flex; flex-direction: column; gap: 2px; }

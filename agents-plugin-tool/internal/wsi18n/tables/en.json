@@ -550,6 +550,8 @@
   "js.term.state.wait": "reconnecting…",
   "js.hint.enter": "Message this session. Enter sends, Shift+Enter adds a line. Board answers and pasted images attach. Start with ! to run a bash command.",
   "js.hint.mod": "Message this session. Ctrl/Cmd+Enter sends, Enter adds a line. Board answers and pasted images attach.",
+  "js.composer.send.key": "Send ({0})",
+  "js.composer.multiline.revert": "Revert to Enter-to-send mode",
   "js.img.big": "{0} is larger than 10 MiB",
   "js.img.max": "a message holds at most {0} images",
   "js.img.readfail": "Could not read {0}.",

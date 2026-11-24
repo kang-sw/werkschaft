@@ -550,6 +550,8 @@
   "js.term.state.wait": "reconectando…",
   "js.hint.enter": "Escribe a esta sesión. Enter envía, Shift+Enter añade una línea. Se adjuntan las respuestas de la pizarra y las imágenes pegadas. Empieza con ! para un comando bash.",
   "js.hint.mod": "Escribe a esta sesión. Ctrl/Cmd+Enter envía, Enter añade una línea. Se adjuntan las respuestas de la pizarra y las imágenes pegadas.",
+  "js.composer.send.key": "Enviar ({0})",
+  "js.composer.multiline.revert": "Volver al modo enviar con Enter",
   "js.img.big": "{0} es mayor de 10 MiB",
   "js.img.max": "un mensaje admite como máximo {0} imágenes",
   "js.img.readfail": "No se pudo leer {0}.",
