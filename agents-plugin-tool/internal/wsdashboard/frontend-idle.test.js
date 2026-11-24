@@ -74,7 +74,7 @@ test('idle CSS bounds animation rates and contains without paint or size contain
   const clocks = read(whiteboard, 'page-items.css');
   assert.match(base, /dash-spin \.8s steps\(12\) infinite/);
   assert.match(base, /dash-pulse 1\.6s steps\(4\) infinite/);
-  assert.match(rail, /rail-orbit 1\.3s steps\(12\) infinite/);
+  assert.match(base, /\.hb \.hbr::before\s*\{[^}]*animation: hbspin 1\.1s linear infinite/);
   assert.match(rail, /rail-blink 1\.4s steps\(4\) infinite/);
   assert.match(conversation, /dash-spin \.8s steps\(12\) infinite/);
   assert.match(base, /:root\[data-animation-paused\][^{]+\{\s*animation-play-state: paused/);
