@@ -21,47 +21,68 @@ diff <(sed '1,/board.html: begin/d;/board.html: end/,$d' mockup.html) board.html
 
 The dashed bar at the top switches states and is not part of the product.
 Its theme buttons (페이지 따름 / 다크 / 라이트) set the wrapper's own theme. The
-mockup reproduces the live `/settings` "에이전트 · 티어" section from
-`dashboard-settings.css`: `.srow` rows, origin pills, `.btn`, `.seg`, `.tg`,
-and the 1120px and 820px breakpoints. It adds a provider-credential group,
-replaces the `agent.werk_endpoints` textarea row with a structured list, and
-adds a dashboard-wide consent banner. The tier matrix below them is an
-abridged copy of the existing picker and is unchanged.
+mockup reproduces the live `/settings` page from `dashboard.tmpl` and
+`dashboard-settings.css`: the header with its target pill and precedence
+(scope) strip, the search and filter bar, the section nav, `.srow` rows,
+origin pills, `.btn`, `.seg`, `.tg`, and the 1120px and 820px breakpoints.
+
+v4 adds a new settings section, **계정** (Account), next to
+"에이전트 · 티어" in the nav. It holds the provider credentials (OpenRouter,
+and OpenAI with the background-use consent toggle) and the structured editor
+for local endpoints, which replaces the `agent.werk_endpoints` textarea row.
+The section has no scope switcher (settlement 11). "에이전트 · 티어" keeps
+only the tier picker, an abridged copy of the existing one. Where it needs a
+provider, it links to 계정 (`계정에서 관리`). The dashboard-wide consent banner
+links to the OpenAI row in 계정. Use the `설정 섹션` and `선택된 스코프` groups in
+the bar to compare the two sections under each scope.
 
 All visible strings are Korean. The implementation adds them as
 `js.settings.*` i18n keys in every `wsi18n/tables/*.json` locale table, as
-`ai-docs/manuals/config-settings-ui.md` requires, and declares the rows in
-`dashboard-settings-catalog.json`.
+`ai-docs/manuals/config-settings-ui.md` requires. That includes the new
+section's label and note. The rows are declared in
+`dashboard-settings-catalog.json` (gap 12).
 
 ## States covered
 
 | Group | States |
 |---|---|
+| Settings section | 계정: the header shows the fixed label `이 머신 전체`, with no precedence strip and no filter bar; the nav count is the number of items that need attention. 에이전트 · 티어: the live header with the precedence strip, the filter bar, and the tier picker |
+| Selected scope | builtin, global, repo, project, session (synced is the live page's disabled "준비 중" node). In 에이전트 · 티어 the target pill, strip, and the repo, builtin, or project notice follow the scope. 계정 looks the same under every scope |
 | OpenRouter | not set (`미설정`); key entry; prefix warning (key does not start with `sk-or-`, saving still allowed); verifying with OpenRouter (`확인 중`); rejected by OpenRouter (invalid key, nothing saved); format rejected by the daemon (422 from `validateKey`); daemon not answering (drain or restart, with retry); saved and verified (`OpenRouter에서 유효한 키로 확인했습니다`); saved but not verified (`저장됨 · 확인 못 함`, with the reason and `다시 확인`, which re-runs the check); key set (`키 설정됨 sk-or-...a1b2`); replace entry; remove with a 1.5 s hold-to-confirm |
 | OpenAI (Sign in with ChatGPT) | signed out; viewed from another device (sign-in button disabled with a one-line hint); browser flow pending (spinner and cancel, 5-minute timeout); sign-in failed or timed out; signed in with the verified email; signed in without an email; plan usage not granted (sign in again to grant it); refresh refused, so sign-in is needed again; sign out with hold-to-confirm, which deletes the account record |
-| Background consent | dashboard-wide request banner with 허용 / 허용 안 함 / close (×) and a link to the OpenAI row; not yet answered (banner closed); allowed; denied or revoked. The settled answer is a toggle in a sub-row under the OpenAI row. It is disabled, with its value kept, while the account needs sign-in again or plan usage is off |
+| Background consent | dashboard-wide request banner with 허용 / 허용 안 함 / close (×) and a link to the OpenAI row in 계정 (`계정에서 OpenAI 보기`, which opens 계정 from any section); not yet answered (banner closed); allowed; denied or revoked. The settled answer is a toggle in a sub-row under the OpenAI row. It is disabled, with its value kept, while the account needs sign-in again or plan usage is off |
 | Local endpoints | none; list (name with `local/<name>`, base URL, kind, and the backend mask `...9f3c` for a key); add; edit with a changed URL (the key field is empty and warns that the stored key is deleted on save); validation errors (name pattern, URL scheme and query); delete with hold-to-confirm, which also deletes the stored key; read-only "저장 형식(JSON) 보기" |
-| Tier links | every provider row has `Werk 티어에서 … 모델 선택 →`. It scrolls to the existing tier matrix, keeps the Werk tab selected, and highlights the tiers that use that provider |
+| Tier links | every provider row in 계정 has `Werk 티어에서 … 모델 선택 →`. It opens 에이전트 · 티어, scrolls to the tier matrix, keeps the Werk tab selected, and highlights the tiers that use that provider |
+| 계정 links | in 에이전트 · 티어, a note above the matrix links to 계정. A tier whose provider is not ready (no OpenRouter key; OpenAI signed out, plan usage off, or sign-in needed; endpoint `ollama-box` missing) gets a one-line warning under its model with `계정에서 관리 →`, which opens 계정 and highlights that row |
 | Theme | dark and light, in both files |
 
 Checked with headless Chromium (cached Playwright 1.60):
 
-- Both files at 1280px and 390px, in dark and light, through every state.
+- Both files at 1280px and 390px, in dark and light, through every state of
+  every group, once with 계정 open and once with 에이전트 · 티어 open.
 - No console errors, and the page never scrolls sideways. The snav and tier
   table keep the live page's own horizontal scrollers.
+- In every 계정 render, the precedence strip, the filter bar, and every scope
+  button are absent, and the target pill reads `이 머신 전체` and contains no
+  control. In every 에이전트 · 티어 render, the strip is shown, and neither a
+  provider row, the endpoint list, nor the text `agent.werk_endpoints`
+  appears.
 - The interactions work: hold-to-remove, the save → verify → saved flow,
-  closing the banner, and the banner and tier links.
+  closing the banner, a scope click in 에이전트 · 티어 (계정 still shows its
+  fixed label afterwards), and the cross-section links (tier links from 계정,
+  `계정에서 관리` from a tier row and from the note, and the banner link).
 - `board.html` also loads inside a sandboxed `srcdoc` iframe with the
   whiteboard's sandbox flags (`allow-scripts allow-popups
-  allow-popups-to-escape-sandbox`, `wswhiteboard/render.go:702`) and a dark
-  root. It follows the host theme and collapses at an 820px frame width.
+  allow-popups-to-escape-sandbox`, `wswhiteboard/render.go:702`), at frame
+  widths 1200px and 820px with a dark root and 390px with a light root. It
+  follows the host theme and collapses at an 820px frame width.
 
 Screenshots are not committed.
 
 ## Settled (lead, 2026-11-24)
 
 Items 1 to 8 settled the first round of questions, and items 9 and 10 the
-second.
+second. Items 11 and 12 record the owner's v4 decisions.
 
 1. **Consent banner: 허용 / 허용 안 함 plus a close (×). No "나중에".**
    Closing hides the banner until the next refused background request raises
@@ -112,6 +133,41 @@ second.
     for. Once the URL differs from the stored one, the key field stays empty
     and says, before save, `URL이 바뀌면 저장된 키가 삭제됩니다. 새 URL용 키를
     다시 입력하세요.` Saving deletes the old key.
+11. **Credentials and local endpoints live in their own 계정 section, and it
+    is global only** (owner, v4; decision (53)=a). 계정 sits next to
+    "에이전트 · 티어" in the settings nav. It holds OpenRouter, OpenAI with
+    the background-use toggle, and the endpoint editor. "에이전트 · 티어" keeps
+    only the tier picker and links to 계정 where a provider matters. 계정
+    has no scope switcher, and nothing in it says it is per-project. The live
+    header draws the target pill and the precedence strip
+    (builtin → synced → global → repo → project → session) for every section
+    (`dashboard.tmpl`, `renderHeader` in `dashboard-settings.js:266`). Of the
+    two options, the mockup uses **the fixed label**. In 계정, the existing
+    target pill reads `이 머신 전체` and holds no control. The strip and the
+    search and filter bar are not drawn. The reasons:
+    - The target pill is already the live page's non-interactive answer to
+      "where does an edit go". 계정 keeps that answer with honest text.
+      Hiding the pill as well would leave the one section without an answer
+      and make the header change shape between sections.
+    - The strip is removed, not disabled. Six disabled scope nodes would
+      suggest that the values are layered and only locked here.
+    - The filter bar goes too. Its filters (overridden in this scope,
+      shadowed, editable) only make sense for layered keys.
+    The scope selected in the URL stays as it was, so another section opens
+    at the same scope. 계정 shows no project note and no repo or builtin
+    banner, and it stays editable when the page is open at the built-in
+    scope, where every other section is read-only.
+12. **`agent.werk_endpoints` is hidden from agent tools** (owner, v4). It
+    remains the stored config value, but only 계정 and the CLI edit it.
+    config.list, config.get, config.tune, and lead-tune neither show it nor
+    change it. No generic config row and nothing in "에이전트 · 티어" renders
+    it. The read-only JSON disclosure in 계정 is the only place the raw value
+    appears. The reasons:
+    - Changing where worker traffic goes is an owner-level action.
+    - Hiding the key does not close a leak. Endpoint keys are bound to the
+      URL (settlement 10), so pointing an endpoint elsewhere never sends a
+      stored key there. The point is who may decide, not secrecy.
+    - The key is new in 0.52, so no existing setup or script loses anything.
 
 ## Design notes
 
@@ -121,11 +177,22 @@ second.
   button are disabled. After a daemon-down failure, the typed value stays in
   the field for a retry. That value came from the user, never from the store.
 - **The stored format is unchanged.** The endpoint list reads and writes the
-  same `agent.werk_endpoints` JSON object (`{name: {base_url, kind}}`)
-  through the ordinary `/api/config/set` route. The JSON disclosure shows
-  exactly that value, which never contains keys. An endpoint key is stored
-  separately in the credential store under `local/<name>`, bound to the
-  base URL.
+  same `agent.werk_endpoints` JSON object (`{name: {base_url, kind}}`) at
+  global scope through the dashboard's ordinary `/api/config/set` route.
+  That is a session-authenticated browser route, not an agent tool, so
+  settlement 12 does not affect it. The JSON disclosure shows exactly that
+  value, which never contains keys. An endpoint key is stored separately in
+  the credential store under `local/<name>`, bound to the base URL.
+- **Where the agents section mentions a provider, it links to 계정.** A note
+  above the tier matrix always links there. A tier row gets a warning and
+  `계정에서 관리 →` only while its provider is not usable, so a healthy setup
+  adds no noise to the existing picker. The warning does not mention
+  background consent, because consent depends on who starts the session,
+  not on the tier.
+- **The 계정 nav count shows what needs attention** (no OpenRouter key, an
+  OpenAI account that needs sign-in or plan approval, a pending consent
+  request) in the warning tint. 계정 has no per-scope overrides, so the
+  other sections' override count would always be empty there.
 - **Hold-to-confirm.** Remove, sign-out, and endpoint delete use the
   dashboard's `WsHoldConfirm` behavior: a radial fill on 28px icon buttons
   over 1.5 s, cancelled by Escape, pointer leave, blur, or a visibility
@@ -188,8 +255,57 @@ second.
 10. **Error texts still point at the CLI.** `credential.go:97`,
     `credential.go:116`, `credential.go:118` and `werk.go:146` say to run
     `credential set` or `credential sign-in`. They should mention the
-    dashboard, as `werk.go:220` already does.
+    dashboard's 계정 section, as `werk.go:220` already mentions the dashboard.
+11. **Registry: `agent.werk_endpoints` must be hidden from agent tools**
+    (settlement 12). Its registry entry (`config_registry.go:434`) is an
+    ordinary `config.tune` knob with `RequiresLeadAuthority`. No flag means
+    "not an agent knob" today. `NoAgentVisible` only decides what the
+    agentless wsflow catalog keeps (`config_registry.go:65`,
+    `server_config.go:305`). The entry needs a new flag that:
+    - removes the key from config.list, config.get, and the lead-tune
+      catalog;
+    - makes config.tune refuse to write or reset it.
+    The dashboard reads the key through the `wsconfigservice` projection.
+    That projection must keep it, because the 계정 editor and the catalog
+    drift test (`dashboard_settings_ui_catalog_test.go`) both use it. The
+    tier provider field's description (`config_registry.go:651`) tells
+    agents to pick `local/<name> from agent.werk_endpoints`. It should name
+    the dashboard's 계정 section instead of the hidden key.
+12. **Dashboard settings: the catalog needs a new `account` section.**
+    - Add `account` to the allowed `section` values in
+      `ai-docs/manuals/config-settings-ui.md`.
+    - Add it to `sections` in `dashboard-settings.js:24`, after `agents`, and
+      add its label and section note to the i18n tables in every locale
+      (ko: `계정`).
+    - Move the `agent.werk_endpoints` row (`dashboard-settings-catalog.json:2`)
+      from `section: "agents", control: "textarea"` to `section: "account"`
+      with a new specialized control for the structured editor. The control
+      list in the manual and the drift test gain it, and no generic row can
+      render the value.
+    - In `renderHeader` (`dashboard-settings.js:266`), when 계정 is active,
+      hide `[data-settings-precedence]` and the filter bar, and give the
+      target pill the fixed label.
+    - In `renderContent` (`dashboard-settings.js:1428-1437`), skip the
+      project note and the repo and builtin banners for 계정. The section
+      always reads and writes at global scope, whatever scope the URL
+      selects.
+    - The credential rows are not config keys. They render from the
+      credential status route (gap 1), not from catalog rows.
+    - The 계정 nav count shows the items that need attention, not the
+      per-scope override count.
+13. **The CLI cannot edit endpoints yet.** Settlement 12 leaves 계정 and the
+    CLI as the only writers, but `ws-mcp config` offers only `list` and the
+    tier `tune` (`hosted_cli.go:268-300`), and `ws-mcp credential` handles
+    only keys (`credential_cli.go:28`). Settled here as a technical choice:
+    add `ws-mcp credential endpoint <set|remove> <name> [--base-url <url>
+    --kind vllm|ollama]` under `credential`. The owner manages endpoints next
+    to the keys, and the command must do the same URL-change and delete key
+    cleanup as gap 7. `ws-mcp config list` is an owner-run CLI, so it may
+    keep showing the value.
 
 ## Open questions
 
 None. Both questions from the second round are settled (items 9 and 10).
+The v4 scope presentation (fixed label, settlement 11) and the CLI command
+shape (gap 13) were technical choices made during the revision. Change
+either if the owner prefers otherwise.
