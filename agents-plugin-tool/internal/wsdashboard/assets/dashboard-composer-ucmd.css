@@ -1,0 +1,750 @@
+/* User Commands v2: always-visible .cbadges trigger button beside #sbadge,
+   floating borderless tonal popover above #composer, 3-line inline-editable
+   command cards, and 1.5s hold-to-confirm radial fills (WsHoldConfirm). */
+.composer {
+  --ucmd-well: color-mix(in srgb, var(--wb-fg) 4.5%, var(--wb-card));
+  --ucmd-input: var(--wb-muted);
+  --ucmd-dim: color-mix(in srgb, var(--wb-muted-fg) 84%, transparent);
+  --ucmd-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  --ucmd-primary-ink: var(--wb-primary);
+  --ucmd-ok-ink: var(--wb-ok);
+  --ucmd-cmd-fg: var(--wb-fg);
+  --ucmd-prompt-fg: var(--wb-fg);
+  --ucmd-ask-accent: #6a5de0;
+  --ucmd-ask-ink: #5a4dd0;
+  --ucmd-agent-bg: color-mix(in srgb, #6a5de0 13%, transparent);
+  --ucmd-agent-fg: #5a4dd0;
+  --ucmd-hold-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .composer {
+    --ucmd-well: #25272c;
+    --ucmd-input: #16181c;
+    --ucmd-dim: #6f747d;
+    --ucmd-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --ucmd-primary-ink: #b7cdff;
+    --ucmd-ok-ink: #9ad8ba;
+    --ucmd-cmd-fg: #c8cbd2;
+    --ucmd-prompt-fg: #d5d7dc;
+    --ucmd-ask-accent: #8b88f8;
+    --ucmd-ask-ink: #c8c6ff;
+    --ucmd-agent-bg: color-mix(in srgb, #b89cff 13%, transparent);
+    --ucmd-agent-fg: #c4b5e6;
+    --ucmd-hold-ink: #141518;
+  }
+}
+:root[data-theme="dark"] .composer {
+  --ucmd-well: #25272c;
+  --ucmd-input: #16181c;
+  --ucmd-dim: #6f747d;
+  --ucmd-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --ucmd-primary-ink: #b7cdff;
+  --ucmd-ok-ink: #9ad8ba;
+  --ucmd-cmd-fg: #c8cbd2;
+  --ucmd-prompt-fg: #d5d7dc;
+  --ucmd-ask-accent: #8b88f8;
+  --ucmd-ask-ink: #c8c6ff;
+  --ucmd-agent-bg: color-mix(in srgb, #b89cff 13%, transparent);
+  --ucmd-agent-fg: #c4b5e6;
+  --ucmd-hold-ink: #141518;
+}
+
+/* Single compact User Commands trigger button directly right of #sbadge */
+.ucmd-trigger {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-width: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--wb-fg);
+  background: var(--wb-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 10%, transparent), var(--wb-shadow-hi);
+  transition: background-color .14s, color .14s, box-shadow .14s;
+}
+.ucmd-trigger[hidden] { display: none; }
+.ucmd-trigger svg { display: block; flex: none; pointer-events: none; }
+.ucmd-trigger:hover {
+  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
+  color: var(--ucmd-primary-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, transparent), var(--wb-shadow-hi);
+}
+.ucmd-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  color: var(--ucmd-primary-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 48%, transparent), var(--wb-shadow-hi);
+}
+.ucmd-trigger:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 2px;
+}
+.ucmd-trigger.is-empty {
+  color: var(--wb-muted-fg);
+  padding: 0 7px;
+}
+.ucmd-trigger-cnt {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+}
+.ucmd-trigger-cnt:empty { display: none; }
+.ucmd-trigger[aria-expanded="true"] .ucmd-trigger-cnt,
+.ucmd-trigger:hover .ucmd-trigger-cnt {
+  color: var(--ucmd-primary-ink);
+}
+
+/* Floating User Commands Popover above #composer */
+.ucmd-pop {
+  position: absolute;
+  z-index: var(--z-popovers, 60);
+  right: 10px;
+  bottom: calc(100% + 18px);
+  width: min(630px, calc(100% - 20px));
+  max-height: min(455px, 65vh);
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: var(--wb-radius);
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  overflow: hidden;
+  animation: ucmd-pop-in .14s ease-out;
+}
+.ucmd-pop[hidden] { display: none; }
+@keyframes ucmd-pop-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.ucmd-pop-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--wb-fg) 3%, var(--wb-card));
+  border-bottom: 1px solid var(--wb-line);
+  flex: none;
+  user-select: none;
+}
+.ucmd-pop-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--wb-fg);
+  flex: none;
+}
+.ucmd-pop-ico {
+  color: var(--wb-primary);
+  display: inline-flex;
+  align-items: center;
+}
+.ucmd-count {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--ucmd-wash);
+  color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.ucmd-pop-sub {
+  font-size: 11px;
+  color: var(--ucmd-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  transition: color .14s;
+}
+.ucmd-pop-sub.is-holding-run {
+  color: var(--ucmd-primary-ink);
+  font-weight: 600;
+}
+.ucmd-pop-sub.is-holding-ask {
+  color: var(--ucmd-ask-ink);
+  font-weight: 600;
+}
+.ucmd-pop-sub.is-holding-del {
+  color: var(--wb-fail);
+  font-weight: 600;
+}
+.ucmd-add-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  color: var(--ucmd-primary-ink);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .12s, color .12s;
+}
+.ucmd-add-btn:hover {
+  background: color-mix(in srgb, var(--wb-primary) 22%, transparent);
+}
+.ucmd-add-btn.is-active {
+  background: color-mix(in srgb, var(--wb-primary) 26%, transparent);
+}
+.ucmd-add-btn:focus-visible,
+.ucmd-close-btn:focus-visible,
+.ucmd-btn-ghost:focus-visible,
+.ucmd-btn-save:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+.ucmd-close-btn {
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--ucmd-dim);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+  transition: background-color .12s, color .12s;
+}
+.ucmd-close-btn:hover {
+  background: var(--ucmd-wash);
+  color: var(--wb-fg);
+}
+
+.ucmd-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+/* Empty state inside popover */
+.ucmd-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 14px;
+  margin: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ucmd-well);
+  color: var(--wb-fg);
+  font-size: 12.5px;
+}
+.ucmd-empty[hidden] { display: none; }
+.ucmd-empty-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  margin-top: 3px;
+}
+
+/* Inline Create Command form */
+.ucmd-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  margin: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ucmd-well);
+}
+.ucmd-add-form[hidden] { display: none; }
+.ucmd-form-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+.ucmd-form-sub {
+  font-weight: 500;
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+}
+.ucmd-grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 175px);
+  gap: 8px;
+}
+@media (max-width: 560px) {
+  .ucmd-grid2 { grid-template-columns: 1fr; }
+}
+.ucmd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ucmd-lbl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--wb-muted-fg);
+}
+.ucmd-lbl-opt {
+  font-weight: 400;
+  color: var(--ucmd-dim);
+}
+.ucmd-input,
+.ucmd-ta {
+  box-sizing: border-box;
+  width: 100%;
+  border: 0;
+  border-radius: 7px;
+  background: var(--ucmd-input);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  color: var(--wb-fg);
+  padding: 7px 9px;
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition: box-shadow .12s;
+}
+.ucmd-input.is-mono,
+.ucmd-ta.is-mono {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: var(--ucmd-cmd-fg);
+}
+.ucmd-input:focus,
+.ucmd-ta:focus {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-ta {
+  resize: vertical;
+  min-height: 46px;
+  line-height: 1.45;
+}
+.ucmd-form-err {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--wb-fail);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-fail) 12%, transparent);
+}
+.ucmd-form-err[hidden] { display: none; }
+.ucmd-form-acts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+.ucmd-btn-ghost {
+  cursor: pointer;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  transition: background-color .12s, color .12s;
+}
+.ucmd-btn-ghost:hover {
+  color: var(--wb-fg);
+  background: var(--ucmd-wash);
+}
+.ucmd-btn-save {
+  cursor: pointer;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 11px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--wb-ok) 16%, transparent);
+  color: var(--ucmd-ok-ink);
+  transition: background-color .12s, color .12s;
+}
+.ucmd-btn-save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-ok) 25%, transparent);
+}
+.ucmd-btn-save:disabled {
+  opacity: .55;
+  cursor: progress;
+}
+
+/* 3-line inline-editable command card */
+.ucmd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ucmd-list[hidden] { display: none; }
+.ucmd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-fg) 2%, transparent);
+  transition: background-color .14s;
+  min-width: 0;
+}
+.ucmd-card:hover {
+  background: var(--ucmd-well);
+}
+.ucmd-card.is-dirty {
+  background: color-mix(in srgb, var(--wb-warn) 4.5%, var(--ucmd-well));
+}
+
+/* Line 1: Single-line Header + Compact 26x26 Icon Actions (no wrapping) */
+.ucmd-line1 {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+.ucmd-head-l {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.ucmd-src {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 5px;
+  flex: none;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.ucmd-src.agent {
+  background: var(--ucmd-agent-bg);
+  color: var(--ucmd-agent-fg);
+}
+.ucmd-src.user {
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  color: var(--wb-muted-fg);
+}
+.ucmd-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ucmd-dirty-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-warn);
+  flex: none;
+}
+.ucmd-card.is-dirty .ucmd-dirty-dot {
+  display: inline-block;
+}
+.ucmd-cwd {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  color: var(--ucmd-dim);
+  background: color-mix(in srgb, var(--wb-fg) 4.5%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 138px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ucmd-cwd[hidden] { display: none; }
+
+/* Line 1 Right: Compressed 26x26 borderless tonal icon actions */
+.ucmd-acts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  flex: none;
+}
+.ucmd-ibtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .12s, color .12s, transform .08s, box-shadow .12s;
+}
+.ucmd-ibtn:disabled {
+  opacity: .55;
+  cursor: progress;
+}
+.ucmd-ibtn:active:not(.is-hold):not(:disabled) {
+  transform: scale(.95);
+}
+.ucmd-ibtn svg {
+  display: block;
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Shared 1.5s hold-to-confirm inside-out radial fill for ▶, ↗, × */
+.ucmd-ibtn.is-hold {
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+.ucmd-ibtn.is-hold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .12s ease-out, opacity .12s ease-out;
+}
+.ucmd-ibtn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 70%, transparent);
+}
+.ucmd-ibtn.is-hold.d-hold-active {
+  color: var(--ucmd-hold-ink);
+}
+.ucmd-ibtn.is-hold.d-hold-active::before {
+  transform: scale(1.55);
+  opacity: .95;
+  transition: transform var(--d-hold-dur, 1500ms) linear, opacity 120ms ease-out;
+}
+.ucmd-ibtn.is-hold.d-hold-ready {
+  color: var(--ucmd-hold-ink);
+  transform: scale(1.06);
+}
+.ucmd-ibtn.is-hold.d-hold-ready::before {
+  transform: scale(1.65);
+  opacity: 1;
+}
+
+/* ▶ Run Now (1.5s hold — primary blue fill) */
+.ucmd-ibtn-run {
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  color: var(--ucmd-primary-ink);
+}
+.ucmd-ibtn-run::before { background: var(--tm-blue, #5b9bf0); }
+.ucmd-ibtn-run:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-primary) 26%, transparent);
+}
+.ucmd-ibtn-run.d-hold-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tm-blue, #5b9bf0) 80%, transparent);
+}
+.ucmd-ibtn-run.d-hold-ready {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tm-blue, #5b9bf0) 75%, transparent);
+}
+
+/* ↗ Ask Agent (1.5s hold — calm violet fill) */
+.ucmd-ibtn-ask {
+  background: color-mix(in srgb, var(--ucmd-ask-accent) 14%, transparent);
+  color: var(--ucmd-ask-ink);
+}
+.ucmd-ibtn-ask::before { background: var(--ucmd-ask-accent); }
+.ucmd-ibtn-ask:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ucmd-ask-accent) 24%, transparent);
+}
+.ucmd-ibtn-ask.d-hold-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ucmd-ask-accent) 80%, transparent);
+}
+.ucmd-ibtn-ask.d-hold-ready {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ucmd-ask-accent) 75%, transparent);
+}
+
+/* 💾 Save to template (single click, visible ONLY when dirty) */
+.ucmd-ibtn-save {
+  display: none;
+  background: color-mix(in srgb, var(--wb-ok) 16%, transparent);
+  color: var(--wb-ok);
+}
+.ucmd-card.is-dirty .ucmd-ibtn-save {
+  display: inline-flex;
+}
+.ucmd-ibtn-save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-ok) 26%, transparent);
+  color: var(--ucmd-ok-ink);
+}
+
+/* × Hold-to-Delete (1.5s hold — danger red fill) */
+.ucmd-ibtn-del {
+  background: transparent;
+  color: var(--ucmd-dim);
+}
+.ucmd-ibtn-del::before { background: var(--wb-fail); }
+.ucmd-ibtn-del:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
+  color: var(--wb-fail);
+}
+.ucmd-ibtn-del.d-hold-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 75%, transparent);
+}
+.ucmd-ibtn-del.d-hold-ready {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-fail) 75%, transparent);
+}
+
+/* Line 2 & Line 3: Always-editable recessed borderless inline bars */
+.ucmd-inline-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ucmd-input);
+  border: 0;
+  border-radius: 7px;
+  padding: 3px 5px 3px 9px;
+  transition: box-shadow .14s, background-color .14s;
+  min-width: 0;
+}
+.ucmd-inline-bar.is-dirty {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-warn) 78%, transparent);
+}
+.ucmd-inline-bar:focus-within {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-inline-bar.is-dirty:focus-within {
+  box-shadow: inset 2px 0 0 var(--wb-warn), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-glyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ucmd-dim);
+  user-select: none;
+}
+.ucmd-glyph.is-prompt {
+  color: color-mix(in srgb, var(--wb-primary) 70%, var(--ucmd-dim));
+}
+.ucmd-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+.ucmd-inline-input.is-cmd {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: var(--ucmd-cmd-fg);
+}
+.ucmd-inline-input.is-multi {
+  resize: none;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ucmd-inline-input.is-prompt {
+  font-family: var(--wb-sans);
+  font-size: 12px;
+  color: var(--ucmd-prompt-fg);
+}
+.ucmd-inline-input::placeholder {
+  color: var(--ucmd-dim);
+}
+
+/* Right-side ↺ Revert icon button (22x22) */
+.ucmd-rev-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  flex: none;
+  background: transparent;
+  color: var(--ucmd-dim);
+  opacity: .22;
+  cursor: default;
+  pointer-events: none;
+  transition: background-color .12s, color .12s, opacity .12s;
+}
+.ucmd-rev-btn.is-dirty {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--wb-warn) 14%, transparent);
+  color: var(--wb-warn);
+}
+.ucmd-rev-btn.is-dirty:hover {
+  background: color-mix(in srgb, var(--wb-warn) 25%, transparent);
+}
+.ucmd-rev-btn:focus-visible {
+  outline: 1.5px solid var(--wb-warn);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ucmd-pop,
+  .ucmd-trigger,
+  .ucmd-ibtn,
+  .ucmd-ibtn.is-hold::before {
+    animation: none !important;
+    transition: none !important;
+  }
+}

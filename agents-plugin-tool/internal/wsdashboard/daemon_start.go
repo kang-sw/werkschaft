@@ -266,11 +266,13 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if ah, ok := d.agents.(AgentAuditHost); ok {
 			ah.SetAuditSink(d.AuditSink())
 		}
+		d.agentStarting.Store(true)
 		if startup, ok := d.agents.(AgentStartupHost); ok {
 			startup.StartForPublication(d.agentChanged, accepting)
 		} else {
 			d.agents.Start(d.agentChanged)
 		}
+		d.agentStarting.Store(false)
 	}
 	cleanupBeforePublish := func() {
 		if d.planUsage != nil {

@@ -355,6 +355,8 @@ func (h *holderChild) event(ev wsholder.Event) {
 			err = fmt.Errorf("signal %d", *ev.Signal)
 		case ev.ExitCode != nil && *ev.ExitCode != 0:
 			err = fmt.Errorf("exit status %d", *ev.ExitCode)
+		case ev.Reason != "":
+			err = fmt.Errorf("holder exited (%s)", ev.Reason)
 		}
 		h.proc.finish(err)
 		return

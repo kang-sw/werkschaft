@@ -19,20 +19,20 @@
 @media (min-width: 1600px) {
   .dwrap:not(.narrow) { max-width: none; }
   .dlanding { --dl-r: var(--dl-x); }
-  .dbody { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0 16px; align-items: start; }
+  .dbody { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0 8px; align-items: start; }
   .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
   .dash.live .dbody > .dgrid.live, .dash.history .dbody > .dgrid.history { min-height: 0; }
   body.tk-paged .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
   .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
   .dash:not(.live):not(.history) .rail { position: sticky; top: 12px; max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
   .dwrap > .top > .back { display: none; }
-  .dwrap > .top { margin-left: calc(340px + 16px); }
+  .dwrap > .top { margin-left: calc(340px + 8px); }
   .dbody > .rail { margin: calc(-1 * var(--toph)) 0 0 -4px; }
   :root:not([data-mode="index"]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dbody > .dgrid { width: 100%; max-width: var(--stagew); margin-inline: auto; }
-  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: max(0px, (100% - 356px - var(--stagew)) / 2); }
-  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top { margin-left: calc(356px + var(--stage-side)); margin-right: var(--stage-side); }
+  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: max(0px, (100% - 348px - var(--stagew)) / 2); }
+  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top { margin-left: calc(348px + var(--stage-side)); margin-right: var(--stage-side); }
   :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top:is(.dr-room, .tk-room) { padding-right: max(0px, calc(var(--drhw, 0px) + var(--tkhw, 0px) + 6px - var(--stage-side, 0px))); }
-  :root[data-shell] .dwrap > .top { margin-left: calc(356px + var(--sh-stage-side, 0px)); margin-right: var(--sh-stage-side, 0px); }
+  :root[data-shell] .dwrap > .top { margin-left: calc(348px + var(--sh-stage-side, 0px)); margin-right: var(--sh-stage-side, 0px); }
 }
 @media (max-width: 1599.98px) {
   .rail { position: fixed; z-index: 45; top: 12px; bottom: 12px; left: 12px; width: 340px; max-width: calc(100vw - 24px); box-shadow: var(--wb-shadow-hi); transform: translateX(calc(-100% - 20px)); visibility: hidden; transition: transform .22s cubic-bezier(.2, .7, .3, 1), visibility 0s linear .22s; }
@@ -72,13 +72,13 @@
    window is clamped to what this window leaves). On the live page
    --boardw is the board's own column, not its cell: the cell is the
    conversation's width (--cvw: --convow, else the stylesheet's 5:7 share
-   of the board), the grid's 16px gap and the board's, so each handle
+   of the board), the grid's 8px gap and the board's, so each handle
    moves only the panel on its left and the column takes the difference.
    A docked unit fills its pane: a card's body flexes (its stored height
    waits for the board), a topic's head stays put over its body's
    scroller (.gal-pbody, cards.js wrapTopic), so nothing sticks over what
    a deep link scrolls to. A page is a split tree: a split (.gal-split,
-   row or col) holds its two children and a 6px divider (.gal-div, a
+   row or col) holds its two children and an 8px divider (.gal-div, a
    focusable separator) between them; a drag over a docked pane previews
    its drop zone (.gal-overlay over the viewport: the zone's half of the
    pane, or all of it for the center). A drag held over a rail dot
@@ -88,7 +88,7 @@
    transform) while data-gal-pull is set, a pill (.gal-pullpill) at that
    edge of the viewport reads the target and its percentage, and the
    target's dot carries .pull-target. */
-:root { --pbw: calc(1680px - 32px - 356px); }
+:root { --pbw: calc(1680px - 32px - 348px); }
 /* --stagew stays --pbw in Band 3; Band 4 sizes .dbody directly with --boardw. */
 .dash { --stagew: var(--pbw); }
 .dash.board { --pbw: 900px; }
@@ -140,11 +140,11 @@
 .gal-split.row { flex-direction: row; }
 .gal-split.col { flex-direction: column; }
 .gal-div { flex: none; position: relative; touch-action: none; -webkit-user-select: none; user-select: none; outline: none; }
-.gal-split.row > .gal-div { width: 6px; cursor: col-resize; }
-.gal-split.col > .gal-div { height: 6px; cursor: row-resize; }
-.gal-div::after { content: ""; position: absolute; border-radius: 999px; background: transparent; transition: background .12s; }
-.gal-split.row > .gal-div::after { left: 2px; right: 2px; top: 4px; bottom: 4px; }
-.gal-split.col > .gal-div::after { top: 2px; bottom: 2px; left: 4px; right: 4px; }
+.gal-split.row > .gal-div { width: 8px; cursor: col-resize; }
+.gal-split.col > .gal-div { height: 8px; cursor: row-resize; }
+.gal-div::after { content: ""; position: absolute; border-radius: 999px; background: transparent; transition: background .14s ease; }
+.gal-split.row > .gal-div::after { left: 3px; right: 3px; top: 10px; bottom: 10px; }
+.gal-split.col > .gal-div::after { top: 3px; bottom: 3px; left: 10px; right: 10px; }
 .gal-div:hover::after, .gal-div:focus-visible::after, .gal-div.drag::after { background: var(--wb-primary); }
 .gal-overlay { position: absolute; z-index: 5; box-sizing: border-box; pointer-events: none; background: color-mix(in srgb, var(--wb-primary) 24%, transparent); border: 2px solid var(--wb-primary); border-radius: 6px; }
 .gal-overlay[hidden] { display: none; }
@@ -152,7 +152,6 @@
 .gal-pane > section.topic, .gal-pane > .bcard { flex: 1 1 auto; min-height: 0; margin: 0; display: flex; flex-direction: column; }
 .gal-pane > section.topic { overflow: hidden; overflow: clip; }
 .gal-pane > section.topic > .tophead { flex: none; position: static; }
-.gal-pane > section.topic:not(.quiet) > .tophead > .tbar { border-radius: var(--wb-radius) var(--wb-radius) 0 0; }
 .gal-pbody { flex: 1 1 auto; min-height: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain; }
 /* The board's visible-only rendering never skips a docked body: the
    gallery keeps its pages rendered and off the view by transform alone. */
@@ -180,16 +179,16 @@
 :root[data-gal-away] .dgrid > .bcol > * { transform: translateX(calc(-100% - 100vw)); }
 :root[data-gal-away] .dgrid.board > .bcol { overflow-x: clip; }
 /* the wide view with no docked page, while a drag runs: over the right edge */
-:root[data-gal="drag"] .bgal:not([hidden]) { position: fixed; z-index: 40; top: 50px; bottom: 12px; right: 16px; width: clamp(360px, calc(100vw - 1696px), 520px); }
-.bp-edge { position: absolute; top: 0; bottom: 0; left: -12px; width: 9px; cursor: col-resize; touch-action: none; z-index: 2; }
-.bp-edge::after, .dcv-edge::after { content: ""; position: absolute; top: 50%; left: 3px; width: 3px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--wb-muted); transition: background .15s; }
-.bp-edge:hover::after, .bp-edge.drag::after, .dcv-edge:hover::after, .dcv-edge.drag::after { background: var(--wb-primary); }
+:root[data-gal="drag"] .bgal:not([hidden]) { position: fixed; z-index: 40; top: 50px; bottom: 12px; right: 16px; width: clamp(360px, calc(100vw - 1688px), 520px); }
+.bp-edge { position: absolute; top: 0; bottom: 0; left: -8px; width: 8px; cursor: col-resize; touch-action: none; z-index: 2; outline: none; }
+.bp-edge::after, .dcv-edge::after { content: ""; position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px; transform: translateX(-50%); border-radius: 999px; background: transparent; transition: background .14s ease; }
+.bp-edge:hover::after, .bp-edge.drag::after, .bp-edge:focus-visible::after, .dcv-edge:hover::after, .dcv-edge.drag::after, .dcv-edge:focus-visible::after { background: var(--wb-primary); }
 @media (min-width: 1600px) {
   /* Band 4 (dynamic four-column dock): rail, stage, and gallery column all show */
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid.board { max-width: none; margin: 0; }
-  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 852px)), 100% - 652px)) minmax(280px, 1fr); }
-  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }
+  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
+  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .dgrid,
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -202,8 +201,8 @@
      (never display:none) so docked xterm/iframes live. */
   :root[data-overview-preview] .dwrap:not(.narrow),
   :root[data-overview-preview] .dgrid.board { max-width: none; margin: 0; }
-  :root[data-overview-preview] .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 852px)), 100% - 652px)) minmax(280px, 1fr); }
-  :root[data-boardw][data-overview-preview] .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }
+  :root[data-overview-preview] .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
+  :root[data-boardw][data-overview-preview] .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
   :root[data-overview-preview] .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root[data-overview-preview] .dbody > .dgrid,
   :root[data-overview-preview] .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -415,16 +414,28 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .dracts button { display: inline-grid; place-items: center; width: 20px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--wb-muted-fg); cursor: pointer; }
 .rail .dracts .i { width: 13px; height: 13px; stroke-width: 1.6; }
 .rail .dracts button:hover, .rail .dracts button:focus-visible { color: var(--wb-primary); background: var(--wb-muted); outline: none; }
-/* a hosted lead's third hover button (archive, or unarchive in the archived
-   fold): the time slot widens so nothing moves when the three show */
+/* a hosted lead's third hover button (stop on live rows with a process, or
+   unarchive in the archived fold): the time slot widens so nothing moves
+   when the three show */
 .rail .rs.hosted-row .drslot { min-width: 66px; }
-.rail .drarch.busy { opacity: .55; cursor: progress; }
+.rail .drarch.busy, .rail .drstop.busy { opacity: .55; cursor: progress; }
+.rail .drstop { position: relative; overflow: hidden; isolation: isolate; }
+.rail .drstop .i { position: relative; z-index: 1; }
+.rail .drstop.d-stop-safe { color: var(--wb-muted-fg); }
+.rail .drstop.d-stop-safe:hover, .rail .drstop.d-stop-safe:focus-visible { color: var(--wb-fg); background: var(--wb-muted); }
+.rail .drstop.d-stop-unsafe { color: var(--wb-fail); }
+.rail .drstop.d-stop-unsafe:hover, .rail .drstop.d-stop-unsafe:focus-visible { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
+.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
+.rail .drstop.d-stop-unsafe.d-hold-active::before { opacity: 1; animation: d-hold-radial var(--d-hold-dur, 1500ms) linear forwards; }
+.rail .drstop.d-stop-unsafe.d-hold-ready { color: var(--wb-card); box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
+.rail .drstop.d-stop-unsafe.d-hold-ready::before { background: var(--wb-fail); transform: scale(1); opacity: 1; animation: none; }
+@keyframes d-hold-radial { from { transform: scale(0); } to { transform: scale(1); } }
 @media (hover: hover) {
   .rail .rs:hover .dracts { display: flex; }
   .rail .rs:hover .drslot { visibility: hidden; }
 }
-.rail .rs:focus-within .dracts { display: flex; }
-.rail .rs:focus-within .drslot { visibility: hidden; }
+.rail .rs:focus-within .dracts, .rail .rs.d-holding .dracts { display: flex; }
+.rail .rs:focus-within .drslot, .rail .rs.d-holding .drslot { visibility: hidden; }
 /* a row's rename: the input stands where the name was */
 .rail .drinp { flex: 1 1 0; min-width: 60px; margin: 3px 0; padding: 1px 4px; font: inherit; font-size: 12.5px; color: var(--wb-fg); background: var(--wb-card); border: 1px solid var(--wb-primary); border-radius: 4px; outline: none; -webkit-user-select: text; user-select: text; }
 .rail .rs .s1:has(.drinp) .drtail { flex: none; }
@@ -691,6 +702,7 @@ html:not([data-sysopen]) .rail .rnew { display: none; }
 html:not([data-sysopen]) .rail .rdel { display: none; }
 html:not([data-sysopen]) .rail .rgit { display: none; }
 html:not([data-sysopen]) .rail .drarch { display: none; }
+html:not([data-sysopen]) .rail .drstop { display: none; }
 .rpop .sploc { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: -4px; font-size: 11.5px; color: var(--wb-muted-fg); white-space: nowrap; }
 .rpop .sploc .i { width: 12px; height: 12px; flex: none; }
 .rpop .sploc b { font-family: var(--wb-mono); font-weight: 700; color: var(--wb-fg); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
@@ -711,13 +723,28 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .rpop .spdesc:empty { display: none; }
 .rpop .spsec .spdesc { margin: 4px 0 0; text-align: left; }
 .rpop .spacts { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid var(--wb-muted); }
-.rpop .spact { display: flex; align-items: flex-start; gap: 9px; border: 0; background: transparent; border-radius: 8px; padding: 6px 8px; text-align: left; cursor: pointer; color: inherit; font: inherit; font-size: 13px; }
+.rpop .spact { position: relative; overflow: hidden; isolation: isolate; display: flex; align-items: flex-start; gap: 9px; border: 0; background: transparent; border-radius: 8px; padding: 6px 8px; text-align: left; cursor: pointer; color: inherit; font: inherit; font-size: 13px; }
+.rpop .spact > * { position: relative; z-index: 1; }
 .rpop .spact:hover:not(:disabled) { background: var(--wb-muted); }
 .rpop .spact:disabled { opacity: .45; cursor: default; }
 .rpop .spact:focus-visible { outline: 1.5px solid var(--wb-primary); }
 .rpop .spact .i { width: 14px; height: 14px; flex: none; margin-top: 2px; }
 .rpop .spact .gs { display: block; font-size: 11.5px; color: var(--wb-muted-fg); font-weight: 400; }
 .rpop .spact.danger { color: var(--wb-fail); }
+.rpop .spact.d-hold-btn::before { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--wb-primary) 22%, transparent); transform: scaleX(0); transform-origin: 0 50%; opacity: 0; pointer-events: none; z-index: 0; }
+.rpop .spact.danger.d-hold-btn::before { background: color-mix(in srgb, var(--wb-fail) 24%, transparent); }
+.rpop .spact.d-hold-btn.d-hold-active::before { opacity: 1; animation: d-hold-bar var(--d-hold-dur, 1500ms) linear forwards; }
+.rpop .spact.d-hold-btn.d-hold-ready { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.rpop .spact.danger.d-hold-btn.d-hold-ready { box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
+.rpop .spact.d-hold-btn.d-hold-ready::before { background: color-mix(in srgb, var(--wb-primary) 34%, transparent); transform: scaleX(1); opacity: 1; animation: none; }
+.rpop .spact.danger.d-hold-btn.d-hold-ready::before { background: color-mix(in srgb, var(--wb-fail) 36%, transparent); }
+@keyframes d-hold-bar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .rail .drstop.d-stop-unsafe.d-hold-active::before,
+  .rpop .spact.d-hold-btn.d-hold-active::before { animation: none; transform: scale(1); opacity: .45; }
+  .rail .drstop.d-stop-unsafe.d-hold-ready::before,
+  .rpop .spact.d-hold-btn.d-hold-ready::before { opacity: 1; }
+}
 /* a rail row's menu (dashboard.js, rail row menu): items as the link menu's,
    the "move under" list opening in place below its item, indented, and a
    hosted row's session menu below them; the live line its moves (and the
@@ -1164,12 +1191,12 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 
 /* The settings sheet keeps the standard 340px docked rail from 1600px and uses the 340px overlay drawer below. */
 @media (min-width: 1600px) {
-  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 356px; }
+  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 348px; }
   :root[data-settings-shell] .dwrap > .top > .back { display: none; }
   :root[data-settings-shell] .dbody {
     display: grid;
     grid-template-columns: 340px minmax(0, 1fr);
-    gap: 0 16px;
+    gap: 0 8px;
     flex: 1 1 0;
     min-height: 0;
     align-items: stretch;
@@ -1199,14 +1226,17 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .apanswered > .conv-audit-items { margin-left: 36px; }
 .apanswered:not([open]) > .conv-audit-items { display: none; }
 
-/* ===== Right-side outer circle-chain board dial (dashboard-board-dial.js) =====
-   Sits in #bcol's right-edge margin (26px reserved only when bounded & >1 card)
-   so it never overlaps cards. Hide states (Overview, gal-away, file-preview,
-   maximized sheet) toggle visibility on #bdial itself, keeping #bcol padding
-   stable. */
-:root[data-board-dial] .dgrid:is(.live, .history, .worktree) > #bcol { padding-right: 26px; }
-.d-board-dial { position: relative; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 22px; padding: 6px 0; box-sizing: border-box; touch-action: none; -webkit-user-select: none; user-select: none; }
+/* ===== Center-locked rotary vernier board dial (dashboard-board-dial.js) =====
+   Straddles #bcol's right edge at right: -4px (18px wide, transparent at rest)
+   so #bcol keeps its base 4px right padding and cards keep their own margins.
+   On hover, focus-within, or pointer scrub, the capsule blooms leftward to 28px
+   while staying pinned at right: -4px. Hide states toggle visibility on #bdial
+   and display on .d-board-dial-tip without shifting board layout. */
+.d-board-dial { position: relative; right: -4px; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 18px; height: 292px; max-height: calc(100% - 16px); border-radius: 9px; background: transparent; box-sizing: border-box; cursor: ns-resize; touch-action: none; -webkit-user-select: none; user-select: none; transition: width .16s cubic-bezier(.22, 1, .36, 1), border-radius .16s ease, background-color .16s ease, box-shadow .16s ease; }
 .d-board-dial[hidden] { display: none !important; }
+.d-board-dial:hover,
+.d-board-dial:focus-within,
+.d-board-dial[data-scrub] { width: 28px; border-radius: 13px; background: color-mix(in srgb, var(--wb-card) 84%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 13%, transparent), var(--wb-shadow-hi); }
 :root[data-overview] .d-board-dial,
 :root[data-gal-away] .d-board-dial,
 :root[data-file-preview] .d-board-dial,
@@ -1215,25 +1245,43 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 :root[data-gal-away] .d-board-dial-tip,
 :root[data-file-preview] .d-board-dial-tip,
 :root[data-board-max] .d-board-dial-tip { display: none; }
-.d-board-dial-track { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.d-board-dial-dot { position: relative; display: grid; place-items: center; width: 18px; height: 14px; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: pointer; outline: none; }
-.d-board-dial-dot:focus-visible { box-shadow: 0 0 0 1.5px var(--wb-primary); }
-.d-board-dial-pip { display: block; border-radius: 50%; box-sizing: border-box; transition: width .14s ease, height .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease, box-shadow .14s ease; }
-.d-board-dial-dot[data-tier="0"] .d-board-dial-pip { width: 8px; height: 8px; background: var(--wb-primary); border: 0; opacity: 1; }
-.d-board-dial-dot[data-tier="1"] .d-board-dial-pip { width: 6px; height: 6px; background: transparent; border: 1.5px solid color-mix(in srgb, var(--wb-fg) 56%, transparent); opacity: .9; }
-.d-board-dial-dot[data-tier="2"] .d-board-dial-pip { width: 4.5px; height: 4.5px; background: color-mix(in srgb, var(--wb-muted-fg) 72%, transparent); border: 0; opacity: .78; }
-.d-board-dial-dot[data-tier="3"] .d-board-dial-pip { width: 3px; height: 3px; background: color-mix(in srgb, var(--wb-muted-fg) 52%, transparent); border: 0; opacity: .52; }
-.d-board-dial-dot[data-edge="1"] .d-board-dial-pip { opacity: .35; }
-.d-board-dial-dot[data-closed="1"]:not([data-tier="0"]) .d-board-dial-pip { opacity: .4; }
-.d-board-dial-dot[data-kind="card"]:not([data-tier="0"]) .d-board-dial-pip { border-radius: 2px; }
-.d-board-dial-dot[data-ask="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-warn); }
-.d-board-dial-dot[data-held="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-primary); }
-.d-board-dial-dot[data-ask="1"][data-held="1"] .d-board-dial-pip { box-shadow: 0 0 0 2px var(--wb-warn), 0 0 0 3.5px var(--wb-primary); }
-.d-board-dial-dot:hover .d-board-dial-pip { opacity: 1; border-color: var(--wb-primary); }
-.d-board-dial-dot:not([data-tier="1"]):hover .d-board-dial-pip { background: var(--wb-primary); }
-.d-board-dial[data-scrub] { cursor: ns-resize; }
-.d-board-dial-tip { position: fixed; top: 0; left: 0; z-index: 42; pointer-events: none; display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 8px; border-radius: 7px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); font: 600 11.5px/1.3 var(--wb-sans); white-space: nowrap; will-change: transform; }
+.d-board-dial-reticle { position: absolute; left: 0; right: 0; top: 50%; height: 22px; transform: translateY(-50%); pointer-events: none; z-index: 3; }
+.d-board-dial-reticle::before { content: ""; position: absolute; inset: 2px 1px; border-radius: 6px; background: color-mix(in srgb, var(--wb-primary) 17%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 46%, transparent); transition: inset .16s ease, border-radius .16s ease; }
+.d-board-dial-reticle::after { content: ""; position: absolute; right: -1px; top: 50%; width: 2.5px; height: 11px; transform: translateY(-50%); border-radius: 999px; background: var(--wb-primary); box-shadow: 0 0 8px color-mix(in srgb, var(--wb-primary) 72%, transparent); transition: right .16s ease, width .16s ease, height .16s ease; }
+.d-board-dial:is(:hover, :focus-within, [data-scrub]) .d-board-dial-reticle::before { inset: 1px 3px; border-radius: 7px; }
+.d-board-dial:is(:hover, :focus-within, [data-scrub]) .d-board-dial-reticle::after { right: 0; width: 3px; height: 12px; }
+.d-board-dial-mask { position: absolute; inset: 4px 0; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%); mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%); }
+.d-board-dial-track { position: absolute; left: 0; right: 0; top: 50%; will-change: transform; }
+.d-board-dial-dot { position: absolute; left: 0; right: 0; height: 22px; margin-top: -11px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--wb-muted-fg); display: flex; align-items: center; justify-content: center; cursor: pointer; outline: none; }
+.d-board-dial-dot:focus-visible { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.d-board-dial-ic { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 3px; transition: color .12s ease, transform .12s ease; }
+.d-board-dial-ic svg { width: 12px; height: 12px; display: block; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.d-board-dial-ring { position: absolute; top: -1px; right: -2px; width: 5px; height: 5px; border-radius: 50%; display: none; pointer-events: none; }
+.d-board-dial-dot[data-ask="1"] .d-board-dial-ring { display: block; background: var(--wb-warn); box-shadow: 0 0 0 1.5px var(--wb-bg); }
+.d-board-dial-dot[data-held="1"]:not([data-ask="1"]) .d-board-dial-ring { display: block; background: var(--wb-primary); box-shadow: 0 0 0 1.5px var(--wb-bg); }
+.d-board-dial-dot[data-ask="1"][data-held="1"] .d-board-dial-ring { display: block; background: var(--wb-warn); box-shadow: 0 0 0 1.5px var(--wb-primary); }
+.d-board-dial-tick { display: none; height: 1.8px; border-radius: 999px; background: currentColor; pointer-events: none; }
+.d-board-dial-dot[data-vtier="0"] { color: var(--wb-primary); }
+.d-board-dial-dot[data-vtier="0"][data-ask="1"] { color: var(--wb-warn); }
+.d-board-dial-dot[data-vtier="0"] .d-board-dial-ic { transform: scale(1.06); }
+.d-board-dial-dot[data-vtier="1"] { color: color-mix(in srgb, var(--wb-fg) 76%, var(--wb-muted-fg)); opacity: .78; }
+.d-board-dial-dot[data-vtier="1"] .d-board-dial-ic { transform: scale(.86); }
+.d-board-dial-dot[data-vtier="2"] { color: var(--wb-muted-fg); opacity: .54; }
+.d-board-dial-dot[data-vtier="2"] .d-board-dial-ic { transform: scale(.74); }
+.d-board-dial-dot[data-vtier="3"] .d-board-dial-ic,
+.d-board-dial-dot[data-vtier="4"] .d-board-dial-ic,
+.d-board-dial-dot[data-vtier="5"] .d-board-dial-ic { display: none; }
+.d-board-dial-dot[data-vtier="3"] .d-board-dial-tick { display: block; width: 7px; opacity: .56; }
+.d-board-dial-dot[data-vtier="4"] .d-board-dial-tick { display: block; width: 5px; opacity: .38; }
+.d-board-dial-dot[data-vtier="5"] .d-board-dial-tick { display: block; width: 3px; opacity: .24; }
+.d-board-dial-dot[data-ask="1"]:is([data-vtier="3"], [data-vtier="4"], [data-vtier="5"]) .d-board-dial-tick { background: var(--wb-warn); opacity: .85; }
+.d-board-dial-dot[data-held="1"]:not([data-ask="1"]):is([data-vtier="3"], [data-vtier="4"], [data-vtier="5"]) .d-board-dial-tick { background: var(--wb-primary); opacity: .8; }
+.d-board-dial-dot[data-edge="1"] { opacity: .35; }
+.d-board-dial-dot[data-closed="1"]:not([data-vtier="0"]) { opacity: .36; }
+.d-board-dial-dot:hover { opacity: 1 !important; color: var(--wb-primary); }
+.d-board-dial-tip { position: fixed; top: 0; left: 0; z-index: 42; pointer-events: none; display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 5px 9px; border-radius: 8px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); font: 600 11.5px/1.3 var(--wb-sans); white-space: nowrap; will-change: transform; }
 .d-board-dial-tip[hidden] { display: none; }
+.d-board-dial-tip-idx { flex: none; font: 700 10.5px/1 var(--wb-mono); color: var(--wb-primary); font-variant-numeric: tabular-nums; }
 .d-board-dial-tip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .d-board-dial-tip-badge { flex: none; padding: 1px 5px; border-radius: 999px; font-size: 10px; font-weight: 700; }
 .d-board-dial-tip-state { --dial-st: var(--wb-muted-fg); background: color-mix(in srgb, var(--dial-st) 16%, transparent); color: var(--dial-st); }
@@ -1290,5 +1338,8 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .gal-pop-spring-track { height: 3px; border-radius: 999px; background: var(--wb-muted); overflow: hidden; }
 .gal-pop-spring-bar { height: 100%; width: 100%; background: var(--wb-primary); transform-origin: left center; transform: scaleX(0); will-change: transform; }
 @media (prefers-reduced-motion: reduce) {
-  .d-board-dial-pip { transition: none; }
+  .d-board-dial,
+  .d-board-dial-ic,
+  .d-board-dial-reticle::before,
+  .d-board-dial-reticle::after { transition: none; }
 }

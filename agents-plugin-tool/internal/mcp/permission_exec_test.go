@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 // A hosted worker's connection (a Codex or Claude cutover worker attaches
@@ -314,29 +316,99 @@ func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
 	}
 }
 
-func TestWerkReadOnlyCannotLaunchOrWriteExec(t *testing.T) {
-	w := newWorkerFixture(t, wsagent.BackendWerk, wsagent.PermissionReadOnly)
-	w.worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
-	calls := []struct {
-		name string
-		args map[string]any
-	}{
-		{"exec.run", map[string]any{"exe": "git", "args": []string{"status"}}},
-		{"exec.shell", map[string]any{"cmd": "git status"}},
-		{"exec.spawn", map[string]any{"cmd": "git", "args": []string{"status"}}},
-		{"exec.write", map[string]any{"exec_id": "fixture", "data": ""}},
-	}
-	for _, cutover := range []string{wsagent.BackendWerk, ""} {
-		w.worker.execCutover = cutover
-		names := listedNames(w.worker)
-		for _, call := range calls {
-			if slices.Contains(names, call.name) || slices.Contains(names, strings.ReplaceAll(call.name, ".", "_")) {
-				t.Errorf("read-only listing includes %s", call.name)
-			}
-			text, failed := w.call(call.name, call.args)
-			if !failed || !strings.Contains(text, "this read-only session cannot start or send input") {
-				t.Errorf("cutover %q, %s = %v %q", cutover, call.name, failed, text)
+func TestWerkReadOnlyLeadFailClosedAndWorkerAllowlistParity(t *testing.T) {
+	t.Run("read-only werk lead cannot launch or write exec", func(t *testing.T) {
+		w := newWorkerFixture(t, wsagent.BackendWerk, wsagent.PermissionReadOnly)
+		w.worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
+		w.worker.fileWrites = &FileWriteSession{
+			Root: w.root, Cwd: w.root, Authority: wsfs.AuthorityReadOnly, LiveAuthority: true,
+			CurrentAuthority: func() wsfs.Authority { return wsfs.AuthorityReadOnly },
+		}
+		calls := []struct {
+			name string
+			args map[string]any
+		}{
+			{"exec.run", map[string]any{"exe": "git", "args": []string{"status"}}},
+			{"exec.shell", map[string]any{"cmd": "git status"}},
+			{"exec.spawn", map[string]any{"cmd": "git", "args": []string{"status"}}},
+			{"exec.write", map[string]any{"exec_id": "fixture", "data": ""}},
+		}
+		for _, cutover := range []string{wsagent.BackendWerk, ""} {
+			w.worker.execCutover = cutover
+			names := listedNames(w.worker)
+			for _, call := range calls {
+				if slices.Contains(names, call.name) || slices.Contains(names, strings.ReplaceAll(call.name, ".", "_")) {
+					t.Errorf("read-only lead listing includes %s", call.name)
+				}
+				text, failed := w.call(call.name, call.args)
+				if !failed || !strings.Contains(text, "this read-only session cannot start or send input") {
+					t.Errorf("cutover %q, %s = %v %q", cutover, call.name, failed, text)
+				}
 			}
 		}
-	}
+	})
+
+	t.Run("read-only werk worker gets allowlist exec parity", func(t *testing.T) {
+		w := newWorkerFixture(t, wsagent.BackendWerk, wsagent.PermissionReadOnly)
+		gitIn(t, w.root, "add", ".")
+		gitIn(t, w.root, "commit", "-q", "-m", "werk worker commit")
+		recorded := 0
+		w.worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
+		w.worker.fileWrites = &FileWriteSession{
+			Root: w.root, Cwd: w.root, Authority: wsfs.AuthorityReadOnly, LiveAuthority: false,
+			CurrentAuthority: func() wsfs.Authority { return wsfs.AuthorityReadOnly },
+		}
+		w.worker.recordExecLaunch = func(_ context.Context, _ execjob.ModelLaunch) (bool, error) {
+			recorded++
+			return false, nil
+		}
+		names := listedNames(w.worker)
+		for _, want := range []string{"exec.run", "exec.shell"} {
+			if !slices.Contains(names, want) {
+				t.Fatalf("read-only werk worker listing misses %s: %v", want, names)
+			}
+		}
+
+		callCorrelated := func(tool string, args map[string]any) (string, bool) {
+			t.Helper()
+			withKey := map[string]any{"session_key": w.key}
+			for k, v := range args {
+				withKey[k] = v
+			}
+			return rawCorrelatedToolCall(t, w.worker, tool, "werk-call", withKey)
+		}
+
+		text, failed := callCorrelated("exec.run", map[string]any{"exe": "git", "args": []string{"log", "--oneline", "-n", "1"}})
+		if failed || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "werk worker commit") {
+			t.Fatalf("read-only werk worker exec.run git log = %v %s", failed, text)
+		}
+		text, failed = callCorrelated("exec.shell", map[string]any{"cmd": "git status --short"})
+		if failed || !strings.Contains(text, "status: exited 0") {
+			t.Fatalf("read-only werk worker exec.shell git status = %v %s", failed, text)
+		}
+		if recorded < 2 {
+			t.Fatalf("read-only werk worker recorded %d launches, want >= 2", recorded)
+		}
+
+		pwned := filepath.Join(w.root, "pwned")
+		for _, tc := range []struct {
+			tool string
+			args map[string]any
+			want string
+		}{
+			{"exec.run", map[string]any{"exe": "touch", "args": []string{"pwned"}}, "not an allowed read command"},
+			{"exec.run", map[string]any{"exe": "git", "args": []string{"commit", "-m", "x"}}, "not an allowed read subcommand"},
+			{"exec.shell", map[string]any{"cmd": "echo x > pwned"}, "only 2>&1"},
+			{"exec.shell", map[string]any{"command": "touch pwned"}, "not checked"},
+			{"exec.spawn", map[string]any{"cmd": "touch", "args": []string{"pwned"}}, "not checked"},
+		} {
+			text, failed := callCorrelated(tc.tool, tc.args)
+			if !failed || !strings.Contains(text, tc.want) || !strings.Contains(text, "permission denied") {
+				t.Errorf("read-only werk worker %s %v = %v %q, want refusal naming %q", tc.tool, tc.args, failed, text, tc.want)
+			}
+		}
+		if _, err := os.Stat(pwned); err == nil {
+			t.Fatal("a refused read-only werk worker launch wrote a file")
+		}
+	})
 }

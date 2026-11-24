@@ -197,8 +197,8 @@ function buildBootstrapScript() {
         if (!e.data || e.data.wbDoc !== "wheel") return;
         var frames = doc.querySelectorAll("iframe.doc-frame");
         for (var i = 0; i < frames.length; i++) {
-          if (frames[i].contentWindow === e.source && window.WsBoardAnchor && window.WsBoardAnchor.onFrameWheel) {
-            window.WsBoardAnchor.onFrameWheel(frames[i], e.data.dy, e.data.dx, e.data.mode);
+          if (frames[i].contentWindow === e.source && window.WsCards && window.WsCards.onFrameWheel) {
+            window.WsCards.onFrameWheel(frames[i], e.data.dy, e.data.dx, e.data.mode);
             break;
           }
         }
@@ -532,10 +532,11 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     });
     assert.deepEqual(geomCounts, { outerReads: 0, otherReads: 0 }, 'non-current card update must perform zero geometry reads');
 
-    // Phase 1 Snap Deck assertions: mandatory snap, hidden scrollbar, fixed slot height,
-    // contain: strict with entry-panel[data-max] & overview lifts, hidden .bcard .bc-grip,
-    // and .oq-pill 2-level offscreen jump back to Topic 1's #item-1.
-    const snapDeck = await page.evaluate(() => {
+    // Designated-Y free-canvas assertions: no CSS scroll-snap, hidden scrollbar,
+    // contain: layout style (no contain: strict) with entry-panel[data-max] &
+    // overview lifts, hidden .bcard .bc-grip, and .oq-pill 2-level offscreen
+    // jump back to Topic 1's #item-1.
+    const freeCanvas = await page.evaluate(() => {
       const bcol = document.getElementById('bcol');
       const bcolCs = getComputedStyle(bcol);
       const t1 = document.getElementById('topic-1');
@@ -565,9 +566,11 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       const ovContain = getComputedStyle(t4).contain;
       document.documentElement.removeAttribute('data-overview');
       return {
+        freeAttr: bcol.hasAttribute('data-board-free'),
         snapType: bcolCs.scrollSnapType,
         scrollbarWidth: bcolCs.scrollbarWidth,
         usable,
+        t1Pos: getComputedStyle(t1).position,
         t1H: t1.getBoundingClientRect().height,
         t1ScrollMarginTop: getComputedStyle(t1).scrollMarginTop,
         cardScrollMarginTop: getComputedStyle(card).scrollMarginTop,
@@ -581,27 +584,27 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         cardSnap: getComputedStyle(card).scrollSnapAlign,
         cardInH: cardIn.getBoundingClientRect().height,
         hasGrip: !!grip,
-        bodyFlexGrow: getComputedStyle(body).flexGrow,
       };
     });
-    assert.equal(snapDeck.snapType, 'none', '#bcol uses wheel-virtualized deck (no CSS scroll-snap)');
-    assert.equal(snapDeck.scrollbarWidth, 'none', '#bcol hides outer scrollbar');
-    assert.ok(snapDeck.t1H >= snapDeck.usable - 1.5, `topic height (${snapDeck.t1H}) is at least --board-usable (${snapDeck.usable})`);
-    assert.equal(snapDeck.cardScrollMarginTop, '0px', 'wheel-virtualized slot 0 uses no CSS scroll-margin-top');
-    assert.equal(snapDeck.t1ScrollMarginTop, '0px', 'wheel-virtualized slot 1 uses no CSS scroll-margin-top');
-    assert.equal(snapDeck.t4Contain, 'strict', 'normal topic uses contain: strict');
-    assert.equal(snapDeck.t4ContainMax, 'none', 'entry-panel[data-max] lifts contain: strict via data-has-panel-max');
-    assert.ok(Math.abs(snapDeck.epRect.top - 52) <= 1 && Math.abs(snapDeck.epRect.left - 16) <= 1 &&
-      Math.abs(snapDeck.epRect.width - (snapDeck.vw - 32)) <= 2 && Math.abs(snapDeck.epRect.height - (snapDeck.vh - 64)) <= 2 &&
-      snapDeck.epRect.height > snapDeck.usable + 50,
-      `entry-panel[data-max] fills viewport unclipped by #bcol / contain: strict: ${JSON.stringify(snapDeck.epRect)} vs ${snapDeck.vw}x${snapDeck.vh}`);
-    assert.equal(snapDeck.webBodyOverflow, 'hidden', 'web .bcard .bc-body preserves overflow: hidden inside #bcol');
-    assert.equal(snapDeck.ovSnap, 'none', 'overview keeps scroll-snap-type: none');
-    assert.equal(snapDeck.ovContain, 'none', 'overview lifts containment');
-    assert.equal(snapDeck.cardSnap, 'none', '.bcard uses wheel virtualization (no CSS scroll-snap-align)');
-    assert.ok(snapDeck.cardInH >= snapDeck.usable - 1.5, `.bcard > .bc-in height (${snapDeck.cardInH}) is at least --board-usable (${snapDeck.usable})`);
-    assert.equal(snapDeck.hasGrip, false, 'retired .bc-grip is not rendered on .bcard');
-    assert.equal(snapDeck.bodyFlexGrow, '1', 'in-board .bcard > .bc-in > .bc-body flex-grows');
+    assert.equal(freeCanvas.freeAttr, true, '#bcol enters Designated-Y free-canvas mode');
+    assert.equal(freeCanvas.snapType, 'none', '#bcol uses native free scroll (no CSS scroll-snap)');
+    assert.equal(freeCanvas.scrollbarWidth, 'none', '#bcol hides outer scrollbar');
+    assert.equal(freeCanvas.t1Pos, 'absolute', 'mounted free-canvas topics use position: absolute');
+    assert.ok(freeCanvas.t1H > 0, `topic keeps natural height (${freeCanvas.t1H})`);
+    assert.equal(freeCanvas.cardScrollMarginTop, '0px', 'free-canvas slot 0 uses no CSS scroll-margin-top');
+    assert.equal(freeCanvas.t1ScrollMarginTop, '0px', 'free-canvas slot 1 uses no CSS scroll-margin-top');
+    assert.equal(freeCanvas.t4Contain, 'layout style', 'free-canvas topic uses contain: layout style (never strict/paint)');
+    assert.equal(freeCanvas.t4ContainMax, 'none', 'entry-panel[data-max] lifts containment via data-has-panel-max');
+    assert.ok(Math.abs(freeCanvas.epRect.top - 52) <= 1 && Math.abs(freeCanvas.epRect.left - 16) <= 1 &&
+      Math.abs(freeCanvas.epRect.width - (freeCanvas.vw - 32)) <= 2 && Math.abs(freeCanvas.epRect.height - (freeCanvas.vh - 64)) <= 2 &&
+      freeCanvas.epRect.height > freeCanvas.usable + 50,
+      `entry-panel[data-max] fills viewport unclipped by #bcol: ${JSON.stringify(freeCanvas.epRect)} vs ${freeCanvas.vw}x${freeCanvas.vh}`);
+    assert.equal(freeCanvas.webBodyOverflow, 'hidden', 'web .bcard .bc-body preserves overflow: hidden inside #bcol');
+    assert.equal(freeCanvas.ovSnap, 'none', 'overview keeps scroll-snap-type: none');
+    assert.equal(freeCanvas.ovContain, 'none', 'overview lifts containment');
+    assert.equal(freeCanvas.cardSnap, 'none', '.bcard uses no CSS scroll-snap-align');
+    assert.ok(freeCanvas.cardInH > 0, `.bcard > .bc-in keeps positive height (${freeCanvas.cardInH})`);
+    assert.equal(freeCanvas.hasGrip, false, 'retired .bc-grip is not rendered on .bcard');
 
     // Offscreen .oq-pill 2-level jump: from Topic 4 (offscreen from Topic 1), update pill and click.
     await page.evaluate(() => {

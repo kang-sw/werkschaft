@@ -29,6 +29,9 @@ type State struct {
 	Status string `json:"status"`
 	// Process reports a live backend process.
 	Process bool `json:"process"`
+	// SafeStop reports whether stopping the live process right now is safe
+	// (holder-backed, idle, no active descendants or native subagents).
+	SafeStop bool `json:"safe_stop,omitempty"`
 	// Holding reports whether a finished turn is held pending child reports.
 	Holding bool `json:"holding,omitempty"`
 	// Hidden is dashboard sidecar state, never part of the runner record.
@@ -120,6 +123,10 @@ type State struct {
 	// ResumeCommand is the shell command that resumes a handed-off lead
 	// session's conversation in a terminal. It names paths of this
 	// machine, so the routes answer it to a viewer with CanControl alone.
+	//
+	// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+	// removal in 261124-refactor-remove-terminal-handoff. Retained in Phase 1
+	// for T0 compatibility and passive display of historical handed-off records.
 	ResumeCommand string `json:"resume_command,omitempty"`
 
 	// Parent, Label, and Cwd are a spawned conversation's (Runner.Spawn):

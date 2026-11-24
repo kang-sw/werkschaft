@@ -101,17 +101,14 @@ func TestUserCommandBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chromium user command acceptance: %v", err)
 	}
-	// One run of "make all" per language; the stale click ran nothing.
 	f.svc.mu.Lock()
 	defer f.svc.mu.Unlock()
 	runs := map[string]int{}
 	for _, l := range f.svc.launches {
 		runs[l.Line]++
 	}
-	// Per language: one "make all", one "echo ctor", and "echo dbl" twice (a real
-	// double click is one run, two rapid clicks another); the stale click ran
-	// nothing.
-	if runs["make all"] != 2 || runs["echo ctor"] != 2 || runs["echo dbl"] != 4 || len(f.svc.launches) != 8 {
-		t.Fatalf("launches %v, want one \"make all\", one \"echo ctor\" and two \"echo dbl\" per language and nothing else", runs)
+	// Each confirmed command launches once per language.
+	if runs["make all"] != 2 || runs["echo ctor"] != 2 || runs["echo dbl"] != 2 || len(f.svc.launches) != 6 {
+		t.Fatalf("launches %v, want one of each confirmed command per language", runs)
 	}
 }

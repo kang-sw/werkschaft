@@ -190,6 +190,14 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
     }, props));
   }
 
+  function beforeinput(props) {
+    return ctext.dispatch('beforeinput', Object.assign({
+      inputType: 'insertParagraph',
+      data: null,
+      isComposing: false,
+    }, props));
+  }
+
   function setValueAndInput(v) {
     ctext.value = v;
     ctext.dispatch('input');
@@ -205,6 +213,7 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
     histHintsEl,
     sent,
     keydown,
+    beforeinput,
     setValueAndInput,
     setBang(v) { bangActive = v; },
     setPopup({ mention = false, slash = false, bangHist = false }) {
@@ -274,23 +283,100 @@ test('macOS shows Cmd micro-badge and Cmd+Enter sends and resets', () => {
   assert.equal(h.csend.title, ko['composer.send']);
 });
 
-test('multiline paste auto-switches, non-empty 1-line edit does not flicker, empty input resets', () => {
+test('multiline paste requires internal newline, stray edge newlines stay single-line, deleting all newlines auto-exits', () => {
   const h = createHarness();
+
+  // Stray trailing/leading newlines from single-line clipboard pastes must NOT enter autoMultiline.
+  for (const stray of ['git status\n', '\ngit status', '\ngit status\n', '\n', '\n\n']) {
+    h.setValueAndInput(stray);
+    assert.equal(h.ctx.effectiveInputMode(), 'enter', 'stray edge newline stays single-line: ' + JSON.stringify(stray));
+    assert.equal(h.csend.classList.contains('is-multiline'), false);
+  }
+
+  // Real internal multi-line content enters autoMultiline.
   h.setValueAndInput('first\nsecond');
   assert.equal(h.ctx.effectiveInputMode(), 'mod');
   assert.equal(h.csend.classList.contains('is-multiline'), true);
 
-  // Deleting back to 1 non-empty line keeps multiline mode (no flicker).
+  // Deleting all newlines back to a single non-empty line auto-exits multiline mode.
   h.setValueAndInput('first');
-  assert.equal(h.ctx.effectiveInputMode(), 'mod');
-  assert.equal(h.csend.classList.contains('is-multiline'), true);
+  assert.equal(h.ctx.effectiveInputMode(), 'enter');
+  assert.equal(h.csend.classList.contains('is-multiline'), false);
+  assert.equal(h.csendKbd.hidden, true);
+  assert.equal(h.csendRevert.hidden, true);
 
-  // Clearing the input completely resets back to enter mode.
+  // Explicit Shift+Enter still enters autoMultiline immediately and stays on with trailing "\n",
+  // then auto-exits once the newline is deleted.
+  h.keydown({ key: 'Enter', shiftKey: true });
+  assert.equal(h.ctx.effectiveInputMode(), 'mod');
+  h.setValueAndInput('first\n');
+  assert.equal(h.ctx.effectiveInputMode(), 'mod');
+  h.setValueAndInput('first');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter');
+
+  // Clearing the input completely also stays in enter mode.
   h.setValueAndInput('');
   assert.equal(h.ctx.effectiveInputMode(), 'enter');
   assert.equal(h.csend.classList.contains('is-multiline'), false);
   assert.equal(h.csendKbd.hidden, true);
   assert.equal(h.csendRevert.hidden, true);
+});
+
+test('revert × stays reverted while newlines remain, then clears once all newlines are deleted', () => {
+  const h = createHarness();
+  h.setValueAndInput('line 1\nline 2');
+  assert.equal(h.ctx.effectiveInputMode(), 'mod');
+
+  h.csendRevert.dispatch('click');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter');
+  h.setValueAndInput('line 1\nline 2!');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter', 'editing reverted multiline draft stays in enter mode');
+
+  // Deleting all newlines clears autoMultilineReverted so a later multiline paste can re-enter.
+  h.setValueAndInput('line 1 line 2!');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter');
+  h.setValueAndInput('a\nb');
+  assert.equal(h.ctx.effectiveInputMode(), 'mod', 're-enters autoMultiline after newlines were cleared');
+});
+
+test('Korean/CJK IME Enter beforeinput guard blocks stray newlines in enter mode without breaking Hangul commit, Shift+Enter, or mod mode', () => {
+  const h = createHarness();
+
+  // 1. Korean IME composing Enter in single-line "enter" mode:
+  //    keydown is bypassed (isComposing / keyCode 229), Hangul commit (insertCompositionText) is allowed,
+  //    and native insertParagraph / insertLineBreak is prevented.
+  const kd = h.keydown({ key: 'Process', code: 'Enter', keyCode: 229, isComposing: true });
+  assert.equal(kd.defaultPrevented, false);
+  assert.equal(h.sent.length, 0);
+  const commitEv = h.beforeinput({ inputType: 'insertCompositionText', data: '녕', isComposing: true });
+  assert.equal(commitEv.defaultPrevented, false, 'Hangul syllable commit must not be blocked');
+  const paraEv = h.beforeinput({ inputType: 'insertParagraph', isComposing: false });
+  assert.equal(paraEv.defaultPrevented, true, 'stray insertParagraph after IME Enter must be blocked in enter mode');
+  const brEv = h.beforeinput({ inputType: 'insertLineBreak', isComposing: false });
+  assert.equal(brEv.defaultPrevented, true, 'stray insertLineBreak in enter mode must be blocked');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter');
+
+  // 2. Shift+Enter (including during IME composition) allows native insertLineBreak / insertParagraph.
+  h.keydown({ key: 'Process', code: 'Enter', keyCode: 229, isComposing: true, shiftKey: true });
+  const shiftBr = h.beforeinput({ inputType: 'insertLineBreak', isComposing: false });
+  assert.equal(shiftBr.defaultPrevented, false, 'Shift+Enter must still allow line break');
+
+  // 3. Alt+Enter also allows line break.
+  h.keydown({ key: 'Enter', code: 'Enter', altKey: true });
+  const altBr = h.beforeinput({ inputType: 'insertLineBreak', isComposing: false });
+  assert.equal(altBr.defaultPrevented, false, 'Alt+Enter must still allow line break');
+
+  // 4. Plain Enter when already in autoMultiline ("mod") mode allows insertParagraph / insertLineBreak.
+  h.keydown({ key: 'Enter', shiftKey: true });
+  assert.equal(h.ctx.effectiveInputMode(), 'mod');
+  h.keydown({ key: 'Enter', code: 'Enter' });
+  const modPara = h.beforeinput({ inputType: 'insertParagraph', isComposing: false });
+  assert.equal(modPara.defaultPrevented, false, 'multiline mode must allow native insertParagraph');
+
+  // 5. Global "mod" inputMode also allows insertParagraph / insertLineBreak.
+  const hMod = createHarness({ initialInputMode: 'mod' });
+  hMod.keydown({ key: 'Process', code: 'Enter', keyCode: 229, isComposing: true });
+  assert.equal(hMod.beforeinput({ inputType: 'insertParagraph' }).defaultPrevented, false);
 });
 
 test('clicking revert × immediately reverts to enter mode and refocuses without sending', () => {

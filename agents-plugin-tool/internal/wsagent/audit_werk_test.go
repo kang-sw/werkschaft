@@ -146,7 +146,7 @@ func TestWerkAuditCapturesARecordedSessionThroughTheTap(t *testing.T) {
 	sink := &memSink{}
 	tap := &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedChild}, Sink: sink}
 	harness, adapter := newWerkMapper("").newAudit(tap.Session.ID)
-	capture := newAuditCapture(tap, harness, "capture", adapter)
+	capture := newAuditCapture(tap, harness, "capture", adapter, false)
 	for _, line := range lines {
 		capture.line([]byte(line), 0, false)
 	}

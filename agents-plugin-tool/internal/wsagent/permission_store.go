@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -103,7 +104,7 @@ func (slot *permissionSelection) loadLocked(dir string) {
 // neither the file nor a dangling link exists (readPermissionMembers treats a
 // dangling link as an unreadable selection, not omission).
 func statPermissionSelection(dir string) (info os.FileInfo, absent bool) {
-	path := filepath.Join(dir, "permission.json")
+	path := filepath.Join(dir, wsdashboard.SessionPermissionFileName)
 	info, err := wsstate.Stat(path)
 	if err == nil {
 		return info, false
@@ -118,7 +119,7 @@ func statPermissionSelection(dir string) (info os.FileInfo, absent bool) {
 
 // readPermissionMembers distinguishes absence from an invalid existing selection.
 func readPermissionMembers(dir string) (map[string]json.RawMessage, PermissionLevel, bool, error) {
-	path := filepath.Join(dir, "permission.json")
+	path := filepath.Join(dir, wsdashboard.SessionPermissionFileName)
 	raw, err := readFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		// A dangling link is an existing, unreadable selection, not omission.
@@ -153,7 +154,7 @@ func readPermissionSelectionState(dir string) (level PermissionLevel, explicit, 
 	if raw, ok := members["delegated_authority"]; ok {
 		delegatedSet = true
 		if err := json.Unmarshal(raw, &delegated); err != nil {
-			return "", true, false, true, fmt.Errorf("invalid delegated_authority in %s", filepath.Join(dir, "permission.json"))
+			return "", true, false, true, fmt.Errorf("invalid delegated_authority in %s", filepath.Join(dir, wsdashboard.SessionPermissionFileName))
 		}
 	}
 	return level, true, delegated, delegatedSet, nil
@@ -218,7 +219,7 @@ func writePermissionSelectionAs(dir string, level PermissionLevel, delegated, se
 	if raw, ok := members["delegated_authority"]; ok {
 		storedDelegatedSet = true
 		if err := json.Unmarshal(raw, &storedDelegated); err != nil {
-			return fmt.Errorf("invalid delegated_authority in %s", filepath.Join(dir, "permission.json"))
+			return fmt.Errorf("invalid delegated_authority in %s", filepath.Join(dir, wsdashboard.SessionPermissionFileName))
 		}
 	}
 	if setDelegated {
@@ -229,7 +230,7 @@ func writePermissionSelectionAs(dir string, level PermissionLevel, delegated, se
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(filepath.Join(dir, "permission.json"), append(raw, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(dir, wsdashboard.SessionPermissionFileName), append(raw, '\n'), 0o600); err != nil {
 		return err
 	}
 	slot.delegated = storedDelegated

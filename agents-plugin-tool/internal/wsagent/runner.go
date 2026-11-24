@@ -355,9 +355,18 @@ type Runner struct {
 	started atomic.Bool
 	// startupLoaded closes after Start installed every open record. Restore
 	// markers may be present before then, but compactIdle sends none until the
-	// complete direct-child projection exists.
+	// complete direct-child projection exists. serving, when non-nil
+	// (StartForPublication), closes once the daemon has published its endpoint
+	// and started accepting connections; processless conversations defer
+	// starting new harness processes until then so they never self-deadlock on
+	// an unpublished /mcp/session endpoint.
 	startupMu     sync.RWMutex
 	startupLoaded chan struct{}
+	serving       <-chan struct{}
+	// onDeferKick, when non-nil in tests, runs between deferKickIfUnpublished's
+	// initial !publicationReady() check and kickDeferred.Store(true) to exercise
+	// the store-then-recheck boundary deterministically.
+	onDeferKick func()
 	// playbookCmds is Options.PlaybookCommands' list, read once
 	// (playbookCommands) under playbookMu.
 	playbookMu     sync.Mutex

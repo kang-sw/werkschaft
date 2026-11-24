@@ -169,7 +169,13 @@ function loadAuditControllerHarness(fetchImpl) {
           for (const c of node.children || []) {
             if (sel === '.au-row[data-call]' && c.matches(sel)) out.push(c);
             else if (sel === '#convo .au-row[data-call]:not([data-au-hydrated])' && c.matches('.au-row[data-call]:not([data-au-hydrated])')) out.push(c);
+            else if (sel === '.au-mk use') {
+              if (c.classList && c.classList.contains('au-mk')) {
+                for (const sub of c.querySelectorAll('use')) out.push(sub);
+              }
+            }
             else if (sel.startsWith('.') && c.classList && c.classList.contains(sel.slice(1).split(/[\s\[]/)[0])) out.push(c);
+            else if (sel === 'use' && c.tagName === 'USE') out.push(c);
             visit(c);
           }
         };
@@ -533,4 +539,124 @@ test('estimated compaction renders banner, localized meta row, and au-est window
   assert.equal(statEl.textContent, 'js.audit.compaction.estimated');
   assert.equal(statEl.className, 'au-wstatus au-est');
   assert.equal(statEl.hidden, false);
+});
+
+test('estimated context size formats (in+out)/4 uniformly across parallel calls and upgrades error icons', async () => {
+  const h = loadAuditWindowHelpers();
+  assert.equal(h.auEstContextTokens(0, 0), 0);
+  assert.equal(h.auEstContextText(0, 0), '');
+  assert.equal(h.auEstContextTokens(1, 0), 1);
+  assert.equal(h.auEstContextText(1, 0), '+1');
+  assert.equal(h.auEstContextTokens(100, 68), 42);
+  assert.equal(h.auEstContextText(100, 68), '+42');
+  assert.equal(h.auEstContextText(2048, 5325), '+1.8k');
+  assert.equal(h.auEstContextText(0, 480000), '+120k');
+  assert.equal(h.auEstContextText(0, 4800000), '+1.2M');
+  assert.equal(
+    h.auEstContextTitle(2048, 5325, null),
+    '~1.8k tok (in 2.0 KB + out 5.2 KB)'
+  );
+  assert.equal(
+    h.auEstContextTitle(2048, 5325, { ctx_before: 12000, ctx_after: 14500 }),
+    '~1.8k tok (in 2.0 KB + out 5.2 KB) · 12000 → 14500'
+  );
+
+  // Hydration: parallel siblings sharing request_id BOTH get +(in+out)/4 (no "·"),
+  // real ctx_before -> ctx_after appends to tooltip, and tool_result error swaps #i-check -> #i-x.
+  const ctrl = loadAuditControllerHarness(async () => ({
+    ok: true, status: 200,
+    async json() {
+      return {
+        events: [
+          { id: 'e1', seq: 1, kind: 'tool_call', call_id: 'p1', request_id: 'req-1', in_bytes: 2048, ctx_before: 10000, ctx_after: 12500 },
+          { id: 'e2', seq: 2, kind: 'tool_call', call_id: 'p2', request_id: 'req-1', in_bytes: 400, ctx_before: 10000, ctx_after: 12500 },
+          { id: 'e3', seq: 3, kind: 'tool_result', call_id: 'p1', out_bytes: 5325 },
+          { id: 'e4', seq: 4, kind: 'tool_result', call_id: 'p2', out_bytes: 800, subkind: 'error' }
+        ],
+        before: 'e1', after: 'e4', end: true
+      };
+    }
+  }));
+
+  const makeRowWithIcon = (cid) => {
+    const row = makeCallRow(ctrl.makeEl, cid);
+    row.classList.add('au-done');
+    const mk = row.querySelector('.au-mk');
+    const svg = ctrl.makeEl('SVG');
+    const use = ctrl.makeEl('USE');
+    use.setAttribute('href', '#i-check');
+    svg.appendChild(use);
+    mk.appendChild(svg);
+    return row;
+  };
+  const r1 = makeRowWithIcon('p1');
+  const r2 = makeRowWithIcon('p2');
+  ctrl.convo.appendChild(r1);
+  ctrl.convo.appendChild(r2);
+
+  await ctrl.ctx.WsAudit.hydrate();
+  assert.equal(r1.querySelector('.au-tok').textContent, '+1.8k');
+  assert.equal(r1.querySelector('.au-tok').classList.contains('au-sib'), false);
+  assert.equal(r1.querySelector('.au-tok').title, '~1.8k tok (in 2.0 KB + out 5.2 KB) · 10000 → 12500');
+  assert.equal(r1.querySelector('.au-mk use').getAttribute('href'), '#i-check');
+
+  assert.equal(r2.querySelector('.au-tok').textContent, '+300', 'parallel sibling shows own +(in+out)/4, not dot placeholder');
+  assert.equal(r2.querySelector('.au-tok').classList.contains('au-sib'), false);
+  assert.equal(r2.querySelector('.au-tok').title, '~300 tok (in 400 B + out 800 B) · 10000 → 12500');
+  assert.equal(r2.classList.contains('au-fail'), true);
+  assert.equal(r2.classList.contains('au-done'), false);
+  assert.equal(r2.querySelector('.au-mk use').getAttribute('href'), '#i-x', 'error hydration swaps check icon to x');
+});
+
+test('hydration keeps walking backward when tool_result precedes tool_call across pages', async () => {
+  const urls = [];
+  const ctrl = loadAuditControllerHarness(async (url) => {
+    urls.push(url);
+    if (!url.includes('before=')) {
+      return {
+        ok: true, status: 200,
+        async json() {
+          return {
+            events: [{ id: 'e2', seq: 2, kind: 'tool_result', call_id: 'split-1', out_bytes: 800 }],
+            before: 'e2', after: 'e2', end: false
+          };
+        }
+      };
+    }
+    return {
+      ok: true, status: 200,
+      async json() {
+        return {
+          events: [{ id: 'e1', seq: 1, kind: 'tool_call', call_id: 'split-1', in_bytes: 400, duration_ms: 1500 }],
+          before: 'e1', after: 'e1', end: true
+        };
+      }
+    };
+  });
+  const r = makeCallRow(ctrl.makeEl, 'split-1');
+  r.classList.add('au-done');
+  ctrl.convo.appendChild(r);
+
+  await ctrl.ctx.WsAudit.hydrate();
+  assert.equal(urls.length, 2, 'must walk backward to fetch matching tool_call');
+  assert.equal(r.querySelector('.au-tok').textContent, '+300');
+  assert.equal(r.querySelector('.au-tok').title, '~300 tok (in 400 B + out 800 B)');
+  assert.equal(r.querySelector('.au-dur').textContent, '1.5s');
+  assert.equal(r.getAttribute('data-au-hydrated'), '1');
+});
+
+test('activity row polish CSS contracts: duration clipping, empty tok hiding, and trace palette tokens', () => {
+  const dashCSS = fs.readFileSync(__dirname + '/assets/dashboard.css', 'utf8');
+  const convCSS = fs.readFileSync(__dirname + '/assets/dashboard-conversation.css', 'utf8');
+  const auditCSS = fs.readFileSync(__dirname + '/assets/dashboard-audit.css', 'utf8');
+
+  assert.ok(convCSS.includes('grid-template-columns: 14px 20px minmax(0, 1fr) minmax(44px, auto);'),
+    'col 4 must grow for duration + token estimate without clipping');
+  assert.ok(auditCSS.includes('justify-content: flex-end;'), '.au-right must right-align items');
+  assert.ok(/\.au-tok:empty\s*\{\s*display:\s*none;\s*\}/.test(auditCSS), '.au-tok:empty must collapse cleanly');
+
+  for (const tok of ['--conv-trace-fg:', '--conv-trace-dim:', '--conv-trace-accent:']) {
+    const count = dashCSS.split(tok).length - 1;
+    assert.equal(count, 3, tok + ' must be defined in light :root, @media dark, and [data-theme="dark"]');
+  }
 });

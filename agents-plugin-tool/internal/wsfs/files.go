@@ -44,13 +44,14 @@ type Files struct {
 	Protection func() FileProtection
 	// RecordMutation persists the admitted target and content states before
 	// the file is touched.
-	RecordMutation func(context.Context, FileIntent) error
+	RecordMutation         func(context.Context, FileIntent) error
+	beforeReplacementWrite func(*os.File)
 }
 
 // FileProtection checks the selected path and the actual handles used for it.
 type FileProtection interface {
 	CheckPath(string) error
-	CheckOpened(os.FileInfo) error
+	CheckOpened(*os.File, os.FileInfo) error
 }
 
 // ResolvePath normalizes a path relative to the caller's working directory.

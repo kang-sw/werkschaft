@@ -142,3 +142,61 @@ func TestFileEditRechecksCredentialIdentityAfterIntent(t *testing.T) {
 		t.Fatalf("read linked credential = %q, %v", data, err)
 	}
 }
+
+func TestModelFileToolsProtectLinkedCredentialTargets(t *testing.T) {
+	fx := newFSFixture(t, wsagent.BackendWerk)
+	fx.s.callerBinding = boundCallers{backends: map[string]string{fx.s.conversation: wsagent.BackendWerk}}
+	fx.s.fileWrites = &FileWriteSession{Authority: wsfs.AuthorityReadOnly}
+	writer := NewServerWithOptions(ServerOptions{
+		Root: fx.root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk,
+		FileWrites: &FileWriteSession{Root: fx.root, Authority: wsfs.AuthorityFull,
+			Record: func(context.Context, FileWriteCall) error {
+				t.Error("a write to a linked credential reached mutation admission")
+				return nil
+			}},
+	})
+	current, err := wscred.DefaultPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(os.Getenv(wsstate.EnvCacheHome), "auth", wscred.FileName)
+	for _, layout := range []struct{ name, path string }{{"committed", current}, {"legacy", legacy}} {
+		t.Run(layout.name, func(t *testing.T) {
+			const secret = "synthetic-provider-value"
+			target := filepath.Join(fx.root, layout.name+".txt")
+			mustWrite(t, fx.root, filepath.Base(target), secret)
+			if err := os.MkdirAll(filepath.Dir(layout.path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, layout.path); err != nil {
+				t.Skipf("file symlink unavailable: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := os.Remove(layout.path); err != nil {
+					t.Error(err)
+				}
+			})
+			for _, path := range []string{layout.path, target} {
+				const protected = "the provider credential store is protected"
+				if text, failed := fx.call("fs.read", map[string]any{"path": path}); !failed || !strings.Contains(text, protected) || strings.Contains(text, secret) {
+					t.Fatalf("read %s = %v, %q", path, failed, text)
+				}
+				if text, failed := rawCorrelatedToolCall(t, writer, "fs.write", "write", map[string]any{"path": path, "content": "replacement"}); !failed || !strings.Contains(text, protected) {
+					t.Fatalf("write %s = %v, %q", path, failed, text)
+				}
+				edit := map[string]any{"path": path, "edits": []map[string]string{{"oldText": secret, "newText": "replacement"}}}
+				if text, failed := rawCorrelatedToolCall(t, writer, "fs.edit", "edit", edit); !failed || !strings.Contains(text, protected) || strings.Contains(text, secret) {
+					t.Fatalf("edit %s = %v, %q", path, failed, text)
+				}
+			}
+			if err := os.Remove(target); err != nil {
+				t.Fatal(err)
+			}
+			public := filepath.Join(fx.root, "public.txt")
+			mustWrite(t, fx.root, "public.txt", "public")
+			if text, failed := fx.call("fs.read", map[string]any{"path": public}); !failed || !strings.Contains(text, "cannot verify provider credential identity") {
+				t.Fatalf("read with a dangling credential name = %v, %q", failed, text)
+			}
+		})
+	}
+}

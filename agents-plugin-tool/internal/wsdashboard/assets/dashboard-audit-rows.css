@@ -49,10 +49,12 @@
 .au-turn-tool.au-fail { color: var(--wb-fail); }
 
 /* Native calls and audit events share the trace grid. */
-.au-call-details > summary.au-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto 16px; padding: 2px 0; border: 0; background: none; box-shadow: none; }
+.au-call-details > summary.au-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto 16px; padding: 1px 0; border: 0; background: none; box-shadow: none; }
 .au-call-details > summary.au-row:hover { background: color-mix(in srgb, var(--wb-fg) 4%, transparent); }
 .au-call-details .au-tool { font-weight: 600; }
-.au-call-details .au-args { color: var(--wb-muted-fg); }
+.au-call-details .au-args { color: var(--conv-trace-dim); }
+.au-call-details[open] > summary.au-row:not(.au-fail) .au-tool { color: var(--wb-fg); }
+.au-call-details[open] > summary.au-row .au-args { color: var(--conv-trace-fg); }
 .au-call-details .au-fail :is(.au-tool, .au-args, .au-mk) { color: var(--wb-fail); }
 .au-call-input, .au-call-output { margin: 5px 0 5px 28px; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--wb-mono); color: var(--wb-muted-fg); }
 .au-open-call { display: flex; gap: 6px; align-items: center; font: 11px var(--wb-mono); margin: 3px 0 3px 28px; border: 0; background: transparent; color: var(--wb-muted-fg); cursor: pointer; border-radius: 4px; padding: 3px 6px; }

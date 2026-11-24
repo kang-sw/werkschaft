@@ -90,10 +90,14 @@ type RingEntry struct {
 	// Direction, Peer, and Title describe a mail line; HistoryKey is the
 	// file name of the message's entry in the session's mailbox history,
 	// where its body stays while that shorter ring still holds it.
+	// BodyBytes records the original payload size in bytes for mail and
+	// mail-wake entries so token estimates survive history eviction or
+	// ring text truncation (T0 additive field).
 	Direction  string `json:"direction,omitempty"`
 	Peer       string `json:"peer,omitempty"`
 	Title      string `json:"title,omitempty"`
 	HistoryKey string `json:"historyKey,omitempty"`
+	BodyBytes  int    `json:"bodyBytes,omitempty"`
 	// Trigger (TriggerAuto, TriggerManual, or empty when unknown) and
 	// CompactFailed describe a compaction line: a failure or a veto, else a
 	// compaction that landed.

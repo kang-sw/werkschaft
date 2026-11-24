@@ -121,6 +121,9 @@ type ConvEntry struct {
 	// BoardNudgeMails holds each raw envelope once on the first row of a
 	// collapsed run. Ring text and all absorbed entry keys remain unchanged.
 	BoardNudgeMails []string
+	// BoardNudgeBytes is the summed payload byte count across a collapsed
+	// board-nudge run, preserving pre-truncation BodyBytes of each absorbed row.
+	BoardNudgeBytes int
 	// PeerReplyID links a mail line's peer to its page when PeerLinked.
 	PeerReplyID string
 	PeerLinked  bool

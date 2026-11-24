@@ -203,6 +203,12 @@ type Snapshot struct {
 	// leaves both absent. Readers that know no such member ignore them.
 	HolderID  string  `json:"holderId,omitempty"`
 	HolderSeq *uint64 `json:"holderSeq,omitempty"`
+	// InProcessLive is an in-memory-only marker (never serialized to disk) set
+	// by the daemon for a snapshot owned by an active in-process hosted runner
+	// slot. While true, Stale reports false regardless of UpdatedAt age so a
+	// slow runner operation does not expire an in-process hosted session; disk
+	// reads and external writers always leave it false.
+	InProcessLive bool `json:"-"`
 }
 
 // Command list caps.
@@ -477,6 +483,8 @@ type BatchCall struct {
 	Failed      bool
 	ArgsPreview string
 	ID          string
+	InBytes     int
+	OutBytes    int
 }
 
 // CallIDMaxBytes bounds a call ID a batch may carry: a normalized ID is at
@@ -541,6 +549,9 @@ func ReadSnapshot(path string) (Snapshot, error) {
 // its in-memory state) leaves a snapshot that turns stale instead of showing
 // as live indefinitely. An absent heartbeat reads as HeartbeatInterval.
 func (s Snapshot) Stale(now time.Time) bool {
+	if s.InProcessLive {
+		return false
+	}
 	beat := s.HeartbeatMs
 	if beat <= 0 {
 		beat = HeartbeatInterval.Milliseconds()

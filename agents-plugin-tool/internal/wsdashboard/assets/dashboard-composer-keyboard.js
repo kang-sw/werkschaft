@@ -33,9 +33,19 @@
     ctext.addEventListener("input", function () { grow(); syncMarkers(); trackMentions(); paintMentions(); if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue(); });
     // Tab indents rather than leaving the composer; Escape, then Tab,
     // leaves it (the keyboard way out).
-    var tabOut = false;
-    ctext.addEventListener("blur", function () { tabOut = false; });
+    var tabOut = false, allowLineBreak = false;
+    ctext.addEventListener("blur", function () { tabOut = false; allowLineBreak = false; });
+    // Guard against native contenteditable Enter inserting a stray newline
+    // during CJK/Korean IME composition in single-line "enter" mode.
+    ctext.addEventListener("beforeinput", function (e) {
+      if (e.inputType !== "insertParagraph" && e.inputType !== "insertLineBreak") return;
+      var effMode = typeof effectiveInputMode === "function" ? effectiveInputMode() : inputMode;
+      if (effMode === "enter" && !allowLineBreak) e.preventDefault();
+      allowLineBreak = false;
+    });
     ctext.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter") allowLineBreak = !!(e.shiftKey || e.altKey);
+      else if (e.key !== "Shift" && e.key !== "Alt") allowLineBreak = false;
       // A key that confirms an IME composition (Korean, Japanese, Chinese)
       // must never send or indent: browsers report it as isComposing, and
       // Safari reports the first keydown after compositionend as keyCode 229.

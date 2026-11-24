@@ -39,15 +39,17 @@ func (c *conv) commitInboxClaims(recs []wsinbox.Record, queue []QueuedInput, cov
 }
 
 func orderInboxClaims(records []wsinbox.Record) {
-	slices.SortStableFunc(records, func(a, b wsinbox.Record) int {
-		if a.Entry.Steer != b.Entry.Steer {
-			if a.Entry.Steer {
-				return -1
-			}
-			return 1
+	slices.SortStableFunc(records, compareInboxClaims)
+}
+
+func compareInboxClaims(a, b wsinbox.Record) int {
+	if a.Entry.Steer != b.Entry.Steer {
+		if a.Entry.Steer {
+			return -1
 		}
-		return strings.Compare(a.Name, b.Name)
-	})
+		return 1
+	}
+	return strings.Compare(a.Name, b.Name)
 }
 
 type durableTurnProcess interface {

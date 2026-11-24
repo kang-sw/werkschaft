@@ -1,13 +1,19 @@
 package wsagent
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/kang-sw/devenv/internal/werk"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
@@ -108,6 +114,210 @@ func TestDeliverCronSteersMidTurnAndDrainsWhenIdle(t *testing.T) {
 	}
 	if ids := h.runner.CronHeld(id); len(ids) != 0 {
 		t.Fatalf("still held after the idle drain: %v", ids)
+	}
+}
+
+type cronPlanStatus struct {
+	allowed bool
+}
+
+func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Credential, error) {
+	return wscred.Credential{}, wscred.ErrNotConfigured
+}
+
+func (s cronPlanStatus) Status() ([]wscred.ProviderStatus, error) {
+	return []wscred.ProviderStatus{{Provider: wscred.ProviderOpenAI, OpenAIAccounts: []wscred.OpenAIAccountStatus{{
+		Active: true, SignedIn: true, PlanEnabled: true, BackgroundConsent: &s.allowed,
+	}}}}, nil
+}
+
+type cronModelRequest struct {
+	interactive bool
+	input       []json.RawMessage
+}
+
+func (r cronModelRequest) contains(text string) bool {
+	return slices.ContainsFunc(r.input, func(item json.RawMessage) bool { return strings.Contains(string(item), text) })
+}
+
+func nextCronModelRequest(t *testing.T, requests <-chan cronModelRequest) cronModelRequest {
+	t.Helper()
+	select {
+	case req := <-requests:
+		return req
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Werk model request")
+		return cronModelRequest{}
+	}
+}
+
+var cronConsentMark = wsinbox.Cron{ID: "cron-consent", Name: "check", At: "2026-03-10T09:00:00Z"}
+
+const cronConsentPrompt = "scheduled consent fixture"
+
+func waitForCronConsentRefusal(t *testing.T, h *leadHarness, id string) {
+	t.Helper()
+	want := (&wscred.ProviderError{Provider: wscred.ProviderOpenAI, Err: wscred.ErrConsentRequired}).Error()
+	eventually(t, "settled cron consent refusal and covered sends", func() bool {
+		rec := werkRecord(t, h, id)
+		return rec.LastTurn != nil && rec.LastTurn.Result.Status == TurnFailed && rec.LastTurn.Result.Error == want &&
+			rec.LastTurn.Mark == rec.Sends && rec.Drained == rec.Sends && h.state(id).Error == want
+	})
+}
+
+func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider wscred.ProviderID
+		allowed  bool
+		steers   bool
+	}{
+		{"plan consent off", wscred.ProviderOpenAI, false, false},
+		{"plan consent on", wscred.ProviderOpenAI, true, true},
+		{"non-plan provider", wscred.ProviderOpenRouter, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan cronModelRequest, 8)
+			observe := func(ctx context.Context, req werk.Request) {
+				requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+			}
+			release := make(chan struct{})
+			reply := func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+				observe(ctx, req)
+				return werkMessage("completed")(ctx, req)
+			}
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+				func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+					observe(ctx, req)
+					select {
+					case <-release:
+						return &werk.Response{Output: []json.RawMessage{json.RawMessage(werkCall("cron_tool", "git_status", `{}`))}}, nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				},
+				reply, reply, reply,
+			}}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{allowed: tc.allowed}})
+			id := h.lead(BackendWerk, LeadOptions{Provider: string(tc.provider), Model: "fixture-model"}).ID
+			h.send(id, "operator prompt")
+			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator prompt") {
+				t.Fatalf("first request = %+v", req)
+			}
+			if ok, err := h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt); !ok || err != nil {
+				t.Fatalf("DeliverCron = %v, %v", ok, err)
+			}
+			h.send(id, "operator steer")
+			c := h.runner.conv(id)
+			held, err := wsinbox.Held(c.inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operator := slices.IndexFunc(held, func(rec wsinbox.Record) bool { return rec.Entry.Operator })
+			if operator < 0 {
+				t.Fatal("missing held operator input")
+			}
+			if _, err := wsinbox.Steer(c.inbox, held[operator].Name); err != nil {
+				t.Fatal(err)
+			}
+			if !c.do(c.steer) {
+				t.Fatal("the conversation stopped before steering")
+			}
+			if ids := h.runner.CronHeld(id); (len(ids) == 0) != tc.steers {
+				t.Fatalf("held cron during operator turn = %v, steer expected %v", ids, tc.steers)
+			}
+			close(release)
+			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator steer") || req.contains(cronConsentPrompt) != tc.steers {
+				t.Fatalf("second request interactive=%v, operator steer=%v, cron=%v, want cron=%v", req.interactive, req.contains("operator steer"), req.contains(cronConsentPrompt), tc.steers)
+			}
+			if tc.steers {
+				h.idle(id)
+				return
+			}
+			waitForCronConsentRefusal(t, h, id)
+			assertNextOperator := func(text string) {
+				t.Helper()
+				h.send(id, text)
+				if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains(text) || req.contains(cronConsentPrompt) {
+					t.Fatalf("operator request %q interactive=%v, current prompt=%v, cron=%v", text, req.interactive, req.contains(text), req.contains(cronConsentPrompt))
+				}
+				h.idle(id)
+			}
+			assertNextOperator("operator after cron refusal")
+			h.runner.Close()
+			fleet.start(h)
+			assertNextOperator("operator after reopening")
+			drained, err := wsinbox.Drained(c.inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, rec := range drained {
+				if isCronInput(rec) {
+					count++
+				}
+			}
+			if count != 1 || model.requestCount() != 4 {
+				t.Fatalf("after reopening: %d drained cron entries and %d model requests", count, model.requestCount())
+			}
+		})
+	}
+}
+
+func TestWerkCronQueuedWithOperatorGetsSeparateConsentRefusal(t *testing.T) {
+	requests := make(chan cronModelRequest, 4)
+	release := make(chan struct{})
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		func(ctx context.Context, req werk.Request) (*werk.Response, error) {
+			requests <- cronModelRequest{werk.InteractiveTurn(ctx), req.Input}
+			select {
+			case <-release:
+				return werkMessage("operator completed")(ctx, req)
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}}
+	h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{}})
+	var failed atomic.Bool
+	h.opts.beforeDurableWrite = func(rec Record) error {
+		if rec.LastTurn != nil && rec.LastTurn.Result.Status == TurnFailed && len(rec.DurableInboxClaims) > 0 && !failed.Swap(true) {
+			return errors.New("simulated interruption before committing cron refusal")
+		}
+		return nil
+	}
+	h.runner.Close()
+	fleet.start(h)
+	id := h.lead(BackendWerk, LeadOptions{Provider: string(wscred.ProviderOpenAI), Model: "fixture-model"}).ID
+	c := h.runner.conv(id)
+	var sent bool
+	var sendErr, cronErr error
+	if !c.do(func() {
+		// Both are ready before the loop can drain either one. Put cron
+		// first, since it normally has steer priority over a follow-up.
+		sent, cronErr = h.runner.DeliverCron(id, cronConsentMark, cronConsentPrompt)
+		_, sendErr = h.runner.Send(id, "queued operator prompt")
+	}) || !sent || cronErr != nil || sendErr != nil {
+		t.Fatalf("enqueue cron and operator: cron=%v, cron error=%v, send error=%v", sent, cronErr, sendErr)
+	}
+	if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("queued operator prompt") || req.contains(cronConsentPrompt) {
+		t.Fatalf("queued operator request interactive=%v, operator=%v, cron=%v", req.interactive, req.contains("queued operator prompt"), req.contains(cronConsentPrompt))
+	}
+	if ids := h.runner.CronHeld(id); !slices.Equal(ids, []string{cronConsentMark.ID}) {
+		t.Fatalf("held cron during queued operator turn = %v", ids)
+	}
+	close(release)
+	eventually(t, "the claimed cron refusal write was interrupted", func() bool {
+		return failed.Load() && strings.Contains(h.state(id).Error, "save scheduled input refusal")
+	})
+	if rec := c.record(); rec.LastTurn == nil || rec.LastTurn.Mark >= rec.Sends {
+		t.Fatalf("operator settlement covered the deferred send: %+v", rec.LastTurn)
+	}
+	h.runner.Close()
+	fleet.start(h)
+	waitForCronConsentRefusal(t, h, id)
+	if count := model.requestCount(); count != 1 {
+		t.Fatalf("%d requests after recovering the cron claim, want only the operator request", count)
 	}
 }
 

@@ -1175,22 +1175,106 @@
     var b = d && d.querySelector(".board-overview");
     return b && b.getClientRects().length ? b : null;
   }
+  function gitHandleEl(d) {
+    var g = d && (d.getElementById ? d.getElementById("ghandle") : d.querySelector && d.querySelector("#ghandle"));
+    return g && !g.disabled ? g : null;
+  }
+  function ticketMapAvailable(d) {
+    if (!d) return false;
+    var back = d.getElementById ? d.getElementById("tmback") : d.querySelector && d.querySelector("#tmback");
+    if (back && !back.hidden) return true;
+    var th = d.getElementById ? d.getElementById("thandle") : d.querySelector && d.querySelector("#thandle");
+    return !!(th && !th.hidden && !th.disabled);
+  }
+  function filesSheetOpenEl(d) {
+    var s = d && (d.getElementById ? d.getElementById("toolbar-files") : d.querySelector && d.querySelector("#toolbar-files"));
+    return !!(s && !s.hidden);
+  }
+  function filesButton(d) {
+    var b = d && d.querySelector && d.querySelector(".board-files");
+    if (!b || b.disabled) return null;
+    if (filesSheetOpenEl(d)) return b;
+    return b.getClientRects && b.getClientRects().length ? b : null;
+  }
+  function globalShortcutAvailable(d, kind) {
+    if (kind === "overview") return !!overviewButton(d);
+    if (kind === "git") return !!gitHandleEl(d);
+    if (kind === "ticketmap") return ticketMapAvailable(d);
+    if (kind === "files") return !!filesButton(d);
+    return false;
+  }
+  function runGlobalShortcut(kind) {
+    if (kind === "overview") {
+      var b = overviewButton(doc);
+      if (!b) return false;
+      if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+      b.click();
+      return true;
+    }
+    if (kind === "git") {
+      if (!gitHandleEl(doc) || typeof drSetOpen !== "function") return false;
+      var openGit = !(typeof drOpen !== "undefined" && drOpen && typeof drMode !== "undefined" && drMode === "git");
+      if (openGit) {
+        if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
+        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+          window.WsOverview.after(function () { drSetOpen(true, "git"); });
+          return true;
+        }
+      }
+      drSetOpen(openGit, "git");
+      return true;
+    }
+    if (kind === "ticketmap") {
+      if (!ticketMapAvailable(doc) || typeof ticketMap === "undefined" || !ticketMap || typeof ticketMap.toggle !== "function") return false;
+      var openMap = !(ticketMap.isOpen && ticketMap.isOpen());
+      if (openMap) {
+        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+          window.WsOverview.after(function () { ticketMap.toggle(); });
+          return true;
+        }
+      }
+      ticketMap.toggle();
+      return true;
+    }
+    if (kind === "files") {
+      var fb = filesButton(doc);
+      if (!fb) return false;
+      if (filesSheetOpenEl(doc)) {
+        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+        else fb.click();
+        return true;
+      }
+      if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      fb.click();
+      return true;
+    }
+    return false;
+  }
   // Keyboard events do not cross the session iframe. The rail forwards to
-  // the shown frame; both paths activate the same visible toolbar control.
+  // the shown frame; both paths activate the same visible control or toggle.
   doc.addEventListener("keydown", function (e) {
-    if (shSettingsEntry || e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || (e.key || "").toLowerCase() !== "q") return;
+    if (shSettingsEntry || e.defaultPrevented || e.isComposing || e.keyCode === 229 || !e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    var k = (e.key || "").toLowerCase();
+    var kind = k === "q" ? "overview" : k === "g" ? "git" : k === "b" ? "ticketmap" : k === "e" ? "files" : "";
+    if (!kind) return;
     var t = e.target;
-    if (t && (t.isContentEditable || (t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=\"false\"]), .xterm, .tm-host")))) return;
-    var b;
+    var editable = !!(t && (t.isContentEditable || (t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable=\"false\"]), .xterm, .tm-host"))));
+    if (editable) {
+      if (!(kind === "files" && !shell && !shHidden && filesSheetOpenEl(doc) && t.closest && t.closest("#toolbar-files") && !t.closest(".xterm, .tm-host"))) return;
+    }
     if (shell) {
-      try { b = shOn && overviewButton(shOn.el.contentDocument); } catch (x) { return; }
-      if (!b) return;
-      shSend(shOn, "overview");
+      var fd;
+      try { fd = shOn && shOn.el.contentDocument; } catch (x) { return; }
+      if (!globalShortcutAvailable(fd, kind)) return;
+      shSend(shOn, kind);
     } else {
       if (shHidden) return;
-      b = overviewButton(doc);
-      if (!b) return;
-      b.click();
+      if (!runGlobalShortcut(kind)) return;
     }
     e.preventDefault();
   });
@@ -1425,9 +1509,8 @@
       } else if (m.wsShell === "search") {
         // Open, do not toggle a hidden header button via a synthetic click.
         tkSearch();
-      } else if (m.wsShell === "overview") {
-        var b = !shHidden && overviewButton(doc);
-        if (b) b.click();
+      } else if (m.wsShell === "overview" || m.wsShell === "git" || m.wsShell === "ticketmap" || m.wsShell === "files") {
+        if (!shHidden) runGlobalShortcut(m.wsShell);
       } else if (m.wsShell === "menu") {
         var h = region("head"), chip = h && h.querySelector(".host.hbtn");
         if (chip && WsRail) railPopOpen("sess", chip);

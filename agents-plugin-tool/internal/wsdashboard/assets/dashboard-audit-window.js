@@ -55,6 +55,37 @@
     return { text: auFmtCompactTok(delta), sibling: false, delta: delta };
   }
 
+  // Estimated context tokens added by a tool call: (in_bytes + out_bytes) / 4,
+  // floored at 1 when any bytes were transferred, 0 when both are zero.
+  function auEstContextTokens(inBytes, outBytes) {
+    var inB = typeof inBytes === "number" && isFinite(inBytes) && inBytes > 0 ? inBytes : 0;
+    var outB = typeof outBytes === "number" && isFinite(outBytes) && outBytes > 0 ? outBytes : 0;
+    var total = inB + outB;
+    if (total <= 0) return 0;
+    return Math.max(1, Math.round(total / 4));
+  }
+
+  function auEstContextText(inBytes, outBytes) {
+    var est = auEstContextTokens(inBytes, outBytes);
+    return est > 0 ? auFmtCompactTok(est) : "";
+  }
+
+  function auEstContextTitle(inBytes, outBytes, summary) {
+    var inB = typeof inBytes === "number" && isFinite(inBytes) && inBytes > 0 ? inBytes : 0;
+    var outB = typeof outBytes === "number" && isFinite(outBytes) && outBytes > 0 ? outBytes : 0;
+    var est = auEstContextTokens(inB, outB);
+    var parts = [];
+    if (est > 0) {
+      var tok = auFmtCompactTok(est).replace(/^\+/, "");
+      parts.push("~" + tok + " tok (in " + auFmtBytes(inB) + " + out " + auFmtBytes(outB) + ")");
+    }
+    if (summary && typeof summary.ctx_before === "number" && typeof summary.ctx_after === "number" &&
+        isFinite(summary.ctx_before) && isFinite(summary.ctx_after)) {
+      parts.push(summary.ctx_before + " \u2192 " + summary.ctx_after);
+    }
+    return parts.join(" \u00b7 ");
+  }
+
   function auUtf8Len(ch, code) {
     if (code <= 0x7f) return 1;
     if (code <= 0x7ff) return 2;

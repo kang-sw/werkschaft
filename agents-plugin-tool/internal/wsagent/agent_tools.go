@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // AgentWorkerProfile is the internal builtin profile an agent.spawn child
@@ -42,7 +43,7 @@ const EnvPermissionLevel = "WS_MCP_PERMISSION_LEVEL"
 
 // systemPromptFile is the session directory's copy of an agent.spawn
 // system prompt (Record.SystemPrompt).
-const systemPromptFile = "system_prompt.md"
+const systemPromptFile = wsdashboard.SessionSystemPromptFileName
 
 // maxSystemPrompt bounds a system_prompt_path read.
 const maxSystemPrompt = 1 << 20

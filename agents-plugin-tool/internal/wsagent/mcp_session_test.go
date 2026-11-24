@@ -803,6 +803,37 @@ func TestDurableMCPExecBindingTracksAuthorityAndRevocation(t *testing.T) {
 	if _, err := hello.RecordExecLaunch(ctx, launch); !isClosed(void) || err == nil || proc.execCalls != 1 {
 		t.Fatal("the revoked session recorded a launch")
 	}
+
+	// A worker bound at PermissionReadOnly (!LiveAuthority) records
+	// daemon-allowlisted read-only exec launches on its durable token,
+	// whereas a lead at PermissionReadOnly (LiveAuthority) stays refused.
+	roRec := Record{ReplyID: "ro-child", Backend: "fixture", Root: root}
+	roProc := &recordingMCPProcess{}
+	roConv := &conv{r: r, rec: roRec, proc: roProc, workerPermissionLevel: PermissionReadOnly}
+	roSession := r.attachMCP(roRec.ReplyID, "", nil, root, 0, roRec.Backend)
+	roConv.bindDurableMCP(roSession, roRec, roProc, PermissionReadOnly)
+	roSession.Started(nil, 0)
+	roHello, _, ok := r.ResolveMCPToken(roSession.Token)
+	if !ok || roHello.RecordExecLaunch == nil {
+		t.Fatal("the read-only worker bearer did not resolve to its exec binding")
+	}
+	if _, err := roHello.RecordExecLaunch(ctx, launch); err != nil || roProc.execCalls != 1 {
+		t.Fatalf("read-only worker launch = %v, recorder called %d times", err, roProc.execCalls)
+	}
+
+	leadRec := Record{ReplyID: "ro-lead", Backend: "fixture", Root: root, Lead: true, PermissionMode: string(PermissionReadOnly)}
+	leadProc := &recordingMCPProcess{}
+	leadConv := &conv{r: r, rec: leadRec, proc: leadProc}
+	leadSession := r.attachMCP(leadRec.ReplyID, "", nil, root, 0, leadRec.Backend)
+	leadConv.bindDurableMCP(leadSession, leadRec, leadProc, PermissionReadOnly)
+	leadSession.Started(nil, 0)
+	leadHello, _, ok := r.ResolveMCPToken(leadSession.Token)
+	if !ok || leadHello.RecordExecLaunch == nil {
+		t.Fatal("the read-only lead bearer did not resolve to its exec binding")
+	}
+	if _, err := leadHello.RecordExecLaunch(ctx, launch); err == nil || leadProc.execCalls != 0 {
+		t.Fatalf("read-only lead recorded a launch: err=%v calls=%d", err, leadProc.execCalls)
+	}
 }
 
 func TestDurableMCPFileBindingTracksLiveAuthorityAndRevocation(t *testing.T) {

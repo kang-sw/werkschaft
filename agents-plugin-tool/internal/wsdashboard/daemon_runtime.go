@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -49,6 +50,11 @@ func (d *Daemon) sessionChanged(replyID string) {
 // stream reads the conversation's own live files; the re-read's change, if
 // any, wakes it again when it lands.
 func (d *Daemon) agentChanged(replyID, _ string) {
+	if d.agentStarting.Load() {
+		// Bulk startup runs before Serve and before poll's initial
+		// Index.Refresh; skip per-conversation RereadLive storms here.
+		return
+	}
 	if d.index != nil {
 		// The runner changes live stores, not ws-mcp's record/board/mailbox.
 		d.index.RereadLive(replyID)
@@ -176,30 +182,52 @@ func (d *Daemon) Close() {
 		// scheduled would leave the port bound past Close, so a restart could
 		// not rebind it. Closing it here makes Close release the port.
 		_ = d.listener.Close()
-		// The web card listeners are servers of their own; closed here,
-		// before the lock goes, a successor never races a leftover port.
-		d.web.close()
-		if d.agents != nil {
-			d.agents.Close()
-		}
-		// Detaches only: the holders and their children outlive the daemon.
-		if d.holders != nil {
-			d.holders.Close()
-		}
-		d.foreign.close()
+		// The web card listeners, foreign schedule, and agent/holder teardown
+		// are independent; keep holders.Close after agents.Close so a
+		// conversation's finishLine can still read remaining holder output.
+		var teardownWG sync.WaitGroup
+		teardownWG.Add(3)
+		go func() {
+			defer teardownWG.Done()
+			d.web.close()
+		}()
+		go func() {
+			defer teardownWG.Done()
+			d.foreign.close()
+		}()
+		go func() {
+			defer teardownWG.Done()
+			if d.agents != nil {
+				d.agents.Close()
+			}
+			// Detaches only: the holders and their children outlive the daemon.
+			if d.holders != nil {
+				d.holders.Close()
+			}
+		}()
+		teardownWG.Wait()
 		// After the runner and holders let go, so no capture appends race
-		// the final flush.
-		d.closeAudit()
-		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
-		// A credential change still in flight (a hosted call or a change
-		// request the bounded drain left running) lands now or is refused:
-		// once the lock goes, a successor or the offline CLI writes the file.
+		// the final flush. Each store teardown below is independent, so run
+		// them in parallel before removing the endpoint and releasing the lock.
+		var flushWG sync.WaitGroup
+		runFlush := func(fn func()) {
+			flushWG.Add(1)
+			go func() {
+				defer flushWG.Done()
+				fn()
+			}()
+		}
+		runFlush(d.closeAudit)
+		runFlush(func() {
+			_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
+		})
 		if d.credentials != nil {
-			d.credentials.Close()
+			runFlush(d.credentials.Close)
 		}
 		if d.beforeUnlock != nil {
-			d.beforeUnlock()
+			runFlush(d.beforeUnlock)
 		}
+		flushWG.Wait()
 		removeEndpointIfOwned(d.dir, d.endpoint.Token)
 		fmt.Fprintf(d.log, "dashboard: stopped (pid %d)\n", d.endpoint.PID)
 		if d.endLog != nil {

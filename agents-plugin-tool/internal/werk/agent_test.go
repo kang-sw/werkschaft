@@ -720,10 +720,11 @@ func TestNewRefusesAWorkerWithNoAuthority(t *testing.T) {
 	}
 }
 
-// A read-only worker is offered no exec launch tool, and a forced call to one
-// is refused without reaching the daemon, whose hosted exec approves every
-// worker. Its read tools stay; workdir-write and full keep the shell.
-func TestReadOnlyWorkerHasNoExecLaunchTools(t *testing.T) {
+// A read-only lead is offered no exec launch tool, and a forced call to one
+// is refused without reaching the daemon. A read-only worker gets allowlist
+// exec parity (exec_shell and exec_run stay offered; exec_spawn stays refused
+// and hidden). Workdir-write and full keep the shell.
+func TestReadOnlyExecLaunchToolPolicy(t *testing.T) {
 	tools := []MCPTool{
 		{Name: "exec.shell"}, {Name: "exec.run"}, {Name: "exec.spawn"}, {Name: "exec.write"},
 		{Name: "exec.list"}, {Name: "exec.tail"}, {Name: "git.status"},
@@ -736,45 +737,85 @@ func TestReadOnlyWorkerHasNoExecLaunchTools(t *testing.T) {
 		}
 		return m
 	}
-
-	ws := &fakeWS{tools: tools}
-	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
-		reply(callOf("c1", "exec_shell", `{"cmd":"touch x"}`), callOf("c2", "exec_run", `{"exe":"touch"}`)),
-		reply(msgItem("done")),
-	}}
-	r := newRig(t, Config{Endpoint: model, WS: ws, Authority: AuthorityReadOnly})
-	r.user("go")
-	r.waitTurnEnd(1)
-	reqs := model.requests()
-	got := offered(reqs[0])
-	for _, n := range []string{"exec_shell", "exec_run", "exec_spawn", "exec_write"} {
-		if got[n] {
-			t.Errorf("a read-only worker is offered %s", n)
-		}
-	}
-	for _, n := range []string{"fs_read", "fs_grep", "fs_list", "git_status", "exec_list", "exec_tail"} {
-		if !got[n] {
-			t.Errorf("a read-only worker lost %s", n)
-		}
-	}
-	if strings.Contains(reqs[0].Instructions, "exec_shell") {
-		t.Errorf("the instructions send a read-only worker to a shell it lacks: %q", reqs[0].Instructions)
-	}
-	if calls := ws.callNames(); len(calls) != 0 {
-		t.Errorf("a forced exec call reached the daemon: %v", calls)
-	}
-	for _, c := range []string{"c1", "c2"} {
-		var out string
-		for _, it := range reqs[1].Input {
+	outputOf := func(req Request, callID string) string {
+		for _, it := range req.Input {
 			var m map[string]any
-			if json.Unmarshal(it, &m) == nil && m["type"] == "function_call_output" && m["call_id"] == c {
-				out, _ = m["output"].(string)
+			if json.Unmarshal(it, &m) == nil && m["type"] == "function_call_output" && m["call_id"] == callID {
+				out, _ := m["output"].(string)
+				return out
 			}
 		}
-		if !strings.Contains(out, "read-only") {
-			t.Errorf("call %s answered %q, want a read-only refusal", c, out)
-		}
+		return ""
 	}
+
+	t.Run("read-only lead has no exec launch tools", func(t *testing.T) {
+		ws := &fakeWS{tools: tools}
+		model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+			reply(callOf("c1", "exec_shell", `{"cmd":"git status"}`), callOf("c2", "exec_run", `{"exe":"git","args":["status"]}`)),
+			reply(msgItem("done")),
+		}}
+		r := newRig(t, Config{Endpoint: model, WS: ws, Authority: AuthorityReadOnly, Lead: true})
+		r.user("go")
+		r.waitTurnEnd(1)
+		reqs := model.requests()
+		got := offered(reqs[0])
+		for _, n := range []string{"exec_shell", "exec_run", "exec_spawn", "exec_write"} {
+			if got[n] {
+				t.Errorf("a read-only lead is offered %s", n)
+			}
+		}
+		for _, n := range []string{"fs_read", "fs_grep", "fs_list", "git_status", "exec_list", "exec_tail"} {
+			if !got[n] {
+				t.Errorf("a read-only lead lost %s", n)
+			}
+		}
+		if strings.Contains(reqs[0].Instructions, "exec_shell") {
+			t.Errorf("the instructions send a read-only lead to a shell it lacks: %q", reqs[0].Instructions)
+		}
+		if calls := ws.callNames(); len(calls) != 0 {
+			t.Errorf("a forced exec call from a read-only lead reached the daemon: %v", calls)
+		}
+		for _, c := range []string{"c1", "c2"} {
+			if out := outputOf(reqs[1], c); !strings.Contains(out, "read-only") {
+				t.Errorf("call %s answered %q, want a read-only refusal", c, out)
+			}
+		}
+	})
+
+	t.Run("read-only worker gets allowlist exec_shell and exec_run but not exec_spawn", func(t *testing.T) {
+		ws := &fakeWS{tools: tools}
+		model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+			reply(
+				callOf("c1", "exec_run", `{"exe":"git","args":["status"]}`),
+				callOf("c2", "exec_shell", `{"cmd":"git status"}`),
+				callOf("c3", "exec_spawn", `{"cmd":"touch","args":["x"]}`),
+			),
+			reply(msgItem("done")),
+		}}
+		r := newRig(t, Config{Endpoint: model, WS: ws, Authority: AuthorityReadOnly})
+		r.user("go")
+		r.waitTurnEnd(1)
+		reqs := model.requests()
+		got := offered(reqs[0])
+		for _, n := range []string{"exec_shell", "exec_run", "fs_read", "fs_grep", "fs_list", "git_status", "exec_list", "exec_tail"} {
+			if !got[n] {
+				t.Errorf("a read-only worker lost %s", n)
+			}
+		}
+		if got["exec_spawn"] {
+			t.Errorf("a read-only worker is offered exec_spawn")
+		}
+		if !strings.Contains(reqs[0].Instructions, "allowlisted read-only shell commands") || !strings.Contains(reqs[0].Instructions, "exec_shell, exec_run") {
+			t.Errorf("read-only worker instructions lack allowlisted exec guidance: %q", reqs[0].Instructions)
+		}
+		calls := ws.callNames()
+		if len(calls) != 2 || calls[0] != "exec.run" || calls[1] != "exec.shell" {
+			t.Errorf("daemon calls = %v, want [exec.run exec.shell]", calls)
+		}
+		if out := outputOf(reqs[1], "c3"); !strings.Contains(out, "read-only") {
+			t.Errorf("forced exec_spawn answered %q, want a read-only refusal", out)
+		}
+	})
 
 	for _, auth := range []Authority{AuthorityWorkdirWrite, AuthorityFull} {
 		m := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){reply(msgItem("ok"))}}

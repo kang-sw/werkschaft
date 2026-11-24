@@ -18,6 +18,8 @@ var (
 	_ nativeModeAdmitter = AgyBackend{}
 )
 
+// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+// removal in 261124-refactor-remove-terminal-handoff.
 func (AgyBackend) terminalResume(rec Record, _ string) string {
 	if rec.SessionID == "" {
 		return ""

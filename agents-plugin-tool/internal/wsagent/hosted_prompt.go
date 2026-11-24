@@ -35,31 +35,36 @@ func (p *HarnessProfile) NativeSubagentTool(role CatalogRole) string {
 	return ""
 }
 
-// subagentSteer is the line that keeps rec's session off its harness's
-// native subagent tool, so it delegates through ws's agent tools alone:
-// only under the removal policy (RemovesSubagents, whatever the harness
-// can physically remove), and only where the backend's catalog names that
-// tool. "" otherwise: a session outside the policy, such as a tracker
-// support conversation, gets none, and the CLI tier never reads this text.
-// A lead of a backend with BackendRegistration.PreferNativeSubagent gets
-// nativeFirstSteer instead: its native subagent tool stays in use.
+// leadSubagentPolicy resolves the backend's LeadSubagent policy for rec using
+// rec's repository root and session config overrides.
+func (r *Runner) leadSubagentPolicy(rec Record) LeadSubagentPolicy {
+	if !rec.Lead {
+		return LeadSubagentPolicy{}
+	}
+	reg := r.opts.Backends[rec.Backend]
+	cfg := r.opts.Config
+	if rec.Root != "" {
+		cfg.RepoRoot = rec.Root
+	}
+	if roots, ok := r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+		if root, found := roots.Root(rec.WSKey); found {
+			cfg.RepoRoot = root
+		}
+	}
+	reader, _ := r.opts.Keys.(wsconfig.SessionReader)
+	return reg.LeadSubagent(cfg, reader, rec.WSKey)
+}
+
+// subagentSteer is the delegation line appended to a hosted conversation's
+// prompt when RemovesSubagents holds; empty otherwise. A backend with
+// PreferNativeSubagent keeps its lead on nativeFirstSteer instead.
 func (r *Runner) subagentSteer(rec Record) string {
 	if !RemovesSubagents(rec) {
 		return ""
 	}
 	reg := r.opts.Backends[rec.Backend]
 	if rec.Lead {
-		cfg := r.opts.Config
-		if rec.Root != "" {
-			cfg.RepoRoot = rec.Root
-		}
-		if roots, ok := r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
-			if root, found := roots.Root(rec.WSKey); found {
-				cfg.RepoRoot = root
-			}
-		}
-		reader, _ := r.opts.Keys.(wsconfig.SessionReader)
-		policy := reg.LeadSubagent(cfg, reader, rec.WSKey)
+		policy := r.leadSubagentPolicy(rec)
 		if policy.Active {
 			if policy.PreferNativeSubagent {
 				// Preserve Catalog.NativeSubagentTool(RoleLead) so

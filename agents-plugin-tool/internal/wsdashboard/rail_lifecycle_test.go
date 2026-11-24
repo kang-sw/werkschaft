@@ -139,13 +139,20 @@ func TestRailLifecycle(t *testing.T) {
 		}
 	}
 	activeRow, _, _ := strings.Cut(strings.SplitN(html, `data-rid="activeon"`, 2)[1], `data-rid="asleep"`)
-	if !strings.Contains(activeRow, `class="drarch" data-act="hide" title="보관 · 프로세스를 끝내고 레일에서 숨김"`) {
-		t.Errorf("an active hosted row lacks its archive button:\n%s", activeRow)
+	if !strings.Contains(activeRow, `class="drstop d-stop-unsafe" data-safe="0" data-hold-mode="radial" title="중지 · 길게 눌러 실행 중인 프로세스 종료"`) {
+		t.Errorf("an active hosted row lacks its stop button:\n%s", activeRow)
+	}
+	if strings.Contains(activeRow, "drarch") {
+		t.Errorf("an active hosted row must not offer hover archive:\n%s", activeRow)
+	}
+	asleepRow, _, _ := strings.Cut(strings.SplitN(html, `data-rid="asleep"`, 2)[1], `data-rid="hostexit"`)
+	if strings.Contains(asleepRow, "drstop") || strings.Contains(asleepRow, "drarch") {
+		t.Errorf("an asleep hosted row must not offer hover stop or archive:\n%s", asleepRow)
 	}
 	termRow := strings.SplitN(html, `data-rid="terminal"`, 2)[1]
 	termRow, _, _ = strings.Cut(termRow, `<div class="rs`)
-	if strings.Contains(termRow, "drarch") {
-		t.Errorf("a terminal row offers archive:\n%s", termRow)
+	if strings.Contains(termRow, "drarch") || strings.Contains(termRow, "drstop") {
+		t.Errorf("a terminal row offers archive or stop:\n%s", termRow)
 	}
 
 	// No archived rows: the archived half is disabled, the deleted one is not.

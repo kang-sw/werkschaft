@@ -236,7 +236,8 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 	t.fileWrites = files
 	t.recordExecLaunch = func(ctx context.Context, call execjob.ModelLaunch) (bool, error) {
 		level := files.AuthorityForCall()
-		if level != wsfs.AuthorityWorkdirWrite && level != wsfs.AuthorityFull {
+		readOnlyWorker := !files.LiveAuthority && files.Authority == wsfs.AuthorityReadOnly && level == wsfs.AuthorityReadOnly
+		if !readOnlyWorker && level != wsfs.AuthorityWorkdirWrite && level != wsfs.AuthorityFull {
 			return false, errors.New("the session cannot launch exec jobs with its current authority")
 		}
 		recorder, ok := proc.(execLaunchRecorder)
@@ -251,11 +252,17 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 			return false, err
 		}
 		current := files.AuthorityForCall()
-		if current != wsfs.AuthorityWorkdirWrite && current != wsfs.AuthorityFull {
-			return false, errors.New("the exec launch's authority changed")
-		}
-		if call.Approval == nil && current != level {
-			return false, errors.New("the exec launch's authority changed")
+		if readOnlyWorker {
+			if current != wsfs.AuthorityReadOnly {
+				return false, errors.New("the exec launch's authority changed")
+			}
+		} else {
+			if current != wsfs.AuthorityWorkdirWrite && current != wsfs.AuthorityFull {
+				return false, errors.New("the exec launch's authority changed")
+			}
+			if call.Approval == nil && current != level {
+				return false, errors.New("the exec launch's authority changed")
+			}
 		}
 		return explicit, nil
 	}

@@ -1,0 +1,1776 @@
+<div class="ucm2-root" data-ucm2-root>
+<style>
+.ucm2-root {
+  --wb-bg: #141518;
+  --wb-card: #1e2024;
+  --wb-well: #25272c;
+  --wb-muted: #2b2d32;
+  --wb-topic: #2a2d33;
+  --wb-input: #16181c;
+  --wb-fg: #e7e7e4;
+  --wb-muted-fg: #a2a6ad;
+  --wb-dim: #6f747d;
+  --wb-line: color-mix(in srgb, #e7e7e4 10%, transparent);
+  --wb-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --wb-primary: #7aa2ff;
+  --wb-primary-ink: #b7cdff;
+  --wb-ok: #6cc39a;
+  --wb-ok-ink: #9ad8ba;
+  --wb-warn: #e0a36c;
+  --wb-fail: #f0797e;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  --wb-radius: 12px;
+  --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--wb-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--wb-fg);
+  background: var(--wb-bg);
+  border: 0;
+  border-radius: var(--wb-radius);
+  padding: 14px;
+  box-sizing: border-box;
+  max-width: 820px;
+  margin: 0 auto;
+}
+.ucm2-root *, .ucm2-root *::before, .ucm2-root *::after { box-sizing: border-box; }
+.ucm2-root button, .ucm2-root input, .ucm2-root textarea { font-family: inherit; }
+
+/* Top scenario switcher — borderless tonal tabbar */
+.ucm2-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ucm2-bar-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wb-dim);
+  padding-left: 2px;
+}
+.ucm2-scen-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--wb-well);
+}
+.ucm2-scen {
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .14s, color .14s;
+}
+.ucm2-scen:hover { color: var(--wb-fg); background: var(--wb-wash); }
+.ucm2-scen.is-on {
+  background: #2e323a;
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow);
+}
+.ucm2-reset {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.ucm2-reset:hover { color: var(--wb-fg); background: var(--wb-wash); }
+
+/* Soft tonal toast */
+.ucm2-toast {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-ok) 13%, var(--wb-card));
+  color: var(--wb-ok-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ucm2-toast.is-show { display: flex; }
+.ucm2-toast.is-warn {
+  background: color-mix(in srgb, var(--wb-warn) 13%, var(--wb-card));
+  color: var(--wb-warn);
+}
+.ucm2-toast.is-fail {
+  background: color-mix(in srgb, var(--wb-fail) 14%, var(--wb-card));
+  color: var(--wb-fail);
+}
+
+/* Stage: conversation + composer with floating popover */
+.ucm2-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Conversation pane — matches dashboard .convo tonal surface */
+.ucm2-conv {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 24px;
+  border: 0;
+  border-radius: var(--wb-radius);
+  background: color-mix(in srgb, var(--wb-muted) 34%, var(--wb-bg));
+  min-height: 210px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ucm2-stage.is-pop-open .ucm2-conv {
+  min-height: 445px;
+}
+.ucm2-msg { display: flex; flex-direction: column; gap: 4px; }
+.ucm2-msg.is-user { align-items: flex-end; }
+.ucm2-mh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+}
+.ucm2-mh b { color: var(--wb-fg); font-weight: 600; }
+.ucm2-bub {
+  max-width: 90%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 4px 12px 12px 12px;
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  font-size: 12.5px;
+  color: var(--wb-fg);
+}
+.ucm2-msg.is-user .bub-user {
+  max-width: 86%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 12px 12px 4px 12px;
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  box-shadow: var(--wb-shadow);
+  font-size: 12.5px;
+  color: var(--wb-fg);
+}
+.ucm2-req-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--wb-primary-ink);
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+}
+.ucm2-req-cmd {
+  display: block;
+  margin: 6px 0;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-input);
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: #c8cbd2;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ucm2-req-cmd::before { content: "$ "; color: var(--wb-dim); font-weight: 700; }
+.ucm2-req-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  margin-top: 4px;
+}
+.ucm2-req-prompt {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--wb-line);
+  font-size: 12px;
+  color: var(--wb-fg);
+  white-space: pre-wrap;
+}
+
+/* Clean #composer — borderless elevated Material card */
+.ucm2-composer {
+  position: relative;
+  background: var(--wb-card);
+  border: 0;
+  border-radius: var(--wb-radius);
+  padding: 13px 11px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  box-shadow: var(--wb-shadow-hi);
+}
+
+/* Real Werkschaft .cbadges row centered on top edge of #composer */
+.ucm2-cbadges {
+  position: absolute;
+  z-index: 6;
+  left: 10px;
+  right: 10px;
+  top: -1px;
+  transform: translateY(-50%);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.ucm2-cbadges > * { pointer-events: auto; }
+.ucm2-ibadge-slot {
+  grid-column: 1;
+  font-size: 10.5px;
+  color: var(--wb-dim);
+  padding-left: 2px;
+  user-select: none;
+}
+.ucm2-sbwrap {
+  grid-column: 2;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Exec Job HUD (.xgroup) — matches real .xchip pill */
+.ucm2-xgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.ucm2-xchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .09), var(--wb-shadow-hi);
+  transition: background-color .12s, box-shadow .12s;
+}
+.ucm2-xchip:hover { background: var(--wb-well); }
+.ucm2-xchip.is-open {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 42%, transparent), var(--wb-shadow-hi);
+}
+.ucm2-xchip.is-run { color: var(--wb-primary-ink); }
+.ucm2-xspin {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.8px solid var(--wb-primary);
+  border-right-color: transparent;
+  display: inline-block;
+  animation: ucm2-spin .75s linear infinite;
+}
+@keyframes ucm2-spin { to { transform: rotate(360deg); } }
+.ucm2-xdot-ok { color: var(--wb-ok); font-weight: 800; }
+.ucm2-xdot-fail { color: var(--wb-fail); font-weight: 800; }
+.ucm2-xtime { font-family: var(--wb-mono); font-size: 10px; color: var(--wb-muted-fg); font-weight: 500; }
+
+/* Subagent execution badge (.sbadge — matches dashboard-conversation.css) */
+.ucm2-sbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 11px 0 9px;
+  border: 0;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--wb-primary);
+  background: var(--wb-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, transparent), var(--wb-shadow-hi);
+  cursor: default;
+}
+.ucm2-sbadge .ucm2-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.8px solid currentColor;
+  border-right-color: transparent;
+  animation: ucm2-spin .85s linear infinite;
+}
+.ucm2-sbadge .ucm2-sword {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wb-muted-fg);
+}
+
+/* Single compact User Commands icon button directly to the right of .sbadge */
+.ucm2-trigger {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-width: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--wb-fg);
+  background: var(--wb-card);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .09), var(--wb-shadow-hi);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: background-color .14s, color .14s, box-shadow .14s;
+}
+.ucm2-trigger:hover {
+  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
+  color: var(--wb-primary-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, transparent), var(--wb-shadow-hi);
+}
+.ucm2-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  color: var(--wb-primary-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 48%, transparent), var(--wb-shadow-hi);
+}
+.ucm2-trigger.is-empty {
+  color: var(--wb-muted-fg);
+  padding: 0 7px;
+}
+.ucm2-trigger-cnt {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+}
+.ucm2-trigger[aria-expanded="true"] .ucm2-trigger-cnt,
+.ucm2-trigger:hover .ucm2-trigger-cnt {
+  color: var(--wb-primary-ink);
+}
+
+/* Quiet helper caption when popup is closed */
+.ucm2-callout {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  margin-top: -8px;
+  padding-right: 4px;
+}
+.ucm2-stage.is-callout .ucm2-callout { display: flex; }
+
+/* Floating User Commands Popover — borderless elevated Material surface */
+.ucm2-pop {
+  position: absolute;
+  z-index: 25;
+  right: 10px;
+  bottom: calc(100% + 18px);
+  width: min(630px, calc(100% - 20px));
+  max-height: 455px;
+  display: none;
+  flex-direction: column;
+  border: 0;
+  border-radius: var(--wb-radius);
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px rgb(255 255 255 / .05);
+  overflow: hidden;
+  animation: ucm2-pop-in .14s ease-out;
+}
+.ucm2-pop.is-open { display: flex; }
+@keyframes ucm2-pop-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ucm2-pop-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--wb-fg) 3%, var(--wb-card));
+  border-bottom: 1px solid var(--wb-line);
+  flex: none;
+}
+.ucm2-pop-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--wb-fg);
+  flex: none;
+}
+.ucm2-pop-ico { color: var(--wb-primary); display: inline-flex; }
+.ucm2-count {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--wb-wash);
+  color: var(--wb-muted-fg);
+}
+.ucm2-pop-sub {
+  font-size: 11px;
+  color: var(--wb-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  transition: color .14s;
+}
+.ucm2-pop-sub.is-holding-run {
+  color: var(--wb-primary-ink);
+  font-weight: 600;
+}
+.ucm2-pop-sub.is-holding-ask {
+  color: #b7b4ff;
+  font-weight: 600;
+}
+.ucm2-pop-sub.is-holding-del {
+  color: var(--wb-fail);
+  font-weight: 600;
+}
+.ucm2-add-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  color: var(--wb-primary-ink);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .12s, color .12s;
+}
+.ucm2-add-btn:hover { background: color-mix(in srgb, var(--wb-primary) 22%, transparent); color: #dce7ff; }
+.ucm2-add-btn.is-active {
+  background: color-mix(in srgb, var(--wb-primary) 26%, transparent);
+  color: #e4ecff;
+}
+.ucm2-close-btn {
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--wb-dim);
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+  transition: background-color .12s, color .12s;
+}
+.ucm2-close-btn:hover { background: var(--wb-wash); color: var(--wb-fg); }
+
+.ucm2-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Exec Output Peek panel — recessed tonal well */
+.ucm2-xpeek {
+  display: none;
+  flex-direction: column;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-well);
+  overflow: hidden;
+}
+.ucm2-xpeek.is-show { display: flex; }
+.ucm2-xpeek-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--wb-fg) 3%, var(--wb-well));
+  border-bottom: 1px solid var(--wb-line);
+  font-size: 11.5px;
+}
+.ucm2-xpeek-cmd {
+  font-family: var(--wb-mono);
+  color: var(--wb-muted-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ucm2-xpeek-cmd::before { content: "$ "; color: var(--wb-dim); font-weight: 700; }
+.ucm2-xpeek-code {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.ucm2-xpeek-code.ok { background: color-mix(in srgb, var(--wb-ok) 15%, transparent); color: var(--wb-ok-ink); }
+.ucm2-xpeek-code.fail { background: color-mix(in srgb, var(--wb-fail) 16%, transparent); color: var(--wb-fail); }
+.ucm2-xpeek-code.run { background: color-mix(in srgb, var(--wb-primary) 16%, transparent); color: var(--wb-primary-ink); }
+.ucm2-xpeek-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--wb-fg);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* Empty state inside popover — quiet tonal well */
+.ucm2-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 14px;
+  margin: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-well);
+  color: var(--wb-fg);
+  font-size: 12.5px;
+}
+.ucm2-empty-sub { display: block; font-size: 11.5px; color: var(--wb-muted-fg); margin-top: 3px; }
+
+/* Add command inline form — borderless tonal well */
+.ucm2-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  margin: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-well);
+}
+.ucm2-form-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+.ucm2-form-sub { font-weight: 500; color: var(--wb-muted-fg); font-size: 11px; }
+.ucm2-grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 175px);
+  gap: 8px;
+}
+@media (max-width: 560px) { .ucm2-grid2 { grid-template-columns: 1fr; } }
+.ucm2-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ucm2-lbl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--wb-muted-fg);
+}
+.ucm2-lbl-opt { font-weight: 400; color: var(--wb-dim); }
+.ucm2-input, .ucm2-ta {
+  width: 100%;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-input);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .05);
+  color: var(--wb-fg);
+  padding: 7px 9px;
+  font-size: 12.5px;
+  outline: none;
+  transition: box-shadow .12s;
+}
+.ucm2-input.is-mono, .ucm2-ta.is-mono {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: #d6d9df;
+}
+.ucm2-input:focus, .ucm2-ta:focus {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucm2-ta { resize: vertical; min-height: 46px; line-height: 1.45; }
+.ucm2-form-acts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+.ucm2-btn-ghost {
+  cursor: pointer;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  transition: background-color .12s, color .12s;
+}
+.ucm2-btn-ghost:hover { color: var(--wb-fg); background: var(--wb-wash); }
+.ucm2-btn-save {
+  cursor: pointer;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--wb-ok) 16%, transparent);
+  color: var(--wb-ok-ink);
+  transition: background-color .12s, color .12s;
+}
+.ucm2-btn-save:hover { background: color-mix(in srgb, var(--wb-ok) 25%, transparent); color: #c4ebd7; }
+
+/* Ultra-compact 3-line inline-editable command unit — borderless Material row */
+.ucm2-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-fg) 2%, transparent);
+  transition: background-color .14s;
+}
+.ucm2-card:hover {
+  background: var(--wb-well);
+}
+.ucm2-card.is-dirty {
+  background: color-mix(in srgb, var(--wb-warn) 4.5%, var(--wb-well));
+}
+
+/* Line 1: Single-line Header + Compact Icon Actions (NO WRAPPING) */
+.ucm2-line1 {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+.ucm2-head-l {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.ucm2-src {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 5px;
+  flex: none;
+  line-height: 1.5;
+}
+.ucm2-src.agent {
+  background: color-mix(in srgb, #b89cff 13%, transparent);
+  color: #c4b5e6;
+}
+.ucm2-src.user {
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  color: var(--wb-muted-fg);
+}
+.ucm2-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ucm2-dirty-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-warn);
+  flex: none;
+}
+.ucm2-card.is-dirty .ucm2-dirty-dot {
+  display: inline-block;
+}
+.ucm2-cwd {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  color: var(--wb-dim);
+  background: color-mix(in srgb, var(--wb-fg) 4.5%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 138px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Line 1 Right: Compressed 26x26 borderless tonal icon buttons */
+.ucm2-acts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  flex: none;
+}
+.ucm2-ibtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .12s, color .12s, transform .08s;
+}
+.ucm2-ibtn:active:not(.is-hold) { transform: scale(.95); }
+.ucm2-ibtn svg { display: block; position: relative; z-index: 1; pointer-events: none; }
+
+/* Shared 1.5s hold-to-confirm inside-out radial fill for ▶, ↗, × */
+.ucm2-ibtn.is-hold {
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+.ucm2-ibtn.is-hold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .12s ease-out, opacity .12s ease-out;
+}
+.ucm2-ibtn.is-hold:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 70%, transparent);
+}
+.ucm2-ibtn.is-hold.is-holding {
+  color: #141518;
+}
+.ucm2-ibtn.is-hold.is-holding::before {
+  transform: scale(1.55);
+  opacity: .95;
+  transition: transform 1500ms linear, opacity 120ms ease-out;
+}
+
+/* ▶ Run Now (1.5s hold — primary blue fill) */
+.ucm2-ibtn-run {
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  color: var(--wb-primary-ink);
+}
+.ucm2-ibtn-run::before { background: #5b9bf0; }
+.ucm2-ibtn-run:hover {
+  background: color-mix(in srgb, var(--wb-primary) 26%, transparent);
+  color: #dce7ff;
+}
+.ucm2-ibtn-run.is-holding {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #5b9bf0 80%, transparent);
+}
+
+/* ↗ Ask Agent (1.5s hold — calm violet fill) */
+.ucm2-ibtn-ask {
+  background: color-mix(in srgb, #8b88f8 14%, transparent);
+  color: #c8c6ff;
+}
+.ucm2-ibtn-ask::before { background: #8b88f8; }
+.ucm2-ibtn-ask:hover {
+  background: color-mix(in srgb, #8b88f8 24%, transparent);
+  color: #e2e1ff;
+}
+.ucm2-ibtn-ask.is-holding {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #8b88f8 80%, transparent);
+}
+
+/* 💾 Save to template (instant click, visible ONLY when dirty) */
+.ucm2-ibtn-save {
+  display: none;
+  background: color-mix(in srgb, var(--wb-ok) 16%, transparent);
+  color: var(--wb-ok);
+}
+.ucm2-card.is-dirty .ucm2-ibtn-save {
+  display: inline-flex;
+}
+.ucm2-ibtn-save:hover {
+  background: color-mix(in srgb, var(--wb-ok) 26%, transparent);
+  color: #b7ebd1;
+}
+
+/* × Hold-to-Delete (1.5s hold — danger red fill) */
+.ucm2-ibtn-del {
+  background: transparent;
+  color: var(--wb-dim);
+}
+.ucm2-ibtn-del::before { background: var(--wb-fail); }
+.ucm2-ibtn-del:hover {
+  background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
+  color: var(--wb-fail);
+}
+.ucm2-ibtn-del.is-holding {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 75%, transparent);
+}
+
+/* Line 2 & Line 3: Always-editable recessed borderless inline bars */
+.ucm2-inline-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--wb-input);
+  border: 0;
+  border-radius: 7px;
+  padding: 3px 5px 3px 9px;
+  transition: box-shadow .14s, background-color .14s;
+}
+.ucm2-inline-bar.is-dirty {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-warn) 78%, transparent);
+}
+.ucm2-inline-bar:focus-within {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucm2-inline-bar.is-dirty:focus-within {
+  box-shadow: inset 2px 0 0 var(--wb-warn), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucm2-glyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--wb-dim);
+  user-select: none;
+}
+.ucm2-glyph.is-prompt {
+  color: color-mix(in srgb, var(--wb-primary) 70%, var(--wb-dim));
+}
+.ucm2-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+.ucm2-inline-input.is-cmd {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: #c8cbd2;
+}
+.ucm2-inline-input.is-prompt {
+  font-family: var(--wb-sans);
+  font-size: 12px;
+  color: #d5d7dc;
+}
+.ucm2-inline-input::placeholder {
+  color: var(--wb-dim);
+}
+
+/* Right-side ↺ Revert icon button (22x22) */
+.ucm2-rev-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  flex: none;
+  background: transparent;
+  color: var(--wb-dim);
+  opacity: .22;
+  cursor: default;
+  pointer-events: none;
+  transition: background-color .12s, color .12s, opacity .12s;
+}
+.ucm2-rev-btn.is-dirty {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--wb-warn) 14%, transparent);
+  color: var(--wb-warn);
+}
+.ucm2-rev-btn.is-dirty:hover {
+  background: color-mix(in srgb, var(--wb-warn) 25%, transparent);
+  color: #f2be8e;
+}
+
+/* Composer internals — exact dashboard tonal parity */
+.ucm2-ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  padding: 0 2px;
+}
+.ucm2-ctx-pct { font-weight: 800; color: var(--wb-primary); font-size: 13px; }
+.ucm2-ctx-track {
+  flex: 1 1 auto;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--wb-muted);
+  overflow: hidden;
+}
+.ucm2-ctx-fill { width: 34%; height: 100%; background: var(--wb-primary); border-radius: 999px; }
+.ucm2-crow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.ucm2-cinput {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  padding: 8px 11px;
+  font-size: 13px;
+  resize: none;
+  outline: none;
+}
+.ucm2-cinput:focus {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucm2-csend {
+  width: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card));
+  color: var(--wb-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color .12s;
+}
+.ucm2-csend:hover { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); }
+.ucm2-cfoot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  padding: 0 2px;
+}
+.ucm2-pill {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-weight: 600;
+}
+.ucm2-pill:hover { background: var(--wb-wash); color: var(--wb-fg); }
+</style>
+
+<!-- Top Scenario Switcher -->
+<div class="ucm2-bar">
+  <span class="ucm2-bar-title">시나리오</span>
+  <div class="ucm2-scen-group" role="tablist">
+    <button type="button" class="ucm2-scen" data-scen="closed">팝업 닫힘 (아이콘만)</button>
+    <button type="button" class="ucm2-scen is-on" data-scen="open">팝업 열림 (목록)</button>
+    <button type="button" class="ucm2-scen" data-scen="dirty">인라인 임시 수정됨</button>
+    <button type="button" class="ucm2-scen" data-scen="add">새 커맨드 등록</button>
+    <button type="button" class="ucm2-scen" data-scen="empty">빈 상태 (0개)</button>
+  </div>
+  <button type="button" class="ucm2-reset" data-act="reset-all">초기화</button>
+</div>
+
+<div class="ucm2-toast" data-el="toast"></div>
+
+<div class="ucm2-stage" data-el="stage">
+  <!-- Simulated Lead Conversation -->
+  <div class="ucm2-conv" data-el="conv">
+    <div class="ucm2-msg">
+      <div class="ucm2-mh"><b>Lead · Werkschaft</b><span>15:08</span></div>
+      <div class="ucm2-bub">자주 쓰는 테스트·린트 명령을 유저 커맨드로 등록해 두었습니다. 서브에이전트 배지 옆 <b>&gt;_ 아이콘</b>을 열어 명령어·프롬프트를 바로 수정하고 <b>▶ 즉시 실행</b> 또는 <b>↗ 실행 요청</b>을 사용할 수 있습니다.</div>
+    </div>
+  </div>
+
+  <div class="ucm2-callout">
+    <span>▲ 서브에이전트 배지 바로 오른쪽의 단일 아이콘 버튼 — 클릭하여 유저 커맨드 팝업 열기</span>
+  </div>
+
+  <!-- Clean #composer (NO .d-ucmd strip inside) -->
+  <div class="ucm2-composer">
+    <!-- Floating Popover anchored directly above the trigger icon -->
+    <div class="ucm2-pop" data-el="pop" role="dialog" aria-label="유저 커맨드">
+      <div class="ucm2-pop-hd">
+        <span class="ucm2-pop-title">
+          <span class="ucm2-pop-ico" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </span>
+          <span>유저 커맨드</span>
+          <span class="ucm2-count" data-el="pop-count">0</span>
+        </span>
+        <span class="ucm2-pop-sub" data-el="pop-sub">▶ · ↗ · × 1.5초 길게 눌러 확인 · 💾 / ↺ 즉시 반영</span>
+        <button type="button" class="ucm2-add-btn" data-act="toggle-add">+ 커맨드 등록</button>
+        <button type="button" class="ucm2-close-btn" data-act="close-pop" title="닫기" aria-label="닫기">×</button>
+      </div>
+      <div class="ucm2-pop-body" data-el="pop-body"></div>
+    </div>
+
+    <!-- Real .cbadges row on top edge of #composer -->
+    <div class="ucm2-cbadges">
+      <span class="ucm2-ibadge-slot">#composer · .cbadges</span>
+      <span class="ucm2-sbwrap">
+        <!-- Exec Job HUD (.xgroup) -->
+        <span class="ucm2-xgroup" data-el="xgroup"></span>
+
+        <!-- Subagent execution badge (.sbadge) -->
+        <button type="button" class="ucm2-sbadge" title="서브에이전트 실행 현황">
+          <span class="ucm2-spin" aria-hidden="true"></span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/></svg>
+          <span>1</span>
+          <span class="ucm2-sword">실행 중</span>
+        </button>
+
+        <!-- Single User Commands Icon Button directly right of .sbadge -->
+        <button type="button" class="ucm2-trigger" data-act="toggle-pop" aria-haspopup="dialog" aria-expanded="false" title="유저 커맨드 열기">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span class="ucm2-trigger-cnt" data-el="trigger-cnt"></span>
+        </button>
+      </span>
+    </div>
+
+    <!-- Expandable Exec Output Peek (only visible when clicking an Exec HUD chip) -->
+    <div class="ucm2-xpeek" data-el="xpeek">
+      <div class="ucm2-xpeek-hd">
+        <span class="ucm2-xpeek-cmd" data-el="xpeek-cmd"></span>
+        <span class="ucm2-xpeek-code" data-el="xpeek-code"></span>
+        <button type="button" class="ucm2-close-btn" data-act="close-xpeek" title="닫기">×</button>
+      </div>
+      <pre class="ucm2-xpeek-pre" data-el="xpeek-out"></pre>
+    </div>
+
+    <!-- Clean Context Bar -->
+    <div class="ucm2-ctx-row">
+      <span class="ucm2-ctx-pct">34%</span>
+      <span class="ucm2-ctx-track"><span class="ucm2-ctx-fill"></span></span>
+      <span>68k / 200k</span>
+    </div>
+
+    <!-- Standard Composer Input Row -->
+    <div class="ucm2-crow">
+      <textarea class="ucm2-cinput" rows="1" placeholder="메시지를 입력하세요… (! 로 셸 명령 즉시 실행)"></textarea>
+      <button type="button" class="ucm2-csend" title="전송" aria-label="전송">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+      </button>
+    </div>
+
+    <!-- Standard Composer Footer -->
+    <div class="ucm2-cfoot">
+      <span class="ucm2-pill">claude-sonnet-4-6</span>
+      <span class="ucm2-pill">effort: medium</span>
+      <span class="ucm2-pill">worktree: develop</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var scriptEl = document.currentScript;
+  var root = scriptEl ? scriptEl.closest('[data-ucm2-root]') : document.querySelector('[data-ucm2-root]');
+  if (!root || root.dataset.ucm2Init) return;
+  root.dataset.ucm2Init = '1';
+
+  var DEFAULT_POP_SUB = '▶ · ↗ · × 1.5초 길게 눌러 확인 · 💾 / ↺ 즉시 반영';
+  var HOLD_MS = 1500;
+  var HOLD_META = {
+    run: {
+      hint: '즉시 실행 확인 중… 1.5초 유지',
+      cls: 'is-holding-run',
+      earlyMsg: '즉시 실행하려면 ▶ 버튼을 1.5초 길게 누르세요.'
+    },
+    ask: {
+      hint: '실행 요청 확인 중… 1.5초 유지',
+      cls: 'is-holding-ask',
+      earlyMsg: '실행 요청을 보내려면 ↗ 버튼을 1.5초 길게 누르세요.'
+    },
+    del: {
+      hint: '삭제 확인 중… 1.5초 유지',
+      cls: 'is-holding-del',
+      earlyMsg: '삭제하려면 × 버튼을 1.5초 길게 누르세요.'
+    }
+  };
+
+  var SEED_COMMANDS = [
+    {
+      id: 'cmd-1',
+      source: 'agent',
+      label: '대시보드 단위 테스트',
+      command: 'go test ./internal/wsdashboard/... -count=1',
+      cwd: 'agents-plugin-tool',
+      defaultPrompt: '실패 시 원인 요약 후 수정안 제안'
+    },
+    {
+      id: 'cmd-2',
+      source: 'agent',
+      label: '변경 파일 린트 검사',
+      command: 'golangci-lint run ./internal/wsdashboard/...',
+      cwd: 'agents-plugin-tool',
+      defaultPrompt: ''
+    },
+    {
+      id: 'cmd-3',
+      source: 'user',
+      label: '로컬 빌드 & 버전 확인',
+      command: 'go build -o ./bin/ws-mcp ./cmd/ws-mcp && ./bin/ws-mcp --version',
+      cwd: 'agents-plugin-tool',
+      defaultPrompt: '빌드 완료 후 바이너리 버전이 최신인지 확인해줘.'
+    }
+  ];
+
+  var state = {
+    commands: clone(SEED_COMMANDS),
+    popOpen: true,
+    adding: false,
+    drafts: {},
+    execJobs: [],
+    openExecId: null,
+    nextCmdId: 4,
+    nextJobId: 1,
+    activeScenario: 'open'
+  };
+
+  var elStage = root.querySelector('[data-el="stage"]');
+  var elConv = root.querySelector('[data-el="conv"]');
+  var elPop = root.querySelector('[data-el="pop"]');
+  var elPopBody = root.querySelector('[data-el="pop-body"]');
+  var elPopCount = root.querySelector('[data-el="pop-count"]');
+  var elPopSub = root.querySelector('[data-el="pop-sub"]');
+  var elTrigger = root.querySelector('[data-act="toggle-pop"]');
+  var elTriggerCnt = root.querySelector('[data-el="trigger-cnt"]');
+  var elAddBtn = root.querySelector('[data-act="toggle-add"]');
+  var elXgroup = root.querySelector('[data-el="xgroup"]');
+  var elXpeek = root.querySelector('[data-el="xpeek"]');
+  var elXpeekCmd = root.querySelector('[data-el="xpeek-cmd"]');
+  var elXpeekCode = root.querySelector('[data-el="xpeek-code"]');
+  var elXpeekOut = root.querySelector('[data-el="xpeek-out"]');
+  var elToast = root.querySelector('[data-el="toast"]');
+  var toastTimer = null;
+
+  /* Active 1.5s hold-to-delete state */
+  var holdState = null;
+
+  function clone(v) { return JSON.parse(JSON.stringify(v)); }
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function showToast(msg, tone) {
+    elToast.textContent = msg;
+    elToast.className = 'ucm2-toast is-show' + (tone === 'warn' ? ' is-warn' : (tone === 'fail' ? ' is-fail' : ''));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { elToast.className = 'ucm2-toast'; }, 2800);
+  }
+
+  function getCmd(id) {
+    for (var i = 0; i < state.commands.length; i++) {
+      if (state.commands[i].id === id) return state.commands[i];
+    }
+    return null;
+  }
+
+  function ensureDraft(cmd) {
+    if (!state.drafts[cmd.id]) {
+      state.drafts[cmd.id] = {
+        command: cmd.command,
+        prompt: cmd.defaultPrompt || ''
+      };
+    }
+    return state.drafts[cmd.id];
+  }
+
+  function isCmdDirty(cmd, draft) {
+    return draft.command.trim() !== cmd.command.trim();
+  }
+
+  function isPromptDirty(cmd, draft) {
+    return (draft.prompt || '').trim() !== (cmd.defaultPrompt || '').trim();
+  }
+
+  function isAnyDirty(cmd, draft) {
+    return isCmdDirty(cmd, draft) || isPromptDirty(cmd, draft);
+  }
+
+  function persistDraft(cmd, draft) {
+    cmd.command = draft.command.trim() || cmd.command;
+    cmd.defaultPrompt = (draft.prompt || '').trim();
+    draft.command = cmd.command;
+    draft.prompt = cmd.defaultPrompt;
+  }
+
+  function simulateOutput(command, cwd) {
+    var fail = /\bfail\b|--fail|exit\s+1/i.test(command);
+    if (fail) {
+      return {
+        exitCode: 1,
+        elapsed: '0.8s',
+        output: (cwd ? '[cwd: ' + cwd + ']\n' : '') +
+          '--- FAIL: TestUserCommandOverride (0.04s)\n' +
+          '    ucmd_test.go:118: expected exit 0, got 1\n' +
+          'FAIL\tinternal/wsdashboard\t0.812s'
+      };
+    }
+    if (/lint/i.test(command)) {
+      return {
+        exitCode: 0,
+        elapsed: '1.4s',
+        output: (cwd ? '[cwd: ' + cwd + ']\n' : '') +
+          '0 issues.\n✓ golangci-lint passed (24 files checked)'
+      };
+    }
+    if (/build/i.test(command)) {
+      return {
+        exitCode: 0,
+        elapsed: '1.9s',
+        output: (cwd ? '[cwd: ' + cwd + ']\n' : '') +
+          'built ./bin/ws-mcp (18.4 MB)\nws-mcp v0.51.2 (dev)'
+      };
+    }
+    return {
+      exitCode: 0,
+      elapsed: '1.1s',
+      output: (cwd ? '[cwd: ' + cwd + ']\n' : '') +
+        'ok  \tinternal/wsdashboard\t1.084s\n' +
+        'PASS (42 tests, 0 skipped)'
+    };
+  }
+
+  function runLocal(cmd) {
+    var draft = ensureDraft(cmd);
+    var effCmd = draft.command.trim() || cmd.command;
+    var effCwd = cmd.cwd || '';
+    var dirty = isCmdDirty(cmd, draft);
+
+    var jobId = 'job-' + (state.nextJobId++);
+    var job = {
+      id: jobId,
+      label: cmd.label,
+      command: effCmd,
+      cwd: effCwd,
+      status: 'run',
+      exitCode: null,
+      elapsed: '…',
+      output: (effCwd ? '[cwd: ' + effCwd + ']\n' : '') + '실행 중…'
+    };
+    state.execJobs.unshift(job);
+    if (state.execJobs.length > 3) state.execJobs.pop();
+    state.openExecId = jobId;
+    state.popOpen = false;
+    render();
+    showToast(dirty
+      ? '임시 수정된 명령으로 "' + cmd.label + '" 즉시 실행을 시작했습니다.'
+      : '"' + cmd.label + '" 즉시 실행을 시작했습니다.');
+
+    setTimeout(function () {
+      var res = simulateOutput(effCmd, effCwd);
+      job.status = res.exitCode === 0 ? 'ok' : 'fail';
+      job.exitCode = res.exitCode;
+      job.elapsed = res.elapsed;
+      job.output = res.output;
+      renderExecHud();
+    }, 650);
+  }
+
+  function askAgent(cmd) {
+    var draft = ensureDraft(cmd);
+    var effCmd = draft.command.trim() || cmd.command;
+    var effCwd = cmd.cwd || '';
+    var effPrompt = (draft.prompt || '').trim();
+    var dirty = isAnyDirty(cmd, draft);
+
+    var now = new Date();
+    var hh = String(now.getHours()).padStart(2, '0');
+    var mm = String(now.getMinutes()).padStart(2, '0');
+    var modeNote = dirty ? '인라인 임시 수정 (1회성)' : '저장된 템플릿';
+
+    var msg = document.createElement('div');
+    msg.className = 'ucm2-msg is-user';
+    msg.innerHTML =
+      '<div class="ucm2-mh"><span>' + hh + ':' + mm + '</span><b>사용자</b></div>' +
+      '<div class="bub-user">' +
+        '<div class="ucm2-req-tag">↗ 유저 커맨드 실행 요청</div>' +
+        '<div>사용자가 이 유저 커맨드(<b>"' + esc(cmd.label) + '"</b>)의 실행을 요청함</div>' +
+        '<code class="ucm2-req-cmd">' + esc(effCmd) + '</code>' +
+        '<div class="ucm2-req-meta">' +
+          '<span>모드: ' + esc(modeNote) + '</span>' +
+          (effCwd ? '<span>· 폴더: ' + esc(effCwd) + '</span>' : '') +
+        '</div>' +
+        (effPrompt ? '<div class="ucm2-req-prompt"><b>부가 프롬프트:</b> ' + esc(effPrompt) + '</div>' : '') +
+      '</div>';
+    elConv.appendChild(msg);
+    elConv.scrollTop = elConv.scrollHeight;
+    state.popOpen = false;
+    render();
+    showToast('에이전트 대화창으로 "' + cmd.label + '" 실행 요청을 전송했습니다.');
+  }
+
+  function renderExecHud() {
+    elXgroup.innerHTML = state.execJobs.map(function (j) {
+      var cls = 'ucm2-xchip ' + (j.status === 'run' ? 'is-run' : (j.status === 'ok' ? 'is-ok' : 'is-fail')) + (state.openExecId === j.id ? ' is-open' : '');
+      var icon = j.status === 'run'
+        ? '<span class="ucm2-xspin"></span>'
+        : (j.status === 'ok' ? '<span class="ucm2-xdot-ok">✓</span>' : '<span class="ucm2-xdot-fail">✕</span>');
+      return '<button type="button" class="' + cls + '" data-act="toggle-xpeek" data-job="' + esc(j.id) + '">' +
+        icon + '<span>' + esc(j.label) + '</span><span class="ucm2-xtime">' + esc(j.elapsed) + '</span></button>';
+    }).join('');
+
+    var openJob = null;
+    for (var i = 0; i < state.execJobs.length; i++) {
+      if (state.execJobs[i].id === state.openExecId) { openJob = state.execJobs[i]; break; }
+    }
+    if (!openJob) {
+      elXpeek.classList.remove('is-show');
+      return;
+    }
+    elXpeek.classList.add('is-show');
+    elXpeekCmd.textContent = openJob.command;
+    elXpeekCode.className = 'ucm2-xpeek-code ' + openJob.status;
+    elXpeekCode.textContent = openJob.status === 'run' ? '실행 중' : ('exit ' + openJob.exitCode);
+    elXpeekOut.textContent = openJob.output;
+  }
+
+  function renderAddForm() {
+    return '<form class="ucm2-add-form" data-el="add-form">' +
+      '<div class="ucm2-form-hd"><span>새 유저 커맨드 등록</span><span class="ucm2-form-sub">사용자 템플릿으로 저장</span></div>' +
+      '<div class="ucm2-grid2">' +
+        '<label class="ucm2-field"><span class="ucm2-lbl">이름 <span>*</span></span>' +
+          '<input class="ucm2-input" name="label" required placeholder="예: 프론트엔드 빌드 확인" value="웹 자산 번들 확인"></label>' +
+        '<label class="ucm2-field"><span class="ucm2-lbl">작업 폴더 <span class="ucm2-lbl-opt">(선택)</span></span>' +
+          '<input class="ucm2-input is-mono" name="cwd" placeholder="예: agents-plugin-tool" value="agents-plugin-tool"></label>' +
+      '</div>' +
+      '<label class="ucm2-field"><span class="ucm2-lbl">실행 명령어 <span>*</span></span>' +
+        '<input class="ucm2-input is-mono" name="command" required placeholder="예: go test ./internal/wsdashboard/..." value="go test ./internal/wsdashboard -run TestUserCommands -v"></label>' +
+      '<label class="ucm2-field"><span class="ucm2-lbl">기본 요청 프롬프트 <span class="ucm2-lbl-opt">(선택 · ↗ 실행 요청 시 자동 채움)</span></span>' +
+        '<textarea class="ucm2-ta" name="defaultPrompt" rows="2" placeholder="예: 실패 시 원인 요약 후 수정안 제안">테스트가 실패하면 실패한 케이스와 원인을 정리해줘.</textarea></label>' +
+      '<div class="ucm2-form-acts">' +
+        '<button type="button" class="ucm2-btn-ghost" data-act="cancel-add">취소</button>' +
+        '<button type="submit" class="ucm2-btn-save">등록하기</button>' +
+      '</div>' +
+    '</form>';
+  }
+
+  function syncCardDirtyDOM(id) {
+    var cmd = getCmd(id);
+    if (!cmd) return;
+    var card = root.querySelector('[data-cmd-card="' + id + '"]');
+    if (!card) return;
+    var draft = ensureDraft(cmd);
+    var cmdDirty = isCmdDirty(cmd, draft);
+    var promptDirty = isPromptDirty(cmd, draft);
+    var anyDirty = cmdDirty || promptDirty;
+
+    card.classList.toggle('is-dirty', anyDirty);
+
+    var cmdBar = card.querySelector('[data-bar="command"]');
+    var cmdRev = card.querySelector('[data-act="revert-cmd"]');
+    if (cmdBar) cmdBar.classList.toggle('is-dirty', cmdDirty);
+    if (cmdRev) {
+      cmdRev.classList.toggle('is-dirty', cmdDirty);
+      cmdRev.disabled = !cmdDirty;
+    }
+
+    var promptBar = card.querySelector('[data-bar="prompt"]');
+    var promptRev = card.querySelector('[data-act="revert-prompt"]');
+    if (promptBar) promptBar.classList.toggle('is-dirty', promptDirty);
+    if (promptRev) {
+      promptRev.classList.toggle('is-dirty', promptDirty);
+      promptRev.disabled = !promptDirty;
+    }
+  }
+
+  function cancelHold(notifyEarly) {
+    if (!holdState) return;
+    var elapsed = Date.now() - holdState.startedAt;
+    var meta = HOLD_META[holdState.act];
+    clearTimeout(holdState.timer);
+    if (holdState.btn) holdState.btn.classList.remove('is-holding');
+    elPopSub.textContent = DEFAULT_POP_SUB;
+    elPopSub.classList.remove('is-holding-run', 'is-holding-ask', 'is-holding-del');
+    var completed = holdState.completed;
+    holdState = null;
+    if (notifyEarly && !completed && elapsed > 40 && elapsed < HOLD_MS && meta) {
+      showToast(meta.earlyMsg, 'warn');
+    }
+  }
+
+  function startHold(btn, act, id) {
+    if (holdState) cancelHold(false);
+    var cmd = getCmd(id);
+    var meta = HOLD_META[act];
+    if (!cmd || !meta) return;
+    btn.classList.add('is-holding');
+    elPopSub.textContent = meta.hint + ' ("' + cmd.label + '")';
+    elPopSub.classList.remove('is-holding-run', 'is-holding-ask', 'is-holding-del');
+    elPopSub.classList.add(meta.cls);
+    holdState = {
+      btn: btn,
+      act: act,
+      id: id,
+      startedAt: Date.now(),
+      completed: false,
+      timer: setTimeout(function () {
+        if (!holdState || holdState.id !== id || holdState.act !== act) return;
+        holdState.completed = true;
+        var target = getCmd(id);
+        cancelHold(false);
+        if (!target) return;
+        if (act === 'run') {
+          runLocal(target);
+        } else if (act === 'ask') {
+          askAgent(target);
+        } else if (act === 'del') {
+          state.commands = state.commands.filter(function (c) { return c.id !== id; });
+          delete state.drafts[id];
+          render();
+          showToast('"' + target.label + '" 커맨드를 삭제했습니다.', 'fail');
+        }
+      }, HOLD_MS)
+    };
+  }
+
+  function renderCard(cmd) {
+    var draft = ensureDraft(cmd);
+    var cmdDirty = isCmdDirty(cmd, draft);
+    var promptDirty = isPromptDirty(cmd, draft);
+    var anyDirty = cmdDirty || promptDirty;
+    var srcBadge = cmd.source === 'agent'
+      ? '<span class="ucm2-src agent">에이전트</span>'
+      : '<span class="ucm2-src user">사용자</span>';
+
+    return '<div class="ucm2-card ' + (anyDirty ? 'is-dirty' : '') + '" data-cmd-card="' + esc(cmd.id) + '">' +
+      /* Line 1: Single-line Header + Compact 26x26 Icon Actions */
+      '<div class="ucm2-line1">' +
+        '<div class="ucm2-head-l">' +
+          srcBadge +
+          '<span class="ucm2-title" title="' + esc(cmd.label) + '">' + esc(cmd.label) + '</span>' +
+          '<span class="ucm2-dirty-dot" title="임시 수정됨 (템플릿 미반영)"></span>' +
+          (cmd.cwd ? '<span class="ucm2-cwd" title="작업 폴더: ' + esc(cmd.cwd) + '">' + esc(cmd.cwd) + '</span>' : '') +
+        '</div>' +
+        '<div class="ucm2-acts">' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-run is-hold" data-hold-act="run" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 즉시 실행 (내 셸에서 바로 실행)" aria-label="1.5초 길게 눌러 즉시 실행">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>' +
+          '</button>' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-ask is-hold" data-hold-act="ask" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 에이전트에게 실행 요청 (커맨드 + 프롬프트 전달)" aria-label="1.5초 길게 눌러 에이전트에게 실행 요청">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg>' +
+          '</button>' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-save" data-act="save-tpl" data-id="' + esc(cmd.id) + '" title="수정된 내용을 템플릿에 영구 반영" aria-label="템플릿에 영구 반영">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' +
+          '</button>' +
+          '<button type="button" class="ucm2-ibtn ucm2-ibtn-del is-hold" data-hold-act="del" data-id="' + esc(cmd.id) + '" title="1.5초 길게 눌러 삭제" aria-label="1.5초 길게 눌러 삭제">' +
+            '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+
+      /* Line 2: Always-Editable Command Bar + Right-side ↺ Revert */
+      '<div class="ucm2-inline-bar ' + (cmdDirty ? 'is-dirty' : '') + '" data-bar="command">' +
+        '<span class="ucm2-glyph" aria-hidden="true">$</span>' +
+        '<input type="text" class="ucm2-inline-input is-cmd" data-inline-field="command" data-id="' + esc(cmd.id) + '" value="' + esc(draft.command) + '" spellcheck="false" autocomplete="off" title="실행 명령어 (Enter 시 ▶ 버튼으로 포커스 이동)" aria-label="실행 명령어">' +
+        '<button type="button" class="ucm2-rev-btn ' + (cmdDirty ? 'is-dirty' : '') + '" data-act="revert-cmd" data-id="' + esc(cmd.id) + '" title="임시 수정 되돌리기 (템플릿 원복)" aria-label="명령어 되돌리기"' + (cmdDirty ? '' : ' disabled') + '>' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>' +
+        '</button>' +
+      '</div>' +
+
+      /* Line 3: Always-Editable Prompt Input + Right-side ↺ Revert */
+      '<div class="ucm2-inline-bar ' + (promptDirty ? 'is-dirty' : '') + '" data-bar="prompt">' +
+        '<span class="ucm2-glyph is-prompt" aria-hidden="true">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' +
+        '</span>' +
+        '<input type="text" class="ucm2-inline-input is-prompt" data-inline-field="prompt" data-id="' + esc(cmd.id) + '" value="' + esc(draft.prompt) + '" placeholder="에이전트에게 함께 보낼 프롬프트 입력 (선택)..." autocomplete="off" title="에이전트 실행 요청 프롬프트 (Enter 시 ↗ 버튼으로 포커스 이동)" aria-label="에이전트 실행 요청 프롬프트">' +
+        '<button type="button" class="ucm2-rev-btn ' + (promptDirty ? 'is-dirty' : '') + '" data-act="revert-prompt" data-id="' + esc(cmd.id) + '" title="프롬프트 임시 수정 되돌리기" aria-label="프롬프트 되돌리기"' + (promptDirty ? '' : ' disabled') + '>' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function render() {
+    cancelHold(false);
+    var count = state.commands.length;
+    elPopCount.textContent = String(count);
+    elTriggerCnt.textContent = count > 0 ? String(count) : '';
+    elTrigger.classList.toggle('is-empty', count === 0);
+    elTrigger.setAttribute('aria-expanded', state.popOpen ? 'true' : 'false');
+    elPop.classList.toggle('is-open', state.popOpen);
+    elStage.classList.toggle('is-pop-open', state.popOpen);
+    elStage.classList.toggle('is-callout', !state.popOpen);
+    elAddBtn.classList.toggle('is-active', state.adding);
+
+    var html = '';
+    if (state.adding) html += renderAddForm();
+
+    if (!count) {
+      if (!state.adding) {
+        html += '<div class="ucm2-empty">' +
+          '<div><b>등록된 유저 커맨드가 없습니다</b><span class="ucm2-empty-sub">자주 쓰는 빌드·테스트 명령을 직접 등록하거나, 에이전트가 세션 중 추천 커맨드를 추가할 수 있습니다.</span></div>' +
+          '<button type="button" class="ucm2-add-btn" data-act="toggle-add">+ 첫 커맨드 등록</button>' +
+        '</div>';
+      }
+    } else {
+      html += state.commands.map(renderCard).join('');
+    }
+
+    elPopBody.innerHTML = html;
+    renderExecHud();
+
+    var scenBtns = root.querySelectorAll('[data-scen]');
+    for (var i = 0; i < scenBtns.length; i++) {
+      scenBtns[i].classList.toggle('is-on', scenBtns[i].getAttribute('data-scen') === state.activeScenario);
+    }
+  }
+
+  function applyScenario(name) {
+    state.activeScenario = name;
+    state.adding = false;
+    state.drafts = {};
+    if (name === 'closed') {
+      state.commands = clone(SEED_COMMANDS);
+      state.popOpen = false;
+    } else if (name === 'open') {
+      state.commands = clone(SEED_COMMANDS);
+      state.popOpen = true;
+    } else if (name === 'dirty') {
+      state.commands = clone(SEED_COMMANDS);
+      state.popOpen = true;
+      state.drafts['cmd-1'] = {
+        command: 'go test ./internal/wsdashboard/... -run TestUserCommand -v -count=1',
+        prompt: '실패 시 원인 요약 후 수정 패치까지 바로 제안해줘'
+      };
+    } else if (name === 'add') {
+      state.commands = clone(SEED_COMMANDS);
+      state.popOpen = true;
+      state.adding = true;
+    } else if (name === 'empty') {
+      state.commands = [];
+      state.popOpen = true;
+    }
+    render();
+  }
+
+  /* Hold-to-confirm (1.5s) pointer & keyboard handlers for ▶, ↗, × */
+  root.addEventListener('pointerdown', function (ev) {
+    if (ev.button !== 0) return;
+    var holdBtn = ev.target.closest('[data-hold-act]');
+    if (!holdBtn) return;
+    ev.preventDefault();
+    startHold(holdBtn, holdBtn.getAttribute('data-hold-act'), holdBtn.getAttribute('data-id'));
+  });
+  root.addEventListener('pointerup', function () { cancelHold(true); });
+  root.addEventListener('pointercancel', function () { cancelHold(false); });
+  root.addEventListener('pointerleave', function (ev) {
+    if (holdState && ev.target === holdState.btn) cancelHold(false);
+  }, true);
+  root.addEventListener('keydown', function (ev) {
+    var holdBtn = ev.target.closest('[data-hold-act]');
+    if (holdBtn && (ev.key === ' ' || ev.key === 'Enter')) {
+      ev.preventDefault();
+      if (!ev.repeat) startHold(holdBtn, holdBtn.getAttribute('data-hold-act'), holdBtn.getAttribute('data-id'));
+      return;
+    }
+    var field = ev.target.getAttribute && ev.target.getAttribute('data-inline-field');
+    if (field && ev.key === 'Enter') {
+      ev.preventDefault();
+      var id = ev.target.getAttribute('data-id');
+      var targetAct = field === 'command' ? 'run' : 'ask';
+      var targetBtn = root.querySelector('[data-cmd-card="' + id + '"] [data-hold-act="' + targetAct + '"]');
+      if (targetBtn) targetBtn.focus();
+      showToast('▶ / ↗ 버튼을 1.5초 길게 눌러 실행하세요.', 'warn');
+    }
+  });
+  root.addEventListener('keyup', function (ev) {
+    if (holdState && (ev.key === ' ' || ev.key === 'Enter')) cancelHold(true);
+  });
+  root.addEventListener('blur', function (ev) {
+    if (holdState && ev.target === holdState.btn) cancelHold(false);
+  }, true);
+
+  root.addEventListener('click', function (ev) {
+    var scenBtn = ev.target.closest('[data-scen]');
+    if (scenBtn) {
+      applyScenario(scenBtn.getAttribute('data-scen'));
+      return;
+    }
+    var btn = ev.target.closest('[data-act]');
+    if (!btn) return;
+    var act = btn.getAttribute('data-act');
+    var id = btn.getAttribute('data-id');
+
+    if (act === 'reset-all') {
+      state.execJobs = [];
+      state.openExecId = null;
+      elConv.innerHTML = '<div class="ucm2-msg"><div class="ucm2-mh"><b>Lead · Werkschaft</b><span>15:08</span></div><div class="ucm2-bub">자주 쓰는 테스트·린트 명령을 유저 커맨드로 등록해 두었습니다. 서브에이전트 배지 옆 <b>&gt;_ 아이콘</b>을 열어 명령어·프롬프트를 바로 수정하고 <b>▶ 즉시 실행</b> 또는 <b>↗ 실행 요청</b>을 사용할 수 있습니다.</div></div>';
+      applyScenario('open');
+      showToast('목업 상태를 초기화했습니다.');
+      return;
+    }
+    if (act === 'toggle-pop') {
+      state.popOpen = !state.popOpen;
+      render();
+      return;
+    }
+    if (act === 'close-pop') {
+      state.popOpen = false;
+      render();
+      return;
+    }
+    if (act === 'toggle-add') {
+      state.popOpen = true;
+      state.adding = !state.adding;
+      render();
+      return;
+    }
+    if (act === 'cancel-add') {
+      state.adding = false;
+      render();
+      return;
+    }
+    if (act === 'toggle-xpeek') {
+      var jobId = btn.getAttribute('data-job');
+      state.openExecId = state.openExecId === jobId ? null : jobId;
+      renderExecHud();
+      return;
+    }
+    if (act === 'close-xpeek') {
+      state.openExecId = null;
+      renderExecHud();
+      return;
+    }
+
+    var cmd = getCmd(id);
+    if (!cmd) return;
+    var draft = ensureDraft(cmd);
+
+    if (act === 'save-tpl') {
+      persistDraft(cmd, draft);
+      syncCardDirtyDOM(id);
+      showToast('"' + cmd.label + '" 수정 내용을 템플릿에 영구 반영했습니다.');
+    } else if (act === 'revert-cmd') {
+      draft.command = cmd.command;
+      var cmdInput = root.querySelector('[data-inline-field="command"][data-id="' + id + '"]');
+      if (cmdInput) cmdInput.value = cmd.command;
+      syncCardDirtyDOM(id);
+      showToast('실행 명령어를 저장된 템플릿으로 되돌렸습니다.');
+    } else if (act === 'revert-prompt') {
+      draft.prompt = cmd.defaultPrompt || '';
+      var promptInput = root.querySelector('[data-inline-field="prompt"][data-id="' + id + '"]');
+      if (promptInput) promptInput.value = draft.prompt;
+      syncCardDirtyDOM(id);
+      showToast('프롬프트를 저장된 템플릿으로 되돌렸습니다.');
+    }
+  });
+
+  root.addEventListener('input', function (ev) {
+    var field = ev.target.getAttribute('data-inline-field');
+    if (!field) return;
+    var id = ev.target.getAttribute('data-id');
+    var cmd = getCmd(id);
+    if (!cmd) return;
+    var draft = ensureDraft(cmd);
+    draft[field] = ev.target.value;
+    syncCardDirtyDOM(id);
+  });
+
+  root.addEventListener('submit', function (ev) {
+    var form = ev.target.closest('[data-el="add-form"]');
+    if (!form) return;
+    ev.preventDefault();
+    var label = form.elements.label.value.trim();
+    var command = form.elements.command.value.trim();
+    var cwd = form.elements.cwd.value.trim();
+    var defaultPrompt = form.elements.defaultPrompt.value.trim();
+    if (!label || !command) return;
+
+    var newCmd = {
+      id: 'cmd-' + (state.nextCmdId++),
+      source: 'user',
+      label: label,
+      command: command,
+      cwd: cwd,
+      defaultPrompt: defaultPrompt
+    };
+    state.commands.push(newCmd);
+    state.adding = false;
+    state.popOpen = true;
+    render();
+    showToast('"' + label + '" 커맨드를 등록했습니다.');
+  });
+
+  render();
+})();
+</script>
+</div>

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1252,4 +1253,24 @@ func TestConfigWritesKeepFileMode(t *testing.T) {
 		t.Fatalf("agents.tier set: %v", err)
 	}
 	assertMode(0o600)
+}
+
+func TestExecNativeToolRemovalWerkOffRejected(t *testing.T) {
+	r, _ := newTestResolver(t, nil, nil)
+	key := ItemExecNativeToolRemoval + ".werk"
+	for _, v := range []string{"off", "OFF", "false", "0", "no"} {
+		err := r.Set(key, v, SetOptions{ExplicitScope: ScopeGlobal})
+		if err == nil {
+			t.Fatalf("Set(%q, %q) succeeded, want refusal", key, v)
+		}
+		if !strings.Contains(err.Error(), "no native shell tools") {
+			t.Fatalf("Set(%q, %q) error = %q, want explanation that werk has no native shell tools", key, v, err.Error())
+		}
+	}
+	if err := r.Set(key, "on", SetOptions{ExplicitScope: ScopeGlobal}); err != nil {
+		t.Fatalf("Set(%q, on) failed: %v", key, err)
+	}
+	if err := r.Set(ItemExecNativeToolRemoval+".claude", "off", SetOptions{ExplicitScope: ScopeGlobal}); err != nil {
+		t.Fatalf("Set(claude, off) failed: %v", err)
+	}
 }

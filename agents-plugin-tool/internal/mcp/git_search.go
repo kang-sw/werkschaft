@@ -812,12 +812,8 @@ func (s *Server) handleGitSearch(ctx context.Context, id json.RawMessage, args m
 // process's environment; git is resolved from its PATH.
 func runGitSearch(ctx context.Context, environ []string, repo, root string, req gitSearchRequest) (string, error) {
 	if req.readsWorktree() {
-		linked, err := wsdashboard.NewProviderCredentialProtection().HasLinkedCredentialFiles()
-		if err != nil {
-			return "", errors.New("cannot verify provider credential hard links before reading the worktree; retry when the credential store is accessible")
-		}
-		if linked {
-			return "", errors.New("worktree search refused because a provider credential file has an extra hard link; remove the extra link while keeping the store's file, then retry")
+		if err := wsdashboard.NewProviderCredentialProtection().CheckGitWorktreeCredentials(); err != nil {
+			return "", err
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, gitSearchTimeout)

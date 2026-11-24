@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,22 +21,26 @@ import (
 type usercmdFake struct {
 	reg *wsusercmd.Registry
 
-	mu      sync.Mutex
-	root    string
-	openErr error
+	mu        sync.Mutex
+	root      string
+	rootByID  map[string]string
+	openErr   error
 }
 
-func (u *usercmdFake) scope() (string, error) {
+func (u *usercmdFake) scope(replyID string) (string, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.openErr != nil {
 		return "", u.openErr
 	}
+	if r, ok := u.rootByID[replyID]; ok {
+		return r, nil
+	}
 	return u.root, nil
 }
 
 func (u *usercmdFake) List(replyID string) ([]wsusercmd.Command, string, error) {
-	root, err := u.scope()
+	root, err := u.scope(replyID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -43,26 +48,50 @@ func (u *usercmdFake) List(replyID string) ([]wsusercmd.Command, string, error) 
 	return cmds, rev + ".t" + strconv.Itoa(len(root)), nil
 }
 
-func (u *usercmdFake) Get(replyID, id string) (wsusercmd.Command, string, bool, error) {
-	root, err := u.scope()
+func (u *usercmdFake) Get(replyID, source, id string) (wsusercmd.Command, string, bool, error) {
+	root, err := u.scope(replyID)
 	if err != nil {
 		return wsusercmd.Command{}, "", false, err
 	}
-	c, ok := u.reg.Get(replyID, root, id)
+	c, ok := u.reg.GetBySource(replyID, root, source, id)
 	return c, root, ok, nil
 }
 
-func (u *usercmdFake) RemoveIf(replyID, id string, rev int64) error {
-	root, err := u.scope()
+func (u *usercmdFake) Create(replyID string, in wsusercmd.Input) (wsusercmd.Command, error) {
+	root, err := u.scope(replyID)
+	if err != nil {
+		return wsusercmd.Command{}, err
+	}
+	if _, err := wsusercmd.ValidateWorktreeCwd(root, in.Cwd); err != nil {
+		return wsusercmd.Command{}, err
+	}
+	return u.reg.CreateUser(root, in)
+}
+
+func (u *usercmdFake) PatchIf(replyID, source, id string, rev int64, patch wsusercmd.Patch) (wsusercmd.Command, error) {
+	root, err := u.scope(replyID)
+	if err != nil {
+		return wsusercmd.Command{}, err
+	}
+	if patch.Cwd != nil {
+		if _, err := wsusercmd.ValidateWorktreeCwd(root, *patch.Cwd); err != nil {
+			return wsusercmd.Command{}, err
+		}
+	}
+	return u.reg.PatchIf(replyID, root, source, id, rev, patch)
+}
+
+func (u *usercmdFake) RemoveIf(replyID, source, id string, rev int64) error {
+	root, err := u.scope(replyID)
 	if err != nil {
 		return err
 	}
-	return u.reg.RemoveIf(replyID, root, id, rev)
+	return u.reg.RemoveIfSource(replyID, root, source, id, rev)
 }
 
 func (u *usercmdFake) Revision(replyID string) string {
-	root, _ := u.scope()
-	return u.reg.Revision(replyID) + ".t" + strconv.Itoa(len(root))
+	root, _ := u.scope(replyID)
+	return u.reg.RevisionFor(replyID, root) + ".t" + strconv.Itoa(len(root))
 }
 
 type usercmdFixture struct {
@@ -73,7 +102,11 @@ type usercmdFixture struct {
 func startUserCommandFixture(t *testing.T) *usercmdFixture {
 	t.Helper()
 	f := startComposerFixture(t)
-	users := &usercmdFake{root: filepath.Join(t.TempDir(), "worktree")}
+	root := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	users := &usercmdFake{root: root}
 	reg, err := wsusercmd.Open(filepath.Join(t.TempDir(), wsusercmd.StoreName), f.d.UserCommandsChanged)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +271,7 @@ func TestUserCommandClickIdempotency(t *testing.T) {
 		t.Fatalf("unknown retry: %d %+v launches %d", res.Code, card, f.svc.launchCount())
 	}
 	// A fresh id is a new run.
-	cur, _, _, _ := f.users.Get("livesession", "build")
+	cur, _, _, _ := f.users.Get("livesession", wsusercmd.SourceAgent, "build")
 	if res := f.run("build", cur.Revision, "click-conc-00002", false); res.Code != 202 {
 		t.Fatalf("fresh id: %d", res.Code)
 	}
@@ -512,5 +545,282 @@ func TestUserCommandWithdrawalRacesTheClaim(t *testing.T) {
 		default:
 			t.Fatalf("round %d: mixed outcome: %d fresh, %d known, %d refused", round, fresh, known, refused)
 		}
+	}
+}
+
+func ucPut(d *Daemon, path string, body any) *httptest.ResponseRecorder {
+	raw, _ := json.Marshal(body)
+	return composerHTTP(d, http.MethodPut, path, string(raw), "http://127.0.0.1", "127.0.0.1:1234", nil)
+}
+
+// TestUserCommandCreateAndUpdateRoutes covers POST /user-commands, PUT /user-commands/<id>,
+// cross-origin gating, and verifies PUT /composer-exec remains 405.
+func TestUserCommandCreateAndUpdateRoutes(t *testing.T) {
+	f := startUserCommandFixture(t)
+	sub := filepath.Join(f.users.root, "backend")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// PUT /composer-exec must stay 405 Method Not Allowed.
+	if res := ucPut(f.d, "/s/livesession/composer-exec", map[string]any{"submission_id": "x", "line": "true"}); res.Code != 405 {
+		t.Fatalf("PUT /composer-exec = %d, want 405", res.Code)
+	}
+
+	// Cross-origin POST/PUT rejected with 403.
+	if res := composerHTTP(f.d, http.MethodPost, "/s/livesession/user-commands", `{"label":"X","line":"true"}`, "http://evil.test", "127.0.0.1:1", nil); res.Code != 403 {
+		t.Fatalf("cross-origin POST create = %d, want 403", res.Code)
+	}
+	if res := composerHTTP(f.d, http.MethodPut, "/s/livesession/user-commands/x", `{"revision":1,"line":"true"}`, "http://evil.test", "127.0.0.1:1", nil); res.Code != 403 {
+		t.Fatalf("cross-origin PUT update = %d, want 403", res.Code)
+	}
+
+	// Bad cwd or missing label/line returns 400.
+	if res := ucPost(f.d, "/s/livesession/user-commands", map[string]any{"label": "Bad", "line": "true", "cwd": "../escape"}); res.Code != 400 {
+		t.Fatalf("create bad cwd = %d %s", res.Code, res.Body)
+	}
+	if res := ucPost(f.d, "/s/livesession/user-commands", map[string]any{"label": "", "line": "true"}); res.Code != 400 {
+		t.Fatalf("create empty label = %d %s", res.Code, res.Body)
+	}
+
+	// Valid POST /user-commands returns 201 with created command + refreshed list.
+	res := ucPost(f.d, "/s/livesession/user-commands", map[string]any{
+		"label":  "Go Tests",
+		"line":   "go test ./...",
+		"prompt": "Fix failing tests",
+		"cwd":    "backend",
+	})
+	var created userCommandList
+	if res.Code != 201 || json.Unmarshal(res.Body.Bytes(), &created) != nil || created.Command == nil || created.Command.ID != "go-tests" || created.Command.Source != wsusercmd.SourceUser || len(created.Commands) != 1 {
+		t.Fatalf("create = %d %s", res.Code, res.Body)
+	}
+
+	// Explicit duplicate ID returns 409.
+	if res := ucPost(f.d, "/s/livesession/user-commands", map[string]any{"id": "go-tests", "label": "Dup", "line": "true"}); res.Code != 409 {
+		t.Fatalf("duplicate id = %d %s", res.Code, res.Body)
+	}
+
+	// PUT /user-commands/<id> updates line & prompt atomically.
+	res = ucPut(f.d, "/s/livesession/user-commands/go-tests", map[string]any{
+		"source":   wsusercmd.SourceUser,
+		"revision": created.Command.Revision,
+		"line":     "go test -race ./...",
+		"prompt":   "Investigate race",
+	})
+	var updated userCommandList
+	if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &updated) != nil || updated.Command == nil || updated.Command.Line != "go test -race ./..." || updated.Command.Prompt != "Investigate race" {
+		t.Fatalf("put user = %d %s", res.Code, res.Body)
+	}
+
+	// Stale revision returns 409 with error="stale".
+	res = ucPut(f.d, "/s/livesession/user-commands/go-tests", map[string]any{
+		"source":   wsusercmd.SourceUser,
+		"revision": created.Command.Revision,
+		"line":     "go test",
+	})
+	var stale userCommandList
+	if res.Code != 409 || json.Unmarshal(res.Body.Bytes(), &stale) != nil || stale.Error != "stale" {
+		t.Fatalf("stale put = %d %s", res.Code, res.Body)
+	}
+
+	// Bad cwd on PUT returns 400.
+	if res := ucPut(f.d, "/s/livesession/user-commands/go-tests", map[string]any{
+		"source":   wsusercmd.SourceUser,
+		"revision": updated.Command.Revision,
+		"cwd":      "../escape",
+	}); res.Code != 400 {
+		t.Fatalf("bad cwd put = %d %s", res.Code, res.Body)
+	}
+
+	// PUT also edits an agent-scoped command (keeping source="agent").
+	ag := f.register(t, "go-tests", "make agent")
+	res = ucPut(f.d, "/s/livesession/user-commands/go-tests", map[string]any{
+		"source":   wsusercmd.SourceAgent,
+		"revision": ag.Revision,
+		"line":     "make agent-edited",
+		"prompt":   "Edited agent prompt",
+	})
+	var agUp userCommandList
+	if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &agUp) != nil || agUp.Command == nil || agUp.Command.Source != wsusercmd.SourceAgent || agUp.Command.Line != "make agent-edited" {
+		t.Fatalf("put agent = %d %s", res.Code, res.Body)
+	}
+
+	// Remove user command leaves same-id agent command intact.
+	res = ucPost(f.d, "/s/livesession/user-commands/go-tests/remove", map[string]any{
+		"source":   wsusercmd.SourceUser,
+		"revision": updated.Command.Revision,
+	})
+	if res.Code != 200 {
+		t.Fatalf("remove user = %d %s", res.Code, res.Body)
+	}
+	if _, _, ok, _ := f.users.Get("livesession", wsusercmd.SourceAgent, "go-tests"); !ok {
+		t.Fatal("removing user command removed same-id agent command")
+	}
+}
+
+// TestUserCommandRunOverridesCwdFenceAndIdempotency verifies inline line/cwd
+// overrides, synchronous 400 cwd fence before slot claim, and composerKnown
+// binding to (source, id, revision, hasLine, lineOverride, hasCwd, cwdOverride).
+func TestUserCommandRunOverridesCwdFenceAndIdempotency(t *testing.T) {
+	f := startUserCommandFixture(t)
+	sub := filepath.Join(f.users.root, "backend")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ag := f.register(t, "build", "make agent")
+	us, err := f.users.Create("livesession", wsusercmd.Input{ID: "build", Label: "User Build", Line: "make user", Cwd: "backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bad cwd override fails synchronously with 400 BEFORE claiming the submission slot.
+	res := ucPost(f.d, "/s/livesession/user-commands/build/run", map[string]any{
+		"submission_id": "sub-fence-0001",
+		"revision":      us.Revision,
+		"source":        wsusercmd.SourceUser,
+		"cwd":           "../escape",
+		"token":         f.d.composer.token(),
+	})
+	if res.Code != 400 {
+		t.Fatalf("bad cwd run = %d %s, want 400", res.Code, res.Body)
+	}
+	if f.svc.launchCount() != 0 {
+		t.Fatalf("bad cwd launched %d jobs", f.svc.launchCount())
+	}
+
+	// The same submission_id is NOT fenced and runs cleanly with valid line+cwd override.
+	res = ucPost(f.d, "/s/livesession/user-commands/build/run", map[string]any{
+		"submission_id": "sub-fence-0001",
+		"revision":      us.Revision,
+		"source":        wsusercmd.SourceUser,
+		"line":          "make user --dry-run",
+		"cwd":           "backend",
+		"token":         f.d.composer.token(),
+	})
+	if res.Code != 202 {
+		t.Fatalf("valid override run = %d %s", res.Code, res.Body)
+	}
+	f.launches(t, 1)
+	if got := f.svc.launches[0]; got.Line != "make user --dry-run" || got.Cwd != "backend" {
+		t.Fatalf("launch = %+v", got)
+	}
+
+	// Reusing the same submission_id with a different line override or source returns 409.
+	res = ucPost(f.d, "/s/livesession/user-commands/build/run", map[string]any{
+		"submission_id": "sub-fence-0001",
+		"revision":      us.Revision,
+		"source":        wsusercmd.SourceUser,
+		"line":          "make user --other",
+		"cwd":           "backend",
+		"token":         f.d.composer.token(),
+	})
+	if res.Code != 409 {
+		t.Fatalf("different line same submission_id = %d, want 409", res.Code)
+	}
+	res = ucPost(f.d, "/s/livesession/user-commands/build/run", map[string]any{
+		"submission_id": "sub-fence-0001",
+		"revision":      ag.Revision,
+		"source":        wsusercmd.SourceAgent,
+		"token":         f.d.composer.token(),
+	})
+	if res.Code != 409 {
+		t.Fatalf("different source same submission_id = %d, want 409", res.Code)
+	}
+
+	// Removing the command afterwards still lets a retry of the exact override tuple return 200.
+	if err := f.users.RemoveIf("livesession", wsusercmd.SourceUser, "build", us.Revision); err != nil {
+		t.Fatal(err)
+	}
+	res = ucPost(f.d, "/s/livesession/user-commands/build/run", map[string]any{
+		"submission_id": "sub-fence-0001",
+		"revision":      us.Revision,
+		"source":        wsusercmd.SourceUser,
+		"line":          "make user --dry-run",
+		"cwd":           "backend",
+		"retry":         true,
+		"token":         f.d.composer.token(),
+	})
+	if res.Code != 200 || decodeCard(t, res).Command != "make user --dry-run" {
+		t.Fatalf("retry after withdrawal = %d %s", res.Code, res.Body)
+	}
+}
+
+// TestUserCommandRootScopedSSEFanOut verifies that a user-scoped command change
+// pushes a usercmd SSE event to every session on the same root and NOT to a
+// session bound to a different root.
+func TestUserCommandRootScopedSSEFanOut(t *testing.T) {
+	f := startUserCommandFixture(t)
+	otherRoot := filepath.Join(t.TempDir(), "other-wt")
+	if err := os.MkdirAll(otherRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Seed two additional sessions: peersession (same root) and foreignsession (different root).
+	now := time.Now()
+	for _, spec := range []struct{ id, root string }{
+		{"peersession", f.users.root},
+		{"foreignsession", otherRoot},
+	} {
+		register(t, f.dir, spec.id, spec.root, now)
+		r, err := ReadRegistration(f.dir, spec.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Hosted = true
+		if err := WriteRegistration(f.dir, r); err != nil {
+			t.Fatal(err)
+		}
+		f.src.setPage(spec.id, PageContent{HasBoard: true, Seq: 1, Board: boardRegions(t, spec.id)})
+	}
+	f.d.Index().Refresh()
+	waitFor(t, "peer and foreign sessions registered", func() bool {
+		_, ok1 := f.d.Index().Session("peersession")
+		_, ok2 := f.d.Index().Session("foreignsession")
+		return ok1 && ok2
+	})
+	f.users.mu.Lock()
+	f.users.rootByID = map[string]string{
+		"livesession":    f.users.root,
+		"peersession":    f.users.root,
+		"foreignsession": otherRoot,
+	}
+	f.users.mu.Unlock()
+
+	evLive := openSSE(t, f.base+"/s/livesession/events")
+	evPeer := openSSE(t, f.base+"/s/peersession/events")
+	evForeign := openSSE(t, f.base+"/s/foreignsession/events")
+
+	revs := func(got []sseEvent) (out []string) {
+		for _, ev := range got {
+			if ev.name == "usercmd" {
+				var p struct{ Rev string `json:"rev"` }
+				if err := json.Unmarshal([]byte(ev.data), &p); err == nil && p.Rev != "" {
+					out = append(out, p.Rev)
+				}
+			}
+		}
+		return out
+	}
+	// Drain initial connect events.
+	_ = revs(mustCollect(t, evLive))
+	_ = revs(mustCollect(t, evPeer))
+	_ = revs(mustCollect(t, evForeign))
+
+	// Create a user-scoped command from livesession.
+	if res := ucPost(f.d, "/s/livesession/user-commands", map[string]any{"label": "Shared", "line": "echo shared"}); res.Code != 201 {
+		t.Fatalf("create shared: %d %s", res.Code, res.Body)
+	}
+	var liveGot, peerGot []string
+	waitFor(t, "both same-root sessions receive usercmd", func() bool {
+		if g, _ := collect(evLive); len(g) > 0 {
+			liveGot = append(liveGot, revs(g)...)
+		}
+		if g, _ := collect(evPeer); len(g) > 0 {
+			peerGot = append(peerGot, revs(g)...)
+		}
+		return len(liveGot) > 0 && len(peerGot) > 0
+	})
+	time.Sleep(50 * time.Millisecond)
+	if g := revs(mustCollect(t, evForeign)); len(g) != 0 {
+		t.Fatalf("foreign-root session received usercmd: %v", g)
 	}
 }

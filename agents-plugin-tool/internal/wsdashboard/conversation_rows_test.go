@@ -30,7 +30,7 @@ func TestConversationRowsShareNativeFrame(t *testing.T) {
 				t.Fatal(err)
 			}
 			html := buf.String()
-			for _, want := range []string{`conv-row`, `class="row-icon`, `class="row-content`, `class="row-time"`, `data-entry="` + e.Key + `"`} {
+			for _, want := range []string{`conv-row`, `class="row-icon`, `class="row-content`, `class="row-time`, `data-entry="` + e.Key + `"`} {
 				if !strings.Contains(html, want) {
 					t.Errorf("missing frame %q: %s", want, html)
 				}

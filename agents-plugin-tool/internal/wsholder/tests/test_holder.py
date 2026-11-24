@@ -1399,12 +1399,15 @@ class WindowsPriorityQoSTest(unittest.TestCase):
         fake_proc = mock.MagicMock()
         fake_proc.pid = 9001
         fake_proc._handle = 0x5555
+        fake_job = mock.MagicMock()
+        fake_job.assign.return_value = True
 
         with (
             mock.patch.object(holder_mod, "WINDOWS", True),
             mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
             mock.patch.object(holder_mod.subprocess, "Popen", return_value=fake_proc) as mock_popen,
             mock.patch.object(holder_mod, "_clear_windows_eco_qos") as mock_clear,
+            mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", return_value=fake_job),
         ):
             child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
 
@@ -1412,11 +1415,36 @@ class WindowsPriorityQoSTest(unittest.TestCase):
         _, kwargs = mock_popen.call_args
         self.assertEqual(kwargs["creationflags"], 0x00000200 | 0x00000020)
         mock_clear.assert_called_once_with(0x5555)
+        fake_job.assign.assert_called_once_with(0x5555)
+        child.after_exit()
+        child.close()
+        fake_job.close.assert_called_once_with()
+
+    def test_pipe_child_closes_qos_job_if_assign_fails(self):
+        fake_proc = mock.MagicMock()
+        fake_proc.pid = 9002
+        fake_proc._handle = 0x5556
+        fake_job = mock.MagicMock()
+        fake_job.assign.return_value = False
+
+        with (
+            mock.patch.object(holder_mod, "WINDOWS", True),
+            mock.patch.object(holder_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
+            mock.patch.object(holder_mod.subprocess, "Popen", return_value=fake_proc),
+            mock.patch.object(holder_mod, "_clear_windows_eco_qos"),
+            mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", return_value=fake_job),
+        ):
+            child = holder_mod.PipeChild({"argv": ["cmd.exe"], "cwd": ".", "env": None})
+
+        fake_job.assign.assert_called_once_with(0x5556)
+        fake_job.close.assert_called_once_with()
+        self.assertIsNone(child._qos_job)
 
     def test_conpty_child_creationflags_and_eco_qos(self):
         import ctypes
 
         captured = {}
+        order = []
 
         class FakeFunc:
             def __init__(self, fn=None):
@@ -1442,7 +1470,8 @@ class WindowsPriorityQoSTest(unittest.TestCase):
                 self.WaitForSingleObject = FakeFunc(lambda *args: 0)
                 self.GetExitCodeProcess = FakeFunc(lambda *args: 1)
                 self.TerminateProcess = FakeFunc(lambda *args: 1)
-                self.CloseHandle = FakeFunc(lambda *args: 1)
+                self.ResumeThread = FakeFunc(self._resume_thread)
+                self.CloseHandle = FakeFunc(self._close_handle)
                 self.SetProcessInformation = FakeFunc(self._set_proc_info)
 
             def _create_process(self, app, cmdline, pa, ta, inherit, flags, env, cwd, si, pi_ref):
@@ -1456,15 +1485,278 @@ class WindowsPriorityQoSTest(unittest.TestCase):
             def _set_proc_info(self, handle, info_class, state_ptr, size):
                 state = state_ptr._obj
                 captured["eco_qos"] = (handle, info_class, state.Version, state.ControlMask, state.StateMask, size)
+                order.append("clear_eco_qos")
+                return 1
+
+            def _resume_thread(self, handle):
+                captured["resumed"] = handle
+                order.append("resume_thread")
+                return 1
+
+            def _close_handle(self, handle):
+                if handle == 0x8888:
+                    order.append("close_thread")
                 return 1
 
         fake_k32 = FakeKernel32()
-        with mock.patch.object(ctypes, "WinDLL", return_value=fake_k32, create=True):
+        fake_job = mock.MagicMock()
+
+        def _fake_assign(handle):
+            captured["assigned"] = handle
+            order.append("assign_job")
+            return True
+
+        fake_job.assign.side_effect = _fake_assign
+        with (
+            mock.patch.object(ctypes, "WinDLL", return_value=fake_k32, create=True),
+            mock.patch.object(holder_mod._WindowsDescendantQoSJob, "start", return_value=fake_job) as mock_start,
+        ):
             child = holder_mod.ConPtyChild({"argv": ["cmd.exe"], "cwd": ".", "env": None, "cols": 80, "rows": 24})
 
         self.assertEqual(child.pid, 4242)
-        self.assertEqual(captured["flags"], 0x00080000 | 0x00000400 | 0x00000020)
+        self.assertEqual(captured["flags"], 0x00080000 | 0x00000400 | 0x00000020 | 0x00000004)
         self.assertEqual(captured["eco_qos"], (0x7777, 4, 1, 1, 0, 12))
+        self.assertEqual(captured["assigned"], 0x7777)
+        self.assertEqual(captured["resumed"], 0x8888)
+        self.assertEqual(order, ["clear_eco_qos", "assign_job", "resume_thread", "close_thread"])
+        mock_start.assert_called_once_with(k32=fake_k32)
+        child.after_exit()
+        child.close()
+        fake_job.close.assert_called_once_with()
+
+    def test_windows_descendant_qos_job_iocp_clears_new_process_and_closes_cleanly(self):
+        import queue
+
+        iocp_queue: queue.Queue = queue.Queue()
+        opened = []
+        cleared = []
+        closed_handles = []
+        assoc_seen = {}
+        assigned = []
+        processed = threading.Event()
+
+        class FakeFunc:
+            def __init__(self, fn):
+                self._fn = fn
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self._fn(*args)
+
+        class FakeKernel32:
+            def __init__(self):
+                self.CreateJobObjectW = FakeFunc(lambda sa, name: 0x1111)
+                self.CreateIoCompletionPort = FakeFunc(self._create_iocp)
+                self.SetInformationJobObject = FakeFunc(self._set_info_job)
+                self.AssignProcessToJobObject = FakeFunc(self._assign)
+                self.GetQueuedCompletionStatus = FakeFunc(self._get_qcs)
+                self.PostQueuedCompletionStatus = FakeFunc(self._post_qcs)
+                self.OpenProcess = FakeFunc(self._open_proc)
+                self.SetProcessInformation = FakeFunc(self._set_proc_info)
+                self.CloseHandle = FakeFunc(self._close_handle)
+
+            def _create_iocp(self, file_handle, existing, key, threads):
+                assoc_seen["create_iocp"] = (file_handle.value, existing, key, threads)
+                return 0x2222
+
+            def _set_info_job(self, job, info_class, info_ptr, size):
+                assoc = info_ptr._obj
+                assoc_seen["set_info"] = (job, info_class, assoc.CompletionKey, assoc.CompletionPort, size)
+                return 1
+
+            def _assign(self, job, proc):
+                assigned.append((job, proc))
+                return 1
+
+            def _get_qcs(self, iocp, transferred_ref, key_ref, ov_ref, timeout):
+                item = iocp_queue.get(timeout=5.0)
+                if item is None:
+                    return 0
+                msg, key, ov = item
+                transferred_ref._obj.value = msg
+                key_ref._obj.value = key
+                ov_ref._obj.value = ov
+                return 1
+
+            def _post_qcs(self, iocp, transferred, key, ov):
+                iocp_queue.put((transferred, key, 0 if ov is None else ov))
+                return 1
+
+            def _open_proc(self, access, inherit, pid):
+                opened.append((access, inherit, pid))
+                return 0x9000 + pid
+
+            def _set_proc_info(self, handle, info_class, state_ptr, size):
+                state = state_ptr._obj
+                cleared.append((handle, info_class, state.Version, state.ControlMask, state.StateMask, size))
+                processed.set()
+                return 1
+
+            def _close_handle(self, handle):
+                closed_handles.append(handle)
+                return 1
+
+        fake_k32 = FakeKernel32()
+        job = holder_mod._WindowsDescendantQoSJob.start(k32=fake_k32)
+        self.assertIsNotNone(job)
+        self.assertEqual(assoc_seen["set_info"][:4], (0x1111, 7, 1, 0x2222))
+        self.assertTrue(job.assign(0x3333))
+        self.assertEqual(assigned, [(0x1111, 0x3333)])
+
+        iocp_queue.put((holder_mod.JOB_OBJECT_MSG_NEW_PROCESS, holder_mod._JOB_COMPLETION_KEY, 12345))
+        self.assertTrue(processed.wait(timeout=5.0))
+        self.assertEqual(opened, [(0x0200, False, 12345)])
+        self.assertEqual(cleared, [(0x9000 + 12345, 4, 1, 1, 0, 12)])
+
+        job.close()
+        job.close()  # idempotent
+        self.assertFalse(job._thread.is_alive())
+        self.assertEqual(closed_handles, [0x9000 + 12345, 0x1111, 0x2222])
+
+    def test_windows_descendant_qos_job_fail_open_closes_partial_handles(self):
+        class FakeFunc:
+            def __init__(self, fn):
+                self._fn = fn
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self._fn(*args)
+
+        # Missing SetProcessInformation -> returns None without creating handles.
+        class NoSetProcInfo:
+            pass
+
+        self.assertIsNone(holder_mod._WindowsDescendantQoSJob.start(k32=NoSetProcInfo()))
+
+        # SetInformationJobObject fails -> closes both IOCP and Job handles.
+        closed = []
+
+        class FailingAssocKernel32:
+            def __init__(self):
+                self.SetProcessInformation = FakeFunc(lambda *a: 1)
+                self.CreateJobObjectW = FakeFunc(lambda *a: 0xAA01)
+                self.CreateIoCompletionPort = FakeFunc(lambda *a: 0xAA02)
+                self.SetInformationJobObject = FakeFunc(lambda *a: 0)
+                self.AssignProcessToJobObject = FakeFunc(lambda *a: 1)
+                self.GetQueuedCompletionStatus = FakeFunc(lambda *a: 0)
+                self.PostQueuedCompletionStatus = FakeFunc(lambda *a: 1)
+                self.OpenProcess = FakeFunc(lambda *a: 0)
+                self.CloseHandle = FakeFunc(lambda h: closed.append(h) or 1)
+
+        self.assertIsNone(holder_mod._WindowsDescendantQoSJob.start(k32=FailingAssocKernel32()))
+        self.assertEqual(closed, [0xAA02, 0xAA01])
+
+    @unittest.skipUnless(WINDOWS, "Windows only")
+    def test_live_pipe_child_three_level_tree_clears_eco_qos_without_affinity_clamp(self):
+        probe_code = """
+import ctypes, json, os, subprocess, sys
+from ctypes import wintypes
+
+class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+    _fields_ = [
+        ("Version", wintypes.DWORD),
+        ("ControlMask", wintypes.DWORD),
+        ("StateMask", wintypes.DWORD),
+    ]
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.GetCurrentProcess.argtypes = []
+k32.GetCurrentProcess.restype = wintypes.HANDLE
+k32.GetPriorityClass.argtypes = [wintypes.HANDLE]
+k32.GetPriorityClass.restype = wintypes.DWORD
+k32.GetProcessInformation.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+k32.GetProcessInformation.restype = wintypes.BOOL
+k32.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+k32.GetProcessAffinityMask.restype = wintypes.BOOL
+
+h = k32.GetCurrentProcess()
+state = PROCESS_POWER_THROTTLING_STATE(1, 0, 0)
+ok = k32.GetProcessInformation(h, 4, ctypes.byref(state), ctypes.sizeof(state))
+proc_mask = ctypes.c_size_t(0)
+sys_mask = ctypes.c_size_t(0)
+aff_ok = k32.GetProcessAffinityMask(h, ctypes.byref(proc_mask), ctypes.byref(sys_mask))
+prio = k32.GetPriorityClass(h)
+
+depth = int(sys.argv[1])
+print(json.dumps({
+    "depth": depth,
+    "pid": os.getpid(),
+    "ok": bool(ok),
+    "throttling": [state.Version, state.ControlMask, state.StateMask],
+    "priority_class": prio,
+    "aff_ok": bool(aff_ok),
+    "proc_affinity": proc_mask.value,
+    "sys_affinity": sys_mask.value,
+}), flush=True)
+if depth < 2:
+    r = subprocess.run([sys.executable, "-u", "-c", sys.argv[2], str(depth + 1), sys.argv[2]], check=True)
+"""
+        child = holder_mod.PipeChild(
+            {"argv": [PY, "-u", "-c", probe_code, "0", probe_code], "cwd": None, "env": None}
+        )
+        self.assertIsNotNone(child._qos_job)
+        job_thread = child._qos_job._thread
+        try:
+            out, err = child.proc.communicate(timeout=TIMEOUT)
+            self.assertEqual(child.proc.returncode, 0, err.decode("utf-8", "replace"))
+        finally:
+            child.after_exit()
+            child.close()
+
+        self.assertIsNone(child._qos_job)
+        self.assertFalse(job_thread.is_alive())
+
+        rows = [json.loads(line) for line in out.decode("utf-8").splitlines() if line.strip()]
+        self.assertEqual([r["depth"] for r in rows], [0, 1, 2], rows)
+        for row in rows:
+            self.assertTrue(row["ok"], row)
+            self.assertEqual(row["throttling"], [1, 1, 0], row)
+            self.assertEqual(row["priority_class"], holder_mod.NORMAL_PRIORITY_CLASS, row)
+            self.assertTrue(row["aff_ok"], row)
+            self.assertEqual(row["proc_affinity"], row["sys_affinity"], row)
+
+    @unittest.skipUnless(WINDOWS, "Windows only")
+    def test_live_pipe_child_git_bash_grandchild_clears_eco_qos(self):
+        git_exe = shutil.which("git")
+        if not git_exe:
+            self.skipTest("git not on PATH")
+        bin_bash = os.path.join(os.path.dirname(os.path.dirname(git_exe)), "bin", "bash.exe")
+        if not os.path.isfile(bin_bash):
+            self.skipTest(f"{bin_bash} not found")
+
+        probe = (
+            "import ctypes,json;from ctypes import wintypes;"
+            "S=type('S',(ctypes.Structure,),{'_fields_':[('v',wintypes.DWORD),('c',wintypes.DWORD),('s',wintypes.DWORD)]});"
+            "k=ctypes.WinDLL('kernel32',use_last_error=True);"
+            "k.GetCurrentProcess.restype=wintypes.HANDLE;"
+            "k.GetProcessInformation.argtypes=[wintypes.HANDLE,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD];"
+            "k.GetProcessInformation.restype=wintypes.BOOL;"
+            "k.GetProcessAffinityMask.argtypes=[wintypes.HANDLE,ctypes.POINTER(ctypes.c_size_t),ctypes.POINTER(ctypes.c_size_t)];"
+            "k.GetProcessAffinityMask.restype=wintypes.BOOL;"
+            "h=k.GetCurrentProcess();st=S(1,0,0);ok=k.GetProcessInformation(h,4,ctypes.byref(st),ctypes.sizeof(st));"
+            "pm=ctypes.c_size_t(0);sm=ctypes.c_size_t(0);k.GetProcessAffinityMask(h,ctypes.byref(pm),ctypes.byref(sm));"
+            "print(json.dumps({'ok':bool(ok),'throttling':[st.v,st.c,st.s],'proc_affinity':pm.value,'sys_affinity':sm.value}))"
+        )
+        py_posix = PY.replace("\\", "/")
+        cmd = f'"{py_posix}" -c "{probe}"'
+        child = holder_mod.PipeChild({"argv": [bin_bash, "-c", cmd], "cwd": None, "env": None})
+        self.assertIsNotNone(child._qos_job)
+        job_thread = child._qos_job._thread
+        try:
+            out, err = child.proc.communicate(timeout=TIMEOUT)
+            self.assertEqual(child.proc.returncode, 0, err.decode("utf-8", "replace"))
+        finally:
+            child.after_exit()
+            child.close()
+
+        self.assertIsNone(child._qos_job)
+        self.assertFalse(job_thread.is_alive())
+        row = json.loads(out.decode("utf-8").strip())
+        self.assertTrue(row["ok"], row)
+        self.assertEqual(row["throttling"], [1, 1, 0], row)
+        self.assertEqual(row["proc_affinity"], row["sys_affinity"], row)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,10 @@ type conv struct {
 	// exec cutover (exec_cutover.go): its native process tools removed in
 	// favour of the ws exec tools. Set at each start and rejoin.
 	execCutover bool
+	// unrequestedCmdWarn records a user-visible advisory when a native command
+	// ran without a permission request under the exec cutover; cleared when a
+	// new process starts.
+	unrequestedCmdWarn string
 	// launchBinary fingerprints the binary the current process launched
 	// from (harnessBinaryOf), "" for one this daemon did not launch or a
 	// backend without a cutover mechanism. Set with execCutover.
@@ -388,6 +392,9 @@ type conv struct {
 	// prompt's send is in flight.
 	awakeMember  bool
 	awakeSending bool
+	// loopBusy mirrors loop-owned safe-stop blockers (replaying, bgGraceTimer,
+	// compacting, compactCommand) for lock-free reads off the loop.
+	loopBusy atomic.Bool
 
 	// Turn settles (spawn.go). sends counts Runner.Send's messages and
 	// settled is the last settled turn, settleC closed and replaced at each
@@ -397,14 +404,19 @@ type conv struct {
 	// sends the running turn's messages covered, and reply its last reply
 	// text; all three loop-owned. quitting is set at the daemon's
 	// shutdown, whose cut-off turn the next daemon reports instead.
-	sends    uint64
-	settled  TurnResult
-	settleC  chan struct{}
-	voided   uint64
-	drained  uint64
-	turnMark uint64
-	reply    string
-	quitting bool
+	// quitting is set at the daemon's shutdown, whose cut-off turn the next
+	// daemon reports instead. kickDeferred marks a processless conversation
+	// whose start kick was deferred until StartForPublication's serving channel
+	// closes.
+	sends        uint64
+	settled      TurnResult
+	settleC      chan struct{}
+	voided       uint64
+	drained      uint64
+	turnMark     uint64
+	reply        string
+	quitting     bool
+	kickDeferred atomic.Bool
 
 	// wmu orders the record writes of update, which other conversations'
 	// goroutines also make (children.go takes a delivered report).
@@ -438,12 +450,32 @@ type conv struct {
 func (c *conv) do(fn func()) bool {
 	ran := make(chan struct{})
 	select {
-	case c.reqs <- func() { defer close(ran); fn() }:
+	case c.reqs <- func() { defer close(ran); defer c.syncLoopBusy(); fn() }:
 		<-ran
 		return true
 	case <-c.done:
 		return false
 	}
+}
+
+func (c *conv) syncLoopBusy() {
+	c.loopBusy.Store(c.replaying || c.bgGraceTimer != nil || c.compacting || c.compactCommand)
+}
+
+// safeStopSelfLocked reports whether this conversation's own process is safe to
+// stop right now (ignoring descendants, which must be checked without holding
+// c.mu). Caller holds c.mu.
+func (c *conv) safeStopSelfLocked() bool {
+	if c.closed || c.proc == nil || !isHolderBacked(c.proc) {
+		return false
+	}
+	if len(c.approvals) != 0 || c.turn || c.holding || c.bgTasks > 0 || c.cmpActive || c.ownsLiveExec() {
+		return false
+	}
+	if c.loopBusy.Load() || c.live.hasRunningNativeAgents() {
+		return false
+	}
+	return true
 }
 
 // signalInbox tells the loop the inbox changed, without waiting; signals
@@ -807,6 +839,7 @@ func (c *conv) loop() {
 	// trusted holder: publish that before the replay settles it.
 	c.publishAwake(c.wantAwake())
 	for {
+		c.syncLoopBusy()
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
 		compactC = c.compactC
@@ -988,7 +1021,6 @@ func (c *conv) memoryState() State { return c.stateWithKeyCheck(false) }
 
 func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	st := closedState(c.rec)
 	st.Status, st.ClosedAt = StatusIdle, ""
 	if c.turn {
@@ -1005,6 +1037,8 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		}
 	}
 	st.Process = c.proc != nil
+	selfSafe := c.safeStopSelfLocked()
+	replyID, isLead := c.rec.ReplyID, c.rec.Lead
 	st.Holding = c.holding && !c.closed
 	st.Hidden = c.hidden
 	if c.rec.Lead && !c.closed {
@@ -1019,6 +1053,9 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	}
 	st.Held = c.held + len(c.rec.Mail) + len(c.rec.Queued) + len(c.rec.Reports)
 	st.Error = c.lastErr
+	if c.unrequestedCmdWarn != "" {
+		st.Error = appendDiagnostic(st.Error, c.unrequestedCmdWarn)
+	}
 	if c.rejoinKeyPending && checkKey {
 		if err := c.r.opts.LeadKeys.EnsureLead(c.rec.Root, c.rec.WSKey); err != nil {
 			st.Error = appendDiagnostic(st.Error, "rejoin ws session key (advisory): "+err.Error())
@@ -1061,12 +1098,14 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		}
 	}
 	st.IsChild = c.r.isChildRecord(c.rec)
-	if !c.rec.Lead {
-		// The loop refreshes worker permission at startup and every launch or
-		// control change. State/List stay memory-only on the interactive path.
-		return st
+	if c.rec.Lead {
+		st = c.r.permissionState(st, c.rec, c.dir)
 	}
-	return c.r.permissionState(st, c.rec, c.dir)
+	c.mu.Unlock()
+	if selfSafe {
+		st.SafeStop = c.r.descendantsAllowSafeStop(replyID, isLead)
+	}
+	return st
 }
 
 func (c *conv) record() Record {
@@ -1701,6 +1740,9 @@ type nativeLaunchForgetter interface {
 // it, which each turn end submits; mail waits for the next message turn, or
 // goes alone once nothing is queued.
 func (c *conv) canKick() bool {
+	if c.proc == nil && !c.r.publicationReady() {
+		return false
+	}
 	durable := c.r.durableProcess(c.rec.Backend)
 	if durable && (c.r.durableStopping.Load() || !c.r.startupReady() || c.r.exec.deferred.Load() && !c.r.exec.bound.Load()) {
 		return false
@@ -1710,7 +1752,39 @@ func (c *conv) canKick() bool {
 		!(c.r.opts.Holders != nil && !c.r.scanDone())
 }
 
+// hasPendingKick reports from in-memory state whether a processless
+// conversation has queued work waiting to kick once serving opens.
+func (c *conv) hasPendingKick() bool {
+	c.mu.Lock()
+	held := c.held
+	c.mu.Unlock()
+	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
+		c.rec.DurableTurn != nil || c.kickDeferred.Load()
+}
+
+// deferKickIfUnpublished defers a processless start kick until
+// StartForPublication's serving channel closes. Storing kickDeferred before
+// re-checking publicationReady prevents a missed wakeup when close(serving) +
+// kickAfterServing runs between the first check and the store.
+func (c *conv) deferKickIfUnpublished() bool {
+	if c.r.publicationReady() {
+		return false
+	}
+	if hook := c.r.onDeferKick; hook != nil {
+		hook()
+	}
+	c.kickDeferred.Store(true)
+	if c.r.publicationReady() {
+		c.kickDeferred.Store(false)
+		return false
+	}
+	return true
+}
+
 func (c *conv) kick() {
+	if c.proc == nil && c.deferKickIfUnpublished() {
+		return
+	}
 	if !c.canKick() {
 		return
 	}
@@ -1820,22 +1894,39 @@ func (c *conv) kickInput() {
 		}
 		c.setStatus(func() { c.wakeRefused = false })
 	}
-	// Under mu, as Send writes: every send counted here is in the drain
+	// Under mu, as Send writes: count the sends covered by the drain
 	// (Wait's turn marks).
+	separateCron := durable && c.separatesPlanCron()
+	var isolatedCron bool
 	c.mu.Lock()
+	covered := c.sends
 	var recs []wsinbox.Record
 	if durable {
 		// Refresh under the same lock as Send, since a process start
 		// can take time and the earlier held snapshot is only advisory.
 		held, err = wsinbox.Held(c.inbox)
 		if err == nil {
+			c.held = len(held)
+			if separateCron {
+				take, cron := planInputClaims(c.rec.Queued, pending, held)
+				if take != nil {
+					isolatedCron = cron
+					available := len(pending) + len(held)
+					pending = slices.DeleteFunc(pending, func(rec wsinbox.Record) bool { return !take(rec) })
+					held = slices.DeleteFunc(held, func(rec wsinbox.Record) bool { return !take(rec) })
+					if len(pending)+len(held) < available {
+						// A held cron can be older than the input taken here.
+						// Advance the prefix once the deferred entries settle.
+						covered = c.drained
+					}
+				}
+			}
 			recs, err = wsinbox.ClaimInputs(c.inbox, held)
 		}
 	} else {
 		recs, _ = wsinbox.Drain(c.inbox)
 	}
 	c.held = max(0, c.held-len(recs))
-	covered := c.sends
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
 	if durable && err != nil {
@@ -1845,6 +1936,15 @@ func (c *conv) kickInput() {
 	if len(pending) > 0 {
 		recs = append(pending, recs...)
 		orderInboxClaims(recs)
+	}
+	if isolatedCron {
+		if len(recs) > 0 {
+			c.settlePlanCronRefusal(recs[0].Name, covered)
+		} else {
+			// A cancellation won the claim. Recheck the deferred entries.
+			c.signalInbox()
+		}
+		return
 	}
 	from := c.drained
 	if !durable {

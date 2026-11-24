@@ -110,8 +110,12 @@ func TestEveryEnglishKeyIsUsed(t *testing.T) {
 	keys, _ := usedKeys(t)
 	var unused []string
 	for k := range Table(Default) {
-		// Retain the former long ETA label for older rendered pages.
-		if k == nameKey || k == "js.wb.state.eta" {
+		// Retain the former long ETA label for older rendered pages, and
+		// deprecated terminal handoff keys until Phase 2 removal
+		// (261124-refactor-remove-terminal-handoff).
+		if k == nameKey || k == "js.wb.state.eta" ||
+			k == "js.lead.handoff" || k == "js.lead.handoff.note" ||
+			k == "js.lead.handoff.confirm.one" || k == "js.lead.handoff.confirm.other" {
 			continue
 		}
 		if _, ok := keys[k]; !ok {

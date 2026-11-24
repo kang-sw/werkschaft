@@ -8,9 +8,8 @@ import (
 
 // Meta keys capture adapters write on assembled and loss events.
 const (
-	// MetaIncomplete marks an assembled event some of whose source lines were
-	// lost (dropped tee lines, an unfenced interval, a stream that ended
-	// mid-block).
+	// MetaIncomplete marks an assembled event with lost source lines or a
+	// discarded body.
 	MetaIncomplete = "incomplete"
 	// MetaLost counts the source lines known lost on an incomplete event or a
 	// loss marker; absent when the count is unknown.
@@ -33,6 +32,7 @@ const (
 	LossFenceTimeout = "fence_timeout" // no fence within the bound; the source's tee stream closed
 	LossLate         = "late"          // a tee line arrived after its interval was finalized
 	LossQueueFull    = "queue_full"    // the daemon's capture queue was full
+	LossCaptureCap   = "capture_cap"   // the assembled body exceeded the capture byte budget
 	LossStreamEnd    = "stream_end"    // the stream ended inside an assembled block
 	LossAppendFailed = "append_failed" // finalized at or below the boundary without a retained identity
 )

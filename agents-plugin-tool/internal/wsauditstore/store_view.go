@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
@@ -281,6 +283,45 @@ func (s *Store) EventsByCallID(ctx context.Context, session, key string) ([]wsau
 		}
 	})
 	return out, err
+}
+
+// RecoverCompactionBaseline finds the latest retained manual cut for the source.
+// Capture calls it on reattachment, off the holder and conversation paths.
+// Unlike Recover, it waits for an existing cold ring before answering.
+func (s *Store) RecoverCompactionBaseline(ctx context.Context, session, source string) (boundary, counter uint64, err error) {
+	info, err := s.loaded(ctx, session)
+	if err != nil || info == nil {
+		return 0, 0, err
+	}
+	r := info.view.Load()
+	if r == nil {
+		return 0, 0, nil
+	}
+	source = wsaudit.NormalizeID(source)
+	r.view.RLock()
+	defer r.view.RUnlock()
+	for i := len(r.events) - 1; i >= 0; i-- {
+		ev, id := r.events[i], r.ids[i]
+		if id == nil || id.Source != source || ev.Kind != wsaudit.KindCompaction || ev.Meta["inferred_by"] != "command_end" {
+			continue
+		}
+		// The synthetic identity already carries the cut's position even
+		// though its SourceID has no sequenced record.
+		pos, ok := strings.CutPrefix(id.Key, "inferred.compaction.")
+		if !ok {
+			continue
+		}
+		b, n, ok := strings.Cut(pos, ".")
+		if !ok {
+			continue
+		}
+		boundary, bErr := strconv.ParseUint(b, 10, 64)
+		counter, nErr := strconv.ParseUint(n, 10, 64)
+		if bErr == nil && nErr == nil && counter > 0 {
+			return boundary, counter, nil
+		}
+	}
+	return 0, 0, nil
 }
 
 // loaded returns the session's entry with its ring in memory, recovering

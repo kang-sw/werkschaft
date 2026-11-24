@@ -956,3 +956,20 @@ func TestKeyedGateReadsKeyRecordForOtherTools(t *testing.T) {
 		t.Fatalf("%d gated calls read key.json %d times, want %d (handler %d + gate 1 each)", calls, got, want, handler)
 	}
 }
+
+func TestMailRingLinesPopulatesBodyBytes(t *testing.T) {
+	body := "hello peer with secret-session-key inside\nsecond line"
+	lines := mailRingLines("secret-session-key", []mailboxHistoryEntry{
+		{Direction: wslive.MailRecv, Counterparty: "peer@worktree", Body: body},
+		{Direction: wslive.MailSent, Counterparty: "peer@worktree", Body: ""},
+	}, []string{"k1.json", "k2.json"})
+	if len(lines) != 2 {
+		t.Fatalf("len(lines) = %d, want 2", len(lines))
+	}
+	if lines[0].BodyBytes != len(body) || lines[0].HistoryKey != "k1.json" || strings.Contains(lines[0].Title, "secret-session-key") {
+		t.Fatalf("line 0 = %+v, want BodyBytes=%d scrubbed title", lines[0], len(body))
+	}
+	if lines[1].BodyBytes != 0 || lines[1].HistoryKey != "k2.json" {
+		t.Fatalf("line 1 = %+v, want BodyBytes=0", lines[1])
+	}
+}

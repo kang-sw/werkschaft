@@ -401,7 +401,7 @@
       if (source.classList.contains("au-fail") || source.classList.contains("fail")) el.classList.add("au-fail");
       var icon = auText(el, "span", "row-icon");
       if (glyph) icon.appendChild(glyph.parentNode.cloneNode(true));
-      else icon.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-' + (item.tool ? "hammer" : "chat") + '"></use></svg>';
+      else icon.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-' + (item.tool ? (el.classList.contains("au-fail") ? "x" : "check") : "chat") + '"></use></svg>';
       var content = auText(el, "span", "row-content trace-content");
       if (name) auText(content, "span", "au-tool row-name", auReferenceText(name).trim());
       if (preview || !name) {

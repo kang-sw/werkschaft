@@ -10,6 +10,26 @@ import (
 
 func claimDir(dir string) string { return filepath.Join(dir, "runner-claims") }
 
+// VisitTurnInputPaths visits held and claimed inputs a durable runner can
+// restore, without opening their contents.
+func VisitTurnInputPaths(dir string, visit func(string) error) error {
+	for _, folder := range []string{dir, claimDir(dir)} {
+		names, err := entryNames(folder)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			if err := visit(filepath.Join(folder, name)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // DiscardClaims drops staging for a closed conversation. The runner must
 // acknowledge committed claims first and stop admitting claims before this.
 func DiscardClaims(dir string) error { return os.RemoveAll(claimDir(dir)) }

@@ -114,7 +114,8 @@ type LifecyclePolicy struct {
 	// a durable recorder for them.
 	FileWriteTools bool
 	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
-	// worker of this backend, including calls made outside the cutover.
+	// lead with live authority, including calls made outside the cutover.
+	// Immutable read-only workers use the daemon's read-only exec allowlist.
 	ReadOnlyNoExec bool
 	// ExecOptIn is the config key and label of an opt-in a backend's exec
 	// cutover needs beyond the rollout switch: off unless the key says on, and
@@ -168,10 +169,17 @@ type ConnectionPolicy struct {
 // common default named at its use.
 
 // terminalSession is implemented by a backend whose hosted lead a terminal can
-// take over and be handed back (handoff.go). Without it both are refused.
+// take over (handoff.go). Without it TakeOver and HandOff are refused.
+// Note: explicit terminal handoff (terminalResume) is deprecated; new
+// harnesses only need TakeOver support (checkTerminalSession,
+// adoptTerminalSession).
 type terminalSession interface {
 	// terminalResume is the shell command that resumes rec's conversation in a
 	// terminal, "" while it has none.
+	//
+	// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+	// removal in 261124-refactor-remove-terminal-handoff; new harnesses do not
+	// need to implement terminal handoff.
 	terminalResume(rec Record, sessionDir string) string
 	// checkTerminalSession refuses a terminal session the daemon could not
 	// adopt, before anything is written.
@@ -247,6 +255,9 @@ func (r *Runner) adoptTerminalSession(rec *Record, session string) {
 // resumeCommand is the shell command that resumes a lead session's harness
 // conversation in a terminal, or "" when its backend has none or the
 // conversation has none yet.
+//
+// Deprecated: Explicit terminal handoff is deprecated and scheduled for
+// removal in 261124-refactor-remove-terminal-handoff.
 func (r *Runner) resumeCommand(rec Record, sessionDir string) string {
 	if !rec.Lead {
 		return ""

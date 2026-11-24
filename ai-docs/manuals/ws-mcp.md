@@ -148,8 +148,8 @@ for named local endpoints (`internal/wscred`) live in one owner-only file,
 `<cache root>/dashboard/auth/credentials.json`:
 POSIX mode 0600 in a 0700 directory, on Windows a protected DACL granting
 the current user alone; never in a project tree. It sits under the daemon's
-state directory because v0.51.2's file preview already denies that whole
-directory, so a rolled-back daemon cannot show it. A pre-release build kept
+state directory because the file preview has denied that whole directory
+since v0.51.1, so a rolled-back daemon cannot show it. A pre-release build kept
 it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
 the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
 not a SQLite row, so the offline CLI can write it and nothing that copies
@@ -207,9 +207,44 @@ requires explicit consent on that registration before background use.
 
 Werk carries the operator flag from trusted lead input through the daemon's
 inbox, queue, and turn replay. Automatic nudges run as background input.
-Model file tools refuse writes under `<daemon state>/sessions/`, where the
-daemon keeps the session state it uses for operator provenance. Model reads
-of that state still follow normal file-read permissions.
+Model file tools refuse writes anywhere in the daemon state directory
+(`<cache root>/dashboard`, `wsdashboard.Dir`), by path and by file identity.
+Nothing there is a model write target: it holds the durable metadata store,
+session state, and every other daemon-owned store. An existing write target
+with more than one hard link is also compared by identity against
+`metadata.sqlite` and its `-wal`, `-shm`, and `-journal` sidecars, and against
+the session files the daemon reads back as authority (`agent.json`,
+`registration.json`, `permission.json`, `system_prompt.md`, `snapshot.json`,
+and held or claimed inbox entries), so an external hard link cannot bypass
+the path check. If the state directory cannot be resolved, model writes fail
+closed. Model reads of that state still follow normal file-read permissions.
+Project-scoped workflow paths outside it are unaffected.
+
+Background consent also covers scheduled prompts. While consent is off, a
+`ws/cron` prompt for a durable Werk lead on a ChatGPT plan is never steered
+into an interactive turn or batched with operator input. It waits for the
+turn to finish, then settles on its own with the consent-required error,
+with its inbox claim and send coverage recorded. The refused text stays out
+of the model history, including across daemon restarts. With consent on,
+cron prompts steer into the running turn as before. Consent is checked when
+the entry is claimed: a claim accepted while consent was on stays
+authorized if consent is revoked before an interrupted turn resumes. Other
+providers keep their harness's delivery rules.
+
+Scoped file replacement (`fs.write`/`fs.edit` over an existing file) never
+lets the staging file hold new bytes with wider access than the destination.
+On Linux and macOS the staging file is created exclusively at `0600` and,
+before the first byte, takes the destination's mode, owner, group, and
+access ACL, read from the verified destination handle; both are rechecked
+before the rename. On macOS, where inherited ACL entries are not masked by
+the mode, staging happens inside a locked `0700` child directory
+`.ws-stage-<sha256 of the destination name>` whose inherited ACL is removed
+first; the next replacement of the same file reclaims a stage an
+interrupted write left behind. On Windows the staging file is created with
+the destination's DACL, protection flag, owner, and integrity label, and the
+result is verified before writing and again before publication. Metadata
+that cannot be reproduced, or any mismatch, aborts the write without
+publishing. A brand-new file keeps the default creation mode.
 
 `POST /auth/provider/token` is an internal HTTP route for an external
 hosted harness with a per-session bearer (`WS_MCP_SESSION_TOKEN`) and a
@@ -620,9 +655,13 @@ HEAD's unreached commits, initialized submodules, lock, the sessions and
 terminals in it, whether force is needed, and a token of that state); `POST
 /rail/worktrees/delete` checks again and answers 409 with the fresh check
 when it is refused (primary, pooled, missing, locked, a live session or
-terminal), needs force the submit did not carry, or was forced on a stale
+terminal, or a live retired Pi holder whose working directory is in the
+checkout, even when its session row has ended or lacks a holder ID), needs force the submit did not carry, or was forced on a stale
 token; else it runs `git worktree remove [--force]` from the primary and
-keeps the branch. A viewer elsewhere gets 404.
+keeps the branch. A viewer elsewhere gets 404. The retired Pi holder check
+runs at preview, at final authorization, and again before the archive purge;
+a holder inventory that has not finished scanning counts as occupied. Force
+applies only to Git's own removal checks.
 Ended sessions fold apart under each worktree while their registry directory
 and session record exist, including beyond the index page's 24-hour window.
 An eligible closed hosted lead offers `reopen` and an eligible Claude terminal
@@ -1301,17 +1340,25 @@ Differences from a support conversation:
     A ws-mcp that outlived the session's harness re-reads the row under
     the lock before each of its row writes and stops writing once the row
     is hosted.
-  - `POST /agents/<id>/handoff` hands a hosted session to the terminal:
-    the process ends, the row becomes an ended terminal row (`hosted`,
-    `host_pid`, `harness_pid` cleared, `ended_at` set), the record is
-    marked `handed_off_at` as in an implicit hand-off, and the state
+  - `POST /agents/<id>/handoff` **(Deprecated — scheduled for removal in
+    `261124-refactor-remove-terminal-handoff`)** hands a hosted session to
+    the terminal: the process ends, the row becomes an ended terminal row
+    (`hosted`, `host_pid`, `harness_pid` cleared, `ended_at` set), the record
+    is marked `handed_off_at` as in an implicit hand-off, and the state
     carries `resume_command` (`cd <dir> && claude --resume <id>` for Claude),
-    which is answered to a viewer with
-    `can_control` only. It is refused (409) for a session with no harness
-    conversation yet, and fails when the process could not be ended. The
-    session's page carries `data-handed` while the row is an ended
-    terminal row and the record is handed off, and then reads the command
-    from `GET /agents/<id>`.
+    which is answered to a viewer with `can_control` only. It is refused
+    (409) for a session with no harness conversation yet, and fails when the
+    process could not be ended. The session's page carries `data-handed`
+    while the row is an ended terminal row and the record is handed off, and
+    then reads the command from `GET /agents/<id>`. UI entry points are
+    hidden; `POST /agents/<id>/handoff`, `Runner.HandOff`,
+    `terminalSession.terminalResume`, and `State.ResumeCommand` remain
+    working for T0 compatibility until Phase 2 removal. **New harnesses do
+    not need to implement terminal handoff (`terminalResume`).** Implicit
+    terminal re-login (`conv.release()`, `handed_off_at`, `StatusHandedOff`)
+    and reverse `POST /agents/<id>/takeover` (`TakeOver`,
+    `checkTerminalSession`, `adoptTerminalSession`) remain active and are not
+    deprecated.
   - `POST /agents/<id>/reopen` opens a closed hosted session again under
     its key, conversation, and settings. It is refused (409) once the
     session's row is a terminal's, and for a handed-off record; such a
@@ -1441,7 +1488,14 @@ Differences from a support conversation:
   native subagent (`parent_tool_use_id`), advancing once per assistant
   message ID, text-only messages included; `ctx` is input + cache read +
   cache creation tokens and is absent without usage. Codex streams carry
-  usage but no request ID, so their events omit it.
+  usage but no request ID, so their events omit it. The Antigravity adapter
+  caps an assembled thought at 1 MiB of decoded text: past the cap it drops
+  the body and records one bodyless `thinking` event with `incomplete` and
+  `loss_reason: capture_cap`, then ignores chunks until the next thought
+  boundary. On reattachment it recovers the latest retained manual
+  compaction cut for that holder (the `inferred.compaction.<boundary>.<counter>`
+  source key) and resets the usage baseline at that position, so the replay
+  does not record a second cut.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN
@@ -1548,7 +1602,8 @@ retention, plus `agent.git_search_roots` (a global-only path list that needs
 lead authority); without `repo` it lists the roots.
 
 Before a worktree read, `git.search` checks the protected credential files,
-including any retiring generation, for extra hard links. Worktree reads
+including any retiring generation, for extra hard links and for a credential
+filename that is itself a symbolic link or Windows reparse point. Worktree reads
 include `grep` outside the index or a revision, all `blame`, `ls-files`
 modes and format fields that inspect the worktree, and `log` or `show`
 with mailmap enabled or a mailmap-aware format. Index and revision reads
@@ -1558,6 +1613,16 @@ an extra link, the tool answers:
 > git.search: worktree search refused because a provider credential file has
 > an extra hard link; remove the extra link while keeping the store's file,
 > then retry
+
+A linked credential filename is refused with:
+
+> git.search: worktree search refused because a provider credential filename
+> is a symbolic link or reparse point; restore a regular credential file,
+> then retry
+
+The credential store itself still loads through a linked filename. The
+loader and the file-tool guards resolve it the same way, so both the link
+path and the resolved target's identity are protected.
 
 Pages render in one language end to end, chosen by the server from the first
 byte: the `ws_dashboard_lang` cookie when it names an available language (the

@@ -97,6 +97,29 @@ func TestUserCommandToolsRegisterReplaceUnregister(t *testing.T) {
 	if got, ok := f.host.reg.Get("lead", "/worktree", "build"); !ok || got.Line != "make clean all" {
 		t.Fatalf("stored %+v %v", got, ok)
 	}
+	// Optional prompt and cwd round-trip cleanly.
+	withExtras, isErr := f.call("session.register_user_command", map[string]any{
+		"id":      "lint",
+		"label":   "Lint",
+		"command": "make lint",
+		"prompt":  "Fix any lint errors in pkg/",
+		"cwd":     "pkg",
+	})
+	if isErr || !strings.Contains(withExtras, "status: registered") {
+		t.Fatalf("with prompt+cwd = %q, %v", withExtras, isErr)
+	}
+	if got, ok := f.host.reg.Get("lead", "/worktree", "lint"); !ok || got.Prompt != "Fix any lint errors in pkg/" || got.Cwd != "pkg" || got.Source != wsusercmd.SourceAgent {
+		t.Fatalf("stored with prompt+cwd: %+v %v", got, ok)
+	}
+	// Invalid cwd syntax is refused cleanly.
+	if text, isErr := f.call("session.register_user_command", map[string]any{
+		"id":      "badcwd",
+		"label":   "Bad",
+		"command": "true",
+		"cwd":     "a\nb",
+	}); !isErr || !strings.Contains(text, "cwd") {
+		t.Fatalf("bad cwd = %q, %v", text, isErr)
+	}
 	jsonText, isErr := f.call("session.register_user_command", map[string]any{"id": "b2", "label": "B2", "command": "true", "format": "json"})
 	var parsed struct {
 		ID       string `json:"id"`

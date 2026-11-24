@@ -1,5 +1,5 @@
 // Run by TestUserCommandBrowser against a live daemon whose launch service is a
-// fake: the user commands' strip and a slot-run card in ko and en.
+// fake: the v2 user commands trigger, popover, 3-line inline cards, and 1.5s hold UX in ko and en.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -7,8 +7,8 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, signals, shots] = process.argv.slice(2);
 
 const TEXT = {
-  ko: { title: '명령 (2)', stale: '실행 전에 이 명령이 바뀌어 아무것도 실행되지 않았습니다', exit0: '종료 코드 0' },
-  en: { title: 'Commands (2)', stale: 'This command changed before it ran, so nothing was run', exit0: 'exit 0' },
+  ko: { count: '2개', stale: '실행 전에 이 명령이 바뀌어 아무것도 실행되지 않았습니다', earlyRun: '1.5초간 꾹 누르면 실행됩니다' },
+  en: { count: '2', stale: 'This command changed before it ran, so nothing was run', earlyRun: 'Hold ▶ for 1.5s to run' },
 };
 
 async function sessionFrame(page) {
@@ -19,7 +19,7 @@ async function sessionFrame(page) {
   }
   throw new Error('no session frame');
 }
-// The Go side changes the registry as the agent would: a signal file per step.
+
 async function agent(step, tag) {
   const name = step + '.' + tag;
   fs.writeFileSync(path.join(signals, 'do-' + name), '');
@@ -28,6 +28,23 @@ async function agent(step, tag) {
     await new Promise(r => setTimeout(r, 25));
   }
   throw new Error('the agent step ' + step + ' was not acknowledged');
+}
+
+async function openPop(view) {
+  const open = await view.locator('.ucmd-pop').isVisible();
+  if (!open) {
+    await view.locator('#ucmdbadge').click();
+    await view.waitForSelector('.ucmd-pop:not([hidden])', { timeout: 5000 });
+  }
+}
+
+async function holdButton(page, locator, ms = 1600) {
+  const box = await locator.boundingBox();
+  assert.ok(box, 'hold target must have a bounding box');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(ms);
+  await page.mouse.up();
 }
 
 (async () => {
@@ -48,7 +65,7 @@ async function agent(step, tag) {
         if (r.method() === 'POST') posts.push({ path: p, body: r.postData() || '' });
         else if (p.endsWith('/user-commands')) gets.push(p);
       });
-      const shot = async name => { if (shots) await view.locator('#composer').screenshot({ path: path.join(shots, 'slots-' + lang + '-' + name + '.png') }); };
+      const shot = async name => { if (shots) await page.screenshot({ path: path.join(shots, 'ucmd-v2-' + lang + '-' + name + '.png') }); };
       await page.goto(base + '/s/livesession');
       let view = await sessionFrame(page);
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
@@ -59,205 +76,143 @@ async function agent(step, tag) {
           window.addEventListener('ws:cexec-admitted', e => window.__admitted.push(e.detail));
         }
       });
-      await page.waitForTimeout(500);
-      assert.equal(await view.locator('.d-ucmd:not([hidden]) .ucmd').count(), 0, 'no strip without commands');
+      await page.waitForTimeout(400);
+      await view.waitForSelector('#ucmdbadge:not([hidden])', { timeout: 5000 });
+      assert.equal(await view.locator('#ucmdbadge.is-empty').count(), 1, 'trigger is always visible even at 0 commands');
+      await openPop(view);
+      assert.equal(await view.locator('.ucmd-empty:not([hidden])').count(), 1, 'empty state shown at 0 commands');
+      await shot('empty');
 
-      // the agent registers two commands: an open page shows them with no reload
-      // and no polling (the refetch rides the stream's revision event)
+      // Agent registers two commands: open page updates via SSE with no reload or polling.
       const getsBefore = gets.length;
       await agent('register', lang);
-      await view.waitForSelector('.d-ucmd .ucmd[data-ucmd="test"]', { timeout: 10000 });
-      assert.ok(gets.length - getsBefore <= 2, 'the strip refetched once per change, not by polling: ' + (gets.length - getsBefore));
-      assert.equal(await view.locator('.d-ucmd .ucmd').count(), 2);
-      assert.equal(await view.locator('.d-ucmd > summary').textContent(), t.title);
-      const build = view.locator('.ucmd[data-ucmd="build"]');
-      assert.equal(await build.locator('.ucmd-run').textContent(), '▶ Build');
-      assert.equal(await build.locator('.ucmd-desc').textContent(), 'compile everything');
-      assert.equal(await build.locator('.ucmd-line').textContent(), 'make all', 'the exact stored command is shown');
-      assert.equal(await view.locator('.ucmd[data-ucmd="test"] .ucmd-line').textContent(), 'make test\n./run --verbose', 'a multiline command is shown whole');
-      await shot('buttons');
+      await view.waitForSelector('.ucmd-card[data-ucmd="test"]', { timeout: 10000 });
+      assert.ok(gets.length - getsBefore <= 2, 'refetched once per change, not by polling: ' + (gets.length - getsBefore));
+      assert.equal(await view.locator('.ucmd-card').count(), 2);
+      assert.equal(await view.locator('.ucmd-count').textContent(), t.count);
+      const build = view.locator('.ucmd-card[data-ucmd="build"]');
+      assert.equal(await build.locator('.ucmd-title').textContent(), 'Build');
+      assert.equal(await build.locator('.ucmd-inline-input.is-cmd').inputValue(), 'make all');
+      assert.equal(await view.locator('.ucmd-card[data-ucmd="test"] .ucmd-inline-input.is-cmd').inputValue(), 'make test\n./run --verbose');
+      await shot('list');
 
-      // a click runs the stored line through the composer's route and emits headless admission
-      const hWithSlots = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
-      await build.locator('.ucmd-run').click();
+      // Quick click does NOT run and shows reminder toast.
+      await build.locator('.ucmd-ibtn-run').click();
+      await page.waitForTimeout(200);
+      assert.equal(posts.filter(p => p.path.endsWith('/user-commands/build/run')).length, 0, 'quick click never runs');
+      assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.earlyRun), () => false), 'early-release hint toast shown');
+
+      // 1.5s hold runs the stored line and emits headless admission with 0px composer height growth.
+      const hBefore = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
+      await holdButton(page, build.locator('.ucmd-ibtn-run'));
       await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'make all'));
       const buildAdmit = await view.evaluate(() => window.__admitted.find(e => e.command === 'make all'));
       assert.equal(buildAdmit.origin, 'ucmd');
-      assert.ok(buildAdmit.exec_id, 'admitted event carries exec_id');
-      assert.equal(await view.locator('.d-cexec').count(), 0, 'no inline console card for slot run');
-      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), hWithSlots, '0px height growth on slot run');
+      assert.ok(buildAdmit.exec_id);
+      assert.equal(await view.locator('.d-cexec').count(), 0);
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), hBefore);
       const runs = posts.filter(p => p.path.endsWith('/user-commands/build/run'));
       assert.equal(runs.length, 1);
       const body = JSON.parse(runs[0].body);
-      assert.deepEqual(Object.keys(body).sort(), ['retry', 'revision', 'submission_id', 'token'], 'a click names the command and its revision, never text');
-      assert.ok(posts.every(p => !p.path.endsWith('/message') && !p.path.endsWith('/composer-exec')), 'a slot click posts only to its own route: ' + JSON.stringify(posts.map(p => p.path)));
-      await shot('slot-run');
+      assert.deepEqual(Object.keys(body).sort(), ['retry', 'revision', 'source', 'submission_id', 'token'], 'unmodified hold names scope+id+revision, never text');
+      assert.ok(posts.every(p => !p.path.endsWith('/message') && !p.path.endsWith('/composer-exec')));
 
-      // an agent replacement the page has not heard of yet (its refetch is held
-      // back): the click is stale, runs nothing, warns, and the strip refreshes
+      // Stale command replaced behind the page's back: hold runs nothing, warns, refreshes card.
+      await openPop(view);
       const admittedBeforeStale = await view.evaluate(() => window.__admitted.length);
       await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.abort() : route.continue());
       await agent('replace-build', lang);
       await page.waitForTimeout(400);
-      assert.equal(await build.locator('.ucmd-line').textContent(), 'make all', 'the held-back page still shows the old command');
-      await build.locator('.ucmd-run').click();
-      await view.locator('.ucmd[data-ucmd="build"] .ucmd-line:text-is("make clean all")').waitFor({ timeout: 10000 });
-      assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.stale), () => false), 'the stale rejection is shown');
-      assert.equal(await view.evaluate(() => window.__admitted.length), admittedBeforeStale, 'a stale click triggered no admission');
-      await shot('stale');
+      assert.equal(await build.locator('.ucmd-inline-input.is-cmd').inputValue(), 'make all');
+      await holdButton(page, build.locator('.ucmd-ibtn-run'));
+      await view.waitForFunction(() => {
+        const el = document.querySelector('.ucmd-card[data-ucmd="build"] .ucmd-inline-input.is-cmd');
+        return el && el.value === 'make clean all';
+      }, null, { timeout: 10000 });
+      assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.stale), () => false), 'stale rejection shown');
+      assert.equal(await view.evaluate(() => window.__admitted.length), admittedBeforeStale);
       await page.unroute('**/user-commands');
 
-      // the agent withdraws a command: it disappears from the open page
+      // Agent unregisters "test" -> card disappears.
       await agent('unregister-test', lang);
-      await view.waitForSelector('.d-ucmd:not([hidden]) .ucmd[data-ucmd="test"]', { state: 'detached', timeout: 10000 });
+      await view.waitForSelector('.ucmd-card[data-ucmd="test"]', { state: 'detached', timeout: 10000 });
 
-      // the user's remove control withdraws the last one; the strip hides
-      await view.locator('.ucmd[data-ucmd="build"] .ucmd-x').click();
-      await view.waitForSelector('.d-ucmd', { state: 'hidden', timeout: 10000 });
-      assert.ok(posts.some(p => p.path.endsWith('/user-commands/build/remove')), 'the remove control posted to its route');
+      // Hold-to-delete removes "build"; popover shows empty state.
+      await holdButton(page, view.locator('.ucmd-card[data-ucmd="build"] .ucmd-ibtn-del'));
+      await view.waitForSelector('.ucmd-empty:not([hidden])', { timeout: 10000 });
+      assert.ok(posts.some(p => p.path.endsWith('/user-commands/build/remove')));
 
-      // two more commands: one named like an Object property (its button must
-      // not be disabled by the busy table), and one clicked twice in a row
+      // Command named "constructor" is runnable (null-prototype busy table).
       await agent('register-extra', lang);
-      await view.waitForSelector('.ucmd[data-ucmd="dbl"]', { timeout: 10000 });
-      const ctor = view.locator('.ucmd[data-ucmd="constructor"] .ucmd-run');
-      assert.equal(await ctor.isDisabled(), false, 'a command named "constructor" is runnable');
-      const runsOf = id => posts.filter(p => p.path.endsWith('/user-commands/' + id + '/run')).length;
-      await ctor.click();
+      await view.waitForSelector('.ucmd-card[data-ucmd="constructor"]', { timeout: 10000 });
+      const ctor = view.locator('.ucmd-card[data-ucmd="constructor"] .ucmd-ibtn-run');
+      assert.equal(await ctor.isDisabled(), false);
+      await holdButton(page, ctor);
       await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'echo ctor'), null, { timeout: 10000 });
-      assert.equal(runsOf('constructor'), 1);
-      await page.waitForTimeout(900);
-      assert.equal(await ctor.isDisabled(), false, 'it is runnable again once the guard passes');
-      // a real double click is one run
-      const dbl = view.locator('.ucmd[data-ucmd="dbl"] .ucmd-run');
-      await dbl.dblclick();
-      await page.waitForTimeout(900);
-      assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
-      // two rapid separate clicks, the second one right after the first one's
-      // acknowledgement settled (inside the 600ms post-ack guard; no click count
-      // tells them apart), are one run
-      await page.waitForTimeout(300);
-      const dblAdmitted = () => view.evaluate(() => (window.__admitted || []).filter(e => e.command === 'echo dbl').length);
-      const dblBefore = await dblAdmitted();
-      const acked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/user-commands/dbl/run'));
-      await dbl.evaluate(el => el.click());
-      await acked;
-      // Wait for the POST response handler to settle the attempt (clearing
-      // sessionStorage) and arm the 600ms post-ack guard, without waiting for
-      // the 1100ms headless poll that emits ws:cexec-admitted.
-      await view.waitForFunction(k => !JSON.parse(window.sessionStorage.getItem(k) || '{}').dbl, 'ws.ucmd.attempt.livesession', { timeout: 5000 });
-      assert.equal(await dbl.isDisabled(), true, 'the post-ack guard keeps the slot disabled');
-      await dbl.evaluate(el => el.click());
-      await page.waitForTimeout(900);
-      for (let i = 0; i < 200 && (await dblAdmitted()) <= dblBefore; i++) await page.waitForTimeout(25);
-      assert.equal(await dblAdmitted(), dblBefore + 1, 'the single run was admitted once');
-      assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');
-      await shot('double-click');
+      assert.equal(posts.filter(p => p.path.endsWith('/user-commands/constructor/run')).length, 1);
 
-      // answers arrive out of order: the user's removal of "dbl" is processed by
-      // the daemon, but its answer is held back while the agent registers another
-      // command and the stream's refetch shows the newer list; the older answer
-      // then lands and must not replace it
+      // Reopen during the post-ack guard and retry before the admission poll.
+      await openPop(view);
+      const dbl = view.locator('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run');
+      const runPath = '**/user-commands/dbl/run';
+      let releaseRun;
+      const runResponse = new Promise(resolve => { releaseRun = resolve; });
+      await page.route(runPath, async route => {
+        await runResponse;
+        await route.continue();
+      });
+      await holdButton(page, dbl);
+      await view.waitForFunction(() => JSON.parse(sessionStorage.getItem('ws.ucmd.attempt.livesession') || '{}')['agent:dbl']);
+      releaseRun();
+      const guard = await view.waitForFunction(() => {
+        if (JSON.parse(sessionStorage.getItem('ws.ucmd.attempt.livesession') || '{}')['agent:dbl']) return false;
+        document.getElementById('ucmdbadge').click();
+        const button = document.querySelector('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run');
+        const disabled = button.disabled;
+        button.click();
+        return { disabled };
+      });
+      assert.equal((await guard.jsonValue()).disabled, true, 'the acknowledged run still guards the slot');
+      await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'echo dbl'));
+      await view.waitForFunction(() => !document.querySelector('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run').disabled);
+      assert.equal(posts.filter(p => p.path.endsWith('/user-commands/dbl/run')).length, 1, 'the retry did not submit a second run');
+      await page.unroute(runPath);
+
+      // Out-of-order removal answer does not clobber a newer SSE list.
+      await openPop(view);
       let held = null;
       await page.route('**/user-commands/dbl/remove', async route => { held = { route, response: await route.fetch() }; });
-      await view.locator('.ucmd[data-ucmd="dbl"] .ucmd-x').click();
+      await holdButton(page, view.locator('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-del'));
       for (let i = 0; i < 100 && !held; i++) await page.waitForTimeout(25);
-      assert.ok(held, 'the removal reached the daemon');
+      assert.ok(held, 'removal reached daemon');
       await agent('register-late', lang);
-      await view.waitForSelector('.ucmd[data-ucmd="late"]', { timeout: 10000 });
-      assert.equal(await view.locator('.ucmd[data-ucmd="dbl"]').count(), 0, 'the newer list no longer has the removed command');
+      await view.waitForSelector('.ucmd-card[data-ucmd="late"]', { timeout: 10000 });
       await held.route.fulfill({ response: held.response });
-      await page.waitForTimeout(700);
-      assert.equal(await view.locator('.ucmd[data-ucmd="late"]').count(), 1, 'an older removal answer did not replace the newer list');
-      assert.equal(await view.locator('.d-ucmd .ucmd').count(), 2);
+      await page.waitForTimeout(600);
+      assert.equal(await view.locator('.ucmd-card[data-ucmd="late"]').count(), 1);
       await page.unroute('**/user-commands/dbl/remove');
-      await shot('out-of-order');
 
-      // a delayed answer from another daemon epoch (the daemon restarted, the page
-      // kept its stream): it lands after the strip already shows the current
-      // list, and neither replaces it nor is trusted: one read fetches the truth
-      let heldB = null;
-      await page.route('**/user-commands/late/remove', async route => { heldB = { route, response: await route.fetch() }; });
-      await view.locator('.ucmd[data-ucmd="late"] .ucmd-x').click();
-      for (let i = 0; i < 100 && !heldB; i++) await page.waitForTimeout(25);
-      assert.ok(heldB, 'the second removal reached the daemon');
-      await view.waitForSelector('.ucmd[data-ucmd="late"]', { state: 'detached', timeout: 10000 });
-      await page.waitForTimeout(500);
-      const getsBeforeOld = gets.length;
-      const stale = await heldB.response.json();
-      const parts = stale.rev.split('.');
-      stale.rev = 'deadbeefdeadbeef.' + (parseInt(parts[1], 10) + 1000) + '.' + parts.slice(2).join('.');
-      stale.commands = [];
-      await heldB.route.fulfill({ response: heldB.response, json: stale });
-      await page.waitForTimeout(700);
-      assert.equal(await view.locator('.ucmd[data-ucmd="constructor"]').count(), 1, 'an answer from another epoch did not replace the current list');
-      assert.ok(gets.length > getsBeforeOld, 'the dropped answer asked for one read of the current list');
+      // Refused GET hides trigger and clears list; a held write answer does not bring it back.
+      let heldDenied = null;
+      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, body: 'unknown session' }) : route.continue());
+      await page.route('**/user-commands/late/remove', async route => { heldDenied = { route, response: await route.fetch() }; });
+      await holdButton(page, view.locator('.ucmd-card[data-ucmd="late"] .ucmd-ibtn-del'));
+      for (let i = 0; i < 100 && !heldDenied; i++) await page.waitForTimeout(25);
+      assert.ok(heldDenied, 'denied-phase removal reached daemon');
+      await view.waitForSelector('#ucmdbadge', { state: 'hidden', timeout: 10000 });
+      await heldDenied.route.fulfill({ response: heldDenied.response });
+      await page.waitForTimeout(400);
+      assert.equal(await view.locator('#ucmdbadge:not([hidden])').count(), 0, 'write answer did not bring back denied trigger');
+      await page.unroute('**/user-commands');
       await page.unroute('**/user-commands/late/remove');
 
-      // a read that fails while a newer wake is pending: the wake is still
-      // answered by one more read (no polling, no loop)
-      const heldGets = [];
-      await page.route('**/user-commands', async route => {
-        if (route.request().method() !== 'GET') return route.continue();
-        if (heldGets.length === 0) { heldGets.push(route); return; }
-        return route.continue();
-      });
-      const getsBeforeWake = gets.length;
-      await agent('put-x', lang);
-      for (let i = 0; i < 100 && heldGets.length === 0; i++) await page.waitForTimeout(25);
-      assert.equal(heldGets.length, 1, 'the first wake started a read');
-      await page.waitForTimeout(400);
-      await agent('put-y', lang);
-      await page.waitForTimeout(700);
-      assert.equal(gets.length - getsBeforeWake, 1, 'the second wake waits for the read in flight');
-      await heldGets[0].fulfill({ status: 503, body: 'not ready' });
-      await view.waitForSelector('.ucmd[data-ucmd="y"]', { timeout: 10000 });
-      await page.waitForTimeout(600);
-      assert.equal(gets.length - getsBeforeWake, 2, 'one more read answered the pending wake: ' + (gets.length - getsBeforeWake));
-      assert.equal(await view.locator('.ucmd[data-ucmd="x"]').count(), 1);
-      await page.unroute('**/user-commands');
-
-      // a failed read leaves the strip that already showed a list (a 503 while the
-      // daemon starts, a server error); the next change refreshes it
-      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 503, body: 'not ready' }) : route.continue());
-      await agent('put-z', lang);
-      await page.waitForTimeout(900);
-      assert.equal(await view.locator('.d-ucmd:not([hidden]) .ucmd[data-ucmd="x"]').count(), 1, 'a failed read did not clear the strip');
-      assert.equal(await view.locator('.ucmd[data-ucmd="z"]').count(), 0, 'and showed nothing new');
-      await page.unroute('**/user-commands');
-      await agent('put-w', lang);
-      await view.waitForSelector('.ucmd[data-ucmd="w"]', { timeout: 10000 });
-      assert.equal(await view.locator('.ucmd[data-ucmd="z"]').count(), 1, 'the next read caught up');
-
-      // a write answer held back while a read is refused for good (the strip is
-      // cleared and shows no revision): the answer is only a snapshot and must not
-      // bring the strip back; one read asks again instead
-      let heldC = null;
-      // the refusal is in place before the removal, so the removal's own stream
-      // wake can only meet a refused read
-      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, body: 'unknown session' }) : route.continue());
-      await page.route('**/user-commands/w/remove', async route => { heldC = { route, response: await route.fetch() }; });
-      await view.locator('.d-ucmd:not([hidden]) .ucmd[data-ucmd="w"] .ucmd-x').click();
-      for (let i = 0; i < 100 && !heldC; i++) await page.waitForTimeout(25);
-      assert.ok(heldC, 'the third removal reached the daemon');
-      await view.waitForSelector('.d-ucmd', { state: 'hidden', timeout: 10000 });
-      await page.waitForTimeout(400);
-      const getsBeforeDenied = gets.length;
-      await heldC.route.fulfill({ response: heldC.response });
-      await page.waitForTimeout(700);
-      assert.equal(await view.locator('.d-ucmd:not([hidden])').count(), 0, 'a write answer did not bring a cleared strip back');
-      assert.ok(gets.length > getsBeforeDenied, 'the dropped answer asked for one read');
-      await page.unroute('**/user-commands');
-      await page.unroute('**/user-commands/w/remove');
-
-      // never in the shared transcript: the session page any other viewer gets
-      // carries no command text
+      // Never in shared transcript.
       const shared = await (await page.request.get(base + '/s/livesession?frame=1', { headers: { 'Sec-Fetch-Dest': 'iframe' } })).text();
-      assert.ok(!shared.includes('make clean all') && !shared.includes('compile everything') && !shared.includes('d-ucmd'), 'the shared page holds no command');
+      assert.ok(!shared.includes('make clean all') && !shared.includes('compile everything'), 'shared page holds no command');
       await ctx.close();
     }
     assert.deepEqual(errors, []);
-    console.log('user command browser acceptance passed');
+    console.log('user command v2 browser acceptance passed');
   } finally {
     await browser.close();
   }

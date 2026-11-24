@@ -489,3 +489,68 @@ func TestEveryArgsPreviewIsMasked(t *testing.T) {
 		t.Fatalf("finished call args = %+v", args)
 	}
 }
+
+// TestCallBytesAndFailedReachToolSummaryAndRing verifies T0 additive byte
+// counts and per-call failed flags across normalizeCalls, ToolBatch,
+// ToolSummary (including omitted batches), and ring persistence.
+func TestCallBytesAndFailedReachToolSummaryAndRing(t *testing.T) {
+	st := NewState(ownerKey)
+	withBytes := func(c map[string]any, id string, inB, outB int) map[string]any {
+		if id != "" {
+			c["id"] = id
+		}
+		c["inBytes"] = inB
+		c["outBytes"] = outB
+		return c
+	}
+	b1 := withCalls(finishedAt(1, 100, 300, 2, 1, "Read", "Bash"),
+		withBytes(call("Read", 100, 180, false), "c1", 200, 1800),
+		withBytes(call("Bash", 120, 300, true), "c2", -50, 600))
+	mustApply(t, st, Event{Kind: KindAgent, Batches: batchesJSON(t, b1)}, 4000)
+	// Fill past ToolSummaryBatches in a second snapshot (each snapshot caps at
+	// MaxBatches) so the last batch is omitted but still contributes its bytes
+	// to ToolSummary.InBytes / OutBytes.
+	var batches []map[string]any
+	for i := 2; i <= ToolSummaryBatches+1; i++ {
+		batches = append(batches, withCalls(finishedAt(int64(i), int64(i*100), int64(i*100+50), 1, 0, "Grep"),
+			withBytes(call("Grep", int64(i*100), int64(i*100+50), false), "", 100, 300)))
+	}
+	mustApply(t, st, Event{Kind: KindAgent, Batches: batchesJSON(t, batches...)}, 5000)
+	res := mustApply(t, st, Event{Kind: KindReply, Final: true, Text: "done"}, 5100)
+	if len(res.Ring) != 2 || res.Ring[0].Tools == nil {
+		t.Fatalf("ring = %+v", res.Ring)
+	}
+	ts := res.Ring[0].Tools
+	wantTotalIn := 200 + ToolSummaryBatches*100
+	wantTotalOut := 1800 + 600 + ToolSummaryBatches*300
+	if ts.InBytes != wantTotalIn || ts.OutBytes != wantTotalOut || ts.BatchesOmitted != 1 {
+		t.Fatalf("summary bytes = (%d, %d) omitted=%d, want (%d, %d) omitted=1", ts.InBytes, ts.OutBytes, ts.BatchesOmitted, wantTotalIn, wantTotalOut)
+	}
+	first := ts.Batches[0]
+	if first.InBytes != 200 || first.OutBytes != 2400 {
+		t.Fatalf("batch 0 bytes = (%d, %d), want (200, 2400)", first.InBytes, first.OutBytes)
+	}
+	wantArgs := []ToolCallArgs{
+		{Name: "Read", ID: "c1", Failed: false, InBytes: 200, OutBytes: 1800},
+		{Name: "Bash", ID: "c2", Failed: true, InBytes: 0, OutBytes: 600},
+	}
+	if !reflect.DeepEqual(first.CallArgs, wantArgs) {
+		t.Fatalf("batch 0 CallArgs = %+v, want %+v", first.CallArgs, wantArgs)
+	}
+	dir := t.TempDir()
+	if err := AppendRing(dir, res.Ring[:1]); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ReadRing(dir)
+	if err != nil || !reflect.DeepEqual(recs[0].Tools, ts) {
+		t.Fatalf("ring round-trip = %+v err %v", recs, err)
+	}
+	// T0 compatibility: legacy ring JSON lacking inBytes/outBytes/failed reads cleanly.
+	var legacy ToolSummary
+	if err := json.Unmarshal([]byte(`{"calls":1,"batches":[{"names":["Read"],"calls":1,"callArgs":[{"name":"Read","id":"old1"}]}]}`), &legacy); err != nil {
+		t.Fatalf("legacy unmarshal failed: %v", err)
+	}
+	if legacy.InBytes != 0 || legacy.OutBytes != 0 || legacy.Batches[0].CallArgs[0].Failed {
+		t.Fatalf("legacy zero defaults violated: %+v", legacy)
+	}
+}

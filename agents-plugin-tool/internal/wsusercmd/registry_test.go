@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -413,5 +415,223 @@ func TestStoreMigrationBackfillsTheRevisionHighWater(t *testing.T) {
 	defer s.Close()
 	if got, err := s.highWater(); err != nil || got != 9 {
 		t.Fatalf("high-water after the upgrade = %d, %v; want 9", got, err)
+	}
+}
+
+// TestStoreV2InPlaceUpgradeKeepsSchemaVersionTwo: an existing schema-v2 DB
+// (pre-v2 feature: no root_user_commands table, no prompt/cwd columns on
+// user_commands) opens cleanly, preserves PRAGMA user_version == 2 (T0/T1
+// patch-safe), preserves existing rows, and performs zero write ops on a
+// subsequent reopen.
+func TestStoreV2InPlaceUpgradeKeepsSchemaVersionTwo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StoreName)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE user_commands (reply TEXT NOT NULL, root TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL, description TEXT NOT NULL, line TEXT NOT NULL, revision INTEGER NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (reply, root, id))`,
+		`CREATE TABLE meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL)`,
+		`INSERT INTO meta VALUES ('revision', 12)`,
+		`INSERT INTO user_commands VALUES ('lead', '/w', 'a', 'A', 'desc', 'echo a', 12, 1)`,
+		`PRAGMA user_version=2`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open pre-extension v2 db: %v", err)
+	}
+	var ver int
+	if err := r.store.db.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil || ver != 2 {
+		t.Fatalf("user_version = %d, %v; want 2", ver, err)
+	}
+	got, ok := r.GetBySource("lead", "/w", SourceAgent, "a")
+	if !ok || got.Line != "echo a" || got.Prompt != "" || got.Cwd != "" || got.Source != SourceAgent {
+		t.Fatalf("existing row after upgrade: %+v %v", got, ok)
+	}
+	// Create a user-scoped command and an agent command with prompt+cwd.
+	u, err := r.CreateUser("/w", Input{Label: "Lint", Line: "make lint", Prompt: "Fix lint", Cwd: "pkg"})
+	if err != nil || u.Source != SourceUser || u.Revision <= 12 || u.Prompt != "Fix lint" || u.Cwd != "pkg" {
+		t.Fatalf("create user: %+v %v", u, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second reopen performs only the two startup reads (load + highWater),
+	// zero DDL writes, and restores both scopes.
+	r2, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer r2.Close()
+	if r2.Ops() != 2 {
+		t.Fatalf("reopen performed %d ops, want 2 (load + highWater only)", r2.Ops())
+	}
+	list := r2.List("lead", "/w")
+	if len(list) != 2 || list[0].Source != SourceAgent || list[0].ID != "a" || list[1].Source != SourceUser || list[1].ID != u.ID || list[1].Prompt != "Fix lint" || list[1].Cwd != "pkg" {
+		t.Fatalf("reopened list: %+v", list)
+	}
+}
+
+// TestDualScopeCoexistencePatchAndReconcile: agent and user commands share
+// one root list ordered by seq, may share the same ID without colliding,
+// support PatchIf across both scopes without changing Source or seq, and
+// Reconcile drops dead sessions' agent commands while leaving root_user_commands
+// untouched.
+func TestDualScopeCoexistencePatchAndReconcile(t *testing.T) {
+	var notified []string
+	r, path := openTest(t, func(reply string) { notified = append(notified, reply) })
+
+	a, _, err := r.Set("live", "/w", Input{ID: "build", Label: "Agent Build", Line: "make agent", Prompt: "Check agent build", Cwd: "cmd"})
+	if err != nil || a.Source != SourceAgent || a.Prompt != "Check agent build" || a.Cwd != "cmd" {
+		t.Fatalf("agent set: %+v %v", a, err)
+	}
+	u, err := r.CreateUser("/w", Input{ID: "build", Label: "User Build", Line: "make user", Prompt: "Check user build", Cwd: "pkg"})
+	if err != nil || u.Source != SourceUser || u.ID != "build" {
+		t.Fatalf("user create same id: %+v %v", u, err)
+	}
+	// Duplicate user ID returns ErrExists.
+	if _, err := r.CreateUser("/w", Input{ID: "build", Label: "Dup", Line: "true"}); !errors.Is(err, ErrExists) {
+		t.Fatalf("duplicate user id: %v", err)
+	}
+	// Auto-slug generation and collision suffixing.
+	s1, err := r.CreateUser("/w", Input{Label: "Run Tests!", Line: "go test ./..."})
+	if err != nil || s1.ID != "run-tests" {
+		t.Fatalf("slug 1: %+v %v", s1, err)
+	}
+	s2, err := r.CreateUser("/w", Input{Label: "Run Tests!", Line: "go test -race ./..."})
+	if err != nil || !strings.HasPrefix(s2.ID, "run-tests-") || s2.ID == s1.ID || !ValidID(s2.ID) {
+		t.Fatalf("slug 2: %+v %v", s2, err)
+	}
+	// Non-ASCII label falls back to "cmd" slug.
+	s3, err := r.CreateUser("/w", Input{Label: "빌드", Line: "make"})
+	if err != nil || s3.ID != "cmd" {
+		t.Fatalf("non-ascii slug: %+v %v", s3, err)
+	}
+
+	// Merged list for "live" has both "build" entries in seq order; another session
+	// on the same root sees user commands only; another root sees none.
+	liveList, revLive := r.Snapshot("live", "/w")
+	if len(liveList) != 5 || liveList[0].Source != SourceAgent || liveList[1].Source != SourceUser || liveList[1].ID != "build" {
+		t.Fatalf("live list: %+v", liveList)
+	}
+	if got := r.RevisionFor("live", "/w"); got != revLive {
+		t.Fatalf("RevisionFor %q != Snapshot rev %q", got, revLive)
+	}
+	otherList := r.List("other", "/w")
+	if len(otherList) != 4 {
+		t.Fatalf("other session on same root: %+v", otherList)
+	}
+	if len(r.List("other", "/other-root")) != 0 {
+		t.Fatal("other root leaked user commands")
+	}
+
+	// PatchIf updates line and prompt atomically on both scopes, keeping Source and seq.
+	newLine := "make agent-v2"
+	newPrompt := "Updated prompt"
+	a2, err := r.PatchIf("live", "/w", SourceAgent, "build", a.Revision, Patch{Line: &newLine, Prompt: &newPrompt})
+	if err != nil || a2.Source != SourceAgent || a2.Line != newLine || a2.Prompt != newPrompt || a2.Cwd != "cmd" || a2.Revision <= a.Revision {
+		t.Fatalf("patch agent: %+v %v", a2, err)
+	}
+	// Stale revision refused.
+	if _, err := r.PatchIf("live", "/w", SourceAgent, "build", a.Revision, Patch{Line: &newLine}); !errors.Is(err, ErrStale) {
+		t.Fatalf("stale patch: %v", err)
+	}
+	// Patch user command.
+	uLine := "make user-v2"
+	u2, err := r.PatchIf("other", "/w", SourceUser, "build", u.Revision, Patch{Line: &uLine})
+	if err != nil || u2.Source != SourceUser || u2.Line != uLine || u2.Prompt != "Check user build" {
+		t.Fatalf("patch user: %+v %v", u2, err)
+	}
+	// Order preserved: agent "build" still precedes user "build".
+	afterPatch := r.List("live", "/w")
+	if afterPatch[0].Source != SourceAgent || afterPatch[0].Line != newLine || afterPatch[1].Source != SourceUser || afterPatch[1].Line != uLine {
+		t.Fatalf("order after patch: %+v", afterPatch[:2])
+	}
+
+	// RemoveIfSource removes only the named scope.
+	if err := r.RemoveIfSource("live", "/w", SourceUser, "build", u.Revision); !errors.Is(err, ErrStale) {
+		t.Fatalf("stale user remove: %v", err)
+	}
+	if err := r.RemoveIfSource("live", "/w", SourceUser, "build", u2.Revision); err != nil {
+		t.Fatalf("user remove: %v", err)
+	}
+	if _, ok := r.GetBySource("live", "/w", SourceAgent, "build"); !ok {
+		t.Fatal("removing user command removed same-id agent command")
+	}
+	if _, ok := r.GetBySource("live", "/w", SourceUser, "build"); ok {
+		t.Fatal("removed user command still present")
+	}
+
+	// Reconcile drops dead agent session commands but leaves user commands untouched.
+	if _, _, err := r.Set("dead", "/w", in("deadcmd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Reconcile(func(id string) bool { return id == "live" }); err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	r2, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.Close()
+	if got := r2.List("dead", "/w"); len(got) != 3 { // only the 3 surviving user commands
+		t.Fatalf("after reconcile dead session sees %+v", got)
+	}
+	for _, c := range r2.List("dead", "/w") {
+		if c.Source != SourceUser {
+			t.Fatalf("dead agent command survived reconcile: %+v", c)
+		}
+	}
+}
+
+func TestValidateWorktreeCwd(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "backend")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+
+	if _, err := ValidateWorktreeCwd(root, ""); err != nil {
+		t.Fatalf("empty cwd: %v", err)
+	}
+	if _, err := ValidateWorktreeCwd(root, "backend"); err != nil {
+		t.Fatalf("valid subdir: %v", err)
+	}
+	for name, bad := range map[string]string{
+		"escape":   "../escape",
+		"missing":  "does-not-exist",
+		"file":     "file.txt",
+		"absolute": outside,
+		"newline":  "backend\n",
+		"nul":      "backend\x00",
+	} {
+		_, err := ValidateWorktreeCwd(root, bad)
+		if err == nil || !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s (%q): got %v, want ErrInvalid", name, bad, err)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(root, "escape-link")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ValidateWorktreeCwd(root, "escape-link"); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("symlink escape: got %v, want ErrInvalid", err)
+		}
 	}
 }

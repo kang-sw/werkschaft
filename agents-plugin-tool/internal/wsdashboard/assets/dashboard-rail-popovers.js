@@ -428,6 +428,7 @@
   }
   function railPopClose(refocus) {
     if (!rp.P) return;
+    if (window.WsHoldConfirm) window.WsHoldConfirm.cancelAll();
     var P = rp.P, b = railPopBtn(), row = rp.kind === "row";
     P.close();
     P.el.hidden = true;
@@ -484,26 +485,29 @@
       toast(leadErr(status, s));
     });
   }
-  // railArchive archives ("hide") or unarchives ("unhide") the row's hosted
-  // lead through its agent route. The row moves only when the rail swap
-  // shows the new state, so a refusal leaves it where it is and says why. A
-  // 409 on archive is the runner still checking the session; the user may
-  // try again, and nothing retries here.
+  // railStop stops a live hosted row's process from the rail hover button.
+  // Safe-stop rows run on single click; unsafe rows require a 1.5s radial hold
+  // enforced by WsHoldConfirm.delegate.
+  var stopBusy = "";
+  function railStop(btn) {
+    var row = btn && btn.closest ? btn.closest(".rs") : null;
+    var id = row ? row.getAttribute("data-rid") || "" : "";
+    if (!id || stopBusy || !root.hasAttribute("data-sysopen")) return;
+    stopBusy = id;
+    railMarks();
+    railPost("/agents/" + encodeURIComponent(id) + "/stop", {}, function (status, v, s) {
+      stopBusy = "";
+      railMarks();
+      if (status !== 200) toast(leadErr(status, s));
+    });
+  }
+  // railArchive unarchives ("unhide") an archived hosted lead from the rail's
+  // archived fold. Live-row archiving lives in the right-click and session
+  // menus behind a 1.5s hold.
   var archBusy = "";
-  async function railArchive(btn) {
+  function railArchive(btn) {
     var row = btn.closest(".rs"), id = row ? row.getAttribute("data-rid") || "" : "", act = btn.getAttribute("data-act") || "";
     if (!id || archBusy || (act !== "hide" && act !== "unhide")) return;
-    // Archive asks first; unarchive stays one click.
-    if (act === "hide") {
-      archBusy = id;
-      var ok = await window.wsConfirm(wsT("js.lead.archive.confirm"), { opener: btn, accept: wsT("js.lead.archive.accept") });
-      archBusy = "";
-      // The hover-only button is hidden once the dialog covers the pointer, so
-      // focus falls back to the row's name link.
-      if (!ok && row.isConnected && document.activeElement !== btn) { var rl = row.querySelector(".rl"); if (rl) rl.focus({ preventScroll: true }); }
-      if (!ok || !row.isConnected) return;
-    }
-    if (archBusy) return;
     archBusy = id;
     railMarks();
     railPost("/agents/" + encodeURIComponent(id) + "/" + act, {}, function (status, v, s) {
@@ -758,7 +762,7 @@
       rmHeld = false;
       rmCancel(null);
       if (e.pointerType !== "touch" || !e.isPrimary) return;
-      var t = e.target, row = t.closest && !t.closest(".drgrip, input, textarea") ? t.closest(".rs") : null;
+      var t = e.target, row = t.closest && !t.closest(".drgrip, button, input, textarea") ? t.closest(".rs") : null;
       if (!row) return;
       var id = row.getAttribute("data-rid") || "", h = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: 0 };
       h.timer = setTimeout(function () {
@@ -1208,6 +1212,7 @@
     doc.addEventListener("click", function (e) {
       var t = e.target;
       if (!rp.P || !t || !t.closest) return;
+      if (window.WsHoldConfirm && (window.WsHoldConfirm.isHolding() || window.WsHoldConfirm.wasJustCancelled())) return;
       if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .hbtn, .usage-toggle, .settings-toggle, .pmdlg, .pmhead")) return;
       railPopClose(false);
     }, true);

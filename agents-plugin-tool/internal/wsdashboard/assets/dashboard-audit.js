@@ -922,10 +922,9 @@
   // --- Lazy post-render hydration for call rows ---
   function auApplyHydration(summaries, markChecked) {
     var byCall = Object.create(null);
+    var inBytesByCall = Object.create(null);
+    var outBytesByCall = Object.create(null);
     var errByCall = Object.create(null);
-    var seenRequests = Object.create(null);
-    // Summaries arrive newest first or oldest first; process oldest first so
-    // first call per request_id gets "+delta" and parallel siblings get "·".
     var ordered = Array.isArray(summaries)
       ? summaries.slice().sort(function (a, b) { return (a.seq || 0) - (b.seq || 0); })
       : [];
@@ -934,7 +933,13 @@
       if (!ev || !ev.call_id) continue;
       if (ev.kind === "tool_call") {
         byCall[ev.call_id] = ev;
+        if (typeof ev.in_bytes === "number" && isFinite(ev.in_bytes) && ev.in_bytes > 0) {
+          inBytesByCall[ev.call_id] = ev.in_bytes;
+        }
       } else if (ev.kind === "tool_result") {
+        if (typeof ev.out_bytes === "number" && isFinite(ev.out_bytes) && ev.out_bytes > 0) {
+          outBytesByCall[ev.call_id] = (outBytesByCall[ev.call_id] || 0) + ev.out_bytes;
+        }
         if (ev.subkind === "error" || (ev.title && ev.title.indexOf("error") === 0)) {
           errByCall[ev.call_id] = true;
         }
@@ -946,32 +951,40 @@
       var cid = row.getAttribute("data-call");
       if (!cid) continue;
       var s = byCall[cid];
+      var inB = inBytesByCall[cid] || 0;
+      var outB = outBytesByCall[cid] || 0;
+      var hasAny = !!(s || outB > 0 || errByCall[cid]);
       if (s || markChecked) row.setAttribute("data-au-hydrated", "1");
-      if (!s) continue;
+      if (!hasAny) continue;
 
       if (errByCall[cid] && !row.classList.contains("au-fail")) {
         row.classList.remove("au-done");
         row.classList.add("au-fail");
+        var useEl = row.querySelector(".au-mk use");
+        if (useEl) useEl.setAttribute("href", "#i-x");
       }
       var durEl = row.querySelector(".au-dur");
-      if (durEl && typeof s.duration_ms === "number" && s.duration_ms > 0) {
+      if (durEl && s && typeof s.duration_ms === "number" && s.duration_ms > 0) {
         var durText = auFmtSpan(s.duration_ms);
         if (durEl.textContent !== durText) durEl.textContent = durText;
         durEl.title = s.duration_ms + " ms";
       }
       var tokEl = row.querySelector(".au-tok");
       if (tokEl) {
-        var tg = auTokenGrowthDisplay(s, seenRequests);
-        if (tokEl.textContent !== tg.text) tokEl.textContent = tg.text;
-        tokEl.classList.toggle("au-sib", !!tg.sibling);
-        if (tg.delta != null) {
-          tokEl.title = (s.ctx_before + " \u2192 " + s.ctx_after);
-        } else if (tg.sibling && s.request_id) {
-          tokEl.title = s.request_id;
+        var estText = auEstContextText(inB, outB);
+        tokEl.classList.remove("au-sib");
+        if (estText) {
+          if (tokEl.textContent !== estText) tokEl.textContent = estText;
+          tokEl.title = auEstContextTitle(inB, outB, s);
+        } else if (s && typeof s.ctx_before === "number" && typeof s.ctx_after === "number" &&
+                   isFinite(s.ctx_before) && isFinite(s.ctx_after) && tokEl.textContent) {
+          var ctxNote = s.ctx_before + " \u2192 " + s.ctx_after;
+          if (!tokEl.title) tokEl.title = ctxNote;
+          else if (tokEl.title.indexOf(ctxNote) === -1) tokEl.title = tokEl.title + " \u00b7 " + ctxNote;
         }
       }
       var attEl = row.querySelector(".au-att");
-      var attCnt = Array.isArray(s.attached) ? s.attached.length : 0;
+      var attCnt = s && Array.isArray(s.attached) ? s.attached.length : 0;
       if (attEl) {
         if (attCnt > 0) {
           var attText = "+" + attCnt;
@@ -1202,6 +1215,9 @@
     fmtBytes: auFmtBytes,
     fmtSpan: auFmtSpan,
     tokenGrowth: auTokenGrowthDisplay,
+    estContextTokens: auEstContextTokens,
+    estContextText: auEstContextText,
+    estContextTitle: auEstContextTitle,
     renderBody: auRenderBodyContent,
     applyHydration: auApplyHydration,
     hydrate: auHydrateCalls,

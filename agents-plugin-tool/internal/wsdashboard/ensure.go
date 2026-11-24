@@ -34,8 +34,8 @@ const (
 )
 
 // DefaultStartWait bounds how long Ensure waits for a started daemon's
-// endpoint file: the daemon's own lock wait plus start-up.
-const DefaultStartWait = DefaultLockWait + 5*time.Second
+// endpoint file: the successor's lock wait plus start-up.
+const DefaultStartWait = SuccessorLockWait + 15*time.Second
 
 // maxSpawns bounds the daemons one Ensure starts: the first, and one more to
 // replace an older daemon that a concurrent older ws-mcp started and that won

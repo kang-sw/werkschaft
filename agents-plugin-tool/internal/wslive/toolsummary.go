@@ -70,10 +70,14 @@ type ToolBatch struct {
 	DurationMs int64 `json:"durationMs,omitempty"`
 	// Usage is the request's tokens, when the adapter reported them.
 	Usage *TokenUsage `json:"usage,omitempty"`
-	// CallArgs, when any call the batch carried had an argument preview or
-	// a call ID, is every carried call's name, preview, and ID in call order
-	// (up to BatchCallCap); absent otherwise, as for an adapter that sends
-	// neither.
+	// InBytes and OutBytes sum the batch's tool call input and output byte
+	// lengths across carried calls, when the adapter reported them.
+	InBytes  int `json:"inBytes,omitempty"`
+	OutBytes int `json:"outBytes,omitempty"`
+	// CallArgs, when any call the batch carried had an argument preview, a
+	// call ID, or byte counts, is every carried call's name, preview, ID,
+	// failure flag, and byte counts in call order (up to BatchCallCap);
+	// absent otherwise.
 	CallArgs []ToolCallArgs `json:"callArgs,omitempty"`
 }
 
@@ -85,7 +89,10 @@ type ToolCallArgs struct {
 	// (wsaudit.NormalizeID), the key of the call's audit events (their
 	// call_id); empty for an adapter that sends none and for entries
 	// written before IDs were carried.
-	ID string `json:"id,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Failed   bool   `json:"failed,omitempty"`
+	InBytes  int    `json:"inBytes,omitempty"`
+	OutBytes int    `json:"outBytes,omitempty"`
 }
 
 // ToolSummary is the lead's finished tool batches over one gap.
@@ -106,6 +113,10 @@ type ToolSummary struct {
 	// Usage sums the tokens of the gap's batches that reported them, the
 	// omitted ones included; absent when none did.
 	Usage *TokenUsage `json:"usage,omitempty"`
+	// InBytes and OutBytes sum the tool call input and output byte lengths
+	// across all batches in the gap, omitted batches included.
+	InBytes  int `json:"inBytes,omitempty"`
+	OutBytes int `json:"outBytes,omitempty"`
 }
 
 // toolGap accumulates the lead's finished batches since the last
@@ -114,6 +125,8 @@ type toolGap struct {
 	counts         map[string]int
 	otherCalls     int
 	calls, failed  int
+	inBytes        int
+	outBytes       int
 	startedAt      int64
 	endedAt        int64
 	batches        []ToolBatch
@@ -149,8 +162,11 @@ func (g *toolGap) add(b BatchView) {
 		credited += n
 	}
 	var tallies []ToolTally
+	var batchIn, batchOut int
 	if len(b.Calls) > 0 {
 		for _, c := range b.Calls {
+			batchIn += max(c.InBytes, 0)
+			batchOut += max(c.OutBytes, 0)
 			credit(c.Name, 1)
 			i := slices.IndexFunc(tallies, func(t ToolTally) bool { return t.Name == c.Name })
 			if i < 0 {
@@ -168,19 +184,36 @@ func (g *toolGap) add(b BatchView) {
 			credit(name, n)
 		}
 	}
+	g.inBytes += batchIn
+	g.outBytes += batchOut
 	g.otherCalls += max(b.CallCount-credited, 0)
 	if len(g.batches) >= ToolSummaryBatches {
 		g.batchesOmitted++
 		return
 	}
-	tb := ToolBatch{Names: append([]string(nil), b.ToolNames...), Tools: tallies, Calls: b.CallCount, Failed: b.Failed, DurationMs: spanMs(b.StartedAt, b.EndedAt)}
+	tb := ToolBatch{
+		Names:      append([]string(nil), b.ToolNames...),
+		Tools:      tallies,
+		Calls:      b.CallCount,
+		Failed:     b.Failed,
+		DurationMs: spanMs(b.StartedAt, b.EndedAt),
+		InBytes:    batchIn,
+		OutBytes:   batchOut,
+	}
 	if b.Usage != nil {
 		u := *b.Usage
 		tb.Usage = &u
 	}
-	if slices.ContainsFunc(b.Calls, func(c BatchCall) bool { return c.ArgsPreview != "" || c.ID != "" }) {
+	if slices.ContainsFunc(b.Calls, func(c BatchCall) bool { return c.ArgsPreview != "" || c.ID != "" || c.InBytes > 0 || c.OutBytes > 0 }) {
 		for _, c := range b.Calls {
-			tb.CallArgs = append(tb.CallArgs, ToolCallArgs{Name: c.Name, ArgsPreview: c.ArgsPreview, ID: c.ID})
+			tb.CallArgs = append(tb.CallArgs, ToolCallArgs{
+				Name:        c.Name,
+				ArgsPreview: c.ArgsPreview,
+				ID:          c.ID,
+				Failed:      c.Failed,
+				InBytes:     max(c.InBytes, 0),
+				OutBytes:    max(c.OutBytes, 0),
+			})
 		}
 	}
 	g.batches = append(g.batches, tb)
@@ -207,6 +240,8 @@ func (g *toolGap) summary() *ToolSummary {
 		OtherCalls:     g.otherCalls,
 		Batches:        cloneToolBatches(g.batches),
 		BatchesOmitted: g.batchesOmitted,
+		InBytes:        g.inBytes,
+		OutBytes:       g.outBytes,
 	}
 	if g.hasUsage {
 		u := g.usage

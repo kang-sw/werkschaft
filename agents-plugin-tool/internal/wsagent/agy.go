@@ -103,7 +103,14 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		// refuses it (agy 1.5.14 live probe: native auto and
 		// --dangerously-skip-permissions run commands without asking, and
 		// top-level --settings rules do not reach ACP sessions).
-		ExecCutover: &ExecCutoverSupport{Since: "1.5.14", LaunchMode: agyCutoverMode, RejectTools: []string{agyCommandTool}, Instruction: agyExecCutoverInstruction},
+		ExecCutover: &ExecCutoverSupport{
+			Since:                     "1.5.14",
+			LaunchMode:                agyCutoverMode,
+			RejectTools:               []string{agyCommandTool},
+			AutoApprove:               agyCutoverAutoApprove,
+			Instruction:               agyExecCutoverInstruction,
+			UnrequestedCommandWarning: agyUnrequestedCommandWarning,
+		},
 		Profiles: []BuiltinProfileRegistration{
 			agentWorkerBuiltinProfile(BackendAgy, nil),
 			leadBuiltinProfile(LeadProfileAgy, BackendAgy, ""),
@@ -166,7 +173,12 @@ const agyCutoverMode = "default"
 // prompt at session creation, and sent once as a prompt at the end of a
 // turn whose run_command call the daemon refused (or that ran one without
 // a permission request): agy shows the model no refusal text of its own.
-const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_write`, `exec_stop` and `exec_list`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
+const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Do not delegate shell commands to `invoke_subagent` to bypass this rule. Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_write`, `exec_stop` and `exec_list`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
+
+// agyUnrequestedCommandWarning is surfaced to the user when ~/.gemini
+// always-allow rules let run_command execute without a permission request
+// under the exec cutover.
+const agyUnrequestedCommandWarning = "A native run_command ran without a permission request under the exec cutover (check ~/.gemini always-allow rules so shell commands route through ws exec tools)."
 
 // agyRingSkip matches agy's thought chunks, which the mapper drops: a
 // lead's holder keeps them out of its ring. A line whose shape this no
@@ -278,6 +290,7 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	// Set before startChild: a rejoin's holder replay maps through m too.
 	m.lead = spec.Lead != nil
 	m.cutover = spec.ExecCutover
+	m.warnNativeSubagent = spec.ExecCutover && (spec.Lead == nil || !spec.Lead.PreferNativeSubagent)
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
 	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
@@ -764,9 +777,11 @@ type agyMapper struct {
 	// (openBg, bgCalls), and requested and ranUnrequested correlate the
 	// permission requests and execution evidence of its commands by tool
 	// call id (Event.UnrequestedCommand).
-	cutover        bool
-	requested      map[string]bool
-	ranUnrequested map[string]bool
+	cutover            bool
+	warnNativeSubagent bool
+	requested          map[string]bool
+	ranUnrequested     map[string]bool
+	warnedSubagent     map[string]bool
 	modelFailure   string
 	// content is set while mapping one session/update that carried model
 	// content (text, thought, its holder pulse, or a plan).
@@ -849,6 +864,7 @@ func newAgyMapper(sessionID string) *agyMapper {
 		approvalOf:     map[string]string{},
 		requested:      map[string]bool{},
 		ranUnrequested: map[string]bool{},
+		warnedSubagent: map[string]bool{},
 		nativeLaunch:   map[string]bool{},
 	}
 }
@@ -1132,6 +1148,7 @@ func (m *agyMapper) request(msg agyMessage, replies lineReplies, now int64) []Ev
 		ToolCall struct {
 			ToolCallID string          `json:"toolCallId"`
 			Name       string          `json:"name"`
+			Kind       string          `json:"kind"`
 			Title      string          `json:"title"`
 			Args       json.RawMessage `json:"args"`
 			RawInput   json.RawMessage `json:"rawInput"`
@@ -1166,7 +1183,7 @@ func (m *agyMapper) request(msg agyMessage, replies lineReplies, now int64) []Ev
 	if tool == "" {
 		tool = p.ToolCall.Title
 	}
-	return append(out, Event{Approval: &ApprovalRequest{ID: id, Tool: tool, Input: input, Description: p.ToolCall.Title, ToolUseID: p.ToolCall.ToolCallID, StartedAt: now}})
+	return append(out, Event{Approval: &ApprovalRequest{ID: id, Tool: tool, Kind: p.ToolCall.Kind, Input: input, Description: p.ToolCall.Title, ToolUseID: p.ToolCall.ToolCallID, StartedAt: now}})
 }
 
 func compactRaw(raw json.RawMessage) json.RawMessage {
@@ -1537,6 +1554,7 @@ type agyUpdate struct {
 	Title             string            `json:"title"`
 	Status            string            `json:"status"`
 	Args              json.RawMessage   `json:"args"`
+	RawInput          json.RawMessage   `json:"rawInput"`
 	RawOutput         json.RawMessage   `json:"rawOutput"`
 	Used              *int64            `json:"used"`
 	Size              int64             `json:"size"`
@@ -1643,10 +1661,17 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 				m.openCalls[u.ToolCallID] = true
 			}
 		}
-		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), now)...)
+		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), len(agyAuditBody(u.Args, u.RawInput)), now)...)
 		m.groupCalls = true
 		if name == agyInvokeSubagentTool {
 			out = append(out, m.nativeStart(u, now)...)
+			if m.warnNativeSubagent && u.ToolCallID != "" && !m.warnedSubagent[u.ToolCallID] {
+				if len(m.warnedSubagent) >= agyCorrelationCap {
+					clear(m.warnedSubagent)
+				}
+				m.warnedSubagent[u.ToolCallID] = true
+				out = append(out, Event{UnrequestedSubagent: u.ToolCallID})
+			}
 		}
 		return append(out, m.toolStatus(u, replaying, now)...)
 	case "tool_call_update":
@@ -1711,7 +1736,7 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 	delete(m.pendingTools, u.ToolCallID)
 	delete(m.openCalls, u.ToolCallID)
 	delete(m.openBg, u.ToolCallID)
-	out = append(out, m.batches.endCall(u.ToolCallID, failed, now)...)
+	out = append(out, m.batches.endCall(u.ToolCallID, failed, len(agyAuditBody(u.RawOutput, u.Content)), now)...)
 	if m.nativeLaunch[u.ToolCallID] {
 		// A completed launch only means the child runs asynchronously; its
 		// row stays running until the runner settles it at the parent's

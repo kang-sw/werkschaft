@@ -49,34 +49,40 @@
     if (lbl) lbl.textContent = closed;
     else el.textContent = closed;
   }
+  function subagentCloseSend(replyId, trigger, onDone) {
+    if (trigger) trigger.disabled = true;
+    fetch("/agents/" + encodeURIComponent(replyId) + "/close", {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json" }, body: "{}"
+    }).then(function (r) {
+      return r.text().then(function (body) {
+        if (r.status !== 200) throw new Error(leadErr(r.status, body.trim()));
+        document.querySelectorAll("[data-reply-id]").forEach(function (el) {
+          if (el.getAttribute("data-reply-id") === replyId) {
+            el.setAttribute("data-subagent-closed", "1");
+            if (el.hasAttribute("data-child-close")) markChildCloseButton(el);
+          }
+        });
+        subagentClosing[replyId] = "closed";
+        document.dispatchEvent(new CustomEvent("ws:subagent-closed", { detail: { replyId: replyId } }));
+      });
+    }).catch(function (err) {
+      delete subagentClosing[replyId];
+      if (trigger && trigger.isConnected) trigger.disabled = false;
+      toast(wsT("js.subagent.close.error", err.message || wsT("js.post.unreachable")));
+    }).then(onDone);
+  }
+  function subagentCloseDirect(replyId, trigger) {
+    if (!root.hasAttribute("data-can-control") || !replyId || subagentClosing[replyId]) return;
+    subagentClosing[replyId] = true;
+    subagentCloseSend(replyId, trigger, function () {});
+  }
   function subagentClose(replyId, label, state, trigger) {
     if (!root.hasAttribute("data-can-control") || !replyId || subagentClosing[replyId]) return;
     subagentClosing[replyId] = true;
     function restore() { if (trigger && trigger.isConnected && trigger.focus) trigger.focus(); }
     function cancel() { delete subagentClosing[replyId]; restore(); }
-    function send() {
-      if (trigger) trigger.disabled = true;
-      fetch("/agents/" + encodeURIComponent(replyId) + "/close", {
-        method: "POST", credentials: "same-origin", cache: "no-store",
-        headers: { "Content-Type": "application/json" }, body: "{}"
-      }).then(function (r) {
-        return r.text().then(function (body) {
-          if (r.status !== 200) throw new Error(leadErr(r.status, body.trim()));
-          document.querySelectorAll("[data-reply-id]").forEach(function (el) {
-            if (el.getAttribute("data-reply-id") === replyId) {
-              el.setAttribute("data-subagent-closed", "1");
-              if (el.hasAttribute("data-child-close")) markChildCloseButton(el);
-            }
-          });
-          subagentClosing[replyId] = "closed";
-          document.dispatchEvent(new CustomEvent("ws:subagent-closed", { detail: { replyId: replyId } }));
-        });
-      }).catch(function (err) {
-        delete subagentClosing[replyId];
-        if (trigger && trigger.isConnected) trigger.disabled = false;
-        toast(wsT("js.subagent.close.error", err.message || wsT("js.post.unreachable")));
-      }).then(restore);
-    }
+    function send() { subagentCloseSend(replyId, trigger, restore); }
     if (state === "idle" || state === "done" || state === "failed") { send(); return; }
     if (subagentDialog && subagentDialog.open) { cancel(); return; }
     var dl = mk("dialog", "rdeldlg"), title = dl.appendChild(mk("h2", "rdhd"));
@@ -983,9 +989,19 @@
     // archive hides the session from the rail (no process, mail held until
     // unarchive); on an archived session it is unarchive (back to asleep).
     var archive = actBtn("archive", "", wsT("js.lead.archive")), archT = archive.b.lastChild.firstChild;
-    var handoff = actBtn(luIcon("square-terminal"), "", wsT("js.lead.handoff")), close = actBtn("power", " danger", wsT("js.lead.close"));
-    handoff.note.textContent = wsT("js.lead.handoff.note");
-    close.note.textContent = wsT("js.lead.close.note");
+    var close = actBtn("power", " danger", wsT("js.lead.close"));
+    function holdHintNote(base) { return base + " · " + wsT("js.hold.hint"); }
+    function drawStopNote(st) {
+      if (!st || !st.process) { stop.note.textContent = wsT("js.lead.stopped"); return; }
+      stop.note.textContent = st.safe_stop ? wsT("js.lead.stop.note") : holdHintNote(wsT("js.lead.stop.note"));
+    }
+    function drawArchiveNote(st) {
+      archive.note.textContent = st && st.hidden ? wsT("js.lead.unarchive.note") : holdHintNote(wsT("js.lead.archive.note"));
+    }
+    function drawCloseNote() {
+      close.note.textContent = holdHintNote(wsT("js.lead.close.note"));
+    }
+    drawCloseNote();
     // state is the session's last read state.
     function state() { return inRow ? P.st : lead.st; }
     // bgTasks is the background task count of the last read state.
@@ -1085,38 +1101,59 @@
       }
       act(action, {});
     }
-    stop.b.addEventListener("click", function () {
-      var n = bgTasks();
-      confirmAction("stop", stop.b, n > 0 ? wsTn("js.lead.stop.confirm", n) : "", n);
-    });
-    archive.b.addEventListener("click", async function () {
-      var st = state(), opener = railPopBtn() || archive.b;
-      railPopClose(false);
-      if (!(st && st.hidden)) {
-        // Archive asks first; unarchive stays one click. The menu has closed,
-        // so focus returns to its opener on cancel.
-        var target = P.rid, gen = P.gen, page = rid;
-        if (!(await window.wsConfirm(wsT("js.lead.archive.confirm"), { opener: opener, accept: wsT("js.lead.archive.accept") }))) return;
-        st = state();
-        if (P.gen !== gen || P.rid !== target || rid !== page || !opener.isConnected || leadGone(st) || (st && st.hidden)) return;
+    function canActOn(button, extra) {
+      var st = state();
+      return !button.disabled && !leadGone(st) && !!st.can_control && !leadActions.has(P.rid) && (inRow || P.rid === rid) && (!extra || extra(st));
+    }
+    function bindHold(button, noteEl, restoreNote, opts) {
+      if (window.WsHoldConfirm) {
+        return window.WsHoldConfirm.attach(button, {
+          mode: "bar",
+          shouldHold: opts.shouldHold,
+          canStart: opts.canStart,
+          onReady: function () { noteEl.textContent = wsT("js.hold.release"); },
+          onCancel: function () { restoreNote(state()); if (typeof railRelease === "function") railRelease(); },
+          onConfirm: function () { opts.onConfirm(); if (typeof railRelease === "function") railRelease(); }
+        });
       }
-      act(st && st.hidden ? "unhide" : "hide", {});
+      button.addEventListener("click", function () {
+        if (opts.canStart(button)) opts.onConfirm();
+      });
+      return { sync: function () {}, cancel: function () {} };
+    }
+    var stopHold = bindHold(stop.b, stop.note, drawStopNote, {
+      shouldHold: function () { var st = state(); return !(st && st.safe_stop); },
+      canStart: function () { return canActOn(stop.b, function (st) { return !!st.process; }); },
+      onConfirm: function () {
+        if (!canActOn(stop.b, function (st) { return !!st.process; })) return;
+        railPopClose(false);
+        act("stop", {});
+      }
+    });
+    var archiveHold = bindHold(archive.b, archive.note, drawArchiveNote, {
+      shouldHold: function () { var st = state(); return !(st && st.hidden); },
+      canStart: function () { return canActOn(archive.b); },
+      onConfirm: function () {
+        var st = state();
+        if (!canActOn(archive.b)) return;
+        railPopClose(false);
+        act(st && st.hidden ? "unhide" : "hide", {});
+      }
+    });
+    var closeHold = bindHold(close.b, close.note, drawCloseNote, {
+      shouldHold: function () { return true; },
+      canStart: function () { return canActOn(close.b); },
+      onConfirm: function () {
+        var st = state(), target = P.rid;
+        if (!canActOn(close.b)) return;
+        railPopClose(false);
+        if (st && st.is_child) subagentCloseDirect(target, close.b);
+        else act("close", {});
+      }
     });
     restart.b.addEventListener("click", function () {
       var n = bgTasks();
       confirmAction("restart", restart.b, n > 0 ? wsTn("js.lead.restart.confirm", n) : "", n);
-    });
-    handoff.b.addEventListener("click", function () {
-      var n = bgTasks();
-      confirmAction("handoff", handoff.b, n > 0 ? wsTn("js.lead.handoff.confirm", n) : "", n);
-    });
-    close.b.addEventListener("click", function () {
-      var st = state(), n = bgTasks(), target = P.rid;
-      if (st && st.is_child) {
-        railPopClose(false);
-        var phase = st.approvals && st.approvals.length ? "permission" : st.holding ? "holding" : st.status === "running" ? "thinking" : "idle";
-        subagentClose(target, st.label || target, phase, close.b);
-      } else confirmAction("close", close.b, n > 0 ? wsTn("js.lead.close.confirm.bg", n) : wsT("js.lead.close.confirm"), n);
     });
     // draw shows the session's state; it runs when the menu opens and after
     // every read of the state while it is open.
@@ -1136,22 +1173,33 @@
       permDraw(st);
       rows.disable(P.busy);
       stop.b.disabled = P.busy || !st.process;
-      stop.note.textContent = wsT(st.process ? "js.lead.stop.note" : "js.lead.stopped");
+      var stopSig = (st.process ? "1" : "0") + ":" + (st.safe_stop ? "1" : "0");
+      if (stop.b.getAttribute("data-stop-sig") !== stopSig) {
+        stop.b.setAttribute("data-stop-sig", stopSig);
+        stop.b.setAttribute("data-safe", st.safe_stop ? "1" : "0");
+        stop.b.classList.toggle("danger", !!(st.process && !st.safe_stop));
+        stop.b.replaceChild(gIcon(st.process && st.safe_stop ? "moon" : "stop"), stop.b.firstChild);
+        stopHold.sync();
+      }
+      if (stop.b.getAttribute("data-hold-state") !== "ready") drawStopNote(st);
+      if (stop.b.disabled) stopHold.cancel();
       var broken = Array.isArray(st.mcp_broken) ? st.mcp_broken.map(String) : [];
       restart.b.hidden = !broken.length;
       restart.b.disabled = P.busy;
-      handoff.b.hidden = !!st.is_child;
       archive.b.hidden = !!st.is_child;
-      handoff.b.disabled = P.busy;
       archive.b.disabled = P.busy;
       if (archive.b.getAttribute("data-hidden") !== String(!!st.hidden)) {
         archive.b.setAttribute("data-hidden", String(!!st.hidden));
         archive.b.replaceChild(gIcon(st.hidden ? "archive-restore" : "archive"), archive.b.firstChild);
         archT.textContent = wsT(st.hidden ? "js.lead.unarchive" : "js.lead.archive");
-        archive.note.textContent = wsT(st.hidden ? "js.lead.unarchive.note" : "js.lead.archive.note");
+        archiveHold.sync();
       }
+      if (archive.b.getAttribute("data-hold-state") !== "ready") drawArchiveNote(st);
+      if (archive.b.disabled || archive.b.hidden) archiveHold.cancel();
       restart.note.textContent = broken.length ? wsT("js.lead.restart.note", broken.join(", ")) : "";
       close.b.disabled = P.busy || subagentClosing[P.rid] === "closed";
+      if (close.b.getAttribute("data-hold-state") !== "ready") drawCloseNote();
+      if (close.b.disabled) closeHold.cancel();
       err.textContent = text;
       err.hidden = !text;
     };
@@ -1202,6 +1250,9 @@
     };
     P.focus = function () { rows.model.focus(); };
     P.close = function () {
+      stopHold.cancel();
+      archiveHold.cancel();
+      closeHold.cancel();
       permFullDrop();
       if (!inRow) return;
       P.gen++;

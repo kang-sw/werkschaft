@@ -27,12 +27,16 @@ function vars(source, names) {
     return found[0];
   }).join('');
 }
-const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorCap0', 'anchorProg', 'WHEEL_OWN']) +
-  anchorSrc.match(/\n  var WHEEL_DEFAULTS = \{[\s\S]*?\n  \};\n/)[0] +
-  funcs(anchorSrc, ['createBoardWheel', 'anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCancelGlide', 'anchorGlide', 'anchorCardCap', 'anchorLandingTop',
-    'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
+const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorCap0', 'anchorProg',
+    'FREE_RUNWAY_MID', 'FREE_RUNWAY_HEIGHT', 'FREE_RUNWAY_MARGIN', 'FREE_IDLE_RECENTER_MS', 'FREE_BASE_WINDOW', 'FREE_MAX_WINDOW', 'FREE_VIEWPORT_COVERAGE', 'FREE_CARD_GAP', 'FREE_RESIZE_EPS', 'FREE_FALLBACK_H', 'FREE_BOT_PAD',
+    'freeActive', 'freeWinStart', 'freePos', 'freeCardRO', 'freeScrollRaf']) +
+  funcs(anchorSrc, ['anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
+    'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark',
+    'freeEnabled', 'freeTopPad', 'freeMeasureHeight', 'freeCachedHeight', 'freeSetOffWindow', 'freeClearNode', 'freeCancelTimers', 'freeSuspend', 'freeSuspendForOverview', 'freeResumeFromOverview',
+    'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeScrollTick', 'freeIdleRecenter', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
+    'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
-    'anchorSize', 'anchorCancelProg', 'anchorCanReach', 'anchorCanInnerScroll', 'anchorHandleWheel', 'anchorOnWheel', 'anchorOnFrameWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
+    'anchorSize', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -141,6 +145,10 @@ function world(spec, opt = {}) {
     },
     boardBoxes: () => [board], editing: () => false, reducedMotion: () => true, wsT: s => s, setTimeout() { return 1; }, clearTimeout() {}, postTheme() {},
     shHidden: false, deferred: null, boardDragHeld: null, boardOverviewHeld: null, heldSwap: null, raf: [],
+    virtualExemptSet: new Set(), virtualExemptDirty: new Set(), virtualNearSet: new Set(), virtualInitialized: false, virtualLastBounded: false,
+    virtualDescribeNode: n => ({ isTopic: n && n.tagName === 'SECTION', collapsed: false }),
+    virtualIsItemExempt: d => !(d && d.isTopic),
+    virtualCollapse() {}, virtualHydrate() {},
     requestAnimationFrame(fn) { g.raf.push(fn); return g.raf.length; },
     getComputedStyle: n => { C.d.style++; return { overflowY: n.overflowY || 'visible' }; },
     applyBoard(staged) {
@@ -215,17 +223,25 @@ test('removal of the current card falls back to the next card, else the previous
   assert.equal(w.cur(), 't:C', 'a card that leaves the order (hidden) hands over too');
 });
 
-test('wheel-virtualized deck: no CSS scroll-snap drift, overscroll-behavior-y contain on inner scrollers, explicit data-has-panel-max, and no .board-step buttons or i18n keys', () => {
+test('Designated-Y free-canvas board: no snap-deck slot height caps or wheel interception, split off-window CSS, Overview overrides, and no .board-step buttons or i18n keys', () => {
   assert.doesNotMatch(cssSrc, /scroll-snap-type\s*:/);
   assert.doesNotMatch(cssSrc, /scroll-snap-align\s*:/);
   assert.doesNotMatch(cssSrc, /scroll-snap-stop\s*:/);
-  assert.match(cssSrc, /section\.topic\[data-topic\]:not\(\[data-max\]\)[^}]*overscroll-behavior-y:\s*contain/);
-  assert.match(cssSrc, /\.bcard\[data-card\]:not\(\[data-max\]\)\s*>\s*\.bc-in\s*>\s*\.bc-body[^}]*overscroll-behavior-y:\s*contain/);
+  assert.doesNotMatch(cssSrc, /--board-slot-h/);
+  assert.doesNotMatch(cssSrc, /overscroll-behavior-y:\s*contain/);
+  assert.doesNotMatch(cssSrc, /:not\(\[data-max\]\)[^>]*>\s*\.bc-in\s*>\s*\.bc-body[^}]*height:\s*auto\s*!important/);
   assert.doesNotMatch(cssSrc, /:has\(details\.entry-panel\[data-max\]\)/);
-  assert.match(cssSrc, /:not\(\[data-has-panel-max\]\)/);
+  assert.match(cssSrc, /#bcol\[data-board-free\]/);
+  assert.match(cssSrc, /contain:\s*layout style/);
+  assert.match(cssSrc, /\[data-has-panel-max\]/);
+  assert.match(cssSrc, /\[data-wb-offwindow="hidden"\]:not\(\[data-max\]\)/);
+  assert.match(cssSrc, /\[data-wb-offwindow="parked"\]:not\(\[data-max\]\)/);
+  assert.match(cssSrc, /:root\[data-overview\][\s\S]*?#r-board/);
+  assert.match(cssSrc, /\.overview-preview-stage/);
   assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
-  assert.match(anchorSrc, /addEventListener\(\s*["']wheel["'][^)]*passive\s*:\s*false/);
+  assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["']/);
+  assert.doesNotMatch(anchorSrc, /WsBoardWheel/);
   const w = world([T('A'), T('B')]);
   w.c.anchorInit();
   assert.equal(w.bar.children[0].children.length, 0, 'anchorInit mounts no .board-step toolbar buttons');
@@ -260,7 +276,7 @@ test('WsBoardAnchor.step navigates both ways across an interleaved sequence and 
   assert.equal(w.node('t:C').hasAttribute('data-current'), false);
 });
 
-test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches top line', () => {
+test('board-usable clears top 2-row rail and bottom 2-row rail; unbounded clears data-board-bounded and free canvas', () => {
   const w = world([T('A'), T('B'), T('C')]);
   w.bcol.overflowY = 'auto';
   w.bcol.style.setProperty('--wb-rail-inset', '34px');
@@ -271,20 +287,15 @@ test('board-usable clears top 2-row rail and bottom 2-row rail; runway reaches t
   // topSpace = 34 + capH(2)=44 = 78; bot2 = 47 => usable = 800 - 78 - 47 = 675
   assert.equal(w.bcol.props.get('--board-usable'), '675px');
   assert.equal(w.bcol.props.get('--board-h'), '800px');
-  assert.equal(w.bcol.props.get('--board-top-0'), '38px');
-  assert.equal(w.bcol.props.get('--board-top-1'), '58px');
-  assert.equal(w.bcol.props.get('--board-top-2'), '78px');
-  assert.equal(w.bcol.props.get('--board-bot-0'), '6px');
-  assert.equal(w.bcol.props.get('--board-bot-1'), '27px');
-  assert.equal(w.bcol.props.get('--board-bot-2'), '47px');
-  assert.equal(w.bcol.props.get('--board-card-gap'), '59px');
   assert.equal(w.bcol.hasAttribute('data-board-bounded'), true);
+  assert.equal(w.bcol.hasAttribute('data-board-free'), true);
   assert.equal(w.bcol.props.has('--board-runway'), false);
-  // Unbounded document-scrolled board must clear --board-usable
+  // Unbounded document-scrolled board must clear --board-usable and data-board-free
   w.bcol.overflowY = 'visible';
   w.bcol.style.removeProperty = k => w.bcol.props.delete(k);
   w.c.anchorSize([{ target: w.bcol, contentBoxSize: [{ inlineSize: 900, blockSize: 5000 }], contentRect: { width: 900, height: 5000 } }]);
   assert.equal(w.bcol.hasAttribute('data-board-bounded'), false);
+  assert.equal(w.bcol.hasAttribute('data-board-free'), false);
   assert.equal(w.bcol.props.has('--board-usable'), false);
   assert.equal(w.bcol.props.has('--board-runway'), false);
 });
@@ -489,23 +500,36 @@ test('anchorSlotCaps isolates data-anchor-last to the trailing non-rail .bcard',
   assert.equal(w.node('t:B').getAttribute('data-anchor-last'), '1');
 });
 
-test('anchorOnWheel ignores wheel events inside .tpop, open popover, or dialog[open]', () => {
-  const w = world([T('A'), T('B')]);
+test('free-canvas viewport-wide boardGuards and anchorExposed hold updates for all visible cards and flush on scroll-out', () => {
+  const w = world([T('A'), T('B'), T('C'), T('D')]);
   w.bcol.overflowY = 'auto';
-  w.c.anchorInit();
-  w.select('t:A');
-  for (const hit of ['.tpop', '[popover]:popover-open', 'dialog[open]']) {
-    let prevented = false;
-    w.c.anchorOnWheel({
-      defaultPrevented: false,
-      ctrlKey: false,
-      deltaY: 120,
-      deltaX: 0,
-      deltaMode: 1,
-      target: { closest: sel => sel.includes(hit) ? {} : null },
-      preventDefault: () => { prevented = true; }
-    });
-    assert.equal(prevented, false, 'wheel inside ' + hit + ' must not be intercepted');
-    assert.equal(w.cur(), 't:A', 'wheel inside ' + hit + ' must not change current card');
+  w.bcol.clientHeight = 700;
+  w.bcol.getBoundingClientRect = () => ({ top: 0, bottom: 700, left: 0, right: 800, height: 700, width: 800 });
+  const heights = { 't:A': 250, 't:B': 250, 't:C': 250, 't:D': 250 };
+  for (const [k, h] of Object.entries(heights)) {
+    const node = w.node(k);
+    node.offsetHeight = h;
+    node.getBoundingClientRect = () => {
+      const y = w.c.freePos.get(node) || 0;
+      return { top: y - w.bcol.st, bottom: y + h - w.bcol.st, left: 0, right: 800, height: h, width: 800 };
+    };
   }
+  w.c.anchorInit();
+  w.bcol.st = 0;
+  // At scrollTop=0 with 700px viewport: A (0..250), B (266..516), C (532..782) all intersect viewport; D (798..1048) is below.
+  assert.deepEqual(Array.from(w.c.boardGuards()), ['A', 'B', 'C']);
+  assert.equal(w.c.anchorExposed(w.node('t:B')), true, 'non-anchor visible card B is exposed');
+  assert.equal(w.c.anchorExposed(w.node('t:D')), false, 'below-viewport buffer card D is not exposed');
+
+  // Updates to visible non-anchor card B are staged, while off-viewport buffer card D applies immediately.
+  w.update({ B: 'b2', D: 'd2' });
+  assert.equal(w.node('t:B').attrs['data-th'], 'r1', 'visible card B held');
+  assert.equal(w.node('t:D').attrs['data-th'], 'd2', 'below-viewport buffer card D admitted immediately');
+  assert.deepEqual(Object.keys(w.c.boardPending), ['B']);
+
+  // Scrolling past B so B leaves the visible viewport triggers freeFlushScrolledOutHeld -> boardFlushViewed(false).
+  w.bcol.st = 600;
+  w.c.freeScrollTick();
+  assert.equal(w.node('t:B').attrs['data-th'], 'b2', 'held update on B flushed once B scrolled out of viewport');
+  assert.equal(Object.keys(w.c.boardPending).length, 0);
 });

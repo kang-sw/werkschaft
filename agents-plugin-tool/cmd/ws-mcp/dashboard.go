@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -201,18 +202,31 @@ func dashboardCommand(args []string) {
 		CompanionOneShot:    wsagent.RunOneShot,
 		CompanionHasOneShot: wsagent.HasOneShot,
 		BeforeUnlock: func() {
-			if err := boards.Close(); err != nil {
-				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
+			var wg sync.WaitGroup
+			run := func(fn func()) {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					fn()
+				}()
 			}
-			exportMailbox.call()
-			// Under the lock, so the successor never fires the same schedules.
-			cron.close(logw)
-			// And so the successor's user commands are the only ones that commit.
-			if u := host.userCmds.Load(); u != nil {
-				if err := u.Close(); err != nil {
-					fmt.Fprintf(logw, "dashboard: user commands close: %v\n", err)
+			run(func() {
+				if err := boards.Close(); err != nil {
+					fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
 				}
-			}
+			})
+			run(exportMailbox.call)
+			// Under the lock, so the successor never fires the same schedules.
+			run(func() { cron.close(logw) })
+			// And so the successor's user commands are the only ones that commit.
+			run(func() {
+				if u := host.userCmds.Load(); u != nil {
+					if err := u.Close(); err != nil {
+						fmt.Fprintf(logw, "dashboard: user commands close: %v\n", err)
+					}
+				}
+			})
+			wg.Wait()
 		},
 	})
 	if errors.Is(err, wsdashboard.ErrLocked) {
@@ -568,7 +582,7 @@ func dashboardStarters(ctx context.Context, dir string, candidate func() (string
 			return err
 		}
 		if strict {
-			return wsdashboard.SpawnDetachedStrict(exe, append(args, "--lock-wait", "8s"), dir)
+			return wsdashboard.SpawnDetachedStrict(exe, append(args, "--lock-wait", wsdashboard.SuccessorLockWait.String()), dir)
 		}
 		return wsdashboard.SpawnDetached(exe, args, dir)
 	}

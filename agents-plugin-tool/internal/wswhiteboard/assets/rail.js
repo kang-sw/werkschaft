@@ -133,6 +133,7 @@
     cx.textContent = extra ? "+" + extra : "";
   }
 
+  var freeWinKey = "", freeWinChanged = false;
   function run() {
     raf = 0;
     if (motionRaf) cancelAnimationFrame(motionRaf);
@@ -146,6 +147,69 @@
         (staleGhosts || (staleGhosts = {}))[e] = g;
       }
     });
+    var freeInfo = (host.hasAttribute && host.hasAttribute("data-board-free") && window.WsBoardAnchor && window.WsBoardAnchor.windowInfo) ? window.WsBoardAnchor.windowInfo() : null;
+    if (freeInfo && !freeInfo.active) freeInfo = null;
+    if (freeInfo) {
+      var list = freeInfo.list || [], railList = freeInfo.railList || [];
+      var start = Math.max(0, freeInfo.start || 0), end = Math.min(list.length - 1, freeInfo.end != null ? freeInfo.end : -1);
+      var offBefore = freeInfo.railBefore && start < freeInfo.railBefore.length ? freeInfo.railBefore[start] : 0;
+      var winTopics = [], winRects = [], winRailIdx = [], rIdx = offBefore;
+      for (var wi = start; wi <= end; wi++) {
+        var c = list[wi];
+        if (!c || !(c.hasAttribute("data-topic") || c.hasAttribute("data-rail"))) continue;
+        var wr = c.getBoundingClientRect();
+        if (wr.height) { winTopics.push(c); winRects.push(wr); winRailIdx.push(rIdx); }
+        rIdx++;
+      }
+      var nextFreeWinKey = start + ":" + end + ":" + winTopics.length;
+      if (nextFreeWinKey !== freeWinKey) { freeWinKey = nextFreeWinKey; freeWinChanged = true; }
+      found = winTopics;
+      dirty = false;
+      topics = railList;
+      var wn = winTopics.length;
+      if (!wn || !railList.length) return draw(null, staleGhosts);
+      var afterStart = rIdx;
+      var offAfter = Math.max(0, railList.length - afterStart);
+      var fvt = viewTop(), fvb = root ? root.getBoundingClientRect().bottom : window.innerHeight;
+      var fi = -1;
+      for (var fk = 0; fk < wn && winRects[fk].top <= fvt + capH(Math.min(2, winRailIdx[fk])) + 1; fk++) fi = fk;
+      var curLocal = fi >= 0 && winRects[fi].bottom > fvt + capH(Math.min(2, winRailIdx[fi])) + 1 ? fi : -1;
+      var fcur = curLocal >= 0 ? winRailIdx[curLocal] : -1;
+      var fabove = fcur >= 0 ? fcur : (fi >= 0 ? winRailIdx[fi] + 1 : offBefore), fnTop = Math.min(2, fabove), ftop = capH(fnTop);
+      var freply = box.querySelector(".reply"), freplyOff = freply && freply.offsetHeight ? freply.offsetHeight + 14 : 0;
+      var fline = fvb - freplyOff - BOT, fbelow = [], frest = scrollRest();
+      for (fk = curLocal >= 0 ? curLocal + 1 : fi + 1; fk < wn; fk++) {
+        if (winRects[fk].top >= fline && !(winRects[fk].top < fvb && winRects[fk].top - frest >= fline)) fbelow.push(winRailIdx[fk]);
+      }
+      var totalBelow = fbelow.length + offAfter;
+      for (var fa = 0; fa < offAfter && fbelow.length < 2 && afterStart + fa < railList.length; fa++) {
+        fbelow.push(afterStart + fa);
+      }
+      var fbar = curLocal >= 0 ? stickOf(winTopics[curLocal]) : null;
+      var fbarOff = 0;
+      if (!fbar && wn > 0 && fabove === 0 && winRects[0].top > fvt + 1) {
+        var fcap0 = winTopics[0].getAttribute && winTopics[0].getAttribute("data-anchor-cap");
+        if (fcap0 !== "rail0" && (fcap0 === "0" || winRects[0].top <= fvt + 16)) {
+          fbar = stickOf(winTopics[0]);
+          fbarOff = Math.max(0, Math.round(winRects[0].top - fvt));
+        }
+      }
+      var fbarH = fbar ? fbar.offsetHeight : 0;
+      return draw({
+        top: ftop,
+        cur: fcur,
+        bar: fbar,
+        barH: fbarH,
+        barOff: fbarOff,
+        stuck: curLocal >= 0 && winRects[curLocal].top < fvt + ftop - 0.5,
+        up: [fabove - 1, fabove - 2].filter(function (x) { return x >= 0 && x < railList.length; }),
+        upMore: Math.max(0, fabove - 2),
+        down: fbelow.slice(0, 2),
+        downMore: Math.max(0, totalBelow - 2),
+        replyOff: freplyOff
+      }, staleGhosts);
+    }
+    freeWinKey = "";
     if (dirty) { found = Array.prototype.slice.call(box.querySelectorAll(ITEMS)); dirty = false; fresh = true; }
     var rects = [];
     topics = [];
@@ -216,7 +280,7 @@
       // starving morphs during continuous scrolling.
       if (pending) after(pending);
       dropStaleGhosts(staleGhosts);
-      if (fresh || hChanged) offsets();
+      if (fresh || hChanged || freeWinChanged) { freeWinChanged = false; offsets(); }
       return;
     }
     last = key;
@@ -284,6 +348,7 @@
   }
   function offsets() {
     fresh = false;
+    freeWinChanged = false;
     found.forEach(function (t) { put(stickOf(t), "--wb-rail-top", vals.top); });
     put(host.querySelector(".oq-wrap.wb-oq-top"), "--wb-rail-h", vals.h);
     put(host.querySelector(".oq-wrap.wb-oq-bot"), "--wb-rail-bot", vals.bot);
@@ -493,7 +558,23 @@
   if (mo) mo.observe(host, { attributes: true, attributeFilter: ["style", "class"] });
   scroller.addEventListener("scroll", kick, { passive: true });
   window.addEventListener("resize", reflow);
-  var ro = window.ResizeObserver ? new ResizeObserver(reflow) : null;
+  var boardWidth = -1;
+  function onResize(entries) {
+    if (entries && entries.length && host.hasAttribute && host.hasAttribute("data-board-free")) {
+      var onlyBoardHeight = true;
+      for (var ei = 0; ei < entries.length; ei++) {
+        var et = entries[ei].target;
+        var isBoard = et && (et.id === "r-board" || (et.classList && et.classList.contains("r-board")));
+        if (!isBoard) { onlyBoardHeight = false; break; }
+        var w = entries[ei].contentRect ? Math.round(entries[ei].contentRect.width) : -1;
+        if (w >= 0 && boardWidth >= 0 && w !== boardWidth) { onlyBoardHeight = false; boardWidth = w; break; }
+        if (w >= 0) boardWidth = w;
+      }
+      if (onlyBoardHeight) { kick(); return; }
+    }
+    reflow();
+  }
+  var ro = window.ResizeObserver ? new ResizeObserver(onResize) : null;
   if (ro) {
     ro.observe(box);
     Array.prototype.forEach.call(box.children, function (c) { if (!c.classList.contains("wb-rail-wrap") && !c.classList.contains("oq-wrap")) ro.observe(c); });

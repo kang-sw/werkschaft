@@ -644,6 +644,8 @@
       if (window.wbAgo) window.wbAgo(page);
       mermaid(page);
       if (kept) kept.h.apply();
+      if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
+      if (typeof boardDialSync === "function") boardDialSync();
       return true;
     }, function () { btn.disabled = false; return false; });
   }

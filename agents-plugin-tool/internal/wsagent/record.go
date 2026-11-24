@@ -499,6 +499,27 @@ type liveWriter struct {
 	// records that a held change needs the closing write, batchWake that a
 	// held ring append owes file-only readers a wake after it. Loop-owned.
 	batch, batchChanged, batchWake bool
+	// runningNativeAgents mirrors the count of running host-native subagent
+	// rows (AgentKind == "") currently in st for lock-free reads off the
+	// conversation loop.
+	runningNativeAgents atomic.Int32
+}
+
+func (w *liveWriter) syncRunningNativeAgents() {
+	if w == nil || w.st == nil {
+		return
+	}
+	var n int32
+	for _, a := range w.st.Snapshot(w.now().UnixMilli()).Agents {
+		if a.Status == wslive.StatusRunning && a.AgentKind == "" {
+			n++
+		}
+	}
+	w.runningNativeAgents.Store(n)
+}
+
+func (w *liveWriter) hasRunningNativeAgents() bool {
+	return w != nil && w.runningNativeAgents.Load() > 0
 }
 
 // beginBatch starts holding the writer's publications (batch).
@@ -614,7 +635,21 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 	if extraFound {
 		extraDisk, _ = json.Marshal(extra)
 	}
+	var lastSnapshot []byte
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
+		if prev.HolderSeq != nil {
+			// Seed lastSnapshot from the raw disk snapshot before overlaying
+			// extra scales so unchanged startup projections publish to RAM
+			// without rewriting snapshot.json on boot; legacy pre-coverage
+			// files (HolderSeq == nil) still rewrite on first flush to upgrade.
+			diskPrev := prev.ForDisk()
+			diskPrev.UpdatedAt = 0
+			diskPrev.HolderID = ""
+			diskPrev.HolderSeq = nil
+			if b, err := json.Marshal(diskPrev); err == nil {
+				lastSnapshot = b
+			}
+		}
 		restored = restoredAgyNativeOf(prev, st.ReplyID())
 		restored.erased = restored.readable && !restored.covered && extra.Coverage
 		// Rows an older writer seeded without their scale take it back.
@@ -643,6 +678,7 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		restored:          restored,
 		extra:             extra,
 		extraDisk:         extraDisk,
+		lastSnapshot:      lastSnapshot,
 	}
 }
 
@@ -666,6 +702,9 @@ func (w *liveWriter) applyRAM(ev wslive.Event) bool {
 	if err != nil {
 		fmt.Fprintf(w.log, "agent %s: drop %s event: %v\n", w.st.ReplyID(), ev.Kind, err)
 		return false
+	}
+	if ev.Kind == wslive.KindAgent {
+		w.syncRunningNativeAgents()
 	}
 	if len(res.Ring) > 0 || len(res.Observed) > 0 || res.OutputRate != nil {
 		// Not a RAM-only change after all: take the file-fenced path.
@@ -705,6 +744,9 @@ func (w *liveWriter) applyMode(ev wslive.Event, coalesceTurnEnd bool) bool {
 	} else {
 		res, err = w.st.Apply(ev, w.now().UnixMilli())
 	}
+	if err == nil && ev.Kind == wslive.KindAgent {
+		w.syncRunningNativeAgents()
+	}
 	// A backend may attach a stable native identity to a finished reply.
 	// Keep it in the existing ring source member, in the same write as the
 	// text, so lost-holder-ring recovery can distinguish persisted output
@@ -729,6 +771,9 @@ func (w *liveWriter) applyMode(ev wslive.Event, coalesceTurnEnd bool) bool {
 func (w *liveWriter) applyQuiet(ev wslive.Event) {
 	res, err := w.st.Apply(ev, w.now().UnixMilli())
 	if err == nil {
+		if ev.Kind == wslive.KindAgent {
+			w.syncRunningNativeAgents()
+		}
 		w.writeObserved(res.Observed)
 		w.holdOutputRate(res.OutputRate)
 	}

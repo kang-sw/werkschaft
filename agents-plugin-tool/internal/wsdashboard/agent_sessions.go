@@ -116,13 +116,15 @@ type AgentHistoryPurger interface {
 // AgentSessionMeta holds a runner conversation's in-memory metadata for
 // dashboard rendering without touching disk.
 type AgentSessionMeta struct {
-	Hosted  bool
-	IsChild bool
-	Closed  bool
-	Active  bool
-	Backend string
-	Model   string
-	Effort  string
+	Hosted     bool
+	IsChild    bool
+	Closed     bool
+	Active     bool
+	HasProcess bool
+	SafeStop   bool
+	Backend    string
+	Model      string
+	Effort     string
 }
 
 // AgentSessionMetaHost is an optional AgentHost that exposes in-memory

@@ -301,3 +301,113 @@ func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestActivityRowPolishIconsAndContextTokens(t *testing.T) {
+	// Verify estContextTokens / estContextText / estContextTitle parity with JS.
+	if got := estContextTokens(0, 0); got != 0 {
+		t.Fatalf("estContextTokens(0,0) = %d", got)
+	}
+	if got := estContextText(1, 0); got != "+1" {
+		t.Fatalf("estContextText(1,0) = %q", got)
+	}
+	if got := estContextText(100, 68); got != "+42" {
+		t.Fatalf("estContextText(100,68) = %q", got)
+	}
+	if got := estContextText(2048, 5325); got != "+1.8k" {
+		t.Fatalf("estContextText(2048,5325) = %q", got)
+	}
+	if got := estContextTitle(2048, 5325); got != "~1.8k tok (in 2.0 KB + out 5.2 KB)" {
+		t.Fatalf("estContextTitle = %q", got)
+	}
+
+	// Single call rows with partial batch failure + collapsed batch summary with Failed > 0.
+	summary := &wslive.ToolSummary{
+		Calls:      5,
+		Failed:     2,
+		DurationMs: 2_000,
+		InBytes:    3048,
+		OutBytes:   8125,
+		Batches: []wslive.ToolBatch{
+			{
+				Names:    []string{"Read", "Bash"},
+				Calls:    2,
+				Failed:   1,
+				InBytes:  2248,
+				OutBytes: 6125,
+				CallArgs: []wslive.ToolCallArgs{
+					{Name: "Read", ArgsPreview: "a.go", ID: "c1", Failed: false, InBytes: 2048, OutBytes: 5325},
+					{Name: "Bash", ArgsPreview: "go test", ID: "c2", Failed: true, InBytes: 200, OutBytes: 800},
+				},
+			},
+			{
+				// Collapsed batch without CallArgs: Failed > 0 (< Calls) must render au-fail and #i-x.
+				Names:    []string{"Edit"},
+				Calls:    3,
+				Failed:   1,
+				InBytes:  800,
+				OutBytes: 2000,
+			},
+		},
+	}
+	rec := ringRecord(2, wslive.RingEntry{Kind: wslive.RingTools, Tools: summary})
+	set, err := renderSessionRegions(historyView([]wslive.RingRecord{rec}, "", PageContent{}, sessionLookup{}), newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := stdhtml.UnescapeString(string(set[regionEntries].HTML))
+	if strings.Contains(html, "#i-hammer") {
+		t.Errorf("audit call rows must not render hammer icon:\n%s", html)
+	}
+	for _, want := range []string{
+		`class="conv-row au-row au-done" data-call="c1"><span class="row-icon au-mk"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg></span>`,
+		`<span class="au-tok" title="~1.8k tok (in 2.0 KB + out 5.2 KB)">+1.8k</span>`,
+		`class="conv-row au-row au-fail" data-call="c2"><span class="row-icon au-mk"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></span>`,
+		`<span class="au-tok" title="~250 tok (in 200 B + out 800 B)">+250</span>`,
+		`class="conv-row au-row au-fail au-static"><span class="row-icon au-mk"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></span>`,
+		`<span class="au-tok" title="~700 tok (in 800 B + out 2.0 KB)">+700</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered audit rows missing %q:\n%s", want, html)
+		}
+	}
+
+	// Legacy collapsed toolsline: uses #i-x when Failed > 0, #i-check when Failed == 0,
+	// and renders summed context tokens on .tsn and batchNums .btok.
+	legacyFail := &wslive.ToolSummary{
+		Calls:    2,
+		Failed:   1,
+		InBytes:  2048,
+		OutBytes: 5325,
+		Tools:    []wslive.ToolTally{{Name: "Bash", Calls: 2}},
+		Batches:  []wslive.ToolBatch{{Names: []string{"Bash"}, Calls: 2, Failed: 1, InBytes: 2048, OutBytes: 5325}},
+	}
+	legacyPass := &wslive.ToolSummary{
+		Calls:    1,
+		InBytes:  400,
+		OutBytes: 800,
+		Tools:    []wslive.ToolTally{{Name: "Read", Calls: 1}},
+		Batches:  []wslive.ToolBatch{{Names: []string{"Read"}, Calls: 1, InBytes: 400, OutBytes: 800}},
+	}
+	lset, err := renderSessionRegions(historyView([]wslive.RingRecord{
+		ringRecord(3, wslive.RingEntry{Kind: wslive.RingTools, Tools: legacyFail}),
+		ringRecord(4, wslive.RingEntry{Kind: wslive.RingTools, Tools: legacyPass}),
+	}, "", PageContent{}, sessionLookup{}), newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lhtml := stdhtml.UnescapeString(string(lset[regionEntries].HTML))
+	if strings.Contains(lhtml, "#i-hammer") {
+		t.Errorf("toolsline must not render hammer icon:\n%s", lhtml)
+	}
+	for _, want := range []string{
+		`<span class="row-icon"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></span>`,
+		`<span class="row-icon"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg></span>`,
+		`<span class="ttok" title="~1.8k tok (in 2.0 KB + out 5.2 KB)">+1.8k</span>`,
+		`<span class="btok" title="~1.8k tok (in 2.0 KB + out 5.2 KB)">+1.8k</span>`,
+		`<span class="ttok" title="~300 tok (in 400 B + out 800 B)">+300</span>`,
+	} {
+		if !strings.Contains(lhtml, want) {
+			t.Errorf("rendered legacy toolsline missing %q:\n%s", want, lhtml)
+		}
+	}
+}

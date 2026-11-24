@@ -22,7 +22,7 @@ function slice(src, from, to) {
   return src.slice(a, b);
 }
 const pickers = read('dashboard-composer-pickers.js');
-const css = [WB, read('dashboard.css'), read('dashboard-conversation.css'), read('dashboard-exec-hud.css'), read('dashboard-rail.css')].join('\n');
+const css = [WB, read('dashboard.css'), read('dashboard-conversation.css'), read('dashboard-exec-hud.css'), read('dashboard-composer-ucmd.css'), read('dashboard-rail.css')].join('\n');
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;padding:340px 24px 24px;width:760px">
 <div id="composer" class="composer" data-cexec="1"><div class="cbadges"><button type="button" class="ibadge" id="ibadge" hidden><span class="istop"></span><span class="ilabel">Stop</span></button><span class="sbwrap"><button type="button" class="sbadge" id="sbadge" hidden><span class="spin"></span><span class="slabel"></span><span class="sword">running</span></button><span class="bgbadge" id="bgbadge" hidden><span class="blabel"></span></span><span class="bgbadge" id="monbadge" hidden><span class="blabel"></span></span></span></div><div class="cimgs" id="cimgs"></div><div class="cchips" id="cchips"></div><div class="crow"><div class="cfield"><div class="chl" id="chl"></div><textarea id="ctext" rows="1" placeholder="x"></textarea></div><button type="button" class="csend" id="csend">s</button></div><div class="cfoot"></div></div>
 <button id="after" type="button">after</button></body></html>`;
@@ -33,7 +33,7 @@ function wsT(k) { var s = T[k] || k; for (var i = 1; i < arguments.length; i++) 
 var composer = $("composer"), ctext = $("ctext"), inputMode = "enter", mention = null, slash = null, cmdSel = null;
 var xhPeekEl = null; function xhPeekOpen() { return false; } function xhPeekId() { return ""; } function xhOpenPeek() {} function xhClosePeek() {} function xhAskStop() {} function xhPeekSync() {} function xhPeekJobsChanged() {} function xhStopSettle() {} function xhPeekDestroy() {}
 if (window.WsCapsules) window.WsCapsules.attach(ctext);
-function grow() {} function clearMentions() {} function saveDraft() {} function queueDraft() {} function noteWarn(m) { window.__warn = m; }
+function grow() {} function clearMentions() {} function saveDraft() {} function queueDraft() {} function noteWarn(m) { window.__warn = m; } function noteOk(m) { window.__ok = m; } function post(r, b, d) { d(true, {}); }
 function copyText() {} function syncMarkers() {} function trackMentions() {} function syncChips() {} function followImgs() {} function inBoard() { return false; } function uncommand() {}
 function execWake() { window.__execWakes = (window.__execWakes || 0) + 1; }
 function sendMessage() { if (!cexecSend()) window.__msg = ctext.value; }
@@ -97,6 +97,7 @@ async function open(t, pre, opts) {
   const mount = async (afterReloadPre) => {
     await page.addScriptTag({ content: read('capsules.js') });
     await page.addScriptTag({ content: read('mention.js') });
+    await page.addScriptTag({ content: read('hold-confirm.js') });
     await page.addScriptTag({ content: route });
     const hook = afterReloadPre !== undefined ? afterReloadPre : pre;
     if (hook) await page.evaluate(hook);
@@ -116,7 +117,7 @@ async function open(t, pre, opts) {
 
 test('shell mode flag follows the first character, paints the bang, and keeps 0px height growth', { skip }, async t => {
   const { page, type, state, errs } = await open(t);
-  await page.waitForSelector('.d-ucmd .ucmd');
+  await page.waitForSelector('#ucmdbadge:not([hidden])');
   const h0 = await page.evaluate(() => composer.getBoundingClientRect().height);
   assert.equal(await page.locator('.d-cexec, .cbang').count(), 0, 'no inline console or cbang hint row');
   await type('!echo hi');
@@ -202,7 +203,7 @@ test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors,
     };
   `;
   const { page, type, errs } = await open(t, timerControl);
-  await page.waitForSelector('.d-ucmd .ucmd');
+  await page.waitForSelector('#ucmdbadge:not([hidden])');
   const h0 = await page.evaluate(() => composer.getBoundingClientRect().height);
 
   // 1) Immediate exec_id on POST (e.g. retry or fast launch) emits once and wakes HUD.
@@ -237,13 +238,19 @@ test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors,
   assert.equal(await page.evaluate(() => window.__execWakes), 2);
   assert.equal(await page.evaluate(() => window.__timers.some(t => !t.cleared)), false, 'polling stops once admitted');
 
-  // 3) User command slot click goes through headless tracker with origin: 'ucmd'.
+  // 3) User command 1.5s hold goes through headless tracker with origin: 'ucmd'.
   await page.evaluate(() => {
     window.__onPoll = function (id, n, res) {
       return res({ id: id, command: 'make test\n./run --verbose', phase: 'done', exec_id: 'exec_ucmd1' });
     };
   });
-  await page.click('.ucmd-run');
+  await page.click('#ucmdbadge');
+  const runBox = await page.locator('.ucmd-ibtn-run').boundingBox();
+  await page.mouse.move(runBox.x + runBox.width / 2, runBox.y + runBox.height / 2);
+  await page.mouse.down();
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared && t.ms === 1500));
+  await page.evaluate(() => window.__flushTimer());
+  await page.mouse.up();
   await page.waitForFunction(() => window.__timers.some(t => !t.cleared));
   await page.evaluate(() => window.__flushTimer());
   await page.waitForFunction(() => window.__admitted.length === 3);
@@ -296,26 +303,24 @@ test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors,
   assert.deepEqual(errs, []);
 });
 
-test('slot blocks show the whole stored line on a dark $ block', { skip }, async t => {
+test('user command popover shows the whole stored line on an inline-editable card', { skip }, async t => {
   const { page } = await open(t);
-  await page.waitForSelector('.d-ucmd .ucmd');
-  assert.equal(await page.locator('.ucmd-line').textContent(), 'make test\n./run --verbose');
-  assert.equal(await page.locator('.ucmd-run').textContent(), '▶ Run tests');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor), 'rgb(19, 20, 23)');
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.ucmd-line'), '::before').content), '"$ "');
+  await page.waitForSelector('#ucmdbadge:not([hidden])');
+  await page.click('#ucmdbadge');
+  await page.waitForSelector('.ucmd-pop:not([hidden]) .ucmd-card');
+  assert.equal(await page.locator('.ucmd-card .ucmd-inline-input.is-cmd').inputValue(), 'make test\n./run --verbose');
+  assert.equal(await page.locator('.ucmd-card .ucmd-title').textContent(), 'Run tests');
+  assert.equal(await page.locator('.ucmd-card .ucmd-glyph').first().textContent(), '$');
 });
 
 test('light theme tints the terminal surfaces Solarized, dark stays dark, with 0px height delta', { skip }, async t => {
   const { page, type } = await open(t);
-  await page.waitForSelector('.d-ucmd .ucmd');
+  await page.waitForSelector('#ucmdbadge:not([hidden])');
   const hDark = await page.evaluate(() => composer.getBoundingClientRect().height);
-  const ucmdBg = () => page.evaluate(() => getComputedStyle(document.querySelector('.ucmd')).backgroundColor);
   const edBg = () => page.evaluate(() => getComputedStyle(document.querySelector('.cfield [contenteditable]')).backgroundColor);
-  assert.equal(await ucmdBg(), 'rgb(19, 20, 23)', 'dark theme ucmd');
   await page.emulateMedia({ colorScheme: 'light' });
   const hLightIdle = await page.evaluate(() => composer.getBoundingClientRect().height);
   assert.equal(hLightIdle, hDark, 'matching baseline height across themes');
-  assert.equal(await ucmdBg(), 'rgb(253, 246, 227)', 'light theme ucmd: Solarized base3');
   await type('!ls');
   assert.equal(await edBg(), 'rgb(253, 246, 227)', 'light theme bang input: Solarized base3');
   assert.equal(await page.evaluate(() => composer.getBoundingClientRect().height), hLightIdle, '0px vertical height change in light bang mode');

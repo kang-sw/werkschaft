@@ -83,7 +83,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 		// lists them, holds the report for a live job, and protects the
 		// worktree from release). There is no binary version to verify the
 		// removal against: the removal is the absence of the tool.
-		ExecCutover: &ExecCutoverSupport{},
+		ExecCutover: &ExecCutoverSupport{NoNativeTools: true},
 		Dashboard:   werkDashboardTraits(),
 		Profiles:    []BuiltinProfileRegistration{worker, lead},
 	}
@@ -238,24 +238,35 @@ func (b WerkBackend) workerProviderGap(id string) string {
 	if provider.ID != wscred.ProviderOpenAI {
 		return ""
 	}
-	// The Store reports consent without refreshing or borrowing the bearer.
+	consent, known, err := b.planBackgroundConsent()
+	if err != nil {
+		return "the provider credential store could not be read: " + err.Error()
+	}
+	if known && !consent {
+		return (&wscred.ProviderError{Provider: provider.ID, Err: wscred.ErrConsentRequired}).Error()
+	}
+	return ""
+}
+
+// planBackgroundConsent reads the active registration without acquiring a token.
+func (b WerkBackend) planBackgroundConsent() (allowed, known bool, err error) {
 	if store, ok := b.credentials.(interface {
 		Status() ([]wscred.ProviderStatus, error)
 	}); ok {
 		statuses, err := store.Status()
 		if err != nil {
-			return "the provider credential store could not be read: " + err.Error()
+			return false, false, err
 		}
 		for _, status := range statuses {
 			for _, account := range status.OpenAIAccounts {
 				if account.Active && account.BackgroundConsent != nil && *account.BackgroundConsent {
-					return ""
+					return true, true, nil
 				}
 			}
 		}
-		return (&wscred.ProviderError{Provider: provider.ID, Err: wscred.ErrConsentRequired}).Error()
+		return false, true, nil
 	}
-	return ""
+	return false, false, nil
 }
 
 // workerTierGap is workerSetup: tiers start empty, so a harness with no tier
