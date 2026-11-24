@@ -56,14 +56,15 @@ test('lifecycle post coalesces on rAF and reads layout before lifting the frame'
   const source = section(asset('dashboard-lifecycle.js'), '    function post() {', '    doc.addEventListener("ws-overview", queue);');
   const frames = [], events = [], messages = [];
   const top = { offsetHeight: 42 }, head = { innerHTML: 'header' }, qs = {};
+  const attrs = new Set(['data-pincol']);
   const root = {
     get clientWidth() { events.push('read:width'); return 990; },
-    hasAttribute() { events.push('read:pincol'); return true; },
-    setAttribute() { events.push('write:lifted'); },
-    removeAttribute() { events.push('write:lifted'); }
+    hasAttribute(name) { events.push('read:' + name); return attrs.has(name); },
+    setAttribute(name) { events.push('write:lifted'); attrs.add(name); },
+    removeAttribute(name) { events.push('write:lifted'); attrs.delete(name); }
   };
   const context = {
-    queued: null, root, shHidden: false,
+    queued: null, head: null, headDirty: true, root, shHidden: false,
     doc: { querySelector() { return top; } },
     region() { return head; },
     $(id) { return id === 'qsslot' ? qs : null; },
@@ -89,6 +90,11 @@ test('lifecycle post coalesces on rAF and reads layout before lifting the frame'
   assert.equal(messages[1][0], 'layout');
   assert.equal(messages[1][1].dim, 0.5);
   assert.equal(messages[1][1].popover, true);
+  events.length = 0;
+  context.queue();
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.ok(!events.includes('read:style') && !events.includes('read:width'), 'overlay-only post reuses header geometry');
   context.queue();
   assert.equal(frames.length, 1);
   context.shHidden = true;
