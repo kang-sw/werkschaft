@@ -1,0 +1,84 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+const { assemble } = require('./assemble-daemon-input.cjs');
+const { validateDaemonRoot } = require('./daemon-selection.cjs');
+const { copyPackage } = require('./daemon-stage.cjs');
+const repo = path.resolve(__dirname, '../../..');
+const inventory = execFileSync(process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3'),
+  [path.join(repo, 'agents-plugin-tool/scripts/generate-package-assets.py'), '--inventory']);
+
+for (const product of ['wsflow', 'ws']) for (const platform of ['darwin', 'win32']) {
+  test(`assemble real ${product} package for ${platform} from non-executable bytes`, t => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop assembly test '));
+    t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+    const source = path.join(repo, product === 'ws' ? 'agents-plugin' : 'agents-plugin-wsflow');
+    const contract = JSON.parse(fs.readFileSync(path.join(source, 'runtime.json'), 'utf8'));
+    const appRoot = path.join(base, 'app'), userData = path.join(base, 'user data');
+    fs.mkdirSync(appRoot); fs.mkdirSync(userData);
+    const binary = path.join(base, 'release-asset');
+    const metadata = product === 'ws' ? binary + '.metadata.json' : path.join(base, 'identity.json');
+    // Not an executable, including when testing Windows inputs on macOS.
+    const bytes = Buffer.concat([Buffer.from('fake ws-mcp bytes; never execute'), inventory]);
+    fs.writeFileSync(binary, bytes);
+    const identity = { schema_version: 1, version: contract.plugin_version,
+      binary_sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+      mcp_protocol: contract.mcp_protocol };
+    const save = () => fs.writeFileSync(metadata, JSON.stringify(identity));
+    save();
+    const out = path.join(appRoot, 'daemon');
+    const options = { binary, out, platform, ...(product === 'ws' ? { package: product } : { metadata }) };
+    const assembled = assemble(options);
+    const select = () => validateDaemonRoot(out, 'bundled', platform);
+    const selected = select();
+    assert.equal(selected.source, 'bundled');
+    assert.equal(selected.contract.plugin, product);
+    assert.equal(selected.contract.plugin_version, contract.plugin_version);
+    assert.equal(selected.metadata.binary_sha256, identity.binary_sha256);
+    assert.equal(assembled.binary, selected.binary);
+    assert.equal(path.basename(selected.binary), platform === 'win32' ? 'ws-mcp.exe' : 'ws-mcp');
+    assert.deepEqual(fs.readFileSync(selected.binary), bytes);
+    if (platform === 'darwin' && process.platform !== 'win32') assert(fs.statSync(selected.binary).mode & 0o111);
+    const plugin = JSON.parse(fs.readFileSync(path.join(out, '.claude-plugin', 'plugin.json'), 'utf8'));
+    assert.equal(plugin.version, contract.plugin_version);
+    for (const name of ['bin/ws-mcp-launcher.py', 'config-manifest.json', 'agy-config-manifest.json', 'dashboard-config-manifest.json',
+      'claude-agents/effort-low.md', 'rsrc/manifest.json', 'skills/manifest.json']) {
+      assert(fs.statSync(path.join(out, name)).isFile(), name);
+    }
+    // Exercise the packaging copy gate too: no links anywhere, including hooks/bin.
+    const copy = copyPackage(out, path.join(base, 'copy'), 'bundled', platform);
+    assert.equal(copy.contract.plugin, product);
+    assert.throws(() => assemble(options), /EEXIST/);
+    assert.deepEqual(fs.readFileSync(selected.binary), bytes, 'existing output was not removed');
+
+    // Missing/stale embedded provenance is refused before making an output;
+    // assembly cannot retrofit a supplied binary, even with valid metadata.
+    fs.writeFileSync(binary, 'old binary without embedded inventory');
+    assert.throws(() => assemble({ ...options, out: path.join(base, 'missing-assets') }), /generate assets BEFORE/);
+    assert.equal(fs.existsSync(path.join(base, 'missing-assets')), false);
+    const stale = Buffer.from(bytes);
+    stale[stale.length - 2] ^= 1;
+    fs.writeFileSync(binary, stale);
+    assert.throws(() => assemble({ ...options, out: path.join(base, 'stale-assets') }), /generate assets BEFORE/);
+    fs.writeFileSync(binary, bytes);
+
+    // Both the assembly gate and the app's own selector refuse a wrong core.
+    identity.version = '99.0.0'; save();
+    const bad = path.join(base, 'bad');
+    assert.throws(() => assemble({ ...options, out: bad }), /version\/contract mismatch/);
+    assert.equal(fs.existsSync(bad), false, 'failed owned output was cleaned');
+    fs.copyFileSync(metadata, selected.binary + '.metadata.json');
+    assert.throws(select, /version\/contract mismatch/);
+  });
+}
+
+test('assembly rejects unsupported packages and targets before writing output', () => {
+  assert.throws(() => assemble({ package: 'pi' }), /Package must be wsflow or ws/);
+  assert.throws(() => assemble({ platform: 'linux' }), /Target platform/);
+  assert.throws(() => assemble({ platform: 'win32' }), /--binary and --out/);
+});

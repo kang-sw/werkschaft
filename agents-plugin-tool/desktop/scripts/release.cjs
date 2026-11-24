@@ -3,7 +3,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { parseArgs } = require('node:util');
-const { assetName, parseVersion, SUMS } = require('../../desktop-electron/update');
+function parseVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-canary\.(\d+))?$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const numbers = match.slice(1).map(part => part == null ? null : Number(part));
+  if (numbers.some(part => part != null && !Number.isSafeInteger(part))) return null;
+  const core = numbers.slice(0, 3), canary = numbers[3];
+  return { core, channel: canary == null ? 'stable' : 'canary', canary,
+    version: `${core.join('.')}${canary == null ? '' : `-canary.${canary}`}` };
+}
+
 const { publicKey, verifySignature } = require('./release-signature.cjs');
 
 const FEED = 'werkschaft-tauri-update.json';
@@ -20,10 +29,6 @@ function releaseVersion(version) {
     throw new Error('Tauri releases require an exact version X.Y.Z or X.Y.Z-canary.N');
   }
   return parsed;
-}
-
-function legacyName(platform, version) {
-  if (releaseVersion(version).channel === 'stable') return assetName(platform, PLATFORMS[platform].arch);
 }
 
 async function measure(file, signed = false) {
@@ -57,11 +62,6 @@ async function inspectAssets(dir, platform, version, key) {
     entries[target] = { url: `https://github.com/kang-sw/werkschaft/releases/download/v${version}/${name}`,
       signature, ...data };
   }
-  const legacy = legacyName(platform, version);
-  if (legacy) {
-    const { sha256, size } = await measure(path.join(dir, legacy));
-    assets[legacy] = { sha256, size };
-  }
   return { assets, entries };
 }
 
@@ -75,8 +75,6 @@ function checkNames(dir, expected) {
 
 function assetFiles(platform, version) {
   const files = Object.values(PLATFORMS[platform].assets).flatMap(name => [name, `${name}.sig`]);
-  const legacy = legacyName(platform, version);
-  if (legacy) files.push(legacy);
   return files;
 }
 
@@ -96,9 +94,8 @@ async function combine(input, output, version, key) {
       checkNames(source, [...files, 'platform.json']);
       for (const file of files) fs.copyFileSync(path.join(source, file), path.join(output, file));
     }
-    const { feed, sums } = await describeRelease(output, version, key, input);
+    const { feed } = await describeRelease(output, version, key, input);
     writeJSON(path.join(output, FEED), feed);
-    if (sums) fs.writeFileSync(path.join(output, SUMS), sums, { flag: 'wx' });
   } catch (error) {
     fs.rmSync(output, { recursive: true, force: true });
     throw error;
@@ -107,7 +104,6 @@ async function combine(input, output, version, key) {
 
 async function describeRelease(dir, version, key, input) {
   const feed = { version, platforms: {} };
-  const lines = [];
   for (const [platform, { arch }] of Object.entries(PLATFORMS)) {
     const { assets, entries } = await inspectAssets(dir, platform, version, key);
     if (input) {
@@ -117,20 +113,17 @@ async function describeRelease(dir, version, key, input) {
       }
     }
     Object.assign(feed.platforms, entries);
-    const legacy = legacyName(platform, version);
-    if (legacy) lines.push(`${assets[legacy].sha256}  ${legacy}`);
   }
-  return { feed, sums: lines.length ? lines.join('\n') + '\n' : '' };
+  return { feed };
 }
 
 async function verifyRelease(dir, version, key) {
   const files = [FEED, ...Object.keys(PLATFORMS).flatMap(platform => assetFiles(platform, version))];
-  if (releaseVersion(version).channel === 'stable') files.push(SUMS);
+  releaseVersion(version);
   checkNames(dir, files);
-  const { feed, sums } = await describeRelease(dir, version, key);
-  if (fs.readFileSync(path.join(dir, FEED), 'utf8') !== JSON.stringify(feed, null, 2) + '\n' ||
-      (sums && fs.readFileSync(path.join(dir, SUMS), 'utf8') !== sums)) {
-    throw new Error('Combined release feed or legacy checksums differ from the payload');
+  const { feed } = await describeRelease(dir, version, key);
+  if (fs.readFileSync(path.join(dir, FEED), 'utf8') !== JSON.stringify(feed, null, 2) + '\n') {
+    throw new Error('Combined release feed differs from the payload');
   }
 }
 
@@ -150,4 +143,4 @@ async function main() {
 if (require.main === module) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
-module.exports = { PLATFORMS, releaseVersion, legacyName, measure, writePlatformManifest, combine, verifyRelease };
+module.exports = { PLATFORMS, releaseVersion, measure, writePlatformManifest, combine, verifyRelease };
