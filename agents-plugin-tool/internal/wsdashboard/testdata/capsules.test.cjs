@@ -237,6 +237,79 @@ assert.deepEqual(seenBeforeInput, [
   { inputType: 'insertCompositionText', data: '녕', isComposing: true },
 ]);
 
+// upsert() fast path: unchanged anchor mutates the existing .wsc-capsule node in place
+// without wiping editor.textContent or dispatching synthetic input; anchor change renders once.
+{
+  const upField = make('Prefix ');
+  const editor = upField.wsc.editor;
+  let editorRebuilds = 0;
+  const textDesc = Object.getOwnPropertyDescriptor(El.prototype, 'textContent');
+  Object.defineProperty(editor, 'textContent', {
+    configurable: true,
+    get() { return textDesc.get.call(this); },
+    set(v) { if (v === '') editorRebuilds++; textDesc.set.call(this, v); }
+  });
+  let upInputs = 0;
+  const upChanges = [];
+  upField.addEventListener('input', () => upInputs++);
+  upField.addEventListener('wsc:change', e => upChanges.push(plain(e.detail)));
+
+  upField.wsc.upsert('answer', '7', { label: '(7)=note', anchor: '(7)=note', plain: '(7)=note a', answer: { id: '7', answer: '', note: 'a' } });
+  const origChip = editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'answer' && n.getAttribute('data-wsc-key') === '7');
+  assert.ok(origChip, 'initial answer capsule exists');
+
+  editorRebuilds = 0; upInputs = 0; upChanges.length = 0;
+  upField.wsc.upsert('answer', '7', { label: '(7)=note', anchor: '(7)=note', plain: '(7)=note ab', answer: { id: '7', answer: '', note: 'ab' } });
+  const sameChip = editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'answer' && n.getAttribute('data-wsc-key') === '7');
+  assert.equal(editorRebuilds, 0, 'unchanged-anchor upsert does not clear/rebuild editor DOM');
+  assert.equal(sameChip, origChip, 'unchanged-anchor upsert preserves exact .wsc-capsule DOM node identity');
+  assert.equal(JSON.parse(origChip.getAttribute('data-wsc-payload')).answer.note, 'ab', 'DOM data-wsc-payload updated in place');
+  assert.equal(upField.wsc.ordered().find(r => r.kind === 'answer' && r.key === '7').payload.answer.note, 'ab', 'ordered snapshot payload updated');
+  assert.equal(upInputs, 0, 'unchanged-anchor upsert dispatches zero synthetic input events');
+  assert.equal(upChanges.length, 1, 'unchanged-anchor upsert still emits wsc:change');
+  assert.equal(upChanges[0].action, 'update');
+  assert.equal(upChanges[0].updated.length, 1);
+
+  // Label change with unchanged anchor and selector-hostile key updates data-wsc-label and textContent in place.
+  const hostileKey = 'topic"1[x]';
+  upField.wsc.upsert('topic-note', hostileKey, { label: '[topic"1[x]] first', anchor: '[note:topic"1[x]]', plain: '[topic"1[x]] first', topic: hostileKey, note: 'first' });
+  const origTopicChip = editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'topic-note' && n.getAttribute('data-wsc-key') === hostileKey);
+  assert.ok(origTopicChip, 'topic-note capsule with selector-hostile key exists');
+
+  editorRebuilds = 0; upInputs = 0; upChanges.length = 0;
+  upField.wsc.upsert('topic-note', hostileKey, { label: '[topic"1[x]] second', anchor: '[note:topic"1[x]]', plain: '[topic"1[x]] second', topic: hostileKey, note: 'second' });
+  const sameTopicChip = editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'topic-note' && n.getAttribute('data-wsc-key') === hostileKey);
+  assert.equal(editorRebuilds, 0, 'label-change with unchanged anchor does not rebuild editor DOM');
+  assert.equal(sameTopicChip, origTopicChip, 'label-change preserves exact .wsc-capsule DOM node identity');
+  assert.equal(origTopicChip.getAttribute('data-wsc-label'), '[topic"1[x]] second', 'data-wsc-label updated in place');
+  assert.equal(origTopicChip.textContent, '[topic"1[x]] second', 'capsule textContent updated in place');
+  assert.equal(upInputs, 0, 'label-change with unchanged anchor dispatches zero synthetic input events');
+  assert.equal(upChanges.length, 1, 'label-change emits wsc:change');
+  // Native editor input reads back the updated label and payload from the mutated DOM node.
+  editor.dispatchEvent(new Evt('input'));
+  const readBack = upField.wsc.ordered().find(r => r.kind === 'topic-note' && r.key === hostileKey);
+  assert.equal(readBack.label, '[topic"1[x]] second', 'read() sees updated data-wsc-label');
+  assert.equal(readBack.payload.note, 'second', 'read() sees updated data-wsc-payload');
+
+  // Anchor change (e.g. switching option on a card) performs at most one render().
+  editorRebuilds = 0; upInputs = 0; upChanges.length = 0;
+  upField.wsc.upsert('answer', '7', { label: '(7)=a', anchor: '(7)=a', plain: '(7)=a ab', answer: { id: '7', answer: 'a', note: 'ab' } });
+  assert.equal(editorRebuilds, 1, 'anchor-change upsert performs exactly one render(), not two');
+  assert.equal(upInputs, 1, 'anchor-change upsert dispatches one input event');
+  assert.equal(upChanges.length, 1, 'anchor-change upsert emits wsc:change');
+  assert.ok(upField.value.includes('(7)=a'), 'canonical text reflects updated anchor');
+  assert.equal(upField.wsc.ordered().find(r => r.kind === 'answer' && r.key === '7').label, '(7)=a');
+
+  // Unexpected DOM drift (missing chip node) falls back safely to a single render().
+  const driftChip = editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'answer' && n.getAttribute('data-wsc-key') === '7');
+  driftChip.remove();
+  editorRebuilds = 0; upInputs = 0; upChanges.length = 0;
+  upField.wsc.upsert('answer', '7', { label: '(7)=a', anchor: '(7)=a', plain: '(7)=a abc', answer: { id: '7', answer: 'a', note: 'abc' } });
+  assert.equal(editorRebuilds, 1, 'DOM drift fallback renders once');
+  assert.equal(upChanges.length, 1, 'DOM drift fallback emits wsc:change');
+  assert.ok(editor.querySelectorAll('.wsc-capsule').find(n => n.getAttribute('data-wsc-kind') === 'answer' && n.getAttribute('data-wsc-key') === '7'), 'DOM drift fallback restores capsule node');
+}
+
 // Topics and image-marker removal retain surrounding references and identities.
 const imgText = '[Image #1] [a] [Image #2] [b]';
 const rs = [{ start: 11, end: 14, kind: 'topic', id: 'a', label: 'A' }, { start: 26, end: 29, kind: 'topic', id: 'b', label: 'B' }];

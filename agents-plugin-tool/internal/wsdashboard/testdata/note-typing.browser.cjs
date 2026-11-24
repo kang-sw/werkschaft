@@ -48,6 +48,11 @@ function func(name) {
       const note = document.querySelector('#ctext').wsc.ordered().find(r => r.kind === 'topic-note' && r.key === 't0');
       return note?.payload.note === 'warmup';
     }), 'warmup note appears in inline composer');
+    await page.evaluate(() => {
+      window.__topicChip = document.querySelector('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]');
+      window.__ctextTopicInputs = 0;
+      document.querySelector('#ctext').addEventListener('input', () => { window.__ctextTopicInputs++; });
+    });
     const cdp = await page.context().newCDPSession(page), events = [];
     cdp.on('Tracing.dataCollected', e => events.push(...e.value));
     await cdp.send('Tracing.start', { categories: 'toplevel,devtools.timeline,blink,disabled-by-default-devtools.timeline.invalidationTracking', transferMode: 'ReportEvents' });
@@ -74,9 +79,11 @@ function func(name) {
       assert(Math.max(...counts) < 100, 'typing never restyles the whole document');
       assert(await page.evaluate(() => {
         const rows = document.querySelector('#ctext').wsc.ordered().filter(r => r.kind === 'topic-note' && r.key === 't0');
+        const chip = document.querySelector('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]');
         return rows.length === 1 && rows[0].payload.note === document.querySelector('.tnote').value &&
-          document.querySelectorAll('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]').length === 1;
-      }), 'inline topic note tracks all 50 inputs');
+          document.querySelectorAll('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]').length === 1 &&
+          chip === window.__topicChip && window.__ctextTopicInputs === 0;
+      }), 'inline topic note tracks all 50 inputs without recreating capsule DOM or firing #ctext input');
     }
     // The compact capsule label shows the first 40 characters. Start the
     // native IME probe with a short note so the composed text is visible.
@@ -95,8 +102,64 @@ function func(name) {
     assert(state.value.endsWith('한글'));
     assert.equal(state.inlineNotes.length, 1);
     assert.equal(state.inlineNotes[0].payload.note, state.value.trim());
-    assert(state.label.includes('한글'), 'inline topic note displays the composed text');
+    assert.equal(state.label, '[t0] ' + state.value.trim().slice(0, 40), 'inline topic note label stays capped at 40 chars');
     assert.deepEqual(state.capsules, []);
-    console.log('note typing: native input, backing value, inline composer note and Korean IME passed');
+    // Short Korean IME composition also updates the displayed capsule label in place.
+    await page.evaluate(() => {
+      const field = document.querySelector('.tnote');
+      field.value = '짧은 ';
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    });
+    for (const text of ['ㅎ', '하', '한', '한ㄱ', '한그', '한글']) {
+      await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });
+    }
+    await cdp.send('Input.insertText', { text: '한글' });
+    const shortLabel = await page.evaluate(() => document.querySelector('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]')?.textContent);
+    assert(shortLabel && shortLabel.includes('한글'), 'inline topic note displays composed text within the 40-char label');
+
+    // Board card textarea.note typing must preserve #ctext .wsc-capsule DOM node identity across keystrokes.
+    await page.evaluate(() => document.querySelector('.card[data-id="1"] textarea.note').focus());
+    await page.keyboard.type('init');
+    await page.evaluate(() => {
+      window.__cardChip = document.querySelector('#ctext + .wsc-editor [data-wsc-kind="answer"][data-wsc-key="1"]');
+      window.__ctextCardInputs = 0;
+      document.querySelector('#ctext').addEventListener('input', () => { window.__ctextCardInputs++; });
+    });
+    assert(await page.evaluate(() => {
+      const row = document.querySelector('#ctext').wsc.ordered().find(r => r.kind === 'answer' && r.key === '1');
+      return !!window.__cardChip && row?.payload?.answer?.note === 'init';
+    }), 'initial card note creates answer capsule in #ctext');
+    for (const ch of 'abcdefghijklmnopqrst') {
+      await page.keyboard.type(ch);
+      if (!baseline) {
+        const preserved = await page.evaluate(() => {
+          const chip = document.querySelector('#ctext + .wsc-editor [data-wsc-kind="answer"][data-wsc-key="1"]');
+          return chip === window.__cardChip;
+        });
+        assert(preserved, 'card note keystroke must not tear down or recreate #ctext .wsc-capsule DOM node');
+      }
+    }
+    const cardState = await page.evaluate(() => {
+      const field = document.querySelector('.card[data-id="1"] textarea.note');
+      const rows = document.querySelector('#ctext').wsc.ordered().filter(r => r.kind === 'answer' && r.key === '1');
+      const chip = document.querySelector('#ctext + .wsc-editor [data-wsc-kind="answer"][data-wsc-key="1"]');
+      return {
+        value: field.value,
+        rows,
+        sameNode: chip === window.__cardChip,
+        domPayloadNote: chip ? JSON.parse(chip.getAttribute('data-wsc-payload'))?.answer?.note : null,
+        ctextInputs: window.__ctextCardInputs
+      };
+    });
+    assert.equal(cardState.value, 'initabcdefghijklmnopqrst');
+    assert.equal(cardState.rows.length, 1);
+    assert.equal(cardState.rows[0].payload.answer.note, 'initabcdefghijklmnopqrst');
+    if (!baseline) {
+      assert.equal(cardState.sameNode, true, 'card note typing keeps exact #ctext .wsc-capsule node');
+      assert.equal(cardState.domPayloadNote, 'initabcdefghijklmnopqrst', 'DOM data-wsc-payload stays synced');
+      assert.equal(cardState.ctextInputs, 0, 'card note typing dispatches zero synthetic input events on #ctext');
+    }
+    console.log('note typing: native input, backing value, inline composer note, card note identity and Korean IME passed');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
