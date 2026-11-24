@@ -729,3 +729,47 @@ file operations, and a deferred purge skips directory and record removal.
 Routing suggested a branch rename. The ticket lease and both commits use
 the branch assigned by the lead. The ticket stays in `ready/` at the lead's
 direction.
+
+### Phase 8: Make the deferred purge restart-safe
+
+Added after the sixth re-review of `41e81115c..b4dcc6aa1`
+(`465c3a92-01-findings.md`) blocked on three Important interactions
+around Phase 7. Lead decision under the owner's overnight directive. This
+is the last repair round for the I6 ancestry area: after it, the re-review
+checks these three repairs and their regressions, and any further new edge
+case in this area ships as an `important` review follow-up instead of
+another phase.
+
+- R1, revival after delete and restart: `dead_binding.go:67-80` keeps the
+  predecessor's open record on disk while a holder exists, and startup
+  re-derives closure from the Git release marker
+  (`worktree_release.go:145-172`, `runner_startup.go:145-160`). Dashboard
+  deletion removes the checkout and its marker
+  (`railworktreedelete.go:636-645`), so a record Phase 7 retained loads as
+  open and the worker reattaches in the deleted checkout. Before the
+  dashboard deletes a checkout whose closed worker's record is retained,
+  make the closure durable in that record (for example `ClosedAt` or
+  `DeadBindingClosure`), so startup loads it closed without the marker,
+  while holder recovery of a worker that was not released stays as it is.
+  Test: real delete, then a replacement-daemon startup; the released worker
+  stays closed and the grandchild link survives.
+- R2, delete during release: `dead_binding.go:116-125` publishes the ended
+  registration before moving the conversation from `r.convs` to
+  `r.closed`, and `ForgetClosed` (`agent_delivery.go:262-279`) only checks
+  descendants when it finds a closed row. Treat a conversation that is
+  still registered (closing) like a closed one with descendants: the purge
+  is deferred, under the same registry lock. Test: pause release after the
+  ended row is published, run the dashboard delete, and assert the session
+  directory survives and the ancestry is present after restart.
+- R3, startup expiry: `agent_delivery.go:329-374` builds the expiry
+  subtree from open records only, and startup deletes the selected
+  directory and private record directly (`runner_startup.go:162-174`).
+  Include the closed rows startup already loaded (`runner_startup.go:150`)
+  as ancestry links, so an ancestor above a closed bridge with an open
+  descendant is not selected, and route the startup deletion through the
+  same purge guard as the in-process path. Test: a waiting ancestor past
+  expiry, a closed bridge, and a descendant with an open turn survive
+  startup; the same tree without the open descendant is expired as today.
+- Rejected: reverting Phase 7 (reopens the fifth-round finding) and
+  shipping R1 as a follow-up (a released worker reviving in a deleted
+  checkout is a regression this range introduced).
