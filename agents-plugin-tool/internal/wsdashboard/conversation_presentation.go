@@ -72,14 +72,17 @@ func (e ConvEntry) BoardNudgeSummary() string {
 // (1881 survivor; TestConversationPresentationPeerNoteIsDisplayOnly).
 var peerLeadFirstLine = regexp.MustCompile(`^\[(?:ws|wsflow) note: from a peer lead session \((?:(?:claude|codex|pi), )?not a worker\), with the same authority as yours\]$`)
 
-// A matching stored note earns only a display badge. It is not an identity or
-// privilege check; the original body remains available unchanged.
+// PeerLead recognizes a stored note for mail preview and body formatting.
 func (e ConvEntry) PeerLead() bool {
 	if !e.HasBody {
 		return false
 	}
 	line, _, _ := strings.Cut(e.Body, "\n")
 	return peerLeadFirstLine.MatchString(line)
+}
+
+func (e ConvEntry) ShowPeerLeadBadge() bool {
+	return !e.suppressPeerLeadBadge && e.PeerLead()
 }
 
 func (e ConvEntry) MailBody() string {

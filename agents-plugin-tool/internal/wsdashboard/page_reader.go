@@ -437,7 +437,7 @@ func (r pageReader) history(replyID, before string, n int) (ConversationView, ws
 	}
 	reg := s.Registration
 	contacts := resolvedContacts(page.Contacts, reg.ReplyID)
-	cv := conversation(wslive.Lead{}, ring.Records, page.MailBodies, contacts, r.lookup(), replyMarkdown(reg.Project, reg.ReplyID), reg.ReplyID)
+	cv := conversation(wslive.Lead{}, ring.Records, page.MailBodies, contacts, r.lookup(), replyMarkdown(reg.Project, reg.ReplyID), reg)
 	splitUserEntries(cv.Entries, wsinbox.AttachmentsDir(sessionInbox(r.dir, replyID)), reg.ReplyID)
 	attributeBoardNavigation(&cv, page.BoardTargets)
 	return cv, ring, true, nil
