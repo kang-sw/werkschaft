@@ -514,6 +514,9 @@
     },
     "261124-feat-ws-user-commands-v2": {
       "registered_at": "2026-11-24T07:18:57Z"
+    },
+    "261124-refactor-remove-terminal-handoff": {
+      "registered_at": "2026-11-24T07:52:19Z"
     }
   }
 }
