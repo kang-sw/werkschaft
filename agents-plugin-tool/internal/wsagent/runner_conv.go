@@ -1820,22 +1820,42 @@ func (c *conv) kickInput() {
 		}
 		c.setStatus(func() { c.wakeRefused = false })
 	}
-	// Under mu, as Send writes: every send counted here is in the drain
+	// Under mu, as Send writes: count the sends covered by the drain
 	// (Wait's turn marks).
+	separateCron := durable && c.separatesPlanCron()
+	// Previously flattened input has only the operator bit. Keep its
+	// background text out of interactive plan turns as well.
+	splitQueued := separateCron && len(c.rec.Queued) > 0
+	var isolatedCron bool
 	c.mu.Lock()
+	covered := c.sends
 	var recs []wsinbox.Record
 	if durable {
 		// Refresh under the same lock as Send, since a process start
 		// can take time and the earlier held snapshot is only advisory.
 		held, err = wsinbox.Held(c.inbox)
 		if err == nil {
+			c.held = len(held)
+			if separateCron {
+				take, cron := planInputClaims(c.rec.Queued, pending, held)
+				if take != nil {
+					isolatedCron = cron
+					available := len(pending) + len(held)
+					pending = slices.DeleteFunc(pending, func(rec wsinbox.Record) bool { return !take(rec) })
+					held = slices.DeleteFunc(held, func(rec wsinbox.Record) bool { return !take(rec) })
+					if len(pending)+len(held) < available {
+						// A held cron can be older than the input taken here.
+						// Advance the prefix once the deferred entries settle.
+						covered = c.drained
+					}
+				}
+			}
 			recs, err = wsinbox.ClaimInputs(c.inbox, held)
 		}
 	} else {
 		recs, _ = wsinbox.Drain(c.inbox)
 	}
 	c.held = max(0, c.held-len(recs))
-	covered := c.sends
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
 	if durable && err != nil {
@@ -1845,6 +1865,15 @@ func (c *conv) kickInput() {
 	if len(pending) > 0 {
 		recs = append(pending, recs...)
 		orderInboxClaims(recs)
+	}
+	if isolatedCron {
+		if len(recs) > 0 {
+			c.settlePlanCronRefusal(recs[0].Name, nil, covered)
+		} else {
+			// A cancellation won the claim. Recheck the deferred entries.
+			c.signalInbox()
+		}
+		return
 	}
 	from := c.drained
 	if !durable {
@@ -1876,7 +1905,7 @@ func (c *conv) kickInput() {
 		}
 		return
 	}
-	cmd, parts, rest := nextTurn(queue)
+	cmd, parts, rest := nextTurn(queue, splitQueued)
 	if cmd != nil {
 		mail, reports = nil, nil
 	}
@@ -1893,6 +1922,10 @@ func (c *conv) kickInput() {
 	mark := covered
 	if len(rest) > 0 {
 		mark = rest[0].After
+	}
+	if splitQueued && len(queue) > 0 && !queue[0].Operator {
+		c.settlePlanCronRefusal("", rest, mark)
+		return
 	}
 	c.stopIdle()
 	// Read before the send: a request boundary is never later than the
@@ -2119,15 +2152,15 @@ func (c *conv) voidCancelled() {
 	}
 }
 
-// nextTurn splits queue at its first slash command: a command at the front
-// is the turn (cmd), else the texts before the first command are (parts).
-// rest is what waits for the turns after it; nil when nothing does.
-func nextTurn(queue []QueuedInput) (cmd *wsinbox.Command, parts []string, rest []QueuedInput) {
+// nextTurn takes a leading slash command or the text that precedes the next
+// command. When splitOperator is set, text with different operator provenance
+// also waits for a later turn.
+func nextTurn(queue []QueuedInput, splitOperator bool) (cmd *wsinbox.Command, parts []string, rest []QueuedInput) {
 	n := 0
 	if len(queue) > 0 && queue[0].Command != nil {
 		cmd, n = queue[0].Command, 1
 	} else {
-		for n < len(queue) && queue[n].Command == nil {
+		for n < len(queue) && queue[n].Command == nil && (!splitOperator || queue[n].Operator == queue[0].Operator) {
 			parts = append(parts, queue[n].Text)
 			n++
 		}

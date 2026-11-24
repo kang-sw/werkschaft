@@ -5,6 +5,10 @@
 package wsagent
 
 import (
+	"errors"
+	"slices"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
@@ -79,12 +83,12 @@ func (r *Runner) CronHeld(id string) []string {
 }
 
 // DeliverCron holds one scheduled prompt as a steered, never-merged entry in
-// lead conversation id's inbox: a running turn takes it mid-turn when the
-// harness steers (after any in-flight ws MCP call on a replacesTurn harness),
-// and an idle lead starts a turn with it. It reports false when the
-// conversation is closed, handed off, not a lead or unknown, with nothing
-// written. Its send counters and record write are Runner.send's, as
-// AdmitCompletion keeps them.
+// lead conversation id's inbox. An interactive ChatGPT plan turn holds it
+// while background consent is off. Other running turns use the harness's
+// steer rules, including waiting for in-flight MCP calls on a replacesTurn
+// harness. It reports false with nothing written when the conversation is
+// closed, handed off, not a lead or unknown. Its send counters and record
+// write are Runner.send's, as AdmitCompletion keeps them.
 func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accepted bool, err error) {
 	c, err := r.open(id)
 	if err != nil {
@@ -110,4 +114,85 @@ func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accep
 	_ = c.persistRecord()
 	c.signalInbox()
 	return true, nil
+}
+
+func (c *conv) separatesPlanCron() bool {
+	if !c.rec.Lead || c.rec.Provider != string(wscred.ProviderOpenAI) {
+		return false
+	}
+	backend, ok := c.r.opts.Backends[c.rec.Backend].Backend.(interface {
+		planBackgroundConsent() (allowed, known bool, err error)
+	})
+	if !ok {
+		return false
+	}
+	allowed, _, err := backend.planBackgroundConsent()
+	return err != nil || !allowed
+}
+
+func isCronInput(rec wsinbox.Record) bool { return rec.Entry.Cron != nil }
+
+// planInputClaims selects the next batch while cron needs separate admission.
+// Keep scheduled input waiting when operator input is ready. Otherwise keep
+// inbox order and take one scheduled entry at a time.
+func planInputClaims(queue []QueuedInput, pending, held []wsinbox.Record) (take func(wsinbox.Record) bool, cron bool) {
+	if !slices.ContainsFunc(held, isCronInput) && !slices.ContainsFunc(pending, isCronInput) {
+		return nil, false
+	}
+	operator := func(rec wsinbox.Record) bool { return rec.Entry.Operator }
+	if len(queue) > 0 || slices.ContainsFunc(pending, operator) || slices.ContainsFunc(held, operator) {
+		return func(rec wsinbox.Record) bool { return !isCronInput(rec) }, false
+	}
+	ordered := append(slices.Clone(pending), held...)
+	orderInboxClaims(ordered)
+	firstCron := slices.IndexFunc(ordered, isCronInput)
+	if firstCron == 0 {
+		name := ordered[0].Name
+		return func(rec wsinbox.Record) bool { return rec.Name == name }, true
+	}
+	boundary := ordered[firstCron]
+	return func(rec wsinbox.Record) bool { return compareInboxClaims(rec, boundary) < 0 }, false
+}
+
+// settlePlanCronRefusal keeps a denied prompt out of the model log, where
+// a later interactive request would pick it up as conversation history.
+func (c *conv) settlePlanCronRefusal(claim string, rest []QueuedInput, mark uint64) {
+	message := (&wscred.ProviderError{Provider: wscred.ProviderOpenAI, Err: wscred.ErrConsentRequired}).Error()
+	var err error
+	refused := c.admitInput(func() {
+		var release func()
+		release, err = c.r.admitDurableTransition()
+		if err != nil {
+			return
+		}
+		defer release()
+		err = c.publishWith(TurnResult{ID: c.rec.ReplyID, Status: TurnFailed, Error: message, mark: mark}, false, func(rec *Record) {
+			rec.Queued, rec.TurnMark = rest, mark
+			if claim != "" {
+				// The refusal owns the inbox entry once its settlement commits.
+				rec.Drained, rec.DurableInboxClaims = mark, []string{claim}
+			}
+		})
+	})
+	switch {
+	case refused != "":
+		c.refuseStart(checkoutReleasedRefusal(refused))
+	case errors.Is(err, errDurableStopping):
+		return
+	case err != nil:
+		c.durableTurnError("save scheduled input refusal", err)
+	default:
+		if claim != "" {
+			c.drained, c.inboxClaimsAcked = mark, false
+			if err := c.ackInboxClaims(); err != nil {
+				c.durableTurnError("acknowledge scheduled input", err)
+				return
+			}
+		}
+		c.setStatus(func() { c.lastErr = message })
+		c.live.writeSnapshot()
+		c.changed(false)
+		c.signalInbox()
+	}
+	c.armIdle()
 }

@@ -238,13 +238,15 @@ func TestWerkHostedLeadProviders(t *testing.T) {
 				if accepted, err := open.runner.DeliverCron(st.ID, mark, "Scheduled fixture"); err != nil || !accepted {
 					t.Fatalf("queue scheduled prompt: %v", err)
 				}
-				req := awaitWerkFixture(t, source.requests, "background credential request")
-				if !req.Background || !req.AgentSession || req.Provider != tc.id {
-					t.Fatalf("wrong credential scope: %+v", req)
-				}
+				wantError := (&wscred.ProviderError{Provider: tc.id, Err: wscred.ErrConsentRequired}).Error()
 				waitWerkLead(t, open.runner, st.ID, 10*time.Second, func(st wsagent.State) bool {
-					return st.Status == wsagent.StatusIdle && st.Error != ""
+					return st.Status == wsagent.StatusIdle && st.Error == wantError
 				})
+				select {
+				case req := <-source.requests:
+					t.Fatalf("the refused schedule reached credential acquisition: %+v", req)
+				default:
+				}
 				if calls.Load() != 4 {
 					t.Fatal("scheduled prompt reached SIWC without consent")
 				}
