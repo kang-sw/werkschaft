@@ -52,20 +52,46 @@ func TestRetiredPiHistorySurvivesPruneAndRollback(t *testing.T) {
 			start(now).Close()
 			pruneAt := now.Add(wsdashboard.RegistryRetention + time.Hour)
 			var runner *Runner
+			want := []string{"retired output"}
 			if mode == "current prune" {
 				runner = start(pruneAt)
 				if n := wsdashboard.PruneRegistrations(dir, pruneAt, wsdashboard.RegistryRetention); n != 0 {
 					t.Fatalf("0.52 pruned %d retired Pi sessions", n)
 				}
 			} else {
+				// The first rollback leaves this entry in the live ring, so
+				// it exists when 0.52 runs again and enters its next backup.
+				ring := wslive.RingDir(sessionDir)
+				if err := wslive.AppendRing(ring, []wslive.RingEntry{{Kind: "reply", Text: "survived first rollback"}}); err != nil {
+					t.Fatal(err)
+				}
+				start(now.Add(time.Minute)).Close()
+				want = append(want, "survived first rollback")
+				// Entries written only during the second rollback age out
+				// under the old daemon's retention.
+				if err := wslive.AppendRing(ring, []wslive.RingEntry{{Kind: "reply", Text: "second rollback only"}}); err != nil {
+					t.Fatal(err)
+				}
 				pruneRetiredPiLeadLike0512(t, dir, id, pruneAt)
 				if _, err := os.Stat(sessionDir); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("0.51.2 prune left session directory: %v", err)
 				}
+				// An interrupted publication can leave the prior complete
+				// archive in the recovery slot rather than at its final name.
+				archive := filepath.Join(dir, retiredPiHistoryDir, id)
+				if err := os.Rename(archive, archive+previousPiHistorySuffix); err != nil {
+					t.Fatal(err)
+				}
 				runner = start(pruneAt)
 			}
-			if history, err := runner.Transcript(id); err != nil || len(history) != 1 || history[0].Text != "retired output" {
+			history, err := runner.Transcript(id)
+			if err != nil || len(history) != len(want) {
 				t.Fatalf("readback = %+v, %v", history, err)
+			}
+			for i, text := range want {
+				if history[i].Text != text {
+					t.Fatalf("readback[%d] = %q, want %q", i, history[i].Text, text)
+				}
 			}
 			if data, err := os.ReadFile(piFile); err != nil || string(data) != raw {
 				t.Fatalf("Pi JSONL readback = %q, %v", data, err)
