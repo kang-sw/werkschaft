@@ -131,12 +131,14 @@ var parallelMCP = map[string]bool{
 }
 
 // execLaunchTools are the ws tools that start or feed a process. A read-only
-// worker is not offered them and a call to one is refused: the daemon
-// approves a hosted worker's exec calls whatever its authority, so the
-// authority is held here (the generic gap is the exec-tools ticket's).
+// lead is not offered them and a call to one is refused (fail-closed no-exec);
+// an immutable read-only worker may call allowlisted read-only exec_shell and
+// exec_run through the daemon's read-only allowlist gate (exec_spawn stays
+// blocked).
 var execLaunchTools = []string{"exec.shell", "exec.run", "exec.spawn", "exec.write"}
 
-// execLaunchRefusal answers a read-only worker's call to an exec launch tool.
+// execLaunchRefusal answers a read-only lead's call to an exec launch tool
+// (or a read-only worker's call to exec_spawn).
 const execLaunchRefusal = "Error: this session is read-only: it may not run commands. Read files with the file tools instead."
 
 // launchesProcess reports whether a model-side tool name is an exec launch
@@ -859,7 +861,11 @@ func (a *Agent) instructions() string {
 		b.WriteString("Your authority is full. ")
 	}
 	if authority == AuthorityReadOnly {
-		b.WriteString("You have no shell: read and search files with the file tools.")
+		if a.cfg.Lead {
+			b.WriteString("You have no shell: read and search files with the file tools.")
+		} else {
+			b.WriteString("Run allowlisted read-only shell commands with the ws exec tools (exec_shell, exec_run); read and search files with the file tools.")
+		}
 	} else {
 		b.WriteString("Run shell commands with the ws exec tools (exec_shell, exec_run); read and change files with the file tools.")
 	}
@@ -898,8 +904,16 @@ func (a *Agent) loadTools(ctx context.Context) error {
 			if _, dup := tools[name]; dup || name == "" {
 				continue
 			}
-			if authority == AuthorityReadOnly && (launchesProcess(name) || (a.cfg.Approve != nil && approvalTool(mt.Name) != "")) {
-				continue
+			if authority == AuthorityReadOnly {
+				if a.cfg.Lead && launchesProcess(name) {
+					continue
+				}
+				if !a.cfg.Lead && name == ModelToolName("exec.spawn") {
+					continue
+				}
+				if a.cfg.Approve != nil && approvalTool(mt.Name) != "" {
+					continue
+				}
 			}
 			tools[name] = toolEntry{ws: mt.Name, readOnly: parallelMCP[name]}
 			defs = append(defs, ToolDef{Name: name, Description: mt.Description, Parameters: mt.InputSchema})
@@ -1039,7 +1053,7 @@ func (a *Agent) invokeMutating(ctx context.Context, tools map[string]toolEntry, 
 
 // invoke runs the tool a call names and returns the text the model sees.
 func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functionCall) (string, bool) {
-	if a.Authority() == AuthorityReadOnly && launchesProcess(c.Name) {
+	if a.Authority() == AuthorityReadOnly && ((a.cfg.Lead && launchesProcess(c.Name)) || (!a.cfg.Lead && c.Name == ModelToolName("exec.spawn"))) {
 		return execLaunchRefusal, true
 	}
 	e, ok := tools[c.Name]

@@ -330,6 +330,9 @@ func (s *Server) bindExecLaunch(ctx context.Context, req *execjob.HostedLaunch, 
 	if s.fileWrites != nil {
 		req.ModelAuthority = func() (bool, error) {
 			level := s.fileWrites.AuthorityForCall()
+			if level == wsfs.AuthorityReadOnly && !s.fileWrites.LiveAuthority && req.ReadOnly {
+				return true, nil
+			}
 			if level != wsfs.AuthorityFull && level != wsfs.AuthorityWorkdirWrite {
 				return false, errors.New("the session cannot launch exec jobs with its current authority")
 			}

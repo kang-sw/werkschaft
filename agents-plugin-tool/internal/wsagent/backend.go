@@ -144,6 +144,9 @@ type LeadSpec struct {
 	// request): ws-mcp confirms a hosted session by the registration's
 	// host_pid, so the row must name the process first.
 	Spawned func(holderID string, pid int)
+	// PreferNativeSubagent reports whether the hosted lead's resolved
+	// subagent policy keeps its native subagent tool active.
+	PreferNativeSubagent bool
 	// FrameTrace, when not empty, is the capture file of an opt-in HTTP/2
 	// frame trace: agy starts with GODEBUG=http2debug=2 and its holder
 	// keeps only filtered frame summaries of that stderr output there.
@@ -335,6 +338,9 @@ type ApprovalRequest struct {
 	// ID is the harness's request id: what an answer names.
 	ID   string `json:"id"`
 	Tool string `json:"tool"`
+	// Kind is the harness-reported tool category when present (e.g. ACP
+	// toolCall.kind such as "edit", "read", "execute"); additive and optional.
+	Kind string `json:"kind,omitempty"`
 	// Input is the tool call's input as the harness sent it; an allow hands
 	// it back unchanged.
 	Input       json.RawMessage `json:"input,omitempty"`
@@ -393,6 +399,10 @@ type Event struct {
 	// UnrequestedCommand names (by tool call id) a native process tool call
 	// whose execution the stream shows with no permission request for it.
 	UnrequestedCommand string
+	// UnrequestedSubagent names (by tool call id) a native subagent tool call
+	// observed in a cutover session whose policy does not prefer native
+	// subagents.
+	UnrequestedSubagent string
 	// PermissionMode is the permission mode the harness reports it runs in.
 	PermissionMode string
 	// HarnessState is the state the harness reports it moved to

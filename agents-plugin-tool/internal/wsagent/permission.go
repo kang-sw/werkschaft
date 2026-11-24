@@ -304,6 +304,8 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 		c.applySettings()
 	}
 	c.permissionNudge(level, !rec.Lead, c.activeMode)
+	c.rejectCutoverPending()
+	c.allowAgyBypassPending()
 	c.recheckExecApprovals()
 	return nil
 }

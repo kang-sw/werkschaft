@@ -83,7 +83,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 		// lists them, holds the report for a live job, and protects the
 		// worktree from release). There is no binary version to verify the
 		// removal against: the removal is the absence of the tool.
-		ExecCutover: &ExecCutoverSupport{},
+		ExecCutover: &ExecCutoverSupport{NoNativeTools: true},
 		Dashboard:   werkDashboardTraits(),
 		Profiles:    []BuiltinProfileRegistration{worker, lead},
 	}
