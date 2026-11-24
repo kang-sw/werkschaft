@@ -391,6 +391,37 @@ func TestErrorBodyIsCapped(t *testing.T) {
 	}
 }
 
+func TestFillArgumentsBoundsEncodedExpansion(t *testing.T) {
+	const delta = "<&>\u2028\u2029\n\\\"\x01é"
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"type":"function_call","id":"call","arguments": ""}`),
+		json.RawMessage(`{"type":"function_call","id":"call","arguments":null,"extra":"<&>"}`),
+		json.RawMessage(`{"type":"function_call","id":"call","nested":{"arguments":""}}`),
+	} {
+		encoded, err := json.Marshal(delta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start, end, prefix := argumentSlot(raw)
+		limit := len(raw) - (end - start) + len(prefix) + len(encoded)
+		var b strings.Builder
+		b.WriteString(delta)
+		state := streamState{maxOutput: limit - 1, args: map[string]*strings.Builder{"call": &b}}
+		items := []json.RawMessage{raw}
+		if err := state.fillArguments(items); !errors.Is(err, errResponseTooLarge) || string(items[0]) != string(raw) {
+			t.Fatalf("over budget item = %s, %v", items[0], err)
+		}
+		state.maxOutput = limit
+		if err := state.fillArguments(items); err != nil || len(items[0]) != limit {
+			t.Fatalf("item at budget = %s, %v", items[0], err)
+		}
+		var got struct{ Arguments string }
+		if err := json.Unmarshal(items[0], &got); err != nil || got.Arguments != delta {
+			t.Fatalf("reconstructed item = %s, %v", items[0], err)
+		}
+	}
+}
+
 func TestReadStreamRejectsOversizedEventAndResponse(t *testing.T) {
 	item := ev("response.output_item.done", `{"output_index":0,"item":`+callItem+`}`)
 	finished := ev("response.completed", `{"response":{"id":"r","output":[]}}`)
