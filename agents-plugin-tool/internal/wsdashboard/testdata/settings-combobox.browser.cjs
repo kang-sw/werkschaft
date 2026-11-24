@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
-const [login, shots] = process.argv.slice(2);
+const [login, shots, mode] = process.argv.slice(2);
 const shot = name => shots ? path.join(shots, name) : undefined;
 
 const CHOICES = {
@@ -101,9 +101,84 @@ const CHOICES = {
       assert.equal(overflow.stageX, false, 'horizontal overflow in settings content');
     }
 
+    if (mode && mode.startsWith('legacy-')) {
+      await context.addCookies([{ name: 'ws_dashboard_theme', value: 'dark', url: base }]);
+      await page.goto(base + '/settings');
+      await frame().locator('[data-settings-section=agents]').click();
+      await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+      const banner = frame().locator('[data-settings-tier-legacy="1"]');
+      const clearBtn = frame().locator('[data-settings-tier-legacy-clear="1"]');
+      await banner.waitFor({ state: 'visible' });
+
+      if (mode === 'legacy-project-only') {
+        const text = await banner.textContent();
+        assert.match(text, /legacy-project-small/, 'banner lists Project legacy override');
+        assert.match(text, /Project/i, 'banner names Project scope');
+        if (shots) {
+          await page.screenshot({ path: shot(process.env.WS_LOOK_BEFORE ? '01-settings-banner-project-only.png' : '01-settings-banner-project-only-enabled.png') });
+        }
+        assert.equal(await clearBtn.isDisabled(), false, 'Project-only legacy cleanup button must be enabled from plain /settings');
+        await clearBtn.click();
+        await banner.waitFor({ state: 'detached' });
+        if (shots) await page.screenshot({ path: shot('02-settings-banner-project-only-cleared.png') });
+        await page.goto(base + '/settings');
+        await frame().locator('[data-settings-section=agents]').click();
+        await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+        assert.equal(await banner.count(), 0, 'Project-only legacy banner stays gone after reload');
+      } else if (mode === 'legacy-mixed') {
+        const text = await banner.textContent();
+        assert.match(text, /legacy-global-small/, 'banner lists Global legacy override');
+        assert.match(text, /legacy-project-medium/, 'banner lists Project legacy override');
+        if (shots) {
+          await page.screenshot({ path: shot(process.env.WS_LOOK_BEFORE ? '02-settings-banner-mixed-scopes.png' : '03-settings-banner-mixed-scopes-enabled.png') });
+        }
+        assert.equal(await clearBtn.isDisabled(), false, 'mixed Global+Project legacy cleanup button must be enabled from plain /settings');
+        await clearBtn.click();
+        await banner.waitFor({ state: 'detached' });
+        if (shots) await page.screenshot({ path: shot('04-settings-banner-mixed-scopes-cleared.png') });
+        await page.goto(base + '/settings');
+        await frame().locator('[data-settings-section=agents]').click();
+        await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+        assert.equal(await banner.count(), 0, 'mixed Global+Project legacy banner stays gone after reload');
+      } else if (mode === 'legacy-global-and-builtin') {
+        await frame().locator('[data-settings-scope=builtin]').click();
+        await frame().locator('.builtin-banner').waitFor();
+        await frame().locator('[data-settings-section=agents]').click();
+        await banner.waitFor({ state: 'visible' });
+        assert.equal(await clearBtn.isDisabled(), true, 'builtin scope keeps legacy cleanup button disabled');
+        await frame().locator('[data-settings-scope=global]').click();
+        await frame().locator('[data-settings-section=agents]').click();
+        await banner.waitFor({ state: 'visible' });
+        assert.equal(await clearBtn.isDisabled(), false, 'global-only legacy cleanup button is enabled');
+        await clearBtn.click();
+        await banner.waitFor({ state: 'detached' });
+        await page.goto(base + '/settings');
+        await frame().locator('[data-settings-section=agents]').click();
+        await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+        assert.equal(await banner.count(), 0, 'global-only legacy banner stays gone after reload');
+      }
+      assert.deepEqual(errors, [], 'unexpected console/page errors: ' + errors.join('; '));
+      console.log('settings legacy cleanup passed (' + mode + ')');
+      return;
+    }
+
     // 1. Dark theme: tier matrix model combobox open + filtering + custom + backend switch + bundle modal
     await setTheme('dark');
     assert.equal(choicesRequests, 0, 'lazy: /support/choices must not be fetched before interacting with combobox');
+
+    // Verify 4-harness tabs (claude, codex, agy, werk; no default tab) and unconfigured Werk row presentation.
+    const tabBuckets = await frame().locator('[data-bucket-key="agents.tier"]').evaluateAll(els => els.map(el => el.getAttribute('data-settings-bucket')));
+    assert.deepEqual(tabBuckets, ['claude', 'codex', 'agy', 'werk'], 'agents.tier exposes 4 harness tabs with no default tab');
+    const starterTab = await frame().locator('[data-bucket-key="agents.tier"][aria-selected="true"]').getAttribute('data-settings-bucket');
+    assert.ok(['claude', 'codex', 'agy', 'werk'].includes(starterTab), 'starter tab is one of the 4 harnesses: ' + starterTab);
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="werk"]').click();
+    const unconfiguredWerk = frame().locator('tbody.tier-entry[data-settings-tier=medium]');
+    await unconfiguredWerk.waitFor();
+    assert.equal(await unconfiguredWerk.getAttribute('data-tier-unconfigured'), '1', 'unconfigured Werk row carries data-tier-unconfigured="1"');
+    assert.equal(await unconfiguredWerk.locator('input.scb-inp.is-unset').count(), 1, 'unconfigured Werk row model input carries .is-unset');
+    assert.match(await unconfiguredWerk.textContent(), /Unconfigured/, 'unconfigured Werk row renders Unconfigured status');
+    if (shots) await page.screenshot({ path: shot('05-settings-werk-unconfigured-row.png') });
+    await frame().locator('[data-bucket-key="agents.tier"][data-settings-bucket="' + starterTab + '"]').click();
 
     const mediumRow = frame().locator('tbody.tier-entry[data-settings-tier=medium]');
     const mediumInputs = mediumRow.locator('input.scb-inp');

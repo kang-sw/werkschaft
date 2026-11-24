@@ -456,6 +456,30 @@ assert.equal(idle.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
 assert.equal(idle.children.filter(c => c.className === 'hud-obs').length, 1, 'the count is updated in place');
 assert.equal(hudCanvas.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
 
+// Re-opening full after compact must re-measure full dimensions instead of
+// reusing compact's cached box (regression for 04af032ab leaving agDone="full|").
+const origPopDesc = Object.getOwnPropertyDescriptor(pop, 'offsetHeight');
+Object.defineProperty(pop, 'offsetHeight', { configurable: true, get() { reads.n++; return 320; } });
+try {
+  hudPayload = { lead: 'coord', completed: 0, peers: 0, roots: [
+    { id: 'a-reopen', label: 'worker', harness: 'claude', state: 'thinking', startedAt: 1000 }
+  ] };
+  ctx.agSwapped();
+  assert.equal(island.attrs['data-mode'], 'compact');
+  badge.listeners.click[0]();
+  assert.equal(island.attrs['data-mode'], 'full');
+  assert.equal(island.style.height, '320px');
+  close.listeners.click[0]();
+  assert.equal(island.attrs['data-mode'], 'compact');
+  assert.equal(island.style.height, '56px');
+  badge.listeners.click[0]();
+  assert.equal(island.attrs['data-mode'], 'full');
+  assert.equal(island.style.height, '320px', 're-opening full after compact restores full height');
+  close.listeners.click[0]();
+} finally {
+  if (origPopDesc) Object.defineProperty(pop, 'offsetHeight', origPopDesc);
+}
+
 // Empty visible HUD forest falls back to idle pill even when folded > 0
 hudPayload = { lead: 'coord', completed: 4, folded: 4, peers: 2, roots: [] };
 ctx.agSwapped();

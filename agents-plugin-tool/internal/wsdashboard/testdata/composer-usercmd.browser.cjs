@@ -151,6 +151,33 @@ async function holdButton(page, locator, ms = 1600) {
       await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'echo ctor'), null, { timeout: 10000 });
       assert.equal(posts.filter(p => p.path.endsWith('/user-commands/constructor/run')).length, 1);
 
+      // Reopen during the post-ack guard and retry before the admission poll.
+      await openPop(view);
+      const dbl = view.locator('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run');
+      const runPath = '**/user-commands/dbl/run';
+      let releaseRun;
+      const runResponse = new Promise(resolve => { releaseRun = resolve; });
+      await page.route(runPath, async route => {
+        await runResponse;
+        await route.continue();
+      });
+      await holdButton(page, dbl);
+      await view.waitForFunction(() => JSON.parse(sessionStorage.getItem('ws.ucmd.attempt.livesession') || '{}')['agent:dbl']);
+      releaseRun();
+      const guard = await view.waitForFunction(() => {
+        if (JSON.parse(sessionStorage.getItem('ws.ucmd.attempt.livesession') || '{}')['agent:dbl']) return false;
+        document.getElementById('ucmdbadge').click();
+        const button = document.querySelector('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run');
+        const disabled = button.disabled;
+        button.click();
+        return { disabled };
+      });
+      assert.equal((await guard.jsonValue()).disabled, true, 'the acknowledged run still guards the slot');
+      await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'echo dbl'));
+      await view.waitForFunction(() => !document.querySelector('.ucmd-card[data-ucmd="dbl"] .ucmd-ibtn-run').disabled);
+      assert.equal(posts.filter(p => p.path.endsWith('/user-commands/dbl/run')).length, 1, 'the retry did not submit a second run');
+      await page.unroute(runPath);
+
       // Out-of-order removal answer does not clobber a newer SSE list.
       await openPop(view);
       let held = null;

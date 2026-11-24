@@ -66,14 +66,16 @@ async function waitAdmitted(view, cmd, count = 1, timeout = 15000) {
       await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
       await attachAdmitted(view);
       assert.equal(await view.locator('.d-cexec, .cbang').count(), 0, 'no inline console or cbang hint before a command');
-      const baseHeight = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
+      const emptyHeight = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
+      await type(view, 'echo hi');
+      const singleLineHeight = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
 
       // done with inline output (headless admission + 0 px composer height change)
       await type(view, '!echo hi');
-      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), baseHeight, '0px height change in bang mode');
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), singleLineHeight, '0px height change in bang mode');
       await view.click('#csend');
       await waitAdmitted(view, 'echo hi');
-      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), baseHeight, '0px height change after command admission');
+      assert.equal(await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height), emptyHeight, '0px height change after command admission');
       assert.equal(await view.locator('.d-cexec, .cbang').count(), 0, 'no inline console after command');
       assert.equal(await view.evaluate(() => window.__admitted.find(e => e.command === 'echo hi').exec_id), 'exec_hi');
       assert.equal(await draft(view), '', 'the draft goes once the daemon holds the submission');

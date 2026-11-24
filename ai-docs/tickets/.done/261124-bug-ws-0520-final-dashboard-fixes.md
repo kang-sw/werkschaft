@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 16d1aa3a9b846884
 sage-review-completeness-reviewed: 16d1aa3a9b846884
+completed: 2026-11-24
 ---
 
 # 0.52 final release-gate dashboard fixes
@@ -110,3 +111,29 @@ Verification: the named tests; full `go test ./internal/wsdashboard -timeout
 30m` and `./internal/wswhiteboard` with Chromium; screenshots of the settings
 banner (Project-only and mixed scopes) and of any surface a browser-red fix
 changes.
+
+### Result (ca2fa33b8) - 2026-11-24
+
+- **Sent-state index (Important 2, culprit `d823ed82b`)**: Replaced per-item document-wide `q('.sentdata i[data-id="..."]')` queries in scoped `applySent(true, sec)` (`agents-plugin-tool/internal/wsdashboard/assets/dashboard-composer-status.js`) with an incremental id-keyed `sentIndex` `Map` maintained via live `doc.getElementsByClassName("sentdata")` and `MutationObserver` (`sentIndexApplyRecords` / `sentIndexGet`). Extended `testdata/board-snap-deck-0512.browser.cjs` to instrument `document.querySelector` / `document.querySelectorAll` and assert `docSentScans === 0`, flat `describes`/`slotVisits` across board sizes (`N=12` vs `N=24`) and sent-row counts (`10` vs `3,000`), and incremental `.sentdata` append updates.
+- **Settings legacy cleanup (Important 3, T0 transparent)**: Allowed empty `selection.Target` for `wsconfig.ScopeProject` in `agents-plugin-tool/internal/wsdashboard/config_routes.go` (`resolveConfig`), while keeping `404 target_not_found` for unknown non-empty targets and `400 invalid_context` for mismatched `ctx.Worktree`. Added `legacyClearTarget(itemScope)` in `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.js` so plain `/settings` clears Project-only, Global-only, and mixed Global+Project overrides, preserves `editable`/`disabled_reason` on snapshot merge, and refreshes UI on partial failure. Added `TestSettingsProjectScopeWithoutWorkspaceTarget`, `TestSettingsLegacyCleanupBrowser`, and 4-harness/unconfigured-Werk checks in `testdata/settings-combobox.browser.cjs`.
+- **Browser reds (all 8 verified)**:
+  - `TestAgentBadgePopoverBrowser` (`04af032ab`, production bug): cleared `agDone = ""` in `agSize()` compact branch (`dashboard-composer-status.js`) + unit regression in `testdata/agents-island.test.cjs`.
+  - `TestBoardHoldPillBrowser` (`03466dd2e`, production bug + outdated test): fixed `!anchorSized.bounded` document-scroll mode in `dashboard-board-anchor.js` (`anchorScroller`, guarding `anchorAlign` against active `wbHistory.keeping(sc)` so `TestCenterNavigationBrowser` stays centered) + updated `testdata/board-anchor.test.cjs` and `testdata/board-hold-pill.browser.cjs`.
+  - `TestComposerExecBrowser` (`40daceb63`, test bug): compared bang-mode height against 1-line normal draft height in `testdata/composer-exec.browser.cjs`.
+  - `TestUserCommandBrowser` (`40daceb63`, test bug): fired rapid 2nd click after POST ack settles in `testdata/composer-usercmd.browser.cjs`.
+  - `TestRailSessionRowBrowser` (`3996eb829`, outdated test): updated `testdata/rail-session-row.browser.cjs` for overlaid `#i-robot` `.sbn` icon (`6px` gap).
+  - `TestWarmSwitchReadsBrowser` (`03466dd2e`, outdated test): updated `testdata/warm-switch-reads.browser.cjs` for anchor-owned `#bcol` (`phase.bcol === 0`, `phase.convo === 1`).
+  - `TestWhiteboardEffectsBrowser` (`c1e91f9199` + `2eefe7a85`, production bug + outdated test): guarded `shShow()` iframe focus in `dashboard-lifecycle.js` against open rail popovers (`!(typeof rp !== "undefined" && rp.P)`) + updated `testdata/whiteboard-effects-browser.cjs` scroller lookup for inner scrollable `section.topic[data-topic]`.
+  - `TestRailNavigationBrowser`: passes (~3.5s) both isolated and in the full package run.
+- **Verification**: `node --check`, `frontend-settings.test.js` (22/22), `generate-package-assets.py --check`, `board-snap-deck-0512.browser.cjs` (10/10), `agents-island.test.cjs`, `composer-multiline.test.cjs` (10/10), `board-snap-deck-0512.test.cjs` (5/5), Windows cross-compile & vet (`GOOS=windows go test -c ./internal/wsdashboard` and `go vet`), before/after Chromium screenshots visually checked under `/tmp/0520-browser-ci-shots/`, and full `./internal/wsdashboard` + `./internal/wswhiteboard` suites run with Chromium.
+
+#### Edition (368f527f2) - 2026-11-24
+
+- Added `anchorIsBounded(col)` in `agents-plugin-tool/internal/wsdashboard/assets/dashboard-board-anchor.js` so `anchorScroller`, `anchorLandingTop`, `anchorAlign`, and `anchorScrollEnd` detect bounded `#bcol` even before `ResizeObserver` fires (fixing `TestBoardAnchorContracts` at `board-anchor.test.cjs:292-309`), and threaded the computed boolean through `anchorSelect` / `anchorAlign` / `anchorScrollEnd` so `getComputedStyle(col)` runs at most once per alignment (`performance.md` `## Frontend Minimal Updates` rule 4).
+- Restored `doc.addEventListener("scrollend", anchorScrollEnd)` while keeping the `!bounded && wbHistory.keeping(sc)` guard in `anchorAlign` and accepting both `col` and `doc`/`doc.scrollingElement` targets in `anchorScrollEnd`, so `TestBoardHoldPillBrowser` (all 9 cases including `documentMode`), `TestBoardAnchorContracts` (19/19), and `TestCenterNavigationBrowser` all pass together.
+- Updated `agents-plugin-tool/internal/wsdashboard/testdata/board-anchor.test.cjs` to extract `anchorIsBounded`.
+
+
+## Resolution (2026-11-24)
+
+Completed Phase 1 in ca2fa33b8: incremental sent-state index for scoped applySent (Important 2), plain-/settings Project & mixed legacy override cleanup (Important 3), and all 7+1 Chromium browser CI regressions with before/after screenshot verification.

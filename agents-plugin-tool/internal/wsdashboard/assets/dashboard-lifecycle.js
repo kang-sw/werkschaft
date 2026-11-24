@@ -1118,7 +1118,7 @@
     shLayout(ent);
     shScroll(ent);
     if (ent.title) doc.title = ent.title;
-    if (!shSettingsEntry) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
+    if (!shSettingsEntry && !(typeof rp !== "undefined" && rp.P)) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
   function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode }); }

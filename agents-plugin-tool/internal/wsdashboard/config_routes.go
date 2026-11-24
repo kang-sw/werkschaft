@@ -203,7 +203,7 @@ func (d *Daemon) resolveConfig(selection configSelection) (configResolved, confi
 	var workspaces map[string]string
 	var worktrees map[string]configWorktree
 	var sessionWorktrees map[string]string
-	if selection.Context.Worktree != "" || selection.Scope == wsconfig.ScopeProject || selection.Scope == wsconfig.ScopeRepo {
+	if selection.Context.Worktree != "" || (selection.Scope == wsconfig.ScopeProject && selection.Target != "") || selection.Scope == wsconfig.ScopeRepo {
 		workspaces, worktrees, sessionWorktrees = d.settingsTargets()
 	}
 	var path string
@@ -219,8 +219,10 @@ func (d *Daemon) resolveConfig(selection configSelection) (configResolved, confi
 		}
 		path, err = wsconfig.GlobalPath(result.opts)
 	case wsconfig.ScopeProject:
-		if _, ok := workspaces[selection.Target]; !ok {
-			return result, configTargetMissing
+		if selection.Target != "" {
+			if _, ok := workspaces[selection.Target]; !ok {
+				return result, configTargetMissing
+			}
 		}
 		path, err = wsconfig.Path(result.opts)
 	case wsconfig.ScopeRepo:
@@ -251,7 +253,7 @@ func (d *Daemon) resolveConfig(selection configSelection) (configResolved, confi
 	if ctx.Worktree != "" {
 		worktree, ok := worktrees[ctx.Worktree]
 		if !ok ||
-			(selection.Scope == wsconfig.ScopeProject && worktree.workspace != selection.Target) ||
+			(selection.Scope == wsconfig.ScopeProject && selection.Target != "" && worktree.workspace != selection.Target) ||
 			(selection.Scope == wsconfig.ScopeRepo && ctx.Worktree != selection.Target) {
 			return result, badConfigContext
 		}

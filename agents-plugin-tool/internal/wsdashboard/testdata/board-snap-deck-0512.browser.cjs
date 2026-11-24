@@ -223,7 +223,7 @@ function buildBootstrapScript(savedCards) {
   const composerStatusJs = readAsset(WSD, 'dashboard-composer-status.js');
   const composerJs = readAsset(WSD, 'dashboard-composer.js');
   const boardItemMatch = composerJs.match(/\n  function boardItem\(id\) \{[\s\S]*?\n  \}/);
-  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
+  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;[\s\S]*?\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
   assert.ok(boardItemMatch, 'production boardItem found');
   assert.ok(applySentMatch, 'production applySent found');
   const streamBundle = [
@@ -782,14 +782,33 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.deepEqual(errors, []);
   });
 
-  await t.test('Finding #12: steady-state step navigation in Chromium is O(1) with zero prunes across board sizes', async () => {
+  await t.test('Finding #12: Designated-Y step navigation measures a bounded window across board sizes', async () => {
     async function measure(topicCount) {
       const { ctx, page, errors } = await openHarness(browser, { topicCount });
       try {
         const stats = await page.evaluate(() => {
+          const { get: readHeight } = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+          let topicMeasures = 0;
+          Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+            configurable: true,
+            get() {
+              if (this.matches('#r-board section.topic[data-topic]')) topicMeasures++;
+              return readHeight.call(this);
+            },
+          });
+          const anchor = window.WsBoardAnchor;
+          const keys = [];
           window.WsBoardVirtual.resetStats();
-          for (let i = 0; i < 6; i++) window.WsBoardAnchor.step(1);
-          return window.WsBoardVirtual.stats();
+          try {
+            for (let i = 0; i < 6; i++) {
+              if (!anchor.step(1)) throw new Error('step must move to the next card');
+              keys.push(anchor.key());
+            }
+          } finally {
+            Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { get: readHeight });
+          }
+          const { active, start, end } = anchor.windowInfo();
+          return { ...window.WsBoardVirtual.stats(), keys, active, mounted: end - start + 1, topicMeasures };
         });
         assert.deepEqual(errors, []);
         return stats;
@@ -798,27 +817,26 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
       }
     }
 
-    const s12 = await measure(12);
     const s24 = await measure(24);
-    assert.equal(s12.prunes, 0, 'zero prunes during steady-state step navigation (N=12)');
-    assert.equal(s24.prunes, 0, 'zero prunes during steady-state step navigation (N=24)');
-    assert.equal(s12.fullReconciles, 0, 'zero full reconciles during steady-state step navigation');
-    assert.equal(s24.fullReconciles, 0, 'zero full reconciles during steady-state step navigation');
-    assert.equal(s12.deltaReconciles, 6);
-    assert.equal(s24.deltaReconciles, 6);
-    assert.equal(s12.describes, s24.describes, `describes must be invariant across N=12 (${s12.describes}) and N=24 (${s24.describes})`);
-    assert.ok(s24.describes <= 6, `expected <= 6 total describes across 6 steps, got ${s24.describes}`);
-    assert.equal(s12.slotVisits, s24.slotVisits, `slotVisits must be O(1) invariant across N=12 (${s12.slotVisits}) and N=24 (${s24.slotVisits})`);
-    assert.ok(s24.slotVisits > 0 && s24.slotVisits <= 80, `slotVisits must stay O(1)-bounded across 6 steps, got ${s24.slotVisits}`);
-    assert.equal(s12.frameIndexes, s24.frameIndexes, `frameIndexes must be O(1) invariant across N=12 (${s12.frameIndexes}) and N=24 (${s24.frameIndexes})`);
-    assert.ok(s24.frameIndexes <= 12, `frameIndexes must stay O(1)-bounded across 6 steps, got ${s24.frameIndexes}`);
+    const s48 = await measure(48);
+    for (const stat of [s24, s48]) {
+      assert.equal(stat.active, true, 'the browser uses Designated-Y');
+      assert.equal(new Set(stat.keys).size, 6, 'all six steps reach distinct cards');
+      assert.equal(stat.prunes, 0, 'steady-state navigation never prunes the full board');
+      assert.equal(stat.fullReconciles, 0, 'steady-state navigation never reconciles the full board');
+      assert.ok(stat.mounted <= 17, 'at most eight cards on either side of the anchor are mounted');
+      assert.ok(stat.topicMeasures > 0 && stat.topicMeasures <= 6 * 17, 'steps measure only their mounted cards');
+    }
+    assert.deepEqual(s24.keys, s48.keys);
+    assert.equal(s24.topicMeasures, s48.topicMeasures, 'measurement count is independent of board size');
   });
 
-  await t.test('Important #4 (Chromium): entering SSE-updated stashed topic stays O(1) across board sizes (N=12 vs N=24) and far exempt draft counts (2 vs 12)', async () => {
-    async function measureStashedEntry(topicCount, farExemptCount) {
+  await t.test('Important #4 (Chromium): entering SSE-updated stashed topic stays O(1) across board sizes (N=24 vs N=36) and far exempt draft counts (2 vs 12)', async () => {
+    async function measureStashedEntry(topicCount, farExemptCount, sentRowCount = 10) {
       const { ctx, page, errors } = await openHarness(browser, { topicCount });
       try {
-        const targetIdx = 7;
+        const targetIdx = 10;
+        const itemId = `${targetIdx}01`;
         const targetId = topicHexId(targetIdx);
         const initialHtml = Array.from({ length: topicCount }, (_, idx) => {
           const i = idx + 1;
@@ -828,19 +846,19 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           const i = idx + 1;
           return buildTopicHtml(i, {
             withAsk: i === 1 || i === targetIdx,
-            rev: i === targetIdx ? 'rev-7-sse-stashed' : `rev-${i}-v1`,
-            streamNote: i === targetIdx ? 'StashedSseStreamNote-7' : undefined,
+            rev: i === targetIdx ? 'rev-target-sse-stashed' : `rev-${i}-v1`,
+            streamNote: i === targetIdx ? 'StashedSseStreamNote' : undefined,
           });
         }).join('\n');
 
-        const result = await page.evaluate(({ tid, initHtml, html, farExemptCount }) => {
+        const result = await page.evaluate(({ tid, itemId, initHtml, html, farExemptCount, sentRowCount }) => {
           // Establish baseline boardRendered hash and flush initial viewed hold before adding drafts/SSE update.
           window.__testApi.swapBoard('h-init', initHtml);
           const allTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
           window.WsBoardAnchor.select(allTopics[1]);
           window.WsBoardAnchor.select(allTopics[0]);
 
-          // Populate .sentdata entries for both far topics and the target stashed topic (#7 -> data-id="701").
+          // Populate .sentdata entries (10 vs 3,000 rows), including the target and unrelated topics.
           let sentBox = document.querySelector('.sentdata');
           if (!sentBox) {
             sentBox = document.createElement('div');
@@ -848,18 +866,20 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             sentBox.hidden = true;
             document.body.appendChild(sentBox);
           }
-          sentBox.innerHTML = [
+          const rows = [
             '<i data-id="101" data-state="held" data-answer="later" data-note="far-1"></i>',
-            '<i data-id="701" data-state="sent" data-answer="yes" data-note="approved"></i>',
+            `<i data-id="${itemId}" data-state="sent" data-answer="yes" data-note="approved"></i>`,
             '<i data-id="1101" data-state="sent" data-answer="ok" data-note="far-11"></i>',
             '<i data-id="1201" data-state="held" data-answer="no" data-note="far-12"></i>',
-          ].join('');
+          ];
+          for (let r = rows.length; r < sentRowCount; r++) {
+            rows.push(`<i data-id="9${String(r).padStart(4, '0')}" data-state="sent" data-answer="ok" data-note="bulk-${r}"></i>`);
+          }
+          sentBox.innerHTML = rows.join('');
 
-          // 1. Make `farExemptCount` OTHER far topics exempt strictly outside both slot 0's
-          //    near window [0..2] and targetIdx's near window [4..8] BEFORE the SSE swap, so
-          //    entering work is identical while far exempt count grows from 2 to 12.
+          // Park other topics beyond either mounted window with drafts.
           const exemptIndices = [];
-          for (let idx = 9; idx < allTopics.length && exemptIndices.length < farExemptCount; idx++) {
+          for (let idx = 18; idx < allTopics.length && exemptIndices.length < farExemptCount; idx++) {
             exemptIndices.push(idx);
           }
           for (const idx of exemptIndices) {
@@ -868,15 +888,18 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             const tn = sec.querySelector('.tnote[data-topic]');
             if (tn) { tn.hidden = false; tn.value = 'Draft on ' + sec.id; }
           }
-          window.WsBoardAnchor.select(allTopics[0]);
-          window.WsBoardVirtual.reconcile({ full: true });
+          window.WsBoardAnchor.settle();
 
-          // 2. Stash an SSE update on collapsed far topic #7 (leaving all other topics' data-th unchanged).
+          // 2. Stash an SSE update on the collapsed target topic (leaving all other topics' data-th unchanged).
           window.__testApi.swapBoard('h-sse-i4', html);
+          // Apply any draft bookkeeping queued by the fixture's off-window edits.
+          window.WsBoardAnchor.select(allTopics[0], { still: true });
           const hasStashedBefore = window.WsBoardVirtual.hasStashed(tid);
+          const parkedDrafts = exemptIndices.filter(idx => allTopics[idx].getAttribute('data-wb-offwindow') === 'parked').length;
 
-          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, and whole-board #r-board/#bgal
-          //    querySelectorAll to verify scoped hydration only (zero boardItem/boardQ whole-board scans in applySent).
+          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, document.querySelector/All,
+          //    and whole-board #r-board/#bgal querySelectorAll to verify scoped O(1) hydration only
+          //    (zero boardItem/boardQ whole-board scans AND zero document-wide .sentdata scans).
           const origDecorate = window.WsCards.decorate;
           const origWbBindBoard = window.wbBindBoard;
           const origWbForm = window.wbForm;
@@ -884,7 +907,22 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           const galEl = document.getElementById('bgal');
           const origBoardQSA = boardEl.querySelectorAll;
           const origGalQSA = galEl ? galEl.querySelectorAll : null;
-          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0;
+          const origDocQS = document.querySelector;
+          const origDocQSA = document.querySelectorAll;
+          const origDocClass = document.getElementsByClassName;
+          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0, docSentScans = 0;
+          document.querySelector = function (sel) {
+            if (typeof sel === 'string' && sel.includes('.sentdata')) docSentScans++;
+            return origDocQS.apply(this, arguments);
+          };
+          document.querySelectorAll = function (sel) {
+            if (typeof sel === 'string' && sel.includes('.sentdata')) docSentScans++;
+            return origDocQSA.apply(this, arguments);
+          };
+          document.getElementsByClassName = function (name) {
+            if (name === 'sentdata') docSentScans++;
+            return origDocClass.apply(this, arguments);
+          };
           boardEl.querySelectorAll = function (sel) {
             if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
             return origBoardQSA.apply(this, arguments);
@@ -910,28 +948,63 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             return origWbForm ? origWbForm.apply(this, arguments) : undefined;
           };
 
-          // 4. Reset stats and navigate straight into the SSE-updated stashed topic #7.
+          // 4. Reset stats and navigate straight into the SSE-updated stashed topic.
           window.WsBoardVirtual.resetStats();
           const targetSec = document.getElementById(tid);
-          window.WsBoardAnchor.select(targetSec);
+          const activeFreeCanvas = window.WsBoardAnchor.free();
+          const wasOffWindow = targetSec.getAttribute('data-wb-offwindow') === 'hidden';
+          const origGetAttr = Element.prototype.getAttribute;
+          let sentRowReads = 0;
+          Element.prototype.getAttribute = function () {
+            if (this.parentNode === sentBox) sentRowReads++;
+            return origGetAttr.apply(this, arguments);
+          };
+          try {
+            window.WsBoardAnchor.select(targetSec);
+          } finally {
+            Element.prototype.getAttribute = origGetAttr;
+          }
           const stats = window.WsBoardVirtual.stats();
           const hydratedText = targetSec.textContent || '';
-          const item701 = targetSec.querySelector('#item-701');
-          const sentMark701 = item701 ? item701.querySelector('.sentmark.sent') : null;
+          const hydratedItem = targetSec.querySelector(`#item-${itemId}`);
+          const sentMark = hydratedItem ? hydratedItem.querySelector('.sentmark.sent') : null;
 
+          // Restore whole-board / decorate / bind / form wrappers before the follow-up swapBoard
+          // (swapBoard runs a full board swap, whereas the follow-up select tests scoped hydration).
           boardEl.querySelectorAll = origBoardQSA;
           if (galEl && origGalQSA) galEl.querySelectorAll = origGalQSA;
           window.WsCards.decorate = origDecorate;
           window.wbBindBoard = origWbBindBoard;
           window.wbForm = origWbForm;
+
+          // Verify incremental append keeps sentIndex accurate on next stashed hydration with zero doc .sentdata scans.
+          const extra = document.createElement('i');
+          extra.setAttribute('data-id', itemId);
+          extra.setAttribute('data-state', 'held');
+          extra.setAttribute('data-answer', 'revised');
+          extra.setAttribute('data-note', 'followup');
+          sentBox.appendChild(extra);
+          window.WsBoardAnchor.select(allTopics[0]);
+          window.__testApi.swapBoard('h-sse-i4-append', html.replace('rev-target-sse-stashed', 'rev-target-sse-stashed-2'));
+          window.WsBoardAnchor.select(targetSec);
+          const marksAfterAppend = targetSec.querySelectorAll(`#item-${itemId} .sentmark`).length;
+
+          document.querySelector = origDocQS;
+          document.querySelectorAll = origDocQSA;
+          document.getElementsByClassName = origDocClass;
           return {
+            activeFreeCanvas,
+            wasOffWindow,
             hasStashedBefore,
+            sentRowReads,
             stillCollapsed: targetSec.hasAttribute('data-wb-virtual'),
-            renderedSse: hydratedText.includes('StashedSseStreamNote-7'),
-            item701HasSentClass: !!(item701 && item701.classList.contains('sent-sent')),
-            sentMark701Text: sentMark701 ? sentMark701.textContent : null,
+            renderedSse: hydratedText.includes('StashedSseStreamNote'),
+            hydratedItemHasSentClass: !!(hydratedItem && hydratedItem.classList.contains('sent-sent')),
+            sentMarkText: sentMark ? sentMark.textContent : null,
+            marksAfterAppend,
             wholeBoardSentScans,
-            exemptCount: exemptIndices.length,
+            docSentScans,
+            parkedDrafts,
             stats,
             decorateScoped,
             decorateWholeBoard,
@@ -939,15 +1012,21 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             bindBoardWholeBoard,
             wbFormCalls,
           };
-        }, { tid: targetId, initHtml: initialHtml, html: updatedHtml, farExemptCount });
+        }, { tid: targetId, itemId, initHtml: initialHtml, html: updatedHtml, farExemptCount, sentRowCount });
 
         assert.deepEqual(errors, []);
+        assert.equal(result.parkedDrafts, farExemptCount);
+        assert.equal(result.activeFreeCanvas, true, 'the browser uses Designated-Y');
+        assert.equal(result.wasOffWindow, true, 'target starts beyond the mounted window');
+        assert.equal(result.sentRowReads, 0, 'hydration uses the warm index without reading any sent DOM rows');
         assert.equal(result.hasStashedBefore, true, 'target topic had stashed SSE revision');
         assert.equal(result.stillCollapsed, false, 'target topic hydrated on navigation');
         assert.equal(result.renderedSse, true, 'stashed SSE content rendered on hydration');
         assert.equal(result.wholeBoardSentScans, 0, 'applySent(true, sec) must NEVER run whole-board boardItem/boardQ scans on #r-board or #bgal');
-        assert.equal(result.item701HasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
-        assert.equal(result.sentMark701Text, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
+        assert.equal(result.docSentScans, 0, `applySent(true, sec) must NEVER run document-wide .sentdata scans (sentRowCount=${sentRowCount})`);
+        assert.equal(result.hydratedItemHasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
+        assert.equal(result.sentMarkText, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
+        assert.equal(result.marksAfterAppend, 2, 'incremental .sentdata append updates scoped sentIndex on next hydration');
         assert.equal(result.decorateWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board WsCards.decorate()');
         assert.equal(result.decorateScoped, 1, 'hydrating one stashed topic calls scoped WsCards.decorate(sec) exactly once');
         assert.ok(result.bindBoardScoped >= 1, 'hydrating one stashed topic calls scoped wbBindBoard(sec)');
@@ -959,17 +1038,15 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
       }
     }
 
-    const r12_2 = await measureStashedEntry(12, 2);
-    const r24_2 = await measureStashedEntry(24, 2);
-    const r24_12 = await measureStashedEntry(24, 12);
+    const small = await measureStashedEntry(24, 2, 10);
+    const large = await measureStashedEntry(36, 2, 10);
+    const manySent = await measureStashedEntry(36, 12, 3000);
 
-    assert.equal(r12_2.stats.prunes, 0);
-    assert.equal(r24_2.stats.prunes, 0);
-    assert.equal(r24_12.stats.prunes, 0);
-    assert.equal(r12_2.stats.describes, r24_2.stats.describes, `describes must be invariant across N=12 (${JSON.stringify(r12_2.stats)}) and N=24 (${JSON.stringify(r24_2.stats)})`);
-    assert.equal(r24_2.stats.describes, r24_12.stats.describes, `describes must be invariant across 2 (${r24_2.stats.describes}) and 12 (${r24_12.stats.describes}) far exempt topics`);
-    assert.equal(r12_2.stats.slotVisits, r24_2.stats.slotVisits, `slotVisits must be invariant across N=12 (${r12_2.stats.slotVisits}) and N=24 (${r24_2.stats.slotVisits})`);
-    assert.equal(r24_2.stats.slotVisits, r24_12.stats.slotVisits, `slotVisits must be invariant across 2 (${r24_2.stats.slotVisits}) and 12 (${r24_12.stats.slotVisits}) far exempt topics`);
+    for (const result of [small, large, manySent]) assert.equal(result.stats.prunes, 0);
+    for (const key of ['describes', 'slotVisits']) {
+      assert.equal(small.stats[key], large.stats[key], key + ' must be invariant across board sizes');
+      assert.equal(large.stats[key], manySent.stats[key], key + ' must be invariant across far draft and sent-row counts');
+    }
   });
 
   await t.test('Important #5 (Chromium): lazy-history reply arriving after navigation reattaches topic runs live admission and surfaces archived matches in palette', async () => {

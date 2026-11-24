@@ -1168,6 +1168,15 @@ var wsSettingsChoiceLabels = {
       });
     }
 
+    function legacyClearTarget(itemScope) {
+      var target = preferenceTarget(itemScope);
+      if (target) return target;
+      if (itemScope === "project") {
+        return { scope: "project", target: "", context: selection.context };
+      }
+      return null;
+    }
+
     var legacyBanner = null;
     function syncLegacyBanner() {
       var items = legacyDefaultOverrides(currentEntries());
@@ -1183,24 +1192,29 @@ var wsSettingsChoiceLabels = {
       banner.dataset.settingsTierLegacy = "1";
       var summary = items.map(formatLegacyOverride).join(", ");
       var text = el("span", "tier-legacy-text", tr("js.settings.tier.legacy_default_banner", items.length, summary));
-      var clearable = items.filter(function (item) { return Boolean(preferenceTarget(item.scope)); });
+      var clearable = items.filter(function (item) { return Boolean(legacyClearTarget(item.scope)); });
       var errHint = el("span", "hint err");
       var clearBtn = button("tier-legacy-btn", tr("js.settings.tier.legacy_default_clear"), async function () {
         if (clearBtn.disabled) return;
         clearBtn.disabled = true;
         clearBtn.textContent = tr("js.settings.tier.legacy_default_clearing");
         errHint.textContent = "";
+        var mutated = false;
         try {
           for (var item of clearable) {
-            var target = preferenceTarget(item.scope);
+            var target = legacyClearTarget(item.scope);
             if (!target) continue;
             var result = await request("/api/config/reset", Object.assign({}, target, {
               key: spec.key,
               selectors: { tier: item.tier, harness: "default" }
             }));
             if (result && result.entry) {
+              mutated = true;
               var affected = new Map((result.affected_entries || [result.entry]).map(function (it) { return [entryID(it), it]; }));
-              snapshot.entries = snapshot.entries.map(function (it) { return affected.get(entryID(it)) || it; });
+              snapshot.entries = snapshot.entries.map(function (it) {
+                var fresh = affected.get(entryID(it));
+                return fresh ? Object.assign({}, fresh, { editable: it.editable, disabled_reason: it.disabled_reason }) : it;
+              });
             }
           }
           renderCounts();
@@ -1209,6 +1223,12 @@ var wsSettingsChoiceLabels = {
           syncTable();
           syncLegacyBanner();
         } catch (error) {
+          if (mutated) {
+            renderCounts();
+            choices.forEach(syncTabCard);
+            syncActiveBar();
+            syncTable();
+          }
           clearBtn.disabled = false;
           clearBtn.textContent = tr("js.settings.tier.legacy_default_clear");
           errHint.textContent = statusText(error.code);

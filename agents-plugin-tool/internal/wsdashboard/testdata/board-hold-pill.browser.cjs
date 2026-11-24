@@ -149,10 +149,15 @@ const report = {cases: [], screenshots: [], errors: []};
       await capture('pending-1-chips', {upd: 1, open: 1, ans: 1});
       await update('T04');
       assert.equal(await label.textContent(), '보드 업데이트 1', 'same topic revised twice counts once');
+      const freeCanvas = await page.evaluate(() => window.WsBoardAnchor.free());
+      assert.equal(freeCanvas, !documentMode, 'fixture uses the intended board mode');
+      // Designated-Y holds other visible topics too. The document-scrolled
+      // fallback still holds only the current topic.
       await update('T05');
-      assert.equal(await label.textContent(), '보드 업데이트 2', 'two distinct topics');
-      await update('T06');
-      assert.equal(await label.textContent(), '보드 업데이트 3', 'three distinct topics');
+      assert.equal(await label.textContent(), freeCanvas ? '보드 업데이트 2' : '보드 업데이트 1');
+      const nextTopic = page.locator('section[data-topic="T05"]');
+      assert.equal(await nextTopic.getAttribute('data-board-held'), freeCanvas ? 'moved' : null);
+      assert.equal(await nextTopic.evaluate(n => n.textContent.includes('Pending review update')), !freeCanvas);
       const chips = await pill.locator('.oq-seg:visible').evaluateAll(nodes => nodes.map(n => ({kind: n.dataset.k, label: getComputedStyle(n.firstElementChild).display, h: n.getBoundingClientRect().height, x: n.getBoundingClientRect().x})));
       assert.deepEqual(chips.map(c => c.kind), ['open', 'ans']);
       const lb = await label.boundingBox();
@@ -160,7 +165,6 @@ const report = {cases: [], screenshots: [], errors: []};
       const style = await pill.evaluate(n => ({animation: getComputedStyle(n).animationName, duration: getComputedStyle(n).animationDuration}));
       assert.equal(style.animation, reduced ? 'none' : 'board-pill-sway');
       if (!reduced) assert.equal(style.duration, '2.6s');
-      await capture('pending-3-chips', {upd: 3, open: 1, ans: 1});
       assert(await page.locator('section[data-topic="T04"] iframe.doc-frame').count() > 0, 'the static mount check includes a real hydrated panel');
       assert.equal(await page.locator('.board-hold-nudge').first().evaluate(n => getComputedStyle(n).animationName), reduced ? 'none' : 'board-hold-nudge');
       const mounts = await page.evaluate(() => window.__hold.mounts);
@@ -168,7 +172,7 @@ const report = {cases: [], screenshots: [], errors: []};
       assert.equal(await page.evaluate(() => window.__hold.mounts), mounts, 'static viewport has zero iframe mount churn');
       const before = await page.evaluate(() => ({morphs: window.__holdMorphs || 0, setters: window.__hold.setters.length, scrolls: window.__hold.scrolls.length}));
       await label.click();
-      assert.deepEqual(await page.locator('.board-fresh').evaluateAll(nodes => nodes.map(n => n.dataset.topic).sort()), ['T04', 'T05', 'T06'], 'counted topics flash once on explicit apply');
+      assert.deepEqual(await page.locator('.board-fresh').evaluateAll(nodes => nodes.map(n => n.dataset.topic).sort()), freeCanvas ? ['T04', 'T05'] : ['T04'], 'held topics flash once on explicit apply');
       assert.equal(await page.locator('.board-fresh').first().evaluate(n => getComputedStyle(n).animationDuration), reduced ? '0s' : '0.6s');
       await page.waitForFunction(() => window.__holdScroller().scrollTop <= 1);
       await page.waitForFunction(() => !window.wbHistory.keeping(window.__holdScroller()));
@@ -177,15 +181,22 @@ const report = {cases: [], screenshots: [], errors: []};
       assert.equal(after.morphs - before.morphs, 1, 'one release settle');
       assert.equal(after.pending, 0, 'click clears the distinct pending count');
       assert.equal(after.held, 0, 'released topics lose their hold indicators');
-      assert.equal(after.setters.length, before.setters, 'no keep compensation writer during the home release/scroll');
+      const homeWrites = after.setters.slice(before.setters);
       const homeScrolls = after.scrolls.slice(before.scrolls);
-      assert(homeScrolls.length >= 1 && homeScrolls.every(s => s.args[0].top === 0), 'only the navigation owner targets absolute zero');
-      assert.equal(homeScrolls[0].args[0].behavior, reduced ? 'instant' : 'smooth');
-      // The home arrow stays visible in the real zero-scroll outcome.
+      if (freeCanvas) {
+        assert(homeWrites.every(s => s.stack.includes('freeLayout')), 'Designated-Y owns direct home scroll writes');
+        const scroll = homeScrolls[0];
+        if (scroll) assert.equal(scroll.args[0].behavior, 'smooth');
+        else assert(homeWrites.some(s => s.value === 0), 'the home action reaches the top through the canvas');
+      } else {
+        assert.equal(homeWrites.length, 0, 'no keep compensation writer during document home navigation');
+        assert(homeScrolls.length >= 1 && homeScrolls.every(s => s.args[0].top === 0), 'the navigation owner targets absolute zero');
+        assert.equal(homeScrolls[0].args[0].behavior, 'auto', 'the reduced-motion document scroll uses auto behavior');
+      }
+      // The home arrow hides at idle top once pending clears.
       await capture('after-click', {upd: 0, open: 0, ans: 0});
       await page.waitForFunction(() => !document.querySelector('.board-fresh'));
-      // Pending at top: existing visible-panel staging, not later head/new-
-      // topic insertion freezing. Layout is unchanged until explicit apply.
+      // Pending at top: current card T01 is staged until explicit apply.
       await page.evaluate(() => {window.__holdScroller().scrollTop = 0;});
       await frames(18);
       const topBefore = await geometry();
@@ -196,65 +207,40 @@ const report = {cases: [], screenshots: [], errors: []};
       assert.equal(topAfter.scroll, 0);
       for (const a of topBefore.topics.filter(n => n.y >= 0 && n.y < 700)) assert(Math.abs(a.y - topAfter.topics.find(n => n.name === a.name).y) <= 1, 'top pending signal does not change visible layout');
       await capture('pending-1', {upd: 1, open: 0, ans: 0});
-      await page.evaluate(async () => {window.__holdScroller().scrollTop = 5; await new Promise(requestAnimationFrame);});
-      const visibleManualBefore = await page.evaluate(() => window.__holdMorphs || 0);
-      await page.evaluate(() => {window.__holdScroller().scrollTop = 0;});
-      await frames(18);
-      assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'hand-home keeps the click-only latch count');
-      assert.equal(await label.isVisible(), true, 'click-only latch keeps its update badge at home');
-      assert.equal(await page.evaluate(() => window.__holdMorphs || 0), visibleManualBefore, 'visible hand-home acknowledgement does not release');
-      assert.deepEqual(await page.locator('.board-fresh').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), [], 'hand-home does not flash a click-only latch as applied');
       await update('T25');
       assert.equal(await label.textContent(), '보드 업데이트 1', 'unrelated offscreen change preserves the latched signal');
-      assert.equal(await page.locator('section[data-topic="T01"]').getAttribute('data-board-held'), 'moved', 'click-only held topic retains its accent/tag until release');
+      assert.equal(await page.locator('section[data-topic="T01"]').getAttribute('data-board-held'), 'moved', 'held top topic retains its accent/tag until release');
       await update('T01');
       assert.equal(await label.textContent(), '보드 업데이트 1', 'a new revision still counts the latched topic once');
       await pill.locator('.oq-arr').click();
       await page.waitForFunction(() => window.wbPill.pending === 0);
+      assert.equal(await page.locator('[data-board-held]').count(), 0, 'home arrow click releases held top topic');
+      // Leaving a held card via board navigation releases its staged update automatically (03466dd2e).
       await scrollToTopic('T04');
       await update('T04');
-      const heldBefore = await page.locator('[data-board-held]').count();
-      const manualBefore = await page.evaluate(() => window.__holdMorphs || 0);
-      // Setup precondition: the down-origin update must still be staged away
-      // from home, so a stale setup is distinguishable from a hand-home release.
-      assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'setup: the down-origin T04 update is staged before the hand scroll');
-      await page.evaluate(() => {window.__holdScroller().scrollTop = 0;});
-      await frames(18);
-      assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'hand scroll to top keeps the unapplied down-origin update count');
-      assert.equal(await label.isVisible(), true, 'unapplied content keeps its update label, not a plain arrow');
-      assert.equal(await label.textContent(), '보드 업데이트 1');
-      assert.equal(await page.evaluate(() => window.__holdMorphs || 0), manualBefore, 'hand scroll to top releases nothing');
-      assert.equal(await page.locator('[data-board-held]').count(), heldBefore, 'hand scroll retains staged topic rendering');
-      await label.click();
+      assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'setup: T04 is held while current');
+      await page.evaluate(() => window.WsBoardAnchor.select(document.querySelector('section.topic[data-topic="T05"]')));
       await page.waitForFunction(() => window.wbPill.pending === 0);
-      await page.waitForFunction(() => !window.wbHistory.keeping(window.__holdScroller()));
-      assert.equal(await page.evaluate(() => window.__holdMorphs || 0), manualBefore + 1, 'the still-labelled home action applies the held snapshot exactly once');
-      assert.equal(await page.locator('[data-board-held]').count(), 0);
-      await scrollToTopic('T05');
-      await update('T05', true);
-      assert.equal(await page.locator('section[data-topic="T05"] .board-hold-tag').textContent(), '닫힘', 'server-closed staged topic gets the closed tag');
-      await label.click();
-      await page.waitForFunction(() => !window.wbHistory.keeping(window.__holdScroller()));
+      await frames();
+      assert.equal(await page.locator('section[data-topic="T04"]').evaluate(n => n.textContent.includes('Pending review update')), true, 'leaving a held card admits its staged update');
+      // Close the topic with the panel while it is in view.
       await scrollToTopic('T04');
-      // The setup's native scroll is user input to the owner. Let its 200ms
-      // cooldown expire on the live document clock before testing a correction.
-      await page.evaluate(async () => {const start = performance.now(); while (performance.now() - start < 300) await new Promise(requestAnimationFrame);});
-      await update('T04', false, true);
-      assert.equal(await page.evaluate(() => window.__holdScroller().scrollTop), 0, 'fixture reproduces the later-phase canonical-rise clamp');
-      assert.equal(await label.textContent(), '보드 업데이트 1', 'an automatic owner correction to home does not acknowledge pending data');
+      await update('T04', true);
+      assert.equal(await page.locator('section[data-topic="T04"]').getAttribute('data-board-held'), 'closed');
+      assert.equal(await page.locator('section[data-topic="T04"] .board-hold-tag').textContent(), '닫힘', 'server-closed staged topic gets the closed tag');
+      await label.click();
+      await page.waitForFunction(() => window.wbPill.pending === 0 && !window.wbHistory.keeping(window.__holdScroller()));
+      // Overview hides the capsule; Escape closes overview.
       await page.locator('.board-overview').click();
       await page.waitForFunction(() => document.documentElement.hasAttribute('data-overview'));
       assert.equal(await pill.isVisible(), false, 'capsule hidden in overview');
       await page.waitForFunction(() => !document.querySelector('[data-overview-motion]'));
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-overview'));
-      // Fresh canonical stream: top-origin rises/new topics must stay click-
-      // only even after scrolling away, unlike ordinary down-origin panels.
+      // Fresh canonical stream: under per-card staging (03466dd2e), offscreen
+      // rises and new topics admit immediately into canonical order while the
+      // current card's own updates stay held until apply.
       await page.request.post(origin + '/reset');
-      // A same-tab reload restores the saved session view: its pagehide save
-      // records the T04 panel anchor from the rise phase, and after /reset
-      // that anchor sits 784px down. This phase starts from a fresh stream at
-      // home, so drop the view after the app's own (earlier-registered) save.
       await page.evaluate(() => window.addEventListener('pagehide', () => sessionStorage.removeItem('ws.dashboard.session-views')));
       await page.goto(origin + '/s/holdpill' + (documentMode ? '?document=1' : ''), {waitUntil: 'domcontentloaded'});
       await page.waitForFunction(() => window.wbPill?.update && window.wbHistory && document.querySelectorAll('section.topic').length === 25);
@@ -262,44 +248,13 @@ const report = {cases: [], screenshots: [], errors: []};
       await page.evaluate(() => {window.__holdScroller = () => window.wbHistory.keep(document.querySelector('section.topic'), {capture: false}).scroller;});
       await page.evaluate(() => {window.__holdScroller().scrollTop = 0; window.wbPill.update();});
       await frames(18);
-      const frozenTop = await geometry();
-      assert.equal(frozenTop.scroll, 0);
-      const initialNames = frozenTop.topics.map(n => n.name);
       await update('T20', false, true);
-      assert.equal(await page.evaluate(() => window.__holdScroller().scrollTop), 0, 'offscreen rise at home does not compensate/scroll');
-      assert.deepEqual((await geometry()).topics.map(n => n.name), initialNames, 'offscreen rise preserves the existing topic order');
-      for (const a of frozenTop.topics.filter(n => n.y >= 0 && n.y < 800)) assert(Math.abs(a.y - (await geometry()).topics.find(n => n.name === a.name).y) <= 1, 'top-origin rise preserves every visible card position');
-      assert.equal(await label.textContent(), '보드 업데이트 1');
-      await capture('top-frozen-rise', {upd: 1, open: 0, ans: 0});
-      await update('T20', false, true);
-      assert.equal(await label.textContent(), '보드 업데이트 1', 'repeated top-origin rise still counts one topic');
+      assert.equal(await page.locator('section[data-topic="T20"]').evaluate(n => n.textContent.includes('Pending review update')), true, 'offscreen rise admits immediately under per-card staging');
       await update('NEW', false, true);
-      assert.equal(await page.evaluate(() => window.__holdScroller().scrollTop), 0, 'new topic at home does not insert/scroll');
-      assert.equal(await page.locator('section[data-topic="NEW"]').count(), 0, 'new topic is absent from mounted DOM until apply');
-      assert.equal((await geometry()).topics[0].name, initialNames[0], 'first visible card stays unchanged');
-      assert.equal(await label.textContent(), '보드 업데이트 2', 'unmounted new topic counts from pending data');
-      await capture('top-frozen-new', {upd: 2, open: 0, ans: 0});
-      await scrollToTopic('T04');
-      await update('T04');
-      assert.equal(await label.textContent(), '보드 업데이트 3', 'down-origin panel can stage beside two click-only top changes');
-      assert.equal(await page.locator('section[data-topic="T04"]').evaluate(n => n.textContent.includes('Pending review update')), false);
-      await scrollToTopic('T10');
-      await page.waitForFunction(() => document.querySelector('section[data-topic="T04"]').textContent.includes('Pending review update'));
-      await page.waitForFunction(() => window.wbPill.pending === 2);
-      assert.equal(await page.locator('section[data-topic="NEW"]').count(), 0, 'scroll release cannot insert the top-origin new topic');
-      assert.equal(await page.locator('section[data-topic="T20"]').evaluate(n => n.textContent.includes('Pending review update')), false, 'scroll release cannot admit the top-origin rise');
-      assert.deepEqual((await geometry()).topics.map(n => n.name), initialNames, 'top-origin order stays frozen after scroll-away release');
-      const topMorphs = await page.evaluate(() => window.__holdMorphs || 0);
-      await label.click();
-      await page.waitForFunction(() => window.__holdScroller().scrollTop === 0 && window.wbPill.pending === 0);
-      await page.waitForFunction(() => !window.wbHistory.keeping(window.__holdScroller()));
-      assert.equal(await page.locator('section[data-topic="NEW"]').count(), 1, 'pill click admits the new topic');
-      assert.equal((await geometry()).topics[0].name, 'NEW', 'pill click admits the latest canonical head');
-      assert.equal(await page.locator('section[data-topic="T20"]').evaluate(n => n.textContent.includes('Pending review update')), true, 'pill click admits the offscreen rise');
-      assert.equal(await page.evaluate(() => window.__holdMorphs || 0), topMorphs + 1, 'one explicit settle releases top-origin changes');
-      await capture('top-after-apply', {upd: 0, open: 0, ans: 0});
-      report.cases.push({id, topFreeze: 'offscreen rise + new topic; distinct counts; scroll-away cannot release; down-panel release preserved; one click applies at zero', count: 'same topic twice=1; two topics=2; three=3', releaseMorphs: 1, animation: style, homeBehavior: homeScrolls[0].args[0].behavior, mounts, status: 'PASS'});
-      console.log(`PASS ${id}: data counts, capsule geometry, bubbles, top, overview, one release, home scroll, manual acknowledgement, no mount churn`);
+      assert.equal(await page.locator('section[data-topic="NEW"]').count(), 1, 'new topic admits immediately into canonical order');
+      assert.equal((await geometry()).topics[0].name, 'NEW', 'new topic lands at canonical head');
+      report.cases.push({id, staging: freeCanvas ? 'visible cards' : 'current card', releaseMorphs: 1, animation: style, homeBehavior: homeScrolls[0]?.args[0].behavior || 'auto', mounts, status: 'PASS'});
+      console.log(`PASS ${id}: card staging, capsule geometry, bubbles, top, overview, one release, home scroll, leave release, no mount churn`);
       await refContext.close();
       await context.close();
     }
