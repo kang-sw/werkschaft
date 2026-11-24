@@ -215,32 +215,31 @@ with more than one hard link is also compared by identity against
 `metadata.sqlite` and its `-wal`, `-shm`, and `-journal` sidecars, and against
 the session files the daemon reads back as authority (`agent.json`,
 `registration.json`, `permission.json`, `system_prompt.md`, `snapshot.json`,
-and held or claimed inbox entries), so an external hard link cannot bypass
-the path check. If the state directory cannot be resolved, model writes fail
-closed. Model reads of that state still follow normal file-read permissions.
+hosted Werk journals, and held or claimed inbox entries), so an external
+hard link cannot bypass the path check. If the state directory cannot be
+resolved, model writes fail closed. Model reads of that state still follow
+normal file-read permissions.
 Project-scoped workflow paths outside it are unaffected.
 
-Background consent also covers scheduled prompts. While consent is off, a
-`ws/cron` prompt for a durable Werk lead on a ChatGPT plan is never steered
-into an interactive turn or batched with operator input. It waits for the
-turn to finish, then settles on its own with the consent-required error,
-with its inbox claim and send coverage recorded. The refused text stays out
-of the model history, including across daemon restarts. With consent on,
-cron prompts steer into the running turn as before. Consent is checked when
-the entry is claimed: a claim accepted while consent was on stays
-authorized if consent is revoked before an interrupted turn resumes. Other
-providers keep their harness's delivery rules.
+Background consent also covers scheduled prompts. A durable Werk lead on a
+ChatGPT plan records the consent decision when it claims a `ws/cron` entry,
+whether the lead is idle or already in a turn. An authorized claim can steer
+the running turn and keeps its authorization across restart. A refused claim
+settles separately with the consent-required error, after any running turn
+ends. Its text stays out of the model history, including across restart.
+Recovery checks current consent for any interrupted claim without a recorded
+decision. Other providers keep their harness's delivery rules.
 
 Scoped file replacement (`fs.write`/`fs.edit` over an existing file) never
 lets the staging file hold new bytes with wider access than the destination.
 On Linux and macOS the staging file is created exclusively at `0600` and,
 before the first byte, takes the destination's mode, owner, group, and
 access ACL, read from the verified destination handle; both are rechecked
-before the rename. On macOS, where inherited ACL entries are not masked by
-the mode, staging happens inside a locked `0700` child directory
-`.ws-stage-<sha256 of the destination name>` whose inherited ACL is removed
-first; the next replacement of the same file reclaims a stage an
-interrupted write left behind. On Windows the staging file is created with
+before the rename. On macOS the replacement holds an exclusive lock on the
+destination inode through publication. Each write exclusively creates a
+fresh `0700` child directory (`.ws-write-<random hex>`) and clears its inherited
+ACL before creating the staging file. A later write leaves any stage from an
+interrupted write in place. On Windows the staging file is created with
 the destination's DACL, protection flag, owner, and integrity label, and the
 result is verified before writing and again before publication. Metadata
 that cannot be reproduced, or any mismatch, aborts the write without

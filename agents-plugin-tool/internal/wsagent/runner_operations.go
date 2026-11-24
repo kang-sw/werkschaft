@@ -172,15 +172,8 @@ func (r *Runner) Stop(id string) (State, error) {
 
 func (r *Runner) stop(id string, safeOnly bool) (State, error) {
 	return r.act(id, func(c *conv) error {
-		if safeOnly {
-			// Admit inside the conversation loop so an earlier turn event
-			// can make the stop unsafe before we touch the process.
-			c.mu.Lock()
-			selfSafe, lead := c.safeStopSelfLocked(), c.rec.Lead
-			c.mu.Unlock()
-			if !selfSafe || !r.descendantsAllowSafeStop(id, lead) {
-				return &requestError{status: http.StatusConflict, msg: "session no longer safe to stop"}
-			}
+		if safeOnly && !r.admitsSafeStop(id, c) {
+			return &requestError{status: http.StatusConflict, msg: "session no longer safe to stop"}
 		}
 		c.stopProcess("")
 		return nil
@@ -322,10 +315,52 @@ func isHolderBacked(p Process) bool {
 	return held
 }
 
+type safeStopNode struct {
+	id     string
+	lead   bool
+	parent ParentRef
+	busy   bool
+}
+
+func (c *conv) safeStopNodeLocked() safeStopNode {
+	n := safeStopNode{id: c.rec.ReplyID, lead: c.rec.Lead}
+	if c.rec.Parent != nil {
+		n.parent = *c.rec.Parent
+	}
+	n.busy = c.keepsAwakeLocked() || (!c.closed && c.proc != nil && !isHolderBacked(c.proc))
+	return n
+}
+
+// admitsSafeStop runs inside the root loop. Pin the registry and conversation
+// state together at admission. A contended lock means the gate cannot prove
+// safety, including when another operation holds a conversation or adds work.
+func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.convs[rootID] != root {
+		return false
+	}
+	for _, c := range r.convs {
+		if !c.mu.TryLock() {
+			return false
+		}
+		defer c.mu.Unlock()
+	}
+	// Exec counts are published separately from conversation state.
+	exec := r.exec.live.Load()
+	if !root.safeStopSelfLocked() {
+		return false
+	}
+	nodes := make([]safeStopNode, 0, len(r.convs))
+	for _, c := range r.convs {
+		nodes = append(nodes, c.safeStopNodeLocked())
+	}
+	return safeStopDescendants(rootID, root.rec.Lead, nodes, r.pendingSpawns) && exec == r.exec.live.Load()
+}
+
 // descendantsAllowSafeStop reports whether every live descendant conversation
 // of rootID is idle (not keeping its parent awake) and holder-backed if it has
-// a live process. Must not be called while holding any conv.mu (acquires r.mu,
-// then each conv.mu).
+// a live process. This is an advisory snapshot for the dashboard.
 func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
 	if r == nil {
 		return true
@@ -336,35 +371,20 @@ func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
 		convs = append(convs, c)
 	}
 	r.mu.Unlock()
-	type node struct {
-		id           string
-		lead         bool
-		parent       *ParentRef
-		keepsAwake   bool
-		hasProc      bool
-		holderBacked bool
-	}
-	nodes := make([]node, 0, len(convs))
+	nodes := make([]safeStopNode, 0, len(convs))
 	for _, ch := range convs {
 		ch.mu.Lock()
-		n := node{
-			id:           ch.rec.ReplyID,
-			lead:         ch.rec.Lead,
-			keepsAwake:   ch.keepsAwakeLocked(),
-			hasProc:      !ch.closed && ch.proc != nil,
-			holderBacked: ch.proc != nil && isHolderBacked(ch.proc),
-		}
-		if ch.rec.Parent != nil {
-			p := *ch.rec.Parent
-			n.parent = &p
-		}
+		nodes = append(nodes, ch.safeStopNodeLocked())
 		ch.mu.Unlock()
-		nodes = append(nodes, n)
 	}
-	byParent := make(map[ParentRef][]int, len(nodes))
-	for i := range nodes {
-		if nodes[i].parent != nil {
-			byParent[*nodes[i].parent] = append(byParent[*nodes[i].parent], i)
+	return safeStopDescendants(rootID, rootIsLead, nodes, nil)
+}
+
+func safeStopDescendants(rootID string, rootIsLead bool, nodes []safeStopNode, pendingSpawns map[ParentRef]int) bool {
+	byParent := make(map[ParentRef][]safeStopNode, len(nodes))
+	for _, n := range nodes {
+		if n.parent.ReplyID != "" {
+			byParent[n.parent] = append(byParent[n.parent], n)
 		}
 	}
 	rootKind := ParentConversation
@@ -376,13 +396,15 @@ func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		for _, idx := range byParent[cur] {
-			n := nodes[idx]
+		if pendingSpawns[cur] > 0 {
+			return false
+		}
+		for _, n := range byParent[cur] {
 			if visited[n.id] {
 				continue
 			}
 			visited[n.id] = true
-			if n.keepsAwake || (n.hasProc && !n.holderBacked) {
+			if n.busy {
 				return false
 			}
 			childKind := ParentConversation

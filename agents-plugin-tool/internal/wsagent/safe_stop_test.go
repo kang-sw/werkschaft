@@ -212,3 +212,49 @@ func TestSafeOnlyStopChecksStateAtAdmission(t *testing.T) {
 		t.Fatalf("legacy stop: status %d, body %s", out.Code, out.Body)
 	}
 }
+
+func TestSafeOnlyStopRefusesOverlappingDescendantTransitions(t *testing.T) {
+	h := newLeadHarness(t)
+	h.opts.Trusted = func(*http.Request) (bool, bool) { return true, true }
+	h.start()
+	id, _ := h.settledLead()
+	parent := &ParentRef{Kind: ParentLead, ReplyID: id}
+	a := &conv{rec: Record{ReplyID: "child-a", Parent: parent}}
+	b := &conv{rec: Record{ReplyID: "child-b", Parent: parent}, turn: true}
+	h.runner.mu.Lock()
+	h.runner.convs[a.rec.ReplyID], h.runner.convs[b.rec.ReplyID] = a, b
+	h.runner.mu.Unlock()
+	defer func() {
+		h.runner.mu.Lock()
+		delete(h.runner.convs, a.rec.ReplyID)
+		delete(h.runner.convs, b.rec.ReplyID)
+		h.runner.mu.Unlock()
+	}()
+
+	// B has work while A is idle. Keep B locked while A accepts work and
+	// B settles, so there is no point at which both descendants are safe.
+	b.mu.Lock()
+	a.mu.Lock()
+	a.turn = true
+	b.turn = false
+	a.mu.Unlock()
+	out := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/agents/"+id+"/stop", strings.NewReader(`{"safe_only":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.runner.Handler().ServeHTTP(rec, req)
+		out <- rec
+	}()
+	select {
+	case rec := <-out:
+		b.mu.Unlock()
+		if rec.Code != http.StatusConflict || !h.state(id).Process {
+			t.Fatalf("contended safe-only stop: status %d, body %s", rec.Code, rec.Body)
+		}
+	case <-time.After(2 * time.Second):
+		b.mu.Unlock()
+		<-out
+		t.Fatal("safe Stop waited for a descendant transition instead of refusing admission")
+	}
+}
