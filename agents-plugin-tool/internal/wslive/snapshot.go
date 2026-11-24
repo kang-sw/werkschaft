@@ -432,6 +432,8 @@ type Agent struct {
 	// legacy-compatible (StatusDone when not actively running or holding mail).
 	Holding bool `json:"holding,omitempty"`
 	Alive   bool `json:"alive,omitempty"`
+	// HoldingShell is the live HUD label hint for an exclusively shell-held report.
+	HoldingShell bool `json:"holdingShell,omitempty"`
 }
 
 // Permission is a tool permission prompt the agent waits on. The approval

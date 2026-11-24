@@ -314,6 +314,10 @@ func TestSpawnAgentEventLegacyStatusContract(t *testing.T) {
 		{"closed stale failure", State{Status: StatusClosed, Error: "old failure", Held: 1}, wslive.StatusDone},
 		{"idle", State{Status: StatusIdle}, wslive.StatusDone},
 		{"held", State{Status: StatusIdle, Held: 1}, wslive.StatusRunning},
+		{"held with old error", State{Status: StatusIdle, Held: 1, Error: "old failure"}, wslive.StatusRunning},
+		{"held with dead binding", State{Status: StatusIdle, Held: 1, WakeBlocked: true}, wslive.StatusDone},
+		{"held with refused wake", State{Status: StatusIdle, Held: 1, WakeBlocked: true, Error: "launch refused"}, wslive.StatusFailed},
+		{"actual turn with dead binding", State{Status: StatusRunning, Held: 1, WakeBlocked: true}, wslive.StatusRunning},
 		{"running", State{Status: StatusRunning}, wslive.StatusRunning},
 		{"failed", State{Status: StatusIdle, Error: "failure"}, wslive.StatusFailed},
 	} {
@@ -416,6 +420,7 @@ func TestSpawnAgentEventProjectsHoldingAndAlive(t *testing.T) {
 		{"running", State{Status: StatusRunning, Process: true, Holding: false}, wslive.StatusRunning, false, true},
 		{"failed alive", State{Status: StatusIdle, Error: "boom", Process: true}, wslive.StatusFailed, false, true},
 		{"closed clears liveness", State{Status: StatusClosed, Process: true, Holding: true}, wslive.StatusDone, false, false},
+		{"dead binding clears liveness", State{Status: StatusIdle, Process: true, Holding: true, WakeBlocked: true}, wslive.StatusDone, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.st.ID = "child"
@@ -435,7 +440,7 @@ func TestConvStateHoldingTracksHeldTurn(t *testing.T) {
 	parentProc.reply("waiting on child")
 	eventually(t, "parent holding", func() bool {
 		st, err := h.runner.Get(parentID)
-		return err == nil && st.Holding && st.Process
+		return err == nil && st.Holding && !st.HoldingShell && st.Process
 	})
 	childProc.reply("child done")
 	eventually(t, "parent releases hold", func() bool {
@@ -450,5 +455,47 @@ func TestConvStateHoldingTracksHeldTurn(t *testing.T) {
 	}
 	if st, err := h.runner.Get(parentID); err != nil || st.Holding || st.Process {
 		t.Fatalf("closed parent kept holding/process: %+v, err=%v", st, err)
+	}
+}
+
+func TestSpawnAgentEventClearsShellHold(t *testing.T) {
+	feed := wslive.NewState("lead-key")
+	st := State{ID: "child", Status: StatusIdle, Holding: true, HoldingShell: true}
+	if _, err := feed.Apply(SpawnAgentEvent(st, "child-key"), 100); err != nil {
+		t.Fatal(err)
+	}
+	snap := feed.Snapshot(100)
+	if row := snap.Agents[0]; !row.Holding || !row.HoldingShell {
+		t.Fatalf("shell-only hold was lost: %+v", row)
+	}
+	reopened := wslive.NewState("lead-key")
+	reopened.SeedFinished(snap)
+	if row := reopened.Snapshot(100).Agents[0]; row.Holding || row.HoldingShell {
+		t.Fatalf("live hold was restored from disk: %+v", row)
+	}
+	st.HoldingShell = false
+	if _, err := feed.Apply(SpawnAgentEvent(st, "child-key"), 101); err != nil {
+		t.Fatal(err)
+	}
+	if row := feed.Snapshot(101).Agents[0]; !row.Holding || row.HoldingShell {
+		t.Fatalf("child wait kept stale shell-only hold: %+v", row)
+	}
+}
+
+func TestShellHoldRequiresNoOpenChild(t *testing.T) {
+	r := &Runner{convs: map[string]*conv{}}
+	parent := &conv{r: r, rec: Record{ReplyID: "parent"}, heldRes: &TurnResult{}, holding: true}
+	child := &conv{rec: Record{ReplyID: "child", Parent: &ParentRef{Kind: ParentConversation, ReplyID: "parent"}, TurnOpen: true}}
+	r.convs["child"] = child
+	jobs := map[string]int{"parent": 1}
+	r.exec.live.Store(&jobs)
+	parent.refreshShellHold()
+	if parent.holdingShell {
+		t.Fatal("a live shell job hid the open child wait")
+	}
+	child.rec.TurnOpen = false
+	parent.refreshShellHold()
+	if !parent.holdingShell {
+		t.Fatal("the remaining shell job did not qualify the hold")
 	}
 }

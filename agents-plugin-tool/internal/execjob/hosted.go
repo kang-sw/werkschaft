@@ -890,12 +890,14 @@ type HostedLaunch struct {
 	// in it, which the approval shows.
 	Environ []string
 	Env     map[string]string
-	// Stdin is written at the start, then stdin closes; StdinSet says it
-	// was given. Without it a legacy launch's stdin closes at once and a
-	// new launch's stays open for Write.
+	// Stdin is written at the start, then stdin closes. StdinSet also
+	// records an explicitly empty input.
 	Stdin    []byte
 	StdinSet bool
-	Async    bool
+	// StdinOpen keeps stdin open for Write. It requires a new-style launch
+	// without Stdin.
+	StdinOpen bool
+	Async     bool
 	// Legacy launches keep the legacy key and reply shape.
 	Legacy bool
 	// Window overrides the execution window of this launch (zero keeps the

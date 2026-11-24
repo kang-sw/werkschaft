@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "사고 중",
   "js.hud.state.tool": "도구 실행",
   "js.hud.state.holding": "하위 대기",
+  "js.hud.state.holding_shell": "셸 종료 대기",
   "js.hud.state.idle": "대기 중",
   "js.hud.state.permission": "승인 대기",
   "js.hud.state.failed": "실패",

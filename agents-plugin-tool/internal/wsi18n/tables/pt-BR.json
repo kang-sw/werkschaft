@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Pensando",
   "js.hud.state.tool": "Chamada de ferramenta",
   "js.hud.state.holding": "Aguardando filhos",
+  "js.hud.state.holding_shell": "Aguardando o shell",
   "js.hud.state.idle": "Ocioso (ativo)",
   "js.hud.state.permission": "Permissão",
   "js.hud.state.failed": "Falhou",

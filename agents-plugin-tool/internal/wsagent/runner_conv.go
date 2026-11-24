@@ -383,6 +383,9 @@ type conv struct {
 	// after the claim (a start deferred past the holder scan, a later kick)
 	// still reaches each of them, once. Memory only. Loop-owned.
 	heldSenders []string
+	// deliverySenders tracks direct Deliver sends that have neither reached a
+	// turn nor already been refused. It is keyed by send coverage under mu.
+	deliverySenders map[uint64]pendingDelivery
 	// spawnPending is true from registration in r.convs until spawned()'s
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
@@ -436,6 +439,7 @@ type conv struct {
 	settledReport string
 	parentWaits   map[uint64]int
 	holding       bool
+	holdingShell  bool // protected by mu, refreshed by the loop
 	heldRes       *TurnResult
 	steered       []steeredReport
 	steerSeq      int
@@ -582,7 +586,7 @@ func (c *conv) mailChanged() {
 
 // tellRefusedWake tells each sender of held mail, claimed for a sleeping
 // child whose wake admission refused, that its mail waits
-// (Options.WakeRefused), once per sender. It runs in the loop.
+// (Options.WakeRefused). It runs in the loop.
 func (c *conv) tellRefusedWake() {
 	c.mu.Lock()
 	refused, reason, checkout := c.wakeRefused, c.lastErr, c.releasedCheckout
@@ -593,10 +597,9 @@ func (c *conv) tellRefusedWake() {
 	c.tellHeldSenders(checkout, reason)
 }
 
-// holdSender keeps sender, once, among the senders of mail held in the
-// record (heldSenders). It runs in the loop.
+// holdSender records the sender of one pending message. It runs in the loop.
 func (c *conv) holdSender(sender string) {
-	if sender == "" || slices.Contains(c.heldSenders, sender) {
+	if sender == "" {
 		return
 	}
 	c.heldSenders = append(c.heldSenders, sender)
@@ -608,8 +611,18 @@ func (c *conv) holdSender(sender string) {
 func (c *conv) tellHeldSenders(checkout, reason string) {
 	senders := c.heldSenders
 	c.heldSenders = nil
+	if len(senders) == 0 {
+		return
+	}
+	dead := c.r.deadBindingRefusal(c.record(), checkout)
+	seen := make(map[string]bool)
 	for _, sender := range senders {
-		c.r.tellRefused(sender, c.rec.ReplyID, checkout, reason)
+		if dead != nil {
+			c.r.tellUndeliverable(sender, c.rec.ReplyID, dead)
+		} else if !seen[sender] {
+			c.r.tellRefused(sender, c.rec.ReplyID, checkout, reason)
+			seen[sender] = true
+		}
 	}
 }
 
@@ -838,6 +851,9 @@ func (c *conv) loop() {
 	// A rejoined child whose record shows its turn open runs it under a
 	// trusted holder: publish that before the replay settles it.
 	c.publishAwake(c.wantAwake())
+	if c.refreshShellHold() {
+		c.watched()
+	}
 	for {
 		c.syncLoopBusy()
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
@@ -875,6 +891,9 @@ func (c *conv) loop() {
 		case <-c.mailC:
 			c.mailChanged()
 		case <-c.spawnC:
+			if c.refreshShellHold() {
+				c.watched()
+			}
 			if c.compactResume && c.r.durableProcess(c.rec.Backend) {
 				c.kick()
 			}
@@ -1036,10 +1055,12 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 			st.ResumeCommand = c.r.resumeCommand(c.rec, c.dir)
 		}
 	}
+	st.WakeBlocked = !c.closed && (c.releasedLocked() != "" || c.r.deadBindingRefusal(c.rec, "") != nil)
 	st.Process = c.proc != nil
 	selfSafe := c.safeStopSelfLocked()
 	replyID, isLead := c.rec.ReplyID, c.rec.Lead
 	st.Holding = c.holding && !c.closed
+	st.HoldingShell = st.Holding && c.holdingShell
 	st.Hidden = c.hidden
 	if c.rec.Lead && !c.closed {
 		st.Lifecycle = wsdashboard.SessionAsleep
@@ -1343,13 +1364,13 @@ func (c *conv) release() {
 // dropHeld drops the dashboard messages held for a conversation that takes
 // no more turns, the ones drained and still queued, and its pending
 // interrupt requests.
-func (c *conv) dropHeld() {
+func (c *conv) dropHeld() []wsinbox.Record {
 	if len(c.rec.Queued) > 0 {
 		c.update(func(rec *Record) { rec.Queued = nil })
 	}
 	removed := 0
+	var dropped []wsinbox.Record
 	if held, err := wsinbox.Held(c.inbox); err == nil {
-		var dropped []wsinbox.Record
 		for _, rec := range held {
 			if _, err := wsinbox.Cancel(c.inbox, rec.Name); err == nil {
 				removed++
@@ -1361,6 +1382,7 @@ func (c *conv) dropHeld() {
 	c.inboxMutated(removed)
 	_, _ = wsinbox.DrainInterrupt(c.inbox)
 	c.setStatus(func() { c.held = 0 })
+	return dropped
 }
 
 // apply applies a wslive event and tells the daemon when it wrote. quiet
@@ -1819,6 +1841,7 @@ func (c *conv) refuseStart(refused *admissionRefusal) {
 	fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, refused)
 	c.live.writeSnapshot()
 	c.r.notify(c.rec.ReplyID, c.rec.Root)
+	c.watched()
 	// Persist the input's coverage so crash recovery cannot expire it as
 	// quiet.
 	c.flushRecord()
@@ -1864,9 +1887,13 @@ func (c *conv) kickInput() {
 	}
 	if released != "" {
 		// Its checkout's release ended the binding: a live process that
-		// outlived it takes no new turn there, and none starts. The input
-		// stays, as a refused start keeps it.
-		c.refuseStart(checkoutReleasedRefusal(released))
+		// outlived it takes no new turn. The release notice handles its
+		// cancellation. A processless binding can be closed here too.
+		refused := checkoutReleasedRefusal(released)
+		c.refuseStart(refused)
+		if c.proc == nil && !c.replaying {
+			c.closeDeadAfterRefusal(refused)
+		}
 		return
 	}
 	if c.proc == nil {
@@ -1883,6 +1910,9 @@ func (c *conv) kickInput() {
 			var refused *admissionRefusal
 			if errors.As(err, &refused) {
 				c.refuseStart(refused)
+				if dead := c.r.deadBindingRefusal(c.record(), refused.checkout); dead != nil {
+					c.closeDeadAfterRefusal(dead)
+				}
 				return
 			}
 			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), false })
@@ -2141,6 +2171,13 @@ func (c *conv) kickInput() {
 		c.startModelWait(sentAt)
 	}
 	c.sendRetried = false
+	c.mu.Lock()
+	for send := range c.deliverySenders {
+		if send <= mark {
+			delete(c.deliverySenders, send)
+		}
+	}
+	c.mu.Unlock()
 	c.stopBgGrace()
 	c.turnMark, c.reply = mark, ""
 	// A child report satisfies an agent worker's hold on the completed turn
@@ -2211,6 +2248,7 @@ func (c *conv) voidCancelled() {
 	grew := err == nil && len(held) == 0 && c.sends > max(c.voided, c.settled.mark)
 	if grew {
 		c.voided = c.sends
+		clear(c.deliverySenders)
 	}
 	parent := c.rec.Parent
 	c.mu.Unlock()

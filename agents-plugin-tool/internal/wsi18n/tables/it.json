@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "Ragionamento",
   "js.hud.state.tool": "Chiamata tool",
   "js.hud.state.holding": "Attesa figli",
+  "js.hud.state.holding_shell": "In attesa della shell",
   "js.hud.state.idle": "Inattivo (attivo)",
   "js.hud.state.permission": "Permesso",
   "js.hud.state.failed": "Fallito",

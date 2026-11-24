@@ -295,7 +295,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "exec.write",
-			"description": "Write text to a running exec job's stdin; eof closes stdin after the text.",
+			"description": "Write text to a running exec job launched with stdin_open: true. Set eof to close stdin after the text.",
 			"inputSchema": execWriteSchema(),
 		},
 		{
@@ -1369,8 +1369,11 @@ func execEnvProperty() map[string]any {
 // per call.
 var (
 	execShellLegacyOnly = []string{"command", "working_dir", "shell"}
-	execShellNewOnly    = []string{"cmd", "cwd", "async"}
+	execShellNewOnly    = []string{"cmd", "cwd", "async", "stdin_open"}
 )
+
+const execStdinDescription = "Text written to stdin, which then closes. Stdin closes immediately by default."
+const execStdinOpenDescription = "Keep stdin open for exec.write. Omit stdin when setting this to true."
 
 func execShellSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
@@ -1381,18 +1384,20 @@ func execShellSchema() map[string]any {
 		"working_dir": stringProperty("Legacy form: command working directory. Defaults to the resolved ws worktree root; relative paths resolve beneath that root."),
 		"shell":       stringProperty("Legacy form: optional explicit shell executable. Defaults to the platform shell."),
 		"env":         execEnvProperty(),
-		"stdin":       stringProperty("Text written to stdin, which then closes. New form without it: stdin stays open for exec.write. Legacy form without it: stdin is closed at once."),
+		"stdin":       stringProperty(execStdinDescription),
+		"stdin_open":  boolProperty("New form only. " + execStdinOpenDescription),
 	}}
 }
 
 func execRunSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"exe":   stringProperty("The program to run: a name looked up on PATH, or a path. Not a shell line; use exec.shell for one."),
-		"args":  stringArrayProperty("Arguments passed to the program as given, without shell parsing."),
-		"cwd":   stringProperty("Working directory. Defaults to the session's worktree root; a relative path resolves beneath it."),
-		"env":   execEnvProperty(),
-		"stdin": stringProperty("Text written to stdin, which then closes. Without it, stdin stays open for exec.write."),
-		"async": boolProperty("Answer with the exec id at once instead of waiting up to the execution window."),
+		"exe":        stringProperty("The program to run: a name looked up on PATH, or a path. Not a shell line; use exec.shell for one."),
+		"args":       stringArrayProperty("Arguments passed to the program as given, without shell parsing."),
+		"cwd":        stringProperty("Working directory. Defaults to the session's worktree root; a relative path resolves beneath it."),
+		"env":        execEnvProperty(),
+		"stdin":      stringProperty(execStdinDescription),
+		"stdin_open": boolProperty(execStdinOpenDescription),
+		"async":      boolProperty("Answer with the exec id at once instead of waiting up to the execution window."),
 	}, "required": []string{"exe"}}
 }
 

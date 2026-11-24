@@ -18,7 +18,7 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 		// Closed records have no live diagnostic; closing settles the row
 		// identically before and after its loop leaves the runner.
 		status = wslive.StatusDone
-	case st.Status == StatusRunning || (st.Status != StatusClosed && st.Held > 0):
+	case st.Status == StatusRunning || (!st.WakeBlocked && st.Held > 0):
 		status = wslive.StatusRunning
 	case st.Error != "":
 		status = wslive.StatusFailed
@@ -29,15 +29,18 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 	}
 	// Retained name check: the live agent id prefix of a Pi child row is persisted in
 	// snapshots written by older daemons (TestAgentSpawnHostedWorkerRows).
+	showLiveness := st.Status != StatusClosed && (!st.WakeBlocked || st.Status == StatusRunning)
+	holding := showLiveness && st.Holding
 	ev := wslive.Event{Kind: wslive.KindAgent, AgentID: "pi:" + st.ID,
 		AgentKind: wslive.AgentKindPi, Harness: st.Backend, Label: label, Status: status,
 		Model: st.Model, Effort: st.Effort, Observed: st.Observed, SessionKey: key,
 		ContextTokens: st.ContextTokens, OutputTps: st.OutputTps,
 		ContextCompaction: cloneUsageCompaction(st.ContextCompaction),
 		ActiveMs:          st.ActiveMs,
-		Holding:           st.Status != StatusClosed && st.Holding,
-		Alive:             st.Status != StatusClosed && st.Process,
-		Compacting:        st.Status != StatusClosed && st.Compacting,
+		Holding:           holding,
+		HoldingShell:      holding && st.HoldingShell,
+		Alive:             showLiveness && st.Process,
+		Compacting:        showLiveness && st.Compacting,
 		Compactions:       st.Compactions, CompactOrigin: st.CompactOrigin}
 	if st.Status == StatusRunning {
 		ev.TurnStartedAt = st.TurnStartedAt
@@ -46,7 +49,7 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 		window := float64(st.ContextWindow)
 		ev.ContextWindow = &window
 	}
-	if st.Status != StatusClosed && st.BackgroundTasks > 0 {
+	if showLiveness && st.BackgroundTasks > 0 {
 		ev.BackgroundTasks = st.BackgroundTasks
 	}
 	// An explicit empty list clears the previous activity on the row.

@@ -169,11 +169,12 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 		}
 	}
 	h.mu.Lock()
-	running, open, unknown, spawned := !j.row.Terminal(), j.stdinOpen, j.stdinUnknown, j.row.PID != 0
+	state, running, open, unknown, spawned := j.row.State, !j.row.Terminal(), j.stdinOpen, j.stdinUnknown, j.row.PID != 0
 	h.mu.Unlock()
+	const openStdinHint = "To feed stdin with exec.write, set stdin_open: true at launch."
 	switch {
 	case !running:
-		return h.view(j, 0), fmt.Errorf("exec job %s is not running (%s)", id, j.row.State)
+		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: the job is not running (%s). %s", id, state, openStdinHint)
 	case !spawned:
 		// Its holder runs but the process has not started (an approval
 		// may still be pending): the holder's no_child would read as an
@@ -182,7 +183,7 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 	case unknown:
 		return h.view(j, 0), fmt.Errorf("exec job %s's stdin state is not known yet: its holder is not attached; retry once it is", id)
 	case !open:
-		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: it was given at launch, closed by eof, or the job is a legacy launch", id)
+		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin. %s", id, openStdinHint)
 	}
 	if err := h.opts.Holders.Input(holder, data, eof); err != nil {
 		var opErr *wsholder.OpError

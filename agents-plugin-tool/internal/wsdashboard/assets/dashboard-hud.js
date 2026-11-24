@@ -19,7 +19,8 @@
     return typeof subagentClosing !== "undefined" && subagentClosing && subagentClosing[replyId] === "closed";
   }
 
-  function hudStateText(st) {
+  function hudStateText(st, holdingShell) {
+    if (st === "holding" && holdingShell) return wsT("js.hud.state.holding_shell");
     return wsT(HUD_STATE_KEYS[st] || "js.hud.state.idle");
   }
   function hudReadData(tree) {
@@ -74,7 +75,7 @@
     if (node.replyId) btn.setAttribute("data-reply-id", node.replyId); else btn.removeAttribute("data-reply-id");
     if (node.linked) btn.setAttribute("data-linked", "1"); else btn.removeAttribute("data-linked");
     if (node.native) btn.setAttribute("data-native", "1"); else btn.removeAttribute("data-native");
-    btn.setAttribute("aria-label", label + " (" + (HUD_HARNESS_NAME[harness] || harness || "?") + ", " + hudStateText(state) + ")");
+    btn.setAttribute("aria-label", label + " (" + (HUD_HARNESS_NAME[harness] || harness || "?") + ", " + hudStateText(state, node.holdingShell) + ")");
     if (harness) emb.setAttribute("data-h", harness); else emb.removeAttribute("data-h");
     emb.textContent = HUD_HARNESS_LABEL[harness] || "??";
     if (ANIMATION_PERIOD_MS[state]) animationPhaseDelay(ring, ANIMATION_PERIOD_MS[state], node.id || "", HUD_ANIMATION_STATE_KEY[state] || state, moved);
@@ -104,7 +105,7 @@
     Object.assign(entry.data, {
         id: node.id || "", replyId: node.replyId || "", linked: !!node.linked, label: label,
         harness: harness, state: state, model: node.model || "", effort: node.effort || "",
-        closeActive: !!node.closeActive,
+        closeActive: !!node.closeActive, holdingShell: state === "holding" && !!node.holdingShell,
         elapsedMs: Number(node.elapsedMs) || 0, activeSince: Number(node.activeSince) || 0,
         chain: Array.isArray(node.chain) ? node.chain : [],
         task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
@@ -296,7 +297,7 @@
     var hb = doc.createElement("span"); hb.className = "hb sm";
     if (d.harness) hb.setAttribute("data-h", d.harness);
     var title = doc.createElement("span"); title.className = "tt-title"; title.textContent = d.label;
-    var pill = doc.createElement("span"); pill.className = "tt-pill"; pill.setAttribute("data-state", d.state); pill.textContent = hudStateText(d.state);
+    var pill = doc.createElement("span"); pill.className = "tt-pill"; pill.setAttribute("data-state", d.state); pill.textContent = hudStateText(d.state, d.holdingShell);
     head.appendChild(hb); head.appendChild(title);
     if (d.native) { var nb = doc.createElement("span"); nb.className = "tt-native"; nb.textContent = wsT("js.hud.native"); head.appendChild(nb); }
     head.appendChild(pill);

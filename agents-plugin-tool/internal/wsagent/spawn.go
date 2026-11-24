@@ -257,6 +257,7 @@ func (c *conv) settleTurn(status, errText string, mark uint64) error {
 			c.hold(&res)
 		}
 		c.reply = ""
+		c.refreshShellHold()
 		c.watched()
 		return nil
 	}

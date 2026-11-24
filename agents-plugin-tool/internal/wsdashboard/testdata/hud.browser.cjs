@@ -210,6 +210,15 @@ async function checkKeyedRebuild(frame) {
       assert.equal(geom.nodeCount, 12);
       assert.deepEqual(geom.harnesses, ['agy', 'claude', 'codex']);
       assert.deepEqual(geom.states, ['failed', 'holding', 'idle', 'permission', 'thinking', 'tool']);
+      const shellNode = frame.locator('#agcompact .hud-node[data-id="h2"]');
+      assert.equal(await shellNode.getAttribute('data-state'), 'holding');
+      assert.match(await shellNode.getAttribute('aria-label'), /셸 종료 대기/);
+      assert.match(await frame.locator('#agcompact .hud-node[data-id="h1"]').getAttribute('aria-label'), /하위 대기/);
+      await shellNode.hover();
+      await frame.locator('#hud-tooltip:not([hidden])').waitFor();
+      assert.equal(await frame.locator('#hud-tooltip .tt-pill').textContent(), '셸 종료 대기');
+      await frame.locator('#agcompact .hud-node[data-id="h1"]').hover();
+      assert.equal(await frame.locator('#hud-tooltip .tt-pill').textContent(), '하위 대기');
       const flat = await frame.evaluate(() => {
         const panel = document.getElementById('agisland'), compact = document.getElementById('agcompact');
         const tip = document.getElementById('hud-tooltip'), drawer = document.getElementById('drawer');

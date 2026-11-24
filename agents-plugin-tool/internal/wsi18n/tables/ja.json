@@ -2587,6 +2587,7 @@
   "js.hud.state.thinking": "思考中",
   "js.hud.state.tool": "ツール実行",
   "js.hud.state.holding": "子待機中",
+  "js.hud.state.holding_shell": "シェルの終了待ち",
   "js.hud.state.idle": "待機中",
   "js.hud.state.permission": "承認待ち",
   "js.hud.state.failed": "失敗",

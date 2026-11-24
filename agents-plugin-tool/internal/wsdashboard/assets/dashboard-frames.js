@@ -583,6 +583,10 @@
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
     } else if (m.wbDoc === "wheel") {
       var wdy = num(m.dy), wdx = num(m.dx), wmode = num(m.mode);
+      if (Math.abs(wdy) > Math.abs(wdx) && typeof anchorCancelProg === "function") {
+        var wheelCol = $("bcol");
+        if (wheelCol && wheelCol.contains(f)) anchorCancelProg();
+      }
       var gal = window.WsCards && window.WsCards.gallery && window.WsCards.gallery();
       if (gal && gal.contains(f)) {
         if (window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);

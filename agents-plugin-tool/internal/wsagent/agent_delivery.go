@@ -37,12 +37,18 @@ type Delivery struct {
 	Text string
 }
 
+type pendingDelivery struct {
+	name   string
+	sender string
+}
+
 // Deliver hands d to conversation id as its next input, waking it when it
 // sleeps; the width cap does not apply. When it sleeps and its admission
 // is refused now, the message still queues, it stays asleep, and the
 // sender gets one notice (Options.WakeRefused).
 func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 	var refusal error
+	var dead *admissionRefusal
 	checkout := ""
 	if c := r.conv(id); c != nil {
 		c.mu.Lock()
@@ -59,6 +65,7 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			checkout = c.releasedLocked()
 		}
 		c.mu.Unlock()
+		dead = r.deadBindingRefusal(rec, checkout)
 		switch {
 		case checkout != "":
 			// Its checkout was released after it was bound: no launch, wake
@@ -75,12 +82,22 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			}
 		}
 	}
-	st, err := r.send(id, d.Text, false)
+	sender := d.From
+	if refusal != nil {
+		// The notice below owns this send, even if close wins immediately
+		// after enqueue. A later close only tells senders still owed notice.
+		sender = ""
+	}
+	st, err := r.sendFrom(id, d.Text, false, sender)
 	if err != nil {
 		return st, err
 	}
 	if refusal != nil {
-		r.tellRefused(d.From, id, checkout, refusal.Error())
+		if dead != nil {
+			r.tellUndeliverable(d.From, id, dead)
+		} else {
+			r.tellRefused(d.From, id, checkout, refusal.Error())
+		}
 	}
 	return st, nil
 }
@@ -246,6 +263,7 @@ func (r *Runner) dropClosed(id string) (Record, bool) {
 	rec, ok := r.closed[id]
 	delete(r.closed, id)
 	delete(r.closedRows, id)
+	delete(r.deadRefusals, id)
 	if ok && rec.Parent != nil && r.childrenIndex != nil {
 		delete(r.childrenIndex[*rec.Parent], id)
 		if len(r.childrenIndex[*rec.Parent]) == 0 {
@@ -277,7 +295,7 @@ func (r *Runner) forget(id string) {
 // input) past its expiry whose descendants are all quiet, with those
 // descendants. A child whose input waits on a refused wake is not quiet
 // here; its loop's heartbeat deletes it once its start is refused again.
-func (r *Runner) expiredAtStart(open []Record) []string {
+func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal) []string {
 	now := r.opts.Now()
 	expiry := r.childWaitingExpiry()
 	byID := map[string]Record{}
@@ -293,7 +311,7 @@ func (r *Runner) expiredAtStart(open []Record) []string {
 		if rec.LastTurn != nil {
 			mark = max(mark, rec.LastTurn.Mark)
 		}
-		return !rec.Lead && rec.Parent != nil && rec.HolderID == "" && !rec.TurnOpen && rec.HeldTurn == nil &&
+		return dead[rec.ReplyID] == nil && !rec.Lead && rec.Parent != nil && rec.HolderID == "" && !rec.TurnOpen && rec.HeldTurn == nil &&
 			rec.Sends <= mark && len(rec.Queued)+len(rec.Mail)+len(rec.Reports)+len(rec.Steered)+len(rec.PendingReports) == 0
 	}
 	seen := map[string]bool{}

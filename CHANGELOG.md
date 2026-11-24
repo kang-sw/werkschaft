@@ -131,6 +131,13 @@
 
 ## v0.52.0
 
+- **Hosted exec jobs close stdin by default.** Commands such as `cat` and
+  `rg` without a path can finish when they read to EOF. To send input later
+  with `exec.write`, launch with `stdin_open: true` on `exec.run` or the
+  `cmd` form of `exec.shell`. Supplying `stdin` sends the text followed
+  by EOF. Choose one input mode. Existing callers that write after launch
+  must add the opt-in on 0.52. Older daemons reject the new argument.
+
 - Claude exec cutover defaults on for hosted leads and spawned workers in ws
   and wsflow. Set `claude.exec_cutover_enabled` to false to opt out; all other
   cutover conditions and fail-closed config reads remain unchanged.
