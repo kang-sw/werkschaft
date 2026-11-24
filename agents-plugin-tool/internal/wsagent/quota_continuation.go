@@ -156,6 +156,7 @@ func (c *conv) armQuotaTimer(delay time.Duration) {
 	c.quotaCancelFence.Store(quotaFencePending)
 	c.mu.Lock()
 	held := c.held > 0
+	c.quotaArmedInputGen = c.quotaInputGen.Load()
 	c.mu.Unlock()
 	if held {
 		c.cancelQuotaContinuationForInput()
@@ -380,14 +381,16 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		}
 		return false
 	}
+	if hook := c.onQuotaAfterFence; hook != nil {
+		hook()
+	}
 	qc := cloneQuotaContinuation(c.rec.QuotaContinuation)
 	if !c.rec.Lead || c.closed || c.hidden || c.isForeign() || c.turn || qc == nil || qc.Status != QuotaContinuationScheduled {
 		c.quotaCancelFence.Store(quotaFenceIdle)
 		return false
 	}
 	c.mu.Lock()
-	inputGen := c.quotaInputGen.Load()
-	hasInput := c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
+	hasInput := c.quotaInputGen.Load() != c.quotaArmedInputGen || c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
 	c.mu.Unlock()
 	if hasInput {
 		c.cancelQuotaContinuation(false)
@@ -426,7 +429,7 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		c.quotaCancelFence.Store(quotaFenceIdle)
 		return false
 	}
-	raced := c.quotaInputGen.Load() != inputGen || c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
+	raced := c.quotaInputGen.Load() != c.quotaArmedInputGen || c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
 	if raced {
 		c.mu.Unlock()
 		c.wmu.Unlock()

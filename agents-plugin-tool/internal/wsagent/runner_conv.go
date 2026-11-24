@@ -210,8 +210,9 @@ type conv struct {
 	quotaPendingFire       bool
 	quotaCancelFence       atomic.Uint32
 	quotaInputGen          atomic.Uint64
-	// onQuotaBeforeSend is a test-only hook invoked in quotaContinuationTimedOut
-	// after persisting in_flight and before re-checking input under wmu+mu.
+	quotaArmedInputGen     uint64
+	// Test-only hooks for quotaContinuationTimedOut race windows (nil in production).
+	onQuotaAfterFence func()
 	onQuotaBeforeSend func()
 
 	// loop-owned, except registration timing below.

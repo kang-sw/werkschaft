@@ -952,7 +952,7 @@ func TestQuotaContinuationHTTPAuthAndLifecycle(t *testing.T) {
 }
 
 func TestQuotaContinuationInputRaceDuringFire(t *testing.T) {
-	for _, kind := range []string{"Runner.Send", "Runner.PageInput"} {
+	for _, kind := range []string{"Runner.Send", "Runner.PageInput", "PageInputAfterFenceBeforeMu"} {
 		t.Run(kind, func(t *testing.T) {
 			env := newQuotaEnv(t, map[string]string{
 				wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
@@ -968,31 +968,34 @@ func TestQuotaContinuationInputRaceDuringFire(t *testing.T) {
 			p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
 			env.waitIdle(id)
 
-			// Inject concurrent user input right after quotaContinuationTimedOut
-			// persists in_flight and before it re-checks under wmu+mu.
+			// Inject concurrent user input in the target race window.
 			c := env.runner.conv(id)
 			var once sync.Once
 			racedDone := make(chan error, 1)
-			c.do(func() {
-				c.onQuotaBeforeSend = func() {
-					once.Do(func() {
-						go func() {
-							if kind == "Runner.Send" {
-								_, err := env.runner.Send(id, "user raced in")
-								racedDone <- err
-							} else {
-								err := env.runner.PageInput(id, func() bool {
-									_, _, werr := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{"page raced in"}, Operator: true}, env.currentNow())
-									return werr == nil
-								})
-								racedDone <- err
-							}
-						}()
-						// Wait for the concurrent input to commit before releasing the hook.
-						if err := <-racedDone; err != nil {
-							t.Errorf("concurrent %s failed: %v", kind, err)
+			trigger := func() {
+				once.Do(func() {
+					go func() {
+						if kind == "Runner.Send" {
+							_, err := env.runner.Send(id, "user raced in")
+							racedDone <- err
+						} else {
+							err := env.runner.PageInput(id, func() bool {
+								_, _, werr := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{"page raced in"}, Operator: true}, env.currentNow())
+								return werr == nil
+							})
+							racedDone <- err
 						}
-					})
+					}()
+					if err := <-racedDone; err != nil {
+						t.Errorf("concurrent %s failed: %v", kind, err)
+					}
+				})
+			}
+			c.do(func() {
+				if kind == "PageInputAfterFenceBeforeMu" {
+					c.onQuotaAfterFence = trigger
+				} else {
+					c.onQuotaBeforeSend = trigger
 				}
 			})
 
@@ -1003,7 +1006,7 @@ func TestQuotaContinuationInputRaceDuringFire(t *testing.T) {
 				t.Fatalf("continuation prompt was co-mingled or injected after %s race: %q", kind, second.Text)
 			}
 			wantSub := "user raced in"
-			if kind == "Runner.PageInput" {
+			if kind != "Runner.Send" {
 				wantSub = "page raced in"
 			}
 			if !strings.Contains(second.Text, wantSub) {
