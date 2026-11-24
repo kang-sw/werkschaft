@@ -282,6 +282,7 @@
 .snav-btn .cnt:empty { display: none; }
 
 .scontent {
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -290,6 +291,7 @@
   flex-direction: column;
   gap: 9px;
 }
+.scontent > * { flex: none; }
 
 /* ==========================================================================
    Slim 1-line Scope / Sync Banners (34px)
@@ -356,8 +358,10 @@
 /* ==========================================================================
    High-Density 2-Column Grouped List (.sgroup + .srow + .layer-drawer)
    ========================================================================== */
-.klist { display: flex; flex-direction: column; gap: 9px; }
+.klist { display: flex; flex-direction: column; gap: 9px; flex: none; }
+.klist > * { flex: none; }
 [data-settings-view] .sgroup {
+  flex: none;
   border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
   border-radius: 10px;
   background: var(--wb-card);
@@ -1137,6 +1141,8 @@
 :root[data-settings-modal] .rail-ph { display: none; }
 :root[data-settings-modal] .dbody {
   display: flex;
+  flex: 1 1 0;
+  min-height: 0;
   padding: 0;
   gap: 0;
 }
