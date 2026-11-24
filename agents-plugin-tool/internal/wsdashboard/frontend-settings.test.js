@@ -321,6 +321,7 @@ function createFakeDOM() {
       return false;
     }
     setAttribute(k, v) { this.attrs[k] = String(v); }
+    hasAttribute(k) { return Object.hasOwn(this.attrs, k); }
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
     removeAttribute(k) { delete this.attrs[k]; }
     appendChild(child) {
@@ -927,11 +928,14 @@ test("modal settings iframe owns navigation, close, and Escape precedence", () =
         if (type === "keydown") keys.push({fn, capture});
       }
     };
-    const view = {querySelector(selector) {
-      if (selector === "[data-settings-search]") return search;
-      if (selector === "[data-settings-close]") return {addEventListener(type, fn) { close.click = fn; }};
-      return {};
-    }};
+    const view = {
+      hasAttribute: () => false,
+      querySelector(selector) {
+        if (selector === "[data-settings-search]") return search;
+        if (selector === "[data-settings-close]") return {addEventListener(type, fn) { close.click = fn; }};
+        return {};
+      }
+    };
     const win = {
       parent: {
         location: {hash: "#project=parent"},

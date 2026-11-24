@@ -278,8 +278,9 @@ type Daemon struct {
 	userCmds atomic.Pointer[UserCommandService]
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
-	credentials credentialStore
-	leadNudges  interface {
+	credentials   credentialStore
+	accountSignIn accountSignIn
+	leadNudges    interface {
 		Start()
 		Close()
 	}

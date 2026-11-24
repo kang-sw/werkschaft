@@ -314,7 +314,8 @@ func (d *Daemon) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if framedRequest(r) {
 		lang, _ := requestLang(r)
-		html, err := renderSettingsPage(lang, requestTheme(r))
+		_, hasAccount := d.credentials.(browserCredentialStore)
+		html, err := renderSettingsPage(lang, requestTheme(r), hasAccount)
 		if err != nil {
 			writeConfigError(w, configUnavailable)
 			return

@@ -94,7 +94,7 @@ var (
 	ErrNotConfigured   = errors.New("provider credential not configured")
 	ErrConsentRequired = errors.New("provider credential needs the user's consent for background use")
 	// ErrOpenAIPlanDisabled means sign-in succeeded without plan permission.
-	ErrOpenAIPlanDisabled = errors.New("ChatGPT plan usage is disabled; enable it with \"credential sign-in openai --enable-plan\"")
+	ErrOpenAIPlanDisabled = errors.New("ChatGPT plan usage is disabled; enable it in dashboard Settings → Account or with \"credential sign-in openai --enable-plan\"")
 	// ErrNotPermitted is the token route's refusal of a session whose
 	// harness may not obtain provider credentials.
 	ErrNotPermitted = errors.New("this session may not obtain provider credentials")
@@ -113,11 +113,11 @@ type ProviderError struct {
 func (e *ProviderError) Error() string {
 	switch {
 	case e.Provider == ProviderOpenAI && errors.Is(e.Err, ErrNotConfigured):
-		return "OpenAI needs sign-in; run \"credential sign-in openai\""
+		return "OpenAI needs sign-in in dashboard Settings → Account or via \"credential sign-in openai\""
 	case errors.Is(e.Err, ErrNotConfigured):
-		return fmt.Sprintf("provider %q has no credential configured; set it with the CLI command \"credential set %s\"", e.Provider, e.Provider)
+		return fmt.Sprintf("provider %q has no credential configured; set it in dashboard Settings → Account or with the CLI command \"credential set %s\"", e.Provider, e.Provider)
 	case errors.Is(e.Err, ErrConsentRequired):
-		return fmt.Sprintf("provider %q may not be used by a background session until the user allows it in the dashboard", e.Provider)
+		return fmt.Sprintf("provider %q may not be used by a background session until the user allows it in dashboard Settings → Account", e.Provider)
 	case errors.Is(e.Err, ErrUnknownProvider):
 		return fmt.Sprintf("unknown provider %q", e.Provider)
 	}

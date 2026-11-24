@@ -13,6 +13,10 @@ var wsSettingsChoiceLabels = {
   var modal = query.get("frame") === "1" && query.get("modal") === "1";
   query.delete("frame");
   query.delete("modal");
+  var requestedSection = query.get("section");
+  var requestedProvider = query.get("provider");
+  query.delete("section");
+  query.delete("provider");
   if (window.parent === window) {
     location.replace(window.WsShell.pagePath(location));
     return;
@@ -21,7 +25,7 @@ var wsSettingsChoiceLabels = {
   if (modal) document.documentElement.setAttribute("data-settings-modal", "");
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
-  var sections = ["workflow", "agents", "compaction", "adapters", "companion", "profiles", "prompts"];
+  var sections = ["workflow", "agents", "account", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "agy", "dashboard"];
   var tierHarnessOrder = ["claude", "codex", "agy", "werk"];
   var filterLabels = {
@@ -41,6 +45,7 @@ var wsSettingsChoiceLabels = {
   var sectionLabels = {
     workflow: "js.settings.section.workflow",
     agents: "js.settings.section.agents",
+    account: "js.settings.section.account",
     compaction: "js.settings.section.compaction",
     adapters: "js.settings.section.adapters",
     companion: "js.settings.section.companion",
@@ -53,6 +58,7 @@ var wsSettingsChoiceLabels = {
   var sectionNotes = {
     workflow: "js.settings.section_note.workflow",
     agents: "js.settings.section_note.agents",
+    account: "js.settings.section_note.account",
     compaction: "js.settings.section_note.compaction",
     adapters: "js.settings.section_note.adapters",
     companion: "js.settings.section_note.companion",
@@ -92,7 +98,8 @@ var wsSettingsChoiceLabels = {
     target: query.get("target") || "",
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
-  var snapshot = null, failure = "", activeSection = "workflow", adapter = "claude", filter = "all";
+  var snapshot = null, failure = "", activeSection = requestedSection === "account" ? "account" : "workflow";
+  var adapter = "claude", filter = "all", focusedTierProvider = "";
   var buckets = new Map(), warnings = new Map(), openLayers = new Set();
   var catalog = window.WsSettingsCatalog;
   var specs = new Map(catalog.map(function (spec) { return [spec.key, spec]; }));
@@ -105,6 +112,15 @@ var wsSettingsChoiceLabels = {
   var count = view.querySelector("[data-settings-count]");
 
   var tr = window.wsT;
+  var accountSpec = catalog.find(function (spec) { return spec.control === "werk_endpoints"; });
+  var account = view.hasAttribute("data-settings-account") && accountSpec && window.WsSettingsAccount && window.WsSettingsAccount.create({
+    el, button, append, svgIcon, request, showTiers, endpointSpec: accountSpec,
+    onChange: function () {
+      renderAccountCount();
+      content.querySelectorAll("[data-account-tier-provider]").forEach(syncAccountRemedy);
+    }
+  });
+  if (!account && activeSection === "account") activeSection = "workflow";
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -265,13 +281,26 @@ var wsSettingsChoiceLabels = {
 
   function renderHeader() {
     var display = view.querySelector("[data-settings-target-display]");
-    display.className = "scope-target-pill" + (scopes.includes(scope) ? " scope-" + scope : "");
-    display.querySelector("span").textContent = scopeName(scope);
+    var accountActive = activeSection === "account";
+    view.classList.toggle("account-active", accountActive);
+    display.className = "scope-target-pill" + (accountActive ? " scope-machine" : scopes.includes(scope) ? " scope-" + scope : "");
+    var label = display.querySelector("span");
+    var machine = display.querySelector(".i");
+    label.textContent = accountActive ? tr("js.settings.account.machine_target") : scopeName(scope);
+    if (accountActive && !machine) display.prepend(svgIcon("i-hosted"));
+    if (!accountActive && machine) machine.remove();
     var path = display.querySelector("code");
-    path.textContent = snapshot && snapshot.path || (scope === "session" ? selection.target : "");
+    path.textContent = accountActive ? "" : snapshot && snapshot.path || (scope === "session" ? selection.target : "");
     path.title = path.textContent;
     path.hidden = !path.textContent;
     var strip = view.querySelector("[data-settings-precedence]");
+    var filters = search.closest(".filter-bar");
+    if (filters) filters.hidden = accountActive;
+    strip.hidden = accountActive;
+    if (accountActive) {
+      strip.replaceChildren();
+      return;
+    }
     strip.replaceChildren(el("strong", "prec-lbl", tr("js.settings.precedence")));
     scopes.forEach(function (name, i) {
       if (i) {
@@ -590,9 +619,6 @@ var wsSettingsChoiceLabels = {
         var result = pending ? await pending :
           await request("/api/config/" + action, Object.assign({}, selection, {key: operation.key, selectors: operation.selectors, value: operation.value}));
         if (result.entry) {
-          if (entry.key === "agent.werk_endpoints" && window.WsSettingsCombobox) {
-            window.WsSettingsCombobox.invalidateChoices();
-          }
           var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
@@ -951,6 +977,57 @@ var wsSettingsChoiceLabels = {
     return item.tier + " → " + target + " (" + scopeName(item.scope) + ")";
   }
 
+  function accountLink(label, action) {
+    return append(button("account-link", tr(label), action), svgIcon("l-chevron-right"));
+  }
+
+  function selectSection(name, provider) {
+    var wasAccount = activeSection === "account";
+    var goingToAccount = name === "account";
+    if (wasAccount && !goingToAccount) account.closeEditors();
+    if (!wasAccount && goingToAccount) {
+      account.refreshStatus();
+      account.ensureEndpoints(true);
+    }
+    activeSection = name;
+    if (name !== "agents") focusedTierProvider = "";
+    view.querySelectorAll("[data-settings-section]").forEach(function (item) {
+      item.setAttribute("aria-current", String(item.dataset.settingsSection === name));
+    });
+    if (wasAccount !== goingToAccount) renderHeader();
+    renderContent();
+    content.scrollTop = 0;
+    if (goingToAccount && provider) account.focus(provider);
+  }
+
+  function showTiers(provider) {
+    focusedTierProvider = provider;
+    search.value = "";
+    filter = "all";
+    view.querySelector("[data-settings-filters]").querySelectorAll("button").forEach(function (node, i) {
+      node.setAttribute("aria-pressed", String(i === 0));
+    });
+    buckets.set("agents.tier", "werk");
+    selectSection("agents");
+    var row = content.querySelector("tr.account-focus");
+    var tab = content.querySelector("[data-bucket-key='agents.tier'][data-settings-bucket='werk']");
+    var destination = row || tab;
+    if (destination) {
+      destination.focus({preventScroll: true});
+      destination.scrollIntoView({block: "nearest"});
+    }
+  }
+
+  function syncAccountRemedy(remedy) {
+    var provider = remedy.dataset.accountTierProvider;
+    var issue = provider ? account.providerIssue(provider) : "";
+    remedy.hidden = !issue;
+    if (remedy.firstChild?.textContent === issue || (!issue && !remedy.firstChild)) return;
+    remedy.replaceChildren();
+    if (issue) remedy.append(el("span", "", issue), " ",
+      accountLink("js.settings.account.manage", function () { selectSection("account", provider); }));
+  }
+
   function tierRow(entry, spec, onMutated) {
     var canEdit = editable(entry, spec), group = el("tbody", "tier-entry" + rowClass(entry, canEdit));
     group.dataset.configKey = entry.key;
@@ -991,6 +1068,26 @@ var wsSettingsChoiceLabels = {
       combos.effort.refresh();
     });
     row.prepend(cell);
+    if (account && entry.selectors.harness === "werk") {
+      var remedy = el("div", "account-tier-remedy");
+      var modelCell = row.children[2];
+      modelCell.append(remedy);
+      function syncProvider() {
+        var backend = inputs[0].value.trim().toLowerCase() || "werk";
+        var model = cb.modelSelection(inputs[1].value, value.provider);
+        var provider = backend === "werk" && model.model ? model.provider || "openrouter" : "";
+        remedy.dataset.accountTierProvider = provider;
+        syncAccountRemedy(remedy);
+        var highlighted = !!focusedTierProvider && (provider === focusedTierProvider ||
+          focusedTierProvider === "local" && provider.startsWith("local/"));
+        row.classList.toggle("account-focus", highlighted);
+        if (highlighted) row.tabIndex = -1;
+        else row.removeAttribute("tabindex");
+      }
+      inputs[0].addEventListener("input", syncProvider);
+      inputs[1].addEventListener("input", syncProvider);
+      syncProvider();
+    }
     var status = el("span", "hint");
     status.setAttribute("role", "status");
     var submit = makeSubmit(entry, group, status, function (fresh) {
@@ -1077,6 +1174,7 @@ var wsSettingsChoiceLabels = {
       var tab = button("tier-htab", "", function () {
         if (choice === active) return;
         active = choice;
+        focusedTierProvider = "";
         buckets.set(spec.key, choice);
         syncTabSelection();
         syncActiveBar();
@@ -1159,6 +1257,7 @@ var wsSettingsChoiceLabels = {
     }
 
     function syncTable() {
+      if (account && active === "werk") account.ensureEndpoints();
       Array.from(table.querySelectorAll("tbody")).forEach(function (tb) { tb.remove(); });
       var visible = currentEntries().filter(function (entry) {
         return entry.selectors.harness === active && matches(entry, spec);
@@ -1369,22 +1468,27 @@ var wsSettingsChoiceLabels = {
   function renderCounts() {
     var n = snapshot ? snapshot.entries.filter(function (entry) { return selected(entry) !== undefined; }).length : 0;
     count.textContent = snapshot ? tr("js.settings.override_count", n) : "";
-    for (var node of view.querySelectorAll("[data-settings-section]")) {
+    renderAccountCount();
+    for (var node of view.querySelectorAll("[data-settings-section]:not([data-settings-section='account'])")) {
       var total = sectionEntries(node.dataset.settingsSection).filter(function (entry) { return selected(entry) !== undefined; }).length;
       node.querySelector(".cnt").textContent = total || "";
       node.querySelector(".dot").classList.toggle("none", !total);
     }
   }
 
+  function renderAccountCount() {
+    if (!account) return;
+    var node = view.querySelector("[data-settings-section='account']");
+    if (!node) return;
+    var total = account.attention();
+    node.querySelector(".cnt").textContent = total || "";
+    node.querySelector(".dot").classList.toggle("none", !total);
+  }
+
   function renderSections() {
     var nav = view.querySelector("[data-settings-sections]");
-    nav.replaceChildren(...sections.map(function (name) {
-      var node = button("snav-btn", "", function () {
-        activeSection = name;
-        for (var item of nav.children) item.setAttribute("aria-current", String(item === node));
-        renderContent();
-        content.scrollTop = 0;
-      });
+    nav.replaceChildren(...sections.filter(function (name) { return name !== "account" || account; }).map(function (name) {
+      var node = button("snav-btn", "", function () { selectSection(name); });
       node.dataset.settingsSection = name;
       node.setAttribute("aria-current", String(name === activeSection));
       return append(node, el("span", "dot none"), el("span", "", sectionName(name)), el("span", "cnt"));
@@ -1417,6 +1521,15 @@ var wsSettingsChoiceLabels = {
   }
 
   function renderContent() {
+    if (activeSection === "account") {
+      if (!account.panel.isConnected) {
+        preferenceEditor = null;
+        content.replaceChildren(append(el("header", "sec-head"), el("h2", "", sectionName("account")),
+          el("p", "", tr(sectionNotes.account))), account.panel);
+      }
+      account.ensureEndpoints();
+      return;
+    }
     preferenceEditor = null;
     content.replaceChildren();
     if (!snapshot) {
@@ -1439,6 +1552,8 @@ var wsSettingsChoiceLabels = {
       el("p", "", tr(sectionNotes[activeSection])));
     if (activeSection === "workflow" && scope === "global") content.append(syncCard());
     content.append(heading);
+    if (activeSection === "agents" && account) content.append(append(el("p", "info-note account-tier-note"),
+      tr("js.settings.account.tiers_note"), " ", accountLink("js.settings.account.manage", function () { selectSection("account"); })));
     if (activeSection === "adapters") {
       var tabs = append(el("div", "subtabs"), ...adapters.map(function (name) {
         var tab = button("subtab", sectionName(name), function () {
@@ -1520,6 +1635,14 @@ var wsSettingsChoiceLabels = {
     renderHeader();
     renderSections();
     renderContent();
+    if (account) {
+      account.refreshStatus();
+      window.parent.document.addEventListener("ws-openai-consent", account.refreshStatus);
+      window.addEventListener("pagehide", function () {
+        window.parent.document.removeEventListener("ws-openai-consent", account.refreshStatus);
+      });
+      if (activeSection === "account" && requestedProvider) account.focus(requestedProvider);
+    }
     try {
       var loaded = await request("/api/config/snapshot" + (query.size ? "?" + query.toString() : ""));
       if (!Array.isArray(loaded.entries)) throw new Error();

@@ -1,5 +1,5 @@
 [
-  {"key": "agent.werk_endpoints", "section": "agents", "control": "textarea", "label": "js.settings.key.agent.werk_endpoints.label", "description": "js.settings.key.agent.werk_endpoints.description", "selectors": []},
+  {"key": "agent.werk_endpoints", "section": "account", "control": "werk_endpoints", "label": "js.settings.key.agent.werk_endpoints.label", "description": "js.settings.key.agent.werk_endpoints.description", "selectors": []},
   {"key": "workflow.lang", "section": "workflow", "control": "text", "label": "js.settings.key.workflow.lang.label", "description": "js.settings.key.workflow.lang.description", "selectors": []},
   {"key": "workflow.profile", "section": "workflow", "control": "choice", "label": "js.settings.key.workflow.profile.label", "description": "js.settings.key.workflow.profile.description", "selectors": ["harness"]},
   {"key": "workflow.prefer_subagent", "section": "workflow", "control": "toggle", "label": "js.settings.key.workflow.prefer_subagent.label", "description": "js.settings.key.workflow.prefer_subagent.description", "selectors": []},

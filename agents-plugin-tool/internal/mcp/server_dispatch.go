@@ -352,6 +352,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		catalog.Knobs = append(catalog.Knobs, s.declared.knobs(&catalogResolver, sessionKey)...)
+		hideConfigDiscovery(&view, &catalog)
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, configListView{View: view, Knobs: catalog.Knobs, ManifestErrors: s.declared.rejected}, nil)
 		}

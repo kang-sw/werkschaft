@@ -1,4 +1,89 @@
   // --- stream ----------------------------------------------------------------
+  const consentBanner = doc.querySelector("[data-openai-consent]");
+  let consentPrompt = 0, consentLocal = false, dismissedConsentPrompt = 0;
+  let consentResize;
+
+  function setConsentBannerHidden(hidden) {
+    consentBanner.hidden = hidden;
+    if (hidden) {
+      consentResize?.disconnect();
+      root.style.removeProperty("--account-banner-height");
+    } else if (typeof ResizeObserver === "function") {
+      consentResize ||= new ResizeObserver(([entry]) => {
+        if (!consentBanner.hidden) root.style.setProperty("--account-banner-height", entry.borderBoxSize[0].blockSize + "px");
+      });
+      consentResize.observe(consentBanner, {box: "border-box"});
+    }
+  }
+
+  function showOpenAIConsent(event) {
+    if (!consentBanner || !event || !Number.isSafeInteger(event.prompt) || typeof event.local !== "boolean") return;
+    const {prompt, local} = event;
+    if (prompt === consentPrompt && local === consentLocal) return;
+    consentPrompt = prompt;
+    consentLocal = local;
+    setConsentBannerHidden(!prompt || prompt === dismissedConsentPrompt);
+    consentBanner.replaceChildren();
+    doc.dispatchEvent(new CustomEvent("ws-openai-consent", {detail: event}));
+    if (consentBanner.hidden) return;
+
+    function item(tag, className, key) {
+      const node = doc.createElement(tag);
+      node.className = className;
+      node.textContent = wsT(key);
+      return node;
+    }
+    const copy = doc.createElement("div");
+    copy.className = "account-banner-copy";
+    copy.append(item("strong", "", "js.account.banner_title"), item("p", "", "js.account.banner_description"));
+    consentBanner.append(copy);
+    if (!local) {
+      copy.append(item("p", "account-banner-local", "js.account.banner_local_hint"));
+      return;
+    }
+    const link = item("a", "account-link", "js.account.banner_openai_link");
+    link.href = "/settings?section=account&provider=openai";
+    copy.append(link);
+    const controls = doc.createElement("div");
+    controls.className = "account-banner-controls";
+    consentBanner.append(controls);
+    const error = item("p", "account-banner-error", "js.account.banner_failed");
+    error.hidden = true;
+    error.setAttribute("role", "alert");
+    copy.append(error);
+
+    function action(key, allowed, primary) {
+      const node = item("button", "btn" + (primary ? " pri" : ""), key);
+      node.type = "button";
+      node.addEventListener("click", async function () {
+        const buttons = controls.querySelectorAll("button");
+        buttons.forEach(button => { button.disabled = true; });
+        error.hidden = true;
+        const dismiss = allowed === undefined;
+        try {
+          const response = await fetch("/api/account/consent" + (dismiss ? "/dismiss" : ""), {
+            method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(dismiss ? {prompt} : {prompt, allowed})
+          });
+          if (!response.ok) throw new Error();
+          dismissedConsentPrompt = prompt;
+          if (consentPrompt === prompt) setConsentBannerHidden(true);
+        } catch (_) {
+          error.hidden = false;
+        } finally {
+          buttons.forEach(button => { button.disabled = false; });
+        }
+      });
+      return node;
+    }
+    const close = action("js.account.banner_close");
+    close.className = "btn account-banner-close";
+    close.title = close.textContent;
+    close.setAttribute("aria-label", close.textContent);
+    close.textContent = "×";
+    controls.append(action("js.account.banner_allow", true, true), action("js.account.banner_deny", false), close);
+  }
+
   // The stream state shows on every indicator in the top bar: the bare dot,
   // and the harness badge's LED, which a head region swap redraws lit, so
   // the swap reapplies the state (swap above).
@@ -414,9 +499,12 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
+    function onOpenAIConsent(event) {
+      if (!framed && current()) showOpenAIConsent(event);
+    }
     function onCompanion(config) {
       if (!shell || !current() || !config) return;
       window.wsCompanionConfig = config;

@@ -67,6 +67,9 @@ func (b WerkBackend) Choices(ctx context.Context) ([]ModelChoice, []string, erro
 }
 
 func (b WerkBackend) choiceRevision() uint64 {
+	if source, ok := b.credentials.(interface{ ProviderRevision() uint64 }); ok {
+		return source.ProviderRevision()
+	}
 	if source, ok := b.credentials.(interface{ LocalRevision() uint64 }); ok {
 		return source.LocalRevision()
 	}
