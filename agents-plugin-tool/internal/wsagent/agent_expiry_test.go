@@ -307,6 +307,73 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 	}
 }
 
+func TestHeartbeatExpiryKeepsAncestorAcrossClosedBridge(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		hasLeaf bool
+		turn    bool
+	}{
+		{name: "open turn below the bridge", hasLeaf: true, turn: true},
+		{name: "young idle leaf below the bridge", hasLeaf: true},
+		{name: "without open grandchild"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clk := expiryHarness(t)
+			h.runner.Close()
+			var leafAge time.Duration
+			if tc.hasLeaf {
+				leafAge = time.Hour
+			}
+			writeExpiryBridge(h, clk, day, leafAge, false)
+			h.config.heartbeat = time.Hour
+			h.start()
+			ancestor := h.runner.conv("ancestor")
+			if ancestor == nil {
+				t.Fatal("ancestor must start before reaching its expiry")
+			}
+			if tc.hasLeaf {
+				leaf := h.runner.conv("leaf")
+				if leaf == nil {
+					t.Fatal("leaf did not start")
+				}
+				if tc.turn {
+					leaf.do(func() { leaf.setStatus(func() { leaf.turn = true }) })
+				}
+			}
+			clk.advance(day + time.Hour)
+			if !tc.hasLeaf {
+				ancestor.do(ancestor.heartbeat)
+				eventually(t, "ancestor expiry with no open leaf", func() bool { return gone(h, "ancestor") })
+				return
+			}
+			for range 2 {
+				if !ancestor.do(ancestor.heartbeat) {
+					t.Fatal("heartbeat closed the ancestor despite its open grandchild")
+				}
+				eventually(t, "heartbeat expiry decision", func() bool {
+					var scheduled bool
+					ancestor.do(func() { scheduled = ancestor.expiring })
+					return !scheduled
+				})
+				if h.runner.conv("ancestor") == nil || h.state("ancestor").Status == StatusClosed {
+					t.Fatal("heartbeat closed the ancestor despite its open grandchild")
+				}
+			}
+			if st := h.state("leaf"); st.Status == StatusClosed {
+				t.Fatal("heartbeat closed the open grandchild")
+			}
+			if !tc.turn {
+				clk.advance(day)
+				leaf := h.runner.conv("leaf")
+				leaf.do(leaf.heartbeat)
+				eventually(t, "the leaf to expire on its own heartbeat", func() bool { return gone(h, "leaf") })
+				ancestor.do(ancestor.heartbeat)
+				eventually(t, "ancestor expiry after the leaf expired", func() bool { return gone(h, "ancestor") })
+			}
+		})
+	}
+}
+
 // expiredAtStart picks each quiet subtree past its expiry, deepest first;
 // a busy descendant keeps its ancestors, a recent or busy child is kept,
 // and a conversation with no spawn parent is never picked.
