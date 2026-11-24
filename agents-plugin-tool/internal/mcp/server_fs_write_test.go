@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
@@ -230,5 +231,129 @@ func TestModelFileToolsKeepOperatorSessionStateReadOnly(t *testing.T) {
 		if got, err := os.ReadFile(path); err != nil || string(got) != prior {
 			t.Fatalf("trusted state = %s, %v", got, err)
 		}
+	}
+}
+
+func TestModelFileWriteHoldsPostureThroughPrepareAndApply(t *testing.T) {
+	for _, phase := range []string{"prepare", "apply"} {
+		t.Run(phase, func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "test.txt")
+			var guard sync.RWMutex
+			level := wsfs.AuthorityFull
+			race := make(chan struct{})
+			transitioning := make(chan struct{})
+			downgraded := make(chan struct{})
+			go func() {
+				<-race
+				close(transitioning)
+				guard.Lock()
+				level = wsfs.AuthorityWorkdirWrite
+				guard.Unlock()
+				close(downgraded)
+			}()
+			assertHeld := func() {
+				if guard.TryLock() {
+					guard.Unlock()
+					t.Error("the file mutation did not hold the posture guard")
+				}
+			}
+			var once sync.Once
+			at := func(here string) {
+				assertHeld()
+				if here == phase {
+					once.Do(func() {
+						close(race)
+						<-transitioning
+					})
+				}
+			}
+			binding := &FileWriteSession{
+				Root: root, Authority: wsfs.AuthorityFull, LiveAuthority: true,
+				HoldAuthority: func() func() {
+					guard.RLock()
+					return func() {
+						if data, err := os.ReadFile(target); err != nil || string(data) != "admitted" {
+							t.Errorf("file write after releasing the posture guard = %q, %v", data, err)
+						}
+						guard.RUnlock()
+					}
+				},
+				CurrentAuthority: func() wsfs.Authority {
+					at("prepare")
+					return level
+				},
+				Record: func(_ context.Context, call FileWriteCall) error {
+					at("apply")
+					if call.Authority != wsfs.AuthorityFull || call.Intent.Outcome() != "not applied" {
+						t.Errorf("intent before apply = %+v", call)
+					}
+					return nil
+				},
+			}
+			s := &Server{fileWrites: binding}
+			args := map[string]any{"path": target, "content": "admitted"}
+			meta := map[string]any{mcpframe.ToolCallIDMeta: "mutation"}
+			res := s.callFSWrite(context.Background(), json.RawMessage("21"), "fs.write", args, meta)
+			<-downgraded
+			if got, _ := json.Marshal(res); !strings.Contains(string(got), "created") {
+				t.Fatalf("write admitted before downgrade = %s", got)
+			}
+		})
+	}
+}
+
+func TestModelFileWriteRechecksPostureAfterOperatorGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after wsfs.Authority
+	}{
+		{"scoped approval", wsfs.AuthorityWorkdirWrite},
+		{"read-only after approval", wsfs.AuthorityReadOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "test.txt")
+			var guard sync.RWMutex
+			level := wsfs.AuthorityWorkdirWrite
+			approved, recorded := false, false
+			binding := &FileWriteSession{
+				Root: root, Authority: wsfs.AuthorityFull, LiveAuthority: true,
+				HoldAuthority: func() func() {
+					guard.RLock()
+					return guard.RUnlock
+				},
+				CurrentAuthority: func() wsfs.Authority { return level },
+				Approve: func(_ context.Context, call FileWriteCall) error {
+					if !guard.TryLock() {
+						t.Fatal("operator approval was awaited under the posture guard")
+					}
+					defer guard.Unlock()
+					if call.Authority != wsfs.AuthorityWorkdirWrite {
+						t.Errorf("approval authority = %s", call.Authority)
+					}
+					approved = true
+					level = tc.after
+					return nil
+				},
+				Record: func(_ context.Context, call FileWriteCall) error {
+					recorded = true
+					if !approved || call.Authority != wsfs.AuthorityWorkdirWrite {
+						t.Errorf("recorded without scoped approval: %+v", call)
+					}
+					return nil
+				},
+			}
+			s := &Server{fileWrites: binding}
+			args := map[string]any{"path": target, "content": "admitted"}
+			meta := map[string]any{mcpframe.ToolCallIDMeta: "mutation"}
+			res := s.callFSWrite(context.Background(), json.RawMessage("21"), "fs.write", args, meta)
+			data, err := os.ReadFile(target)
+			wantWrite := tc.after == wsfs.AuthorityWorkdirWrite
+			if !approved || recorded != wantWrite || (wantWrite && (err != nil || string(data) != "admitted")) ||
+				(!wantWrite && !errors.Is(err, os.ErrNotExist)) {
+				t.Fatalf("file after operator grant = %q, %v (approved %v, recorded %v, response %+v)", data, err, approved, recorded, res)
+			}
+		})
 	}
 }

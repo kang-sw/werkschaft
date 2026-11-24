@@ -82,6 +82,7 @@ func (s *denySessions) Approve(context.Context, string, execjob.HostedCall) (boo
 	s.mu.Unlock()
 	return false, errors.New("approval asked")
 }
+func (s *denySessions) LockExecAuthority(string) (func(), error) { return func() {}, nil }
 func (s *denySessions) Immediate(string) (bool, error) {
 	s.mu.Lock()
 	s.asked++

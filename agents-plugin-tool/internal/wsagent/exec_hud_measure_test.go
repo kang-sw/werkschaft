@@ -30,8 +30,9 @@ func (s measureSessions) Owner(id string) (execjob.HostedOwner, error) {
 func (s measureSessions) Approve(context.Context, string, execjob.HostedCall) (bool, error) {
 	return true, nil
 }
-func (s measureSessions) Immediate(string) (bool, error) { return true, nil }
-func (s measureSessions) StopNote(id string) string      { return s.r.ExecStopNote(id) }
+func (s measureSessions) LockExecAuthority(string) (func(), error) { return func() {}, nil }
+func (s measureSessions) Immediate(string) (bool, error)           { return true, nil }
+func (s measureSessions) StopNote(id string) string                { return s.r.ExecStopNote(id) }
 func (s measureSessions) Hand(id string, gen uint64, execID, text string) error {
 	return s.r.PassiveHand(id, gen, execID, text)
 }

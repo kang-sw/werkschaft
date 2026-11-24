@@ -31,7 +31,12 @@ type FileWriteSession struct {
 	CurrentAuthority func() Authority
 	// LiveAuthority is set when the harness applies mode changes in the current process.
 	LiveAuthority bool
-	Record        func(context.Context, FileCall) error
+	// HoldAuthority orders preparation and mutation against posture changes.
+	HoldAuthority func() (release func())
+	// Approve waits for the operator when a scoped model call needs a grant.
+	// Call it outside HoldAuthority before retrying admission.
+	Approve func(context.Context, FileCall) error
+	Record  func(context.Context, FileCall) error
 }
 
 // AuthorityForCall snapshots the permission level to pin for one file operation.

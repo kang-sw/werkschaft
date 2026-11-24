@@ -97,6 +97,10 @@ func (s execSessions) Approve(ctx context.Context, id string, call execjob.Hoste
 
 func (s execSessions) Immediate(id string) (bool, error) { return s.r.ExecImmediate(id) }
 
+func (s execSessions) LockExecAuthority(id string) (func(), error) {
+	return s.r.LockExecAuthority(id)
+}
+
 // StopNote is the user-stop sentence in id's language (its workflow.lang).
 func (s execSessions) StopNote(id string) string { return s.r.ExecStopNote(id) }
 

@@ -173,6 +173,8 @@ type HostedSessions interface {
 	// Immediate reports whether id's live role and mode run a call without
 	// a prompt now.
 	Immediate(id string) (bool, error)
+	// LockExecAuthority holds the owner's posture stable through process spawn.
+	LockExecAuthority(id string) (release func(), err error)
 	// Notify admits the completion notice text of event eventID for id
 	// under generation gen, once per event.
 	Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error)
