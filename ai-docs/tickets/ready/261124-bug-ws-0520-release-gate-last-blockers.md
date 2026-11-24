@@ -236,6 +236,86 @@ C1, C2, C3, I1, I2, I3. Verify with the affected packages' Go tests
 `internal/wsfs`, `internal/wsholder`), and with
 `go test ./internal/mcp -timeout 45m` if the change reaches it.
 
+### Result (c82aac170) - 2026-11-24
+
+Phase 1 landed on `impl/develop/0520-blockers-backend` from `bbcd42ec9`.
+
+- **C1** (`063b7f465`, `c3b4a5488`) includes hosted Werk journal identities
+  in the model-write authority check. The existing multi-link gate keeps
+  this inventory off single-link writes. The scanner allowlist classifies
+  the journal basename as a persisted directory name and cites the
+  hard-link regression.
+- **C2** (`d6f512ee7`, `c82aac170`) serializes the durable claim with
+  plan consent. Active-steer and idle-batch recovery preserve saved claim
+  decisions and classify previously unclassified claims under current
+  consent before delivery. Regression tests cover recovery across
+  revocation, including an authorized idle claim delivered once and an
+  unclassified idle claim refused.
+- **C3** (`42cacf68a`) rejects dangling symlinks at the edit target or
+  in an ancestor during AgY accept-edits approval. Missing in-root
+  destinations remain eligible for file creation.
+- **I1** (`e363a0b6f`) gives each macOS replacement an exclusively
+  created stage and holds the destination inode lock through publication.
+  An identical write bypasses staging. Pre-existing directories whose
+  ownership by this write cannot be established are preserved.
+- **I2** (`b521e2f26`) starts the Windows pipe child suspended, applies
+  QoS and assigns its job before resuming the primary thread. The child
+  still resumes if job creation or assignment fails.
+- **I3** (`e5d9e6b63`) persists positive dead-binding closure evidence.
+  Restart restores permanent mail non-delivery and its notice for those
+  closures. Ordinary closed agents keep their existing mail behavior,
+  and closed-record persistence stays deferred while a holder may still
+  be alive.
+
+**Compatibility (T0).** The optional `runnerCronClaim` member uses the
+existing durable inbox entry (`wsinbox/inbox_claim.go:71,90–137`).
+Older ordinary entry readers ignore unknown JSON members
+(`wsinbox/inbox_store.go:169–179`), acknowledgment retains the entry
+bytes, and pre-cron readers already skip `.cron.json` entries
+(`wsinbox/cron.go:51–60`). The optional `dead_binding_closure` member
+uses the existing durable record (`wsagent/record.go:63`,
+`wsagent/runner_durable.go:37–77`). Older record readers preserve
+unknown top-level members (`wsagent/record.go:232–282`), and the new
+reader applies the refusal only when it reads that evidence
+(`wsagent/runner_startup.go:309–316`).
+
+**Review.** Independent lite review found one Important test gap.
+`c82aac170` adds both idle-batch restart cases. The targeted
+post-correction run passed.
+
+**Verification** (from `agents-plugin-tool/`).
+
+- Pass — `go test ./internal/wsfs ./internal/werk ./internal/wsinbox ./internal/wsholder ./internal/wscred ./internal/wsstate -timeout 45m`.
+- Pass — `go test ./internal/wsagent -timeout 45m -parallel 1 -skip '^(TestAgyWorkerRetirementRestartsTheExpiryClock|TestCompactionStateClosedChildKeepsItsCountAcrossARestart)$'`.
+  Those two ticket-listed flakes failed in an earlier broad run. The
+  transient `TestWerkLeadSteersAndInterrupts` and
+  `TestWorktreeActiveChildrenAndSpawnReleaseReservation` failures passed
+  individually with `-count=3` and in the serial suite.
+- Pass — `go test ./internal/wsagent ./internal/wsdashboard -timeout 5m -run '^(TestCommonCodeHasNoHarnessNameBranch|TestWerkCronIdleBatchRecoversClaimAfterConsentRevocation|TestModelFileProtectionRefusesWerkJournalAlias)$' -count=1`.
+- Pass — `go test ./internal/wsdashboard -timeout 70s -run '^TestExecJobsEventBurstWakeCost$' -count=1`,
+  `go test ./internal/wsdashboard -timeout 70s -run '^TestEntryRowsRenderedSharedParity$' -count=1`,
+  and `go test ./internal/wsdashboard -timeout 3m -run '^(TestAgentsIslandBehavior|TestPanelRowsStreams)$' -count=1`.
+  The five-minute dashboard package run reported an intermittent
+  `TestAgentsIslandBehavior` timing assertion and the baseline
+  `TestBoardFrameBands` selector failure assigned to Phase 3, then hit its
+  package limit while running `TestPanelRowsStreams`. At the lead's
+  direction the 45-minute retry was stopped for verification on merged
+  `develop`.
+- Fail (pooled-worktree assets) — `go test ./internal/mcp -timeout 45m`.
+  `TestLegacyWerkTierResolutionRequiresItsProvider` reported missing
+  `internal/wspackage/generated/inventory.json`. That generated directory
+  contains only `PLACEHOLDER`, with both embedded package trees
+  (`ws/` and `wsflow/`) absent. Pass —
+  `go test ./internal/mcp -timeout 10m -run '^Test(CronTool|DashboardInboxDrainDescriptionNamesTheCronEnvelopeInBothProducts|MailboxSendChecksDeadBindingAfterEnqueue|FileWriteToolsRequireTrustedWerkWriteAuthority)' -count=1`.
+- Pass — `GOOS=windows go vet ./internal/wsholder ./internal/wsfs ./internal/wsinbox ./internal/wscred`
+  and `GOOS=windows go vet ./internal/wsdashboard ./internal/werk ./internal/wsstate`.
+- Pass — `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s internal/wsholder/tests`
+  ran 72 tests with two native Windows skips.
+
+**ws dogfood.** Routing suggested `impl/develop/rigor-gout-cramp` as a
+rename for the preassigned branch. The worker kept
+`impl/develop/0520-blockers-backend` as directed and acquired the ticket.
+
 ### Phase 2: Dashboard user commands and Stop
 
 C4, I4, I5, I6, I7. Verify with browser regressions for holds changed
