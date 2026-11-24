@@ -36,8 +36,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	// the key rule, which reads the tool's schema by canonical name.
 	params.Name = s.connectionDescriptor().aliases.canonical(params.Name)
 	// call is only an envelope. Dispatch re-enters here with the inner name,
-	// arguments and metadata; no outer key or authority is inherited. Schema
-	// inspection uses the same gates below, but stops before argument checking.
+	// arguments and metadata; an omitted, null, or blank inner session_key
+	// forwards a non-blank outer session_key when the target tool declares one,
+	// and no other outer key or authority is inherited. Schema inspection uses
+	// the same gates below, but stops before argument checking.
 	schemaOnly := false
 	if params.Name == "call" {
 		if !s.toolAllowed("call") {
@@ -51,13 +53,27 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolErrorTextResponse(req.ID, "call: tool must be a string")
 		}
 		if name != "" {
-			if s.connectionDescriptor().aliases.canonical(name) == "call" {
+			canonicalName := s.connectionDescriptor().aliases.canonical(name)
+			if canonicalName == "call" {
 				return toolErrorTextResponse(req.ID, "call cannot target itself")
 			}
 			if raw, present := params.Arguments["arguments"]; present {
 				arguments, ok := raw.(map[string]any)
 				if !ok {
 					return toolErrorTextResponse(req.ID, "call: arguments must be an object")
+				}
+				outerRaw, _ := params.Arguments["session_key"].(string)
+				outerKey := strings.TrimSpace(outerRaw)
+				innerRaw, innerPresent := arguments["session_key"]
+				innerStr, innerIsString := innerRaw.(string)
+				innerBlank := !innerPresent || innerRaw == nil || (innerIsString && strings.TrimSpace(innerStr) == "")
+				if innerBlank && outerKey != "" && toolDeclaresSessionKey(canonicalName) {
+					cloned := make(map[string]any, len(arguments)+1)
+					for k, v := range arguments {
+						cloned[k] = v
+					}
+					cloned["session_key"] = outerKey
+					arguments = cloned
 				}
 				inner, err := json.Marshal(map[string]any{"name": name, "arguments": arguments, "_meta": params.Meta})
 				if err != nil {
