@@ -18,6 +18,37 @@ type mutationTarget struct {
 	missing []string
 }
 
+func (f *Files) pinForWrite(path string) (*mutationTarget, FileProtection, error) {
+	var protection FileProtection
+	if f.Protection != nil {
+		protection = f.Protection()
+	}
+	path, err := f.writable(path, protection)
+	if err != nil {
+		return nil, nil, err
+	}
+	target, err := pinMutationTarget(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := target.checkProtectedParent(protection); err != nil {
+		target.close()
+		return nil, nil, err
+	}
+	return target, protection, nil
+}
+
+func (t *mutationTarget) checkProtectedParent(protection FileProtection) error {
+	if protection == nil {
+		return nil
+	}
+	info, err := t.parent.Stat()
+	if err != nil {
+		return err
+	}
+	return protection.CheckOpened(info)
+}
+
 func pinMutationTarget(path string) (*mutationTarget, error) {
 	root := filepath.VolumeName(path) + string(filepath.Separator)
 	relative, err := filepath.Rel(root, filepath.Dir(path))

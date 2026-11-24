@@ -189,6 +189,40 @@ func TestEditPreservesCRLF(t *testing.T) {
 	}
 }
 
+func TestEditPreservesMixedLineEndingsOutsideReplacements(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "mixed.txt")
+	original := "keep LF\nfirst\r\nsecond\r\nkeep CRLF\r\nthird\nkeep final LF\n"
+	must(t, os.WriteFile(p, []byte(original), 0o644))
+	f := &Files{Root: root, Cwd: root, Authority: AuthorityFull}
+	diff, err := call(t, f, "edit", map[string]any{"path": "mixed.txt", "edits": []map[string]string{
+		{"oldText": "third", "newText": "new third\nnew fourth"},
+		{"oldText": "first\nsecond", "newText": "new first\nnew second"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "keep LF\nnew first\r\nnew second\r\nkeep CRLF\r\nnew third\nnew fourth\nkeep final LF\n"
+	if data, err := os.ReadFile(p); err != nil || string(data) != want {
+		t.Fatalf("file = %q, %v; want %q", data, err, want)
+	}
+	for _, line := range []string{" keep LF\n", " keep CRLF\r\n", " keep final LF\n", "+new first\r\n", "+new fourth\n"} {
+		if !strings.Contains(diff, line) {
+			t.Errorf("diff missing %q: %q", line, diff)
+		}
+	}
+
+	text, err := call(t, f, "edit", map[string]any{"path": "mixed.txt", "edits": []map[string]string{
+		{"oldText": "keep LF\nnew first\nnew second", "newText": "keep LF\nnew first\nnew second"},
+	}})
+	if err != nil || !strings.Contains(text, "no change") {
+		t.Fatalf("no-op edit = %q, %v", text, err)
+	}
+	if data, err := os.ReadFile(p); err != nil || string(data) != want {
+		t.Fatalf("file after no-op = %q, %v; want %q", data, err, want)
+	}
+}
+
 // A symbolic link whose target does not exist yet is followed by a write,
 // which creates the target: the boundary is judged where the link points.
 func TestDanglingSymlinkWriteBoundary(t *testing.T) {

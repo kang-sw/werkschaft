@@ -115,6 +115,47 @@ func TestFileWriteToolsResolveWorkingDirectoryAndRefuseUnrecordedCalls(t *testin
 	}
 }
 
+func TestScopedFileToolsLeaveExternalHardLinkUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"fs.write", map[string]any{"path": "file.txt", "content": "new"}},
+		{"fs.edit", map[string]any{"path": "file.txt", "edits": []map[string]string{{"oldText": "old", "newText": "new"}}}},
+	} {
+		for _, timing := range []string{"existing link", "linked during intent"} {
+			t.Run(tc.tool+"/"+timing, func(t *testing.T) {
+				root := t.TempDir()
+				outside := t.TempDir()
+				mustWrite(t, root, "file.txt", "old")
+				target := filepath.Join(root, "file.txt")
+				alias := filepath.Join(outside, "alias.txt")
+				binding := &FileWriteSession{Root: root, Authority: wsfs.AuthorityWorkdirWrite}
+				binding.Record = func(context.Context, FileWriteCall) error {
+					if timing == "linked during intent" {
+						return os.Link(target, alias)
+					}
+					return nil
+				}
+				if timing == "existing link" {
+					if err := os.Link(target, alias); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk, FileWrites: binding})
+				if text, failed := rawCorrelatedToolCall(t, s, tc.tool, "fixture-call", tc.args); !failed || !strings.Contains(text, "cannot modify a shared file") {
+					t.Fatalf("%s = %v, %s", tc.tool, failed, text)
+				}
+				for _, path := range []string{target, alias} {
+					if data, err := os.ReadFile(path); err != nil || string(data) != "old" {
+						t.Errorf("read %s = %q, %v", path, data, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
 	root := t.TempDir()
 	level := wsfs.AuthorityFull

@@ -13,14 +13,16 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // server_fs.go is the fs.* read tools a cutover Codex session reads with in
 // place of its shell: fs.read, fs.grep and fs.list. They are read-only and
 // run without approval in every session mode. Their reach matches Codex's
-// native read-only sandbox, which reads the whole filesystem: a relative
+// native read-only sandbox: a relative
 // path resolves beneath the session's root and an absolute path is read as
-// given. The checks are advisory; nothing confines the daemon's own reads.
+// given. The provider credential store and its filesystem aliases are denied.
 //
 // Every reply is bounded: at most fsResultBudget bytes of text, with what
 // was cut said in the reply, and finite work behind it (the caps below).
@@ -162,6 +164,10 @@ func fsRead(path string, offset, limit int) (string, error) {
 	if limit > fsReadMaxLines {
 		limit = fsReadMaxLines
 	}
+	protection := wsdashboard.NewProviderCredentialProtection()
+	if err := protection.CheckPath(path); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -177,6 +183,10 @@ func fsRead(path string, offset, limit int) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	info, err = fsCheckOpened(f, protection)
+	if err != nil {
+		return "", err
+	}
 	reader := bufio.NewReaderSize(io.LimitReader(f, fsReadScanBytes), 64<<10)
 	head, _ := reader.Peek(fsBinarySniff)
 	if fsIsBinary(head) {
@@ -254,6 +264,10 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("bad pattern: %v", err)
 	}
+	protection := wsdashboard.NewProviderCredentialProtection()
+	if err := protection.CheckPath(path); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -280,6 +294,12 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			return nil
 		}
 		defer f.Close()
+		if _, err := fsCheckOpened(f, protection); err != nil {
+			if file == path {
+				return err
+			}
+			return nil
+		}
 		files++
 		// The bytes actually read count, not the size stat saw nor what
 		// the search consumed: a file that grows while it is read stops at
@@ -336,7 +356,7 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			return "", fmt.Errorf("%s is a binary file; fs.grep searches text files only", path)
 		}
 	} else {
-		walkErr := fsWalk(path, func(p string, d fs.DirEntry) error {
+		walkErr := fsWalk(path, protection, func(p string, d fs.DirEntry) error {
 			if !d.Type().IsRegular() || !fsGlobMatch(glob, d.Name()) {
 				return nil
 			}
@@ -371,6 +391,17 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 	return out.b.String(), nil
 }
 
+func fsCheckOpened(file *os.File, protection *wsdashboard.ProviderCredentialProtection) (os.FileInfo, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if err := protection.CheckOpened(info); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
 // fsMoreToRead reports whether f has a byte past its current offset.
 func fsMoreToRead(f *os.File) bool {
 	var b [1]byte
@@ -388,7 +419,7 @@ const fsWalkBatch = 1024
 // it, capped runs and the walk ends with fs.SkipAll. It descends into real
 // directories only (not symlinked ones, nor .git), skips unreadable ones
 // below root, and stops early when visit returns fs.SkipAll.
-func fsWalk(root string, visit func(path string, d fs.DirEntry) error, capped func()) error {
+func fsWalk(root string, protection *wsdashboard.ProviderCredentialProtection, visit func(path string, d fs.DirEntry) error, capped func()) error {
 	queue := []string{root}
 	visited := 0
 	for len(queue) > 0 {
@@ -396,6 +427,13 @@ func fsWalk(root string, visit func(path string, d fs.DirEntry) error, capped fu
 		queue = queue[1:]
 		f, err := os.Open(dir)
 		if err != nil {
+			if dir == root {
+				return err
+			}
+			continue
+		}
+		if _, err := fsCheckOpened(f, protection); err != nil {
+			f.Close()
 			if dir == root {
 				return err
 			}
@@ -411,6 +449,9 @@ func fsWalk(root string, visit func(path string, d fs.DirEntry) error, capped fu
 					return fs.SkipAll
 				}
 				p := filepath.Join(dir, e.Name())
+				if protection.DeniesName(p) {
+					continue
+				}
 				if e.IsDir() {
 					if e.Name() != ".git" {
 						queue = append(queue, p)
@@ -434,6 +475,10 @@ func fsWalk(root string, visit func(path string, d fs.DirEntry) error, capped fu
 // fsList lists directory path's entries whose name passes glob, sorted,
 // with a trailing slash on directories.
 func fsList(path, glob string) (string, error) {
+	protection := wsdashboard.NewProviderCredentialProtection()
+	if err := protection.CheckPath(path); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -446,6 +491,9 @@ func fsList(path, glob string) (string, error) {
 		return "", err
 	}
 	defer dir.Close()
+	if _, err := fsCheckOpened(dir, protection); err != nil {
+		return "", err
+	}
 	entries, err := dir.ReadDir(fsListScanEntries)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
@@ -458,7 +506,7 @@ func fsList(path, glob string) (string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if !fsGlobMatch(glob, e.Name()) {
+		if !fsGlobMatch(glob, e.Name()) || protection.DeniesName(filepath.Join(path, e.Name())) {
 			continue
 		}
 		name := e.Name()

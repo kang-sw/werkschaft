@@ -39,9 +39,18 @@ type Files struct {
 	// Cwd is the directory a relative path resolves against.
 	Cwd       string
 	Authority Authority
+	// Protection gives the caller a fresh path and handle policy for each
+	// inspection and again immediately before mutation.
+	Protection func() FileProtection
 	// RecordMutation persists the admitted target and content states before
 	// the file is touched.
 	RecordMutation func(context.Context, FileIntent) error
+}
+
+// FileProtection checks the selected path and the actual handles used for it.
+type FileProtection interface {
+	CheckPath(string) error
+	CheckOpened(os.FileInfo) error
 }
 
 // ResolvePath normalizes a path relative to the caller's working directory.
@@ -101,23 +110,34 @@ func realPath(p string) (string, error) {
 }
 
 // writable resolves path for a write and enforces the authority.
-func (f *Files) writable(path string) (string, error) {
+func (f *Files) writable(path string, protection FileProtection) (string, error) {
 	switch f.Authority {
 	case AuthorityReadOnly:
 		return "", errors.New("this session is read-only: it may not edit or write files")
-	case AuthorityWorkdirWrite:
-	case AuthorityFull:
-		target, err := f.ResolvePath(path)
-		if err != nil {
-			return "", err
-		}
-		return realPath(target)
+	case AuthorityWorkdirWrite, AuthorityFull:
 	default:
 		return "", fmt.Errorf("this session has no write authority (%q)", string(f.Authority))
 	}
 	p, err := f.ResolvePath(path)
 	if err != nil {
 		return "", err
+	}
+	if protection != nil {
+		if err := protection.CheckPath(p); err != nil {
+			return "", err
+		}
+	}
+	realTarget, err := realPath(p)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %v", path, err)
+	}
+	if protection != nil && realTarget != p {
+		if err := protection.CheckPath(realTarget); err != nil {
+			return "", err
+		}
+	}
+	if f.Authority == AuthorityFull {
+		return realTarget, nil
 	}
 	root := f.Root
 	if root == "" {
@@ -126,10 +146,6 @@ func (f *Files) writable(path string) (string, error) {
 	realRoot, err := realPath(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve the worktree root: %v", err)
-	}
-	realTarget, err := realPath(p)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %v", path, err)
 	}
 	if !within(realRoot, realTarget) {
 		return "", fmt.Errorf("%s is outside the session's worktree; workdir-write may write inside it only", path)
@@ -167,34 +183,26 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("edit arguments: %v", err)
 	}
-	p, err := f.writable(a.Path)
-	if err != nil {
-		return "", err
-	}
 	if len(a.Edits) == 0 {
 		return "", errors.New("edits is empty")
 	}
-	target, err := pinMutationTarget(p)
+	target, protection, err := f.pinForWrite(a.Path)
 	if err != nil {
 		return "", err
 	}
 	defer target.close()
-	prior, data, err := target.inspect(true)
+	prior, data, err := target.inspect(true, protection)
 	if err != nil {
 		return "", err
 	}
 	if prior.info == nil {
-		return "", &os.PathError{Op: "read", Path: p, Err: fs.ErrNotExist}
+		return "", &os.PathError{Op: "read", Path: target.path, Err: fs.ErrNotExist}
 	}
 	if IsBinary(data) {
 		return "", fmt.Errorf("%s is a binary file", a.Path)
 	}
 	orig := string(data)
-	crlf := strings.Contains(orig, "\r\n")
-	text := orig
-	if crlf {
-		text = strings.ReplaceAll(orig, "\r\n", "\n")
-	}
+	text, crlfOffsets := editMatchText(orig)
 	type span struct{ start, end int }
 	spans := make([]span, len(a.Edits))
 	for i, e := range a.Edits {
@@ -202,7 +210,7 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 			return "", fmt.Errorf("edit %d: newText is required", i+1)
 		}
 		old := e.Old
-		if crlf {
+		if len(crlfOffsets) != 0 {
 			old = strings.ReplaceAll(old, "\r\n", "\n")
 		}
 		if old == "" {
@@ -230,20 +238,25 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 	var out strings.Builder
 	last := 0
 	for _, i := range order {
-		out.WriteString(text[last:spans[i].start])
-		new := *a.Edits[i].New
-		if crlf {
-			new = strings.ReplaceAll(new, "\r\n", "\n")
+		match := spans[i]
+		start := match.start + sort.SearchInts(crlfOffsets, match.start)
+		end := match.end + sort.SearchInts(crlfOffsets, match.end)
+		out.WriteString(orig[last:start])
+		replacement := *a.Edits[i].New
+		if len(crlfOffsets) != 0 {
+			replacement = strings.ReplaceAll(replacement, "\r\n", "\n")
+			if replacement == text[match.start:match.end] {
+				replacement = orig[start:end]
+			} else if editLineUsesCRLF(orig, start) {
+				replacement = strings.ReplaceAll(replacement, "\n", "\r\n")
+			}
 		}
-		out.WriteString(new)
-		last = spans[i].end
+		out.WriteString(replacement)
+		last = end
 	}
-	out.WriteString(text[last:])
+	out.WriteString(orig[last:])
 	result := out.String()
-	diff := unifiedDiff(a.Path, text, result)
-	if crlf {
-		result = strings.ReplaceAll(result, "\n", "\r\n")
-	}
+	diff := unifiedDiff(a.Path, orig, result)
 	if err := f.commitFile(ctx, target, prior, []byte(result)); err != nil {
 		return "", err
 	}
@@ -251,6 +264,38 @@ func (f *Files) Edit(ctx context.Context, raw json.RawMessage) (string, error) {
 		return fmt.Sprintf("edited %s (no change)", a.Path), nil
 	}
 	return diff, nil
+}
+
+// editMatchText normalizes CRLF for matching and records each removed CR at
+// its corresponding LF's offset in the normalized text. The number of removed
+// CRs strictly before a match boundary maps it back to the original bytes.
+func editMatchText(orig string) (string, []int) {
+	var offsets []int
+	for start := 0; ; {
+		index := strings.Index(orig[start:], "\r\n")
+		if index < 0 {
+			break
+		}
+		index += start
+		offsets = append(offsets, index-len(offsets))
+		start = index + 2
+	}
+	if len(offsets) == 0 {
+		return orig, nil
+	}
+	return strings.ReplaceAll(orig, "\r\n", "\n"), offsets
+}
+
+// New lines use the edited line's terminator, or the preceding one for an
+// unterminated last line.
+func editLineUsesCRLF(orig string, start int) bool {
+	end := strings.IndexByte(orig[start:], '\n')
+	if end >= 0 {
+		end += start
+	} else {
+		end = strings.LastIndexByte(orig[:start], '\n')
+	}
+	return end > 0 && orig[end-1] == '\r'
 }
 
 func countMatches(text, match string) int {
@@ -274,16 +319,12 @@ func (f *Files) Write(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("write arguments: %v", err)
 	}
-	p, err := f.writable(a.Path)
-	if err != nil {
-		return "", err
-	}
-	target, err := pinMutationTarget(p)
+	target, protection, err := f.pinForWrite(a.Path)
 	if err != nil {
 		return "", err
 	}
 	defer target.close()
-	prior, _, err := target.inspect(false)
+	prior, _, err := target.inspect(false, protection)
 	if err != nil {
 		return "", err
 	}

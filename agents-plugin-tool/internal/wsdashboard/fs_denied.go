@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -47,13 +46,6 @@ func deniedBasePaths(homes []string) []string {
 	// directory beside the daemon's, until the daemon moves the file out
 	// of it (wscred.Store.MigrateLegacy). The release baseline already
 	// denies the daemon directory the file lives under.
-	addCredentials := func(cacheHome string) {
-		if path, err := wscred.DefaultPath(cacheHome); err == nil {
-			add(filepath.Dir(path))
-			add(path)
-			add(filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "auth"))
-		}
-	}
 	for _, home := range homes {
 		for _, name := range outsideDenied {
 			add(filepath.Join(home, filepath.FromSlash(name)))
@@ -61,13 +53,17 @@ func deniedBasePaths(homes []string) []string {
 		if dir, err := Dir(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName)); err == nil {
 			addDaemonDir(dir)
 		}
-		addCredentials(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
+		for _, base := range providerCredentialBases(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName)) {
+			add(base)
+		}
 	}
 	// Use the daemon's own resolver, including WS_CACHE_HOME relocation.
 	if dir, err := Dir(""); err == nil {
 		addDaemonDir(dir)
 	}
-	addCredentials("")
+	for _, base := range providerCredentialBases("") {
+		add(base)
+	}
 	for _, key := range []string{"GH_CONFIG_DIR", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE"} {
 		add(os.Getenv(key))
 	}
@@ -153,6 +149,10 @@ func (s *denySet) lexical(path string) bool {
 			}
 		}
 	}
+	return s.containsBasePath(lower)
+}
+
+func (s *denySet) containsBasePath(lower string) bool {
 	for _, base := range s.lower {
 		// At or under base, without regard to case: a case-insensitive
 		// volume reads ~/.SSH as ~/.ssh. Both sides are clean, so a prefix

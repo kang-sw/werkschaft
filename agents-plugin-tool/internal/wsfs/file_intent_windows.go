@@ -10,6 +10,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func hasSingleLink(file *os.File, _ os.FileInfo) (bool, error) {
+	var info windows.ByHandleFileInformation
+	err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info)
+	runtime.KeepAlive(file)
+	return info.NumberOfLinks == 1, err
+}
+
 func openMutationDir(parent *os.File, name string, create bool) (*os.File, error) {
 	const access = windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES
 	if parent == nil {
