@@ -685,3 +685,47 @@ verified fixed). Lead decision under the owner's overnight directive.
   restart because the durable record is already deleted); refusing safe Stop
   whenever any live conversation has an unresolvable parent (reintroduces
   the Phase 5 unrelated refusal).
+
+#### Result (7)
+
+2026-11-25 · `ffbe13f29`
+
+`ForgetClosed` keeps the closed row, parent edge, and durable record while
+an open descendant or a pending spawn needs them. The check and the
+in-memory drop share the registry mutex with spawn reservation and
+registration. The dashboard honors the purge decision and retains the
+session directory when the purge is deferred. Startup discovers both file
+records and SQLite-backed agent records through those directories.
+
+Waiting-child expiry uses the same guard. Its close cascade only walks open
+conversations, so expiry can close a parent and miss a live descendant
+behind an already-closed worker. A later purge with no open or pending
+descendants takes the existing cleanup path, including cron cleanup.
+
+On `develop` at `30481b451`, the authenticated dashboard sequence returned
+HTTP 200 for safe-only Stop in all three runs after deleting the middle
+worker's linked checkout. Both advisory views also reported safe Stop while
+the grandchild ran. With the fix, the same delete removes the checkout and
+retains the session record, both advisories report unsafe, and Stop returns
+409 until the grandchild settles. A separate test verifies private record
+retention through a pending spawn behind a closed child and deletion on
+retry after releasing that reservation.
+
+T0. The purge decision travels through an in-process Go interface. The HTTP
+and persisted record formats stay compatible. The registry check adds zero
+file operations, and a deferred purge skips directory and record removal.
+
+- Passed `go build ./cmd/...`.
+- Passed `go test -race ./internal/wsagent -run '^Test(SafeStop|SafeOnlyStop|WerkCron|Forget)' -count=3`.
+- Passed `go test ./internal/wsagent -parallel 1 -skip '^(TestAgyWorkerRetirementRestartsTheExpiryClock|TestAgyParentedWorkerRecordWakesStampedOrFromItsParent|TestCompactionStateClosedChildKeepsItsCountAcrossARestart)$' -count=1`.
+- Passed `go test ./internal/wsdashboard -run 'Worktree.*Delete|RailWorktree' -count=1`.
+- Passed `GOOS=windows go vet -stdversion=false ./internal/wsagent ./internal/wsdashboard`
+  and `git diff --check`.
+- Independent lite review of `30481b451..ffbe13f29` found no Critical or
+  Important issues (`cb43586e-01-findings.md`). Restart discovery was
+  inspected in source. The tests verified that the directory record and the
+  private SQLite record survive their respective deferred purge calls.
+
+Routing suggested a branch rename. The ticket lease and both commits use
+the branch assigned by the lead. The ticket stays in `ready/` at the lead's
+direction.

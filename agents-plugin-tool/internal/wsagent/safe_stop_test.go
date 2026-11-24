@@ -1,13 +1,19 @@
 package wsagent
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -289,8 +295,41 @@ func TestSafeOnlyStopAllowsUnrelatedLeadContention(t *testing.T) {
 }
 
 func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
-	h, _ := newHeldWorkerHarness(t)
-	worktree := releaseTestWorktree(t, h.root)
+	h, _ := configureHeldWorkerHarness(t)
+	worktree, err := filepath.EvalSymlinks(releaseTestWorktree(t, h.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.runner = NewRunner(h.opts)
+	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
+		Dir: h.dir, Home: t.TempDir(), Agents: h.runner, Sessions: leadSessions{},
+		WorkspacesFile: filepath.Join(t.TempDir(), "workspaces.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	t.Cleanup(h.holders.drain)
+	base := fmt.Sprintf("http://127.0.0.1:%d", d.Endpoint().Port)
+	cookie := daemonCookieForTest(t, d)
+	post := func(path string, body any) reply {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, base+path, bytes.NewReader(raw))
+		req.RemoteAddr = localBrowser.remote
+		req.Header.Set("Origin", base)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(cookie)
+		res := httptest.NewRecorder()
+		d.Handler().ServeHTTP(res, req)
+		return reply{res.Code, res.Body.String()}
+	}
+	if res := post("/rail/workspaces/add", map[string]string{"path": h.root}); res.status != http.StatusOK {
+		t.Fatalf("add workspace: status %d, body %s", res.status, res.body)
+	}
 	leadID, _ := h.settledLead()
 	lead := ParentRef{Kind: ParentLead, ReplyID: leadID}
 	spawn := func(parent ParentRef, root, prompt string) (string, string) {
@@ -330,16 +369,35 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 		t.Fatalf("spawn tree after release = %+v, want closed middle worker and running grandchild", rows)
 	}
 
-	st := h.state(leadID)
-	meta, ok := h.runner.SessionMeta(leadID)
-	post := func() reply {
-		return h.route(localBrowser, http.MethodPost, "/agents/"+leadID+"/stop", map[string]bool{"safe_only": true})
+	stop := func() reply {
+		return post("/agents/"+leadID+"/stop", map[string]bool{"safe_only": true})
 	}
-	res := post()
-	if !st.Process || st.SafeStop || !ok || !meta.HasProcess || meta.SafeStop ||
-		res.status != http.StatusConflict || !h.state(leadID).Process {
-		t.Fatalf("busy grandchild behind closed worker: advisory safe_stop=%v, metadata safe_stop=%v, Stop status=%d, body=%s",
-			st.SafeStop, meta.SafeStop, res.status, res.body)
+	assertStopRefused := func(when string) {
+		t.Helper()
+		st := h.state(leadID)
+		meta, ok := h.runner.SessionMeta(leadID)
+		res := stop()
+		if !st.Process || st.SafeStop || !ok || !meta.HasProcess || meta.SafeStop ||
+			res.status != http.StatusConflict || !h.state(leadID).Process {
+			t.Fatalf("%s: advisory safe_stop=%v, metadata safe_stop=%v, Stop status=%d, body=%s",
+				when, st.SafeStop, meta.SafeStop, res.status, res.body)
+		}
+	}
+	assertStopRefused("busy grandchild before checkout delete")
+
+	d.Index().Refresh()
+	if s, ok := d.Index().Session(middleID); !ok || s.Registration.Live(time.Now()) {
+		t.Fatalf("dashboard session for the released worker = %+v, present=%v, want ended", s, ok)
+	}
+	if res := post("/rail/worktrees/delete", map[string]string{"workspace": h.root, "path": worktree}); res.status != http.StatusOK {
+		t.Fatalf("delete checkout: status %d, body %s", res.status, res.body)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("deleted checkout: stat error = %v, want missing directory", err)
+	}
+	assertStopRefused("busy grandchild after checkout delete")
+	if _, err := readRecord(wsdashboard.SessionDir(h.dir, middleID)); err != nil {
+		t.Fatalf("session record for restart after checkout delete: %v", err)
 	}
 
 	h.holders.out(leafHolder, recoveryWorkerReply("done")...)
@@ -347,7 +405,7 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 	if st := h.state(leadID); !st.SafeStop {
 		t.Fatalf("lead with idle grandchild and closed middle worker = %+v, want safe Stop", st)
 	}
-	if res := post(); res.status != http.StatusOK || h.state(leadID).Process {
+	if res := stop(); res.status != http.StatusOK || h.state(leadID).Process {
 		t.Fatalf("safe-only Stop after the grandchild settled: status %d, body %s", res.status, res.body)
 	}
 }

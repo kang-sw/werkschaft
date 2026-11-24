@@ -270,13 +270,14 @@ func (a *deleteForgetAgents) Handler() http.Handler      { return http.NotFoundH
 func (a *deleteForgetAgents) Start(func(string, string)) {}
 func (a *deleteForgetAgents) InboxChanged(string)        {}
 func (a *deleteForgetAgents) Close()                     {}
-func (a *deleteForgetAgents) ForgetClosed(replyID string) {
+func (a *deleteForgetAgents) ForgetClosed(replyID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.forgotten == nil {
 		a.forgotten = map[string]bool{}
 	}
 	a.forgotten[replyID] = true
+	return true
 }
 
 func (a *deleteForgetAgents) forgot(replyID string) bool {
