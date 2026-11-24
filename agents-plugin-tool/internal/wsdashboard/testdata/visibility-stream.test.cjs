@@ -15,7 +15,7 @@ test('visibility follows both sources and disposes each connection listener', ()
   };
   function WebSocket(url) { this.url = url; this.readyState = 0; this.sent = []; this.send = s => this.sent.push(JSON.parse(s)); this.close = () => { this.readyState = 3; }; sockets.push(this); }
   WebSocket.OPEN = 1;
-  const ctx = { doc, WebSocket, location: { protocol: 'http:', host: 'localhost' }, shellHidden: false };
+  const ctx = { doc, WebSocket, window: {}, location: { protocol: 'http:', host: 'localhost' }, shellHidden: false };
   ctx.pageHidden = () => doc.hidden || ctx.shellHidden;
   vm.runInNewContext(openStream, ctx);
   const emit = type => { for (const fn of [...listeners.get(type)]) fn(); };
