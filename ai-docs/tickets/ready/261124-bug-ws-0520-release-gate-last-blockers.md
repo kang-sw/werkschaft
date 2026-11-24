@@ -816,7 +816,7 @@ Critical or Important findings (`a6ce06ae-01-findings.md`).
 The ticket lease and commits use the branch assigned by the lead.
 Ticket closure and daemon replacement remain with the lead.
 
-#### Edition (8664625a9) - 2026-11-25
+#### Edition (8664625a7) - 2026-11-25
 
 - Startup expiry uses closed workers as ancestry links. An open worker below
   a closed bridge blocks the ancestor's cascade and is evaluated against its
@@ -834,7 +834,7 @@ Both regressions reproduced in all three runs on `e5f01c5ae` and passed
 in all three runs with the fix. The changes use the existing
 `DeadBindingClosure` and `HolderID` in `record.go` and add zero file
 operations to startup. The independent lite review of
-`e5f01c5ae..8664625a9` found no Critical or Important issues
+`e5f01c5ae..8664625a7` found no Critical or Important issues
 (`9a6f7b9d-01-findings.md`).
 
 - Passed `go build ./cmd/...`.
