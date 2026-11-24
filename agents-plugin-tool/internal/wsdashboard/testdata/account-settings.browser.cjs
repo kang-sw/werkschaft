@@ -30,6 +30,11 @@ async function setup(page) {
     socket = ws;
     ws.onClose(() => { if (socket === ws) socket = null; });
   });
+  state.reconnect = async () => {
+    const previous = socket;
+    await previous.close();
+    await waitFor(() => socket && socket !== previous);
+  };
   state.emit = async (prompt, local = true) => {
     state.prompt = prompt;
     await waitFor(() => socket);
@@ -161,9 +166,11 @@ async function exercise(page) {
   await banner.getByRole('button', {name:/Close until/}).click();
   await banner.waitFor({state:'hidden'});
   assert.deepEqual(state.requests.at(-1), {action:'consent/dismiss', body:{prompt:1}});
-  await state.emit(2);
+  await state.reconnect();
+  const successorPrompt = 4503599627370497;
+  await state.emit(successorPrompt);
   await banner.getByRole('button', {name:'Don’t allow'}).click();
-  assert.deepEqual(state.requests.at(-1), {action:'consent', body:{prompt:2, allowed:false}});
+  assert.deepEqual(state.requests.at(-1), {action:'consent', body:{prompt:successorPrompt, allowed:false}});
   await state.emit(3);
   await banner.getByRole('button', {name:'Allow', exact:true}).click();
   assert.deepEqual(state.requests.at(-1), {action:'consent', body:{prompt:3, allowed:true}});

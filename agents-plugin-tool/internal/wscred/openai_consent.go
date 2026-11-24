@@ -1,6 +1,9 @@
 package wscred
 
-import "errors"
+import (
+	"errors"
+	"math/rand/v2"
+)
 
 // ErrOpenAIAccountChanged means a browser action was prepared for an account
 // or prompt that is no longer current.
@@ -50,6 +53,11 @@ func (s *Store) requestOpenAIConsentLocked() {
 		return
 	}
 	p := &s.openAIConsent
+	// Start each store at a random offset so prompts from a replaced daemon
+	// cannot match ordinary stale actions. Keep IDs exact in JavaScript.
+	if p.sequence == 0 || p.sequence == (1<<53)-1 {
+		p.sequence = rand.Uint64() >> 12
+	}
 	p.sequence++
 	p.pending, p.account = p.sequence, account.ClientID
 	p.notify()

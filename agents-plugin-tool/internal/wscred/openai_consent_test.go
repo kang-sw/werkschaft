@@ -100,6 +100,38 @@ func TestOpenAIConsentPromptAndSignOut(t *testing.T) {
 	}
 }
 
+func TestOpenAIConsentPromptRejectsPreviousStoreActions(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{})
+	s.RequestOpenAIBackgroundConsent()
+	previous, _ := s.OpenAIConsentPrompt()
+	if previous == 0 {
+		t.Fatal("missing prompt in first store")
+	}
+	s.DismissOpenAIConsentPrompt(previous)
+
+	reopened := NewStore(s.Path())
+	if _, err := reopened.Status(); err != nil {
+		t.Fatal(err)
+	}
+	reopened.RequestOpenAIBackgroundConsent()
+	current, _ := reopened.OpenAIConsentPrompt()
+	if current == 0 || current == previous || current >= 1<<53 {
+		t.Fatalf("successor prompt ID %d cannot replace dismissed prompt %d", current, previous)
+	}
+	reopened.DismissOpenAIConsentPrompt(previous)
+	if got, _ := reopened.OpenAIConsentPrompt(); got != current {
+		t.Fatal("stale dismiss cleared the successor's prompt")
+	}
+	if err := reopened.SetActiveOpenAIBackgroundConsent("", previous, true); !errors.Is(err, ErrOpenAIAccountChanged) {
+		t.Fatalf("stale answer applied to successor: %v", err)
+	}
+	if err := reopened.SetActiveOpenAIBackgroundConsent("", current, false); err != nil {
+		t.Fatalf("valid successor prompt: %v", err)
+	}
+}
+
 func TestOpenAIConsentCanBeRevokedAfterRefreshFailure(t *testing.T) {
 	s := testStore(t)
 	f := newOpenAIFixture(t, s)
