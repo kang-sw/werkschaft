@@ -460,3 +460,41 @@ directive; the earlier Decisions stay authoritative. Work splits into 4a
 
 All Phase 4 changes are T0 (no new cross-version surface); a change that
 needs a tier above T0 stops and goes to the lead.
+
+#### Result (4b)
+
+Implemented in `58e18e873` on `impl/develop/0520-p4-dashboard`.
+
+- **I11.** Exact jumps recheck clearance after the destination rail draws.
+  Input, native scroll, a newer jump, or target removal can cancel the
+  pending correction. Chromium follows a conversation link from a card
+  without upper capsules to a tall panel below a two-capsule rail.
+- **Files scrim.** Both filter rows, the narrow trigger, and the popover
+  yield pointer input to the scrim. Chromium clicks through the space
+  occupied by each inline row, dismisses Files, and checks the active filter.
+- **Narrow toolbar.** The in-flow slot keeps the measured face height plus
+  its margin when resting or floating in dropdown and tight modes.
+  Chromium measures the slot in both states.
+- **Radio order.** Arrow keys and Home/End follow each radiogroup's DOM order.
+  The browser matrix checks focus and persistence in inline and dropdown modes.
+
+All four regressions reproduced with the original dashboard code. The narrow
+dropdown slot grew from 40 px to 56 px at the sticky boundary, and the
+uncorrected panel intersected the destination rail and pill. The updated
+tests use actual hit testing, slot geometry, radio order, and destination
+geometry.
+
+Independent lite review of `7f949ef1d..58e18e873` found no issues. T0 uses
+existing browser state, filter values, and storage keys.
+
+Verification from `agents-plugin-tool/` with cached Playwright and Chromium
+for browser runs:
+
+- Pass — `go test ./internal/wsdashboard -run '^TestBoard(PanelFullscreen|ToolbarCollapse|StateFilter)Browser$' -timeout 4m -count=1`.
+- Pass — `go test ./internal/wsdashboard ./internal/wswhiteboard -run '^Test(BoardSnapDeck(P2|P3|P4|Feel|0512)Browser|BoardScrollP1FixesBrowser|GalleryBrowser|History(FoldRule|LoadAnchor)Browser)$' -timeout 4m -count=1`.
+- Pass — `go test ./internal/wsdashboard -run '^Test(BoardToolbarBackdrop|BoardToolbarPlacementAndCounts|ToolbarFloatingGeometry|BoardStateFilter(Asks|Tickets)?|FilesToolbarSheet|BoardFrameBands|BoardAnchorContracts|BoardSnapDeck0512Contracts)$' -count=1`.
+- Pass — `node --test --test-reporter=dot internal/wsdashboard/testdata/board-{anchor,free-canvas,navigation,snap-deck-0512,virtualize}.test.cjs internal/wsdashboard/testdata/wide-explorer.test.cjs` (100 cases).
+- Pass — `go build ./...` and `git diff --check`.
+
+The route suggested renaming the assigned dashboard branch. The ticket
+lease recorded the assigned branch.
