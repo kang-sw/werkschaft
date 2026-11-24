@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -179,10 +180,34 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 	if rec.HolderID == "" && !process {
 		return
 	}
+	r.rememberDeadOccupancyLocked(deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout})
+}
+
+// restoreRetainedReleaseOccupancy re-registers a detached holder's binding
+// when the daemon stopped between persisting the closure and removing the
+// checkout. The normal holder inventory determines whether it is still live.
+func (r *Runner) restoreRetainedReleaseOccupancy(rec Record) {
+	closure := rec.DeadBindingClosure
+	if rec.ClosedAt == "" || rec.HolderID == "" || closure == nil || closure.Reason == "" || closure.Checkout == "" {
+		return
+	}
+	info, err := os.Stat(closure.Checkout)
+	if os.IsNotExist(err) || (err == nil && !info.IsDir()) {
+		return
+	}
+	root, cwd := canonicalBinding(rec)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rememberDeadOccupancyLocked(deadBindingOccupancy{
+		rec: rec, root: root, cwd: cwd, checkout: closure.Checkout, closurePersisted: true,
+	})
+}
+
+func (r *Runner) rememberDeadOccupancyLocked(binding deadBindingOccupancy) {
 	if r.deadBindings == nil {
 		r.deadBindings = make(map[string]deadBindingOccupancy)
 	}
-	r.deadBindings[rec.ReplyID] = deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout}
+	r.deadBindings[binding.rec.ReplyID] = binding
 }
 
 func (r *Runner) rememberDeadRefusalLocked(id string, refusal *admissionRefusal) {

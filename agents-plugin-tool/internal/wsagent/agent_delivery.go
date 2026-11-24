@@ -4,9 +4,11 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -183,6 +185,11 @@ func (c *conv) expireIfDue() {
 	if at.IsZero() || c.r.opts.Now().Sub(at) < c.r.childWaitingExpiry() {
 		return
 	}
+	// The expiry walk needs every open descendant registered before it can
+	// decide whether closing the ancestor is safe.
+	if !c.r.startupReady() {
+		return
+	}
 	c.expiring = true
 	c.r.expireLater(rec.ReplyID)
 }
@@ -207,16 +214,12 @@ func (r *Runner) expire(id string) bool {
 	c.mu.Lock()
 	waiting := c.childWaitingLocked()
 	c.mu.Unlock()
-	desc := r.descendants(id)
-	busy := !waiting
-	for _, d := range desc {
-		if dc := r.conv(d); dc != nil {
-			dc.mu.Lock()
-			busy = busy || dc.awakeLocked()
-			dc.mu.Unlock()
-		}
+	if !waiting {
+		c.do(func() { c.expiring = false })
+		return false
 	}
-	if busy {
+	desc, quiet := r.liveExpiryDescendants(safeStopParent(id, false))
+	if !quiet {
 		c.do(func() { c.expiring = false })
 		return false
 	}
@@ -235,6 +238,67 @@ func (r *Runner) expire(id string) bool {
 		r.forget(d)
 	}
 	return true
+}
+
+func (r *Runner) liveExpiryDescendants(root ParentRef) ([]string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return expiryDescendants(root, func(parent ParentRef) iter.Seq[string] {
+		return maps.Keys(r.childrenIndex[parent])
+	}, func(id string) expiryNode {
+		if child := r.convs[id]; child != nil {
+			child.mu.Lock()
+			defer child.mu.Unlock()
+			return expiryNode{
+				parent: safeStopParent(id, child.rec.Lead),
+				closed: child.closed,
+				quiet:  !child.awakeLocked(),
+			}
+		}
+		if rec, ok := r.closed[id]; ok {
+			return expiryNode{parent: safeStopParent(id, rec.Lead), closed: true}
+		}
+		return expiryNode{}
+	})
+}
+
+type expiryNode struct {
+	parent ParentRef
+	closed bool
+	quiet  bool
+}
+
+// expiryDescendants collects the open descendants of a quiet expiry
+// candidate, deepest first. A closed record can carry ancestry but breaks
+// the cascade: every open record beyond it must meet its own expiry.
+func expiryDescendants(root ParentRef, children func(ParentRef) iter.Seq[string], lookup func(string) expiryNode) ([]string, bool) {
+	seen := map[string]bool{root.ReplyID: true}
+	var out []string
+	var walk func(ParentRef, bool) bool
+	walk = func(parent ParentRef, throughClosed bool) bool {
+		for id := range children(parent) {
+			if seen[id] {
+				return false
+			}
+			seen[id] = true
+			child := lookup(id)
+			if child.parent.ReplyID == "" {
+				continue
+			}
+			if !child.closed && (throughClosed || !child.quiet) {
+				return false
+			}
+			if !walk(child.parent, throughClosed || child.closed) {
+				return false
+			}
+			if !child.closed {
+				out = append(out, id)
+			}
+		}
+		return true
+	}
+	ok := walk(root, false)
+	return out, ok
 }
 
 var _ wsdashboard.AgentForgetter = (*Runner)(nil)
@@ -371,9 +435,7 @@ func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal
 		add(rec)
 	}
 	r.mu.Unlock()
-	children := func(rec Record) []string {
-		return kids[safeStopParent(rec.ReplyID, rec.Lead)]
-	}
+	children := func(parent ParentRef) iter.Seq[string] { return slices.Values(kids[parent]) }
 	quiet := func(rec Record) bool {
 		mark := rec.Voided
 		if rec.LastTurn != nil {
@@ -382,42 +444,25 @@ func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal
 		return dead[rec.ReplyID] == nil && !rec.Lead && rec.Parent != nil && rec.HolderID == "" && !rec.TurnOpen && rec.HeldTurn == nil &&
 			rec.Sends <= mark && len(rec.Queued)+len(rec.Mail)+len(rec.Reports)+len(rec.Steered)+len(rec.PendingReports) == 0
 	}
-	seen := map[string]bool{}
-	var subtree func(id string, out *[]string, throughClosed bool) bool
-	subtree = func(id string, out *[]string, throughClosed bool) bool {
-		if seen[id] {
-			return false
-		}
-		seen[id] = true
-		closed := closedIDs[id]
-		if !closed && (throughClosed || !quiet(byID[id])) {
-			return false
-		}
-		for _, k := range children(byID[id]) {
-			if !subtree(k, out, throughClosed || closed) {
-				return false
-			}
-		}
-		if !closed {
-			*out = append(*out, id)
-		}
-		return true
+	lookup := func(id string) expiryNode {
+		rec := byID[id]
+		return expiryNode{parent: safeStopParent(id, rec.Lead), closed: closedIDs[id], quiet: quiet(rec)}
 	}
+	seen := map[string]bool{}
 	var out []string
 	var visit func(id string)
 	visit = func(id string) {
+		seen[id] = true
 		rec := byID[id]
+		parent := safeStopParent(id, rec.Lead)
 		if at := lastActive(rec); !closedIDs[id] && quiet(rec) && !at.IsZero() && now.Sub(at) >= expiry {
-			var tree []string
-			saved := maps.Clone(seen)
-			if subtree(id, &tree, false) {
-				out = append(out, tree...)
+			if desc, ok := expiryDescendants(parent, children, lookup); ok {
+				out = append(out, desc...)
+				out = append(out, id)
 				return
 			}
-			seen = saved
 		}
-		seen[id] = true
-		for _, k := range children(rec) {
+		for k := range children(parent) {
 			if !seen[k] {
 				visit(k)
 			}

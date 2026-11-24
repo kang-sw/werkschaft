@@ -149,6 +149,7 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 			// A handed-off session is a terminal harness's: nothing here
 			// writes its row, watches its mail, or starts a process for it.
 			r.loadClosed(rec)
+			r.restoreRetainedReleaseOccupancy(rec)
 		} else {
 			open = append(open, rec)
 			binding := r.resolveAgentBinding(rec)

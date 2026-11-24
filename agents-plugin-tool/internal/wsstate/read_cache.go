@@ -50,7 +50,7 @@ func ReadFileCached(path string) ([]byte, error) {
 	if ok && SameFileMetadata(cached.info, info) {
 		return cached.data, nil
 	}
-	data, err := ReadFileOnce(path)
+	data, err := ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
