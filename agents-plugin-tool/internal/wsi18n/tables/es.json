@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "Total: {0}",
   "js.settings.account.endpoints_failed": "No se pudieron cargar los puntos de conexión locales.",
   "js.settings.account.endpoints_empty": "No hay puntos de conexión locales registrados.",
+  "js.settings.account.endpoint_key_retired": "La configuración del punto de conexión no cambió. Se eliminó la clave anterior.",
   "js.settings.account.invalid_endpoint": "El daemon rechazó este punto de conexión. Revisa el nombre, la URL, el tipo y la clave opcional.",
   "js.settings.account.add_endpoint": "+ Punto de conexión",
   "js.settings.account.base_url": "URL base",

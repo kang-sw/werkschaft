@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "{0} 件",
   "js.settings.account.endpoints_failed": "ローカルエンドポイントを読み込めませんでした。",
   "js.settings.account.endpoints_empty": "ローカルエンドポイントは登録されていません。",
+  "js.settings.account.endpoint_key_retired": "エンドポイントの設定は変更されませんでした。以前のキーは削除されました。",
   "js.settings.account.invalid_endpoint": "デーモンがこのエンドポイントを拒否しました。名前、URL、種類、任意のキーを確認してください。",
   "js.settings.account.add_endpoint": "+ エンドポイント",
   "js.settings.account.base_url": "ベース URL",

@@ -281,10 +281,13 @@ func TestCredentialCLIEndpointEdits(t *testing.T) {
 	if _, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "show"); code != 0 {
 		t.Fatalf("show from another config home: %d %q", code, stderr)
 	}
+	if _, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "endpoint", "set", "desk", "--base-url", "http://other.invalid/v1", "--kind", "ollama"); code != 0 {
+		t.Fatalf("set from another config home: %d %q", code, stderr)
+	}
 	t.Setenv(wsconfig.EnvConfigHome, configHome)
 	out, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "show", "local/desk")
 	if code != 0 || !strings.HasPrefix(out, "local/desk (desk): ...0001, updated ") {
-		t.Fatalf("show after alternate config read: %d %q %q", code, out, stderr)
+		t.Fatalf("show after alternate config write: %d %q %q", code, out, stderr)
 	}
 	_, stderr, code = runCredentialCLI(t, nil, cache, "", "credential", "endpoint", "remove", "desk")
 	if code != 0 {

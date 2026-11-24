@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "Total: {0}",
   "js.settings.account.endpoints_failed": "Não foi possível carregar os endpoints locais.",
   "js.settings.account.endpoints_empty": "Nenhum endpoint local cadastrado.",
+  "js.settings.account.endpoint_key_retired": "A configuração do endpoint não mudou. A chave anterior foi removida.",
   "js.settings.account.invalid_endpoint": "O daemon rejeitou este endpoint. Confira o nome, a URL, o tipo e a chave opcional.",
   "js.settings.account.add_endpoint": "+ Endpoint",
   "js.settings.account.base_url": "URL base",

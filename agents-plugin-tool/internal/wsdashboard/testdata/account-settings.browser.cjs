@@ -20,7 +20,7 @@ async function setup(page) {
   const state = {
     openrouter: {configured:false}, openai: null, sign_in: {state:'idle'},
     endpoints: demoEndpoints(), localKeys: {'lab-vllm':'...a3b7'},
-    keyOutcome: 'unverified', signInOutcome: 'waiting', prompt: 0, polls: 0,
+    keyOutcome: 'unverified', signInOutcome: 'waiting', endpointPublishFails: false, prompt: 0, polls: 0,
     requests: [], snapshotScopes: [], errors: [],
   };
   page.setDefaultTimeout(7000);
@@ -115,6 +115,10 @@ async function setup(page) {
         await state.emit(0);
         return empty();
       case 'endpoints':
+        if (state.endpointPublishFails) {
+          delete state.localKeys[body.name];
+          return json({error:'endpoint_key_retired'}, 500);
+        }
         if (body.op === 'remove') {
           delete state.endpoints[body.name];
           delete state.localKeys[body.name];
@@ -303,9 +307,15 @@ async function exercise(page) {
   assert.equal(await endpoints.getByRole('button', {name:'Save', exact:true}).isDisabled(), true);
   await endpointURL.fill('https://vllm2.example/v1/');
   await endpoints.getByText('Saving a new URL deletes the key stored for the old URL.').waitFor();
+  state.endpointPublishFails = true;
   await endpoints.getByRole('button', {name:'Save', exact:true}).click();
+  await endpoints.getByText('The endpoint configuration did not change. The previous key was removed.').waitFor();
   await lab.getByText('No key').waitFor();
-  assert.equal((await projection())['lab-vllm'].base_url, 'https://vllm2.example/v1');
+  assert.equal((await projection())['lab-vllm'].base_url, 'https://vllm.example/v1');
+  state.endpointPublishFails = false;
+  await endpoints.getByRole('button', {name:'Save', exact:true}).click();
+  await endpointURL.waitFor({state:'detached'});
+  await waitFor(async () => (await projection())['lab-vllm'].base_url === 'https://vllm2.example/v1');
 
   await endpoints.getByRole('button', {name:'+ Endpoint'}).click();
   const endpointName = frame.getByLabel('Name', {exact:true});

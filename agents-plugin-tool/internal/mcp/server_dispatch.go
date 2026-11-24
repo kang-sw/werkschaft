@@ -495,7 +495,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			// Reset means "drop the override and fall back to the builtin default" —
 			// distinct from explicitly writing the builtin's current value.
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
-			if err := resolver.Unset(storeKey, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
+			if err := s.writeScalarTune(&resolver, writeOpts, storeKey, nil, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
 			s.notifyScalarTune(entry.Key, writeOpts)
@@ -560,7 +560,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return toolTextResponse(req.ID, "", err)
 			}
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
-			if err := resolver.Set(storeKey, value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
+			if err := s.writeScalarTune(&resolver, writeOpts, storeKey, &value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
 			s.notifyScalarTune(entry.Key, writeOpts)

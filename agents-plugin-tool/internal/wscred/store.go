@@ -128,6 +128,9 @@ func (s *Store) MigrateLegacy() error {
 // never holds what the file does not. While a daemon runs, its Store is the
 // file's only writer (see the package doc).
 type Store struct {
+	// localMu orders catalog loads and edits before they take mu. Waiting
+	// for the config file lock leaves credential reads free to take mu.
+	localMu              sync.Mutex
 	localProviders       atomic.Pointer[[]Provider]
 	localRevision        atomic.Uint64
 	openAIRevision       atomic.Uint64

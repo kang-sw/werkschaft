@@ -829,6 +829,10 @@ var errConfigUnchanged = errors.New("ws config unchanged")
 // Config. A missing file reads as Config{}; callers whose no-op must not create
 // the directory or lock file check for the file before calling.
 func updateConfigFile(path string, mutate func(*Config) error) (Config, error) {
+	return updateConfigFileBeforeReplace(path, mutate, nil)
+}
+
+func updateConfigFileBeforeReplace(path string, mutate func(*Config) error, beforeReplace func() error) (Config, error) {
 	var cfg Config
 	// The lock is a sibling file so it survives the atomic rename of the config.
 	err := rewriteLocked(path, path+".lock", func(raw []byte, exists bool) ([]byte, error) {
@@ -846,7 +850,7 @@ func updateConfigFile(path string, mutate func(*Config) error) (Config, error) {
 			return nil, fmt.Errorf("encode config: %w", err)
 		}
 		return append(payload, '\n'), nil
-	})
+	}, beforeReplace)
 	if errors.Is(err, errConfigUnchanged) {
 		return cfg, nil
 	}
@@ -861,8 +865,8 @@ func updateConfigFile(path string, mutate func(*Config) error) (Config, error) {
 // file serializes against every other while unlocked readers see the old or
 // the new file, never a torn one. A missing file reaches transform with
 // exists=false. A transform error (errConfigUnchanged included) skips the write
-// and is returned unchanged.
-func rewriteLocked(path, lockPath string, transform func(raw []byte, exists bool) ([]byte, error)) error {
+// and is returned unchanged. beforeReplace runs after staging and before publication.
+func rewriteLocked(path, lockPath string, transform func(raw []byte, exists bool) ([]byte, error), beforeReplace func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -914,6 +918,12 @@ func rewriteLocked(path, lockPath string, transform func(raw []byte, exists bool
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("close temp config: %w", err)
+	}
+	if beforeReplace != nil {
+		if err := beforeReplace(); err != nil {
+			os.Remove(tmpName)
+			return err
+		}
 	}
 	if err := replaceConfigFile(tmpName, path); err != nil {
 		os.Remove(tmpName)

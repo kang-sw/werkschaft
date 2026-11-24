@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "Gesamt: {0}",
   "js.settings.account.endpoints_failed": "Lokale Endpunkte konnten nicht geladen werden.",
   "js.settings.account.endpoints_empty": "Keine lokalen Endpunkte registriert.",
+  "js.settings.account.endpoint_key_retired": "Die Endpunktkonfiguration blieb unverändert. Der bisherige Schlüssel wurde entfernt.",
   "js.settings.account.invalid_endpoint": "Der Daemon hat den Endpunkt abgelehnt. Prüfen Sie Name, URL, Typ und optionalen Schlüssel.",
   "js.settings.account.add_endpoint": "+ Endpunkt",
   "js.settings.account.base_url": "Basis-URL",

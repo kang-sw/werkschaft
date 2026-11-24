@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "Всего: {0}",
   "js.settings.account.endpoints_failed": "Не удалось загрузить локальные эндпоинты.",
   "js.settings.account.endpoints_empty": "Локальные эндпоинты не зарегистрированы.",
+  "js.settings.account.endpoint_key_retired": "Конфигурация эндпоинта не изменилась. Прежний ключ удалён.",
   "js.settings.account.invalid_endpoint": "Демон отклонил эндпоинт. Проверьте имя, URL, тип и необязательный ключ.",
   "js.settings.account.add_endpoint": "+ Эндпоинт",
   "js.settings.account.base_url": "Базовый URL",

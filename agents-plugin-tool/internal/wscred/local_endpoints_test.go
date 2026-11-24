@@ -9,13 +9,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 	opts := wsconfig.Options{ConfigHome: t.TempDir()}
-	resolver := wsconfig.NewResolver(opts, nil, nil, nil)
 	path := filepath.Join(t.TempDir(), dirName, FileName)
 	store := NewStore(path)
 	const id ProviderID = "local/desk"
@@ -25,10 +27,7 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 	configure := func(base string) {
 		t.Helper()
 		raw := fmt.Sprintf(`{"desk":{"base_url":%q,"kind":"ollama"}}`, base)
-		if err := resolver.Set(wsconfig.ItemWerkEndpoints, raw, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.ReconcileLocalEndpoints(opts); err != nil {
+		if err := store.SetLocalEndpointOverride(opts, &raw, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -77,6 +76,33 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 	checkStatus(false)
 }
 
+func TestLocalEndpointStartupLoadsCredentialsWithoutRetirement(t *testing.T) {
+	firstHome := wsconfig.Options{ConfigHome: t.TempDir()}
+	secondHome := wsconfig.Options{ConfigHome: t.TempDir()}
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	store := NewStore(path)
+	const base = "http://example.invalid/one"
+	if _, err := store.ApplyLocalEndpoint(firstHome, LocalEndpointChange{
+		Op: OpSet, Name: "desk", BaseURL: base, Kind: "ollama", Key: NewSecret("fake-current-key"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := NewStore(path)
+	if err := reopened.LoadLocalEndpoints(secondHome); err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.loaded || len(reopened.LocalProviders()) != 0 {
+		t.Fatal("startup did not warm credentials with the active config's catalog")
+	}
+	if err := reopened.LoadLocalEndpoints(firstHome); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Provider: "local/desk", BaseURL: base}
+	if key, err := reopened.Credential(context.Background(), req); err != nil || key.Secret.Reveal() != "fake-current-key" {
+		t.Fatalf("alternate startup removed the key: %v", err)
+	}
+}
+
 func TestLocalEndpointMutationCleanupRetryAndConcurrency(t *testing.T) {
 	opts := wsconfig.Options{ConfigHome: t.TempDir()}
 	path := filepath.Join(t.TempDir(), "credentials.json")
@@ -102,23 +128,34 @@ func TestLocalEndpointMutationCleanupRetryAndConcurrency(t *testing.T) {
 	if err := set("http://example.invalid/two", ""); err == nil {
 		t.Fatal("expected write failure")
 	}
-	if got := store.LocalProviders(); len(got) != 1 || got[0].BaseURL != "http://example.invalid/two" {
-		t.Fatal("failed cleanup left stale catalog")
+	if got := store.LocalProviders(); len(got) != 1 || got[0].BaseURL != first {
+		t.Fatal("failed cleanup changed live routing")
 	}
-	if err := set(first, ""); err == nil {
-		t.Fatal("accepted URL restoration before retrying cleanup")
+	const second = "http://example.invalid/two"
+	setLegacy := func(base string) error {
+		raw := fmt.Sprintf(`{"desk":{"base_url":%q,"kind":"ollama"}}`, base)
+		return store.SetLocalEndpointOverride(opts, &raw, true)
 	}
-	store.writeStep = nil
-	// Restart before retrying: recovery must reconcile the saved URL first.
+	if err := setLegacy(second); err == nil {
+		t.Fatal("legacy override bypassed failed cleanup")
+	}
+	// Reopen with the original config. Its key was never retired.
 	store = NewStore(path)
-	if err := set(first, ""); err != nil {
+	if err := store.LoadLocalEndpoints(opts); err != nil {
 		t.Fatal(err)
 	}
-	if err := set("http://example.invalid/two", ""); err != nil {
+	req := Request{Provider: "local/desk", BaseURL: first}
+	if key, err := store.Credential(context.Background(), req); err != nil || key.Secret.Reveal() != "fake-retired-key" {
+		t.Fatalf("failed cleanup removed the current key: %v", err)
+	}
+	if err := set(second, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := set(first, ""); err != nil {
+	if err := setLegacy(first); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.Credential(context.Background(), req); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("legacy restore revived the retired key: %v", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -154,6 +191,106 @@ func TestLocalEndpointMutationCleanupRetryAndConcurrency(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "fake-delete-key") {
 		t.Fatal("removed endpoint key persisted")
+	}
+}
+
+func TestLocalEndpointConfigPublishFailureReportsRetiredKey(t *testing.T) {
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	store := NewStore(path)
+	const first = "http://example.invalid/one"
+	change := LocalEndpointChange{Op: OpSet, Name: "desk", BaseURL: first, Kind: "ollama", Key: NewSecret("fake-retired-key")}
+	if _, err := store.ApplyLocalEndpoint(opts, change); err != nil {
+		t.Fatal(err)
+	}
+	configPath, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.writeStep = func(step credentialWriteStep) {
+		if step != credentialLinked {
+			return
+		}
+		// Force config publication to fail only after the credential writer
+		// is ready to publish the retirement.
+		staged, err := filepath.Glob(configPath + "-*.tmp")
+		if err != nil || len(staged) != 1 {
+			t.Fatalf("staged config files: %v, %v", staged, err)
+		}
+		if err := os.Remove(staged[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	change.BaseURL = "http://example.invalid/two"
+	change.Key = Secret{}
+	if _, err := store.ApplyLocalEndpoint(opts, change); !errors.Is(err, ErrEndpointKeyRetired) {
+		t.Fatalf("config publication failure = %v", err)
+	}
+	reopened := NewStore(path)
+	if err := reopened.LoadLocalEndpoints(opts); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Provider: "local/desk", BaseURL: first}
+	if _, err := reopened.Credential(context.Background(), req); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("expected old URL with retired key after reopening: %v", err)
+	}
+}
+
+func TestLocalEndpointConfigLockWaitLeavesCredentialReadsFree(t *testing.T) {
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	store := NewStore(filepath.Join(t.TempDir(), "credentials.json"))
+	const first = "http://example.invalid/one"
+	change := LocalEndpointChange{Op: OpSet, Name: "desk", BaseURL: first, Kind: "ollama", Key: NewSecret("fake-current-key")}
+	if _, err := store.ApplyLocalEndpoint(opts, change); err != nil {
+		t.Fatal(err)
+	}
+	configPath, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(configPath + ".lock")
+	defer lock.Close()
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	editDone := make(chan error, 1)
+	go func() {
+		change.BaseURL = "http://example.invalid/two"
+		change.Key = Secret{}
+		_, err := store.ApplyLocalEndpoint(opts, change)
+		editDone <- err
+	}()
+	deadline := time.After(3 * time.Second)
+	for store.localMu.TryLock() {
+		store.localMu.Unlock()
+		select {
+		case <-deadline:
+			t.Fatal("endpoint edit did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		req := Request{Provider: "local/desk", BaseURL: first}
+		_, err := store.Credential(context.Background(), req)
+		if err == nil {
+			_, err = store.Status()
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("credential read during endpoint edit: %v", err)
+		}
+	case <-deadline:
+		t.Fatal("credential reads stalled while the config lock was held")
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-editDone; err != nil {
+		t.Fatalf("edit after config lock was released: %v", err)
 	}
 }
 

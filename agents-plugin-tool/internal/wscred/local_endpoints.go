@@ -7,26 +7,16 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
-// LoadLocalEndpoints reads the machine-scoped registry for a credential lookup.
+// LoadLocalEndpoints reads the machine-scoped registry and warms the credential
+// store before routing starts. Only an edit can establish that a key was retired.
 func (s *Store) LoadLocalEndpoints(opts wsconfig.Options) error {
-	return s.loadLocalEndpoints(opts, false)
-}
-
-// ReconcileLocalEndpoints loads the registry and prunes retired keys under the
-// daemon's credential writer ownership.
-func (s *Store) ReconcileLocalEndpoints(opts wsconfig.Options) error {
-	return s.loadLocalEndpoints(opts, true)
-}
-
-func (s *Store) loadLocalEndpoints(opts wsconfig.Options, reconcile bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
 
 	overrides, err := wsconfig.GlobalOverrides(opts)
 	if err != nil {
@@ -36,21 +26,16 @@ func (s *Store) loadLocalEndpoints(opts wsconfig.Options, reconcile bool) error 
 	if err != nil {
 		return err
 	}
-	if reconcile {
-		return s.reconcileLocalEndpointsLocked(endpoints, nil)
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.publishLocalEndpointsLocked(endpoints)
-	return nil
+	return s.loadLocked(false)
 }
 
-func (s *Store) publishLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint) []Provider {
+func (s *Store) publishLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint) {
 	providers := make([]Provider, 0, len(endpoints))
 	for _, name := range slices.Sorted(maps.Keys(endpoints)) {
-		endpoint := endpoints[name]
-		providers = append(providers, Provider{
-			ID: ProviderID(wsconfig.LocalWerkProviderID(name)), Name: name,
-			Kind: KindAPIKey, BaseURL: endpoint.BaseURL, Dialect: endpoint.Kind,
-		})
+		providers = append(providers, localProvider(name, endpoints[name]))
 	}
 	previous := s.localProviders.Swap(&providers)
 	if previous == nil || !slices.EqualFunc(*previous, providers, func(a, b Provider) bool {
@@ -58,53 +43,38 @@ func (s *Store) publishLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEn
 	}) {
 		s.localRevision.Add(1)
 	}
-	return providers
 }
 
-func (s *Store) reconcileLocalEndpointsLocked(endpoints map[string]wsconfig.WerkEndpoint, change *LocalEndpointChange) error {
-	// Keep routing current even if credential cleanup must be retried.
-	providers := s.publishLocalEndpointsLocked(endpoints)
+func localProvider(name string, endpoint wsconfig.WerkEndpoint) Provider {
+	return Provider{ID: ProviderID(wsconfig.LocalWerkProviderID(name)), Name: name,
+		Kind: KindAPIKey, BaseURL: endpoint.BaseURL, Dialect: endpoint.Kind}
+}
+
+func (s *Store) retireLocalEndpointKeysLocked(before, after map[string]wsconfig.WerkEndpoint) (bool, error) {
 	if err := s.prepareWriteLocked(); err != nil {
-		return err
+		return false, err
 	}
+	var ids []string
+	for name, prior := range before {
+		if current, ok := after[name]; ok && current.BaseURL == prior.BaseURL {
+			continue
+		}
+		id := string(localProvider(name, prior).keyID())
+		if _, ok := s.doc.providers[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return false, nil
+	}
+	oldCount := len(s.doc.providers)
 	next := s.doc.clone()
-	valid := map[string]bool{}
-	for _, p := range providers {
-		valid[string(p.keyID())] = true
+	for _, id := range ids {
+		delete(next.providers, id)
 	}
-	dirty := false
-	for id := range next.providers {
-		if strings.HasPrefix(id, "local/") && !valid[id] {
-			delete(next.providers, id)
-			dirty = true
-		}
-	}
-	if change != nil && change.Key.Reveal() != "" && change.Op == OpSet {
-		for _, p := range providers {
-			if string(p.ID) != wsconfig.LocalWerkProviderID(change.Name) || p.BaseURL != change.BaseURL {
-				continue
-			}
-			id := p.keyID()
-			key := trimKey(change.Key.Reveal())
-			if cur, ok := s.keys[id]; ok && cur.APIKey == key {
-				continue
-			}
-			entry, err := mergeEntry(next.providers[string(id)], apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: s.now().UTC().Format(time.RFC3339)})
-			if err != nil {
-				return err
-			}
-			next.providers[string(id)] = entry
-			dirty = true
-		}
-	}
-	if dirty {
-		// Invalidate even when publication succeeds but retirement reports an error.
-		s.localRevision.Add(1)
-		if err := s.writeLocked(next); err != nil {
-			return err
-		}
-	}
-	return nil
+	s.localRevision.Add(1)
+	err := s.writeLocked(next)
+	return len(s.doc.providers) < oldCount, err
 }
 
 // LocalRevision changes when an endpoint definition or API key changes.
@@ -159,6 +129,9 @@ type LocalEndpointStatus struct {
 
 var ErrInvalidEndpoint = errors.New("invalid endpoint")
 
+// ErrEndpointKeyRetired means the config change failed after removing its key.
+var ErrEndpointKeyRetired = errors.New("endpoint configuration change was not applied, but its previous key was removed")
+
 // ApplyLocalEndpoint serializes endpoint edits and key cleanup with key writes.
 func (s *Store) ApplyLocalEndpoint(opts wsconfig.Options, change LocalEndpointChange) ([]LocalEndpointStatus, error) {
 	if !wsconfig.IsLocalWerkProvider(wsconfig.LocalWerkProviderID(change.Name)) {
@@ -181,25 +154,81 @@ func (s *Store) ApplyLocalEndpoint(opts wsconfig.Options, change LocalEndpointCh
 	} else if change.Op != OpRemove {
 		return nil, ErrInvalidEndpoint
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Finish any prior failed cleanup against the still-current config before
-	// accepting another edit. This prevents restoring a retired URL's key.
-	endpoints, err := wsconfig.UpdateWerkEndpoint(opts, change.Name, endpoint, func(current map[string]wsconfig.WerkEndpoint) error {
-		return s.reconcileLocalEndpointsLocked(current, nil)
+	return s.editLocalEndpoints(true, func(retire func(before, after map[string]wsconfig.WerkEndpoint) error) (map[string]wsconfig.WerkEndpoint, error) {
+		return wsconfig.UpdateWerkEndpoint(opts, change.Name, endpoint, retire)
+	}, change)
+}
+
+// SetLocalEndpointOverride applies the legacy whole-map write or reset through
+// the same retirement guard. Edits to other config homes leave routing intact.
+func (s *Store) SetLocalEndpointOverride(opts wsconfig.Options, value *string, publish bool) error {
+	_, err := s.editLocalEndpoints(publish, func(retire func(before, after map[string]wsconfig.WerkEndpoint) error) (map[string]wsconfig.WerkEndpoint, error) {
+		return wsconfig.SetWerkEndpointOverride(opts, value, retire)
+	}, LocalEndpointChange{})
+	return err
+}
+
+func (s *Store) editLocalEndpoints(publish bool, write func(retire func(before, after map[string]wsconfig.WerkEndpoint) error) (map[string]wsconfig.WerkEndpoint, error), change LocalEndpointChange) ([]LocalEndpointStatus, error) {
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
+	locked, retired := false, false
+	defer func() {
+		if locked {
+			s.mu.Unlock()
+		}
+	}()
+	endpoints, err := write(func(before, after map[string]wsconfig.WerkEndpoint) error {
+		s.mu.Lock()
+		locked = true
+		var err error
+		// Stage config first, then retire keys before publishing it. A crash
+		// between those commits can leave the old URL without a key. Publishing
+		// config first could allow a subsequent edit to revive a retired key.
+		retired, err = s.retireLocalEndpointKeysLocked(before, after)
+		return err
 	})
 	if err != nil {
+		if retired {
+			return nil, fmt.Errorf("%w: %w", ErrEndpointKeyRetired, err)
+		}
 		return nil, err
 	}
-	if endpoint != nil {
-		change.BaseURL = endpoint.BaseURL
+	if !locked {
+		s.mu.Lock()
+		locked = true
 	}
-	if err := s.reconcileLocalEndpointsLocked(endpoints, &change); err != nil {
-		return nil, err
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
+	if publish {
+		s.publishLocalEndpointsLocked(endpoints)
+	}
+	if key := trimKey(change.Key.Reveal()); key != "" {
+		if err := s.writeLocalEndpointKeyLocked(localProvider(change.Name, endpoints[change.Name]), key); err != nil {
+			return nil, err
+		}
 	}
 	result := []LocalEndpointStatus{}
 	for _, p := range s.LocalProviders() {
 		result = append(result, LocalEndpointStatus{Name: p.Name, BaseURL: p.BaseURL, Kind: p.Dialect})
 	}
 	return result, nil
+}
+
+func (s *Store) writeLocalEndpointKeyLocked(p Provider, key string) error {
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
+	}
+	id := p.keyID()
+	if cur, ok := s.keys[id]; ok && cur.APIKey == key {
+		return nil
+	}
+	next := s.doc.clone()
+	entry, err := mergeEntry(next.providers[string(id)], apiKeyEntry{Kind: KindAPIKey, APIKey: key, UpdatedAt: s.now().UTC().Format(time.RFC3339)})
+	if err != nil {
+		return err
+	}
+	next.providers[string(id)] = entry
+	s.localRevision.Add(1)
+	return s.writeLocked(next)
 }

@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "Total : {0}",
   "js.settings.account.endpoints_failed": "Impossible de charger les points de terminaison locaux.",
   "js.settings.account.endpoints_empty": "Aucun point de terminaison local enregistré.",
+  "js.settings.account.endpoint_key_retired": "La configuration du point de terminaison est restée inchangée. La clé précédente a été supprimée.",
   "js.settings.account.invalid_endpoint": "Le daemon a refusé ce point de terminaison. Vérifiez le nom, l’URL, le type et la clé facultative.",
   "js.settings.account.add_endpoint": "+ Point de terminaison",
   "js.settings.account.base_url": "URL de base",

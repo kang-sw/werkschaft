@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "共 {0} 个",
   "js.settings.account.endpoints_failed": "无法加载本地端点。",
   "js.settings.account.endpoints_empty": "没有已注册的本地端点。",
+  "js.settings.account.endpoint_key_retired": "端点配置未更改。先前的密钥已删除。",
   "js.settings.account.invalid_endpoint": "守护进程拒绝了此端点。请检查名称、URL、类型和可选密钥。",
   "js.settings.account.add_endpoint": "+ 端点",
   "js.settings.account.base_url": "基础 URL",

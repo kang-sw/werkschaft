@@ -79,6 +79,7 @@
   "js.settings.account.endpoint_count": "共 {0} 個",
   "js.settings.account.endpoints_failed": "無法載入本機端點。",
   "js.settings.account.endpoints_empty": "沒有已登錄的本機端點。",
+  "js.settings.account.endpoint_key_retired": "端點設定未變更。先前的金鑰已移除。",
   "js.settings.account.invalid_endpoint": "常駐程式拒絕了此端點。請檢查名稱、URL、類型和選填金鑰。",
   "js.settings.account.add_endpoint": "+ 端點",
   "js.settings.account.base_url": "基礎 URL",
