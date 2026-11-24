@@ -745,10 +745,13 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
 	c.cutoverInstructionGone()
-	if c.modelWaitBackoffC != nil && c.held > 0 {
+	c.mu.Lock()
+	held := c.held
+	c.mu.Unlock()
+	if c.modelWaitBackoffC != nil && held > 0 {
 		c.cancelModelWaitBackoff()
 	}
-	if !c.quotaInjecting && c.held > 0 && c.hasQuotaContinuation() {
+	if !c.quotaInjecting && held > 0 && c.hasQuotaContinuation() {
 		c.cancelQuotaContinuation(false)
 	}
 	c.checkInterrupt()
