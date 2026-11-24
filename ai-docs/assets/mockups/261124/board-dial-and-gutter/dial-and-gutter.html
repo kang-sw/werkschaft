@@ -1,0 +1,2046 @@
+<div id="bdg-mockup" data-mode="after" data-guides="off">
+<style>
+  #bdg-mockup {
+    --bdg-bg: #141518;
+    --bdg-card: #1e2024;
+    --bdg-header: #25282e;
+    --bdg-topic: #2a2d33;
+    --bdg-muted: #2b2d32;
+    --bdg-well: #16181c;
+    --bdg-fg: #e6e6e6;
+    --bdg-muted-fg: #a2a6ad;
+    --bdg-line: color-mix(in srgb, #e7e7e4 14%, transparent);
+    --bdg-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --bdg-primary: #5b9bf0;
+    --bdg-primary-hi: #7aa2ff;
+    --bdg-warn: #e0a84a;
+    --bdg-warn-bg: #5b3a1c;
+    --bdg-warn-fg: #f6d9bd;
+    --bdg-ok: #5cc46a;
+    --bdg-ok-bg: #1f4433;
+    --bdg-ok-fg: #c6ead6;
+    --bdg-fail: #f0797e;
+    --bdg-purple: #c6a5f7;
+    --bdg-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+    --bdg-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .42);
+    --bdg-radius: 12px;
+    --bdg-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    --bdg-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    --bdg-gap: 8px;
+    --bdg-bcol-pr: 4px;
+    --bdg-convo-w: 230px;
+    --bdg-gal-w: 245px;
+
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--bdg-bg);
+    color: var(--bdg-fg);
+    font: 13px/1.45 var(--bdg-sans);
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  #bdg-mockup[data-mode="before"] {
+    --bdg-gap: 16px;
+    --bdg-bcol-pr: 26px;
+  }
+
+  #bdg-mockup *,
+  #bdg-mockup *::before,
+  #bdg-mockup *::after {
+    box-sizing: border-box;
+  }
+
+  /* ===== Top Control Bar ===== */
+  #bdg-mockup .bdg-topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border-radius: var(--bdg-radius);
+    background: var(--bdg-card);
+    box-shadow: var(--bdg-shadow);
+    user-select: none;
+  }
+
+  #bdg-mockup .bdg-seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
+    background: var(--bdg-well);
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-seg-btn {
+    border: 0;
+    background: transparent;
+    color: var(--bdg-muted-fg);
+    font: 700 12px/1.2 var(--bdg-sans);
+    padding: 6px 11px;
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+  }
+
+  #bdg-mockup .bdg-seg-btn:hover {
+    color: var(--bdg-fg);
+  }
+
+  #bdg-mockup .bdg-seg-btn[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--bdg-primary) 20%, var(--bdg-card));
+    color: var(--bdg-fg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-primary) 42%, transparent), 0 1px 3px rgb(0 0 0 / .35);
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-seg-btn[data-set-mode="before"][aria-pressed="true"] {
+    background: color-mix(in srgb, var(--bdg-warn) 18%, var(--bdg-card));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-warn) 42%, transparent), 0 1px 3px rgb(0 0 0 / .35);
+  }
+
+  #bdg-mockup .bdg-metrics {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #bdg-mockup .bdg-metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--bdg-muted);
+    color: var(--bdg-muted-fg);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  #bdg-mockup .bdg-metric strong {
+    color: var(--bdg-fg);
+    font-family: var(--bdg-mono);
+    font-weight: 700;
+    font-size: 11px;
+  }
+
+  #bdg-mockup .bdg-metric.gain {
+    background: color-mix(in srgb, var(--bdg-ok) 15%, var(--bdg-card));
+    color: var(--bdg-ok-fg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-ok) 32%, transparent);
+  }
+
+  #bdg-mockup .bdg-metric.gain strong {
+    color: var(--bdg-ok);
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-metric.gain {
+    background: color-mix(in srgb, var(--bdg-warn) 13%, var(--bdg-card));
+    color: var(--bdg-warn-fg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-warn) 30%, transparent);
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-metric.gain strong {
+    color: var(--bdg-warn);
+  }
+
+  #bdg-mockup .bdg-top-right {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  #bdg-mockup .bdg-guide-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--bdg-muted);
+    color: var(--bdg-muted-fg);
+    font: 700 12px/1 var(--bdg-sans);
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  }
+
+  #bdg-mockup .bdg-guide-btn:hover {
+    color: var(--bdg-fg);
+  }
+
+  #bdg-mockup .bdg-guide-btn[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--bdg-primary) 20%, var(--bdg-card));
+    color: var(--bdg-primary-hi);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--bdg-primary) 50%, transparent);
+  }
+
+  #bdg-mockup .bdg-guide-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: .65;
+  }
+
+  #bdg-mockup .bdg-guide-btn[aria-pressed="true"] .bdg-guide-dot {
+    opacity: 1;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--bdg-primary) 28%, transparent);
+  }
+
+  #bdg-mockup .bdg-readout {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--bdg-well);
+    color: var(--bdg-fg);
+    font: 700 12px/1 var(--bdg-sans);
+    font-variant-numeric: tabular-nums;
+    box-shadow: inset 0 0 0 1px var(--bdg-line);
+    white-space: nowrap;
+  }
+
+  #bdg-mockup .bdg-readout-num {
+    font-family: var(--bdg-mono);
+    color: var(--bdg-primary);
+    font-weight: 800;
+  }
+
+  /* ===== Legend Strip (visible when guides ON) ===== */
+  #bdg-mockup .bdg-guide-legend {
+    display: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 6px 12px;
+    margin-bottom: 10px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--bdg-card) 86%, var(--bdg-bg));
+    box-shadow: inset 0 0 0 1px var(--bdg-line);
+    font-size: 11.5px;
+    color: var(--bdg-muted-fg);
+    user-select: none;
+  }
+
+  #bdg-mockup[data-guides="on"] .bdg-guide-legend {
+    display: flex;
+  }
+
+  #bdg-mockup .bdg-leg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #bdg-mockup .bdg-leg-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-leg-swatch.card-m {
+    background: rgb(92 196 106 / .22);
+    box-shadow: inset 0 0 0 1px rgb(92 196 106 / .65);
+  }
+
+  #bdg-mockup .bdg-leg-swatch.dial-z {
+    background: rgb(91 155 240 / .24);
+    box-shadow: inset 0 0 0 1px rgb(91 155 240 / .75);
+  }
+
+  #bdg-mockup .bdg-leg-swatch.hit-z {
+    background: rgb(224 168 74 / .24);
+    box-shadow: inset 0 0 0 1px rgb(224 168 74 / .75);
+  }
+
+  #bdg-mockup .bdg-leg-note {
+    margin-left: auto;
+    font-family: var(--bdg-mono);
+    font-size: 11px;
+    color: var(--bdg-ok);
+  }
+
+  /* ===== 3-Column Mini-Workspace ===== */
+  #bdg-mockup .bdg-ws {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    height: 610px;
+    min-height: 480px;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  #bdg-mockup.bdg-dragging,
+  #bdg-mockup.bdg-dragging * {
+    cursor: col-resize !important;
+    user-select: none !important;
+  }
+
+  /* ===== Splitters (.dcv-edge / .bp-edge) ===== */
+  #bdg-mockup .bdg-split {
+    position: relative;
+    flex: 0 0 var(--bdg-gap);
+    width: var(--bdg-gap);
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+    z-index: 6;
+    transition: flex-basis .24s cubic-bezier(.22, 1, .36, 1), width .24s cubic-bezier(.22, 1, .36, 1);
+  }
+
+  #bdg-mockup.bdg-dragging .bdg-split {
+    transition: none;
+  }
+
+  /* Before mode: visible 3px x 36px grey vertical grip pill */
+  #bdg-mockup[data-mode="before"] .bdg-split::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 36px;
+    transform: translate(-50%, -50%);
+    border-radius: 2px;
+    background: #3d4149;
+    transition: background .15s ease, height .15s ease;
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-split:hover::after,
+  #bdg-mockup[data-mode="before"] .bdg-split.drag::after {
+    background: var(--bdg-primary);
+    height: 48px;
+  }
+
+  /* After mode: completely invisible at rest; 2px #5b9bf0 line ONLY on hover/drag */
+  #bdg-mockup[data-mode="after"] .bdg-split::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: transparent;
+    transition: background .14s ease, opacity .14s ease;
+  }
+
+  #bdg-mockup[data-mode="after"] .bdg-split:hover::after,
+  #bdg-mockup[data-mode="after"] .bdg-split.drag::after {
+    background: var(--bdg-primary);
+  }
+
+  /* Guide overlay on splitters */
+  #bdg-mockup[data-guides="on"] .bdg-split {
+    background: repeating-linear-gradient(
+      -45deg,
+      rgb(224 168 74 / .16) 0 4px,
+      rgb(224 168 74 / .06) 4px 8px
+    );
+    box-shadow: inset 1px 0 0 rgb(224 168 74 / .48), inset -1px 0 0 rgb(224 168 74 / .48);
+  }
+
+  #bdg-mockup .bdg-split-tag {
+    display: none;
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: rgb(20 21 24 / .92);
+    color: var(--bdg-warn);
+    font: 700 9.5px/1.1 var(--bdg-mono);
+    white-space: nowrap;
+    box-shadow: 0 0 0 1px rgb(224 168 74 / .5);
+    pointer-events: none;
+    z-index: 12;
+  }
+
+  #bdg-mockup[data-guides="on"] .bdg-split-tag {
+    display: block;
+  }
+
+  /* ===== Left Column: Convo ===== */
+  #bdg-mockup .bdg-convo-col {
+    flex: 0 0 var(--bdg-convo-w);
+    width: var(--bdg-convo-w);
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-radius: var(--bdg-radius);
+    background: color-mix(in srgb, var(--bdg-muted) 40%, var(--bdg-bg));
+    box-shadow: var(--bdg-shadow);
+    overflow: hidden;
+  }
+
+  #bdg-mockup .bdg-chead {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    padding: 0 8px 0 6px;
+    background: var(--bdg-header);
+    user-select: none;
+  }
+
+  #bdg-mockup .bdg-ctab {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--bdg-muted-fg);
+    border-bottom: 2px solid transparent;
+  }
+
+  #bdg-mockup .bdg-ctab.active {
+    color: var(--bdg-fg);
+    border-bottom-color: var(--bdg-primary);
+  }
+
+  #bdg-mockup .bdg-cbadge {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bdg-card);
+    color: var(--bdg-muted-fg);
+    font: 700 10.5px/1.4 var(--bdg-mono);
+  }
+
+  #bdg-mockup .bdg-convo-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(231 231 228 / .2) transparent;
+  }
+
+  #bdg-mockup .bdg-msg {
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--bdg-card);
+    box-shadow: 0 1px 2px rgb(0 0 0 / .28);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  #bdg-mockup .bdg-msg.user {
+    background: color-mix(in srgb, var(--bdg-primary) 13%, var(--bdg-card));
+  }
+
+  #bdg-mockup .bdg-msg-who {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--bdg-muted-fg);
+    margin-bottom: 3px;
+  }
+
+  #bdg-mockup .bdg-msg-who .role-u {
+    color: var(--bdg-primary-hi);
+  }
+
+  #bdg-mockup .bdg-msg-who .role-a {
+    color: var(--bdg-ok);
+  }
+
+  #bdg-mockup .bdg-tool-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 7px;
+    border-radius: 6px;
+    background: var(--bdg-well);
+    font: 11px/1.3 var(--bdg-mono);
+    color: var(--bdg-muted-fg);
+  }
+
+  #bdg-mockup .bdg-tool-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--bdg-ok);
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-tool-name {
+    color: var(--bdg-fg);
+    font-weight: 700;
+  }
+
+  #bdg-mockup .bdg-tool-arg {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  #bdg-mockup .bdg-composer {
+    flex: none;
+    margin: 8px;
+    padding: 7px 9px;
+    border-radius: 10px;
+    background: var(--bdg-card);
+    box-shadow: var(--bdg-shadow);
+  }
+
+  #bdg-mockup .bdg-composer-well {
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 7px;
+    background: var(--bdg-well);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--bdg-muted-fg);
+  }
+
+  #bdg-mockup .bdg-send-pill {
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--bdg-primary) 22%, transparent);
+    color: var(--bdg-primary);
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+
+  /* ===== Center Column: Main Board #bcol ===== */
+  #bdg-mockup .bdg-board-wrap {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 280px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #bdg-mockup .bdg-bcol {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 2px var(--bdg-bcol-pr) 24px 2px;
+    scrollbar-width: none;
+    scroll-behavior: auto;
+    transition: padding-right .24s cubic-bezier(.22, 1, .36, 1);
+  }
+
+  #bdg-mockup .bdg-bcol::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Sticky Board Toolbar */
+  #bdg-mockup .bdg-btoolbar {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    margin-bottom: 10px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    background: var(--bdg-card);
+    box-shadow: var(--bdg-shadow), 0 -6px 0 6px var(--bdg-bg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #bdg-mockup .bdg-bt-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: var(--bdg-muted);
+    color: var(--bdg-fg);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-bt-filters {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--bdg-well);
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-bt-f {
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--bdg-muted-fg);
+    white-space: nowrap;
+  }
+
+  #bdg-mockup .bdg-bt-f.active {
+    background: var(--bdg-card);
+    color: var(--bdg-fg);
+  }
+
+  #bdg-mockup .bdg-bt-f.ask {
+    color: var(--bdg-warn);
+  }
+
+  /* ===== Board Cards ===== */
+  #bdg-mockup .bdg-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  #bdg-mockup .bdg-card {
+    position: relative;
+    border-radius: var(--bdg-radius);
+    background: var(--bdg-card);
+    box-shadow: var(--bdg-shadow);
+    overflow: hidden;
+    overflow: clip;
+    transition: box-shadow .16s ease, opacity .16s ease;
+  }
+
+  #bdg-mockup .bdg-card[data-active="true"] {
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--bdg-primary) 55%, transparent), var(--bdg-shadow-hi);
+  }
+
+  #bdg-mockup .bdg-card[data-held="1"] {
+    box-shadow: inset 3px 0 0 var(--bdg-primary), var(--bdg-shadow);
+  }
+
+  #bdg-mockup .bdg-card[data-held="1"][data-active="true"] {
+    box-shadow: inset 3px 0 0 var(--bdg-primary), inset 0 0 0 1.5px color-mix(in srgb, var(--bdg-primary) 55%, transparent), var(--bdg-shadow-hi);
+  }
+
+  #bdg-mockup .bdg-card[data-closed="1"] {
+    opacity: .68;
+  }
+
+  #bdg-mockup .bdg-card-hd {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 5px 24px 5px 12px;
+    background: var(--bdg-header);
+    font-size: 12.5px;
+    min-width: 0;
+  }
+
+  #bdg-mockup .bdg-card[data-kind="topic"] .bdg-card-hd {
+    background: var(--bdg-topic);
+  }
+
+  #bdg-mockup .bdg-card-ic {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    color: var(--bdg-muted-fg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #bdg-mockup .bdg-card-ic svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  #bdg-mockup .bdg-card[data-active="true"] .bdg-card-ic {
+    color: var(--bdg-primary);
+  }
+
+  #bdg-mockup .bdg-card-idx {
+    font: 700 10.5px/1 var(--bdg-mono);
+    color: var(--bdg-muted-fg);
+    opacity: .75;
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-card-title {
+    font-weight: 700;
+    color: var(--bdg-fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  #bdg-mockup .bdg-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  #bdg-mockup .bdg-pill.ask {
+    background: var(--bdg-warn-bg);
+    color: var(--bdg-warn-fg);
+  }
+
+  #bdg-mockup .bdg-pill.held {
+    background: color-mix(in srgb, var(--bdg-primary) 22%, var(--bdg-card));
+    color: var(--bdg-primary-hi);
+  }
+
+  #bdg-mockup .bdg-pill.impl {
+    background: color-mix(in srgb, var(--bdg-primary) 16%, transparent);
+    color: #8db8ff;
+  }
+
+  #bdg-mockup .bdg-pill.research {
+    background: color-mix(in srgb, var(--bdg-purple) 16%, transparent);
+    color: var(--bdg-purple);
+  }
+
+  #bdg-mockup .bdg-pill.discuss {
+    background: color-mix(in srgb, var(--bdg-warn) 16%, transparent);
+    color: var(--bdg-warn);
+  }
+
+  #bdg-mockup .bdg-pill.confirm {
+    background: var(--bdg-ok-bg);
+    color: var(--bdg-ok-fg);
+  }
+
+  #bdg-mockup .bdg-pill.closed {
+    background: var(--bdg-muted);
+    color: var(--bdg-muted-fg);
+  }
+
+  #bdg-mockup .bdg-pill.kind {
+    background: var(--bdg-muted);
+    color: var(--bdg-muted-fg);
+    border-radius: 4px;
+    font-family: var(--bdg-mono);
+  }
+
+  #bdg-mockup .bdg-card-body {
+    padding: 10px 24px 12px 12px;
+    font-size: 12.5px;
+    color: color-mix(in srgb, var(--bdg-fg) 88%, var(--bdg-muted-fg));
+    line-height: 1.5;
+  }
+
+  #bdg-mockup .bdg-card-body p {
+    margin: 0 0 6px;
+  }
+
+  #bdg-mockup .bdg-card-body p:last-child {
+    margin-bottom: 0;
+  }
+
+  #bdg-mockup .bdg-code {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bdg-well);
+    font: 11.5px/1.55 var(--bdg-mono);
+    color: var(--bdg-fg);
+    overflow: hidden;
+    white-space: pre;
+    text-overflow: ellipsis;
+  }
+
+  #bdg-mockup .bdg-code .c-dim { color: var(--bdg-muted-fg); }
+  #bdg-mockup .bdg-code .c-ok { color: var(--bdg-ok); }
+  #bdg-mockup .bdg-code .c-add { color: var(--bdg-ok); background: rgb(92 196 106 / .10); display: block; margin: 0 -10px; padding: 0 10px; }
+  #bdg-mockup .bdg-code .c-del { color: var(--bdg-fail); background: rgb(240 121 126 / .11); display: block; margin: 0 -10px; padding: 0 10px; }
+  #bdg-mockup .bdg-code .c-key { color: var(--bdg-primary-hi); }
+
+  #bdg-mockup .bdg-ask-box {
+    margin-top: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bdg-warn-bg) 32%, var(--bdg-card));
+    box-shadow: inset 3px 0 0 var(--bdg-warn);
+    font-size: 12px;
+    color: var(--bdg-warn-fg);
+  }
+
+  /* Card inner right margin guide (20px safe zone) */
+  #bdg-mockup .bdg-card::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 20px;
+    pointer-events: none;
+    opacity: 0;
+    background: rgb(92 196 106 / .16);
+    box-shadow: inset 1px 0 0 rgb(92 196 106 / .55);
+    transition: opacity .18s ease;
+  }
+
+  #bdg-mockup[data-guides="on"] .bdg-card::after {
+    opacity: 1;
+  }
+
+  /* ===== Dial Overlay Guide Zone ===== */
+  #bdg-mockup .bdg-dial-guide {
+    display: none;
+    position: absolute;
+    top: 44px;
+    bottom: 10px;
+    right: 2px;
+    width: 22px;
+    border-radius: 11px;
+    background: rgb(91 155 240 / .13);
+    box-shadow: inset 0 0 0 1px rgb(91 155 240 / .58);
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  #bdg-mockup[data-guides="on"] .bdg-dial-guide {
+    display: block;
+  }
+
+  #bdg-mockup .bdg-dial-guide-lbl {
+    position: absolute;
+    top: 6px;
+    right: 26px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgb(20 21 24 / .92);
+    color: var(--bdg-primary-hi);
+    font: 700 9.5px/1.2 var(--bdg-mono);
+    white-space: nowrap;
+    box-shadow: 0 0 0 1px rgb(91 155 240 / .45);
+  }
+
+  /* ===== BEFORE MODE: Legacy Static Dot Strip ===== */
+  #bdg-mockup .bdg-dial-legacy {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 5;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    padding: 6px 0;
+    touch-action: none;
+    user-select: none;
+  }
+
+  #bdg-mockup[data-mode="before"] .bdg-dial-legacy {
+    display: flex;
+  }
+
+  #bdg-mockup .bdg-dial-legacy[data-scrub] {
+    cursor: ns-resize;
+  }
+
+  #bdg-mockup .bdg-ldot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 14px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    cursor: pointer;
+    outline: none;
+  }
+
+  #bdg-mockup .bdg-lpip {
+    display: block;
+    border-radius: 50%;
+    transition: width .14s ease, height .14s ease, background-color .14s ease, border-color .14s ease, opacity .14s ease;
+  }
+
+  #bdg-mockup .bdg-ldot[data-tier="0"] .bdg-lpip { width: 8px; height: 8px; background: var(--bdg-primary); opacity: 1; }
+  #bdg-mockup .bdg-ldot[data-tier="1"] .bdg-lpip { width: 6px; height: 6px; background: transparent; border: 1.5px solid rgb(230 230 230 / .56); opacity: .9; }
+  #bdg-mockup .bdg-ldot[data-tier="2"] .bdg-lpip { width: 4.5px; height: 4.5px; background: rgb(162 166 173 / .72); opacity: .78; }
+  #bdg-mockup .bdg-ldot[data-tier="3"] .bdg-lpip { width: 3px; height: 3px; background: rgb(162 166 173 / .52); opacity: .52; }
+  #bdg-mockup .bdg-ldot[data-kind="card"]:not([data-tier="0"]) .bdg-lpip { border-radius: 2px; }
+  #bdg-mockup .bdg-ldot[data-ask="1"] .bdg-lpip { box-shadow: 0 0 0 2px var(--bdg-warn); }
+  #bdg-mockup .bdg-ldot[data-held="1"] .bdg-lpip { box-shadow: 0 0 0 2px var(--bdg-primary); }
+  #bdg-mockup .bdg-ldot[data-ask="1"][data-held="1"] .bdg-lpip { box-shadow: 0 0 0 2px var(--bdg-warn), 0 0 0 3.5px var(--bdg-primary); }
+  #bdg-mockup .bdg-ldot:hover .bdg-lpip { opacity: 1; background: var(--bdg-primary); border-color: var(--bdg-primary); }
+
+  /* ===== AFTER MODE: Center-Locked Rotary Vernier Dial ===== */
+  #bdg-mockup .bdg-dial-vernier {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 5;
+    display: none;
+    width: 24px;
+    height: 300px;
+    border-radius: 12px;
+    background: transparent;
+    cursor: ns-resize;
+    touch-action: none;
+    user-select: none;
+    transition: background .16s ease, box-shadow .16s ease;
+  }
+
+  #bdg-mockup[data-mode="after"] .bdg-dial-vernier {
+    display: block;
+  }
+
+  #bdg-mockup .bdg-dial-vernier:hover,
+  #bdg-mockup .bdg-dial-vernier[data-scrub="1"] {
+    background: rgb(20 21 24 / .74);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: inset 0 0 0 1px rgb(231 231 228 / .10), 0 4px 16px rgb(0 0 0 / .45);
+  }
+
+  /* Fixed center reticle at exact vertical center (y = 0) */
+  #bdg-mockup .bdg-reticle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 22px;
+    transform: translateY(-50%);
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  #bdg-mockup .bdg-reticle::before {
+    content: "";
+    position: absolute;
+    inset: 1px 2px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--bdg-primary) 16%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bdg-primary) 42%, transparent);
+  }
+
+  /* Crisp primary reticle tick on right rim */
+  #bdg-mockup .bdg-reticle::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 3px;
+    height: 12px;
+    transform: translateY(-50%);
+    border-radius: 999px;
+    background: var(--bdg-primary);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--bdg-primary) 75%, transparent);
+  }
+
+  /* Masked viewport for the GPU-translated rotary strip */
+  #bdg-mockup .bdg-vmask {
+    position: absolute;
+    inset: 4px 0;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  }
+
+  #bdg-mockup .bdg-vstrip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    will-change: transform;
+  }
+
+  #bdg-mockup .bdg-vslot {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 22px;
+    margin-top: -11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--bdg-muted-fg);
+    cursor: pointer;
+    outline: none;
+  }
+
+  #bdg-mockup .bdg-vslot-ic {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    transition: color .12s ease;
+  }
+
+  #bdg-mockup .bdg-vslot-ic svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  #bdg-mockup .bdg-vslot-tick {
+    display: none;
+    height: 1.8px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  /* Status ring / pip indicators for ask & held */
+  #bdg-mockup .bdg-vslot-ring {
+    position: absolute;
+    top: -1px;
+    right: -2px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    display: none;
+  }
+
+  #bdg-mockup .bdg-vslot[data-ask="1"] .bdg-vslot-ring {
+    display: block;
+    background: var(--bdg-warn);
+    box-shadow: 0 0 0 1.5px var(--bdg-bg);
+  }
+
+  #bdg-mockup .bdg-vslot[data-held="1"]:not([data-ask="1"]) .bdg-vslot-ring {
+    display: block;
+    background: var(--bdg-primary);
+    box-shadow: 0 0 0 1.5px var(--bdg-bg);
+  }
+
+  #bdg-mockup .bdg-vslot[data-ask="1"][data-held="1"] .bdg-vslot-ring {
+    display: block;
+    background: var(--bdg-warn);
+    box-shadow: 0 0 0 1.5px var(--bdg-primary);
+  }
+
+  /* Slot visual tiers driven by distance from center */
+  #bdg-mockup .bdg-vslot[data-vtier="0"] {
+    color: var(--bdg-primary-hi);
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="0"][data-ask="1"] {
+    color: var(--bdg-warn);
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="0"] .bdg-vslot-ic {
+    transform: scale(1.06);
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="1"] {
+    color: color-mix(in srgb, var(--bdg-fg) 76%, var(--bdg-muted-fg));
+    opacity: .76;
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="1"] .bdg-vslot-ic {
+    transform: scale(.86);
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="2"] {
+    color: var(--bdg-muted-fg);
+    opacity: .5;
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="2"] .bdg-vslot-ic {
+    transform: scale(.74);
+  }
+
+  /* Outer slots (±3..±7): graduated vernier scale ticks */
+  #bdg-mockup .bdg-vslot[data-vtier="3"] .bdg-vslot-ic,
+  #bdg-mockup .bdg-vslot[data-vtier="4"] .bdg-vslot-ic,
+  #bdg-mockup .bdg-vslot[data-vtier="5"] .bdg-vslot-ic {
+    display: none;
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="3"] .bdg-vslot-tick {
+    display: block;
+    width: 9px;
+    opacity: .56;
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="4"] .bdg-vslot-tick {
+    display: block;
+    width: 6px;
+    opacity: .38;
+  }
+
+  #bdg-mockup .bdg-vslot[data-vtier="5"] .bdg-vslot-tick {
+    display: block;
+    width: 4px;
+    opacity: .24;
+  }
+
+  #bdg-mockup .bdg-vslot[data-ask="1"]:is([data-vtier="3"], [data-vtier="4"], [data-vtier="5"]) .bdg-vslot-tick {
+    background: var(--bdg-warn);
+    opacity: .85;
+  }
+
+  #bdg-mockup .bdg-vslot[data-held="1"]:not([data-ask="1"]):is([data-vtier="3"], [data-vtier="4"], [data-vtier="5"]) .bdg-vslot-tick {
+    background: var(--bdg-primary);
+    opacity: .8;
+  }
+
+  #bdg-mockup .bdg-vslot[data-closed="1"]:not([data-vtier="0"]) {
+    opacity: .34;
+  }
+
+  #bdg-mockup .bdg-vslot:hover {
+    opacity: 1 !important;
+    color: var(--bdg-primary-hi);
+  }
+
+  /* ===== Floating Left-Side Dial Tooltip ===== */
+  #bdg-mockup .bdg-tip {
+    position: absolute;
+    top: 0;
+    right: 34px;
+    z-index: 15;
+    pointer-events: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    padding: 5px 9px;
+    border-radius: 8px;
+    background: var(--bdg-card);
+    color: var(--bdg-fg);
+    box-shadow: inset 0 0 0 1px var(--bdg-line), var(--bdg-shadow-hi);
+    font: 600 11.5px/1.3 var(--bdg-sans);
+    white-space: nowrap;
+    opacity: 0;
+    transform: translate3d(6px, 0, 0);
+    transition: opacity .12s ease;
+    will-change: transform, opacity;
+  }
+
+  #bdg-mockup .bdg-tip[data-show="1"] {
+    opacity: 1;
+  }
+
+  #bdg-mockup .bdg-tip-idx {
+    font: 800 10.5px/1 var(--bdg-mono);
+    color: var(--bdg-primary);
+    flex: none;
+  }
+
+  #bdg-mockup .bdg-tip-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  /* ===== Right Column: Gallery Rail (.bgal) ===== */
+  #bdg-mockup .bdg-gal-col {
+    flex: 0 0 var(--bdg-gal-w);
+    width: var(--bdg-gal-w);
+    min-width: 175px;
+    min-height: 0;
+    display: flex;
+    gap: 6px;
+  }
+
+  #bdg-mockup .bdg-gal-rail {
+    flex: none;
+    width: 30px;
+    border-radius: var(--bdg-radius);
+    background: color-mix(in srgb, var(--bdg-bg) 65%, var(--bdg-card));
+    box-shadow: var(--bdg-shadow);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 8px 0;
+    user-select: none;
+  }
+
+  #bdg-mockup .bdg-gal-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    border: 1.5px solid var(--bdg-muted-fg);
+    background: var(--bdg-card);
+    color: var(--bdg-muted-fg);
+    font: 700 10px/1 var(--bdg-mono);
+    display: grid;
+    place-items: center;
+  }
+
+  #bdg-mockup .bdg-gal-dot.active {
+    height: 28px;
+    border-color: var(--bdg-primary);
+    background: color-mix(in srgb, var(--bdg-primary) 18%, var(--bdg-card));
+    color: var(--bdg-fg);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--bdg-primary) 28%, transparent);
+  }
+
+  #bdg-mockup .bdg-gal-dot.plus {
+    border-style: dashed;
+    background: transparent;
+    font-size: 13px;
+  }
+
+  #bdg-mockup .bdg-gal-pane {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    border-radius: var(--bdg-radius);
+    background: var(--bdg-card);
+    box-shadow: var(--bdg-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #bdg-mockup .bdg-gal-hd {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--bdg-header);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  #bdg-mockup .bdg-gal-hd .sub {
+    margin-left: auto;
+    font: 600 10.5px/1 var(--bdg-mono);
+    color: var(--bdg-muted-fg);
+  }
+
+  #bdg-mockup .bdg-gal-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+    font-size: 11.5px;
+    color: var(--bdg-muted-fg);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  #bdg-mockup .bdg-gal-box {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bdg-well);
+    font-family: var(--bdg-mono);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--bdg-fg);
+  }
+
+  #bdg-mockup .bdg-gal-kv {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--bdg-line);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #bdg-mockup .bdg-gal-kv:last-child {
+    border-bottom: 0;
+  }
+
+  #bdg-mockup .bdg-gal-kv b {
+    color: var(--bdg-fg);
+    font-family: var(--bdg-mono);
+  }
+
+  /* ===== Footer Hint Bar ===== */
+  #bdg-mockup .bdg-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-top: 8px;
+    padding: 0 4px;
+    font-size: 11.5px;
+    color: var(--bdg-muted-fg);
+    user-select: none;
+  }
+
+  #bdg-mockup .bdg-foot kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bdg-card);
+    box-shadow: inset 0 0 0 1px var(--bdg-line);
+    font: 700 10.5px/1.3 var(--bdg-mono);
+    color: var(--bdg-fg);
+  }
+</style>
+
+<!-- Top Control Bar -->
+<div class="bdg-topbar">
+  <div class="bdg-seg" role="group" aria-label="레이아웃 비교 모드">
+    <button type="button" class="bdg-seg-btn" data-set-mode="before" aria-pressed="false">이전: 42px 데드존</button>
+    <button type="button" class="bdg-seg-btn" data-set-mode="after" aria-pressed="true">개선: 오버레이 눈금 다이얼 + 8px 경계</button>
+  </div>
+
+  <div class="bdg-metrics">
+    <span class="bdg-metric">#bcol 패딩 <strong data-m-pad>26px → 4px</strong></span>
+    <span class="bdg-metric">컬럼 간격 <strong data-m-gap>16px → 8px</strong></span>
+    <span class="bdg-metric gain">회수 폭 <strong data-m-gain>+34px (3~4컬럼 +42px+)</strong></span>
+    <span class="bdg-metric">보드 실폭 <strong data-m-bw>—</strong></span>
+  </div>
+
+  <div class="bdg-top-right">
+    <button type="button" class="bdg-guide-btn" data-toggle-guides aria-pressed="false">
+      <span class="bdg-guide-dot" aria-hidden="true"></span>
+      여백 가이드 표시
+    </button>
+    <span class="bdg-readout" aria-live="polite">
+      현재 카드: <span class="bdg-readout-num" data-active-readout>#1 / 20</span>
+    </span>
+  </div>
+</div>
+
+<!-- Margin / Hit-zone Legend (shown when guides ON) -->
+<div class="bdg-guide-legend">
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch card-m"></span>카드 우측 내부 여백 (20px — 본문 텍스트 안전선)</span>
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch dial-z"></span>다이얼 오버레이 존 (right: 2px, 폭 22px)</span>
+  <span class="bdg-leg-item"><span class="bdg-leg-swatch hit-z"></span>컬럼 리사이즈 히트 존 (.dcv-edge / .bp-edge)</span>
+  <span class="bdg-leg-note">텍스트 겹침 0px · .bp-edge 포인터 충돌 0px</span>
+</div>
+
+<!-- Interactive 3-Column Mini-Workspace -->
+<div class="bdg-ws" data-ws>
+  <!-- Column 1: Convo -->
+  <aside class="bdg-convo-col" aria-label="대화 패널">
+    <div class="bdg-chead">
+      <span class="bdg-ctab active">대화</span>
+      <span class="bdg-ctab">파일</span>
+      <span class="bdg-ctab">터미널</span>
+      <span class="bdg-cbadge">14</span>
+    </div>
+    <div class="bdg-convo-body">
+      <div class="bdg-msg user">
+        <div class="bdg-msg-who"><span class="role-u">사용자</span><span>17:04</span></div>
+        보드 우측 다이얼 거터랑 컬럼 사이 리사이즈 갭 때문에 3컬럼에서 카드 폭이 너무 좁아 보여요.
+      </div>
+      <div class="bdg-msg">
+        <div class="bdg-msg-who"><span class="role-a">lead</span><span>17:06</span></div>
+        `#bcol` 우측 패딩을 `26px → 4px`로 줄이고 중앙 고정 버니어 다이얼을 우측 여백에 오버레이하면 텍스트 겹침 없이 `+34px` 이상 회수됩니다.
+      </div>
+      <div class="bdg-tool-row">
+        <span class="bdg-tool-dot"></span>
+        <span class="bdg-tool-name">read</span>
+        <span class="bdg-tool-arg">dashboard-board-dial.js</span>
+      </div>
+      <div class="bdg-tool-row">
+        <span class="bdg-tool-dot"></span>
+        <span class="bdg-tool-name">read</span>
+        <span class="bdg-tool-arg">dashboard-rail.css:1229</span>
+      </div>
+      <div class="bdg-msg user">
+        <div class="bdg-msg-who"><span class="role-u">사용자</span><span>17:12</span></div>
+        (1580)=a, (1581)=a로 확정. 인터랙티브 목업으로 바로 체감해 봅시다.
+      </div>
+      <div class="bdg-msg">
+        <div class="bdg-msg-who"><span class="role-a">lead</span><span>17:15</span></div>
+        Before/After 토글과 실측 드래그 스플리터, 20장 카드 회전 다이얼 목업을 준비했습니다.
+      </div>
+    </div>
+    <div class="bdg-composer">
+      <div class="bdg-composer-well">
+        <span>메시지 입력…</span>
+        <span class="bdg-send-pill">↵ 전송</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Splitter 1: Convo | Board (.dcv-edge) -->
+  <div class="bdg-split" data-split="cv" role="separator" aria-orientation="vertical" aria-label="대화-보드 경계 조절" tabindex="0">
+    <span class="bdg-split-tag" data-split-tag-cv>8px</span>
+  </div>
+
+  <!-- Column 2: Main Board (#bcol) + Dial -->
+  <main class="bdg-board-wrap" data-board-wrap>
+    <div class="bdg-bcol" data-bcol>
+      <div class="bdg-btoolbar">
+        <span class="bdg-bt-btn">+ 토픽</span>
+        <span class="bdg-bt-btn">+ 터미널</span>
+        <div class="bdg-bt-filters">
+          <span class="bdg-bt-f active">전체 20</span>
+          <span class="bdg-bt-f ask">? 질문 4</span>
+          <span class="bdg-bt-f">보류 3</span>
+        </div>
+      </div>
+      <div class="bdg-cards" data-cards></div>
+    </div>
+
+    <!-- Margin Guide Highlight for Dial Zone -->
+    <div class="bdg-dial-guide" aria-hidden="true">
+      <span class="bdg-dial-guide-lbl">dial right:2px</span>
+    </div>
+
+    <!-- BEFORE: Old Static Dot Strip -->
+    <nav class="bdg-dial-legacy" data-dial-legacy aria-label="이전 보드 다이얼"></nav>
+
+    <!-- AFTER: Center-Locked Rotary Vernier Dial -->
+    <nav class="bdg-dial-vernier" data-dial-vernier aria-label="회전 버니어 보드 다이얼">
+      <div class="bdg-reticle" aria-hidden="true"></div>
+      <div class="bdg-vmask">
+        <div class="bdg-vstrip" data-vstrip></div>
+      </div>
+    </nav>
+
+    <!-- Floating Left-Side Tooltip -->
+    <div class="bdg-tip" data-dial-tip role="tooltip"></div>
+  </main>
+
+  <!-- Splitter 2: Board | Gallery (.bp-edge) -->
+  <div class="bdg-split" data-split="bp" role="separator" aria-orientation="vertical" aria-label="보드-갤러리 경계 조절" tabindex="0">
+    <span class="bdg-split-tag" data-split-tag-bp>8px</span>
+  </div>
+
+  <!-- Column 3: Gallery Rail (.bgal) -->
+  <aside class="bdg-gal-col" aria-label="도킹 갤러리">
+    <div class="bdg-gal-rail" aria-label="갤러리 페이지 레일">
+      <span class="bdg-gal-dot active" title="페이지 1">1</span>
+      <span class="bdg-gal-dot" title="페이지 2">2</span>
+      <span class="bdg-gal-dot plus" title="새 페이지">+</span>
+    </div>
+    <div class="bdg-gal-pane">
+      <div class="bdg-gal-hd">
+        <span>도킹 프리뷰</span>
+        <span class="sub">.bgal</span>
+      </div>
+      <div class="bdg-gal-body">
+        <div class="bdg-gal-box">
+          <div class="bdg-gal-kv"><span>모드</span><b data-gal-mode>After</b></div>
+          <div class="bdg-gal-kv"><span>#bcol 우측 패딩</span><b data-gal-pad>4px</b></div>
+          <div class="bdg-gal-kv"><span>스플리터 간격</span><b data-gal-gap>8px</b></div>
+          <div class="bdg-gal-kv"><span>대화 / 보드 / 갤러리</span><b data-gal-cols>—</b></div>
+        </div>
+        <div class="bdg-gal-box">
+          <span style="color:#a2a6ad">// (1580)=a · (1581)=a</span><br>
+          • 평상시 프레임 없는 투명 다이얼<br>
+          • 현재 카드 y=0 중앙 고정<br>
+          • GPU translate3d 회전<br>
+          • 스플리터 평상시 완전 비가시<br>
+          • hover/drag 시 2px #5b9bf0 라인
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Footer Interaction Hints -->
+<div class="bdg-foot">
+  <span>보드 스크롤 · 다이얼 <kbd>드래그</kbd> / <kbd>휠</kbd> / <kbd>클릭</kbd> · 컬럼 경계 <kbd>드래그 리사이즈</kbd> 모두 실시간 동작</span>
+  <span>20장 혼합 카드 · GPU <kbd>translate3d</kbd> (Zero Layout Reflow)</span>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById("bdg-mockup");
+  if (!root || root.dataset.bdgInit) return;
+  root.dataset.bdgInit = "1";
+
+  var wsEl = root.querySelector("[data-ws]");
+  var bcol = root.querySelector("[data-bcol]");
+  var boardWrap = root.querySelector("[data-board-wrap]");
+  var cardsWrap = root.querySelector("[data-cards]");
+  var dialLegacy = root.querySelector("[data-dial-legacy]");
+  var dialVernier = root.querySelector("[data-dial-vernier]");
+  var vstrip = root.querySelector("[data-vstrip]");
+  var tipEl = root.querySelector("[data-dial-tip]");
+  var readoutEl = root.querySelector("[data-active-readout]");
+  var guideBtn = root.querySelector("[data-toggle-guides]");
+  var modeBtns = root.querySelectorAll("[data-set-mode]");
+  var splitCv = root.querySelector('[data-split="cv"]');
+  var splitBp = root.querySelector('[data-split="bp"]');
+  var tagCv = root.querySelector("[data-split-tag-cv]");
+  var tagBp = root.querySelector("[data-split-tag-bp]");
+
+  var mPad = root.querySelector("[data-m-pad]");
+  var mGap = root.querySelector("[data-m-gap]");
+  var mGain = root.querySelector("[data-m-gain]");
+  var mBw = root.querySelector("[data-m-bw]");
+  var gMode = root.querySelector("[data-gal-mode]");
+  var gPad = root.querySelector("[data-gal-pad]");
+  var gGap = root.querySelector("[data-gal-gap]");
+  var gCols = root.querySelector("[data-gal-cols]");
+
+  var SLOT_H = 22;
+  var ICONS = {
+    topic: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    terminal: '<svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    file: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>',
+    diff: '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/><line x1="5" y1="19" x2="19" y2="19"/></svg>',
+    note: '<svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+    closed: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>'
+  };
+
+  var CARDS_DATA = [
+    { kind: "topic", state: "discussing", stateLabel: "논의 중", ask: true, held: false, title: "보드 회전 버니어 다이얼 & 8px 스플리터 확정", body: "오른쪽 26px 데드존을 회수하고, 현재 보고 있는 카드를 항상 y=0 중앙 눈금에 고정합니다. 카드 내부 우측 20px 여백과 겹치지 않도록 right: 2px에 배치합니다.", askText: "(1580) 오버레이 버니어 다이얼 + (1581) 프레임리스 8px 스플리터로 진행할까요?" },
+    { kind: "diff", state: "card", stateLabel: "Diff", ask: false, held: false, title: "dashboard-rail.css · #bcol padding-right", code: '<span class="c-dim">@@ -1232,4 +1232,4 @@</span>\n<span class="c-del">-:root[data-board-dial] #bcol { padding-right: 26px; }</span>\n<span class="c-add">+:root[data-board-dial] #bcol { padding-right: 4px; }</span>\n <span class="c-dim">.d-board-dial { right: 2px; width: 24px; }</span>' },
+    { kind: "topic", state: "implementing", stateLabel: "구현 중", ask: false, held: true, title: "지정-Y 프리캔버스 가상 스크롤 앵커 보정", body: "오프윈도우 토픽을 display:none으로 숨길 때 스크롤 앵커가 튀지 않도록 현재 읽는 카드의 상대 오프셋을 유지합니다. 보류 상태로 스테이징되어 있습니다." },
+    { kind: "terminal", state: "card", stateLabel: "Terminal", ask: false, held: false, title: "pwsh · go test ./internal/wsdashboard/...", code: '<span class="c-dim">$ go test ./internal/wsdashboard/... -count=1</span>\n<span class="c-ok">ok  </span> ws-mcp/internal/wsdashboard  <span class="c-dim">1.42s</span>\n<span class="c-ok">PASS</span> 118 tests, 0 skipped' },
+    { kind: "topic", state: "researching", stateLabel: "조사 중", ask: true, held: false, title: "WebView 유휴 CPU 점유율 프로파일링", body: "백그라운드 탭과 접힌 레일에서 CSS conic-gradient 스피너가 메인 스레드 리페인트 비용을 유발하는지 Trace로 측정했습니다.", askText: "(1584) 창 비활성화 시 모든 대시보드 애니메이션을 자동 일시정지할까요?" },
+    { kind: "file", state: "card", stateLabel: "File", ask: false, held: false, title: "dashboard-board-dial.js (L242-265)", code: '<span class="c-key">function</span> boardDialMark(n) {\n  <span class="c-key">if</span> (!dialEl || dialEl.hidden) <span class="c-key">return</span>;\n  <span class="c-dim">// O(1) transform update via rAF</span>\n  vstrip.style.transform = <span class="c-ok">"translate3d(0,"</span> + y + <span class="c-ok">"px,0)"</span>;\n}' },
+    { kind: "note", state: "card", stateLabel: "Note", ask: false, held: false, title: "스플리터 회수 폭 검증 체크리스트", body: "• 2컬럼(대화|보드): #bcol 22px + 간격 8px = +30px\n• 3컬럼(대화|보드|갤러리): 22px + 8px×2 = +38px\n• 4컬럼(레일 포함): +46px 회수 및 포인터 충돌 0건" },
+    { kind: "topic", state: "awaiting-confirmation", stateLabel: "확인 대기", ask: false, held: false, title: "갤러리 레일 호버 프리뷰 팝오버 위치 보정", body: "좁은 뷰포트에서 .gal-pop 캐럿이 좌우 가장자리를 넘지 않도록 뷰포트 클램핑을 적용했습니다." },
+    { kind: "topic", state: "implementing", stateLabel: "구현 중", ask: true, held: true, title: "렌더러 네이티브 메모리 증가 원인 추적", body: "장시간 열린 대시보드에서 iframe 프레임 교체 후 detached DOM이 남는지 힙 스냅샷을 비교 분석 중입니다.", askText: "(1587) 닫힌 토픽의 iframe을 즉시 언마운트하고 스크롤 복귀 시 재마운트할까요?" },
+    { kind: "diff", state: "card", stateLabel: "Diff", ask: false, held: false, title: "dashboard-layout.css · --dgrid-gap 8px", code: '<span class="c-dim">@@ -18,3 +18,3 @@</span>\n<span class="c-del">-.dgrid { --dgrid-gap: 16px; }</span>\n<span class="c-add">+.dgrid { --dgrid-gap: 8px; }</span>\n <span class="c-dim">.dcv-edge { width: 8px; background: transparent; }</span>' },
+    { kind: "topic", state: "closed", stateLabel: "닫힘", ask: false, held: false, closed: true, title: "컴포저 멀티라인 모드 1-클릭 복귀 버튼", body: "임시 멀티라인 전환 후 전송 버튼 옆 ↺ 아이콘으로 즉시 단일 라인 모드로 되돌릴 수 있게 완료되었습니다." },
+    { kind: "file", state: "card", stateLabel: "File", ask: false, held: false, title: "ai-docs/manuals/dashboard-style.md", code: '<span class="c-dim">## 1. Borderless Material Tonal Surfaces</span>\n<span class="c-key">--wb-bg</span>: #141518  <span class="c-key">--wb-card</span>: #1e2024\n<span class="c-key">--wb-primary</span>: #5b9bf0  <span class="c-key">--wb-warn</span>: #e0a84a' },
+    { kind: "topic", state: "discussing", stateLabel: "논의 중", ask: false, held: false, title: "오버뷰 피커 전환 모션 240ms 튜닝", body: "개요 모드 진입 시 비활성 패널의 brightness(.28) 디밍과 카드 접기 전환 타이밍을 일치시켰습니다." },
+    { kind: "terminal", state: "card", stateLabel: "Terminal", ask: false, held: false, title: "git · log --oneline -5", code: '<span class="c-ok">e8c8239</span> fix(dashboard): pause hidden rail spinners\n<span class="c-dim">7a10c44</span> feat(board): add free-canvas virtual scroll\n<span class="c-dim">3b91f20</span> style(dashboard): unify borderless tokens' },
+    { kind: "topic", state: "implementing", stateLabel: "구현 중", ask: false, held: true, title: "워크트리 어드미션 승인/거절 초안 캡슐", body: "승인·거절 상태를 일괄 확정하기 전까지 되돌리기(Undo) 가능한 하단 플로팅 캡슐을 유지합니다." },
+    { kind: "note", state: "card", stateLabel: "Note", ask: false, held: false, title: "다이얼 스크럽 UX 세부 규칙", body: "• 평상시: 투명 배경 + 미세 눈금으로 시야 방해 최소화\n• 호버/드래그: 반투명 다크 필 스크림 + 좌측 카드 툴팁\n• 휠: 다이얼 위에서는 카드 단위 1칸씩 스텝 이동" },
+    { kind: "topic", state: "researching", stateLabel: "조사 중", ask: true, held: false, title: "설정 UI 하네스별 티어 라우팅 미리보기", body: "codex / claude / agy 하네스 폴백 체인이 설정 패널에서 한눈에 보이도록 배지 표기를 검토 중입니다.", askText: "(1591) 폴백 발생 시 원천 버킷 이름을 인라인 칩으로 같이 표시할까요?" },
+    { kind: "diff", state: "card", stateLabel: "Diff", ask: false, held: false, title: "dashboard-board.css · sticky header clip", code: '<span class="c-dim">@@ -34,2 +34,3 @@</span>\n .bc-in { border-radius: var(--wb-radius); }\n<span class="c-add">+.bc-in { overflow: hidden; overflow: clip; }</span>' },
+    { kind: "topic", state: "closed", stateLabel: "닫힘", ask: false, held: false, closed: true, title: "파일 탐색기 다중 탭 스트립 접힘 처리", body: "단일 탭일 때 탭 칩을 숨겨 주소줄 공간을 확보하는 레이아웃 정리가 머지되었습니다." },
+    { kind: "topic", state: "awaiting-confirmation", stateLabel: "확인 대기", ask: false, held: false, title: "최종 릴리즈 호환성 티어(T0) 점검 완료", body: "이번 보드 다이얼 및 8px 스플리터 변경은 순수 프런트엔드 CSS/JS 개선으로 프로토콜 호환성 영향이 없는 T0입니다." }
+  ];
+
+  // Build 20 cards
+  var cardEls = [];
+  CARDS_DATA.forEach(function (c, i) {
+    var sec = document.createElement("article");
+    sec.className = "bdg-card";
+    sec.dataset.idx = String(i);
+    sec.dataset.kind = c.kind === "topic" ? "topic" : "card";
+    sec.dataset.iconKind = c.closed ? "closed" : c.kind;
+    if (c.ask) sec.dataset.ask = "1";
+    if (c.held) sec.dataset.held = "1";
+    if (c.closed) sec.dataset.closed = "1";
+
+    var badges = "";
+    if (c.kind === "topic") {
+      var stCls = c.closed ? "closed" : c.state === "implementing" ? "impl" : c.state === "researching" ? "research" : c.state === "discussing" ? "discuss" : "confirm";
+      badges += '<span class="bdg-pill ' + stCls + '">' + c.stateLabel + "</span>";
+    } else {
+      badges += '<span class="bdg-pill kind">' + c.stateLabel + "</span>";
+    }
+    if (c.ask) badges += '<span class="bdg-pill ask">질문</span>';
+    if (c.held) badges += '<span class="bdg-pill held">보류</span>';
+
+    var bodyHtml = "";
+    if (c.body) {
+      c.body.split("\n").forEach(function (line) {
+        bodyHtml += "<p>" + line + "</p>";
+      });
+    }
+    if (c.code) {
+      bodyHtml += '<pre class="bdg-code">' + c.code + "</pre>";
+    }
+    if (c.askText) {
+      bodyHtml += '<div class="bdg-ask-box">' + c.askText + "</div>";
+    }
+
+    sec.innerHTML =
+      '<div class="bdg-card-hd">' +
+        '<span class="bdg-card-ic" aria-hidden="true">' + ICONS[c.closed ? "closed" : c.kind] + "</span>" +
+        '<span class="bdg-card-idx">#' + (i + 1) + "</span>" +
+        '<span class="bdg-card-title">' + c.title + "</span>" +
+        '<span class="bdg-badges">' + badges + "</span>" +
+      "</div>" +
+      '<div class="bdg-card-body">' + bodyHtml + "</div>";
+
+    sec.addEventListener("click", function () {
+      scrollToCard(i, true);
+    });
+    cardsWrap.appendChild(sec);
+    cardEls.push(sec);
+  });
+
+  // Build Legacy Static Dots (Before mode)
+  var legacyDots = [];
+  CARDS_DATA.forEach(function (c, i) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bdg-ldot";
+    btn.dataset.idx = String(i);
+    btn.dataset.kind = c.kind === "topic" ? "topic" : "card";
+    if (c.ask) btn.dataset.ask = "1";
+    if (c.held) btn.dataset.held = "1";
+    btn.setAttribute("aria-label", "#" + (i + 1) + " " + c.title);
+    btn.innerHTML = '<span class="bdg-lpip" aria-hidden="true"></span>';
+    dialLegacy.appendChild(btn);
+    legacyDots.push(btn);
+  });
+
+  // Build Rotary Vernier Slots (After mode)
+  var vernierSlots = [];
+  CARDS_DATA.forEach(function (c, i) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bdg-vslot";
+    btn.dataset.idx = String(i);
+    btn.style.top = (i * SLOT_H) + "px";
+    if (c.ask) btn.dataset.ask = "1";
+    if (c.held) btn.dataset.held = "1";
+    if (c.closed) btn.dataset.closed = "1";
+    btn.setAttribute("aria-label", "#" + (i + 1) + " " + c.title);
+    var iconSvg = ICONS[c.closed ? "closed" : c.kind];
+    btn.innerHTML =
+      '<span class="bdg-vslot-ic" aria-hidden="true">' + iconSvg + '<span class="bdg-vslot-ring"></span></span>' +
+      '<span class="bdg-vslot-tick" aria-hidden="true"></span>';
+    vstrip.appendChild(btn);
+    vernierSlots.push(btn);
+  });
+
+  // State
+  var activeIdx = 0;
+  var targetPos = 0;
+  var displayPos = 0;
+  var animRaf = 0;
+  var scrubbing = false;
+  var swallowClick = false;
+  var convoW = 230;
+  var galW = 245;
+
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+
+  function updateMetrics() {
+    var mode = root.getAttribute("data-mode");
+    var isAfter = mode === "after";
+    var bw = Math.round(bcol.getBoundingClientRect().width);
+    if (mPad) mPad.textContent = isAfter ? "26px → 4px" : "26px (고정 거터)";
+    if (mGap) mGap.textContent = isAfter ? "16px → 8px" : "16px (그립 필)";
+    if (mGain) mGain.textContent = isAfter ? "+34px (3~4컬럼 +42px+)" : "0px (42px 데드존)";
+    if (mBw) mBw.textContent = bw + "px";
+    if (gMode) gMode.textContent = isAfter ? "After" : "Before";
+    if (gPad) gPad.textContent = isAfter ? "4px" : "26px";
+    if (gGap) gGap.textContent = isAfter ? "8px" : "16px";
+    if (gCols) gCols.textContent = Math.round(convoW) + " / " + bw + " / " + Math.round(galW);
+    if (tagCv) tagCv.textContent = isAfter ? "8px" : "16px";
+    if (tagBp) tagBp.textContent = isAfter ? "8px" : "16px";
+  }
+
+  function computeScrollPos() {
+    var st = bcol.scrollTop;
+    var anchorY = st + bcol.clientHeight * 0.34;
+    if (st <= 2) return 0;
+    if (st + bcol.clientHeight >= bcol.scrollHeight - 2) return cardEls.length - 1;
+
+    var centers = [];
+    for (var i = 0; i < cardEls.length; i++) {
+      centers.push(cardEls[i].offsetTop + cardEls[i].offsetHeight * 0.45);
+    }
+    if (anchorY <= centers[0]) return 0;
+    if (anchorY >= centers[centers.length - 1]) return centers.length - 1;
+    for (var j = 0; j < centers.length - 1; j++) {
+      if (anchorY >= centers[j] && anchorY <= centers[j + 1]) {
+        var span = Math.max(1, centers[j + 1] - centers[j]);
+        return j + (anchorY - centers[j]) / span;
+      }
+    }
+    return 0;
+  }
+
+  function paintVernier(pos) {
+    // Pure GPU transform: locks `pos` at exact vertical center (y = 0)
+    vstrip.style.transform = "translate3d(0, " + (-pos * SLOT_H).toFixed(2) + "px, 0)";
+    var nearest = clamp(Math.round(pos), 0, cardEls.length - 1);
+    for (var i = 0; i < vernierSlots.length; i++) {
+      var d = Math.abs(i - pos);
+      var tier = d < 0.5 ? "0" : d < 1.5 ? "1" : d < 2.5 ? "2" : d < 4.5 ? "3" : d < 6.5 ? "4" : "5";
+      if (vernierSlots[i].dataset.vtier !== tier) {
+        vernierSlots[i].dataset.vtier = tier;
+      }
+    }
+    if (nearest !== activeIdx) {
+      setActiveCard(nearest);
+    }
+  }
+
+  function paintLegacy(idx) {
+    for (var i = 0; i < legacyDots.length; i++) {
+      var d = Math.abs(i - idx);
+      var tier = d === 0 ? "0" : d === 1 ? "1" : d === 2 ? "2" : "3";
+      legacyDots[i].dataset.tier = tier;
+      legacyDots[i].setAttribute("aria-current", i === idx ? "true" : "false");
+    }
+  }
+
+  function setActiveCard(idx) {
+    if (cardEls[activeIdx]) cardEls[activeIdx].dataset.active = "false";
+    activeIdx = clamp(idx, 0, cardEls.length - 1);
+    if (cardEls[activeIdx]) cardEls[activeIdx].dataset.active = "true";
+    if (readoutEl) readoutEl.textContent = "#" + (activeIdx + 1) + " / " + cardEls.length;
+    paintLegacy(activeIdx);
+  }
+
+  function stepAnimation() {
+    animRaf = 0;
+    var diff = targetPos - displayPos;
+    if (Math.abs(diff) < 0.004) {
+      displayPos = targetPos;
+      paintVernier(displayPos);
+      return;
+    }
+    displayPos += diff * 0.28;
+    paintVernier(displayPos);
+    animRaf = requestAnimationFrame(stepAnimation);
+  }
+
+  function scheduleVernier(pos, immediate) {
+    targetPos = clamp(pos, 0, cardEls.length - 1);
+    if (immediate) {
+      if (animRaf) { cancelAnimationFrame(animRaf); animRaf = 0; }
+      displayPos = targetPos;
+      paintVernier(displayPos);
+      return;
+    }
+    if (!animRaf) {
+      animRaf = requestAnimationFrame(stepAnimation);
+    }
+  }
+
+  function scrollToCard(idx, smooth) {
+    idx = clamp(idx, 0, cardEls.length - 1);
+    var el = cardEls[idx];
+    if (!el) return;
+    var top = Math.max(0, el.offsetTop - 48);
+    bcol.scrollTo({ top: top, behavior: smooth ? "smooth" : "auto" });
+    setActiveCard(idx);
+    scheduleVernier(idx, !smooth);
+  }
+
+  function scrollToFractionalPos(pos) {
+    pos = clamp(pos, 0, cardEls.length - 1);
+    var lo = Math.floor(pos);
+    var hi = Math.min(cardEls.length - 1, lo + 1);
+    var frac = pos - lo;
+    var y0 = Math.max(0, cardEls[lo].offsetTop - 48);
+    var y1 = Math.max(0, cardEls[hi].offsetTop - 48);
+    bcol.scrollTop = y0 + (y1 - y0) * frac;
+  }
+
+  // Tooltip helper (positioned relative to boardWrap)
+  function showTip(idx, anchorY) {
+    var c = CARDS_DATA[idx];
+    if (!c) return;
+    var badges = "";
+    if (c.kind === "topic") {
+      var stCls = c.closed ? "closed" : c.state === "implementing" ? "impl" : c.state === "researching" ? "research" : c.state === "discussing" ? "discuss" : "confirm";
+      badges += '<span class="bdg-pill ' + stCls + '">' + c.stateLabel + "</span>";
+    } else {
+      badges += '<span class="bdg-pill kind">' + c.stateLabel + "</span>";
+    }
+    if (c.ask) badges += '<span class="bdg-pill ask">질문</span>';
+    if (c.held) badges += '<span class="bdg-pill held">보류</span>';
+    tipEl.innerHTML =
+      '<span class="bdg-tip-idx">#' + (idx + 1) + "</span>" +
+      '<span class="bdg-tip-title">' + c.title + "</span>" +
+      badges;
+    var wrapH = boardWrap.clientHeight || 560;
+    var tipH = tipEl.offsetHeight || 28;
+    var y = clamp(anchorY - tipH / 2, 10, wrapH - tipH - 10);
+    tipEl.style.transform = "translate3d(0, " + Math.round(y) + "px, 0)";
+    tipEl.dataset.show = "1";
+  }
+
+  function hideTip() {
+    tipEl.dataset.show = "0";
+  }
+
+  // Board native scroll -> rotates vernier dial smoothly
+  bcol.addEventListener("scroll", function () {
+    if (scrubbing) return;
+    scheduleVernier(computeScrollPos(), false);
+  }, { passive: true });
+
+  // Mode toggle (Before / After)
+  modeBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var next = btn.getAttribute("data-set-mode");
+      root.setAttribute("data-mode", next);
+      modeBtns.forEach(function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      hideTip();
+      updateMetrics();
+      setTimeout(updateMetrics, 260);
+    });
+  });
+
+  // Margin / Hit-zone guide toggle
+  guideBtn.addEventListener("click", function () {
+    var on = root.getAttribute("data-guides") === "on";
+    root.setAttribute("data-guides", on ? "off" : "on");
+    guideBtn.setAttribute("aria-pressed", on ? "false" : "true");
+  });
+
+  // Vernier dial interactions (click, hover, wheel, drag scrub)
+  dialVernier.addEventListener("click", function (e) {
+    if (swallowClick) { swallowClick = false; return; }
+    var slot = e.target.closest(".bdg-vslot");
+    if (!slot) return;
+    var idx = parseInt(slot.dataset.idx, 10);
+    if (!isNaN(idx)) scrollToCard(idx, true);
+  });
+
+  dialVernier.addEventListener("pointerover", function (e) {
+    if (scrubbing) return;
+    var slot = e.target.closest(".bdg-vslot");
+    if (!slot) return;
+    var idx = parseInt(slot.dataset.idx, 10);
+    var wr = boardWrap.getBoundingClientRect();
+    var sr = slot.getBoundingClientRect();
+    if (!isNaN(idx)) showTip(idx, sr.top + sr.height / 2 - wr.top);
+  });
+
+  dialVernier.addEventListener("pointerleave", function () {
+    if (!scrubbing) hideTip();
+  });
+
+  dialVernier.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var dir = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
+    if (!dir) return;
+    var next = clamp(activeIdx + dir, 0, cardEls.length - 1);
+    scrollToCard(next, true);
+    showTip(next, boardWrap.clientHeight / 2);
+  }, { passive: false });
+
+  dialVernier.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0) return;
+    var startY = e.clientY;
+    var startPos = displayPos;
+    var moved = false;
+
+    function onMove(ev) {
+      var dy = ev.clientY - startY;
+      if (!moved) {
+        if (Math.abs(dy) <= 3) return;
+        moved = true;
+        scrubbing = true;
+        dialVernier.dataset.scrub = "1";
+        try { dialVernier.setPointerCapture(ev.pointerId); } catch (err) {}
+      }
+      ev.preventDefault();
+      var nextPos = clamp(startPos + dy / 18, 0, cardEls.length - 1);
+      scheduleVernier(nextPos, true);
+      scrollToFractionalPos(nextPos);
+      var nearest = clamp(Math.round(nextPos), 0, cardEls.length - 1);
+      showTip(nearest, boardWrap.clientHeight / 2);
+    }
+
+    function onEnd(ev) {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onEnd);
+      document.removeEventListener("pointercancel", onEnd);
+      if (moved) {
+        try { dialVernier.releasePointerCapture(ev.pointerId); } catch (err) {}
+        swallowClick = true;
+        setTimeout(function () { swallowClick = false; }, 0);
+        scrubbing = false;
+        delete dialVernier.dataset.scrub;
+        var snapIdx = clamp(Math.round(displayPos), 0, cardEls.length - 1);
+        scrollToCard(snapIdx, true);
+        hideTip();
+      }
+    }
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onEnd);
+    document.addEventListener("pointercancel", onEnd);
+  });
+
+  // Legacy dial interactions (Before mode comparison)
+  dialLegacy.addEventListener("click", function (e) {
+    if (swallowClick) { swallowClick = false; return; }
+    var dot = e.target.closest(".bdg-ldot");
+    if (!dot) return;
+    var idx = parseInt(dot.dataset.idx, 10);
+    if (!isNaN(idx)) scrollToCard(idx, true);
+  });
+
+  dialLegacy.addEventListener("pointerover", function (e) {
+    if (scrubbing) return;
+    var dot = e.target.closest(".bdg-ldot");
+    if (!dot) return;
+    var idx = parseInt(dot.dataset.idx, 10);
+    var wr = boardWrap.getBoundingClientRect();
+    var dr = dot.getBoundingClientRect();
+    if (!isNaN(idx)) showTip(idx, dr.top + dr.height / 2 - wr.top);
+  });
+
+  dialLegacy.addEventListener("pointerleave", function () {
+    if (!scrubbing) hideTip();
+  });
+
+  dialLegacy.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var dir = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
+    if (!dir) return;
+    scrollToCard(clamp(activeIdx + dir, 0, cardEls.length - 1), true);
+  }, { passive: false });
+
+  dialLegacy.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0) return;
+    var startY = e.clientY;
+    var startIdx = activeIdx;
+    var moved = false;
+    function onMove(ev) {
+      var dy = ev.clientY - startY;
+      if (!moved) {
+        if (Math.abs(dy) <= 4) return;
+        moved = true;
+        scrubbing = true;
+        dialLegacy.dataset.scrub = "1";
+        try { dialLegacy.setPointerCapture(ev.pointerId); } catch (err) {}
+      }
+      var nextIdx = clamp(startIdx + Math.round(dy / 14), 0, cardEls.length - 1);
+      if (nextIdx !== activeIdx) {
+        scrollToCard(nextIdx, false);
+        var wr = boardWrap.getBoundingClientRect();
+        var dr = legacyDots[nextIdx].getBoundingClientRect();
+        showTip(nextIdx, dr.top + dr.height / 2 - wr.top);
+      }
+    }
+    function onEnd(ev) {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onEnd);
+      document.removeEventListener("pointercancel", onEnd);
+      if (moved) {
+        try { dialLegacy.releasePointerCapture(ev.pointerId); } catch (err) {}
+        swallowClick = true;
+        setTimeout(function () { swallowClick = false; }, 0);
+        scrubbing = false;
+        delete dialLegacy.dataset.scrub;
+        hideTip();
+      }
+    }
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onEnd);
+    document.addEventListener("pointercancel", onEnd);
+  });
+
+  // Real pointer drag resizing on both splitters (Convo|Board and Board|Gallery)
+  function bindSplitter(el, which) {
+    el.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startX = e.clientX;
+      var startCv = convoW;
+      var startGal = galW;
+      var totalW = wsEl.clientWidth;
+      var gap = root.getAttribute("data-mode") === "before" ? 16 : 8;
+
+      el.classList.add("drag");
+      root.classList.add("bdg-dragging");
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+
+      function onMove(ev) {
+        var dx = ev.clientX - startX;
+        if (which === "cv") {
+          var maxCv = Math.max(170, totalW - galW - gap * 2 - 280);
+          convoW = clamp(startCv + dx, 170, maxCv);
+          root.style.setProperty("--bdg-convo-w", Math.round(convoW) + "px");
+        } else {
+          var maxGal = Math.max(175, totalW - convoW - gap * 2 - 280);
+          galW = clamp(startGal - dx, 175, maxGal);
+          root.style.setProperty("--bdg-gal-w", Math.round(galW) + "px");
+        }
+        updateMetrics();
+      }
+
+      function onUp(ev) {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("pointercancel", onUp);
+        el.classList.remove("drag");
+        root.classList.remove("bdg-dragging");
+        try { el.releasePointerCapture(ev.pointerId); } catch (err) {}
+      }
+
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("pointercancel", onUp);
+    });
+  }
+
+  bindSplitter(splitCv, "cv");
+  bindSplitter(splitBp, "bp");
+
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(updateMetrics).observe(wsEl);
+  }
+
+  // Initial sync
+  setActiveCard(0);
+  paintVernier(0);
+  updateMetrics();
+})();
+</script>
+</div>
