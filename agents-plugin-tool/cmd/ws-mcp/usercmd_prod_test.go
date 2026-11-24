@@ -70,7 +70,7 @@ func TestUserCommandsOnTheProductionRunnerNeverReadTheKeyRecord(t *testing.T) {
 		if u.Revision(f.lead) != rev {
 			t.Fatalf("the stream revision %q is not the list's %q", u.Revision(f.lead), rev)
 		}
-		got, gotRoot, found, err := u.Get(f.lead, "build")
+		got, gotRoot, found, err := u.Get(f.lead, wsusercmd.SourceAgent, "build")
 		if err != nil || !found || got != cmd || !sameRoot(gotRoot, root) {
 			t.Fatalf("get: %+v %q %v %v (root %q)", got, gotRoot, found, err, root)
 		}
@@ -78,7 +78,7 @@ func TestUserCommandsOnTheProductionRunnerNeverReadTheKeyRecord(t *testing.T) {
 	if _, _, err := u.List("someone-else"); err == nil {
 		t.Fatal("a conversation that is not an open lead was listed")
 	}
-	if err := u.RemoveIf(f.lead, "build", cmd.Revision+1); !errors.Is(err, wsusercmd.ErrStale) {
+	if err := u.RemoveIf(f.lead, wsusercmd.SourceAgent, "build", cmd.Revision+1); !errors.Is(err, wsusercmd.ErrStale) {
 		t.Fatalf("stale removal: %v", err)
 	}
 }

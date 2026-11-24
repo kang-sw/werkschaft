@@ -92,7 +92,7 @@ func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
 	if got, _, _ := u.List("lead"); len(got) != 0 {
 		t.Fatalf("another worktree sees %+v", got)
 	}
-	if _, _, ok, _ := u.Get("lead", "build"); ok {
+	if _, _, ok, _ := u.Get("lead", wsusercmd.SourceAgent, "build"); ok {
 		t.Fatal("a click in another worktree resolves the first worktree's command")
 	}
 	runner.mu.Lock()
@@ -133,7 +133,7 @@ func TestUserCommandsFollowTheRunnersWorktree(t *testing.T) {
 	if len(cmds) != 0 || rev2 == rev1 || u.Revision("lead") != rev2 {
 		t.Fatalf("after the worktree changed: %+v rev %q (was %q)", cmds, rev2, rev1)
 	}
-	got, root, found, _ := u.Get("lead", "build")
+	got, root, found, _ := u.Get("lead", wsusercmd.SourceAgent, "build")
 	if found || got.ID != "" || !sameRoot(root, wt2) {
 		t.Fatalf("get in the other worktree: %+v %q %v", got, root, found)
 	}
@@ -252,5 +252,68 @@ func TestUserCommandsKeepAClosedOwnerOnDashboardStartup(t *testing.T) {
 	defer commands.Close()
 	if cmd, ok := commands.reg.Get(id, home, "build"); !ok || cmd.Line != "make" {
 		t.Fatal("startup discarded the closed owner's command")
+	}
+}
+
+func TestUserCommandsV2CreatePatchCwdAndRootRevision(t *testing.T) {
+	dir := t.TempDir()
+	wt1, wt2 := filepath.Join(dir, "wt1"), filepath.Join(dir, "wt2")
+	sub := filepath.Join(wt1, "backend")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &userCommandRunnerFake{
+		gens:  map[string]uint64{"lead1": 1, "lead2": 1, "other": 1},
+		roots: map[string]string{"lead1": wt1, "lead2": wt1, "other": wt2},
+		known: map[string]bool{"lead1": true, "lead2": true, "other": true},
+	}
+	u := openUserCommandsFixture(t, dir, runner, nil)
+
+	// Register rejects escaping or missing cwd synchronously.
+	if _, _, err := u.Register("lead1", wsusercmd.Input{ID: "bad", Label: "Bad", Line: "true", Cwd: "../escape"}); !errors.Is(err, wsusercmd.ErrInvalid) {
+		t.Fatalf("register escaping cwd: %v", err)
+	}
+	if _, _, err := u.Register("lead1", wsusercmd.Input{ID: "miss", Label: "Miss", Line: "true", Cwd: "missing"}); !errors.Is(err, wsusercmd.ErrInvalid) {
+		t.Fatalf("register missing cwd: %v", err)
+	}
+	// Valid subdir succeeds.
+	if _, _, err := u.Register("lead1", wsusercmd.Input{ID: "ag", Label: "Agent", Line: "make", Cwd: "backend", Prompt: "Check"}); err != nil {
+		t.Fatalf("register valid cwd: %v", err)
+	}
+
+	// Create user command validates cwd and moves Revision for both leads on wt1,
+	// preserving epoch.N.rootTag, while leaving wt2's revision untouched.
+	rev2Before := u.Revision("lead2")
+	revOtherBefore := u.Revision("other")
+	if _, err := u.Create("lead1", wsusercmd.Input{Label: "Bad", Line: "true", Cwd: "../nope"}); !errors.Is(err, wsusercmd.ErrInvalid) {
+		t.Fatalf("create bad cwd: %v", err)
+	}
+	created, err := u.Create("lead1", wsusercmd.Input{Label: "User Test", Line: "go test ./...", Cwd: "backend", Prompt: "Fix tests"})
+	if err != nil || created.Source != wsusercmd.SourceUser || created.ID != "user-test" {
+		t.Fatalf("create user: %+v %v", created, err)
+	}
+	cmds2, rev2After, err := u.List("lead2")
+	if err != nil || len(cmds2) != 1 || cmds2[0].ID != "user-test" || rev2After == rev2Before || u.Revision("lead2") != rev2After {
+		t.Fatalf("lead2 after root create: cmds=%+v rev=%q (was %q) revFn=%q err=%v", cmds2, rev2After, rev2Before, u.Revision("lead2"), err)
+	}
+	if u.Revision("other") != revOtherBefore {
+		t.Fatalf("wt2 revision moved: %q -> %q", revOtherBefore, u.Revision("other"))
+	}
+
+	// PatchIf validates cwd and updates stored command.
+	badCwd := "../escape"
+	if _, err := u.PatchIf("lead2", wsusercmd.SourceUser, created.ID, created.Revision, wsusercmd.Patch{Cwd: &badCwd}); !errors.Is(err, wsusercmd.ErrInvalid) {
+		t.Fatalf("patch bad cwd: %v", err)
+	}
+	newLine := "go test -race ./..."
+	patched, err := u.PatchIf("lead2", wsusercmd.SourceUser, created.ID, created.Revision, wsusercmd.Patch{Line: &newLine})
+	if err != nil || patched.Line != newLine {
+		t.Fatalf("patch user: %+v %v", patched, err)
+	}
+	if err := u.RemoveIf("lead1", wsusercmd.SourceUser, created.ID, patched.Revision); err != nil {
+		t.Fatalf("remove user: %v", err)
 	}
 }

@@ -40,13 +40,40 @@ const storeSchema = `CREATE TABLE IF NOT EXISTS user_commands (
 	label       TEXT NOT NULL,
 	description TEXT NOT NULL,
 	line        TEXT NOT NULL,
+	prompt      TEXT NOT NULL DEFAULT '',
+	cwd         TEXT NOT NULL DEFAULT '',
 	revision    INTEGER NOT NULL,
 	seq         INTEGER NOT NULL,
 	PRIMARY KEY (reply, root, id)
 );
+CREATE TABLE IF NOT EXISTS root_user_commands (
+	root        TEXT NOT NULL,
+	id          TEXT NOT NULL,
+	label       TEXT NOT NULL,
+	description TEXT NOT NULL,
+	line        TEXT NOT NULL,
+	prompt      TEXT NOT NULL DEFAULT '',
+	cwd         TEXT NOT NULL DEFAULT '',
+	revision    INTEGER NOT NULL,
+	seq         INTEGER NOT NULL,
+	PRIMARY KEY (root, id)
+);
 CREATE TABLE IF NOT EXISTS meta (
 	k TEXT PRIMARY KEY,
 	v INTEGER NOT NULL
+)`
+
+const rootTableSchema = `CREATE TABLE IF NOT EXISTS root_user_commands (
+	root        TEXT NOT NULL,
+	id          TEXT NOT NULL,
+	label       TEXT NOT NULL,
+	description TEXT NOT NULL,
+	line        TEXT NOT NULL,
+	prompt      TEXT NOT NULL DEFAULT '',
+	cwd         TEXT NOT NULL DEFAULT '',
+	revision    INTEGER NOT NULL,
+	seq         INTEGER NOT NULL,
+	PRIMARY KEY (root, id)
 )`
 
 // metaRevision is the meta row holding the highest revision ever issued: it
@@ -118,14 +145,27 @@ func storeMigrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("%w: version %d, this build knows %d", ErrStoreNewer, version, storeSchemaVersion)
 	}
 	if version == storeSchemaVersion {
-		return nil
+		changed, err := ensureV2Extensions(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		return tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx, storeSchema); err != nil {
 		return fmt.Errorf("create user command store schema: %w", err)
 	}
+	if _, err := ensureV2Extensions(ctx, tx); err != nil {
+		return err
+	}
 	// A version-1 database has rows but no high-water: it starts at the highest
 	// surviving revision (a fresh one at 0).
-	if _, err := tx.ExecContext(ctx, `INSERT INTO meta (k, v) SELECT ?, COALESCE(MAX(revision), 0) FROM user_commands WHERE true
+	if _, err := tx.ExecContext(ctx, `INSERT INTO meta (k, v) SELECT ?, MAX(
+		COALESCE((SELECT MAX(revision) FROM user_commands), 0),
+		COALESCE((SELECT MAX(revision) FROM root_user_commands), 0)
+	)
 		ON CONFLICT(k) DO UPDATE SET v = MAX(v, excluded.v)`, metaRevision); err != nil {
 		return fmt.Errorf("backfill user command revision: %w", err)
 	}
@@ -133,6 +173,57 @@ func storeMigrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("stamp user command store version: %w", err)
 	}
 	return tx.Commit()
+}
+
+// ensureV2Extensions idempotently ensures the v2 additive surfaces exist on an
+// already-v2 (or newly-upgraded) store without bumping PRAGMA user_version:
+// root_user_commands table and prompt/cwd columns on user_commands. When every
+// extension is already present, it performs read-only inspection only.
+func ensureV2Extensions(ctx context.Context, tx *sql.Tx) (bool, error) {
+	changed := false
+	var rootTable string
+	err := tx.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'root_user_commands'`).Scan(&rootTable)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := tx.ExecContext(ctx, rootTableSchema); err != nil {
+			return false, fmt.Errorf("create root_user_commands table: %w", err)
+		}
+		changed = true
+	} else if err != nil {
+		return false, fmt.Errorf("inspect root_user_commands table: %w", err)
+	}
+	cols, err := tableColumns(ctx, tx, "user_commands")
+	if err != nil {
+		return false, err
+	}
+	for _, col := range []string{"prompt", "cwd"} {
+		if !cols[col] {
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE user_commands ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, col)); err != nil {
+				return false, fmt.Errorf("add user_commands.%s column: %w", col, err)
+			}
+			changed = true
+		}
+	}
+	return changed, nil
+}
+
+func tableColumns(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("scan %s column info: %w", table, err)
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 // highWater is the highest revision ever issued (0 for a new store).
@@ -158,36 +249,52 @@ func (s *Store) highWater() (int64, error) {
 	return v, nil
 }
 
-// load returns every stored row, oldest registration first.
-func (s *Store) load() ([]row, error) {
+// load returns every stored agent and root-user row, oldest registration first.
+func (s *Store) load() (agentRows, rootRows []row, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, ErrStoreClosed
+		return nil, nil, ErrStoreClosed
 	}
 	ctx := context.Background()
 	s.ops.Add(1)
-	var out []row
-	err := sqliteRetry(ctx, func() error {
-		out = nil
-		rows, err := s.db.QueryContext(ctx, `SELECT reply, root, id, label, description, line, revision, seq FROM user_commands ORDER BY seq, reply, root, id`)
+	err = sqliteRetry(ctx, func() error {
+		agentRows, rootRows = nil, nil
+		rows, err := s.db.QueryContext(ctx, `SELECT reply, root, id, label, description, line, prompt, cwd, revision, seq FROM user_commands ORDER BY seq, reply, root, id`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var r row
-			if err := rows.Scan(&r.Reply, &r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Revision, &r.Seq); err != nil {
+			if err := rows.Scan(&r.Reply, &r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Prompt, &r.Cwd, &r.Revision, &r.Seq); err != nil {
 				return err
 			}
-			out = append(out, r)
+			r.Source = SourceAgent
+			agentRows = append(agentRows, r)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rrows, err := s.db.QueryContext(ctx, `SELECT root, id, label, description, line, prompt, cwd, revision, seq FROM root_user_commands ORDER BY seq, root, id`)
+		if err != nil {
+			return err
+		}
+		defer rrows.Close()
+		for rrows.Next() {
+			var r row
+			if err := rrows.Scan(&r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Prompt, &r.Cwd, &r.Revision, &r.Seq); err != nil {
+				return err
+			}
+			r.Source = SourceUser
+			rootRows = append(rootRows, r)
+		}
+		return rrows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("load user commands: %w", err)
+		return nil, nil, fmt.Errorf("load user commands: %w", err)
 	}
-	return out, nil
+	return agentRows, rootRows, nil
 }
 
 // raise lifts the stored revision high-water to rev inside tx.
@@ -197,25 +304,50 @@ func raise(ctx context.Context, tx *sql.Tx, rev int64) error {
 	return err
 }
 
-// put writes r and raises the revision high-water to r.Revision in one
-// transaction (one WAL commit).
+// put writes r into user_commands and raises the revision high-water to
+// r.Revision in one transaction (one WAL commit).
 func (s *Store) put(r row) error {
 	return s.write("put user command "+r.ID, func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO user_commands (reply, root, id, label, description, line, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_commands (reply, root, id, label, description, line, prompt, cwd, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(reply, root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
-			line = excluded.line, revision = excluded.revision`,
-			r.Reply, r.Root, r.ID, r.Label, r.Description, r.Line, r.Revision, r.Seq); err != nil {
+			line = excluded.line, prompt = excluded.prompt, cwd = excluded.cwd, revision = excluded.revision`,
+			r.Reply, r.Root, r.ID, r.Label, r.Description, r.Line, r.Prompt, r.Cwd, r.Revision, r.Seq); err != nil {
 			return err
 		}
 		return raise(ctx, tx, r.Revision)
 	})
 }
 
-// del removes one command and raises the revision high-water to rev in one
-// transaction (one WAL commit): a withdrawal never lowers it.
+// putRoot writes r into root_user_commands and raises the shared revision
+// high-water to r.Revision in one transaction (one WAL commit).
+func (s *Store) putRoot(r row) error {
+	return s.write("put root user command "+r.ID, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO root_user_commands (root, id, label, description, line, prompt, cwd, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
+			line = excluded.line, prompt = excluded.prompt, cwd = excluded.cwd, revision = excluded.revision`,
+			r.Root, r.ID, r.Label, r.Description, r.Line, r.Prompt, r.Cwd, r.Revision, r.Seq); err != nil {
+			return err
+		}
+		return raise(ctx, tx, r.Revision)
+	})
+}
+
+// del removes one agent command and raises the revision high-water to rev in
+// one transaction (one WAL commit): a withdrawal never lowers it.
 func (s *Store) del(reply, root, id string, rev int64) error {
 	return s.write("delete user command", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM user_commands WHERE reply = ? AND root = ? AND id = ?`, reply, root, id); err != nil {
+			return err
+		}
+		return raise(ctx, tx, rev)
+	})
+}
+
+// delRoot removes one root user command and raises the shared revision
+// high-water to rev in one transaction (one WAL commit).
+func (s *Store) delRoot(root, id string, rev int64) error {
+	return s.write("delete root user command", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM root_user_commands WHERE root = ? AND id = ?`, root, id); err != nil {
 			return err
 		}
 		return raise(ctx, tx, rev)
