@@ -477,7 +477,7 @@ test('Phase 3: middle-click toggle, autoscroll suppression, exclusions & doc-fra
 test('Phase 3: wide 4-col Quick Look (0-docked + docked), 4+1 exemptions, moveBefore & screenshots', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // --- A. Wide 4-col (Band 4, >=2441px) with 0 docked pages (dark theme for Shot 01, light for Shot 02) ---
+    // --- A. Wide 4-col (Band 4, >=2442px) with 0 docked pages (dark theme for Shot 01, light for Shot 02) ---
     {
       const { context, page, errors } = await openFixture(browser, {
         viewport: { width: 2560, height: 960 },
@@ -695,7 +695,7 @@ test('Phase 3: wide 4-col Quick Look (0-docked + docked), 4+1 exemptions, moveBe
       await context.close();
     }
 
-    // --- B. Wide 4-col (Band 4, >=2441px) with docked #bgal page preserved (dark theme for Shot 03) ---
+    // --- B. Wide 4-col (Band 4, >=2442px) with docked #bgal page preserved (dark theme for Shot 03) ---
     {
       const { context, page, errors } = await openFixture(browser, {
         viewport: { width: 2560, height: 960 },
@@ -980,7 +980,7 @@ test('Phase 3 review regressions: #1 boardRendered sync, #2 bgal relayout, #3 fa
 test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggles cleanly across Band 3 <-> Band 4 resize', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // 1720px on default 5:7 live grid is Band 3 (3-col: >=1600px, <2441px).
+    // 1720px on default 5:7 live grid is Band 3 (3-col: >=1600px, <2442px).
     const { context, page, errors } = await openFixture(browser, {
       viewport: { width: 1720, height: 960 },
       theme: 'dark',
@@ -1003,7 +1003,7 @@ test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggl
       t2InBoard: !!document.querySelector('#r-board section.topic[data-topic="topic-2"]'),
     }));
     assert.ok(band3Open.innerWidth >= 1600, 'Band 3 viewport is >= 1600px');
-    assert.equal(band3Open.isFourCol, false, '1720px live grid must NOT be 4-col (Band 4 starts at 2441px)');
+    assert.equal(band3Open.isFourCol, false, '1720px live grid must NOT be 4-col (Band 4 starts at 2442px)');
     assert.equal(band3Open.hasPreviewAttr, false, 'Band 3 Overview must NOT set data-overview-preview');
     assert.equal(band3Open.previewHostCount, 0, 'Band 3 Overview must NOT mount .overview-preview');
     assert.equal(band3Open.placeholderCount, 0);

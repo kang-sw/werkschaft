@@ -236,45 +236,69 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
       const info = await page.evaluate(() => {
         const dial = document.getElementById('bdial');
         const bcol = document.getElementById('bcol');
+        const dialRect = dial.getBoundingClientRect();
+        const bcolRect = bcol.getBoundingClientRect();
         const dots = Array.from(dial.querySelectorAll('.d-board-dial-dot'));
         return {
           hasRootAttr: document.documentElement.hasAttribute('data-board-dial'),
           dialVisible: getComputedStyle(dial).display !== 'none' && !dial.hidden,
           bcolPadRight: parseFloat(getComputedStyle(bcol).paddingRight),
+          dialWidthRest: Math.round(dialRect.width),
+          straddleOverhang: Math.round(dialRect.right - bcolRect.right),
+          hasReticle: !!dial.querySelector('.d-board-dial-reticle'),
+          hasSvg0: !!dots[0].querySelector('.d-board-dial-ic svg'),
           dotCount: dots.length,
           ask0: dots[0].getAttribute('data-ask'),
           held1: dots[1].getAttribute('data-held'),
           tier0: dots[0].getAttribute('data-tier'),
           tier1: dots[1].getAttribute('data-tier'),
           tier2: dots[2].getAttribute('data-tier'),
+          vtier0: dots[0].getAttribute('data-vtier'),
+          vtier3: dots[3].getAttribute('data-vtier'),
         };
       });
       assert.equal(info.hasRootAttr, true);
       assert.equal(info.dialVisible, true);
-      assert.equal(info.bcolPadRight, 26);
+      assert.equal(info.bcolPadRight, 4);
+      assert.equal(info.dialWidthRest, 18);
+      assert.ok(Math.abs(info.straddleOverhang - 4) <= 1, `dial straddles right edge by +4px, got ${info.straddleOverhang}`);
+      assert.equal(info.hasReticle, true);
+      assert.equal(info.hasSvg0, true);
       assert.equal(info.dotCount, 6);
       assert.equal(info.ask0, '1');
       assert.equal(info.held1, '1');
       assert.equal(info.tier0, '0');
       assert.equal(info.tier1, '1');
       assert.equal(info.tier2, '2');
+      assert.equal(info.vtier0, '0');
+      assert.equal(info.vtier3, '3');
 
-      // Hover dot 0 shows human title + state badge; hide states hide both #bdial and .d-board-dial-tip
+      // Hover dot 0 blooms capsule leftward (18->28px, right pinned at +4px) and shows #index + human title + state badge
       await page.locator('#bdial .d-board-dial-dot').nth(0).hover();
-      await page.waitForTimeout(40);
+      await page.waitForTimeout(200);
       const tipInfo = await page.evaluate(() => {
+        const dial = document.getElementById('bdial');
+        const bcol = document.getElementById('bcol');
+        const dr = dial.getBoundingClientRect();
+        const br = bcol.getBoundingClientRect();
         const tip = document.querySelector('.d-board-dial-tip');
         return {
+          bloomWidth: Math.round(dr.width),
+          bloomOverhang: Math.round(dr.right - br.right),
           hidden: tip ? tip.hidden : true,
+          idx: tip && tip.querySelector('.d-board-dial-tip-idx') ? tip.querySelector('.d-board-dial-tip-idx').textContent : '',
           title: tip && tip.querySelector('.d-board-dial-tip-title') ? tip.querySelector('.d-board-dial-tip-title').textContent : '',
           state: tip && tip.querySelector('.d-board-dial-tip-state') ? tip.querySelector('.d-board-dial-tip-state').textContent : ''
         };
       });
+      assert.equal(tipInfo.bloomWidth, 28, 'dial blooms leftward to 28px on hover');
+      assert.ok(Math.abs(tipInfo.bloomOverhang - 4) <= 1, `dial right edge stays pinned at +4px on bloom, got ${tipInfo.bloomOverhang}`);
       assert.equal(tipInfo.hidden, false);
+      assert.equal(tipInfo.idx, '#01');
       assert.equal(tipInfo.title, 'Topic 1');
       assert.equal(tipInfo.state, '논의 중');
 
-      // Hide states toggle #bdial visibility ONLY (keeping #bcol paddingRight === 26) and hide .d-board-dial-tip
+      // Hide states toggle #bdial visibility ONLY (keeping #bcol paddingRight === 4) and hide .d-board-dial-tip
       for (const attr of ['data-overview', 'data-gal-away', 'data-file-preview', 'data-board-max']) {
         const res = await page.evaluate(a => {
           document.documentElement.setAttribute(a, '');
@@ -290,7 +314,7 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
           return out;
         }, attr);
         assert.equal(res.vis, 'hidden', `${attr} hides #bdial`);
-        assert.equal(res.pad, 26, `${attr} preserves #bcol right padding`);
+        assert.equal(res.pad, 4, `${attr} preserves #bcol right padding`);
         assert.equal(res.tipDisp, 'none', `${attr} hides .d-board-dial-tip`);
       }
 

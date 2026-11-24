@@ -96,7 +96,7 @@ async function dragSplit(tab, page, dx) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // 1. 1660x960 (Band 3) with persisted small bb=500, cw=380 (total 896px < 1292px)
+    // 1. 1660x960 (Band 3) with persisted small bb=500, cw=380 (total 888px < 1300px)
     //    Dark and light captures + .dcv-edge drag keeping total stage constant.
     for (const colorScheme of ['dark', 'light']) {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
@@ -109,9 +109,9 @@ async function dragSplit(tab, page, dx) {
       assert.equal(before.gal, null, `${colorScheme} 1660: Band 3 has no 4th column`);
       assert.equal(before.hasBoardw, true, `${colorScheme} 1660: bb stays loaded in root attr`);
       assert.equal(before.boardwVar, '500px', `${colorScheme} 1660: --boardw preserved`);
-      assert(Math.abs(before.gridW - 1272) <= 2, `${colorScheme} 1660: .dgrid.live fills Band 3 stage (~1272px, not 896px), got ${before.gridW}`);
+      assert(Math.abs(before.gridW - 1280) <= 2, `${colorScheme} 1660: .dgrid.live fills Band 3 stage (~1280px, not 888px), got ${before.gridW}`);
       assert(Math.abs(before.convoW - 380) <= 2, `${colorScheme} 1660: persisted cw=380 applies to convo, got ${before.convoW}`);
-      assert(Math.abs(before.boardW - (before.gridW - 16 - before.convoW)) <= 2, `${colorScheme} 1660: board takes remaining stage width, got ${before.boardW}`);
+      assert(Math.abs(before.boardW - (before.gridW - 8 - before.convoW)) <= 2, `${colorScheme} 1660: board takes remaining stage width, got ${before.boardW}`);
       if (shots) await tab.screenshot({ path: path.join(shots, `band3-1660-${colorScheme}.png`) });
 
       if (colorScheme === 'dark') {
@@ -128,8 +128,8 @@ async function dragSplit(tab, page, dx) {
     }
 
     // 2. 1920x960 (Band 3) with persisted bb=600, cw=0 (unresized convo):
-    //    Stage stays centered at 1292px with 5fr/7fr split (NOT 1045px / 429px).
-    //    Dragging .dcv-edge shifts width between convo and board within 1292px.
+    //    Stage stays centered at 1300px with 5fr/7fr split (NOT 1037px / 429px).
+    //    Dragging .dcv-edge shifts width between convo and board within 1300px.
     //    Widening to 2560x960 enters Band 4 and still applies persisted bb=600.
     {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
@@ -142,19 +142,19 @@ async function dragSplit(tab, page, dx) {
       assert.equal(m1920.gal, null, '1920: Band 3 has no 4th column');
       assert.equal(m1920.hasBoardw, true, '1920: data-boardw preserved');
       assert.equal(m1920.hasConvow, false, '1920: cw=0 leaves data-convow unset');
-      assert(Math.abs(m1920.gridW - 1292) <= 2, `1920: .dgrid.live equals 1292px (not ~1045px), got ${m1920.gridW}`);
-      const leftPad = m1920.gridLeft - (m1920.railRight + 16);
+      assert(Math.abs(m1920.gridW - 1300) <= 2, `1920: .dgrid.live equals 1300px (not ~1037px), got ${m1920.gridW}`);
+      const leftPad = m1920.gridLeft - (m1920.railRight + 8);
       const rightPad = m1920.dbodyRight - m1920.gridRight;
       assert(Math.abs(leftPad - 120) <= 3 && Math.abs(rightPad - 120) <= 3, `1920: stage centered in column 2 (left=${leftPad}, right=${rightPad})`);
-      const wantConvo5fr = Math.round((1292 - 16) * 5 / 12);
-      const wantBoard7fr = Math.round((1292 - 16) * 7 / 12);
+      const wantConvo5fr = Math.round((1300 - 8) * 5 / 12);
+      const wantBoard7fr = Math.round((1300 - 8) * 7 / 12);
       assert(Math.abs(m1920.convoW - wantConvo5fr) <= 2 && Math.abs(m1920.boardW - wantBoard7fr) <= 2,
         `1920: default 5fr/7fr preserved (got ${m1920.convoW}/${m1920.boardW}, want ${wantConvo5fr}/${wantBoard7fr})`);
       if (shots) await tab.screenshot({ path: path.join(shots, 'band3-1920-dark.png') });
 
       await dragSplit(tab, page, 100);
       const dragged = await measure(page);
-      assert(Math.abs(dragged.gridW - 1292) <= 2, `1920 drag keeps .dgrid.live at 1292px, got ${dragged.gridW}`);
+      assert(Math.abs(dragged.gridW - 1300) <= 2, `1920 drag keeps .dgrid.live at 1300px, got ${dragged.gridW}`);
       assert(Math.abs((dragged.convoW - m1920.convoW) - 100) <= 2, `1920 drag widens convo by +100px (${m1920.convoW} -> ${dragged.convoW})`);
       assert(Math.abs((m1920.boardW - dragged.boardW) - 100) <= 2, `1920 drag narrows board by -100px (${m1920.boardW} -> ${dragged.boardW})`);
       assert.equal(dragged.rec.bb, 600, `1920 drag keeps persisted bb=600, got ${dragged.rec.bb}`);
