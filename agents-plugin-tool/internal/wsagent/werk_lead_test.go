@@ -57,6 +57,18 @@ func TestWerkLeadSteersAndInterrupts(t *testing.T) {
 		model.steps = append(model.steps, continuation)
 	}
 	h, ws, _ := werkHarness(t, model)
+	// Drain MCP tool observations so the HTTP handler can respond while the
+	// model keeps calling tools until the steer arrives.
+	drainCtx := t.Context()
+	go func() {
+		for {
+			select {
+			case <-ws.calls:
+			case <-drainCtx.Done():
+				return
+			}
+		}
+	}()
 	st, err := h.runner.CreateLead(BackendWerk, h.root, LeadOptions{Model: "vendor/fixture", PermissionLevel: PermissionReadOnly, permissionUser: true})
 	if err != nil {
 		t.Fatal(err)

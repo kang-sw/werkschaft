@@ -123,7 +123,11 @@ func (f *werkFixture) serve(w http.ResponseWriter, req *http.Request) {
 	var result any
 	switch call.Method {
 	case "initialize":
-		f.bindings <- hello
+		select {
+		case f.bindings <- hello:
+		case <-req.Context().Done():
+			return
+		}
 		result = map[string]any{}
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
@@ -135,7 +139,11 @@ func (f *werkFixture) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		result = map[string]any{"tools": tools}
 	case "tools/call":
-		f.calls <- call.Params.Name
+		select {
+		case f.calls <- call.Params.Name:
+		case <-req.Context().Done():
+			return
+		}
 		result = map[string]any{"content": []map[string]string{{"type": "text", "text": "ran " + call.Params.Name}}}
 	default:
 		w.WriteHeader(http.StatusBadRequest)
