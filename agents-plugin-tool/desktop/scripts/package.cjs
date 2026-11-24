@@ -3,8 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { copyPackage } = require('../../desktop-electron/daemon-stage');
-const { PLATFORMS, releaseVersion, legacyName, measure, writePlatformManifest } = require('./release.cjs');
+const { copyPackage } = require('./daemon-stage.cjs');
+const { PLATFORMS, releaseVersion, writePlatformManifest } = require('./release.cjs');
 const { publicKey } = require('./release-signature.cjs');
 
 const desktop = path.resolve(__dirname, '..');
@@ -117,7 +117,7 @@ function comparePackage(source, target, platform) {
     const destination = path.join(target, ...name.slice('daemon/'.length).split('/'));
     if (!fs.readFileSync(file).equals(fs.readFileSync(destination))) throw new Error(`Packaged daemon differs: ${name}`);
   }
-  require('../../desktop-electron/daemon-selection').validateDaemonRoot(target, 'bundled', platform);
+  require('./daemon-selection.cjs').validateDaemonRoot(target, 'bundled', platform);
 }
 
 function releaseConfig({ resources, platform, version, pubkey }) {
@@ -174,43 +174,15 @@ function releaseMac(stage, built, daemon, output, version) {
   execFileSync('tar', ['-xf', archive, '-C', extracted]);
   if (fs.readdirSync(extracted).join() !== 'Werkschaft.app') throw new Error('Invalid macOS updater archive root');
   verifyMacApp(path.join(extracted, 'Werkschaft.app'), daemon, version);
-
-  const legacy = legacyName('darwin', version);
-  if (!legacy) return;
-  const zip = path.join(output, legacy);
-  execFileSync('ditto', ['-c', '-k', '--keepParent', '--norsrc', app, zip]);
-  const unzipped = path.join(stage, 'mac-legacy');
-  execFileSync('ditto', ['-x', '-k', zip, unzipped]);
-  if (fs.readdirSync(unzipped).join() !== 'Werkschaft.app') throw new Error('Invalid macOS migration archive root');
-  verifyMacApp(path.join(unzipped, 'Werkschaft.app'), daemon, version);
 }
 
-async function releaseWindows(stage, built, output, version, env) {
+function releaseWindows(built, output, version) {
   checkArchitecture(path.join(built, 'werkschaft-desktop.exe'), 'win32');
   const names = PLATFORMS.win32.assets;
   const installer = path.join(output, names['windows-x86_64-nsis']);
   fs.copyFileSync(path.join(built, 'bundle', 'nsis', `Werkschaft_${version}_x64-setup.exe`), installer);
   fs.copyFileSync(path.join(built, 'bundle', 'msi', `Werkschaft_${version}_x64_en-US.msi`),
     path.join(output, names['windows-x86_64-msi']));
-
-  const legacy = legacyName('win32', version);
-  if (!legacy) return;
-  const migration = path.join(stage, 'windows-legacy');
-  fs.mkdirSync(migration);
-  const namesAtRoot = ['Werkschaft-setup.exe', 'Werkschaft.exe'];
-  const payload = path.join(migration, namesAtRoot[0]);
-  fs.copyFileSync(installer, payload);
-  const { sha256 } = await measure(payload);
-  execFileSync('rustc', ['--edition', '2021', '--target', 'x86_64-pc-windows-msvc', '-C', 'opt-level=z',
-    '-C', 'strip=symbols', path.join(desktop, 'migration', 'main.rs'), '-o', path.join(migration, namesAtRoot[1])], {
-    stdio: 'inherit', env: { ...env, WERKSCHAFT_PAYLOAD_VERSION: version, WERKSCHAFT_PAYLOAD_ID: sha256 },
-  });
-  checkArchitecture(path.join(migration, namesAtRoot[1]), 'win32');
-  const zip = path.join(output, legacy);
-  const tar = path.join(env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
-  execFileSync(tar, ['-a', '-cf', zip, ...namesAtRoot], { cwd: migration });
-  const members = execFileSync(tar, ['-tf', zip], { encoding: 'utf8' }).trim().split(/\r?\n/).sort();
-  if (members.join() !== namesAtRoot.join()) throw new Error('Invalid Windows migration archive root');
 }
 
 async function buildRelease() {
@@ -233,7 +205,7 @@ async function buildRelease() {
     try {
       const built = bundleRelease(stage, selected.root, platform, version, pubkey, env);
       if (platform === 'darwin') releaseMac(stage, built, selected.root, output, version);
-      else await releaseWindows(stage, built, output, version, env);
+      else releaseWindows(built, output, version);
       // --no-sign excludes OS signing. Sign only the final updater filenames
       // with the lockfile-pinned Tauri signer and the exact application version.
       const cli = require.resolve('@tauri-apps/cli/tauri.js');

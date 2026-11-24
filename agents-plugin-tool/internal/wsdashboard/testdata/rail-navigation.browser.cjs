@@ -3,8 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
-const { destination } = require('../../../desktop-electron/policy');
-const preload = fs.readFileSync(path.join(__dirname, '../../../desktop-electron/dashboard-preload.js'), 'utf8');
+const updateBridge = fs.readFileSync(path.join(__dirname, '../../../desktop/src/update-bridge.js'), 'utf8');
 const [base, shots] = process.argv.slice(2);
 const on = '.sframe.on';
 const editor = '#ctext + .wsc-editor';
@@ -31,20 +30,19 @@ async function openRail(page) {
         // Pin the server-rendered language: routed Chromium requests may omit
         // Accept-Language even when the browser context has a locale.
         await context.addCookies([{ name: 'ws_dashboard_lang', value: desktop ? 'ko' : 'en', url: base }]);
-        await context.addInitScript(({ desktop, preload }) => {
+        await context.addInitScript(({ desktop, updateBridge, base }) => {
           if (self.origin === 'null') return;
           const workers = navigator.serviceWorker;
           if (workers) Object.getPrototypeOf(workers).register = async () => { throw new Error('Service workers forbidden in rail navigation fixture'); };
           if (desktop && self === top) {
-            new Function('require', preload)(name => {
-              if (name !== 'electron') throw new Error('Unexpected preload dependency');
-              return {
-                contextBridge: { exposeInMainWorld: (key, value) => { window[key] = value; } },
-                ipcRenderer: { send() {}, on() {} }
-              };
-            });
+            window.webkit = { messageHandlers: { werkschaftUpdate: { postMessage() {} } } };
+            document.addEventListener('DOMContentLoaded', () => {
+              const install = new Function('origin', 'channel', `${updateBridge}
+                installWerkschaftUpdateBridge(origin, channel, 'idle');`);
+              install(base, { canary: false, version: '1.0.0' });
+            }, { once: true });
           }
-        }, { desktop, preload });
+        }, { desktop, updateBridge, base });
         await context.route('**/*', route => {
           const url = new URL(route.request().url());
           if (url.origin !== base) return route.abort();
@@ -81,10 +79,7 @@ async function openRail(page) {
         }
         if (desktop) {
           assert.equal(await page.evaluate(() => Object.isFrozen(window.werkschaftDesktop.update)), true);
-          for (const suffix of ['/', '/?frame=1', '/s/livesession', '/s/livesession?frame=1']) {
-            assert.equal(destination(base + suffix, base, true), 'dashboard');
-            assert.equal(destination(base + suffix, base, false), 'dashboard');
-          }
+          assert.deepEqual(await page.evaluate(() => window.werkschaftDesktop.update.channel()), { canary: false, version: '1.0.0' });
         }
         await page.frameLocator(on).locator(editor).fill('Keep this draft on reselect');
         await page.frameLocator(on).locator('body').evaluate(() => { window.railNavigationMarker = 42; });
@@ -132,7 +127,7 @@ async function openRail(page) {
         assert.deepEqual(errors, []);
         assert.deepEqual(context.serviceWorkers(), []);
         await context.close();
-        console.log(`${desktop ? 'Desktop preload' : 'Browser'} ${theme}: Home placement/labels/navigation/drafts, repeated click/double-click/Enter no-op, other session selection and Escape passed.`);
+        console.log(`${desktop ? 'Tauri bridge' : 'Browser'} ${theme}: Home placement/labels/navigation/drafts, repeated click/double-click/Enter no-op, other session selection and Escape passed.`);
       }
     }
   } finally { await browser.close(); }

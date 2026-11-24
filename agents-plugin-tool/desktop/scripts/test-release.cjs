@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { PLATFORMS, releaseVersion, legacyName, writePlatformManifest, combine, verifyRelease } = require('./release.cjs');
+const { PLATFORMS, releaseVersion, writePlatformManifest, combine, verifyRelease } = require('./release.cjs');
 const { publicKey, verifySignature } = require('./release-signature.cjs');
 
 // Offline test vector from tauri-plugin-updater 2.14.1's updater.rs. Its
@@ -33,22 +33,20 @@ test('verifies the Tauri signature and binds the claimed version', () => {
     hash('test'), '2.0.1'), /verify/);
 });
 
-test('accepts exact stable and canary versions with legacy zips only on stable', () => {
-  for (const version of ['0.50.8-dev', 'v0.50.8', '0.050.8', '0.50.8-canary.01', '0.50.8+21', '0.50.8\n']) {
+test('requires exact stable and canary versions for release manifests', async () => {
+  assert.equal(releaseVersion('0.50.8').channel, 'stable');
+  assert.equal(releaseVersion('0.50.8-canary.0').channel, 'canary');
+  for (const version of ['0.50.8-dev', 'v0.50.8', '0.050.8', '0.50.8-canary.01', '0.50.8+21', '0.50.8\n', '9007199254740992.0.0', '0.1.0-canary.9007199254740992']) {
     assert.throws(() => releaseVersion(version), /exact version/);
   }
-  assert.equal(legacyName('darwin', '0.50.8'), 'Werkschaft-darwin-arm64.zip');
-  assert.equal(legacyName('win32', '0.50.8'), 'Werkschaft-win32-x64.zip');
-  assert.equal(legacyName('darwin', '0.50.8-canary.0'), undefined);
-  assert.equal(legacyName('win32', '0.50.8-canary.2'), undefined);
+  await assert.rejects(writePlatformManifest('', 'darwin', '0.50.8-dev', key), /exact version/);
 });
 
-test('combines and independently verifies the complete stable release with Electron checksums', async t => {
+test('combines and independently verifies the complete stable release with Tauri payloads', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tauri-release-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const output = path.join(root, 'combined');
   const version = '2.0.0';
-  const zip = 'Werkschaft-win32-x64.zip';
   for (const [platform, { arch, assets }] of Object.entries(PLATFORMS)) {
     const dir = path.join(root, `tauri-${platform}-${arch}`);
     fs.mkdirSync(dir);
@@ -56,7 +54,6 @@ test('combines and independently verifies the complete stable release with Elect
       fs.writeFileSync(path.join(dir, name), 'test');
       fs.writeFileSync(path.join(dir, `${name}.sig`), signature);
     }
-    fs.writeFileSync(path.join(dir, legacyName(platform, version)), `migration-${platform}`);
     await writePlatformManifest(dir, platform, version, key);
   }
   await combine(root, output, version, key);
@@ -68,14 +65,61 @@ test('combines and independently verifies the complete stable release with Elect
     url: 'https://github.com/kang-sw/werkschaft/releases/download/v2.0.0/Werkschaft-win32-x64-setup.exe',
     signature, sha256: createHash('sha256').update('test').digest('hex'), size: 4,
   });
-  const sums = fs.readFileSync(path.join(output, 'Werkschaft-desktop-SHA256SUMS'), 'utf8');
-  const winSHA = createHash('sha256').update('migration-win32').digest('hex');
-  assert.equal(sums.split('\n')[1], `${winSHA}  ${zip}`);
-  fs.appendFileSync(path.join(output, zip), 'changed');
-  await assert.rejects(verifyRelease(output, version, key), /feed or legacy checksums/);
-  fs.appendFileSync(path.join(root, 'tauri-win32-x64', zip), 'changed');
+  assert.equal(fs.readdirSync(output).length, 7);
+  const feedFile = path.join(output, 'werkschaft-tauri-update.json');
+  const originalFeed = fs.readFileSync(feedFile);
+  fs.writeFileSync(feedFile, '{}');
+  await assert.rejects(verifyRelease(output, version, key), /feed differs/);
+  fs.writeFileSync(feedFile, originalFeed);
+  const retired = path.join(output, 'Werkschaft-desktop-SHA256SUMS');
+  fs.writeFileSync(retired, '');
+  await assert.rejects(verifyRelease(output, version, key), /Unexpected release files/);
+  fs.unlinkSync(retired);
+  fs.appendFileSync(path.join(output, 'Werkschaft-win32-x64-setup.exe'), 'changed');
+  await assert.rejects(verifyRelease(output, version, key), /verify/);
+  fs.appendFileSync(path.join(root, 'tauri-win32-x64', 'Werkschaft-win32-x64-setup.exe'), 'changed');
   const invalid = path.join(root, 'invalid');
-  await assert.rejects(combine(root, invalid, version, key), /digests differ/);
+  await assert.rejects(combine(root, invalid, version, key), /verify/);
   assert.equal(fs.existsSync(invalid), false);
-  await assert.rejects(combine(root, invalid, '2.0.0-canary.1', key), /Unexpected release files/);
+});
+
+test('combines signed canary payloads with the same Tauri-only artifact contract', async t => {
+  const { generateKeyPairSync, sign } = require('node:crypto');
+  const { publicKey: pub, privateKey } = generateKeyPairSync('ed25519');
+  const key = { id: Buffer.alloc(8, 1), key: pub };
+  const version = '2.0.0-canary.1';
+  const raw = sign(null, createHash('blake2b512').update('test').digest(), privateKey);
+  const comment = 'timestamp:1\tfile:payload\tversion:' + version;
+  const signature = base64([
+    'untrusted comment: fixture',
+    Buffer.concat([Buffer.from('ED'), key.id, raw]).toString('base64'),
+    'trusted comment: ' + comment,
+    sign(null, Buffer.concat([raw, Buffer.from(comment)]), privateKey).toString('base64'),
+  ].join('\n'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tauri-canary-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const [platform, { arch, assets }] of Object.entries(PLATFORMS)) {
+    const dir = path.join(root, 'tauri-' + platform + '-' + arch);
+    fs.mkdirSync(dir);
+    for (const name of Object.values(assets)) {
+      fs.writeFileSync(path.join(dir, name), 'test');
+      fs.writeFileSync(path.join(dir, name + '.sig'), signature);
+    }
+    await writePlatformManifest(dir, platform, version, key);
+  }
+  const output = path.join(root, 'combined');
+  await combine(root, output, version, key);
+  await verifyRelease(output, version, key);
+  assert.equal(fs.readdirSync(output).length, 7);
+  const feed = JSON.parse(fs.readFileSync(path.join(output, 'werkschaft-tauri-update.json')));
+  assert.equal(feed.version, version);
+  assert.equal(Object.keys(feed.platforms).length, 3);
+  for (const entry of Object.values(feed.platforms)) {
+    assert(entry.url.includes('/v' + version + '/'));
+    assert.equal(entry.signature, signature);
+    assert.equal(entry.size, 4);
+  }
+  const platform = path.join(root, 'tauri-win32-x64', 'platform.json');
+  fs.writeFileSync(platform, '{}');
+  await assert.rejects(combine(root, path.join(root, 'invalid'), version, key), /digests differ/);
 });

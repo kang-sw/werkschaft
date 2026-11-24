@@ -6,9 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { assemble } = require('../scripts/assemble-daemon-input.cjs');
-const { selectDaemon } = require('../daemon-selection');
-const { copyPackage } = require('../daemon-stage');
+const { assemble } = require('./assemble-daemon-input.cjs');
+const { validateDaemonRoot } = require('./daemon-selection.cjs');
+const { copyPackage } = require('./daemon-stage.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const inventory = execFileSync(process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3'),
   [path.join(repo, 'agents-plugin-tool/scripts/generate-package-assets.py'), '--inventory']);
@@ -34,7 +34,7 @@ for (const product of ['wsflow', 'ws']) for (const platform of ['darwin', 'win32
     const out = path.join(appRoot, 'daemon');
     const options = { binary, out, platform, ...(product === 'ws' ? { package: product } : { metadata }) };
     const assembled = assemble(options);
-    const select = () => selectDaemon({ appRoot, userData, platform });
+    const select = () => validateDaemonRoot(out, 'bundled', platform);
     const selected = select();
     assert.equal(selected.source, 'bundled');
     assert.equal(selected.contract.plugin, product);
@@ -50,7 +50,7 @@ for (const product of ['wsflow', 'ws']) for (const platform of ['darwin', 'win32
       'claude-agents/effort-low.md', 'rsrc/manifest.json', 'skills/manifest.json']) {
       assert(fs.statSync(path.join(out, name)).isFile(), name);
     }
-    // Exercise build.cjs's copy gate too: no links anywhere, including hooks/bin.
+    // Exercise the packaging copy gate too: no links anywhere, including hooks/bin.
     const copy = copyPackage(out, path.join(base, 'copy'), 'bundled', platform);
     assert.equal(copy.contract.plugin, product);
     assert.throws(() => assemble(options), /EEXIST/);

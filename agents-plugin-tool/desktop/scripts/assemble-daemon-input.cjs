@@ -2,14 +2,14 @@
 /*
  * Assemble repo-local, platform-specific input for the offline desktop builder.
  * From the repo root (Node + Python 3 required; no downloads/builds/daemon runs):
- *   node agents-plugin-tool/desktop-electron/scripts/assemble-daemon-input.cjs \
+ *   node agents-plugin-tool/desktop/scripts/assemble-daemon-input.cjs \
  *     --binary /absolute/path/ws-mcp-darwin-arm64 --out /absolute/path/daemon-input \
  *     --platform darwin [--package wsflow|ws] [--metadata /path/to/metadata.json]
  * Windows runners: --platform win32 --binary C:\\artifacts\\ws-mcp-windows-amd64.exe
  *   --out C:\\artifacts\\daemon-input (use PowerShell's line continuation, not \\).
  * Then set WERKSCHAFT_DAEMON_INPUT to the printed absolute output path and run
- *   node agents-plugin-tool/desktop-electron/scripts/build.cjs
- * The output directory must not exist. Package defaults to wsflow (owner 1210).
+ *   node agents-plugin-tool/desktop/scripts/package.cjs
+ * The output directory must not exist. Package defaults to wsflow.
  * Metadata defaults to <binary>.metadata.json; obtain it with the built release
  * asset, or stamp at build time using
  * agents-plugin-tool/scripts/write-runtime-metadata.py with the SAME
@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { parseArgs } = require('node:util');
-const { validateDaemonRoot } = require('../daemon-selection');
+const { validateDaemonRoot } = require('./daemon-selection.cjs');
 const repo = path.resolve(__dirname, '../../..');
 
 function assemble({ binary, out, package: product = 'wsflow', metadata, platform = process.platform,

@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 713a9307b8b974c2
 sage-review-completeness-reviewed: 713a9307b8b974c2
+completed: 2026-11-25
 ---
 
 # Retire the Electron desktop shell: stop building and shipping, remove code
@@ -155,3 +156,33 @@ build route and the Electron source tree remains; this ticket removes both.
   `desktop/RELEASE.md`; the default `0.52.0-dev` is rejected) checking the
   `werkschaft-tauri-assets` artifact is the lead's step after merge, not the
   worker's.
+
+### Result (bdbcd72c4) - 2026-11-25
+
+- Removed the Electron source tree, build and publish jobs, dispatch input,
+  and automatic migration assets. Existing Electron installations use manual
+  Tauri reinstall. The Tauri workflow handles exact stable and canary tags.
+  Stable publication combines native and desktop assets, and canary
+  publication attaches the same signed Tauri assets to the native prerelease.
+- Moved the shared daemon assembly, staging, and validation scripts and their
+  contract tests into `desktop/scripts/`. Kept exact release version validation
+  at the platform manifest boundary in `a9aa2d654`. The rail Chromium fixture
+  now loads the actual Tauri updater bridge over a stub native transport.
+  Updated desktop docs, operating manuals, and the shipping dry-run and
+  canary verification steps.
+- Generated embedded packages and passed `go build ./...` and
+  `go vet ./internal/wsrsrc ./internal/wsdashboard`. With
+  `WS_TEST_EMBEDDED_PACKAGES=1` and the cached Playwright module and browser,
+  `go test -count=1 -v ./internal/wsrsrc ./internal/wsdashboard -run 'Contract|CIRelease|Rail'`
+  passed 246 tests and subtests. The release cases and
+  `TestRailNavigationBrowser` ran, including browser and Tauri bridge
+  navigation in both themes. The release cases passed again after the last
+  workflow edit.
+- `node --test --test-reporter=dot scripts/*.test.js scripts/test-*.cjs` from
+  `desktop/` passed 40 tests. `python3 scripts/test-evaluation-feed.py`
+  passed three tests, including CLI startup with a seven-file Tauri-only
+  stable fixture and HTTP and fault checks. Ruby Psych parsed both workflows.
+  Local documentation link targets and `git diff --check` passed.
+- Independent lite review of `b98630ccf..bdbcd72c4` found no actionable
+  findings. The lead owns the remote Tauri dry run after merge. Native app
+  launches were excluded from local verification.

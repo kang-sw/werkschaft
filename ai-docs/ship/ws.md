@@ -4,7 +4,7 @@ Ships the `ws` / `wsflow` plugin packages as a cut-point release: a
 `release/<version>` branch cut at the review frontier head carries the version
 bump, `main` fast-forwards to it, and a `v<version>` tag on it triggers the
 `ws-mcp release` GitHub Actions workflow (`.github/workflows/ws-mcp-release.yml`)
-to build cross-platform `ws-mcp` assets plus macOS/Windows desktop archives and
+to build cross-platform `ws-mcp` assets plus signed macOS/Windows Tauri packages and
 publish them to the same GitHub release. `develop` keeps taking merges for the whole release; the release branch is merged back
 into it afterwards, which keeps `main` an ancestor of `develop`.
 
@@ -162,55 +162,49 @@ fetched state.
   validates the plugin release contract, builds release assets
   (`agents-plugin-tool/scripts/build-release-assets.sh`), and runs the Windows
   executable smoke.
-- Desktop assets now come from that same CI run (owner (1224)=a), not a manual
-  package build. The macOS (`darwin-arm64`) and Windows (`win32-x64`) jobs
-  download the existing `ws-mcp-assets` workflow artifact, so the daemon binary
-  and adjacent metadata are exactly the native release build's bytes. Each
-  installs the lockfile-pinned desktop dependencies and pinned Electron zip,
-  assembles a `wsflow` daemon input with
-  `agents-plugin-tool/desktop-electron/scripts/assemble-daemon-input.cjs`, then
-  runs `desktop-electron/scripts/build.cjs` without launching Electron. The
-  packaged app version comes from validated binary metadata; for stable tags it
-  equals the plugin runtime contract's numeric core.
-- A final job waits for both desktop platforms, verifies each archive against
-  its platform checksum, and writes one combined
-  `Werkschaft-desktop-SHA256SUMS` (SHA256, two spaces, asset filename per line).
-  It uploads exactly `Werkschaft-darwin-arm64.zip`,
-  `Werkschaft-win32-x64.zip`, and that combined SUMS file to the native assets'
-  tag release. These are the updater's existing asset names. The same three
-  files are retained as the `werkschaft-desktop-assets` workflow artifact.
-- **Unsigned / unnotarized:** no signing secrets are configured. Gatekeeper may
-  block the downloaded macOS app until the user explicitly approves it;
-  Windows may show SmartScreen warnings. A green packaging job is not proof of
-  installed-app launch, updater swap, daemon lifetime, or platform acceptance.
-- The native release can appear before desktop packaging finishes. Treat the
-  release workflow as incomplete until **all** jobs, including
-  `desktop-release`, succeed; do not infer desktop availability from the native
-  assets alone.
+- The `Tauri desktop` jobs reuse `ws-mcp-assets` for macOS arm64 and Windows
+  x64. They assemble wsflow with
+  `agents-plugin-tool/desktop/scripts/assemble-daemon-input.cjs` and run
+  `desktop/scripts/package.cjs --release` without launching the app. The
+  validated daemon metadata sets the app version.
+- The combined `werkschaft-tauri-assets` artifact contains
+  `Werkschaft-darwin-arm64.app.tar.gz`, `Werkschaft-win32-x64-setup.exe`,
+  `Werkschaft-win32-x64.msi`, their three `.sig` files, and
+  `werkschaft-tauri-update.json` for both channels. The combine job verifies
+  hashes, sizes, and signatures before writing the updater feed. Stable tags
+  publish native and Tauri assets together. Exact `vX.Y.Z-canary.N` tags add
+  Tauri assets to the native prerelease. Other tags publish native assets.
+- Updater signing uses the configured Tauri keys. Apple Developer ID signing
+  and notarization and Windows Authenticode signing remain deferred.
+  Gatekeeper or SmartScreen may prompt during native acceptance.
+- Wait for all `Tauri desktop` package, combine and publish jobs. Existing
+  Electron users reinstall Tauri manually from the release page.
 
 ### Desktop dry run before shipping
 
 After the workflow changes are on `develop`, the lead can build both platforms
-without creating or uploading to any GitHub release:
+without publishing. From a checkout of that candidate, use its explicit
+numeric version (or that version with `-canary.N`):
 
 ```sh
-gh workflow run ws-mcp-release.yml --ref develop -f desktop_dry_run=true
+core=$(jq -r '.plugin_version' agents-plugin-wsflow/runtime.json)
+gh workflow run ws-mcp-release.yml --ref develop -f tauri_dry_run=true -f version="$core"
 gh run list --workflow ws-mcp-release.yml --branch develop --event workflow_dispatch
 gh run watch <run-id> --exit-status
-gh run download <run-id> -n werkschaft-desktop-assets -D desktop-dry-run
-(cd desktop-dry-run && shasum -a 256 -c Werkschaft-desktop-SHA256SUMS)
+gh run download <run-id> -n werkschaft-tauri-assets -D tauri-dry-run
+export WERKSCHAFT_UPDATER_PUBLIC_KEY="$(gh variable get WERKSCHAFT_EVAL_UPDATER_PUBLIC_KEY --repo kang-sw/werkschaft --json value --jq .value)"
+node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-dry-run --version "$core"
 ```
 
-Confirm the selected run's head SHA is the intended `develop` commit before
-using its result. The existing native build and Windows executable smoke also
-run; desktop packaging never launches the app. `desktop_dry_run=true` vetoes
-**both** native and desktop release-publishing steps, even if dispatched on a
-tag. Ordinary branch dispatches without this flag retain native-only behavior.
-The optional `version` input defaults to the bump-maintained development
-version; an override (`-f version=X.Y.Z-dev`) must match the plugin/runtime
-numeric core or desktop assembly fails closed. Keep this verification before
-the release tag push; it is not a substitute for Publish's native CI gate or
-real packaged-app acceptance.
+Confirm the selected run's head SHA is the intended `develop` commit. The
+native build and Windows executable smoke also run. `tauri_dry_run=true`
+vetoes native and Tauri publication even on a tag. The default development
+version is rejected. For a canary dry run, pass `version="$core-canary.1"`
+and verify with that same version. Configure the evaluation keys and follow
+[desktop release packaging](../../agents-plugin-tool/desktop/RELEASE.md)
+for the two-channel feed and native acceptance checks. Keep this verification
+before the tag push and follow the Publish CI gate and packaged-app
+acceptance procedures.
 
 ## Tag
 
@@ -283,8 +277,8 @@ independent of the release.
 ## Post-ship
 
 - **Automatically** watch the `ws-mcp release` workflow run for `v<version>` to
-  green (native build/publish, windows-smoke, both desktop builds, and combined
-  desktop asset verification/publish). This is an
+  green (native build/publish, windows-smoke, both Tauri desktop builds, and combined
+  Tauri asset verification/publish). This is an
   unprompted post-ship step: attach to the run without asking the user for
   approval, and report only the terminal result — green, or the failure with
   its failing job/step. Monitoring is read-only and pushes nothing, so it never
@@ -341,12 +335,21 @@ the authority for stable publication.
    same tag release with `--prerelease --latest=false`; native and desktop jobs
    upload to that one release.
 5. Watch the complete `ws-mcp release` run, including native build, Windows
-   smoke, both desktop builds, and `desktop-release`. Confirm the release is a
-   prerelease, is excluded from latest, and its tag and target SHA match the
-   approved values. Download the release assets and verify native `SHA256SUMS`
-   plus combined `Werkschaft-desktop-SHA256SUMS`. Confirm the latter contains
-   exactly `Werkschaft-darwin-arm64.zip` and `Werkschaft-win32-x64.zip`, each
-   with a passing SHA-256 check. A green native upload alone is incomplete.
+   smoke, and all `Tauri desktop` package, combine and publish jobs. Confirm
+   the release is a prerelease, is excluded from latest, and its tag and target
+   SHA match the approved values. Download the native assets and check
+   `shasum -a 256 -c SHA256SUMS` in their directory. Download the three actual
+   Tauri packages listed in Build, their `.sig` files and
+   `werkschaft-tauri-update.json` into a separate directory, `tauri-canary`.
+   Load the production public key and verify the complete payload and feed:
+
+   ```sh
+   export WERKSCHAFT_UPDATER_PUBLIC_KEY="$(gh variable get WERKSCHAFT_UPDATER_PUBLIC_KEY --repo kang-sw/werkschaft --json value --jq .value)"
+   node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-canary --version "<core>-canary.N"
+   ```
+
+   This checks exact file names, hashes, byte counts, signatures and canonical
+   feed URLs for the approved version. A green native upload alone is incomplete.
 6. On a test machine, use the explicit `Canary 빌드로 업데이트` action to install
    the canary, restart, and confirm the desktop reports the suffixed version and
    connects to its bundled daemon. Exercise `Back to stable`, confirm the
