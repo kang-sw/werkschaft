@@ -58,6 +58,9 @@ type Record struct {
 	// and an older writer keeps it as an unknown member.
 	CreatedUnixNano int64  `json:"created_unix_nano,omitempty"`
 	ClosedAt        string `json:"closed_at,omitempty"`
+	// DeadBindingClosure records the permanent refusal only when the runner
+	// automatically closes this binding. Legacy closes have no such evidence.
+	DeadBindingClosure *deadBindingClosure `json:"dead_binding_closure,omitempty"`
 
 	// HandedOffAt is when a lead session was handed to a terminal harness
 	// (conv.release): the daemon serves it no more, as it serves no closed

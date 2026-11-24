@@ -31,30 +31,47 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 		c.durableTurnError("read claimed steering", err)
 		return
 	}
+	if p == nil && len(pending) == 0 {
+		return
+	}
 	c.admitInput(func() {
 		c.mu.Lock()
-		held, err := wsinbox.Held(c.inbox)
-		deferCron := c.rec.DurableTurn != nil && c.rec.DurableTurn.Operator &&
-			(slices.ContainsFunc(pending, isCronInput) || slices.ContainsFunc(held, isCronInput)) && c.separatesPlanCron()
-		skipSteer := func(rec wsinbox.Record) bool {
-			return !rec.Entry.Steer || rec.Entry.Command != nil || (deferCron && isCronInput(rec))
+		var held []wsinbox.Record
+		if p != nil {
+			held, err = wsinbox.Held(c.inbox)
 		}
 		pendingCount := len(pending)
-		pending = slices.DeleteFunc(pending, skipSteer)
 		var claimed []wsinbox.Record
 		unclaimed := len(held)
-		if err == nil {
-			claimed, err = wsinbox.ClaimInputs(c.inbox, slices.DeleteFunc(held, skipSteer))
-			c.held = unclaimed - len(claimed)
+		skipSteer := func(rec wsinbox.Record) bool {
+			return !rec.Entry.Steer || rec.Entry.Command != nil
 		}
+		if err == nil {
+			pending = slices.DeleteFunc(pending, skipSteer)
+			held = slices.DeleteFunc(held, skipSteer)
+			c.withCronClaimConsent(pending, held, func(disposition wsinbox.CronClaimDisposition) {
+				if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
+					return
+				}
+				claimed, err = wsinbox.ClaimInputs(c.inbox, held)
+			})
+			if p != nil {
+				c.held = unclaimed - len(claimed)
+			}
+		}
+		claimedCount := len(claimed)
+		// Leave refusals staged for the idle path to settle. Only admitted
+		// text can enter Werk's journal or the runner's steer fallback.
+		pending = slices.DeleteFunc(pending, refusedCron)
+		claimed = slices.DeleteFunc(claimed, refusedCron)
 		// Send coverage is a prefix. A manually promoted message can
 		// overtake a held follow-up, so only advance when no input is left.
-		covered := c.turnMark
-		if c.held == 0 && pendingCount == len(pending) && len(c.rec.Queued) == 0 {
+		covered := c.rec.TurnMark
+		if c.held == 0 && pendingCount == len(pending) && claimedCount == len(claimed) && len(c.rec.Queued) == 0 {
 			covered = c.sends
 		}
 		c.mu.Unlock()
-		c.inboxMutated(len(claimed))
+		c.inboxMutated(claimedCount)
 		if err != nil {
 			c.durableTurnError("claim steering", err)
 			return
@@ -101,7 +118,7 @@ func (c *conv) queueDurableSteer(p durableSteerProcess, steer durableSteer, clai
 	if err := c.ackInboxClaims(); err != nil {
 		c.durableTurnError("acknowledge steering", err)
 	}
-	if steer.Text != "" {
+	if steer.Text != "" && p != nil {
 		if err := p.submitSteer(c.rec.DurableTurn.ID, steer); err != nil {
 			c.durableTurnError("send steering", err)
 		} else {

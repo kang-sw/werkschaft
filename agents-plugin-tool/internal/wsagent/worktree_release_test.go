@@ -19,6 +19,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 // releaseTell is one refusal notice the runner sent a message's sender.
@@ -127,7 +128,7 @@ func noTurnSent(t *testing.T, p *fakeProc, what string) {
 // turn, live process or not; a child bound after the release launches
 // normally.
 func TestCheckoutReleaseEndsEarlierBindings(t *testing.T) {
-	h, clk, wt, tells := releaseHarness(t)
+	h, clk, wt, _ := releaseHarness(t)
 	lead := h.leadCaller()
 	spawn := func(prompt string) (string, *fakeProc) {
 		return h.agentRunning(lead, AgentSpawnRequest{Prompt: prompt, Tier: "medium", Authority: "workdir-write", Worktree: wt})
@@ -185,41 +186,16 @@ func TestCheckoutReleaseEndsEarlierBindings(t *testing.T) {
 	if failingProc.isClosed() || runningProc.isClosed() {
 		t.Fatal("a release must never stop a process, even when its interrupt failed")
 	}
-	if !h.state(failing).Process || h.state(failing).Status != StatusRunning {
-		t.Fatalf("the failed-interrupt child keeps its process and turn: %+v", h.state(failing))
-	}
-
-	// The interrupted turn ends; the process stays, awake and idle, and
-	// keeps the worktree's binding live.
-	runningProc.reply("interrupted")
-	eventually(t, "interrupted turn settled", func() bool { return h.state(running).Status == StatusIdle })
-	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(running)]; !c.Live {
-		t.Fatalf("an awake idle process is live: %+v", c)
-	}
-
-	// Mail to the live child and to the asleep one is refused, naming the
-	// released worktree, and starts nothing.
-	starts := h.backend.startCount()
-	for _, id := range []string{running, sleeper} {
-		if _, err := h.runner.Deliver(id, Delivery{From: "sender-reply", Text: "keep going"}); err != nil {
-			t.Fatalf("Deliver(%s): %v", id, err)
+	for _, id := range []string{failing, running, sleeper} {
+		if st := h.state(id); st.Status != StatusClosed || st.Process || outcomes[AgentAddress(id)].State != AgentClosed {
+			t.Fatalf("released child = %+v, notice = %+v", st, outcomes[AgentAddress(id)])
+		}
+		if _, err := h.runner.Deliver(id, Delivery{Text: "keep going"}); err != errClosed {
+			t.Fatalf("Deliver(%s) to closed child = %v", id, err)
 		}
 	}
-	noTurnSent(t, runningProc, "mail to a child released while awake")
-	if n := h.backend.startCount(); n != starts {
-		t.Fatalf("mail to released children started %d processes", n-starts)
-	}
-	got := tells.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("refusal notices = %+v, want one per mail", got)
-	}
-	for _, tell := range got {
-		if !tell.released || tell.from != "sender-reply" || canonicalWorktreePath(tell.checkout) != canonicalWorktreePath(wt) || !strings.Contains(tell.reason, "released") {
-			t.Fatalf("notice must reach the sender through CheckoutReleased naming the worktree: %+v", tell)
-		}
-	}
-	if st := h.state(sleeper); st.Process || !strings.Contains(st.Error, "released") {
-		t.Fatalf("the asleep child stays asleep with the refusal: %+v", st)
+	if c := after[AgentAddress(running)]; c.State != AgentClosed || !c.Live {
+		t.Fatalf("closed running process keeps the checkout occupied: %+v", c)
 	}
 
 	// A child bound after the release (in its own second, still counted as
@@ -248,7 +224,7 @@ func TestCheckoutReleaseBackgroundWorkKeepsBindingLive(t *testing.T) {
 	h, clk, wt, _ := releaseHarness(t)
 	lead := h.leadCaller()
 	child, proc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "run build", Tier: "small", Authority: "workdir-write", Worktree: wt})
-	one, zero := 1, 0
+	one := 1
 	proc.events <- Event{BackgroundTasks: &one}
 	proc.reply("started background build")
 	eventually(t, "background state", func() bool {
@@ -263,87 +239,84 @@ func TestCheckoutReleaseBackgroundWorkKeepsBindingLive(t *testing.T) {
 		t.Fatal("a release must never stop a process")
 	}
 
-	proc.events <- Event{BackgroundTasks: &zero}
-	eventually(t, "background work ended", func() bool { return h.state(child).BackgroundTasks == 0 })
-	h.asleep(child)
-	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(child)]; !c.BoundBeforeRelease || c.Live {
-		t.Fatalf("an asleep pre-release binding is not live: %+v", c)
+	if st := h.state(child); st.Status != StatusClosed {
+		t.Fatalf("background process has a closed row: %+v", st)
 	}
+	_ = proc.Close()
+	eventually(t, "checkout is free after physical process exit", func() bool {
+		return len(h.runner.ActiveChildrenInWorktree(wt)) == 0
+	})
 }
 
-// TestCheckoutReleaseRefusesMailboxMail: mail claimed from the mailbox of a
-// child bound before a release is held, never steered into a live turn nor
-// started as a new one, and each sender hears once, through the
-// checkout-release notice naming the worktree. That holds for a child marked
-// in memory while its process lives and for an asleep child after a daemon
-// restart, which learns the release only when its wake is refused.
+// A release tells each held sender once. A prior wake-refusal notice owns
+// its message even when another message from the same sender remains queued.
 func TestCheckoutReleaseRefusesMailboxMail(t *testing.T) {
 	h, clk, wt, tells := releaseHarness(t)
 	mail := newFakeMail()
 	h.config.Mail = mail
 	h.runner.Close()
 	h.start()
-	lead := h.leadCaller()
-	spawn := func(prompt string) (string, *fakeProc) {
-		return h.agentRunning(lead, AgentSpawnRequest{Prompt: prompt, Tier: "medium", Authority: "workdir-write", Worktree: wt})
-	}
-	live, liveProc := spawn("still running")
-	sleeper, sleeperProc := spawn("finishes early")
-	sleeperProc.reply("done")
-	eventually(t, "sleeper settled", func() bool { return h.state(sleeper).Status == StatusIdle })
-	h.asleep(sleeper)
-	liveKey, sleeperKey := h.keyOf(live), h.keyOf(sleeper)
-	eventually(t, "mailboxes watched", func() bool { return mail.watched(liveKey) && mail.watched(sleeperKey) })
+	child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "still running", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+	key := h.keyOf(child)
+	eventually(t, "mailbox watched", func() bool { return mail.watched(key) })
+	proc.failSteers(func(string) bool { return true })
+	c := h.runner.conv(child)
+	mail.deliverFrom(key, "peerreplyid", "first")
+	eventually(t, "first message held", func() bool { return len(h.record(child).Mail) == 1 })
+	c.do(func() { c.tellHeldSenders("", "temporary refusal") })
+	mail.deliverFrom(key, "peerreplyid", "second")
+	mail.deliverFrom(key, "peerreplyid", "third")
+	eventually(t, "three messages held", func() bool { return len(h.record(child).Mail) == 3 })
 
-	checkTold := func(n int, from string) {
-		t.Helper()
-		eventually(t, "sender told", func() bool { return len(tells.snapshot()) == n })
-		tell := tells.snapshot()[n-1]
-		if !tell.released || tell.from != from || canonicalWorktreePath(tell.checkout) != canonicalWorktreePath(wt) || !strings.Contains(tell.reason, "released") {
-			t.Fatalf("notice must reach the sender through CheckoutReleased naming the worktree: %+v", tell)
-		}
+	at := releaseAfterBindings(t, clk, wt)
+	h.runner.CheckoutReleased(wt, at, false)
+	h.runner.CheckoutReleased(wt, at, false)
+	if got := tells.snapshot(); len(got) != 3 || got[0].released || !got[1].released || !got[2].released {
+		t.Fatalf("notices = %+v, want one prior notice and two distinct release notices", got)
 	}
-
-	// (a) A live child marked released by the release notice.
-	h.runner.CheckoutReleased(wt, releaseAfterBindings(t, clk, wt), false)
-	mail.deliverFrom(liveKey, "peerreplyid", "keep going")
-	checkTold(1, "peerreplyid")
-	if got, _ := liveProc.steered(); len(got) != 0 {
-		t.Fatalf("mail was steered into a released child's turn: %q", got)
+	if rec := h.record(child); rec.ClosedAt == "" || len(rec.Mail) != 0 || rec.TurnOpen {
+		t.Fatalf("released child kept active work: %+v", rec)
 	}
-	liveProc.reply("turn over")
-	eventually(t, "live child settled", func() bool { return h.state(live).Status == StatusIdle })
-	noTurnSent(t, liveProc, "held mail after the released child's turn")
-	if liveProc.isClosed() {
-		t.Fatal("a release must never stop a process")
-	}
-
-	// (b) An asleep child after a restart: no notice reached this daemon;
-	// loading the conversation read the marker.
-	h.runner.Close()
-	h.start()
-	eventually(t, "mailbox watched after restart", func() bool { return mail.watched(sleeperKey) })
-	starts := h.backend.startCount()
-	mail.deliverFrom(sleeperKey, "otherreplyid", "wake up")
-	checkTold(2, "otherreplyid")
-	if n := h.backend.startCount(); n != starts {
-		t.Fatalf("mail to a released asleep child started %d processes", n-starts)
-	}
-	if st := h.state(sleeper); st.Process || !strings.Contains(st.Error, "released") {
-		t.Fatalf("the asleep child stays asleep with the refusal: %+v", st)
-	}
-	if got := tells.snapshot(); len(got) != 2 {
-		t.Fatalf("each sender is told once: %+v", got)
+	if proc.isClosed() {
+		t.Fatal("release stopped the process")
 	}
 }
 
-// TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart: a daemon that
-// starts after the release has no in-memory notice; the wake of a child
-// bound by root (agent.spawn worktree) or by working directory (cwd inside
-// the worktree) reads the release marker and is refused, naming the
-// worktree, with no process started.
-func TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart(t *testing.T) {
+func TestCheckoutReleaseDirectDeliveryNoticesSkipCancelledInboxEntry(t *testing.T) {
 	h, clk, wt, tells := releaseHarness(t)
+	child, _ := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "running", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+	for _, sender := range []string{"first", "cancelled", "last"} {
+		if _, err := h.runner.Deliver(child, Delivery{From: sender, Text: sender}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := h.runner.conv(child)
+	entries, err := wsinbox.Held(c.inbox)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("held = %+v, %v", entries, err)
+	}
+	cancelled := false
+	for _, entry := range entries {
+		if len(entry.Entry.Parts) == 1 && entry.Entry.Parts[0] == "cancelled" {
+			if _, err := wsinbox.Cancel(c.inbox, entry.Name); err != nil {
+				t.Fatal(err)
+			}
+			cancelled = true
+		}
+	}
+	if !cancelled {
+		t.Fatal("pending cancellation was not found")
+	}
+	h.runner.CheckoutReleased(wt, releaseAfterBindings(t, clk, wt), false)
+	if got := tells.snapshot(); len(got) != 2 || got[0].from == "cancelled" || got[1].from == "cancelled" {
+		t.Fatalf("notices = %+v, want only the two queued messages", got)
+	}
+}
+
+// Startup recognizes release by either root or CWD, preserving a sibling
+// whose binding still admits a wake.
+func TestCheckoutReleaseClosesByRootOrCwdAtStartup(t *testing.T) {
+	h, clk, wt, _ := releaseHarness(t)
 	sub := filepath.Join(wt, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -351,42 +324,29 @@ func TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart(t *testing.T) {
 	lead := h.leadCaller()
 	byRoot, rootProc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "root", Tier: "medium", Authority: "workdir-write", Worktree: wt})
 	byCwd, cwdProc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "cwd", Tier: "medium", Authority: "workdir-write", Cwd: sub})
-	for id, p := range map[string]*fakeProc{byRoot: rootProc, byCwd: cwdProc} {
-		p.reply("done")
+	wakeable, wakeableProc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "unreleased", Tier: "medium", Authority: "workdir-write"})
+	for id, p := range map[string]*fakeProc{byRoot: rootProc, byCwd: cwdProc, wakeable: wakeableProc} {
+		p.reply("retained reply")
 		eventually(t, id+" settled", func() bool { return h.state(id).Status == StatusIdle })
 		h.asleep(id)
 	}
 	releaseAfterBindings(t, clk, wt)
-
 	h.runner.Close()
 	h.start()
 	starts := h.backend.startCount()
 	for _, id := range []string{byRoot, byCwd} {
-		if _, err := h.runner.Deliver(id, Delivery{From: "sender-" + id, Text: "wake up"}); err != nil {
-			t.Fatalf("Deliver(%s): %v", id, err)
+		if st := h.state(id); st.Status != StatusClosed || st.Process {
+			t.Fatalf("released child = %+v", st)
+		}
+		if rec := h.record(id); rec.ClosedAt == "" || rec.LastTurn == nil || rec.LastTurn.Result.Message != "retained reply" {
+			t.Fatalf("closed history = %+v", rec)
 		}
 	}
-	eventually(t, "both wakes refused", func() bool {
-		return strings.Contains(h.state(byRoot).Error, "released") && strings.Contains(h.state(byCwd).Error, "released")
-	})
-	if n := h.backend.startCount(); n != starts {
-		t.Fatalf("refused wakes started %d processes", n-starts)
+	if _, err := h.runner.Deliver(wakeable, Delivery{Text: "wake up"}); err != nil {
+		t.Fatal(err)
 	}
-	got := tells.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("refusal notices = %+v, want two", got)
-	}
-	for _, tell := range got {
-		if !tell.released || tell.from != "sender-"+tell.id || canonicalWorktreePath(tell.checkout) != canonicalWorktreePath(wt) {
-			t.Fatalf("notice must name the released worktree to its sender: %+v", tell)
-		}
-	}
-	// Neither counts as a current binding, and neither is live: an
-	// acquisition may reuse the worktree.
-	for addr, c := range boundByAddress(h.runner.ActiveChildrenInWorktree(wt)) {
-		if !c.BoundBeforeRelease || c.Live {
-			t.Fatalf("%s after a refused wake: %+v, want pre-release and not live", addr, c)
-		}
+	if got := h.backend.waitProc(t, starts).nextSent(t); !strings.Contains(got, "wake up") {
+		t.Fatalf("wakeable child's prompt = %q", got)
 	}
 }
 
@@ -413,7 +373,7 @@ func TestCheckoutReleaseKeepsLeadBindings(t *testing.T) {
 // the release's own second predates it (nanosecond precision), so its wake
 // is refused; one made at the release instant stays current.
 func TestCheckoutReleaseEndsSameSecondEarlierBinding(t *testing.T) {
-	h, clk, wt, tells := releaseHarness(t)
+	h, clk, wt, _ := releaseHarness(t)
 	lead := h.leadCaller()
 	second := time.Date(2026, 11, 22, 10, 0, 5, 0, time.UTC)
 	setClock(clk, second.Add(100*time.Millisecond))
@@ -431,18 +391,8 @@ func TestCheckoutReleaseEndsSameSecondEarlierBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.runner.CheckoutReleased(wt, release, false)
-	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(early)]; !c.BoundBeforeRelease {
-		t.Fatalf("a binding earlier in the release's second predates it: %+v", c)
-	}
-	starts := h.backend.startCount()
-	if _, err := h.runner.Deliver(early, Delivery{From: "sender-reply", Text: "wake"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := tells.snapshot(); len(got) != 1 || !got[0].released {
-		t.Fatalf("the same-second binding's wake must be refused as released: %+v", got)
-	}
-	if n := h.backend.startCount(); n != starts {
-		t.Fatalf("a refused wake started %d processes", n-starts)
+	if st := h.state(early); st.Status != StatusClosed {
+		t.Fatalf("the earlier binding must close: %+v", st)
 	}
 
 	// A binding at the release instant itself is not before it.
@@ -581,8 +531,8 @@ func TestCheckoutReleaseTokenRouteCancelsOnlyForRootLead(t *testing.T) {
 	if n := procInterrupts(victimProc); n != 0 {
 		t.Fatalf("a worker token interrupted %d turns", n)
 	}
-	if c := h.runner.conv(victim); c.released() == "" {
-		t.Fatal("the notice still ends the earlier binding")
+	if st := h.state(victim); st.Status != StatusClosed {
+		t.Fatal("the notice still closes the earlier binding")
 	}
 	victimProc.reply("done")
 	workerProc.reply("done")
@@ -597,21 +547,10 @@ func TestCheckoutReleaseSendsNoContinuationToReleasedBinding(t *testing.T) {
 	proc.reply("done")
 	eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
 	h.runner.CheckoutReleased(wt, releaseAfterBindings(t, clk, wt), false)
-	c := h.runner.conv(child)
-	c.do(func() {
-		// A continuation staged before the release: the compaction resume.
-		c.compactResume, c.compactNote = true, "carry this forward"
-		c.kick()
-	})
-	noTurnSent(t, proc, "compaction continuation to a released binding")
-	c.do(func() {
-		c.compactResume, c.compactNote = false, ""
-		// A standalone compaction advisory waiting for the idle process.
-		c.compactNudge = compactionNudge{text: "compact soon", level: 1, standalone: true}
-		c.compactUsageFresh = true
-		c.kickInput()
-	})
-	noTurnSent(t, proc, "compaction nudge to a released binding")
+	if st := h.state(child); st.Status != StatusClosed {
+		t.Fatalf("released row = %+v", st)
+	}
+	noTurnSent(t, proc, "a continuation or nudge to a released binding")
 	if proc.isClosed() {
 		t.Fatal("a release never stops a process")
 	}
@@ -642,19 +581,20 @@ func TestCheckoutReleaseTellsMailClaimedBeforeHolderScan(t *testing.T) {
 	release := func() { opened.Do(func() { close(gate) }) }
 	h.config.Holders = holders
 	h.runner.Close()
+	mail.deliverFrom(key, "early-sender", "wake up")
 	h.start()
 	t.Cleanup(release) // runs before the runner's Close cleanup
 	wait(t, "initial holder scan", entered)
-	eventually(t, "mailbox watched", func() bool { return mail.watched(key) })
 	starts := h.backend.startCount()
-	mail.deliverFrom(key, "early-sender", "wake up")
 	eventually(t, "sender told before the scan", func() bool { return len(tells.snapshot()) == 1 })
 	tell := tells.snapshot()[0]
 	if !tell.released || tell.from != "early-sender" || canonicalWorktreePath(tell.checkout) != canonicalWorktreePath(wt) {
 		t.Fatalf("the refusal must reach the sender naming the worktree: %+v", tell)
 	}
 	release()
-	eventually(t, "deferred kick refused", func() bool { return strings.Contains(h.state(sleeper).Error, "released") })
+	if st := h.state(sleeper); st.Status != StatusClosed {
+		t.Fatalf("released row = %+v", st)
+	}
 	time.Sleep(100 * time.Millisecond)
 	if got := tells.snapshot(); len(got) != 1 {
 		t.Fatalf("the sender is told once: %+v", got)
@@ -670,7 +610,7 @@ func TestCheckoutReleaseTellsMailClaimedBeforeHolderScan(t *testing.T) {
 // is refused after a restart. The refusal is served from memory: the marker
 // read when the conversation loaded, even once the file is gone.
 func TestCheckoutReleaseReachesSubmoduleCwdAndServesFromMemory(t *testing.T) {
-	h, clk, wt, tells := releaseHarness(t)
+	h, clk, wt, _ := releaseHarness(t)
 	module := filepath.Join(wt, "vendor", "mod")
 	if err := os.MkdirAll(filepath.Join(module, "src"), 0o755); err != nil {
 		t.Fatal(err)
@@ -698,12 +638,11 @@ func TestCheckoutReleaseReachesSubmoduleCwdAndServesFromMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	starts := h.backend.startCount()
-	if _, err := h.runner.Deliver(child, Delivery{From: "sender", Text: "wake"}); err != nil {
-		t.Fatal(err)
+	if _, err := h.runner.Deliver(child, Delivery{Text: "wake"}); err != errClosed {
+		t.Fatalf("released child accepted wake: %v", err)
 	}
-	got := tells.snapshot()
-	if len(got) != 1 || !got[0].released || canonicalWorktreePath(got[0].checkout) != canonicalWorktreePath(wt) {
-		t.Fatalf("the submodule child's wake must be refused naming the worktree: %+v", got)
+	if st := h.state(child); st.Status != StatusClosed {
+		t.Fatalf("released row = %+v", st)
 	}
 	if n := h.backend.startCount(); n != starts {
 		t.Fatalf("a refused wake started %d processes", n-starts)
@@ -821,8 +760,8 @@ func TestCheckoutReleaseTokenRouteRefusesForgedNotice(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("the true notice = %d %s", code, out)
 	}
-	if c := h.runner.conv(victim); c.released() == "" {
-		t.Fatal("the true notice ends the earlier binding")
+	if st := h.state(victim); st.Status != StatusClosed {
+		t.Fatal("the true notice closes the earlier binding")
 	}
 	victimProc.reply("done")
 	workerProc.reply("done")
@@ -913,13 +852,21 @@ func TestCheckoutReleaseNoticeDuringAStartRefusesItsTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.awaitEntered(t)
-	h.runner.CheckoutReleased(wt, releaseAfterBindings(t, clk, wt), false)
+	at := releaseAfterBindings(t, clk, wt)
+	released := make(chan struct{})
+	go func() {
+		h.runner.CheckoutReleased(wt, at, false)
+		close(released)
+	}()
+	c := h.runner.conv(child)
+	eventually(t, "release reaches the starting child", func() bool { return c.released() != "" })
 	g.release()
+	wait(t, "release closes the starting child", released)
 	next := h.backend.waitProc(t, starts)
 	noTurnSent(t, next, "a turn whose release landed during its start")
 	eventually(t, "refusal recorded", func() bool { return strings.Contains(h.state(child).Error, "released") })
-	if rec := h.record(child); len(rec.Queued) == 0 {
-		t.Fatalf("the refused turn's input must stay queued: %+v", rec.Queued)
+	if rec := h.record(child); rec.ClosedAt == "" || len(rec.Queued) != 0 {
+		t.Fatalf("the refused turn must close and discard queued input: %+v", rec)
 	}
 	if next.isClosed() {
 		t.Fatal("a release never stops a process")
@@ -953,7 +900,7 @@ func TestCheckoutReleaseCrossingAutomaticCompactionInput(t *testing.T) {
 			child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write", Worktree: wt})
 			proc.reply("done")
 			eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
-			at := releaseAfterBindings(t, clk, wt)
+			releaseAfterBindings(t, clk, wt)
 			c := h.runner.conv(child)
 			var sent bool
 			var req *compactRequest
@@ -963,7 +910,7 @@ func TestCheckoutReleaseCrossingAutomaticCompactionInput(t *testing.T) {
 					t.Error("the snapshot must pass: the release has not landed yet")
 					return
 				}
-				h.runner.CheckoutReleased(wt, at, false)
+				c.noteReleased(canonicalWorktreePath(wt))
 				sent = tc.send(c)
 				if c.compacting || c.compactCommand {
 					t.Errorf("a refused compaction input started a compaction: compacting=%v command=%v", c.compacting, c.compactCommand)
@@ -998,7 +945,7 @@ func TestCheckoutReleaseCrossingAutomaticCompactionInput(t *testing.T) {
 // of a released worktree, such a child is bound to that worktree by the rule
 // occupancy uses, so its wake after a restart is refused naming it.
 func TestCheckoutReleaseReachesALegacyRecordWithoutCwd(t *testing.T) {
-	h, clk, wt, tells := releaseHarness(t)
+	h, clk, wt, _ := releaseHarness(t)
 	nested := filepath.Join(wt, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
@@ -1021,11 +968,11 @@ func TestCheckoutReleaseReachesALegacyRecordWithoutCwd(t *testing.T) {
 	releaseAfterBindings(t, clk, wt)
 	h.start()
 	starts := h.backend.startCount()
-	if _, err := h.runner.Deliver(child, Delivery{From: "sender", Text: "wake"}); err != nil {
-		t.Fatal(err)
+	if _, err := h.runner.Deliver(child, Delivery{Text: "wake"}); err != errClosed {
+		t.Fatalf("released child accepted wake: %v", err)
 	}
-	if got := tells.snapshot(); len(got) != 1 || !got[0].released || canonicalWorktreePath(got[0].checkout) != canonicalWorktreePath(wt) {
-		t.Fatalf("the legacy child's wake must be refused naming the worktree: %+v", got)
+	if st := h.state(child); st.Status != StatusClosed {
+		t.Fatalf("released row = %+v", st)
 	}
 	if n := h.backend.startCount(); n != starts {
 		t.Fatalf("a refused wake started %d processes", n-starts)

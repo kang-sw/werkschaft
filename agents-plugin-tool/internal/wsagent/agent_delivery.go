@@ -37,12 +37,18 @@ type Delivery struct {
 	Text string
 }
 
+type pendingDelivery struct {
+	name   string
+	sender string
+}
+
 // Deliver hands d to conversation id as its next input, waking it when it
 // sleeps; the width cap does not apply. When it sleeps and its admission
 // is refused now, the message still queues, it stays asleep, and the
 // sender gets one notice (Options.WakeRefused).
 func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 	var refusal error
+	var dead *admissionRefusal
 	checkout := ""
 	if c := r.conv(id); c != nil {
 		c.mu.Lock()
@@ -59,6 +65,7 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			checkout = c.releasedLocked()
 		}
 		c.mu.Unlock()
+		dead = r.deadBindingRefusal(rec, checkout)
 		switch {
 		case checkout != "":
 			// Its checkout was released after it was bound: no launch, wake
@@ -75,12 +82,22 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 			}
 		}
 	}
-	st, err := r.send(id, d.Text, false)
+	sender := d.From
+	if refusal != nil {
+		// The notice below owns this send, even if close wins immediately
+		// after enqueue. A later close only tells senders still owed notice.
+		sender = ""
+	}
+	st, err := r.sendFrom(id, d.Text, false, sender)
 	if err != nil {
 		return st, err
 	}
 	if refusal != nil {
-		r.tellRefused(d.From, id, checkout, refusal.Error())
+		if dead != nil {
+			r.tellUndeliverable(d.From, id, dead)
+		} else {
+			r.tellRefused(d.From, id, checkout, refusal.Error())
+		}
 	}
 	return st, nil
 }
@@ -223,117 +240,202 @@ func (r *Runner) expire(id string) bool {
 var _ wsdashboard.AgentForgetter = (*Runner)(nil)
 
 // ForgetClosed drops a closed or handed-off conversation and any private
-// record. The caller owns removal of the session directory.
-func (r *Runner) ForgetClosed(id string) {
-	if rec, ok := r.forgetClosed(id); ok {
+// record. It returns whether the caller may remove the session directory.
+func (r *Runner) ForgetClosed(id string) bool {
+	rec, purge := r.forgetClosed(id)
+	if purge && rec.ReplyID != "" {
 		r.deleteDurableRecord(rec)
 	}
+	return purge
 }
 
 func (r *Runner) forgetClosed(id string) (Record, bool) {
-	rec, ok := r.dropClosed(id)
+	rec, purge := r.dropClosed(id)
 	// Gone from the runner for good (not merely closed, and not open under
 	// the same id): its scheduled prompts go with it.
-	if !r.CronKnown(id) {
+	if purge && !r.CronKnown(id) {
 		r.cronGone(id)
 	}
-	return rec, ok
+	return rec, purge
 }
 
 func (r *Runner) dropClosed(id string) (Record, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.closed[id]
+	if ok && r.hasLiveDescendantsLocked(safeStopParent(id, rec.Lead), nil) {
+		return Record{}, false
+	}
+	// An ended dashboard row can become visible before its conversation
+	// moves from convs to closed. Check both parent kinds without taking a
+	// conversation lock under the registry lock.
+	if r.convs[id] != nil &&
+		(r.hasLiveDescendantsLocked(safeStopParent(id, false), nil) ||
+			r.hasLiveDescendantsLocked(safeStopParent(id, true), nil)) {
+		return Record{}, false
+	}
 	delete(r.closed, id)
 	delete(r.closedRows, id)
-	if ok && rec.Parent != nil && r.childrenIndex != nil {
-		delete(r.childrenIndex[*rec.Parent], id)
+	delete(r.deadRefusals, id)
+	if ok {
+		r.unindexChildLocked(rec)
+	}
+	return rec, true
+}
+
+func (r *Runner) unindexChildLocked(rec Record) {
+	if rec.Parent != nil {
+		delete(r.childrenIndex[*rec.Parent], rec.ReplyID)
 		if len(r.childrenIndex[*rec.Parent]) == 0 {
 			delete(r.childrenIndex, *rec.Parent)
 		}
 	}
-	return rec, ok
+}
+
+// hasLiveDescendantsLocked follows retained closed ancestry under r.mu.
+// Either an open descendant or a reserved spawn still needs this record.
+func (r *Runner) hasLiveDescendantsLocked(root ParentRef, startupOpen map[string]Record) bool {
+	queue := []ParentRef{root}
+	visited := map[string]bool{root.ReplyID: true}
+	for i := 0; i < len(queue); i++ {
+		parent := queue[i]
+		if r.pendingSpawns[parent] > 0 {
+			return true
+		}
+		for id := range r.childrenIndex[parent] {
+			if visited[id] {
+				continue
+			}
+			visited[id] = true
+			if _, pending := startupOpen[id]; pending || r.convs[id] != nil {
+				return true
+			}
+			if child, ok := r.closed[id]; ok {
+				queue = append(queue, safeStopParent(id, child.Lead))
+			}
+		}
+	}
+	return false
 }
 
 // forget drops closed conversation id from the runner and deletes its
 // session directory.
 func (r *Runner) forget(id string) {
-	rec, ok := r.forgetClosed(id)
-	if !ok {
+	rec, purge := r.forgetClosed(id)
+	if !purge || rec.ReplyID == "" {
 		return
 	}
+	r.deleteSessionRecord(rec)
+	r.notify(id, rec.Root)
+}
+
+func (r *Runner) deleteSessionRecord(rec Record) bool {
+	id := rec.ReplyID
 	sessionDir := wsdashboard.SessionDir(r.opts.Dir, id)
 	wslive.DropRing(wslive.RingDir(sessionDir))
 	if err := os.RemoveAll(sessionDir); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
-	} else {
-		r.deleteDurableRecord(rec)
+		return false
 	}
-	r.notify(id, rec.Root)
+	r.deleteDurableRecord(rec)
+	return true
 }
 
 // expiredAtStart picks the open spawned children a daemon start deletes
 // instead of serving, deepest first: each quiet (no turn open or held, no
 // input) past its expiry whose descendants are all quiet, with those
-// descendants. A child whose input waits on a refused wake is not quiet
-// here; its loop's heartbeat deletes it once its start is refused again.
-func (r *Runner) expiredAtStart(open []Record) []string {
+// descendants. An open descendant beyond a closed bridge blocks the cascade
+// and is evaluated separately against its own expiry. A child whose input
+// waits on a refused wake is not quiet here; its loop's heartbeat deletes it
+// once its start is refused again.
+func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal) []string {
 	now := r.opts.Now()
 	expiry := r.childWaitingExpiry()
 	byID := map[string]Record{}
-	kids := map[string][]string{}
-	for _, rec := range open {
+	kids := map[ParentRef][]string{}
+	var closed []Record
+	closedIDs := map[string]bool{}
+	add := func(rec Record) {
 		byID[rec.ReplyID] = rec
 		if rec.Parent != nil {
-			kids[rec.Parent.ReplyID] = append(kids[rec.Parent.ReplyID], rec.ReplyID)
+			kids[*rec.Parent] = append(kids[*rec.Parent], rec.ReplyID)
 		}
+	}
+	for _, rec := range open {
+		add(rec)
+	}
+	r.mu.Lock()
+	for id, rec := range r.closed {
+		closedIDs[id] = true
+		closed = append(closed, rec)
+		add(rec)
+	}
+	r.mu.Unlock()
+	children := func(rec Record) []string {
+		return kids[safeStopParent(rec.ReplyID, rec.Lead)]
 	}
 	quiet := func(rec Record) bool {
 		mark := rec.Voided
 		if rec.LastTurn != nil {
 			mark = max(mark, rec.LastTurn.Mark)
 		}
-		return !rec.Lead && rec.Parent != nil && rec.HolderID == "" && !rec.TurnOpen && rec.HeldTurn == nil &&
+		return dead[rec.ReplyID] == nil && !rec.Lead && rec.Parent != nil && rec.HolderID == "" && !rec.TurnOpen && rec.HeldTurn == nil &&
 			rec.Sends <= mark && len(rec.Queued)+len(rec.Mail)+len(rec.Reports)+len(rec.Steered)+len(rec.PendingReports) == 0
 	}
 	seen := map[string]bool{}
-	var subtree func(id string, out *[]string) bool
-	subtree = func(id string, out *[]string) bool {
+	var subtree func(id string, out *[]string, throughClosed bool) bool
+	subtree = func(id string, out *[]string, throughClosed bool) bool {
 		if seen[id] {
 			return false
 		}
 		seen[id] = true
-		ok := true
-		for _, k := range kids[id] {
-			ok = subtree(k, out) && quiet(byID[k]) && ok
+		closed := closedIDs[id]
+		if !closed && (throughClosed || !quiet(byID[id])) {
+			return false
 		}
-		*out = append(*out, id)
-		return ok
+		for _, k := range children(byID[id]) {
+			if !subtree(k, out, throughClosed || closed) {
+				return false
+			}
+		}
+		if !closed {
+			*out = append(*out, id)
+		}
+		return true
 	}
 	var out []string
 	var visit func(id string)
 	visit = func(id string) {
 		rec := byID[id]
-		if at := lastActive(rec); quiet(rec) && !at.IsZero() && now.Sub(at) >= expiry {
+		if at := lastActive(rec); !closedIDs[id] && quiet(rec) && !at.IsZero() && now.Sub(at) >= expiry {
 			var tree []string
 			saved := maps.Clone(seen)
-			if subtree(id, &tree) {
+			if subtree(id, &tree, false) {
 				out = append(out, tree...)
 				return
 			}
 			seen = saved
 		}
 		seen[id] = true
-		for _, k := range kids[id] {
+		for _, k := range children(rec) {
 			if !seen[k] {
 				visit(k)
 			}
 		}
 	}
-	for _, rec := range open {
-		if rec.Parent == nil || byID[rec.Parent.ReplyID].ReplyID == "" {
-			visit(rec.ReplyID)
+	visitRoot := func(rec Record) {
+		if rec.Parent != nil {
+			if parent, ok := byID[rec.Parent.ReplyID]; ok && *rec.Parent == safeStopParent(parent.ReplyID, parent.Lead) {
+				return
+			}
 		}
+		visit(rec.ReplyID)
+	}
+	for _, rec := range open {
+		visitRoot(rec)
+	}
+	for _, rec := range closed {
+		visitRoot(rec)
 	}
 	return out
 }

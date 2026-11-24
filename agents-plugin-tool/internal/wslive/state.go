@@ -123,6 +123,8 @@ type Event struct {
 	// Holding and Alive carry live hosted-worker liveness onto Pi agent rows.
 	Holding bool `json:"holding,omitempty"`
 	Alive   bool `json:"alive,omitempty"`
+	// HoldingShell qualifies Holding for a worker waiting only on shell work.
+	HoldingShell bool `json:"-"`
 	// Compacting, Compactions and CompactOrigin carry a Pi agent's compaction
 	// state (Agent.Compacting, Agent.Compactions, Agent.CompactOrigin). Like
 	// Holding they are authoritative on a Pi event, zero values included.
@@ -235,7 +237,7 @@ type agentState struct {
 	contextCompaction                    *UsageCompaction
 	outputTps                            float64
 	bgTasks                              int
-	holding, alive                       bool
+	holding, holdingShell, alive         bool
 	// compacting is whether a compaction is queued or running; compactions
 	// counts the completed ones and compactOrigin names the latest's origin.
 	compacting    bool
@@ -729,7 +731,7 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		batches = st.normalizeBatches(ev.Batches)
 	}
 	if ev.AgentID == "" {
-		if ev.Status != "" || ev.ParentID != "" || ev.Label != "" || ev.SessionKey != "" || ev.AgentKind != "" || ev.Harness != "" || ev.ActiveMs != 0 || ev.TurnStartedAt != 0 || ev.BackgroundTasks != 0 || ev.Holding || ev.Alive || ev.Compacting || ev.Compactions != 0 || ev.CompactOrigin != "" || hasTelemetry(ev) || ev.Observed != nil || ev.OutputRate != nil {
+		if ev.Status != "" || ev.ParentID != "" || ev.Label != "" || ev.SessionKey != "" || ev.AgentKind != "" || ev.Harness != "" || ev.ActiveMs != 0 || ev.TurnStartedAt != 0 || ev.BackgroundTasks != 0 || ev.Holding || ev.HoldingShell || ev.Alive || ev.Compacting || ev.Compactions != 0 || ev.CompactOrigin != "" || hasTelemetry(ev) || ev.Observed != nil || ev.OutputRate != nil {
 			return fmt.Errorf("the lead takes only batches and caption; set agentId for a subagent")
 		}
 		st.setActivity(&st.lead, ev, batches)
@@ -791,7 +793,7 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		a.status = ev.Status
 		a.permission = nil
 		if ev.AgentKind != AgentKindPi {
-			a.holding, a.alive, a.compacting = false, false, false
+			a.holding, a.holdingShell, a.alive, a.compacting = false, false, false, false
 		}
 		st.batchesEnded += uint64(len(closeBatches(&a.activityState, at)))
 	}
@@ -803,6 +805,7 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		a.turnStartedAt = max(ev.TurnStartedAt, 0)
 		a.bgTasks = max(ev.BackgroundTasks, 0)
 		a.holding = ev.Holding
+		a.holdingShell = ev.Holding && ev.HoldingShell
 		a.alive = ev.Alive
 		a.compacting = ev.Compacting
 		a.compactions = min(max(ev.Compactions, 0), MaxCompactions)
@@ -1178,24 +1181,23 @@ func (st *State) SeedFinished(prev Snapshot) {
 			continue
 		}
 		a := &agentState{
-			id:            p.ID,
-			label:         cleanLine(st.scrub.scrub(p.Label), LabelRunes),
-			replyID:       p.ReplyID,
-			kind:          knownAgentKind(p.AgentKind),
-			harness:       cleanLine(p.Harness, 32),
-			status:        p.Status,
-			startedAt:     p.StartedAt,
-			endedAt:       p.EndedAt,
-			endUnknown:    p.EndUnknown || AgyObservationEnded(p.ID, p.Status),
-			activeMs:      p.ActiveMs,
-			touched:       p.EndedAt,
-			// Holding and Alive are intentionally not seeded from disk (T0):
-			// liveness is republished solely from RAM by live writers.
+			id:         p.ID,
+			label:      cleanLine(st.scrub.scrub(p.Label), LabelRunes),
+			replyID:    p.ReplyID,
+			kind:       knownAgentKind(p.AgentKind),
+			harness:    cleanLine(p.Harness, 32),
+			status:     p.Status,
+			startedAt:  p.StartedAt,
+			endedAt:    p.EndedAt,
+			endUnknown: p.EndUnknown || AgyObservationEnded(p.ID, p.Status),
+			activeMs:   p.ActiveMs,
+			touched:    p.EndedAt,
+			// The runner republishes Holding, HoldingShell, Alive, and
+			// Compacting from RAM after it restores the conversation.
 			model:         cleanLine(st.scrub.scrub(p.Model), ModelRunes),
 			effort:        cleanLine(st.scrub.scrub(p.Effort), EffortRunes),
 			contextTokens: p.ContextTokens,
 			contextWindow: max(p.ContextWindow, 0),
-			// Compacting is not seeded, as Holding and Alive are not (T0).
 			compactions:   min(max(p.Compactions, 0), MaxCompactions),
 			compactOrigin: knownCompactOrigin(p.CompactOrigin),
 		}
@@ -1272,6 +1274,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 			ContextCompaction: normalizeCompaction(a.contextCompaction),
 			BackgroundTasks:   a.bgTasks,
 			Holding:           a.holding,
+			HoldingShell:      a.holdingShell,
 			Alive:             a.alive,
 			Compacting:        a.compacting,
 			Compactions:       a.compactions,

@@ -377,6 +377,8 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
     railPopBtn: () => null,
     railPopClose: () => { closedPop++; },
     railPopPlace: () => {},
+    railMarks: () => {},
+    stopNeedsHold: new Set(),
     leadRows: () => ({
       model: { focus: () => {} },
       effort: {},
@@ -390,6 +392,10 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
     toast: msg => toasts.push(msg),
     railPost: (route, body, done) => {
       posts.push({ route, body });
+      if (body.safe_only) {
+        done(409, {}, 'session no longer safe to stop');
+        return;
+      }
       done(200, { id: 's1', status: 'running', can_control: true, process: false }, '');
     },
     subagentClose: () => { subagentModalCalled++; },
@@ -423,11 +429,12 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
   h.fire(stopBtn, 'click');
   assert.equal(posts.length, 1);
   assert.equal(posts[0].route, '/agents/s1/stop');
+  assert.equal(posts[0].body.safe_only, true);
   assert.equal(confirmCalled, 0);
 
-  // 2. Unsafe stop: stop icon, danger class, requires 1500ms hold; no wsConfirm.
-  P.st = { id: 's1', backend: 'claude', status: 'running', can_control: true, process: true, safe_stop: false, hidden: false };
-  P.draw();
+  // 2. The refusal overrides the previously safe state immediately.
+  assert.equal(P.st.safe_stop, true);
+  assert.equal(closedPop, 0);
   assert.equal(stopBtn.firstChild.getAttribute('data-icon'), 'stop');
   assert.equal(stopBtn.classList.contains('danger'), true);
   assert.equal(stopBtn.classList.contains('d-hold-btn'), true);
@@ -438,6 +445,7 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
   h.fire(h.window, 'pointerup', { pointerId: 1, clientX: 50, clientY: 20 });
   assert.equal(posts.length, 2);
   assert.equal(posts[1].route, '/agents/s1/stop');
+  assert.deepEqual(Object.keys(posts[1].body), []);
   assert.equal(confirmCalled, 0);
 
   // 3. Archive (hide) requires 1500ms hold; unhide is immediate single click.

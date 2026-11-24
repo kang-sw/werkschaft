@@ -315,7 +315,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if spawn != nil {
 		claimWidth = spawn.claimWidth
 	}
-	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, false)
+	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, nil)
 	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {

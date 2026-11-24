@@ -77,7 +77,7 @@ test('closed opener clicks open full sheets and the fold closes back to that ope
       setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(k, fn) { this.listeners[k] = fn; },
       contains: () => false, focus() { c.doc.activeElement = this; } };
   }
-  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'gbody', 'sbody', 'drhandle', 'shandle', 'gitRegion', 'drfold'].map(k => [k, node()]));
+  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'gbody', 'sbody', 'drhandle', 'shandle', 'thandle', 'gitRegion', 'drfold'].map(k => [k, node()]));
   const git = node(), documentClicks = [], saved = [];
   const c = vm.createContext({ ...nodes, doc: { activeElement: null, addEventListener: (type, fn) => documentClicks.push(fn) },
     ghandle: () => git, drHeaderBottom: () => 48, drMax: () => 812,

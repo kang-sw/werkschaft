@@ -27,13 +27,17 @@ type State struct {
 	// handed_off (a lead session a terminal harness holds: no process runs
 	// here, mail no longer resumes it, and its row is the terminal's).
 	Status string `json:"status"`
+	// WakeBlocked reports a binding that permanently prevents a wake.
+	WakeBlocked bool `json:"-"`
 	// Process reports a live backend process.
 	Process bool `json:"process"`
 	// SafeStop reports whether stopping the live process right now is safe
 	// (holder-backed, idle, no active descendants or native subagents).
 	SafeStop bool `json:"safe_stop,omitempty"`
-	// Holding reports whether a finished turn is held pending child reports.
+	// Holding reports whether a finished turn is held pending other work.
 	Holding bool `json:"holding,omitempty"`
+	// HoldingShell is the live projection hint when only shell work holds it.
+	HoldingShell bool `json:"-"`
 	// Hidden is dashboard sidecar state, never part of the runner record.
 	Hidden    bool                         `json:"hidden,omitempty"`
 	Lifecycle wsdashboard.SessionLifecycle `json:"lifecycle,omitempty"`
@@ -153,15 +157,12 @@ func (r *Runner) memoryClosedState(rec Record) State {
 		st.IsChild = r.isChildRecord(rec)
 		return st
 	}
-	st := closedState(rec)
-	st.IsChild = r.isChildRecord(rec)
-	return st
+	return r.closedRecordState(rec)
 }
 
 // closedState reads the presentation of a record no loop serves.
 func (r *Runner) closedState(rec Record) State {
-	st := closedState(rec)
-	st.IsChild = r.isChildRecord(rec)
+	st := r.closedRecordState(rec)
 	if r.opts.closedSnapshotRead != nil {
 		r.opts.closedSnapshotRead(rec.ReplyID)
 	}
@@ -192,6 +193,17 @@ func (r *Runner) closedState(rec Record) State {
 		st.ResumeCommand = r.resumeCommand(rec, dir)
 	}
 	return r.permissionState(st, rec, dir)
+}
+
+func (r *Runner) closedRecordState(rec Record) State {
+	st := closedState(rec)
+	st.IsChild = r.isChildRecord(rec)
+	if st.Status == StatusClosed {
+		if refusal := r.admitWorkerRecord(rec); refusal != nil {
+			st.Error = refusal.Error()
+		}
+	}
+	return st
 }
 
 // Retained name check: ended state of retained Pi records (TestRetiredPiHoldersKeepRunning).

@@ -65,6 +65,10 @@
   proxy opens the connection.
 
 ### Changed
+- **Claude tier defaults in ws and wsflow target cheaper plans.** Small stays
+  Haiku with high effort; medium uses Sonnet with medium effort; large uses
+  Sonnet with high effort; xlarge uses Opus with high effort. User and project
+  tier overrides keep precedence. Compatibility: T0; stored shapes are unchanged.
 - **A read-only worker's exec launches are limited to read commands.**
   When a worker runs at the `read-only` authority, `exec.spawn` and the
   legacy `exec.shell` form (a caller-selected shell) are refused. `exec.run`
@@ -126,6 +130,13 @@
   it. `route.resolve_implement` keeps the shared fact-parsing helpers.
 
 ## v0.52.0
+
+- **Hosted exec jobs close stdin by default.** Commands such as `cat` and
+  `rg` without a path can finish when they read to EOF. To send input later
+  with `exec.write`, launch with `stdin_open: true` on `exec.run` or the
+  `cmd` form of `exec.shell`. Supplying `stdin` sends the text followed
+  by EOF. Choose one input mode. Existing callers that write after launch
+  must add the opt-in on 0.52. Older daemons reject the new argument.
 
 - Claude exec cutover defaults on for hosted leads and spawned workers in ws
   and wsflow. Set `claude.exec_cutover_enabled` to false to opt out; all other

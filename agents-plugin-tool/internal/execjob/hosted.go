@@ -268,6 +268,24 @@ func (h *Hosted) RunningOwners() map[string]int {
 	return out
 }
 
+// RunningAgentOwners counts the agent-origin jobs still running by their
+// owning conversation (HostedJobRow.Owner), strictly excluding user-origin
+// composer `!` jobs. It reads memory only; a nil h counts none.
+func (h *Hosted) RunningAgentOwners() map[string]int {
+	out := map[string]int{}
+	if h == nil {
+		return out
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, j := range h.jobs {
+		if !j.row.Terminal() && j.row.Owner != "" && j.origin != OriginUser {
+			out[j.row.Owner]++
+		}
+	}
+	return out
+}
+
 // runningChanged calls OnRunning; h.mu must not be held.
 func (h *Hosted) runningChanged() {
 	if h.opts.OnRunning != nil {
@@ -890,12 +908,14 @@ type HostedLaunch struct {
 	// in it, which the approval shows.
 	Environ []string
 	Env     map[string]string
-	// Stdin is written at the start, then stdin closes; StdinSet says it
-	// was given. Without it a legacy launch's stdin closes at once and a
-	// new launch's stays open for Write.
+	// Stdin is written at the start, then stdin closes. StdinSet also
+	// records an explicitly empty input.
 	Stdin    []byte
 	StdinSet bool
-	Async    bool
+	// StdinOpen keeps stdin open for Write. It requires a new-style launch
+	// without Stdin.
+	StdinOpen bool
+	Async     bool
 	// Legacy launches keep the legacy key and reply shape.
 	Legacy bool
 	// Window overrides the execution window of this launch (zero keeps the

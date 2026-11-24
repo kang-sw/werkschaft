@@ -303,7 +303,10 @@
           if (!loaded && (!window.wbHistory || !window.wbHistory.navigate)) {
             var anchor = window.WsBoardAnchor, card = anchor && anchor.owner && anchor.owner(target);
             if (card) anchor.select(card, { smooth: target === card });
-            if (target !== card) target.scrollIntoView({ block: "start" });
+            if (target !== card) {
+              target.scrollIntoView({ block: "start" });
+              if (card && anchor.land) anchor.land(target);
+            }
           }
           if (window.wbHistory && window.wbHistory.keep) window.wbHistory.keep(target);
           // Entry/item flashes belong to loadTarget; topic-only navigation

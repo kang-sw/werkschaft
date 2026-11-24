@@ -221,15 +221,16 @@
       field.dispatchEvent(event);
       if (before) changed(before, action);
     }
-    function replace(s, a, b, mode) {
+    function spliceText(s, a, b, mode) {
       // A partial range through a capsule edits the whole capsule.
       ranges.forEach(function (r) { if (a < r.end && b > r.start) { a = Math.min(a, r.start); b = Math.max(b, r.end); } });
       var next = text.slice(0, a) + s + text.slice(b);
       ranges = ranges.filter(function (r) { return r.end <= a || r.start >= b; }).map(function (r) {
         r = Object.assign({}, r); if (r.start >= b) { r.start += s.length - (b - a); r.end += s.length - (b - a); } return r;
       });
-      text = next; selection = mode === "select" ? [a, a + s.length] : [a + s.length, a + s.length]; render();
+      text = next; selection = mode === "select" ? [a, a + s.length] : [a + s.length, a + s.length];
     }
+    function replace(s, a, b, mode) { spliceText(s, a, b, mode); render(); }
     function expanded(a, b) {
       ranges.forEach(function (r) {
         if (a === b && a > r.start && a < r.end) { a = r.end; b = r.end; }
@@ -371,13 +372,35 @@
         key = String(key); var old = ranges.find(function (r) { return r.kind === kind && r.key === key; });
         if (!old) return insertGeneric(kind, payload, { key: key, at: text.length, preserveCaret: true });
         if (!payload || typeof payload.anchor !== "string" || !payload.anchor) return null;
-        var before = valid(text, ranges), label = typeof payload.label === "string" ? payload.label : payload.anchor;
+        var before = valid(text, ranges), label = typeof payload.label === "string" ? payload.label : payload.anchor, mark;
         if (marker(old) === payload.anchor && old.label === label && JSON.stringify(old.payload) === JSON.stringify(payload)) return old;
+        if (marker(old) === payload.anchor) {
+          mark = { start: old.start, end: old.end, kind: kind, id: key, key: key, label: label, payload: Object.assign({}, payload) };
+          ranges = valid(text, ranges.map(function (r) { return r === old ? mark : r; }));
+          var matches = Array.prototype.filter.call(editor.querySelectorAll(".wsc-capsule"), function (node) {
+            return node.getAttribute("data-wsc-kind") === kind && node.getAttribute("data-wsc-key") === key;
+          });
+          if (matches.length === 1) {
+            var chip = matches[0];
+            chip.setAttribute("data-wsc-payload", JSON.stringify(mark.payload));
+            if (old.label !== label || chip.getAttribute("data-wsc-label") !== label) {
+              chip.setAttribute("data-wsc-label", label);
+              chip.textContent = (kind === "skill" ? "/" : kind === "topic" ? "#" : "") + label;
+            }
+            changed(before, "update");
+            return mark;
+          }
+          selection = focused(field) ? offsets().slice() : selection.slice();
+          render();
+          changed(before, "update");
+          return mark;
+        }
         var kept = focused(field) ? offsets().slice() : selection.slice();
-        replace(payload.anchor, old.start, old.end);
-        var mark = { start: old.start, end: old.start + payload.anchor.length, kind: kind, id: key, key: key, label: label, payload: Object.assign({}, payload) };
+        spliceText(payload.anchor, old.start, old.end);
+        mark = { start: old.start, end: old.start + payload.anchor.length, kind: kind, id: key, key: key, label: label, payload: Object.assign({}, payload) };
         ranges = valid(text, ranges.concat(mark).sort(function (a, b) { return a.start - b.start; }));
-        render(); var moved = movedSelection(kept, old.start, old.end, payload.anchor.length); select(moved[0], moved[1]);
+        selection = movedSelection(kept, old.start, old.end, payload.anchor.length);
+        render();
         notify(before, "update"); return mark;
       },
       remove: function (kind, key) {

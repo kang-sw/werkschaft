@@ -247,7 +247,7 @@
     return filled;
   }
   function fillTopic(section, full) { return fillRoots([section], full); }
-  function hydrateWith(root, topics) {
+  function hydrateWith(root, topics, getDetachedRoots) {
     var filled = 0;
     topics.forEach(function (t) {
       if (!t || typeof t.name !== 'string' || typeof t.html !== 'string') return;
@@ -257,18 +257,22 @@
       if (!full) return;
       var sections = named(root.querySelectorAll('section.topic[data-topic]'), 'data-topic', t.name);
       if (root.matches && root.matches('section.topic') && root.getAttribute('data-topic') === t.name) sections.unshift(root);
-      sections.forEach(function (section) {
-        if (!lazyIn(section)) return;
-        var n = fillTopic(section, full);
+      sections = sections.filter(function (s) { return lazyIn(s) && !(getDetachedRoots && s.hasAttribute('data-wb-virtual')); });
+      var detached = getDetachedRoots && getDetachedRoots(t.name);
+      var deferred = named(root.querySelectorAll('template[data-history-topic][data-lazy]'), 'data-history-topic', t.name);
+      deferred.forEach(function (slot) {
+        slot.content.appendChild(document.importNode(full, true));
+        slot.removeAttribute('data-lazy');
+        filled++;
+      });
+      sections.forEach(function (section, i) {
+        var source = i < sections.length - 1 || (detached && detached.length) ? full.cloneNode(true) : full;
+        var n = fillTopic(section, source);
         if (!n) return;
         histories(section).forEach(admitted);
         filled += n;
       });
-      named(root.querySelectorAll('template[data-history-topic][data-lazy]'), 'data-history-topic', t.name).forEach(function (deferred) {
-        deferred.content.appendChild(document.importNode(full, true));
-        deferred.removeAttribute('data-lazy');
-        filled++;
-      });
+      if (detached && detached.some(lazyIn)) filled += fillRoots(detached, full);
     });
     return filled;
   }
@@ -298,7 +302,7 @@
   }
   // hydrateAll fills every lazy topic under root in one fetch (the command
   // palette's complete entry search).
-  function hydrateAll(root) {
+  function hydrateAll(root, getDetachedRoots) {
     root = root || document;
     var names = new Set();
     Array.from(root.querySelectorAll('section.topic[data-topic]')).forEach(function (t) { if (lazyIn(t)) names.add(t.getAttribute('data-topic')); });
@@ -307,7 +311,9 @@
     // The route answers at most 512 names a request.
     var list = Array.from(names), queries = [];
     for (var i = 0; i < list.length; i += 256) queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
-    return Promise.all(queries.map(fetchTopics)).then(function (all) { return hydrateWith(root, [].concat.apply([], all)); });
+    return Promise.all(queries.map(fetchTopics)).then(function (all) {
+      return hydrateWith(root, [].concat.apply([], all), getDetachedRoots);
+    });
   }
   // hydrateDetached fetches lazy history for detached topic roots (such as
   // virtualized offscreen topics) through the shared fetchTopics pipeline
@@ -323,27 +329,7 @@
       queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
     }
     return Promise.all(queries.map(fetchTopics)).then(function (all) {
-      var topics = [].concat.apply([], all), filled = 0;
-      topics.forEach(function (t) {
-        if (!t || typeof t.name !== 'string' || typeof t.html !== 'string') return;
-        var live = document.querySelectorAll
-          ? named(document.querySelectorAll('section.topic[data-topic]'), 'data-topic', t.name).filter(function (s) {
-              return !s.hasAttribute('data-wb-virtual');
-            })
-          : [];
-        if (live.length) {
-          live.forEach(function (section) { filled += hydrateWith(section, [t]); });
-          return;
-        }
-        var roots = typeof getRoots === 'function' ? getRoots(t.name) : null;
-        if (!roots || !roots.length || !roots.some(lazyIn)) return;
-        var parsed = document.createElement('template');
-        parsed.innerHTML = t.html;
-        var full = parsed.content.querySelector('section.topic');
-        if (!full) return;
-        filled += fillRoots(roots, full);
-      });
-      return filled;
+      return hydrateWith(document, [].concat.apply([], all), getRoots);
     });
   }
   // A lazy board's deterministic file-image stamp changes even when its

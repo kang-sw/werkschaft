@@ -575,8 +575,8 @@ func TestHostedSyncEndInsideTheWindow(t *testing.T) {
 	if execID, ok := ExecHolderID(spec.Session); !ok || execID != v.ID || spec.ExitCopy != filepath.Join(fx.exitDir, v.ID+".json") {
 		t.Fatalf("launch spec = %+v", spec)
 	}
-	if s := fx.holders.spawnOf(v.HolderID); s.InputEOF || s.Input != nil || s.Mode != "pipe" {
-		t.Fatalf("a new launch without stdin keeps stdin open: %+v", s)
+	if s := fx.holders.spawnOf(v.HolderID); !s.InputEOF || s.Input != nil || s.Mode != "pipe" {
+		t.Fatalf("a new launch without stdin sends EOF: %+v", s)
 	}
 	eventuallyExec(t, "the ended job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), v.HolderID) })
 	if n := fx.sessions.noticeList(); len(n) != 0 {
@@ -878,9 +878,8 @@ func TestHostedInterruptStopsAndDrainConverts(t *testing.T) {
 	fx.holders.onSpawn = nil
 }
 
-// TestHostedStdinAndWrite: stdin given at launch closes after it; without
-// it a new job takes exec.write until eof; a legacy job's stdin closes at
-// once even without stdin.
+// TestHostedStdinAndWrite: stdin given at launch closes after it, and only
+// an opted-in job takes exec.write until eof.
 func TestHostedStdinAndWrite(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Stdin: []byte("given"), StdinSet: true})
@@ -897,6 +896,20 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	v, err = fx.launch(context.Background(), nil, HostedLaunch{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if s := fx.holders.spawnOf(v.HolderID); len(s.Input) != 0 || !s.InputEOF {
+		t.Fatalf("spawn without stdin = %+v", s)
+	}
+	if _, err := fx.h.Write("lead", v.ID, []byte("late"), false); err == nil || !strings.Contains(err.Error(), "no open stdin") || !strings.Contains(err.Error(), "stdin_open: true") {
+		t.Fatalf("write to default-closed stdin = %v", err)
+	}
+
+	v, err = fx.launch(context.Background(), nil, HostedLaunch{StdinOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := fx.holders.spawnOf(v.HolderID); len(s.Input) != 0 || s.InputEOF {
+		t.Fatalf("spawn with open stdin = %+v", s)
 	}
 	if _, err := fx.h.Write("lead", v.ID, []byte("line1\n"), false); err != nil {
 		t.Fatal(err)
@@ -937,13 +950,11 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	}
 }
 
-// TestHostedStdinSurvivesARestart: a running job launched without stdin
-// takes exec.write and its eof under the next daemon, whose holder still
-// holds the pipe open; a job given stdin at launch, and a legacy launch,
-// stay closed.
+// TestHostedStdinSurvivesARestart: the successor uses the holder's stdin
+// state for running jobs, including jobs whose stdin closed at launch.
 func TestHostedStdinSurvivesARestart(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
-	open, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	open, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,13 +963,14 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 	// Launched with explicit empty stdin, and closed by an acked eof before
 	// the replacement: the row cannot tell either from an open stdin.
 	empty, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinSet: true})
-	acked, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	closed, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	acked, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinOpen: true})
 	if _, err := fx.h.Write("lead", acked.ID, []byte("last\n"), true); err != nil {
 		t.Fatal(err)
 	}
 	_ = fx.h.Close()
 	fx.open(10 * time.Millisecond)
-	for _, v := range []HostedView{empty, acked} {
+	for _, v := range []HostedView{empty, closed, acked} {
 		fx.holders.mu.Lock()
 		before := fx.holders.inputCalls
 		fx.holders.mu.Unlock()
@@ -994,7 +1006,7 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 // accepted prefix; stdin stays open.
 func TestHostedPartialWriteSaysWhatToResend(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
-	v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{StdinOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1040,7 +1052,7 @@ func TestHostedWriteToAGoneStdinGivesNoResendAdvice(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newHostedFixture(t, 10*time.Millisecond)
-			v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+			v, err := fx.launch(context.Background(), nil, HostedLaunch{StdinOpen: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1067,7 +1079,7 @@ func TestHostedWriteToAGoneStdinGivesNoResendAdvice(t *testing.T) {
 // reaching the holder until the holder attaches, then delivers.
 func TestHostedStdinSettlesOnALaterAttach(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
-	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1099,7 +1111,7 @@ func TestHostedStdinSettlesOnALaterAttach(t *testing.T) {
 // never claims a success the holder may have dropped.
 func TestHostedStdinUnknownAfterRestartStaysClosed(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
-	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2102,7 +2114,7 @@ func TestHostedWriteBeforeTheSpawnKeepsStdin(t *testing.T) {
 	}
 	launched := make(chan result, 1)
 	go func() {
-		v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinOpen: true})
 		launched <- result{v, err}
 	}()
 	<-waiting

@@ -166,6 +166,7 @@ import time
 STARTED_AT = time.time()
 
 import argparse
+import contextlib
 import base64
 import datetime
 import hashlib
@@ -554,6 +555,71 @@ def _kill_tree_windows(pid: int) -> None:
     )
 
 
+class _WindowsPipeProcess:
+    """Start with the primary thread suspended and keep its handle until resume."""
+
+    def __init__(self, spec: dict) -> None:
+        import _winapi
+        import msvcrt
+
+        self._winapi = _winapi
+        with contextlib.ExitStack() as child_ends, contextlib.ExitStack() as parent_ends:
+            in_read, in_write = os.pipe()
+            child_stdin = child_ends.enter_context(os.fdopen(in_read, "rb", buffering=0))
+            self.stdin = parent_ends.enter_context(os.fdopen(in_write, "wb", buffering=0))
+            out_read, out_write = os.pipe()
+            self.stdout = parent_ends.enter_context(os.fdopen(out_read, "rb", buffering=0))
+            child_stdout = child_ends.enter_context(os.fdopen(out_write, "wb", buffering=0))
+            err_read, err_write = os.pipe()
+            self.stderr = parent_ends.enter_context(os.fdopen(err_read, "rb", buffering=0))
+            child_stderr = child_ends.enter_context(os.fdopen(err_write, "wb", buffering=0))
+
+            handles = [msvcrt.get_osfhandle(f.fileno()) for f in (child_stdin, child_stdout, child_stderr)]
+            for handle in handles:
+                os.set_handle_inheritable(handle, True)
+            startup = subprocess.STARTUPINFO(
+                dwFlags=subprocess.STARTF_USESTDHANDLES,
+                hStdInput=handles[0],
+                hStdOutput=handles[1],
+                hStdError=handles[2],
+                lpAttributeList={"handle_list": handles},
+            )
+            self.handle, self._thread, self.pid, _ = _winapi.CreateProcess(
+                None, subprocess.list2cmdline(spec["argv"]), None, None, True,
+                subprocess.CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED,
+                spec["env"], spec["cwd"], startup,
+            )
+            parent_ends.pop_all()
+
+    def resume(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        try:
+            resume_thread = ctypes.WinDLL("kernel32", use_last_error=True).ResumeThread
+            resume_thread.argtypes = [wintypes.HANDLE]
+            resume_thread.restype = wintypes.DWORD
+            if resume_thread(self._thread) == 0xFFFFFFFF:
+                raise ctypes.WinError(ctypes.get_last_error())
+        except BaseException:
+            try:
+                self._winapi.TerminateProcess(self.handle, 1)
+            finally:
+                self._winapi.CloseHandle(self.handle)
+                for stream in (self.stdin, self.stdout, self.stderr):
+                    stream.close()
+            raise
+        finally:
+            self._winapi.CloseHandle(self._thread)
+
+    def wait(self) -> int:
+        try:
+            self._winapi.WaitForSingleObject(self.handle, self._winapi.INFINITE)
+            return self._winapi.GetExitCodeProcess(self.handle)
+        finally:
+            self._winapi.CloseHandle(self.handle)
+
+
 class PipeChild:
     """A child over three pipes. On POSIX it stays in the holder's process
     group, so a kill of that group (the daemon's guarded kill) ends it too."""
@@ -561,9 +627,24 @@ class PipeChild:
     mode = "pipe"
 
     def __init__(self, spec: dict) -> None:
-        flags = (subprocess.CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS) if WINDOWS else 0
-        self._qos_job = _WindowsDescendantQoSJob.start() if WINDOWS else None
-        try:
+        self._qos_job = None
+        if WINDOWS:
+            self.proc = _WindowsPipeProcess(spec)
+            try:
+                _clear_windows_eco_qos(self.proc.handle)
+                job = _WindowsDescendantQoSJob.start()
+                if job is not None:
+                    if job.assign(self.proc.handle):
+                        self._qos_job = job
+                    else:
+                        job.close()
+            finally:
+                try:
+                    self.proc.resume()
+                except BaseException:
+                    self._close_qos_job()
+                    raise
+        else:
             self.proc = subprocess.Popen(
                 spec["argv"],
                 stdin=subprocess.PIPE,
@@ -572,20 +653,8 @@ class PipeChild:
                 cwd=spec["cwd"],
                 env=spec["env"],
                 bufsize=0,
-                creationflags=flags,
             )
-        except BaseException:
-            self._close_qos_job()
-            raise
         self.pid = self.proc.pid
-        if WINDOWS:
-            handle = getattr(self.proc, "_handle", None)
-            if handle:
-                _clear_windows_eco_qos(handle)
-                if self._qos_job is not None and not self._qos_job.assign(handle):
-                    self._close_qos_job()
-            else:
-                self._close_qos_job()
 
     def _close_qos_job(self) -> None:
         job = self._qos_job

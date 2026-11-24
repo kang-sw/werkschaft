@@ -29,14 +29,15 @@ function vars(source, names) {
 }
 const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorCap0', 'anchorProg',
     'FREE_RUNWAY_MID', 'FREE_RUNWAY_HEIGHT', 'FREE_RUNWAY_MARGIN', 'FREE_IDLE_RECENTER_MS', 'FREE_BASE_WINDOW', 'FREE_MAX_WINDOW', 'FREE_VIEWPORT_COVERAGE', 'FREE_CARD_GAP', 'FREE_RESIZE_EPS', 'FREE_FALLBACK_H', 'FREE_BOT_PAD',
-    'freeActive', 'freeWinStart', 'freePos', 'freeCardRO', 'freeScrollRaf']) +
+    'freeActive', 'freeWinStart', 'freePos', 'freeCardRO', 'freeScrollRaf', 'FREE_PIN_MS', 'freePin']) +
   funcs(anchorSrc, ['anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark',
     'freeEnabled', 'freeTopPad', 'freeMeasureHeight', 'freeCachedHeight', 'freeSetOffWindow', 'freeClearNode', 'freeCancelTimers', 'freeSuspend', 'freeSuspendForOverview', 'freeResumeFromOverview',
-    'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeScrollTick', 'freeIdleRecenter', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
+    'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeShiftScroll', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeFinishJump', 'freeScrollTick', 'freeIdleRecenter', 'freeScheduleIdle', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
+    'freeReleasePin', 'freePinned', 'freeStartPinWindow', 'freeOffset', 'freeLand', 'freeLandTarget', 'freePinLayout',
     'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
-    'anchorSize', 'anchorCancelProg', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
+    'anchorSize', 'anchorCancelProg', 'anchorOnWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +
   vars(boardSrc, ['boardSeen', 'boardOwn', 'boardChanges', 'boardPaged']) +
   funcs(boardSrc, ['topicKey', 'topicSeen', 'boardKeep', 'boardWithSnap', 'boardExposed', 'boardLivePanels', 'boardPanelNodes', 'boardPanelKey', 'boardPanelMap',
     'boardRenderBlockers', 'boardRecordPending', 'boardOwnerSnapshot', 'boardStageInput', 'boardGuards', 'boardStageSnap', 'boardPendingNames', 'boardPendingBadge',
@@ -150,6 +151,7 @@ function world(spec, opt = {}) {
     virtualIsItemExempt: d => !(d && d.isTopic),
     virtualCollapse() {}, virtualHydrate() {},
     requestAnimationFrame(fn) { g.raf.push(fn); return g.raf.length; },
+    cancelAnimationFrame(id) { g.raf[id - 1] = () => {}; },
     getComputedStyle: n => { C.d.style++; return { overflowY: n.overflowY || 'visible' }; },
     applyBoard(staged) {
       staged.order.forEach(k => {
@@ -240,7 +242,7 @@ test('Designated-Y free-canvas board: no snap-deck slot height caps or wheel int
   assert.match(cssSrc, /\.overview-preview-stage/);
   assert.doesNotMatch(cssSrc, /scroll-padding-top:/);
   assert.doesNotMatch(cssSrc, /\.board-step\b/);
-  assert.doesNotMatch(anchorSrc, /addEventListener\(\s*["']wheel["']/);
+  assert.match(anchorSrc, /addEventListener\("wheel", anchorOnWheel, \{ passive: true \}\)/);
   assert.doesNotMatch(anchorSrc, /WsBoardWheel/);
   const w = world([T('A'), T('B')]);
   w.c.anchorInit();

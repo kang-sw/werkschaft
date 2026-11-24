@@ -130,7 +130,8 @@ type ConvEntry struct {
 	// PeerLabel is the display label of a served peer the line names by its
 	// id: address, shown in place of Peer (which stays the tooltip); empty
 	// when the peer has none, is not served, or is a named address.
-	PeerLabel string
+	PeerLabel             string
+	suppressPeerLeadBadge bool
 	// Lang is the language the entry renders in; the entry cache keys on it.
 	Lang string
 }
@@ -298,7 +299,7 @@ func buildSessionView(in pageInputs) SessionView {
 		if !reg.Agent && (len(in.Ring) > 0 || len(v.ModelHistory) > 0) {
 			v.SavedConversation = true
 			contacts := resolvedContacts(in.Page.Contacts, reg.ReplyID)
-			v.Conversation = conversation(wslive.Lead{}, in.Ring, in.Page.MailBodies, contacts, in.Lookup, replyMarkdown(reg.Project, reg.ReplyID), reg.ReplyID)
+			v.Conversation = conversation(wslive.Lead{}, in.Ring, in.Page.MailBodies, contacts, in.Lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 			splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
 			attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)
 		}
@@ -310,6 +311,11 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Commands = in.Snapshot.Commands
 	v.Host = in.Snapshot.Host
 	v.Background, v.Monitors = taskBadgeCounts(in.Snapshot)
+	if h := in.Snapshot.Host; h != nil {
+		v.BgExecCount = max(0, h.BgExecCount)
+		v.BgExecSelf = max(0, h.BgExecSelf)
+		v.BgExecDesc = max(0, h.BgExecDesc)
+	}
 	v.Tree.Agents = agentTree(in.Snapshot.Agents, lookup)
 	markNativeAgents(v.Tree.Agents, v.Harness, lookup.harnesses)
 	for _, a := range in.Snapshot.Agents {
@@ -326,7 +332,7 @@ func buildSessionView(in pageInputs) SessionView {
 	}
 	contacts := resolvedContacts(in.Page.Contacts, reg.ReplyID)
 	v.Tree.Peers = peerGroup(contacts, reg.Project, lookup, in.Now)
-	v.Conversation = conversation(in.Snapshot.Lead, in.Ring, in.Page.MailBodies, contacts, lookup, replyMarkdown(reg.Project, reg.ReplyID), reg.ReplyID)
+	v.Conversation = conversation(in.Snapshot.Lead, in.Ring, in.Page.MailBodies, contacts, lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 	splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
 	v.Conversation.Held = heldViews(in.Held, in.AttachDir, reg.ReplyID)
 	attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)

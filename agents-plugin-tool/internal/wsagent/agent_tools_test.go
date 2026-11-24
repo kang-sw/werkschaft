@@ -12,6 +12,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // agentHarness is childHarness with both worker harnesses spawnable for
@@ -269,6 +270,7 @@ func TestAgentListProjectsChildActivity(t *testing.T) {
 			} else {
 				r.convs = map[string]*conv{id: {r: r, rec: tc.rec, lastErr: tc.stateError}}
 			}
+			r.indexChildLocked(tc.rec)
 			child := findAgent(t, r.AgentList(AgentCaller{Parent: parent}), id)
 			if child.Activity == nil || *child.Activity != tc.want || child.CreatedAt != created {
 				t.Errorf("activity = %+v, want %+v", child.Activity, tc.want)
@@ -412,6 +414,9 @@ func TestRefusedWakeKeepsTheMailAndTellsTheSenderOnce(t *testing.T) {
 	st := h.state(b)
 	if st.Held == 0 || st.Process || st.Lifecycle != wsdashboard.SessionChildWaiting || AgentStatus(st) != AgentWaiting {
 		t.Fatalf("the refused child = %+v", st)
+	}
+	if ev := SpawnAgentEvent(st, ""); st.WakeBlocked || ev.Status != wslive.StatusRunning {
+		t.Fatalf("retryable refusal changed the held mail projection: %+v", ev)
 	}
 	if n := h.backend.startCount(); n != starts {
 		t.Fatalf("a refused wake started %d processes", n-starts)

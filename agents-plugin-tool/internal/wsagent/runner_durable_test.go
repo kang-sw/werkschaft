@@ -107,7 +107,7 @@ func TestRunnerWithExternalBackendsDoesNotOpenPrivateStore(t *testing.T) {
 	}
 }
 
-func TestDurableRunnerForgetClosedDeletesPrivateRecord(t *testing.T) {
+func TestForgetClosedKeepsPrivateRecordWhileSpawnIsPending(t *testing.T) {
 	const backend = "fixture"
 	r := NewRunner(Options{
 		Dir:      t.TempDir(),
@@ -126,11 +126,32 @@ func TestDurableRunnerForgetClosedDeletesPrivateRecord(t *testing.T) {
 	if err := r.persistAgentRecord(dir, rec); err != nil {
 		t.Fatal(err)
 	}
+	parent := ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID}
+	child := Record{ReplyID: "child", Parent: &parent, ClosedAt: rec.ClosedAt}
+	_, release, err := r.reserveSpawnWidth(ParentRef{Kind: ParentConversation, ReplyID: child.ReplyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	r.loadClosed(rec)
+	r.loadClosed(child)
 
-	r.ForgetClosed(rec.ReplyID)
-
+	if r.ForgetClosed(rec.ReplyID) {
+		t.Fatal("ForgetClosed allowed a purge while a spawn behind a closed child was pending")
+	}
 	rows, err := r.durableRecords.DurableAgentRecords(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].ReplyID != rec.ReplyID {
+		t.Fatalf("private records during deferred purge = %d, error %v", len(rows), err)
+	}
+	if st, err := r.Get(rec.ReplyID); err != nil || st.Status != StatusClosed {
+		t.Fatalf("record during deferred purge = %+v, %v, want closed", st, err)
+	}
+
+	release()
+	if !r.ForgetClosed(rec.ReplyID) {
+		t.Fatal("ForgetClosed deferred purge after the spawn reservation was released")
+	}
+	rows, err = r.durableRecords.DurableAgentRecords(context.Background())
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("private records after purge = %d, error %v", len(rows), err)
 	}

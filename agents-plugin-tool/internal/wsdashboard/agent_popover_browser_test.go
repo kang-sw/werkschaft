@@ -162,6 +162,7 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 	// Heavy 12-agent 3-level tree covering all 6 states and 4 harnesses + 2 done folded into 완료 2
 	h2 := mk("h2", "h1", "ast-scanner", "claude", wslive.StatusDone, "", "sonnet-4.6", "medium", "Aggregating symbols", 108000, true, true)
 	h2.ReplyID = "boardsession"
+	h2.HoldingShell = true
 	h5 := mk("h5", "h1", "schema-diff", "codex", wslive.StatusRunning, wslive.PhaseTool, "gpt-5.4", "high", "apply_patch", 65000, false, true)
 	h5.Batches = []wslive.BatchView{{Seq: 1, StartedAt: now - 5000, Running: &wslive.RunningView{ToolName: "apply_patch", ArgsPreview: "v2.go", StartedAt: now - 5000}}}
 	h7 := mk("h7", "h6", "cycle-detect", "claude", wslive.StatusRunning, wslive.PhaseThinking, "sonnet-4.6", "medium", "Needs approval", 78000, false, true)

@@ -136,9 +136,9 @@ func TestResolveAgentDefaultClaudeTierModels(t *testing.T) {
 		effort string
 	}{
 		{tier: "small", model: "haiku", effort: "high"},
-		{tier: "medium", model: "sonnet", effort: "high"},
-		{tier: "large", model: "opus", effort: "high"},
-		{tier: "xlarge", model: "opus", effort: "xhigh"},
+		{tier: "medium", model: "sonnet", effort: "medium"},
+		{tier: "large", model: "sonnet", effort: "high"},
+		{tier: "xlarge", model: "opus", effort: "high"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.tier, func(t *testing.T) {
@@ -278,7 +278,7 @@ func TestResolveAgentLegacyTierUsesHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAgentForHarness returned error: %v", err)
 	}
-	if backend != "claude" || model != "opus" {
+	if backend != "claude" || model != "sonnet" {
 		t.Fatalf("resolved legacy tier = %q/%q", backend, model)
 	}
 }

@@ -299,8 +299,7 @@ func worktreeEndedSessions(target, realTarget string, sessions []Session, now ti
 
 // purgeWorktreeSessions removes ended sessions attached to a deleted worktree
 // from the index and deletes their session registry directories from disk.
-// Live sessions are left untouched (checkWorktreeDelete refuses them with
-// deleteBusy).
+// A session retained by the agent host keeps its directory for recovery.
 func (d *Daemon) purgeWorktreeSessions(target, realTarget string, before map[string]bool, now time.Time) {
 	if d.index == nil {
 		return
@@ -313,8 +312,8 @@ func (d *Daemon) purgeWorktreeSessions(target, realTarget string, before map[str
 		if !before[s.ReplyID] && !worktreeHolds(target, realTarget, s.Project) {
 			continue
 		}
-		if forgetter != nil {
-			forgetter.ForgetClosed(s.ReplyID)
+		if forgetter != nil && !forgetter.ForgetClosed(s.ReplyID) {
+			continue
 		}
 		if err := d.index.purge(s.ReplyID); err != nil {
 			fmt.Fprintf(d.log, "dashboard: remove session %s after deleting %s: %v\n", s.ReplyID, target, err)

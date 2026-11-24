@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // fakeExecJobs is the hosted exec jobs as the runner reads them: running
@@ -209,7 +211,7 @@ func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
 		t.Fatalf("the report went out while the job ran: %+v", res)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if st := h.state(worker.ID); st.Status != StatusIdle {
+	if st := h.state(worker.ID); st.Status != StatusIdle || !st.Holding || !st.HoldingShell {
 		t.Fatalf("worker state %+v", st)
 	}
 	c := h.runner.conv(worker.ID)
@@ -504,4 +506,163 @@ func TestAgyHeldWorkerKeepsItsReportForALiveExecJobAtAChildReport(t *testing.T) 
 	if reps := got.list(); len(reps) != 0 {
 		t.Fatalf("the held report was published at the successor's send while its exec job runs: %+v", reps)
 	}
+}
+
+// fakeAgentExecJobs extends fakeExecJobs with separate agent-origin counts so
+// tests can verify user-origin jobs are excluded from bg exec badges.
+type fakeAgentExecJobs struct {
+	*fakeExecJobs
+	agentCounts map[string]int
+}
+
+func (f *fakeAgentExecJobs) RunningAgentOwners() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := maps.Clone(f.agentCounts)
+	for k, v := range out {
+		if v == 0 {
+			delete(out, k)
+		}
+	}
+	return out
+}
+
+func (f *fakeAgentExecJobs) setAgent(owner string, n int) {
+	f.mu.Lock()
+	f.counts[owner] = n
+	f.agentCounts[owner] = n
+	f.mu.Unlock()
+}
+
+func (f *fakeAgentExecJobs) setUserOnly(owner string, n int) {
+	f.mu.Lock()
+	f.counts[owner] = n
+	delete(f.agentCounts, owner)
+	f.mu.Unlock()
+}
+
+// TestExecSubtreeAndCycleSafety pins recursive 3-level subtree traversal
+// (Lead -> Child -> Grandchild), depth/path calculation, and cycle safety.
+func TestExecSubtreeAndCycleSafety(t *testing.T) {
+	r := &Runner{convs: map[string]*conv{}}
+	lead := &conv{r: r, rec: Record{ReplyID: "leadA", Label: "lead-a", Lead: true}}
+	child := &conv{r: r, rec: Record{ReplyID: "childA1", Label: "quota-p1-p2", Parent: &ParentRef{Kind: ParentLead, ReplyID: "leadA"}}}
+	grand := &conv{r: r, rec: Record{ReplyID: "grandA2", Label: "verify-chromium", Parent: &ParentRef{Kind: ParentConversation, ReplyID: "childA1"}}}
+	other := &conv{r: r, rec: Record{ReplyID: "leadB", Label: "lead-b", Lead: true}}
+	r.convs["leadA"], r.convs["childA1"], r.convs["grandA2"], r.convs["leadB"] = lead, child, grand, other
+
+	tree := r.Subtree("leadA")
+	if len(tree) != 3 {
+		t.Fatalf("subtree len = %d, want 3: %+v", len(tree), tree)
+	}
+	if tree[0].ID != "leadA" || tree[0].Depth != 0 || len(tree[0].Path) != 0 {
+		t.Fatalf("node 0 = %+v", tree[0])
+	}
+	if tree[1].ID != "childA1" || tree[1].Depth != 1 || !slices.Equal(tree[1].Path, []string{"quota-p1-p2"}) {
+		t.Fatalf("node 1 = %+v", tree[1])
+	}
+	if tree[2].ID != "grandA2" || tree[2].Depth != 2 || !slices.Equal(tree[2].Path, []string{"quota-p1-p2", "verify-chromium"}) {
+		t.Fatalf("node 2 = %+v", tree[2])
+	}
+
+	// Child's subtree contains only itself and grandchild, never its parent.
+	sub := r.Subtree("childA1")
+	if len(sub) != 2 || sub[0].ID != "childA1" || sub[0].Depth != 0 || sub[1].ID != "grandA2" || sub[1].Depth != 1 {
+		t.Fatalf("child subtree = %+v", sub)
+	}
+
+	// Artificial cycle in childrenIndex must not loop.
+	r.mu.Lock()
+	r.childrenIndex[ParentRef{Kind: ParentConversation, ReplyID: "grandA2"}] = map[string]bool{"leadA": true, "childA1": true}
+	r.mu.Unlock()
+	cycled := r.Subtree("leadA")
+	if len(cycled) != 3 {
+		t.Fatalf("cycled subtree len = %d, want 3: %+v", len(cycled), cycled)
+	}
+}
+
+// TestExecGrandchildUpdatesRootLeadHostCountsInRealTime verifies that starting
+// and ending a grandchild's agent-origin ws/exec job propagates up the ancestor
+// chain and updates the root lead's live Host bg_exec_* counts immediately,
+// while user-origin jobs do not affect bg_exec_*.
+func TestExecGrandchildUpdatesRootLeadHostCountsInRealTime(t *testing.T) {
+	h, _ := newHeldWorkerHarness(t)
+	jobs := &fakeAgentExecJobs{fakeExecJobs: newFakeExecJobs(), agentCounts: map[string]int{}}
+	h.runner.BindExecJobs(jobs)
+
+	// Start a hosted lead (depth 0), child (depth 1), grandchild (depth 2).
+	leadID, _ := h.runLead("hello")
+	child, err := h.runner.Spawn(SpawnSpec{
+		Profile:            AgentWorkerProfile(BackendClaude),
+		PermissionLevel:    PermissionWorkdirWrite,
+		delegatedAuthority: true,
+		Root:               h.root,
+		Prompt:             "child-worker",
+		Label:              "child-worker",
+		Tier:               "small",
+		Parent:             &ParentRef{Kind: ParentLead, ReplyID: leadID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.holder(child.ID)
+	grand, err := h.runner.Spawn(SpawnSpec{
+		Profile:            AgentWorkerProfile(BackendClaude),
+		PermissionLevel:    PermissionWorkdirWrite,
+		delegatedAuthority: true,
+		Root:               h.root,
+		Prompt:             "grandchild-worker",
+		Label:              "grandchild-worker",
+		Tier:               "small",
+		Parent:             &ParentRef{Kind: ParentConversation, ReplyID: child.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.holder(grand.ID)
+
+	leadConv := h.runner.conv(leadID)
+	hostCounts := func() (total, self, desc int) {
+		var snapHost *wslive.Host
+		leadConv.do(func() {
+			snapHost = leadConv.live.st.Snapshot(time.Now().UnixMilli()).Host
+		})
+		if snapHost == nil {
+			return 0, 0, 0
+		}
+		return snapHost.BgExecCount, snapHost.BgExecSelf, snapHost.BgExecDesc
+	}
+
+	// Start 1 job on grandchild -> root lead must update immediately to total=1, self=0, desc=1.
+	jobs.setAgent(grand.ID, 1)
+	h.runner.ExecJobsChanged()
+	eventually(t, "root lead bg exec count after grandchild start", func() bool {
+		tot, self, desc := hostCounts()
+		return tot == 1 && self == 0 && desc == 1
+	})
+
+	// Add 1 job on lead itself + 1 user-only job on child (must be ignored).
+	jobs.setAgent(leadID, 1)
+	jobs.setUserOnly(child.ID, 2)
+	h.runner.ExecJobsChanged()
+	eventually(t, "root lead bg exec count with self+grandchild excluding user-only", func() bool {
+		tot, self, desc := hostCounts()
+		return tot == 2 && self == 1 && desc == 1
+	})
+
+	// Finish grandchild job -> root lead updates to total=1, self=1, desc=0.
+	jobs.setAgent(grand.ID, 0)
+	h.runner.ExecJobsChanged()
+	eventually(t, "root lead bg exec count after grandchild exit", func() bool {
+		tot, self, desc := hostCounts()
+		return tot == 1 && self == 1 && desc == 0
+	})
+
+	// Finish lead job -> root lead returns to 0/0/0.
+	jobs.setAgent(leadID, 0)
+	h.runner.ExecJobsChanged()
+	eventually(t, "root lead bg exec count back to zero", func() bool {
+		tot, self, desc := hostCounts()
+		return tot == 0 && self == 0 && desc == 0
+	})
 }

@@ -55,7 +55,7 @@ func (c *conv) restoreWorkerMCP() {
 // the holder passed the ownership match and the rejected-holder guard; a
 // mismatched holder is never stopped. Replay, events, and the MCP bearer were
 // never opened.
-//   - The record stays listable, stopped, with the cross-harness refusal as
+//   - The closed record stays listable with the cross-harness refusal as
 //     its error.
 //   - An open turn settles failed with that reason, as a process gone at
 //     rejoin does (processGone).
@@ -77,7 +77,8 @@ func (c *conv) retireCrossHarnessWorker(hp holderProcess) {
 		hp.Detach()
 		c.events = nil
 	}
-	if err := c.r.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+	if err := c.r.opts.Holders.Stop(id); err != nil &&
+		(!errors.Is(err, wsholder.ErrUnknownHolder) || errors.Is(err, wsholder.ErrUnknownHolderIncomplete)) {
 		c.crossHarnessRetiring = true
 		// The next beat asks again; replaying keeps checkReattach running.
 		c.replayAsked = false
@@ -89,6 +90,8 @@ func (c *conv) retireCrossHarnessWorker(hp holderProcess) {
 		}
 		return
 	}
+	// The orphan sweep may already have taken its inventory for this scan.
+	c.r.holders.reject(id)
 	c.crossHarnessRetiring = false
 	c.replaying, c.replayAsked = false, false
 	// A failed attempt's stop error no longer applies.
@@ -137,22 +140,23 @@ func (c *conv) retryRetirement(hp holderProcess, wake bool) {
 //   - it failed the ownership match;
 //   - a downgrade retired it.
 //
-// The record shows the refusal and gets a fresh activity stamp, so its child
-// expiry runs one full interval with the reason visible, not at once from
-// an old stamp. It does nothing while a retirement is still retrying
-// (workerRetiring).
+// Preserve the refusal and retirement timestamp on the historical record.
+// Retirement must finish before the conversation can close.
 func (c *conv) crossHarnessRetired() {
-	if !c.crossHarnessRejoin || c.workerRetiring {
+	if !c.crossHarnessRejoin || c.retiringHolder() || c.rec.HolderID != "" {
 		return
 	}
-	refusal := c.r.admitWorkerRecord(c.record())
+	refusal := c.r.deadBindingRefusal(c.record(), "")
 	if refusal == nil {
 		return
 	}
 	c.crossHarnessRejoin = false
 	c.setStatus(func() { c.lastErr, c.wakeRefused = refusal.Error(), true })
 	c.update(func(rec *Record) { rec.LastActiveAt = c.r.opts.Now().UTC().Format(time.RFC3339) })
-	c.writeRegistration()
+	c.closeDeadAfterRefusal(refusal)
+	if !c.closed {
+		c.writeRegistration()
+	}
 }
 
 // A parent's activity stamp denotes settlement only without any later input.

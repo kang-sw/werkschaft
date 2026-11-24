@@ -61,6 +61,12 @@ type Host struct {
 	// Nil is unknown, distinct from a known zero; BackgroundTasks keeps its meaning.
 	Background *int `json:"background,omitempty"`
 	Monitors   *int `json:"monitors,omitempty"`
+	// BgExecCount, BgExecSelf, and BgExecDesc count running agent-origin
+	// hosted ws/exec jobs across this session and its recursive descendants.
+	// Memory-only live counts (stripped by Snapshot.ForDisk).
+	BgExecCount int `json:"bg_exec_count,omitempty"`
+	BgExecSelf  int `json:"bg_exec_self,omitempty"`
+	BgExecDesc  int `json:"bg_exec_desc,omitempty"`
 	// Failure is the typed failure that keeps the session from working (a
 	// login needed, a model unavailable, a usage limit) until a turn
 	// succeeds; nil when none.
@@ -106,6 +112,9 @@ func (st *State) SetHost(h *Host) bool {
 		c := *h
 		c.BackgroundTasks = max(c.BackgroundTasks, 0)
 		c.Background, c.Monitors = taskCount(c.Background), taskCount(c.Monitors)
+		c.BgExecCount = max(c.BgExecCount, 0)
+		c.BgExecSelf = max(c.BgExecSelf, 0)
+		c.BgExecDesc = max(c.BgExecDesc, 0)
 		if c.Failure != nil {
 			f := *c.Failure
 			f.Text = cleanLine(st.scrub.scrub(f.Text), NoticeTextRunes)

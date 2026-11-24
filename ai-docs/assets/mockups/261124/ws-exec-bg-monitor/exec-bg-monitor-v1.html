@@ -1,0 +1,1559 @@
+<style>
+  .ebm-root {
+    --ebm-bg: #141518;
+    --ebm-card: #1e2024;
+    --ebm-hover: #25272c;
+    --ebm-muted: #2b2d32;
+    --ebm-well: #16181c;
+    --ebm-fg: #e7e7e4;
+    --ebm-muted-fg: #a2a6ad;
+    --ebm-line: rgba(231, 231, 228, 0.12);
+    --ebm-line-soft: rgba(231, 231, 228, 0.07);
+    --ebm-wash: rgba(231, 231, 228, 0.06);
+    --ebm-primary: #7aa2ff;
+    --ebm-primary-fg: #0c1424;
+    --ebm-ok: #6cc39a;
+    --ebm-warn: #e0a36c;
+    --ebm-fail: #f0797e;
+    --ebm-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    --ebm-shadow-hi: 0 2px 4px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.4);
+    --ebm-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    --ebm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 18px 14px 28px;
+    background: var(--ebm-bg);
+    color: var(--ebm-fg);
+    font: 13px/1.5 var(--ebm-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .ebm-root *, .ebm-root *::before, .ebm-root *::after {
+    box-sizing: border-box;
+  }
+
+  /* Page Header */
+  .ebm-hero {
+    margin-bottom: 20px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--ebm-card);
+    box-shadow: var(--ebm-shadow);
+  }
+  .ebm-hero-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: var(--ebm-primary);
+    margin-bottom: 4px;
+  }
+  .ebm-hero h1 {
+    margin: 0 0 6px;
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1.35;
+    color: var(--ebm-fg);
+  }
+  .ebm-hero p {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--ebm-muted-fg);
+    line-height: 1.55;
+  }
+  .ebm-hero-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .ebm-kchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--ebm-muted);
+    color: var(--ebm-fg);
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .ebm-kchip.is-primary {
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--ebm-primary);
+  }
+  .ebm-kchip.is-warn {
+    background: rgba(224, 163, 108, 0.16);
+    color: var(--ebm-warn);
+  }
+
+  /* Variant Section */
+  .ebm-section {
+    margin-bottom: 24px;
+  }
+  .ebm-sec-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-bottom: 10px;
+    padding: 0 2px;
+  }
+  .ebm-sec-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ebm-fg);
+  }
+  .ebm-sec-tag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--ebm-primary);
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .ebm-sec-meta {
+    font-size: 11.5px;
+    color: var(--ebm-muted-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .ebm-sec-desc {
+    margin: 0 0 12px;
+    padding: 0 2px;
+    font-size: 12px;
+    color: var(--ebm-muted-fg);
+  }
+
+  /* Convo + Composer Anchor Stage */
+  .ebm-stage {
+    position: relative;
+    border-radius: 12px;
+    background: #17191d;
+    padding: 16px 14px 12px;
+    box-shadow: inset 0 0 0 1px var(--ebm-line-soft);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+  }
+  .ebm-convo-hint {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 4px 2px;
+    font-size: 11.5px;
+    color: rgba(162, 166, 173, 0.55);
+    font-family: var(--ebm-mono);
+    overflow: hidden;
+  }
+  .ebm-convo-hint span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-convo-hint .ebm-time {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Floating Composer Context + Badge Strip */
+  .ebm-composer-wrap {
+    align-self: stretch;
+    position: relative;
+    margin-top: 10px;
+  }
+  .ebm-cbadges {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 8px -12px;
+  }
+  .ebm-composer-card {
+    border-radius: 12px;
+    background: var(--ebm-card);
+    box-shadow: var(--ebm-shadow-hi);
+    padding: 18px 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .ebm-meter-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11.5px;
+    font-family: var(--ebm-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-meter-bar {
+    flex: 1 1 auto;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--ebm-muted);
+    overflow: hidden;
+    max-width: 180px;
+  }
+  .ebm-meter-fill {
+    width: 53%;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--ebm-primary);
+  }
+  .ebm-cinput {
+    height: 30px;
+    border-radius: 10px;
+    background: var(--ebm-well);
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: rgba(162, 166, 173, 0.52);
+  }
+
+  /* Badges (exact Werkschaft pill grammar) */
+  .ebm-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 10px 0 8px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--ebm-card);
+    color: var(--ebm-muted-fg);
+    font: 700 11.5px/1 var(--ebm-sans);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    box-shadow: inset 0 0 0 1.5px rgba(162, 166, 173, 0.35), var(--ebm-shadow-hi);
+  }
+  .ebm-pill-sub {
+    color: var(--ebm-primary);
+    box-shadow: inset 0 0 0 1.5px rgba(122, 162, 255, 0.45), var(--ebm-shadow-hi);
+  }
+  .ebm-pill-sub .ebm-sword {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-pill-bg {
+    color: var(--ebm-fg);
+    background: #272f42;
+    box-shadow: inset 0 0 0 1.5px var(--ebm-primary), var(--ebm-shadow-hi);
+  }
+  .ebm-pill-bg .ebm-bg-cnt {
+    color: var(--ebm-primary);
+    font-weight: 800;
+  }
+  .ebm-pill-bg .ebm-bg-split {
+    margin-left: 2px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--ebm-primary);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .ebm-pill-user {
+    padding: 0 9px 0 4px;
+    color: var(--ebm-fg);
+    background: var(--ebm-card);
+    box-shadow: inset 0 0 0 1.5px rgba(224, 163, 108, 0.5), var(--ebm-shadow-hi);
+  }
+  .ebm-user-emblem {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(224, 163, 108, 0.18);
+    color: var(--ebm-warn);
+    font: 800 10px/1 var(--ebm-mono);
+  }
+  .ebm-spin {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.8px solid rgba(122, 162, 255, 0.25);
+    border-top-color: var(--ebm-primary);
+    border-right-color: var(--ebm-primary);
+    flex: none;
+  }
+  .ebm-ico {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    display: inline-block;
+  }
+
+  /* Shared Popover Shell */
+  .ebm-pop {
+    width: 100%;
+    border-radius: 12px;
+    background: var(--ebm-card);
+    color: var(--ebm-fg);
+    box-shadow: var(--ebm-shadow-hi), inset 0 0 0 1px var(--ebm-line);
+    overflow: hidden;
+  }
+  .ebm-pop-a { max-width: 460px; }
+  .ebm-pop-b { max-width: 680px; }
+  .ebm-pop-c { max-width: 500px; }
+
+  /* Popover Header */
+  .ebm-pop-hd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 9px;
+    background: var(--ebm-card);
+    border-bottom: 1px solid var(--ebm-line-soft);
+  }
+  .ebm-pop-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--ebm-fg);
+    white-space: nowrap;
+  }
+  .ebm-pop-sub {
+    font-size: 11px;
+    color: var(--ebm-muted-fg);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .ebm-hd-spacer { flex: 1 1 auto; }
+  .ebm-seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--ebm-well);
+  }
+  .ebm-seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ebm-muted-fg);
+    white-space: nowrap;
+  }
+  .ebm-seg-btn.is-active {
+    background: var(--ebm-muted);
+    color: var(--ebm-fg);
+  }
+  .ebm-ibtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ebm-muted-fg);
+    font-size: 13px;
+    font-weight: 700;
+    flex: none;
+  }
+  .ebm-ibtn.is-hover {
+    background: var(--ebm-muted);
+    color: var(--ebm-fg);
+  }
+  .ebm-ibtn.is-pinned {
+    background: rgba(122, 162, 255, 0.15);
+    color: var(--ebm-primary);
+  }
+
+  /* Status Dots & Pills */
+  .ebm-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--ebm-primary);
+  }
+  .ebm-dot.is-ok { background: var(--ebm-ok); }
+  .ebm-dot.is-warn { background: var(--ebm-warn); }
+  .ebm-dot.is-fail { background: var(--ebm-fail); }
+  .ebm-dot.is-live {
+    background: var(--ebm-ok);
+    box-shadow: 0 0 0 3px rgba(108, 195, 154, 0.2);
+  }
+
+  .ebm-stpill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 19px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--ebm-primary);
+  }
+  .ebm-stpill.is-ok {
+    background: rgba(108, 195, 154, 0.16);
+    color: var(--ebm-ok);
+  }
+  .ebm-stpill.is-muted {
+    background: var(--ebm-muted);
+    color: var(--ebm-muted-fg);
+  }
+
+  /* Harness Emblem (tiny 16px) */
+  .ebm-hem {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    font: 800 9px/1 var(--ebm-sans);
+    flex: none;
+  }
+  .ebm-hem.is-lead { background: #d97757; color: #ffffff; }
+  .ebm-hem.is-agy { background: #3b7be8; color: #ffffff; }
+  .ebm-hem.is-codex { background: #e7e7e4; color: #18181b; }
+
+  /* Hold-to-Confirm Destructive Stop Button (1.5s WsHoldConfirm cue) */
+  .ebm-stop-hold {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 6px;
+    background: rgba(240, 121, 126, 0.12);
+    color: var(--ebm-fail);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .ebm-stop-hold::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 34%;
+    background: rgba(240, 121, 126, 0.2);
+    pointer-events: none;
+  }
+  .ebm-stop-hold span {
+    position: relative;
+    z-index: 1;
+  }
+  .ebm-stop-sq {
+    width: 7px;
+    height: 7px;
+    border-radius: 1.5px;
+    background: currentColor;
+    flex: none;
+    position: relative;
+    z-index: 1;
+  }
+  .ebm-act-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 6px;
+    background: var(--ebm-muted);
+    color: var(--ebm-fg);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .ebm-act-btn.is-ghost {
+    background: transparent;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-act-btn.is-ghost-lit {
+    background: var(--ebm-hover);
+    color: var(--ebm-fg);
+  }
+
+  /* Recessed Terminal / Tail Well */
+  .ebm-tail {
+    border-radius: 8px;
+    background: var(--ebm-well);
+    padding: 8px 10px;
+    font: 11.2px/1.52 var(--ebm-mono);
+    color: var(--ebm-fg);
+    overflow: hidden;
+  }
+  .ebm-tail-line {
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .ebm-tail-line.is-dim { color: var(--ebm-muted-fg); }
+  .ebm-tail-line.is-ok { color: var(--ebm-ok); }
+  .ebm-tail-line.is-err {
+    color: var(--ebm-fail);
+    box-shadow: inset 2px 0 0 var(--ebm-fail);
+    padding-left: 7px;
+    margin-left: -3px;
+  }
+  .ebm-tail-cursor {
+    display: inline-block;
+    width: 6px;
+    height: 11px;
+    background: var(--ebm-muted-fg);
+    vertical-align: -1px;
+    margin-left: 2px;
+    opacity: 0.75;
+  }
+  .ebm-tail-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 10.5px;
+    color: var(--ebm-muted-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .ebm-live-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 700;
+    color: var(--ebm-ok);
+  }
+
+  /* ================= VARIANT A: Tree-Grouped Accordion ================= */
+  .ebm-a-body {
+    padding: 8px 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ebm-a-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ebm-a-group.is-d1 { padding-left: 12px; }
+  .ebm-a-group.is-d2 { padding-left: 24px; }
+  .ebm-a-aghd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-a-branch {
+    font-family: var(--ebm-mono);
+    color: rgba(162, 166, 173, 0.55);
+    font-size: 11px;
+    flex: none;
+  }
+  .ebm-a-agname {
+    color: var(--ebm-fg);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-a-role {
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--ebm-muted);
+    color: var(--ebm-muted-fg);
+    font-size: 10px;
+    font-weight: 700;
+    flex: none;
+  }
+  .ebm-a-role.is-self {
+    background: rgba(122, 162, 255, 0.14);
+    color: var(--ebm-primary);
+  }
+  .ebm-a-jump {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    color: var(--ebm-muted-fg);
+    font-size: 11px;
+  }
+  .ebm-a-jump.is-lit {
+    background: var(--ebm-hover);
+    color: var(--ebm-fg);
+  }
+  .ebm-a-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: transparent;
+    min-width: 0;
+  }
+  .ebm-a-row.is-hover {
+    background: var(--ebm-hover);
+  }
+  .ebm-a-row.is-expanded {
+    background: rgba(122, 162, 255, 0.12);
+    border-radius: 7px 7px 0 0;
+  }
+  .ebm-a-cmd {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: 600 11.5px/1.3 var(--ebm-mono);
+    color: var(--ebm-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-a-cwd {
+    flex: none;
+    max-width: 108px;
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--ebm-well);
+    color: var(--ebm-muted-fg);
+    font: 500 10px/1.4 var(--ebm-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-a-el {
+    flex: none;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-a-chev {
+    flex: none;
+    font-size: 10px;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-a-drawer {
+    padding: 8px 8px 9px;
+    border-radius: 0 0 8px 8px;
+    background: #23262d;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .ebm-a-dmeta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 10.5px;
+    color: var(--ebm-muted-fg);
+    font-family: var(--ebm-mono);
+  }
+  .ebm-a-dacts {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 2px;
+  }
+  .ebm-a-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 2px;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-a-divider::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--ebm-line-soft);
+  }
+  .ebm-a-row.is-done {
+    opacity: 0.78;
+  }
+
+  /* ================= VARIANT B: Master-Detail Split ================= */
+  .ebm-b-grid {
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);
+    min-height: 312px;
+  }
+  .ebm-b-left {
+    background: #1a1c20;
+    padding: 8px 6px;
+    border-right: 1px solid var(--ebm-line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .ebm-b-ag {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px 2px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-b-ag.is-d1 { padding-left: 14px; }
+  .ebm-b-ag.is-d2 { padding-left: 24px; }
+  .ebm-b-ag span.ebm-b-an {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ebm-fg);
+  }
+  .ebm-b-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    min-width: 0;
+  }
+  .ebm-b-item.is-d1 { margin-left: 10px; }
+  .ebm-b-item.is-d2 { margin-left: 20px; }
+  .ebm-b-item.is-selected {
+    background: rgba(122, 162, 255, 0.14);
+  }
+  .ebm-b-item-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .ebm-b-cmd {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: 600 11.2px/1.3 var(--ebm-mono);
+    color: var(--ebm-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-b-item-sub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding-left: 13px;
+    font-size: 10.5px;
+    color: var(--ebm-muted-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .ebm-b-right {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .ebm-b-crumb {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-b-crumb b {
+    color: var(--ebm-fg);
+    font-weight: 700;
+  }
+  .ebm-b-crumb-sep {
+    opacity: 0.45;
+  }
+  .ebm-b-cmdbox {
+    border-radius: 7px;
+    background: var(--ebm-well);
+    padding: 6px 9px;
+    font: 600 11.5px/1.4 var(--ebm-mono);
+    color: var(--ebm-fg);
+    word-break: break-all;
+  }
+  .ebm-b-cmdbox::before {
+    content: "$ ";
+    color: var(--ebm-muted-fg);
+  }
+  .ebm-b-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font-size: 11px;
+    color: var(--ebm-muted-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .ebm-b-meta code {
+    font-family: var(--ebm-mono);
+    font-size: 10.5px;
+    color: var(--ebm-fg);
+    background: var(--ebm-muted);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+  .ebm-b-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: auto;
+    padding-top: 2px;
+  }
+  .ebm-b-actions .ebm-hd-spacer { flex: 1 1 auto; }
+
+  /* ================= VARIANT C: Flat Breadcrumb List + Docked Tail ================= */
+  .ebm-c-list {
+    padding: 7px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ebm-c-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border-radius: 7px;
+    min-width: 0;
+  }
+  .ebm-c-row.is-selected {
+    background: rgba(122, 162, 255, 0.14);
+  }
+  .ebm-c-row.is-done {
+    opacity: 0.72;
+  }
+  .ebm-c-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .ebm-c-cmd {
+    font: 600 11.5px/1.3 var(--ebm-mono);
+    color: var(--ebm-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-c-anc {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    color: var(--ebm-muted-fg);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ebm-c-depth {
+    display: inline-flex;
+    align-items: center;
+    height: 15px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--ebm-muted);
+    color: var(--ebm-muted-fg);
+    font: 700 9.5px/1 var(--ebm-mono);
+    flex: none;
+  }
+  .ebm-c-depth.is-self {
+    background: rgba(122, 162, 255, 0.16);
+    color: var(--ebm-primary);
+  }
+  .ebm-c-el {
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ebm-muted-fg);
+    white-space: nowrap;
+  }
+  .ebm-c-dock {
+    border-top: 1px solid var(--ebm-line-soft);
+    background: #1a1c20;
+    padding: 8px 10px 9px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ebm-c-dock-hd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .ebm-c-dock-title {
+    font: 700 11.2px/1.3 var(--ebm-mono);
+    color: var(--ebm-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .ebm-callout {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: rgba(122, 162, 255, 0.09);
+    color: var(--ebm-muted-fg);
+    font-size: 11.5px;
+  }
+  .ebm-callout b { color: var(--ebm-fg); }
+
+  /* Comparison Table & Badge Note */
+  .ebm-compare {
+    margin-top: 22px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--ebm-card);
+    box-shadow: var(--ebm-shadow);
+  }
+  .ebm-compare h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ebm-fg);
+  }
+  .ebm-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+  }
+  .ebm-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .ebm-table th {
+    text-align: left;
+    padding: 7px 8px;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--ebm-muted-fg);
+    border-bottom: 1px solid var(--ebm-line);
+    white-space: nowrap;
+  }
+  .ebm-table td {
+    padding: 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--ebm-line-soft);
+    color: var(--ebm-fg);
+    line-height: 1.45;
+  }
+  .ebm-table tr:last-child td { border-bottom: 0; }
+  .ebm-table td.ebm-col-k {
+    font-weight: 700;
+    color: var(--ebm-primary);
+    white-space: nowrap;
+  }
+  .ebm-note-box {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--ebm-well);
+    font-size: 12px;
+    color: var(--ebm-muted-fg);
+    line-height: 1.55;
+  }
+  .ebm-note-box b { color: var(--ebm-fg); }
+  .ebm-note-box code {
+    font-family: var(--ebm-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--ebm-muted);
+    color: var(--ebm-fg);
+  }
+
+  @media (max-width: 640px) {
+    .ebm-b-grid {
+      grid-template-columns: 1fr;
+    }
+    .ebm-b-left {
+      border-right: 0;
+      border-bottom: 1px solid var(--ebm-line-soft);
+    }
+  }
+</style>
+
+<div class="ebm-root">
+  <!-- Intro -->
+  <div class="ebm-hero">
+    <div class="ebm-hero-kicker">WERKSCHAFT DASHBOARD · MOCKUP V1</div>
+    <h1>재귀 자손 ws/exec 백그라운드 작업 모니터 팝업 (A / B / C안)</h1>
+    <p>
+      컴포저 상단 <strong>N 백그라운드 작업</strong> 뱃지를 클릭해 현재 리드(본인)와 모든 하위 자손 에이전트(자식 → 손자 …)의
+      비동기 <code>ws/exec</code> 작업을 한곳에서 누적 모니터링·실시간 테일·중지(1.5초 꾹)하는 3가지 팝오버 시안입니다.
+    </p>
+    <div class="ebm-hero-pills">
+      <span class="ebm-kchip is-primary">⚙ 백그라운드 작업 3개 (본인 1 · 자손 2)</span>
+      <span class="ebm-kchip">최근 완료 1개 포함</span>
+      <span class="ebm-kchip is-warn">&gt;_ 1 사용자 직접 실행 뱃지 별도 유지</span>
+    </div>
+  </div>
+
+  <!-- ================= A안 ================= -->
+  <section class="ebm-section">
+    <div class="ebm-sec-head">
+      <div class="ebm-sec-title">
+        <span class="ebm-sec-tag">A안</span>
+        계층 트리 그룹 + 인라인 로그 아코디언
+      </div>
+      <div class="ebm-sec-meta">폭 ~460px · 트리 구조 직관성 우선</div>
+    </div>
+    <p class="ebm-sec-desc">
+      에이전트 트리 헤더 아래에 해당 에이전트의 <code>ws/exec</code> 작업을 묶어 표시합니다.
+      평소에는 1줄로 컴팩트하게 접혀 있고, 행을 클릭하면 그 자리에서 <code>exec_tail</code> 실시간 출력창이 펼쳐집니다.
+    </p>
+
+    <div class="ebm-stage">
+      <div class="ebm-convo-hint">
+        <span>Reply with mailbox.send(to: "id:bovine...", content: ...)</span>
+        <span class="ebm-time">21:54</span>
+      </div>
+
+      <!-- Popover A -->
+      <div class="ebm-pop ebm-pop-a">
+        <div class="ebm-pop-hd">
+          <span class="ebm-pop-title">백그라운드 ws/exec 작업</span>
+          <span class="ebm-hd-spacer"></span>
+          <div class="ebm-seg">
+            <span class="ebm-seg-btn is-active">실행 중 3</span>
+            <span class="ebm-seg-btn">완료 1</span>
+          </div>
+          <span class="ebm-ibtn" title="고정: 바깥 클릭 무시"><svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.8 2.8l3.4 3.4-1.4 1.4-1-.4-2.2 2.2.3 1.7-1.1 1.1-2.4-2.4-2.8 2.8m2.8-2.8L3 7.4l1.1-1.1 1.7.3 2.2-2.2-.4-1 1.2-1.2z"/></svg></span>
+          <span class="ebm-ibtn" title="닫기 (Esc)">×</span>
+        </div>
+
+        <div class="ebm-a-body">
+          <!-- Depth 0: Lead -->
+          <div class="ebm-a-group">
+            <div class="ebm-a-aghd">
+              <span class="ebm-hem is-lead">C</span>
+              <span class="ebm-a-agname">리드</span>
+              <span class="ebm-a-role is-self">본인</span>
+            </div>
+            <div class="ebm-a-row">
+              <span class="ebm-dot"></span>
+              <span class="ebm-a-cmd">go test ./internal/wsdashboard -timeout 45m</span>
+              <span class="ebm-a-cwd">agents-plugin-tool</span>
+              <span class="ebm-a-el">03:18</span>
+              <span class="ebm-a-chev">▸</span>
+            </div>
+          </div>
+
+          <!-- Depth 1: Child -->
+          <div class="ebm-a-group is-d1">
+            <div class="ebm-a-aghd">
+              <span class="ebm-a-branch">└</span>
+              <span class="ebm-hem is-agy">A</span>
+              <span class="ebm-a-agname">quota-continuation-p1-p2</span>
+              <span class="ebm-a-role">자식</span>
+              <span class="ebm-a-jump" title="에이전트로 이동">↗</span>
+            </div>
+            <div class="ebm-a-row is-hover">
+              <span class="ebm-dot"></span>
+              <span class="ebm-a-cmd">go test ./internal/wsagent ./internal/mcp -count=1</span>
+              <span class="ebm-a-cwd">agents-plugin-tool</span>
+              <span class="ebm-a-el">01:04</span>
+              <span class="ebm-a-chev">▸</span>
+            </div>
+          </div>
+
+          <!-- Depth 2: Grandchild (Expanded Inline) -->
+          <div class="ebm-a-group is-d2">
+            <div class="ebm-a-aghd">
+              <span class="ebm-a-branch">└</span>
+              <span class="ebm-hem is-agy">A</span>
+              <span class="ebm-a-agname">verify-chromium-helper</span>
+              <span class="ebm-a-role">손자</span>
+              <span class="ebm-a-jump is-lit" title="에이전트로 이동">↗</span>
+            </div>
+            <div class="ebm-a-row is-expanded">
+              <span class="ebm-dot"></span>
+              <span class="ebm-a-cmd">node testdata/note-typing.browser.cjs</span>
+              <span class="ebm-a-el">00:27</span>
+              <span class="ebm-a-chev">▾</span>
+            </div>
+            <div class="ebm-a-drawer">
+              <div class="ebm-a-dmeta">
+                <span>exec_velvet-spark-orbit</span>
+                <span>cwd: …/internal/wsdashboard</span>
+              </div>
+              <div class="ebm-tail">
+                <span class="ebm-tail-line is-dim">[22:00:51] playwright: chromium launched (headless)</span>
+                <span class="ebm-tail-line">PASS  note-typing: korean IME composition (412ms)</span>
+                <span class="ebm-tail-line">PASS  note-typing: shift+enter newline (188ms)</span>
+                <span class="ebm-tail-line is-err">WARN  slow layout frame: 24.3ms on #composer swap</span>
+                <span class="ebm-tail-line">RUN   note-typing: paste multiline markdown...</span>
+                <span class="ebm-tail-line is-ok">  ✓ clipboard event settled, checking caret<span class="ebm-tail-cursor"></span></span>
+              </div>
+              <div class="ebm-tail-foot">
+                <span class="ebm-live-tag"><span class="ebm-dot is-live"></span>실시간 · 자동 따라가기</span>
+                <span>4.0 KiB / 14.2 KiB</span>
+              </div>
+              <div class="ebm-a-dacts">
+                <span class="ebm-act-btn">출력 복사</span>
+                <span class="ebm-act-btn is-ghost">줄바꿈</span>
+                <span class="ebm-hd-spacer"></span>
+                <span class="ebm-stop-hold"><span class="ebm-stop-sq"></span><span>중지 (1.5초 꾹)</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recently Completed -->
+          <div class="ebm-a-divider">최근 완료</div>
+          <div class="ebm-a-row is-done">
+            <span class="ebm-dot is-ok"></span>
+            <span class="ebm-a-cmd">GOOS=windows go vet ./...</span>
+            <span class="ebm-stpill is-ok">완료 · 0</span>
+            <span class="ebm-a-el">12s · 1분 전</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Composer + Badge Cluster -->
+      <div class="ebm-composer-wrap">
+        <div class="ebm-cbadges">
+          <span class="ebm-pill ebm-pill-sub">
+            <span class="ebm-spin"></span>
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="5" width="10" height="8" rx="2"/><circle cx="6.2" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="9.8" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M8 2.5V5M5.5 11.2h5"/></svg>
+            <span>2</span>
+            <span class="ebm-sword">실행 중</span>
+          </span>
+          <span class="ebm-pill ebm-pill-bg">
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.6M8 12.2v1.6M2.2 8h1.6M12.2 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9L11 5M5 11l-1.1 1.1"/></svg>
+            <span class="ebm-bg-cnt">3</span>
+            <span>백그라운드 작업</span>
+          </span>
+          <span class="ebm-pill ebm-pill-user" title="사용자가 직접 실행한 명령">
+            <span class="ebm-user-emblem">&gt;_</span>
+            <span>1</span>
+          </span>
+        </div>
+        <div class="ebm-composer-card">
+          <div class="ebm-meter-row">
+            <div class="ebm-meter-bar"><div class="ebm-meter-fill"></div></div>
+            <span>123,024 / 230K (1.0M)</span>
+          </div>
+          <div class="ebm-cinput">메시지 입력 또는 ! 셸 명령 실행…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= B안 ================= -->
+  <section class="ebm-section">
+    <div class="ebm-sec-head">
+      <div class="ebm-sec-title">
+        <span class="ebm-sec-tag">B안</span>
+        마스터-디테일 2단 분할 팝오버
+      </div>
+      <div class="ebm-sec-meta">폭 ~680px (좌 236px + 우 444px) · 지속 모니터링 최적</div>
+    </div>
+    <p class="ebm-sec-desc">
+      왼쪽 트리에서 계층별 작업을 빠르게 전환하고, 오른쪽 고정 <code>exec_tail</code> 터미널 영역에서 긴 빌드·테스트 로그를
+      스크롤 튐 없이 연속 관찰합니다.
+    </p>
+
+    <div class="ebm-stage">
+      <div class="ebm-convo-hint">
+        <span>Reply with mailbox.send(to: "id:bovine...", content: ...)</span>
+        <span class="ebm-time">21:54</span>
+      </div>
+
+      <!-- Popover B -->
+      <div class="ebm-pop ebm-pop-b">
+        <div class="ebm-pop-hd">
+          <span class="ebm-pop-title">백그라운드 ws/exec 작업</span>
+          <span class="ebm-pop-sub">본인 1 · 자손 2</span>
+          <span class="ebm-hd-spacer"></span>
+          <div class="ebm-seg">
+            <span class="ebm-seg-btn is-active">실행 중 3</span>
+            <span class="ebm-seg-btn">최근 완료 1</span>
+          </div>
+          <span class="ebm-ibtn is-pinned" title="고정됨: 바깥 클릭 무시"><svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.8 2.8l3.4 3.4-1.4 1.4-1-.4-2.2 2.2.3 1.7-1.1 1.1-2.4-2.4-2.8 2.8m2.8-2.8L3 7.4l1.1-1.1 1.7.3 2.2-2.2-.4-1 1.2-1.2z"/></svg></span>
+          <span class="ebm-ibtn" title="닫기 (Esc)">×</span>
+        </div>
+
+        <div class="ebm-b-grid">
+          <!-- Left Tree Pane -->
+          <div class="ebm-b-left">
+            <div class="ebm-b-ag">
+              <span class="ebm-hem is-lead">C</span>
+              <span class="ebm-b-an">리드 (본인)</span>
+            </div>
+            <div class="ebm-b-item">
+              <div class="ebm-b-item-top">
+                <span class="ebm-dot"></span>
+                <span class="ebm-b-cmd">go test ./internal/wsdashboard</span>
+              </div>
+              <div class="ebm-b-item-sub">
+                <span>실행 중</span>
+                <span>03:18</span>
+              </div>
+            </div>
+
+            <div class="ebm-b-ag is-d1">
+              <span class="ebm-a-branch">└</span>
+              <span class="ebm-hem is-agy">A</span>
+              <span class="ebm-b-an">quota-continuation-p1-p2</span>
+            </div>
+            <div class="ebm-b-item is-d1">
+              <div class="ebm-b-item-top">
+                <span class="ebm-dot"></span>
+                <span class="ebm-b-cmd">go test ./internal/wsagent ...</span>
+              </div>
+              <div class="ebm-b-item-sub">
+                <span>실행 중</span>
+                <span>01:04</span>
+              </div>
+            </div>
+
+            <div class="ebm-b-ag is-d2">
+              <span class="ebm-a-branch">└</span>
+              <span class="ebm-hem is-agy">A</span>
+              <span class="ebm-b-an">verify-chromium-helper</span>
+            </div>
+            <div class="ebm-b-item is-d2 is-selected">
+              <div class="ebm-b-item-top">
+                <span class="ebm-dot"></span>
+                <span class="ebm-b-cmd">node testdata/note-typing...</span>
+              </div>
+              <div class="ebm-b-item-sub">
+                <span style="color:#7aa2ff;font-weight:700;">실행 중 · 선택됨</span>
+                <span>00:27</span>
+              </div>
+            </div>
+
+            <div class="ebm-a-divider" style="margin-top:6px;">최근 완료</div>
+            <div class="ebm-b-item" style="opacity:0.72;">
+              <div class="ebm-b-item-top">
+                <span class="ebm-dot is-ok"></span>
+                <span class="ebm-b-cmd">GOOS=windows go vet ./...</span>
+              </div>
+              <div class="ebm-b-item-sub">
+                <span>완료 · 0 · 본인</span>
+                <span>12s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Detail Tail Pane -->
+          <div class="ebm-b-right">
+            <div class="ebm-b-crumb">
+              <span>리드</span>
+              <span class="ebm-b-crumb-sep">›</span>
+              <span>quota-continuation-p1-p2</span>
+              <span class="ebm-b-crumb-sep">›</span>
+              <b>verify-chromium-helper</b>
+              <span class="ebm-hd-spacer"></span>
+              <span class="ebm-stpill">실행 중</span>
+            </div>
+
+            <div class="ebm-b-cmdbox">node testdata/note-typing.browser.cjs</div>
+
+            <div class="ebm-b-meta">
+              <span>ID <code>exec_velvet-spark-orbit</code></span>
+              <span>디렉터리 <code>…/internal/wsdashboard</code></span>
+              <span>경과 <b style="color:#e7e7e4;">00:27</b></span>
+            </div>
+
+            <div class="ebm-tail" style="flex:1 1 auto;">
+              <span class="ebm-tail-line is-dim">[22:00:51] playwright: chromium launched (760x900)</span>
+              <span class="ebm-tail-line">[22:00:54] PASS  korean IME composition (412ms)</span>
+              <span class="ebm-tail-line">[22:00:58] PASS  shift+enter newline (188ms)</span>
+              <span class="ebm-tail-line">[22:01:03] PASS  undo/redo ring buffer (95ms)</span>
+              <span class="ebm-tail-line is-err">[22:01:08] stderr: WARN slow frame 24.3ms (#composer)</span>
+              <span class="ebm-tail-line">[22:01:12] RUN   paste multiline markdown...</span>
+              <span class="ebm-tail-line is-ok">[22:01:16]   ✓ clipboard settled, caret=42<span class="ebm-tail-cursor"></span></span>
+            </div>
+
+            <div class="ebm-tail-foot" style="margin-top:0;">
+              <span class="ebm-live-tag"><span class="ebm-dot is-live"></span>실시간</span>
+              <span>끝부분 · 누적 14.2 KiB 중 4.0 KiB · stdout+stderr</span>
+            </div>
+
+            <div class="ebm-b-actions">
+              <span class="ebm-act-btn">출력 복사</span>
+              <span class="ebm-act-btn is-ghost-lit">에이전트로 이동 ↗</span>
+              <span class="ebm-hd-spacer"></span>
+              <span class="ebm-stop-hold"><span class="ebm-stop-sq"></span><span>중지 (1.5초 꾹)</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Composer + Badge Cluster -->
+      <div class="ebm-composer-wrap">
+        <div class="ebm-cbadges">
+          <span class="ebm-pill ebm-pill-sub">
+            <span class="ebm-spin"></span>
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="5" width="10" height="8" rx="2"/><circle cx="6.2" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="9.8" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M8 2.5V5M5.5 11.2h5"/></svg>
+            <span>2</span>
+            <span class="ebm-sword">실행 중</span>
+          </span>
+          <span class="ebm-pill ebm-pill-bg">
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.6M8 12.2v1.6M2.2 8h1.6M12.2 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9L11 5M5 11l-1.1 1.1"/></svg>
+            <span class="ebm-bg-cnt">3</span>
+            <span>백그라운드 작업</span>
+            <span class="ebm-bg-split">본인 1 · 자손 2</span>
+          </span>
+          <span class="ebm-pill ebm-pill-user" title="사용자가 직접 실행한 명령">
+            <span class="ebm-user-emblem">&gt;_</span>
+            <span>1</span>
+          </span>
+        </div>
+        <div class="ebm-composer-card">
+          <div class="ebm-meter-row">
+            <div class="ebm-meter-bar"><div class="ebm-meter-fill"></div></div>
+            <span>123,024 / 230K (1.0M)</span>
+          </div>
+          <div class="ebm-cinput">메시지 입력 또는 ! 셸 명령 실행…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= C안 ================= -->
+  <section class="ebm-section">
+    <div class="ebm-sec-head">
+      <div class="ebm-sec-title">
+        <span class="ebm-sec-tag">C안</span>
+        컴팩트 브레드크럼 리스트 + 하단 도킹 테일 서랍
+      </div>
+      <div class="ebm-sec-meta">폭 ~500px · 깊은 계층에서도 높은 정보 밀도</div>
+    </div>
+    <p class="ebm-sec-desc">
+      트리 헤더 줄을 없애고 모든 작업을 실행 중 우선 단일 리스트로 배치하되, 각 행에 깊이 배지(<code>L0</code>·<code>L1</code>·<code>L2</code>)와
+      계보 브레드크럼을 달았습니다. 행을 선택하면 하단 도킹 서랍에 실시간 로그가 표시됩니다.
+    </p>
+
+    <div class="ebm-stage">
+      <div class="ebm-convo-hint">
+        <span>Reply with mailbox.send(to: "id:bovine...", content: ...)</span>
+        <span class="ebm-time">21:54</span>
+      </div>
+
+      <!-- Popover C -->
+      <div class="ebm-pop ebm-pop-c">
+        <div class="ebm-pop-hd">
+          <span class="ebm-pop-title">백그라운드 ws/exec 작업</span>
+          <span class="ebm-stpill">본인 1 · 자손 2</span>
+          <span class="ebm-hd-spacer"></span>
+          <div class="ebm-seg">
+            <span class="ebm-seg-btn is-active">실행 중 3</span>
+            <span class="ebm-seg-btn">완료 1</span>
+          </div>
+          <span class="ebm-ibtn" title="닫기 (Esc)">×</span>
+        </div>
+
+        <div class="ebm-c-list">
+          <!-- Row 1: Depth 0 -->
+          <div class="ebm-c-row">
+            <span class="ebm-dot"></span>
+            <div class="ebm-c-main">
+              <span class="ebm-c-cmd">go test ./internal/wsdashboard -timeout 45m</span>
+              <span class="ebm-c-anc">
+                <span class="ebm-c-depth is-self">본인</span>
+                <span>agents-plugin-tool</span>
+              </span>
+            </div>
+            <span class="ebm-c-el">03:18</span>
+            <span class="ebm-ibtn" title="로그 보기">▾</span>
+          </div>
+
+          <!-- Row 2: Depth 1 (Selected) -->
+          <div class="ebm-c-row is-selected">
+            <span class="ebm-dot"></span>
+            <div class="ebm-c-main">
+              <span class="ebm-c-cmd">go test ./internal/wsagent ./internal/mcp -count=1</span>
+              <span class="ebm-c-anc">
+                <span class="ebm-c-depth">L1</span>
+                <span>quota-continuation-p1-p2</span>
+                <span>· agents-plugin-tool</span>
+              </span>
+            </div>
+            <span class="ebm-c-el" style="color:#7aa2ff;">01:04</span>
+            <span class="ebm-ibtn is-hover" title="에이전트로 이동">↗</span>
+          </div>
+
+          <!-- Row 3: Depth 2 -->
+          <div class="ebm-c-row">
+            <span class="ebm-dot"></span>
+            <div class="ebm-c-main">
+              <span class="ebm-c-cmd">node testdata/note-typing.browser.cjs</span>
+              <span class="ebm-c-anc">
+                <span class="ebm-c-depth">L2</span>
+                <span>quota-p1-p2 › verify-chromium-helper</span>
+              </span>
+            </div>
+            <span class="ebm-c-el">00:27</span>
+            <span class="ebm-ibtn" title="에이전트로 이동">↗</span>
+          </div>
+
+          <!-- Row 4: Completed -->
+          <div class="ebm-c-row is-done">
+            <span class="ebm-dot is-ok"></span>
+            <div class="ebm-c-main">
+              <span class="ebm-c-cmd">GOOS=windows go vet ./...</span>
+              <span class="ebm-c-anc">
+                <span class="ebm-c-depth is-self">본인</span>
+                <span>완료 · 0 · 1분 전</span>
+              </span>
+            </div>
+            <span class="ebm-c-el">12s</span>
+            <span class="ebm-ibtn" title="출력 보기">▾</span>
+          </div>
+        </div>
+
+        <!-- Docked Bottom Tail Drawer -->
+        <div class="ebm-c-dock">
+          <div class="ebm-c-dock-hd">
+            <span class="ebm-dot is-live"></span>
+            <span class="ebm-c-dock-title">go test ./internal/wsagent ./internal/mcp -count=1</span>
+            <span class="ebm-act-btn is-ghost" style="height:22px;padding:0 7px;">복사</span>
+            <span class="ebm-act-btn is-ghost-lit" style="height:22px;padding:0 7px;">이동 ↗</span>
+            <span class="ebm-stop-hold" style="height:22px;padding:0 8px;"><span class="ebm-stop-sq"></span><span>중지 (1.5초 꾹)</span></span>
+          </div>
+          <div class="ebm-tail">
+            <span class="ebm-tail-line is-dim">=== RUN   TestQuotaContinuationResume</span>
+            <span class="ebm-tail-line is-ok">--- PASS: TestQuotaContinuationResume (1.42s)</span>
+            <span class="ebm-tail-line is-dim">=== RUN   TestMailboxSteerWhileExecRunning</span>
+            <span class="ebm-tail-line is-ok">--- PASS: TestMailboxSteerWhileExecRunning (0.87s)</span>
+            <span class="ebm-tail-line">=== RUN   TestMCPExecTailStreamEviction<span class="ebm-tail-cursor"></span></span>
+          </div>
+          <div class="ebm-tail-foot" style="margin-top:0;">
+            <span class="ebm-live-tag"><span class="ebm-dot is-live"></span>실시간 · exec_harbor-prism-latch</span>
+            <span>누적 8.6 KiB · Esc 닫기 · ↑↓ 전환</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ebm-callout">
+        <svg class="ebm-ico" style="color:#7aa2ff;" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 7.2v3.6M8 4.8h.01" stroke-linecap="round"/></svg>
+        <span>평소 <b>3 백그라운드 작업</b> 뱃지는 간결하게 숫자만 표시하고, 열었을 때 <b>본인 1 · 자손 2</b> 내역을 보여줍니다. 사용자 직접 실행 <b>&gt;_ 1</b> 뱃지는 분리된 상태로 유지됩니다.</span>
+      </div>
+
+      <!-- Composer + Badge Cluster -->
+      <div class="ebm-composer-wrap">
+        <div class="ebm-cbadges">
+          <span class="ebm-pill ebm-pill-sub">
+            <span class="ebm-spin"></span>
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="5" width="10" height="8" rx="2"/><circle cx="6.2" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="9.8" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M8 2.5V5M5.5 11.2h5"/></svg>
+            <span>2</span>
+            <span class="ebm-sword">실행 중</span>
+          </span>
+          <span class="ebm-pill ebm-pill-bg">
+            <svg class="ebm-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.6M8 12.2v1.6M2.2 8h1.6M12.2 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9L11 5M5 11l-1.1 1.1"/></svg>
+            <span class="ebm-bg-cnt">3</span>
+            <span>백그라운드 작업</span>
+          </span>
+          <span class="ebm-pill ebm-pill-user" title="사용자가 직접 실행한 명령">
+            <span class="ebm-user-emblem">&gt;_</span>
+            <span>1</span>
+          </span>
+        </div>
+        <div class="ebm-composer-card">
+          <div class="ebm-meter-row">
+            <div class="ebm-meter-bar"><div class="ebm-meter-fill"></div></div>
+            <span>123,024 / 230K (1.0M)</span>
+          </div>
+          <div class="ebm-cinput">메시지 입력 또는 ! 셸 명령 실행…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= Comparison Table ================= -->
+  <section class="ebm-compare">
+    <h2>시안별 비교 및 뱃지 역할 분리</h2>
+    <div class="ebm-table-wrap">
+      <table class="ebm-table">
+        <thead>
+          <tr>
+            <th>시안</th>
+            <th>팝업 폭 / 공간 점유</th>
+            <th>다단계 자손 계층 가독성</th>
+            <th>실시간 로그 테일 편의성</th>
+            <th>추천 상황</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ebm-col-k">A안 (트리 아코디언)</td>
+            <td>좁음 (~460px)<br>대화창 가림 최소</td>
+            <td>최상 — 부모→자식→손자 들여쓰기가 한눈에 들어옴</td>
+            <td>보통 — 1개씩 펼쳐서 확인, 작업이 많으면 스크롤 증가</td>
+            <td>좁은 분할 화면에서 계층 파악 위주로 가볍게 확인할 때</td>
+          </tr>
+          <tr>
+            <td class="ebm-col-k">B안 (2단 마스터-디테일)</td>
+            <td>넓음 (~680px)<br>좁은 화면엔 상하 스택</td>
+            <td>우수 — 좌측 트리 고정으로 컨텍스트 유지</td>
+            <td>최상 — 넓은 우측 테일창에서 여러 작업을 빠르게 오가며 관찰</td>
+            <td>긴 빌드·테스트(45분 go test 등)를 핀 고정해 계속 볼 때</td>
+          </tr>
+          <tr>
+            <td class="ebm-col-k">C안 (플랫 + 하단 도킹)</td>
+            <td>중간 (~500px)<br>세로 밀도 가장 높음</td>
+            <td>양호 — <code>L1</code>/<code>L2</code> 배지 + 브레드크럼으로 깊은 트리도 평탄화</td>
+            <td>우수 — 목록과 5~6줄 테일을 동시에 보며 키보드(↑↓)로 전환</td>
+            <td>자손 에이전트가 많고(5개+) 공간 효율·빠른 전환을 모두 원할 때</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="ebm-note-box">
+      <b>뱃지 역할 분리 원칙:</b>
+      <code>N 백그라운드 작업</code> 뱃지는 현재 리드(본인)와 모든 자손 에이전트가 <code>ws/exec</code>로 실행해 백그라운드로 전환된 작업을 재귀 합산해 모니터링합니다.
+      반면 사용자가 입력창 <code>!</code> 또는 전용 실행 경로로 직접 띄운 명령은 기존 전용 <code>&gt;_</code> 뱃지(앰버 링 · <code>origin: "user"</code>)로 분리 유지해,
+      에이전트 백그라운드 작업과 사용자가 직접 실행한 명령이 섞이지 않도록 합니다.
+    </div>
+  </section>
+</div>

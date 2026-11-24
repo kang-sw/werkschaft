@@ -1,8 +1,8 @@
 // args: board.html shotdir. Topic "a" loads history above its fold, the owner
 // wheels until the whole card is above the viewport, and the loaded rows fold
 // back into the gap while a visible line in topic "b" stays put (< 2 px).
-// Runs in the page scroller and in a nested one, then checks the load
-// control's capsule styling in both themes.
+// Runs in the page scroller and in a nested one, then checks the dedicated
+// GitLab-diff tonal gap band and right-aligned action in both themes.
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [file, shots] = process.argv.slice(2);
@@ -93,48 +93,68 @@ async function run(b, nested) {
   return fail;
 }
 
-// The load pill sits right after the gap label/time, not at the far right
-// edge, and never overflows the gap row when it wraps at narrow widths.
-async function inline(b, scheme, width) {
+// The right-aligned load action sits inside the dedicated gap band and never
+// overflows the gap row at standard or narrow widths.
+async function layout(b, scheme, width) {
   const p = await open(b, false, scheme, width);
   const gap = p.locator('.topic[data-topic="a"] .history-gap').first();
   await gap.scrollIntoViewIfNeeded();
   const m = await gap.evaluate((g) => {
-    const range = g.querySelector('.gap-range').getBoundingClientRect(), pill = g.querySelector('[data-load="up"]').getBoundingClientRect(), row = g.getBoundingClientRect();
-    const em = parseFloat(getComputedStyle(g).fontSize);
-    return { em, rangeRight: range.right, pillLeft: pill.left, pillRight: pill.right, rowRight: row.right, sameLine: Math.abs(pill.top - range.top) < 12 };
+    const range = g.querySelector('.gap-range').getBoundingClientRect();
+    const act = g.querySelector('[data-load="up"]').getBoundingClientRect();
+    const row = g.getBoundingClientRect();
+    const gutter = g.querySelector('.gap-gutter').getBoundingClientRect();
+    return {
+      gutterW: gutter.width,
+      rangeRight: range.right,
+      actLeft: act.left,
+      actRight: act.right,
+      rowRight: row.right,
+      rowH: row.height,
+      overflow: g.scrollWidth > g.clientWidth + 1,
+      sameLine: Math.abs(act.top - range.top) < 12,
+    };
   });
   const r = await gap.boundingBox();
-  await p.screenshot({ path: `${shots}/loadmore-inline-${scheme}-${width}.png`, clip: { x: Math.max(0, r.x - 40), y: Math.max(0, r.y - 60), width: Math.min(width, r.width + 80), height: r.height + 120 } });
+  await p.screenshot({ path: `${shots}/loadmore-layout-${scheme}-${width}.png`, clip: { x: Math.max(0, r.x - 40), y: Math.max(0, r.y - 60), width: Math.min(width, r.width + 80), height: r.height + 120 } });
   await p.close();
   const fail = [];
-  if (m.pillRight > m.rowRight + 0.5) fail.push(`${scheme} ${width}: pill overflows row ${JSON.stringify(m)}`);
-  if (width >= 1000 && !(m.sameLine && m.pillLeft - m.rangeRight >= 0 && m.pillLeft - m.rangeRight <= 1.5 * m.em)) fail.push(`${scheme} ${width}: pill not inline after label ${JSON.stringify(m)}`);
-  console.log(`inline ${scheme} ${width} ${JSON.stringify(m)}`);
+  if (m.overflow || m.actRight > m.rowRight + 0.5) fail.push(`${scheme} ${width}: action overflows row ${JSON.stringify(m)}`);
+  if (m.rowH < 28) fail.push(`${scheme} ${width}: gap band height ${m.rowH} < 28`);
+  if (m.gutterW < 36) fail.push(`${scheme} ${width}: gutter missing/too narrow ${m.gutterW}`);
+  if (width >= 700 && !(m.sameLine && m.actLeft >= m.rangeRight && m.rowRight - m.actRight <= 24)) fail.push(`${scheme} ${width}: action not right-aligned on same line ${JSON.stringify(m)}`);
+  console.log(`layout ${scheme} ${width} ${JSON.stringify(m)}`);
   return fail;
 }
 
-async function capsule(b, scheme) {
+async function band(b, scheme) {
   const p = await open(b, false, scheme);
-  const up = p.locator('.topic[data-topic="a"] .history-gap [data-load="up"]').first();
-  await up.scrollIntoViewIfNeeded();
-  const st = await up.evaluate((n) => {
-    const c = getComputedStyle(n), r = n.getBoundingClientRect();
-    return { bg: c.backgroundColor, bw: c.borderTopWidth, bs: c.borderTopStyle, radius: parseFloat(c.borderTopLeftRadius), h: r.height, color: c.color };
-  });
   const gap = p.locator('.topic[data-topic="a"] .history-gap').first();
+  const up = gap.locator('[data-load="up"]');
+  await gap.scrollIntoViewIfNeeded();
+  const st = await gap.evaluate((g) => {
+    const gc = getComputedStyle(g), gr = g.getBoundingClientRect();
+    const btn = g.querySelector('[data-load="up"]'), bc = getComputedStyle(btn);
+    return {
+      rowBg: gc.backgroundColor,
+      rowH: gr.height,
+      btnBw: bc.borderTopWidth,
+      btnBs: bc.borderTopStyle,
+      btnColor: bc.color,
+    };
+  });
   const r = await gap.boundingBox();
-  await p.screenshot({ path: `${shots}/loadmore-capsule-${scheme}.png`, clip: { x: Math.max(0, r.x - 40), y: Math.max(0, r.y - 60), width: Math.min(1280, r.width + 80), height: r.height + 120 } });
-  await up.hover(); await p.waitForTimeout(100);
-  const hover = await up.evaluate((n) => getComputedStyle(n).backgroundColor);
+  await p.screenshot({ path: `${shots}/loadmore-band-${scheme}.png`, clip: { x: Math.max(0, r.x - 40), y: Math.max(0, r.y - 60), width: Math.min(1280, r.width + 80), height: r.height + 120 } });
+  await gap.hover(); await p.waitForTimeout(150);
+  const hoverBg = await gap.evaluate((g) => getComputedStyle(g).backgroundColor);
   await p.close();
   const fail = [];
   const alpha = (c) => { const m = /rgba?\(([^)]+)\)/.exec(c); if (!m) return 1; const v = m[1].split(/[ ,/]+/).filter(Boolean); return v.length > 3 ? +v[3] : 1; };
-  if (st.bg === 'transparent' || !(alpha(st.bg) > 0)) fail.push(`${scheme}: capsule background ${st.bg}`);
-  if (!(st.bw === '0px' || st.bs === 'none')) fail.push(`${scheme}: capsule border ${st.bw} ${st.bs}`);
-  if (!(st.radius >= st.h / 2)) fail.push(`${scheme}: radius ${st.radius} < height/2 ${st.h / 2}`);
-  if (hover === st.bg) fail.push(`${scheme}: no hover change (${hover})`);
-  console.log(`capsule ${scheme} ${JSON.stringify(Object.assign(st, { hover }))}`);
+  if (st.rowBg === 'transparent' || !(alpha(st.rowBg) > 0)) fail.push(`${scheme}: gap band background ${st.rowBg}`);
+  if (st.rowH < 28) fail.push(`${scheme}: gap band height ${st.rowH} < 28`);
+  if (!(st.btnBw === '0px' || st.btnBs === 'none')) fail.push(`${scheme}: action button border ${st.btnBw} ${st.btnBs}`);
+  if (hoverBg === st.rowBg) fail.push(`${scheme}: no row hover change (${hoverBg})`);
+  console.log(`band ${scheme} ${JSON.stringify(Object.assign(st, { hoverBg }))}`);
   return fail;
 }
 
@@ -144,9 +164,9 @@ async function capsule(b, scheme) {
   try {
     fail = fail.concat(await run(b, false));
     fail = fail.concat(await run(b, true));
-    fail = fail.concat(await capsule(b, 'dark'));
-    fail = fail.concat(await capsule(b, 'light'));
-    for (const scheme of ['dark', 'light']) for (const width of [1440, 700, 480]) fail = fail.concat(await inline(b, scheme, width));
+    fail = fail.concat(await band(b, 'dark'));
+    fail = fail.concat(await band(b, 'light'));
+    for (const scheme of ['dark', 'light']) for (const width of [1440, 700, 480]) fail = fail.concat(await layout(b, scheme, width));
   } finally { await b.close(); }
   if (fail.length) { console.error(fail.join('\n')); process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });

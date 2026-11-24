@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ws 대시보드 · /settings 계정 섹션 (Phase 3 목업)</title>
+<script>
+  (function () {
+    var m = /[?&]theme=(dark|light)/.exec(location.search);
+    document.documentElement.setAttribute("data-theme", m ? m[1] : "dark");
+  })();
+</script>
+<style>
+  html { background: #f3f3f0; }
+  html[data-theme="dark"], html:has(.pa-mk[data-theme="dark"]) { background: #141518; }
+  html:has(.pa-mk[data-theme="light"]) { background: #f3f3f0; }
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<!-- board.html: begin (byte-identical copy of board.html, the whiteboard panel fragment) -->
+<style>
+/* Provider auth settings mockup (Phase 3, 261122-feat-ws-provider-auth-layer).
+   Every rule is scoped under .pa-mk; tokens follow the host root's data-theme
+   unless the wrapper carries its own. Widths use a container query so the
+   fragment collapses by its own width inside a whiteboard panel. */
+.pa-mk {
+  --wb-bg: #f3f3f0; --wb-fg: #1b1d21; --wb-card: #ffffff; --wb-muted: #e9e8e3; --wb-muted-fg: #5f646b;
+  --wb-primary: #2b62d9; --wb-primary-fg: #ffffff;
+  --wb-line: color-mix(in srgb, var(--wb-fg) 14%, transparent);
+  --wb-wash: color-mix(in srgb, var(--wb-fg) 5%, transparent);
+  --wb-ok: #1d7348; --wb-fail: #a72e36; --wb-warn: #986300; --wb-warn-ink: #7a4c00;
+  --wb-technical: #2457c5; --wb-on-technical: #ffffff;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05);
+  --wb-radius: 12px;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  color-scheme: light;
+  container: pa / inline-size;
+  box-sizing: border-box; padding: 10px 0 24px;
+  background: var(--wb-bg); color: var(--wb-fg); font: 13px/1.45 var(--wb-sans); -webkit-font-smoothing: antialiased;
+}
+:root[data-theme="dark"] .pa-mk:not([data-theme="light"]), .pa-mk[data-theme="dark"] {
+  --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32; --wb-muted-fg: #a2a6ad;
+  --wb-primary: #7aa2ff; --wb-primary-fg: #0c1424;
+  --wb-ok: #6cc39a; --wb-fail: #f1888e; --wb-warn: #e0a741; --wb-warn-ink: #f6c76b;
+  --wb-technical: #26385e; --wb-on-technical: #d2dcf6;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .pa-mk:not([data-theme="light"]) {
+    --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32; --wb-muted-fg: #a2a6ad;
+    --wb-primary: #7aa2ff; --wb-primary-fg: #0c1424;
+    --wb-ok: #6cc39a; --wb-fail: #f1888e; --wb-warn: #e0a741; --wb-warn-ink: #f6c76b;
+    --wb-technical: #26385e; --wb-on-technical: #d2dcf6;
+    --wb-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+    color-scheme: dark;
+  }
+}
+.pa-mk * { box-sizing: border-box; }
+.pa-mk button, .pa-mk input, .pa-mk select, .pa-mk textarea { font: inherit; color: inherit; }
+.pa-mk code, .pa-mk .mono { font-family: var(--wb-mono); }
+.pa-mk .i { width: 14px; height: 14px; flex: none; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pa-mk [data-settings-view] button:focus-visible,
+.pa-mk [data-settings-view] input:focus-visible,
+.pa-mk [data-settings-view] summary:focus-visible,
+.pa-mk .pa-ask button:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+
+/* Mockup-only chrome (mk-*): not part of the product */
+.pa-mk .mk-bar { margin: 0 max(14px, calc((100% - 1280px) / 2)) 10px; padding: 8px 12px; border: 1px dashed var(--wb-line); border-radius: 10px; background: color-mix(in srgb, var(--wb-muted) 30%, var(--wb-bg)); display: flex; flex-direction: column; gap: 6px; }
+.pa-mk .mk-title { font-size: 11px; font-weight: 800; color: var(--wb-muted-fg); letter-spacing: .02em; }
+.pa-mk .mk-grp { display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; }
+.pa-mk .mk-lbl { flex: 0 0 104px; font-size: 11px; font-weight: 700; color: var(--wb-muted-fg); word-break: keep-all; }
+.pa-mk .mk-btn { height: 22px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--wb-line); background: transparent; color: var(--wb-muted-fg); font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.pa-mk .mk-btn:hover { color: var(--wb-fg); background: var(--wb-wash); }
+.pa-mk .mk-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 48%, transparent); color: var(--wb-primary); }
+.pa-mk .mk-note { margin: 0 max(14px, calc((100% - 1280px) / 2)) 4px; font-size: 10.5px; font-weight: 700; color: var(--wb-muted-fg); }
+
+/* Live settings page primitives (dashboard-settings.css, abridged) */
+.pa-mk .page { padding: 0 14px; }
+.pa-mk .stage { background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); border: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent); display: flex; flex-direction: column; width: 100%; max-width: 1280px; margin-inline: auto; min-width: 0; overflow: hidden; }
+.pa-mk .shd-top { min-height: 42px; padding: 5px 16px; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 80%, transparent); }
+.pa-mk .shd-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.pa-mk .shd-title > .i { width: 15px; height: 15px; color: var(--wb-primary); }
+.pa-mk .shd-title h1 { margin: 0; font-size: 14px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
+.pa-mk .route-pill { font-family: var(--wb-mono); font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 5px; background: var(--wb-wash); color: var(--wb-muted-fg); white-space: nowrap; }
+.pa-mk [hidden] { display: none !important; }
+.pa-mk .shd { background: var(--wb-card); }
+.pa-mk .scope-target-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 700; background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card)); color: var(--wb-primary); min-width: 0; max-width: min(100%, 56ch); white-space: nowrap; word-break: keep-all; }
+.pa-mk .scope-target-pill > span { flex: none; white-space: nowrap; }
+.pa-mk .scope-target-pill > code { font-size: 10.5px; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pa-mk .scope-target-pill.scope-repo { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: var(--wb-warn-ink); }
+.pa-mk .scope-target-pill.scope-builtin { background: color-mix(in srgb, var(--wb-technical) 15%, var(--wb-card)); color: var(--wb-technical); }
+:root[data-theme="dark"] .pa-mk:not([data-theme="light"]) .scope-target-pill.scope-builtin, .pa-mk[data-theme="dark"] .scope-target-pill.scope-builtin { background: var(--wb-technical); color: var(--wb-on-technical); }
+.pa-mk .scope-target-pill.pa-machine { background: var(--wb-muted); color: var(--wb-fg); cursor: default; }
+.pa-mk .scope-target-pill .i { width: 12px; height: 12px; }
+.pa-mk .prec-strip { min-height: 34px; padding: 4px 16px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; background: color-mix(in srgb, var(--wb-muted) 28%, var(--wb-card)); border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent); font-size: 11px; }
+.pa-mk .prec-lbl { font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg); margin-right: 3px; white-space: nowrap; }
+.pa-mk .prec-arrow { color: var(--wb-muted-fg); opacity: .55; font-size: 11px; user-select: none; }
+.pa-mk .prec-node { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid color-mix(in srgb, var(--wb-line) 85%, transparent); background: var(--wb-card); color: var(--wb-muted-fg); cursor: pointer; white-space: nowrap; transition: border-color .1s, background .1s, color .1s; }
+.pa-mk .prec-node:hover:not(:disabled) { border-color: var(--wb-primary); color: var(--wb-fg); }
+.pa-mk .prec-node:disabled { cursor: default; opacity: .74; }
+.pa-mk .prec-node.synced { border-style: dashed; background: transparent; opacity: .66; }
+.pa-mk .prec-node.active { background: var(--wb-primary); color: var(--wb-primary-fg); border-color: var(--wb-primary); }
+.pa-mk .prec-node.active.repo-mode { background: var(--wb-warn); color: #fff; border-color: var(--wb-warn); }
+:root[data-theme="dark"] .pa-mk:not([data-theme="light"]) .prec-node.active.repo-mode, .pa-mk[data-theme="dark"] .prec-node.active.repo-mode { color: #19140b; }
+.pa-mk .prec-node.active.builtin-mode { background: var(--wb-technical); color: var(--wb-on-technical); border-color: var(--wb-technical); }
+.pa-mk .prec-node .sub { font-size: 10px; font-weight: 600; opacity: .82; }
+.pa-mk .prec-hint { margin-left: auto; font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; }
+.pa-mk .filter-bar { min-height: 36px; padding: 4px 16px; display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; border-bottom: 1px solid var(--wb-muted); background: var(--wb-card); }
+.pa-mk .search-wrap { display: flex; align-items: center; flex: 1 1 200px; max-width: 260px; min-width: 150px; }
+.pa-mk .search-input { width: 100%; height: 26px; padding: 0 10px; border: 1px solid var(--wb-line); border-radius: 7px; background: var(--wb-bg); color: var(--wb-fg); font-size: 12px; }
+.pa-mk .fchips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pa-mk .fchip { height: 25px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--wb-line); background: transparent; color: var(--wb-muted-fg); font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; word-break: keep-all; }
+.pa-mk .fchip[aria-pressed="true"] { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 48%, transparent); color: var(--wb-primary); }
+.pa-mk .ov-counter { margin-left: auto; font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; }
+.pa-mk .info-note { margin: 0; padding: 7px 11px; border-radius: 8px; background: var(--wb-wash); font-size: 11.5px; color: var(--wb-muted-fg); line-height: 1.45; word-break: keep-all; }
+.pa-mk .info-note b { color: var(--wb-fg); }
+.pa-mk .info-note .pa-link { margin: 0 0 0 6px; vertical-align: baseline; }
+.pa-mk .repo-banner, .pa-mk .builtin-banner { min-height: 34px; padding: 5px 12px; border-radius: 8px; display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; font-size: 11.5px; word-break: keep-all; }
+.pa-mk .repo-banner { border: 1px solid color-mix(in srgb, var(--wb-warn) 42%, transparent); background: color-mix(in srgb, var(--wb-warn) 9%, var(--wb-card)); }
+.pa-mk .builtin-banner { border: 1px solid var(--wb-line); background: color-mix(in srgb, var(--wb-muted) 38%, var(--wb-card)); }
+.pa-mk .bn-title { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--wb-fg); white-space: nowrap; }
+.pa-mk .repo-banner .bn-title { color: var(--wb-warn-ink); font-weight: 800; }
+.pa-mk .bn-title .i { width: 13px; height: 13px; }
+.pa-mk .bn-desc { font-size: 11.5px; line-height: 1.4; color: var(--wb-muted-fg); }
+.pa-mk .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--wb-line); background: var(--wb-card); color: var(--wb-fg); font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap; word-break: keep-all; }
+.pa-mk .btn:hover:not(:disabled) { background: var(--wb-muted); }
+.pa-mk .btn.pri { background: var(--wb-primary); color: var(--wb-primary-fg); border-color: var(--wb-primary); }
+.pa-mk .btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.pa-mk .btn:disabled { opacity: .48; cursor: not-allowed; }
+.pa-mk .seg { display: inline-flex; align-items: center; gap: 2px; width: fit-content; max-width: 100%; height: 30px; padding: 2px; border-radius: 8px; background: var(--wb-muted); }
+.pa-mk .seg button { display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; border-radius: 6px; height: 26px; padding: 0 10px; font-size: 11.5px; font-weight: 700; color: var(--wb-muted-fg); cursor: pointer; white-space: nowrap; font-family: var(--wb-mono); }
+.pa-mk .seg button:hover { color: var(--wb-fg); }
+.pa-mk .seg button[aria-pressed="true"] { background: var(--wb-card); color: var(--wb-fg); box-shadow: 0 1px 2px rgb(0 0 0 / .12), inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 70%, transparent); }
+
+.pa-mk .sbody { display: grid; grid-template-columns: 172px minmax(0, 1fr); }
+.pa-mk .snav { border-right: 1px solid var(--wb-muted); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; background: color-mix(in srgb, var(--wb-muted) 12%, var(--wb-card)); }
+.pa-mk .snav-btn { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; border: 0; border-radius: 7px; padding: 6px 8px; background: transparent; color: var(--wb-muted-fg); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.pa-mk .snav-btn:hover { background: var(--wb-wash); color: var(--wb-fg); }
+.pa-mk .snav-btn[aria-current="true"] { background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card)); color: var(--wb-primary); font-weight: 700; }
+.pa-mk .snav-btn .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--wb-primary); flex: none; }
+.pa-mk .snav-btn .dot.none { background: transparent; }
+.pa-mk .snav-btn .cnt { margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--wb-muted-fg); padding: 0 5px; border-radius: 999px; background: var(--wb-wash); font-variant-numeric: tabular-nums; }
+.pa-mk .snav-btn .cnt:empty { display: none; }
+.pa-mk .snav-btn .cnt.warn { background: color-mix(in srgb, var(--wb-warn) 18%, var(--wb-card)); color: var(--wb-warn-ink); }
+.pa-mk .scontent { min-width: 0; padding: 10px 18px 24px; display: flex; flex-direction: column; gap: 9px; }
+
+.pa-mk .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 2px 2px 3px; }
+.pa-mk .sec-head h2 { margin: 0; font-size: 13px; font-weight: 800; letter-spacing: -.01em; word-break: keep-all; }
+.pa-mk .sec-head p { margin: 0; font-size: 11px; color: var(--wb-muted-fg); word-break: keep-all; }
+.pa-mk .sec-head h3 { margin: 4px 0 0; font-size: 11.5px; font-weight: 800; color: var(--wb-muted-fg); word-break: keep-all; }
+
+.pa-mk .sgroup { border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent); border-radius: 10px; background: var(--wb-card); overflow: hidden; }
+.pa-mk .srow { display: grid; grid-template-columns: minmax(0, 1fr) 396px; gap: 0 18px; align-items: center; padding: 9px 16px; background: var(--wb-card); transition: background .1s, box-shadow .2s; }
+.pa-mk .srow + .srow { border-top: 1px solid color-mix(in srgb, var(--wb-muted) 82%, transparent); }
+.pa-mk .srow:hover { background: color-mix(in srgb, var(--wb-fg) 2%, var(--wb-card)); }
+.pa-mk .srow.overridden { box-shadow: inset 3px 0 0 var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 5%, var(--wb-card)); }
+.pa-mk .srow.attn { box-shadow: inset 3px 0 0 var(--wb-warn); background: color-mix(in srgb, var(--wb-warn) 5%, var(--wb-card)); }
+.pa-mk .srow.pa-flash { box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent); }
+.pa-mk .kmeta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pa-mk .klabel-line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.pa-mk .klabel { font-size: 13px; font-weight: 700; word-break: keep-all; }
+.pa-mk .skey { font-family: var(--wb-mono); font-size: 11px; font-weight: 500; color: var(--wb-muted-fg); background: color-mix(in srgb, var(--wb-muted) 55%, transparent); padding: 0 5px; border-radius: 4px; line-height: 17px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.pa-mk .tag { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; line-height: 16px; padding: 0 6px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
+.pa-mk .kdesc { margin: 0; font-size: 12px; color: var(--wb-muted-fg); line-height: 1.38; word-break: keep-all; }
+.pa-mk .inline-warn { margin-top: 4px; padding: 4px 9px; border-radius: 6px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); border: 1px solid color-mix(in srgb, var(--wb-warn) 36%, transparent); color: var(--wb-warn-ink); font-size: 11px; line-height: 1.35; word-break: keep-all; }
+.pa-mk .inline-warn.fail { background: color-mix(in srgb, var(--wb-fail) 10%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-fail) 36%, transparent); color: var(--wb-fail); }
+.pa-mk .hint { font-size: 11px; color: var(--wb-muted-fg); line-height: 1.35; word-break: keep-all; }
+.pa-mk .hint:empty { display: none; }
+.pa-mk .hint.err { color: var(--wb-fail); font-weight: 700; }
+.pa-mk .hint.warn { color: var(--wb-warn-ink); font-weight: 700; }
+.pa-mk .hint.ok { color: var(--wb-ok); font-weight: 700; }
+.pa-mk .inp { width: 100%; height: 30px; padding: 0 9px; border: 1px solid var(--wb-line); border-radius: 7px; background: var(--wb-bg); color: var(--wb-fg); font-size: 12px; min-width: 0; }
+.pa-mk .inp.mono { font-family: var(--wb-mono); }
+.pa-mk .inp:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -1px; }
+.pa-mk .inp.bad { border-color: color-mix(in srgb, var(--wb-fail) 60%, transparent); }
+.pa-mk .inp.soft { border-color: color-mix(in srgb, var(--wb-warn) 60%, transparent); }
+.pa-mk .inp:disabled { opacity: .62; cursor: not-allowed; }
+.pa-mk .tg { position: relative; width: 36px; height: 20px; border-radius: 999px; border: 0; padding: 0; cursor: pointer; flex: none; background: color-mix(in srgb, var(--wb-fg) 22%, var(--wb-card)); transition: background .12s; }
+.pa-mk .tg::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: left .12s; }
+.pa-mk .tg[aria-checked="true"] { background: var(--wb-primary); }
+.pa-mk .tg[aria-checked="true"]::after { left: 19px; }
+.pa-mk .tg:disabled { opacity: .45; cursor: not-allowed; }
+.pa-mk .tgl { font-size: 12px; font-weight: 600; word-break: keep-all; }
+.pa-mk .origin-pill { min-width: 0; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent); background: var(--wb-wash); color: var(--wb-muted-fg); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+.pa-mk .origin-pill > .lbl { overflow: hidden; text-overflow: ellipsis; }
+.pa-mk .origin-pill .i { width: 11px; height: 11px; }
+
+/* Tier matrix (dashboard-settings.css .tier-*): existing picker, abridged */
+.pa-mk .tier-group-head { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 10px; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 90%, transparent); background: color-mix(in srgb, var(--wb-muted) 22%, var(--wb-card)); }
+.pa-mk .tier-htabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pa-mk .tier-htab { appearance: none; text-align: left; cursor: pointer; background: var(--wb-bg); border: 1px solid var(--wb-line); border-radius: 8px; padding: 8px 10px; color: var(--wb-fg); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pa-mk .tier-htab[aria-selected="true"] { background: color-mix(in srgb, var(--wb-primary) 11%, var(--wb-card)); border-color: var(--wb-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 28%, transparent); }
+.pa-mk .tier-htab-id { font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.pa-mk .tier-htab-sub { font-family: var(--wb-mono); font-size: 10.5px; color: var(--wb-muted-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa-mk .tier-scroll { overflow-x: auto; }
+.pa-mk .tier-tbl { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 560px; }
+.pa-mk .tier-tbl th { text-align: left; font-size: 11px; font-weight: 700; color: var(--wb-muted-fg); padding: 7px 8px; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent); white-space: nowrap; }
+.pa-mk .tier-tbl th:first-child, .pa-mk .tier-tbl td:first-child { padding-left: 16px; }
+.pa-mk .tier-tbl td { padding: 7px 8px; border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 70%, transparent); }
+.pa-mk .tier-tbl tr:last-child td { border-bottom: 0; }
+.pa-mk .tier-tbl td.tname { font-family: var(--wb-mono); font-weight: 800; width: 80px; }
+.pa-mk .tier-tbl .inp { height: 29px; }
+.pa-mk .tier-tbl tr.pa-flash td { background: color-mix(in srgb, var(--wb-primary) 9%, var(--wb-card)); }
+.pa-mk .tier-tbl tr.pa-flash td:first-child { box-shadow: inset 3px 0 0 var(--wb-primary); }
+.pa-mk .pa-th { display: flex; align-items: center; gap: 2px 8px; flex-wrap: wrap; margin-top: 3px; }
+.pa-mk .pa-th .pa-link { margin-top: 0; }
+
+/* Provider auth (pa-*): built only from the primitives above */
+.pa-mk .pa-rail { display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 396px; min-width: 0; flex-wrap: wrap; }
+.pa-mk .pa-rail .origin-pill { flex: 1 1 auto; }
+.pa-mk .pa-rail > .hint { flex-basis: 100%; text-align: right; }
+.pa-mk .origin-pill.ok { background: color-mix(in srgb, var(--wb-ok) 12%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-ok) 38%, transparent); color: var(--wb-ok); }
+.pa-mk .origin-pill.unset { background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-warn) 36%, transparent); color: var(--wb-warn-ink); }
+.pa-mk .origin-pill.fail { background: color-mix(in srgb, var(--wb-fail) 11%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-fail) 36%, transparent); color: var(--wb-fail); }
+.pa-mk .origin-pill.busy { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 40%, transparent); color: var(--wb-primary); }
+.pa-mk .origin-pill .tail, .pa-mk .tail { font-family: var(--wb-mono); font-weight: 600; }
+.pa-mk .pa-spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: pa-mk-spin .8s linear infinite; flex: none; }
+@keyframes pa-mk-spin { to { transform: rotate(360deg); } }
+
+.pa-mk .pa-link { align-self: flex-start; margin-top: 3px; display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--wb-primary); font-size: 11px; font-weight: 700; cursor: pointer; }
+.pa-mk .pa-link:hover { text-decoration: underline; }
+.pa-mk .pa-link .i { width: 11px; height: 11px; }
+
+/* 28x28 icon button (reset-icon-btn geometry); radial hold-to-confirm fill */
+.pa-mk .pa-ibtn { position: relative; overflow: hidden; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--wb-line) 85%, transparent); background: transparent; color: var(--wb-muted-fg); display: inline-grid; place-items: center; cursor: pointer; }
+.pa-mk .pa-ibtn:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.pa-mk .pa-ibtn > .i { position: relative; z-index: 1; }
+.pa-mk .pa-ibtn.plain { border-color: transparent; }
+.pa-mk .pa-ibtn.danger:hover { color: var(--wb-fail); border-color: color-mix(in srgb, var(--wb-fail) 45%, transparent); }
+.pa-mk .pa-ibtn.d-hold-btn::before { content: ""; position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); pointer-events: none; }
+.pa-mk .pa-ibtn.d-hold-btn.d-hold-active::before { animation: pa-mk-hold var(--d-hold-dur, 1500ms) linear forwards; }
+.pa-mk .pa-ibtn.d-hold-btn.d-hold-ready { color: var(--wb-card); border-color: var(--wb-fail); }
+.pa-mk .pa-ibtn.d-hold-btn.d-hold-ready::before { background: var(--wb-fail); transform: scale(1); animation: none; }
+@keyframes pa-mk-hold { from { transform: scale(0); } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .pa-mk .pa-ibtn.d-hold-btn.d-hold-active::before { animation: none; transform: scale(1); opacity: .45; }
+  .pa-mk .pa-spin { animation-duration: 2.4s; }
+  .pa-mk .srow, .pa-mk .tg, .pa-mk .tg::after { transition: none; }
+}
+
+/* Full-width editor strip under a row (layer-drawer geometry) */
+.pa-mk .pa-drawer { grid-column: 1 / -1; margin: 9px -16px -9px; padding: 9px 16px 10px; background: color-mix(in srgb, var(--wb-muted) 42%, var(--wb-bg)); border-top: 1px solid color-mix(in srgb, var(--wb-line) 60%, transparent); display: flex; flex-direction: column; gap: 6px; }
+.pa-mk .pa-form { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.pa-mk .pa-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pa-mk .pa-field > label { font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg); }
+.pa-mk .pa-field.key { flex: 1 1 300px; max-width: 460px; }
+.pa-mk .pa-actions { display: flex; align-items: center; gap: 6px; padding-top: 17px; }
+.pa-mk .pa-note { font-size: 11.5px; color: var(--wb-muted-fg); line-height: 1.45; word-break: keep-all; margin: 0; }
+.pa-mk .pa-note b { color: var(--wb-fg); }
+
+/* Consent sub-row under the OpenAI row */
+.pa-mk .srow.pa-sub { padding-left: 34px; background: color-mix(in srgb, var(--wb-muted) 10%, var(--wb-card)); }
+.pa-mk .pa-sub .klabel { font-size: 12.5px; }
+.pa-mk .pa-sub .pa-rail { justify-content: flex-start; }
+
+/* Dashboard-wide consent request banner (repo-banner geometry, primary tint) */
+.pa-mk .pa-shell { margin: 0 max(14px, calc((100% - 1280px) / 2)) 10px; }
+.pa-mk .pa-shell .mk-note { margin: 0 0 4px; }
+.pa-mk .pa-ask { padding: 9px 8px 9px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--wb-primary) 42%, transparent); background: color-mix(in srgb, var(--wb-primary) 8%, var(--wb-card)); box-shadow: inset 3px 0 0 var(--wb-primary), var(--wb-shadow); display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.pa-mk .pa-ask-text { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pa-mk .pa-ask-title { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; color: var(--wb-fg); word-break: keep-all; }
+.pa-mk .pa-ask-title .i { color: var(--wb-primary); }
+.pa-mk .pa-ask-desc { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--wb-fg); word-break: keep-all; }
+.pa-mk .pa-ask-desc code { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: var(--wb-wash); }
+.pa-mk .pa-ask-btns { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+
+/* Local endpoints list */
+.pa-mk .pa-eps { grid-column: 1 / -1; margin: 9px -16px -9px; border-top: 1px solid color-mix(in srgb, var(--wb-muted) 82%, transparent); }
+.pa-mk .pa-ep { display: grid; grid-template-columns: 150px minmax(0, 1fr) 70px 150px 64px; gap: 10px; align-items: center; padding: 7px 16px; }
+.pa-mk .pa-ep + .pa-ep { border-top: 1px solid color-mix(in srgb, var(--wb-muted) 70%, transparent); }
+.pa-mk .pa-ep.head { font-size: 11px; font-weight: 700; color: var(--wb-muted-fg); padding-top: 6px; padding-bottom: 6px; }
+.pa-mk .pa-ep .nm { display: flex; flex-direction: column; min-width: 0; }
+.pa-mk .pa-ep .nm b { font-family: var(--wb-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.pa-mk .pa-ep .nm span { font-family: var(--wb-mono); font-size: 10.5px; color: var(--wb-muted-fg); }
+.pa-mk .pa-ep .url { font-family: var(--wb-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pa-mk .pa-ep .kind { font-family: var(--wb-mono); font-size: 11px; font-weight: 700; }
+.pa-mk .pa-ep .key { font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; }
+.pa-mk .pa-ep .key.set { color: var(--wb-ok); font-weight: 700; }
+.pa-mk .pa-ep .acts { display: flex; gap: 6px; justify-content: flex-end; }
+.pa-mk .pa-ep.editing { background: color-mix(in srgb, var(--wb-primary) 5%, var(--wb-card)); box-shadow: inset 3px 0 0 var(--wb-primary); }
+.pa-mk .pa-ep-edit { padding: 9px 16px 11px; background: color-mix(in srgb, var(--wb-muted) 42%, var(--wb-bg)); border-top: 1px solid color-mix(in srgb, var(--wb-line) 60%, transparent); display: flex; flex-direction: column; gap: 8px; }
+.pa-mk .pa-ep-grid { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto minmax(0, 220px); gap: 8px 10px; align-items: start; }
+.pa-mk .pa-ep-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pa-mk .pa-ep-empty { padding: 12px 16px; font-size: 12px; color: var(--wb-muted-fg); }
+.pa-mk .pa-ep-add { padding: 8px 16px 10px; border-top: 1px solid color-mix(in srgb, var(--wb-muted) 70%, transparent); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pa-mk .pa-json summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--wb-muted-fg); }
+.pa-mk .pa-json pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 7px; background: var(--wb-bg); border: 1px solid var(--wb-line); font: 11px/1.5 var(--wb-mono); color: var(--wb-fg); overflow-x: auto; }
+
+/* Responsive collapse: the live page's 1120px and 820px breakpoints, by fragment width */
+@container pa (max-width: 1120px) {
+  .pa-mk .sbody { grid-template-columns: 156px minmax(0, 1fr); }
+  .pa-mk .srow { grid-template-columns: minmax(0, 1fr) 336px; gap: 0 12px; }
+  .pa-mk .pa-rail { width: 336px; }
+}
+@container pa (max-width: 960px) {
+  .pa-mk .pa-ep { grid-template-columns: 130px minmax(0, 1fr) 60px 130px 64px; }
+  .pa-mk .pa-ep-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@container pa (max-width: 820px) {
+  .pa-mk .page { padding: 0 8px; }
+  .pa-mk .mk-bar, .pa-mk .pa-shell { margin-left: 8px; margin-right: 8px; }
+  .pa-mk .sbody { display: flex; flex-direction: column; }
+  .pa-mk .snav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--wb-muted); }
+  .pa-mk .snav-btn { width: auto; flex: none; }
+  .pa-mk .scontent { padding: 10px 12px 20px; }
+  .pa-mk .srow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .pa-mk .pa-rail { width: 100%; justify-content: flex-start; }
+  .pa-mk .pa-rail > .hint { text-align: left; }
+  .pa-mk .pa-ep.head { display: none; }
+  .pa-mk .pa-ep { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; }
+  .pa-mk .pa-ep .nm, .pa-mk .pa-ep .url, .pa-mk .pa-ep .kind, .pa-mk .pa-ep .key { grid-column: 1; }
+  .pa-mk .pa-ep .acts { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+  .pa-mk .pa-ep-grid { grid-template-columns: minmax(0, 1fr); }
+  .pa-mk .pa-field.key { flex-basis: 100%; max-width: none; }
+  .pa-mk .pa-actions { padding-top: 0; }
+}
+@container pa (max-width: 680px) {
+  .pa-mk .tier-htabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pa-mk .mk-lbl { flex-basis: 100%; }
+}
+</style>
+<div class="pa-mk" lang="ko">
+<div class="mk-bar" data-mk-bar aria-label="목업 상태 전환">
+  <div class="mk-title">목업 상태 전환 — 검토용 도구이며 실제 화면에는 없습니다</div>
+  <div class="mk-grp" data-mk="sec"><span class="mk-lbl">설정 섹션</span>
+    <button type="button" class="mk-btn" data-v="account">계정</button>
+    <button type="button" class="mk-btn" data-v="agents">에이전트 · 티어</button>
+  </div>
+  <div class="mk-grp" data-mk="scope"><span class="mk-lbl">선택된 스코프</span>
+    <button type="button" class="mk-btn" data-v="builtin">내장 기본값</button>
+    <button type="button" class="mk-btn" data-v="global">전역</button>
+    <button type="button" class="mk-btn" data-v="repo">저장소</button>
+    <button type="button" class="mk-btn" data-v="project">프로젝트</button>
+    <button type="button" class="mk-btn" data-v="session">세션</button>
+  </div>
+  <div class="mk-grp" data-mk="or"><span class="mk-lbl">OpenRouter</span>
+    <button type="button" class="mk-btn" data-v="unset">미설정</button>
+    <button type="button" class="mk-btn" data-v="entry">키 입력</button>
+    <button type="button" class="mk-btn" data-v="prefix">접두사 경고</button>
+    <button type="button" class="mk-btn" data-v="verifying">확인 중</button>
+    <button type="button" class="mk-btn" data-v="invalid">OpenRouter 거부</button>
+    <button type="button" class="mk-btn" data-v="rejected">형식 거부</button>
+    <button type="button" class="mk-btn" data-v="down">데몬 응답 없음</button>
+    <button type="button" class="mk-btn" data-v="saved">저장·확인됨</button>
+    <button type="button" class="mk-btn" data-v="unverified">저장·확인 못 함</button>
+    <button type="button" class="mk-btn" data-v="set">설정됨</button>
+    <button type="button" class="mk-btn" data-v="replace">교체 입력</button>
+  </div>
+  <div class="mk-grp" data-mk="oa"><span class="mk-lbl">OpenAI</span>
+    <button type="button" class="mk-btn" data-v="out">로그아웃 상태</button>
+    <button type="button" class="mk-btn" data-v="remote">다른 기기에서 열람</button>
+    <button type="button" class="mk-btn" data-v="pending">브라우저 진행 중</button>
+    <button type="button" class="mk-btn" data-v="failed">로그인 실패</button>
+    <button type="button" class="mk-btn" data-v="in">로그인됨</button>
+    <button type="button" class="mk-btn" data-v="noemail">로그인됨(이메일 없음)</button>
+    <button type="button" class="mk-btn" data-v="plan">요금제 사용 꺼짐</button>
+    <button type="button" class="mk-btn" data-v="reauth">다시 로그인 필요</button>
+  </div>
+  <div class="mk-grp" data-mk="cs"><span class="mk-lbl">백그라운드 동의</span>
+    <button type="button" class="mk-btn" data-v="ask">요청 배너</button>
+    <button type="button" class="mk-btn" data-v="none">미응답(배너 닫힘)</button>
+    <button type="button" class="mk-btn" data-v="yes">허용</button>
+    <button type="button" class="mk-btn" data-v="no">허용 안 함/철회</button>
+  </div>
+  <div class="mk-grp" data-mk="ep"><span class="mk-lbl">로컬 엔드포인트</span>
+    <button type="button" class="mk-btn" data-v="empty">없음</button>
+    <button type="button" class="mk-btn" data-v="list">목록</button>
+    <button type="button" class="mk-btn" data-v="add">추가</button>
+    <button type="button" class="mk-btn" data-v="edit">편집(URL 변경)</button>
+    <button type="button" class="mk-btn" data-v="invalid">검증 오류</button>
+  </div>
+  <div class="mk-grp" data-mk="theme"><span class="mk-lbl">테마</span>
+    <button type="button" class="mk-btn" data-v="auto">페이지 따름</button>
+    <button type="button" class="mk-btn" data-v="dark">다크</button>
+    <button type="button" class="mk-btn" data-v="light">라이트</button>
+  </div>
+</div>
+<div data-slot="shell"></div>
+<div class="page">
+<div class="stage" data-settings-view>
+  <header class="shd">
+    <div class="shd-top">
+      <div class="shd-title">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+        <h1>워크플로 설정</h1>
+      </div>
+      <span class="route-pill">/settings</span>
+      <div class="scope-target-pill" data-slot="target"></div>
+    </div>
+    <nav class="prec-strip" data-slot="prec" aria-label="우선순위"></nav>
+  </header>
+  <div class="filter-bar" data-slot="filters">
+    <div class="search-wrap"><input class="search-input" type="search" placeholder="설정 검색…" aria-label="설정 검색…"></div>
+    <div class="fchips" role="group" aria-label="설정 필터">
+      <button type="button" class="fchip" aria-pressed="true">전체</button>
+      <button type="button" class="fchip" aria-pressed="false">이 스코프의 오버라이드</button>
+      <button type="button" class="fchip" aria-pressed="false">가려짐</button>
+      <button type="button" class="fchip" aria-pressed="false">편집 가능</button>
+    </div>
+    <span class="ov-counter">이 스코프의 오버라이드 2개</span>
+  </div>
+  <div class="sbody">
+    <nav class="snav" aria-label="설정 분류">
+      <button class="snav-btn" type="button"><span class="dot"></span>워크플로 · 리뷰<span class="cnt">2</span></button>
+      <button class="snav-btn" type="button" data-act="sec" data-v="agents"><span class="dot none"></span>에이전트 · 티어<span class="cnt"></span></button>
+      <button class="snav-btn" type="button" data-act="sec" data-v="account"><span class="dot none"></span>계정<span class="cnt" data-slot="navcnt"></span></button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>컴팩션 · 워크트리<span class="cnt"></span></button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>하네스 어댑터<span class="cnt"></span></button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>컴패니언<span class="cnt"></span></button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>프로필<span class="cnt"></span></button>
+      <button class="snav-btn" type="button"><span class="dot none"></span>프롬프트 오버라이드<span class="cnt"></span></button>
+    </nav>
+    <div class="scontent" data-slot="content"></div>
+  </div>
+</div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var root = document.currentScript.parentNode;
+  var $ = function (sel) { return root.querySelector(sel); };
+  var $$ = function (sel) { return Array.prototype.slice.call(root.querySelectorAll(sel)); };
+  var qtheme = /[?&]theme=(dark|light)/.exec(location.search);
+  var S = { sec: "account", scope: "global", or: "unset", oa: "out", cs: "none", ep: "list", theme: qtheme ? qtheme[1] : "auto" };
+  var verifyTimer = 0, flashTimer = 0;
+
+  var IC = {
+    key: '<svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M16 7l3 3M14 9l2 2"/></svg>',
+    trash: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+    pen: '<svg class="i" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>',
+    out: '<svg class="i" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l-5-5 5-5M5 12h11"/></svg>',
+    arrow: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+    ext: '<svg class="i" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+    check: '<svg class="i" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>',
+    x: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+    ask: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/></svg>',
+    machine: '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>',
+    lock: '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>'
+  };
+  var SCOPES = [["builtin", "내장 기본값"], ["synced", "동기화"], ["global", "전역"], ["repo", "저장소"], ["project", "프로젝트"], ["session", "세션"]];
+  var SCOPE_PATH = { global: "~/.ws/config.json", project: "~/.ws/projects/my-app/config.json", session: "sess-3f1a" };
+  var MACHINE_TITLE = "계정은 스코프를 고르지 않습니다. 이 컴퓨터의 데몬 한 곳에 저장되어 모든 프로젝트와 세션에 적용됩니다.";
+  var EMAIL = "minji.kim@example.com";
+  var OR_MASK = "sk-or-...a1b2";
+  var OR_HINT = "sk-or-로 시작하는 키 · 저장할 때 OpenRouter에서 확인합니다";
+  var OR_PREFIX = "sk-or-로 시작하지 않습니다. OpenRouter 키가 맞는지 확인하세요. 그래도 저장할 수 있습니다.";
+
+  function tierLink(provider, label) {
+    return '<button type="button" class="pa-link" data-act="tier" data-provider="' + provider + '" title="에이전트 · 티어 섹션으로 이동">' + label + IC.arrow + '</button>';
+  }
+  function acctLink(row) {
+    return '<button type="button" class="pa-link" data-act="acct" data-target="' + (row || "") + '" title="계정 섹션으로 이동">계정에서 관리' + IC.arrow + '</button>';
+  }
+  function holdBtn(act, title, icon) {
+    var t = title + " (길게 눌러 확인)";
+    return '<button type="button" class="pa-ibtn danger d-hold-btn" data-hold="' + act + '" title="' + t + '" aria-label="' + t + '">' + (icon || IC.trash) + '</button>';
+  }
+
+  /* OpenRouter */
+  function openRouterRow() {
+    var st = S.or, pill, ctl = "", drawer = "", note = "", cls = "srow";
+    var editing = ["entry", "prefix", "verifying", "invalid", "rejected", "down", "replace"].indexOf(st) >= 0;
+    var hasKey = st === "set" || st === "saved" || st === "replace" || st === "unverified" || st === "rechecking";
+    if (hasKey) {
+      cls += " overridden";
+      if (st === "unverified") {
+        pill = '<span class="origin-pill unset" title="2026-11-24 저장 · OpenRouter 확인 못 함"><span class="lbl">저장됨 · 확인 못 함</span><span class="tail">' + OR_MASK + '</span></span>';
+        note = '<span class="hint warn">연결 실패: OpenRouter에 연결하지 못해 키를 확인하지 못했습니다. 키는 저장되었습니다.</span>';
+      } else if (st === "rechecking") {
+        pill = '<span class="origin-pill busy"><span class="pa-spin" aria-hidden="true"></span><span class="lbl">확인 중…</span><span class="tail">' + OR_MASK + '</span></span>';
+      } else {
+        pill = '<span class="origin-pill ok" title="2026-11-22 저장">' + IC.check + '<span class="lbl">키 설정됨</span><span class="tail">' + OR_MASK + '</span></span>';
+      }
+      if (st === "unverified") ctl = '<button type="button" class="btn" data-act="or-recheck">다시 확인</button>';
+      if (st === "rechecking") ctl = '<button type="button" class="btn" disabled><span class="pa-spin" aria-hidden="true"></span>다시 확인</button>';
+      if (st !== "replace") ctl += '<button type="button" class="btn" data-act="or-replace"' + (st === "rechecking" ? " disabled" : "") + '>교체</button>' + holdBtn("or-remove", "OpenRouter 키 삭제");
+      if (st === "saved") note = '<span class="hint ok">OpenRouter에서 유효한 키로 확인했습니다.</span>';
+    } else {
+      pill = '<span class="origin-pill unset"><span class="lbl">미설정</span></span>';
+      if (!editing) ctl = '<button type="button" class="btn" data-act="or-entry">' + IC.key + '키 추가</button>';
+    }
+    if (editing) {
+      var val = "", inpCls = "inp mono", hint = '<span class="hint">' + OR_HINT + '</span>', busy = st === "verifying", fail = "";
+      if (st === "prefix") { val = "or-live-3f9c21aa0e7d44b1"; inpCls += " soft"; hint = '<span class="hint warn">' + OR_PREFIX + '</span>'; }
+      if (st === "verifying") { val = "sk-or-v1-3f9c21aa0e7d44b1c0a1b2"; hint = '<span class="hint">OpenRouter에서 키를 확인하는 중…</span>'; }
+      if (st === "invalid") { val = "sk-or-v1-3f9c21aa0e7d44b1c0dead"; inpCls += " bad"; hint = '<span class="hint err">OpenRouter가 이 키를 거부했습니다(유효하지 않은 키). 저장하지 않았습니다.</span>'; }
+      if (st === "rejected") { val = "sk-or-v1-3f9c 21aa0e7d44b1"; inpCls += " bad"; hint = '<span class="hint err">데몬이 키를 거부했습니다: 공백, 제어 문자 또는 ASCII가 아닌 문자가 있습니다.</span>'; }
+      if (st === "down") { val = "sk-or-v1-3f9c21aa0e7d44b1c0a1b2"; fail = '<div class="inline-warn fail">데몬이 응답하지 않아 키를 저장하지 못했습니다. 데몬이 다시 시작되는 중일 수 있습니다. 입력한 키는 이 입력란에만 남아 있습니다.</div>'; }
+      drawer = '<div class="pa-drawer"><div class="pa-form">' +
+          '<div class="pa-field key"><label for="pa-mk-or-key">' + (st === "replace" ? "새 OpenRouter API 키" : "OpenRouter API 키") + '</label>' +
+            '<input id="pa-mk-or-key" data-or-key class="' + inpCls + '" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-v1-…" data-val="' + val + '"' + (busy ? " disabled" : "") + '>' + hint +
+          '</div>' +
+          '<div class="pa-actions">' +
+            '<button type="button" class="btn pri" data-act="or-save"' + (busy ? " disabled" : "") + '>' + (busy ? '<span class="pa-spin" aria-hidden="true"></span>확인 중' : st === "down" ? "다시 시도" : "저장") + '</button>' +
+            '<button type="button" class="btn" data-act="or-cancel">취소</button>' +
+          '</div></div>' + fail + '</div>';
+    }
+    return '<div class="' + cls + '" data-row="openrouter"><div class="kmeta">' +
+        '<div class="klabel-line"><span class="klabel">OpenRouter</span><span class="tag">API 키</span><code class="skey">openrouter</code></div>' +
+        '<p class="kdesc">Werk 하네스와 웹 도구가 OpenRouter 모델을 부를 때 쓰는 API 키입니다.</p>' +
+        tierLink("openrouter", "Werk 티어에서 OpenRouter 모델 선택") + note +
+      '</div><div class="pa-rail">' + pill + ctl + '</div>' + drawer + '</div>';
+  }
+
+  /* OpenAI (Sign in with ChatGPT) */
+  var SIGNOUT = "OpenAI 로그아웃: 이 계정 기록과 백그라운드 사용 답을 지웁니다";
+  function openAIRow() {
+    var st = S.oa, pill, ctl = "", drawer = "", warn = "", cls = "srow";
+    switch (st) {
+      case "out":
+        pill = '<span class="origin-pill unset"><span class="lbl">로그인 안 됨</span></span>';
+        ctl = '<button type="button" class="btn pri" data-act="oa-signin">ChatGPT로 로그인' + IC.ext + '</button>';
+        break;
+      case "remote":
+        pill = '<span class="origin-pill unset"><span class="lbl">로그인 안 됨</span></span>';
+        ctl = '<button type="button" class="btn pri" disabled title="데몬이 실행 중인 컴퓨터에서만 로그인할 수 있습니다">ChatGPT로 로그인' + IC.ext + '</button>' +
+          '<span class="hint">로그인은 데몬이 실행 중인 컴퓨터에서 대시보드를 열어 진행하세요.</span>';
+        break;
+      case "failed":
+        pill = '<span class="origin-pill unset"><span class="lbl">로그인 안 됨</span></span>';
+        ctl = '<button type="button" class="btn pri" data-act="oa-signin">다시 시도' + IC.ext + '</button>';
+        warn = '<div class="inline-warn fail">로그인을 마치지 못했습니다: 브라우저에서 취소했거나 5분 안에 완료하지 않았습니다.</div>';
+        break;
+      case "pending":
+        pill = '<span class="origin-pill busy"><span class="pa-spin" aria-hidden="true"></span><span class="lbl">브라우저에서 로그인 중…</span></span>';
+        ctl = '<button type="button" class="btn" data-act="oa-cancel">취소</button>';
+        drawer = '<div class="pa-drawer"><p class="pa-note">이 컴퓨터의 기본 브라우저에서 OpenAI 로그인 페이지를 열었습니다. 그 브라우저에서 로그인과 <b>ChatGPT 요금제 사용 허용</b>을 마치면 이 행이 자동으로 바뀝니다. 5분이 지나면 자동으로 취소됩니다.</p></div>';
+        break;
+      case "in":
+      case "noemail":
+        cls += " overridden";
+        pill = '<span class="origin-pill ok">' + IC.check + '<span class="lbl">' + (st === "in" ? EMAIL : "로그인됨") + '</span></span>';
+        ctl = holdBtn("oa-signout", SIGNOUT, IC.out);
+        break;
+      case "plan":
+        cls += " attn";
+        pill = '<span class="origin-pill unset"><span class="lbl">요금제 사용 꺼짐 · ' + EMAIL + '</span></span>';
+        ctl = '<button type="button" class="btn pri" data-act="oa-signin">다시 로그인하여 허용' + IC.ext + '</button>' + holdBtn("oa-signout", SIGNOUT, IC.out);
+        warn = '<div class="inline-warn">로그인은 되었지만 ChatGPT 요금제 사용을 허용하지 않아 에이전트 세션에 쓸 수 없습니다.</div>';
+        break;
+      case "reauth":
+        cls += " attn";
+        pill = '<span class="origin-pill fail"><span class="lbl">다시 로그인 필요 · ' + EMAIL + '</span></span>';
+        ctl = '<button type="button" class="btn pri" data-act="oa-signin">다시 로그인' + IC.ext + '</button>' + holdBtn("oa-signout", SIGNOUT, IC.out);
+        warn = '<div class="inline-warn fail">OpenAI가 토큰 갱신을 거부했습니다(만료 또는 철회). 다시 로그인할 때까지 이 계정을 쓰는 세션은 실패합니다.</div>';
+        break;
+    }
+    return '<div class="' + cls + '" data-row="openai"><div class="kmeta">' +
+        '<div class="klabel-line"><span class="klabel">OpenAI</span><span class="tag">ChatGPT로 로그인</span><code class="skey">openai</code></div>' +
+        '<p class="kdesc">ChatGPT 요금제로 내 에이전트 세션(Werk 하네스)을 실행합니다. 웹 검색·이미지 같은 도구는 이 계정을 쓰지 않습니다.</p>' +
+        tierLink("openai", "Werk 티어에서 OpenAI 모델 선택") + warn +
+      '</div><div class="pa-rail">' + pill + ctl + '</div>' + drawer + '</div>' + consentRow();
+  }
+
+  function consentRow() {
+    var st = S.oa;
+    if (st === "out" || st === "remote" || st === "pending" || st === "failed") return "";
+    var on = S.cs === "yes", usable = st === "in" || st === "noemail";
+    var state = S.cs === "yes" ? "허용됨" : S.cs === "no" ? "허용 안 함" : "아직 묻지 않음";
+    var note = usable ? "" : '<span class="hint">다시 로그인해도 이 답은 유지됩니다.</span>';
+    return '<div class="srow pa-sub" data-row="openai-consent"><div class="kmeta">' +
+        '<div class="klabel-line"><span class="klabel">백그라운드 세션에서 사용</span><span class="tag">' + state + '</span></div>' +
+        '<p class="kdesc">워커, 예약 작업처럼 직접 조작하지 않는 세션도 이 계정의 ChatGPT 요금제를 쓸 수 있게 합니다. 끄면 그런 세션은 실행 전에 이유를 남기고 멈춥니다.</p>' +
+      '</div><div class="pa-rail">' +
+        '<button type="button" class="tg" role="switch" aria-checked="' + on + '" data-act="cs-toggle" aria-label="백그라운드 세션에서 사용"' + (usable ? "" : " disabled") + '></button>' +
+        '<span class="tgl">' + (on ? "켜짐" : "꺼짐") + '</span>' + note +
+      '</div></div>';
+  }
+
+  function consentBanner() {
+    if (S.cs !== "ask") return "";
+    return '<div class="mk-note">(목업 주석) 이 배너는 설정 화면만이 아니라 대시보드 모든 화면 상단에 표시됩니다.</div>' +
+      '<div class="pa-ask" role="region" aria-label="백그라운드 사용 동의 요청"><div class="pa-ask-text">' +
+        '<span class="pa-ask-title">' + IC.ask + '백그라운드 세션이 OpenAI 계정을 쓰려고 합니다</span>' +
+        '<p class="pa-ask-desc">워커 <code>wrk-7c1e</code>(티어 <code>medium</code>, <code>openai gpt-5.1-codex</code>)가 ' + EMAIL + '의 ChatGPT 요금제로 실행하려다 멈췄습니다. 허용하면 앞으로 워커와 예약 작업도 이 계정을 씁니다. 설정의 계정 섹션에서 언제든 끌 수 있습니다.</p>' +
+        '<button type="button" class="pa-link" data-act="goto-openai">계정에서 OpenAI 보기' + IC.arrow + '</button>' +
+      '</div><div class="pa-ask-btns">' +
+        '<button type="button" class="btn pri" data-act="cs-yes">허용</button>' +
+        '<button type="button" class="btn" data-act="cs-no">허용 안 함</button>' +
+        '<button type="button" class="pa-ibtn plain" data-act="cs-close" title="닫기: 다음에 백그라운드 세션이 거부되면 다시 표시됩니다" aria-label="닫기">' + IC.x + '</button>' +
+      '</div></div>';
+  }
+
+  /* Local endpoints */
+  var EPS = [
+    { name: "ollama-box", url: "http://localhost:11434/v1", kind: "ollama", key: "" },
+    { name: "lab-vllm", url: "https://vllm.lab.internal:8000/v1", kind: "vllm", key: "...9f3c" }
+  ];
+  function epRow(ep, editing) {
+    var key = ep.key ? '<span class="key set">키 설정됨 <span class="tail">' + ep.key + '</span></span>' : '<span class="key">키 없음</span>';
+    var del = ep.name + " 삭제" + (ep.key ? " (저장된 API 키도 함께 삭제)" : "");
+    return '<div class="pa-ep' + (editing ? " editing" : "") + '">' +
+      '<div class="nm"><b>' + ep.name + '</b><span>local/' + ep.name + '</span></div>' +
+      '<div class="url" title="' + ep.url + '">' + ep.url + '</div>' +
+      '<div class="kind">' + ep.kind + '</div>' + key +
+      '<div class="acts"><button type="button" class="pa-ibtn" data-act="ep-edit" title="편집" aria-label="' + ep.name + ' 편집">' + IC.pen + '</button>' + holdBtn("ep-remove", del) + '</div>' +
+    '</div>';
+  }
+  function epEditor(mode) {
+    var isNew = mode === "add" || mode === "invalid";
+    var name = "", url = "", kind = "ollama", nameCls = "inp mono", urlCls = "inp mono", urlWarn = "";
+    var nameHint = '<span class="hint">소문자·숫자·하이픈, 첫 글자는 문자나 숫자, 최대 64자</span>';
+    var urlHint = '<span class="hint">http(s) 절대 주소 · 사용자 정보, 쿼리, # 없이 · 끝의 / 는 지워집니다</span>';
+    var keyLabel = "API 키 (선택)", keyPh = "없으면 비워 두세요", keyHint = '<span class="hint">이 주소로만 보냅니다</span>';
+    if (mode === "invalid") {
+      name = "My_Box"; nameCls += " bad"; nameHint = '<span class="hint err">소문자, 숫자, 하이픈만 쓸 수 있습니다.</span>';
+      url = "localhost:11434/v1?stream=1"; urlCls += " bad"; urlHint = '<span class="hint err">http:// 또는 https://로 시작하고 쿼리(?)가 없어야 합니다.</span>';
+    }
+    if (mode === "edit") {
+      name = "lab-vllm"; url = "https://vllm2.lab.internal:8000/v1"; kind = "vllm"; urlCls += " soft";
+      keyLabel = "API 키 (새 URL용)"; keyPh = "없으면 비워 두세요"; keyHint = '<span class="hint warn">URL이 바뀌면 저장된 키가 삭제됩니다. 새 URL용 키를 다시 입력하세요.</span>';
+      urlWarn = '<div class="inline-warn">기존 키(<span class="tail">...9f3c</span>)는 이전 URL에만 쓰이므로 새 URL로 보내지 않고, 저장할 때 삭제합니다.</div>';
+    }
+    var seg = '<div class="seg" role="group" aria-label="종류">' +
+      '<button type="button" data-act="ep-kind" aria-pressed="' + (kind === "vllm") + '">vllm</button>' +
+      '<button type="button" data-act="ep-kind" aria-pressed="' + (kind === "ollama") + '">ollama</button></div>';
+    return '<div class="pa-ep-edit"><div class="pa-ep-grid">' +
+        '<div class="pa-field"><label for="pa-mk-ep-name">이름</label><input id="pa-mk-ep-name" class="' + nameCls + '" value="' + name + '" placeholder="ollama-box" spellcheck="false">' + nameHint + '</div>' +
+        '<div class="pa-field"><label for="pa-mk-ep-url">기본 URL</label><input id="pa-mk-ep-url" class="' + urlCls + '" value="' + url + '" placeholder="http://localhost:11434/v1" spellcheck="false">' + urlHint + '</div>' +
+        '<div class="pa-field"><label>종류</label>' + seg + '</div>' +
+        '<div class="pa-field"><label for="pa-mk-ep-key">' + keyLabel + '</label><input id="pa-mk-ep-key" class="inp mono" type="password" autocomplete="off" placeholder="' + keyPh + '">' + keyHint + '</div>' +
+      '</div>' + urlWarn +
+      '<div class="pa-ep-foot">' +
+        '<button type="button" class="btn pri" data-act="ep-save"' + (mode === "invalid" ? " disabled" : "") + '>' + (isNew ? "추가" : "저장") + '</button>' +
+        '<button type="button" class="btn" data-act="ep-cancel">취소</button>' +
+      '</div></div>';
+  }
+  function endpointsRow() {
+    var st = S.ep, list;
+    if (st === "empty") list = '<div class="pa-ep-empty">등록된 로컬 엔드포인트가 없습니다.</div>';
+    else {
+      list = '<div class="pa-ep head"><span>이름</span><span>기본 URL</span><span>종류</span><span>API 키</span><span></span></div>' +
+        epRow(EPS[0], false) + epRow(EPS[1], st === "edit") + (st === "edit" ? epEditor("edit") : "");
+    }
+    if (st === "add" || st === "invalid") list += epEditor(st);
+    var json = {};
+    (st === "empty" ? [] : EPS).forEach(function (e) { json[e.name] = { base_url: e.url, kind: e.kind }; });
+    var add = (st === "add" || st === "invalid" || st === "edit") ? "" : '<button type="button" class="btn" data-act="ep-add">+ 엔드포인트</button>';
+    return '<div class="srow" data-row="werk-endpoints"><div class="kmeta">' +
+        '<div class="klabel-line"><span class="klabel">Werk 로컬 엔드포인트</span><code class="skey">agent.werk_endpoints</code><span class="tag">' + (st === "empty" ? 0 : 2) + '개</span></div>' +
+        '<p class="kdesc">직접 운영하는 vLLM·Ollama 서버입니다. 각 엔드포인트는 프로바이더 <code>local/&lt;이름&gt;</code>으로 티어에서 고를 수 있습니다.</p>' +
+        tierLink("local", "Werk 티어에서 로컬 모델 선택") +
+      '</div><div class="pa-rail">' + add + '</div>' +
+      '<div class="pa-eps">' + list + '<div class="pa-ep-add">' +
+        '<details class="pa-json"><summary>저장 형식(JSON) 보기</summary><pre>' + JSON.stringify(json, null, 2).replace(/</g, "&lt;") + '</pre></details>' +
+      '</div></div></div>';
+  }
+
+  /* Tier matrix: the existing picker, abridged and unchanged */
+  var TIERS = [
+    { t: "small", model: "local/ollama-box qwen3:32b", effort: "—", p: "local" },
+    { t: "medium", model: "openai gpt-5.1-codex", effort: "medium", p: "openai" },
+    { t: "large", model: "openrouter anthropic/claude-opus-4.5", effort: "high", p: "openrouter" },
+    { t: "xlarge", model: "openai gpt-5.1-codex-max", effort: "xhigh", p: "openai" }
+  ];
+  /* A provider the tier uses but that is not ready: the agents section links to 계정 for it. */
+  var PROV_ROW = { openrouter: "openrouter", openai: "openai", local: "werk-endpoints" };
+  function providerIssue(p) {
+    if (p === "openrouter") return ["set", "saved", "unverified", "rechecking", "replace"].indexOf(S.or) >= 0 ? "" : "OpenRouter 키가 없습니다";
+    if (p === "openai") {
+      if (S.oa === "in" || S.oa === "noemail") return "";
+      if (S.oa === "plan") return "OpenAI 요금제 사용이 꺼져 있습니다";
+      if (S.oa === "reauth") return "OpenAI에 다시 로그인해야 합니다";
+      return "OpenAI에 로그인하지 않았습니다";
+    }
+    if (p === "local") return S.ep === "empty" ? "로컬 엔드포인트 ollama-box가 없습니다" : "";
+    return "";
+  }
+  function tierBlock() {
+    var rows = TIERS.map(function (r) {
+      var issue = providerIssue(r.p);
+      var th = issue ? '<div class="pa-th"><span class="hint warn">' + issue + '</span>' + acctLink(PROV_ROW[r.p]) + '</div>' : "";
+      return '<tr data-prov="' + r.p + '"><td class="tname">' + r.t + '</td>' +
+        '<td><input class="inp mono" value="werk" aria-label="' + r.t + ' 백엔드"></td>' +
+        '<td><input class="inp mono" value="' + r.model + '" aria-label="' + r.t + ' 모델">' + th + '</td>' +
+        '<td><input class="inp mono" value="' + r.effort + '" aria-label="' + r.t + ' 추론 강도"></td></tr>';
+    }).join("");
+    return '<div class="sgroup" data-slot="tiers"><div class="tier-group-head">' +
+        '<div class="klabel-line"><span class="klabel">능력 티어 매트릭스</span><code class="skey">agents.tier</code><span class="tag">기존 화면 · 계정 링크만 추가</span></div>' +
+        '<div class="tier-htabs" role="tablist">' +
+          '<button type="button" class="tier-htab" role="tab" aria-selected="false"><span class="tier-htab-id">Claude</span><span class="tier-htab-sub">sonnet · opus</span></button>' +
+          '<button type="button" class="tier-htab" role="tab" aria-selected="false"><span class="tier-htab-id">Codex</span><span class="tier-htab-sub">gpt-5.1-codex</span></button>' +
+          '<button type="button" class="tier-htab" role="tab" aria-selected="false"><span class="tier-htab-id">AgY</span><span class="tier-htab-sub">gemini-3-pro</span></button>' +
+          '<button type="button" class="tier-htab" role="tab" aria-selected="true"><span class="tier-htab-id">Werk</span><span class="tier-htab-sub">openrouter · openai · local</span></button>' +
+        '</div></div>' +
+      '<div class="tier-scroll"><table class="tier-tbl"><thead><tr><th>티어</th><th>백엔드</th><th>모델</th><th>추론 강도</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+
+  function scopeName(name) {
+    for (var i = 0; i < SCOPES.length; i++) if (SCOPES[i][0] === name) return SCOPES[i][1];
+    return name;
+  }
+
+  /* Header: the live page draws the target pill and the precedence (scope) strip for
+     every section. 계정 keeps the pill as a fixed, non-interactive label and drops the
+     strip and the override filter bar, because nothing in it is layered by scope. */
+  function renderHeader() {
+    var pill = $('[data-slot="target"]'), strip = $('[data-slot="prec"]');
+    var account = S.sec === "account";
+    strip.hidden = account;
+    $('[data-slot="filters"]').hidden = account;
+    if (account) {
+      pill.className = "scope-target-pill pa-machine";
+      pill.title = MACHINE_TITLE;
+      pill.innerHTML = IC.machine + '<span>이 머신 전체</span>';
+      strip.innerHTML = "";
+      return;
+    }
+    pill.className = "scope-target-pill scope-" + S.scope;
+    pill.removeAttribute("title");
+    pill.innerHTML = '<span>' + scopeName(S.scope) + '</span>' + (SCOPE_PATH[S.scope] ? '<code>' + SCOPE_PATH[S.scope] + '</code>' : "");
+    strip.innerHTML = '<strong class="prec-lbl">우선순위</strong>' + SCOPES.map(function (s, i) {
+      var name = s[0], active = name === S.scope, planned = name === "synced";
+      var cls = "prec-node" + (planned ? " synced" : "") + (active ? " active " + name + "-mode" : "");
+      return (i ? '<span class="prec-arrow" aria-hidden="true">→</span>' : "") +
+        '<button type="button" class="' + cls + '" data-act="scope" data-v="' + name + '" aria-current="' + (active ? "page" : "false") + '"' +
+        (planned ? ' disabled title="준비 중"' : "") + '>' + s[1] + (planned ? '<span class="sub">준비 중</span>' : "") + '</button>';
+    }).join("") + '<span class="prec-hint">오른쪽 레이어가 왼쪽을 덮어씀</span>';
+  }
+
+  function accountSection() {
+    return '<header class="sec-head"><h2>계정</h2><p>프로바이더 자격 증명과 로컬 엔드포인트 · 이 컴퓨터의 모든 프로젝트와 세션에 적용</p></header>' +
+      '<p class="info-note">이 섹션의 값은 이 컴퓨터의 데몬에만 저장됩니다. 에이전트는 도구로 이 값을 읽거나 바꿀 수 없습니다.</p>' +
+      '<div class="sec-head"><h3>프로바이더</h3></div>' +
+      '<div class="sgroup">' + openRouterRow() + openAIRow() + '</div>' +
+      '<div class="sec-head"><h3>로컬 엔드포인트</h3></div>' +
+      '<div class="sgroup">' + endpointsRow() + '</div>';
+  }
+
+  function agentsSection() {
+    var pre = "";
+    if (S.scope === "project") pre = '<p class="info-note">프로젝트 설정 파일은 이 컴퓨터의 모든 워크스페이스가 공유합니다.</p>';
+    if (S.scope === "repo") pre = '<div class="repo-banner"><span class="bn-title">' + IC.lock + '저장소 설정</span><span class="bn-desc">저장소 설정을 확인할 수 있습니다. 편집은 변경 제안과 함께 제공될 예정입니다.</span></div>';
+    if (S.scope === "builtin") pre = '<div class="builtin-banner"><span class="bn-title">' + IC.lock + '내장 기본값</span><span class="bn-desc">내장 기본값과 우선 적용되는 값을 확인합니다.</span></div>';
+    return pre +
+      '<header class="sec-head"><h2>에이전트 · 티어</h2><p>하네스 티어 매트릭스와 에이전트 운영 정책</p></header>' +
+      '<p class="info-note">Werk 티어가 쓰는 OpenRouter·OpenAI 계정과 로컬 엔드포인트는 <b>계정</b> 섹션에 있습니다.' + acctLink("") + '</p>' +
+      tierBlock() +
+      '<div class="sgroup"><div class="srow"><div class="kmeta"><div class="klabel-line"><span class="klabel">자식 대기 일수</span><code class="skey">agent.child_waiting_days</code></div><p class="kdesc">(기존 행 · 문맥용)</p></div><div class="pa-rail"><span class="origin-pill"><span class="lbl">내장 기본값</span></span></div></div></div>';
+  }
+
+  function render() {
+    if (S.theme === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", S.theme);
+    var attention = (S.or === "unset" ? 1 : 0) + ((S.oa === "reauth" || S.oa === "plan") ? 1 : 0) + (S.cs === "ask" ? 1 : 0);
+    var cnt = $('[data-slot="navcnt"]');
+    cnt.textContent = attention ? String(attention) : "";
+    cnt.className = "cnt" + (attention ? " warn" : "");
+    cnt.title = attention ? "확인이 필요한 항목 " + attention + "개" : "";
+    $$('.snav-btn').forEach(function (b) { b.setAttribute("aria-current", String(b.dataset.v === S.sec)); });
+    var shell = $('[data-slot="shell"]');
+    shell.className = S.cs === "ask" ? "pa-shell" : "";
+    shell.innerHTML = consentBanner();
+    renderHeader();
+    $('[data-slot="content"]').innerHTML = S.sec === "account" ? accountSection() : agentsSection();
+    // Demo-only: put the typed value of an error state into the field after render.
+    var k = $("[data-or-key]");
+    if (k && k.dataset.val) { k.value = k.dataset.val; k.removeAttribute("data-val"); }
+    $$(".mk-grp").forEach(function (g) {
+      g.querySelectorAll(".mk-btn").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.v === S[g.dataset.mk])); });
+    });
+  }
+
+  function top() {
+    var stage = $("[data-settings-view]");
+    if (stage.getBoundingClientRect().top < 0) stage.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function flash(el) {
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("pa-flash");
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { el.classList.remove("pa-flash"); }, 1800);
+  }
+
+  $("[data-mk-bar]").addEventListener("click", function (e) {
+    var b = e.target.closest(".mk-btn"); if (!b) return;
+    var g = b.closest(".mk-grp").dataset.mk;
+    clearTimeout(verifyTimer);
+    S[g] = b.dataset.v;
+    var signedIn = S.oa === "in" || S.oa === "noemail";
+    if (g === "cs" && b.dataset.v !== "none" && !signedIn) S.oa = "in";
+    if (g === "oa" && S.cs === "ask" && !signedIn) S.cs = "none";
+    render();
+  });
+
+  var ACT = {
+    "or-entry": function () { S.or = "entry"; },
+    "or-replace": function () { S.or = "replace"; },
+    "or-recheck": function () {
+      S.or = "rechecking";
+      clearTimeout(verifyTimer);
+      verifyTimer = setTimeout(function () { if (S.or === "rechecking") { S.or = "saved"; render(); } }, 1200);
+    },
+    "or-cancel": function () { S.or = (S.or === "replace") ? "set" : "unset"; },
+    "or-save": function () {
+      var v = ($("[data-or-key]") || {}).value || "";
+      if (!v) return false;
+      S.or = "verifying";
+      clearTimeout(verifyTimer);
+      verifyTimer = setTimeout(function () { if (S.or === "verifying") { S.or = "saved"; render(); } }, 1200);
+    },
+    "oa-signin": function () { S.oa = "pending"; },
+    "oa-cancel": function () { S.oa = "out"; },
+    "cs-yes": function () { S.cs = "yes"; },
+    "cs-no": function () { S.cs = "no"; },
+    "cs-close": function () { S.cs = "none"; },
+    "cs-toggle": function () { S.cs = S.cs === "yes" ? "no" : "yes"; },
+    "sec": function (b) { S.sec = b.dataset.v; render(); top(); return false; },
+    "scope": function (b) { S.scope = b.dataset.v; },
+    "acct": function (b) {
+      S.sec = "account"; render();
+      if (b.dataset.target) flash($('[data-row="' + b.dataset.target + '"]')); else top();
+      return false;
+    },
+    "goto-openai": function () { S.sec = "account"; render(); flash($('[data-row="openai"]')); return false; },
+    "ep-add": function () { S.ep = "add"; },
+    "ep-edit": function () { S.ep = "edit"; },
+    "ep-cancel": function () { S.ep = "list"; },
+    "ep-save": function () { S.ep = "list"; },
+    "ep-kind": function (b) { b.parentNode.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); }); return false; },
+    "tier": function (b) {
+      S.sec = "agents"; render();
+      var box = $('[data-slot="tiers"]');
+      box.scrollIntoView({ behavior: "smooth", block: "start" });
+      box.querySelectorAll("tr[data-prov]").forEach(function (tr) { tr.classList.toggle("pa-flash", tr.dataset.prov === b.dataset.provider); });
+      return false;
+    }
+  };
+  root.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]"); if (!b || b.disabled || !root.contains(b)) return;
+    var fn = ACT[b.dataset.act]; if (!fn) return;
+    if (fn(b) !== false) render();
+  });
+  root.addEventListener("input", function (e) {
+    if (!e.target.hasAttribute("data-or-key")) return;
+    var v = e.target.value.trim(), hint = e.target.parentNode.querySelector(".hint");
+    var soft = v !== "" && v.indexOf("sk-or-") !== 0;
+    e.target.classList.toggle("soft", soft); e.target.classList.remove("bad");
+    hint.className = "hint" + (soft ? " warn" : "");
+    hint.textContent = soft ? OR_PREFIX : OR_HINT;
+  });
+
+  /* Hold-to-confirm: WsHoldConfirm behavior, 1.5 s */
+  var HOLD_MS = 1500, hold = null;
+  var DONE = {
+    "or-remove": function () { S.or = "unset"; },
+    "oa-signout": function () { S.oa = "out"; S.cs = "none"; },
+    "ep-remove": function () { S.ep = "list"; }
+  };
+  function cancelHold() {
+    if (!hold) return;
+    clearTimeout(hold.timer); hold.el.classList.remove("d-hold-active", "d-hold-ready"); hold = null;
+  }
+  function startHold(el) {
+    cancelHold();
+    el.style.setProperty("--d-hold-dur", HOLD_MS + "ms");
+    el.classList.add("d-hold-active");
+    hold = { el: el, timer: setTimeout(function () {
+      el.classList.add("d-hold-ready");
+      hold.timer = setTimeout(function () { var a = el.dataset.hold; hold = null; if (DONE[a]) { DONE[a](); render(); } }, 160);
+    }, HOLD_MS) };
+  }
+  function ready() { return hold && hold.el.classList.contains("d-hold-ready"); }
+  root.addEventListener("pointerdown", function (e) { var b = e.target.closest("[data-hold]"); if (b) { e.preventDefault(); startHold(b); } });
+  ["pointerup", "pointercancel"].forEach(function (t) { root.addEventListener(t, function () { if (!ready()) cancelHold(); }); });
+  root.addEventListener("pointerleave", function (e) { if (hold && e.target === hold.el && !ready()) cancelHold(); }, true);
+  root.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { cancelHold(); return; }
+    var b = e.target.closest && e.target.closest("[data-hold]");
+    if (b && (e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); startHold(b); }
+  });
+  root.addEventListener("keyup", function (e) { if ((e.key === " " || e.key === "Enter") && !ready()) cancelHold(); });
+  window.addEventListener("blur", cancelHold);
+  document.addEventListener("visibilitychange", cancelHold);
+
+  render();
+})();
+</script>
+</div>
+<!-- board.html: end -->
+</body>
+</html>

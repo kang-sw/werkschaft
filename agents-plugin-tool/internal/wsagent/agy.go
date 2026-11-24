@@ -173,7 +173,7 @@ const agyCutoverMode = "default"
 // prompt at session creation, and sent once as a prompt at the end of a
 // turn whose run_command call the daemon refused (or that ran one without
 // a permission request): agy shows the model no refusal text of its own.
-const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Do not delegate shell commands to `invoke_subagent` to bypass this rule. Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_write`, `exec_stop` and `exec_list`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
+const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Do not delegate shell commands to `invoke_subagent` to bypass this rule. Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_stop` and `exec_list`. Set `stdin_open: true` at launch to send input later with `exec_write`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
 
 // agyUnrequestedCommandWarning is surfaced to the user when ~/.gemini
 // always-allow rules let run_command execute without a permission request

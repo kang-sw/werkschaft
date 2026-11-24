@@ -594,6 +594,21 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			}
 		}
+		var consentWake <-chan struct{}
+		consent, hasCredentials := d.credentials.(interface {
+			OpenAIConsentPrompt() (uint64, <-chan struct{})
+		})
+		sendConsent := func() bool {
+			prompt, wake := consent.OpenAIConsentPrompt()
+			consentWake = wake
+			// LAN viewers need only the same prompt signal and a local-viewer
+			// flag. Account state is served by the local-only status route.
+			payload := fmt.Appendf(nil, `{"prompt":%d,"local":%t}`, prompt, localStream)
+			return sink.event("openai-consent", payload) == nil && sink.flush() == nil
+		}
+		if hasCredentials && (src.key.kind == regionRail || !framedRequest(r)) && !sendConsent() {
+			return
+		}
 		var companionWake <-chan struct{}
 		sendCompanion := func() bool {
 			snapshot := d.companion.current()
@@ -716,6 +731,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			case <-d.stop:
 				return
+			case <-consentWake:
+				if !sendConsent() {
+					return
+				}
+				continue
 			case <-companionWake:
 				if !sendCompanion() {
 					return

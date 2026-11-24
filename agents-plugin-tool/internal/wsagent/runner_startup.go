@@ -127,6 +127,8 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	// From the full set, before any record is loaded or rejoined, so a
 	// child read before its parent is admitted from that parent.
 	r.resolveSpawnerBackends(all)
+	dead := map[string]*admissionRefusal{}
+	bindings := map[string]resolvedAgentBinding{}
 	retiredPiHolders := map[string]bool{}
 	for _, rec := range all {
 		if rec.Backend == BackendPi {
@@ -149,38 +151,40 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 			r.loadClosed(rec)
 		} else {
 			open = append(open, rec)
+			binding := r.resolveAgentBinding(rec)
+			bindings[rec.ReplyID] = binding
+			if refusal := r.deadBindingRefusal(rec, binding.released); refusal != nil {
+				dead[rec.ReplyID] = refusal
+			}
 		}
 	}
-	gone := map[string]bool{}
-	for _, id := range r.expiredAtStart(open) {
-		// Deepest first: a child waiting past its expiry is deleted with
-		// its descendants, as the heartbeat would (expire).
-		sessionDir := wsdashboard.SessionDir(r.opts.Dir, id)
-		wslive.DropRing(wslive.RingDir(sessionDir))
-		if err := os.RemoveAll(sessionDir); err != nil {
-			fmt.Fprintf(r.opts.Log, "agent %s: delete: %v\n", id, err)
-			continue
-		}
-		if rec, ok := private[id]; ok {
-			r.deleteDurableRecord(rec)
-		}
-		gone[id] = true
-	}
-	open = slices.DeleteFunc(open, func(rec Record) bool { return gone[rec.ReplyID] })
+	open = r.expireBeforeServing(open, dead)
 	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
 	for _, rec := range open {
-		if orphans[rec.ReplyID] && r.closeAtStart(rec) {
+		binding := bindings[rec.ReplyID]
+		refusal := dead[rec.ReplyID]
+		// A cross-harness worker must finish the existing rejoin and
+		// retirement path, including settlement of a cut-off turn.
+		if refusal != nil && r.admitWorkerRecord(rec) == nil {
+			r.closeDeadAtStart(rec, refusal, binding)
+			continue
+		}
+		if refusal == nil && orphans[rec.ReplyID] && r.closeAtStart(rec) {
 			continue
 		}
 		// A lead whose process may still run under its holder rejoins
 		// it there, before the scan below replays the holder's records.
 		// A turn the last daemon's exit cut off settles there too.
-		startup = append(startup, r.startConvAtStartup(rec, nil))
+		startup = append(startup, r.startConvWith(rec, nil, false, nil, &binding))
 	}
 	close(startupLoaded)
 	for _, c := range startup {
 		c.do(func() {
+			if refusal := dead[c.rec.ReplyID]; refusal != nil && c.proc == nil && c.rec.HolderID == "" {
+				c.closeDeadAfterRefusal(refusal)
+				return
+			}
 			if r.durableProcess(c.rec.Backend) {
 				c.kick()
 				c.releaseHeld()
@@ -286,12 +290,55 @@ func (r *Runner) kickAfterServing() {
 	}
 }
 
+// expireBeforeServing applies the purge guard before any open record starts
+// a loop. A descendant that could not be deleted still protects its ancestors.
+func (r *Runner) expireBeforeServing(open []Record, dead map[string]*admissionRefusal) []Record {
+	expired := r.expiredAtStart(open, dead)
+	if len(expired) == 0 {
+		return open
+	}
+	startupOpen := make(map[string]Record, len(open))
+	r.mu.Lock()
+	for _, rec := range open {
+		startupOpen[rec.ReplyID] = rec
+		r.indexChildLocked(rec)
+	}
+	r.mu.Unlock()
+	for _, id := range expired {
+		rec := startupOpen[id]
+		r.mu.Lock()
+		retain := r.hasLiveDescendantsLocked(safeStopParent(id, rec.Lead), startupOpen)
+		r.mu.Unlock()
+		if retain || !r.deleteSessionRecord(rec) {
+			continue
+		}
+		delete(startupOpen, id)
+		r.mu.Lock()
+		r.unindexChildLocked(rec)
+		r.mu.Unlock()
+	}
+	return slices.DeleteFunc(open, func(rec Record) bool {
+		_, keep := startupOpen[rec.ReplyID]
+		return !keep
+	})
+}
+
 // loadClosed lists closed (or handed-off) record rec at Start.
 func (r *Runner) loadClosed(rec Record) {
+	closure := rec.DeadBindingClosure
+	dead := rec.ClosedAt != "" && closure != nil && closure.Reason != ""
+	if dead && rec.HolderID != "" {
+		// A retained release closure can reach disk while its detached
+		// holder still owns the running process. Leave it to the holder.
+		r.holders.reject(rec.HolderID)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed[rec.ReplyID] = rec
 	r.indexChildLocked(rec)
+	if dead {
+		r.rememberDeadRefusalLocked(rec.ReplyID, &admissionRefusal{reason: closure.Reason, checkout: closure.Checkout})
+	}
 }
 
 // Hydration reads retained evidence outside the runner lock. A concurrent
@@ -334,11 +381,8 @@ func (r *Runner) hydrateClosedRows() {
 // reports whether it did.
 func (r *Runner) closeAtStart(rec Record) bool {
 	now := r.opts.Now()
-	rec.ClosedAt = now.UTC().Format(time.RFC3339)
-	rec.OpenGen++ // the completion fence, as closeIf
 	// An orphan's cut-off turn ends here, as close ends a running one.
-	finishActiveTurn(&rec, now.UnixMilli())
-	rec.TurnOpen = false
+	stampClosed(&rec, now)
 	if err := r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
 		fmt.Fprintf(r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 		return false
@@ -397,7 +441,9 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 	// opened after the listing launched no holder in it, and a holder a
 	// start launched meanwhile is in its record by the time the
 	// conversation's loop answers.
-	listed := r.opts.Holders.List().Holders
+	deadHolders := r.deadHolderRecords()
+	inventory := r.opts.Holders.List()
+	listed := inventory.Holders
 	r.mu.Lock()
 	convs := make([]*conv, 0, len(r.convs))
 	for _, c := range r.convs {
@@ -438,6 +484,9 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 		// daemon's first scan sweeps instead.
 		return
 	default:
+	}
+	if !inventory.Incomplete {
+		r.finalizeDeadHolders(deadHolders, listed)
 	}
 	for _, info := range listed {
 		var meta holderSession

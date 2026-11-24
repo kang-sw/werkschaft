@@ -20,10 +20,14 @@ func (c *conv) reattach() {
 		// the ownership match every held worker passes. Replay, events,
 		// and the MCP bearer stay closed. A matching holder is then
 		// ended (retireCrossHarnessWorker); a mismatched one is never
-		// stopped. The record stays, stopped, either way.
+		// stopped. The record closes after retirement.
 		c.crossHarnessRejoin = true
 		c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
+		if c.r.opts.Holders == nil {
+			c.replaying = true
+			return
+		}
 	}
 	// A cross-harness rejoin never runs, so it reads no profile (startWorker
 	// skips its config reads too).
@@ -105,7 +109,8 @@ func (c *conv) checkReattach() {
 	}
 	id, _, _ := hp.HolderInfo()
 	listed, attached := false, false
-	for _, info := range c.r.opts.Holders.List().Holders {
+	inventory := c.r.opts.Holders.List()
+	for _, info := range inventory.Holders {
 		if info.ID == id {
 			listed, attached = true, info.Attached
 			if !attached {
@@ -158,6 +163,9 @@ func (c *conv) checkReattach() {
 		}
 	}
 	if !listed {
+		if c.crossHarnessRejoin && inventory.Incomplete {
+			return
+		}
 		c.processGone()
 		c.crossHarnessRetired()
 		return

@@ -525,7 +525,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	var loadProviderConfig func(wsconfig.Options) error
 	if credentials != nil {
 		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
-		loadProviderConfig = credentials.LoadLocalEndpoints
+		loadProviderConfig = credentials.ReconcileLocalEndpoints
 	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{
@@ -572,7 +572,8 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		TierRoles: mcp.PackagedTierRoles,
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
-		WakeRefused: mcp.AgentWakeRefused(logw),
+		WakeRefused:       mcp.AgentWakeRefused(logw),
+		WakeUndeliverable: mcp.AgentWakeUndeliverable(logw),
 		// A message for an agent whose worktree was released after it was
 		// bound there never reaches it; its sender hears why.
 		CheckoutReleased: mcp.AgentCheckoutReleased(logw),

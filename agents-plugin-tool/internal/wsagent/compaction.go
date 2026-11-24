@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -49,6 +51,7 @@ type compactRequest struct {
 	internal bool
 	auto     bool
 	crossing bool
+	stage1   bool
 	err      error
 	lead     *wscompact.LeadSummary
 }
@@ -115,9 +118,8 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			return
 		}
 		if lead != nil {
-			_, accepts := dest.proc.(leadSummaryCompactor)
-			if dest != own || !dest.rec.Lead || !accepts {
-				out = CompactResult{"error", "lead_summary is only available for a builtin lead compacting itself"}
+			if dest != own || !dest.rec.Lead {
+				out = CompactResult{"error", "lead_summary is only available for a hosted lead compacting itself"}
 				return
 			}
 		}
@@ -125,10 +127,26 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			out = CompactResult{"queued", "compaction already pending"}
 			return
 		}
-		req := &compactRequest{resume: again, internal: dest.compactInternalTurn, crossing: dest.aboveCompactHard(), lead: lead}
+		internal := dest.compactInternalTurn
+		crossing := dest.aboveCompactHard()
+		if dest.compactStage1Active {
+			internal = dest.compactStage1Internal
+			crossing = crossing || dest.compactStage1Auto
+		}
+		req := &compactRequest{
+			resume:   again,
+			internal: internal,
+			auto:     dest.compactStage1Active && dest.compactStage1Auto,
+			crossing: crossing,
+			lead:     lead,
+		}
 		dest.compactPending = req
 		dest.publishCompaction(false)
-		out = CompactResult{"queued", "native compaction waits for the idle boundary"}
+		if lead != nil {
+			out = CompactResult{"queued", "ws-managed compaction waits for the idle boundary"}
+		} else {
+			out = CompactResult{"queued", "native compaction waits for the idle boundary"}
+		}
 		dest.kick()
 		if req.err != nil {
 			out = CompactResult{"error", req.err.Error()}
@@ -188,6 +206,11 @@ func (c *conv) loadCompaction() {
 	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
 	c.compactNudge = compactionNudge{}
 	c.compactOrigin = ""
+	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+}
+
+func (c *conv) wsManagedLeadCompaction() bool {
+	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactLeadMode == wsconfig.CompactionModeWS
 }
 
 func (c *conv) loadCompactionThresholds() {
@@ -226,6 +249,16 @@ func (c *conv) loadCompactionThresholds() {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", c.rec.ReplyID, key, err)
 			*slot.to = wsconfig.Threshold{}
 		}
+	}
+	if c.rec.Lead {
+		v, _, err := r.Compaction(c.rec.WSKey, wsconfig.ItemCompactionLeadMode, c.rec.Backend, "")
+		rawMode := ""
+		if err == nil {
+			rawMode = v.Value
+		}
+		c.compactLeadMode = EffectiveLeadCompactionMode(c.rec.Backend, rawMode, c.r.opts.Backends)
+	} else {
+		c.compactLeadMode = wsconfig.CompactionModeNative
 	}
 	c.compactGen = gen
 }
@@ -445,6 +478,27 @@ func (c *conv) compactIdle() bool {
 			return false
 		}
 		c.compactPending = nil
+		if req.stage1 {
+			if err := c.sendStandalonePrompt(false, func() error { return c.proc.Send(stage1CompactionPrompt()) }); err != nil {
+				if checkout, ok := releasedInput(err); ok {
+					req.err = err
+					c.dropReleasedInput("compaction stage 1", checkout)
+					c.releaseHeld()
+					return false
+				}
+				// Stage 1 steer failed to dispatch; fall through to Stage 2 native /compact.
+				req.stage1 = false
+			} else {
+				c.compactStage1Active = true
+				c.compactStage1Resume = req.resume
+				c.compactStage1Internal = req.internal
+				c.compactStage1Auto = req.auto
+				c.compactStage1UsageLimited = false
+				c.compactInternalTurn = true
+				c.beginTurn(false)
+				return true
+			}
+		}
 		c.compactResume, c.compactCommand = req.resume, true
 		c.compactResumeInternal = req.resume && req.internal
 		trigger := wslive.TriggerManual
@@ -452,6 +506,37 @@ func (c *conv) compactIdle() bool {
 			trigger = wslive.TriggerAuto
 		}
 		c.compactOrigin = trigger
+		_, acceptsSummary := c.proc.(leadSummaryCompactor)
+		if req.lead != nil && !acceptsSummary {
+			rotated, err := c.rotateExternalLead(req, trigger)
+			if checkout, ok := releasedInput(err); ok {
+				req.err = err
+				c.compactOrigin = ""
+				c.compactCommand, c.compactResume, c.compactResumeInternal = false, false, false
+				c.dropReleasedInput("compaction", checkout)
+				c.releaseHeld()
+				return false
+			}
+			if err != nil {
+				req.err = err
+				c.compactCommand = false
+				c.stopCompactWatchdog()
+				if c.compacting {
+					c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
+					c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: err.Error()})
+				} else {
+					c.compactResume, c.compactResumeInternal, c.compactOrigin = false, false, ""
+				}
+				c.setStatus(func() { c.lastErr = "compaction: " + err.Error() })
+				c.releaseHeld()
+				return false
+			}
+			if rotated {
+				// CompactEnd already ran synchronously inside rotateExternalLead;
+				// fall through so compactResume opens the continuation turn now.
+				goto postCompact
+			}
+		}
 		cmd := wsinbox.Command{Name: "compact"}
 		// The compaction starts with its command, behind the last release
 		// check: a refused one leaves no started compaction to unwind.
@@ -491,6 +576,7 @@ func (c *conv) compactIdle() bool {
 		}
 		return true
 	}
+postCompact:
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
 		if c.r.durableProcess(c.rec.Backend) {
 			return c.compactDurableContinue()
@@ -565,8 +651,125 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 	// checkpoint. Automatically compact its next input without extending
 	// the finished turn. An explicit resume request still opens new input.
 	resume = resume && (c.rec.Lead || !c.r.durableProcess(c.rec.Backend))
-	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
+	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction()}
 	c.publishCompaction(false)
+}
+
+func stage1CompactionPrompt() string {
+	var fields []string
+	for _, f := range wscompact.ProseFields() {
+		fields = append(fields, f.Key)
+	}
+	return "Compaction is requested. Save any durable state to your agenda, then call ws/compact with lead_summary containing all seven string fields (" +
+		strings.Join(fields, ", ") +
+		"; use empty strings for sections with nothing to carry forward) and optional reread (up to 12 worktree text file paths) so ws can rotate the session with your checkpoint. End your turn after calling ws/compact."
+}
+
+// rotateExternalLead executes ws-managed compaction for an external hosted lead:
+// builds the checkpoint, emits CompactStart, commits an explicit non-estimated
+// wsaudit.KindCompaction on the old process before closing it, retires the old
+// holder, clears rec.SessionID/SessionFile, starts a fresh native session via
+// startLead, emits CompactEnd, and queues RestoreCompaction + checkpoint.
+func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, error) {
+	rec := c.record()
+	rp, err := c.r.resolve(rec.Profile, rec.Root)
+	if err != nil {
+		return false, fmt.Errorf("resolve profile: %w", err)
+	}
+	var records []wslive.RingRecord
+	if c.dir != "" {
+		if recs, err := wslive.ReadRing(filepath.Join(c.dir, "ring")); err == nil {
+			records = recs
+		}
+	}
+	dialogRes := wscompact.BuildRingDialog(records, "ring")
+	prose := make([]string, len(req.lead.Prose))
+	for i, text := range req.lead.Prose {
+		prose[i] = wscompact.BoundedText(wscompact.Scrub(text), wscompact.ProseFieldBytes)
+	}
+	var rereads string
+	if len(req.lead.Paths) > 0 {
+		files := wsdashboard.ReadWorktreeTextFiles(rec.Root, req.lead.Paths, wscompact.RereadBytes)
+		rereads = wscompact.FormatRereads(req.lead.Paths, files)
+	}
+	state := c.r.compactionState(rec.ReplyID)(dialogRes.LastCompactAt)
+	checkpoint := wscompact.BuildCheckpoint(wscompact.CheckpointInput{
+		Lead:         true,
+		Ticket:       dialogRes.Ticket,
+		Playbook:     dialogRes.Playbook,
+		State:        state,
+		OmitChildren: c.r.opts.RestoreBundle != nil,
+		Prose:        prose,
+		Rereads:      rereads,
+		Dialog:       dialogRes.Dialog,
+	})
+
+	err = c.sendStandalonePrompt(false, func() error {
+		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
+		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
+
+		if committer, ok := c.proc.(auditCheckpointCommitter); ok {
+			at := time.Now()
+			if c.r != nil && c.r.opts.Now != nil {
+				at = c.r.opts.Now()
+			}
+			ev, err := wsaudit.NewEnvelope(rec.ReplyID, rec.Backend, at, wsaudit.KindCompaction)
+			if err != nil {
+				return fmt.Errorf("build compaction audit envelope: %w", err)
+			}
+			ev.Subkind = trigger
+			ev.Out = checkpoint
+			ev.Meta = map[string]any{
+				"mode":    wsconfig.CompactionModeWS,
+				"trigger": trigger,
+			}
+			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
+			if err := committer.commitAuditCheckpoint(context.Background(), id, ev); err != nil {
+				return fmt.Errorf("commit compaction audit checkpoint: %w", err)
+			}
+		}
+
+		oldProc := c.proc
+		c.setStatus(func() { c.proc = nil })
+		c.events = nil
+		if oldProc != nil {
+			_ = oldProc.Close()
+			c.releaseHolder(oldProc)
+		}
+		if err := c.retireHolder(); err != nil {
+			return fmt.Errorf("retire session holder: %w", err)
+		}
+
+		prevSessionID, prevSessionFile := rec.SessionID, rec.SessionFile
+		c.update(func(r *Record) {
+			r.SessionID = ""
+			r.SessionFile = ""
+		})
+		if err := c.startLead(c.record(), rp.Definition, false); err != nil {
+			c.update(func(r *Record) {
+				r.SessionID = prevSessionID
+				r.SessionFile = prevSessionFile
+			})
+			return fmt.Errorf("start fresh session: %w", err)
+		}
+
+		c.compactOrigin = trigger
+		c.compactCommand = false
+		c.compactRotated = true
+		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
+		c.compactRotated = false
+		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
+		if strings.TrimSpace(c.compactNote) != "" {
+			c.compactNote += "\n\n" + checkpoint
+		} else {
+			c.compactNote = checkpoint
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *conv) compactionStateInstruction() string {
@@ -681,7 +884,7 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	}
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
-	case supported && c.rec.Lead && c.r.durableProcess(c.rec.Backend):
+	case supported && c.rec.Lead && (c.r.durableProcess(c.rec.Backend) || c.wsManagedLeadCompaction()):
 		action = "Write durable state to your agenda, then call ws/compact with the carry-forward fields in lead_summary at a safe boundary."
 	case supported:
 		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
@@ -792,6 +995,7 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compacting, c.compactResume = false, false
 		c.compactResumeInternal = false
 		c.compactHardAtStart = false
+		c.compactOrigin = ""
 	case wslive.CompactEnd:
 		// Duplicate ends carry neither a second note nor another continue turn.
 		if !c.compacting {
@@ -818,7 +1022,11 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.queueRestore(RestoreCompaction)
 		if !c.r.opts.Backends[c.rec.Backend].CompactionProtocol().PromptPersists {
 			if c.rec.Lead {
-				c.compactNote += c.leadManual(c.record())
+				// Rotation starts a fresh process via startLead, which already
+				// embeds composeLeadInstructions (including leadManual).
+				if !c.compactRotated || !c.r.lifecycle(c.rec.Backend).ComposedLeadInstructions {
+					c.compactNote += c.leadManual(c.record())
+				}
 			} else {
 				if c.systemPrompt == "" && c.rec.SystemPrompt && c.dir != "" {
 					if raw, err := os.ReadFile(filepath.Join(c.dir, systemPromptFile)); err == nil {

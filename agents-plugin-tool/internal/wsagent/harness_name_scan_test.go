@@ -216,6 +216,7 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claudeAiOauth"`, 1, classExternal, "the provider's credential file member", "TestPlanUsageCodexCredentials"),
 		site("internal/wsdashboard/plan_usage.go", "codexFiveHourHistory", 1, classPersisted, "the plan-usage response member the page reads", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
+		site("internal/wsdashboard/fs_model_write_protection.go", "WerkJournalDirName", 1, classPersisted, "the durable session journal directory", "TestModelFileProtectionRefusesWerkJournalAlias"),
 		site("internal/wsdashboard/plan_usage_history.go", "plan-usage-codex-history.json", 1, classPersisted, "the persisted five-hour history file name", "TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile"),
 		site("internal/wsdashboard/plan_usage_history.go", "codex", 2, classPersisted, "persisted history validators accept the labels earlier writers wrote", history),
 		site("internal/wsdashboard/plan_usage_history.go", "claude", 2, classPersisted, "persisted history validators accept the labels earlier writers wrote", history),

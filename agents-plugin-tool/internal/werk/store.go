@@ -16,6 +16,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 // store.go is the conversation's persistence. The live transcript is the
@@ -29,10 +30,6 @@ import (
 // header, so a segment is self-describing. Each later line is a transcript
 // item, a complete model response, or recovery evidence for a mutation. Recovery discards a torn tail so it
 // cannot mistake part of a response for committed model output.
-
-// storeDirName is the directory under a session's directory that holds the
-// conversation segments.
-const storeDirName = "werk"
 
 // storeVersion is the segment format version.
 const storeVersion = 1
@@ -100,7 +97,7 @@ type Store struct {
 }
 
 func segmentPath(dir, session string) string {
-	return filepath.Join(dir, storeDirName, session+".jsonl")
+	return filepath.Join(dir, wsstate.WerkJournalDirName, session+".jsonl")
 }
 
 // OpenStore opens session's file under dir and returns the items it holds. A

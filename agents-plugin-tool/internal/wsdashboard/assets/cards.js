@@ -90,8 +90,10 @@
   var boardw = 0, convow = 0;
   var toolbar = null, overviewOn = false;
   var stateFilter = "all", stateUI = null;
-  var toolbarFit = { width: 0, probing: false, modes: ["", "compact-filter", "compact-actions", "dropdown", "tight"] };
+  var toolbarFit = { width: 0, probing: false, modes: ["", "compact", "dropdown", "tight"] };
   var filterValues = ["all", "asks", "researching", "discussing", "waiting", "implementing", "awaiting-confirmation", "closed", "cards", "tickets"];
+  var metaFilterValues = ["all", "asks", "closed", "cards", "tickets"];
+  var pipelineFilterValues = ["researching", "discussing", "waiting", "implementing", "awaiting-confirmation"];
 
   function licon(name) { return '<svg class="li" aria-hidden="true"><use href="#l-' + name + '"/></svg>'; }
   function mk(tag, cls, text) {
@@ -116,7 +118,7 @@
     toolbar.setAttribute("role", "toolbar");
     toolbar.setAttribute("aria-label", wsT("js.board.toolbar.label"));
     var row = mk("div", "board-tools"), actions = opt.toolbar || {};
-    function action(cls, icon, label, run) {
+    function action(parent, cls, icon, label, run) {
       var b = mk("button", "board-action " + cls);
       b.type = "button";
       b.innerHTML = licon(icon);
@@ -124,24 +126,26 @@
       b.title = label;
       b.setAttribute("aria-label", label);
       b.addEventListener("click", function (e) { if (run) run(e); });
-      row.appendChild(b);
+      parent.appendChild(b);
       return b;
     }
-    var overview = action("board-overview", "chevrons-down-up", wsT("js.board.toolbar.overview"), actions.overview);
+    var overview = action(row, "board-overview", "chevrons-down-up", wsT("js.board.toolbar.overview"), actions.overview);
     overview.setAttribute("aria-pressed", "false");
     overview.title = wsT("js.board.toolbar.overview.title");
+    var stack = mk("div", "board-stack");
+    var acts = mk("div", "board-acts");
     var term = mk("span", "board-term-slot");
     term.id = "board-term-slot";
-    row.appendChild(term);
+    acts.appendChild(term);
     var web = mk("span", "board-web-slot");
     web.id = "board-web-slot";
-    row.appendChild(web);
+    acts.appendChild(web);
     if (actions.download) {
-      var download = action("board-download", "download", wsT("js.board.toolbar.download"), actions.download);
+      var download = action(acts, "board-download", "download", wsT("js.board.toolbar.download"), actions.download);
       download.title = wsT("js.board.toolbar.download.title");
     }
     if (actions.files) {
-      var files = action("board-files", "folder-open", wsT("js.board.toolbar.files"), function () {
+      var files = action(acts, "board-files", "folder-open", wsT("js.board.toolbar.files"), function () {
         var owner = actions.files;
         if (!owner.el) return;
         maximize(maxed && maxed.files ? null : { files: true, el: owner.el, owner: owner, back: files });
@@ -150,7 +154,12 @@
       files.setAttribute("aria-expanded", "false");
       files.title = wsT("js.board.toolbar.files.title");
     }
-    row.appendChild(buildStateFilter());
+    var actsDiv = mk("span", "board-acts-vdiv");
+    actsDiv.setAttribute("aria-hidden", "true");
+    acts.appendChild(actsDiv);
+    stack.appendChild(acts);
+    stack.appendChild(buildStateFilter());
+    row.appendChild(stack);
     var face = mk("div", "board-toolbar-face");
     face.appendChild(row);
     toolbar.appendChild(face);
@@ -197,18 +206,20 @@
         var r = n.getBoundingClientRect();
         if (!r.height) return;
         var key = Math.round((r.top + r.bottom) * 2) / 4;
-        rows[key] = 30;
+        rows[key] = 44;
       });
       var wrapped = Object.keys(rows).length > 1;
-      var keys = Object.keys(rows), reserved = 16 + Math.max(0, keys.length - 1) * 6;
+      var keys = Object.keys(rows), reserved = 6 + Math.max(0, keys.length - 1) * 6;
       keys.forEach(function (key) { reserved += rows[key]; });
       var height = faceRect.height;
+      var fit = toolbar.getAttribute("data-toolbar-fit");
+      var narrow = fit === "dropdown" || fit === "tight";
       // All geometry above, all writes below; ResizeObserver settles a face
       // whose dimensions change when floating or wrapping changes.
       style(toolbar, "--toolbar-top", inset + "px");
       if (toolbar.hasAttribute("data-floating") !== floating) toolbar.toggleAttribute("data-floating", floating);
       if (toolbar.hasAttribute("data-wrapped-actions") !== wrapped) toolbar.toggleAttribute("data-wrapped-actions", wrapped);
-      style(toolbar, "--toolbar-reserved", (floating ? reserved : height) + "px");
+      style(toolbar, "--toolbar-reserved", (floating && !narrow ? reserved : height) + "px");
       // The rail already exposes a host inset; include the lower hit extension.
       style(doc.getElementById("bcol") || board, "--wb-rail-inset", (inset + height + 6) + "px");
       if (scrollBox && scrollBox !== s) scrollBox.style.removeProperty("scroll-padding-top");
@@ -227,18 +238,20 @@
   function filterMark(value) {
     var n = mk("span", value === "asks" ? "board-state-glyph" : value === "cards" || value === "tickets" ? "board-state-icon" : "board-state-dot");
     if (value === "asks") n.textContent = "?";
-    if (value === "cards") n.innerHTML = '<svg class="li" aria-hidden="true"><use href="#i-hammer"/></svg>';
+    if (value === "cards") n.innerHTML = '<svg class="li" aria-hidden="true"><use href="#i-app-window"/></svg>';
     if (value === "tickets") n.innerHTML = '<svg class="li" aria-hidden="true"><use href="#i-ticket"/></svg>';
     return n;
   }
   function buildStateFilter() {
     var root = mk("div", "board-state-filter"), inline = mk("div", "board-state-inline");
+    var meta = mk("div", "board-state-meta"), pipeline = mk("div", "board-state-pipeline");
     var trigger = mk("button", "board-action board-state-trigger"), pop = mk("div", "tpop board-state-pop");
     var labels = [wsT("js.board.filter.all"), wsT("js.board.filter.asks"), wsT("js.board.filter.researching"), wsT("js.board.filter.discuss"), wsT("js.board.filter.wait"), wsT("js.board.filter.implement"), wsT("js.board.filter.confirm"), wsT("js.board.filter.closed"), wsT("js.board.filter.cards"), wsT("js.board.filter.tickets")];
+    var asksShort = wsT("js.board.filter.asks.short");
     var label = wsT("js.board.filter.label");
     stateFilter = opt.load(opt.key + ".state-filter");
     if (filterValues.indexOf(stateFilter) < 0) stateFilter = "all";
-    stateUI = { root: root, inline: inline, trigger: trigger, pop: pop, labels: labels, radios: [], totals: {} };
+    stateUI = { root: root, inline: inline, meta: meta, pipeline: pipeline, trigger: trigger, pop: pop, labels: labels, radios: [], totals: {} };
     trigger.type = "button";
     trigger.hidden = true;
     trigger.setAttribute("aria-label", label);
@@ -249,33 +262,51 @@
     pop.setAttribute("aria-label", label);
     pop.appendChild(mk("div", "lb", label));
     var options = mk("div", "board-state-options");
-    [inline, options].forEach(function (group, g) {
-      group.setAttribute("role", "radiogroup");
-      group.setAttribute("aria-label", label);
-      if (!g) group.innerHTML = licon("list-filter");
-      filterValues.forEach(function (value, i) {
-        var b = mk("button", g ? "board-state-option" : "board-state-radio");
-        b.type = "button";
-        b.setAttribute("role", "radio");
-        b.setAttribute("data-filter", value);
-        if (g) b.appendChild(mk("span", "board-state-ring"));
-        b.appendChild(filterMark(value));
-        b.appendChild(mk("span", "board-state-label", labels[i]));
-        b.appendChild(mk("span", "board-state-count"));
-        b.addEventListener("click", function () { selectFilter(value, b, !!g); });
-        b.addEventListener("keydown", function (e) {
-          var index = filterValues.indexOf(stateFilter), next;
-          if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % filterValues.length;
-          else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (index + filterValues.length - 1) % filterValues.length;
-          else if (e.key === "Home") next = 0;
-          else if (e.key === "End") next = filterValues.length - 1;
-          if (next === undefined) return;
-          e.preventDefault(); e.stopPropagation();
-          selectFilter(filterValues[next], group.querySelector('[data-filter="' + filterValues[next] + '"]'), false);
-        });
-        group.appendChild(b);
-        stateUI.radios.push(b);
+    inline.setAttribute("role", "radiogroup");
+    inline.setAttribute("aria-label", label);
+    options.setAttribute("role", "radiogroup");
+    options.setAttribute("aria-label", label);
+    function makeRadio(group, container, value, isPop, extraCls) {
+      var idx = filterValues.indexOf(value);
+      var b = mk("button", (isPop ? "board-state-option" : "board-state-radio") + (extraCls ? " " + extraCls : ""));
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.setAttribute("data-filter", value);
+      if (isPop) b.appendChild(mk("span", "board-state-ring"));
+      b.appendChild(filterMark(value));
+      var text = !isPop && value === "asks" ? asksShort : labels[idx];
+      b.appendChild(mk("span", "board-state-label", text));
+      b.appendChild(mk("span", "board-state-count"));
+      b.addEventListener("click", function () { selectFilter(value, b, isPop); });
+      b.addEventListener("keydown", function (e) {
+        var radios = group.querySelectorAll('[role="radio"]');
+        var index = Array.prototype.indexOf.call(radios, b), next;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % radios.length;
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (index + radios.length - 1) % radios.length;
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = radios.length - 1;
+        if (next === undefined) return;
+        e.preventDefault(); e.stopPropagation();
+        selectFilter(radios[next].getAttribute("data-filter"), radios[next], false);
       });
+      container.appendChild(b);
+      stateUI.radios.push(b);
+    }
+    metaFilterValues.forEach(function (value) {
+      makeRadio(inline, meta, value, false, "board-state-chip");
+      if (value === "all") {
+        var vdiv = mk("span", "board-state-vdiv");
+        vdiv.setAttribute("aria-hidden", "true");
+        meta.appendChild(vdiv);
+      }
+    });
+    pipelineFilterValues.forEach(function (value) {
+      makeRadio(inline, pipeline, value, false, "board-state-seg");
+    });
+    inline.appendChild(meta);
+    inline.appendChild(pipeline);
+    filterValues.forEach(function (value) {
+      makeRadio(options, options, value, true, "");
     });
     pop.appendChild(options);
     root.appendChild(inline); root.appendChild(trigger); root.appendChild(pop);
@@ -332,14 +363,29 @@
   function toolbarRowFits(face, row) {
     var faceRect = face.getBoundingClientRect();
     if (!faceRect.width) return true;
-    var firstY = null;
-    for (var i = 0; i < row.children.length; i++) {
-      var r = row.children[i].getBoundingClientRect();
-      if (!r.width && !r.height) continue;
-      var cy = r.top + r.height / 2;
-      if (firstY === null) firstY = cy;
-      else if (Math.abs(cy - firstY) > 2) return false;
-      if (r.right > faceRect.right - 0.5) return false;
+    var acts = row.querySelector(".board-acts");
+    var actsRect = acts ? acts.getBoundingClientRect() : null;
+    if (stateUI && stateUI.root.isConnected && !stateUI.inline.hidden) {
+      var metaRect = stateUI.meta.getBoundingClientRect();
+      var pipeRect = stateUI.pipeline.getBoundingClientRect();
+      if (actsRect && actsRect.width > 0 && metaRect.left < actsRect.right - 0.5) return false;
+      if (metaRect.right > faceRect.right - 0.5) return false;
+      if (pipeRect.right > faceRect.right - 0.5) return false;
+      var chips = stateUI.meta.querySelectorAll(".board-state-radio");
+      for (var i = 0; i < chips.length; i++) {
+        if (chips[i].scrollWidth > chips[i].clientWidth + 1) return false;
+      }
+      var segs = stateUI.pipeline.querySelectorAll(".board-state-radio");
+      for (var j = 0; j < segs.length; j++) {
+        if (segs[j].scrollWidth > segs[j].clientWidth + 1) return false;
+      }
+      return true;
+    }
+    if (stateUI && stateUI.root.isConnected && !stateUI.trigger.hidden) {
+      var trigRect = stateUI.trigger.getBoundingClientRect();
+      if (actsRect && actsRect.width > 0 && trigRect.left < actsRect.right - 0.5) return false;
+      if (trigRect.right > faceRect.right - 0.5) return false;
+      return true;
     }
     return true;
   }
@@ -357,7 +403,7 @@
     var active = doc.activeElement;
     var wasNarrow = !!(ui && ui.inline.hidden);
     var inFilter = !!(ui && active && (ui.inline.contains(active) || active === ui.trigger || ui.pop.contains(active)));
-    var modes = ui ? toolbarFit.modes : ["", "compact-filter", "compact-actions", "tight"];
+    var modes = ui ? toolbarFit.modes : ["", "compact", "tight"];
     var chosen = modes[modes.length - 1];
     toolbarFit.probing = true;
     try {
@@ -417,11 +463,14 @@
     stateUI.totals = totals;
     stateUI.radios.forEach(function (b) {
       var value = b.getAttribute("data-filter"), checked = value === stateFilter;
-      var label = stateUI.labels[filterValues.indexOf(value)] + " " + totals[value];
+      var count = totals[value] || 0;
+      var label = stateUI.labels[filterValues.indexOf(value)] + " " + count;
       b.setAttribute("aria-checked", String(checked));
       b.setAttribute("tabindex", checked ? "0" : "-1");
       b.setAttribute("aria-label", label); b.title = label;
-      b.querySelector(".board-state-count").textContent = String(totals[value]);
+      b.setAttribute("data-count", String(count));
+      if (count === 0) b.setAttribute("data-zero", ""); else b.removeAttribute("data-zero");
+      b.querySelector(".board-state-count").textContent = String(count);
     });
     var i = filterValues.indexOf(stateFilter), trigger = stateUI.trigger;
     trigger.setAttribute("data-filter", stateFilter);
@@ -1911,10 +1960,16 @@
         if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
         if (was.maxBtn.isConnected) was.maxBtn.focus();
       } else {
-        // The focus comes back without scrolling: the node's place is where
-        // it was left.
+        var origin = was.panelHosts && was.panelHosts[0];
         var back = shrink(was);
-        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
+        var anchor = window.WsBoardAnchor;
+        if (anchor && anchor.settle) {
+          // A fixed panel can stay in view while its topic leaves the board
+          // viewport. Bring that topic back before returning focus to it.
+          var moved = back && origin && board.contains(origin) && anchor.free && anchor.free()
+            && anchor.visibleCards().indexOf(origin) < 0;
+          if (!moved || !anchor.select(origin, { keep: true })) anchor.settle();
+        }
         if (back) back.focus({ preventScroll: true });
       }
     }

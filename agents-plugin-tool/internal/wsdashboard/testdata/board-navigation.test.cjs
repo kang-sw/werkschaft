@@ -229,9 +229,11 @@ test('direct Overview target selection applies before landing on its fresh ident
   const { context, nodes, events } = environment(true), callbacks = [];
   let holding = true;
   context.window.WsOverview = { holding: () => holding, after: fn => callbacks.push(fn) };
-  Object.assign(context, { o: {}, on: true, busy: false, ITEM: 'section.topic', identity: n => n.id,
+  Object.assign(context, { o: {}, on: true, busy: false, preview: null, pendingLandNode: null, pendingLandKey: null,
+    ITEM: 'section.topic', identity: n => n.id,
     find: id => nodes[id], clearance: () => 0, keep: n => n.scrollIntoView(), flash() {}, select: n => events.push('select:' + n.id) });
-  vm.runInContext(func(readAssetSource('wsdashboard', 'overview.js'), 'exit'), context);
+  const source = readAssetSource('wsdashboard', 'overview.js');
+  vm.runInContext(func(source, 'resolveTarget') + func(source, 'exit'), context);
   context.exit(nodes['topic-aa']);
   assert.deepEqual(events, []); assert.equal(callbacks.length, 1);
   holding = false; context.on = false; callbacks.shift()();

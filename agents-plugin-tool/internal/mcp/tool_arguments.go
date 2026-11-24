@@ -233,7 +233,7 @@ func execShellFamily(arguments map[string]any) (execShellArgFamily, string) {
 		}
 	}
 	if len(legacy) > 0 && len(current) > 0 {
-		return execShellArgFamily{}, fmt.Sprintf("mixed argument forms: %s belong to the new form (cmd, cwd, async) and %s to the legacy form (command, working_dir, shell); use one form", strings.Join(current, ", "), strings.Join(legacy, ", "))
+		return execShellArgFamily{}, fmt.Sprintf("mixed argument forms: %s belong to the new form (%s) and %s to the legacy form (%s); use one form", strings.Join(current, ", "), strings.Join(execShellNewOnly, ", "), strings.Join(legacy, ", "), strings.Join(execShellLegacyOnly, ", "))
 	}
 	if len(legacy) > 0 {
 		return execShellArgFamily{legacy: true, required: "command"}, ""

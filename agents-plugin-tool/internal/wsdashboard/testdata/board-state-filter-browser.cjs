@@ -8,7 +8,10 @@ const [base, control, output, reference] = process.argv.slice(2);
 // Eight operational topics, one legacy topic, and no research topics or
 // framework roots. The asks filter counts topics, not individual items.
 const values = ['all', 'asks', 'researching', 'discussing', 'waiting', 'implementing', 'awaiting-confirmation', 'closed', 'cards', 'tickets'];
-const labels = ['전체', '연구 중', '논의 중', '대기 중', '진행 중', '확인 대기', '종료', '카드', '열린 티켓'];
+const inlineValues = ['all', 'asks', 'closed', 'cards', 'tickets', 'researching', 'discussing', 'waiting', 'implementing', 'awaiting-confirmation'];
+const nonAskValues = values.filter(v => v !== 'asks');
+const labelsByValue = { all: '전체', asks: '미결', researching: '연구 중', discussing: '논의 중', waiting: '대기 중', implementing: '진행 중', 'awaiting-confirmation': '확인 대기', closed: '종료', cards: '카드', tickets: '열린 티켓' };
+const labels = nonAskValues.map(v => labelsByValue[v]);
 for (const address of [base, control]) {
   const u = new URL(address);
   assert(['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname));
@@ -103,7 +106,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           await tab.setViewportSize({ width: Math.round(tab.viewportSize().width + target - actual), height: 1000 });
         }
         await until(async () => Math.abs((await page.locator('.board-toolbar').boundingBox()).width - target) < 0.1, 'actual toolbar outer width ' + target);
-        await until(async () => await page.locator('.board-state-trigger').isVisible() === (target < 600), 'responsive presentation at actual width ' + target);
+        await until(async () => await page.locator('.board-state-trigger').isVisible() === (target < 450), 'responsive presentation at actual width ' + target);
         measurements.push({ theme, requestedToolbarWidth: target, viewport: tab.viewportSize(), outer: await page.locator('.board-toolbar').boundingBox(), inline: await page.locator('.board-state-inline').isVisible(), selected: await page.locator('.board-state-radio[aria-checked="true"]').getAttribute('data-filter') });
         write('measurements', measurements);
       }
@@ -115,19 +118,23 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await settle();
         assert.equal(await page.locator('.board-state-radio[aria-checked="true"]').getAttribute('data-filter'), value);
       }
+      async function readCounts(selector) {
+        const byFilter = await page.locator(selector).evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.filter, (n.querySelector('.board-state-count')?.textContent || '').trim()])));
+        return nonAskValues.map(v => byFilter[v]);
+      }
       async function update(id, name, expected) {
         await action(id, name);
         // e64fcea2d AI Context intentionally latches top-origin changes until
         // explicit apply; unexposed content can still be admitted immediately.
         // Verify the same exact counts after either production admission path.
         const apply = page.locator('.wb-oq-top .oq-updates');
-        await until(async () => await apply.isVisible() || JSON.stringify(await page.locator('.board-state-radio:not([data-filter="asks"]) .board-state-count').allTextContents()) === JSON.stringify(expected.map(String)), 'stream update admitted or offered for explicit apply');
+        await until(async () => await apply.isVisible() || JSON.stringify(await readCounts('.board-state-radio')) === JSON.stringify(expected.map(String)), 'stream update admitted or offered for explicit apply');
         if (await apply.isVisible()) await apply.click();
         await counts(expected);
       }
       async function counts(expected) {
-        await until(async () => JSON.stringify(await page.locator('.board-state-radio:not([data-filter="asks"]) .board-state-count').allTextContents()) === JSON.stringify(expected.map(String)), 'authoritative counts ' + expected);
-        assert.deepEqual(await page.locator('.board-state-option:not([data-filter="asks"]) .board-state-count').allTextContents(), expected.map(String));
+        await until(async () => JSON.stringify(await readCounts('.board-state-radio')) === JSON.stringify(expected.map(String)), 'authoritative counts ' + expected);
+        assert.deepEqual(await readCounts('.board-state-option'), expected.map(String));
       }
       async function eligible(value) {
         const nodes = await page.locator('section.topic[data-topic]').evaluateAll(nodes => nodes.map(n => ({ name: n.dataset.topic, state: n.dataset.state, closed: n.classList.contains('closed'), asks: n.dataset.openAsks === 'true', tickets: n.dataset.openTickets === 'true', hidden: n.hasAttribute('data-state-filtered'), display: getComputedStyle(n).display })));
@@ -140,16 +147,33 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         }
         assert(nodes.some(n => n.name === 'legacy' && !n.state), 'legacy remains metadata-free and retained');
       }
-      async function geometry(name, oneRow) {
+      async function geometry(name, inlineExpected) {
         const result = await page.locator('.board-toolbar').evaluate(toolbar => {
           const rect = n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }; };
+          const overview = toolbar.querySelector('.board-overview');
+          const acts = [...toolbar.querySelectorAll('.board-acts .board-action')];
           const actions = [...toolbar.querySelectorAll('.board-overview,.tnew,.wnew,.board-download,.board-files')].map(n => {
             const r = rect(n), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
             return { label: n.getAttribute('aria-label'), rect: r, hit: !!hit && n.contains(hit), clipped: n.scrollWidth > n.clientWidth + 1 };
           });
           const radios = [...toolbar.querySelectorAll('.board-state-radio')].filter(n => n.getClientRects().length).map(n => ({ value: n.dataset.filter, rect: rect(n), clipped: n.scrollWidth > n.clientWidth + 1 }));
           const filter = toolbar.querySelector('.board-state-filter');
-          return { outer: rect(toolbar), face: rect(toolbar.firstChild), filter: rect(filter), actions, radios, selected: toolbar.querySelector('.board-state-radio[aria-checked="true"]').dataset.filter, floating: toolbar.hasAttribute('data-floating') };
+          const meta = toolbar.querySelector('.board-state-meta');
+          const pipeline = toolbar.querySelector('.board-state-pipeline');
+          const segs = pipeline && pipeline.getClientRects().length ? [...pipeline.querySelectorAll('.board-state-seg')].map(n => rect(n)) : [];
+          return {
+            outer: rect(toolbar),
+            face: rect(toolbar.firstChild),
+            overview: overview ? rect(overview) : null,
+            actRects: acts.map(n => rect(n)),
+            meta: meta && meta.getClientRects().length ? rect(meta) : null,
+            segs,
+            filter: rect(filter),
+            actions,
+            radios,
+            selected: toolbar.querySelector('.board-state-radio[aria-checked="true"]').dataset.filter,
+            floating: toolbar.hasAttribute('data-floating')
+          };
         });
         measurements.push({ name, theme, ...result }); write('measurements', measurements);
         const live = await page.locator('html').getAttribute('data-mode') === 'live';
@@ -160,12 +184,17 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           assert(!a.clipped, name + ' action clipping: ' + a.label);
           assert(a.rect.x >= result.face.x && a.rect.right <= result.face.right, name + ' action within face');
         }
-        if (oneRow) {
-          const boxes = [...result.actions.map(a => a.rect), result.filter];
-          assert(Math.max(...boxes.map(r => r.y + r.height / 2)) - Math.min(...boxes.map(r => r.y + r.height / 2)) <= 1, name + ' single row');
-          const sorted = boxes.sort((a, b) => a.x - b.x);
-          for (let i = 1; i < sorted.length; i++) assert(sorted[i - 1].right <= sorted[i].x + 0.5, name + ' no overlap');
-          assert(result.filter.right <= result.face.right, name + ' filter fits face');
+        if (inlineExpected) {
+          const row1 = [...result.actRects, ...(result.meta ? [result.meta] : [])];
+          assert(Math.max(...row1.map(r => r.y + r.height / 2)) - Math.min(...row1.map(r => r.y + r.height / 2)) <= 1.5, name + ' row 1 aligned');
+          const sorted1 = row1.slice().sort((a, b) => a.x - b.x);
+          for (let i = 1; i < sorted1.length; i++) assert(sorted1[i - 1].right <= sorted1[i].x + 0.5, name + ' row 1 no overlap');
+          if (result.overview && sorted1.length) assert(result.overview.right <= sorted1[0].x + 0.5, name + ' overview left of row 1');
+          if (result.segs.length) {
+            assert(Math.max(...result.segs.map(r => r.y + r.height / 2)) - Math.min(...result.segs.map(r => r.y + r.height / 2)) <= 1.5, name + ' row 2 chevrons aligned');
+            if (result.overview) assert(result.overview.right <= result.segs[0].x + 0.5, name + ' overview left of row 2');
+          }
+          assert(result.filter.right <= result.face.right + 0.5, name + ' filter fits face');
           for (const r of result.radios) assert(!r.clipped, name + ' segment unclipped ' + r.value);
         }
       }
@@ -204,13 +233,19 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           await load(id);
         }
         await width(800);
-        for (const selector of ['.board-state-radio', '.board-state-option']) {
-          assert.deepEqual(await page.locator(selector).evaluateAll(nodes => nodes.map(n => n.dataset.filter)), values, selector + ' exact lifecycle order');
-          assert.deepEqual(await page.locator(selector + ':not([data-filter="asks"]) .board-state-label').allTextContents(), labels, selector + ' Korean labels follow values');
-        }
+        assert.deepEqual(await page.locator('.board-state-radio').evaluateAll(nodes => nodes.map(n => n.dataset.filter)), inlineValues, '.board-state-radio exact 2-row inline order');
+        assert.deepEqual(await page.locator('.board-state-option').evaluateAll(nodes => nodes.map(n => n.dataset.filter)), values, '.board-state-option exact lifecycle order');
+        assert.deepEqual(await page.locator('.board-state-radio .board-state-label').allTextContents(), inlineValues.map(v => labelsByValue[v]), '.board-state-radio Korean labels follow 2-row order');
+        assert.deepEqual(await page.locator('.board-state-option:not([data-filter="asks"]) .board-state-label').allTextContents(), labels, '.board-state-option Korean labels follow values');
         await select('discussing');
         const inlineCurrent = () => page.locator('.board-state-radio[aria-checked="true"]');
-        for (const [key, value] of [['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['Home', 'all'], ['ArrowLeft', 'tickets'], ['ArrowUp', 'cards'], ['ArrowLeft', 'closed'], ['ArrowRight', 'cards'], ['ArrowDown', 'tickets'], ['ArrowRight', 'all'], ['End', 'tickets'], ['ArrowDown', 'all'], ['ArrowUp', 'tickets']]) {
+        for (const [key, value] of [
+          ['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'],
+          ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'tickets'],
+          ['ArrowLeft', 'cards'], ['ArrowLeft', 'closed'], ['ArrowLeft', 'asks'], ['ArrowRight', 'closed'],
+          ['Home', 'all'], ['ArrowLeft', 'awaiting-confirmation'], ['ArrowRight', 'all'],
+          ['End', 'awaiting-confirmation'], ['ArrowDown', 'all'], ['ArrowUp', 'awaiting-confirmation'],
+        ]) {
           await inlineCurrent().press(key);
           assert.equal(await inlineCurrent().getAttribute('data-filter'), value);
           assert.equal(await inlineCurrent().evaluate(n => document.activeElement === n), true);
@@ -220,7 +255,10 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0, 2]);
         assert.equal(await page.locator('section.topic.closed').count(), 30);
         assert.equal(await page.locator('.closed-more').getAttribute('data-closed-more'), String(closed - 30));
-        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => { n.filterOriginalNode = n; n.filterOriginalFrames = [...n.querySelectorAll('iframe')]; }));
+        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => {
+          n.filterOriginalNode = n;
+          n.filterOriginalFrames = [...n.querySelectorAll('iframe.doc-frame')].map(f => f.dataset.docKey);
+        }));
         const order = await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic));
         for (const value of values) {
           await select(value); await eligible(value);
@@ -228,7 +266,14 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           const shot = await capture(name);
           if (value === 'discussing' || value === 'all') await pair(name, shot, refs[`v1-${theme}-900`]);
           await geometry(name, true);
-          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && n.filterOriginalFrames.every(f => (f.isConnected && n.contains(f)) || n.querySelectorAll('iframe.doc-frame, div.doc-frame').length >= n.filterOriginalFrames.length))), true, 'filter retains nodes and body iframes (or FAR-band placeholders/remounts)');
+          const lost = await page.locator('section.topic').evaluateAll(nodes => nodes.flatMap(n => {
+            if (n.filterOriginalNode !== n) return [n.dataset.topic + ': replaced topic'];
+            const roots = [n, ...window.WsBoardVirtual.searchRoots(n)];
+            const frames = roots.flatMap(root => root.matches('.doc-frame') ? [root] : [...root.querySelectorAll('.doc-frame')]);
+            const keys = new Set(frames.map(f => f.dataset.docKey));
+            return n.filterOriginalFrames.filter(key => !keys.has(key)).map(key => n.dataset.topic + ': ' + key);
+          }));
+          assert.deepEqual(lost, [], `${value}: filter retains topic nodes and frame identities in mounted or detached bodies`);
         }
         await select('all');
         assert.deepEqual(await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), order, 'All restores original order');
@@ -238,7 +283,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await width(700); await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0, 2]);
         assert.equal(await page.locator('.board-state-inline').isVisible(), true);
         await capture(`${id}-${theme}-700-inline`);
-        await width(539);
+        await width(400);
         assert.equal(await page.locator('.board-state-trigger').evaluate(n => document.activeElement === n), true, 'focus transfers to pill');
         assert.equal(await page.locator('.board-state-trigger').getAttribute('data-filter'), 'discussing');
         await page.locator('.board-state-trigger').click();
@@ -253,8 +298,8 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           assert.equal(await o.getAttribute('aria-checked'), String(selected));
           assert.equal(await o.getAttribute('tabindex'), selected ? '0' : '-1');
         }
-        let shot = await capture(`${id}-${theme}-539-open`);
-        await pair(`${id}-${theme}-539-open`, shot, refs[`v2-${theme}-1280`]);
+        let shot = await capture(`${id}-${theme}-400-open`);
+        await pair(`${id}-${theme}-400-open`, shot, refs[`v2-${theme}-1280`]);
         const current = () => page.locator('.board-state-option[aria-checked="true"]');
         for (const [key, value] of [['ArrowDown', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowRight', 'waiting'], ['ArrowLeft', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['End', 'tickets'], ['ArrowUp', 'cards'], ['ArrowDown', 'tickets'], ['ArrowRight', 'all'], ['ArrowLeft', 'tickets'], ['Home', 'all'], ['ArrowUp', 'tickets'], ['ArrowDown', 'all']]) {
           await current().press(key);
@@ -279,7 +324,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await page.locator('.board-state-trigger').focus();
         await width(700);
         assert.equal(await page.locator('.board-state-radio[data-filter="discussing"]').evaluate(n => document.activeElement === n), true, 'focus returns to checked inline radio');
-        await width(539);
+        await width(400);
         await width(360); await geometry(`${id}-${theme}-360`, false);
         shot = await capture(`${id}-${theme}-360-pill`); await pair(`${id}-${theme}-360-pill`, shot, refs[`v2-${theme}-900`]);
         const stored = await page.evaluate(id => localStorage.getItem('ws.dashboard.cards.' + id + '.state-filter'), id);
@@ -294,8 +339,12 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await select('discussing'); await update(id, 'close', [closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]);
         await eligible('discussing');
         await select('closed');
-        const paging = tab.waitForResponse(r => new URL(r.url()).pathname === `/s/${id}/closed` && r.status() === 200);
-        await page.locator('.closed-more').click(); await paging;
+        // The page control mounts at the end of the free canvas.
+        await page.locator('section.topic.closed').last().evaluate(n => window.WsBoardAnchor.select(n, { smooth: false }));
+        await Promise.all([
+          tab.waitForResponse(r => new URL(r.url()).pathname === `/s/${id}/closed` && r.status() === 200),
+          page.locator('.closed-more').click(),
+        ]);
         await until(async () => await page.locator('section.topic.closed').count() > 30, 'real closed history appended');
         await counts([closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]); await eligible('closed');
         await select('all');

@@ -277,9 +277,131 @@ test('Part 1 & 2: Designated-Y free-canvas variable heights + native #bcol wheel
       }));
       assert.equal(jumped.key, 't:topic-4', 'synchronous jump selects target card');
       assert.equal(jumped.off, null, 'jumped target card is mounted in active window');
+      await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        col.scrollTop += document.getElementById('topic-4').offsetHeight + col.clientHeight / 2;
+      });
+      await page.waitForFunction(() => window.WsBoardAnchor.key() !== 't:topic-4');
     } finally {
       await ctx.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('wheel reversal takes over a pending board alignment during frame hydration', async () => {
+  const browser = await launchBrowser();
+  try {
+    const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 12 });
+    try {
+      const start = await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        col.scrollTop = 620;
+        const rect = col.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + 170, height: col.scrollHeight };
+      });
+      await waitFrames(page, 4);
+      await page.mouse.move(start.x, start.y);
+      await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        const topic = document.getElementById('topic-0');
+        const frame = topic.querySelector('iframe.doc-frame');
+        window.boardWheelTrace = [];
+        col.addEventListener('wheel', e => window.boardWheelTrace.push(e.deltaY));
+        // Hold a frame's first measured height until both wheel events arrive.
+        new Promise(resolve => { window.releaseFrameHeight = resolve; })
+          .then(() => window.__queueFrameHeight(frame, 180));
+        window.WsBoardAnchor.select(topic, { smooth: true });
+      });
+      await page.mouse.wheel(0, 950);
+      await page.mouse.wheel(0, -300);
+      await page.evaluate(() => window.releaseFrameHeight());
+      await page.waitForFunction(() => document.querySelector('#topic-0 iframe').style.height === '180px');
+      // Chromium's superseded smooth scroll would otherwise keep settling at 0.
+      await page.waitForTimeout(600);
+      const result = await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        return { top: col.scrollTop, height: col.scrollHeight, wheels: window.boardWheelTrace };
+      });
+      assert.deepEqual(result.wheels, [950, -300], 'both native wheel events reached the board');
+      assert.ok(result.top > 200, 'the wheel reversal stays clear of the stale top landing: ' + JSON.stringify(result));
+      assert.equal(result.height, start.height, 'frame hydration keeps the board runway in place');
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a newly mounted tail keeps the runway through a scroll reversal while cards are loading', async () => {
+  const browser = await launchBrowser();
+  try {
+    const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 10 });
+    try {
+      const loading = await page.addStyleTag({ content: '#bcol section.topic { height: 40px; overflow: clip; }' });
+      await page.evaluate(() => window.WsBoardAnchor.settle());
+      const result = await page.evaluate(() => new Promise(resolve => {
+        const col = document.getElementById('bcol');
+        const height = col.scrollHeight;
+        col.addEventListener('scrollend', () => {
+          const info = window.WsBoardAnchor.windowInfo();
+          const tail = { mounted: info.end === info.list.length - 1, height: col.scrollHeight };
+          col.scrollTop -= 300;
+          resolve({ height, tail, top: col.scrollTop });
+        }, { once: true });
+        col.scrollTop = 1100;
+      }));
+      await loading.evaluate(el => el.remove());
+      assert.equal(result.tail.mounted, true, 'the short tail is measured while the reversal is pending');
+      assert.equal(result.tail.height, result.height, 'the loading tail leaves the runway intact');
+      assert.equal(result.top, 800, 'the browser can apply the upward reversal without a clamp');
+    } finally {
+      await ctx.close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a smooth topic jump holds its resting offset when a frame resizes in flight', async () => {
+  const browser = await launchBrowser();
+  try {
+    async function jump(grow) {
+      const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 12 });
+      try {
+        const nativeEnd = await page.evaluate(grow => new Promise(resolve => {
+          const col = document.getElementById('bcol');
+          const target = document.getElementById('topic-1');
+          if (grow) {
+            col.addEventListener('scroll', () => {
+              window.__queueFrameHeight(document.querySelector('#topic-0 iframe'), 180);
+            }, { once: true });
+          }
+          col.addEventListener('scrollend', () => resolve(col.scrollTop), { once: true });
+          window.WsBoardAnchor.select(target, { smooth: true });
+        }), grow);
+        await waitFrames(page);
+        const final = await page.evaluate(() => {
+          const col = document.getElementById('bcol');
+          const target = document.getElementById('topic-1');
+          return {
+            top: col.scrollTop,
+            offset: target.getBoundingClientRect().top - col.getBoundingClientRect().top,
+          };
+        });
+        return { nativeEnd, ...final };
+      } finally {
+        await ctx.close();
+      }
+    }
+    const control = await jump(false);
+    const resized = await jump(true);
+    assert.ok(control.nativeEnd > 200, 'the control reaches a distinct target');
+    assert.ok(Math.abs(control.nativeEnd - resized.nativeEnd) <= 3, 'layout leaves the in-flight native destination alone');
+    assert.ok(resized.top > resized.nativeEnd + 130, 'layout correction runs after the smooth scroll finishes');
+    assert.ok(Math.abs(control.offset - resized.offset) <= 3, 'the topic holds the original resting offset');
   } finally {
     await browser.close();
   }
@@ -330,21 +452,26 @@ test('Part 3: Overview fast exit (0 data-overview-motion tags) + 0 idle rAF whil
       await waitFrames(page, 6);
       const afterExit = await page.evaluate(() => {
         const card = document.getElementById('topic-6');
-        const topStack = document.querySelector('.wb-rail-wrap.up .wb-rail-stack');
-        const topBot = topStack && !topStack.hidden ? topStack.getBoundingClientRect().bottom : 0;
+        const col = document.getElementById('bcol');
+        const rect = col.getBoundingClientRect();
+        const contentTop = rect.top + col.clientTop;
+        const top = contentTop + parseFloat(col.style.getPropertyValue('--wb-rail-inset') || 0) + 44;
+        const bottom = rect.top + col.clientTop + col.clientHeight - 47;
+        const cardRect = card.getBoundingClientRect();
+        const centerOffset = Math.max(0, (bottom - top - cardRect.height) / 2);
         return {
           active: window.WsOverview.active(),
           hasAttr: document.documentElement.hasAttribute('data-overview'),
           key: window.WsBoardAnchor.key(),
           motionTagged: window.__motionTagged,
-          topDelta: +(card.getBoundingClientRect().top - topBot).toFixed(2)
+          topDelta: +(cardRect.top - top - centerOffset).toFixed(2)
         };
       });
       assert.equal(afterExit.active, false);
       assert.equal(afterExit.hasAttr, false);
       assert.equal(afterExit.key, 't:topic-6');
       assert.equal(afterExit.motionTagged, 0, 'snap-deck Overview exit must never tag cards with data-overview-motion');
-      assert.ok(Math.abs(afterExit.topDelta) <= 2, 'non-first card must land with 0px misalignment after fast Overview exit: ' + JSON.stringify(afterExit));
+      assert.ok(Math.abs(afterExit.topDelta) <= 2, 'card must land centered in the unobscured free canvas after fast Overview exit: ' + JSON.stringify(afterExit));
     } finally {
       await ctx.close();
     }

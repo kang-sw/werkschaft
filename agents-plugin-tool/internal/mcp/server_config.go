@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -289,6 +290,24 @@ type tuningAgentTierCurrent struct {
 	Effort   string `json:"effort,omitempty"`
 }
 
+// hideConfigDiscovery applies the same visibility to the resolved view and
+// its tuning catalog. lead-tune draws its entries from the latter.
+func hideConfigDiscovery(view *wsconfig.View, catalog *tuningCatalog) {
+	for _, entry := range configRegistry {
+		if !entry.HideFromDiscovery {
+			continue
+		}
+		delete(view.Config.Overrides, entry.Key)
+		delete(view.Config.StructuredOverrides, entry.Key)
+		view.ResolvedOverrides = slices.DeleteFunc(view.ResolvedOverrides, func(item wsconfig.ScopedItem) bool {
+			return item.Key == entry.Key
+		})
+		catalog.Knobs = slices.DeleteFunc(catalog.Knobs, func(knob tuningKnob) bool {
+			return knob.ID == entry.Key
+		})
+	}
+}
+
 // harness selects the bucket a harness-bucketed knob's current value is
 // resolved for (the session's detected harness; empty reads only all).
 func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey, harness string, noAgentMode bool, configOpts wsconfig.Options, registries ...map[string]wsagent.BackendRegistration) (tuningCatalog, error) {
@@ -447,6 +466,23 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		ValueFields: tierAliasesEntry.ValueFields,
 		Current:     currentWorkflowPreference(resolver, sessionKey, tierAliasesEntry.Key),
 	})
+
+	{
+		entry := registryEntryByKey(wsconfig.ItemCompactionLeadMode)
+		rv, _, _ := resolveCompactionValue(resolver, sessionKey, entry.Key, harness, registries...)
+		def := wsconfig.CompactionDefaults[entry.Key]
+		appendKnob(entry, tuningKnob{
+			ID:             entry.Key,
+			Kind:           "workflow_preference",
+			Description:    "Hosted lead compaction mode: native uses the harness's built-in compaction; ws uses ws-managed checkpoints and native session rotation. Backends without native compaction always run ws.",
+			Writer:         tuningWriter{Tool: "config.tune", FixedArguments: map[string]string{"key": entry.Key}},
+			Reset:          &tuningWriter{Tool: "config.tune", FixedArguments: map[string]string{"key": entry.Key, "reset": "true"}},
+			SelectorFields: entry.SelectorFields,
+			ValueFields:    entry.ValueFields,
+			Current:        tuningScopedValue{Value: rv.Value, Scope: string(rv.Scope)},
+			Default:        &def,
+		})
+	}
 
 	for _, key := range []string{"compaction.lead_advisory", "compaction.lead_hard", "compaction.worker_advisory", "compaction.worker_hard"} {
 		entry := registryEntryByKey(key)

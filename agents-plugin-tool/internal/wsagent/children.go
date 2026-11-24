@@ -733,15 +733,33 @@ func (c *conv) saveSteered() {
 // (steered and not taken, or kept for the next turn), or a child of its own
 // that is open (openChildOf). It runs in the loop.
 func (c *conv) holdsReport() bool {
-	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil || c.ownsLiveExec() || c.cutoverNudge != "" || c.cutoverInstructing)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
-		return true
-	}
+	return c.shellHoldsReport() || c.otherWorkHoldsReport() || c.hasOpenReportChild()
+}
+
+func (c *conv) shellHoldsReport() bool {
+	return !c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil || c.ownsLiveExec())
+}
+
+func (c *conv) otherWorkHoldsReport() bool {
+	return (!c.rec.Lead && (c.cutoverNudge != "" || c.cutoverInstructing)) ||
+		len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport()
+}
+
+func (c *conv) hasOpenReportChild() bool {
 	ref := ParentRef{Kind: ParentConversation, ReplyID: c.rec.ReplyID}
 	c.r.mu.Lock()
-	kids := make([]*conv, 0, len(c.r.convs))
-	for _, k := range c.r.convs {
-		if k != c {
-			kids = append(kids, k)
+	var kids []*conv
+	if c.r.childrenIndex != nil {
+		for id := range c.r.childrenIndex[ref] {
+			if k := c.r.convs[id]; k != nil && k != c {
+				kids = append(kids, k)
+			}
+		}
+	} else {
+		for _, k := range c.r.convs {
+			if k != c {
+				kids = append(kids, k)
+			}
 		}
 	}
 	c.r.mu.Unlock()
@@ -751,6 +769,20 @@ func (c *conv) holdsReport() bool {
 		}
 	}
 	return false
+}
+
+// refreshShellHold mirrors the hold reason for snapshot readers. The loop owns
+// report bookkeeping, so it computes the reason before publishing it under mu.
+func (c *conv) refreshShellHold() bool {
+	if c.heldRes == nil {
+		return false
+	}
+	shellOnly := c.shellHoldsReport() && !c.otherWorkHoldsReport() && !c.hasOpenReportChild()
+	c.mu.Lock()
+	changed := c.holdingShell != shellOnly
+	c.holdingShell = shellOnly
+	c.mu.Unlock()
+	return changed
 }
 
 // openChildOf reports whether the conversation is an open child of parent:
@@ -775,7 +807,13 @@ func (c *conv) openChildOf(parent ParentRef) bool {
 // once nothing is left to wait for: a child closed with its report never
 // sent. It runs in the loop.
 func (c *conv) releaseHeld() {
-	if c.heldRes == nil || c.turn || c.closed || c.holdsReport() {
+	if c.heldRes == nil || c.turn || c.closed {
+		return
+	}
+	if c.holdsReport() {
+		if c.refreshShellHold() {
+			c.watched()
+		}
 		return
 	}
 	res := *c.heldRes

@@ -55,6 +55,13 @@ func recoveryStoppedLinuxZombie(dir string, pid int, stopErr error) bool {
 
 func newHeldWorkerHarness(t *testing.T) (*leadHarness, *reports) {
 	t.Helper()
+	h, got := configureHeldWorkerHarness(t)
+	h.start()
+	return h, got
+}
+
+func configureHeldWorkerHarness(t *testing.T) (*leadHarness, *reports) {
+	t.Helper()
 	h := newLeadHarness(t)
 	got := &reports{}
 	h.opts.Report = got.add
@@ -65,7 +72,6 @@ func newHeldWorkerHarness(t *testing.T) (*leadHarness, *reports) {
 		}
 	}
 	h.endpoint = "http://127.0.0.1:1"
-	h.start()
 	return h, got
 }
 

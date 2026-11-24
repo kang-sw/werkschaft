@@ -48,20 +48,30 @@ var watches=[];window.historyKit={seen:function(){return null;},pin:function(){r
 function ResizeObserver(fn){this.fn=fn;};ResizeObserver.prototype.observe=function(){};ResizeObserver.prototype.disconnect=function(){};
 function row(i,height,body){return '<div class="timeline-row" data-row="e'+i+'" data-count="1" data-from="10:00" data-to="10:01" data-height="'+height+'">'+(body||'<article class="wb-entry agent" id="e'+i+'" data-entry="e'+i+'">line</article>')+'</div>';}
 function rows(from,to,height){var s='';for(var i=from;i<=to;i++)s+=row(i,height);return s;}
-function gap(html,top){return '<div class="history-gap"><span class="gap-label"></span><span class="gap-range"></span><span><button data-load="up">up</button><button data-load="down"'+(top?' hidden':'')+'>down</button></span><template data-history-gap>'+html+'</template></div>';}
+function gap(html,top){return '<div class="history-gap"><span class="gap-gutter"></span><span class="gap-main"><span class="gap-info"><span class="gap-label"></span><span class="gap-range"></span></span><span class="gap-actions"><button data-load="up">up</button><button data-load="down"'+(top?' hidden':'')+'>down</button></span></span><template data-history-gap>'+html+'</template></div>';}
 function board(html){root=parse('<section class="topic" data-topic="t"><div class="wb-history" data-history="t"><div class="history-live">'+html+'</div></div></section>');root.querySelectorAll('template').reverse().forEach(function(t){t.content=new E('#fragment');t.children.slice().forEach(function(c){t.content.appendChild(c);});});return root.querySelector('.wb-history');}
 function liveIDs(h){return h.querySelectorAll('.timeline-row').map(function(n){return n.getAttribute('data-row');});}
 var bound=0;window.wbBindBoard=function(){bound++;};
 var h=board(gap(rows(1,10,400),true)+row(11,50)+gap(rows(12,24,400),false)+row(25,50));
 ` + string(asset) + `
 var top=h.querySelector('.history-gap');click(top.querySelector('[data-load="down"]'));check('top has no downward load',liveIDs(h),['e11','e25']);
-click(top.querySelector('[data-load="up"]'));
-check('up includes straddling third item',liveIDs(h),['e8','e9','e10','e11','e25']);
+click(top.querySelector('.gap-label'));
+check('single-direction row click expands visible up direction',liveIDs(h),['e8','e9','e10','e11','e25']);
 check('top remainder count and range',[top.getAttribute('data-count'),top.querySelector('.gap-range').textContent,top.querySelector('[data-load="down"]').hidden],['7','10:00–10:01',true]);
-var middle=h.querySelectorAll('.history-gap')[1];click(middle.querySelector('[data-load="down"]'));
+var middle=h.querySelectorAll('.history-gap')[1];
+click(middle.querySelector('.gap-label'));
+check('bidirectional row body click does not expand either direction',liveIDs(h),['e8','e9','e10','e11','e25']);
+click(middle.querySelector('[data-load="down"]'));
 check('middle down admits only nearest edge',liveIDs(h),['e8','e9','e10','e11','e12','e13','e14','e25']);
 click(middle.querySelector('[data-load="up"]'));
 check('middle up admits opposite edge',liveIDs(h),['e8','e9','e10','e11','e12','e13','e14','e22','e23','e24','e25']);
+// Single-direction down-only gap row click expands downward.
+var downOnly=board(row(1,50)+'<div class="history-gap"><span class="gap-gutter"></span><span class="gap-main"><span class="gap-info"><span class="gap-label"></span><span class="gap-range"></span></span><span class="gap-actions"><button data-load="up" hidden>up</button><button data-load="down">down</button></span></span><template data-history-gap>'+rows(2,6,400)+'</template></div>');
+window.wbHistory.init(document);
+click(downOnly.querySelector('.gap-gutter'));
+check('single-direction down-only row click expands downward',liveIDs(downOnly),['e1','e2','e3','e4']);
+// Restore h as active root for subsequent assertions.
+root=h.closest('.topic');
 check('insertion used shared owner',keeps.every(function(k){return k.applied===1;}),true);
 var oldLoads=loads;check('unknown target inert',window.wbHistory.loadTarget(document,'e999'),null);check('injection inert',window.wbHistory.loadTarget(document,'e1"] script'),null);check('invalid cannot admit',loads,oldLoads);
 h.closest('.topic').setAttribute('data-size','fold');guard=true;

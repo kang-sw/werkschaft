@@ -46,7 +46,7 @@ func replyRenderUnder(targets wswhiteboard.TextTargets) replyRender {
 // its body while the mailbox history still holds it and a link to its peer's
 // page when this daemon serves the peer. A lead reply's markdown is left to
 // the entry render (renderEntries), which caches it.
-func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]string, contacts []Contact, lookup sessionLookup, render replyRender, self string) ConversationView {
+func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]string, contacts []Contact, lookup sessionLookup, render replyRender, self Registration) ConversationView {
 	byAddress := map[string]string{}
 	for _, c := range contacts {
 		if c.ReplyID != "" {
@@ -77,18 +77,23 @@ func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]
 			if rid == "" && hasReplyIDPrefix(r.Peer) {
 				rid = r.Peer[len(wsmailbox.ReplyIDPrefix):]
 			}
+			// A sent note describes this session, so only a known lead on
+			// the other side can make that exchange peer mail.
+			e.suppressPeerLeadBadge = self.Agent || self.ParentReplyID != "" || (rid != "" && rid == self.ReplyID)
 			if rid != "" {
 				if s, ok := lookup.get(rid); ok {
 					e.PeerReplyID, e.PeerLinked = rid, true
+					e.suppressPeerLeadBadge = e.suppressPeerLeadBadge || s.Agent || s.ParentReplyID != ""
 					if hasReplyIDPrefix(r.Peer) {
 						e.PeerLabel = s.Label
 					}
 				}
 			}
+			e.suppressPeerLeadBadge = e.suppressPeerLeadBadge || (r.Direction == wslive.MailSent && !e.PeerLinked)
 		}
 		cv.Entries = append(cv.Entries, e)
 	}
-	linkMailWakes(cv.Entries, self)
+	linkMailWakes(cv.Entries, self.ReplyID)
 	collapseBoardNudges(cv.Entries)
 	return cv
 }

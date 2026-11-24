@@ -69,7 +69,7 @@ func TestFilesExplorerCards(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(pageCode)
 	src.WriteString("var PAGE_FILES = " + string(encoded) + ";\n")
-	fixture, err := os.ReadFile("testdata/explorer-cards.test.cjs")
+	fixture, err := os.ReadFile("testdata/explorer-cards.fixture.cjs")
 	if err != nil {
 		t.Fatal(err)
 	}

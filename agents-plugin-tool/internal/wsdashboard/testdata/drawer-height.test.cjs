@@ -5,11 +5,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 
 process.chdir(path.resolve(__dirname, '..'));
 const go = fs.readFileSync('drawer_height_test.go', 'utf8');
 const dashboard = fs.readFileSync('assets/dashboard-drawer.js', 'utf8');
 const tracker = fs.readFileSync('assets/tracker-render.js', 'utf8');
+const requireFixture = createRequire(path.resolve('drawer_height_test.go'));
 const tick = String.fromCharCode(96);
 
 function block(src, start, end) {
@@ -26,7 +28,7 @@ function functions(src, name) {
 function run(name, script) {
   let output = '';
   const result = { stdout: { write: s => { output += s; } }, exitCode: 0 };
-  vm.runInNewContext(script, { require, process: result }, { filename: name });
+  vm.runInNewContext(script, { require: requireFixture, process: result }, { filename: name });
   if (output.trim() || result.exitCode) throw new Error(name + ': ' + output);
   console.log('PASS ' + name);
 }

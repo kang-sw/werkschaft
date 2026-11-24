@@ -25,6 +25,7 @@ for (const latched of [[], ['T20'], ['T20', 'NEW']]) {
       function topicKey(n) { return n.key; }
       function anchorCards() { return [{ key: null }, first, { key: 'T20' }]; }
       function anchorSelect(n, opt) { selected.push(n); return true; }
+      var anchorUserScroll = 0;
       var boardReleaseFrame = 7, boardRelease = false;
       var boardPending = Object.create(null);
       var boardLatest = { hash: 'latest', html: { content: 'new' } };
@@ -50,6 +51,14 @@ for (const latched of [[], ['T20'], ['T20', 'NEW']]) {
       assert.deepEqual(boardPendingNames(), []);
       assert.deepEqual(selected, [first], 'the first topic is selected after apply');
       assert.deepEqual(flashed, [{ names: latched.concat('T04'), inView: false }]);
+
+      deferred = {};
+      window.wbPill.home();
+      assert.equal(boardAfterApply.length, 1, 'a held board update defers the alignment');
+      anchorUserScroll++;
+      deferred = null;
+      boardApplied();
+      assert.deepEqual(selected, [first], 'new scroll input supersedes the deferred jump');
     `, c);
   });
 }

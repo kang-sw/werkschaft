@@ -1,6 +1,8 @@
 package wsfs
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,37 +62,31 @@ func TestReplacementKeepsDarwinACLUnderInheritingParent(t *testing.T) {
 	}
 }
 
-func TestDarwinReplacementReclaimsInterruptedStage(t *testing.T) {
+func TestDarwinReplacementPreservesPreexistingStage(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "private")
-	stageDir := filepath.Join(root, darwinMutationStageName("private"))
+	oldName := sha256.Sum256([]byte("private"))
+	stageDir := filepath.Join(root, ".ws-stage-"+hex.EncodeToString(oldName[:]))
 	stagePath := filepath.Join(stageDir, darwinMutationStageFile)
 	must(t, os.WriteFile(path, []byte("before"), 0o600))
 	must(t, os.Mkdir(stageDir, 0o700))
-	must(t, os.WriteFile(stagePath, []byte("interrupted"), 0o600))
+	must(t, os.WriteFile(stagePath, []byte("keep"), 0o600))
 	files := &Files{Root: root, Authority: AuthorityWorkdirWrite, beforeReplacementWrite: func(stage *os.File) {
-		info, err := stage.Stat()
-		must(t, err)
-		if info.Size() != 0 {
-			t.Fatal("new staging file retained interrupted content")
+		if filepath.Dir(stage.Name()) == stageDir {
+			t.Fatal("replacement reused an existing directory")
 		}
 	}}
 	_, err := callMutation(t, files, "write", map[string]any{"path": "private", "content": "after"})
 	must(t, err)
 	assertReplacementContent(t, path, "after")
-	if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
-		t.Fatalf("staging directory still present: %v", err)
-	}
-	must(t, os.Mkdir(stageDir, 0o700))
+	assertReplacementContent(t, stagePath, "keep")
 	files.beforeReplacementWrite = func(*os.File) { t.Fatal("identical retry unexpectedly wrote bytes") }
 	_, err = callMutation(t, files, "write", map[string]any{"path": "private", "content": "after"})
 	must(t, err)
-	if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
-		t.Fatalf("identical retry left the interrupted staging directory: %v", err)
-	}
+	assertReplacementContent(t, stagePath, "keep")
 }
 
-func TestDarwinReplacementRefusesActiveOrUnexpectedStage(t *testing.T) {
+func TestDarwinReplacementSerializesDestination(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "private")
 	must(t, os.WriteFile(path, []byte("before"), 0o600))
@@ -98,20 +94,13 @@ func TestDarwinReplacementRefusesActiveOrUnexpectedStage(t *testing.T) {
 	args := map[string]any{"path": "private", "content": "other"}
 	files := &Files{Root: root, Authority: AuthorityWorkdirWrite, beforeReplacementWrite: func(*os.File) {
 		_, err := callMutation(t, other, "write", args)
-		if err == nil || !strings.Contains(err.Error(), "lock replacement staging directory") {
+		if err == nil || !strings.Contains(err.Error(), "lock replacement destination") {
 			t.Fatalf("concurrent replacement = %v, want active-stage refusal", err)
 		}
 	}}
 	_, err := callMutation(t, files, "write", map[string]any{"path": "private", "content": "after"})
 	must(t, err)
-	stageDir := filepath.Join(root, darwinMutationStageName("private"))
-	must(t, os.Mkdir(stageDir, 0o700))
-	unexpected := filepath.Join(stageDir, "unrecognized")
-	must(t, os.WriteFile(unexpected, []byte("keep"), 0o600))
 	_, err = callMutation(t, other, "write", args)
-	if err == nil || !strings.Contains(err.Error(), "unexpected entries") {
-		t.Fatalf("unrecognized replacement = %v, want refusal", err)
-	}
-	assertReplacementContent(t, unexpected, "keep")
-	assertReplacementContent(t, path, "after")
+	must(t, err)
+	assertReplacementContent(t, path, "other")
 }

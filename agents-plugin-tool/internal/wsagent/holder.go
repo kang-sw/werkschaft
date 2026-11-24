@@ -448,8 +448,8 @@ type holderProcess interface {
 	Detach() bool
 }
 
-// reject fences the orphan sweep even when a heartbeat validated the worker
-// before holdersScanned visited it. A mismatched record grants no stop authority.
+// reject fences the orphan sweep for a holder this runner must leave alone,
+// including a mismatched holder or one retained by a closed dead binding.
 func (t *holderTable) reject(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

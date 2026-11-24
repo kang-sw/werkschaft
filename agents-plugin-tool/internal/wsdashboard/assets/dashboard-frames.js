@@ -111,7 +111,7 @@
     if (frameInOverviewPreview(f)) return true;
     var t = f.parentNode ? f.parentNode.closest("section.topic[data-topic]") : null;
     if (!t) return true;
-    if (t.hasAttribute("data-overview-live") || t.hasAttribute("data-max")) return true;
+    if (t.matches("[data-overview-live], [data-max], [data-has-panel-max]")) return true;
     if (window.WsBoardVirtual && window.WsBoardVirtual.isNear && window.WsBoardVirtual.isNear(t)) return true;
     bandTopic(t);
     var near = t.wbNear !== undefined ? t.wbNear : topicNear[t.getAttribute("data-topic")] === true;
@@ -169,12 +169,16 @@
   // topicBand takes a band report for topic t. A report with no box (a
   // hidden board column, a topic taken off the page) tells no distance. A
   // docked topic (cards.js) on a gallery page not shown reports far, but
-  // stays mounted: switching pages never reloads a frame. So does a board
-  // topic while the narrow view's Main Board stands off the view behind a
-  // docked page (the root's data-gal-away).
+  // stays mounted: switching pages never reloads a frame. Keep frames for a
+  // fullscreen topic or panel, and on the Main Board behind a docked page.
   function topicBand(t, r, near) {
     if (!r.rect || (!r.rect.width && !r.rect.height)) return;
-    if (!near) { if (!r.visible && !root.hasAttribute("data-gal-away") && !t.hasAttribute("data-overview-live") && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t); return; }
+    if (!near) {
+      if (!r.visible && !root.hasAttribute("data-gal-away")
+          && !t.matches("[data-overview-live], [data-max], [data-has-panel-max]")
+          && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t);
+      return;
+    }
     t.wbNear = r.visible;
     topicNear[t.getAttribute("data-topic")] = r.visible;
     if (r.visible && !t.hasAttribute("data-wb-virtual")) mountFramesPaced(t);
@@ -333,13 +337,17 @@
       if (unfoldTopic) unfoldTopic(target);
       for (var p = target; p && inBoard(p); p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
       var w = window.wbHistory, anchor = window.WsBoardAnchor, card = anchor && anchor.owner(target);
-      // A board target snaps to its containing card first, then scrolls inside it.
-      if (card) { anchor.select(card, { smooth: target === card }); if (target === card) return; }
+      // loadTarget has already navigated to an exact history target.
+      if (!loaded && card === target) { anchor.select(card, { smooth: true }); return; }
       if (!loaded && w && w.navigate) w.navigate(target);
       else if (!loaded && window.WsCards && window.WsCards.activate) window.WsCards.activate(target);
       // History targets were anchored by the loader; never scroll their clip.
       if (!target.closest(".wb-history")) {
-        if (!loaded && (!w || !w.navigate)) target.scrollIntoView({ block: "start" });
+        if (!loaded && (!w || !w.navigate)) {
+          if (card) anchor.select(card);
+          target.scrollIntoView({ block: "start" });
+          if (card && anchor.land) anchor.land(target);
+        }
         if (w && w.bands && w.keep) w.keep(target);
       }
     }
@@ -499,9 +507,11 @@
       if (Math.abs(Math.ceil(h) - (parseFloat(f.style.height) || 0)) >= 1) f.wbKeep = false;
     });
     var kept = batch.size ? boardKeep(Array.from(batch.keys())) : null;
+    var pinLayout = false;
     batch.forEach(function (h, f) {
       var from = parseFloat(f.style.height) || 0, to = Math.ceil(h);
       f.style.height = to + "px";
+      if (from !== to && typeof freePin !== "undefined" && freePin && freePin.col.contains(f)) pinLayout = true;
       // A frame the bands mounted (wbFirst, mountFrame) resizes its topic
       // by the bands' doing once, when its first height changes it.
       if (f.wbFirst) {
@@ -522,6 +532,7 @@
       postTheme(f);
     });
     if (kept) kept.h.apply();
+    if (pinLayout) freePinLayout();
   }
   window.wbCardFindFrame = { post: postDoc };
   window.addEventListener("message", function (e) {
@@ -579,6 +590,10 @@
       if (window.wbCardFind && window.wbCardFind.setHoveredFrame) window.wbCardFind.setHoveredFrame(m.on ? f : null, f);
     } else if (m.wbDoc === "wheel") {
       var wdy = num(m.dy), wdx = num(m.dx), wmode = num(m.mode);
+      if (Math.abs(wdy) > Math.abs(wdx) && typeof anchorCancelProg === "function") {
+        var wheelCol = $("bcol");
+        if (wheelCol && wheelCol.contains(f)) anchorCancelProg();
+      }
       var gal = window.WsCards && window.WsCards.gallery && window.WsCards.gallery();
       if (gal && gal.contains(f)) {
         if (window.WsCards.onFrameWheel) window.WsCards.onFrameWheel(f, wdy, wdx, wmode);

@@ -116,36 +116,71 @@ func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accep
 	return true, nil
 }
 
-func (c *conv) separatesPlanCron() bool {
-	if !c.rec.Lead || c.rec.Provider != string(wscred.ProviderOpenAI) {
-		return false
+func (c *conv) withCronClaimConsent(pending, held []wsinbox.Record, claim func(wsinbox.CronClaimDisposition)) {
+	if !c.rec.Lead || c.rec.Provider != string(wscred.ProviderOpenAI) ||
+		(!slices.ContainsFunc(pending, unclassifiedCron) && !slices.ContainsFunc(held, unclassifiedCron)) {
+		claim("")
+		return
 	}
 	backend, ok := c.r.opts.Backends[c.rec.Backend].Backend.(interface {
-		planBackgroundConsent() (allowed, known bool, err error)
+		withPlanBackgroundConsent(func(bool))
 	})
 	if !ok {
-		return false
+		claim("")
+		return
 	}
-	allowed, _, err := backend.planBackgroundConsent()
-	return err != nil || !allowed
+	backend.withPlanBackgroundConsent(func(allowed bool) {
+		if allowed {
+			claim(wsinbox.CronClaimAuthorized)
+		} else {
+			claim(wsinbox.CronClaimRefused)
+		}
+	})
 }
 
 func isCronInput(rec wsinbox.Record) bool { return rec.Entry.Cron != nil }
 
-// planInputClaims selects the next batch while cron needs separate admission.
-// Keep scheduled input waiting when operator input is ready. Otherwise keep
-// inbox order and take one scheduled entry at a time.
+func unclassifiedCron(rec wsinbox.Record) bool { return isCronInput(rec) && rec.CronClaim == "" }
+
+func refusedCron(rec wsinbox.Record) bool { return rec.CronClaim == wsinbox.CronClaimRefused }
+
+// classifyCronClaims keeps recovered decisions and writes evidence for any
+// legacy unclassified claim. Held entries acquire evidence only if claimed.
+func classifyCronClaims(inbox string, pending, held []wsinbox.Record, disposition wsinbox.CronClaimDisposition) error {
+	if disposition == "" {
+		return nil
+	}
+	for i, rec := range pending {
+		if unclassifiedCron(rec) {
+			rec.CronClaim = disposition
+			if err := wsinbox.RecordCronClaim(inbox, rec); err != nil {
+				return err
+			}
+			pending[i] = rec
+		}
+	}
+	for i, rec := range held {
+		if unclassifiedCron(rec) {
+			held[i].CronClaim = disposition
+		}
+	}
+	return nil
+}
+
+// planInputClaims selects the next batch when a schedule needs a refusal.
+// Operator input can proceed while the refused schedule waits. Otherwise
+// preserve inbox order and settle one refused entry at a time.
 func planInputClaims(queue []QueuedInput, pending, held []wsinbox.Record) (take func(wsinbox.Record) bool, cron bool) {
-	if !slices.ContainsFunc(held, isCronInput) && !slices.ContainsFunc(pending, isCronInput) {
+	if !slices.ContainsFunc(held, refusedCron) && !slices.ContainsFunc(pending, refusedCron) {
 		return nil, false
 	}
 	operator := func(rec wsinbox.Record) bool { return rec.Entry.Operator }
 	if len(queue) > 0 || slices.ContainsFunc(pending, operator) || slices.ContainsFunc(held, operator) {
-		return func(rec wsinbox.Record) bool { return !isCronInput(rec) }, false
+		return func(rec wsinbox.Record) bool { return !refusedCron(rec) }, false
 	}
 	ordered := append(slices.Clone(pending), held...)
 	orderInboxClaims(ordered)
-	firstCron := slices.IndexFunc(ordered, isCronInput)
+	firstCron := slices.IndexFunc(ordered, refusedCron)
 	if firstCron == 0 {
 		name := ordered[0].Name
 		return func(rec wsinbox.Record) bool { return rec.Name == name }, true
@@ -157,6 +192,7 @@ func planInputClaims(queue []QueuedInput, pending, held []wsinbox.Record) (take 
 // settlePlanCronRefusal keeps a denied prompt out of the model log, where
 // a later interactive request would pick it up as conversation history.
 func (c *conv) settlePlanCronRefusal(claim string, mark uint64) {
+	requestPlanBackgroundConsent(c.r.opts.Backends[c.rec.Backend].Backend)
 	message := (&wscred.ProviderError{Provider: wscred.ProviderOpenAI, Err: wscred.ErrConsentRequired}).Error()
 	var err error
 	refused := c.admitInput(func() {

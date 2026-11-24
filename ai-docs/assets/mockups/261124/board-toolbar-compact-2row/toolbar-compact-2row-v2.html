@@ -1,0 +1,1299 @@
+<div class="bt2v2-root">
+  <!-- Inline SVG sprite (strictly self-contained, zero external URLs) -->
+  <svg width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true">
+    <defs>
+      <symbol id="bt2v2-i-overview" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>
+      </symbol>
+      <symbol id="bt2v2-i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+      </symbol>
+      <symbol id="bt2v2-i-web" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>
+      </symbol>
+      <symbol id="bt2v2-i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>
+      </symbol>
+      <symbol id="bt2v2-i-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+      </symbol>
+      <symbol id="bt2v2-i-filter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>
+      </symbol>
+      <symbol id="bt2v2-i-hammer" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8.6 6.4l-6 6a1.1 1.1 0 0 0 1.5 1.5l6-6"/><path d="M6.6 4.4l2.6-2.2c1.6-.6 3.2-.2 4.4 1l-1.4.6 1.6 1.6-2.6 2.6-1.6-1.6-.4.4z"/>
+      </symbol>
+      <symbol id="bt2v2-i-ticket" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 4.8a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1.7a1.5 1.5 0 0 0 0 3v1.7a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V9.5a1.5 1.5 0 0 0 0-3z"/><path d="M10.2 4.6v1.2M10.2 7.4v1.2M10.2 10.2v1.2"/>
+      </symbol>
+
+      <!-- Replacement icon candidates for "카드" (cards: terminal/web/file/download workbench cards) -->
+      <!-- 1. layout-grid (4분할 카드) -->
+      <symbol id="bt2v2-i-card-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/>
+        <rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/>
+        <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/>
+        <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>
+      </symbol>
+      <!-- 2. layers (겹친 카드 스택) -->
+      <symbol id="bt2v2-i-card-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m12 3 9 4.8-9 4.8-9-4.8z"/>
+        <path d="m3 12.6 9 4.8 9-4.8"/>
+        <path d="m3 17.2 9 4.8 9-4.8"/>
+      </symbol>
+      <!-- 3. app-window (도구 창 카드) -->
+      <symbol id="bt2v2-i-card-window" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
+        <path d="M2.5 9.5h19"/>
+        <path d="M6.5 6.8h.01"/>
+        <path d="M10 6.8h.01"/>
+      </symbol>
+      <!-- 4. blocks (모듈 블록 카드) -->
+      <symbol id="bt2v2-i-card-blocks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+        <path d="M10 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-5"/>
+        <path d="M3 13h17"/>
+        <path d="M11 13v8"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <style>
+    .bt2v2-root {
+      --bt2v2-bg: #141518;
+      --bt2v2-card: #1e2024;
+      --bt2v2-well: #16181c;
+      --bt2v2-hover: #25272c;
+      --bt2v2-muted: #2b2d32;
+      --bt2v2-topic: #2a2d33;
+      --bt2v2-on-topic: #e4e5e8;
+      --bt2v2-fg: #e7e7e4;
+      --bt2v2-muted-fg: #a2a6ad;
+      --bt2v2-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+      --bt2v2-line-soft: color-mix(in srgb, #e7e7e4 10%, transparent);
+      --bt2v2-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+      --bt2v2-primary: #7aa2ff;
+      --bt2v2-now: #243457;
+      --bt2v2-on-now: #d3defb;
+      --bt2v2-ok: #6cc39a;
+      --bt2v2-warn: #e0a36c;
+      --bt2v2-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+      --bt2v2-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+      --bt2v2-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+      /* Live filter semantic colors */
+      --bt2v2-c-asks: #e8a45a;
+      --bt2v2-c-research: #c6a5f7;
+      --bt2v2-c-discuss: #e0a36c;
+      --bt2v2-c-wait: #a2a6ad;
+      --bt2v2-c-impl: #7aa2ff;
+      --bt2v2-c-confirm: #6cc39a;
+      --bt2v2-c-closed: #a2a6ad;
+      --bt2v2-c-cards: #a2a6ad;
+      --bt2v2-c-tickets: #7aa2ff;
+
+      box-sizing: border-box;
+      background: var(--bt2v2-bg);
+      color: var(--bt2v2-fg);
+      font: 13px/1.45 var(--bt2v2-sans);
+      padding: 16px 16px 22px;
+      border-radius: 12px;
+      max-width: 1260px;
+      margin: 0 auto;
+    }
+    .bt2v2-root *, .bt2v2-root *::before, .bt2v2-root *::after { box-sizing: border-box; }
+
+    /* Page header */
+    .bt2v2-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px 16px;
+      margin-bottom: 12px;
+    }
+    .bt2v2-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -.01em;
+      color: var(--bt2v2-fg);
+    }
+    .bt2v2-sub {
+      margin: 3px 0 0;
+      font-size: 12.5px;
+      color: var(--bt2v2-muted-fg);
+    }
+    .bt2v2-ver {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--bt2v2-now);
+      color: var(--bt2v2-on-now);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+
+    /* Compact Before vs B-1 vs B-2 Height Parity Header */
+    .bt2v2-parity {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .bt2v2-parity-card {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bt2v2-card);
+      box-shadow: var(--bt2v2-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .bt2v2-parity-card.bt2v2-parity-hi {
+      background: color-mix(in srgb, var(--bt2v2-primary) 9%, var(--bt2v2-card));
+    }
+    .bt2v2-parity-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .bt2v2-parity-name {
+      font-size: 12.5px;
+      font-weight: 800;
+      color: var(--bt2v2-fg);
+    }
+    .bt2v2-parity-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 19px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: var(--bt2v2-well);
+      color: var(--bt2v2-muted-fg);
+      font-size: 10.5px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .bt2v2-parity-pill.bt2v2-ok {
+      background: color-mix(in srgb, var(--bt2v2-ok) 16%, var(--bt2v2-well));
+      color: var(--bt2v2-ok);
+    }
+    .bt2v2-parity-desc {
+      margin: 0;
+      font-size: 11.5px;
+      color: var(--bt2v2-muted-fg);
+      line-height: 1.4;
+    }
+    .bt2v2-parity-desc strong { color: var(--bt2v2-fg); font-weight: 700; }
+
+    /* Variant Section */
+    .bt2v2-sec {
+      margin-bottom: 18px;
+      padding: 13px 14px 14px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--bt2v2-card) 58%, var(--bt2v2-bg));
+      box-shadow: var(--bt2v2-shadow);
+    }
+    .bt2v2-sec-hd {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      margin-bottom: 8px;
+    }
+    .bt2v2-tag {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--bt2v2-muted);
+      color: var(--bt2v2-fg);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+    .bt2v2-tag-rec {
+      background: var(--bt2v2-now);
+      color: var(--bt2v2-on-now);
+    }
+    .bt2v2-sec-name {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--bt2v2-fg);
+    }
+    .bt2v2-metrics {
+      margin-left: auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .bt2v2-metric {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 20px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--bt2v2-well);
+      color: var(--bt2v2-muted-fg);
+      font-size: 11px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .bt2v2-metric b { color: var(--bt2v2-fg); font-weight: 700; }
+    .bt2v2-metric-ok b { color: var(--bt2v2-ok); }
+    .bt2v2-sec-desc {
+      margin: 0 0 11px;
+      font-size: 12px;
+      color: var(--bt2v2-muted-fg);
+    }
+    .bt2v2-sec-desc strong { color: var(--bt2v2-fg); }
+
+    /* Two-width preview grid */
+    .bt2v2-grid {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .bt2v2-frame-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+    .bt2v2-frame-cap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      padding: 0 2px;
+      font-variant-numeric: tabular-nums;
+    }
+    .bt2v2-frame-cap .bt2v2-cap-note {
+      font-weight: 600;
+      opacity: .85;
+    }
+    .bt2v2-col {
+      background: var(--bt2v2-bg);
+      border-radius: 12px;
+      padding: 10px 10px 0;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px var(--bt2v2-line-soft);
+    }
+    .bt2v2-col-std { width: 680px; max-width: 100%; }
+    .bt2v2-col-tight { width: 500px; max-width: 100%; }
+
+    .bt2v2-state-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      margin: 0 0 4px 2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .bt2v2-state-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 16px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--bt2v2-primary) 16%, var(--bt2v2-well));
+      color: var(--bt2v2-primary);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    /* Realistic faded topic peek beneath toolbar */
+    .bt2v2-topic-peek {
+      position: relative;
+      border-radius: 10px 10px 0 0;
+      background: var(--bt2v2-topic);
+      color: var(--bt2v2-on-topic);
+      padding: 7px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+      font-weight: 700;
+      box-shadow: var(--bt2v2-shadow);
+      mask-image: linear-gradient(to bottom, rgb(0 0 0 / .92) 45%, rgb(0 0 0 / .18) 100%);
+      -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / .92) 45%, rgb(0 0 0 / .18) 100%);
+    }
+    .bt2v2-topic-peek .bt2v2-tp-plus {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Shared SVG icon sizing */
+    .bt2v2-ic-lg { width: 17px; height: 17px; flex: none; display: block; }
+    .bt2v2-ic { width: 14px; height: 14px; flex: none; display: block; }
+    .bt2v2-ic-sm { width: 12px; height: 12px; flex: none; display: block; }
+    .bt2v2-ic-xs { width: 11.5px; height: 11.5px; flex: none; display: block; }
+    .bt2v2-ic-24 { width: 24px; height: 24px; flex: none; display: block; }
+
+    /* Shared state marks */
+    .bt2v2-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex: none;
+      background: var(--bt2v2-sc, var(--bt2v2-muted-fg));
+    }
+    .bt2v2-dot-hollow {
+      background: transparent;
+      box-shadow: inset 0 0 0 1.4px var(--bt2v2-sc, var(--bt2v2-muted-fg));
+    }
+    .bt2v2-dot-sq {
+      border-radius: 1.8px;
+      background: transparent;
+      box-shadow: inset 0 0 0 1.4px var(--bt2v2-sc, var(--bt2v2-muted-fg));
+    }
+    .bt2v2-q {
+      font: 900 12px/1 var(--bt2v2-sans);
+      color: var(--bt2v2-c-asks);
+      flex: none;
+    }
+
+    /* ======================================================================
+       BASELINE COMPACT REFERENCE (Current 1-row toolbar: 46px face / 56px slot)
+       ====================================================================== */
+    .bt2v2-base-slot { margin-bottom: 10px; }
+    .bt2v2-base-face {
+      border: 1px solid var(--bt2v2-line);
+      border-radius: 12px;
+      background: var(--bt2v2-card);
+    }
+    .bt2v2-base-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 8px;
+    }
+    .bt2v2-base-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 30px;
+      padding: 0 8px;
+      border-radius: 8px;
+      background: var(--bt2v2-muted);
+      color: var(--bt2v2-fg);
+      font: 600 12.5px var(--bt2v2-sans);
+      flex: none;
+    }
+    .bt2v2-base-caret { font-size: 9px; opacity: .75; margin-left: 1px; }
+    .bt2v2-base-inline {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      height: 30px;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--bt2v2-muted);
+      flex: none;
+    }
+    .bt2v2-base-inline > .bt2v2-ic-sm {
+      margin: 0 3px 0 5px;
+      color: var(--bt2v2-muted-fg);
+    }
+    .bt2v2-base-radio {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 26px;
+      padding: 0 7px;
+      border-radius: 6px;
+      color: var(--bt2v2-muted-fg);
+      font: 600 11.5px var(--bt2v2-sans);
+      white-space: nowrap;
+      flex: none;
+    }
+    .bt2v2-base-radio.bt2v2-on {
+      background: var(--bt2v2-card);
+      color: var(--bt2v2-fg);
+      box-shadow: inset 0 0 0 1px var(--bt2v2-line);
+      font-size: 12.5px;
+    }
+    .bt2v2-base-radio .bt2v2-cnt {
+      font-size: 11.5px;
+      font-weight: 600;
+      opacity: .8;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ======================================================================
+       V2 B-VARIANT CORE LAYOUT
+       Left: Full-height "한 눈에 보기" anchor (38px wide × 44px tall)
+       Right: 2-row compact stack (Row 1: 21px + 2px gap + Row 2: 21px = 44px)
+       Face: 3px top + 44px body + 3px bottom = 50px (+ 6px margin = 56px slot)
+       ====================================================================== */
+    .bt2v2-slot {
+      margin-bottom: 6px;
+    }
+    .bt2v2-slot-gap {
+      margin-bottom: 10px;
+    }
+    .bt2v2-face {
+      border: 0;
+      border-radius: 10px;
+      background: var(--bt2v2-card);
+      box-shadow: var(--bt2v2-shadow);
+      padding: 3px 6px;
+    }
+    .bt2v2-shell {
+      display: flex;
+      align-items: stretch;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    /* Generous full-height left anchor button ("한 눈에 보기") */
+    .bt2v2-overview-anchor {
+      width: 38px;
+      min-height: 44px;
+      flex: none;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 7px;
+      background: var(--bt2v2-muted);
+      color: var(--bt2v2-fg);
+      position: relative;
+    }
+
+    /* Right 2-row stack */
+    .bt2v2-stack {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    /* Row 1: compact 20px secondary actions (left) + global/meta chips (right) */
+    .bt2v2-r1 {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 21px;
+      min-width: 0;
+    }
+    .bt2v2-acts {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      flex: none;
+    }
+    .bt2v2-ibtn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      height: 20px;
+      min-width: 22px;
+      padding: 0 4px;
+      border: 0;
+      border-radius: 5px;
+      background: var(--bt2v2-hover);
+      color: var(--bt2v2-fg);
+      font: 600 10.5px var(--bt2v2-sans);
+      flex: none;
+    }
+    .bt2v2-ibtn-caret {
+      padding: 0 4px 0 5px;
+    }
+    .bt2v2-caret {
+      font-size: 8px;
+      color: var(--bt2v2-muted-fg);
+      line-height: 1;
+    }
+
+    .bt2v2-meta {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      height: 21px;
+      padding: 1px 2px;
+      border-radius: 6px;
+      background: var(--bt2v2-well);
+      flex: none;
+    }
+    .bt2v2-vdiv {
+      width: 1px;
+      height: 13px;
+      background: var(--bt2v2-line);
+      flex: none;
+      margin: 0 2px;
+    }
+
+    /* Borderless tonal meta chips */
+    .bt2v2-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3.5px;
+      height: 19px;
+      padding: 0 5.5px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--bt2v2-fg);
+      font: 600 11px/1 var(--bt2v2-sans);
+      white-space: nowrap;
+      flex: none;
+    }
+    .bt2v2-chip-lbl {
+      color: var(--bt2v2-fg);
+      letter-spacing: -.01em;
+    }
+    .bt2v2-chip-cnt {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      font-variant-numeric: tabular-nums;
+    }
+    .bt2v2-chip.bt2v2-nz {
+      background: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 10%, var(--bt2v2-hover));
+    }
+    .bt2v2-chip.bt2v2-nz .bt2v2-chip-cnt {
+      color: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 75%, var(--bt2v2-fg));
+    }
+    .bt2v2-chip.bt2v2-zero {
+      opacity: .50;
+    }
+    .bt2v2-chip.bt2v2-zero .bt2v2-chip-lbl {
+      color: var(--bt2v2-muted-fg);
+      font-weight: 500;
+    }
+    .bt2v2-chip.bt2v2-zero .bt2v2-chip-cnt {
+      font-weight: 500;
+    }
+    .bt2v2-chip.bt2v2-active {
+      background: color-mix(in srgb, var(--bt2v2-primary) 20%, var(--bt2v2-card));
+      color: var(--bt2v2-on-now);
+      opacity: 1;
+    }
+    .bt2v2-chip.bt2v2-active .bt2v2-chip-lbl {
+      color: var(--bt2v2-on-now);
+      font-weight: 700;
+    }
+    .bt2v2-chip.bt2v2-active .bt2v2-chip-cnt {
+      color: var(--bt2v2-primary);
+      font-weight: 800;
+    }
+
+    /* ======================================================================
+       ROW 2: POWERLINE INTERLOCKING ARROW PIPELINE
+       Height: 21px. Arrow tip: 7px. Overlap: -5px -> exact 2px #1e2024 cutout.
+       ====================================================================== */
+    .bt2v2-pl {
+      display: flex;
+      align-items: stretch;
+      height: 21px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: transparent;
+      min-width: 0;
+    }
+    .bt2v2-pl-seg {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 21px;
+      padding: 0 11px 0 14px;
+      margin-left: -5px;
+      font: 600 11px/1 var(--bt2v2-sans);
+      white-space: nowrap;
+      clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%, 7px 50%);
+      background: var(--bt2v2-hover);
+      color: var(--bt2v2-fg);
+    }
+    .bt2v2-pl-seg:first-child {
+      margin-left: 0;
+      padding: 0 11px 0 8px;
+      clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
+    }
+    .bt2v2-pl-seg:last-child {
+      padding: 0 8px 0 14px;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 7px 50%);
+    }
+    .bt2v2-pl-lbl {
+      letter-spacing: -.015em;
+    }
+    .bt2v2-pl-cnt {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* B-1: Soft Tonal Powerline (recessed dark neutrals + semantic dot) */
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-zero {
+      background: #1a1c20;
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-zero > * {
+      opacity: .56;
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-zero .bt2v2-pl-lbl {
+      color: var(--bt2v2-muted-fg);
+      font-weight: 500;
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-nz {
+      background: #25272c;
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-nz .bt2v2-pl-cnt {
+      color: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 75%, var(--bt2v2-fg));
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-active {
+      background: color-mix(in srgb, var(--bt2v2-primary) 20%, #25272c);
+      color: var(--bt2v2-on-now);
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-active .bt2v2-pl-lbl {
+      color: var(--bt2v2-on-now);
+      font-weight: 700;
+    }
+    .bt2v2-pl-b1 .bt2v2-pl-seg.bt2v2-pl-active .bt2v2-pl-cnt {
+      color: var(--bt2v2-primary);
+      font-weight: 800;
+    }
+
+    /* B-2: Semantic Wash Powerline (whisper 9-10% semantic tint on non-zero stages) */
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-zero {
+      background: #1a1c20;
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-zero > * {
+      opacity: .52;
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-zero .bt2v2-pl-lbl {
+      color: var(--bt2v2-muted-fg);
+      font-weight: 500;
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-nz {
+      background: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 10%, #24262b);
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-nz .bt2v2-pl-lbl {
+      color: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 22%, var(--bt2v2-fg));
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-nz .bt2v2-pl-cnt {
+      color: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-fg)) 85%, var(--bt2v2-fg));
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-active {
+      background: color-mix(in srgb, var(--bt2v2-sc, var(--bt2v2-primary)) 24%, #24262b);
+      color: var(--bt2v2-on-now);
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-active .bt2v2-pl-lbl {
+      color: var(--bt2v2-on-now);
+      font-weight: 700;
+    }
+    .bt2v2-pl-b2 .bt2v2-pl-seg.bt2v2-pl-active .bt2v2-pl-cnt {
+      color: var(--bt2v2-sc, var(--bt2v2-primary));
+      font-weight: 800;
+    }
+
+    /* Tight-width micro-tuning at 500px so powerline segments breathe cleanly */
+    .bt2v2-col-tight .bt2v2-pl-seg {
+      padding: 0 9px 0 11px;
+      gap: 3px;
+      font-size: 10.5px;
+    }
+    .bt2v2-col-tight .bt2v2-pl-seg:first-child {
+      padding: 0 9px 0 6px;
+    }
+    .bt2v2-col-tight .bt2v2-pl-seg:last-child {
+      padding: 0 6px 0 11px;
+    }
+    .bt2v2-col-tight .bt2v2-chip {
+      padding: 0 4.5px;
+      gap: 3px;
+      font-size: 10.5px;
+    }
+
+    /* ======================================================================
+       "카드" (cards) REPLACEMENT ICON PICKER (4 Candidates)
+       ====================================================================== */
+    .bt2v2-ic-before {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--bt2v2-well);
+      color: var(--bt2v2-muted-fg);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .bt2v2-ic-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .bt2v2-ic-card {
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--bt2v2-card);
+      box-shadow: var(--bt2v2-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .bt2v2-ic-card.bt2v2-ic-picked {
+      background: color-mix(in srgb, var(--bt2v2-primary) 8%, var(--bt2v2-card));
+    }
+    .bt2v2-ic-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .bt2v2-ic-num {
+      font-size: 11.5px;
+      font-weight: 800;
+      color: var(--bt2v2-fg);
+    }
+    .bt2v2-ic-code {
+      font: 600 10.5px/1 var(--bt2v2-mono);
+      color: var(--bt2v2-muted-fg);
+    }
+    .bt2v2-ic-stage {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      background: var(--bt2v2-well);
+    }
+    .bt2v2-ic-zoom {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: var(--bt2v2-hover);
+      color: var(--bt2v2-fg);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .bt2v2-ic-live {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .bt2v2-ic-live-cap {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--bt2v2-muted-fg);
+      opacity: .8;
+    }
+    .bt2v2-ic-chips {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .bt2v2-ic-chips .bt2v2-chip {
+      height: 20px;
+      padding: 0 6px;
+    }
+    .bt2v2-ic-chips .bt2v2-ic {
+      width: 14px;
+      height: 14px;
+    }
+    .bt2v2-ic-note {
+      margin: 0;
+      font-size: 11.5px;
+      color: var(--bt2v2-muted-fg);
+      line-height: 1.4;
+      word-break: keep-all;
+    }
+    .bt2v2-ic-note strong { color: var(--bt2v2-fg); font-weight: 700; }
+  </style>
+
+  <!-- Header -->
+  <div class="bt2v2-head">
+    <div>
+      <h2 class="bt2v2-title">화이트보드 툴바 v2 — B안 심화 (좌측 풀사이즈 앵커 · 파워라인 파이프라인 · 카드 아이콘 후보)</h2>
+      <p class="bt2v2-sub">자주 누르는 <strong>한 눈에 보기</strong>는 2행 전체 높이 앵커로 유지하고, 하단 파이프라인을 <strong>맞물리는 파워라인 화살표</strong>로 개선한 v2 시안</p>
+    </div>
+    <span class="bt2v2-ver">B안 v2 · 슬롯 56px 유지</span>
+  </div>
+
+  <!-- Before vs B-1 vs B-2 Height Parity Header -->
+  <div class="bt2v2-parity">
+    <div class="bt2v2-parity-card">
+      <div class="bt2v2-parity-top">
+        <span class="bt2v2-parity-name">현재 1행 (기준선)</span>
+        <span class="bt2v2-parity-pill">본체 46px · 슬롯 56px</span>
+      </div>
+      <p class="bt2v2-parity-desc">한 눈에 보기 30×30px. 필터 9개가 점·망치 기호로만 표시되며 500px에서는 드롭다운으로 접힘.</p>
+    </div>
+    <div class="bt2v2-parity-card bt2v2-parity-hi">
+      <div class="bt2v2-parity-top">
+        <span class="bt2v2-parity-name">B-1 · 소프트 톤 파워라인</span>
+        <span class="bt2v2-parity-pill bt2v2-ok">본체 50px · 슬롯 56px (±0px)</span>
+      </div>
+      <p class="bt2v2-parity-desc"><strong>한 눈에 보기 38×44px</strong> 풀높이 앵커 + 중립 다크 톤 파워라인 화살표. 차분하고 정돈된 기본 톤.</p>
+    </div>
+    <div class="bt2v2-parity-card bt2v2-parity-hi">
+      <div class="bt2v2-parity-top">
+        <span class="bt2v2-parity-name">B-2 · 컬러 틴트 파워라인</span>
+        <span class="bt2v2-parity-pill bt2v2-ok">본체 50px · 슬롯 56px (±0px)</span>
+      </div>
+      <p class="bt2v2-parity-desc">동일한 <strong>38×44px</strong> 앵커 + 1건 이상 단계에 <strong>9~10% 시맨틱 틴트</strong>를 입혀 활성 흐름을 직관적으로 강조.</p>
+    </div>
+  </div>
+
+  <!-- Compact Baseline Strip for Direct Comparison -->
+  <section class="bt2v2-sec" data-variant="baseline">
+    <div class="bt2v2-sec-hd">
+      <span class="bt2v2-tag">비교 기준</span>
+      <h3 class="bt2v2-sec-name">현재 1행 툴바 (680px)</h3>
+      <div class="bt2v2-metrics">
+        <span class="bt2v2-metric">한 눈에 보기 <b>30×30px</b></span>
+        <span class="bt2v2-metric">본체 <b>46px</b></span>
+        <span class="bt2v2-metric">슬롯 <b>56px</b></span>
+      </div>
+    </div>
+    <div class="bt2v2-col bt2v2-col-std">
+      <div class="bt2v2-base-slot" data-measure="baseline-680-slot">
+        <div class="bt2v2-base-face" data-measure="baseline-680-face">
+          <div class="bt2v2-base-row">
+            <span class="bt2v2-base-btn" title="한 눈에 보기"><svg class="bt2v2-ic"><use href="#bt2v2-i-overview"/></svg></span>
+            <span class="bt2v2-base-btn" title="새 터미널"><svg class="bt2v2-ic"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-base-caret">▾</span></span>
+            <span class="bt2v2-base-btn" title="웹 페이지"><svg class="bt2v2-ic"><use href="#bt2v2-i-web"/></svg></span>
+            <span class="bt2v2-base-btn" title="다운로드"><svg class="bt2v2-ic"><use href="#bt2v2-i-download"/></svg></span>
+            <span class="bt2v2-base-btn" title="파일"><svg class="bt2v2-ic"><use href="#bt2v2-i-files"/></svg></span>
+            <div class="bt2v2-base-inline">
+              <svg class="bt2v2-ic-sm"><use href="#bt2v2-i-filter"/></svg>
+              <span class="bt2v2-base-radio bt2v2-on">전체 <span class="bt2v2-cnt">47</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-q">?</span><span class="bt2v2-cnt" style="color:var(--bt2v2-c-asks)">0</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot" style="--bt2v2-sc:var(--bt2v2-c-research)"></span><span class="bt2v2-cnt">0</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot" style="--bt2v2-sc:var(--bt2v2-c-discuss)"></span><span class="bt2v2-cnt">1</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot bt2v2-dot-hollow" style="--bt2v2-sc:var(--bt2v2-c-wait)"></span><span class="bt2v2-cnt">1</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot" style="--bt2v2-sc:var(--bt2v2-c-impl)"></span><span class="bt2v2-cnt">2</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot" style="--bt2v2-sc:var(--bt2v2-c-confirm)"></span><span class="bt2v2-cnt">0</span></span>
+              <span class="bt2v2-base-radio"><span class="bt2v2-dot bt2v2-dot-sq" style="--bt2v2-sc:var(--bt2v2-c-closed)"></span><span class="bt2v2-cnt">43</span></span>
+              <span class="bt2v2-base-radio"><svg class="bt2v2-ic-sm" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-hammer"/></svg><span class="bt2v2-cnt">0</span></span>
+              <span class="bt2v2-base-radio"><svg class="bt2v2-ic-sm" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-cnt">5</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bt2v2-topic-peek">
+        <span>WS 관리 컴팩션 사전 논의</span>
+        <span class="bt2v2-tp-plus">+1</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       B-1: 소프트 톤 파워라인 (Recessed Tonal Interlocking Chevrons)
+       ==================================================================== -->
+  <section class="bt2v2-sec" data-variant="B-1">
+    <div class="bt2v2-sec-hd">
+      <span class="bt2v2-tag bt2v2-tag-rec">B-1</span>
+      <h3 class="bt2v2-sec-name">소프트 톤 파워라인 — 중립 다크 톤 맞물림 화살표 + 시맨틱 점</h3>
+      <div class="bt2v2-metrics">
+        <span class="bt2v2-metric bt2v2-metric-ok">한 눈에 보기 <b>38×44px</b></span>
+        <span class="bt2v2-metric bt2v2-metric-ok">본체 <b>50px</b> · 슬롯 <b>56px</b></span>
+        <span class="bt2v2-metric">카드 아이콘 <b>후보 3 적용 (교체 가능)</b></span>
+      </div>
+    </div>
+    <p class="bt2v2-sec-desc">좌측 <strong>한 눈에 보기</strong>를 2행 전체 높이(44px) 앵커로 고정하고, 우측 2행에 <code>2px</code> 컷아웃으로 맞물리는 다크 파워라인 파이프라인을 배치합니다. 1건 이상 단계는 <code>#25272c</code>, 0건 단계는 차분한 <code>#1a1c20</code>로 대비를 주며, 선택 시 <code>--wb-primary</code> 20% 워시로 또렷하게 강조됩니다.</p>
+
+    <div class="bt2v2-grid">
+      <!-- B-1 680px (Default + Active-selected) -->
+      <div class="bt2v2-frame-wrap">
+        <div class="bt2v2-frame-cap">
+          <span>표준 보드 폭 · 680px</span>
+          <span class="bt2v2-cap-note">기본(전체 활성) + 파이프라인 단계 선택(진행 중 활성)</span>
+        </div>
+        <div class="bt2v2-col bt2v2-col-std">
+          <div class="bt2v2-state-label">기본 상태 · 전체 47 선택</div>
+          <div class="bt2v2-slot bt2v2-slot-gap" data-measure="b1-680-slot">
+            <div class="bt2v2-face" data-measure="b1-680-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기 (풀사이즈 앵커)"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1" data-row="b1-680-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret" title="새 터미널"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn" title="웹 페이지"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn" title="다운로드"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn" title="파일"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip bt2v2-active"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b1" data-row="b1-680-r2">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bt2v2-state-label">선택 상태 예시 <span class="bt2v2-state-badge">진행 중 2 선택됨</span></div>
+          <div class="bt2v2-slot" data-measure="b1-680-active-slot">
+            <div class="bt2v2-face" data-measure="b1-680-active-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b1">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-active" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bt2v2-topic-peek">
+            <span>WS 관리 컴팩션 사전 논의</span>
+            <span class="bt2v2-tp-plus">+1</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- B-1 500px -->
+      <div class="bt2v2-frame-wrap">
+        <div class="bt2v2-frame-cap">
+          <span>좁은 분할 폭 · 500px</span>
+          <span class="bt2v2-cap-note">줄바꿈·넘침 없이 5단계 화살표 유지</span>
+        </div>
+        <div class="bt2v2-col bt2v2-col-tight">
+          <div class="bt2v2-state-label">좁은 폭 · 진행 중 2 선택됨</div>
+          <div class="bt2v2-slot" data-measure="b1-500-slot">
+            <div class="bt2v2-face" data-measure="b1-500-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1" data-row="b1-500-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b1" data-row="b1-500-r2">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-active" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="bt2v2-topic-peek">
+            <span>WS 관리 컴팩션 사전 논의</span>
+            <span class="bt2v2-tp-plus">+1</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       B-2: 컬러 틴트 파워라인 (Semantic Wash Interlocking Chevrons)
+       ==================================================================== -->
+  <section class="bt2v2-sec" data-variant="B-2">
+    <div class="bt2v2-sec-hd">
+      <span class="bt2v2-tag bt2v2-tag-rec">B-2</span>
+      <h3 class="bt2v2-sec-name">컬러 틴트 파워라인 — 활성 단계에 은은한 시맨틱 워시(10%)</h3>
+      <div class="bt2v2-metrics">
+        <span class="bt2v2-metric bt2v2-metric-ok">한 눈에 보기 <b>38×44px</b></span>
+        <span class="bt2v2-metric bt2v2-metric-ok">본체 <b>50px</b> · 슬롯 <b>56px</b></span>
+        <span class="bt2v2-metric">흐름 가시성 <b>높음</b></span>
+      </div>
+    </div>
+    <p class="bt2v2-sec-desc">동일한 맞물림 파워라인 구조에, 항목이 있는 단계(<strong>논의 중 1 · 대기 중 1 · 진행 중 2</strong>)만 각자 고유 색상의 <strong>10% 은은한 워시</strong>를 입혀 현재 보드에서 어느 단계에 토픽이 몰려 있는지 시선이 즉시 닿습니다. 0건 단계는 조용한 <code>#1a1c20</code>을 유지해 Werkschaft의 저대비 톤을 해치지 않습니다.</p>
+
+    <div class="bt2v2-grid">
+      <!-- B-2 680px (Default + Active-selected) -->
+      <div class="bt2v2-frame-wrap">
+        <div class="bt2v2-frame-cap">
+          <span>표준 보드 폭 · 680px</span>
+          <span class="bt2v2-cap-note">기본(전체 활성) + 파이프라인 단계 선택(진행 중 활성)</span>
+        </div>
+        <div class="bt2v2-col bt2v2-col-std">
+          <div class="bt2v2-state-label">기본 상태 · 전체 47 선택</div>
+          <div class="bt2v2-slot bt2v2-slot-gap" data-measure="b2-680-slot">
+            <div class="bt2v2-face" data-measure="b2-680-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기 (풀사이즈 앵커)"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1" data-row="b2-680-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret" title="새 터미널"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn" title="웹 페이지"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn" title="다운로드"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn" title="파일"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip bt2v2-active"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b2" data-row="b2-680-r2">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bt2v2-state-label">선택 상태 예시 <span class="bt2v2-state-badge">진행 중 2 선택됨</span></div>
+          <div class="bt2v2-slot" data-measure="b2-680-active-slot">
+            <div class="bt2v2-face" data-measure="b2-680-active-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b2">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-active" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bt2v2-topic-peek">
+            <span>WS 관리 컴팩션 사전 논의</span>
+            <span class="bt2v2-tp-plus">+1</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- B-2 500px -->
+      <div class="bt2v2-frame-wrap">
+        <div class="bt2v2-frame-cap">
+          <span>좁은 분할 폭 · 500px</span>
+          <span class="bt2v2-cap-note">줄바꿈·넘침 없이 시맨틱 워시 유지</span>
+        </div>
+        <div class="bt2v2-col bt2v2-col-tight">
+          <div class="bt2v2-state-label">좁은 폭 · 진행 중 2 선택됨</div>
+          <div class="bt2v2-slot" data-measure="b2-500-slot">
+            <div class="bt2v2-face" data-measure="b2-500-face">
+              <div class="bt2v2-shell">
+                <span class="bt2v2-overview-anchor" title="한 눈에 보기"><svg class="bt2v2-ic-lg"><use href="#bt2v2-i-overview"/></svg></span>
+                <div class="bt2v2-stack">
+                  <div class="bt2v2-r1" data-row="b2-500-r1">
+                    <div class="bt2v2-acts">
+                      <span class="bt2v2-ibtn bt2v2-ibtn-caret"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-term"/></svg><span class="bt2v2-caret">▾</span></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-web"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-download"/></svg></span>
+                      <span class="bt2v2-ibtn"><svg class="bt2v2-ic-sm"><use href="#bt2v2-i-files"/></svg></span>
+                    </div>
+                    <div class="bt2v2-meta">
+                      <span class="bt2v2-chip"><span class="bt2v2-chip-lbl">전체</span><span class="bt2v2-chip-cnt">47</span></span>
+                      <span class="bt2v2-vdiv"></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-asks)"><span class="bt2v2-q">?</span><span class="bt2v2-chip-lbl">미결</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-closed)"><span class="bt2v2-dot bt2v2-dot-sq"></span><span class="bt2v2-chip-lbl">종료</span><span class="bt2v2-chip-cnt">43</span></span>
+                      <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+                      <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-tickets)"><svg class="bt2v2-ic-xs" style="color:var(--bt2v2-c-tickets)"><use href="#bt2v2-i-ticket"/></svg><span class="bt2v2-chip-lbl">티켓</span><span class="bt2v2-chip-cnt">5</span></span>
+                    </div>
+                  </div>
+                  <div class="bt2v2-pl bt2v2-pl-b2" data-row="b2-500-r2">
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-research)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">연구 중</span><span class="bt2v2-pl-cnt">0</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-discuss)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">논의 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-nz" style="--bt2v2-sc:var(--bt2v2-c-wait)"><span class="bt2v2-dot bt2v2-dot-hollow"></span><span class="bt2v2-pl-lbl">대기 중</span><span class="bt2v2-pl-cnt">1</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-active" style="--bt2v2-sc:var(--bt2v2-c-impl)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">진행 중</span><span class="bt2v2-pl-cnt">2</span></span>
+                    <span class="bt2v2-pl-seg bt2v2-pl-zero" style="--bt2v2-sc:var(--bt2v2-c-confirm)"><span class="bt2v2-dot"></span><span class="bt2v2-pl-lbl">확인 대기</span><span class="bt2v2-pl-cnt">0</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="bt2v2-topic-peek">
+            <span>WS 관리 컴팩션 사전 논의</span>
+            <span class="bt2v2-tp-plus">+1</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       "카드" (cards) REPLACEMENT ICON PICKER (4 Candidates)
+       ==================================================================== -->
+  <section class="bt2v2-sec" data-variant="icon-picker">
+    <div class="bt2v2-sec-hd">
+      <span class="bt2v2-tag">아이콘 교체</span>
+      <h3 class="bt2v2-sec-name">「카드」 필터 아이콘 후보 4종 (24×24 확대 + 실제 14×14 칩 비교)</h3>
+      <div class="bt2v2-metrics">
+        <span class="bt2v2-ic-before">기존: <svg class="bt2v2-ic" style="color:var(--bt2v2-muted-fg)"><use href="#bt2v2-i-hammer"/></svg> hammer</span>
+      </div>
+    </div>
+    <p class="bt2v2-sec-desc"><code>cards.js</code>에서 「카드」 필터는 토픽 외 보드에 띄운 <strong>터미널·웹 페이지·파일·다운로드 등 도구 카드</strong>를 모아 보여줍니다. 위 B-1/B-2 미리보기에는 <strong>후보 3(app-window)</strong>을 적용했으며, 4종 모두 자유롭게 교체할 수 있습니다.</p>
+
+    <div class="bt2v2-ic-grid">
+      <!-- Candidate 1: layout-grid -->
+      <div class="bt2v2-ic-card">
+        <div class="bt2v2-ic-top">
+          <span class="bt2v2-ic-num">아이콘 1 · 4분할 카드</span>
+          <span class="bt2v2-ic-code">layout-grid</span>
+        </div>
+        <div class="bt2v2-ic-stage">
+          <span class="bt2v2-ic-zoom" title="24×24 확대"><svg class="bt2v2-ic-24"><use href="#bt2v2-i-card-grid"/></svg></span>
+          <div class="bt2v2-ic-live">
+            <span class="bt2v2-ic-live-cap">실제 14×14 칩 스케일</span>
+            <div class="bt2v2-ic-chips">
+              <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-grid"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+              <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-fg)"><use href="#bt2v2-i-card-grid"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">3</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="bt2v2-ic-note"><strong>2×2 둥근 미니 카드.</strong> 대시보드 위젯·카드 모음을 가장 직관적으로 전달하며 14px에서도 실루엣이 선명합니다.</p>
+      </div>
+
+      <!-- Candidate 2: layers -->
+      <div class="bt2v2-ic-card">
+        <div class="bt2v2-ic-top">
+          <span class="bt2v2-ic-num">아이콘 2 · 겹친 카드 스택</span>
+          <span class="bt2v2-ic-code">layers</span>
+        </div>
+        <div class="bt2v2-ic-stage">
+          <span class="bt2v2-ic-zoom" title="24×24 확대"><svg class="bt2v2-ic-24"><use href="#bt2v2-i-card-layers"/></svg></span>
+          <div class="bt2v2-ic-live">
+            <span class="bt2v2-ic-live-cap">실제 14×14 칩 스케일</span>
+            <div class="bt2v2-ic-chips">
+              <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-layers"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+              <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-fg)"><use href="#bt2v2-i-card-layers"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">3</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="bt2v2-ic-note"><strong>3단 겹친 시트/카드.</strong> 여러 장의 보드 카드가 쌓인 느낌을 주며 기존 티켓 아이콘과 시각적 무게감이 잘 맞습니다.</p>
+      </div>
+
+      <!-- Candidate 3: app-window (Picked in preview) -->
+      <div class="bt2v2-ic-card bt2v2-ic-picked">
+        <div class="bt2v2-ic-top">
+          <span class="bt2v2-ic-num">아이콘 3 · 도구 창 카드</span>
+          <span class="bt2v2-ic-code">app-window · 적용</span>
+        </div>
+        <div class="bt2v2-ic-stage">
+          <span class="bt2v2-ic-zoom" title="24×24 확대"><svg class="bt2v2-ic-24"><use href="#bt2v2-i-card-window"/></svg></span>
+          <div class="bt2v2-ic-live">
+            <span class="bt2v2-ic-live-cap">실제 14×14 칩 스케일</span>
+            <div class="bt2v2-ic-chips">
+              <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+              <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-fg)"><use href="#bt2v2-i-card-window"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">3</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="bt2v2-ic-note"><strong>상단 헤더 바가 있는 미니 창.</strong> 터미널·웹·파일 등 실제 도구 카드의 모양과 가장 정확하게 일치합니다.</p>
+      </div>
+
+      <!-- Candidate 4: blocks -->
+      <div class="bt2v2-ic-card">
+        <div class="bt2v2-ic-top">
+          <span class="bt2v2-ic-num">아이콘 4 · 모듈 블록 카드</span>
+          <span class="bt2v2-ic-code">blocks</span>
+        </div>
+        <div class="bt2v2-ic-stage">
+          <span class="bt2v2-ic-zoom" title="24×24 확대"><svg class="bt2v2-ic-24"><use href="#bt2v2-i-card-blocks"/></svg></span>
+          <div class="bt2v2-ic-live">
+            <span class="bt2v2-ic-live-cap">실제 14×14 칩 스케일</span>
+            <div class="bt2v2-ic-chips">
+              <span class="bt2v2-chip bt2v2-zero" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-c-cards)"><use href="#bt2v2-i-card-blocks"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">0</span></span>
+              <span class="bt2v2-chip bt2v2-nz" style="--bt2v2-sc:var(--bt2v2-c-cards)"><svg class="bt2v2-ic" style="color:var(--bt2v2-fg)"><use href="#bt2v2-i-card-blocks"/></svg><span class="bt2v2-chip-lbl">카드</span><span class="bt2v2-chip-cnt">3</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="bt2v2-ic-note"><strong>확장형 모듈 블록 타일.</strong> 조립식 워크벤치 카드·플러그인 패널의 성격을 깔끔하게 표현합니다.</p>
+      </div>
+    </div>
+  </section>
+</div>

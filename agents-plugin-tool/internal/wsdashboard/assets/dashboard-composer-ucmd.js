@@ -13,7 +13,7 @@
   var ucmdForm = null, ucmdFormErr = null, ucmdFormSave = null;
   var ucmdEmptyEl = null, ucmdListEl = null;
   var ucmdAttemptKey = "ws.ucmd.attempt." + rid, ucmdGuardMs = 600;
-  var UCMD_HOLD_MS = 1500;
+  var UCMD_HOLD_MS = 1500, ucmdHold = null, ucmdHoldControl = null;
   var UCMD_SUB_HOLDING = {
     run: "js.ucmd.sub.holding.run",
     ask: "js.ucmd.sub.holding.ask",
@@ -308,7 +308,7 @@
     composer.appendChild(ucmdPop);
 
     if (window.WsHoldConfirm && typeof window.WsHoldConfirm.delegate === "function") {
-      window.WsHoldConfirm.delegate(ucmdListEl, ".ucmd-ibtn.is-hold", {
+      ucmdHoldControl = window.WsHoldConfirm.delegate(ucmdListEl, ".ucmd-ibtn.is-hold", {
         mode: "radial",
         duration: UCMD_HOLD_MS,
         canStart: function (btn) {
@@ -318,6 +318,10 @@
         },
         onStart: function (btn) {
           var act = btn.getAttribute("data-act") || "";
+          var key = btn.getAttribute("data-ucmd-key") || "";
+          var c = ucmdByKey[key], eff = ucmdEffective(c);
+          ucmdHold = { key: key, act: act, command: c, effective: eff };
+          if (act === "ask") ucmdHold.text = ucmdAskText(c, eff);
           ucmdSetSub(UCMD_SUB_HOLDING[act], "is-holding-" + act);
         },
         onReady: function (btn) {
@@ -325,21 +329,21 @@
           ucmdSetSub(UCMD_SUB_READY[act], "is-holding-" + act);
         },
         onCancel: function (btn, reason) {
+          ucmdHold = null;
           ucmdResetSub();
           if (reason === "early-release") {
             var act = btn.getAttribute("data-act") || "";
             if (UCMD_EARLY[act]) noteWarn(wsT(UCMD_EARLY[act]));
           }
         },
-        onConfirm: function (btn) {
+        onConfirm: function () {
+          var hold = ucmdHold;
+          ucmdHold = null;
           ucmdResetSub();
-          var key = btn.getAttribute("data-ucmd-key") || "";
-          var act = btn.getAttribute("data-act") || "";
-          var c = ucmdByKey[key];
-          if (!c) return;
-          if (act === "run") ucmdRun(c);
-          else if (act === "ask") ucmdAsk(c);
-          else if (act === "del") ucmdRemove(c);
+          if (!hold || !ucmdHoldCurrent(hold)) return;
+          if (hold.act === "run") ucmdRun(hold.command, hold.effective);
+          else if (hold.act === "ask") ucmdAsk(hold.command, hold.effective, hold.text);
+          else if (hold.act === "del") ucmdRemove(hold.command);
         }
       });
     }
@@ -372,6 +376,7 @@
   }
   function ucmdClosePopover(refocus) {
     if (!ucmdOpen) return;
+    if (ucmdHoldControl) ucmdHoldControl.cancel();
     ucmdOpen = false;
     ucmdAdding = false;
     if (ucmdPop) ucmdPop.hidden = true;
@@ -402,30 +407,58 @@
   }
 
   function ucmdEffective(c) {
-    var key = ucmdKey(c);
+    var draft = ucmdDrafts[ucmdKey(c)] || {};
     var savedLine = c.line || "", savedPrompt = c.prompt || "";
-    var node = ucmdNodes[key];
-    var draft = ucmdDrafts[key];
-    var line = node ? node.cmdIn.value : (draft ? draft.line : savedLine);
-    var prompt = node ? node.prIn.value : (draft ? draft.prompt : savedPrompt);
+    var line = draft.line === undefined ? savedLine : draft.line;
+    var prompt = draft.prompt === undefined ? savedPrompt : draft.prompt;
     var cmdDirty = line !== savedLine, prDirty = prompt !== savedPrompt;
     return { line: line, prompt: prompt, cmdDirty: cmdDirty, prDirty: prDirty, anyDirty: cmdDirty || prDirty };
   }
+
+  function ucmdHoldCurrent(hold) {
+    var c = ucmdByKey[hold.key];
+    if (!c || c.revision !== hold.command.revision || ucmdBusy[hold.key]) return false;
+    if (hold.act === "del") return true;
+    var eff = ucmdEffective(c);
+    if (hold.act === "ask") return ucmdAskText(c, eff) === hold.text;
+    return eff.line === hold.effective.line && eff.cmdDirty === hold.effective.cmdDirty && c.cwd === hold.command.cwd;
+  }
+
+  function ucmdCheckHold() {
+    if (ucmdHold && !ucmdHoldCurrent(ucmdHold)) ucmdHoldControl.cancel();
+  }
+
+  // Editors normalize line endings for display. Keep untouched fields in the
+  // stored representation and record only individual fields the user changed.
+  function ucmdEditorValue(value, multi) {
+    return multi ? value.replace(/\r\n?/g, "\n") : value.replace(/[\r\n]/g, "");
+  }
+
+  function ucmdEdit(key, field, value, multi) {
+    var c = ucmdByKey[key];
+    if (!c || ucmdBusy[key] === "save") return;
+    var draft = ucmdDrafts[key] || {};
+    if (value === ucmdEditorValue(c[field] || "", multi)) delete draft[field];
+    else draft[field] = value;
+    if (draft.line === undefined && draft.prompt === undefined) delete ucmdDrafts[key];
+    else ucmdDrafts[key] = draft;
+    ucmdSyncDirty(key);
+    ucmdCheckHold();
+  }
+
   function ucmdSyncDirty(key) {
     var c = ucmdByKey[key], node = ucmdNodes[key];
     if (!c || !node) return;
-    var savedLine = c.line || "", savedPrompt = c.prompt || "";
-    var line = node.cmdIn.value, prompt = node.prIn.value;
-    var cmdDirty = line !== savedLine, prDirty = prompt !== savedPrompt, any = cmdDirty || prDirty;
-    if (any) ucmdDrafts[key] = { line: line, prompt: prompt };
-    else delete ucmdDrafts[key];
+    var eff = ucmdEffective(c);
+    var cmdDirty = eff.cmdDirty, prDirty = eff.prDirty, any = eff.anyDirty;
+    var saving = ucmdBusy[key] === "save";
     node.el.classList.toggle("is-dirty", any);
     node.cmdBar.classList.toggle("is-dirty", cmdDirty);
     node.cmdRev.classList.toggle("is-dirty", cmdDirty);
-    node.cmdRev.disabled = !cmdDirty;
+    node.cmdRev.disabled = saving || !cmdDirty;
     node.prBar.classList.toggle("is-dirty", prDirty);
     node.prRev.classList.toggle("is-dirty", prDirty);
-    node.prRev.disabled = !prDirty;
+    node.prRev.disabled = saving || !prDirty;
   }
 
   function ucmdBuildCard(c) {
@@ -504,7 +537,7 @@
     cmdIn.placeholder = wsT("js.ucmd.placeholder.cmd");
     cmdIn.spellcheck = false;
     cmdIn.autocomplete = "off";
-    cmdIn.addEventListener("input", function () { ucmdSyncDirty(key); });
+    cmdIn.addEventListener("input", function () { ucmdEdit(key, "line", cmdIn.value, multi); });
     cmdIn.addEventListener("keydown", function (ev) {
       if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
         ev.preventDefault();
@@ -522,8 +555,8 @@
     cmdRev.addEventListener("click", function () {
       var cur = ucmdByKey[key];
       if (!cur) return;
-      cmdIn.value = cur.line || "";
-      ucmdSyncDirty(key);
+      cmdIn.value = ucmdEditorValue(cur.line || "", multi);
+      ucmdEdit(key, "line", cmdIn.value, multi);
       noteOk(wsT("js.ucmd.reverted.cmd", cur.label));
     });
     cmdBar.appendChild(cmdGlyph);
@@ -537,14 +570,16 @@
     var prGlyph = doc.createElement("span");
     prGlyph.className = "ucmd-glyph is-prompt";
     prGlyph.appendChild(ucmdPromptIcon());
-    var prIn = doc.createElement("input");
-    prIn.type = "text";
+    var prIn = doc.createElement("textarea");
     prIn.className = "ucmd-inline-input is-prompt";
     prIn.placeholder = wsT("js.ucmd.placeholder.prompt");
     prIn.autocomplete = "off";
-    prIn.addEventListener("input", function () { ucmdSyncDirty(key); });
+    prIn.addEventListener("input", function () {
+      prIn.rows = Math.min(4, prIn.value.split("\n").length);
+      ucmdEdit(key, "prompt", prIn.value, true);
+    });
     prIn.addEventListener("keydown", function (ev) {
-      if (ev.key === "Enter" && !ev.isComposing) {
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
         ev.preventDefault();
         askBtn.focus();
         noteWarn(wsT("js.ucmd.enter.hint"));
@@ -560,8 +595,9 @@
     prRev.addEventListener("click", function () {
       var cur = ucmdByKey[key];
       if (!cur) return;
-      prIn.value = cur.prompt || "";
-      ucmdSyncDirty(key);
+      prIn.value = ucmdEditorValue(cur.prompt || "", true);
+      prIn.rows = Math.min(4, prIn.value.split("\n").length);
+      ucmdEdit(key, "prompt", prIn.value, true);
       noteOk(wsT("js.ucmd.reverted.prompt", cur.label));
     });
     prBar.appendChild(prGlyph);
@@ -598,6 +634,7 @@
     node.askBtn.disabled = busy;
     node.saveBtn.disabled = busy;
     node.delBtn.disabled = busy;
+    node.cmdIn.readOnly = node.prIn.readOnly = ucmdBusy[key] === "save";
     var rt = wsT("js.ucmd.run.title", c.label || c.id);
     node.runBtn.title = rt;
     node.runBtn.setAttribute("aria-label", rt);
@@ -608,15 +645,13 @@
     node.delBtn.title = dt;
     node.delBtn.setAttribute("aria-label", dt);
 
-    var draft = ucmdDrafts[key];
-    var targetLine = draft ? draft.line : (c.line || "");
-    var targetPrompt = draft ? draft.prompt : (c.prompt || "");
-    if (doc.activeElement !== node.cmdIn && node.cmdIn.value !== targetLine) {
-      node.cmdIn.value = targetLine;
-    }
-    if (doc.activeElement !== node.prIn && node.prIn.value !== targetPrompt) {
-      node.prIn.value = targetPrompt;
-    }
+    var eff = ucmdEffective(c);
+    var targetLine = ucmdEditorValue(eff.line, node.multi);
+    var targetPrompt = ucmdEditorValue(eff.prompt, true);
+    if (node.cmdIn.value !== targetLine) node.cmdIn.value = targetLine;
+    if (node.prIn.value !== targetPrompt) node.prIn.value = targetPrompt;
+    var rows = Math.min(4, targetPrompt.split("\n").length);
+    if (node.prIn.rows !== rows) node.prIn.rows = rows;
     ucmdSyncDirty(key);
   }
 
@@ -648,6 +683,7 @@
       seen[key] = true;
       ucmdByKey[key] = c;
     }
+    ucmdCheckHold();
     Object.keys(ucmdDrafts).forEach(function (k) { if (!seen[k]) delete ucmdDrafts[k]; });
     Object.keys(ucmdNodes).forEach(function (k) {
       if (!seen[k]) {
@@ -693,7 +729,10 @@
     if (typeof list.token === "string" && list.token && !cexecToken) cexecToken = list.token;
     var order = ucmdCompare(list.rev);
     if (post ? order !== 0 && order !== 1 : order === -1) {
-      if (post) ucmdRefresh();
+      if (post) {
+        ucmdRender();
+        ucmdRefresh();
+      }
       return;
     }
     ucmdDenied = false;
@@ -749,7 +788,7 @@
     var label = (fLabel.value || "").trim();
     var line = (fLine.value || "").trim();
     var cwd = (fCwd.value || "").trim();
-    var prompt = (fPrompt.value || "").trim();
+    var prompt = fPrompt.value;
     if (!label || !line) {
       ucmdFormErr.textContent = wsT("js.ucmd.form.req");
       ucmdFormErr.hidden = false;
@@ -757,7 +796,11 @@
       return;
     }
     ucmdFormErr.hidden = true;
-    ucmdFormSave.disabled = true;
+    function setSaving(on) {
+      ucmdFormSave.disabled = on;
+      fLabel.readOnly = fCwd.readOnly = fLine.readOnly = fPrompt.readOnly = on;
+    }
+    setSaving(true);
     fetch("/s/" + rid + "/user-commands", {
       method: "POST", credentials: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json" },
@@ -765,7 +808,7 @@
     }).then(function (r) {
       return r.text().then(function (s) { return { r: r, s: s }; }, function () { return { r: r, s: "" }; });
     }).then(function (x) {
-      ucmdFormSave.disabled = false;
+      setSaving(false);
       var parsed = ucmdParseError(x.s, x.r.status);
       if (x.r.ok && parsed.body && Array.isArray(parsed.body.commands)) {
         fLabel.value = "";
@@ -780,7 +823,7 @@
       ucmdFormErr.textContent = parsed.msg;
       ucmdFormErr.hidden = false;
     }, function () {
-      ucmdFormSave.disabled = false;
+      setSaving(false);
       ucmdFormErr.textContent = wsT("js.post.unreachable");
       ucmdFormErr.hidden = false;
     });
@@ -794,17 +837,16 @@
       noteWarn(wsT("js.ucmd.save.empty"));
       return;
     }
-    ucmdBusy[key] = true;
+    if (!eff.anyDirty) return;
+    var patch = { source: c.source || "agent", revision: c.revision };
+    if (eff.cmdDirty) patch.line = eff.line;
+    if (eff.prDirty) patch.prompt = eff.prompt;
+    ucmdBusy[key] = "save";
     ucmdRender();
     fetch("/s/" + rid + "/user-commands/" + encodeURIComponent(c.id), {
       method: "PUT", credentials: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: c.source || "agent",
-        revision: c.revision,
-        line: eff.line,
-        prompt: eff.prompt
-      })
+      body: JSON.stringify(patch)
     }).then(function (r) {
       return r.text().then(function (s) { return { r: r, s: s }; }, function () { return { r: r, s: "" }; });
     }).then(function (x) {
@@ -830,10 +872,9 @@
     });
   }
 
-  function ucmdRun(c) {
+  function ucmdRun(c, eff) {
     var key = ucmdKey(c);
     if (ucmdBusy[key]) return;
-    var eff = ucmdEffective(c);
     if (!eff.line.trim()) {
       noteWarn(wsT("js.ucmd.save.empty"));
       return;
@@ -911,19 +952,21 @@
     });
   }
 
-  function ucmdAsk(c) {
+  function ucmdAskText(c, eff) {
+    var lines = [wsT("js.ucmd.ask.header") + ": " + (c.label || c.id) + (eff.anyDirty ? " " + wsT("js.ucmd.ask.edited") : "")];
+    if (c.cwd) lines.push("cwd: " + c.cwd);
+    lines.push("```\n" + eff.line + "\n```");
+    lines.push(eff.prompt || wsT("js.ucmd.ask.default"));
+    return lines.join("\n");
+  }
+
+  function ucmdAsk(c, eff, text) {
     var key = ucmdKey(c);
     if (ucmdBusy[key]) return;
-    var eff = ucmdEffective(c);
     if (!eff.line.trim()) {
       noteWarn(wsT("js.ucmd.save.empty"));
       return;
     }
-    var lines = [wsT("js.ucmd.ask.header") + ": " + (c.label || c.id) + (eff.anyDirty ? " " + wsT("js.ucmd.ask.edited") : "")];
-    if (c.cwd) lines.push("cwd: " + c.cwd);
-    lines.push("```\n" + eff.line + "\n```");
-    lines.push((eff.prompt || "").trim() || wsT("js.ucmd.ask.default"));
-    var text = lines.join("\n");
     ucmdBusy[key] = true;
     ucmdRender();
     post("message", {
