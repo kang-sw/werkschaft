@@ -29,7 +29,7 @@ function vars(source, names) {
 }
 const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', 'anchorKey', 'anchorLast', 'anchorCap0', 'anchorProg', 'WHEEL_OWN']) +
   anchorSrc.match(/\n  var WHEEL_DEFAULTS = \{[\s\S]*?\n  \};\n/)[0] +
-  funcs(anchorSrc, ['createBoardWheel', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCancelGlide', 'anchorGlide', 'anchorCardCap', 'anchorLandingTop',
+  funcs(anchorSrc, ['createBoardWheel', 'anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCancelGlide', 'anchorGlide', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark', 'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',
     'anchorSlotCaps', 'anchorSettle', 'anchorOwner', 'anchorView', 'anchorExposed', 'anchorSetVar', 'anchorApplySizes', 'anchorObserveAux', 'anchorRealign',
     'anchorSize', 'anchorCancelProg', 'anchorCanReach', 'anchorCanInnerScroll', 'anchorHandleWheel', 'anchorOnWheel', 'anchorOnFrameWheel', 'anchorOnKey', 'anchorScrollEnd', 'anchorInit']) +

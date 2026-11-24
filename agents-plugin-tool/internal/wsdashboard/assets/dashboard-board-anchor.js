@@ -835,11 +835,20 @@
     for (var i = 0; i < at; i++) if (cards[i].hasAttribute("data-topic") || cards[i].hasAttribute("data-rail")) prev++;
     return anchorCapH(Math.min(2, prev));
   }
-  function anchorScroller(col) {
-    return anchorSized.bounded ? col : (doc.scrollingElement || doc.documentElement || col);
+  function anchorIsBounded(col) {
+    if (anchorSized.bounded) return true;
+    if (col && typeof getComputedStyle === "function") {
+      try { return /auto|scroll/.test(getComputedStyle(col).overflowY); } catch (e) {}
+    }
+    return false;
   }
-  function anchorLandingTop(col, colRect, n, list) {
-    var top = anchorSized.bounded && colRect ? colRect.top + (col.clientTop || 0) : 0;
+  function anchorScroller(col, bounded) {
+    var b = bounded === undefined ? anchorIsBounded(col) : !!bounded;
+    return b ? col : (doc.scrollingElement || doc.documentElement || col);
+  }
+  function anchorLandingTop(col, colRect, n, list, bounded) {
+    var b = bounded === undefined ? anchorIsBounded(col) : !!bounded;
+    var top = b && colRect ? colRect.top + (col.clientTop || 0) : 0;
     return top + anchorSized.padTop + anchorRailInset(col) + anchorCardCap(n, list);
   }
   function anchorId(n) {
@@ -938,16 +947,17 @@
       virtualReconcile(opts && opts.full ? { full: true } : undefined);
     }
   }
-  function anchorAlign(col, n, smooth, list) {
+  function anchorAlign(col, n, smooth, list, bounded) {
     if (!col || !n || !n.isConnected) return false;
-    var sc = anchorScroller(col), delta, target;
-    if (!anchorSized.bounded && typeof window !== "undefined" && window.wbHistory && window.wbHistory.keeping && window.wbHistory.keeping(sc)) return false;
+    var b = bounded === undefined ? anchorIsBounded(col) : !!bounded;
+    var sc = anchorScroller(col, b), delta, target;
+    if (!b && typeof window !== "undefined" && window.wbHistory && window.wbHistory.keeping && window.wbHistory.keeping(sc)) return false;
     if (n.getAttribute && n.getAttribute("data-anchor-cap") === "0") {
       target = 0;
       delta = -sc.scrollTop;
     } else {
-      var c = anchorSized.bounded ? col.getBoundingClientRect() : null, r = n.getBoundingClientRect();
-      delta = r.top - anchorLandingTop(col, c, n, list);
+      var c = b ? col.getBoundingClientRect() : null, r = n.getBoundingClientRect();
+      delta = r.top - anchorLandingTop(col, c, n, list, b);
       target = Math.max(0, sc.scrollTop + delta);
     }
     if (anchorProg && anchorProg.key === anchorId(n)) anchorProg.target = target;
@@ -999,9 +1009,9 @@
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
       anchorCancelGlide();
-      var sc = anchorScroller(col);
+      var bounded = anchorIsBounded(col), sc = anchorScroller(col, bounded);
       anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: sc.scrollTop };
-      var moved = anchorAlign(col, n, smooth);
+      var moved = anchorAlign(col, n, smooth, undefined, bounded);
       if (glideDir && !calm) anchorGlide(n, glideDir);
       if (!moved) { anchorProg = null; return true; }
       if (prevFloat !== null) anchorProg.waitFloat = (anchorProg.target > anchorSized.padTop + 1) !== prevFloat;
@@ -1310,10 +1320,12 @@
   // to an earlier short or folded card.
   function anchorScrollEnd(e) {
     var col = $("bcol");
-    if (e.target !== col) return;
+    if (!col) return;
+    var bounded = anchorIsBounded(col), sc = anchorScroller(col, bounded);
+    if (e.target !== col && e.target !== sc && !(sc === doc.scrollingElement && (e.target === doc || e.target === doc.documentElement))) return;
     var p = anchorProg;
     if (p && p.key === anchorKey && Date.now() <= p.until) {
-      if (!p.smooth && Math.abs(col.scrollTop - p.target) > 120) { anchorProg = null; }
+      if (!p.smooth && Math.abs(sc.scrollTop - p.target) > 120) { anchorProg = null; }
       else {
       var targetNode = anchorNode(p.key) || anchorLast;
       if (anchorGlideAnim) {
@@ -1323,17 +1335,17 @@
       }
       if (targetNode && targetNode.isConnected) {
         var err = 0, canMove = false;
-        if (anchorSized.bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
-          err = -col.scrollTop;
-          canMove = col.scrollTop > 1;
+        if (bounded && targetNode.getAttribute && targetNode.getAttribute("data-anchor-cap") === "0") {
+          err = -sc.scrollTop;
+          canMove = sc.scrollTop > 1;
         } else {
-          var c = col.getBoundingClientRect(), r = targetNode.getBoundingClientRect();
-          err = r.top - anchorLandingTop(col, c, targetNode);
-          canMove = err > 0 ? col.scrollTop + col.clientHeight < col.scrollHeight - 1 : col.scrollTop > 1;
+          var c = bounded ? col.getBoundingClientRect() : null, r = targetNode.getBoundingClientRect();
+          err = r.top - anchorLandingTop(col, c, targetNode, undefined, bounded);
+          canMove = err > 0 ? sc.scrollTop + sc.clientHeight < sc.scrollHeight - 1 : sc.scrollTop > 1;
         }
         if (Math.abs(err) > 1.5 && canMove && p.tries < 2) {
           p.tries++;
-          anchorAlign(col, targetNode, false);
+          anchorAlign(col, targetNode, false, undefined, bounded);
           return;
         }
       }
@@ -1346,8 +1358,7 @@
     anchorProg = null;
     var list = anchorCards();
     if (!list.length) return;
-    var colRect = col.getBoundingClientRect();
-    var vt = colRect.top + (col.clientTop || 0) + anchorSized.padTop + anchorRailInset(col);
+    var vt = (bounded ? col.getBoundingClientRect().top + (col.clientTop || 0) : 0) + anchorSized.padTop + anchorRailInset(col);
     var rects = list.map(function (n) { return n.getBoundingClientRect(); });
     var railCount = 0, pick = -1, closest = null, gap = Infinity;
     for (var k = 0; k < list.length; k++) {
@@ -1376,6 +1387,7 @@
     col.addEventListener("touchstart", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
     col.addEventListener("scrollend", anchorScrollEnd, { passive: true });
+    if (doc.addEventListener) doc.addEventListener("scrollend", anchorScrollEnd, { passive: true });
     if (window.ResizeObserver) {
       anchorRO = new ResizeObserver(anchorSize);
       anchorRO.observe(col);
