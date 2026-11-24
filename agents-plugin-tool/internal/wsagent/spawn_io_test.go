@@ -23,6 +23,7 @@ func TestChildEventWith200ConversationsDoesNoFileIO(t *testing.T) {
 		c := &conv{r: r, rec: Record{ReplyID: id}, inbox: filepath.Join(dir, id, "inbox")}
 		if i == 0 {
 			c.rec.Parent = &ParentRef{Kind: ParentConversation, ReplyID: "parent"}
+			r.indexChildLocked(c.rec)
 			child = c
 		}
 		r.convs[id] = c
@@ -52,6 +53,7 @@ func TestSpawnBurstInboxScanCountsAndTrailingUpdate(t *testing.T) {
 	child := &conv{r: r, rec: Record{ReplyID: "child", WSKey: "child-key", Label: "initial", Parent: &ParentRef{Kind: ParentConversation, ReplyID: "parent"}},
 		inbox: filepath.Join(dir, "child", "inbox"), turn: true}
 	r.convs["parent"], r.convs["child"] = parent, child
+	r.indexChildLocked(child.rec)
 	defer func() {
 		if parent.spawnTimer != nil {
 			parent.spawnTimer.Stop()
