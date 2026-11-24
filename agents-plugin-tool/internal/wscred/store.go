@@ -80,9 +80,13 @@ func legacyPath(path string) string {
 // secret remains in the unprotected place. A file already at the store's path
 // wins, and the stale legacy file is removed. The caller holds the daemon's
 // single-instance lock (the file's writer lock), and calls it before the
-// store's first use. It reads nothing and is a single stat when no legacy
-// file exists.
+// store's first use. It also completes any interrupted file replacement.
 func (s *Store) MigrateLegacy() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.recoverLocked(); err != nil {
+		return err
+	}
 	legacy := legacyPath(s.path)
 	if legacy == "" {
 		return nil
@@ -93,8 +97,6 @@ func (s *Store) MigrateLegacy() error {
 		}
 		return fmt.Errorf("check the legacy credential file: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, err := os.Lstat(s.path); err == nil {
 		if err := os.Remove(legacy); err != nil {
 			return fmt.Errorf("remove the legacy credential file: %w", err)
@@ -137,9 +139,11 @@ type Store struct {
 	pendingOpenAIRefresh *openAIAccount
 	openAIPlanPauses     map[string]*openAIPlanPause // guarded by mu
 
-	mu      sync.Mutex
-	loaded  bool
-	loadErr error
+	mu        sync.Mutex
+	recovered bool
+	loaded    bool
+	loadErr   error
+	writeStep func(credentialWriteStep) // test checkpoint during replacement
 	// closed refuses every later change (Close).
 	closed bool
 	// failedAt identifies the file a failed load read (see loadLocked).
@@ -323,6 +327,9 @@ func stampOf(path string) fileStamp {
 // parse, per request; once the user fixes, replaces, or removes it, the next
 // use reads it again. retry (a change) rereads it regardless.
 func (s *Store) loadLocked(retry bool) error {
+	if err := s.recoverLocked(); err != nil {
+		return err
+	}
 	if s.loaded && s.loadErr == nil {
 		return nil
 	}
@@ -345,6 +352,17 @@ func (s *Store) loadLocked(retry bool) error {
 		return s.loadErr
 	}
 	s.useDocumentLocked(doc)
+	return nil
+}
+
+func (s *Store) recoverLocked() error {
+	if s.recovered {
+		return nil
+	}
+	if err := recoverPrivateFile(s.path); err != nil {
+		return fmt.Errorf("recover the credential file: %w", err)
+	}
+	s.recovered = true
 	return nil
 }
 
@@ -484,10 +502,14 @@ func (s *Store) writeLocked(next document) error {
 	if beforeCredentialWrite != nil {
 		beforeCredentialWrite()
 	}
-	if err := writePrivateFile(s.path, data); err != nil {
+	published, err := writePrivateFile(s.path, data, replaceCredentialFile, s.writeStep)
+	if published {
+		s.useDocumentLocked(next)
+	}
+	if err != nil {
+		s.recovered = false
 		return fmt.Errorf("write the credential file: %w", err)
 	}
-	s.useDocumentLocked(next)
 	return nil
 }
 

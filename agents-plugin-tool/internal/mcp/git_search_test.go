@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
@@ -341,6 +343,139 @@ func TestGitSearchCommands(t *testing.T) {
 	if !failed || !strings.Contains(text, "no-such-rev") {
 		t.Errorf("a bad revision must answer git's error: %s", text)
 	}
+}
+
+func TestGitSearchRefusesWorktreeReadsWithCredentialHardLinks(t *testing.T) {
+	f := newGitSearchFixture(t)
+	const fixtureKey = "synthetic-provider-key-for-git-search"
+	current := gitSearchCredentialFixture(t, fixtureKey)
+	tracked := filepath.Join(f.repo, "a.txt")
+	untracked := filepath.Join(f.repo, "untracked-provider-alias.txt")
+	if err := os.Remove(tracked); err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{tracked, untracked} {
+		if err := os.Link(current, alias); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		command   string
+		options   []any
+		revisions []any
+	}{
+		{command: "grep"},
+		{command: "grep", options: []any{"-c"}},
+		{command: "grep", options: []any{"-l"}},
+		{command: "grep", options: []any{"-h"}},
+		{command: "grep", options: []any{"-C1"}},
+		{command: "grep", options: []any{"--untracked"}},
+		{command: "blame"},
+		{command: "blame", revisions: []any{"HEAD"}},
+		{command: "ls-files", options: []any{"--eol"}},
+		{command: "ls-files", options: []any{"-m"}},
+		{command: "ls-files", options: []any{"--deleted"}},
+		{command: "ls-files", options: []any{"--others"}},
+		{command: "ls-files", options: []any{"--killed"}},
+		{command: "ls-files", options: []any{"--ignored", "-o"}},
+		{command: "ls-files", options: []any{"--format=%(eolinfo:worktree)"}},
+		{command: "ls-files", options: []any{"--format=%(eolattr)"}},
+		{command: "log", options: []any{"--use-mailmap"}},
+		{command: "log", options: []any{"--no-mailmap", "--mailmap"}},
+		{command: "log", options: []any{"--no-mailmap", "--format=%+aN"}},
+		{command: "show", revisions: []any{"HEAD"}},
+		{command: "show", options: []any{"--no-use-mailmap", "--pretty=format:%cL"}},
+	} {
+		args := map[string]any{"repo": f.repo, "command": tc.command, "options": tc.options, "revisions": tc.revisions}
+		switch tc.command {
+		case "grep":
+			args["pattern"] = "hello"
+		case "blame":
+			args["paths"] = []any{"a.txt"}
+		}
+		forbidden := []string{fixtureKey, current, filepath.Base(tracked), filepath.Base(untracked)}
+		text, failed := f.search(t, args)
+		if !failed || !strings.Contains(text, "remove the extra link while keeping the store's file") {
+			t.Fatalf("%v should refuse while a credential link exists: %q", tc, text)
+		}
+		for _, field := range forbidden {
+			if strings.Contains(text, field) {
+				t.Errorf("%v refusal disclosed a protected detail", tc)
+			}
+		}
+		req, err := parseGitSearchRequest(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Git cannot resolve from this PATH. The same refusal proves the
+		// credential check happens before the command can run.
+		_, err = runGitSearch(context.Background(), []string{"PATH="}, f.repo, f.root, req)
+		if err == nil || "git.search: "+err.Error() != text {
+			t.Errorf("%v reached Git lookup: %v", tc, err)
+		}
+	}
+	// These modes read the index or a committed revision while both links exist.
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "grep", "pattern": "hello", "options": []any{"--cached"}}); got != "a.txt:hello\n" {
+		t.Errorf("grep --cached = %q", got)
+	}
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "grep", "pattern": "world", "revisions": []any{"HEAD~1"}, "paths": []any{"a.txt"}}); got != "HEAD~1:a.txt:world\n" {
+		t.Errorf("grep in a revision = %q", got)
+	}
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "ls-files", "options": []any{"--cached"}}); got != "a.txt\nsub/b.txt\n" {
+		t.Errorf("ls-files --cached = %q", got)
+	}
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "show", "options": []any{"--no-mailmap"}, "revisions": []any{"HEAD~1:a.txt"}}); got != "hello\nworld\n" {
+		t.Errorf("show --no-mailmap = %q", got)
+	}
+	runGit(t, f.repo, "config", "format.pretty", "format:%aN")
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "log", "options": []any{"--use-mailmap", "--no-use-mailmap", "-1"}}); !strings.Contains(got, "\n    two\n") {
+		t.Errorf("log --no-use-mailmap used the configured mailmap format: %q", got)
+	}
+	for _, alias := range []string{tracked, untracked} {
+		if err := os.Remove(alias); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(t, f.repo, "a.txt", "hello\nworld\nagain\n")
+	if got := f.mustSearch(t, map[string]any{"repo": f.repo, "command": "grep", "pattern": "hello"}); got != "a.txt:hello\n" {
+		t.Errorf("worktree search after removing both links = %q", got)
+	}
+}
+
+func TestGitSearchCountsRetiringCredentialLinks(t *testing.T) {
+	f := newGitSearchFixture(t)
+	current := gitSearchCredentialFixture(t, "synthetic-provider-key-for-git-search")
+	_, retiring, _ := wscred.GenerationPaths(current)
+	if err := os.WriteFile(retiring, []byte("synthetic retiring generation\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(f.repo, "retiring-alias.txt")
+	if err := os.Link(retiring, alias); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"repo": f.repo, "command": "grep", "pattern": "hello"}
+	if text, failed := f.search(t, args); !failed || !strings.Contains(text, "remove the extra link") {
+		t.Fatalf("retiring link was not counted: %q", text)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.mustSearch(t, args); got != "a.txt:hello\n" {
+		t.Errorf("once the retiring generation has only its store link: %q", got)
+	}
+}
+
+func gitSearchCredentialFixture(t *testing.T, key string) string {
+	t.Helper()
+	current, err := wscred.DefaultPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := wscred.NewStore(current)
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret(key)}); err != nil {
+		t.Fatal(err)
+	}
+	return current
 }
 
 func TestGitSearchCapsOutput(t *testing.T) {

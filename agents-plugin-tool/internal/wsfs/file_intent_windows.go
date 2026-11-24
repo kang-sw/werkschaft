@@ -7,14 +7,27 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/kang-sw/devenv/internal/wsstate"
 	"golang.org/x/sys/windows"
 )
 
-func hasSingleLink(file *os.File, _ os.FileInfo) (bool, error) {
-	var info windows.ByHandleFileInformation
-	err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info)
-	runtime.KeepAlive(file)
-	return info.NumberOfLinks == 1, err
+func openMutationTemp(parent *os.File, name string) (*os.File, error) {
+	return openMutationAt(parent, name, windows.GENERIC_WRITE|windows.FILE_READ_ATTRIBUTES|windows.DELETE, windows.FILE_NON_DIRECTORY_FILE, true)
+}
+
+func setMutationTempMode(*os.File, os.FileMode) error { return nil }
+
+func publishMutationTemp(parent, tmp *os.File, name string, replace bool) error {
+	if !validMutationName(name) {
+		return &os.PathError{Op: "rename", Path: filepath.Join(parent.Name(), name), Err: windows.ERROR_INVALID_NAME}
+	}
+	return wsstate.RenameFileAt(parent, tmp, name, replace)
+}
+
+func discardMutationTemp(_ *os.File, tmp *os.File) {
+	removeOnClose := byte(1)
+	_ = windows.SetFileInformationByHandle(windows.Handle(tmp.Fd()), windows.FileDispositionInfo, &removeOnClose, 1)
+	runtime.KeepAlive(tmp)
 }
 
 func openMutationDir(parent *os.File, name string, create bool) (*os.File, error) {
@@ -44,9 +57,13 @@ func openMutationFile(parent *os.File, name string, flags int) (*os.File, error)
 
 const mutationShare = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 
+func validMutationName(name string) bool {
+	return filepath.IsLocal(name) && !strings.ContainsAny(name, `:/\`)
+}
+
 func openMutationAt(parent *os.File, name string, access, options uint32, create bool) (*os.File, error) {
 	path := filepath.Join(parent.Name(), name)
-	if !filepath.IsLocal(name) || strings.ContainsAny(name, `:/\`) {
+	if !validMutationName(name) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: windows.ERROR_INVALID_NAME}
 	}
 	child, err := windows.NewNTUnicodeString(name)

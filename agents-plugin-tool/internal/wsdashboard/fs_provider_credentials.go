@@ -7,40 +7,71 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 func providerCredentialBases(cacheHome string) []string {
+	dirs, files := providerCredentialPaths(cacheHome)
+	return append(dirs, files...)
+}
+
+func providerCredentialPaths(cacheHome string) (dirs, files []string) {
 	path, err := wscred.DefaultPath(cacheHome)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	current := filepath.Dir(path)
 	legacy := filepath.Join(filepath.Dir(filepath.Dir(current)), filepath.Base(current))
-	return []string{current, path, legacy, filepath.Join(legacy, wscred.FileName)}
+	committed, retiring, staged := wscred.GenerationPaths(path)
+	return []string{current, legacy}, []string{committed, retiring, staged, filepath.Join(legacy, wscred.FileName)}
 }
 
 var errProviderCredentialPath = errors.New("the provider credential store is protected")
 
 // ProviderCredentialProtection holds one file operation's view of the daemon's
 // credential store and the default and legacy locations it may have used.
-type ProviderCredentialProtection struct{ deny *denySet }
+type ProviderCredentialProtection struct {
+	deny            *denySet
+	credentialFiles []string
+}
 
 func NewProviderCredentialProtection() *ProviderCredentialProtection {
 	deny := &denySet{loaded: true}
-	bases := providerCredentialBases("")
+	bases, files := providerCredentialPaths("")
 	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
-		bases = append(bases, providerCredentialBases(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))...)
+		homeDirs, homeFiles := providerCredentialPaths(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
+		bases = append(bases, homeDirs...)
+		files = append(files, homeFiles...)
+	}
+	p := &ProviderCredentialProtection{deny: deny}
+	fileSet := make(map[string]bool)
+	for _, path := range files {
+		if !fileSet[path] {
+			p.credentialFiles = append(p.credentialFiles, path)
+			fileSet[path] = true
+		}
+	}
+	deny.stat = func(path string) (os.FileInfo, error) {
+		if !fileSet[path] {
+			return os.Stat(path)
+		}
+		file, err := wscred.OpenCredentialFile(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		return file.Stat()
 	}
 	seen := make(map[string]bool)
-	for _, base := range bases {
+	for _, base := range append(bases, p.credentialFiles...) {
 		if !seen[base] {
 			seen[base] = true
 			deny.bases = append(deny.bases, base)
 			deny.lower = append(deny.lower, strings.ToLower(base))
 		}
 	}
-	return &ProviderCredentialProtection{deny: deny}
+	return p
 }
 
 // DeniesName checks a path without touching the filesystem, for directory walks.
@@ -69,4 +100,35 @@ func (p *ProviderCredentialProtection) CheckOpened(info os.FileInfo) error {
 		return errProviderCredentialPath
 	}
 	return nil
+}
+
+// HasLinkedCredentialFiles inspects only the store's regular credential
+// generations, including the link held while the previous generation retires.
+func (p *ProviderCredentialProtection) HasLinkedCredentialFiles() (bool, error) {
+	for _, path := range p.credentialFiles {
+		if networkPath(path) || deviceElement(path) {
+			return false, errProviderCredentialPath
+		}
+		linked, err := providerCredentialHasMultipleLinks(path)
+		if linked || err != nil {
+			return linked, err
+		}
+	}
+	return false, nil
+}
+
+func providerCredentialHasMultipleLinks(path string) (bool, error) {
+	file, err := wscred.OpenCredentialFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return false, err
+	}
+	return wsfs.HasMultipleLinks(file, info)
 }
