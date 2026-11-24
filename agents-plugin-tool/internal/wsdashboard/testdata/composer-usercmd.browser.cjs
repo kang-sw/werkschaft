@@ -39,6 +39,7 @@ async function openPop(view) {
 }
 
 async function holdButton(page, locator, ms = 1600) {
+  await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   assert.ok(box, 'hold target must have a bounding box');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -204,8 +205,12 @@ async function holdButton(page, locator, ms = 1600) {
           asked = route.request().postDataJSON().text;
           return route.fulfill({ status: 200, body: '{}' });
         });
-        await holdButton(page, entry.locator('.ucmd-ibtn-ask'));
-        await view.waitForSelector('.ucmd-pop', { state: 'hidden' });
+        const ask = entry.locator('.ucmd-ibtn-ask');
+        await ask.focus();
+        await page.keyboard.down('Space');
+        await ask.and(view.locator('[data-hold-state="ready"]')).waitFor({ timeout: 5000 });
+        await page.keyboard.up('Space');
+        await view.waitForSelector('.ucmd-pop', { state: 'hidden', timeout: 5000 });
         assert.ok(asked.endsWith('\n' + original), 'Ask sends the exact stored prompt');
         await page.unroute('**/s/livesession/message');
         await openPop(view);
