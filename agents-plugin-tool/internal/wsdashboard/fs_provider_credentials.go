@@ -11,36 +11,66 @@ import (
 )
 
 func providerCredentialBases(cacheHome string) []string {
+	dirs, files := providerCredentialPaths(cacheHome)
+	return append(dirs, files...)
+}
+
+func providerCredentialPaths(cacheHome string) (dirs, files []string) {
 	path, err := wscred.DefaultPath(cacheHome)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	current := filepath.Dir(path)
 	legacy := filepath.Join(filepath.Dir(filepath.Dir(current)), filepath.Base(current))
-	return []string{current, path, legacy, filepath.Join(legacy, wscred.FileName)}
+	committed, retiring, staged := wscred.GenerationPaths(path)
+	return []string{current, legacy}, []string{committed, retiring, staged, filepath.Join(legacy, wscred.FileName)}
 }
 
 var errProviderCredentialPath = errors.New("the provider credential store is protected")
 
 // ProviderCredentialProtection holds one file operation's view of the daemon's
 // credential store and the default and legacy locations it may have used.
-type ProviderCredentialProtection struct{ deny *denySet }
+type ProviderCredentialProtection struct {
+	deny            *denySet
+	credentialFiles []string
+}
 
 func NewProviderCredentialProtection() *ProviderCredentialProtection {
 	deny := &denySet{loaded: true}
-	bases := providerCredentialBases("")
+	bases, files := providerCredentialPaths("")
 	if home, err := os.UserHomeDir(); err == nil && filepath.IsAbs(home) {
-		bases = append(bases, providerCredentialBases(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))...)
+		homeDirs, homeFiles := providerCredentialPaths(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
+		bases = append(bases, homeDirs...)
+		files = append(files, homeFiles...)
+	}
+	p := &ProviderCredentialProtection{deny: deny}
+	fileSet := make(map[string]bool)
+	for _, path := range files {
+		if !fileSet[path] {
+			p.credentialFiles = append(p.credentialFiles, path)
+			fileSet[path] = true
+		}
+	}
+	deny.stat = func(path string) (os.FileInfo, error) {
+		if !fileSet[path] {
+			return os.Stat(path)
+		}
+		file, err := wscred.OpenCredentialFile(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		return file.Stat()
 	}
 	seen := make(map[string]bool)
-	for _, base := range bases {
+	for _, base := range append(bases, p.credentialFiles...) {
 		if !seen[base] {
 			seen[base] = true
 			deny.bases = append(deny.bases, base)
 			deny.lower = append(deny.lower, strings.ToLower(base))
 		}
 	}
-	return &ProviderCredentialProtection{deny: deny}
+	return p
 }
 
 // DeniesName checks a path without touching the filesystem, for directory walks.

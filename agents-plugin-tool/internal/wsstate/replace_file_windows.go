@@ -4,8 +4,12 @@ package wsstate
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -31,6 +35,62 @@ func AtomicReplaceFile(tmp, path string) error {
 		CountFileIO("atomic_replace")
 		return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 	})
+}
+
+// RenameFileAt publishes an open source file at name in the pinned parent.
+// The source handle must grant DELETE and the destination may be held
+// open by handles that share delete.
+func RenameFileAt(parent, tmp *os.File, name string, replace bool) error {
+	return renameFileAt(parent, tmp, name, replace, windows.NtSetInformationFile)
+}
+
+// RetryRenameFileAt replaces name while retrying brief sharing violations.
+func RetryRenameFileAt(parent, tmp *os.File, name string) error {
+	return retryTransient(func() error { return RenameFileAt(parent, tmp, name, true) })
+}
+
+func renameFileAt(parent, tmp *os.File, name string, replace bool, setInfo func(windows.Handle, *windows.IO_STATUS_BLOCK, *byte, uint32, uint32) error) error {
+	// The target name is relative to the pinned directory handle. POSIX
+	// replacement allows existing handles that share delete to remain open.
+	type renameInfo struct {
+		flags         uint32
+		rootDirectory windows.Handle
+		nameLength    uint32
+		name          [256]uint16
+	}
+	path := filepath.Join(parent.Name(), name)
+	name16, err := windows.UTF16FromString(name)
+	if err != nil {
+		return err
+	}
+	info := renameInfo{
+		rootDirectory: windows.Handle(parent.Fd()),
+		nameLength:    uint32((len(name16) - 1) * 2),
+	}
+	if len(name16) > len(info.name) {
+		return &os.PathError{Op: "rename", Path: path, Err: windows.ERROR_FILENAME_EXCED_RANGE}
+	}
+	copy(info.name[:], name16)
+	if replace {
+		info.flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	}
+	buf := (*byte)(unsafe.Pointer(&info))
+	size := uint32(unsafe.Sizeof(info))
+	handle := windows.Handle(tmp.Fd())
+	const fileRenameInformationEx = 65
+	err = setInfo(handle, &windows.IO_STATUS_BLOCK{}, buf, size, fileRenameInformationEx)
+	if errors.Is(err, windows.STATUS_INVALID_PARAMETER) || errors.Is(err, windows.STATUS_NOT_SUPPORTED) || errors.Is(err, windows.STATUS_INVALID_INFO_CLASS) {
+		err = fmt.Errorf("Windows POSIX rename is unavailable: %w", errors.ErrUnsupported)
+	}
+	runtime.KeepAlive(parent)
+	runtime.KeepAlive(tmp)
+	if code, ok := err.(windows.NTStatus); ok {
+		err = code.Errno()
+	}
+	if err != nil {
+		return &os.PathError{Op: "rename", Path: path, Err: err}
+	}
+	return nil
 }
 
 // ReadFile reads path, retrying the brief holds AtomicReplaceFile retries:
