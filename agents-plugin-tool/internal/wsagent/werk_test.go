@@ -339,6 +339,104 @@ func TestWerkResumesActiveTurnAcrossRunnerReplacement(t *testing.T) {
 	}
 }
 
+func TestWerkCloseDuringRequestAllowsNewTurnInSameConversation(t *testing.T) {
+	started := make(chan struct{})
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		func(ctx context.Context, _ werk.Request) (*werk.Response, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		werkMessage("new turn completed"),
+	}}
+	h, fleet, _ := werkHarness(t, model)
+	id := h.lead(BackendWerk, LeadOptions{Model: "vendor/some-model"}).ID
+	h.send(id, "abandon this turn")
+	wait(t, "active werk request", started)
+	before := werkRecord(t, h, id)
+	if before.DurableTurn == nil || before.SessionID == "" {
+		t.Fatal("request has no durable turn or session identity")
+	}
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.Close()
+	fleet.start(h)
+	if _, err := h.runner.Reopen(id); err != nil {
+		t.Fatal(err)
+	}
+	h.send(id, "start a fresh turn")
+	eventually(t, "new turn settled", func() bool {
+		rec := werkRecord(t, h, id)
+		return rec.LastTurn != nil && rec.LastTurn.Result.Message == "new turn completed"
+	})
+	after := werkRecord(t, h, id)
+	if after.SessionID != before.SessionID || after.LastTurn.ID == before.DurableTurn.ID {
+		t.Fatal("reopen did not run a new turn in the same conversation")
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.reqs) != 2 || len(model.reqs[1].Input) != 2 ||
+		!strings.Contains(string(model.reqs[1].Input[0]), "abandon this turn") ||
+		!strings.Contains(string(model.reqs[1].Input[1]), "start a fresh turn") {
+		t.Fatalf("reopened model history = %+v", model.reqs)
+	}
+}
+
+func TestWerkCloseReopenDiscardsInterruptedInboxClaim(t *testing.T) {
+	for _, interruptedCleanup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("interrupted cleanup %t", interruptedCleanup), func(t *testing.T) {
+			model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){werkMessage("fresh answer")}}
+			h, fleet, _ := werkHarness(t, model)
+			id := h.lead(BackendWerk, LeadOptions{Model: "vendor/some-model"}).ID
+			inbox := h.runner.conv(id).inbox
+			stage := func() {
+				t.Helper()
+				if _, _, err := wsinbox.Send(inbox, wsinbox.Entry{Parts: []string{"discard this"}}, h.opts.Now()); err != nil {
+					t.Fatal(err)
+				}
+				held, err := wsinbox.Held(inbox)
+				if err != nil || len(held) != 1 {
+					t.Fatalf("stage inbox fixture: %v, %d messages", err, len(held))
+				}
+				if claims, err := wsinbox.ClaimInputs(inbox, held); err != nil || len(claims) != 1 {
+					t.Fatalf("claim inbox fixture: %v, %d messages", err, len(claims))
+				}
+			}
+			if !interruptedCleanup {
+				stage()
+			}
+			if _, err := h.runner.CloseConversation(id); err != nil {
+				t.Fatal(err)
+			}
+			if pending, err := wsinbox.PendingClaims(inbox, nil); err != nil || len(pending) != 0 {
+				t.Fatalf("claims after close = %+v, %v", pending, err)
+			}
+			if interruptedCleanup {
+				// Recreate the crash state: the record is closed and the
+				// staging directory still contains the interrupted claim.
+				stage()
+				h.runner.Close()
+				fleet.start(h)
+			}
+			if _, err := h.runner.Reopen(id); err != nil {
+				t.Fatal(err)
+			}
+			h.send(id, "fresh input")
+			eventually(t, "fresh input settled", func() bool {
+				rec := werkRecord(t, h, id)
+				return rec.LastTurn != nil && rec.LastTurn.Result.Message == "fresh answer"
+			})
+			model.mu.Lock()
+			defer model.mu.Unlock()
+			if len(model.reqs) != 1 || len(model.reqs[0].Input) != 1 ||
+				!strings.Contains(string(model.reqs[0].Input[0]), "fresh input") || strings.Contains(string(model.reqs[0].Input[0]), "discard this") {
+				t.Fatalf("reopened model input = %+v", model.reqs)
+			}
+		})
+	}
+}
+
 func TestWerkCostAccumulatesAcrossIdleWakeAndRunnerReplacement(t *testing.T) {
 	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
 		werkMessage("first"), werkMessage("second"), werkMessage("third"),

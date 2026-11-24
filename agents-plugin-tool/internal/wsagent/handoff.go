@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 // A lead conversation moves between the dashboard daemon and a terminal
@@ -293,7 +294,8 @@ func (r *Runner) Reopen(id string) (State, error) {
 		unlock()
 		return State{}, conflict("the session runs in a terminal now. Use Take over on its rail row after the terminal session exits")
 	}
-	if r.durableProcess(rec.Backend) {
+	durable := r.durableProcess(rec.Backend)
+	if durable {
 		release, err := r.admitDurableTransition()
 		if err != nil {
 			unlock()
@@ -308,21 +310,32 @@ func (r *Runner) Reopen(id string) (State, error) {
 		return State{}, conflict("the session is open")
 	}
 	delete(r.closed, id)
-	delete(r.closedRows, id)
 	r.mu.Unlock()
+	closedRec := rec
 	rec.ClosedAt = ""
-	err = r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec)
-	unlock()
-	if err == nil {
-		r.unfenceExec(id)
+	dir := wsdashboard.SessionDir(r.opts.Dir, id)
+	if durable {
+		// The previous daemon may have stopped after committing close but
+		// before discarding its staged, undelivered inbox claims.
+		if discardErr := wsinbox.DiscardClaims(wsinbox.Dir(dir)); discardErr != nil {
+			err = fmt.Errorf("discard closed inbox claims: %w", discardErr)
+		}
 	}
+	if err == nil {
+		err = r.persistAgentRecord(dir, rec)
+	}
+	r.mu.Lock()
 	if err != nil {
-		r.mu.Lock()
-		rec.ClosedAt = r.opts.Now().UTC().Format(time.RFC3339)
-		r.closed[id] = rec
-		r.mu.Unlock()
+		r.closed[id] = closedRec
+	} else {
+		delete(r.closedRows, id)
+	}
+	r.mu.Unlock()
+	unlock()
+	if err != nil {
 		return State{}, err
 	}
+	r.unfenceExec(id)
 	return r.startConv(rec, nil).state(), nil
 }
 

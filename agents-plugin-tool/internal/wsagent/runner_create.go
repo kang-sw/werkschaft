@@ -448,6 +448,7 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 			return nil, categorized(ErrLaunchFailed, errors.New("the backend has no durable process"))
 		}
 		start = durable.startLoop
+		spec.closedTurnID = c.rec.DurableClosedTurnID
 		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
 		spec.compactState = c.r.compactionState(c.rec.ReplyID)
 		spec.sessionSecret = c.rec.WSKey

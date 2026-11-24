@@ -133,8 +133,9 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	cfg := werk.Config{
 		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
 		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
-		Lead:  spec.Lead != nil,
-		Model: spec.Model, Effort: spec.Effort, Instructions: string(instructions),
+		Lead:         spec.Lead != nil,
+		ClosedTurnID: spec.closedTurnID,
+		Model:        spec.Model, Effort: spec.Effort, Instructions: string(instructions),
 		Skills:   discoverWerkSkills(spec),
 		Endpoint: endpoint, RecoverExec: spec.recoverExec,
 		WS:             &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
