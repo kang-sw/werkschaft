@@ -187,6 +187,13 @@ func resolvePathWithMissingLeaf(p string) (string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
+		// EvalSymlinks also reports ENOENT for a link with a missing target.
+		// Only peel a name that is itself absent.
+		if _, statErr := os.Lstat(cur); statErr == nil {
+			return "", err
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
+		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
 			return "", err
