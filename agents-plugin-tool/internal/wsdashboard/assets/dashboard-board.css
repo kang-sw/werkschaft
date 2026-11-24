@@ -36,10 +36,9 @@
    header sticks under the top capsules while it is current and casts the
    stuck shadow, as a topic's bar does; .bc-in clips rather than hides its
    overflow, so it is no scroll container. A maximized card's header stays
-   in its sheet. Stuck, its rounded top corners are filled with the page
-   colour as a topic's bar's are (page.css), so the body scrolling under
-   it does not show through them. */
-.wb-rail .bcard:not([data-max]) .bc-hd { position: sticky; top: var(--wb-rail-top, 0px); z-index: 1; background: var(--wb-card); border-radius: var(--wb-radius) var(--wb-radius) 0 0; }
+   in its sheet. .bc-in shapes the top radius so a stuck .bc-hd stays
+   square and cannot expose .bc-body behind rounded top corners. */
+.wb-rail .bcard:not([data-max]) .bc-hd { position: sticky; top: var(--wb-rail-top, 0px); z-index: 1; background: var(--wb-card); }
 .wb-rail .bcard:not([data-max]) .bc-hd.wb-stuck { box-shadow: var(--wb-shadow), 0 -6px 0 6px var(--wb-bg); }
 .bc-hd { display: flex; align-items: center; gap: 7px; padding: 4px 6px 4px 12px; min-height: 32px; font-size: 12.5px; min-width: 0; }
 .bc-hd:hover .ibtn { opacity: .9; }
@@ -128,6 +127,7 @@ section.topic[data-max], details.entry-panel[data-max] { position: fixed; z-inde
 section.topic[data-max] { background: var(--wb-card); }
 details.entry-panel[data-max] { background: var(--wb-bg); }
 section.topic[data-max] > .tophead, details.entry-panel[data-max] > summary { position: sticky; top: 0; z-index: 2; }
+section.topic.quiet[data-max] > .tophead > .tbar { border-top-left-radius: 0; border-top-right-radius: 0; }
 details.entry-panel[data-max] > summary { background: var(--wb-bg); cursor: default; }
 section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max { display: none; }
 section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-max] > summary > .d-min { display: inline-grid; }
@@ -172,6 +172,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .overview-preview-stage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .overview-preview-stage > section.topic[data-topic] { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; margin: 0; overflow-y: auto; overflow-x: clip; overscroll-behavior: contain; contain: none; content-visibility: visible !important; }
 .overview-preview-stage > section.topic[data-topic] > .tophead { position: sticky; top: 0; z-index: 2; background: var(--wb-card); }
+.overview-preview-stage > section.topic.quiet[data-topic] > .tophead > .tbar { border-top-left-radius: 0; border-top-right-radius: 0; }
 .overview-preview-stage > section.topic[data-topic] > :not(.tophead) { content-visibility: visible !important; contain: none; }
 .overview-preview-stage > .bcard { flex: 1 1 auto; min-height: 0; height: 100%; margin: 0; display: flex; flex-direction: column; contain: none; }
 .overview-preview-stage > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; contain: none; }

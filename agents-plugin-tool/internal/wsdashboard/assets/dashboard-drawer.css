@@ -405,8 +405,8 @@
 .gfiles .gf[data-side]:hover { background: var(--wb-muted); }
 /* one file section of the diff viewer: a sticky header, then its unified
    diff (or a notice, a load button, a skeleton) */
-.dfile { flex: none; background: var(--wb-card); border-radius: 10px; box-shadow: var(--wb-shadow); }
-.dfh { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 8px 4px 6px; background: var(--wb-card); border-radius: 10px 10px 0 0; box-shadow: 0 1px 0 var(--wb-line); }
+.dfile { flex: none; background: var(--wb-card); border-radius: 10px; box-shadow: var(--wb-shadow); overflow: hidden; overflow: clip; }
+.dfh { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 8px 4px 6px; background: var(--wb-card); box-shadow: 0 1px 0 var(--wb-line); }
 .dfh .gst { width: 16px; }
 .dfh .gp { flex: 0 1 auto; font-size: 12.5px; }
 .dfh .gname { font-weight: 700; }

@@ -152,7 +152,6 @@
 .gal-pane > section.topic, .gal-pane > .bcard { flex: 1 1 auto; min-height: 0; margin: 0; display: flex; flex-direction: column; }
 .gal-pane > section.topic { overflow: hidden; overflow: clip; }
 .gal-pane > section.topic > .tophead { flex: none; position: static; }
-.gal-pane > section.topic:not(.quiet) > .tophead > .tbar { border-radius: var(--wb-radius) var(--wb-radius) 0 0; }
 .gal-pbody { flex: 1 1 auto; min-height: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain; }
 /* The board's visible-only rendering never skips a docked body: the
    gallery keeps its pages rendered and off the view by transform alone. */
