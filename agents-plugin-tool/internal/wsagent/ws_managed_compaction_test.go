@@ -67,30 +67,39 @@ type wsCompactProc struct {
 	holderID string
 	events   chan Event
 
-	mu            sync.Mutex
-	sends         []string
-	commands      []wsinbox.Command
-	auditEvents   []wsaudit.Envelope
-	auditIDs      []wsaudit.SourceID
-	closed        bool
+	mu          sync.Mutex
+	sends       []string
+	commands    []wsinbox.Command
+	auditEvents []wsaudit.Envelope
+	auditIDs    []wsaudit.SourceID
+	closed      bool
+	failSend    bool
+	failCommand bool
 }
 
 func (p *wsCompactProc) Events() <-chan Event { return p.events }
 func (p *wsCompactProc) Send(text string) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failSend {
+		p.failSend = false
+		return errors.New("simulated send failure")
+	}
 	p.sends = append(p.sends, text)
-	p.mu.Unlock()
 	return nil
 }
 func (p *wsCompactProc) RunCommand(cmd wsinbox.Command) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.commands = append(p.commands, cmd)
-	p.mu.Unlock()
+	if p.failCommand {
+		return errors.New("simulated command failure")
+	}
 	return nil
 }
-func (p *wsCompactProc) Interrupt() error         { return nil }
-func (p *wsCompactProc) SetModel(string) error    { return nil }
-func (p *wsCompactProc) SetEffort(string) error   { return nil }
+func (p *wsCompactProc) Interrupt() error       { return nil }
+func (p *wsCompactProc) SetModel(string) error  { return nil }
+func (p *wsCompactProc) SetEffort(string) error { return nil }
 func (p *wsCompactProc) Close() error {
 	p.mu.Lock()
 	already := p.closed
@@ -568,9 +577,9 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 		cfgOpts := wsconfig.Options{RepoRoot: root, CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
 		r := wsconfig.NewResolver(cfgOpts, nil, nil, nil)
 		for k, v := range map[string]string{
-			wsconfig.ItemCompactionLeadMode + "." + BackendClaude: wsconfig.CompactionModeWS,
-			"compaction.lead_advisory." + BackendClaude:           "60%",
-			"compaction.lead_hard." + BackendClaude:               "80%",
+			wsconfig.ItemCompactionLeadMode + "." + BackendClaude:     wsconfig.CompactionModeWS,
+			"compaction.lead_advisory." + BackendClaude:               "60%",
+			"compaction.lead_hard." + BackendClaude:                   "80%",
 			wsconfig.ItemAgentQuotaContinuation + "." + BackendClaude: "auto",
 		} {
 			if err := r.Set(k, v, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
@@ -672,6 +681,41 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 		if len(cmds) != 0 {
 			t.Fatalf("unexpected native /compact command after quota continuation resume: %+v", cmds)
 		}
+	})
+}
+
+func TestDashboardCompactFailureDeliversQueuedPrompt(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+	p.mu.Lock()
+	p.failSend, p.failCommand = true, true
+	p.mu.Unlock()
+
+	// Queue both inputs during the first turn so one idle drain sees both.
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Send(id, "continue after failed compact"); err != nil {
+		t.Fatal(err)
+	}
+	p.events <- Event{TurnEnd: true}
+
+	waitWSCompact(t, "queued prompt after synchronous failures", func() bool {
+		sends, commands := p.sent()
+		return len(commands) == 1 && commands[0].Name == "compact" &&
+			len(sends) == 2 && strings.Contains(sends[1], "continue after failed compact")
 	})
 }
 

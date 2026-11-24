@@ -2062,7 +2062,9 @@ func (c *conv) kickInput() {
 				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, stage1: true}
 				c.publishCompaction(false)
 			}
-			c.compactIdle()
+			if !c.compactIdle() {
+				c.signalInbox()
+			}
 			return
 		}
 	}
