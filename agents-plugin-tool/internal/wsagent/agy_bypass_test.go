@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -437,5 +438,30 @@ func TestAgyBypassEnableDuringReplay(t *testing.T) {
 	eventually(t, "answered after the rejoin", func() bool { return agyBypassAnswers(h, holder, "req-waiting") == 1 })
 	if st := h.state(id); st.PermissionMode != "bypass" || len(st.Approvals) != 0 {
 		t.Fatalf("after the rejoin: %+v", st)
+	}
+}
+
+func TestAgyAcceptEditsRejectsDanglingLinks(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(outside, "missing"), link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{link, false},
+		{filepath.Join(link, "nested", "file"), false},
+		{filepath.Join(root, "nested", "file"), true},
+	} {
+		input, err := json.Marshal(map[string]string{"path": tc.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := agyEditInputWithinRoot(root, root, input); got != tc.want {
+			t.Errorf("approval for %s = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }

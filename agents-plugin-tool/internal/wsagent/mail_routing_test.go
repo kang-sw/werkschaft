@@ -400,3 +400,45 @@ func TestSpawnLabelNamesASpawnedChild(t *testing.T) {
 		t.Fatalf("SpawnLabel(the lead) = %q", got)
 	}
 }
+
+func TestDeadBindingMailRoutingSurvivesRestart(t *testing.T) {
+	refusals := &wakeRefusals{}
+	h, mail := mailHarness(t, func(o *Options) { o.WakeUndeliverable = refusals.add })
+	spawn := func(prompt string) string {
+		t.Helper()
+		id, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: prompt, Tier: "small", Authority: "read-only"})
+		proc.reply("done")
+		eventually(t, "worker settled", func() bool { return h.state(id).Status == StatusIdle })
+		h.asleep(id)
+		return id
+	}
+	dead, normal := spawn("permanently refused"), spawn("normally closed")
+	deadKey, normalKey := h.keyOf(dead), h.keyOf(normal)
+	c := h.runner.conv(dead)
+	var closeErr error
+	const reason = "permanent binding refusal"
+	c.do(func() { closeErr = c.closeDeadBinding(&admissionRefusal{reason: reason}) })
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if _, err := h.runner.CloseConversation(normal); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.Close()
+	h.start()
+	mail.deliverFrom(deadKey, "peerreplyid", "cannot reach this worker")
+	mail.deliverFrom(normalKey, "peerreplyid", "keep until reopened")
+	// The production mailbox send callback invokes this after it queues.
+	h.runner.DrainDeadBindingMail(dead)
+	h.runner.DrainDeadBindingMail(dead)
+	h.runner.DrainDeadBindingMail(normal)
+	if got := refusals.list(); len(got) != 1 || got[0][0] != "peerreplyid" || got[0][1] != dead || !strings.Contains(got[0][2], reason) {
+		t.Fatalf("restart sent these notices: %v", got)
+	}
+	if got := mail.waiting(deadKey); len(got) != 0 {
+		t.Fatalf("permanently undeliverable mail remains queued: %v", got)
+	}
+	if got := mail.waiting(normalKey); len(got) != 1 {
+		t.Fatalf("ordinary closed worker lost its mail: %v", got)
+	}
+}

@@ -172,6 +172,11 @@ func (c *conv) resumeDurableTurn() {
 		}
 		c.setStatus(func() { c.wakeRefused = false })
 	}
+	if _, ok := c.proc.(durableSteerProcess); ok && c.rec.Lead {
+		// Include any interrupted steering claims in the resumed turn's
+		// durable input, before starting the model loop again.
+		c.steerDurableInbox(nil)
+	}
 	var err error
 	refused := c.admitInput(func() {
 		var release func()

@@ -1926,7 +1926,6 @@ func (c *conv) kickInput() {
 	}
 	// Under mu, as Send writes: count the sends covered by the drain
 	// (Wait's turn marks).
-	separateCron := durable && c.separatesPlanCron()
 	var isolatedCron bool
 	c.mu.Lock()
 	covered := c.sends
@@ -1937,7 +1936,10 @@ func (c *conv) kickInput() {
 		held, err = wsinbox.Held(c.inbox)
 		if err == nil {
 			c.held = len(held)
-			if separateCron {
+			c.withCronClaimConsent(pending, held, func(disposition wsinbox.CronClaimDisposition) {
+				if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
+					return
+				}
 				take, cron := planInputClaims(c.rec.Queued, pending, held)
 				if take != nil {
 					isolatedCron = cron
@@ -1950,8 +1952,8 @@ func (c *conv) kickInput() {
 						covered = c.drained
 					}
 				}
-			}
-			recs, err = wsinbox.ClaimInputs(c.inbox, held)
+				recs, err = wsinbox.ClaimInputs(c.inbox, held)
+			})
 		}
 	} else {
 		recs, _ = wsinbox.Drain(c.inbox)
