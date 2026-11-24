@@ -327,35 +327,72 @@ func (c *conv) safeStopNodeLocked() safeStopNode {
 	if c.rec.Parent != nil {
 		n.parent = *c.rec.Parent
 	}
-	n.busy = c.keepsAwakeLocked() || (!c.closed && c.proc != nil && !isHolderBacked(c.proc))
+	n.busy = c.blocksParentSafeStopLocked()
 	return n
 }
 
-// admitsSafeStop runs inside the root loop. Pin the registry and conversation
-// state together at admission. A contended lock means the gate cannot prove
-// safety, including when another operation holds a conversation or adds work.
+func (c *conv) blocksParentSafeStopLocked() bool {
+	return c.keepsAwakeLocked() || (!c.closed && c.proc != nil && !isHolderBacked(c.proc))
+}
+
+func safeStopParent(id string, lead bool) ParentRef {
+	kind := ParentConversation
+	if lead {
+		kind = ParentLead
+	}
+	return ParentRef{Kind: kind, ReplyID: id}
+}
+
+// admitsSafeStop runs inside the root loop. Keep the target tree and its
+// pending spawn slots together under r.mu. TryLock avoids waiting on another
+// conversation's transition while holding the registry lock.
 func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.convs[rootID] != root {
+	if r.convs[rootID] != root || !root.mu.TryLock() {
 		return false
 	}
-	for _, c := range r.convs {
-		if !c.mu.TryLock() {
-			return false
-		}
-		defer c.mu.Unlock()
-	}
-	// Exec counts are published separately from conversation state.
-	exec := r.exec.live.Load()
+	defer root.mu.Unlock()
 	if !root.safeStopSelfLocked() {
 		return false
 	}
-	nodes := make([]safeStopNode, 0, len(r.convs))
-	for _, c := range r.convs {
-		nodes = append(nodes, c.safeStopNodeLocked())
+
+	tree := []*conv{root}
+	visited := map[string]bool{rootID: true}
+	for i := 0; i < len(tree); i++ {
+		c := tree[i]
+		parent := safeStopParent(c.rec.ReplyID, c.rec.Lead)
+		if r.pendingSpawns[parent] > 0 {
+			return false
+		}
+		for id := range r.childrenIndex[parent] {
+			child := r.convs[id]
+			if child == nil || visited[id] {
+				continue
+			}
+			if !child.mu.TryLock() {
+				return false
+			}
+			defer child.mu.Unlock()
+			if child.blocksParentSafeStopLocked() {
+				return false
+			}
+			visited[id] = true
+			tree = append(tree, child)
+		}
 	}
-	return safeStopDescendants(rootID, root.rec.Lead, nodes, r.pendingSpawns) && exec == r.exec.live.Load()
+
+	// The predicates above read exec counts independently. Validate all live
+	// tree members together against one immutable publication with their
+	// conversation state still pinned.
+	if exec := r.exec.live.Load(); exec != nil {
+		for _, c := range tree {
+			if !c.closed && (*exec)[c.rec.ReplyID] > 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // descendantsAllowSafeStop reports whether every live descendant conversation
@@ -377,28 +414,21 @@ func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
 		nodes = append(nodes, ch.safeStopNodeLocked())
 		ch.mu.Unlock()
 	}
-	return safeStopDescendants(rootID, rootIsLead, nodes, nil)
+	return safeStopDescendants(rootID, rootIsLead, nodes)
 }
 
-func safeStopDescendants(rootID string, rootIsLead bool, nodes []safeStopNode, pendingSpawns map[ParentRef]int) bool {
+func safeStopDescendants(rootID string, rootIsLead bool, nodes []safeStopNode) bool {
 	byParent := make(map[ParentRef][]safeStopNode, len(nodes))
 	for _, n := range nodes {
 		if n.parent.ReplyID != "" {
 			byParent[n.parent] = append(byParent[n.parent], n)
 		}
 	}
-	rootKind := ParentConversation
-	if rootIsLead {
-		rootKind = ParentLead
-	}
-	queue := []ParentRef{{Kind: rootKind, ReplyID: rootID}}
+	queue := []ParentRef{safeStopParent(rootID, rootIsLead)}
 	visited := map[string]bool{rootID: true}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		if pendingSpawns[cur] > 0 {
-			return false
-		}
 		for _, n := range byParent[cur] {
 			if visited[n.id] {
 				continue
@@ -407,11 +437,7 @@ func safeStopDescendants(rootID string, rootIsLead bool, nodes []safeStopNode, p
 			if n.busy {
 				return false
 			}
-			childKind := ParentConversation
-			if n.lead {
-				childKind = ParentLead
-			}
-			queue = append(queue, ParentRef{Kind: childKind, ReplyID: n.id})
+			queue = append(queue, safeStopParent(n.id, n.lead))
 		}
 	}
 	return true

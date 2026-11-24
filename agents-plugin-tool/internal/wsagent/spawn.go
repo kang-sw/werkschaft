@@ -457,15 +457,6 @@ func (r *Runner) emit(st State) {
 // oldest first.
 func (r *Runner) Children(parent ParentRef) []State {
 	r.mu.Lock()
-	if r.childrenIndex == nil {
-		r.childrenIndex = map[ParentRef]map[string]bool{}
-		for _, c := range r.convs {
-			r.indexChildLocked(c.record())
-		}
-		for _, rec := range r.closed {
-			r.indexChildLocked(rec)
-		}
-	}
 	var out []State
 	var open []*conv
 	for id := range r.childrenIndex[parent] {
@@ -491,8 +482,11 @@ func (r *Runner) Children(parent ParentRef) []State {
 // indexChildLocked maintains immutable parent edges; closed children stay in
 // the index so an already displayed running row can settle after close.
 func (r *Runner) indexChildLocked(rec Record) {
-	if r.childrenIndex == nil || rec.Parent == nil {
+	if rec.Parent == nil {
 		return
+	}
+	if r.childrenIndex == nil {
+		r.childrenIndex = map[ParentRef]map[string]bool{}
 	}
 	ids := r.childrenIndex[*rec.Parent]
 	if ids == nil {

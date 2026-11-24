@@ -569,3 +569,34 @@ under the owner's overnight directive.
 - Rejected: dropping the consistency check (reopens the Phase 4a defect);
   retrying the whole-registry TryLock (still fails under sustained unrelated
   holds).
+
+#### Result (5)
+
+2026-11-25 · `a01aeb62d`, `80feeb35c`
+
+Safe-only Stop holds the registry and TryLocks the target and its live
+descendants. Parent edges are maintained at registration, including restored
+records, so discovery takes no conversation locks. Admission still refuses
+in-tree contention and pending descendant spawns. A final immutable exec
+snapshot checks the live members of that tree together. The change is T0 and
+adds zero file operations to admission. The Stop request, response, and stored
+record formats are unchanged.
+
+- On `develop` at `15940c2b4`, the HTTP tests for a held mutex in a separate
+  holder-backed lead and a separate lead's exec publication each returned 409
+  in all three runs. Both now return 200. In-tree overlap, target exec
+  publication, and a pending grandchild spawn return 409. Releasing the
+  spawn reservation makes the next safe Stop succeed.
+- `go build ./cmd/...` and `git diff --check` passed.
+- `go test -race ./internal/wsagent -run '^Test(SafeStop|SafeOnlyStop|WerkCron)' -count=3`
+  passed.
+- `go test ./internal/wsagent -parallel 1` passed with
+  `TestAgyWorkerRetirementRestartsTheExpiryClock`,
+  `TestAgyParentedWorkerRecordWakesStampedOrFromItsParent`, and
+  `TestCompactionStateClosedChildKeepsItsCountAcrossARestart` excluded.
+  The initial run exposed two fixtures that bypassed parent-edge
+  registration. They now register the edges and retain their assertions.
+- `GOOS=windows go vet ./internal/wsagent` reported the pre-existing
+  `testing.Context` version diagnostic at `werk_lead_test.go:62`.
+  `GOOS=windows go vet -stdversion=false ./internal/wsagent` passed.
+- Independent lite review of `a01aeb62d` found no actionable issues.
