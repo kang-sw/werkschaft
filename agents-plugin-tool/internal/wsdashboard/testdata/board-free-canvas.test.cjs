@@ -1,0 +1,909 @@
+// Offline unit tests for the Designated-Y free-canvas virtual scroll engine
+// and its cross-module integrations (stream-view.js, rail.js, pill.js,
+// overview.js, cards.js, dashboard-conversation.js).
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const { readAssetSource } = require('./asset-source.cjs');
+
+const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
+const overviewSrc = readAssetSource('wsdashboard', 'overview.js');
+const convSrc = readAssetSource('wsdashboard', 'dashboard-conversation.js');
+const cardsSrc = readAssetSource('wsdashboard', 'cards.js');
+const streamViewSrc = readAssetSource('wswhiteboard', 'stream-view.js');
+const railSrc = readAssetSource('wswhiteboard', 'rail.js');
+const pillSrc = readAssetSource('wswhiteboard', 'pill.js');
+
+function makeEl(tag, opts = {}) {
+  const attrs = new Map(Object.entries(opts.attrs || {}));
+  const props = new Map();
+  const cls = new Set(opts.cls || []);
+  const listeners = new Map();
+  const el = {
+    nodeType: 1,
+    tagName: tag.toUpperCase(),
+    childNodes: [],
+    parentNode: null,
+    hidden: !!opts.hidden,
+    inert: false,
+    open: !!opts.open,
+    value: opts.value || '',
+    textContent: opts.text || '',
+    _innerHTML: '',
+    get innerHTML() { return el._innerHTML; },
+    set innerHTML(html) {
+      el._innerHTML = String(html || '');
+      while (el.childNodes.length) el.removeChild(el.childNodes[0]);
+      const re = /<([a-z0-9]+)(?:\s+class="([^"]*)")?[^>]*>([^<]*)<\/\1>/gi;
+      let m;
+      while ((m = re.exec(el._innerHTML))) {
+        el.appendChild(makeEl(m[1], {
+          cls: m[2] ? m[2].split(/\s+/).filter(Boolean) : [],
+          text: m[3] || '',
+        }));
+      }
+    },
+    scrollTop: opts.scrollTop || 0,
+    scrollLeft: 0,
+    clientTop: 0,
+    clientHeight: opts.clientHeight || 0,
+    scrollHeight: opts.scrollHeight || 0,
+    offsetHeight: opts.offsetHeight || 0,
+    offsetTop: opts.offsetTop || 0,
+    overflowY: opts.overflowY || 'visible',
+    listeners,
+    style: {
+      top: '',
+      minHeight: '',
+      cssText: '',
+      setProperty(k, v) { props.set(k, String(v)); },
+      removeProperty(k) { props.delete(k); },
+      getPropertyValue(k) { return props.get(k) || ''; },
+    },
+    get id() { return attrs.get('id') || ''; },
+    set id(v) { attrs.set('id', String(v)); },
+    get parentElement() { return el.parentNode; },
+    get className() { return Array.from(cls).join(' '); },
+    set className(v) {
+      cls.clear();
+      String(v || '').split(/\s+/).filter(Boolean).forEach(c => cls.add(c));
+    },
+    get isConnected() {
+      let p = el;
+      while (p.parentNode) p = p.parentNode;
+      return p.tagName === 'ROOT' || p.tagName === 'HTML';
+    },
+    get children() { return el.childNodes.filter(c => c.nodeType === 1); },
+    get firstChild() { return el.childNodes[0] || null; },
+    get firstElementChild() { return el.children[0] || null; },
+    get nextSibling() {
+      if (!el.parentNode) return null;
+      const i = el.parentNode.childNodes.indexOf(el);
+      return i >= 0 ? el.parentNode.childNodes[i + 1] || null : null;
+    },
+    get attributes() {
+      const out = [];
+      for (const [name, value] of attrs.entries()) out.push({ name, value: String(value) });
+      return out;
+    },
+    classList: {
+      contains: c => cls.has(c),
+      add: (...cs) => cs.forEach(c => cls.add(c)),
+      remove: (...cs) => cs.forEach(c => cls.delete(c)),
+      toggle: (c, force) => {
+        const on = force === undefined ? !cls.has(c) : !!force;
+        if (on) cls.add(c); else cls.delete(c);
+        return on;
+      },
+    },
+    hasAttribute: k => attrs.has(k),
+    getAttribute: k => attrs.has(k) ? String(attrs.get(k)) : null,
+    setAttribute(k, v) {
+      attrs.set(k, String(v));
+      if (k === 'class') el.className = String(v);
+      if (k === 'inert') el.inert = true;
+    },
+    removeAttribute(k) {
+      attrs.delete(k);
+      if (k === 'inert') el.inert = false;
+    },
+    appendChild(ch) {
+      if (ch.parentNode) ch.parentNode.removeChild(ch);
+      ch.parentNode = el;
+      el.childNodes.push(ch);
+      return ch;
+    },
+    insertBefore(ch, ref) {
+      if (ch.parentNode) ch.parentNode.removeChild(ch);
+      ch.parentNode = el;
+      const i = ref ? el.childNodes.indexOf(ref) : -1;
+      if (i < 0) el.childNodes.push(ch); else el.childNodes.splice(i, 0, ch);
+      return ch;
+    },
+    removeChild(ch) {
+      const i = el.childNodes.indexOf(ch);
+      if (i >= 0) el.childNodes.splice(i, 1);
+      ch.parentNode = null;
+      return ch;
+    },
+    replaceChild(next, old) {
+      if (next.parentNode) next.parentNode.removeChild(next);
+      const i = el.childNodes.indexOf(old);
+      if (i >= 0) {
+        el.childNodes[i] = next;
+        next.parentNode = el;
+        old.parentNode = null;
+      }
+      return old;
+    },
+    contains(other) {
+      for (let p = other; p; p = p.parentNode) if (p === el) return true;
+      return false;
+    },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(fn);
+    },
+    removeEventListener(type, fn) {
+      const list = listeners.get(type);
+      if (!list) return;
+      const i = list.indexOf(fn);
+      if (i >= 0) list.splice(i, 1);
+    },
+    scrollTo(o) {
+      if (o && typeof o.top === 'number') el.scrollTop = o.top;
+    },
+    getBoundingClientRect() {
+      if (opts.rect) return opts.rect(el);
+      const y = parseFloat(el.style.top) || 0;
+      const h = el.hasAttribute('data-wb-offwindow') && el.getAttribute('data-wb-offwindow') === 'hidden' ? 0 : (el.offsetHeight || el.clientHeight || 0);
+      return { top: y, bottom: y + h, left: 0, right: 800, width: h ? 800 : 0, height: h };
+    },
+    matches(sel) {
+      return sel.split(',').some(part => {
+        part = part.trim();
+        if (!part) return false;
+        if (part.includes('section.topic[data-topic]') || part === 'section.topic') {
+          return el.tagName === 'SECTION' && cls.has('topic') && attrs.has('data-topic');
+        }
+        if (part.startsWith('button.closed-more')) {
+          if (el.tagName !== 'BUTTON' || !cls.has('closed-more')) return false;
+          if (part.includes('[data-closed-next]') && !attrs.has('data-closed-next')) return false;
+          if (part.includes(':not([hidden])') && el.hidden) return false;
+          if (part.includes(':not([data-state-filtered])') && attrs.has('data-state-filtered')) return false;
+          return true;
+        }
+        if (/[\s>+~:]/.test(part)) return false;
+        const m = part.match(/^([a-z0-9]*)((?:[.#][\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i);
+        if (!m) return false;
+        if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
+        const tokens = m[2].match(/[.#][\w-]+|\[[\w-]+(?:="[^"]*")?\]/g) || [];
+        return tokens.every(t => {
+          if (t[0] === '.') return cls.has(t.slice(1));
+          if (t[0] === '#') return attrs.get('id') === t.slice(1);
+          const eq = t.indexOf('=');
+          if (eq > 0) return attrs.get(t.slice(1, eq)) === t.slice(eq + 2, -2);
+          return attrs.has(t.slice(1, -1));
+        });
+      });
+    },
+    closest(sel) {
+      for (let p = el; p && p.nodeType === 1; p = p.parentNode) {
+        if (p.matches && p.matches(sel)) return p;
+      }
+      return null;
+    },
+    querySelector(sel) {
+      if (sel.startsWith(':scope > ')) {
+        const rest = sel.slice(9).trim();
+        if (!/[\s>+~]/.test(rest)) return el.children.find(c => c.matches(rest)) || null;
+        return null;
+      }
+      return el.querySelectorAll(sel)[0] || null;
+    },
+    querySelectorAll(sel) {
+      const out = [];
+      (function walk(node) {
+        for (const c of node.children) {
+          let hit = false;
+          if (sel === '.xterm, .tm-host') hit = c.classList.contains('xterm') || c.classList.contains('tm-host');
+          else if (sel === 'details') hit = c.tagName === 'DETAILS';
+          else if (sel === '[data-max]') hit = c.hasAttribute('data-max');
+          else if (sel === 'iframe.doc-frame') hit = c.tagName === 'IFRAME' && c.classList.contains('doc-frame');
+          else if (sel.includes('textarea')) hit = c.tagName === 'TEXTAREA' || c.tagName === 'INPUT';
+          else if (sel.includes('.card.policy')) hit = c.classList.contains('policy') && c.id.startsWith('item-');
+          else if (sel.startsWith('#')) hit = c.id === sel.slice(1);
+          else hit = c.matches(sel);
+          if (hit) out.push(c);
+          walk(c);
+        }
+      })(el);
+      return out;
+    },
+  };
+  return el;
+}
+
+function makeTopic(name, opts = {}) {
+  const sec = makeEl('section', {
+    cls: ['topic'],
+    attrs: { id: 'topic-' + name, 'data-topic': name, 'data-th': opts.rev || 'v1' },
+    offsetHeight: opts.height || 300,
+  });
+  const head = makeEl('div', { cls: ['tophead'], offsetHeight: 36 });
+  const body = makeEl('div', { cls: ['tdoc'] });
+  const stream = makeEl('div', { cls: ['topic-stream'] });
+  sec.appendChild(head);
+  sec.appendChild(body);
+  sec.appendChild(stream);
+  if (opts.withTerm) sec.appendChild(makeEl('div', { cls: ['xterm'] }));
+  if (opts.withDraft) {
+    const ta = makeEl('textarea', { cls: ['note'], value: 'unsaved draft' });
+    sec.appendChild(ta);
+  }
+  return sec;
+}
+
+function makeBcard(id, opts = {}) {
+  const c = makeEl('div', {
+    cls: ['bcard'],
+    attrs: { 'data-card': id, ...(opts.rail ? { 'data-rail': '' } : {}) },
+    offsetHeight: opts.height || 360,
+  });
+  const inner = makeEl('div', { cls: ['bc-in'] });
+  const hd = makeEl('div', { cls: ['bc-hd'], offsetHeight: 32 });
+  const body = makeEl('div', { cls: ['bc-body'], offsetHeight: (opts.height || 360) - 32 });
+  inner.appendChild(hd);
+  inner.appendChild(body);
+  c.appendChild(inner);
+  return c;
+}
+
+function makeFreeCanvasWorld(spec, opts = {}) {
+  const root = makeEl('root');
+  const html = makeEl('html');
+  const body = makeEl('body');
+  const bcol = makeEl('div', {
+    attrs: { id: 'bcol' },
+    overflowY: 'auto',
+    clientHeight: opts.viewH || 800,
+  });
+  const board = makeEl('div', { attrs: { id: 'r-board' } });
+  let toolbar = null;
+  if (opts.toolbarH) {
+    toolbar = makeEl('div', { cls: ['board-toolbar'], offsetHeight: opts.toolbarH });
+    board.appendChild(toolbar);
+  }
+  const nodes = [];
+  for (const s of spec) {
+    const n = s.card ? makeBcard(s.card, s) : makeTopic(s.topic, s);
+    board.appendChild(n);
+    nodes.push(n);
+  }
+  let moreBtn = null;
+  if (opts.closedMore) {
+    moreBtn = makeEl('button', {
+      cls: ['closed-more'],
+      attrs: { 'data-closed-next': '20' },
+      offsetHeight: opts.closedMoreH || 40,
+    });
+    board.appendChild(moreBtn);
+  }
+  bcol.appendChild(board);
+  body.appendChild(bcol);
+  html.appendChild(body);
+  root.appendChild(html);
+
+  // Track ResizeObserver instances created by dashboard-board-anchor.js.
+  const ros = [];
+  class FakeRO {
+    constructor(cb) {
+      this.cb = cb;
+      this.observed = new Set();
+      ros.push(this);
+    }
+    observe(n) { this.observed.add(n); }
+    unobserve(n) { this.observed.delete(n); }
+    disconnect() { this.observed.clear(); }
+    fire(entries) { this.cb(entries); }
+  }
+
+  let nextTimer = 1;
+  const timers = new Map();
+  const rafs = [];
+  const flushes = [];
+  const store = new Map();
+
+  const ctx = {
+    window: null,
+    location: { pathname: '/s/free/', search: '' },
+    doc: {
+      activeElement: null,
+      documentElement: html,
+      body,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    },
+    $: id => (id === 'bcol' ? bcol : id === 'r-board' ? board : null),
+    region: name => (name === 'board' ? board : null),
+    topicKey: n => (n && n.nodeType === 1 && n.tagName === 'SECTION' && n.classList.contains('topic') ? n.getAttribute('data-topic') : null),
+    reducedMotion: () => true,
+    boardPending: {},
+    boardGuards: () => ctx.anchorVisibleCards().map(c => ctx.topicKey(c)).filter(Boolean),
+    boardFlushViewed: force => { flushes.push(!!force); },
+    boardSnap: null,
+    dialScrubbing: false,
+    ResizeObserver: FakeRO,
+    MutationObserver: null,
+    sessionStorage: {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+    },
+    setTimeout(fn, ms) {
+      const id = nextTimer++;
+      timers.set(id, { fn, ms });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) { rafs.push(fn); return rafs.length; },
+    cancelAnimationFrame() {},
+    getComputedStyle: n => ({ overflowY: n.overflowY || 'visible', paddingTop: '0px' }),
+    unmountFrames: () => {},
+    mountFrames: () => {},
+    mountFramesPaced: () => {},
+    readAnswers: () => ({}),
+    writeAnswers: () => {},
+    frameHeights: () => ({}),
+    setFrameHeights: () => {},
+    restoreOpen: () => {},
+    watchBoard: () => {},
+    bandBoard: () => {},
+    fmtTimes: () => {},
+    sweepOutImgs: () => {},
+    indexFrames: () => {},
+    mermaid: () => {},
+    applySent: () => {},
+    wbBindBoard: () => {},
+    bindCapsuleNotes: () => {},
+    WsCards: {
+      toolbar: () => toolbar,
+      isDocked: () => false,
+      decorate: () => {},
+    },
+    wbHistory: { capture: () => [], init: () => {}, restore: () => {} },
+    Date, Math, Set, Map, Array, Object, String, Number, Infinity, isNaN, parseFloat,
+  };
+  ctx.window = ctx;
+  ctx.innerHeight = opts.viewH || 800;
+  vm.createContext(ctx);
+  vm.runInContext(anchorSrc, ctx);
+  ctx.anchorInit();
+
+  const cardRO = () => ros.find(r => r !== ctx.anchorRO);
+  return {
+    ctx, bcol, board, html, nodes, moreBtn, ros, cardRO, timers, rafs, flushes,
+    fireIdle() {
+      const entries = Array.from(timers.entries());
+      timers.clear();
+      for (const [, t] of entries) t.fn();
+    },
+    flushRaf() {
+      while (rafs.length) rafs.shift()();
+    },
+  };
+}
+
+test('1. Designated-Y upward/downward placement and ResizeObserver 0px viewport shift on k < anchor vs k >= anchor', () => {
+  const spec = Array.from({ length: 20 }, (_, i) => ({ topic: `t${i}`, height: 300 + (i % 3) * 80 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800 });
+  const { ctx, nodes, bcol } = w;
+
+  // Jump synchronously to middle card 10.
+  assert.equal(ctx.WsBoardAnchor.select(nodes[10], { smooth: false }), true);
+  const info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.active, true);
+  assert.equal(info.anchorIdx, 10);
+  // 1.5 * 800 = 1200px coverage above/below; with ~380px cards + 16px gap, ±3..±4 covers >= 1200px.
+  assert.ok(info.start <= 7 && info.start >= 2, `start=${info.start} within [2..7]`);
+  assert.ok(info.end >= 13 && info.end <= 18, `end=${info.end} within [13..18]`);
+
+  // Verify exact anchor-relative upward & downward coordinates around y_10 = 50000.
+  assert.equal(info.posOf(nodes[10]), 50000);
+  for (let i = 11; i <= info.end; i++) {
+    assert.equal(info.posOf(nodes[i]), info.posOf(nodes[i - 1]) + nodes[i - 1].offsetHeight + 16);
+  }
+  for (let i = 9; i >= info.start; i--) {
+    assert.equal(info.posOf(nodes[i]), info.posOf(nodes[i + 1]) - 16 - nodes[i].offsetHeight);
+  }
+
+  // ResizeObserver observes strictly mounted in-window cards (none off-window).
+  const ro = w.cardRO();
+  assert.ok(ro, 'free-canvas ResizeObserver created');
+  for (let i = 0; i < nodes.length; i++) {
+    const inWin = i >= info.start && i <= info.end;
+    assert.equal(ro.observed.has(nodes[i]), inWin, `RO observed[${i}] === ${inWin}`);
+  }
+
+  // Position scrollTop so card 10 is the topmost viewport-intersecting card.
+  bcol.scrollTop = 50000;
+  const cacheBefore = ctx.anchorCache;
+  const yBefore = [];
+  for (let i = info.start; i <= info.end; i++) yBefore[i] = info.posOf(nodes[i]);
+
+  // Above-anchor buffer card k=8 (< anchor=10) grows by +120px:
+  // ONLY j <= 8 shift upward by -120px; 9, 10 (anchor), and 11..end stay at 0px shift; scrollTop untouched!
+  const kAbove = 8;
+  const newHAbove = nodes[kAbove].offsetHeight + 120;
+  nodes[kAbove].offsetHeight = newHAbove;
+  ro.fire([{ target: nodes[kAbove], borderBoxSize: [{ blockSize: newHAbove }], contentRect: { height: newHAbove } }]);
+
+  assert.equal(ctx.anchorCache, cacheBefore, 'ResizeObserver height update must not invalidate anchorCache');
+  assert.equal(bcol.scrollTop, 50000, 'scrollTop untouched on non-clamped k < anchor resize');
+  for (let i = info.start; i <= kAbove; i++) {
+    assert.equal(info.posOf(nodes[i]), yBefore[i] - 120, `j=${i} <= k shifts upward by -120`);
+  }
+  for (let i = kAbove + 1; i <= info.end; i++) {
+    assert.equal(info.posOf(nodes[i]), yBefore[i], `j=${i} > k has exact 0px shift`);
+  }
+
+  // Anchor card k=10 grows by +80px: ONLY j > 10 shift downward by +80px.
+  const yBeforeDown = [];
+  for (let i = info.start; i <= info.end; i++) yBeforeDown[i] = info.posOf(nodes[i]);
+  const newHAnchor = nodes[10].offsetHeight + 80;
+  nodes[10].offsetHeight = newHAnchor;
+  ro.fire([{ target: nodes[10], borderBoxSize: [{ blockSize: newHAnchor }], contentRect: { height: newHAnchor } }]);
+
+  for (let i = info.start; i <= 10; i++) {
+    assert.equal(info.posOf(nodes[i]), yBeforeDown[i], `j=${i} <= anchor untouched`);
+  }
+  for (let i = 11; i <= info.end; i++) {
+    assert.equal(info.posOf(nodes[i]), yBeforeDown[i] + 80, `j=${i} > anchor shifts downward by +80`);
+  }
+
+  // Sub-epsilon resize (< 0.5px) triggers zero style mutations.
+  const top11Before = nodes[11].style.top;
+  ro.fire([{ target: nodes[10], borderBoxSize: [{ blockSize: newHAnchor + 0.3 }], contentRect: { height: newHAnchor + 0.3 } }]);
+  assert.equal(nodes[11].style.top, top11Before, 'sub-epsilon delta (<0.5px) ignored');
+});
+
+test('2. Top boundary clamping (y_0 = topPad, scrollTop sync, no recenter) and bottom boundary clamping (closed-more, tight minHeight, default 100000px)', () => {
+  const spec = Array.from({ length: 16 }, (_, i) => ({ topic: `t${i}`, height: 420 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800, toolbarH: 40, closedMore: true, closedMoreH: 44 });
+  const { ctx, nodes, bcol, board, moreBtn } = w;
+
+  // Initial anchor is card 0 (winStart === 0): y_0 = topPad (40 + 16 = 56), minHeight = 100000px, closed-more hidden.
+  let info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.start, 0);
+  assert.ok(info.end < nodes.length - 1);
+  assert.equal(info.posOf(nodes[0]), 56, 'y_0 clamped to toolbarH + gap');
+  assert.equal(board.style.minHeight, '100000px', 'default RUNWAY_HEIGHT = 100000px when Card N-1 is off-window');
+  assert.equal(moreBtn.getAttribute('data-wb-offwindow'), 'hidden');
+
+  // Idle recentering must be skipped while winStart === 0 even though y_0 = 56 < 10000.
+  ctx.freeOnScroll();
+  w.fireIdle();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[0]), 56, 'no idle recenter while winStart === 0');
+
+  // Resize k=0 (< anchor=2) while winStart === 0: y_0 re-clamps to 56 and scrollTop shifts by +dh (0px visual shift on anchor).
+  const y2Before = ctx.WsBoardAnchor.windowInfo().posOf(nodes[2]);
+  bcol.scrollTop = y2Before;
+  nodes[0].offsetHeight = 520; // +100px
+  w.cardRO().fire([{ target: nodes[0], borderBoxSize: [{ blockSize: 520 }], contentRect: { height: 520 } }]);
+  const y2After = ctx.WsBoardAnchor.windowInfo().posOf(nodes[2]);
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[0]), 56, 'y_0 stays clamped to topPad');
+  assert.equal(y2After - bcol.scrollTop, y2Before - y2Before, '0px visual shift on anchor during winStart===0 resize');
+  assert.equal(bcol.scrollTop, y2Before + 100);
+
+  // Jump to Card N-1 (winEnd === N-1): closed-more visible below last card, minHeight tightly clamped, no idle recenter.
+  ctx.WsBoardAnchor.select(nodes[15], { smooth: false });
+  info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.end, 15);
+  assert.equal(moreBtn.hasAttribute('data-wb-offwindow'), false, 'closed-more un-hidden at bottom boundary');
+  const expectedMoreTop = Math.round(info.posOf(nodes[15]) + nodes[15].offsetHeight + 16);
+  assert.equal(moreBtn.style.top, expectedMoreTop + 'px');
+  const expectedMinH = Math.ceil(expectedMoreTop + 44 + 48);
+  assert.equal(board.style.minHeight, expectedMinH + 'px', 'minHeight clamped tightly at bottom boundary');
+
+  // Force y_first < 10000 while winEnd === N-1: idle recentering still skipped!
+  const y15Before = info.posOf(nodes[15]);
+  ctx.freeOnScroll();
+  w.fireIdle();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[15]), y15Before, 'no idle recenter while winEnd === N-1');
+});
+
+test('3. Idle runway recentering (0px visual delta, skipped during dialScrubbing) and synchronous jump centering (short centered vs tall top-aligned)', () => {
+  const spec = Array.from({ length: 24 }, (_, i) => ({
+    topic: `t${i}`,
+    height: i === 12 ? 220 : i === 14 ? 1100 : 400,
+  }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800 });
+  const { ctx, nodes, bcol } = w;
+
+  // Jump to short card 12 (h = 220 < usableH): synchronously centered in usable viewport.
+  ctx.WsBoardAnchor.select(nodes[12], { smooth: false });
+  assert.equal(nodes[12].hasAttribute('data-wb-offwindow'), false);
+  const y12 = ctx.WsBoardAnchor.windowInfo().posOf(nodes[12]);
+  assert.equal(y12, 50000);
+  // topClear = padTop(0) + railInset(0) + capH(2)=44; botClear = botReserve(2)=47; usableH = 800-44-47 = 709.
+  // Centered scrollTop = 50000 - 44 - (709 - 220) / 2 = 49711.5 -> 49712.
+  assert.equal(bcol.scrollTop, Math.round(50000 - 44 - (709 - 220) / 2), 'short card centered in usable viewport');
+
+  // Jump to tall card 14 (h = 1100 >= usableH): top-aligned at y - topClear.
+  ctx.WsBoardAnchor.select(nodes[14], { smooth: false });
+  assert.equal(bcol.scrollTop, 50000 - 44, 'tall card top-aligned below sticky rail headers');
+
+  // Simulate drifting near top runway margin (y_first < 10000) while winStart > 0 && winEnd < N-1.
+  const info = ctx.WsBoardAnchor.windowInfo();
+  assert.ok(info.start > 0 && info.end < nodes.length - 1);
+  const shiftNearTop = -44000;
+  for (let i = info.start; i <= info.end; i++) {
+    const ny = info.posOf(nodes[i]) + shiftNearTop;
+    ctx.freePos.set(nodes[i], ny);
+    nodes[i].style.top = Math.round(ny) + 'px';
+  }
+  bcol.scrollTop = bcol.scrollTop + shiftNearTop;
+  const visualBefore = ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]) - bcol.scrollTop;
+  assert.ok(ctx.WsBoardAnchor.windowInfo().posOf(nodes[info.start]) < 10000);
+
+  // While dialScrubbing is true, idle recenter is skipped.
+  ctx.dialScrubbing = true;
+  ctx.freeOnScroll();
+  w.fireIdle();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]), 6000, 'idle recenter skipped during dialScrubbing');
+
+  // Once scrubbing ends, idle recenter rebases anchor back to RUNWAY_MID (50000) with 0px visual shift.
+  ctx.dialScrubbing = false;
+  ctx.freeOnScroll();
+  w.fireIdle();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]), 50000, 'anchor rebased to RUNWAY_MID');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]) - bcol.scrollTop, visualBefore, 'exact 0px visual delta after recentering');
+});
+
+test('4. Split data-wb-offwindow hidden vs parked+inert, VIRTUAL_KEEP_ATTRS, Overview suspend/resume, releaseNode, empty board, and loadClosed settlement', () => {
+  const spec = [
+    { topic: 't0', height: 400 },
+    { card: 'term1', height: 400 }, // exempt .bcard widget
+    { topic: 't2', height: 400, withTerm: true }, // exempt topic (.xterm)
+    { topic: 't3', height: 400, withDraft: true }, // exempt topic (draft textarea)
+    ...Array.from({ length: 12 }, (_, i) => ({ topic: `t${i + 4}`, height: 400 })),
+  ];
+  const w = makeFreeCanvasWorld(spec, { viewH: 800 });
+  const { ctx, nodes, bcol, board } = w;
+
+  // Jump to last topic so indices 0..3 are off-window.
+  ctx.WsBoardAnchor.select(nodes[15], { smooth: false });
+  assert.equal(nodes[0].getAttribute('data-wb-offwindow'), 'hidden', 'ordinary off-window topic is hidden');
+  assert.equal(nodes[0].hasAttribute('data-wb-virtual'), true, 'ordinary off-window topic body evicted');
+  assert.equal(nodes[0].inert, false, 'hidden topic does not set inert');
+
+  for (const idx of [1, 2, 3]) {
+    assert.equal(nodes[idx].getAttribute('data-wb-offwindow'), 'parked', `exempt node[${idx}] is parked (never hidden)`);
+    assert.equal(nodes[idx].inert, true, `parked node[${idx}] has inert`);
+    assert.equal(nodes[idx].hasAttribute('data-wb-virtual'), false, `exempt node[${idx}] body preserved`);
+    assert.equal(w.cardRO().observed.has(nodes[idx]), false, `parked node[${idx}] unobserved by ResizeObserver`);
+  }
+
+  // VIRTUAL_KEEP_ATTRS preserves data-wb-offwindow across stashed SSE header sync.
+  assert.equal(ctx.VIRTUAL_KEEP_ATTRS['data-wb-offwindow'], true);
+
+  // releaseNode strips data-wb-offwindow, inert, style.top (used on #bgal dock & [data-max] maximize).
+  ctx.WsBoardAnchor.releaseNode(nodes[1]);
+  assert.equal(nodes[1].hasAttribute('data-wb-offwindow'), false);
+  assert.equal(nodes[1].inert, false);
+  assert.equal(nodes[1].style.top, '');
+
+  // Re-entering window clears parked + inert and hydrates hidden topic.
+  ctx.WsBoardAnchor.select(nodes[0], { smooth: false });
+  assert.equal(nodes[0].hasAttribute('data-wb-offwindow'), false);
+  assert.equal(nodes[0].hasAttribute('data-wb-virtual'), false);
+  assert.equal(nodes[2].hasAttribute('data-wb-offwindow'), false);
+  assert.equal(nodes[2].inert, false);
+
+  // suspendForOverview strips data-board-free, board.style.minHeight, all inline style.top, offwindow & inert.
+  ctx.WsBoardAnchor.select(nodes[15], { smooth: false });
+  ctx.WsBoardAnchor.suspendForOverview();
+  assert.equal(bcol.hasAttribute('data-board-free'), false);
+  assert.equal(board.style.minHeight, '');
+  for (const n of nodes) {
+    assert.equal(n.hasAttribute('data-wb-offwindow'), false);
+    assert.equal(n.inert, false);
+    assert.equal(n.style.top, '');
+  }
+
+  // resumeFromOverview + select restores free-canvas centered on selected card.
+  ctx.WsBoardAnchor.resumeFromOverview();
+  ctx.WsBoardAnchor.select(nodes[8], { smooth: false });
+  assert.equal(bcol.hasAttribute('data-board-free'), true);
+  assert.equal(ctx.WsBoardAnchor.windowInfo().active, true);
+  assert.equal(ctx.WsBoardAnchor.windowInfo().anchorIdx, 8);
+
+  // Empty board suspends free-canvas so .empty renders normally.
+  while (board.children.length) board.removeChild(board.children[0]);
+  ctx.WsBoardAnchor.settle();
+  assert.equal(bcol.hasAttribute('data-board-free'), false);
+  assert.equal(ctx.WsBoardAnchor.windowInfo().active, false);
+
+  // Cross-module call-site contracts in overview.js, cards.js, dashboard-conversation.js.
+  assert.match(overviewSrc, /WsBoardAnchor\.suspendForOverview/);
+  assert.match(overviewSrc, /WsBoardAnchor\.resumeFromOverview/);
+  assert.match(overviewSrc, /WsBoardAnchor\.releaseNode/);
+  assert.match(cardsSrc, /WsBoardAnchor\.releaseNode/);
+  assert.match(convSrc, /kept\.h\.apply\(\);[\s\S]{0,160}WsBoardAnchor\.settle\(\)[\s\S]{0,120}boardDialSync\(\)/);
+});
+
+test('5a. stream-view.js wbHistory.keep skips compensation for above-anchor buffer cards (k < anchor) and preserves tall anchor card (k === anchor) & #bgal', () => {
+  const root = makeEl('root');
+  const html = makeEl('html');
+  const bcol = makeEl('div', { attrs: { id: 'bcol', 'data-board-free': '' }, overflowY: 'auto', scrollTop: 50000, clientHeight: 800, scrollHeight: 100000 });
+  const bgal = makeEl('div', { attrs: { id: 'bgal' }, overflowY: 'auto', scrollTop: 300, clientHeight: 800, scrollHeight: 2000 });
+  const board = makeEl('div', { attrs: { id: 'r-board' } });
+  const cardAbove = makeTopic('above', { height: 400 });
+  const cardAnchor = makeTopic('anchor', { height: 1200 });
+  const cardGal = makeTopic('docked', { height: 1000 });
+  const itemAbove = makeEl('article', { cls: ['wb-entry'], attrs: { id: 'e-above' }, offsetHeight: 100 });
+  const itemAnchor = makeEl('article', { cls: ['wb-entry'], attrs: { id: 'e-anchor' }, offsetHeight: 100 });
+  const itemGal = makeEl('article', { cls: ['wb-entry'], attrs: { id: 'e-gal' }, offsetHeight: 100 });
+  cardAbove.appendChild(itemAbove);
+  cardAnchor.appendChild(itemAnchor);
+  cardGal.appendChild(itemGal);
+  board.appendChild(cardAbove);
+  board.appendChild(cardAnchor);
+  bcol.appendChild(board);
+  bgal.appendChild(cardGal);
+  html.appendChild(bcol);
+  html.appendChild(bgal);
+  root.appendChild(html);
+
+  let anchorShift = 0;
+  let galShift = 0;
+  itemAbove.getBoundingClientRect = () => ({ top: -200, bottom: -100, height: 100, left: 0, right: 600, width: 600 });
+  itemAnchor.getBoundingClientRect = () => ({ top: 200 + anchorShift, bottom: 300 + anchorShift, height: 100, left: 0, right: 600, width: 600 });
+  itemGal.getBoundingClientRect = () => ({ top: 200 + galShift, bottom: 300 + galShift, height: 100, left: 0, right: 600, width: 600 });
+  bcol.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 800, width: 800 });
+  bgal.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 800, width: 800 });
+
+  const ctx = {
+    window: null,
+    document: {
+      documentElement: html,
+      body: html,
+      scrollingElement: html,
+      getElementById: id => (id === 'e-anchor' ? itemAnchor : id === 'e-gal' ? itemGal : id === 'e-above' ? itemAbove : null),
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+    },
+    getComputedStyle: n => ({ overflowY: n.overflowY || 'visible', display: 'block', visibility: 'visible' }),
+    requestAnimationFrame: fn => { fn(); return 1; },
+    cancelAnimationFrame: () => {},
+    addEventListener: () => {},
+    Date, Math, Set, Map, WeakMap, Array, Object,
+    WsBoardAnchor: {
+      windowInfo: () => ({
+        active: true,
+        anchorIdx: 1,
+        indexOf: n => (n === cardAbove ? 0 : n === cardAnchor ? 1 : -1),
+      }),
+      owner: n => (cardAbove.contains(n) ? cardAbove : cardAnchor.contains(n) ? cardAnchor : null),
+    },
+  };
+  ctx.window = ctx;
+  ctx.innerHeight = 800;
+  vm.createContext(ctx);
+  vm.runInContext(streamViewSrc, ctx);
+  const kit = ctx.viewKit(ctx);
+
+  // Above-anchor buffer card (k=0 < anchor=1): keep returns no-op and never modifies bcol.scrollTop.
+  const hAbove = kit.keep(itemAbove, { scroller: bcol, offset: 100 });
+  hAbove.apply();
+  hAbove.end();
+  assert.equal(bcol.scrollTop, 50000, 'above-anchor buffer card skips wbHistory.keep compensation');
+
+  // Anchor card (k=1 === anchor=1): keep compensates bcol.scrollTop when item shifts down by +150px.
+  const hAnchor = kit.keep(itemAnchor, { scroller: bcol, offset: 200 });
+  anchorShift = 150;
+  hAnchor.apply();
+  hAnchor.end();
+  assert.equal(bcol.scrollTop, 50150, 'tall anchor card retains wbHistory.keep scroll compensation');
+
+  // Docked card in #bgal: unchanged normal compensation.
+  const hGal = kit.keep(itemGal, { scroller: bgal, offset: 200 });
+  galShift = 90;
+  hGal.apply();
+  hGal.end();
+  assert.equal(bgal.scrollTop, 390, '#bgal keeps normal scroll compensation');
+});
+
+test('5b. rail.js free-canvas reads rects ONLY for mounted window cards, computes offBefore/offAfter capsules & +N counts, and skips dropGhost on #r-board height resize', () => {
+  const root = makeEl('root');
+  const html = makeEl('html');
+  const bcol = makeEl('div', {
+    attrs: { id: 'bcol', 'data-board-free': '' },
+    overflowY: 'auto',
+    scrollTop: 50000,
+    clientHeight: 800,
+    scrollHeight: 100000,
+  });
+  const board = makeEl('div', { attrs: { id: 'r-board' } });
+  bcol.appendChild(board);
+  html.appendChild(bcol);
+  root.appendChild(html);
+
+  const rectReads = new Map();
+  const topics = [];
+  for (let i = 0; i < 20; i++) {
+    const t = makeTopic(`t${i}`, { height: 400 });
+    t.children[0].appendChild(makeEl('span', { cls: ['tname'], text: `Topic ${i}` }));
+    const idx = i;
+    t.getBoundingClientRect = () => {
+      rectReads.set(idx, (rectReads.get(idx) || 0) + 1);
+      // Window is [7..13]: place t7, t8 above viewport; t9 current spanning top; t10 visible; t11..t13 below bottom line.
+      const top = (idx - 9) * 420 - 40;
+      return { top, bottom: top + 400, height: 400, left: 0, right: 800, width: 800 };
+    };
+    board.appendChild(t);
+    topics.push(t);
+  }
+  bcol.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 800, width: 800 });
+
+  const railROs = [];
+  class RailRO {
+    constructor(cb) { this.cb = cb; railROs.push(this); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const rafs = [];
+  const docEl = {
+    documentElement: html,
+    body: html,
+    scrollingElement: html,
+    getElementById: id => (id === 'bcol' ? bcol : id === 'r-board' ? board : null),
+    createElement: tag => makeEl(tag),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+  };
+  const ctx = {
+    window: null,
+    document: docEl,
+    ResizeObserver: RailRO,
+    MutationObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: fn => { rafs.push(fn); return rafs.length; },
+    cancelAnimationFrame: () => {},
+    getComputedStyle: n => ({ overflowY: n.overflowY || 'visible', paddingTop: '0px', paddingBottom: '0px', fontSize: '13px', color: '#000', backgroundColor: '#fff', borderRadius: '8px', getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: true }),
+    addEventListener: () => {},
+    Math, Set, Map, Array, Object, String, Number, parseFloat,
+    WsBoardAnchor: {
+      windowInfo: () => ({
+        active: true,
+        start: 7,
+        end: 13,
+        anchorIdx: 9,
+        list: topics,
+        railList: topics,
+        railBefore: topics.map((_, i) => i),
+        railTotal: topics.length,
+      }),
+    },
+  };
+  ctx.window = ctx;
+  ctx.innerHeight = 800;
+  vm.createContext(ctx);
+  vm.runInContext(railSrc, ctx);
+  while (rafs.length) rafs.shift()();
+
+  // Only mounted window cards [7..13] had getBoundingClientRect called (0 reads on [0..6] and [14..19]).
+  for (let i = 0; i < 20; i++) {
+    const reads = rectReads.get(i) || 0;
+    if (i >= 7 && i <= 13) assert.ok(reads > 0, `mounted topic ${i} measured`);
+    else assert.equal(reads, 0, `off-window topic ${i} must have 0 rect reads`);
+  }
+
+  // Top capsules show far (with +upMore) and near; bottom includes off-window downMore > 0.
+  const topWrap = bcol.children.find(c => c.classList.contains('wb-rail-wrap') && c.classList.contains('up'));
+  const botWrap = bcol.children.find(c => c.classList.contains('wb-rail-wrap') && c.classList.contains('dn'));
+  assert.ok(topWrap && botWrap, 'rail wrappers mounted');
+  const topBtns = topWrap.querySelectorAll('.wb-cap').filter(b => !b.hidden);
+  const botBtns = botWrap.querySelectorAll('.wb-cap').filter(b => !b.hidden);
+  assert.equal(topBtns.length, 2, '2 top capsules mounted');
+  const topFar = topWrap.querySelector('.wb-cap.far');
+  assert.equal(topFar.querySelector(':scope > .cx').textContent, '+7', 'top +N reflects offBefore=7 + mounted above');
+  assert.equal(botBtns.length, 2, '2 bottom capsules mounted');
+  const botFar = botWrap.querySelector('.wb-cap.far');
+  const botExtra = botFar.querySelector(':scope > .cx').textContent;
+  assert.ok(botExtra.startsWith('+') && parseInt(botExtra.slice(1), 10) >= 6, `bottom +N (${botExtra}) reflects offAfter=6`);
+
+  // ResizeObserver callback for #r-board height-only change in free-canvas kicks without dropping ghosts.
+  const ro = railROs[0];
+  assert.ok(ro, 'rail ResizeObserver registered');
+  const rafBefore = rafs.length;
+  ro.cb([{ target: board, contentRect: { width: 800, height: 100000 } }]);
+  assert.ok(rafs.length > rafBefore, '#r-board resize schedules kick()');
+  assert.match(railSrc, /if \(onlyBoardHeight\) \{ kick\(\); return; \}/);
+});
+
+test('5c. pill.js classifies open asks inside data-wb-offwindow topics via WsBoardAnchor window indices instead of dropping 0x0 rects', () => {
+  const root = makeEl('root');
+  const html = makeEl('html');
+  const bcol = makeEl('div', {
+    attrs: { id: 'bcol', 'data-board-free': '' },
+    overflowY: 'auto',
+    scrollTop: 50000,
+    clientHeight: 800,
+    rect: () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 800, width: 800 }),
+  });
+  const board = makeEl('div', { attrs: { id: 'r-board' } });
+  bcol.appendChild(board);
+  html.appendChild(bcol);
+  root.appendChild(html);
+
+  // Build 4 topics: t0 (offwindow above), t1 (offwindow above, filtered -> skip),
+  // t2 (mounted visible), t3 (offwindow parked below).
+  const t0 = makeTopic('t0'); t0.setAttribute('data-wb-offwindow', 'hidden');
+  const t1 = makeTopic('t1'); t1.setAttribute('data-wb-offwindow', 'hidden'); t1.setAttribute('data-state-filtered', '');
+  const t2 = makeTopic('t2');
+  t2.getBoundingClientRect = () => ({ top: 100, bottom: 500, height: 400, left: 0, right: 800, width: 800 });
+  const t3 = makeTopic('t3'); t3.setAttribute('data-wb-offwindow', 'parked');
+
+  const ask0 = makeEl('div', { cls: ['card', 'policy'], attrs: { id: 'item-0', 'data-state': 'open' }, rect: () => ({ top: 0, bottom: 0, height: 0, width: 0 }) });
+  const ask1 = makeEl('div', { cls: ['card', 'policy'], attrs: { id: 'item-1', 'data-state': 'open' }, rect: () => ({ top: 0, bottom: 0, height: 0, width: 0 }) });
+  const ask2 = makeEl('div', { cls: ['card', 'policy'], attrs: { id: 'item-2', 'data-state': 'open' }, rect: () => ({ top: 200, bottom: 300, height: 100, width: 600 }) });
+  const ask3 = makeEl('div', { cls: ['card', 'policy'], attrs: { id: 'item-3', 'data-state': 'open' }, rect: () => ({ top: 0, bottom: 0, height: 0, width: 0 }) });
+  t0.appendChild(ask0); t1.appendChild(ask1); t2.appendChild(ask2); t3.appendChild(ask3);
+  [t0, t1, t2, t3].forEach(t => board.appendChild(t));
+
+  const rafs = [];
+  const idxMap = new Map([[t0, 0], [t2, 2], [t3, 3]]);
+  const docEl = {
+    documentElement: html,
+    body: html,
+    scrollingElement: html,
+    getElementById: id => (id === 'bcol' ? bcol : id === 'r-board' ? board : null),
+    createElement: tag => makeEl(tag),
+    querySelector: sel => (sel === '.topic' ? t0 : null),
+    querySelectorAll: sel => (sel.includes('.card.policy') ? [ask0, ask1, ask2, ask3] : []),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const ctx = {
+    window: null,
+    document: docEl,
+    location: { pathname: '/s/free/' },
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    IntersectionObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: fn => { rafs.push(fn); return rafs.length; },
+    cancelAnimationFrame: () => {},
+    getComputedStyle: n => ({ overflowY: n.overflowY || 'visible' }),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    wsT: s => s,
+    Math, Set, Map, Array, Object, String, Number, JSON,
+    WsBoardAnchor: {
+      windowInfo: () => ({
+        active: true,
+        start: 2,
+        end: 2,
+        indexOf: n => (idxMap.has(n) ? idxMap.get(n) : -1),
+      }),
+    },
+  };
+  ctx.window = ctx;
+  ctx.innerHeight = 800;
+  vm.createContext(ctx);
+  vm.runInContext(pillSrc, ctx);
+  while (rafs.length) rafs.shift()();
+
+  // Inspect actual top and bottom pills produced by shipped pill.js!
+  const topWrap = bcol.children.find(c => c.classList.contains('wb-oq-top'));
+  const botWrap = bcol.children.find(c => c.classList.contains('wb-oq-bot'));
+  assert.ok(topWrap && botWrap, 'top and bottom .oq-wrap created by pill.js');
+  const topOpenBtn = topWrap.querySelectorAll('.oq-seg').find(b => b.getAttribute('data-k') === 'open');
+  const botOpenBtn = botWrap.querySelectorAll('.oq-seg').find(b => b.getAttribute('data-k') === 'open');
+  assert.ok(topOpenBtn && !topOpenBtn.hidden, 'top open segment visible for off-window ask above window');
+  assert.equal(topOpenBtn.querySelector('.n').textContent.trim(), '1', 'filtered t1 skipped; 1 open ask above window');
+  assert.ok(botOpenBtn && !botOpenBtn.hidden, 'bottom open segment visible for off-window parked ask below window');
+  assert.equal(botOpenBtn.querySelector('.n').textContent.trim(), '1', '1 open ask below window');
+});
