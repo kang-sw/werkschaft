@@ -305,8 +305,28 @@
   // the open-question pill's class observer.
   var sentSig = null;
   function applySent(force) {
+    var scope = arguments[1];
     var b = region("board");
     if (!b) return;
+    if (scope && scope.querySelectorAll) {
+      q(".sentmark", scope).forEach(function (m) { if (m.parentNode) m.parentNode.removeChild(m); });
+      q(".sent-sent, .sent-held", scope).forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
+      q(".sentdata i[data-id]").forEach(function (i) {
+        var item = boardItem(i.getAttribute("data-id"));
+        if (!item || !scope.contains(item)) return;
+        var head = item.querySelector(".head, .stext");
+        if (!head) return;
+        var state = i.getAttribute("data-state"), m = doc.createElement("span");
+        item.classList.add(state === "held" ? "sent-held" : "sent-sent");
+        m.className = "sentmark " + state;
+        m.textContent = state + " · " + (i.getAttribute("data-answer") || "note");
+        var note = i.getAttribute("data-note");
+        m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (note ? ": " + note : "");
+        var id = head.querySelector(".id");
+        head.insertBefore(m, id ? id.nextSibling : head.firstChild);
+      });
+      return;
+    }
     var sig = q(".sentdata i[data-id]").map(function (i) {
       return [i.getAttribute("data-id"), i.getAttribute("data-state"), i.getAttribute("data-answer"), i.getAttribute("data-note")].join("\u0001");
     }).join("\u0002");
