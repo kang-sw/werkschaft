@@ -166,8 +166,11 @@ func (c *conv) armQuotaTimer(delay time.Duration) {
 }
 
 // cancelQuotaContinuationForInput fences a pending quota continuation timer
-// from outside the conversation loop when new input is admitted.
+// from outside the conversation loop when new input is admitted. Callers hold
+// c.mu so the generation bump is ordered with quotaContinuationTimedOut's final
+// check before wsinbox.Send.
 func (c *conv) cancelQuotaContinuationForInput() {
+	c.quotaInputGen.Add(1)
 	c.quotaCancelFence.CompareAndSwap(quotaFencePending, quotaFenceCancelled)
 }
 
@@ -365,36 +368,40 @@ func (c *conv) settleQuotaInFlightAfterReplay() {
 	}
 }
 
-func (c *conv) quotaContinuationTimedOut() {
+// quotaContinuationTimedOut fires a scheduled quota continuation. It returns
+// true when it injected or deferred a continuation turn, and false when it
+// cancelled or skipped so kick() can fall through to pending user/mail input.
+func (c *conv) quotaContinuationTimedOut() bool {
 	c.quotaC, c.quotaStop = nil, nil
 	c.quotaPendingFire = false
 	if !c.quotaCancelFence.CompareAndSwap(quotaFencePending, quotaFenceFiring) {
 		if c.quotaCancelFence.Load() == quotaFenceCancelled {
 			c.cancelQuotaContinuation(false)
 		}
-		return
+		return false
 	}
 	qc := cloneQuotaContinuation(c.rec.QuotaContinuation)
 	if !c.rec.Lead || c.closed || c.hidden || c.isForeign() || c.turn || qc == nil || qc.Status != QuotaContinuationScheduled {
 		c.quotaCancelFence.Store(quotaFenceIdle)
-		return
+		return false
 	}
 	c.mu.Lock()
+	inputGen := c.quotaInputGen.Load()
 	hasInput := c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
 	c.mu.Unlock()
 	if hasInput {
 		c.cancelQuotaContinuation(false)
-		return
+		return false
 	}
 	if c.proc == nil && c.deferKickIfUnpublished() {
 		c.quotaPendingFire = true
 		c.quotaCancelFence.Store(quotaFencePending)
-		return
+		return true
 	}
 	if !c.canKick() {
 		c.quotaPendingFire = true
 		c.quotaCancelFence.Store(quotaFencePending)
-		return
+		return true
 	}
 
 	knownReset := qc.MaxAttempts == 0
@@ -405,9 +412,9 @@ func (c *conv) quotaContinuationTimedOut() {
 		next.Attempts++
 	}
 	c.update(func(rec *Record) { rec.QuotaContinuation = cloneQuotaContinuation(next) })
-	c.syncHost(false)
-	c.changed(false)
-	c.quotaCancelFence.Store(quotaFenceIdle)
+	if hook := c.onQuotaBeforeSend; hook != nil {
+		hook()
+	}
 
 	prompt := quotaContinuationPrompt(knownReset)
 	operator := next.Manual && c.rec.Lead
@@ -416,7 +423,15 @@ func (c *conv) quotaContinuationTimedOut() {
 	if c.closed {
 		c.mu.Unlock()
 		c.wmu.Unlock()
-		return
+		c.quotaCancelFence.Store(quotaFenceIdle)
+		return false
+	}
+	raced := c.quotaInputGen.Load() != inputGen || c.held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0
+	if raced {
+		c.mu.Unlock()
+		c.wmu.Unlock()
+		c.cancelQuotaContinuation(false)
+		return false
 	}
 	_, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{prompt}, Operator: operator}, c.r.opts.Now())
 	if err == nil {
@@ -428,11 +443,16 @@ func (c *conv) quotaContinuationTimedOut() {
 	c.wmu.Unlock()
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: quota continuation send: %v\n", c.rec.ReplyID, err)
-		return
+		c.cancelQuotaContinuation(false)
+		return false
 	}
+	c.quotaCancelFence.Store(quotaFenceIdle)
+	c.syncHost(false)
+	c.changed(false)
 	c.quotaInjecting = true
 	defer func() { c.quotaInjecting = false }()
 	c.inboxMutated(1)
 	c.recordDirty = true
 	c.kick()
+	return true
 }

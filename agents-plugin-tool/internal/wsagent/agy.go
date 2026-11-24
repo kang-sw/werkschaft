@@ -1551,8 +1551,28 @@ func isAgyQuotaText(text string) bool {
 		strings.Contains(lower, "too many requests"),
 		strings.Contains(lower, "quota"),
 		strings.Contains(lower, "exhausted your capacity"),
-		strings.Contains(lower, "429"):
+		hasHTTPStatus429(lower):
 		return true
+	}
+	return false
+}
+
+// hasHTTPStatus429 matches HTTP/API status-code 429 shapes while avoiding false
+// positives on unrelated numbers such as line numbers or ports ("line 1429", "port 4290").
+func hasHTTPStatus429(lower string) bool {
+	if strings.TrimSpace(lower) == "429" {
+		return true
+	}
+	for _, pat := range []string{
+		"http 429", "http/1.1 429", "http/2 429",
+		"status 429", "status: 429", "status=429",
+		"code 429", "code: 429", "code=429",
+		"error 429", "error: 429",
+		"429 too many", "(429)", "[429]",
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
 	}
 	return false
 }

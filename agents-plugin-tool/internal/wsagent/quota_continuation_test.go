@@ -127,6 +127,7 @@ type quotaEnv struct {
 	nowMu   sync.Mutex
 	timers  *leverTimers
 	backend *quotaBackend
+	mail    *fakeMail
 	runner  *Runner
 	trusted func(*http.Request) (bool, bool)
 }
@@ -156,6 +157,7 @@ func newQuotaEnv(t *testing.T, configOverrides map[string]string, jitter time.Du
 		now:     time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC),
 		timers:  &leverTimers{},
 		backend: &quotaBackend{},
+		mail:    newFakeMail(),
 		trusted: func(*http.Request) (bool, bool) { return true, true },
 	}
 	env.startRunner(jitter, nil)
@@ -187,6 +189,7 @@ func (e *quotaEnv) startRunner(jitter time.Duration, serving <-chan struct{}) {
 		Dir:      e.dir,
 		Keys:     keys,
 		LeadKeys: leadKeys,
+		Mail:     e.mail,
 		Config:   wsconfig.Options{ConfigHome: e.home, RepoRoot: e.root},
 		WSMCP:     func(string) (MCPCommand, error) { return MCPCommand{Command: "ws-mcp"}, nil },
 		DaemonMCP: func(string) (MCPCommand, error) { return MCPCommand{}, nil },
@@ -946,4 +949,163 @@ func TestQuotaContinuationHTTPAuthAndLifecycle(t *testing.T) {
 	if st.QuotaContinuation != nil {
 		t.Fatalf("cancel response QuotaContinuation = %+v, want nil", st.QuotaContinuation)
 	}
+}
+
+func TestQuotaContinuationInputRaceDuringFire(t *testing.T) {
+	for _, kind := range []string{"Runner.Send", "Runner.PageInput"} {
+		t.Run(kind, func(t *testing.T) {
+			env := newQuotaEnv(t, map[string]string{
+				wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+			}, 0)
+			id := env.createLead(BackendClaude)
+			if _, err := env.runner.Send(id, "initial"); err != nil {
+				t.Fatal(err)
+			}
+			p := env.backend.proc(t, 0)
+			first := p.nextSend(t)
+			p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+			p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit", ResetsAt: env.currentNow().Add(5 * time.Minute).UnixMilli()}, TurnID: first.TurnID}
+			p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+			env.waitIdle(id)
+
+			// Inject concurrent user input right after quotaContinuationTimedOut
+			// persists in_flight and before it re-checks under wmu+mu.
+			c := env.runner.conv(id)
+			var once sync.Once
+			racedDone := make(chan error, 1)
+			c.do(func() {
+				c.onQuotaBeforeSend = func() {
+					once.Do(func() {
+						go func() {
+							if kind == "Runner.Send" {
+								_, err := env.runner.Send(id, "user raced in")
+								racedDone <- err
+							} else {
+								err := env.runner.PageInput(id, func() bool {
+									_, _, werr := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{"page raced in"}, Operator: true}, env.currentNow())
+									return werr == nil
+								})
+								racedDone <- err
+							}
+						}()
+						// Wait for the concurrent input to commit before releasing the hook.
+						if err := <-racedDone; err != nil {
+							t.Errorf("concurrent %s failed: %v", kind, err)
+						}
+					})
+				}
+			})
+
+			env.advance(6 * time.Minute)
+			env.timers.fire(t, 0)
+			second := p.nextSend(t)
+			if strings.Contains(second.Text, "[system]") {
+				t.Fatalf("continuation prompt was co-mingled or injected after %s race: %q", kind, second.Text)
+			}
+			wantSub := "user raced in"
+			if kind == "Runner.PageInput" {
+				wantSub = "page raced in"
+			}
+			if !strings.Contains(second.Text, wantSub) {
+				t.Fatalf("delivered prompt = %q, want %q", second.Text, wantSub)
+			}
+			env.quiesce(id)
+			if st, _ := env.runner.Get(id); st.QuotaContinuation != nil {
+				t.Fatalf("State.QuotaContinuation after %s race = %+v, want nil", kind, st.QuotaContinuation)
+			}
+			if host := env.hostOf(id); host != nil && host.QuotaContinuation != nil {
+				t.Fatalf("Host.QuotaContinuation after %s race = %+v, want nil", kind, host.QuotaContinuation)
+			}
+			if rec := env.recordOf(id); rec.QuotaContinuation != nil {
+				t.Fatalf("Record.QuotaContinuation after %s race = %+v, want nil", kind, rec.QuotaContinuation)
+			}
+		})
+	}
+}
+
+func TestQuotaContinuationMailChangedAutoCancelAndDelivery(t *testing.T) {
+	env := newQuotaEnv(t, map[string]string{
+		wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+	}, 0)
+	id := env.createLead(BackendClaude)
+	if _, err := env.runner.Send(id, "initial"); err != nil {
+		t.Fatal(err)
+	}
+	p := env.backend.proc(t, 0)
+	first := p.nextSend(t)
+	p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+	p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit", ResetsAt: env.currentNow().Add(5 * time.Minute).UnixMilli()}, TurnID: first.TurnID}
+	p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+	env.waitIdle(id)
+
+	c := env.runner.conv(id)
+	wsKey := env.recordOf(id).WSKey
+	// Deliver a mailbox message through fakeMail -> Watch -> signalMail -> mailChanged.
+	// Also set quotaPendingFire to verify kick() falls through to kickInput()
+	// instead of stranding the mail.
+	c.do(func() { c.quotaPendingFire = true })
+	env.mail.mu.Lock()
+	env.mail.queued[wsKey] = append(env.mail.queued[wsKey], ClaimedMail{Text: "mail from peer lead"})
+	watch := env.mail.watches[wsKey]
+	env.mail.mu.Unlock()
+	if watch == nil {
+		t.Fatalf("expected mail watch registered for %q", wsKey)
+	}
+	watch()
+
+	second := p.nextSend(t)
+	if !strings.Contains(second.Text, "mail from peer lead") {
+		t.Fatalf("expected mail turn delivered, got %q", second.Text)
+	}
+	if strings.Contains(second.Text, "[system]") {
+		t.Fatalf("continuation prompt must not be injected with mail: %q", second.Text)
+	}
+	env.quiesce(id)
+	if st, _ := env.runner.Get(id); st.QuotaContinuation != nil {
+		t.Fatalf("QuotaContinuation after mailChanged = %+v, want nil", st.QuotaContinuation)
+	}
+	if host := env.hostOf(id); host != nil && host.QuotaContinuation != nil {
+		t.Fatalf("Host.QuotaContinuation after mailChanged = %+v, want nil", host.QuotaContinuation)
+	}
+}
+
+func TestQuotaContinuationHasPendingKickForStartForPublication(t *testing.T) {
+	env := newQuotaEnv(t, map[string]string{
+		wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+	}, 0)
+	id := env.createLead(BackendClaude)
+	if _, err := env.runner.Send(id, "initial"); err != nil {
+		t.Fatal(err)
+	}
+	p := env.backend.proc(t, 0)
+	first := p.nextSend(t)
+	p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+	p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit", ResetsAt: env.currentNow().Add(5 * time.Minute).UnixMilli()}, TurnID: first.TurnID}
+	p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+	env.waitIdle(id)
+
+	env.runner.Close()
+	env.runner = nil
+	env.advance(10 * time.Minute)
+	env.timers = &leverTimers{}
+	serving := make(chan struct{})
+	env.startRunner(0, serving)
+	eventually(t, "re-armed timer on StartForPublication", func() bool {
+		n, _ := env.timers.counts()
+		return n == 1
+	})
+	env.timers.fire(t, 0)
+	env.quiesce(id)
+
+	c := env.runner.conv(id)
+	var pending bool
+	c.do(func() {
+		pending = c.quotaPendingFire && c.hasPendingKick()
+	})
+	if !pending {
+		t.Fatalf("expected hasPendingKick() == true when quotaPendingFire is set before publication")
+	}
+	close(serving)
+	p2 := env.backend.proc(t, 1)
+	p2.nextSend(t)
 }

@@ -209,6 +209,10 @@ type conv struct {
 	quotaInjecting         bool
 	quotaPendingFire       bool
 	quotaCancelFence       atomic.Uint32
+	quotaInputGen          atomic.Uint64
+	// onQuotaBeforeSend is a test-only hook invoked in quotaContinuationTimedOut
+	// after persisting in_flight and before re-checking input under wmu+mu.
+	onQuotaBeforeSend func()
 
 	// loop-owned, except registration timing below.
 	events          <-chan Event
@@ -567,6 +571,9 @@ func (c *conv) mailChanged() {
 		// turn that runs submits nothing now, so nothing else would tell
 		// the page.
 		c.r.notify(rec.ReplyID, rec.Root)
+	}
+	if (len(mail) > 0 || len(c.rec.Mail) > 0) && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
 	}
 	// Mail claimed earlier and not yet delivered (a start that failed, a
 	// daemon that ended) goes with it: nothing else would submit it.
@@ -1341,6 +1348,7 @@ func (c *conv) release() {
 		rec.QuotaContinuation = nil
 		c.closed = true
 	})
+	c.syncHost(false)
 	c.dropHeld()
 	c.live.setAdapter("")
 	rec := c.record()
@@ -1778,7 +1786,7 @@ func (c *conv) hasPendingKick() bool {
 	held := c.held
 	c.mu.Unlock()
 	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
-		c.rec.DurableTurn != nil || c.kickDeferred.Load()
+		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire
 }
 
 // deferKickIfUnpublished defers a processless start kick until
@@ -1808,8 +1816,9 @@ func (c *conv) kick() {
 		return
 	}
 	if c.quotaPendingFire {
-		c.quotaContinuationTimedOut()
-		return
+		if c.quotaContinuationTimedOut() {
+			return
+		}
 	}
 	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
 		c.resumeDurableTurn()

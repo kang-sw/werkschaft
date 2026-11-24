@@ -246,6 +246,28 @@ func TestAgyMapperQuotaClassificationAndWatchdogExclusion(t *testing.T) {
 			t.Fatalf("503 no capacity should not be classified as quota")
 		}
 	})
+
+	t.Run("non-HTTP 429 substrings are not classified as quota", func(t *testing.T) {
+		for _, text := range []string{
+			"compile error at line 1429",
+			"failed to connect to localhost port 4290",
+			"request id 42999 timed out",
+		} {
+			if isAgyQuotaText(text) {
+				t.Fatalf("isAgyQuotaText(%q) = true, want false", text)
+			}
+		}
+		for _, text := range []string{
+			"HTTP 429 error",
+			"status: 429",
+			"error 429: slowed down",
+			"429 Too Many",
+		} {
+			if !isAgyQuotaText(text) {
+				t.Fatalf("isAgyQuotaText(%q) = false, want true", text)
+			}
+		}
+	})
 }
 
 type fakeWatchdogProc struct {

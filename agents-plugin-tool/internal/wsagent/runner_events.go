@@ -1279,6 +1279,7 @@ func (c *conv) closeIf(done func() bool) bool {
 // closed. It runs in the loop.
 func (c *conv) finishClose() {
 	c.stopQuotaTimer()
+	c.syncHost(false)
 	c.stopProcess("")
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
