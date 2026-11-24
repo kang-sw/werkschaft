@@ -785,9 +785,9 @@ func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
 	if at := lastActive(h.record(id)); time.Since(at) > time.Hour {
 		t.Fatalf("last activity %v was not stamped at retirement", at)
 	}
-	if h.runner.conv(id) != nil {
-		t.Fatal("the historical record is still eligible for an open child's expiry sweep")
-	}
+	// The closed state is published before the conversation leaves r.convs,
+	// so a loaded runner can observe the window between the two.
+	eventually(t, "the historical record to leave the open-child expiry sweep", func() bool { return h.runner.conv(id) == nil })
 	if st := h.state(id); st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("state = %+v", st)
 	}
