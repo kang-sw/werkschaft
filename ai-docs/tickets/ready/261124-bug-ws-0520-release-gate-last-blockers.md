@@ -622,3 +622,37 @@ decision under the owner's overnight directive.
   the Phase 5 unrelated-lock case still returns 200.
 - Rejected: treating a closed middle row as busy (would block Stop forever
   after any mid-tree close even when every live descendant is idle).
+
+#### Result (6)
+
+2026-11-25 · `25f98cf64`
+
+Safe-only Stop and its dashboard advisory follow retained closed records
+through the parent index. Admission pins live members of the target tree
+and checks their exec counts in one snapshot. The advisory checks live
+descendants after releasing the registry mutex. Both refuse pending spawn
+reservations under retained closed workers.
+
+The holder-backed regression releases the middle worker's linked checkout
+while the grandchild runs in the lead checkout. On `develop` at
+`8333ef0eb`, all three runs advertised `safe_stop=true` in state and
+session metadata, then returned HTTP 200 and stopped the lead. With the
+fix, both advisory views report false and HTTP returns 409. Settling the
+grandchild restores advisory safety and HTTP 200. A second regression
+covers refusal while a spawn reservation survives the middle worker's
+close and success after releasing the reservation. An unrelated held
+lock leaves the advisory safe and the HTTP response at 200.
+
+T0. The checks reuse in-memory records and the existing Stop request and
+response. They add zero file operations.
+
+- Passed `go build ./cmd/...`.
+- Passed `go test -race ./internal/wsagent -run '^Test(SafeStop|SafeOnlyStop|WerkCron)' -count=3`.
+- Passed `go test ./internal/wsagent -parallel 1` with
+  `TestAgyWorkerRetirementRestartsTheExpiryClock`,
+  `TestAgyParentedWorkerRecordWakesStampedOrFromItsParent`, and
+  `TestCompactionStateClosedChildKeepsItsCountAcrossARestart` skipped.
+- Passed `GOOS=windows go vet -stdversion=false ./internal/wsagent`
+  and `git diff --check`.
+- Independent lite review of `8333ef0eb..25f98cf64` reported no Critical
+  or Important findings (`fc00ff89-01-findings.md`).
