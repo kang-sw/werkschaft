@@ -102,7 +102,7 @@
           if (execDesc > 0 && typeof wsT === "function") parts.push(wsT("js.bgexec.split", String(execSelf), String(execDesc)));
           if (bg > 0) parts.push(wsTn("js.bgtasks", bg));
           if (parts.length) tip = label + " (" + parts.join(" \u00b7 ") + ")";
-          else if (typeof wsT === "function") tip = label + " \u00b7 " + wsT("js.bgexec.badge.tip");
+          else if (bgbadge.tagName === "BUTTON") tip = label + " \u00b7 " + wsT("js.bgexec.badge.tip");
         } else if (bgTitle) {
           tip = label + " \u00b7 " + bgTitle;
         }

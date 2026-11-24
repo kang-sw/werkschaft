@@ -213,7 +213,7 @@ func TestBgExecMonitorBrowser(t *testing.T) {
 	if shots != "" && !filepath.IsAbs(shots) {
 		t.Fatal("WS_BG_EXEC_SHOTS must be absolute")
 	}
-	f := startComposerFixture(t)
+	f := startComposerFixture(t, lanMode)
 	now := time.Now().UnixMilli()
 	zero := 0
 
@@ -404,7 +404,7 @@ func TestBgExecMonitorBrowser(t *testing.T) {
 	}()
 
 	script := "testdata/bg-exec-monitor.browser.cjs"
-	out, err := exec.CommandContext(ctx, "node", script, f.base, ctlSrv.URL, shots).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "node", script, f.base, ctlSrv.URL, shots, readLANToken(t, f.dir)).CombinedOutput()
 	t.Log(string(out))
 	if err != nil {
 		t.Fatalf("Chromium bg-exec monitor acceptance: %v", err)

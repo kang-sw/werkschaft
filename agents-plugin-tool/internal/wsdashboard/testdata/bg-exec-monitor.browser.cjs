@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 
-const [base, ctl, shotsDir] = process.argv.slice(2);
+const [base, ctl, shotsDir, lanToken] = process.argv.slice(2);
 if (!base || !ctl) throw new Error('usage: node bg-exec-monitor.browser.cjs <base> <ctl> [shotsDir]');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -46,7 +46,10 @@ async function openSessionFrame(context, url, errors) {
 
 async function main() {
   if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--host-resolver-rules=MAP dashboard-lan.test 127.0.0.1', '--no-proxy-server'],
+  });
   try {
     const errors = [];
     const context = await browser.newContext({
@@ -55,6 +58,31 @@ async function main() {
       colorScheme: 'dark',
     });
     await context.addCookies([{ name: 'ws_dashboard_lang', value: 'en', url: base }]);
+
+    const lan = await browser.newContext();
+    const lanURL = new URL(base);
+    lanURL.hostname = 'dashboard-lan.test';
+    await lan.addCookies([{ name: 'ws_dashboard_token', value: lanToken, url: lanURL.origin }]);
+    const lanErrors = [];
+    const { view: lanView } = await openSessionFrame(lan, lanURL.origin + '/s/livesession', lanErrors);
+    const lanBadge = lanView.locator('#bgbadge:not([hidden])');
+    await lanBadge.waitFor({ timeout: 10000 });
+    assert.equal(await lanBadge.evaluate((el) => el.tagName), 'SPAN', 'LAN gets a non-interactive background count');
+    assert.match(await lanBadge.locator('.blabel').textContent(), /3/);
+    assert.equal(await lanBadge.getAttribute('aria-haspopup'), null);
+    await lanBadge.click();
+    assert.equal(await lanView.locator('#bgpop').count(), 0);
+    for (const [method, endpoint, status] of [
+      ['GET', 'jobs', 404], ['GET', 'exec_l2_run/output', 404], ['POST', 'exec_l2_run/stop', 403],
+    ]) {
+      const actual = await lanView.evaluate(async ({ method, endpoint }) => {
+        const response = await fetch('/s/livesession/exec/bg/' + endpoint, { method });
+        return response.status;
+      }, { method, endpoint });
+      assert.equal(actual, status, `authenticated LAN ${method} ${endpoint}`);
+    }
+    await lan.close();
+    assert.deepEqual(lanErrors.filter((err) => !err.includes('status of 403')), []);
 
     const { page, view } = await openSessionFrame(context, `${base}/s/livesession`, errors);
     await view.waitForSelector('#bgbadge:not([hidden])', { timeout: 10000 });
@@ -213,7 +241,7 @@ async function main() {
     assert.equal(quietStats.counts.bgList || 0, 0, 'zero bg/jobs requests after close');
     assert.equal(quietStats.counts.bgOutput || 0, 0, 'zero bg/output requests after close');
 
-    // 10. Read-only mode (can_control: false): hold-to-stop completely hidden.
+    // 10. A list response that withdraws control removes the hold control.
     await context.route('**/exec/bg/jobs', async (route) => {
       const resp = await route.fetch();
       const body = await resp.json();

@@ -811,7 +811,7 @@
     });
   }
 
-  if (bgbadge) {
+  if (bgbadge && bgbadge.tagName === "BUTTON") {
     bgbadge.addEventListener("click", function () {
       bgExecToggle();
     });
