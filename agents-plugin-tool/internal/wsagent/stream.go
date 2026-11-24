@@ -155,7 +155,8 @@ func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
 // of the daemon's own child) before the first output line can arrive.
 func (p *streamProcess) startAudit(source string) {
 	if p.auditTap != nil && p.audit == nil {
-		p.audit = newAuditCapture(p.auditTap, p.auditHarness, source, p.auditAdapter)
+		reattaching := p.holder != nil && p.holder.replaying
+		p.audit = newAuditCapture(p.auditTap, p.auditHarness, source, p.auditAdapter, reattaching)
 	}
 }
 

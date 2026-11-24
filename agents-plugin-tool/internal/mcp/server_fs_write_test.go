@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsinbox"
+	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 func rawCorrelatedToolCall(t *testing.T, s *Server, name, callID string, arguments map[string]any) (string, bool) {
@@ -212,42 +216,150 @@ func TestBoundFileToolsObservePermissionChanges(t *testing.T) {
 	}
 }
 
-func TestModelFileToolsKeepOperatorSessionStateReadOnly(t *testing.T) {
+func TestModelFileToolsKeepDaemonStateReadOnly(t *testing.T) {
 	fx := newFSFixture(t, wsagent.BackendWerk)
 	dir, err := wsdashboard.Dir("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	session := wsdashboard.SessionDir(dir, fx.s.conversation)
+	ctx := context.Background()
+	db, err := wsmeta.Open(dir, wsmeta.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	row := wsmeta.DurableAgentRecord{ReplyID: fx.s.conversation, Backend: wsagent.BackendWerk, JSON: json.RawMessage(`{"operator":false}`)}
+	if err := db.PutDurableAgentRecord(ctx, row); err != nil {
+		t.Fatal(err)
+	}
 	fx.s.callerBinding = boundCallers{backends: map[string]string{fx.s.conversation: wsagent.BackendWerk}}
 	fx.s.fileWrites = &FileWriteSession{Authority: wsfs.AuthorityReadOnly}
+	var admitted []string
 	f := NewServerWithOptions(ServerOptions{
 		Root: fx.root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk,
 		FileWrites: &FileWriteSession{Root: fx.root, Authority: wsfs.AuthorityFull,
-			Record: func(context.Context, FileWriteCall) error {
-				t.Error("a model write to daemon session state reached mutation admission")
+			Record: func(_ context.Context, call FileWriteCall) error {
+				admitted = append(admitted, call.ID)
 				return nil
 			}},
 	})
+	const prior = `{"operator":false}`
+	const readOnly = "daemon state is read-only"
+	refuseWrite := func(path string) {
+		t.Helper()
+		if text, failed := rawCorrelatedToolCall(t, f, "fs.write", "write", map[string]any{"path": path, "content": `{"operator":true}`}); !failed || !strings.Contains(text, readOnly) {
+			t.Fatalf("write %s = %v, %s", path, failed, text)
+		}
+	}
+	dbPath := filepath.Join(dir, wsmeta.DBName)
+	refuseWrite(dbPath)
+	absentSidecars := 0
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		path := dbPath + suffix
+		_, statErr := os.Stat(path)
+		refuseWrite(path)
+		if errors.Is(statErr, os.ErrNotExist) {
+			absentSidecars++
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("creation of %s was not refused: %v", path, err)
+			}
+		} else if statErr != nil {
+			t.Fatal(statErr)
+		}
+	}
+	if absentSidecars == 0 {
+		t.Fatal("expected an absent SQLite sidecar")
+	}
+	agentRecord := filepath.Join(session, wsdashboard.AgentRecordFileName)
+	// The daemon can open this spelling on a case-insensitive volume.
+	permissionRecord := filepath.Join(session, strings.ToUpper(wsdashboard.SessionPermissionFileName))
+	systemPrompt := filepath.Join(session, wsdashboard.SessionSystemPromptFileName)
+	inbox := wsinbox.Dir(session)
+	inboxName, _, err := wsinbox.Send(inbox, wsinbox.Entry{Parts: []string{"fixture input"}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxEntry := filepath.Join(inbox, inboxName)
 	for _, path := range []string{
-		filepath.Join(session, "agent.json"),
-		filepath.Join(wsinbox.Dir(session), "entry.json"),
+		agentRecord,
+		permissionRecord,
+		systemPrompt,
+		filepath.Join(inbox, "entry.json"),
+		filepath.Join(dir, "another-daemon-state.json"),
 	} {
-		const prior = `{"operator":false}`
 		mustWrite(t, filepath.Dir(path), filepath.Base(path), prior)
 		if text, failed := fx.call("fs.read", map[string]any{"path": path}); failed || !strings.Contains(text, prior) {
 			t.Fatalf("read-only session state = %v, %s", failed, text)
 		}
-		if text, failed := rawCorrelatedToolCall(t, f, "fs.write", "write", map[string]any{"path": path, "content": `{"operator":true}`}); !failed || !strings.Contains(text, "session state is read-only") {
-			t.Fatalf("session-state write = %v, %s", failed, text)
-		}
+		refuseWrite(path)
 		edit := map[string]any{"path": path, "edits": []map[string]string{{"oldText": "false", "newText": "true"}}}
-		if text, failed := rawCorrelatedToolCall(t, f, "fs.edit", "edit", edit); !failed || !strings.Contains(text, "session state is read-only") {
+		if text, failed := rawCorrelatedToolCall(t, f, "fs.edit", "edit", edit); !failed || !strings.Contains(text, readOnly) {
 			t.Fatalf("session-state edit = %v, %s", failed, text)
 		}
 		if got, err := os.ReadFile(path); err != nil || string(got) != prior {
 			t.Fatalf("trusted state = %s, %v", got, err)
 		}
+	}
+	for i, path := range []string{dbPath, agentRecord, permissionRecord, systemPrompt, inboxEntry} {
+		alias := filepath.Join(fx.root, fmt.Sprintf("alias-%d", i))
+		if err := os.Link(path, alias); err != nil {
+			t.Fatal(err)
+		}
+		refuseWrite(alias)
+		if path == inboxEntry {
+			held, err := wsinbox.Held(inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if claimed, err := wsinbox.ClaimInputs(inbox, held); err != nil || len(claimed) != 1 {
+				t.Fatalf("claim fixture input: %v, %v", claimed, err)
+			}
+			refuseWrite(alias)
+		}
+	}
+	out := filepath.Join(fx.root, "project-workflow.md")
+	mustWrite(t, fx.root, filepath.Base(out), "old")
+	if text, failed := rawCorrelatedToolCall(t, f, "fs.write", "outside", map[string]any{"path": out, "content": "generated"}); failed {
+		t.Fatalf("project workflow write: %s", text)
+	}
+	if got, err := os.ReadFile(out); err != nil || string(got) != "generated" {
+		t.Fatalf("project workflow file = %s, %v", got, err)
+	}
+	if !slices.Equal(admitted, []string{"outside"}) {
+		t.Fatalf("admitted model writes = %v", admitted)
+	}
+	if got, err := db.DurableAgentRecords(ctx); err != nil || len(got) != 1 || got[0].ReplyID != row.ReplyID || got[0].Backend != row.Backend || string(got[0].JSON) != string(row.JSON) {
+		t.Fatalf("durable records = %+v, %v", got, err)
+	}
+}
+
+func TestModelFileToolsFailClosedWithoutDaemonStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(wsstate.EnvCacheHome, "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := wsdashboard.Dir(""); err == nil {
+		t.Fatal("test must leave the daemon directory unresolvable")
+	}
+	s := NewServerWithOptions(ServerOptions{
+		Root: root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk,
+		FileWrites: &FileWriteSession{Root: root, Authority: wsfs.AuthorityFull,
+			Record: func(context.Context, FileWriteCall) error {
+				t.Error("an unverifiable model write reached mutation admission")
+				return nil
+			}},
+	})
+	path := filepath.Join(root, "new-file")
+	if text, failed := rawCorrelatedToolCall(t, s, "fs.write", "write", map[string]any{"path": path, "content": "new"}); !failed || !strings.Contains(text, "resolve daemon state directory") {
+		t.Fatalf("write with an unresolvable daemon directory = %v, %s", failed, text)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("creation of the target was not refused: %v", err)
 	}
 }
 

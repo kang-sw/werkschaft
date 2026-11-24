@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 5d5605fdebfe79d1
 sage-review-completeness-reviewed: 5d5605fdebfe79d1
+completed: 2026-11-24
 ---
 
 # Fix the remaining ws 0.52 release-gate blockers
@@ -197,12 +198,54 @@ both land and a re-review clears.
   delivery is unchanged; operator input and cron delivery into other turns
   are unchanged.
 
+### Result (0f4e40110) - 2026-11-24
+
+- **C1** (`dbec2c0ed`, merge `78581cd17`): Unix replacements are created at
+  `0600` and take the destination's mode, owner, group and access ACL from a
+  verified handle before the first byte, rechecked before publish; anything
+  unreproducible aborts. macOS stages in a locked `0700`
+  `.ws-stage-<sha256(basename)>` child with its inherited ACL stripped and
+  verified; the next write to that basename reclaims an interrupted stage
+  (seven directory operations on the ordinary path, enumeration only on
+  recovery). Windows passes the destination's DACL, protection, owner and
+  integrity label to `NtCreateFile` and verifies them before write and
+  publish; empty and null DACLs stay distinct.
+- **C6** (`a689c7952`, `baff69e5d`): the loader and the model guard share one
+  verified read-only open, so a linked credential name is protected by name
+  and target identity; a missing name reports not-exist without invalidating
+  the guard. Git worktree-content commands refuse a linked credential name.
+- **C7** (`0b351a9bb`, `8a06164a0`, merge `0f4e40110`): model writes are
+  refused anywhere under the daemon state directory, and fail closed when it
+  cannot be resolved. An existing multi-link destination is compared by
+  identity against the metadata store, its sidecars and the trusted session
+  files; a single-link edit skips that inventory (zero extra Unix syscalls,
+  one handle query per check on Windows). Runbook: `a510cf47d`.
+- **Cron consent** (`5388ec94b`, `f5d55f303`, merge `7dba48077`): with consent
+  off, cron is checked before model-log admission, is not steered into or
+  batched with an operator plan turn, and runs afterwards as its own
+  background entry. Consent authorizes at the durable claim boundary; a claim
+  accepted with consent on may resume after a crash-interrupted revocation.
+
+Verification on `0f4e40110`: macOS full `go test ./internal/mcp -timeout 45m`
+(706 s), `./internal/wsagent`, `./internal/wsfs`, `./internal/wscron`,
+`./cmd/ws-mcp`, `./internal/wscred -race` and the focused wsdashboard run
+passed; native Windows `wsfs`, `wsstate`, `wsmeta`, `wscred`, focused
+wsdashboard and mcp `FS|Write|Edit|GitSearch|Credential|ModelFileTools`
+passed. Linux ACL cases passed in a container on the slice.
+
 ### Phase 2: Dashboard deletion occupancy
 
 - **Dashboard deletion** `internal/wsdashboard/railworktreedelete.go:465`.
   Test: preview and final deletion refuse a checkout with an active legacy Pi
   descriptor without a saved holder ID (including a holder that appears
   between preview and purge), and allow it after the holder exits.
+
+### Result (128b36229) - 2026-11-24
+
+`89acc54d6` (merge `128b36229`): preview and final deletion consult
+`Runner.WorktreePiOccupied`; a live legacy Pi descriptor, or a scan that
+cannot complete, refuses the deletion before the purge. Git force applies
+only to Git. Verified in the focused wsdashboard runs above.
 
 ### Phase 3: agy audit
 
@@ -212,6 +255,15 @@ both land and a re-review clears.
 - **Thought bound** `internal/wsagent/audit_agy.go:94`. Test: a long thought
   carried across finalized intervals never grows the builder past the bound,
   and is recorded as one capture-cap loss marker without body text.
+
+### Result (128b36229) - 2026-11-24
+
+- **Replay baseline** (`1cb0b2902`): a reattaching capture recovers the
+  recorded compaction baseline (`Store.RecoverCompactionBaseline`), so a
+  restart before the next usage sample keeps exactly one cut at its original
+  position.
+- **Thought bound** (`a3bb614b1`, merge `128b36229`): agy thought capture is
+  capped at 1 MiB; an overflow records one bodyless `capture_cap` loss marker.
 
 All code paths are relative to `agents-plugin-tool/`.
 

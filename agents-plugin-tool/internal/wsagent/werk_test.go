@@ -156,6 +156,11 @@ func (f *werkFixture) start(h *leadHarness) {
 
 func werkHarness(t *testing.T, model *werkModel) (*leadHarness, *werkFixture, *reports) {
 	t.Helper()
+	return werkHarnessWithBackend(t, model, WerkBackend{})
+}
+
+func werkHarnessWithBackend(t *testing.T, model *werkModel, backend WerkBackend) (*leadHarness, *werkFixture, *reports) {
+	t.Helper()
 	h := newLeadHarness(t)
 	got := &reports{}
 	h.opts.Report = got.add
@@ -163,7 +168,7 @@ func werkHarness(t *testing.T, model *werkModel) (*leadHarness, *werkFixture, *r
 		return MCPCommand{}, errors.New("daemon loop attempted to resolve a launcher")
 	}
 	h.opts.DaemonMCP = func(string) (MCPCommand, error) { return MCPCommand{}, nil }
-	_, reg := (WerkBackend{}).registration()
+	_, reg := backend.registration()
 	if reg.ProcessKind != ProcessDurable {
 		t.Fatal("the production registration did not select the daemon loop")
 	}

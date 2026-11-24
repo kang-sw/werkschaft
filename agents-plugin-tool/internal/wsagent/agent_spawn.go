@@ -329,13 +329,13 @@ func (r *Runner) rememberRetiredPiBinding(rec Record) {
 	r.mu.Unlock()
 }
 
-func (r *Runner) boundRetiredPiHolders(target string) []retiredPiBinding {
+func (r *Runner) boundRetiredPiHolders(target string) (matches []retiredPiBinding, complete bool) {
 	if r.opts.Holders == nil {
-		return nil
+		return nil, true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	complete := r.scanDone()
+	complete = r.scanDone()
 	listed := r.opts.Holders.List()
 	complete = complete && !listed.Incomplete
 	alive := make(map[string]bool, len(listed.Holders))
@@ -361,7 +361,6 @@ func (r *Runner) boundRetiredPiHolders(target string) []retiredPiBinding {
 			child:     BoundWorktreeChild{Address: AgentAddress(meta.ReplyID), State: AgentRunning, Cwd: meta.Cwd, Live: true},
 		}
 	}
-	var matches []retiredPiBinding
 	for id, binding := range r.retiredPiBindings {
 		live, known := alive[id]
 		if !live && (known || complete) {
@@ -372,7 +371,14 @@ func (r *Runner) boundRetiredPiHolders(target string) []retiredPiBinding {
 			matches = append(matches, binding)
 		}
 	}
-	return matches
+	return matches, complete
+}
+
+// WorktreePiOccupied reports live retired Pi holders and treats an
+// incomplete holder inventory as occupied for dashboard checkout deletion.
+func (r *Runner) WorktreePiOccupied(worktree string) bool {
+	matches, complete := r.boundRetiredPiHolders(canonicalWorktreePath(worktree))
+	return !complete || len(matches) != 0
 }
 
 // ActiveChildrenInWorktree returns every conversation in the runner whose
@@ -393,7 +399,8 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 		child     BoundWorktreeChild
 	}
 	var matches []match
-	for _, binding := range r.boundRetiredPiHolders(target) {
+	retired, _ := r.boundRetiredPiHolders(target)
+	for _, binding := range retired {
 		matches = append(matches, match{createdAt: binding.createdAt, child: binding.child})
 	}
 	for _, c := range r.boundConvs(target) {

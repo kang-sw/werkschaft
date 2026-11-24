@@ -8,11 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
 	"golang.org/x/sys/windows"
 )
+
+// CredentialNameIsLink checks a credential name for any reparse point,
+// including types Go does not mark as ModeSymlink.
+func CredentialNameIsLink(info os.FileInfo) bool {
+	attributes, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	return ok && attributes.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
 
 // restrictFile replaces the still-empty temp file's DACL with a protected
 // one (no inherited entries) granting the current user alone full access.
@@ -30,7 +38,10 @@ func restrictFile(_ *os.File, name string) error {
 // file's, and the user's profile directory already excludes other users.
 func restrictDir(string) error { return nil }
 
-func openCredentialFile(path string, write bool) (*os.File, error) {
+func openCredentialFile(path string, write, follow bool) (*os.File, error) {
+	if follow {
+		return openCredentialHandleWithFlags(path, windows.GENERIC_READ, 0)
+	}
 	access := uint32(windows.FILE_READ_ATTRIBUTES)
 	if write {
 		access |= windows.GENERIC_WRITE | windows.DELETE
@@ -39,12 +50,15 @@ func openCredentialFile(path string, write bool) (*os.File, error) {
 }
 
 func openCredentialHandle(path string, access uint32) (*os.File, error) {
+	return openCredentialHandleWithFlags(path, access, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT)
+}
+
+func openCredentialHandleWithFlags(path string, access, flags uint32) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
 	const share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
-	const flags = windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OPEN_REPARSE_POINT
 	handle, err := windows.CreateFile(name, access, share, nil, windows.OPEN_EXISTING, flags, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}

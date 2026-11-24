@@ -459,3 +459,50 @@ func TestRetiredPiHolderBlocksWorktreeUntilExit(t *testing.T) {
 		t.Fatalf("exited holder still occupies the worktree: %+v", bound)
 	}
 }
+
+func TestRetiredPiDescriptorOccupiesCheckoutUntilExit(t *testing.T) {
+	dir, checkout := t.TempDir(), t.TempDir()
+	holders := newFakeHolders()
+	const session = "descriptorpi"
+	cwd := filepath.Join(checkout, "pkg")
+	if err := os.Mkdir(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	holder := holders.add(holderSession{
+		Kind: holderKindPiWorker, ReplyID: session, Cwd: cwd,
+	})
+	rec := Record{
+		ReplyID: session, Backend: BackendPi, Cwd: checkout,
+		WSKey: "fixture", Profile: "custom-profile", Parent: &leadParent,
+	}
+	if err := writeRecord(wsdashboard.SessionDir(dir, session), rec); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(Options{Dir: dir, Holders: holders})
+	t.Cleanup(r.Close)
+	if !r.WorktreePiOccupied(checkout) {
+		t.Fatal("unchecked inventory was taken for vacancy")
+	}
+	r.Start(nil)
+	wait(t, "holder scan", r.rejoined)
+	bound := r.ActiveChildrenInWorktree(checkout)
+	if len(bound) != 1 || bound[0].Address != AgentAddress(session) || !bound[0].Live {
+		t.Fatalf("live descriptor's release and reuse binding = %+v", bound)
+	}
+	if !r.WorktreePiOccupied(checkout) || r.WorktreePiOccupied(t.TempDir()) {
+		t.Fatal("dashboard occupancy did not match the live descriptor's checkout")
+	}
+	holders.exit(holder, 0)
+	holders.mu.Lock()
+	holders.incomplete = true
+	holders.mu.Unlock()
+	if !r.WorktreePiOccupied(checkout) {
+		t.Fatal("incomplete inventory was taken for vacancy")
+	}
+	holders.mu.Lock()
+	holders.incomplete = false
+	holders.mu.Unlock()
+	if r.WorktreePiOccupied(checkout) {
+		t.Fatal("exited descriptor still blocks dashboard deletion")
+	}
+}

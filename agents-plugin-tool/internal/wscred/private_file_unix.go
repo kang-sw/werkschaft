@@ -8,8 +8,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func openCredentialFile(path string, write bool) (*os.File, error) {
-	flags := unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+func openCredentialFile(path string, write, follow bool) (*os.File, error) {
+	flags := unix.O_CLOEXEC | unix.O_NONBLOCK
+	if !follow {
+		flags |= unix.O_NOFOLLOW
+	}
 	if write {
 		flags |= unix.O_WRONLY
 	}

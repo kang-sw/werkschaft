@@ -144,6 +144,17 @@ type worktreeDeleteAnswer struct {
 	Message string `json:"message"`
 }
 
+// worktreePiOccupancy is the agent host's live retired Pi holder check.
+// An incomplete inventory reports occupied.
+type worktreePiOccupancy interface {
+	WorktreePiOccupied(worktree string) bool
+}
+
+func (d *Daemon) worktreePiOccupied(worktree string) bool {
+	host, ok := d.agents.(worktreePiOccupancy)
+	return ok && host.WorktreePiOccupied(worktree)
+}
+
 // deleteListEntry is one worktree of git worktree list --porcelain, with
 // what a delete checks.
 type deleteListEntry struct {
@@ -477,7 +488,7 @@ func (d *Daemon) checkWorktreeDelete(ctx context.Context, root, path string, now
 	switch {
 	case c.Locked:
 		c.Refusal = deleteLocked
-	case len(c.Holders) > 0 && c.Holders[0].Live:
+	case (len(c.Holders) > 0 && c.Holders[0].Live) || d.worktreePiOccupied(c.Path):
 		c.Refusal = deleteBusy
 	}
 	return c, nil
@@ -607,6 +618,12 @@ func (d *Daemon) handleWorktreeDelete(w http.ResponseWriter, r *http.Request) {
 	var endedBefore map[string]bool
 	if d.index != nil {
 		endedBefore = worktreeEndedSessions(c.Path, realTarget, d.index.Sessions(), time.Now())
+	}
+	if d.worktreePiOccupied(realTarget) {
+		c.Refusal = deleteBusy
+		c.Note = worktreeDeleteNote(lang, c)
+		writeJSON(w, http.StatusConflict, c)
+		return
 	}
 	purger, _ := d.agents.(AgentHistoryPurger)
 	if purger != nil {
