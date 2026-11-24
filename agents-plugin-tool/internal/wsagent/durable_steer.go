@@ -43,34 +43,35 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 		pendingCount := len(pending)
 		var claimed []wsinbox.Record
 		unclaimed := len(held)
-		claim := func(disposition wsinbox.CronClaimDisposition) {
-			if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
-				return
-			}
-			skipSteer := func(rec wsinbox.Record) bool {
-				return !rec.Entry.Steer || rec.Entry.Command != nil || refusedCron(rec)
-			}
+		skipSteer := func(rec wsinbox.Record) bool {
+			return !rec.Entry.Steer || rec.Entry.Command != nil
+		}
+		if err == nil {
 			pending = slices.DeleteFunc(pending, skipSteer)
-			claimed, err = wsinbox.ClaimInputs(c.inbox, slices.DeleteFunc(held, skipSteer))
+			held = slices.DeleteFunc(held, skipSteer)
+			c.withCronClaimConsent(pending, held, func(disposition wsinbox.CronClaimDisposition) {
+				if err = classifyCronClaims(c.inbox, pending, held, disposition); err != nil {
+					return
+				}
+				claimed, err = wsinbox.ClaimInputs(c.inbox, held)
+			})
 			if p != nil {
 				c.held = unclaimed - len(claimed)
 			}
 		}
-		if err == nil {
-			if c.rec.DurableTurn != nil && c.rec.DurableTurn.Operator {
-				c.withCronClaimConsent(pending, held, claim)
-			} else {
-				claim("")
-			}
-		}
+		claimedCount := len(claimed)
+		// Leave refusals staged for the idle path to settle. Only admitted
+		// text can enter Werk's journal or the runner's steer fallback.
+		pending = slices.DeleteFunc(pending, refusedCron)
+		claimed = slices.DeleteFunc(claimed, refusedCron)
 		// Send coverage is a prefix. A manually promoted message can
 		// overtake a held follow-up, so only advance when no input is left.
 		covered := c.rec.TurnMark
-		if c.held == 0 && pendingCount == len(pending) && len(c.rec.Queued) == 0 {
+		if c.held == 0 && pendingCount == len(pending) && claimedCount == len(claimed) && len(c.rec.Queued) == 0 {
 			covered = c.sends
 		}
 		c.mu.Unlock()
-		c.inboxMutated(len(claimed))
+		c.inboxMutated(claimedCount)
 		if err != nil {
 			c.durableTurnError("claim steering", err)
 			return
