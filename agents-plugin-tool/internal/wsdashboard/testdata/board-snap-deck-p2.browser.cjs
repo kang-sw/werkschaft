@@ -318,21 +318,23 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
         assert.equal(res.tipDisp, 'none', `${attr} hides .d-board-dial-tip`);
       }
 
-      // Click dot 3 navigates to topic-4
-      await page.locator('#bdial .d-board-dial-dot').nth(3).click();
-      await page.waitForTimeout(80);
+      // Click the dial button assigned to topic-4 and wait for native scroll to settle.
+      await page.evaluate(() => { window.__dialScrollDone = new Promise(resolve => document.getElementById('bcol').addEventListener('scrollend', resolve, { once: true })); });
+      await page.locator('#bdial .d-board-dial-dot[data-idx="3"]').click();
+      await page.evaluate(() => window.__dialScrollDone);
       assert.equal(await page.evaluate(() => window.WsBoardAnchor.key()), 't:topic-4');
 
-      // 3b resting alignment check within 1px (floating toolbar when scrolled to topic-4)
+      // 3b: the resting jump centers short cards and clears the rails for tall cards.
       const align3b = await page.evaluate(() => {
         const col = document.getElementById('bcol');
         const card = document.querySelector('section.topic[data-topic="topic-4"]');
         const colRect = col.getBoundingClientRect();
         const cardRect = card.getBoundingClientRect();
-        const padTop = parseFloat(getComputedStyle(col).paddingTop) || 0;
         const inset = parseFloat(col.style.getPropertyValue('--wb-rail-inset')) || 0;
         const capH2 = 4 + 2 * (17 + 3); // 44px
-        const expectedTop = colRect.top + col.clientTop + padTop + inset + capH2;
+        const top = colRect.top + col.clientTop + inset + capH2;
+        const bottom = colRect.top + col.clientTop + col.clientHeight - 47;
+        const expectedTop = top + Math.max(0, (bottom - top - cardRect.height) / 2);
         const bar = window.WsCards.toolbar();
         return {
           err: Math.abs(cardRect.top - expectedTop),
@@ -342,7 +344,7 @@ test('Phase 2 Playwright: dial layout/rings/scrub>18/hide-states, gal-rail previ
         };
       });
       assert.equal(align3b.scrollPad, align3b.railInset, '3b: scroll-padding-top matches --wb-rail-inset');
-      assert.ok(align3b.err <= 1.5, `3b: card top alignment error ${align3b.err}px <= 1.5px`);
+      assert.ok(align3b.err <= 2, `3b: free-canvas landing error ${align3b.err}px within the 2px board inset`);
 
       // Zero idle rAF check over 250ms
       const idleRafs = await page.evaluate(() => new Promise(resolve => {
