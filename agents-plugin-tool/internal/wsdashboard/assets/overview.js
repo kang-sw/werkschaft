@@ -63,48 +63,57 @@
     if (grid && grid.getAttribute("data-layout") === "tabs") return false;
     return !!doc.getElementById("bgal");
   }
+  function stripIds(el) {
+    if (!el) return el;
+    if (el.removeAttribute) el.removeAttribute("id");
+    var kids = el.children;
+    if (kids) {
+      for (var i = 0; i < kids.length; i++) stripIds(kids[i]);
+    }
+    return el;
+  }
+  function copyAttrs(from, to, names) {
+    for (var i = 0; i < names.length; i++) {
+      var k = names[i];
+      if (from.hasAttribute(k)) to.setAttribute(k, from.getAttribute(k));
+    }
+  }
   function buildPlaceholder(node, height) {
     var ph = doc.createElement("div");
-    ph.className = "overview-placeholder overview-previewing" + (node.classList.contains("overview-here") ? " overview-here" : "");
+    var isTopic = node.hasAttribute("data-topic");
+    var cls = "overview-placeholder overview-previewing" + (isTopic ? " topic" : " bcard");
+    if (isTopic && node.classList.contains("quiet")) cls += " quiet";
+    if (isTopic && node.classList.contains("closed")) cls += " closed";
+    if (node.classList.contains("overview-here")) cls += " overview-here";
+    ph.className = cls;
     ph.setAttribute("data-overview-placeholder", "");
-    if (node.hasAttribute("data-topic")) ph.setAttribute("data-overview-target-topic", node.getAttribute("data-topic"));
+    if (isTopic) ph.setAttribute("data-overview-target-topic", node.getAttribute("data-topic"));
     if (node.hasAttribute("data-card")) ph.setAttribute("data-overview-target-card", node.getAttribute("data-card"));
     if (height > 0) ph.style.height = height + "px";
     ph.setAttribute("tabindex", node.getAttribute("tabindex") === "0" ? "0" : "-1");
-    var head = doc.createElement("div");
-    head.className = "overview-placeholder-head";
-    var titleEl = doc.createElement("span");
-    titleEl.className = "overview-placeholder-title";
-    var badgeText = "", titleText = "", recapText = "";
-    if (node.hasAttribute("data-topic")) {
-      var tn = node.querySelector(":scope > .tophead > .tbar .tname, :scope > .tophead > .tbar h2, :scope > .tophead > .tbar .t-title");
-      titleText = (tn ? tn.textContent : node.getAttribute("data-topic") || "").trim();
-      var sb = node.querySelector(":scope > .tophead > .tbar .tstate, :scope > .tophead > .tbar .badge");
-      if (sb) badgeText = sb.textContent.trim();
-      var rc = node.querySelector(".trecap .rtext");
-      if (rc) recapText = rc.textContent.trim();
+    if (isTopic) {
+      copyAttrs(node, ph, ["data-state", "data-size", "data-board-held"]);
+      var head = node.querySelector(":scope > .tophead");
+      if (head && head.cloneNode) {
+        var headClone = stripIds(head.cloneNode(true));
+        headClone.inert = true;
+        headClone.setAttribute("aria-hidden", "true");
+        ph.appendChild(headClone);
+      }
     } else {
-      var nm = node.querySelector(".bc-nm");
-      var sub = node.querySelector(".bc-sub");
-      var kd = node.querySelector(".bc-kind");
-      titleText = (nm ? nm.textContent : node.getAttribute("data-card") || "").trim();
-      if (kd) badgeText = kd.textContent.trim();
-      if (sub) recapText = sub.textContent.trim();
-    }
-    titleEl.textContent = titleText;
-    head.appendChild(titleEl);
-    if (badgeText) {
-      var bEl = doc.createElement("span");
-      bEl.className = "overview-placeholder-badge";
-      bEl.textContent = badgeText;
-      head.appendChild(bEl);
-    }
-    ph.appendChild(head);
-    if (recapText) {
-      var rEl = doc.createElement("div");
-      rEl.className = "overview-placeholder-recap";
-      rEl.textContent = recapText;
-      ph.appendChild(rEl);
+      copyAttrs(node, ph, ["data-kind", "data-file-state", "data-exited", "data-size"]);
+      var hd = node.querySelector(":scope > .bc-in > .bc-hd") || node.querySelector(".bc-hd");
+      if (hd && hd.cloneNode) {
+        var bcIn = doc.createElement("div");
+        bcIn.className = "bc-in";
+        bcIn.inert = true;
+        bcIn.setAttribute("aria-hidden", "true");
+        var hdClone = stripIds(hd.cloneNode(true));
+        hdClone.inert = true;
+        hdClone.setAttribute("aria-hidden", "true");
+        bcIn.appendChild(hdClone);
+        ph.appendChild(bcIn);
+      }
     }
     return ph;
   }
