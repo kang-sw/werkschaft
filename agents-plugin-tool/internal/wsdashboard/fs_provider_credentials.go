@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -99,4 +100,35 @@ func (p *ProviderCredentialProtection) CheckOpened(info os.FileInfo) error {
 		return errProviderCredentialPath
 	}
 	return nil
+}
+
+// HasLinkedCredentialFiles inspects only the store's regular credential
+// generations, including the link held while the previous generation retires.
+func (p *ProviderCredentialProtection) HasLinkedCredentialFiles() (bool, error) {
+	for _, path := range p.credentialFiles {
+		if networkPath(path) || deviceElement(path) {
+			return false, errProviderCredentialPath
+		}
+		linked, err := providerCredentialHasMultipleLinks(path)
+		if linked || err != nil {
+			return linked, err
+		}
+	}
+	return false, nil
+}
+
+func providerCredentialHasMultipleLinks(path string) (bool, error) {
+	file, err := wscred.OpenCredentialFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return false, err
+	}
+	return wsfs.HasMultipleLinks(file, info)
 }
