@@ -518,6 +518,58 @@ func TestWorktreeDeleteRefusesARunningTerminal(t *testing.T) {
 	f.refused(t, worktreeDeleteRequest{Path: wt}, deleteBusy)
 }
 
+type deletePiAgents struct {
+	deleteRetryAgents
+	checks atomic.Int32
+	busyAt atomic.Int32
+}
+
+func (a *deletePiAgents) WorktreePiOccupied(string) bool {
+	busyAt := a.busyAt.Load()
+	return busyAt > 0 && a.checks.Add(1) >= busyAt
+}
+
+func TestWorktreeDeleteRefusesRetiredPiOccupancy(t *testing.T) {
+	var purges atomic.Int32
+	agents := &deletePiAgents{}
+	agents.prepare = func(string) error {
+		purges.Add(1)
+		return nil
+	}
+	f := newDeleteFixtureWithAgents(t, agents)
+	wt := filepath.Join(f.tmp, "retired-pi")
+	gitRun(t, f.root, "worktree", "add", "-q", "-b", "retired-pi", wt)
+	if err := os.WriteFile(filepath.Join(wt, "draft"), []byte("draft\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	agents.busyAt.Store(1)
+	c := f.check(t, wt)
+	if c.Refusal != deleteBusy || !c.Force {
+		t.Fatalf("preview with Pi occupancy = %+v", c)
+	}
+	req := worktreeDeleteRequest{Path: wt, Force: true, Token: c.Token}
+	f.refused(t, req, deleteBusy)
+
+	agents.busyAt.Store(0)
+	if c := f.check(t, wt); c.Refusal != "" {
+		t.Fatalf("preview with no holder = %+v", c)
+	}
+	// A holder arriving after submit's first check must still block the purge.
+	agents.checks.Store(0)
+	agents.busyAt.Store(2)
+	f.refused(t, req, deleteBusy)
+	if purges.Load() != 0 {
+		t.Fatal("busy checkout reached archive purge")
+	}
+
+	agents.busyAt.Store(0)
+	f.deleted(t, req)
+	if purges.Load() != 1 || !agents.done.Load() {
+		t.Fatal("vacant checkout did not complete archive purge")
+	}
+}
+
 // TestWorktreeDeleteForce pins the force gate: a branch worktree whose
 // commits no other branch reaches deletes without force and keeps its
 // branch; changed or untracked files, a detached HEAD's unreached commits,
