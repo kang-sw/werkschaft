@@ -143,13 +143,14 @@ func TestScopedFileToolsLeaveExternalHardLinkUnchanged(t *testing.T) {
 					}
 				}
 				s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: []string{}, Conversation: "bound", ExecCutover: wsagent.BackendWerk, FileWrites: binding})
-				if text, failed := rawCorrelatedToolCall(t, s, tc.tool, "fixture-call", tc.args); !failed || !strings.Contains(text, "cannot modify a shared file") {
+				if text, failed := rawCorrelatedToolCall(t, s, tc.tool, "fixture-call", tc.args); failed {
 					t.Fatalf("%s = %v, %s", tc.tool, failed, text)
 				}
-				for _, path := range []string{target, alias} {
-					if data, err := os.ReadFile(path); err != nil || string(data) != "old" {
-						t.Errorf("read %s = %q, %v", path, data, err)
-					}
+				if data, err := os.ReadFile(target); err != nil || string(data) != "new" {
+					t.Errorf("target = %q, %v", data, err)
+				}
+				if data, err := os.ReadFile(alias); err != nil || string(data) != "old" {
+					t.Errorf("external alias = %q, %v", data, err)
 				}
 			})
 		}

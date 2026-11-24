@@ -1,6 +1,7 @@
 package wsfs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,11 +11,64 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func hasSingleLink(file *os.File, _ os.FileInfo) (bool, error) {
-	var info windows.ByHandleFileInformation
-	err := windows.GetFileInformationByHandle(windows.Handle(file.Fd()), &info)
-	runtime.KeepAlive(file)
-	return info.NumberOfLinks == 1, err
+func openMutationTemp(parent *os.File, name string) (*os.File, error) {
+	return openMutationAt(parent, name, windows.GENERIC_WRITE|windows.FILE_READ_ATTRIBUTES|windows.DELETE, windows.FILE_NON_DIRECTORY_FILE, true)
+}
+
+func setMutationTempMode(*os.File, os.FileMode) error { return nil }
+
+func publishMutationTemp(parent, tmp *os.File, name string, replace bool) error {
+	// The target name is relative to the pinned directory handle. POSIX
+	// replacement allows existing handles that share delete to remain open.
+	type renameInfo struct {
+		flags         uint32
+		rootDirectory windows.Handle
+		nameLength    uint32
+		name          [256]uint16
+	}
+	path := filepath.Join(parent.Name(), name)
+	if !validMutationName(name) {
+		return &os.PathError{Op: "rename", Path: path, Err: windows.ERROR_INVALID_NAME}
+	}
+	name16, err := windows.UTF16FromString(name)
+	if err != nil {
+		return err
+	}
+	info := renameInfo{
+		rootDirectory: windows.Handle(parent.Fd()),
+		nameLength:    uint32((len(name16) - 1) * 2),
+	}
+	if len(name16) > len(info.name) {
+		return &os.PathError{Op: "rename", Path: path, Err: windows.ERROR_FILENAME_EXCED_RANGE}
+	}
+	copy(info.name[:], name16)
+	if replace {
+		info.flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	}
+	buf := (*byte)(unsafe.Pointer(&info))
+	size := uint32(unsafe.Sizeof(info))
+	handle := windows.Handle(tmp.Fd())
+	const fileRenameInformationEx = 65
+	err = windows.NtSetInformationFile(handle, &windows.IO_STATUS_BLOCK{}, buf, size, fileRenameInformationEx)
+	if errors.Is(err, windows.STATUS_INVALID_PARAMETER) || errors.Is(err, windows.STATUS_NOT_SUPPORTED) || errors.Is(err, windows.STATUS_INVALID_INFO_CLASS) {
+		info.flags &= windows.FILE_RENAME_REPLACE_IF_EXISTS
+		err = windows.NtSetInformationFile(handle, &windows.IO_STATUS_BLOCK{}, buf, size, windows.FileRenameInformation)
+	}
+	runtime.KeepAlive(parent)
+	runtime.KeepAlive(tmp)
+	if code, ok := err.(windows.NTStatus); ok {
+		err = code.Errno()
+	}
+	if err != nil {
+		return &os.PathError{Op: "rename", Path: path, Err: err}
+	}
+	return nil
+}
+
+func discardMutationTemp(_ *os.File, tmp *os.File) {
+	removeOnClose := byte(1)
+	_ = windows.SetFileInformationByHandle(windows.Handle(tmp.Fd()), windows.FileDispositionInfo, &removeOnClose, 1)
+	runtime.KeepAlive(tmp)
 }
 
 func openMutationDir(parent *os.File, name string, create bool) (*os.File, error) {
@@ -44,9 +98,13 @@ func openMutationFile(parent *os.File, name string, flags int) (*os.File, error)
 
 const mutationShare = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 
+func validMutationName(name string) bool {
+	return filepath.IsLocal(name) && !strings.ContainsAny(name, `:/\`)
+}
+
 func openMutationAt(parent *os.File, name string, access, options uint32, create bool) (*os.File, error) {
 	path := filepath.Join(parent.Name(), name)
-	if !filepath.IsLocal(name) || strings.ContainsAny(name, `:/\`) {
+	if !validMutationName(name) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: windows.ERROR_INVALID_NAME}
 	}
 	child, err := windows.NewNTUnicodeString(name)

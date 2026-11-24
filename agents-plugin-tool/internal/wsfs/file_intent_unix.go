@@ -3,21 +3,45 @@
 package wsfs
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-func hasSingleLink(_ *os.File, info os.FileInfo) (bool, error) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return false, errors.ErrUnsupported
+func openMutationTemp(parent *os.File, name string) (*os.File, error) {
+	return openMutationFile(parent, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+}
+
+func setMutationTempMode(file *os.File, mode os.FileMode) error {
+	return file.Chmod(mode.Perm() | mode&os.ModeSticky)
+}
+
+func publishMutationTemp(parent, tmp *os.File, name string, replace bool) error {
+	fd := int(parent.Fd())
+	old := filepath.Base(tmp.Name())
+	var err error
+	if replace {
+		err = unix.Renameat(fd, old, fd, name)
+	} else {
+		// Link the fully written file into a new entry. Linkat refuses an
+		// entry created by someone else since admission, like O_EXCL.
+		err = unix.Linkat(fd, old, fd, name, 0)
+		if err == nil {
+			err = unix.Unlinkat(fd, old, 0)
+		}
 	}
-	return stat.Nlink == 1, nil
+	runtime.KeepAlive(parent)
+	if err != nil {
+		return &os.PathError{Op: "publish", Path: filepath.Join(parent.Name(), name), Err: err}
+	}
+	return nil
+}
+
+func discardMutationTemp(parent, tmp *os.File) {
+	_ = unix.Unlinkat(int(parent.Fd()), filepath.Base(tmp.Name()), 0)
+	runtime.KeepAlive(parent)
 }
 
 func openMutationDir(parent *os.File, name string, create bool) (*os.File, error) {
