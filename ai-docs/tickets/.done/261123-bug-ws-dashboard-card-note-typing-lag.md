@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: eebef4f4c95cdbf6
 sage-review-completeness-reviewed: eebef4f4c95cdbf6
+completed: 2026-11-24
 ---
 
 # Fix Per-Keystroke `#ctext` Capsule Recreation During Board Card Note Typing
@@ -96,3 +97,26 @@ Eliminate per-keystroke `#ctext` DOM teardown during board card note typing and 
 - Local targeted `node --test` on `agents-plugin-tool/internal/wsdashboard/testdata/capsules.test.cjs`, `composer-inline.test.cjs`, and `composer-note-chips.test.cjs`.
 - Playwright regression check on `agents-plugin-tool/internal/wsdashboard/testdata/note-typing.browser.cjs` (standalone script requiring `WS_PLAYWRIGHT_MODULE`, run via `node` when Playwright Chromium is available or via Go `capsules_browser_test.go` on remote `w5090`).
 - Remote `w5090` Go verification for dashboard asset assembly and tests (`TestDashboardAssetSourceAssembly` / `./internal/wsdashboard/...` as appropriate).
+
+### Result (a255d1409) - 2026-11-24
+
+Implemented the T0 client-only fix for per-keystroke `#ctext` capsule recreation and the owner-approved `(117)=a` `form.js` `grow()` guard:
+
+- **Changed files:**
+  - `agents-plugin-tool/internal/wsdashboard/assets/capsules.js`: Added an in-place fast path in `upsert()` when `marker(old) === payload.anchor` that locates the single matching `.wsc-capsule` node by iterating `editor.querySelectorAll(".wsc-capsule")` and comparing `data-wsc-kind` / `data-wsc-key` (no raw CSS attribute-selector interpolation), updates `ranges`, `data-wsc-payload`, and (when changed) `data-wsc-label` + `textContent` in place, and emits `wsc:change` via `changed(before, "update")` without calling `replace()`, `render()`, `select()`, or dispatching synthetic `input`. Extracted `spliceText()` so the anchor-changed fallback path performs a single `render()` call instead of two, and falls back to a single `render()` on unexpected DOM drift.
+  - `agents-plugin-tool/internal/wswhiteboard/assets/form.js`: Guarded `grow(n)` to return early when `n.classList && n.classList.contains("wsc-backing")`, avoiding synchronous `style.height = "auto"` / `scrollHeight` layout flushes on hidden capsule-backed note textareas while preserving auto-grow on plain visible textareas.
+  - `agents-plugin-tool/internal/wsdashboard/testdata/capsules.test.cjs`: Added unit coverage for unchanged-anchor in-place `upsert()`, label-change with selector-hostile key (`topic"1[x]`), single-`render()` anchor-change fallback, and DOM drift fallback.
+  - `agents-plugin-tool/internal/wsdashboard/testdata/note-typing.browser.cjs`: Added Playwright Chromium regression checks verifying `#ctext` `.wsc-capsule` DOM node identity and zero synthetic `#ctext` `input` events across both `.tnote` and board card `textarea.note` keystrokes (also fixed the pre-existing 40-char label truncation assertion for Korean IME composition).
+  - `agents-plugin-tool/internal/wswhiteboard/check_form_test.go`: Added `TestFormGrowSkipsWscBackingTextarea` verifying `grow()` skips `.wsc-backing` textareas on `input` and `note-toggle` click while still auto-growing plain `textarea.note`.
+
+- **Verification (macOS local Go + Node + Playwright Chromium):**
+  - `node --test agents-plugin-tool/internal/wsdashboard/testdata/capsules.test.cjs agents-plugin-tool/internal/wsdashboard/testdata/composer-inline.test.cjs agents-plugin-tool/internal/wsdashboard/testdata/composer-note-chips.test.cjs` — PASS (3/3).
+  - `WS_PLAYWRIGHT_MODULE=... PLAYWRIGHT_BROWSERS_PATH=... go test ./internal/wsdashboard -run 'TestDashboardAssetSourceAssembly|TestCapsules|TestInlineCapsules|TestComposer|TestNoteTyping' -v` — PASS.
+  - `WS_PLAYWRIGHT_MODULE=... PLAYWRIGHT_BROWSERS_PATH=... go test ./internal/wsdashboard -run 'TestBoardNoteTypingBrowser' -v` — PASS (`styleElements: [3, 1]`, `stylePerKeyMs: 0.35ms`, `layoutPerKeyMs: 0.48ms`, `mainTaskMaxMs: 5.07ms` on 14,722 elements; exact `.wsc-capsule` DOM node preserved and 0 synthetic `#ctext` `input` events).
+  - `WS_PLAYWRIGHT_MODULE=... PLAYWRIGHT_BROWSERS_PATH=... go test ./internal/wswhiteboard -run 'TestForm|TestWhiteboardAsset|TestCheckRows|TestTypingBuilds|TestPillRedraws' -v` — PASS (including `TestFormGrowSkipsWscBackingTextarea`).
+  - `GOOS=windows go vet ./internal/wsdashboard ./internal/wswhiteboard` — PASS.
+
+
+## Resolution (2026-11-24)
+
+Implemented in-place capsule upsert fast path and single-render anchor-change fallback in capsules.js, added the owner-confirmed (117)=a grow() guard for hidden .wsc-backing textareas in form.js, and added Node, Go, and Playwright Chromium regression coverage.
