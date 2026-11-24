@@ -19,6 +19,7 @@ func TestGalleryModel(t *testing.T) {
 		"testdata/gallery-state.test.cjs",
 		"testdata/gallery-tree.test.cjs",
 		"testdata/gallery-wheel.test.cjs",
+		"testdata/gallery-frame-wheel.test.cjs",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("gallery model tests failed: %v\n%s", err, out)

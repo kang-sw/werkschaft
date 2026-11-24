@@ -788,8 +788,9 @@ async function routeTerminal(context) {
       assert.equal(await pill(), null);
       done.push('trailing + bottom: damped micro-bounce only, no flip or wrap');
 
-      // Terminals and frames take their own wheel: a docked terminal and a
-      // topic's doc frame never charge the gate.
+      // Terminals and non-doc-frame iframes take their own wheel, while a
+      // docked topic's .doc-frame forwards wheel deltas to the gate at the
+      // pane boundary.
       const term = page.locator('.bcard[data-card]:has(.tm-host)');
       await until(() => term.count().then(n => n === 1), 'terminal card from the routed list');
       await term.locator('.bc-pin').click();
@@ -812,12 +813,9 @@ async function routeTerminal(context) {
       const frameAt = { x: fo.x + fr.x, y: fo.y + fr.y };
       assert.equal(await page.evaluate(([x, y]) => document.elementFromPoint(x, y).tagName, [fr.x, fr.y]), 'IFRAME', 'the spot is on alpha\'s doc frame');
       await sleep(G_LOCK);
-      for (const dy of [-125, 125]) {
-        await wheel(frameAt, dy, 6, 40);
-        assert.equal(await pill(), null, 'a frame\'s wheel never pulls (' + dy + ')');
-        assert.equal(await pos(page), 1, 'a frame never flips (' + dy + ')');
-      }
-      done.push('terminals and iframes do not charge the gate or flip pages');
+      await wheel(frameAt, -125, 4, 30);
+      await until(async () => await pos(page) === 0, 'doc-frame wheel at top boundary flips to page 1');
+      done.push('terminals never charge the gate; docked topic doc-frame wheel flips pages at boundary');
 
       // Handler cost: N synthetic wheel events through the gallery's
       // listener (the pass path over a pane that still scrolls; the

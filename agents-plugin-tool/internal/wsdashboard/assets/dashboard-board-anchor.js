@@ -1219,10 +1219,10 @@
   }
   function anchorHandleWheel(target, card, rawDy, rawDx, deltaMode, prevent) {
     anchorProg = null;
-    if (!anchorSized.bounded) return;
-    if (doc.documentElement.hasAttribute("data-overview") || doc.documentElement.hasAttribute("data-board-max")) return;
+    if (!anchorSized.bounded) return false;
+    if (doc.documentElement.hasAttribute("data-overview") || doc.documentElement.hasAttribute("data-board-max")) return false;
     var list = anchorCards();
-    if (!list.length) return;
+    if (!list.length) return false;
     var cur = anchorCurrent() || list[0];
     var at = anchorCache && anchorCache.indexByNode.has(cur) ? anchorCache.indexByNode.get(cur) : -1;
     if (at < 0) at = 0;
@@ -1242,12 +1242,13 @@
       atFirst: at <= 0,
       atLast: at >= list.length - 1
     });
-    if (res.action === "ignore" || res.action === "inner" || res.action === "edge") return;
+    if (res.action === "ignore" || res.action === "inner" || res.action === "edge") return false;
     if (prevent) prevent();
     if (res.action === "commit") {
       var next = list[at + res.dir];
       if (next) anchorSelect(next, { smooth: false, glide: res.dir });
     }
+    return true;
   }
   function anchorOnWheel(e) {
     if (e.defaultPrevented || e.ctrlKey) return;
@@ -1257,11 +1258,11 @@
     anchorHandleWheel(t, card, e.deltaY, e.deltaX, e.deltaMode, function () { e.preventDefault(); });
   }
   function anchorOnFrameWheel(frame, dy, dx, mode) {
-    if (!frame || !frame.isConnected) return;
+    if (!frame || !frame.isConnected) return false;
     var col = $("bcol");
-    if (!col || !col.contains(frame)) return;
+    if (!col || !col.contains(frame)) return false;
     var card = frame.closest ? frame.closest("section.topic[data-topic], .bcard[data-card]") : null;
-    anchorHandleWheel(frame, card, dy, dx, mode || 0, null);
+    return anchorHandleWheel(frame, card, dy, dx, mode || 0, null);
   }
   function anchorOnKey(e) {
     var k = e && e.key;
