@@ -52,6 +52,9 @@
   //                                   the clock, and tracker reads
   //     search  {}                    open the search palette
   //     overview {}                   toggle the visible board's Overview
+  //     git     {}                    toggle the git drawer
+  //     ticketmap {}                  toggle the ticket map overlay
+  //     files   {}                    toggle the floating board files sheet
   //     menu    {}                    open the session menu (the head's
   //                                   harness chip, which the shell mirrors)
   //     sync    {}                    send the header, layout, and title
@@ -85,6 +88,9 @@
     shown: { shown: "boolean" },
     search: {},
     overview: {},
+    git: {},
+    ticketmap: {},
+    files: {},
     menu: {},
     sync: {}
   };

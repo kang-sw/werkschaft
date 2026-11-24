@@ -148,6 +148,7 @@
       });
       if (actions.files.el) files.setAttribute("aria-controls", actions.files.el.id);
       files.setAttribute("aria-expanded", "false");
+      files.title = wsT("js.board.toolbar.files.title");
     }
     row.appendChild(buildStateFilter());
     var face = mk("div", "board-toolbar-face");

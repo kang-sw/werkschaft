@@ -808,6 +808,7 @@
       if (gw && gw.back && !gw.back.hidden) gwClose();
       if (modelHistoryOpen) modelHistoryClose(false);
       if (drawer && drOpen) drSetOpen(false);
+      if (window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
     }
     function open() {
       if (isOpen()) return;
@@ -876,9 +877,31 @@
     // (the default action, typing or a native control, still happens).
     function onKey(e) {
       if (!isOpen()) return;
-      e.stopImmediatePropagation();
-      if (e.isComposing || e.keyCode === 229) return;
+      if (e.isComposing || e.keyCode === 229) { e.stopImmediatePropagation(); return; }
       var key = e.key || "", t = e.target, v = cur(), done = false;
+      if (!e.defaultPrevented && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        var lk = key.toLowerCase();
+        if (lk === "b") {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          close(false);
+          return;
+        }
+        if (e.code === "Backquote") {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          close(true);
+          if (typeof railKey === "function") railKey();
+          return;
+        }
+        var gkind = lk === "q" ? "overview" : lk === "g" ? "git" : lk === "e" ? "files" : "";
+        if (gkind && typeof runGlobalShortcut === "function" && runGlobalShortcut(gkind)) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          return;
+        }
+      }
+      e.stopImmediatePropagation();
       // The search palette's keys (lifecycle's shell hotkeys, qShortcut).
       var k = key.toLowerCase() === "k", space = e.code === "Space" || key === " ";
       var palette = !e.altKey && !e.shiftKey && (e.metaKey ? !e.ctrlKey && k : e.ctrlKey && (k || space));
@@ -913,7 +936,7 @@
     api.ST = TM_ST;
     api.REL = TM_REL;
     api.open = open;
-    api.close = function () { close(false); };
+    api.close = function (yieldTo) { close(!!yieldTo); };
     api.toggle = toggle;
     api.isOpen = isOpen;
     api.data = function () { return G; };
