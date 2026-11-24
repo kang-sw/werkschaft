@@ -315,22 +315,6 @@ func isHolderBacked(p Process) bool {
 	return held
 }
 
-type safeStopNode struct {
-	id     string
-	lead   bool
-	parent ParentRef
-	busy   bool
-}
-
-func (c *conv) safeStopNodeLocked() safeStopNode {
-	n := safeStopNode{id: c.rec.ReplyID, lead: c.rec.Lead}
-	if c.rec.Parent != nil {
-		n.parent = *c.rec.Parent
-	}
-	n.busy = c.blocksParentSafeStopLocked()
-	return n
-}
-
 func (c *conv) blocksParentSafeStopLocked() bool {
 	return c.keepsAwakeLocked() || (!c.closed && c.proc != nil && !isHolderBacked(c.proc))
 }
@@ -357,17 +341,26 @@ func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
 		return false
 	}
 
-	tree := []*conv{root}
+	live := []*conv{root}
+	queue := []ParentRef{safeStopParent(rootID, root.rec.Lead)}
 	visited := map[string]bool{rootID: true}
-	for i := 0; i < len(tree); i++ {
-		c := tree[i]
-		parent := safeStopParent(c.rec.ReplyID, c.rec.Lead)
+	for i := 0; i < len(queue); i++ {
+		parent := queue[i]
 		if r.pendingSpawns[parent] > 0 {
 			return false
 		}
 		for id := range r.childrenIndex[parent] {
+			if visited[id] {
+				continue
+			}
+			visited[id] = true
 			child := r.convs[id]
-			if child == nil || visited[id] {
+			if child == nil {
+				// Checkout release can close a worker while its children run
+				// elsewhere. The retained row still carries their ancestry.
+				if rec, ok := r.closed[id]; ok {
+					queue = append(queue, safeStopParent(id, rec.Lead))
+				}
 				continue
 			}
 			if !child.mu.TryLock() {
@@ -377,8 +370,8 @@ func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
 			if child.blocksParentSafeStopLocked() {
 				return false
 			}
-			visited[id] = true
-			tree = append(tree, child)
+			live = append(live, child)
+			queue = append(queue, safeStopParent(id, child.rec.Lead))
 		}
 	}
 
@@ -386,7 +379,7 @@ func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
 	// tree members together against one immutable publication with their
 	// conversation state still pinned.
 	if exec := r.exec.live.Load(); exec != nil {
-		for _, c := range tree {
+		for _, c := range live {
 			if !c.closed && (*exec)[c.rec.ReplyID] > 0 {
 				return false
 			}
@@ -395,49 +388,44 @@ func (r *Runner) admitsSafeStop(rootID string, root *conv) bool {
 	return true
 }
 
-// descendantsAllowSafeStop reports whether every live descendant conversation
-// of rootID is idle (not keeping its parent awake) and holder-backed if it has
-// a live process. This is an advisory snapshot for the dashboard.
+// descendantsAllowSafeStop is the dashboard advisory for descendant work and
+// pending spawns. Read each parent's edges under r.mu, then inspect the live
+// children after releasing it.
 func (r *Runner) descendantsAllowSafeStop(rootID string, rootIsLead bool) bool {
 	if r == nil {
 		return true
 	}
-	r.mu.Lock()
-	convs := make([]*conv, 0, len(r.convs))
-	for _, c := range r.convs {
-		convs = append(convs, c)
-	}
-	r.mu.Unlock()
-	nodes := make([]safeStopNode, 0, len(convs))
-	for _, ch := range convs {
-		ch.mu.Lock()
-		nodes = append(nodes, ch.safeStopNodeLocked())
-		ch.mu.Unlock()
-	}
-	return safeStopDescendants(rootID, rootIsLead, nodes)
-}
-
-func safeStopDescendants(rootID string, rootIsLead bool, nodes []safeStopNode) bool {
-	byParent := make(map[ParentRef][]safeStopNode, len(nodes))
-	for _, n := range nodes {
-		if n.parent.ReplyID != "" {
-			byParent[n.parent] = append(byParent[n.parent], n)
-		}
-	}
 	queue := []ParentRef{safeStopParent(rootID, rootIsLead)}
 	visited := map[string]bool{rootID: true}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, n := range byParent[cur] {
-			if visited[n.id] {
+	for i := 0; i < len(queue); i++ {
+		parent := queue[i]
+		r.mu.Lock()
+		if r.pendingSpawns[parent] > 0 {
+			r.mu.Unlock()
+			return false
+		}
+		var live []*conv
+		for id := range r.childrenIndex[parent] {
+			if visited[id] {
 				continue
 			}
-			visited[n.id] = true
-			if n.busy {
+			visited[id] = true
+			if child := r.convs[id]; child != nil {
+				live = append(live, child)
+			} else if rec, ok := r.closed[id]; ok {
+				queue = append(queue, safeStopParent(id, rec.Lead))
+			}
+		}
+		r.mu.Unlock()
+		for _, child := range live {
+			child.mu.Lock()
+			busy := child.blocksParentSafeStopLocked()
+			next := safeStopParent(child.rec.ReplyID, child.rec.Lead)
+			child.mu.Unlock()
+			if busy {
 				return false
 			}
-			queue = append(queue, safeStopParent(n.id, n.lead))
+			queue = append(queue, next)
 		}
 	}
 	return true

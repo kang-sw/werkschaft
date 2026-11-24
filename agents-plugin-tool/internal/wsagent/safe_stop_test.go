@@ -269,19 +269,86 @@ func TestSafeOnlyStopAllowsUnrelatedLeadContention(t *testing.T) {
 	other := h.runner.conv(otherID)
 	other.mu.Lock()
 	out := make(chan reply, 1)
+	var advisorySafe bool
 	go func() {
+		advisorySafe = h.state(id).SafeStop
 		out <- h.route(localBrowser, http.MethodPost, "/agents/"+id+"/stop", map[string]bool{"safe_only": true})
 	}()
 	select {
 	case res := <-out:
 		other.mu.Unlock()
-		if res.status != http.StatusOK || h.state(id).Process || !h.state(otherID).Process {
-			t.Fatalf("safe-only stop with a separate lead locked: status %d, body %s", res.status, res.body)
+		if !advisorySafe || res.status != http.StatusOK || h.state(id).Process || !h.state(otherID).Process {
+			t.Fatalf("safe-only stop with a separate lead locked: advisory safe_stop=%v, status %d, body %s",
+				advisorySafe, res.status, res.body)
 		}
 	case <-time.After(2 * time.Second):
 		other.mu.Unlock()
 		<-out
 		t.Fatal("safe Stop waited on a separate lead")
+	}
+}
+
+func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
+	h, _ := newHeldWorkerHarness(t)
+	worktree := releaseTestWorktree(t, h.root)
+	leadID, _ := h.settledLead()
+	lead := ParentRef{Kind: ParentLead, ReplyID: leadID}
+	spawn := func(parent ParentRef, root, prompt string) (string, string) {
+		t.Helper()
+		st, err := h.runner.Spawn(SpawnSpec{
+			Profile:            AgentWorkerProfile(BackendClaude),
+			PermissionLevel:    PermissionWorkdirWrite,
+			delegatedAuthority: true,
+			Root:               root,
+			Prompt:             prompt,
+			Tier:               "small",
+			Parent:             &parent,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		holder := h.holder(st.ID)
+		h.holders.out(holder, stateLine(HarnessRunning), initLine(prompt, "dontAsk"))
+		eventually(t, prompt+" running", func() bool { return h.state(st.ID).Status == StatusRunning })
+		return st.ID, holder
+	}
+	middleID, _ := spawn(lead, worktree, "middle")
+	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
+	if st := h.state(leadID); !st.Process || st.SafeStop {
+		t.Fatalf("lead before checkout release = %+v, want a process and unsafe Stop", st)
+	}
+
+	clock := newTestClock()
+	setClock(clock, h.opts.Now())
+	released := h.runner.CheckoutReleased(worktree, releaseAfterBindings(t, clock, worktree), true)
+	if len(released) != 1 || released[0].Address != AgentAddress(middleID) || released[0].State != AgentClosed {
+		t.Fatalf("release outcomes = %+v, want only the middle worker closed", released)
+	}
+	rows := SpawnTree(lead, h.runner.Children)
+	if len(rows) != 2 || rows[0].ID != middleID || rows[0].Status != StatusClosed ||
+		rows[1].ID != leafID || rows[1].Status != StatusRunning {
+		t.Fatalf("spawn tree after release = %+v, want closed middle worker and running grandchild", rows)
+	}
+
+	st := h.state(leadID)
+	meta, ok := h.runner.SessionMeta(leadID)
+	post := func() reply {
+		return h.route(localBrowser, http.MethodPost, "/agents/"+leadID+"/stop", map[string]bool{"safe_only": true})
+	}
+	res := post()
+	if !st.Process || st.SafeStop || !ok || !meta.HasProcess || meta.SafeStop ||
+		res.status != http.StatusConflict || !h.state(leadID).Process {
+		t.Fatalf("busy grandchild behind closed worker: advisory safe_stop=%v, metadata safe_stop=%v, Stop status=%d, body=%s",
+			st.SafeStop, meta.SafeStop, res.status, res.body)
+	}
+
+	h.holders.out(leafHolder, recoveryWorkerReply("done")...)
+	h.idle(leafID)
+	if st := h.state(leadID); !st.SafeStop {
+		t.Fatalf("lead with idle grandchild and closed middle worker = %+v, want safe Stop", st)
+	}
+	if res := post(); res.status != http.StatusOK || h.state(leadID).Process {
+		t.Fatalf("safe-only Stop after the grandchild settled: status %d, body %s", res.status, res.body)
 	}
 }
 
@@ -347,6 +414,7 @@ func TestSafeOnlyStopRefusesPendingDescendantSpawn(t *testing.T) {
 	defer func() {
 		h.runner.mu.Lock()
 		delete(h.runner.convs, child.rec.ReplyID)
+		delete(h.runner.closed, child.rec.ReplyID)
 		h.runner.mu.Unlock()
 	}()
 
@@ -360,6 +428,18 @@ func TestSafeOnlyStopRefusesPendingDescendantSpawn(t *testing.T) {
 	}
 	if res := post(); res.status != http.StatusConflict || !h.state(id).Process {
 		t.Fatalf("safe-only stop during a pending grandchild spawn: status %d, body %s", res.status, res.body)
+	}
+
+	// Retain the middle row after close while its spawn is still in flight.
+	h.runner.mu.Lock()
+	delete(h.runner.convs, child.rec.ReplyID)
+	h.runner.closed[child.rec.ReplyID] = child.rec
+	h.runner.mu.Unlock()
+	if st := h.state(id); st.SafeStop {
+		t.Fatal("pending grandchild spawn behind a closed worker advertised safe Stop")
+	}
+	if res := post(); res.status != http.StatusConflict || !h.state(id).Process {
+		t.Fatalf("safe-only stop during a pending spawn behind a closed worker: status %d, body %s", res.status, res.body)
 	}
 	release()
 	if res := post(); res.status != http.StatusOK || h.state(id).Process {
