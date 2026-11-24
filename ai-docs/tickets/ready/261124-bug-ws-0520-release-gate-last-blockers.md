@@ -395,3 +395,68 @@ passed with the repair.
 
 The route suggested renaming the explicitly assigned board branch. The
 ticket lease recorded the assigned branch, and all Phase 3 commits use it.
+
+### Phase 4: Re-review repairs
+
+Added after the re-review of `41e81115c..ca8a565ae` blocked (1 Critical,
+6 Important; the review cache report is summarized here so the phase is
+self-contained). Lead decisions under the owner's overnight
+directive; the earlier Decisions stay authoritative. Work splits into 4a
+(backend) and 4b (dashboard), run in parallel.
+
+#### 4a: Backend (C2 completion, I6 completion, runbook)
+
+- C2 active path: a scheduled (cron) input never enters an active
+  background turn through an unclassified claim. `durable_steer.go:46-64`
+  and the pre-resume call in `durable_turn.go:175-188` decide consent and
+  persist the disposition (authorized or refused) under the same
+  serialization as the idle path, through `wsinbox/inbox_claim.go`
+  (which today persists only a nonempty disposition, lines 163-170). A
+  refused or unauthorized cron steer is excluded from every later turn's
+  input: it is not converted into a plain report that rides an operator
+  request (`durable_settle.go:37-41`, `durable_steer.go:149-161`,
+  `runner_conv.go:1880-1883,2049-2064`). Werk does not record steer text in
+  its transcript before the consent decision for that input
+  (`internal/werk/agent.go:548-560,622-630,745-754`). Tests: active
+  background steering and its restart replay; revocation crossing the real
+  idle and active claim boundaries using the real credential lock seam (not
+  the status-only double in `cron_seams_test.go:121-137`, and not revoking
+  only after the runner closes). Rejected: rechecking consent only at
+  settlement (the text is already in the transcript by then).
+- I6 descendants: safe-only Stop admits only from a consistent view of the
+  root and all descendants (`runner_operations.go:173-185,329-362,379-387`).
+  When the gate cannot establish one (for example a descendant's state
+  generation changes during sampling), it refuses with the existing 409 so
+  the UI falls back to hold-to-stop. Test overlapping descendant
+  transitions. Rejected: sampling each descendant under its own lock with no
+  consistency check (the reviewed defect).
+- Runbook: `ai-docs/manuals/ws-mcp.md:214-219,239-243` lists the Werk journal
+  in the file-identity inventory and describes the macOS destination-inode
+  lock with exclusive per-write stages that are preserved, not reclaimed.
+
+#### 4b: Dashboard (I11 completion, compact toolbar from `ed838422a`)
+
+- I11: the exact-jump destination clearance recheck runs after the
+  destination rail has published its sticky geometry (after the rail's
+  scroll-triggered frame, `rail.js:317-320,349-354,542-559`), not in the
+  same task as the jump (`dashboard-board-anchor.js:1105-1119,1145-1147`,
+  `stream-navigation.js:95-116`); cancellation by input, a newer jump,
+  native movement or target removal stays effective. Browser test: real
+  navigation between cards with different rail stacks, not callback-count
+  stubs.
+- Files modal scrim: while the Files modal is open, the board toolbar's
+  filter rows receive no pointer events; an outside click hits the scrim
+  and dismisses the modal (`dashboard-board.css:286,302,337,341`,
+  `dashboard-layout.css:233-235`). Test with a real hit-tested click, not a
+  dispatched scrim event.
+- Narrow toolbar height: at dropdown and tight widths the in-flow toolbar
+  slot keeps the same height whether floating or resting
+  (`cards.js:202-220`); the test measures the in-flow slot on both sides of
+  the sticky boundary.
+- Inline filter radios: arrow keys move through each radiogroup in its
+  rendered order and persist that radio (`cards.js:279-306`); the browser
+  fixture asserts the rendered order
+  (`board-state-filter-browser.cjs:235-246`).
+
+All Phase 4 changes are T0 (no new cross-version surface); a change that
+needs a tier above T0 stops and goes to the lead.
