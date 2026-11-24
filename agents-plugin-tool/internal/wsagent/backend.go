@@ -427,6 +427,10 @@ type Event struct {
 	// (a login needed, a model unavailable, a usage limit): a conversation
 	// line, and the session's failure state until a turn succeeds.
 	Alert *wslive.Notice
+	// AlertManualOnly marks a usage-limit alert (such as a provider plan pause)
+	// that must not auto-schedule continuation under agent.quota_continuation=auto;
+	// an explicit manual UI reservation can still schedule a probe.
+	AlertManualOnly bool
 	// Retry is an API request retry the harness started; RetryEnd that the
 	// retrying is over (a response came, or the turn ended).
 	Retry    *wslive.Retry

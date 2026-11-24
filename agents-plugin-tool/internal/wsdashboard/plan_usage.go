@@ -424,6 +424,62 @@ func (s *planUsageStore) entries() []planUsageEntry {
 	return out
 }
 
+// quotaResetAt returns a cached future quota reset timestamp (epoch ms) from
+// daemon memory for (backend, model), or 0 when unavailable. Zero disk/network I/O.
+func (s *planUsageStore) quotaResetAt(backend, model string) int64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.nowTime().UnixMilli()
+	maxReset := func(windows []planUsageWindow, minPercent float64) int64 {
+		var best int64
+		for _, w := range windows {
+			if w.ResetsAt <= now {
+				continue
+			}
+			if w.Disabled || w.Percent >= minPercent {
+				if w.ResetsAt > best {
+					best = w.ResetsAt
+				}
+			}
+		}
+		return best
+	}
+	switch backend {
+	case "agy":
+		group := agyModelGroupKey(model)
+		for _, g := range s.agyGroups {
+			if g.Group != group {
+				continue
+			}
+			if at := maxReset(g.Windows, 100); at > 0 {
+				return at
+			}
+			// plan-usage-agy.json is debounced (10m) and may lag live exhaustion;
+			// accept a near-saturated bucket (>= 90%) from the active model group.
+			return maxReset(g.Windows, 90)
+		}
+		return 0
+	case "claude":
+		return maxReset(s.claude.Windows, 100)
+	case "codex":
+		return maxReset(s.gpt.Windows, 100)
+	default:
+		return 0
+	}
+}
+
+func agyModelGroupKey(model string) string {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") ||
+		strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+		return "claude_gpt"
+	}
+	return "gemini"
+}
+
 // GET is viewer-authorized by the daemon's ordinary access wrapper. Pages
 // request while connected; there is no polling goroutine without viewers.
 func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {

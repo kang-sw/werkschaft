@@ -143,6 +143,8 @@ type codexMapper struct {
 	// event carries both.
 	context *wslive.UsageContext
 	limits  []wslive.UsageLimit
+	// now overrides wall time (epoch ms) for deterministic tests; nil uses time.Now.
+	now func() int64
 }
 
 // codexNativeSeenCap bounds the remembered subAgentActivity ids; an id
@@ -196,6 +198,9 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UnixMilli()
+	if m.now != nil {
+		now = m.now()
+	}
 	hasID := len(msg.ID) > 0 && string(msg.ID) != "null"
 	switch {
 	case msg.Method != "" && hasID:
@@ -266,7 +271,7 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 			m.retry++
 			return []Event{{Retry: &wslive.Retry{Attempt: m.retry, Error: p.Error.Message}}}
 		}
-		return append(codexAlert(&p.Error), Event{Notice: "codex: " + p.Error.Message})
+		return append(m.codexAlert(&p.Error, now), Event{Notice: "codex: " + p.Error.Message})
 	}
 
 	// A native subagent's lifecycle is the parent thread's, not its turn's:
@@ -577,7 +582,7 @@ func (m *codexMapper) endTurn(turn codexTurn, now int64) []Event {
 		out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: end.TurnError}})
 		m.compact = false
 	}
-	out = append(out, codexAlert(turn.Error)...)
+	out = append(out, m.codexAlert(turn.Error, now)...)
 	m.turnID, m.endedTurn, m.retry = "", turn.ID, 0
 	return append(out, Event{RetryEnd: true}, end)
 }
@@ -701,7 +706,7 @@ func (m *codexMapper) approvalAnswer(id string, allow bool) (json.RawMessage, an
 	return approval.raw, result, nil
 }
 
-func codexAlert(err *codexError) []Event {
+func (m *codexMapper) codexAlert(err *codexError, now int64) []Event {
 	if err == nil {
 		return nil
 	}
@@ -715,7 +720,15 @@ func codexAlert(err *codexError) []Event {
 	if kind == "" {
 		return nil
 	}
-	return []Event{{Alert: &wslive.Notice{Kind: kind, Text: err.Message}}}
+	var resetsAt int64
+	if kind == wslive.NoticeUsageLimit {
+		for _, limit := range m.limits {
+			if limit.Percent >= 100 && limit.ResetsAt > now && limit.ResetsAt > resetsAt {
+				resetsAt = limit.ResetsAt
+			}
+		}
+	}
+	return []Event{{Alert: &wslive.Notice{Kind: kind, Text: err.Message, ResetsAt: resetsAt}}}
 }
 
 // codexModels keeps only the harness's advertised choices, including the

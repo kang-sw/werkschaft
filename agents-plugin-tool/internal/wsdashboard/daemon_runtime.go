@@ -90,6 +90,15 @@ func (d *Daemon) AgyActivity() {
 	d.agyActivity(nil)
 }
 
+// QuotaResetAt returns a cached future quota reset timestamp (epoch ms) from
+// the daemon's in-memory plan usage store, or 0 when unavailable.
+func (d *Daemon) QuotaResetAt(backend, model string) int64 {
+	if d == nil || d.planUsage == nil {
+		return 0
+	}
+	return d.planUsage.quotaResetAt(backend, model)
+}
+
 // agyActivity exposes completion of the lock-taking handoff to package tests.
 func (d *Daemon) agyActivity(done chan<- struct{}) {
 	if d.planUsage == nil {

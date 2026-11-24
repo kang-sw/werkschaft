@@ -32,6 +32,11 @@ func (c *conv) syncHost(quiet bool) {
 // alert takes a typed failure the harness reported: a conversation line,
 // and the session's failure state until a turn succeeds.
 func (c *conv) alert(n wslive.Notice, quiet bool) {
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && n.ResetsAt <= 0 && c.r.opts.QuotaResetAt != nil {
+		if at := c.r.opts.QuotaResetAt(c.rec.Backend, c.rec.Model); at > c.r.opts.Now().UnixMilli() {
+			n.ResetsAt = at
+		}
+	}
 	c.alerted = true
 	c.setStatus(func() { c.failure = &n })
 	if !quiet {

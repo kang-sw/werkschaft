@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -581,28 +582,70 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	turn := a.turn
 	a.running, a.lastReply, a.lastReason, a.lastError, a.taken = true, "", "", "", nil
 	a.mu.Unlock()
-	var reason, errText string
+	var result durableEnd
 	defer func() {
 		if recover() != nil {
-			reason, errText = ReasonError, "the werk turn failed unexpectedly"
+			result = durableEnd{Reason: ReasonError, Error: "the werk turn failed unexpectedly"}
 		}
-		a.endTurn(turn, reason, errText)
+		a.endTurn(turn, result)
 	}()
 	a.out.line(Line{T: LineTurnStart, Turn: turn})
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
-	result, _ := a.loop(ctx, nil, turn, "")
-	reason, errText = result.Reason, result.Error
+	result, _ = a.loop(ctx, nil, turn, "")
 }
 
-func (a *Agent) endTurn(turn int, reason, errText string) {
+func (a *Agent) endTurn(turn int, result durableEnd) {
 	// Complete the log before publishing the turn end, including after an
 	// interrupt. On a log failure the existing notice reports the cause.
 	a.log.Flush()
 	a.mu.Lock()
-	a.running, a.lastReason, a.lastError = false, reason, errText
+	a.running, a.lastReason, a.lastError = false, result.Reason, result.Error
 	a.mu.Unlock()
-	a.out.line(Line{T: LineTurnEnd, Turn: turn, Reason: reason, Error: errText})
+	a.out.line(Line{
+		T:          LineTurnEnd,
+		Turn:       turn,
+		Reason:     result.Reason,
+		Error:      result.Error,
+		ErrorCode:  result.ErrorCode,
+		ResetsAt:   result.ResetsAt,
+		UsageLimit: result.UsageLimit,
+		PlanPaused: result.PlanPaused,
+	})
+}
+
+func classifyTurnError(err error) durableEnd {
+	end := durableEnd{Reason: ReasonError, Error: err.Error()}
+	var h *HTTPError
+	var f *FailedError
+	hasHTTP := errors.As(err, &h)
+	hasFailed := errors.As(err, &f)
+	if hasHTTP && h.Code != "" {
+		end.ErrorCode = h.Code
+	} else if hasFailed && f.Code != "" {
+		end.ErrorCode = f.Code
+	}
+	if errors.Is(err, wscred.ErrOpenAIPlanPaused) || planLimitExceeded(err) {
+		end.UsageLimit = true
+		end.PlanPaused = true
+		if end.ErrorCode == "" {
+			end.ErrorCode = openAIPlanLimitCode
+		}
+		if hasHTTP && h.ResetsAt > 0 {
+			end.ResetsAt = h.ResetsAt
+		}
+		return end
+	}
+	if hasHTTP && (h.Status == http.StatusTooManyRequests || h.Code == "rate_limit_exceeded") {
+		end.UsageLimit = true
+		end.ResetsAt = h.ResetsAt
+		return end
+	}
+	if hasFailed && f.Code == "rate_limit_exceeded" {
+		end.UsageLimit = true
+		return end
+	}
+	return end
 }
 
 // loop runs model requests and tool calls until the model asks for no more.
@@ -627,7 +670,7 @@ func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durabl
 			if ctx.Err() != nil {
 				return durableEnd{Reason: ReasonAborted}, nil
 			}
-			return durableEnd{Reason: ReasonError, Error: err.Error()}, nil
+			return classifyTurnError(err), nil
 		}
 		a.appendResponse(resp)
 		a.report(turn, resp)
@@ -775,7 +818,7 @@ func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
 			// The provider asked for a longer wait than a session holds a turn
 			// open for. Retrying early would only be refused again, so the turn
 			// ends and says how long to wait.
-			return nil, fmt.Errorf("the model endpoint asked to wait %s before the next request, longer than the %s this session waits; send the message again after that wait (%v)",
+			return nil, fmt.Errorf("the model endpoint asked to wait %s before the next request, longer than the %s this session waits; send the message again after that wait (%w)",
 				delay.Round(time.Second), MaxRetryAfter, err)
 		}
 		if delay <= 0 {
