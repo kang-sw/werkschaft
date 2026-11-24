@@ -27,7 +27,7 @@
   var freeActive = false, freeSuspended = false;
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   var freePos = new Map(), freeHeightCache = new Map();
-  var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet();
+  var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
   var freeScrollRaf = 0, freeIdleTimer = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
@@ -624,6 +624,15 @@
           if (virtualExemptSet.has(exNode) && candidates.indexOf(exNode) < 0) candidates.push(exNode);
         });
       }
+      if (freeDeferredCollapse.size) {
+        Array.from(freeDeferredCollapse).forEach(function (dn) {
+          freeDeferredCollapse.delete(dn);
+          virtualStats.slotVisits++;
+          if (!dn || !dn.isConnected || nextNear.has(dn)) return;
+          if (dn.hasAttribute && dn.hasAttribute("data-wb-virtual")) return;
+          if (candidates.indexOf(dn) < 0) candidates.push(dn);
+        });
+      }
       virtualNearSet = nextNear;
       var entering = [];
       for (var ei = lo; ei <= hi; ei++) {
@@ -893,6 +902,7 @@
   function freeClearNode(n) {
     if (!n || n.nodeType !== 1) return;
     freeSetOffWindow(n, null);
+    freeDeferredCollapse.delete(n);
     if (n.style && n.style.top) n.style.top = "";
     if (freeCardRO && freeObserved.has(n)) {
       try { freeCardRO.unobserve(n); } catch (e) {}
@@ -908,6 +918,7 @@
   }
   function freeSuspend() {
     freeCancelTimers();
+    freeDeferredCollapse.clear();
     if (freeCardRO) {
       freeObserved.forEach(function (n) { try { freeCardRO.unobserve(n); } catch (e) {} });
       freeObserved.clear();
@@ -1012,7 +1023,13 @@
     } else {
       freeSetOffWindow(node, "hidden");
       virtualExemptSet.delete(node);
-      if (!scrubbing && !desc.collapsed) virtualCollapse(node, desc);
+      if (!desc.collapsed) {
+        if (scrubbing) freeDeferredCollapse.add(node);
+        else {
+          freeDeferredCollapse.delete(node);
+          virtualCollapse(node, desc);
+        }
+      }
     }
   }
   function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd) {
@@ -1065,6 +1082,7 @@
       var node = list[idx];
       if (!node) return;
       freeSetOffWindow(node, null);
+      freeDeferredCollapse.delete(node);
       virtualExemptSet.delete(node);
       if (node.hasAttribute && node.hasAttribute("data-wb-virtual") && !scrubbing) {
         virtualHydrate(node, { immediate: idx === aIdx });
@@ -1119,6 +1137,14 @@
         });
       }
     }
+    if (!scrubbing && freeDeferredCollapse.size) {
+      Array.from(freeDeferredCollapse).forEach(function (dn) {
+        freeDeferredCollapse.delete(dn);
+        if (!dn || !dn.isConnected) return;
+        var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
+        if (di >= 0 && (di < start || di > end)) freeApplyOffWindow(dn, false);
+      });
+    }
 
     // Keep WsBoardVirtual's near set aligned with the active free-canvas window.
     var nextNear = new Set();
@@ -1143,7 +1169,7 @@
       var shift = topPad - ys[0];
       if (Math.abs(shift) >= FREE_RESIZE_EPS) {
         for (var si = start; si <= end; si++) ys[si] += shift;
-        if (!opts.jump && wasActive) col.scrollTop = Math.max(0, col.scrollTop + shift);
+        if ((!opts.jump || opts.smooth) && wasActive) col.scrollTop = Math.max(0, col.scrollTop + shift);
       }
     }
     var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end]);
@@ -1394,6 +1420,8 @@
     if (key === null) return false;
     var left = anchorKey !== null && anchorKey !== key;
     if (freeEnabled(col, anchorCards())) {
+      var wasMounted = freeActive && freePos.has(n) && (!n.hasAttribute || !n.hasAttribute("data-wb-offwindow"));
+      var prevMountedY = wasMounted ? freePos.get(n) : undefined;
       freeSetOffWindow(n, null);
       var isScrub = typeof dialScrubbing !== "undefined" && !!dialScrubbing;
       if (!isScrub && typeof virtualHydrate === "function" && n.hasAttribute && n.hasAttribute("data-wb-virtual")) {
@@ -1408,13 +1436,14 @@
       var idx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
       if (idx < 0) return false;
       var still = !!(opt && opt.still);
-      var anchorY = still && freePos.has(n) ? freePos.get(n) : FREE_RUNWAY_MID;
+      var anchorY = wasMounted ? (freePos.has(n) ? freePos.get(n) : prevMountedY) : FREE_RUNWAY_MID;
+      var wantSmooth = !still && wasMounted && !!(opt && opt.smooth);
       freeLayout({
         anchorIdx: idx,
         anchorY: anchorY,
         jump: !still,
         centerJump: !(opt && opt.alignTop),
-        smooth: !!(opt && opt.smooth),
+        smooth: wantSmooth,
         forceFull: !!(opt && opt.fullVirtual) || !freeActive,
         list: list
       });
@@ -1755,7 +1784,10 @@
         if (nextInset === anchorSized.inset) return;
         anchorSized.inset = nextInset;
         anchorApplySizes(col);
-        if (freeActive && freeWinStart === 0) freeLayout(freeAnchorIdx, { fullPass: false });
+        if (freeActive && freeWinStart === 0) {
+          var moList = anchorCards(), moNode = moList[freeAnchorIdx];
+          freeLayout({ anchorIdx: freeAnchorIdx, anchorY: moNode && freePos.has(moNode) ? freePos.get(moNode) : undefined, list: moList });
+        }
         if (anchorProg) anchorRealign(true);
       });
       anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });

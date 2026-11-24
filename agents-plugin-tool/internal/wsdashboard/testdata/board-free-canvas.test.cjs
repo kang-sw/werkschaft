@@ -531,7 +531,8 @@ test('3. Idle runway recentering (0px visual delta, skipped during dialScrubbing
 
   // Jump to tall card 14 (h = 1100 >= usableH): top-aligned at y - topClear.
   ctx.WsBoardAnchor.select(nodes[14], { smooth: false });
-  assert.equal(bcol.scrollTop, 50000 - 44, 'tall card top-aligned below sticky rail headers');
+  const y14 = ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]);
+  assert.equal(bcol.scrollTop, Math.round(y14 - 44), 'tall card top-aligned below sticky rail headers');
 
   // Simulate drifting near top runway margin (y_first < 10000) while winStart > 0 && winEnd < N-1.
   const info = ctx.WsBoardAnchor.windowInfo();
@@ -550,7 +551,7 @@ test('3. Idle runway recentering (0px visual delta, skipped during dialScrubbing
   ctx.dialScrubbing = true;
   ctx.freeOnScroll();
   w.fireIdle();
-  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]), 6000, 'idle recenter skipped during dialScrubbing');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[14]), y14 + shiftNearTop, 'idle recenter skipped during dialScrubbing');
 
   // Once scrubbing ends, idle recenter rebases anchor back to RUNWAY_MID (50000) with 0px visual shift.
   ctx.dialScrubbing = false;
@@ -906,4 +907,74 @@ test('5c. pill.js classifies open asks inside data-wb-offwindow topics via WsBoa
   assert.equal(topOpenBtn.querySelector('.n').textContent.trim(), '1', 'filtered t1 skipped; 1 open ask above window');
   assert.ok(botOpenBtn && !botOpenBtn.hidden, 'bottom open segment visible for off-window parked ask below window');
   assert.equal(botOpenBtn.querySelector('.n').textContent.trim(), '1', '1 open ask below window');
+});
+
+test('6. Smooth select (mounted vs off-window), anchorMO inset preserve, and post-scrub deferred collapse', () => {
+  const scrollToCalls = [];
+  let moCallback = null;
+  class FakeMO {
+    constructor(cb) { this.cb = cb; }
+    observe(target) {
+      if (target && target.id === 'bcol') moCallback = this.cb;
+    }
+    takeRecords() { return []; }
+    disconnect() {}
+  }
+
+  const spec25 = Array.from({ length: 25 }, (_, i) => ({ topic: `t${i}`, height: 400 }));
+  const h = makeFreeCanvasWorld(spec25, { viewH: 800, toolbarH: 40 });
+
+  // Enable smooth scroll path (!reducedMotion) and spy on scrollTo.
+  h.ctx.reducedMotion = () => false;
+  const origScrollTo = h.bcol.scrollTo.bind(h.bcol);
+  h.bcol.scrollTo = arg => {
+    scrollToCalls.push(arg);
+    if (arg && typeof arg === 'object' && arg.behavior === 'smooth') {
+      // Simulate async smooth scroll: scrollTop stays at old value until frames tick!
+      return;
+    }
+    origScrollTo(arg);
+  };
+
+  // 6b-1: Smooth jump to an ALREADY-MOUNTED neighbor preserves its freePos Y (no 50000px teleport) and uses smooth scrollTo.
+  const y1Before = parseFloat(h.nodes[1].style.top);
+  assert.ok(y1Before < 2000, 'Card 1 starts near topPad (clamped window)');
+  h.ctx.WsBoardAnchor.select(h.nodes[1], { smooth: true });
+  assert.equal(parseFloat(h.nodes[1].style.top), y1Before, 'smooth select on mounted neighbor preserves its Y without teleporting to 50000');
+  assert.equal(scrollToCalls.length, 1, 'smooth select on mounted neighbor invokes scrollTo');
+  assert.equal(scrollToCalls[0].behavior, 'smooth', 'mounted neighbor scroll uses smooth behavior');
+
+  // 6b-2: Smooth select to an OFF-WINDOW card (Card 20) sets scrollTop synchronously (never smooth-scrolls across 50000px blank runway).
+  scrollToCalls.length = 0;
+  h.ctx.WsBoardAnchor.select(h.nodes[20], { smooth: true });
+  assert.equal(scrollToCalls.length, 0, 'off-window jump to RUNWAY_MID never uses smooth scrollTo');
+  assert.ok(h.bcol.scrollTop > 40000, 'off-window jump synchronously moves scrollTop to Card 20 near 50000px');
+  assert.equal(h.ctx.WsBoardAnchor.windowInfo().anchorIdx, 20, 'anchorIdx is 20 after off-window jump');
+
+  // 6c: dialScrubbing defers virtualCollapse during scrub and flushes deferred collapses once scrubbing ends.
+  h.ctx.WsBoardAnchor.select(h.nodes[0], { smooth: false });
+  assert.equal(h.nodes[0].hasAttribute('data-wb-virtual'), false, 'Card 0 starts hydrated');
+  h.ctx.dialScrubbing = true;
+  h.ctx.WsBoardAnchor.select(h.nodes[15], { smooth: false });
+  assert.equal(h.nodes[0].getAttribute('data-wb-offwindow'), 'hidden', 'Card 0 marked hidden during scrub');
+  assert.equal(h.nodes[0].hasAttribute('data-wb-virtual'), false, 'Card 0 body collapse deferred while dialScrubbing=true');
+  // End scrub on the SAME target (prevStart..prevEnd === start..end) and verify Card 0 collapses!
+  h.ctx.dialScrubbing = false;
+  h.ctx.WsBoardAnchor.select(h.nodes[15], { smooth: false });
+  assert.equal(h.nodes[0].hasAttribute('data-wb-virtual'), true, 'deferred Card 0 collapses once dialScrubbing ends');
+  assert.equal(h.nodes[15].hasAttribute('data-wb-virtual'), false, 'target Card 15 is hydrated once dialScrubbing ends');
+
+  // 6a: anchorMO --wb-rail-inset mutation when freeWinStart === 0 preserves freeAnchorIdx (> 0).
+  const spec15 = Array.from({ length: 15 }, (_, i) => ({ topic: `m${i}`, height: 400 }));
+  const hMO = makeFreeCanvasWorld(spec15, { viewH: 800, toolbarH: 40 });
+  // Attach a fake MO capturing #bcol's observer by re-running with MutationObserver stub
+  hMO.ctx.MutationObserver = FakeMO;
+  hMO.ctx.anchorInit();
+  hMO.ctx.WsBoardAnchor.select(hMO.nodes[2], { smooth: false });
+  assert.equal(hMO.ctx.WsBoardAnchor.windowInfo().start, 0, 'Card 2 window is top-clamped (winStart === 0)');
+  assert.equal(hMO.ctx.WsBoardAnchor.windowInfo().anchorIdx, 2, 'anchorIdx is 2 before inset mutation');
+  hMO.bcol.style.setProperty('--wb-rail-inset', '64px');
+  assert.ok(moCallback, 'anchorMO registered on #bcol');
+  moCallback();
+  assert.equal(hMO.ctx.WsBoardAnchor.windowInfo().anchorIdx, 2, 'anchorMO inset change preserves freeAnchorIdx (does not reset to 0)');
 });

@@ -220,96 +220,63 @@ async function assertSheetAboveScrim(page, selector, label) {
   assert.equal(res.ok, true, label + ' must paint opaque (z=70) strictly above .bc-scrim (z=69): ' + JSON.stringify(res));
 }
 
-test('Part 1 & 2: wheel virtualization + per-edge 100% full-span height + 0px next-card peek', async () => {
+test('Part 1 & 2: Designated-Y free-canvas variable heights + native #bcol wheel scroll', async () => {
   const browser = await launchBrowser();
   try {
     const { ctx, page } = await setupPage(browser, { width: 1440, height: 900 }, { topics: 6 });
     try {
-      // Measure Card 0, Card 1, Card 2 (middle), Card 4 (N-2), Card 5 (N-1)
-      const metrics = [];
-      for (const idx of [0, 1, 2, 4, 5]) {
-        await page.evaluate(i => {
-          window.WsBoardAnchor.select(document.getElementById('topic-' + i), { smooth: false });
-        }, idx);
-        await waitFrames(page, 6);
-        const m = await page.evaluate(i => {
-          const col = document.getElementById('bcol');
-          const colR = col.getBoundingClientRect();
-          const card = document.getElementById('topic-' + i);
-          const r = card.getBoundingClientRect();
-          const next = document.getElementById('topic-' + (i + 1));
-          const nextR = next ? next.getBoundingClientRect() : null;
-          const botStack = document.querySelector('.wb-rail-wrap.dn .wb-rail-stack');
-          const botShown = !!(botStack && !botStack.hidden);
-          const botCaps = botShown ? Array.from(botStack.querySelectorAll('.wb-cap')).filter(b => !b.hidden).length : 0;
-          const botTop = botCaps > 0 ? botStack.getBoundingClientRect().top : colR.bottom;
-          const topStack = document.querySelector('.wb-rail-wrap.up .wb-rail-stack');
-          const topShown = !!(topStack && !topStack.hidden);
-          const topCaps = topShown ? Array.from(topStack.querySelectorAll('.wb-cap')).filter(b => !b.hidden).length : 0;
-          const topBot = topCaps > 0 ? topStack.getBoundingClientRect().bottom : document.querySelector('.board-toolbar-face').getBoundingClientRect().bottom;
-          return {
-            idx: i,
-            capAttr: card.getAttribute('data-anchor-cap'),
-            botAttr: card.getAttribute('data-anchor-bot'),
-            topCaps,
-            botCaps,
-            cardH: Math.round(r.height),
-            topGap: +(r.top - topBot).toFixed(2),
-            botGap: +(botTop - r.bottom).toFixed(2),
-            nextPeekAboveColBottom: nextR ? +(colR.bottom - nextR.top).toFixed(2) : null,
-            nextPeekAboveBotStack: nextR ? +(botTop - nextR.top).toFixed(2) : null,
-          };
-        }, idx);
-        metrics.push(m);
-        assert.ok(m.botGap >= 0 && m.botGap <= 10, `Card ${idx} bottom gap must be 0..10px above bottom rail/col (got ${m.botGap}px): ${JSON.stringify(m)}`);
-        if (m.nextPeekAboveColBottom !== null) {
-          assert.ok(m.nextPeekAboveColBottom <= 0.5, `Card ${idx + 1} must NOT peek above #bcol bottom (got ${m.nextPeekAboveColBottom}px): ${JSON.stringify(m)}`);
-        }
-      }
-      // Card 0 (0 top caps) must be taller than middle Card 2 (2 top caps)
-      assert.ok(metrics[0].cardH > metrics[2].cardH + 30, `Card 0 (${metrics[0].cardH}) must reclaim top-cap height vs middle Card 2 (${metrics[2].cardH})`);
-      // Card 5 (0 bottom caps) must be taller than middle Card 2 (2 bottom caps)
-      assert.ok(metrics[4].cardH > metrics[2].cardH + 30, `Last card (${metrics[4].cardH}) must reclaim bottom-cap height vs middle Card 2 (${metrics[2].cardH})`);
-
-      // Part 1: Wheel virtualization in real Chromium
-      await page.evaluate(() => {
+      // Verify #bcol uses Designated-Y free-canvas positioning without fixed-slot height stretching
+      const freeState = await page.evaluate(() => {
+        const col = document.getElementById('bcol');
         const t0 = document.getElementById('topic-0');
-        t0.scrollTop = 0;
-        window.WsBoardAnchor.select(t0, { smooth: false });
-        window.WsBoardAnchor.wheel.reset();
+        const t1 = document.getElementById('topic-1');
+        return {
+          freeAttr: col.hasAttribute('data-board-free'),
+          hasWheelObj: !!window.WsBoardAnchor.wheel,
+          t0Pos: getComputedStyle(t0).position,
+          t0Top: parseFloat(t0.style.top || '0'),
+          t1Top: parseFloat(t1.style.top || '0'),
+          t0H: Math.round(t0.getBoundingClientRect().height),
+          t1H: Math.round(t1.getBoundingClientRect().height),
+          t0OverflowY: getComputedStyle(t0).overflowY,
+        };
+      });
+      assert.equal(freeState.freeAttr, true, '#bcol enters free-canvas mode');
+      assert.equal(freeState.hasWheelObj, false, 'snap-deck WsBoardAnchor.wheel is retired');
+      assert.equal(freeState.t0Pos, 'absolute', 'free-canvas cards use position: absolute');
+      assert.notEqual(freeState.t0OverflowY, 'auto', 'topics have no inner overflow-y: auto trap');
+      assert.ok(freeState.t1Top > freeState.t0Top + freeState.t0H, 'Topic 1 sits below Topic 0 with gap');
+
+      // Native wheel scroll moves #bcol directly (never trapped inside topic-0)
+      await page.evaluate(() => {
+        window.WsBoardAnchor.select(document.getElementById('topic-0'), { smooth: false });
       });
       await waitFrames(page, 4);
       const center = await page.evaluate(() => {
         const r = document.getElementById('topic-0').getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + Math.min(r.height / 2, 200)) };
       });
       await page.mouse.move(center.x, center.y);
-      // Native inner scroll inside tall Topic 0
-      await page.mouse.wheel(0, 180);
-      await waitFrames(page, 3);
-      const innerCheck = await page.evaluate(() => ({
-        key: window.WsBoardAnchor.key(),
+      await page.mouse.wheel(0, 240);
+      await waitFrames(page, 4);
+      const scrollCheck = await page.evaluate(() => ({
         innerTop: document.getElementById('topic-0').scrollTop,
-        bcolTop: document.getElementById('bcol').scrollTop
+        bcolTop: document.getElementById('bcol').scrollTop,
       }));
-      assert.equal(innerCheck.key, 't:topic-0');
-      assert.ok(innerCheck.innerTop > 0, 'wheel inside tall card scrolls natively');
-      assert.equal(innerCheck.bcolTop, 0, 'outer #bcol stays pinned while inner scrolls');
+      assert.equal(scrollCheck.innerTop, 0, 'topic-0 does not trap wheel scroll internally');
+      assert.ok(scrollCheck.bcolTop > 0, 'outer #bcol scrolls natively on wheel');
 
-      // Move to bottom of Topic 0, pause > idleGapMs, dispatch a single flick + decaying inertia tail
+      // Synchronous jump selects and mounts target card immediately
       await page.evaluate(() => {
-        const t0 = document.getElementById('topic-0');
-        t0.scrollTop = t0.scrollHeight;
-        window.WsBoardAnchor.wheel.reset();
+        window.WsBoardAnchor.select(document.getElementById('topic-4'), { smooth: false });
       });
-      await page.waitForTimeout(180);
-      for (const dy of [18, 42, 34, 24, 16, 10, 6, 3]) {
-        await page.mouse.wheel(0, dy);
-        await page.waitForTimeout(16);
-      }
-      await page.waitForTimeout(260);
-      const afterFlick = await page.evaluate(() => window.WsBoardAnchor.key());
-      assert.equal(afterFlick, 't:topic-1', 'single flick with decaying tail must commit exactly 1 card without double-jump');
+      await waitFrames(page, 4);
+      const jumped = await page.evaluate(() => ({
+        key: window.WsBoardAnchor.key(),
+        off: document.getElementById('topic-4').getAttribute('data-wb-offwindow'),
+      }));
+      assert.equal(jumped.key, 't:topic-4', 'synchronous jump selects target card');
+      assert.equal(jumped.off, null, 'jumped target card is mounted in active window');
     } finally {
       await ctx.close();
     }
