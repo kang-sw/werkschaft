@@ -20,6 +20,7 @@
   var FREE_FALLBACK_H = 320;
   var FREE_RESIZE_EPS = 0.5;
   var FREE_BOT_PAD = 48;
+  var FREE_PIN_MS = 1500;
   var anchorKey = null, anchorSized = { w: 0, h: 0, bar: 0, reply: 0, padTop: 0, inset: 0, bounded: false };
   var anchorLast = null, anchorRO = null, anchorMO = null, anchorBoardMO = null, anchorFaceEl = null, anchorReplyEl = null, anchorCache = null;
   var anchorCap0 = null, anchorCapR0 = null, anchorCap1 = null, anchorBotNodes = [], anchorLastNode = null;
@@ -29,6 +30,7 @@
   var freePos = new Map(), freeHeightCache = new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
   var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false;
+  var freePin = null, freePinTimer = 0, freePinRaf = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
   // Far section.topic bodies outside the active free-canvas window (or
@@ -769,6 +771,7 @@
   }
   function anchorProcessRecords(records) {
     if (!records || !records.length) return;
+    if (freePin) freePinLayout();
     if (anchorRecordsAffectOrder(records)) anchorCache = null;
     if (virtualExemptSet.size) {
       for (var i = 0; i < records.length; i++) {
@@ -892,6 +895,7 @@
       }
       return;
     }
+    if (freePin && freePin.card === n) freeReleasePin();
     if (mode === "hidden") {
       if (!n.getAttribute || n.getAttribute("data-wb-offwindow") !== "hidden") n.setAttribute("data-wb-offwindow", "hidden");
       if (freeParkedByUs.has(n)) {
@@ -912,6 +916,7 @@
   }
   function freeClearNode(n) {
     if (!n || n.nodeType !== 1) return;
+    if (freePin && freePin.card === n) freeReleasePin();
     freeSetOffWindow(n, null);
     freeDeferredCollapse.delete(n);
     if (n.style && n.style.top) n.style.top = "";
@@ -928,6 +933,7 @@
     freeIdleTimer = 0;
   }
   function freeSuspend() {
+    freeReleasePin();
     freeJump = null;
     freeStagePending = false;
     freeCancelTimers();
@@ -1081,6 +1087,79 @@
     col.scrollTop = Math.max(0, top + delta);
     if (atJump) freeJump.top = col.scrollTop;
   }
+  function freeReleasePin() {
+    if (!freePin) return;
+    freePin = null;
+    clearTimeout(freePinTimer);
+    if (freePinRaf) cancelAnimationFrame(freePinRaf);
+    freePinTimer = freePinRaf = 0;
+  }
+  function freePinned() {
+    var p = freePin;
+    if (p && (Date.now() >= p.until || p.generation !== anchorUserScroll ||
+        !p.node.isConnected || !p.col.contains(p.card) || !p.card.contains(p.node) || p.card.hidden || p.node.hidden ||
+        p.card.hasAttribute("data-wb-offwindow") || p.card.hasAttribute("data-state-filtered") ||
+        p.card.hasAttribute("data-max") || p.node.hasAttribute("data-max"))) freeReleasePin();
+    return freePin;
+  }
+  function freeStartPinWindow() {
+    freePin.until = Date.now() + FREE_PIN_MS;
+    freePinTimer = setTimeout(freeReleasePin, FREE_PIN_MS);
+  }
+  function freeOffset(node, col) {
+    return node.getBoundingClientRect().top - col.getBoundingClientRect().top - (col.clientTop || 0);
+  }
+  function freeLand(col, top, smooth, pin) {
+    freeReleasePin();
+    var from = col.scrollTop;
+    var moving = !!(smooth && col.scrollTo && Math.abs(from - top) > 1);
+    if (pin && pin.offset === undefined) pin.offset = freeOffset(pin.node, col);
+    if (moving) col.scrollTo({ top: top, behavior: "smooth" });
+    else {
+      if (top !== from) col.scrollTop = top;
+      top = col.scrollTop;
+    }
+    freeJump = { top: top, moving: moving };
+    if (pin) {
+      // Capture the projected landing during animation. Layout signals that
+      // arrive in flight are applied when the native scroll settles.
+      pin.col = col;
+      pin.offset += from - top;
+      pin.generation = anchorUserScroll;
+      pin.until = Infinity;
+      pin.dirty = false;
+      freePin = pin;
+      if (moving) freeScheduleIdle(col);
+      else freeStartPinWindow();
+    }
+  }
+  function freeLandTarget(node, top, smooth, offset) {
+    var col = $("bcol"), card = freeActive && anchorOwner(node);
+    if (!col || !card || !freePos.has(card) || !col.contains(node) ||
+        card.hasAttribute("data-max") || node.hasAttribute("data-max")) return false;
+    freeLand(col, top === undefined ? col.scrollTop : top, smooth && !reducedMotion(), { node: node, card: card, offset: offset });
+    return true;
+  }
+  function freePinLayout() {
+    var p = freePinned();
+    if (!p) return;
+    p.dirty = true;
+    if (freePinRaf || (freeJump && freeJump.moving)) return;
+    // Coalesce the height reports, observer callbacks and layout writes.
+    freePinRaf = requestAnimationFrame(function () {
+      freePinRaf = 0;
+      if (!freePinned()) return;
+      p.dirty = false;
+      var top = p.col.scrollTop;
+      // A focus or native scroll-into-view can move the scroller before its
+      // scroll event arrives. That movement takes over just like input.
+      if (!freeJump || Math.abs(top - freeJump.top) > 1) { freeReleasePin(); return; }
+      var delta = freeOffset(p.node, p.col) - p.offset;
+      if (Math.abs(delta) < FREE_RESIZE_EPS) return;
+      p.col.scrollTop = top + delta;
+      if (freeJump) freeJump.top = p.col.scrollTop;
+    });
+  }
   function freeLayout(opts) {
     opts = opts || {};
     var col = $("bcol"), board = region("board");
@@ -1193,7 +1272,7 @@
       var shift = topPad - ys[0];
       if (Math.abs(shift) >= FREE_RESIZE_EPS) {
         for (var si = start; si <= end; si++) ys[si] += shift;
-        if ((!opts.jump || opts.smooth) && wasActive) freeShiftScroll(col, shift);
+        if ((!opts.jump || opts.smooth) && wasActive && !freePinned()) freeShiftScroll(col, shift);
       }
     }
     var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end], !opts.jump && !!freeIdleTimer);
@@ -1231,14 +1310,9 @@
       targetScroll = Math.max(0, Math.min(maxScroll, Math.round(targetScroll)));
       // A centered or clamped jump can leave a preceding card visible. Keep
       // the requested selection at the landing offset until the board moves.
-      if (opts.smooth && !reducedMotion() && col.scrollTo && Math.abs(col.scrollTop - targetScroll) > 1) {
-        freeJump = { top: targetScroll, moving: true };
-        col.scrollTo({ top: targetScroll, behavior: "smooth" });
-      } else {
-        col.scrollTop = targetScroll;
-        freeJump = { top: col.scrollTop, moving: false };
-      }
-    }
+      var pin = opts.pin !== false && !scrubbing ? { node: aNode, card: aNode } : null;
+      freeLand(col, targetScroll, opts.smooth && !reducedMotion(), pin);
+    } else freePinLayout();
     return true;
   }
   function freeOnCardResize(entries) {
@@ -1287,7 +1361,7 @@
             var ns = list[si], ys = freePos.get(ns);
             if (ys !== undefined) freePos.set(ns, ys + shift);
           }
-          freeShiftScroll(col, shift);
+          if (!freePinned()) freeShiftScroll(col, shift);
         }
       }
     }
@@ -1301,6 +1375,7 @@
       var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
       if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeCachedHeight(lastCard), !!freeIdleTimer);
     }
+    freePinLayout();
   }
   function freeFlushScrolledOutHeld() {
     if (typeof boardPending === "undefined" || !Object.keys(boardPending).length) return;
@@ -1314,6 +1389,10 @@
     if (!freeJump || !freeJump.moving) return;
     freeJump.top = col.scrollTop;
     freeJump.moving = false;
+    if (freePin) {
+      freeStartPinWindow();
+      if (freePin.dirty) freePinLayout();
+    }
   }
   function freeScrollTick() {
     freeScrollRaf = 0;
@@ -1321,7 +1400,10 @@
     var col = $("bcol"), list = anchorCards();
     if (!col || !list.length || freeWinEnd < freeWinStart) return;
     var top = col.scrollTop;
-    if (freeJump && !freeJump.moving && Math.abs(top - freeJump.top) > 1) freeJump = null;
+    if (freeJump && !freeJump.moving && Math.abs(top - freeJump.top) > 1) {
+      freeReleasePin();
+      freeJump = null;
+    }
     var viewTopY = top + anchorSized.padTop + anchorRailInset(col);
     var nextAnchor = freeJump && !freeJump.moving ? freeAnchorIdx : freeFindTopVisibleIdx(list, col, viewTopY);
     var nextNode = list[nextAnchor];
@@ -1362,6 +1444,7 @@
     if (freeStagePending) {
       var tail = list[freeWinEnd], tailY = freePos.get(tail);
       if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeCachedHeight(tail), false);
+      freePinLayout();
     }
     if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
     var yFirst = freePos.get(list[freeWinStart]);
@@ -1500,6 +1583,7 @@
       var idx = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : list.indexOf(n);
       if (idx < 0) return false;
       var still = !!(opt && opt.still);
+      if (!still) freeReleasePin();
       var anchorY = wasMounted ? (freePos.has(n) ? freePos.get(n) : prevMountedY) : FREE_RUNWAY_MID;
       var wantSmooth = !still && wasMounted && !!(opt && opt.smooth);
       freeLayout({
@@ -1507,6 +1591,7 @@
         anchorY: anchorY,
         jump: !still,
         centerJump: !(opt && opt.alignTop),
+        pin: !(opt && opt.pin === false),
         smooth: wantSmooth,
         forceFull: !!(opt && opt.fullVirtual) || !freeActive,
         list: list
@@ -1547,6 +1632,7 @@
     if (d > 0) {
       var col = $("bcol");
       if (col) {
+        freeReleasePin();
         var height = col.scrollHeight, smooth = !reducedMotion();
         if (freeActive && smooth) {
           var target = Math.max(0, height - col.clientHeight);
@@ -1642,7 +1728,9 @@
     if (anchorKey === null) try { saved = window.sessionStorage.getItem(ANCHOR_STORE); } catch (e) {}
     var key = saved !== null ? saved : null, next = key !== null ? anchorNode(key) : null;
     if (!next && before && anchorLast) next = anchorFallback(before, anchorLast);
-    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next, fullVirtual: true });
+    // Restoring a saved jump may pin it. A missing card's automatic fallback
+    // leaves the former target's pin released.
+    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next, pin: key !== null && !!next, fullVirtual: true });
   }
   // jump resolves a board topic or card to its containing card, then lets the
   // caller scroll inside it.
@@ -1780,6 +1868,7 @@
   function anchorCancelProg(e) {
     if (e && e.defaultPrevented) return;
     anchorUserScroll++;
+    freeReleasePin();
     var col = $("bcol"), sc = null;
     if (freeJump && freeJump.moving) sc = col;
     else if (anchorProg && anchorProg.smooth && !anchorProg.scrollDone) sc = anchorProg.scroller;
@@ -1869,6 +1958,7 @@
     col.addEventListener("touchmove", anchorCancelProg, { passive: true });
     col.addEventListener("keydown", anchorOnKey, { passive: true });
     col.addEventListener("scrollend", anchorScrollEnd, { passive: true });
+    col.addEventListener("load", function () { if (freePin) freePinLayout(); }, true);
     if (doc.addEventListener) doc.addEventListener("scrollend", anchorScrollEnd, { passive: true });
     if (window.ResizeObserver) {
       anchorRO = new ResizeObserver(anchorSize);
@@ -1912,6 +2002,8 @@
     window.WsBoardAnchor = {
       restore: function () { var n = anchorCurrent(); if (n) anchorSelect(n, { keep: true }); },
       select: anchorSelect,
+      land: freeLandTarget,
+      pinning: function () { return !!freePinned(); },
       step: anchorStep,
       owner: anchorOwner,
       key: function () { return anchorKey; },

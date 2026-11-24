@@ -3,9 +3,94 @@ const assert = require('node:assert/strict');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base] = process.argv.slice(2);
 
+async function checkJumpPin(browser, release) {
+  const tab = await browser.newPage({
+    viewport: { width: 1440, height: 950 }, reducedMotion: 'reduce',
+  });
+  try {
+    tab.setDefaultTimeout(5000);
+    await tab.goto(base + '/s/livesession');
+    const page = tab.frameLocator('iframe.sframe.on');
+    const board = page.locator('#bcol');
+    const topic = board.locator('section.topic[data-topic="Topic 10"]');
+    const target = topic.locator('#p2');
+    const above = topic.locator('.tdoc iframe.doc-frame');
+    const link = page.locator('#convo a[data-wb-jump="p2"]');
+    await topic.evaluate(el => {
+      window.WsBoardAnchor.select(el);
+      const card = document.createElement('section');
+      card.className = 'wbupdate-topic';
+      card.dataset.wbTopic = el.id;
+      card.innerHTML = '<a href="#p2" data-wb-jump="p2">#p2</a>';
+      document.querySelector('#r-entries .centries').prepend(card);
+    });
+    await above.contentFrame().getByText('Topic body text', { exact: true }).waitFor();
+    const measure = () => target.evaluate(el => {
+      const col = el.closest('#bcol');
+      return { offset: el.getBoundingClientRect().top - col.getBoundingClientRect().top, top: col.scrollTop };
+    });
+    const grow = async height => {
+      const before = await above.evaluate(el => el.offsetHeight);
+      // Release a height report from the sandbox after the panel has landed.
+      await above.contentFrame().locator('body').evaluate((el, height) => {
+        const docKey = document.querySelector('meta[name="wb-doc-key"]').content;
+        parent.postMessage({ wbDoc: 'height', docKey, height }, '*');
+      }, before + height);
+      await expectFrameHeight(above, before + height);
+      await target.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    };
+    await link.click();
+    assert.equal(await target.evaluate(el => document.activeElement === el), true, 'the conversation link lands on the panel');
+    const landed = await measure();
+    // The height report lands after the old history follow has gone quiet.
+    await tab.waitForTimeout(release === 'timeout' ? 950 : 450);
+    await grow(140);
+    const held = await measure();
+    assert.ok(Math.abs(held.offset - landed.offset) <= 3, 'late height keeps the panel in place: ' + JSON.stringify({ landed, held }));
+    assert.ok(held.top > landed.top + 130, 'the board compensated for the actual frame report');
+    if (release === 'wheel') {
+      const bounds = await board.boundingBox();
+      await tab.mouse.move(bounds.x + bounds.width - 2, bounds.y + 240);
+      await tab.mouse.wheel(0, 85);
+      await board.evaluate((el, top) => new Promise(resolve => {
+        if (el.scrollTop > top + 80) resolve();
+        else el.addEventListener('scrollend', resolve, { once: true });
+      }), held.top);
+      assert.ok((await measure()).top > held.top + 80, 'native wheel moved the board during the pin');
+    } else {
+      await tab.waitForTimeout(600);
+    }
+    const released = await measure();
+    await grow(110);
+    const after = await measure();
+    assert.ok(Math.abs(after.top - released.top) <= 3, release + ' releases scrollTop: ' + JSON.stringify({ released, after }));
+    assert.ok(after.offset > released.offset + 100, 'growth after release moves the panel');
+    console.log('conversation panel jump holds through late heights and releases on ' + release);
+  } finally {
+    await tab.close();
+  }
+}
+
+async function expectFrameHeight(frame, min) {
+  await frame.evaluate((el, height) => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      reject(new Error('Expected frame height ' + height + ', got ' + el.offsetHeight + ' (' + el.style.height + ')'));
+    }, 2500);
+    const observer = new ResizeObserver(() => {
+      if (el.offsetHeight < height) return;
+      observer.disconnect();
+      clearTimeout(timeout);
+      resolve();
+    });
+    observer.observe(el);
+  }), min);
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
+    for (const release of ['wheel', 'timeout']) await checkJumpPin(browser, release);
     for (const exit of ['Escape', 'button']) {
       const tab = await browser.newPage({
         viewport: { width: 1440, height: 950 }, reducedMotion: 'reduce',
