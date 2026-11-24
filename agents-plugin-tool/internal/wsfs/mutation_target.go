@@ -46,7 +46,7 @@ func (t *mutationTarget) checkProtectedParent(protection FileProtection) error {
 	if err != nil {
 		return err
 	}
-	return protection.CheckOpened(info)
+	return protection.CheckOpened(t.parent, info)
 }
 
 func pinMutationTarget(path string) (*mutationTarget, error) {

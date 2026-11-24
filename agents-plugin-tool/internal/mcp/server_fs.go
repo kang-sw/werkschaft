@@ -396,7 +396,7 @@ func fsCheckOpened(file *os.File, protection *wsdashboard.ProviderCredentialProt
 	if err != nil {
 		return nil, err
 	}
-	if err := protection.CheckOpened(info); err != nil {
+	if err := protection.CheckOpened(file, info); err != nil {
 		return nil, err
 	}
 	return info, nil

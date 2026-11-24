@@ -117,7 +117,7 @@ func (p *ProviderCredentialProtection) CheckPath(path string) error {
 	return p.checkIdentityError()
 }
 
-func (p *ProviderCredentialProtection) CheckOpened(info os.FileInfo) error {
+func (p *ProviderCredentialProtection) CheckOpened(_ *os.File, info os.FileInfo) error {
 	if p.deny.opened(info) {
 		return errProviderCredentialPath
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsfs"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
@@ -65,11 +66,11 @@ func (p *modelFileWriteProtection) CheckPath(path string) error {
 	return nil
 }
 
-func (p *modelFileWriteProtection) CheckOpened(info os.FileInfo) error {
+func (p *modelFileWriteProtection) CheckOpened(file *os.File, info os.FileInfo) error {
 	if p.stateErr != nil {
 		return p.stateErr
 	}
-	if err := p.ProviderCredentialProtection.CheckOpened(info); err != nil {
+	if err := p.ProviderCredentialProtection.CheckOpened(file, info); err != nil {
 		return err
 	}
 	if info.IsDir() {
@@ -80,19 +81,27 @@ func (p *modelFileWriteProtection) CheckOpened(info os.FileInfo) error {
 			return errModelDaemonState
 		}
 	}
-	if info.Mode().IsRegular() {
-		// A missing destination has no inode to compare. Resolve the
-		// individual identities only for an existing regular file.
-		if !p.filesLoaded {
-			p.filesLoaded = true
-			if err := p.loadFileIdentities(); err != nil {
-				p.stateErr = fmt.Errorf("cannot verify daemon state file identity: %w", err)
-				return p.stateErr
-			}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	// Root protection handles paths into the store. Only a destination
+	// with another directory entry can be a hard link to a state file.
+	linked, err := wsfs.HasMultipleLinks(file, info)
+	if err != nil {
+		return fmt.Errorf("cannot verify daemon state file identity: check destination link count: %w", err)
+	}
+	if !linked {
+		return nil
+	}
+	if !p.filesLoaded {
+		p.filesLoaded = true
+		if err := p.loadFileIdentities(); err != nil {
+			p.stateErr = fmt.Errorf("cannot verify daemon state file identity: %w", err)
+			return p.stateErr
 		}
-		if sameDeniedFile(info, p.files) {
-			return errModelDaemonState
-		}
+	}
+	if sameDeniedFile(info, p.files) {
+		return errModelDaemonState
 	}
 	return nil
 }
