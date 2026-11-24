@@ -69,6 +69,8 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		// The tool summary's token and batch lines.
 		"tokenText":        func(requests int, u *wslive.TokenUsage) string { return tokenText(lang, requests, u) },
 		"tokenTitle":       func(requests int, u *wslive.TokenUsage) string { return tokenTitle(lang, requests, u) },
+		"estContextText":   estContextText,
+		"estContextTitle":  estContextTitle,
 		"requests":         summaryRequests,
 		"batchNums":        func(b wslive.ToolBatch) []batchNum { return batchNums(lang, b) },
 		"batchArgs":        batchArgs,
@@ -238,6 +240,47 @@ func compactTokens(n int64) string {
 	return strconv.FormatFloat(float64(n)/1e6, 'f', 1, 64) + "M"
 }
 
+// estContextTokens estimates the context tokens added by a tool call's input
+// and output bytes: (inBytes + outBytes) / 4, rounded to the nearest integer
+// and floored at 1 when any bytes were transferred. Mirrors auEstContextTokens.
+func estContextTokens(inBytes, outBytes int) int64 {
+	total := int64(max(inBytes, 0)) + int64(max(outBytes, 0))
+	if total <= 0 {
+		return 0
+	}
+	return max(int64(1), (total+2)/4)
+}
+
+// fmtBytes formats a byte count identically to auFmtBytes in JS.
+func fmtBytes(n int64) string {
+	if n <= 0 {
+		return "0 B"
+	}
+	if n < 1024 {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+	if n < 1048576 {
+		return strconv.FormatFloat(float64(n)/1024, 'f', 1, 64) + " KB"
+	}
+	return strconv.FormatFloat(float64(n)/1048576, 'f', 1, 64) + " MB"
+}
+
+func estContextText(inBytes, outBytes int) string {
+	est := estContextTokens(inBytes, outBytes)
+	if est <= 0 {
+		return ""
+	}
+	return "+" + compactTokens(est)
+}
+
+func estContextTitle(inBytes, outBytes int) string {
+	est := estContextTokens(inBytes, outBytes)
+	if est <= 0 {
+		return ""
+	}
+	return "~" + compactTokens(est) + " tok (in " + fmtBytes(int64(max(inBytes, 0))) + " + out " + fmtBytes(int64(max(outBytes, 0))) + ")"
+}
+
 // tokenText is a token usage in one compact line: the model requests it
 // covers when more than one, the whole prompt the model read (input plus
 // cache reads and writes) with the cache-write part as a trailing +N when
@@ -320,6 +363,9 @@ func batchNums(lang string, b wslive.ToolBatch) []batchNum {
 		}
 		add(" · ", compactTokens(u.Output), wsi18n.T(lang, "tok.out", commafy(u.Output)), "")
 	}
+	if tok := estContextText(b.InBytes, b.OutBytes); tok != "" {
+		add(" · ", tok, estContextTitle(b.InBytes, b.OutBytes), "btok")
+	}
 	return nums
 }
 
@@ -355,6 +401,8 @@ type auditCallRow struct {
 	DurationMs    int64
 	Duration      string
 	DurationTitle string
+	TokText       string
+	TokTitle      string
 	IsSummary     bool
 }
 
@@ -402,20 +450,33 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 	if s == nil {
 		return rows
 	}
+	var shownFailed, shownIn, shownOut int
 	for _, b := range s.Batches {
+		shownFailed += b.Failed
+		shownIn += max(b.InBytes, 0)
+		shownOut += max(b.OutBytes, 0)
 		if len(b.CallArgs) > 0 {
 			allFailed := b.Failed > 0 && b.Failed >= b.Calls
 			singleDur := int64(0)
 			if b.Calls == 1 && b.DurationMs > 0 {
 				singleDur = b.DurationMs
 			}
+			var argsFailed, argsIn, argsOut int
 			for _, c := range b.CallArgs {
+				failed := c.Failed || allFailed
+				if failed {
+					argsFailed++
+				}
+				argsIn += max(c.InBytes, 0)
+				argsOut += max(c.OutBytes, 0)
 				row := auditCallRow{
 					ID:          c.ID,
 					Name:        c.Name,
 					ShortName:   toolName(c.Name),
 					ArgsPreview: c.ArgsPreview,
-					Failed:      allFailed,
+					Failed:      failed,
+					TokText:     estContextText(c.InBytes, c.OutBytes),
+					TokTitle:    estContextTitle(c.InBytes, c.OutBytes),
 				}
 				if singleDur > 0 {
 					row.DurationMs = singleDur
@@ -429,9 +490,14 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 			}
 			if rest := b.Calls - len(b.CallArgs); rest > 0 {
 				label := wsi18n.Plural(lang, "batch.calls", rest)
+				remIn := max(b.InBytes-argsIn, 0)
+				remOut := max(b.OutBytes-argsOut, 0)
 				rows = append(rows, auditCallRow{
 					Name:      label,
 					ShortName: label,
+					Failed:    b.Failed > argsFailed,
+					TokText:   estContextText(remIn, remOut),
+					TokTitle:  estContextTitle(remIn, remOut),
 					IsSummary: true,
 				})
 			}
@@ -460,16 +526,23 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 			rows = append(rows, auditCallRow{
 				Name:      short,
 				ShortName: short,
-				Failed:    b.Failed > 0 && b.Failed >= b.Calls,
+				Failed:    b.Failed > 0,
+				TokText:   estContextText(b.InBytes, b.OutBytes),
+				TokTitle:  estContextTitle(b.InBytes, b.OutBytes),
 				IsSummary: true,
 			})
 		}
 	}
 	if s.BatchesOmitted > 0 {
 		label := wsi18n.T(lang, "tools.more", s.BatchesOmitted)
+		remIn := max(s.InBytes-shownIn, 0)
+		remOut := max(s.OutBytes-shownOut, 0)
 		rows = append(rows, auditCallRow{
 			Name:      label,
 			ShortName: label,
+			Failed:    s.Failed > shownFailed,
+			TokText:   estContextText(remIn, remOut),
+			TokTitle:  estContextTitle(remIn, remOut),
 			IsSummary: true,
 		})
 	}

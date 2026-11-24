@@ -521,6 +521,8 @@ type toolCall struct {
 	startedAt int64
 	endedAt   int64
 	failed    bool
+	inBytes   int
+	outBytes  int
 }
 
 func newBatchTracker(prefix string) batchTracker {
@@ -529,7 +531,7 @@ func newBatchTracker(prefix string) batchTracker {
 
 // addCall records a call of the assistant message group, ending the
 // current batch first when it belongs to another message.
-func (t *batchTracker) addCall(group, id, name, args string, now int64) []Event {
+func (t *batchTracker) addCall(group, id, name, args string, inBytes int, now int64) []Event {
 	var out []Event
 	if t.batch != nil && t.batch.group != group {
 		if ev := t.finish(now, true); ev != nil {
@@ -540,7 +542,7 @@ func (t *batchTracker) addCall(group, id, name, args string, now int64) []Event 
 		t.seq++
 		t.batch = &toolBatch{group: group, seq: t.seq, startedAt: now}
 	}
-	t.batch.calls = append(t.batch.calls, &toolCall{id: id, name: name, args: args, startedAt: now})
+	t.batch.calls = append(t.batch.calls, &toolCall{id: id, name: name, args: args, startedAt: now, inBytes: max(inBytes, 0)})
 	return append(out, t.event())
 }
 
@@ -560,14 +562,15 @@ func (t *batchTracker) setUsage(group string, usage *wslive.TokenUsage) []Event 
 
 // endCall ends the call id; the batch finishes when it was the last open
 // call.
-func (t *batchTracker) endCall(id string, failed bool, now int64) []Event {
+func (t *batchTracker) endCall(id string, failed bool, outBytes int, now int64) []Event {
 	if t.batch == nil {
 		return nil
 	}
 	changed := false
+	clampedOut := max(outBytes, 0)
 	for _, c := range t.batch.calls {
 		if c.id == id && c.endedAt == 0 {
-			c.endedAt, c.failed, changed = now, failed, true
+			c.endedAt, c.failed, c.outBytes, changed = now, failed, clampedOut, true
 		}
 	}
 	if !changed {
@@ -624,7 +627,9 @@ type wireCall struct {
 	// display key a history row carries, which is what the audit store makes
 	// of the raw call_id the call's audit events carry (it normalizes once,
 	// at ingestion).
-	ID string `json:"id,omitempty"`
+	ID       string `json:"id,omitempty"`
+	InBytes  int    `json:"inBytes,omitempty"`
+	OutBytes int    `json:"outBytes,omitempty"`
 }
 
 // event is the lead's batch list holding the current batch: running while
@@ -639,7 +644,7 @@ func (t *batchTracker) event() Event {
 		if !contains(w.ToolNames, c.name) {
 			w.ToolNames = append(w.ToolNames, c.name)
 		}
-		wc := wireCall{Name: c.name, StartedAt: c.startedAt, EndedAt: c.endedAt, Failed: c.failed, ArgsPreview: c.args}
+		wc := wireCall{Name: c.name, StartedAt: c.startedAt, EndedAt: c.endedAt, Failed: c.failed, ArgsPreview: c.args, InBytes: c.inBytes, OutBytes: c.outBytes}
 		if t.callIDs {
 			wc.ID = wsaudit.NormalizeID(c.id)
 		}

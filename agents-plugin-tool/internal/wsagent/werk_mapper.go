@@ -96,9 +96,9 @@ func (m *werkMapper) mapEvent(l werk.Line) []Event {
 	case werk.LineReasoning:
 		return m.reasoning(l)
 	case werk.LineToolStart:
-		return m.batches.addCall(m.group(), l.Call, l.Name, l.Args, now)
+		return m.batches.addCall(m.group(), l.Call, l.Name, l.Args, len(l.Args), now)
 	case werk.LineToolEnd:
-		return m.batches.endCall(l.Call, l.Failed, now)
+		return m.batches.endCall(l.Call, l.Failed, len(l.Output), now)
 	case werk.LineCheckpoint:
 		if l.Replayed {
 			return nil

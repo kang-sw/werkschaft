@@ -33,13 +33,13 @@ func TestCompactionHardSteersAtParallelBoundariesUntilRequest(t *testing.T) {
 			}
 		})
 	}
-	feed(batch.addCall("parallel", "a", "one", "", 1))
-	feed(batch.addCall("parallel", "b", "two", "", 2))
-	feed(batch.endCall("a", false, 3))
+	feed(batch.addCall("parallel", "a", "one", "", 0, 1))
+	feed(batch.addCall("parallel", "b", "two", "", 0, 2))
+	feed(batch.endCall("a", false, 0, 3))
 	if got := h.userInputs(holder); len(got) != 2 {
 		t.Fatalf("first result of a parallel batch delivered a steer: %q", got)
 	}
-	feed(batch.endCall("b", false, 4))
+	feed(batch.endCall("b", false, 0, 4))
 	got = h.userInputs(holder)
 	if len(got) != 3 || !strings.HasPrefix(got[2], "Hard 250k, +6% (265k).") || strings.Contains(got[2], "\n") {
 		t.Fatalf("parallel boundary steer = %q", got)
@@ -48,8 +48,8 @@ func TestCompactionHardSteersAtParallelBoundariesUntilRequest(t *testing.T) {
 	if result := h.runner.Compact(h.record(id).WSKey, "", nil); result.Status != "queued" {
 		t.Fatal(result)
 	}
-	feed(batch.addCall("next", "c", "three", "", 5))
-	feed(batch.endCall("c", false, 6))
+	feed(batch.addCall("next", "c", "three", "", 0, 5))
+	feed(batch.endCall("c", false, 0, 6))
 	if got := h.userInputs(holder); len(got) != 3 {
 		t.Fatalf("pending request allowed more guidance or mid-turn compaction: %q", got)
 	}

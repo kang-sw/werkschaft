@@ -32,7 +32,7 @@
 
 /* ===== Conversation call rows ===== */
 .au-tools {
-  margin: 4px 0 8px;
+  margin: 1px 0 2px;
 }
 
 .au-calls {
@@ -41,7 +41,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 .au-row {
@@ -49,10 +49,10 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
-  padding: 4px 8px;
+  padding: 2px 6px;
   border-radius: 6px;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
 .au-row[data-call] {
@@ -74,7 +74,7 @@
 }
 
 .au-row.au-static {
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-dim);
   cursor: default;
 }
 
@@ -87,7 +87,7 @@
 }
 
 .au-done .au-mk {
-  color: var(--wb-ok);
+  color: var(--conv-trace-dim);
 }
 
 .au-fail .au-mk {
@@ -95,7 +95,11 @@
 }
 
 .au-static .au-mk {
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-dim);
+}
+
+.au-static.au-fail .au-mk {
+  color: var(--wb-fail);
 }
 
 .au-tool {
@@ -103,13 +107,17 @@
   font-family: var(--wb-mono);
   font-weight: 700;
   font-size: 11.5px;
-  color: var(--wb-fg);
+  color: var(--conv-trace-fg);
 }
 
 .au-row.au-static .au-tool {
   font-family: var(--wb-sans);
   font-weight: 600;
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-fg);
+}
+
+.au-row.au-fail .au-tool {
+  color: var(--wb-fail);
 }
 
 .au-args {
@@ -120,7 +128,15 @@
   white-space: nowrap;
   font-family: var(--wb-mono);
   font-size: 11.5px;
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-dim);
+}
+
+.au-row:not(.au-fail):hover .au-tool {
+  color: var(--wb-fg);
+}
+
+.au-row:hover .au-args {
+  color: var(--conv-trace-fg);
 }
 
 .au-right {
@@ -128,11 +144,13 @@
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 7px;
   font-family: var(--wb-mono);
   font-size: 11px;
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-dim);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .au-att {
@@ -154,14 +172,22 @@
   text-align: right;
 }
 
+.au-dur:empty {
+  display: none;
+}
+
 .au-tok {
   min-width: 34px;
   text-align: right;
-  color: var(--wb-primary);
+  color: var(--conv-trace-dim);
+}
+
+.au-tok:empty {
+  display: none;
 }
 
 .au-tok.au-sib {
-  color: var(--wb-muted-fg);
+  color: var(--conv-trace-dim);
 }
 
 /* ===== Audit floating window & narrow bottom sheet ===== */

@@ -63,7 +63,7 @@ func (m *claudeMapper) assistant(raw json.RawMessage, now int64, alerted bool) [
 				out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: b.Text, Final: true}})
 			}
 		case "tool_use":
-			out = append(out, m.batches.addCall(msg.ID, b.ID, b.Name, argsPreview(b.Input), now)...)
+			out = append(out, m.batches.addCall(msg.ID, b.ID, b.Name, argsPreview(b.Input), len(compactJSON(b.Input)), now)...)
 			if !m.lead() {
 				continue
 			}
@@ -102,7 +102,8 @@ func (m *claudeMapper) toolResults(raw json.RawMessage, now int64) []Event {
 	for _, b := range blocks {
 		if b.Type == "tool_result" {
 			name := m.batches.callName(b.ToolUseID)
-			out = append(out, m.batches.endCall(b.ToolUseID, b.IsError, now)...)
+			resText := claudeResultText(b.Content)
+			out = append(out, m.batches.endCall(b.ToolUseID, b.IsError, len(resText), now)...)
 			if m.lead() && b.IsError && strings.HasPrefix(name, "mcp__") {
 				// A failed MCP tool call may be a server that went away.
 				out = append(out, Event{MCPCheck: true})
@@ -112,7 +113,7 @@ func (m *claudeMapper) toolResults(raw json.RawMessage, now int64) []Event {
 				m.lever = m.lever || !b.IsError
 			}
 			if tool := m.resultTool(name); !b.IsError && tool != "" {
-				out = append(out, resultEvents(tool, claudeResultText(b.Content))...)
+				out = append(out, resultEvents(tool, resText)...)
 			}
 		}
 	}

@@ -35,17 +35,23 @@ type codexTurn struct {
 }
 
 type codexItem struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	Status    string          `json:"status"`
-	Command   string          `json:"command"`
-	Server    string          `json:"server"`
-	Tool      string          `json:"tool"`
-	Arguments json.RawMessage `json:"arguments"`
-	Result    json.RawMessage `json:"result"`
-	Error     json.RawMessage `json:"error"`
-	ExitCode  *int            `json:"exitCode"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Text             string          `json:"text"`
+	Status           string          `json:"status"`
+	Command          string          `json:"command"`
+	Cwd              string          `json:"cwd"`
+	Server           string          `json:"server"`
+	Tool             string          `json:"tool"`
+	Arguments        json.RawMessage `json:"arguments"`
+	Result           json.RawMessage `json:"result"`
+	Error            json.RawMessage `json:"error"`
+	ExitCode         *int            `json:"exitCode"`
+	AggregatedOutput *string         `json:"aggregatedOutput"`
+	Changes          json.RawMessage `json:"changes"`
+	Query            string          `json:"query"`
+	Path             string          `json:"path"`
+	Prompt           *string         `json:"prompt"`
 	// Kind, AgentThreadID, and AgentPath are a subAgentActivity item's: the
 	// transition (started or completed), the child's thread, and its path.
 	Kind          string `json:"kind"`
@@ -55,6 +61,28 @@ type codexItem struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+}
+
+func (item codexItem) auditItem() codexAuditItem {
+	return codexAuditItem{
+		ID:               item.ID,
+		Type:             item.Type,
+		Text:             item.Text,
+		Status:           item.Status,
+		Command:          item.Command,
+		Cwd:              item.Cwd,
+		Server:           item.Server,
+		Tool:             item.Tool,
+		Arguments:        item.Arguments,
+		Result:           item.Result,
+		Error:            item.Error,
+		ExitCode:         item.ExitCode,
+		AggregatedOutput: item.AggregatedOutput,
+		Changes:          item.Changes,
+		Query:            item.Query,
+		Path:             item.Path,
+		Prompt:           item.Prompt,
+	}
 }
 
 type codexStatus struct {
@@ -437,11 +465,11 @@ func (m *codexMapper) item(turn string, item codexItem, done bool, now int64) []
 			if item.Type == "mcpToolCall" {
 				name, args = item.Server+"/"+item.Tool, argsPreview(item.Arguments)
 			}
-			return m.batches.addCall(m.turnID, item.ID, name, args, now)
+			return m.batches.addCall(m.turnID, item.ID, name, args, len(codexToolInput(item.auditItem())), now)
 		}
 		failed := item.Status == "failed" || item.Status == "declined" ||
 			(item.ExitCode != nil && *item.ExitCode != 0) || codexPresent(item.Error)
-		out := m.batches.endCall(item.ID, failed, now)
+		out := m.batches.endCall(item.ID, failed, len(codexToolOutput(item.auditItem())), now)
 		if !failed && (item.Server == "ws" || item.Server == "wsflow") && slices.Contains(resultTools, item.Tool) {
 			var result struct {
 				Content []struct {

@@ -477,6 +477,8 @@ type BatchCall struct {
 	Failed      bool
 	ArgsPreview string
 	ID          string
+	InBytes     int
+	OutBytes    int
 }
 
 // CallIDMaxBytes bounds a call ID a batch may carry: a normalized ID is at
