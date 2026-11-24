@@ -311,19 +311,26 @@
     if (scope && scope.querySelectorAll) {
       q(".sentmark", scope).forEach(function (m) { if (m.parentNode) m.parentNode.removeChild(m); });
       q(".sent-sent, .sent-held", scope).forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
-      q(".sentdata i[data-id]").forEach(function (i) {
-        var item = boardItem(i.getAttribute("data-id"));
-        if (!item || !scope.contains(item)) return;
+      var scopedItems = new Map();
+      q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", scope).forEach(function (item) {
+        var id = item.getAttribute("data-id");
+        if (id && !scopedItems.has(id)) scopedItems.set(id, item);
+      });
+      if (!scopedItems.size) return;
+      scopedItems.forEach(function (item, id) {
         var head = item.querySelector(".head, .stext");
         if (!head) return;
-        var state = i.getAttribute("data-state"), m = doc.createElement("span");
-        item.classList.add(state === "held" ? "sent-held" : "sent-sent");
-        m.className = "sentmark " + state;
-        m.textContent = state + " · " + (i.getAttribute("data-answer") || "note");
-        var note = i.getAttribute("data-note");
-        m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (note ? ": " + note : "");
-        var id = head.querySelector(".id");
-        head.insertBefore(m, id ? id.nextSibling : head.firstChild);
+        var esc = window.CSS && window.CSS.escape ? window.CSS.escape(id) : String(id).replace(/["\\]/g, "\\$&");
+        q('.sentdata i[data-id="' + esc + '"]').forEach(function (i) {
+          var state = i.getAttribute("data-state"), m = doc.createElement("span");
+          item.classList.add(state === "held" ? "sent-held" : "sent-sent");
+          m.className = "sentmark " + state;
+          m.textContent = state + " · " + (i.getAttribute("data-answer") || "note");
+          var note = i.getAttribute("data-note");
+          m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (note ? ": " + note : "");
+          var idEl = head.querySelector(".id");
+          head.insertBefore(m, idEl ? idEl.nextSibling : head.firstChild);
+        });
       });
       return;
     }

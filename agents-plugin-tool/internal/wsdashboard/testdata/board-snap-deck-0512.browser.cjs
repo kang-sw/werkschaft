@@ -82,7 +82,7 @@ function buildTopicHtml(i, opts = {}) {
 
   const askBlock = opts.withAsk
     ? `<div class="tbody"><div class="card policy" id="item-${i}01" data-id="${i}01">
-        <div class="title">Ask question for Topic ${i}</div>
+        <div class="head"><span class="id">#${i}01</span><span class="title">Ask question for Topic ${i}</span></div>
         <textarea class="note" placeholder="Write answer note"></textarea>
       </div></div>`
     : '';
@@ -220,6 +220,12 @@ function buildBootstrapScript(savedCards) {
   const boardJs = readAsset(WSD, 'dashboard-board.js');
   const convoJs = readAsset(WSD, 'dashboard-conversation.js');
   const trackerJs = readAsset(WSD, 'dashboard-tracker.js');
+  const composerStatusJs = readAsset(WSD, 'dashboard-composer-status.js');
+  const composerJs = readAsset(WSD, 'dashboard-composer.js');
+  const boardItemMatch = composerJs.match(/\n  function boardItem\(id\) \{[\s\S]*?\n  \}/);
+  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
+  assert.ok(boardItemMatch, 'production boardItem found');
+  assert.ok(applySentMatch, 'production applySent found');
   const streamBundle = [
     readAsset(WSW, 'stream.js'),
     readAsset(WSW, 'stream-navigation.js'),
@@ -277,7 +283,8 @@ function buildBootstrapScript(savedCards) {
       function syncSpinnerPhases() {}
       function mermaid() {}
       function syncChips() {}
-      function applySent() {}
+      ${boardItemMatch[0]}
+      ${applySentMatch[0]}
       function outboxSync() {}
       function drawerSync() {}
       function drawerSwapped() {}
@@ -820,7 +827,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
         const updatedHtml = Array.from({ length: topicCount }, (_, idx) => {
           const i = idx + 1;
           return buildTopicHtml(i, {
-            withAsk: i === 1,
+            withAsk: i === 1 || i === targetIdx,
             rev: i === targetIdx ? 'rev-7-sse-stashed' : `rev-${i}-v1`,
             streamNote: i === targetIdx ? 'StashedSseStreamNote-7' : undefined,
           });
@@ -832,6 +839,21 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           const allTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
           window.WsBoardAnchor.select(allTopics[1]);
           window.WsBoardAnchor.select(allTopics[0]);
+
+          // Populate .sentdata entries for both far topics and the target stashed topic (#7 -> data-id="701").
+          let sentBox = document.querySelector('.sentdata');
+          if (!sentBox) {
+            sentBox = document.createElement('div');
+            sentBox.className = 'sentdata';
+            sentBox.hidden = true;
+            document.body.appendChild(sentBox);
+          }
+          sentBox.innerHTML = [
+            '<i data-id="101" data-state="held" data-answer="later" data-note="far-1"></i>',
+            '<i data-id="701" data-state="sent" data-answer="yes" data-note="approved"></i>',
+            '<i data-id="1101" data-state="sent" data-answer="ok" data-note="far-11"></i>',
+            '<i data-id="1201" data-state="held" data-answer="no" data-note="far-12"></i>',
+          ].join('');
 
           // 1. Make `farExemptCount` OTHER far topics exempt strictly outside both slot 0's
           //    near window [0..2] and targetIdx's near window [4..8] BEFORE the SSE swap, so
@@ -853,11 +875,26 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           window.__testApi.swapBoard('h-sse-i4', html);
           const hasStashedBefore = window.WsBoardVirtual.hasStashed(tid);
 
-          // 3. Wrap WsCards.decorate, window.wbBindBoard, and window.wbForm to verify scoped hydration only.
+          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, and whole-board #r-board/#bgal
+          //    querySelectorAll to verify scoped hydration only (zero boardItem/boardQ whole-board scans in applySent).
           const origDecorate = window.WsCards.decorate;
           const origWbBindBoard = window.wbBindBoard;
           const origWbForm = window.wbForm;
-          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0;
+          const boardEl = document.getElementById('r-board');
+          const galEl = document.getElementById('bgal');
+          const origBoardQSA = boardEl.querySelectorAll;
+          const origGalQSA = galEl ? galEl.querySelectorAll : null;
+          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0;
+          boardEl.querySelectorAll = function (sel) {
+            if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
+            return origBoardQSA.apply(this, arguments);
+          };
+          if (galEl && origGalQSA) {
+            galEl.querySelectorAll = function (sel) {
+              if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
+              return origGalQSA.apply(this, arguments);
+            };
+          }
           window.WsCards.decorate = function (scope) {
             if (scope && scope.nodeType === 1) decorateScoped++;
             else decorateWholeBoard++;
@@ -879,7 +916,11 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           window.WsBoardAnchor.select(targetSec);
           const stats = window.WsBoardVirtual.stats();
           const hydratedText = targetSec.textContent || '';
+          const item701 = targetSec.querySelector('#item-701');
+          const sentMark701 = item701 ? item701.querySelector('.sentmark.sent') : null;
 
+          boardEl.querySelectorAll = origBoardQSA;
+          if (galEl && origGalQSA) galEl.querySelectorAll = origGalQSA;
           window.WsCards.decorate = origDecorate;
           window.wbBindBoard = origWbBindBoard;
           window.wbForm = origWbForm;
@@ -887,6 +928,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             hasStashedBefore,
             stillCollapsed: targetSec.hasAttribute('data-wb-virtual'),
             renderedSse: hydratedText.includes('StashedSseStreamNote-7'),
+            item701HasSentClass: !!(item701 && item701.classList.contains('sent-sent')),
+            sentMark701Text: sentMark701 ? sentMark701.textContent : null,
+            wholeBoardSentScans,
             exemptCount: exemptIndices.length,
             stats,
             decorateScoped,
@@ -901,6 +945,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
         assert.equal(result.hasStashedBefore, true, 'target topic had stashed SSE revision');
         assert.equal(result.stillCollapsed, false, 'target topic hydrated on navigation');
         assert.equal(result.renderedSse, true, 'stashed SSE content rendered on hydration');
+        assert.equal(result.wholeBoardSentScans, 0, 'applySent(true, sec) must NEVER run whole-board boardItem/boardQ scans on #r-board or #bgal');
+        assert.equal(result.item701HasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
+        assert.equal(result.sentMark701Text, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
         assert.equal(result.decorateWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board WsCards.decorate()');
         assert.equal(result.decorateScoped, 1, 'hydrating one stashed topic calls scoped WsCards.decorate(sec) exactly once');
         assert.ok(result.bindBoardScoped >= 1, 'hydrating one stashed topic calls scoped wbBindBoard(sec)');
