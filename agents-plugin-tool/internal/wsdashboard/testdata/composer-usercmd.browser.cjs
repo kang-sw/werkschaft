@@ -194,7 +194,7 @@ async function holdButton(page, locator, ms = 1600) {
         } finally {
           releaseSave();
         }
-        await entry.locator('.ucmd-ibtn-save:enabled').waitFor();
+        await entry.locator('.ucmd-ibtn-save:enabled').waitFor({ state: 'attached' });
         await page.unroute(savePath);
         const saved = await (await page.request.get(base + '/s/livesession/user-commands')).json();
         assert.equal(saved.commands.find(c => c.id === 'hold').prompt, original, 'unrelated Save leaves the stored prompt byte-for-byte intact');
