@@ -1356,6 +1356,8 @@ type callIn struct {
 	Failed      bool   `json:"failed"`
 	ArgsPreview string `json:"argsPreview"`
 	ID          string `json:"id"`
+	InBytes     int    `json:"inBytes"`
+	OutBytes    int    `json:"outBytes"`
 }
 
 var epochPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -1463,7 +1465,15 @@ func (st *State) normalizeCalls(raw []json.RawMessage, callCount int) []BatchCal
 		if json.Unmarshal(item, &in) != nil || strings.TrimSpace(in.Name) == "" {
 			continue
 		}
-		c := BatchCall{Name: cleanToolName(st.scrub.scrub(in.Name)), StartedAt: max(in.StartedAt, 0), Failed: in.Failed, ArgsPreview: st.argsPreview(in.ArgsPreview), ID: callID(in.ID)}
+		c := BatchCall{
+			Name:        cleanToolName(st.scrub.scrub(in.Name)),
+			StartedAt:   max(in.StartedAt, 0),
+			Failed:      in.Failed,
+			ArgsPreview: st.argsPreview(in.ArgsPreview),
+			ID:          callID(in.ID),
+			InBytes:     max(in.InBytes, 0),
+			OutBytes:    max(in.OutBytes, 0),
+		}
 		if in.EndedAt >= c.StartedAt {
 			c.EndedAt = in.EndedAt
 		}

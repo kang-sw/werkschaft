@@ -58,17 +58,19 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
       const r2 = document.querySelector('.au-row[data-call="c2"]');
       const r3 = document.querySelector('.au-row[data-call="c3"]');
       return r1 && r1.getAttribute('data-au-hydrated') === '1' &&
-        r2 && r2.querySelector('.au-tok')?.textContent === '·' &&
+        r2 && r2.getAttribute('data-au-hydrated') === '1' &&
         r3 && r3.getAttribute('data-au-hydrated') === '1';
     });
 
     const tok1 = await frame.locator('.au-row[data-call="c1"] .au-tok').textContent();
     const tok2 = await frame.locator('.au-row[data-call="c2"] .au-tok').textContent();
     const tok3 = await frame.locator('.au-row[data-call="c3"] .au-tok').textContent();
+    const tok1Title = await frame.locator('.au-row[data-call="c1"] .au-tok').getAttribute('title');
     const att1 = await frame.locator('.au-row[data-call="c1"] .au-att').textContent();
-    assert.equal(tok1, '+2.4k', 'first call in request gets token delta');
-    assert.equal(tok2, '·', 'parallel sibling in same request gets middot');
-    assert.equal(tok3, '+1.7k', 'c3 in req-2 -> req-3 gets token delta');
+    assert.equal(tok1, '+2.2M', 'c1 shows estimated +(in+out)/4 token size');
+    assert.equal(tok2, '+2.2M', 'parallel sibling c2 shows its own estimated +(in+out)/4 instead of middot');
+    assert.equal(tok3, '+20', 'c3 shows estimated +(in+out)/4 token size');
+    assert.ok(tok1Title && tok1Title.includes('48000 \u2192 50400'), 'tooltip retains ctx_before -> ctx_after');
     assert.equal(att1, '+2', 'c1 shows attached event count (+2)');
 
     // No group frame: no header line, no fold or "+N more" button. Every call

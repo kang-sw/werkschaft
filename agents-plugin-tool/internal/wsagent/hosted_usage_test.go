@@ -42,8 +42,8 @@ func TestHostedBatchUsageFromAssistantMessages(t *testing.T) {
 			if b := st.Snapshot(150).Lead.Batches; len(b) != 1 || b[0].Running == nil {
 				t.Fatal("missing running batch")
 			}
-			apply(batches.endCall("c1", false, 200))
-			apply(batches.endCall("c2", false, 300))
+			apply(batches.endCall("c1", false, 0, 200))
+			apply(batches.endCall("c2", false, 0, 300))
 			apply([]Event{{Live: &wslive.Event{Kind: wslive.KindReply, Text: "done", Final: true}}})
 			if len(ring) != 2 || ring[0].Tools == nil || len(ring[0].Tools.Batches) != 1 {
 				t.Fatalf("finished batches: %+v", ring)
@@ -54,8 +54,8 @@ func TestHostedBatchUsageFromAssistantMessages(t *testing.T) {
 			}
 			// A later batch with no usage stays absent, not the previous
 			// message's usage or a fabricated zero-count chip.
-			apply(batches.addCall("next", "c3", "read", "", 400))
-			apply(batches.endCall("c3", false, 500))
+			apply(batches.addCall("next", "c3", "read", "", 0, 400))
+			apply(batches.endCall("c3", false, 0, 500))
 			apply([]Event{{Live: &wslive.Event{Kind: wslive.KindReply, Text: "done again", Final: true}}})
 			if b := ring[len(ring)-2].Tools.Batches[0]; b.Usage != nil {
 				t.Fatalf("usage leaked between batches: %+v", b)

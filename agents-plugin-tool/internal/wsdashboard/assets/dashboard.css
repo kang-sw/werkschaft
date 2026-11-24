@@ -13,6 +13,9 @@
   --wb-compact-ink: var(--wb-ph-compact);
   --pv-bg: #e4dcf7; --pv-fg: #3a2c6b; --pv-line: #b9a9e8;
   --conv-trigger: #0f7a72;
+  --conv-trace-fg: color-mix(in srgb, var(--wb-fg) 68%, var(--wb-bg));
+  --conv-trace-dim: color-mix(in srgb, var(--wb-muted-fg) 84%, var(--wb-bg));
+  --conv-trace-accent: color-mix(in srgb, var(--wb-primary) 72%, var(--wb-muted-fg));
   --wb-ok: #1d7348; --wb-fail: #c0262d;
   --wb-warn: #c27a00; --wb-warn-ink: #a35f00; --wb-hot: #d95d16;
   /* the warning tone on a toast, whose surface is the inverted text colour */
@@ -39,6 +42,9 @@
     --wb-compact-ink: var(--wb-on-ph-compact);
     --pv-bg: #3d2f6b; --pv-fg: #ddd3fb; --pv-line: #6a4fc4;
     --conv-trigger: #6ccbc2;
+    --conv-trace-fg: color-mix(in srgb, var(--wb-fg) 70%, var(--wb-bg));
+    --conv-trace-dim: color-mix(in srgb, var(--wb-muted-fg) 86%, var(--wb-bg));
+    --conv-trace-accent: color-mix(in srgb, var(--wb-primary) 74%, var(--wb-muted-fg));
     --wb-ok: #6cc39a; --wb-fail: #f0797e;
     --wb-warn: #e0a36c; --wb-warn-ink: #e0a36c; --wb-hot: #fb923c;
     --wb-toast-warn: #9a5a00;
@@ -63,6 +69,9 @@
   --wb-compact-ink: var(--wb-on-ph-compact);
   --pv-bg: #3d2f6b; --pv-fg: #ddd3fb; --pv-line: #6a4fc4;
   --conv-trigger: #6ccbc2;
+  --conv-trace-fg: color-mix(in srgb, var(--wb-fg) 70%, var(--wb-bg));
+  --conv-trace-dim: color-mix(in srgb, var(--wb-muted-fg) 86%, var(--wb-bg));
+  --conv-trace-accent: color-mix(in srgb, var(--wb-primary) 74%, var(--wb-muted-fg));
   --wb-ok: #6cc39a; --wb-fail: #f0797e;
   --wb-warn: #e0a36c; --wb-warn-ink: #e0a36c; --wb-hot: #fb923c;
   --wb-toast-warn: #9a5a00;

@@ -1537,6 +1537,7 @@ type agyUpdate struct {
 	Title             string            `json:"title"`
 	Status            string            `json:"status"`
 	Args              json.RawMessage   `json:"args"`
+	RawInput          json.RawMessage   `json:"rawInput"`
 	RawOutput         json.RawMessage   `json:"rawOutput"`
 	Used              *int64            `json:"used"`
 	Size              int64             `json:"size"`
@@ -1643,7 +1644,7 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 				m.openCalls[u.ToolCallID] = true
 			}
 		}
-		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), now)...)
+		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), len(agyAuditBody(u.Args, u.RawInput)), now)...)
 		m.groupCalls = true
 		if name == agyInvokeSubagentTool {
 			out = append(out, m.nativeStart(u, now)...)
@@ -1711,7 +1712,7 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 	delete(m.pendingTools, u.ToolCallID)
 	delete(m.openCalls, u.ToolCallID)
 	delete(m.openBg, u.ToolCallID)
-	out = append(out, m.batches.endCall(u.ToolCallID, failed, now)...)
+	out = append(out, m.batches.endCall(u.ToolCallID, failed, len(agyAuditBody(u.RawOutput, u.Content)), now)...)
 	if m.nativeLaunch[u.ToolCallID] {
 		// A completed launch only means the child runs asynchronously; its
 		// row stays running until the runner settles it at the parent's

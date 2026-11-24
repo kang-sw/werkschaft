@@ -1002,3 +1002,9 @@ test('estimated compaction renders badge on row and compaction owner summary wit
   // Reconciling again with no changes performs zero DOM operations.
   assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0);
 });
+
+test('turn reference fallback uses check/x icons instead of hammer for tool rows', () => {
+  assert.ok(!rowsSrc.includes('"hammer"'), 'dashboard-audit-rows.js must not fall back to hammer icon');
+  assert.ok(rowsSrc.includes('el.classList.contains("au-fail") ? "x" : "check"'),
+    'tool fallback icon must pick #i-x for failed rows and #i-check otherwise');
+});
