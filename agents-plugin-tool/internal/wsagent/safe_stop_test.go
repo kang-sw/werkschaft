@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,22 +295,66 @@ func TestSafeOnlyStopAllowsUnrelatedLeadContention(t *testing.T) {
 	}
 }
 
+// releaseNotifyingRunner can pause the release loop immediately after the ended
+// registration becomes visible to the dashboard's index.
+type releaseNotifyingRunner struct {
+	*Runner
+	afterNotify func(string)
+}
+
+func (r releaseNotifyingRunner) StartForPublication(notify func(string, string), serving <-chan struct{}) {
+	r.Runner.StartForPublication(func(id, project string) {
+		notify(id, project)
+		r.afterNotify(id)
+	}, serving)
+}
+
 func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
+	testReleasedWorkerDelete(t, false, false)
+}
+
+func TestDeadBindingCheckoutDeleteSurvivesReplacement(t *testing.T) {
+	testReleasedWorkerDelete(t, true, false)
+}
+
+func TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow(t *testing.T) {
+	testReleasedWorkerDelete(t, true, true)
+}
+
+func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
+	t.Helper()
 	h, _ := configureHeldWorkerHarness(t)
 	worktree, err := filepath.EvalSymlinks(releaseTestWorktree(t, h.root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.runner = NewRunner(h.opts)
-	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
+	opts := wsdashboard.DaemonOptions{
 		Dir: h.dir, Home: t.TempDir(), Agents: h.runner, Sessions: leadSessions{},
 		WorkspacesFile: filepath.Join(t.TempDir(), "workspaces.json"),
-	})
+	}
+	var pauseID atomic.Pointer[string]
+	ended, resume := make(chan struct{}), make(chan struct{})
+	var paused, resumed sync.Once
+	unpause := func() { resumed.Do(func() { close(resume) }) }
+	if pauseRelease {
+		opts.Agents = releaseNotifyingRunner{h.runner, func(id string) {
+			if target := pauseID.Load(); target == nil || id != *target {
+				return
+			}
+			row, err := wsdashboard.ReadRegistration(h.dir, id)
+			if err == nil && !row.Live(time.Now()) {
+				paused.Do(func() { close(ended); <-resume })
+			}
+		}}
+	}
+	d, err := wsdashboard.StartDaemon(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
 	t.Cleanup(h.holders.drain)
+	defer unpause()
 	base := fmt.Sprintf("http://127.0.0.1:%d", d.Endpoint().Port)
 	cookie := daemonCookieForTest(t, d)
 	post := func(path string, body any) reply {
@@ -351,7 +396,7 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 		eventually(t, prompt+" running", func() bool { return h.state(st.ID).Status == StatusRunning })
 		return st.ID, holder
 	}
-	middleID, _ := spawn(lead, worktree, "middle")
+	middleID, middleHolder := spawn(lead, worktree, "middle")
 	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
 	if st := h.state(leadID); !st.Process || st.SafeStop {
 		t.Fatalf("lead before checkout release = %+v, want a process and unsafe Stop", st)
@@ -359,14 +404,52 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 
 	clock := newTestClock()
 	setClock(clock, h.opts.Now())
-	released := h.runner.CheckoutReleased(worktree, releaseAfterBindings(t, clock, worktree), true)
-	if len(released) != 1 || released[0].Address != AgentAddress(middleID) || released[0].State != AgentClosed {
-		t.Fatalf("release outcomes = %+v, want only the middle worker closed", released)
+	at := releaseAfterBindings(t, clock, worktree)
+	outcome := make(chan []ReleasedConversation, 1)
+	release := func() { outcome <- h.runner.CheckoutReleased(worktree, at, true) }
+	checkRelease := func() {
+		t.Helper()
+		var released []ReleasedConversation
+		select {
+		case released = <-outcome:
+		case <-time.After(5 * time.Second):
+			t.Fatal("release did not finish")
+		}
+		if len(released) != 1 || released[0].Address != AgentAddress(middleID) || released[0].State != AgentClosed {
+			t.Fatalf("release outcomes = %+v, want only the middle worker closed", released)
+		}
 	}
-	rows := SpawnTree(lead, h.runner.Children)
-	if len(rows) != 2 || rows[0].ID != middleID || rows[0].Status != StatusClosed ||
-		rows[1].ID != leafID || rows[1].Status != StatusRunning {
-		t.Fatalf("spawn tree after release = %+v, want closed middle worker and running grandchild", rows)
+	checkTree := func(r *Runner) {
+		t.Helper()
+		rows := SpawnTree(lead, r.Children)
+		if len(rows) != 2 || rows[0].ID != middleID || rows[0].Status != StatusClosed ||
+			rows[1].ID != leafID || rows[1].Parent == nil || rows[1].Parent.ReplyID != middleID {
+			t.Fatalf("spawn tree = %+v, want the closed middle worker and its grandchild", rows)
+		}
+	}
+	if pauseRelease {
+		pauseID.Store(&middleID)
+		go release()
+		wait(t, "ended registration", ended)
+		if h.runner.conv(middleID) == nil {
+			t.Fatal("release moved the worker out of the conversation registry before delete")
+		}
+	} else {
+		release()
+		checkRelease()
+		checkTree(h.runner)
+		if st := h.state(leafID); st.Status != StatusRunning {
+			t.Fatalf("grandchild after release = %+v, want running", st)
+		}
+	}
+	if restart {
+		alive := false
+		for _, holder := range h.holders.List().Holders {
+			alive = alive || holder.ID == middleHolder && holder.Child != nil && holder.Child.State == "running"
+		}
+		if !alive {
+			t.Fatal("released worker's holder must still be running before deletion")
+		}
 	}
 
 	stop := func() reply {
@@ -383,7 +466,9 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 				when, st.SafeStop, meta.SafeStop, res.status, res.body)
 		}
 	}
-	assertStopRefused("busy grandchild before checkout delete")
+	if !pauseRelease {
+		assertStopRefused("busy grandchild before checkout delete")
+	}
 
 	d.Index().Refresh()
 	if s, ok := d.Index().Session(middleID); !ok || s.Registration.Live(time.Now()) {
@@ -394,6 +479,30 @@ func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
 	}
 	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
 		t.Fatalf("deleted checkout: stat error = %v, want missing directory", err)
+	}
+	if pauseRelease {
+		unpause()
+		checkRelease()
+	}
+	if restart {
+		_, dirErr := os.Stat(wsdashboard.SessionDir(h.dir, middleID))
+		d.Close()
+		h.holders.restart()
+		h.runner = NewRunner(h.opts)
+		opts.Agents = h.runner
+		successor, err := wsdashboard.StartDaemon(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(successor.Close)
+		if dirErr != nil {
+			t.Errorf("retained session directory after checkout delete: %v", dirErr)
+		}
+		if c := h.runner.conv(middleID); c != nil {
+			t.Errorf("released worker rejoined after checkout deletion under holder %s", c.record().HolderID)
+		}
+		checkTree(h.runner)
+		return
 	}
 	assertStopRefused("busy grandchild after checkout delete")
 	if _, err := readRecord(wsdashboard.SessionDir(h.dir, middleID)); err != nil {

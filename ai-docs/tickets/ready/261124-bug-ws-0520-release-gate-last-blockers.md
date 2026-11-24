@@ -773,3 +773,45 @@ another phase.
 - Rejected: reverting Phase 7 (reopens the fifth-round finding) and
   shipping R1 as a follow-up (a released worker reviving in a deleted
   checkout is a regression this range introduced).
+
+#### Result (8)
+
+2026-11-25 · `c16b53a47`
+
+- R1. The dashboard's pre-delete hook writes the existing closed record for
+  a released holder-backed worker whose record needs to survive. A failed
+  write stops checkout deletion while the release marker is still available.
+  The authenticated delete and replacement-daemon regression verifies that
+  the worker stays closed even with its holder available and that the
+  grandchild remains linked.
+- R2. The same purge guard checks the still-registered conversation under
+  the registry lock. The regression pauses release after the ended row
+  reaches the dashboard, deletes the checkout, finishes release, and checks
+  the retained directory and ancestry after replacement.
+- R3. Startup walks already closed rows as links and applies the descendant
+  guard before removing each selected record deepest first. The regression
+  preserves an aged ancestor above a closed bridge with an open-turn leaf.
+  Its control expires the ancestor when the leaf is absent and retains
+  the already closed bridge.
+
+T0. The record reader already understands `ClosedAt` and
+`DeadBindingClosure` (`record.go`). Startup loads those values from the
+existing file or private SQLite record (`runner_startup.go`,
+`runner_durable.go`). The retention checks add no file operations. A retained
+holder-backed closure uses one existing record write before deletion and
+skips that write on retry once committed. Ended rows eligible for ordinary
+purge keep their existing path.
+
+The three regressions failed with the original production code at
+`3eeb0c5c3` and passed with the repair. The no-grandchild expiry control
+passed on both. Independent lite review of `3eeb0c5c3..c16b53a47` found no
+Critical or Important findings (`a6ce06ae-01-findings.md`).
+
+- Passed `go build ./cmd/...`.
+- Passed `go test -race ./internal/wsagent -run '^Test(SafeStop|SafeOnlyStop|WerkCron|Forget|DeadBinding|Expir)' -count=3`.
+- Passed `go test ./internal/wsagent -parallel 1 -skip '^(TestAgyWorkerRetirementRestartsTheExpiryClock|TestAgyParentedWorkerRecordWakesStampedOrFromItsParent|TestCompactionStateClosedChildKeepsItsCountAcrossARestart)$'`.
+- Passed `go test ./internal/wsdashboard -run 'Worktree.*Delete|RailWorktree|Prune' -count=1`.
+- Passed `GOOS=windows go vet -stdversion=false ./internal/wsagent ./internal/wsdashboard` and `git diff --check`.
+
+The ticket lease and commits use the branch assigned by the lead.
+Ticket closure and daemon replacement remain with the lead.

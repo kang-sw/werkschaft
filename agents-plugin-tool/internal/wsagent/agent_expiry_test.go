@@ -176,6 +176,58 @@ func TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop(t *testing.T) {
 	}
 }
 
+func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
+	for _, liveLeaf := range []bool{true, false} {
+		name := "without open grandchild"
+		if liveLeaf {
+			name = "with an open turn below the bridge"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, clk := expiryHarness(t)
+			h.runner.Close()
+			old := clk.Now().Add(-3 * day).Format(time.RFC3339)
+			write := func(id string, parent ParentRef, closed, turnOpen bool) {
+				t.Helper()
+				rec := Record{
+					ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
+					SpawnerBackend: BackendClaude, Parent: &parent,
+					Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
+				}
+				if closed {
+					rec.ClosedAt = old
+				}
+				if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("ancestor", leadParent, false, false)
+			write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, true, false)
+			if liveLeaf {
+				write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, false, true)
+			}
+			h.start()
+			if !liveLeaf {
+				if !gone(h, "ancestor") || h.runner.conv("ancestor") != nil {
+					t.Fatal("expired ancestor without an open grandchild survived startup")
+				}
+				if _, err := readRecord(wsdashboard.SessionDir(h.dir, "bridge")); err != nil {
+					t.Fatalf("startup removed already closed bridge: %v", err)
+				}
+				return
+			}
+			for _, id := range []string{"ancestor", "bridge", "leaf"} {
+				if _, err := readRecord(wsdashboard.SessionDir(h.dir, id)); err != nil {
+					t.Errorf("%s did not survive startup: %v", id, err)
+				}
+			}
+			rows := SpawnTree(leadParent, h.runner.Children)
+			if len(rows) != 3 || rows[0].ID != "ancestor" || rows[1].ID != "bridge" || rows[1].Status != StatusClosed || rows[2].ID != "leaf" {
+				t.Fatalf("spawn tree after startup = %+v, want ancestor, closed bridge and leaf", rows)
+			}
+		})
+	}
+}
+
 // expiredAtStart picks each quiet subtree past its expiry, deepest first;
 // a busy descendant keeps its ancestors, a recent or busy child is kept,
 // and a conversation with no spawn parent is never picked.
