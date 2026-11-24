@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "Удерживайте для остановки",
   "js.bgexec.stop.aria": "Удерживайте, чтобы остановить {0}",
   "js.bgexec.stopping": "Остановка…",
-  "js.bgexec.stop.fail": "Не удалось остановить",
+  "js.bgexec.stop.fail": "Не удалось остановить: {0}",
   "js.bgexec.tail.empty": "Вывода пока нет.",
   "js.bgexec.tail.live": "Онлайн",
   "js.bgexec.tail.ended": "Завершено",
   "js.bgexec.tail.gap": "Предыдущий вывод обрезан.",
-  "js.bgexec.tail.evicted": "Первые {0} байт обрезаны.",
+  "js.bgexec.tail.evicted": "{0} ({1} обрезано)",
   "js.bgexec.hint": "↑/↓ выбор · Esc закрыть",
   "js.bgexec.readonly": "Только чтение"
 }

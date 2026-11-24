@@ -26,6 +26,7 @@
   var bgTickTimer = 0, bgCopyTimer = 0;
 
   function bgExecOpen() { return bgSt.open; }
+  function bgPageHidden() { return typeof pageHidden === "function" ? pageHidden() : !!doc.hidden; }
 
   function bgEl(tag, cls, text) {
     var e = doc.createElement(tag);
@@ -173,17 +174,21 @@
       if (bgSt.open) bgPosition();
     });
 
-    doc.addEventListener("visibilitychange", function () {
+    function bgOnVisibility() {
       if (!bgSt.open) return;
-      if (doc.hidden) {
+      if (bgPageHidden()) {
         bgStopTick();
         clearTimeout(bgTailTimer);
         bgTailTimer = 0;
+        if (bgTailAC) { try { bgTailAC.abort(); } catch (e) {} bgTailAC = null; }
+        if (bgTailState) bgTailState.busy = false;
       } else {
         bgSyncTick();
-        if (bgTailState && !bgTailState.drained) bgTailSchedule(0);
+        if (bgTailState && !bgTailState.drained && !bgTailState.busy) bgTailSchedule(0);
       }
-    });
+    }
+    doc.addEventListener("visibilitychange", bgOnVisibility);
+    doc.addEventListener("ws-page-visibility", bgOnVisibility);
 
     return bgPop;
   }
@@ -249,10 +254,10 @@
   }
 
   function bgSyncTick() {
-    var hasRunning = bgSt.open && !doc.hidden && bgSt.jobs.some(function (j) { return j.state === "running"; });
+    var hasRunning = bgSt.open && !bgPageHidden() && bgSt.jobs.some(function (j) { return j.state === "running"; });
     if (hasRunning && !bgTickTimer) {
       bgTickTimer = setInterval(function () {
-        if (!bgSt.open || doc.hidden) { bgStopTick(); return; }
+        if (!bgSt.open || bgPageHidden()) { bgStopTick(); return; }
         var now = Date.now();
         if (bgPop) {
           var nodes = bgPop.querySelectorAll("[data-bg-since]");
@@ -347,8 +352,13 @@
       bgTailStart(bgSt.byId[id]);
     }
     if (focusRow && bgListEl) {
-      var btn = bgListEl.querySelector('.bgp-row[data-bg-id="' + id + '"]');
-      if (btn) btn.focus();
+      var children = bgListEl.children;
+      for (var i = 0; i < children.length; i++) {
+        if (children[i].getAttribute && children[i].getAttribute("data-bg-id") === id) {
+          children[i].focus();
+          break;
+        }
+      }
     }
   }
 
@@ -604,18 +614,18 @@
 
   function bgTailSchedule(ms) {
     clearTimeout(bgTailTimer);
-    if (!bgSt.open || !bgTailState || bgTailState.drained || doc.hidden) return;
+    if (!bgSt.open || !bgTailState || bgTailState.drained || bgPageHidden()) return;
     var gen = bgTailState.gen;
     bgTailTimer = setTimeout(function () {
       bgTailTimer = 0;
-      if (!bgSt.open || !bgTailState || bgTailState.gen !== gen || bgTailState.busy) return;
+      if (!bgSt.open || !bgTailState || bgTailState.gen !== gen || bgTailState.busy || bgPageHidden()) return;
       bgTailFetch(gen);
     }, ms);
   }
 
   function bgTailFetch(gen) {
     var ts = bgTailState;
-    if (!ts || ts.gen !== gen || !bgSt.open || !rid) return;
+    if (!ts || ts.gen !== gen || !bgSt.open || !rid || bgPageHidden()) return;
     ts.busy = true;
     var ac = window.AbortController ? new AbortController() : null;
     bgTailAC = ac;
@@ -623,7 +633,11 @@
     var opts = { credentials: "same-origin", cache: "no-store" };
     if (ac) opts.signal = ac.signal;
     fetch(url, opts).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!r.ok) {
+        var e = new Error("HTTP " + r.status);
+        e.status = r.status;
+        throw e;
+      }
       return r.json();
     }).then(function (res) {
       if (bgTailAC === ac) bgTailAC = null;
@@ -635,6 +649,7 @@
       if (typeof res.evicted === "number") ts.evicted = res.evicted;
       bgTailAppend(res);
       var j = bgSt.byId[ts.id];
+      var wasRunning = j && j.state === "running";
       if (res.job && j) {
         j.state = res.job.state || j.state;
         j.exit_code = res.job.exit_code;
@@ -644,8 +659,10 @@
       }
       if (j) bgRenderTailFoot(j);
       var stillRunning = res.job ? res.job.state === "running" : (j && j.state === "running");
+      if (wasRunning && !stillRunning) bgSyncTick();
       if (!stillRunning && !advanced) {
         ts.drained = true;
+        bgSyncTick();
         return;
       }
       ts.delay = advanced ? BG_POLL_MIN : Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.5));
@@ -655,6 +672,11 @@
       if (!bgTailState || bgTailState.gen !== gen || !bgSt.open) return;
       ts.busy = false;
       if (err && err.name === "AbortError") return;
+      if (err && (err.status === 404 || err.status === 403)) {
+        ts.drained = true;
+        if (err.status === 404) bgExecFetchList();
+        return;
+      }
       ts.delay = Math.min(BG_POLL_MAX, Math.round(ts.delay * 1.6));
       bgTailSchedule(ts.delay);
     });
@@ -731,7 +753,7 @@
       if (bgSt.open) bgExecFetchList();
     }, function (err) {
       delete bgSt.stopping[id];
-      if (typeof noteWarn === "function") noteWarn(wsT("js.bgexec.stop.fail", (err && err.message) || ""));
+      if (typeof noteWarn === "function") noteWarn(wsT("js.bgexec.stop.fail", (err && err.message) || "error"));
       if (bgSt.open) bgRenderAll();
     });
   }

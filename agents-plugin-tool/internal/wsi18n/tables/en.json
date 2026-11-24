@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "Hold to stop",
   "js.bgexec.stop.aria": "Hold to stop {0}",
   "js.bgexec.stopping": "Stopping…",
-  "js.bgexec.stop.fail": "Could not stop",
+  "js.bgexec.stop.fail": "Could not stop: {0}",
   "js.bgexec.tail.empty": "No output yet.",
   "js.bgexec.tail.live": "Live",
   "js.bgexec.tail.ended": "Ended",
   "js.bgexec.tail.gap": "Older output was trimmed.",
-  "js.bgexec.tail.evicted": "First {0} bytes trimmed.",
+  "js.bgexec.tail.evicted": "{0} ({1} trimmed)",
   "js.bgexec.hint": "↑/↓ select · Esc close",
   "js.bgexec.readonly": "Read-only view"
 }

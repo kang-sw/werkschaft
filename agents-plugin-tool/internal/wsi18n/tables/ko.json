@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "길게 눌러 중지",
   "js.bgexec.stop.aria": "{0} 길게 눌러 중지",
   "js.bgexec.stopping": "중지 중…",
-  "js.bgexec.stop.fail": "중지하지 못했습니다",
+  "js.bgexec.stop.fail": "중지하지 못했습니다: {0}",
   "js.bgexec.tail.empty": "아직 출력이 없습니다.",
   "js.bgexec.tail.live": "실시간",
   "js.bgexec.tail.ended": "종료됨",
   "js.bgexec.tail.gap": "이전 출력이 잘렸습니다.",
-  "js.bgexec.tail.evicted": "앞부분 {0}바이트가 잘렸습니다.",
+  "js.bgexec.tail.evicted": "{0} ({1} 잘림)",
   "js.bgexec.hint": "↑/↓ 선택 · Esc 닫기",
   "js.bgexec.readonly": "읽기 전용"
 }

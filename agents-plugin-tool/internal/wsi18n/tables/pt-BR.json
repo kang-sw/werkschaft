@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "Segure para parar",
   "js.bgexec.stop.aria": "Segure para parar {0}",
   "js.bgexec.stopping": "Parando…",
-  "js.bgexec.stop.fail": "Não foi possível parar",
+  "js.bgexec.stop.fail": "Não foi possível parar: {0}",
   "js.bgexec.tail.empty": "Sem saída ainda.",
   "js.bgexec.tail.live": "Ao vivo",
   "js.bgexec.tail.ended": "Encerrado",
   "js.bgexec.tail.gap": "A saída anterior foi cortada.",
-  "js.bgexec.tail.evicted": "Primeiros {0} bytes cortados.",
+  "js.bgexec.tail.evicted": "{0} ({1} cortados)",
   "js.bgexec.hint": "↑/↓ selecionar · Esc fechar",
   "js.bgexec.readonly": "Somente leitura"
 }

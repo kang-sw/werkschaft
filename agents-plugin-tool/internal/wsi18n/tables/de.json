@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "Halten zum Stoppen",
   "js.bgexec.stop.aria": "Halten zum Stoppen von {0}",
   "js.bgexec.stopping": "Wird gestoppt…",
-  "js.bgexec.stop.fail": "Konnte nicht gestoppt werden",
+  "js.bgexec.stop.fail": "Konnte nicht gestoppt werden: {0}",
   "js.bgexec.tail.empty": "Noch keine Ausgabe.",
   "js.bgexec.tail.live": "Live",
   "js.bgexec.tail.ended": "Beendet",
   "js.bgexec.tail.gap": "Ältere Ausgabe wurde gekürzt.",
-  "js.bgexec.tail.evicted": "Erste {0} Bytes gekürzt.",
+  "js.bgexec.tail.evicted": "{0} ({1} gekürzt)",
   "js.bgexec.hint": "↑/↓ wählen · Esc schließen",
   "js.bgexec.readonly": "Nur-Lesen-Ansicht"
 }

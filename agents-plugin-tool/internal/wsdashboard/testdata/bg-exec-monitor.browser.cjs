@@ -213,6 +213,67 @@ async function main() {
       await page.screenshot({ path: path.join(shotsDir, 'after-dark-readonly.png') });
     }
 
+    // 11. Cached-iframe shell hide (ws-page-visibility / shHidden=true while doc.hidden=false)
+    //     pauses live-tail polling and 1s elapsed ticker, then resumes cleanly on show.
+    await ctlPost('/reset');
+    await page.evaluate(() => {
+      const f = [...document.querySelectorAll('iframe')].find((el) => (el.src || '').includes('/s/livesession'));
+      if (!f || !f.contentWindow) throw new Error('missing session iframe element');
+      f.contentWindow.postMessage({ wsShell: 'shown', shown: false }, location.origin);
+    });
+    await sleep(250);
+    await ctlPost('/reset');
+    const elBefore = await view.locator('#bgpop .bgp-row[data-bg-id="exec_l2_run"] .bgp-el').textContent();
+    await sleep(1600);
+    const hiddenStats = await ctlGet('/stats');
+    assert.equal(hiddenStats.counts.bgOutput || 0, 0, 'zero bg/output polls while cached iframe is hidden (shHidden=true)');
+    const elAfter = await view.locator('#bgpop .bgp-row[data-bg-id="exec_l2_run"] .bgp-el').textContent();
+    assert.equal(elAfter, elBefore, '1s elapsed ticker must pause while cached iframe is hidden');
+
+    // Resume shell visibility -> polling resumes and picks up appended tail output.
+    await ctlPost('/append', { ID: 'exec_l2_run', Stream: 'stdout', Text: 'resumed-after-shell-show\n' });
+    await page.evaluate(() => {
+      const f = [...document.querySelectorAll('iframe')].find((el) => (el.src || '').includes('/s/livesession'));
+      f.contentWindow.postMessage({ wsShell: 'shown', shown: true }, location.origin);
+    });
+    await view.waitForFunction(
+      () => (document.querySelector('#bgpop .bgp-tail')?.textContent || '').includes('resumed-after-shell-show'),
+      null,
+      { timeout: 5000 },
+    );
+
+    // 12. Evicted output footer formats written & trimmed sizes cleanly with no duplicate "bytes" unit.
+    await context.route('**/exec/bg/exec_lead_run/output*', async (route) => {
+      const resp = await route.fetch();
+      const body = await resp.json();
+      body.written = 2048;
+      body.evicted = 512;
+      await route.fulfill({ response: resp, body: JSON.stringify(body), contentType: 'application/json' });
+    });
+    await view.locator('#bgpop .bgp-row[data-bg-id="exec_lead_run"]').click();
+    await view.waitForFunction(
+      () => (document.querySelector('#bgpop .bgp-foot-r')?.textContent || '').includes('trimmed'),
+      null,
+      { timeout: 5000 },
+    );
+    const footText = await view.locator('#bgpop .bgp-foot-r').textContent();
+    assert.match(footText, /2\.0 KiB \(512 B trimmed\)/, `unexpected evicted footer format: ${footText}`);
+    assert.ok(!/bytes/i.test(footText), `evicted footer must not duplicate "bytes" unit: ${footText}`);
+
+    // 13. HTTP 404 on tail output stops polling (no retries) and refreshes job list.
+    await context.unroute('**/exec/bg/exec_lead_run/output*');
+    let out404Count = 0;
+    await context.route('**/exec/bg/exec_l2_run/output*', async (route) => {
+      out404Count++;
+      await route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' });
+    });
+    await ctlPost('/reset');
+    await view.locator('#bgpop .bgp-row[data-bg-id="exec_l2_run"]').click();
+    await sleep(1600);
+    assert.equal(out404Count, 1, 'tail polling must stop immediately after HTTP 404 without retrying');
+    const after404Stats = await ctlGet('/stats');
+    assert.ok((after404Stats.counts.bgList || 0) >= 1, 'HTTP 404 on tail output should refresh job list');
+
     assert.deepEqual(errors, [], `unexpected browser errors: ${errors.join('; ')}`);
     console.log('bg-exec-monitor browser acceptance passed');
   } finally {

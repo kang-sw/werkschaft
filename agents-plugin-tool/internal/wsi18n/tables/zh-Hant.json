@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "長按停止",
   "js.bgexec.stop.aria": "長按停止 {0}",
   "js.bgexec.stopping": "正在停止…",
-  "js.bgexec.stop.fail": "無法停止",
+  "js.bgexec.stop.fail": "無法停止：{0}",
   "js.bgexec.tail.empty": "尚無輸出。",
   "js.bgexec.tail.live": "即時",
   "js.bgexec.tail.ended": "已結束",
   "js.bgexec.tail.gap": "較早的輸出已被截斷。",
-  "js.bgexec.tail.evicted": "前 {0} 位元組已被截斷。",
+  "js.bgexec.tail.evicted": "{0}（已截斷 {1}）",
   "js.bgexec.hint": "↑/↓ 選擇 · Esc 關閉",
   "js.bgexec.readonly": "唯讀檢視"
 }

@@ -3492,12 +3492,12 @@
   "js.bgexec.stop.hold": "長押しで停止",
   "js.bgexec.stop.aria": "{0} を長押しで停止",
   "js.bgexec.stopping": "停止中…",
-  "js.bgexec.stop.fail": "停止できませんでした",
+  "js.bgexec.stop.fail": "停止できませんでした: {0}",
   "js.bgexec.tail.empty": "出力はまだありません。",
   "js.bgexec.tail.live": "ライブ",
   "js.bgexec.tail.ended": "終了",
   "js.bgexec.tail.gap": "古い出力は切り詰められました。",
-  "js.bgexec.tail.evicted": "先頭 {0} バイトが切り詰められました。",
+  "js.bgexec.tail.evicted": "{0} ({1} 切り詰め)",
   "js.bgexec.hint": "↑/↓ 選択 · Esc 閉じる",
   "js.bgexec.readonly": "読み取り専用"
 }
