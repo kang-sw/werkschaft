@@ -286,7 +286,8 @@ type Runner struct {
 	// Opened during daemon startup under the dashboard lock, then held
 	// until all conversations have drained.
 	durableRecords     *wsmeta.Store
-	durableProjections sync.Map // reply-id -> last published projection digest
+	durableProjections sync.Map   // reply-id -> last published projection digest
+	deadClosureMu      sync.Mutex // serializes persistence of holder-backed dead closures
 	piPurgeMu          sync.Mutex
 	piPurgeStore       *wsmeta.Store
 	piPurges           map[string]string // reply ID -> worktree, under piPurgeMu after startup
