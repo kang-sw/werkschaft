@@ -139,7 +139,7 @@ function makeHarness(opts = {}) {
   const galEl = new El('aside', { attrs: { id: 'bgal' }, cls: ['bgal'] });
   const viewEl = new El('div', { cls: ['gal-viewport'] });
   const plusEl = new El('div', { cls: ['gal-page', 'gal-plus'] });
-  const page1 = new El('div', { cls: ['gal-page'] });
+  const page1 = new El('div', { cls: ['gal-page'], attrs: { 'data-active': '' } });
   const pane1 = new El('div', { cls: ['gal-pane'] });
   const topic1 = new El('section', { cls: ['topic'], attrs: { 'data-topic': 'alpha' } });
   const pbody1 = new El('div', {
@@ -159,7 +159,28 @@ function makeHarness(opts = {}) {
   topic1.appendChild(pbody1);
   pane1.appendChild(topic1);
   page1.appendChild(pane1);
+
+  // Page 2 remains attached in #bgal even while inactive (matching slide()).
+  const page2 = new El('div', { cls: ['gal-page'] });
+  const pane2 = new El('div', { cls: ['gal-pane'] });
+  const topic2 = new El('section', { cls: ['topic'], attrs: { 'data-topic': 'beta' } });
+  const pbody2 = new El('div', {
+    cls: ['gal-pbody'],
+    scrollTop: 400,
+    scrollHeight: 800,
+    clientHeight: 400,
+    overflowY: 'auto'
+  });
+  const tbody2 = new El('div', { cls: ['tbody'] });
+  const docFrame2 = new El('iframe', { cls: ['doc-frame'], attrs: { 'data-doc': 'beta', 'data-doc-key': 'beta' } });
+  tbody2.appendChild(docFrame2);
+  pbody2.appendChild(tbody2);
+  topic2.appendChild(pbody2);
+  pane2.appendChild(topic2);
+  page2.appendChild(pane2);
+
   viewEl.appendChild(page1);
+  viewEl.appendChild(page2);
   viewEl.appendChild(plusEl);
   galEl.appendChild(viewEl);
   bcol.appendChild(board);
@@ -189,7 +210,7 @@ function makeHarness(opts = {}) {
     ],
     rev: 1
   };
-  const pageEls = { p1: page1, p2: new El('div', { cls: ['gal-page'] }) };
+  const pageEls = { p1: page1, p2: page2 };
 
   const ctx = vm.createContext({
     Math, Date: { now: () => now },
@@ -258,7 +279,7 @@ function makeHarness(opts = {}) {
   vm.runInContext(routeCode, ctx);
 
   return {
-    ctx, events, docFrame, plainIframe, pbody1, topic1, pane1, page1,
+    ctx, events, docFrame, docFrame2, plainIframe, pbody1, pbody2, topic1, topic2, pane1, pane2, page1, page2,
     bcol, board, bTopicA, bTopicB, bFrameA, bFrameB,
     tick(ms) { now += ms; },
     send(frame, dy, dx = 0, mode = 0) {
@@ -286,21 +307,54 @@ test('docked topic doc-frame at .gal-pbody bottom boundary charges tension and f
   h.send(h.docFrame, 125);
   assert.deepEqual(h.events.flips, [{ to: 1, dir: 1 }], 'reaching 100% tension flips to page 2');
 
-  // Wait past refractory lock (420ms), move pbody to top boundary, and wheel up to flip back.
+  // Wait past refractory lock (420ms), move pbody2 to top boundary, and wheel up from active page2 to flip back.
   h.tick(500);
-  h.pbody1.scrollTop = 0;
+  h.pbody2.scrollTop = 0;
   h.events.pulls.length = 0;
   h.events.flips.length = 0;
 
-  h.send(h.docFrame, -125);
+  h.send(h.docFrame2, -125);
   assert.equal(h.events.pulls.length, 1);
   assert.equal(h.events.pulls[0].dir, -1);
   assert.equal(h.events.pulls[0].target, 0);
   h.tick(30);
+  h.send(h.docFrame2, -125);
+  h.tick(30);
+  h.send(h.docFrame2, -125);
+  assert.deepEqual(h.events.flips, [{ to: 0, dir: -1 }], 'top boundary tension flips back to page 1');
+});
+
+test('delayed wheel from previously visible (now inactive, still attached) gallery page is rejected and does not change active page tension', () => {
+  const h = makeHarness({ pbodyScrollTop: 400, pbodyScrollHeight: 800, pbodyClientHeight: 400 });
+
+  // While page 1 is active, a wheel from attached-but-inactive page 2 is rejected.
+  assert.equal(h.ctx.onFrameWheel(h.docFrame2, 125, 0, 0), false, 'inactive page 2 frame must be rejected while page 1 is active');
+  h.send(h.docFrame2, 125);
+  assert.equal(h.events.pulls.length, 0, 'inactive page 2 must not charge tension on active page 1');
+  assert.equal(h.events.flips.length, 0);
+
+  // Flip from page 1 to page 2 so page 1 is now previously visible (still attached in #bgal, inactive).
+  h.send(h.docFrame, 125);
+  h.tick(30);
+  h.send(h.docFrame, 125);
+  h.tick(30);
+  h.send(h.docFrame, 125);
+  assert.deepEqual(h.events.flips, [{ to: 1, dir: 1 }], 'flipped to page 2');
+
+  // Wait past refractory lock and send delayed wheel messages from the previously visible page 1 frame.
+  h.tick(500);
+  h.events.pulls.length = 0;
+  h.events.flips.length = 0;
+  h.pbody1.scrollTop = 0;
+
+  assert.equal(h.ctx.onFrameWheel(h.docFrame, -125, 0, 0), false, 'delayed wheel from now-inactive page 1 must be rejected');
   h.send(h.docFrame, -125);
   h.tick(30);
   h.send(h.docFrame, -125);
-  assert.deepEqual(h.events.flips, [{ to: 0, dir: -1 }], 'top boundary tension flips back to page 1');
+  h.tick(30);
+  h.send(h.docFrame, -125);
+  assert.equal(h.events.pulls.length, 0, 'delayed wheel from previously visible page 1 must not change active page 2 tension');
+  assert.equal(h.events.flips.length, 0, 'delayed wheel from previously visible page 1 must not flip away from page 2');
 });
 
 test('docked topic doc-frame passes through without tension while .gal-pbody still has scroll room', () => {

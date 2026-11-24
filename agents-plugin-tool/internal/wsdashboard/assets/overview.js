@@ -78,9 +78,17 @@
       if (from.hasAttribute(k)) to.setAttribute(k, from.getAttribute(k));
     }
   }
+  function placeholderLabel(node, isTopic) {
+    var el = isTopic
+      ? (node.querySelector(":scope > .tophead > .tbar .tname") || node.querySelector(".tname"))
+      : (node.querySelector(":scope > .bc-in > .bc-hd .bc-nm") || node.querySelector(".bc-nm"));
+    var txt = el && el.textContent ? el.textContent.trim().replace(/\s+/g, " ") : "";
+    if (txt) return txt;
+    return (node.getAttribute("aria-label") || node.getAttribute(isTopic ? "data-topic" : "data-card") || "").trim();
+  }
   function buildPlaceholder(node, height) {
-    var ph = doc.createElement("div");
     var isTopic = node.hasAttribute("data-topic");
+    var ph = doc.createElement(isTopic ? "section" : "div");
     var cls = "overview-placeholder overview-previewing" + (isTopic ? " topic" : " bcard");
     if (isTopic && node.classList.contains("quiet")) cls += " quiet";
     if (isTopic && node.classList.contains("closed")) cls += " closed";
@@ -91,6 +99,9 @@
     if (node.hasAttribute("data-card")) ph.setAttribute("data-overview-target-card", node.getAttribute("data-card"));
     if (height > 0) ph.style.height = height + "px";
     ph.setAttribute("tabindex", node.getAttribute("tabindex") === "0" ? "0" : "-1");
+    ph.setAttribute("role", "button");
+    var label = placeholderLabel(node, isTopic);
+    if (label) ph.setAttribute("aria-label", label);
     if (isTopic) {
       copyAttrs(node, ph, ["data-state", "data-size", "data-board-held"]);
       var head = node.querySelector(":scope > .tophead");
@@ -161,6 +172,7 @@
     }
     preview.node = null;
     preview.placeholder = null;
+    if (window.WsBoardVirtual && window.WsBoardVirtual.markExemptDirty) window.WsBoardVirtual.markExemptDirty(node);
     if (!(opts && opts.skipReconcile) && window.WsBoardAnchor && window.WsBoardAnchor.reconcile) window.WsBoardAnchor.reconcile();
   }
   function teardownPreview(opts) {

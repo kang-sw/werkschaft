@@ -494,3 +494,43 @@ test('cached hidden event invalidates pending tool lookup and envelope responses
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(win.activeEnvelope.id, 'hidden');
 });
+
+test('estimated compaction renders banner, localized meta row, and au-est window status', async () => {
+  const h = loadAuditWindowHelpers();
+  const estEv = {
+    id: 'cmp-est',
+    kind: 'compaction',
+    subkind: 'auto',
+    harness: 'agy',
+    at: '2026-11-24T00:00:00.000000000Z',
+    model_seen: true,
+    meta: { estimated: true, inferred_by: 'usage_drop', pre_tokens: 180000, post_tokens: 30000 }
+  };
+  const body = h.auRenderBodyContent(estEv, 'in', {});
+  assert.ok(body.html.includes('au-banner'));
+  assert.ok(body.html.includes('js.audit.compaction.estimated.title'));
+  assert.ok(body.html.includes('js.audit.compaction.estimated.note'));
+  assert.ok(body.html.includes('js.audit.part.empty'));
+
+  const explicit = h.auRenderBodyContent({ id: 'cmp-exp', kind: 'compaction', subkind: 'auto', model_seen: true }, 'in', {});
+  assert.ok(!explicit.html.includes('js.audit.compaction.estimated.title'));
+
+  const meta = h.auRenderMetaGrid({ activeEnvelope: estEv });
+  assert.ok(meta.includes('>js.audit.meta.estimated<'));
+  assert.ok(meta.includes('>js.audit.meta.yes<'));
+  assert.ok(meta.includes('>meta.inferred_by<'));
+  assert.ok(!meta.includes('>meta.estimated<'));
+
+  const pending = [];
+  const ctrl = loadAuditControllerHarness((url) => new Promise((resolve) => pending.push({ url, resolve })));
+  ctrl.ctx.WsAudit.openEvent('cmp-est');
+  const win = ctrl.ctx.WsAudit.windows()[0];
+  const statEl = ctrl.makeEl('SPAN');
+  statEl.className = 'au-wstatus';
+  win.el.appendChild(statEl);
+  pending.shift().resolve({ ok: true, status: 200, async json() { return estEv; } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(statEl.textContent, 'js.audit.compaction.estimated');
+  assert.equal(statEl.className, 'au-wstatus au-est');
+  assert.equal(statEl.hidden, false);
+});

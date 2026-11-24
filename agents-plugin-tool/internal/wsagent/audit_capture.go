@@ -66,9 +66,10 @@ type auditAdapter interface {
 // yield, such as a Codex tool call from its started item or, that one gone,
 // from its completed one, so either finds the other retained.
 type auditEvent struct {
-	slot int
-	key  string
-	ev   wsaudit.Envelope
+	slot     int
+	key      string
+	inferred bool
+	ev       wsaudit.Envelope
 }
 
 // slotted gives evs their positions as slots, for a record whose events are
@@ -123,7 +124,13 @@ const (
 	auditItemAttached
 	auditItemDetached
 	auditItemCheckpoint
+	auditItemSynthetic
 )
+
+type auditSynthetic struct {
+	key string
+	ev  wsaudit.Envelope
+}
 
 type auditItem struct {
 	kind       auditItemKind
@@ -133,6 +140,7 @@ type auditItem struct {
 	replay     bool
 	ev         wsholder.Event
 	checkpoint *auditCheckpoint
+	synthetic  *auditSynthetic
 }
 
 // auditInterval is the tee lines skipped after the kept line anchor, with
@@ -219,6 +227,7 @@ type auditCapture struct {
 	boundary  uint64
 	finalized uint64
 	losses    uint64
+	inferred  uint64
 	logged    bool
 }
 
@@ -252,6 +261,17 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 // daemon applied. It never blocks.
 func (c *auditCapture) line(data []byte, seq uint64, replay bool) {
 	c.enqueue(auditItem{kind: auditItemLine, data: bytes.Clone(data), seq: seq, replay: replay, at: time.Now()})
+}
+
+// synthetic hands a daemon-inferred audit event to capture (for example an
+// inferred compaction cut on a harness with no explicit wire event). It never
+// blocks and preserves order behind any held lines waiting on a tee fence.
+func (c *auditCapture) synthetic(key string, ev wsaudit.Envelope) {
+	at := ev.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	c.enqueue(auditItem{kind: auditItemSynthetic, synthetic: &auditSynthetic{key: key, ev: ev}, at: at})
 }
 
 type auditCheckpoint struct {
@@ -533,6 +553,13 @@ func (c *auditCapture) handle(it auditItem) {
 	switch it.kind {
 	case auditItemCheckpoint:
 		it.checkpoint.done <- c.writeCheckpoint(it.checkpoint)
+	case auditItemSynthetic:
+		if len(c.held) == 0 && len(c.ready) == 0 {
+			c.writeSynthetic(it.synthetic)
+			return
+		}
+		c.held = append(c.held, it)
+		c.pump()
 	case auditItemLine:
 		if it.seq == 0 {
 			c.localSeq++
@@ -655,6 +682,13 @@ func (c *auditCapture) pump() {
 			continue
 		}
 		if len(c.held) > 0 {
+			if c.held[0].kind == auditItemSynthetic {
+				it := c.held[0]
+				c.held = c.held[1:]
+				c.writeSynthetic(it.synthetic)
+				progressed = true
+				continue
+			}
 			s := c.held[0].seq
 			fenced := !c.teeOn || s < c.waitFrom || s <= c.through
 			earlier := len(c.ready) > 0 && c.ready[0].anchor < s
@@ -728,13 +762,17 @@ func (c *auditCapture) closeTee(reason string) {
 	c.teeOn = false
 	// A tee line sits after the kept line it is anchored on.
 	for len(c.held) > 0 || len(c.ready) > 0 {
-		if len(c.ready) > 0 && (len(c.held) == 0 || c.ready[0].anchor < c.held[0].seq) {
+		if len(c.ready) > 0 && (len(c.held) == 0 || (c.held[0].kind == auditItemSynthetic && c.ready[0].anchor <= c.boundary) || (c.held[0].kind != auditItemSynthetic && c.ready[0].anchor < c.held[0].seq)) {
 			c.mapInterval(c.ready[0])
 			c.ready = c.ready[1:]
 			continue
 		}
 		it := c.held[0]
 		c.held = c.held[1:]
+		if it.kind == auditItemSynthetic {
+			c.writeSynthetic(it.synthetic)
+			continue
+		}
 		c.mapKept(it)
 	}
 	c.held, c.ready, c.stuckAt = nil, nil, time.Time{}
@@ -746,11 +784,59 @@ func (c *auditCapture) closeTee(reason string) {
 func (c *auditCapture) mapKept(it auditItem) {
 	recognized, carried, evs := c.adapter.mapLine(it.data, it.at)
 	rec := wsaudit.SourceID{Source: c.source, Seq: it.seq}
+	if it.replay && len(evs) > 0 {
+		kept := evs[:0]
+		for _, m := range evs {
+			if !m.inferred {
+				kept = append(kept, m)
+			}
+		}
+		evs = kept
+	}
 	c.emitCarried(carried, it.at, rec, "asm."+strconv.FormatUint(it.seq, 10))
 	c.emit(evs, recognized, it.data, it.at, rec, "")
 	if it.seq > c.boundary {
 		c.boundary = it.seq
 	}
+}
+
+func (c *auditCapture) writeSynthetic(s *auditSynthetic) {
+	if s == nil {
+		return
+	}
+	ev := s.ev
+	if ev.V == 0 {
+		ev.V = wsaudit.SchemaVersion
+	}
+	if ev.Session == "" {
+		ev.Session = c.session.ID
+	}
+	if ev.Harness == "" {
+		ev.Harness = c.harness
+	}
+	if ev.At.IsZero() {
+		ev.At = time.Now().UTC()
+	} else {
+		ev.At = ev.At.UTC()
+	}
+	filtered := wsaudit.FilterEvents(c.session, []wsaudit.Envelope{ev})
+	if len(filtered) == 0 {
+		return
+	}
+	if filtered[0].Kind == wsaudit.KindCompaction {
+		if r, ok := c.adapter.(interface{ resetCompactionBaseline() }); ok {
+			r.resetCompactionBaseline()
+		}
+	}
+	key := s.key
+	if key == "" {
+		c.inferred++
+		key = fmt.Sprintf("inferred.%s.%d.%d", filtered[0].Kind, c.boundary, c.inferred)
+	}
+	// A daemon-inferred record sits at the current capture frontier, never
+	// refused as covered by an earlier finalized boundary (same as loss markers).
+	id := wsaudit.SourceID{Source: c.source, Key: key}
+	c.append(id, id, filtered[0])
 }
 
 func (c *auditCapture) mapTee(t wsholder.Event) {

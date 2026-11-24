@@ -12,6 +12,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: c545dd031fe981a0
 sage-review-completeness-reviewed: c545dd031fe981a0
+completed: 2026-11-24
 ---
 
 # Audit capture point and per-harness adapters
@@ -647,6 +648,102 @@ Verification: per-kind fixtures, including a thought chunk and a
 `/compact` completion that yields the estimated cut (`meta.estimated: true`,
 earlier events `model_seen: false`); ring call ID parity.
 
+### Result (d452c4e2a) - 2026-11-24
+
+Completed on `impl/develop/mural-kitty-yeast` (`d452c4e2a`, building on the
+initial `agyAudit` mapper and `agy` tee baseline from `d99095040`):
+
+- **Ring call ID (601, Decision 3).** `newAgyMapper` (`wsagent/agy.go`) sets
+  `callIDs: true` on its `batchTracker`, so `wslive` `ToolCallArgs.ID` carries
+  `wsaudit.NormalizeID(toolCallId)` while audit envelopes keep raw `call_id`
+  values (store normalizes on ingestion, ring-store Decision 3).
+- **Thought chunk assembly, loss, and flush (`(1730)=b`, Decision 5).**
+  `agyAudit` (`wsagent/audit_agy.go`) assembles contiguous
+  `agent_thought_chunk` updates (delivered over the Decision 5 holder tee)
+  into a single `KindThinking` envelope (`meta.assembled: true`). `ws_activity`
+  pulses pass through without splitting an open thought; non-thought,
+  non-activity lines emit the assembled thought as `carried`; `markLoss` marks
+  an open thought incomplete with `loss_reason` and `lost`; and `flush` closes
+  any trailing thought with `loss_reason: stream_end`.
+- **Inferred compaction cut (`meta.estimated: true`, Decision 6) and UI
+  labels.**
+  - Automatic usage-drop cuts: `agyAudit.checkUsageDrop` mirrors
+    `AgyCatalog().Compaction` (`UsageDropRatio: 0.85`, `UsageDropMinDelta:
+    2000`, window-change baseline reset) synchronously on `usage_update` lines
+    (`slot: 1`, `inferred: true`), emitting `KindCompaction` with
+    `meta.estimated: true`, `inferred_by: "usage_drop"`, `pre_tokens`, and
+    `post_tokens` ahead of any subsequent lines in the same burst.
+  - Manual `/compact` cuts: `runner_events.go` (`CommandEndConfirms` in
+    `endTurn`) calls `conv.recordInferredCompaction` ->
+    `streamProcess.recordAuditEvent` -> `auditCapture.synthetic`, which writes
+    `KindCompaction` (`meta.estimated: true`, `inferred_by: "command_end"`)
+    and invokes `resetCompactionBaseline()` on the adapter so the next turn's
+    dropped `usage_update` sets the new baseline without duplicating the cut.
+    On replay (`it.replay == true`), `auditCapture.mapKept` drops adapter-inferred
+    events so a live-suppressed `usage_drop` never records a false loss.
+  - Request usage (Decision 7): ACP `session/update` lines carry no per-request
+    ID, so `agyAudit` omits `meta.request` (pinned by recording fixture tests).
+  - Dashboard UI and i18n: `auditSummary` (`wsdashboard/audit_query.go`) adds
+    `estimated` (`omitempty`) for estimated compaction events;
+    `dashboard-audit-rows.js` pairs `launch_*` (`launch_started`,
+    `launch_completed`, `launch_failed`) subagent rows alongside `task_*` and
+    renders localized `.au-est-badge` labels on estimated compaction rows and
+    `[data-audit-owner="compaction"] > summary` (0 DOM writes on no-op
+    reconcile); `dashboard-audit.js` and `dashboard-audit-window.js` show the
+    estimated status pill, body banner, and localized `meta.estimated` field;
+    `.au-est-badge` and `.au-wstatus.au-est` use `.au-*` classes; all 11
+    `internal/wsi18n/tables/*.json` locales include the 4 new keys.
+
+Compatibility: T0 across all surfaces (`ToolCallArgs.ID`,
+`auditSummary.Estimated`, and `meta.estimated` are additive `omitempty` fields;
+no protocol, hello, or on-disk breaking change).
+
+Performance: zero extra file I/O (stays purely in memory on the ACP stream and
+holder tee; never tails Antigravity's local `transcript.jsonl`), and no-op
+dashboard reconciles perform 0 DOM operations.
+
+Verification:
+
+- Remote Linux (`w5090`, `agents-plugin-tool`):
+  - `go test -race -count=1 -run TestAudit ./internal/wsagent/...`: ok (3.665s)
+  - `go test -race -count=1 -run TestAgy ./internal/wsagent/...`: ok (21.822s),
+    covering `TestAgyAuditUpdates`, `TestAgyAuditThoughtAssemblyLossAndFlush`,
+    `TestAgyAuditCapturesEveryKindFromRecordings` (per-file sessions over
+    `agy-1.5.10-hosted-lead.jsonl` verifying the real `/compact` usage drop
+    `38791 -> 28415` yields `Cut.Estimated == true`, earlier events
+    `ModelSeen == false`, later events `ModelSeen == true`, and no false cut on
+    model switches, plus `agy-1.5.12-compaction-probe-{1,2}.jsonl` confirming 0
+    raw-stdout compactions), `TestAgyRingCallIDMatchesTheAuditCallID` (long
+    >256B, short, and `sha256:` literal), and `TestAgyInferredCompactionCut`
+    (`usage_drop` in a single-burst write and `command_end` via `Compact` with
+    follow-up usage drop deduplication).
+  - `go test -count=1 -run TestClaudeAudit ./internal/wsagent/...` (0.039s),
+    `TestCodexAudit` (0.054s), `TestCompactionDescriptors` /
+    `TestCompactionMeasuredMissingSignals` / `TestCompactionLiveNativeFixtures` /
+    `TestCompactionMilestonesAndUsageContext` (0.026s–0.028s each): all ok.
+    (Note: Claude-lead `compactionHarness` tests require staged packages under
+    `internal/wspackage/generated/`, absent in this worktree as noted in Phase 1.)
+  - `go test -count=1 ./internal/wsaudit/...` (0.004s),
+    `./internal/wsauditstore/...` (89.431s), `./internal/wsi18n/...` (4.381s):
+    all ok.
+  - `go test -count=1 -run TestAudit ./internal/wsdashboard/...` (16.167s),
+    `go test -race -count=1 -run TestAuditSummaryEstimatedCompaction ./internal/wsdashboard/...`
+    (1.425s), `TestCSSClassesDoNotCollideAcrossModules` (0.125s),
+    `TestDashboardAsset` (0.026s): all ok.
+  - `go vet` and `GOOS=windows go vet` across `./internal/wsagent/...`,
+    `./internal/wsaudit/...`, `./internal/wsauditstore/...`,
+    `./internal/wsdashboard/...`, `./internal/wsi18n/...`: clean.
+- Local Node:
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-audit-rows.test.js agents-plugin-tool/internal/wsdashboard/frontend-audit.test.js`:
+    35/35 pass.
+
+Lite review (`code-review-lite`, one pass, findings
+`778ca9c6-01-findings.md`): clean (0 Critical, 0 Important). Two optional Minor
+test-coverage notes remain: no dedicated unit test drives `mapKept` with
+`it.replay == true` on an `inferred: true` `usage_drop` event, and
+`TestAgyInferredCompactionCut` exercises `auditItemSynthetic` without an active
+tee channel (fast path rather than `c.held` queuing through `pump`/`closeTee`).
+
 ### Phase 4: Pi adapter [dropped]
 
 Pi retires per `261123-chore-ws-retire-pi-harness`; no Pi adapter is required.
@@ -716,3 +813,8 @@ Verification (macOS): `go test -count=1 ./internal/wsagent/
 two optional minors (warm `Recover` not asserted in the failed-append test;
 `persistedLosses` ignores unparsable lines, guarded by the loss-present
 assertion).
+
+
+## Resolution (2026-11-24)
+
+All actionable phases (Phase 1 Claude + holder tee + ring call ID, Phase 2 Codex, Phase 3 agy + inferred estimated compaction cut + UI labels, and Phase 5 store-integrated restart/replay) landed on `impl/develop/mural-kitty-yeast` (Phase 4 Pi dropped per `261123-chore-ws-retire-pi-harness`). Verified across recorded fixtures, `-race` Go suites, Linux/Windows `go vet`, local JS unit tests, and clean one-pass lite review.

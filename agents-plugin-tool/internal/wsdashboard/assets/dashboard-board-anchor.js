@@ -141,10 +141,19 @@
   var virtualStore = new Map();
   var virtualNearSet = new Set();
   var virtualExemptSet = new Set();
+  var virtualExemptDirty = new Set();
   var virtualInitialized = false;
   var virtualLastBounded = null;
   var virtualLastNearSlots = VIRTUAL_NEAR_DEFAULT;
   var virtualStats = { describes: 0, prunes: 0, fullReconciles: 0, deltaReconciles: 0, slotVisits: 0, frameIndexes: 0 };
+
+  function virtualMarkExemptDirty(node) {
+    if (!node || !virtualExemptSet.size) return;
+    var sec = node.nodeType === 1 && node.matches && node.matches("section.topic[data-topic]")
+      ? node
+      : (node.closest ? node.closest("section.topic[data-topic]") : null);
+    if (sec && virtualExemptSet.has(sec)) virtualExemptDirty.add(sec);
+  }
   var VIRTUAL_ASK_SEL = '.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])';
   var VIRTUAL_KEEP_ATTRS = {
     "data-wb-virtual": true, "data-current": true, "data-anchor-cap": true,
@@ -379,8 +388,9 @@
       liveSec.replaceChild(newHead.cloneNode(true), oldHead);
       if (headAnswers && Object.keys(headAnswers).length) {
         if (typeof writeAnswers === "function") writeAnswers(liveSec, headAnswers);
-        if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
-        if (window.wbForm) window.wbForm();
+        if (typeof bindCapsuleNotes === "function") bindCapsuleNotes(liveSec);
+        if (window.wbBindBoard) window.wbBindBoard(liveSec);
+        else if (window.wbForm) window.wbForm();
       }
     }
     // Refresh any kept open-ask child without mounting heavy body parts.
@@ -441,12 +451,13 @@
       if (immediate && typeof mountFrames === "function") mountFrames(sec);
       else if (typeof mountFramesPaced === "function") mountFramesPaced(sec);
       if (rec.answers && typeof writeAnswers === "function") writeAnswers(sec, rec.answers);
-      if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate();
+      if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(sec);
       if (typeof indexFrames === "function") indexFrames(sec);
-      if (window.wbForm) window.wbForm();
-      if (typeof bindCapsuleNotes === "function") bindCapsuleNotes();
+      if (window.wbBindBoard) window.wbBindBoard(sec);
+      else if (window.wbForm) window.wbForm();
+      if (typeof bindCapsuleNotes === "function") bindCapsuleNotes(sec);
       if (typeof mermaid === "function") mermaid([sec]);
-      if (typeof applySent === "function") applySent(true);
+      if (typeof applySent === "function") applySent(true, sec);
     } else if (rec.children) {
       for (var i = 0; i < rec.children.length; i++) sec.appendChild(rec.children[i]);
       virtualRestoreOpen(sec, rec.openDetails);
@@ -563,6 +574,7 @@
     anchorCache = null;
     virtualNearSet.forEach(function (n) { if (!n || !n.isConnected) virtualNearSet.delete(n); });
     virtualExemptSet.forEach(function (n) { if (!n || !n.isConnected) virtualExemptSet.delete(n); });
+    virtualExemptDirty.forEach(function (n) { if (!n || !n.isConnected || !virtualExemptSet.has(n)) virtualExemptDirty.delete(n); });
     if (!virtualStore.size) return 0;
     var present;
     if (presentKeys instanceof Set) {
@@ -616,6 +628,7 @@
       virtualLastNearSlots = virtualNearSlots;
       virtualNearSet.clear();
       virtualExemptSet.clear();
+      virtualExemptDirty.clear();
       if (virtualStore.size) {
         Array.from(virtualStore.keys()).forEach(function (k) {
           var sec = virtualFindTopic(k);
@@ -648,6 +661,7 @@
       if (plan.skip) return false;
       virtualNearSet = nextNear;
       virtualExemptSet = new Set();
+      virtualExemptDirty = new Set();
       // Hydrate newly near or newly exempt topics first, then collapse far ones.
       for (var h = 0; h < plan.actions.length; h++) {
         if (plan.actions[h].action === "hydrate") {
@@ -663,9 +677,10 @@
         }
       }
     } else {
-      // Steady-state O(1) delta reconcile: inspect ONLY leaving slots and the
-      // bounded previously-exempt far set; never scan unchanged far slots or
-      // prune virtualStore during normal navigation.
+      // Steady-state O(1) delta reconcile: inspect ONLY leaving slots and
+      // previously-exempt far topics whose exemption state changed (dirty);
+      // never revisit unchanged far exempt topics or prune virtualStore during
+      // normal navigation.
       virtualStats.deltaReconciles++;
       var candidates = [];
       virtualNearSet.forEach(function (prevNode) {
@@ -674,19 +689,23 @@
         if (prevNode.hasAttribute && prevNode.hasAttribute("data-wb-virtual")) return;
         candidates.push(prevNode);
       });
-      Array.from(virtualExemptSet).forEach(function (exNode) {
-        virtualStats.slotVisits++;
-        if (!exNode || !exNode.isConnected || nextNear.has(exNode)) {
-          virtualExemptSet.delete(exNode);
-          return;
-        }
-        if (candidates.indexOf(exNode) < 0) candidates.push(exNode);
-      });
+      if (virtualExemptDirty.size) {
+        Array.from(virtualExemptDirty).forEach(function (exNode) {
+          virtualExemptDirty.delete(exNode);
+          virtualStats.slotVisits++;
+          if (!exNode || !exNode.isConnected || nextNear.has(exNode)) {
+            virtualExemptSet.delete(exNode);
+            return;
+          }
+          if (virtualExemptSet.has(exNode) && candidates.indexOf(exNode) < 0) candidates.push(exNode);
+        });
+      }
       virtualNearSet = nextNear;
       var entering = [];
       for (var ei = lo; ei <= hi; ei++) {
         var en = list[ei];
         virtualExemptSet.delete(en);
+        virtualExemptDirty.delete(en);
         if (en && en.hasAttribute && en.hasAttribute("data-wb-virtual")) {
           entering.push({ node: en, immediate: ei === activeIdx });
         }
@@ -696,6 +715,7 @@
       }
       for (var ci = 0; ci < candidates.length; ci++) {
         var cn = candidates[ci];
+        virtualExemptDirty.delete(cn);
         var desc = virtualDescribeNode(cn);
         if (!desc.isTopic) {
           virtualExemptSet.delete(cn);
@@ -732,6 +752,7 @@
     hydrateForTarget: virtualHydrateForTarget,
     collapse: virtualCollapse,
     reconcile: virtualReconcile,
+    markExemptDirty: virtualMarkExemptDirty,
     prune: virtualPrune,
     searchRoots: virtualSearchRoots,
     detachedNodes: virtualSearchRoots,
@@ -841,9 +862,18 @@
     }
     return false;
   }
+  function anchorProcessRecords(records) {
+    if (!records || !records.length) return;
+    if (anchorRecordsAffectOrder(records)) anchorCache = null;
+    if (virtualExemptSet.size) {
+      for (var i = 0; i < records.length; i++) {
+        virtualMarkExemptDirty(records[i].target);
+      }
+    }
+  }
   function anchorDrainMutations() {
-    if (anchorBoardMO && anchorBoardMO.takeRecords && anchorRecordsAffectOrder(anchorBoardMO.takeRecords())) {
-      anchorCache = null;
+    if (anchorBoardMO && anchorBoardMO.takeRecords) {
+      anchorProcessRecords(anchorBoardMO.takeRecords());
     }
   }
   function anchorCards(rebuild) {
@@ -1354,15 +1384,21 @@
         if (anchorProg) anchorRealign(true);
       });
       anchorMO.observe(col, { attributes: true, attributeFilter: ["style"] });
-      anchorBoardMO = new MutationObserver(function (records) {
-        if (anchorRecordsAffectOrder(records)) anchorCache = null;
-      });
+      anchorBoardMO = new MutationObserver(anchorProcessRecords);
       anchorBoardMO.observe(region("board"), {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["hidden", "data-state-filtered", "data-card", "data-topic", "data-rail"]
+        attributeFilter: ["hidden", "data-state-filtered", "data-card", "data-topic", "data-rail", "data-max", "data-has-panel-max", "data-overview-live", "aria-pressed", "data-no"]
       });
+    }
+    var boardEl = region("board");
+    if (boardEl && boardEl.addEventListener) {
+      var onBoardExemptEvt = function (e) { virtualMarkExemptDirty(e && e.target); };
+      boardEl.addEventListener("input", onBoardExemptEvt, { passive: true });
+      boardEl.addEventListener("change", onBoardExemptEvt, { passive: true });
+      boardEl.addEventListener("focusout", onBoardExemptEvt, { passive: true });
+      boardEl.addEventListener("click", onBoardExemptEvt, { passive: true });
     }
     col.wbScrollOwner = true;
     anchorSettle(null);

@@ -65,6 +65,27 @@ const shot = name => shots ? path.join(shots, name) : undefined;
 
     await openSettings();
 
+    // 0. Constrained viewport (1280x800, modal height ~768px): .tr-card must not
+    // collapse or clip vertically, and .scontent must scroll cleanly.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.waitForTimeout(100);
+    const modalMetrics = await card.evaluate(el => {
+      const scontent = el.closest('.scontent');
+      const trFrame = el.querySelector('.tr-frame');
+      return {
+        cardScrollHeight: el.scrollHeight,
+        cardClientHeight: el.clientHeight,
+        frameHeight: trFrame ? trFrame.getBoundingClientRect().height : 0,
+        scontentScrollHeight: scontent ? scontent.scrollHeight : 0,
+        scontentClientHeight: scontent ? scontent.clientHeight : 0
+      };
+    });
+    assert.ok(modalMetrics.cardScrollHeight <= modalMetrics.cardClientHeight + 2, `tr-card clipped at 1280x800: ${JSON.stringify(modalMetrics)}`);
+    assert.ok(modalMetrics.frameHeight >= 120, `tr-frame collapsed at 1280x800: ${JSON.stringify(modalMetrics)}`);
+    assert.ok(modalMetrics.scontentScrollHeight > modalMetrics.scontentClientHeight, `scontent not scrollable at 1280x800: ${JSON.stringify(modalMetrics)}`);
+    await page.setViewportSize({ width: 1440, height: 1800 });
+    await page.waitForTimeout(100);
+
     // 1. The graph is the daemon's, global, and shows the caller fallthrough.
     let v = await view();
     assert.match(await card.locator('[data-tier-scope=global]').textContent(), /Global/);

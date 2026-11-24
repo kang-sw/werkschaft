@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -49,10 +48,11 @@ func (l *cronRemovals) got() []string {
 	return append([]string(nil), l.ids...)
 }
 
-// TestDeliverCronHoldsUntilTheTurnEndsThenDrains: a prompt that arrives
-// mid-turn is held, never steered into the running turn, counted as a send,
-// and taken by the next turn, which reports the removal to the observer.
-func TestDeliverCronHoldsUntilTheTurnEndsThenDrains(t *testing.T) {
+// TestDeliverCronSteersMidTurnAndDrainsWhenIdle: a prompt that arrives
+// mid-turn is written with Steer set, counted as a send, steered into the
+// running turn immediately, and reported to the removal observer; a prompt
+// that arrives while idle starts the next turn through the normal drain path.
+func TestDeliverCronSteersMidTurnAndDrainsWhenIdle(t *testing.T) {
 	var removals cronRemovals
 	stop := wsinbox.ObserveCronRemoval(removals.add)
 	defer stop()
@@ -72,31 +72,87 @@ func TestDeliverCronHoldsUntilTheTurnEndsThenDrains(t *testing.T) {
 	if got := h.record(id).Sends; got != sendsBefore+1 {
 		t.Fatalf("sends = %d, want %d", got, sendsBefore+1)
 	}
-	if ids := h.runner.CronHeld(id); len(ids) != 1 || ids[0] != "cron-aa11" {
-		t.Fatalf("held cron entries = %v", ids)
-	}
-	held, err := wsinbox.Held(wsinbox.Dir(wsdashboard.SessionDir(h.dir, id)))
-	if err != nil || len(held) != 1 || held[0].Entry.Steer || held[0].Entry.Cron == nil {
-		t.Fatalf("held = %+v, %v", held, err)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if got := len(h.userInputs(holder)); got != before {
-		t.Fatalf("the prompt reached the running turn (%d inputs, was %d)", got, before)
-	}
-	if len(removals.got()) != 0 {
-		t.Fatalf("observer fired before the drain: %v", removals.got())
-	}
-
-	h.holders.out(holder, turnLines("sess-1", "u2", "done")...)
-	eventually(t, "the next turn carries the scheduled prompt", func() bool {
+	eventually(t, "the running turn receives the steered cron prompt", func() bool {
 		inputs := h.userInputs(holder)
 		return len(inputs) > before && strings.Contains(inputs[len(inputs)-1], `<ws:cron id="cron-aa11" name="board" at="2026-03-10T09:00:00+09:00">`)
 	})
 	if got := removals.got(); len(got) != 1 || got[0] != "cron-aa11" {
-		t.Fatalf("drain observed %v", got)
+		t.Fatalf("steer drain observed %v", got)
 	}
 	if ids := h.runner.CronHeld(id); len(ids) != 0 {
-		t.Fatalf("still held after the drain: %v", ids)
+		t.Fatalf("still held after the steer drain: %v", ids)
+	}
+	drained, err := wsinbox.Drained(wsinbox.Dir(wsdashboard.SessionDir(h.dir, id)))
+	if err != nil || len(drained) == 0 {
+		t.Fatalf("drained = %+v, %v", drained, err)
+	}
+	last := drained[len(drained)-1]
+	if !last.Entry.Steer || last.Entry.Cron == nil || last.Entry.Cron.ID != "cron-aa11" {
+		t.Fatalf("drained cron entry = %+v", last.Entry)
+	}
+
+	// Idle fallback: once the turn ends, DeliverCron kicks a new turn via Drain.
+	h.holders.out(holder, turnLines("sess-1", "u2", "done")...)
+	h.idle(id)
+	beforeIdle := len(h.userInputs(holder))
+	mark2 := wsinbox.Cron{ID: "cron-aa22", Name: "idle", At: "2026-03-10T09:05:00+09:00"}
+	if ok, err := h.runner.DeliverCron(id, mark2, "check while idle"); err != nil || !ok {
+		t.Fatalf("idle DeliverCron = %v, %v", ok, err)
+	}
+	eventually(t, "the idle lead starts a turn with the scheduled prompt", func() bool {
+		inputs := h.userInputs(holder)
+		return len(inputs) > beforeIdle && strings.Contains(inputs[len(inputs)-1], `<ws:cron id="cron-aa22" name="idle" at="2026-03-10T09:05:00+09:00">`)
+	})
+	if got := removals.got(); len(got) != 2 || got[1] != "cron-aa22" {
+		t.Fatalf("idle drain observed %v", got)
+	}
+	if ids := h.runner.CronHeld(id); len(ids) != 0 {
+		t.Fatalf("still held after the idle drain: %v", ids)
+	}
+}
+
+// TestDeliverCronWaitsOutInFlightMCPCallOnAgy: on agy, whose steer replaces
+// the running prompt, a scheduled prompt waits while a ws MCP call is in
+// flight and steers as soon as that call ends.
+func TestDeliverCronWaitsOutInFlightMCPCallOnAgy(t *testing.T) {
+	var removals cronRemovals
+	stop := wsinbox.ObserveCronRemoval(removals.add)
+	defer stop()
+	h, f := newAgyLeadHarness(t)
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{}).ID
+	f.replyID = id
+	h.send(id, "p1")
+	holder := h.holder(id)
+	eventually(t, "p1 sent", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+	token := h.record(id).MCPToken
+	if token == "" {
+		t.Fatal("the agy lead has no MCP session token")
+	}
+	end := h.runner.MCPCallBegin(token)
+	mark := wsinbox.Cron{ID: "cron-agy1", Name: "board", At: "2026-03-10T09:00:00+09:00"}
+	if ok, err := h.runner.DeliverCron(id, mark, "check the board"); err != nil || !ok {
+		t.Fatalf("DeliverCron = %v, %v", ok, err)
+	}
+	h.quiesce(id)
+	if n := len(agyPromptIDs(h, holder)); n != 1 {
+		t.Fatalf("the scheduled prompt steered during the MCP call: %d prompts", n)
+	}
+	if ids := h.runner.CronHeld(id); len(ids) != 1 || ids[0] != "cron-agy1" {
+		t.Fatalf("held cron entries during MCP call = %v", ids)
+	}
+	if got := removals.got(); len(got) != 0 {
+		t.Fatalf("observer fired while held for MCP call: %v", got)
+	}
+	end()
+	eventually(t, "the held cron steers once the MCP call finishes", func() bool {
+		return len(agyPromptIDs(h, holder)) == 2
+	})
+	if got := removals.got(); len(got) != 1 || got[0] != "cron-agy1" {
+		t.Fatalf("observer after MCP call = %v", got)
+	}
+	if ids := h.runner.CronHeld(id); len(ids) != 0 {
+		t.Fatalf("still held after MCP call ended: %v", ids)
 	}
 }
 

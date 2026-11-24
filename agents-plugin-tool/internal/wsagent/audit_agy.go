@@ -17,10 +17,23 @@ func (*agyMapper) newAudit(sessionID string) (string, auditAdapter) {
 }
 
 // agyAudit maps ACP independently of the live mapper. The holder tees
-// thought chunks to audit while sending only activity pulses to the live mapper.
+// thought chunks to audit while sending only activity pulses to the live mapper;
+// contiguous thought chunks are assembled into one thinking event and flushed
+// on any non-thought, non-activity line or at stream end.
 type agyAudit struct {
-	session   string
-	openTools map[string]string
+	session    string
+	openTools  map[string]string
+	thought    *agyAuditThought
+	prevTokens int64
+	prevWindow int64
+}
+
+type agyAuditThought struct {
+	at        time.Time
+	body      strings.Builder
+	lost      uint64
+	lossKnown bool
+	reason    string
 }
 
 func (a *agyAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
@@ -29,20 +42,16 @@ func (a *agyAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
 }
 
 func (a *agyAudit) mapLine(line []byte, at time.Time) (bool, []auditEvent, []auditEvent) {
-	recognized, evs := a.mapOwn(line, at)
-	return recognized, nil, evs
-}
-
-func (a *agyAudit) mapOwn(line []byte, at time.Time) (bool, []auditEvent) {
 	var msg agyMessage
 	if json.Unmarshal(line, &msg) != nil {
-		return false, nil
+		return false, a.finishThought(false), nil
 	}
 	hasID := len(msg.ID) > 0 && string(msg.ID) != "null"
 	switch {
 	case msg.Method == "session/update" && !hasID:
 		return a.update(msg.Params, at)
 	case msg.Method == "session/request_permission" && hasID:
+		carried := a.finishThought(false)
 		var p struct {
 			ToolCall struct {
 				ID string `json:"toolCallId"`
@@ -51,15 +60,16 @@ func (a *agyAudit) mapOwn(line []byte, at time.Time) (bool, []auditEvent) {
 		_ = json.Unmarshal(msg.Params, &p)
 		ev := a.env(wsaudit.KindSystem, at)
 		ev.Subkind, ev.CallID, ev.Out = "request:"+msg.Method, p.ToolCall.ID, compactJSON(msg.Params)
-		return true, slotted([]wsaudit.Envelope{ev})
+		return true, carried, slotted([]wsaudit.Envelope{ev})
 	case msg.Method == "" && hasID && (msg.Result != nil || msg.Error != nil):
+		carried := a.finishThought(false)
 		subkind := "response"
 		if msg.Error != nil {
 			subkind = "response:error"
 		}
-		return true, a.system(subkind, line, at)
+		return true, carried, a.system(subkind, line, at)
 	}
-	return false, nil
+	return false, a.finishThought(false), nil
 }
 
 type agyAuditUpdate struct {
@@ -67,45 +77,59 @@ type agyAuditUpdate struct {
 	RawInput json.RawMessage `json:"rawInput"`
 }
 
-func (a *agyAudit) update(params json.RawMessage, at time.Time) (bool, []auditEvent) {
+func (a *agyAudit) update(params json.RawMessage, at time.Time) (bool, []auditEvent, []auditEvent) {
 	var p struct {
 		Update json.RawMessage `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
-		return false, nil
+		return false, a.finishThought(false), nil
 	}
 	var update struct {
 		Type    string          `json:"sessionUpdate"`
 		Content json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(p.Update, &update) != nil {
-		return false, nil
+		return false, a.finishThought(false), nil
 	}
 	switch update.Type {
-	case "user_message_chunk", "agent_message_chunk", "ws_activity":
-		return true, nil
+	case "ws_activity":
+		// Holder pulse injected onto the kept stream while thought chunks are
+		// tee'd; never break an open thought assembly on it.
+		return true, nil, nil
 	case "agent_thought_chunk":
 		var c struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
 		if json.Unmarshal(update.Content, &c) != nil || c.Type != "text" || c.Text == "" {
-			return true, nil
+			return true, nil, nil
 		}
-		ev := a.env(wsaudit.KindThinking, at)
-		ev.Out = c.Text
-		return true, slotted([]wsaudit.Envelope{ev})
+		if a.thought == nil {
+			a.thought = &agyAuditThought{at: at}
+		}
+		a.thought.body.WriteString(c.Text)
+		return true, nil, nil
+	case "user_message_chunk", "agent_message_chunk":
+		return true, a.finishThought(false), nil
 	case "tool_call", "tool_call_update":
+		carried := a.finishThought(false)
 		var u agyAuditUpdate
 		if json.Unmarshal(p.Update, &u) != nil {
-			return false, nil
+			return false, carried, nil
 		}
-		return true, a.tool(u, at)
-	case "plan", "usage_update", "available_commands_update", "current_mode_update",
+		return true, carried, a.tool(u, at)
+	case "usage_update":
+		carried := a.finishThought(false)
+		evs := a.system(update.Type, p.Update, at)
+		if cmpEv, ok := a.checkUsageDrop(p.Update, at); ok {
+			evs = append(evs, auditEvent{slot: 1, inferred: true, ev: cmpEv})
+		}
+		return true, carried, evs
+	case "plan", "available_commands_update", "current_mode_update",
 		"config_option_update", "session_info_update":
-		return true, a.system(update.Type, p.Update, at)
+		return true, a.finishThought(false), a.system(update.Type, p.Update, at)
 	}
-	return false, nil
+	return false, a.finishThought(false), nil
 }
 
 func (a *agyAudit) system(subkind string, body []byte, at time.Time) []auditEvent {
@@ -185,6 +209,92 @@ func agyAuditBody(raw, fallback json.RawMessage) string {
 	return compactJSON(raw)
 }
 
-func (*agyAudit) markLoss(uint64, string) bool { return false }
+func (a *agyAudit) finishThought(ending bool) []auditEvent {
+	th := a.thought
+	if th == nil {
+		return nil
+	}
+	a.thought = nil
+	lost := th.reason != ""
+	if ending && th.reason == "" {
+		th.reason = wsaudit.LossStreamEnd
+	}
+	if th.body.Len() == 0 && !lost && !ending {
+		return nil
+	}
+	ev := a.env(wsaudit.KindThinking, th.at)
+	ev.Out = th.body.String()
+	setMeta(&ev, wsaudit.MetaAssembled, true)
+	if th.reason != "" {
+		setMeta(&ev, wsaudit.MetaIncomplete, true)
+		setMeta(&ev, wsaudit.MetaLossReason, th.reason)
+		if th.lossKnown && th.lost > 0 {
+			setMeta(&ev, wsaudit.MetaLost, th.lost)
+		}
+	}
+	return []auditEvent{{slot: 0, ev: ev}}
+}
 
-func (*agyAudit) flush(time.Time) []auditEvent { return nil }
+func (a *agyAudit) markLoss(n uint64, reason string) bool {
+	th := a.thought
+	if th == nil {
+		return false
+	}
+	if th.reason == "" {
+		th.lossKnown = true
+	}
+	th.reason = reason
+	if n == 0 {
+		th.lossKnown = false
+	}
+	th.lost += n
+	return true
+}
+
+func (a *agyAudit) flush(time.Time) []auditEvent {
+	return a.finishThought(true)
+}
+
+// checkUsageDrop mirrors conv.checkUsageDropCompaction using AgyCatalog's
+// thresholds so an automatic usage-drop cut is emitted synchronously at the
+// exact usage_update record, ahead of any subsequent lines in the same burst.
+func (a *agyAudit) checkUsageDrop(raw json.RawMessage, at time.Time) (wsaudit.Envelope, bool) {
+	p := AgyCatalog().Compaction
+	if p.UsageDropRatio <= 0 || p.UsageDropRatio >= 1 {
+		return wsaudit.Envelope{}, false
+	}
+	var u struct {
+		Used int64 `json:"used"`
+		Size int64 `json:"size"`
+	}
+	if json.Unmarshal(raw, &u) != nil || u.Used <= 0 || u.Used > wslive.MaxContextTokens || u.Size <= 0 {
+		return wsaudit.Envelope{}, false
+	}
+	if a.prevWindow > 0 && u.Size != a.prevWindow {
+		a.prevTokens, a.prevWindow = 0, u.Size
+		return wsaudit.Envelope{}, false
+	}
+	prev := a.prevTokens
+	a.prevTokens, a.prevWindow = u.Used, u.Size
+	if prev <= 0 {
+		return wsaudit.Envelope{}, false
+	}
+	dropped := prev - u.Used
+	if dropped < p.UsageDropMinDelta || float64(u.Used) >= float64(prev)*p.UsageDropRatio {
+		return wsaudit.Envelope{}, false
+	}
+	ev := a.env(wsaudit.KindCompaction, at)
+	ev.Subkind = wslive.TriggerAuto
+	ev.Meta = map[string]any{
+		wsaudit.MetaEstimated: true,
+		"inferred_by":         "usage_drop",
+		"trigger":             wslive.TriggerAuto,
+		"pre_tokens":          prev,
+		"post_tokens":         u.Used,
+	}
+	return ev, true
+}
+
+func (a *agyAudit) resetCompactionBaseline() {
+	a.prevTokens = 0
+}

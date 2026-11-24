@@ -950,3 +950,55 @@ test('rows added under a bottom-pinned conversation re-pin it; no-op reconciles 
     assert.equal(pins, stick ? 2 : 0);
   }
 });
+
+test('launch_* subagent events pair under subagent owner and wait for turn while running', () => {
+  const h = loadAuditRowsHelpers();
+  assert.equal(h.auEventOwnerKind({ kind: 'subagent', subkind: 'launch_started' }), 'subagent');
+  assert.equal(h.auEventOwnerKind({ kind: 'subagent', subkind: 'launch_completed' }), 'subagent');
+  assert.equal(h.auEventOwnerKind({ kind: 'subagent', subkind: 'launch_failed' }), 'subagent');
+  assert.equal(h.auWaitForTurn({ kind: 'subagent', subkind: 'launch_started' }), true);
+  assert.equal(h.auWaitForTurn({ kind: 'subagent', subkind: 'launch_completed' }), true);
+
+  const f = turnFixture();
+  const doneOwner = f.owner('subagent', 15);
+  const failOwner = f.owner('subagent', 18);
+  f.add('l1-start', 1, 'subagent', 12, { subkind: 'launch_started', agent_id: 'agy:c1', parent_id: 'c1' });
+  f.add('l1-end', 2, 'subagent', 15, { subkind: 'launch_completed', agent_id: 'agy:c1', parent_id: 'c1' });
+  f.add('l2-start', 3, 'subagent', 16, { subkind: 'launch_started', agent_id: 'agy:c2', parent_id: 'c2' });
+  f.add('l2-fail', 4, 'subagent', 18, { subkind: 'launch_failed', agent_id: 'agy:c2', parent_id: 'c2' });
+  f.ctx.auReconcileRows();
+
+  const ids = (root) => root.querySelector('.conv-audit-items').children.map((row) => row.getAttribute('data-event-id'));
+  assert.deepEqual(ids(doneOwner), ['l1-start', 'l1-end']);
+  assert.deepEqual(ids(failOwner), ['l2-start', 'l2-fail']);
+
+  // While running (no finished turn, no completion owner yet), launch_started waits for the upcoming turn.
+  const running = turnFixture(false);
+  running.add('l3-start', 1, 'subagent', 12, { subkind: 'launch_started', agent_id: 'agy:c3' });
+  running.ctx.auReconcileRows();
+  assert.equal(rowById(running.dom, 'l3-start'), null);
+});
+
+test('estimated compaction renders badge on row and compaction owner summary with zero churn on no-op reconcile', () => {
+  const f = turnFixture();
+  const compact = f.owner('compaction', 14);
+  const sum = new f.dom.El('SUMMARY');
+  sum.appendChild(f.dom.doc.createTextNode('context compacted (auto)'));
+  const timeEl = new f.dom.El('TIME');
+  sum.appendChild(timeEl);
+  compact.insertBefore(sum, compact.firstChild);
+
+  f.add('cmp-est', 1, 'compaction', 14, { subkind: 'auto', estimated: true });
+  f.ctx.auReconcileRows();
+
+  const row = rowById(f.dom, 'cmp-est');
+  assert.ok(row && row.classList.contains('au-estimated'));
+  const rowBadge = row.querySelector('.au-est-badge');
+  assert.ok(rowBadge && rowBadge.textContent === 'js.audit.compaction.estimated');
+  const sumBadge = sum.querySelector('.au-est-badge');
+  assert.ok(sumBadge && sumBadge.textContent === 'js.audit.compaction.estimated');
+  assert.equal(sumBadge.nextElementSibling, timeEl, 'owner summary badge sits before timestamp');
+
+  // Reconciling again with no changes performs zero DOM operations.
+  assert.equal(countDomOps(f.dom, () => f.ctx.auReconcileRows()), 0);
+});

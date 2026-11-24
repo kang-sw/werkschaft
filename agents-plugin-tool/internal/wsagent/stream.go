@@ -165,6 +165,19 @@ func (p *streamProcess) closeAudit() {
 	}
 }
 
+// auditSyntheticRecorder is implemented by a process whose audit capture
+// accepts non-blocking daemon-derived events (such as estimated compaction
+// cuts for harnesses that emit no explicit compaction wire event).
+type auditSyntheticRecorder interface {
+	recordAuditEvent(key string, ev wsaudit.Envelope)
+}
+
+func (p *streamProcess) recordAuditEvent(key string, ev wsaudit.Envelope) {
+	if p != nil && p.audit != nil {
+		p.audit.synthetic(key, ev)
+	}
+}
+
 // startStreamProcess starts cmd as the daemon's own child.
 func startStreamProcess(cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*streamProcess, error) {
 	p := newStreamProcess(mapper, proto)

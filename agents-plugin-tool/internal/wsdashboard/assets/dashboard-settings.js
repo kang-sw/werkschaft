@@ -23,6 +23,7 @@ var wsSettingsChoiceLabels = {
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
   var sections = ["workflow", "agents", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "agy", "dashboard"];
+  var tierHarnessOrder = ["claude", "codex", "agy", "werk"];
   var filterLabels = {
     all: "js.settings.filter.all",
     overridden: "js.settings.filter.overridden",
@@ -431,7 +432,7 @@ var wsSettingsChoiceLabels = {
       chip.dataset.layerStatus = layer.status;
       var from = layer.inherited ? tr("js.settings.inherited_session") : scopeName(layer.scope);
       if (layer.bucket && layer.bucket !== entry.selectors.harness) from += " · " + bucketShort(layer.bucket);
-      var isWinner = !draft && layer.scope === entry.source_scope && (!layer.bucket || layer.bucket === entry.source_bucket);
+      var isWinner = !draft && !isTierUnconfigured(entry) && layer.scope === entry.source_scope && (!layer.bucket || layer.bucket === entry.source_bucket);
       var isDraftLayer = draft && layer.scope === "repo";
       var valText, isEmpty = false;
       if (isDraftLayer) {
@@ -474,6 +475,7 @@ var wsSettingsChoiceLabels = {
     });
     drawer.append(chain);
     var noteText = draft ? tr("js.settings.proposal.queued") :
+      isTierUnconfigured(entry) ? tr("js.settings.tier.unconfigured_hint") :
       shadowed(entry) ? tr(entry.conditional ? "js.settings.shadow_conditional" : "js.settings.shadow", source(entry)) :
       scope === "builtin" ? tr("js.settings.builtin_value", shownValue(entry.default, entry.key)) :
       selected(entry) !== undefined ? tr("js.settings.override", shownValue(selected(entry), entry.key)) :
@@ -501,6 +503,14 @@ var wsSettingsChoiceLabels = {
   function originPillState(entry) {
     var here = selected(entry) !== undefined;
     var bucketSuffix = entry.selectors.harness && entry.selectors.harness !== "default" ? bucketShort(entry.selectors.harness) : "";
+    if (isTierUnconfigured(entry)) {
+      return {
+        text: tr("js.settings.tier.unconfigured"),
+        style: "unset",
+        title: tr("js.settings.tier.unconfigured_hint") + " · " + tr("js.settings.layers"),
+        lock: scope === "builtin"
+      };
+    }
     if (scope === "builtin") {
       return {
         text: scopeName("builtin"),
@@ -830,10 +840,123 @@ var wsSettingsChoiceLabels = {
     return row;
   }
 
-  function tierRow(entry, spec) {
+  function currentSessionHarness() {
+    var h = snapshot && typeof snapshot.session_harness === "string"
+      ? snapshot.session_harness.trim().toLowerCase() : "";
+    if (!h) {
+      try {
+        var badge = window.parent.document.querySelector(".rail .rs.cur .hb[data-h]") ||
+          window.parent.document.querySelector(".tph-hs .hb[data-h]");
+        if (badge) h = (badge.getAttribute("data-h") || "").trim().toLowerCase();
+      } catch (error) { /* Ignore cross-origin or standalone frame reads. */ }
+    }
+    return tierHarnessOrder.includes(h) ? h : "";
+  }
+
+  function tierHarnessChoices(entries) {
+    var seen = new Set(entries.map(function (entry) { return entry.selectors.harness; }).filter(function (h) {
+      return h && h !== "default";
+    }));
+    return tierHarnessOrder.filter(function (h) { return seen.has(h); }).concat(
+      [...seen].filter(function (h) { return !tierHarnessOrder.includes(h); }).sort()
+    );
+  }
+
+  function activeTierBucket(entries) {
+    var choices = tierHarnessChoices(entries);
+    var active = buckets.get("agents.tier");
+    if (choices.includes(active)) return active;
+    var sessionH = currentSessionHarness();
+    if (sessionH && choices.includes(sessionH)) return sessionH;
+    return choices[0] || "";
+  }
+
+  function isTierUnconfigured(entry) {
+    if (!entry || entry.key !== "agents.tier") return false;
+    var val = scope === "builtin" ? entry.default : (selected(entry) ?? entry.value);
+    return !val || (!val.backend && !val.model);
+  }
+
+  function tierHarnessSummary(harness, entries) {
+    var matching = entries.filter(function (entry) { return entry.selectors.harness === harness; });
+    var ownCount = 0;
+    var otherScopes = [];
+    var otherCount = 0;
+    var allUnset = matching.length > 0;
+    var models = [];
+    var cb = window.WsSettingsCombobox;
+    for (var entry of matching) {
+      if (!isTierUnconfigured(entry)) allUnset = false;
+      var val = scope === "builtin" ? entry.default : (selected(entry) ?? entry.value);
+      if (val && val.model) {
+        var modelText = cb ? cb.modelKey(val.model, val.provider) : val.model;
+        if (modelText && !models.includes(modelText)) models.push(modelText);
+      }
+      if (scope !== "builtin" && selected(entry) !== undefined) {
+        ownCount++;
+      } else {
+        var hasOther = false;
+        for (var layer of entry.layers) {
+          if (layer.scope !== "builtin" && layer.scope !== scope && layer.selected !== undefined) {
+            hasOther = true;
+            if (!otherScopes.includes(layer.scope)) otherScopes.push(layer.scope);
+          }
+        }
+        if (hasOther) otherCount++;
+      }
+    }
+    var badgeKind = "builtin";
+    var badgeText = tr("js.settings.builtin_title");
+    var overrideCount = ownCount > 0 ? ownCount : otherCount;
+    var overrideScopes = ownCount > 0 ? [scope] : otherScopes;
+    if (overrideCount > 0) {
+      badgeKind = "ov";
+      badgeText = overrideScopes.length === 1
+        ? tr("js.settings.tier.badge_overrides", scopeName(overrideScopes[0]), overrideCount)
+        : tr("js.settings.tier.badge_overrides_multi", overrideCount);
+    } else if (allUnset) {
+      badgeKind = "unset";
+      badgeText = tr("js.settings.tier.unconfigured");
+    }
+    return {
+      badgeKind: badgeKind,
+      badgeText: badgeText,
+      overrideCount: overrideCount,
+      overrideScopes: overrideScopes,
+      allUnset: allUnset,
+      modelsText: models.length ? models.join(" · ") : tr("js.settings.tier.model_required")
+    };
+  }
+
+  function legacyDefaultOverrides(entries) {
+    var items = [];
+    for (var entry of entries) {
+      if (entry.selectors.harness !== "default") continue;
+      for (var layer of entry.layers) {
+        if (layer.scope === "builtin" || layer.selected === undefined) continue;
+        items.push({
+          entry: entry,
+          tier: entry.selectors.tier,
+          scope: layer.scope,
+          value: layer.selected
+        });
+      }
+    }
+    return items;
+  }
+
+  function formatLegacyOverride(item) {
+    var val = item.value || {};
+    var target = [val.backend, val.model].filter(Boolean).join(" / ") || shownValue(val, item.entry.key);
+    return item.tier + " → " + target + " (" + scopeName(item.scope) + ")";
+  }
+
+  function tierRow(entry, spec, onMutated) {
     var canEdit = editable(entry, spec), group = el("tbody", "tier-entry" + rowClass(entry, canEdit));
     group.dataset.configKey = entry.key;
     group.dataset.settingsTier = entry.selectors.tier;
+    var unset = isTierUnconfigured(entry);
+    if (unset) group.dataset.tierUnconfigured = "1";
     var row = el("tr", "tier-main-row"), secondary = el("tr", "tier-secondary");
     var cell = el("td", "tname", entry.selectors.tier);
     var fields = ["backend", "model", "effort"];
@@ -842,6 +965,13 @@ var wsSettingsChoiceLabels = {
     var cb = window.WsSettingsCombobox;
     var inputs = fields.map(function (field) {
       var input = textInput(field === "model" ? cb.modelKey(value.model, value.provider) : value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
+      if (unset) {
+        if (field === "backend") input.placeholder = entry.selectors.harness;
+        else if (field === "model") {
+          input.placeholder = tr("js.settings.tier.unset_model_placeholder");
+          input.classList.add("is-unset");
+        } else if (field === "effort") input.placeholder = "—";
+      }
       var combo = cb.attach(input, {
         getOptions: function () {
           if (field === "backend") return cb.backendOptions();
@@ -864,7 +994,8 @@ var wsSettingsChoiceLabels = {
     var status = el("span", "hint");
     status.setAttribute("role", "status");
     var submit = makeSubmit(entry, group, status, function (fresh) {
-      group.replaceWith(tierRow(fresh, spec));
+      group.replaceWith(tierRow(fresh, spec, onMutated));
+      if (onMutated) onMutated();
     });
     var layerTr = null;
     function syncTierDrawer(expanded, drawerId) {
@@ -918,14 +1049,58 @@ var wsSettingsChoiceLabels = {
   }
 
   function renderTier(entries, spec) {
-    var card = el("div", "sgroup tier-group" + (!entries.some(function (e) { return editable(e, spec); }) ? " disabled" : "")), active = activeBucket(spec.key, entries);
-    var heading = append(el("div", "kmeta"), append(el("div", "klabel-line"), el("b", "klabel", window.wsT(spec.label)),
-      el("code", "skey", spec.key), el("span", "tag bucket", tr("js.settings.bucket.tag"))), el("p", "kdesc", window.wsT(spec.description)));
-    var visible = entries.filter(function (entry) { return entry.selectors.harness === active && matches(entry, spec); });
-    var top = append(el("div", "tier-group-head"), heading, bucketPicker(spec.key, entries, "seg bucket-seg"));
-    if (visible.length && !editable(visible[0], spec)) {
-      heading.firstChild.append(el("span", "tag lock", tr(reasons[rowReason(visible[0], spec)] || reasons.scope_unsupported)));
+    var wrapper = el("div", "tier-section");
+    var currentEntries = function () { return group(spec.key); };
+    var choices = tierHarnessChoices(entries);
+    var active = activeTierBucket(entries);
+    var sessionH = currentSessionHarness();
+    var card = el("div", "sgroup tier-group" + (!entries.some(function (e) { return editable(e, spec); }) ? " disabled" : ""));
+    var headingLine = append(el("div", "klabel-line"), el("b", "klabel", window.wsT(spec.label)),
+      el("code", "skey", spec.key), el("span", "tag bucket", tr("js.settings.bucket.tag")));
+    var firstVisible = entries.find(function (entry) { return entry.selectors.harness === active && matches(entry, spec); });
+    if (firstVisible && !editable(firstVisible, spec)) {
+      headingLine.append(el("span", "tag lock", tr(reasons[rowReason(firstVisible, spec)] || reasons.scope_unsupported)));
     }
+    var heading = append(el("div", "kmeta"), headingLine, el("p", "kdesc", window.wsT(spec.description)));
+
+    var tabBar = el("div", "tier-htabs");
+    tabBar.setAttribute("role", "tablist");
+    tabBar.setAttribute("aria-label", tr("js.settings.tier.harness_select"));
+    var tabNodes = new Map();
+
+    choices.forEach(function (choice) {
+      var badgeEl = el("span", "tier-htab-badge");
+      var subEl = el("div", "tier-htab-sub");
+      var hBadge = el("span", "hb");
+      hBadge.dataset.h = choice;
+      hBadge.setAttribute("aria-hidden", "true");
+      var tab = button("tier-htab", "", function () {
+        if (choice === active) return;
+        active = choice;
+        buckets.set(spec.key, choice);
+        syncTabSelection();
+        syncActiveBar();
+        syncTable();
+      });
+      tab.setAttribute("role", "tab");
+      tab.dataset.bucketKey = spec.key;
+      tab.dataset.settingsBucket = choice;
+      tab.append(
+        append(el("div", "tier-htab-top"), append(el("span", "tier-htab-id"), hBadge, bucketName(choice)), badgeEl),
+        subEl
+      );
+      tabNodes.set(choice, { tab: tab, badge: badgeEl, sub: subEl });
+      tabBar.append(tab);
+    });
+
+    var top = append(el("div", "tier-group-head"), append(el("div", "tier-head-top"), heading), tabBar);
+    var activeBar = el("div", "tier-active-bar");
+    var activeBarBadge = el("span", "hb");
+    activeBarBadge.setAttribute("aria-hidden", "true");
+    var activeBarTitle = el("strong", "");
+    var activeBarNote = el("span", "tier-active-note");
+    activeBar.append(append(el("span", "tier-active-title"), activeBarBadge, activeBarTitle), activeBarNote);
+
     var table = el("table", "tier-tbl");
     var colgroup = el("colgroup");
     ["78px", "120px", "", "108px", "232px"].forEach(function (w) {
@@ -938,9 +1113,124 @@ var wsSettingsChoiceLabels = {
       th.scope = "col";
       return th;
     });
-    table.append(colgroup, append(el("thead"), append(el("tr"), ...headers)),
-      ...visible.map(function (entry) { return tierRow(entry, spec); }));
-    return append(card, top, append(el("div", "tier-scroll"), table));
+    table.append(colgroup, append(el("thead"), append(el("tr"), ...headers)));
+
+    function syncTabCard(choice) {
+      var refs = tabNodes.get(choice);
+      if (!refs) return;
+      var sum = tierHarnessSummary(choice, currentEntries());
+      refs.badge.className = "tier-htab-badge " + sum.badgeKind;
+      refs.badge.textContent = sum.badgeText;
+      refs.sub.textContent = sum.modelsText;
+      refs.sub.title = sum.modelsText;
+    }
+
+    function syncTabSelection() {
+      tabNodes.forEach(function (refs, choice) {
+        refs.tab.setAttribute("aria-selected", String(choice === active));
+      });
+    }
+
+    function syncActiveBar() {
+      if (!active) {
+        activeBar.hidden = true;
+        return;
+      }
+      activeBar.hidden = false;
+      activeBarBadge.dataset.h = active;
+      activeBarTitle.textContent = tr("js.settings.tier.matrix_title", bucketName(active));
+      var sum = tierHarnessSummary(active, currentEntries());
+      var parts = [];
+      if (sessionH && sessionH === active) parts.push(tr("js.settings.tier.current_session"));
+      if (sum.allUnset) {
+        parts.push(tr("js.settings.tier.unconfigured_hint"));
+      } else if (sum.overrideCount > 0) {
+        parts.push(tr("js.settings.tier.overrides_active", sum.overrideScopes.map(scopeName).join(", "), sum.overrideCount));
+      } else {
+        parts.push(tr("js.settings.tier.builtin_active"));
+      }
+      activeBarNote.textContent = parts.join(" · ");
+    }
+
+    function onTierMutated() {
+      syncTabCard(active);
+      syncActiveBar();
+      syncLegacyBanner();
+    }
+
+    function syncTable() {
+      Array.from(table.querySelectorAll("tbody")).forEach(function (tb) { tb.remove(); });
+      var visible = currentEntries().filter(function (entry) {
+        return entry.selectors.harness === active && matches(entry, spec);
+      });
+      visible.forEach(function (entry) {
+        table.append(tierRow(entry, spec, onTierMutated));
+      });
+    }
+
+    var legacyBanner = null;
+    function syncLegacyBanner() {
+      var items = legacyDefaultOverrides(currentEntries());
+      if (!items.length) {
+        if (legacyBanner) {
+          legacyBanner.remove();
+          legacyBanner = null;
+        }
+        return;
+      }
+      var banner = el("div", "tier-legacy");
+      banner.setAttribute("role", "status");
+      banner.dataset.settingsTierLegacy = "1";
+      var summary = items.map(formatLegacyOverride).join(", ");
+      var text = el("span", "tier-legacy-text", tr("js.settings.tier.legacy_default_banner", items.length, summary));
+      var clearable = items.filter(function (item) { return Boolean(preferenceTarget(item.scope)); });
+      var errHint = el("span", "hint err");
+      var clearBtn = button("tier-legacy-btn", tr("js.settings.tier.legacy_default_clear"), async function () {
+        if (clearBtn.disabled) return;
+        clearBtn.disabled = true;
+        clearBtn.textContent = tr("js.settings.tier.legacy_default_clearing");
+        errHint.textContent = "";
+        try {
+          for (var item of clearable) {
+            var target = preferenceTarget(item.scope);
+            if (!target) continue;
+            var result = await request("/api/config/reset", Object.assign({}, target, {
+              key: spec.key,
+              selectors: { tier: item.tier, harness: "default" }
+            }));
+            if (result && result.entry) {
+              var affected = new Map((result.affected_entries || [result.entry]).map(function (it) { return [entryID(it), it]; }));
+              snapshot.entries = snapshot.entries.map(function (it) { return affected.get(entryID(it)) || it; });
+            }
+          }
+          renderCounts();
+          choices.forEach(syncTabCard);
+          syncActiveBar();
+          syncTable();
+          syncLegacyBanner();
+        } catch (error) {
+          clearBtn.disabled = false;
+          clearBtn.textContent = tr("js.settings.tier.legacy_default_clear");
+          errHint.textContent = statusText(error.code);
+        }
+      });
+      clearBtn.dataset.settingsTierLegacyClear = "1";
+      clearBtn.disabled = scope === "builtin" || !clearable.length;
+      banner.append(text, clearBtn);
+      if (errHint) banner.append(errHint);
+      if (legacyBanner) legacyBanner.replaceWith(banner);
+      else wrapper.append(banner);
+      legacyBanner = banner;
+    }
+
+    choices.forEach(syncTabCard);
+    syncTabSelection();
+    syncActiveBar();
+    syncTable();
+    card.append(top, activeBar, append(el("div", "tier-scroll"), table));
+    wrapper.append(card);
+    syncLegacyBanner();
+    return wrapper;
   }
 
   // tierRoutingRow is the agent.tier_routing graph editor

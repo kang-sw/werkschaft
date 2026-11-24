@@ -82,7 +82,7 @@ function buildTopicHtml(i, opts = {}) {
 
   const askBlock = opts.withAsk
     ? `<div class="tbody"><div class="card policy" id="item-${i}01" data-id="${i}01">
-        <div class="title">Ask question for Topic ${i}</div>
+        <div class="head"><span class="id">#${i}01</span><span class="title">Ask question for Topic ${i}</span></div>
         <textarea class="note" placeholder="Write answer note"></textarea>
       </div></div>`
     : '';
@@ -220,6 +220,12 @@ function buildBootstrapScript(savedCards) {
   const boardJs = readAsset(WSD, 'dashboard-board.js');
   const convoJs = readAsset(WSD, 'dashboard-conversation.js');
   const trackerJs = readAsset(WSD, 'dashboard-tracker.js');
+  const composerStatusJs = readAsset(WSD, 'dashboard-composer-status.js');
+  const composerJs = readAsset(WSD, 'dashboard-composer.js');
+  const boardItemMatch = composerJs.match(/\n  function boardItem\(id\) \{[\s\S]*?\n  \}/);
+  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
+  assert.ok(boardItemMatch, 'production boardItem found');
+  assert.ok(applySentMatch, 'production applySent found');
   const streamBundle = [
     readAsset(WSW, 'stream.js'),
     readAsset(WSW, 'stream-navigation.js'),
@@ -277,7 +283,8 @@ function buildBootstrapScript(savedCards) {
       function syncSpinnerPhases() {}
       function mermaid() {}
       function syncChips() {}
-      function applySent() {}
+      ${boardItemMatch[0]}
+      ${applySentMatch[0]}
       function outboxSync() {}
       function drawerSync() {}
       function drawerSwapped() {}
@@ -805,5 +812,316 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
     assert.ok(s24.slotVisits > 0 && s24.slotVisits <= 80, `slotVisits must stay O(1)-bounded across 6 steps, got ${s24.slotVisits}`);
     assert.equal(s12.frameIndexes, s24.frameIndexes, `frameIndexes must be O(1) invariant across N=12 (${s12.frameIndexes}) and N=24 (${s24.frameIndexes})`);
     assert.ok(s24.frameIndexes <= 12, `frameIndexes must stay O(1)-bounded across 6 steps, got ${s24.frameIndexes}`);
+  });
+
+  await t.test('Important #4 (Chromium): entering SSE-updated stashed topic stays O(1) across board sizes (N=12 vs N=24) and far exempt draft counts (2 vs 12)', async () => {
+    async function measureStashedEntry(topicCount, farExemptCount) {
+      const { ctx, page, errors } = await openHarness(browser, { topicCount });
+      try {
+        const targetIdx = 7;
+        const targetId = topicHexId(targetIdx);
+        const initialHtml = Array.from({ length: topicCount }, (_, idx) => {
+          const i = idx + 1;
+          return buildTopicHtml(i, { withAsk: i === 1, rev: `rev-${i}-v1` });
+        }).join('\n');
+        const updatedHtml = Array.from({ length: topicCount }, (_, idx) => {
+          const i = idx + 1;
+          return buildTopicHtml(i, {
+            withAsk: i === 1 || i === targetIdx,
+            rev: i === targetIdx ? 'rev-7-sse-stashed' : `rev-${i}-v1`,
+            streamNote: i === targetIdx ? 'StashedSseStreamNote-7' : undefined,
+          });
+        }).join('\n');
+
+        const result = await page.evaluate(({ tid, initHtml, html, farExemptCount }) => {
+          // Establish baseline boardRendered hash and flush initial viewed hold before adding drafts/SSE update.
+          window.__testApi.swapBoard('h-init', initHtml);
+          const allTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
+          window.WsBoardAnchor.select(allTopics[1]);
+          window.WsBoardAnchor.select(allTopics[0]);
+
+          // Populate .sentdata entries for both far topics and the target stashed topic (#7 -> data-id="701").
+          let sentBox = document.querySelector('.sentdata');
+          if (!sentBox) {
+            sentBox = document.createElement('div');
+            sentBox.className = 'sentdata';
+            sentBox.hidden = true;
+            document.body.appendChild(sentBox);
+          }
+          sentBox.innerHTML = [
+            '<i data-id="101" data-state="held" data-answer="later" data-note="far-1"></i>',
+            '<i data-id="701" data-state="sent" data-answer="yes" data-note="approved"></i>',
+            '<i data-id="1101" data-state="sent" data-answer="ok" data-note="far-11"></i>',
+            '<i data-id="1201" data-state="held" data-answer="no" data-note="far-12"></i>',
+          ].join('');
+
+          // 1. Make `farExemptCount` OTHER far topics exempt strictly outside both slot 0's
+          //    near window [0..2] and targetIdx's near window [4..8] BEFORE the SSE swap, so
+          //    entering work is identical while far exempt count grows from 2 to 12.
+          const exemptIndices = [];
+          for (let idx = 9; idx < allTopics.length && exemptIndices.length < farExemptCount; idx++) {
+            exemptIndices.push(idx);
+          }
+          for (const idx of exemptIndices) {
+            const sec = allTopics[idx];
+            window.WsBoardVirtual.hydrate(sec, { immediate: false });
+            const tn = sec.querySelector('.tnote[data-topic]');
+            if (tn) { tn.hidden = false; tn.value = 'Draft on ' + sec.id; }
+          }
+          window.WsBoardAnchor.select(allTopics[0]);
+          window.WsBoardVirtual.reconcile({ full: true });
+
+          // 2. Stash an SSE update on collapsed far topic #7 (leaving all other topics' data-th unchanged).
+          window.__testApi.swapBoard('h-sse-i4', html);
+          const hasStashedBefore = window.WsBoardVirtual.hasStashed(tid);
+
+          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, and whole-board #r-board/#bgal
+          //    querySelectorAll to verify scoped hydration only (zero boardItem/boardQ whole-board scans in applySent).
+          const origDecorate = window.WsCards.decorate;
+          const origWbBindBoard = window.wbBindBoard;
+          const origWbForm = window.wbForm;
+          const boardEl = document.getElementById('r-board');
+          const galEl = document.getElementById('bgal');
+          const origBoardQSA = boardEl.querySelectorAll;
+          const origGalQSA = galEl ? galEl.querySelectorAll : null;
+          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0;
+          boardEl.querySelectorAll = function (sel) {
+            if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
+            return origBoardQSA.apply(this, arguments);
+          };
+          if (galEl && origGalQSA) {
+            galEl.querySelectorAll = function (sel) {
+              if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
+              return origGalQSA.apply(this, arguments);
+            };
+          }
+          window.WsCards.decorate = function (scope) {
+            if (scope && scope.nodeType === 1) decorateScoped++;
+            else decorateWholeBoard++;
+            return origDecorate.apply(this, arguments);
+          };
+          window.wbBindBoard = function (scope) {
+            if (scope && scope.nodeType === 1) bindBoardScoped++;
+            else bindBoardWholeBoard++;
+            return origWbBindBoard ? origWbBindBoard.apply(this, arguments) : undefined;
+          };
+          window.wbForm = function () {
+            wbFormCalls++;
+            return origWbForm ? origWbForm.apply(this, arguments) : undefined;
+          };
+
+          // 4. Reset stats and navigate straight into the SSE-updated stashed topic #7.
+          window.WsBoardVirtual.resetStats();
+          const targetSec = document.getElementById(tid);
+          window.WsBoardAnchor.select(targetSec);
+          const stats = window.WsBoardVirtual.stats();
+          const hydratedText = targetSec.textContent || '';
+          const item701 = targetSec.querySelector('#item-701');
+          const sentMark701 = item701 ? item701.querySelector('.sentmark.sent') : null;
+
+          boardEl.querySelectorAll = origBoardQSA;
+          if (galEl && origGalQSA) galEl.querySelectorAll = origGalQSA;
+          window.WsCards.decorate = origDecorate;
+          window.wbBindBoard = origWbBindBoard;
+          window.wbForm = origWbForm;
+          return {
+            hasStashedBefore,
+            stillCollapsed: targetSec.hasAttribute('data-wb-virtual'),
+            renderedSse: hydratedText.includes('StashedSseStreamNote-7'),
+            item701HasSentClass: !!(item701 && item701.classList.contains('sent-sent')),
+            sentMark701Text: sentMark701 ? sentMark701.textContent : null,
+            wholeBoardSentScans,
+            exemptCount: exemptIndices.length,
+            stats,
+            decorateScoped,
+            decorateWholeBoard,
+            bindBoardScoped,
+            bindBoardWholeBoard,
+            wbFormCalls,
+          };
+        }, { tid: targetId, initHtml: initialHtml, html: updatedHtml, farExemptCount });
+
+        assert.deepEqual(errors, []);
+        assert.equal(result.hasStashedBefore, true, 'target topic had stashed SSE revision');
+        assert.equal(result.stillCollapsed, false, 'target topic hydrated on navigation');
+        assert.equal(result.renderedSse, true, 'stashed SSE content rendered on hydration');
+        assert.equal(result.wholeBoardSentScans, 0, 'applySent(true, sec) must NEVER run whole-board boardItem/boardQ scans on #r-board or #bgal');
+        assert.equal(result.item701HasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
+        assert.equal(result.sentMark701Text, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
+        assert.equal(result.decorateWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board WsCards.decorate()');
+        assert.equal(result.decorateScoped, 1, 'hydrating one stashed topic calls scoped WsCards.decorate(sec) exactly once');
+        assert.ok(result.bindBoardScoped >= 1, 'hydrating one stashed topic calls scoped wbBindBoard(sec)');
+        assert.equal(result.bindBoardWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board wbBindBoard()');
+        assert.equal(result.wbFormCalls, 0, 'hydrating one stashed topic must NEVER call whole-board wbForm()');
+        return result;
+      } finally {
+        await ctx.close();
+      }
+    }
+
+    const r12_2 = await measureStashedEntry(12, 2);
+    const r24_2 = await measureStashedEntry(24, 2);
+    const r24_12 = await measureStashedEntry(24, 12);
+
+    assert.equal(r12_2.stats.prunes, 0);
+    assert.equal(r24_2.stats.prunes, 0);
+    assert.equal(r24_12.stats.prunes, 0);
+    assert.equal(r12_2.stats.describes, r24_2.stats.describes, `describes must be invariant across N=12 (${JSON.stringify(r12_2.stats)}) and N=24 (${JSON.stringify(r24_2.stats)})`);
+    assert.equal(r24_2.stats.describes, r24_12.stats.describes, `describes must be invariant across 2 (${r24_2.stats.describes}) and 12 (${r24_12.stats.describes}) far exempt topics`);
+    assert.equal(r12_2.stats.slotVisits, r24_2.stats.slotVisits, `slotVisits must be invariant across N=12 (${r12_2.stats.slotVisits}) and N=24 (${r24_2.stats.slotVisits})`);
+    assert.equal(r24_2.stats.slotVisits, r24_12.stats.slotVisits, `slotVisits must be invariant across 2 (${r24_2.stats.slotVisits}) and 12 (${r24_12.stats.slotVisits}) far exempt topics`);
+  });
+
+  await t.test('Important #5 (Chromium): lazy-history reply arriving after navigation reattaches topic runs live admission and surfaces archived matches in palette', async () => {
+    const { ctx, page, errors } = await openHarness(browser, { topicCount: 14 });
+    t.after(async () => { await ctx.close(); });
+
+    const t13 = topicHexId(13);
+    const fullTopic13Html = buildTopicHtml(13, { lazyFetch: false, twoGaps: true });
+
+    // Defer wbHistoryFetch so navigation can reattach Topic 13 while the fetch is in flight.
+    await page.evaluate(([tid, html13]) => {
+      window.__historyLoadEvents = 0;
+      document.addEventListener('wbhistoryload', () => { window.__historyLoadEvents++; });
+      window.__resolvePendingHistory = null;
+      window.__paletteUpdatedRows = null;
+      window.wbHistoryFetch = function () {
+        return new Promise((resolve) => {
+          window.__resolvePendingHistory = () => resolve([{ name: tid, html: html13 }]);
+        });
+      };
+    }, [t13, fullTopic13Html]);
+
+    // 1. Confirm Topic 13 starts collapsed with lazy gaps, then kick off palette lazy-history search.
+    const started = await page.evaluate(async (tid) => {
+      const sec = document.getElementById(tid);
+      const collapsedBefore = sec.hasAttribute('data-wb-virtual');
+      window.__testApi.paletteHistory((rows) => { window.__paletteUpdatedRows = rows; });
+      // Wait a microtask tick so hydrateAll settles and hydrateLazySearch invokes wbHistoryFetch.
+      await new Promise((r) => setTimeout(r, 20));
+      return {
+        collapsedBefore,
+        fetchPending: typeof window.__resolvePendingHistory === 'function',
+      };
+    }, t13);
+    assert.equal(started.collapsedBefore, true, 'Topic 13 starts collapsed');
+    assert.equal(started.fetchPending, true, 'lazy-history fetch is pending');
+
+    // 2. Navigate to Topic 13 BEFORE the fetch resolves so it reattaches to live DOM while fetch is in flight.
+    const reattached = await page.evaluate((tid) => {
+      const sec = document.getElementById(tid);
+      window.WsBoardAnchor.select(sec);
+      return {
+        collapsedAfterNav: sec.hasAttribute('data-wb-virtual'),
+        stillHasLazyGap: !!sec.querySelector('.history-gap[data-lazy]'),
+      };
+    }, t13);
+    assert.equal(reattached.collapsedAfterNav, false, 'navigation reattached Topic 13 to live DOM');
+    assert.equal(reattached.stillHasLazyGap, true, 'lazy gap is still pending before fetch resolves');
+
+    // 3. Now resolve the in-flight fetch and assert BOTH live admission AND palette search matches!
+    const afterResolve = await page.evaluate(async (tid) => {
+      window.__resolvePendingHistory();
+      await new Promise((r) => setTimeout(r, 40));
+      const sec = document.getElementById(tid);
+      const rows = window.__paletteUpdatedRows || window.__testApi.paletteRows();
+      const gap1Match = rows.find((r) => r.topic === tid && r.entry === 'e1300');
+      const gap2Match = rows.find((r) => r.topic === tid && r.entry === 'e1304');
+      return {
+        paletteCallbackFired: Array.isArray(window.__paletteUpdatedRows),
+        historyLoadEvents: window.__historyLoadEvents,
+        remainingLazyGaps: sec.querySelectorAll('.history-gap[data-lazy]').length,
+        hasGap1Match: !!gap1Match,
+        hasGap2Match: !!gap2Match,
+      };
+    }, t13);
+
+    assert.deepEqual(errors, []);
+    assert.equal(afterResolve.paletteCallbackFired, true, 'palette update callback fired after reattached fetch resolved');
+    assert.ok(afterResolve.historyLoadEvents >= 1, 'live admission dispatched wbhistoryload on reattached topic');
+    assert.equal(afterResolve.remainingLazyGaps, 0, 'all lazy gaps on live reattached topic were filled');
+    assert.equal(afterResolve.hasGap1Match, true, 'gap 1 archived match appears in search palette');
+    assert.equal(afterResolve.hasGap2Match, true, 'gap 2 archived match appears in search palette');
+  });
+
+  await t.test('Important #7 & #8 (Chromium): Overview Quick Look folded placeholder matches folded geometry and exposes accessible name with inert controls', async () => {
+    const { ctx, page, errors } = await openHarness(browser, { topicCount: 6 });
+    t.after(async () => { await ctx.close(); });
+
+    const t1 = topicHexId(1);
+    const t2 = topicHexId(2);
+    // Fold BOTH Topic 1 and Topic 2 through their real .t-fold buttons, then enter Overview.
+    // Topic 1 becomes the Quick Look placeholder in #r-board while Topic 2 remains a non-previewed
+    // folded topic right beside it in #r-board, giving an exact apples-to-apples geometry baseline.
+    await page.evaluate(([id1, id2]) => {
+      for (const tid of [id1, id2]) {
+        const sec = document.getElementById(tid);
+        const foldBtn = sec.querySelector(':scope > .tophead > .tbar > .t-fold');
+        if (foldBtn) foldBtn.click();
+        else sec.setAttribute('data-size', 'fold');
+      }
+      window.WsOverview.toggle();
+    }, [t1, t2]);
+    // Wait past the 240ms Overview FLIP entry transition so t2 settles to its final folded height.
+    await page.waitForTimeout(320);
+
+    const before = await page.evaluate((tid2) => {
+      const sec = document.getElementById(tid2);
+      const foldRect = sec.getBoundingClientRect();
+      const foldBar = sec.querySelector(':scope > .tophead > .tbar');
+      const foldSub = sec.querySelector(':scope > .tophead > .tsub');
+      return {
+        height: Math.round(foldRect.height),
+        tbarPadRight: foldBar ? getComputedStyle(foldBar).paddingRight : '',
+        tsubDisplay: foldSub ? getComputedStyle(foldSub).display : '',
+      };
+    }, t2);
+
+    // Ensure Topic 1 is previewed in Quick Look and its placeholder is mounted in #r-board.
+    const t1Name = await page.evaluate((tid1) => {
+      const sec = document.getElementById(tid1);
+      return sec && sec.querySelector('.tname') ? sec.querySelector('.tname').textContent.trim() : '';
+    }, t1);
+    before.tname = t1Name;
+    if (!(await page.locator('#r-board .overview-placeholder').count())) {
+      const box1 = await page.locator(`#${t1}`).boundingBox();
+      await page.mouse.move(box1.x + box1.width / 2, box1.y + 16);
+      await page.waitForTimeout(350);
+    }
+
+    const after = await page.evaluate(() => {
+      const ph = document.querySelector('#r-board .overview-placeholder');
+      if (ph) ph.focus();
+      const phRect = ph ? ph.getBoundingClientRect() : null;
+      const phBar = ph ? ph.querySelector(':scope > .tophead > .tbar') : null;
+      const phSub = ph ? ph.querySelector(':scope > .tophead > .tsub') : null;
+      const phHead = ph ? ph.querySelector(':scope > .tophead') : null;
+      return {
+        tagName: ph ? ph.tagName : null,
+        height: phRect ? Math.round(phRect.height) : null,
+        tbarPadRight: phBar ? getComputedStyle(phBar).paddingRight : '',
+        tsubDisplay: phSub ? getComputedStyle(phSub).display : '',
+        role: ph ? ph.getAttribute('role') : null,
+        ariaLabel: ph ? ph.getAttribute('aria-label') : null,
+        activeIsPh: document.activeElement === ph,
+        headInert: phHead ? !!phHead.inert : false,
+        headAriaHidden: phHead ? phHead.getAttribute('aria-hidden') : null,
+      };
+    });
+
+    const ariaSnap = await page.locator('#r-board .overview-placeholder').ariaSnapshot();
+
+    assert.deepEqual(errors, []);
+    assert.equal(before.tsubDisplay, 'none', 'folded topic hides .tsub before Overview');
+    assert.equal(after.tagName, 'SECTION', 'folded topic placeholder uses <section>');
+    assert.equal(after.tsubDisplay, 'none', 'folded topic placeholder hides cloned .tsub');
+    assert.equal(after.tbarPadRight, before.tbarPadRight, 'folded topic placeholder preserves .tbar padding-right');
+    assert.equal(after.height, before.height, 'folded topic placeholder outer height matches folded topic');
+    assert.equal(after.activeIsPh, true, 'keyboard focus lands on placeholder');
+    assert.equal(after.role, 'button', 'placeholder exposes button role');
+    assert.equal(after.ariaLabel, before.tname, 'placeholder aria-label matches original topic title');
+    assert.equal(after.headInert, true, 'cloned header controls stay inert');
+    assert.equal(after.headAriaHidden, 'true', 'cloned header stays aria-hidden');
+    assert.ok(ariaSnap.includes(`button "${before.tname}"`), `expected ariaSnapshot to expose button "${before.tname}", got: ${ariaSnap}`);
   });
 });

@@ -1,0 +1,7 @@
+{
+  "key": "home-agent-stop-handoff-261124",
+  "value": "OWNER 2026-11-24 10:44 KST: Home harness session MUST STOP now (08:30 cutoff passed; office is sole lead). Do NOT push to develop. Commit any WIP to `handoff/home-agent-261124`, push it to origin, stop workers, and end turn. Office will take over from there.",
+  "priority": 99,
+  "written_at": "2026-11-24T01:46:22Z",
+  "visible": true
+}

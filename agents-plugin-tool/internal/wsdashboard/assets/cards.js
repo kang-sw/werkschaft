@@ -1273,6 +1273,9 @@
   function onFrameWheel(frame, dy, dx, mode) {
     if (!frame || !frame.isConnected) return false;
     if (galEl && galEl.contains(frame)) {
+      var pos = G.position(gal, !!(lay && lay.narrow));
+      var activePage = pos >= 0 ? (pos >= gal.pages.length ? plusEl : pageEls[gal.pages[pos].id]) : null;
+      if (!activePage || !activePage.contains(frame)) return false;
       gateWheelInput(frame, dy, dx, mode || 0, false, null);
       return true;
     }
@@ -1414,26 +1417,42 @@
   // section, or the old one with the new bar's content), so this runs
   // after every settle, and draws a large topic or panel large again on the
   // node that now stands for it.
-  function decorate() {
+  function decorate(scope) {
+    function decorateTopic(sec, inGallery) {
+      var head = child(sec, "tophead"), bar = head && child(head, "tbar");
+      if (!bar) return;
+      var r = topics[sec.getAttribute("data-topic")], on = !!(r && r.pinned && r.el === sec);
+      var b = child(bar, "tpin");
+      if (!b) {
+        b = ibtn("tpin", "pin", wsT("js.card.pin"));
+        bar.insertBefore(b, child(bar, "tnote-toggle"));
+      }
+      [["t-fold", "chevron-down", "js.card.fold"], ["t-raise", "arrow-up-to-line", "js.card.raise"], ["d-max", "maximize-2", "js.card.max"], ["d-min", "minimize-2", "js.card.back"]].forEach(function (a) {
+        if (!child(bar, a[0])) bar.insertBefore(ibtn(a[0], a[1], wsT(a[2])), child(bar, "tnote-toggle"));
+      });
+      sec.setAttribute("data-size", r && r.folded ? "fold" : "base");
+      child(bar, "t-fold").setAttribute("aria-expanded", String(!(r && r.folded)));
+      b.setAttribute("aria-pressed", String(on));
+      if (on) sec.setAttribute("data-docked", ""); else sec.removeAttribute("data-docked");
+      if (on && inGallery) wrapTopic(sec); else unwrapTopic(sec);
+    }
+    if (scope && scope.nodeType === 1) {
+      var inGal = !!(galEl && (scope === galEl || galEl.contains(scope)));
+      if (scope.matches && scope.matches("section.topic[data-topic]")) {
+        decorateTopic(scope, inGal);
+        if (maxed && !maxed.files && !(maxed instanceof Card) && maxed.el === scope) follow(maxed);
+      } else if (scope.querySelectorAll) {
+        Array.prototype.forEach.call(scope.querySelectorAll("section.topic[data-topic]"), function (sec) {
+          decorateTopic(sec, inGal);
+        });
+        if (maxed && !maxed.files && !(maxed instanceof Card)) follow(maxed);
+      }
+      return;
+    }
     [board, galEl].forEach(function (box) {
       if (!box) return;
       Array.prototype.forEach.call(box.querySelectorAll("section.topic[data-topic]"), function (sec) {
-        var head = child(sec, "tophead"), bar = head && child(head, "tbar");
-        if (!bar) return;
-        var r = topics[sec.getAttribute("data-topic")], on = !!(r && r.pinned && r.el === sec);
-        var b = child(bar, "tpin");
-        if (!b) {
-          b = ibtn("tpin", "pin", wsT("js.card.pin"));
-          bar.insertBefore(b, child(bar, "tnote-toggle"));
-        }
-        [["t-fold", "chevron-down", "js.card.fold"], ["t-raise", "arrow-up-to-line", "js.card.raise"], ["d-max", "maximize-2", "js.card.max"], ["d-min", "minimize-2", "js.card.back"]].forEach(function (a) {
-          if (!child(bar, a[0])) bar.insertBefore(ibtn(a[0], a[1], wsT(a[2])), child(bar, "tnote-toggle"));
-        });
-        sec.setAttribute("data-size", r && r.folded ? "fold" : "base");
-        child(bar, "t-fold").setAttribute("aria-expanded", String(!(r && r.folded)));
-        b.setAttribute("aria-pressed", String(on));
-        if (on) sec.setAttribute("data-docked", ""); else sec.removeAttribute("data-docked");
-        if (on && box === galEl) wrapTopic(sec); else unwrapTopic(sec);
+        decorateTopic(sec, box === galEl);
       });
     });
     if (maxed && !maxed.files && !(maxed instanceof Card)) follow(maxed);
@@ -2520,8 +2539,8 @@
     // on a new page; or after and before in the open flow).
     move: function (n, to) { var u = unitOf(n); if (u) drop(u, to); },
     // decorate gives topics the page added outside a board update (a
-    // fetched closed page) their pin buttons.
-    decorate: function () { if (board) decorate(); },
+    // fetched closed page or single hydrated topic) their pin buttons.
+    decorate: function (scope) { if (board) decorate(scope); },
     unfoldTopic: unfoldTopic,
     revealTopic: revealTopic,
     onFrameWheel: onFrameWheel,

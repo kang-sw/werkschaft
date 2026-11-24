@@ -102,6 +102,7 @@ function makeEl(tag, attrs = {}, children = []) {
       for (let p = el; p; p = p.parentNode) {
         if (sel === '.tophead' && p.classList && p.classList.contains('tophead')) return p;
         if (sel === '.overview-preview-stage' && p.classList && p.classList.contains('overview-preview-stage')) return p;
+        if (sel === 'section.topic[data-topic]' && p.tagName === 'SECTION' && p.classList && p.classList.contains('topic') && p.hasAttribute && p.hasAttribute('data-topic')) return p;
       }
       return null;
     },
@@ -157,6 +158,11 @@ function makeTopic(name, opts = {}) {
   ]);
   const children = [head, body, stream];
   if (opts.withTerm) children.push(makeEl('div', { class: 'xterm' }));
+  if (opts.withDraft) {
+    const ta = makeEl('textarea', { class: 'note' });
+    ta.value = opts.withDraft === true ? `Draft on ${name}` : String(opts.withDraft);
+    children.push(ta);
+  }
   return makeEl('section', {
     class: 'topic',
     id: `topic-${name}`,
@@ -211,13 +217,18 @@ function loadVirtualWorld(nodes = []) {
     getComputedStyle: () => ({ overflowY: 'auto', paddingTop: '0' }),
     Date, Math, Set, Map, Array, Object, String, Number, Infinity, isNaN, parseFloat,
   };
+  const calls = { decorate: [], wbBindBoard: [], wbForm: 0, bindCapsuleNotes: [], applySent: [] };
+  ctx.bindCapsuleNotes = scope => { calls.bindCapsuleNotes.push(scope || null); };
+  ctx.applySent = (force, scope) => { calls.applySent.push({ force: !!force, scope: scope || null }); };
+  ctx.wbBindBoard = scope => { calls.wbBindBoard.push(scope || null); };
+  ctx.wbForm = () => { calls.wbForm++; };
   ctx.window = ctx;
   ctx.wbHistory = { capture: () => [], init: () => {}, restore: () => {} };
-  ctx.WsCards = { isDocked: n => n.hasAttribute('data-test-docked'), decorate: () => {} };
+  ctx.WsCards = { isDocked: n => n.hasAttribute('data-test-docked'), decorate: scope => { calls.decorate.push(scope || null); } };
   vm.createContext(ctx);
   vm.runInContext(anchorSrc, ctx);
   ctx.anchorSized.bounded = true;
-  return { ctx, board, bcol };
+  return { ctx, board, bcol, calls };
 }
 
 test('Finding #12: steady-state anchorMark navigation is strictly O(1) across N=12 and N=60 with zero prunes', () => {
@@ -306,13 +317,15 @@ test('Finding #12: virtualExemptSet tracks far exempt topics and collapses them 
   ctx.anchorMark(nodes[5]);
   assert.equal(nodes[1].hasAttribute('data-wb-virtual'), false, 'far topic with .xterm remains mounted');
 
-  // Remove the .xterm from t1, then step to slot 6: delta reconcile re-checks virtualExemptSet and collapses t1!
+  // Remove the .xterm from t1 and mark it dirty (as anchorBoardMO does on childList mutation),
+  // then step to slot 6: delta reconcile re-checks only the dirtied exempt topic and collapses t1!
   const term = nodes[1].querySelector('.xterm, .tm-host');
   term.parentNode.removeChild(term);
+  ctx.WsBoardVirtual.markExemptDirty(nodes[1]);
   ctx.WsBoardVirtual.resetStats();
   ctx.anchorMark(nodes[6]);
   assert.equal(nodes[1].hasAttribute('data-wb-virtual'), true, 'previously exempt far topic collapses once exemption clears');
-  assert.equal(ctx.WsBoardVirtual.stats().describes, 2, 'only leaving slot + 1 previously exempt slot described');
+  assert.equal(ctx.WsBoardVirtual.stats().describes, 2, 'only leaving slot + 1 dirtied previously exempt slot described');
 
   // Remove collapsed topic t11 from board and run keyed virtualPrune.
   board.removeChild(nodes[11]);
@@ -355,4 +368,63 @@ test('Finding #10: WsBoardVirtual.searchRoots / detachedNodes returns detached c
   assert.equal(stashedRoots[0].tagName, 'SECTION');
   assert.equal(stashedRoots[0].getAttribute('data-th'), 'v2');
   assert.equal(nodes[8].hasAttribute('data-wb-virtual'), true, 'topic stays collapsed after stashed search read');
+});
+
+test('Important #4: entering SSE-updated stashed topic stays O(1) across board sizes (N=12 vs N=60) and far exempt draft counts (2 vs 20)', () => {
+  function runScenario(totalTopics, farExemptCount) {
+    const targetIdx = 6;
+    // Place far exempt topics strictly outside both slot 0's near window [0..2]
+    // and targetIdx's near window [4..8], so the entering window is identical
+    // while far exempt count grows from 2 to 20.
+    const exemptIndices = new Set();
+    for (let i = 9; i < totalTopics && exemptIndices.size < farExemptCount; i++) {
+      exemptIndices.add(i);
+    }
+    const nodes = Array.from({ length: totalTopics }, (_, i) =>
+      makeTopic(`t${i}`, { withDraft: exemptIndices.has(i) })
+    );
+    const { ctx, calls } = loadVirtualWorld(nodes);
+    ctx.anchorMark(nodes[0]);
+
+    // Verify target topic is collapsed and stash an SSE update onto it.
+    assert.equal(nodes[targetIdx].hasAttribute('data-wb-virtual'), true);
+    const incoming = makeTopic(`t${targetIdx}`, { rev: 'v2', bodyText: 'Stashed SSE v2' });
+    assert.equal(ctx.virtualStashUpdate(nodes[targetIdx], incoming), true);
+    assert.equal(ctx.WsBoardVirtual.hasStashed(`t${targetIdx}`), true);
+
+    // Reset counters and navigate into the SSE-updated stashed topic.
+    calls.decorate.length = 0;
+    calls.wbBindBoard.length = 0;
+    calls.wbForm = 0;
+    calls.bindCapsuleNotes.length = 0;
+    calls.applySent.length = 0;
+    ctx.WsBoardVirtual.resetStats();
+
+    ctx.anchorMark(nodes[targetIdx]);
+    const stats = ctx.WsBoardVirtual.stats();
+
+    assert.equal(nodes[targetIdx].hasAttribute('data-wb-virtual'), false, 'stashed target hydrated on navigation');
+    assert.equal(calls.wbForm, 0, 'hydrating one stashed topic must never call whole-board wbForm()');
+    assert.deepEqual(calls.decorate, [nodes[targetIdx]], 'WsCards.decorate must be scoped to hydrated topic only');
+    assert.deepEqual(calls.wbBindBoard, [nodes[targetIdx]], 'wbBindBoard must be scoped to hydrated topic only');
+    assert.deepEqual(calls.bindCapsuleNotes, [nodes[targetIdx]], 'bindCapsuleNotes must be scoped to hydrated topic only');
+    assert.deepEqual(calls.applySent, [{ force: true, scope: nodes[targetIdx] }], 'applySent must be scoped to hydrated topic only');
+    return stats;
+  }
+
+  const s12_2 = runScenario(12, 2);
+  const s60_2 = runScenario(60, 2);
+  const s60_20 = runScenario(60, 20);
+
+  for (const [label, s] of [['N=12,exempt=2', s12_2], ['N=60,exempt=2', s60_2], ['N=60,exempt=20', s60_20]]) {
+    assert.equal(s.prunes, 0, `${label}: zero prunes on navigation`);
+    assert.equal(s.fullReconciles, 0, `${label}: zero full reconciles on navigation`);
+    assert.equal(s.deltaReconciles, 1, `${label}: single delta reconcile`);
+  }
+  assert.equal(s12_2.slotVisits, s60_2.slotVisits, `slotVisits flat across board sizes N=12 (${s12_2.slotVisits}) vs N=60 (${s60_2.slotVisits})`);
+  assert.equal(s60_2.slotVisits, s60_20.slotVisits, `slotVisits flat across far exempt counts 2 (${s60_2.slotVisits}) vs 20 (${s60_20.slotVisits})`);
+  assert.equal(s12_2.describes, s60_2.describes, `describes flat across board sizes N=12 (${s12_2.describes}) vs N=60 (${s60_2.describes})`);
+  assert.equal(s60_2.describes, s60_20.describes, `describes flat across far exempt counts 2 (${s60_2.describes}) vs 20 (${s60_20.describes})`);
+  assert.equal(s12_2.frameIndexes, s60_2.frameIndexes, `frameIndexes flat across board sizes N=12 (${s12_2.frameIndexes}) vs N=60 (${s60_2.frameIndexes})`);
+  assert.equal(s60_2.frameIndexes, s60_20.frameIndexes, `frameIndexes flat across far exempt counts 2 (${s60_2.frameIndexes}) vs 20 (${s60_20.frameIndexes})`);
 });

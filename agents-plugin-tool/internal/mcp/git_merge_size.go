@@ -267,8 +267,11 @@ func mergeSizeDiagnostic(code, file string, lines int64, reason string) implMerg
 		Code:           code,
 		Classification: "advisory",
 		Reason:         reason,
-		Resolution: fmt.Sprintf("Do not split this file on your own. Ask the user whether refactoring this project is permitted and whether to do it now. "+
-			"If the user declines, record that in a normal commit by adding `%s ws-size-guard=%d` to .gitattributes (warn again only past that size), or `%s -ws-size-guard` to stop warning for this path.",
+		Resolution: fmt.Sprintf("Do not split this file on your own. Ask the user to choose: "+
+			"(1) refactor/split now (if refactoring this project is permitted), "+
+			"(2) ignore this warning for now (make no .gitattributes change), "+
+			"(3) raise this path's limit in .gitattributes (`%s ws-size-guard=%d`, warn again only past that size), or "+
+			"(4) silence warnings for this path in .gitattributes (`%s -ws-size-guard`).",
 			pattern, mergeSizeMargin(lines), pattern),
 	}
 }
