@@ -1,6 +1,7 @@
 package wslive
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -69,5 +70,63 @@ func TestWakeDoesNotClaimPersonOrRunningTurn(t *testing.T) {
 	res, _ := st.Apply(Event{Kind: KindTurnEnd}, 4)
 	if res.Ring[0].WakeTurn {
 		t.Fatal("reset kept wake")
+	}
+}
+
+func TestRingEntryBodyBytesRoundTripAndWakeMailTruncation(t *testing.T) {
+	// RingEntry.BodyBytes serializes with omitempty and decodes cleanly when absent (T0).
+	withBytes := RingEntry{Kind: RingMail, Direction: MailRecv, Peer: "bob@machine", Title: "hi", BodyBytes: 512}
+	raw, err := json.Marshal(withBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"bodyBytes":512`) {
+		t.Fatalf("expected bodyBytes in JSON, got %s", raw)
+	}
+	var decoded RingEntry
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.BodyBytes != 512 {
+		t.Fatalf("decoded BodyBytes = %d, want 512", decoded.BodyBytes)
+	}
+
+	zeroBytes := RingEntry{Kind: RingMail, Direction: MailSent, Peer: "bob@machine", Title: "hi"}
+	rawZero, err := json.Marshal(zeroBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawZero), "bodyBytes") {
+		t.Fatalf("zero BodyBytes must be omitted, got %s", rawZero)
+	}
+	var legacy RingEntry
+	if err := json.Unmarshal([]byte(`{"kind":"mail","direction":"recv","peer":"bob@machine","title":"old"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.BodyBytes != 0 {
+		t.Fatalf("legacy record BodyBytes = %d, want 0", legacy.BodyBytes)
+	}
+
+	// Mail wakes record the full scrubbed payload size even when capText truncates Text.
+	st := NewState("secret-key")
+	longMail := strings.Repeat("a", TextBytes+256)
+	res, err := st.Apply(Event{Kind: KindWake, Cause: "mail", Text: longMail}, 1)
+	if err != nil || len(res.Ring) != 1 {
+		t.Fatalf("mail wake: %+v %v", res, err)
+	}
+	if !res.Ring[0].Truncated {
+		t.Fatal("expected long mail wake to be truncated")
+	}
+	if res.Ring[0].BodyBytes != len(longMail) {
+		t.Fatalf("mail wake BodyBytes = %d, want %d", res.Ring[0].BodyBytes, len(longMail))
+	}
+
+	// Non-mail wakes leave BodyBytes zero.
+	res2, err := st.Apply(Event{Kind: KindWake, Cause: "monitor", Text: "ping"}, 2)
+	if err != nil || len(res2.Ring) != 1 {
+		t.Fatalf("monitor wake: %+v %v", res2, err)
+	}
+	if res2.Ring[0].BodyBytes != 0 {
+		t.Fatalf("monitor wake BodyBytes = %d, want 0", res2.Ring[0].BodyBytes)
 	}
 }

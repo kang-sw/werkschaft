@@ -983,7 +983,13 @@ func mailRingLines(sessionKey string, entries []mailboxHistoryEntry, keys []stri
 	for i, e := range entries {
 		// The ring reaches the browser: scrub the body before the title cap.
 		title := mailboxHistoryTitle(wslive.ScrubSessionKeys(e.Body, sessionKey))
-		line := wslive.RingEntry{Kind: wslive.RingMail, Direction: e.Direction, Peer: e.Counterparty, Title: title}
+		line := wslive.RingEntry{
+			Kind:      wslive.RingMail,
+			Direction: e.Direction,
+			Peer:      e.Counterparty,
+			Title:     title,
+			BodyBytes: len(e.Body),
+		}
 		if i < len(keys) {
 			line.HistoryKey = keys[i]
 		}
