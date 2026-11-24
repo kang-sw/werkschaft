@@ -268,3 +268,45 @@ func TestSettingsConfigWriteIgnoresANullSpelling(t *testing.T) {
 		t.Errorf("write kept the cased spelling: %s", out)
 	}
 }
+
+func TestInspectTierWerkUnconfiguredAndExplicit(t *testing.T) {
+	opts := Options{ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+	path, err := GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"schema_version":1,"agents":{"tiers":{"small":{"backend":"codex","model":"legacy-small"}},"model_aliases":{"small":{"default":{"backend":"codex","model":"default-small"}}}}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := FileLayers(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	werk := InspectTier(files, "small", "werk")
+	if werk.Scope != ScopeBuiltin || werk.Bucket != "" || werk.Default != (AgentTier{}) || werk.Value != (AgentTier{}) || len(werk.Layers) != 0 {
+		t.Fatalf("unconfigured werk InspectTier = %#v, want empty unconfigured state", werk)
+	}
+	codex := InspectTier(files, "small", "codex")
+	if codex.Scope != ScopeGlobal || codex.Value.Model != "legacy-small" {
+		t.Fatalf("codex InspectTier = %#v, want global legacy-small fallback", codex)
+	}
+	def := InspectTier(files, "small", "default")
+	if def.Scope != ScopeGlobal || def.Value.Model != "default-small" {
+		t.Fatalf("default InspectTier = %#v, want global default-small", def)
+	}
+	if _, err := SetGlobalAgentsTierForHarness(opts, "small", "werk", "glm-4.7", "werk"); err != nil {
+		t.Fatal(err)
+	}
+	files, err = FileLayers(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	werk = InspectTier(files, "small", "werk")
+	if werk.Scope != ScopeGlobal || werk.Bucket != "werk" || werk.Value.Model != "glm-4.7" || werk.Value.Backend != "werk" || werk.Value.Provider != WerkDefaultProvider || werk.Default != (AgentTier{}) {
+		t.Fatalf("configured werk InspectTier = %#v, want global explicit werk tier", werk)
+	}
+	if werk.Layers[ScopeGlobal].Selected == nil || werk.Layers[ScopeGlobal].Selected.Model != "glm-4.7" {
+		t.Fatalf("configured werk global layer = %#v, want selected override", werk.Layers[ScopeGlobal])
+	}
+}

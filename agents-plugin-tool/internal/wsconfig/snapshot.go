@@ -41,6 +41,24 @@ type TierLayer struct {
 func InspectTier(files map[Scope]Config, tier, harness string) TierInspection {
 	global, project := files[ScopeGlobal], files[ScopeProject]
 	result := TierInspection{Scope: ScopeBuiltin, Layers: make(map[Scope]TierLayer, 2)}
+	if harness == "werk" {
+		// werk has no builtin tier defaults and agent.spawn rejects unconfigured
+		// werk tiers rather than falling back to default/codex.
+		for _, scope := range []Scope{ScopeProject, ScopeGlobal} {
+			if own, ok := files[scope].Agents.ModelAliases[tier]["werk"]; ok {
+				effective := own
+				if (effective.Backend == "" || effective.Backend == "werk") && effective.Provider == "" {
+					effective.Provider = WerkDefaultProvider
+				}
+				selected := own
+				result.Layers[scope] = TierLayer{Value: effective, Bucket: "werk", Selected: &selected}
+				if result.Scope == ScopeBuiltin {
+					result.Value, result.Bucket, result.Scope = effective, "werk", scope
+				}
+			}
+		}
+		return result
+	}
 	result.Default, _, _ = resolveAliasMapping(effectiveAgentConfig(), tier, "", harness)
 	result.Value, result.Bucket, _ = resolveAliasMapping(effectiveAgentConfig(global, project), tier, "", harness)
 	scopes := []Scope{ScopeProject, ScopeGlobal}
