@@ -42,14 +42,14 @@ gh run download "$stable_run" --repo kang-sw/werkschaft -n werkschaft-tauri-asse
 gh run download "$canary_run" --repo kang-sw/werkschaft -n werkschaft-tauri-assets -D tauri-canary
 node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-stable --version "$core"
 node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-canary --version "$canary"
-(cd tauri-stable && shasum -a 256 -c Werkschaft-desktop-SHA256SUMS)
 ```
 
-Both runs retain `ws-mcp-assets` and build only the Tauri desktop payload.
-The stable run includes both Electron migration zips and their combined
-checksum file. The canary run contains the Tauri feed and signed updater
-assets. Both dry-run inputs veto publication, including a dispatch on a tag.
-Use `desktop_dry_run=true` by itself for the existing Electron dry run.
+Both runs retain `ws-mcp-assets` and the combined `werkschaft-tauri-assets`.
+Both channels contain the three packages listed below, their `.sig` files,
+and `werkschaft-tauri-update.json`. `tauri_dry_run=true` vetoes native and
+Tauri publication, including a dispatch on a tag. Supply an explicit numeric
+checkout version or that version with `-canary.N`; the default development
+version is rejected.
 
 ## Local signed packages
 
@@ -71,7 +71,7 @@ On macOS arm64, put `ws-mcp-darwin-arm64` and its metadata under
 
 ```sh
 output=$(mktemp -d)
-node agents-plugin-tool/desktop-electron/scripts/assemble-daemon-input.cjs \
+node agents-plugin-tool/desktop/scripts/assemble-daemon-input.cjs \
   --binary "$PWD/ws-mcp-assets/ws-mcp-darwin-arm64" --out "$output/daemon" --platform darwin --package wsflow
 cd agents-plugin-tool/desktop
 npm ci --ignore-scripts --no-audit --no-fund
@@ -85,7 +85,7 @@ On Windows x64, put `ws-mcp-windows-amd64.exe` and its metadata under
 ```powershell
 $output = Join-Path $env:TEMP ('werkschaft-release-' + [guid]::NewGuid())
 New-Item -ItemType Directory $output | Out-Null
-node agents-plugin-tool/desktop-electron/scripts/assemble-daemon-input.cjs --binary "$PWD\ws-mcp-assets\ws-mcp-windows-amd64.exe" --out "$output\daemon" --platform win32 --package wsflow
+node agents-plugin-tool/desktop/scripts/assemble-daemon-input.cjs --binary "$PWD\ws-mcp-assets\ws-mcp-windows-amd64.exe" --out "$output\daemon" --platform win32 --package wsflow
 Set-Location agents-plugin-tool/desktop
 npm ci --ignore-scripts --no-audit --no-fund
 $env:WERKSCHAFT_DAEMON_INPUT = "$output\daemon"
@@ -114,12 +114,9 @@ signature over the payload and its trusted version comment.
 | `windows-x86_64-nsis` | `Werkschaft-win32-x64-setup.exe` |
 | `windows-x86_64-msi` | `Werkschaft-win32-x64.msi` |
 
-The macOS migration zip contains `Werkschaft.app` at its root. Packaging
-extracts both Mac archives and verifies the plist, `Contents/MacOS/Werkschaft`,
-and every embedded daemon file. The stable Windows migration zip contains
-`Werkschaft.exe` and `Werkschaft-setup.exe` at its root. The launcher is built
-with the exact stable version and the hash of the bundled per-user NSIS
-installer. The Windows app executable is `werkschaft-desktop.exe`. WiX uses
+Packaging extracts the Mac updater archive and verifies the plist,
+`Contents/MacOS/Werkschaft`, and every embedded daemon file. The Windows app
+executable is `werkschaft-desktop.exe`. WiX uses
 the numeric core as `ProductVersion` for MSI. Its stock `MajorUpgrade` with
 `AllowDowngrades="yes"` also replaces a different product at the same core.
 The app inside the MSI, the updater signature, and the feed identify the full version.
@@ -127,9 +124,8 @@ The app inside the MSI, the updater signature, and the feed identify the full ve
 
 ## Publication gate
 
-Keep `WERKSCHAFT_TAURI_RELEASE` unset until the owner accepts the macOS and
-Windows Phase 4 results. Set the following production values through the
-repository's Actions settings when the owner approves the Tauri rollout.
+Configure the production updater key pair through the repository's Actions
+settings:
 
 | Kind | Name |
 | --- | --- |
@@ -137,29 +133,21 @@ repository's Actions settings when the owner approves the Tauri rollout.
 | Secret | `TAURI_SIGNING_PRIVATE_KEY` |
 | Optional secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
-The owner enables Tauri releases after acceptance.
+Stable `vX.Y.Z` tags publish native and Tauri assets together after the
+combined payload is verified. Exact `vX.Y.Z-canary.N` tags add the signed
+Tauri assets and feed to the native prerelease (`--latest=false`). Other tags
+retain native-only behavior. Check the complete workflow and confirm
+`releases/latest` resolves to a stable release. Follow the
+[release procedure](../../ai-docs/ship/ws.md) for CI, approval, and tagging.
 
-```sh
-gh variable set WERKSCHAFT_TAURI_RELEASE --repo kang-sw/werkschaft --body true
-```
+Updater signatures authenticate update payloads. Apple Developer ID signing
+and notarization and Windows Authenticode signing remain deferred; Electron
+retirement does not approve new OS signing. Gatekeeper or SmartScreen may
+prompt during native acceptance.
 
-Follow the existing release procedure for the CI gate, tagging, release, and
-checks. With the variable set, `vX.Y.Z` ships the
-Tauri signed assets and the Electron-named migration zips. GitHub CLI
-publishes a new stable release after the native and desktop jobs finish and
-every attachment uploads to its draft. [GitHub CLI release creation](https://cli.github.com/manual/gh_release_create)
-
-Exact `vX.Y.Z-canary.N` tags keep their Electron archives and add the distinct Tauri
-signed assets to the same prerelease. Check the combined artifact and the
-published feed, and confirm `releases/latest` resolves to a stable release.
-[Release procedure](../../ai-docs/ship/ws.md)
-
-Phase 4 covers updater signatures and migration on disposable profiles and
-installations. Production OS trust requires Apple Developer ID Application
-signing and notarization for macOS distribution, and Windows Authenticode
-signing and trusted timestamping for the app and installers. This phase uses
-updater signatures with OS signing deferred to the Electron retirement
-decision. Plan for the Windows SmartScreen prompt during native acceptance.
+Existing Electron users must manually install Tauri from the release page.
+Releases no longer include Electron migration ZIPs or desktop SHA256SUMS.
+Tauri uses its own WebView profile and starts with default window settings.
 
 ## Native acceptance
 
@@ -186,14 +174,8 @@ A same-core canary also exercises the MSI equal-core version replacement.
    Stage an update, select the other channel, quit before downloading, and
    confirm reopen offers no superseded restart. Force an install or swap
    failure and verify retry or reinstall with the retained profile.
-4. Run the [Windows migration checks](migration/README.md). Exercise an
-   Electron update from a disposable populated profile using the legacy zip
-   and SUMS with the fixture release. Set `WERKSCHAFT_UPDATE_FEED` to
-   `http://127.0.0.1:43137` in the environment that launches Electron.
-   Cover failed file moves and rollback,
-   failed installer and first launch, SmartScreen, the retained profile,
-   default Tauri Settings, exact downgrade over a newer installed canary,
-   and launch-only after a Tauri self-update. Check a shared portable folder
-   under a second account. On macOS, check the same Electron swap using the
-   Tauri app at the zip root, plus relaunch and recovery on the authorized
-   native test host.
+4. On disposable machines with old Electron installations, manually install
+   the Tauri app or installer from the release page. Confirm first launch,
+   connection, and default Tauri Settings. Electron's retained profile is not
+   imported. Record Gatekeeper or SmartScreen prompts and reinstall recovery
+   on the authorized native test hosts.
