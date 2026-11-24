@@ -206,10 +206,10 @@
         var r = n.getBoundingClientRect();
         if (!r.height) return;
         var key = Math.round((r.top + r.bottom) * 2) / 4;
-        rows[key] = 30;
+        rows[key] = 44;
       });
       var wrapped = Object.keys(rows).length > 1;
-      var keys = Object.keys(rows), reserved = 16 + Math.max(0, keys.length - 1) * 6;
+      var keys = Object.keys(rows), reserved = 6 + Math.max(0, keys.length - 1) * 6;
       keys.forEach(function (key) { reserved += rows[key]; });
       var height = faceRect.height;
       // All geometry above, all writes below; ResizeObserver settles a face
