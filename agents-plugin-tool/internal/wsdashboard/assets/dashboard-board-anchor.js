@@ -835,8 +835,12 @@
     for (var i = 0; i < at; i++) if (cards[i].hasAttribute("data-topic") || cards[i].hasAttribute("data-rail")) prev++;
     return anchorCapH(Math.min(2, prev));
   }
+  function anchorScroller(col) {
+    return anchorSized.bounded ? col : (doc.scrollingElement || doc.documentElement || col);
+  }
   function anchorLandingTop(col, colRect, n, list) {
-    return colRect.top + (col.clientTop || 0) + anchorSized.padTop + anchorRailInset(col) + anchorCardCap(n, list);
+    var top = anchorSized.bounded && colRect ? colRect.top + (col.clientTop || 0) : 0;
+    return top + anchorSized.padTop + anchorRailInset(col) + anchorCardCap(n, list);
   }
   function anchorId(n) {
     var k = n && n.nodeType === 1 ? topicKey(n) : null;
@@ -936,19 +940,20 @@
   }
   function anchorAlign(col, n, smooth, list) {
     if (!col || !n || !n.isConnected) return false;
-    var delta, target;
-    if (anchorSized.bounded && n.getAttribute && n.getAttribute("data-anchor-cap") === "0") {
+    var sc = anchorScroller(col), delta, target;
+    if (!anchorSized.bounded && typeof window !== "undefined" && window.wbHistory && window.wbHistory.keeping && window.wbHistory.keeping(sc)) return false;
+    if (n.getAttribute && n.getAttribute("data-anchor-cap") === "0") {
       target = 0;
-      delta = -col.scrollTop;
+      delta = -sc.scrollTop;
     } else {
-      var c = col.getBoundingClientRect(), r = n.getBoundingClientRect();
+      var c = anchorSized.bounded ? col.getBoundingClientRect() : null, r = n.getBoundingClientRect();
       delta = r.top - anchorLandingTop(col, c, n, list);
-      target = Math.max(0, col.scrollTop + delta);
+      target = Math.max(0, sc.scrollTop + delta);
     }
     if (anchorProg && anchorProg.key === anchorId(n)) anchorProg.target = target;
     if (Math.abs(delta) <= 0.5) return false;
-    if (col.scrollTo) col.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
-    else col.scrollTop = target;
+    if (sc.scrollTo) sc.scrollTo({ top: target, behavior: smooth ? "smooth" : "auto" });
+    else sc.scrollTop = target;
     return true;
   }
   function anchorWaitFrames(pid, count) {
@@ -994,7 +999,8 @@
       var prevFloat = bar ? bar.hasAttribute("data-floating") : null;
       var pid = ++anchorProgSeq;
       anchorCancelGlide();
-      anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: col.scrollTop };
+      var sc = anchorScroller(col);
+      anchorProg = { key: key, id: pid, smooth: smooth, until: Date.now() + (smooth ? 1500 : 400), tries: 0, waitFloat: false, scrollDone: false, target: sc.scrollTop };
       var moved = anchorAlign(col, n, smooth);
       if (glideDir && !calm) anchorGlide(n, glideDir);
       if (!moved) { anchorProg = null; return true; }

@@ -225,8 +225,14 @@ async function until(check, message) {
         const target = page.locator('#p1');
         async function jumpGeometry() {
           const geometry = await target.evaluate(e => {
+            const scroller = el => {
+              for (let p = el.parentElement; p; p = p.parentElement) {
+                if (p.matches('section.topic[data-topic], #bcol, .gal-pbody') && /(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+              }
+              return el.closest('#bcol, .gal-pbody');
+            };
             const r = e.getBoundingClientRect();
-            const board = e.closest('#bcol, .gal-pbody');
+            const board = scroller(e);
             const b = board.getBoundingClientRect();
             const clip = { left: b.left + board.clientLeft, top: b.top + board.clientTop };
             clip.right = clip.left + board.clientWidth;
@@ -251,13 +257,28 @@ async function until(check, message) {
         {
           let last = '', same = 0;
           await until(async () => {
-            const now = await target.evaluate(e => { const r = e.getBoundingClientRect(), b = e.closest('#bcol, .gal-pbody'); return JSON.stringify([b.scrollHeight, Math.round(r.top), Math.round(r.height), [...document.querySelectorAll('iframe.doc-frame')].map(f => f.style.height).join()]); });
+            const now = await target.evaluate(e => {
+              const scroller = el => {
+                for (let p = el.parentElement; p; p = p.parentElement) {
+                  if (p.matches('section.topic[data-topic], #bcol, .gal-pbody') && /(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+                }
+                return el.closest('#bcol, .gal-pbody');
+              };
+              const r = e.getBoundingClientRect(), b = scroller(e);
+              return JSON.stringify([b.scrollHeight, Math.round(r.top), Math.round(r.height), [...document.querySelectorAll('iframe.doc-frame')].map(f => f.style.height).join()]);
+            });
             same = now === last ? same + 1 : 0;
             last = now;
             return same >= 8;
           }, 'the board target keeps one size and place');
           await target.evaluate(async e => {
-            const b = e.closest('#bcol, .gal-pbody'), frames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const scroller = el => {
+              for (let p = el.parentElement; p; p = p.parentElement) {
+                if (p.matches('section.topic[data-topic], #bcol, .gal-pbody') && /(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+              }
+              return el.closest('#bcol, .gal-pbody');
+            };
+            const b = scroller(e), frames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
             const clip = () => { const c = b.getBoundingClientRect(); return { top: c.top + b.clientTop, bottom: c.top + b.clientTop + b.clientHeight }; };
             // The settled panel is taller than the board (its frame's real
             // height), so it cannot lie wholly outside the clip: what must

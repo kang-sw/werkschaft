@@ -108,8 +108,11 @@ async function editing(page, id, wide) {
       const gap = id => page.locator(row(id)).evaluate(e => e.querySelector('.rid').getBoundingClientRect().left - e.querySelector('.hb').getBoundingClientRect().right);
       assert.equal(await gap('plainrow'), 6, 'no-count gap equals mockup 6px');
       assert.equal(await gap('kidrow'), 6, 'child no-count gap equals mockup 6px');
-      assert.ok(await gap('agentsrow') > 6, 'one-digit count pushes the name');
-      assert.ok(await gap('dotrow') > await gap('agentsrow'), 'two-digit count pushes farther');
+      // 3996eb829: .sbn overlays the top-right corner of .hb as a robot icon instead of pushing .rid right.
+      assert.equal(await gap('agentsrow'), 6, 'overlaid subagent robot icon keeps 6px gap');
+      assert.equal(await gap('dotrow'), 6, 'overlaid subagent robot icon keeps 6px gap on two-digit count');
+      assert.equal(await page.locator(row('agentsrow') + ' .sbn use').getAttribute('href'), '#i-robot');
+      assert.equal(await page.locator(row('dotrow') + ' .sbn use').getAttribute('href'), '#i-robot');
       await openMenu(page, 'agentsrow');
       assert.equal(await page.locator(menu).getByRole('menuitem', { name: '즐겨찾기 해제', exact: true }).count(), 1);
       await page.keyboard.press('Escape');

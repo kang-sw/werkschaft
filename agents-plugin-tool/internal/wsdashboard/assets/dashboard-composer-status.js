@@ -130,7 +130,9 @@
     if (mode === "compact") {
       // The cache is empty on entering the mode (the observer ignored the
       // canvas meanwhile); a zero box is a hidden island, which the observer
-      // reports again once it shows.
+      // reports again once it shows. Clear agDone so re-opening full/idle
+      // re-measures instead of keeping compact's dimensions.
+      agDone = "";
       if (agBox) agApplyCompact(agBox); else agMeasure();
       return;
     }
@@ -304,13 +306,103 @@
   // a board swap asks (force): putting back the same classes would only wake
   // the open-question pill's class observer.
   var sentSig = null;
+  var sentLive = doc.getElementsByClassName ? doc.getElementsByClassName("sentdata") : null;
+  var sentIndex = null;
+  var sentIndexDirty = true;
+  var sentIndexBoxes = [];
+  var sentIndexObs = null;
+  function sentIndexAdd(el) {
+    if (!el || el.nodeType !== 1 || el.tagName !== "I") return false;
+    var id = el.getAttribute("data-id");
+    if (!id) return true;
+    var list = sentIndex.get(id);
+    if (!list) { list = []; sentIndex.set(id, list); }
+    list.push({
+      state: el.getAttribute("data-state") || "",
+      answer: el.getAttribute("data-answer") || "",
+      note: el.getAttribute("data-note") || ""
+    });
+    return true;
+  }
+  function sentIndexApplyRecords(records) {
+    if (!records || !records.length) return;
+    if (sentIndexDirty || !sentIndex) return;
+    for (var r = 0; r < records.length; r++) {
+      var rec = records[r];
+      if (rec.type !== "childList" || (rec.removedNodes && rec.removedNodes.length)) {
+        sentIndexDirty = true;
+        return;
+      }
+      var added = rec.addedNodes;
+      for (var a = 0; a < added.length; a++) {
+        if (!sentIndexAdd(added[a])) { sentIndexDirty = true; return; }
+      }
+    }
+  }
+  function sentBoxesChanged() {
+    if (!sentLive) return true;
+    if (sentLive.length !== sentIndexBoxes.length) return true;
+    for (var k = 0; k < sentLive.length; k++) {
+      if (sentLive[k] !== sentIndexBoxes[k]) return true;
+    }
+    return false;
+  }
+  function sentIndexRebuild() {
+    sentIndex = new Map();
+    sentIndexBoxes = [];
+    if (sentIndexObs) sentIndexObs.disconnect();
+    if (!sentIndexObs && window.MutationObserver) {
+      sentIndexObs = new MutationObserver(sentIndexApplyRecords);
+    }
+    var boxes = sentLive ? Array.prototype.slice.call(sentLive) : q(".sentdata");
+    for (var b = 0; b < boxes.length; b++) {
+      var box = boxes[b];
+      sentIndexBoxes.push(box);
+      if (sentIndexObs) sentIndexObs.observe(box, { childList: true, attributes: true, subtree: true });
+      var kids = box.children;
+      if (kids) {
+        for (var c = 0; c < kids.length; c++) sentIndexAdd(kids[c]);
+      } else {
+        q("i[data-id]", box).forEach(sentIndexAdd);
+      }
+    }
+    sentIndexDirty = false;
+  }
+  function sentIndexGet() {
+    if (sentIndexObs && sentIndexObs.takeRecords) sentIndexApplyRecords(sentIndexObs.takeRecords());
+    if (sentIndexDirty || !sentIndex || sentBoxesChanged()) sentIndexRebuild();
+    return sentIndex;
+  }
   function applySent(force) {
     var scope = arguments[1];
     var b = region("board");
     if (!b) return;
+    function appendMark(item, head, rec) {
+      var state = rec.state, m = doc.createElement("span");
+      item.classList.add(state === "held" ? "sent-held" : "sent-sent");
+      m.className = "sentmark " + state;
+      m.textContent = state + " · " + (rec.answer || "note");
+      m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (rec.note ? ": " + rec.note : "");
+      var idEl = head.querySelector(".id");
+      head.insertBefore(m, idEl ? idEl.nextSibling : head.firstChild);
+    }
+    var index;
+    if (typeof sentIndexGet === "function") {
+      index = sentIndexGet();
+    } else {
+      index = new Map();
+      q(".sentdata i[data-id]").forEach(function (n) {
+        var id = n.getAttribute("data-id");
+        if (!id) return;
+        var list = index.get(id);
+        if (!list) { list = []; index.set(id, list); }
+        list.push({ state: n.getAttribute("data-state") || "sent", answer: n.getAttribute("data-answer") || "", note: n.getAttribute("data-note") || "" });
+      });
+    }
     if (scope && scope.querySelectorAll) {
       q(".sentmark", scope).forEach(function (m) { if (m.parentNode) m.parentNode.removeChild(m); });
       q(".sent-sent, .sent-held", scope).forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
+      if (!index.size) return;
       var scopedItems = new Map();
       q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", scope).forEach(function (item) {
         var id = item.getAttribute("data-id");
@@ -318,39 +410,28 @@
       });
       if (!scopedItems.size) return;
       scopedItems.forEach(function (item, id) {
+        var recs = index.get(id);
+        if (!recs || !recs.length) return;
         var head = item.querySelector(".head, .stext");
         if (!head) return;
-        var esc = window.CSS && window.CSS.escape ? window.CSS.escape(id) : String(id).replace(/["\\]/g, "\\$&");
-        q('.sentdata i[data-id="' + esc + '"]').forEach(function (i) {
-          var state = i.getAttribute("data-state"), m = doc.createElement("span");
-          item.classList.add(state === "held" ? "sent-held" : "sent-sent");
-          m.className = "sentmark " + state;
-          m.textContent = state + " · " + (i.getAttribute("data-answer") || "note");
-          var note = i.getAttribute("data-note");
-          m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (note ? ": " + note : "");
-          var idEl = head.querySelector(".id");
-          head.insertBefore(m, idEl ? idEl.nextSibling : head.firstChild);
-        });
+        for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
       });
       return;
     }
-    var sig = q(".sentdata i[data-id]").map(function (i) {
-      return [i.getAttribute("data-id"), i.getAttribute("data-state"), i.getAttribute("data-answer"), i.getAttribute("data-note")].join("\u0001");
-    }).join("\u0002");
+    var sigParts = [];
+    index.forEach(function (recs, id) {
+      for (var r = 0; r < recs.length; r++) {
+        sigParts.push([id, recs[r].state, recs[r].answer, recs[r].note].join("\u0001"));
+      }
+    });
+    var sig = sigParts.join("\u0002");
     if (!force && sig === sentSig) return;
     sentSig = sig;
     boardQ(".sentmark").forEach(function (m) { m.parentNode.removeChild(m); });
     boardQ(".sent-sent, .sent-held").forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
-    q(".sentdata i[data-id]").forEach(function (i) {
-      var item = boardItem(i.getAttribute("data-id")), head = item && item.querySelector(".head, .stext");
+    index.forEach(function (recs, id) {
+      var item = boardItem(id), head = item && item.querySelector(".head, .stext");
       if (!head) return;
-      var state = i.getAttribute("data-state"), m = doc.createElement("span");
-      item.classList.add(state === "held" ? "sent-held" : "sent-sent");
-      m.className = "sentmark " + state;
-      m.textContent = state + " · " + (i.getAttribute("data-answer") || "note");
-      var note = i.getAttribute("data-note");
-      m.title = wsT(state === "held" ? "js.sent.held.title" : "js.sent.sent.title") + (note ? ": " + note : "");
-      var id = head.querySelector(".id");
-      head.insertBefore(m, id ? id.nextSibling : head.firstChild);
+      for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
     });
   }

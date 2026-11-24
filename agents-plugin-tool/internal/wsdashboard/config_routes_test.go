@@ -376,3 +376,72 @@ func TestSettingsSnapshotSessionHarnessAndUnconfiguredWerk(t *testing.T) {
 		t.Fatalf("missing expected tier entries: sawWerk=%v sawCodex=%v", sawWerk, sawCodex)
 	}
 }
+
+func TestSettingsProjectScopeWithoutWorkspaceTarget(t *testing.T) {
+	backend := settingsTestBackend(t)
+	if _, err := wsconfig.SetAgentTierValue(backend.Options, true, "small", "default", wsconfig.AgentTier{Backend: "codex", Model: "global-default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wsconfig.SetAgentTierValue(backend.Options, false, "small", "default", wsconfig.AgentTier{Backend: "codex", Model: "project-default"}); err != nil {
+		t.Fatal(err)
+	}
+	d := authFixture(t)
+	d.config = backend
+	own := "http://127.0.0.1:43210"
+
+	// Plain Global snapshot (zero registered workspaces) shows both Global and Project layers.
+	globalSnap := settingsRequest(t, d, http.MethodGet, "/api/config/snapshot", "", "")
+	if globalSnap.Code != http.StatusOK {
+		t.Fatalf("global snapshot = %d %s", globalSnap.Code, globalSnap.Body)
+	}
+	var view configSnapshot
+	if err := json.Unmarshal(globalSnap.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	var sawGlobal, sawProject bool
+	for _, e := range view.Entries {
+		if e.Key != "agents.tier" || e.Selectors["tier"] != "small" || e.Selectors["harness"] != "default" {
+			continue
+		}
+		for _, layer := range e.Layers {
+			if layer.Scope == wsconfig.ScopeGlobal && layer.Selected != nil {
+				sawGlobal = true
+			}
+			if layer.Scope == wsconfig.ScopeProject && layer.Selected != nil {
+				sawProject = true
+			}
+		}
+	}
+	if !sawGlobal || !sawProject {
+		t.Fatalf("plain Global snapshot missing overrides: sawGlobal=%v sawProject=%v", sawGlobal, sawProject)
+	}
+
+	// GET /api/config/snapshot?scope=project without a workspace target returns 200.
+	projSnap := settingsRequest(t, d, http.MethodGet, "/api/config/snapshot?scope=project", "", "")
+	if projSnap.Code != http.StatusOK {
+		t.Fatalf("project snapshot without target = %d %s", projSnap.Code, projSnap.Body)
+	}
+
+	// POST /api/config/reset with scope=project and empty target clears ONLY Project and leaves Global intact.
+	resetBody := `{"scope":"project","target":"","key":"agents.tier","selectors":{"tier":"small","harness":"default"}}`
+	resetResp := settingsRequest(t, d, http.MethodPost, "/api/config/reset", resetBody, own)
+	if resetResp.Code != http.StatusOK {
+		t.Fatalf("project reset without target = %d %s", resetResp.Code, resetResp.Body)
+	}
+	files, err := wsconfig.FileLayers(backend.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := files[wsconfig.ScopeProject].Agents.ModelAliases["small"]["default"]; exists {
+		t.Fatalf("project legacy override still present: %+v", files[wsconfig.ScopeProject].Agents.ModelAliases)
+	}
+	if got := files[wsconfig.ScopeGlobal].Agents.ModelAliases["small"]["default"].Model; got != "global-default" {
+		t.Fatalf("global legacy override = %q, want %q", got, "global-default")
+	}
+
+	// A non-empty unknown workspace target still returns 404 target_not_found.
+	staleSnap := settingsRequest(t, d, http.MethodGet, "/api/config/snapshot?scope=project&target=missing-workspace", "", "")
+	if staleSnap.Code != http.StatusNotFound || !strings.Contains(staleSnap.Body.String(), "target_not_found") {
+		t.Fatalf("stale project target = %d %s, want 404 target_not_found", staleSnap.Code, staleSnap.Body)
+	}
+}

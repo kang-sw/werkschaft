@@ -37,10 +37,12 @@ const CHANGEABLE = ['convlive', 'entries', 'tree', 'ctx', 'git', 'cmds', 'sline'
     await wait(1200);
     await f.evaluate(() => {
       const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
-      window.phase = { bcol: 0, root: 0 };
+      window.phase = { bcol: 0, convo: 0, root: 0 };
       Object.defineProperty(Element.prototype, 'scrollTop', { configurable: true, set(v) { desc.set.call(this, v); },
         get() {
-          if ((this.id === 'bcol' || this === document.scrollingElement) && new Error().stack.includes('scrollState')) window.phase[this.id === 'bcol' ? 'bcol' : 'root']++;
+          if ((this.id === 'bcol' || this.id === 'convo' || this === document.scrollingElement) && new Error().stack.includes('scrollState')) {
+            window.phase[this.id === 'bcol' ? 'bcol' : this.id === 'convo' ? 'convo' : 'root']++;
+          }
           return desc.get.call(this);
         } });
     });
@@ -66,18 +68,21 @@ const CHANGEABLE = ['convlive', 'entries', 'tree', 'ctx', 'git', 'cmds', 'sline'
     assert.ok(delivered >= 4, 'several region messages were delivered in one task (' + delivered + ')');
     const applied = await f.evaluate(names => names.map(n => (document.querySelector('[data-region="' + n + '"]') || document.body).getAttribute('data-h')), CHANGEABLE);
     assert.equal(applied.filter(h => /^warm/.test(h)).length, delivered, 'every delivered region landed');
-    console.log('messages=' + delivered + ' scroll read phases: bcol=' + phase.bcol + ' document=' + phase.root + ' layouts in the window=' + forced);
-    assert.equal(phase.bcol, 1, 'the board column offset is read once for ' + delivered + ' messages in one frame');
+    console.log('messages=' + delivered + ' scroll read phases: convo=' + phase.convo + ' bcol=' + phase.bcol + ' document=' + phase.root + ' layouts in the window=' + forced);
+    // 03466dd2e: #bcol is anchor-owned (wbScrollOwner=true) so scrollState skips it entirely.
+    assert.equal(phase.bcol, 0, 'the anchor-owned board column offset is never read by scrollState');
+    assert.equal(phase.convo, 1, 'the conversation pane offset is read once for ' + delivered + ' messages in one frame');
     assert.ok(phase.root <= 1, 'the document offset is read at most once');
     // A frame later the share has ended: the next message reads afresh.
-    await f.evaluate(() => { window.phase.bcol = 0; });
+    await f.evaluate(() => { window.phase.convo = 0; window.phase.bcol = 0; });
     await f.evaluate(() => {
       const sock = window.pageSockets.filter(s => s.url.includes('/events') && s.readyState === 1).pop();
       const el = document.querySelector('[data-region="convlive"]');
       sock.onmessage({ data: JSON.stringify({ event: 'region', data: { name: 'convlive', hash: 'later', html: el.innerHTML + '<div class="warm" style="height:3px"></div>' } }) });
     });
     await wait(200);
-    assert.equal(await f.evaluate(() => window.phase.bcol), 1, 'a message in a later frame reads the offsets again');
+    assert.equal(await f.evaluate(() => window.phase.bcol), 0, 'a later-frame message still skips anchor-owned bcol');
+    assert.equal(await f.evaluate(() => window.phase.convo), 1, 'a message in a later frame reads the offsets again');
     assert.deepEqual(errors, []);
     console.log('PASS ' + delivered + ' region messages in one frame share one scroll read phase');
   } finally {

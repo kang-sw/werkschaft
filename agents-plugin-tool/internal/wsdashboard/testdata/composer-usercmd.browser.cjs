@@ -133,19 +133,24 @@ async function agent(step, tag) {
       await dbl.dblclick();
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
-      // two rapid separate clicks, the second one after the first one's
-      // acknowledgement was tracked and emitted (no click count tells them
-      // apart), are one run
+      // two rapid separate clicks, the second one right after the first one's
+      // acknowledgement settled (inside the 600ms post-ack guard; no click count
+      // tells them apart), are one run
       await page.waitForTimeout(300);
       const dblAdmitted = () => view.evaluate(() => (window.__admitted || []).filter(e => e.command === 'echo dbl').length);
       const dblBefore = await dblAdmitted();
       const acked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/user-commands/dbl/run'));
       await dbl.evaluate(el => el.click());
       await acked;
-      for (let i = 0; i < 200 && (await dblAdmitted()) <= dblBefore; i++) await page.waitForTimeout(25);
-      assert.equal(await dblAdmitted(), dblBefore + 1, 'the acknowledgement was tracked before the second click');
+      // Wait for the POST response handler to settle the attempt (clearing
+      // sessionStorage) and arm the 600ms post-ack guard, without waiting for
+      // the 1100ms headless poll that emits ws:cexec-admitted.
+      await view.waitForFunction(k => !JSON.parse(window.sessionStorage.getItem(k) || '{}').dbl, 'ws.ucmd.attempt.livesession', { timeout: 5000 });
+      assert.equal(await dbl.isDisabled(), true, 'the post-ack guard keeps the slot disabled');
       await dbl.evaluate(el => el.click());
       await page.waitForTimeout(900);
+      for (let i = 0; i < 200 && (await dblAdmitted()) <= dblBefore; i++) await page.waitForTimeout(25);
+      assert.equal(await dblAdmitted(), dblBefore + 1, 'the single run was admitted once');
       assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');
       await shot('double-click');
 

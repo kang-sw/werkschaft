@@ -223,7 +223,7 @@ function buildBootstrapScript(savedCards) {
   const composerStatusJs = readAsset(WSD, 'dashboard-composer-status.js');
   const composerJs = readAsset(WSD, 'dashboard-composer.js');
   const boardItemMatch = composerJs.match(/\n  function boardItem\(id\) \{[\s\S]*?\n  \}/);
-  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
+  const applySentMatch = composerStatusJs.match(/\n  var sentSig = null;[\s\S]*?\n  function applySent\(force\) \{[\s\S]*?\n  \}/);
   assert.ok(boardItemMatch, 'production boardItem found');
   assert.ok(applySentMatch, 'production applySent found');
   const streamBundle = [
@@ -815,7 +815,7 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
   });
 
   await t.test('Important #4 (Chromium): entering SSE-updated stashed topic stays O(1) across board sizes (N=12 vs N=24) and far exempt draft counts (2 vs 12)', async () => {
-    async function measureStashedEntry(topicCount, farExemptCount) {
+    async function measureStashedEntry(topicCount, farExemptCount, sentRowCount = 10) {
       const { ctx, page, errors } = await openHarness(browser, { topicCount });
       try {
         const targetIdx = 7;
@@ -833,14 +833,14 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           });
         }).join('\n');
 
-        const result = await page.evaluate(({ tid, initHtml, html, farExemptCount }) => {
+        const result = await page.evaluate(({ tid, initHtml, html, farExemptCount, sentRowCount }) => {
           // Establish baseline boardRendered hash and flush initial viewed hold before adding drafts/SSE update.
           window.__testApi.swapBoard('h-init', initHtml);
           const allTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
           window.WsBoardAnchor.select(allTopics[1]);
           window.WsBoardAnchor.select(allTopics[0]);
 
-          // Populate .sentdata entries for both far topics and the target stashed topic (#7 -> data-id="701").
+          // Populate .sentdata entries (varied 10 vs 1200 rows) including far topics and target stashed topic (#7 -> data-id="701").
           let sentBox = document.querySelector('.sentdata');
           if (!sentBox) {
             sentBox = document.createElement('div');
@@ -848,12 +848,16 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             sentBox.hidden = true;
             document.body.appendChild(sentBox);
           }
-          sentBox.innerHTML = [
+          const rows = [
             '<i data-id="101" data-state="held" data-answer="later" data-note="far-1"></i>',
             '<i data-id="701" data-state="sent" data-answer="yes" data-note="approved"></i>',
             '<i data-id="1101" data-state="sent" data-answer="ok" data-note="far-11"></i>',
             '<i data-id="1201" data-state="held" data-answer="no" data-note="far-12"></i>',
-          ].join('');
+          ];
+          for (let r = rows.length; r < sentRowCount; r++) {
+            rows.push(`<i data-id="9${String(r).padStart(4, '0')}" data-state="sent" data-answer="ok" data-note="bulk-${r}"></i>`);
+          }
+          sentBox.innerHTML = rows.join('');
 
           // 1. Make `farExemptCount` OTHER far topics exempt strictly outside both slot 0's
           //    near window [0..2] and targetIdx's near window [4..8] BEFORE the SSE swap, so
@@ -875,8 +879,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           window.__testApi.swapBoard('h-sse-i4', html);
           const hasStashedBefore = window.WsBoardVirtual.hasStashed(tid);
 
-          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, and whole-board #r-board/#bgal
-          //    querySelectorAll to verify scoped hydration only (zero boardItem/boardQ whole-board scans in applySent).
+          // 3. Wrap WsCards.decorate, window.wbBindBoard, window.wbForm, document.querySelector/All,
+          //    and whole-board #r-board/#bgal querySelectorAll to verify scoped O(1) hydration only
+          //    (zero boardItem/boardQ whole-board scans AND zero document-wide .sentdata scans).
           const origDecorate = window.WsCards.decorate;
           const origWbBindBoard = window.wbBindBoard;
           const origWbForm = window.wbForm;
@@ -884,7 +889,17 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           const galEl = document.getElementById('bgal');
           const origBoardQSA = boardEl.querySelectorAll;
           const origGalQSA = galEl ? galEl.querySelectorAll : null;
-          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0;
+          const origDocQS = document.querySelector;
+          const origDocQSA = document.querySelectorAll;
+          let decorateScoped = 0, decorateWholeBoard = 0, bindBoardScoped = 0, bindBoardWholeBoard = 0, wbFormCalls = 0, wholeBoardSentScans = 0, docSentScans = 0;
+          document.querySelector = function (sel) {
+            if (typeof sel === 'string' && sel.includes('.sentdata')) docSentScans++;
+            return origDocQS.apply(this, arguments);
+          };
+          document.querySelectorAll = function (sel) {
+            if (typeof sel === 'string' && sel.includes('.sentdata')) docSentScans++;
+            return origDocQSA.apply(this, arguments);
+          };
           boardEl.querySelectorAll = function (sel) {
             if (typeof sel === 'string' && (sel.includes('[data-id=') || sel.includes('.sentmark') || sel.includes('.sent-sent'))) wholeBoardSentScans++;
             return origBoardQSA.apply(this, arguments);
@@ -919,18 +934,37 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
           const item701 = targetSec.querySelector('#item-701');
           const sentMark701 = item701 ? item701.querySelector('.sentmark.sent') : null;
 
+          // Restore whole-board / decorate / bind / form wrappers before the follow-up swapBoard
+          // (swapBoard runs a full board swap, whereas the follow-up select tests scoped hydration).
           boardEl.querySelectorAll = origBoardQSA;
           if (galEl && origGalQSA) galEl.querySelectorAll = origGalQSA;
           window.WsCards.decorate = origDecorate;
           window.wbBindBoard = origWbBindBoard;
           window.wbForm = origWbForm;
+
+          // Verify incremental append keeps sentIndex accurate on next stashed hydration with zero doc .sentdata scans.
+          const extra = document.createElement('i');
+          extra.setAttribute('data-id', '701');
+          extra.setAttribute('data-state', 'held');
+          extra.setAttribute('data-answer', 'revised');
+          extra.setAttribute('data-note', 'followup');
+          sentBox.appendChild(extra);
+          window.WsBoardAnchor.select(allTopics[0]);
+          window.__testApi.swapBoard('h-sse-i4-append', html.replace('rev-7-sse-stashed', 'rev-7-sse-stashed-2'));
+          window.WsBoardAnchor.select(targetSec);
+          const marksAfterAppend = targetSec.querySelectorAll('#item-701 .sentmark').length;
+
+          document.querySelector = origDocQS;
+          document.querySelectorAll = origDocQSA;
           return {
             hasStashedBefore,
             stillCollapsed: targetSec.hasAttribute('data-wb-virtual'),
             renderedSse: hydratedText.includes('StashedSseStreamNote-7'),
             item701HasSentClass: !!(item701 && item701.classList.contains('sent-sent')),
             sentMark701Text: sentMark701 ? sentMark701.textContent : null,
+            marksAfterAppend,
             wholeBoardSentScans,
+            docSentScans,
             exemptCount: exemptIndices.length,
             stats,
             decorateScoped,
@@ -939,15 +973,17 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
             bindBoardWholeBoard,
             wbFormCalls,
           };
-        }, { tid: targetId, initHtml: initialHtml, html: updatedHtml, farExemptCount });
+        }, { tid: targetId, initHtml: initialHtml, html: updatedHtml, farExemptCount, sentRowCount });
 
         assert.deepEqual(errors, []);
         assert.equal(result.hasStashedBefore, true, 'target topic had stashed SSE revision');
         assert.equal(result.stillCollapsed, false, 'target topic hydrated on navigation');
         assert.equal(result.renderedSse, true, 'stashed SSE content rendered on hydration');
         assert.equal(result.wholeBoardSentScans, 0, 'applySent(true, sec) must NEVER run whole-board boardItem/boardQ scans on #r-board or #bgal');
+        assert.equal(result.docSentScans, 0, `applySent(true, sec) must NEVER run document-wide .sentdata scans (sentRowCount=${sentRowCount})`);
         assert.equal(result.item701HasSentClass, true, 'hydrated stashed topic item still receives .sent-sent class');
         assert.equal(result.sentMark701Text, 'sent · yes', 'hydrated stashed topic item still receives accurate .sentmark text');
+        assert.equal(result.marksAfterAppend, 2, 'incremental .sentdata append updates scoped sentIndex on next hydration');
         assert.equal(result.decorateWholeBoard, 0, 'hydrating one stashed topic must NEVER call whole-board WsCards.decorate()');
         assert.equal(result.decorateScoped, 1, 'hydrating one stashed topic calls scoped WsCards.decorate(sec) exactly once');
         assert.ok(result.bindBoardScoped >= 1, 'hydrating one stashed topic calls scoped wbBindBoard(sec)');
@@ -959,9 +995,9 @@ test('0.51.2 release-gate findings #8, #9, #10, #11, #12 in Chromium', async (t)
       }
     }
 
-    const r12_2 = await measureStashedEntry(12, 2);
-    const r24_2 = await measureStashedEntry(24, 2);
-    const r24_12 = await measureStashedEntry(24, 12);
+    const r12_2 = await measureStashedEntry(12, 2, 10);
+    const r24_2 = await measureStashedEntry(24, 2, 10);
+    const r24_12 = await measureStashedEntry(24, 12, 3000);
 
     assert.equal(r12_2.stats.prunes, 0);
     assert.equal(r24_2.stats.prunes, 0);
