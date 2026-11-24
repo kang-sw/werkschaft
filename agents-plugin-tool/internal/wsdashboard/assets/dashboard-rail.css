@@ -440,11 +440,11 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 /* status: the harness badge (.hb, dashboard.css) stays still while the lead
    works and the spinner ring (.hbr) turns around it; it wobbles and hops while
    it waits on an approval (a static ring stays) and wears a static ring when
-   it has failed. The wrap (.hiw) fits the badge and any running-subagent
-   count: the count flows just past the working ring at bottom-right and
-   pushes the name right only while present. Open policy items are a 7px
-   dot at top-left; favorites are a 10px star at bottom-left, ringed in the
-   row's ground so the badge parts from badge and ring. */
+   it has failed. The wrap (.hiw) fits the badge; a running-subagent robot
+   icon (.sbn, 10px; 9px on .hb.sm) overlays top-right in the row's ground
+   without widening the wrap. Open policy items are a 7px dot at top-left;
+   favorites are a 10px star at bottom-left, ringed in the row's ground so
+   the badge parts from badge and ring. */
 .rail .hb { cursor: default; }
 /* a stopped (sleeping) session, one with no harness process: the title muted
    and the harness badge dimmed, and no second line */
@@ -454,7 +454,9 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .hb.perm { outline: 2px solid var(--wb-perm-ink); animation: rail-nudge 1.5s steps(4) infinite; }
 .rail .hb.err { outline: 2px solid var(--wb-fail); }
 .rail .hiw { position: relative; flex: none; display: inline-flex; align-items: center; }
-.rail .sbn { position: relative; bottom: -3px; align-self: flex-end; margin-left: 2.5px; font-size: 9px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; color: var(--wb-primary); cursor: default; animation: rail-blink 1.4s steps(4) infinite; }
+.rail .sbn { position: absolute; z-index: 3; top: -4px; right: -4px; width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; background: var(--rs-ground); box-shadow: 0 0 0 1px var(--rs-ground); color: var(--wb-primary); cursor: default; animation: rail-blink 1.4s steps(4) infinite; }
+.rail .sbn .i { width: 100%; height: 100%; stroke-width: 1.9; }
+.rail .hb.sm ~ .sbn { top: -3.5px; right: -3.5px; width: 9px; height: 9px; }
 .rail .rs { --rs-ground: var(--wb-card); }
 .rail .rs:hover { --rs-ground: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
 .rail .rs.cur { --rs-ground: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }

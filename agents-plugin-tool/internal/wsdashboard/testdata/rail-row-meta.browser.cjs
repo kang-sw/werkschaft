@@ -27,27 +27,26 @@ const row = id => `#r-rail .rs[data-rid="${id}"]`;
 
       // Line 1: no robot badge and no policy capsule in any row.
       assert.equal(await page.locator('#r-rail .rs .bots, #r-rail .rs .chip.policy').count(), 0, scheme + ': no robot badge or capsule in a row');
-      // The subagent count rides on the icon, hidden at zero.
-      assert.equal(await page.locator(row('metaparent') + ' .sbn').textContent(), '1', scheme + ': parent count');
-      assert.equal(await page.locator(row('dotrow') + ' .sbn').textContent(), '12', scheme + ': two-digit count');
-      assert.equal(await page.locator(row('plainrow') + ' .sbn').count(), 0, scheme + ': no count at zero');
+      // The subagent robot icon overlays the icon's top-right corner, hidden at zero.
+      assert.equal(await page.locator(row('metaparent') + ' .sbn').getAttribute('title'), '1 subagents running', scheme + ': parent subagent tooltip');
+      assert.equal(await page.locator(row('dotrow') + ' .sbn').getAttribute('aria-label'), '12 subagents running', scheme + ': two-digit subagent label');
+      assert.equal(await page.locator(row('dotrow') + ' .sbn use').getAttribute('href'), '#i-robot', scheme + ': robot sprite icon');
+      assert.equal(await page.locator(row('plainrow') + ' .sbn').count(), 0, scheme + ': no subagent icon at zero');
       // The question dot carries its count to a reader.
       assert.equal(await page.locator(row('metaparent') + ' .qdot').getAttribute('aria-label'), '2 items to answer', scheme + ': dot label');
       assert.equal(await page.locator(row('kidone') + ' .qdot').getAttribute('aria-label'), '1 item to answer', scheme + ': child dot label');
       assert.equal(await page.locator(row('plainrow') + ' .qdot').count(), 0, scheme + ': no dot without questions');
-      // No count reserves no space: the mockup's name-to-icon gap is 6px.
-      // A count flows 2.5px after the icon and pushes the name by its width.
+      // Overlaying .sbn keeps the name-to-icon gap at 6px without expanding horizontal space.
       const gap = id => page.locator(row(id)).evaluate(r => r.querySelector('.rid').getBoundingClientRect().left - r.querySelector('.hb').getBoundingClientRect().right);
       assert.equal(await gap('plainrow'), 6, scheme + ': no-count gap matches the mockup');
       assert.equal(await gap('idleparent'), 6, scheme + ': no reserved count slot');
       for (const id of ['agentsrow', 'dotrow', 'metaparent', 'kidone']) {
-        const width = await page.locator(row(id) + ' .sbn').evaluate(e => e.getBoundingClientRect().width);
-        assert.ok(Math.abs(await gap(id) - (8.5 + width)) < 0.1, scheme + ': ' + id + ' count pushes name');
+        assert.equal(await gap(id), 6, scheme + ': ' + id + ' overlaid icon keeps 6px gap');
       }
       const iconX = await left(row('plainrow') + ' .hb');
       assert.ok(Math.abs(await left(row('dotrow') + ' .hb') - iconX) < 0.5, scheme + ': the dot keeps the icon x');
       const kidX = await left(row('kidfour') + ' .rid');
-      assert.ok(await left(row('kidone') + ' .rid') > kidX, scheme + ': child count pushes name');
+      assert.ok(Math.abs(await left(row('kidone') + ' .rid') - kidX) < 0.5, scheme + ': child overlaid icon keeps name x');
       assert.equal(await gap('kidfour'), 6, scheme + ': child no-count gap');
       // Child rows stay one line, badges or not.
       const kidH = await height('kidfour');

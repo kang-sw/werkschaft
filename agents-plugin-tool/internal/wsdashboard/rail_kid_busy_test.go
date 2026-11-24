@@ -86,10 +86,11 @@ func TestRailMarkupKidBusy(t *testing.T) {
 
 // TestRailMarkupAvatarBadges pins a row's line 1 and a parent's second
 // line: the harness icon in its wrap with the question dot (its count read
-// aloud) and the own-subagent count, nothing between the wrap and the name,
-// no robot badge or policy capsule; a parent's toggle (chevron, person,
-// count) opening its second line, an empty message link after it when it
-// has no message; and a child row with no second line, badges or not.
+// aloud) and the own-subagent robot icon (its count in title and aria-label),
+// nothing between the wrap and the name, no .bots badge or policy capsule; a
+// parent's toggle (chevron, person, count) opening its second line, an empty
+// message link after it when it has no message; and a child row with no second
+// line, badges or not.
 func TestRailMarkupAvatarBadges(t *testing.T) {
 	kid := RailRow{ReplyID: "kid", Harness: "pi", Live: true, Child: true, Group: "/w/folder", CountPolicy: 1, OpenAskIDs: "40", Subagents: 1, Message: "child text"}
 	par := RailRow{ReplyID: "par", Harness: "claude", Live: true, HasChildren: true, Children: []RailRow{kid}, KidBusy: 1}
@@ -108,21 +109,21 @@ func TestRailMarkupAvatarBadges(t *testing.T) {
 		return row
 	}
 	for _, want := range []string{
-		`></span><span class="qdot" role="img" aria-label="2 items to answer" title="2 items to answer"></span><span class="sbn" title="3 subagents running">3</span></span><span class="rid">q</span>`,
+		`></span><span class="qdot" role="img" aria-label="2 items to answer" title="2 items to answer"></span><span class="sbn" role="img" title="3 subagents running" aria-label="3 subagents running"><svg class="i" aria-hidden="true"><use href="#i-robot"/></svg></span></span><span class="rid">q</span>`,
 		`<a class="drmsg" href="/s/q" tabindex="-1"><span class="s2">last reply</span></a>`,
 	} {
 		if !strings.Contains(rowOf("q"), want) {
 			t.Errorf("row q lacks %s:\n%s", want, rowOf("q"))
 		}
 	}
-	if row := rowOf("p"); !strings.Contains(row, `<span class="hiw"><span class="hb" data-h="codex"`) || !strings.Contains(row, `></span></span><span class="rid">p</span>`) {
+	if row := rowOf("p"); !strings.Contains(row, `<span class="hiw"><span class="hb" data-h="codex"`) || !strings.Contains(row, `></span></span><span class="rid">p</span>`) || strings.Contains(row, `class="sbn"`) {
 		t.Errorf("a row without badges must keep the bare wrap before its name:\n%s", row)
 	}
 	if row := rowOf("par"); !strings.Contains(row, `<div class="drmeta"><button type="button" class="kidtog" aria-expanded="true"`) ||
 		!strings.Contains(row, `<use href="#i-chev"/></svg><svg class="i" aria-hidden="true"><use href="#i-person"/></svg><span class="kn">1</span></button><sub class="drkwork" title="1 session under this one at work">1</sub><a class="drmsg" href="/s/par" tabindex="-1"></a></div>`) {
 		t.Errorf("the parent's second line is not toggle, working count, empty message link:\n%s", row)
 	}
-	if row := rowOf("kid"); strings.Contains(row, "drmeta") || strings.Contains(row, "drmsg") || !strings.Contains(row, `aria-label="1 item to answer"`) || !strings.Contains(row, `<span class="sbn" title="1 subagents running">1</span>`) {
+	if row := rowOf("kid"); strings.Contains(row, "drmeta") || strings.Contains(row, "drmsg") || !strings.Contains(row, `aria-label="1 item to answer"`) || !strings.Contains(row, `<span class="sbn" role="img" title="1 subagents running" aria-label="1 subagents running"><svg class="i" aria-hidden="true"><use href="#i-robot"/></svg></span>`) {
 		t.Errorf("a child row is one line with its badges on the icon:\n%s", row)
 	}
 	for _, want := range []string{
@@ -134,9 +135,27 @@ func TestRailMarkupAvatarBadges(t *testing.T) {
 			t.Errorf("the rail lacks ask-ID attribute %s", want)
 		}
 	}
-	for _, gone := range []string{`class="bots"`, `chip policy`, `#i-robot`} {
+	for _, gone := range []string{`class="bots"`, `chip policy`} {
 		if strings.Contains(html, gone) {
 			t.Errorf("the rail still carries %s", gone)
+		}
+	}
+}
+
+func TestRailSubagentIconCSSContract(t *testing.T) {
+	cssBytes, err := dashboardTestAsset("dashboard-rail.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	for _, want := range []string{
+		`.rail .sbn { position: absolute;`,
+		`top: -4px; right: -4px;`,
+		`background: var(--rs-ground);`,
+		`.rail .hb.sm ~ .sbn {`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard-rail.css lacks %q", want)
 		}
 	}
 }
