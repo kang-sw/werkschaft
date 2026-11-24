@@ -26,7 +26,7 @@ import (
 // (wswhiteboard.RenderRegions); the rest render from the view model
 // (pageview.go).
 
-//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/toast.js assets/confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
+//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
 var dashboardFS embed.FS
 
 // These are ordered source fragments, not independently loaded scripts or
@@ -254,6 +254,9 @@ type pageAssetsData struct {
 	// ConfirmScript handles modal confirmation and installs its Escape handler
 	// before the page shortcuts in every dashboard document.
 	ConfirmScript template.JS
+	// HoldConfirmScript provides the reusable 1.5s press-and-hold confirmation
+	// controller (hold-confirm.js, window.WsHoldConfirm).
+	HoldConfirmScript template.JS
 	// RailScript is the session rail's browser-side state (rail.js,
 	// window.WsRail): per-session drafts, stars, and the rail's own
 	// toggles, which the session page's script uses.
@@ -380,8 +383,9 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		TrackerCSS:       template.CSS(get("tracker.css")),
 		TrackerScript:    template.JS(get("tracker.js")),
 		MentionScript:    template.JS(get("mention.js") + "\n" + get("capsules.js")),
-		ToastScript:      template.JS(get("toast.js")),
-		ConfirmScript:    template.JS(get("confirm.js")),
+		ToastScript:       template.JS(get("toast.js")),
+		ConfirmScript:     template.JS(get("confirm.js")),
+		HoldConfirmScript: template.JS(get("hold-confirm.js")),
 		RailScript:       template.JS(get("rail.js")),
 		MemoScript:       template.JS(get("memo.js")),
 		UsageScript:      template.JS(get("usage.js")),

@@ -23,7 +23,7 @@
   // it is stale); railGate holds the rail swaps back while a press lasts,
   // a row's rename is open, or an op posts.
   var rdrag = null, railSaving = 0, railMinGen = 0;
-  var railGate = WsRail ? WsRail.swapGate(function () { return !!rdrag || railEditing() || railSaving > 0; }) : null;
+  var railGate = WsRail ? WsRail.swapGate(function () { return !!rdrag || railEditing() || railSaving > 0 || !!(window.WsHoldConfirm && window.WsHoldConfirm.isHolding()); }) : null;
   var RAIL_WIDE = window.matchMedia ? window.matchMedia("(min-width: 1600px)") : null;
   var RAIL_SCROLL_KEY = "ws.dashboard.railscroll";
   var RENAME_NEW = "ws.dashboard.renameNew", renameNewFrame = null;
@@ -91,6 +91,10 @@
       var row = b.closest(".rs");
       b.classList.toggle("busy", !!archBusy && !!row && row.getAttribute("data-rid") === archBusy);
     });
+    q(".drstop", r).forEach(function (b) {
+      var row = b.closest(".rs");
+      b.classList.toggle("busy", !!stopBusy && !!row && row.getAttribute("data-rid") === stopBusy);
+    });
     if (usageGutter) usageGutter.sync();
     admissionSync();
     railPopSync();
@@ -130,7 +134,7 @@
   // railRefocus puts it back on the new row after the swap, unless the
   // focus went elsewhere meanwhile. A keyboard move (Alt and an arrow)
   // lands its swap on the row it moved, so the next key still finds it.
-  var RAIL_FOCUS = [".r-config-gear", ".rl", ".kidtog", ".drren", ".drcopy", ".drarch", ".rrev"];
+  var RAIL_FOCUS = [".r-config-gear", ".rl", ".kidtog", ".drren", ".drcopy", ".drstop", ".drarch", ".rrev"];
   function railFocus() {
     var a = doc.activeElement, row = a && railEl && WsRail && railEl.contains(a) && a.closest ? a.closest(".rs") : null;
     if (!row) return null;
@@ -532,6 +536,15 @@
       });
       WsRail.topWatch(topEl);
     }
+    if (window.WsHoldConfirm) {
+      window.WsHoldConfirm.delegate(railEl, ".drstop", {
+        mode: "radial",
+        shouldHold: function (el) { return el.getAttribute("data-safe") !== "1"; },
+        canStart: function (el) { return !el.disabled && !el.classList.contains("busy") && root.hasAttribute("data-sysopen"); },
+        onConfirm: function (el) { railStop(el); railRelease(); },
+        onCancel: function () { railRelease(); }
+      });
+    }
     railEl.addEventListener("click", function (e) {
       var t = e.target;
       var gear = t.closest && t.closest("[data-scope-entry]");
@@ -600,6 +613,11 @@
       if (fold) {
         e.preventDefault();
         if (railSets) WsRail.foldPick(railSets, fold);
+        return;
+      }
+      var stopBtn = t.closest && t.closest(".drstop");
+      if (stopBtn) {
+        e.preventDefault();
         return;
       }
       var arch = t.closest && t.closest(".drarch");

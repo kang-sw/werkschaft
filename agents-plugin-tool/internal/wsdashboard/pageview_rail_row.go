@@ -82,9 +82,13 @@ type RailRow struct {
 	Message string
 	User    bool
 	// Hosted marks a lead session the daemon spawned and feeds
-	// (Registration.Hosted).
-	Hosted bool
-	Exit   *HostExit
+	// (Registration.Hosted). HasProcess reports a live backend process on a
+	// hosted row; SafeStop reports whether stopping it now is safe (idle,
+	// holder-backed, no active descendants or native subagents).
+	Hosted     bool
+	HasProcess bool
+	SafeStop   bool
+	Exit       *HostExit
 	// Approval is the tool approval a live hosted session waits on, which
 	// the dashboard answers; nil when it waits on none.
 	Approval *ApprovalWait
@@ -262,26 +266,41 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		}
 	}
 	snap := in.Snapshot
-	if snap == nil {
-		return row
-	}
-	row.LastTool = lastToolAt(snap.Lead)
-	if row.Exit == nil && lifecycle != SessionStopped && adapterPresent(snap, now) {
-		row.Working = leadWorking(snap.Lead.Phase)
-		row.permission = snap.Lead.Phase == wslive.PhasePermission
-		row.Subagents = levelOneRunning(snap.Agents)
-		for _, a := range snap.Agents {
-			if a.Status == wslive.StatusRunning {
-				row.runningAgents++
+	if snap != nil {
+		row.LastTool = lastToolAt(snap.Lead)
+		if row.Exit == nil && lifecycle != SessionStopped && adapterPresent(snap, now) {
+			row.Working = leadWorking(snap.Lead.Phase)
+			row.permission = snap.Lead.Phase == wslive.PhasePermission
+			row.Subagents = levelOneRunning(snap.Agents)
+			for _, a := range snap.Agents {
+				if a.Status == wslive.StatusRunning {
+					row.runningAgents++
+				}
+			}
+			bg, mon := taskBadgeCounts(snap)
+			row.BackgroundTasks = bg + mon
+			if live {
+				row.Approval = approvalWait(reg, snap)
+			}
+			if snap.Host != nil {
+				row.Failure = snap.Host.Failure
 			}
 		}
-		bg, mon := taskBadgeCounts(snap)
-		row.BackgroundTasks = bg + mon
-		if live {
-			row.Approval = approvalWait(reg, snap)
+	}
+	if reg.Hosted && live {
+		if in.AgentMeta != nil {
+			if meta, found := in.AgentMeta.SessionMeta(reg.ReplyID); found {
+				row.HasProcess = meta.HasProcess
+				row.SafeStop = meta.SafeStop
+			}
+		} else if !reg.HostStopped {
+			// Conservative fallback when no AgentSessionMetaHost is wired (e.g.
+			// lightweight dashboard fixtures): treat an active hosted row as
+			// having a process, never assuming safe-stop without holder proof.
+			row.HasProcess = true
 		}
-		if snap.Host != nil {
-			row.Failure = snap.Host.Failure
+		if row.SafeStop && (!row.HasProcess || row.runningAgents > 0 || row.Working || row.permission || row.Approval != nil || row.BackgroundTasks > 0 || row.OwnExecJobs > 0) {
+			row.SafeStop = false
 		}
 	}
 	return row

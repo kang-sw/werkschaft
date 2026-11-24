@@ -37,7 +37,7 @@ func (a *dashboardAssets) buildFrameFiles() {
 		string(d.ConfirmScript),
 		string(d.AnswersScript),
 		"window.wbForm = function () {\n" + string(d.FormScript) + "};\nwindow.wbMermaid = function () {\n" + string(d.MermaidInit) + "};\nwindow.wbMermaidFile = " + string(mermaid) + ";",
-		string(d.ViewerScript), string(d.ToastScript), string(d.TrackerScript),
+		string(d.ViewerScript), string(d.ToastScript), string(d.HoldConfirmScript), string(d.TrackerScript),
 		string(d.MentionScript), string(d.RailScript), string(d.MemoScript),
 		string(d.UsageScript), string(d.ShellScript), string(d.CardsScript),
 		string(d.OverviewScript), string(d.PreviewScript), string(d.FilesScript),
