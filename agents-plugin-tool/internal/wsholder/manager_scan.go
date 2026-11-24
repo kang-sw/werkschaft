@@ -7,8 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// scanConcurrency bounds parallel holder descriptor reads, attaches, and dead
+// holder cleanups during Manager.scan so one stalled or reused-PID holder
+// cannot block all others.
+const scanConcurrency = 8
+
+type scanEntryResult struct {
+	id         string
+	seen       bool
+	incomplete bool
+}
 
 // Scanning the holders directory and attaching to holders: scan, cleanup, attach, and event delivery.
 
@@ -36,59 +49,41 @@ func (m *Manager) scan() {
 		}
 		dirs = nil
 	}
-	seen := map[string]bool{}
+	valid := make([]string, 0, len(dirs))
 	for _, d := range dirs {
 		id := d.Name()
 		if !d.IsDir() || !ValidID(id) {
 			continue
 		}
-		dir := filepath.Join(m.opts.Dir, id)
-		desc, err := ReadDescriptor(dir)
-		if err != nil {
-			info, statErr := os.Stat(dir)
-			// A directory gone meanwhile is a holder that exited.
-			removed := errors.Is(statErr, os.ErrNotExist)
-			// Only a directory with no descriptor at all is an orphan to
-			// clear once aged; one whose descriptor exists but does not read
-			// or is invalid may still belong to a live holder, so it stays
-			// and keeps the listing incomplete.
-			missing := errors.Is(err, os.ErrNotExist)
-			if statErr == nil && missing && time.Since(info.ModTime()) > orphanDirGrace {
-				removed = os.RemoveAll(dir) == nil
-			}
-			if !removed {
-				// A holder may run here whose registration did not read.
-				incomplete = true
-			}
-			continue
+		valid = append(valid, id)
+	}
+	results := make([]scanEntryResult, len(valid))
+	if len(valid) > 0 {
+		workers := min(scanConcurrency, len(valid))
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				for {
+					idx := int(next.Add(1) - 1)
+					if idx >= len(valid) {
+						return
+					}
+					results[idx] = m.scanOne(valid[idx])
+				}
+			}()
 		}
-		seen[id] = true
-		m.mu.Lock()
-		e := m.entries[id]
-		attached := e != nil && e.client != nil && e.desc.PID == desc.PID && e.desc.Port == desc.Port
-		m.mu.Unlock()
-		if attached {
-			continue
+		wg.Wait()
+	}
+	seen := make(map[string]bool, len(results))
+	for _, res := range results {
+		if res.seen {
+			seen[res.id] = true
 		}
-		if !m.opts.alive(desc.PID) {
-			m.logf("holder %s (pid %d) is gone; removing its descriptor", id, desc.PID)
-			if m.cleanup(desc, "unknown") == nil {
-				seen[id] = false
-			}
-			continue
-		}
-		// A holder that died without removing its directory (a reboot, a
-		// kill) leaves a descriptor whose PID the OS hands to another
-		// process. Nothing could ever stop that entry, since the guarded
-		// kill rightly refuses the stranger, so it is cleared here. Both
-		// signs are required: a start mismatch alone is not proof on an OS
-		// matched by wall clock, and a live holder answers its endpoint.
-		if err := m.attach(desc); err != nil && attachCause(err) == CauseNoAnswer && !errors.Is(err, ErrDetached) &&
-			errors.Is(m.sameProcess(desc), ErrStartTimeMismatch) {
-			m.logf("holder %s is gone and pid %d belongs to another process; removing its descriptor", id, desc.PID)
-			if m.cleanup(desc, "unknown") == nil {
-				seen[id] = false
-			}
+		if res.incomplete {
+			incomplete = true
 		}
 	}
 	// A holder whose directory vanished stays while attached (it rewrites
@@ -101,6 +96,53 @@ func (m *Manager) scan() {
 	}
 	m.incomplete = incomplete
 	m.mu.Unlock()
+}
+
+func (m *Manager) scanOne(id string) scanEntryResult {
+	dir := filepath.Join(m.opts.Dir, id)
+	desc, err := ReadDescriptor(dir)
+	if err != nil {
+		info, statErr := os.Stat(dir)
+		// A directory gone meanwhile is a holder that exited.
+		removed := errors.Is(statErr, os.ErrNotExist)
+		// Only a directory with no descriptor at all is an orphan to
+		// clear once aged; one whose descriptor exists but does not read
+		// or is invalid may still belong to a live holder, so it stays
+		// and keeps the listing incomplete.
+		missing := errors.Is(err, os.ErrNotExist)
+		if statErr == nil && missing && time.Since(info.ModTime()) > orphanDirGrace {
+			removed = os.RemoveAll(dir) == nil
+		}
+		return scanEntryResult{id: id, incomplete: !removed}
+	}
+	m.mu.Lock()
+	e := m.entries[id]
+	attached := e != nil && e.client != nil && e.desc.PID == desc.PID && e.desc.Port == desc.Port
+	m.mu.Unlock()
+	if attached {
+		return scanEntryResult{id: id, seen: true}
+	}
+	if !m.opts.alive(desc.PID) {
+		m.logf("holder %s (pid %d) is gone; removing its descriptor", id, desc.PID)
+		if m.cleanup(desc, "unknown") == nil {
+			return scanEntryResult{id: id, seen: false}
+		}
+		return scanEntryResult{id: id, seen: true}
+	}
+	// A holder that died without removing its directory (a reboot, a
+	// kill) leaves a descriptor whose PID the OS hands to another
+	// process. Nothing could ever stop that entry, since the guarded
+	// kill rightly refuses the stranger, so it is cleared here. Both
+	// signs are required: a start mismatch alone is not proof on an OS
+	// matched by wall clock, and a live holder answers its endpoint.
+	if err := m.attach(desc); err != nil && attachCause(err) == CauseNoAnswer && !errors.Is(err, ErrDetached) &&
+		errors.Is(m.sameProcess(desc), ErrStartTimeMismatch) {
+		m.logf("holder %s is gone and pid %d belongs to another process; removing its descriptor", id, desc.PID)
+		if m.cleanup(desc, "unknown") == nil {
+			return scanEntryResult{id: id, seen: false}
+		}
+	}
+	return scanEntryResult{id: id, seen: true}
 }
 
 // cleanup persists an available exit before removing the holder directory.
@@ -137,8 +179,77 @@ func (m *Manager) cleanup(desc Descriptor, fallback string) error {
 		m.logf("holder %s: remove directory: %v", desc.ID, err)
 		return err
 	}
+	// If the holder died abruptly without delivering a protocol "exit" frame,
+	// emit a synthetic exit once before forgetting the entry so consumers
+	// settle instead of staying wedged as running. Never emit during Close.
+	var sinks []Sink
+	emitExit := false
+	m.mu.Lock()
+	if !m.closed {
+		if e := m.entries[desc.ID]; e != nil && !e.exitDelivered {
+			e.exitDelivered = true
+			e.child.State, e.child.ExitCode, e.child.Signal = "exited", exit.ExitCode, exit.Signal
+			sinks = m.sinks
+			emitExit = true
+		}
+	}
+	m.mu.Unlock()
+	if emitExit {
+		ev := Event{
+			Event:    "exit",
+			ExitCode: exit.ExitCode,
+			Signal:   exit.Signal,
+			Reason:   exit.Reason,
+		}
+		for _, sink := range sinks {
+			sink.HolderEvent(desc.ID, ev)
+		}
+	}
 	m.forget(desc.ID)
 	return nil
+}
+
+// handleDisconnect reacts promptly to a dropped holder connection without
+// waiting for the periodic rescan. A live holder stays detached and
+// reattachable; a dead PID is cleaned up under opMu so sinks receive a
+// synthetic exit when no protocol exit frame arrived. A brief bounded recheck
+// handles OS process teardown where the socket closes milliseconds before the
+// PID leaves the process table.
+func (m *Manager) handleDisconnect(desc Descriptor) {
+	const (
+		deadRecheckAttempts = 4
+		deadRecheckInterval = 25 * time.Millisecond
+	)
+	for attempt := 0; ; attempt++ {
+		if m.isClosed() {
+			return
+		}
+		if !m.opts.alive(desc.PID) {
+			break
+		}
+		if attempt >= deadRecheckAttempts {
+			return
+		}
+		select {
+		case <-m.stop:
+			return
+		case <-time.After(deadRecheckInterval):
+		}
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if m.isClosed() || m.opts.alive(desc.PID) {
+		return
+	}
+	m.mu.Lock()
+	e := m.entries[desc.ID]
+	stale := e == nil || e.client != nil || e.desc.PID != desc.PID
+	m.mu.Unlock()
+	if stale {
+		return
+	}
+	m.logf("holder %s (pid %d) disconnected and is gone; removing its descriptor", desc.ID, desc.PID)
+	_ = m.cleanup(desc, "unknown")
 }
 
 func (m *Manager) isClosed() bool {
@@ -228,11 +339,16 @@ func (m *Manager) attach(desc Descriptor) error {
 	m.logf("attached to holder %s (pid %d, protocol %d)", id, desc.PID, info.Protocol)
 	go func() {
 		<-client.Done()
+		shouldCheckDead := false
 		m.mu.Lock()
 		if e.client == client {
 			e.client, e.cause, e.audit = nil, CauseNoAnswer, Event{}
+			shouldCheckDead = !m.closed
 		}
 		m.mu.Unlock()
+		if shouldCheckDead {
+			m.handleDisconnect(desc)
+		}
 	}()
 	if _, _, err := client.Replay(from); err != nil {
 		client.Close()
@@ -255,6 +371,7 @@ func (m *Manager) event(id string, ev Event) {
 			if ev.Seq > e.lastSeq {
 				e.lastSeq = ev.Seq
 			}
+			e.exitDelivered = true
 			e.child.State, e.child.ExitCode, e.child.Signal = "exited", ev.ExitCode, ev.Signal
 		case "gap":
 			// Only records this process never received are lost: a

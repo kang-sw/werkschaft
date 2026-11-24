@@ -397,14 +397,19 @@ type conv struct {
 	// sends the running turn's messages covered, and reply its last reply
 	// text; all three loop-owned. quitting is set at the daemon's
 	// shutdown, whose cut-off turn the next daemon reports instead.
-	sends    uint64
-	settled  TurnResult
-	settleC  chan struct{}
-	voided   uint64
-	drained  uint64
-	turnMark uint64
-	reply    string
-	quitting bool
+	// quitting is set at the daemon's shutdown, whose cut-off turn the next
+	// daemon reports instead. kickDeferred marks a processless conversation
+	// whose start kick was deferred until StartForPublication's serving channel
+	// closes.
+	sends        uint64
+	settled      TurnResult
+	settleC      chan struct{}
+	voided       uint64
+	drained      uint64
+	turnMark     uint64
+	reply        string
+	quitting     bool
+	kickDeferred atomic.Bool
 
 	// wmu orders the record writes of update, which other conversations'
 	// goroutines also make (children.go takes a delivered report).
@@ -1701,6 +1706,9 @@ type nativeLaunchForgetter interface {
 // it, which each turn end submits; mail waits for the next message turn, or
 // goes alone once nothing is queued.
 func (c *conv) canKick() bool {
+	if c.proc == nil && !c.r.publicationReady() {
+		return false
+	}
 	durable := c.r.durableProcess(c.rec.Backend)
 	if durable && (c.r.durableStopping.Load() || !c.r.startupReady() || c.r.exec.deferred.Load() && !c.r.exec.bound.Load()) {
 		return false
@@ -1710,7 +1718,21 @@ func (c *conv) canKick() bool {
 		!(c.r.opts.Holders != nil && !c.r.scanDone())
 }
 
+// hasPendingKick reports from in-memory state whether a processless
+// conversation has queued work waiting to kick once serving opens.
+func (c *conv) hasPendingKick() bool {
+	c.mu.Lock()
+	held := c.held
+	c.mu.Unlock()
+	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
+		c.rec.DurableTurn != nil || c.kickDeferred.Load()
+}
+
 func (c *conv) kick() {
+	if c.proc == nil && !c.r.publicationReady() {
+		c.kickDeferred.Store(true)
+		return
+	}
 	if !c.canKick() {
 		return
 	}

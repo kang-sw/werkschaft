@@ -63,20 +63,22 @@ func (r *Runner) SetAuditSink(sink wsaudit.Sink) { r.opts.AuditSink = sink }
 // each write to a conversation's stores, so the daemon re-reads it. The
 // daemon calls Start once it holds its lock.
 func (r *Runner) Start(notify func(replyID, project string)) {
-	r.start(notify)
+	r.startWithServing(notify, nil)
 	r.hydrateClosedRows()
 }
 
 // StartForPublication waits for held-session recovery before the daemon
-// publishes its endpoint. Closed presentations hydrate once it accepts requests.
+// publishes its endpoint. Deferred processless kicks and closed presentations
+// run once it accepts requests.
 func (r *Runner) StartForPublication(notify func(replyID, project string), serving <-chan struct{}) {
-	r.start(notify)
+	r.startWithServing(notify, serving)
 	<-r.rejoined
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		select {
 		case <-serving:
+			r.kickAfterServing()
 			r.hydrateClosedRows()
 		case <-r.quit:
 		}
@@ -84,12 +86,13 @@ func (r *Runner) StartForPublication(notify func(replyID, project string), servi
 }
 
 // Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
-func (r *Runner) start(notify func(replyID, project string)) {
+func (r *Runner) startWithServing(notify func(replyID, project string), serving <-chan struct{}) {
 	r.reloadProviderConfig()
 	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()
 	r.startupLoaded = startupLoaded
+	r.serving = serving
 	r.startupMu.Unlock()
 	if notify != nil {
 		r.notify = notify
@@ -241,6 +244,48 @@ func (r *Runner) startupReady() bool {
 	}
 }
 
+// publicationReady reports whether new process launches may dial the daemon's
+// published endpoint. Plain Start sets no serving channel, so it is true at
+// once; StartForPublication gates processless launches until serving closes.
+func (r *Runner) publicationReady() bool {
+	if r == nil {
+		return true
+	}
+	r.startupMu.RLock()
+	serving := r.serving
+	r.startupMu.RUnlock()
+	if serving == nil {
+		return true
+	}
+	select {
+	case <-serving:
+		return true
+	default:
+		return false
+	}
+}
+
+// kickAfterServing wakes conversations whose processless start kick was
+// deferred until the daemon published its endpoint and started accepting.
+func (r *Runner) kickAfterServing() {
+	r.mu.Lock()
+	convs := make([]*conv, 0, len(r.convs))
+	for _, c := range r.convs {
+		convs = append(convs, c)
+	}
+	r.mu.Unlock()
+	for _, c := range convs {
+		select {
+		case <-r.quit:
+			return
+		default:
+		}
+		if c.kickDeferred.Swap(false) {
+			c.signalInbox()
+		}
+	}
+}
+
 // loadClosed lists closed (or handed-off) record rec at Start.
 func (r *Runner) loadClosed(rec Record) {
 	r.mu.Lock()
@@ -371,7 +416,14 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 			}
 			if c.proc == nil {
 				// A start kick put off until the scan (a rejoin that failed).
-				c.kick()
+				// During StartForPublication, never start a fresh harness CLI
+				// before endpoint publication (<-serving) and finishMCPRejoin;
+				// defer pending kicks until kickAfterServing wakes them.
+				if r.publicationReady() {
+					c.kick()
+				} else if c.hasPendingKick() {
+					c.kickDeferred.Store(true)
+				}
 			}
 			if id := c.rec.HolderID; id != "" {
 				owned[id] = true
