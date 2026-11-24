@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -127,10 +128,12 @@ func (s *Store) MigrateLegacy() error {
 // never holds what the file does not. While a daemon runs, its Store is the
 // file's only writer (see the package doc).
 type Store struct {
-	localProviders atomic.Pointer[[]Provider]
-	localRevision  atomic.Uint64
-	path           string
-	now            func() time.Time
+	localProviders       atomic.Pointer[[]Provider]
+	localRevision        atomic.Uint64
+	openRouterGeneration uint64            // guarded by mu; changes on key and verification publication
+	openRouterTransport  http.RoundTripper // tests only; production uses the fixed HTTPS transport
+	path                 string
+	now                  func() time.Time
 
 	// openAIMu serializes OpenAI changes and refreshes. Always acquire it
 	// before mu. The browser wait and ordinary credential reads hold neither.
@@ -211,19 +214,21 @@ type ChangeResult struct {
 // ProviderStatus is a provider's display state; it never carries a secret,
 // only its masked form.
 type ProviderStatus struct {
-	Provider       ProviderID            `json:"provider"`
-	Name           string                `json:"name"`
-	Kind           Kind                  `json:"kind"`
-	Configured     bool                  `json:"configured"`
-	Masked         string                `json:"masked,omitempty"`
-	UpdatedAt      string                `json:"updated_at,omitempty"`
-	OpenAIAccounts []OpenAIAccountStatus `json:"accounts,omitempty"`
+	Verification   *OpenRouterVerificationStatus `json:"verification,omitempty"`
+	Provider       ProviderID                    `json:"provider"`
+	Name           string                        `json:"name"`
+	Kind           Kind                          `json:"kind"`
+	Configured     bool                          `json:"configured"`
+	Masked         string                        `json:"masked,omitempty"`
+	UpdatedAt      string                        `json:"updated_at,omitempty"`
+	OpenAIAccounts []OpenAIAccountStatus         `json:"accounts,omitempty"`
 }
 
 type apiKeyEntry struct {
-	Kind      Kind   `json:"kind"`
-	APIKey    string `json:"api_key"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	Verification *openRouterVerification `json:"verification,omitempty"`
+	Kind         Kind                    `json:"kind"`
+	APIKey       string                  `json:"api_key"`
+	UpdatedAt    string                  `json:"updated_at,omitempty"`
 }
 
 // document is the file's content: the members this version knows, decoded,
@@ -427,6 +432,10 @@ func (s *Store) statusLocked(p Provider) ProviderStatus {
 	}
 	if entry, ok := s.keys[p.keyID()]; p.Kind == KindAPIKey && ok {
 		status.Configured, status.Masked, status.UpdatedAt = true, Mask(p, entry.APIKey), entry.UpdatedAt
+		if p.ID == ProviderOpenRouter {
+			v := entry.verificationStatus()
+			status.Verification = &v
+		}
 	}
 	return status
 }
@@ -507,6 +516,9 @@ func (s *Store) writeLocked(next document) error {
 	}
 	published, err := writePrivateFile(s.path, data, replaceCredentialFile, s.writeStep)
 	if published {
+		if string(s.doc.providers[string(ProviderOpenRouter)]) != string(next.providers[string(ProviderOpenRouter)]) {
+			s.openRouterGeneration++
+		}
 		s.useDocumentLocked(next)
 	}
 	if err != nil {
