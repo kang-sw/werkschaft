@@ -311,6 +311,9 @@ func (r *Runner) loadClosed(rec Record) {
 	defer r.mu.Unlock()
 	r.closed[rec.ReplyID] = rec
 	r.indexChildLocked(rec)
+	if closure := rec.DeadBindingClosure; rec.ClosedAt != "" && closure != nil && closure.Reason != "" {
+		r.rememberDeadRefusalLocked(rec.ReplyID, &admissionRefusal{reason: closure.Reason, checkout: closure.Checkout})
+	}
 }
 
 // Hydration reads retained evidence outside the runner lock. A concurrent

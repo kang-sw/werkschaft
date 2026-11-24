@@ -30,8 +30,14 @@ func stampClosed(rec *Record, now time.Time) {
 	rec.TurnOpen = false
 }
 
-func closeDeadRecord(rec *Record, now time.Time) {
+type deadBindingClosure struct {
+	Reason   string `json:"reason"`
+	Checkout string `json:"checkout,omitempty"`
+}
+
+func closeDeadRecord(rec *Record, now time.Time, refusal *admissionRefusal) {
 	stampClosed(rec, now)
+	rec.DeadBindingClosure = &deadBindingClosure{Reason: refusal.reason, Checkout: refusal.checkout}
 	if rec.DurableTurn != nil {
 		rec.DurableClosedTurnID = rec.DurableTurn.ID
 	}
@@ -61,7 +67,7 @@ func (c *conv) closeDeadAfterRefusal(refusal *admissionRefusal) {
 func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	c.wmu.Lock()
 	rec := c.record()
-	closeDeadRecord(&rec, c.r.opts.Now())
+	closeDeadRecord(&rec, c.r.opts.Now(), refusal)
 	if rec.HolderID == "" {
 		if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
 			c.wmu.Unlock()
@@ -168,10 +174,7 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.deadRefusals == nil {
-		r.deadRefusals = make(map[string]*admissionRefusal)
-	}
-	r.deadRefusals[rec.ReplyID] = refusal
+	r.rememberDeadRefusalLocked(rec.ReplyID, refusal)
 	if rec.HolderID == "" && !process {
 		return
 	}
@@ -179,6 +182,13 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 		r.deadBindings = make(map[string]deadBindingOccupancy)
 	}
 	r.deadBindings[rec.ReplyID] = deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout}
+}
+
+func (r *Runner) rememberDeadRefusalLocked(id string, refusal *admissionRefusal) {
+	if r.deadRefusals == nil {
+		r.deadRefusals = make(map[string]*admissionRefusal)
+	}
+	r.deadRefusals[id] = refusal
 }
 
 func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []retiredPiBinding {
@@ -252,7 +262,7 @@ func (r *Runner) discardDeadClaims(inbox string, rec Record) {
 
 func (r *Runner) closeDeadAtStart(rec Record, refusal *admissionRefusal, binding resolvedAgentBinding) {
 	now := r.opts.Now()
-	closeDeadRecord(&rec, now)
+	closeDeadRecord(&rec, now, refusal)
 	r.rememberDeadBinding(rec, binding.root, binding.cwd, refusal, false)
 	r.loadClosed(rec)
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
