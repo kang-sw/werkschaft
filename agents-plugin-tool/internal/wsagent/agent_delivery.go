@@ -344,8 +344,10 @@ func (r *Runner) deleteSessionRecord(rec Record) bool {
 // expiredAtStart picks the open spawned children a daemon start deletes
 // instead of serving, deepest first: each quiet (no turn open or held, no
 // input) past its expiry whose descendants are all quiet, with those
-// descendants. A child whose input waits on a refused wake is not quiet
-// here; its loop's heartbeat deletes it once its start is refused again.
+// descendants. An open descendant beyond a closed bridge blocks the cascade
+// and is evaluated separately against its own expiry. A child whose input
+// waits on a refused wake is not quiet here; its loop's heartbeat deletes it
+// once its start is refused again.
 func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal) []string {
 	now := r.opts.Now()
 	expiry := r.childWaitingExpiry()
@@ -381,20 +383,25 @@ func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal
 			rec.Sends <= mark && len(rec.Queued)+len(rec.Mail)+len(rec.Reports)+len(rec.Steered)+len(rec.PendingReports) == 0
 	}
 	seen := map[string]bool{}
-	var subtree func(id string, out *[]string) bool
-	subtree = func(id string, out *[]string) bool {
+	var subtree func(id string, out *[]string, throughClosed bool) bool
+	subtree = func(id string, out *[]string, throughClosed bool) bool {
 		if seen[id] {
 			return false
 		}
 		seen[id] = true
-		ok := true
-		for _, k := range children(byID[id]) {
-			ok = subtree(k, out) && (closedIDs[k] || quiet(byID[k])) && ok
+		closed := closedIDs[id]
+		if !closed && (throughClosed || !quiet(byID[id])) {
+			return false
 		}
-		if !closedIDs[id] {
+		for _, k := range children(byID[id]) {
+			if !subtree(k, out, throughClosed || closed) {
+				return false
+			}
+		}
+		if !closed {
 			*out = append(*out, id)
 		}
-		return ok
+		return true
 	}
 	var out []string
 	var visit func(id string)
@@ -403,7 +410,7 @@ func (r *Runner) expiredAtStart(open []Record, dead map[string]*admissionRefusal
 		if at := lastActive(rec); !closedIDs[id] && quiet(rec) && !at.IsZero() && now.Sub(at) >= expiry {
 			var tree []string
 			saved := maps.Clone(seen)
-			if subtree(id, &tree) {
+			if subtree(id, &tree, false) {
 				out = append(out, tree...)
 				return
 			}

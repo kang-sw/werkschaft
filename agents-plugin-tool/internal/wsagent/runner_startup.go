@@ -325,11 +325,18 @@ func (r *Runner) expireBeforeServing(open []Record, dead map[string]*admissionRe
 
 // loadClosed lists closed (or handed-off) record rec at Start.
 func (r *Runner) loadClosed(rec Record) {
+	closure := rec.DeadBindingClosure
+	dead := rec.ClosedAt != "" && closure != nil && closure.Reason != ""
+	if dead && rec.HolderID != "" {
+		// A retained release closure can reach disk while its detached
+		// holder still owns the running process. Leave it to the holder.
+		r.holders.reject(rec.HolderID)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed[rec.ReplyID] = rec
 	r.indexChildLocked(rec)
-	if closure := rec.DeadBindingClosure; rec.ClosedAt != "" && closure != nil && closure.Reason != "" {
+	if dead {
 		r.rememberDeadRefusalLocked(rec.ReplyID, &admissionRefusal{reason: closure.Reason, checkout: closure.Checkout})
 	}
 }

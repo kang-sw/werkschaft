@@ -177,21 +177,26 @@ func TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop(t *testing.T) {
 }
 
 func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
-	for _, liveLeaf := range []bool{true, false} {
-		name := "without open grandchild"
-		if liveLeaf {
-			name = "with an open turn below the bridge"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		leafAge  time.Duration
+		turnOpen bool
+	}{
+		{name: "open turn below the bridge", leafAge: 3 * day, turnOpen: true},
+		{name: "young idle leaf below the bridge", leafAge: time.Hour},
+		{name: "without open grandchild"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			h, clk := expiryHarness(t)
 			h.runner.Close()
 			old := clk.Now().Add(-3 * day).Format(time.RFC3339)
-			write := func(id string, parent ParentRef, closed, turnOpen bool) {
+			write := func(id string, parent ParentRef, age time.Duration, closed, turnOpen bool) {
 				t.Helper()
 				rec := Record{
 					ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
 					SpawnerBackend: BackendClaude, Parent: &parent,
 					Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
+					LastActiveAt: clk.Now().Add(-age).Format(time.RFC3339),
 				}
 				if closed {
 					rec.ClosedAt = old
@@ -200,13 +205,13 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			write("ancestor", leadParent, false, false)
-			write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, true, false)
-			if liveLeaf {
-				write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, false, true)
+			write("ancestor", leadParent, 3*day, false, false)
+			write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, 3*day, true, false)
+			if tc.leafAge != 0 {
+				write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, tc.leafAge, false, tc.turnOpen)
 			}
 			h.start()
-			if !liveLeaf {
+			if tc.leafAge == 0 {
 				if !gone(h, "ancestor") || h.runner.conv("ancestor") != nil {
 					t.Fatal("expired ancestor without an open grandchild survived startup")
 				}

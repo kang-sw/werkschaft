@@ -815,3 +815,33 @@ Critical or Important findings (`a6ce06ae-01-findings.md`).
 
 The ticket lease and commits use the branch assigned by the lead.
 Ticket closure and daemon replacement remain with the lead.
+
+#### Edition (8664625a7) - 2026-11-25
+
+- Startup expiry uses closed workers as ancestry links. An open worker below
+  a closed bridge blocks the ancestor's cascade and is evaluated against its
+  own expiry. The replacement-runner test preserves a one-hour-old idle leaf
+  under the two-day TTL. The open-turn leaf still protects the ancestor, and
+  the no-leaf control still expires it.
+- When startup restores a durable dead-binding closure, it also restores the
+  detached holder's exemption from the orphan sweep. Both dashboard
+  delete-and-replacement tests verify that the holder is running after the
+  sweep, the worker remains closed with its grandchild linked, and mail
+  receives the release refusal. This includes the delete during release
+  publication.
+
+Both regressions reproduced in all three runs on `e5f01c5ae` and passed
+in all three runs with the fix. The changes use the existing
+`DeadBindingClosure` and `HolderID` in `record.go` and add zero file
+operations to startup. The independent lite review of
+`e5f01c5ae..8664625a7` found no Critical or Important issues
+(`9a6f7b9d-01-findings.md`).
+
+- Passed `go build ./cmd/...`.
+- Passed `go test -race ./internal/wsagent -run '^Test(SafeStop|SafeOnlyStop|WerkCron|Forget|DeadBinding|Expir|Orphan|Holder)' -count=3`.
+- Passed `go test ./internal/wsagent -parallel 1 -skip '^(TestAgyWorkerRetirementRestartsTheExpiryClock|TestAgyParentedWorkerRecordWakesStampedOrFromItsParent|TestCompactionStateClosedChildKeepsItsCountAcrossARestart)$'`.
+- Passed `go test ./internal/wsdashboard -run 'Worktree.*Delete|RailWorktree|Prune' -count=1`.
+- Passed `GOOS=windows go vet -stdversion=false ./internal/wsagent ./internal/wsdashboard` and `git diff --check`.
+
+The ticket stays in `ready/` and the commits stay on the lead-assigned
+`impl/develop/0520-p8b-fix-forward` branch.
