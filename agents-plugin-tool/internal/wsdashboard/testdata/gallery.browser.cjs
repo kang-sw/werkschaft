@@ -270,7 +270,10 @@ async function routeTerminal(context) {
 
       // The keyboard: Enter on a pin button and on a dot.
       if (await pos(page) !== -1) await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'main board shown before keyboard pin');
+      await topic(page, 'gamma').evaluate(n => window.WsBoardAnchor.select(n, { smooth: false }));
       await bar(page, 'gamma').locator('.tpin').focus();
+      assert.equal(await bar(page, 'gamma').locator('.tpin').evaluate(n => n === document.activeElement), true, 'gamma pin takes keyboard focus');
       await tab.keyboard.press('Enter');
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha"],["gamma"]]', 'Enter on pin docks gamma');
       assert.equal(await active(page), 1);
