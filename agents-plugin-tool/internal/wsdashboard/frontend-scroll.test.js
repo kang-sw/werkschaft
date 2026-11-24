@@ -27,15 +27,16 @@ test('scroll restoration coalesces read phase, keeps owners and pinned conversat
 test('conversation pagination supersedes an older queued WS scroll restoration', () => {
   const frames = [], convo = { isConnected: true, scrollTop: 80, scrollHeight: 1000 };
   const context = { Map, convo, stick: false, requestAnimationFrame(fn) { frames.push(fn); return 1; },
-    window: { addEventListener() {} }, epoch: 1, histEpoch: 1, histBusy: true, box: {},
+    window: { addEventListener() {} }, epoch: 1, histEpoch: 1, histBusy: true, histEnd: false, box: {}, prevOldestAt: '',
     frag: html => html, mergeEntries() { convo.scrollHeight += 1500; return []; },
-    sweepOutImgs() {}, mermaid() {}, nearTop() {}, res: { before: 'e1' }
+    sweepOutImgs() {}, mermaid() {}, emitAuditEvent() {}, nearTop() {}, res: { before: 'e1' }
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('  var scrollRestore ='), source.indexOf('  // The conversation stays')) + '\nrestoreScroll([[convo, 80]]);', context);
   const conversation = fs.readFileSync(__dirname + '/assets/dashboard-conversation.js', 'utf8');
   const pagination = conversation.split('}).then(function (res) {')[1].split('    }, function () {')[0];
-  vm.runInContext('(function(){' + pagination + '})()', context);
+  const firstEntry = conversation.slice(conversation.indexOf('  function firstEntryEl('), conversation.indexOf('  function lastEntryEl('));
+  vm.runInContext(firstEntry + '\n(function(){' + pagination + '})()', context);
   assert.equal(convo.scrollTop, 1580);
   frames.shift()();
   assert.equal(convo.scrollTop, 1580);

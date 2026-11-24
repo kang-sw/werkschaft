@@ -277,6 +277,11 @@ test('Part 1 & 2: Designated-Y free-canvas variable heights + native #bcol wheel
       }));
       assert.equal(jumped.key, 't:topic-4', 'synchronous jump selects target card');
       assert.equal(jumped.off, null, 'jumped target card is mounted in active window');
+      await page.evaluate(() => {
+        const col = document.getElementById('bcol');
+        col.scrollTop += document.getElementById('topic-4').offsetHeight + col.clientHeight / 2;
+      });
+      await page.waitForFunction(() => window.WsBoardAnchor.key() !== 't:topic-4');
     } finally {
       await ctx.close();
     }
@@ -330,21 +335,26 @@ test('Part 3: Overview fast exit (0 data-overview-motion tags) + 0 idle rAF whil
       await waitFrames(page, 6);
       const afterExit = await page.evaluate(() => {
         const card = document.getElementById('topic-6');
-        const topStack = document.querySelector('.wb-rail-wrap.up .wb-rail-stack');
-        const topBot = topStack && !topStack.hidden ? topStack.getBoundingClientRect().bottom : 0;
+        const col = document.getElementById('bcol');
+        const rect = col.getBoundingClientRect();
+        const contentTop = rect.top + col.clientTop;
+        const top = contentTop + parseFloat(col.style.getPropertyValue('--wb-rail-inset') || 0) + 44;
+        const bottom = rect.top + col.clientTop + col.clientHeight - 47;
+        const cardRect = card.getBoundingClientRect();
+        const centerOffset = Math.max(0, (bottom - top - cardRect.height) / 2);
         return {
           active: window.WsOverview.active(),
           hasAttr: document.documentElement.hasAttribute('data-overview'),
           key: window.WsBoardAnchor.key(),
           motionTagged: window.__motionTagged,
-          topDelta: +(card.getBoundingClientRect().top - topBot).toFixed(2)
+          topDelta: +(cardRect.top - top - centerOffset).toFixed(2)
         };
       });
       assert.equal(afterExit.active, false);
       assert.equal(afterExit.hasAttr, false);
       assert.equal(afterExit.key, 't:topic-6');
       assert.equal(afterExit.motionTagged, 0, 'snap-deck Overview exit must never tag cards with data-overview-motion');
-      assert.ok(Math.abs(afterExit.topDelta) <= 2, 'non-first card must land with 0px misalignment after fast Overview exit: ' + JSON.stringify(afterExit));
+      assert.ok(Math.abs(afterExit.topDelta) <= 2, 'card must land centered in the unobscured free canvas after fast Overview exit: ' + JSON.stringify(afterExit));
     } finally {
       await ctx.close();
     }

@@ -9,7 +9,7 @@ import (
 // Execute the memory-only pane against the production preview state machine.
 func TestFilesPreviewPane(t *testing.T) {
 	src, _ := json.Marshal(mustAsset(t, "preview.js"))
-	fixture, err := os.ReadFile("testdata/preview-pane.test.cjs")
+	fixture, err := os.ReadFile("testdata/preview-pane.fixture.cjs")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestFilesPreviewPane(t *testing.T) {
 // Execute the production preview renderer, shared by Files and explorer cards.
 func TestFilesPreviewContentRenderer(t *testing.T) {
 	src, _ := json.Marshal(mustAsset(t, "preview.js"))
-	fixture, err := os.ReadFile("testdata/preview-content.test.cjs")
+	fixture, err := os.ReadFile("testdata/preview-content.fixture.cjs")
 	if err != nil {
 		t.Fatal(err)
 	}

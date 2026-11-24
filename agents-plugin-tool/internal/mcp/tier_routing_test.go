@@ -106,7 +106,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	// A cross-harness mapping moves only the daemon caller's binding.
 	setRouting(t, f.s, `{"nodes":{"implement":{"*":"claude.*"}}}`)
 	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, nil))
-	if want := "recommended-tier: claude.medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
+	if want := "recommended-tier: claude.medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: medium"; daemon != want {
 		t.Fatalf("mapped daemon metadata = %q, want %q", daemon, want)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitNative, nil)); native != nativeBaseline {
@@ -115,7 +115,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 
 	// tier_override keeps its bare validation and replaces the role's size.
 	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", codexInitDaemon, map[string]any{"tier_override": "opus"}))
-	if want := "recommended-tier: claude.large\nrecommended-model: opus\nrecommended-reasoning-effort: high"; daemon != want {
+	if want := "recommended-tier: claude.large\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("override daemon metadata = %q, want %q", daemon, want)
 	}
 	resp = callToolOnce(t, f.s, 3, "playbook.render", map[string]any{"name": "role-pb", "session_key": f.leadKey, "tier_override": "ticket-worker:large"})
@@ -246,7 +246,7 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	if got, errText := resolve("discussion"); errText != "" || got.Backend != "agy" || got.Model != "claude-opus-4-6-thinking" || got.ResolvedFrom != "bundle" {
 		t.Fatalf("bundle = %+v %s", got, errText)
 	}
-	if got, errText := resolve("claude.large"); errText != "" || got.Model != "opus" || got.Trace != "claude.large" {
+	if got, errText := resolve("claude.large"); errText != "" || got.Model != "sonnet" || got.Trace != "claude.large" {
 		t.Fatalf("explicit target = %+v %s", got, errText)
 	}
 	// review:xlarge lands on pi.xlarge, whose werk slot is unset: agent.spawn
@@ -293,7 +293,7 @@ func TestFormatAgentTiersRoutingSection(t *testing.T) {
 		Supported: true,
 		Bundles:   []wsagent.AgentRouteEntry{{Tier: "discussion", Trace: "discussion", Harness: "agy", Error: `harness "agy" has no spawnable tier now`}},
 		Routes: []wsagent.AgentRouteEntry{
-			{Tier: "ticket-worker:medium", Trace: "ticket-worker:medium -> implement:medium -> medium -> claude.medium", Model: "sonnet", Effort: "high"},
+			{Tier: "ticket-worker:medium", Trace: "ticket-worker:medium -> implement:medium -> medium -> claude.medium", Model: "sonnet", Effort: "medium"},
 			{Tier: "x:small", Error: "boom"},
 		},
 		Collisions: []string{"alias a -> b shadows bundle a"},
@@ -302,7 +302,7 @@ func TestFormatAgentTiersRoutingSection(t *testing.T) {
 	for _, want := range []string{
 		"routing (agent.tier_routing;",
 		"  discussion: not spawnable now: harness \"agy\" has no spawnable tier now\n",
-		"  ticket-worker:medium -> implement:medium -> medium -> claude.medium: sonnet/high\n",
+		"  ticket-worker:medium -> implement:medium -> medium -> claude.medium: sonnet/medium\n",
 		"  x:small: not spawnable now: boom\n",
 		"  collision: alias a -> b shadows bundle a\n",
 	} {
@@ -353,7 +353,7 @@ func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
 	}
 	setRouting(t, f.s, `{"nodes":{"review":{"*":"claude.*"}}}`)
-	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: claude.large\nrecommended-model: opus") {
+	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: claude.large\nrecommended-model: sonnet") {
 		t.Fatalf("mapped daemon metadata = %q", daemon)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", codexInitNative, nil)); native != nativeBefore {

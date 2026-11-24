@@ -220,7 +220,10 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0, 2]);
         assert.equal(await page.locator('section.topic.closed').count(), 30);
         assert.equal(await page.locator('.closed-more').getAttribute('data-closed-more'), String(closed - 30));
-        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => { n.filterOriginalNode = n; n.filterOriginalFrames = [...n.querySelectorAll('iframe')]; }));
+        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => {
+          n.filterOriginalNode = n;
+          n.filterOriginalFrames = [...n.querySelectorAll('iframe.doc-frame')].map(f => f.dataset.docKey);
+        }));
         const order = await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic));
         for (const value of values) {
           await select(value); await eligible(value);
@@ -228,7 +231,14 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           const shot = await capture(name);
           if (value === 'discussing' || value === 'all') await pair(name, shot, refs[`v1-${theme}-900`]);
           await geometry(name, true);
-          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && n.filterOriginalFrames.every(f => (f.isConnected && n.contains(f)) || n.querySelectorAll('iframe.doc-frame, div.doc-frame').length >= n.filterOriginalFrames.length))), true, 'filter retains nodes and body iframes (or FAR-band placeholders/remounts)');
+          const lost = await page.locator('section.topic').evaluateAll(nodes => nodes.flatMap(n => {
+            if (n.filterOriginalNode !== n) return [n.dataset.topic + ': replaced topic'];
+            const roots = [n, ...window.WsBoardVirtual.searchRoots(n)];
+            const frames = roots.flatMap(root => root.matches('.doc-frame') ? [root] : [...root.querySelectorAll('.doc-frame')]);
+            const keys = new Set(frames.map(f => f.dataset.docKey));
+            return n.filterOriginalFrames.filter(key => !keys.has(key)).map(key => n.dataset.topic + ': ' + key);
+          }));
+          assert.deepEqual(lost, [], `${value}: filter retains topic nodes and frame identities in mounted or detached bodies`);
         }
         await select('all');
         assert.deepEqual(await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), order, 'All restores original order');
@@ -294,8 +304,12 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await select('discussing'); await update(id, 'close', [closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]);
         await eligible('discussing');
         await select('closed');
-        const paging = tab.waitForResponse(r => new URL(r.url()).pathname === `/s/${id}/closed` && r.status() === 200);
-        await page.locator('.closed-more').click(); await paging;
+        // The page control mounts at the end of the free canvas.
+        await page.locator('section.topic.closed').last().evaluate(n => window.WsBoardAnchor.select(n, { smooth: false }));
+        await Promise.all([
+          tab.waitForResponse(r => new URL(r.url()).pathname === `/s/${id}/closed` && r.status() === 200),
+          page.locator('.closed-more').click(),
+        ]);
         await until(async () => await page.locator('section.topic.closed').count() > 30, 'real closed history appended');
         await counts([closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]); await eligible('closed');
         await select('all');

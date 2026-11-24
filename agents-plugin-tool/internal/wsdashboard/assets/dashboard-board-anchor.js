@@ -28,7 +28,7 @@
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   var freePos = new Map(), freeHeightCache = new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0;
+  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null;
 
   // --- windowed O(1) topic body virtualization --------------------------------
   // Far section.topic bodies outside the active free-canvas window (or
@@ -928,6 +928,7 @@
     freeIdleTimer = 0;
   }
   function freeSuspend() {
+    freeJump = null;
     freeCancelTimers();
     freeDeferredCollapse.clear();
     if (freeCardRO) {
@@ -1068,6 +1069,12 @@
     }
     return stageH;
   }
+  function freeShiftScroll(col, delta) {
+    var top = col.scrollTop;
+    var atJump = freeJump && !freeJump.moving && Math.abs(top - freeJump.top) <= 1;
+    col.scrollTop = Math.max(0, top + delta);
+    if (atJump) freeJump.top = col.scrollTop;
+  }
   function freeLayout(opts) {
     opts = opts || {};
     var col = $("bcol"), board = region("board");
@@ -1180,7 +1187,7 @@
       var shift = topPad - ys[0];
       if (Math.abs(shift) >= FREE_RESIZE_EPS) {
         for (var si = start; si <= end; si++) ys[si] += shift;
-        if ((!opts.jump || opts.smooth) && wasActive) col.scrollTop = Math.max(0, col.scrollTop + shift);
+        if ((!opts.jump || opts.smooth) && wasActive) freeShiftScroll(col, shift);
       }
     }
     var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end]);
@@ -1203,7 +1210,8 @@
 
     // Phase E: synchronous jump positioning (center short/medium, top-align tall).
     if (opts.jump) {
-      var topClear = anchorSized.padTop + anchorRailInset(col) + anchorCardCap(list[aIdx], list);
+      // Match the rail's stick line when a tall card lands at the top.
+      var topClear = anchorRailInset(col) + anchorCardCap(list[aIdx], list);
       var botClear = anchorBotReserve(Math.min(2, Math.max(0, list.length - 1 - aIdx)));
       var usableH = Math.max(120, viewH - topClear - botClear);
       var targetH = heights[aIdx];
@@ -1215,10 +1223,14 @@
       }
       var maxScroll = Math.max(0, stageH - viewH);
       targetScroll = Math.max(0, Math.min(maxScroll, Math.round(targetScroll)));
-      if (opts.smooth && !reducedMotion() && col.scrollTo) {
+      // A centered or clamped jump can leave a preceding card visible. Keep
+      // the requested selection at the landing offset until the board moves.
+      if (opts.smooth && !reducedMotion() && col.scrollTo && Math.abs(col.scrollTop - targetScroll) > 1) {
+        freeJump = { top: targetScroll, moving: true };
         col.scrollTo({ top: targetScroll, behavior: "smooth" });
       } else {
         col.scrollTop = targetScroll;
+        freeJump = { top: col.scrollTop, moving: false };
       }
     }
     return true;
@@ -1269,7 +1281,7 @@
             var ns = list[si], ys = freePos.get(ns);
             if (ys !== undefined) freePos.set(ns, ys + shift);
           }
-          col.scrollTop = Math.max(0, col.scrollTop + shift);
+          freeShiftScroll(col, shift);
         }
       }
     }
@@ -1292,15 +1304,22 @@
       boardFlushViewed(false);
     }
   }
+  function freeFinishJump(col) {
+    if (!freeJump || !freeJump.moving) return;
+    freeJump.top = col.scrollTop;
+    freeJump.moving = false;
+  }
   function freeScrollTick() {
     freeScrollRaf = 0;
     if (!freeActive || freeSuspended) return;
     var col = $("bcol"), list = anchorCards();
     if (!col || !list.length || freeWinEnd < freeWinStart) return;
-    var viewTopY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
-    var nextAnchor = freeFindTopVisibleIdx(list, col, viewTopY);
+    var top = col.scrollTop;
+    if (freeJump && !freeJump.moving && Math.abs(top - freeJump.top) > 1) freeJump = null;
+    var viewTopY = top + anchorSized.padTop + anchorRailInset(col);
+    var nextAnchor = freeJump && !freeJump.moving ? freeAnchorIdx : freeFindTopVisibleIdx(list, col, viewTopY);
     var nextNode = list[nextAnchor];
-    if (nextNode && nextNode !== anchorLast) anchorMark(nextNode, { skipVirtual: true });
+    if (!freeJump && nextNode && nextNode !== anchorLast) anchorMark(nextNode, { skipVirtual: true });
     var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
     var yFirst = freePos.get(list[freeWinStart]);
     var lastCard = list[freeWinEnd];
@@ -1308,7 +1327,7 @@
     var needSlide = nextAnchor !== freeAnchorIdx ||
       (freeWinStart > 0 && yFirst !== undefined && (col.scrollTop - yFirst) < viewH * 0.75) ||
       (freeWinEnd < list.length - 1 && (yLastBottom - (col.scrollTop + viewH)) < viewH * 0.75);
-    if (needSlide) {
+    if (!freeJump && needSlide) {
       freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list });
     }
     if (typeof boardDialScroll === "function" && nextNode) {
@@ -1328,7 +1347,12 @@
     if (typeof dialScrubbing !== "undefined" && dialScrubbing) return;
     var col = $("bcol"), board = region("board"), list = anchorCards();
     if (!col || !board || !list.length || freeWinEnd < freeWinStart) return;
-    freeFlushScrolledOutHeld();
+    if (freeJump && freeJump.moving) {
+      freeFinishJump(col);
+      freeScrollTick();
+    } else {
+      freeFlushScrolledOutHeld();
+    }
     if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
     var yFirst = freePos.get(list[freeWinStart]);
     var lastNode = list[freeWinEnd];
@@ -1350,7 +1374,7 @@
         if (c.style && c.style.top !== topStr) c.style.top = topStr;
       }
     }
-    col.scrollTop = col.scrollTop + delta;
+    freeShiftScroll(col, delta);
   }
   function freeOnScroll() {
     if (!freeActive || freeSuspended) return;
@@ -1724,16 +1748,23 @@
     }
     if (insetChanged && anchorProg) anchorRealign(false);
   }
-  function anchorCancelProg() { anchorProg = null; }
+  function anchorCancelProg(e) {
+    if (e && e.defaultPrevented) return;
+    anchorProg = null;
+    freeJump = null;
+  }
   function anchorOnKey(e) {
     var k = e && e.key;
-    if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorProg = null;
+    if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End" || k === " ") anchorCancelProg(e);
   }
   function anchorScrollEnd(e) {
     var col = $("bcol");
     if (!col) return;
     if (freeActive) {
-      if (e.target === col) freeScrollTick();
+      if (e.target === col) {
+        freeFinishJump(col);
+        freeScrollTick();
+      }
       return;
     }
     var bounded = anchorIsBounded(col), sc = anchorScroller(col, bounded);

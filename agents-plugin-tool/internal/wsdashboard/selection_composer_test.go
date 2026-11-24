@@ -44,7 +44,9 @@ func selectionActualSource(t *testing.T, source string, variables, functions []s
 		pieces = append(pieces, piece{match[0], match[1]})
 	}
 	if composer {
-		for _, p := range regexp.MustCompile(`(?m)^  var [^\n]*\n`).FindAllStringIndex(source, -1) {
+		// Preserve multiline object initializers along with one-line declarations.
+		declaration := regexp.MustCompile(`(?m)^  var (?:[^\n]* = \{\n(?s:.*?)^  \};\n|[^\n]*\n)`)
+		for _, p := range declaration.FindAllStringIndex(source, -1) {
 			pieces = append(pieces, piece{p[0], p[1]})
 		}
 		for _, m := range regexp.MustCompile(`(?m)^  function ([A-Za-z0-9_$]+)\(`).FindAllStringSubmatch(source, -1) {

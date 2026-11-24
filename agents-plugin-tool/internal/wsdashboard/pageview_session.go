@@ -130,7 +130,8 @@ type ConvEntry struct {
 	// PeerLabel is the display label of a served peer the line names by its
 	// id: address, shown in place of Peer (which stays the tooltip); empty
 	// when the peer has none, is not served, or is a named address.
-	PeerLabel string
+	PeerLabel             string
+	suppressPeerLeadBadge bool
 	// Lang is the language the entry renders in; the entry cache keys on it.
 	Lang string
 }
@@ -298,7 +299,7 @@ func buildSessionView(in pageInputs) SessionView {
 		if !reg.Agent && (len(in.Ring) > 0 || len(v.ModelHistory) > 0) {
 			v.SavedConversation = true
 			contacts := resolvedContacts(in.Page.Contacts, reg.ReplyID)
-			v.Conversation = conversation(wslive.Lead{}, in.Ring, in.Page.MailBodies, contacts, in.Lookup, replyMarkdown(reg.Project, reg.ReplyID), reg.ReplyID)
+			v.Conversation = conversation(wslive.Lead{}, in.Ring, in.Page.MailBodies, contacts, in.Lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 			splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
 			attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)
 		}
@@ -326,7 +327,7 @@ func buildSessionView(in pageInputs) SessionView {
 	}
 	contacts := resolvedContacts(in.Page.Contacts, reg.ReplyID)
 	v.Tree.Peers = peerGroup(contacts, reg.Project, lookup, in.Now)
-	v.Conversation = conversation(in.Snapshot.Lead, in.Ring, in.Page.MailBodies, contacts, lookup, replyMarkdown(reg.Project, reg.ReplyID), reg.ReplyID)
+	v.Conversation = conversation(in.Snapshot.Lead, in.Ring, in.Page.MailBodies, contacts, lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 	splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
 	v.Conversation.Held = heldViews(in.Held, in.AttachDir, reg.ReplyID)
 	attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)

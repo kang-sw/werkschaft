@@ -17,7 +17,7 @@ test('new session saves only successful starts and restores available per-harnes
     focus() {}
   }
   let raw = '{bad', pending, reply, writes = 0;
-  const hs = [ { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto', 'plan'] }, { harness: 'pi', lead: true, available: true, models: [{ id: 'gpt' }], efforts: ['low'], permission_modes: [] } ];
+  const hs = [ { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto', 'plan'] }, { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt' }], efforts: ['low'], permission_modes: [] } ];
   const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
     localStorage: { getItem: () => raw, setItem(k, v) { assert.equal(k, 'ws.dashboard.newSession'); raw = v; writes++; } },
     sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
@@ -41,18 +41,23 @@ test('new session saves only successful starts and restores available per-harnes
   const start = p.el.children.at(-1).children.at(-1);
   click(start); reply(500, {}, 'error'); assert.equal(writes, 0);
   click(start); reply(201, { id: '1' }); assert.equal(writes, 1);
-  assert.deepEqual(JSON.parse(raw), { harness: 'claude', harnesses: { claude: { model: 'opus', mode: 'plan', effort: 'high', iso: 'default' } } });
+  assert.deepEqual(JSON.parse(raw), { harness: 'claude', harnesses: { claude: { model: 'opus', provider: '', mode: 'plan', effort: 'high', iso: 'default' } } });
   p.open('root', 'name', btn);
   selects = all(p.el, 'select'); assert.equal(selects[0].value, 'opus'); assert.equal(selects[1].value, 'plan');
   const segment = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
-  const pi = find(segment, e => e.attrs['data-harness'] === 'pi');
-  segment.events.click({ target: { closest: () => pi } });
+  const codex = find(segment, e => e.attrs['data-harness'] === 'codex');
+  assert.equal(codex.disabled, false);
+  segment.events.click({ target: { closest: () => codex } });
+  assert.equal(codex.attrs['aria-checked'], 'true');
   selects[0].value = 'gpt'; selects[2].value = 'low'; click(start); reply(201, { id: '2' });
-  assert.equal(JSON.parse(raw).harnesses.claude.model, 'opus');
+  const saved = JSON.parse(raw);
+  assert.equal(saved.harness, 'codex');
+  assert.equal(saved.harnesses.codex.model, 'gpt');
+  assert.equal(saved.harnesses.claude.model, 'opus');
   c.supChoices = null;
   p.open('root', 'name', btn); assert.equal(start.disabled, true);
   hs[1].models = []; hs[1].efforts = ['high']; pending(200, { harnesses: hs });
-  assert.equal(pi.attrs['aria-checked'], 'true');
+  assert.equal(codex.attrs['aria-checked'], 'true');
   assert.equal(selects[0].value, ''); assert.equal(selects[2].value, '');
   const before = raw;
   const cancel = p.el.children.at(-1).children.at(-2);
