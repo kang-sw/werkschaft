@@ -150,6 +150,7 @@ type deadBindingOccupancy struct {
 	rec                 Record
 	root, cwd, checkout string
 	closurePersisted    bool
+	holderExited        bool
 }
 
 // DrainDeadBindingMail handles mail queued across or after an automatic
@@ -226,8 +227,9 @@ func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []re
 	var complete bool
 	alive := map[string]bool{}
 	if r.opts.Holders != nil {
+		scanned := r.scanDone()
 		listed := r.opts.Holders.List()
-		complete = r.scanDone() && !listed.Incomplete
+		complete = scanned && !listed.Incomplete
 		for _, info := range listed.Holders {
 			alive[info.ID] = info.Child == nil || info.Child.State != "exited"
 		}
@@ -236,17 +238,28 @@ func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []re
 	for id, binding := range r.deadBindings {
 		rec := binding.rec
 		if holder := rec.HolderID; holder != "" {
-			if live, known := alive[holder]; !live && (known || complete) {
+			live, known := alive[holder]
+			if known && !live && !binding.holderExited {
+				// The manager can drop this holder while another holder
+				// keeps the census incomplete. Keep the exit with the binding
+				// while its closed record may still need to be persisted.
+				binding.holderExited = true
+				r.deadBindings[id] = binding
+			}
+			if binding.holderExited || !live && complete {
 				if _, retained := r.closed[id]; !retained && r.convs[id] == nil {
 					delete(r.deadBindings, id)
 				}
 				continue
 			}
 		}
-		if !worktreePathContains(target, binding.root) && !worktreePathContains(target, binding.cwd) {
+		// A retained release closure names the checkout the holder used
+		// even if a symlink in its recorded cwd now resolves elsewhere.
+		releasedHere := sameWorktreePath(binding.checkout, target)
+		if !releasedHere && !worktreePathContains(target, binding.root) && !worktreePathContains(target, binding.cwd) {
 			continue
 		}
-		before := releaseBound(rec) && (sameWorktreePath(binding.checkout, target) ||
+		before := releaseBound(rec) && (releasedHere ||
 			release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at))
 		out = append(out, retiredPiBinding{createdAt: rec.CreatedAt, child: BoundWorktreeChild{
 			Address: AgentAddress(id), State: AgentClosed, Cwd: rec.Cwd, BoundBeforeRelease: before, Live: true,

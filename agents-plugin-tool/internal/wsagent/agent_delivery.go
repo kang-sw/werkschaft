@@ -211,30 +211,24 @@ func (r *Runner) expire(id string) bool {
 	if c == nil {
 		return false
 	}
-	c.mu.Lock()
-	waiting := c.childWaitingLocked()
-	c.mu.Unlock()
-	if !waiting {
-		c.do(func() { c.expiring = false })
-		return false
+	if hook := r.opts.beforeExpiryClose; hook != nil {
+		hook()
 	}
-	desc, quiet := r.liveExpiryDescendants(safeStopParent(id, false))
-	if !quiet {
-		c.do(func() { c.expiring = false })
-		return false
-	}
-	if _, err := r.CloseConversation(id); err != nil {
+	_, order, err := r.closeConversation(id, true)
+	if err != nil {
 		if errors.Is(err, errClosed) {
 			// Someone closed it meanwhile (a dashboard close): what they
 			// closed is theirs to delete, not the expiry's.
 			return false
 		}
 		fmt.Fprintf(r.opts.Log, "agent %s: expire: %v\n", id, err)
+	}
+	if len(order) == 0 {
 		// A later heartbeat tries again.
 		c.do(func() { c.expiring = false })
 		return false
 	}
-	for _, d := range append(desc, id) {
+	for _, d := range order {
 		r.forget(d)
 	}
 	return true
@@ -243,6 +237,16 @@ func (r *Runner) expire(id string) bool {
 func (r *Runner) liveExpiryDescendants(root ParentRef) ([]string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	c := r.convs[root.ReplyID]
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	waiting := c.childWaitingLocked()
+	c.mu.Unlock()
+	if !waiting {
+		return nil, false
+	}
 	return expiryDescendants(root, func(parent ParentRef) iter.Seq[string] {
 		return maps.Keys(r.childrenIndex[parent])
 	}, func(id string) expiryNode {

@@ -378,6 +378,56 @@ func TestHeartbeatExpiryKeepsAncestorAcrossClosedBridge(t *testing.T) {
 	}
 }
 
+func TestHeartbeatExpiryRechecksTreeAfterCheckoutRelease(t *testing.T) {
+	h, clk := expiryHarness(t)
+	h.runner.Close()
+	worktree := releaseTestWorktree(t, h.root)
+	write := expiryRecordWriter(h, clk)
+	write("ancestor", leadParent, day, false, false)
+	write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, day, false, false)
+	write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, time.Hour, false, false)
+	bridgeDir := wsdashboard.SessionDir(h.dir, "bridge")
+	bridge := h.record("bridge")
+	bridge.Root = worktree
+	if err := writeRecord(bridgeDir, bridge); err != nil {
+		t.Fatal(err)
+	}
+
+	h.config.heartbeat = time.Hour
+	closing, resume := make(chan struct{}), make(chan struct{})
+	h.config.beforeExpiryClose = func() {
+		close(closing)
+		<-resume
+	}
+	h.start()
+	r := h.runner
+	unpause := sync.OnceFunc(func() { close(resume) })
+	defer unpause()
+
+	clk.advance(day + time.Hour)
+	ancestor := r.conv("ancestor")
+	if ancestor == nil || !ancestor.do(ancestor.heartbeat) {
+		t.Fatal("ancestor did not reach its heartbeat")
+	}
+	// Pause expiry at the close gate and close only the bridge through release.
+	wait(t, "expiry at its close gate", closing)
+	at := releaseAfterBindings(t, clk, worktree)
+	released := r.CheckoutReleased(worktree, at, false)
+	if len(released) != 1 || released[0].Address != AgentAddress("bridge") || released[0].State != AgentClosed {
+		t.Fatalf("release outcomes = %+v, want only the bridge closed", released)
+	}
+	unpause()
+	eventually(t, "expiry decision", func() bool {
+		var expiring bool
+		return !ancestor.do(func() { expiring = ancestor.expiring }) || !expiring
+	})
+	for _, id := range []string{"ancestor", "leaf"} {
+		if r.conv(id) == nil {
+			t.Errorf("%s closed during heartbeat expiry across the released bridge", id)
+		}
+	}
+}
+
 // expiredAtStart picks each quiet subtree past its expiry, deepest first;
 // a busy descendant keeps its ancestors, a recent or busy child is kept,
 // and a conversation with no spawn parent is never picked.

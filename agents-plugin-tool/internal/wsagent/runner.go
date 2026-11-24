@@ -255,6 +255,8 @@ type Options struct {
 	TierRoles func() ([]wsconfig.TierRole, error)
 	// heartbeat overrides wslive.HeartbeatInterval for tests.
 	heartbeat time.Duration
+	// beforeExpiryClose pauses heartbeat expiry before starting its close (tests).
+	beforeExpiryClose func()
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
