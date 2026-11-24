@@ -123,21 +123,21 @@ func (t *mutationTarget) inspect(keepData bool) (fileSnapshot, []byte, error) {
 	if err != nil {
 		return fileSnapshot{}, nil, err
 	}
-	if err := verifyFile(file, info); err != nil {
+	if _, err := verifyFile(file, info); err != nil {
 		return fileSnapshot{}, nil, err
 	}
 	return fileSnapshot{info: info, digest: &digest}, data, nil
 }
 
-func verifyFile(file *os.File, prior fs.FileInfo) error {
+func verifyFile(file *os.File, prior fs.FileInfo) (fs.FileInfo, error) {
 	info, err := file.Stat()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !os.SameFile(prior, info) || prior.Size() != info.Size() || !prior.ModTime().Equal(info.ModTime()) {
-		return fmt.Errorf("%s changed while preparing the mutation", file.Name())
+		return nil, fmt.Errorf("%s changed while preparing the mutation", file.Name())
 	}
-	return nil
+	return info, nil
 }
 
 func contentHash(data []byte) string {
@@ -171,11 +171,21 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 	}
 	defer file.Close()
 	if prior.info != nil {
-		if err := verifyFile(file, prior.info); err != nil {
+		info, err := verifyFile(file, prior.info)
+		if err != nil {
 			return err
 		}
 		if *prior.digest == expected {
 			return nil
+		}
+		if f.Authority == AuthorityWorkdirWrite {
+			single, err := hasSingleLink(file, info)
+			if err != nil {
+				return fmt.Errorf("check file link count: %w", err)
+			}
+			if !single {
+				return fmt.Errorf("%s is not singly linked; workdir-write cannot modify a shared file", target.path)
+			}
 		}
 		if err := file.Truncate(0); err != nil {
 			return err
