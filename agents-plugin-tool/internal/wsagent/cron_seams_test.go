@@ -119,14 +119,6 @@ func TestDeliverCronSteersMidTurnAndDrainsWhenIdle(t *testing.T) {
 
 type cronPlanStatus struct {
 	allowed bool
-	prompt  chan struct{}
-}
-
-func (s cronPlanStatus) RequestOpenAIBackgroundConsent() {
-	select {
-	case s.prompt <- struct{}{}:
-	default:
-	}
 }
 
 func (s cronPlanStatus) Credential(context.Context, wscred.Request) (wscred.Credential, error) {
@@ -173,6 +165,18 @@ func waitForCronConsentRefusal(t *testing.T, h *leadHarness, id string) {
 	})
 }
 
+type cronPlanPromptStatus struct {
+	cronPlanStatus
+	prompt chan struct{}
+}
+
+func (s cronPlanPromptStatus) RequestOpenAIBackgroundConsent() {
+	select {
+	case s.prompt <- struct{}{}:
+	default:
+	}
+}
+
 func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -207,7 +211,8 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 				reply, reply, reply,
 			}}
 			prompt := make(chan struct{}, 1)
-			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{allowed: tc.allowed, prompt: prompt}})
+			credentials := cronPlanPromptStatus{cronPlanStatus: cronPlanStatus{allowed: tc.allowed}, prompt: prompt}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: credentials})
 			id := h.lead(BackendWerk, LeadOptions{Provider: string(tc.provider), Model: "fixture-model"}).ID
 			h.send(id, "operator prompt")
 			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator prompt") {

@@ -289,7 +289,7 @@ func TestAgentSystemPromptReachesEveryStart(t *testing.T) {
 func TestWerkWorkerAdmissionAsksForConsentOnlyOnStart(t *testing.T) {
 	prompt := make(chan struct{}, 1)
 	r := &Runner{opts: Options{Backends: map[string]BackendRegistration{
-		BackendWerk: {Backend: WerkBackend{credentials: cronPlanStatus{prompt: prompt}}},
+		BackendWerk: {Backend: WerkBackend{credentials: cronPlanPromptStatus{prompt: prompt}}},
 	}}}
 	provider := string(wscred.ProviderOpenAI)
 	if why := r.workerProviderGap(BackendWerk, provider); why == "" || len(prompt) != 0 {

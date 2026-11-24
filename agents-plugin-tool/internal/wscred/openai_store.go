@@ -185,6 +185,33 @@ func (s *Store) finishOpenAISignIn(ctx context.Context, previous, account openAI
 	return s.writeOpenAIAccountLocked(state, account)
 }
 
+// SignOutOpenAI deletes the displayed active registration and its consent.
+func (s *Store) SignOutOpenAI(clientID string) error {
+	s.openAIMu.Lock()
+	defer s.openAIMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
+	}
+	state := s.doc.openAIState()
+	if clientID == "" || state.Active != clientID {
+		return ErrOpenAIAccountChanged
+	}
+	delete(state.Accounts, clientID)
+	state.Active = ""
+	err := s.writeOpenAIStateLocked(state)
+	// Retirement can report an error after the replacement was published.
+	// In either published case, an old in-memory grant must stay retired.
+	if s.openAIAccount.ClientID != clientID {
+		delete(s.openAIPlanPauses, clientID)
+		if s.pendingOpenAIRefresh != nil && s.pendingOpenAIRefresh.ClientID == clientID {
+			s.pendingOpenAIRefresh = nil
+		}
+	}
+	return err
+}
+
 // SetOpenAIBackgroundConsent records the user's explicit answer for the
 // selected registration. A false answer also revokes a previous grant.
 func (s *Store) SetOpenAIBackgroundConsent(clientID string, allowed bool) error {
@@ -221,33 +248,6 @@ func (s *Store) setOpenAIBackgroundConsent(clientID string, prompt uint64, activ
 	}
 	a.Consent = &allowed
 	return s.writeOpenAIAccountLocked(state, a)
-}
-
-// SignOutOpenAI deletes the displayed active registration and its consent.
-func (s *Store) SignOutOpenAI(clientID string) error {
-	s.openAIMu.Lock()
-	defer s.openAIMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.prepareWriteLocked(); err != nil {
-		return err
-	}
-	state := s.doc.openAIState()
-	if clientID == "" || state.Active != clientID {
-		return ErrOpenAIAccountChanged
-	}
-	delete(state.Accounts, clientID)
-	state.Active = ""
-	err := s.writeOpenAIStateLocked(state)
-	// Retirement can report an error after the replacement was published.
-	// In either published case, an old in-memory grant must stay retired.
-	if s.openAIAccount.ClientID != clientID {
-		delete(s.openAIPlanPauses, clientID)
-		if s.pendingOpenAIRefresh != nil && s.pendingOpenAIRefresh.ClientID == clientID {
-			s.pendingOpenAIRefresh = nil
-		}
-	}
-	return err
 }
 
 func openAIProviderError(err error) error {
