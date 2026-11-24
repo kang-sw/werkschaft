@@ -124,7 +124,12 @@
     if (on) row.setAttribute("data-no", ""); else row.removeAttribute("data-no");
   }
   // Size a note textarea to its content; scrollHeight is 0 while hidden.
-  function grow(n) { n.style.height = "auto"; if (n.scrollHeight) n.style.height = n.scrollHeight + "px"; }
+  // Skip hidden backing textareas owned by WsCapsules so typing does not force a layout flush.
+  function grow(n) {
+    if (n.classList && n.classList.contains("wsc-backing")) return;
+    n.style.height = "auto";
+    if (n.scrollHeight) n.style.height = n.scrollHeight + "px";
+  }
   // Bulk acknowledge: checks every ack row. Policy items stay manual.
   if (all && once(all)) all.addEventListener("change", function () {
     var on = this.checked;

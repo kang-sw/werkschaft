@@ -258,6 +258,53 @@ process.stdout.write(bad.join("\n"));`
 	}
 }
 
+// TestFormGrowSkipsWscBackingTextarea pins that form.js's grow() skips hidden
+// .wsc-backing textareas (avoiding forced style/layout flushes on capsule-backed
+// board notes) while still auto-growing plain visible textarea.note fields.
+func TestFormGrowSkipsWscBackingTextarea(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; form grow cases not executed")
+	}
+	st := &State{}
+	mustApply(t, st, `<wb:topic name="a"><wb:add class="check"><wb:title>first</wb:title></wb:add></wb:topic>
+<wb:topic name="b"><wb:add class="check"><wb:title>second</wb:title></wb:add></wb:topic>`)
+	regions, err := RenderRegions(BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	board, _ := json.Marshal(string(regions.Board))
+	answers, err := embeddedAsset("answers.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := embeddedAsset("form.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "var BOARD = " + string(board) + ";\n" + formPrelude + "(function () {\n" + string(answers) + string(form) + "})();\n" + `
+var plain = byId("item-1").querySelector("textarea.note");
+var backing = byId("item-2").querySelector("textarea.note");
+backing.classList.toggle("wsc-backing", true);
+var plainReads = 0, backingReads = 0;
+Object.defineProperty(plain, "scrollHeight", { get: function () { plainReads++; return 44; } });
+Object.defineProperty(backing, "scrollHeight", { get: function () { backingReads++; return 44; } });
+key(plain, "hello");
+check("plain textarea auto-grows on input", [plain.style.height, plainReads], ["44px", 2]);
+key(backing, "hello");
+check("wsc-backing textarea skips grow on input", [backing.style.height || "", backingReads], ["", 0]);
+click(byId("item-2").querySelector("button.note-toggle"));
+check("wsc-backing textarea skips grow on note-toggle open", [backing.style.height || "", backingReads], ["", 0]);
+process.stdout.write(bad.join("\n"));`
+	out, err := nodeScript(node, script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		t.Errorf("form grow cases failed:\n%s", s)
+	}
+}
+
 // TestPillRedrawsTypingOnceAFrame pins that pill.js redraws on typing in
 // the next frame, not inside the input event right after form.js grew the
 // note, and drops a waiting redraw when torn down.
