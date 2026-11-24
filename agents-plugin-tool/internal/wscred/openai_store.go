@@ -270,7 +270,7 @@ func (s *Store) openAICurrentLocked(req Request) (Credential, openAIAccount, boo
 	}
 	account := s.openAIAccount
 	switch {
-	case account.ClientID == "" || account.IDToken == "":
+	case account.ClientID == "" || account.IDToken == "" || (req.openAIAccount != "" && req.openAIAccount != account.ClientID):
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrNotConfigured)
 	case !account.planEnabled():
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrOpenAIPlanDisabled)

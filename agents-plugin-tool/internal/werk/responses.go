@@ -88,7 +88,9 @@ type Client struct {
 	Dialect string
 	// Token returns the credential to send, asked for on every request.
 	Token func(ctx context.Context) (string, error)
-	HTTP  *http.Client
+	// PlanToken admits a request against the signed-in account's pause.
+	PlanToken func(context.Context) (wscred.OpenAIPlanRequest, error)
+	HTTP      *http.Client
 	// StallTimeout cuts a stream that delivers nothing for this long; zero
 	// is DefaultStallTimeout.
 	StallTimeout time.Duration
@@ -169,11 +171,28 @@ type TransientError struct{ Err error }
 func (e *TransientError) Error() string { return e.Err.Error() }
 func (e *TransientError) Unwrap() error { return e.Err }
 
+type planProbeError struct{ error }
+
+func (e planProbeError) Unwrap() error { return e.error }
+
+const openAIPlanLimitCode = "subscription_sharing_usage_limit_exceeded"
+
+func planLimitExceeded(err error) bool {
+	var h *HTTPError
+	var f *FailedError
+	return (errors.As(err, &h) && h.Code == openAIPlanLimitCode) ||
+		(errors.As(err, &f) && f.Code == openAIPlanLimitCode)
+}
+
 // Retryable reports whether err is worth another request and how long to wait
 // before it: delay is the endpoint's own Retry-After when it sent one, else
 // zero (the caller's backoff). A refused credential, a bad request and a
 // context end are not retryable.
 func Retryable(err error) (delay time.Duration, ok bool) {
+	var probe planProbeError
+	if errors.As(err, &probe) || planLimitExceeded(err) {
+		return 0, false
+	}
 	var tr *TransientError
 	if errors.As(err, &tr) {
 		return 0, true
@@ -277,10 +296,30 @@ func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
 }
 
 // Respond sends req and reads the streamed response to its terminal event.
-func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Response, error) {
+func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (out *Response, err error) {
 	var token string
-	var err error
-	if c.Token != nil {
+	if c.PlanToken != nil {
+		plan, admitErr := c.PlanToken(ctx)
+		if admitErr != nil {
+			return nil, admitErr
+		}
+		token = plan.Credential.Secret.Reveal()
+		defer func() {
+			outcome := wscred.OpenAIPlanUnchanged
+			switch {
+			case planLimitExceeded(err):
+				outcome = wscred.OpenAIPlanLimitExceeded
+				err = wscred.ErrOpenAIPlanPaused
+			case err == nil && out != nil:
+				outcome = wscred.OpenAIPlanSucceeded
+			case plan.Probe && err != nil && ctx.Err() == nil:
+				// A probe is one provider request. Give the operator its
+				// failure and keep the account paused until a later success.
+				err = planProbeError{err}
+			}
+			plan.Finish(outcome)
+		}()
+	} else if c.Token != nil {
 		token, err = c.Token(ctx)
 		if err != nil {
 			return nil, err
@@ -338,7 +377,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
-	out, err := readStream(resp.Body, h, func() { timer.Reset(stall) }, maxStreamEvent, maxStreamResponse)
+	out, err = readStream(resp.Body, h, func() { timer.Reset(stall) }, maxStreamEvent, maxStreamResponse)
 	var failed *FailedError
 	if errors.As(err, &failed) {
 		failed.Message = Scrub(failed.Message, secret)

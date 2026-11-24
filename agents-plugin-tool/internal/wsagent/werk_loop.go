@@ -62,7 +62,7 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &werk.Client{
+	client := &werk.Client{
 		BaseURL:  provider.BaseURL,
 		Provider: provider.ID,
 		Dialect:  provider.Dialect,
@@ -70,7 +70,17 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 		Token: func(ctx context.Context) (string, error) {
 			return b.providerToken(ctx, provider, !werk.InteractiveTurn(ctx))
 		},
-	}, nil
+	}
+	if provider.ID == wscred.ProviderOpenAI {
+		if source, ok := b.credentials.(interface {
+			BeginOpenAIPlanRequest(context.Context, bool) (wscred.OpenAIPlanRequest, error)
+		}); ok {
+			client.PlanToken = func(ctx context.Context) (wscred.OpenAIPlanRequest, error) {
+				return source.BeginOpenAIPlanRequest(ctx, !werk.InteractiveTurn(ctx))
+			}
+		}
+	}
+	return client, nil
 }
 
 func (b WerkBackend) providerToken(ctx context.Context, provider wscred.Provider, background bool) (string, error) {

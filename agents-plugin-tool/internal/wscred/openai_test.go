@@ -486,3 +486,40 @@ func TestOpenAIRejectsInvalidIdentityOrCallback(t *testing.T) {
 		t.Fatal("failed reauthorization changed the active credential")
 	}
 }
+
+func TestOpenAIPlanPauseLivesInMemoryAndPrecedesRefresh(t *testing.T) {
+	s := testStore(t)
+	f := newOpenAIFixture(t, s)
+	signInFixture(t, s, f, OpenAISignIn{EnablePlan: true})
+	if err := s.SetOpenAIBackgroundConsent(f.clientID, true); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	call, err := s.BeginOpenAIPlanRequest(ctx, false)
+	if err != nil || call.Probe {
+		t.Fatalf("initial request: probe %v, error %v", call.Probe, err)
+	}
+	call.Finish(OpenAIPlanLimitExceeded)
+	f.now = f.now.Add(time.Hour)
+	if _, err := s.BeginOpenAIPlanRequest(ctx, true); !errors.Is(err, ErrOpenAIPlanPaused) || f.refreshes != 0 {
+		t.Fatalf("paused request reached refresh: %v, refreshes %d", err, f.refreshes)
+	}
+	probe, err := s.BeginOpenAIPlanRequest(ctx, false)
+	if err != nil || !probe.Probe || f.refreshes != 1 {
+		t.Fatalf("operator probe: probe %v, error %v, refreshes %d", probe.Probe, err, f.refreshes)
+	}
+	if _, err := s.BeginOpenAIPlanRequest(ctx, false); !errors.Is(err, ErrOpenAIPlanPaused) {
+		t.Fatalf("a second probe entered concurrently: %v", err)
+	}
+	probe.Finish(OpenAIPlanLimitExceeded)
+	if _, err := s.BeginOpenAIPlanRequest(ctx, true); !errors.Is(err, ErrOpenAIPlanPaused) {
+		t.Fatalf("quota probe cleared the pause: %v", err)
+	}
+	reopened := NewStore(s.Path())
+	reopened.now = s.now
+	resumed, err := reopened.BeginOpenAIPlanRequest(ctx, true)
+	if err != nil || resumed.Probe {
+		t.Fatalf("a new store retained the pause: probe %v, error %v", resumed.Probe, err)
+	}
+	resumed.Finish(OpenAIPlanSucceeded)
+}

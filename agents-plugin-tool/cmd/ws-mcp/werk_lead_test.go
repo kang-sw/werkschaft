@@ -322,6 +322,84 @@ func TestWerkOperatorProvenanceAtCredentialBoundary(t *testing.T) {
 	})
 }
 
+func TestWerkPlanPauseReprobesOnlyForOperator(t *testing.T) {
+	f := newWerkDaemonFixture(t)
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	record := fmt.Sprintf(`{"schema_version":1,"providers":{"openai":{"kind":"siwc","active":"fixture",
+		"accounts":{"fixture":{"client_id":"fixture","issuer":"https://example.test","subject":"fixture",
+			"id_token":"test-identity","access_token":"test-credential","refresh_token":"test-refresh",
+			"scopes":["chatgpt.tokens.use.direct"],"expires_at":%q,"background_consent":true}}}}}`,
+		time.Now().Add(time.Hour).Format(time.RFC3339))
+	if err := os.WriteFile(path, []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := wscred.NewStore(path)
+	f.credential, f.configured = store, credentialStatus(store)
+	var calls atomic.Int32
+	installWerkFixtureTransport(t, func(wrapped http.RoundTripper) http.RoundTripper {
+		return werkFixtureRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Hostname() == "127.0.0.1" {
+				return wrapped.RoundTrip(req)
+			}
+			if req.URL.Host != "api.openai.com" {
+				return nil, fmt.Errorf("unexpected fixture request to %s", req.URL.Host)
+			}
+			req.Body.Close()
+			var code string
+			switch calls.Add(1) {
+			case 1, 4:
+				code = "rate_limit_exceeded"
+			case 3:
+				code = "subscription_sharing_usage_limit_exceeded"
+			}
+			if code != "" {
+				return &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header),
+					Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"error":{"code":%q}}`, code)))}, nil
+			}
+			return werkReplacementResponse(map[string]any{
+				"type": "message", "id": "plan-fixture", "role": "assistant",
+				"content": []map[string]string{{"type": "output_text", "text": "accepted"}},
+			})
+		})
+	})
+	open := f.open(nil)
+	st, err := open.runner.CreateLead(wsagent.BackendWerk, f.root, wsagent.LeadOptions{Provider: "openai", Model: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(operator bool, text string, wantCalls int32, wantError string) {
+		t.Helper()
+		var err error
+		if operator {
+			_, err = open.runner.Send(st.ID, text)
+		} else {
+			_, err = open.runner.Deliver(st.ID, wsagent.Delivery{Text: text})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := open.runner.Wait(context.Background(), st.ID, 10*time.Second)
+		if err != nil || calls.Load() != wantCalls {
+			t.Fatalf("%s requests = %d, want %d, wait error = %v", text, calls.Load(), wantCalls, err)
+		}
+		if wantError != "" {
+			got, err := open.runner.Get(st.ID)
+			if err != nil || !strings.Contains(got.Error, wantError) {
+				t.Fatalf("%s refusal = %q, %v", text, got.Error, err)
+			}
+		} else if res.Status != wsagent.TurnDone {
+			t.Fatalf("%s status = %s", text, res.Status)
+		}
+	}
+	send(true, "transient gets an ordinary retry", 2, "")
+	send(false, "receive quota limit", 3, "https://chatgpt.com/settings/usage")
+	send(false, "paused automatic input", 3, "https://chatgpt.com/settings/usage")
+	send(true, "a transient probe has no retry", 4, "429")
+	send(false, "still paused after a failed probe", 4, "https://chatgpt.com/settings/usage")
+	send(true, "successful operator probe", 5, "")
+	send(false, "automatic input resumes", 6, "")
+}
+
 func TestWerkLeadApprovalHonorsLivePermissionAndCommitsOnce(t *testing.T) {
 	f := newWerkDaemonFixture(t)
 	var calls atomic.Int32
