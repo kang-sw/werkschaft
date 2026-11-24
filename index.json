@@ -484,9 +484,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-24T14:16:33Z",
+        "touched_at": "2026-11-24T14:16:50Z",
         "impl": {
-          "branch": "impl/develop/0520-blockers-board"
+          "branch": "impl/develop/0520-blockers-ucmd"
         }
       }
     },
