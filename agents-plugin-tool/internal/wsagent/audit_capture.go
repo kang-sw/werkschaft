@@ -54,6 +54,14 @@ type auditAdapter interface {
 	flush(at time.Time) []auditEvent
 }
 
+type auditCompactionRecovery interface {
+	RecoverCompactionBaseline(ctx context.Context, session, source string) (boundary, counter uint64, err error)
+}
+
+type compactionBaselineResetter interface {
+	resetCompactionBaseline()
+}
+
 // auditEvent is one mapped event and its slot, the ordinal it takes under
 // its source record's identity. A slot is fixed by the event's role in the
 // record (a content block's index), never by which other events the record
@@ -182,6 +190,9 @@ type auditCapture struct {
 	// The fields below are the capture goroutine's.
 	nextSeq  uint64
 	recovery wsaudit.Recovery
+	// A retained manual cut resets the replay's usage baseline just after
+	// this kept sequence, before any post-cut usage is mapped.
+	compactionResetAfter *uint64
 	// localSeq numbers the lines of a process without a holder.
 	localSeq uint64
 	// teeOn is set while a holder connection that negotiated the audit
@@ -233,7 +244,7 @@ type auditCapture struct {
 
 // newAuditCapture starts capture for one process; nil when tap or adapter
 // is nil.
-func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter) *auditCapture {
+func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter, reattaching bool) *auditCapture {
 	if tap == nil || tap.Sink == nil || adapter == nil || !tap.Session.DaemonHosted() {
 		return nil
 	}
@@ -252,7 +263,7 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 		c.recovery = s.Recover(c.session.ID, source)
 		c.nextSeq = c.recovery.MaxSeq + 1
 	}
-	go c.run()
+	go c.run(reattaching)
 	return c
 }
 
@@ -461,8 +472,11 @@ func (c *auditCapture) close() {
 	c.stopOnce.Do(func() { close(c.stop) })
 }
 
-func (c *auditCapture) run() {
+func (c *auditCapture) run(reattaching bool) {
 	defer close(c.done)
+	if reattaching {
+		c.recoverCompactionBaseline()
+	}
 	for {
 		c.takeOverflow()
 		var timeout <-chan time.Time
@@ -505,6 +519,25 @@ func (c *auditCapture) run() {
 			c.finalize()
 			return
 		}
+	}
+}
+
+func (c *auditCapture) recoverCompactionBaseline() {
+	store, ok := c.sourced.(auditCompactionRecovery)
+	if _, resets := c.adapter.(compactionBaselineResetter); !ok || !resets {
+		return
+	}
+	boundary, counter, err := store.RecoverCompactionBaseline(context.Background(), c.session.ID, c.source)
+	if err != nil {
+		c.logf("recover compaction baseline: %v", err)
+		return
+	}
+	// The ring is loaded now even if the constructor raced its preload.
+	c.recovery = c.sourced.Recover(c.session.ID, c.source)
+	c.nextSeq = c.recovery.MaxSeq + 1
+	if counter != 0 {
+		c.compactionResetAfter = &boundary
+		c.inferred = counter
 	}
 }
 
@@ -782,6 +815,10 @@ func (c *auditCapture) closeTee(reason string) {
 }
 
 func (c *auditCapture) mapKept(it auditItem) {
+	if c.compactionResetAfter != nil && it.seq > *c.compactionResetAfter {
+		c.adapter.(compactionBaselineResetter).resetCompactionBaseline()
+		c.compactionResetAfter = nil
+	}
 	recognized, carried, evs := c.adapter.mapLine(it.data, it.at)
 	rec := wsaudit.SourceID{Source: c.source, Seq: it.seq}
 	if it.replay && len(evs) > 0 {
@@ -824,7 +861,7 @@ func (c *auditCapture) writeSynthetic(s *auditSynthetic) {
 		return
 	}
 	if filtered[0].Kind == wsaudit.KindCompaction {
-		if r, ok := c.adapter.(interface{ resetCompactionBaseline() }); ok {
+		if r, ok := c.adapter.(compactionBaselineResetter); ok {
 			r.resetCompactionBaseline()
 		}
 	}

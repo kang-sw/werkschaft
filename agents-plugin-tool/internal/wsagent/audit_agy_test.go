@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -438,7 +439,9 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 		eventually(t, "inferred usage_drop compaction in audit sink", func() bool {
 			evs := sink.events()
 			return len(find(evs, ofKind(wsaudit.KindCompaction))) == 1 &&
-				len(find(evs, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "after auto compact" })) == 1
+				len(find(evs, func(ev wsaudit.Envelope) bool {
+					return ev.Kind == wsaudit.KindThinking && ev.Out == "after auto compact"
+				})) == 1
 		})
 
 		evs := sink.events()
@@ -452,8 +455,12 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 			cmpEv.Meta["pre_tokens"] != int64(100000) || cmpEv.Meta["post_tokens"] != int64(30000) {
 			t.Fatalf("compaction event = %+v", cmpEv)
 		}
-		pre := find(marked, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "before auto compact" })
-		post := find(marked, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "after auto compact" })
+		pre := find(marked, func(ev wsaudit.Envelope) bool {
+			return ev.Kind == wsaudit.KindThinking && ev.Out == "before auto compact"
+		})
+		post := find(marked, func(ev wsaudit.Envelope) bool {
+			return ev.Kind == wsaudit.KindThinking && ev.Out == "after auto compact"
+		})
 		if len(pre) != 1 || pre[0].ModelSeen {
 			t.Fatalf("pre-compaction thought = %+v, want ModelSeen=false", pre)
 		}
@@ -464,12 +471,47 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 
 	t.Run("command_end", func(t *testing.T) {
 		h, f := newAgyLeadHarness(t)
-		sink := &memSink{}
+		auditRoot := t.TempDir()
+		sink := openStoreSink(t, auditRoot)
 		h.opts.AuditSink = sink
 		h.startAt("http://127.0.0.1:1")
+		h.runner.mu.Lock()
+		h.endpoint = h.runner.endpoint
+		h.runner.mu.Unlock()
 		id := h.lead(BackendAgy, LeadOptions{}).ID
 		f.replyID = id
 		key := h.record(id).WSKey
+		events := func() []wsaudit.Envelope {
+			t.Helper()
+			if err := sink.Flush(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			evs, err := sink.Events(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return evs
+		}
+		restart := func() {
+			t.Helper()
+			h.runner.Close()
+			if err := sink.Close(); err != nil {
+				t.Fatal(err)
+			}
+			sink = openStoreSink(t, auditRoot)
+			h.opts.AuditSink = sink
+			h.restart()
+			wait(t, "rejoined agy holder", h.runner.rejoined)
+			eventually(t, "agy replay complete", func() bool {
+				c := h.runner.conv(id)
+				if c == nil {
+					return false
+				}
+				var ready bool
+				c.do(func() { ready = c.proc != nil && !c.replaying && !c.turn })
+				return ready
+			})
+		}
 
 		h.send(id, "turn-1")
 		holder := h.holder(id)
@@ -488,8 +530,21 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 		eventually(t, "compact prompt", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
 		h.holders.out(holder, agyPromptDoneLine(agyPromptIDs(h, holder)[1]))
 		h.idle(id)
+		var beforeRestart wsaudit.Envelope
+		eventually(t, "retained manual cut before restart", func() bool {
+			cuts := find(events(), ofKind(wsaudit.KindCompaction))
+			if len(cuts) != 1 {
+				return false
+			}
+			beforeRestart = cuts[0]
+			return true
+		})
+		restart()
+		if got := h.holder(id); got != holder {
+			t.Fatalf("holder changed after manual cut: %s -> %s", holder, got)
+		}
 
-		// Post-compaction turn reports the dropped usage without emitting a second compaction cut.
+		// The first sample after the manual cut arrives live after restart.
 		h.send(id, "turn-2")
 		eventually(t, "turn 2 prompt", func() bool { return len(agyPromptIDs(h, holder)) == 3 })
 		h.holders.out(holder,
@@ -500,12 +555,14 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 		h.idle(id)
 
 		eventually(t, "inferred command_end compaction in audit sink", func() bool {
-			evs := sink.events()
+			evs := events()
 			return len(find(evs, ofKind(wsaudit.KindCompaction))) >= 1 &&
-				len(find(evs, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "after manual compact" })) == 1
+				len(find(evs, func(ev wsaudit.Envelope) bool {
+					return ev.Kind == wsaudit.KindThinking && ev.Out == "after manual compact"
+				})) == 1
 		})
 
-		evs := sink.events()
+		evs := events()
 		compactions := find(evs, ofKind(wsaudit.KindCompaction))
 		if len(compactions) != 1 {
 			t.Fatalf("compactions = %+v, want exactly 1 (no duplicate on follow-up usage drop)", compactions)
@@ -515,17 +572,41 @@ func TestAgyInferredCompactionCut(t *testing.T) {
 			t.Fatalf("cut = %+v, want HasCompaction=true Estimated=true", cut)
 		}
 		cmpEv := marked[cut.Index]
-		if cmpEv.Subkind != string(wslive.TriggerManual) ||
+		if cmpEv.ID != beforeRestart.ID || cmpEv.Seq != beforeRestart.Seq ||
+			cmpEv.Subkind != string(wslive.TriggerManual) ||
 			cmpEv.Meta[wsaudit.MetaEstimated] != true || cmpEv.Meta["inferred_by"] != "command_end" {
 			t.Fatalf("compaction event = %+v", cmpEv)
 		}
-		pre := find(marked, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "before manual compact" })
-		post := find(marked, func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindThinking && ev.Out == "after manual compact" })
+		pre := find(marked, func(ev wsaudit.Envelope) bool {
+			return ev.Kind == wsaudit.KindThinking && ev.Out == "before manual compact"
+		})
+		post := find(marked, func(ev wsaudit.Envelope) bool {
+			return ev.Kind == wsaudit.KindThinking && ev.Out == "after manual compact"
+		})
 		if len(pre) != 1 || pre[0].ModelSeen {
 			t.Fatalf("pre-compaction thought = %+v, want ModelSeen=false", pre)
 		}
 		if len(post) != 1 || !post[0].ModelSeen {
 			t.Fatalf("post-compaction thought = %+v, want ModelSeen=true", post)
+		}
+
+		// Now the replay includes the post-cut sample. It must still be the
+		// baseline for a genuine live drop after reattachment.
+		restart()
+		if got := h.holder(id); got != holder {
+			t.Fatalf("holder changed after post-cut usage: %s -> %s", holder, got)
+		}
+		h.send(id, "turn-3")
+		eventually(t, "turn 3 prompt", func() bool { return len(agyPromptIDs(h, holder)) == 4 })
+		h.holders.out(holder, agyUsageLine(12000, 1048576), agyPromptDoneLine(agyPromptIDs(h, holder)[3]))
+		h.idle(id)
+		eventually(t, "retained live compaction after replayed usage", func() bool {
+			compactions = find(events(), ofKind(wsaudit.KindCompaction))
+			return len(compactions) >= 2
+		})
+		if len(compactions) != 2 || compactions[0].ID != beforeRestart.ID ||
+			compactions[1].Subkind != string(wslive.TriggerAuto) || compactions[1].Meta["inferred_by"] != "usage_drop" {
+			t.Fatalf("compactions after the genuine live drop = %+v", compactions)
 		}
 	})
 }

@@ -171,7 +171,7 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		harness, adapter := p.mapper.newAudit(spec.audit.Session.ID)
 		// Capture sequences are local to this loop. Give each opening a
 		// distinct source even when it resumes an existing conversation.
-		p.audit = newAuditCapture(spec.audit, harness, werk.NewSessionID(), adapter)
+		p.audit = newAuditCapture(spec.audit, harness, werk.NewSessionID(), adapter, false)
 	}
 	p.agent = a
 	go p.run(a)
