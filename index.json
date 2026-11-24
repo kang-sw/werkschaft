@@ -480,26 +480,6 @@
     "261123-chore-werkschaft-electron-retirement": {
       "registered_at": "2026-11-23T00:31:15Z"
     },
-    "261124-bug-ws-0520-final-dashboard-fixes": {
-      "registered_at": "2026-11-24T04:02:35Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-24T05:09:02Z"
-      }
-    },
-    "261124-bug-ws-0520-release-gate-final-blockers": {
-      "registered_at": "2026-11-24T03:50:38Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-24T06:26:43Z"
-      }
-    },
     "261124-bug-ws-git-search-credential-hardlink": {
       "registered_at": "2026-11-24T01:13:52Z"
     },
@@ -507,23 +487,17 @@
       "registered_at": "2026-11-23T20:41:17Z"
     },
     "261124-feat-ws-harness-quota-continuation": {
-      "registered_at": "2026-11-24T06:09:28Z"
+      "registered_at": "2026-11-24T06:09:28Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-24T12:30:22Z"
+      }
     },
     "261124-feat-ws-managed-compaction": {
       "registered_at": "2026-11-24T05:12:49Z"
-    },
-    "261124-feat-ws-user-commands-v2": {
-      "registered_at": "2026-11-24T07:18:57Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "active",
-        "touched_at": "2026-11-24T08:53:06Z",
-        "impl": {
-          "branch": "impl/develop/aloof-cinch-glory"
-        }
-      }
     },
     "261124-refactor-remove-terminal-handoff": {
       "registered_at": "2026-11-24T07:52:19Z"
