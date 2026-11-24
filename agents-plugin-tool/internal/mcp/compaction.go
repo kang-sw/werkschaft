@@ -33,6 +33,7 @@ func notifyCompactionTune(key string) {
 		wsagent.NotifyCompactionConfigChanged()
 	}
 }
+
 var compactionLeadModeEnum = []string{wsconfig.CompactionModeNative, wsconfig.CompactionModeWS}
 
 func compactionLeadModeEntry() configKeyEntry {
@@ -122,40 +123,8 @@ func (s *Server) compactAdvertisesLeadSummary() bool {
 	if s.conversation == "" || s.workerForwards() {
 		return false
 	}
-	harness := s.playbookHarness()
-	leadConfirmed := false
-	if getter, ok := s.agents.(interface {
-		Get(string) (wsagent.State, error)
-	}); ok {
-		st, err := getter.Get(s.conversation)
-		if err != nil || !st.Lead {
-			return false
-		}
-		leadConfirmed = true
-		if st.Backend != "" {
-			harness = st.Backend
-		}
-	} else if s.userCommands != nil || s.userCommandsDiscovery != nil {
-		if !s.userCommandsListed() {
-			return false
-		}
-		leadConfirmed = true
-	}
-	if !leadConfirmed {
-		return false
-	}
-	if s.callerBinding != nil {
-		if b := s.callerBinding.CallerBackend(s.conversation, ""); b != "" {
-			harness = b
-		}
-	}
-	sessionKey := ""
-	if s.env != nil {
-		sessionKey = strings.TrimSpace(s.env.get(wsagent.EnvHostedSessionKey))
-	}
-	resolver := s.sessionResolver(sessionKey, s.declared.withDefaults(builtinConfigDefaults()))
-	rv, _, err := s.compactionValue(&resolver, sessionKey, wsconfig.ItemCompactionLeadMode, harness)
-	return err == nil && rv.Value == wsconfig.CompactionModeWS
+	binding, ok := s.agents.(interface{ LeadCompactionMode(string) string })
+	return ok && binding.LeadCompactionMode(s.conversation) == wsconfig.CompactionModeWS
 }
 
 // compactTool is discoverable before use; an older daemon refuses the unknown

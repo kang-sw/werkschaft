@@ -154,7 +154,10 @@ type conv struct {
 	compactNudge                               compactionNudge
 	compactInternalTurn, compactResumeInternal bool
 
-	compactAdvisory, compactHard                                                                                   wsconfig.Threshold
+	compactAdvisory, compactHard wsconfig.Threshold
+	// Lead mode is also read by MCP discovery, outside the conversation loop.
+	compactModeMu                                                                                                  sync.Mutex
+	compactModeGen                                                                                                 uint64
 	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64

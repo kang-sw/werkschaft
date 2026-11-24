@@ -111,13 +111,17 @@ func TestDashboardCompactionModeProjectsHarnessPolicy(t *testing.T) {
 type compactSchemaRunner struct {
 	AgentHost
 	state       wsagent.State
+	mode        string
 	calledWith  *wscompact.LeadSummary
 	calledNoArg bool
 }
 
 func (*compactSchemaRunner) Watch(func(wsagent.State)) func() { return func() {} }
-func (r *compactSchemaRunner) Get(string) (wsagent.State, error) {
-	return r.state, nil
+func (r *compactSchemaRunner) LeadCompactionMode(conversation string) string {
+	if r.state.ID != conversation || !r.state.Lead {
+		return ""
+	}
+	return wsagent.EffectiveLeadCompactionMode(r.state.Backend, r.mode)
 }
 func (r *compactSchemaRunner) Compact(string, string, *bool) wsagent.CompactResult {
 	r.calledNoArg = true
@@ -203,6 +207,7 @@ func TestCompactToolListConditionalLeadSummaryAndAgyWSCall(t *testing.T) {
 	if toolIsError(t, tuneResp) {
 		t.Fatalf("config.tune agy=ws failed: %s", tuneResp)
 	}
+	leadRunner.mode = wsconfig.CompactionModeWS
 	has, size := compactToolHasLeadSummary(t, ls)
 	if !has {
 		t.Fatal("ws-mode hosted lead should see lead_summary in tools/list")

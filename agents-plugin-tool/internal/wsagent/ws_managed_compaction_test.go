@@ -734,6 +734,70 @@ func TestDashboardCompactFailureDeliversQueuedPrompt(t *testing.T) {
 	})
 }
 
+func TestHostedLeadModeCacheAndStage1AfterToggle(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeNative, nil)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("initial mode = %q", mode)
+	}
+
+	resolver := wsconfig.NewResolver(runner.opts.Config, nil, nil, nil)
+	change := func(mode string) {
+		t.Helper()
+		if err := resolver.Set(wsconfig.ItemCompactionLeadMode+"."+BackendClaude, mode, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runner.Send(id, "work started in native mode"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+
+	change(wsconfig.CompactionModeWS)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("read bypassed cached native mode: %q", mode)
+	}
+	NotifyCompactionConfigChanged()
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeWS {
+		t.Fatalf("native-to-ws toggle: %q", mode)
+	}
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.signalInbox()
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "Stage 1 after toggle", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+	})
+	resume := false
+	if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+		t.Fatalf("Stage 1 summary: %+v", result)
+	}
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "successful Stage 1 rotation", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Compactions == 1 && b.latest() != p
+	})
+
+	change(wsconfig.CompactionModeNative)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeWS {
+		t.Fatalf("read bypassed cached ws mode: %q", mode)
+	}
+	NotifyCompactionConfigChanged()
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("ws-to-native toggle: %q", mode)
+	}
+}
+
 func TestRotationResetsInFlightMCPCheck(t *testing.T) {
 	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
 	if _, err := runner.Send(id, "work"); err != nil {

@@ -210,22 +210,61 @@ func (c *conv) loadCompaction() {
 }
 
 func (c *conv) wsManagedLeadCompaction() bool {
-	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactLeadMode == wsconfig.CompactionModeWS
+	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.rec) == wsconfig.CompactionModeWS
+}
+
+// LeadCompactionMode reports the effective mode of an authenticated open
+// hosted lead. Discovery needs only the in-memory binding and mode cache.
+func (r *Runner) LeadCompactionMode(conversation string) string {
+	c := r.conv(conversation)
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	rec, openLead := c.rec, c.rec.Lead && !c.closed
+	c.mu.Unlock()
+	if !openLead {
+		return ""
+	}
+	return c.leadCompactionMode(rec)
+}
+
+func (c *conv) leadCompactionMode(rec Record) string {
+	c.compactModeMu.Lock()
+	defer c.compactModeMu.Unlock()
+	gen := compactionConfigGen.Load()
+	if c.compactLeadMode != "" && c.compactModeGen == gen {
+		return c.compactLeadMode
+	}
+	var raw string
+	if !LeadCompactionWSOnly(rec.Backend, c.r.opts.Backends) {
+		resolver := c.compactionResolver(rec)
+		if value, _, err := resolver.Compaction(rec.WSKey, wsconfig.ItemCompactionLeadMode, rec.Backend, ""); err == nil {
+			raw = value.Value
+		}
+	}
+	c.compactLeadMode = EffectiveLeadCompactionMode(rec.Backend, raw, c.r.opts.Backends)
+	c.compactModeGen = gen
+	return c.compactLeadMode
+}
+
+func (c *conv) compactionResolver(rec Record) wsconfig.Resolver {
+	cfg := c.r.opts.Config
+	cfg.RepoRoot = rec.Root
+	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+		if root, found := roots.Root(rec.WSKey); found {
+			cfg.RepoRoot = root
+		}
+	}
+	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
+	return wsconfig.NewResolver(cfg, nil, reader, nil)
 }
 
 func (c *conv) loadCompactionThresholds() {
 	// Capture generation before reading config so a concurrent tune during the
 	// read leaves compactGen behind and triggers one more reload next check.
 	gen := compactionConfigGen.Load()
-	cfg := c.r.opts.Config
-	cfg.RepoRoot = c.rec.Root
-	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
-		if root, found := roots.Root(c.rec.WSKey); found {
-			cfg.RepoRoot = root
-		}
-	}
-	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
-	r := wsconfig.NewResolver(cfg, nil, reader, nil)
+	r := c.compactionResolver(c.rec)
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	role := "worker"
 	if c.rec.Lead {
@@ -249,16 +288,6 @@ func (c *conv) loadCompactionThresholds() {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", c.rec.ReplyID, key, err)
 			*slot.to = wsconfig.Threshold{}
 		}
-	}
-	if c.rec.Lead {
-		v, _, err := r.Compaction(c.rec.WSKey, wsconfig.ItemCompactionLeadMode, c.rec.Backend, "")
-		rawMode := ""
-		if err == nil {
-			rawMode = v.Value
-		}
-		c.compactLeadMode = EffectiveLeadCompactionMode(c.rec.Backend, rawMode, c.r.opts.Backends)
-	} else {
-		c.compactLeadMode = wsconfig.CompactionModeNative
 	}
 	c.compactGen = gen
 }
