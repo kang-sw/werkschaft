@@ -489,16 +489,20 @@
   // Safe-stop rows run on single click; unsafe rows require a 1.5s radial hold
   // enforced by WsHoldConfirm.delegate.
   var stopBusy = "";
-  function railStop(btn) {
+  function railStop(btn, held) {
     var row = btn && btn.closest ? btn.closest(".rs") : null;
     var id = row ? row.getAttribute("data-rid") || "" : "";
     if (!id || stopBusy || !root.hasAttribute("data-sysopen")) return;
     stopBusy = id;
     railMarks();
-    railPost("/agents/" + encodeURIComponent(id) + "/stop", {}, function (status, v, s) {
+    railPost("/agents/" + encodeURIComponent(id) + "/stop", held ? {} : { safe_only: true }, function (status, v, s) {
       stopBusy = "";
+      if (status === 200) stopNeedsHold.delete(id);
+      else if (!held && status === 409) {
+        stopNeedsHold.add(id);
+        toast(wsT("js.hold.hint"));
+      } else toast(leadErr(status, s));
       railMarks();
-      if (status !== 200) toast(leadErr(status, s));
     });
   }
   // railArchive unarchives ("unhide") an archived hosted lead from the rail's

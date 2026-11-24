@@ -292,30 +292,36 @@ under `<cache root>/dashboard/`:
   daemon binds this port before an OS-assigned one, so a restart keeps its
   origin (page localStorage, LAN bookmark); a free `dashboard.port` always
   wins.
-- `user-commands.db` - the user commands ("command slots") a hosted lead
-  registered with `session.register_user_command` and withdrew with
-  `session.unregister_user_command`: a database of its own (storage type 2:
-  held connection, WAL, one commit per changed command, none for an unchanged
-  registration, read once at start into the memory model every list and page
-  read serves). A command is a stable id, label, optional description, raw
-  bash line and a revision, scoped to the lead's reply-id and the worktree it
-  is bound to (32 per scope; label 64 and description 256 characters, line
-  4 KiB). The tools are listed only to an authenticated open hosted lead
-  (the connection's token-resolved conversation, never a supplied session key
-  or reply-id). The lead's chat shows the commands to a browser on this machine
-  only (`GET /s/<reply-id>/user-commands`, with Run and remove under it behind
-  the composer's localhost gate); a click names the command and the revision it
-  displayed and runs the stored line through the composer's `!` path, so a stale
-  revision or a withdrawn command runs nothing (the revision check and the
-  claim of the click are one step). The user's remove control also names the
-  displayed revision and removes only that one; the agent's unregister tool
-  removes by id. A revision is never issued twice: the store keeps the highest
-  one ever issued, raised in the same commit as every change and withdrawal.
-  The lead's worktree is read from the runner's memory, never from the key
-  record file. A change reaches an open page as the opaque `usercmd` stream
-  event, which makes it refetch the list. The database is unknown to an older daemon, which neither reads nor overwrites it;
-  the daemon that reopens restores the commands, and drops those of a
-  conversation the runner no longer knows.
+- `user-commands.db` stores dashboard user commands in two scopes. Agent
+  commands belong to a hosted lead's reply-id and worktree root. The lead
+  registers and unregisters them through `session.register_user_command`
+  and `session.unregister_user_command`. The command stays with that
+  conversation while it is known to the runner, including while its process
+  sleeps. Commands created by the user belong to the worktree root. Leads
+  in that root share them, and they outlive any one conversation.
+  The store keeps a held SQLite connection and a WAL (storage type 2), loads
+  into memory at startup, and commits one transaction per changed command.
+  Each change or withdrawal advances the durable revision high-water mark.
+  An opaque `usercmd` stream event prompts affected pages to refetch.
+  The registering tools are listed to authenticated open hosted leads and
+  resolve the scope from the calling conversation. The dashboard's localhost
+  composer routes list both scopes (`GET /s/<reply-id>/user-commands`),
+  create root commands (`POST` to the list), and edit either scope
+  (`PUT .../<id>`) or delete a command (`POST .../<id>/remove`).
+  Commands carry a label, optional description, bash line, optional
+  multiline Ask prompt, optional cwd, and a revision. PUT accepts field
+  patches, including prompt and cwd. Ask sends a conversation message.
+  Run (`POST .../<id>/run`) executes through the composer's `!` path and
+  accepts a one-off line or cwd override without changing the command.
+  The effective cwd must resolve to an existing directory under the
+  worktree root. Run and Delete check the displayed revision at admission.
+  The v1 daemon already loads and updates agent-scope rows. Its SQL leaves
+  the root table and the agent prompt and cwd columns intact on an update
+  (`bbdbba130^`, `internal/wsusercmd/store.go:173,204–206`).
+  Root rows are invisible to v1 and reappear with v2 (T0). Agent prompt and
+  cwd are omitted by v1 and restored when v2 reloads the surviving rows (T1,
+  `internal/wsusercmd/store.go:263–289`). Withdrawing an agent command
+  still deletes that row in either version.
 - `sessions/<reply-id>/registration.json` - one entry per top-level lead
   session whose `dashboard.enabled` resolves on (session scope included),
   written by the serving ws-mcp at its first keyed call and heartbeated every

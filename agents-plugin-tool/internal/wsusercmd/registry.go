@@ -237,7 +237,7 @@ func normRoot(root string) string {
 	return root
 }
 
-// check validates an Input and returns it with its texts trimmed.
+// check validates an Input and normalizes the label, description, and cwd.
 func check(in Input) (Input, error) {
 	if !ValidID(in.ID) {
 		return in, fmt.Errorf("%w: id must be 1-64 characters of letters, digits, '.', '_' or '-', starting with a letter or digit", ErrInvalid)
@@ -248,7 +248,6 @@ func check(in Input) (Input, error) {
 func checkFields(in Input) (Input, error) {
 	in.Label = strings.TrimSpace(in.Label)
 	in.Description = strings.TrimSpace(in.Description)
-	in.Prompt = strings.TrimSpace(in.Prompt)
 	in.Cwd = strings.TrimSpace(in.Cwd)
 	if in.Label == "" {
 		return in, fmt.Errorf("%w: label is required", ErrInvalid)

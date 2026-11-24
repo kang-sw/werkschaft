@@ -27,6 +27,9 @@ type sessionRowAgents struct {
 func (*sessionRowAgents) Start(func(string, string)) {}
 func (*sessionRowAgents) InboxChanged(string)        {}
 func (*sessionRowAgents) Close()                     {}
+func (*sessionRowAgents) SessionMeta(id string) (AgentSessionMeta, bool) {
+	return AgentSessionMeta{Hosted: true, HasProcess: true, SafeStop: true}, id == "plainrow"
+}
 func (a *sessionRowAgents) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

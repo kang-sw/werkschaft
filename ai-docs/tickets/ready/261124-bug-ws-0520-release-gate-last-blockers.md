@@ -243,6 +243,34 @@ mid-hold (pointer and keyboard), multiline prompts, delayed Save, and a
 Stop whose session becomes busy before admission, plus Go tests for the
 daemon's safe-only admission.
 
+### Result (4cbe60fcb) - 2026-11-24
+
+- C4: Run, Ask and Delete bind to the command revision and action inputs at
+  press time. An intervening refresh cancels the hold. Ask sends the captured
+  message, and Run and Delete submit the captured revision.
+- I4: The prompt editor shows multiline text. Untouched fields keep their
+  stored bytes, including CRLF, across Ask, unrelated patches and revert.
+- I5: Command fields stay read-only while Save is pending. The card and
+  creation form unlock after a response or transport failure.
+- I6: Rail and menu clicks send optional `safe_only`. The daemon checks
+  the session in its conversation loop and returns 409 if it can no longer
+  stop safely. The UI then requires a fresh hold. T0: the old handler at
+  `bbcd42ec9:agents-plugin-tool/internal/wsagent/http.go:280–282` ignored
+  the request body. The new handler accepts the old empty request and
+  persists no intent field.
+- I7: The MCP runbook records command scopes, lifetimes, CRUD, Run
+  overrides, and v1 behavior (root commands T0, agent prompt and cwd T1).
+
+The Go build, registry tests, targeted dashboard route tests, safe-only
+admission and Chromium rail/menu fallback passed. Chromium user-command
+acceptance passed with the fixture corrections in `6f78445d3` and
+`0c97a7752`. The Playwright-enabled dashboard Node suite matched all four
+failing `composer-bang.test.cjs` test names on `bbcd42ec9`, with no
+branch-only failures. The optional full Go package run passed `wsagent`
+and `wsusercmd`. It hit the Phase 3 `TestBoardFrameBands` selector-fixture
+failure, and the worker ended its own broader dashboard test process after
+6m38s. Independent lite review found no issues.
+
 ### Phase 3: Board and whiteboard
 
 I8 through I14. Verify with the Board, Anchor and Gallery browser tests,

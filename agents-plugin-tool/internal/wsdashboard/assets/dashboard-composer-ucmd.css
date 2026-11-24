@@ -698,6 +698,7 @@
   white-space: pre;
 }
 .ucmd-inline-input.is-prompt {
+  resize: none;
   font-family: var(--wb-sans);
   font-size: 12px;
   color: var(--ucmd-prompt-fg);
