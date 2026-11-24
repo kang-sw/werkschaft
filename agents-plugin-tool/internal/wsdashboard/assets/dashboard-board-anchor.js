@@ -1102,12 +1102,22 @@
         p.card.hasAttribute("data-max") || p.node.hasAttribute("data-max"))) freeReleasePin();
     return freePin;
   }
-  function freeStartPinWindow() {
+  function freeStartPinWindow(afterRail) {
     var p = freePinned();
     if (!p) return;
-    // After the native landing, the destination rail can reserve a different
-    // amount of space. Correct once before holding the measured offset.
+    if (p.recheck && !afterRail) {
+      // The landing's scroll event queues the rail draw. Let that frame
+      // publish the sticky offsets before rechecking the destination.
+      freePinRaf = requestAnimationFrame(function () {
+        freePinRaf = requestAnimationFrame(function () {
+          freePinRaf = 0;
+          freeStartPinWindow(true);
+        });
+      });
+      return;
+    }
     if (p.recheck) {
+      if (!freeJump || Math.abs(p.col.scrollTop - freeJump.top) > 1) { freeReleasePin(); return; }
       var top = p.recheck();
       p.recheck = null;
       if (top !== undefined) {
@@ -1118,6 +1128,7 @@
     }
     p.until = Date.now() + FREE_PIN_MS;
     freePinTimer = setTimeout(freeReleasePin, FREE_PIN_MS);
+    if (p.dirty) freePinLayout();
   }
   function freeOffset(node, col) {
     return node.getBoundingClientRect().top - col.getBoundingClientRect().top - (col.clientTop || 0);
@@ -1159,7 +1170,7 @@
     var p = freePinned();
     if (!p) return;
     p.dirty = true;
-    if (freePinRaf || (freeJump && freeJump.moving)) return;
+    if (p.recheck || freePinRaf || (freeJump && freeJump.moving)) return;
     // Coalesce the height reports, observer callbacks and layout writes.
     freePinRaf = requestAnimationFrame(function () {
       freePinRaf = 0;
@@ -1404,10 +1415,7 @@
     if (!freeJump || !freeJump.moving) return;
     freeJump.top = col.scrollTop;
     freeJump.moving = false;
-    if (freePin) {
-      freeStartPinWindow();
-      if (freePin && freePin.dirty) freePinLayout();
-    }
+    freeStartPinWindow();
   }
   function freeScrollTick() {
     freeScrollRaf = 0;

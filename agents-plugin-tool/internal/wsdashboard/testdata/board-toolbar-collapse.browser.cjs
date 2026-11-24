@@ -102,7 +102,7 @@ async function measureToolbar(page) {
       outerWidth: Math.round(rect(toolbar).width * 10) / 10,
       faceWidth: Math.round(faceRect.width * 10) / 10,
       faceHeight: Math.round(faceRect.height * 10) / 10,
-      slotHeight: Math.round((faceRect.height + marginBottom) * 10) / 10,
+      slotHeight: Math.round((rect(toolbar).height + marginBottom) * 10) / 10,
       overviewRect: overviewRect ? { width: Math.round(overviewRect.width * 10) / 10, height: Math.round(overviewRect.height * 10) / 10 } : null,
       filterWidth: filterVisible ? Math.round(rect(filter).width * 10) / 10 : 0,
       mode: toolbar.getAttribute('data-toolbar-fit') || 'full',
@@ -191,6 +191,40 @@ function assertSingleRow(m, label) {
       assert.equal(wide.faceHeight, 50, `${lang} ${wideTarget} faceHeight must be 50px`);
       assert.equal(wide.slotHeight, 56, `${lang} ${wideTarget} slotHeight must be 56px`);
       assert.deepEqual(wide.overviewRect, { width: 38, height: 44 }, `${lang} ${wideTarget} overview anchor must be 38x44`);
+
+      if (lang === 'ko') {
+        for (const selector of ['.board-state-chip[data-filter="asks"]', '.board-state-seg[data-filter="waiting"]']) {
+          await page.locator('.board-files').click();
+          await page.locator('#toolbar-files[data-max]').waitFor();
+          const box = await page.locator(selector).boundingBox();
+          const x = box.x + box.width / 2, y = box.y + box.height / 2;
+          const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y).matches('.bc-scrim'), { x, y });
+          await page.mouse.click(x, y);
+          assert.equal(hit, true, selector + ' is covered by the Files scrim');
+          assert.equal(await page.locator('#toolbar-files').isVisible(), false, 'the outside click dismisses Files');
+          assert.equal(await page.locator('.board-state-radio[aria-checked="true"]').getAttribute('data-filter'), 'all');
+        }
+
+        await setExactToolbarWidth(page, 400);
+        await page.locator('.board-overview').click();
+        await page.locator('html[data-overview]').waitFor({ state: 'attached' });
+        for (const mode of ['dropdown', 'tight']) {
+          const toolbar = page.locator('.board-toolbar');
+          if (mode === 'tight') await toolbar.evaluate(el => { el.style.maxWidth = '175px'; });
+          await resetScroll(page);
+          const resting = await measureToolbar(page);
+          assert.equal(resting.mode, mode);
+          assert.equal(resting.floating, false);
+          await page.locator('#bcol').evaluate(el => { el.scrollTop = 300; });
+          await settle(page);
+          const floating = await measureToolbar(page);
+          assert.equal(floating.floating, true, mode + ' reaches the sticky boundary in Overview');
+          assert.equal(floating.slotHeight, resting.slotHeight, mode + ' reserves the same in-flow height');
+        }
+        await page.locator('.board-toolbar').evaluate(el => { el.style.removeProperty('max-width'); });
+        await page.locator('.board-overview').click();
+        await page.locator('html[data-overview]').waitFor({ state: 'detached' });
+      }
 
       // Verify 680px (and 500px for Korean) stays inline with zero overflow/clipping.
       for (const target of (lang === 'ko' ? [680, 500] : [680])) {

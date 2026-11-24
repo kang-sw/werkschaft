@@ -97,7 +97,14 @@ boot(store, served, { kinds: ["preview", "terminal", "web", "explorer"] });
 check("reload restores Cards selection and retained framework records", [radio("cards").getAttribute("aria-checked"), shown(), counts()[7]], ["true", [], "3"]);
 [false, true].forEach(function (pop) {
   choose("researching");
-  [["ArrowRight", "discussing"], ["ArrowDown", "waiting"], ["ArrowLeft", "discussing"], ["ArrowUp", "researching"], ["ArrowLeft", "asks"], ["ArrowLeft", "all"], ["ArrowRight", "asks"], ["Home", "all"], ["ArrowLeft", "tickets"], ["ArrowUp", "cards"], ["ArrowDown", "tickets"], ["ArrowRight", "all"], ["End", "tickets"], ["ArrowDown", "all"], ["ArrowUp", "tickets"]].forEach(function (step) {
+  var steps = [
+    ["ArrowRight", "discussing"], ["ArrowDown", "waiting"], ["ArrowLeft", "discussing"], ["ArrowUp", "researching"],
+    ["ArrowLeft", pop ? "asks" : "tickets"],
+    ["Home", "all"], ["ArrowRight", "asks"], ["ArrowRight", pop ? "researching" : "closed"],
+    ["End", pop ? "tickets" : "awaiting-confirmation"], ["ArrowDown", "all"],
+    ["ArrowUp", pop ? "tickets" : "awaiting-confirmation"]
+  ];
+  steps.forEach(function (step) {
     var selected = filterOrder.filter(function (value) { return radio(value, pop).getAttribute("aria-checked") === "true"; })[0], prevented = false;
     radio(selected, pop).fire("keydown", { key: step[0], preventDefault: function(){prevented=true;}, stopPropagation: function(){} });
     check("keyboard lifecycle " + pop + " " + step[0] + " to " + step[1], [radio(step[1]).getAttribute("aria-checked"), radio(step[1], true).getAttribute("aria-checked"), store["cards.state-filter"], prevented], ["true", "true", step[1], true]);
