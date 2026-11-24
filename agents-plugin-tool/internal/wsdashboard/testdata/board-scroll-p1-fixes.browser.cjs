@@ -267,14 +267,14 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     const stepBtnCount = await page.locator('.board-step, .board-step-prev, .board-step-next').count();
     assert.equal(stepBtnCount, 0, 'redundant .board-step chevron buttons must be removed');
 
-    // Verify wheel-virtualized CSS: overscroll-behavior-y: contain on inner scroller, no scroll-margin-top
+    // The topic takes its natural height and wheel scrolling flows to #bcol.
     const topicCss = await page.locator('section.topic[data-topic="topic-4"]').evaluate(el => {
       const cs = getComputedStyle(el);
-      return { overscrollY: cs.overscrollBehaviorY, scrollMarginTop: cs.scrollMarginTop, overflowAnchor: cs.overflowAnchor };
+      return { overscrollY: cs.overscrollBehaviorY, scrollMarginTop: cs.scrollMarginTop, innerRange: el.scrollHeight - el.clientHeight };
     });
-    assert.equal(topicCss.overscrollY, 'contain', 'section.topic must contain inner overscroll');
-    assert.equal(topicCss.scrollMarginTop, '0px', 'wheel-virtualized deck uses no CSS scroll-margin-top');
-    assert.equal(topicCss.overflowAnchor, 'none', 'non-current card must keep overflow-anchor: none');
+    assert.equal(topicCss.overscrollY, 'auto', 'free-canvas topics do not trap overscroll');
+    assert.equal(topicCss.scrollMarginTop, '0px', 'free-canvas cards use no CSS scroll-margin-top');
+    assert.equal(topicCss.innerRange, 0, 'a tall topic uses its natural height');
 
     // Bug 3 + Bug 4 toolbar-float transition: select Topic 4 from scrollTop=0
     await page.evaluate(() => {
@@ -296,7 +296,6 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
       return {
         key: window.WsBoardAnchor.key(),
         currentAttr: t4.hasAttribute('data-current'),
-        overflowAnchor: getComputedStyle(t4).overflowAnchor,
         floating: toolbar && toolbar.hasAttribute('data-floating'),
         faceH: face ? face.getBoundingClientRect().height : null,
         wbRailInset: bcol.style.getPropertyValue('--wb-rail-inset'),
@@ -319,8 +318,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
 
     assert.equal(t4TopMetrics.key, 't:topic-4');
     assert.equal(t4TopMetrics.currentAttr, true);
-    assert.equal(t4TopMetrics.overflowAnchor, 'auto', 'current card keeps overflow-anchor: auto');
-    assert.equal(t4TopMetrics.floating, false, 'toolbar stays non-floating in bounded snap-deck mode');
+    assert.equal(t4TopMetrics.floating, false, 'toolbar stays non-floating in bounded free-canvas mode');
     assert.equal(t4TopMetrics.topCaps.length, 2, '2-row top rail bars visible');
     const topGap = t4TopMetrics.cardTop - t4TopMetrics.topStackBottom;
     assert.ok(topGap >= -1 && topGap <= 3, `expected <=3px gap below 2-row top rail, got ${topGap.toFixed(2)}px`);
@@ -329,82 +327,34 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
 
     if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '01-top-rail-and-oq-pill.png') });
 
-    // Bug 4: Scroll inside Topic 4 to bottom edge and verify bottom 2-row rail clearance
-    const t4BotMetrics = await page.evaluate(() => {
-      const t4 = document.getElementById('topic-4');
-      t4.scrollTop = t4.scrollHeight - t4.clientHeight;
-      const botStack = document.querySelector('.wb-rail-wrap.dn .wb-rail-stack');
-      const botCaps = Array.from(document.querySelectorAll('.wb-rail-wrap.dn .wb-cap')).filter(b => !b.hidden).map(b => b.textContent.trim());
-      const lastLine = t4.querySelector('.tlog .last-line');
-      return {
-        scrollTop: t4.scrollTop,
-        maxScroll: t4.scrollHeight - t4.clientHeight,
-        botCaps: botCaps,
-        cardBottom: t4.getBoundingClientRect().bottom,
-        botStackTop: botStack.getBoundingClientRect().top,
-        lastLineBottom: lastLine.getBoundingClientRect().bottom,
-        lastLineTop: lastLine.getBoundingClientRect().top,
-      };
+    // A real wheel gesture over the doc frame scrolls the outer board.
+    const hitPoint = await page.evaluate(() => {
+      const col = document.getElementById('bcol');
+      const frame = document.querySelector('#topic-4 iframe.doc-frame').getBoundingClientRect();
+      return { x: Math.round(frame.left + frame.width / 2), y: Math.round(frame.top + 80), top: col.scrollTop };
     });
-    await waitFrames(page, 3);
-    assert.equal(t4BotMetrics.botCaps.length, 2, '2-row bottom rail bars visible');
-    assert.ok(t4BotMetrics.cardBottom <= t4BotMetrics.botStackTop + 0.5,
-      `card bottom (${t4BotMetrics.cardBottom}) must sit cleanly above bottom rail stack top (${t4BotMetrics.botStackTop})`);
-    assert.ok(t4BotMetrics.lastLineBottom <= t4BotMetrics.cardBottom + 0.5 && t4BotMetrics.lastLineBottom <= t4BotMetrics.botStackTop + 0.5,
-      `last line bottom (${t4BotMetrics.lastLineBottom}) must not clip`);
+    await page.mouse.move(hitPoint.x, hitPoint.y);
+    await page.mouse.wheel(0, 260);
+    await page.waitForFunction(top => document.getElementById('bcol').scrollTop > top + 100, hitPoint.top);
+    const downTop = await page.locator('#bcol').evaluate(el => el.scrollTop);
+    await page.mouse.wheel(0, -120);
+    await page.waitForFunction(top => document.getElementById('bcol').scrollTop < top, downTop);
+
+    // Bring the final text into view in the outer scroller. The full-height
+    // card extends past the viewport, while its text can clear the bottom rail.
+    const lastLine = page.locator('#topic-4 .tlog .last-line');
+    await lastLine.evaluate(el => el.scrollIntoView({ block: 'center' }));
+    await waitFrames(page, 4);
+    const t4Bottom = await lastLine.evaluate(el => {
+      const col = document.getElementById('bcol').getBoundingClientRect();
+      const rail = document.querySelector('.wb-rail-wrap.dn .wb-rail-stack').getBoundingClientRect();
+      const line = el.getBoundingClientRect();
+      return { lineTop: line.top, lineBottom: line.bottom, colTop: col.top, railTop: rail.top };
+    });
+    assert.ok(t4Bottom.lineTop >= t4Bottom.colTop && t4Bottom.lineBottom <= t4Bottom.railTop + 0.5,
+      'the last line can scroll fully above the bottom rail: ' + JSON.stringify(t4Bottom));
 
     if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, '02-tall-card-bottom-clearance.png') });
-
-    // Bug 1: Real wheel over visible iframe.doc-frame scrolls Topic 4 down to bottom ->
-    // chains into #bcol -> moves off Topic 4, and upward wheel chains back up #bcol!
-    const hitPoint = await page.evaluate(() => {
-      const t4 = document.getElementById('topic-4');
-      t4.scrollTop = 0;
-      const t4r = t4.getBoundingClientRect();
-      const fr = t4.querySelector('iframe.doc-frame').getBoundingClientRect();
-      return {
-        x: Math.round(fr.left + fr.width / 2),
-        y: Math.round(Math.max(t4r.top + 80, fr.top + 80)),
-        t4Top: t4.scrollTop,
-        t4Max: t4.scrollHeight - t4.clientHeight,
-        bcolTop: document.getElementById('bcol').scrollTop,
-      };
-    });
-    await waitFrames(page, 2);
-    await page.mouse.move(hitPoint.x, hitPoint.y);
-
-    // Wheel down enough to finish Topic 4 inner scroll, then pause past wallGuardMs and step to next card
-    for (let i = 0; i < 9; i++) {
-      await page.mouse.wheel(0, 260);
-      await page.waitForTimeout(35);
-    }
-    await page.waitForTimeout(200);
-    await page.mouse.wheel(0, 120);
-    await page.waitForTimeout(260);
-    const afterDownChain = await page.evaluate(() => ({
-      t4Top: document.getElementById('topic-4').scrollTop,
-      bcolTop: document.getElementById('bcol').scrollTop,
-      key: window.WsBoardAnchor.key(),
-    }));
-    assert.ok(afterDownChain.t4Top > 100, `wheel over iframe.doc-frame must scroll topic-4 internally first (got ${afterDownChain.t4Top})`);
-    assert.ok(afterDownChain.bcolTop > hitPoint.bcolTop + 100,
-      `wheel over iframe.doc-frame must step from topic-4 into next card (${hitPoint.bcolTop} -> ${afterDownChain.bcolTop})`);
-    assert.notEqual(afterDownChain.key, 't:topic-4', `wheel step must advance anchorKey off topic-4 (got ${afterDownChain.key})`);
-
-    // Now pause past idleGapMs, ensure current card is at top, and wheel UP to confirm upward deck step also works
-    await page.evaluate(() => {
-      const cur = document.querySelector('section.topic[data-current]');
-      if (cur) cur.scrollTop = 0;
-    });
-    await page.waitForTimeout(200);
-    await page.mouse.move(hitPoint.x, hitPoint.y);
-    await page.mouse.wheel(0, -120);
-    await page.waitForTimeout(260);
-    const afterUpChain = await page.evaluate(() => ({
-      bcolTop: document.getElementById('bcol').scrollTop,
-      key: window.WsBoardAnchor.key(),
-    }));
-    assert.ok(afterUpChain.bcolTop < afterDownChain.bcolTop, 'upward wheel must step back up #bcol');
 
     // Bug 4 (part B): From Topic 1 (with full-span cards, Topic 2 & Topic 3 sit in bottom rail), click bottom .wb-cap for Topic 3 (after folded Topic 2)
     await page.evaluate(() => {
@@ -536,6 +486,8 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     // contain: layout style (no contain: strict) with entry-panel[data-max] &
     // overview lifts, hidden .bcard .bc-grip, and .oq-pill 2-level offscreen
     // jump back to Topic 1's #item-1.
+    await page.locator('#topic-4').evaluate(n => window.WsBoardAnchor.select(n, { smooth: false }));
+    await waitFrames(page, 4);
     const freeCanvas = await page.evaluate(() => {
       const bcol = document.getElementById('bcol');
       const bcolCs = getComputedStyle(bcol);
@@ -615,13 +567,20 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     await waitFrames(page, 4);
     const pillTop = page.locator('.wb-oq-top .oq-pill');
     assert.equal(await pillTop.isVisible(), true, 'top .oq-pill visible when Topic 1 ask is offscreen above');
+    await page.locator('#item-1').evaluate(el => {
+      const scrollIntoView = el.scrollIntoView;
+      el.scrollIntoView = function (options) {
+        window.__askLandingKey = window.WsBoardAnchor.key();
+        return scrollIntoView.call(this, options);
+      };
+    });
     await pillTop.click();
     await waitForScrollSettle(page);
     const jumped = await page.evaluate(() => {
       const bcol = document.getElementById('bcol').getBoundingClientRect();
       const item = document.getElementById('item-1').getBoundingClientRect();
       return {
-        key: window.WsBoardAnchor.key(),
+        key: window.__askLandingKey,
         visible: item.bottom > bcol.top && item.top < bcol.bottom,
       };
     });

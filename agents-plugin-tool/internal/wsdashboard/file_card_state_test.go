@@ -12,7 +12,7 @@ import (
 
 func TestFileCardThreeState(t *testing.T) {
 	src, _ := json.Marshal(mustAsset(t, "preview.js"))
-	fixture, err := os.ReadFile("testdata/file-card-state.test.cjs")
+	fixture, err := os.ReadFile("testdata/file-card-state.fixture.cjs")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,6 +78,10 @@ function func(name) {
           document.querySelectorAll('#ctext + .wsc-editor [data-wsc-kind="topic-note"][data-wsc-key="t0"]').length === 1;
       }), 'inline topic note tracks all 50 inputs');
     }
+    // The compact capsule label shows the first 40 characters. Start the
+    // native IME probe with a short note so the composed text is visible.
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.type('warmup');
     // Native Korean IME composition follows the same board-input path.
     for (const text of ['ㅎ', '하', '한', '한ㄱ', '한그', '한글']) {
       await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });

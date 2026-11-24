@@ -275,6 +275,7 @@ async function run(browser, { lang, scheme }) {
 
   // I5: the keyboard survives a confirmation timeout, an end under the confirmation, and a fold.
   await sect('I5', async () => {
+    await page.setViewportSize({ width: 1536, height: 900 });
     await setJobs([J('exec_f1', 'npm run dev'), J('exec_f2', 'cargo watch', { started_at: Date.now() - 50000 })]);
     await view.waitForSelector('.xchip[data-xid="exec_f2"]');
     await openChip(view, 'exec_f1');

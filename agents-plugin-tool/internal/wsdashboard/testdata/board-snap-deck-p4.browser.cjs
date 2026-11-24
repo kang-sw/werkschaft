@@ -556,7 +556,7 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
       if (docked) docked.__p4DockedIdentity = 'docked-18';
     });
 
-    // 2. Jump to middle topic (topic-9) and verify O(1) ±2 window + bounded mounted DOM & doc-frames
+    // 2. Jump to topic-9 and verify the bounded free-canvas window and the live-frame exemptions.
     await page.evaluate(() => {
       window.WsBoardAnchor.select(document.getElementById('topic-9'), { smooth: false });
     });
@@ -569,14 +569,20 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
       const boardTopics = Array.from(document.querySelectorAll('#r-board > section.topic[data-topic]'));
       const hydratedTopics = boardTopics.filter(t => !t.hasAttribute('data-wb-virtual'));
       const collapsedTopics = boardTopics.filter(t => t.hasAttribute('data-wb-virtual'));
-      const mountedDocFrames = document.querySelectorAll('#r-board iframe.doc-frame').length;
+      const mountedDocFrames = [...document.querySelectorAll('#r-board iframe.doc-frame')].map(f => f.closest('section.topic')?.dataset.topic);
+      const { start, end } = window.WsBoardAnchor.windowInfo();
+      const expectedHydrated = boardTopics.filter(n => {
+        const i = cards.indexOf(n);
+        return (i >= start && i <= end) || n.id === 'topic-17';
+      });
       const collapsedWithTopheadOnly = collapsedTopics.every(t => t.children.length === 1 && t.firstElementChild.classList.contains('tophead'));
       const bcardsCollapsed = Array.from(document.querySelectorAll('#r-board .bcard')).some(c => c.hasAttribute('data-wb-virtual'));
       const ptyTopic = document.getElementById('topic-17');
       const dockedTopic = document.querySelector('#bgal section.topic[data-topic="topic-18"]');
       return {
         curKey: window.WsBoardAnchor.key(),
-        curIdx,
+        curIdx, start, end,
+        expectedHydrated: expectedHydrated.map(n => n.dataset.topic),
         totalBoardTopics: boardTopics.length,
         hydratedNames: hydratedTopics.map(t => t.getAttribute('data-topic')),
         collapsedCount: collapsedTopics.length,
@@ -590,14 +596,14 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
 
     assert.equal(midStats.curKey, 't:topic-9');
     assert.equal(midStats.collapsedWithTopheadOnly, true, 'every collapsed far topic keeps .tophead mounted and detaches body');
-    // Hydrated topics in #r-board: ±2 around topic-9 (topics 7, 8, 9, 10, 11) + exempt topic-17 (has .xterm/.tm-host) = 6
-    assert.deepEqual(
-      midStats.hydratedNames,
-      ['topic-7', 'topic-8', 'topic-9', 'topic-10', 'topic-11', 'topic-17'],
-      'only ±2 near topics plus exempt .xterm/.tm-host topic remain hydrated',
-    );
-    assert.ok(midStats.collapsedCount >= 11, `at least 11 far topics collapsed (got ${midStats.collapsedCount})`);
-    assert.ok(midStats.mountedDocFrames <= 6, `mounted iframe.doc-frame count strictly bounded O(1) (got ${midStats.mountedDocFrames})`);
+    for (const radius of [midStats.curIdx - midStats.start, midStats.end - midStats.curIdx]) {
+      assert.ok(radius >= 3 && radius <= 8, `free-canvas window radius stays within 3–8 cards (got ${radius})`);
+    }
+    assert.deepEqual(midStats.hydratedNames, midStats.expectedHydrated, 'only window topics and exempt PTYs remain hydrated');
+    assert.equal(midStats.collapsedCount, midStats.totalBoardTopics - midStats.expectedHydrated.length);
+    assert.ok(midStats.collapsedCount > 0, 'distant bodies are still evicted');
+    assert.ok(midStats.mountedDocFrames.length <= midStats.expectedHydrated.length, 'mounted frames remain bounded by hydrated topics');
+    assert.ok(midStats.mountedDocFrames.every(name => midStats.expectedHydrated.includes(name)), 'no frames remain mounted in evicted topics');
     assert.equal(midStats.bcardsCollapsed, false, 'unpinned .bcard widgets are NEVER collapsed');
     assert.equal(midStats.ptyTopicCollapsed, false, 'topic with .xterm/.tm-host is NEVER collapsed');
     assert.equal(midStats.dockedTopicCollapsed, false, '#bgal-docked topic is NEVER collapsed');
@@ -904,7 +910,7 @@ test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, 
 
     // (b) Non-stashed SSE update to a collapsed topic (when virtualStashUpdate returns false, e.g.
     //     active slot moved near during deferred dial scrub before reconcile) preserves history,
-    //     openDetails, and scrollTop via virtualTakeCollapsed; AND stashed hydration calls bindCapsuleNotes (g).
+    //     and open details via virtualTakeCollapsed. Stashed hydration also binds capsule notes (g).
     await page.evaluate(() => {
       const t13 = document.getElementById('topic-13');
       window.WsBoardAnchor.select(t13, { smooth: false });
@@ -916,13 +922,12 @@ test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, 
       liveBox.insertBefore(extra, liveBox.firstElementChild);
       t13.querySelector('details.entry-panel').open = true;
       window.__p4SetOpenState('panel-13', true);
-      t13.scrollTop = 48;
       // Move away so topic-13 and topic-10 collapse
       window.WsBoardAnchor.select(document.getElementById('topic-1'), { smooth: false });
     });
     await waitFrames(page, 4);
 
-    // Start a dial scrub to topic-12 so topic-13 is now within ±2 (virtualIsNearNode === true)
+    // Start a dial scrub to bring topic-13 into the active free-canvas window
     // while still collapsed (dialScrubbing defers virtualReconcile) -> forces non-stashed branch!
     const nonStashedHtml = Array.from({ length: 18 }, (_, idx) => {
       const i = idx + 1;
@@ -956,7 +961,7 @@ test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, 
         collapsedAfter: t13After.hasAttribute('data-wb-virtual'),
         hasLoadedRow: !!t13After.querySelector('[data-row="t13-nonstashed-loaded"]'),
         detailOpen: !!t13After.querySelector('details.entry-panel')?.open,
-        scrollTop: t13After.scrollTop,
+        topicScrollRange: t13After.scrollHeight - t13After.clientHeight,
         rev: t13After.getAttribute('data-th'),
       };
     }, nonStashedHtml);
@@ -969,7 +974,7 @@ test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, 
     assert.equal(nonStashedCheck.collapsedAfter, false);
     assert.equal(nonStashedCheck.hasLoadedRow, true, '(b) loaded history row preserved on non-stashed SSE replacement');
     assert.equal(nonStashedCheck.detailOpen, true, '(b) details[open] preserved on non-stashed SSE replacement');
-    assert.ok(nonStashedCheck.scrollTop >= 40, '(b) scrollTop preserved on non-stashed SSE replacement');
+    assert.equal(nonStashedCheck.topicScrollRange, 0, '(b) updated topic stays full-height on the free canvas');
     assert.equal(nonStashedCheck.rev, 'rev-13-nonstash-v2');
 
     // (g) Verify bindCapsuleNotes is invoked on stashed hydration (topic-10 was far during swap, now jump to it)

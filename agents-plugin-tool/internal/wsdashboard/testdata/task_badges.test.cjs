@@ -5,7 +5,8 @@ const vm = require('node:vm');
 
 // Exercise the real badge functions without booting the rest of the page.
 const source = readAssetSource('wsdashboard', 'dashboard.js');
-const functions = source.slice(source.indexOf('  function taskBadge('), source.indexOf('  function interruptTurn('));
+const badgeStart = source.indexOf('  function taskBadge(');
+const functions = source.slice(badgeStart, source.indexOf('  // --- agents island', badgeStart));
 function badge() {
   const label = { textContent: '' };
   const attrs = {};

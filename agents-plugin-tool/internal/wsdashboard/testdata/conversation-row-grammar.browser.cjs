@@ -42,9 +42,9 @@ const live = JSON.parse(fs.readFileSync(fixture, 'utf8'));
    assert(await frame.locator('article.wbeffects.wbupdate').count()>0,'expanded whiteboard card');
    assert(await frame.locator('.turnline').count()>0,'turn summary rendered');
    const traceHeight=await frame.locator('.mailline > summary').first().evaluate(el=>el.getBoundingClientRect().height);
-   const primaryColor=await frame.evaluate(()=>{
+   const traceAccent=await frame.evaluate(()=>{
     const probe=document.createElement('span');
-    probe.style.color='var(--wb-primary)';
+    probe.style.color='var(--conv-trace-accent)';
     document.body.appendChild(probe);
     const color=getComputedStyle(probe).color;
     probe.remove();
@@ -64,8 +64,8 @@ const live = JSON.parse(fs.readFileSync(fixture, 'utf8'));
     assert.equal(metrics.whiteSpace,'nowrap','collapsed row content stays on one line');
     assert(metrics.height<=traceHeight+4,`collapsed row stays one trace line (${metrics.height}px vs ${traceHeight}px; ${metrics.classes}; ${metrics.text})`);
     if(metrics.isMail) {
-     assert.equal(metrics.iconColor,primaryColor,'mail icon uses the primary blue family');
-     assert.equal(metrics.contentColor,primaryColor,'trigger mail name uses the primary blue family');
+     assert.equal(metrics.iconColor,traceAccent,'mail icon uses the conversation trace accent');
+     assert.equal(metrics.contentColor,traceAccent,'trigger mail name uses the conversation trace accent');
     }
    }
    for(const height of await frame.locator('.turnline > summary').evaluateAll(rows=>rows.map(el=>el.getBoundingClientRect().height))) {
