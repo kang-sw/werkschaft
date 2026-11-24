@@ -87,8 +87,8 @@ type execCutoverInputs struct {
 //   - its ws tools include the replacement (cutoverReplacement): a lead
 //     lists every ws tool, a worker only its profile's allowlist, and
 //     agentless ws-mcp lists no exec tool;
-//   - the harness's rollout switch is on, and for Claude its opt-in
-//     (claude.exec_cutover_enabled, off by default) is on.
+//   - the harness's rollout switch is on, and Claude has not opted out
+//     (claude.exec_cutover_enabled defaults to on).
 func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bool, string) {
 	reg := c.r.opts.Backends[rec.Backend]
 	if reg.ExecCutover == nil {
@@ -146,11 +146,10 @@ func cutoverReplacement(life LifecyclePolicy) []string {
 
 // execRolloutOn reads the harness's rollout switch: its bucket, then all,
 // then the bare key; on unless one says off. A backend with an ExecOptIn
-// (Claude's claude.exec_cutover_enabled) also needs it: off unless it says on,
-// and off when the config cannot be read, so the default Claude path keeps its
-// native tools and never depends on the ws-mcp session route for commands. One
-// resolution reads every scope's file once for all the keys. When off, the
-// second result says why.
+// (Claude's claude.exec_cutover_enabled) also needs it: on unless explicitly
+// off. Config read errors keep native tools so command execution remains
+// available. One resolution reads every scope's file once for all keys.
+// When off, the second result says why.
 func (c *conv) execRolloutOn(rec Record) (bool, string) {
 	optIn := c.r.opts.Backends[rec.Backend].Lifecycle.ExecOptIn
 	gated := optIn.Key != ""
@@ -190,10 +189,8 @@ func (c *conv) execRolloutOn(rec Record) (bool, string) {
 		break
 	}
 	if gated {
-		switch strings.ToLower(strings.TrimSpace(byKey[optIn.Key])) {
-		case "true", "on", "1", "yes":
-		default:
-			return false, optIn.Key + " is off (the " + optIn.Label + " cutover is opt-in)"
+		if switchOff(strings.ToLower(strings.TrimSpace(byKey[optIn.Key]))) {
+			return false, optIn.Key + " is off (the " + optIn.Label + " cutover is disabled)"
 		}
 	}
 	return true, ""

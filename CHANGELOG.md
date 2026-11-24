@@ -127,6 +127,10 @@
 
 ## v0.52.0
 
+- Claude exec cutover defaults on for hosted leads and spawned workers in ws
+  and wsflow. Set `claude.exec_cutover_enabled` to false to opt out; all other
+  cutover conditions and fail-closed config reads remain unchanged.
+
 - **Werk replaces Pi for hosted leads and workers.** The daemon runs werk
   in process with durable turn recovery, lead compaction, skills, and
   permission modes. Choose OpenRouter, Sign in with ChatGPT, or a named

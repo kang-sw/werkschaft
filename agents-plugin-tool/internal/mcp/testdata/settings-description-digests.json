@@ -12,7 +12,7 @@
   "agents-plugin/config-manifest.json#claude.display_summary_enabled": "24b89645d2a89284",
   "agents-plugin/config-manifest.json#claude.display_summary_model": "3d8e6766e4225b93",
   "agents-plugin/config-manifest.json#claude.display_summary_style": "b9949dc38466786f",
-  "agents-plugin/config-manifest.json#claude.exec_cutover_enabled": "a9f2e375dba3f538",
+  "agents-plugin/config-manifest.json#claude.exec_cutover_enabled": "79220958476fb634",
   "agents-plugin/config-manifest.json#claude.mailbox_drain": "06bb5737ad86f7b2",
   "agents-plugin/config-manifest.json#claude.manual_injection_enabled": "1e425cd448007f79",
   "agents-plugin/config-manifest.json#claude.mcp_watchdog_enabled": "313de25b9c54f91f",
