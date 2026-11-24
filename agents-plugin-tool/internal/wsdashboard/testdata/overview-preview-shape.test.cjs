@@ -302,6 +302,9 @@ test('buildPlaceholder clones inert, id-free summary shell for both section.topi
 
   const topicPh = board.querySelector('.overview-placeholder');
   assert.ok(topicPh, 'topic placeholder inserted into board');
+  assert.equal(topicPh.tagName, 'SECTION', 'topic placeholder uses <section> so section.topic[data-size="fold"] rules apply');
+  assert.equal(topicPh.getAttribute('role'), 'button', 'topic placeholder exposes button role');
+  assert.equal(topicPh.getAttribute('aria-label'), 'Alpha Topic', 'topic placeholder exposes original topic accessible label');
   assert.equal(topicPh.style.height, '92px');
   assert.equal(topicPh.getAttribute('data-overview-target-topic'), 'alpha');
   assert.equal(topicPh.hasAttribute('data-topic'), false, 'placeholder must not carry data-topic');
@@ -338,6 +341,8 @@ test('buildPlaceholder clones inert, id-free summary shell for both section.topi
 
   const cardPh = board.querySelector('.overview-placeholder');
   assert.ok(cardPh, 'bcard placeholder inserted into board');
+  assert.equal(cardPh.getAttribute('role'), 'button', 'bcard placeholder exposes button role');
+  assert.equal(cardPh.getAttribute('aria-label'), 'Terminal 1', 'bcard placeholder exposes original card accessible label');
   assert.equal(cardPh.style.height, '36px');
   assert.equal(cardPh.getAttribute('data-overview-target-card'), 'term-1');
   assert.equal(cardPh.hasAttribute('data-card'), false, 'placeholder must not carry data-card');
@@ -404,4 +409,103 @@ test('dashboard-board.css Overview summary card geometry and inset ring contract
   assert.doesNotMatch(overviewBlockMatch[0], /outline-offset:\s*-1px/, 'Overview block must not use outline-offset: -1px');
   assert.doesNotMatch(overviewBlockMatch[0], /border:\s*1\.5px dashed/, 'Overview block must not use 1.5px dashed border');
   assert.doesNotMatch(boardCSS, /\.overview-placeholder-(head|title|badge|recap)/, 'obsolete plain-text placeholder classes removed');
+});
+
+test('folded topic placeholder keeps <section> selector match for folded CSS and preserves accessible name with inert controls', () => {
+  const { El, body, doc } = makeMiniDom();
+  const grid = new El('main', { class: 'dgrid live' });
+  const bcol = new El('div', { id: 'bcol' });
+  const board = new El('div', { id: 'r-board', class: 'r-board' });
+  const toolbar = new El('div', { class: 'board-toolbar', _rect: { top: -80, bottom: -40, height: 40 } }, [
+    new El('button', { class: 'board-overview', _rect: { top: -80, bottom: -40, height: 40 } }),
+  ]);
+  const bgal = new El('div', { id: 'bgal', class: 'bgal' }, [
+    new El('div', { class: 'gal-viewport' }),
+    new El('div', { class: 'gal-rail' }),
+  ]);
+  bgal.hidden = true;
+
+  const foldedTopic = new El('section', {
+    class: 'topic',
+    id: 'topic-folded',
+    'data-topic': 'folded-spec',
+    'data-state': 'discussing',
+    'data-size': 'fold',
+    _rect: { top: 20, bottom: 60, height: 40 },
+  }, [
+    new El('div', { class: 'tophead', id: 'th-folded' }, [
+      new El('div', { class: 'tbar', id: 'tb-folded' }, [
+        new El('span', { class: 'tname', _text: 'Folded Spec Topic' }),
+        new El('button', { class: 't-fold', _text: 'Fold' }),
+      ]),
+      new El('div', { class: 'tsub' }, [
+        new El('div', { class: 'trecap' }, [
+          new El('div', { class: 'rtext', _text: 'Recap hidden when folded' }),
+        ]),
+      ]),
+    ]),
+    new El('div', { class: 'tbody', _text: 'Body' }),
+  ]);
+
+  board.appendChild(toolbar);
+  board.appendChild(foldedTopic);
+  bcol.appendChild(board);
+  grid.appendChild(bcol);
+  body.appendChild(grid);
+  body.appendChild(bgal);
+
+  const storage = {};
+  const win = {
+    innerWidth: 1600,
+    innerHeight: 900,
+    matchMedia: () => ({ matches: true }),
+    WsCards: { isFourCol: () => true, relayout: () => {} },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const ctx = vm.createContext({
+    document: doc,
+    window: win,
+    sessionStorage: {
+      getItem: k => (k in storage ? storage[k] : null),
+      setItem: (k, v) => { storage[k] = String(v); },
+      removeItem: k => { delete storage[k]; },
+    },
+    getComputedStyle: () => ({ overflowY: 'visible', marginBottom: '6px', scrollPaddingTop: '0', getPropertyValue: () => '' }),
+    requestAnimationFrame: () => 1,
+    performance: { now: () => 0 },
+    innerHeight: 900,
+    innerWidth: 1600,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    wsT: k => k,
+    Event: function Event(type) { this.type = type; },
+  });
+  vm.runInContext(overviewSrc, ctx);
+  win.WsOverview.mount({ board, toolbar, rid: 'folded-rid', place: () => {}, keep: () => {} });
+  win.WsOverview.toggle();
+
+  const ph = board.querySelector('.overview-placeholder');
+  assert.ok(ph, 'folded topic placeholder inserted');
+  assert.equal(ph.tagName, 'SECTION', 'folded placeholder must be <section> to match dashboard-board.css folded rules');
+  assert.equal(ph.classList.contains('topic'), true);
+  assert.equal(ph.getAttribute('data-size'), 'fold');
+  assert.equal(ph.hasAttribute('data-max'), false);
+  assert.equal(ph.hasAttribute('data-overview-live'), false);
+  assert.equal(ph.getAttribute('role'), 'button');
+  assert.equal(ph.getAttribute('aria-label'), 'Folded Spec Topic');
+  assert.equal(doc.activeElement, ph, 'keyboard focus lands on the named placeholder');
+  const clonedHead = ph.querySelector(':scope > .tophead');
+  assert.equal(clonedHead.inert, true, 'cloned header controls stay inert');
+  assert.equal(clonedHead.getAttribute('aria-hidden'), 'true');
+  assert.match(
+    boardCSS,
+    /section\.topic\[data-size="fold"\]:not\(\[data-max\]\):not\(\[data-overview-live\]\) > \.tophead > :not\(\.tbar\),[\s\S]*?\{ display: none !important; \}/,
+    'folded CSS rule hides cloned .tsub/.trecap on <section class="topic" data-size="fold">'
+  );
+  assert.match(
+    boardCSS,
+    /section\.topic\[data-size="fold"\]:not\(\[data-max\]\):not\(\[data-overview-live\]\) > \.tophead > \.tbar \{ padding-right: 12px; \}/,
+    'folded CSS rule preserves folded header padding on <section class="topic" data-size="fold">'
+  );
 });

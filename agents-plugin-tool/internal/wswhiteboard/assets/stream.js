@@ -311,8 +311,10 @@
   }
   // hydrateDetached fetches lazy history for detached topic roots (such as
   // virtualized offscreen topics) through the shared fetchTopics pipeline
-  // (deduplicated, image-revision checked, retry-safe) and fills matching gaps
-  // and lazy entry bodies via fillRoots without running live DOM admission.
+  // (deduplicated, image-revision checked, retry-safe). When navigation has
+  // reattached a topic to the live DOM before the reply arrives, it routes the
+  // reply through live hydrateWith admission (panel state, control binding,
+  // frame mounting); otherwise it fills matching detached roots via fillRoots.
   function hydrateDetached(getRoots, names) {
     var list = Array.from(new Set((names || []).filter(Boolean)));
     if (!list.length) return Promise.resolve(0);
@@ -324,6 +326,15 @@
       var topics = [].concat.apply([], all), filled = 0;
       topics.forEach(function (t) {
         if (!t || typeof t.name !== 'string' || typeof t.html !== 'string') return;
+        var live = document.querySelectorAll
+          ? named(document.querySelectorAll('section.topic[data-topic]'), 'data-topic', t.name).filter(function (s) {
+              return !s.hasAttribute('data-wb-virtual');
+            })
+          : [];
+        if (live.length) {
+          live.forEach(function (section) { filled += hydrateWith(section, [t]); });
+          return;
+        }
         var roots = typeof getRoots === 'function' ? getRoots(t.name) : null;
         if (!roots || !roots.length || !roots.some(lazyIn)) return;
         var parsed = document.createElement('template');

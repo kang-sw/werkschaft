@@ -213,8 +213,15 @@
     submitCommand(sel.name, sendText().slice(sel.end).trim(), true);
   }
   // Topic-only editors keep their textarea owner and canonical [stem] strings.
-  function bindCapsuleNotes() {
+  function bindCapsuleNotes(scope) {
     if (!window.WsCapsules) return;
+    if (scope && scope.querySelectorAll) {
+      q(".tnote[data-topic], textarea.note", scope).forEach(function (note) {
+        if (note.wscTopicPicker) return;
+        note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
+      });
+      return;
+    }
     window.WsCapsules.sweep();
     boardNotes().forEach(function (note) {
       if (note.wscTopicPicker) return;

@@ -22,6 +22,8 @@ const inputBlock = slice(dashboardJS, '  var INPUT_KEY = "ws.dashboard.input"', 
 const keyboardBlock = slice(dashboardJS, '  if (ctext) {\n    var csend = $("csend");', '    // The form script\'s own listeners');
 const bangKeyBlock = slice(dashboardJS, '  function bangSendKeyLabel() {', '  // --- trigger badge & popup UI');
 const bangSyncModeBlock = slice(dashboardJS, '  function bangHistSyncMode() {', '  function histCreateRowEl(cmd) {');
+const sendMessageBlock = slice(dashboardJS, '  function sendMessage() {', '  // --- outbox');
+const cexecAckBlock = slice(dashboardJS, '  function cexecAcknowledged(text, track) {', '  // cexecSend takes the composer\'s raw text');
 
 function makeElement(id) {
   const classes = new Set();
@@ -127,11 +129,40 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
     trackMentions() {},
     paintMentions() {},
     indentLines() {},
-    sendMessage() {
-      sent.push(ctext.value);
-      ctext.value = '';
-      if (typeof ctx.resetAutoMultiline === 'function') ctx.resetAutoMultiline();
-    },
+    // External delivery/draft collaborators for production sendMessage & cexecAcknowledged:
+    window: {},
+    restoring: false,
+    draftStore: null,
+    draftLoaded: true,
+    bselections: [],
+    bmentions: [],
+    imgs: [],
+    mpend: null,
+    wpicks: [],
+    wconsoles: [],
+    closeRequests: [],
+    boardOwn: {},
+    cexecSend: () => false,
+    outboxInFlight: () => false,
+    inlineEditor: () => null,
+    sendText: () => ctext.value,
+    selectionPrefix: () => '',
+    chipList: () => [],
+    topicNotes: () => [],
+    noteWarn() {},
+    saveDraft() {},
+    dropImg() {},
+    clearMentions() {},
+    dropChip() {},
+    setItem() {},
+    closeTopicNotes() {},
+    clearTrash() {},
+    renderChips() {},
+    renderImgs() {},
+    lastUserEntry: () => '',
+    outboxAdd(entry) { sent.push(entry.body.text); },
+    bangSync() {},
+    bangHistClose() {},
   };
 
   vm.createContext(ctx);
@@ -139,6 +170,8 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
     inputBlock + '\n' +
     bangKeyBlock + '\n' +
     bangSyncModeBlock + '\n' +
+    sendMessageBlock + '\n' +
+    cexecAckBlock + '\n' +
     keyboardBlock + '\n  }\n',
     ctx
   );
@@ -335,13 +368,66 @@ test('global mod inputMode never shows temporary badge or overrides global behav
   assert.equal(h.csendRevert.hidden, true);
 });
 
-test('programmatic send/clear paths reset temporary multiline state without input event', () => {
-  // Verify production source explicitly calls resetAutoMultiline on all direct ctext.value = "" paths.
-  assert.match(
-    dashboardJS,
-    /ctext\.value = ""; grow\(\); clearMentions\(\);\s*if \(typeof resetAutoMultiline === "function"\) resetAutoMultiline\(\);/,
-    'sendMessage and cexecAcknowledged reset temporary multiline state'
-  );
+test('production sendMessage resets temporary multiline state independently without input event', () => {
+  const h = createHarness({ platform: 'Win32', table: en });
+  h.keydown({ key: 'Enter', shiftKey: true });
+  h.setValueAndInput('line 1\nline 2');
+  assert.equal(h.ctx.effectiveInputMode(), 'mod');
+  assert.equal(h.csend.classList.contains('is-multiline'), true);
+  assert.equal(h.csendKbd.hidden, false);
+  assert.equal(h.csendRevert.hidden, false);
+
+  // Exercise production sendMessage() directly (as clicking #csend does).
+  h.ctx.sendMessage();
+  assert.deepEqual(h.sent, ['line 1\nline 2']);
+  assert.equal(h.ctext.value, '');
+  assert.equal(h.ctx.effectiveInputMode(), 'enter', 'production sendMessage must reset temporary multiline mode');
+  assert.equal(h.csend.classList.contains('is-multiline'), false, 'production sendMessage must clear .is-multiline');
+  assert.equal(h.csendKbd.hidden, true, 'production sendMessage must hide micro-badge');
+  assert.equal(h.csendRevert.hidden, true, 'production sendMessage must hide revert button');
+  assert.equal(h.csend.title, en['composer.send']);
+});
+
+test('production cexecAcknowledged resets temporary multiline state when emptying draft and when remaining draft is single-line or multiline', () => {
+  // Case 1: acknowledgement empties the entire composer draft.
+  const h1 = createHarness({ platform: 'Win32', table: en });
+  h1.keydown({ key: 'Enter', shiftKey: true });
+  h1.setValueAndInput('!echo one\ntwo');
+  assert.equal(h1.ctx.effectiveInputMode(), 'mod');
+  assert.equal(h1.csend.classList.contains('is-multiline'), true);
+
+  h1.ctx.cexecAcknowledged('!echo one\ntwo', { intact: true });
+  assert.equal(h1.ctext.value, '');
+  assert.equal(h1.ctx.effectiveInputMode(), 'enter', 'cexecAcknowledged (empty remainder) must reset temporary multiline mode');
+  assert.equal(h1.csend.classList.contains('is-multiline'), false);
+  assert.equal(h1.csendKbd.hidden, true);
+  assert.equal(h1.csendRevert.hidden, true);
+
+  // Case 2: acknowledgement leaves remaining single-line draft text typed while exec was in flight.
+  const h2 = createHarness({ platform: 'Win32', table: en });
+  h2.keydown({ key: 'Enter', shiftKey: true });
+  h2.setValueAndInput('!echo one\ntwonext single line');
+  assert.equal(h2.ctx.effectiveInputMode(), 'mod');
+  assert.equal(h2.csend.classList.contains('is-multiline'), true);
+
+  h2.ctx.cexecAcknowledged('!echo one\ntwo', { intact: true });
+  assert.equal(h2.ctext.value, 'next single line');
+  assert.equal(h2.ctx.effectiveInputMode(), 'enter', 'cexecAcknowledged (single-line remainder) must reset temporary multiline mode');
+  assert.equal(h2.csend.classList.contains('is-multiline'), false);
+  assert.equal(h2.csendKbd.hidden, true);
+  assert.equal(h2.csendRevert.hidden, true);
+
+  // Case 3: acknowledgement leaves remaining multiline draft text -> resets then re-syncs multiline mode.
+  const h3 = createHarness({ platform: 'Win32', table: en });
+  h3.keydown({ key: 'Enter', shiftKey: true });
+  h3.setValueAndInput('!echo one\ntwoline A\nline B');
+  h3.ctx.cexecAcknowledged('!echo one\ntwo', { intact: true });
+  assert.equal(h3.ctext.value, 'line A\nline B');
+  assert.equal(h3.ctx.effectiveInputMode(), 'mod', 'cexecAcknowledged (multiline remainder) re-syncs multiline mode');
+  assert.equal(h3.csend.classList.contains('is-multiline'), true);
+});
+
+test('programmatic submitCommand clear path resets temporary multiline state', () => {
   assert.match(
     dashboardJS,
     /if \(clearText\) \{ ctext\.value = ""; grow\(\); clearMentions\(\); if \(typeof resetAutoMultiline === "function"\) resetAutoMultiline\(\); \}/,
