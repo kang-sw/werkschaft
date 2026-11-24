@@ -1277,10 +1277,10 @@
   // first topic in Main Board order the filter shows (the applied revision's
   // order); with none eligible the current card stays.
   function boardHome() {
-    var names = boardPendingNames();
+    var names = boardPendingNames(), generation = anchorUserScroll;
     function go() {
       var first = anchorCards().filter(function (n) { return topicKey(n) !== null; })[0];
-      if (first) anchorSelect(first, { smooth: true });
+      if (first && generation === anchorUserScroll) anchorSelect(first, { smooth: true });
       boardFlash(names, false);
     }
     if (boardApplyPending(go)) go();
