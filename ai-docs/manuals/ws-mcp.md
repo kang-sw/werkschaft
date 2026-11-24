@@ -1686,6 +1686,27 @@ restart-safe holder; one still inside its starter's job object may end with it.
 
 After rolling back the daemon, terminal sessions refresh their tool list.
 
+Minor floor (`<daemon dir>/daemon-minor-floor`): a plain text file beside
+`dashboard.lock` and `last-port` holding one numeric `major.minor` (storage
+type 5 in `performance.md`, read raw by the Python launchers). The lock-owning
+daemon advances it atomically only to a higher minor, after startup
+initialization and before writing `endpoint.json` (no write when equal). An
+absent file is legacy state and admits any candidate; an unreadable or
+malformed existing file is a startup error, never an admit. Cold starts and
+replacements enforce it at three points, each refusing a lower minor with the
+"update this plugin" error shape: Go `Ensure` (before requesting any drain, so
+a refused successor never stops a running daemon, passing its `--start-intent`
+of `absence`, `upgrade`, or `replace` to the child), Go `StartDaemon` (under
+the singleton lock, before side effects, using that same intent), and the
+Python launchers (after candidate selection and before staging, including the
+hosted launcher's `last-running-executable.json` restart). Live newer daemons
+are still protected by `keepRunning` / never-downgrade; the floor closes the
+cold-start window when no healthy daemon answers. Deliberate rollback uses
+`daemon-start --below-floor` (through the launcher or Go binary): the launcher
+precheck admits and forwards the flag, and `StartDaemon` lowers the floor to
+that candidate's minor under the singleton lock before endpoint publication. No
+other path lowers the floor.
+
 Session holders: a holder is a small Python process (standard library only,
 3.10 or newer) that owns one child process, over pipes or a PTY (ConPTY on
 Windows), and outlives the daemon, so the child survives a daemon restart

@@ -962,6 +962,7 @@ DAEMON_DIR_NAME = "dashboard"  # wsdashboard.dirName
 DAEMON_ENDPOINT_FILE = "endpoint.json"
 DAEMON_BIN_DIR_NAME = "bin"
 DAEMON_RUNNING_EXECUTABLE_FILE = "last-running-executable.json"
+DAEMON_MINOR_FLOOR_FILE = "daemon-minor-floor"
 PROXY_PATH = "/mcp"
 PROXY_UPGRADE = "ws-mcp"
 PROXY_PROTOCOL = 1
@@ -1141,6 +1142,73 @@ def same_minor(a: str, b: str) -> bool:
     pa = parse_daemon_version(a)
     pb = parse_daemon_version(b)
     return pa is not None and pb is not None and pa[0][:2] == pb[0][:2]
+
+
+def parse_minor_floor(text: str) -> tuple[int, int]:
+    """Parse daemon-minor-floor: one numeric major.minor pair."""
+    raw = text.strip()
+    parts = raw.split(".")
+    if len(parts) != 2 or any(not part or not part.isascii() or not part.isdigit() for part in parts):
+        raise ValueError(f"malformed {DAEMON_MINOR_FLOOR_FILE}: {raw!r}")
+    return int(parts[0]), int(parts[1])
+
+
+def read_daemon_minor_floor(daemon_dir: Path) -> tuple[int, int] | None:
+    """Read daemon_dir/daemon-minor-floor.
+
+    Absent returns None (legacy state: admit). Unreadable or malformed raises
+    DaemonUnavailable (fail closed: never admit).
+    """
+    path = daemon_dir / DAEMON_MINOR_FLOOR_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DaemonUnavailable(f"unreadable {DAEMON_MINOR_FLOOR_FILE}: {exc}") from exc
+    try:
+        return parse_minor_floor(text)
+    except ValueError as exc:
+        raise DaemonUnavailable(str(exc)) from exc
+
+
+def lifecycle_has_below_floor(lifecycle_argv: list[str] | None) -> bool:
+    """Return whether lifecycle_argv explicitly enables Go's --below-floor flag."""
+    if not lifecycle_argv:
+        return False
+    enabled = False
+    for arg in lifecycle_argv[1:]:
+        if arg == "--":
+            break
+        if arg in {"--below-floor", "-below-floor"}:
+            enabled = True
+            continue
+        name, sep, value = arg.partition("=")
+        if sep and name in {"--below-floor", "-below-floor"}:
+            if value in {"1", "t", "T", "TRUE", "true", "True"}:
+                enabled = True
+            elif value in {"0", "f", "F", "FALSE", "false", "False"}:
+                enabled = False
+    return enabled
+
+
+def check_daemon_minor_floor(daemon_dir: Path, candidate_version: str, *, below_floor: bool = False) -> None:
+    """Refuse a candidate whose minor is below daemon_dir's recorded floor."""
+    floor = read_daemon_minor_floor(daemon_dir)
+    if floor is None:
+        return
+    parsed = parse_daemon_version(candidate_version)
+    if parsed is None:
+        raise DaemonUnavailable(
+            f"cannot verify candidate version {candidate_version!r} against minor floor {floor[0]}.{floor[1]}"
+        )
+    candidate_minor = parsed[0][:2]
+    if candidate_minor < floor and not below_floor:
+        raise DaemonNewerMinor(
+            f"the shared daemon state directory requires minor {floor[0]}.{floor[1]} or newer, "
+            f"a newer minor than this plugin ({candidate_version}); update this plugin and restart this session "
+            f"(or run daemon-start --below-floor to roll back)"
+        )
 
 
 def read_daemon_endpoint(daemon_dir: Path) -> dict | None:
@@ -1535,6 +1603,7 @@ class DaemonLink:
         self._content_hash: str | None = None
         self.started = False
         self.start_error = ""
+        self.start_error_newer_minor = False
         self.start_output = ""
         self.start_returncode: int | None = None
         metadata = None if self.hosted_package else read_runtime_metadata(binary)
@@ -1608,6 +1677,12 @@ class DaemonLink:
 
     def start_daemon(self, lifecycle_argv: list[str] | None = None, *, deadline: float | None = None) -> bool:
         """Run daemon-start while the caller holds the launcher starter lock."""
+        self.started = False
+        self.start_error = ""
+        self.start_error_newer_minor = False
+        self.start_output = ""
+        self.start_returncode = None
+        below_floor = lifecycle_has_below_floor(lifecycle_argv)
         if self.hosted_package:
             try:
                 record = read_running_executable(self.daemon_dir)
@@ -1619,6 +1694,17 @@ class DaemonLink:
             self.binary_version = record["version"]
             self.build_time = record["build_time"]
             self._content_hash = record["binary_sha256"]
+            try:
+                check_daemon_minor_floor(self.daemon_dir, self.binary_version, below_floor=below_floor)
+            except DaemonNewerMinor as exc:
+                self.start_error = str(exc)
+                self.start_error_newer_minor = True
+                note(self.start_error)
+                return False
+            except DaemonUnavailable as exc:
+                self.start_error = str(exc)
+                note(self.start_error)
+                return False
         else:
             # External plugins keep their own repair/runtime selection.
             if self.repair_runtime is not None and not self.repair_runtime():
@@ -1631,6 +1717,17 @@ class DaemonLink:
             self.binary_version = metadata["version"]
             self.build_time = self.binary.stat().st_mtime_ns // 1_000_000
             self._content_hash = None
+            try:
+                check_daemon_minor_floor(self.daemon_dir, self.binary_version, below_floor=below_floor)
+            except DaemonNewerMinor as exc:
+                self.start_error = str(exc)
+                self.start_error_newer_minor = True
+                note(self.start_error)
+                return False
+            except DaemonUnavailable as exc:
+                self.start_error = str(exc)
+                note(self.start_error)
+                return False
             try:
                 staged = stage_daemon_binary(self.binary, self.daemon_dir / DAEMON_BIN_DIR_NAME)
             except OSError as exc:
@@ -1673,6 +1770,8 @@ class DaemonLink:
             note(f"daemon-start: {line}")
         if proc.returncode != 0:
             self.start_error = f"daemon-start exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
+            if "a newer minor than this plugin" in self.start_error:
+                self.start_error_newer_minor = True
             note(self.start_error)
             return False
         return True
@@ -1720,6 +1819,8 @@ class DaemonLink:
                         if not daemon_absence_proven(self.daemon_dir):
                             raise DaemonUnavailable("daemon not answering; dashboard lock is held or unqueryable; refusing absence startup")
                     if not self.start_daemon(lifecycle_argv, deadline=deadline):
+                        if self.start_error_newer_minor:
+                            raise DaemonNewerMinor(self.start_error)
                         raise DaemonUnavailable(self.start_error or "no daemon could be started")
                     endpoint, health = self.wait_healthy(min(self.start_budget, max(0, deadline - time.monotonic())))
                     if health is None or endpoint is None:

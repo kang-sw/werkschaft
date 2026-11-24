@@ -449,6 +449,85 @@ class LauncherStartContractTest(unittest.TestCase):
                 self.link.ensure_healthy(lifecycle_argv=argv)
                 self.assertEqual(start.called, starts)
 
+    def test_minor_floor_refuses_lower_candidate_before_staging_and_draining(self):
+        self.link.daemon_dir.mkdir(parents=True, exist_ok=True)
+        (self.link.daemon_dir / self.m.DAEMON_MINOR_FLOOR_FILE).write_text("0.52\n", encoding="utf-8")
+        self.m.write_runtime_metadata(self.binary, {"version": "0.51.2"})
+        link = self.m.DaemonLink(self.binary, "0.51.2", "windows", self.env, answer_budget=0.01, start_budget=0.1)
+
+        with mock.patch.object(self.m, "stage_daemon_binary", side_effect=AssertionError("staged despite floor")):
+            # Cold start (absence): raises DaemonNewerMinor naming update path.
+            with mock.patch.object(link, "probe", return_value=(None, None)):
+                with self.assertRaises(self.m.DaemonNewerMinor) as err:
+                    link.ensure_healthy()
+                self.assertIn("update this plugin", str(err.exception))
+                self.assertIn("daemon-start --below-floor", str(err.exception))
+            # Live raced older daemon (0.50.0): refused before staging/spawning, never drains.
+            with mock.patch.object(link, "probe", return_value=(self.endpoint, {"version": "0.50.0"})):
+                with self.assertRaises(self.m.DaemonNewerMinor) as err:
+                    link.ensure_healthy()
+                self.assertIn("update this plugin", str(err.exception))
+        self.spawns["run"].assert_not_called()
+
+    def test_minor_floor_absent_admits_and_malformed_or_unreadable_errors(self):
+        self.link.daemon_dir.mkdir(parents=True, exist_ok=True)
+        floor_path = self.link.daemon_dir / self.m.DAEMON_MINOR_FLOOR_FILE
+
+        # Absent admits.
+        self.assertIsNone(self.m.read_daemon_minor_floor(self.link.daemon_dir))
+        self.m.check_daemon_minor_floor(self.link.daemon_dir, "0.51.2")
+
+        # Malformed errors, never admits (even with --below-floor).
+        for bad in ("", "  \n", "0.52.0\n", "v0.52\n", "0.52-dev\n", "-1.0\n", "abc\n", "0.\n", ".52\n"):
+            floor_path.write_text(bad, encoding="utf-8")
+            with mock.patch.object(self.m, "stage_daemon_binary", side_effect=AssertionError("staged on malformed floor")):
+                for argv in (None, ["daemon-start", "--below-floor"]):
+                    with mock.patch.object(self.link, "probe", return_value=(None, None)):
+                        with self.assertRaises(self.m.DaemonUnavailable) as err:
+                            self.link.ensure_healthy(lifecycle_argv=argv)
+                        self.assertNotIsInstance(err.exception, self.m.DaemonNewerMinor)
+
+        # Unreadable (directory at floor path) errors, never admits.
+        floor_path.unlink()
+        floor_path.mkdir()
+        with mock.patch.object(self.m, "stage_daemon_binary", side_effect=AssertionError("staged on unreadable floor")):
+            with mock.patch.object(self.link, "probe", return_value=(None, None)):
+                with self.assertRaises(self.m.DaemonUnavailable):
+                    self.link.ensure_healthy(lifecycle_argv=["daemon-start", "--below-floor"])
+        self.spawns["run"].assert_not_called()
+
+    def test_minor_floor_below_floor_flag_admits_and_forwards(self):
+        self.link.daemon_dir.mkdir(parents=True, exist_ok=True)
+        (self.link.daemon_dir / self.m.DAEMON_MINOR_FLOOR_FILE).write_text("0.52\n", encoding="utf-8")
+        self.m.write_runtime_metadata(self.binary, {"version": "0.51.2"})
+        link = self.m.DaemonLink(self.binary, "0.51.2", "windows", self.env, answer_budget=0.01, start_budget=0.1)
+
+        # Explicit --below-floor=false still refuses.
+        with mock.patch.object(self.m, "stage_daemon_binary", side_effect=AssertionError("staged with below-floor=false")), \
+             mock.patch.object(link, "probe", return_value=(None, None)):
+            with self.assertRaises(self.m.DaemonNewerMinor):
+                link.ensure_healthy(lifecycle_argv=["daemon-start", "--below-floor=false"])
+
+        # Explicit --below-floor admits and forwards the flag to Go daemon-start.
+        state = [False]
+        seen = []
+
+        def run(argv, **kwargs):
+            seen.append(argv)
+            state[0] = True
+            return mock.Mock(returncode=0, stdout='{"outcome":"started"}\n', stderr="")
+
+        self.spawns["run"].side_effect = run
+        with mock.patch.object(link, "probe", side_effect=lambda timeout:
+                               (self.endpoint, {"version": "0.51.2"}) if state[0] else (None, None)):
+            link.ensure_healthy(lifecycle_argv=["daemon-start", "--below-floor"])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][1:], ["daemon-start", "--below-floor"])
+
+    def test_wsflow_launcher_mirror_is_byte_identical(self):
+        wsflow_launcher = LAUNCHER.parents[2] / "agents-plugin-wsflow" / "bin" / "ws-mcp-launcher.py"
+        self.assertEqual(wsflow_launcher.read_bytes(), LAUNCHER.read_bytes())
+
 
 @unittest.skipUnless(os.environ.get("WS_LAUNCHER_PROCESS_TESTS") == "1", "remote-only process fixture")
 class LauncherStarterProcessesTest(unittest.TestCase):

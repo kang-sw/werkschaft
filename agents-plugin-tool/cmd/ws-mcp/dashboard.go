@@ -37,7 +37,13 @@ func dashboardCommand(args []string) {
 	buildTime := fs.Int64("build-time", 0, "the ws-mcp build time in Unix milliseconds to report in /health; the starter passes the time of the executable it measured, and 0 reads this executable's")
 	lockWait := fs.Duration("lock-wait", wsdashboard.DefaultLockWait, "how long to wait for another daemon to release the single-instance lock")
 	preflight := fs.Bool("desktop-preflight", false, "report pre-lock readiness and wait for the starter's admission")
+	startIntent := fs.String("start-intent", "", "why the starter invoked this daemon (absence, upgrade, or replace); empty defaults to absence")
+	belowFloor := fs.Bool("below-floor", false, "admit starting below the state directory's daemon-minor-floor and lower the floor to this daemon's minor")
 	_ = fs.Parse(args)
+	intent, err := wsdashboard.ParseStartIntent(*startIntent)
+	if err != nil {
+		fatal("dashboard", err)
+	}
 
 	// Before anything reads the environment or spawns from it: the session
 	// that started this daemon is not one it hosts.
@@ -151,6 +157,8 @@ func dashboardCommand(args []string) {
 		Port:         *port,
 		LAN:          *lan,
 		Version:      version,
+		StartIntent:  intent,
+		BelowFloor:   *belowFloor,
 		BuildTime:    *buildTime,
 		ContentHash:  contentHash,
 		Executable:   exe,

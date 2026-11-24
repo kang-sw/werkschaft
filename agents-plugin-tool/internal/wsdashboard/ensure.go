@@ -56,6 +56,10 @@ type EnsureOptions struct {
 	// Replace requests one explicit equal-core replacement, even for the
 	// same content. It never permits downgrading a newer numeric core.
 	Replace bool
+	// BelowFloor explicitly admits starting a candidate whose minor is lower
+	// than dir's daemon-minor-floor and lowers the floor to that candidate's
+	// minor under the singleton lock. It never drains a healthy newer daemon.
+	BelowFloor bool
 	// SpawnBeforeShutdown waits for a gated successor's readiness before drain.
 	SpawnBeforeShutdown bool
 	// JoinStarterLock serializes starters whose caller does not hold launcher-start.lock.
@@ -124,6 +128,29 @@ func DaemonArgs(port int, lan bool, buildTime int64) []string {
 	return args
 }
 
+func ensureDaemonArgs(port int, lan bool, buildTime int64, intent StartIntent, belowFloor bool) []string {
+	args := DaemonArgs(port, lan, buildTime)
+	if intent != "" {
+		args = append(args, "--start-intent", string(intent))
+	}
+	if belowFloor {
+		args = append(args, "--below-floor")
+	}
+	return args
+}
+
+func replaceIntent(info HealthInfo, opts EnsureOptions) StartIntent {
+	running, _, runningOK := parseVersion(info.Version)
+	candidate, _, candidateOK := parseVersion(opts.Version)
+	if runningOK && candidateOK && running == candidate {
+		return StartIntentReplace
+	}
+	if CompareVersions(info.Version, opts.Version) < 0 {
+		return StartIntentUpgrade
+	}
+	return StartIntentReplace
+}
+
 // Ensure makes sure a daemon at least as new as opts.Version runs:
 //
 //   - A healthy newer daemon is left alone whatever its LAN mode, so an older
@@ -173,6 +200,7 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	replaced := false
 	spawns := 0
 	for {
+		intent := StartIntentAbsence
 		previous, readErr := ReadEndpoint(opts.Dir)
 		if readErr == nil {
 			info, err := Health(ctx, client, previous)
@@ -195,8 +223,12 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 				}
 				return OutcomeStarted, nil
 			case err == nil:
+				intent = replaceIntent(info, opts)
+				if _, _, err := checkMinorFloorForIntent(opts.Dir, opts.Version, intent, opts.BelowFloor); err != nil {
+					return OutcomeUnavailable, err
+				}
 				if opts.SpawnBeforeShutdown {
-					if err := replaceWithPreparedSuccessor(ctx, client, opts, previous, info, logw); err != nil {
+					if err := replaceWithPreparedSuccessor(ctx, client, opts, previous, info, intent, logw); err != nil {
 						return OutcomeUnavailable, err
 					}
 					if !waitForSuccessor(ctx, client, opts, previous.Token, true, logw) {
@@ -220,11 +252,16 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 		if spawns >= maxSpawns {
 			return OutcomeUnavailable, nil
 		}
+		if intent == StartIntentAbsence {
+			if _, _, err := checkMinorFloorForIntent(opts.Dir, opts.Version, intent, opts.BelowFloor); err != nil {
+				return OutcomeUnavailable, err
+			}
+		}
 		spawns++
 		// An explicit request applies only to the initial daemon, not a
 		// successor (including when the initial endpoint was absent).
 		opts.Replace = false
-		if err := opts.Spawn(DaemonArgs(opts.Port, opts.LAN, opts.BuildTime)); err != nil {
+		if err := opts.Spawn(ensureDaemonArgs(opts.Port, opts.LAN, opts.BuildTime, intent, opts.BelowFloor)); err != nil {
 			return OutcomeUnavailable, fmt.Errorf("dashboard: start daemon: %w", err)
 		}
 		if !waitForSuccessor(ctx, client, opts, previous.Token, false, logw) {
@@ -236,7 +273,7 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	}
 }
 
-func replaceWithPreparedSuccessor(ctx context.Context, client *http.Client, opts EnsureOptions, previous Endpoint, previousHealth HealthInfo, logw io.Writer) error {
+func replaceWithPreparedSuccessor(ctx context.Context, client *http.Client, opts EnsureOptions, previous Endpoint, previousHealth HealthInfo, intent StartIntent, logw io.Writer) error {
 	if opts.PrepareSuccessor == nil {
 		return errors.New("dashboard: no successor preflight")
 	}
@@ -245,7 +282,7 @@ func replaceWithPreparedSuccessor(ctx context.Context, client *http.Client, opts
 		// Retain the dashboard origin and its webview-local drafts.
 		port = previous.Port
 	}
-	admit, err := opts.PrepareSuccessor(DaemonArgs(port, opts.LAN, opts.BuildTime))
+	admit, err := opts.PrepareSuccessor(ensureDaemonArgs(port, opts.LAN, opts.BuildTime, intent, opts.BelowFloor))
 	if err != nil {
 		return fmt.Errorf("dashboard: successor preflight: %w", err)
 	}
