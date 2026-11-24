@@ -656,3 +656,32 @@ response. They add zero file operations.
   and `git diff --check`.
 - Independent lite review of `8333ef0eb..25f98cf64` reported no Critical
   or Important findings (`fc00ff89-01-findings.md`).
+
+### Phase 7: Keep closed ancestry through a checkout-delete purge
+
+Added after the fifth re-review of `41e81115c..ff0ddb747` blocked on one
+Important (Phase 6 retained-row case and Phase 5 unrelated-lock case are
+verified fixed). Lead decision under the owner's overnight directive.
+
+- I6 purge: dashboard checkout deletion (`railworktreedelete.go:317,645`)
+  calls `Runner.ForgetClosed`, whose `dropClosed`
+  (`agent_delivery.go:244-274`) deletes the closed row, its incoming
+  `childrenIndex` edge, and the durable record. A live grandchild in another
+  checkout still names the purged worker as its parent, so the Phase 6 walk
+  loses it: the advisory reports safe and safe-only Stop returns 200 and
+  stops the lead. Defer the purge of a closed record while any descendant
+  under it is live or a spawn under it is pending: `ForgetClosed` keeps the
+  closed row, its edge, and its durable record in that case (it stays a
+  retained closed row, which Phase 6 already walks and which a restart
+  reloads). A record with no live or pending descendant is purged exactly
+  as today. Apply the same rule to the other `forgetClosed` caller
+  (`agent_delivery.go:279`) only if it can strand a live descendant;
+  otherwise leave it unchanged and say why.
+- Tests: the real dashboard delete-to-Stop sequence (`POST
+  /rail/worktrees/delete` then safe-only Stop) refuses with 409 while the
+  grandchild runs and admits once it settles; purge of a closed record with
+  no live descendants is unchanged.
+- Rejected: an in-memory ancestry stub after the purge (lost on daemon
+  restart because the durable record is already deleted); refusing safe Stop
+  whenever any live conversation has an unresolvable parent (reintroduces
+  the Phase 5 unrelated refusal).
