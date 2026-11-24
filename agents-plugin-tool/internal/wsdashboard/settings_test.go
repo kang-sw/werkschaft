@@ -48,6 +48,22 @@ func TestSettingsVersionFooterStyleKeepsNoticeAndVersionInline(t *testing.T) {
 	}
 }
 
+func TestSettingsModalFlexHeightChainAndNonShrinkingCards(t *testing.T) {
+	css := mustAsset(t, "dashboard-settings.css")
+	for _, want := range []string{
+		":root[data-settings-modal] .dbody {\n  display: flex;\n  flex: 1 1 0;\n  min-height: 0;",
+		".scontent {\n  flex: 1 1 0;\n  min-width: 0;\n  min-height: 0;",
+		".scontent > * { flex: none; }",
+		".klist { display: flex; flex-direction: column; gap: 9px; flex: none; }",
+		".klist > * { flex: none; }",
+		"[data-settings-view] .sgroup {\n  flex: none;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard-settings.css lacks flex-height/non-shrink contract %q", want)
+		}
+	}
+}
+
 // The footer link, launcher download destinations, and plugin manifest links
 // name one repository: the daemon restates runtime.json's release_repository
 // (see releaseRepository).
