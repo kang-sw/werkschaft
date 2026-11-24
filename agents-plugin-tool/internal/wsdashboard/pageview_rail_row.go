@@ -240,7 +240,9 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)
 	}
-	if lifecycle == SessionPendingDeletion {
+	// The registry sweep retains Pi runner history after retirement.
+	retainedPi := reg.Harness == "pi" && (reg.Hosted || reg.Agent)
+	if lifecycle == SessionPendingDeletion && !retainedPi {
 		if seen := reg.LastSeen(); !seen.IsZero() {
 			row.DeleteAt = seen.Add(RegistryRetention).UnixMilli()
 		}

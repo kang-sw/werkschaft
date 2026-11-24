@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestRailRetiredPiHasNoDeletionCountdown(t *testing.T) {
+	ended := stampFor(testNow.Add(-time.Hour))
+	for _, reg := range []Registration{
+		{ReplyID: "retiredlead", Harness: "pi", Hosted: true, HeartbeatAt: ended, EndedAt: ended},
+		{ReplyID: "retiredworker", Harness: "pi", Agent: true, HeartbeatAt: ended, EndedAt: ended},
+	} {
+		row := railRow(railInput{Session: Session{Registration: reg}}, false, testNow)
+		if row.DeleteAt != 0 {
+			t.Errorf("%s has deletion deadline %d, want none for retained Pi history", row.ReplyID, row.DeleteAt)
+		}
+	}
+}
+
 // TestRailLifecycle pins row placement and the distinction between
 // heartbeat liveness, a stopped process, and deletion by the user.
 func TestRailLifecycle(t *testing.T) {

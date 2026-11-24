@@ -130,7 +130,7 @@ func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSessio
 		{id: "mk936tidy", project: devenv, label: "mk936 정리", harness: "claude", hosted: true, endedAgo: left(4 * day)},
 		{id: "execsecond", project: devenv, label: "EXEC 2", harness: "pi", hosted: true, endedAgo: left(2 * day)},
 		{id: "termtrial", project: devenv, label: "터미널 실험", harness: "claude", endedAgo: left(day)},
-		{id: "hotfixprobe", project: devenv, label: "핫픽스 조사", harness: "pi", hosted: true, endedAgo: left(9 * time.Hour)},
+		{id: "hotfixprobe", project: devenv, label: "핫픽스 조사", harness: "claude", hosted: true, endedAgo: left(9 * time.Hour)},
 		{id: "renderer", project: game, label: "렌더러", harness: "claude", hosted: true, snap: approval},
 		{id: "assettidy", project: game, label: "에셋 정리", harness: "claude", hosted: true, asleep: true},
 		{id: "shaderlab", project: game, label: "셰이더 실험", harness: "pi", reply: "normal map 경로가 바뀐 이유를 확인해 줘", user: true},
