@@ -170,6 +170,13 @@ func buildEntry(rule Rule, selectors map[string]string, scope wsconfig.Scope, la
 	if rule.Structured {
 		e.Default = safeStructured(rule.Key, layers.Structured[rule.Key])
 	}
+	var fixed string
+	if rule.FixedHarnessValue != nil {
+		fixed = rule.FixedHarnessValue(harness)
+	}
+	if fixed != "" {
+		e.Default, e.Enum = rule.display(fixed), []string{fixed}
+	}
 	e.Value = e.Default
 	keys, buckets := rule.readKeys(harness)
 	for _, s := range precedence {
@@ -233,6 +240,9 @@ func buildEntry(rule Rule, selectors map[string]string, scope wsconfig.Scope, la
 			}
 			break
 		}
+	}
+	if fixed != "" {
+		e.Value = e.Default
 	}
 	return e
 }

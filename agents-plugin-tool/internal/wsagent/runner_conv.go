@@ -154,7 +154,10 @@ type conv struct {
 	compactNudge                               compactionNudge
 	compactInternalTurn, compactResumeInternal bool
 
-	compactAdvisory, compactHard                                                                                   wsconfig.Threshold
+	compactAdvisory, compactHard wsconfig.Threshold
+	// Lead mode is also read by MCP discovery, outside the conversation loop.
+	compactModeMu                                                                                                  sync.Mutex
+	compactModeGen                                                                                                 uint64
 	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64
@@ -2062,7 +2065,9 @@ func (c *conv) kickInput() {
 				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, stage1: true}
 				c.publishCompaction(false)
 			}
-			c.compactIdle()
+			if !c.compactIdle() {
+				c.signalInbox()
+			}
 			return
 		}
 	}

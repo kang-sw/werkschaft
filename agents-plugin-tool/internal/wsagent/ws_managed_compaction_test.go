@@ -67,30 +67,54 @@ type wsCompactProc struct {
 	holderID string
 	events   chan Event
 
-	mu            sync.Mutex
-	sends         []string
-	commands      []wsinbox.Command
-	auditEvents   []wsaudit.Envelope
-	auditIDs      []wsaudit.SourceID
-	closed        bool
+	mu           sync.Mutex
+	sends        []string
+	commands     []wsinbox.Command
+	auditEvents  []wsaudit.Envelope
+	auditIDs     []wsaudit.SourceID
+	closed       bool
+	failSend     bool
+	failCommand  bool
+	mcpReconnect func()
 }
 
 func (p *wsCompactProc) Events() <-chan Event { return p.events }
 func (p *wsCompactProc) Send(text string) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failSend {
+		p.failSend = false
+		return errors.New("simulated send failure")
+	}
 	p.sends = append(p.sends, text)
-	p.mu.Unlock()
 	return nil
 }
 func (p *wsCompactProc) RunCommand(cmd wsinbox.Command) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.commands = append(p.commands, cmd)
-	p.mu.Unlock()
+	if p.failCommand {
+		return errors.New("simulated command failure")
+	}
 	return nil
 }
-func (p *wsCompactProc) Interrupt() error         { return nil }
-func (p *wsCompactProc) SetModel(string) error    { return nil }
-func (p *wsCompactProc) SetEffort(string) error   { return nil }
+func (p *wsCompactProc) MCPStatus() ([]MCPServer, error) {
+	return []MCPServer{{Name: "ws", Status: MCPConnected}}, nil
+}
+
+func (p *wsCompactProc) ReconnectMCP(string) error {
+	p.mu.Lock()
+	reconnect := p.mcpReconnect
+	p.mu.Unlock()
+	if reconnect != nil {
+		reconnect()
+	}
+	return nil
+}
+
+func (p *wsCompactProc) Interrupt() error       { return nil }
+func (p *wsCompactProc) SetModel(string) error  { return nil }
+func (p *wsCompactProc) SetEffort(string) error { return nil }
 func (p *wsCompactProc) Close() error {
 	p.mu.Lock()
 	already := p.closed
@@ -256,11 +280,11 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 			if starts[1].SessionID != "" {
 				t.Fatalf("rotated StartSpec.SessionID = %q, want empty (fresh native session)", starts[1].SessionID)
 			}
-			// Verify audit commit happened BEFORE old process Close and BEFORE new Start.
+			// Only a successfully started replacement can establish the cut.
 			auditIdx, closeIdx, start2Idx := -1, -1, -1
 			for i, step := range order {
 				switch {
-				case step == "audit:1":
+				case step == "audit:2":
 					auditIdx = i
 				case step == "close:1":
 					closeIdx = i
@@ -268,14 +292,21 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 					start2Idx = i
 				}
 			}
-			if !(auditIdx >= 0 && closeIdx > auditIdx && start2Idx > closeIdx) {
-				t.Fatalf("unexpected rotation ordering %v (want audit:1 < close:1 < start:2)", order)
+			if !(closeIdx >= 0 && start2Idx > closeIdx && auditIdx > start2Idx) {
+				t.Fatalf("unexpected rotation ordering %v (want close:1 < start:2 < audit:2)", order)
 			}
+			if retained, err := ReadRecord(runner.opts.Dir, id); err != nil || retained.SessionID != "native-sid-1" {
+				t.Fatalf("durable native binding before replacement reports ID = %q, err=%v", retained.SessionID, err)
+			}
+			procs[1].events <- Event{SessionID: "native-sid-2"}
+			waitWSCompact(t, "replacement's persisted native ID", func() bool {
+				retained, err := ReadRecord(runner.opts.Dir, id)
+				return err == nil && retained.SessionID == "native-sid-2" && retained.WSKey == recBefore.WSKey
+			})
 
-			// Verify explicit non-estimated wsaudit.KindCompaction on old process.
-			ids, evs := procs[0].audits()
+			ids, evs := procs[1].audits()
 			if len(evs) != 1 || evs[0].Kind != wsaudit.KindCompaction {
-				t.Fatalf("audit events on old proc = %+v, want 1 KindCompaction", evs)
+				t.Fatalf("audit events on replacement = %+v, want 1 KindCompaction", evs)
 			}
 			if _, est := evs[0].Meta[wsaudit.MetaEstimated]; est {
 				t.Fatalf("ws-managed compaction audit must not be marked estimated: %+v", evs[0].Meta)
@@ -338,34 +369,51 @@ func TestWSManagedRotationFailurePreservesSessionIdentity(t *testing.T) {
 		return ok && rec.SessionID == "keep-sid" && err == nil && st.Status == StatusIdle
 	})
 
-	// 1. Audit commit failure aborts cleanly before closing old proc or clearing SessionID.
 	b.mu.Lock()
-	b.failAuditErr = errors.New("audit disk full")
+	b.failStartAt = 2
 	b.mu.Unlock()
 	rec, _ := runner.recordOf(id)
 	res := runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
-	if res.Status != "error" {
-		t.Fatalf("expected error on audit commit failure, got %+v", res)
-	}
-	recAfter, _ := runner.recordOf(id)
-	st, _ := runner.Get(id)
-	if recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
-		t.Fatalf("audit failure corrupted state: sid=%q compactions=%d", recAfter.SessionID, st.Compactions)
-	}
-
-	// 2. startLead failure restores previous SessionID and does not increment Compactions.
-	b.mu.Lock()
-	b.failAuditErr = nil
-	b.failStartAt = 2
-	b.mu.Unlock()
-	res = runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
-	if res.Status != "error" {
+	if res.Status != "error" || !strings.Contains(res.Reason, "start fresh session") {
 		t.Fatalf("expected error on startLead failure, got %+v", res)
 	}
-	recAfter, _ = runner.recordOf(id)
+	if _, events := p1.audits(); wsaudit.FindModelSeenCut(events).HasCompaction {
+		t.Fatalf("failed launch left an audit cut: %+v", events)
+	}
+	recAfter, err := ReadRecord(runner.opts.Dir, id)
+	st, _ := runner.Get(id)
+	if err != nil || recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
+		t.Fatalf("startLead failure corrupted state: sid=%q compactions=%d err=%v", recAfter.SessionID, st.Compactions, err)
+	}
+
+	b.mu.Lock()
+	b.failStartAt = 0
+	b.failAuditErr = errors.New("audit disk full")
+	b.mu.Unlock()
+	if _, err := runner.Send(id, "wake after failed rotation"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "prompt sent on the resumed native session", func() bool {
+		starts, _, procs := b.snapshot()
+		if len(starts) != 2 || starts[1].SessionID != "keep-sid" {
+			return false
+		}
+		sends, _ := procs[1].sent()
+		return len(sends) == 1
+	})
+	b.latest().events <- Event{TurnEnd: true}
+	waitWSCompact(t, "idle on previous native session", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Status == StatusIdle
+	})
+	res = runner.CompactWithSummary(rec.WSKey, "", nil, testLeadSummary())
+	if res.Status != "error" || !strings.Contains(res.Reason, "audit disk full") {
+		t.Fatalf("expected error on audit commit failure, got %+v", res)
+	}
+	recAfter, err = ReadRecord(runner.opts.Dir, id)
 	st, _ = runner.Get(id)
-	if recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
-		t.Fatalf("startLead failure corrupted state: sid=%q compactions=%d", recAfter.SessionID, st.Compactions)
+	if err != nil || recAfter.SessionID != "keep-sid" || st.Compactions != 0 {
+		t.Fatalf("audit failure corrupted state: sid=%q compactions=%d err=%v", recAfter.SessionID, st.Compactions, err)
 	}
 }
 
@@ -568,9 +616,9 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 		cfgOpts := wsconfig.Options{RepoRoot: root, CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
 		r := wsconfig.NewResolver(cfgOpts, nil, nil, nil)
 		for k, v := range map[string]string{
-			wsconfig.ItemCompactionLeadMode + "." + BackendClaude: wsconfig.CompactionModeWS,
-			"compaction.lead_advisory." + BackendClaude:           "60%",
-			"compaction.lead_hard." + BackendClaude:               "80%",
+			wsconfig.ItemCompactionLeadMode + "." + BackendClaude:     wsconfig.CompactionModeWS,
+			"compaction.lead_advisory." + BackendClaude:               "60%",
+			"compaction.lead_hard." + BackendClaude:                   "80%",
 			wsconfig.ItemAgentQuotaContinuation + "." + BackendClaude: "auto",
 		} {
 			if err := r.Set(k, v, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
@@ -673,6 +721,255 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 			t.Fatalf("unexpected native /compact command after quota continuation resume: %+v", cmds)
 		}
 	})
+}
+
+func TestDashboardCompactFailureDeliversQueuedPrompt(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+	p.mu.Lock()
+	p.failSend, p.failCommand = true, true
+	p.mu.Unlock()
+
+	// Queue both inputs during the first turn so one idle drain sees both.
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Send(id, "continue after failed compact"); err != nil {
+		t.Fatal(err)
+	}
+	p.events <- Event{TurnEnd: true}
+
+	waitWSCompact(t, "queued prompt after synchronous failures", func() bool {
+		sends, commands := p.sent()
+		return len(commands) == 1 && commands[0].Name == "compact" &&
+			len(sends) == 2 && strings.Contains(sends[1], "continue after failed compact")
+	})
+}
+
+func TestHostedLeadModeCacheAndStage1AfterToggle(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeNative, nil)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("initial mode = %q", mode)
+	}
+
+	resolver := wsconfig.NewResolver(runner.opts.Config, nil, nil, nil)
+	change := func(mode string) {
+		t.Helper()
+		if err := resolver.Set(wsconfig.ItemCompactionLeadMode+"."+BackendClaude, mode, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runner.Send(id, "work started in native mode"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+
+	change(wsconfig.CompactionModeWS)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("read bypassed cached native mode: %q", mode)
+	}
+	NotifyCompactionConfigChanged()
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeWS {
+		t.Fatalf("native-to-ws toggle: %q", mode)
+	}
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.signalInbox()
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "Stage 1 after toggle", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+	})
+	resume := false
+	if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+		t.Fatalf("Stage 1 summary: %+v", result)
+	}
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "successful Stage 1 rotation", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Compactions == 1 && b.latest() != p
+	})
+
+	change(wsconfig.CompactionModeNative)
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeWS {
+		t.Fatalf("read bypassed cached ws mode: %q", mode)
+	}
+	NotifyCompactionConfigChanged()
+	if mode := runner.LeadCompactionMode(id); mode != wsconfig.CompactionModeNative {
+		t.Fatalf("ws-to-native toggle: %q", mode)
+	}
+}
+
+func TestRotationResetsInFlightMCPCheck(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	old := b.latest()
+	old.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "idle", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Status == StatusIdle
+	})
+
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	old.mu.Lock()
+	old.mcpReconnect = func() {
+		close(started)
+		<-release
+	}
+	old.mu.Unlock()
+	c := runner.conv(id)
+	c.do(func() { c.checkMCP([]string{"ws"}) })
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old process did not start its MCP check")
+	}
+
+	resume := false
+	if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+		t.Fatalf("rotation: %+v", result)
+	}
+	replacement := b.latest()
+	if replacement == old {
+		t.Fatal("replacement process did not start")
+	}
+	newStarted := make(chan struct{})
+	replacement.mu.Lock()
+	replacement.mcpReconnect = func() { close(newStarted) }
+	replacement.mu.Unlock()
+	c.do(func() {
+		c.mcpChecked(old, nil, map[string]bool{"ws": false}, nil)
+		c.checkMCP([]string{"ws"})
+	})
+	select {
+	case <-newStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replacement MCP check waited behind the retired process")
+	}
+}
+
+func TestMCPRecoveryWaitsForAcceptedCompaction(t *testing.T) {
+	for _, withSummary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("summary=%t", withSummary), func(t *testing.T) {
+			runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+			if _, err := runner.Send(id, "work"); err != nil {
+				t.Fatal(err)
+			}
+			waitWSCompact(t, "first prompt", func() bool {
+				p := b.latest()
+				if p == nil {
+					return false
+				}
+				sends, _ := p.sent()
+				return len(sends) == 1
+			})
+			p := b.latest()
+			c := runner.conv(id)
+			if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			c.signalInbox()
+			p.events <- Event{TurnEnd: true}
+			waitWSCompact(t, "Stage 1 prompt", func() bool {
+				sends, _ := p.sent()
+				return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+			})
+			c.do(func() { c.mcpChecked(p, nil, map[string]bool{"ws": false}, nil) })
+			if withSummary {
+				resume := false
+				if result := runner.CompactWithSummary(c.record().WSKey, "", &resume, testLeadSummary()); result.Status != "queued" {
+					t.Fatalf("Stage 1 summary: %+v", result)
+				}
+			}
+			p.events <- Event{TurnEnd: true}
+			if withSummary {
+				waitWSCompact(t, "summary rotation", func() bool {
+					state, err := runner.Get(id)
+					return err == nil && state.Compactions == 1 && b.latest() != p
+				})
+			} else {
+				waitWSCompact(t, "Stage 2 dispatch on the original process", func() bool {
+					_, commands := p.sent()
+					return len(commands) == 1 && commands[0].Name == "compact"
+				})
+			}
+		})
+	}
+}
+
+func TestStage1NativeCutSatisfiesDashboardCompact(t *testing.T) {
+	runner, b, id := newWSCompactTestRunner(t, t.TempDir(), BackendClaude, wsconfig.CompactionModeWS, nil)
+	if _, err := runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "first prompt", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p := b.latest()
+	c := runner.conv(id)
+	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Command: &wsinbox.Command{Name: "compact"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c.signalInbox()
+	p.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "Stage 1 prompt", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 2 && sends[1] == stage1CompactionPrompt()
+	})
+
+	p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart}}
+	p.events <- Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd}}
+	p.events <- Event{TurnEnd: true}
+	if _, err := runner.Send(id, "work after native cut"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "prompt after the native cut", func() bool {
+		sends, _ := p.sent()
+		return len(sends) == 3 && strings.Contains(sends[2], "work after native cut")
+	})
+	_, commands := p.sent()
+	st, err := runner.Get(id)
+	if len(commands) != 0 || err != nil || st.Compactions != 1 {
+		t.Fatalf("native cut must satisfy Stage 1: commands=%v state=%+v err=%v", commands, st, err)
+	}
 }
 
 func TestTwoStageFallbackDashboardSlashCompact(t *testing.T) {

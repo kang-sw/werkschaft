@@ -147,6 +147,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	c.refreshHeld()
 	c.live.coverage = c.snapshotCoverage
 	if rec.Lead {
+		c.leadCompactionMode(rec)
 		_, _, _ = refreshPermissionSelection(dir)
 		r.setSummaryOwner(rec.ReplyID, c)
 		c.live.owner = c.lockSummaryWriter
