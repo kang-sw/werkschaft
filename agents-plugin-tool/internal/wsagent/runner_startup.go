@@ -389,8 +389,7 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 	}
 	for _, info := range listed {
 		var meta holderSession
-		if json.Unmarshal(info.Session, &meta) != nil || retiredPiHolders[info.ID] ||
-			meta.Kind == holderKindPiWorker || meta.Backend == BackendPi {
+		if json.Unmarshal(info.Session, &meta) != nil || retiredPiHolders[info.ID] || meta.retiredPi() {
 			// Pi history is closed, but its holders retain ownership of their processes.
 			continue
 		}
@@ -408,6 +407,11 @@ func (r *Runner) holdersScanned(retiredPiHolders map[string]bool) {
 			fmt.Fprintf(r.opts.Log, "agent: stop holder %s: %v\n", info.ID, err)
 		}
 	}
+}
+
+// Retained name check: retained holder descriptors (TestRetiredPiRealHolderSurvivesStartup).
+func (meta holderSession) retiredPi() bool {
+	return meta.Kind == holderKindPiWorker || meta.Backend == BackendPi
 }
 
 // scanDone reports whether the holder manager's first scan of this daemon

@@ -165,6 +165,10 @@ type fileCallRecorder interface {
 	recordFileCall(context.Context, wsfs.FileCall) error
 }
 
+type fileCallApprover interface {
+	approveFileCall(context.Context, wsfs.FileCall) error
+}
+
 // bindDurableMCP binds a just-installed daemon process before the token
 // becomes ready. The connection may outlive its admission, so each call
 // checks the token and the stored permission again.
@@ -199,9 +203,17 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		return wsfs.Authority(workerLevel)
 	}
 	_, liveModes := proc.(liveLeadMode)
+	admission := &permissionSlot(c.dir).admission
 	files := &wsfs.FileWriteSession{
 		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),
 		CurrentAuthority: authority, LiveAuthority: rec.Lead && liveModes,
+		HoldAuthority: func() func() {
+			admission.RLock()
+			return admission.RUnlock
+		},
+	}
+	if approver, ok := proc.(fileCallApprover); ok {
+		files.Approve = approver.approveFileCall
 	}
 	if recorder, ok := proc.(fileCallRecorder); ok && c.r.lifecycle(rec.Backend).FileWriteTools {
 		files.Record = func(ctx context.Context, call wsfs.FileCall) error {

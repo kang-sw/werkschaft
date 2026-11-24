@@ -270,7 +270,8 @@ type Options struct {
 	// sendAdmitting observes the revival admission fence in tests.
 	sendAdmitting func(string)
 	// beforeDurableWrite injects a failed private record write in tests.
-	beforeDurableWrite func(Record) error
+	beforeDurableWrite     func(Record) error
+	removeRetiredPiArchive func(string) error // archive removal fault in tests
 	// suppressReportDelivery simulates loss after settlement commits in tests.
 	suppressReportDelivery func(Record) bool
 }
@@ -283,6 +284,11 @@ type Runner struct {
 	// until all conversations have drained.
 	durableRecords     *wsmeta.Store
 	durableProjections sync.Map // reply-id -> last published projection digest
+	piPurgeMu          sync.Mutex
+	piPurgeStore       *wsmeta.Store
+	piPurges           map[string]string // reply ID -> worktree, under piPurgeMu after startup
+	piArchiveIDs       map[string]bool   // under piPurgeMu after startup
+	piPurgeLoadErr     error
 	// Full Quit refuses durable starts and input before draining transitions
 	// that already hold admission.
 	durableStopping    atomic.Bool
@@ -331,7 +337,7 @@ type Runner struct {
 	closedRows map[string]State
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
-	retiredPiBindings []retiredPiBinding
+	retiredPiBindings map[string]retiredPiBinding
 	// resumeMu serializes Pi child revival with close cascades without
 	// holding mu over store writes or conversation startup.
 	resumeMu sync.Mutex

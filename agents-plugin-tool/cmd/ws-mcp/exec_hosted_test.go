@@ -29,7 +29,8 @@ func (allowSessions) Owner(id string) (execjob.HostedOwner, error) {
 func (allowSessions) Approve(context.Context, string, execjob.HostedCall) (bool, error) {
 	return false, nil
 }
-func (allowSessions) Immediate(string) (bool, error) { return true, nil }
+func (allowSessions) LockExecAuthority(string) (func(), error) { return func() {}, nil }
+func (allowSessions) Immediate(string) (bool, error)           { return true, nil }
 func (allowSessions) Notify(string, uint64, string, string) (execjob.NoticeOutcome, error) {
 	return execjob.NoticeAccepted, nil
 }

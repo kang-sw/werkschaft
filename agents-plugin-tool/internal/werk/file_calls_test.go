@@ -225,6 +225,9 @@ func TestWerkFileCallRequiresApprovalAfterPostureDowngrade(t *testing.T) {
 				// The MCP boundary observes the downgrade before the model
 				// loop's permission callback reaches this process.
 				call.Authority = wsfs.AuthorityWorkdirWrite
+				if err := a.ApproveFileCall(ctx, call); err != nil {
+					return CallResult{}, err
+				}
 				files := wsfs.Files{Root: dir, Authority: call.Authority, RecordMutation: func(ctx context.Context, intent wsfs.FileIntent) error {
 					call.Intent = intent
 					return a.RecordFileCall(ctx, call)

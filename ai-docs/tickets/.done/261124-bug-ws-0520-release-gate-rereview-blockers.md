@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: e427bdcec26223dc
 sage-review-completeness-reviewed: e427bdcec26223dc
+completed: 2026-11-24
 ---
 
 # 0.52 release-gate re-review blockers (permissions, credentials, Pi history, git.search)
@@ -197,6 +198,75 @@ composer reset tests) are in `261124-bug-ws-0520-rereview-dashboard-fixes`.
 
 All paths are under `agents-plugin-tool/` unless shown otherwise.
 
+### Result (483c06dd0) - 2026-11-24
+
+- C1 (`0267af9fd`): scoped write and edit publish through a sibling
+  replacement entry. `TestScopedFileToolsLeaveExternalHardLinkUnchanged`
+  covers an existing alias and a link added during intent, on macOS and
+  Windows.
+- C3 (`748124f0f`): hosted exec spawn and file prepare/apply share the
+  posture transition guard, including the authority recheck after approval.
+  `TestHostedModelLaunchHoldsPostureThroughSpawn`,
+  `TestHostedModelLaunchRechecksPostureAfterOperatorGrant`,
+  `TestHostedModelLaunchRequiresApprovalAfterPostureDowngrade`,
+  `TestModelFileWriteHoldsPostureThroughPrepareAndApply`, and
+  `TestModelFileWriteRechecksPostureAfterOperatorGrant` cover those paths.
+- C4 (`195d792b2`, `5cdc60426`): startup refreshes surviving retired Pi sessions and
+  recovers complete archives after interrupted refresh.
+  `TestRetiredPiHistorySurvivesPruneAndRollback` verifies the modeled v0.51.2
+  prune, retention of history seen by 0.52, and loss of an aged entry written
+  only during rollback. The integrated read-through reproduced data loss
+  when an interrupted v0.51.2 prune left an agent record beside a missing
+  ring. `TestRetiredPiArchiveSurvivesPartialRollbackPrune` verifies preserved
+  ring and JSONL, manual recovery, and merging new entries from a shorter
+  surviving ring within the existing cap.
+- Pi purge (`ade0fc7cc`): the pending deletion survives a restart and uses
+  the same checkout on retry. `TestRetiredPiPurgeFailureSurvivesRestartAndRetry`,
+  `TestRetiredPiPurgeDoesNotRearchiveWhileCheckoutRemovalIsPending`, and
+  `TestWorktreeDeleteRetriesHistoryPurgeBeforeRemovingCheckout` cover
+  archive and Git failure ordering.
+- C5 (`e1dd9018c`): live Pi holder descriptors count toward checkout
+  occupancy even when the runner saved no holder ID.
+  `TestRetiredPiHolderBlocksWorktreeUntilExit` and
+  `TestWorktreeGuardsRefuseLiveRetiredPiHolder` cover occupancy and release
+  until the holder exits, with history shown as ended.
+- C6 (`9611ddea7`): credential updates protect the retiring generation and
+  scrub its bytes through the held handle. `TestCredentialReplacement*`
+  covers scrubbing, failed rename, and interrupted recovery, plus Windows
+  open handles and refusal when native POSIX rename or the scrub handle is
+  unavailable. `TestProviderCredentialProtectionDuringReplacement` covers
+  the protected generation window and
+  `TestRenameFileAtRefusesUnsupportedWindowsPOSIXRename` covers fail-closed
+  rename.
+- C7 (`4496d408a`): the model write guard includes daemon session state.
+  `TestModelFileToolsKeepOperatorSessionStateReadOnly` covers read and
+  write behavior. `TestWerkOperatorProvenanceAtCredentialBoundary` covers
+  trusted input, nudge, and replay.
+- I9 (`992f0db82`): the picker preserves the ChatGPT plan reconsent remedy
+  when OpenRouter or a local provider remains usable.
+  `TestWerkPickerKeepsPlanReconsentWithAvailableProviders` and
+  `TestLeadPopoverLaunchBehavior` cover the mixed-provider payload and UI.
+- I18 (`ceb5ace2d`): the argument reconstruction enforces the encoded
+  byte limit before allocation. `TestFillArgumentsBoundsEncodedExpansion`
+  covers over-limit expansion.
+- git.search (`6e34e379e`): the worktree-read preflight checks protected
+  current and retiring file link counts before Git runs.
+  `TestGitSearchRefusesWorktreeReadsWithCredentialHardLinks` and
+  `TestGitSearchCountsRetiringCredentialLinks` cover refusal, index and
+  revision controls, and recovery on unlink.
+- Approved fixture corrections `ea5668790` derive the three
+  `TestStartDashboardPasses*` argument lists from the current starter
+  and preserve the predecessor minor in
+  `TestHiringApprovalReplaysSelectedWerkProvider`. Integration merged
+  `origin/develop` at `2c1d50fef` in `fba63ff7c`. The release lead
+  approved the test-only `f818bf506` correction to
+  `TestConversationSendRearmsBottomFollow`, which passes at the integrated
+  tip and reproduces its stale assertion on `origin/develop`.
+- Test-only `0a5c1de29` uses the predecessor version in the shared hiring
+  restart fixture following the release lead's approval. This fixes the
+  six restarts that failed on `origin/develop` after the minor floor was
+  written. All `TestHiring*` tests passed, including provider replay.
+
 ### Phase 2: Docs
 
 Depends on Phase 1.
@@ -213,3 +283,81 @@ Verification: each named regression; full `go test ./internal/mcp -timeout
 45m`; `./internal/wsagent`, `./internal/werk`, `./internal/wsfs`,
 `./internal/execjob`, `./internal/wscred -race`, `./cmd/ws-mcp`; the
 Windows host runs above. The lead then re-reviews `cee60ac89..<fix head>`.
+
+### Result (2973ca5d5) - 2026-11-24
+
+- `db8a3cf36`: the ws MCP runbook gives the matched v0.51.2 rollback
+  steps and scopes `daemon-start --below-floor` to floor-aware
+  candidates. Checked the tagged launcher's cold start and the current
+  floor-aware launcher and Go starter.
+- `ef611d33b`: the Pi retention and compatibility docs describe what
+  0.52 archives, v0.51.2 retention for rollback-era writes, and manual
+  recovery of partial session directories. They record the committed
+  purge state and the HTTP 503 retry on the same checkout.
+- `2973ca5d5`: both manuals specify how refresh handles missing archived
+  components and merges surviving ring entries after an interrupted prune.
+- The source read-through aligned the provider-store docs with previous
+  generation scrubbing and Windows preconditions (`8efd1b88d`), documented
+  model reads and the `sessions/` write refusal for operator provenance
+  (`5ae071680`), and added the exact git.search refusal and the worktree
+  modes it applies to (`5a16c832d`).
+
+#### Integrated verification
+
+Verified code and docs at `2973ca5d5` with generated package assets.
+Test credentials and provider responses used fixtures.
+
+- macOS: `go build ./... && go vet ./...` passed.
+- macOS: `go test ./internal/mcp/ -count=1 -timeout 45m` passed
+  (724.283s).
+- macOS: `go test ./internal/wsagent/ ./internal/werk/ ./internal/wsfs/
+  ./internal/execjob/ ./cmd/ws-mcp/ -count=1` passed.
+- macOS: `go test ./internal/wslive/ -count=1` and
+  `go test ./internal/wscred/ -race -count=1` passed. Focused runs confirmed
+  the Phase 1 regressions and minor-floor tests.
+- macOS: targeted `go test ./internal/wsdashboard/ -count=1 -v -run …`
+  passed for the credential, picker, retired Pi, and checkout purge
+  tests, including `TestRailRowMetaBrowser` in Chromium and the corrected
+  `TestConversationSendRearmsBottomFollow`.
+- Windows: `go test ./internal/wsfs/ ./internal/wscred/ ./internal/wsagent/
+  ./cmd/ws-mcp/ -count=1 -timeout 40m` passed.
+- Windows: `go test ./internal/mcp/ ./internal/wscred/ ./internal/wsstate/
+  ./internal/wsagent/ -v -count=1 -timeout 40m -run …` passed for
+  `TestScopedFileToolsLeaveExternalHardLinkUnchanged`, `TestGitSearch*`,
+  `TestCredentialReplacement*`, and
+  `TestRenameFileAtRefusesUnsupportedWindowsPOSIXRename`. The same run
+  passed the partial-prune, history rollback, and purge regressions.
+  The release lead accepted the pre-existing Windows skip in
+  `TestGitSearchNeutralisesAHostileRepoConfig` for POSIX shell sentinels.
+  The ticket's Windows regressions ran and passed.
+
+#### Full dashboard verification
+
+The full Chromium-enabled dashboard run at `5a16c832d` with
+`go test ./internal/wsdashboard/ -count=1 -timeout 30m -v` finished in
+1753.421s with failures. The first run used the default 10-minute limit
+and timed out during `TestExecHUDBrowser`. That test passed in the
+30-minute run and in focused runs on both revisions.
+
+- Seven Chromium failures reproduced in focused runs at
+  `origin/develop` (`2c1d50fef`) and at the integrated tip.
+  `TestAgentBadgePopoverBrowser` hit a click interception,
+  `TestBoardHoldPillBrowser` saw the same topic twice,
+  `TestComposerExecBrowser` failed its bang-mode height assertion,
+  `TestUserCommandBrowser` counted an extra request,
+  `TestRailSessionRowBrowser` failed the count geometry assertion,
+  `TestWarmSwitchReadsBrowser` saw zero column offset reads, and
+  `TestWhiteboardEffectsBrowser` failed its clipping geometry assertion.
+- `TestRailNavigationBrowser` timed out in the full run and passed
+  focused on both revisions.
+- The six hiring restarts failed on both revisions before the approved
+  fixture correction. `go test ./internal/wsdashboard/ -count=1 -v -run
+  '^TestHiring'` passed with `0a5c1de29`, including the withdrawal startup
+  subtest and provider replay. This commit changes only test code.
+
+The lead's range re-review and live-provider publish gates remain pending.
+
+
+## Resolution (2026-11-24)
+
+Both phases landed with the integrated macOS and Windows verification recorded in the Results. Phase 2 also fixed a C4 partial-refresh loss found in the source read-through (5cdc60426) and repaired pre-existing dashboard test fixtures with the release lead's approval. Seven Chromium dashboard tests that fail identically on develop are handed to the dashboard owner and are outside this ticket.

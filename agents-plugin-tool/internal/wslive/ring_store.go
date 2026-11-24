@@ -585,6 +585,45 @@ func makeRingName(entry RingEntry) (string, time.Time, error) {
 	return name, stamp, nil
 }
 
+// CopyRingUnion snapshots the retained records from two rings into a fresh
+// directory. Keep an existing layout when either source already holds the
+// union. Rewrite diverged histories using the usual bounded segment writer.
+func CopyRingUnion(dest, archived, live string) error {
+	saved, err := loadRingDir(archived, false)
+	if err != nil {
+		return err
+	}
+	current, err := loadRingDir(live, false)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]RingRecord, len(saved.records)+len(current.records))
+	for _, rec := range current.records {
+		byName[rec.Name] = rec
+	}
+	for _, rec := range saved.records {
+		byName[rec.Name] = rec
+	}
+	switch {
+	case len(byName) == 0:
+		return nil
+	case len(byName) == len(saved.records):
+		return os.CopyFS(dest, os.DirFS(archived))
+	case len(byName) == len(current.records):
+		return os.CopyFS(dest, os.DirFS(live))
+	}
+	records := make([]RingRecord, 0, len(byName))
+	for _, rec := range byName {
+		records = append(records, rec)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Name < records[j].Name })
+	if len(records) > RingHistoryCap {
+		records = records[len(records)-RingHistoryCap:]
+	}
+	writer := ringMem{dir: dest}
+	return errors.Join(writer.appendRecordsLocked(records), writer.close())
+}
+
 func encodeSegmentLines(records []RingRecord, prevMax string) ([]byte, error) {
 	var buf bytes.Buffer
 	for i, rec := range records {

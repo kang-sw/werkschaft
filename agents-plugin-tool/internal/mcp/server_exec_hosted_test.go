@@ -38,7 +38,8 @@ func (s *execTestSessions) Approve(context.Context, string, execjob.HostedCall) 
 	return false, nil
 }
 
-func (s *execTestSessions) Immediate(string) (bool, error) { return true, nil }
+func (s *execTestSessions) LockExecAuthority(string) (func(), error) { return func() {}, nil }
+func (s *execTestSessions) Immediate(string) (bool, error)           { return true, nil }
 
 func (s *execTestSessions) StopNote(string) string                    { return "" }
 func (s *execTestSessions) Hand(string, uint64, string, string) error { return nil }

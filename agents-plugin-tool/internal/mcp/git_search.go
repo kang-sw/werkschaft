@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ type gitSearchValueCheck func(value string) string
 var (
 	gitSearchDigitsPattern = regexp.MustCompile(`^[0-9]+$`)
 	gitSearchScorePattern  = regexp.MustCompile(`^[0-9]+%?$`)
+	gitSearchMailmapField  = regexp.MustCompile(`%[+ -]?(?:[ac][NEL]|g[NE])`)
 )
 
 func gitSearchAnyValue(value string) string {
@@ -141,6 +143,7 @@ var gitSearchDiffExact = []string{
 	"--no-relative", "--notes", "--no-notes", "--decorate", "--no-decorate", "-m", "--cc",
 	"--first-parent", "--pickaxe-all", "--pickaxe-regex", "--word-diff", "--irreversible-delete",
 	"-D", "-R", "--dirstat", "--cumulative", "--parents", "--show-notes",
+	"--mailmap", "--use-mailmap", "--no-mailmap", "--no-use-mailmap",
 }
 
 var gitSearchDiffValued = map[string]gitSearchValueCheck{
@@ -192,7 +195,7 @@ var gitSearchFlagSets = map[string]gitSearchFlagSet{
 			"--cherry-pick", "--cherry-mark", "--boundary", "--source", "--root", "--all-match",
 			"--invert-grep", "-i", "--regexp-ignore-case", "-E", "--extended-regexp", "-F",
 			"--fixed-strings", "-P", "--perl-regexp", "--basic-regexp", "--full-diff", "--no-walk",
-			"--do-walk", "--children", "--use-mailmap", "--mailmap", "--log-size"),
+			"--do-walk", "--children", "--log-size"),
 		valued: gitSearchMerge(gitSearchDiffValued, map[string]gitSearchValueCheck{
 			"--max-count": gitSearchDigits, "--skip": gitSearchDigits, "--since": gitSearchAnyValue,
 			"--after": gitSearchAnyValue, "--until": gitSearchAnyValue, "--before": gitSearchAnyValue,
@@ -553,6 +556,55 @@ type gitSearchRequest struct {
 	paths     []string
 }
 
+func (req gitSearchRequest) mailmapDisabled() bool {
+	disabled := false
+	for _, option := range req.options {
+		switch option {
+		case "--no-mailmap", "--no-use-mailmap":
+			disabled = true
+		case "--mailmap", "--use-mailmap":
+			disabled = false
+		}
+	}
+	return disabled
+}
+
+func (req gitSearchRequest) readsWorktree() bool {
+	switch req.command {
+	case "grep":
+		return len(req.revisions) == 0 && !slices.Contains(req.options, "--cached")
+	case "blame":
+		// Git loads the worktree mailmap even when blame names a revision.
+		return true
+	case "ls-files":
+		for _, option := range req.options {
+			switch option {
+			case "--eol", "-m", "--modified", "-d", "--deleted", "-o", "--others", "-k", "--killed", "-i", "--ignored":
+				return true
+			}
+			if value, ok := strings.CutPrefix(option, "--format="); ok {
+				format := strings.ReplaceAll(value, "%%", " ")
+				if strings.Contains(format, "%(eolinfo:worktree)") || strings.Contains(format, "%(eolattr)") {
+					return true
+				}
+			}
+		}
+	case "log", "show":
+		if !req.mailmapDisabled() {
+			return true
+		}
+		for _, option := range req.options {
+			name, value, _ := strings.Cut(option, "=")
+			// Mailmap-aware pretty fields read .mailmap independently of the
+			// command's mailmap switch.
+			if (name == "--format" || name == "--pretty") && gitSearchMailmapField.MatchString(strings.ReplaceAll(value, "%%", " ")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // parseGitSearchRequest validates everything but the repository path.
 func parseGitSearchRequest(args map[string]any) (gitSearchRequest, error) {
 	var req gitSearchRequest
@@ -639,7 +691,13 @@ func parseGitSearchRequest(args map[string]any) (gitSearchRequest, error) {
 // through -e, a revision starting with - is refused by the request parser,
 // and their paths follow "--", so "[rev] -- path" is safe on both versions.
 func gitSearchArgs(req gitSearchRequest) []string {
-	args := []string{"--no-pager", "-c", "core.fsmonitor=false", req.command}
+	args := []string{"--no-pager", "-c", "core.fsmonitor=false"}
+	if req.mailmapDisabled() {
+		// A configured default pretty format could independently select
+		// mailmap fields. Explicit formats still control the output.
+		args = append(args, "-c", "format.pretty=medium")
+	}
+	args = append(args, req.command)
 	args = append(args, gitSearchForcedFlags[req.command]...)
 	args = append(args, req.options...)
 	switch req.command {
@@ -753,6 +811,15 @@ func (s *Server) handleGitSearch(ctx context.Context, id json.RawMessage, args m
 // output, capped, or git's stderr as the error. environ is the caller
 // process's environment; git is resolved from its PATH.
 func runGitSearch(ctx context.Context, environ []string, repo, root string, req gitSearchRequest) (string, error) {
+	if req.readsWorktree() {
+		linked, err := wsdashboard.NewProviderCredentialProtection().HasLinkedCredentialFiles()
+		if err != nil {
+			return "", errors.New("cannot verify provider credential hard links before reading the worktree; retry when the credential store is accessible")
+		}
+		if linked {
+			return "", errors.New("worktree search refused because a provider credential file has an extra hard link; remove the extra link while keeping the store's file, then retry")
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, gitSearchTimeout)
 	defer cancel()
 	bin, lookErr := wsgit.LookPathEnv("git", environ)

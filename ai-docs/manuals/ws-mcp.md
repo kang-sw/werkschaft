@@ -161,6 +161,19 @@ whose `schema_version` is newer is read but never rewritten. There is no
 environment-variable source: the daemon's environment reaches every hosted
 session and exec subprocess.
 
+On update, the writer stages the new file beside `credentials.json`. It
+adds a store-owned retiring hard link to the current generation and opens
+that file for scrubbing before atomically publishing the replacement. A
+successful update truncates the retiring file and removes the store's link,
+so existing aliases to that generation read empty. If publication fails,
+the writer removes the retiring link and leaves the current bytes intact.
+On recovery, a retiring link with the same identity as the current file is
+removed with its bytes intact. A different retiring generation and any
+staged file are truncated and removed. On Windows, replacement requires
+native POSIX rename and unlink support. A volume without that support or
+a reader that blocks opening the retiring handle causes the update to
+fail before publication.
+
 Use `credential set openrouter` for an OpenRouter key. For vLLM or Ollama,
 add a name, `base_url`, and `kind` to the global `agent.werk_endpoints`
 map and select `local/<name>` as the provider. If the endpoint requires
@@ -192,13 +205,21 @@ The builtin harness uses the daemon's in-process store for its account
 catalog and access token. The store serializes refresh rotation and
 requires explicit consent on that registration before background use.
 
+Werk carries the operator flag from trusted lead input through the daemon's
+inbox, queue, and turn replay. Automatic nudges run as background input.
+Model file tools refuse writes under `<daemon state>/sessions/`, where the
+daemon keeps the session state it uses for operator provenance. Model reads
+of that state still follow normal file-read permissions.
+
 `POST /auth/provider/token` is an internal HTTP route for an external
 hosted harness with a per-session bearer (`WS_MCP_SESSION_TOKEN`) and a
 backend registration that enables `ProviderCredentials`. Current external
 harnesses use their own logins. Werk uses the credential store in process,
 and the route refuses `openai` (Sign in with ChatGPT). The dashboard file
-browser and daemon file tools deny the credential directory. Keys and
-tokens are never logged.
+browser and daemon file tools protect the credential directory and its
+current, staged, and retiring files by path and file identity. The guards
+also cover the default and legacy store locations. Keys and tokens are
+never logged.
 
 Trust boundary: the token route's answer to an admitted session is the only
 response that carries a secret; no ws tool output returns one. Processes
@@ -884,17 +905,32 @@ retired.
 Before retiring a Pi record, 0.52 commits a copy to
 `<daemon state>/retired-pi-history/<reply-id>/`. It preserves `agent.json`
 and, when present, `registration.json`, `snapshot.json`, `ring/`, and the
-daemon-owned `pi/session.jsonl`. The archived JSONL keeps later appends via
-a hard link where supported. Otherwise it holds the retirement-time bytes.
+daemon-owned `pi/session.jsonl`. On startup, 0.52 refreshes changed archives
+from surviving sessions and keeps archived components missing from the
+live directory. It combines archived and surviving ring entries within
+the existing ring retention limit. A complete copy stays recoverable
+during refresh. The archived JSONL keeps later appends through a hard link
+where supported. Other filesystems keep a copy from the last archive snapshot.
 
-If you roll back with a matching v0.51.2 plugin and daemon, its registry
-pruner walks `sessions/` only and can remove an aged, closed Pi directory
-(v0.51.2 `internal/wsdashboard/registry.go:386–425,471–472`). At startup,
-0.52 restores a missing `sessions/<reply-id>/` from the archive and applies
-retirement again to restored open metadata. An existing partial session
-directory needs manual recovery from the archive. Both directories are
-exempt from the 0.52 seven-day sweep. An explicit 0.52 history purge removes
-both.
+During a matched v0.51.2 rollback, the old pruner walks only `sessions/`
+and can remove aged, retired sessions that lack a terminal owner (v0.51.2
+`internal/wsdashboard/registry.go:386–425,461–472`). On return, 0.52 can
+recover the Pi history it last saw before rollback. History written by
+v0.51.2 during rollback follows v0.51.2 retention. On startup, 0.52 restores
+missing session directories from the archive and retires restored open
+metadata again. Recover an existing partial session directory manually from
+the archive, or explicitly purge it. The 0.52 seven-day sweep leaves
+retired Pi session directories and archives in place.
+
+When you delete a checkout from the dashboard, 0.52 commits pending Pi
+history deletions before removing their archives and running
+`git worktree remove`. If archive removal fails, the dashboard returns
+HTTP 503. Retry deletion on the same checkout, even if its session row has
+disappeared. Startup honors the committed deletion and skips restoring or
+refreshing that archive. If Git fails after archive removal, the live
+session directory and pending deletion stay available for retry. Successful
+purge removes the live session directory and clears the pending state once
+both copies are gone.
 
 #### Worker mail and delegation
 
@@ -1511,6 +1547,18 @@ roots of non-agent dashboard registrations seen within the registry
 retention, plus `agent.git_search_roots` (a global-only path list that needs
 lead authority); without `repo` it lists the roots.
 
+Before a worktree read, `git.search` checks the protected credential files,
+including any retiring generation, for extra hard links. Worktree reads
+include `grep` outside the index or a revision, all `blame`, `ls-files`
+modes and format fields that inspect the worktree, and `log` or `show`
+with mailmap enabled or a mailmap-aware format. Index and revision reads
+that do not inspect the worktree continue normally. If a protected file has
+an extra link, the tool answers:
+
+> git.search: worktree search refused because a provider credential file has
+> an extra hard link; remove the extra link while keeping the store's file,
+> then retry
+
 Pages render in one language end to end, chosen by the server from the first
 byte: the `ws_dashboard_lang` cookie when it names an available language (the
 gear menu's language `<select>` writes it; no cookie, or the empty choice,
@@ -1756,12 +1804,24 @@ of `absence`, `upgrade`, or `replace` to the child), Go `StartDaemon` (under
 the singleton lock, before side effects, using that same intent), and the
 Python launchers (after candidate selection and before staging, including the
 hosted launcher's `last-running-executable.json` restart). Live newer daemons
-are still protected by `keepRunning` / never-downgrade; the floor closes the
-cold-start window when no healthy daemon answers. Deliberate rollback uses
-`daemon-start --below-floor` (through the launcher or Go binary): the launcher
-precheck admits and forwards the flag, and `StartDaemon` lowers the floor to
-that candidate's minor under the singleton lock before endpoint publication. No
-other path lowers the floor.
+are still protected by `keepRunning`. The floor also applies when no healthy
+daemon answers.
+
+To roll back from 0.52 to a matched v0.51.2 plugin and daemon:
+
+1. End sessions that use the 0.52 plugin so their launchers stop reconnecting,
+   and stop the newer daemon. The desktop app's Full Quit also closes hosted
+   sessions.
+2. Install v0.51.2 in each affected harness and start a fresh harness session
+   with that plugin. With the daemon stopped, the v0.51.2 plugin launcher
+   cold-starts its own verified v0.51.2 binary.
+3. Verify the daemon reports v0.51.2 at `/health` before resuming work.
+
+The v0.51.2 pair predates the floor. It leaves the floor file in place and
+starts with its normal arguments. For a floor-aware rollback candidate, use
+that candidate's `daemon-start --below-floor` after stopping the newer
+daemon. Its launcher admits and forwards the flag, and `StartDaemon` lowers
+the floor under the singleton lock before publishing the endpoint.
 
 Session holders: a holder is a small Python process (standard library only,
 3.10 or newer) that owns one child process, over pipes or a PTY (ConPTY on

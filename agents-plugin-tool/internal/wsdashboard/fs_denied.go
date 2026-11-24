@@ -104,6 +104,7 @@ type denySet struct {
 	ids     []os.FileInfo
 	idPaths []string
 	above   map[string]bool
+	stat    func(string) (os.FileInfo, error)
 }
 
 // newDenySet is a lazy deny set for one request, for the current homes.
@@ -175,13 +176,17 @@ func (s *denySet) identities() []os.FileInfo {
 	}
 	s.statted = true
 	s.load()
+	stat := s.stat
+	if stat == nil {
+		stat = os.Stat
+	}
 	for _, base := range s.bases {
 		// Do not trigger network/device access just to inspect a configured
 		// credential location. Such paths remain lexically denied.
 		if networkPath(base) || deviceElement(base) {
 			continue
 		}
-		if info, err := os.Stat(base); err == nil {
+		if info, err := stat(base); err == nil {
 			s.ids = append(s.ids, info)
 			s.idPaths = append(s.idPaths, base)
 		}

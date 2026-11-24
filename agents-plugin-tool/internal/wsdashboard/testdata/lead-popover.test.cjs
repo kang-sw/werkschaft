@@ -119,6 +119,18 @@ for (const harness of ['claude']) {
   assert.deepEqual(dismissed.events, ['rail-close', 'draft', 'rename-intent', ['navigate', '/s/created']], 'late success still opens the created session without closing another popover');
   assert.deepEqual(JSON.parse(dismissed.storage['ws.dashboard.renameNew']), { id: 'created', at: 12345 });
 }
+for (const provider of ['openrouter', 'local/desk']) {
+  const remedy = 'ChatGPT plan usage is disabled; enable it with "credential sign-in openai --enable-plan"';
+  const f = fixture('werk', [{ harness: 'werk', lead: true, available: true,
+    model_providers: [provider], model_notice: remedy,
+    models: [{ id: 'vendor/model', provider }, { id: 'unavailable', provider: 'openai' }] }]);
+  const note = f.nodes.find(n => n.id === f.model.attrs['aria-describedby']);
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, remedy);
+  assert.equal(f.model.disabled, false);
+  assert.deepEqual(f.model.children.slice(1).map(n => n.value),
+    [provider === 'openrouter' ? 'vendor/model' : provider + ' vendor/model']);
+}
 // Lead-marked descriptors replace, rather than extend, the fixed buttons.
 const custom = { harness: 'custom', profile: '', lead: true, available: true,
   models: [{ id: 'custom-model' }], efforts: ['deep'], permission_modes: ['review', 'auto', 'plan'] };

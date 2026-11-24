@@ -2,6 +2,7 @@ package wsfs
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -31,7 +32,12 @@ type FileWriteSession struct {
 	CurrentAuthority func() Authority
 	// LiveAuthority is set when the harness applies mode changes in the current process.
 	LiveAuthority bool
-	Record        func(context.Context, FileCall) error
+	// HoldAuthority orders preparation and mutation against posture changes.
+	HoldAuthority func() (release func())
+	// Approve waits for the operator when a scoped model call needs a grant.
+	// Call it outside HoldAuthority before retrying admission.
+	Approve func(context.Context, FileCall) error
+	Record  func(context.Context, FileCall) error
 }
 
 // AuthorityForCall snapshots the permission level to pin for one file operation.
@@ -175,6 +181,9 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 			return err
 		}
 	}
+	if f.Authority == AuthorityWorkdirWrite && (prior.digest == nil || *prior.digest != expected) {
+		return target.commitReplacement(ctx, prior, data, protection)
+	}
 	flags := os.O_WRONLY
 	if prior.info == nil {
 		if err := target.createParents(); err != nil {
@@ -188,26 +197,11 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 	}
 	defer file.Close()
 	if prior.info != nil {
-		info, err := verifyFile(file, prior.info)
-		if err != nil {
+		if err := verifyMutationDestination(file, prior.info, protection); err != nil {
 			return err
-		}
-		if protection != nil {
-			if err := protection.CheckOpened(info); err != nil {
-				return err
-			}
 		}
 		if *prior.digest == expected {
 			return nil
-		}
-		if f.Authority == AuthorityWorkdirWrite {
-			single, err := hasSingleLink(file, info)
-			if err != nil {
-				return fmt.Errorf("check file link count: %w", err)
-			}
-			if !single {
-				return fmt.Errorf("%s is not singly linked; workdir-write cannot modify a shared file", target.path)
-			}
 		}
 		if err := file.Truncate(0); err != nil {
 			return err
@@ -217,4 +211,63 @@ func (f *Files) commitFile(ctx context.Context, target *mutationTarget, prior fi
 		return err
 	}
 	return file.Close()
+}
+
+func verifyMutationDestination(file *os.File, prior fs.FileInfo, protection FileProtection) error {
+	info, err := verifyFile(file, prior)
+	if err == nil && protection != nil {
+		err = protection.CheckOpened(info)
+	}
+	return err
+}
+
+// A scoped mutation publishes a complete new file in the pinned parent.
+// Hard links to the previous entry continue to refer to the previous inode.
+func (t *mutationTarget) commitReplacement(ctx context.Context, prior fileSnapshot, data []byte, protection FileProtection) error {
+	if err := t.createParents(); err != nil {
+		return err
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return err
+	}
+	tmp, err := openMutationTemp(t.parent, ".ws-write-"+hex.EncodeToString(random[:]))
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			discardMutationTemp(t.parent, tmp)
+		}
+		_ = tmp.Close()
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := t.checkParent(); err != nil {
+		return err
+	}
+	name := filepath.Base(t.path)
+	if prior.info != nil {
+		file, err := openMutationFile(t.parent, name, os.O_WRONLY)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		if err := verifyMutationDestination(file, prior.info, protection); err != nil {
+			return err
+		}
+		if err := setMutationTempMode(tmp, prior.info.Mode()); err != nil {
+			return err
+		}
+	}
+	if err := publishMutationTemp(t.parent, tmp, name, prior.info != nil); err != nil {
+		return err
+	}
+	published = true
+	return tmp.Close()
 }

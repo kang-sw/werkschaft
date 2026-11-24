@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // responses.go is the Responses streaming client: POST <base>/responses with
@@ -731,19 +732,59 @@ func (s *streamState) fillArguments(items []json.RawMessage) error {
 		if b.Len() > remaining {
 			return errResponseTooLarge
 		}
-		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) != nil {
-			continue
+		start, end, prefix := argumentSlot(raw)
+		growth := len(prefix) + jsonStringSize(b.String()) - (end - start)
+		if growth > remaining {
+			return errResponseTooLarge
 		}
 		args, _ := json.Marshal(b.String())
-		m["arguments"] = args
-		if patched, err := json.Marshal(m); err == nil {
-			remaining -= len(patched) - len(raw)
-			if remaining < 0 {
-				return errResponseTooLarge
-			}
-			items[i] = patched
-		}
+		patched := make(json.RawMessage, 0, len(raw)+growth)
+		patched = append(patched, raw[:start]...)
+		patched = append(patched, prefix...)
+		patched = append(patched, args...)
+		items[i] = append(patched, raw[end:]...)
+		remaining -= growth
 	}
 	return nil
+}
+
+// argumentSlot locates the last exact "arguments" member in a function
+// call object already validated by json.Unmarshal. Preserve the other fields
+// as received so their size does not change during reconstruction.
+func argumentSlot(raw json.RawMessage) (start, end int, prefix string) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	_, _ = dec.Token() // opening brace
+	for dec.More() {
+		key, _ := dec.Token()
+		var value json.RawMessage
+		_ = dec.Decode(&value)
+		if key == "arguments" {
+			end = int(dec.InputOffset())
+			start = end - len(value)
+		}
+	}
+	if end == 0 {
+		end = bytes.LastIndexByte(raw, '}')
+		return end, end, `,"arguments":`
+	}
+	return start, end, ""
+}
+
+// jsonStringSize matches encoding/json's string quoting, including its
+// default HTML escaping, without allocating the quoted string.
+func jsonStringSize(s string) int {
+	size := 2
+	for len(s) != 0 {
+		r, width := utf8.DecodeRuneInString(s)
+		s = s[width:]
+		switch {
+		case r == '"' || r == '\\' || r == '\b' || r == '\f' || r == '\n' || r == '\r' || r == '\t':
+			size += 2
+		case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || (r == utf8.RuneError && width == 1):
+			size += 6
+		default:
+			size += width
+		}
+	}
+	return size
 }

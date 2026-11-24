@@ -25,7 +25,8 @@ func TestConversationSendRearmsBottomFollow(t *testing.T) {
 	if !strings.Contains(src, `if (csend) csend.addEventListener("click", function () { sendMessage(); ctext.focus(); });`) {
 		t.Fatal("the send button no longer routes through sendMessage")
 	}
-	if !strings.Contains(src, `if (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod) { e.preventDefault(); sendMessage(); }`) {
+	if !strings.Contains(src, `var isSend = effMode === "enter" ? !e.shiftKey && !e.altKey : mod;`) ||
+		!strings.Contains(src, `if (isSend) { e.preventDefault(); sendMessage(); return; }`) {
 		t.Fatal("Enter no longer routes through sendMessage")
 	}
 	fns := strings.Join([]string{

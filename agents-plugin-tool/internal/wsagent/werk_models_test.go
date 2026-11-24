@@ -171,7 +171,15 @@ func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
 	}
 }
 
-type werkPlanDisabledSource struct{ wscred.Source }
+type werkPlanDisabledSource struct {
+	local []wscred.Provider
+}
+
+func (s werkPlanDisabledSource) LocalProviders() []wscred.Provider { return s.local }
+
+func (werkPlanDisabledSource) Credential(context.Context, wscred.Request) (wscred.Credential, error) {
+	return wscred.Credential{}, wscred.ErrNotConfigured
+}
 
 func (werkPlanDisabledSource) Status() ([]wscred.ProviderStatus, error) {
 	return []wscred.ProviderStatus{{Provider: wscred.ProviderOpenAI, OpenAIAccounts: []wscred.OpenAIAccountStatus{
@@ -199,5 +207,30 @@ func TestWerkPickerAndTierReportPlanReconsent(t *testing.T) {
 	_, _, _, err := r.resolveTier(caller, "werk.small")
 	if err == nil || !strings.Contains(err.Error(), "credential sign-in openai --enable-plan") {
 		t.Fatalf("tier refusal = %v", err)
+	}
+}
+
+func TestWerkPickerKeepsPlanReconsentWithAvailableProviders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"id":"vendor/m"}]}`)
+	}))
+	defer srv.Close()
+	for _, id := range []wscred.ProviderID{wscred.ProviderOpenRouter, "local/desk"} {
+		t.Run(string(id), func(t *testing.T) {
+			sh := newSupportHarness(t)
+			source := werkPlanDisabledSource{}
+			if id != wscred.ProviderOpenRouter {
+				source.local = []wscred.Provider{{ID: id, BaseURL: srv.URL, Dialect: "ollama"}}
+			}
+			_, reg := (WerkBackend{modelsURL: srv.URL, httpClient: srv.Client(), credentials: source,
+				credentialStatus: func(provider string) (bool, error) { return provider == string(id), nil },
+			}).registration()
+			sh.runner.opts.Backends[BackendWerk] = reg
+			picker := harnessByName(t, choicesWithPickers(t, sh.support), BackendWerk)
+			if !picker.Available || picker.Error != "" || len(picker.ModelProviders) != 1 || picker.ModelProviders[0] != string(id) ||
+				picker.ModelNotice != wscred.ErrOpenAIPlanDisabled.Error() {
+				t.Fatalf("mixed-provider picker = %+v", picker)
+			}
+		})
 	}
 }

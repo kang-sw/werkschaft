@@ -134,6 +134,18 @@ func (r *Runner) ExecImmediate(id string) (bool, error) {
 	return c.execImmediate(), nil
 }
 
+// LockExecAuthority shares the permission transition's admission guard.
+// Take it before consulting authority or the hosted job's mutex.
+func (r *Runner) LockExecAuthority(id string) (func(), error) {
+	c, err := r.open(id)
+	if err != nil {
+		return nil, err
+	}
+	admission := &permissionSlot(c.dir).admission
+	admission.RLock()
+	return admission.RUnlock, nil
+}
+
 // execImmediate reports whether c runs an exec call without a prompt: every
 // conversation that is not a lead does (a spawned worker's own permission
 // requests are answered for it, and no page shows a non-lead's prompt), and

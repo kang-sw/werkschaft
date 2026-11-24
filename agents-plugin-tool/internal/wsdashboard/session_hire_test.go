@@ -335,6 +335,21 @@ func TestHiringLifecycle(t *testing.T) {
 	}
 }
 
+func restartHiringFixture(t *testing.T, f *pageFixture, opts DaemonOptions) *Daemon {
+	t.Helper()
+	opts.Dir = f.dir
+	opts.Version = f.d.Endpoint().Version
+	opts.Sessions = f.src
+	opts.noGitBadge = true
+	opts.PollInterval = time.Hour
+	d, err := StartDaemon(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	return d
+}
+
 func TestHiringExpiryAndRestart(t *testing.T) {
 	var clock atomic.Int64
 	clock.Store(time.Now().UnixMilli())
@@ -353,11 +368,7 @@ func TestHiringExpiryAndRestart(t *testing.T) {
 	if err = WriteRegistration(f.dir, reg); err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, noGitBadge: true, hireNow: now, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{hireNow: now})
 	waitFor(t, "restart expiry mail", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
 	assertHireMail(t, d, p, "expired")
 	d.settleHires()
@@ -372,11 +383,7 @@ func TestHiringPendingSurvivesRestartAndExpiryClock(t *testing.T) {
 	enableHiring(t, f.d, "livesession")
 	p := requestHiring(t, f.d, "livesession")
 	f.d.Close()
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, noGitBadge: true, hireNow: now, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{hireNow: now})
 	queue, err := d.pendingHires()
 	if err != nil || len(queue) != 1 || queue[0].ID != p.ID || !queue[0].ExpiresAt.Equal(p.ExpiresAt) {
 		t.Fatalf("restored: %+v %v", queue, err)
@@ -436,11 +443,7 @@ func TestHiringWithdrawals(t *testing.T) {
 				d.index.Refresh()
 				d.pokeHires()
 			case "startup":
-				d, err = StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, noGitBadge: true, PollInterval: time.Hour})
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer d.Close()
+				d = restartHiringFixture(t, f, DaemonOptions{})
 			case "approval", "flag":
 				res := hirePost(d, hireRoute+"/"+p.ID+"/approve", `{"harness":"pi"}`)
 				if res.Code != 200 && res.Code != 409 {
@@ -539,11 +542,7 @@ func TestHiringApprovalIntentRecoversOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{Agents: creator})
 	waitFor(t, "approval intent recovery", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
 	assertHireMail(t, d, p, "approved")
 	creator.mu.Lock()
@@ -570,11 +569,7 @@ func TestHiringApprovalReplaysSelectedWerkProvider(t *testing.T) {
 	if err := f.d.saveHires(proposals); err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{Agents: creator})
 	waitFor(t, "provider selection replay", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
 	assertHireMail(t, d, p, "approved")
 	creator.mu.Lock()
@@ -612,11 +607,7 @@ func TestHiringEndedRequesterCancelsInterruptedCreation(t *testing.T) {
 	if err = WriteRegistration(f.dir, reg); err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, Agents: creator, noGitBadge: true, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{Agents: creator})
 	waitFor(t, "interrupted approval withdrawal", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
 	assertHireMail(t, d, p, "withdrawn")
 	child, err := ReadRegistration(f.dir, id)
@@ -675,11 +666,7 @@ func TestHiringOutcomeWriteFailureRetriesFromDisk(t *testing.T) {
 	if err = holder.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDaemon(DaemonOptions{Dir: f.dir, Sessions: f.src, noGitBadge: true, PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d := restartHiringFixture(t, f, DaemonOptions{})
 	waitFor(t, "retained outcome mail", func() bool { return len(hireMails(t, d, p.Requester)) == 1 })
 	assertHireMail(t, d, p, "rejected")
 }

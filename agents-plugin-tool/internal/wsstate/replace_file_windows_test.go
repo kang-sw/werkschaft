@@ -3,11 +3,45 @@
 package wsstate
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+func TestRenameFileAtRefusesUnsupportedWindowsPOSIXRename(t *testing.T) {
+	dir := t.TempDir()
+	before, after := filepath.Join(dir, "current"), filepath.Join(dir, "staged")
+	for path, value := range map[string]string{before: "committed", after: "staged"} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	tmp, err := os.Open(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tmp.Close()
+	calls := 0
+	unsupported := func(windows.Handle, *windows.IO_STATUS_BLOCK, *byte, uint32, uint32) error {
+		calls++
+		return windows.STATUS_INVALID_INFO_CLASS
+	}
+	if err := renameFileAt(parent, tmp, "current", true, unsupported); !errors.Is(err, errors.ErrUnsupported) || calls != 1 {
+		t.Fatalf("rename error = %v after %d calls", err, calls)
+	}
+	if data, err := os.ReadFile(before); err != nil || string(data) != "committed" {
+		t.Fatalf("committed entry = %q, %v", data, err)
+	}
+}
 
 // TestAtomicReplaceFileWindowsReplacesExisting verifies that AtomicReplaceFile
 // succeeds when the destination already exists and the new contents are visible

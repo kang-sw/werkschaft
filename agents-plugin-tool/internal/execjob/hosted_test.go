@@ -346,6 +346,7 @@ type execNotice struct {
 
 // fakeExecSessions is a HostedSessions over a fixed set of owners.
 type fakeExecSessions struct {
+	authority sync.RWMutex
 	mu        sync.Mutex
 	owners    map[string]HostedOwner
 	approve   func(ctx context.Context, id string, call HostedCall) (bool, error)
@@ -409,6 +410,11 @@ func (s *fakeExecSessions) Immediate(id string) (bool, error) {
 		return fn(id)
 	}
 	return true, nil
+}
+
+func (s *fakeExecSessions) LockExecAuthority(string) (func(), error) {
+	s.authority.RLock()
+	return s.authority.RUnlock, nil
 }
 
 func (s *fakeExecSessions) StopNote(id string) string { return "NOTE: deliberate stop" }
