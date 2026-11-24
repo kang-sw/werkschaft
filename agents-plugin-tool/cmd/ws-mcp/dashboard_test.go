@@ -38,6 +38,25 @@ func TestStartDashboardWithTheKeyOffSpawnsNothing(t *testing.T) {
 	}
 }
 
+// absenceStartArgs observes the production argv builder through Ensure on
+// an empty daemon directory. The caller supplies the expected settings.
+func absenceStartArgs(t *testing.T, port int, lan bool, buildTime int64) []string {
+	t.Helper()
+	refused := errors.New("captured daemon start")
+	var args []string
+	_, err := wsdashboard.Ensure(context.Background(), wsdashboard.EnsureOptions{
+		Dir: t.TempDir(), Version: version, Port: port, LAN: lan, BuildTime: buildTime,
+		Spawn: func(argv []string) error {
+			args = argv
+			return refused
+		},
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("capture absence start arguments: %v", err)
+	}
+	return args
+}
+
 func TestStartDashboardPassesThePortKeyAsTheDaemonFlag(t *testing.T) {
 	var got []string
 	var log bytes.Buffer
@@ -45,7 +64,7 @@ func TestStartDashboardPassesThePortKeyAsTheDaemonFlag(t *testing.T) {
 		got = args
 		return errors.New("spawn refused in test")
 	}, nil, &log)
-	if want := []string{"dashboard", "--port", "12345"}; !reflect.DeepEqual(got, want) {
+	if want := absenceStartArgs(t, 12345, false, 0); !reflect.DeepEqual(got, want) {
 		t.Fatalf("spawn args = %v, want %v", got, want)
 	}
 	if outcome != wsdashboard.OutcomeUnavailable || !strings.Contains(log.String(), "dashboard unavailable") {
@@ -60,11 +79,7 @@ func TestStartDashboardPassesLANAsTheDaemonFlag(t *testing.T) {
 			got = args
 			return errors.New("spawn refused in test")
 		}, nil, io.Discard)
-		want := []string{"dashboard", "--port", "12345"}
-		if lan {
-			want = append(want, "--lan")
-		}
-		if !reflect.DeepEqual(got, want) {
+		if want := absenceStartArgs(t, 12345, lan, 0); !reflect.DeepEqual(got, want) {
 			t.Fatalf("lan %v: spawn args = %v, want %v", lan, got, want)
 		}
 	}
@@ -76,7 +91,7 @@ func TestStartDashboardPassesTheBuildTimeAsTheDaemonFlag(t *testing.T) {
 		got = args
 		return errors.New("spawn refused in test")
 	}, nil, io.Discard)
-	if want := []string{"dashboard", "--port", "12345", "--build-time", "1700000000000"}; !reflect.DeepEqual(got, want) {
+	if want := absenceStartArgs(t, 12345, false, 1700000000000); !reflect.DeepEqual(got, want) {
 		t.Fatalf("spawn args = %v, want %v", got, want)
 	}
 }
