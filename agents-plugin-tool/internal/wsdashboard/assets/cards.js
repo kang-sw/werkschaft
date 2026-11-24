@@ -1911,10 +1911,16 @@
         if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
         if (was.maxBtn.isConnected) was.maxBtn.focus();
       } else {
-        // The focus comes back without scrolling: the node's place is where
-        // it was left.
+        var origin = was.panelHosts && was.panelHosts[0];
         var back = shrink(was);
-        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
+        var anchor = window.WsBoardAnchor;
+        if (anchor && anchor.settle) {
+          // A fixed panel can stay in view while its topic leaves the board
+          // viewport. Bring that topic back before returning focus to it.
+          var moved = back && origin && board.contains(origin) && anchor.free && anchor.free()
+            && anchor.visibleCards().indexOf(origin) < 0;
+          if (!moved || !anchor.select(origin, { keep: true })) anchor.settle();
+        }
         if (back) back.focus({ preventScroll: true });
       }
     }
