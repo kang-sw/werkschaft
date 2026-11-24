@@ -127,6 +127,12 @@ changes.
   - `TestRailNavigationBrowser`: passes (~3.5s) both isolated and in the full package run.
 - **Verification**: `node --check`, `frontend-settings.test.js` (22/22), `generate-package-assets.py --check`, `board-snap-deck-0512.browser.cjs` (10/10), `agents-island.test.cjs`, `composer-multiline.test.cjs` (10/10), `board-snap-deck-0512.test.cjs` (5/5), Windows cross-compile & vet (`GOOS=windows go test -c ./internal/wsdashboard` and `go vet`), before/after Chromium screenshots visually checked under `/tmp/0520-browser-ci-shots/`, and full `./internal/wsdashboard` + `./internal/wswhiteboard` suites run with Chromium.
 
+#### Edition (368f527f2) - 2026-11-24
+
+- Added `anchorIsBounded(col)` in `agents-plugin-tool/internal/wsdashboard/assets/dashboard-board-anchor.js` so `anchorScroller`, `anchorLandingTop`, `anchorAlign`, and `anchorScrollEnd` detect bounded `#bcol` even before `ResizeObserver` fires (fixing `TestBoardAnchorContracts` at `board-anchor.test.cjs:292-309`), and threaded the computed boolean through `anchorSelect` / `anchorAlign` / `anchorScrollEnd` so `getComputedStyle(col)` runs at most once per alignment (`performance.md` `## Frontend Minimal Updates` rule 4).
+- Restored `doc.addEventListener("scrollend", anchorScrollEnd)` while keeping the `!bounded && wbHistory.keeping(sc)` guard in `anchorAlign` and accepting both `col` and `doc`/`doc.scrollingElement` targets in `anchorScrollEnd`, so `TestBoardHoldPillBrowser` (all 9 cases including `documentMode`), `TestBoardAnchorContracts` (19/19), and `TestCenterNavigationBrowser` all pass together.
+- Updated `agents-plugin-tool/internal/wsdashboard/testdata/board-anchor.test.cjs` to extract `anchorIsBounded`.
+
 
 ## Resolution (2026-11-24)
 
