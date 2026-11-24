@@ -396,7 +396,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board button[data-closed-next] { position: absolute; left: 0; right: 0; }
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board button[data-closed-next][data-wb-offwindow="hidden"] { display: none; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board { min-height: 0 !important; }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]) { position: static; top: auto !important; left: auto; right: auto; visibility: visible; pointer-events: auto; contain: none; margin-bottom: 6px; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]) { position: relative; top: auto !important; left: auto; right: auto; visibility: visible; pointer-events: auto; contain: none; margin-bottom: 6px; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic] { height: auto; max-height: none; overflow-y: clip; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in { height: auto; max-height: none; contain: none; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in > .bc-body { flex: 0 1 auto; }
