@@ -111,6 +111,7 @@
     ctext.value = back + (back && cur ? "\n\n" : "") + cur;
     if (inlineEditor() && backRanges.length) inlineEditor().restore(backRanges.concat(inlineEditor().snapshot()));
     grow();
+    if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue();
     shiftMentions(back.length + (back && cur ? 2 : 0) - lead);
     imgs.sort(function (a, b) { return a.n - b.n; });
     // Their mentions go back ahead of the draft's, in the order given.
@@ -135,7 +136,7 @@
     if (cmd) {
       if (ctext.value.trim()) setCommand(cmd.name, cmd.args || "");
       else if (ctext.wsc) restoreInlineCommand(cmd);
-      else { ctext.value = cmd.args || ""; grow(); clearMentions(); setCommand(cmd.name); }
+      else { ctext.value = cmd.args || ""; grow(); clearMentions(); setCommand(cmd.name); if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue(); }
     }
     if (astext) noteWarn(wsT("js.cmd.astext"));
   }
@@ -165,6 +166,7 @@
     ctext.wsc.restore([{ start: 0, end: cmd.name.length, kind: "skill", id: cmd.name, label: cmd.name }]);
     ctext.setSelectionRange(v.length, v.length);
     grow(); clearMentions();
+    if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue();
   }
   function cancelHeld(btn) {
     btn.disabled = true;

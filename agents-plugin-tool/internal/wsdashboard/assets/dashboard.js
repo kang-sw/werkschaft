@@ -476,15 +476,79 @@
   }
   // Input mode: which key sends. "enter" (the default) sends on Enter and
   // adds a line on Shift+Enter; "mod" sends on Ctrl/Cmd+Enter and Enter adds
-  // a line. The placeholder tells which one is on.
+  // a line. In "enter" mode, Shift+Enter or multiline input temporarily
+  // switches to multiline send (Ctrl/Cmd+Enter) until send, empty, or revert.
   var INPUT_KEY = "ws.dashboard.input", inputMode = "enter";
+  var autoMultiline = false, autoMultilineReverted = false;
+  var isMacPlatform = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   var HINT = { enter: wsT("js.hint.enter"), mod: wsT("js.hint.mod") };
+  function effectiveInputMode() { return inputMode === "mod" || autoMultiline ? "mod" : "enter"; }
+  function sendChordLabel() { return isMacPlatform ? "\u2318+Enter" : "Ctrl+Enter"; }
+  function sendKbdLabel() { return isMacPlatform ? "\u2318+\u21b5" : "Ctrl+\u21b5"; }
+  function syncSendButtonLabel() {
+    var btn = $("csend");
+    if (!btn || (typeof bangMode === "function" && bangMode())) return;
+    var label = effectiveInputMode() === "mod" ? wsT("js.composer.send.key", sendChordLabel()) : wsT("composer.send");
+    if (btn.title !== label) btn.title = label;
+    if (btn.getAttribute("aria-label") !== label) btn.setAttribute("aria-label", label);
+  }
+  function syncAutoMultilineUI() {
+    var active = inputMode === "enter" && autoMultiline;
+    var btn = $("csend"), kbd = $("csend-kbd"), rev = $("csend-revert");
+    if (btn) btn.classList.toggle("is-multiline", active);
+    if (kbd) {
+      if (active) {
+        var kl = sendKbdLabel();
+        if (kbd.textContent !== kl) kbd.textContent = kl;
+      }
+      if (kbd.hidden !== !active) kbd.hidden = !active;
+    }
+    if (rev && rev.hidden !== !active) rev.hidden = !active;
+    syncSendButtonLabel();
+    if (typeof bangHistSyncMode === "function") bangHistSyncMode();
+  }
+  function setAutoMultiline(on) {
+    var next = !!(on && inputMode === "enter");
+    if (next) autoMultilineReverted = false;
+    if (next === autoMultiline) return;
+    autoMultiline = next;
+    syncAutoMultilineUI();
+  }
+  function resetAutoMultiline() {
+    autoMultilineReverted = false;
+    if (autoMultiline) setAutoMultiline(false);
+  }
+  function revertAutoMultiline() {
+    var v = typeof ctext !== "undefined" && ctext && typeof ctext.value === "string" ? ctext.value : "";
+    autoMultilineReverted = v.indexOf("\n") !== -1;
+    if (autoMultiline) setAutoMultiline(false);
+    if (typeof ctext !== "undefined" && ctext && ctext.focus) ctext.focus();
+  }
+  function syncAutoMultilineFromValue() {
+    if (inputMode !== "enter") {
+      autoMultilineReverted = false;
+      if (autoMultiline) setAutoMultiline(false);
+      return;
+    }
+    var v = typeof ctext !== "undefined" && ctext && typeof ctext.value === "string" ? ctext.value : "";
+    if (!v) {
+      autoMultilineReverted = false;
+      if (autoMultiline) setAutoMultiline(false);
+      return;
+    }
+    if (v.indexOf("\n") === -1) {
+      autoMultilineReverted = false;
+      return;
+    }
+    if (!autoMultiline && !autoMultilineReverted) setAutoMultiline(true);
+  }
   function setInput(v) {
     inputMode = v === "mod" ? "mod" : "enter";
+    if (inputMode === "mod") { autoMultiline = false; autoMultilineReverted = false; }
     q(".gmenu [data-input]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-input") === inputMode)); });
     var t = $("ctext");
     if (t) { t.placeholder = HINT[inputMode]; growCtext(); }
-    if (typeof bangHistSyncMode === "function") bangHistSyncMode();
+    syncAutoMultilineUI();
   }
   function setTab(t) {
     grid.setAttribute("data-tab", t);

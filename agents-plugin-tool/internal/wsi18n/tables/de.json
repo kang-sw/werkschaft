@@ -550,6 +550,8 @@
   "js.term.state.wait": "verbinde neu…",
   "js.hint.enter": "Nachricht an diese Sitzung. Enter sendet, Shift+Enter fügt eine Zeile ein. Board-Antworten und eingefügte Bilder werden angehängt. Mit ! beginnen für einen Bash-Befehl.",
   "js.hint.mod": "Nachricht an diese Sitzung. Ctrl/Cmd+Enter sendet, Enter fügt eine Zeile ein. Board-Antworten und eingefügte Bilder werden angehängt.",
+  "js.composer.send.key": "Senden ({0})",
+  "js.composer.multiline.revert": "Zurück zum Senden mit Enter",
   "js.img.big": "{0} ist größer als 10 MiB",
   "js.img.max": "eine Nachricht enthält höchstens {0} Bilder",
   "js.img.readfail": "{0} konnte nicht gelesen werden.",

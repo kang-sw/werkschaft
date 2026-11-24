@@ -105,6 +105,24 @@ class HostedLauncherTest(unittest.TestCase):
             self.assertTrue(proxy.call_args.args[0].hosted_package)
         self.assertFalse((staged / ".runtime").exists())
 
+    def test_hosted_restart_refuses_retained_binary_below_minor_floor(self):
+        self.record(b"older", "0.51.2")
+        (self.dir / self.m.DAEMON_MINOR_FLOOR_FILE).write_text("0.52\n", encoding="utf-8")
+        with mock.patch.object(self.m.subprocess, "run", side_effect=AssertionError("spawned below floor")), \
+             mock.patch.object(self.link, "probe", return_value=(None, None)):
+            with self.assertRaises(self.m.DaemonNewerMinor) as err:
+                self.link.ensure_healthy()
+            self.assertIn("update this plugin", str(err.exception))
+            self.assertIn("daemon-start --below-floor", str(err.exception))
+
+    def test_hosted_restart_errors_on_malformed_minor_floor(self):
+        self.record(b"current", "0.52.0")
+        (self.dir / self.m.DAEMON_MINOR_FLOOR_FILE).write_text("bad-floor\n", encoding="utf-8")
+        with mock.patch.object(self.m.subprocess, "run", side_effect=AssertionError("spawned on malformed floor")):
+            self.assertFalse(self.link.start_daemon())
+            self.assertFalse(self.link.start_error_newer_minor)
+            self.assertIn("malformed", self.link.start_error)
+
 
 if __name__ == "__main__":
     unittest.main()

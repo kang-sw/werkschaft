@@ -550,6 +550,8 @@
   "js.term.state.wait": "reconnexion…",
   "js.hint.enter": "Écrire à cette session. Entrée envoie, Shift+Enter ajoute une ligne. Les réponses du tableau et les images collées sont jointes. Commencez par ! pour une commande bash.",
   "js.hint.mod": "Écrire à cette session. Ctrl/Cmd+Enter envoie, Entrée ajoute une ligne. Les réponses du tableau et les images collées sont jointes.",
+  "js.composer.send.key": "Envoyer ({0})",
+  "js.composer.multiline.revert": "Revenir à l’envoi avec Entrée",
   "js.img.big": "{0} dépasse 10 MiB",
   "js.img.max": "un message contient au plus {0} images",
   "js.img.readfail": "Impossible de lire {0}.",

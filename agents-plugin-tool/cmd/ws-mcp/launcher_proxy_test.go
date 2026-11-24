@@ -454,3 +454,56 @@ func TestLauncherRunsMailboxWaitThroughTheDaemonLikeTheDirectCLI(t *testing.T) {
 		t.Fatalf("mailbox wait answers differ:\nhosted %s\ndirect %s", hostedJSON, directJSON)
 	}
 }
+
+func TestLauncherDaemonStartMinorFloorRefusalAndBelowFloorRollback(t *testing.T) {
+	bin := buildDashboardTestBin(t, "")
+	launcher, env, cache, cwd := launcherTestPlugin(t, bin)
+	dir, err := wsdashboard.Dir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	floorPath := filepath.Join(dir, wsdashboard.MinorFloorFile)
+	if err := os.WriteFile(floorPath, []byte("99.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Refused before staging when --below-floor is absent.
+	refuse := exec.Command("python3", launcher, "daemon-start")
+	refuse.Env, refuse.Dir = env, cwd
+	refuseOut, refuseErr := refuse.CombinedOutput()
+	if refuseErr == nil {
+		t.Fatalf("launcher daemon-start admitted below floor:\n%s", refuseOut)
+	}
+	if !strings.Contains(string(refuseOut), "update this plugin") {
+		t.Fatalf("launcher refusal missing update path:\n%s", refuseOut)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dir, "bin")); len(entries) != 0 {
+		t.Fatalf("launcher staged binaries despite minor floor refusal: %v", entries)
+	}
+	if raw, err := os.ReadFile(floorPath); err != nil || string(raw) != "99.0\n" {
+		t.Fatalf("floor changed on launcher refusal: %q (%v)", string(raw), err)
+	}
+
+	// Explicit rollback via launcher daemon-start --below-floor admits, forwards
+	// the flag to Go, starts the daemon, and lowers the floor to this minor.
+	rollback := exec.Command("python3", launcher, "daemon-start", "--below-floor")
+	rollback.Env, rollback.Dir = env, cwd
+	rollbackOut, rollbackErr := rollback.CombinedOutput()
+	if rollbackErr != nil || !strings.Contains(string(rollbackOut), `"outcome":"started"`) {
+		t.Fatalf("launcher daemon-start --below-floor: %v\n%s", rollbackErr, rollbackOut)
+	}
+	ep := waitForEndpoint(t, dir, version, 10*time.Second)
+	if ep.PID <= 0 {
+		t.Fatalf("invalid endpoint after rollback: %+v", ep)
+	}
+	floor, exists, err := wsdashboard.ReadMinorFloor(dir)
+	if err != nil || !exists {
+		t.Fatalf("ReadMinorFloor = (%v, %v, %v)", floor, exists, err)
+	}
+	if !wsdashboard.SameMinor(floor.String()+".0", version) {
+		t.Fatalf("floor after launcher rollback = %s, want minor of %s", floor, version)
+	}
+}

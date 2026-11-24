@@ -59,13 +59,19 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 	}()
 
-	listener, err := listen(bindHostFor(opts), portCandidates(opts.Dir, opts.Port))
-	if err != nil {
-		return nil, err
-	}
 	logw := opts.Log
 	if logw == nil {
 		logw = io.Discard
+	}
+	floor, hasFloor, err := checkMinorFloorForIntent(opts.Dir, opts.Version, opts.StartIntent, opts.BelowFloor)
+	if err != nil {
+		fmt.Fprintf(logw, "dashboard: minor floor refused start: %v\n", err)
+		return nil, err
+	}
+
+	listener, err := listen(bindHostFor(opts), portCandidates(opts.Dir, opts.Port))
+	if err != nil {
+		return nil, err
 	}
 	// Recorded under the lock; losing it only costs the next restart its
 	// sticky port.
@@ -266,9 +272,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			d.agents.Start(d.agentChanged)
 		}
 	}
-	if err := writeEndpoint(opts.Dir, d.endpoint); err != nil {
-		// A detached daemon's returned error has no reader; the log does.
-		fmt.Fprintf(logw, "dashboard: write endpoint file: %v\n", err)
+	cleanupBeforePublish := func() {
 		if d.planUsage != nil {
 			d.planUsage.close(context.Background())
 		}
@@ -278,6 +282,16 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		_ = listener.Close()
+	}
+	if err := updateMinorFloor(opts.Dir, opts.Version, floor, hasFloor, opts.BelowFloor); err != nil {
+		fmt.Fprintf(logw, "dashboard: write minor floor: %v\n", err)
+		cleanupBeforePublish()
+		return nil, fmt.Errorf("write minor floor: %w", err)
+	}
+	if err := writeEndpoint(opts.Dir, d.endpoint); err != nil {
+		// A detached daemon's returned error has no reader; the log does.
+		fmt.Fprintf(logw, "dashboard: write endpoint file: %v\n", err)
+		cleanupBeforePublish()
 		return nil, fmt.Errorf("write endpoint file: %w", err)
 	}
 	// Read the agents' global settings only now that the endpoint is
