@@ -95,6 +95,7 @@ func (r *Runner) start(notify func(replyID, project string)) {
 		r.notify = notify
 	}
 	private := r.openDurableAgentRecords()
+	r.restoreRetiredPiHistory()
 	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
 	var all, open []Record
 	for _, e := range entries {
@@ -130,7 +131,9 @@ func (r *Runner) start(notify func(replyID, project string)) {
 				retiredPiHolders[rec.HolderID] = true
 				r.rememberRetiredPiBinding(rec)
 			}
-			if rec.ClosedAt == "" && !rec.handedOff() && r.closeAtStart(rec) {
+			if err := r.archiveRetiredPiHistory(rec); err != nil {
+				fmt.Fprintf(r.opts.Log, "agent %s: archive retired Pi history: %v\n", rec.ReplyID, err)
+			} else if rec.ClosedAt == "" && !rec.handedOff() && r.closeAtStart(rec) {
 				continue
 			}
 			// Even if the record could not be written, never rejoin a Pi process.

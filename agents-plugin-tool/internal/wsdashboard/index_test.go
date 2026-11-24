@@ -221,9 +221,7 @@ func TestPruneRegistrationsAgesRetiredLeadsByTheirRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A pi session the daemon started and handed to a terminal: the
-	// terminal's conversation file is in the directory. One taken over from
-	// a terminal runs on a file elsewhere, and a closed one has no terminal.
+	// Retired Pi history is retained for hosted and handed-off records.
 	row("handedpi", old, terminal)
 	record("handedpi", `{"lead":true,"backend":"pi","handed_off_at":"2026-10-01T00:00:00Z"}`)
 	row("handedpiback", old, terminal)
@@ -233,11 +231,11 @@ func TestPruneRegistrationsAgesRetiredLeadsByTheirRow(t *testing.T) {
 	row("closedpi", old, closedRow)
 	record("closedpi", `{"lead":true,"backend":"pi","closed_at":"2026-10-01T00:00:00Z"}`)
 
-	if n := PruneRegistrations(dir, testNow, RegistryRetention); n != 4 {
-		t.Errorf("pruned %d, want 4", n)
+	if n := PruneRegistrations(dir, testNow, RegistryRetention); n != 2 {
+		t.Errorf("pruned %d, want 2", n)
 	}
 	for id, want := range map[string]bool{
-		"closedold": false, "handedold": false, "handedpiown": false, "closedpi": false, "handedpi": true, "handedpiback": true,
+		"closedold": false, "handedold": false, "handedpiown": true, "closedpi": true, "handedpi": true, "handedpiback": true,
 		"closedrecent": true, "handedrecent": true, "openold": true, "supportold": true, "agentnoflag": true, "unreadable": true, "norow": true,
 	} {
 		_, err := os.Stat(SessionDir(dir, id))
@@ -247,10 +245,9 @@ func TestPruneRegistrationsAgesRetiredLeadsByTheirRow(t *testing.T) {
 	}
 }
 
-// A closed spawned child (any backend: a Pi child or an agent.spawn
-// child) ages from the row its close wrote last, as a retired lead does,
-// though its row is an agent's; an open one, and a closed agent
-// conversation with no spawn parent, keep the runner's lifetime.
+// A closed spawned child ages from the row its close wrote last, as a
+// retired lead does. Pi history, open children, and closed conversations
+// with no spawn parent keep the runner's lifetime.
 func TestPruneRegistrationsAgesClosedSpawnedChildrenByTheirRow(t *testing.T) {
 	dir := t.TempDir()
 	old := testNow.Add(-RegistryRetention - time.Hour)
@@ -280,10 +277,10 @@ func TestPruneRegistrationsAgesClosedSpawnedChildrenByTheirRow(t *testing.T) {
 	session("claudechild", `{"backend":"claude","parent":{"kind":"lead","reply_id":"someleadid"},"closed_at":"2026-10-01T00:00:00Z"}`, old, true)
 	session("pinoparent", `{"backend":"pi","closed_at":"2026-10-01T00:00:00Z"}`, old, true)
 
-	if n := PruneRegistrations(dir, testNow, RegistryRetention); n != 2 {
-		t.Errorf("pruned %d, want 2", n)
+	if n := PruneRegistrations(dir, testNow, RegistryRetention); n != 1 {
+		t.Errorf("pruned %d, want 1", n)
 	}
-	for id, want := range map[string]bool{"childold": false, "childrecent": true, "childopen": true, "childheld": true, "claudechild": false, "pinoparent": true} {
+	for id, want := range map[string]bool{"childold": true, "childrecent": true, "childopen": true, "childheld": true, "claudechild": false, "pinoparent": true} {
 		_, err := os.Stat(SessionDir(dir, id))
 		if exists := err == nil; exists != want {
 			t.Errorf("%s exists = %v, want %v", id, exists, want)
