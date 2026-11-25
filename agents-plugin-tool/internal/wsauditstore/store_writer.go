@@ -118,6 +118,7 @@ func (s *Store) handle(j job) {
 	case jobSweep:
 		s.sweep()
 	case jobBarrier:
+		s.flushPending()
 		if j.fn != nil {
 			j.fn()
 		}

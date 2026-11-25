@@ -29,3 +29,11 @@ Fix the test-only synchronization race in `agents-plugin-tool/internal/wsagent/a
 ## Git & Return Rules
 - Commit cleanly on `impl/develop/0522-audit-test-flake` using `ws/git.commit` including `ai-docs/.plans/2026-11/25-1505-0522-audit-test-flake.md` in `paths` and NO `Co-Authored-By` trailer.
 - Do NOT merge to `develop`, do NOT push, and do NOT release the worktree. End with the `delegate-report` block with commit SHA and verbatim `w5090` output.
+
+## Expanded Scope: `wsauditstore.Store.Flush` Barrier Fix
+Approved via parent mail (`2026-11-25T06:12:58Z`) after `TestAuditColdReplayAgainstTheStoreNeverAppendsAKeyedEventLate/codex_call` (`audit_store_test.go:180`) flaked on `w5090`:
+- **Root cause:** `Store.handle` (`agents-plugin-tool/internal/wsauditstore/store_writer.go`) replied to `jobBarrier` before `Store.run()` reached `s.flushPending()` at idle, allowing a single `Store.Flush()` to return before queued `pendingLoss` / `pendingFin` control lines hit disk.
+- **Fix:**
+  1. Call `s.flushPending()` inside `case jobBarrier:` before `j.fn` and replying on `j.reply` in `agents-plugin-tool/internal/wsauditstore/store_writer.go`, and update `Store.Flush` doc comment in `agents-plugin-tool/internal/wsauditstore/store.go`.
+  2. Add a regression test in `agents-plugin-tool/internal/wsauditstore/store_test.go` verifying that a single `Flush()` persists queued `RecordLoss` and `Finalize` control lines to disk before returning.
+  3. Verify `gofmt -l`, `go vet ./internal/wsagent ./internal/wsauditstore`, `go test -race -count=20 ./internal/wsagent -run "TestAudit"`, and `go test -race -count=10 ./internal/wsauditstore` on `w5090`.
