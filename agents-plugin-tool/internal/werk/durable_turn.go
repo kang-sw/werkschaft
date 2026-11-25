@@ -40,21 +40,22 @@ type turnSteerRecord struct {
 // turnJournal identifies the last turn and the point reached in the log
 // when opened. The live turn appends to the transcript in order.
 type turnJournal struct {
-	id          string
-	number      int
-	input       int
-	user        json.RawMessage
-	response    *Response
-	responseEnd int
-	end         *durableEnd
-	steers      []turnSteerRecord
+	id           string
+	number       int
+	input        int
+	user         json.RawMessage
+	response     *Response
+	responseEnd  int
+	searchesUsed int
+	end          *durableEnd
+	steers       []turnSteerRecord
 }
 
 // Preserve the completed identity and original input while dropping indexes
 // into the previous model input. An already-settled turn may still be
 // submitted again during reconciliation.
 func (j *turnJournal) selectCheckpoint() {
-	j.input, j.responseEnd = 0, 0
+	j.input, j.responseEnd, j.searchesUsed = 0, 0, 0
 	j.response, j.steers = nil, nil
 }
 
@@ -169,7 +170,11 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 			return nil
 		}
 	}
-	result, err = a.loop(ctx, host, turn, cmd.TurnID)
+	priorSearches := 0
+	if resumed {
+		priorSearches = journal.searchesUsed
+	}
+	result, err = a.loop(ctx, host, turn, cmd.TurnID, a.newTurnSearchBudget(priorSearches))
 	return err
 }
 

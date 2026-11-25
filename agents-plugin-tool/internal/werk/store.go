@@ -227,6 +227,7 @@ func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, 
 				if s.turnJournal.id != "" && s.turnJournal.end == nil {
 					s.turnJournal.response = l.Response
 					s.turnJournal.responseEnd = len(items)
+					s.turnJournal.searchesUsed += l.Response.webSearchesUsed()
 				}
 			case l.K == "turn_start" && l.TurnID != "" && len(l.User) > 0:
 				if s.turnJournal.id != "" && s.turnJournal.end == nil {

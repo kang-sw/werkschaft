@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -104,6 +105,11 @@ type StartSpec struct {
 	compactState       func(time.Time) compactionState
 	sessionSecret      string
 	modelContextWindow func(string) int64
+	// sessionConfig returns the conversation's layered config options,
+	// optional session override reader, and session key for backends that
+	// resolve per-turn config directly. Nil when the runner disables session
+	// config lookup (for example, a private fixed-profile runner).
+	sessionConfig func() (wsconfig.Options, wsconfig.SessionReader, string)
 
 	// reattachedPromptAfter is the holder sequence before the worker's
 	// outstanding daemon-sent prompt. Nil means there is no such prompt.

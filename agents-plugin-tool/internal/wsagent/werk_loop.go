@@ -16,6 +16,7 @@ import (
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wscompact"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
@@ -162,6 +163,17 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		}
 	}
 	cfg.ContextWindow = spec.modelContextWindow
+	if spec.sessionConfig != nil {
+		cfg.WebSearch = resolveWerkWebSearchPolicy(spec.sessionConfig)
+	}
+	if spec.Provider != "" {
+		cfg.Provider = wscred.ProviderID(spec.Provider)
+		if wsconfig.IsLocalWerkProvider(spec.Provider) {
+			cfg.Dialect = "local"
+		}
+	} else if _, isClient := endpoint.(*werk.Client); !isClient && spec.sessionConfig != nil {
+		cfg.Provider = wscred.ProviderOpenRouter
+	}
 	a, err := werk.New(cfg)
 	if err != nil {
 		cancel()
@@ -176,6 +188,21 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	p.agent = a
 	go p.run(a)
 	return p, nil
+}
+
+func resolveWerkWebSearchPolicy(sessionConfig func() (wsconfig.Options, wsconfig.SessionReader, string)) func() werk.WebSearchPolicy {
+	return func() werk.WebSearchPolicy {
+		cfg, reader, key := sessionConfig()
+		resolver := wsconfig.NewResolver(cfg, wsconfig.WerkWebSearchDefaults(), reader, nil)
+		resolved := wsconfig.ResolveWerkWebSearch(&resolver, key)
+		return werk.WebSearchPolicy{
+			Enabled:    resolved.Enabled,
+			MaxUses:    resolved.MaxUses,
+			MaxResults: resolved.MaxResults,
+			Engine:     resolved.Engine,
+			SIWC:       resolved.SIWC,
+		}
+	}
 }
 
 func (p *werkLoop) approveFileCall(ctx context.Context, call wsfs.FileCall) error {

@@ -37,6 +37,16 @@ type ToolDef struct {
 	Parameters json.RawMessage
 }
 
+// WebSearchRequest configures the provider server-side web search tool attached
+// to one model request. OpenRouter receives openrouter:web_search with these
+// parameters; OpenAI SIWC receives the bare web_search tool (no request-level
+// max_uses or max_tool_calls); local endpoints ignore it.
+type WebSearchRequest struct {
+	Engine     string
+	MaxUses    int
+	MaxResults int
+}
+
 // Request is one model request.
 type Request struct {
 	Model        string
@@ -44,6 +54,9 @@ type Request struct {
 	// Input is the whole conversation so far, as items.
 	Input []json.RawMessage
 	Tools []ToolDef
+	// WebSearch attaches the provider's server-side web search tool when
+	// non-nil and supported by the request's provider.
+	WebSearch *WebSearchRequest
 	// Effort is the reasoning effort; empty sends no reasoning setting.
 	Effort string
 }
@@ -55,6 +68,9 @@ type Usage struct {
 	CachedTokens     int64  `json:"cached_tokens"`
 	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
 	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
+	// WebSearchRequests is the provider's reported server-side web search count
+	// (usage.server_tool_use.web_search_requests), nil when omitted.
+	WebSearchRequests *int `json:"web_search_requests,omitempty"`
 	// CostUSD is the provider's own cost figure, nil when it sent none.
 	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
@@ -63,10 +79,44 @@ type Usage struct {
 type Response struct {
 	ID string `json:"id"`
 	// Output are the response's items in order, as received.
-	Output []json.RawMessage `json:"output"`
-	Usage  Usage             `json:"usage"`
-	window int64
-	model  string
+	Output       []json.RawMessage `json:"output"`
+	Usage        Usage             `json:"usage"`
+	usageMissing bool
+	window       int64
+	model        string
+}
+
+// webSearchesUsed reports how many server-side web searches this completed
+// response ran, taking the larger of usage.server_tool_use.web_search_requests
+// and the web_search_call items present in Output.
+func (r *Response) webSearchesUsed() int {
+	if r == nil {
+		return 0
+	}
+	used := countWebSearchCalls(r.Output)
+	if r.Usage.WebSearchRequests != nil && *r.Usage.WebSearchRequests > used {
+		used = *r.Usage.WebSearchRequests
+	}
+	if used < 0 {
+		return 0
+	}
+	return used
+}
+
+func countWebSearchCalls(items []json.RawMessage) int {
+	n := 0
+	for _, raw := range items {
+		var it struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &it) != nil {
+			continue
+		}
+		if it.Type == "web_search_call" || it.Type == "openrouter:web_search_call" {
+			n++
+		}
+	}
+	return n
 }
 
 // StreamHandler receives the response's streamed text. Both callbacks are
@@ -248,11 +298,26 @@ type toolWire struct {
 	Strict      bool            `json:"strict"`
 }
 
+type openRouterWebSearchWire struct {
+	Type       string                    `json:"type"`
+	Parameters openRouterWebSearchParams `json:"parameters"`
+}
+
+type openRouterWebSearchParams struct {
+	Engine     string `json:"engine,omitempty"`
+	MaxUses    int    `json:"max_uses,omitempty"`
+	MaxResults int    `json:"max_results,omitempty"`
+}
+
+type openAIWebSearchWire struct {
+	Type string `json:"type"`
+}
+
 type requestWire struct {
 	Model             string            `json:"model"`
 	Instructions      string            `json:"instructions,omitempty"`
 	Input             []json.RawMessage `json:"input"`
-	Tools             []toolWire        `json:"tools,omitempty"`
+	Tools             []any             `json:"tools,omitempty"`
 	ParallelToolCalls bool              `json:"parallel_tool_calls,omitempty"`
 	Stream            bool              `json:"stream"`
 	Store             bool              `json:"store"`
@@ -268,9 +333,9 @@ type reasoningWire struct {
 var emptyObjectSchema = json.RawMessage(`{"type":"object","properties":{}}`)
 
 // body is the request's JSON.
-func (r Request) body() ([]byte, error) { return r.bodyFor("") }
+func (r Request) body() ([]byte, error) { return r.bodyFor("", "") }
 
-func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
+func (r Request) bodyFor(provider wscred.ProviderID, dialect string) ([]byte, error) {
 	w := requestWire{
 		Model: r.Model, Instructions: r.Instructions, Input: r.Input,
 		Stream: true, Store: false,
@@ -284,6 +349,22 @@ func (r Request) bodyFor(provider wscred.ProviderID) ([]byte, error) {
 			params = emptyObjectSchema
 		}
 		w.Tools = append(w.Tools, toolWire{Type: "function", Name: t.Name, Description: t.Description, Parameters: params})
+	}
+	if r.WebSearch != nil && dialect == "" {
+		switch provider {
+		case wscred.ProviderOpenRouter:
+			w.Tools = append(w.Tools, openRouterWebSearchWire{
+				Type: "openrouter:web_search",
+				Parameters: openRouterWebSearchParams{
+					Engine:     r.WebSearch.Engine,
+					MaxUses:    r.WebSearch.MaxUses,
+					MaxResults: r.WebSearch.MaxResults,
+				},
+			})
+		case wscred.ProviderOpenAI:
+			// OpenAI SIWC rejects max_tool_calls; send the bare server tool.
+			w.Tools = append(w.Tools, openAIWebSearchWire{Type: "web_search"})
+		}
 	}
 	if len(w.Tools) > 0 {
 		w.ParallelToolCalls = true
@@ -332,7 +413,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (out
 	if token == "" && c.Dialect != "ollama" && c.Dialect != "vllm" {
 		return nil, ErrNoCredential
 	}
-	body, err := req.bodyFor(c.Provider)
+	body, err := req.bodyFor(c.Provider, c.Dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -718,6 +799,9 @@ type usageWire struct {
 	OutputTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 	} `json:"output_tokens_details"`
+	ServerToolUse *struct {
+		WebSearchRequests *int `json:"web_search_requests"`
+	} `json:"server_tool_use"`
 	Cost *float64 `json:"cost"`
 }
 
@@ -746,11 +830,19 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 		if cacheWrite == nil {
 			cacheWrite = u.CacheWriteTokens
 		}
+		var webSearches *int
+		if u.ServerToolUse != nil && u.ServerToolUse.WebSearchRequests != nil {
+			v := *u.ServerToolUse.WebSearchRequests
+			webSearches = &v
+		}
 		resp.Usage = Usage{
 			InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 			CachedTokens: u.InputTokensDetails.CachedTokens, ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
-			CostUSD: u.Cost, CacheWriteTokens: cacheWrite,
+			WebSearchRequests: webSearches,
+			CostUSD:           u.Cost, CacheWriteTokens: cacheWrite,
 		}
+	} else {
+		resp.usageMissing = true
 	}
 	return resp, nil
 }
