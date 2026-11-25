@@ -482,7 +482,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T12:49:38Z"
+        "touched_at": "2026-11-25T12:53:56Z",
+        "impl": {
+          "branch": "impl/develop/mace-slug-smith"
+        }
       }
     },
     "261125-feat-composer-mailbox-badge": {
