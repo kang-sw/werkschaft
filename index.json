@@ -500,23 +500,10 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T12:51:11Z",
         "impl": {
           "branch": "impl/develop/tray-awoke-mumps"
-        }
-      }
-    },
-    "261125-feat-whiteboard-gap-two-row-layout": {
-      "registered_at": "2026-11-25T09:19:33Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:50:37Z",
-        "impl": {
-          "branch": "impl/develop/vista-fox-amigo"
         }
       }
     },
