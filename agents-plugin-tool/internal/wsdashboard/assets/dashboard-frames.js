@@ -37,7 +37,7 @@
   // for comparisons.
   var mountTimer = 0;
   function mountFrame(p) {
-    if (shHidden) return p;
+    if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return p;
     var f = doc.createElement("iframe");
     Array.prototype.forEach.call(p.attributes, function (a) { if (a.name !== "data-sandbox") f.setAttribute(a.name, a.value); });
     f.setAttribute("sandbox", p.getAttribute("data-sandbox") || "");
@@ -59,7 +59,7 @@
     return f;
   }
   function mountFrames(el) {
-    if (shHidden) return;
+    if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return;
     q("div.doc-frame[data-srcdoc]", el).forEach(function (p) {
       if (frameShown(p) && frameNear(p)) mountFrame(p);
     });
@@ -72,13 +72,13 @@
   // board performance harness). A placeholder a swap or a toggle open took
   // meanwhile is skipped (frameShown checks it is still connected).
   function mountFramesPaced(el) {
-    if (shHidden) return;
+    if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return;
     mountList = mountList.concat(q("div.doc-frame[data-srcdoc]", el));
     if (!mountTask) mountSlice();
   }
   function mountSlice() {
     mountTimer = 0;
-    if (shHidden) { mountList = []; mountTask = false; return; }
+    if (shHidden || (typeof shStaged !== "undefined" && shStaged)) { mountList = []; mountTask = false; return; }
     var t = performance.now();
     mountTask = true;
     while (mountList.length && performance.now() - t < 8) {
@@ -176,7 +176,8 @@
     if (!near) {
       if (!r.visible && !root.hasAttribute("data-gal-away")
           && !t.matches("[data-overview-live], [data-max], [data-has-panel-max]")
-          && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))) unmountFrames(t);
+          && !(window.WsCards && window.WsCards.isDocked && window.WsCards.isDocked(t))
+          && !(window.WsBoardAnchor && window.WsBoardAnchor.keepFrame && window.WsBoardAnchor.keepFrame(t))) unmountFrames(t);
       return;
     }
     t.wbNear = r.visible;

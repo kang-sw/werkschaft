@@ -617,8 +617,13 @@
       if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
       // or during a drag. Reconnect's first full rail silently baselines.
-      var railFrag = ev.name === "rail" && railAttention ? frag(WsRail.rowInputHTML(ev.html)) : null;
-      if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
+      var needCompanionRail = !!(shell && window.WsCompanion && window.WsCompanion.observeRail && (!window.WsCompanion.hasRailObserver || window.WsCompanion.hasRailObserver()));
+      var fastRailRows = ev.name === "rail" && railAttention && !railBaseline && !needCompanionRail && !pageHidden() && WsRail && WsRail.rowInputAttentionRows
+        ? WsRail.rowInputAttentionRows(ev.html)
+        : null;
+      var railFrag = ev.name === "rail" && railAttention && !fastRailRows ? frag(WsRail.rowInputHTML(ev.html)) : null;
+      if (fastRailRows) railAttention.observe(fastRailRows, rid, railBaseline);
+      else if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
       if (railFrag && shell) window.WsCompanion?.observeRail?.(railFrag, rid, railBaseline);
       if (railFrag && railBaseline) apScan(railFrag, "rail", true);
       if (ev.name === "rail") railBaseline = false;

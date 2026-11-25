@@ -842,7 +842,7 @@
     if (nodes.some(function (n) {
       var id = n.getAttribute("data-rid");
       if (!id || rows[id] || n.parentElement.closest(".rs")) return true;
-      rows[id] = { html: n.outerHTML }; order.push(id);
+      rows[id] = { html: n.outerHTML, asks: n.getAttribute("data-asks") }; order.push(id);
       return false;
     })) return null;
     nodes.forEach(function (n) { n.replaceWith(doc.createComment("ws-rail-row")); });
@@ -862,7 +862,7 @@
       if (!r || typeof r.key !== "string" || !r.key || typeof r.hash !== "string" || changed[r.key]) return true;
       var n = rowNode(r.html, r.key, doc);
       if (!n) return true;
-      changed[r.key] = true; rows[r.key] = { html: n.outerHTML };
+      changed[r.key] = true; rows[r.key] = { html: n.outerHTML, asks: n.getAttribute("data-asks") };
       return false;
     })) return null;
     if (ev.order.some(function (id) {
@@ -872,6 +872,20 @@
     var kept = Object.create(null);
     ev.order.forEach(function (id) { kept[id] = rows[id]; });
     return { shell: base.shell, order: ev.order.slice(), rows: kept };
+  }
+  function rowInputAttentionRows(input) {
+    if (!input || typeof input === "string" || !Array.isArray(input.order) || !input.rows) return null;
+    return input.order.map(function (id) {
+      var row = input.rows[id];
+      var asks = row && Object.prototype.hasOwnProperty.call(row, "asks") ? row.asks : null;
+      return {
+        getAttribute: function (name) {
+          if (name === "data-rid") return id;
+          if (name === "data-asks") return asks;
+          return null;
+        }
+      };
+    });
   }
   function rowInputHTML(input) {
     if (typeof input === "string") return input;
@@ -950,7 +964,7 @@
       top: Math.max(8, Math.min(anchor.top, viewport.height - height - 8)) };
   }
   function hover(doc, win) {
-    var pop = null, active = null, x = 0, y = 0, keyboard = false, html = null;
+    var pop = null, active = null, x = 0, y = 0, keyboard = false, html = null, popCls = "", popW = 0, popH = 0;
     function target(n) {
       return n && n.closest ? n.closest(".rs, .amodel, .agent .aname") : null;
     }
@@ -964,26 +978,41 @@
       return null;
     }
     function hide() {
-      active = null; html = null;
+      active = null; html = null; popCls = ""; popW = 0; popH = 0;
       if (pop) pop.hidden = true;
     }
     function show(n) {
       var src = n && source(n);
       // A rail drag (rdragging) shows no hover: the rows it passes are targets.
-      if (!src || !n.isConnected || !n.getClientRects().length || hasClass(doc.documentElement, "rdragging")) { hide(); return; }
+      if (!src || !n.isConnected || hasClass(doc.documentElement, "rdragging")) { hide(); return; }
+      if (!n.getClientRects().length) { hide(); return; }
+      // Read anchor and rail geometry before mutating pop so DOM writes do not force a second layout.
+      var a = n.getBoundingClientRect(), rail = hasClass(n, "rs") && n.closest(".rail");
+      var edge = rail ? rail.getBoundingClientRect().right : a.right;
+      var vw = win.innerWidth, vh = win.innerHeight;
+      var nextCls = "rpop shp" + (src.getAttribute("data-stale") ? " stale" : "");
+      var nextHtml = src.innerHTML;
+      var created = false;
       if (!pop) {
-        pop = doc.createElement("div"); pop.className = "rpop shp";
+        pop = doc.createElement("div"); pop.className = nextCls;
         pop.setAttribute("role", "tooltip");
         doc.body.appendChild(pop);
+        created = true;
       }
       active = n;
-      pop.className = "rpop shp" + (src.getAttribute("data-stale") ? " stale" : "");
-      if (html !== src.innerHTML) { html = src.innerHTML; pop.innerHTML = html; }
-      pop.hidden = false;
-      var a = n.getBoundingClientRect(), rail = hasClass(n, "rs") && n.closest(".rail");
-      var p = hoverPlace(a, rail ? rail.getBoundingClientRect().right : a.right,
-        pop.offsetWidth, pop.offsetHeight, { width: win.innerWidth, height: win.innerHeight });
-      pop.style.left = p.left + "px"; pop.style.top = p.top + "px";
+      var wasHidden = created || pop.hidden;
+      var contentChanged = wasHidden || popCls !== nextCls || html !== nextHtml;
+      if (popCls !== nextCls) { popCls = nextCls; pop.className = nextCls; }
+      if (html !== nextHtml) { html = nextHtml; pop.innerHTML = html; }
+      if (pop.hidden) pop.hidden = false;
+      if (contentChanged || !popW || !popH) {
+        popW = pop.offsetWidth;
+        popH = pop.offsetHeight;
+      }
+      var p = hoverPlace(a, edge, popW, popH, { width: vw, height: vh });
+      var leftPx = p.left + "px", topPx = p.top + "px";
+      if (pop.style.left !== leftPx) pop.style.left = leftPx;
+      if (pop.style.top !== topPx) pop.style.top = topPx;
     }
     doc.addEventListener("mouseover", function (e) {
       keyboard = false; x = e.clientX; y = e.clientY;
@@ -1074,6 +1103,7 @@
     rowInputFull: rowInputFull,
     rowInputPatch: rowInputPatch,
     rowInputHTML: rowInputHTML,
+    rowInputAttentionRows: rowInputAttentionRows,
     mergeRows: mergeRows,
     hover: hover,
     hoverPlace: hoverPlace,
