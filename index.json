@@ -524,7 +524,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T12:51:36Z"
+        "touched_at": "2026-11-25T12:55:26Z",
+        "impl": {
+          "branch": "impl/develop/flame-anger-stole"
+        }
       }
     },
     "261125-feat-ws-desktop-native-os-stt": {
