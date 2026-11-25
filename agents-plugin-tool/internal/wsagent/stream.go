@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -177,6 +178,26 @@ func (p *streamProcess) recordAuditEvent(key string, ev wsaudit.Envelope) {
 	if p != nil && p.audit != nil {
 		p.audit.synthetic(key, ev)
 	}
+}
+
+// waitForAudit drains the retired process's capture before the replacement
+// writes a cut to the same audit stream.
+func (p *streamProcess) waitForAudit() {
+	if p.audit != nil {
+		<-p.audit.done
+	}
+}
+
+// auditCheckpointCommitter commits the replacement's cut before its first turn.
+type auditCheckpointCommitter interface {
+	commitAuditCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error
+}
+
+func (p *streamProcess) commitAuditCheckpoint(ctx context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	if p == nil || p.audit == nil {
+		return nil
+	}
+	return p.audit.commitCheckpoint(ctx, id, ev)
 }
 
 // startStreamProcess starts cmd as the daemon's own child.

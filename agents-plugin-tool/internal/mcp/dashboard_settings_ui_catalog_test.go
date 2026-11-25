@@ -80,6 +80,9 @@ func TestDashboardSettingsUICatalog(t *testing.T) {
 						t.Errorf("%s: UI control %q for daemon type %s, want %s", row.Key, row.Control, entry.Type, want)
 					}
 				}
+				if row.Key == "agent.werk_endpoints" && (row.Section != "account" || row.Control != "werk_endpoints") {
+					t.Errorf("%s: want the structured Account editor, got %s / %s", row.Key, row.Section, row.Control)
+				}
 				if strings.HasPrefix(row.Key, "dashboard.companion_") {
 					if row.Section != "companion" {
 						t.Errorf("%s: companion section = %s", row.Key, row.Section)

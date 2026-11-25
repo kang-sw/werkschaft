@@ -268,6 +268,24 @@ func (h *Hosted) RunningOwners() map[string]int {
 	return out
 }
 
+// RunningAgentOwners counts the agent-origin jobs still running by their
+// owning conversation (HostedJobRow.Owner), strictly excluding user-origin
+// composer `!` jobs. It reads memory only; a nil h counts none.
+func (h *Hosted) RunningAgentOwners() map[string]int {
+	out := map[string]int{}
+	if h == nil {
+		return out
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, j := range h.jobs {
+		if !j.row.Terminal() && j.row.Owner != "" && j.origin != OriginUser {
+			out[j.row.Owner]++
+		}
+	}
+	return out
+}
+
 // runningChanged calls OnRunning; h.mu must not be held.
 func (h *Hosted) runningChanged() {
 	if h.opts.OnRunning != nil {

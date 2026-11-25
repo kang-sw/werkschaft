@@ -143,6 +143,71 @@ func TestCIReleaseLongSkipGate(t *testing.T) {
 	}
 }
 
+func TestCIReleaseTauriVersion(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash unavailable")
+	}
+	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "ws-mcp-release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, step, ok := strings.Cut(string(workflow), "      - name: Select the Tauri build version\n")
+	if !ok {
+		t.Fatal("desktop version selector missing")
+	}
+	step, _, ok = strings.Cut(step, "\n\n")
+	if !ok {
+		t.Fatal("desktop version selector boundary missing")
+	}
+	_, body, ok := strings.Cut(step, "        run: |\n")
+	if !ok {
+		t.Fatal("desktop version selector shell missing")
+	}
+	for _, tt := range []struct {
+		name, ref, refName, dryRun, dispatch, version string
+		invalid                                       bool
+	}{
+		{name: "stable tag", ref: "refs/tags/v0.52.0", refName: "v0.52.0", version: "0.52.0"},
+		{name: "canary tag", ref: "refs/tags/v0.52.0-canary.0", refName: "v0.52.0-canary.0", version: "0.52.0-canary.0"},
+		{name: "other tag", ref: "refs/tags/v0.52.0-rc.1", refName: "v0.52.0-rc.1"},
+		{name: "normal dispatch", ref: "refs/heads/develop", refName: "develop", dryRun: "false", dispatch: "0.52.0"},
+		{name: "pull request", ref: "refs/pull/1/merge"},
+		{name: "dry run stable", dryRun: "true", dispatch: "0.52.0", version: "0.52.0"},
+		{name: "dry run canary", dryRun: "true", dispatch: "v0.52.0-canary.19", version: "0.52.0-canary.19"},
+		{name: "dry run default", dryRun: "true", dispatch: "0.52.0-dev", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "output")
+			if err := os.WriteFile(output, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bash, "-c", body)
+			cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+output, "GITHUB_REF="+tt.ref,
+				"GITHUB_REF_NAME="+tt.refName, "TAURI_DRY_RUN="+tt.dryRun, "DISPATCH_VERSION="+tt.dispatch)
+			log, err := cmd.CombinedOutput()
+			if tt.invalid {
+				if err == nil || !strings.Contains(string(log), "::error::Set version") {
+					t.Fatalf("selector accepted invalid dry-run version or failed unexpectedly: %v\n%s", err, log)
+				}
+			} else if err != nil {
+				t.Fatalf("selector failed: %v\n%s", err, log)
+			}
+			data, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if tt.version != "" {
+				want = "tauri_version=" + tt.version + "\n"
+			}
+			if string(data) != want {
+				t.Fatalf("selector output = %q, want %q", data, want)
+			}
+		})
+	}
+}
+
 func TestCIReleasePublication(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -158,8 +223,8 @@ func TestCIReleasePublication(t *testing.T) {
 		t.Fatal("native publication step missing")
 	}
 	publication, _, ok = strings.Cut(publication, "\n  windows-smoke:")
-	if !ok || !strings.Contains(publication, "if: startsWith(github.ref, 'refs/tags/') && !inputs.desktop_dry_run") {
-		t.Fatal("native publication must remain gated on tags and dry-run veto")
+	if !ok || !strings.Contains(publication, "if: startsWith(github.ref, 'refs/tags/') && !inputs.tauri_dry_run && (steps.route.outputs.tauri_version == '' || contains(steps.route.outputs.tauri_version, '-canary.'))") {
+		t.Fatal("native publication must handle non-Tauri and canary tags outside dry runs")
 	}
 	_, body, ok := strings.Cut(publication, "        run: |\n")
 	if !ok {
@@ -217,19 +282,41 @@ func TestCIReleasePublication(t *testing.T) {
 			}
 		})
 	}
+	for _, removed := range []string{"desktop_dry_run", "desktop-build:", "desktop-release:", "tauri_route", "WERKSCHAFT_TAURI_RELEASE"} {
+		if strings.Contains(text, removed) {
+			t.Fatalf("retired desktop release contract still contains %q", removed)
+		}
+	}
+	_, desktop, ok := strings.Cut(text, "\n  tauri-desktop:")
+	if !ok {
+		t.Fatal("Tauri desktop release job missing")
+	}
 	for _, required := range []string{
-		"agents-plugin-tool/desktop-electron/dist/Werkschaft-${{ matrix.platform }}-${{ matrix.arch }}.zip",
-		"agents-plugin-tool/desktop-electron/dist/Werkschaft-desktop-SHA256SUMS",
-		"[['darwin', 'arm64'], ['win32', 'x64']]",
-		"fs.writeFileSync(path.join(process.env.OUTPUT, SUMS), lines.join('\\n') + '\\n');",
-		"gh release upload \"$GITHUB_REF_NAME\" \"$RUNNER_TEMP/desktop-release/\"* --repo \"$GITHUB_REPOSITORY\" --clobber",
+		"needs: build",
+		"if: needs.build.outputs.tauri_version != ''",
+		"uses: ./.github/workflows/werkschaft-tauri-build.yml",
+		"version: ${{ needs.build.outputs.tauri_version }}",
+		"dry_run: ${{ inputs.tauri_dry_run || false }}",
 	} {
-		if !strings.Contains(text, required) {
+		if !strings.Contains(desktop, required) {
 			t.Fatalf("desktop release contract missing %q", required)
 		}
 	}
-	_, desktop, ok := strings.Cut(text, "      - name: Publish desktop assets to the native assets' tag release\n")
-	if !ok || !strings.Contains(desktop, "if: startsWith(github.ref, 'refs/tags/') && !inputs.desktop_dry_run") {
-		t.Fatal("desktop upload must target the same tag release under the same dry-run veto")
+	tauri, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "werkschaft-tauri-build.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"node scripts/assemble-daemon-input.cjs",
+		"name: werkschaft-tauri-assets",
+		"if: ${{ !inputs.dry_run && github.ref == format('refs/tags/v{0}', inputs.version) }}",
+		"feed=\"$RUNNER_TEMP/tauri-release/werkschaft-tauri-update.json\"",
+		"files=( \"$RUNNER_TEMP/ws-mcp-assets/\"* \"${desktop[@]}\" \"$feed\" )",
+		"gh release upload \"$GITHUB_REF_NAME\" \"${desktop[@]}\" --repo \"$GITHUB_REPOSITORY\" --clobber",
+		"gh release upload \"$GITHUB_REF_NAME\" \"$feed\" --repo \"$GITHUB_REPOSITORY\" --clobber",
+	} {
+		if !strings.Contains(string(tauri), required) {
+			t.Fatalf("Tauri workflow contract missing %q", required)
+		}
 	}
 }

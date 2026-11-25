@@ -171,6 +171,18 @@ func waitForCronConsentRefusal(t *testing.T, h *leadHarness, id string) {
 	})
 }
 
+type cronPlanPromptStatus struct {
+	cronPlanStatus
+	prompt chan struct{}
+}
+
+func (s cronPlanPromptStatus) RequestOpenAIBackgroundConsent() {
+	select {
+	case s.prompt <- struct{}{}:
+	default:
+	}
+}
+
 func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -204,7 +216,9 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 				},
 				reply, reply, reply,
 			}}
-			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: cronPlanStatus{allowed: tc.allowed}})
+			prompt := make(chan struct{}, 1)
+			credentials := cronPlanPromptStatus{cronPlanStatus: cronPlanStatus{allowed: tc.allowed}, prompt: prompt}
+			h, fleet, _ := werkHarnessWithBackend(t, model, WerkBackend{credentials: credentials})
 			id := h.lead(BackendWerk, LeadOptions{Provider: string(tc.provider), Model: "fixture-model"}).ID
 			h.send(id, "operator prompt")
 			if req := nextCronModelRequest(t, requests); !req.interactive || !req.contains("operator prompt") {
@@ -240,9 +254,15 @@ func TestWerkCronSteeringRespectsPlanConsent(t *testing.T) {
 			}
 			if tc.steers {
 				h.idle(id)
+				if len(prompt) != 0 {
+					t.Fatal("an admitted cron entry asked for consent")
+				}
 				return
 			}
 			waitForCronConsentRefusal(t, h, id)
+			if len(prompt) != 1 {
+				t.Fatal("a refused cron entry did not ask for consent")
+			}
 			assertNextOperator := func(text string) {
 				t.Helper()
 				h.send(id, text)

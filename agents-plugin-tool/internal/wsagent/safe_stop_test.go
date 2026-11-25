@@ -310,22 +310,37 @@ func (r releaseNotifyingRunner) StartForPublication(notify func(string, string),
 }
 
 func TestSafeOnlyStopFindsRunningGrandchildThroughReleasedWorker(t *testing.T) {
-	testReleasedWorkerDelete(t, false, false)
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{})
 }
 
 func TestDeadBindingCheckoutDeleteSurvivesReplacement(t *testing.T) {
-	testReleasedWorkerDelete(t, true, false)
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true})
 }
 
 func TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow(t *testing.T) {
-	testReleasedWorkerDelete(t, true, true)
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, pauseRelease: true})
 }
 
-func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
+func TestDeadBindingInterruptedCheckoutDeleteRestoresOccupancy(t *testing.T) {
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true})
+}
+
+func TestDeadBindingInterruptedCheckoutDeleteWithChangedCwd(t *testing.T) {
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true, changedCwd: true})
+}
+
+type releasedWorkerDeleteOptions struct {
+	restart         bool
+	pauseRelease    bool
+	interruptDelete bool
+	changedCwd      bool
+}
+
+func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 	t.Helper()
 	h, _ := configureHeldWorkerHarness(t)
 	mail, refusals := newFakeMail(), &wakeRefusals{}
-	if restart {
+	if test.restart {
 		h.opts.Mail = mail
 		h.opts.WakeRefused = refusals.add
 	}
@@ -342,7 +357,7 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 	ended, resume := make(chan struct{}), make(chan struct{})
 	var paused, resumed sync.Once
 	unpause := func() { resumed.Do(func() { close(resume) }) }
-	if pauseRelease {
+	if test.pauseRelease {
 		opts.Agents = releaseNotifyingRunner{h.runner, func(id string) {
 			if target := pauseID.Load(); target == nil || id != *target {
 				return
@@ -382,13 +397,14 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 	}
 	leadID, _ := h.settledLead()
 	lead := ParentRef{Kind: ParentLead, ReplyID: leadID}
-	spawn := func(parent ParentRef, root, prompt string) (string, string) {
+	spawn := func(parent ParentRef, root, cwd, prompt string) (string, string) {
 		t.Helper()
 		st, err := h.runner.Spawn(SpawnSpec{
 			Profile:            AgentWorkerProfile(BackendClaude),
 			PermissionLevel:    PermissionWorkdirWrite,
 			delegatedAuthority: true,
 			Root:               root,
+			Cwd:                cwd,
 			Prompt:             prompt,
 			Tier:               "small",
 			Parent:             &parent,
@@ -401,9 +417,16 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 		eventually(t, prompt+" running", func() bool { return h.state(st.ID).Status == StatusRunning })
 		return st.ID, holder
 	}
-	middleID, middleHolder := spawn(lead, worktree, "middle")
+	middleRoot, middleCwd := worktree, ""
+	if test.changedCwd {
+		middleRoot, middleCwd = h.root, filepath.Join(t.TempDir(), "worktree-link")
+		if err := os.Symlink(worktree, middleCwd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	middleID, middleHolder := spawn(lead, middleRoot, middleCwd, "middle")
 	middleKey := h.record(middleID).WSKey
-	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "grandchild")
+	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "", "grandchild")
 	assertHolderRunning := func(when string) {
 		t.Helper()
 		for _, holder := range h.holders.List().Holders {
@@ -442,7 +465,7 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 			t.Fatalf("spawn tree = %+v, want the closed middle worker and its grandchild", rows)
 		}
 	}
-	if pauseRelease {
+	if test.pauseRelease {
 		pauseID.Store(&middleID)
 		go release()
 		wait(t, "ended registration", ended)
@@ -457,7 +480,7 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 			t.Fatalf("grandchild after release = %+v, want running", st)
 		}
 	}
-	if restart {
+	if test.restart {
 		assertHolderRunning("before deletion")
 	}
 
@@ -475,7 +498,7 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 				when, st.SafeStop, meta.SafeStop, res.status, res.body)
 		}
 	}
-	if !pauseRelease {
+	if !test.pauseRelease {
 		assertStopRefused("busy grandchild before checkout delete")
 	}
 
@@ -483,20 +506,44 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 	if s, ok := d.Index().Session(middleID); !ok || s.Registration.Live(time.Now()) {
 		t.Fatalf("dashboard session for the released worker = %+v, present=%v, want ended", s, ok)
 	}
-	if res := post("/rail/worktrees/delete", map[string]string{"workspace": h.root, "path": worktree}); res.status != http.StatusOK {
-		t.Fatalf("delete checkout: status %d, body %s", res.status, res.body)
+	if test.interruptDelete {
+		// Stop at the dashboard's pre-delete persistence boundary, with
+		// the checkout and release marker still in place.
+		if err := h.runner.PrepareWorktreeHistoryPurge(worktree, map[string]bool{middleID: true}); err != nil {
+			t.Fatal(err)
+		}
+		rec := h.record(middleID)
+		if rec.ClosedAt == "" || rec.DeadBindingClosure == nil ||
+			rec.DeadBindingClosure.Checkout != worktree || rec.HolderID != middleHolder {
+			t.Fatalf("pre-delete record did not persist the held release closure: %+v", rec)
+		}
+		if got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]; !got.Live {
+			t.Fatalf("released worker must occupy the checkout before replacement: %+v", got)
+		}
+	} else {
+		if res := post("/rail/worktrees/delete", map[string]string{"workspace": h.root, "path": worktree}); res.status != http.StatusOK {
+			t.Fatalf("delete checkout: status %d, body %s", res.status, res.body)
+		}
+		if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+			t.Fatalf("deleted checkout: stat error = %v, want missing directory", err)
+		}
 	}
-	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
-		t.Fatalf("deleted checkout: stat error = %v, want missing directory", err)
-	}
-	if pauseRelease {
+	if test.pauseRelease {
 		unpause()
 		checkRelease()
 	}
-	if restart {
+	if test.restart {
 		_, dirErr := os.Stat(wsdashboard.SessionDir(h.dir, middleID))
 		d.Close()
 		h.holders.restart()
+		if test.changedCwd {
+			if err := os.Remove(middleCwd); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(h.root, middleCwd); err != nil {
+				t.Fatal(err)
+			}
+		}
 		h.runner = NewRunner(h.opts)
 		opts.Agents = h.runner
 		successor, err := wsdashboard.StartDaemon(opts)
@@ -518,6 +565,28 @@ func testReleasedWorkerDelete(t *testing.T, restart, pauseRelease bool) {
 			t.Errorf("mail after replacement produced notices %v, want a release refusal naming %s", got, worktree)
 		}
 		checkTree(h.runner)
+		got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]
+		if test.interruptDelete {
+			if !got.Live || got.State != AgentClosed || !got.BoundBeforeRelease {
+				t.Fatalf("released worker occupancy after replacement = %+v, want closed and live", got)
+			}
+			h.holders.set(func() { h.holders.incomplete = true })
+			if !boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)].Live {
+				t.Fatal("incomplete holder census hid the live worker")
+			}
+			h.holders.exit(middleHolder, 0)
+			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+				t.Fatalf("exited worker still blocks checkout reuse: %+v", got)
+			}
+			// Cleanup forgets the exited holder while the census is
+			// still incomplete due to an unrelated holder.
+			h.holders.vanish(middleHolder)
+			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+				t.Errorf("checkout reuse blocked after the exited holder was removed: %+v", got)
+			}
+		} else if got.Address != "" {
+			t.Errorf("worker for the deleted checkout occupies it after replacement: %+v", got)
+		}
 		return
 	}
 	assertStopRefused("busy grandchild after checkout delete")

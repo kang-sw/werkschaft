@@ -3,6 +3,7 @@ package wsagent
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -176,6 +177,94 @@ func TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop(t *testing.T) {
 	}
 }
 
+func expiryRecordWriter(h *harness, clk *testClock) func(string, ParentRef, time.Duration, bool, bool) {
+	now := clk.Now()
+	old := now.Add(-3 * day).Format(time.RFC3339)
+	return func(id string, parent ParentRef, age time.Duration, closed, turnOpen bool) {
+		h.t.Helper()
+		rec := Record{
+			ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
+			SpawnerBackend: BackendClaude, Parent: &parent,
+			Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
+			LastActiveAt: now.Add(-age).Format(time.RFC3339),
+		}
+		if closed {
+			rec.ClosedAt = old
+		}
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+}
+
+// writeExpiryBridge seeds an open worker, its closed child and, optionally,
+// an open grandchild. The caller starts a new runner over these records.
+func writeExpiryBridge(h *harness, clk *testClock, ancestorAge, leafAge time.Duration, turnOpen bool) {
+	h.t.Helper()
+	write := expiryRecordWriter(h, clk)
+	write("ancestor", leadParent, ancestorAge, false, false)
+	write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, 3*day, true, false)
+	if leafAge != 0 {
+		write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, leafAge, false, turnOpen)
+	}
+}
+
+type expiryStartupHost struct {
+	leafOpening chan struct{}
+	resume      chan struct{}
+}
+
+func (h expiryStartupHost) OpenHostedSlot(dir string) (wsdashboard.HostedSlot, bool) {
+	if filepath.Base(dir) == "leaf" {
+		close(h.leafOpening)
+		<-h.resume
+	}
+	return nil, false
+}
+
+func TestHeartbeatExpiryWaitsForStartupRegistration(t *testing.T) {
+	h, clk := expiryHarness(t)
+	h.runner.Close()
+	writeExpiryBridge(h, clk, 3*day, time.Hour, false)
+
+	host := expiryStartupHost{leafOpening: make(chan struct{}), resume: make(chan struct{})}
+	h.config.LiveHost = host
+	h.config.heartbeat = time.Hour
+	h.runner = NewRunner(h.config)
+	t.Cleanup(h.runner.Close)
+	started := make(chan struct{})
+	go func() {
+		h.runner.Start(nil)
+		close(started)
+	}()
+	defer func() {
+		close(host.resume)
+		wait(t, "runner startup", started)
+	}()
+
+	wait(t, "startup to reach the leaf", host.leafOpening)
+	ancestor := h.runner.conv("ancestor")
+	if ancestor == nil || h.runner.conv("leaf") != nil {
+		t.Fatal("expected the ancestor to be registered before the leaf")
+	}
+	var scheduled bool
+	ancestor.do(func() {
+		ancestor.heartbeat()
+		scheduled = ancestor.expiring
+	})
+	if scheduled {
+		eventually(t, "the premature expiry to delete the ancestor", func() bool { return gone(h, "ancestor") })
+		t.Fatal("heartbeat deleted the ancestor before startup registered the leaf")
+	}
+	t.Cleanup(func() {
+		for _, id := range []string{"ancestor", "bridge", "leaf"} {
+			if _, err := readRecord(wsdashboard.SessionDir(h.dir, id)); err != nil {
+				t.Errorf("%s did not survive startup: %v", id, err)
+			}
+		}
+	})
+}
+
 func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -189,22 +278,7 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, clk := expiryHarness(t)
 			h.runner.Close()
-			old := clk.Now().Add(-3 * day).Format(time.RFC3339)
-			write := func(id string, parent ParentRef, age time.Duration, closed, turnOpen bool) {
-				t.Helper()
-				rec := Record{
-					ReplyID: id, Profile: AgentWorkerProfile(BackendClaude), Backend: BackendClaude,
-					SpawnerBackend: BackendClaude, Parent: &parent,
-					Root: h.root, WSKey: id, CreatedAt: old, TurnOpen: turnOpen,
-					LastActiveAt: clk.Now().Add(-age).Format(time.RFC3339),
-				}
-				if closed {
-					rec.ClosedAt = old
-				}
-				if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
-					t.Fatal(err)
-				}
-			}
+			write := expiryRecordWriter(h, clk)
 			write("ancestor", leadParent, 3*day, false, false)
 			write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, 3*day, true, false)
 			if tc.leafAge != 0 {
@@ -234,6 +308,123 @@ func TestExpiredAtStartKeepsAncestorAcrossClosedBridge(t *testing.T) {
 				t.Fatalf("spawn tree after startup = %+v, want ancestor, closed bridge and leaf", rows)
 			}
 		})
+	}
+}
+
+func TestHeartbeatExpiryKeepsAncestorAcrossClosedBridge(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		hasLeaf bool
+		turn    bool
+	}{
+		{name: "open turn below the bridge", hasLeaf: true, turn: true},
+		{name: "young idle leaf below the bridge", hasLeaf: true},
+		{name: "without open grandchild"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clk := expiryHarness(t)
+			h.runner.Close()
+			var leafAge time.Duration
+			if tc.hasLeaf {
+				leafAge = time.Hour
+			}
+			writeExpiryBridge(h, clk, day, leafAge, false)
+			h.config.heartbeat = time.Hour
+			h.start()
+			ancestor := h.runner.conv("ancestor")
+			if ancestor == nil {
+				t.Fatal("ancestor must start before reaching its expiry")
+			}
+			if tc.hasLeaf {
+				leaf := h.runner.conv("leaf")
+				if leaf == nil {
+					t.Fatal("leaf did not start")
+				}
+				if tc.turn {
+					leaf.do(func() { leaf.setStatus(func() { leaf.turn = true }) })
+				}
+			}
+			clk.advance(day + time.Hour)
+			if !tc.hasLeaf {
+				ancestor.do(ancestor.heartbeat)
+				eventually(t, "ancestor expiry with no open leaf", func() bool { return gone(h, "ancestor") })
+				return
+			}
+			for range 2 {
+				if !ancestor.do(ancestor.heartbeat) {
+					t.Fatal("heartbeat closed the ancestor despite its open grandchild")
+				}
+				eventually(t, "heartbeat expiry decision", func() bool {
+					var scheduled bool
+					ancestor.do(func() { scheduled = ancestor.expiring })
+					return !scheduled
+				})
+				if h.runner.conv("ancestor") == nil || h.state("ancestor").Status == StatusClosed {
+					t.Fatal("heartbeat closed the ancestor despite its open grandchild")
+				}
+			}
+			if st := h.state("leaf"); st.Status == StatusClosed {
+				t.Fatal("heartbeat closed the open grandchild")
+			}
+			if !tc.turn {
+				clk.advance(day)
+				leaf := h.runner.conv("leaf")
+				leaf.do(leaf.heartbeat)
+				eventually(t, "the leaf to expire on its own heartbeat", func() bool { return gone(h, "leaf") })
+				ancestor.do(ancestor.heartbeat)
+				eventually(t, "ancestor expiry after the leaf expired", func() bool { return gone(h, "ancestor") })
+			}
+		})
+	}
+}
+
+func TestHeartbeatExpiryRechecksTreeAfterCheckoutRelease(t *testing.T) {
+	h, clk := expiryHarness(t)
+	h.runner.Close()
+	worktree := releaseTestWorktree(t, h.root)
+	write := expiryRecordWriter(h, clk)
+	write("ancestor", leadParent, day, false, false)
+	write("bridge", ParentRef{Kind: ParentConversation, ReplyID: "ancestor"}, day, false, false)
+	write("leaf", ParentRef{Kind: ParentConversation, ReplyID: "bridge"}, time.Hour, false, false)
+	bridgeDir := wsdashboard.SessionDir(h.dir, "bridge")
+	bridge := h.record("bridge")
+	bridge.Root = worktree
+	if err := writeRecord(bridgeDir, bridge); err != nil {
+		t.Fatal(err)
+	}
+
+	h.config.heartbeat = time.Hour
+	closing, resume := make(chan struct{}), make(chan struct{})
+	h.config.beforeExpiryClose = func() {
+		close(closing)
+		<-resume
+	}
+	h.start()
+	r := h.runner
+	unpause := sync.OnceFunc(func() { close(resume) })
+	defer unpause()
+
+	clk.advance(day + time.Hour)
+	ancestor := r.conv("ancestor")
+	if ancestor == nil || !ancestor.do(ancestor.heartbeat) {
+		t.Fatal("ancestor did not reach its heartbeat")
+	}
+	// Pause expiry at the close gate and close only the bridge through release.
+	wait(t, "expiry at its close gate", closing)
+	at := releaseAfterBindings(t, clk, worktree)
+	released := r.CheckoutReleased(worktree, at, false)
+	if len(released) != 1 || released[0].Address != AgentAddress("bridge") || released[0].State != AgentClosed {
+		t.Fatalf("release outcomes = %+v, want only the bridge closed", released)
+	}
+	unpause()
+	eventually(t, "expiry decision", func() bool {
+		var expiring bool
+		return !ancestor.do(func() { expiring = ancestor.expiring }) || !expiring
+	})
+	for _, id := range []string{"ancestor", "leaf"} {
+		if r.conv(id) == nil {
+			t.Errorf("%s closed during heartbeat expiry across the released bridge", id)
+		}
 	}
 }
 

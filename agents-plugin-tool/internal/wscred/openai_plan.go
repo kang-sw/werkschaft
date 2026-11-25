@@ -61,7 +61,7 @@ func (s *Store) BeginOpenAIPlanRequest(ctx context.Context, background bool) (Op
 				delete(s.openAIPlanPauses, account)
 			}
 		}
-		if outcome == OpenAIPlanLimitExceeded && current == nil {
+		if outcome == OpenAIPlanLimitExceeded && current == nil && s.openAIAccount.ClientID == account {
 			if s.openAIPlanPauses == nil {
 				s.openAIPlanPauses = make(map[string]*openAIPlanPause)
 			}

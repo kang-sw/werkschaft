@@ -83,7 +83,35 @@
     }
   }
   function bgBadge(clive) {
-    taskBadge(bgbadge, clive, "data-bg", bgTitle);
+    if (bgbadge) {
+      var bg = clive ? Number(clive.getAttribute("data-bg")) || 0 : 0;
+      var execTotal = clive ? Number(clive.getAttribute("data-bg-exec")) || 0 : 0;
+      var execSelf = clive ? Number(clive.getAttribute("data-bg-exec-self")) || 0 : 0;
+      var execDesc = clive ? Number(clive.getAttribute("data-bg-exec-desc")) || 0 : 0;
+      var n = bg + execTotal;
+      var popOpen = typeof bgExecOpen === "function" && bgExecOpen();
+      bgbadge.hidden = !(liveMode && (n > 0 || popOpen));
+      if (!bgbadge.hidden) {
+        var label = wsTn("js.bgtasks", n);
+        var el = bgbadge.querySelector(".blabel");
+        if (el && el.textContent !== label) el.textContent = label;
+        if (bgbadge.classList) bgbadge.classList.toggle("has-exec", execTotal > 0);
+        var tip = label;
+        if (execTotal > 0) {
+          var parts = [];
+          if (execDesc > 0 && typeof wsT === "function") parts.push(wsT("js.bgexec.split", String(execSelf), String(execDesc)));
+          if (bg > 0) parts.push(wsTn("js.bgtasks", bg));
+          if (parts.length) tip = label + " (" + parts.join(" \u00b7 ") + ")";
+          else if (bgbadge.tagName === "BUTTON") tip = label + " \u00b7 " + wsT("js.bgexec.badge.tip");
+        } else if (bgTitle) {
+          tip = label + " \u00b7 " + bgTitle;
+        }
+        if (bgbadge.getAttribute("aria-label") !== label) bgbadge.setAttribute("aria-label", label);
+        if (bgbadge.title !== tip) bgbadge.title = tip;
+      } else if (bgbadge.classList) {
+        bgbadge.classList.remove("has-exec");
+      }
+    }
     taskBadge(monbadge, clive, "data-monitors", monTitle);
   }
   // --- agents island ---------------------------------------------------------

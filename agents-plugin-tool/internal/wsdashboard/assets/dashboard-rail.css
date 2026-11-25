@@ -805,7 +805,35 @@ html:not([data-sysopen]) .rail .drstop { display: none; }
    subagent badge; and the session menu's restart, shown only while broken */
 .host.sse.err { color: var(--wb-fail); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-fail) 70%, transparent); }
 .chip.fail { background: color-mix(in srgb, var(--wb-fail) 14%, var(--wb-card)); color: var(--wb-fail); cursor: help; }
+.chip.qc-chip { font-variant-numeric: tabular-nums; }
+.chip.qc-chip.scheduled { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); color: var(--wb-primary); }
+.chip.qc-chip.exhausted { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: var(--wb-warn-ink); }
 .chip.mcpbad { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); cursor: help; }
+.qcbox { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 0 12px 10px; }
+.qcbox[hidden] { display: none; }
+.qccard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; padding: 10px 13px; border-radius: 10px; background: var(--wb-card); box-shadow: var(--wb-shadow); font-size: 13px; }
+.qccard-ready { background: color-mix(in srgb, var(--wb-fail) 8%, var(--wb-card)); }
+.qccard-scheduled { background: color-mix(in srgb, var(--wb-primary) 10%, var(--wb-card)); }
+.qccard-exhausted { background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); }
+.qccard .qcbody { display: grid; gap: 3px; min-width: 0; flex: 1 1 240px; }
+.qccard .qchd { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
+.qccard .qchd > .i { width: 14px; height: 14px; flex: none; }
+.qccard-ready .qchd > .i { color: var(--wb-fail); }
+.qccard-scheduled .qchd > .i { color: var(--wb-primary); }
+.qccard-exhausted .qchd > .i { color: var(--wb-warn-ink); }
+.qccard .qctitle { font-weight: 700; color: var(--wb-fg); }
+.qccard .qcmeta { font-size: 12px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
+.qccard .qcmeta time { font-weight: 600; color: var(--wb-fg); font-variant-numeric: tabular-nums; }
+.qccard .qcatt { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
+.qccard .qcdesc { font-size: 12px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
+.qccard .qcact { display: flex; align-items: center; gap: 6px; flex: none; }
+.qccard .btn { border: 0; border-radius: 8px; padding: 6px 12px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.qccard .btn.go { background: var(--wb-primary); color: var(--wb-primary-fg); }
+.qccard .btn.go:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-primary) 86%, var(--wb-fg)); }
+.qccard .btn.qccancel { background: var(--wb-muted); color: var(--wb-fg); }
+.qccard .btn.qccancel:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-muted) 80%, var(--wb-fg)); }
+.qccard .btn:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+.qccard .btn:disabled { opacity: .5; cursor: default; }
 .sysline.fail, .sysline.retry { max-width: 92%; }
 .sysline .nt { min-width: 0; overflow-wrap: anywhere; }
 .sysline .nt .t { font-size: inherit; font-weight: inherit; }
@@ -814,7 +842,13 @@ html:not([data-sysopen]) .rail .drstop { display: none; }
 .sysline.retry .spin { width: 10px; height: 10px; }
 .thead .chip.bgt { color: var(--wb-fg); }
 .sbwrap { grid-column: 2; justify-self: end; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-.bgbadge { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px 0 8px; border-radius: 999px; white-space: nowrap; flex: none; cursor: help; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--wb-muted-fg); background: var(--wb-card); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-muted-fg) 35%, transparent), var(--wb-shadow-hi); animation: ibadge-rise .16s ease-out; }
+.bgbadge { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px 0 8px; border: 0; border-radius: 999px; white-space: nowrap; flex: none; cursor: help; font-family: inherit; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--wb-muted-fg); background: var(--wb-card); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-muted-fg) 35%, transparent), var(--wb-shadow-hi); animation: ibadge-rise .16s ease-out; }
+button.bgbadge { cursor: pointer; }
+button.bgbadge:hover { background: color-mix(in srgb, var(--wb-fg) 6%, var(--wb-card)); color: var(--wb-fg); }
+button.bgbadge.has-exec, button.bgbadge[aria-expanded="true"] { color: var(--wb-fg); background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 65%, transparent), var(--wb-shadow-hi); }
+button.bgbadge.has-exec:hover, button.bgbadge[aria-expanded="true"]:hover { background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); }
+button.bgbadge[aria-expanded="true"] { box-shadow: inset 0 0 0 1.5px var(--wb-primary), var(--wb-shadow-hi); }
+button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; }
 .bgbadge[hidden] { display: none; }
 .bgbadge .i { width: 13px; height: 13px; flex: none; }
 .rpop .spact[hidden] { display: none; }

@@ -33,6 +33,36 @@ func notifyCompactionTune(key string) {
 		wsagent.NotifyCompactionConfigChanged()
 	}
 }
+
+var compactionLeadModeEnum = []string{wsconfig.CompactionModeNative, wsconfig.CompactionModeWS}
+
+func compactionLeadModeEntry() configKeyEntry {
+	return configKeyEntry{
+		Key: wsconfig.ItemCompactionLeadMode, WriterTool: "config.tune", ResetTool: "config.tune",
+		ResolverBacked: true, HarnessApplicable: true, NoAgentVisible: true,
+		SelectorFields: []tuningField{
+			{Name: "harness", Description: "Harness override; * writes the shared layer value.", Enum: promptHarnessEnum},
+			{Name: "scope", Enum: wsconfig.ScopeSchemaEnum()},
+		},
+		ValueFields: []tuningField{
+			{Name: "value", Description: "Hosted lead compaction mode: native (harness-native compaction) or ws (ws-managed checkpoint and session rotation).", Enum: compactionLeadModeEnum},
+		},
+	}
+}
+
+func validateCompactionLeadModeTarget(key, harness, value string, registries ...map[string]wsagent.BackendRegistration) error {
+	if key != wsconfig.ItemCompactionLeadMode || value != wsconfig.CompactionModeNative {
+		return nil
+	}
+	if harness == "" || harness == "*" || harness == "all" {
+		return nil
+	}
+	if wsagent.LeadCompactionWSOnly(harness, registries...) {
+		return fmt.Errorf("config.tune: %s.%s cannot be set to native because %s only supports ws-managed lead compaction", key, harness, harness)
+	}
+	return nil
+}
+
 func compactionKeyEntry(key string) configKeyEntry {
 	return configKeyEntry{Key: key, WriterTool: "config.tune", ResetTool: "config.tune", ResolverBacked: true, HarnessApplicable: true, NoAgentVisible: true,
 		SelectorFields: []tuningField{{Name: "harness", Description: "Harness override; * writes the shared layer value.", Enum: promptHarnessEnum}, {Name: "scope", Enum: wsconfig.ScopeSchemaEnum()}},
@@ -51,7 +81,50 @@ func resolveCompactionValue(r *wsconfig.Resolver, key, item, harness string, reg
 			break
 		}
 	}
-	return r.Compaction(key, item, harness, p.LegacyKey(item))
+	rv, answered, err := r.Compaction(key, item, harness, p.LegacyKey(item))
+	if err == nil && item == wsconfig.ItemCompactionLeadMode {
+		rv.Value = wsagent.EffectiveLeadCompactionMode(harness, rv.Value, registries...)
+	}
+	return rv, answered, err
+}
+
+func compactToolWithoutLeadSummary(tool map[string]any) map[string]any {
+	cloned := make(map[string]any, len(tool))
+	for k, v := range tool {
+		cloned[k] = v
+	}
+	schema, ok := tool["inputSchema"].(map[string]any)
+	if !ok {
+		return cloned
+	}
+	newSchema := make(map[string]any, len(schema))
+	for k, v := range schema {
+		newSchema[k] = v
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		newProps := make(map[string]any, len(props))
+		for k, v := range props {
+			if k == "lead_summary" {
+				continue
+			}
+			newProps[k] = v
+		}
+		newSchema["properties"] = newProps
+	}
+	cloned["inputSchema"] = newSchema
+	return cloned
+}
+
+// compactAdvertisesLeadSummary reports whether tools/list should include the
+// lead_summary argument on compact for this connection. Only hosted lead
+// sessions with effective compaction.lead_mode=ws see it; workers, native-mode
+// leads, and non-hosted/CLI sessions get the stripped schema.
+func (s *Server) compactAdvertisesLeadSummary() bool {
+	if s.conversation == "" || s.workerForwards() {
+		return false
+	}
+	binding, ok := s.agents.(interface{ LeadCompactionMode(string) string })
+	return ok && binding.LeadCompactionMode(s.conversation) == wsconfig.CompactionModeWS
 }
 
 // compactTool is discoverable before use; an older daemon refuses the unknown
@@ -96,7 +169,7 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		}); ok {
 			out = runner.CompactWithSummary(key, target, resume, prose)
 		} else {
-			out = wsagent.CompactResult{Status: "unsupported", Reason: "lead_summary requires an in-daemon builtin lead"}
+			out = wsagent.CompactResult{Status: "unsupported", Reason: "lead_summary requires a hosted lead session"}
 		}
 	} else if runner, ok := s.agents.(compactRunner); ok {
 		out = runner.Compact(key, target, resume)

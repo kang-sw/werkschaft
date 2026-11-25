@@ -17,13 +17,38 @@ import (
 // loop): the session shows it broken until it connects again, and the
 // user may restart by hand (Runner.Restart).
 
-// syncHost writes the lead's host state into its live snapshot (unless
-// quiet, a replayed line: the replay's end writes the snapshot).
+// syncHost writes the conversation's host state into its live snapshot (unless
+// quiet, a replayed line: the replay's end writes the snapshot). Leads carry
+// harness background tasks, failures, MCP status, retries, and recursive
+// agent-origin ws/exec counts; non-lead workers carry host state only while
+// they or their descendants have running agent-origin ws/exec jobs.
 func (c *conv) syncHost(quiet bool) {
-	if !c.rec.Lead {
-		return
+	var selfExec, descExec int
+	if c.r != nil {
+		selfExec, descExec = c.r.BgExecCounts(c.rec.ReplyID)
 	}
-	h := &wslive.Host{BackgroundTasks: c.bgTasks, Background: copyCount(c.background), Monitors: copyCount(c.monitors), Failure: c.failure, MCPBroken: c.mcpBroken, Retry: c.retry}
+	totalExec := selfExec + descExec
+	var h *wslive.Host
+	if c.rec.Lead {
+		h = &wslive.Host{
+			BackgroundTasks:   c.bgTasks,
+			Background:        copyCount(c.background),
+			Monitors:          copyCount(c.monitors),
+			BgExecCount:       totalExec,
+			BgExecSelf:        selfExec,
+			BgExecDesc:        descExec,
+			Failure:           c.failure,
+			MCPBroken:         c.mcpBroken,
+			Retry:             c.retry,
+			QuotaContinuation: toLiveQuotaContinuation(c.rec.QuotaContinuation),
+		}
+	} else if totalExec > 0 {
+		h = &wslive.Host{
+			BgExecCount: totalExec,
+			BgExecSelf:  selfExec,
+			BgExecDesc:  descExec,
+		}
+	}
 	if c.live.setHost(h, quiet) && !quiet {
 		c.r.notify(c.rec.ReplyID, c.rec.Root)
 	}
@@ -31,11 +56,27 @@ func (c *conv) syncHost(quiet bool) {
 
 // alert takes a typed failure the harness reported: a conversation line,
 // and the session's failure state until a turn succeeds.
-func (c *conv) alert(n wslive.Notice, quiet bool) {
+func (c *conv) alert(n wslive.Notice, manualOnly, quiet bool) {
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && n.ResetsAt <= 0 && c.r.opts.QuotaResetAt != nil {
+		if at := c.r.opts.QuotaResetAt(c.rec.Backend, c.rec.Model); at > c.r.opts.Now().UnixMilli() {
+			n.ResetsAt = at
+		}
+	}
 	c.alerted = true
+	if n.Kind == wslive.NoticeUsageLimit {
+		c.quotaUsageLimitAlerted = true
+	}
+	if !quiet && c.compactStage1Active && n.Kind == wslive.NoticeUsageLimit {
+		c.compactStage1UsageLimited = true
+	}
 	c.setStatus(func() { c.failure = &n })
 	if !quiet {
 		c.live.notice(n)
+	}
+	// A harness can report the same failure both before and during settlement.
+	if !quiet && n.Kind == wslive.NoticeUsageLimit && !c.quotaUsageLimitHandled {
+		c.quotaUsageLimitHandled = true
+		c.handleUsageLimitAlert(n, manualOnly)
 	}
 	c.syncHost(quiet)
 	c.changed(quiet)
@@ -43,12 +84,18 @@ func (c *conv) alert(n wslive.Notice, quiet bool) {
 
 // turnSettled clears what a turn's end settles: a retry still shown, and
 // the failure state once a turn ended with no failure of any kind.
-func (c *conv) turnSettled(turnErr string, quiet bool) {
+func (c *conv) turnSettled(turnErr string, quiet, compactCommand bool) {
 	alerted := c.alerted
-	c.alerted, c.retry = false, nil
+	usageLimitAlerted := c.quotaUsageLimitAlerted
+	c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled, c.retry = false, false, false, nil
 	if turnErr == "" && !alerted && c.failure != nil {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)
+	}
+	// A native compaction command settles independently of the work that
+	// owns a quota reservation.
+	if !quiet && !compactCommand && !usageLimitAlerted && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(quiet)
 	}
 	c.syncHost(quiet)
 }
@@ -70,6 +117,13 @@ func (c *conv) mcpReported(servers []MCPServer, quiet bool) {
 	if len(failed) > 0 && !quiet {
 		c.checkMCP(failed)
 	}
+}
+
+// clearProcessMCP forgets checks and server state owned by a retired process.
+// mcpRestarted survives so automatic restarts still have their retry bound.
+func (c *conv) clearProcessMCP() {
+	c.setStatus(func() { c.mcpBroken = nil })
+	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 }
 
 // mcpConnected marks server connected in this process.
@@ -205,6 +259,11 @@ func (c *conv) mcpRestartDue() bool {
 // idle point with no background task, and reports whether a new process
 // runs; a failed start leaves none, with its error on the session.
 func (c *conv) restartIfDue() bool {
+	// The idle kick settles accepted compaction work before a process stop
+	// can clear it. A dispatched compaction or continuation holds idle.
+	if c.compactPending != nil || c.compactResume {
+		return false
+	}
 	storeGone := c.cutoverStoreGone()
 	if !(c.mcpStale || storeGone || c.mcpRestartDue()) || c.proc == nil || !c.idleNow() {
 		return false

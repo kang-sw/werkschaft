@@ -113,8 +113,8 @@ process.stdout.write(bad.join("\n"));
 }
 
 // Uses disposable fixture stores and an ephemeral listener, not the shared
-// daemon. The desktop case runs the real preload over a stub IPC bridge in
-// headless Chromium; it never launches Electron or a GUI window.
+// daemon. The desktop case runs the Tauri update bridge over a stub native
+// transport in headless Chromium.
 func TestRailNavigationBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")

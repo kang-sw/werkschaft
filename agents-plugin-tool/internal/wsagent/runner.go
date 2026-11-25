@@ -232,6 +232,14 @@ type Options struct {
 	// turn settles. It may be called from any conversation loop and must not
 	// block on the runner.
 	AgyActivity func()
+	// QuotaResetAt, when not nil, looks up a cached future quota reset time
+	// (epoch ms) from daemon memory for (backend, model) when a usage-limit
+	// alert arrives with ResetsAt == 0. Must not perform disk or network I/O.
+	QuotaResetAt func(backend, model string) int64
+	// QuotaContinuationJitter, when not nil, returns the jitter duration added
+	// past ResetsAt + buffer when scheduling a quota continuation (clamped to
+	// [0, max]). Nil uses bounded random jitter.
+	QuotaContinuationJitter func(max time.Duration) time.Duration
 	// Report, when not nil, receives each settled turn of a conversation
 	// with a parent (Runner.Spawn): a turn's end, a failed start, a process
 	// lost mid-turn, and, when the next daemon loads the record, a turn
@@ -247,6 +255,8 @@ type Options struct {
 	TierRoles func() ([]wsconfig.TierRole, error)
 	// heartbeat overrides wslive.HeartbeatInterval for tests.
 	heartbeat time.Duration
+	// beforeExpiryClose pauses heartbeat expiry before starting its close (tests).
+	beforeExpiryClose func()
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).

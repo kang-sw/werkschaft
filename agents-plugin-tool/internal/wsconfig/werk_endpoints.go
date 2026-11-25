@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"regexp"
 	"strings"
@@ -61,3 +62,75 @@ func ParseWerkEndpoints(raw string) (map[string]WerkEndpoint, error) {
 }
 
 func LocalWerkProviderID(name string) string { return localWerkProviderPrefix + name }
+
+// UpdateWerkEndpoint mutates one endpoint under the shared global config lock.
+func UpdateWerkEndpoint(opts Options, name string, endpoint *WerkEndpoint, retire func(before, after map[string]WerkEndpoint) error) (map[string]WerkEndpoint, error) {
+	return updateWerkEndpoints(opts, func(current map[string]WerkEndpoint, parseErr error) (*string, error) {
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		endpoints := maps.Clone(current)
+		if endpoints == nil {
+			endpoints = map[string]WerkEndpoint{}
+		}
+		if endpoint == nil {
+			delete(endpoints, name)
+		} else {
+			endpoints[name] = *endpoint
+		}
+		raw, err := json.Marshal(endpoints)
+		value := string(raw)
+		return &value, err
+	}, retire)
+}
+
+// SetWerkEndpointOverride preserves the legacy scalar value verbatim. A nil
+// value removes the override.
+func SetWerkEndpointOverride(opts Options, value *string, retire func(before, after map[string]WerkEndpoint) error) (map[string]WerkEndpoint, error) {
+	if value == nil {
+		path, err := GlobalPath(opts)
+		if err != nil || !configFileExists(path) {
+			return nil, err
+		}
+	}
+	return updateWerkEndpoints(opts, func(map[string]WerkEndpoint, error) (*string, error) { return value, nil }, retire)
+}
+
+func updateWerkEndpoints(opts Options, edit func(map[string]WerkEndpoint, error) (*string, error), retire func(before, after map[string]WerkEndpoint) error) (map[string]WerkEndpoint, error) {
+	path, err := GlobalPath(opts)
+	if err != nil {
+		return nil, err
+	}
+	var before, after map[string]WerkEndpoint
+	_, err = updateConfigFileBeforeReplace(path, func(cfg *Config) error {
+		current, exists := cfg.Overrides[ItemWerkEndpoints]
+		// A legacy overwrite can repair malformed config. Only a valid old
+		// catalog establishes which credential IDs it owned.
+		var parseErr error
+		before, parseErr = ParseWerkEndpoints(current)
+		value, err := edit(before, parseErr)
+		if err != nil {
+			return err
+		}
+		if value == nil {
+			if !exists {
+				return errConfigUnchanged
+			}
+			delete(cfg.Overrides, ItemWerkEndpoints)
+			return nil
+		}
+		after, err = ParseWerkEndpoints(*value)
+		if err != nil {
+			return err
+		}
+		if exists && current == *value {
+			return errConfigUnchanged
+		}
+		if cfg.Overrides == nil {
+			cfg.Overrides = map[string]string{}
+		}
+		cfg.Overrides[ItemWerkEndpoints] = *value
+		return nil
+	}, func() error { return retire(before, after) })
+	return after, err
+}

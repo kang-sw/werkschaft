@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -149,6 +150,7 @@ type deadBindingOccupancy struct {
 	rec                 Record
 	root, cwd, checkout string
 	closurePersisted    bool
+	holderExited        bool
 }
 
 // DrainDeadBindingMail handles mail queued across or after an automatic
@@ -179,10 +181,34 @@ func (r *Runner) rememberDeadBinding(rec Record, root, cwd string, refusal *admi
 	if rec.HolderID == "" && !process {
 		return
 	}
+	r.rememberDeadOccupancyLocked(deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout})
+}
+
+// restoreRetainedReleaseOccupancy re-registers a detached holder's binding
+// when the daemon stopped between persisting the closure and removing the
+// checkout. The normal holder inventory determines whether it is still live.
+func (r *Runner) restoreRetainedReleaseOccupancy(rec Record) {
+	closure := rec.DeadBindingClosure
+	if rec.ClosedAt == "" || rec.HolderID == "" || closure == nil || closure.Reason == "" || closure.Checkout == "" {
+		return
+	}
+	info, err := os.Stat(closure.Checkout)
+	if os.IsNotExist(err) || (err == nil && !info.IsDir()) {
+		return
+	}
+	root, cwd := canonicalBinding(rec)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rememberDeadOccupancyLocked(deadBindingOccupancy{
+		rec: rec, root: root, cwd: cwd, checkout: closure.Checkout, closurePersisted: true,
+	})
+}
+
+func (r *Runner) rememberDeadOccupancyLocked(binding deadBindingOccupancy) {
 	if r.deadBindings == nil {
 		r.deadBindings = make(map[string]deadBindingOccupancy)
 	}
-	r.deadBindings[rec.ReplyID] = deadBindingOccupancy{rec: rec, root: root, cwd: cwd, checkout: refusal.checkout}
+	r.deadBindings[binding.rec.ReplyID] = binding
 }
 
 func (r *Runner) rememberDeadRefusalLocked(id string, refusal *admissionRefusal) {
@@ -201,8 +227,9 @@ func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []re
 	var complete bool
 	alive := map[string]bool{}
 	if r.opts.Holders != nil {
+		scanned := r.scanDone()
 		listed := r.opts.Holders.List()
-		complete = r.scanDone() && !listed.Incomplete
+		complete = scanned && !listed.Incomplete
 		for _, info := range listed.Holders {
 			alive[info.ID] = info.Child == nil || info.Child.State != "exited"
 		}
@@ -211,17 +238,28 @@ func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []re
 	for id, binding := range r.deadBindings {
 		rec := binding.rec
 		if holder := rec.HolderID; holder != "" {
-			if live, known := alive[holder]; !live && (known || complete) {
+			live, known := alive[holder]
+			if known && !live && !binding.holderExited {
+				// The manager can drop this holder while another holder
+				// keeps the census incomplete. Keep the exit with the binding
+				// while its closed record may still need to be persisted.
+				binding.holderExited = true
+				r.deadBindings[id] = binding
+			}
+			if binding.holderExited || !live && complete {
 				if _, retained := r.closed[id]; !retained && r.convs[id] == nil {
 					delete(r.deadBindings, id)
 				}
 				continue
 			}
 		}
-		if !worktreePathContains(target, binding.root) && !worktreePathContains(target, binding.cwd) {
+		// A retained release closure names the checkout the holder used
+		// even if a symlink in its recorded cwd now resolves elsewhere.
+		releasedHere := sameWorktreePath(binding.checkout, target)
+		if !releasedHere && !worktreePathContains(target, binding.root) && !worktreePathContains(target, binding.cwd) {
 			continue
 		}
-		before := releaseBound(rec) && (sameWorktreePath(binding.checkout, target) ||
+		before := releaseBound(rec) && (releasedHere ||
 			release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at))
 		out = append(out, retiredPiBinding{createdAt: rec.CreatedAt, child: BoundWorktreeChild{
 			Address: AgentAddress(id), State: AgentClosed, Cwd: rec.Cwd, BoundBeforeRelease: before, Live: true,

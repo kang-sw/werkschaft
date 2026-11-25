@@ -65,6 +65,9 @@ type configKeyEntry struct {
 	// NoAgentVisible reports whether this knob stays visible in the
 	// agentless wsflow (no-agent) tuning catalog and tool surface.
 	NoAgentVisible bool
+	// HideFromDiscovery omits a setting from config.list and lead-tune.
+	// Direct calls and the dashboard catalog still use this registry row.
+	HideFromDiscovery bool
 	// RequiresLeadAuthority marks knobs that require a lead-scoped session
 	// key beyond the config.* prefix gate (today: the global-only
 	// workflow-preference writers, whose entries derive it from
@@ -259,6 +262,7 @@ const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep whil
 // family is not represented here — it is generated per discovered override
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
 var configRegistry = []configKeyEntry{
+	compactionLeadModeEntry(),
 	compactionKeyEntry("compaction.lead_advisory"),
 	compactionKeyEntry("compaction.lead_hard"),
 	compactionKeyEntry("compaction.worker_advisory"),
@@ -376,6 +380,34 @@ var configRegistry = []configKeyEntry{
 		ResolverBacked:        true,
 	},
 	{
+		Key:        wsconfig.ItemAgentQuotaContinuation,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{
+			{
+				Name:        "harness",
+				Description: "Harness bucket the value applies to. When omitted, defaults to the current session's detected harness. Use * explicitly for every harness (all).",
+				Enum:        promptHarnessEnum,
+			},
+			{
+				Name:        "scope",
+				Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+				Enum:        wsconfig.ScopeSchemaEnum(),
+			},
+		},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "off keeps post-usage-limit continuation manual per session; auto schedules a continuation turn automatically after a hosted lead hits a usage limit. Omit when reset is true.",
+			Enum:        []string{"off", "auto"},
+		}},
+		HarnessApplicable: true,
+		NoAgentVisible:    true,
+		// A lead-only knob: it controls whether hosted lead sessions
+		// automatically schedule continuation turns after usage limits.
+		RequiresLeadAuthority: true,
+		ResolverBacked:        true,
+	},
+	{
 		Key:        wsconfig.ItemWorkflowProfile,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",
@@ -438,6 +470,7 @@ var configRegistry = []configKeyEntry{
 			Name:        "value",
 			Description: "JSON object mapping endpoint names to {base_url, kind}, with kind vllm or ollama. Store optional API keys with credential set local/<name>.",
 		}},
+		HideFromDiscovery:     true,
 		RequiresLeadAuthority: true,
 		ResolverBacked:        true,
 		Normalize: func(value string) (string, error) {
@@ -648,7 +681,7 @@ var configRegistry = []configKeyEntry{
 			},
 			{
 				Name:        "provider",
-				Description: "Optional provider for a werk tier: openrouter (default), openai (Sign in with ChatGPT, with background consent), or local/<name> from agent.werk_endpoints.",
+				Description: "Optional provider for a werk tier: openrouter (default), openai (Sign in with ChatGPT, with background consent), or local/<name> from dashboard Settings → Account.",
 			},
 			{
 				Name:        "effort",

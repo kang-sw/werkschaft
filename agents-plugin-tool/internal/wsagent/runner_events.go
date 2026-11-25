@@ -304,7 +304,7 @@ func (c *conv) handle(ev Event) {
 			}
 		}
 	case ev.Alert != nil:
-		c.alert(*ev.Alert, quiet)
+		c.alert(*ev.Alert, ev.AlertManualOnly, quiet)
 	case ev.Retry != nil || ev.RetryEnd:
 		c.retry = ev.Retry
 		c.syncHost(quiet)
@@ -421,7 +421,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		c.setStatus(func() { c.turn = false })
 		c.apply(wslive.Event{Kind: wslive.KindTurnEnd, Reason: c.summaryReason}, quiet)
 	}
-	c.turnSettled(turnErr, quiet)
+	c.turnSettled(turnErr, quiet, compactCommand)
 	internalPrompt := c.clearAgyInternalPrompt()
 	if c.replaying && c.rec.Parent != nil {
 		c.replayTurnError = turnErr
@@ -436,7 +436,21 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		c.clearCompactionSteerReplies()
 		c.compactContinueAtIdle = turnErr == "" && c.summaryReason != wslive.TurnAborted
 		c.compactIdleInternal = c.compactInternalTurn
-		c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+		if c.compactStage1Active {
+			resume, internal, auto, usageLimited := c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited
+			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+			if c.compactPending != nil {
+				// Lead queued ws/compact during Stage 1; kick() below runs it.
+			} else if usageLimited {
+				// Quota exhausted during Stage 1: suppress immediate Stage 2
+				// native /compact so quota continuation can recover cleanly.
+			} else if c.proc != nil {
+				c.compactPending = &compactRequest{resume: resume, internal: internal, auto: auto, crossing: auto}
+				c.publishCompaction(false)
+			}
+		} else {
+			c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+		}
 	}
 	// Observers must see the terminal diagnostic in the same emission as
 	// the settled lifecycle, including mapped Pi agent_settled failures.
@@ -473,8 +487,12 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	// goes as the next one (children.go).
 	c.unsteer()
 	c.applySettings()
+	compactionFirst := c.compactPending != nil || c.compactResume
 	c.restartIfDue()
 	c.kick()
+	if compactionFirst {
+		c.restartIfDue()
+	}
 	c.releaseHeld()
 	c.flushRecord()
 	if !c.turn && !c.compacting && !c.compactCommand {
@@ -746,6 +764,7 @@ func (c *conv) processExited() {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
@@ -878,9 +897,10 @@ func (c *conv) processEnded() {
 	c.checkAction(false)
 	hadBackgroundTasks := c.bgTasks != 0
 	c.setStatus(func() {
-		c.activeMode, c.bgTasks, c.mcpBroken = "", 0, nil
+		c.activeMode, c.bgTasks = "", 0
 		c.background, c.monitors = nil, nil
 	})
+	c.clearProcessMCP()
 	if hadBackgroundTasks || hadBgGrace || c.heldRes != nil {
 		// A child's held background turn settles and its parent's idle
 		// timer re-arms once the process exits and clears background work
@@ -892,8 +912,7 @@ func (c *conv) processEnded() {
 			c.watched()
 		}
 	}
-	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
-	c.retry, c.alerted = nil, false
+	c.retry, c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled = nil, false, false, false
 	c.syncHost(true)
 	// A replay the process's end cut short still resolves what it staged of
 	// agy native rows and what the restored recovery file held (dropping
@@ -963,6 +982,7 @@ func (c *conv) stopProcess(reason string) {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
@@ -1108,6 +1128,9 @@ func (c *conv) checkInterrupt() {
 // failure leads to is the caller's: the page's interrupt stops the process,
 // a forced worktree release only reports it. It runs in the loop.
 func (c *conv) cancelTurn() (bool, error) {
+	if c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
+	}
 	if c.modelWaitBackoffC != nil {
 		c.cancelModelWaitBackoff()
 		return true, nil
@@ -1266,6 +1289,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	// The completion fence (AdmitCompletion): a notice admitted under an
 	// earlier generation never reaches the conversation again, revived or not.
 	c.rec.OpenGen++
+	c.rec.QuotaContinuation = nil
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()
@@ -1280,6 +1304,8 @@ func (c *conv) closeIf(done func() bool) bool {
 // finishClose is the rest of a close, once the conversation is marked
 // closed. It runs in the loop.
 func (c *conv) finishClose() {
+	c.stopQuotaTimer()
+	c.syncHost(false)
 	c.stopProcess("")
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })

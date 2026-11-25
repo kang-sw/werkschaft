@@ -140,6 +140,9 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
+	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// for a freshly started process that already received composed instructions.
+	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
 	// (Compacting, Compactions, CompactOrigin) under mu, as the loop-owned
 	// fields above are not readable there.
@@ -151,7 +154,11 @@ type conv struct {
 	compactNudge                               compactionNudge
 	compactInternalTurn, compactResumeInternal bool
 
-	compactAdvisory, compactHard                                                                                   wsconfig.Threshold
+	compactAdvisory, compactHard wsconfig.Threshold
+	// Lead mode is also read by MCP discovery, outside the conversation loop.
+	compactModeMu                                                                                                  sync.Mutex
+	compactModeGen                                                                                                 uint64
+	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64
 	compactGen                                                                                                     uint64
@@ -161,6 +168,7 @@ type conv struct {
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
+	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -201,6 +209,20 @@ type conv struct {
 	// pending -> cancelled lets a successful inbox write win before it
 	// returns; pending -> firing commits the automatic continue instead.
 	modelWaitBackoffFence atomic.Uint32
+
+	// Hosted-lead quota continuation scheduler state (quota_continuation.go).
+	quotaC                 <-chan time.Time
+	quotaStop              func()
+	quotaUsageLimitAlerted bool
+	quotaUsageLimitHandled bool
+	quotaInjecting         bool
+	quotaPendingFire       bool
+	quotaCancelFence       atomic.Uint32
+	quotaInputGen          atomic.Uint64
+	quotaArmedInputGen     uint64
+	// Test-only hooks for quotaContinuationTimedOut race windows (nil in production).
+	onQuotaAfterFence func()
+	onQuotaBeforeSend func()
 
 	// loop-owned, except registration timing below.
 	events          <-chan Event
@@ -564,6 +586,9 @@ func (c *conv) mailChanged() {
 		// the page.
 		c.r.notify(rec.ReplyID, rec.Root)
 	}
+	if (len(mail) > 0 || len(c.rec.Mail) > 0) && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
+	}
 	// Mail claimed earlier and not yet delivered (a start that failed, a
 	// daemon that ended) goes with it: nothing else would submit it.
 	if len(c.rec.Mail) > 0 {
@@ -724,8 +749,14 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
 	c.cutoverInstructionGone()
-	if c.modelWaitBackoffC != nil && c.held > 0 {
+	c.mu.Lock()
+	held := c.held
+	c.mu.Unlock()
+	if c.modelWaitBackoffC != nil && held > 0 {
 		c.cancelModelWaitBackoff()
+	}
+	if !c.quotaInjecting && held > 0 && c.hasQuotaContinuation() {
+		c.cancelQuotaContinuation(false)
 	}
 	c.checkInterrupt()
 	c.steer()
@@ -815,6 +846,7 @@ func (c *conv) loop() {
 		c.stopCompactWatchdog()
 		c.stopModelWaitTimer()
 		c.stopModelWaitBackoff()
+		c.stopQuotaTimer()
 		if c.spawnTimer != nil {
 			c.spawnTimer.Stop()
 		}
@@ -851,18 +883,20 @@ func (c *conv) loop() {
 	// A rejoined child whose record shows its turn open runs it under a
 	// trusted holder: publish that before the replay settles it.
 	c.publishAwake(c.wantAwake())
+	c.restoreQuotaContinuation()
 	if c.refreshShellHold() {
 		c.watched()
 	}
 	for {
 		c.syncLoopBusy()
-		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
+		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, quotaC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
 		compactC = c.compactC
 		modelWaitC = c.modelWaitC
 		modelWaitDrainC = c.modelWaitDrainC
 		modelWaitCancelC = c.modelWaitCancelC
 		modelWaitBackoffC = c.modelWaitBackoffC
+		quotaC = c.quotaC
 		if c.spawnTimer != nil {
 			spawnC = c.spawnTimer.C
 		}
@@ -897,6 +931,7 @@ func (c *conv) loop() {
 			if c.compactResume && c.r.durableProcess(c.rec.Backend) {
 				c.kick()
 			}
+			c.syncHost(true)
 			c.spawnDirty = true
 			c.live.writeSnapshot()
 			if c.live.currentSlot() == nil {
@@ -948,6 +983,8 @@ func (c *conv) loop() {
 			c.modelWaitCancelTimedOut()
 		case <-modelWaitBackoffC:
 			c.modelWaitBackoffTimedOut()
+		case <-quotaC:
+			c.quotaContinuationTimedOut()
 		case <-beat.C:
 			c.heartbeat()
 		case <-c.r.quit:
@@ -1105,6 +1142,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 			f := *c.failure
 			st.Failure = &f
 		}
+		st.QuotaContinuation = cloneQuotaContinuation(c.rec.QuotaContinuation)
 		st.MCPBroken = slices.Clone(c.mcpBroken)
 	}
 	if c.caps != nil {
@@ -1338,11 +1376,14 @@ func (c *conv) release() {
 			mail = nil
 		}
 	}
+	c.stopQuotaTimer()
 	c.update(func(rec *Record) {
 		rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 		rec.Mail = mail
+		rec.QuotaContinuation = nil
 		c.closed = true
 	})
+	c.syncHost(false)
 	c.dropHeld()
 	c.live.setAdapter("")
 	rec := c.record()
@@ -1781,7 +1822,7 @@ func (c *conv) hasPendingKick() bool {
 	held := c.held
 	c.mu.Unlock()
 	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
-		c.rec.DurableTurn != nil || c.kickDeferred.Load()
+		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire
 }
 
 // deferKickIfUnpublished defers a processless start kick until
@@ -1812,6 +1853,9 @@ func (c *conv) kick() {
 	}
 	if c.rec.DurableTurn != nil && c.r.durableProcess(c.rec.Backend) {
 		c.resumeDurableTurn()
+		return
+	}
+	if c.quotaPendingFire && !c.compacting && !c.compactCommand && c.quotaContinuationTimedOut() {
 		return
 	}
 	// A released binding gets no compaction command, continuation or restore
@@ -1854,7 +1898,7 @@ func (c *conv) kickInput() {
 	// Checked before anything is sent: a released binding gets no
 	// compaction nudge, and no new turn or start below.
 	released := c.released()
-	if released == "" && c.sendCompactionNudge() {
+	if released == "" && !c.quotaInjecting && c.sendCompactionNudge() {
 		return
 	}
 	c.mu.Lock()
@@ -2009,6 +2053,23 @@ func (c *conv) kickInput() {
 		return
 	}
 	cmd, parts, rest := nextTurn(queue)
+	if !durable && cmd != nil && cmd.Name == "compact" {
+		c.refreshCompaction()
+		if c.wsManagedLeadCompaction() {
+			c.update(func(rec *Record) {
+				rec.Queued = rest
+				rec.Drained, rec.Voided = c.drained, c.voided
+			})
+			if c.compactPending == nil && !c.compacting && !c.compactCommand && !c.compactStage1Active {
+				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, stage1: true}
+				c.publishCompaction(false)
+			}
+			if !c.compactIdle() {
+				c.signalInbox()
+			}
+			return
+		}
+	}
 	if cmd != nil {
 		mail, reports = nil, nil
 	}

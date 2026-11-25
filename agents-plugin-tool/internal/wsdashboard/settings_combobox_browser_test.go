@@ -10,6 +10,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
@@ -65,6 +66,7 @@ func TestSettingsComboboxBrowser(t *testing.T) {
 	}
 	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
 		Dir: dir, Home: t.TempDir(), Sessions: source, Worktrees: tierUIWorktrees{}, Config: backend, Agents: tierUIAgents{},
+		Credentials: wscred.NewStore(filepath.Join(home, wscred.FileName)),
 	})
 	if err != nil {
 		t.Fatal(err)

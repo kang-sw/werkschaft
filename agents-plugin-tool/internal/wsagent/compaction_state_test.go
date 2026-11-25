@@ -374,20 +374,27 @@ func TestCompactionStateClosedChildKeepsItsCountAcrossARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	holder := h.holder(child.ID)
-	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
-	h.idle(child.ID)
+	// Claude's running state tells the mapper to end this turn at idle.
+	h.holders.out(holder, stateLine(HarnessRunning), resultLine())
+	h.sync(child.ID, holder)
 	h.runner.conv(child.ID).do(func() {
 		c := h.runner.conv(child.ID)
 		c.compactPending = &compactRequest{auto: true}
 		c.publishCompaction(false)
 		c.kick()
 	})
+	if got := countCompactInputs(h.userInputs(holder)); got != 0 {
+		t.Fatalf("compact commands sent to the worker before the initial idle = %d, want 0", got)
+	}
+	h.holders.out(holder, stateLine(HarnessIdle))
 	eventually(t, "worker compact command", func() bool { return countCompactInputs(h.userInputs(holder)) == 1 })
 	compactBoundary(h, child.ID, holder)
-	eventually(t, "the completed compaction", func() bool { return h.state(child.ID).Compactions == 1 })
-	eventually(t, "the row shows the count", func() bool {
+	if st := h.state(child.ID); st.Compactions != 1 || st.CompactOrigin != wslive.CompactOriginAuto {
+		t.Fatalf("worker compaction count and origin = %d/%q, want 1/auto", st.Compactions, st.CompactOrigin)
+	}
+	eventually(t, "the snapshot shows the compaction count and origin", func() bool {
 		for _, a := range h.snapshot(lead.ID).Agents {
-			if a.ID == "pi:"+child.ID && a.Compactions == 1 {
+			if a.ID == "pi:"+child.ID && a.Compactions == 1 && a.CompactOrigin == wslive.CompactOriginAuto {
 				return true
 			}
 		}

@@ -594,6 +594,21 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			}
 		}
+		var consentWake <-chan struct{}
+		consent, hasCredentials := d.credentials.(interface {
+			OpenAIConsentPrompt() (uint64, <-chan struct{})
+		})
+		sendConsent := func() bool {
+			prompt, wake := consent.OpenAIConsentPrompt()
+			consentWake = wake
+			// LAN viewers need only the same prompt signal and a local-viewer
+			// flag. Account state is served by the local-only status route.
+			payload := fmt.Appendf(nil, `{"prompt":%d,"local":%t}`, prompt, localStream)
+			return sink.event("openai-consent", payload) == nil && sink.flush() == nil
+		}
+		if hasCredentials && (src.key.kind == regionRail || !framedRequest(r)) && !sendConsent() {
+			return
+		}
 		var companionWake <-chan struct{}
 		sendCompanion := func() bool {
 			snapshot := d.companion.current()
@@ -716,6 +731,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			case <-d.stop:
 				return
+			case <-consentWake:
+				if !sendConsent() {
+					return
+				}
+				continue
 			case <-companionWake:
 				if !sendCompanion() {
 					return
@@ -786,10 +806,7 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		}
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no")
-	sink := &sseSink{w: w, rc: http.NewResponseController(w), flusher: flusher, timeout: wsWriteTimeout, done: r.Context().Done()}
+	sink := newSSESink(w, r, flusher)
 	// A deadline left on the connection would cut the next response of a
 	// reused keep-alive connection: the server sets none of its own.
 	defer func() { _ = sink.rc.SetWriteDeadline(time.Time{}) }()
@@ -878,6 +895,13 @@ type sseSink struct {
 	flusher http.Flusher
 	timeout time.Duration
 	done    <-chan struct{}
+}
+
+func newSSESink(w http.ResponseWriter, r *http.Request, flusher http.Flusher) *sseSink {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	return &sseSink{w: w, rc: http.NewResponseController(w), flusher: flusher, timeout: wsWriteTimeout, done: r.Context().Done()}
 }
 
 // arm sets the write deadline for the next write. A writer without deadline

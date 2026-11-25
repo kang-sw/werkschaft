@@ -34,6 +34,7 @@ func (c *conv) setHidden(hidden bool) error {
 		return err
 	}
 	if hidden {
+		c.cancelQuotaContinuation(false)
 		// Persist the no-start gate first: process-end/replay callbacks cannot
 		// consume held input while the process is being stopped.
 		c.stopProcess("")
@@ -77,8 +78,14 @@ func (r *Runner) PageInput(id string, write func() bool) error {
 	default:
 	}
 	committed := write()
+	if committed {
+		c.cancelQuotaContinuationForInput()
+	}
 	hidden := c.hidden
 	c.mu.Unlock()
+	if committed && !hidden {
+		c.signalInbox()
+	}
 	if committed && hidden {
 		go c.do(func() {
 			if c.closed {

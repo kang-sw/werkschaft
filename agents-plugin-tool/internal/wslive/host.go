@@ -61,6 +61,12 @@ type Host struct {
 	// Nil is unknown, distinct from a known zero; BackgroundTasks keeps its meaning.
 	Background *int `json:"background,omitempty"`
 	Monitors   *int `json:"monitors,omitempty"`
+	// BgExecCount, BgExecSelf, and BgExecDesc count running agent-origin
+	// hosted ws/exec jobs across this session and its recursive descendants.
+	// Memory-only live counts (stripped by Snapshot.ForDisk).
+	BgExecCount int `json:"bg_exec_count,omitempty"`
+	BgExecSelf  int `json:"bg_exec_self,omitempty"`
+	BgExecDesc  int `json:"bg_exec_desc,omitempty"`
 	// Failure is the typed failure that keeps the session from working (a
 	// login needed, a model unavailable, a usage limit) until a turn
 	// succeeds; nil when none.
@@ -70,6 +76,20 @@ type Host struct {
 	MCPBroken []string `json:"mcpBroken,omitempty"`
 	// Retry is the API request retry under way; nil when none.
 	Retry *Retry `json:"retry,omitempty"`
+	// QuotaContinuation is a hosted lead's post-usage-limit resume state; nil
+	// when no continuation is scheduled, in flight, or exhausted.
+	QuotaContinuation *QuotaContinuation `json:"quotaContinuation,omitempty"`
+}
+
+// QuotaContinuation is a hosted lead's post-usage-limit continuation status
+// projected into the live snapshot.
+type QuotaContinuation struct {
+	Status      string `json:"status"`
+	ResumeAt    int64  `json:"resumeAt,omitempty"`
+	Attempts    int    `json:"attempts,omitempty"`
+	MaxAttempts int    `json:"maxAttempts,omitempty"`
+	Manual      bool   `json:"manual,omitempty"`
+	NoticeText  string `json:"noticeText,omitempty"`
 }
 
 // Retry is an API request the harness retries: attempt N of MaxRetries
@@ -92,6 +112,9 @@ func (st *State) SetHost(h *Host) bool {
 		c := *h
 		c.BackgroundTasks = max(c.BackgroundTasks, 0)
 		c.Background, c.Monitors = taskCount(c.Background), taskCount(c.Monitors)
+		c.BgExecCount = max(c.BgExecCount, 0)
+		c.BgExecSelf = max(c.BgExecSelf, 0)
+		c.BgExecDesc = max(c.BgExecDesc, 0)
 		if c.Failure != nil {
 			f := *c.Failure
 			f.Text = cleanLine(st.scrub.scrub(f.Text), NoticeTextRunes)
@@ -106,6 +129,12 @@ func (st *State) SetHost(h *Host) bool {
 			r := *c.Retry
 			r.Error = cleanLine(st.scrub.scrub(r.Error), RetryErrorRunes)
 			c.Retry = &r
+		}
+		if c.QuotaContinuation != nil {
+			qc := *c.QuotaContinuation
+			qc.ResumeAt = max(qc.ResumeAt, 0)
+			qc.NoticeText = cleanLine(st.scrub.scrub(qc.NoticeText), NoticeTextRunes)
+			c.QuotaContinuation = &qc
 		}
 		if !reflect.DeepEqual(c, Host{}) {
 			next = &c
@@ -132,6 +161,10 @@ func (h *Host) clone() *Host {
 	if h.Retry != nil {
 		r := *h.Retry
 		c.Retry = &r
+	}
+	if h.QuotaContinuation != nil {
+		qc := *h.QuotaContinuation
+		c.QuotaContinuation = &qc
 	}
 	return &c
 }

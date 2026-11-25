@@ -110,6 +110,71 @@ func TestAtomicReplaceFileWindowsWaitsOutAReader(t *testing.T) {
 	}
 }
 
+func TestReadFileCachedWindowsFailsFastDuringExclusiveOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	const content = "persisted\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := os.NewFile(uintptr(handle), path)
+	defer hold.Close()
+
+	before := readCacheReads()
+	if _, err := ReadFileCached(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("cached read under exclusive open = %v, want sharing violation", err)
+	}
+	if attempts := readCacheReads() - before; attempts != 1 {
+		t.Fatalf("cached read made %d attempts, want 1", attempts)
+	}
+
+	// An uncached background read still waits out the publication hold.
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	before = FileIOCounters()["file_io_read_file"]
+	go func() {
+		data, err := ReadFile(path)
+		done <- result{data, err}
+	}()
+
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	// Keep the handle open until a second read proves the first was blocked.
+	for FileIOCounters()["file_io_read_file"]-before < 2 {
+		select {
+		case got := <-done:
+			t.Fatalf("uncached read returned before retrying: %v", got.err)
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("uncached read did not retry")
+		}
+	}
+	if err := hold.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || string(got.data) != content {
+			t.Fatalf("uncached read = %q, %v, want %q", got.data, got.err, content)
+		}
+	case <-deadline.C:
+		t.Fatal("uncached read did not finish after the handle closed")
+	}
+}
+
 // TestRemoveFileWindowsWaitsOutAReader: a plain Go reader holding the file
 // fails os.Remove on Windows; RemoveFile retries until the reader closes.
 func TestRemoveFileWindowsWaitsOutAReader(t *testing.T) {

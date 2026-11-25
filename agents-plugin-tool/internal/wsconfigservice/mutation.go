@@ -110,6 +110,11 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 			return Mutation{}, ErrInvalid
 		}
 	}
+	if rule.ValidateHarnessValue != nil {
+		if err := rule.ValidateHarnessValue(harness, value); err != nil {
+			return Mutation{}, InvalidValue{Reason: err}
+		}
+	}
 	m.Scalar = value
 	return m, nil
 }

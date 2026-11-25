@@ -67,7 +67,7 @@ cd agents-plugin-tool
 python3 scripts/generate-package-assets.py
 go build -trimpath -ldflags '-s -w -X main.version=0.51.0-dev' -o /tmp/ws-mcp-darwin-arm64 ./cmd/ws-mcp
 python3 scripts/write-runtime-metadata.py /tmp/ws-mcp-darwin-arm64 --version 0.51.0-dev
-node desktop-electron/scripts/assemble-daemon-input.cjs --binary /tmp/ws-mcp-darwin-arm64 --out /tmp/werkschaft-daemon-input --platform darwin
+node desktop/scripts/assemble-daemon-input.cjs --binary /tmp/ws-mcp-darwin-arm64 --out /tmp/werkschaft-daemon-input --platform darwin
 cd desktop
 npm ci --ignore-scripts --no-audit --no-fund
 WERKSCHAFT_DAEMON_INPUT=/tmp/werkschaft-daemon-input npm run build:package
@@ -85,7 +85,7 @@ On Windows x64, from `agents-plugin-tool` in PowerShell:
 python scripts/generate-package-assets.py
 go build -trimpath -ldflags '-s -w -X main.version=0.51.0-dev' -o "$env:TEMP\ws-mcp-windows-amd64.exe" ./cmd/ws-mcp
 python scripts/write-runtime-metadata.py "$env:TEMP\ws-mcp-windows-amd64.exe" --version 0.51.0-dev
-node desktop-electron/scripts/assemble-daemon-input.cjs --binary "$env:TEMP\ws-mcp-windows-amd64.exe" --out "$env:TEMP\werkschaft-daemon-input" --platform win32
+node desktop/scripts/assemble-daemon-input.cjs --binary "$env:TEMP\ws-mcp-windows-amd64.exe" --out "$env:TEMP\werkschaft-daemon-input" --platform win32
 cd desktop
 npm ci --ignore-scripts --no-audit --no-fund
 $env:WERKSCHAFT_DAEMON_INPUT = "$env:TEMP\werkschaft-daemon-input"
@@ -188,9 +188,8 @@ ordering.
 
 If download or verification fails, check again from Settings and retry.
 If installation fails, reopen Werkschaft and retry the staged update or
-reinstall from the release page. On Windows, reopen the old Electron
-shortcut to retry a failed first migration install. Reinstalling Electron
-reopens its retained profile. Tauri uses its own WebView profile and starts
+reinstall from the release page. Existing Electron users must manually install
+Tauri from the release page. Tauri uses its own WebView profile and starts
 with default window settings.
 
 On a disposable smoke host, point the signed evaluation builds at the

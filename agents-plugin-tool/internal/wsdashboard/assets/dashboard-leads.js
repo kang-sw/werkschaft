@@ -1528,6 +1528,7 @@
     }
     handedDraw(st);
     harnessDraw(st);
+    quotaDraw(st);
     if (!box) return;
     var open = !leadGone(st), pin = pinned(), keep = {}, changed = apMountAnswered() || !!lead.approvalChanged;
     lead.approvalChanged = false;
@@ -1611,13 +1612,140 @@
     window.WsToast.show(key, { kind: "warn" });
     harnessNotices.add(key);
   }
-  // leadKey is the conversation's permission line as the state follows it:
-  // its tool, arguments, and stamp; empty when the session waits on none.
+  // quotaDraw renders a hosted lead's post-usage-limit continuation status and,
+  // only for viewers holding control authority (st.can_control), manual
+  // schedule / cancel buttons. Resume timestamps use static <time data-f="dt">
+  // with zero countdown timers or idle animations.
+  var quotaState = { busy: false, sig: "" };
+  function quotaToast(text, kind) {
+    if (window.WsToast) window.WsToast.show(text, { kind: kind || "info" });
+    else toast(text);
+  }
+  function quotaAction(kind) {
+    if (quotaState.busy || !leadCan()) return;
+    quotaState.busy = true;
+    quotaDraw(lead.st);
+    var url = "/agents/" + encodeURIComponent(rid) + (kind === "cancel" ? "/quota-continuation/cancel" : "/quota-continuation");
+    railPost(url, {}, function (st, v, s) {
+      quotaState.busy = false;
+      if (st === 200 && v && v.id) {
+        lead.st = v;
+        leadDraw();
+        quotaToast(wsT(kind === "cancel" ? "js.quota.cancelled_toast" : "js.quota.scheduled_toast"), "info");
+        return;
+      }
+      if (st === 409) leadFetch();
+      quotaToast(leadErr(st, s), "warn");
+      leadDraw();
+    });
+  }
+  function quotaDraw(st) {
+    var box = $("qcbox");
+    if (!box) return;
+    if (!st || !st.lead || st.is_child || leadGone(st)) {
+      if (!box.hidden || box.childNodes.length) { box.hidden = true; box.textContent = ""; }
+      quotaState.sig = "";
+      return;
+    }
+    var qc = st.quota_continuation || null;
+    if (qc && qc.status === "in_flight") {
+      if (!box.hidden || box.childNodes.length) { box.hidden = true; box.textContent = ""; }
+      quotaState.sig = "";
+      return;
+    }
+    var fail = st.failure && st.failure.kind === "usage_limit" ? st.failure : null;
+    var can = !!st.can_control;
+    var mode = "";
+    if (qc && qc.status === "scheduled" && qc.resume_at > 0) mode = "scheduled";
+    else if (qc && qc.status === "exhausted") mode = "exhausted";
+    else if (fail && can && st.status !== "running") mode = "ready";
+    if (!mode) {
+      if (!box.hidden || box.childNodes.length) { box.hidden = true; box.textContent = ""; }
+      quotaState.sig = "";
+      return;
+    }
+    var sig = JSON.stringify([
+      mode, can, quotaState.busy,
+      fail ? Number(fail.resetsAt || 0) : 0,
+      qc ? [qc.status || "", Number(qc.resume_at || 0), Number(qc.attempts || 0), Number(qc.max_attempts || 0)] : null
+    ]);
+    if (quotaState.sig === sig && !box.hidden) return;
+    quotaState.sig = sig;
+    var pin = pinned();
+    box.textContent = "";
+    var card = mk("div", "qccard qccard-" + mode);
+    card.setAttribute("role", "status");
+    card.setAttribute("data-qc-mode", mode);
+    var body = card.appendChild(mk("div", "qcbody"));
+    var hd = body.appendChild(mk("div", "qchd"));
+    hd.appendChild(gIcon(mode === "scheduled" ? "clock" : "x"));
+    var titleKey = mode === "scheduled" ? "js.quota.title.scheduled" : (mode === "exhausted" ? "js.quota.title.exhausted" : "js.quota.title.ready");
+    hd.appendChild(mk("b", "qctitle", wsT(titleKey)));
+    if (mode === "scheduled") {
+      var meta = hd.appendChild(mk("span", "qcmeta"));
+      meta.appendChild(doc.createTextNode(wsT("js.quota.resume_at") + " "));
+      var tm = meta.appendChild(mk("time", "t"));
+      tm.setAttribute("data-ms", String(qc.resume_at));
+      tm.setAttribute("data-f", "dt");
+      if (qc.max_attempts > 0) {
+        var attText = qc.attempts > 0
+          ? wsT("js.quota.attempt", String(qc.attempts), String(qc.max_attempts))
+          : wsT("js.quota.fallback_hourly", String(qc.max_attempts));
+        hd.appendChild(mk("span", "qcatt", attText));
+      }
+    } else if (mode === "ready") {
+      if (fail && fail.resetsAt > 0) {
+        var rmeta = hd.appendChild(mk("span", "qcmeta"));
+        rmeta.appendChild(doc.createTextNode(wsT("js.quota.resets_at") + " "));
+        var rtm = rmeta.appendChild(mk("time", "t"));
+        rtm.setAttribute("data-ms", String(fail.resetsAt));
+        rtm.setAttribute("data-f", "dt");
+      }
+      body.appendChild(mk("div", "qcdesc", wsT("js.quota.ready_hint")));
+    } else if (mode === "exhausted") {
+      var maxA = Number(qc.max_attempts || 6);
+      var attA = Number(qc.attempts || maxA);
+      body.appendChild(mk("div", "qcdesc", wsT("js.quota.exhausted_hint", String(attA), String(maxA))));
+    }
+    if (can) {
+      var act = card.appendChild(mk("div", "qcact"));
+      if (mode === "scheduled") {
+        var cancelBtn = act.appendChild(rpBtn("btn qccancel", wsT("js.quota.cancel")));
+        cancelBtn.setAttribute("data-qc-act", "cancel");
+        cancelBtn.disabled = quotaState.busy;
+        cancelBtn.addEventListener("click", function () { quotaAction("cancel"); });
+      } else {
+        var schedBtn = act.appendChild(rpBtn("btn go qcsched", wsT("js.quota.schedule")));
+        schedBtn.setAttribute("data-qc-act", "schedule");
+        schedBtn.disabled = quotaState.busy;
+        schedBtn.addEventListener("click", function () { quotaAction("schedule"); });
+      }
+    }
+    box.appendChild(card);
+    box.hidden = false;
+    fmtTimes(box);
+    if (pin) pinConvo();
+  }
+  // leadKey is the conversation's live host/permission state as the state
+  // follows it: permission slot, quota state, and turn activity while a
+  // usage-limit alert can expose manual scheduling.
   function leadKey() {
-    var c = region("convlive"), slot = c && c.querySelector(".apslot");
-    if (!slot) return "";
-    var t = slot.querySelector("time[data-ms]"), code = slot.querySelector("code"), args = slot.querySelector(".args");
-    return [t ? t.getAttribute("data-ms") : "", code ? code.title : "", args ? args.textContent : ""].join("\n");
+    var c = region("convlive"), clive = c && c.querySelector(".clive");
+    var quotaFailure = clive && clive.getAttribute("data-qc-fail") || "";
+    var slot = c && c.querySelector(".apslot");
+    var t = slot && slot.querySelector("time[data-ms]"), code = slot && slot.querySelector("code"), args = slot && slot.querySelector(".args");
+    var parts = [
+      t ? t.getAttribute("data-ms") : "",
+      code ? code.title : "",
+      args ? args.textContent : "",
+      quotaFailure,
+      quotaFailure === "usage_limit" && clive.hasAttribute("data-turn") ? "running" : "",
+      clive ? (clive.getAttribute("data-qc-reset") || "") : "",
+      clive ? (clive.getAttribute("data-qc-status") || "") : "",
+      clive ? (clive.getAttribute("data-qc-resume") || "") : "",
+      clive ? (clive.getAttribute("data-qc-att") || "") : ""
+    ];
+    return parts.join("\n");
   }
   // leadSwapped runs after an update of a region the state follows.
   function leadSwapped(name) {

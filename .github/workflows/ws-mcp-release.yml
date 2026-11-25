@@ -19,11 +19,6 @@ on:
         description: "Version to embed in ws-mcp binaries, for example 0.52.1-dev"
         required: false
         default: "0.52.1-dev"
-      desktop_dry_run:
-        description: "Build both desktop zips as workflow artifacts only; never publish a release"
-        type: boolean
-        required: false
-        default: false
       tauri_dry_run:
         description: "Build signed Tauri desktop artifacts without publishing; supply a stable or canary version"
         type: boolean
@@ -48,7 +43,6 @@ jobs:
     name: Build ws-mcp assets
     runs-on: ubuntu-latest
     outputs:
-      tauri_route: ${{ steps.route.outputs.tauri_route }}
       tauri_version: ${{ steps.route.outputs.tauri_version }}
     # Normal duration ~2 min. Without a cap, a hung step burns runner time while
     # the run still reads as in-progress.
@@ -66,11 +60,10 @@ jobs:
           go-version-file: agents-plugin-tool/go.mod
           cache-dependency-path: agents-plugin-tool/go.sum
 
-      - name: Select the Tauri build route
+      - name: Select the Tauri build version
         id: route
         env:
           TAURI_DRY_RUN: ${{ inputs.tauri_dry_run }}
-          TAURI_RELEASE: ${{ vars.WERKSCHAFT_TAURI_RELEASE }}
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           number='(0|[1-9][0-9]*)'
@@ -83,14 +76,7 @@ jobs:
               exit 1
             fi
             echo "tauri_version=$version" >> "$GITHUB_OUTPUT"
-          elif [[ "$TAURI_RELEASE" == true && "$GITHUB_REF" == refs/tags/* ]]; then
-            if [[ "$GITHUB_REF_NAME" =~ ^v$core$ ]]; then
-              echo 'tauri_route=stable' >> "$GITHUB_OUTPUT"
-            elif [[ "$GITHUB_REF_NAME" =~ ^v$canary$ ]]; then
-              echo 'tauri_route=canary' >> "$GITHUB_OUTPUT"
-            else
-              exit 0
-            fi
+          elif [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" =~ ^v($core|$canary)$ ]]; then
             echo "tauri_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -160,7 +146,8 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/') && !inputs.desktop_dry_run && !inputs.tauri_dry_run && steps.route.outputs.tauri_route != 'stable'
+        # The Tauri publisher handles exact stable tags and includes the native assets.
+        if: startsWith(github.ref, 'refs/tags/') && !inputs.tauri_dry_run && (steps.route.outputs.tauri_version == '' || contains(steps.route.outputs.tauri_version, '-canary.'))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -209,178 +196,10 @@ jobs:
           $root = Resolve-Path ".."
           & $exe smoke --root $root
 
-  desktop-build:
-    name: Desktop (${{ matrix.platform }}, ${{ matrix.arch }})
-    needs: build
-    # Keep ordinary PR/manual native-only builds unchanged. A tag ships desktop;
-    # an explicit dry run builds identical archives but cannot publish anything.
-    if: ${{ !inputs.tauri_dry_run && (inputs.desktop_dry_run || (startsWith(github.ref, 'refs/tags/') && needs.build.outputs.tauri_route != 'stable')) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            platform: darwin
-            arch: arm64
-            binary: ws-mcp-darwin-arm64
-            shell: bash
-          - os: windows-latest
-            platform: win32
-            arch: x64
-            binary: ws-mcp-windows-amd64.exe
-            shell: pwsh
-    defaults:
-      run:
-        working-directory: agents-plugin-tool/desktop-electron
-        shell: ${{ matrix.shell }}
-    env:
-      # Explicit targets also work if GitHub changes the macOS runner CPU.
-      npm_config_platform: ${{ matrix.platform }}
-      npm_config_arch: ${{ matrix.arch }}
-      DESKTOP_PLATFORM: ${{ matrix.platform }}
-      DESKTOP_ARCH: ${{ matrix.arch }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: agents-plugin-tool/desktop-electron/package-lock.json
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Download the release build's binaries and metadata
-        uses: actions/download-artifact@v5
-        with:
-          name: ws-mcp-assets
-          path: ${{ runner.temp }}/ws-mcp-assets
-
-      # Networked prerequisites are explicit and lockfile/version pinned. The
-      # subsequent package build only reads the cache; it never runs Electron.
-      - name: Install pinned desktop build dependencies and Electron zip
-        env:
-          # The installer's cacheRoot and build.cjs must agree.
-          electron_config_cache: ${{ runner.temp }}/electron-cache
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          node node_modules/electron/install.js
-
-      - name: Test desktop startup and packaging contracts
-        run: npm test
-
-      - name: Assemble the wsflow daemon input without executing it
-        run: >-
-          node scripts/assemble-daemon-input.cjs
-          --binary "${{ runner.temp }}/ws-mcp-assets/${{ matrix.binary }}"
-          --out "${{ runner.temp }}/desktop-daemon-input"
-          --platform "${{ matrix.platform }}" --package wsflow
-
-      - name: Package unsigned desktop app and archive without launching it
-        env:
-          ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
-          WERKSCHAFT_DAEMON_INPUT: ${{ runner.temp }}/desktop-daemon-input
-        run: >-
-          node -e "require('./scripts/build.cjs').build({ platform: process.env.DESKTOP_PLATFORM,
-          arch: process.env.DESKTOP_ARCH }).catch(error => { console.error(error); process.exitCode = 1; })"
-
-      - name: Verify packaged Windows daemon autostart without Python
-        if: matrix.platform == 'win32'
-        run: node test/autostart-smoke.cjs
-
-      - name: Upload Windows autostart evidence
-        if: always() && matrix.platform == 'win32'
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-win32-autostart-evidence
-          path: agents-plugin-tool/desktop-electron/dist/autostart-evidence/
-          if-no-files-found: warn
-
-      - name: Upload platform desktop archive and checksum
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            agents-plugin-tool/desktop-electron/dist/Werkschaft-${{ matrix.platform }}-${{ matrix.arch }}.zip
-            agents-plugin-tool/desktop-electron/dist/Werkschaft-desktop-SHA256SUMS
-          if-no-files-found: error
-          compression-level: 0
-
-  desktop-release:
-    name: Verify and publish desktop assets
-    needs: desktop-build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-
-      - name: Download both desktop artifacts without overwriting their SUMS
-        uses: actions/download-artifact@v5
-        with:
-          pattern: desktop-*
-          path: ${{ runner.temp }}/desktop-platforms
-          merge-multiple: false
-
-      - name: Verify archives and write combined updater checksums
-        env:
-          INPUT: ${{ runner.temp }}/desktop-platforms
-          OUTPUT: ${{ runner.temp }}/desktop-release
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const crypto = require('node:crypto');
-          const { assetName, parseSums, SUMS } = require('./agents-plugin-tool/desktop-electron/update');
-          fs.mkdirSync(process.env.OUTPUT);
-          const lines = [];
-          for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64']]) {
-            const source = path.join(process.env.INPUT, `desktop-${platform}-${arch}`);
-            const name = assetName(platform, arch);
-            const bytes = fs.readFileSync(path.join(source, name));
-            const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-            const sums = parseSums(fs.readFileSync(path.join(source, SUMS), 'utf8'));
-            if (sums.size !== 1 || sums.get(name) !== hash) throw new Error(`Invalid checksum for ${name}`);
-            fs.writeFileSync(path.join(process.env.OUTPUT, name), bytes);
-            lines.push(`${hash}  ${name}`);
-          }
-          fs.writeFileSync(path.join(process.env.OUTPUT, SUMS), lines.join('\n') + '\n');
-          NODE
-
-      # Retain the same combined payload on tags and dry runs. Only tags may
-      # reach the publishing step below, and the explicit dry-run veto wins.
-      - name: Upload combined desktop workflow artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: werkschaft-desktop-assets
-          path: ${{ runner.temp }}/desktop-release/*
-          if-no-files-found: error
-          compression-level: 0
-
-      - name: Publish desktop assets to the native assets' tag release
-        if: startsWith(github.ref, 'refs/tags/') && !inputs.desktop_dry_run && !inputs.tauri_dry_run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/desktop-release/"* --repo "$GITHUB_REPOSITORY" --clobber
-
   tauri-desktop:
     name: Tauri desktop
     needs: build
-    if: inputs.tauri_dry_run || (!inputs.desktop_dry_run && needs.build.outputs.tauri_route != '')
+    if: needs.build.outputs.tauri_version != ''
     uses: ./.github/workflows/werkschaft-tauri-build.yml
     with:
       version: ${{ needs.build.outputs.tauri_version }}

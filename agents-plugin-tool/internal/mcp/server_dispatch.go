@@ -352,6 +352,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		catalog.Knobs = append(catalog.Knobs, s.declared.knobs(&catalogResolver, sessionKey)...)
+		hideConfigDiscovery(&view, &catalog)
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, configListView{View: view, Knobs: catalog.Knobs, ManifestErrors: s.declared.rejected}, nil)
 		}
@@ -494,7 +495,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			// Reset means "drop the override and fall back to the builtin default" —
 			// distinct from explicitly writing the builtin's current value.
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
-			if err := resolver.Unset(storeKey, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
+			if err := s.writeScalarTune(&resolver, writeOpts, storeKey, nil, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
 			s.notifyScalarTune(entry.Key, writeOpts)
@@ -555,8 +556,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if err != nil {
 				return toolTextResponse(req.ID, "", err)
 			}
+			if err := validateCompactionLeadModeTarget(entry.Key, harness, value, s.agentBackends()...); err != nil {
+				return toolTextResponse(req.ID, "", err)
+			}
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
-			if err := resolver.Set(storeKey, value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
+			if err := s.writeScalarTune(&resolver, writeOpts, storeKey, &value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
 			s.notifyScalarTune(entry.Key, writeOpts)

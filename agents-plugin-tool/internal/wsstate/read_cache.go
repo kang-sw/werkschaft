@@ -27,10 +27,9 @@ var readCache struct {
 // instead of a read. A cached copy is served only while the file stats as it
 // did before the read that produced it (mode, size, mtime, and file identity)
 // and that read happened at least readCacheRacyWindow after its mtime;
-// otherwise the file is read again. The stat comes first, so a write landing
-// between stat and read is cached under the older stamp and read again next
-// time. A failed stat or read is returned uncached (a missing file stays
-// fs.ErrNotExist).
+// otherwise the file is read again, with one attempt. A write landing between
+// the stat and read is cached under the older stamp and read again next time.
+// A failed stat or read is returned uncached (a missing file stays fs.ErrNotExist).
 //
 // It is for small files that every writer replaces whole (atomic temp and
 // rename) or edits by hand: an in-place edit that keeps size and mtime is not

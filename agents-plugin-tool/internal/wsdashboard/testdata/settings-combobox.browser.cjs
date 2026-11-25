@@ -270,17 +270,23 @@ const CHOICES = {
     assert.equal(switchedValue.provider, '');
 
     // Changing the endpoint list refreshes the already-cached model choices.
-    const endpointRow = frame().locator('[data-config-key="agent.werk_endpoints"]');
-    const endpointsSaved = page.waitForResponse(r => r.url().endsWith('/api/config/set') &&
-      r.request().postDataJSON()?.key === 'agent.werk_endpoints');
-    await endpointRow.locator('textarea').fill(JSON.stringify({
-      desk: { base_url: 'https://ollama.example/v1', kind: 'ollama' }
-    }));
+    await frame().locator('[data-settings-section=account]').click();
+    const endpointRow = frame().locator('[data-account-row=local]');
+    await endpointRow.getByRole('button', { name: '+ Endpoint' }).click();
+    await endpointRow.getByLabel('Name', { exact: true }).fill('desk');
+    await endpointRow.getByLabel('Base URL', { exact: true }).fill('https://ollama.example/v1');
     endpointModels = [{ id: 'new-model', provider: 'local/desk' }];
-    await endpointRow.locator('.save-btn').click();
-    assert.equal((await endpointsSaved).status(), 200);
-    await endpointRow.locator('.reset-btn').waitFor({ state: 'visible' });
+    const endpointsSaved = page.waitForResponse(r => r.url().endsWith('/api/account/endpoints') &&
+      r.request().method() === 'POST');
+    await endpointRow.getByRole('button', { name: 'Add', exact: true }).click();
+    const endpointsResponse = await endpointsSaved;
+    assert.equal(endpointsResponse.status(), 200);
+    assert.deepEqual((await endpointsResponse.json()).endpoints, [
+      { name: 'desk', base_url: 'https://ollama.example/v1', kind: 'ollama' }
+    ]);
+    await endpointRow.locator('[data-endpoint-name=desk]').waitFor();
     assert.equal(choicesRequests, 1, 'endpoint save leaves discovery lazy');
+    await endpointRow.getByRole('button', { name: 'Choose local models in Werk tiers' }).click();
     await werkInputs.nth(0).fill('werk');
     await werkRow.locator('.scb-btn').nth(1).click();
     await popup.getByText('local/desk new-model', { exact: true }).waitFor();

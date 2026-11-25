@@ -547,6 +547,47 @@ func TestAgyModelWaitInBandFailureContinuesHostedLeadTurn(t *testing.T) {
 	}
 }
 
+func TestAgyQuotaFailureSettlesWithoutPromptResponse(t *testing.T) {
+	h, f := newAgyLeadHarness(t)
+	timers := &leverTimers{}
+	h.opts.Timer = timers.start
+	resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+	if err := resolver.Set(wsconfig.ItemAgyStallLogCheck, "false", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{}).ID
+	f.replyID = id
+	h.send(id, "work")
+	holder := h.holder(id)
+	eventually(t, "hosted lead first prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+
+	const failure = "⚠ API error (attempt 1): HTTP 429 RESOURCE_EXHAUSTED: model quota exceeded"
+	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"\n`+failure+`\n"}}}}`)
+	eventually(t, "anchored quota failure arms a drain", func() bool {
+		started, _ := timers.counts()
+		return started == 1
+	})
+	timers.mu.Lock()
+	delay := timers.durs[0]
+	timers.mu.Unlock()
+	if delay != modelFailureDrain {
+		t.Fatalf("quota failure drain = %v, want %v", delay, modelFailureDrain)
+	}
+	timers.fire(t, 0)
+
+	eventually(t, "quota failure settles without a prompt response", func() bool {
+		st := h.state(id)
+		return !st.Process && st.Status != StatusRunning && st.Failure != nil && st.Failure.Kind == wslive.NoticeUsageLimit
+	})
+	if got := h.state(id).Failure.Text; got != failure {
+		t.Fatalf("usage-limit notice = %q, want %q", got, failure)
+	}
+	if started, _ := timers.counts(); started != 1 {
+		t.Fatalf("armed %d timers, want only the terminal failure drain", started)
+	}
+}
+
 func TestAgyModelWaitWatchdogForceStopsWhenInterruptIsIgnored(t *testing.T) {
 	// Exercise the shipped default-three budget: a cancellation that never
 	// lands must still fail on its own grace timer before any retry can start.
