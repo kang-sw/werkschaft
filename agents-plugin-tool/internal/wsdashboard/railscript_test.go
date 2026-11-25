@@ -16,7 +16,7 @@ var bad = [];
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); }
 function El(cls, attrs) {
   var self = this;
-  this.className = cls || ""; this.children = []; this.parentNode = null; this.attrs = attrs || {};
+  this.className = cls || ""; this.children = []; this.parentNode = null; this.attrs = attrs || {}; this.hidden = false;
   this.classList = {
     add: function (c) { if (!self.classList.contains(c)) self.className = (self.className + " " + c).trim(); },
     remove: function (c) { self.className = self.className.split(" ").filter(function (x) { return x && x !== c; }).join(" "); },

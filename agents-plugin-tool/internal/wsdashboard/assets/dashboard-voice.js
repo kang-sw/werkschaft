@@ -848,7 +848,7 @@
       if (state === "recording" || state === "transcribing") {
         var cancelBtn = doc.createElement("button");
         cancelBtn.type = "button";
-        cancelBtn.className = "cvox-btn muted";
+        cancelBtn.className = "cvox-btn cvox-muted";
         cancelBtn.setAttribute("data-voice-action", "cancel");
         cancelBtn.textContent = translate("js.voice.cancel");
         cancelBtn.addEventListener("click", function () { controller.cancel({ discardLast: true }); });
@@ -865,7 +865,7 @@
         }
         var dismissBtn = doc.createElement("button");
         dismissBtn.type = "button";
-        dismissBtn.className = "cvox-btn muted";
+        dismissBtn.className = "cvox-btn cvox-muted";
         dismissBtn.setAttribute("data-voice-action", "dismiss");
         dismissBtn.textContent = translate("js.voice.dismiss");
         dismissBtn.addEventListener("click", function () {
