@@ -479,12 +479,57 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
   const closeBtn = findAction(P.el, 'js.lead.close');
   assert(closeBtn, 'close button exists');
   assert.equal(closeBtn.classList.contains('d-hold-btn'), true);
+  // Hold buttons stack .gs-idle and .gs-ready in 1/1 grid with zero text swap on ready; non-hold restart stays plain.
+  function findClass(node, cls) {
+    if (node.classList && node.classList.contains(cls)) return node;
+    for (const c of (node.children || [])) {
+      const hit = findClass(c, cls);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const restartBtn = findAction(P.el, 'js.lead.restart');
+  assert(restartBtn, 'restart button exists');
+  assert.equal(findClass(restartBtn, 'gs-idle'), null, 'non-hold restart keeps plain .gs');
+  assert.equal(findClass(restartBtn, 'gs-ready'), null, 'non-hold restart has no .gs-ready');
+  for (const btn of [stopBtn, archBtn, closeBtn]) {
+    const idle = findClass(btn, 'gs-idle');
+    const ready = findClass(btn, 'gs-ready');
+    assert(idle && ready, 'hold button has .gs-idle and .gs-ready');
+    assert.equal(ready.textContent, 'js.hold.release');
+    assert.equal(idle.getAttribute('aria-hidden'), null);
+    assert.equal(ready.getAttribute('aria-hidden'), 'true');
+  }
+  const closeIdle = findClass(closeBtn, 'gs-idle');
+  const closeReady = findClass(closeBtn, 'gs-ready');
+  const closeIdleBefore = closeIdle.textContent;
   h.fire(closeBtn, 'click');
   assert.equal(directCloses.length, 0);
+  // Armed ready state toggles .d-hold-ready and aria-hidden without swapping .gs-idle text; cancel restores aria-hidden.
   h.fire(closeBtn, 'pointerdown', { button: 0, isPrimary: true, pointerId: 3 });
   h.advance(1500);
-  h.fire(h.window, 'pointerup', { pointerId: 3, clientX: 50, clientY: 20 });
+  assert.equal(closeBtn.classList.contains('d-hold-ready'), true);
+  assert.equal(closeIdle.textContent, closeIdleBefore, 'onReady does not swap idle note text');
+  assert.equal(closeReady.textContent, 'js.hold.release');
+  assert.equal(closeIdle.getAttribute('aria-hidden'), 'true');
+  assert.equal(closeReady.getAttribute('aria-hidden'), null);
+  h.fire(h.window, 'pointermove', { pointerId: 3, clientX: 500, clientY: 500 });
+  assert.equal(closeBtn.classList.contains('d-hold-ready'), false);
+  assert.equal(closeIdle.getAttribute('aria-hidden'), null);
+  assert.equal(closeReady.getAttribute('aria-hidden'), 'true');
+  assert.equal(directCloses.length, 0);
+  // Full hold + release inside bounds confirms and restores aria-hidden.
+  h.fire(closeBtn, 'pointerdown', { button: 0, isPrimary: true, pointerId: 4 });
+  h.advance(1500);
+  h.fire(h.window, 'pointerup', { pointerId: 4, clientX: 50, clientY: 20 });
+  assert.equal(closeIdle.getAttribute('aria-hidden'), null);
+  assert.equal(closeReady.getAttribute('aria-hidden'), 'true');
   assert.deepEqual(directCloses, ['child1']);
   assert.equal(subagentModalCalled, 0);
   assert.equal(confirmCalled, 0);
+
+  // CSS stacks .gs-idle/.gs-ready in the same 1/1 grid cell so height never shrinks on armed state.
+  const railCss = readAssetSource('wsdashboard', 'dashboard-rail.css');
+  assert.match(railCss, /\.rpop\s+\.spact\s+\.gs\s*\{[^}]*display:\s*grid/);
+  assert.match(railCss, /\.rpop\s+\.spact\s+\.gs\s*>\s*\.gs-idle,\s*\.rpop\s+\.spact\s+\.gs\s*>\s*\.gs-ready\s*\{[^}]*grid-area:\s*1\s*\/\s*1/);
 });

@@ -819,9 +819,12 @@ dialog.tk-dlg .btn:disabled { opacity: .45; cursor: default; }
 .tk .gantt { font-size: 12px; }
 .tk .grow-row.ended .glabel, .tk .grow-row.ended .gbar { opacity: .55; } /* timeline and calendar keep ended items, muted */
 .tk .citem.ended { opacity: .55; }
-.tk .grow-axis, .tk .grow-row { display: grid; grid-template-columns: minmax(180px, 34%) 1fr; gap: 8px; align-items: center; padding: 2px 0; border-top: 1px solid var(--wb-muted); }
-.tk .glabel { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; min-width: 0; padding-left: calc(var(--ind, 0) * 14px); }
-.tk .glabel .tmore { padding-left: 20px; }
+.tk .grow-axis, .tk .grow-row { display: grid; grid-template-columns: minmax(220px, 38%) 1fr; gap: 8px; align-items: center; padding: 2px 0; border-top: 1px solid var(--wb-muted); }
+.tk .glabel { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; padding-left: calc(min(var(--ind, 0), 5) * 14px); }
+.tk .glabel .title { font-weight: 600; color: var(--wb-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; }
+.tk .glabel > .muted { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk .glabel .chip.hid, .tk .glabel .tsub, .tk .glabel .tw, .tk .glabel .sti, .tk .glabel .pri, .tk .glabel .gmore { flex: none; }
+.tk .glabel .tmore { padding-left: 20px; white-space: nowrap; }
 .tk .grow-row.ctx .glabel .title { font-weight: 400; color: var(--wb-muted-fg); }
 .tk .grow-row.ctx .gbar { opacity: .55; }
 /* a parent's summary bar: thin, under its own bar, spanning every dated item below it */

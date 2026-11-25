@@ -89,12 +89,12 @@ var times = 0, tickSets = null;
 function fmtTime() { times++; }
 function pace() {}
 Date.now = function () { return 0; };
-var linkMenus = [], railPops = [];
+var linkMenus = [], railPops = [], tkDrawers = [];
 q = function (sel) {
   if (/time\[data-ms\]/.test(sel)) return [{}];
   if (sel === "#sse") return [indicator];
   if (sel === ".rpop:not([hidden])") return railPops;
-  if (sel === ".rpop:not([hidden]), .lmenu") return railPops.concat(linkMenus);
+  if (sel === ".rpop:not([hidden]), .lmenu, #tkdrawer[open]") return railPops.concat(linkMenus, tkDrawers);
   return [];
 };
 `+mustAsset(t, "shell.js")+dashboardFuncs(t, "syncPageVisibility")+open+connect+show+tick+post+search+frame+`
@@ -182,6 +182,14 @@ check("a hover card keeps the page background", "data-lifted" in rootAttrs, fals
 railPops = [hoverCard, visible];
 check("an interactive popover beside a hover card still lifts the frame", popover(), true);
 railPops = [];
+tkDrawers = [visible];
+check("an open tracker drawer lifts its frame above the shell rail and header", popover(), true);
+check("an open tracker drawer drops the page background while lifted", "data-lifted" in rootAttrs, true);
+tkDrawers = [hidden];
+check("a display-none tracker drawer (paged mode) does not lift the frame", popover(), false);
+tkDrawers = [];
+check("closing the tracker drawer restores the shell layer", popover(), false);
+check("closing the tracker drawer restores the page background", "data-lifted" in rootAttrs, false);
 process.stdout.write(bad.join("\n"));
 })();
 `)

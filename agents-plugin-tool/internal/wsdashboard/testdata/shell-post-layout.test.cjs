@@ -31,7 +31,7 @@ function region() { return header; }
 function $() { return null; }
 function q(sel) {
   if (sel === "dialog[open]") return dialogs;
-  if (sel === ".rpop:not([hidden]), .lmenu") return menus;
+  if (sel === ".rpop:not([hidden]), .lmenu, #tkdrawer[open]") return menus;
   return overlays;
 }
 function shPost(kind, m) { posts.push([kind, m]); }
@@ -53,6 +53,19 @@ assert.equal(run('posts[posts.length - 1][1].popover'), true);
 run('reads = []; menus = [];'); rootObserver.fn([]); run('flush();');
 assert.deepEqual(Array.from(c.reads), []);
 assert.equal(run('root.hasAttribute("data-lifted")'), false);
+// #tkdrawer[open] triggers the existing body attributeFilter:["open","hidden"] observer (no "class" watch) and lifts/lowers cleanly.
+const bodyAttrObserver = c.observers.find(o => o.nodes.some(([n, opts]) => n === c.doc.body && opts && opts.attributeFilter));
+assert.ok(bodyAttrObserver, 'body attribute observer exists');
+assert.deepEqual(Array.from(bodyAttrObserver.nodes.find(([n, opts]) => n === c.doc.body && opts && opts.attributeFilter)[1].attributeFilter), ['open', 'hidden']);
+run(`menus = [{id: "tkdrawer", getClientRects: function () { reads.push("tkdrawer"); return [{}]; }}]; reads = [];`);
+bodyAttrObserver.fn([]); run('flush();');
+assert.deepEqual(Array.from(c.reads), ['tkdrawer']);
+assert.equal(run('attrs["data-lifted"]'), '');
+assert.equal(run('posts[posts.length - 1][1].popover'), true);
+run('reads = []; menus = [];'); bodyAttrObserver.fn([]); run('flush();');
+assert.deepEqual(Array.from(c.reads), []);
+assert.equal(run('root.hasAttribute("data-lifted")'), false);
+assert.equal(run('posts[posts.length - 1][1].popover'), false);
 run(`dialogs = [{matches: function () { return true; }}]; reads = [];`);
 rootObserver.fn([]); run('flush();');
 assert.deepEqual(Array.from(c.reads), ['style'], 'only an open modal needs its backdrop style');

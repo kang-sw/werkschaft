@@ -1,6 +1,6 @@
 /* User Commands v2: always-visible .cbadges trigger button beside #sbadge,
    floating borderless tonal popover above #composer, 3-line inline-editable
-   command cards, and 1.5s hold-to-confirm radial fills (WsHoldConfirm). */
+   command cards, and 1s hold-to-confirm radial fills (WsHoldConfirm). */
 .composer {
   --ucmd-well: color-mix(in srgb, var(--wb-fg) 4.5%, var(--wb-card));
   --ucmd-input: var(--wb-muted);
@@ -539,7 +539,7 @@
   pointer-events: none;
 }
 
-/* Shared 1.5s hold-to-confirm inside-out radial fill for ▶, ↗, × */
+/* Shared 1s hold-to-confirm inside-out radial fill for ▶, ↗, × */
 .ucmd-ibtn.is-hold {
   overflow: hidden;
   user-select: none;
@@ -568,7 +568,7 @@
 .ucmd-ibtn.is-hold.d-hold-active::before {
   transform: scale(1.55);
   opacity: .95;
-  transition: transform var(--d-hold-dur, 1500ms) linear, opacity 120ms ease-out;
+  transition: transform var(--d-hold-dur, 1000ms) linear, opacity 120ms ease-out;
 }
 .ucmd-ibtn.is-hold.d-hold-ready {
   color: var(--ucmd-hold-ink);
@@ -579,7 +579,7 @@
   opacity: 1;
 }
 
-/* ▶ Run Now (1.5s hold — primary blue fill) */
+/* ▶ Run Now (1s hold — primary blue fill) */
 .ucmd-ibtn-run {
   background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
   color: var(--ucmd-primary-ink);
@@ -595,7 +595,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--tm-blue, #5b9bf0) 75%, transparent);
 }
 
-/* ↗ Ask Agent (1.5s hold — calm violet fill) */
+/* ↗ Ask Agent (1s hold — calm violet fill) */
 .ucmd-ibtn-ask {
   background: color-mix(in srgb, var(--ucmd-ask-accent) 14%, transparent);
   color: var(--ucmd-ask-ink);
@@ -625,7 +625,7 @@
   color: var(--ucmd-ok-ink);
 }
 
-/* × Hold-to-Delete (1.5s hold — danger red fill) */
+/* × Hold-to-Delete (1s hold — danger red fill) */
 .ucmd-ibtn-del {
   background: transparent;
   color: var(--ucmd-dim);

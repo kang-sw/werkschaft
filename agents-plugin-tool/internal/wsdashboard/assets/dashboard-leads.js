@@ -979,17 +979,22 @@
     }, adv);
     el.appendChild(mk("p", "spnote", wsT("js.lead.menu.note")));
     var acts = el.appendChild(mk("div", "spacts"));
-    function actBtn(icon, cls, title) {
+    function actBtn(icon, cls, title, hold) {
       var b = acts.appendChild(rpBtn("spact" + cls));
       b.appendChild(typeof icon === "string" ? gIcon(icon) : icon);
       var s = b.appendChild(mk("span", null, title));
-      return { b: b, note: s.appendChild(mk("span", "gs")) };
+      var gs = s.appendChild(mk("span", "gs"));
+      if (!hold) return { b: b, note: gs };
+      var idle = gs.appendChild(mk("span", "gs-idle"));
+      var ready = gs.appendChild(mk("span", "gs-ready", wsT("js.hold.release")));
+      ready.setAttribute("aria-hidden", "true");
+      return { b: b, note: idle, ready: ready };
     }
-    var stop = actBtn("stop", "", wsT("js.lead.stop")), restart = actBtn("reload", "", wsT("js.lead.restart"));
+    var stop = actBtn("stop", "", wsT("js.lead.stop"), true), restart = actBtn("reload", "", wsT("js.lead.restart"));
     // archive hides the session from the rail (no process, mail held until
     // unarchive); on an archived session it is unarchive (back to asleep).
-    var archive = actBtn("archive", "", wsT("js.lead.archive")), archT = archive.b.lastChild.firstChild;
-    var close = actBtn("power", " danger", wsT("js.lead.close"));
+    var archive = actBtn("archive", "", wsT("js.lead.archive"), true), archT = archive.b.lastChild.firstChild;
+    var close = actBtn("power", " danger", wsT("js.lead.close"), true);
     function holdHintNote(base) { return base + " · " + wsT("js.hold.hint"); }
     function canClickStop(st) { return st && st.safe_stop && !stopNeedsHold.has(P.rid); }
     function drawStopNote(st) {
@@ -1117,23 +1122,32 @@
       var st = state();
       return !button.disabled && !leadGone(st) && !!st.can_control && !leadActions.has(P.rid) && (inRow || P.rid === rid) && (!extra || extra(st));
     }
-    function bindHold(button, noteEl, restoreNote, opts) {
+    function bindHold(item, restoreNote, opts) {
+      function showReady(on) {
+        if (on) {
+          item.note.setAttribute("aria-hidden", "true");
+          item.ready.removeAttribute("aria-hidden");
+        } else {
+          item.note.removeAttribute("aria-hidden");
+          item.ready.setAttribute("aria-hidden", "true");
+        }
+      }
       if (window.WsHoldConfirm) {
-        return window.WsHoldConfirm.attach(button, {
+        return window.WsHoldConfirm.attach(item.b, {
           mode: "bar",
           shouldHold: opts.shouldHold,
           canStart: opts.canStart,
-          onReady: function () { noteEl.textContent = wsT("js.hold.release"); },
-          onCancel: function () { restoreNote(state()); if (typeof railRelease === "function") railRelease(); },
-          onConfirm: function (el, held) { opts.onConfirm(held); if (typeof railRelease === "function") railRelease(); }
+          onReady: function () { showReady(true); },
+          onCancel: function () { showReady(false); restoreNote(state()); if (typeof railRelease === "function") railRelease(); },
+          onConfirm: function (el, held) { showReady(false); opts.onConfirm(held); if (typeof railRelease === "function") railRelease(); }
         });
       }
-      button.addEventListener("click", function () {
-        if (opts.canStart(button)) opts.onConfirm();
+      item.b.addEventListener("click", function () {
+        if (opts.canStart(item.b)) opts.onConfirm();
       });
       return { sync: function () {}, cancel: function () {} };
     }
-    var stopHold = bindHold(stop.b, stop.note, drawStopNote, {
+    var stopHold = bindHold(stop, drawStopNote, {
       shouldHold: function () { return !canClickStop(state()); },
       canStart: function () { return canActOn(stop.b, function (st) { return !!st.process; }); },
       onConfirm: function (held) {
@@ -1142,7 +1156,7 @@
         act("stop", held ? {} : { safe_only: true });
       }
     });
-    var archiveHold = bindHold(archive.b, archive.note, drawArchiveNote, {
+    var archiveHold = bindHold(archive, drawArchiveNote, {
       shouldHold: function () { var st = state(); return !(st && st.hidden); },
       canStart: function () { return canActOn(archive.b); },
       onConfirm: function () {
@@ -1152,7 +1166,7 @@
         act(st && st.hidden ? "unhide" : "hide", {});
       }
     });
-    var closeHold = bindHold(close.b, close.note, drawCloseNote, {
+    var closeHold = bindHold(close, drawCloseNote, {
       shouldHold: function () { return true; },
       canStart: function () { return canActOn(close.b); },
       onConfirm: function () {
