@@ -1,6 +1,8 @@
 package wsdashboard
 
 import (
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -73,10 +75,20 @@ type HUDNode struct {
 	Compactions   int    `json:"compactions,omitempty"`
 	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
-	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
+	// their Task, Done, Failed, and OutputTps from .ag-source (keeping tree-rows
+	// shell invariant on caption, tool-count, and rate edits).
 	OwnRow bool `json:"-"`
 	// HoldingShell distinguishes shell-only waits while retaining the holding state.
 	HoldingShell bool `json:"holdingShell,omitempty"`
+	// Done, Failed, and OutputTps are zero-I/O live telemetry from wslive.Agent.
+	// OwnRow nodes omit them in hudJSON and read them from #r-tree's DOM instead.
+	Done      int     `json:"done,omitempty"`
+	Failed    int     `json:"failed,omitempty"`
+	OutputTps float64 `json:"outputTps,omitempty"`
+	// Branch and Dir are zero-I/O session context from lookup.get(rid) and its
+	// already-read snapshot, populated only when different from the viewed session.
+	Branch string `json:"branch,omitempty"`
+	Dir    string `json:"dir,omitempty"`
 }
 
 type hudRawNode struct {
@@ -89,6 +101,8 @@ type hudRawNode struct {
 	// read of its own: a linked row that is not expanded, or whose snapshot
 	// carries none, leaves it nil.
 	usage    *wslive.UsageContext
+	project  string
+	branch   string
 	children []*hudRawNode
 }
 
@@ -107,7 +121,7 @@ func (f *hudFold) add(n *hudRawNode) {
 // hudProjection builds the compact HUD forest from the session's own agents and
 // any live linked delegate subtrees, keeping own-snapshot ParentID placement
 // authoritative on duplicate agent IDs and capping depth at hudMaxDepth.
-func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, peers int, lookup sessionLookup, now time.Time) HUDView {
+func hudProjection(self, leadLabel, leadHarness, selfProject, selfBranch string, agents []wslive.Agent, peers int, lookup sessionLookup, now time.Time) HUDView {
 	out := HUDView{
 		Lead:  leadLabel,
 		Peers: peers,
@@ -135,7 +149,7 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 		mark(r, 1)
 	}
 	var fold hudFold
-	out.Roots = projectHUDNodes(lookup.harnesses, roots, 1, lookup.harnesses.normalize(leadHarness), nil, visible, &fold, now)
+	out.Roots = projectHUDNodes(lookup.harnesses, roots, 1, lookup.harnesses.normalize(leadHarness), selfProject, selfBranch, nil, visible, &fold, now)
 	out.Completed, out.Folded, out.ObservationEnded = fold.completed, fold.roots, fold.observationEnded
 	return out
 }
@@ -172,8 +186,11 @@ func buildHUDRawForest(agents []wslive.Agent, ownRow bool, ownerHarness string, 
 			seenIDs[a.ID] = true
 			node := &hudRawNode{agent: a, ownRow: ownRow, native: hudNative(a, ownerHarness, lookup.harnesses)}
 			if a.ReplyID != "" && !node.native {
-				if s, ok := lookup.get(a.ReplyID); ok && (s.HasBoard || s.Agent) {
-					node.linked = true
+				if s, ok := lookup.get(a.ReplyID); ok {
+					if s.HasBoard || s.Agent {
+						node.linked = true
+					}
+					node.project = s.Project
 				}
 			}
 			node.children = build(children[a.ID])
@@ -196,8 +213,13 @@ func expandHUDLinked(nodes []*hudRawNode, seenIDs, visited map[string]bool, look
 			continue
 		}
 		snap := lookup.snap(rid)
-		if snap != nil && snap.Usage != nil {
-			n.usage = snap.Usage.Context
+		if snap != nil {
+			if snap.Usage != nil {
+				n.usage = snap.Usage.Context
+			}
+			if snap.Repo != nil && snap.Repo.Branch != "" {
+				n.branch = snap.Repo.Branch
+			}
 		}
 		if adapterPresent(snap, now) {
 			attached := buildHUDRawForest(snap.Agents, false, n.agent.Harness, seenIDs, lookup)
@@ -211,7 +233,7 @@ func hudShouldExpandLinked(a wslive.Agent) bool {
 	return a.Status == wslive.StatusRunning || a.Holding || a.Alive
 }
 
-func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, fold *hudFold, now time.Time) []HUDNode {
+func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parentHarness, selfProject, selfBranch string, chain []string, visible map[*hudRawNode]bool, fold *hudFold, now time.Time) []HUDNode {
 	out := []HUDNode{}
 	for _, n := range nodes {
 		if !visible[n] {
@@ -247,6 +269,13 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 			Chain:       slices.Clone(chain),
 			Task:        hudNodeTask(a),
 			OwnRow:      n.ownRow,
+			Done:        max(a.Done, 0),
+			Failed:      max(a.Failed, 0),
+			OutputTps:   float64(an.Rate()),
+			Dir:         hudRelDir(n.project, selfProject),
+		}
+		if n.branch != "" && n.branch != selfBranch {
+			node.Branch = n.branch
 		}
 		node.HoldingShell = a.HoldingShell && state == "holding"
 		node.setContext(a, n.usage)
@@ -261,7 +290,7 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 		}
 		if depth < hudMaxDepth {
 			nextChain := append(slices.Clone(chain), label)
-			kids := projectHUDNodes(set, n.children, depth+1, harness, nextChain, visible, fold, now)
+			kids := projectHUDNodes(set, n.children, depth+1, harness, selfProject, selfBranch, nextChain, visible, fold, now)
 			if len(kids) > 0 {
 				node.Children = kids
 			}
@@ -271,6 +300,24 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 		out = append(out, node)
 	}
 	return out
+}
+
+func hudRelDir(project, selfProject string) string {
+	if project == "" {
+		return ""
+	}
+	clean := filepath.Clean(project)
+	if selfProject != "" {
+		selfClean := filepath.Clean(selfProject)
+		if clean == selfClean || runtime.GOOS == "windows" && strings.EqualFold(clean, selfClean) {
+			return ""
+		}
+	}
+	base := filepath.Base(clean)
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
 }
 
 // setContext fills the Context* fields through the status band's own rule

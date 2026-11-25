@@ -35,8 +35,12 @@
       roots: Array.isArray(raw.roots) ? raw.roots : []
     };
   }
-  function hudCollectOwnTasks(tree) {
-    var tasks = {};
+  function hudParseInt(text) {
+    var m = String(text || "").match(/\d+/);
+    return m ? parseInt(m[0], 10) || 0 : 0;
+  }
+  function hudCollectOwnMeta(tree) {
+    var meta = {};
     q("details[data-key]", tree).forEach(function (d) {
       var k = d.getAttribute("data-key") || "";
       if (k.indexOf("agent-") !== 0) return;
@@ -50,9 +54,16 @@
         var cap = d.querySelector("summary.ahead .acap");
         if (cap) text = cap.textContent.trim();
       }
-      if (text) tasks[id] = text;
+      var done = 0, failed = 0, tps = 0;
+      var okEl = d.querySelector("summary.ahead .am .ok");
+      if (okEl) done = hudParseInt(okEl.textContent);
+      var failEl = d.querySelector("summary.ahead .am .f");
+      if (failEl) failed = hudParseInt(failEl.textContent);
+      var tpsEl = d.querySelector("summary.ahead .astat .atps");
+      if (tpsEl) tps = hudParseInt(tpsEl.textContent);
+      if (text || done > 0 || failed > 0 || tps > 0) meta[id] = { task: text, done: done, failed: failed, outputTps: tps };
     });
-    return tasks;
+    return meta;
   }
   function hudBuildNode() {
     var wrap = doc.createElement("div"); wrap.className = "tree-node";
@@ -65,7 +76,7 @@
     wrap.appendChild(slot);
     return wrap;
   }
-  function hudUpdateNode(wrap, node, ownTasks, moved) {
+  function hudUpdateNode(wrap, node, ownMeta, moved) {
     var slot = wrap.firstElementChild, btn = slot.firstElementChild;
     var ring = btn.querySelector(".hud-ring"), emb = btn.querySelector(".hud-emblem");
     var state = node.state || "idle", harness = node.harness || "", label = node.label || node.id || "";
@@ -101,6 +112,7 @@
       close.setAttribute("aria-label", closeLabel);
       close.setAttribute("title", closeLabel);
     } else if (close) close.remove();
+    var own = ownMeta[node.id] || {};
     var entry = hudRegistry[node.id] || { data: {}, el: btn };
     Object.assign(entry.data, {
         id: node.id || "", replyId: node.replyId || "", linked: !!node.linked, label: label,
@@ -108,7 +120,10 @@
         closeActive: !!node.closeActive, holdingShell: state === "holding" && !!node.holdingShell,
         elapsedMs: Number(node.elapsedMs) || 0, activeSince: Number(node.activeSince) || 0,
         chain: Array.isArray(node.chain) ? node.chain : [],
-        task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
+        task: node.task || own.task || "", overflow: Number(node.overflow) || 0,
+        done: Number(node.done) || own.done || 0, failed: Number(node.failed) || own.failed || 0,
+        outputTps: Number(node.outputTps) || own.outputTps || 0,
+        branch: node.branch || "", dir: node.dir || "",
         native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown,
         contextTokens: Number(node.contextTokens) || 0, contextWindow: Number(node.contextWindow) || 0,
         contextSoft: Number(node.contextSoft) || 0, contextLevel: node.contextLevel || "", contextText: node.contextText || "",
@@ -117,19 +132,19 @@
     entry.el = btn;
     hudRegistry[node.id] = entry;
   }
-  function hudReconcile(parent, nodes, existing, ownTasks, parentId, seen) {
+  function hudReconcile(parent, nodes, existing, ownMeta, parentId, seen) {
     nodes.forEach(function (node, i) {
       var wrap = existing[node.id] || hudBuildNode();
       var moved = parent.children[i] !== wrap;
       if (moved) parent.insertBefore(wrap, parent.children[i] || null);
-      hudUpdateNode(wrap, node, ownTasks, moved);
+      hudUpdateNode(wrap, node, ownMeta, moved);
       seen[node.id] = true;
       if (parentId) hudEdges.push([parentId, node.id]);
       var children = Array.isArray(node.children) ? node.children : [];
       var kidsEl = wrap.querySelector(":scope > .tree-kids");
       if (children.length) {
         if (!kidsEl) { kidsEl = doc.createElement("div"); kidsEl.className = "tree-kids"; wrap.appendChild(kidsEl); }
-        hudReconcile(kidsEl, children, existing, ownTasks, node.id, seen);
+        hudReconcile(kidsEl, children, existing, ownMeta, node.id, seen);
       } else if (kidsEl) kidsEl.remove();
     });
     for (var r = parent.children.length - 1; r >= nodes.length; r--) {
@@ -235,17 +250,23 @@
       else if (hudFoldedHovered) hudShowFoldedTooltip();
     });
   }
-  function hudPositionTooltip(tt, btn) {
+  function hudPositionTooltip(tt, btn, wide) {
     if (!tt.getBoundingClientRect || !btn.getBoundingClientRect) return;
     var anchor = $("convo") || $("agisland");
-    var vw = window.innerWidth || 800, vh = window.innerHeight || 600;
+    var vw = window.innerWidth || 800, vh = window.innerHeight || 600, pad = 8;
     var ar = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    var br = btn.getBoundingClientRect();
     var box = ar && ar.width > 0 && ar.height > 0 ? {
       left: Math.max(0, ar.left), top: Math.max(0, ar.top), right: Math.min(vw, ar.right), bottom: Math.min(vh, ar.bottom)
     } : { left: 0, top: 0, right: vw, bottom: vh };
-    var br = btn.getBoundingClientRect(), tr = tt.getBoundingClientRect(), pad = 8;
-    var left = br.left + br.width / 2 - tr.width / 2;
-    left = Math.max(box.left + pad, Math.min(left, box.right - tr.width - pad));
+    var avail = Math.floor(box.right - box.left - pad * 2);
+    if (avail < 220) avail = Math.max(180, Math.min(252, vw - pad * 2));
+    tt.style.width = wide ? avail + "px" : "";
+    tt.style.maxWidth = avail + "px";
+    var tr = tt.getBoundingClientRect();
+    var w = wide ? avail : tr.width;
+    var left = br.left + br.width / 2 - w / 2;
+    left = Math.max(box.left + pad, Math.min(left, box.right - w - pad));
     var top = br.bottom + 8;
     if (top + tr.height > box.bottom - pad) top = Math.max(box.top + pad, br.top - tr.height - 8);
     tt.style.left = Math.round(left) + "px";
@@ -280,7 +301,7 @@
     hint.textContent = wsT("js.hud.hint.details");
     tt.appendChild(hint);
     tt.hidden = false;
-    hudPositionTooltip(tt, hudFoldedBtn);
+    hudPositionTooltip(tt, hudFoldedBtn, false);
   }
   function hudShowTooltip(id) {
     var tt = $("hud-tooltip"), entry = hudRegistry[id];
@@ -316,18 +337,39 @@
       elSpan.appendChild(doc.createTextNode(typeof dur === "function" ? dur(d.elapsedMs) : String(d.elapsedMs) + "ms"));
     }
     if (d.overflow > 0) elSpan.appendChild(doc.createTextNode(" \u00b7 " + wsT("js.hud.deeper", d.overflow)));
-    meta.appendChild(elSpan); tt.appendChild(meta);
-    var ctx = hudContextRow(d); if (ctx) tt.appendChild(ctx);
-    var cmp = hudCompactionRow(d); if (cmp) tt.appendChild(cmp);
+    meta.appendChild(elSpan);
+    if (d.branch) { var br = doc.createElement("span"); br.className = "tt-chip tt-br"; br.textContent = d.branch; meta.appendChild(br); }
+    if (d.done > 0 || d.failed > 0 || d.outputTps > 0) {
+      var stats = doc.createElement("span"); stats.className = "tt-stats";
+      if (d.done > 0) { var ok = doc.createElement("span"); ok.className = "tt-ok"; ok.textContent = "\u2713 " + d.done; stats.appendChild(ok); }
+      if (d.failed > 0) { var fl = doc.createElement("span"); fl.className = "tt-fail"; fl.textContent = "\u2717 " + d.failed; stats.appendChild(fl); }
+      if (d.outputTps > 0) { var tp = doc.createElement("span"); tp.className = "tt-tps"; tp.textContent = Math.round(d.outputTps) + " t/s"; stats.appendChild(tp); }
+      meta.appendChild(stats);
+    }
+    tt.appendChild(meta);
+    var ctx = hudContextRow(d), cmp = hudCompactionRow(d);
+    if (ctx) {
+      if (cmp) { cmp.classList.add("tt-cmp-inline"); ctx.appendChild(cmp); }
+      tt.appendChild(ctx);
+    } else if (cmp) {
+      tt.appendChild(cmp);
+    }
     var chain = doc.createElement("div"); chain.className = "tt-chain";
     chain.textContent = [hudLead].concat(d.chain, [d.label]).filter(Boolean).join(" \u203a ");
     tt.appendChild(chain);
     if (d.task) { var task = doc.createElement("div"); task.className = "tt-task"; task.textContent = d.task; tt.appendChild(task); }
     var hint = doc.createElement("div"); hint.className = "tt-hint";
-    hint.textContent = d.linked && d.replyId ? wsT("js.hud.hint.link", d.replyId) : wsT("js.hud.hint.details");
+    var hintText = d.linked && d.replyId ? wsT("js.hud.hint.link", d.replyId) : wsT("js.hud.hint.details");
+    if (d.dir) {
+      var hm = doc.createElement("span"); hm.className = "tt-hint-main"; hm.textContent = hintText;
+      var hr = doc.createElement("span"); hr.className = "tt-hint-meta"; hr.textContent = d.dir;
+      hint.appendChild(hm); hint.appendChild(hr);
+    } else {
+      hint.textContent = hintText;
+    }
     tt.appendChild(hint);
     tt.hidden = false;
-    hudPositionTooltip(tt, entry.el);
+    hudPositionTooltip(tt, entry.el, true);
   }
   // hudContextRow is the card's context occupancy row: percent, bar, ws soft
   // tick and "used / window" text when the window is known; the bare token
@@ -528,7 +570,7 @@
     });
   }
   function hudProject(tree, agcompact, agidle, agpop, agOpenFn) {
-    var hud = hudReadData(tree), ownTasks = hudCollectOwnTasks(tree);
+    var hud = hudReadData(tree), ownMeta = hudCollectOwnMeta(tree);
     q(".aclose", agpop).forEach(function (el) { el.hidden = !hudCanControl() || hudClosed(el.getAttribute("data-reply-id")); });
     hudLead = hud.lead || wsT("js.hud.lead");
     hudEdges = [];
@@ -539,7 +581,7 @@
         existing[btn.getAttribute("data-id")] = btn.parentElement.parentElement;
       });
       var seen = Object.create(null);
-      hudReconcile(rootsEl, hud.roots, existing, ownTasks, "", seen);
+      hudReconcile(rootsEl, hud.roots, existing, ownMeta, "", seen);
       Object.keys(hudRegistry).forEach(function (id) { if (!seen[id]) delete hudRegistry[id]; });
       hudUpdateFolded(rootsEl, hud.roots.length > 0 ? hud.folded : 0);
     }
