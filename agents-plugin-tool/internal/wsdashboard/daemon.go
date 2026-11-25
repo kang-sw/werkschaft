@@ -331,9 +331,15 @@ type Daemon struct {
 	// index.
 	acks *ackChecker
 	// lan is LAN mode; tokenMu serializes minting the LAN token and the
-	// localhost secret (persistedSecret).
-	lan     bool
-	tokenMu sync.Mutex
+	// localhost secret (persistedSecret) and guards publishedSecrets.
+	lan              bool
+	tokenMu          sync.Mutex
+	publishedSecrets map[string]publishedSecret
+	// secretRead, secretSharing, and secretRetryWait are nil in production;
+	// tests set them to inject Windows sharing-violation races deterministically.
+	secretRead      func(string) ([]byte, error)
+	secretSharing   func(error) bool
+	secretRetryWait time.Duration
 	// auth holds bounded, ephemeral login codes and the exchange rate window.
 	auth      localhostAuth
 	clipboard clipboardWriter

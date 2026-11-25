@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -299,8 +300,8 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 			if !(closeIdx >= 0 && start2Idx > closeIdx && auditIdx > start2Idx) {
 				t.Fatalf("unexpected rotation ordering %v (want close:1 < start:2 < audit:2)", order)
 			}
-			if retained, err := ReadRecord(runner.opts.Dir, id); err != nil || retained.SessionID != "native-sid-1" {
-				t.Fatalf("durable native binding before replacement reports ID = %q, err=%v", retained.SessionID, err)
+			if retained, err := ReadRecord(runner.opts.Dir, id); err != nil || retained.SessionID != "" || retained.SessionFile != "" {
+				t.Fatalf("durable native binding after committed rotation = (%q, %q), err=%v; want cleared until replacement reports ID", retained.SessionID, retained.SessionFile, err)
 			}
 			procs[1].events <- Event{SessionID: "native-sid-2"}
 			waitWSCompact(t, "replacement's persisted native ID", func() bool {
@@ -1022,6 +1023,7 @@ func TestTwoStageFallbackDashboardSlashCompact(t *testing.T) {
 }
 
 func TestPendingCompactionT0RecordUnknownFieldRoundTrip(t *testing.T) {
+	zeroSends := uint64(0)
 	rec := Record{
 		ReplyID: "lead-pending-compact",
 		WSKey:   "ws-key-pending-compact",
@@ -1029,11 +1031,12 @@ func TestPendingCompactionT0RecordUnknownFieldRoundTrip(t *testing.T) {
 		Backend: BackendClaude,
 		Model:   "sonnet",
 		PendingCompaction: &PendingCompaction{
-			Note:           "## Checkpoint\nimplementing phase 1\n",
-			RestoreBundle:  true,
-			Resume:         true,
-			ResumeInternal: true,
-			Origin:         wslive.TriggerManual,
+			Note:              "## Checkpoint\nimplementing phase 1\n",
+			RestoreBundle:     true,
+			Resume:            true,
+			ResumeInternal:    true,
+			Origin:            wslive.TriggerManual,
+			RotatedAfterSends: &zeroSends,
 		},
 	}
 	raw, err := json.Marshal(rec)
@@ -1060,8 +1063,11 @@ func TestPendingCompactionT0RecordUnknownFieldRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rewritten, &reopened); err != nil {
 		t.Fatal(err)
 	}
-	if reopened.PendingCompaction == nil || *reopened.PendingCompaction != *rec.PendingCompaction {
+	if !reflect.DeepEqual(reopened.PendingCompaction, rec.PendingCompaction) {
 		t.Fatalf("reopened PendingCompaction = %+v, want %+v", reopened.PendingCompaction, rec.PendingCompaction)
+	}
+	if reopened.PendingCompaction.RotatedAfterSends == nil || *reopened.PendingCompaction.RotatedAfterSends != 0 {
+		t.Fatalf("reopened RotatedAfterSends = %v, want pointer to 0", reopened.PendingCompaction.RotatedAfterSends)
 	}
 	if reopened.Model != "opus" {
 		t.Fatalf("reopened Model = %q, want opus", reopened.Model)
@@ -1303,5 +1309,347 @@ func TestWSManagedLeadRotationRealProtocolRestartAndAuditStore(t *testing.T) {
 		eventually(t, "PendingCompaction cleared after continuation send", func() bool {
 			return h.record(id).PendingCompaction == nil
 		})
+	})
+}
+
+func TestWSManagedLeadRotationReplacementHolderDiesBeforeFirstPrompt(t *testing.T) {
+	newFixture := func(t *testing.T) *leadHarness {
+		t.Helper()
+		h := newLeadHarness(t)
+		builtin := BuiltinBackendRegistrations()[BackendClaude]
+		reg := h.opts.Backends[BackendClaude]
+		reg.Catalog = builtin.Catalog
+		reg.NativeCompaction = builtin.NativeCompaction
+		reg.Profiles = builtin.Profiles
+		h.opts.Backends[BackendClaude] = reg
+		h.opts.RestoreBundle = func(_, _, _ string, cause RestoreCause, _ []AgentChild) (string, error) {
+			return "## Hosted Session Restore\n\n(cause=" + string(cause) + ")\n", nil
+		}
+		resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+		if err := resolver.Set(wsconfig.ItemCompactionLeadMode+"."+BackendClaude, wsconfig.CompactionModeWS, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+		NotifyCompactionConfigChanged()
+		h.start()
+		return h
+	}
+
+	t.Run("resume_false_dead_replacement_holder_starts_fresh_session", func(t *testing.T) {
+		h := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+		h.idle(id)
+
+		recBefore := h.record(id)
+		resume := false
+		if res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt")); res.Status != "queued" {
+			t.Fatalf("CompactWithSummary = %+v, want queued", res)
+		}
+		var h2 string
+		eventually(t, "replacement holder started", func() bool {
+			rec := h.record(id)
+			h2 = rec.HolderID
+			return h2 != "" && h2 != h1
+		})
+		h.quiesce(id)
+
+		recAfterRotate := h.record(id)
+		if recAfterRotate.SessionID != "" || recAfterRotate.SessionFile != "" {
+			t.Fatalf("after committed rotation SessionID=%q SessionFile=%q, want both cleared", recAfterRotate.SessionID, recAfterRotate.SessionFile)
+		}
+
+		// Replacement holder dies before any prompt or KindSession arrives.
+		h.runner.Close()
+		h.holders.restart()
+		h.holders.vanish(h2)
+		h.start()
+		wait(t, "rejoin after dead replacement holder", h.runner.rejoined)
+
+		h.send(id, "next prompt after dead holder")
+		var h3 string
+		eventually(t, "third holder started on next prompt", func() bool {
+			rec := h.record(id)
+			h3 = rec.HolderID
+			return h3 != "" && h3 != h1 && h3 != h2 && len(h.userInputs(h3)) == 1
+		})
+		spec := h.holders.spawned(h3)
+		if slices.Contains(spec.Argv, "--resume") || slices.Contains(spec.Argv, "claude-sid-1") {
+			t.Fatalf("relaunch after dead replacement holder resumed old session: argv=%v", spec.Argv)
+		}
+		prompt := h.userInputs(h3)[0]
+		for _, want := range []string{"## Hosted Session Restore", "cause=compaction", "implementing phase 1", "next prompt after dead holder"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "cause=restart") {
+			t.Fatalf("prompt unexpectedly used cause=restart:\n%s", prompt)
+		}
+		eventually(t, "PendingCompaction cleared after delivery", func() bool {
+			return h.record(id).PendingCompaction == nil
+		})
+	})
+
+	t.Run("resume_true_dead_replacement_holder_starts_fresh_session", func(t *testing.T) {
+		h := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+		h.idle(id)
+
+		recBefore := h.record(id)
+		resume := false
+		if res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt")); res.Status != "queued" {
+			t.Fatalf("CompactWithSummary = %+v, want queued", res)
+		}
+		var h2 string
+		eventually(t, "replacement holder started", func() bool {
+			rec := h.record(id)
+			h2 = rec.HolderID
+			return h2 != "" && h2 != h1
+		})
+		h.quiesce(id)
+
+		// Crash right after rotation with Resume=true and replacement holder dead.
+		h.runner.Close()
+		h.holders.restart()
+		h.holders.vanish(h2)
+		rec := h.record(id)
+		if rec.PendingCompaction == nil {
+			t.Fatal("expected PendingCompaction on disk")
+		}
+		rec.PendingCompaction.Resume = true
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			t.Fatal(err)
+		}
+		h.start()
+		wait(t, "rejoin after dead replacement holder", h.runner.rejoined)
+
+		var h3 string
+		eventually(t, "third holder launched for standalone continuation", func() bool {
+			r := h.record(id)
+			h3 = r.HolderID
+			return h3 != "" && h3 != h1 && h3 != h2 && len(h.userInputs(h3)) == 1
+		})
+		spec := h.holders.spawned(h3)
+		if slices.Contains(spec.Argv, "--resume") || slices.Contains(spec.Argv, "claude-sid-1") {
+			t.Fatalf("resume relaunch after dead replacement holder resumed old session: argv=%v", spec.Argv)
+		}
+		prompt := h.userInputs(h3)[0]
+		for _, want := range []string{"## Hosted Session Restore", "cause=compaction", "implementing phase 1", "Continue the work that was pending."} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("continuation prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		eventually(t, "PendingCompaction cleared after continuation send", func() bool {
+			return h.record(id).PendingCompaction == nil
+		})
+	})
+
+	t.Run("resume_true_dead_replacement_holder_enforces_start_process_guards", func(t *testing.T) {
+		h := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+		h.idle(id)
+
+		recBefore := h.record(id)
+		resume := false
+		if res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt")); res.Status != "queued" {
+			t.Fatalf("CompactWithSummary = %+v, want queued", res)
+		}
+		var h2 string
+		eventually(t, "replacement holder started", func() bool {
+			rec := h.record(id)
+			h2 = rec.HolderID
+			return h2 != "" && h2 != h1
+		})
+		h.quiesce(id)
+
+		// Dead replacement holder + profile now selects a different backend:
+		// compactIdle must route through startProcess() and refuse to launch.
+		h.runner.Close()
+		h.holders.restart()
+		h.holders.vanish(h2)
+		rec := h.record(id)
+		rec.Profile = "codex-lead"
+		rec.PendingCompaction.Resume = true
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			t.Fatal(err)
+		}
+		spawnsBefore := h.holders.opCount("spawn:")
+		h.start()
+		wait(t, "rejoin after dead replacement holder with mismatched profile", h.runner.rejoined)
+
+		eventually(t, "startProcess guard cleared PendingCompaction.Resume and recorded error", func() bool {
+			r := h.record(id)
+			st := h.state(id)
+			return r.PendingCompaction != nil && !r.PendingCompaction.Resume && strings.Contains(st.Error, "resume after compaction:")
+		})
+		if got := h.holders.opCount("spawn:"); got != spawnsBefore {
+			t.Fatalf("spawn count = %d, want %d (startProcess must refuse backend mismatch)", got, spawnsBefore)
+		}
+	})
+}
+
+func TestPendingCompactionDowngradeReopenDropsStaleHandoff(t *testing.T) {
+	newFixture := func(t *testing.T) *leadHarness {
+		t.Helper()
+		h := newLeadHarness(t)
+		builtin := BuiltinBackendRegistrations()[BackendClaude]
+		reg := h.opts.Backends[BackendClaude]
+		reg.Catalog = builtin.Catalog
+		reg.NativeCompaction = builtin.NativeCompaction
+		reg.Profiles = builtin.Profiles
+		h.opts.Backends[BackendClaude] = reg
+		h.opts.RestoreBundle = func(_, _, _ string, cause RestoreCause, _ []AgentChild) (string, error) {
+			return "## Hosted Session Restore\n\n(cause=" + string(cause) + ")\n", nil
+		}
+		resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+		if err := resolver.Set(wsconfig.ItemCompactionLeadMode+"."+BackendClaude, wsconfig.CompactionModeWS, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+		NotifyCompactionConfigChanged()
+		h.start()
+		return h
+	}
+
+	for _, tc := range []struct {
+		name          string
+		resume        bool
+		zeroWaterMark bool
+		vanishHolder  bool
+	}{
+		{name: "resume_false_live_holder", resume: false},
+		{name: "resume_true_live_holder", resume: true},
+		{name: "resume_true_dead_holder", resume: true, vanishHolder: true},
+		{name: "zero_sends_watermark", resume: true, zeroWaterMark: true, vanishHolder: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newFixture(t)
+			id, h1 := h.runLead("initial work")
+			h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+			h.idle(id)
+
+			recBefore := h.record(id)
+			resume := false
+			if res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt")); res.Status != "queued" {
+				t.Fatalf("CompactWithSummary = %+v, want queued", res)
+			}
+			var h2 string
+			eventually(t, "replacement holder started", func() bool {
+				rec := h.record(id)
+				h2 = rec.HolderID
+				return h2 != "" && h2 != h1
+			})
+			h.quiesce(id)
+
+			// Simulate 0.52.2 -> 0.52.0 -> 0.52.2: the older daemon preserved
+			// unknown pending_compaction as T0, ran a newer turn (advancing
+			// Sends), and persisted the record without clearing PendingCompaction.
+			h.runner.Close()
+			h.holders.restart()
+			if tc.vanishHolder {
+				h.holders.vanish(h2)
+			}
+			rec := h.record(id)
+			if rec.PendingCompaction == nil || rec.PendingCompaction.RotatedAfterSends == nil {
+				t.Fatalf("expected PendingCompaction with RotatedAfterSends, got %+v", rec.PendingCompaction)
+			}
+			if tc.zeroWaterMark {
+				zero := uint64(0)
+				rec.PendingCompaction.RotatedAfterSends = &zero
+				rec.Sends = 1
+			} else {
+				if *rec.PendingCompaction.RotatedAfterSends != rec.Sends {
+					t.Fatalf("RotatedAfterSends = %d, want %d", *rec.PendingCompaction.RotatedAfterSends, rec.Sends)
+				}
+				rec.Sends++
+			}
+			rec.PendingCompaction.Resume = tc.resume
+			rec.SessionID = "claude-sid-2"
+			if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+				t.Fatal(err)
+			}
+
+			spawnsBefore := h.holders.opCount("spawn:")
+			h.start()
+			wait(t, "rejoin after downgrade-reopen", h.runner.rejoined)
+			h.quiesce(id)
+
+			if after := h.record(id); after.PendingCompaction != nil {
+				t.Fatalf("stale PendingCompaction was not cleared on startup: %+v", after.PendingCompaction)
+			}
+
+			var prompt string
+			if tc.vanishHolder {
+				// With no live holder and stale PendingCompaction dropped,
+				// Resume=true must NOT spawn a holder or fire a continuation.
+				if got := h.holders.opCount("spawn:"); got != spawnsBefore {
+					t.Fatalf("stale Resume=%v spawned holder on startup: spawns=%d want %d", tc.resume, got, spawnsBefore)
+				}
+				h.send(id, "fresh prompt on 0.52.2")
+				var h3 string
+				eventually(t, "fresh prompt delivered on new holder with restart restore", func() bool {
+					r := h.record(id)
+					h3 = r.HolderID
+					return h3 != "" && h3 != h1 && h3 != h2 && len(h.userInputs(h3)) == 1
+				})
+				prompt = h.userInputs(h3)[0]
+				if !strings.Contains(prompt, "fresh prompt on 0.52.2") {
+					t.Fatalf("prompt missing user input:\n%s", prompt)
+				}
+			} else {
+				// With a live holder rejoined, falling through to normal
+				// restart restore delivers the standalone cause=restart bundle
+				// rather than the stale compaction continuation.
+				eventually(t, "standalone restart restore delivered", func() bool {
+					return len(h.userInputs(h2)) == 1
+				})
+				prompt = h.userInputs(h2)[0]
+			}
+			if !strings.Contains(prompt, "## Hosted Session Restore") || !strings.Contains(prompt, "cause=restart") {
+				t.Fatalf("expected normal restart restore after dropping stale PendingCompaction:\n%s", prompt)
+			}
+			for _, forbidden := range []string{"cause=compaction", "implementing phase 1", "Continue the work that was pending."} {
+				if strings.Contains(prompt, forbidden) {
+					t.Fatalf("stale compaction content %q leaked into post-downgrade prompt:\n%s", forbidden, prompt)
+				}
+			}
+		})
+	}
+
+	t.Run("restore_bundle_false_is_honored", func(t *testing.T) {
+		h := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+		h.idle(id)
+
+		h.runner.Close()
+		h.holders.restart()
+		rec := h.record(id)
+		sends := rec.Sends
+		rec.PendingCompaction = &PendingCompaction{
+			Note:              "plain compaction checkpoint without bundle",
+			RestoreBundle:     false,
+			Resume:            false,
+			Origin:            wslive.TriggerManual,
+			RotatedAfterSends: &sends,
+		}
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			t.Fatal(err)
+		}
+
+		h.start()
+		wait(t, "rejoin with RestoreBundle=false", h.runner.rejoined)
+		h.send(id, "user follow-up")
+		eventually(t, "follow-up prompt delivered", func() bool {
+			return len(h.userInputs(h1)) == 2
+		})
+		prompt := h.userInputs(h1)[1]
+		if !strings.Contains(prompt, "plain compaction checkpoint without bundle") || !strings.Contains(prompt, "user follow-up") {
+			t.Fatalf("prompt missing expected handoff/user text:\n%s", prompt)
+		}
+		if strings.Contains(prompt, "## Hosted Session Restore") || strings.Contains(prompt, "cause=compaction") {
+			t.Fatalf("RestoreBundle=false still injected restore bundle:\n%s", prompt)
+		}
 	})
 }

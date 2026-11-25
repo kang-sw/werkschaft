@@ -7,9 +7,11 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -62,7 +64,19 @@ const (
 	// lanCookieMaxAge keeps the cookie across browser restarts; browsers cap
 	// a cookie's lifetime at 400 days.
 	lanCookieMaxAge = 400 * 24 * 60 * 60
+
+	// secretSharingWait bounds retries on Windows ERROR_SHARING_VIOLATION when
+	// reading a secret file whose publisher is outside this daemon's own
+	// publishedSecrets cache (for example, an external rotation or restart).
+	secretSharingWait    = 500 * time.Millisecond
+	secretSharingInitial = 5 * time.Millisecond
+	secretSharingMax     = 50 * time.Millisecond
 )
+
+type publishedSecret struct {
+	secret string
+	info   os.FileInfo
+}
 
 // lanToken returns the LAN access token, minting and persisting one when its
 // file is missing or blank. Every call revalidates the file (persistedSecret),
@@ -82,12 +96,12 @@ func (d *Daemon) lanToken() (string, error) {
 // tokenMu serializes only minting, and the file is read again under it, so
 // concurrent first requests agree on one secret.
 func (d *Daemon) persistedSecret(name string) (string, bool, error) {
-	if secret, err := d.readSecret(name); err != nil || secret != "" {
+	if secret, err := d.readSecretState(name, false); err != nil || secret != "" {
 		return secret, false, err
 	}
 	d.tokenMu.Lock()
 	defer d.tokenMu.Unlock()
-	if secret, err := d.readSecret(name); err != nil || secret != "" {
+	if secret, err := d.readSecretState(name, true); err != nil || secret != "" {
 		return secret, false, err
 	}
 	secret, err := newToken()
@@ -96,6 +110,14 @@ func (d *Daemon) persistedSecret(name string) (string, bool, error) {
 	}
 	if err := writePrivateFile(d.dir, name, []byte(secret+"\n")); err != nil {
 		return "", false, err
+	}
+	if info, err := wsstate.Stat(filepath.Join(d.dir, name)); err == nil {
+		if d.publishedSecrets == nil {
+			d.publishedSecrets = map[string]publishedSecret{}
+		}
+		d.publishedSecrets[name] = publishedSecret{secret: secret, info: info}
+	} else {
+		delete(d.publishedSecrets, name)
 	}
 	return secret, true, nil
 }
@@ -107,17 +129,91 @@ func (d *Daemon) persistedSecret(name string) (string, bool, error) {
 // request after a rotation sees the new secret or its absence. Only a
 // rewrite that keeps mode, size, mtime and file identity (an in-place edit
 // that restores the old stamp, as touch -r does) goes unseen; every writer
-// here replaces the file with a fresh mtime. Any other stat or read failure
-// is returned, and the caller refuses.
+// here replaces the file with a fresh mtime. Transient Windows
+// ERROR_SHARING_VIOLATION errors (concurrent publish or scanner hold) are
+// resolved from the daemon's own published copy when metadata still matches,
+// or retried briefly; any other stat or read failure (including
+// ERROR_ACCESS_DENIED) is returned immediately and the caller refuses.
 func (d *Daemon) readSecret(name string) (string, error) {
-	raw, err := wsstate.ReadFileCached(filepath.Join(d.dir, name))
+	return d.readSecretState(name, false)
+}
+
+func (d *Daemon) readSecretState(name string, tokenMuHeld bool) (string, error) {
+	path := filepath.Join(d.dir, name)
+	readFn := d.secretRead
+	if readFn == nil {
+		readFn = wsstate.ReadFileCached
+	}
+	isSharing := d.secretSharing
+	if isSharing == nil {
+		isSharing = isSecretSharingViolation
+	}
+	raw, err := readFn(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
-	if err != nil {
+	if err == nil {
+		return strings.TrimSpace(string(raw)), nil
+	}
+	if !isSharing(err) {
 		return "", err
 	}
-	return strings.TrimSpace(string(raw)), nil
+	if secret, ok := d.publishedSecretFor(name, path, tokenMuHeld); ok {
+		return secret, nil
+	}
+	wait := d.secretRetryWait
+	if wait <= 0 {
+		wait = secretSharingWait
+	}
+	deadline := time.Now().Add(wait)
+	delay := secretSharingInitial
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return "", err
+		}
+		if delay > rem {
+			delay = rem
+		}
+		time.Sleep(delay)
+		if delay < secretSharingMax {
+			delay = min(delay*2, secretSharingMax)
+		}
+		raw, err = readFn(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		if err == nil {
+			return strings.TrimSpace(string(raw)), nil
+		}
+		if !isSharing(err) {
+			return "", err
+		}
+		if secret, ok := d.publishedSecretFor(name, path, tokenMuHeld); ok {
+			return secret, nil
+		}
+	}
+}
+
+func (d *Daemon) publishedSecretFor(name, path string, tokenMuHeld bool) (string, bool) {
+	if !tokenMuHeld {
+		d.tokenMu.Lock()
+	}
+	pub, ok := d.publishedSecrets[name]
+	if !tokenMuHeld {
+		d.tokenMu.Unlock()
+	}
+	if !ok || pub.info == nil {
+		return "", false
+	}
+	info, err := wsstate.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	if !wsstate.SameFileMetadata(pub.info, info) {
+		return "", false
+	}
+	return pub.secret, true
 }
 
 // accessGuard covers every mux route, including future additions.

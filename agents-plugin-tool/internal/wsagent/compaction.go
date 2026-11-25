@@ -49,12 +49,16 @@ func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
 // PendingCompaction holds a rotated lead's carry-forward compaction handoff
 // until the replacement session delivers its first prompt. Additive top-level
 // member on Record; preserved as unknown by older daemons (T0).
+// RotatedAfterSends records Record.Sends when rotation committed so a
+// downgrade-reopen (where an older daemon ran newer turns without knowing
+// about PendingCompaction) drops the stale handoff instead of replaying it.
 type PendingCompaction struct {
-	Note           string `json:"note"`
-	RestoreBundle  bool   `json:"restore_bundle,omitempty"`
-	Resume         bool   `json:"resume,omitempty"`
-	ResumeInternal bool   `json:"resume_internal,omitempty"`
-	Origin         string `json:"origin,omitempty"`
+	Note              string  `json:"note"`
+	RestoreBundle     bool    `json:"restore_bundle,omitempty"`
+	Resume            bool    `json:"resume,omitempty"`
+	ResumeInternal    bool    `json:"resume_internal,omitempty"`
+	Origin            string  `json:"origin,omitempty"`
+	RotatedAfterSends *uint64 `json:"rotated_after_sends,omitempty"`
 }
 
 func clonePendingCompaction(pc *PendingCompaction) *PendingCompaction {
@@ -62,6 +66,10 @@ func clonePendingCompaction(pc *PendingCompaction) *PendingCompaction {
 		return nil
 	}
 	cp := *pc
+	if pc.RotatedAfterSends != nil {
+		sends := *pc.RotatedAfterSends
+		cp.RotatedAfterSends = &sends
+	}
 	return &cp
 }
 
@@ -80,7 +88,7 @@ func (c *conv) restorePendingCompaction(pc *PendingCompaction) {
 	if pc == nil {
 		return
 	}
-	if c.r != nil && c.r.opts.RestoreBundle != nil {
+	if pc.RestoreBundle && c.r != nil && c.r.opts.RestoreBundle != nil {
 		if pc.Note != "" {
 			c.compactNote = compactionRestoreMarker + pc.Note
 		} else {
@@ -672,18 +680,24 @@ func (c *conv) compactIdle() bool {
 postCompact:
 	if c.compactResume && c.compactNote != "" {
 		if c.proc == nil && c.rec.Lead && c.rec.PendingCompaction != nil {
-			rec := c.record()
-			if rp, err := c.r.resolve(rec.Profile, rec.Root); err != nil {
+			if err := c.startProcess(); err != nil {
+				if errors.Is(err, errDurableStopping) {
+					return true
+				}
 				c.compactResume, c.compactResumeInternal = false, false
 				c.clearPendingCompactionResume()
-				c.setStatus(func() { c.lastErr = "resume after compaction: " + err.Error() })
-				return false
-			} else if err := c.startLead(rec, rp.Definition, false); err != nil {
-				c.compactResume, c.compactResumeInternal = false, false
-				c.clearPendingCompactionResume()
-				c.setStatus(func() { c.lastErr = "resume after compaction: " + err.Error() })
+				var refused *admissionRefusal
+				if errors.As(err, &refused) {
+					c.refuseStart(refused)
+					if dead := c.r.deadBindingRefusal(c.record(), refused.checkout); dead != nil {
+						c.closeDeadAfterRefusal(dead)
+					}
+					return true
+				}
+				c.setStatus(func() { c.lastErr, c.wakeRefused = "resume after compaction: "+err.Error(), false })
 				return false
 			}
+			c.setStatus(func() { c.wakeRefused = false })
 		}
 	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
@@ -837,8 +851,9 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 			return fmt.Errorf("retire session holder: %w", err)
 		}
 
-		// Only the launch uses an empty native binding. Retain the last
-		// known ID on disk until the replacement reports its own.
+		// Launch with an empty native binding and keep the prior on-disk
+		// SessionID/SessionFile intact until both startLead and
+		// commitAuditCheckpoint succeed, so a failed rotation rolls back cleanly.
 		fresh := c.record()
 		fresh.SessionID, fresh.SessionFile = "", ""
 		noteBefore := c.compactNote
@@ -866,7 +881,13 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 			c.compactNote = checkpoint
 		}
 		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
-		c.update(func(rec *Record) { rec.PendingCompaction = clonePendingCompaction(pending) })
+		c.update(func(rec *Record) {
+			sends := rec.Sends
+			saved := clonePendingCompaction(pending)
+			saved.RotatedAfterSends = &sends
+			rec.SessionID, rec.SessionFile = "", ""
+			rec.PendingCompaction = saved
+		})
 		return nil
 	})
 	if err != nil {
