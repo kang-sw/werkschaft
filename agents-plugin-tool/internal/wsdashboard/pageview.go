@@ -428,8 +428,9 @@ type PeerRow struct {
 // ConversationView is the conversation stream.
 type ConversationView struct {
 	// Lang is the language the entries render in (SessionView.Lang).
-	Lang    string
-	Entries []ConvEntry
+	Lang       string
+	MailboxCtx mailboxContext
+	Entries    []ConvEntry
 	// Reply is the lead's reply text still streaming; nil when none.
 	// ReplyHTML is its text rendered as markdown with raw HTML escaped.
 	Reply     *wslive.Reply

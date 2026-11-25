@@ -243,15 +243,35 @@
     var backConsoles = (back.consoles || []).slice(), usedConsole = [];
     function hydrateProseInto(parent, prose) {
       if (!prose) return;
-      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length) {
+      var wsc = window.WsCapsules;
+      var hasMailbox = prose.indexOf("<mailbox ") >= 0 && !!(wsc && typeof wsc.parseMailboxTag === "function");
+      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length && !hasMailbox) {
         appendImageTags(parent, prose);
         return;
       }
-      var last = 0, i = 0;
+      var last = 0, i = 0, mbCtx = null;
       function isWord(ch) { return /[A-Za-z0-9_]/.test(ch); }
       while (i < prose.length) {
         var ch = prose.charAt(i);
-        if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
+        if (ch === "<") {
+          if (prose.slice(i, i + 9) === "<textref " && wsc && typeof wsc.skipTextref === "function") {
+            var tend = wsc.skipTextref(prose, i);
+            if (tend > i) { i = tend; continue; }
+          }
+          if (hasMailbox && prose.slice(i, i + 9) === "<mailbox ") {
+            var mb = wsc.parseMailboxTag(prose, i);
+            if (mb) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              if (!mbCtx) mbCtx = wsc.viewingContext(doc);
+              var mbEl = doc.createElement("span");
+              mbEl.className = "icapsule icapsule-mailbox";
+              mbEl.setAttribute("title", wsc.formatMailboxTooltip(mb.tag));
+              mbEl.textContent = wsc.formatMailboxLabel(mb.tag, mbCtx);
+              parent.appendChild(mbEl);
+              i = mb.end; last = i; continue;
+            }
+          }
+        } else if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
           var am = /^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})/.exec(prose.slice(i));
           if (am) {
             var ci = -1;
