@@ -71,7 +71,11 @@ test('release overlays retain the exact updater version and platform installer c
   assert.equal(windows.mainBinaryName, undefined);
   assert.deepEqual(windows.bundle.targets, ['nsis', 'msi']);
   assert.deepEqual(windows.bundle.windows, {
-    webviewInstallMode: { type: 'embedBootstrapper', silent: true }, nsis: { installMode: 'currentUser' },
+    webviewInstallMode: { type: 'embedBootstrapper', silent: true },
+    nsis: { installMode: 'currentUser', installerHooks: path.resolve(__dirname, '..', 'installer-hooks.nsh') },
     allowDowngrades: true, wix: { version: '0.50.8' },
   });
+  // An upgrade must not keep a daemon/ file the new release dropped.
+  const hooks = fs.readFileSync(windows.bundle.windows.nsis.installerHooks, 'utf8');
+  assert.match(hooks, /!macro NSIS_HOOK_PREINSTALL\s+RMDir \/r "\$INSTDIR\\daemon"\s+!macroend/);
 });

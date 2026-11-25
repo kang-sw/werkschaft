@@ -131,7 +131,7 @@ function releaseConfig({ resources, platform, version, pubkey }) {
   if (mac) config.mainBinaryName = 'Werkschaft';
   else config.bundle.windows = {
     webviewInstallMode: { type: 'embedBootstrapper', silent: true },
-    nsis: { installMode: 'currentUser' }, allowDowngrades: true,
+    nsis: { installMode: 'currentUser', installerHooks: path.join(desktop, 'installer-hooks.nsh') }, allowDowngrades: true,
     // WiX accepts numeric versions. AllowDowngrades in its stock MajorUpgrade
     // also replaces a different product with the same numeric ProductVersion.
     wix: { version: parsed.core.join('.') },
