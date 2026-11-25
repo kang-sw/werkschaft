@@ -1,0 +1,1016 @@
+<style>
+.ws-rec-root {
+  --ws-rec-bg: #141518;
+  --ws-rec-card: #1e2024;
+  --ws-rec-muted: #2b2d32;
+  --ws-rec-hover: #25272c;
+  --ws-rec-topic: #2a2d33;
+  --ws-rec-on-topic: #e4e5e8;
+  --ws-rec-well: #16181c;
+  --ws-rec-fg: #e7e7e4;
+  --ws-rec-muted-fg: #a2a6ad;
+  --ws-rec-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+  --ws-rec-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --ws-rec-primary: #7aa2ff;
+  --ws-rec-primary-fg: #0c1424;
+  --ws-rec-now: #243457;
+  --ws-rec-on-now: #d3defb;
+  --ws-rec-ok: #6cc39a;
+  --ws-rec-warn: #e0a36c;
+  --ws-rec-fail: #f0797e;
+  --ws-rec-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --ws-rec-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  --ws-rec-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --ws-rec-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  box-sizing: border-box;
+  background: var(--ws-rec-bg);
+  color: var(--ws-rec-fg);
+  font-family: var(--ws-rec-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 24px;
+  border-radius: 12px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.ws-rec-root *,
+.ws-rec-root *::before,
+.ws-rec-root *::after {
+  box-sizing: border-box;
+}
+
+.ws-rec-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-rec-mono {
+  font-family: var(--ws-rec-mono);
+}
+
+/* Header */
+.ws-rec-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.ws-rec-hero-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ws-rec-fg);
+}
+
+.ws-rec-hero-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-hero-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ws-rec-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ws-rec-card);
+  color: var(--ws-rec-muted-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  box-shadow: var(--ws-rec-shadow);
+  white-space: nowrap;
+}
+
+.ws-rec-pill-primary {
+  background: color-mix(in srgb, var(--ws-rec-primary) 14%, var(--ws-rec-card));
+  color: var(--ws-rec-primary);
+}
+
+.ws-rec-pill-ok {
+  background: color-mix(in srgb, var(--ws-rec-ok) 15%, var(--ws-rec-card));
+  color: var(--ws-rec-ok);
+}
+
+.ws-rec-pill-warn {
+  background: color-mix(in srgb, var(--ws-rec-warn) 16%, var(--ws-rec-card));
+  color: var(--ws-rec-warn);
+}
+
+.ws-rec-pill-fail {
+  background: color-mix(in srgb, var(--ws-rec-fail) 16%, var(--ws-rec-card));
+  color: var(--ws-rec-fail);
+}
+
+.ws-rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: none;
+}
+
+/* Section wrapper */
+.ws-rec-section {
+  margin-bottom: 28px;
+}
+
+.ws-rec-section:last-child {
+  margin-bottom: 0;
+}
+
+.ws-rec-sec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.ws-rec-sec-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ws-rec-primary);
+  margin-right: 8px;
+}
+
+.ws-rec-sec-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ws-rec-fg);
+}
+
+.ws-rec-sec-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ws-rec-muted-fg);
+}
+
+/* Tauri Window Mock */
+.ws-rec-win {
+  background: var(--ws-rec-card);
+  border-radius: 12px;
+  box-shadow: var(--ws-rec-shadow-hi);
+  overflow: hidden;
+}
+
+.ws-rec-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  background: var(--ws-rec-topic);
+  color: var(--ws-rec-on-topic);
+  font-size: 12.5px;
+}
+
+.ws-rec-strip-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ws-rec-app-glyph {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--ws-rec-now);
+  color: var(--ws-rec-on-now);
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.ws-rec-strip-menu {
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ws-rec-muted-fg);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ws-rec-strip-menu-active {
+  background: var(--ws-rec-wash);
+  color: var(--ws-rec-fg);
+}
+
+.ws-rec-strip-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ws-rec-on-topic);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-rec-strip-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.ws-rec-win-btn {
+  width: 28px;
+  height: 24px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ws-rec-muted-fg);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ws-rec-win-body {
+  padding: 24px 28px 26px;
+  background: var(--ws-rec-bg);
+}
+
+.ws-rec-recovery-stack {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Cards */
+.ws-rec-card {
+  background: var(--ws-rec-card);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: var(--ws-rec-shadow);
+}
+
+.ws-rec-subcard {
+  background: var(--ws-rec-card);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: var(--ws-rec-shadow);
+}
+
+.ws-rec-update-card {
+  background: color-mix(in srgb, var(--ws-rec-primary) 9%, var(--ws-rec-card));
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: var(--ws-rec-shadow);
+}
+
+.ws-rec-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ws-rec-h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ws-rec-fg);
+  line-height: 1.3;
+}
+
+.ws-rec-h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ws-rec-fg);
+}
+
+.ws-rec-copy {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ws-rec-muted-fg);
+}
+
+/* Metadata Grid in Recessed Well */
+.ws-rec-meta-well {
+  margin-top: 14px;
+  background: var(--ws-rec-well);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+
+.ws-rec-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-rec-k {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-v {
+  font-size: 12.5px;
+  color: var(--ws-rec-fg);
+  word-break: break-word;
+}
+
+.ws-rec-code {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--ws-rec-muted);
+  color: var(--ws-rec-fg);
+  font-family: var(--ws-rec-mono);
+  font-size: 12px;
+}
+
+.ws-rec-code-fail {
+  background: color-mix(in srgb, var(--ws-rec-fail) 16%, var(--ws-rec-well));
+  color: var(--ws-rec-fail);
+}
+
+.ws-rec-code-warn {
+  background: color-mix(in srgb, var(--ws-rec-warn) 16%, var(--ws-rec-well));
+  color: var(--ws-rec-warn);
+}
+
+/* Buttons */
+.ws-rec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ws-rec-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  font-family: var(--ws-rec-sans);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ws-rec-btn-primary {
+  background: var(--ws-rec-primary);
+  color: var(--ws-rec-primary-fg);
+  box-shadow: var(--ws-rec-shadow);
+}
+
+.ws-rec-btn-ok {
+  background: color-mix(in srgb, var(--ws-rec-ok) 20%, var(--ws-rec-card));
+  color: var(--ws-rec-ok);
+}
+
+.ws-rec-btn-tonal {
+  background: var(--ws-rec-muted);
+  color: var(--ws-rec-fg);
+}
+
+.ws-rec-btn-ghost {
+  background: transparent;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ws-rec-state-tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ws-rec-muted-fg);
+  margin-left: 4px;
+}
+
+.ws-rec-path-hint {
+  font-family: var(--ws-rec-mono);
+  font-size: 11.5px;
+  color: var(--ws-rec-muted-fg);
+  margin-left: auto;
+}
+
+/* Static Progress Sub-row */
+.ws-rec-progress-box {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--ws-rec-well);
+}
+
+.ws-rec-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+
+.ws-rec-progress-label {
+  color: var(--ws-rec-fg);
+  font-weight: 600;
+}
+
+.ws-rec-progress-meta {
+  color: var(--ws-rec-muted-fg);
+  font-size: 11.5px;
+}
+
+.ws-rec-progress-track {
+  height: 6px;
+  width: 100%;
+  border-radius: 999px;
+  background: var(--ws-rec-muted);
+  overflow: hidden;
+}
+
+.ws-rec-progress-fill {
+  height: 100%;
+  width: 68%;
+  border-radius: 999px;
+  background: var(--ws-rec-primary);
+}
+
+/* Pure-HTML Collapsible Diagnostics */
+.ws-rec-details {
+  background: var(--ws-rec-card);
+  border-radius: 10px;
+  box-shadow: var(--ws-rec-shadow);
+  overflow: hidden;
+}
+
+.ws-rec-details-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ws-rec-fg);
+  background: var(--ws-rec-card);
+}
+
+.ws-rec-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ws-rec-details-summary:hover {
+  background: var(--ws-rec-hover);
+}
+
+.ws-rec-details-body {
+  padding: 0 16px 14px;
+}
+
+.ws-rec-log-well {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--ws-rec-well);
+  font-family: var(--ws-rec-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ws-rec-muted-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ws-rec-log-err {
+  color: var(--ws-rec-fail);
+}
+
+.ws-rec-log-ok {
+  color: var(--ws-rec-ok);
+}
+
+/* Section 2 Blocked Accent Strip */
+.ws-rec-blocked-callout {
+  background: color-mix(in srgb, var(--ws-rec-warn) 10%, var(--ws-rec-card));
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.ws-rec-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--ws-rec-well);
+  font-size: 12px;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-inline-meta strong {
+  color: var(--ws-rec-fg);
+  font-weight: 600;
+}
+
+/* Section 3 Layout */
+.ws-rec-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* Toast Banner */
+.ws-rec-dash-stage {
+  background: var(--ws-rec-bg);
+  padding: 18px 20px 20px;
+}
+
+.ws-rec-toast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ws-rec-warn) 13%, var(--ws-rec-card));
+  box-shadow: var(--ws-rec-shadow-hi);
+}
+
+.ws-rec-toast-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 360px;
+}
+
+.ws-rec-toast-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ws-rec-warn) 22%, var(--ws-rec-card));
+  color: var(--ws-rec-warn);
+  font-size: 12px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-top: 1px;
+}
+
+.ws-rec-toast-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ws-rec-fg);
+  margin: 0 0 2px;
+}
+
+.ws-rec-toast-desc {
+  font-size: 12.5px;
+  color: var(--ws-rec-muted-fg);
+  margin: 0;
+}
+
+.ws-rec-toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.ws-rec-dash-ghost {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  opacity: 0.55;
+}
+
+.ws-rec-dash-block {
+  height: 44px;
+  border-radius: 10px;
+  background: var(--ws-rec-card);
+}
+
+/* Floating Popover / Native Menus */
+.ws-rec-menu-card {
+  background: var(--ws-rec-card);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  box-shadow: var(--ws-rec-shadow);
+}
+
+.ws-rec-menu-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ws-rec-menu-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-popover {
+  background: var(--ws-rec-card);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: inset 0 0 0 1px var(--ws-rec-line), var(--ws-rec-shadow-hi);
+}
+
+.ws-rec-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ws-rec-fg);
+  background: transparent;
+}
+
+.ws-rec-menu-row-focus {
+  background: color-mix(in srgb, var(--ws-rec-primary) 13%, var(--ws-rec-card));
+  color: var(--ws-rec-fg);
+  font-weight: 600;
+}
+
+.ws-rec-menu-row-ready {
+  background: color-mix(in srgb, var(--ws-rec-ok) 12%, var(--ws-rec-card));
+  color: var(--ws-rec-ok);
+  font-weight: 600;
+}
+
+.ws-rec-menu-accel {
+  font-family: var(--ws-rec-mono);
+  font-size: 11px;
+  color: var(--ws-rec-muted-fg);
+}
+
+.ws-rec-menu-sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--ws-rec-line);
+}
+
+.ws-rec-menu-subnote {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--ws-rec-muted-fg);
+}
+
+@media (max-width: 760px) {
+  .ws-rec-meta-well,
+  .ws-rec-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .ws-rec-path-hint {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+</style>
+
+<div class="ws-rec-root">
+  <!-- Header -->
+  <div class="ws-rec-hero">
+    <div>
+      <h1 class="ws-rec-hero-title">Werkschaft Tauri 데몬 자가복구(Self-Recovery) UI 목업</h1>
+      <p class="ws-rec-hero-sub">오프라인 복구 화면, Cross-Minor Floor 차단, LKG 안전 폴백 배너 및 네이티브 메뉴·트레이 진입점</p>
+    </div>
+    <div class="ws-rec-hero-chips">
+      <span class="ws-rec-pill ws-rec-pill-primary">Tauri Desktop Shell</span>
+      <span class="ws-rec-pill">4 Settled Surfaces</span>
+      <span class="ws-rec-pill ws-rec-num">v0.52.x / v0.53.x</span>
+    </div>
+  </div>
+
+  <!-- Section 1: Offline Recovery View -->
+  <section class="ws-rec-section">
+    <div class="ws-rec-sec-head">
+      <h2 class="ws-rec-sec-title">
+        <span class="ws-rec-sec-kicker">Section 1</span>오프라인 복구 화면 (<span class="ws-rec-mono">ui/index.html</span>) — 번들 패키지 오류 + 핫픽스 준비 완료
+      </h2>
+      <p class="ws-rec-sec-note">번들 데몬 검증 실패 &amp; 사용 가능한 LKG 없음 · 셸 자체 업데이터 카드로 즉시 복구</p>
+    </div>
+
+    <div class="ws-rec-win">
+      <!-- Frameless Tauri Dark Top Strip -->
+      <div class="ws-rec-strip">
+        <div class="ws-rec-strip-left">
+          <span class="ws-rec-app-glyph">W</span>
+          <span class="ws-rec-strip-menu ws-rec-strip-menu-active">Connection</span>
+          <span class="ws-rec-strip-menu">View</span>
+          <span class="ws-rec-strip-title">Werkschaft — Recovery</span>
+        </div>
+        <div class="ws-rec-strip-controls" aria-hidden="true">
+          <span class="ws-rec-win-btn">&#8722;</span>
+          <span class="ws-rec-win-btn">&#9633;</span>
+          <span class="ws-rec-win-btn">&#10005;</span>
+        </div>
+      </div>
+
+      <div class="ws-rec-win-body">
+        <div class="ws-rec-recovery-stack">
+          <!-- Error Summary Card -->
+          <div class="ws-rec-card">
+            <div class="ws-rec-card-top">
+              <span class="ws-rec-pill ws-rec-pill-fail"><span class="ws-rec-dot"></span>Daemon Package Error</span>
+              <span class="ws-rec-pill ws-rec-num">Bundled v0.52.0 · LKG None</span>
+            </div>
+            <h3 class="ws-rec-h2">Werkschaft could not start the bundled daemon</h3>
+            <p class="ws-rec-copy">Package integrity validation rejected the bundled runtime before launch, and no previous Last-Known-Good (LKG) stage is available on this machine.</p>
+
+            <div class="ws-rec-meta-well">
+              <div class="ws-rec-kv">
+                <span class="ws-rec-k">Failure Variant</span>
+                <span class="ws-rec-v"><span class="ws-rec-code ws-rec-code-fail">DaemonPackageError::UnexpectedFile</span></span>
+              </div>
+              <div class="ws-rec-kv">
+                <span class="ws-rec-k">Offending Path</span>
+                <span class="ws-rec-v"><span class="ws-rec-code">rsrc/prompts/legacy-guide.md</span></span>
+              </div>
+              <div class="ws-rec-kv">
+                <span class="ws-rec-k">Bundled Version</span>
+                <span class="ws-rec-v ws-rec-num">v0.52.0 <span class="ws-rec-copy">(unlisted in rsrc/manifest.json)</span></span>
+              </div>
+              <div class="ws-rec-kv">
+                <span class="ws-rec-k">LKG Fallback</span>
+                <span class="ws-rec-v">None available</span>
+              </div>
+            </div>
+
+            <!-- Action Row -->
+            <div class="ws-rec-actions">
+              <span class="ws-rec-btn ws-rec-btn-tonal">Retry</span>
+              <span class="ws-rec-btn ws-rec-btn-tonal">Copy Diagnostics</span>
+              <span class="ws-rec-btn ws-rec-btn-tonal">Open Logs</span>
+              <span class="ws-rec-path-hint">&lt;app_local_data_dir&gt;/logs/shell.log</span>
+            </div>
+          </div>
+
+          <!-- Self-Update Recovery Card -->
+          <div class="ws-rec-update-card">
+            <div class="ws-rec-card-top">
+              <span class="ws-rec-pill ws-rec-pill-ok"><span class="ws-rec-dot"></span>Hotfix Available · v0.52.1</span>
+              <span class="ws-rec-pill ws-rec-pill-primary">Self-Update Recovery</span>
+            </div>
+            <h3 class="ws-rec-h3">Update to Werkschaft v0.52.1 to recover automatically</h3>
+            <p class="ws-rec-copy">A signed shell hotfix is ready on the update channel. Installing it replaces the broken bundled package without losing workspace state.</p>
+
+            <div class="ws-rec-actions">
+              <span class="ws-rec-btn ws-rec-btn-primary">Download &amp; Install</span>
+              <span class="ws-rec-btn ws-rec-btn-ok">Restart to Update (v0.52.1)</span>
+              <span class="ws-rec-state-tag">available → ready</span>
+            </div>
+
+            <!-- Static Downloading Progress Preview (zero animations) -->
+            <div class="ws-rec-progress-box">
+              <div class="ws-rec-progress-head">
+                <span class="ws-rec-progress-label">Downloading v0.52.1… <span class="ws-rec-state-tag">(in-progress state preview)</span></span>
+                <span class="ws-rec-progress-meta ws-rec-num">68% · 14.2 / 20.8 MB</span>
+              </div>
+              <div class="ws-rec-progress-track">
+                <div class="ws-rec-progress-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pure-HTML Collapsible Diagnostic Preview -->
+          <details class="ws-rec-details" open>
+            <summary class="ws-rec-details-summary">
+              <span>Diagnostic Preview — <span class="ws-rec-mono ws-rec-num">daemon-start</span> exit code <span class="ws-rec-num">78</span></span>
+              <span class="ws-rec-pill">Toggle Details</span>
+            </summary>
+            <div class="ws-rec-details-body">
+              <pre class="ws-rec-log-well"><span class="ws-rec-log-ok">log_path:</span> &lt;app_local_data_dir&gt;/logs/shell.log
+<span class="ws-rec-log-ok">stage:</span>    daemon-start (exit_code=78, bundled=0.52.0, lkg=none)
+<span class="ws-rec-log-err">[2026-11-25T12:41:08Z] ERROR daemon_package::validate: UnexpectedFile { tree: "rsrc", path: "rsrc/prompts/legacy-guide.md" }</span>
+[2026-11-25T12:41:08Z] WARN  daemon::lkg: no validated LKG candidate found in daemon-stages
+[2026-11-25T12:41:08Z] INFO  shell::recovery: entering offline recovery view (auth_token=[REDACTED])</pre>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 2: Cross-Minor Floor Blocked State -->
+  <section class="ws-rec-section">
+    <div class="ws-rec-sec-head">
+      <h2 class="ws-rec-sec-title">
+        <span class="ws-rec-sec-kicker">Section 2</span>Cross-Minor Floor 차단 상태 (<span class="ws-rec-mono">(1590)=a</span>)
+      </h2>
+      <p class="ws-rec-sec-note"><span class="ws-rec-mono">daemon-minor-floor = 0.53</span> 기록 후 번들 <span class="ws-rec-mono">v0.53.0</span> 실패 시 <span class="ws-rec-mono">0.52.x</span> LKG 자동 롤백 차단</p>
+    </div>
+
+    <div class="ws-rec-win">
+      <div class="ws-rec-strip">
+        <div class="ws-rec-strip-left">
+          <span class="ws-rec-app-glyph">W</span>
+          <span class="ws-rec-strip-menu">Connection</span>
+          <span class="ws-rec-strip-menu">View</span>
+          <span class="ws-rec-strip-title">Werkschaft — Recovery (Fallback Blocked)</span>
+        </div>
+        <div class="ws-rec-strip-controls" aria-hidden="true">
+          <span class="ws-rec-win-btn">&#8722;</span>
+          <span class="ws-rec-win-btn">&#9633;</span>
+          <span class="ws-rec-win-btn">&#10005;</span>
+        </div>
+      </div>
+
+      <div class="ws-rec-win-body">
+        <div class="ws-rec-recovery-stack">
+          <div class="ws-rec-card">
+            <div class="ws-rec-blocked-callout">
+              <div class="ws-rec-card-top">
+                <span class="ws-rec-pill ws-rec-pill-warn"><span class="ws-rec-dot"></span>Automatic Fallback Blocked</span>
+                <span class="ws-rec-pill ws-rec-num">daemon-minor-floor: 0.53</span>
+              </div>
+              <h3 class="ws-rec-h2">Cannot fall back to v0.52.x to protect data compatibility</h3>
+              <p class="ws-rec-copy">Bundled <span class="ws-rec-mono ws-rec-num">v0.53.0</span> failed validation, and this profile has already advanced to minor floor <span class="ws-rec-mono ws-rec-num">0.53</span>. Rolling back to LKG <span class="ws-rec-mono ws-rec-num">v0.52.1</span> is blocked to prevent state corruption.</p>
+              <div class="ws-rec-inline-meta ws-rec-num">
+                <span>Bundled: <strong>v0.53.0</strong> (failed)</span>
+                <span>Minor floor: <strong>0.53</strong></span>
+                <span>LKG candidate: <span class="ws-rec-code ws-rec-code-warn">v0.52.1 (blocked · cross-minor)</span></span>
+              </div>
+            </div>
+
+            <!-- Live Self-Update Card for 0.53.1 Hotfix -->
+            <div class="ws-rec-update-card">
+              <div class="ws-rec-card-top">
+                <span class="ws-rec-pill ws-rec-pill-ok"><span class="ws-rec-dot"></span>Compatible Hotfix Ready · v0.53.1</span>
+                <span class="ws-rec-pill ws-rec-pill-primary">Recommended Recovery</span>
+              </div>
+              <h3 class="ws-rec-h3">Install Werkschaft v0.53.1</h3>
+              <p class="ws-rec-copy">Install the <span class="ws-rec-mono ws-rec-num">0.53.x</span> hotfix directly from this screen, or inspect <span class="ws-rec-mono">shell.log</span> for full startup diagnostics.</p>
+              <div class="ws-rec-actions">
+                <span class="ws-rec-btn ws-rec-btn-primary">Download &amp; Install</span>
+                <span class="ws-rec-btn ws-rec-btn-ok">Restart to Update (v0.53.1)</span>
+                <span class="ws-rec-btn ws-rec-btn-tonal">Open Logs</span>
+                <span class="ws-rec-btn ws-rec-btn-tonal">Copy Diagnostics</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 3: LKG Fallback Active Banner + Native Menu / Tray Entry Points -->
+  <section class="ws-rec-section">
+    <div class="ws-rec-sec-head">
+      <h2 class="ws-rec-sec-title">
+        <span class="ws-rec-sec-kicker">Section 3</span>LKG 폴백 활성 배너 + 네이티브 메뉴 / 트레이 진입점 (<span class="ws-rec-mono">(1585)=a</span>)
+      </h2>
+      <p class="ws-rec-sec-note">동일 minor LKG로 정상 기동 유지 · 경고 토스트(<span class="ws-rec-mono">WsToast.show</span>) 및 네이티브 업데이트 메뉴 노출</p>
+    </div>
+
+    <!-- 3A: Sticky Warning Toast + Window Title Indicator -->
+    <div class="ws-rec-win">
+      <div class="ws-rec-strip">
+        <div class="ws-rec-strip-left">
+          <span class="ws-rec-app-glyph">W</span>
+          <span class="ws-rec-strip-menu">Connection</span>
+          <span class="ws-rec-strip-menu">View</span>
+          <span class="ws-rec-strip-title ws-rec-num">Werkschaft — Safe Fallback v0.52.0</span>
+          <span class="ws-rec-pill ws-rec-pill-warn">Safe Fallback</span>
+        </div>
+        <div class="ws-rec-strip-controls" aria-hidden="true">
+          <span class="ws-rec-win-btn">&#8722;</span>
+          <span class="ws-rec-win-btn">&#9633;</span>
+          <span class="ws-rec-win-btn">&#10005;</span>
+        </div>
+      </div>
+
+      <div class="ws-rec-dash-stage">
+        <div class="ws-rec-toast">
+          <div class="ws-rec-toast-main">
+            <span class="ws-rec-toast-badge" aria-hidden="true">!</span>
+            <div>
+              <p class="ws-rec-toast-title ws-rec-num">Running on Safe Fallback v0.52.0</p>
+              <p class="ws-rec-toast-desc">The bundled runtime failed startup, so Werkschaft recovered using the last known good version while checking for a hotfix in the background.</p>
+            </div>
+          </div>
+          <div class="ws-rec-toast-actions">
+            <span class="ws-rec-btn ws-rec-btn-sm ws-rec-btn-primary">Check for Updates</span>
+            <span class="ws-rec-btn ws-rec-btn-sm ws-rec-btn-tonal">Open Logs</span>
+            <span class="ws-rec-btn ws-rec-btn-sm ws-rec-btn-ghost">Dismiss</span>
+          </div>
+        </div>
+        <div class="ws-rec-dash-ghost" aria-hidden="true">
+          <div class="ws-rec-dash-block"></div>
+          <div class="ws-rec-dash-block"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3B: Side-by-Side Native Connection Submenu & System Tray Menu -->
+    <div class="ws-rec-grid-2">
+      <!-- Connection Submenu -->
+      <div class="ws-rec-menu-card">
+        <div class="ws-rec-menu-caption">
+          <span class="ws-rec-menu-label">Native Menu · Connection</span>
+          <span class="ws-rec-pill">main.rs</span>
+        </div>
+        <div class="ws-rec-popover">
+          <div class="ws-rec-menu-row">
+            <span>Retry</span>
+            <span class="ws-rec-menu-accel">Ctrl+R</span>
+          </div>
+          <div class="ws-rec-menu-row">
+            <span>Replace daemon (same core)</span>
+          </div>
+          <div class="ws-rec-menu-row">
+            <span>Copy Browser Login Link to Clipboard</span>
+          </div>
+          <div class="ws-rec-menu-sep"></div>
+          <div class="ws-rec-menu-row ws-rec-menu-row-focus">
+            <span>Check for Updates…</span>
+            <span class="ws-rec-menu-accel">idle / checking</span>
+          </div>
+          <div class="ws-rec-menu-row ws-rec-menu-row-ready">
+            <span class="ws-rec-num">Restart to Update (v0.52.1)</span>
+            <span class="ws-rec-menu-accel">when ready</span>
+          </div>
+        </div>
+        <p class="ws-rec-menu-subnote">핫픽스 다운로드 완료 시 <span class="ws-rec-mono">Check for Updates…</span> 항목이 <span class="ws-rec-mono ws-rec-num">Restart to Update (v0.52.1)</span>로 전환</p>
+      </div>
+
+      <!-- System Tray Menu -->
+      <div class="ws-rec-menu-card">
+        <div class="ws-rec-menu-caption">
+          <span class="ws-rec-menu-label">System Tray Menu</span>
+          <span class="ws-rec-pill">tray.rs</span>
+        </div>
+        <div class="ws-rec-popover">
+          <div class="ws-rec-menu-row">
+            <span>Open Werkschaft</span>
+          </div>
+          <div class="ws-rec-menu-row ws-rec-menu-row-focus">
+            <span>Check for Updates…</span>
+            <span class="ws-rec-menu-accel ws-rec-num">v0.52.1</span>
+          </div>
+          <div class="ws-rec-menu-sep"></div>
+          <div class="ws-rec-menu-row">
+            <span>Hide</span>
+          </div>
+          <div class="ws-rec-menu-row">
+            <span>Quit</span>
+          </div>
+        </div>
+        <p class="ws-rec-menu-subnote">트레이 라벨 정책 준수: 앱 이름과 동작만 노출하며 내부 용어 미사용</p>
+      </div>
+    </div>
+  </section>
+</div>
