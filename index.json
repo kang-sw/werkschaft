@@ -227,7 +227,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T12:52:32Z"
+        "touched_at": "2026-11-25T12:54:32Z",
+        "impl": {
+          "branch": "impl/develop/lard-rind-crave"
+        }
       }
     },
     "261115-feat-ws-permission-profile": {
