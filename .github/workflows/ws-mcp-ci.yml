@@ -37,18 +37,33 @@ jobs:
       # run, which is the one this workflow exists to catch early.
       fail-fast: false
       matrix:
-        # ubuntu runs the default group. On Windows internal/mcp alone
-        # took ~15 min serially (864 s, run 36662026067; git-process heavy), so
-        # the Windows leg splits it across parallel jobs; `rest` plus every
-        # `mcp I 4` covers exactly the tests of `all`. Add the opt-in long job
-        # for full coverage (agents-plugin-tool/scripts/ci-test-shard.sh).
+        # Both Ubuntu and Windows shard the default group so no single leg
+        # approaches the 25 min timeout:
+        #   - internal/wsdashboard splits 2-way on both OSes (~15 min on Windows,
+        #     ~10 min on Ubuntu).
+        #   - internal/mcp runs as one leg on Ubuntu (~5.5 min) and splits 4-way
+        #     on Windows (~15 min serially; git-process heavy).
+        #   - remaining default packages (`rest`) split 3-way with heavy-package
+        #     pins plus deterministic mod assignment so every future package
+        #     automatically lands in exactly one `rest-*` shard.
+        # On each OS, the union of its shards covers exactly `all`. Add the
+        # opt-in long job for full coverage (agents-plugin-tool/scripts/ci-test-shard.sh).
         include:
-          - { os: ubuntu-latest, shard: all, args: "all" }
-          - { os: windows-latest, shard: rest, args: "rest" }
+          - { os: ubuntu-latest, shard: mcp, args: "mcp" }
+          - { os: ubuntu-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }
+          - { os: ubuntu-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }
+          - { os: ubuntu-latest, shard: rest-0, args: "rest 0 3" }
+          - { os: ubuntu-latest, shard: rest-1, args: "rest 1 3" }
+          - { os: ubuntu-latest, shard: rest-2, args: "rest 2 3" }
           - { os: windows-latest, shard: mcp-0, args: "mcp 0 4" }
           - { os: windows-latest, shard: mcp-1, args: "mcp 1 4" }
           - { os: windows-latest, shard: mcp-2, args: "mcp 2 4" }
           - { os: windows-latest, shard: mcp-3, args: "mcp 3 4" }
+          - { os: windows-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }
+          - { os: windows-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }
+          - { os: windows-latest, shard: rest-0, args: "rest 0 3" }
+          - { os: windows-latest, shard: rest-1, args: "rest 1 3" }
+          - { os: windows-latest, shard: rest-2, args: "rest 2 3" }
     runs-on: ${{ matrix.os }}
     # The Windows smoke job in the release workflow once hung to ~46 min
     # (v0.37.2); a cap turns a hang here into a fast, legible failure.
