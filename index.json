@@ -495,7 +495,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T12:48:18Z"
+        "touched_at": "2026-11-25T12:50:37Z",
+        "impl": {
+          "branch": "impl/develop/vista-fox-amigo"
+        }
       }
     },
     "261125-feat-ws-dashboard-composer-indent-inline-markdown": {
