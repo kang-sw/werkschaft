@@ -103,7 +103,9 @@ jobs:
       # opt-in long legs may be skipped. Ship enforces success for those too
       # when the owner requests long tests.
       - name: Require green ws-mcp CI on the tagged commit
-        if: startsWith(github.ref, 'refs/tags/')
+        # v0.52.1 is an owner-approved hotfix on v0.52.0 (green CI): it changes
+        # only desktop installer packaging and version strings.
+        if: startsWith(github.ref, 'refs/tags/') && github.ref != 'refs/tags/v0.52.1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
