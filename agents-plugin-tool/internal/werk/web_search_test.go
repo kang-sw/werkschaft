@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -688,5 +690,182 @@ func TestDurableTurnResumeDeductsPriorSearches(t *testing.T) {
 	body := decodeRequestBody(t, captured)
 	if ws, ok := findToolByType(t, body, "openrouter:web_search"); ok {
 		t.Fatalf("resumed durable turn must omit search after 2 prior searches, got %#v", ws)
+	}
+}
+
+type observingResponder struct {
+	inner     *Client
+	mu        sync.Mutex
+	responses []*Response
+	errs      []error
+}
+
+func (o *observingResponder) Respond(ctx context.Context, req Request, h StreamHandler) (*Response, error) {
+	resp, err := o.inner.Respond(ctx, req, h)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if resp != nil {
+		o.responses = append(o.responses, resp)
+	}
+	if err != nil {
+		o.errs = append(o.errs, err)
+	}
+	return resp, err
+}
+
+// TestWerkLiveSIWCWebSearch runs one bounded read-only turn against the
+// signed-in OpenAI SIWC account with server-side web search opted in. It runs
+// only when WERK_LIVE_SIWC_WEB_SEARCH=1 is set.
+func TestWerkLiveSIWCWebSearch(t *testing.T) {
+	if os.Getenv("WERK_LIVE_SIWC_WEB_SEARCH") != "1" {
+		t.Skip("live SIWC search verification requires WERK_LIVE_SIWC_WEB_SEARCH=1")
+	}
+	credPath, err := wscred.DefaultPath("")
+	if err != nil {
+		t.Fatalf("credential path: %v", err)
+	}
+	store := wscred.NewStore(credPath)
+	provider, ok := wscred.Lookup(wscred.ProviderOpenAI)
+	if !ok {
+		t.Fatal("openai provider not registered")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	model := strings.TrimSpace(os.Getenv("WERK_LIVE_SIWC_MODEL"))
+	if model == "" {
+		models, err := store.OpenAIModels(ctx, wscred.Request{AgentSession: true})
+		if err != nil {
+			t.Fatalf("list openai models: %v", err)
+		}
+		if len(models) == 0 {
+			t.Fatal("no openai SIWC models available")
+		}
+		model = models[0].Slug
+		for _, m := range models {
+			if strings.Contains(m.Slug, "mini") {
+				model = m.Slug
+				break
+			}
+		}
+	}
+
+	client := &Client{
+		BaseURL:  provider.BaseURL,
+		Provider: provider.ID,
+		PlanToken: func(ctx context.Context) (wscred.OpenAIPlanRequest, error) {
+			return store.BeginOpenAIPlanRequest(ctx, false)
+		},
+	}
+	obs := &observingResponder{inner: client}
+
+	var (
+		mu         sync.Mutex
+		usageLines []Line
+		errLines   []Line
+		textBuf    strings.Builder
+	)
+	doneCh := make(chan struct{}, 1)
+	a, err := New(Config{
+		Dir:       t.TempDir(),
+		Authority: AuthorityReadOnly,
+		Model:     model,
+		Provider:  wscred.ProviderOpenAI,
+		Endpoint:  obs,
+		WS:        fakeWSTools{},
+		WebSearch: func() WebSearchPolicy {
+			return WebSearchPolicy{Enabled: true, MaxUses: 1, MaxResults: 5, Engine: "exa", SIWC: true}
+		},
+		Emit: func(l Line) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch l.T {
+			case LineUsage:
+				usageLines = append(usageLines, l)
+			case LineReply:
+				if l.Final {
+					textBuf.WriteString(l.Text)
+				}
+			case LineNotice:
+				errLines = append(errLines, l)
+			case LineTurnEnd:
+				if l.Text != "" {
+					errLines = append(errLines, l)
+				}
+				select {
+				case doneCh <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer a.Close()
+
+	cmds := make(chan Command, 1)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.ServeCommands(ctx, cmds) }()
+	cmds <- Command{
+		Type: CmdUser,
+		Text: "Use web search once to check the official Go documentation URL for net/http and reply with only the URL and one short sentence.",
+	}
+	select {
+	case <-doneCh:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for live SIWC turn: %v", ctx.Err())
+	}
+	close(cmds)
+	if err := <-serveErr; err != nil {
+		t.Fatalf("ServeCommands: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	t.Logf("model=%s responses=%d errs=%d errLines=%d usageLines=%d", model, len(obs.responses), len(obs.errs), len(errLines), len(usageLines))
+	for i, e := range obs.errs {
+		t.Logf("respErr[%d]: %v", i, e)
+	}
+	for i, l := range errLines {
+		t.Logf("line[%d]: type=%s text=%s", i, l.T, l.Text)
+	}
+	for i, r := range obs.responses {
+		costStr := "nil"
+		if r.Usage.CostUSD != nil {
+			costStr = fmt.Sprintf("%.6f", *r.Usage.CostUSD)
+		}
+		wsReqStr := "nil"
+		if r.Usage.WebSearchRequests != nil {
+			wsReqStr = fmt.Sprintf("%d", *r.Usage.WebSearchRequests)
+		}
+		t.Logf("response[%d]: id=%s searches_used=%d usage.web_search_requests=%s output_items=%d in=%d out=%d cost_usd=%s",
+			i, r.ID, r.webSearchesUsed(), wsReqStr, len(r.Output), r.Usage.InputTokens, r.Usage.OutputTokens, costStr)
+	}
+	for i, l := range usageLines {
+		costStr := "nil"
+		if l.CostUSD != nil {
+			costStr = fmt.Sprintf("%.6f", *l.CostUSD)
+		}
+		t.Logf("usageLine[%d]: in=%d out=%d cached=%d cost_usd=%s", i, l.InputTokens, l.OutputTokens, l.CachedTokens, costStr)
+	}
+	t.Logf("reply=%q", strings.TrimSpace(textBuf.String()))
+	if len(obs.errs) != 0 {
+		t.Fatalf("live SIWC turn failed with provider errors: %v", obs.errs)
+	}
+	if len(obs.responses) == 0 || len(usageLines) == 0 {
+		t.Fatalf("expected at least one completed response and usage line, got responses=%d usage=%d", len(obs.responses), len(usageLines))
+	}
+	totalSearches := 0
+	for _, r := range obs.responses {
+		totalSearches += r.webSearchesUsed()
+	}
+	if totalSearches < 1 {
+		t.Fatalf("expected at least 1 server-side web search call, got %d", totalSearches)
+	}
+	if strings.TrimSpace(textBuf.String()) == "" {
+		t.Fatal("expected non-empty reply text")
 	}
 }
