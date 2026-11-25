@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { readAssetSource } = require('./testdata/asset-source.cjs');
 
+const dashSrc = readAssetSource('wsdashboard', 'dashboard.js');
 const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
 const framesSrc = readAssetSource('wsdashboard', 'dashboard-frames.js');
 const cardsSrc = readAssetSource('wsdashboard', 'cards.js');
@@ -587,81 +588,229 @@ test('stream-view owner() scroll listener skips scrollTop reads during user-scro
 //    panel-diff layout(), tracker-render measure(), wsAdmissionSync, railGate
 // ---------------------------------------------------------------------------
 test('shell reveals frame early on ready+head without waiting for iframe load and stays idempotent on load', () => {
-  const sentToA = [], sentToB = [];
-  const makeFrame = (rid, sent) => {
+  const sentToA = [], sentToB = [], swaps = [];
+  const makeFrame = (rid, sent, initialClass) => {
+    const cls = new Set((initialClass || 'sframe').split(/\s+/).filter(Boolean));
+    const listeners = {};
     const f = {
       _src: '/s/' + rid + '?frame=1',
       get src() { return this._src; },
       set src(v) { this._src = v; },
-      className: 'sframe',
+      get className() { return Array.from(cls).join(' '); },
+      set className(v) { cls.clear(); String(v || '').split(/\s+/).filter(Boolean).forEach(c => cls.add(c)); },
       inert: false,
       style: {},
       classList: {
-        add(c) { if (!f.className.split(' ').includes(c)) f.className += ' ' + c; },
-        remove(c) { f.className = f.className.split(' ').filter(x => x !== c).join(' '); },
-        contains(c) { return f.className.split(' ').includes(c); },
+        add(c) { cls.add(c); },
+        remove(c) { cls.delete(c); },
+        contains(c) { return cls.has(c); },
+        toggle(c, force) {
+          const on = force === undefined ? !cls.has(c) : !!force;
+          if (on) cls.add(c); else cls.delete(c);
+          return on;
+        },
       },
-      contentDocument: { readyState: 'loading' },
+      contentDocument: { readyState: 'loading', activeElement: null },
       contentWindow: {
-        location: { href: 'http://h:1/s/' + rid + '?frame=1', hash: '' },
+        location: { href: 'http://h:1/s/' + rid + '?frame=1', hash: '', reload() {} },
         postMessage(m) { sent.push(m); },
         focus() {},
+        wsCanCacheSession() { return true; },
       },
-      listeners: {},
-      addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); },
+      addEventListener(t, fn) { (listeners[t] ||= []).push(fn); },
+      dispatch(t) { for (const fn of (listeners[t] || []).slice()) fn(); },
+      focus() {},
+      blur() {},
       remove() {},
       getBoundingClientRect() { return { top: 0, left: 0, width: 800, height: 600 }; },
     };
     return f;
   };
-  const frameA = makeFrame('a', sentToA);
+  const frameA = makeFrame('a', sentToA, 'sframe on');
   frameA.contentDocument.readyState = 'complete';
-  const frameB = makeFrame('b', sentToB);
+  const frameB = makeFrame('b', sentToB, 'sframe');
 
   const winListeners = {};
-  const framesBox = { appendChild() {}, children: [frameA] };
-  const topEl = { style: { minHeight: '', setProperty() {}, removeProperty() {} }, querySelector: () => null };
+  const framesBox = { children: [frameA], appendChild(el) { this.children.push(el); return el; } };
+  const topEl = makeEl('div', { cls: ['top'] });
+  const rootEl = makeEl('html');
+  const timers = new Map();
+  let nextTimer = 1;
   const doc = {
     title: 'old',
     activeElement: null,
-    documentElement: makeEl('html'),
+    documentElement: rootEl,
     body: makeEl('body'),
     createElement(tag) { return tag === 'iframe' ? frameB : makeEl(tag); },
-    getElementById: id => ({ sframes: framesBox, sframe: frameA }[id] || null),
-    querySelector: sel => sel === '.dwrap > .top' ? topEl : null,
+    getElementById: id => ({ frames: framesBox }[id] || null),
+    querySelector: sel => {
+      if (sel === '.dwrap > .top') return topEl;
+      if (sel === '#frames > iframe') return frameA;
+      return null;
+    },
     querySelectorAll: () => [],
     addEventListener() {},
   };
+  const loc = { origin: 'http://h:1', href: 'http://h:1/s/a', pathname: '/s/a', search: '', hash: '' };
+  const hist = {
+    state: { wsShellIndex: 0 },
+    pushState(s, _t, u) {
+      this.state = s;
+      const parsed = new URL(u, loc.origin);
+      loc.href = parsed.href; loc.pathname = parsed.pathname; loc.search = parsed.search; loc.hash = parsed.hash;
+    },
+    replaceState(s, _t, u) {
+      this.state = s;
+      const parsed = new URL(u, loc.origin);
+      loc.href = parsed.href; loc.pathname = parsed.pathname; loc.search = parsed.search; loc.hash = parsed.hash;
+    },
+  };
   const win = {
-    location: { origin: 'http://h:1', href: 'http://h:1/s/a', pathname: '/s/a', search: '', hash: '' },
-    history: { state: { i: 0 }, pushState() {}, replaceState() {} },
+    location: loc,
+    history: hist,
     addEventListener(t, fn) { (winListeners[t] ||= []).push(fn); },
-    setTimeout: () => 1,
-    clearTimeout: () => {},
   };
   const ctx = {
-    Map, Set, URL, Object, Array, Math, Date, JSON,
-    window: win, doc, location: win.location, history: win.history,
-    root: doc.documentElement,
+    Map, Set, URL, URLSearchParams, Object, Array, Math, Date, JSON, Promise, Number,
+    window: win, doc, location: loc, history: hist,
+    root: rootEl,
     shell: true, framed: false, rid: 'a',
+    layoutMode: 'split', inputMode: 'enter', headHeld: null,
     $: id => doc.getElementById(id),
     q: () => [],
     region: () => null,
-    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railRenameNew() {},
-    setTheme() {}, swap() {},
-    shCompanion: null, shCompanionFrame: null, shCompanionTarget() {}, shSettingsDialog: null,
-    shSettingsEntry: null, shOpenSettings: () => false, shCloseSettings() {},
-    shTop: topEl,
+    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railRenameNew() {}, railSettingsMark() {},
+    railBtn: null,
+    labelEditing: () => false, labelEnd() {},
+    setTheme() {},
+    swap(name, hash, html) { swaps.push({ name, hash, html }); },
+    setTimeout(fn, ms) { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
+    clearTimeout(id) { timers.delete(id); },
   };
   vm.createContext(ctx);
   vm.runInContext(shellSrc, ctx);
   assert.ok(ctx.window.WsShell.message({ wsShell: 'ready' }), 'shell.js accepts T0 ready message');
 
-  // Verify dashboard-lifecycle.js handles ready + head -> early shShow before iframe load.
-  assert.match(lifecycleSrc, /case "ready":[\s\S]*?ent\.ready = true;/);
-  assert.match(lifecycleSrc, /if \(!ent\.loaded && !ent\.ready\) return;/);
-  assert.match(lifecycleSrc, /shPost\("ready"\);/);
-  assert.match(framesSrc, /if \(shHidden \|\| \(typeof shStaged !== "undefined" && shStaged\)\) return;/);
+  // Execute the real shell glue + shShellInit from dashboard-lifecycle.js.
+  const shellGlueMatch = lifecycleSrc.match(/\n  var shFrames = \[\][\s\S]*?\n  \/\/ shFrameInit wires/);
+  const shellInitMatch = lifecycleSrc.match(/\n  function shShellInit\(\) \{[\s\S]*?\n  \}\n/);
+  assert.ok(shellGlueMatch && shellInitMatch, 'dashboard-lifecycle.js shell glue and shShellInit present');
+  vm.runInContext(shellGlueMatch[0] + '\n' + shellInitMatch[0] + '\nshShellInit();\n', ctx);
+  assert.equal(ctx.shOn.el, frameA, 'initial loaded frame A is active');
+
+  // Open /s/b: frame B is created and staged as shWant while frame A remains visible.
+  ctx.shOpen('/s/b', true);
+  assert.equal(ctx.shWant.el, frameB, 'frame B becomes pending destination');
+  assert.equal(ctx.shOn.el, frameA, 'frame A stays visible while frame B boots');
+  assert.equal(frameB.classList.contains('on'), false, 'frame B is hidden before ready+head');
+  assert.equal(sentToB.length, 0, 'no messages posted to frame B before ready');
+
+  const dispatchMsg = (source, data) => {
+    for (const fn of (winListeners.message || [])) fn({ origin: loc.origin, source, data });
+  };
+
+  // Frame B posts ready before head: settings are sent once and headTimer waits, no reveal yet.
+  dispatchMsg(frameB.contentWindow, { wsShell: 'ready' });
+  assert.equal(ctx.shWant.ready, true, 'ready message marks entry ready');
+  assert.equal(ctx.shWant.loaded, false, 'iframe load has not fired yet');
+  assert.equal(sentToB.filter(m => m.wsShell === 'settings').length, 1, 'settings sent once on ready');
+  assert.equal(sentToB.filter(m => m.wsShell === 'shown').length, 0, 'shown not sent before head');
+  assert.equal(frameB.classList.contains('on'), false, 'frame B stays hidden until head arrives');
+  assert.equal(timers.size, 1, 'head wait fallback timer armed');
+
+  // Frame B posts head before iframe load: shShow reveals frame B immediately.
+  dispatchMsg(frameB.contentWindow, { wsShell: 'head', html: '<b>B</b>', qs: '', pad: 0, top: 44 });
+  assert.equal(timers.size, 0, 'head wait timer cleared on reveal');
+  assert.equal(ctx.shOn.el, frameB, 'frame B revealed early on ready+head before iframe load');
+  assert.equal(ctx.shWant, null, 'pending destination cleared after reveal');
+  assert.equal(ctx.shOn.loaded, false, 'frame B is revealed while iframe load is still pending');
+  assert.equal(frameB.classList.contains('on'), true, 'frame B has .on class');
+  assert.equal(frameA.classList.contains('on'), false, 'frame A loses .on class');
+  assert.equal(frameB.inert, false, 'frame B is interactive');
+  assert.equal(ctx.rid, 'b', 'shell updates active rid');
+  assert.deepEqual(JSON.parse(JSON.stringify(sentToB.filter(m => m.wsShell === 'shown'))), [{ wsShell: 'shown', shown: true }], 'frame B receives shown:true once');
+  assert.equal(sentToA.filter(m => m.wsShell === 'shown').at(-1).shown, false, 'frame A receives shown:false');
+  assert.ok(swaps.some(s => s.name === 'head' && s.html === '<b>B</b>'), 'shell mirrors frame B header');
+
+  // Late iframe load event after early reveal must stay idempotent (no duplicate settings/shown).
+  frameB.dispatch('load');
+  assert.equal(ctx.shOn.loaded, true, 'load marks entry loaded');
+  assert.equal(sentToB.filter(m => m.wsShell === 'settings').length, 1, 'late load does not re-send settings');
+  assert.equal(sentToB.filter(m => m.wsShell === 'shown').length, 1, 'late load does not re-send shown');
+  assert.equal(ctx.shOn.el, frameB, 'late load keeps frame B active');
+
+  // Execute real shStaged/shUnstage (dashboard.js) + mountFrame/mountFrames/mountFramesPaced (dashboard-frames.js).
+  const stageBlock = dashSrc.match(/\n  var shStaged = framed[\s\S]*?\n  \}\n/);
+  assert.ok(stageBlock, 'dashboard.js shStaged/shUnstage block present');
+  const frameFuncs = ['frameShown', 'mountFrame', 'mountFrames', 'mountFramesPaced', 'mountSlice']
+    .map(n => extractFunc(framesSrc, n)).join('\n');
+
+  const htmlRoot = makeEl('html');
+  const bodyEl = makeEl('body');
+  const boardEl = makeEl('div', { attrs: { id: 'r-board' } });
+  const placeholder = makeEl('div', {
+    cls: ['doc-frame'],
+    attrs: { class: 'doc-frame', 'data-srcdoc': '<p>hello</p>', 'data-sandbox': 'allow-scripts' },
+  });
+  Object.defineProperty(placeholder, 'attributes', {
+    get() {
+      return ['class', 'data-srcdoc', 'data-sandbox']
+        .filter(k => placeholder.hasAttribute(k))
+        .map(k => ({ name: k, value: placeholder.getAttribute(k) }));
+    },
+  });
+  boardEl.replaceChild = (next, old) => {
+    const i = boardEl.childNodes.indexOf(old);
+    if (i >= 0) {
+      boardEl.childNodes[i] = next;
+      next.parentNode = boardEl;
+      old.parentNode = null;
+    }
+    return old;
+  };
+  boardEl.appendChild(placeholder);
+  bodyEl.appendChild(boardEl);
+  htmlRoot.appendChild(bodyEl);
+
+  let createdIframes = 0;
+  let stagedCallbacksRan = 0;
+  const fCtx = {
+    Array, WeakMap,
+    framed: true, shHidden: false,
+    mountList: [], mountTask: false, mountTimer: 0,
+    frameWins: new WeakMap(),
+    performance: { now: () => 0 },
+    setTimeout: () => 1,
+    doc: {
+      createElement(tag) {
+        if (tag === 'iframe') createdIframes++;
+        return makeEl(tag);
+      },
+    },
+    q: (sel, el) => (el || htmlRoot).querySelectorAll(sel),
+    frameNear: () => true,
+  };
+  vm.createContext(fCtx);
+  vm.runInContext(stageBlock[0] + '\n' + frameFuncs, fCtx);
+
+  assert.equal(fCtx.shHolding(), true, 'framed page starts staged');
+  fCtx.shStage(() => { stagedCallbacksRan++; });
+  assert.equal(stagedCallbacksRan, 0, 'shStage defers callbacks while staged');
+  assert.equal(fCtx.mountFrame(placeholder), placeholder, 'mountFrame defers while shStaged');
+  fCtx.mountFrames(boardEl);
+  fCtx.mountFramesPaced(boardEl);
+  assert.equal(createdIframes, 0, 'zero doc-frame iframes created while shStaged');
+  assert.equal(boardEl.children[0].tagName, 'DIV', 'placeholder remains unmounted while shStaged');
+
+  // Once shell delivers shown:true -> shUnstage() runs and mountFramesPaced mounts the iframe.
+  fCtx.shUnstage();
+  assert.equal(fCtx.shHolding(), false, 'shUnstage clears staged state');
+  assert.equal(stagedCallbacksRan, 1, 'shUnstage flushes deferred callbacks');
+  fCtx.mountFramesPaced(boardEl);
+  assert.equal(createdIframes, 1, 'mountFramesPaced mounts doc-frame iframe after unstage');
+  assert.equal(boardEl.children[0].tagName, 'IFRAME', 'placeholder replaced with iframe');
+  assert.equal(boardEl.children[0].getAttribute('srcdoc'), '<p>hello</p>', 'mounted iframe carries srcdoc');
+  assert.equal(boardEl.children[0].getAttribute('sandbox'), 'allow-scripts', 'mounted iframe carries sandbox');
 });
 
 test('terminal rgb() avoids DOM probe for hex/rgb colors, panel-diff layout() and tracker measure() batch read-before-write', () => {
@@ -794,8 +943,59 @@ test('terminal rgb() avoids DOM probe for hex/rgb colors, panel-diff layout() an
   att.mark([domRow], 's1', 'needs attention');
   assert.equal(domRow.classList.contains('attn'), true, 'rowInputAttentionRows triggers attention without reparsing HTML');
 
-  // Verify dashboard-rail.js wires boardScrolling() into railGate and listens for ws-board-scroll-idle.
-  assert.match(dashRailSrc, /function boardScrolling\(\)/);
-  assert.match(dashRailSrc, /railGate[\s\S]*boardScrolling\(\)/);
-  assert.match(dashRailSrc, /addEventListener\("ws-board-scroll-idle", railRelease\)/);
+  // Execute real dashboard-rail.js boardScrolling(), railGate, railRelease(), and ws-board-scroll-idle wiring.
+  const railGateBlock = dashRailSrc.match(/\n  var rdrag = null, railSaving = 0, railMinGen = 0;[\s\S]*?\n  var railGate = [^\n]+\n/);
+  const railReleaseBlock = dashRailSrc.match(/\n  function railRelease\(\) \{[\s\S]*?\n  function railEditing\(\) \{[^\n]+\}\n/);
+  assert.ok(railGateBlock && railReleaseBlock, 'dashboard-rail.js boardScrolling/railGate/railRelease blocks present');
+
+  let directScrolling = false;
+  let framedScrolling = false;
+  const railSwaps = [];
+  const railDoc = makeEl('document');
+  const railWin = {
+    addEventListener() {},
+    MutationObserver: class { observe() {} },
+    WsBoardAnchor: { scrolling: () => directScrolling },
+  };
+  const gateCtx = {
+    window: railWin,
+    document: railDoc,
+    doc: railDoc,
+    Object, Array, Set, Map, JSON,
+    railEl: null,
+    shell: true,
+    shOn: { el: { contentWindow: { WsBoardAnchor: { scrolling: () => framedScrolling } } } },
+    swap(name, hash, html) { railSwaps.push({ name, hash, html }); },
+  };
+  vm.createContext(gateCtx);
+  vm.runInContext(railSrc + '\nvar WsRail = window.WsRail;\n' + railGateBlock[0] + '\n' + railReleaseBlock[0], gateCtx);
+
+  // Direct board scroll holds rail swaps and flushes the latest held swap on ws-board-scroll-idle.
+  directScrolling = true;
+  assert.equal(gateCtx.boardScrolling(), true, 'boardScrolling() reports true during direct board scroll');
+  assert.equal(gateCtx.railGate.offer({ hash: 'h1', html: '<div>rail-1</div>' }), true, 'railGate holds swap during active scroll');
+  assert.equal(gateCtx.railGate.offer({ hash: 'h2', html: '<div>rail-2</div>' }), true, 'railGate coalesces later swap while held');
+  railDoc.dispatch('ws-board-scroll-idle');
+  assert.equal(railSwaps.length, 0, 'railRelease does not flush while scroll is still active');
+
+  directScrolling = false;
+  railDoc.dispatch('ws-board-scroll-idle');
+  assert.deepEqual(railSwaps, [{ name: 'rail', hash: 'h2', html: '<div>rail-2</div>' }], 'ws-board-scroll-idle flushes latest held rail swap');
+  railDoc.dispatch('ws-board-scroll-idle');
+  assert.equal(railSwaps.length, 1, 'subsequent ws-board-scroll-idle with nothing held is a no-op');
+  assert.equal(gateCtx.railGate.offer({ hash: 'h-idle', html: '<div>idle</div>' }), false, 'railGate does not hold once scrolling is idle');
+
+  // Shell-framed board scroll holds rail swaps via shOn.el.contentWindow.WsBoardAnchor and flushes via window.wsBoardScrollIdle.
+  framedScrolling = true;
+  assert.equal(gateCtx.boardScrolling(), true, 'boardScrolling() detects scrolling in active shell frame');
+  assert.equal(gateCtx.railGate.offer({ hash: 'h3', html: '<div>rail-3</div>' }), true, 'railGate holds swap while shell frame is scrolling');
+  railWin.wsBoardScrollIdle();
+  assert.equal(railSwaps.length, 1, 'window.wsBoardScrollIdle does not flush while frame is still scrolling');
+
+  framedScrolling = false;
+  railWin.wsBoardScrollIdle();
+  assert.deepEqual(railSwaps, [
+    { name: 'rail', hash: 'h2', html: '<div>rail-2</div>' },
+    { name: 'rail', hash: 'h3', html: '<div>rail-3</div>' },
+  ], 'window.wsBoardScrollIdle flushes held rail swap once shell frame scroll settles');
 });

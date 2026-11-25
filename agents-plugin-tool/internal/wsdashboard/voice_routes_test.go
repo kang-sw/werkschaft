@@ -456,3 +456,128 @@ func TestVoiceTranscribeGroqOpenRouterAndLocalEndpoint(t *testing.T) {
 		t.Fatalf("slow upstream: code=%d body=%s", w5.Code, w5.Body.String())
 	}
 }
+
+func TestVoiceTranscribeBackendOverrideModelDefault(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotModel = ""
+		mr, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			data, _ := io.ReadAll(part)
+			if part.FormName() == "model" {
+				gotModel = string(data)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	d := authFixture(t)
+	configHome := t.TempDir()
+	store := wscred.NewStore(filepath.Join(t.TempDir(), "auth", wscred.FileName))
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenAIAPI, APIKey: wscred.NewSecret(voiceFixtureOpenAIKey)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderGroq, APIKey: wscred.NewSecret(voiceFixtureGroqKey)}); err != nil {
+		t.Fatal(err)
+	}
+	opts := wsconfig.Options{ConfigHome: configHome}
+	if _, err := store.ApplyLocalEndpoint(opts, wscred.LocalEndpointChange{
+		Op:      wscred.OpSet,
+		Name:    "whisper-local",
+		BaseURL: srv.URL,
+		Kind:    "vllm",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.credentials = store
+	d.voiceBaseURLs = map[wscred.ProviderID]string{
+		wscred.ProviderOpenAIAPI: srv.URL,
+		wscred.ProviderGroq:      srv.URL,
+	}
+	d.voiceConfig = func() voiceSettings {
+		return voiceSettings{
+			Backend: "openai_api",
+			Model:   "gpt-4o-mini-transcribe",
+		}
+	}
+
+	cases := []struct {
+		name      string
+		settings  *voiceSettings
+		fields    map[string]string
+		wantModel string
+	}{
+		{
+			name:      "omitted backend inherits global model",
+			fields:    map[string]string{},
+			wantModel: "gpt-4o-mini-transcribe",
+		},
+		{
+			name:      "same backend with empty model inherits global model",
+			fields:    map[string]string{"backend": "openai_api"},
+			wantModel: "gpt-4o-mini-transcribe",
+		},
+		{
+			name:      "overridden cloud backend with empty model uses target default",
+			fields:    map[string]string{"backend": "groq"},
+			wantModel: "whisper-large-v3-turbo",
+		},
+		{
+			name:      "overridden local backend with empty model uses whisper-1",
+			fields:    map[string]string{"backend": "local/whisper-local"},
+			wantModel: "whisper-1",
+		},
+		{
+			name:      "explicit model wins on overridden backend",
+			fields:    map[string]string{"backend": "groq", "model": "whisper-large-v3"},
+			wantModel: "whisper-large-v3",
+		},
+		{
+			name:      "explicit model wins on same backend",
+			fields:    map[string]string{"backend": "openai_api", "model": "whisper-1"},
+			wantModel: "whisper-1",
+		},
+		{
+			name:      "empty global backend with stale global model does not leak to explicit backend",
+			settings:  &voiceSettings{Backend: "", Model: "gpt-4o-mini-transcribe"},
+			fields:    map[string]string{"backend": "groq"},
+			wantModel: "whisper-large-v3-turbo",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.settings != nil {
+				s := *tc.settings
+				d.voiceConfig = func() voiceSettings { return s }
+			} else {
+				d.voiceConfig = func() voiceSettings {
+					return voiceSettings{Backend: "openai_api", Model: "gpt-4o-mini-transcribe"}
+				}
+			}
+			req := voiceMultipartRequest(t, voicePrefix+"transcribe", tc.fields, "a.webm", "audio/webm", []byte("WEBM"))
+			req.AddCookie(authCookie(t, d))
+			w := authServe(d, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+			}
+			if gotModel != tc.wantModel {
+				t.Fatalf("upstream model = %q, want %q", gotModel, tc.wantModel)
+			}
+		})
+	}
+}

@@ -436,7 +436,7 @@ func (d *Daemon) resolveVoiceTarget(ctx context.Context, backend, model string) 
 	if backend == "" {
 		return resolvedVoiceTarget{}, http.StatusBadRequest, "backend_required"
 	}
-	if model == "" {
+	if model == "" && backend == settings.Backend {
 		model = settings.Model
 	}
 	pid := wscred.ProviderID(backend)
