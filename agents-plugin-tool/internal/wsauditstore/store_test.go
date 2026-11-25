@@ -476,6 +476,31 @@ func TestStoreRecordLossAndBoundaryPersistWithoutALaterRecord(t *testing.T) {
 	}
 }
 
+// TestStoreSingleFlushPersistsPendingControlLines pins that a single Flush
+// writes queued RecordLoss and Finalize control lines to disk before returning.
+func TestStoreSingleFlushPersistsPendingControlLines(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	lost := wsaudit.SourceID{Source: "holder:1", Seq: 2}
+	if err := s.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 2); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"t":"loss"`)) || !bytes.Contains(raw, []byte(`"reason":"dropped"`)) || !bytes.Contains(raw, []byte(`"t":"fin"`)) {
+		t.Fatalf("control lines not on disk after single Flush:\n%s", raw)
+	}
+}
+
 // TestStoreRecoveryAnswersNeverWaitOnAWrite pins the SourcedSink contract:
 // Recover, Retained and AppendSourced return while the writer is stuck in a
 // disk write of the same ring.

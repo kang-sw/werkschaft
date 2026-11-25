@@ -151,14 +151,15 @@ func (auditNopHost) Stop(string) error { return nil }
 // auditRig is a Claude lead process under a stand-in holder whose output
 // and audit channel events a test delivers by hand, with capture on.
 type auditRig struct {
-	t      *testing.T
-	p      *streamProcess
-	h      *holderChild
-	mu     sync.Mutex
-	evs    []Event
-	seq    uint64
-	anchor uint64
-	index  uint64
+	t       *testing.T
+	p       *streamProcess
+	h       *holderChild
+	mu      sync.Mutex
+	evs     []Event
+	evsDone chan struct{}
+	seq     uint64
+	anchor  uint64
+	index   uint64
 	// conn is the holder connection tee and fence events carry.
 	conn uint64
 }
@@ -175,8 +176,9 @@ func newAuditRigWith(t *testing.T, sink wsaudit.Sink, holderID string, m lineMap
 	p.child, p.holder = h, h
 	p.prepareAudit(StartSpec{audit: &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, Sink: sink}}, m)
 	p.startAudit(holderID)
-	r := &auditRig{t: t, p: p, h: h}
+	r := &auditRig{t: t, p: p, h: h, evsDone: make(chan struct{})}
 	go func() {
+		defer close(r.evsDone)
 		for ev := range p.events {
 			r.mu.Lock()
 			r.evs = append(r.evs, ev)
@@ -184,8 +186,8 @@ func newAuditRigWith(t *testing.T, sink wsaudit.Sink, holderID string, m lineMap
 		}
 	}()
 	t.Cleanup(func() {
-		p.closeAudit()
 		p.finish(nil)
+		<-r.evsDone
 	})
 	return r
 }
@@ -222,14 +224,21 @@ func (r *auditRig) keptRun(line string, sent, dropped uint64) uint64 {
 	return r.kept(line)
 }
 
-// end closes capture and waits until it has drained.
+// end closes capture and waits until it and the display stream have drained.
 func (r *auditRig) end() {
 	r.t.Helper()
-	r.p.closeAudit()
+	r.p.finish(nil)
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
 	select {
 	case <-r.p.audit.done:
-	case <-time.After(10 * time.Second):
+	case <-deadline.C:
 		r.t.Fatal("capture did not drain")
+	}
+	select {
+	case <-r.evsDone:
+	case <-deadline.C:
+		r.t.Fatal("display events did not drain")
 	}
 }
 

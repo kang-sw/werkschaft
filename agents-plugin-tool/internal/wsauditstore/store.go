@@ -443,7 +443,8 @@ func (s *Store) DeleteSession(ctx context.Context, session string) error {
 	return err
 }
 
-// Flush waits until every job queued before it has run.
+// Flush waits until every job queued before it has run and any pending
+// control lines have been written.
 func (s *Store) Flush(ctx context.Context) error {
 	_, err := s.call(ctx, job{kind: jobBarrier})
 	return err
