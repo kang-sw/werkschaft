@@ -6,7 +6,21 @@
   function indentLines(out) {
     var v = ctext.value, a = ctext.selectionStart, b = ctext.selectionEnd;
     var multi = v.slice(a, b).indexOf("\n") >= 0;
-    if (!out && !multi) { editText(a, b, "  "); return; }
+    if (!out && !multi) {
+      if (a === b) {
+        var sls = a > 0 ? v.lastIndexOf("\n", a - 1) + 1 : 0;
+        var sle = v.indexOf("\n", a);
+        if (sle < 0) sle = v.length;
+        var sline = v.slice(sls, sle);
+        if (/^[ \t]*(?:[-*+] |\d+\. |> )/.test(sline) || /^[ \t]*$/.test(v.slice(sls, a))) {
+          editText(sls, sls, "  ");
+          ctext.setSelectionRange(a + 2, a + 2);
+          return;
+        }
+      }
+      editText(a, b, "  ");
+      return;
+    }
     var last = b > a && v.charAt(b - 1) === "\n" ? b - 1 : b;
     var ls = a > 0 ? v.lastIndexOf("\n", a - 1) + 1 : 0, le = v.indexOf("\n", last);
     if (le < 0) le = v.length;
@@ -78,6 +92,24 @@
       if (e.repeat && isSend) { e.preventDefault(); return; }
       if (isSend) { e.preventDefault(); sendMessage(); return; }
       if (inputMode === "enter" && !e.repeat && e.shiftKey && !mod && !e.altKey && typeof setAutoMultiline === "function") setAutoMultiline(true);
+      if (bangMode()) return;
+      e.preventDefault();
+      var nv = ctext.value, na = ctext.selectionStart, nb = ctext.selectionEnd;
+      var nls = na > 0 ? nv.lastIndexOf("\n", na - 1) + 1 : 0;
+      var nle = nv.indexOf("\n", na);
+      if (nle < 0) nle = nv.length;
+      var nbefore = nv.slice(nls, na), nline = nv.slice(nls, nle);
+      var nindent = /^[ \t]*/.exec(nbefore)[0], nrest = nbefore.slice(nindent.length);
+      var nmarker = "", nnext = "", nm;
+      if ((nm = /^([-*+]) \[[ xX]\] /.exec(nrest))) { nmarker = nm[0]; nnext = nm[1] + " [ ] "; }
+      else if ((nm = /^([-*+]) /.exec(nrest))) { nmarker = nm[0]; nnext = nm[0]; }
+      else if ((nm = /^(\d+)\. /.exec(nrest))) { nmarker = nm[0]; nnext = (parseInt(nm[1], 10) + 1) + ". "; }
+      else if ((nm = /^(?:>[ \t]?)+/.exec(nrest))) { nmarker = nm[0]; nnext = nm[0]; }
+      if (na === nb && nmarker && /^[ \t]*$/.test(nline.slice(nindent.length + nmarker.length))) {
+        editText(nls, nle, "");
+      } else {
+        editText(na, nb, "\n" + nindent + nnext);
+      }
     });
     // The form script's own listeners have rebuilt the reply line by the
     // time an event bubbles here.

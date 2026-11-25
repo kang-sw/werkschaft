@@ -34,7 +34,7 @@
     });
     text += raw.slice(at);
     var legacy = bselections.filter(function (s) { return !usedSelections[s.key]; });
-    return { text: selectionPrefix(legacy) + text.trim(), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
+    return { text: selectionPrefix(legacy) + text.replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
   }
   function sendMessage() {
     if (restoring || draftStore && !draftLoaded) return;
@@ -48,7 +48,7 @@
     if (cmdSel) { sendCommand(); return; }
     if (inline) { sendInlineCommand(inline); return; }
     var groups = bselections.slice(), inlineData = inlineEditor() ? inlineSend() : null;
-    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().trim(), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
+    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
     var committed = {};
     groups.forEach(function (s) { s.images.forEach(function (n) { committed[n] = true; }); });
     var pics = imgs.filter(function (p) { return !mpend || (mpend.images || []).indexOf(p.n) < 0 || committed[p.n]; });

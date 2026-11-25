@@ -118,6 +118,16 @@
    terminal-tinted mono field, the `!` is painted amber by the highlight
    registry, and the send button becomes a green Run, with no height change. */
 ::highlight(ws-bang) { color: var(--tm-amber); }
+/* Cosmetic inline markdown and @ mention highlights inside .wsc-editor (CSS Custom Highlight API). */
+::highlight(ws-md-marker) { color: color-mix(in srgb, var(--wb-muted-fg) 68%, transparent); }
+::highlight(ws-md-code) { background-color: color-mix(in srgb, var(--wb-fg) 10%, transparent); }
+::highlight(ws-md-head) { color: var(--wb-primary); }
+::highlight(ws-md-quote) { color: var(--wb-muted-fg); }
+::highlight(ws-md-em) { color: color-mix(in srgb, var(--wb-fg) 68%, var(--wb-ok)); }
+::highlight(ws-md-strong) { color: color-mix(in srgb, var(--wb-fg) 62%, var(--wb-primary)); }
+::highlight(ws-md-strike) { color: var(--wb-muted-fg); text-decoration: line-through; }
+::highlight(ws-md-link) { color: var(--wb-primary); text-decoration: underline; }
+::highlight(ws-md-mention) { color: var(--wb-primary); background-color: color-mix(in srgb, var(--wb-primary) 14%, transparent); }
 .composer[data-bang] { box-shadow: var(--wb-shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--tm-green) 45%, transparent); }
 .composer[data-bang] .cfield { background: var(--tm-bg); box-shadow: inset 0 0 0 1px var(--tm-line); }
 .composer[data-bang] textarea + .wsc-editor { font: 13px/1.5 var(--wb-mono); color: var(--tm-fg); background: var(--tm-bg); caret-color: var(--tm-green); padding: 9px 10px; }
