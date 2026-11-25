@@ -368,8 +368,10 @@ test('tabs and narrow sheets keep dropdown sizing and standard card preview; wor
 test('leaving split undocks the open sheet without dismissing it and transfers preview to a card', () => {
   const { context: c, pane, events } = fixture();
   mountSheetFramework(c).fire('click'); c.previewLeftFile('a.txt', {});
+  assert.equal(c.doc.body.hasAttribute('data-files-docked'), true);
   events.length = 0; c.layoutMode = 'tabs'; c.syncFilePreview();
   assert.equal(c.filesSheet.el.hasAttribute('data-docked'), false);
+  assert.equal(c.doc.body.hasAttribute('data-files-docked'), false);
   assert.equal(c.filesSheet.el.hidden, false); assert.equal(pane.current(), null);
   assert.deepEqual(plain(events), ['close', ['card', 'a.txt', { keep: false }]]);
 });
@@ -395,8 +397,8 @@ test('pane keep and toolbar durable intent close both surfaces before revealing 
 test('docked geometry overrides dropdown insets and pane paints above the scrim', () => {
   const css = readAssetSource('wsdashboard', 'dashboard.css');
   assert.match(css, /#toolbar-files\[data-max\]\[data-docked\] \{[^}]*top: var\(--files-dock-top\);[^}]*left: var\(--files-dock-left\);[^}]*right: auto; bottom: auto;[^}]*width: var\(--files-dock-width\); height: var\(--files-dock-height\);/);
-  assert.match(css, /body:has\(#toolbar-files\[data-max\]\[data-docked\]\) \.file-preview-pane \{ z-index: var\(--z-modal\);/);
-  assert.match(css, /body:has\(#toolbar-files\[data-max\]\[data-docked\]\) \.board-toolbar \.sheet-width \{ display: none;/);
+  assert.match(css, /body\[data-files-docked\] \.file-preview-pane \{ z-index: var\(--z-modal\);/);
+  assert.match(css, /body\[data-files-docked\] \.board-toolbar \.sheet-width \{ display: none;/);
 });
 test('pane CSS preserves board/gallery geometry and hides overlay while closed', () => {
   const css = readAssetSource('wsdashboard', 'dashboard.css');

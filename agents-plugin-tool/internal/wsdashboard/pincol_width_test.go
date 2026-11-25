@@ -242,8 +242,8 @@ func TestConversationSplitHandle(t *testing.T) {
 func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
-		".dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
-		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }`,
+		".dash[data-split-grid] { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
+		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }`,
 		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
 		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 8px; }",
 	} {
@@ -256,7 +256,7 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	// column or wide-only overview Quick Look preview).
 	for _, gone := range []string{
 		":root[data-boardw] .dash.board",
-		":root[data-boardw] .dash:has(> .dwrap .dgrid:is(.live, .history))",
+		":root[data-boardw] .dash[data-split-grid]",
 		":root[data-boardw] .dgrid:is(.live, .history)",
 	} {
 		if strings.Contains(css, gone) {

@@ -529,7 +529,7 @@ test('template and CSS follow Variant B without touching .cfoot or nesting butto
   );
   assert.match(
     dashboardTmpl,
-    /<div class="cfoot">\{\{if or \.Hosted \.IsChild\}\}\{\{template "composerpills" \.\}\}\{\{end\}\}\{\{region \. "sline"\}\}<\/div>/,
+    /<div class="cfoot"\{\{if not \(or \.Hosted \.IsChild\)\}\} hidden\{\{end\}\}>\{\{if or \.Hosted \.IsChild\}\}\{\{template "composerpills" \.\}\}\{\{end\}\}\{\{region \. "sline"\}\}<\/div>/,
     '.cfoot bottom-right remains untouched'
   );
   assert.match(dashboardCSS, /\.csend\.is-multiline \{[^}]*width: 48px;[^}]*flex-direction: column;/);

@@ -92,7 +92,7 @@
 /* --stagew stays --pbw in Band 3; Band 4 sizes .dbody directly with --boardw. */
 .dash { --stagew: var(--pbw); }
 .dash.board { --pbw: 900px; }
-.dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }
+.dash[data-split-grid] { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }
 .bgal { display: none; }
 :root[data-gal] .bgal:not([hidden]) { display: flex; gap: 6px; min-width: 0; min-height: 0; }
 .bgal > .bp-edge { display: none; }
@@ -188,7 +188,7 @@
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid.board { max-width: none; margin: 0; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
-  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
+  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .dgrid,
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -202,7 +202,7 @@
   :root[data-overview-preview] .dwrap:not(.narrow),
   :root[data-overview-preview] .dgrid.board { max-width: none; margin: 0; }
   :root[data-overview-preview] .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
-  :root[data-boardw][data-overview-preview] .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
+  :root[data-boardw][data-overview-preview] .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
   :root[data-overview-preview] .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root[data-overview-preview] .dbody > .dgrid,
   :root[data-overview-preview] .dbody > .tk-spage { grid-column: 2; grid-row: 1; }

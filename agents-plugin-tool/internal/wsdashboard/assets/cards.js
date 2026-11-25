@@ -1946,6 +1946,8 @@
       clearSheetWidth(was);
       if (was.files) {
         was.el.removeAttribute("data-max");
+        doc.body.removeAttribute("data-fpane-max");
+        doc.body.removeAttribute("data-files-docked");
         was.el.style.removeProperty("--files-top");
         toolbar.removeAttribute("data-files");
         was.back.setAttribute("aria-expanded", "false");
@@ -1954,6 +1956,7 @@
         if (was.back.isConnected) was.back.focus({ preventScroll: true });
       } else if (was instanceof Card) {
         was.el.removeAttribute("data-max");
+        if (was.kind === "explorer") doc.body.removeAttribute("data-explorer-max");
         was.el.removeAttribute("data-float");
         was.el.style.height = "";
         was.sized();
@@ -1989,6 +1992,7 @@
       c.el.hidden = false;
       c.el.style.setProperty("--files-top", Math.max(52, toolbar.firstChild.getBoundingClientRect().bottom + 8) + "px");
       c.el.setAttribute("data-max", "");
+      doc.body.setAttribute("data-fpane-max", "");
       toolbar.setAttribute("data-files", "");
       c.back.setAttribute("aria-expanded", "true");
       c.owner.shown();
@@ -2007,6 +2011,7 @@
     releaseFreeNode(c.el);
     c.el.style.height = c.el.getBoundingClientRect().height + "px";
     c.el.setAttribute("data-max", "");
+    if (c.kind === "explorer") doc.body.setAttribute("data-explorer-max", "");
     if (floatOn) c.el.setAttribute("data-float", "");
     sizeSheet(c);
     c.sized();

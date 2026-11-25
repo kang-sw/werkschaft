@@ -32,6 +32,14 @@
     return tpl ? tpl.content : null;
   }
   function gaps(root) { return Array.from(root.querySelectorAll('.history-gap')); }
+  function syncGapAttrs(gap) {
+    if (!gap) return;
+    var up = gap.querySelector('[data-load="up"]'), down = gap.querySelector('[data-load="down"]');
+    var upShown = !!(up && !up.hidden), downShown = !!(down && !down.hidden);
+    gap.setAttribute('data-gap-dir', upShown && downShown ? 'both' : (downShown ? 'down' : 'up'));
+    var sep = gap.querySelector('.gap-sep'), range = gap.querySelector('.gap-range');
+    if (sep) sep.hidden = !(range && range.textContent);
+  }
   function refresh(gap) {
     var list = Array.from(payload(gap).children);
     if (!list.length) { gap.remove(); return; }
@@ -42,6 +50,7 @@
     gap.querySelector('.gap-range').textContent = from === to ? from : from + '\u2013' + to;
     var before = Array.from(gap.parentElement.children).slice(0, Array.from(gap.parentElement.children).indexOf(gap));
     gap.querySelector('[data-load="down"]').hidden = !before.some(function (n) { return n.matches('.timeline-row'); });
+    syncGapAttrs(gap);
   }
   function admitted(h) {
     if (panelState) h.querySelectorAll('.entry-panel[data-key]').forEach(panelState.restore);

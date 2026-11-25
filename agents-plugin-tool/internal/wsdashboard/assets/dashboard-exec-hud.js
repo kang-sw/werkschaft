@@ -213,17 +213,24 @@
         if (back) back.focus();
       }
     } else {
-      xhTickText();
-      xhLayout();
+      if (xhTickText()) xhLayout();
     }
     xhSchedule(vis, now);
     xhPeekSync();
     if (window.performance && performance.measure && t0) { try { performance.measure("ws.xhud.render", { start: t0, end: performance.now(), detail: { jobs: xhJobs.length, chips: xhSlots.length, rebuilt: changed } }); } catch (e) {} }
   }
   function xhTickText() {
-    q("[data-xsince]", xhGroup).concat(xhTip && !xhTip.hidden ? q("[data-xsince]", xhTip) : [], xhPeekEl && !xhPeekEl.hidden ? q("[data-xsince]", xhPeekEl) : []).forEach(function (n) {
-      n.textContent = xhFmtElapsed(Date.now() - Number(n.getAttribute("data-xsince")));
+    var resized = false;
+    q("[data-xsince]", xhGroup).forEach(function (n) {
+      var next = xhFmtElapsed(Date.now() - Number(n.getAttribute("data-xsince")));
+      if (n.textContent.length !== next.length) resized = true;
+      if (n.textContent !== next) n.textContent = next;
     });
+    (xhTip && !xhTip.hidden ? q("[data-xsince]", xhTip) : []).concat(xhPeekEl && !xhPeekEl.hidden ? q("[data-xsince]", xhPeekEl) : []).forEach(function (n) {
+      var next = xhFmtElapsed(Date.now() - Number(n.getAttribute("data-xsince")));
+      if (n.textContent !== next) n.textContent = next;
+    });
+    return resized;
   }
   // schedule: a one-second clock while a chip shows elapsed time, and one timer
   // at the next pin or fade boundary, so an idle page runs neither.

@@ -175,9 +175,9 @@
 .file-preview-pane { grid-area: board; z-index: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); overflow: hidden; }
 .file-preview-pane[hidden] { display: none; }
 /* Both reading surfaces stay interactive above the shared sheet scrim. */
-body:has(#toolbar-files[data-max][data-docked]) .file-preview-pane { z-index: var(--z-modal); }
+body[data-files-docked] .file-preview-pane { z-index: var(--z-modal); }
 #toolbar-files[data-max][data-docked] { top: var(--files-dock-top); left: var(--files-dock-left); right: auto; bottom: auto; width: var(--files-dock-width); height: var(--files-dock-height); }
-body:has(#toolbar-files[data-max][data-docked]) .board-toolbar .sheet-width { display: none; }
+body[data-files-docked] .board-toolbar .sheet-width { display: none; }
 .file-preview-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--wb-line); flex: none; }
 .file-preview-head > strong { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-preview-head > button { flex: none; }
@@ -228,13 +228,13 @@ body:has(#toolbar-files[data-max][data-docked]) .board-toolbar .sheet-width { di
 /* The old sheet removed the tab pane and its label from their slots.
    Conceal their paint under the scrim without disturbing the new owner's
    layout or state; otherwise the tab shadow protrudes beside the sheet. */
-body:has(.fpane[data-max]) .dgrid.live > .fpane,
-body:has(.fpane[data-max]) .chead .fsum .froot { visibility: hidden; }
+body[data-fpane-max] .dgrid.live > .fpane,
+body[data-fpane-max] .chead .fsum .froot { visibility: hidden; }
 .board-toolbar[data-files] { z-index: calc(var(--z-modal) + 1); }
 .board-toolbar[data-files] .board-toolbar-face,
 .board-toolbar[data-files] :is(.board-state-meta, .board-state-pipeline, .board-state-trigger, .board-state-pop) { pointer-events: none; }
 .board-toolbar[data-files] .board-files, .board-toolbar[data-files] .sheet-width { pointer-events: auto; }
-body:has(.fpane[data-max]) > .fmenu { z-index: calc(var(--z-modal) + 2); }
+body[data-fpane-max] > .fmenu { z-index: calc(var(--z-modal) + 2); }
 @media (max-width: 640px) { .fpane[data-max] { left: 8px; right: 8px; bottom: 8px; } }
 @media (min-width: 641px) {
   .bcard[data-max] .bc-in, section.topic[data-max], details.entry-panel[data-max], .fpane[data-max] { left: var(--sheet-inset, 16px); right: var(--sheet-inset, 16px); }
@@ -441,7 +441,7 @@ body:has(.fpane[data-max]) > .fmenu { z-index: calc(var(--z-modal) + 2); }
 .bcard[data-kind="explorer"][data-float] .bc-in { top: max(52px, 10vh); bottom: 8vh; }
 .bcard[data-kind="explorer"][data-float] .bc-max { display: inline-grid; }
 .bcard[data-kind="explorer"][data-float] .bc-float { display: none; }
-body:has(.bcard[data-kind="explorer"][data-max]) > .fmenu { z-index: calc(var(--z-modal) + 2); }
+body[data-explorer-max] > .fmenu { z-index: calc(var(--z-modal) + 2); }
 
 /* board-first page: no live layer; the board in one readable column that
    the page scrolls. As in the live board column, topicResized owns band

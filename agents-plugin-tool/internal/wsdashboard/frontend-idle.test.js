@@ -158,3 +158,271 @@ test('HUD node animations pause when hidden and disable under reduced motion', (
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-ring,\s*\.hud-ring::before[^}]*transition:\s*none !important;/);
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}/);
 });
+
+function findForbiddenHas(css, file) {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const violations = [];
+  const highAncestorRe = /(?:^|(?<![a-zA-Z0-9_-]))(:root|html|body|\.dash|\.dbody|\.dwrap|\.dgrid)(?![a-zA-Z0-9_-])/;
+  const stripBrackets = s => {
+    let out = '', depth = 0, open = '';
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (!depth && (ch === '[' || ch === '(')) { depth = 1; open = ch; continue; }
+      if (depth) {
+        if (ch === open) depth++;
+        else if ((open === '[' && ch === ']') || (open === '(' && ch === ')')) depth--;
+        continue;
+      }
+      out += ch;
+    }
+    return out;
+  };
+  const topBranches = body => {
+    const out = []; let depth = 0, start = 0;
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      else if (depth === 0 && ch === ',') { out.push(body.slice(start, i)); start = i + 1; }
+    }
+    out.push(body.slice(start));
+    return out;
+  };
+  const compoundBefore = pos => {
+    let i = pos - 1;
+    const parts = [];
+    while (i >= 0) {
+      const ch = src[i];
+      if (ch === ')' || ch === ']') {
+        const close = ch, open = ch === ')' ? '(' : '[';
+        let depth = 1, end = i;
+        i--;
+        while (i >= 0 && depth > 0) {
+          if (src[i] === close) depth++;
+          else if (src[i] === open) depth--;
+          i--;
+        }
+        parts.unshift(src.slice(i + 1, end + 1));
+        continue;
+      }
+      if (ch === '(') {
+        i--;
+        while (i >= 0 && /[a-zA-Z0-9_-]/.test(src[i])) i--;
+        if (i >= 0 && src[i] === ':') i--;
+        continue;
+      }
+      if (/[\s,>+~{};]/.test(ch)) {
+        if (ch === ',' || /\s/.test(ch)) {
+          let j = i, depth = 0, foundOpen = -1;
+          while (j >= 0) {
+            const c = src[j];
+            if (c === ')' || c === ']') depth++;
+            else if (c === '(' || c === '[') {
+              if (depth === 0) { foundOpen = j; break; }
+              depth--;
+            } else if (depth === 0 && (c === '{' || c === '}' || c === ';')) break;
+            j--;
+          }
+          if (foundOpen >= 0 && src[foundOpen] === '(') {
+            const branch = src.slice(foundOpen + 1, pos);
+            const cur = topBranches(branch).at(-1).trim();
+            if (cur === '' || !/[\s>+~]/.test(cur)) { i = foundOpen; continue; }
+          }
+        }
+        break;
+      }
+      parts.unshift(ch);
+      i--;
+    }
+    return parts.join('');
+  };
+  const re = /:has\(/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const start = m.index, bodyStart = start + 5;
+    let depth = 1, end = bodyStart;
+    while (end < src.length && depth > 0) {
+      if (src[end] === '(') depth++;
+      else if (src[end] === ')') depth--;
+      end++;
+    }
+    const body = src.slice(bodyStart, end - 1);
+    const expr = src.slice(start, end);
+    if (topBranches(body).some(b => /^\s*[+~]/.test(b))) {
+      violations.push(`${file}: sibling ${expr}`);
+    }
+    if (/:empty\b/.test(body)) {
+      violations.push(`${file}: :empty inside ${expr}`);
+    }
+    const compound = stripBrackets(compoundBefore(start));
+    if (highAncestorRe.test(compound)) {
+      violations.push(`${file}: high-ancestor ${compound}${expr}`);
+    }
+  }
+  return violations;
+}
+
+test('CSS avoids high-cost :has() selectors across dashboard and whiteboard assets', () => {
+  // Verify the detector catches each forbidden class while permitting local component :has().
+  assert.equal(findForbiddenHas('.a:has(+ .b) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas('.a:has(~ .b) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas('.a:has(> .b:empty) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas(':root[data-x]:has(.b) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas('body:has(.b) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas('.dgrid:is(.live, :has(> #c)) {}', 'x.css').length, 1);
+  assert.equal(findForbiddenHas('.dgrid.live > .bcol:has(> .r-board > .empty) {}', 'x.css').length, 0);
+  assert.equal(findForbiddenHas('.dgrid.live > .agisland[data-mode="compact"]:is(:hover, :has(> .agcompact:focus-visible)) {}', 'x.css').length, 0);
+
+  const violations = [];
+  for (const [label, dir] of [['wsdashboard', dashboard], ['wswhiteboard', whiteboard]]) {
+    for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.css')).sort()) {
+      violations.push(...findForbiddenHas(read(dir, file), `${label}/${file}`));
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    'Forbidden :has() selectors violate ai-docs/manuals/performance.md (replace with explicit data-* / hidden / :empty):\n' + violations.join('\n')
+  );
+});
+
+test('exec HUD 1-second tick skips layout when elapsed digit length is unchanged', () => {
+  const css = read(dashboard, 'dashboard-exec-hud.css');
+  assert.match(css, /^\.xel\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/m);
+
+  const js = read(dashboard, 'dashboard-exec-hud.js');
+  const fmtFn = js.match(/\n  function xhFmtElapsed\([\s\S]*?\n  \}/)[0];
+  const renderFn = js.match(/\n  function xhRender\([\s\S]*?\n  \}/)[0];
+  const tickFn = js.match(/\n  function xhTickText\([\s\S]*?\n  \}/)[0];
+
+  let now = 5000, layouts = 0, textWrites = 0, textVal = '';
+  const elapsedNode = {
+    getAttribute(k) { return k === 'data-xsince' ? '0' : null; },
+    get textContent() { return textVal; },
+    set textContent(v) { textWrites++; textVal = v; }
+  };
+  const group = {
+    contains() { return false; },
+    appendChild() {},
+    set textContent(_) {}
+  };
+  const job = { id: 'j1', started_at: 0 };
+  const ctx = {
+    Date: { now: () => now },
+    window: {},
+    doc: { activeElement: null },
+    xhEnabled: true, xhAbsent: false, xhSig: '', xhHidden: false,
+    xhVis: [], xhSlots: [], xhJobs: [job], xhGroup: group, xhMore: {}, xhAgg: {},
+    xhTip: null, xhPeekEl: null, XH_MAX_CHIPS: 3,
+    xhVisible: () => [job],
+    xhGroupEl: () => group,
+    xhSt: () => 'running',
+    xhPeekOpen: () => false,
+    xhPeekId: () => '',
+    xhBuildChip: () => { textVal = '0:05'; return {}; },
+    xhLayout() { layouts++; },
+    xhSchedule() {},
+    xhPeekSync() {},
+    xhButtons: () => [],
+    q(sel, root) { return root === group && sel === '[data-xsince]' ? [elapsedNode] : []; }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(fmtFn + '\n' + renderFn + '\n' + tickFn, ctx);
+
+  ctx.xhRender(false);
+  assert.equal(layouts, 1, 'initial build lays out once');
+  assert.equal(textVal, '0:05');
+
+  now = 6000;
+  ctx.xhRender(false);
+  assert.equal(textVal, '0:06');
+  assert.equal(textWrites, 1);
+  assert.equal(layouts, 1, 'same-length tick skips xhLayout');
+
+  ctx.xhRender(false);
+  assert.equal(textWrites, 1, 'unchanged elapsed string skips DOM textContent write');
+  assert.equal(layouts, 1);
+
+  now = 600000;
+  ctx.xhRender(false);
+  assert.equal(textVal, '10:00');
+  assert.equal(layouts, 2, 'digit-length change triggers xhLayout');
+});
+
+test('explicit state attributes sync across consent banner, settings popover, audit badges, and whiteboard gaps', () => {
+  const makeAttrs = () => {
+    const map = new Map();
+    return {
+      setAttribute(k, v) { map.set(k, String(v)); },
+      removeAttribute(k) { map.delete(k); },
+      hasAttribute(k) { return map.has(k); },
+      getAttribute(k) { return map.has(k) ? map.get(k) : null; }
+    };
+  };
+
+  // 1. Account consent banner -> :root[data-account-banner]
+  const streamJs = read(dashboard, 'dashboard-stream.js');
+  const consentFn = streamJs.match(/\n  function setConsentBannerHidden\([\s\S]*?\n  \}/)[0];
+  const root = Object.assign(makeAttrs(), { style: { setProperty() {}, removeProperty() {} } });
+  const consentBanner = { hidden: true };
+  const consentCtx = { root, consentBanner, consentResize: null };
+  vm.createContext(consentCtx);
+  vm.runInContext(consentFn, consentCtx);
+  consentCtx.setConsentBannerHidden(false);
+  assert.equal(root.hasAttribute('data-account-banner'), true);
+  consentCtx.setConsentBannerHidden(true);
+  assert.equal(root.hasAttribute('data-account-banner'), false);
+
+  // 2. Settings popover -> :root[data-settings-open]
+  const popJs = read(dashboard, 'dashboard-rail-popovers.js');
+  const popBlock = popJs.match(/\n  function railPopClose\([\s\S]*?\n  function railPopOpen\([\s\S]*?\n  \}/)[0];
+  const gmenu = { hidden: true, parentNode: {}, focus() {} };
+  const btn = Object.assign(makeAttrs(), { closest() { return null; }, focus() {} });
+  const popCtx = {
+    window: {}, root, doc: { body: { appendChild() {} } }, gmenu,
+    rp: { P: null, kind: '', ws: '', btn: null },
+    layoutMode: 'auto', inputMode: 'enter',
+    rpKey: () => 'settings',
+    railPopBtn: () => btn,
+    railPopPlace() {},
+    setLayout() {}, setInput() {}, markTheme() {}, markLang() {}
+  };
+  vm.createContext(popCtx);
+  vm.runInContext(popBlock, popCtx);
+  popCtx.railPopOpen('settings', btn);
+  assert.equal(root.hasAttribute('data-settings-open'), true);
+  popCtx.railPopClose(false);
+  assert.equal(root.hasAttribute('data-settings-open'), false);
+
+  // 3. Audit boundary badge -> .boundary-badge[data-has-audit]
+  const auditJs = read(dashboard, 'dashboard-audit-rows.js');
+  assert.match(auditJs, /badge\.setAttribute\("data-has-audit", ""\)/);
+  assert.match(auditJs, /badge\.removeAttribute\("data-has-audit"\)/);
+
+  // 4. Whiteboard history gap -> data-gap-dir and .gap-sep[hidden]
+  const wbStreamJs = read(whiteboard, 'stream.js');
+  const gapFn = wbStreamJs.match(/\n  function syncGapAttrs\([\s\S]*?\n  \}/)[0];
+  const gapCtx = {};
+  vm.createContext(gapCtx);
+  vm.runInContext(gapFn, gapCtx);
+  const up = { hidden: false }, down = { hidden: true }, sep = { hidden: false }, range = { textContent: '1–5' };
+  const gap = Object.assign(makeAttrs(), {
+    querySelector(sel) {
+      if (sel === '[data-load="up"]') return up;
+      if (sel === '[data-load="down"]') return down;
+      if (sel === '.gap-sep') return sep;
+      if (sel === '.gap-range') return range;
+      return null;
+    }
+  });
+  gapCtx.syncGapAttrs(gap);
+  assert.equal(gap.getAttribute('data-gap-dir'), 'up');
+  assert.equal(sep.hidden, false);
+  down.hidden = false;
+  gapCtx.syncGapAttrs(gap);
+  assert.equal(gap.getAttribute('data-gap-dir'), 'both');
+  up.hidden = true; range.textContent = '';
+  gapCtx.syncGapAttrs(gap);
+  assert.equal(gap.getAttribute('data-gap-dir'), 'down');
+  assert.equal(sep.hidden, true);
+});

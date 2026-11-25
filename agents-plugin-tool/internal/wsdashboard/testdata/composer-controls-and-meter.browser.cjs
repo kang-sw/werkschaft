@@ -44,7 +44,7 @@ function composerHtml({ theme, width, harness, model, effort, isChild, canEdit, 
     .stage { width: ${width}px; max-width: 100%; }
   </style></head><body>${ASSETS.sprite}
   <div class="dwrap"><div class="top"><span id="r-head" class="region r-head" data-region="head"><span class="tph tph-hs"><span class="host sse"><span class="dot"></span>${harness}</span></span></span><span class="tcen"><button class="usage-toggle" type="button"></button><span id="talert" hidden></span></span></div><aside id="rail" hidden><div id="r-rail"><div class="rfoot"></div></div></aside></div>
-  <div class="stage"><div id="composer" class="composer"><div id="r-ctx" class="region r-ctx" data-region="ctx">${meterMarkup(meter)}</div><div class="crow"><div class="cfield"><textarea id="ctext" rows="1" placeholder="Message..."></textarea></div><button type="button" class="csend" id="csend">Send</button></div><div class="cfoot">${pills}<div id="r-sline" class="region r-sline" data-region="sline"></div></div></div></div></body></html>`;
+  <div class="stage"><div id="composer" class="composer"><div id="r-ctx" class="region r-ctx" data-region="ctx">${meterMarkup(meter)}</div><div class="crow"><div class="cfield"><textarea id="ctext" rows="1" placeholder="Message..."></textarea></div><button type="button" class="csend" id="csend">Send</button></div><div class="cfoot"${(hosted || isChild) ? '' : ' hidden'}>${pills}<div id="r-sline" class="region r-sline" data-region="sline"></div></div></div></div></body></html>`;
 }
 
 async function sideBySide(ctx, name, leftBuf, rightBuf, theme) {
@@ -156,7 +156,7 @@ async function sideBySide(ctx, name, leftBuf, rightBuf, theme) {
       .flist { display: flex; flex-direction: column; gap: 6px; max-width: 580px; background: var(--wb-card); padding: 12px; border-radius: 12px; }
       .frow { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 10px; }
     </style></head><body>${ASSETS.sprite}<div class="flist">${roles.map(([lbl, r]) =>
-      `<div class="frow"><b style="font-size:12px">${lbl}</b><div class="cfoot">${(r.hosted || r.isChild) ? pillsMarkup(r) : ''}<div class="region r-sline"></div></div></div>`
+      `<div class="frow"><b style="font-size:12px">${lbl}</b><div class="cfoot"${(r.hosted || r.isChild) ? '' : ' hidden'}>${(r.hosted || r.isChild) ? pillsMarkup(r) : ''}<div class="region r-sline"></div></div></div>`
     ).join('')}</div></body></html>`);
     const frows = rPage.locator('.frow');
     for (let i = 0; i < 6; i++) {

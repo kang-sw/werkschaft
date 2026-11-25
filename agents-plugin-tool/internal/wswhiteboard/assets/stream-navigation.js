@@ -270,6 +270,7 @@
       h._wbHistoryPending = [];
       // Kept before any load can exhaust and remove the last gap, so a fold
       // always has a shell to return rows into.
+      gaps(h).forEach(syncGapAttrs);
       var first = h.querySelector('.history-live > .history-gap');
       h._wbGapShell = first ? shell(first) : null;
       fresh.push(h);

@@ -166,7 +166,7 @@ a.tph-parent:focus-visible { outline: 1.5px solid var(--wb-primary); outline-off
 .tph-hs > .hosted { width: auto; height: 17px; padding: 0 5px; border-radius: 4px; background: var(--wb-muted); }
 /* status chips, one line; the group hides while it holds nothing */
 .tph-chips { gap: 5px; padding: 2px 8px 0; }
-.tph-chips:not(:has(> :not(:empty))) { display: none; }
+.tph-chips:empty { display: none; }
 .tph-chips > .counts { display: inline-flex; gap: 5px; margin: 0; }
 .tph-chips > .counts:empty { display: none; }
 .tph-chips .chip, .tph-chips .nolive, .tph-chips .ended-chip, .tph-chips .worktree-path { flex: none; font-size: 11px; line-height: 18px; }

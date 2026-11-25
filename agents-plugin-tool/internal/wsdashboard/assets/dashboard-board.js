@@ -273,12 +273,14 @@
     filePreview.el.style.width = Math.max(0, right - board.left) + "px";
   }
   function sizeFilesSheet() {
-    if (!filesSheet || filesSheet.el.hidden) return;
+    if (!filesSheet || filesSheet.el.hidden) { doc.body.removeAttribute("data-files-docked"); return; }
     var sheet = filesSheet.el;
-    if (!splitFiles()) { sheet.removeAttribute("data-docked"); return; }
+    if (!splitFiles()) { sheet.removeAttribute("data-docked"); doc.body.removeAttribute("data-files-docked"); return; }
     // The left column includes its header and composer, not just #convo.
     var column = chead.getBoundingClientRect(), bounds = grid.getBoundingClientRect();
     sheet.setAttribute("data-docked", "");
+    if (sheet.hasAttribute("data-max")) doc.body.setAttribute("data-files-docked", "");
+    else doc.body.removeAttribute("data-files-docked");
     sheet.style.setProperty("--files-dock-left", column.left + "px");
     sheet.style.setProperty("--files-dock-top", bounds.top + "px");
     sheet.style.setProperty("--files-dock-width", column.width + "px");
@@ -355,6 +357,7 @@
           if (filePreview) filePreview.close();
         }
         sheet.removeAttribute("data-docked");
+        doc.body.removeAttribute("data-files-docked");
       }
     };
     // Capture before explorer menus/inputs or pane chrome consume Escape.

@@ -6,13 +6,17 @@
   function setConsentBannerHidden(hidden) {
     consentBanner.hidden = hidden;
     if (hidden) {
+      root.removeAttribute("data-account-banner");
       consentResize?.disconnect();
       root.style.removeProperty("--account-banner-height");
-    } else if (typeof ResizeObserver === "function") {
-      consentResize ||= new ResizeObserver(([entry]) => {
-        if (!consentBanner.hidden) root.style.setProperty("--account-banner-height", entry.borderBoxSize[0].blockSize + "px");
-      });
-      consentResize.observe(consentBanner, {box: "border-box"});
+    } else {
+      root.setAttribute("data-account-banner", "");
+      if (typeof ResizeObserver === "function") {
+        consentResize ||= new ResizeObserver(([entry]) => {
+          if (!consentBanner.hidden) root.style.setProperty("--account-banner-height", entry.borderBoxSize[0].blockSize + "px");
+        });
+        consentResize.observe(consentBanner, {box: "border-box"});
+      }
     }
   }
 
