@@ -470,6 +470,9 @@
     "261124-refactor-remove-terminal-handoff": {
       "registered_at": "2026-11-24T07:52:19Z"
     },
+    "261125-feat-werkschaft-tauri-daemon-self-recovery": {
+      "registered_at": "2026-11-25T04:04:05Z"
+    },
     "261125-feat-ws-exec-completion-chat-row": {
       "registered_at": "2026-11-24T21:27:32Z"
     },
