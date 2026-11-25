@@ -16,7 +16,7 @@ import (
 
 func TestDashboardSettingsCatalog(t *testing.T) {
 	t.Setenv(wspackage.EnvDevCheckout, "")
-	var namespaces = map[string]int{"claude": 13, "agy": 6, "dashboard": 21}
+	var namespaces = map[string]int{"claude": 13, "agy": 6, "dashboard": 24}
 	for _, pkg := range []string{"ws", "wsflow"} {
 		t.Run(pkg, func(t *testing.T) {
 			catalog, err := DashboardConfigCatalog(pkg)
