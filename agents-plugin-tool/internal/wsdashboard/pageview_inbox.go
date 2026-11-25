@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"cmp"
+	"fmt"
 	"html/template"
 	"os"
 	"regexp"
@@ -45,6 +46,8 @@ type HeldView struct {
 	Consoles []wsinbox.Console
 	// Images are the entry's attached images.
 	Images []AttachmentView
+	// TextRefs are the entry's inline <textref> blocks, extracted from Parts.
+	TextRefs []TextRefView
 	// Command is a command entry's slash command; the bubble shows its
 	// typed line. Its steer control sends the line as steered text the agent
 	// acts on itself (wsinbox.Steer).
@@ -53,6 +56,50 @@ type HeldView struct {
 	// user-stop notice admitted through wsinbox.AdmitCompletion.
 	ExecNotice *ExecNoticeView
 	Lang       string
+}
+
+// TextRefView is one inline <textref> attachment extracted from a user message.
+type TextRefView struct {
+	Num      int
+	Body     string
+	Bytes    int
+	Lines    int
+	SizeText string
+}
+
+func formatTextRefBytes(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1f MiB", float64(n)/(1024*1024))
+}
+
+func countTextRefLines(body string) int {
+	if body == "" {
+		return 0
+	}
+	return 1 + strings.Count(body, "\n")
+}
+
+func textRefViews(refs []wsinbox.TextRef) []TextRefView {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]TextRefView, 0, len(refs))
+	for _, r := range refs {
+		nBytes := len(r.Body)
+		out = append(out, TextRefView{
+			Num:      r.Num,
+			Body:     r.Body,
+			Bytes:    nBytes,
+			Lines:    countTextRefLines(r.Body),
+			SizeText: formatTextRefBytes(nBytes),
+		})
+	}
+	return out
 }
 
 // AllImages returns every attached image for the held message, combining
@@ -64,7 +111,7 @@ func (h HeldView) AllImages() []AttachmentView {
 // Hydrated projects inline anchor-matched capsules inside Parts/Content and
 // deduplicates matched items from the header chip strip.
 func (h HeldView) Hydrated() hydratedUserMessage {
-	return hydrateUserMessage(h.Lang, h.Answers(), h.Mentions, h.CloseRequests, h.Picks, h.Consoles, h.BoardTargets, "", h.Parts, h.Content)
+	return hydrateUserMessage(h.Lang, h.Answers(), h.Mentions, h.CloseRequests, h.Picks, h.Consoles, h.TextRefs, h.BoardTargets, "", h.Parts, h.Content)
 }
 
 // AllImages returns every attached image for the entry, combining
@@ -76,7 +123,7 @@ func (e ConvEntry) AllImages() []AttachmentView {
 // Hydrated projects inline anchor-matched capsules inside Text/Content and
 // deduplicates matched items from the header chip strip.
 func (e ConvEntry) Hydrated() hydratedUserMessage {
-	return hydrateUserMessage(e.Lang, e.Answers, e.Mentions, e.CloseRequests, e.Picks, e.Consoles, e.BoardTargets, e.Text, nil, e.Content)
+	return hydrateUserMessage(e.Lang, e.Answers, e.Mentions, e.CloseRequests, e.Picks, e.Consoles, e.TextRefs, e.BoardTargets, e.Text, nil, e.Content)
 }
 
 func collectBubbleImages(content []SelectionContentPart, loose []AttachmentView) []AttachmentView {
@@ -121,6 +168,7 @@ type hydratedUserMessage struct {
 var (
 	inlineAnswerAnchorRe    = regexp.MustCompile(`^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})`)
 	inlinePanelAnchorRe     = regexp.MustCompile(`^\{\{(p[1-9][0-9]*)\}\}`)
+	inlineTextRefAnchorRe   = regexp.MustCompile(`^\[Text #([1-9][0-9]{0,5})\]`)
 	inlineLeadingNewlineRe  = regexp.MustCompile(`^(?:\r?\n){1,2}`)
 	inlineTrailingNewlineRe = regexp.MustCompile(`(?:\r?\n){1,2}$`)
 )
@@ -140,15 +188,25 @@ type inlineHydrator struct {
 	mentions []conversationChip
 	picks    []wsinbox.Pick
 	consoles []wsinbox.Console
+	textRefs map[int]TextRefView
 	usedAns  []bool
 	usedMen  []bool
 	usedPick []bool
 	usedCon  []bool
 }
 
-func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, picks []wsinbox.Pick, consoles []wsinbox.Console, targets map[string]string) *inlineHydrator {
+func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string) *inlineHydrator {
 	ac := answerChips(answers, targets)
 	mc := mentionChips(mentions, targets)
+	var trMap map[int]TextRefView
+	if len(textRefs) > 0 {
+		trMap = make(map[int]TextRefView, len(textRefs))
+		for _, r := range textRefs {
+			if _, ok := trMap[r.Num]; !ok {
+				trMap[r.Num] = r
+			}
+		}
+	}
 	return &inlineHydrator{
 		lang:     lang,
 		targets:  targets,
@@ -156,6 +214,7 @@ func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsi
 		mentions: mc,
 		picks:    picks,
 		consoles: consoles,
+		textRefs: trMap,
 		usedAns:  make([]bool, len(ac)),
 		usedMen:  make([]bool, len(mc)),
 		usedPick: make([]bool, len(picks)),
@@ -164,7 +223,20 @@ func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsi
 }
 
 func (h *inlineHydrator) hasCandidates() bool {
-	return len(h.answers) > 0 || len(h.mentions) > 0 || len(h.picks) > 0 || len(h.consoles) > 0
+	return len(h.answers) > 0 || len(h.mentions) > 0 || len(h.picks) > 0 || len(h.consoles) > 0 || len(h.textRefs) > 0
+}
+
+func (h *inlineHydrator) renderTextTag(ref TextRefView) string {
+	esc := template.HTMLEscapeString
+	title := wsi18n.T(h.lang, "textref.title", ref.Num, ref.SizeText, ref.Lines)
+	popTitle := wsi18n.T(h.lang, "textref.pop.title", ref.Num)
+	popMeta := wsi18n.T(h.lang, "textref.pop.meta", ref.SizeText, ref.Lines)
+	var b strings.Builder
+	b.WriteString(`<span class="txttag" data-icapsule="1" data-icapsule-click="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(title) + `">`)
+	b.WriteString(`<svg class="li" aria-hidden="true"><use href="#l-file-text"/></svg>`)
+	b.WriteString(`<span>Text #` + strconv.Itoa(ref.Num) + `</span>`)
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title">` + esc(popTitle) + `</b><span class="icapsule-pop-meta-dim">` + esc(popMeta) + `</span></div><pre class="icapsule-pop-textref">` + esc(ref.Body) + `</pre></template></span>`)
+	return b.String()
 }
 
 func (h *inlineHydrator) jumpButton(target, topicTarget string) string {
@@ -408,6 +480,20 @@ func (h *inlineHydrator) hydrateProse(prose string) template.HTML {
 					last = i
 					continue
 				}
+			case strings.HasPrefix(prose[i:], "[Text #"):
+				if len(h.textRefs) > 0 {
+					if m := inlineTextRefAnchorRe.FindStringSubmatchIndex(prose[i:]); m != nil {
+						if n, err := strconv.Atoi(prose[i+m[2] : i+m[3]]); err == nil {
+							if ref, ok := h.textRefs[n]; ok {
+								b.WriteString(string(markedText(h.lang, prose[last:i])))
+								b.WriteString(h.renderTextTag(ref))
+								i += m[1]
+								last = i
+								continue
+							}
+						}
+					}
+				}
 			}
 		}
 		i++
@@ -525,8 +611,8 @@ func renderSelectionInlineHTML(lang string, s *SelectionView, targets map[string
 	return template.HTML(b.String())
 }
 
-func hydrateUserMessage(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, closeReqs []wsinbox.CloseRequest, picks []wsinbox.Pick, consoles []wsinbox.Console, targets map[string]string, text string, parts []string, content []SelectionContentPart) hydratedUserMessage {
-	h := newInlineHydrator(lang, answers, mentions, picks, consoles, targets)
+func hydrateUserMessage(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, closeReqs []wsinbox.CloseRequest, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string, text string, parts []string, content []SelectionContentPart) hydratedUserMessage {
+	h := newInlineHydrator(lang, answers, mentions, picks, consoles, textRefs, targets)
 	out := hydratedUserMessage{CloseRequests: closeReqs}
 	if len(content) > 0 {
 		out.Grouped = true
@@ -687,10 +773,13 @@ func selectionViews(parts []wsinbox.SelectionPart, images []AttachmentView) ([]S
 }
 
 // splitSelectionContent consumes bare message content, after legacy leading
-// blocks (and, when present, the caller-owned message envelope). Extract image
-// definitions only outside selections so source/memo path lines stay literal.
-func splitSelectionContent(text, attachDir, replyID string) (string, []SelectionContentPart, []AttachmentView) {
-	parts := wsinbox.ParseSelections(text)
+// blocks (and, when present, the caller-owned message envelope). Strip valid
+// <textref> blocks first so anything inside their bodies stays opaque to
+// selection, image, and inline-anchor parsing. Extract image definitions only
+// outside selections so source/memo path lines stay literal.
+func splitSelectionContent(text, attachDir, replyID string) (string, []SelectionContentPart, []AttachmentView, []TextRefView) {
+	stripped, rawTextRefs := wsinbox.StripTextRefs(text)
+	parts := wsinbox.ParseSelections(stripped)
 	var images []AttachmentView
 	var rest strings.Builder
 	for i, p := range parts {
@@ -705,7 +794,7 @@ func splitSelectionContent(text, attachDir, replyID string) (string, []Selection
 		rest.WriteString(parts[i].Text)
 	}
 	content, loose := selectionViews(parts, images)
-	return rest.String(), content, loose
+	return rest.String(), content, loose, textRefViews(rawTextRefs)
 }
 
 // splitUserEntries unwraps each inbox item before the leading-anchored
@@ -831,14 +920,16 @@ func userBlockTexts(text string) []string {
 }
 
 func parseUserContent(e *ConvEntry, attachDir, replyID string) {
-	text := e.Text
+	text, rawTextRefs := wsinbox.StripTextRefs(e.Text)
 	if lines, rest, ok := wsinbox.ParseAnswerBlock(text); ok {
 		e.Answers, text = lines, rest
 	}
 	e.Mentions, text = wsinbox.ParseMentions(text)
 	e.CloseRequests, text = wsinbox.ParseCloseRequests(text)
 	e.Picks, e.Consoles, text = wsinbox.ParseWebElements(text)
-	e.Text, e.Content, e.Images = splitSelectionContent(text, attachDir, replyID)
+	var extraRefs []TextRefView
+	e.Text, e.Content, e.Images, extraRefs = splitSelectionContent(text, attachDir, replyID)
+	e.TextRefs = append(textRefViews(rawTextRefs), extraRefs...)
 }
 
 // userImages takes the image lines (wsinbox.ParseImageLine: the numbered
@@ -905,6 +996,15 @@ func heldViews(held []wsinbox.Record, attachDir, replyID string) []HeldView {
 		for i, path := range r.Entry.Images {
 			v.Images = append(v.Images, attachmentView(attachDir, replyID, nums[i], path))
 		}
+		var strippedParts []string
+		var rawTextRefs []wsinbox.TextRef
+		for _, p := range r.Entry.Parts {
+			sp, refs := wsinbox.StripTextRefs(p)
+			strippedParts = append(strippedParts, sp)
+			rawTextRefs = append(rawTextRefs, refs...)
+		}
+		v.Parts = strippedParts
+		v.TextRefs = textRefViews(rawTextRefs)
 		v.Content, v.Images = selectionViews(wsinbox.ParseSelections(strings.Join(v.Parts, "\n\n")), v.Images)
 		out = append(out, v)
 	}

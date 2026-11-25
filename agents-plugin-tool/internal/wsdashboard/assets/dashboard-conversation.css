@@ -639,9 +639,17 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .cimgs { display: flex; flex-wrap: wrap; gap: 6px; }
 .cimgs:empty { display: none; }
 .ichip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--wb-muted); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); flex: none; }
+.ichip[data-icapsule] { cursor: pointer; }
+.ichip[data-icapsule]:hover, .ichip[data-icapsule][aria-expanded="true"] { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.ichip[data-icapsule]:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 .ichip img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.unimg { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 999px; padding: 0; line-height: 18px; font-size: 13px; cursor: pointer; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); }
-.unimg:hover { background: var(--wb-card); }
+.unimg, .untxt { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 999px; padding: 0; line-height: 18px; font-size: 13px; cursor: pointer; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); }
+.unimg:hover, .untxt:hover { background: var(--wb-card); }
+.txtchip, .textref-thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; background: var(--wb-muted); color: var(--wb-muted-fg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); flex: none; cursor: pointer; }
+.txtchip:hover, .txtchip[aria-expanded="true"], .textref-thumb:hover, .textref-thumb[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); color: var(--wb-fg); box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.txtchip:focus-visible, .textref-thumb:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+.txtchip-ico, .textref-ico { display: grid; place-items: center; padding-bottom: 6px; pointer-events: none; }
+.txtchip-ico .li, .textref-ico .li { width: 22px; height: 22px; stroke-width: 1.75; }
 .inum, .thumbs .tnum { position: absolute; left: 2px; bottom: 2px; font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 4px; border-radius: 4px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); pointer-events: none; }
 .composer.drop { outline: 2px dashed var(--wb-primary); outline-offset: -4px; }
 /* A board note's image chips: a row right after its note, aligned with it,
@@ -660,8 +668,12 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .thumbs .thumb { position: relative; display: block; }
 .thumbs .thumb img { display: block; max-width: 160px; max-height: 120px; border-radius: 6px; object-fit: contain; background: var(--wb-muted); }
 .thumbs .ipath { font-size: 12px; color: var(--wb-muted-fg); word-break: break-all; }
-/* an "[Image #N]" marker in a message's text */
+/* an "[Image #N]" or "[Text #N]" marker in a message's text */
 .imgtag { display: inline-block; font-size: 11px; font-weight: 800; line-height: 1.3; padding: 0 5px; border-radius: 4px; font-variant-numeric: tabular-nums; vertical-align: 1px; background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); color: var(--wb-fg); }
+.txttag { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; line-height: 1.3; padding: 1px 6px; margin: 0 1px; border-radius: 5px; font-variant-numeric: tabular-nums; vertical-align: baseline; background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); color: var(--wb-fg); cursor: pointer; }
+.txttag .li { width: 12px; height: 12px; flex: none; color: var(--wb-primary); }
+.txttag:hover, .txttag[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+.txttag:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 /* inline hydrated capsules inside chat prose: compact single-line pills that
    match prose line height without inflating vertical rhythm; rich multi-line
    details live in the viewport-clamped .icapsule-pop popover. */
@@ -698,6 +710,10 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .icapsule-pop-lines { border-left-color: var(--wb-warn); }
 .icapsule-pop-comment { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--wb-line); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-fg); }
 .icapsule-pop-imgs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.icapsule-pop-meta-dim { flex: none; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.icapsule-pop-textref { margin: 0; padding: 7px 9px; border-radius: 6px; background: var(--wb-muted); color: var(--wb-fg); font-family: var(--wb-mono); font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.icapsule-pop-imgwrap { display: flex; justify-content: center; background: var(--wb-muted); border-radius: 6px; padding: 4px; }
+.icapsule-pop-img { display: block; max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 4px; }
 /* held: sent from the page, not yet received by the session */
 .msg.held .bub { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); }
 .heldtag { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; background: var(--wb-ph-perm); color: var(--wb-on-ph-perm); }

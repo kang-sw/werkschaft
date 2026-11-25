@@ -93,6 +93,8 @@ type ConvEntry struct {
 	HTML template.HTML
 	// Images are a user message's attached images, taken out of its text.
 	Images []AttachmentView
+	// TextRefs are a user message's inline <textref> blocks, taken out of its text.
+	TextRefs []TextRefView
 	// Content keeps grouped source/memo/image display in message order;
 	// nil retains the legacy Text rendering path.
 	Content []SelectionContentPart

@@ -84,6 +84,10 @@
   function attach(field) {
     if (!field || field.wsc) return field && field.wsc;
     var editor = doc.createElement("div"), text = field.value, ranges = [], selection = [0, 0], seenCaret = false, composing = false, nextKey = 0;
+    var rawPasteArmed = false, rawPasteActive = false;
+    function isRawPasteKey(e) {
+      return !!((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.code === "KeyV" || String(e.key || "").toLowerCase() === "v"));
+    }
     var nativeValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
     // Board snapshots clone DOM, not expando properties or event handlers.
     if (field.nextElementSibling && field.nextElementSibling.classList.contains("wsc-editor")) field.nextElementSibling.remove();
@@ -289,6 +293,14 @@
       editor.addEventListener(type, function (e) {
         e.stopPropagation();
         if (e.defaultPrevented) return;
+        if (type === "keydown") {
+          if (!composing && !e.isComposing && e.keyCode !== 229) {
+            if (isRawPasteKey(e)) rawPasteArmed = true;
+            else if (e.key !== "Shift" && e.key !== "Control" && e.key !== "Meta") rawPasteArmed = false;
+          }
+        } else if (!e.shiftKey || !(e.ctrlKey || e.metaKey) || e.code === "KeyV" || String(e.key || "").toLowerCase() === "v") {
+          rawPasteArmed = false;
+        }
         var forwarded = new KeyboardEvent(type, { key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: composing || e.isComposing, bubbles: true, cancelable: true });
         if (!field.dispatchEvent(forwarded)) { e.preventDefault(); return; }
         if (type !== "keydown" || composing || e.isComposing || e.keyCode === 229) return;
@@ -306,21 +318,30 @@
         }
       });
     });
-    ["focus", "blur", "click", "mouseup", "scroll"].forEach(function (type) { editor.addEventListener(type, function () { if (type === "focus") seenCaret = true; offsets(); field.dispatchEvent(new Event(type)); }); });
+    ["focus", "blur", "click", "mouseup", "scroll"].forEach(function (type) { editor.addEventListener(type, function () { if (type === "focus") seenCaret = true; if (type === "blur") { rawPasteArmed = false; rawPasteActive = false; } offsets(); field.dispatchEvent(new Event(type)); }); });
     editor.addEventListener("paste", function (e) {
       e.stopPropagation();
-      var forward = new Event("paste", { bubbles: true, cancelable: true });
-      Object.defineProperty(forward, "clipboardData", { value: e.clipboardData }); field.dispatchEvent(forward);
-      e.preventDefault();
-      if (forward.defaultPrevented || !e.clipboardData) return;
-      var rich;
-      try { rich = JSON.parse(e.clipboardData.getData("application/x-wsc-capsules+json")); } catch (_) { rich = null; }
-      if (rich && typeof rich.text === "string" && Array.isArray(rich.ranges) && valid(rich.text, rich.ranges).length === rich.ranges.length) {
-        var sel = expanded.apply(null, offsets()), before = valid(text, ranges), start = sel[0];
-        replace(rich.text, sel[0], sel[1]);
-        ranges = valid(text, ranges.concat(rich.ranges.map(function (r) { return Object.assign({}, r, { start: r.start + start, end: r.end + start }); })).sort(function (a, b) { return a.start - b.start; }));
-        render(); notify(before, "paste");
-      } else insertPlain(e.clipboardData.getData("text/plain"));
+      var raw = rawPasteArmed;
+      rawPasteArmed = false;
+      rawPasteActive = raw;
+      try {
+        var forward = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(forward, "clipboardData", { value: e.clipboardData }); field.dispatchEvent(forward);
+        e.preventDefault();
+        if (forward.defaultPrevented || !e.clipboardData) return;
+        var rich = null;
+        if (!raw) {
+          try { rich = JSON.parse(e.clipboardData.getData("application/x-wsc-capsules+json")); } catch (_) { rich = null; }
+        }
+        if (rich && typeof rich.text === "string" && Array.isArray(rich.ranges) && valid(rich.text, rich.ranges).length === rich.ranges.length) {
+          var sel = expanded.apply(null, offsets()), before = valid(text, ranges), start = sel[0];
+          replace(rich.text, sel[0], sel[1]);
+          ranges = valid(text, ranges.concat(rich.ranges.map(function (r) { return Object.assign({}, r, { start: r.start + start, end: r.end + start }); })).sort(function (a, b) { return a.start - b.start; }));
+          render(); notify(before, "paste");
+        } else insertPlain(e.clipboardData.getData("text/plain"));
+      } finally {
+        rawPasteActive = false;
+      }
     });
     // Rich HTML drops must not manufacture capsule identity or execute markup.
     editor.addEventListener("drop", function (e) {
@@ -364,6 +385,7 @@
     }
     var api = field.wsc = {
       editor: editor, snapshot: function () { return valid(text, ranges); },
+      rawPaste: function () { return rawPasteActive || rawPasteArmed; },
       rememberCaret: offsets,
       ordered: function () { return valid(text, ranges); },
       restore: function (saved) { var before = valid(text, ranges); ranges = valid(text, saved); render(); changed(before, "restore"); },
@@ -438,5 +460,6 @@
     field.addEventListener("keydown", function (e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); });
     return popup;
   }
-  window.WsCapsules = { attach: attach, topicPicker: topicPicker, sweep: sweep, token: token, rank: rank, valid: valid, shifted: shifted, stripMarkers: stripMarkers, command: command, focused: focused, fieldFor: fieldFor };
+  function rawPaste(field) { return !!(field && field.wsc && typeof field.wsc.rawPaste === "function" && field.wsc.rawPaste()); }
+  window.WsCapsules = { attach: attach, topicPicker: topicPicker, sweep: sweep, token: token, rank: rank, valid: valid, shifted: shifted, stripMarkers: stripMarkers, command: command, focused: focused, fieldFor: fieldFor, rawPaste: rawPaste };
 })();

@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "預約繼續",
   "js.quota.cancel": "取消預約",
   "js.quota.scheduled_toast": "已預約繼續執行。",
-  "js.quota.cancelled_toast": "已取消預約的繼續執行。"
+  "js.quota.cancelled_toast": "已取消預約的繼續執行。",
+  "textref.title": "附加文字 #{0} · {1} · {2} 行",
+  "textref.pop.title": "文字 #{0}",
+  "textref.pop.meta": "{0} · {1} 行",
+  "js.textref.title": "附加文字 #{0} · {1} · {2} 行",
+  "js.textref.pop.title": "文字 #{0}",
+  "js.textref.pop.meta": "{0} · {1} 行",
+  "js.textref.remove": "移除附加文字",
+  "js.textref.overcap.paste": "附加文字（{0}）超過訊息上限（{1}）— 請在傳送前縮減或移除。",
+  "js.textref.overcap.send": "訊息（{0}）超過上限（{1}）— 請縮減或移除附加文字後再試。"
 }

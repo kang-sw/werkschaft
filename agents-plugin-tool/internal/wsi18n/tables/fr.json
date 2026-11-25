@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "Planifier la poursuite",
   "js.quota.cancel": "Annuler",
   "js.quota.scheduled_toast": "Poursuite planifiée.",
-  "js.quota.cancelled_toast": "Poursuite planifiée annulée."
+  "js.quota.cancelled_toast": "Poursuite planifiée annulée.",
+  "textref.title": "texte joint #{0} · {1} · {2} lignes",
+  "textref.pop.title": "Texte #{0}",
+  "textref.pop.meta": "{0} · {1} lignes",
+  "js.textref.title": "texte joint #{0} · {1} · {2} lignes",
+  "js.textref.pop.title": "Texte #{0}",
+  "js.textref.pop.meta": "{0} · {1} lignes",
+  "js.textref.remove": "retirer le texte joint",
+  "js.textref.overcap.paste": "Le texte joint ({0}) dépasse la limite de {1} — raccourcissez-le ou retirez-le avant d’envoyer.",
+  "js.textref.overcap.send": "Le message ({0}) dépasse la limite de {1} — raccourcissez ou retirez le texte joint puis réessayez."
 }

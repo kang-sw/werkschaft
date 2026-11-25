@@ -25,6 +25,8 @@
     if (t.closest("#ccmd [data-uncmd]")) { clearCommand(); ctext.focus(); return; }
     u = t.closest("[data-unimg]");
     if (u) { unattach(imgs[+u.getAttribute("data-unimg")]); return; }
+    u = t.closest("[data-untxt]");
+    if (u) { if (typeof unattachTextRef === "function") unattachTextRef(+u.getAttribute("data-untxt")); return; }
     u = t.closest("#r-board button.closed-more[data-closed-next]");
     if (u) { loadClosed(u); return; }
     u = t.closest("#r-convlive [data-cancel]");

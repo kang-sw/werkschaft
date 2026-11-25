@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "続行を予約",
   "js.quota.cancel": "予約をキャンセル",
   "js.quota.scheduled_toast": "続行を予約しました。",
-  "js.quota.cancelled_toast": "予約された続行をキャンセルしました。"
+  "js.quota.cancelled_toast": "予約された続行をキャンセルしました。",
+  "textref.title": "添付テキスト #{0} · {1} · {2}行",
+  "textref.pop.title": "テキスト #{0}",
+  "textref.pop.meta": "{0} · {1}行",
+  "js.textref.title": "添付テキスト #{0} · {1} · {2}行",
+  "js.textref.pop.title": "テキスト #{0}",
+  "js.textref.pop.meta": "{0} · {1}行",
+  "js.textref.remove": "添付テキストを削除",
+  "js.textref.overcap.paste": "添付テキスト（{0}）がメッセージ上限（{1}）を超えています — 送信前に短縮または削除してください。",
+  "js.textref.overcap.send": "メッセージ（{0}）が上限（{1}）を超えています — 添付テキストを短縮または削除して再試行してください。"
 }

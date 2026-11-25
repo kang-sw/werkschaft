@@ -63,7 +63,7 @@
     if (!d || typeof d !== "object") return true;
     return !d.text && !d.cmd && !(d.chips && d.chips.length) && !(d.bmentions && d.bmentions.length) && !(d.closeRequests && d.closeRequests.length) &&
       !(d.wpicks && d.wpicks.length) && !(d.wconsoles && d.wconsoles.length) && !keys(d.answers).length && !(d.refs && d.refs.length) &&
-      !(d.lost && d.lost.length) && !keys(d.open).length && (!d.tab || d.tab === "convo");
+      !(d.textRefs && d.textRefs.length) && !(d.lost && d.lost.length) && !keys(d.open).length && (!d.tab || d.tab === "convo");
   }
 
   // drafts is the draft store: load(rid), save(rid, draft) (an empty draft

@@ -274,6 +274,8 @@
       wpicks: wpicks.slice(),
       wconsoles: wconsoles.slice(),
       refs: imgs.filter(function (p) { return !!p.ref; }).map(function (p) { return { ref: p.ref, name: p.name, n: p.n }; }),
+      textRefs: typeof textRefs !== "undefined" ? textRefs.map(function (r) { return { n: r.n, body: r.body }; }) : [],
+      txtSeq: typeof txtSeq === "number" ? txtSeq : 0,
       lost: imgs.filter(function (p) { return !p.ref; }).map(function (p) { return p.n; }),
       open: open,
       tab: live ? grid.getAttribute("data-tab") || "" : ""
@@ -686,6 +688,16 @@
         });
         restoreDraftMarkers(loose);
         imgs.sort(function (a, b) { return a.n - b.n; });
+        if (typeof textRefs !== "undefined" && typeof textMarkerNums === "function") {
+          if (typeof d.txtSeq === "number" && d.txtSeq > txtSeq) txtSeq = d.txtSeq;
+          var haveTxt = textMarkerNums(ctext.value);
+          (Array.isArray(d.textRefs) ? d.textRefs : []).forEach(function (r) {
+            if (!r || !(r.n >= 1) || typeof r.body !== "string" || !haveTxt[r.n] || textRefs.some(function (x) { return x.n === r.n; })) return;
+            textRefs.push({ n: r.n, body: r.body, bytes: utf8ByteLen(r.body), lines: countTextRefLines(r.body) });
+            txtSeq = Math.max(txtSeq, r.n);
+          });
+          textRefs.sort(function (a, b) { return a.n - b.n; });
+        }
         renderImgs();
       }
       if (live && d.tab === "board") setTab("board");
