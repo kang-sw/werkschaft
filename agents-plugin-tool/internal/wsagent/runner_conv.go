@@ -687,7 +687,7 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 	if p, ok := c.proc.(durableSteerProcess); ok && c.rec.DurableTurn != nil {
 		queued := false
 		c.admitInput(func() {
-			queued = c.queueDurableSteer(p, durableSteer{Text: text, Mail: m.Text}, nil, *wakeEvent("mail", "mailbox", "", text).Live)
+			queued = c.queueDurableSteer(p, durableSteer{Text: text, Mail: m.Text}, nil, []wslive.Event{*wakeEvent("mail", "mailbox", "", text).Live})
 		})
 		return queued
 	}
@@ -816,17 +816,12 @@ func (c *conv) steer() {
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
 	c.cutoverInstructionLeft(recs)
-	var parts []string
-	for _, rec := range recs {
-		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			parts = append(parts, text)
-		}
-	}
+	parts := recordParts(recs)
 	if len(parts) == 0 {
 		return
 	}
-	text := strings.Join(parts, "\n\n")
-	c.apply(wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
+	text := partsText(parts)
+	c.applyLive(liveEvents(parts))
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
 		c.stopProcess("")
@@ -2036,7 +2031,8 @@ func (c *conv) kickInput() {
 			cmd := *cmd
 			queue = append(queue, QueuedInput{Command: &cmd, After: from, Operator: operator})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator})
+			_, exec := rec.Entry.ExecNotice()
+			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -2054,7 +2050,11 @@ func (c *conv) kickInput() {
 		}
 		return
 	}
-	cmd, parts, rest := nextTurn(queue)
+	cmd, inputs, rest := nextTurn(queue)
+	parts := make([]string, len(inputs))
+	for i, input := range inputs {
+		parts[i] = input.Text
+	}
 	if !durable && cmd != nil && cmd.Name == "compact" {
 		c.refreshCompaction()
 		if c.wsManagedLeadCompaction() {
@@ -2292,15 +2292,34 @@ func (c *conv) kickInput() {
 	// Mail shows on the page through the session's mail history, so only
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.
+	//
+	// An exec job's completion notice is a background_exit wake, never the
+	// user's text: it is recorded in queue order beside the user entries,
+	// and a turn made of notices alone keeps the mail origin so the ring
+	// marks it a wake turn.
 	origin := wslive.OriginMail
-	text := strings.Join(append(slices.Clone(parts), sentReports...), "\n\n")
+	var shown []livePart
 	if cmd != nil {
-		text = cmd.Line()
+		shown = []livePart{{Text: cmd.Line()}}
+	} else {
+		for _, input := range inputs {
+			shown = append(shown, livePart{Text: input.Text, Exec: input.Exec})
+		}
+		shown = append(shown, reportParts(reports)...)
+		for i := range sentReports {
+			// A text report shows as sent (with its legend, if any); a
+			// notice keeps its envelope, which a legend would not parse.
+			if p := &shown[len(shown)-len(reports)+i]; !p.Exec {
+				p.Text = sentReports[i]
+			}
+		}
 	}
-	if text != "" {
+	shown = slices.DeleteFunc(shown, func(p livePart) bool { return p.Text == "" })
+	live := liveEvents(shown)
+	if hasUserText(live) {
 		origin = wslive.OriginWhiteboard
-		c.apply(wslive.Event{Kind: wslive.KindUser, Origin: origin, Text: text})
 	}
+	c.applyLive(live)
 	for _, text := range submitted {
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 	}
@@ -2329,20 +2348,20 @@ func (c *conv) voidCancelled() {
 }
 
 // nextTurn splits queue at its first slash command: a command at the front
-// is the turn (cmd), else the texts before the first command are (parts).
+// is the turn (cmd), else the texts before the first command are (inputs).
 // rest is what waits for the turns after it; nil when nothing does.
-func nextTurn(queue []QueuedInput) (cmd *wsinbox.Command, parts []string, rest []QueuedInput) {
+func nextTurn(queue []QueuedInput) (cmd *wsinbox.Command, inputs []QueuedInput, rest []QueuedInput) {
 	n := 0
 	if len(queue) > 0 && queue[0].Command != nil {
 		cmd, n = queue[0].Command, 1
 	} else {
 		for n < len(queue) && queue[n].Command == nil {
-			parts = append(parts, queue[n].Text)
+			inputs = append(inputs, queue[n])
 			n++
 		}
 	}
 	if n < len(queue) {
 		rest = slices.Clone(queue[n:])
 	}
-	return cmd, parts, rest
+	return cmd, inputs, rest
 }

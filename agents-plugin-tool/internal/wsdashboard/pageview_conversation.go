@@ -68,6 +68,15 @@ func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]
 		switch r.Kind {
 		case wslive.RingUser:
 			cv.Users++
+		case wslive.RingWake:
+			if r.Cause == "background_exit" {
+				if ev, at, ok := parseExecNoticeWithAt(r.Text); ok {
+					e.ExecNotice = ev
+					if at != "" {
+						e.EnvelopeAt = at
+					}
+				}
+			}
 		case wslive.RingMail:
 			cv.Mails++
 			if r.HistoryKey != "" {

@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 850f6d7c47de10f7
 sage-review-completeness-reviewed: 850f6d7c47de10f7
+completed: 2026-11-25
 ---
 
 # Render background ws/exec completion notices as compact wake rows with monitor link
@@ -136,3 +137,22 @@ Implement end-to-end Option C across `wsinbox`, `wsagent`, and `wsdashboard`:
      - Mid-turn steer and persisted-queue paths record `RingWake`, not `RingUser`, for exec notices, with `<ws:exec>` framing and `</ws:exec` escaping in the model-facing text.
      - Legacy `RingUser` fallback renders identically.
    - `GOOS=windows go -C agents-plugin-tool vet -stdversion=false ./...` passes cleanly.
+
+### Result (b8c084db7) - 2026-11-25
+
+- **Source classification & `<ws:exec>` framing (`8762dec82`):**
+  - Classified hosted `ws/exec` completion and user-stop notices by their trusted `EventID` prefix (`"exec:"`, set only by `execjob`/`AdmitCompletion`) in `wsinbox/user_message.go`, rendering them in `<ws:exec at="..." id="...">` … `</ws:exec>` with `</ws:exec` escaping and keeping `ParseUserMessages` plain-block handling. Updated `rsrc/whiteboard/whiteboard.md` (plus manifest and `agents-plugin-wsflow/` mirror) with one sentence naming `<ws:exec>`.
+  - Carried per-part `ExecNotice` classification through every `wsagent` inbox drain, mid-turn steer, durable-steer, requeue, worker (`children.go`), and persisted `QueuedInput` / `Record.Queued` / `Record.Reports` / `Record.Mail` path (additive `omitempty` / `<ws:exec>` block recovery; T0/T1 compatible).
+  - Emitted `wslive.KindWake` (`Cause: "background_exit"`, `Source: exec_id`, one-line `Caption`, unwrapped `Text`) instead of `RingUser(OriginWhiteboard)` across normal drain and durable-steer paths, separating mixed user+exec batches in queue order and using empty origin (`WakeTurn`) for exec-only turn-start batches.
+- **Dashboard rendering, legacy fallback & monitor jump (`8e1b0a3e7`, `b8c084db7`):**
+  - Added strict shared parser `wsdashboard/exec_notice.go` matching `execjob/hosted_notice.go` (`noticeText`) and `execjob/hosted_hud.go` (`stopNoticeText`) after trimming surrounding whitespace (all `endText` variants, multi-line command/stop notes, output/no-output sections, exact matching `exec.tail` trailer; rejects extra prose, concatenated notices, and spoofs).
+  - Rendered both new `RingWake(background_exit)` exec notices and legacy `RingUser` single/mixed-batch exec blocks identically as compact borderless collapsible `.exec-notice` rows (`data-wake-cause="background_exit"`, `.fail` tone for non-zero/error, no `.msg.user`, no rewind/edit/copy controls; non-matching `background_exit` wakes fall back to `agent-note`), compact `.held-exec` display for held `exec:` entries, aligned `userBlockTexts` / `countUserEntries`, and registered `.exec-notice` in `dashboard-audit-rows.js`.
+  - Wired click-then-resolve `window.wsBgExecJump(id, anchorEl)` in `dashboard-bg-exec-monitor.js` preserving zero closed-state requests/timers, gating `.exec-view-out` on `html[data-sysopen="1"] body.live` (matching `#bgbadge` `.SysOpen` posture), anchoring `#bgpop` on-screen when `#bgbadge` is hidden, applying `bgPendingSel` over default first-running selection, and hiding expired rows with the localized note on resolution (without stale closed-state or in-flight list races).
+  - Added 13 `entry.exec.*` keys across all 11 locale tables under `wsi18n/tables/*.json`.
+- **Review (`code-review-lite`, one pass):**
+  - Fresh read-only reviewer (`id:ivorylungcrablikegawk`) reported 0 Critical, 1 Important (vacuous `.act-rewind`/`.act-edit` selector in `exec-completion-row.browser.cjs`), and 2 Minor (in-flight `bgListRequest` toggle guard + present-row reconciliation in `dashboard-bg-exec-monitor.js`; multi-line `stopped by user:` note test case in `exec_notice_test.go`). All 3 findings were fixed in `b8c084db7` and re-verified.
+- **Verification:**
+  - Remote `w5090` (`go test -race`): `./internal/wsinbox/...` PASS, `./internal/wsrsrc/...` PASS, `./internal/execjob/...` PASS, `./internal/wsi18n/...` PASS (all 11 locales), `./internal/wsagent -run 'ExecNotice|ExecClassification|DurableSteer|Child|Inbox|Runner'` PASS, `./internal/wsdashboard -run 'TestParseExecNotice|TestExecCompletionRowSSRAndLegacyParity|TestMessageRouteCannotForgeExecEventID|TestEntryText|TestUserMessage|TestHeld'` PASS (`33.2s` pre-fix, `2.6s` post-fix).
+  - Remote `w5090` Playwright Chromium (`WS_PLAYWRIGHT_MODULE=/tmp/shellredesign-pw/node_modules/playwright`): `TestBgExecMonitorBrowser` PASS (`15.61s`), `TestExecCompletionRowBrowser` PASS (`5.20s`, covering LAN read-only hide, compact ok/fail rows, non-vacuous rewind/edit absence, zero closed-state requests, hidden-badge on-screen jump, open-monitor and click-time expiry hide, `bgPendingSel` overriding first-running on legacy `RingUser`, zero post-close requests).
+  - Remote `w5090` `GOOS=windows go vet -stdversion=false ./...`: PASS (0 warnings).
+  - Local checks: `node --check` on edited JS clean, `git diff --check` clean, `python -m unittest discover -s agents-plugin-wsflow/tests` PASS (22 tests, 1 skipped), `node --test` on `frontend-audit-rows.test.js`, `frontend-audit.test.js`, `frontend-companion.test.js`, `frontend-user-jump.test.js`, `frontend-interaction.test.js`, `frontend-history.test.js`, `frontend-stream-message.test.js`, `frontend-scroll.test.js`, `frontend-idle.test.js`, `composer-outbox-resilience.test.cjs`, `notifications.test.cjs` PASS.

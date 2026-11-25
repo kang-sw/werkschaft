@@ -562,18 +562,13 @@ func (c *conv) steerWorker() {
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
 	c.cutoverInstructionLeft(recs)
-	var parts []string
-	for _, rec := range recs {
-		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-			parts = append(parts, text)
-		}
-	}
+	parts := recordParts(recs)
 	if len(parts) == 0 {
 		return
 	}
 	c.drained = covered
 	c.update(func(rec *Record) { rec.Drained = covered })
-	c.takeSteer(strings.Join(parts, "\n\n"), covered)
+	c.takeSteerLive(partsText(parts), covered, liveEvents(parts))
 }
 
 // takeReport takes a child's report into the conversation: steered into
@@ -585,19 +580,24 @@ func (c *conv) takeReport(text string) {
 }
 
 func (c *conv) takeSteer(text string, mark uint64) {
+	c.takeSteerLive(text, mark, userEvents(text))
+}
+
+// takeSteerLive is takeSteer with the ring's account of text (liveEvents),
+// for a steer whose parts are not all the user's own.
+func (c *conv) takeSteerLive(text string, mark uint64, live []wslive.Event) {
 	if c.r.durableProcess(c.rec.Backend) {
 		if p, ok := c.proc.(durableSteerProcess); ok && c.turn && c.rec.DurableTurn != nil && !c.rec.Lead &&
 			!c.wrapHold && !c.compacting && !c.compactCommand && !c.compactInternalTurn {
 			queued := false
 			c.admitInput(func() {
-				queued = c.queueDurableSteer(p, durableSteer{Text: text, Mark: mark}, nil,
-					wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
+				queued = c.queueDurableSteer(p, durableSteer{Text: text, Mark: mark}, nil, live)
 			})
 			if queued {
 				return
 			}
 		}
-		c.update(func(rec *Record) { rec.Reports = append(rec.Reports, text) })
+		c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(text)...) })
 		c.kick()
 		c.changed(false)
 		return
@@ -616,7 +616,7 @@ func (c *conv) takeSteer(text string, mark uint64) {
 			err = checkoutReleasedRefusal(refusedBy)
 		}
 		if err == nil {
-			c.apply(wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
+			c.applyLive(live)
 			c.changed(false)
 			return
 		}
@@ -624,7 +624,7 @@ func (c *conv) takeSteer(text string, mark uint64) {
 		c.saveSteered()
 		fmt.Fprintf(c.r.opts.Log, "agent %s: steer a message: %v\n", c.rec.ReplyID, err)
 	}
-	c.update(func(rec *Record) { rec.Reports = append(rec.Reports, text) })
+	c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(text)...) })
 	c.kick()
 	c.changed(false)
 }
@@ -641,7 +641,7 @@ func (c *conv) steerAnswered(refusal string) {
 				fmt.Fprintf(c.r.opts.Log, "agent %s: the harness refused a steered report (%s); it goes as a turn\n", c.rec.ReplyID, refusal)
 				c.steered = slices.Delete(c.steered, i, i+1)
 				c.saveSteered()
-				c.update(func(rec *Record) { rec.Reports = append(rec.Reports, s.requeued()) })
+				c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(s.requeued())...) })
 				break
 			}
 		}
@@ -698,7 +698,7 @@ func (c *conv) requeueSteered() bool {
 	}
 	texts := make([]string, 0, len(c.steered))
 	for _, s := range c.steered {
-		texts = append(texts, s.requeued())
+		texts = append(texts, splitReportTexts(s.requeued())...)
 	}
 	c.steered = nil
 	c.saveSteered()
