@@ -294,6 +294,23 @@ test('Ctrl+Shift+V and Cmd+Shift+V share rawPasteBypass accessor and bypass badg
   assert.equal(C.rawPasteBypass(), false);
   pasteText(field, tag);
   assert.equal(field.wsc.snapshot().length, 1, 'disarmed keyup does not stick raw bypass');
+
+  // blur disarms rawPasteArmed
+  field.wsc.editor.dispatchEvent(new Evt('keydown', { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true }));
+  assert.equal(C.rawPasteBypass(), true);
+  field.wsc.editor.dispatchEvent(new Evt('blur'));
+  assert.equal(C.rawPasteBypass(), false, 'blur disarms raw paste bypass');
+
+  // Ctrl+Shift+V bypasses rich capsule clipboard payload too
+  field.value = '';
+  const rich = JSON.stringify({
+    text: tag,
+    ranges: [{ start: 0, end: tag.length, kind: 'mailbox', id: 'mailbox:9', key: 'mailbox:9', label: 'Worker', payload: { anchor: tag } }]
+  });
+  field.wsc.editor.dispatchEvent(new Evt('keydown', { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true }));
+  pasteText(field, tag, rich);
+  assert.equal(field.value, tag);
+  assert.equal(field.wsc.snapshot().length, 0, 'Ctrl+Shift+V bypasses rich capsule paste as plain text');
 });
 
 test('textref opacity precedence: mailbox tag inside valid textref is not converted, outside is converted', () => {

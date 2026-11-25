@@ -233,3 +233,39 @@ func TestMailboxBadgeSSRHeldDeliveredXSSAndTextrefOpacity(t *testing.T) {
 		t.Fatalf("expected only the 1 mailbox entry to rebuild on branch change (plain entry stays cached), got %d rebuilds", got)
 	}
 }
+
+func TestMailboxBadgeHistoryRouteUsesViewingDirAndBranch(t *testing.T) {
+	f := startPageFixture(t)
+	proj := f.project
+
+	// Seed the daemon's git tracker for proj so handleHistory sees branch="develop".
+	if f.d.git == nil {
+		f.d.git = &gitWatcher{stop: make(chan struct{}), roots: map[string]*gitRoot{}}
+	}
+	f.d.git.mu.Lock()
+	f.d.git.roots[gitKey(proj)] = &gitRoot{
+		badge: &GitBadge{State: gitOK, Root: proj, TopLevel: proj, Repo: wslive.Repo{Branch: "develop"}},
+	}
+	f.d.git.mu.Unlock()
+
+	sameTag := `<mailbox id="id:abcdef123456" dir="` + proj + `" branch="develop" harness="claude">Hist Worker</mailbox>`
+	diffBranchTag := `<mailbox id="id:998877665544" dir="` + proj + `" branch="feat/x">Other Branch</mailbox>`
+	msg := wsinbox.Entry{Parts: []string{"See " + sameTag + " and " + diffBranchTag}}
+	ringDir := wslive.RingDir(SessionDir(f.dir, "livesession"))
+	if err := wslive.AppendRing(ringDir, []wslive.RingEntry{
+		{Kind: wslive.RingUser, Origin: wslive.OriginWhiteboard, Text: msg.Text()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ans := getHistory(t, f.base+"/s/livesession/history")
+	if !strings.Contains(ans.HTML, `class="icapsule icapsule-mailbox"`) {
+		t.Fatalf("history HTML missing mailbox capsule:\n%s", ans.HTML)
+	}
+	if !strings.Contains(ans.HTML, `>Hist Worker</span>`) {
+		t.Errorf("same-dir same-branch badge in history should shorten to 'Hist Worker', got:\n%s", ans.HTML)
+	}
+	if !strings.Contains(ans.HTML, `>feat/x · Other Branch</span>`) {
+		t.Errorf("same-dir diff-branch badge in history should shorten to 'feat/x · Other Branch', got:\n%s", ans.HTML)
+	}
+}
