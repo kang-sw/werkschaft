@@ -26,9 +26,17 @@ var errNoFSReadTools = errors.New("this read tool requires a dashboard-hosted se
 
 // execToolsListed reports whether this connection lists the exec tools: a
 // trusted binding to a conversation that launched under the cutover, on a
-// daemon that runs hosted exec jobs.
+// daemon that runs hosted exec jobs (or a daemon-side lead manual render for
+// a cutover session).
 func (s *Server) execToolsListed() bool {
-	return s.hostedExec() && s.execCutover != ""
+	return (s.hostedExec() || s.connectionDescriptor().leadRender) && s.execCutover != ""
+}
+
+// isDirectTool reports whether canonicalName is listed directly in tools/list
+// when descriptor.directTools restricts discovery. Cutover-listed tools are
+// always direct so directTools does not silently strip them behind call.
+func (s *Server) isDirectTool(descriptor connectionDescriptor, canonicalName string) bool {
+	return canonicalName == "call" || slices.Contains(descriptor.directTools, canonicalName) || s.cutoverListed(canonicalName)
 }
 
 // fsReadTools requires a trusted cutover binding to a backend that declares

@@ -3,10 +3,12 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
@@ -77,10 +79,13 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 		manifests string
 		namespace string
 		forward   bool
+		cutover   string
 	}{
 		{name: "ws lead", manifests: wsManifests()},
 		{name: "wsflow lead", manifests: wsflow.own + ";" + wsflow.dashboard, namespace: "wsflow"},
 		{name: "ws forwarding worker", manifests: wsManifests(), forward: true},
+		{name: "ws cutover lead", manifests: wsManifests(), cutover: wsagent.BackendAgy},
+		{name: "wsflow cutover lead", manifests: wsflow.own + ";" + wsflow.dashboard, namespace: "wsflow", cutover: wsagent.BackendAgy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(envNamespace, tc.namespace)
@@ -92,10 +97,31 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 				agents = newFakePiAgents()
 			}
 			f := agentLeadFixture(t, tc.manifests, agents)
+			if tc.cutover != "" {
+				hosted := &execjob.Hosted{}
+				f.server.conversation = "lead"
+				f.server.execCutover = tc.cutover
+				f.server.exec = func() *execjob.Hosted { return hosted }
+			}
+			sizes := listedToolSizes(t, f.server)
 			var over []string
-			for _, tool := range listedToolSizes(t, f.server) {
+			seenExec := map[string]int{}
+			for _, tool := range sizes {
+				if slices.Contains(cutoverExecTools, tool.name) {
+					seenExec[tool.name] = tool.size
+				}
 				if tool.size > toolSchemaByteCap {
 					over = append(over, fmt.Sprintf("%s: %d B", tool.name, tool.size))
+				}
+			}
+			if tc.cutover != "" {
+				for _, name := range cutoverExecTools {
+					sz, ok := seenExec[name]
+					if !ok {
+						t.Errorf("cutover surface missing %s", name)
+					} else {
+						t.Logf("%s: %d B", name, sz)
+					}
 				}
 			}
 			if len(over) > 0 {
