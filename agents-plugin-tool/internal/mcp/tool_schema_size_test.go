@@ -10,6 +10,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 // toolSchemaByteCap is the most a model-visible tool may cost as tools/list
@@ -20,8 +21,17 @@ import (
 const toolSchemaByteCap = 1450
 
 type listedToolSize struct {
-	name string
-	size int
+	name          string
+	size          int
+	hasLeadSummary bool
+}
+
+type fakePiAgentsLeadModeWS struct {
+	*fakePiAgents
+}
+
+func (fakePiAgentsLeadModeWS) LeadCompactionMode(string) string {
+	return wsconfig.CompactionModeWS
 }
 
 // listedToolSizes measures every tool a server's tools/list answer shows.
@@ -30,9 +40,9 @@ func listedToolSizes(t *testing.T, s *Server) []listedToolSize {
 	var resp struct {
 		Result struct {
 			Tools []struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				InputSchema any    `json:"inputSchema"`
+				Name        string         `json:"name"`
+				Description string         `json:"description"`
+				InputSchema map[string]any `json:"inputSchema"`
 			} `json:"tools"`
 		} `json:"result"`
 	}
@@ -53,7 +63,9 @@ func listedToolSizes(t *testing.T, s *Server) []listedToolSize {
 		if err != nil {
 			t.Fatalf("%s: %v", tool.Name, err)
 		}
-		sizes = append(sizes, listedToolSize{tool.Name, len(encoded)})
+		props, _ := tool.InputSchema["properties"].(map[string]any)
+		_, hasLeadSummary := props["lead_summary"]
+		sizes = append(sizes, listedToolSize{tool.Name, len(encoded), hasLeadSummary})
 	}
 	sort.Slice(sizes, func(i, j int) bool {
 		if sizes[i].size != sizes[j].size {
@@ -75,14 +87,17 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 
 	wsflow := dashboardPackages[1]
 	for _, tc := range []struct {
-		name      string
-		manifests string
-		namespace string
-		forward   bool
-		cutover   string
+		name       string
+		manifests  string
+		namespace  string
+		forward    bool
+		cutover    string
+		leadModeWS bool
 	}{
 		{name: "ws lead", manifests: wsManifests()},
 		{name: "wsflow lead", manifests: wsflow.own + ";" + wsflow.dashboard, namespace: "wsflow"},
+		{name: "ws lead compaction.lead_mode=ws", manifests: wsManifests(), leadModeWS: true},
+		{name: "wsflow lead compaction.lead_mode=ws", manifests: wsflow.own + ";" + wsflow.dashboard, namespace: "wsflow", leadModeWS: true},
 		{name: "ws forwarding worker", manifests: wsManifests(), forward: true},
 		{name: "ws cutover lead", manifests: wsManifests(), cutover: wsagent.BackendAgy},
 		{name: "wsflow cutover lead", manifests: wsflow.own + ";" + wsflow.dashboard, namespace: "wsflow", cutover: wsagent.BackendAgy},
@@ -93,10 +108,15 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 			if tc.forward {
 				t.Setenv(wsagent.EnvPiToken, "token")
 				t.Setenv(wsagent.EnvPiEndpoint, "http://127.0.0.1:1")
+			} else if tc.leadModeWS {
+				agents = fakePiAgentsLeadModeWS{fakePiAgents: newFakePiAgents()}
 			} else {
 				agents = newFakePiAgents()
 			}
 			f := agentLeadFixture(t, tc.manifests, agents)
+			if tc.leadModeWS {
+				f.server.conversation = "lead"
+			}
 			if tc.cutover != "" {
 				hosted := &execjob.Hosted{}
 				f.server.conversation = "lead"
@@ -106,12 +126,25 @@ func TestListedToolSchemasFitByteCap(t *testing.T) {
 			sizes := listedToolSizes(t, f.server)
 			var over []string
 			seenExec := map[string]int{}
-			for _, tool := range sizes {
+			var seenCompact *listedToolSize
+			for i := range sizes {
+				tool := sizes[i]
+				if tool.name == "compact" {
+					seenCompact = &tool
+				}
 				if slices.Contains(cutoverExecTools, tool.name) {
 					seenExec[tool.name] = tool.size
 				}
 				if tool.size > toolSchemaByteCap {
 					over = append(over, fmt.Sprintf("%s: %d B", tool.name, tool.size))
+				}
+			}
+			if seenCompact == nil {
+				t.Errorf("surface missing compact")
+			} else {
+				t.Logf("compact (lead_summary=%v): %d B", seenCompact.hasLeadSummary, seenCompact.size)
+				if seenCompact.hasLeadSummary != tc.leadModeWS {
+					t.Errorf("compact hasLeadSummary = %v, want %v", seenCompact.hasLeadSummary, tc.leadModeWS)
 				}
 			}
 			if tc.cutover != "" {

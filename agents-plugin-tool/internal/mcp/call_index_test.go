@@ -7,6 +7,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 func TestCallIndexMatchesConnectionDiscovery(t *testing.T) {
@@ -161,5 +162,63 @@ func TestCallIndexMarksCutoverExecToolsDirect(t *testing.T) {
 	}
 	if strings.Contains(ncIndex, "exec_") {
 		t.Fatalf("non-cutover render must not include exec_* tools:\n%s", ncIndex)
+	}
+}
+
+func TestCallIndexMarksCompactDirectOnAgyLead(t *testing.T) {
+	regs := wsagent.BuiltinBackendRegistrations()
+	reg := regs[wsagent.BackendAgy]
+	render := HostedRender{
+		Harness:          reg.ManualHarness,
+		PlaybookCommands: reg.PlaybookCommands,
+		ToolNameScheme:   reg.ToolNameScheme,
+		CallFallback:     reg.CallFallback,
+		DirectTools:      reg.DirectTools,
+	}
+
+	for _, tc := range []struct {
+		name string
+		mode string
+	}{
+		{name: "default native", mode: wsconfig.CompactionModeNative},
+		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := hostedBackendConnection(t, wsagent.BackendAgy, regs)
+			defer s.Close()
+			s.agentBackendSource = s.agents.(AgentBackendRegistry)
+			s.agents = &compactSchemaRunner{
+				AgentHost: s.agents,
+				state:     wsagent.State{ID: s.conversation, Lead: true, Backend: wsagent.BackendAgy},
+				mode:      tc.mode,
+			}
+
+			rendered, err := RenderLeadManual(os.Environ(), f.root, render, f.hosted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			live := toolText(t, callToolOnce(t, s, 1, "workflow_manual", map[string]any{}))
+			for source, manual := range map[string]string{"daemon prompt": rendered, "connection manual": live} {
+				_, index, ok := strings.Cut(manual, "## Callable ws tools\n\n")
+				if !ok {
+					t.Fatalf("%s has no fallback index", source)
+				}
+				lines, _, ok := strings.Cut(index, "\n\n")
+				if !ok {
+					t.Fatalf("%s malformed index: %s", source, index)
+				}
+				var sawCompactDirect bool
+				for _, line := range strings.Split(lines, "\n") {
+					if strings.HasPrefix(line, "compact [direct] - ") {
+						sawCompactDirect = true
+					} else if strings.HasPrefix(line, "compact - ") {
+						t.Fatalf("%s listed compact without [direct] marker: %q", source, line)
+					}
+				}
+				if !sawCompactDirect {
+					t.Fatalf("%s callable index missing compact [direct]:\n%s", source, lines)
+				}
+			}
+		})
 	}
 }

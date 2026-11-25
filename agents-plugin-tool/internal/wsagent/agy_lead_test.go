@@ -1238,3 +1238,17 @@ func TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt(t *testing.T) {
 		}
 	}
 }
+
+// TestAgyDirectToolsListCompact pins that agy's direct tool list includes
+// compact once so hosted agy leads see compact (and lead_summary in ws mode)
+// directly in tools/list instead of routing through ws/call.
+func TestAgyDirectToolsListCompact(t *testing.T) {
+	_, reg := (AgyBackend{}).registration()
+	n := slices.Index(reg.DirectTools, "compact")
+	if n < 0 {
+		t.Fatalf("agy DirectTools lacks compact: %v", reg.DirectTools)
+	}
+	if slices.Index(reg.DirectTools[n+1:], "compact") >= 0 {
+		t.Fatalf("agy DirectTools lists compact twice: %v", reg.DirectTools)
+	}
+}
