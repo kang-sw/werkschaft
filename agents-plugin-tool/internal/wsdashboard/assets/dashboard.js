@@ -393,18 +393,30 @@
   // The conversation stays at the bottom while the user has it there. Its
   // two regions (entries, convlive) scroll together inside #convo, which
   // owns the scroll and the pin.
-  var convo = $("convo"), stick = true;
+  var convo = $("convo"), stick = true, pinConvoFrame = 0;
+  function convoVisible() {
+    if (!convo) return false;
+    return paneObserver && Object.prototype.hasOwnProperty.call(paneVisible, "convo") ? paneVisible.convo : visible(convo);
+  }
   function atBottom() { return convo.scrollTop + convo.clientHeight >= convo.scrollHeight - 24; }
-  function pinned() { if (visible(convo)) stick = atBottom(); return stick; }
-  function pinConvo() { if (stick && visible(convo)) convo.scrollTop = convo.scrollHeight; }
+  function pinned() { if (convoVisible()) stick = atBottom(); return stick; }
+  function pinConvo() { if (stick && convoVisible()) convo.scrollTop = convo.scrollHeight; }
+  function queuePinConvo() {
+    if (!stick || !convo || pinConvoFrame) return;
+    if (typeof requestAnimationFrame !== "function") { pinConvo(); return; }
+    pinConvoFrame = requestAnimationFrame(function () {
+      pinConvoFrame = 0;
+      pinConvo();
+    });
+  }
   // An accepted message starts a new reply, so sending re-arms bottom follow
   // even when the user had scrolled up. A later user scroll still cancels it.
   function followConvo() { stick = true; pinConvo(); }
   if (convo) {
-    convo.addEventListener("scroll", function () { if (visible(convo)) stick = atBottom(); });
+    convo.addEventListener("scroll", function () { if (convoVisible()) stick = atBottom(); }, { passive: true });
     // A resize (another pane grew, the window changed, the tab came back)
     // keeps a pinned conversation at the bottom.
-    if (window.ResizeObserver) new ResizeObserver(pinConvo).observe(convo);
+    if (window.ResizeObserver) new ResizeObserver(queuePinConvo).observe(convo);
   }
 
   // --- layout and tabs (live or saved session conversation) ----------------
@@ -438,7 +450,9 @@
   function tabShown(t) { return visible($(PANE[t])) || (t === "convo" && (visible(fpane) || visible($("cterm-panes")))); }
   function tabDot(t) { var b = doc.querySelector('#tabbar [data-tab="' + t + '"]'); return b && b.querySelector(".tdot"); }
   function ctabDot() { return doc.querySelector('#ctabs [data-ctab="convo"] .tdot'); }
+  var bootingPanes = false;
   function revealPanes() {
+    if (typeof bootingPanes !== "undefined" && bootingPanes) return;
     syncFilePreview();
     PANES.forEach(function (id) {
       var el = $(id);
@@ -450,7 +464,8 @@
     pinConvo();
     nearTop(); // a conversation shown too short to scroll still loads older entries
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
-    if (visible(convo) && ctabDot()) ctabDot().classList.remove("on");
+    var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));
+    if (cv && ctabDot()) ctabDot().classList.remove("on");
     // The Files pane hears each time it comes into view (a tab, a layout,
     // or a resize showed it) and each time it leaves.
     var fs = visible(fpane);

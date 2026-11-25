@@ -107,12 +107,30 @@
     // (.gal-pbody), a card body (.bc-body) and a dashboard board topic section.
     // Ownership must survive a short card growing into overflow.
     function ownsBody(p) {
-      return p.classList.contains("gal-pbody") || p.classList.contains("bc-body") || (p.classList.contains("topic") && p.hasAttribute("data-topic"));
+      return !!(p && p.classList && (p.classList.contains("gal-pbody") || p.classList.contains("bc-body") || (p.classList.contains("topic") && p.hasAttribute && p.hasAttribute("data-topic"))));
     }
+    // Per-frame overflowY cache (timestamp-bounded, zero rAF timer overhead)
+    // so ancestor walks across many topics do not repeat getComputedStyle.
+    var overflowCache = null, overflowCacheAt = -Infinity;
+    function clearOverflowCache() { overflowCache = null; overflowCacheAt = -Infinity; }
+    function overflowYOf(p) {
+      var now = win.performance ? win.performance.now() : Date.now();
+      if (overflowCache && now >= overflowCacheAt && now - overflowCacheAt < 16) {
+        if (overflowCache.has(p)) return overflowCache.get(p);
+      } else {
+        overflowCache = new Map();
+        overflowCacheAt = now;
+      }
+      var oy = win.getComputedStyle(p).overflowY;
+      overflowCache.set(p, oy);
+      return oy;
+    }
+    if (win.addEventListener) win.addEventListener('resize', clearOverflowCache, { passive: true });
     function scrollerOf(node) {
       for (var p = node && node.parentElement; p && p !== doc.body && p !== doc.documentElement; p = p.parentElement) {
-        var oy = win.getComputedStyle(p).overflowY;
-        if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || ownsBody(p))) return p;
+        if (p.wbScrollOwner && p.id === "bcol") return p;
+        var oy = overflowYOf(p);
+        if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (ownsBody(p) || p.scrollHeight > p.clientHeight)) return p;
       }
       return docScroller();
     }
@@ -236,12 +254,14 @@
         if (/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End| |Spacebar)$/.test(e.key)) intent();
       }, true);
       target.addEventListener('scroll', function () {
-        if (Math.abs(scroller.scrollTop - o.wrote) <= 1) return;
         var s = sessions.get(scroller);
         if (s && s.follow) return; // Native initial smooth navigation is not input.
-        if (o.state === 'user-scrolling') o.until = clock() + 200;
-        else intent();
-        o.wrote = scroller.scrollTop;
+        var now = clock();
+        if (o.state === 'user-scrolling' && !o.transaction && !o.pin && now < o.until) { o.until = now + 200; return; }
+        var top = scroller.scrollTop;
+        if (Math.abs(top - o.wrote) <= 1) return;
+        intent();
+        o.wrote = top;
       }, { passive: true });
       o.ready = function () {
         if (o.state === 'user-scrolling' && clock() >= o.until) o.state = 'idle';

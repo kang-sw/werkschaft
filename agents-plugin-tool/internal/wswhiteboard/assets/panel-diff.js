@@ -162,9 +162,10 @@
     // In the host this is the existing 1px guide. In a frame its own guide
     // sits inside the document so the stable button hit boxes are not clipped.
     var gx = box.left + (framed ? parseFloat(getComputedStyle(body).paddingLeft || '0') - 7 : .5);
-    state.items.forEach(function (item) {
+    // Batch all geometry reads before mutating hit classes/styles to avoid layout thrashing.
+    var measured = state.items.map(function (item) {
       var r = item.block.getBoundingClientRect(), h = r.height, top = r.top;
-      var gone = (item.gone || []).map(function (n) { return n.getBoundingClientRect(); }).filter(function (r) { return r.height > 0; });
+      var gone = (item.gone || []).map(function (n) { return n.getBoundingClientRect(); }).filter(function (gr) { return gr.height > 0; });
       var delblock = gone.length > 0;
       if (item.change.k === 'del') {
         if (delblock) { top = gone[0].top; h = gone[gone.length - 1].bottom - top; }
@@ -173,8 +174,16 @@
         var nested = item.block.querySelector(':scope > ul, :scope > ol');
         if (nested) h = nested.getBoundingClientRect().top - r.top;
       }
-      item.hit.classList.toggle('delblock', !!delblock); item.hit.classList.toggle('del', item.change.k === 'del' && !delblock);
-      item.hit.style.left = (gx - origin.left - 7) + 'px'; item.hit.style.top = (top - origin.top) + 'px'; item.hit.style.height = Math.max(12, h) + 'px';
+      return { item: item, delblock: delblock, top: top, h: h };
+    });
+    var leftPx = (gx - origin.left - 7) + 'px';
+    measured.forEach(function (m) {
+      var item = m.item;
+      item.hit.classList.toggle('delblock', !!m.delblock);
+      item.hit.classList.toggle('del', item.change.k === 'del' && !m.delblock);
+      item.hit.style.left = leftPx;
+      item.hit.style.top = (m.top - origin.top) + 'px';
+      item.hit.style.height = Math.max(12, m.h) + 'px';
     });
     if (active && state.layer.contains(active.hit)) place(active);
   }

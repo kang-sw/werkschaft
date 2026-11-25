@@ -856,5 +856,6 @@
   }
 
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
+    hasRailObserver() { return !!mountedRailObserver; },
     observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

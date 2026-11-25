@@ -1,12 +1,34 @@
   // ------------------------------------------------------------------ render
 
   // The handle row's width (plus the 6px gap to the host's handle) and the header's bottom
-  // edge, where the drawer hangs. The width first: the host header pads clear of it, which
-  // can change how the header wraps and so where it ends.
+  // edge, where the drawer hangs. Batch both reads before both writes to avoid a forced
+  // reflow between --tkhw and O.header.getBoundingClientRect(); if --tkhw changes, recheck
+  // --tktop on the next frame in case the header wrapped.
+  var lastTkhw = '', lastTktop = '', measureTopFrame = 0;
   function measure() {
-    var w = Math.ceil($('tkhandles').getBoundingClientRect().width);
-    document.documentElement.style.setProperty('--tkhw', (w ? w + 6 : 0) + 'px');
-    $('tkdrawer').style.setProperty('--tktop', Math.max(0, Math.round(O.header.getBoundingClientRect().bottom)) + 'px');
+    var handles = $('tkhandles'), drawerEl = $('tkdrawer');
+    var w = handles ? Math.ceil(handles.getBoundingClientRect().width) : 0;
+    var top = O.header ? Math.max(0, Math.round(O.header.getBoundingClientRect().bottom)) : 0;
+    var hwVal = (w ? w + 6 : 0) + 'px', topVal = top + 'px';
+    var hwChanged = hwVal !== lastTkhw;
+    if (hwChanged) {
+      lastTkhw = hwVal;
+      document.documentElement.style.setProperty('--tkhw', hwVal);
+    }
+    if (drawerEl && topVal !== lastTktop) {
+      lastTktop = topVal;
+      drawerEl.style.setProperty('--tktop', topVal);
+    }
+    if (hwChanged && O.header && drawerEl && !measureTopFrame && typeof requestAnimationFrame === 'function') {
+      measureTopFrame = requestAnimationFrame(function () {
+        measureTopFrame = 0;
+        var nextTop = Math.max(0, Math.round(O.header.getBoundingClientRect().bottom)) + 'px';
+        if (nextTop !== lastTktop) {
+          lastTktop = nextTop;
+          drawerEl.style.setProperty('--tktop', nextTop);
+        }
+      });
+    }
   }
   // Every store fills the available space below the header. A host can supply its
   // maximum (including composer clearance); standalone pages use the viewport.

@@ -178,6 +178,7 @@
   }
   // The sticky root keeps the original flex footprint. Only its face changes
   // height: no scroll writer, replacement controls, or transient measuring DOM.
+  var floatQueue = null;
   function floatToolbar() {
     if (!window.ResizeObserver) return;
     var face = toolbar.firstChild, row = face.firstChild, scrollBox = null, cachedScroller = null, frame = 0;
@@ -212,7 +213,7 @@
       var keys = Object.keys(rows), reserved = 6 + Math.max(0, keys.length - 1) * 6;
       keys.forEach(function (key) { reserved += rows[key]; });
       var height = faceRect.height;
-      var fit = toolbar.getAttribute("data-toolbar-fit");
+      var fit = toolbar.getAttribute ? toolbar.getAttribute("data-toolbar-fit") : null;
       var narrow = fit === "dropdown" || fit === "tight";
       // All geometry above, all writes below; ResizeObserver settles a face
       // whose dimensions change when floating or wrapping changes.
@@ -229,7 +230,17 @@
     }
     function queue() { if (!frame) frame = requestAnimationFrame(update); }
     function resized() { cachedScroller = null; queue(); }
-    doc.addEventListener("scroll", queue, { capture: true, passive: true });
+    function onScroll(e) {
+      var t = e && e.target;
+      if (t && !overviewOn) {
+        var s = cachedScroller || (cachedScroller = scroller(board) || doc.scrollingElement);
+        if (t === s && s !== doc.scrollingElement && s.wbScrollOwner) return;
+        if (t.id === "bcol" && t.wbScrollOwner) return;
+      }
+      queue();
+    }
+    floatQueue = queue;
+    doc.addEventListener("scroll", onScroll, { capture: true, passive: true });
     window.addEventListener("resize", resized);
     var observer = new window.ResizeObserver(resized);
     observer.observe(face); observer.observe(board);
@@ -910,7 +921,7 @@
     gal.pages.forEach(function (pg, i) { slide(pageEls[pg.id], i - pos, dir); });
     slide(plusEl, n - pos, dir);
     var activeDot = dotEls[dotKey(pos)];
-    if (activeDot && dotsEl.scrollHeight > dotsEl.clientHeight) {
+    if (rail && !galEl.hidden && activeDot && dotsEl.scrollHeight > dotsEl.clientHeight) {
       var listBox = dotsEl.getBoundingClientRect(), dotBox = activeDot.getBoundingClientRect();
       if (dotBox.top < listBox.top) dotsEl.scrollTop += dotBox.top - listBox.top;
       else if (dotBox.bottom > listBox.bottom) dotsEl.scrollTop += dotBox.bottom - listBox.bottom;
@@ -2606,6 +2617,7 @@
     overview: function (on) {
       overviewOn = !!on;
       if (overviewOn && window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
+      if (floatQueue) floatQueue();
     },
     // pinnedTopic tells whether a topic name is docked on this page (its
     // node stands in a pane).

@@ -14,7 +14,7 @@
   var FREE_RUNWAY_MARGIN = 10000;
   var FREE_IDLE_RECENTER_MS = 150;
   var FREE_BASE_WINDOW = 3;
-  var FREE_MAX_WINDOW = 8;
+  var FREE_MAX_WINDOW = 8, FREE_EVICT_MARGIN = 4;
   var FREE_VIEWPORT_COVERAGE = 1.5;
   var FREE_CARD_GAP = 16;
   var FREE_FALLBACK_H = 320;
@@ -29,7 +29,7 @@
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   var freePos = new Map(), freeHeightCache = new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false;
+  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
@@ -193,19 +193,27 @@
     return !!(node.querySelector && node.querySelector(VIRTUAL_ASK_SEL));
   }
 
-  function virtualCollapse(sec, preDesc) {
+  function virtualCaptureForCollapse(sec, cold) {
+    return {
+      scrollTop: cold ? 0 : (sec.scrollTop || 0),
+      history: window.wbHistory && window.wbHistory.capture ? window.wbHistory.capture(sec) : null,
+      answers: typeof readAnswers === "function" ? readAnswers(sec) : null,
+      frameH: typeof frameHeights === "function" ? frameHeights(sec) : null,
+      openDetails: virtualCaptureOpen(sec)
+    };
+  }
+
+  function virtualCollapse(sec, preDesc, opts) {
     if (!sec || sec.nodeType !== 1 || !sec.hasAttribute("data-topic") || sec.hasAttribute("data-wb-virtual")) return false;
     if (virtualIsItemExempt(preDesc || virtualDescribeNode(sec))) return false;
     var head = sec.querySelector && sec.querySelector(":scope > .tophead");
     if (!head) return false;
     var k = topicKey(sec);
     if (k === null) return false;
+    // Capture scrollTop and state before unmountFrames/DOM detachment so a
+    // collapse never interleaves DOM writes with a forced scrollTop reflow.
+    var snap = opts && opts.snapshot ? opts.snapshot : virtualCaptureForCollapse(sec, !!(opts && opts.cold));
     if (typeof unmountFrames === "function") unmountFrames(sec);
-    var scrollTop = sec.scrollTop || 0;
-    var history = window.wbHistory && window.wbHistory.capture ? window.wbHistory.capture(sec) : null;
-    var answers = typeof readAnswers === "function" ? readAnswers(sec) : null;
-    var frameH = typeof frameHeights === "function" ? frameHeights(sec) : null;
-    var openDetails = virtualCaptureOpen(sec);
     var raw = Array.prototype.slice.call(sec.childNodes || []);
     var children = [], detached = 0;
     for (var i = 0; i < raw.length; i++) {
@@ -220,11 +228,11 @@
     if (!detached) return false;
     virtualStore.set(k, {
       children: children,
-      scrollTop: scrollTop,
-      history: history,
-      answers: answers,
-      frameH: frameH,
-      openDetails: openDetails,
+      scrollTop: snap.scrollTop,
+      history: snap.history,
+      answers: snap.answers,
+      frameH: snap.frameH,
+      openDetails: snap.openDetails,
       stashed: null
     });
     sec.setAttribute("data-wb-virtual", "1");
@@ -927,10 +935,23 @@
     freePos.delete(n);
   }
   function freeCancelTimers() {
+    var wasScrolling = !!(freeScrollRaf || freeIdleTimer);
     if (freeScrollRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeScrollRaf);
     freeScrollRaf = 0;
     if (freeIdleTimer) clearTimeout(freeIdleTimer);
     freeIdleTimer = 0;
+    freePendingScrollEnd = false;
+    if (wasScrolling && typeof freeNotifyScrollIdle === "function") freeNotifyScrollIdle();
+  }
+  function freeNotifyScrollIdle() {
+    if (doc && doc.dispatchEvent && typeof CustomEvent === "function") {
+      doc.dispatchEvent(new CustomEvent("ws-board-scroll-idle"));
+    }
+    try {
+      if (window.parent && window.parent !== window && typeof window.parent.wsBoardScrollIdle === "function") {
+        window.parent.wsBoardScrollIdle();
+      }
+    } catch (_) {}
   }
   function freeSuspend() {
     freeReleasePin();
@@ -1028,26 +1049,62 @@
     }
     return best >= 0 ? best : closest;
   }
-  function freeApplyOffWindow(node, scrubbing) {
-    // Parking a panel's topic would also hide and disable its fixed sheet.
-    if (!node || (node.hasAttribute && (node.hasAttribute("data-max") || node.hasAttribute("data-has-panel-max")))) return;
-    if (freeCardRO && freeObserved.has(node)) {
-      try { freeCardRO.unobserve(node); } catch (e) {}
-      freeObserved.delete(node);
+  function freeApplyOffWindow(nodeOrNodes, scrubbing, opts) {
+    var nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : (nodeOrNodes ? [nodeOrNodes] : []);
+    if (!nodes.length) return;
+    opts = opts || {};
+    var scrub = !!(scrubbing || opts.scrubbing);
+    var cold = !!opts.cold;
+    var deferCheck = typeof opts.deferCheck === "function" ? opts.deferCheck : null;
+    var seen = new Set();
+    var plan = [];
+    // Pass 1 (READ): describe every candidate and capture scrollTop/frame state
+    // before any off-window attribute write or DOM detachment dirties layout.
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (!node || seen.has(node)) continue;
+      seen.add(node);
+      // Parking a panel's topic would also hide and disable its fixed sheet.
+      if (node.hasAttribute && (node.hasAttribute("data-max") || node.hasAttribute("data-has-panel-max"))) continue;
+      var desc = virtualDescribeNode(node);
+      var exempt = virtualIsItemExempt(desc);
+      var defer = !exempt && !desc.collapsed && !!(scrub || (deferCheck && deferCheck(node)));
+      var snap = null;
+      if (!exempt && !desc.collapsed && !defer && node.nodeType === 1 && node.hasAttribute &&
+          node.hasAttribute("data-topic") && !node.hasAttribute("data-wb-virtual") &&
+          node.querySelector && node.querySelector(":scope > .tophead") && topicKey(node) !== null) {
+        snap = typeof virtualCaptureForCollapse === "function"
+          ? virtualCaptureForCollapse(node, cold)
+          : {
+              scrollTop: cold ? 0 : (node.scrollTop || 0),
+              history: window.wbHistory && window.wbHistory.capture ? window.wbHistory.capture(node) : null,
+              answers: typeof readAnswers === "function" ? readAnswers(node) : null,
+              frameH: typeof frameHeights === "function" ? frameHeights(node) : null,
+              openDetails: typeof virtualCaptureOpen === "function" ? virtualCaptureOpen(node) : []
+            };
+      }
+      plan.push({ node: node, desc: desc, exempt: exempt, defer: defer, snap: snap });
     }
-    freePos.delete(node);
-    var desc = virtualDescribeNode(node);
-    if (virtualIsItemExempt(desc)) {
-      freeSetOffWindow(node, "parked");
-      if (desc.isTopic) virtualExemptSet.add(node);
-    } else {
-      freeSetOffWindow(node, "hidden");
-      virtualExemptSet.delete(node);
-      if (!desc.collapsed) {
-        if (scrubbing) freeDeferredCollapse.add(node);
-        else {
-          freeDeferredCollapse.delete(node);
-          virtualCollapse(node, desc);
+    // Pass 2 (WRITE): apply off-window state, unobserve RO, and collapse.
+    for (var j = 0; j < plan.length; j++) {
+      var p = plan[j], n = p.node;
+      if (freeCardRO && freeObserved.has(n)) {
+        try { freeCardRO.unobserve(n); } catch (e) {}
+        freeObserved.delete(n);
+      }
+      freePos.delete(n);
+      if (p.exempt) {
+        freeSetOffWindow(n, "parked");
+        if (p.desc.isTopic) virtualExemptSet.add(n);
+      } else {
+        freeSetOffWindow(n, "hidden");
+        virtualExemptSet.delete(n);
+        if (!p.desc.collapsed) {
+          if (p.defer) freeDeferredCollapse.add(n);
+          else {
+            freeDeferredCollapse.delete(n);
+            if (p.snap) virtualCollapse(n, p.desc, { snapshot: p.snap, cold: cold });
+          }
         }
       }
     }
@@ -1081,11 +1138,14 @@
     }
     return stageH;
   }
-  function freeShiftScroll(col, delta) {
-    var top = col.scrollTop;
+  function freeShiftScroll(col, delta, knownTop) {
+    var top = typeof knownTop === "number" ? knownTop : col.scrollTop;
     var atJump = freeJump && !freeJump.moving && Math.abs(top - freeJump.top) <= 1;
-    col.scrollTop = Math.max(0, top + delta);
-    if (atJump) freeJump.top = col.scrollTop;
+    var next = Math.max(0, top + delta);
+    col.scrollTop = next;
+    freeLastShift += next - top;
+    freeLastScrollTop = next;
+    if (atJump) freeJump.top = next;
   }
   function freeReleasePin() {
     if (!freePin) return;
@@ -1188,6 +1248,7 @@
   }
   function freeLayout(opts) {
     opts = opts || {};
+    freeLastShift = 0;
     var col = $("bcol"), board = region("board");
     var list = opts.list || anchorCards();
     if (!freeEnabled(col, list)) {
@@ -1198,6 +1259,7 @@
     var prevStart = freeWinStart, prevEnd = freeWinEnd;
     if (!col.hasAttribute || !col.hasAttribute("data-board-free")) col.setAttribute("data-board-free", "");
     freeActive = true;
+    var scrollTick = !!opts.scrollTick;
     var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
     var aIdx = typeof opts.anchorIdx === "number" ? Math.max(0, Math.min(list.length - 1, opts.anchorIdx)) : 0;
     var aNode = list[aIdx];
@@ -1219,17 +1281,18 @@
     }
     for (var mi = start; mi <= end; mi++) mountSlot(mi);
 
-    // Measure actual heights and expand up to FREE_MAX_WINDOW if measured
-    // cards are shorter than cached/fallback heights and cover < 1.5*viewH.
+    // On active scroll ticks use cached/fallback heights instead of synchronous
+    // offsetHeight reflows; freeCardRO reconciles real heights on the next frame.
+    var measureFn = scrollTick ? freeCachedHeight : freeMeasureHeight;
     var heights = Object.create(null);
-    for (var hi = start; hi <= end; hi++) heights[hi] = freeMeasureHeight(list[hi]);
+    for (var hi = start; hi <= end; hi++) heights[hi] = measureFn(list[hi]);
     var need = Math.max(1, viewH) * FREE_VIEWPORT_COVERAGE;
     var aboveH = 0;
     for (var ai = aIdx - 1; ai >= start; ai--) aboveH += heights[ai] + FREE_CARD_GAP;
     while (start > 0 && (aIdx - start) < FREE_MAX_WINDOW && aboveH < need) {
       start--;
       mountSlot(start);
-      heights[start] = freeMeasureHeight(list[start]);
+      heights[start] = measureFn(list[start]);
       aboveH += heights[start] + FREE_CARD_GAP;
     }
     var belowH = 0;
@@ -1237,11 +1300,14 @@
     while (end < list.length - 1 && (end - aIdx) < FREE_MAX_WINDOW && belowH < need) {
       end++;
       mountSlot(end);
-      heights[end] = freeMeasureHeight(list[end]);
+      heights[end] = measureFn(list[end]);
       belowH += heights[end] + FREE_CARD_GAP;
     }
 
-    // Mark off-window cards ("hidden" + body eviction vs "parked" + inert).
+    // Mark off-window cards ("hidden" + body eviction vs "parked" + inert) in
+    // one batched read-then-write pass. During active scroll, cards within
+    // FREE_EVICT_MARGIN slots of the window defer collapse until scroll idle.
+    var offNodes = [];
     var fullPass = !wasActive || !!opts.forceFull;
     if (fullPass) {
       freePos.forEach(function (_, fn) {
@@ -1249,30 +1315,39 @@
       });
       for (var oi = 0; oi < list.length; oi++) {
         if (oi >= start && oi <= end) continue;
-        freeApplyOffWindow(list[oi], scrubbing);
+        offNodes.push(list[oi]);
       }
     } else {
       // O(1) delta: process cards leaving the previous window plus any dirty
       // far exempt topics or newly unpositioned cards.
       for (var pi = prevStart; pi <= prevEnd; pi++) {
         if (pi < 0 || pi >= list.length || (pi >= start && pi <= end)) continue;
-        freeApplyOffWindow(list[pi], scrubbing);
+        offNodes.push(list[pi]);
       }
       if (virtualExemptDirty.size) {
         Array.from(virtualExemptDirty).forEach(function (dn) {
           virtualExemptDirty.delete(dn);
           var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
-          if (di >= 0 && (di < start || di > end)) freeApplyOffWindow(dn, scrubbing);
+          if (di >= 0 && (di < start || di > end)) offNodes.push(dn);
         });
       }
     }
+    var hysteresisCheck = scrollTick && !scrubbing ? function (n) {
+      var ni = anchorCache && anchorCache.indexByNode.has(n) ? anchorCache.indexByNode.get(n) : -1;
+      return ni >= 0 && ni >= start - FREE_EVICT_MARGIN && ni <= end + FREE_EVICT_MARGIN;
+    } : null;
     if (!scrubbing && freeDeferredCollapse.size) {
       Array.from(freeDeferredCollapse).forEach(function (dn) {
-        freeDeferredCollapse.delete(dn);
-        if (!dn || !dn.isConnected) return;
+        if (!dn || !dn.isConnected) { freeDeferredCollapse.delete(dn); return; }
         var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
-        if (di >= 0 && (di < start || di > end)) freeApplyOffWindow(dn, false);
+        if (di < 0 || (di >= start && di <= end)) { freeDeferredCollapse.delete(dn); return; }
+        if (hysteresisCheck && hysteresisCheck(dn)) return;
+        freeDeferredCollapse.delete(dn);
+        offNodes.push(dn);
       });
+    }
+    if (offNodes.length) {
+      freeApplyOffWindow(offNodes, scrubbing, { cold: !wasActive, deferCheck: hysteresisCheck });
     }
 
     // Keep WsBoardVirtual's near set aligned with the active free-canvas window.
@@ -1298,7 +1373,7 @@
       var shift = topPad - ys[0];
       if (Math.abs(shift) >= FREE_RESIZE_EPS) {
         for (var si = start; si <= end; si++) ys[si] += shift;
-        if ((!opts.jump || opts.smooth) && wasActive && !freePinned()) freeShiftScroll(col, shift);
+        if ((!opts.jump || opts.smooth) && wasActive && !freePinned()) freeShiftScroll(col, shift, opts.scrollTop);
       }
     }
     var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end], !opts.jump && !!freeIdleTimer);
@@ -1411,9 +1486,9 @@
       boardFlushViewed(false);
     }
   }
-  function freeFinishJump(col) {
+  function freeFinishJump(col, knownTop) {
     if (!freeJump || !freeJump.moving) return;
-    freeJump.top = col.scrollTop;
+    freeJump.top = typeof knownTop === "number" ? knownTop : col.scrollTop;
     freeJump.moving = false;
     freeStartPinWindow();
   }
@@ -1423,11 +1498,18 @@
     var col = $("bcol"), list = anchorCards();
     if (!col || !list.length || freeWinEnd < freeWinStart) return;
     var top = col.scrollTop;
+    freeLastScrollTop = top;
+    if (freePendingScrollEnd) {
+      freePendingScrollEnd = false;
+      // An interrupted native wheel transaction can emit its own scrollend.
+      if (freeJump && Math.abs(top - freeJump.top) <= 1) freeFinishJump(col, top);
+    }
     if (freeJump && !freeJump.moving && Math.abs(top - freeJump.top) > 1) {
       freeReleasePin();
       freeJump = null;
     }
-    var viewTopY = top + anchorSized.padTop + anchorRailInset(col);
+    var inset = anchorRailInset(col);
+    var viewTopY = top + anchorSized.padTop + inset;
     var nextAnchor = freeJump && !freeJump.moving ? freeAnchorIdx : freeFindTopVisibleIdx(list, col, viewTopY);
     var nextNode = list[nextAnchor];
     if (!freeJump && nextNode && nextNode !== anchorLast) anchorMark(nextNode, { skipVirtual: true });
@@ -1436,15 +1518,17 @@
     var lastCard = list[freeWinEnd];
     var yLastBottom = (freePos.get(lastCard) || 0) + freeCachedHeight(lastCard);
     var needSlide = nextAnchor !== freeAnchorIdx ||
-      (freeWinStart > 0 && yFirst !== undefined && (col.scrollTop - yFirst) < viewH * 0.75) ||
-      (freeWinEnd < list.length - 1 && (yLastBottom - (col.scrollTop + viewH)) < viewH * 0.75);
+      (freeWinStart > 0 && yFirst !== undefined && (top - yFirst) < viewH * 0.75) ||
+      (freeWinEnd < list.length - 1 && (yLastBottom - (top + viewH)) < viewH * 0.75);
+    var didLayout = false;
     if (!freeJump && (needSlide || virtualExemptDirty.size)) {
-      freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list });
+      didLayout = freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list, scrollTick: true, scrollTop: top });
     }
     if (typeof boardDialScroll === "function" && nextNode) {
       var yCur = freePos.get(nextNode);
       if (yCur !== undefined) {
-        var curTopY = col.scrollTop + anchorSized.padTop + anchorRailInset(col);
+        var curTop = top + (didLayout ? freeLastShift : 0);
+        var curTopY = curTop + anchorSized.padTop + inset;
         var span = Math.max(1, freeCachedHeight(nextNode) + FREE_CARD_GAP);
         var frac = Math.max(0, Math.min(0.999, (curTopY - yCur) / span));
         boardDialScroll(Math.max(0, Math.min(list.length - 1, nextAnchor + frac)));
@@ -1454,55 +1538,70 @@
   }
   function freeIdleRecenter() {
     freeIdleTimer = 0;
-    if (!freeActive || freeSuspended) return;
-    if (typeof dialScrubbing !== "undefined" && dialScrubbing) return;
-    var col = $("bcol"), board = region("board"), list = anchorCards();
-    if (!col || !board || !list.length || freeWinEnd < freeWinStart) return;
-    if (freeJump && freeJump.moving) {
-      freeFinishJump(col);
-      freeScrollTick();
-    } else {
-      freeFlushScrolledOutHeld();
-    }
-    if (freeStagePending) {
-      var tail = list[freeWinEnd], tailY = freePos.get(tail);
-      if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeCachedHeight(tail), false);
-      freePinLayout();
-    }
-    if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
-    var yFirst = freePos.get(list[freeWinStart]);
-    var lastNode = list[freeWinEnd];
-    var yLast = freePos.get(lastNode);
-    if (yFirst === undefined || yLast === undefined) return;
-    var yLastBottom = yLast + freeCachedHeight(lastNode);
-    var stageH = parseFloat(board.style.minHeight) || FREE_RUNWAY_HEIGHT;
-    if (yFirst >= FREE_RUNWAY_MARGIN && yLastBottom <= stageH - FREE_RUNWAY_MARGIN) return;
-    var anchorNodeCur = list[freeAnchorIdx];
-    var yAnchor = freePos.get(anchorNodeCur);
-    if (yAnchor === undefined) return;
-    var delta = FREE_RUNWAY_MID - yAnchor;
-    if (Math.abs(delta) < 1) return;
-    for (var i = freeWinStart; i <= freeWinEnd; i++) {
-      var c = list[i], ny = freePos.get(c) + delta;
-      freePos.set(c, ny);
-      if (!c.hasAttribute || !c.hasAttribute("data-max")) {
-        var topStr = Math.round(ny) + "px";
-        if (c.style && c.style.top !== topStr) c.style.top = topStr;
+    try {
+      if (!freeActive || freeSuspended) return;
+      if (typeof dialScrubbing !== "undefined" && dialScrubbing) return;
+      var col = $("bcol"), board = region("board"), list = anchorCards();
+      if (!col || !board || !list.length || freeWinEnd < freeWinStart) return;
+      if (freeJump && freeJump.moving) {
+        freeFinishJump(col);
+        freeScrollTick();
+      } else {
+        freeFlushScrolledOutHeld();
       }
+      // Flush cards whose collapse was deferred by hysteresis during active scroll.
+      if (freeDeferredCollapse.size) {
+        var toFlush = [];
+        Array.from(freeDeferredCollapse).forEach(function (dn) {
+          freeDeferredCollapse.delete(dn);
+          if (!dn || !dn.isConnected) return;
+          var di = anchorCache && anchorCache.indexByNode.has(dn) ? anchorCache.indexByNode.get(dn) : -1;
+          if (di >= 0 && (di < freeWinStart || di > freeWinEnd)) toFlush.push(dn);
+        });
+        if (toFlush.length) freeApplyOffWindow(toFlush, false, { cold: false });
+      }
+      if (freeStagePending) {
+        var tail = list[freeWinEnd], tailY = freePos.get(tail);
+        if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeCachedHeight(tail), false);
+        freePinLayout();
+      }
+      if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
+      var yFirst = freePos.get(list[freeWinStart]);
+      var lastNode = list[freeWinEnd];
+      var yLast = freePos.get(lastNode);
+      if (yFirst === undefined || yLast === undefined) return;
+      var yLastBottom = yLast + freeCachedHeight(lastNode);
+      var stageH = parseFloat(board.style.minHeight) || FREE_RUNWAY_HEIGHT;
+      if (yFirst >= FREE_RUNWAY_MARGIN && yLastBottom <= stageH - FREE_RUNWAY_MARGIN) return;
+      var anchorNodeCur = list[freeAnchorIdx];
+      var yAnchor = freePos.get(anchorNodeCur);
+      if (yAnchor === undefined) return;
+      var delta = FREE_RUNWAY_MID - yAnchor;
+      if (Math.abs(delta) < 1) return;
+      for (var i = freeWinStart; i <= freeWinEnd; i++) {
+        var c = list[i], ny = freePos.get(c) + delta;
+        freePos.set(c, ny);
+        if (!c.hasAttribute || !c.hasAttribute("data-max")) {
+          var topStr = Math.round(ny) + "px";
+          if (c.style && c.style.top !== topStr) c.style.top = topStr;
+        }
+      }
+      freeShiftScroll(col, delta);
+    } finally {
+      if (typeof freeNotifyScrollIdle === "function") freeNotifyScrollIdle();
     }
-    freeShiftScroll(col, delta);
   }
-  function freeScheduleIdle(col) {
+  function freeScheduleIdle() {
     if (freeIdleTimer) clearTimeout(freeIdleTimer);
-    var generation = anchorUserScroll, top = col.scrollTop;
+    var gen = ++freeScrollGen, generation = anchorUserScroll;
     freeIdleTimer = setTimeout(function () {
       freeIdleTimer = 0;
-      if (generation === anchorUserScroll && col.scrollTop === top) freeIdleRecenter();
+      if (gen === freeScrollGen && generation === anchorUserScroll) freeIdleRecenter();
     }, FREE_IDLE_RECENTER_MS);
   }
   function freeOnScroll() {
     if (!freeActive || freeSuspended) return;
-    freeScheduleIdle($("bcol"));
+    freeScheduleIdle();
     if (!freeScrollRaf && typeof requestAnimationFrame === "function") {
       freeScrollRaf = requestAnimationFrame(freeScrollTick);
     }
@@ -1912,9 +2011,12 @@
     if (!col) return;
     if (freeActive) {
       if (e.target === col) {
-        // An interrupted native wheel transaction can emit its own scrollend.
-        if (freeJump && Math.abs(col.scrollTop - freeJump.top) <= 1) freeFinishJump(col);
-        freeScrollTick();
+        freePendingScrollEnd = true;
+        if (typeof requestAnimationFrame === "function") {
+          if (!freeScrollRaf) freeScrollRaf = requestAnimationFrame(freeScrollTick);
+        } else {
+          freeScrollTick();
+        }
       }
       return;
     }
@@ -2044,6 +2146,8 @@
         if (typeof boardDialSync === "function") boardDialSync();
       },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
+      scrolling: function () { return !!(freeActive && (freeScrollRaf || freeIdleTimer)); },
+      keepFrame: function (t) { return !!(freeActive && (freeScrollRaf || freeIdleTimer) && freeDeferredCollapse.has(t)); },
       hydrate: typeof virtualHydrate === "function" ? virtualHydrate : null,
       hydrateForTarget: typeof virtualHydrateForTarget === "function" ? virtualHydrateForTarget : null,
       reconcile: typeof virtualReconcile === "function" ? virtualReconcile : null,

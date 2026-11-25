@@ -449,7 +449,7 @@
         }
         if (mode) root.setAttribute("data-gal", mode); else root.removeAttribute("data-gal");
         galNarrow = mode === "narrow";
-        if (galNarrow) placeGallery();
+        if (galNarrow) queueGallery();
         if (window.WsOverview && window.WsOverview.syncPreview) window.WsOverview.syncPreview();
       },
       closed: function (from, done) {
