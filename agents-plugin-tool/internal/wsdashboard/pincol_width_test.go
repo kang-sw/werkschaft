@@ -144,6 +144,7 @@ var galNarrow = false;
 var window = { get innerWidth() { return width; } };
 function railOpen() { rails++; }
 function placeGallery() { placed++; }
+function queueGallery() { placeGallery(); }
 ` + canFit + mode + `
 var optLayout = { ` + hook + ` };
 function at(px, pages, dragging, tabs) {

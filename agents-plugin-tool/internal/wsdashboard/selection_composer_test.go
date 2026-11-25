@@ -98,7 +98,7 @@ func selectionProductionRuntime(t *testing.T) string {
 	base := read("dashboard.js")
 	// Follow pages.go's fragment order, including the real initialization
 	// bindings that the former function-only harnesses accidentally omitted.
-	source := selectionActualSource(t, base, []string{"doc =", "mode =", "rid =", "shell =", "store =", "openState =", "PEER_KEY =", "SHUT_KEY =", "convo =", "grid ="}, []string{"q", "$", "load", "save", "region", "boardBoxes", "boardQ", "inBoard", "boardRead", "visible", "atBottom", "pinConvo", "followConvo", "isPanel", "shutList", "shutHas", "isPeer", "openKey", "restoreOpenOne", "restoreOpen", "postDoc", "pickKey", "readAnswers", "openNote", "setCheckNo", "writeAnswers"}, false)
+	source := selectionActualSource(t, base, []string{"doc =", "mode =", "rid =", "shell =", "store =", "openState =", "PEER_KEY =", "SHUT_KEY =", "paneScroll =", "convo =", "grid ="}, []string{"q", "$", "load", "save", "region", "boardBoxes", "boardQ", "inBoard", "boardRead", "visible", "convoVisible", "atBottom", "pinConvo", "followConvo", "isPanel", "shutList", "shutHas", "isPeer", "openKey", "restoreOpenOne", "restoreOpen", "postDoc", "pickKey", "readAnswers", "openNote", "setCheckNo", "writeAnswers"}, false)
 	// Keep the actual guarded browser storage initialization too.
 	storageInit := regexp.MustCompile(`(?m)^  try \{ store = window\.localStorage;[^\n]*\n`).FindString(base)
 	if storageInit == "" {
@@ -159,7 +159,7 @@ Promise.resolve(vm.runInContext(`+quoted("(async function(){\n"+body+"\n})()")+`
 }
 
 const selectionRuntimeEnvironment = `
-var bad=[];
+var bad=[],paneObserver=null;
 // Fixture elements are built in the host realm while expectations are built in
 // the vm realm, so their Array prototypes differ and isDeepStrictEqual rejects
 // identical values. Normalize both sides into this realm; undefined stays distinct.

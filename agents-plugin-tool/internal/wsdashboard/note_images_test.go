@@ -32,6 +32,7 @@ Object.defineProperty(El.prototype, "textContent", {
 El.prototype.setSelectionRange = function (a, b) { this.selectionStart = a; this.selectionEnd = b; };
 El.prototype.setRangeText = function (s, a, b) { this.value = this.value.slice(0, a) + s + this.value.slice(b); this.selectionStart = this.selectionEnd = a + s.length; };
 El.prototype.focus = function () { if (!this.hidden) document.activeElement = this; };
+El.prototype.addEventListener = function () {};
 El.prototype.dispatchEvent = function (e) { if (this === ctext) syncMarkers(); else boardInput(); };
 function Event(type) { this.type = type; }
 function walk(n, fn) { n.children.forEach(function (c) { fn(c); walk(c, fn); }); }
