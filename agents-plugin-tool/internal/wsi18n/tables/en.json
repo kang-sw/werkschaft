@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Schedule continuation",
   "js.quota.cancel": "Cancel",
   "js.quota.scheduled_toast": "Continuation scheduled.",
-  "js.quota.cancelled_toast": "Scheduled continuation cancelled."
+  "js.quota.cancelled_toast": "Scheduled continuation cancelled.",
+  "js.settings.key.dashboard.voice_backend.label": "Voice transcription backend",
+  "js.settings.key.dashboard.voice_backend.description": "Speech-to-text backend for composer push-to-talk (for example openai_api, groq, openrouter, native, or local/<name>). Leave empty to hide the microphone button.",
+  "js.settings.key.dashboard.voice_model.label": "Voice transcription model",
+  "js.settings.key.dashboard.voice_model.description": "Model ID sent to the selected voice backend (for example gpt-transcribe or whisper-large-v3-turbo). Leave empty to use the backend default.",
+  "js.settings.key.dashboard.voice_language.label": "Voice transcription language",
+  "js.settings.key.dashboard.voice_language.description": "Optional ISO-639-1/BCP-47 language hint (or comma-separated codes for OpenAI gpt-transcribe). Leave empty for automatic language detection.",
+  "js.settings.account.voice_providers": "Voice transcription keys",
+  "js.settings.account.voice_api_key": "Voice API key",
+  "js.settings.account.openai_api_description": "OpenAI Platform API key used only for dashboard voice transcription (distinct from ChatGPT sign-in).",
+  "js.settings.account.groq_description": "Groq API key used only for dashboard voice transcription.",
+  "js.settings.account.voice_key_label": "%s API key",
+  "js.settings.account.replace_voice_key": "New %s API key",
+  "js.settings.account.remove_voice_key": "Hold to remove %s API key",
+  "js.settings.account.voice_prefix_warning": "Keys for this provider usually start with %s.",
+  "js.settings.account.voice_key_help": "Stored locally in the daemon credential store; used only for voice transcription and never exposed to agent sessions."
 }

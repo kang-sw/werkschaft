@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Programar continuación",
   "js.quota.cancel": "Cancelar",
   "js.quota.scheduled_toast": "Continuación programada.",
-  "js.quota.cancelled_toast": "Continuación programada cancelada."
+  "js.quota.cancelled_toast": "Continuación programada cancelada.",
+  "js.settings.key.dashboard.voice_backend.label": "Backend de transcripción de voz",
+  "js.settings.key.dashboard.voice_backend.description": "Backend de voz a texto para pulsar y hablar en el redactor (por ejemplo openai_api, groq, openrouter, native o local/<name>). Déjelo vacío para ocultar el botón de micrófono.",
+  "js.settings.key.dashboard.voice_model.label": "Modelo de transcripción de voz",
+  "js.settings.key.dashboard.voice_model.description": "ID del modelo enviado al backend de voz seleccionado (por ejemplo gpt-transcribe o whisper-large-v3-turbo). Déjelo vacío para usar el valor predeterminado del backend.",
+  "js.settings.key.dashboard.voice_language.label": "Idioma de transcripción de voz",
+  "js.settings.key.dashboard.voice_language.description": "Sugerencia opcional de idioma ISO-639-1/BCP-47 (o códigos separados por comas para OpenAI gpt-transcribe). Déjelo vacío para detección automática.",
+  "js.settings.account.voice_providers": "Claves de transcripción de voz",
+  "js.settings.account.voice_api_key": "Clave API de voz",
+  "js.settings.account.openai_api_description": "Clave API de OpenAI Platform usada solo para transcripción de voz del panel (distinta del inicio de sesión de ChatGPT).",
+  "js.settings.account.groq_description": "Clave API de Groq usada solo para transcripción de voz del panel.",
+  "js.settings.account.voice_key_label": "Clave API de %s",
+  "js.settings.account.replace_voice_key": "Nueva clave API de %s",
+  "js.settings.account.remove_voice_key": "Mantén pulsado para eliminar la clave API de %s",
+  "js.settings.account.voice_prefix_warning": "Las claves de este proveedor suelen empezar por %s.",
+  "js.settings.account.voice_key_help": "Guardada localmente en el almacén de credenciales del daemon; solo se usa para transcripción de voz y nunca se expone a sesiones de agente."
 }

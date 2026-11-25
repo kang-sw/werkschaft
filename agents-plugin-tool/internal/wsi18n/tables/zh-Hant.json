@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "預約繼續",
   "js.quota.cancel": "取消預約",
   "js.quota.scheduled_toast": "已預約繼續執行。",
-  "js.quota.cancelled_toast": "已取消預約的繼續執行。"
+  "js.quota.cancelled_toast": "已取消預約的繼續執行。",
+  "js.settings.key.dashboard.voice_backend.label": "語音轉寫後端",
+  "js.settings.key.dashboard.voice_backend.description": "輸入框按鍵說話使用的語音轉寫後端（例如 openai_api、groq、openrouter、native 或 local/<name>）。留空會隱藏麥克風按鈕。",
+  "js.settings.key.dashboard.voice_model.label": "語音轉寫模型",
+  "js.settings.key.dashboard.voice_model.description": "傳送至所選語音後端的模型 ID（例如 gpt-transcribe 或 whisper-large-v3-turbo）。留空以使用後端預設模型。",
+  "js.settings.key.dashboard.voice_language.label": "語音轉寫語言",
+  "js.settings.key.dashboard.voice_language.description": "選填的 ISO-639-1/BCP-47 語言提示（OpenAI gpt-transcribe 可用逗號分隔）。留空以自動偵測語言。",
+  "js.settings.account.voice_providers": "語音轉寫金鑰",
+  "js.settings.account.voice_api_key": "語音 API 金鑰",
+  "js.settings.account.openai_api_description": "僅供儀表板語音轉寫使用的 OpenAI Platform API 金鑰（與 ChatGPT 登入分開）。",
+  "js.settings.account.groq_description": "僅供儀表板語音轉寫使用的 Groq API 金鑰。",
+  "js.settings.account.voice_key_label": "%s API 金鑰",
+  "js.settings.account.replace_voice_key": "新的 %s API 金鑰",
+  "js.settings.account.remove_voice_key": "長按以移除 %s API 金鑰",
+  "js.settings.account.voice_prefix_warning": "此供應商的金鑰通常以 %s 開頭。",
+  "js.settings.account.voice_key_help": "儲存在本機背景程式憑證存放區中，僅供語音轉寫使用，不會公開給代理程式工作階段。"
 }

@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Fortsetzung planen",
   "js.quota.cancel": "Abbrechen",
   "js.quota.scheduled_toast": "Fortsetzung geplant.",
-  "js.quota.cancelled_toast": "Geplante Fortsetzung abgebrochen."
+  "js.quota.cancelled_toast": "Geplante Fortsetzung abgebrochen.",
+  "js.settings.key.dashboard.voice_backend.label": "Sprachtranskriptions-Backend",
+  "js.settings.key.dashboard.voice_backend.description": "Speech-to-Text-Backend für Push-to-Talk im Eingabefeld (z. B. openai_api, groq, openrouter, native oder local/<name>). Leer lassen, um die Mikrofonschaltfläche auszublenden.",
+  "js.settings.key.dashboard.voice_model.label": "Sprachtranskriptions-Modell",
+  "js.settings.key.dashboard.voice_model.description": "Modell-ID für das ausgewählte Sprach-Backend (z. B. gpt-transcribe oder whisper-large-v3-turbo). Leer lassen für den Backend-Standard.",
+  "js.settings.key.dashboard.voice_language.label": "Sprachtranskriptions-Sprache",
+  "js.settings.key.dashboard.voice_language.description": "Optionaler ISO-639-1/BCP-47-Sprachhinweis (oder kommagetrennt für OpenAI gpt-transcribe). Leer lassen für automatische Spracherkennung.",
+  "js.settings.account.voice_providers": "Schlüssel für Sprachtranskription",
+  "js.settings.account.voice_api_key": "Sprach-API-Schlüssel",
+  "js.settings.account.openai_api_description": "OpenAI-Platform-API-Schlüssel ausschließlich für die Dashboard-Sprachtranskription (getrennt von der ChatGPT-Anmeldung).",
+  "js.settings.account.groq_description": "Groq-API-Schlüssel ausschließlich für die Dashboard-Sprachtranskription.",
+  "js.settings.account.voice_key_label": "%s-API-Schlüssel",
+  "js.settings.account.replace_voice_key": "Neuer %s-API-Schlüssel",
+  "js.settings.account.remove_voice_key": "Gedrückt halten, um den %s-API-Schlüssel zu entfernen",
+  "js.settings.account.voice_prefix_warning": "Schlüssel dieses Anbieters beginnen normalerweise mit %s.",
+  "js.settings.account.voice_key_help": "Lokal im Daemon-Anmeldeinformationsspeicher abgelegt; wird nur für Sprachtranskription verwendet und niemals an Agent-Sitzungen weitergegeben."
 }

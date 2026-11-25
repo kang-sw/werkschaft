@@ -173,6 +173,30 @@
       "default": "",
       "default_scope": "global",
       "description": "Companion pack sources the companion settings list for install: a whitespace-separated list of at most 16 https URLs, each a git repository (with an optional #ref) or a zip file holding a marketplace.json. A source is fetched only when the user asks to list, install, or update its packs. An invalid entry is shown as an error and skipped. Only the global value applies."
+    },
+    {
+      "key": "dashboard.voice_backend",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_/-]{0,79})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the speech-to-text backend for dashboard composer voice typing (for example openai_api, groq, openrouter, native, or local/<name>). Empty leaves voice typing off unless a backend is selected and usable. Only the global value applies."
+    },
+    {
+      "key": "dashboard.voice_model",
+      "type": "string",
+      "pattern": "^([a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Overrides the transcription model sent to the selected voice backend (for example gpt-transcribe, whisper-large-v3-turbo, or an OpenRouter/local model ID). Empty uses the backend's default model. Only the global value applies."
+    },
+    {
+      "key": "dashboard.voice_language",
+      "type": "string",
+      "pattern": "^([a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*(,[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*){0,7})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Language hint for voice transcription (ISO-639-1/BCP-47 code, or comma-separated codes for OpenAI gpt-transcribe). Empty lets the backend auto-detect the spoken language. Only the global value applies."
     }
   ]
 }

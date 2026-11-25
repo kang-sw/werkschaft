@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "続行を予約",
   "js.quota.cancel": "予約をキャンセル",
   "js.quota.scheduled_toast": "続行を予約しました。",
-  "js.quota.cancelled_toast": "予約された続行をキャンセルしました。"
+  "js.quota.cancelled_toast": "予約された続行をキャンセルしました。",
+  "js.settings.key.dashboard.voice_backend.label": "音声文字起こしバックエンド",
+  "js.settings.key.dashboard.voice_backend.description": "コンポーザーのプッシュトゥトークで使用する音声文字起こしバックエンド（例: openai_api、groq、openrouter、native、local/<name>）。空のままにするとマイクボタンは非表示になります。",
+  "js.settings.key.dashboard.voice_model.label": "音声文字起こしモデル",
+  "js.settings.key.dashboard.voice_model.description": "選択した音声バックエンドに送信するモデル ID（例: gpt-transcribe、whisper-large-v3-turbo）。空のままにすると既定モデルを使用します。",
+  "js.settings.key.dashboard.voice_language.label": "音声文字起こし言語",
+  "js.settings.key.dashboard.voice_language.description": "任意の ISO-639-1/BCP-47 言語ヒント（OpenAI gpt-transcribe はカンマ区切り）。空のままにすると言語を自動検出します。",
+  "js.settings.account.voice_providers": "音声文字起こしキー",
+  "js.settings.account.voice_api_key": "音声 API キー",
+  "js.settings.account.openai_api_description": "ダッシュボードの音声文字起こし専用の OpenAI Platform API キー（ChatGPT サインインとは別）。",
+  "js.settings.account.groq_description": "ダッシュボードの音声文字起こし専用の Groq API キー。",
+  "js.settings.account.voice_key_label": "%s API キー",
+  "js.settings.account.replace_voice_key": "新しい %s API キー",
+  "js.settings.account.remove_voice_key": "長押しして %s API キーを削除",
+  "js.settings.account.voice_prefix_warning": "このプロバイダーのキーは通常 %s で始まります。",
+  "js.settings.account.voice_key_help": "ローカルデーモンの認証情報ストアに保存され、音声文字起こしにのみ使用され、エージェントセッションには公開されません。"
 }

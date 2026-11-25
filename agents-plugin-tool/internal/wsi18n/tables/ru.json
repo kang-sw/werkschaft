@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Запланировать продолжение",
   "js.quota.cancel": "Отменить",
   "js.quota.scheduled_toast": "Продолжение запланировано.",
-  "js.quota.cancelled_toast": "Запланированное продолжение отменено."
+  "js.quota.cancelled_toast": "Запланированное продолжение отменено.",
+  "js.settings.key.dashboard.voice_backend.label": "Бэкенд голосовой транскрипции",
+  "js.settings.key.dashboard.voice_backend.description": "Бэкенд распознавания речи для голосового ввода в поле сообщения (например, openai_api, groq, openrouter, native или local/<name>). Оставьте пустым, чтобы скрыть кнопку микрофона.",
+  "js.settings.key.dashboard.voice_model.label": "Модель голосовой транскрипции",
+  "js.settings.key.dashboard.voice_model.description": "Идентификатор модели для выбранного голосового бэкенда (например, gpt-transcribe или whisper-large-v3-turbo). Оставьте пустым для модели по умолчанию.",
+  "js.settings.key.dashboard.voice_language.label": "Язык голосовой транскрипции",
+  "js.settings.key.dashboard.voice_language.description": "Необязательный код языка ISO-639-1/BCP-47 (или список через запятую для OpenAI gpt-transcribe). Оставьте пустым для автоопределения.",
+  "js.settings.account.voice_providers": "Ключи голосовой транскрипции",
+  "js.settings.account.voice_api_key": "Голосовой API-ключ",
+  "js.settings.account.openai_api_description": "API-ключ OpenAI Platform, используемый только для голосовой транскрипции на панели (отдельно от входа в ChatGPT).",
+  "js.settings.account.groq_description": "API-ключ Groq, используемый только для голосовой транскрипции на панели.",
+  "js.settings.account.voice_key_label": "API-ключ %s",
+  "js.settings.account.replace_voice_key": "Новый API-ключ %s",
+  "js.settings.account.remove_voice_key": "Удерживайте, чтобы удалить API-ключ %s",
+  "js.settings.account.voice_prefix_warning": "Ключи этого провайдера обычно начинаются с %s.",
+  "js.settings.account.voice_key_help": "Хранится локально в хранилище учётных данных демона; используется только для голосовой транскрипции и никогда не передаётся сессиям агентов."
 }

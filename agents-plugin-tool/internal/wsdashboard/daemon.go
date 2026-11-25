@@ -280,6 +280,10 @@ type Daemon struct {
 	// credentialSource), nil without one.
 	credentials   credentialStore
 	accountSignIn accountSignIn
+	// voice test hooks (nil in production).
+	voiceBaseURLs   map[wscred.ProviderID]string
+	voiceHTTPClient *http.Client
+	voiceConfig     func() voiceSettings
 	leadNudges    interface {
 		Start()
 		Close()

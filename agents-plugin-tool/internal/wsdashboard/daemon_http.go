@@ -60,6 +60,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc(credentialChangePath, d.handleProviderChange)
 	mux.HandleFunc(EndpointChangePath, d.handleEndpointChange)
 	mux.HandleFunc(accountPrefix, d.handleAccount)
+	mux.HandleFunc(voicePrefix, d.handleVoice)
 	mux.HandleFunc("/nudge", d.handleNudge)
 	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)

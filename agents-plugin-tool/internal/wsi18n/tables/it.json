@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Programma continuazione",
   "js.quota.cancel": "Annulla",
   "js.quota.scheduled_toast": "Continuazione programmata.",
-  "js.quota.cancelled_toast": "Continuazione programmata annullata."
+  "js.quota.cancelled_toast": "Continuazione programmata annullata.",
+  "js.settings.key.dashboard.voice_backend.label": "Backend di trascrizione vocale",
+  "js.settings.key.dashboard.voice_backend.description": "Backend speech-to-text per push-to-talk nel compositore (ad esempio openai_api, groq, openrouter, native o local/<name>). Lascia vuoto per nascondere il pulsante del microfono.",
+  "js.settings.key.dashboard.voice_model.label": "Modello di trascrizione vocale",
+  "js.settings.key.dashboard.voice_model.description": "ID modello inviato al backend vocale selezionato (ad esempio gpt-transcribe o whisper-large-v3-turbo). Lascia vuoto per usare il modello predefinito.",
+  "js.settings.key.dashboard.voice_language.label": "Lingua di trascrizione vocale",
+  "js.settings.key.dashboard.voice_language.description": "Suggerimento linguistico ISO-639-1/BCP-47 facoltativo (o codici separati da virgola per OpenAI gpt-transcribe). Lascia vuoto per il rilevamento automatico.",
+  "js.settings.account.voice_providers": "Chiavi di trascrizione vocale",
+  "js.settings.account.voice_api_key": "Chiave API vocale",
+  "js.settings.account.openai_api_description": "Chiave API OpenAI Platform usata solo per la trascrizione vocale della dashboard (distinta dall'accesso ChatGPT).",
+  "js.settings.account.groq_description": "Chiave API Groq usata solo per la trascrizione vocale della dashboard.",
+  "js.settings.account.voice_key_label": "Chiave API %s",
+  "js.settings.account.replace_voice_key": "Nuova chiave API %s",
+  "js.settings.account.remove_voice_key": "Tieni premuto per rimuovere la chiave API %s",
+  "js.settings.account.voice_prefix_warning": "Le chiavi di questo provider iniziano solitamente con %s.",
+  "js.settings.account.voice_key_help": "Archiviata localmente nell'archivio credenziali del daemon; usata solo per la trascrizione vocale e mai esposta alle sessioni agente."
 }

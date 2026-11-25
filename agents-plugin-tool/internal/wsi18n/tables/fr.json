@@ -3638,5 +3638,20 @@
   "js.quota.schedule": "Planifier la poursuite",
   "js.quota.cancel": "Annuler",
   "js.quota.scheduled_toast": "Poursuite planifiée.",
-  "js.quota.cancelled_toast": "Poursuite planifiée annulée."
+  "js.quota.cancelled_toast": "Poursuite planifiée annulée.",
+  "js.settings.key.dashboard.voice_backend.label": "Backend de transcription vocale",
+  "js.settings.key.dashboard.voice_backend.description": "Backend de reconnaissance vocale pour le bouton appuyer-pour-parler du compositeur (par exemple openai_api, groq, openrouter, native ou local/<name>). Laissez vide pour masquer le bouton micro.",
+  "js.settings.key.dashboard.voice_model.label": "Modèle de transcription vocale",
+  "js.settings.key.dashboard.voice_model.description": "Identifiant de modèle envoyé au backend vocal sélectionné (par exemple gpt-transcribe ou whisper-large-v3-turbo). Laissez vide pour utiliser le modèle par défaut.",
+  "js.settings.key.dashboard.voice_language.label": "Langue de transcription vocale",
+  "js.settings.key.dashboard.voice_language.description": "Indication facultative de langue ISO-639-1/BCP-47 (ou codes séparés par des virgules pour OpenAI gpt-transcribe). Laissez vide pour la détection automatique.",
+  "js.settings.account.voice_providers": "Clés de transcription vocale",
+  "js.settings.account.voice_api_key": "Clé API vocale",
+  "js.settings.account.openai_api_description": "Clé API OpenAI Platform utilisée uniquement pour la transcription vocale du tableau de bord (distincte de la connexion ChatGPT).",
+  "js.settings.account.groq_description": "Clé API Groq utilisée uniquement pour la transcription vocale du tableau de bord.",
+  "js.settings.account.voice_key_label": "Clé API %s",
+  "js.settings.account.replace_voice_key": "Nouvelle clé API %s",
+  "js.settings.account.remove_voice_key": "Maintenir pour supprimer la clé API %s",
+  "js.settings.account.voice_prefix_warning": "Les clés de ce fournisseur commencent généralement par %s.",
+  "js.settings.account.voice_key_help": "Stockée localement dans le coffre d'identifiants du démon ; utilisée uniquement pour la transcription vocale et jamais exposée aux sessions d'agent."
 }

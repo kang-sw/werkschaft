@@ -37,6 +37,13 @@ const ProviderOpenRouter ProviderID = "openrouter"
 // ProviderOpenAI uses Sign in with ChatGPT for the local builtin harness.
 const ProviderOpenAI ProviderID = "openai"
 
+// ProviderOpenAIAPI is the OpenAI Platform API key (distinct from ProviderOpenAI
+// ChatGPT Plan OAuth), scoped strictly to voice transcription.
+const ProviderOpenAIAPI ProviderID = "openai_api"
+
+// ProviderGroq is the Groq API key, scoped strictly to voice transcription.
+const ProviderGroq ProviderID = "groq"
+
 // Kind is how a provider authenticates.
 type Kind string
 
@@ -64,12 +71,18 @@ type Provider struct {
 	// its key from. A child process that is not given the key through the
 	// token route must not inherit one from the daemon's environment.
 	EnvKeys []string
+	// VoiceOnly restricts a provider's credential to daemon-mediated voice
+	// transcription: it is refused on the agent token route, not admitted as a
+	// werk agent provider, and omitted from agent credential CLI listings.
+	VoiceOnly bool
 }
 
 // providers is the registry, in display order.
 var providers = []Provider{
 	{ID: ProviderOpenRouter, Name: "OpenRouter", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-", EnvKeys: []string{"OPENROUTER_API_KEY"}},
 	{ID: ProviderOpenAI, Name: "OpenAI", Kind: KindSIWC, BaseURL: openAIResource},
+	{ID: ProviderOpenAIAPI, Name: "OpenAI Platform", Kind: KindAPIKey, BaseURL: "https://api.openai.com/v1", KeyPrefix: "sk-", EnvKeys: []string{"OPENAI_API_KEY"}, VoiceOnly: true},
+	{ID: ProviderGroq, Name: "Groq", Kind: KindAPIKey, BaseURL: "https://api.groq.com/openai/v1", KeyPrefix: "gsk_", EnvKeys: []string{"GROQ_API_KEY"}, VoiceOnly: true},
 }
 
 // Providers returns the registry in display order.
@@ -83,6 +96,12 @@ func Lookup(id ProviderID) (Provider, bool) {
 		}
 	}
 	return Provider{}, false
+}
+
+// IsVoiceOnly reports whether id is a registered voice-only provider.
+func IsVoiceOnly(id ProviderID) bool {
+	p, ok := Lookup(id)
+	return ok && p.VoiceOnly
 }
 
 // Mask is the display form of a provider's key: the provider's non-secret

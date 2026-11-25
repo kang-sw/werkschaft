@@ -34,10 +34,10 @@ func TestLocalEndpointKeysFollowTheirConfiguredAPIRoot(t *testing.T) {
 	checkStatus := func(configured bool) {
 		t.Helper()
 		statuses, err := store.Status()
-		if err != nil || len(statuses) != 3 {
+		if err != nil || len(statuses) != len(Providers())+1 {
 			t.Fatalf("statuses = %v, %v", statuses, err)
 		}
-		got := statuses[2]
+		got := statuses[len(statuses)-1]
 		if got.Provider != id || got.Kind != KindAPIKey || got.Configured != configured || got.Masked == key {
 			t.Fatalf("local status = %v", got)
 		}
