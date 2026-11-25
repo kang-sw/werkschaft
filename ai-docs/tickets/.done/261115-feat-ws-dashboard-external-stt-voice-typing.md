@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: b54ccb65ecca0724
 sage-review-completeness-reviewed: b54ccb65ecca0724
+completed: 2026-11-25
 ---
 
 # Dashboard voice typing through an external transcription provider
@@ -147,3 +148,34 @@ Implement the full push-to-talk composer voice typing path over the shared voice
    - Tauri desktop Rust tests (`cargo test` in `agents-plugin-tool/desktop/`) verifying the pure macOS/Windows origin-and-kind permission decision (daemon origin + microphone granted; other origins, other kinds and non-user-initiated Windows requests denied). The WKWebView and WebView2 delegate wiring itself is not unit-testable; cover it by the pure decision function plus a manual packaged-app check. The `Info.plist` purpose string and the audio-input entitlement are verified on the built bundle by the `plutil` check in `desktop/scripts/package.cjs`, not by `cargo test`.
    - Frontend acceptance assertions: the capsule is anchored at the caret offset; the composer lock releases on success, provider error and abort; the resend button discards its audio on a new recording and on unload; a hide/minimize/tray (visibility change) cancels an active recording, releases the mic, drops the lock and discards the last recording; a second concurrent recorder start is refused.
    - Isolated fixture verification only (never port `29417`; obtain explicit owner approval before any live paid provider smoke call).
+
+### Result (251cc857) - 2026-11-25
+
+- **Landed:**
+  - **Daemon external STT & voice-only credentials (`507890e8`):**
+    - Added `wscred.ProviderOpenAIAPI` (`openai_api`) and `wscred.ProviderGroq` (`groq`) marked `VoiceOnly: true`, rejected by `wsagent` werk runtime and `ws-mcp` credential CLI while supported in Account API key CRUD with masked/never-echoed responses (`internal/wscred/provider.go`, `route.go`, `internal/wsagent/werk.go`, `cmd/ws-mcp/credential_cli.go`, `internal/wsdashboard/account_routes.go`).
+    - Added daemon routes `GET /api/voice/capabilities` and `POST /api/voice/transcribe` under the existing loopback + Host + Origin viewer boundary (returning empty capabilities to non-loopback/unauthenticated viewers), supporting OpenAI Platform (`gpt-transcribe` `languages` vs `gpt-4o-*`/`whisper-1` `language` + SSE `transcript.text.delta`/`transcript.text.done` streaming), Groq (`whisper-large-v3-turbo`/`whisper-large-v3`), OpenRouter (`chat/completions` `input_audio`), and custom local OpenAI-compatible endpoints (`local/<name>`), with a 25 MiB in-memory cap and zero audio disk writes (`internal/wsdashboard/voice_routes.go`, `daemon.go`, `daemon_http.go`).
+    - Added global settings `dashboard.voice_backend`, `dashboard.voice_model`, and `dashboard.voice_language` to `agents-plugin/dashboard-config-manifest.json` (mirrored to `agents-plugin-wsflow/dashboard-config-manifest.json`), `dashboard-settings-catalog.json`, `dashboard-settings-account.js` (grouped Voice keys section), and all 11 locale tables (`internal/wsi18n/tables/*.json`).
+  - **Tauri v2 scoped desktop microphone permissions (`822dac8f`):**
+    - Added pure cross-platform origin+kind policy functions and unit tests in `agents-plugin-tool/desktop/src/permissions.rs`.
+    - Added `Info.plist` (`NSMicrophoneUsageDescription`), `entitlements.plist` (`com.apple.security.device.audio-input`), and `bundle.macOS` config in `tauri.conf.json` while keeping `withGlobalTauri: false` and `no-native-authority` untouched.
+    - Wired `WKUIDelegate` (`macos/webview_delegate.rs`, `macos.rs`) and WebView2 `add_PermissionRequested` (`windows.rs`, `SetSavesInProfile(false)`, fail-closed `DENY`) through `permissions.rs`, and added macOS plist/entitlement verification checks to `desktop/scripts/package.cjs` and `test-package.cjs`.
+  - **Common `WsVoiceInput` interface & composer UI (`01ac0567`, `251cc857`):**
+    - Added provider-agnostic `window.WsVoiceInput` registry, controller, external daemon backend (synchronous `getUserMedia` inside click gesture, codec negotiation + PCM16 WAV fallback, SSE delta/done parser rejecting incomplete EOF streams with `stream_incomplete`, memory-only `lastAudio` resend/discard, cross-frame single-recorder lock on `window.top`), and composer integration (`dashboard-voice.js`, `dashboard-voice.css`, `dashboard.tmpl`, `sprite.svg`, `pages.go`, `dashboard-composer-delivery.js`, 13 `js.voice.*` keys across all 11 locales, `frontend-voice.test.js`, `frontend-idle.test.js`, `asset_source_test.go`, and updated `internal/mcp/testdata/settings-description-digests.json`).
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: pass
+  - `python3 -m unittest discover agents-plugin-wsflow/tests`: pass (22 tests, 2 skipped)
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-voice.test.js agents-plugin-tool/internal/wsdashboard/frontend-idle.test.js agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js agents-plugin-tool/internal/wsdashboard/frontend-interaction.test.js agents-plugin-tool/desktop/scripts/test-package.cjs`: pass (52/52)
+  - `PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path agents-plugin-tool/desktop/Cargo.toml`: pass (129/129, 0 warnings)
+  - `go -C agents-plugin-tool test ./internal/wscred/... ./internal/wsi18n/... ./internal/wspackage/... ./internal/wsagent/... ./cmd/ws-mcp/...`: pass
+  - `go -C agents-plugin-tool test -run 'TestVoice|TestAccount|TestDashboard|TestPage|TestFrame|TestAsset|TestUserMessageComposerSendsBrowserOffset|TestComposerCarriesWebPicks|TestSelectionComposerDraftTextOnlyAndLostBytes' ./internal/wsdashboard`: pass (full `./internal/wsdashboard` hit two pre-existing failures on `develop` `0f306a07` unrelated to voice typing: `TestSessionPageOffersSystemOpenToLocalViewersOnly` from `dashboard-conversation.css:892` and `TestSelectionComposerSendSnapshotsAndCancel` `convoVisible is not defined`)
+  - `go -C agents-plugin-tool test ./internal/mcp -timeout 45m`: full suite ran with only `TestSettingsDescriptionsMatchTheLocaleReviewFixture` failing on the 3 new manifest keys; after regenerating `settings-description-digests.json`, `go -C agents-plugin-tool test ./internal/mcp -run 'TestSettingsDescriptionsMatchTheLocaleReviewFixture|TestDashboardSettingsUICatalog' -count=1` passed.
+  - `code-review-lite`: found 1 Critical (`discoverCapabilities` parsing daemon `selected` object) and 1 Important (incomplete SSE stream EOF committing partial text); both fixed and regression-tested in `251cc857`.
+- **Decisions:**
+  - Appended `dashboard-voice.js` after `dashboard-lifecycle.js` in `dashboardScriptFiles` so its standalone IIFE runs after `WsCapsules` attaches and stays outside `selection_composer_test.go`'s composer fragment slice.
+  - Maintained T0 additive compatibility (new additive `/api/voice/*` routes, additive `dashboard.voice_*` settings keys, additive `VoiceOnly` providers).
+
+
+## Resolution (2026-11-25)
+
+Implemented Phase 1 end-to-end: daemon-mediated external STT (`/api/voice/capabilities`, `/api/voice/transcribe`) with voice-only `wscred` keys (`openai_api`, `groq`), OpenAI/Groq/OpenRouter/local endpoints, global `dashboard.voice_*` settings & 11-locale i18n, Tauri v2 scoped macOS/Windows microphone permissions, provider-agnostic `window.WsVoiceInput` + push-to-talk composer UI/capsule/lock/resend, full unit/integration test suites, and `code-review-lite` remediation.

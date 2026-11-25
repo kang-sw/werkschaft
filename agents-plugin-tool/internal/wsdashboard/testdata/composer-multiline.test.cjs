@@ -534,7 +534,7 @@ test('programmatic submitCommand clear path resets temporary multiline state', (
 test('template and CSS follow Variant B without touching .cfoot or nesting buttons', () => {
   assert.match(
     dashboardTmpl,
-    /<div class="csend-wrap" id="csend-wrap"><button type="button" class="csend" id="csend"[^>]*>\{\{icon "send"\}\}<span class="csend-kbd" id="csend-kbd" aria-hidden="true" hidden><\/span><\/button><button type="button" class="csend-revert" id="csend-revert"[^>]*hidden>×<\/button><\/div>/,
+    /<div class="csend-wrap" id="csend-wrap">(?:<button type="button" class="cvox" id="cvox"[^>]*>\{\{icon "mic"\}\}<\/button>)?<button type="button" class="csend" id="csend"[^>]*>\{\{icon "send"\}\}<span class="csend-kbd" id="csend-kbd" aria-hidden="true" hidden><\/span><\/button><button type="button" class="csend-revert" id="csend-revert"[^>]*hidden>×<\/button><\/div>/,
     'Variant B wrapper keeps #csend-revert as a sibling button'
   );
   assert.match(

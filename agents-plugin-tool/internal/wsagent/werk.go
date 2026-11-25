@@ -127,7 +127,7 @@ func (b WerkBackend) werkProvider(id string) (wscred.Provider, error) {
 	if id == "" {
 		id = string(wscred.ProviderOpenRouter)
 	}
-	if provider, ok := wscred.Lookup(wscred.ProviderID(id)); ok {
+	if provider, ok := wscred.Lookup(wscred.ProviderID(id)); ok && !provider.VoiceOnly {
 		return provider, nil
 	}
 	for _, provider := range b.localProviders() {

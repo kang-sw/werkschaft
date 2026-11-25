@@ -81,6 +81,10 @@ func ServeToken(w http.ResponseWriter, r *http.Request, src Source, req Request)
 		RefuseToken(w, http.StatusForbidden, RefusalNotPermitted, body.Provider, "OpenAI credentials are available only to the builtin harness")
 		return
 	}
+	if IsVoiceOnly(body.Provider) {
+		RefuseToken(w, http.StatusForbidden, RefusalNotPermitted, body.Provider, "voice transcription credentials are not available to agent sessions")
+		return
+	}
 	req.Provider = body.Provider
 	cred, err := src.Credential(r.Context(), req)
 	if err != nil {

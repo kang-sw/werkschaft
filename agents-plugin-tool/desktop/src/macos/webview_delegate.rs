@@ -1,17 +1,19 @@
-//! The WKWebView navigation delegate and the update/notify script-message bridges.
+//! The WKWebView navigation/UI delegates and the update/notify script-message bridges.
 
 use block2::Block;
 use objc2::{
     define_class,
-    rc::Weak,
+    rc::{Retained, Weak},
     runtime::{NSObject, ProtocolObject},
     DefinedClass, MainThreadOnly,
 };
-use objc2_foundation::{NSError, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSError, NSObjectProtocol, NSString, NSURL};
 use objc2_web_kit::{
-    WKDownload, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKNavigationResponse, WKNavigationResponsePolicy, WKScriptMessage, WKScriptMessageHandler,
-    WKUserContentController, WKWebView,
+    WKDownload, WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationAction,
+    WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse,
+    WKNavigationResponsePolicy, WKOpenPanelParameters, WKPermissionDecision, WKScriptMessage,
+    WKScriptMessageHandler, WKSecurityOrigin, WKUIDelegate, WKUserContentController, WKWebView,
+    WKWebViewConfiguration, WKWindowFeatures,
 };
 use tauri::{AppHandle, Manager};
 use url::Url;
@@ -20,6 +22,7 @@ use crate::{
     close,
     navigation::{self, Destination, Popup},
     notify,
+    permissions::{self, MediaCaptureKind},
     shell::Connection,
     updates,
 };
@@ -28,6 +31,11 @@ pub(super) struct NavigationState {
     pub(super) original: Weak<ProtocolObject<dyn WKNavigationDelegate>>,
     pub(super) connection: std::sync::Weak<Connection>,
     pub(super) dashboard: Option<(AppHandle, usize)>,
+}
+
+pub(super) struct UIState {
+    pub(super) original: Weak<ProtocolObject<dyn WKUIDelegate>>,
+    pub(super) connection: std::sync::Weak<Connection>,
 }
 
 #[derive(Clone, Copy)]
@@ -208,6 +216,99 @@ define_class!(
         #[unsafe(method(webViewWebContentProcessDidTerminate:))]
         fn renderer_failed(&self, _: &WKWebView) {
             self.recover("Dashboard renderer stopped");
+        }
+    }
+);
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = UIState]
+    pub(super) struct UIDelegate;
+
+    unsafe impl NSObjectProtocol for UIDelegate {}
+
+    unsafe impl WKUIDelegate for UIDelegate {
+        #[unsafe(method(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:))]
+        fn media_capture_permission(
+            &self,
+            _: &WKWebView,
+            origin: &WKSecurityOrigin,
+            _: &WKFrameInfo,
+            capture_type: WKMediaCaptureType,
+            decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
+        ) {
+            let kind = match capture_type {
+                WKMediaCaptureType::Microphone => MediaCaptureKind::Microphone,
+                WKMediaCaptureType::Camera => MediaCaptureKind::Camera,
+                WKMediaCaptureType::CameraAndMicrophone => MediaCaptureKind::CameraAndMicrophone,
+                _ => MediaCaptureKind::Other,
+            };
+            let protocol = unsafe { origin.protocol() }.to_string();
+            let host = unsafe { origin.host() }.to_string();
+            let raw_port = unsafe { origin.port() };
+            let port = u16::try_from(raw_port).ok().filter(|p| *p > 0);
+            let pin = self
+                .ivars()
+                .connection
+                .upgrade()
+                .and_then(|state| state.pinned_url());
+            let decision = if permissions::macos_media_capture_allowed(
+                &protocol,
+                &host,
+                port,
+                kind,
+                pin.as_ref(),
+            ) {
+                WKPermissionDecision::Grant
+            } else {
+                WKPermissionDecision::Deny
+            };
+            decision_handler.call((decision,));
+        }
+
+        // Forward Wry's file-open panel and popup-window hooks so replacing
+        // WKUIDelegate preserves existing upload and secondary-window behavior.
+        #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
+        fn run_open_panel(
+            &self,
+            webview: &WKWebView,
+            parameters: &WKOpenPanelParameters,
+            frame: &WKFrameInfo,
+            completion_handler: &Block<dyn Fn(*mut NSArray<NSURL>)>,
+        ) {
+            if let Some(original) = self.ivars().original.load() {
+                unsafe {
+                    original
+                        .webView_runOpenPanelWithParameters_initiatedByFrame_completionHandler(
+                            webview,
+                            parameters,
+                            frame,
+                            completion_handler,
+                        );
+                }
+                return;
+            }
+            completion_handler.call((std::ptr::null_mut(),));
+        }
+
+        #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        fn create_web_view(
+            &self,
+            webview: &WKWebView,
+            configuration: &WKWebViewConfiguration,
+            navigation_action: &WKNavigationAction,
+            window_features: &WKWindowFeatures,
+        ) -> Option<Retained<WKWebView>> {
+            self.ivars().original.load().and_then(|original| unsafe {
+                original
+                    .webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures(
+                        webview,
+                        configuration,
+                        navigation_action,
+                        window_features,
+                    )
+            })
         }
     }
 );

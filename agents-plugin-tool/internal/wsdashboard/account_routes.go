@@ -34,6 +34,7 @@ type accountStatus struct {
 	ConsentPrompt uint64                      `json:"consent_prompt"`
 	SignIn        accountSignInStatus         `json:"sign_in"`
 	LocalKeys     []wscred.ProviderStatus     `json:"local_keys"`
+	VoiceKeys     []wscred.ProviderStatus     `json:"voice_keys"`
 }
 
 func accountError(w http.ResponseWriter, status int, code string) {
@@ -126,6 +127,7 @@ func (d *Daemon) handleAccountStatus(w http.ResponseWriter, r *http.Request, sto
 	status.ConsentPrompt, _ = store.OpenAIConsentPrompt()
 	status.SignIn = d.accountSignIn.status()
 	status.LocalKeys = []wscred.ProviderStatus{}
+	status.VoiceKeys = []wscred.ProviderStatus{}
 	for _, provider := range providers {
 		switch provider.Provider {
 		case wscred.ProviderOpenRouter:
@@ -139,7 +141,11 @@ func (d *Daemon) handleAccountStatus(w http.ResponseWriter, r *http.Request, sto
 				}
 			}
 		default:
-			status.LocalKeys = append(status.LocalKeys, provider)
+			if wscred.IsVoiceOnly(provider.Provider) {
+				status.VoiceKeys = append(status.VoiceKeys, provider)
+			} else {
+				status.LocalKeys = append(status.LocalKeys, provider)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, status)

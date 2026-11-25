@@ -66,7 +66,11 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	var id wscred.ProviderID
 	if len(positional) == 1 {
 		id = wscred.ProviderID(positional[0])
-		if _, ok := wscred.Lookup(id); !ok && !wsconfig.IsLocalWerkProvider(string(id)) {
+		if p, ok := wscred.Lookup(id); ok {
+			if p.VoiceOnly {
+				return c.failed(name, fmt.Errorf("unknown provider; known providers: %s", knownProviderIDs()))
+			}
+		} else if !wsconfig.IsLocalWerkProvider(string(id)) {
 			return c.failed(name, fmt.Errorf("unknown provider; known providers: %s", knownProviderIDs()))
 		}
 	}
@@ -140,6 +144,9 @@ func (c *hostedCLI) credentialSignIn(args []string) int {
 func knownProviderIDs() string {
 	var ids []string
 	for _, p := range wscred.Providers() {
+		if p.VoiceOnly {
+			continue
+		}
 		ids = append(ids, string(p.ID))
 	}
 	return strings.Join(ids, ", ")
@@ -278,6 +285,16 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 				}
 			}
 		}
+	}
+	if err == nil {
+		filtered := make([]wscred.ProviderStatus, 0, len(statuses))
+		for _, s := range statuses {
+			if wscred.IsVoiceOnly(s.Provider) {
+				continue
+			}
+			filtered = append(filtered, s)
+		}
+		statuses = filtered
 	}
 	if err == nil && id != "" {
 		var one []wscred.ProviderStatus
