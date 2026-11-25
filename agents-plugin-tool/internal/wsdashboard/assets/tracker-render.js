@@ -164,7 +164,11 @@
     VS = name ? vss[name] : null; EV = {};
     UNREADS = { store: name, ready: false, entries: [] };
     renderHandles();
-    $('tkdrawer').classList.toggle('open', !!ui.open);
+    var tkd = $('tkdrawer'), tkOpen = !!ui.open;
+    tkd.classList.toggle('open', tkOpen);
+    if (tkd.hasAttribute('open') !== tkOpen) {
+      if (tkOpen) tkd.setAttribute('open', ''); else tkd.removeAttribute('open');
+    }
 
     // the store renders into the store page or the drawer, never both (the card ids are unique)
     var body = ui.page ? $('tkpage') : $('tkbody'), sb = $('tkwinbody'), top1 = body.scrollTop, top2 = sb.scrollTop;

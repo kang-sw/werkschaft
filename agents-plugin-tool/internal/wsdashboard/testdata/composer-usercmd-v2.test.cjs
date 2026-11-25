@@ -320,7 +320,7 @@ function makeUcmdHarness(initialFetchImpl) {
     });
   }
 
-  function holdConfirm(btn, holdMs = 1500, opts = {}) {
+  function holdConfirm(btn, holdMs = 1000, opts = {}) {
     fire(btn, 'pointerdown', { button: 0, isPrimary: true, pointerId: 1 });
     advance(holdMs);
     if (opts.leave) {
@@ -468,7 +468,7 @@ test('dual-scope same-ID coexistence, inline editing with zero focus loss, Enter
   assert.equal(agentCard.classList.contains('is-dirty'), false, 'dirty cleared after save');
 });
 
-test('1.5s hold confirmation on Run, Ask Agent (preserving #composer draft), Delete, and Escape/early-release safety', async () => {
+test('1s hold confirmation on Run, Ask Agent (preserving #composer draft), Delete, and Escape/early-release safety', async () => {
   const reqs = [];
   const cmds = [
     { id: 'test', source: 'agent', label: 'Run Tests', line: 'go test ./...', prompt: 'Check failures', cwd: 'pkg', revision: 'r1' }
@@ -492,7 +492,7 @@ test('1.5s hold confirmation on Run, Ask Agent (preserving #composer draft), Del
   const askBtn = card.querySelector('.ucmd-ibtn-ask');
   const delBtn = card.querySelector('.ucmd-ibtn-del');
 
-  // 1) Early release (<1500ms) on ▶ cancels and emits quick-click reminder toast; nothing runs.
+  // 1) Early release (<1000ms) on ▶ cancels and emits quick-click reminder toast; nothing runs.
   h.holdConfirm(runBtn, 400);
   assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 0);
   assert.equal(h.warns.at(-1), EN['js.ucmd.hold.early.run']);
@@ -502,11 +502,11 @@ test('1.5s hold confirmation on Run, Ask Agent (preserving #composer draft), Del
   assert.equal(pop.hidden, false, 'popover stays open when Escape cancels a hold');
   assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 0);
 
-  // 3) Full 1500ms hold on ↗ sends immediate structured POST /message WITHOUT touching #composer draft.
+  // 3) Full 1000ms hold on ↗ sends immediate structured POST /message WITHOUT touching #composer draft.
   const cmdIn = card.querySelector('.ucmd-inline-input.is-cmd');
   cmdIn.value = 'go test -race ./...';
   h.fire(cmdIn, 'input');
-  h.holdConfirm(askBtn, 1500);
+  h.holdConfirm(askBtn, 1000);
   await h.flushMicrotasks();
   assert.equal(h.posts.length, 1);
   assert.equal(h.posts[0].route, 'message');
@@ -517,9 +517,9 @@ test('1.5s hold confirmation on Run, Ask Agent (preserving #composer draft), Del
   assert.equal(h.ctext.value, 'unsent composer draft', '#composer draft untouched');
   assert.equal(pop.hidden, true, 'popover closes after ask send');
 
-  // 4) Reopen and full 1500ms hold on ▶ sends edited line override + source to /run and tracks ucmd origin.
+  // 4) Reopen and full 1000ms hold on ▶ sends edited line override + source to /run and tracks ucmd origin.
   h.fire(badge, 'click');
-  h.holdConfirm(runBtn, 1500);
+  h.holdConfirm(runBtn, 1000);
   await h.flushMicrotasks();
   const runReq = reqs.find(r => r.url.endsWith('/run'));
   assert(runReq, 'run POST sent');
@@ -529,10 +529,10 @@ test('1.5s hold confirmation on Run, Ask Agent (preserving #composer draft), Del
   assert.equal(h.tracked[0].origin, 'ucmd');
   assert.equal(pop.hidden, true, 'popover closes after run');
 
-  // 5) After guard expires, reopen and full 1500ms hold on × deletes command.
+  // 5) After guard expires, reopen and full 1000ms hold on × deletes command.
   h.advance(700);
   h.fire(badge, 'click');
-  h.holdConfirm(delBtn, 1500);
+  h.holdConfirm(delBtn, 1000);
   await h.flushMicrotasks();
   const delReq = reqs.find(r => r.url.endsWith('/remove'));
   assert(delReq, 'remove POST sent');
@@ -632,7 +632,7 @@ test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/
   const askBtn = card.querySelector('.ucmd-ibtn-ask');
   const delBtn = card.querySelector('.ucmd-ibtn-del');
 
-  // 1) Keyboard Space early release (<1500ms) cancels and emits quick-click toast.
+  // 1) Keyboard Space early release (<1000ms) cancels and emits quick-click toast.
   runBtn.focus();
   h.fire(runBtn, 'keydown', { key: ' ', repeat: false });
   h.advance(300);
@@ -640,9 +640,9 @@ test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/
   assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 0);
   assert.equal(h.warns.at(-1), EN['js.ucmd.hold.early.run']);
 
-  // 2) Keyboard Enter full 1500ms hold + release confirms run.
+  // 2) Keyboard Enter full 1000ms hold + release confirms run.
   h.fire(runBtn, 'keydown', { key: 'Enter', repeat: false });
-  h.advance(1500);
+  h.advance(1000);
   h.fire(runBtn, 'keyup', { key: 'Enter' });
   await h.flushMicrotasks();
   assert.equal(reqs.filter(r => r.url.endsWith('/run')).length, 1);
@@ -652,14 +652,14 @@ test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/
   h.fire(badge, 'click');
   cmdIn.value = '   ';
   h.fire(cmdIn, 'input');
-  h.holdConfirm(askBtn, 1500);
+  h.holdConfirm(askBtn, 1000);
   assert.equal(h.posts.length, 0, 'empty command line does not send ask message');
   assert.equal(h.warns.at(-1), EN['js.ucmd.save.empty']);
 
   // 4) 409 stale on delete keeps unsaved inline command draft and shows stale warning.
   cmdIn.value = 'go build -race ./...';
   h.fire(cmdIn, 'input');
-  h.holdConfirm(delBtn, 1500);
+  h.holdConfirm(delBtn, 1000);
   await h.flushMicrotasks();
   assert.equal(h.warns.at(-1), EN['js.ucmd.stale']);
   assert.equal(h.oks.length, 0);
@@ -668,7 +668,7 @@ test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/
   assert.equal(refreshedCard.classList.contains('is-dirty'), true);
 
   // 5) 409 withdrawn on delete warns withdrawn and clears card.
-  h.holdConfirm(refreshedCard.querySelector('.ucmd-ibtn-del'), 1500);
+  h.holdConfirm(refreshedCard.querySelector('.ucmd-ibtn-del'), 1000);
   await h.flushMicrotasks();
   assert.equal(h.warns.at(-1), EN['js.ucmd.withdrawn']);
   assert.equal(h.composer.querySelectorAll('.ucmd-card').length, 0);

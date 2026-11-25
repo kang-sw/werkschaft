@@ -238,7 +238,7 @@ test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors,
   assert.equal(await page.evaluate(() => window.__execWakes), 2);
   assert.equal(await page.evaluate(() => window.__timers.some(t => !t.cleared)), false, 'polling stops once admitted');
 
-  // 3) User command 1.5s hold goes through headless tracker with origin: 'ucmd'.
+  // 3) User command 1s hold goes through headless tracker with origin: 'ucmd'.
   await page.evaluate(() => {
     window.__onPoll = function (id, n, res) {
       return res({ id: id, command: 'make test\n./run --verbose', phase: 'done', exec_id: 'exec_ucmd1' });
@@ -248,7 +248,7 @@ test('headless tracking: ws:cexec-admitted, execWake, ucmd origin, toast errors,
   const runBox = await page.locator('.ucmd-ibtn-run').boundingBox();
   await page.mouse.move(runBox.x + runBox.width / 2, runBox.y + runBox.height / 2);
   await page.mouse.down();
-  await page.waitForFunction(() => window.__timers.some(t => !t.cleared && t.ms === 1500));
+  await page.waitForFunction(() => window.__timers.some(t => !t.cleared && t.ms === 1000));
   await page.evaluate(() => window.__flushTimer());
   await page.mouse.up();
   await page.waitForFunction(() => window.__timers.some(t => !t.cleared));

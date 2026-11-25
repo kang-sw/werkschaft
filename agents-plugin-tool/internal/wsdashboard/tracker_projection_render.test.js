@@ -127,3 +127,28 @@ test('due chips and row dates are equivalent with projections and legacy clock',
     assert.ok(!c.dueChip(it).includes('due over'));
   }
 });
+
+test('gantt left labels stay single-line with ellipsis, indent cap, and title tooltip', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'assets/tracker.css'), 'utf8');
+  assert.match(css, /\.tk\s+\.grow-axis,\s*\.tk\s+\.grow-row\s*\{[^}]*grid-template-columns:\s*minmax\(220px,\s*38%\)\s+1fr/);
+  assert.match(css, /\.tk\s+\.glabel\s*\{[^}]*flex-wrap:\s*nowrap[^}]*overflow:\s*hidden[^}]*calc\(min\(var\(--ind,\s*0\),\s*5\)\s*\*\s*14px\)/);
+  assert.match(css, /\.tk\s+\.glabel\s+\.title\s*\{[^}]*white-space:\s*nowrap[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*min-width:\s*0[^}]*flex:\s*1\s+1\s+0/);
+  assert.match(css, /\.tk\s+\.glabel\s*>\s*\.muted\s*\{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/);
+  assert.match(css, /\.tk\s+\.glabel\s+\.tmore\s*\{[^}]*white-space:\s*nowrap/);
+
+  const c = harness();
+  c.attr = (k, v) => ' data-' + k + '="' + c.esc(v) + '"';
+  c.alias = id => id;
+  for (const name of ['tipAttr', 'titleRef']) {
+    const start = tracker.indexOf('  function ' + name + '(');
+    const end = name === 'tipAttr' ? tracker.indexOf('\n', start) : tracker.indexOf('\n  }', start) + 4;
+    vm.runInContext(tracker.slice(start, end), c);
+  }
+  c.VS.items.i1 = { id: 'i1', title: 'Very long "quoted" & <escaped> timeline title' };
+  const plain = c.titleRef('i1');
+  const tipped = c.titleRef('i1', true);
+  assert.ok(!plain.includes('data-tip='), 'default titleRef omits data-tip');
+  assert.ok(tipped.includes('data-tip="Very long &quot;quoted&quot; &amp; &lt;escaped> timeline title"'), tipped);
+  const ganttSrc = fs.readFileSync(path.join(__dirname, 'assets/tracker-window.js'), 'utf8');
+  assert.match(ganttSrc, /titleRef\(it\.id,\s*true\)/, 'ganttBody passes tip=true to titleRef');
+});

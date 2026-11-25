@@ -1,5 +1,5 @@
 // Run by TestUserCommandBrowser against a live daemon whose launch service is a
-// fake: the v2 user commands trigger, popover, 3-line inline cards, and 1.5s hold UX in ko and en.
+// fake: the v2 user commands trigger, popover, 3-line inline cards, and 1s hold UX in ko and en.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -7,8 +7,8 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, signals, shots] = process.argv.slice(2);
 
 const TEXT = {
-  ko: { count: '2개', stale: '실행 전에 이 명령이 바뀌어 아무것도 실행되지 않았습니다', earlyRun: '1.5초간 꾹 누르면 실행됩니다' },
-  en: { count: '2', stale: 'This command changed before it ran, so nothing was run', earlyRun: 'Hold ▶ for 1.5s to run' },
+  ko: { count: '2개', stale: '실행 전에 이 명령이 바뀌어 아무것도 실행되지 않았습니다', earlyRun: '1초간 꾹 누르면 실행됩니다' },
+  en: { count: '2', stale: 'This command changed before it ran, so nothing was run', earlyRun: 'Hold ▶ for 1s to run' },
 };
 
 async function sessionFrame(page) {
@@ -38,7 +38,7 @@ async function openPop(view) {
   }
 }
 
-async function holdButton(page, locator, ms = 1600) {
+async function holdButton(page, locator, ms = 1100) {
   await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   assert.ok(box, 'hold target must have a bounding box');
@@ -103,7 +103,7 @@ async function holdButton(page, locator, ms = 1600) {
       assert.equal(posts.filter(p => p.path.endsWith('/user-commands/build/run')).length, 0, 'quick click never runs');
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.earlyRun), () => false), 'early-release hint toast shown');
 
-      // 1.5s hold runs the stored line and emits headless admission with 0px composer height growth.
+      // 1s hold runs the stored line and emits headless admission with 0px composer height growth.
       const hBefore = await view.evaluate(() => document.getElementById('composer').getBoundingClientRect().height);
       await holdButton(page, build.locator('.ucmd-ibtn-run'));
       await view.waitForFunction(() => (window.__admitted || []).some(e => e.command === 'make all'));

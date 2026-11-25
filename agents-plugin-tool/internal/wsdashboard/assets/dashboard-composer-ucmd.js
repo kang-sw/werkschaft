@@ -1,6 +1,6 @@
 // User commands v2: compact always-visible .cbadges trigger button beside
 // #sbadge, floating borderless popover above #composer, 3-line inline-editable
-// cards keyed by source+id, 1.5s press-and-hold confirmation (WsHoldConfirm)
+// cards keyed by source+id, 1s press-and-hold confirmation (WsHoldConfirm)
 // for Run / Ask Agent / Delete, single-click Save / Revert, inline Create form,
 // and direct composer-preserving Ask Agent dispatch.
   var ucmdEnabled = cexecEnabled;
@@ -13,7 +13,7 @@
   var ucmdForm = null, ucmdFormErr = null, ucmdFormSave = null;
   var ucmdEmptyEl = null, ucmdListEl = null;
   var ucmdAttemptKey = "ws.ucmd.attempt." + rid, ucmdGuardMs = 600;
-  var UCMD_HOLD_MS = 1500, ucmdHold = null, ucmdHoldControl = null;
+  var UCMD_HOLD_MS = 1000, ucmdHold = null, ucmdHoldControl = null;
   var UCMD_SUB_HOLDING = {
     run: "js.ucmd.sub.holding.run",
     ask: "js.ucmd.sub.holding.ask",

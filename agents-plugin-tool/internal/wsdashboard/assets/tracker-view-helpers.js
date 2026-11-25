@@ -137,9 +137,9 @@
   function fmtTs(ts) { return ts ? String(ts).slice(5, 16).replace('T', ' ') : '-'; }
   function today() { return String(VS.now || '').slice(0, 10); }
   function itemRef(id) { return '<a href="#"' + attr('item', id) + '>' + esc(alias(id)) + '</a>'; }
-  function titleRef(id) {
-    var it = VS.items[id];
-    return '<a class="title" href="#"' + attr('item', id) + '>' + esc(it ? it.title : alias(id)) + '</a>';
+  function titleRef(id, tip) {
+    var it = VS.items[id], text = it ? it.title : alias(id);
+    return '<a class="title" href="#"' + attr('item', id) + (tip ? tipAttr(text) : '') + '>' + esc(text) + '</a>';
   }
   // A status's or a kind's display name: the table's, else the value itself.
   function stLabel(s) { return SI.set[s] ? wsT(SI.set[s].label) : s; }
