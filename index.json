@@ -476,19 +476,6 @@
     "261125-feat-composer-mailbox-badge": {
       "registered_at": "2026-11-25T08:09:17Z"
     },
-    "261125-feat-werkschaft-tauri-daemon-self-recovery": {
-      "registered_at": "2026-11-25T04:04:05Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T09:36:29Z",
-        "impl": {
-          "branch": "impl/develop/swear-eel-poach"
-        }
-      }
-    },
     "261125-feat-whiteboard-gap-two-row-layout": {
       "registered_at": "2026-11-25T09:19:33Z"
     },
@@ -498,7 +485,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T09:47:35Z",
         "impl": {
           "branch": "impl/develop/gaffe-hulk-dance"
