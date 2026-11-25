@@ -434,6 +434,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .dgrid:is(.live, .history, .worktree) > #bcol::-webkit-scrollbar { display: none; }
 .dgrid:is(.live, .history, .worktree) > #bcol .board-toolbar .board-toolbar-face::before { content: ""; position: absolute; inset: calc(-12px - var(--toolbar-top, 0px)) 0 0; background: var(--wb-bg); z-index: -1; pointer-events: none; }
 .dgrid:is(.live, .history, .worktree) > #bcol[data-board-bounded] { --wb-rail-dn-pad: 4px 0 4px; --wb-rail-dn-bg: var(--wb-bg); }
+.dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] { overflow-anchor: none; }
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] > .r-board { position: relative; }
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board .closed-page { position: static; }
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board :is(section.topic[data-topic], .bcard[data-card]):not([data-max]) { position: absolute; left: 0; right: 0; margin-bottom: 0; contain: layout style; }

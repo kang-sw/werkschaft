@@ -29,7 +29,7 @@
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   var freePos = new Map(), freeHeightCache = new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
+  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
@@ -957,6 +957,7 @@
     freeReleasePin();
     freeJump = null;
     freeStagePending = false;
+    freeTopRebasePending = false;
     freeCancelTimers();
     freeDeferredCollapse.clear();
     if (freeCardRO) {
@@ -1372,9 +1373,24 @@
       var topPad = freeTopPad(board);
       var shift = topPad - ys[0];
       if (Math.abs(shift) >= FREE_RESIZE_EPS) {
-        for (var si = start; si <= end; si++) ys[si] += shift;
-        if ((!opts.jump || opts.smooth) && wasActive && !freePinned()) freeShiftScroll(col, shift, opts.scrollTop);
+        var deferTopRebase = false;
+        if (scrollTick && shift < 0) {
+          var curTop = typeof opts.scrollTop === "number" ? opts.scrollTop : col.scrollTop;
+          if (curTop > ys[0]) deferTopRebase = true;
+        }
+        if (deferTopRebase) {
+          freeTopRebasePending = true;
+          if (!freeIdleTimer) freeScheduleIdle();
+        } else {
+          for (var si = start; si <= end; si++) ys[si] += shift;
+          if ((!opts.jump || opts.smooth) && wasActive && !freePinned()) freeShiftScroll(col, shift, opts.scrollTop);
+          freeTopRebasePending = false;
+        }
+      } else {
+        freeTopRebasePending = false;
       }
+    } else {
+      freeTopRebasePending = false;
     }
     var stageH = freeUpdateMoreAndStage(board, list, end, ys[end], heights[end], !opts.jump && !!freeIdleTimer);
 
@@ -1458,11 +1474,18 @@
       if (y0 !== undefined) {
         var shift = freeTopPad(board) - y0;
         if (Math.abs(shift) >= FREE_RESIZE_EPS) {
-          for (var si = freeWinStart; si <= freeWinEnd; si++) {
-            var ns = list[si], ys = freePos.get(ns);
-            if (ys !== undefined) freePos.set(ns, ys + shift);
+          if (shift < 0 && freeIdleTimer) {
+            freeTopRebasePending = true;
+          } else {
+            for (var si = freeWinStart; si <= freeWinEnd; si++) {
+              var ns = list[si], ys = freePos.get(ns);
+              if (ys !== undefined) freePos.set(ns, ys + shift);
+            }
+            if (!freePinned()) freeShiftScroll(col, shift);
+            freeTopRebasePending = false;
           }
-          if (!freePinned()) freeShiftScroll(col, shift);
+        } else {
+          freeTopRebasePending = false;
         }
       }
     }
@@ -1519,7 +1542,8 @@
     var yLastBottom = (freePos.get(lastCard) || 0) + freeCachedHeight(lastCard);
     var needSlide = nextAnchor !== freeAnchorIdx ||
       (freeWinStart > 0 && yFirst !== undefined && (top - yFirst) < viewH * 0.75) ||
-      (freeWinEnd < list.length - 1 && (yLastBottom - (top + viewH)) < viewH * 0.75);
+      (freeWinEnd < list.length - 1 && (yLastBottom - (top + viewH)) < viewH * 0.75) ||
+      (freeTopRebasePending && freeWinStart === 0 && yFirst !== undefined && top <= yFirst);
     var didLayout = false;
     if (!freeJump && (needSlide || virtualExemptDirty.size)) {
       didLayout = freeLayout({ anchorIdx: nextAnchor, anchorY: freePos.get(nextNode), list: list, scrollTick: true, scrollTop: top });
@@ -1559,6 +1583,33 @@
           if (di >= 0 && (di < freeWinStart || di > freeWinEnd)) toFlush.push(dn);
         });
         if (toFlush.length) freeApplyOffWindow(toFlush, false, { cold: false });
+      }
+      // Complete any deferred top-boundary rebase once scrolling stops, shifting
+      // scrollTop before shrinking board minHeight so the browser never clamps.
+      if (freeWinStart === 0) {
+        var y0 = freePos.get(list[0]);
+        if (y0 !== undefined) {
+          var topShift = freeTopPad(board) - y0;
+          if (Math.abs(topShift) >= FREE_RESIZE_EPS) {
+            for (var ti = freeWinStart; ti <= freeWinEnd; ti++) {
+              var tc = list[ti], ty = freePos.get(tc);
+              if (ty === undefined) continue;
+              var nty = ty + topShift;
+              freePos.set(tc, nty);
+              if (!tc.hasAttribute || !tc.hasAttribute("data-max")) {
+                var tTopStr = Math.round(nty) + "px";
+                if (tc.style && tc.style.top !== tTopStr) tc.style.top = tTopStr;
+              }
+            }
+            if (!freePinned()) freeShiftScroll(col, topShift);
+            var endNode = list[freeWinEnd], endY = freePos.get(endNode);
+            if (endY !== undefined) {
+              freeUpdateMoreAndStage(board, list, freeWinEnd, endY, freeCachedHeight(endNode), false);
+            }
+            freePinLayout();
+          }
+        }
+        freeTopRebasePending = false;
       }
       if (freeStagePending) {
         var tail = list[freeWinEnd], tailY = freePos.get(tail);
@@ -2147,7 +2198,7 @@
       },
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
       scrolling: function () { return !!(freeActive && (freeScrollRaf || freeIdleTimer)); },
-      keepFrame: function (t) { return !!(freeActive && (freeScrollRaf || freeIdleTimer) && freeDeferredCollapse.has(t)); },
+      keepFrame: function (t) { return !!(freeActive && (freePos.has(t) || ((freeScrollRaf || freeIdleTimer) && freeDeferredCollapse.has(t)))); },
       hydrate: typeof virtualHydrate === "function" ? virtualHydrate : null,
       hydrateForTarget: typeof virtualHydrateForTarget === "function" ? virtualHydrateForTarget : null,
       reconcile: typeof virtualReconcile === "function" ? virtualReconcile : null,
