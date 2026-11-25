@@ -763,6 +763,7 @@ mod tests {
         healthy: bool,
         select_error: Option<DaemonPackageError>,
         stage_fails: bool,
+        spawns: bool,
         start_succeeds: bool,
         running_sha: String,
         floor: Floor,
@@ -789,6 +790,7 @@ mod tests {
                 healthy: true,
                 select_error: None,
                 stage_fails: false,
+                spawns: true,
                 start_succeeds: true,
                 running_sha: sha('n'),
                 floor: Floor::Absent,
@@ -884,7 +886,7 @@ mod tests {
             self.actions.borrow_mut().push("launch");
             *self.start.borrow_mut() = Some((identity.clone(), replace));
             Launch {
-                spawned: true,
+                spawned: self.spawns,
                 started: self.start_succeeds,
                 exit_code: Some(if self.start_succeeds { 0 } else { 78 }),
                 stderr: b"daemon-start: token=0123 refused\n".to_vec(),
@@ -1055,14 +1057,23 @@ mod tests {
             Some(prior.clone()),
             Some(prior.clone()),
         );
-        for (name, mut fixture) in [
-            ("rejected", rejected),
-            ("failed stage", failed_stage),
-            ("failed start", failed_start),
-            ("incumbent survives", incumbent),
+        // Automatic replacement of an older daemon takes the same paths.
+        let mut connect_rejected = Fixture::with(Some(prior.clone()), None, None);
+        connect_rejected.select_error = Some(residual_file());
+        let mut connect_failed_stage = Fixture::with(Some(prior.clone()), None, None);
+        connect_failed_stage.stage_fails = true;
+        let connect_failed_start = Fixture::with(Some(prior.clone()), Some(prior.clone()), None);
+        for (name, mut fixture, intent) in [
+            ("rejected", rejected, Intent::Replace),
+            ("failed stage", failed_stage, Intent::Replace),
+            ("failed start", failed_start, Intent::Replace),
+            ("incumbent survives", incumbent, Intent::Replace),
+            ("connect rejected", connect_rejected, Intent::Connect),
+            ("connect failed stage", connect_failed_stage, Intent::Connect),
+            ("connect failed start", connect_failed_start, Intent::Connect),
         ] {
             fixture.recorded = vec![entry("daemon-lkg", "0.50.7")];
-            let _ = connect_with(&fixture, Intent::Replace);
+            let _ = connect_with(&fixture, intent);
             let actions = fixture.actions.borrow();
             assert!(
                 !actions.contains(&"floor") && !actions.contains(&"lkg-launch"),
@@ -1084,6 +1095,11 @@ mod tests {
         // The same version, but the singleton runs another binary.
         let mut lifecycle = Fixture::alone([Some(Daemon::fixture(41, "0.50.8"))]);
         lifecycle.running_sha = sha('o');
+        connect_with(&lifecycle, Intent::Connect).unwrap();
+        assert!(lifecycle.records.borrow().is_empty());
+        // A matching daemon that no process of this start could have become.
+        let mut lifecycle = Fixture::alone([Some(Daemon::fixture(42, "0.50.8"))]);
+        lifecycle.spawns = false;
         connect_with(&lifecycle, Intent::Connect).unwrap();
         assert!(lifecycle.records.borrow().is_empty());
     }
@@ -1238,6 +1254,76 @@ mod tests {
         ] {
             assert!(version_core(invalid).is_none(), "{invalid}");
         }
+    }
+
+    // The production half of the recording rule: the digest comes from the
+    // singleton's last-running-executable.json under <cache>/dashboard.
+    #[test]
+    fn the_native_lifecycle_records_only_its_own_stage_and_collects_around_it() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        let dashboard = cache.join("dashboard");
+        let user = temp.path().join("user");
+        let stages = user.join("daemon-stages");
+        fs::create_dir_all(&dashboard).unwrap();
+        fs::create_dir_all(&stages).unwrap();
+        let native = NativeLifecycle {
+            cache,
+            resource_root: Err("no resources"),
+            user_data: Ok(user),
+        };
+        let running = |digest: &str| {
+            let record = serde_json::json!({"schema_version": 1, "executable": "ws-mcp",
+                "version": "0.52.1", "binary_sha256": digest, "build_time": 0});
+            fs::write(
+                dashboard.join("last-running-executable.json"),
+                record.to_string(),
+            )
+            .unwrap();
+        };
+        let stage = StageRef {
+            name: "daemon-new".into(),
+            version: [0, 52, 1],
+            binary_sha256: sha('a'),
+        };
+        let daemon = Daemon::fixture(7, "0.52.1-dev");
+        // No record of the running binary: never this stage's process.
+        assert!(!native.became(&daemon, &stage));
+        running(&sha('a').to_ascii_uppercase());
+        assert!(native.became(&daemon, &stage));
+        assert!(!native.became(&Daemon::fixture(7, "0.52.2"), &stage));
+        running(&sha('b'));
+        assert!(!native.became(&daemon, &stage));
+
+        native.record(&stage, &daemon);
+        let recorded = native.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            (recorded[0].stage.as_str(), recorded[0].version.as_str()),
+            ("daemon-new", "0.52.1-dev")
+        );
+        assert_eq!(recorded[0].binary_sha256, sha('a'));
+
+        let metadata = if cfg!(windows) {
+            "ws-mcp.exe.metadata.json"
+        } else {
+            "ws-mcp.metadata.json"
+        };
+        for (name, version, digest) in [
+            ("daemon-new", "0.52.1", 'a'),
+            ("daemon-running", "0.40.0", 'c'),
+            ("daemon-old", "0.30.0", 'd'),
+        ] {
+            fs::create_dir_all(stages.join(name).join("rsrc")).unwrap();
+            let value = serde_json::json!({"version": version, "binary_sha256": sha(digest)});
+            fs::write(stages.join(name).join(metadata), value.to_string()).unwrap();
+        }
+        running(&sha('c'));
+        native.collect(Some("daemon-new"), Some(&Daemon::fixture(9, "0.41.0")));
+        assert!(stages.join("daemon-new").is_dir());
+        assert!(stages.join("daemon-running").is_dir());
+        assert!(!stages.join("daemon-old").exists());
     }
 
     #[test]

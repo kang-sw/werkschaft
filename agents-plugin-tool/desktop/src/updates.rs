@@ -752,6 +752,23 @@ fn admit(
         .then_some(origin)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Recovery(Recovery),
+    Update(Command),
+    Drop,
+}
+
+/// Recovery actions exist only on the recovery page; update commands go to
+/// the updater from either authorized page.
+fn route(command: Command, origin: Origin) -> Route {
+    match command {
+        Command::Recovery(action) if origin == Origin::Local => Route::Recovery(action),
+        Command::Recovery(_) => Route::Drop,
+        command => Route::Update(command),
+    }
+}
+
 pub fn inject(window: &WebviewWindow, source: &Url) {
     let Some(controller) = window.try_state::<Arc<Controller>>() else {
         return;
@@ -783,13 +800,11 @@ pub fn receive(window: WebviewWindow, epoch: usize, main_frame: bool, source: Ur
     let Some(origin) = admit(&connection, epoch, main_frame, &source, current.as_ref()) else {
         return;
     };
-    if let Command::Recovery(action) = command {
-        // Recovery actions exist only on the recovery page.
-        if origin == Origin::Local {
-            crate::recovery::run(window, connection, action);
-        }
-        return;
-    }
+    let command = match route(command, origin) {
+        Route::Recovery(action) => return crate::recovery::run(window, connection, action),
+        Route::Drop => return,
+        Route::Update(command) => command,
+    };
     let Some(controller) = window
         .try_state::<Arc<Controller>>()
         .map(|state| state.inner().clone())
@@ -931,6 +946,42 @@ mod tests {
         assert_eq!(admit(&connection, epoch, true, &local, None), None);
         connection.closing.store(true, Ordering::Release);
         assert_eq!(admit(&connection, epoch, true, &local, Some(&local)), None);
+    }
+
+    #[test]
+    fn while_connected_only_the_dashboard_is_admitted_and_never_for_recovery() {
+        let connection = Connection::default();
+        let daemon = crate::endpoint::Daemon::fixture(7, "0.52.1");
+        let pin = daemon.url.clone();
+        connection.pin_for_test(daemon);
+        let epoch = connection.window_epoch();
+        let page = pin.join("/settings").unwrap();
+        let local = local_view(CONNECT_VIEW);
+        assert_eq!(
+            admit(&connection, epoch, true, &page, Some(&page)),
+            Some(Origin::Dashboard)
+        );
+        // The recovery page is not admitted while connected, even as current.
+        assert_eq!(admit(&connection, epoch, true, &local, Some(&local)), None);
+        // The window left the dashboard after the message was sent.
+        assert_eq!(admit(&connection, epoch, true, &page, Some(&local)), None);
+        assert_eq!(admit(&connection, epoch, false, &page, Some(&page)), None);
+        assert_eq!(
+            route(Command::Recovery(Recovery::Retry), Origin::Dashboard),
+            Route::Drop
+        );
+        assert_eq!(
+            route(Command::Recovery(Recovery::OpenLogs), Origin::Local),
+            Route::Recovery(Recovery::OpenLogs)
+        );
+        assert_eq!(
+            route(Command::Download, Origin::Local),
+            Route::Update(Command::Download)
+        );
+        assert_eq!(
+            route(Command::Restart, Origin::Dashboard),
+            Route::Update(Command::Restart)
+        );
     }
 
     #[test]

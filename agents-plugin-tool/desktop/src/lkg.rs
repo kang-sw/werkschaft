@@ -359,7 +359,13 @@ mod tests {
         assert_eq!(load(stages), [entry("daemon-b", "0.52.0", 20)]);
         // At most RETAIN, newest version first, then latest verification.
         assert!(record(stages, entry("daemon-c", "0.52.1", 30)).unwrap());
-        assert!(record(stages, entry("daemon-d", "0.51.9", 40)).is_ok());
+        let written = fs::metadata(stages.join(INDEX)).unwrap().modified().unwrap();
+        // An older version past RETAIN changes nothing and writes nothing.
+        assert!(!record(stages, entry("daemon-d", "0.51.9", 40)).unwrap());
+        assert_eq!(
+            fs::metadata(stages.join(INDEX)).unwrap().modified().unwrap(),
+            written
+        );
         let kept: Vec<_> = load(stages).into_iter().map(|e| e.stage).collect();
         assert_eq!(kept, ["daemon-c", "daemon-b"]);
         assert!(!stages.join(format!("{INDEX}.tmp")).exists());
@@ -410,6 +416,25 @@ mod tests {
         assert!(!Floor::Unreadable.admits("9.9.9"));
         assert!(Floor::Absent.admits("0.1.0"));
         assert_eq!(Floor::Unreadable.label().as_deref(), Some("unreadable"));
+    }
+
+    #[test]
+    fn the_running_digest_is_read_from_the_singletons_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("last-running-executable.json");
+        assert_eq!(running_sha(temp.path()), None);
+        let digest = "Ab".repeat(32);
+        let record = |sha: &str| {
+            serde_json::json!({"schema_version": 1, "executable": "/x/ws-mcp",
+                "version": "0.52.1", "binary_sha256": sha, "build_time": 1})
+            .to_string()
+        };
+        fs::write(&file, record(&digest)).unwrap();
+        assert_eq!(running_sha(temp.path()), Some(digest.to_ascii_lowercase()));
+        for bad in [record("short"), "{".to_owned(), "x".repeat(70 * 1024)] {
+            fs::write(&file, bad).unwrap();
+            assert_eq!(running_sha(temp.path()), None);
+        }
     }
 
     #[test]

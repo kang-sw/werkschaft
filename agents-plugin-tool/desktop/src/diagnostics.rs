@@ -98,17 +98,26 @@ pub fn redact(text: &str) -> String {
     redact_with(text, home.as_deref())
 }
 
-const SECRET_KEYS: [&str; 7] = [
-    "token", "secret", "password", "cookie", "bearer", "auth", "credential",
+const SECRET_KEYS: [&str; 10] = [
+    "token",
+    "secret",
+    "password",
+    "cookie",
+    "bearer",
+    "auth",
+    "credential",
+    "api_key",
+    "apikey",
+    "access_key",
 ];
 
 fn redact_with(text: &str, home: Option<&str>) -> String {
     let mut text = text.to_owned();
     if let Some(home) = home {
-        text = text.replace(home, "~");
+        text = replace_path(&text, home);
         let slashed = home.replace('\\', "/");
         if slashed != home {
-            text = text.replace(&slashed, "~");
+            text = replace_path(&text, &slashed);
         }
     }
     let mut out = String::with_capacity(text.len());
@@ -119,7 +128,11 @@ fn redact_with(text: &str, home: Option<&str>) -> String {
         if let Some(skip) = secret_key(rest) {
             let (key, after) = rest.split_at(skip);
             out.push_str(key);
-            let mut value = value_end(after);
+            // A quoted value runs to its closing quote, spaces included.
+            let mut value = match key.chars().last() {
+                Some(quote @ ('"' | '\'')) => after.find(quote).unwrap_or(after.len()),
+                _ => value_end(after),
+            };
             // `Authorization: Bearer <credential>` hides the credential too.
             let scheme = after[..value].to_ascii_lowercase();
             if (scheme == "bearer" || scheme == "basic") && after[value..].starts_with(' ') {
@@ -147,6 +160,25 @@ fn redact_with(text: &str, home: Option<&str>) -> String {
         out.push_str(&rest[..word]);
         rest = &rest[word..];
     }
+    out
+}
+
+/// Replaces a path, ignoring ASCII case on Windows, where one directory may
+/// be spelled with different case.
+fn replace_path(text: &str, path: &str) -> String {
+    if !cfg!(windows) {
+        return text.replace(path, "~");
+    }
+    let lower = text.to_ascii_lowercase();
+    let needle = path.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut start = 0;
+    while let Some(found) = lower[start..].find(&needle) {
+        out.push_str(&text[start..start + found]);
+        out.push('~');
+        start += found + needle.len();
+    }
+    out.push_str(&text[start..]);
     out
 }
 
@@ -204,6 +236,14 @@ mod tests {
             "exit status 78 at rsrc/x.md"
         );
         assert_eq!(redact_with("authority granted", None), "authority granted");
+        let quoted = redact_with(r#"token="abc def" api_key: 'k 1' next"#, None);
+        assert_eq!(quoted, r#"token="[REDACTED]" api_key: '[REDACTED]' next"#);
+        if cfg!(windows) {
+            assert_eq!(
+                redact_with(r"c:\users\KIM\x", Some(r"C:\Users\kim")),
+                r"~\x"
+            );
+        }
     }
 
     #[test]

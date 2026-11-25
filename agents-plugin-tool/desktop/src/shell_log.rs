@@ -81,11 +81,16 @@ impl Log {
         } else {
             options().ok()
         };
-        self.size = self
-            .file
-            .as_ref()
-            .and_then(|file| file.metadata().ok())
-            .map_or(0, |meta| meta.len());
+        // A failed rename (a scanner holding the old segment) is retried only
+        // after another segment's worth of lines, never on every line.
+        self.size = if renamed {
+            self.file
+                .as_ref()
+                .and_then(|file| file.metadata().ok())
+                .map_or(0, |meta| meta.len())
+        } else {
+            0
+        };
     }
 }
 

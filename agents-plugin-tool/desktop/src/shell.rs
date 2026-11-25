@@ -102,6 +102,11 @@ impl Connection {
         self.daemon()
     }
 
+    #[cfg(test)]
+    pub(crate) fn pin_for_test(&self, daemon: Daemon) {
+        *self.daemon.lock().unwrap() = Some(daemon);
+    }
+
     pub fn pinned_url(&self) -> Option<Url> {
         self.daemon.lock().unwrap().as_ref().map(|d| d.url.clone())
     }
