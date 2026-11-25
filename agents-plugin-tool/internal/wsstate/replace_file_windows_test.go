@@ -120,12 +120,30 @@ func TestReadFileCachedWindowsFailsFastDuringExclusiveOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	// Hold an exclusive read/write handle directly (matching a publication hold
+	// and avoiding os.NewFile wrapper/double-close) so concurrent opens must
+	// observe ERROR_SHARING_VIOLATION.
+	handle, err := windows.CreateFile(
+		name,
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		0,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold := os.NewFile(uintptr(handle), path)
-	defer hold.Close()
+	closed := false
+	closeHold := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return windows.CloseHandle(handle)
+	}
+	defer func() { _ = closeHold() }()
 
 	before := readCacheReads()
 	if _, err := ReadFileCached(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
@@ -162,7 +180,7 @@ func TestReadFileCachedWindowsFailsFastDuringExclusiveOpen(t *testing.T) {
 			t.Fatal("uncached read did not retry")
 		}
 	}
-	if err := hold.Close(); err != nil {
+	if err := closeHold(); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -173,6 +191,43 @@ func TestReadFileCachedWindowsFailsFastDuringExclusiveOpen(t *testing.T) {
 	case <-deadline.C:
 		t.Fatal("uncached read did not finish after the handle closed")
 	}
+}
+
+func TestRetryTransientWindows(t *testing.T) {
+	t.Run("retries sharing violation and access denied until clear", func(t *testing.T) {
+		errs := []error{
+			&os.PathError{Op: "open", Path: "state", Err: windows.ERROR_SHARING_VIOLATION},
+			&os.PathError{Op: "open", Path: "state", Err: windows.ERROR_ACCESS_DENIED},
+			nil,
+		}
+		attempts := 0
+		err := retryTransient(func() error {
+			e := errs[attempts]
+			attempts++
+			return e
+		})
+		if err != nil {
+			t.Fatalf("retryTransient = %v, want nil", err)
+		}
+		if attempts != 3 {
+			t.Fatalf("attempts = %d, want 3", attempts)
+		}
+	})
+
+	t.Run("does not retry non-transient errors", func(t *testing.T) {
+		attempts := 0
+		want := &os.PathError{Op: "open", Path: "state", Err: windows.ERROR_FILE_NOT_FOUND}
+		err := retryTransient(func() error {
+			attempts++
+			return want
+		})
+		if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			t.Fatalf("retryTransient = %v, want ERROR_FILE_NOT_FOUND", err)
+		}
+		if attempts != 1 {
+			t.Fatalf("attempts = %d, want 1", attempts)
+		}
+	})
 }
 
 // TestRemoveFileWindowsWaitsOutAReader: a plain Go reader holding the file

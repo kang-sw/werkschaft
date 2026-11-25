@@ -407,10 +407,10 @@
     });
     if (!bgSt.jobs.length) {
       if (bgListDivider) bgListDivider.remove();
-      var emptyKey = bgSt.loading ? "loading" : (bgSt.error ? "error" : "empty");
+      var emptyKey = bgSt.loading ? "js.bgexec.loading" : (bgSt.error ? "js.bgexec.error" : "js.bgexec.empty");
       if (bgListEmpty && bgListEmpty.bgKey === emptyKey) return;
       if (bgListEmpty) bgListEmpty.remove();
-      bgListEmpty = bgEl("div", "bgp-empty" + (bgSt.error ? " is-err" : ""), wsT("js.bgexec." + emptyKey));
+      bgListEmpty = bgEl("div", "bgp-empty" + (bgSt.error ? " is-err" : ""), wsT(emptyKey));
       bgListEmpty.bgKey = emptyKey;
       bgListEl.appendChild(bgListEmpty);
       return;
