@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 
@@ -635,6 +634,7 @@ func (s *Server) renderCallToolIndex(key string, entry sessionEntry) string {
 	sort.Slice(definitions, func(i, j int) bool {
 		return definitions[i]["name"].(string) < definitions[j]["name"].(string)
 	})
+	descriptor := s.connectionDescriptor()
 	var b strings.Builder
 	b.WriteString("## Callable ws tools\n\n")
 	for _, tool := range definitions {
@@ -646,14 +646,13 @@ func (s *Server) renderCallToolIndex(key string, entry sessionEntry) string {
 			}
 		}
 		marker := ""
-		descriptor := s.connectionDescriptor()
 		name := descriptor.aliases.canonical(tool["name"].(string))
-		if descriptor.directTools != nil && (name == "call" || slices.Contains(descriptor.directTools, name)) {
+		if descriptor.directTools != nil && s.isDirectTool(descriptor, name) {
 			marker = " [direct]"
 		}
 		fmt.Fprintf(&b, "%s%s - %s\n", tool["name"], marker, description)
 	}
-	if s.connectionDescriptor().directTools != nil {
+	if descriptor.directTools != nil {
 		b.WriteString("\n[direct] tools are listed directly; all others use `call(tool, arguments)`.\n")
 	} else {
 		b.WriteString("\nA ws tool named in this manual but missing from your tool list is reachable through `call(tool, arguments)`.\n")

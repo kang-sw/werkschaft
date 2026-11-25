@@ -270,7 +270,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "exec.shell",
-			"description": "Run one shell line with the configured shell (Bash; Git Bash on Windows): pass cmd, with optional cwd and async (read-only workers may use only this form and allowlisted read commands). It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message. The legacy form takes command, with optional working_dir and shell, and keeps its original replies. The two forms cannot be mixed in one call.",
+			"description": "Run a shell line (Bash; Git Bash on Windows) via cmd (optional cwd, async, stdin_open; read-only workers: this form and allowlisted read commands only). Waits up to the execution window, then returns an exec id and reports completion as a message; async returns immediately. Legacy form: command, working_dir, shell. Do not mix forms.",
 			"inputSchema": execShellSchema(),
 		},
 		{
@@ -1377,15 +1377,15 @@ const execStdinOpenDescription = "Keep stdin open for exec.write. Omit stdin whe
 
 func execShellSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"cmd":         stringProperty("The shell line to run (new form; pairs with cwd and async)."),
-		"cwd":         stringProperty("New form: working directory. Defaults to the session's worktree root; a relative path resolves beneath it."),
-		"async":       boolProperty("New form: answer with the exec id at once instead of waiting up to the execution window."),
-		"command":     stringProperty("Legacy form: the shell command string (pairs with working_dir and shell)."),
-		"working_dir": stringProperty("Legacy form: command working directory. Defaults to the resolved ws worktree root; relative paths resolve beneath that root."),
-		"shell":       stringProperty("Legacy form: optional explicit shell executable. Defaults to the platform shell."),
+		"cmd":         stringProperty("Shell line (new form)."),
+		"cwd":         stringProperty("Working dir, default worktree root (new form)."),
+		"async":       boolProperty("Return exec id immediately (new form)."),
+		"command":     stringProperty("Shell command (legacy form)."),
+		"working_dir": stringProperty("Working dir, default worktree root (legacy form)."),
+		"shell":       stringProperty("Explicit shell executable (legacy form)."),
 		"env":         execEnvProperty(),
-		"stdin":       stringProperty(execStdinDescription),
-		"stdin_open":  boolProperty("New form only. " + execStdinOpenDescription),
+		"stdin":       stringProperty("Text written to stdin before closing it."),
+		"stdin_open":  boolProperty("Keep stdin open for exec.write; omit stdin (new form)."),
 	}}
 }
 

@@ -424,7 +424,7 @@ func (s *Server) handle(ctx context.Context, req request) response {
 		if descriptor.directTools != nil {
 			listed = slices.DeleteFunc(listed, func(tool map[string]any) bool {
 				name := descriptor.aliases.canonical(tool["name"].(string))
-				return name != "call" && !slices.Contains(descriptor.directTools, name)
+				return !s.isDirectTool(descriptor, name)
 			})
 		}
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listed}}

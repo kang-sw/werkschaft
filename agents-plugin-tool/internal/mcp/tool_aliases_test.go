@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
@@ -183,6 +184,84 @@ func TestHostedDirectToolDiscovery(t *testing.T) {
 		}
 		s.Close()
 	}
+}
+
+func TestHostedDirectToolDiscoveryCutoverExec(t *testing.T) {
+	regs := descriptorRegistrations()
+	s, _ := hostedBackendConnection(t, wsagent.BackendAgy, regs)
+	defer s.Close()
+	hosted := &execjob.Hosted{}
+	s.execCutover = wsagent.BackendAgy
+	s.exec = func() *execjob.Hosted { return hosted }
+
+	var resp struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(callToolsList(t, s)), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tool := range resp.Result.Tools {
+		name := tool["name"].(string)
+		got[name] = true
+		meta, ok := tool["_meta"].(map[string]any)
+		if !ok || meta["antigravity/alwaysLoad"] != true {
+			t.Errorf("%s: missing alwaysLoad metadata: %v", name, tool["_meta"])
+		}
+	}
+	want := map[string]bool{"call": true}
+	aliases := s.connectionDescriptor().aliases
+	for _, name := range regs[wsagent.BackendAgy].DirectTools {
+		want[aliases.advertised(name)] = true
+	}
+	for _, name := range cutoverExecTools {
+		want[aliases.advertised(name)] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cutover agy tools/list: got %v, want %v", got, want)
+	}
+
+	// Read-only authority still hides exec launch/write tools on a backend
+	// with ReadOnlyNoExec even when DirectTools and execCutover are active.
+	t.Run("read-only authority enforced", func(t *testing.T) {
+		t.Setenv(wsagent.EnvPermissionLevel, "read-only")
+		roRegs := descriptorRegistrations()
+		agyReg := roRegs[wsagent.BackendAgy]
+		agyReg.Lifecycle.ReadOnlyNoExec = true
+		roRegs[wsagent.BackendAgy] = agyReg
+
+		roServer, _ := hostedBackendConnection(t, wsagent.BackendAgy, roRegs)
+		defer roServer.Close()
+		roServer.execCutover = wsagent.BackendAgy
+		roServer.exec = func() *execjob.Hosted { return hosted }
+
+		var roResp struct {
+			Result struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(callToolsList(t, roServer)), &roResp); err != nil {
+			t.Fatal(err)
+		}
+		roGot := map[string]bool{}
+		for _, tool := range roResp.Result.Tools {
+			roGot[tool.Name] = true
+		}
+		for _, refused := range []string{"exec_run", "exec_shell", "exec_write"} {
+			if roGot[refused] {
+				t.Errorf("read-only cutover agy listed %s", refused)
+			}
+		}
+		for _, kept := range []string{"exec_stop", "exec_tail", "exec_list"} {
+			if !roGot[kept] {
+				t.Errorf("read-only cutover agy omitted %s", kept)
+			}
+		}
+	})
 }
 
 func TestHostedAgyToolsAlwaysLoad(t *testing.T) {

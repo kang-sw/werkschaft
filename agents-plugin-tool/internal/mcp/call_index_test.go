@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
@@ -79,5 +80,86 @@ func TestCallIndexOnlyWithDescriptorFlag(t *testing.T) {
 	_, index, ok := strings.Cut(text, "## Callable ws tools\n\n")
 	if !ok || !strings.HasPrefix(index, "call - ") || !strings.Contains(index, "\nruntime.read - ") || strings.Contains(index, "git.commit - ") {
 		t.Fatalf("index must respect descriptor, permission and allowlist: %s", index)
+	}
+}
+
+func TestCallIndexMarksCutoverExecToolsDirect(t *testing.T) {
+	s, f := hostedBackendConnection(t, wsagent.BackendAgy, descriptorRegistrations())
+	defer s.Close()
+	hosted := &execjob.Hosted{}
+	s.execCutover = wsagent.BackendAgy
+	s.exec = func() *execjob.Hosted { return hosted }
+
+	reg := descriptorRegistrations()[wsagent.BackendAgy]
+	render := HostedRender{
+		Harness:          reg.ManualHarness,
+		PlaybookCommands: reg.PlaybookCommands,
+		ToolNameScheme:   reg.ToolNameScheme,
+		CallFallback:     reg.CallFallback,
+		DirectTools:      reg.DirectTools,
+		ExecCutover:      wsagent.BackendAgy,
+	}
+	rendered, err := RenderLeadManual(os.Environ(), f.root, render, f.hosted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := toolText(t, callToolOnce(t, s, 1, "workflow_manual", map[string]any{}))
+	names := toolText(t, callToolOnce(t, s, 1, "call", map[string]any{}))
+
+	aliases := s.connectionDescriptor().aliases
+	wantDirect := map[string]bool{"call": true, "todo_list": true, "workflow_manual": true}
+	for _, name := range cutoverExecTools {
+		wantDirect[aliases.advertised(name)] = true
+	}
+
+	for source, manual := range map[string]string{"daemon prompt": rendered, "connection manual": live} {
+		_, index, ok := strings.Cut(manual, "## Callable ws tools\n\n")
+		if !ok {
+			t.Fatalf("%s has no fallback index", source)
+		}
+		lines, _, ok := strings.Cut(index, "\n\n")
+		if !ok {
+			t.Fatalf("%s malformed index: %s", source, index)
+		}
+		var indexed []string
+		seenExec := map[string]bool{}
+		for _, line := range strings.Split(lines, "\n") {
+			name, _, ok := strings.Cut(line, " - ")
+			if !ok {
+				t.Fatalf("%s malformed index entry: %q", source, line)
+			}
+			direct := strings.HasSuffix(name, " [direct]")
+			name = strings.TrimSuffix(name, " [direct]")
+			if direct != wantDirect[name] {
+				t.Fatalf("%s: direct=%v on %s, want %v", source, direct, name, wantDirect[name])
+			}
+			if strings.HasPrefix(name, "exec_") {
+				seenExec[name] = true
+			}
+			indexed = append(indexed, name)
+		}
+		for _, name := range cutoverExecTools {
+			alias := aliases.advertised(name)
+			if !seenExec[alias] {
+				t.Fatalf("%s missing cutover tool %s", source, alias)
+			}
+		}
+		if got := strings.Join(indexed, "\n"); got != names {
+			t.Fatalf("%s index differs from call list:\nindex=%s\ncall=%s", source, got, names)
+		}
+	}
+
+	// Non-cutover RenderLeadManual omits exec_* tools.
+	render.ExecCutover = ""
+	nonCutover, err := RenderLeadManual(os.Environ(), f.root, render, f.hosted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ncIndex, ok := strings.Cut(nonCutover, "## Callable ws tools\n\n")
+	if !ok {
+		t.Fatal("non-cutover render has no fallback index")
+	}
+	if strings.Contains(ncIndex, "exec_") {
+		t.Fatalf("non-cutover render must not include exec_* tools:\n%s", ncIndex)
 	}
 }

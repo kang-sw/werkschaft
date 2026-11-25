@@ -27,6 +27,7 @@ type HostedRender struct {
 	ToolNameScheme       string
 	CallFallback         bool
 	DirectTools          []string
+	ExecCutover          string
 	Boards               *WhiteboardStores
 }
 
@@ -60,6 +61,9 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 	}
 	s.descriptor = connectionDescriptor{manualHarness: render.Harness, playbookCommands: render.PlaybookCommands, preferNativeSubagent: render.PreferNativeSubagent, resolveLeadSubagent: render.ResolveLeadSubagent, aliases: aliases, callFallback: render.CallFallback, directTools: render.DirectTools, leadRender: true}
 	s.descriptorResolved = true
+	if render.ExecCutover != "" {
+		s.execCutover = render.ExecCutover
+	}
 	// A render may start the session-start tracker check (a background
 	// fetch); the server is released once that settles, without holding up
 	// the caller.
