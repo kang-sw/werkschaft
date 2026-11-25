@@ -139,6 +139,9 @@ fetched state.
   bumped or reused version. A non-empty result means a concurrent release claimed the
   version; increment the patch again, commit the regenerated version edits,
   rename the branch, re-run tests, and restart the tag check.
+- `cd agents-plugin-tool && python3 scripts/generate-package-assets.py && python3 scripts/generate-package-assets.py --check`
+  on the release branch head so embedded workflow packages are populated before
+  running tests in a fresh worktree.
 - `cd agents-plugin-tool && bash scripts/ci-test-shard.sh all` on the release
   branch head — the regular group must pass. When the owner chose **yes**,
   also run `bash scripts/ci-test-shard.sh long` from `agents-plugin-tool` and

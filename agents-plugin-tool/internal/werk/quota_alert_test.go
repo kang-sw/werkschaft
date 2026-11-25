@@ -154,6 +154,7 @@ func TestAgentTurnEndEmitsUsageLimitFields(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
+			defer a.Close()
 			a.runTurn(context.Background(), "hello")
 			var end *Line
 			for i := range lines {
