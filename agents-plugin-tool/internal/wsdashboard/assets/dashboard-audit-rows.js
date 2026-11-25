@@ -284,7 +284,7 @@
         if (!key || c.hasAttribute("hidden")) continue;
         var footer = c.classList.contains("turnline") ? c : c.querySelector(".turnline");
         var ent = { el: c, key: key, at: c.getAttribute("data-at") || "", turn: !!footer, footer: footer };
-        if (!footer && c.matches(".msg, .user-batch, .mailline, .mail-block, .mail-notification, .wbeffects, .boundary-badge, .apanswered, .cardref, .cmdrun, .uiline, .input-record")) ent.source = c;
+        if (!footer && c.matches(".msg, .user-batch, .mailline, .mail-block, .mail-notification, .exec-notice, .wbeffects, .boundary-badge, .apanswered, .cardref, .cmdrun, .uiline, .input-record")) ent.source = c;
         if (c.matches(".au-tools, .toolsline")) {
           var rows = Array.from(c.querySelectorAll(".au-row"));
           if (!rows.length) rows = Array.from(c.querySelectorAll(".brows .brow:not(.more)"));

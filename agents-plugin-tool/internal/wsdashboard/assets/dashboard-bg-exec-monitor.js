@@ -27,6 +27,7 @@
   var bgListRequest = null, bgListDirty = false;
   var bgTailState = null, bgTailTimer = 0, bgTailAC = null;
   var bgTickTimer = 0, bgCopyTimer = 0;
+  var bgPendingSel = "", bgJumpAnchor = null;
 
   function bgExecOpen() { return bgSt.open; }
   function bgPageHidden() { return typeof pageHidden === "function" ? pageHidden() : !!doc.hidden; }
@@ -150,6 +151,7 @@
       if (!bgSt.open) return;
       if (!e.target || !e.target.isConnected) return;
       if (bgPop.contains(e.target) || (bgbadge && bgbadge.contains(e.target))) return;
+      if (e.target.closest && e.target.closest("[data-bg-exec-jump], details.exec-notice > summary")) return;
       bgExecClose(false);
     }, true);
 
@@ -196,21 +198,51 @@
   }
 
   function bgPosition() {
-    if (!bgPop || !bgSt.open || !bgbadge) return;
+    if (!bgPop || !bgSt.open) return;
     var vw = window.innerWidth || doc.documentElement.clientWidth || 1024;
     var vh = window.innerHeight || doc.documentElement.clientHeight || 768;
     var margin = 8;
     var popW = Math.min(500, Math.max(260, vw - margin * 2));
     bgPop.style.width = popW + "px";
-    var rect = bgbadge.getBoundingClientRect();
+    var rect = null;
+    if (bgbadge && !bgbadge.hidden) {
+      var r0 = bgbadge.getBoundingClientRect();
+      if (r0.width > 0 || r0.height > 0) rect = r0;
+    }
+    if (!rect) {
+      var comp = typeof $ === "function" ? $("composer") : doc.getElementById("composer");
+      if (comp) {
+        var r1 = comp.getBoundingClientRect();
+        if (r1.width > 0 || r1.height > 0) rect = r1;
+      }
+    }
+    if (!rect && bgJumpAnchor && bgJumpAnchor.isConnected) {
+      var r2 = bgJumpAnchor.getBoundingClientRect();
+      if (r2.width > 0 || r2.height > 0) rect = r2;
+    }
+    if (!rect) rect = { right: vw - margin, top: vh - margin };
     var left = rect.right - popW;
     left = Math.max(margin, Math.min(left, vw - popW - margin));
     var availAbove = Math.max(220, rect.top - 18);
-    var maxH = Math.min(520, availAbove);
+    var maxH = Math.min(520, availAbove, Math.max(220, vh - margin * 2));
     var bottom = Math.max(margin, vh - rect.top + 10);
+    var maxBottom = Math.max(margin, vh - maxH - margin);
+    if (bottom > maxBottom) bottom = maxBottom;
     bgPop.style.left = Math.round(left) + "px";
     bgPop.style.bottom = Math.round(bottom) + "px";
     bgPop.style.maxHeight = Math.round(maxH) + "px";
+  }
+
+  function bgMarkExecExpired(id) {
+    if (!id) return;
+    var rows = doc.querySelectorAll("details.exec-notice[data-exec-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute("data-exec-id") !== id) continue;
+      var btn = rows[i].querySelector("[data-bg-exec-jump]");
+      var note = rows[i].querySelector(".exec-row-expired");
+      if (btn) btn.hidden = true;
+      if (note) note.hidden = false;
+    }
   }
 
   function bgExecToggle() {
@@ -239,6 +271,8 @@
     bgTailStop();
     bgAbortList();
     bgListDirty = false;
+    bgPendingSel = "";
+    bgJumpAnchor = null;
     bgClearStop();
     bgDockJob = "";
     clearTimeout(bgCopyTimer);
@@ -317,6 +351,21 @@
         if (j.state !== "running") delete bgSt.stopping[j.id];
       });
       var prevSel = bgSt.selId;
+      var pending = bgPendingSel;
+      bgPendingSel = "";
+      if (pending) {
+        if (bgSt.byId[pending]) {
+          bgSt.selId = pending;
+          bgSt.follow = true;
+        } else {
+          bgMarkExecExpired(pending);
+        }
+      }
+      var openRows = doc.querySelectorAll("details.exec-notice[open][data-exec-id]");
+      for (var oi = 0; oi < openRows.length; oi++) {
+        var oid = openRows[oi].getAttribute("data-exec-id");
+        if (oid && !bgSt.byId[oid]) bgMarkExecExpired(oid);
+      }
       if (!bgSt.selId || !bgSt.byId[bgSt.selId]) {
         var firstRun = list.find(function (j) { return j.state === "running"; });
         bgSt.selId = firstRun ? firstRun.id : (list[0] ? list[0].id : "");
@@ -853,8 +902,41 @@
     });
   }
 
+  window.wsBgExecJump = function (id, anchorEl) {
+    if (!rid || !bgbadge || bgbadge.tagName !== "BUTTON") return;
+    var target = String(id || "");
+    if (!target) return;
+    bgPendingSel = target;
+    bgJumpAnchor = anchorEl && anchorEl.isConnected ? anchorEl : null;
+    if (!bgSt.open) {
+      bgExecOpenPop();
+      return;
+    }
+    if (!bgSt.loading && bgSt.byId[target]) {
+      bgPendingSel = "";
+      bgSelectJob(target, true);
+      return;
+    }
+    bgExecFetchList();
+  };
+
   if (bgbadge && bgbadge.tagName === "BUTTON") {
     bgbadge.addEventListener("click", function () {
       bgExecToggle();
     });
+    doc.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest("[data-bg-exec-jump]") : null;
+      if (!btn || btn.hidden) return;
+      var id = btn.getAttribute("data-bg-exec-jump");
+      if (!id) return;
+      e.preventDefault();
+      window.wsBgExecJump(id, btn);
+    });
+    doc.addEventListener("toggle", function (e) {
+      var el = e.target;
+      if (!el || !el.matches || !el.matches("details.exec-notice[data-exec-id]") || !el.open) return;
+      if (!bgSt.open || bgSt.loading) return;
+      var id = el.getAttribute("data-exec-id");
+      if (id && !bgSt.byId[id]) bgMarkExecExpired(id);
+    }, true);
   }

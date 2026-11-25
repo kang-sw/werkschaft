@@ -134,6 +134,9 @@ type ConvEntry struct {
 	suppressPeerLeadBadge bool
 	// Lang is the language the entry renders in; the entry cache keys on it.
 	Lang string
+	// ExecNotice is set when a background_exit wake or a legacy user entry
+	// parses strictly as a hosted ws/exec completion or user-stop notice.
+	ExecNotice *ExecNoticeView
 }
 
 // WhiteboardChanges decodes only the supported carrier; values remain plain
@@ -301,6 +304,7 @@ func buildSessionView(in pageInputs) SessionView {
 			contacts := resolvedContacts(in.Page.Contacts, reg.ReplyID)
 			v.Conversation = conversation(wslive.Lead{}, in.Ring, in.Page.MailBodies, contacts, in.Lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 			splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
+			v.Conversation.Users = countUserEntries(v.Conversation.Entries)
 			attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)
 		}
 		return v
@@ -334,6 +338,7 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Tree.Peers = peerGroup(contacts, reg.Project, lookup, in.Now)
 	v.Conversation = conversation(in.Snapshot.Lead, in.Ring, in.Page.MailBodies, contacts, lookup, replyMarkdown(reg.Project, reg.ReplyID), reg)
 	splitUserEntries(v.Conversation.Entries, in.AttachDir, reg.ReplyID)
+	v.Conversation.Users = countUserEntries(v.Conversation.Entries)
 	v.Conversation.Held = heldViews(in.Held, in.AttachDir, reg.ReplyID)
 	attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)
 	v.Conversation.Sent = sentMarks(in.Drained, in.Held, in.Page.Reasked, settledTurnStart(in.Ring))

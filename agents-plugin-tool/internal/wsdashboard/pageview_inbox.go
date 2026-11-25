@@ -49,7 +49,10 @@ type HeldView struct {
 	// typed line. Its steer control sends the line as steered text the agent
 	// acts on itself (wsinbox.Steer).
 	Command *wsinbox.Command
-	Lang    string
+	// ExecNotice is set when this held entry is a hosted ws/exec completion or
+	// user-stop notice admitted through wsinbox.AdmitCompletion.
+	ExecNotice *ExecNoticeView
+	Lang       string
 }
 
 // AllImages returns every attached image for the held message, combining
@@ -719,6 +722,16 @@ func splitUserEntries(entries []ConvEntry, attachDir, replyID string) {
 			continue
 		}
 		if !hasUserEnvelope(blocks) {
+			if ev, atStr, ok := parseExecNoticeWithAt(e.Text); ok {
+				entries[i].ExecNotice = ev
+				if atStr != "" {
+					entries[i].EnvelopeAt = atStr
+					if at, err := time.Parse("2006-01-02T15:04-07:00", atStr); err == nil {
+						entries[i].At = at.UnixMilli()
+					}
+				}
+				continue
+			}
 			parseUserContent(&entries[i], attachDir, replyID)
 			continue
 		}
@@ -729,6 +742,16 @@ func splitUserEntries(entries []ConvEntry, attachDir, replyID string) {
 			if b.At != "" {
 				at, _ := time.Parse("2006-01-02T15:04-07:00", b.At)
 				v.At = at.UnixMilli()
+			}
+			if ev, atStr, ok := parseExecNoticeWithAt(b.Text); ok {
+				v.ExecNotice = ev
+				if v.EnvelopeAt == "" && atStr != "" {
+					v.EnvelopeAt = atStr
+					if at, err := time.Parse("2006-01-02T15:04-07:00", atStr); err == nil {
+						v.At = at.UnixMilli()
+					}
+				}
+			} else if b.At != "" {
 				parseUserContent(&v, attachDir, replyID)
 			}
 			views = append(views, v)
@@ -742,6 +765,39 @@ func splitUserEntries(entries []ConvEntry, attachDir, replyID string) {
 	}
 }
 
+func parseExecNoticeWithAt(text string) (*ExecNoticeView, string, bool) {
+	if blk, ok := wsinbox.ParseExecBlock(text); ok {
+		ev, ok := parseExecNotice(blk.Body)
+		return ev, blk.At, ok
+	}
+	ev, ok := parseExecNotice(text)
+	return ev, "", ok
+}
+
+// countUserEntries counts RingUser entries that still contain at least one
+// user bubble after splitUserEntries classifies legacy ws/exec notices.
+func countUserEntries(entries []ConvEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.Kind != wslive.RingUser {
+			continue
+		}
+		if len(e.UserBlocks) > 0 {
+			for _, b := range e.UserBlocks {
+				if b.ExecNotice == nil {
+					n++
+					break
+				}
+			}
+			continue
+		}
+		if e.ExecNotice == nil {
+			n++
+		}
+	}
+	return n
+}
+
 func hasUserEnvelope(blocks []wsinbox.UserMessage) bool {
 	for _, b := range blocks {
 		if b.At != "" {
@@ -752,17 +808,24 @@ func hasUserEnvelope(blocks []wsinbox.UserMessage) bool {
 }
 
 // userBlockTexts is the text of each bubble splitUserEntries draws of a user
-// entry's text, in order, as it stands before parseUserContent: each block of
-// an enveloped batch, else the whole text as its one bubble. The entry text
-// route answers it, so a bubble's index in its batch picks its text.
+// entry's text, in order, as it stands before parseUserContent: each user
+// block of an enveloped batch (omitting blocks rendered as exec rows), else
+// the whole text as its one bubble (nil when rendered as an exec row). The
+// entry text route answers it, so a bubble's index in its batch picks its text.
 func userBlockTexts(text string) []string {
 	blocks, ok := wsinbox.ParseUserMessages(text)
 	if !ok || !hasUserEnvelope(blocks) {
+		if _, ok := parseExecNoticeEntry(text); ok {
+			return nil
+		}
 		return []string{text}
 	}
-	out := make([]string, len(blocks))
-	for i, b := range blocks {
-		out[i] = b.Text
+	out := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if _, ok := parseExecNoticeEntry(b.Text); ok {
+			continue
+		}
+		out = append(out, b.Text)
 	}
 	return out
 }
@@ -822,6 +885,22 @@ func heldViews(held []wsinbox.Record, attachDir, replyID string) []HeldView {
 	out := make([]HeldView, 0, len(held))
 	for _, r := range held {
 		v := HeldView{ID: r.ID(), Steer: r.Entry.Steer, At: r.Entry.SentAt, Parts: r.Entry.Parts, Chips: r.Entry.Chips, Topics: r.Entry.Topics, Mentions: r.Entry.Mentions, CloseRequests: r.Entry.CloseRequests, Picks: r.Entry.Picks, Consoles: r.Entry.Consoles, Command: r.Entry.Command}
+		if id, ok := r.Entry.ExecNotice(); ok {
+			raw := strings.Join(r.Entry.Parts, "\n\n")
+			if ev, ok := parseExecNotice(raw); ok {
+				v.ExecNotice = ev
+			} else {
+				head := strings.TrimSpace(strings.SplitN(raw, "\n", 2)[0])
+				v.ExecNotice = &ExecNoticeView{
+					ID:      id,
+					State:   "ended",
+					Summary: execCommandSummary(head, id),
+					Output:  raw,
+				}
+			}
+			out = append(out, v)
+			continue
+		}
 		nums := r.Entry.Nums()
 		for i, path := range r.Entry.Images {
 			v.Images = append(v.Images, attachmentView(attachDir, replyID, nums[i], path))
