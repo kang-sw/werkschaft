@@ -211,16 +211,6 @@
     "261115-chore-settings-hidden-theme-and-rail-swap-tests": {
       "registered_at": "2026-11-15T04:00:54Z"
     },
-    "261115-feat-werkschaft-electron-spellcheck-dictionary-download": {
-      "registered_at": "2026-11-25T12:21:34Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:21:34Z"
-      }
-    },
     "261115-feat-ws-claude-reasoning-summary-producer": {
       "registered_at": "2026-11-15T09:31:58Z"
     },
@@ -273,16 +263,6 @@
     "261115-ws-dashboard-worktree-detection-approval": {
       "registered_at": "2026-11-15T02:27:24Z"
     },
-    "261116-bug-werkschaft-electron-high-resolution-lag-diagnostics": {
-      "registered_at": "2026-11-25T12:21:50Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:21:50Z"
-      }
-    },
     "261116-epic-lead-orchestration-profile": {
       "registered_at": "2026-11-16T12:45:37Z"
     },
@@ -297,16 +277,6 @@
         "impl": {
           "branch": "impl/track/playbook/utter-crepe-ecard"
         }
-      }
-    },
-    "261116-feat-ws-daemon-plugin-package-select": {
-      "registered_at": "2026-11-25T12:09:30Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:09:30Z"
       }
     },
     "261116-feat-ws-dashboard-generalized-mentions": {
@@ -332,16 +302,6 @@
     },
     "261117-refactor-playbook-compression": {
       "registered_at": "2026-11-17T13:13:25Z"
-    },
-    "261117-research-werkschaft-tauri-shell-revisit": {
-      "registered_at": "2026-11-17T01:03:40Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:21:13Z"
-      }
     },
     "261117-research-ws-daemon-file-touch-map": {
       "registered_at": "2026-11-17T04:32:22Z"
@@ -376,24 +336,11 @@
     "261119-bug-ws-agent-v2-dogfood-surprises": {
       "registered_at": "2026-11-19T13:16:47Z"
     },
-    "261119-epic-ws-conversation-audit": {
-      "registered_at": "2026-11-19T14:04:20Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:20:41Z"
-      }
-    },
     "261119-epic-ws-daemon-sqlite-storage": {
       "registered_at": "2026-11-19T12:55:07Z"
     },
     "261119-feat-ws-audit-sqlite-store": {
       "registered_at": "2026-11-19T14:04:38Z"
-    },
-    "261119-feat-ws-codex-hosted-worker": {
-      "registered_at": "2026-11-19T02:37:47Z"
     },
     "261119-feat-ws-config-git-sync": {
       "registered_at": "2026-11-19T14:03:27Z"
@@ -431,16 +378,6 @@
     },
     "261121-research-werkschaft-lead-companion-wasu-rig": {
       "registered_at": "2026-11-21T09:52:43Z"
-    },
-    "261122-bug-release-0-51-1-compat-blockers": {
-      "registered_at": "2026-11-22T14:55:24Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:10:05Z"
-      }
     },
     "261122-bug-ws-agent-startup-scan-double-start": {
       "registered_at": "2026-11-22T12:55:56Z"
@@ -529,6 +466,9 @@
     },
     "261125-feat-whiteboard-gap-two-row-layout": {
       "registered_at": "2026-11-25T09:19:33Z"
+    },
+    "261125-feat-ws-dashboard-composer-indent-inline-markdown": {
+      "registered_at": "2026-11-25T12:30:55Z"
     },
     "261125-refactor-ws-split-runner-conv": {
       "registered_at": "2026-11-25T03:48:27Z"
