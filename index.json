@@ -483,7 +483,10 @@
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T09:16:36Z"
+        "touched_at": "2026-11-25T09:36:29Z",
+        "impl": {
+          "branch": "impl/develop/swear-eel-poach"
+        }
       }
     },
     "261125-feat-whiteboard-gap-two-row-layout": {
