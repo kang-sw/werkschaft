@@ -350,7 +350,14 @@
       "registered_at": "2026-11-19T13:16:47Z"
     },
     "261119-epic-ws-conversation-audit": {
-      "registered_at": "2026-11-19T14:04:20Z"
+      "registered_at": "2026-11-19T14:04:20Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-25T12:20:41Z"
+      }
     },
     "261119-epic-ws-daemon-sqlite-storage": {
       "registered_at": "2026-11-19T12:55:07Z"
