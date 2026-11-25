@@ -501,7 +501,8 @@ func TestTwoStageFallbackHardThresholdAndUsageLimitSuppression(t *testing.T) {
 
 		waitWSCompact(t, "rotated to process 2", func() bool {
 			starts, _, _ := b.snapshot()
-			return len(starts) == 2
+			st, err := runner.Get(id)
+			return len(starts) == 2 && err == nil && st.Compactions == 1
 		})
 		st, _ := runner.Get(id)
 		if st.Compactions != 1 || st.CompactOrigin != wslive.TriggerAuto {
