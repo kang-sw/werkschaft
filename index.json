@@ -314,7 +314,14 @@
       "registered_at": "2026-11-17T13:13:25Z"
     },
     "261117-research-werkschaft-tauri-shell-revisit": {
-      "registered_at": "2026-11-17T01:03:40Z"
+      "registered_at": "2026-11-17T01:03:40Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-25T12:21:13Z"
+      }
     },
     "261117-research-ws-daemon-file-touch-map": {
       "registered_at": "2026-11-17T04:32:22Z"
