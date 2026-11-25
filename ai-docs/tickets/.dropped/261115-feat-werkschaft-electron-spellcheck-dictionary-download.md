@@ -2,6 +2,7 @@
 title: "Electron 셸: 기본 hunspell 사전 다운로드 정책 결정"
 related:
   261115-feat-werkschaft-electron-shell: "the shell whose session defaults trigger the download"
+dropped: 2026-11-25
 ---
 
 # Electron shell: decide on the default hunspell dictionary download
@@ -45,3 +46,8 @@ Acceptance:
 - The Korean composer still works with the chosen option, including IME
   input and, if spellcheck stays, its underline.
 - macOS behaviour is checked and recorded.
+
+
+## Resolution (2026-11-25)
+
+Dropped during 2026-11-25 housekeeping: Electron shell retired (261123-chore-werkschaft-electron-retirement).

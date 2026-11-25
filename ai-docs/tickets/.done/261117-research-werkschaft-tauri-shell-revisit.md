@@ -4,6 +4,7 @@ related:
   261115-feat-werkschaft-electron-shell: the Electron migration this research may reverse
   261113-feat-werkschaft-thin-tauri-shell: the earlier Tauri thin shell
   261112-research-ws-ade-desktop-shell-and-rename: original shell research
+completed: 2026-11-25
 ---
 
 # Revisit a Tauri shell for Werkschaft (WKWebView viability, size, memory)
@@ -94,3 +95,8 @@ lasting problems for the dashboard, and what a return would cost.
 - Questions 1-6 above.
 
 ### Rejected Alternatives
+
+
+## Resolution (2026-11-25)
+
+Closed during 2026-11-25 housekeeping: Tauri shell return (261121-feat-werkschaft-tauri-shell-return) and Electron retirement (261123-chore-werkschaft-electron-retirement) are complete.

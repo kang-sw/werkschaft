@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 582eb7ecd0bb199f
 sage-review-completeness-reviewed: 582eb7ecd0bb199f
+completed: 2026-11-25
 ---
 
 # Hosted Codex worker: spawn Codex workers through agent.spawn to replace Pi workers
@@ -467,3 +468,8 @@ build. Only rejoin-specific acceptance or follow-up waits for the refactor;
 once it lands, rejoin uses that ticket's holder-backed authority, approval,
 and persisted HTTP-MCP tuple contracts rather than the daemon-owned shape
 recorded above.
+
+
+## Resolution (2026-11-25)
+
+Closed during 2026-11-25 housekeeping: Phase 1/1 and review hardening (59ad13cd8, bd652e115) are complete.

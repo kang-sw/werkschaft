@@ -1,7 +1,6 @@
 ---
 title: "ws/web.* 도구 체인: 자체 하네스 전용 웹 검색과 페이지 가져오기"
 parent: 261114-epic-ws-common-session-foundation
-blocked-by: 261122-feat-ws-builtin-agent-harness#phase1
 related:
   261122-feat-ws-provider-auth-layer: "API-key provider for search"
   261122-feat-ws-builtin-agent-harness: "Phase 1 prerequisite"

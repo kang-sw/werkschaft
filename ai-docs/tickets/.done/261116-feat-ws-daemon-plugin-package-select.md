@@ -3,6 +3,7 @@ title: "명시적 데몬 설정으로 hosted lead 플러그인 패키지(ws 또�
 related:
   261116-feat-ws-dashboard-config-settings-ui: "a later dashboard editor for the setting; its G6 covers per-package manifest defaults"
   261112-feat-ws-mixed-version-compat-guards: "same shared-daemon starter/replacement mechanics; tier vocabulary"
+completed: 2026-11-25
 ---
 
 # Select the hosted-lead plugin package (ws or wsflow) with an explicit daemon setting
@@ -489,3 +490,8 @@ Windows runtime execution, including the parent-death fixture, requires the next
 Windows CI run and was not claimed on macOS. Diff whitespace verification passed.
 No shared daemon, Electron, merge, push or SSH operation was performed. No package
 artifacts or protocol/Record shape changed (T0 unchanged). Ticket remains `todo`.
+
+
+## Resolution (2026-11-25)
+
+Closed during 2026-11-25 housekeeping: Phase 1/1 and CI repair (82a0d819e) are complete on develop.

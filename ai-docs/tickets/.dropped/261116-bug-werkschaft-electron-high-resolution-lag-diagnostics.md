@@ -4,6 +4,7 @@ related:
   261115-feat-werkschaft-electron-shell: "preserve shell security and navigation contract during A/B diagnostics"
   261113-feat-ws-dashboard-frontend-performance-profile-and-optimize: "shared rendering and input candidates are tracked separately from native presentation"
   261116-bug-ws-dashboard-hidden-cached-page-cost: "shared cached-page overhead, not an established Electron-only cause"
+dropped: 2026-11-25
 ---
 
 # P2: Diagnose persistent Electron lag at high-resolution fullscreen
@@ -87,3 +88,8 @@ the smallest measured fix, rerun matched high/low-resolution and aged/session-
 switch controls, and demonstrate unchanged visuals, security and input behavior.
 No GPU-policy change is preauthorized. This docs capture runs no builds, tests,
 Electron instances or live-window operations.
+
+
+## Resolution (2026-11-25)
+
+Dropped during 2026-11-25 housekeeping: Electron shell retired (261123-chore-werkschaft-electron-retirement).

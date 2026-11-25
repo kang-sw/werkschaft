@@ -1,5 +1,6 @@
 ---
 title: "0.51.1 패치 배포를 막는 0.51.0 호환성 문제 수정"
+completed: 2026-11-25
 ---
 
 # Fix the 0.51.0 compatibility blockers found by the 0.51.1 release sweep
@@ -61,3 +62,8 @@ and its compatibility tier in `## AI Context`.
 
 Verification: a test per scenario; focused package suites pass; the release
 sweep's delta review clears the fixes.
+
+
+## Resolution (2026-11-25)
+
+Closed during 2026-11-25 housekeeping: all 0.51.1 compatibility blockers merged (83b8036a0..0d95856c2) and repo is on v0.52.2.

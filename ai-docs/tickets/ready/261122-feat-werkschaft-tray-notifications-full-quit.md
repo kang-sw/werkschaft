@@ -2,7 +2,6 @@
 title: "데스크톱 트레이 상주, 네이티브 알림, 완전 종료"
 related:
   261121-feat-werkschaft-tauri-shell-return: "Phase 4 adoption decision and desktop shell prerequisite"
-blocked-by: 261121-feat-werkschaft-tauri-shell-return#phase4
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: a1a6eb85ad11f88c

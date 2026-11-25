@@ -1,6 +1,5 @@
 ---
 title: "ws/exec 의도 필터: 실행 전 경량 모델이 명령을 선언된 의도와 대조 검증"
-blocked-by: 261117-feat-ws-exec-tools
 related:
   261117-feat-ws-exec-tools: prerequisite; the filter sits on its daemon-owned command path, and its detailed design starts only after that ticket is implemented
 ---

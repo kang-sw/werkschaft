@@ -6,6 +6,7 @@ related:
   261114-feat-ws-conversation-audit-event-store: "superseded (dropped): its still-valid decisions are carried into children 1-4"
   261114-feat-ws-dashboard-conversation-audit-view: "superseded (dropped): its still-valid decisions and approved mockup are carried into child 5"
   261119-feat-ws-dashboard-shell-topbar-rail-redesign: "landed shell redesign; the audit view's mockup surroundings realign to it"
+completed: 2026-11-25
 ---
 
 # Conversation audit
@@ -173,3 +174,8 @@ open response details in (2011) and (2012).
   beyond what (1730)=b/(1731)=b settle (raw stream lines, non-hosted CLI-tier
   sessions, a per-session on/off switch), a purge action, cross-session
   search and at-rest encryption, stay proposals.
+
+
+## Resolution (2026-11-25)
+
+Closed during 2026-11-25 housekeeping: all 5 child tickets are complete in .done/.

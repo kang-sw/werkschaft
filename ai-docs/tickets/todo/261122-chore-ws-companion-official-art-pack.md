@@ -1,11 +1,6 @@
 ---
 title: "Werkschaft Style D (D1) 공식 출하 아트 팩 공방 제작 및 오너 시각 승인 게이트"
 parent: 261122-epic-werkschaft-lead-companion
-blocked-by:
-  - 261122-feat-ws-companion-pack-store
-  - 261122-feat-ws-companion-engine-v2
-  - 261122-feat-ws-companion-paper-doll
-  - 261122-feat-ws-companion-mesh-deform
 related:
   261121-research-werkschaft-lead-companion-rig: owner v3.1 visual audit findings and Style D D1 master lock
   261122-feat-ws-companion-engine-v2: engine v2 assetized timing grammar (easings, stageEffects, propMotions, articulated dangle inertia, handAnchor)
