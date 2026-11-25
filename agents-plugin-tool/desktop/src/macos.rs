@@ -86,6 +86,7 @@ pub fn install(
                     ns_string!("werkschaftUpdate"),
                     target.try_state::<Arc<updates::Controller>>().is_some(),
                 ),
+                (Bridge::Recovery, ns_string!("werkschaftRecovery"), true),
                 (
                     Bridge::Notify,
                     ns_string!("werkschaftNotify"),

@@ -1,6 +1,7 @@
 name: ws-mcp CI
 
-# Runs the default Go test group on Linux and Windows for pull requests that touch
+# Runs the default Go test group on Linux and Windows, and the Werkschaft shell's
+# Rust tests on macOS and Windows when the shell changed, for pull requests that touch
 # the tooling or plugin trees and on manual dispatch (`gh workflow run ws-mcp-ci.yml --ref
 # develop`). A develop push starts no run; the ship flow dispatches this
 # workflow on the exact commit it is about to tag, so a Windows-specific failure
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/ws-mcp-ci.yml"
+      - ".github/workflows/werkschaft-tauri-build.yml"
       - "agents-plugin-tool/**"
       - "agents-plugin/**"
       - "agents-plugin-wsflow/**"
@@ -104,6 +106,77 @@ jobs:
         env:
           WS_TEST_EMBEDDED_PACKAGES: "1"
         run: bash scripts/ci-test-shard.sh ${{ matrix.args }}
+
+  # Whether the Werkschaft shell changed. A pull request runs on every
+  # agents-plugin-tool/** change, so the desktop job needs its own condition.
+  # Outside pull requests (the ship flow's dispatch) it always answers true:
+  # the release gate accepts no skipped job but the two long legs, so the
+  # dispatch run on a tagged commit always runs and passes the desktop tests.
+  desktop-changes:
+    name: desktop change detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      desktop: ${{ steps.diff.outputs.desktop }}
+    steps:
+      - name: Check out repository
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect desktop changes
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            desktop=true
+          elif git diff --name-only "$BASE" "$HEAD" |
+            grep -qE '^(agents-plugin-tool/desktop/|\.github/workflows/(ws-mcp-ci|werkschaft-tauri-build)\.yml$)'; then
+            desktop=true
+          else
+            desktop=false
+          fi
+          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: cargo test (desktop, ${{ matrix.os }})
+    needs: desktop-changes
+    if: needs.desktop-changes.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # The shell builds only for macOS and Windows (main.rs refuses others).
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: agents-plugin-tool/desktop
+        shell: bash
+    steps:
+      - name: Disable Defender real-time scanning (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # tauri::generate_context! reads tauri.conf.json, the ui/ pages, and
+      # icons/ from the checkout; the test build bundles no daemon.
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+
+      - name: Run the shell's Rust tests
+        run: cargo test --locked --features custom-protocol
 
   # Explicit job names stay stable even when skipped before matrix expansion,
   # so the release gate can allow exactly these two skips.

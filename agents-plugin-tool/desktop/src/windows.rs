@@ -183,11 +183,12 @@ unsafe fn install_hooks(
 
     let failed = connection.clone();
     let epoch = failed.window_epoch();
-    let update_bridge = window.try_state::<Arc<updates::Controller>>().is_some();
     let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
     // The theme message needs the strip, which exists only on the main window.
     let theme_bridge = window.app_handle().try_state::<strip::Strips>().is_some();
-    if update_bridge || notify_bridge || theme_bridge {
+    // Always registered: the recovery page's actions work in a build with no
+    // updater, and the update and recovery gate decides per message.
+    {
         let target = window.clone();
         let themes = connection.clone();
         // The core event receives the top-level document only. Frame messages
@@ -210,9 +211,7 @@ unsafe fn install_hooks(
                     let theme = theme_bridge
                         && message.starts_with(strip_msg::THEME_PREFIX)
                         && message.len() <= strip_msg::THEME_MESSAGE_MAX;
-                    let update = update_bridge
-                        && message.starts_with("werkschaft:update:")
-                        && message.len() <= 32;
+                    let update = updates::bridged(&message);
                     let notice = notify_bridge
                         && message.starts_with(notify::PREFIX)
                         && message.len() <= notify::MAX_MESSAGE;

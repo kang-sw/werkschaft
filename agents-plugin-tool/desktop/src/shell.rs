@@ -16,14 +16,60 @@ use url::Url;
 use crate::{
     close::MAIN_WINDOW,
     daemon::{self, Intent},
+    diagnostics::Diagnostics,
     endpoint::{BrowserCookie, Daemon},
     navigation::{self, destination, Destination, CONNECT_VIEW, PYTHON_VIEW},
 };
 
+/// What the dashboard is told once it loads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Notice {
+    /// A replacement was refused; the current daemon keeps serving.
+    Refusal(&'static str),
+    /// The bundled daemon failed and this last-known-good version serves.
+    Fallback(String),
+}
+
+impl Notice {
+    fn title(&self) -> String {
+        match self {
+            Self::Refusal(reason) => format!("Werkschaft — {reason}"),
+            Self::Fallback(version) => fallback_title(version),
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            Self::Refusal(reason) => (*reason).to_owned(),
+            Self::Fallback(version) => format!(
+                "Running on Safe Fallback v{version}. The bundled runtime failed to start, so Werkschaft recovered with the last known good version and is checking for a hotfix in the background."
+            ),
+        }
+    }
+}
+
+/// The window title badge while a fallback daemon serves.
+pub fn fallback_title(version: &str) -> String {
+    format!("Werkschaft — Safe Fallback v{version}")
+}
+
+/// The title of the bundled recovery views.
+fn local_title(page: &str, diagnostics: &Diagnostics) -> String {
+    if page == PYTHON_VIEW {
+        format!("Werkschaft — {} — Connection → Retry", diagnostics.reason)
+    } else if diagnostics.floor_blocked {
+        "Werkschaft — Recovery (Fallback Blocked)".to_owned()
+    } else {
+        "Werkschaft — Recovery".to_owned()
+    }
+}
+
 #[derive(Default)]
 pub struct Connection {
     daemon: Mutex<Option<Daemon>>,
-    refusal: Mutex<Option<(usize, &'static str)>>,
+    refusal: Mutex<Option<(usize, Notice)>>,
+    /// The failure the recovery page shows, cleared when an attempt starts.
+    failure: Mutex<Option<Diagnostics>>,
     next_refusal: AtomicUsize,
     recovery: Mutex<Option<(Instant, u8)>>,
     connecting: AtomicBool,
@@ -60,21 +106,30 @@ impl Connection {
         self.daemon.lock().unwrap().as_ref().map(|d| d.url.clone())
     }
 
-    fn show_local(&self, window: &WebviewWindow, page: &str, reason: &str) {
+    /// The failure the recovery page shows, if any.
+    pub fn failure(&self) -> Option<Diagnostics> {
+        self.failure.lock().unwrap().clone()
+    }
+
+    fn show_local(&self, window: &WebviewWindow, page: &str, diagnostics: Diagnostics) {
         *self.daemon.lock().unwrap() = None;
         *self.refusal.lock().unwrap() = None;
-        crate::chrome::set_title(
-            window,
-            &format!("Werkschaft — {reason} — Connection → Retry"),
-        );
+        crate::chrome::set_title(window, &local_title(page, &diagnostics));
+        // The page URL stays exact: the payload arrives by evaluation once it
+        // loads, never in a query or fragment.
+        *self.failure.lock().unwrap() = Some(diagnostics);
         if window.navigate(navigation::local_view(page)).is_err() {
-            eprintln!("Werkschaft: Could not load the bundled recovery view");
+            crate::shell_log!("Could not load the bundled recovery view");
         }
     }
 
     pub fn setup_failed(&self, window: &WebviewWindow) {
         *self.hooks.lock().unwrap() = Hooks::Failed;
-        self.show_local(window, CONNECT_VIEW, "Could not initialize the webview");
+        self.show_local(
+            window,
+            CONNECT_VIEW,
+            Diagnostics::reason("Could not initialize the webview"),
+        );
     }
 
     pub fn retry_hooks(&self) -> bool {
@@ -99,19 +154,30 @@ impl Connection {
         *self.hooks.lock().unwrap() = Hooks::Installing;
     }
 
-    pub fn connect(self: &Arc<Self>, window: WebviewWindow, intent: Intent) {
+    // Starts an attempt unless one runs: every attempt, a Retry from the
+    // recovery page included, runs the whole sequence from no failure.
+    fn begin(&self, intent: Intent) -> bool {
         if *self.hooks.lock().unwrap() != Hooks::Ready {
-            return;
+            return false;
         }
         if self.closing.load(Ordering::Acquire) || self.connecting.swap(true, Ordering::AcqRel) {
-            return;
+            return false;
         }
         if intent != Intent::Recover {
             *self.recovery.lock().unwrap() = None;
         }
+        *self.failure.lock().unwrap() = None;
+        true
+    }
+
+    pub fn connect(self: &Arc<Self>, window: WebviewWindow, intent: Intent) {
+        if !self.begin(intent) {
+            return;
+        }
         let retained = self.daemon();
         if retained.is_none() {
             crate::chrome::set_title(&window, "Werkschaft — Connecting…");
+            crate::recovery::push(&window, self);
         }
         let epoch = self.window_epoch();
         let state = self.clone();
@@ -158,17 +224,29 @@ impl Connection {
                     if !ui_state.closing.load(Ordering::Acquire) {
                         match result {
                             Ok((answer, keep_document, cookie)) => {
-                                let reason = answer.refusal;
-                                *ui_state.refusal.lock().unwrap() = reason.map(|reason| {
+                                let notice = match (&answer.fallback, answer.refusal) {
+                                    (Some(fallback), _) => Some(Notice::Fallback(
+                                        fallback.lkg_version.clone().unwrap_or_default(),
+                                    )),
+                                    (None, reason) => reason.map(Notice::Refusal),
+                                };
+                                if answer.fallback.is_some() {
+                                    // A hotfix is the way off the fallback.
+                                    crate::updates::check_soon(target.app_handle());
+                                }
+                                let title = notice
+                                    .as_ref()
+                                    .map_or_else(|| "Werkschaft".to_owned(), Notice::title);
+                                *ui_state.refusal.lock().unwrap() = notice.map(|notice| {
                                     (
                                         ui_state.next_refusal.fetch_add(1, Ordering::Relaxed),
-                                        reason,
+                                        notice,
                                     )
                                 });
                                 if keep_document {
                                     ui_state.show_refusal(&target);
                                 } else {
-                                    ui_state.attach(&target, answer.daemon, cookie, reason);
+                                    ui_state.attach(&target, answer.daemon, cookie, &title);
                                 }
                             }
                             Err(error) => {
@@ -177,8 +255,12 @@ impl Connection {
                                 } else {
                                     CONNECT_VIEW
                                 };
-                                eprintln!("Werkschaft: {}", error.reason);
-                                ui_state.show_local(&target, page, error.reason);
+                                crate::shell_log!("{}", error.reason);
+                                let diagnostics = error.diagnostics.map_or_else(
+                                    || Diagnostics::reason(error.reason),
+                                    |diagnostics| *diagnostics,
+                                );
+                                ui_state.show_local(&target, page, diagnostics);
                             }
                         }
                     }
@@ -194,10 +276,10 @@ impl Connection {
 
     pub fn show_refusal(self: &Arc<Self>, window: &WebviewWindow) {
         let Some(pin) = self.pinned_url() else { return };
-        let Some((sequence, reason)) = *self.refusal.lock().unwrap() else {
+        let Some((sequence, notice)) = self.refusal.lock().unwrap().clone() else {
             return;
         };
-        crate::chrome::set_title(window, &format!("Werkschaft — {reason}"));
+        crate::chrome::set_title(window, &notice.title());
         if !window
             .url()
             .is_ok_and(|url| destination(&url, Some(&pin)) == Destination::Dashboard)
@@ -205,7 +287,7 @@ impl Connection {
             return;
         }
         let epoch = self.window_epoch();
-        let script = refusal_script(&pin, reason);
+        let script = refusal_script(&pin, &notice);
         let state = self.clone();
         let target = window.clone();
         let _ = window.eval_with_callback(script, move |value| {
@@ -215,14 +297,18 @@ impl Connection {
             let result = target.clone();
             let state = state.clone();
             let pin = pin.clone();
+            let notice = notice.clone();
             let _ = target.run_on_main_thread(move || {
                 if state.window_epoch() != epoch || state.pinned_url() != Some(pin) {
                     return;
                 }
                 let mut refusal = state.refusal.lock().unwrap();
-                if *refusal == Some((sequence, reason)) {
+                if refusal.as_ref() == Some(&(sequence, notice.clone())) {
                     *refusal = None;
-                    crate::chrome::set_title(&result, "Werkschaft");
+                    // The fallback badge stays while the fallback serves.
+                    if let Notice::Refusal(_) = notice {
+                        crate::chrome::set_title(&result, "Werkschaft");
+                    }
                 }
             });
         });
@@ -233,7 +319,7 @@ impl Connection {
         window: &WebviewWindow,
         daemon: Daemon,
         cookie: Result<Option<BrowserCookie>, &'static str>,
-        refusal: Option<&'static str>,
+        title: &str,
     ) {
         let root = &daemon.url;
         let target = window
@@ -258,21 +344,19 @@ impl Connection {
             Ok(None) | Err(_) => false,
         };
         if !cookie_ready {
-            eprintln!(
-                "Werkschaft: Browser cookie unavailable; loading the daemon login gate if needed"
-            );
+            crate::shell_log!("Browser cookie unavailable; loading the daemon login gate if needed");
         }
         if self.closing.load(Ordering::Acquire) {
             return;
         }
         *self.daemon.lock().unwrap() = Some(daemon);
-        let title = refusal.map_or_else(
-            || "Werkschaft".to_owned(),
-            |reason| format!("Werkschaft — {reason}"),
-        );
-        crate::chrome::set_title(window, &title);
+        crate::chrome::set_title(window, title);
         if window.navigate(target).is_err() {
-            self.show_local(window, CONNECT_VIEW, "Could not open the dashboard");
+            self.show_local(
+                window,
+                CONNECT_VIEW,
+                Diagnostics::reason("Could not open the dashboard"),
+            );
         }
     }
 
@@ -295,11 +379,15 @@ impl Connection {
         if self.closing.load(Ordering::Acquire) || self.connecting.load(Ordering::Acquire) {
             return;
         }
-        eprintln!("Werkschaft: {reason}");
+        crate::shell_log!("{reason}");
         if self.allow_recovery(Instant::now()) {
             self.connect(window, Intent::Recover);
         } else {
-            self.show_local(&window, CONNECT_VIEW, "Lost connection to the dashboard");
+            self.show_local(
+                &window,
+                CONNECT_VIEW,
+                Diagnostics::reason("Lost connection to the dashboard"),
+            );
         }
     }
 
@@ -421,10 +509,17 @@ impl Connection {
     }
 }
 
-fn refusal_script(pin: &Url, reason: &str) -> String {
-    let origin = serde_json::to_string(&pin.origin().ascii_serialization()).expect("string");
-    let reason = serde_json::to_string(reason).expect("string");
-    format!("({})({origin}, {reason})", include_str!("daemon-notice.js"))
+fn refusal_script(pin: &Url, notice: &Notice) -> String {
+    let origin = serde_json::json!(pin.origin().ascii_serialization());
+    let text = serde_json::json!(notice.text());
+    let fallback = match notice {
+        Notice::Refusal(_) => serde_json::Value::Null,
+        Notice::Fallback(version) => serde_json::json!({ "version": version }),
+    };
+    format!(
+        "({})({origin}, {text}, {fallback})",
+        include_str!("daemon-notice.js")
+    )
 }
 
 #[cfg(test)]
@@ -450,6 +545,51 @@ mod tests {
         assert!(!connection.retry_hooks());
         *connection.hooks.lock().unwrap() = Hooks::Ready;
         assert!(!connection.retry_hooks());
+    }
+
+    #[test]
+    fn every_attempt_starts_from_no_failure_and_runs_alone() {
+        let connection = Connection::default();
+        *connection.failure.lock().unwrap() = Some(Diagnostics::reason("old"));
+        // Not before the webview hooks are ready.
+        assert!(!connection.begin(Intent::Connect));
+        assert!(connection.failure().is_some());
+        *connection.hooks.lock().unwrap() = Hooks::Ready;
+        assert!(connection.begin(Intent::Connect));
+        assert!(connection.failure().is_none());
+        // A Retry while an attempt runs does not start a second one.
+        *connection.failure.lock().unwrap() = Some(Diagnostics::reason("new"));
+        assert!(!connection.begin(Intent::Connect));
+        assert!(connection.failure().is_some());
+        connection.connecting.store(false, Ordering::Release);
+        connection.closing.store(true, Ordering::Release);
+        assert!(!connection.begin(Intent::Connect));
+    }
+
+    const REFUSED: &str = "No healthy replacement was found. Keeping the current connection.";
+
+    #[test]
+    fn notices_title_the_window_and_only_the_fallback_carries_a_version() {
+        let pin = Url::parse("http://127.0.0.1:49015/").unwrap();
+        let refusal = Notice::Refusal(REFUSED);
+        assert_eq!(refusal.title(), format!("Werkschaft — {REFUSED}"));
+        assert!(refusal_script(&pin, &refusal)
+            .ends_with(&format!("(\"http://127.0.0.1:49015\", \"{REFUSED}\", null)")));
+        let fallback = Notice::Fallback("0.52.0".into());
+        assert_eq!(fallback.title(), "Werkschaft — Safe Fallback v0.52.0");
+        assert!(fallback.text().starts_with("Running on Safe Fallback v0.52.0."));
+        assert!(refusal_script(&pin, &fallback).ends_with(r#", {"version":"0.52.0"})"#));
+        let mut blocked = Diagnostics::reason("x");
+        assert_eq!(local_title(CONNECT_VIEW, &blocked), "Werkschaft — Recovery");
+        blocked.floor_blocked = true;
+        assert_eq!(
+            local_title(CONNECT_VIEW, &blocked),
+            "Werkschaft — Recovery (Fallback Blocked)"
+        );
+        assert_eq!(
+            local_title(PYTHON_VIEW, &Diagnostics::reason("Python 3 is required")),
+            "Werkschaft — Python 3 is required — Connection → Retry"
+        );
     }
 
     #[test]

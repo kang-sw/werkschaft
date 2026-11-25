@@ -77,6 +77,11 @@ jobs:
           node --test scripts/test-package.cjs scripts/test-release.cjs scripts/test-notify-bridge.cjs
           scripts/assemble-daemon-input.test.js scripts/daemon-selection.test.js scripts/daemon-stage.test.js
 
+      # The shell's own regression suite (daemon package validation, the
+      # last-known-good fallback, the bridge gates) on each platform it ships.
+      - name: Run the shell's Rust tests
+        run: cargo test --locked --features custom-protocol
+
       - name: Assemble and validate the wsflow daemon input without executing it
         run: >-
           node scripts/assemble-daemon-input.cjs

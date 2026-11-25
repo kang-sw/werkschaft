@@ -85,7 +85,7 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
 
 // Whether every item passes, checking each one even after a failure: each
 // window's check is also what asks its page to save its pending draft.
-fn every<T>(items: &[T], mut check: impl FnMut(&T) -> bool) -> bool {
+pub(crate) fn every<T>(items: &[T], mut check: impl FnMut(&T) -> bool) -> bool {
     items
         .iter()
         .fold(true, |passed, item| check(item) && passed)
@@ -93,7 +93,7 @@ fn every<T>(items: &[T], mut check: impl FnMut(&T) -> bool) -> bool {
 
 // Whether a window's drafts are saved: true for a bundled local page,
 // and for the pinned dashboard whose renderer reports its store ready.
-fn drafts_saved(window: &WebviewWindow, connection: &Connection) -> bool {
+pub(crate) fn drafts_saved(window: &WebviewWindow, connection: &Connection) -> bool {
     let pin = connection.pinned_url();
     let Some(current) = window.url().ok() else {
         return false;
@@ -283,7 +283,7 @@ fn show(main: Option<&WebviewWindow>) {
 // rfd is called directly: the dialog plugin maps rfd's raw Cancel (Esc, the
 // close box, a dialog that failed to show) to the second custom button, which
 // here is the one that proceeds. Only that button's own click proceeds.
-fn confirm(
+pub(crate) fn confirm(
     app: &AppHandle,
     main: Option<&WebviewWindow>,
     title: &str,
@@ -323,7 +323,7 @@ fn proceeds(result: &rfd::MessageDialogResult, proceed: &str) -> bool {
     matches!(result, rfd::MessageDialogResult::Custom(label) if label == proceed)
 }
 
-fn inform(
+pub(crate) fn inform(
     app: &AppHandle,
     main: Option<&WebviewWindow>,
     kind: MessageDialogKind,

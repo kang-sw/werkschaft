@@ -9,16 +9,20 @@ mod chrome;
 mod close;
 mod daemon;
 mod daemon_package;
+mod diagnostics;
 mod downloads;
 mod endpoint;
 #[cfg(all(test, unix))]
 mod full_stop_e2e;
+mod lkg;
 #[cfg(target_os = "macos")]
 mod macos;
 mod navigation;
 mod notify;
 mod python;
+mod recovery;
 mod shell;
+mod shell_log;
 #[cfg(windows)]
 mod snap;
 #[cfg(windows)]
@@ -81,11 +85,14 @@ fn build_webview(
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = window.set_zoom(window.state::<Zoom>().current());
-                let dashboard = destination(payload.url(), notice.pinned_url().as_ref())
-                    == Destination::Dashboard;
+                let pin = notice.pinned_url();
+                let dashboard = destination(payload.url(), pin.as_ref()) == Destination::Dashboard;
+                let recovery = updates::authorized(true, payload.url(), pin.as_ref())
+                    == Some(updates::Origin::Local);
                 if main && dashboard {
-                    notice.show_refusal(&window);
+                    // The bridge first: the fallback notice offers its check.
                     updates::inject(&window, payload.url());
+                    notice.show_refusal(&window);
                     notify::inject(&window, payload.url());
                     #[cfg(windows)]
                     strip::inject_theme_bridge(
@@ -95,6 +102,9 @@ fn build_webview(
                     );
                 } else if dashboard {
                     notify::mark_secondary(&window);
+                } else if main && recovery {
+                    updates::inject(&window, payload.url());
+                    recovery::push(&window, &notice);
                 }
             }
         })
@@ -223,6 +233,8 @@ fn restore_main(app: &AppHandle, connection: &Arc<Connection>) {
     }
 }
 
+const CHECK_UPDATES: &str = "check_updates";
+
 fn install_menu(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
     let retry = MenuItem::with_id(app, "retry", "Retry", true, Some("CmdOrCtrl+R"))?;
@@ -240,11 +252,27 @@ fn install_menu(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    // Reachable when the dashboard cannot load: the label becomes
+    // "Restart to Update (vX.Y.Z)" once an update is ready.
+    let update = MenuItem::with_id(
+        app,
+        CHECK_UPDATES,
+        updates::CHECK_LABEL,
+        true,
+        None::<&str>,
+    )?;
+    updates::UpdateItems::add(app, update.clone());
     menu.append(&Submenu::with_items(
         app,
         "Connection",
         true,
-        &[&retry, &replace, &copy],
+        &[
+            &retry,
+            &replace,
+            &copy,
+            &PredefinedMenuItem::separator(app)?,
+            &update,
+        ],
     )?)?;
 
     #[cfg(target_os = "macos")]
@@ -366,6 +394,8 @@ fn main() {
                 Some(tray::Action::Exit(kind)) => {
                     return close::exit(app.clone(), menu_state.clone(), kind)
                 }
+                Some(tray::Action::CheckUpdates) => return updates::menu_check(app),
+                None if event.id().as_ref() == CHECK_UPDATES => return updates::menu_check(app),
                 None => (),
             }
             let window = chrome::all(app)
@@ -377,13 +407,19 @@ fn main() {
             }
         })
         .setup(move |app| {
+            if let Ok(directory) = app.path().app_local_data_dir() {
+                shell_log::init(&directory.join("logs"));
+            }
+            shell_log!("Werkschaft {} starting", app.package_info().version);
+            app.manage(setup_state.clone());
+            app.manage(updates::UpdateItems::<tauri::Wry>::default());
             let zoom = app
                 .path()
                 .app_local_data_dir()
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })
                 .and_then(|directory| Zoom::open(&directory))
                 .unwrap_or_else(|error| {
-                    eprintln!("Werkschaft: Could not restore the page zoom: {error}");
+                    shell_log!("Could not restore the page zoom: {error}");
                     Zoom::default()
                 });
             app.manage(zoom);
