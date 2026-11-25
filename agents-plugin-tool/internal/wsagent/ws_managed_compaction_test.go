@@ -2,18 +2,22 @@ package wsagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wsauditstore"
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -1014,5 +1018,290 @@ func TestTwoStageFallbackDashboardSlashCompact(t *testing.T) {
 	waitWSCompact(t, "stage 2 fallback after dashboard /compact miss", func() bool {
 		_, cmds := p1.sent()
 		return len(cmds) == 1 && cmds[0].Name == "compact"
+	})
+}
+
+func TestPendingCompactionT0RecordUnknownFieldRoundTrip(t *testing.T) {
+	rec := Record{
+		ReplyID: "lead-pending-compact",
+		WSKey:   "ws-key-pending-compact",
+		Lead:    true,
+		Backend: BackendClaude,
+		Model:   "sonnet",
+		PendingCompaction: &PendingCompaction{
+			Note:           "## Checkpoint\nimplementing phase 1\n",
+			RestoreBundle:  true,
+			Resume:         true,
+			ResumeInternal: true,
+			Origin:         wslive.TriggerManual,
+		},
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an older daemon reading into a Record-shaped unknown-field map
+	// (record.go:236-289), mutating an unrelated field, and rewriting the JSON.
+	var oldMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &oldMap); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := oldMap["pending_compaction"]; !ok {
+		t.Fatalf("marshaled record missing pending_compaction: %s", raw)
+	}
+	oldMap["model"] = json.RawMessage(`"opus"`)
+	rewritten, err := json.Marshal(oldMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var reopened Record
+	if err := json.Unmarshal(rewritten, &reopened); err != nil {
+		t.Fatal(err)
+	}
+	if reopened.PendingCompaction == nil || *reopened.PendingCompaction != *rec.PendingCompaction {
+		t.Fatalf("reopened PendingCompaction = %+v, want %+v", reopened.PendingCompaction, rec.PendingCompaction)
+	}
+	if reopened.Model != "opus" {
+		t.Fatalf("reopened Model = %q, want opus", reopened.Model)
+	}
+}
+
+func TestWSManagedLeadRotationRealProtocolRestartAndAuditStore(t *testing.T) {
+	newFixture := func(t *testing.T) (*leadHarness, *wsauditstore.Store) {
+		t.Helper()
+		h := newLeadHarness(t)
+		builtin := BuiltinBackendRegistrations()[BackendClaude]
+		reg := h.opts.Backends[BackendClaude]
+		reg.Catalog = builtin.Catalog
+		reg.NativeCompaction = builtin.NativeCompaction
+		reg.Profiles = builtin.Profiles
+		h.opts.Backends[BackendClaude] = reg
+		auditRoot := filepath.Join(t.TempDir(), "audit")
+		store, err := wsauditstore.Open(wsauditstore.Options{Root: auditRoot, SweepInterval: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		h.opts.AuditSink = store
+		h.opts.RestoreBundle = func(_, _, _ string, cause RestoreCause, _ []AgentChild) (string, error) {
+			return "## Hosted Session Restore\n\n(cause=" + string(cause) + ")\n\n## Direct Children\n\n- worker-1\n", nil
+		}
+		resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+		if err := resolver.Set(wsconfig.ItemCompactionLeadMode+"."+BackendClaude, wsconfig.CompactionModeWS, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+		NotifyCompactionConfigChanged()
+		h.start()
+		return h, store
+	}
+
+	t.Run("resume_false_restart_before_first_prompt", func(t *testing.T) {
+		h, store := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1,
+			stateLine(HarnessRunning),
+			initLine("claude-sid-1", "auto"),
+			toolUseLine("u1-tool", "tu-pre-1"),
+			toolResultLine("tu-pre-1"),
+			replyLine("u1", "initial reply"),
+			resultLine(),
+			stateLine(HarnessIdle),
+		)
+		h.idle(id)
+
+		recBefore := h.record(id)
+		if recBefore.SessionID != "claude-sid-1" {
+			t.Fatalf("SessionID before rotation = %q, want claude-sid-1", recBefore.SessionID)
+		}
+
+		resume := false
+		res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt"))
+		if res.Status != "queued" {
+			t.Fatalf("CompactWithSummary = %+v, want queued", res)
+		}
+
+		var h2 string
+		eventually(t, "replacement holder started", func() bool {
+			rec := h.record(id)
+			h2 = rec.HolderID
+			return h2 != "" && h2 != h1
+		})
+		h.quiesce(id)
+
+		h.holders.mu.Lock()
+		spec := h.holders.holders[h2].spec
+		h.holders.mu.Unlock()
+		if spec == nil || slices.Contains(spec.Argv, "--resume") {
+			t.Fatalf("replacement holder args unexpectedly resumed old session: %+v", spec)
+		}
+		recRotated := h.record(id)
+		if recRotated.PendingCompaction == nil {
+			t.Fatal("expected PendingCompaction persisted after rotation with resume=false")
+		}
+		if recRotated.PendingCompaction.Resume || !recRotated.PendingCompaction.RestoreBundle || recRotated.PendingCompaction.Origin != wslive.TriggerManual {
+			t.Fatalf("unexpected PendingCompaction after rotation: %+v", recRotated.PendingCompaction)
+		}
+		if !strings.Contains(recRotated.PendingCompaction.Note, "implementing phase 1") {
+			t.Fatalf("PendingCompaction.Note missing checkpoint prose: %q", recRotated.PendingCompaction.Note)
+		}
+		if got := h.userInputs(h2); len(got) != 0 {
+			t.Fatalf("unexpected prompt delivered before user follow-up with resume=false: %v", got)
+		}
+
+		// Restart daemon BEFORE the first prompt reaches the replacement session.
+		// Real Claude stream-json emits init only after the first prompt arrives.
+		h.restart()
+		wait(t, "rejoin after restart", h.runner.rejoined)
+		h.idle(id)
+
+		recAfterRestart := h.record(id)
+		if recAfterRestart.PendingCompaction == nil {
+			t.Fatal("PendingCompaction lost across daemon restart")
+		}
+		if got := h.userInputs(h2); len(got) != 0 {
+			t.Fatalf("resume=false sent a prompt automatically on restart: %v", got)
+		}
+
+		h.send(id, "follow up after restart")
+		eventually(t, "first prompt delivered to replacement after restart", func() bool {
+			return len(h.userInputs(h2)) == 1
+		})
+		prompt := h.userInputs(h2)[0]
+		for _, want := range []string{
+			"## Hosted Session Restore",
+			"cause=compaction",
+			"implementing phase 1",
+			"- notes.txt",
+			"initial reply",
+			"follow up after restart",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("post-restart prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "cause=restart") {
+			t.Fatalf("generic restart restore overwrote compaction handoff:\n%s", prompt)
+		}
+		if strings.Contains(prompt, "## Child agents in flight") || strings.Contains(prompt, "## Child agents finished") {
+			t.Fatalf("duplicate child sections present with RestoreBundle:\n%s", prompt)
+		}
+
+		eventually(t, "PendingCompaction cleared after delivery", func() bool {
+			return h.record(id).PendingCompaction == nil
+		})
+
+		h.holders.out(h2,
+			stateLine(HarnessRunning),
+			initLine("claude-sid-2", "auto"),
+			toolUseLine("u2-tool", "tu-post-2"),
+			toolResultLine("tu-post-2"),
+			replyLine("u2", "post-restart reply"),
+			resultLine(),
+			stateLine(HarnessIdle),
+		)
+		h.idle(id)
+		if got := h.record(id).SessionID; got != "claude-sid-2" {
+			t.Fatalf("SessionID after replacement turn = %q, want claude-sid-2", got)
+		}
+
+		if err := store.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		events, err := store.Events(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut := wsaudit.FindModelSeenCut(events)
+		if !cut.HasCompaction {
+			t.Fatalf("audit store missing compaction cut: %+v", events)
+		}
+		var prevSeq uint64
+		preIdx, compactIdx, postIdx := -1, -1, -1
+		for i, ev := range events {
+			if ev.Seq <= prevSeq {
+				t.Fatalf("non-monotonic audit seq at %d: %d <= %d", i, ev.Seq, prevSeq)
+			}
+			prevSeq = ev.Seq
+			if ev.Kind == wsaudit.KindCompaction {
+				if _, est := ev.Meta[wsaudit.MetaEstimated]; est {
+					t.Fatalf("ws-managed compaction audit must not be estimated: %+v", ev.Meta)
+				}
+				if ev.Meta["mode"] != "ws" {
+					t.Fatalf("compaction audit mode = %q, want ws", ev.Meta["mode"])
+				}
+				compactIdx = i
+			}
+			if ev.CallID == "tu-pre-1" && preIdx < 0 {
+				preIdx = i
+			}
+			if ev.CallID == "tu-post-2" && postIdx < 0 {
+				postIdx = i
+			}
+		}
+		if !(preIdx >= 0 && compactIdx > preIdx && postIdx > compactIdx) {
+			t.Fatalf("unexpected audit ordering across rotation+restart: pre=%d compact=%d post=%d (len=%d)", preIdx, compactIdx, postIdx, len(events))
+		}
+	})
+
+	t.Run("resume_true_restart_before_continuation_delivery", func(t *testing.T) {
+		h, _ := newFixture(t)
+		id, h1 := h.runLead("initial work")
+		h.holders.out(h1, turnLines("claude-sid-1", "u1", "initial reply")...)
+		h.idle(id)
+
+		recBefore := h.record(id)
+		resume := false
+		if res := h.runner.CompactWithSummary(recBefore.WSKey, "", &resume, testLeadSummary("notes.txt")); res.Status != "queued" {
+			t.Fatalf("CompactWithSummary = %+v, want queued", res)
+		}
+		var h2 string
+		eventually(t, "replacement holder started", func() bool {
+			rec := h.record(id)
+			h2 = rec.HolderID
+			return h2 != "" && h2 != h1
+		})
+		h.quiesce(id)
+
+		// Simulate a crash right after rotateExternalLead persisted
+		// PendingCompaction{Resume: true} and before compactIdle dispatched the
+		// standalone continuation.
+		h.runner.Close()
+		h.holders.restart()
+		rec := h.record(id)
+		if rec.PendingCompaction == nil {
+			t.Fatal("expected PendingCompaction on disk before restart")
+		}
+		rec.PendingCompaction.Resume = true
+		if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+			t.Fatal(err)
+		}
+		h.start()
+		wait(t, "rejoin after restart", h.runner.rejoined)
+
+		eventually(t, "standalone continuation delivered after restart", func() bool {
+			return len(h.userInputs(h2)) == 1
+		})
+		prompt := h.userInputs(h2)[0]
+		for _, want := range []string{
+			"## Hosted Session Restore",
+			"cause=compaction",
+			"implementing phase 1",
+			"Continue the work that was pending.",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("post-restart continuation prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "cause=restart") {
+			t.Fatalf("generic restart restore overwrote compaction continuation:\n%s", prompt)
+		}
+		if strings.Contains(prompt, "## Child agents in flight") || strings.Contains(prompt, "## Child agents finished") {
+			t.Fatalf("duplicate child sections present with RestoreBundle:\n%s", prompt)
+		}
+		eventually(t, "PendingCompaction cleared after continuation send", func() bool {
+			return h.record(id).PendingCompaction == nil
+		})
 	})
 }

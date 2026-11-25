@@ -46,6 +46,70 @@ func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
 	return CompactionProtocol{}
 }
 
+// PendingCompaction holds a rotated lead's carry-forward compaction handoff
+// until the replacement session delivers its first prompt. Additive top-level
+// member on Record; preserved as unknown by older daemons (T0).
+type PendingCompaction struct {
+	Note           string `json:"note"`
+	RestoreBundle  bool   `json:"restore_bundle,omitempty"`
+	Resume         bool   `json:"resume,omitempty"`
+	ResumeInternal bool   `json:"resume_internal,omitempty"`
+	Origin         string `json:"origin,omitempty"`
+}
+
+func clonePendingCompaction(pc *PendingCompaction) *PendingCompaction {
+	if pc == nil {
+		return nil
+	}
+	cp := *pc
+	return &cp
+}
+
+func pendingCompactionFromState(note string, resume, resumeInternal bool, origin string) *PendingCompaction {
+	trimmed, hasRestore := strings.CutPrefix(note, compactionRestoreMarker)
+	return &PendingCompaction{
+		Note:           strings.TrimSpace(trimmed),
+		RestoreBundle:  hasRestore,
+		Resume:         resume,
+		ResumeInternal: resume && resumeInternal,
+		Origin:         origin,
+	}
+}
+
+func (c *conv) restorePendingCompaction(pc *PendingCompaction) {
+	if pc == nil {
+		return
+	}
+	if c.r != nil && c.r.opts.RestoreBundle != nil {
+		if pc.Note != "" {
+			c.compactNote = compactionRestoreMarker + pc.Note
+		} else {
+			c.compactNote = compactionRestoreMarker
+		}
+	} else {
+		c.compactNote = pc.Note
+	}
+	c.compactResume = pc.Resume
+	c.compactResumeInternal = pc.Resume && pc.ResumeInternal
+	if pc.Origin != "" {
+		c.compactOrigin = pc.Origin
+	}
+}
+
+func (c *conv) clearPendingCompactionResume() {
+	if c.rec.PendingCompaction == nil || (!c.rec.PendingCompaction.Resume && !c.rec.PendingCompaction.ResumeInternal) {
+		return
+	}
+	c.update(func(rec *Record) {
+		if rec.PendingCompaction == nil {
+			return
+		}
+		pc := clonePendingCompaction(rec.PendingCompaction)
+		pc.Resume, pc.ResumeInternal = false, false
+		rec.PendingCompaction = pc
+	})
+}
+
 type compactRequest struct {
 	resume   bool
 	internal bool
@@ -606,6 +670,22 @@ func (c *conv) compactIdle() bool {
 		return true
 	}
 postCompact:
+	if c.compactResume && c.compactNote != "" {
+		if c.proc == nil && c.rec.Lead && c.rec.PendingCompaction != nil {
+			rec := c.record()
+			if rp, err := c.r.resolve(rec.Profile, rec.Root); err != nil {
+				c.compactResume, c.compactResumeInternal = false, false
+				c.clearPendingCompactionResume()
+				c.setStatus(func() { c.lastErr = "resume after compaction: " + err.Error() })
+				return false
+			} else if err := c.startLead(rec, rp.Definition, false); err != nil {
+				c.compactResume, c.compactResumeInternal = false, false
+				c.clearPendingCompactionResume()
+				c.setStatus(func() { c.lastErr = "resume after compaction: " + err.Error() })
+				return false
+			}
+		}
+	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
 		if c.r.durableProcess(c.rec.Backend) {
 			return c.compactDurableContinue()
@@ -614,6 +694,7 @@ postCompact:
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
+			c.clearPendingCompactionResume()
 			if checkout, ok := releasedInput(err); ok {
 				c.dropReleasedInput("continuation after compaction", checkout)
 				c.releaseHeld()
@@ -625,6 +706,9 @@ postCompact:
 		}
 		c.compactNote = ""
 		c.compactInternalTurn, c.compactResumeInternal = c.compactResumeInternal, false
+		if c.rec.PendingCompaction != nil {
+			c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		}
 		c.beginTurn(false)
 		return true
 	}
@@ -646,6 +730,9 @@ postCompact:
 			return false
 		}
 		c.compactNote = ""
+		if c.rec.PendingCompaction != nil {
+			c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		}
 		c.beginTurn(false)
 		return true
 	}
@@ -778,6 +865,8 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		} else {
 			c.compactNote = checkpoint
 		}
+		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
+		c.update(func(rec *Record) { rec.PendingCompaction = clonePendingCompaction(pending) })
 		return nil
 	})
 	if err != nil {

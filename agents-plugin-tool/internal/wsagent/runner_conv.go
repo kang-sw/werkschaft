@@ -1381,6 +1381,7 @@ func (c *conv) release() {
 		rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 		rec.Mail = mail
 		rec.QuotaContinuation = nil
+		rec.PendingCompaction = nil
 		c.closed = true
 	})
 	c.syncHost(false)
@@ -1822,7 +1823,8 @@ func (c *conv) hasPendingKick() bool {
 	held := c.held
 	c.mu.Unlock()
 	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
-		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire
+		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire ||
+		(c.compactResume && c.compactNote != "")
 }
 
 // deferKickIfUnpublished defers a processless start kick until
@@ -2178,6 +2180,9 @@ func (c *conv) kickInput() {
 				rec.Reports = nil
 			}
 			c.setPromptBoundary(rec, startedAt, true)
+			if ordinary {
+				rec.PendingCompaction = nil
+			}
 			// The open successor supersedes or publishes (below) a held
 			// turn; the record never keeps both.
 			rec.HeldTurn = nil
@@ -2271,6 +2276,9 @@ func (c *conv) kickInput() {
 			}
 			if len(reports) > 0 {
 				rec.Reports = nil
+			}
+			if ordinary {
+				rec.PendingCompaction = nil
 			}
 			if rec.Parent != nil {
 				rec.TurnOpen, rec.HeldTurn = true, nil
