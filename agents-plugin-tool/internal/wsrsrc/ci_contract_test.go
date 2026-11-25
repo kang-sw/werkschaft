@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -32,9 +33,18 @@ func TestCITestShardSelection(t *testing.T) {
 set -eu
 if [[ "$1" == list ]]; then
   if [[ "${FAIL_LIST:-}" == 1 ]]; then exit 42; fi
-  printf '%s\n' example/cmd/ws-mcp example/internal/mcp example/internal/wsledger example/internal/wstrackerhost example/internal/wsledger/child
+  printf '%s\n' \
+    example/cmd/ws-mcp \
+    example/internal/mcp \
+    example/internal/wsagent \
+    example/internal/wsdashboard \
+    example/internal/wsfuture \
+    example/internal/wsledger \
+    example/internal/wsledger/child \
+    example/internal/wstrackerhost \
+    example/internal/wswhiteboard
 elif [[ "$2" == -list ]]; then
-  printf '%s\n' TestD TestB TestA TestC ExampleZ FuzzX 'ok example/internal/mcp'
+  printf '%s\n' TestD TestB TestA TestC ExampleZ FuzzX "ok $4"
 else
   printf '%s\n' "$@"
 fi
@@ -53,20 +63,84 @@ fi
 		return strings.Split(strings.TrimSpace(string(out)), "\n")
 	}
 	for _, tt := range []struct {
-		mode string
+		args []string
 		want []string
 	}{
-		{"all", []string{"example/cmd/ws-mcp", "example/internal/mcp", "example/internal/wsledger/child"}},
-		{"rest", []string{"example/cmd/ws-mcp", "example/internal/wsledger/child"}},
-		{"long", []string{"./internal/wsledger", "./internal/wstrackerhost"}},
+		{
+			[]string{"all"},
+			[]string{
+				"example/cmd/ws-mcp",
+				"example/internal/mcp",
+				"example/internal/wsagent",
+				"example/internal/wsdashboard",
+				"example/internal/wsfuture",
+				"example/internal/wsledger/child",
+				"example/internal/wswhiteboard",
+			},
+		},
+		{
+			[]string{"rest"},
+			[]string{
+				"example/cmd/ws-mcp",
+				"example/internal/wsagent",
+				"example/internal/wsfuture",
+				"example/internal/wsledger/child",
+				"example/internal/wswhiteboard",
+			},
+		},
+		{
+			[]string{"long"},
+			[]string{"./internal/wsledger", "./internal/wstrackerhost"},
+		},
+		{
+			[]string{"mcp"},
+			[]string{"./internal/mcp"},
+		},
+		{
+			[]string{"wsdashboard"},
+			[]string{"./internal/wsdashboard"},
+		},
 	} {
-		t.Run(tt.mode, func(t *testing.T) {
+		t.Run(strings.Join(tt.args, "_"), func(t *testing.T) {
 			want := append([]string{"test", "-count=1", "-timeout", "30m", "-list", "."}, tt.want...)
-			if got := run(tt.mode, "-list", "."); !reflect.DeepEqual(got, want) {
+			if got := run(append(tt.args, "-list", ".")...); !reflect.DeepEqual(got, want) {
 				t.Fatalf("selection = %q, want %q", got, want)
 			}
 		})
 	}
+
+	// 3-way rest shards pin heavy packages to distinct buckets and cover every
+	// remaining (including future) package with zero gaps and zero duplicates.
+	restSeen := map[string]int{}
+	var restUnion []string
+	for i := 0; i < 3; i++ {
+		got := run("rest", string(rune('0'+i)), "3", "-list", ".")
+		pkgs := got[6:] // strip: test -count=1 -timeout 30m -list .
+		if len(pkgs) == 0 {
+			t.Fatalf("rest %d 3 selected no packages", i)
+		}
+		for _, pkg := range pkgs {
+			restSeen[pkg]++
+			restUnion = append(restUnion, pkg)
+		}
+	}
+	sort.Strings(restUnion)
+	wantRest := []string{
+		"example/cmd/ws-mcp",
+		"example/internal/wsagent",
+		"example/internal/wsfuture",
+		"example/internal/wsledger/child",
+		"example/internal/wswhiteboard",
+	}
+	if !reflect.DeepEqual(restUnion, wantRest) {
+		t.Fatalf("rest 0..2 union = %q, want %q", restUnion, wantRest)
+	}
+	for pkg, n := range restSeen {
+		if n != 1 {
+			t.Fatalf("rest package %q appeared %d times, want 1", pkg, n)
+		}
+	}
+
 	// Sorted top-level tests partition without overlap, including examples/fuzz.
 	for i, pattern := range []string{"^(ExampleZ|TestC)$", "^(FuzzX|TestD)$", "^(TestA)$", "^(TestB)$"} {
 		index := string(rune('0' + i))
@@ -75,6 +149,47 @@ fi
 			t.Fatalf("mcp %s = %q, want %q", index, got, want)
 		}
 	}
+	for i, pattern := range []string{"^(ExampleZ|TestA|TestC)$", "^(FuzzX|TestB|TestD)$"} {
+		index := string(rune('0' + i))
+		want := []string{"test", "-count=1", "-timeout", "30m", "-run", pattern, "-list", ".", "./internal/wsdashboard"}
+		if got := run("wsdashboard", index, "2", "-list", "."); !reflect.DeepEqual(got, want) {
+			t.Fatalf("wsdashboard %s = %q, want %q", index, got, want)
+		}
+	}
+
+	// Self-check verify mode must pass on the synthetic module.
+	if out := run("verify"); len(out) == 0 || !strings.HasPrefix(out[0], "OK:") {
+		t.Fatalf("verify output = %q, want OK summary", out)
+	}
+
+	// Verify ws-mcp-ci.yml defines the expected sharded matrix for both OSes.
+	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "ws-mcp-ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wfText := string(workflow)
+	for _, entry := range []string{
+		`{ os: ubuntu-latest, shard: mcp, args: "mcp" }`,
+		`{ os: ubuntu-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }`,
+		`{ os: ubuntu-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }`,
+		`{ os: ubuntu-latest, shard: rest-0, args: "rest 0 3" }`,
+		`{ os: ubuntu-latest, shard: rest-1, args: "rest 1 3" }`,
+		`{ os: ubuntu-latest, shard: rest-2, args: "rest 2 3" }`,
+		`{ os: windows-latest, shard: mcp-0, args: "mcp 0 4" }`,
+		`{ os: windows-latest, shard: mcp-1, args: "mcp 1 4" }`,
+		`{ os: windows-latest, shard: mcp-2, args: "mcp 2 4" }`,
+		`{ os: windows-latest, shard: mcp-3, args: "mcp 3 4" }`,
+		`{ os: windows-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }`,
+		`{ os: windows-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }`,
+		`{ os: windows-latest, shard: rest-0, args: "rest 0 3" }`,
+		`{ os: windows-latest, shard: rest-1, args: "rest 1 3" }`,
+		`{ os: windows-latest, shard: rest-2, args: "rest 2 3" }`,
+	} {
+		if !strings.Contains(wfText, entry) {
+			t.Fatalf("ws-mcp-ci.yml missing matrix entry %s", entry)
+		}
+	}
+
 	t.Setenv("FAIL_LIST", "1")
 	cmd := exec.Command(bash, path, "all", "-list", ".")
 	cmd.Env = append(os.Environ(), "PATH="+root+string(os.PathListSeparator)+os.Getenv("PATH"))
