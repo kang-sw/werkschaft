@@ -20,6 +20,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsindex"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsnote"
+	"github.com/kang-sw/devenv/internal/wsweb"
 )
 
 type Server struct {
@@ -86,6 +87,7 @@ type Server struct {
 	// exist, only then. Empty elsewhere.
 	execCutover      string
 	fileWrites       *FileWriteSession
+	webFetchOpts     wsweb.Options
 	recordExecLaunch func(context.Context, execjob.ModelLaunch) (bool, error)
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of the agent host, so token-forwarding workers resolve their

@@ -72,7 +72,7 @@ func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 		p := rp.Definition
 		wsTools := AgentWSTools
 		if backend == BackendWerk {
-			wsTools = append(slices.Clone(wsTools), "fs.edit", "fs.write")
+			wsTools = append(slices.Clone(wsTools), "fs.edit", "fs.write", "web.fetch")
 		}
 		if rp.Scope != wsconfig.ScopeBuiltin || p.Backend != backend || p.Lead || !slices.Equal(p.Tools, tools) || !slices.Equal(p.WSTools, wsTools) {
 			t.Fatalf("%s = %+v", name, rp)

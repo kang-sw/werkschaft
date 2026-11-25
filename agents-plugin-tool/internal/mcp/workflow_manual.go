@@ -105,11 +105,28 @@ func agendaSizeNote(agenda map[string]json.RawMessage) string {
 	return fmt.Sprintf("note: agenda totals %d bytes (threshold %d); clear stale blobs with agenda.clear (key, or all: true).", total, agendaSizeNudgeThreshold)
 }
 
+// whiteboardXMLQuickCard is appended inside ## Session State on hosted
+// restore bundles (compaction or daemon restart) when whiteboard_enabled is
+// active on a top-level lead, keeping exact wb:* attribute names at hand
+// without extra disk I/O.
+const whiteboardXMLQuickCard = "\n### Whiteboard XML Quick-Card\n" +
+	"- `<wb:topic name=\"<stem>\" label?=\"...\" tickets?=\"...\">` (uses `name=`, NOT `id=`)\n" +
+	"- `<wb:panel name=\"...\" recap=\"...\">` (recap required for new panel) / `<wb:change><wb:old>...</wb:old><wb:new>...</wb:new></wb:change>`\n" +
+	"- `<wb:log>` (single-line inline Markdown only)\n" +
+	"- `<wb:add class=\"policy|technical|announced|check\">` (`<wb:title>`, `<wb:option>`, `<wb:recommend>`, `<wb:why>`)\n" +
+	"- `<wb:answer id=\"N\" value=\"...\">` or `ids=\"N M\"` (at root, outside `wb:topic`)\n" +
+	"- `<wb:state value=\"discussing|researching|waiting|implementing|awaiting-confirmation\" owner?=\"...\" eta_minutes?=\"...\"/>`\n" +
+	"- `<wb:eta minutes=\"<total>\" reason=\"...\"/>`, `<wb:close/>`\n"
+
 // renderSessionState builds the ## Session State section from a session record.
 // It renders agenda blobs (keyed alphabetically), open whiteboard topics'
 // latest agent-line or panel-recap topic summaries, then the todo summary.
 // Only scaffolding strings are handler-owned here; no manual prose.
 func renderSessionState(rec sessionRecord) string {
+	return renderSessionStateBody(rec, false)
+}
+
+func renderSessionStateBody(rec sessionRecord, includeWhiteboardQuickCard bool) string {
 	var sb strings.Builder
 	sb.WriteString("## Session State\n")
 
@@ -150,6 +167,9 @@ func renderSessionState(rec sessionRecord) string {
 	} else {
 		sb.WriteString(renderWhiteboardSummaries(rec.Whiteboard))
 	}
+	if includeWhiteboardQuickCard {
+		sb.WriteString(whiteboardXMLQuickCard)
+	}
 
 	// Todo summary.
 	sb.WriteString("\n### Todos\n")
@@ -159,7 +179,7 @@ func renderSessionState(rec sessionRecord) string {
 	return sb.String()
 }
 
-func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild) string {
+func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild, whiteboardQuickCard bool) string {
 	var sb strings.Builder
 	sb.WriteString("## Hosted Session Restore\n\n")
 	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", key)
@@ -169,7 +189,7 @@ func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []
 		sb.WriteString("The daemon restarted. ")
 	}
 	sb.WriteString("This state was rendered immediately before delivery; keep using the same key.\n\n")
-	sb.WriteString(renderSessionState(rec))
+	sb.WriteString(renderSessionStateBody(rec, whiteboardQuickCard))
 	sb.WriteString("\n## Work Target\n")
 	sb.WriteString(renderHostedWorkTarget(rec.Agenda["implement"]))
 	sb.WriteString("\n## Direct Children\n")
@@ -362,13 +382,17 @@ func (s *Server) handleWorkflowState(id json.RawMessage, args map[string]any) re
 	}
 
 	// 3. Resolved record — render only the Session State section, no manual body.
-	//    Match workflow_manual's exact trailing-newline and notes-append shape
-	//    (its CONTINUE branch appends "\n\n"+computeNotes(rec.Root) after
-	//    renderSessionState, then a final "\n") so workflow_state's output
+	//    Hosted leads already carry # Notes in their launch system prompt
+	//    (RenderLeadManual), so omitting the redundant # Notes block keeps
+	//    workflow_state compact and avoids host-side tool-result truncation.
+	if s.hostedSessionKey() != "" {
+		return toolTextResponse(id, renderSessionState(rec)+"\n(Notes already in system prompt; use note.query if fresh notes are needed.)\n", nil)
+	}
+	//    Non-hosted callers match workflow_manual's exact trailing-newline and
+	//    notes-append shape (its CONTINUE branch appends "\n\n"+computeNotes(rec.Root)
+	//    after renderSessionState, then a final "\n") so workflow_state's output
 	//    stays byte-identical to workflow_manual's "## Session State" suffix
-	//    for every resolved session. That byte-identity is the invariant: a
-	//    change to either renderer must be made in both, or workflow_state
-	//    silently diverges from the manual it mirrors.
+	//    for every resolved non-hosted session.
 	return toolTextResponse(id, renderSessionState(rec)+"\n\n"+computeNotes(rec.Root, s.configOptions(), s.stateOptions())+"\n", nil)
 }
 

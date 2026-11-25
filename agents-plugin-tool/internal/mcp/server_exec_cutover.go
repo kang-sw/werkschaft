@@ -59,6 +59,8 @@ func (s *Server) cutoverListed(name string) bool {
 		return s.fileWriteTools()
 	case isFSReadTool(name):
 		return s.fsReadTools()
+	case isWebFetchTool(name):
+		return s.webFetchTools()
 	case slices.Contains(cutoverExecTools, name):
 		return s.execToolsListed() && !s.refuseBoundReadOnlyExec(name)
 	}

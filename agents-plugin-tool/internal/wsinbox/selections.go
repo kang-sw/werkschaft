@@ -177,9 +177,25 @@ func selectionTags(text string) [][2]int {
 	return tags
 }
 
-// walkSelections keeps failed envelopes opaque instead of recovering nested
-// children. Boundary lexing and strict child parsing are separate.
+// walkSelections keeps failed envelopes and length-framed <textref> bodies
+// opaque instead of recovering nested children. <textref> extraction runs
+// first so pasted <wb:selection> content inside a textref is never rewritten
+// or counted toward selection mentions or image ownership.
 func walkSelections(text string, visit func(raw string, group bool, s *Selection)) {
+	if strings.Contains(text, textRefOpenPrefix) {
+		for _, part := range ParseTextRefs(text) {
+			if part.TextRef != nil {
+				visit(part.Text, true, nil)
+				continue
+			}
+			walkSelectionsPlain(part.Text, visit)
+		}
+		return
+	}
+	walkSelectionsPlain(text, visit)
+}
+
+func walkSelectionsPlain(text string, visit func(raw string, group bool, s *Selection)) {
 	tags := selectionTags(text)
 	last := 0
 	for i := 0; i < len(tags); i++ {
@@ -263,11 +279,13 @@ func parseSelection(raw string) *Selection {
 	return &s
 }
 
-// Excerpt is free owner text, without serialized selection/mention groups
-// or attachment markers. Malformed groups remain opaque, literal text.
+// Excerpt is free owner text, without serialized selection/mention groups,
+// length-framed <textref> bodies, or attachment markers. Malformed groups
+// remain opaque, literal text.
 func (e Entry) Excerpt() string {
 	var parts []string
 	for _, text := range e.Parts {
+		text, _ = StripTextRefs(text)
 		walkSelections(text, func(raw string, group bool, s *Selection) {
 			if s != nil {
 				return

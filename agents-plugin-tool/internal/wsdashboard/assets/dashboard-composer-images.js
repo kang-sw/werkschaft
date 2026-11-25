@@ -156,13 +156,16 @@
   function clearTrash() {
     Object.keys(imgTrash).forEach(function (k) { release(imgTrash[k]); });
     imgTrash = {};
+    if (typeof clearTextTrash === "function") clearTextTrash();
   }
   // syncMarkers follows the draft's text (allNums): an image whose marker is
   // gone is dropped (into imgTrash), and a dropped one whose marker is back
   // returns. A restore that moves markers between fields (restoreHeld)
   // holds it off until every marker has landed.
   function syncMarkers() {
-    if (holdSync || (!imgs.length && !Object.keys(imgTrash).length)) return;
+    if (holdSync) return;
+    if (typeof syncTextMarkers === "function") syncTextMarkers();
+    if (!imgs.length && !Object.keys(imgTrash).length) return;
     var have = allNums(), changed = false;
     imgs.slice().forEach(function (it) {
       if (!have[it.n]) { dropImg(it); imgTrash[it.n] = it; changed = true; }
@@ -199,6 +202,12 @@
     imgs.forEach(function (it, i) {
       var el = doc.createElement("span"), im = doc.createElement("img"), x = doc.createElement("button"), num = doc.createElement("span");
       el.className = "ichip";
+      el.setAttribute("data-icapsule", "1");
+      el.setAttribute("data-icapsule-click", "1");
+      el.setAttribute("role", "button");
+      el.setAttribute("tabindex", "0");
+      el.setAttribute("aria-haspopup", "dialog");
+      el.setAttribute("aria-expanded", "false");
       im.src = it.url;
       im.alt = it.name;
       el.title = wsT("js.img.title", it.n, it.name);
@@ -206,11 +215,13 @@
       num.className = "inum";
       num.textContent = "#" + it.n;
       el.appendChild(num);
+      x.type = "button";
       x.className = "unimg";
       x.setAttribute("data-unimg", String(i));
       x.title = wsT("js.img.remove");
       x.textContent = "×";
       el.appendChild(x);
+      if (typeof makeImgPreviewTemplate === "function") el.appendChild(makeImgPreviewTemplate(it));
       var h = homes[i];
       if (h === -2) { if (mimgs) mimgs.appendChild(el); return; }
       if (h <= -3) { var group = bselections[-3 - h]; if (group && group.row) group.row.appendChild(el); else cimgs.appendChild(el); return; }
@@ -225,6 +236,12 @@
       }
       rows[h].appendChild(el);
     });
+    if (typeof textRefs !== "undefined" && typeof makeTextChip === "function") {
+      textRefs.forEach(function (it) { cimgs.appendChild(makeTextChip(it)); });
+    }
+    if (typeof icapsuleActive !== "undefined" && icapsuleActive && !icapsuleActive.isConnected && typeof icapsuleClose === "function") {
+      icapsuleClose(false);
+    }
   }
   // followImgs moves the chips after an edit in a note that changed which
   // field names an image, and puts back the rows a board swap took.

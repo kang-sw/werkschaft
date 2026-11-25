@@ -52,7 +52,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 	b.openAIWindows = new(atomic.Pointer[map[string]int64])
 	lead := leadBuiltinProfile(LeadProfileWerk, BackendWerk, "")
 	worker := agentWorkerBuiltinProfile(BackendWerk, nil)
-	worker.Definition.WSTools = append(slices.Clone(worker.Definition.WSTools), "fs.edit", "fs.write")
+	worker.Definition.WSTools = append(slices.Clone(worker.Definition.WSTools), "fs.edit", "fs.write", "web.fetch")
 	return BackendWerk, BackendRegistration{
 		Backend:             b,
 		ProcessKind:         ProcessDurable,
@@ -76,6 +76,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			NoWorkerCompactionSteer:  true,
 			ExecReadTools:            true,
 			FileWriteTools:           true,
+			WebFetchTool:             true,
 			ReadOnlyNoExec:           true,
 			LeadCompactionWSOnly:     true,
 		},

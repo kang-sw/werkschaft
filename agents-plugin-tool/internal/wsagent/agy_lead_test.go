@@ -498,7 +498,8 @@ func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 			base := leadKeySentence(key) + leadManualOnly
 			if manual != nil {
 				base = leadKeySentence(key) + "The workflow manual below is binding and stays in this prompt across compaction. " +
-					"Use the session state delivered with your first turn or in a restore bundle. For fresh session state, call the workflow_state tool with this key.\n\n" +
+					"Use the session state delivered with your first turn or in a `## Hosted Session Restore` bundle: it already carries fresh `## Session State` after compaction or daemon restart, so do not call `workflow_state` right after receiving one. " +
+					"Call `workflow_state` with this key only for mid-session refreshes or if a restore bundle reports a render error.\n\n" +
 					manual.text
 				if calls := manual.list(); len(calls) != 1 || calls[0][0] != BackendAgy || !sameDir(calls[0][1], h.root) || calls[0][2] != key {
 					t.Fatalf("the manual renders once, for agy, the lead's directory, and its key: %v", calls)
@@ -1236,5 +1237,19 @@ func TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt(t *testing.T) {
 		} else if slices.Index(reg.DirectTools[n+1:], name) >= 0 {
 			t.Fatalf("agy DirectTools lists %s twice: %v", name, reg.DirectTools)
 		}
+	}
+}
+
+// TestAgyDirectToolsListCompact pins that agy's direct tool list includes
+// compact once so hosted agy leads see compact (and lead_summary in ws mode)
+// directly in tools/list instead of routing through ws/call.
+func TestAgyDirectToolsListCompact(t *testing.T) {
+	_, reg := (AgyBackend{}).registration()
+	n := slices.Index(reg.DirectTools, "compact")
+	if n < 0 {
+		t.Fatalf("agy DirectTools lacks compact: %v", reg.DirectTools)
+	}
+	if slices.Index(reg.DirectTools[n+1:], "compact") >= 0 {
+		t.Fatalf("agy DirectTools lists compact twice: %v", reg.DirectTools)
 	}
 }

@@ -324,6 +324,11 @@ func tools() []map[string]any {
 			"inputSchema": fsWriteSchema(),
 		},
 		{
+			"name":        "web.fetch",
+			"description": "Fetch one public HTTP or HTTPS URL and return bounded readable text (HTML reduced to text, private and loopback addresses refused, no cookies or credentials sent).",
+			"inputSchema": webFetchSchema(),
+		},
+		{
 			"name":        "exec.status",
 			"description": "Return lifecycle status and stream sizes for a durable exec job.",
 			"inputSchema": execKeySchema(),
@@ -1640,4 +1645,10 @@ func fsWriteSchema() map[string]any {
 		"path":    stringProperty("File to write, absolute or relative to your working directory."),
 		"content": stringProperty("Complete file contents."),
 	}, "required": []string{"path", "content"}}
+}
+
+func webFetchSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"url": stringProperty("Public http:// or https:// URL to fetch."),
+	}, "required": []string{"url"}}
 }

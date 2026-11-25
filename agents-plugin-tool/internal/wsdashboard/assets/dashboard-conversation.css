@@ -118,6 +118,16 @@
    terminal-tinted mono field, the `!` is painted amber by the highlight
    registry, and the send button becomes a green Run, with no height change. */
 ::highlight(ws-bang) { color: var(--tm-amber); }
+/* Cosmetic inline markdown and @ mention highlights inside .wsc-editor (CSS Custom Highlight API). */
+::highlight(ws-md-marker) { color: color-mix(in srgb, var(--wb-muted-fg) 68%, transparent); }
+::highlight(ws-md-code) { background-color: color-mix(in srgb, var(--wb-fg) 10%, transparent); }
+::highlight(ws-md-head) { color: var(--wb-primary); }
+::highlight(ws-md-quote) { color: var(--wb-muted-fg); }
+::highlight(ws-md-em) { color: color-mix(in srgb, var(--wb-fg) 68%, var(--wb-ok)); }
+::highlight(ws-md-strong) { color: color-mix(in srgb, var(--wb-fg) 62%, var(--wb-primary)); }
+::highlight(ws-md-strike) { color: var(--wb-muted-fg); text-decoration: line-through; }
+::highlight(ws-md-link) { color: var(--wb-primary); text-decoration: underline; }
+::highlight(ws-md-mention) { color: var(--wb-primary); background-color: color-mix(in srgb, var(--wb-primary) 14%, transparent); }
 .composer[data-bang] { box-shadow: var(--wb-shadow-hi), inset 0 0 0 1.5px color-mix(in srgb, var(--tm-green) 45%, transparent); }
 .composer[data-bang] .cfield { background: var(--tm-bg); box-shadow: inset 0 0 0 1px var(--tm-line); }
 .composer[data-bang] textarea + .wsc-editor { font: 13px/1.5 var(--wb-mono); color: var(--tm-fg); background: var(--tm-bg); caret-color: var(--tm-green); padding: 9px 10px; }
@@ -408,10 +418,10 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .hud-folded { height: 24px; min-width: 24px; padding: 0 6px; border-radius: 7px; flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer; background: color-mix(in srgb, var(--wb-card) 72%, transparent); border: 1.5px solid color-mix(in srgb, var(--wb-muted-fg) 42%, transparent); color: var(--wb-muted-fg); font: 800 10px/1 var(--wb-mono); font-variant-numeric: tabular-nums; opacity: .72; transition: transform .12s ease, opacity .15s ease; }
 .hud-folded:hover, .hud-folded:focus-visible, .hud-folded.is-hovered { opacity: 1; transform: translateY(-1px); outline: none; }
 .hud-folded:focus-visible { box-shadow: 0 0 0 1.5px var(--wb-primary); }
-.hud-tooltip { position: fixed; z-index: calc(var(--z-panels, 40) - 4); box-sizing: border-box; width: 252px; max-width: calc(100vw - 16px); padding: 9px 11px; border-radius: 10px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); pointer-events: none; display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; }
+.hud-tooltip { position: fixed; z-index: calc(var(--z-panels, 40) - 4); box-sizing: border-box; width: auto; min-width: 220px; max-width: calc(100vw - 16px); padding: 9px 11px; border-radius: 10px; background: var(--wb-card); color: var(--wb-fg); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); pointer-events: none; display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; }
 .hud-tooltip[hidden] { display: none !important; }
 .tt-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.tt-title { font-weight: 800; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.tt-title { font-weight: 800; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
 .tt-pill { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 800; }
 .tt-pill[data-state="thinking"]   { background: color-mix(in srgb, var(--ring-think) 22%, var(--wb-card)); color: var(--ring-think); }
 .tt-pill[data-state="tool"]       { background: color-mix(in srgb, var(--ring-tool) 20%, var(--wb-card)); color: var(--ring-tool); }
@@ -419,8 +429,14 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-pill[data-state="idle"]       { background: var(--wb-muted); color: var(--wb-muted-fg); }
 .tt-pill[data-state="permission"] { background: color-mix(in srgb, var(--ring-perm) 22%, var(--wb-card)); color: var(--ring-perm); }
 .tt-pill[data-state="failed"]     { background: color-mix(in srgb, var(--ring-fail) 22%, var(--wb-card)); color: var(--ring-fail); }
-.tt-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
-.tt-meta code { font-size: 10.5px; background: var(--wb-muted); padding: 0 4px; border-radius: 4px; color: var(--wb-fg); }
+.tt-meta { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; flex-wrap: nowrap; }
+@media (max-width: 480px) { .tt-meta { flex-wrap: wrap; } }
+.tt-meta code { flex: none; font-size: 10.5px; background: var(--wb-muted); padding: 0 4px; border-radius: 4px; color: var(--wb-fg); }
+.tt-chip { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 10.5px/1.3 var(--wb-mono); background: var(--wb-muted); color: var(--wb-fg); padding: 1px 5px; border-radius: 4px; }
+.tt-stats { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tt-ok { color: var(--wb-ok); font-weight: 700; }
+.tt-fail { color: var(--wb-fail); font-weight: 700; }
+.tt-tps { color: var(--wb-primary); font-weight: 700; }
 .tt-ctx { --c: var(--wb-primary); display: flex; align-items: center; gap: 7px; min-width: 0; font-variant-numeric: tabular-nums; }
 .tt-ctx.warn { --c: var(--wb-warn); }
 .tt-ctx.d-hot { --c: var(--wb-hot); }
@@ -432,6 +448,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-ctx .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--wb-card); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-fg) 26%, transparent); transform: translateX(-50%); }
 .tt-ctx .tok { flex: none; font: 600 10.5px/1 var(--wb-mono); color: var(--wb-muted-fg); white-space: nowrap; }
 .tt-cmp { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10.5px; color: var(--wb-muted-fg); }
+.tt-ctx .tt-cmp-inline { flex: none; margin-left: 4px; padding-left: 7px; border-left: 1px solid var(--wb-line); }
 .tt-cmp .d-now { flex: none; height: 16px; padding: 0 6px; border-radius: 999px; line-height: 16px; font-weight: 800; background: color-mix(in srgb, var(--wb-primary) 18%, transparent); color: var(--wb-primary); }
 .tt-cmp .d-now::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: tt-cmp-pulse 1.2s ease-in-out infinite; }
 @keyframes tt-cmp-pulse { 50% { opacity: .3; } }
@@ -441,7 +458,9 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-task { font-size: 11px; color: var(--wb-fg); opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tt-hint { font-size: 10.5px; color: var(--wb-primary); font-weight: 700; padding-top: 3px; border-top: 1px solid var(--wb-line); font-family: var(--wb-mono); }
+.tt-hint { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 10.5px; color: var(--wb-primary); font-weight: 700; padding-top: 3px; border-top: 1px solid var(--wb-line); font-family: var(--wb-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tt-hint-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tt-hint-meta { flex: none; color: var(--wb-muted-fg); font-weight: 600; }
 /* Native subagents (the harness's own): a dashed ring and badge, their
    lifecycle line, and the count of rows whose observation ended with the
    outcome unknown, which never joins the completed count. */
@@ -505,6 +524,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .wsc-panel, .wsc-ticket { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 10%, var(--wb-card)); }
 .wsc-mention, .wsc-selection, .wsc-pick { color: var(--wb-fg); background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); }
 .wsc-console { color: var(--wb-fg); background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-warn), inset 0 0 0 1px var(--wb-line); }
+.wsc-mailbox { color: var(--wb-fg); background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); font-weight: 600; }
 .composer textarea, .composer textarea + .wsc-editor { font: 13.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; color: inherit; background: var(--wb-muted); border: 0; border-radius: 10px; padding: 8px 10px; resize: none; min-height: 38px; max-height: 160px; width: 100%; display: block; }
 /* Contenteditable blocks already size to their content; JS must not fix height. */
 .composer textarea + .wsc-editor { box-sizing: border-box; overflow: auto; }
@@ -639,9 +659,17 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .cimgs { display: flex; flex-wrap: wrap; gap: 6px; }
 .cimgs:empty { display: none; }
 .ichip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--wb-muted); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); flex: none; }
+.ichip[data-icapsule] { cursor: pointer; }
+.ichip[data-icapsule]:hover, .ichip[data-icapsule][aria-expanded="true"] { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.ichip[data-icapsule]:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 .ichip img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.unimg { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 999px; padding: 0; line-height: 18px; font-size: 13px; cursor: pointer; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); }
-.unimg:hover { background: var(--wb-card); }
+.unimg, .untxt { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 999px; padding: 0; line-height: 18px; font-size: 13px; cursor: pointer; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); }
+.unimg:hover, .untxt:hover { background: var(--wb-card); }
+.txtchip, .textref-thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; background: var(--wb-muted); color: var(--wb-muted-fg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); flex: none; cursor: pointer; }
+.txtchip:hover, .txtchip[aria-expanded="true"], .textref-thumb:hover, .textref-thumb[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); color: var(--wb-fg); box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
+.txtchip:focus-visible, .textref-thumb:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+.txtchip-ico, .textref-ico { display: grid; place-items: center; padding-bottom: 6px; pointer-events: none; }
+.txtchip-ico .li, .textref-ico .li { width: 22px; height: 22px; stroke-width: 1.75; }
 .inum, .thumbs .tnum { position: absolute; left: 2px; bottom: 2px; font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 4px; border-radius: 4px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--wb-card) 85%, transparent); color: var(--wb-fg); pointer-events: none; }
 .composer.drop { outline: 2px dashed var(--wb-primary); outline-offset: -4px; }
 /* A board note's image chips: a row right after its note, aligned with it,
@@ -660,8 +688,12 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .thumbs .thumb { position: relative; display: block; }
 .thumbs .thumb img { display: block; max-width: 160px; max-height: 120px; border-radius: 6px; object-fit: contain; background: var(--wb-muted); }
 .thumbs .ipath { font-size: 12px; color: var(--wb-muted-fg); word-break: break-all; }
-/* an "[Image #N]" marker in a message's text */
+/* an "[Image #N]" or "[Text #N]" marker in a message's text */
 .imgtag { display: inline-block; font-size: 11px; font-weight: 800; line-height: 1.3; padding: 0 5px; border-radius: 4px; font-variant-numeric: tabular-nums; vertical-align: 1px; background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); color: var(--wb-fg); }
+.txttag { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; line-height: 1.3; padding: 1px 6px; margin: 0 1px; border-radius: 5px; font-variant-numeric: tabular-nums; vertical-align: baseline; background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); color: var(--wb-fg); cursor: pointer; }
+.txttag .li { width: 12px; height: 12px; flex: none; color: var(--wb-primary); }
+.txttag:hover, .txttag[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+.txttag:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 /* inline hydrated capsules inside chat prose: compact single-line pills that
    match prose line height without inflating vertical rhythm; rich multi-line
    details live in the viewport-clamped .icapsule-pop popover. */
@@ -676,6 +708,7 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .icapsule-topic .icapsule-sub { font-style: normal; }
 .icapsule-mention, .icapsule-selection, .icapsule-pick { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); }
 .icapsule-console { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-warn), inset 0 0 0 1px var(--wb-line); }
+.icapsule-mailbox { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); font-weight: 600; }
 .icapsule-count, .icapsule-note-mk, .icapsule-img-mk { flex: none; font-size: 10.5px; font-weight: 700; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
 .icapsule-count, .icapsule-img-mk { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-fg); }
 .icapsule[data-icapsule], .icapsule[data-wb-nav] { cursor: pointer; }
@@ -698,6 +731,10 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .icapsule-pop-lines { border-left-color: var(--wb-warn); }
 .icapsule-pop-comment { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--wb-line); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-fg); }
 .icapsule-pop-imgs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.icapsule-pop-meta-dim { flex: none; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.icapsule-pop-textref { margin: 0; padding: 7px 9px; border-radius: 6px; background: var(--wb-muted); color: var(--wb-fg); font-family: var(--wb-mono); font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.icapsule-pop-imgwrap { display: flex; justify-content: center; background: var(--wb-muted); border-radius: 6px; padding: 4px; }
+.icapsule-pop-img { display: block; max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 4px; }
 /* held: sent from the page, not yet received by the session */
 .msg.held .bub { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); }
 .heldtag { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; background: var(--wb-ph-perm); color: var(--wb-on-ph-perm); }

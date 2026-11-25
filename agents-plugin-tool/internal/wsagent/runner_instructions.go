@@ -70,11 +70,12 @@ func composeLeadInstructions(dir string, rec Record, manual, steer string, comma
 	}
 	if manual = strings.TrimSpace(manual); manual != "" && commands {
 		text += "The workflow manual below is binding and stays in this prompt across compaction. " +
-			"Use the session state delivered with your first turn or in a restore bundle. " +
-			"For fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" + manual
+			"Use the session state delivered with your first turn or in a `## Hosted Session Restore` bundle: it already carries fresh `## Session State` after compaction or daemon restart, so do not call `workflow_state` right after receiving one. " +
+			"Call the ws `workflow_state` tool with this key only for mid-session refreshes, if a restore bundle reports a render error, or where the manual says to invoke `/lead-revive`.\n\n" + manual
 	} else if manual != "" {
 		text += "The workflow manual below is binding and stays in this prompt across compaction. " +
-			"Use the session state delivered with your first turn or in a restore bundle. For fresh session state, call the workflow_state tool with this key.\n\n" + manual
+			"Use the session state delivered with your first turn or in a `## Hosted Session Restore` bundle: it already carries fresh `## Session State` after compaction or daemon restart, so do not call `workflow_state` right after receiving one. " +
+			"Call `workflow_state` with this key only for mid-session refreshes or if a restore bundle reports a render error.\n\n" + manual
 	} else {
 		text += "At session start, call the workflow_manual tool with this key and follow it; after any compaction, call workflow_state for fresh session state."
 	}

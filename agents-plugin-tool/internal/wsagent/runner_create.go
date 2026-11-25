@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -452,9 +453,28 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 		spec.recoverExec = c.r.recoverModelExec(c.rec.ReplyID, c.rec.OpenGen)
 		spec.compactState = c.r.compactionState(c.rec.ReplyID)
 		spec.sessionSecret = c.rec.WSKey
+		spec.sessionConfig = c.sessionConfigProvider()
 	}
 	proc, err := start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
+}
+
+func (c *conv) sessionConfigProvider() func() (wsconfig.Options, wsconfig.SessionReader, string) {
+	if c.r.fixedProfile != nil {
+		// Private fixed-profile runners do not read layered session config.
+		return nil
+	}
+	return func() (wsconfig.Options, wsconfig.SessionReader, string) {
+		cfg := c.r.opts.Config
+		cfg.RepoRoot = c.rec.Root
+		if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+			if root, found := roots.Root(c.rec.WSKey); found {
+				cfg.RepoRoot = root
+			}
+		}
+		reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
+		return cfg, reader, c.rec.WSKey
+	}
 }
 
 // Get reads one conversation's state.

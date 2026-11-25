@@ -127,6 +127,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if isFSWriteTool(params.Name) && !s.fileWriteTools() {
 		return toolTextResponse(req.ID, "", fmt.Errorf("%s: this session has no daemon file write authority", params.Name))
 	}
+	if isWebFetchTool(params.Name) && !s.webFetchTools() {
+		return toolTextResponse(req.ID, "", fmt.Errorf("%s: this session does not allow daemon web fetch", params.Name))
+	}
 	// Keyed capability gate: when a session_key is present and maps to a known
 	// non-lead scope, enforce roleAllowsTool for this call. Unknown session keys
 	// are not rejected here; root-aware tools surface the unknown_session error
@@ -317,6 +320,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
 	case "fs.edit", "fs.write":
 		return s.callFSWrite(ctx, req.ID, params.Name, params.Arguments, params.Meta)
+	case "web.fetch":
+		return s.callWebFetch(ctx, req.ID, params.Arguments)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),
@@ -1216,7 +1221,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return !availableToCaller(ownership.ownership(t.Stem, t.Status))
 			}
 		}
-		result, err := wsdoc.TicketsFind(root, wsdoc.TicketFindOptions{
+		result, total, err := wsdoc.TicketsFindPage(root, wsdoc.TicketFindOptions{
 			Env:                s.environ(),
 			Statuses:           statuses,
 			IncludeDone:        boolArgument(params.Arguments["include_done"]),
@@ -1242,9 +1247,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, err)
 		}
-		text := formatTickets(result)
+		rawLimit, hasLimit := params.Arguments["limit"]
+		budget := ticketDiscoveryTextBudget
+		if hasLimit && rawLimit != nil {
+			budget = 0
+		}
+		text := formatTicketsBounded(result, offset, total, budget)
 		if ownership != nil {
-			text = formatTicketsWithOwnership(ownership, result, true)
+			text = formatTicketsWithOwnershipBounded(ownership, result, true, offset, total, budget)
 		}
 		if !resolve {
 			text += ticketScopeAnnotation(root, effectiveTicketStatuses(params.Arguments))

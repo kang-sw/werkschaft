@@ -50,6 +50,9 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 				for i, n := range in {
 					if n.OwnRow {
 						n.Task = ""
+						n.Done = 0
+						n.Failed = 0
+						n.OutputTps = 0
 					}
 					n.Children = strip(n.Children)
 					out[i] = n

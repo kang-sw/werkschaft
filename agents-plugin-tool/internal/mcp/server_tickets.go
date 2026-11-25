@@ -496,6 +496,33 @@ func effectiveTicketStatuses(args map[string]any) []string {
 	)
 }
 
+// ticketDiscoveryTextBudget caps default (no explicit limit) tickets.query
+// text discovery output so routine board listings stay safely under ~8 KiB
+// (leaving headroom for the truncation footer, ownership trailer, and scope
+// annotation) and avoid host-side ~10 KB MCP tool-result truncation.
+const ticketDiscoveryTextBudget = 7680
+
+func formatTicketsBounded(tickets []wsdoc.TicketInfo, offset, total, budget int) string {
+	if budget <= 0 {
+		return formatTickets(tickets)
+	}
+	var b strings.Builder
+	shown := 0
+	for _, ticket := range tickets {
+		chunk := formatTickets([]wsdoc.TicketInfo{ticket})
+		if shown > 0 && b.Len()+len(chunk) > budget {
+			break
+		}
+		b.WriteString(chunk)
+		shown++
+	}
+	if shown < len(tickets) {
+		fmt.Fprintf(&b, "showing %d of %d (truncated to fit output budget; pass offset=%d, limit=%d or narrow query/statuses)\n",
+			shown, total, offset+shown, shown)
+	}
+	return b.String()
+}
+
 func formatTickets(tickets []wsdoc.TicketInfo) string {
 	var b strings.Builder
 	for _, ticket := range tickets {

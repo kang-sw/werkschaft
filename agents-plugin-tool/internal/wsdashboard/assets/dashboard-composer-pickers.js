@@ -45,6 +45,7 @@
     // A text set whole (a restored draft, a cleared send) reaches the shell-mode
     // flag here, as it does the mention layer.
     if (typeof bangSync === "function") bangSync();
+    if (typeof scheduleComposerHighlights === "function") scheduleComposerHighlights();
     if (!chl || !window.wsMention) return;
     if (ctext.wsc) { chl.hidden = true; return; }
     // The textarea's scrollbar narrows its text; the layer narrows alike.
@@ -190,7 +191,7 @@
   // A command with fixed arguments leaves unrelated composer input intact.
   function sendCommand() {
     var sel = cmdSel, fixed = typeof sel.args === "string";
-    if (!fixed && imgs.length) { noteWarn(wsT("js.cmd.images")); return; }
+    if (!fixed && (imgs.length || (typeof textRefs !== "undefined" && textRefs.length))) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, fixed ? sel.args : sendText().trim(), !fixed);
   }
   if (ctext && rid && ccmd && window.wsMention) {
@@ -209,7 +210,7 @@
     });
   }
   function sendInlineCommand(sel) {
-    if (imgs.length) { noteWarn(wsT("js.cmd.images")); return; }
+    if (imgs.length || (typeof textRefs !== "undefined" && textRefs.length)) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, sendText().slice(sel.end).trim(), true);
   }
   // Topic-only editors keep their textarea owner and canonical [stem] strings.

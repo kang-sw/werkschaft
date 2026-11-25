@@ -69,6 +69,60 @@ func TestNormalizeRejectsEmptyAndMalformed(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndTextPreserveOperatorLineOneIndent(t *testing.T) {
+	// Operator parts keep line-1 leading spaces/tabs while stripping leading blank lines and trailing whitespace.
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"spaces", "  - a\n    - b  \n", "  - a\n    - b"},
+		{"tab", "\tindented\t\n", "\tindented"},
+		{"leading blank lines LF and CRLF", "\n  \n\t\r\n  - a  \n\n", "  - a"},
+		{"single indented line", "  hello  ", "  hello"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := Normalize(Entry{Operator: true, Parts: []string{tc.in}})
+			if err != nil {
+				t.Fatalf("Normalize(%q): %v", tc.in, err)
+			}
+			if len(e.Parts) != 1 || e.Parts[0] != tc.want {
+				t.Fatalf("Normalize(%q).Parts = %q, want [%q]", tc.in, e.Parts, tc.want)
+			}
+		})
+	}
+
+	// Whitespace-only operator parts still yield ErrEmpty.
+	for _, blank := range []string{"   ", "\t\t", " \n \r\n\t "} {
+		if _, err := Normalize(Entry{Operator: true, Parts: []string{blank}}); !errors.Is(err, ErrEmpty) {
+			t.Fatalf("Normalize(operator, %q) = %v, want ErrEmpty", blank, err)
+		}
+	}
+
+	// Non-operator parts keep strings.TrimSpace unchanged.
+	nonOp, err := Normalize(Entry{Operator: false, Parts: []string{"\n  - a  \n"}})
+	if err != nil {
+		t.Fatalf("Normalize(non-operator): %v", err)
+	}
+	if len(nonOp.Parts) != 1 || nonOp.Parts[0] != "- a" {
+		t.Fatalf("non-operator Parts = %q, want [%q]", nonOp.Parts, "- a")
+	}
+
+	// Entry.Text() / bodyText() preserves line-1 indent for operator entries and trims non-operator entries.
+	opEntry := Entry{Operator: true, Parts: []string{"  - a"}}
+	if got := opEntry.testBody(t); got != "  - a" {
+		t.Fatalf("operator Text body = %q, want %q", got, "  - a")
+	}
+	if !strings.Contains(opEntry.Text(), "\n  - a\n") {
+		t.Fatalf("operator Text() did not preserve indent in <ws:user> body: %q", opEntry.Text())
+	}
+	lanEntry := Entry{Operator: false, Parts: []string{"  - a"}}
+	if got := lanEntry.testBody(t); got != "- a" {
+		t.Fatalf("non-operator Text body = %q, want %q", got, "- a")
+	}
+}
+
 // TestEachSendIsItsOwnHeldEntry: a send never joins a held entry; two
 // follow-ups are two entries, held in send order, each with its own text and
 // answers.

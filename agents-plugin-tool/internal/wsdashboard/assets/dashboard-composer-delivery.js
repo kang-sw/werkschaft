@@ -34,7 +34,7 @@
     });
     text += raw.slice(at);
     var legacy = bselections.filter(function (s) { return !usedSelections[s.key]; });
-    return { text: selectionPrefix(legacy) + text.trim(), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
+    return { text: selectionPrefix(legacy) + text.replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
   }
   function sendMessage() {
     if (restoring || draftStore && !draftLoaded) return;
@@ -50,14 +50,23 @@
     if (cmdSel) { sendCommand(); return; }
     if (inline) { sendInlineCommand(inline); return; }
     var groups = bselections.slice(), inlineData = inlineEditor() ? inlineSend() : null;
-    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().trim(), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
+    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
     var committed = {};
     groups.forEach(function (s) { s.images.forEach(function (n) { committed[n] = true; }); });
     var pics = imgs.filter(function (p) { return !mpend || (mpend.images || []).indexOf(p.n) < 0 || committed[p.n]; });
     var wp = inlineData ? inlineData.picks : wpicks.slice(), wc = inlineData ? inlineData.consoles : wconsoles.slice();
     var closing = closeRequests.map(function (r) { return { ref: r, topic: r.topic, reason: r.reason }; });
-    if (!t && !list.length && !pics.length && !notes.length && !said.length && !wp.length && !wc.length && !closing.length) { noteWarn(wsT("js.send.empty")); return; }
+    var txtAttachments = typeof textRefs !== "undefined" ? textRefs.slice() : [];
+    if (!t && !list.length && !pics.length && !txtAttachments.length && !notes.length && !said.length && !wp.length && !wc.length && !closing.length) { noteWarn(wsT("js.send.empty")); return; }
     if (pics.some(function (p) { return !p.ref && !p.blob && p.data === null; })) { noteWarn(wsT("js.send.reading")); return; }
+    if (txtAttachments.length && typeof serializeTextRefs === "function") t = serializeTextRefs(t, txtAttachments);
+    if (typeof checkTextRefCap === "function") {
+      var cap = checkTextRefCap(t, said, closing);
+      if (cap.over) {
+        noteWarn(wsT("js.textref.overcap.send", formatTextRefBytes(cap.bytes), formatTextRefBytes(TEXTREF_MAX_BYTES)));
+        return;
+      }
+    }
     var body = { utcOffsetMinutes: -new Date().getTimezoneOffset(), text: t, chips: list, topics: notes.map(function (n) { return { topic: n.topic, note: n.value.trim() }; }), mentions: said };
     if (typeof boardIncarnation === "string") body.boardIncarnation = boardIncarnation;
     if (closing.length) body.closeRequests = closing.map(function (r) { return { topic: r.topic, reason: r.reason }; });
@@ -78,6 +87,7 @@
     saveDraft();
     var inlineBack = inlineEditor() ? { text: ctext.value, capsules: inlineEditor().snapshot(), selections: bselections.map(function (s) { return { key: s.key, mentions: s.mentions, comment: s.comment, images: s.images }; }) } : null;
     pics.forEach(dropImg);
+    if (typeof textRefs !== "undefined") textRefs = [];
     ctext.value = ""; grow(); clearMentions();
     if (typeof resetAutoMultiline === "function") resetAutoMultiline();
     list.forEach(function (c) { dropChip(c.id); });
@@ -126,7 +136,8 @@
     el.className = "d-outbox-row";
     spin.className = "spin";
     text.className = "d-outbox-text";
-    text.textContent = m.back.text || m.pics.map(function (p) { return marker(p.n); }).join(" ");
+    var rowSummary = typeof stripTextRefs === "function" ? stripTextRefs(m.back.text || "").text : (m.back.text || "");
+    text.textContent = rowSummary || m.pics.map(function (p) { return marker(p.n); }).join(" ");
     el.appendChild(spin);
     el.appendChild(text);
     if (cancel) {
@@ -243,17 +254,40 @@
     var backMentions = (back.mentions || []).slice(), usedMention = [];
     var backPicks = (back.picks || []).slice(), usedPick = [];
     var backConsoles = (back.consoles || []).slice(), usedConsole = [];
+    var strippedText = typeof stripTextRefs === "function" ? stripTextRefs(m.back.text || "") : { text: m.back.text || "", refs: [] };
+    var bubbleTextRefs = strippedText.refs || [], backTextRefs = {};
+    bubbleTextRefs.forEach(function (r) { if (!backTextRefs[r.n]) backTextRefs[r.n] = r; });
     function hydrateProseInto(parent, prose) {
       if (!prose) return;
-      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length) {
+      var wsc = window.WsCapsules;
+      var hasMailbox = prose.indexOf("<mailbox ") >= 0 && !!(wsc && typeof wsc.parseMailboxTag === "function");
+      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length && !bubbleTextRefs.length && !hasMailbox) {
         appendImageTags(parent, prose);
         return;
       }
-      var last = 0, i = 0;
+      var last = 0, i = 0, mbCtx = null;
       function isWord(ch) { return /[A-Za-z0-9_]/.test(ch); }
       while (i < prose.length) {
         var ch = prose.charAt(i);
-        if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
+        if (ch === "<") {
+          if (prose.slice(i, i + 9) === "<textref " && wsc && typeof wsc.skipTextref === "function") {
+            var tend = wsc.skipTextref(prose, i);
+            if (tend > i) { i = tend; continue; }
+          }
+          if (hasMailbox && prose.slice(i, i + 9) === "<mailbox ") {
+            var mb = wsc.parseMailboxTag(prose, i);
+            if (mb) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              if (!mbCtx) mbCtx = wsc.viewingContext(doc);
+              var mbEl = doc.createElement("span");
+              mbEl.className = "icapsule icapsule-mailbox";
+              mbEl.setAttribute("title", wsc.formatMailboxTooltip(mb.tag));
+              mbEl.textContent = wsc.formatMailboxLabel(mb.tag, mbCtx);
+              parent.appendChild(mbEl);
+              i = mb.end; last = i; continue;
+            }
+          }
+        } else if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
           var am = /^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})/.exec(prose.slice(i));
           if (am) {
             var ci = -1;
@@ -391,6 +425,13 @@
               usedConsole[cni] = true;
               i += 10 + cnlen; last = i; continue;
             }
+          } else if (bubbleTextRefs.length && prose.slice(i, i + 7) === "[Text #" && typeof makeTextTag === "function") {
+            var tm = /^\[Text #([1-9][0-9]{0,5})\]/.exec(prose.slice(i));
+            if (tm && backTextRefs[+tm[1]]) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              parent.appendChild(makeTextTag(backTextRefs[+tm[1]]));
+              i += tm[0].length; last = i; continue;
+            }
           }
         }
         i++;
@@ -441,10 +482,10 @@
       return pill;
     }
     var part = null;
-    if (m.back.text) {
+    if (strippedText.text) {
       part = doc.createElement("div");
       part.className = "hpart";
-      var raw = m.back.text;
+      var raw = strippedText.text;
       if (raw.indexOf("<wb:selection") >= 0 && typeof selectionTags === "function" && typeof readSelectionBlock === "function") {
         var tags = selectionTags(raw), segs = [], pos = 0;
         for (var ti = 0; ti < tags.length; ti++) {
@@ -507,7 +548,7 @@
     backConsoles.forEach(function (c, i) { if (!usedConsole[i]) chip("mchip cchip", "console ×" + c.lines.length, "", c.url, c.url + "\n" + c.lines.join("\n")); });
     if (chips.firstChild) bub.appendChild(chips);
     if (part && part.firstChild) bub.appendChild(part);
-    if (m.pics.length) {
+    if (m.pics.length || bubbleTextRefs.length) {
       var th = doc.createElement("div");
       th.className = "thumbs";
       m.pics.forEach(function (p) {
@@ -521,6 +562,9 @@
         a.appendChild(num);
         th.appendChild(a);
       });
+      if (typeof makeTextRefThumb === "function") {
+        bubbleTextRefs.forEach(function (r) { th.appendChild(makeTextRefThumb(r)); });
+      }
       bub.appendChild(th);
     }
     if (bub.firstChild) el.appendChild(bub);
@@ -566,7 +610,8 @@
       row.className = "d-outbox-row";
       title.textContent = wsT(m.recoveryState === "queued" ? "js.delivery.unsent" : "js.delivery.unknown");
       text.className = "d-outbox-text";
-      text.textContent = m.back.text || m.pics.map(function (p) { return marker(p.n); }).join(" ") ||
+      var recSummary = typeof stripTextRefs === "function" ? stripTextRefs(m.back.text || "").text : (m.back.text || "");
+      text.textContent = recSummary || m.pics.map(function (p) { return marker(p.n); }).join(" ") ||
         (m.back.chips || []).map(function (c) { return c.note || c.answer || c.id; }).join(" · ") ||
         (m.back.topics || []).map(function (n) { return n.note || n.topic; }).join(" · ");
       row.append(title, text);
@@ -698,7 +743,10 @@
     }
     // A fresh draft numbers its images from 1 again once nothing, sent or
     // not, could name a number.
-    if (!outboxUnsent() && !imgs.length && !ctext.value && !chipList().length && !topicNotes().length) imgSeq = 0;
+    if (!outboxUnsent() && !imgs.length && !(typeof textRefs !== "undefined" && textRefs.length) && !ctext.value && !chipList().length && !topicNotes().length) {
+      imgSeq = 0;
+      if (typeof txtSeq === "number") txtSeq = 0;
+    }
     saveDraft();
     outboxSync();
     followConvo();

@@ -666,16 +666,20 @@
     return null;
   }
   function icapsuleTrigger(n) {
-    var cap = n && n.closest ? n.closest(".icapsule[data-icapsule]") : null;
+    if (!n || !n.closest) return null;
+    if (n.closest(".unimg, .untxt")) return null;
+    var cap = n.closest("[data-icapsule]");
     if (!cap) return null;
     var box = entriesBox(), held = region("convlive");
-    return (box && box.contains(cap)) || (held && held.contains(cap)) ? cap : null;
+    if ((box && box.contains(cap)) || (held && held.contains(cap))) return cap;
+    if ((typeof cimgs !== "undefined" && cimgs && cimgs.contains(cap)) || (typeof mimgs !== "undefined" && mimgs && mimgs.contains(cap))) return cap;
+    return cap.closest(".nimgs, .selection-images") ? cap : null;
   }
   function icapsulePlace() {
     if (!icapsulePop || icapsulePop.hidden || !icapsuleActive) return;
     if (!icapsuleActive.isConnected || !icapsuleActive.getClientRects().length) { icapsuleClose(false); return; }
     var a = icapsuleActive.getBoundingClientRect();
-    if (convo) {
+    if (convo && convo.contains(icapsuleActive)) {
       var cr = convo.getBoundingClientRect();
       if (a.bottom < cr.top || a.top > cr.bottom) { icapsuleClose(false); return; }
     }
@@ -734,7 +738,7 @@
   doc.addEventListener("mouseover", function (e) {
     if (icapsulePinned) return;
     var cap = icapsuleTrigger(e.target);
-    if (cap) icapsuleOpen(cap, false);
+    if (cap && !cap.hasAttribute("data-icapsule-click")) icapsuleOpen(cap, false);
     else if (icapsulePop && icapsulePop.contains(e.target)) clearTimeout(icapsuleLeaveTimer);
   });
   doc.addEventListener("mouseout", function (e) {
@@ -746,7 +750,7 @@
   doc.addEventListener("focusin", function (e) {
     if (icapsulePinned) return;
     var cap = icapsuleTrigger(e.target);
-    if (cap) icapsuleOpen(cap, false);
+    if (cap && !cap.hasAttribute("data-icapsule-click")) icapsuleOpen(cap, false);
     else if (icapsulePop && !icapsulePop.contains(e.target) && icapsuleActive) icapsuleClose(false);
   });
   doc.addEventListener("focusout", function (e) {

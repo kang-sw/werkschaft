@@ -113,6 +113,9 @@ type LifecyclePolicy struct {
 	// FileWriteTools admits daemon file mutations when the session supplies
 	// a durable recorder for them.
 	FileWriteTools bool
+	// WebFetchTool admits the daemon's bounded ws/web.fetch tool for hosted
+	// sessions whose harness has no native web fetch tool (werk).
+	WebFetchTool bool
 	// ReadOnlyNoExec denies exec launch and stdin writes to a bound read-only
 	// lead with live authority, including calls made outside the cutover.
 	// Immutable read-only workers use the daemon's read-only exec allowlist.

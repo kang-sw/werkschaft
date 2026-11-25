@@ -38,6 +38,11 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemGitMergeSizeExtensions:    gitMergeSizeExtensionsKey.Default,
 		wsconfig.ItemAgentChildWaitingDays:     strconv.Itoa(wsagent.DefaultChildWaitingDays),
 		wsconfig.ItemAgentKeepAwakeDuringTurns: keepAwakeDuringTurnsKey.Default,
+		wsconfig.ItemWerkWebSearch:             werkWebSearchKey.Default,
+		wsconfig.ItemWerkWebSearchMaxUses:      werkWebSearchMaxUsesKey.Default,
+		wsconfig.ItemWerkWebSearchMaxResults:   werkWebSearchMaxResultsKey.Default,
+		wsconfig.ItemWerkWebSearchEngine:       werkWebSearchEngineKey.Default,
+		wsconfig.ItemWerkWebSearchSIWC:         werkWebSearchSIWCKey.Default,
 	}
 	for key, value := range wsconfig.CompactionDefaults {
 		defaults[key] = value
@@ -672,6 +677,22 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		appendKnob(entry, tuningKnob{
 			ID:          entry.Key,
 			Kind:        "git_merge_size",
+			Description: k.Description + " Value: " + k.domain() + "; builtin " + strconv.Quote(k.Default) + ".",
+			Writer:      tuningWriter{Tool: entry.WriterTool, FixedArguments: map[string]string{"key": entry.Key}},
+			Reset: &tuningWriter{
+				Tool:           entry.ResetTool,
+				FixedArguments: map[string]string{"key": entry.Key, "reset": "true"},
+			},
+			SelectorFields: entry.SelectorFields,
+			ValueFields:    entry.ValueFields,
+			Current:        currentWorkflowPreference(resolver, sessionKey, entry.Key),
+		})
+	}
+	for _, k := range werkWebSearchKeys {
+		entry := k.entry()
+		appendKnob(entry, tuningKnob{
+			ID:          entry.Key,
+			Kind:        "web_search",
 			Description: k.Description + " Value: " + k.domain() + "; builtin " + strconv.Quote(k.Default) + ".",
 			Writer:      tuningWriter{Tool: entry.WriterTool, FixedArguments: map[string]string{"key": entry.Key}},
 			Reset: &tuningWriter{
