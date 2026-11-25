@@ -221,7 +221,14 @@
       "registered_at": "2026-11-14T22:47:31Z"
     },
     "261115-feat-ws-dashboard-external-stt-voice-typing": {
-      "registered_at": "2026-11-15T02:02:38Z"
+      "registered_at": "2026-11-15T02:02:38Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-25T12:52:32Z"
+      }
     },
     "261115-feat-ws-permission-profile": {
       "registered_at": "2026-11-15T07:40:45Z",
