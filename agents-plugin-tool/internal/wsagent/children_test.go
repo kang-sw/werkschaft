@@ -814,9 +814,19 @@ func TestCancelledMessageLeavesNoChildOpen(t *testing.T) {
 	noSend(t, gp, "a cancelled message")
 }
 
-// TestTokenSpawnCwdFollowsTheHoldersWorkingDirectory: a worker working in
-// a directory of its own (a worktree) spawns its children there: an empty
-// cwd is that directory and a relative one resolves against it, while the
-// child's root stays the holder's.
-// TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey: the legacy token
-// pi.spawn route inherits the holder's session-scope config like agent.spawn.
+func TestRemovedLegacyTokenOpsReturnNotFound(t *testing.T) {
+	h, _ := childHarness(t)
+	_, _, token, gc, _ := workerWithChild(t, h)
+	for _, op := range []string{"spawn", "send", "stop", "wait"} {
+		code, body := h.tokenCall(token, op, map[string]any{"id": gc.ID})
+		if code != http.StatusNotFound || !strings.Contains(body, "unknown agent route") {
+			t.Fatalf("token %s = %d %s, want 404 unknown agent route", op, code, body)
+		}
+	}
+	if code, body := h.tokenCall(token, "list", nil); code != http.StatusOK {
+		t.Fatalf("token list = %d %s, want 200", code, body)
+	}
+	if code, body := h.tokenCall(token, "transcript", map[string]any{"id": gc.ID}); code != http.StatusNotFound || !strings.Contains(body, "pi.transcript:") {
+		t.Fatalf("token transcript = %d %s, want retained pi.transcript handler", code, body)
+	}
+}

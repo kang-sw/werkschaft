@@ -679,7 +679,7 @@ func TestHiringRegistryAdmission(t *testing.T) {
 	}{
 		{"registered extension", "fixture", map[string]bool{"fixture": true}, true},
 		{"registered builtin", "claude", map[string]bool{"claude": true}, true},
-		{"retired even if registered", "pi", map[string]bool{"pi": true}, false},
+		{"unregistered retired", "pi", map[string]bool{"claude": true}, false},
 		{"worker only", "worker", map[string]bool{"worker": false}, false},
 		{"unknown", "unknown", map[string]bool{}, false},
 		{"unspecified", "", map[string]bool{}, true},
@@ -694,10 +694,7 @@ func TestHiringRegistryAdmission(t *testing.T) {
 					t.Fatalf("request = %+v, %v", p, err)
 				}
 			} else {
-				want := "the requested harness does not support hosted leads"
-				if tt.harness == "pi" {
-					want = "the Pi harness is retired; choose an available lead harness"
-				}
+				const want = "the requested harness does not support hosted leads"
 				if err == nil || err.Error() != want {
 					t.Fatalf("refusal = %v, want %s", err, want)
 				}

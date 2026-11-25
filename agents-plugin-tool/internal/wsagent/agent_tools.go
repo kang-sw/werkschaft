@@ -556,6 +556,9 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	switch h, t, dotted := strings.Cut(raw, "."); {
 	case dotted:
 		harness, bare = h, wsconfig.NormalizedTier(t)
+		if IsRetiredDirectTierHarness(harness) && bare != "" {
+			return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: harness %q is not registered in this daemon", tier, harness))
+		}
 	case wsconfig.NormalizedTier(raw) != "":
 		harness, bare = caller.Harness, wsconfig.NormalizedTier(raw)
 	default:

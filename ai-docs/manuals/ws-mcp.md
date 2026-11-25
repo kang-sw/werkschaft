@@ -946,23 +946,26 @@ Update the installed `ws` or `wsflow` plugin in each affected harness to
 shims load the update. A reconnect from the old session still uses its
 older launcher.
 
-The daemon keeps the `ws-pi-bridge` initialization identity and six hidden
-`pi.*` handlers through 0.52. Handler removal is scheduled for 0.53
-(`internal/mcp/pi_tools.go`). Authorized callers
-can use `pi.list` for their own recorded Pi children and `pi.transcript`
-for a child's retained transcript. These reads work without the retired
-`dashboard.pi_spawn_enabled` setting. `pi.spawn`, `pi.send`, `pi.stop`,
-and `pi.wait` return a retirement error. Current worker operations use
+The daemon keeps the `ws-pi-bridge` initialization identity and two hidden
+legacy history reads (`pi.list`, `pi.transcript`) out of `tools/list`
+(`internal/mcp/pi_tools.go`). Authorized callers can use `pi.list` for their
+own recorded Pi children and `pi.transcript` for a child's retained transcript;
+these reads work without the retired `dashboard.pi_spawn_enabled` setting. In
+0.53, the four legacy execution refusal stubs (`pi.spawn`, `pi.send`, `pi.stop`,
+`pi.wait`), their worker-token routes, direct `pi.<tier>` call acceptance, and
+the Pi-specific refusal branches in `session.request_hire` are removed
+(unknown tool / normal harness admission). Current worker operations use
 `agent.spawn`, `agent.interrupt`, `agent.list`, `agent.tiers`, and
 `mailbox.send`.
 
-A `pi.<tier>` name resolves to `werk.<tier>` and uses werk's availability
-check. When the werk slot is unset, the resolver uses a stored Pi model
-only if its ID exactly matches the OpenRouter catalog. Stored Pi records,
-profiles, and routing values remain readable. Retired Pi conversations show
-as ended. The startup sweep leaves live legacy holders to exit on their own,
-including orphan holders. Revival, wake, handoff, and new Pi execution are
-retired.
+Stored `pi` tier pointers, aliases, and bundles continue resolving to `werk` at
+runtime under werk's availability check, while directly passing a `pi.<tier>`
+token on a call surface is refused. When the werk slot is unset, the resolver
+uses a stored Pi model only if its ID exactly matches the OpenRouter catalog.
+Stored Pi records, profiles, and routing values remain readable. Retired Pi
+conversations show as ended. The startup sweep leaves live legacy holders to
+exit on their own, including orphan holders. Revival, wake, handoff, and new Pi
+execution are retired.
 
 ##### Retired Pi history
 

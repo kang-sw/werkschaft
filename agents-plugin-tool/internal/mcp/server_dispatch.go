@@ -1649,8 +1649,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		}
 		return toolTextResponse(req.ID, text+"\n", err)
 
-	// Legacy history reads and retirement refusals remain callable through 0.52.
-	case "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait":
+	// Hidden legacy Pi history reads remain callable (absent from tools/list).
+	case "pi.list", "pi.transcript":
 		return s.handlePiTool(ctx, req.ID, params.Name, params.Arguments)
 	case "compact":
 		return s.handleCompact(ctx, req.ID, params.Arguments)

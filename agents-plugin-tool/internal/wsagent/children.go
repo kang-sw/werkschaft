@@ -384,8 +384,6 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 	}
 	parent := ParentRef{Kind: ParentConversation, ReplyID: caller.record().ReplyID}
 	switch op {
-	case "spawn", "send", "stop", "wait":
-		writeAnswer(w, 0, nil, errPiRetired)
 	case "list":
 		children := r.Children(parent)
 		children = slices.DeleteFunc(children, func(st State) bool { return st.Backend != BackendPi })

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wswake"
@@ -268,9 +269,14 @@ func TestRetiredPiExecutionToolsAreHiddenAndRefuse(t *testing.T) {
 	if got := listedPiTools(f.server); len(got) != 0 {
 		t.Fatalf("legacy Pi tools are visible: %v", got)
 	}
+	for _, tool := range f.server.filteredTools() {
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "pi.") {
+			t.Fatalf("legacy Pi tool %q leaked into tools/list", name)
+		}
+	}
 	for _, tool := range []string{"pi.spawn", "pi.send", "pi.stop", "pi.wait"} {
 		raw := callToolOnce(t, f.server, 2, tool, map[string]any{"session_key": f.key})
-		if !strings.Contains(raw, "Pi harness is retired") {
+		if !strings.Contains(raw, "-32602") || !strings.Contains(raw, "unknown tool: "+tool) {
 			t.Errorf("%s = %s", tool, raw)
 		}
 	}
@@ -297,12 +303,21 @@ func piHistoryFixture(t *testing.T) (piFixture, string) {
 	return f, foreign
 }
 
+type refusingHireHost struct{ err error }
+
+func (refusingHireHost) OpenHostedSlot(string) (wsdashboard.HostedSlot, bool) { return nil, false }
+
+func (h refusingHireHost) RequestHire(string, wsdashboard.HireRequest) (wsdashboard.HireProposal, error) {
+	return wsdashboard.HireProposal{}, h.err
+}
+
 func TestRetiredPiHireRefuses(t *testing.T) {
 	f := newPiFixture(t, "", nil)
+	f.server.live.host = refusingHireHost{err: errors.New("the requested harness does not support hosted leads")}
 	raw := callToolOnce(t, f.server, 2, "session.request_hire", map[string]any{
 		"session_key": f.key, "harness": "pi", "reason": "work", "recovery_context": "context",
 	})
-	if !strings.Contains(raw, "Pi harness is retired") {
+	if !strings.Contains(raw, "does not support hosted leads") || strings.Contains(raw, "Pi harness is retired") {
 		t.Fatalf("session.request_hire = %s", raw)
 	}
 }

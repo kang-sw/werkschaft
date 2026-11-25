@@ -84,6 +84,9 @@ func isProviderTier(tier string, resolver *wsagent.TierBindingResolver) bool {
 // it, for a token that is not routed, and when the binding does not resolve.
 func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options, resolver *wsagent.TierBindingResolver) (model, effort, compat string, ok bool) {
 	tier = strings.TrimSpace(tier)
+	if h, t, dotted := strings.Cut(strings.ToLower(tier), "."); dotted && wsconfig.NormalizedTier(t) != "" && wsagent.IsRetiredDirectTierHarness(h) {
+		return "", "", "", false
+	}
 	if size := wsconfig.NormalizedTier(tier); size != "" && resolver.RequiresOwnBinding(bareHarness) {
 		tier = bareHarness + "." + size
 	}
@@ -229,6 +232,9 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 	opts := s.configOptions()
 	resolver := wsagent.NewTierBindingResolver(opts, s.agentBackends()...)
 	harness = strings.ToLower(strings.TrimSpace(harness))
+	if h, t, dotted := strings.Cut(strings.ToLower(strings.TrimSpace(tier)), "."); dotted && wsconfig.NormalizedTier(t) != "" && wsagent.IsRetiredDirectTierHarness(h) {
+		return resolveAgentTierResult{}, fmt.Errorf("tier must be small, medium, large, or xlarge, or a tier agent.spawn accepts: tier %q: harness %q is not registered in this daemon", tier, h)
+	}
 	if size := wsconfig.NormalizedTier(tier); size != "" && resolver.RequiresOwnBinding(harness) {
 		tier = harness + "." + size
 	}

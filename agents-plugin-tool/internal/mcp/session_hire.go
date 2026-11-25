@@ -22,7 +22,6 @@ type sessionHireHost interface {
 	RequestHire(string, wsdashboard.HireRequest) (wsdashboard.HireProposal, error)
 }
 
-// Retained name check: legacy hire requests (TestRetiredPiHireRefuses).
 func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[string]any) response {
 	key, _ := args["session_key"].(string)
 	key = strings.TrimSpace(key)
@@ -36,9 +35,6 @@ func (s *Server) handleSessionHire(id json.RawMessage, name string, args map[str
 		raw, _ := json.Marshal(args)
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return toolTextResponse(id, "", err)
-		}
-		if strings.EqualFold(strings.TrimSpace(request.Harness), "pi") {
-			return toolTextResponse(id, "", fmt.Errorf("the Pi harness is retired; choose an available lead harness"))
 		}
 		host, ok := s.live.host.(sessionHireHost)
 		if !ok {

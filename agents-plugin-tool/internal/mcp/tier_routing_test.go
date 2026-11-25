@@ -499,9 +499,15 @@ func TestLegacyWerkTierResolutionRequiresItsProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	setRouting(t, f.s, `{"nodes":{"legacy-role":{"*":"pi.*"}}}`)
+	if res, err := f.s.resolveAgentTier("pi.small", "claude"); err == nil || !strings.Contains(err.Error(), `harness "pi" is not registered in this daemon`) || res.Model != "" {
+		t.Errorf("direct pi.small should be refused: %+v, %v", res, err)
+	}
+	if model, _, ok := f.s.renderTierBinding("claude", "claude", "pi.small", opts); ok || model != "" {
+		t.Errorf("render direct pi.small supplied %q", model)
+	}
 	const reason = "no OpenRouter API key"
 	for _, tc := range []struct{ tier, harness string }{
-		{"pi.small", "claude"},
+		{"werk.small", "claude"},
 		{"legacy-role:small", "claude"},
 		{"small", "pi"},
 		{"small", "werk"},
