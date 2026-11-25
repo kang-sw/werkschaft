@@ -319,8 +319,9 @@
     return el;
   }
   function isRawPaste(el) {
-    if (el && el.wsc && window.WsCapsules && typeof window.WsCapsules.rawPaste === "function") {
-      return window.WsCapsules.rawPaste(el);
+    if (el && el.wsc && window.WsCapsules) {
+      if (typeof window.WsCapsules.rawPasteBypass === "function") return window.WsCapsules.rawPasteBypass();
+      if (typeof window.WsCapsules.rawPaste === "function") return window.WsCapsules.rawPaste(el);
     }
     return rawPasteFallback;
   }

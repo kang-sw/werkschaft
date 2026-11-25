@@ -15,6 +15,31 @@ func TestHistoryScriptWholeItemWindowsAndGapNavigationUnderNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	css, err := whiteboardTestAsset("page.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// In the stacked two-row layout, .gap-info and .gap-gutter sit outside the
+	// buttons in the shared DOM and route pointer clicks through to the full-width
+	// up/down buttons via pointer-events: none (synthetic DOM clicks in Node cannot
+	// observe CSS pointer-events routing; history-autofold.cjs verifies it with
+	// elementFromPoint in Chromium).
+	for _, rule := range []string{
+		`.history-gap[data-gap-dir="both"] .gap-info {`,
+		`.history-gap[data-gap-dir="both"] .gap-gutter {`,
+	} {
+		idx := strings.Index(string(css), rule)
+		if idx < 0 {
+			t.Fatalf("missing CSS rule %s", rule)
+		}
+		block := string(css)[idx:]
+		if end := strings.Index(block, "}"); end >= 0 {
+			block = block[:end]
+		}
+		if !strings.Contains(block, "pointer-events: none;") {
+			t.Fatalf("CSS rule %s must set pointer-events: none: %s", rule, block)
+		}
+	}
 	asset = []byte(strings.Replace(string(asset), "var kit = viewKit(window);", "var kit = window.historyKit;", 1))
 	// These cases drive gaps explicitly from hand-set layouts; the initial
 	// 1000px fill has its own browser test (TestHistoryInitialWindowBrowser).
@@ -59,12 +84,21 @@ click(top.querySelector('.gap-label'));
 check('single-direction row click expands visible up direction',liveIDs(h),['e8','e9','e10','e11','e25']);
 check('top remainder count and range',[top.getAttribute('data-count'),top.querySelector('.gap-range').textContent,top.querySelector('[data-load="down"]').hidden],['7','10:00–10:01',true]);
 var middle=h.querySelectorAll('.history-gap')[1];
-click(middle.querySelector('.gap-label'));
-check('bidirectional row body click does not expand either direction',liveIDs(h),['e8','e9','e10','e11','e25']);
+check('bidirectional gap sets data-gap-dir=both and keeps metadata outside up button',[middle.getAttribute('data-gap-dir'),middle.querySelector('[data-load="up"]').querySelector('.gap-info')===null,middle.querySelector('.gap-info')!==null],['both',true,true]);
 click(middle.querySelector('[data-load="down"]'));
 check('middle down admits only nearest edge',liveIDs(h),['e8','e9','e10','e11','e12','e13','e14','e25']);
 click(middle.querySelector('[data-load="up"]'));
 check('middle up admits opposite edge',liveIDs(h),['e8','e9','e10','e11','e12','e13','e14','e22','e23','e24','e25']);
+check('bidirectional gap retains count and range after partial loads',[middle.getAttribute('data-gap-dir'),middle.querySelector('.gap-label').textContent.length>0,middle.querySelector('.gap-range').textContent],['both',true,'10:00–10:01']);
+// Hiding [data-load="up"] and triggering a real refresh/syncGapAttrs flips
+// data-gap-dir from "both" to "down" while keeping .gap-label and .gap-range intact.
+var flip=board(row(1,50)+gap(rows(2,10,400),false)+row(11,50));
+window.wbHistory.init(document);
+var flipGap=flip.querySelector('.history-gap');
+check('fresh bidirectional gap starts as both',flipGap.getAttribute('data-gap-dir'),'both');
+flipGap.querySelector('[data-load="up"]').hidden=true;
+click(flipGap.querySelector('[data-load="down"]'));
+check('up-hidden refresh flips both to down and keeps metadata',[flipGap.getAttribute('data-gap-dir'),flipGap.getAttribute('data-count'),flipGap.querySelector('.gap-label').textContent,flipGap.querySelector('.gap-range').textContent],['down','6','\u22ef 6','10:00–10:01']);
 // Single-direction down-only gap row click expands downward.
 var downOnly=board(row(1,50)+'<div class="history-gap"><span class="gap-gutter"></span><span class="gap-main"><span class="gap-info"><span class="gap-label"></span><span class="gap-range"></span></span><span class="gap-actions"><button data-load="up" hidden>up</button><button data-load="down">down</button></span></span><template data-history-gap>'+rows(2,6,400)+'</template></div>');
 window.wbHistory.init(document);
@@ -136,7 +170,7 @@ var lower=h.querySelector('.history-gap');click(lower.querySelector('[data-load=
 check('loads exhaust both gaps',[liveIDs(h),h.querySelectorAll('.history-gap').length],[['e1','e2','e3','e4','e5','e6','e7','e8','e9'],0]);
 foldWatch.onChange({visible:true});foldWatch.onOut({ratio:0});
 var folded=h.querySelectorAll('.history-gap');
-check('fold returns loaded rows to rebuilt gaps',[liveIDs(h),folded.map(function(g){return g.getAttribute('data-count');}),folded.map(function(g){return g.querySelector('[data-load="down"]').hidden;})],[['e3','e9'],['2','5'],[true,false]]);
+check('fold returns loaded rows to rebuilt gaps',[liveIDs(h),folded.map(function(g){return g.getAttribute('data-count');}),folded.map(function(g){return g.getAttribute('data-gap-dir');}),folded.map(function(g){return g.querySelector('[data-load="down"]').hidden;}),folded.map(function(g){return g.querySelector('.gap-label').textContent;})],[['e3','e9'],['2','5'],['up','both'],[true,false],['\u22ef 2','\u22ef 5']]);
 click(folded[1].querySelector('[data-load="up"]'));check('rebuilt gap loads again',liveIDs(h),['e3','e6','e7','e8','e9']);
 foldWatch.onChange({visible:true});foldWatch.onOut({ratio:0});check('second fold',liveIDs(h),['e3','e9']);
 // The landed initializer still shares one capture per actual scroller.

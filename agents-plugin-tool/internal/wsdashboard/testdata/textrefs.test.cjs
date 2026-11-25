@@ -660,10 +660,12 @@ test('over-cap (>64 KiB) warns on paste and refuses send while keeping draft int
   assert.ok(f.ctext.value.includes('[Text #1]'), 'composer text kept intact after refusal');
 });
 
-test('sendMessage serializes <textref> inline and outboxBubble hydrates opaquely', () => {
+test('sendMessage serializes <textref> inline and outboxBubble hydrates opaquely alongside outer <mailbox>', () => {
   const f = buildComposerFixture();
-  const body = 'Check <wb:selection><wb:mention topic="t">x</wb:mention></wb:selection> and [Image #1] and <mailbox from="a@b">hi</mailbox> ' + 'm'.repeat(1024);
-  f.ctext.value = 'Please inspect ';
+  const hiddenMailbox = '<mailbox id="id:hidden123" dir="/work/devenv" branch="develop">Hidden</mailbox>';
+  const outerMailbox = '<mailbox id="id:outer123456" dir="/work/devenv" branch="develop" harness="claude">Lead A</mailbox>';
+  const body = `Check <wb:selection><wb:mention topic="t">x</wb:mention></wb:selection> and [Image #1] and ${hiddenMailbox} ` + 'm'.repeat(1024);
+  f.ctext.value = `Ping ${outerMailbox} and inspect `;
   f.ctext.setSelectionRange(f.ctext.value.length, f.ctext.value.length);
   f.pasteOnEditor({ text: body });
   f.ctext.value += ' and literal [Text #9]';
@@ -681,6 +683,9 @@ test('sendMessage serializes <textref> inline and outboxBubble hydrates opaquely
     assert.ok(bubble, 'optimistic held bubble rendered');
     const tag = bubble.querySelector('.txttag');
     assert.ok(tag, 'matched [Text #1] hydrated as .txttag');
+    const mbPills = bubble.querySelectorAll('.icapsule.icapsule-mailbox');
+    assert.equal(mbPills.length, 1, 'only outer <mailbox> hydrates; <mailbox> inside <textref> stays opaque');
+    assert.equal(mbPills[0].textContent, 'devenv:develop · Lead A');
     assert.equal(bubble.querySelector('.icapsule-selection'), null, 'selection inside textref stayed opaque');
     const thumb = bubble.querySelector('.thumbs .textref-thumb');
     assert.ok(thumb, '56x56 .textref-thumb rendered in .thumbs');

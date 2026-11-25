@@ -37,20 +37,23 @@ func TestTextRefSSRHeldAndDeliveredParityAndOpacity(t *testing.T) {
 		"첫째 줄 🚀",
 		"<wb:selection><wb:mention topic=\"t\" id=\"01\">quoted</wb:mention></wb:selection>",
 		"Image #1: " + imgPath,
-		"[Image #1] (03)=a [mention:t] <mailbox from=\"a@b\">hi</mailbox>",
+		"[Image #1] (03)=a [mention:t] <mailbox id=\"id:hidden123\" dir=\"/work/devenv\" branch=\"develop\">Hidden</mailbox>",
 		"</textref><script>alert(1)</script></pre></template>",
 	}, "\n")
 	block, err := wsinbox.TextRefBlock(2, opaqueBody)
 	if err != nil {
 		t.Fatalf("TextRefBlock: %v", err)
 	}
-	rawMsg := "See [Text #2] and literal [Text #9] plus [Image #1]\n\n" + block
+	outerMailbox := `<mailbox id="id:outer123456" dir="/work/devenv" branch="develop" harness="claude">Lead A</mailbox>`
+	rawMsg := "See [Text #2], " + outerMailbox + " and literal [Text #9] plus [Image #1]\n\n" + block
 
+	mbCtx := mailboxContext{Dir: "/work/devenv", Branch: "develop"}
 	// 1. Delivered userentry path
 	delivered := ConvEntry{
-		RingEntry: wslive.RingEntry{Kind: wslive.RingUser, Text: rawMsg + "\n\nImage #1: " + imgPath},
-		Key:       "u1",
-		Lang:      "en",
+		RingEntry:  wslive.RingEntry{Kind: wslive.RingUser, Text: rawMsg + "\n\nImage #1: " + imgPath},
+		Key:        "u1",
+		Lang:       "en",
+		MailboxCtx: mbCtx,
 	}
 	parseUserContent(&delivered, attachDir, "rid1")
 	if len(delivered.TextRefs) != 1 || delivered.TextRefs[0].Num != 2 || delivered.TextRefs[0].Body != opaqueBody {
@@ -82,6 +85,7 @@ func TestTextRefSSRHeldAndDeliveredParityAndOpacity(t *testing.T) {
 	}
 	held := heldList[0]
 	held.Lang = "en"
+	held.MailboxCtx = mbCtx
 	if len(held.TextRefs) != 1 || held.TextRefs[0].Num != 2 || held.TextRefs[0].Body != opaqueBody {
 		t.Fatalf("held.TextRefs = %+v, want 1 ref #2 with exact opaque body", held.TextRefs)
 	}
@@ -108,7 +112,9 @@ func TestTextRefSSRHeldAndDeliveredParityAndOpacity(t *testing.T) {
 				`&lt;script&gt;alert(1)&lt;/script&gt;`,
 				`&lt;/pre&gt;&lt;/template&gt;`,
 				`&lt;wb:selection&gt;`,
-				`&lt;mailbox from=&#34;a@b&#34;&gt;hi&lt;/mailbox&gt;`,
+				`&lt;mailbox id=&#34;id:hidden123&#34; dir=&#34;/work/devenv&#34; branch=&#34;develop&#34;&gt;Hidden&lt;/mailbox&gt;`,
+				`<span class="icapsule icapsule-mailbox"`,
+				`>Lead A</span>`,
 				`class="thumb"`,
 			} {
 				if !strings.Contains(tc.html, want) {
@@ -119,6 +125,7 @@ func TestTextRefSSRHeldAndDeliveredParityAndOpacity(t *testing.T) {
 				`<script>alert(1)</script>`,
 				`class="icapsule-selection"`,
 				`<textref id="#2"`,
+				`>Hidden</span>`,
 			} {
 				if strings.Contains(tc.html, forbid) {
 					t.Errorf("%s HTML unexpectedly contains %q\ngot: %s", tc.name, forbid, tc.html)

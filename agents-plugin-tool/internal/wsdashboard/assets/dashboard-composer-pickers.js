@@ -45,6 +45,7 @@
     // A text set whole (a restored draft, a cleared send) reaches the shell-mode
     // flag here, as it does the mention layer.
     if (typeof bangSync === "function") bangSync();
+    if (typeof scheduleComposerHighlights === "function") scheduleComposerHighlights();
     if (!chl || !window.wsMention) return;
     if (ctext.wsc) { chl.hidden = true; return; }
     // The textarea's scrollbar narrows its text; the layer narrows alike.

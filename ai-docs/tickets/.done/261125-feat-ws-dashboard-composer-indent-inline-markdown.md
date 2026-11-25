@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3d21cea2fdff9be8
 sage-review-completeness-reviewed: 3d21cea2fdff9be8
+completed: 2026-11-25
 ---
 
 # Dashboard Composer Indentation Preservation and Cosmetic Inline Markdown Highlighting
@@ -124,3 +125,21 @@ Implement the three confirmed behaviors in the dashboard composer assets:
      - Go unit test in `internal/wsinbox` for `Normalize`: operator part keeps line-1 leading spaces/tabs, strips leading blank lines (`\n` and `\r\n`) and trailing whitespace, whitespace-only operator part yields `ErrEmpty`, non-operator part still `TrimSpace`d; `Entry{Operator: true, Parts: []string{"  - a"}}.Text()` keeps the indent inside the `<ws:user>` body while a non-operator entry is unchanged (LAN viewer parts stay trimmed).
      - Existing `frontend-idle.test.js` (`:has()` and idle-frame guards), `go test ./internal/wsdashboard/...`, and `go test ./internal/wsinbox/...`.
    - Headless Playwright visual check of the composer in both dark and light themes confirming markdown highlights, `@` mentions, and capsules render cleanly with zero console errors and zero layout shift.
+
+### Result (00d1c532) - 2026-11-25
+
+- **Landed:**
+  - **Auto-indent, list/quote continuation, and smart single-line Tab (`dashboard-composer-keyboard.js`):** Non-send `Enter`/`Shift+Enter`/`Alt+Enter` (after popup, `!` bang-mode, `autoMultiline`, and `isComposing || keyCode === 229` IME guards) preserves leading indentation and continues unordered (`- `, `* `, `+ `), task (`- [ ] `), ordered (`(N+1). `), and blockquote (`(?:>[ \t]?)+`) lines via `editText()`, and exits empty-marker lines cleanly when caret is collapsed. `indentLines(false)` nests list/quote lines and leading-whitespace carets with explicit `setSelectionRange(a + 2, a + 2)` while preserving mid-prose `Tab` and `Shift+Tab`.
+  - **End-to-end line-1 leading indent preservation (`dashboard-composer-delivery.js`, `internal/wsinbox/normalize.go`, `internal/wsinbox/inbox.go`):** `inlineSend()` and the `sendMessage()` fallback replace `.trim()` with `.replace(/^(?:[ \t]*\r?\n)+|\s+$/g, "")`; Go `wsinbox.Normalize` and `Entry.bodyText()` share an unexported `trimPart(p string, operator bool)` helper preserving line-1 leading spaces/tabs for `Operator: true` while stripping leading blank lines and trailing whitespace (whitespace-only still yields `ErrEmpty`), leaving non-operator parts `strings.TrimSpace`d. Verified `ack_check.go` (`IsAnswerCheckNudge`) only matches daemon-generated non-operator nudges.
+  - **Cosmetic inline markdown & `@` mention highlighting (`dashboard-composer-highlight.js`, `dashboard-composer-pickers.js`, `dashboard-conversation.css`, `pages.go`):** Added `scanComposerMarkdown`, `buildEditorTextMap`, and `valueSpanToDomRanges` (skipping `.wsc-capsule` subtrees, zero DOM mutations, zero layout reads), registering 9 `CSS.highlights` groups (`ws-md-marker`, `ws-md-head`, `ws-md-quote`, `ws-md-em`, `ws-md-strong`, `ws-md-strike`, `ws-md-link`, `ws-md-mention`, `ws-md-code`) hooked from `paintMentions()` with rAF coalescing, IME composition pause/resume, `!` bang-mode clearing, and graceful no-op when `CSS.highlights` is absent. Added canonical `--wb-*` token `::highlight(ws-md-*)` rules in `dashboard-conversation.css` without `:has()`.
+  - **Tests (`composer-indent-highlight.test.cjs`, `composer-multiline.test.cjs`, `internal/wsinbox/inbox_test.go`):** Added Node unit tests for auto-indent/continuation/exit/IME/bang, Smart Tab, `inlineSend`/`sendMessage` indent preservation, markdown scanner, capsule-aware DOM offset mapping, rAF coalescing, and CSS token rules; updated `composer-multiline.test.cjs` for `defaultPrevented` on intercepted newlines; added `TestNormalizeAndTextPreserveOperatorLineOneIndent`.
+- **Verification:**
+  - `node --test internal/wsdashboard/testdata/composer-indent-highlight.test.cjs internal/wsdashboard/testdata/composer-multiline.test.cjs internal/wsdashboard/frontend-idle.test.js`: 29/29 pass.
+  - `node internal/wsdashboard/testdata/composer-inline.test.cjs`, `composer-outbox-resilience.test.cjs`, `capsules.test.cjs`: all pass.
+  - `go test ./internal/wsinbox/...`: pass.
+  - `go test -v -run 'TestSelectionComposer' ./internal/wsdashboard/...`: 5/6 pass (`TestSelectionComposerSendSnapshotsAndCancel` fails pre-existing on `develop` due to `4dce5d7fa` adding `convoVisible` to `pinConvo` without adding it to `selection_composer_test.go`; `TestSessionPageOffersSystemOpenToLocalViewersOnly` also fails pre-existing unrelated to this change).
+  - Headless Chromium Playwright visual check (light & dark themes): all 9 `ws-md-*` highlight groups active with expected priorities, zero console/page errors, zero DOM mutations, zero layout shift, clean `!` bang-mode clear/restore.
+  - `code-review-lite` (`id:breechinglyricistplacidlyhuntsman`): clean, no remaining findings.
+- **Decisions:**
+  - Kept `MD_HIGHLIGHT_GROUPS` on a single line in `dashboard-composer-highlight.js` so `selection_composer_test.go`'s `var` extractor parses it without syntax errors.
+  - Used `--wb-ok` mixed with `--wb-fg` for `::highlight(ws-md-em)` instead of `--wb-ph-reply` (which is a dark fill token in dark theme).

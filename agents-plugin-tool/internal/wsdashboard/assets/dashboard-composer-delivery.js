@@ -34,7 +34,7 @@
     });
     text += raw.slice(at);
     var legacy = bselections.filter(function (s) { return !usedSelections[s.key]; });
-    return { text: selectionPrefix(legacy) + text.trim(), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
+    return { text: selectionPrefix(legacy) + text.replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
   }
   function sendMessage() {
     if (restoring || draftStore && !draftLoaded) return;
@@ -48,7 +48,7 @@
     if (cmdSel) { sendCommand(); return; }
     if (inline) { sendInlineCommand(inline); return; }
     var groups = bselections.slice(), inlineData = inlineEditor() ? inlineSend() : null;
-    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().trim(), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
+    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
     var committed = {};
     groups.forEach(function (s) { s.images.forEach(function (n) { committed[n] = true; }); });
     var pics = imgs.filter(function (p) { return !mpend || (mpend.images || []).indexOf(p.n) < 0 || committed[p.n]; });
@@ -257,15 +257,35 @@
     bubbleTextRefs.forEach(function (r) { if (!backTextRefs[r.n]) backTextRefs[r.n] = r; });
     function hydrateProseInto(parent, prose) {
       if (!prose) return;
-      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length && !bubbleTextRefs.length) {
+      var wsc = window.WsCapsules;
+      var hasMailbox = prose.indexOf("<mailbox ") >= 0 && !!(wsc && typeof wsc.parseMailboxTag === "function");
+      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length && !bubbleTextRefs.length && !hasMailbox) {
         appendImageTags(parent, prose);
         return;
       }
-      var last = 0, i = 0;
+      var last = 0, i = 0, mbCtx = null;
       function isWord(ch) { return /[A-Za-z0-9_]/.test(ch); }
       while (i < prose.length) {
         var ch = prose.charAt(i);
-        if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
+        if (ch === "<") {
+          if (prose.slice(i, i + 9) === "<textref " && wsc && typeof wsc.skipTextref === "function") {
+            var tend = wsc.skipTextref(prose, i);
+            if (tend > i) { i = tend; continue; }
+          }
+          if (hasMailbox && prose.slice(i, i + 9) === "<mailbox ") {
+            var mb = wsc.parseMailboxTag(prose, i);
+            if (mb) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              if (!mbCtx) mbCtx = wsc.viewingContext(doc);
+              var mbEl = doc.createElement("span");
+              mbEl.className = "icapsule icapsule-mailbox";
+              mbEl.setAttribute("title", wsc.formatMailboxTooltip(mb.tag));
+              mbEl.textContent = wsc.formatMailboxLabel(mb.tag, mbCtx);
+              parent.appendChild(mbEl);
+              i = mb.end; last = i; continue;
+            }
+          }
+        } else if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
           var am = /^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})/.exec(prose.slice(i));
           if (am) {
             var ci = -1;

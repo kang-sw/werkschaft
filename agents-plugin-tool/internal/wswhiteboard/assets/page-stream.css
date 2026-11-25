@@ -100,6 +100,25 @@
 .gap-actions button:active { background: color-mix(in srgb, var(--wb-primary) 22%, transparent); }
 .gap-actions button:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 .gap-actions button[hidden] { display: none; }
+/* Two-sided gaps stack two full-width clickable compact rows (~25px each) with
+   individual row hover wash and zero dead click area. .gap-gutter and .gap-info
+   stay outside the buttons in the shared DOM so direction flips preserve
+   metadata, and overlay non-interactively so pointer clicks hit the buttons. */
+.history-gap[data-gap-dir="both"] { position: relative; flex-direction: column; min-height: 50px; }
+.history-gap[data-gap-dir="both"]:hover, .history-gap[data-gap-dir="both"]:focus-within { background: color-mix(in srgb, var(--wb-muted) 52%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 18%, transparent); }
+.history-gap[data-gap-dir="both"] .gap-gutter { position: absolute; inset: 0 auto 0 0; width: 40px; background: transparent; pointer-events: none; z-index: 1; }
+.history-gap[data-gap-dir="both"]:hover .gap-gutter, .history-gap[data-gap-dir="both"]:focus-within .gap-gutter { background: transparent; color: var(--wb-muted-fg); }
+.history-gap[data-gap-dir="both"] .gap-main { position: relative; flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 0; padding: 0; }
+.history-gap[data-gap-dir="both"] .gap-info { position: absolute; top: 0; right: 10px; height: calc(50% - 0.5px); max-width: calc(100% - 160px); flex-wrap: nowrap; justify-content: flex-end; overflow: hidden; white-space: nowrap; pointer-events: none; z-index: 1; }
+.history-gap[data-gap-dir="both"] .gap-label, .history-gap[data-gap-dir="both"] .gap-range { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-gap[data-gap-dir="both"] .gap-label { font-weight: 400; color: var(--wb-muted-fg); }
+.history-gap[data-gap-dir="both"] .gap-sep { flex: none; }
+.history-gap[data-gap-dir="both"] .gap-actions { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; margin-left: 0; }
+.history-gap[data-gap-dir="both"] .gap-actions button { display: flex; align-items: center; width: 100%; min-height: 25px; box-sizing: border-box; border-radius: 0; padding: 3px 10px 3px 42px; text-align: left; line-height: 19px; }
+.history-gap[data-gap-dir="both"] .gap-actions button[data-load="down"] { border-top: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent); }
+.history-gap[data-gap-dir="both"] .gap-actions button:hover { background: color-mix(in srgb, var(--wb-primary) 12%, transparent); }
+.history-gap[data-gap-dir="both"] .gap-actions button:active { background: color-mix(in srgb, var(--wb-primary) 20%, transparent); }
+.history-gap[data-gap-dir="both"] .gap-actions button:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: -2px; background: color-mix(in srgb, var(--wb-primary) 10%, transparent); }
 .wb-entry { min-width: 0; overflow-wrap: anywhere; }
 /* log rows: role badge, then body with its time inline on the first line */
 .entry-line { display: flex; align-items: baseline; gap: 8px; padding: 0 6px; border-radius: 6px; font-size: 12px; line-height: 1.6; color: var(--wb-muted-fg); }

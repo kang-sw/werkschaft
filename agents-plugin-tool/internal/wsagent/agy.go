@@ -72,7 +72,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 			"agent.spawn", "agent.interrupt", "agent.list", "playbook.read", "playbook.render",
 			"tickets.query", "tickets.move", "git.status", "git.log", "git.commit", "git.merge",
 			"worktree.acquire", "worktree.release", "note.query", "note.write",
-			"config.resolve_agent", "todo.list", "todo.check",
+			"config.resolve_agent", "todo.list", "todo.check", "compact",
 		},
 		ToolsAlwaysLoad:  true,
 		ManualHarness:    BackendAgy,

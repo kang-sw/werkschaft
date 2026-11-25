@@ -11,6 +11,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
@@ -586,5 +587,78 @@ func TestHostedAgyConnectionTunesAndReadsOwnBuckets(t *testing.T) {
 	}
 	if text := toolText(t, resp); !strings.Contains(text, `"workflow.whiteboard_enabled.agy"`) || !strings.Contains(text, `"key":"workflow.whiteboard_enabled","value":"on","scope":"global"`) {
 		t.Fatalf("config.list missing agy bucketed override:\n%s", text)
+	}
+}
+
+// TestHostedAgyRealDirectToolsListCompact verifies against the real built-in
+// agy registration that compact is directly listed on hosted agy leads in both
+// default (native) and compaction.lead_mode=ws modes, with lead_summary
+// advertised only in ws mode and the full tool definition fitting
+// toolSchemaByteCap.
+func TestHostedAgyRealDirectToolsListCompact(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		mode           string
+		wantLeadSchema bool
+	}{
+		{name: "default native", mode: wsconfig.CompactionModeNative, wantLeadSchema: false},
+		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS, wantLeadSchema: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := hostedBackendConnection(t, wsagent.BackendAgy, wsagent.BuiltinBackendRegistrations())
+			defer s.Close()
+			s.agentBackendSource = s.agents.(AgentBackendRegistry)
+			s.agents = &compactSchemaRunner{
+				AgentHost: s.agents,
+				state:     wsagent.State{ID: s.conversation, Lead: true, Backend: wsagent.BackendAgy},
+				mode:      tc.mode,
+			}
+
+			var resp struct {
+				Result struct {
+					Tools []struct {
+						Name        string         `json:"name"`
+						Description string         `json:"description"`
+						InputSchema map[string]any `json:"inputSchema"`
+						Meta        map[string]any `json:"_meta"`
+					} `json:"tools"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(callToolsList(t, s)), &resp); err != nil {
+				t.Fatal(err)
+			}
+			var found bool
+			for _, tool := range resp.Result.Tools {
+				if tool.Name == "cron" {
+					t.Errorf("agy tools/list unexpectedly listed non-direct tool cron")
+				}
+				if tool.Name != "compact" {
+					continue
+				}
+				found = true
+				if tool.Meta["antigravity/alwaysLoad"] != true {
+					t.Errorf("compact missing alwaysLoad metadata: %v", tool.Meta)
+				}
+				props, _ := tool.InputSchema["properties"].(map[string]any)
+				_, hasLeadSummary := props["lead_summary"]
+				if hasLeadSummary != tc.wantLeadSchema {
+					t.Fatalf("compact hasLeadSummary=%v, want %v", hasLeadSummary, tc.wantLeadSchema)
+				}
+				encoded, err := json.Marshal(struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					InputSchema any    `json:"inputSchema"`
+				}{tool.Name, tool.Description, tool.InputSchema})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(encoded) > toolSchemaByteCap {
+					t.Fatalf("compact schema size %d B exceeds cap %d B", len(encoded), toolSchemaByteCap)
+				}
+			}
+			if !found {
+				t.Fatalf("hosted agy tools/list missing compact")
+			}
+		})
 	}
 }

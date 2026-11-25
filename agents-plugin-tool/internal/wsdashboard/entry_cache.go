@@ -53,6 +53,9 @@ func entryCacheKey(e ConvEntry) string {
 	b.WriteString("\x00" + strconv.FormatBool(e.suppressPeerLeadBadge))
 	b.WriteString(boardNavigationKey(e))
 	b.WriteString("\x00" + strconv.FormatBool(e.MailWakeSuppressed) + "\x00" + strconv.FormatBool(e.MatchedMailWake()) + "\x00" + e.BoardNudgeState() + "\x00" + strconv.Itoa(e.MailBytes()))
+	if entryHasMailbox(e) {
+		b.WriteString("\x00mb:" + e.MailboxCtx.Dir + "\x00" + e.MailboxCtx.Branch)
+	}
 	for _, img := range e.Images {
 		b.WriteString("\x00" + img.Src)
 	}

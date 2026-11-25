@@ -357,7 +357,7 @@ func (e Entry) bodyText() string {
 		paras = append(paras, block)
 	}
 	for _, p := range e.Parts {
-		if p = strings.TrimSpace(p); p != "" {
+		if p = trimPart(p, e.Operator); p != "" {
 			paras = append(paras, p)
 		}
 	}

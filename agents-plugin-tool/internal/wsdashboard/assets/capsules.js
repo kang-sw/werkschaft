@@ -1,8 +1,153 @@
 /* Atomic client-local references over an existing textarea's plain-string contract. */
 (function () {
   "use strict";
-  var doc = document, topicPickers = [];
-  var kinds = { skill: true, topic: true, answer: true, "topic-note": true, mention: true, ticket: true, pick: true, console: true, panel: true, selection: true };
+  var doc = document, topicPickers = [], rawPasteArmed = false, rawPasteActive = false;
+  var kinds = { skill: true, topic: true, answer: true, "topic-note": true, mention: true, ticket: true, pick: true, console: true, panel: true, selection: true, mailbox: true };
+  function rawPasteBypass() { return rawPasteActive || rawPasteArmed; }
+  function isRawPasteChord(e) {
+    return !!(e && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === "v" || e.key === "V" || e.code === "KeyV"));
+  }
+  function isRawPasteRelease(e) {
+    return !!(e && (e.key === "v" || e.key === "V" || e.code === "KeyV" || e.key === "Shift" || e.key === "Control" || e.key === "Meta"));
+  }
+  function unescapeMailboxXml(s, allowQuot) {
+    if (!s || s.indexOf("&") < 0) return s;
+    return s.replace(allowQuot ? /&(amp|lt|gt|quot);/g : /&(amp|lt|gt);/g, function (m, name) {
+      return name === "amp" ? "&" : name === "lt" ? "<" : name === "gt" ? ">" : '"';
+    });
+  }
+  function skipTextref(s, start) {
+    if (!s || s.slice(start, start + 14) !== '<textref id="#') return -1;
+    var m = /^<textref id="#([1-9][0-9]*)" bytes="([0-9]+)">/.exec(s.slice(start));
+    if (!m) return -1;
+    var targetBytes = Number(m[2]);
+    if (!Number.isFinite(targetBytes) || targetBytes < 0) return -1;
+    var pos = start + m[0].length, bytes = 0;
+    while (bytes < targetBytes && pos < s.length) {
+      var code = s.charCodeAt(pos);
+      if (code <= 0x7f) { bytes += 1; pos += 1; }
+      else if (code <= 0x7ff) { bytes += 2; pos += 1; }
+      else if (code >= 0xd800 && code <= 0xdbff && pos + 1 < s.length && s.charCodeAt(pos + 1) >= 0xdc00 && s.charCodeAt(pos + 1) <= 0xdfff) { bytes += 4; pos += 2; }
+      else { bytes += 3; pos += 1; }
+    }
+    if (bytes !== targetBytes || s.slice(pos, pos + 10) !== "</textref>") return -1;
+    return pos + 10;
+  }
+  function parseMailboxTag(s, start) {
+    start = start || 0;
+    if (!s || s.slice(start, start + 9) !== "<mailbox ") return null;
+    var p = start + 9, seen = {}, tag = { id: "", dir: "", root: "", branch: "", harness: "", label: "" };
+    while (p < s.length) {
+      while (p < s.length && s.charAt(p) === " ") p++;
+      if (p >= s.length) return null;
+      if (s.slice(p, p + 2) === "/>") {
+        if (!tag.id) return null;
+        return { start: start, end: p + 2, raw: s.slice(start, p + 2), tag: tag };
+      }
+      if (s.charAt(p) === ">") {
+        if (!tag.id) return null;
+        var bodyStart = p + 1, closeAt = s.indexOf("</mailbox>", bodyStart);
+        if (closeAt < 0) return null;
+        var rawLabel = s.slice(bodyStart, closeAt);
+        if (/[<>\r\n]/.test(rawLabel)) return null;
+        tag.label = unescapeMailboxXml(rawLabel, false);
+        var end = closeAt + 10;
+        return { start: start, end: end, raw: s.slice(start, end), tag: tag };
+      }
+      var nm = /^[a-z][a-z0-9_-]*/.exec(s.slice(p));
+      if (!nm) return null;
+      var name = nm[0];
+      p += name.length;
+      if (seen[name] || s.slice(p, p + 2) !== '="') return null;
+      seen[name] = true;
+      p += 2;
+      var valStart = p;
+      while (p < s.length && s.charAt(p) !== '"') {
+        var ch = s.charAt(p);
+        if (ch === "<" || ch === ">" || ch === "\r" || ch === "\n") return null;
+        p++;
+      }
+      if (p >= s.length || s.charAt(p) !== '"') return null;
+      var val = unescapeMailboxXml(s.slice(valStart, p), true);
+      p++;
+      if (name === "id" || name === "dir" || name === "root" || name === "branch" || name === "harness") tag[name] = val;
+      if (p < s.length && s.charAt(p) !== " " && s.charAt(p) !== ">" && s.slice(p, p + 2) !== "/>") return null;
+    }
+    return null;
+  }
+  function scanMailboxTags(s) {
+    var out = [];
+    if (!s || s.indexOf("<mailbox ") < 0) return out;
+    for (var i = 0; i < s.length;) {
+      if (s.charAt(i) === "<") {
+        if (s.slice(i, i + 9) === "<textref ") {
+          var tend = skipTextref(s, i);
+          if (tend > i) { i = tend; continue; }
+        }
+        if (s.slice(i, i + 9) === "<mailbox ") {
+          var m = parseMailboxTag(s, i);
+          if (m) { out.push(m); i = m.end; continue; }
+        }
+      }
+      i++;
+    }
+    return out;
+  }
+  function normalizeMailboxDir(dir) {
+    var s = String(dir || "").replace(/\\/g, "/");
+    while (s.length > 1 && s.charAt(s.length - 1) === "/") {
+      if (s.length === 3 && /^[A-Za-z]:\/$/.test(s)) break;
+      s = s.slice(0, -1);
+    }
+    if (/^[A-Za-z]:/.test(s)) s = s.toLowerCase();
+    return s;
+  }
+  function mailboxDirBase(dir) {
+    var s = String(dir || "").replace(/\\/g, "/");
+    while (s.length > 1 && s.charAt(s.length - 1) === "/") s = s.slice(0, -1);
+    var idx = s.lastIndexOf("/");
+    return idx >= 0 && idx + 1 < s.length ? s.slice(idx + 1) : s;
+  }
+  function shortMailboxId(id) {
+    id = String(id || "");
+    var hasPrefix = id.indexOf("id:") === 0;
+    var rest = hasPrefix ? id.slice(3) : id;
+    var runes = Array.from(rest);
+    var short = runes.length > 6 ? runes.slice(0, 6).join("") : rest;
+    return hasPrefix ? "id:" + short : short;
+  }
+  function formatMailboxLabel(tag, ctx) {
+    ctx = ctx || {};
+    var sameDir = !tag.dir || (!!ctx.dir && normalizeMailboxDir(tag.dir) === normalizeMailboxDir(ctx.dir));
+    var sameBranch = (tag.branch || "") === (ctx.branch || "");
+    var prefix = "";
+    if (!sameDir) {
+      var base = mailboxDirBase(tag.dir);
+      prefix = tag.branch ? base + ":" + tag.branch : base;
+    } else if (!sameBranch && tag.branch) {
+      prefix = tag.branch;
+    }
+    if (prefix && tag.label) return prefix + " · " + tag.label;
+    if (prefix) return prefix;
+    if (tag.label) return tag.label;
+    return shortMailboxId(tag.id);
+  }
+  function formatMailboxTooltip(tag) {
+    var lines = ["id: " + (tag.id || "")];
+    if (tag.dir) lines.push("dir: " + tag.dir);
+    if (tag.root) lines.push("root: " + tag.root);
+    if (tag.branch) lines.push("branch: " + tag.branch);
+    if (tag.harness) lines.push("harness: " + tag.harness);
+    return lines.join("\n");
+  }
+  function viewingContext(root) {
+    root = root || doc;
+    var btn = root && root.querySelector ? root.querySelector("#r-head .snm[data-mailbox-open], .snm[data-mailbox-open]") : null;
+    var open = btn && btn.getAttribute("data-mailbox-open");
+    if (!open) return { dir: "", branch: "" };
+    var parsed = parseMailboxTag(open + "/>", 0);
+    return parsed ? { dir: parsed.tag.dir, branch: parsed.tag.branch } : { dir: "", branch: "" };
+  }
   if (doc.addEventListener) doc.addEventListener("selectionchange", function () {
     var editor = doc.activeElement;
     if (editor && editor.wscField && editor.wscField.wsc) editor.wscField.wsc.rememberCaret();
@@ -84,10 +229,6 @@
   function attach(field) {
     if (!field || field.wsc) return field && field.wsc;
     var editor = doc.createElement("div"), text = field.value, ranges = [], selection = [0, 0], seenCaret = false, composing = false, nextKey = 0;
-    var rawPasteArmed = false, rawPasteActive = false;
-    function isRawPasteKey(e) {
-      return !!((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.code === "KeyV" || String(e.key || "").toLowerCase() === "v"));
-    }
     var nativeValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
     // Board snapshots clone DOM, not expando properties or event handlers.
     if (field.nextElementSibling && field.nextElementSibling.classList.contains("wsc-editor")) field.nextElementSibling.remove();
@@ -188,6 +329,7 @@
       chip.setAttribute("data-wsc-kind", kind); chip.setAttribute("data-wsc-id", id); chip.setAttribute("data-wsc-label", label);
       if (kind !== "skill" && kind !== "topic") {
         chip.setAttribute("data-wsc-key", key); chip.setAttribute("data-wsc-payload", JSON.stringify(payload));
+        if (payload && typeof payload.title === "string" && payload.title) chip.setAttribute("title", payload.title);
       }
       chip.textContent = (kind === "skill" ? "/" : kind === "topic" ? "#" : "") + label;
       return chip;
@@ -295,10 +437,10 @@
         if (e.defaultPrevented) return;
         if (type === "keydown") {
           if (!composing && !e.isComposing && e.keyCode !== 229) {
-            if (isRawPasteKey(e)) rawPasteArmed = true;
+            if (isRawPasteChord(e)) rawPasteArmed = true;
             else if (e.key !== "Shift" && e.key !== "Control" && e.key !== "Meta") rawPasteArmed = false;
           }
-        } else if (!e.shiftKey || !(e.ctrlKey || e.metaKey) || e.code === "KeyV" || String(e.key || "").toLowerCase() === "v") {
+        } else if (rawPasteArmed && isRawPasteRelease(e)) {
           rawPasteArmed = false;
         }
         var forwarded = new KeyboardEvent(type, { key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: composing || e.isComposing, bubbles: true, cancelable: true });
@@ -321,16 +463,16 @@
     ["focus", "blur", "click", "mouseup", "scroll"].forEach(function (type) { editor.addEventListener(type, function () { if (type === "focus") seenCaret = true; if (type === "blur") { rawPasteArmed = false; rawPasteActive = false; } offsets(); field.dispatchEvent(new Event(type)); }); });
     editor.addEventListener("paste", function (e) {
       e.stopPropagation();
-      var raw = rawPasteArmed;
+      var bypass = rawPasteArmed;
       rawPasteArmed = false;
-      rawPasteActive = raw;
+      rawPasteActive = bypass;
       try {
         var forward = new Event("paste", { bubbles: true, cancelable: true });
         Object.defineProperty(forward, "clipboardData", { value: e.clipboardData }); field.dispatchEvent(forward);
         e.preventDefault();
         if (forward.defaultPrevented || !e.clipboardData) return;
         var rich = null;
-        if (!raw) {
+        if (!bypass) {
           try { rich = JSON.parse(e.clipboardData.getData("application/x-wsc-capsules+json")); } catch (_) { rich = null; }
         }
         if (rich && typeof rich.text === "string" && Array.isArray(rich.ranges) && valid(rich.text, rich.ranges).length === rich.ranges.length) {
@@ -338,7 +480,32 @@
           replace(rich.text, sel[0], sel[1]);
           ranges = valid(text, ranges.concat(rich.ranges.map(function (r) { return Object.assign({}, r, { start: r.start + start, end: r.end + start }); })).sort(function (a, b) { return a.start - b.start; }));
           render(); notify(before, "paste");
-        } else insertPlain(e.clipboardData.getData("text/plain"));
+        } else {
+          var plain = e.clipboardData.getData("text/plain");
+          var found = !bypass && plain && plain.indexOf("<mailbox ") >= 0 ? scanMailboxTags(plain) : [];
+          if (found.length) {
+            var mSel = expanded.apply(null, offsets()), mBefore = valid(text, ranges), mStart = mSel[0];
+            var ctx = viewingContext(doc);
+            var added = found.map(function (m) {
+              var mKey;
+              do { mKey = "mailbox:" + (++nextKey); } while (ranges.some(function (r) { return r.kind === "mailbox" && r.key === mKey; }));
+              return {
+                start: mStart + m.start,
+                end: mStart + m.end,
+                kind: "mailbox",
+                id: mKey,
+                key: mKey,
+                label: formatMailboxLabel(m.tag, ctx),
+                payload: { anchor: m.raw, title: formatMailboxTooltip(m.tag), mailbox: m.tag }
+              };
+            });
+            spliceText(plain, mSel[0], mSel[1]);
+            ranges = valid(text, ranges.concat(added).sort(function (a, b) { return a.start - b.start; }));
+            render(); notify(mBefore, "paste");
+          } else {
+            insertPlain(plain);
+          }
+        }
       } finally {
         rawPasteActive = false;
       }
@@ -405,6 +572,8 @@
           if (matches.length === 1) {
             var chip = matches[0];
             chip.setAttribute("data-wsc-payload", JSON.stringify(mark.payload));
+            if (mark.payload && typeof mark.payload.title === "string" && mark.payload.title) chip.setAttribute("title", mark.payload.title);
+            else chip.removeAttribute("title");
             if (old.label !== label || chip.getAttribute("data-wsc-label") !== label) {
               chip.setAttribute("data-wsc-label", label);
               chip.textContent = (kind === "skill" ? "/" : kind === "topic" ? "#" : "") + label;
@@ -460,6 +629,12 @@
     field.addEventListener("keydown", function (e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); });
     return popup;
   }
-  function rawPaste(field) { return !!(field && field.wsc && typeof field.wsc.rawPaste === "function" && field.wsc.rawPaste()); }
-  window.WsCapsules = { attach: attach, topicPicker: topicPicker, sweep: sweep, token: token, rank: rank, valid: valid, shifted: shifted, stripMarkers: stripMarkers, command: command, focused: focused, fieldFor: fieldFor, rawPaste: rawPaste };
+  function rawPaste(field) { return field ? !!(field.wsc && rawPasteBypass()) : rawPasteBypass(); }
+  window.WsCapsules = {
+    attach: attach, topicPicker: topicPicker, sweep: sweep, token: token, rank: rank,
+    valid: valid, shifted: shifted, stripMarkers: stripMarkers, command: command,
+    focused: focused, fieldFor: fieldFor, rawPasteBypass: rawPasteBypass, rawPaste: rawPaste,
+    parseMailboxTag: parseMailboxTag, scanMailboxTags: scanMailboxTags, skipTextref: skipTextref,
+    formatMailboxLabel: formatMailboxLabel, formatMailboxTooltip: formatMailboxTooltip, viewingContext: viewingContext
+  };
 })();

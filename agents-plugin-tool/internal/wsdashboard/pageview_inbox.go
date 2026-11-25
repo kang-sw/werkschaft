@@ -56,6 +56,7 @@ type HeldView struct {
 	// user-stop notice admitted through wsinbox.AdmitCompletion.
 	ExecNotice *ExecNoticeView
 	Lang       string
+	MailboxCtx mailboxContext
 }
 
 // TextRefView is one inline <textref> attachment extracted from a user message.
@@ -111,7 +112,7 @@ func (h HeldView) AllImages() []AttachmentView {
 // Hydrated projects inline anchor-matched capsules inside Parts/Content and
 // deduplicates matched items from the header chip strip.
 func (h HeldView) Hydrated() hydratedUserMessage {
-	return hydrateUserMessage(h.Lang, h.Answers(), h.Mentions, h.CloseRequests, h.Picks, h.Consoles, h.TextRefs, h.BoardTargets, "", h.Parts, h.Content)
+	return hydrateUserMessage(h.Lang, h.MailboxCtx, h.Answers(), h.Mentions, h.CloseRequests, h.Picks, h.Consoles, h.TextRefs, h.BoardTargets, "", h.Parts, h.Content)
 }
 
 // AllImages returns every attached image for the entry, combining
@@ -123,7 +124,7 @@ func (e ConvEntry) AllImages() []AttachmentView {
 // Hydrated projects inline anchor-matched capsules inside Text/Content and
 // deduplicates matched items from the header chip strip.
 func (e ConvEntry) Hydrated() hydratedUserMessage {
-	return hydrateUserMessage(e.Lang, e.Answers, e.Mentions, e.CloseRequests, e.Picks, e.Consoles, e.TextRefs, e.BoardTargets, e.Text, nil, e.Content)
+	return hydrateUserMessage(e.Lang, e.MailboxCtx, e.Answers, e.Mentions, e.CloseRequests, e.Picks, e.Consoles, e.TextRefs, e.BoardTargets, e.Text, nil, e.Content)
 }
 
 func collectBubbleImages(content []SelectionContentPart, loose []AttachmentView) []AttachmentView {
@@ -182,20 +183,21 @@ func singleLinePreview(s string) string {
 }
 
 type inlineHydrator struct {
-	lang     string
-	targets  map[string]string
-	answers  []conversationChip
-	mentions []conversationChip
-	picks    []wsinbox.Pick
-	consoles []wsinbox.Console
-	textRefs map[int]TextRefView
-	usedAns  []bool
-	usedMen  []bool
-	usedPick []bool
-	usedCon  []bool
+	lang       string
+	mailboxCtx mailboxContext
+	targets    map[string]string
+	answers    []conversationChip
+	mentions   []conversationChip
+	picks      []wsinbox.Pick
+	consoles   []wsinbox.Console
+	textRefs   map[int]TextRefView
+	usedAns    []bool
+	usedMen    []bool
+	usedPick   []bool
+	usedCon    []bool
 }
 
-func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string) *inlineHydrator {
+func newInlineHydrator(lang string, mailboxCtx mailboxContext, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string) *inlineHydrator {
 	ac := answerChips(answers, targets)
 	mc := mentionChips(mentions, targets)
 	var trMap map[int]TextRefView
@@ -208,17 +210,18 @@ func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsi
 		}
 	}
 	return &inlineHydrator{
-		lang:     lang,
-		targets:  targets,
-		answers:  ac,
-		mentions: mc,
-		picks:    picks,
-		consoles: consoles,
-		textRefs: trMap,
-		usedAns:  make([]bool, len(ac)),
-		usedMen:  make([]bool, len(mc)),
-		usedPick: make([]bool, len(picks)),
-		usedCon:  make([]bool, len(consoles)),
+		lang:       lang,
+		mailboxCtx: mailboxCtx,
+		targets:    targets,
+		answers:    ac,
+		mentions:   mc,
+		picks:      picks,
+		consoles:   consoles,
+		textRefs:   trMap,
+		usedAns:    make([]bool, len(ac)),
+		usedMen:    make([]bool, len(mc)),
+		usedPick:   make([]bool, len(picks)),
+		usedCon:    make([]bool, len(consoles)),
 	}
 }
 
@@ -347,13 +350,30 @@ func (h *inlineHydrator) renderConsole(c wsinbox.Console) string {
 }
 
 func (h *inlineHydrator) hydrateProse(prose string) template.HTML {
-	if prose == "" || !h.hasCandidates() {
+	hasMailbox := strings.Contains(prose, "<mailbox ")
+	if prose == "" || (!h.hasCandidates() && !hasMailbox) {
 		return markedText(h.lang, prose)
 	}
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(prose); {
 		switch prose[i] {
+		case '<':
+			if strings.HasPrefix(prose[i:], "<textref ") {
+				if end, ok := skipTextref(prose, i); ok {
+					i = end
+					continue
+				}
+			}
+			if hasMailbox && strings.HasPrefix(prose[i:], "<mailbox ") {
+				if tag, end, ok := parseMailboxTag(prose, i); ok {
+					b.WriteString(string(markedText(h.lang, prose[last:i])))
+					b.WriteString(renderMailboxCapsule(tag, h.mailboxCtx))
+					i = end
+					last = i
+					continue
+				}
+			}
 		case '(':
 			if i == 0 || !isAnchorWordByte(prose[i-1]) {
 				if m := inlineAnswerAnchorRe.FindStringSubmatchIndex(prose[i:]); m != nil {
@@ -611,8 +631,8 @@ func renderSelectionInlineHTML(lang string, s *SelectionView, targets map[string
 	return template.HTML(b.String())
 }
 
-func hydrateUserMessage(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, closeReqs []wsinbox.CloseRequest, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string, text string, parts []string, content []SelectionContentPart) hydratedUserMessage {
-	h := newInlineHydrator(lang, answers, mentions, picks, consoles, textRefs, targets)
+func hydrateUserMessage(lang string, mailboxCtx mailboxContext, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, closeReqs []wsinbox.CloseRequest, picks []wsinbox.Pick, consoles []wsinbox.Console, textRefs []TextRefView, targets map[string]string, text string, parts []string, content []SelectionContentPart) hydratedUserMessage {
+	h := newInlineHydrator(lang, mailboxCtx, answers, mentions, picks, consoles, textRefs, targets)
 	out := hydratedUserMessage{CloseRequests: closeReqs}
 	if len(content) > 0 {
 		out.Grouped = true

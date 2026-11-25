@@ -6,6 +6,7 @@ related:
   261125-feat-composer-long-paste-textref: "parallel sibling; shares the composer paste/keydown pipeline, the Ctrl+Shift+V raw-bypass flag, and #convo hydration entry points; no landing order required"
 sage-review-design-reviewed: e40f1bec4212c861
 sage-review-completeness-reviewed: e40f1bec4212c861
+completed: 2026-11-25
 ---
 
 # Composer Mailbox ID (`<mailbox/>`) Paste Badge Rendering
@@ -91,3 +92,16 @@ Pasting that clipboard string into the composer currently inserts the raw XML te
 - Register a `mailbox` capsule kind in `WsCapsules` (`capsules.js`, `dashboard-conversation.css`) so pasting mailbox references converts recognized tags into inline badges backed by the original XML text in `#ctext.value`, computing the dynamic label relative to the current session's `dir`/`branch` per `(1611)=a` and honoring `Ctrl+Shift+V` raw XML bypass.
 - Add matching `<mailbox>` badge hydration in `pageview_inbox.go` and `dashboard-composer-delivery.js` for held and delivered `#convo` user bubbles (`(1610)=a`), using the viewing session's `dir`/`branch` context.
 - Verify with local `node --test` tests (self-closing, labeled, escaped chars, same/diff `dir`/`branch` dynamic rendering, `Ctrl+Shift+V` bypass, mixed prose + multiple tags, malformed tag passthrough, draft save/restore, CSS `:has()` guard) and remote `w5090` `go test -race ./internal/wsdashboard`.
+
+### Result (5629a1d) - 2026-11-25
+
+- Added strict `<mailbox .../>` and `<mailbox ...>...</mailbox>` XML parsing (single-pass unescaping, malformed-tag passthrough, `<textref id="#n" bytes="N">...</textref>` opacity), dynamic relative label formatting (`formatMailboxLabel`), and full metadata tooltips (`formatMailboxTooltip`) in lockstep across JS (`agents-plugin-tool/internal/wsdashboard/assets/capsules.js`) and Go (`agents-plugin-tool/internal/wsdashboard/mailbox_badge.go`).
+- Registered the `mailbox` capsule kind in `WsCapsules` (`capsules.js`, `dashboard-conversation.css`) backed by verbatim T0 `<mailbox ...>` XML in `#ctext.value`, with a single shared `WsCapsules.rawPasteBypass()` accessor armed on `Ctrl+Shift+V` / `Cmd+Shift+V` and cleared on `keyup`, `blur`, and paste completion.
+- Added matching `#convo` mailbox badge hydration in Go SSR (`pageview_inbox.go`, `page_regions.go`, `page_reader.go`, `page_history_routes.go`, `entry_cache.go`) for held, delivered, and paginated `/history` bubbles, and in client `outboxBubble` (`dashboard-composer-delivery.js`).
+- Verified locally on macOS with `node --test agents-plugin-tool/internal/wsdashboard/mailbox-badge.test.js agents-plugin-tool/internal/wsdashboard/frontend-idle.test.js` (14/14 pass), `node agents-plugin-tool/internal/wsdashboard/testdata/capsules.test.cjs`, `node agents-plugin-tool/internal/wsdashboard/testdata/composer-inline.test.cjs`, and `go vet ./internal/wsdashboard/... && go test -race -run "TestMailbox|TestInlineCapsules|TestOutboxBubbleInlineHydrationParityNode|TestCapsules|TestEntryCache" ./internal/wsdashboard/...` (all pass).
+- Completed one-pass `code-review-lite` (`e31d2fc..9195b26`): fixed the 1 Important finding (`handleHistory` viewing `dir`/`branch` plumbing) and the 1 Minor test coverage note (`blur` disarming and rich-paste raw bypass) in `5629a1d`.
+
+
+## Resolution (2026-11-25)
+
+Implemented composer mailbox inline badges, dynamic dir/branch labels, hover tooltips, Ctrl+Shift+V raw bypass, and matching Go SSR + client #convo hydration in 9195b26 and 5629a1d.

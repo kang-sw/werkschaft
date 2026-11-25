@@ -178,7 +178,10 @@ hudPayload = {
   ]
 };
 const d1 = node('details'); d1.setAttribute('data-key', 'agent-a1');
-const s1 = node('summary', 'ahead'); s1.appendChild(node('span', 'acap', 'waiting on beta')); d1.appendChild(s1);
+const s1 = node('summary', 'ahead'); s1.appendChild(node('span', 'acap', 'waiting on beta'));
+const astat1 = node('span', 'astat'); astat1.appendChild(node('span', 'atps', '64 t/s')); s1.appendChild(astat1);
+const am1 = node('span', 'am'); am1.appendChild(node('span', 'ok', '\u2713 9')); am1.appendChild(node('span', 'f', '\u2717 1')); s1.appendChild(am1);
+d1.appendChild(s1);
 const liveOl = node('ol', 'brows live'); const br = node('li', 'brow live');
 br.appendChild(node('span', 'tool', 'Read')); br.appendChild(node('span', 'args', 'foo.go')); liveOl.appendChild(br);
 const agRow = node('div', 'agent running'); agRow.appendChild(d1); agRow.appendChild(liveOl);
@@ -244,10 +247,15 @@ assert.equal(buttons[1].querySelector('.hud-badge').textContent, '!');
 assert.equal(buttons[3].querySelector('.hud-badge').textContent, '\u00d7');
 assert.equal(buttons[2].parentNode.querySelector('.hud-overflow').textContent, '+2');
 
-// Own-row task fallback from #r-tree and tooltip display
+// Own-row task & telemetry fallback from #r-tree, #convo-bounded width, and tooltip display
 hudRoots.listeners.mouseover[0]({ target: buttons[0] });
 assert.equal(tooltip.hidden, false);
+assert.equal(tooltip.style.width, '624px', 'agent tooltip fills #convo width minus 16px padding');
+assert.equal(tooltip.style.left, '8px', 'full-width agent tooltip aligns cleanly inside #convo');
 assert.equal(tooltip.querySelector('.tt-task').textContent, 'Read foo.go');
+assert.equal(tooltip.querySelector('.tt-ok').textContent, '\u2713 9', 'own-row done count read from #r-tree');
+assert.equal(tooltip.querySelector('.tt-fail').textContent, '\u2717 1', 'own-row failed count read from #r-tree');
+assert.equal(tooltip.querySelector('.tt-tps').textContent, '64 t/s', 'own-row output rate read from #r-tree');
 assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details');
 
 // Context row: A normal bar, B past the ws soft threshold, C window unknown, none unknown.
@@ -297,7 +305,8 @@ Object.assign(hudPayload.roots[0], { compacting: true, compactions: 2, compactOr
 ctx.agSwapped();
 assert.equal(cmpRow().querySelector('.d-now').textContent, 'js.hud.compacting', 'D: chip while compacting');
 assert.equal(cmpRow().querySelector('.cnt').textContent, 'js.hud.compactions:2 \u00b7 js.hud.compactorigin.auto');
-assert.equal(tooltip.children.indexOf(cmpRow()), tooltip.children.indexOf(ctxRow()) + 1, 'line sits right under the context row');
+assert.equal(cmpRow().parentNode, ctxRow(), 'compaction folds inline inside .tt-ctx when context bar is shown');
+assert.equal(cmpRow().classList.contains('tt-cmp-inline'), true);
 Object.assign(hudPayload.roots[0], { compacting: false, compactions: 3, compactOrigin: 'manual' });
 ctx.agSwapped();
 assert.equal(cmpRow().querySelector('.d-now'), null, 'E: no chip when not compacting');
@@ -315,11 +324,22 @@ assert.equal(cmpRow().querySelector('.cnt'), null);
 delete hudPayload.roots[0].compacting; delete hudPayload.roots[0].compactions; delete hudPayload.roots[0].compactOrigin;
 ctx.agSwapped();
 assert.equal(cmpRow(), null, 'absent fields drop the line in place');
-hudRoots.listeners.mouseout[0]({ target: buttons[0], relatedTarget: null });
+
+// Enriched branch & dir metadata on linked node
+Object.assign(hudPayload.roots[0].children[0], { branch: 'impl/develop/wide-tip', dir: 'wt-wide', done: 4, outputTps: 52 });
+ctx.agSwapped();
+hudRoots.listeners.mouseover[0]({ target: buttons[1] });
+assert.equal(tooltip.querySelector('.tt-br').textContent, 'impl/develop/wide-tip', 'branch chip renders in .tt-meta');
+assert.equal(tooltip.querySelector('.tt-ok').textContent, '\u2713 4');
+assert.equal(tooltip.querySelector('.tt-tps').textContent, '52 t/s');
+assert.equal(tooltip.querySelector('.tt-hint-main').textContent, 'js.hud.hint.link:r2');
+assert.equal(tooltip.querySelector('.tt-hint-meta').textContent, 'wt-wide', 'worktree dir renders right-aligned in .tt-hint');
+hudRoots.listeners.mouseout[0]({ target: buttons[1], relatedTarget: null });
 
 // .hud-folded hover shows tooltip, updates in place when count changes, and click opens #agpop
 hudRoots.listeners.mouseover[0]({ target: foldedBtn });
 assert.equal(tooltip.hidden, false);
+assert.equal(tooltip.style.width, '', 'folded tooltip stays compact instead of stretching across #convo');
 assert.equal(tooltip.querySelector('.tt-title').textContent, 'js.hud.folded.title:3');
 assert.equal(tooltip.querySelector('.tt-pill').textContent, '+3');
 assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details');

@@ -59,6 +59,11 @@ func (d *Daemon) handleHistory(w http.ResponseWriter, r *http.Request, replyID s
 		var a *dashboardAssets
 		if a, err = loadDashboardAssets(); err == nil {
 			cv.Lang = lang
+			if d.git != nil && cv.MailboxCtx.Dir != "" {
+				if g := d.git.badge(cv.MailboxCtx.Dir); g != nil && !g.Detached {
+					cv.MailboxCtx.Branch = g.Branch
+				}
+			}
 			err = renderEntries(a, d.entries, replyID, &cv)
 		}
 	}

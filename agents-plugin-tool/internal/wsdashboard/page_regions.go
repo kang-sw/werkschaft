@@ -123,8 +123,10 @@ func renderSessionRegions(view SessionView, cache *entryCache) (regionSet, error
 		return nil, err
 	}
 	view.Conversation.Lang = view.Lang
+	view.Conversation.MailboxCtx = view.viewingMailboxContext()
 	for i := range view.Conversation.Held {
 		view.Conversation.Held[i].Lang = view.Lang
+		view.Conversation.Held[i].MailboxCtx = view.Conversation.MailboxCtx
 	}
 	if err := renderEntries(a, cache, view.ReplyID, &view.Conversation); err != nil {
 		return nil, err
@@ -151,11 +153,13 @@ func renderEntries(a *dashboardAssets, cache *entryCache, replyID string, cv *Co
 	for i := range cv.Entries {
 		e := cv.Entries[i]
 		e.Lang = cv.Lang
+		e.MailboxCtx = cv.MailboxCtx
 		if len(e.UserBlocks) > 0 {
 			blocks := make([]ConvEntry, len(e.UserBlocks))
 			copy(blocks, e.UserBlocks)
 			for j := range blocks {
 				blocks[j].Lang = cv.Lang
+				blocks[j].MailboxCtx = cv.MailboxCtx
 			}
 			e.UserBlocks = blocks
 		}

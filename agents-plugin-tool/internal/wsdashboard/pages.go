@@ -47,6 +47,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-images.js",
 	"dashboard-composer-textrefs.js",
 	"dashboard-composer-pickers.js",
+	"dashboard-composer-highlight.js",
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
 	"dashboard-composer-exec.js",

@@ -158,6 +158,93 @@ async function band(b, scheme) {
   return fail;
 }
 
+// A two-sided gap ([data-gap-dir="both"]) renders two full-width stacked
+// compact rows (~25px each, ~50px total) with individual row hover wash,
+// pointer-events: none overlays on .gap-info and .gap-gutter so clicks over
+// the label/range/gutter route to the underlying up/down buttons, and zero
+// overflow even on narrow split panes.
+async function bothLayout(b, scheme, width) {
+  const p = await open(b, false, scheme, width);
+  // Materialize an early entry inside topic a's initial gap so split() creates
+  // a genuine bidirectional middle gap ([data-gap-dir="both"]).
+  const hasBoth = await p.evaluate(() => {
+    window.wbHistory.loadTarget(document, 'e10');
+    return !!document.querySelector('.topic[data-topic="a"] .history-gap[data-gap-dir="both"]');
+  });
+  await p.waitForTimeout(300);
+  const fail = [];
+  if (!hasBoth) {
+    await p.close();
+    return [`both ${scheme} ${width}: failed to create bidirectional gap`];
+  }
+  const gap = p.locator('.topic[data-topic="a"] .history-gap[data-gap-dir="both"]').first();
+  await gap.scrollIntoViewIfNeeded();
+  await p.waitForTimeout(150);
+  const m = await gap.evaluate((g) => {
+    const gr = g.getBoundingClientRect();
+    const up = g.querySelector('[data-load="up"]');
+    const down = g.querySelector('[data-load="down"]');
+    const ur = up.getBoundingClientRect();
+    const dr = down.getBoundingClientRect();
+    const label = g.querySelector('.gap-label');
+    const range = g.querySelector('.gap-range');
+    const lr = label.getBoundingClientRect();
+    const rr = range.getBoundingClientRect();
+    const gutter = g.querySelector('.gap-gutter');
+    const gutR = gutter.getBoundingClientRect();
+    const hitAt = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      const btn = el && el.closest && el.closest('[data-load]');
+      return btn ? btn.getAttribute('data-load') : (el ? el.className || el.tagName : null);
+    };
+    return {
+      rowW: gr.width, rowH: gr.height,
+      overflow: g.scrollWidth > g.clientWidth + 1,
+      upW: ur.width, upH: ur.height, upTop: ur.top, upBottom: ur.bottom,
+      downW: dr.width, downH: dr.height, downTop: dr.top, downBottom: dr.bottom,
+      gutterW: gutR.width,
+      labelInsideTop: lr.top >= ur.top - 1 && lr.bottom <= ur.bottom + 1,
+      labelHit: hitAt(lr.left + lr.width / 2, lr.top + lr.height / 2),
+      rangeHit: rr.width > 0 ? hitAt(rr.left + rr.width / 2, rr.top + rr.height / 2) : 'empty',
+      gutterTopHit: hitAt(gutR.left + gutR.width / 2, ur.top + ur.height / 2),
+      gutterBottomHit: hitAt(gutR.left + gutR.width / 2, dr.top + dr.height / 2),
+      upBg: getComputedStyle(up).backgroundColor,
+      downBg: getComputedStyle(down).backgroundColor,
+      downBorderTop: getComputedStyle(down).borderTopWidth,
+    };
+  });
+  const r = await gap.boundingBox();
+  await p.screenshot({ path: `${shots}/both-gap-${scheme}-${width}.png`, clip: { x: Math.max(0, r.x - 40), y: Math.max(0, r.y - 60), width: Math.min(width, r.width + 80), height: r.height + 120 } });
+  // Hover top row and verify only top row washes.
+  await gap.locator('[data-load="up"]').hover();
+  await p.waitForTimeout(150);
+  const hover = await gap.evaluate((g) => ({
+    upBg: getComputedStyle(g.querySelector('[data-load="up"]')).backgroundColor,
+    downBg: getComputedStyle(g.querySelector('[data-load="down"]')).backgroundColor,
+  }));
+  // Click at .gap-label center coordinates and verify upward load fires.
+  const beforeRows = await p.evaluate(() => document.querySelectorAll('.topic[data-topic="a"] .history-live > .timeline-row').length);
+  const lblBox = await gap.locator('.gap-label').boundingBox();
+  await p.mouse.click(lblBox.x + lblBox.width / 2, lblBox.y + lblBox.height / 2);
+  await p.waitForTimeout(400);
+  const afterRows = await p.evaluate(() => document.querySelectorAll('.topic[data-topic="a"] .history-live > .timeline-row').length);
+  await p.close();
+  if (m.overflow) fail.push(`both ${scheme} ${width}: horizontal overflow ${JSON.stringify(m)}`);
+  if (Math.abs(m.upW - m.rowW) > 1 || Math.abs(m.downW - m.rowW) > 1) fail.push(`both ${scheme} ${width}: buttons not full-width ${JSON.stringify(m)}`);
+  if (m.downTop < m.upBottom - 1) fail.push(`both ${scheme} ${width}: rows not stacked vertically ${JSON.stringify(m)}`);
+  if (m.upH < 24 || m.downH < 24 || m.rowH < 48 || m.rowH > 62) fail.push(`both ${scheme} ${width}: unexpected stacked row height ${JSON.stringify(m)}`);
+  if (m.gutterW < 36) fail.push(`both ${scheme} ${width}: gutter too narrow ${m.gutterW}`);
+  if (!m.labelInsideTop) fail.push(`both ${scheme} ${width}: .gap-label not on top row ${JSON.stringify(m)}`);
+  if (m.labelHit !== 'up') fail.push(`both ${scheme} ${width}: .gap-label click did not route to up (got ${m.labelHit})`);
+  if (m.rangeHit !== 'up' && m.rangeHit !== 'empty') fail.push(`both ${scheme} ${width}: .gap-range click did not route to up (got ${m.rangeHit})`);
+  if (m.gutterTopHit !== 'up' || m.gutterBottomHit !== 'down') fail.push(`both ${scheme} ${width}: gutter dead zone (${m.gutterTopHit}, ${m.gutterBottomHit})`);
+  if (hover.upBg === m.upBg) fail.push(`both ${scheme} ${width}: top row hover did not wash (${hover.upBg})`);
+  if (hover.downBg !== m.downBg) fail.push(`both ${scheme} ${width}: hovering top row washed bottom row (${m.downBg} -> ${hover.downBg})`);
+  if (!(afterRows > beforeRows)) fail.push(`both ${scheme} ${width}: clicking .gap-label coordinates did not load above (${beforeRows} -> ${afterRows})`);
+  console.log(`both ${scheme} ${width} ${JSON.stringify({ rowH: m.rowH, upH: m.upH, downH: m.downH, labelHit: m.labelHit, gutter: [m.gutterTopHit, m.gutterBottomHit], rows: [beforeRows, afterRows] })}`);
+  return fail;
+}
+
 (async () => {
   const b = await chromium.launch();
   let fail = [];
@@ -167,6 +254,7 @@ async function band(b, scheme) {
     fail = fail.concat(await band(b, 'dark'));
     fail = fail.concat(await band(b, 'light'));
     for (const scheme of ['dark', 'light']) for (const width of [1440, 700, 480]) fail = fail.concat(await layout(b, scheme, width));
+    for (const scheme of ['dark', 'light']) for (const width of [1280, 420]) fail = fail.concat(await bothLayout(b, scheme, width));
   } finally { await b.close(); }
   if (fail.length) { console.error(fail.join('\n')); process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });

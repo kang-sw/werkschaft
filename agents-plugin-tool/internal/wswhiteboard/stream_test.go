@@ -524,3 +524,42 @@ func TestStreamRoleMarkerPinsToFirstLine(t *testing.T) {
 		t.Error("page.css centres the role marker on wrapped rows")
 	}
 }
+
+func TestBidirectionalHistoryGapTwoRowLayout(t *testing.T) {
+	st := &State{}
+	// Topic "s" has a single-sided top gap (Above: false -> data-gap-dir="up").
+	for i := 1; i <= 5; i++ {
+		mustApply(t, st, fmt.Sprintf(`<wb:topic name="s"><wb:log>single line %d</wb:log></wb:topic>`, i))
+	}
+	// Topic "t" has a live current agent anchor followed by older panel entries
+	// and a newer tail panel, producing a middle bidirectional gap (Above: true ->
+	// data-gap-dir="both").
+	mustApply(t, st, `<wb:topic name="t"><wb:log>current agent anchor</wb:log></wb:topic>`)
+	mustApply(t, st, `<wb:topic name="t"><wb:panel recap="older panel">older body</wb:panel></wb:topic>`)
+	mustApply(t, st, `<wb:topic name="t"><wb:panel recap="latest panel">latest body</wb:panel></wb:topic>`)
+	out := markup(render(t, BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Location: time.UTC})))
+	// Single-sided top gap stays data-gap-dir="up" with down hidden; middle gap
+	// renders data-gap-dir="both" with both buttons visible and .gap-info outside
+	// the up button in the shared gap shell.
+	wantAll(t, out,
+		`data-gap-dir="up"`,
+		`<button type="button" data-load="down" hidden>`,
+		`data-gap-dir="both"`,
+		`<span class="gap-info"><span class="gap-label">`,
+		`<span class="gap-actions"><button type="button" data-load="up"`,
+		`<button type="button" data-load="down">`,
+	)
+	css, err := whiteboardTestAsset("page.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, string(css),
+		`.history-gap { display: flex; align-items: stretch; min-height: 28px;`,
+		`.history-gap[data-gap-dir="both"] { position: relative; flex-direction: column; min-height: 50px; }`,
+		`.history-gap[data-gap-dir="both"] .gap-gutter { position: absolute; inset: 0 auto 0 0; width: 40px; background: transparent; pointer-events: none; z-index: 1; }`,
+		`.history-gap[data-gap-dir="both"] .gap-info { position: absolute; top: 0; right: 10px; height: calc(50% - 0.5px); max-width: calc(100% - 160px); flex-wrap: nowrap; justify-content: flex-end; overflow: hidden; white-space: nowrap; pointer-events: none; z-index: 1; }`,
+		`.history-gap[data-gap-dir="both"] .gap-actions { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: 100%; margin-left: 0; }`,
+		`.history-gap[data-gap-dir="both"] .gap-actions button { display: flex; align-items: center; width: 100%; min-height: 25px;`,
+		`.history-gap[data-gap-dir="both"] .gap-actions button[data-load="down"] { border-top: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent); }`,
+	)
+}
