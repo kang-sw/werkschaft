@@ -692,6 +692,16 @@ fn read_tail(mut input: impl Read) -> Vec<u8> {
 }
 
 fn run_starter(command: &mut Command, input: &[u8], spawned: &mut impl FnMut()) -> Launch {
+    // The native starter's own budget is 2*DefaultStartWait + 13 s.
+    run_starter_with_timeout(command, input, spawned, Duration::from_secs(42))
+}
+
+fn run_starter_with_timeout(
+    command: &mut Command,
+    input: &[u8],
+    spawned: &mut impl FnMut(),
+    timeout: Duration,
+) -> Launch {
     let Ok(mut child) = command.spawn() else {
         return Launch::default();
     };
@@ -707,30 +717,47 @@ fn run_starter(command: &mut Command, input: &[u8], spawned: &mut impl FnMut()) 
         .stdin
         .take()
         .is_some_and(|mut stdin| stdin.write_all(input).is_ok());
-    // The native starter's own budget is 2*DefaultStartWait + 13 s.
-    let deadline = Instant::now() + Duration::from_secs(42);
-    while wrote_identity && Instant::now() < deadline {
+    let drain_stderr = |rx: Option<mpsc::Receiver<Vec<u8>>>| {
+        rx.and_then(|rx| rx.recv_timeout(Duration::from_millis(500)).ok())
+            .unwrap_or_default()
+    };
+    // If writing stdin failed (e.g. BrokenPipe from an immediate crash on launch),
+    // still poll briefly so we capture the real exit status before falling back to kill.
+    let wait_budget = if wrote_identity {
+        timeout
+    } else {
+        timeout.min(Duration::from_millis(500))
+    };
+    let deadline = Instant::now() + wait_budget;
+    loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stderr = output
-                    .and_then(|rx| rx.recv_timeout(Duration::from_millis(500)).ok())
-                    .unwrap_or_default();
                 return Launch {
                     spawned: true,
-                    started: status.success(),
+                    started: wrote_identity && status.success(),
                     exit_code: status.code(),
-                    stderr,
+                    stderr: drain_stderr(output),
                 };
             }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    break;
+                };
+                if remaining.is_zero() {
+                    break;
+                }
+                thread::sleep(remaining.min(Duration::from_millis(50)));
+            }
             Err(_) => break,
         }
     }
     let _ = child.kill();
-    let _ = child.wait();
+    let exit_code = child.wait().ok().and_then(|status| status.code());
     Launch {
         spawned: true,
-        ..Launch::default()
+        started: false,
+        exit_code,
+        stderr: drain_stderr(output),
     }
 }
 
@@ -1356,6 +1383,50 @@ mod tests {
         assert_eq!(launch.exit_code, Some(3));
         assert_eq!(launch.stderr, b"starter-said\n");
         assert_eq!(taken, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immediate_crash_before_reading_stdin_captures_exit_code_and_stderr() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "echo crash-on-launch >&2; exit 42"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        // Larger than the OS pipe buffer so write_all fails with BrokenPipe when
+        // the child exits immediately without reading stdin.
+        let oversized_input = vec![b'x'; 256 * 1024];
+        let launch = run_starter_with_timeout(
+            &mut command,
+            &oversized_input,
+            &mut || {},
+            Duration::from_secs(5),
+        );
+        assert!(launch.spawned && !launch.started);
+        assert_eq!(launch.exit_code, Some(42));
+        assert_eq!(launch.stderr, b"crash-on-launch\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn starter_timeout_kills_child_and_still_captures_stderr() {
+        let mut command = Command::new("sh");
+        // Use `exec` so killing the child closes stderr directly with no grandchild holding it open.
+        command
+            .args(["-c", "echo hung-before-timeout >&2; exec sleep 10"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let launch = run_starter_with_timeout(
+            &mut command,
+            b"{}",
+            &mut || {},
+            Duration::from_millis(200),
+        );
+        assert!(launch.spawned && !launch.started);
+        assert_eq!(launch.exit_code, None);
+        assert_eq!(launch.stderr, b"hung-before-timeout\n");
     }
 
     #[test]
