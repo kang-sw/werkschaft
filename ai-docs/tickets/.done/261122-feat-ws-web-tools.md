@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 66535ecb0e7e66e8
 sage-review-completeness-reviewed: 66535ecb0e7e66e8
+completed: 2026-11-25
 ---
 
 # ws/web.* tool chain for the builtin harness
@@ -147,3 +148,68 @@ Verified external facts (read-only research, 2026-11-22):
   (no OpenRouter key is configured on the dev machine as of 2026-11-25);
   without that approval record a live SIWC turn if the account allows search,
   else state the live check as owner-pending in the Result.
+
+### Result (df4f9d9a) - 2026-11-25
+
+Implemented Phase 1 (server-side web search + `ws/web.fetch`) on branch
+`impl/develop/lemon-gory-guts` (compatibility tier T0):
+
+- **Server-side search and harness-enforced turn budget (`c9c26e50`, `df4f9d9a`):**
+  - Added layered config keys in `agents-plugin-tool/internal/wsconfig/werk_web_search.go`
+    (`agent.werk_web_search` default `true`, `agent.werk_web_search_max_uses` default `2`,
+    `agent.werk_web_search_max_results` default `5`, `agent.werk_web_search_engine` default
+    `exa`, `agent.werk_web_search_siwc` default `false`; all global-default, overridable across
+    global/repo/project/session).
+  - Extended `agents-plugin-tool/internal/werk/` (`responses.go`, `web_search.go`, `agent.go`,
+    `durable_turn.go`, `store.go`) to attach `openrouter:web_search` with
+    `{engine, max_uses, max_results}` on OpenRouter and bare `{"type":"web_search"}` (without
+    `max_tool_calls`) on OpenAI SIWC when opted in, while never attaching on local endpoints.
+  - Enforced the per-turn budget via pre-request reservation (`reserve` / `settle`) that deducts
+    from `usage.server_tool_use.web_search_requests` and `web_search_call` output items, keeps
+    reservations charged across cut streams, failed requests, and missing usage (including across
+    durable turn resume via optional `usage_missing` field), and omits the search tool on retries
+    and once spent. Search cost flows through `usage.cost` to `LineUsage` and live status events.
+  - Wired registration data `LifecyclePolicy.WebFetchTool` (enabled only on `WerkBackend`) and
+    harness-neutral `StartSpec.sessionConfig` in `agents-plugin-tool/internal/wsagent/` so common
+    code has zero harness-name branches (`TestCommonCodeHasNoHarnessNameBranch` green) and
+    private fixed-profile runners explicitly disable web search.
+- **Bounded SSRF-safe `ws/web.fetch` (`82780e0c`, `5e302755`, `df4f9d9a`):**
+  - Added `agents-plugin-tool/internal/wsweb/` (`fetch.go`, `html.go`) enforcing http/https only,
+    embedded credential rejection, DNS-resolved non-public IP refusal (loopback, link-local,
+    private, CGNAT, ULA, IPv4-mapped IPv6, NAT64) on initial request and every redirect with
+    dial-time IP pinning, redirect/size/time caps, no cookies/Authorization across hops, HTML-to-text
+    extraction, UTF-8 sanitization, and 48 KiB (`werk.ToolOutputBytes`) output bounding with O(1)
+    rune-boundary trimming.
+  - Wired `ws/web.fetch` in `agents-plugin-tool/internal/mcp/` (`server_web.go`,
+    `server_inventory.go`, `server_exec_cutover.go`, `server_dispatch.go`, `server_schemas.go`)
+    gated solely by trusted hosted registration data (`LifecyclePolicy.WebFetchTool`) on both
+    listing and call paths (refusing Claude, Codex, agy, and unbound sessions even if allowlisted
+    or spoofing harness hints).
+  - Registered all five search knobs in `config_registry.go`, `server_config.go`,
+    `dashboard_settings_config.go`, `dashboard-settings-catalog.json`, and all 11
+    `internal/wsi18n/tables/*.json` locales, stating both the native/auto per-request overrun
+    caveat and the SIWC best-effort budget caveat.
+- **Verification:**
+  - Automated suites passing after final edit (`df4f9d9a`): `go build ./...`, `internal/wsconfig`,
+    `internal/wsweb`, `internal/werk`, `internal/wsi18n`, `internal/wspackage`,
+    `internal/wsagent` (including `TestCommonCodeHasNoHarnessNameBranch`,
+    `TestWerkLoopSearchUsageCostReachesLiveStatus`,
+    `TestConvResolveWerkWebSearchLayeredAndFixedProfile`), `internal/mcp` (including
+    `TestWebFetchExposureAndCallPathGating`, `TestWebFetchGatedByRegistrationDataNotHarnessName`,
+    `TestWebFetchValidationPrivateRefusalAndOutputCap`,
+    `TestWerkWebSearchConfigCatalogTuneAndCaveats`, `TestDashboardSettingsUICatalog` for both
+    `ws` and `wsflow`), `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`,
+    and `node --test agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js` (22/22).
+  - **Live search turn (SIWC):** Executed one bounded read-only live OpenAI SIWC turn via opt-in
+    `TestWerkLiveSIWCWebSearch` (`WERK_LIVE_SIWC_WEB_SEARCH=1`, `de7c45f3`): model `gpt-6.2-sol`,
+    response `resp_0da97afb83b97e14016b06eb83ac2887d0a3f0e2f4fff4b2da`, `searches_used=1` (counted
+    from `web_search_call` output item; `usage.web_search_requests` omitted by SIWC),
+    `input_tokens=8549`, `output_tokens=74`, `cached_tokens=3968`, reported `cost_usd=nil`
+    (included in ChatGPT plan), returned cited URL `https://pkg.go.dev/net/http`. Live paid
+    OpenRouter search turn remains **owner-pending** (no OpenRouter API key configured on the dev
+    machine and paid call not approved).
+  - **Code review (`code-review-lite`):** Single pass (`61b9935c-01-findings.md`) reported 3
+    Important findings (fixed-profile runner falling back to default-on search, duplicate header
+    and double truncation in `server_web.go`, O(N^2)/content-wipe on non-UTF-8 pages in
+    `wsweb.trim*UTF8`) and 1 Minor finding (`UsageMissing` not persisted across durable turn
+    resume). All 4 were fixed in `df4f9d9a` with regression tests and re-verified.
