@@ -78,10 +78,10 @@ func TestTerminalButtonLivesInBoardToolbar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(page, `id="tslot"`) || !strings.Contains(page, `<div class="cfoot">`) {
+	if strings.Contains(page, `id="tslot"`) || !strings.Contains(page, `<div class="cfoot"`) {
 		t.Error("the composer must keep its status line without a terminal slot")
 	}
-	if page, err = renderSessionPage(view, regions, true, ""); err != nil || strings.Contains(page, `id="tslot"`) || !strings.Contains(page, `<div class="cfoot">`) {
+	if page, err = renderSessionPage(view, regions, true, ""); err != nil || strings.Contains(page, `id="tslot"`) || !strings.Contains(page, `<div class="cfoot"`) {
 		t.Errorf("a page that offers no terminals has a terminal slot (err %v)", err)
 	}
 	js := mustAsset(t, "terminal.js")
@@ -98,7 +98,7 @@ func TestTerminalButtonLivesInBoardToolbar(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		".cfoot > .r-sline { flex: 0 1 auto; min-width: 0; }",
-		".cfoot:has(> .r-sline:empty):not(:has(> .fpills:not([hidden]))) { display: none; }",
+		".cfoot[hidden] { display: none; }",
 		".tpop { position: absolute; top: calc(100% + 8px); left: 0;",
 		".board-acts .board-action .board-label { display: none; }",
 		".board-action kbd { display: none; }",

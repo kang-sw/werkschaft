@@ -447,8 +447,8 @@
     railPopClose(false);
     var P = kind === "settings" ? {
       el: gmenu,
-      open: function () { setLayout(layoutMode); setInput(inputMode); markTheme(); markLang(); },
-      close: function () {},
+      open: function () { root.setAttribute("data-settings-open", ""); setLayout(layoutMode); setInput(inputMode); markTheme(); markLang(); },
+      close: function () { root.removeAttribute("data-settings-open"); },
       focus: function () { gmenu.focus(); }
     } : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
     if (!P.el.parentNode) doc.body.appendChild(P.el);

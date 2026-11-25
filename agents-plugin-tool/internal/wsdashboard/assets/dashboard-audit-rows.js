@@ -516,6 +516,11 @@
           lastBefore = item.before;
         }
       });
+      Array.from(convo.querySelectorAll(".boundary-badge")).forEach(function (badge) {
+        var items = auDirectItems(badge);
+        if (items && items.firstElementChild) badge.setAttribute("data-has-audit", "");
+        else badge.removeAttribute("data-has-audit");
+      });
       if (pin && changed && typeof pinConvo === "function") pinConvo();
       if (window.WsAudit.syncSelection) window.WsAudit.syncSelection();
     }

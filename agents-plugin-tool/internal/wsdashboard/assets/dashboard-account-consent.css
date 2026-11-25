@@ -14,12 +14,12 @@
   font-size: 12px;
 }
 .account-banner[hidden] { display: none; }
-:root:has(> body > .dwrap > .account-banner:not([hidden])) { --account-banner-space: calc(var(--account-banner-height, 0px) + 8px); }
+:root[data-account-banner] { --account-banner-space: calc(var(--account-banner-height, 0px) + 8px); }
 :root[data-shell] .frames { inset-block-start: var(--account-banner-space, 0px); }
 :root[data-shell]:not([data-fdim]) .account-banner { pointer-events: auto; }
 @media (min-width: 1600px) {
   .account-banner { margin-inline-start: calc(348px + var(--sh-stage-side, 0px)); }
-  .dwrap:has(> .account-banner:not([hidden])) .dbody > .rail {
+  :root[data-account-banner] .dwrap .dbody > .rail {
     margin-block-start: calc(-1 * (var(--toph) + var(--account-banner-space, 0px)));
   }
 }

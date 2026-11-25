@@ -386,6 +386,14 @@
       applyPreset, notice
     });
 
+    let beforeUnreg = null;
+    function setBeforeUnreg(el) {
+      if (beforeUnreg === el) return;
+      beforeUnreg?.removeAttribute("data-companion-before-unreg");
+      beforeUnreg = el || null;
+      beforeUnreg?.setAttribute("data-companion-before-unreg", "");
+    }
+
     function layout() {
       dirty = false;
       markedRid = undefined;
@@ -399,6 +407,7 @@
       const docked = rect && open && rect.right > 0 && getComputedStyle(rail).visibility !== "hidden";
       if (!docked) {
         rail?.removeAttribute("data-companion-dock");
+        setBeforeUnreg(null);
         size = sizing.value(clamp(Math.min(vw - 24, vh - 24), 48, 104), vw, vh);
         const composer = marks["composer-top"];
         home = composer ? {
@@ -423,8 +432,13 @@
       const listBottom = scroller?.bottom + (current === "footer" ? slot : 0);
       const visible = box?.height > 0 && unregTop - size >= scroller?.top && unregTop < listBottom;
       rail.style.setProperty("--companion-slot", slot + "px");
-      if (reserve) rail.dataset.companionDock = visible ? "unregistered" : "footer";
-      else rail.removeAttribute("data-companion-dock");
+      if (reserve) {
+        rail.dataset.companionDock = visible ? "unregistered" : "footer";
+        setBeforeUnreg(visible ? unreg?.previousElementSibling : null);
+      } else {
+        rail.removeAttribute("data-companion-dock");
+        setBeforeUnreg(null);
+      }
       const divider = (visible ? unreg : footer)?.getBoundingClientRect().top ?? rect.bottom;
       home = { x: rect.left + rect.width / 2, y: divider - 2, rail: true };
     }
@@ -832,6 +846,7 @@
         railChanges.disconnect();
         railResize.disconnect();
         rail?.removeAttribute("data-companion-dock");
+        setBeforeUnreg(null);
         rail?.style.removeProperty("--companion-slot");
         loader.dispose();
         node.remove();

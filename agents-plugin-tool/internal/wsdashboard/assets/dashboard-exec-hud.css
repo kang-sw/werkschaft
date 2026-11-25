@@ -24,7 +24,7 @@
 .xchip[data-st="lost"], .xchip[data-st="nostart"] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-warn-ink) 55%, transparent), var(--wb-shadow-hi); }
 .xchip.ended { color: color-mix(in srgb, var(--wb-fg) 78%, var(--wb-muted-fg)); }
 .xlab { max-width: 92px; overflow: hidden; text-overflow: ellipsis; font: 600 11px/1 var(--wb-mono); }
-.xel { font-size: 11px; font-weight: 600; color: var(--wb-muted-fg); }
+.xel { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--wb-muted-fg); }
 .xst { font-size: 11px; font-weight: 700; }
 .xst.ok { color: var(--wb-ok); } .xst.fail { color: var(--wb-fail); } .xst.warn { color: var(--wb-warn-ink); } .xst.mute { color: var(--wb-muted-fg); }
 /* node = the HUD 24px square: emblem + ring + corner badge */

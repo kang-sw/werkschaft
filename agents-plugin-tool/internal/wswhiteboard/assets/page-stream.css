@@ -80,18 +80,18 @@
    primary wash on hover or keyboard focus. */
 .history-gap { display: flex; align-items: stretch; min-height: 28px; margin: 4px 0 4px -12px; padding: 0; border-top: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent); background: color-mix(in srgb, var(--wb-muted) 52%, var(--wb-card)); color: var(--wb-muted-fg); font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; -webkit-user-select: none; user-select: none; transition: background .14s ease, border-color .14s ease; }
 .history-gap:hover, .history-gap:focus-within { background: color-mix(in srgb, var(--wb-primary) 10%, var(--wb-card)); border-color: color-mix(in srgb, var(--wb-primary) 18%, transparent); }
-.history-gap:not(:has([data-load="up"]:not([hidden])):has([data-load="down"]:not([hidden]))) { cursor: pointer; }
+.history-gap:not([data-gap-dir="both"]) { cursor: pointer; }
 .gap-gutter { flex: none; width: 82px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--wb-fg) 4%, transparent); color: var(--wb-muted-fg); transition: background .14s ease, color .14s ease; }
 .history-gap:hover .gap-gutter, .history-gap:focus-within .gap-gutter { background: color-mix(in srgb, var(--wb-primary) 14%, transparent); color: var(--wb-primary); }
 .gap-gutter .i { width: 14px; height: 14px; display: none; }
-.history-gap:not(:has([data-load="down"]:not([hidden]))) .gap-gutter .i:nth-child(1) { display: block; }
-.history-gap:has([data-load="up"][hidden]):has([data-load="down"]:not([hidden])) .gap-gutter .i:nth-child(2) { display: block; }
-.history-gap:has([data-load="up"]:not([hidden])):has([data-load="down"]:not([hidden])) .gap-gutter .i:nth-child(3) { display: block; }
+.history-gap[data-gap-dir="up"] .gap-gutter .i:nth-child(1), .history-gap:not([data-gap-dir]) .gap-gutter .i:nth-child(1) { display: block; }
+.history-gap[data-gap-dir="down"] .gap-gutter .i:nth-child(2) { display: block; }
+.history-gap[data-gap-dir="both"] .gap-gutter .i:nth-child(3) { display: block; }
 .gap-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 10px; padding: 3px 10px 3px 12px; }
 .gap-info { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
 .gap-label { font-weight: 500; color: color-mix(in srgb, var(--wb-fg) 74%, var(--wb-muted-fg)); }
 .gap-sep { opacity: .55; }
-.gap-sep:has(+ .gap-range:empty), .gap-range:empty { display: none; }
+.gap-sep[hidden], .gap-range:empty { display: none; }
 .gap-range { font: 10.5px var(--wb-mono); opacity: .85; font-variant-numeric: tabular-nums; }
 .gap-actions { display: inline-flex; gap: 4px; }
 .history-gap .gap-actions { align-items: center; flex: none; margin-left: auto; }

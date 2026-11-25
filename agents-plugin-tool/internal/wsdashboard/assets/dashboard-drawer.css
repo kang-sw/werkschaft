@@ -87,7 +87,7 @@
 .settings-pop:focus { outline: none; }
 .settings-toggle, .rail-home { flex: none; }
 /* A click on the framed main panel dismisses Settings in its owning shell. */
-:root[data-shell]:has(.settings-pop:not([hidden])) .frames { pointer-events: none; }
+:root[data-shell][data-settings-open] .frames { pointer-events: none; }
 .gmenu.gcard { position: static; width: auto; box-shadow: none; padding: 0; background: transparent; }
 .gmenu.loginbox { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid var(--wb-muted); }
 .loginbox .gt { padding-top: 0; }
