@@ -125,7 +125,7 @@ test('document reconciliation fires only for keyed changes and batches answered 
   c.convo = h.convo;
   c.lead.cards = {};
   c.lead.st = { approvals: [], can_control: true };
-  Object.assign(c, { leadChip() {}, composerSync() {}, rp: {}, handedDraw() {}, harnessDraw() {},
+  Object.assign(c, { leadChip() {}, composerSync() {}, rp: {}, handedDraw() {}, harnessDraw() {}, quotaDraw() {},
     leadGone: () => false, pinned: () => false, pinConvo() {},
     apCard() { return { el: new h.Element('div', 'apcard'), n: new h.Element('span') }; } });
   h.convo.classList = { toggle() {} };

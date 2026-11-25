@@ -30,6 +30,7 @@ func TestConversationSendRearmsBottomFollow(t *testing.T) {
 		t.Fatal("Enter no longer routes through sendMessage")
 	}
 	fns := strings.Join([]string{
+		composerFunc(t, src, "convoVisible"),
 		oneLineDashboardFunc(t, src, "atBottom"),
 		oneLineDashboardFunc(t, src, "pinned"),
 		oneLineDashboardFunc(t, src, "pinConvo"),
@@ -41,6 +42,7 @@ func TestConversationSendRearmsBottomFollow(t *testing.T) {
 	runNode(t, "conversation send follow", selectionCodecSource(t)+composerToastPrelude+`var sending = false;
 function noteWarn(t) { toasts.push([t, "warn"]); }
 var convo = { scrollTop: 700, clientHeight: 100, scrollHeight: 1000 };
+var paneObserver = null, paneVisible = {};
 function visible(el) { return el === convo; }
 `+fns+`
 function clearCommand() { cmdSel = null; }
