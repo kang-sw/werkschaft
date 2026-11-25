@@ -1,7 +1,7 @@
 {
   "meta": {
     "schema": 1,
-    "last_gc": "2026-10-26T10:43:26Z"
+    "last_gc": "2026-11-25T11:04:07Z"
   },
   "registrations": {
     "260626-research-playbook-print-lead-surface-leak": {
@@ -482,7 +482,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T09:36:29Z",
         "impl": {
           "branch": "impl/develop/swear-eel-poach"
