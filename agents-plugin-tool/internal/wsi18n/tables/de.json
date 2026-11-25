@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "Neuer %s-API-Schlüssel",
   "js.settings.account.remove_voice_key": "Gedrückt halten, um den %s-API-Schlüssel zu entfernen",
   "js.settings.account.voice_prefix_warning": "Schlüssel dieses Anbieters beginnen normalerweise mit %s.",
-  "js.settings.account.voice_key_help": "Lokal im Daemon-Anmeldeinformationsspeicher abgelegt; wird nur für Sprachtranskription verwendet und niemals an Agent-Sitzungen weitergegeben."
+  "js.settings.account.voice_key_help": "Lokal im Daemon-Anmeldeinformationsspeicher abgelegt; wird nur für Sprachtranskription verwendet und niemals an Agent-Sitzungen weitergegeben.",
+  "js.voice.start": "Spracheingabe",
+  "js.voice.stop": "Aufnahme stoppen",
+  "js.voice.recording": "Hört zu…",
+  "js.voice.transcribing": "Transkribiert…",
+  "js.voice.resend": "Erneut senden",
+  "js.voice.dismiss": "Schließen",
+  "js.voice.cancel": "Abbrechen",
+  "js.voice.err.mic": "Mikrofon nicht verfügbar oder verweigert",
+  "js.voice.err.busy": "Ein anderes Eingabefeld nimmt bereits auf",
+  "js.voice.err.timeout": "Zeitüberschreitung bei der Transkription",
+  "js.voice.err.auth": "Schlüssel des Sprachanbieters abgelehnt",
+  "js.voice.err.too_large": "Aufnahme überschreitet das Größenlimit",
+  "js.voice.err.failed": "Transkription fehlgeschlagen"
 }

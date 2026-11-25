@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "新しい %s API キー",
   "js.settings.account.remove_voice_key": "長押しして %s API キーを削除",
   "js.settings.account.voice_prefix_warning": "このプロバイダーのキーは通常 %s で始まります。",
-  "js.settings.account.voice_key_help": "ローカルデーモンの認証情報ストアに保存され、音声文字起こしにのみ使用され、エージェントセッションには公開されません。"
+  "js.settings.account.voice_key_help": "ローカルデーモンの認証情報ストアに保存され、音声文字起こしにのみ使用され、エージェントセッションには公開されません。",
+  "js.voice.start": "音声入力",
+  "js.voice.stop": "録音を停止",
+  "js.voice.recording": "聞き取り中…",
+  "js.voice.transcribing": "文字起こし中…",
+  "js.voice.resend": "再送信",
+  "js.voice.dismiss": "閉じる",
+  "js.voice.cancel": "キャンセル",
+  "js.voice.err.mic": "マイクが利用できないか許可されていません",
+  "js.voice.err.busy": "別の入力欄で録音中です",
+  "js.voice.err.timeout": "文字起こしがタイムアウトしました",
+  "js.voice.err.auth": "音声プロバイダーのキーが拒否されました",
+  "js.voice.err.too_large": "録音がサイズ上限を超えています",
+  "js.voice.err.failed": "文字起こしに失敗しました"
 }

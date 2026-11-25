@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "Nouvelle clé API %s",
   "js.settings.account.remove_voice_key": "Maintenir pour supprimer la clé API %s",
   "js.settings.account.voice_prefix_warning": "Les clés de ce fournisseur commencent généralement par %s.",
-  "js.settings.account.voice_key_help": "Stockée localement dans le coffre d'identifiants du démon ; utilisée uniquement pour la transcription vocale et jamais exposée aux sessions d'agent."
+  "js.settings.account.voice_key_help": "Stockée localement dans le coffre d'identifiants du démon ; utilisée uniquement pour la transcription vocale et jamais exposée aux sessions d'agent.",
+  "js.voice.start": "Saisie vocale",
+  "js.voice.stop": "Arrêter l'enregistrement",
+  "js.voice.recording": "Écoute en cours…",
+  "js.voice.transcribing": "Transcription…",
+  "js.voice.resend": "Renvoyer",
+  "js.voice.dismiss": "Fermer",
+  "js.voice.cancel": "Annuler",
+  "js.voice.err.mic": "Microphone indisponible ou refusé",
+  "js.voice.err.busy": "Un autre champ enregistre déjà",
+  "js.voice.err.timeout": "Délai de transcription dépassé",
+  "js.voice.err.auth": "Clé du fournisseur vocal refusée",
+  "js.voice.err.too_large": "L'enregistrement dépasse la taille limite",
+  "js.voice.err.failed": "Échec de la transcription"
 }

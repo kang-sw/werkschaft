@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "Новый API-ключ %s",
   "js.settings.account.remove_voice_key": "Удерживайте, чтобы удалить API-ключ %s",
   "js.settings.account.voice_prefix_warning": "Ключи этого провайдера обычно начинаются с %s.",
-  "js.settings.account.voice_key_help": "Хранится локально в хранилище учётных данных демона; используется только для голосовой транскрипции и никогда не передаётся сессиям агентов."
+  "js.settings.account.voice_key_help": "Хранится локально в хранилище учётных данных демона; используется только для голосовой транскрипции и никогда не передаётся сессиям агентов.",
+  "js.voice.start": "Голосовой ввод",
+  "js.voice.stop": "Остановить запись",
+  "js.voice.recording": "Слушаю…",
+  "js.voice.transcribing": "Распознавание…",
+  "js.voice.resend": "Отправить снова",
+  "js.voice.dismiss": "Закрыть",
+  "js.voice.cancel": "Отмена",
+  "js.voice.err.mic": "Микрофон недоступен или доступ запрещён",
+  "js.voice.err.busy": "Запись уже идёт в другом поле ввода",
+  "js.voice.err.timeout": "Превышено время ожидания распознавания",
+  "js.voice.err.auth": "Ключ голосового провайдера отклонён",
+  "js.voice.err.too_large": "Запись превышает допустимый размер",
+  "js.voice.err.failed": "Ошибка распознавания речи"
 }

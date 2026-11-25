@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "New %s API key",
   "js.settings.account.remove_voice_key": "Hold to remove %s API key",
   "js.settings.account.voice_prefix_warning": "Keys for this provider usually start with %s.",
-  "js.settings.account.voice_key_help": "Stored locally in the daemon credential store; used only for voice transcription and never exposed to agent sessions."
+  "js.settings.account.voice_key_help": "Stored locally in the daemon credential store; used only for voice transcription and never exposed to agent sessions.",
+  "js.voice.start": "Voice input",
+  "js.voice.stop": "Stop recording",
+  "js.voice.recording": "Listening…",
+  "js.voice.transcribing": "Transcribing…",
+  "js.voice.resend": "Resend",
+  "js.voice.dismiss": "Dismiss",
+  "js.voice.cancel": "Cancel",
+  "js.voice.err.mic": "Microphone unavailable or denied",
+  "js.voice.err.busy": "Another composer is already recording",
+  "js.voice.err.timeout": "Transcription timed out",
+  "js.voice.err.auth": "Voice provider key rejected",
+  "js.voice.err.too_large": "Recording exceeds size limit",
+  "js.voice.err.failed": "Transcription failed"
 }

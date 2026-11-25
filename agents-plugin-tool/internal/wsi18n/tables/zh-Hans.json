@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "新的 %s API 密钥",
   "js.settings.account.remove_voice_key": "长按以移除 %s API 密钥",
   "js.settings.account.voice_prefix_warning": "此提供商的密钥通常以 %s 开头。",
-  "js.settings.account.voice_key_help": "仅保存在本地守护进程凭据存储中，仅用于语音转写，不会暴露给代理会话。"
+  "js.settings.account.voice_key_help": "仅保存在本地守护进程凭据存储中，仅用于语音转写，不会暴露给代理会话。",
+  "js.voice.start": "语音输入",
+  "js.voice.stop": "停止录音",
+  "js.voice.recording": "正在聆听…",
+  "js.voice.transcribing": "正在转写…",
+  "js.voice.resend": "重新发送",
+  "js.voice.dismiss": "关闭",
+  "js.voice.cancel": "取消",
+  "js.voice.err.mic": "麦克风不可用或被拒绝",
+  "js.voice.err.busy": "另一个输入框正在录音",
+  "js.voice.err.timeout": "语音转写超时",
+  "js.voice.err.auth": "语音提供商密钥被拒绝",
+  "js.voice.err.too_large": "录音超出大小限制",
+  "js.voice.err.failed": "语音转写失败"
 }

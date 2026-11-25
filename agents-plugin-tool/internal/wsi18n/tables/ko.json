@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "새 %s API 키",
   "js.settings.account.remove_voice_key": "길게 눌러 %s API 키 제거",
   "js.settings.account.voice_prefix_warning": "이 프로바이더의 키는 보통 %s(으)로 시작합니다.",
-  "js.settings.account.voice_key_help": "로컬 데몬 자격 증명 저장소에 보관되며 음성 전사에만 사용되고 에이전트 세션에는 노출되지 않습니다."
+  "js.settings.account.voice_key_help": "로컬 데몬 자격 증명 저장소에 보관되며 음성 전사에만 사용되고 에이전트 세션에는 노출되지 않습니다.",
+  "js.voice.start": "음성 입력",
+  "js.voice.stop": "녹음 중지",
+  "js.voice.recording": "듣는 중…",
+  "js.voice.transcribing": "전사 중…",
+  "js.voice.resend": "다시 보내기",
+  "js.voice.dismiss": "닫기",
+  "js.voice.cancel": "취소",
+  "js.voice.err.mic": "마이크를 사용할 수 없거나 권한이 거부되었습니다",
+  "js.voice.err.busy": "다른 입력창에서 이미 녹음 중입니다",
+  "js.voice.err.timeout": "음성 인식 시간이 초과되었습니다",
+  "js.voice.err.auth": "음성 공급자 키가 거부되었습니다",
+  "js.voice.err.too_large": "녹음 크기가 한도를 초과했습니다",
+  "js.voice.err.failed": "음성 인식에 실패했습니다"
 }

@@ -38,6 +38,8 @@
   }
   function sendMessage() {
     if (restoring || draftStore && !draftLoaded) return;
+    var comp = (typeof $ === "function" ? $("composer") : (typeof doc !== "undefined" && doc && typeof doc.getElementById === "function" ? doc.getElementById("composer") : null));
+    if (comp && comp.hasAttribute && comp.hasAttribute("data-voice-locked")) return;
     // A first-character `!` is a command for the daemon's composer-exec
     // route, taken before any trimming or message assembly.
     if (cexecSend()) return;

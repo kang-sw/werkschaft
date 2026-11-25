@@ -78,6 +78,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-audit.js",
 	"dashboard-audit-rows.js",
 	"dashboard-lifecycle.js",
+	"dashboard-voice.js",
 }
 
 var companionScriptFiles = []string{
@@ -109,6 +110,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-exec-hud.css",
 	"dashboard-bg-exec-monitor.css",
 	"dashboard-composer-ucmd.css",
+	"dashboard-voice.css",
 }
 
 var trackerScriptFiles = []string{

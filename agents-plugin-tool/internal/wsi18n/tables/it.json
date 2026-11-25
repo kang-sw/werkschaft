@@ -3653,5 +3653,18 @@
   "js.settings.account.replace_voice_key": "Nuova chiave API %s",
   "js.settings.account.remove_voice_key": "Tieni premuto per rimuovere la chiave API %s",
   "js.settings.account.voice_prefix_warning": "Le chiavi di questo provider iniziano solitamente con %s.",
-  "js.settings.account.voice_key_help": "Archiviata localmente nell'archivio credenziali del daemon; usata solo per la trascrizione vocale e mai esposta alle sessioni agente."
+  "js.settings.account.voice_key_help": "Archiviata localmente nell'archivio credenziali del daemon; usata solo per la trascrizione vocale e mai esposta alle sessioni agente.",
+  "js.voice.start": "Input vocale",
+  "js.voice.stop": "Ferma registrazione",
+  "js.voice.recording": "In ascolto…",
+  "js.voice.transcribing": "Trascrizione…",
+  "js.voice.resend": "Invia di nuovo",
+  "js.voice.dismiss": "Chiudi",
+  "js.voice.cancel": "Annulla",
+  "js.voice.err.mic": "Microfono non disponibile o negato",
+  "js.voice.err.busy": "Un altro campo sta già registrando",
+  "js.voice.err.timeout": "Tempo scaduto per la trascrizione",
+  "js.voice.err.auth": "Chiave del provider vocale rifiutata",
+  "js.voice.err.too_large": "La registrazione supera il limite di dimensione",
+  "js.voice.err.failed": "Trascrizione non riuscita"
 }

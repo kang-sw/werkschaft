@@ -157,6 +157,13 @@ test('HUD node animations pause when hidden and disable under reduced motion', (
   assert.match(base, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}\s*\}/);
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-ring,\s*\.hud-ring::before[^}]*transition:\s*none !important;/);
   assert.match(conversation, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.hud-node\[data-state\]\s+\.hud-ring\s*\{\s*animation:\s*none;\s*\}/);
+
+  const voice = read(dashboard, 'dashboard-voice.css');
+  const pulse = voice.match(/^@keyframes cvox-pulse\b[^\n]*\n(?:[ \t][^\n]*\n)*/m);
+  assert(pulse, 'missing @keyframes cvox-pulse');
+  assert.doesNotMatch(pulse[0], /box-shadow|width|height|left|top|--[a-z]/, 'cvox-pulse animates only opacity/transform');
+  assert.match(voice, /:root\[data-animation-paused\]\s+\.cvox-cap\[data-state\]\s+\.cvox-dot\s*\{\s*animation-play-state:\s*paused !important;\s*\}/);
+  assert.match(voice, /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cvox-cap\[data-state\]\s+\.cvox-dot\s*\{\s*animation:\s*none !important;\s*\}/);
 });
 
 function findForbiddenHas(css, file) {
