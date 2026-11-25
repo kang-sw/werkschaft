@@ -11,6 +11,7 @@ func TestZombieStat(t *testing.T) {
 	}{
 		{"12 (holder) Z 1", true},
 		{"12 (holder ) name) Z 1", true},
+		{"12 (holder) X 1", true},
 		{"12 (holder) S 1", false},
 		{"invalid", false},
 		{"12 (holder)", false},
