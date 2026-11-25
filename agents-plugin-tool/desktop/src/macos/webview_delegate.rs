@@ -33,6 +33,8 @@ pub(super) struct NavigationState {
 #[derive(Clone, Copy)]
 pub(super) enum Bridge {
     Update,
+    /// The recovery page's fixed actions, present with or without an updater.
+    Recovery,
     Notify,
 }
 
@@ -68,7 +70,9 @@ define_class!(
             if let Some(window) = state.app.get_webview_window("main") {
                 let text = text.to_string();
                 match state.bridge {
-                    Bridge::Update => updates::receive(window, state.epoch, true, source, &text),
+                    Bridge::Update | Bridge::Recovery => {
+                        updates::receive(window, state.epoch, true, source, &text)
+                    }
                     Bridge::Notify => notify::receive(window, state.epoch, source, &text),
                 }
             }
