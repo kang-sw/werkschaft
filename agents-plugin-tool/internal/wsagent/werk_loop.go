@@ -165,6 +165,10 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	cfg.ContextWindow = spec.modelContextWindow
 	if spec.sessionConfig != nil {
 		cfg.WebSearch = resolveWerkWebSearchPolicy(spec.sessionConfig)
+	} else {
+		// Private fixed-profile runners (and specs without layered session
+		// config) never attach provider server-side web search.
+		cfg.WebSearch = func() werk.WebSearchPolicy { return werk.WebSearchPolicy{Enabled: false} }
 	}
 	if spec.Provider != "" {
 		cfg.Provider = wscred.ProviderID(spec.Provider)

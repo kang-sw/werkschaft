@@ -81,7 +81,7 @@ type Response struct {
 	// Output are the response's items in order, as received.
 	Output       []json.RawMessage `json:"output"`
 	Usage        Usage             `json:"usage"`
-	usageMissing bool
+	UsageMissing bool              `json:"usage_missing,omitempty"`
 	window       int64
 	model        string
 }
@@ -842,7 +842,7 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 			CostUSD:           u.Cost, CacheWriteTokens: cacheWrite,
 		}
 	} else {
-		resp.usageMissing = true
+		resp.UsageMissing = true
 	}
 	return resp, nil
 }

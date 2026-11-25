@@ -376,6 +376,8 @@ func readAndFormatResponse(finalURL string, resp *http.Response, maxBytes int64,
 	} else {
 		body = normalizePlainText(string(raw))
 	}
+	title = strings.ToValidUTF8(title, "\uFFFD")
+	body = strings.ToValidUTF8(body, "\uFFFD")
 
 	out := formatOutput(finalURL, resp.StatusCode, mediaType, title, body)
 	truncated := false
@@ -442,6 +444,7 @@ func formatOutput(finalURL string, status int, mediaType, title, body string) st
 // truncateOutput bounds s to limit bytes, keeping head and tail on UTF-8 rune
 // boundaries with an omission marker matching werk.TruncateOutput.
 func truncateOutput(s string, limit int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
 	if limit <= 0 || len(s) <= limit {
 		return s
 	}
@@ -468,15 +471,22 @@ func truncateOutput(s string, limit int) string {
 	return head + marker + tail
 }
 
+// trimRightUTF8 drops at most utf8.UTFMax-1 incomplete trailing bytes created
+// when slicing a valid UTF-8 string at a byte boundary.
 func trimRightUTF8(s string) string {
-	for len(s) > 0 && !utf8.ValidString(s) {
+	for i := 0; i < utf8.UTFMax && len(s) > 0; i++ {
+		r, size := utf8.DecodeLastRuneInString(s)
+		if r != utf8.RuneError || size != 1 {
+			return s
+		}
 		s = s[:len(s)-1]
 	}
 	return s
 }
 
+// trimLeftUTF8 drops orphaned UTF-8 continuation bytes at the left slice edge.
 func trimLeftUTF8(s string) string {
-	for len(s) > 0 && !utf8.ValidString(s) {
+	for i := 0; i < utf8.UTFMax && len(s) > 0 && !utf8.RuneStart(s[0]); i++ {
 		s = s[1:]
 	}
 	return s

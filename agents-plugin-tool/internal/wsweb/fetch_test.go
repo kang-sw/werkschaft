@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type staticResolver map[string][]string
@@ -315,6 +316,48 @@ func TestFetchSizeTimeCapsBinaryAndTruncation(t *testing.T) {
 		}
 		if !strings.Contains(res.Text, "HEAD-MARKER") || !strings.Contains(res.Text, "TAIL-MARKER") || !strings.Contains(res.Text, "bytes truncated") {
 			t.Fatalf("truncation should preserve head, tail, and marker; got len=%d", len(res.Text))
+		}
+	})
+
+	t.Run("non-UTF-8 text page truncates without wiping content", func(t *testing.T) {
+		// Latin-1 / Windows-1252 invalid UTF-8 bytes (0xe9, 0x80, 0xff) placed near
+		// both ends of a large text body.
+		var payload []byte
+		payload = append(payload, "HEAD-START "...)
+		payload = append(payload, 0xe9, 0x80)
+		payload = append(payload, " AFTER-INVALID-HEAD "...)
+		payload = append(payload, strings.Repeat("abcdefghij0123456789\n", 3000)...)
+		payload = append(payload, " BEFORE-INVALID-TAIL "...)
+		payload = append(payload, 0xff, 0xfe)
+		payload = append(payload, " TAIL-END"...)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=iso-8859-1")
+			_, _ = w.Write(payload)
+		}))
+		defer srv.Close()
+
+		res, err := Fetch(context.Background(), "http://public.example/latin1", Options{
+			MaxOutputBytes: 1024,
+			Resolver:       staticResolver{"public.example": {"93.184.216.34"}},
+			DialContext:    dialToTestServer(t, srv, "93.184.216.34"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Truncated {
+			t.Fatal("expected Truncated=true")
+		}
+		if len(res.Text) > 1024 {
+			t.Fatalf("output len = %d, exceeds 1024", len(res.Text))
+		}
+		if !utf8.ValidString(res.Text) {
+			t.Fatal("truncated output is not valid UTF-8")
+		}
+		for _, want := range []string{"HEAD-START", "AFTER-INVALID-HEAD", "BEFORE-INVALID-TAIL", "TAIL-END", "bytes truncated"} {
+			if !strings.Contains(res.Text, want) {
+				t.Fatalf("truncated non-UTF-8 output lost %q:\n%s", want, res.Text)
+			}
 		}
 	})
 }

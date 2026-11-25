@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsweb"
 )
@@ -53,60 +52,5 @@ func (s *Server) callWebFetch(ctx context.Context, id json.RawMessage, args map[
 	if err != nil {
 		return toolTextResponse(id, "", fmt.Errorf("web.fetch: %w", err))
 	}
-	limit := opts.MaxOutputBytes
-	if limit <= 0 {
-		limit = wsweb.DefaultMaxOutputBytes
-	}
-	return toolTextResponse(id, formatWebFetchResult(res, limit), nil)
-}
-
-func formatWebFetchResult(res wsweb.Result, maxBytes int) string {
-	var hdr strings.Builder
-	fmt.Fprintf(&hdr, "URL: %s\nStatus: %d", res.URL, res.StatusCode)
-	if res.ContentType != "" {
-		fmt.Fprintf(&hdr, "\nContent-Type: %s", res.ContentType)
-	}
-	if res.Title != "" {
-		fmt.Fprintf(&hdr, "\nTitle: %s", res.Title)
-	}
-	header := hdr.String()
-	if res.Text == "" {
-		return clampUTF8(header, maxBytes)
-	}
-	out := header + "\n\n" + res.Text
-	if maxBytes <= 0 || len(out) <= maxBytes {
-		return out
-	}
-	avail := maxBytes - len(header) - 2
-	if avail <= 0 {
-		return clampUTF8(header, maxBytes)
-	}
-	return header + "\n\n" + clampUTF8(res.Text, avail)
-}
-
-func clampUTF8(s string, maxBytes int) string {
-	if maxBytes <= 0 || len(s) <= maxBytes {
-		return s
-	}
-	const marker = "\n[... truncated ...]\n"
-	if maxBytes <= len(marker)+16 {
-		n := maxBytes
-		for n > 0 && !utf8.RuneStart(s[n]) {
-			n--
-		}
-		return s[:n]
-	}
-	half := (maxBytes - len(marker)) / 2
-	headEnd := half
-	for headEnd > 0 && !utf8.RuneStart(s[headEnd]) {
-		headEnd--
-	}
-	tailStart := len(s) - (maxBytes - len(marker) - headEnd)
-	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
-		tailStart++
-	}
-	if tailStart <= headEnd {
-		return s[:headEnd]
-	}
-	return s[:headEnd] + marker + s[tailStart:]
+	return toolTextResponse(id, res.Text, nil)
 }

@@ -93,11 +93,17 @@ func (b *turnSearchBudget) reserve() (*WebSearchRequest, int) {
 // settle reconciles reserved against a completed response's reported searches.
 // When usage did not arrive, the reservation stays charged.
 func (b *turnSearchBudget) settle(reserved int, resp *Response) {
-	if b == nil || reserved <= 0 || resp == nil || resp.usageMissing {
+	if b == nil || reserved <= 0 || resp == nil || resp.UsageMissing {
 		return
 	}
 	used := resp.webSearchesUsed()
 	if refund := reserved - used; refund > 0 {
 		b.remaining += refund
+	}
+}
+
+func (b *turnSearchBudget) exhaust() {
+	if b != nil {
+		b.remaining = 0
 	}
 }

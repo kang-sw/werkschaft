@@ -228,6 +228,9 @@ func (s *Store) readSegment(archive *compactArchive) ([]json.RawMessage, int64, 
 					s.turnJournal.response = l.Response
 					s.turnJournal.responseEnd = len(items)
 					s.turnJournal.searchesUsed += l.Response.webSearchesUsed()
+					if l.Response.UsageMissing {
+						s.turnJournal.usageMissing = true
+					}
 				}
 			case l.K == "turn_start" && l.TurnID != "" && len(l.User) > 0:
 				if s.turnJournal.id != "" && s.turnJournal.end == nil {

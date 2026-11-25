@@ -691,6 +691,79 @@ func TestDurableTurnResumeDeductsPriorSearches(t *testing.T) {
 	if ws, ok := findToolByType(t, body, "openrouter:web_search"); ok {
 		t.Fatalf("resumed durable turn must omit search after 2 prior searches, got %#v", ws)
 	}
+
+	t.Run("missing usage persisted across resume keeps budget exhausted", func(t *testing.T) {
+		dir2 := t.TempDir()
+		session2 := NewSessionID()
+		store2, _, err := OpenStore(dir2, session2, func() int64 { return 1 })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store2.appendBarrier(turnStartRecord{K: "turn_start", TurnID: "turn-2", User: userItem("research")}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store2.AppendResponse(&Response{
+			ID:           "resp-no-usage",
+			Output:       []json.RawMessage{json.RawMessage(`{"type":"function_call","id":"fc1","call_id":"c1","name":"fs_read","arguments":"{}"}`)},
+			UsageMissing: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store2.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		var captured2 []byte
+		srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			captured2, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, sseCompleted("resp-after-missing-usage",
+				`[{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"done"}]}]`,
+				`{"input_tokens":10,"output_tokens":5}`))
+		}))
+		defer srv2.Close()
+
+		a2, err := New(Config{
+			Dir: dir2, Session: session2, Authority: AuthorityReadOnly, Model: "openai/gpt-5",
+			Endpoint: &Client{
+				BaseURL:  srv2.URL,
+				Provider: wscred.ProviderOpenRouter,
+				Token:    func(context.Context) (string, error) { return "test-token", nil },
+			},
+			WS:   fakeWSTools{},
+			Emit: func(Line) {},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a2.Close()
+
+		doneCh2 := make(chan struct{}, 1)
+		a2.out.emit = func(l Line) {
+			if l.T == LineTurnEnd {
+				doneCh2 <- struct{}{}
+			}
+		}
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel2()
+		cmds2 := make(chan Command, 1)
+		errCh2 := make(chan error, 1)
+		go func() { errCh2 <- a2.ServeCommands(ctx2, cmds2) }()
+		cmds2 <- Command{Type: CmdUser, TurnID: "turn-2", Text: "research"}
+		select {
+		case <-doneCh2:
+		case <-ctx2.Done():
+			t.Fatal("timed out waiting for resumed durable turn")
+		}
+		close(cmds2)
+		if err := <-errCh2; err != nil {
+			t.Fatal(err)
+		}
+		body2 := decodeRequestBody(t, captured2)
+		if ws, ok := findToolByType(t, body2, "openrouter:web_search"); ok {
+			t.Fatalf("resumed durable turn after UsageMissing must omit search, got %#v", ws)
+		}
+	})
 }
 
 type observingResponder struct {

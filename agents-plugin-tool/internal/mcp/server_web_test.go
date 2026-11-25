@@ -216,6 +216,9 @@ func TestWebFetchExposureAndCallPathGating(t *testing.T) {
 				if !strings.Contains(text, "URL: http://public.example/page") || !strings.Contains(text, "Title: Doc") || !strings.Contains(text, "Bounded text.") {
 					t.Fatalf("unexpected web.fetch output: %q", text)
 				}
+				if strings.Count(text, "URL: ") != 1 || strings.Count(text, "Status: ") != 1 || strings.Count(text, "Title: ") != 1 {
+					t.Fatalf("expected single header block, got:\n%s", text)
+				}
 				if hits.Load() != 1 {
 					t.Fatalf("target hits = %d, want 1", hits.Load())
 				}
@@ -335,5 +338,11 @@ func TestWebFetchValidationPrivateRefusalAndOutputCap(t *testing.T) {
 	}
 	if !strings.Contains(text, "URL: http://public.example/big") || !strings.Contains(text, "Status: 200") {
 		t.Fatalf("missing header fields in %q", text)
+	}
+	if strings.Count(text, "URL: ") != 1 || strings.Count(text, "Status: ") != 1 {
+		t.Fatalf("expected single header block in truncated output:\n%s", text)
+	}
+	if strings.Count(text, "bytes truncated") != 1 || strings.Contains(text, "[... truncated ...]") {
+		t.Fatalf("expected single truncation marker in output:\n%s", text)
 	}
 }

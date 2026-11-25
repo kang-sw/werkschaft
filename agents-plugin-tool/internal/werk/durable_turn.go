@@ -47,6 +47,7 @@ type turnJournal struct {
 	response     *Response
 	responseEnd  int
 	searchesUsed int
+	usageMissing bool
 	end          *durableEnd
 	steers       []turnSteerRecord
 }
@@ -56,6 +57,7 @@ type turnJournal struct {
 // submitted again during reconciliation.
 func (j *turnJournal) selectCheckpoint() {
 	j.input, j.responseEnd, j.searchesUsed = 0, 0, 0
+	j.usageMissing = false
 	j.response, j.steers = nil, nil
 }
 
@@ -174,7 +176,11 @@ func (a *Agent) runDurableTurn(ctx, host context.Context, cmd Command) (err erro
 	if resumed {
 		priorSearches = journal.searchesUsed
 	}
-	result, err = a.loop(ctx, host, turn, cmd.TurnID, a.newTurnSearchBudget(priorSearches))
+	budget := a.newTurnSearchBudget(priorSearches)
+	if resumed && journal.usageMissing {
+		budget.exhaust()
+	}
+	result, err = a.loop(ctx, host, turn, cmd.TurnID, budget)
 	return err
 }
 
