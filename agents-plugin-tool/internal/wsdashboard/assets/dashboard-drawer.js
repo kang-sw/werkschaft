@@ -118,20 +118,21 @@
       drhandle.hidden = !has;
       if (drMode === "panels") {
         drOpen = has && drWant;
-        drApply(false);
+        if (!drBooting) drApply(false);
       }
     }
     ticketIdeaSync();
     thandleSync();
     drFill(true);
   }
+  var drBooting = false;
   // The ticket map's handle follows the same #p-tickets gate as the idea
   // section. A map left open over a panels swap that drops the panel stays
   // usable until it closes.
   function thandleSync() {
     if (!thandle) return;
     var on = !!$("p-tickets");
-    if (thandle.hidden === on) { thandle.hidden = !on; drRoom(); }
+    if (thandle.hidden === on) { thandle.hidden = !on; if (!drBooting) drRoom(); }
   }
   // Ideas belong to this page's demand state, not the live panels region.
   // Reattach after a panels swap without fetching again or replacing focus
@@ -464,7 +465,9 @@
     drhandle.parentNode.insertBefore(drfold, drhandle);
     drfold.addEventListener("click", drFold);
     drWant = load(DR_OPEN) === "1";
+    drBooting = true;
     drawerSync();
+    drBooting = false;
     drawerWait();
     drhandle.addEventListener("click", function () {
       drSetOpen(!(drOpen && drMode === "panels"), "panels");
@@ -548,6 +551,21 @@
       });
     }, { passive: true });
     drOpen = drHas && drWant;
-    drApply(false);
+    if (drOpen || typeof requestAnimationFrame !== "function") {
+      drApply(false);
+    } else {
+      drawer.classList.toggle("open", false);
+      ["panels", "git", "search"].forEach(function (mode) { drawer.classList.toggle(mode, drMode === mode); });
+      drbody.hidden = drMode === "git" || drMode === "search";
+      if (gbody) gbody.hidden = drMode !== "git";
+      if (sbody) sbody.hidden = drMode !== "search";
+      drclip.style.height = "0px";
+      if (shandle) shandle.setAttribute("aria-expanded", "false");
+      drhandle.setAttribute("aria-expanded", "false");
+      drFoldShow("");
+      ghSync();
+      drTitle();
+      requestAnimationFrame(function () { if (drawer.isConnected) drApply(false); });
+    }
   }
 

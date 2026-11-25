@@ -80,7 +80,7 @@
     }
     wsAdmissionFilter(r);
     var list = r.querySelector(".unreg-list");
-    if (list) list.scrollTop = wsUnregScroll;
+    if (list && details && details.open && list.scrollTop !== wsUnregScroll) list.scrollTop = wsUnregScroll;
     if (wsUnregFocus) {
       var input = r.querySelector("#unreg-filter");
       if (input) {

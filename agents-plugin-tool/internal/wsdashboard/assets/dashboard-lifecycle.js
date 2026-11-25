@@ -925,17 +925,19 @@
     }
   }
   function shAdd(el, f) {
-    var ent = { el: el, f: f, head: null, title: "", pincol: false, dim: 0, y: 0, loaded: false };
+    var ent = { el: el, f: f, head: null, title: "", pincol: false, dim: 0, y: 0, loaded: false, ready: false, settingsSent: false, shownSent: false };
     el.addEventListener("load", function () {
       if (shFrames.indexOf(ent) < 0) return;
       ent.loaded = true;
+      ent.ready = true;
       if (ent.lateHash !== undefined) {
         try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
         delete ent.lateHash;
       }
-      shSettings(ent);
+      if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
       if (shWant === ent) shShow(ent);
-      else {
+      else if (!ent.shownSent) {
+        ent.shownSent = true;
         shSend(ent, "shown", { shown: ent === shOn });
         if (!shWant && ent === shOn) shCompanionTarget(ent, true);
       }
@@ -972,16 +974,16 @@
       if (push && window.WsShell.pagePath(location) + location.hash !== f.path + f.hash) shPush(f);
       if (!push) shIndex = shHistoryIndex();
       if (f.hash !== ent.f.hash) {
-        // A document still loading may drop a hash assignment; the load
+        // A document still loading may drop a hash assignment; the ready/load
         // handler applies it once the page is there.
-        if (ent.loaded) {
+        if (ent.loaded || ent.ready) {
           try { ent.el.contentWindow.location.hash = f.hash; } catch (x) { /* unloading */ }
         } else ent.lateHash = f.hash;
       }
       ent.f = f;
-      // A pending destination whose load already fired never gets another
+      // A pending destination whose ready/load already fired never gets another
       // load event to show it; go through the normal show path now.
-      if (ent === shWant && ent !== shOn && ent.loaded) shShow(ent);
+      if (ent === shWant && ent !== shOn && (ent.loaded || ent.ready)) shShow(ent);
       return;
     }
     if (!ent) { shStart(f, push); return; }
@@ -1037,7 +1039,7 @@
   function shStart(f, push, from) {
     if (push && window.WsShell.pagePath(location) + location.hash !== f.path + f.hash) shPush(f);
     if (!push) shIndex = shHistoryIndex();
-    var cached = window.WsShell.cacheLimit && shFrames.filter(function (x) { return x.loaded && x.f.rid && x.f.path === f.path; })[0];
+    var cached = window.WsShell.cacheLimit && shFrames.filter(function (x) { return (x.loaded || x.ready) && x.f.rid && x.f.path === f.path; })[0];
     if (cached) {
       if (cached.f.hash !== f.hash) try { cached.el.contentWindow.location.hash = f.hash; } catch (e) {}
       cached.f = f;
@@ -1068,10 +1070,10 @@
     railMarks();
   }
   function shShow(ent, from) {
-    // load can precede the frame's first rAF/header message. Keep the old
-    // page and header together until the destination's chrome is ready,
-    // but never strand navigation on an error/login page or broken script.
-    if (!ent.loaded) return;
+    // ready/head can precede iframe.load (which waits for nested about:srcdoc
+    // sub-iframes). Reveal once the frame's script and chrome are ready,
+    // without stranding navigation on an error/login page or broken script.
+    if (!ent.loaded && !ent.ready) return;
     if (!ent.head && !ent.headWaitDone) {
       if (!ent.headTimer) ent.headTimer = setTimeout(function () {
         ent.headTimer = null;
@@ -1087,20 +1089,26 @@
     // Keep the ready destination, but settle the draft decision before
     // hiding or destroying an outgoing document that is no longer safe.
     if (was && !shCacheable(was)) {
+      ent.shownSent = true;
       shSend(ent, "shown", { shown: false });
       if (!shLeaving) shLeave(was, ent.f, false, from === undefined ? ent.from : from);
       return;
     }
     shWant = null;
+    if (ent.lateHash !== undefined) {
+      try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
+      delete ent.lateHash;
+    }
     // A rename in progress names the session it was started for.
     var sn = region("head") && region("head").querySelector(".sname");
     if (sn && labelEditing()) labelEnd(sn);
     headHeld = null;
     shOn = ent;
     shFrames.splice(shFrames.indexOf(ent), 1); shFrames.push(ent);
-    if (ent.cached) {
+    if (ent.cached || !ent.settingsSent) {
+      ent.settingsSent = true;
       shSettings(ent);
-      shSend(ent, "theme", { theme: root.getAttribute("data-theme") || "" });
+      if (ent.cached) shSend(ent, "theme", { theme: root.getAttribute("data-theme") || "" });
       ent.cached = false;
     }
     ent.el.inert = false;
@@ -1108,9 +1116,11 @@
     if (was) {
       was.cached = true;
       was.el.classList.remove("on");
+      was.shownSent = true;
       shSend(was, "shown", { shown: false });
     }
     shPrune();
+    ent.shownSent = true;
     shSend(ent, "shown", { shown: true });
     shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);
@@ -1304,6 +1314,19 @@
       var ent = shEnt(e.source), on = !!ent && ent === shOn;
       if (!ent) return;
       switch (m.wsShell) {
+        case "ready":
+          ent.ready = true;
+          if (ent.lateHash !== undefined) {
+            try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
+            delete ent.lateHash;
+          }
+          if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
+          if (on && !ent.shownSent) {
+            ent.shownSent = true;
+            shSend(ent, "shown", { shown: true });
+            if (!shWant) shCompanionTarget(ent, true);
+          } else if (ent === shWant) shShow(ent);
+          break;
         case "head":
           ent.head = m;
           if (on) shHead(ent);
@@ -1520,6 +1543,7 @@
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
     });
     queue();
+    shPost("ready");
     shPost("title", { title: doc.title });
     if (window.scrollY) send("scroll", { y: Math.round(window.scrollY) });
   }
@@ -1542,8 +1566,11 @@
     // when the document already finished: the readiness below still stands.
     if (f.hash) el.src = window.WsShell.src(f);
     try { ent.loaded = el.contentDocument.readyState === "complete"; } catch (x) { /* not yet */ }
+    if (ent.loaded) ent.ready = true;
     shSend(ent, "sync");
     if (ent.loaded) {
+      ent.settingsSent = true;
+      ent.shownSent = true;
       shSettings(ent);
       // No load event will tell this frame it is the shown one.
       shSend(ent, "shown", { shown: true });
@@ -1551,15 +1578,17 @@
     if (settings) shOpenSettings(address);
   }
 
+  bootingPanes = true;
   if (live || gmenu) {
     setLayout(load(LAYOUT_KEY));
     setInput(load(INPUT_KEY));
   }
-  if (worktree) revealPanes();
   if (live) {
     setTab("convo");
     setCtab("convo");
   }
+  bootingPanes = false;
+  if (live || worktree) revealPanes();
   restoreOpen(doc);
   // A body frame that posted its height before the listener above existed
   // posts it again.

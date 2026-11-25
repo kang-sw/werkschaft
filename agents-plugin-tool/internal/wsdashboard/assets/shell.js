@@ -67,6 +67,7 @@
   // the fresh-load path for diagnostics; one destination may be loading.
   var CACHE_LIMIT = 5;
   var KINDS = {
+    ready: {},
     head: { html: "?string", qs: "string", pad: "number", top: "number" },
     title: { title: "string" },
     nav: { href: "string" },

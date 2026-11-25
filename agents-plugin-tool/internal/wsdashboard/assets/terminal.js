@@ -100,15 +100,30 @@
     black: "#1b1d21", red: "#c0262d", green: "#1d7348", yellow: "#8a5a00", blue: "#2457c5", magenta: "#8a3fb5", cyan: "#0e7a83", white: "#8b9097",
     brightBlack: "#5f646b", brightRed: "#d9434a", brightGreen: "#2a8f5c", brightYellow: "#a36b00", brightBlue: "#2b62d9", brightMagenta: "#a052cf", brightCyan: "#138f99", brightWhite: "#b9bdc3"
   };
-  // rgb reads a CSS colour as [r, g, b] through the browser's own parser.
+  // rgb parses standard hex/rgb/rgba CSS colours directly without DOM probes,
+  // caching resolved values and falling back to a browser probe only for other syntax.
+  var rgbCache = Object.create(null);
   function rgb(color) {
-    var probe = mk("span");
-    probe.style.color = color;
-    probe.style.display = "none";
-    doc.body.appendChild(probe);
-    var m = getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) || [0, 0, 0];
-    probe.parentNode.removeChild(probe);
-    return [+m[0], +m[1], +m[2]];
+    var s = String(color || "").trim();
+    if (rgbCache[s]) return rgbCache[s];
+    var out = null, m;
+    if ((m = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s))) {
+      var h = m[1];
+      if (h.length <= 4) out = [parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16)];
+      else out = [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    } else if ((m = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i.exec(s))) {
+      out = [+m[1], +m[2], +m[3]];
+    } else {
+      var probe = mk("span");
+      probe.style.color = s;
+      probe.style.display = "none";
+      doc.body.appendChild(probe);
+      var pm = getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) || [0, 0, 0];
+      probe.parentNode.removeChild(probe);
+      out = [+pm[0], +pm[1], +pm[2]];
+    }
+    rgbCache[s] = out;
+    return out;
   }
   function hex(c) { return "#" + c.map(function (v) { return ("0" + Math.round(v).toString(16)).slice(-2); }).join(""); }
   function theme() {

@@ -153,7 +153,7 @@ s.msg("region", { name: "board", hash: "6", html: "" });
 s.msg("tracker", { rev: 9 });
 check("and then acts on updates as they come", log, ["swap:board.6", "nudge:9"]);
 history.pushState(null, "", "#/store");
-check("the frame posted its title, deferred layout, and hash route to its parent only", parentWin.got.map(function (x) { return x.join(" "); }), ["title http://localhost:1234", "layout http://localhost:1234", "hash http://localhost:1234"]);
+check("the frame posted its ready, title, deferred layout, and hash route to its parent only", parentWin.got.map(function (x) { return x.join(" "); }), ["ready http://localhost:1234", "title http://localhost:1234", "layout http://localhost:1234", "hash http://localhost:1234"]);
 history.replaceState(null, "", "#/store/item");
 location.hash = "#/back";
 listeners.popstate.forEach(function (fn) { fn({}); });

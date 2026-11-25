@@ -24,7 +24,15 @@
   // it is stale); railGate holds the rail swaps back while a press lasts,
   // a row's rename is open, or an op posts.
   var rdrag = null, railSaving = 0, railMinGen = 0;
-  var railGate = WsRail ? WsRail.swapGate(function () { return !!rdrag || railEditing() || railSaving > 0 || !!(window.WsHoldConfirm && window.WsHoldConfirm.isHolding()); }) : null;
+  function boardScrolling() {
+    if (window.WsBoardAnchor && window.WsBoardAnchor.scrolling && window.WsBoardAnchor.scrolling()) return true;
+    try {
+      var cw = shell && shOn && shOn.el && shOn.el.contentWindow;
+      if (cw && cw.WsBoardAnchor && cw.WsBoardAnchor.scrolling && cw.WsBoardAnchor.scrolling()) return true;
+    } catch (_) {}
+    return false;
+  }
+  var railGate = WsRail ? WsRail.swapGate(function () { return !!rdrag || railEditing() || railSaving > 0 || !!(window.WsHoldConfirm && window.WsHoldConfirm.isHolding()) || boardScrolling(); }) : null;
   var RAIL_WIDE = window.matchMedia ? window.matchMedia("(min-width: 1600px)") : null;
   var RAIL_SCROLL_KEY = "ws.dashboard.railscroll";
   var RENAME_NEW = "ws.dashboard.renameNew", renameNewFrame = null;
@@ -124,7 +132,7 @@
         try { sessionStorage.removeItem(RENAME_NEW); } catch (_) {}
         return;
       }
-      if (rid !== intent.id || (shell && (!shOn || !shOn.loaded || shOn.f.rid !== intent.id))) return;
+      if (rid !== intent.id || (shell && (!shOn || !(shOn.loaded || shOn.ready) || shOn.f.rid !== intent.id))) return;
       var r = region("rail"), row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: intent.id });
       var h = region("head"), sn = h && h.querySelector(".sname");
       if (railWide() ? !row || railEditing() : !sn || labelEditing()) return;
@@ -180,6 +188,8 @@
     var h = railGate && railGate.release();
     if (h) swap("rail", h.hash, h.html);
   }
+  if (doc && doc.addEventListener) doc.addEventListener("ws-board-scroll-idle", railRelease);
+  if (shell) window.wsBoardScrollIdle = railRelease;
   function railEditing() { return !!(railEl && railEl.querySelector(".drinp")); }
   // layoutPost posts body, one rail layout op, to POST /rail/layout;
   // done(status, answer) gets the HTTP status (0: the daemon was not
