@@ -109,15 +109,15 @@ Verified external facts (read-only research, 2026-11-22):
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | harness request builder, config keys, new daemon MCP tool, tests; reference only: agents-plugin-pi/src/web-tools.ts (tracked at HEAD, absent from sparse worktree) |
+| scope.span | multi-file | harness request builder, config keys, new daemon MCP tool, tests; reference only: agents-plugin-pi/src/web-tools.ts (deleted in b263ae29c; read it with `git show b263ae29c^:agents-plugin-pi/src/web-tools.ts`) |
 | scope.surface | cross-module | new MCP tool ws/web.fetch plus config keys plus harness request builder; per-session exposure through the WS_MCP_ALLOWED_TOOLS allowlist at agents-plugin-tool/internal/mcp/server.go#L181-L182 |
 | scope.new_public_symbol | yes | ws/web.fetch MCP tool and the search enable, max_uses, max_results, engine config keys |
 | scope.new_type_contract | yes | ws/web.fetch tool input/result schema and the config key set; no such type exists yet (search for web.fetch in agents-plugin-tool returned nothing) |
-| scope.test_surface | new-files | ticket requires request-builder fixture, fetch tests and a harness-exposure test; no web.fetch test exists (search returned nothing); agents-plugin-pi/test/web-tools.test.ts is the retiring Pi analogue |
-| complexity.reuse_points | unconfirmed | request builder belongs to the unlanded builtin harness (pending 261122-feat-ws-builtin-agent-harness); allowlist and hidden-tool listing exist at agents-plugin-tool/internal/mcp/tracker_support_test.go#L285-L288 |
+| scope.test_surface | new-files | ticket requires request-builder fixture, fetch tests and a harness-exposure test; no web.fetch test exists (search returned nothing); agents-plugin-pi/test/web-tools.test.ts (deleted in b263ae29c) is the retired Pi analogue |
+| complexity.reuse_points | confirmed | request builder is werk's Responses client (agents-plugin-tool/internal/werk/responses.go `Request.Tools`, `bodyFor(provider)`), landed with 261122-feat-ws-builtin-agent-harness; allowlist and hidden-tool listing exist at agents-plugin-tool/internal/mcp/tracker_support_test.go#L285-L288 |
 | complexity.side_effect_risk | high | outbound network fetch from the daemon with SSRF exposure, plus paid search spend per turn |
 | risk.correctness | high | private-address refusal must hold after DNS resolution and on every redirect, plus size and time caps |
-| risk.fit | moderate | depends on the unlanded builtin harness request builder and on registration-data gating that does not exist yet |
+| risk.fit | moderate | extends the landed werk request builder; registration-data gating for ws/web.fetch exposure does not exist yet (werk registration in agents-plugin-tool/internal/wsagent/werk.go) |
 | risk.test | moderate | live OpenRouter search turn is required evidence and server-tool behavior is external |
 | risk.security_or_contract | high | new network-egress tool; Prior Decision 260912 said not to add web tools to ws-mcp |
 
@@ -126,15 +126,14 @@ Verified external facts (read-only research, 2026-11-22):
 ### Phase 1: Server-side search and ws/web.fetch
 
 - Attach the search server tool per Decision 2 and 3 in the harness request
-  builder (pending 261122-feat-ws-builtin-agent-harness); config keys for enable, `max_uses`, `max_results`, engine.
+  builder (werk, `agents-plugin-tool/internal/werk/responses.go`); config keys for enable, `max_uses`, `max_results`, engine.
 - `ws/web.fetch` daemon MCP tool with the Constraints above. Admission is
   bound to the caller's trusted hosted registration on the call path
   (`internal/mcp/server_dispatch.go`), not only to listing
   (`internal/mcp/server_inventory.go`): a call from any other harness or an
   unbound session is refused.
-- SIWC search attach: if `261122-feat-ws-builtin-agent-harness` Phase 2 has
-  not landed, this phase covers OpenRouter only and that ticket's Phase 2
-  attaches the SIWC search tool.
+- SIWC search attach (opt-in, default off per Decision 3): werk Phase 2
+  (SIWC provider) has landed, so this phase covers both OpenRouter and SIWC.
 - Verification: request-builder fixture showing the server tool present and
   absent per config; fetch tests for private-address refusal (including
   redirect to a private address), size/time caps, HTML-to-text; a test that
@@ -143,4 +142,8 @@ Verified external facts (read-only research, 2026-11-22):
   fixture showing the search tool omitted once the turn budget is spent; a
   cut-stream fixture showing the reservation stays charged and the retry
   request payload carries no search tool; SIWC search absent by default; one
-  live OpenRouter search turn recorded in the Result with its reported cost.
+  live search turn recorded in the Result with its reported cost. A live
+  OpenRouter turn is a paid call: run it only after the owner approves it
+  (no OpenRouter key is configured on the dev machine as of 2026-11-25);
+  without that approval record a live SIWC turn if the account allows search,
+  else state the live check as owner-pending in the Result.

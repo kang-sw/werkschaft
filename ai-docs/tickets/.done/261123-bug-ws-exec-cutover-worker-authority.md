@@ -285,3 +285,5 @@ Windows CI (43f710ebb, 887f3f98c, 18e7cf753, a6293bf44, 45c99d39d,
 ## Resolution (2026-11-23)
 
 Phase 1 merged in 1d8fa703a (read-only allowlist gate for worker exec launches). Out of scope and still open: OS-level confinement, and lifting the werk stopgap (pending 261122-feat-ws-builtin-agent-harness).
+
+Update (2026-11-25): the werk read-only exec stopgap was lifted in 2ac4cf447 (merged 3bd4dd16f) in favor of this ticket's daemon read-only allowlist; OS-level confinement remains open.

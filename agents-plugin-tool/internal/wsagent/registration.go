@@ -57,7 +57,7 @@ type BackendRegistration struct {
 	// the backend handle-only: no hiding, demotion, or version warning.
 	Catalog *HarnessProfile
 	// NativeCompaction supplies the compaction descriptor for a backend
-	// not yet ported to the full catalog (Pi).
+	// not yet ported to the full catalog.
 	NativeCompaction *CompactionProtocol
 	// ToolNameScheme names how this backend's host must spell ws's dotted
 	// tool names on a connection of its hosted lead or worker (ToolNameSchemeSanitize

@@ -140,9 +140,11 @@ Stage 3 (tier-1 harnesses; each prerequisite: the catalog ticket):
   (decision, image, video) use it too (owner (5002)=a, 2026-11-22).
 - `261122-feat-ws-builtin-agent-harness` - our own Go harness, a backend that
   fills the catalog completely, beneath the unchanged daemon application layer,
-  MCP tools, and prompt assembly; worker, then lead; Pi retires independently via
-  `261123-chore-ws-retire-pi-harness` (owner, 2026-11-23); werk replaces
-  it later without an A/B gate. Blocked by `261118-refactor-ws-harness-name-branches`.
+  MCP tools, and prompt assembly; worker, then lead; Pi retired independently via
+  `261123-chore-ws-retire-pi-harness` (owner, 2026-11-23) and werk replaced
+  it without an A/B gate. Done (2026-11-24, merged `d70c307f1`, shipped in
+  0.52); legacy `pi.*` handler removal continues in
+  `261124-chore-ws-remove-legacy-pi-handlers` (0.53).
   Supersedes the dropped `261120-feat-ws-pi-common-interface-rebuild` and
   `261118-research-ws-pi-hosted-connector`.
 - `261122-feat-ws-web-tools` - `ws/web.*` for the builtin harness only

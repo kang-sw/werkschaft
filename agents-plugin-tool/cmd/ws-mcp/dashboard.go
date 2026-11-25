@@ -508,7 +508,7 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 	return holders
 }
 
-// newAgentRunner is the daemon's agent runner: the claude and pi backends,
+// newAgentRunner is the daemon's agent runner: the registered backends,
 // ws-mcp's key store for conversation keys, and the plugin's Python launcher
 // for the ws-mcp it attaches to a conversation whose profile allows ws tools.
 // trackerChanged runs after a conversation's successful tracker write;
