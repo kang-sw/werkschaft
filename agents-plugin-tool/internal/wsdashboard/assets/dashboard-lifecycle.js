@@ -1517,6 +1517,7 @@
         if (chip && WsRail) railPopOpen("sess", chip);
       } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); }
       else if (m.wsShell === "theme") setTheme(m.theme, true);
+      else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
     });
     queue();

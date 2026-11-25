@@ -51,12 +51,20 @@
   function railKey() {
     if (shSettingsEntry) return;
     if (window.WsOverview && window.WsOverview.holding()) { window.WsOverview.after(railKey); return; }
-    if (framed) { shPost("key", { key: "rail" }); return; }
+    if (framed) {
+      if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore();
+      shPost("key", { key: "rail" });
+      return;
+    }
     if (!railEl || !WsRail) return;
     railOpen(!railShown());
   }
   function railOpen(open) {
     if (!railEl) return;
+    if (open) {
+      if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore();
+      if (typeof shell !== "undefined" && shell && typeof shOn !== "undefined" && shOn) shSend(shOn, "rail-open");
+    }
     root.classList.toggle("rail-open", !!open);
     if (memoPad) memoPad.open(!!open, railWide());
     if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || railWide()));

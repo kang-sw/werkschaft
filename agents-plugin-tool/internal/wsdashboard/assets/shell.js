@@ -57,6 +57,8 @@
   //     files   {}                    toggle the floating board files sheet
   //     menu    {}                    open the session menu (the head's
   //                                   harness chip, which the shell mirrors)
+  //     rail-open {}                  the shell opened its rail overlay: close
+  //                                   any open store drawer so the frame lowers
   //     sync    {}                    send the header, layout, and title
   //                                   again (the shell's script started)
   //     theme   {theme}               another page picked the theme
@@ -92,6 +94,7 @@
     ticketmap: {},
     files: {},
     menu: {},
+    "rail-open": {},
     sync: {}
   };
 

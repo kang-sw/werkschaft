@@ -122,6 +122,15 @@
   }
 
   function listen() {
+    // A click outside the store drawer closes it; tracker overlays, handles,
+    // dialogs, and confirmation modals count as inside. Skip while a tracker
+    // menu is open so menuOutside handles that click first.
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!ui.open || MN || !t || !t.closest) return;
+      if (t.closest('#tkdrawer, #tkclip, #tkhandles, #tkmenu, #tkcap, #tkwin, #tkdlg, #tkpm, #tkorged, #tkqpop, #tkqs, .ws-confirm') || own(t)) return;
+      collapse();
+    }, true);
     document.addEventListener('click', function (e) {
       var t = e.target;
       if (qs.open && !(t.closest && t.closest('#tkqpop, #tkqs')) && !(O.searchHost && O.searchHost.contains(t))) qClose();

@@ -16,3 +16,15 @@ func TestShellPostLayout(t *testing.T) {
 		t.Fatalf("shell post layout: %v", err)
 	}
 }
+
+func TestTrackerDrawerOverlay(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; run testdata/tkdrawer-overlay.test.cjs locally")
+	}
+	out, err := exec.Command(node, "--test", "testdata/tkdrawer-overlay.test.cjs").CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("tracker drawer overlay: %v", err)
+	}
+}
