@@ -126,8 +126,10 @@ func TestHostedCLIWorkerTokenRouting(t *testing.T) {
 	if code == 0 || !strings.Contains(stderr, "above this conversation's own tier") {
 		t.Fatalf("tier cap: %q %q %d", out, stderr, code)
 	}
+	// 0.53 removed the pi.wait refusal stub; the dispatcher now answers it
+	// as an unknown tool.
 	out, stderr, code = call("pi.wait", fmt.Sprintf(`{"session_key":%q,"id":%q}`, key, child.Address))
-	if code == 0 || !strings.Contains(stderr, "Pi harness is retired") {
+	if code == 0 || !strings.Contains(stderr, "unknown tool: pi.wait") {
 		t.Fatalf("legacy wait: %q %q %d", out, stderr, code)
 	}
 }
