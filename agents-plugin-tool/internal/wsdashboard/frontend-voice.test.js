@@ -292,19 +292,25 @@ test('mic button stays hidden until capabilities report a usable selected backen
   assert.equal(env.btn.hidden, true, 'hidden when no backends exist');
 
   capResponse = {
-    backends: [{ id: 'openai', kind: 'external', label: 'OpenAI', available: false }],
-    selected: 'openai'
+    backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: false }],
+    selected: null
   };
   await handle.controller.refreshCapabilities();
-  assert.equal(env.btn.hidden, true, 'hidden when selected backend is unavailable');
+  assert.equal(env.btn.hidden, true, 'hidden when selected backend is unavailable (selected: null)');
 
   capResponse = {
-    backends: [{ id: 'openai', kind: 'external', label: 'OpenAI', available: true, models: [{ id: 'gpt-4o-mini-transcribe', streaming: true }] }],
-    selected: 'openai',
-    model: 'gpt-4o-mini-transcribe'
+    backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: false }],
+    selected: { backend: 'openai_api', model: 'gpt-transcribe' }
   };
   await handle.controller.refreshCapabilities();
-  assert.equal(env.btn.hidden, false, 'visible once selected backend is usable');
+  assert.equal(env.btn.hidden, true, 'hidden when selected object names an unavailable backend');
+
+  capResponse = {
+    backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: true, models: [{ id: 'gpt-transcribe', streaming: true, language_field: 'languages' }] }],
+    selected: { backend: 'openai_api', model: 'gpt-transcribe', language: 'en' }
+  };
+  await handle.controller.refreshCapabilities();
+  assert.equal(env.btn.hidden, false, 'visible once selected object names a usable backend');
   handle.destroy();
 });
 
@@ -369,10 +375,8 @@ test('push-to-talk calls getUserMedia synchronously, streams SSE preview in caps
       return {
         ok: true,
         json: async () => ({
-          backends: [{ id: 'openai', kind: 'external', label: 'OpenAI', available: true, models: [{ id: 'gpt-4o-mini-transcribe', streaming: true }] }],
-          selected: 'openai',
-          model: 'gpt-4o-mini-transcribe',
-          language: 'en'
+          backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: true, models: [{ id: 'gpt-4o-mini-transcribe', streaming: true, language_field: 'language' }] }],
+          selected: { backend: 'openai_api', model: 'gpt-4o-mini-transcribe', language: 'en' }
         })
       };
     }
@@ -435,7 +439,7 @@ test('push-to-talk calls getUserMedia synchronously, streams SSE preview in caps
 
   assert.equal(uploadCount, 1);
   assert.equal(lastForm.getEntry('audio').filename, 'recording.webm');
-  assert.equal(lastForm.get('backend'), 'openai');
+  assert.equal(lastForm.get('backend'), 'openai_api');
   assert.equal(lastForm.get('model'), 'gpt-4o-mini-transcribe');
   assert.equal(lastForm.get('language'), 'en');
   assert.equal(media.tracks[0].stopped, true, 'microphone tracks released on stop');
@@ -476,8 +480,8 @@ test('non-streaming JSON response inserts final text at captured caret', async (
       return {
         ok: true,
         json: async () => ({
-          backends: [{ id: 'groq', kind: 'external', available: true, models: [{ id: 'whisper-large-v3-turbo', streaming: false }] }],
-          selected: 'groq'
+          backends: [{ id: 'groq', kind: 'external', available: true, models: [{ id: 'whisper-large-v3-turbo', streaming: false, language_field: 'language' }] }],
+          selected: { backend: 'groq', model: 'whisper-large-v3-turbo' }
         })
       };
     }
@@ -521,8 +525,8 @@ test('memory-only last recording supports resend on failure and discards on new 
       return {
         ok: true,
         json: async () => ({
-          backends: [{ id: 'openai', kind: 'external', available: true, models: [{ id: 'gpt-4o-mini-transcribe' }] }],
-          selected: 'openai'
+          backends: [{ id: 'openai_api', kind: 'external', available: true, models: [{ id: 'gpt-4o-mini-transcribe', streaming: true, language_field: 'language' }] }],
+          selected: { backend: 'openai_api', model: 'gpt-4o-mini-transcribe' }
         })
       };
     }
@@ -610,8 +614,8 @@ test('single-recorder guard refuses concurrent recording across composers sharin
   const capsFetch = async () => ({
     ok: true,
     json: async () => ({
-      backends: [{ id: 'openai', kind: 'external', available: true, models: [{ id: 'gpt-4o-mini-transcribe' }] }],
-      selected: 'openai'
+      backends: [{ id: 'openai_api', kind: 'external', available: true, models: [{ id: 'gpt-4o-mini-transcribe', streaming: true, language_field: 'language' }] }],
+      selected: { backend: 'openai_api', model: 'gpt-4o-mini-transcribe' }
     })
   });
 
@@ -680,8 +684,8 @@ test('codec negotiation, PCM16 WAV fallback encoding, and delivery lock guard', 
       return {
         ok: true,
         json: async () => ({
-          backends: [{ id: 'custom-local', kind: 'external', available: true, models: [{ id: 'whisper-1' }] }],
-          selected: 'custom-local'
+          backends: [{ id: 'local/whisper', kind: 'external', available: true, models: [{ id: 'whisper-1', streaming: false, language_field: 'language' }] }],
+          selected: { backend: 'local/whisper', model: 'whisper-1' }
         })
       };
     }
@@ -725,4 +729,67 @@ test('codec negotiation, PCM16 WAV fallback encoding, and delivery lock guard', 
 
   // Verify dashboard-composer-delivery.js guards sendMessage while data-voice-locked.
   assert.match(deliveryJS, /data-voice-locked/);
+});
+
+test('incomplete SSE stream without transcript.text.done never commits partial text and preserves resend audio', async () => {
+  const env = createEnv();
+  const media = makeFakeMedia('audio/webm;codecs=opus');
+  env.ctext.value = 'keep me';
+  env.ctext.selectionStart = 7;
+  env.ctext.selectionEnd = 7;
+
+  let attempts = 0;
+  const fakeFetch = async (url) => {
+    if (url === '/api/voice/capabilities') {
+      return {
+        ok: true,
+        json: async () => ({
+          backends: [{ id: 'openai_api', kind: 'external', available: true, models: [{ id: 'gpt-transcribe', streaming: true, language_field: 'languages' }] }],
+          selected: { backend: 'openai_api', model: 'gpt-transcribe' }
+        })
+      };
+    }
+    attempts++;
+    if (attempts === 1) {
+      // Mid-stream EOF after delta without transcript.text.done or error.
+      return makeSSEResponse([
+        'event: transcript.text.delta\ndata: {"type":"transcript.text.delta","delta":"partial only"}\n\n'
+      ]);
+    }
+    return makeSSEResponse([
+      'event: transcript.text.delta\ndata: {"type":"transcript.text.delta","delta":" full"}\n\n',
+      'event: transcript.text.done\ndata: {"type":"transcript.text.done","text":" full"}\n\n'
+    ]);
+  };
+
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc,
+    fetch: fakeFetch,
+    mediaDevices: media.mediaDevices,
+    MediaRecorder: media.MediaRecorder,
+    autoDiscover: false
+  });
+  await handle.controller.refreshCapabilities();
+
+  env.btn.click();
+  await flush();
+  env.btn.click();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(env.ctext.value, 'keep me', 'incomplete stream must never commit partial text');
+  assert.equal(env.composer.hasAttribute('data-voice-locked'), false, 'composer unlocks after incomplete stream');
+  assert.equal(env.cap.getAttribute('data-state'), 'error');
+  assert.equal(handle.controller.canRetry(), true, 'in-memory last recording preserved for resend');
+  const resendBtn = env.cap.querySelector('[data-voice-action="resend"]');
+  assert.ok(resendBtn, 'resend button offered on incomplete stream');
+
+  resendBtn.click();
+  await flush();
+  await flush();
+  await flush();
+  assert.equal(env.ctext.value, 'keep me full');
+  assert.equal(handle.controller.canRetry(), false);
+  handle.destroy();
 });

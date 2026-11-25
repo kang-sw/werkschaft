@@ -196,7 +196,8 @@
             if (decoder) pending += decoder.decode();
             pending = parseSSEFrames(pending + "\n\n", handleEvent);
             if (streamErr) throw streamErr;
-            return { text: finalText !== null ? finalText : accumulated };
+            if (finalText === null) throw voiceError("stream_incomplete", "Transcription stream closed before completion");
+            return { text: finalText };
           }
           var text = typeof chunk.value === "string"
             ? chunk.value
@@ -216,7 +217,8 @@
     return response.text().then(function (full) {
       parseSSEFrames(full + "\n\n", handleEvent);
       if (streamErr) throw streamErr;
-      return { text: finalText !== null ? finalText : accumulated };
+      if (finalText === null) throw voiceError("stream_incomplete", "Transcription stream closed before completion");
+      return { text: finalText };
     });
   }
 
@@ -467,7 +469,19 @@
       return { backends: [], selected: null };
     }).then(function (data) {
       var list = Array.isArray(data && data.backends) ? data.backends : [];
-      var selected = data && typeof data.selected === "string" && data.selected ? data.selected : null;
+      var rawSelected = data && data.selected ? data.selected : null;
+      var selected = null;
+      var model = "";
+      var language = "";
+      if (rawSelected && typeof rawSelected === "object") {
+        if (typeof rawSelected.backend === "string" && rawSelected.backend) selected = rawSelected.backend;
+        if (typeof rawSelected.model === "string") model = rawSelected.model;
+        if (typeof rawSelected.language === "string") language = rawSelected.language;
+      } else if (typeof rawSelected === "string" && rawSelected) {
+        selected = rawSelected;
+        if (data && typeof data.model === "string") model = data.model;
+        if (data && typeof data.language === "string") language = data.language;
+      }
       var externalIDs = Object.create(null);
       for (var i = 0; i < list.length; i++) {
         var b = list[i];
@@ -493,9 +507,9 @@
       return {
         backends: list,
         selected: resolvedSelected,
-        rawSelected: selected,
-        model: (data && typeof data.model === "string") ? data.model : "",
-        language: (data && typeof data.language === "string") ? data.language : ""
+        rawSelected: rawSelected,
+        model: model,
+        language: language
       };
     });
   }
@@ -523,9 +537,16 @@
     }
 
     function setCapabilities(caps) {
-      selectedId = caps && caps.selected ? caps.selected : null;
-      configuredModel = (caps && caps.model) || "";
-      configuredLanguage = (caps && caps.language) || "";
+      var sel = caps && caps.selected ? caps.selected : null;
+      if (sel && typeof sel === "object") {
+        selectedId = typeof sel.backend === "string" && sel.backend ? sel.backend : null;
+        configuredModel = (typeof sel.model === "string" ? sel.model : "") || (caps && caps.model) || "";
+        configuredLanguage = (typeof sel.language === "string" ? sel.language : "") || (caps && caps.language) || "";
+      } else {
+        selectedId = typeof sel === "string" && sel ? sel : null;
+        configuredModel = (caps && caps.model) || "";
+        configuredLanguage = (caps && caps.language) || "";
+      }
       if (typeof opts.onCapabilities === "function") opts.onCapabilities(caps, selectedBackend());
     }
 
