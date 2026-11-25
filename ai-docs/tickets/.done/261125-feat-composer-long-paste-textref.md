@@ -6,6 +6,7 @@ related:
   261125-feat-composer-mailbox-badge: "parallel sibling; shares the composer paste/keydown pipeline, the Ctrl+Shift+V raw-bypass flag, and #convo hydration entry points; no landing order required"
 sage-review-design-reviewed: e83a438c491c0bda
 sage-review-completeness-reviewed: e83a438c491c0bda
+completed: 2026-11-25
 ---
 
 # Composer Long-Paste Text Attachment Reference (`[Text #N]` / `<textref>`)
@@ -99,3 +100,17 @@ The goal is to treat long plain-text pastes (`Ctrl+V` / `Cmd+V`, `>= 1024` chara
   - Add click-to-preview popovers for both pending `.tchip` text attachments (full raw text) and pending `.ichip` pasted images in `#cimgs`, while preserving draft save/restore, undo/redo, and `×` remove + Undo trash restore.
 - Serialize `<textref id="#n" bytes="N">...</textref>` inline in `req.Text`/`Parts` on send (length-framed per `(1613)=a`, no body escaping; refuse the send with an inline error and keep the draft when the total exceeds the 64 KiB cap per `(1614)=a`, with an early per-paste warning), and hydrate `[Text #N]` / `<textref>` in `#convo` held/delivered user bubbles with matching tile + collapsible preview popover (`.thumbs` / `.icapsule` pattern).
 - Verify with local `node --test` unit tests (1024-char boundary, `Ctrl+V` vs `Ctrl+Shift+V`, undo/trash restore, manual marker deletion and `#N` non-reuse, mixed image + long-text clipboard, text-attachment tile vs topic-note chip isolation, `.ichip` and text-tile preview popover behavior, draft round-trip with gaps, CSS `:has()` guard), Go SSR hydration parity tests for held and delivered `#convo` bubbles (including a body that contains `<wb:selection`, `[Image #N]` and `<mailbox` text staying opaque, and `bytes` length mismatch / missing closing tag / cap-truncation fallback to literal text), composer tests for the over-cap send refusal (draft kept, inline error) and the early per-paste warning, and remote `w5090` `go test -race ./internal/wsdashboard`.
+
+### Result (1b3933b) - 2026-11-25
+
+Implemented in commits `1cfbccf05` (`wsinbox`) and `1b3933bb6` (`wsdashboard`, `wsi18n`):
+
+- Added strictly T0 inline UTF-8 byte-framed `<textref id="#n" bytes="N">...</textref>` parsing, stripping, and serialization in `agents-plugin-tool/internal/wsinbox/textref.go` with malformed-tag literal fallback and opaque-body precedence in `wsinbox/selections.go` (`walkSelections`, `Normalize`, `ParseSelections`, `Excerpt`).
+- Added `capsules.js` single `Ctrl+Shift+V` / `Cmd+Shift+V` raw-paste bypass flag accessor (`field.wsc.rawPaste()` / `WsCapsules.rawPaste(field)`), `dashboard-composer-textrefs.js` (352 lines, under 500-line cap) with `>= 1024` char collapse into `[Text #N]` + `56×56` `.txtchip` tiles in `#cimgs` (isolated from `.tchip` topic notes), monotonic `#N` with undo/trash restore, mixed image+text clipboard handling, 64 KiB cap early paste warning and send refusal keeping the draft intact, draft save/restore preserving numbering gaps, and generalized click-to-preview `#icapsule-pop` popovers for pending `.ichip`/`.txtchip` and `#convo` `.textref-thumb`/`.txttag`.
+- Updated Go SSR (`pageview_inbox.go`, `pageview_session.go`, `dashboard.tmpl`, `pages.go`) and client `outboxBubble` to strip `<textref>` first (keeping nested tags/markers opaque), hydrate matched `[Text #N]` and `.thumbs` `.textref-thumb` tiles with inert `<template>` HTML-escaped previews, and added 9 i18n keys across all 11 locale tables.
+- Verified with `go vet`, `go test -race -count=1 ./internal/wsinbox/...`, `go test -race ./internal/wsi18n/...`, `go test -race` on `TestTextRef*`, `TestComposerTextRefsBehavior`, `TestDashboardAssetSourceAssembly`, `TestAssetIDFollowsAssetContent`, `TestSelectionComposerMemoBlurPreservesImageRemoval`, `TestComposerShowsTopicNoteChips`, `TestComposerOutcomesToast`, `TestUserMessageConversation*`, and `TestHeld*`, plus `node --test internal/wsdashboard/testdata/*.test.cjs internal/wsdashboard/*.test.js` (708 pass, 0 fail). Remote `w5090` test run omitted by explicit lead authorization. Lite review (`code-review-lite`, `b6abbfad-01-findings.md`) returned `clean` with zero findings.
+
+
+## Resolution (2026-11-25)
+
+Implemented Phase 1 in commits 1cfbccf05 and 1b3933bb6 on branch impl/develop/mace-slug-smith. Verified with local Go (-race) and Node unit suites (708 pass, 0 fail; remote w5090 test run omitted per lead authorization) and a clean code-review-lite pass.
