@@ -301,6 +301,15 @@ func init() {
 	RegisterGlobalOnly(ItemWerkEndpoints)
 	RegisterGlobalOnly(ItemAgentChildWaitingDays)
 	RegisterGlobalOnly(ItemAgentKeepAwakeDuringTurns)
+	// agent.werk_web_search* keys default to global scope (cross-project user
+	// preference for the builtin harness's search behavior) while resolving
+	// through session > project > repo > global > builtin so a project or
+	// session can tighten or turn off search spend.
+	RegisterDefaultScope(ItemWerkWebSearch, ScopeGlobal)
+	RegisterDefaultScope(ItemWerkWebSearchMaxUses, ScopeGlobal)
+	RegisterDefaultScope(ItemWerkWebSearchMaxResults, ScopeGlobal)
+	RegisterDefaultScope(ItemWerkWebSearchEngine, ScopeGlobal)
+	RegisterDefaultScope(ItemWerkWebSearchSIWC, ScopeGlobal)
 	// sage_review* keys default to project scope: they are project-level opt-ins
 	// that should persist across sessions for the same project.
 	RegisterDefaultScope(ItemSageReview, ScopeProject)

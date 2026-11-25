@@ -131,7 +131,7 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 	for _, entry := range configRegistry {
 		add(entry)
 	}
-	for _, key := range append([]declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey}, gitMergeSizeKeys...) {
+	for _, key := range append(append([]declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey}, gitMergeSizeKeys...), werkWebSearchKeys...) {
 		add(key.entry())
 	}
 	// The pool is visible in config.show and resolved by worktree tools.

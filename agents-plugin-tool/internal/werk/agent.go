@@ -61,6 +61,14 @@ type Config struct {
 	Authority Authority
 	Model     string
 	Effort    string
+	// Provider and Dialect identify the active model endpoint when Endpoint is
+	// not a *Client (e.g. a test double). When Endpoint is a *Client with a
+	// non-empty Provider, the client's Provider and Dialect take precedence.
+	Provider wscred.ProviderID
+	Dialect  string
+	// WebSearch resolves the per-turn server-side web search policy before each
+	// turn. Nil falls back to DefaultWebSearchPolicy().
+	WebSearch func() WebSearchPolicy
 	// Session resumes that session's conversation; empty starts a new one.
 	Session string
 	// ClosedTurnID marks a turn the host intentionally abandoned on close.
@@ -126,7 +134,7 @@ var parallelMCP = map[string]bool{
 	"note_query": true, "rationale_query": true, "git_status": true, "git_diff": true, "git_log": true,
 	"git_merge_base": true, "api_list": true, "project_tree": true, "runtime_read": true,
 	"todo_list": true, "todo_read": true, "mailbox_recipients": true,
-	"fs_read": true, "fs_grep": true, "fs_list": true,
+	"fs_read": true, "fs_grep": true, "fs_list": true, "web_fetch": true,
 	"exec_list": true, "exec_tail": true, "exec_status": true, "exec_result": true,
 	"exec_raw_tail": true, "exec_raw_read": true, "exec_raw_grep": true,
 }
@@ -592,7 +600,7 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	a.out.line(Line{T: LineTurnStart, Turn: turn})
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
-	result, _ = a.loop(ctx, nil, turn, "")
+	result, _ = a.loop(ctx, nil, turn, "", a.newTurnSearchBudget(0))
 }
 
 func (a *Agent) endTurn(turn int, result durableEnd) {
@@ -648,8 +656,24 @@ func classifyTurnError(err error) durableEnd {
 	return end
 }
 
+func (a *Agent) effectiveProvider() (wscred.ProviderID, string) {
+	if c, ok := a.cfg.Endpoint.(*Client); ok && c.Provider != "" {
+		return c.Provider, c.Dialect
+	}
+	return a.cfg.Provider, a.cfg.Dialect
+}
+
+func (a *Agent) newTurnSearchBudget(priorUsed int) *turnSearchBudget {
+	provider, dialect := a.effectiveProvider()
+	policy := DefaultWebSearchPolicy()
+	if a.cfg.WebSearch != nil {
+		policy = a.cfg.WebSearch()
+	}
+	return newTurnSearchBudget(provider, dialect, policy, priorUsed)
+}
+
 // loop runs model requests and tool calls until the model asks for no more.
-func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durableEnd, error) {
+func (a *Agent) loop(ctx, host context.Context, turn int, turnID string, budget *turnSearchBudget) (durableEnd, error) {
 	var listed Authority
 	for {
 		if ctx.Err() != nil {
@@ -665,7 +689,7 @@ func (a *Agent) loop(ctx, host context.Context, turn int, turnID string) (durabl
 		if err := a.takeSteers(turnID); err != nil {
 			return durableEnd{}, err
 		}
-		resp, err := a.request(ctx, turn)
+		resp, err := a.request(ctx, turn, budget)
 		if err != nil {
 			if ctx.Err() != nil {
 				return durableEnd{Reason: ReasonAborted}, nil
@@ -785,21 +809,24 @@ func (a *Agent) reportReply(line Line) {
 }
 
 // request sends one model request, retrying the failures that are worth it.
-func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
+func (a *Agent) request(ctx context.Context, turn int, budget *turnSearchBudget) (*Response, error) {
 	limit := a.cfg.MaxRetries
 	if limit <= 0 {
 		limit = DefaultMaxRetries
 	}
 	for attempt := 0; ; attempt++ {
+		wsReq, reserved := budget.reserve()
 		a.mu.Lock()
 		req := Request{
 			Model: a.model, Effort: a.effort, Instructions: a.instructions(),
 			Input: append([]json.RawMessage(nil), a.transcript...), Tools: a.defs,
+			WebSearch: wsReq,
 		}
 		a.mu.Unlock()
 		resp, err := a.cfg.Endpoint.Respond(ctx, req, a.streamHandler(turn))
 		if err == nil {
 			if resp != nil {
+				budget.settle(reserved, resp)
 				resp.model = req.Model
 				if a.cfg.ContextWindow != nil {
 					resp.window = a.cfg.ContextWindow(req.Model)

@@ -797,7 +797,7 @@ func resolveConfigEntryForKey(key string) (configKeyEntry, bool) {
 	if strings.HasPrefix(key, wsagent.ProfilePrefix) {
 		return agentProfileKnobEntry(strings.TrimPrefix(key, wsagent.ProfilePrefix)), true
 	}
-	for _, k := range append([]declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey}, gitMergeSizeKeys...) {
+	for _, k := range append(append([]declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey}, gitMergeSizeKeys...), werkWebSearchKeys...) {
 		if k.Key == key {
 			return k.entry(), true
 		}
