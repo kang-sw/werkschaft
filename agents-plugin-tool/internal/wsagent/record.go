@@ -328,6 +328,11 @@ type QueuedInput struct {
 	Operator bool             `json:"operator,omitempty"`
 	Text     string           `json:"text,omitempty"`
 	Command  *wsinbox.Command `json:"command,omitempty"`
+	// Exec marks an exec job's completion notice (Entry.ExecNotice): Text is
+	// its <ws:exec> envelope, which the live ring shows as a background_exit
+	// wake, not as the user's text. An older binary ignores the field and
+	// shows the notice as it did before.
+	Exec bool `json:"exec,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

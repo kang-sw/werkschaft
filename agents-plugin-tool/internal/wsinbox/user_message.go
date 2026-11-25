@@ -35,13 +35,17 @@ func unescapeUserBody(text string) string {
 }
 
 // Text wraps each nonempty dashboard item once, regardless of delivery host.
-// Commands remain native command lines; interrupt controls carry no text.
+// Commands remain native command lines; interrupt controls carry no text. A
+// system notice of a background exec job (exec.go) is wrapped as <ws:exec>.
 func (e Entry) Text() string {
 	if e.Command != nil {
 		return e.Command.Line()
 	}
 	if e.Cron != nil {
 		return e.cronText()
+	}
+	if _, ok := e.ExecNotice(); ok {
+		return e.execText()
 	}
 	body := e.bodyText()
 	if body == "" {
@@ -58,38 +62,63 @@ func (e Entry) Text() string {
 // outside envelopes (At empty). Outside text keeps its position in the batch.
 type UserMessage struct{ Text, At string }
 
-// ParseUserMessages splits envelopes before any leading-anchored content
-// parser runs. Legacy text is one plain block. A malformed delimiter or time
-// rejects the whole parse so callers can display the original turn verbatim.
-func ParseUserMessages(text string) ([]UserMessage, bool) {
-	var blocks []UserMessage
+// envelope is one span of a delivered batch: text outside any envelope
+// (kind ""), a <ws:user> block (its body unescaped in text), or a verbatim
+// <ws:cron> / <ws:exec> block. raw is the span as delivered.
+type envelope struct {
+	kind, raw, text, at string
+}
+
+const (
+	kindUser = "user"
+	kindCron = "cron"
+	kindExec = "exec"
+)
+
+// verbatimOpens maps each verbatim envelope kind to its opening-tag pattern.
+func verbatimOpen(kind string) *regexp.Regexp {
+	if kind == kindExec {
+		return execOpen
+	}
+	return cronOpen
+}
+
+// scanEnvelopes splits a delivered batch into its envelopes before any
+// leading-anchored content parser runs. A scheduled prompt and an exec
+// completion notice are each one verbatim block: their bodies are escaped,
+// so the first closing delimiter ends them and nothing inside is read as an
+// envelope. A malformed delimiter or time rejects the whole scan.
+func scanEnvelopes(text string) ([]envelope, bool) {
+	var out []envelope
 	plain := func(s string) {
 		if s = strings.Trim(s, "\r\n"); strings.TrimSpace(s) != "" {
-			blocks = append(blocks, UserMessage{Text: s})
+			out = append(out, envelope{raw: s, text: s})
 		}
 	}
 	for text != "" {
 		start := strings.Index(text, "<ws:user")
-		cronStart := strings.Index(text, "<ws:cron")
-		if cronStart >= 0 && (start < 0 || cronStart < start) {
-			// A scheduled prompt is one plain block, kept verbatim: its
-			// body is escaped, so the first closing delimiter ends it and
-			// nothing inside is read as a user envelope.
-			if strings.Contains(text[:cronStart], "</ws:user") {
+		verbatim, vstart := "", -1
+		for _, kind := range []string{kindCron, kindExec} {
+			if at := strings.Index(text, "<ws:"+kind); at >= 0 && (vstart < 0 || at < vstart) {
+				verbatim, vstart = kind, at
+			}
+		}
+		if vstart >= 0 && (start < 0 || vstart < start) {
+			if strings.Contains(text[:vstart], "</ws:user") {
 				return nil, false
 			}
-			plain(text[:cronStart])
-			text = text[cronStart:]
-			open := cronOpen.FindString(text)
-			if open == "" {
+			plain(text[:vstart])
+			text = text[vstart:]
+			if verbatimOpen(verbatim).FindString(text) == "" {
 				return nil, false
 			}
-			end := strings.Index(text, "</ws:cron")
-			if end < 0 || !strings.HasPrefix(text[end:], "</ws:cron>") {
+			closing := "</ws:" + verbatim
+			end := strings.Index(text, closing)
+			if end < 0 || !strings.HasPrefix(text[end:], closing+">") {
 				return nil, false
 			}
-			end += len("</ws:cron>")
-			blocks = append(blocks, UserMessage{Text: text[:end]})
+			end += len(closing + ">")
+			out = append(out, envelope{kind: verbatim, raw: text[:end], text: text[:end]})
 			text = text[end:]
 			continue
 		}
@@ -117,14 +146,31 @@ func ParseUserMessages(text string) ([]UserMessage, bool) {
 		if offset < -720*60 || offset > 840*60 {
 			return nil, false
 		}
-		text = text[len(open[0]):]
-		end := strings.Index(text, "</ws:user")
-		if end < 0 || !strings.HasPrefix(text[end:], "</ws:user>") {
+		rest := text[len(open[0]):]
+		end := strings.Index(rest, "</ws:user")
+		if end < 0 || !strings.HasPrefix(rest[end:], "</ws:user>") {
 			return nil, false
 		}
-		body := strings.TrimSuffix(strings.TrimPrefix(text[:end], "\n"), "\n")
-		blocks = append(blocks, UserMessage{Text: unescapeUserBody(body), At: open[1]})
-		text = text[end+len("</ws:user>"):]
+		body := strings.TrimSuffix(strings.TrimPrefix(rest[:end], "\n"), "\n")
+		raw := text[:len(open[0])+end+len("</ws:user>")]
+		out = append(out, envelope{kind: kindUser, raw: raw, text: unescapeUserBody(body), at: open[1]})
+		text = rest[end+len("</ws:user>"):]
+	}
+	return out, true
+}
+
+// ParseUserMessages splits envelopes before any leading-anchored content
+// parser runs. Legacy text is one plain block. A malformed delimiter or time
+// rejects the whole parse so callers can display the original turn verbatim.
+// A scheduled prompt or an exec notice is one plain block, kept verbatim.
+func ParseUserMessages(text string) ([]UserMessage, bool) {
+	spans, ok := scanEnvelopes(text)
+	if !ok {
+		return nil, false
+	}
+	blocks := make([]UserMessage, len(spans))
+	for i, s := range spans {
+		blocks[i] = UserMessage{Text: s.text, At: s.at}
 	}
 	return blocks, true
 }

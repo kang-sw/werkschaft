@@ -175,6 +175,9 @@ whiteboard.query payload: {topic?, text?, closed?, entries?, since?, last?, kind
 ## Answers
 
 Messages sent from the dashboard arrive as `<ws:user at="...">` envelopes.
+A finished background `exec` job's completion notice arrives as a
+`<ws:exec at="..." id="...">` envelope instead: a report of the job, not
+something the user typed in the dashboard.
 Inside, in order: a `wb:answers` block, selections and attachments, then the
 user's typed text.
 

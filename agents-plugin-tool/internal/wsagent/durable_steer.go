@@ -2,7 +2,6 @@ package wsagent
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -82,22 +81,18 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 		}
 		orderInboxClaims(recs)
 		c.cutoverInstructionLeft(recs)
-		var parts, names []string
+		var names []string
 		for _, rec := range recs {
 			names = append(names, rec.Name)
-			if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
-				parts = append(parts, text)
-			}
 		}
-		text := strings.Join(parts, "\n\n")
-		c.queueDurableSteer(p, durableSteer{Text: text, Mark: covered}, names,
-			wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
+		parts := recordParts(recs)
+		c.queueDurableSteer(p, durableSteer{Text: partsText(parts), Mark: covered}, names, liveEvents(parts))
 	})
 }
 
 // queueDurableSteer records input before it can enter the session loop.
 // Claims belong to the same commit, so recovery never admits them twice.
-func (c *conv) queueDurableSteer(p durableSteerProcess, steer durableSteer, claims []string, live wslive.Event) bool {
+func (c *conv) queueDurableSteer(p durableSteerProcess, steer durableSteer, claims []string, live []wslive.Event) bool {
 	steer.ID = newReportID()
 	err := c.commitDurableRecord(func(rec *Record) {
 		if steer.Text != "" {
@@ -122,7 +117,7 @@ func (c *conv) queueDurableSteer(p durableSteerProcess, steer durableSteer, clai
 		if err := p.submitSteer(c.rec.DurableTurn.ID, steer); err != nil {
 			c.durableTurnError("send steering", err)
 		} else {
-			c.apply(live)
+			c.applyLive(live)
 			c.changed(false)
 		}
 	}
@@ -157,7 +152,9 @@ func requeueDurableSteers(rec *Record) {
 		if steer.Mail != "" {
 			text = steer.Mail
 		}
-		rec.Reports = append(rec.Reports, text)
+		// The steer's text joins a batch's parts: split it again so each
+		// exec notice keeps its own element (splitReportTexts).
+		rec.Reports = append(rec.Reports, splitReportTexts(text)...)
 	}
 	rec.DurableSteers = nil
 }
