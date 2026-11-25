@@ -494,6 +494,9 @@
         }
       }
     },
+    "261125-feat-ws-daemon-prompt-injection-mcp-output-budget": {
+      "registered_at": "2026-11-25T14:00:10Z"
+    },
     "261125-feat-ws-desktop-native-os-stt": {
       "registered_at": "2026-11-25T12:38:11Z"
     },
