@@ -220,19 +220,6 @@
     "261115-feat-ws-dashboard-conversation-rendering-consolidation": {
       "registered_at": "2026-11-14T22:47:31Z"
     },
-    "261115-feat-ws-dashboard-external-stt-voice-typing": {
-      "registered_at": "2026-11-15T02:02:38Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:54:32Z",
-        "impl": {
-          "branch": "impl/develop/lard-rind-crave"
-        }
-      }
-    },
     "261115-feat-ws-permission-profile": {
       "registered_at": "2026-11-15T07:40:45Z",
       "lease": {
@@ -455,7 +442,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T12:55:28Z",
         "impl": {
           "branch": "impl/develop/flip-sway-blush"
