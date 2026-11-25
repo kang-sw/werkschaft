@@ -124,6 +124,7 @@ type ConvEntry struct {
 	// BoardNudgeBytes is the summed payload byte count across a collapsed
 	// board-nudge run, preserving pre-truncation BodyBytes of each absorbed row.
 	BoardNudgeBytes int
+	MailboxCtx      mailboxContext
 	// PeerReplyID links a mail line's peer to its page when PeerLinked.
 	PeerReplyID string
 	PeerLinked  bool
