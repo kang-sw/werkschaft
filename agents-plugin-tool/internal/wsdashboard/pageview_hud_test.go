@@ -572,3 +572,87 @@ func TestHUDHoldingShellProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestHUDNodeMetadataAndOwnRowInvariance(t *testing.T) {
+	now := testNow
+	self := liveSession("self", "/repo/main", now)
+	otherWT := liveSession("r1", "/repo/wt-feature", now)
+	sameWT := liveSession("r2", "/repo/main", now)
+	deep := liveSession("r3", "/repo/wt-deep", now)
+
+	selfSnap := liveSnap(now, wslive.Lead{},
+		wslive.Agent{
+			ID: "a1", ReplyID: "r1", Status: wslive.StatusRunning, Harness: "codex",
+			Activity:  wslive.Activity{Phase: wslive.PhaseTool, Done: 12, Failed: 2},
+			OutputTps: 42.6,
+		},
+		wslive.Agent{
+			ID: "a2", ReplyID: "r2", Status: wslive.StatusDone, Holding: true, Alive: true, Harness: "claude",
+			Activity:  wslive.Activity{Done: 5, Failed: 0},
+			OutputTps: 19.4, // non-running: Rate() is 0
+		},
+	)
+	selfSnap.Repo = &wslive.Repo{Branch: "develop"}
+
+	r1Snap := liveSnap(now, wslive.Lead{},
+		wslive.Agent{
+			ID: "d1", ReplyID: "r3", Status: wslive.StatusRunning, Harness: "agy",
+			Activity:  wslive.Activity{Phase: wslive.PhaseThinking, Done: 7, Failed: 1, Caption: "deep task"},
+			OutputTps: 88.2,
+		},
+	)
+	r1Snap.Repo = &wslive.Repo{Branch: "impl/develop/feature"}
+	r2Snap := liveSnap(now, wslive.Lead{})
+	r2Snap.Repo = &wslive.Repo{Branch: "develop"}
+	r3Snap := liveSnap(now, wslive.Lead{})
+	r3Snap.Repo = &wslive.Repo{Branch: "impl/develop/deep"}
+
+	sessions := map[string]Session{"self": self, "r1": otherWT, "r2": sameWT, "r3": deep}
+	snaps := map[string]*wslive.Snapshot{"r1": r1Snap, "r2": r2Snap, "r3": r3Snap}
+
+	v := buildSessionView(pageInputs{Session: self, Snapshot: selfSnap, Now: now, Lookup: lookupOf(sessions, snaps)})
+	if len(v.Tree.HUD.Roots) != 2 {
+		t.Fatalf("roots = %+v", v.Tree.HUD.Roots)
+	}
+	a1 := v.Tree.HUD.Roots[0]
+	if !a1.OwnRow || a1.Done != 12 || a1.Failed != 2 || a1.OutputTps != 43 || a1.Branch != "impl/develop/feature" || a1.Dir != "wt-feature" {
+		t.Fatalf("a1 = %+v", a1)
+	}
+	a2 := v.Tree.HUD.Roots[1]
+	if !a2.OwnRow || a2.Done != 5 || a2.Failed != 0 || a2.OutputTps != 0 || a2.Branch != "" || a2.Dir != "" {
+		t.Fatalf("a2 = %+v (same branch/dir should be omitted and non-running rate 0)", a2)
+	}
+	if len(a1.Children) != 1 {
+		t.Fatalf("a1.Children = %+v", a1.Children)
+	}
+	d1 := a1.Children[0]
+	if d1.OwnRow || d1.Done != 7 || d1.Failed != 1 || d1.OutputTps != 88 || d1.Branch != "impl/develop/deep" || d1.Dir != "wt-deep" {
+		t.Fatalf("d1 = %+v", d1)
+	}
+
+	// Render .ag-hud-data via hudJSON: OwnRow strips Task/Done/Failed/OutputTps
+	// to preserve #r-tree shell invariance, while non-OwnRow keeps them.
+	set, err := renderSessionRegions(v, newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeHTML := string(set[regionTree].HTML)
+	const marker = `<script type="application/json" class="ag-hud-data">`
+	start := strings.Index(treeHTML, marker) + len(marker)
+	end := strings.Index(treeHTML[start:], `</script>`)
+	var decoded HUDView
+	if err := json.Unmarshal([]byte(treeHTML[start:start+end]), &decoded); err != nil {
+		t.Fatalf("unmarshal ag-hud-data: %v", err)
+	}
+	da1 := decoded.Roots[0]
+	if da1.Done != 0 || da1.Failed != 0 || da1.OutputTps != 0 || da1.Task != "" {
+		t.Fatalf("OwnRow leaked live telemetry into hudJSON: %+v", da1)
+	}
+	if da1.Branch != "impl/develop/feature" || da1.Dir != "wt-feature" {
+		t.Fatalf("OwnRow lost static session context in hudJSON: %+v", da1)
+	}
+	dd1 := da1.Children[0]
+	if dd1.Done != 7 || dd1.Failed != 1 || dd1.OutputTps != 88 || dd1.Task != "deep task" || dd1.Branch != "impl/develop/deep" || dd1.Dir != "wt-deep" {
+		t.Fatalf("non-OwnRow lost fields in hudJSON: %+v", dd1)
+	}
+}

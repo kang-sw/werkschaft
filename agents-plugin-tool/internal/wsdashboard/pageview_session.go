@@ -343,7 +343,11 @@ func buildSessionView(in pageInputs) SessionView {
 	attributeBoardNavigation(&v.Conversation, in.Page.BoardTargets)
 	v.Conversation.Sent = sentMarks(in.Drained, in.Held, in.Page.Reasked, settledTurnStart(in.Ring))
 	v.Tree.Subagents, v.Tree.CompactAgents = subagentProjection(reg.ReplyID, in.Snapshot.Agents, lookup, in.Now)
-	v.Tree.HUD = hudProjection(reg.ReplyID, v.Label, v.Harness, in.Snapshot.Agents, len(v.Tree.Peers.Live), lookup, in.Now)
+	selfBranch := ""
+	if in.Snapshot != nil && in.Snapshot.Repo != nil {
+		selfBranch = in.Snapshot.Repo.Branch
+	}
+	v.Tree.HUD = hudProjection(reg.ReplyID, v.Label, v.Harness, reg.Project, selfBranch, in.Snapshot.Agents, len(v.Tree.Peers.Live), lookup, in.Now)
 	v.Conversation.Subagents = v.Tree.Subagents
 	return v
 }

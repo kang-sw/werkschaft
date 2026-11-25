@@ -288,7 +288,7 @@ async function checkKeyedRebuild(frame) {
           assert.equal(await cmp.locator('.d-now').textContent(), '압축 중', 'D: compacting chip');
           assert.equal(await cmp.locator('.cnt').textContent(), '압축 2회 · 마지막 ws 자동', 'D: count and origin');
           const ctxBox = await row.boundingBox(), cmpBox = await cmp.boundingBox(), tipBox = await tip.boundingBox();
-          assert(cmpBox.y >= ctxBox.y + ctxBox.height - 1 && cmpBox.y < ctxBox.y + ctxBox.height + 14, 'line sits right under the context row');
+          assert(Math.abs(cmpBox.y - ctxBox.y) < ctxBox.height + 4, 'compaction folds inline on the context row');
           assert(cmpBox.x >= tipBox.x && cmpBox.x + cmpBox.width <= tipBox.x + tipBox.width + 1, 'line stays inside the card');
           assert.notEqual(await cmp.locator('.d-now').evaluate(el => getComputedStyle(el, '::before').animationName), 'none', 'the dot pulses');
           if (shots) await tip.screenshot({ path: `${shots}/hud-cmp-D-${scheme}.png` });
