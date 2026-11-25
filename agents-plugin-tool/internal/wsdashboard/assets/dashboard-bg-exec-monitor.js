@@ -233,15 +233,15 @@
     bgPop.style.maxHeight = Math.round(maxH) + "px";
   }
 
-  function bgMarkExecExpired(id) {
+  function bgSetExecRowExpired(id, expired) {
     if (!id) return;
     var rows = doc.querySelectorAll("details.exec-notice[data-exec-id]");
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].getAttribute("data-exec-id") !== id) continue;
       var btn = rows[i].querySelector("[data-bg-exec-jump]");
       var note = rows[i].querySelector(".exec-row-expired");
-      if (btn) btn.hidden = true;
-      if (note) note.hidden = false;
+      if (btn) btn.hidden = !!expired;
+      if (note) note.hidden = !expired;
     }
   }
 
@@ -357,14 +357,15 @@
         if (bgSt.byId[pending]) {
           bgSt.selId = pending;
           bgSt.follow = true;
+          bgSetExecRowExpired(pending, false);
         } else {
-          bgMarkExecExpired(pending);
+          bgSetExecRowExpired(pending, true);
         }
       }
       var openRows = doc.querySelectorAll("details.exec-notice[open][data-exec-id]");
       for (var oi = 0; oi < openRows.length; oi++) {
         var oid = openRows[oi].getAttribute("data-exec-id");
-        if (oid && !bgSt.byId[oid]) bgMarkExecExpired(oid);
+        if (oid) bgSetExecRowExpired(oid, !bgSt.byId[oid]);
       }
       if (!bgSt.selId || !bgSt.byId[bgSt.selId]) {
         var firstRun = list.find(function (j) { return j.state === "running"; });
@@ -935,8 +936,8 @@
     doc.addEventListener("toggle", function (e) {
       var el = e.target;
       if (!el || !el.matches || !el.matches("details.exec-notice[data-exec-id]") || !el.open) return;
-      if (!bgSt.open || bgSt.loading) return;
+      if (!bgSt.open || bgSt.loading || bgListRequest) return;
       var id = el.getAttribute("data-exec-id");
-      if (id && !bgSt.byId[id]) bgMarkExecExpired(id);
+      if (id) bgSetExecRowExpired(id, !bgSt.byId[id]);
     }, true);
   }

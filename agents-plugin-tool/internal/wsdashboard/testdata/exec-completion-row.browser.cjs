@@ -84,7 +84,9 @@ async function main() {
     assert.equal(await view.locator('details.exec-notice').count(), 4, 'all 4 exec notices should render as details.exec-notice');
     assert.equal(await view.locator('details.exec-notice[data-wake-cause="background_exit"]').count(), 4, 'all 4 exec rows should carry data-wake-cause=background_exit');
     assert.equal(await view.locator('details.exec-notice.fail').count(), 2, 'failed exec rows should carry .fail');
-    assert.equal(await view.locator('details.exec-notice .act-rewind, details.exec-notice .act-edit').count(), 0, 'exec rows must never have rewind/edit buttons');
+    assert.ok(await view.locator('.msg.user [data-act="rewind"]').count() >= 1, 'real .msg.user bubbles must render rewind controls (non-vacuous selector check)');
+    assert.ok(await view.locator('.msg.user [data-act="edit"]').count() >= 1, 'real .msg.user bubbles must render edit controls (non-vacuous selector check)');
+    assert.equal(await view.locator('details.exec-notice [data-act="rewind"], details.exec-notice [data-act="edit"], details.exec-notice .d-acts').count(), 0, 'exec rows must never have rewind/edit/msgacts buttons');
 
     // Collapsed row is compact single-line (height < 42px).
     const rowBox = await view.locator('details.exec-notice[data-exec-id="exec_done_ok"]').first().boundingBox();

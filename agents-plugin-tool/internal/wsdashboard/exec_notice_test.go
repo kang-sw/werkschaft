@@ -20,9 +20,10 @@ func TestParseExecNoticeMatchesExecjobGrammar(t *testing.T) {
 		wantSig     *int
 		wantDur     string
 		wantCmd     string
-		wantSummary string
-		wantStop    bool
-		wantNoOut   bool
+		wantSummary  string
+		wantStop     bool
+		wantStopInfo string
+		wantNoOut    bool
 		wantShown   int
 		wantTotal   int
 		wantOut     string
@@ -59,16 +60,19 @@ func TestParseExecNoticeMatchesExecjobGrammar(t *testing.T) {
 			wantSummary: "exec_sig", wantNoOut: true, wantFailed: true,
 		},
 		{
-			name: "user-stopped notice with multi-line command and stop line",
+			name: "user-stopped notice with multi-line command and multi-line stop note",
 			text: "[ws exec] exec_stop was stopped after 12.3s.\n" +
 				"command: sh -c '\n  echo hi\n'\n" +
-				"stopped by user: cwd /repo; ran 12.3s; 3 bytes of output. The user stopped this background command from the dashboard.\n" +
+				"stopped by user: cwd /repo; ran 12.3s; 3 bytes of output.\n" +
+				"The user stopped this background command from the dashboard.\n" +
 				"output:\n" +
 				"hi\n" +
 				"Read more with exec.tail (exec_id exec_stop).",
 			wantID: "exec_stop", wantState: "stopped", wantDur: "12.3s",
 			wantCmd: "sh -c '\n  echo hi\n'", wantSummary: "sh -c ' echo hi '",
-			wantStop: true, wantOut: "hi",
+			wantStop:     true,
+			wantStopInfo: "cwd /repo; ran 12.3s; 3 bytes of output.\nThe user stopped this background command from the dashboard.",
+			wantOut:      "hi",
 		},
 		{
 			name: "failed to start without duration",
@@ -133,7 +137,8 @@ func TestParseExecNoticeMatchesExecjobGrammar(t *testing.T) {
 			}
 			if ev.ID != tc.wantID || ev.State != tc.wantState || ev.Duration != tc.wantDur ||
 				ev.Command != tc.wantCmd || ev.Summary != tc.wantSummary ||
-				ev.StoppedByUser != tc.wantStop || ev.NoOutput != tc.wantNoOut ||
+				ev.StoppedByUser != tc.wantStop || ev.StopInfo != tc.wantStopInfo ||
+				ev.NoOutput != tc.wantNoOut ||
 				ev.OutputShown != tc.wantShown || ev.OutputTotal != tc.wantTotal ||
 				ev.Output != tc.wantOut || ev.Failed != tc.wantFailed {
 				t.Fatalf("got %+v", ev)
