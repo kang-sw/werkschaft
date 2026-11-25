@@ -1201,7 +1201,8 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
   background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
   color: var(--wb-primary);
 }
-:root[data-can-control] .rail .wsbar .r-config-gear:hover { background: rgb(255 255 255 / .22); }
+:root[data-can-control] .rail .wsbar .r-config-gear:hover,
+:root[data-can-control] .rail .wsbar .r-config-gear:focus-visible { background: color-mix(in srgb, var(--wb-on-topic) 14%, transparent); }
 @media (hover: none) { :root[data-can-control] .rail .r-config-gear { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { :root[data-can-control] .rail .r-config-gear { transition: none; } }
 .rail [data-scope-entry]:focus-visible, .settings-page-link:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
@@ -1210,7 +1211,7 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
   color: var(--wb-primary);
 }
 .rail .wsbar .r-config-gear[aria-current="page"] {
-  background: rgb(255 255 255 / .26);
+  background: color-mix(in srgb, var(--wb-on-topic) 18%, transparent);
   color: var(--wb-on-topic);
 }
 .settings-page-link {

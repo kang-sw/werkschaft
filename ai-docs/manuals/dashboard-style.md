@@ -60,7 +60,7 @@ HUD tokens extend them in `wsdashboard/assets/dashboard.css`.
 | `--wb-bg` | `#f3f3f0` | `#141518` | Page canvas, drawer sheet backdrop |
 | `--wb-card` | `#ffffff` | `#1e2024` | Elevated cards, rail, composer, popovers, dialogs |
 | `--wb-muted` | `#e9e8e3` | `#2b2d32` | Hover surfaces, header strips, chips, recessed tracks |
-| `--wb-topic` / `--wb-on-topic` | `#2c3038` / `#ffffff` | `#2a2d33` / `#e4e5e8` | Filled topic and workspace title bars |
+| `--wb-topic` / `--wb-on-topic` | `#e3e4e8` / `#1b1d21` | `#2a2d33` / `#e4e5e8` | Filled topic and workspace title bars |
 | Recessed input well (dark convention) | — | `#16181c` | Deep recessed well inside `#1e2024` cards (intermediate hover/chip step: `#25272c`) |
 
 ### Ink, Hairline & Neutral Wash
