@@ -74,13 +74,63 @@ func frontmatterFromText(text string) map[string]any {
 
 func cleanScalar(value string) string {
 	value = strings.TrimSpace(value)
-	if idx := strings.Index(value, " #"); idx >= 0 {
-		value = strings.TrimSpace(value[:idx])
+	if value == "" {
+		return ""
 	}
-	if len(value) >= 2 {
-		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
-			return value[1 : len(value)-1]
+	// Quoted YAML scalars may contain "#" (e.g. "foo (#1 text ref) #2"); scan
+	// to the matching closing quote before looking for a trailing comment.
+	if value[0] == '"' {
+		var b strings.Builder
+		for i := 1; i < len(value); i++ {
+			if value[i] == '\\' && i+1 < len(value) {
+				next := value[i+1]
+				if next == '"' || next == '\\' {
+					b.WriteByte(next)
+				} else {
+					b.WriteByte('\\')
+					b.WriteByte(next)
+				}
+				i++
+				continue
+			}
+			if value[i] == '"' {
+				rest := strings.TrimSpace(value[i+1:])
+				if rest == "" || strings.HasPrefix(rest, "#") {
+					return b.String()
+				}
+				break
+			}
+			b.WriteByte(value[i])
+		}
+	} else if value[0] == '\'' {
+		var b strings.Builder
+		for i := 1; i < len(value); i++ {
+			if value[i] == '\'' {
+				if i+1 < len(value) && value[i+1] == '\'' {
+					b.WriteByte('\'')
+					i++
+					continue
+				}
+				rest := strings.TrimSpace(value[i+1:])
+				if rest == "" || strings.HasPrefix(rest, "#") {
+					return b.String()
+				}
+				break
+			}
+			b.WriteByte(value[i])
 		}
 	}
+	if idx := inlineCommentIndex(value); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
 	return value
+}
+
+func inlineCommentIndex(value string) int {
+	for i := 1; i < len(value); i++ {
+		if value[i] == '#' && (value[i-1] == ' ' || value[i-1] == '\t') {
+			return i - 1
+		}
+	}
+	return -1
 }

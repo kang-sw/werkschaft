@@ -118,7 +118,14 @@ func RenderHostedRestoreBundle(env []string, root string, render HostedRender, k
 	if !ok {
 		return "", fmt.Errorf("restore bundle: session key %q has no state", key)
 	}
-	return renderHostedRestoreBundle(key, cause, rec, children), nil
+	whiteboardOn := false
+	if (sessionEntry{scope: toolRole(rec.Scope), parent: rec.Parent}).isTopLevelLead() {
+		knobResolver := s.sessionResolver(key, builtinConfigDefaults())
+		if on, err := s.whiteboardEnabled(&knobResolver, key); err == nil {
+			whiteboardOn = on
+		}
+	}
+	return renderHostedRestoreBundle(key, cause, rec, children, whiteboardOn), nil
 }
 
 // RenderLeadPlaybook renders playbook name for the hosted lead whose key is

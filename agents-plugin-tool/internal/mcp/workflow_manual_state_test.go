@@ -781,7 +781,7 @@ func TestHostedRestoreBundleSessionStateTargetsAndChildren(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderHostedRestoreBundle("session-key", "compaction", sessionRecord{Agenda: tc.agenda, Todos: todos}, tc.children)
+			got := renderHostedRestoreBundle("session-key", "compaction", sessionRecord{Agenda: tc.agenda, Todos: todos}, tc.children, false)
 			for _, want := range []string{
 				"Your ws session key is `session-key`", "Context was compacted", "## Session State",
 				"### Todos\n- [ ] {restore} Restore state", "## Work Target\n" + tc.wantTarget,
@@ -855,5 +855,114 @@ func TestHostedLeadManualAndTurnsReadSessionStateAtDelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertState(bundle, cause)
+	}
+}
+
+func TestWorkflowStateHostedOmitsRedundantNotes(t *testing.T) {
+	setupWorkflowManualNoteEnv(t)
+	root := t.TempDir()
+	initGit(t, root)
+
+	// Mint a lead key and write a note via a non-hosted server first.
+	cliServer := NewServer(root, "test")
+	key, _ := parseLoginResponse(t, callLogin(t, cliServer, 1, root, nil))
+	callToolWithKey(t, cliServer, 2, key, "note.write", map[string]any{
+		"layer": "worktree",
+		"notes": []any{map[string]any{"key": "hosted.dedup", "value": "already in hosted system prompt", "priority": 1}},
+	})
+
+	// Non-hosted CLI caller still receives the # Notes block.
+	cliState := callToolWithKey(t, cliServer, 3, key, "workflow_state", nil)
+	if notesBlockIndex(cliState) < 0 || !strings.Contains(cliState, "hosted.dedup") {
+		t.Fatalf("non-hosted workflow_state must preserve # Notes:\n%s", cliState)
+	}
+
+	// Hosted caller omits # Notes and points to note.query instead.
+	hostedSessionEnv(t, key)
+	hostedServer := NewServer(root, "test")
+	hostedState := callToolWithKey(t, hostedServer, 4, key, "workflow_state", nil)
+	if !strings.Contains(hostedState, "## Session State") || !strings.Contains(hostedState, "### Todos") {
+		t.Fatalf("hosted workflow_state missing Session State:\n%s", hostedState)
+	}
+	if notesBlockIndex(hostedState) >= 0 || strings.Contains(hostedState, "hosted.dedup") {
+		t.Fatalf("hosted workflow_state must omit redundant # Notes:\n%s", hostedState)
+	}
+	if !strings.Contains(hostedState, "note.query") {
+		t.Fatalf("hosted workflow_state missing compact note.query pointer:\n%s", hostedState)
+	}
+}
+
+func TestRenderHostedRestoreBundleWhiteboardQuickCard(t *testing.T) {
+	if n := len(whiteboardXMLQuickCard); n < 400 || n > 700 {
+		t.Fatalf("whiteboardXMLQuickCard byte length = %d, want 400..700", n)
+	}
+
+	f := newWhiteboardFixture(t)
+	f.update(t, `<wb:topic name="card-test"><wb:log>Topic summary</wb:log></wb:topic>`)
+	render := HostedRender{Harness: "claude", Boards: f.s.sessions.boards}
+
+	// 1. Top-level lead with whiteboard_enabled on: quick-card appears right after ### Whiteboard topics.
+	bundleOn, err := RenderHostedRestoreBundle(os.Environ(), f.root, render, f.key, "compaction", nil)
+	if err != nil {
+		t.Fatalf("RenderHostedRestoreBundle (on): %v", err)
+	}
+	topicsIdx := strings.Index(bundleOn, "### Whiteboard topics")
+	cardIdx := strings.Index(bundleOn, "### Whiteboard XML Quick-Card")
+	todosIdx := strings.Index(bundleOn, "### Todos")
+	if topicsIdx < 0 || cardIdx < 0 || todosIdx < 0 || !(topicsIdx < cardIdx && cardIdx < todosIdx) {
+		t.Fatalf("quick-card not positioned between Whiteboard topics and Todos:\n%s", bundleOn)
+	}
+	for _, want := range []string{
+		`<wb:topic name="<stem>"`,
+		`NOT ` + "`id=`",
+		`<wb:panel name="..." recap="...">`,
+		`<wb:change><wb:old>...</wb:old><wb:new>...</wb:new></wb:change>`,
+		`<wb:log>`,
+		`<wb:add class="policy|technical|announced|check">`,
+		`<wb:answer id="N" value="...">`,
+		`<wb:state value="discussing|researching|waiting|implementing|awaiting-confirmation"`,
+		`<wb:eta minutes="<total>" reason="..."/>`,
+		`<wb:close/>`,
+	} {
+		if !strings.Contains(bundleOn, want) {
+			t.Fatalf("quick-card missing %q:\n%s", want, bundleOn)
+		}
+	}
+
+	// 2. Non-top-level (worker / child key with parent) must NOT emit the quick-card.
+	childKey, err := f.s.sessions.mint(f.root, roleLead, f.key)
+	if err != nil {
+		t.Fatalf("mint child key: %v", err)
+	}
+	bundleChild, err := RenderHostedRestoreBundle(os.Environ(), f.root, render, childKey, "compaction", nil)
+	if err != nil {
+		t.Fatalf("RenderHostedRestoreBundle (child): %v", err)
+	}
+	if strings.Contains(bundleChild, "### Whiteboard XML Quick-Card") {
+		t.Fatalf("child restore bundle must not emit Whiteboard XML Quick-Card:\n%s", bundleChild)
+	}
+
+	// 3. Top-level lead with whiteboard_enabled off must NOT emit the quick-card.
+	setupWorkflowManualNoteEnv(t)
+	rootOff := t.TempDir()
+	initGit(t, rootOff)
+	sOff := NewServer(rootOff, "test")
+	keyOff, err := sOff.sessions.mint(rootOff, roleLead, "")
+	if err != nil {
+		t.Fatalf("mint keyOff: %v", err)
+	}
+	if resp := callToolWithKey(t, sOff, 1, keyOff, "config.tune", map[string]any{
+		"key":   "workflow.whiteboard_enabled",
+		"value": "off",
+		"scope": "session",
+	}); strings.Contains(resp, "error") {
+		t.Fatalf("disable whiteboard_enabled: %s", resp)
+	}
+	bundleOff, err := RenderHostedRestoreBundle(os.Environ(), rootOff, HostedRender{Harness: "claude"}, keyOff, "compaction", nil)
+	if err != nil {
+		t.Fatalf("RenderHostedRestoreBundle (off): %v", err)
+	}
+	if strings.Contains(bundleOff, "### Whiteboard XML Quick-Card") {
+		t.Fatalf("whiteboard-off restore bundle must not emit Whiteboard XML Quick-Card:\n%s", bundleOff)
 	}
 }

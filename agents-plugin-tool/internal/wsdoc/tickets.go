@@ -231,6 +231,11 @@ func TicketsList(root string, opts TicketListOptions) ([]TicketInfo, error) {
 }
 
 func TicketsFind(root string, opts TicketFindOptions) ([]TicketInfo, error) {
+	page, _, err := TicketsFindPage(root, opts)
+	return page, err
+}
+
+func TicketsFindPage(root string, opts TicketFindOptions) ([]TicketInfo, int, error) {
 	tickets, bodies, err := scanTicketsWithBodies(root, ticketScanOptions{
 		Statuses:       opts.Statuses,
 		IncludeDone:    opts.IncludeDone,
@@ -239,17 +244,17 @@ func TicketsFind(root string, opts TicketFindOptions) ([]TicketInfo, error) {
 		Env:            opts.Env,
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	query := strings.TrimSpace(opts.Query)
 	ticketStem := strings.TrimSpace(opts.TicketStem)
 	mentions := strings.TrimSpace(opts.MentionsTicketStem)
 	assignedTo := strings.TrimSpace(opts.AssignedToEmail)
 	if ticketStem != "" && !ticketStemRE.MatchString(ticketStem) {
-		return nil, fmt.Errorf("ticket_stem must be a ticket stem")
+		return nil, 0, fmt.Errorf("ticket_stem must be a ticket stem")
 	}
 	if mentions != "" && !ticketStemRE.MatchString(mentions) {
-		return nil, fmt.Errorf("mentions_ticket_stem must be a ticket stem")
+		return nil, 0, fmt.Errorf("mentions_ticket_stem must be a ticket stem")
 	}
 
 	out := []TicketInfo{}
@@ -280,7 +285,7 @@ func TicketsFind(root string, opts TicketFindOptions) ([]TicketInfo, error) {
 			if !ok {
 				raw, err := readTicketFile(filepath.Join(root, filepath.FromSlash(ticket.Path)))
 				if err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				text = string(raw)
 			}
@@ -300,7 +305,7 @@ func TicketsFind(root string, opts TicketFindOptions) ([]TicketInfo, error) {
 		}
 		out = append(out, ticket)
 	}
-	return paginateTickets(out, opts.Offset, opts.Limit), nil
+	return paginateTickets(out, opts.Offset, opts.Limit), len(out), nil
 }
 
 // paginateTickets slices the fully filtered projection. A non-positive limit
