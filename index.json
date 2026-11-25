@@ -494,26 +494,13 @@
         }
       }
     },
-    "261125-feat-composer-mailbox-badge": {
-      "registered_at": "2026-11-25T08:09:17Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:51:11Z",
-        "impl": {
-          "branch": "impl/develop/tray-awoke-mumps"
-        }
-      }
-    },
     "261125-feat-ws-dashboard-composer-indent-inline-markdown": {
       "registered_at": "2026-11-25T12:30:55Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T12:55:26Z",
         "impl": {
           "branch": "impl/develop/flame-anger-stole"
