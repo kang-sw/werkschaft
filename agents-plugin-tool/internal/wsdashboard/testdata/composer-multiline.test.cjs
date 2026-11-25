@@ -32,6 +32,9 @@ function makeElement(id) {
   return {
     id,
     value: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+    setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; },
     title: '',
     hidden: false,
     textContent: '',
@@ -129,6 +132,11 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
     trackMentions() {},
     paintMentions() {},
     indentLines() {},
+    editText(start, end, s) {
+      ctext.value = ctext.value.slice(0, start) + s + ctext.value.slice(end);
+      ctext.selectionStart = ctext.selectionEnd = start + s.length;
+      ctext.dispatch('input');
+    },
     // External delivery/draft collaborators for production sendMessage & cexecAcknowledged:
     window: {},
     restoring: false,
@@ -200,6 +208,7 @@ function createHarness({ platform = 'Win32', table = en, initialInputMode = 'ent
 
   function setValueAndInput(v) {
     ctext.value = v;
+    ctext.selectionStart = ctext.selectionEnd = v.length;
     ctext.dispatch('input');
   }
 
@@ -231,9 +240,9 @@ test('Shift+Enter auto-switches to temporary multiline mode, Enter inserts newli
   assert.equal(h.csendKbd.hidden, true);
   assert.equal(h.csendRevert.hidden, true);
 
-  // Shift+Enter switches to temporary multiline mode without preventing newline.
+  // Shift+Enter switches to temporary multiline mode and inserts a newline via editText().
   const se = h.keydown({ key: 'Enter', shiftKey: true });
-  assert.equal(se.defaultPrevented, false);
+  assert.equal(se.defaultPrevented, true);
   assert.equal(h.sent.length, 0);
   assert.equal(h.ctx.effectiveInputMode(), 'mod');
   assert.equal(h.csend.classList.contains('is-multiline'), true);
@@ -249,9 +258,10 @@ test('Shift+Enter auto-switches to temporary multiline mode, Enter inserts newli
   h.setValueAndInput('line 1\n');
   assert.equal(h.ctx.effectiveInputMode(), 'mod');
 
-  // Plain Enter now inserts a newline instead of sending.
+  // Plain Enter now inserts a newline via editText() instead of sending.
   const e1 = h.keydown({ key: 'Enter' });
-  assert.equal(e1.defaultPrevented, false);
+  assert.equal(e1.defaultPrevented, true);
+  assert.equal(h.ctext.value, 'line 1\n\n');
   assert.equal(h.sent.length, 0);
 
   // Ctrl+Enter sends and resets back to enter mode.

@@ -5,7 +5,37 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
+
+// trimPart trims one message part. Non-operator parts use strings.TrimSpace.
+// Operator parts drop whitespace-only text, strip leading blank lines (lines
+// of only horizontal whitespace ending in \n or \r\n) and trailing whitespace,
+// while preserving intentional line-1 leading spaces/tabs.
+func trimPart(p string, operator bool) string {
+	if !operator {
+		return strings.TrimSpace(p)
+	}
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	for {
+		i := 0
+		for i < len(p) && (p[i] == ' ' || p[i] == '\t') {
+			i++
+		}
+		if i < len(p) && p[i] == '\n' {
+			p = p[i+1:]
+			continue
+		}
+		if i+1 < len(p) && p[i] == '\r' && p[i+1] == '\n' {
+			p = p[i+2:]
+			continue
+		}
+		break
+	}
+	return strings.TrimRightFunc(p, unicode.IsSpace)
+}
 
 // Normalize trims and checks one send: empty parts are dropped, chips are
 // validated, a later chip for an item (or note for a topic) replaces an
@@ -35,7 +65,7 @@ func Normalize(e Entry) (Entry, error) {
 	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Operator: e.Operator, Steer: e.Steer, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
 	size, selectionMentions := 0, 0
 	for _, p := range e.Parts {
-		p = strings.TrimSpace(p)
+		p = trimPart(p, e.Operator)
 		if p == "" {
 			continue
 		}
