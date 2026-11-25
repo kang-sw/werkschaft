@@ -461,19 +461,6 @@
     "261123-bug-ws-windows-test-env-failures": {
       "registered_at": "2026-11-22T17:27:57Z"
     },
-    "261123-chore-werkschaft-electron-retirement": {
-      "registered_at": "2026-11-23T00:31:15Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-24T21:57:03Z",
-        "impl": {
-          "branch": "impl/develop/rinse-smoky-froth"
-        }
-      }
-    },
     "261124-bug-ws-git-search-credential-hardlink": {
       "registered_at": "2026-11-24T01:13:52Z"
     },
@@ -485,6 +472,9 @@
     },
     "261125-feat-ws-exec-completion-chat-row": {
       "registered_at": "2026-11-24T21:27:32Z"
+    },
+    "261125-refactor-ws-split-runner-conv": {
+      "registered_at": "2026-11-25T03:48:27Z"
     }
   }
 }
