@@ -138,7 +138,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			c.lastErr = appendDiagnostic(c.lastErr, "worker permission selection: "+err.Error())
 		}
 	}
-	if loaded != nil && r.opts.RestoreBundle != nil {
+	if loaded != nil && rec.PendingCompaction != nil {
+		// Restore a rotated lead's carry-forward compaction handoff before
+		// the loop or any inbox/mail signal can kick. canKick's scan/replay
+		// gates order delivery after holder reconciliation.
+		c.restorePendingCompaction(rec.PendingCompaction)
+	} else if loaded != nil && r.opts.RestoreBundle != nil {
 		// Install the marker before the loop or any inbox/mail signal can
 		// kick. canKick's scan/replay gates then order delivery after holder
 		// reconciliation without admitting sessions spawned during the scan.

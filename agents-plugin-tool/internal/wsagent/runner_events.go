@@ -768,6 +768,9 @@ func (c *conv) processExited() {
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
+	if !c.quitting {
+		c.clearPendingCompactionResume()
+	}
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	rejoining, proc := c.replaying, c.proc
@@ -986,6 +989,9 @@ func (c *conv) stopProcess(reason string) {
 	c.compactOrigin = ""
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
+	if !c.quitting {
+		c.clearPendingCompactionResume()
+	}
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	c.stopIdle()
@@ -1290,6 +1296,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	// earlier generation never reaches the conversation again, revived or not.
 	c.rec.OpenGen++
 	c.rec.QuotaContinuation = nil
+	c.rec.PendingCompaction = nil
 	c.closed = true
 	rec := c.rec
 	c.mu.Unlock()

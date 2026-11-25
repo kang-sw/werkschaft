@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -953,6 +954,7 @@ func TestQuotaContinuationAutoCancelTriggers(t *testing.T) {
 }
 
 func TestQuotaContinuationT0RecordUnknownFieldRoundTrip(t *testing.T) {
+	scheduledAfter := uint64(3)
 	rec := Record{
 		SchemaVersion: recordSchemaVersion,
 		ReplyID:       "r1",
@@ -962,13 +964,15 @@ func TestQuotaContinuationT0RecordUnknownFieldRoundTrip(t *testing.T) {
 		WSKey:         "key-1",
 		CreatedAt:     "2026-11-24T12:00:00Z",
 		Lead:          true,
+		Sends:         scheduledAfter,
 		QuotaContinuation: &QuotaContinuation{
-			Status:      QuotaContinuationScheduled,
-			ResumeAt:    1795525200000,
-			Attempts:    2,
-			MaxAttempts: 6,
-			Manual:      true,
-			NoticeText:  "usage limit reached",
+			Status:              QuotaContinuationScheduled,
+			ResumeAt:            1795525200000,
+			Attempts:            2,
+			MaxAttempts:         6,
+			Manual:              true,
+			NoticeText:          "usage limit reached",
+			ScheduledAfterSends: &scheduledAfter,
 		},
 	}
 	raw, err := json.Marshal(rec)
@@ -991,17 +995,177 @@ func TestQuotaContinuationT0RecordUnknownFieldRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reopening with the new daemon restores QuotaContinuation intact.
+	// Reopening with the new daemon restores QuotaContinuation (including
+	// scheduled_after_sends) intact.
 	var reopened Record
 	if err := json.Unmarshal(rewritten, &reopened); err != nil {
 		t.Fatal(err)
 	}
-	if reopened.QuotaContinuation == nil || *reopened.QuotaContinuation != *rec.QuotaContinuation {
+	if !reflect.DeepEqual(reopened.QuotaContinuation, rec.QuotaContinuation) {
 		t.Fatalf("reopened QuotaContinuation = %+v, want %+v", reopened.QuotaContinuation, rec.QuotaContinuation)
 	}
 	if reopened.Model != "opus" {
 		t.Fatalf("reopened Model = %q, want opus", reopened.Model)
 	}
+}
+
+func TestQuotaContinuationDowngradeReopenDropsStaleReservation(t *testing.T) {
+	// simulateOldDaemonSend mirrors a 0.52.0 daemon that preserves unknown
+	// top-level quota_continuation opaquely while incrementing Record.Sends.
+	simulateOldDaemonSend := func(t *testing.T, env *quotaEnv, id string, newSends uint64) {
+		t.Helper()
+		rec := env.recordOf(id)
+		raw, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var oldMap map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &oldMap); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := oldMap["quota_continuation"]; !ok {
+			t.Fatalf("expected opaque quota_continuation in record JSON: %s", raw)
+		}
+		oldMap["sends"], err = json.Marshal(newSends)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rewritten, err := json.Marshal(oldMap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := wsmeta.Open(env.dir, wsmeta.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if err := db.PutDurableAgentRecord(context.Background(), wsmeta.DurableAgentRecord{
+			ReplyID: rec.ReplyID, Backend: rec.Backend, JSON: rewritten,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("sends_gt_0_downgrade_drops_stale", func(t *testing.T) {
+		env := newQuotaEnv(t, map[string]string{
+			wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+		}, 0)
+		id := env.createLead(BackendClaude)
+		if _, err := env.runner.Send(id, "work"); err != nil {
+			t.Fatal(err)
+		}
+		p := env.backend.proc(t, 0)
+		first := p.nextSend(t)
+		resetsAt := env.currentNow().Add(5 * time.Minute).UnixMilli()
+		p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+		p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit", ResetsAt: resetsAt}, TurnID: first.TurnID}
+		p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+		env.waitIdle(id)
+
+		rec := env.recordOf(id)
+		if rec.Sends != 1 || rec.QuotaContinuation == nil || rec.QuotaContinuation.ScheduledAfterSends == nil || *rec.QuotaContinuation.ScheduledAfterSends != 1 {
+			t.Fatalf("unexpected watermark after schedule: sends=%d qc=%+v", rec.Sends, rec.QuotaContinuation)
+		}
+
+		// Close new daemon, simulate 0.52.0 advancing sends to 2 while
+		// preserving quota_continuation, then reopen on new daemon.
+		env.runner.Close()
+		env.runner = nil
+		simulateOldDaemonSend(t, env, id, 2)
+		env.advance(10 * time.Minute)
+		env.timers = &leverTimers{}
+		env.startRunner(0, nil)
+		env.quiesce(id)
+
+		if st, err := env.runner.Get(id); err != nil || st.QuotaContinuation != nil {
+			t.Fatalf("stale reservation not dropped on state: st=%+v err=%v", st.QuotaContinuation, err)
+		}
+		if recAfter := env.recordOf(id); recAfter.QuotaContinuation != nil {
+			t.Fatalf("stale reservation not cleared in record: %+v", recAfter.QuotaContinuation)
+		}
+		if n, _ := env.timers.counts(); n != 0 {
+			t.Fatalf("expected 0 armed timers for dropped stale reservation, got %d", n)
+		}
+		if len(env.backend.procs) != 1 {
+			t.Fatalf("stale reservation unexpectedly started a backend process: %d", len(env.backend.procs))
+		}
+	})
+
+	t.Run("sends_eq_0_downgrade_drops_stale", func(t *testing.T) {
+		env := newQuotaEnv(t, map[string]string{
+			wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+		}, 0)
+		id := env.createLead(BackendClaude)
+		c := env.runner.conv(id)
+		c.do(func() {
+			c.setQuotaContinuation(&QuotaContinuation{
+				Status:     QuotaContinuationScheduled,
+				ResumeAt:   env.currentNow().Add(5 * time.Minute).UnixMilli(),
+				NoticeText: "limit before send",
+			}, env.currentNow())
+		})
+
+		rec := env.recordOf(id)
+		if rec.Sends != 0 || rec.QuotaContinuation == nil || rec.QuotaContinuation.ScheduledAfterSends == nil || *rec.QuotaContinuation.ScheduledAfterSends != 0 {
+			t.Fatalf("expected explicit 0 watermark: sends=%d qc=%+v", rec.Sends, rec.QuotaContinuation)
+		}
+
+		env.runner.Close()
+		env.runner = nil
+		simulateOldDaemonSend(t, env, id, 1)
+		env.advance(10 * time.Minute)
+		env.timers = &leverTimers{}
+		env.startRunner(0, nil)
+		env.quiesce(id)
+
+		if st, err := env.runner.Get(id); err != nil || st.QuotaContinuation != nil {
+			t.Fatalf("stale zero-send reservation not dropped: st=%+v err=%v", st.QuotaContinuation, err)
+		}
+		if recAfter := env.recordOf(id); recAfter.QuotaContinuation != nil {
+			t.Fatalf("stale zero-send reservation not cleared in record: %+v", recAfter.QuotaContinuation)
+		}
+		if n, _ := env.timers.counts(); n != 0 {
+			t.Fatalf("expected 0 armed timers for dropped zero-send reservation, got %d", n)
+		}
+	})
+
+	t.Run("normal_restart_without_sends_advance_restores_and_fires", func(t *testing.T) {
+		env := newQuotaEnv(t, map[string]string{
+			wsconfig.ItemAgentQuotaContinuation + ".claude": "auto",
+		}, 0)
+		id := env.createLead(BackendClaude)
+		if _, err := env.runner.Send(id, "work"); err != nil {
+			t.Fatal(err)
+		}
+		p := env.backend.proc(t, 0)
+		first := p.nextSend(t)
+		resetsAt := env.currentNow().Add(5 * time.Minute).UnixMilli()
+		p.events <- Event{TurnStart: true, TurnID: first.TurnID}
+		p.events <- Event{Alert: &wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "limit", ResetsAt: resetsAt}, TurnID: first.TurnID}
+		p.events <- Event{TurnEnd: true, TurnError: "limit", TurnID: first.TurnID}
+		env.waitIdle(id)
+
+		env.runner.Close()
+		env.runner = nil
+		env.advance(10 * time.Minute)
+		env.timers = &leverTimers{}
+		env.startRunner(0, nil)
+
+		eventually(t, "timer re-armed on normal restart", func() bool {
+			n, _ := env.timers.counts()
+			return n == 1
+		})
+		env.timers.fire(t, 0)
+		p2 := env.backend.proc(t, 1)
+		cont := p2.nextSend(t)
+		if !strings.Contains(cont.Text, "usage limit was reached") {
+			t.Fatalf("expected quota continuation prompt after normal restart, got %q", cont.Text)
+		}
+		env.quiesce(id)
+		if recAfter := env.recordOf(id); recAfter.QuotaContinuation == nil || recAfter.QuotaContinuation.Status != QuotaContinuationInFlight || recAfter.QuotaContinuation.ScheduledAfterSends != nil {
+			t.Fatalf("expected in_flight with cleared watermark, got %+v", recAfter.QuotaContinuation)
+		}
+	})
 }
 
 func TestQuotaContinuationHTTPAuthAndLifecycle(t *testing.T) {

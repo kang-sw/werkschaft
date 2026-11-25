@@ -76,6 +76,11 @@ type Record struct {
 	// state. Additive top-level member on Record; preserved as unknown by
 	// older daemons (T0).
 	QuotaContinuation *QuotaContinuation `json:"quota_continuation,omitempty"`
+	// PendingCompaction holds a rotated lead's carry-forward compaction
+	// handoff until the replacement session delivers its first prompt.
+	// Additive top-level member on Record; preserved as unknown by older
+	// daemons (T0).
+	PendingCompaction *PendingCompaction `json:"pending_compaction,omitempty"`
 	// PermissionMode is the permission mode the next process launches in.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// AgyBypass is ws-side approval intent; PermissionMode stays native.

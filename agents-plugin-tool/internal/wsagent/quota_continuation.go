@@ -32,12 +32,13 @@ const (
 // QuotaContinuation is a hosted lead's persisted post-usage-limit resume state.
 // Additive top-level member on Record; preserved as unknown by older daemons (T0).
 type QuotaContinuation struct {
-	Status      string `json:"status"`
-	ResumeAt    int64  `json:"resume_at,omitempty"`
-	Attempts    int    `json:"attempts,omitempty"`
-	MaxAttempts int    `json:"max_attempts,omitempty"`
-	Manual      bool   `json:"manual,omitempty"`
-	NoticeText  string `json:"notice_text,omitempty"`
+	Status              string  `json:"status"`
+	ResumeAt            int64   `json:"resume_at,omitempty"`
+	Attempts            int     `json:"attempts,omitempty"`
+	MaxAttempts         int     `json:"max_attempts,omitempty"`
+	Manual              bool    `json:"manual,omitempty"`
+	NoticeText          string  `json:"notice_text,omitempty"`
+	ScheduledAfterSends *uint64 `json:"scheduled_after_sends,omitempty"`
 }
 
 func cloneQuotaContinuation(qc *QuotaContinuation) *QuotaContinuation {
@@ -45,6 +46,10 @@ func cloneQuotaContinuation(qc *QuotaContinuation) *QuotaContinuation {
 		return nil
 	}
 	cp := *qc
+	if qc.ScheduledAfterSends != nil {
+		sends := *qc.ScheduledAfterSends
+		cp.ScheduledAfterSends = &sends
+	}
 	return &cp
 }
 
@@ -181,7 +186,14 @@ func (c *conv) hasQuotaContinuation() bool {
 
 func (c *conv) setQuotaContinuation(next *QuotaContinuation, now time.Time) {
 	cp := cloneQuotaContinuation(next)
-	c.update(func(rec *Record) { rec.QuotaContinuation = cloneQuotaContinuation(cp) })
+	c.update(func(rec *Record) {
+		saved := cloneQuotaContinuation(cp)
+		if saved != nil && saved.Status == QuotaContinuationScheduled && saved.ScheduledAfterSends == nil {
+			sends := rec.Sends
+			saved.ScheduledAfterSends = &sends
+		}
+		rec.QuotaContinuation = saved
+	})
 	delay := time.Duration(max(0, cp.ResumeAt-now.UnixMilli())) * time.Millisecond
 	c.armQuotaTimer(delay)
 }
@@ -346,6 +358,12 @@ func (c *conv) restoreQuotaContinuation() {
 	qc := cloneQuotaContinuation(c.rec.QuotaContinuation)
 	switch qc.Status {
 	case QuotaContinuationScheduled:
+		if qc.ScheduledAfterSends != nil && c.rec.Sends > *qc.ScheduledAfterSends {
+			// A downgrade to an older daemon that preserved quota_continuation
+			// opaquely while advancing Record.Sends invalidated this reservation.
+			c.cancelQuotaContinuation(false)
+			return
+		}
 		delay := time.Duration(max(0, qc.ResumeAt-c.r.opts.Now().UnixMilli())) * time.Millisecond
 		c.armQuotaTimer(delay)
 		c.syncHost(false)
@@ -412,6 +430,7 @@ func (c *conv) quotaContinuationTimedOut() bool {
 	next := cloneQuotaContinuation(qc)
 	next.Status = QuotaContinuationInFlight
 	next.ResumeAt = 0
+	next.ScheduledAfterSends = nil
 	if next.MaxAttempts > 0 {
 		next.Attempts++
 	}
