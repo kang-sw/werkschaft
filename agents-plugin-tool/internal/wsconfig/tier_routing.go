@@ -53,11 +53,13 @@ var (
 	LaunchEffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 )
 
-// TierBundle is a named terminal: a concrete harness, model, and effort.
+// TierBundle is a named terminal: a concrete harness, optional werk provider,
+// model, and effort.
 type TierBundle struct {
-	Harness string `json:"harness"`
-	Model   string `json:"model"`
-	Effort  string `json:"effort,omitempty"`
+	Harness  string `json:"harness"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
 }
 
 // TierRouting is agent.tier_routing's value. Nodes maps a node name to its
@@ -122,10 +124,14 @@ func ParseTierRouting(raw json.RawMessage) (TierRouting, error) {
 			return TierRouting{}, fmt.Errorf("%s: %q is both a node and a bundle", ItemAgentTierRouting, name)
 		}
 		bundle.Harness = strings.TrimSpace(bundle.Harness)
+		bundle.Provider = strings.TrimSpace(bundle.Provider)
 		bundle.Model = strings.TrimSpace(bundle.Model)
 		bundle.Effort = strings.TrimSpace(bundle.Effort)
 		if !tierSlugPattern.MatchString(bundle.Harness) {
 			return TierRouting{}, fmt.Errorf("%s: bundle %q needs a harness (a lowercase name such as claude or codex)", ItemAgentTierRouting, name)
+		}
+		if err := ValidateTierProvider(bundle.Harness, bundle.Provider); err != nil {
+			return TierRouting{}, fmt.Errorf("%s: bundle %q: %w", ItemAgentTierRouting, name, err)
 		}
 		if bundle.Model == "" {
 			return TierRouting{}, fmt.Errorf("%s: bundle %q needs a model", ItemAgentTierRouting, name)
@@ -316,11 +322,7 @@ func (g *TierGraph) knownHarness(h string) bool {
 	return g.harness == nil || g.harness[h]
 }
 
-// Older daemons reject the entire saved graph if a target names werk.
 func (g *TierGraph) validateStoredHarness(harness string) error {
-	if harness == "werk" {
-		return fmt.Errorf("harness %q is available through direct tiers only", harness)
-	}
 	if !g.knownHarness(harness) {
 		return fmt.Errorf("unknown harness %q", harness)
 	}
@@ -347,6 +349,9 @@ func (g *TierGraph) validate() error {
 			return fmt.Errorf("%s: bundle %q has a node's name", ItemAgentTierRouting, name)
 		}
 		if err := g.validateStoredHarness(g.bundles[name].Harness); err != nil {
+			return fmt.Errorf("%s: bundle %q: %w", ItemAgentTierRouting, name, err)
+		}
+		if err := ValidateTierProvider(g.bundles[name].Harness, g.bundles[name].Provider); err != nil {
 			return fmt.Errorf("%s: bundle %q: %w", ItemAgentTierRouting, name, err)
 		}
 	}
@@ -445,16 +450,17 @@ type TierHop struct {
 }
 
 // TierResolution is where a tier token lands. A slot terminal sets Harness
-// and Size; a bundle terminal sets Bundle, Harness, Model, and Effort, with
-// Size the routed size ("" for a bare bundle name).
+// and Size; a bundle terminal sets Bundle, Harness, optional Provider, Model,
+// and Effort, with Size the routed size ("" for a bare bundle name).
 type TierResolution struct {
-	Token   string    `json:"token"`
-	Harness string    `json:"harness"`
-	Size    string    `json:"size,omitempty"`
-	Bundle  string    `json:"bundle,omitempty"`
-	Model   string    `json:"model,omitempty"`
-	Effort  string    `json:"effort,omitempty"`
-	Hops    []TierHop `json:"hops,omitempty"`
+	Token    string    `json:"token"`
+	Harness  string    `json:"harness"`
+	Provider string    `json:"provider,omitempty"`
+	Size     string    `json:"size,omitempty"`
+	Bundle   string    `json:"bundle,omitempty"`
+	Model    string    `json:"model,omitempty"`
+	Effort   string    `json:"effort,omitempty"`
+	Hops     []TierHop `json:"hops,omitempty"`
 	// CallerFallthrough is set when the terminal slot came from the bare
 	// size on the caller's harness.
 	CallerFallthrough bool `json:"caller_fallthrough,omitempty"`
@@ -551,7 +557,7 @@ func (g *TierGraph) Resolve(token, callerHarness string) (TierResolution, error)
 		return walked, nil
 	}
 	if bundle, ok := g.bundles[raw]; ok {
-		res.Bundle, res.Harness, res.Model, res.Effort = raw, bundle.Harness, bundle.Model, bundle.Effort
+		res.Bundle, res.Harness, res.Provider, res.Model, res.Effort = raw, bundle.Harness, bundle.Provider, bundle.Model, bundle.Effort
 		return res, nil
 	}
 	return res, fmt.Errorf("tier %q is neither a tier, <harness>.<tier>, nor an alias in %s, and no bundle in %s", token, ItemAgentTierAliases, ItemAgentTierRouting)
@@ -615,7 +621,7 @@ func (g *TierGraph) walk(name, size, callerHarness string, useAliases bool) (Tie
 				return res, err
 			}
 			bundle := g.bundles[target.name]
-			res.Bundle, res.Harness, res.Model, res.Effort, res.Size = target.name, bundle.Harness, bundle.Model, bundle.Effort, size
+			res.Bundle, res.Harness, res.Provider, res.Model, res.Effort, res.Size = target.name, bundle.Harness, bundle.Provider, bundle.Model, bundle.Effort, size
 			return res, nil
 		default:
 			if err := hop(here, target.name+":"+next, via); err != nil {

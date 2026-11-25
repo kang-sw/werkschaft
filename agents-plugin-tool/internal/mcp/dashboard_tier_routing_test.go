@@ -361,3 +361,29 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 		t.Fatalf("no check marked %v", view.Unavailable)
 	}
 }
+
+func TestDashboardTierRoutingViewWerkTargetsAndBundleProvider(t *testing.T) {
+	rsrc, opts := dashboardTierFixture(t)
+	draft := json.RawMessage(`{
+		"nodes": {"review": {"*": "werk.*"}, "implement": {"*": "fast-werk"}},
+		"bundles": {"fast-werk": {"harness": "werk", "provider": "openai", "model": "gpt-5.4", "effort": "high"}}
+	}`)
+	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Error != "" {
+		t.Fatalf("werk draft error = %q", view.Error)
+	}
+	r := tierViewRoute(t, tierViewNode(t, view, "implement"), "medium")
+	if r.Harness != "werk" || r.Provider != "openai" || r.Model != "gpt-5.4" || r.Effort != "high" || r.Bundle != "fast-werk" {
+		t.Fatalf("implement:medium = %+v", r)
+	}
+	if len(view.Bundles) != 1 || view.Bundles[0].Route.Provider != "openai" || view.Bundles[0].Route.Model != "gpt-5.4" {
+		t.Fatalf("bundles = %+v", view.Bundles)
+	}
+	rev := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if rev.Harness != "werk" || rev.Trace != "review:large -> werk.large" {
+		t.Fatalf("review:large = %+v", rev)
+	}
+}

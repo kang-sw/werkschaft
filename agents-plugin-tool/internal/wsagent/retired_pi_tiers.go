@@ -3,6 +3,7 @@ package wsagent
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -17,6 +18,14 @@ func TierRuntimeHarness(harness string) string {
 		return BackendWerk
 	}
 	return harness
+}
+
+// IsRetiredDirectTierHarness reports whether a directly passed <harness>.<tier>
+// token names the retired Pi harness, which call surfaces refuse while stored
+// Pi config keeps redirecting through TierRuntimeHarness.
+// Retained name check: direct pi.<tier> call tokens are refused while stored Pi config redirects to werk (TestRetiredPiTierRedirectsToWerk).
+func IsRetiredDirectTierHarness(harness string) bool {
+	return strings.EqualFold(strings.TrimSpace(harness), BackendPi)
 }
 
 // TierBindingResolver shares one lazily fetched OpenRouter catalog within a

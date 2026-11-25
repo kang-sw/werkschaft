@@ -4,9 +4,10 @@
   const tr = (...args) => window.wsT(...args);
   const profileLabels = {
     description: "js.settings.profile.description", backend: "js.settings.profile.backend",
-    model: "js.settings.profile.model", authority: "js.settings.profile.authority",
-    tools: "js.settings.profile.tools", ws_tools: "js.settings.profile.ws_tools",
-    sparse: "js.settings.profile.sparse", preserve: "js.settings.profile.preserve", hooks: "js.settings.profile.hooks"
+    provider: "js.settings.profile.provider", model: "js.settings.profile.model",
+    authority: "js.settings.profile.authority", tools: "js.settings.profile.tools",
+    ws_tools: "js.settings.profile.ws_tools", sparse: "js.settings.profile.sparse",
+    preserve: "js.settings.profile.preserve", hooks: "js.settings.profile.hooks"
   };
 
   function node(tag, className, text) {
@@ -302,7 +303,7 @@
       const pills = node("div", "prof-pills");
       if (profile && typeof profile === "object") {
         const fields = entry.key.startsWith("agent.profile.") ?
-          ["backend", "model", "authority", "tools", "ws_tools"] :
+          ["backend", "provider", "model", "authority", "tools", "ws_tools"] :
           ["sparse", "preserve", "hooks"];
         for (const key of fields) {
           if (profile[key] === undefined) continue;

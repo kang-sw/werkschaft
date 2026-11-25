@@ -12,16 +12,13 @@ import (
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
-var legacyPiToolNames = []string{"pi.spawn", "pi.send", "pi.stop", "pi.wait", "pi.list", "pi.transcript"}
+var legacyPiToolNames = []string{"pi.list", "pi.transcript"}
 
 func isPiTool(name string) bool {
 	return slices.Contains(legacyPiToolNames, name)
 }
 
 func (s *Server) handlePiTool(ctx context.Context, id json.RawMessage, tool string, args map[string]any) response {
-	if tool != "pi.list" && tool != "pi.transcript" {
-		return toolTextResponse(id, "", fmt.Errorf("%s: the Pi harness is retired; use agent.* for worker operations", tool))
-	}
 	if s.workerForwards() {
 		key, err := stringArg(tool, "session_key", args)
 		if err != nil {

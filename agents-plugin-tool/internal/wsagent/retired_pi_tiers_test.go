@@ -58,20 +58,24 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 	t.Cleanup(r.Close)
 	caller := LeadCaller("lead", t.TempDir(), BackendClaude, cfg)
 
+	for _, direct := range []string{"pi.small", "pi.medium", "pi.large", "pi.xlarge"} {
+		if _, _, _, err := r.resolveTier(caller, direct); err == nil || !strings.Contains(err.Error(), `harness "pi" is not registered in this daemon`) {
+			t.Errorf("direct %s should be refused: %v", direct, err)
+		}
+	}
 	for _, tc := range []struct{ token, model, rank string }{
-		{"pi.small", "vendor/exact", "small"},
 		{"werk.small", "vendor/exact", "small"},
 		{"legacy-alias", "vendor/exact", "small"},
 		{"legacy-route:small", "vendor/exact", "small"},
 		{"legacy-bundle", "vendor/bundle", "xlarge"},
-		{"pi.large", "vendor/explicit", "large"},
+		{"legacy-route:large", "vendor/explicit", "large"},
 	} {
 		harness, rank, binding, err := r.resolveTier(caller, tc.token)
 		if err != nil || harness != BackendWerk || rank != tc.rank || binding.Model != tc.model {
 			t.Errorf("%s resolved to %s.%s %+v, %v", tc.token, harness, rank, binding, err)
 		}
 	}
-	if _, _, _, err := r.resolveTier(caller, "pi.medium"); err == nil || !strings.Contains(err.Error(), "werk.medium has no usable model") {
+	if _, _, _, err := r.resolveTier(caller, "legacy-route:medium"); err == nil || !strings.Contains(err.Error(), "werk.medium has no usable model") {
 		t.Fatalf("inexact model should leave the slot unset: %v", err)
 	}
 	tiers, err := r.AgentTiers(caller)
@@ -82,7 +86,7 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 	if err != nil || legacy["small"].Model != "vendor/exact" {
 		t.Fatalf("stored Pi config changed: %+v, %v", legacy, err)
 	}
-	if _, _, _, err := r.resolveTier(caller, "pi.xlarge"); err == nil || !strings.Contains(err.Error(), "werk.xlarge has no usable model") {
+	if _, _, _, err := r.resolveTier(caller, "legacy-route:xlarge"); err == nil || !strings.Contains(err.Error(), "werk.xlarge has no usable model") {
 		t.Fatalf("account-only model should leave the legacy slot unset: %v", err)
 	}
 	routerConfigured = false
@@ -94,7 +98,7 @@ func TestRetiredPiTierRedirectsToWerk(t *testing.T) {
 		t.Fatalf("account-only model should not resolve a legacy bundle: %v", err)
 	}
 	accountConfigured = false
-	if _, _, _, err := r.resolveTier(caller, "pi.small"); err == nil || !strings.Contains(err.Error(), werkNoKeyReason) {
+	if _, _, _, err := r.resolveTier(caller, "legacy-alias"); err == nil || !strings.Contains(err.Error(), werkNoKeyReason) {
 		t.Fatalf("no-key refusal = %v", err)
 	}
 }

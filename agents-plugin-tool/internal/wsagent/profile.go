@@ -80,6 +80,10 @@ type Profile struct {
 	Description string `json:"description,omitempty"`
 	// Backend is the harness name, admitted through BackendRegistration.
 	Backend string `json:"backend"`
+	// Provider is the optional werk provider (openrouter, openai, or
+	// local/<name>); absent defaults to openrouter for werk and is refused for
+	// other backends.
+	Provider string `json:"provider,omitempty"`
 	// Model and Effort are the conversation's starting values; empty leaves
 	// the harness default.
 	Model  string `json:"model,omitempty"`
@@ -232,6 +236,7 @@ func ParseProfile(raw json.RawMessage, registries ...map[string]BackendRegistrat
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Profile{}, fmt.Errorf("value must be a single JSON object")
 	}
+	p.Provider = strings.TrimSpace(p.Provider)
 	if err := p.validate(registries...); err != nil {
 		return Profile{}, err
 	}
@@ -245,6 +250,9 @@ func (p Profile) validate(registries ...map[string]BackendRegistration) error {
 	}
 	if p.Backend != BackendPi && !slices.Contains(names, p.Backend) {
 		return fmt.Errorf("backend must be %s; got %q", backendAlternatives(names), p.Backend)
+	}
+	if err := wsconfig.ValidateTierProvider(p.Backend, p.Provider); err != nil {
+		return err
 	}
 	if p.Model != "" && !modelPattern.MatchString(p.Model) {
 		return fmt.Errorf("model %q must match %s", p.Model, modelPattern.String())
@@ -454,6 +462,7 @@ func ProfileValueSchema(registries ...map[string]BackendRegistration) map[string
 		"properties": map[string]any{
 			"description": map[string]any{"type": "string"},
 			"backend":     map[string]any{"enum": savedProfileBackends(registries), "description": "The harness the conversation runs in."},
+			"provider":    map[string]any{"type": "string", "description": "Optional werk provider (openrouter, openai, or local/<name>); absent defaults to openrouter for werk and is refused for other backends."},
 			"model":       map[string]any{"type": "string", "pattern": modelPattern.String(), "description": "Starting model; absent leaves the harness default."},
 			"effort":      map[string]any{"type": "string", "pattern": effortPattern.String(), "description": "Starting reasoning effort; absent leaves the harness default."},
 			"tools":       stringList("Built-in tool allowlist: tool names, or claude permission rules such as \"Bash(git status)\". Absent allows none; everything not listed is denied without a prompt."),

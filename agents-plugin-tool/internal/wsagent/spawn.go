@@ -129,7 +129,9 @@ func (spec *SpawnSpec) apply(rec *Record) {
 	if spec.Effort != "" {
 		rec.Effort = spec.Effort
 	}
-	rec.Provider = spec.provider
+	if spec.provider != "" {
+		rec.Provider = spec.provider
+	}
 	rec.Label = spec.Label
 	rec.Tier = spec.Tier
 	rec.SystemPrompt = spec.SystemPrompt != ""

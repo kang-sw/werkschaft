@@ -1103,3 +1103,37 @@ test("lead model picks retain endpoint identity for spawning and active-lead swi
     assert.match(ctx.leadModelLabels("werk", "", true)[provider + " same"], new RegExp(provider));
   }
 });
+
+test("werk bundle and profile provider choices and i18n keys are wired across locales", async () => {
+  const win = {};
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), {window: win,
+    fetch: async () => ({ok: true, json: async () => ({harnesses: [
+      {harness: "claude", models: [{id: "sonnet"}]},
+      {harness: "werk",
+        model_providers: ["openrouter", "openai", "local/office"],
+        models: [{id: "m1", provider: "local/home"}, {id: "m2", provider: "openai"}]}
+    ]})})});
+  const cb = win.WsSettingsCombobox;
+  await cb.loadChoices();
+  assert.deepEqual(Array.from(cb.providerOptions("werk")), ["openrouter", "openai", "local/office", "local/home"]);
+  assert.deepEqual(Array.from(cb.providerOptions("claude")), []);
+
+  const locales = ["en", "ko", "ja", "zh-Hans", "zh-Hant", "de", "es", "fr", "it", "pt-BR", "ru"];
+  const keys = [
+    "js.settings.tier_routing.provider",
+    "js.settings.tier_routing.provider.default",
+    "js.settings.profile.provider"
+  ];
+  for (const locale of locales) {
+    const table = readLocale(locale);
+    for (const key of keys) {
+      assert.equal(typeof table[key], "string", `${locale} missing ${key}`);
+      assert.ok(table[key].trim().length > 0, `${locale} empty ${key}`);
+    }
+  }
+  const tiersJS = read("dashboard-settings-tiers.js");
+  assert.match(tiersJS, /tr-bundle-provider/);
+  assert.match(tiersJS, /providerOptions\("werk"\)/);
+  const extrasJS = read("dashboard-settings-extras.js");
+  assert.match(extrasJS, /js\.settings\.profile\.provider/);
+});

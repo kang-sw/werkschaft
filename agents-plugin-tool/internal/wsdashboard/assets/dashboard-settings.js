@@ -377,7 +377,7 @@ var wsSettingsChoiceLabels = {
     if (value === null || value === undefined || value === "") return tr("js.settings.empty_value");
     if (typeof value === "object") {
       if ("backend" in value || "model" in value || "effort" in value) {
-        return [value.backend, value.model, value.effort].filter(Boolean).join(" · ") || tr("js.settings.empty_value");
+        return [value.backend, value.provider, value.model, value.effort].filter(Boolean).join(" · ") || tr("js.settings.empty_value");
       }
       return JSON.stringify(value);
     }

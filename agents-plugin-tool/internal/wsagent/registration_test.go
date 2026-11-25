@@ -136,10 +136,17 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 		BackendClaude: {LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes},
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
-		BackendWerk:   {BuiltinProfilesOnly: true},
+		BackendWerk:   {LeadProfile: LeadProfileWerk, PermissionModes: []string{werkModeReadOnly, werkModeWorkspaceWrite, werkModeFullAccess}},
 	}
 	if !reflect.DeepEqual(ProfileValueSchema(), ProfileValueSchema(production)) {
 		t.Fatal("production profile schema changed from the builtin-only contract")
+	}
+	prodProps := ProfileValueSchema()["properties"].(map[string]any)
+	if enum := prodProps["backend"].(map[string]any)["enum"].([]string); !slices.Contains(enum, BackendWerk) {
+		t.Fatalf("production profile backend enum missing werk: %v", enum)
+	}
+	if _, ok := prodProps["provider"]; !ok {
+		t.Fatal("production profile schema missing provider property")
 	}
 }
 

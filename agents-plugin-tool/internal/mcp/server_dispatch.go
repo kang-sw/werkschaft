@@ -644,7 +644,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, nil)
 		}
-		text := fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", result.Backend, result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
+		text := fmt.Sprintf("backend: %s\n", result.Backend)
+		if result.Provider != "" {
+			text += "provider: " + result.Provider + "\n"
+		}
+		text += fmt.Sprintf("model: %s\neffort: %s\nresolved_from: %s\n", result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
 		if result.Trace != "" {
 			text += "trace: " + result.Trace + "\n"
 		}
@@ -1659,8 +1663,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		}
 		return toolTextResponse(req.ID, text+"\n", err)
 
-	// Legacy history reads and retirement refusals remain callable through 0.52.
-	case "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait":
+	// Hidden legacy Pi history reads remain callable (absent from tools/list).
+	case "pi.list", "pi.transcript":
 		return s.handlePiTool(ctx, req.ID, params.Name, params.Arguments)
 	case "compact":
 		return s.handleCompact(ctx, req.ID, params.Arguments)

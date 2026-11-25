@@ -508,12 +508,13 @@ type ChoicesAnswer struct {
 // SupportTier is one named bundle: its trace and the binding it resolves
 // to, or why it does not resolve. Availability is the harness's own.
 type SupportTier struct {
-	Name    string `json:"name"`
-	Trace   string `json:"trace,omitempty"`
-	Harness string `json:"harness,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Name     string `json:"name"`
+	Trace    string `json:"trace,omitempty"`
+	Harness  string `json:"harness,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // namedTiers resolves every named bundle of the global routing graph.
@@ -548,7 +549,7 @@ func (s *Support) namedTiers() ([]SupportTier, string) {
 		} else if why := resolver.ProviderGap(tier.Harness, binding.Provider); why != "" {
 			tier.Error = why
 		} else {
-			tier.Model, tier.Effort = binding.Model, binding.Effort
+			tier.Provider, tier.Model, tier.Effort = binding.Provider, binding.Model, binding.Effort
 		}
 		out = append(out, tier)
 	}

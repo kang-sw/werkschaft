@@ -214,12 +214,13 @@ type AgentRouting struct {
 // AgentRouteEntry is one routed tier: the token, its resolution trace, and
 // the binding it spawns with now; Error says why it is not spawnable.
 type AgentRouteEntry struct {
-	Tier    string `json:"tier"`
-	Trace   string `json:"trace,omitempty"`
-	Harness string `json:"harness,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Tier     string `json:"tier"`
+	Trace    string `json:"trace,omitempty"`
+	Harness  string `json:"harness,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // TierHarnesses are the harness names a tier route or bundle may name: the
@@ -505,11 +506,11 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 			} else if why := r.workerProviderGap(harness, binding.Provider); why != "" {
 				e.Error = why
 			} else {
-				e.Model, e.Effort = binding.Model, binding.Effort
+				e.Provider, e.Model, e.Effort = binding.Provider, binding.Model, binding.Effort
 			}
 		default:
 			if m, ok := tiers[res.Size]; ok {
-				e.Model, e.Effort = m.Model, m.Effort
+				e.Provider, e.Model, e.Effort = m.Provider, m.Model, m.Effort
 			} else {
 				e.Error = fmt.Sprintf("tier %q is not set for %s", res.Size, harness)
 			}
@@ -556,6 +557,9 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	switch h, t, dotted := strings.Cut(raw, "."); {
 	case dotted:
 		harness, bare = h, wsconfig.NormalizedTier(t)
+		if IsRetiredDirectTierHarness(harness) && bare != "" {
+			return "", "", mapping, r.tierRefusal(caller, resolver, fmt.Sprintf("tier %q: harness %q is not registered in this daemon", tier, harness))
+		}
 	case wsconfig.NormalizedTier(raw) != "":
 		harness, bare = caller.Harness, wsconfig.NormalizedTier(raw)
 	default:
@@ -675,7 +679,7 @@ func (r *TierBindingResolver) Routed(res wsconfig.TierResolution) (wsconfig.Agen
 		if res.Harness == BackendPi && !r.hasExactModel(res.Model) {
 			return wsconfig.AgentTier{}, fmt.Errorf("bundle %q needs an exact OpenRouter model ID for werk; update its model in agent.tier_routing", res.Bundle)
 		}
-		return wsconfig.AgentTier{Backend: harness, Model: res.Model, Effort: res.Effort}, nil
+		return wsconfig.AgentTier{Backend: harness, Provider: res.Provider, Model: res.Model, Effort: res.Effort}, nil
 	}
 	return r.harnessSlot(harness, res.Size)
 }

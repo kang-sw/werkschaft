@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 8fec2ccb49f55f97
 sage-review-design-reviewed: 8fec2ccb49f55f97
+completed: 2026-11-25
 ---
 
 # Remove the legacy pi.* handlers at 0.53
@@ -135,6 +136,23 @@ out of scope, so this ticket carries it.
 - Verification: the affected Go suites; `git grep -i '\bpi\b'` over shipped
   paths reviewed, with each remaining hit justified in the Result.
 
+### Result (f6753ea3b6) - 2026-11-25
+
+- **Landed:** Removed `pi.spawn`, `pi.send`, `pi.stop`, and `pi.wait` from `legacyPiToolNames` and `handlePiTool` (`agents-plugin-tool/internal/mcp/pi_tools.go`), `server_dispatch.go#L1658`, `agents-plugin/runtime.json`, `agents-plugin-wsflow/runtime.json`, and generated `internal/wspackage/generated/*/runtime.json`; removed `spawn`/`send`/`stop`/`wait` cases in `serveToken` (`internal/wsagent/children.go#L275`); added `IsRetiredDirectTierHarness` (`internal/wsagent/retired_pi_tiers.go#L27`) to refuse direct `pi.<tier>` calls in `resolveTier` (`internal/wsagent/agent_tools.go#L560`), `resolveAgentTier` (`internal/mcp/tier_routing.go#L87`), and `renderTierBindingCompat` (`internal/mcp/tier_routing.go#L235`); removed Pi-specific refusal branches in `session.request_hire` (`internal/mcp/session_hire.go`, `internal/wsdashboard/session_hire.go`); updated `ai-docs/manuals/ws-mcp.md` and affected tests (plus `internal/wsagent/agent_prompt_test.go#L108` updated from direct `pi.large` to `werk.large` in `7fed94333a`).
+- **Removed vs. retained remnants (Decisions 3, 4, 6):**
+  - Removed: `pi.spawn`/`pi.send`/`pi.stop`/`pi.wait` MCP handlers, dispatch cases, `runtime.json` entries, `children.go` token ops, direct `pi.<tier>` call acceptance, and Pi-specific `session.request_hire` branches.
+  - Retained: `pi.list`/`pi.transcript` handlers and forwarding (`pi_tools.go#L15-L59`, `server_dispatch.go#L1658`, `server_inventory.go#L69` callable-only/absent from `tools/list`, `runtime.json` entries, `children.go` `mayHoldToken`/`ownChild("pi.transcript")`/list+transcript endpoints — Decision 6); `server_inventory.go` `isPiTool` narrowed to the two retained names; `permission.go#L170,L194` `legacyPiWorkerTools` (Decision 4); `runner_startup.go#L494,L515-L516` legacy Pi holder sweep guards (Decision 3); `config_manifest.go#L196-L198,L218-L220` old-package manifest drop of `pi.` and `dashboard.pi_spawn_enabled` (Decision 4); `retired_pi_tiers.go` and stored-value callers in `agent_tools.go` redirecting stored `pi` pointers/aliases/bundles to `werk` (Decision 4); `// Retained name check` annotations and narrowed `harness_name_scan_test.go` allowlist.
+- **Compatibility (T3 at 0.53; plugin versions left at `0.52.2` for lead release bump):**
+  - MCP tools `pi.spawn`/`pi.send`/`pi.stop`/`pi.wait`: **T3** — 0.52 (`0f306a072:internal/mcp/pi_tools.go:15,21`, `server_dispatch.go:1654`) answered refusal stubs; 0.53 (`HEAD:internal/mcp/pi_tools.go:15,21`, `server_dispatch.go:1658`) removes them so callers receive unknown-tool errors. `pi.list`/`pi.transcript` remain callable and unexposed (T0).
+  - Worker capability token ops `spawn`/`send`/`stop`/`wait`: **T3** — 0.52 (`0f306a072:internal/wsagent/children.go:275`) served legacy refusal replies; 0.53 (`HEAD:internal/wsagent/children.go:275`) returns 404 unknown agent route while keeping `list`/`transcript`.
+  - Direct `pi.<tier>` call tokens (`agent.spawn`, `config.resolve_agent`, `playbook.render`): **T3** — 0.52 redirected direct `pi.<tier>` calls to `werk.<tier>`; 0.53 (`HEAD:internal/wsagent/retired_pi_tiers.go:27`, `agent_tools.go:560`, `internal/mcp/tier_routing.go:87,235`) refuses direct `pi.<tier>` calls while preserving stored Pi data redirection.
+- **Shipped-path `git grep -inw pi agents-plugin/ agents-plugin-wsflow/ agents-plugin-tool/internal/wsdoc/` audit:**
+  - `agents-plugin/runtime.json:90-91` and `agents-plugin-wsflow/runtime.json:93-94`: `"pi.list"`, `"pi.transcript"` — retained callable runtime-contract checks per Decision 6 (absent from MCP schema/`tools/list`).
+  - `agents-plugin/hooks/claude-mod/settings.test.ts:10` and `agents-plugin-wsflow/hooks/claude-mod/settings.test.ts:10`: `{ backend: 'pi' }` — unit test fixture exercising non-boolean setting validation.
+  - `agents-plugin/hooks/claude-mod/watcher.test.ts:1244-1261` and `agents-plugin-wsflow/hooks/claude-mod/watcher.test.ts:1244-1261`: `label: 'pi:childone'` — unit test fixture exercising mail envelope formatting with an opaque label.
+  - `agents-plugin-tool/internal/wsdoc/`: 0 matches.
+- **Verification:** `python3 agents-plugin-tool/scripts/generate-package-assets.py --check` (ok); `python3 -m unittest discover agents-plugin-wsflow/tests` (22 tests, 2 skipped, ok); `python3 -m unittest discover agents-plugin/tests` (184 tests, 3 skipped, ok); `go -C agents-plugin-tool test ./internal/wsagent` (ok, 100.7s); `go -C agents-plugin-tool test ./internal/mcp -timeout 45m` (ok, 674.0s).
+
 ### Phase 2: Allow werk in tier routing and saved profiles
 
 - Accept `werk` as a stored `agent.tier_routing` node/bundle target
@@ -164,3 +182,24 @@ out of scope, so this ticket carries it.
 - Verification: routing-graph and profile tests that a werk target resolves
   and spawns through the normal availability checks; settings catalog and
   translations stay in sync (`ai-docs/manuals/config-settings-ui.md`).
+
+### Result (7fed94333a) - 2026-11-25
+
+- **Landed:** Lifted the `werk` exclusion in `TierGraph.validateStoredHarness` (`agents-plugin-tool/internal/wsconfig/tier_routing.go#L325`) and removed `BuiltinProfilesOnly: true` on `BackendWerk` (`internal/wsagent/werk.go#L56`). Added optional `provider` (`openrouter` | `openai` | `local/<name>`, default `openrouter`) to `TierBundle`/`TierResolution` (`internal/wsconfig/tier_routing.go#L60,L458`) and `Profile` (`internal/wsagent/profile.go#L86`), validated via `wsconfig.ValidateTierProvider` and refused for non-`werk` harnesses. Threaded `provider` through `TierBindingResolver.Routed`, `AgentRouteEntry`, `SupportTier`, `Record.Provider`, `SpawnSpec.apply`, `workerStartProviderGap` on non-lead create/spawn, resolved lead `admitLeadProvider` in `runner_create.go`, `dashboardTierRoute`, `resolveAgentTierResult` (JSON and text), `config_tier_routing.go`, `config_registry.go`, dashboard Settings UI (`dashboard-settings-combobox.js`, `dashboard-settings-tiers.js`, `dashboard-settings-extras.js`, `dashboard-settings.js`, `dashboard-leads.js`, `dashboard-tier-picker.js`), and all 11 locale tables (`internal/wsi18n/tables/*.json`).
+- **Compatibility (T3 at 0.53; plugin versions left at `0.52.2` for lead release bump):**
+  - `agent.tier_routing` targeting `werk` (nodes/bundles, with optional `provider`): **T3** — 0.53 writes `werk` targets and optional `provider` (`HEAD:internal/wsconfig/tier_routing.go:60,325`); a 0.52 binary reading that graph refuses the whole graph with `"harness \"werk\" is available through direct tiers only"` (`0f306a072:internal/wsconfig/tier_routing.go:322`) and `DisallowUnknownFields` rejects `provider`.
+  - Saved `agent.profile.<name>` with `backend: "werk"` (and optional `provider`): **T3** — 0.53 writes saved `werk` profiles with optional `provider` (`HEAD:internal/wsagent/werk.go:56`, `profile.go:86`); a 0.52 binary refuses them with `"backend \"werk\" is available through builtin profiles only"` (`0f306a072:internal/wsagent/werk.go:67`, `profile.go:221,241,433`) and `DisallowUnknownFields` rejects `provider`.
+  - Additive `provider` (`omitempty`) in `config.resolve_agent`, `agent.tiers`, and dashboard tier-routing JSON views: **T0** for callers ignoring unknown JSON fields.
+- **Verification (fakes only, no paid API calls):**
+  - `go -C agents-plugin-tool test ./internal/wsconfig ./internal/wsi18n`: ok
+  - `go -C agents-plugin-tool test ./internal/wsagent`: ok (100.7s)
+  - `go -C agents-plugin-tool test ./internal/mcp -timeout 45m`: ok (674.0s)
+  - All other non-MCP/non-wsdashboard Go packages: ok
+  - `node --test agents-plugin-tool/internal/wsdashboard/*.test.js`: 335/335 passed (including 23/23 in `frontend-settings.test.js`)
+  - `go -C agents-plugin-tool test ./internal/wsdashboard -timeout 25m`: all settings/hire/tier tests passed; 5 pre-existing unrelated failures on `develop` (`0f306a072`) observed in untouched files (`TestHostedSessionMarks`, `TestSessionHoverScriptLifecycle`, `TestGalleryLayoutModes`, `TestSelectionComposerSendSnapshotsAndCancel`, `TestSessionPageOffersSystemOpenToLocalViewersOnly`).
+- **Review (`code-review-lite`, 1 pass):** Clean with 2 minor findings noted for future follow-up: (1) `frontend-settings.test.js:1134-1138` regex-checks `dashboard-settings-tiers.js`/`dashboard-settings-extras.js` instead of executing bundle/lead DOM sync; (2) `runner_create.go:153-169` lacks a dedicated unit test for a saved `lead-werk` profile override carrying `provider`.
+
+
+## Resolution (2026-11-25)
+
+Phase 1 removed the retired pi.spawn/pi.send/pi.stop/pi.wait handlers, runtime.json entries, direct pi.<tier> call acceptance, and Pi-specific session.request_hire branches while retaining hidden callable pi.list/pi.transcript history reads, legacy Pi holder sweep guards, and stored Pi data redirection. Phase 2 lifted werk exclusions from agent.tier_routing and saved custom agent.profile.* entries and added optional werk provider support across config, spawn/create, resolve, dashboard Settings UI, lead presets, and all 11 locale tables. Code-review-lite passed clean with 2 minor notes. Plugin versions remain at 0.52.2 for the lead's 0.53 release bump.

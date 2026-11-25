@@ -133,6 +133,20 @@ var WsSettingsCombobox = (function () {
       .map(function (m) { return { id: modelKey(String(m.id), m.provider || (harnessName === "werk" ? "openrouter" : "")), thinking: m.thinking === true }; });
   }
 
+  function providerOptions(harnessName) {
+    var key = String(harnessName || "").trim().toLowerCase();
+    if (key !== "werk") return [];
+    var out = ["openrouter", "openai"];
+    var h = harnessEntry(key);
+    function add(value) {
+      var id = String(value || "").trim();
+      if (id && out.indexOf(id) < 0) out.push(id);
+    }
+    if (h && Array.isArray(h.model_providers)) h.model_providers.forEach(add);
+    if (h && Array.isArray(h.models)) h.models.forEach(function (m) { if (m && m.provider) add(m.provider); });
+    return out;
+  }
+
   function effortOptions(harnessName) {
     var h = harnessEntry(harnessName);
     if (!h || !Array.isArray(h.efforts)) return [];
@@ -563,6 +577,7 @@ var WsSettingsCombobox = (function () {
     invalidateChoices: invalidateChoices,
     backendOptions: backendOptions,
     modelOptions: modelOptions,
+    providerOptions: providerOptions,
     modelKey: modelKey,
     modelSelection: modelSelection,
     effortOptions: effortOptions,

@@ -165,6 +165,7 @@ type configListView struct {
 // cross-harness fallback without re-deriving the resolution chain itself.
 type resolveAgentTierResult struct {
 	Backend      string `json:"backend"`
+	Provider     string `json:"provider,omitempty"`
 	Model        string `json:"model"`
 	Effort       string `json:"effort"`
 	ResolvedFrom string `json:"resolved_from"`

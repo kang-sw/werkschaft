@@ -61,10 +61,9 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 		PermissionModes:     []string{werkModeReadOnly, werkModeWorkspaceWrite, werkModeFullAccess},
 		Permission:          werkPermissionPolicy(),
 		PlaybookCommands:    true,
-		WorkerCapable:       true,
-		WorkerProfile:       AgentWorkerProfile(BackendWerk),
-		Catalog:             WerkCatalog(),
-		BuiltinProfilesOnly: true,
+		WorkerCapable:    true,
+		WorkerProfile:    AgentWorkerProfile(BackendWerk),
+		Catalog:          WerkCatalog(),
 		// A provider's function names admit no dot, so the model sees ws's
 		// tools spelled exec_shell, agent_spawn (werk.ModelToolName).
 		ToolNameScheme: ToolNameSchemeSanitize,
