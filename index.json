@@ -505,7 +505,14 @@
       }
     },
     "261125-feat-ws-dashboard-composer-indent-inline-markdown": {
-      "registered_at": "2026-11-25T12:30:55Z"
+      "registered_at": "2026-11-25T12:30:55Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-25T12:51:36Z"
+      }
     },
     "261125-feat-ws-desktop-native-os-stt": {
       "registered_at": "2026-11-25T12:38:11Z"
