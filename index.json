@@ -354,7 +354,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-19T13:16:16Z",
         "impl": {
           "branch": "impl/develop/tickets-post-v2"
@@ -478,19 +478,6 @@
     },
     "261125-feat-whiteboard-gap-two-row-layout": {
       "registered_at": "2026-11-25T09:19:33Z"
-    },
-    "261125-feat-ws-exec-completion-chat-row": {
-      "registered_at": "2026-11-24T21:27:32Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "9091c57d68d03c76",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T09:47:35Z",
-        "impl": {
-          "branch": "impl/develop/gaffe-hulk-dance"
-        }
-      }
     },
     "261125-refactor-ws-split-runner-conv": {
       "registered_at": "2026-11-25T03:48:27Z"
