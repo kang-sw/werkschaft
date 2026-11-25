@@ -487,7 +487,14 @@
       }
     },
     "261125-feat-ws-exec-completion-chat-row": {
-      "registered_at": "2026-11-24T21:27:32Z"
+      "registered_at": "2026-11-24T21:27:32Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-25T09:19:14Z"
+      }
     },
     "261125-refactor-ws-split-runner-conv": {
       "registered_at": "2026-11-25T03:48:27Z"
