@@ -274,7 +274,7 @@ func (c *conv) loadCompaction() {
 }
 
 func (c *conv) wsManagedLeadCompaction() bool {
-	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.rec) == wsconfig.CompactionModeWS
+	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.record()) == wsconfig.CompactionModeWS
 }
 
 // LeadCompactionMode reports the effective mode of an authenticated open
@@ -328,7 +328,7 @@ func (c *conv) loadCompactionThresholds() {
 	// Capture generation before reading config so a concurrent tune during the
 	// read leaves compactGen behind and triggers one more reload next check.
 	gen := compactionConfigGen.Load()
-	r := c.compactionResolver(c.rec)
+	r := c.compactionResolver(c.record())
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	role := "worker"
 	if c.rec.Lead {
