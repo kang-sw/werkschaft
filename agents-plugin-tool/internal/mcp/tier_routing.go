@@ -268,7 +268,7 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 	if res.Bundle != "" {
 		from = "bundle"
 	}
-	return resolveAgentTierResult{Backend: binding.Backend, Model: binding.Model, Effort: binding.Effort, ResolvedFrom: from, Trace: res.Trace()}, nil
+	return resolveAgentTierResult{Backend: binding.Backend, Provider: binding.Provider, Model: binding.Model, Effort: binding.Effort, ResolvedFrom: from, Trace: res.Trace()}, nil
 }
 
 // roleRecommendedTier is the tier a render recommends: <role>:<size> when

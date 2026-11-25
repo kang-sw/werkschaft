@@ -43,9 +43,10 @@ func tierRoutingValueSchema() map[string]any {
 					"additionalProperties": false,
 					"required":             []string{"harness", "model"},
 					"properties": map[string]any{
-						"harness": map[string]any{"type": "string", "description": "A harness name such as claude or codex."},
-						"model":   map[string]any{"type": "string"},
-						"effort":  map[string]any{"type": "string"},
+						"harness":  map[string]any{"type": "string", "description": "A harness name such as claude or codex."},
+						"provider": map[string]any{"type": "string", "description": "Optional werk provider (openrouter, openai, or local/<name>); absent defaults to openrouter for werk and is refused for other harnesses."},
+						"model":    map[string]any{"type": "string"},
+						"effort":   map[string]any{"type": "string"},
 					},
 				},
 			},

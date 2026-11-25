@@ -347,7 +347,11 @@ func formatAgentRouting(b *strings.Builder, r *wsagent.AgentRouting) {
 			fmt.Fprintf(b, "  %s: not spawnable now: %s\n", name, oneLine(e.Error))
 			return
 		}
-		fmt.Fprintf(b, "  %s: %s/%s\n", e.Trace, orDash(e.Model), orDash(e.Effort))
+		model := orDash(e.Model)
+		if e.Provider != "" {
+			model = e.Provider + " " + model
+		}
+		fmt.Fprintf(b, "  %s: %s/%s\n", e.Trace, model, orDash(e.Effort))
 	}
 	b.WriteString(" bundles:\n")
 	if len(r.Bundles) == 0 {

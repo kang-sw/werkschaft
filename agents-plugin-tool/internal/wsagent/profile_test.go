@@ -180,18 +180,84 @@ func TestResolveProfileThroughWorkingRoot(t *testing.T) {
 	}
 }
 
-func TestWerkRejectsSavedProfilesAndKeepsItsBuiltin(t *testing.T) {
+func TestWerkSavedProfilesResolveAndValidateProvider(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
 	writeStructured(t, filepath.Join(opts.ConfigHome, "config.json"), map[string]string{
-		ProfilePrefix + "custom": `{"backend":"werk"}`,
+		ProfilePrefix + "custom-default": `{"backend":"werk","model":"vendor/m"}`,
+		ProfilePrefix + "custom-openai":  `{"backend":"werk","provider":"openai","model":"gpt-5.4","effort":"high"}`,
+		ProfilePrefix + "custom-local":   `{"backend":"werk","provider":"local/desk","model":"qwen"}`,
+		ProfilePrefix + "bad-provider":   `{"backend":"werk","provider":"anthropic"}`,
+		ProfilePrefix + "claude-prov":    `{"backend":"claude","provider":"openai"}`,
 	})
-	if _, err := ResolveProfile(opts, root, "custom"); err == nil || !strings.Contains(err.Error(), "builtin profiles only") {
-		t.Fatalf("saved profile error = %v", err)
+	got, err := ResolveProfile(opts, root, "custom-default")
+	if err != nil || got.Scope != wsconfig.ScopeGlobal || got.Definition.Backend != BackendWerk || got.Definition.Provider != "" || got.Definition.Model != "vendor/m" {
+		t.Fatalf("custom-default = %+v, %v", got, err)
 	}
-	got, err := ResolveProfile(opts, root, AgentWorkerProfile(BackendWerk))
+	got, err = ResolveProfile(opts, root, "custom-openai")
+	if err != nil || got.Definition.Provider != "openai" || got.Definition.Model != "gpt-5.4" || got.Definition.Effort != "high" {
+		t.Fatalf("custom-openai = %+v, %v", got, err)
+	}
+	got, err = ResolveProfile(opts, root, "custom-local")
+	if err != nil || got.Definition.Provider != "local/desk" || got.Definition.Model != "qwen" {
+		t.Fatalf("custom-local = %+v, %v", got, err)
+	}
+	if _, err := ResolveProfile(opts, root, "bad-provider"); err == nil || !strings.Contains(err.Error(), "unsupported werk provider") {
+		t.Fatalf("bad-provider error = %v", err)
+	}
+	if _, err := ResolveProfile(opts, root, "claude-prov"); err == nil || !strings.Contains(err.Error(), "provider is available only for werk") {
+		t.Fatalf("claude-prov error = %v", err)
+	}
+	got, err = ResolveProfile(opts, root, AgentWorkerProfile(BackendWerk))
 	if err != nil || got.Scope != wsconfig.ScopeBuiltin || got.Definition.Backend != BackendWerk {
 		t.Fatalf("builtin profile = %+v, %v", got, err)
+	}
+}
+
+type providerGatedFakeBackend struct {
+	*fakeBackend
+	gap func(provider string) string
+}
+
+func (b providerGatedFakeBackend) workerCredentialGap() string                        { return "" }
+func (b providerGatedFakeBackend) workerProviderGap(provider string) string           { return b.gap(provider) }
+func (b providerGatedFakeBackend) workerTierGap(map[string]wsconfig.AgentTier) string { return "" }
+
+func TestWerkCustomProfilePropagatesProviderAndChecksProviderGap(t *testing.T) {
+	h := newHarness(t, map[string]string{
+		"werk-openai":     `{"backend":"werk","provider":"openai","model":"gpt-5.4","effort":"high"}`,
+		"werk-local":      `{"backend":"werk","provider":"local/desk","model":"qwen"}`,
+		"werk-openrouter": `{"backend":"werk","model":"vendor/m"}`,
+	})
+	h.runner.opts.Backends[BackendWerk] = BackendRegistration{
+		Backend: providerGatedFakeBackend{
+			fakeBackend: &fakeBackend{},
+			gap: func(provider string) string {
+				if provider == "openai" || provider == "local/desk" {
+					return ""
+				}
+				return "missing openrouter credential"
+			},
+		},
+		WorkerCapable: true,
+		WorkerProfile: AgentWorkerProfile(BackendWerk),
+	}
+	st, err := h.runner.Create("werk-openai", h.root)
+	if err != nil {
+		t.Fatalf("Create(werk-openai): %v", err)
+	}
+	if rec := h.record(st.ID); rec.Backend != BackendWerk || rec.Provider != "openai" || rec.Model != "gpt-5.4" || rec.Effort != "high" {
+		t.Fatalf("werk-openai record = %+v", rec)
+	}
+	stLocal, err := h.runner.Create("werk-local", h.root)
+	if err != nil {
+		t.Fatalf("Create(werk-local): %v", err)
+	}
+	if rec := h.record(stLocal.ID); rec.Backend != BackendWerk || rec.Provider != "local/desk" || rec.Model != "qwen" {
+		t.Fatalf("werk-local record = %+v", rec)
+	}
+	if _, err := h.runner.Create("werk-openrouter", h.root); err == nil || !strings.Contains(err.Error(), "missing openrouter credential") {
+		t.Fatalf("Create(werk-openrouter) = %v, want missing openrouter credential", err)
 	}
 }
 

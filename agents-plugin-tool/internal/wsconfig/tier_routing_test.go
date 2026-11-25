@@ -331,17 +331,43 @@ func TestTierRoutingValidation(t *testing.T) {
 	}
 }
 
-func TestWerkTiersResolveDirectlyButCannotBeSavedAsGraphTargets(t *testing.T) {
-	for _, raw := range []string{
-		`{"nodes":{"review":{"*":"werk.*"}}}`,
-		`{"bundles":{"b":{"harness":"werk","model":"m"}}}`,
-	} {
-		graph := NewTierGraph(testTierRoles, mustRouting(t, raw), nil, append(slices.Clone(testHarnesses), "werk"))
-		if err := graph.Err(); err == nil || !strings.Contains(err.Error(), "direct tiers only") {
-			t.Fatalf("graph %s: %v", raw, err)
+func TestWerkTargetsAndBundlesWithProviderResolveAndValidate(t *testing.T) {
+	harnesses := append(slices.Clone(testHarnesses), "werk")
+	raw := `{
+		"nodes": {"review": {"*": "werk.*", "small": "oa"}, "implement": {"*": "loc"}},
+		"bundles": {
+			"oa": {"harness": "werk", "provider": "openai", "model": "gpt-5.4", "effort": "high"},
+			"loc": {"harness": "werk", "provider": "local/desk", "model": "qwen"},
+			"def": {"harness": "werk", "model": "vendor/m"}
 		}
-		if got, err := graph.Resolve("werk.small", "claude"); err != nil || got.Harness != "werk" || got.Size != "small" {
-			t.Fatalf("direct tier = %+v, %v", got, err)
+	}`
+	graph := NewTierGraph(testTierRoles, mustRouting(t, raw), nil, harnesses)
+	if err := graph.Err(); err != nil {
+		t.Fatalf("werk graph Err = %v", err)
+	}
+	if got, err := graph.Resolve("werk.small", "claude"); err != nil || got.Harness != "werk" || got.Size != "small" || got.Provider != "" {
+		t.Fatalf("direct tier = %+v, %v", got, err)
+	}
+	if got, err := graph.Resolve("review:large", "claude"); err != nil || got.Harness != "werk" || got.Size != "large" || got.Provider != "" {
+		t.Fatalf("review:large = %+v, %v", got, err)
+	}
+	if got, err := graph.Resolve("review:small", "claude"); err != nil || got.Harness != "werk" || got.Provider != "openai" || got.Model != "gpt-5.4" || got.Effort != "high" || got.Bundle != "oa" {
+		t.Fatalf("review:small = %+v, %v", got, err)
+	}
+	if got, err := graph.Resolve("ticket-worker:medium", "claude"); err != nil || got.Harness != "werk" || got.Provider != "local/desk" || got.Model != "qwen" || got.Bundle != "loc" {
+		t.Fatalf("ticket-worker:medium = %+v, %v", got, err)
+	}
+	if got, err := graph.Resolve("def", "claude"); err != nil || got.Harness != "werk" || got.Provider != "" || got.Model != "vendor/m" {
+		t.Fatalf("def = %+v, %v", got, err)
+	}
+	for bad, want := range map[string]string{
+		`{"bundles":{"b":{"harness":"claude","provider":"openai","model":"m"}}}`:  "provider is available only for werk",
+		`{"bundles":{"b":{"harness":"werk","provider":"anthropic","model":"m"}}}`: "unsupported werk provider",
+		`{"bundles":{"b":{"harness":"werk","provider":"local/Bad","model":"m"}}}`: "unsupported werk provider",
+		`{"bundles":{"b":{"harness":"werk","provider":"local/","model":"m"}}}`:    "unsupported werk provider",
+	} {
+		if _, err := ParseTierRouting(json.RawMessage(bad)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("ParseTierRouting(%s) = %v, want %q", bad, err, want)
 		}
 	}
 }

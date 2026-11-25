@@ -642,7 +642,7 @@
         P.refused = 0;
         mode = pick(t.harness).mode;
       }
-      rows.set(P.harness, { model: t.model || "", effort: t.effort || "", mode: mode });
+      rows.set(P.harness, { model: leadModelKey(t.model, t.provider) || "", effort: t.effort || "", mode: mode });
       edited();
     }
     // tierAgrees is whether the fields carry the picked named tier (true in
@@ -651,7 +651,7 @@
     function tierAgrees() {
       var t = tierPick.name && tierPick.current();
       if (!tierPick.name) return true;
-      return !!t && P.harness === t.harness && rows.model.value === (t.model || "") && rows.effort.value === (t.effort || "");
+      return !!t && P.harness === t.harness && rows.model.value === (leadModelKey(t.model, t.provider) || "") && rows.effort.value === (t.effort || "");
     }
     // reapplyTier puts the still-picked named tier back into the fields
     // after something redrew them (a refreshed choices list drops a model

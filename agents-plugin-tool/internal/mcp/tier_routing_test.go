@@ -268,6 +268,19 @@ func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
 	if _, errText := resolve("nosuch:large"); !strings.Contains(errText, "tier must be small, medium, large, or xlarge") || !strings.Contains(errText, "not a tier node") {
 		t.Fatalf("unknown role error = %q", errText)
 	}
+
+	// A werk bundle with an explicit provider surfaces provider in JSON and text output.
+	setRouting(t, f.s, `{
+		"nodes":{"implement":{"*":"oa"}},
+		"bundles":{"oa":{"harness":"werk","provider":"openai","model":"gpt-5.4","effort":"high"}}
+	}`)
+	if got, errText := resolve("ticket-worker:medium"); errText != "" || got.Backend != "werk" || got.Provider != "openai" || got.Model != "gpt-5.4" || got.Effort != "high" || got.ResolvedFrom != "bundle" {
+		t.Fatalf("werk bundle json = %+v %q", got, errText)
+	}
+	textResp := callToolOnce(t, f.s, 5, "config.resolve_agent", map[string]any{"tier": "oa", "harness": "codex"})
+	if toolIsError(t, textResp) || !strings.Contains(toolText(t, textResp), "provider: openai\n") {
+		t.Fatalf("werk bundle text = %s", textResp)
+	}
 }
 
 func TestPackagedTierRolesFromAResourceTree(t *testing.T) {

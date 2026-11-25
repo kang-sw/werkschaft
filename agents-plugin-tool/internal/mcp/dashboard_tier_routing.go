@@ -88,6 +88,7 @@ type dashboardTierRoute struct {
 	Trace               string             `json:"trace,omitempty"`
 	Hops                []wsconfig.TierHop `json:"hops,omitempty"`
 	Harness             string             `json:"harness,omitempty"`
+	Provider            string             `json:"provider,omitempty"`
 	Resolved            string             `json:"resolved,omitempty"`
 	Bundle              string             `json:"bundle,omitempty"`
 	Model               string             `json:"model,omitempty"`
@@ -314,7 +315,7 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, resolver *wsagent.TierBindi
 	} else if why := resolver.ProviderGap(route.Harness, binding.Provider); why != "" {
 		route.Unavailable, route.BindingError = why, why
 	} else {
-		route.Model, route.Effort = binding.Model, binding.Effort
+		route.Provider, route.Model, route.Effort = binding.Provider, binding.Model, binding.Effort
 	}
 	return route
 }

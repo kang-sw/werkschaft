@@ -105,7 +105,7 @@ func TestAgentSpawnCapsAuthorityAndTier(t *testing.T) {
 	// A nested spawn's tier may not pass its holder's.
 	_, err = h.runner.AgentSpawn(h.holderOf(r), AgentSpawnRequest{Prompt: "x", Tier: "medium", Authority: "read-only"})
 	agentRefused(t, err, http.StatusForbidden, `tier "medium" is above this conversation's own tier "small"`)
-	_, err = h.runner.AgentSpawn(h.holderOf(w), AgentSpawnRequest{Prompt: "x", Tier: "pi.large", Authority: "read-only"})
+	_, err = h.runner.AgentSpawn(h.holderOf(w), AgentSpawnRequest{Prompt: "x", Tier: "werk.large", Authority: "read-only"})
 	agentRefused(t, err, http.StatusForbidden, `tier "large" is above this conversation's own tier "medium"`)
 
 	// A conversation parent with no record has no level: admission fails.

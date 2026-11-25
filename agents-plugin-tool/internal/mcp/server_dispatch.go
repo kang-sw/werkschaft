@@ -639,7 +639,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, nil)
 		}
-		text := fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", result.Backend, result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
+		text := fmt.Sprintf("backend: %s\n", result.Backend)
+		if result.Provider != "" {
+			text += "provider: " + result.Provider + "\n"
+		}
+		text += fmt.Sprintf("model: %s\neffort: %s\nresolved_from: %s\n", result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
 		if result.Trace != "" {
 			text += "trace: " + result.Trace + "\n"
 		}

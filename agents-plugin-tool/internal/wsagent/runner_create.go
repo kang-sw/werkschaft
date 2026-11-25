@@ -98,13 +98,6 @@ func (r *Runner) CreateLead(backend, root string, opts LeadOptions) (State, erro
 	if opts.Effort != "" && !effortPattern.MatchString(opts.Effort) {
 		return State{}, categorized(ErrInvalidProfile, badRequest("effort %q must be a lowercase word", opts.Effort))
 	}
-	if choice, ok := r.opts.Backends[strings.TrimSpace(backend)].Backend.(leadProviderAdmitter); ok {
-		if err := choice.admitLeadProvider(opts.Provider, opts.Model); err != nil {
-			return State{}, categorized(ErrInvalidProfile, err)
-		}
-	} else if opts.Provider != "" {
-		return State{}, badRequest("this harness does not take a provider selection")
-	}
 	modes := permissionModes(strings.TrimSpace(backend), []map[string]BackendRegistration{r.opts.Backends})
 	if opts.PermissionMode != "" && !slices.Contains(modes, opts.PermissionMode) {
 		return State{}, categorized(ErrInvalidProfile, badRequest("permission_mode %q must be one of %s", opts.PermissionMode, strings.Join(modes, ", ")))
@@ -157,6 +150,23 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if spawn != nil {
 		spawnerBackend = spawn.spawnerBackend
 	}
+	if lead != nil {
+		effectiveProvider := rp.Definition.Provider
+		if lead.Provider != "" {
+			effectiveProvider = lead.Provider
+		}
+		effectiveModel := rp.Definition.Model
+		if lead.Model != "" {
+			effectiveModel = lead.Model
+		}
+		if choice, ok := r.opts.Backends[rp.Definition.Backend].Backend.(leadProviderAdmitter); ok {
+			if err := choice.admitLeadProvider(effectiveProvider, effectiveModel); err != nil {
+				return State{}, categorized(ErrInvalidProfile, err)
+			}
+		} else if effectiveProvider != "" {
+			return State{}, badRequest("this harness does not take a provider selection")
+		}
+	}
 	if lead == nil {
 		// Every worker creation, profile-based or spawned, passes the
 		// cross-harness check before anything is minted or written: a
@@ -164,6 +174,13 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		// creation for none.
 		if err := r.admitWorker(rp.Definition.Backend, spawnerBackend); err != nil {
 			return State{}, &requestError{status: http.StatusForbidden, msg: err.Error()}
+		}
+		effectiveProvider := rp.Definition.Provider
+		if spawn != nil && spawn.provider != "" {
+			effectiveProvider = spawn.provider
+		}
+		if why := r.workerStartProviderGap(rp.Definition.Backend, effectiveProvider); why != "" {
+			return State{}, badRequest("%s", why)
 		}
 	}
 	if spawn != nil {
@@ -233,6 +250,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		ReplyID:   wsmailbox.ReplyID(key),
 		Profile:   rp.Name,
 		Backend:   rp.Definition.Backend,
+		Provider:  rp.Definition.Provider,
 		Root:      root,
 		Model:     rp.Definition.Model,
 		Effort:    rp.Definition.Effort,
@@ -248,7 +266,9 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	if lead != nil {
 		rec.Lead = true
-		rec.Provider = lead.Provider
+		if lead.Provider != "" {
+			rec.Provider = lead.Provider
+		}
 		rec.PluginIsolation = leadPluginIsolation(lead.PluginIsolation)
 		rec.PermissionMode = rp.Definition.PermissionMode
 		if lead.Model != "" {

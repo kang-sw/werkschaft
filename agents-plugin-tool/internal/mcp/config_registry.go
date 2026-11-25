@@ -513,7 +513,7 @@ var configRegistry = []configKeyEntry{
 		}},
 		ValueFields: []tuningField{{
 			Name:        "value",
-			Description: "The whole routing object (see value_schema): {\"nodes\": {<node>: {\"*\" or small|medium|large|xlarge: <target>}}, \"bundles\": {<name>: {harness, model, effort}}}. A target is <node>:<size|*>, <harness>.<size|*>, or a bundle name. It replaces the stored routing as a whole; omit when reset is true.",
+			Description: "The whole routing object (see value_schema): {\"nodes\": {<node>: {\"*\" or small|medium|large|xlarge: <target>}}, \"bundles\": {<name>: {harness, provider, model, effort}}}. A target is <node>:<size|*>, <harness>.<size|*>, or a bundle name. It replaces the stored routing as a whole; omit when reset is true.",
 			Required:    true,
 		}},
 		NoAgentVisible:        true,

@@ -22,7 +22,7 @@
     var T = { name: "", busy: false };
     function tiers() { return supChoices && Array.isArray(supChoices.tiers) ? supChoices.tiers : []; }
     function find(name) { return tiers().filter(function (t) { return t.name === name; })[0]; }
-    function shown(t) { return [t.harness, t.model, t.effort].filter(Boolean).join(" · "); }
+    function shown(t) { return [t.harness, t.provider, t.model, t.effort].filter(Boolean).join(" · "); }
     function why(t) { return t.error || (usable(t) ? "" : wsT("js.lead.tier.off", t.harness || "")); }
     // draw lists the tiers against the current availability; an unchanged
     // list is left alone so a redraw never closes an open select.

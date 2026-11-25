@@ -398,7 +398,7 @@
       }
       if (term.kind === "bundle") {
         const b = term.bundle;
-        card.append(el("span", "tr-ptr mono", [b.harness, b.model, b.effort].filter(Boolean).join(" | ")));
+        card.append(el("span", "tr-ptr mono", [b.harness, b.provider, b.model, b.effort].filter(Boolean).join(" | ")));
       } else {
         if (term.kind === "caller") card.append(el("span", "tr-ptr", tr("js.settings.tier_routing.caller.sub", term.name)));
         const chips = el("span", "tr-chips");
@@ -498,7 +498,7 @@
       });
       if (route.bundle && !(route.hops || []).length) wrap.lastChild.classList.add("end");
       const binding = route.binding_error ? el("span", "tr-err", route.binding_error) :
-        el("span", "tr-binding", [route.harness, route.model, route.effort].filter(Boolean).join(" · "));
+        el("span", "tr-binding", [route.harness, route.provider, route.model, route.effort].filter(Boolean).join(" · "));
       if (route.unavailable) binding.dataset.tierUnavailable = route.harness;
       wrap.append(binding);
       if (route.availability_unknown) {
@@ -758,7 +758,7 @@
     function openBundle(name) {
       const view = state.view;
       const isNew = !name;
-      const bundle = isNew ? { name: "", harness: view.harness, model: "", effort: "", inbound: [] } : findBundle(name);
+      const bundle = isNew ? { name: "", harness: view.harness, provider: "", model: "", effort: "", inbound: [] } : findBundle(name);
       if (!bundle) return;
       const stored = compact(routingOf(view));
       const m = modal(isNew ? tr("js.settings.tier_routing.modal.new_bundle") : tr("js.settings.tier_routing.modal.bundle", bundle.name), tr("js.settings.tier_routing.kind.bundle"));
@@ -772,31 +772,86 @@
         nameInput.addEventListener("input", changed);
         m.content.append(field(tr("js.settings.tier_routing.name"), nameInput, tr("js.settings.tier_routing.name.hint")));
       }
+      const cb = typeof window !== "undefined" ? window.WsSettingsCombobox : null;
       const harness = el("select", "sel mono tr-bundle-harness");
       view.harnesses.forEach(function (h) { harness.append(option(h, h)); });
       harness.value = bundle.harness;
+      let prevHarness = harness.value;
+      const provider = el("select", "sel mono tr-bundle-provider");
+      provider.disabled = readOnly;
+      provider.setAttribute("aria-label", tr("js.settings.tier_routing.provider"));
+      function ensureProviderOption(value) {
+        if (!value) return;
+        if (!Array.from(provider.options).some(function (o) { return o.value === value; })) {
+          provider.append(option(value, value));
+        }
+      }
+      function populateProviders(selected) {
+        const current = selected !== undefined ? selected : provider.value;
+        provider.replaceChildren();
+        provider.append(option("", tr("js.settings.tier_routing.provider.default")));
+        const list = cb && typeof cb.providerOptions === "function" ? cb.providerOptions("werk") : ["openrouter", "openai"];
+        list.forEach(function (p) { provider.append(option(p, p)); });
+        ensureProviderOption(current);
+        provider.value = current || "";
+      }
+      populateProviders(harness.value === "werk" ? (bundle.provider || "") : "");
+      const providerField = field(tr("js.settings.tier_routing.provider"), provider);
+      providerField.hidden = harness.value !== "werk";
       const model = el("input", "inp mono tr-bundle-model");
       model.type = "text";
-      model.value = bundle.model;
+      model.value = harness.value === "werk" && cb ? cb.modelKey(bundle.model, bundle.provider) : bundle.model;
       model.disabled = readOnly;
       model.setAttribute("aria-label", tr("js.settings.tier_routing.model"));
-      model.addEventListener("input", changed);
+      model.addEventListener("input", function () {
+        if (harness.value === "werk" && cb) {
+          const picked = cb.modelSelection(model.value.trim(), "");
+          if (picked.provider) {
+            ensureProviderOption(picked.provider);
+            provider.value = picked.provider;
+          }
+        }
+        changed();
+      });
+      provider.addEventListener("change", function () {
+        if (harness.value === "werk" && cb) {
+          const bare = cb.modelSelection(model.value.trim(), "").model;
+          if (bare) model.value = cb.modelKey(bare, provider.value);
+        }
+        changed();
+      });
       const effort = el("input", "inp mono tr-bundle-effort");
       effort.type = "text";
       effort.value = bundle.effort || "";
       effort.disabled = readOnly;
       effort.setAttribute("aria-label", tr("js.settings.tier_routing.effort"));
       effort.addEventListener("input", changed);
-      const cb = typeof window !== "undefined" ? window.WsSettingsCombobox : null;
       const modelCtrl = cb ? cb.attach(model, { getOptions: function () { return cb.modelOptions(harness.value); } }) : null;
       const effortCtrl = cb ? cb.attach(effort, { getOptions: function () { return cb.effortOptions(harness.value); } }) : null;
+      if (cb && typeof cb.loadChoices === "function") {
+        cb.loadChoices().then(function () {
+          if (m.dialog.isConnected && harness.value === "werk") populateProviders(provider.value);
+        });
+      }
       harness.addEventListener("change", function () {
+        const nextHarness = harness.value;
+        providerField.hidden = nextHarness !== "werk";
+        if (nextHarness === "werk") {
+          populateProviders(provider.value);
+        } else {
+          if (prevHarness === "werk" && cb) {
+            model.value = cb.modelSelection(model.value.trim(), "").model;
+          }
+          provider.value = "";
+        }
+        prevHarness = nextHarness;
         if (modelCtrl) modelCtrl.refresh();
         if (effortCtrl) effortCtrl.refresh();
         changed();
       });
       m.content.append(
         field(tr("js.settings.tier_routing.harness"), harness),
+        providerField,
         field(tr("js.settings.tier_routing.model"), modelCtrl ? modelCtrl.node : model),
         field(tr("js.settings.tier_routing.effort"), effortCtrl ? effortCtrl.node : effort)
       );
@@ -828,7 +883,15 @@
         if (!bundleName) return { problem: tr("js.settings.tier_routing.name_required") };
         if (isNew && (findNode(bundleName) || findBundle(bundleName))) return { problem: tr("js.settings.tier_routing.name_taken", bundleName) };
         const routing = routingOf(view);
-        const value = { harness: harness.value, model: model.value.trim() };
+        let modelValue = model.value.trim();
+        let providerValue = "";
+        if (harness.value === "werk") {
+          const picked = cb ? cb.modelSelection(modelValue, provider.value) : { model: modelValue, provider: provider.value };
+          modelValue = picked.model;
+          providerValue = picked.provider;
+        }
+        const value = { harness: harness.value, model: modelValue };
+        if (providerValue) value.provider = providerValue;
         if (effort.value.trim()) value.effort = effort.value.trim();
         routing.bundles[bundleName] = value;
         return { value: compact(routing), name: bundleName };

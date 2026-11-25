@@ -238,7 +238,7 @@ func TestAgentTiersRoutingSection(t *testing.T) {
 		t.Fatalf("user node route = %+v", e)
 	}
 	// The alias shadows the bundle's name, so the token spawns the alias.
-	if len(r.Bundles) != 2 || r.Bundles[0] != (AgentRouteEntry{Tier: "discussion", Trace: "discussion -> werk.small [alias discussion]", Harness: BackendWerk, Model: "prov/small-model", Effort: "low"}) ||
+	if len(r.Bundles) != 2 || r.Bundles[0] != (AgentRouteEntry{Tier: "discussion", Trace: "discussion -> werk.small [alias discussion]", Harness: BackendWerk, Provider: "openrouter", Model: "prov/small-model", Effort: "low"}) ||
 		r.Bundles[1].Error != `harness "agy" is not registered in this daemon` {
 		t.Fatalf("bundles = %+v", r.Bundles)
 	}
@@ -385,5 +385,68 @@ func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T)
 	// group's mapping reaches it, and the group's own name is not a role.
 	if got, want := h.spawnBinding(lead, "playbook-explore:small"), claude("small"); got != want {
 		t.Fatalf("playbook-explore:small = %+v, want %+v", got, want)
+	}
+}
+
+func TestAgentSpawnWerkRoutingAndBundleProvider(t *testing.T) {
+	h := routingHarness(t)
+	werkReg := h.runner.opts.Backends[BackendWerk]
+	werkReg.Backend = providerGatedFakeBackend{
+		fakeBackend: werkReg.Backend.(*fakeBackend),
+		gap: func(provider string) string {
+			if provider == "openai" || provider == "local/desk" {
+				return ""
+			}
+			return "missing openrouter credential"
+		},
+	}
+	h.runner.opts.Backends[BackendWerk] = werkReg
+	setTierRouting(t, h.config.Config, `{
+		"nodes": {"review": {"*": "oa-bundle"}, "implement": {"*": "werk.*"}},
+		"bundles": {
+			"oa-bundle": {"harness": "werk", "provider": "openai", "model": "gpt-5.4", "effort": "high"},
+			"loc-bundle": {"harness": "werk", "provider": "local/desk", "model": "qwen"},
+			"or-bundle": {"harness": "werk", "model": "vendor/m"}
+		}
+	}`)
+	lead := h.leadCaller()
+
+	id := h.agentSpawn(lead, AgentSpawnRequest{Prompt: "review", Tier: "ticket-reviewer-design:large", Authority: "read-only"})
+	if rec := h.record(id); rec.Backend != BackendWerk || rec.Provider != "openai" || rec.Model != "gpt-5.4" || rec.Effort != "high" {
+		t.Fatalf("routed werk bundle record = %+v", rec)
+	}
+	idLocal := h.agentSpawn(lead, AgentSpawnRequest{Prompt: "local", Tier: "loc-bundle", Authority: "read-only"})
+	if rec := h.record(idLocal); rec.Backend != BackendWerk || rec.Provider != "local/desk" || rec.Model != "qwen" {
+		t.Fatalf("local werk bundle record = %+v", rec)
+	}
+	// Default openrouter bundle is blocked by workerStartProviderGap before creation.
+	before := len(h.runner.AgentList(lead))
+	_, err := h.runner.AgentSpawn(lead, AgentSpawnRequest{Prompt: "or", Tier: "or-bundle", Authority: "read-only"})
+	agentRefused(t, err, http.StatusBadRequest, "missing openrouter credential")
+	if got := len(h.runner.AgentList(lead)); got != before {
+		t.Fatalf("refused werk bundle spawned a child: %d vs %d", got, before)
+	}
+
+	tiers, err := h.runner.AgentTiers(lead)
+	if err != nil || tiers.Routing == nil {
+		t.Fatalf("AgentTiers = %+v, %v", tiers, err)
+	}
+	var seenOA, seenOR bool
+	for _, b := range tiers.Routing.Bundles {
+		if b.Tier == "oa-bundle" {
+			seenOA = true
+			if b.Harness != BackendWerk || b.Provider != "openai" || b.Model != "gpt-5.4" || b.Error != "" {
+				t.Fatalf("oa-bundle entry = %+v", b)
+			}
+		}
+		if b.Tier == "or-bundle" {
+			seenOR = true
+			if !strings.Contains(b.Error, "missing openrouter credential") {
+				t.Fatalf("or-bundle entry = %+v, want provider gap error", b)
+			}
+		}
+	}
+	if !seenOA || !seenOR {
+		t.Fatalf("bundles missing expected entries: %+v", tiers.Routing.Bundles)
 	}
 }

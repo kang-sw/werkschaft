@@ -39,7 +39,8 @@ func TestConfigTuneAgentProfile(t *testing.T) {
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "pi", "plugins": []any{"ext.ts"}}, "scope": "repo"}, "may not start programs"},
 		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "claude", "ws_tools": []any{"ferrule"}}, "scope": "repo"}, "lead session key"},
 		{map[string]any{"key": "agent.profile.triage", "value": "{}", "scope": "repo"}, "must be a profile object"},
-		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "werk"}, "scope": "repo"}, "builtin profiles only"},
+		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "claude", "provider": "openai"}, "scope": "repo"}, "provider is available only for werk"},
+		{map[string]any{"key": "agent.profile.triage", "value": map[string]any{"backend": "werk", "provider": "bogus"}, "scope": "repo"}, "unsupported werk provider"},
 		{map[string]any{"key": "agent.profile.triage", "scope": "repo"}, "value is required"},
 	}
 	for i, tc := range rejects {
@@ -107,6 +108,18 @@ func TestConfigTuneAgentProfile(t *testing.T) {
 	}
 	if got := configGetJSON(t, server, 941232, map[string]any{"key": "agent.profile.triage", "session_key": key}); got.Scope != configGetUnsetScope {
 		t.Fatalf("config.get after reset = %+v, want unset", got)
+	}
+
+	// Saved werk profiles with optional provider round-trip cleanly.
+	werkProfile := map[string]any{"backend": "werk", "provider": "openai", "model": "gpt-5.4", "effort": "high"}
+	resp = keyedCall(t, server, 941240, key, "config.tune", map[string]any{"key": "agent.profile.werk-custom", "value": werkProfile, "scope": "repo"})
+	if toolIsError(t, resp) {
+		t.Fatalf("werk repo profile write failed: %s", resp)
+	}
+	gotWerk := configGetJSON(t, server, 941241, map[string]any{"key": "agent.profile.werk-custom", "session_key": key})
+	werkVal, _ := json.Marshal(gotWerk.Value)
+	if gotWerk.Scope != "repo" || !strings.Contains(string(werkVal), `"backend":"werk"`) || !strings.Contains(string(werkVal), `"provider":"openai"`) {
+		t.Fatalf("config.get werk profile = %+v (%s)", gotWerk, werkVal)
 	}
 }
 
