@@ -485,7 +485,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-25T12:48:47Z"
+        "touched_at": "2026-11-25T12:51:11Z",
+        "impl": {
+          "branch": "impl/develop/tray-awoke-mumps"
+        }
       }
     },
     "261125-feat-whiteboard-gap-two-row-layout": {
