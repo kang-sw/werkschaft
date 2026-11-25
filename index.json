@@ -226,7 +226,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-25T12:54:32Z",
         "impl": {
           "branch": "impl/develop/lard-rind-crave"
@@ -416,19 +416,6 @@
     },
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
-    },
-    "261122-feat-ws-web-tools": {
-      "registered_at": "2026-11-22T08:45:33Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-25T12:25:46Z",
-        "impl": {
-          "branch": "impl/develop/lemon-gory-guts"
-        }
-      }
     },
     "261123-bug-ws-dashboard-renderer-native-memory-growth": {
       "registered_at": "2026-11-23T02:06:44Z",
