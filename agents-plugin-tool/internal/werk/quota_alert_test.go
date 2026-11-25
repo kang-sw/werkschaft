@@ -142,6 +142,7 @@ func TestAgentTurnEndEmitsUsageLimitFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var lines []Line
 			a, err := New(Config{
+				Dir:        t.TempDir(),
 				Endpoint:   stubQuotaEndpoint{err: tc.err},
 				Model:      "test-model",
 				Authority:  AuthorityFull,
