@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "이어서 진행 예약",
   "js.quota.cancel": "예약 취소",
   "js.quota.scheduled_toast": "이어서 진행이 예약되었습니다.",
-  "js.quota.cancelled_toast": "예약된 이어서 진행이 취소되었습니다."
+  "js.quota.cancelled_toast": "예약된 이어서 진행이 취소되었습니다.",
+  "textref.title": "첨부 텍스트 #{0} · {1} · {2}줄",
+  "textref.pop.title": "텍스트 #{0}",
+  "textref.pop.meta": "{0} · {1}줄",
+  "js.textref.title": "첨부 텍스트 #{0} · {1} · {2}줄",
+  "js.textref.pop.title": "텍스트 #{0}",
+  "js.textref.pop.meta": "{0} · {1}줄",
+  "js.textref.remove": "첨부 텍스트 제거",
+  "js.textref.overcap.paste": "첨부 텍스트({0})가 메시지 한도({1})를 초과합니다 — 전송 전에 줄이거나 제거하세요.",
+  "js.textref.overcap.send": "메시지({0})가 한도({1})를 초과합니다 — 첨부 텍스트를 줄이거나 제거한 뒤 다시 시도하세요."
 }

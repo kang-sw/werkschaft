@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "Fortsetzung planen",
   "js.quota.cancel": "Abbrechen",
   "js.quota.scheduled_toast": "Fortsetzung geplant.",
-  "js.quota.cancelled_toast": "Geplante Fortsetzung abgebrochen."
+  "js.quota.cancelled_toast": "Geplante Fortsetzung abgebrochen.",
+  "textref.title": "angehängter Text #{0} · {1} · {2} Zeilen",
+  "textref.pop.title": "Text #{0}",
+  "textref.pop.meta": "{0} · {1} Zeilen",
+  "js.textref.title": "angehängter Text #{0} · {1} · {2} Zeilen",
+  "js.textref.pop.title": "Text #{0}",
+  "js.textref.pop.meta": "{0} · {1} Zeilen",
+  "js.textref.remove": "angehängten Text entfernen",
+  "js.textref.overcap.paste": "Angehängter Text ({0}) überschreitet das Nachrichtenlimit von {1} — vor dem Senden kürzen oder entfernen.",
+  "js.textref.overcap.send": "Nachricht ({0}) überschreitet das Limit von {1} — angehängten Text kürzen oder entfernen und erneut versuchen."
 }

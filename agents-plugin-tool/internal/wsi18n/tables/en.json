@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "Schedule continuation",
   "js.quota.cancel": "Cancel",
   "js.quota.scheduled_toast": "Continuation scheduled.",
-  "js.quota.cancelled_toast": "Scheduled continuation cancelled."
+  "js.quota.cancelled_toast": "Scheduled continuation cancelled.",
+  "textref.title": "attached text #{0} · {1} · {2} lines",
+  "textref.pop.title": "Text #{0}",
+  "textref.pop.meta": "{0} · {1} lines",
+  "js.textref.title": "attached text #{0} · {1} · {2} lines",
+  "js.textref.pop.title": "Text #{0}",
+  "js.textref.pop.meta": "{0} · {1} lines",
+  "js.textref.remove": "remove attached text",
+  "js.textref.overcap.paste": "Attached text ({0}) exceeds the {1} message limit — trim or remove it before sending.",
+  "js.textref.overcap.send": "Message ({0}) exceeds the {1} limit — trim or remove attached text and try again."
 }

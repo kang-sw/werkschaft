@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "Programar continuación",
   "js.quota.cancel": "Cancelar",
   "js.quota.scheduled_toast": "Continuación programada.",
-  "js.quota.cancelled_toast": "Continuación programada cancelada."
+  "js.quota.cancelled_toast": "Continuación programada cancelada.",
+  "textref.title": "texto adjunto #{0} · {1} · {2} líneas",
+  "textref.pop.title": "Texto #{0}",
+  "textref.pop.meta": "{0} · {1} líneas",
+  "js.textref.title": "texto adjunto #{0} · {1} · {2} líneas",
+  "js.textref.pop.title": "Texto #{0}",
+  "js.textref.pop.meta": "{0} · {1} líneas",
+  "js.textref.remove": "quitar texto adjunto",
+  "js.textref.overcap.paste": "El texto adjunto ({0}) supera el límite de {1} — recórtalo o quítalo antes de enviar.",
+  "js.textref.overcap.send": "El mensaje ({0}) supera el límite de {1} — recorta o quita el texto adjunto e inténtalo de nuevo."
 }

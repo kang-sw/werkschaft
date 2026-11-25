@@ -3638,5 +3638,14 @@
   "js.quota.schedule": "Agendar continuação",
   "js.quota.cancel": "Cancelar",
   "js.quota.scheduled_toast": "Continuação agendada.",
-  "js.quota.cancelled_toast": "Continuação agendada cancelada."
+  "js.quota.cancelled_toast": "Continuação agendada cancelada.",
+  "textref.title": "texto anexado #{0} · {1} · {2} linhas",
+  "textref.pop.title": "Texto #{0}",
+  "textref.pop.meta": "{0} · {1} linhas",
+  "js.textref.title": "texto anexado #{0} · {1} · {2} linhas",
+  "js.textref.pop.title": "Texto #{0}",
+  "js.textref.pop.meta": "{0} · {1} linhas",
+  "js.textref.remove": "remover texto anexado",
+  "js.textref.overcap.paste": "O texto anexado ({0}) excede o limite de {1} — reduza ou remova antes de enviar.",
+  "js.textref.overcap.send": "A mensagem ({0}) excede o limite de {1} — reduza ou remova o texto anexado e tente novamente."
 }

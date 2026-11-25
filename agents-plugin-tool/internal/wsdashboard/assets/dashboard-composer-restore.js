@@ -61,11 +61,13 @@
       astext++;
       return { text: "/" + c.name + (c.args ? " " + c.args : "") };
     });
-    var cur = ctext.value.trim(), top = imgSeq, backs = [], back, restoredSelections = [], backRanges = [];
+    var cur = ctext.value.trim(), top = imgSeq, txtTop = typeof txtSeq === "number" ? txtSeq : 0, backs = [], back, restoredSelections = [], backRanges = [];
     // The draft's mentions move with it, past its leading whitespace's trim.
     var lead = ctext.value.length - ctext.value.replace(/^\s+/, "").length;
     Object.keys(allNums()).forEach(function (k) { top = Math.max(top, +k); });
     imgs.forEach(function (p) { top = Math.max(top, p.n); });
+    if (typeof allTextNums === "function") Object.keys(allTextNums()).forEach(function (k) { txtTop = Math.max(txtTop, +k); });
+    if (typeof textRefs !== "undefined") textRefs.forEach(function (r) { txtTop = Math.max(txtTop, r.n); });
     // The newest send's answer wins (its sentAt; a later message on a tie),
     // whatever the list's queue order, and a chip attached since keeps its
     // newer answer.
@@ -79,8 +81,20 @@
         if (!have) imgs.push({ name: name, url: attachSrc(name), data: null, ref: name, n: renum[n] });
         top = Math.max(top, renum[n]);
       });
+      var strippedTxt = typeof stripTextRefs === "function" ? stripTextRefs(res.text || "") : { text: res.text || "", refs: [] };
+      var txtRenum = {};
+      if (typeof textRefs !== "undefined" && strippedTxt.refs.length) {
+        strippedTxt.refs.forEach(function (r) {
+          txtRenum[r.n] = ++txtTop;
+          textRefs.push({ n: txtRenum[r.n], body: r.body, bytes: r.bytes, lines: r.lines });
+        });
+      }
+      var rnTxt = function (s) {
+        if (!Object.keys(txtRenum).length) return s || "";
+        return (s || "").replace(new RegExp(TEXT_MARKER, "g"), function (m, k) { return txtRenum[+k] ? textMarker(txtRenum[+k]) : m; });
+      };
       var rn = function (s) { return (s || "").replace(new RegExp(MARKER, "g"), function (m, k) { return renum[+k] ? marker(renum[+k]) : m; }); };
-      var split = splitSelectionText(res.inline && inlineEditor() ? res.inline.text : res.text || ""), text = rn(split.text);
+      var split = splitSelectionText(res.inline && inlineEditor() ? res.inline.text : strippedTxt.text), text = rnTxt(rn(split.text));
       if (res.inline && inlineEditor()) {
         var offset = backs.join("\n\n").length + (backs.length ? 2 : 0);
         var rr = window.WsCapsules.shifted(res.inline.text, text, res.inline.capsules || []);
@@ -102,11 +116,16 @@
       if (text) backs.push(text);
     });
     imgSeq = top;
+    if (typeof txtSeq === "number") txtSeq = txtTop;
     order.forEach(function (id) { if (!chips[id]) { putChip(got[id]); setItem(id, got[id]); } });
     back = backs.join("\n\n");
     bselections = restoredSelections.concat(bselections);
     var named = allNums(), inBack = markerNums(back), missing = [];
     imgs.forEach(function (p) { if (!named[p.n] && !inBack[p.n]) missing.push(marker(p.n)); });
+    if (typeof textRefs !== "undefined" && typeof allTextNums === "function" && typeof textMarkerNums === "function") {
+      var namedTxt = allTextNums(), inBackTxt = textMarkerNums(back);
+      textRefs.forEach(function (r) { if (!namedTxt[r.n] && !inBackTxt[r.n]) missing.push(textMarker(r.n)); });
+    }
     if (missing.length) back += (back ? "\n" : "") + missing.join(" ");
     ctext.value = back + (back && cur ? "\n\n" : "") + cur;
     if (inlineEditor() && backRanges.length) inlineEditor().restore(backRanges.concat(inlineEditor().snapshot()));
@@ -114,6 +133,7 @@
     if (typeof syncAutoMultilineFromValue === "function") syncAutoMultilineFromValue();
     shiftMentions(back.length + (back && cur ? 2 : 0) - lead);
     imgs.sort(function (a, b) { return a.n - b.n; });
+    if (typeof textRefs !== "undefined") textRefs.sort(function (a, b) { return a.n - b.n; });
     // Their mentions go back ahead of the draft's, in the order given.
     var held = [];
     list.forEach(function (res) { if (!res.inline) held = held.concat(validMentions(res.mentions)); });

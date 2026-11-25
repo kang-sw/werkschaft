@@ -191,7 +191,7 @@
   // A command with fixed arguments leaves unrelated composer input intact.
   function sendCommand() {
     var sel = cmdSel, fixed = typeof sel.args === "string";
-    if (!fixed && imgs.length) { noteWarn(wsT("js.cmd.images")); return; }
+    if (!fixed && (imgs.length || (typeof textRefs !== "undefined" && textRefs.length))) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, fixed ? sel.args : sendText().trim(), !fixed);
   }
   if (ctext && rid && ccmd && window.wsMention) {
@@ -210,7 +210,7 @@
     });
   }
   function sendInlineCommand(sel) {
-    if (imgs.length) { noteWarn(wsT("js.cmd.images")); return; }
+    if (imgs.length || (typeof textRefs !== "undefined" && textRefs.length)) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, sendText().slice(sel.end).trim(), true);
   }
   // Topic-only editors keep their textarea owner and canonical [stem] strings.

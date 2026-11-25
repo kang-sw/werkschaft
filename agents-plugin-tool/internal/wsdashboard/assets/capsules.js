@@ -1,11 +1,11 @@
 /* Atomic client-local references over an existing textarea's plain-string contract. */
 (function () {
   "use strict";
-  var doc = document, topicPickers = [], rawPasteArmed = false;
+  var doc = document, topicPickers = [], rawPasteArmed = false, rawPasteActive = false;
   var kinds = { skill: true, topic: true, answer: true, "topic-note": true, mention: true, ticket: true, pick: true, console: true, panel: true, selection: true, mailbox: true };
-  function rawPasteBypass() { return rawPasteArmed; }
+  function rawPasteBypass() { return rawPasteActive || rawPasteArmed; }
   function isRawPasteChord(e) {
-    return !!(e && (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "v" || e.key === "V" || e.code === "KeyV"));
+    return !!(e && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === "v" || e.key === "V" || e.code === "KeyV"));
   }
   function isRawPasteRelease(e) {
     return !!(e && (e.key === "v" || e.key === "V" || e.code === "KeyV" || e.key === "Shift" || e.key === "Control" || e.key === "Meta"));
@@ -435,8 +435,14 @@
       editor.addEventListener(type, function (e) {
         e.stopPropagation();
         if (e.defaultPrevented) return;
-        if (type === "keydown" && isRawPasteChord(e)) rawPasteArmed = true;
-        else if (type === "keyup" && rawPasteArmed && isRawPasteRelease(e)) rawPasteArmed = false;
+        if (type === "keydown") {
+          if (!composing && !e.isComposing && e.keyCode !== 229) {
+            if (isRawPasteChord(e)) rawPasteArmed = true;
+            else if (e.key !== "Shift" && e.key !== "Control" && e.key !== "Meta") rawPasteArmed = false;
+          }
+        } else if (rawPasteArmed && isRawPasteRelease(e)) {
+          rawPasteArmed = false;
+        }
         var forwarded = new KeyboardEvent(type, { key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: composing || e.isComposing, bubbles: true, cancelable: true });
         if (!field.dispatchEvent(forwarded)) { e.preventDefault(); return; }
         if (type !== "keydown" || composing || e.isComposing || e.keyCode === 229) return;
@@ -454,16 +460,18 @@
         }
       });
     });
-    ["focus", "blur", "click", "mouseup", "scroll"].forEach(function (type) { editor.addEventListener(type, function () { if (type === "focus") seenCaret = true; if (type === "blur") rawPasteArmed = false; offsets(); field.dispatchEvent(new Event(type)); }); });
+    ["focus", "blur", "click", "mouseup", "scroll"].forEach(function (type) { editor.addEventListener(type, function () { if (type === "focus") seenCaret = true; if (type === "blur") { rawPasteArmed = false; rawPasteActive = false; } offsets(); field.dispatchEvent(new Event(type)); }); });
     editor.addEventListener("paste", function (e) {
       e.stopPropagation();
       var bypass = rawPasteArmed;
+      rawPasteArmed = false;
+      rawPasteActive = bypass;
       try {
         var forward = new Event("paste", { bubbles: true, cancelable: true });
         Object.defineProperty(forward, "clipboardData", { value: e.clipboardData }); field.dispatchEvent(forward);
         e.preventDefault();
         if (forward.defaultPrevented || !e.clipboardData) return;
-        var rich;
+        var rich = null;
         if (!bypass) {
           try { rich = JSON.parse(e.clipboardData.getData("application/x-wsc-capsules+json")); } catch (_) { rich = null; }
         }
@@ -499,7 +507,7 @@
           }
         }
       } finally {
-        rawPasteArmed = false;
+        rawPasteActive = false;
       }
     });
     // Rich HTML drops must not manufacture capsule identity or execute markup.
@@ -544,6 +552,7 @@
     }
     var api = field.wsc = {
       editor: editor, snapshot: function () { return valid(text, ranges); },
+      rawPaste: function () { return rawPasteActive || rawPasteArmed; },
       rememberCaret: offsets,
       ordered: function () { return valid(text, ranges); },
       restore: function (saved) { var before = valid(text, ranges); ranges = valid(text, saved); render(); changed(before, "restore"); },
@@ -620,10 +629,11 @@
     field.addEventListener("keydown", function (e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); });
     return popup;
   }
+  function rawPaste(field) { return field ? !!(field.wsc && rawPasteBypass()) : rawPasteBypass(); }
   window.WsCapsules = {
     attach: attach, topicPicker: topicPicker, sweep: sweep, token: token, rank: rank,
     valid: valid, shifted: shifted, stripMarkers: stripMarkers, command: command,
-    focused: focused, fieldFor: fieldFor, rawPasteBypass: rawPasteBypass,
+    focused: focused, fieldFor: fieldFor, rawPasteBypass: rawPasteBypass, rawPaste: rawPaste,
     parseMailboxTag: parseMailboxTag, scanMailboxTags: scanMailboxTags, skipTextref: skipTextref,
     formatMailboxLabel: formatMailboxLabel, formatMailboxTooltip: formatMailboxTooltip, viewingContext: viewingContext
   };
