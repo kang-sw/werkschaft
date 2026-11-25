@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const { readAssetSource } = require('./asset-source.cjs');
 
 const anchorSrc = readAssetSource('wsdashboard', 'dashboard-board-anchor.js');
+const boardCssSrc = readAssetSource('wsdashboard', 'dashboard-board.css');
 const selectionsSrc = readAssetSource('wsdashboard', 'dashboard-composer-selections.js');
 const overviewSrc = readAssetSource('wsdashboard', 'overview.js');
 const convSrc = readAssetSource('wsdashboard', 'dashboard-conversation.js');
@@ -996,4 +997,119 @@ test('6. Smooth select (mounted vs off-window), anchorMO inset preserve, and pos
   assert.ok(moCallback, 'anchorMO registered on #bcol');
   moCallback();
   assert.equal(hMO.ctx.WsBoardAnchor.windowInfo().anchorIdx, 2, 'anchorMO inset change preserves freeAnchorIdx (does not reset to 0)');
+});
+
+test('7. Scrolling upward from bottom defers start===0 runway rebase until idle (or top reach) and completes cleanly on freeIdleRecenter', () => {
+  // 8 cards (320px each, viewH=800 -> need=1200px -> 4 cards above anchor):
+  // jumping to the bottom card (index 7) places anchorY = 50000 with start = 3 > 0,
+  // and scrolling upward to card 4 hits start === 0 while the viewport is still
+  // well below ys[0] (~47648px).
+  const spec = Array.from({ length: 8 }, (_, i) => ({ topic: `u${i}`, height: 320 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800, toolbarH: 40, closedMore: true, closedMoreH: 40 });
+  const { ctx, nodes, bcol, board, moreBtn } = w;
+  const topPad = 40 + 16; // toolbarH + FREE_CARD_GAP
+
+  // Jump to bottom card (index 7): anchorY = 50000, minHeight ~ 50424px.
+  assert.equal(ctx.WsBoardAnchor.select(nodes[7], { smooth: false }), true);
+  let info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.anchorIdx, 7);
+  assert.equal(info.posOf(nodes[7]), 50000);
+  assert.ok(info.start > 0, `initial jump to bottom leaves start=${info.start} > 0`);
+  const initialMinH = parseFloat(board.style.minHeight);
+  assert.ok(initialMinH > 50000, `initial minHeight=${initialMinH} > 50000`);
+
+  // Simulate user scrolling upward toward card 4 (still well below y_0 ~ 47648).
+  const y4 = info.posOf(nodes[4]);
+  bcol.scrollTop = y4;
+  ctx.freeOnScroll();
+  w.flushRaf();
+
+  info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.start, 0, 'upward pre-mount window reaches start === 0');
+  assert.equal(bcol.scrollTop, y4, 'scrollTick must NOT jump scrollTop mid-gesture while viewport > ys[0]');
+  assert.ok(info.posOf(nodes[0]) > 40000, `ys[0]=${info.posOf(nodes[0])} stays on high runway during active scroll`);
+  assert.equal(parseFloat(board.style.minHeight), initialMinH, 'minHeight stays stable during active scroll');
+
+  // Record visual offset of card 4 before idle recenter.
+  const visualBeforeIdle = info.posOf(nodes[4]) - bcol.scrollTop;
+
+  // Idle timer fires: freeIdleRecenter rebases ys[0] to topPad, shifts scrollTop
+  // with 0px visual delta, updates closed-more, and shrinks board.style.minHeight.
+  w.fireIdle();
+  info = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(info.posOf(nodes[0]), topPad, 'idle recenter rebases ys[0] to topPad');
+  assert.equal(info.posOf(nodes[4]) - bcol.scrollTop, visualBeforeIdle, 'idle top-boundary rebase preserves 0px visual offset');
+  const shrunkMinH = parseFloat(board.style.minHeight);
+  assert.ok(shrunkMinH < 5000, `idle recenter shrinks minHeight to tight board height (${shrunkMinH}px)`);
+  assert.equal(moreBtn.style.top, Math.round(info.posOf(nodes[7]) + 320 + 16) + 'px', 'closed-more repositioned after idle rebase');
+
+  // Edge case: continuous upward swipe all the way past ys[0] after an Overview
+  // jump to the bottom card rebases immediately so the user cannot scroll into
+  // 47000px of empty runway above card 0.
+  ctx.WsBoardAnchor.suspendForOverview();
+  ctx.WsBoardAnchor.resumeFromOverview();
+  ctx.WsBoardAnchor.select(nodes[7], { smooth: false });
+  const y4Again = ctx.WsBoardAnchor.windowInfo().posOf(nodes[4]);
+  bcol.scrollTop = y4Again;
+  ctx.freeOnScroll();
+  w.flushRaf();
+  const y0High = ctx.WsBoardAnchor.windowInfo().posOf(nodes[0]);
+  assert.ok(y0High > 40000, 'second upward scroll defers rebase while scrollTop > ys[0]');
+
+  // Now swipe past ys[0] into the runway above card 0.
+  bcol.scrollTop = y0High - 200;
+  ctx.freeOnScroll();
+  w.flushRaf();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[0]), topPad, 'swiping past ys[0] rebases card 0 to topPad immediately');
+  assert.equal(bcol.scrollTop, 0, 'scrollTop clamps at 0 instead of entering empty runway above card 0');
+});
+
+test('8. WsBoardAnchor.keepFrame protects active mounted window cards, freeOnCardResize defers y0 > topPad mid-scroll, and CSS disables overflow-anchor under data-board-free', () => {
+  const spec = Array.from({ length: 16 }, (_, i) => ({ topic: `k${i}`, height: 320 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800, toolbarH: 40 });
+  const { ctx, nodes, bcol } = w;
+  const topPad = 40 + 16;
+
+  // Jump to middle card 8: active window cards are protected by keepFrame even when idle,
+  // while off-window evicted cards return false so FAR IO still unmounts them.
+  ctx.WsBoardAnchor.select(nodes[8], { smooth: false });
+  let info = ctx.WsBoardAnchor.windowInfo();
+  for (let i = 0; i < nodes.length; i++) {
+    const inWin = i >= info.start && i <= info.end;
+    assert.equal(ctx.WsBoardAnchor.keepFrame(nodes[i]), inWin, `keepFrame(node[${i}]) === ${inWin}`);
+  }
+
+  // Simulate active scroll with winStart === 0 and y0 > topPad (deferred top rebase).
+  const spec8 = Array.from({ length: 8 }, (_, i) => ({ topic: `r${i}`, height: 320 }));
+  const w2 = makeFreeCanvasWorld(spec8, { viewH: 800, toolbarH: 40 });
+  w2.ctx.WsBoardAnchor.select(w2.nodes[7], { smooth: false });
+  const y4 = w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[4]);
+  w2.bcol.scrollTop = y4;
+  w2.ctx.freeOnScroll();
+  w2.flushRaf();
+  assert.equal(w2.ctx.WsBoardAnchor.windowInfo().start, 0);
+  const y0BeforeResize = w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[0]);
+  assert.ok(y0BeforeResize > topPad);
+
+  // Above-anchor card 2 resizes while freeIdleTimer is active: must NOT snap y0 to topPad via freeShiftScroll.
+  w2.nodes[2].offsetHeight = 420;
+  w2.cardRO().fire([{ target: w2.nodes[2], borderBoxSize: [{ blockSize: 420 }], contentRect: { height: 420 } }]);
+  assert.equal(w2.bcol.scrollTop, y4, 'freeOnCardResize does not call freeShiftScroll to snap y0 > topPad mid-scroll');
+  assert.ok(w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[0]) > 40000, 'y0 remains on high runway until idle');
+
+  // Once idle fires, deferred rebase completes cleanly.
+  w2.fireIdle();
+  assert.equal(w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[0]), topPad, 'idle completes rebase deferred by freeOnCardResize');
+
+  // When y0 < topPad during active scroll (card 0 grows upward past topPad), freeOnCardResize MUST still shift downward.
+  w2.bcol.scrollTop = w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[2]);
+  const stBeforeGrow = w2.bcol.scrollTop;
+  w2.ctx.freeOnScroll(); // arm freeIdleTimer
+  w2.nodes[0].offsetHeight = 420; // +100px above anchor pushes y0 to topPad - 100 < topPad
+  w2.cardRO().fire([{ target: w2.nodes[0], borderBoxSize: [{ blockSize: 420 }], contentRect: { height: 420 } }]);
+  assert.equal(w2.ctx.WsBoardAnchor.windowInfo().posOf(w2.nodes[0]), topPad, 'y0 < topPad still shifts downward immediately');
+  assert.equal(w2.bcol.scrollTop, stBeforeGrow + 100, 'scrollTop compensates positive downward shift');
+
+  // CSS contract: #bcol[data-board-free] disables native overflow-anchor with higher specificity than .dgrid.<mode> > .bcol.
+  assert.match(boardCssSrc, /\.dgrid:is\(\.live,\s*\.history,\s*\.worktree\)\s*>\s*#bcol\[data-board-free\]\s*\{\s*overflow-anchor:\s*none;\s*\}/);
 });
