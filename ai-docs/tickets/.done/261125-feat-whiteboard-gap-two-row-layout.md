@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: ed6050eabb5acfb9
 sage-review-completeness-reviewed: ed6050eabb5acfb9
+completed: 2026-11-25
 ---
 
 # Whiteboard Two-Sided Log Gap Compact Two-Row Layout
@@ -88,3 +89,23 @@ In the narrow `#bcol` split column (typically 380–560px wide), the horizontal 
      - `[data-gap-dir="both"]` renders two full-width `<button data-load="up">` and `<button data-load="down">` rows with gap metadata overlaid on the top row, no dead-zone wrapper between them, and the `up`-hidden / `down`-hidden transitions (via `syncGapAttrs`/`refold`/`split`) keep the count/range visible.
      - Single-sided `up` and `down` gaps retain 1-row markup and `history-autofold.cjs` passes unchanged.
    - Run relevant Node frontend tests (including `history-autofold.cjs`) and remote `w5090` `go vet` + `go test -race ./internal/wswhiteboard/... ./internal/wsdashboard/...`.
+
+### Result (dac0e40) - 2026-11-25
+
+- **Landed:**
+  - `36e0f03`: Styled `.history-gap[data-gap-dir="both"]` in `agents-plugin-tool/internal/wswhiteboard/assets/page-stream.css` as a vertical column stack of two full-width compact buttons (`min-height: 25px` each, `min-height: 50px` total, separated by a tonal hairline `border-top` on `[data-load="down"]`) with individual row hover/active/focus-visible washes, `pointer-events: none` overlays on `.gap-info` (right-aligned on the top row with ellipsis) and `.gap-gutter` (`width: 40px` >= 36px), and zero dead click area. Kept the single shared gap DOM in `page.tmpl` and JS transition logic in `stream.js` / `stream-navigation.js` untouched so `syncGapAttrs`, `refresh`, `shell`, `split`, and `refold` preserve `.gap-label` / `.gap-range` across direction flips, and single-sided (`up`/`down`) gaps remain unchanged at 28px 1-row.
+  - `36e0f03` + `dac0e40`: Added SSR/CSS assertions in `stream_test.go` (`TestBidirectionalHistoryGapTwoRowLayout`), updated `stream_script_test.go` to assert the CSS `pointer-events: none` contract, real `up`-hidden `refresh`/`syncGapAttrs` flip (`both` -> `down`) and `refold` metadata preservation, and extended `testdata/history-autofold.cjs` with Chromium `elementFromPoint`, geometry, hover-wash, and `.gap-label` click-to-load checks on `[data-gap-dir="both"]` gaps across dark/light themes at 1280px and 420px.
+- **Verification:**
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-idle.test.js` — pass (9/9, including `:has()` guard and `syncGapAttrs` test)
+  - `go vet ./internal/wswhiteboard/... ./internal/wsdashboard/...` — pass
+  - `WS_PLAYWRIGHT_MODULE=... go test -v -run 'TestHistoryAutoFoldBrowser|...' ./internal/wswhiteboard/` — pass (existing single-sided autofold/band/layout checks unchanged + 4 new dark/light 1280/420 bidirectional checks)
+  - `go test -race ./internal/wswhiteboard/...` — pass (`ok 265.716s`)
+  - `go test -race -timeout 15m -run "Whiteboard|Board|Stream" ./internal/wsdashboard/...` — pass (`ok 163.007s`)
+  - `go test -race -v -run 'TestHistoryScriptWholeItemWindowsAndGapNavigationUnderNode|TestBidirectionalHistoryGapTwoRowLayout|TestStreamHistoryHeaderIsOneRow' ./internal/wswhiteboard/` (after `dac0e40`) — pass (`ok 2.229s`)
+- **Review:** `code-review-lite` raised 1 Important test-integrity finding on `stream_script_test.go` (no-op `init(document)` on already-bound history); fixed in `dac0e40`.
+- **Decisions:** Kept `.history-gap[data-gap-dir="both"] .gap-gutter` at `40px` across all widths (meeting the `>= 36px` assertion while freeing horizontal room in narrow `#bcol` split panes inside wide desktop viewports) and used `outline-offset: -2px` on stacked button `:focus-visible` to avoid clipping against the sibling row.
+
+
+## Resolution (2026-11-25)
+
+Implemented the compact stacked two-row layout for bidirectional ([data-gap-dir="both"]) whiteboard log gaps in CSS over the single shared gap DOM, preserving single-sided 1-row gaps, dark/light theme parity, and dynamic direction transitions. Verified with Node, Playwright Chromium, go vet, and go test -race.
