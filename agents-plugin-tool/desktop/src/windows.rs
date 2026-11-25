@@ -17,8 +17,8 @@ use windows::{
 };
 
 use crate::{
-    accelerator, close, menu_action, navigation, notify, shell::Connection, strip, strip_msg,
-    updates, webview_setup_failed,
+    accelerator, close, menu_action, navigation, notify, permissions, shell::Connection, strip,
+    strip_msg, updates, webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -141,13 +141,24 @@ unsafe fn install_hooks(
     settings.SetUserAgent(&HSTRING::from(agent))?;
     install_accelerators(controller, window.clone(), connection.clone())?;
 
-    let permissions = connection.clone();
+    let perm_connection = connection.clone();
     webview.add_PermissionRequested(
         &PermissionRequestedEventHandler::create(Box::new(move |_, args| {
             if let Some(args) = args {
                 let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
                 args.PermissionKind(&mut kind)?;
-                if kind == COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ {
+                let perm_kind = if kind == COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ {
+                    permissions::WindowsPermissionKind::ClipboardRead
+                } else if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                    permissions::WindowsPermissionKind::Microphone
+                } else {
+                    permissions::WindowsPermissionKind::Other
+                };
+                if matches!(
+                    perm_kind,
+                    permissions::WindowsPermissionKind::ClipboardRead
+                        | permissions::WindowsPermissionKind::Microphone
+                ) {
                     let transient = args
                         .cast::<ICoreWebView2PermissionRequestedEventArgs3>()
                         .ok();
@@ -160,15 +171,15 @@ unsafe fn install_hooks(
                     let mut raw = PWSTR::null();
                     args.Uri(&mut raw)?;
                     let uri = take_pwstr(raw);
-                    let allowed = url::Url::parse(&uri).ok().is_some_and(|url| {
-                        navigation::destination(&url, permissions.pinned_url().as_ref())
-                            == navigation::Destination::Dashboard
-                    });
                     // A saved grant would bypass future user-gesture and pin checks.
-                    if initiated.as_bool() && allowed {
-                        if transient.is_some() {
-                            args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
-                        }
+                    if permissions::windows_permission_allowed(
+                        perm_kind,
+                        &uri,
+                        perm_connection.pinned_url().as_ref(),
+                        initiated.as_bool(),
+                        transient.is_some(),
+                    ) {
+                        args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
                     }
                 }
             }

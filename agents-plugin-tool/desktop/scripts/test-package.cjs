@@ -4,7 +4,17 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { build, checkBinary, resourceMap, bundleResourceMap, comparePackage, releaseConfig } = require('./package.cjs');
+const {
+  build,
+  checkBinary,
+  resourceMap,
+  bundleResourceMap,
+  comparePackage,
+  releaseConfig,
+  readMacPlist,
+  verifyMacVoicePlist,
+  verifyMacVoiceEntitlements,
+} = require('./package.cjs');
 
 test('maps dotfiles and nested files to their exact daemon resource paths', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'werkschaft-map-test-'));
@@ -78,4 +88,37 @@ test('release overlays retain the exact updater version and platform installer c
   // An upgrade must not keep a daemon/ file the new release dropped.
   const hooks = fs.readFileSync(windows.bundle.windows.nsis.installerHooks, 'utf8');
   assert.match(hooks, /!macro NSIS_HOOK_PREINSTALL\s+RMDir \/r "\$INSTDIR\\daemon"\s+!macroend/);
+});
+
+test('macOS voice bundle verification requires microphone usage description and audio-input entitlement', () => {
+  verifyMacVoicePlist({ NSMicrophoneUsageDescription: 'Push-to-talk voice typing' });
+  assert.throws(() => verifyMacVoicePlist({}), /NSMicrophoneUsageDescription/);
+  assert.throws(() => verifyMacVoicePlist({ NSMicrophoneUsageDescription: '   ' }), /NSMicrophoneUsageDescription/);
+
+  verifyMacVoiceEntitlements({ 'com.apple.security.device.audio-input': true });
+  assert.throws(() => verifyMacVoiceEntitlements({}), /com\.apple\.security\.device\.audio-input/);
+  assert.throws(
+    () => verifyMacVoiceEntitlements({ 'com.apple.security.device.audio-input': false }),
+    /com\.apple\.security\.device\.audio-input/,
+  );
+
+  const desktopDir = path.resolve(__dirname, '..');
+  const tauriConf = JSON.parse(fs.readFileSync(path.join(desktopDir, 'tauri.conf.json'), 'utf8'));
+  assert.equal(tauriConf.app.withGlobalTauri, false);
+  assert.equal(tauriConf.app.security.capabilities[0].identifier, 'no-native-authority');
+  assert.deepEqual(tauriConf.app.security.capabilities[0].permissions, []);
+  assert.equal(tauriConf.bundle.macOS.infoPlist, 'Info.plist');
+  assert.equal(tauriConf.bundle.macOS.entitlements, 'entitlements.plist');
+
+  const infoPlistPath = path.join(desktopDir, tauriConf.bundle.macOS.infoPlist);
+  const entitlementsPath = path.join(desktopDir, tauriConf.bundle.macOS.entitlements);
+  assert.ok(fs.existsSync(infoPlistPath), 'desktop/Info.plist must exist');
+  assert.ok(fs.existsSync(entitlementsPath), 'desktop/entitlements.plist must exist');
+  if (process.platform === 'darwin') {
+    verifyMacVoicePlist(readMacPlist(infoPlistPath));
+    verifyMacVoiceEntitlements(readMacPlist(entitlementsPath));
+  } else {
+    assert.match(fs.readFileSync(infoPlistPath, 'utf8'), /<key>NSMicrophoneUsageDescription<\/key>/);
+    assert.match(fs.readFileSync(entitlementsPath, 'utf8'), /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/);
+  }
 });

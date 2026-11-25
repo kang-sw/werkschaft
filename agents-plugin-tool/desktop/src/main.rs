@@ -19,6 +19,7 @@ mod lkg;
 mod macos;
 mod navigation;
 mod notify;
+mod permissions;
 mod python;
 mod recovery;
 mod shell;

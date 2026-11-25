@@ -35,7 +35,11 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "entitlements": "entitlements.plist"
+    }
   },
   "plugins": {
     "updater": {

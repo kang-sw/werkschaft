@@ -91,10 +91,14 @@ function build(options) {
     execFileSync(process.execPath, args, { cwd: desktop, stdio: 'inherit' });
     const release = path.join(desktop, 'target', 'release');
     if (platform === 'darwin') {
-      const output = path.join(release, 'bundle/macos/Werkschaft.app/Contents/Resources/daemon');
+      const app = path.join(release, 'bundle/macos/Werkschaft.app');
+      const output = path.join(app, 'Contents/Resources/daemon');
       // Compare and revalidate the actual bundle, not just the input.
       comparePackage(daemon, output, platform);
-      console.log(`Packaged app: ${path.dirname(path.dirname(path.dirname(output)))}`);
+      const plist = readMacPlist(path.join(app, 'Contents', 'Info.plist'));
+      verifyMacVoicePlist(plist);
+      verifyMacVoiceEntitlements(readMacPlist(path.join(desktop, 'entitlements.plist')));
+      console.log(`Packaged app: ${app}`);
     } else {
       // Tauri's unbundled resource_dir is the executable's directory on Windows.
       const output = path.join(release, 'phase2-smoke');
@@ -153,12 +157,29 @@ function bundleRelease(stage, daemon, platform, version, pubkey, env) {
   return path.join(targetDir, target, 'release');
 }
 
+function readMacPlist(filePath) {
+  return JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', filePath], { encoding: 'utf8' }));
+}
+
+function verifyMacVoicePlist(plist) {
+  if (!plist || typeof plist.NSMicrophoneUsageDescription !== 'string' || !plist.NSMicrophoneUsageDescription.trim()) {
+    throw new Error('macOS bundle Info.plist is missing a non-empty NSMicrophoneUsageDescription');
+  }
+}
+
+function verifyMacVoiceEntitlements(entitlements) {
+  if (!entitlements || entitlements['com.apple.security.device.audio-input'] !== true) {
+    throw new Error('macOS entitlements must enable com.apple.security.device.audio-input');
+  }
+}
+
 function verifyMacApp(app, daemon, version) {
   const contents = path.join(app, 'Contents');
-  const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(contents, 'Info.plist')],
-    { encoding: 'utf8' }));
+  const plist = readMacPlist(path.join(contents, 'Info.plist'));
   if (plist.CFBundleExecutable !== 'Werkschaft' || plist.CFBundleShortVersionString !== version ||
       plist.CFBundleVersion !== version) throw new Error('macOS bundle Info.plist identity differs from the release');
+  verifyMacVoicePlist(plist);
+  verifyMacVoiceEntitlements(readMacPlist(path.join(desktop, 'entitlements.plist')));
   const binary = path.join(contents, 'MacOS', 'Werkschaft');
   fs.accessSync(binary, fs.constants.X_OK);
   checkArchitecture(binary, 'darwin');
@@ -232,4 +253,14 @@ if (require.main === module) {
     throw new Error('Usage: node scripts/package.cjs [--release]');
   }).catch(error => { console.error(error.message); process.exitCode = 1; });
 }
-module.exports = { build, checkBinary, resourceMap, bundleResourceMap, comparePackage, releaseConfig };
+module.exports = {
+  build,
+  checkBinary,
+  resourceMap,
+  bundleResourceMap,
+  comparePackage,
+  releaseConfig,
+  readMacPlist,
+  verifyMacVoicePlist,
+  verifyMacVoiceEntitlements,
+};

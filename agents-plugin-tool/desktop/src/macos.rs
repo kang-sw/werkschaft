@@ -11,12 +11,14 @@ use std::{
 
 use objc2::{ffi, msg_send, rc::Weak, runtime::ProtocolObject};
 use objc2_foundation::{ns_string, MainThreadMarker};
-use objc2_web_kit::{WKNavigationDelegate, WKWebView};
+use objc2_web_kit::{WKNavigationDelegate, WKUIDelegate, WKWebView};
 use tauri::{Manager, WebviewWindow};
 
 use crate::{close, notify, shell::Connection, updates, webview_setup_failed};
 use escape_guard::guard_escape;
-use webview_delegate::{Bridge, BridgeMessages, BridgeState, NavigationDelegate, NavigationState};
+use webview_delegate::{
+    Bridge, BridgeMessages, BridgeState, NavigationDelegate, NavigationState, UIDelegate, UIState,
+};
 
 // NSWindowStyleMaskFullScreen. The bit is set only while the window is in
 // native (green-button / Ctrl+Cmd+F) full screen.
@@ -46,12 +48,17 @@ pub fn install(
     ready: impl FnOnce(WebviewWindow) + Send + 'static,
 ) -> tauri::Result<()> {
     static DELEGATE_KEY: u8 = 0;
+    static UI_DELEGATE_KEY: u8 = 0;
     let target = window.clone();
     window.with_webview(move |platform| {
         let marker = MainThreadMarker::new().expect("with_webview runs on the main thread");
         // The pinned Tauri runtime supplies a WKWebView on the main thread.
         let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
         let Some(original) = (unsafe { webview.navigationDelegate() }) else {
+            webview_setup_failed(&target, &connection);
+            return;
+        };
+        let Some(original_ui) = (unsafe { webview.UIDelegate() }) else {
             webview_setup_failed(&target, &connection);
             return;
         };
@@ -68,9 +75,16 @@ pub fn install(
         let delegate: objc2::rc::Retained<NavigationDelegate> =
             unsafe { msg_send![super(delegate), init] };
         let protocol = ProtocolObject::from_ref(&*delegate);
+        let ui_delegate = marker.alloc::<UIDelegate>().set_ivars(UIState {
+            original: Weak::new(&original_ui),
+            connection: Arc::downgrade(&connection),
+        });
+        let ui_delegate: objc2::rc::Retained<UIDelegate> =
+            unsafe { msg_send![super(ui_delegate), init] };
+        let ui_protocol = ProtocolObject::from_ref(&*ui_delegate);
         unsafe {
-            // WKWebView's delegate property is weak. Associate the replacement
-            // with its view; the original remains owned by Wry.
+            // WKWebView's delegate properties are weak. Associate each
+            // replacement with its view; the originals remain owned by Wry.
             ffi::objc_setAssociatedObject(
                 (webview as *const WKWebView).cast_mut().cast(),
                 std::ptr::from_ref(&DELEGATE_KEY).cast(),
@@ -80,6 +94,15 @@ pub fn install(
                 ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
             );
             webview.setNavigationDelegate(Some(protocol));
+            ffi::objc_setAssociatedObject(
+                (webview as *const WKWebView).cast_mut().cast(),
+                std::ptr::from_ref(&UI_DELEGATE_KEY).cast(),
+                (ui_protocol as *const ProtocolObject<dyn WKUIDelegate>)
+                    .cast_mut()
+                    .cast(),
+                ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+            webview.setUIDelegate(Some(ui_protocol));
             let bridges = [
                 (
                     Bridge::Update,
