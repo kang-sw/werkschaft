@@ -1216,7 +1216,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return !availableToCaller(ownership.ownership(t.Stem, t.Status))
 			}
 		}
-		result, err := wsdoc.TicketsFind(root, wsdoc.TicketFindOptions{
+		result, total, err := wsdoc.TicketsFindPage(root, wsdoc.TicketFindOptions{
 			Env:                s.environ(),
 			Statuses:           statuses,
 			IncludeDone:        boolArgument(params.Arguments["include_done"]),
@@ -1242,9 +1242,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, err)
 		}
-		text := formatTickets(result)
+		rawLimit, hasLimit := params.Arguments["limit"]
+		budget := ticketDiscoveryTextBudget
+		if hasLimit && rawLimit != nil {
+			budget = 0
+		}
+		text := formatTicketsBounded(result, offset, total, budget)
 		if ownership != nil {
-			text = formatTicketsWithOwnership(ownership, result, true)
+			text = formatTicketsWithOwnershipBounded(ownership, result, true, offset, total, budget)
 		}
 		if !resolve {
 			text += ticketScopeAnnotation(root, effectiveTicketStatuses(params.Arguments))

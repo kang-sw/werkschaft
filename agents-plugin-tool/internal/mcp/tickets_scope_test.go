@@ -274,6 +274,57 @@ func TestTicketsQueryPaginationBoundsTextAndJSONDiscovery(t *testing.T) {
 	}
 }
 
+func TestTicketsQueryDefaultTextDiscoveryBoundedUnder8KiB(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	mustWrite(t, root, "ai-docs/_index.md", "# Index\n")
+	longTitle := strings.Repeat("Long ticket title segment ", 8) // ~208 bytes per title
+	for i := 1; i <= 50; i++ {
+		stem := fmt.Sprintf("260%03d-feat-budget", i)
+		mustWrite(t, root, "ai-docs/tickets/todo/"+stem+".md", fmt.Sprintf("---\ntitle: %s#%d\n---\n# Body %d\n", longTitle, i, i))
+	}
+	initGit(t, root)
+
+	// Default discovery text (no explicit limit) stays safely under 8 KiB and emits a pagination footer.
+	text := callScopedTool(t, root, 1, "tickets.query", nil)
+	if len(text) >= 8192 {
+		t.Fatalf("default tickets.query text = %d bytes, want < 8192", len(text))
+	}
+	shown := strings.Count(text, "[todo]")
+	if shown <= 0 || shown >= 50 {
+		t.Fatalf("default tickets.query shown = %d, want 1..49", shown)
+	}
+	wantFooter := fmt.Sprintf("showing %d of 50 (truncated to fit output budget; pass offset=%d, limit=%d or narrow query/statuses)", shown, shown, shown)
+	if !strings.Contains(text, wantFooter) {
+		t.Fatalf("default tickets.query missing footer %q:\n%s", wantFooter, text)
+	}
+
+	// Explicit limit is honored without byte-budget truncation.
+	explicit := callScopedTool(t, root, 2, "tickets.query", map[string]any{"limit": 50})
+	if got := strings.Count(explicit, "[todo]"); got != 50 {
+		t.Fatalf("explicit limit=50 returned %d tickets, want 50", got)
+	}
+	if strings.Contains(explicit, "truncated to fit output budget") {
+		t.Fatalf("explicit limit=50 unexpectedly emitted truncation footer")
+	}
+
+	// JSON format is unaffected by the text byte budget.
+	jsonOut := callScopedTool(t, root, 3, "tickets.query", map[string]any{"format": "json"})
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(jsonOut), &items); err != nil {
+		t.Fatalf("json discovery decode failed: %v", err)
+	}
+	if len(items) != 50 {
+		t.Fatalf("json discovery returned %d tickets, want 50", len(items))
+	}
+
+	// Single ticket_stem point-resolve is unaffected.
+	single := callScopedTool(t, root, 4, "tickets.query", map[string]any{"ticket_stem": "260001-feat-budget"})
+	if !strings.Contains(single, "260001-feat-budget") || strings.Contains(single, "truncated to fit output budget") {
+		t.Fatalf("point-resolve unexpected:\n%s", single)
+	}
+}
+
 func TestTicketsQueryPaginationRejectsInvalidDiscoveryArguments(t *testing.T) {
 	useLeadProfile(t)
 	root := t.TempDir()

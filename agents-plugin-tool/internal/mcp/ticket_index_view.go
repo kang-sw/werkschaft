@@ -228,23 +228,50 @@ func ownershipLine(o *wsdoc.TicketOwnership) string {
 // tickets held by others (and those closed on origin) to one line each after
 // the full entries; point-resolve never collapses.
 func formatTicketsWithOwnership(v *ownershipView, tickets []wsdoc.TicketInfo, collapse bool) string {
+	return formatTicketsWithOwnershipBounded(v, tickets, collapse, 0, len(tickets), 0)
+}
+
+func formatTicketsWithOwnershipBounded(v *ownershipView, tickets []wsdoc.TicketInfo, collapse bool, offset, total, budget int) string {
 	var b strings.Builder
-	var collapsed []wsdoc.TicketInfo
+	var collapsed []string
+	trailer := v.trailer()
+	used := len(trailer)
+	collapsedHeaderLen := len("held elsewhere or closed on origin (999):\n")
+	shown := 0
 	for _, t := range tickets {
 		if collapse && t.Ownership != nil && !availableToCaller(t.Ownership) {
-			collapsed = append(collapsed, t)
+			line := fmt.Sprintf("  [%s] %s -%s", t.Status, t.Stem, strings.TrimPrefix(ownershipLine(t.Ownership), "  ownership:"))
+			extra := len(line)
+			if len(collapsed) == 0 {
+				extra += collapsedHeaderLen
+			}
+			if budget > 0 && shown > 0 && used+extra > budget {
+				break
+			}
+			collapsed = append(collapsed, line)
+			used += extra
+			shown++
 			continue
 		}
-		b.WriteString(formatTickets([]wsdoc.TicketInfo{t}))
-		b.WriteString(ownershipLine(t.Ownership))
+		chunk := formatTickets([]wsdoc.TicketInfo{t}) + ownershipLine(t.Ownership)
+		if budget > 0 && shown > 0 && used+len(chunk) > budget {
+			break
+		}
+		b.WriteString(chunk)
+		used += len(chunk)
+		shown++
 	}
 	if len(collapsed) > 0 {
 		fmt.Fprintf(&b, "held elsewhere or closed on origin (%d):\n", len(collapsed))
-		for _, t := range collapsed {
-			fmt.Fprintf(&b, "  [%s] %s -%s", t.Status, t.Stem, strings.TrimPrefix(ownershipLine(t.Ownership), "  ownership:"))
+		for _, line := range collapsed {
+			b.WriteString(line)
 		}
 	}
-	b.WriteString(v.trailer())
+	b.WriteString(trailer)
+	if budget > 0 && shown < len(tickets) {
+		fmt.Fprintf(&b, "showing %d of %d (truncated to fit output budget; pass offset=%d, limit=%d or narrow query/statuses)\n",
+			shown, total, offset+shown, shown)
+	}
 	return b.String()
 }
 

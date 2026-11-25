@@ -216,8 +216,8 @@ func TestHostedLeadPlaybookCommands(t *testing.T) {
 		"This session has no ws skills: a `/<name>` reference such as `/lead-run` names a workflow playbook. " +
 		"The user runs one as that dashboard command, which sends you its playbook; you run one by reading it with the ws `playbook.read` tool and following it. " +
 		"The workflow manual below is binding and stays in this prompt across compaction. " +
-		"Use the session state delivered with your first turn or in a restore bundle. " +
-		"For fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" +
+		"Use the session state delivered with your first turn or in a `## Hosted Session Restore` bundle: it already carries fresh `## Session State` after compaction or daemon restart, so do not call `workflow_state` right after receiving one. " +
+		"Call the ws `workflow_state` tool with this key only for mid-session refreshes, if a restore bundle reports a render error, or where the manual says to invoke `/lead-revive`.\n\n" +
 		"# Workflow Manual\nrendered\n"
 	if prompt := appendedPrompt(t, h.holders.spawned(holder).Argv); prompt != wantPrompt {
 		t.Fatalf("lead prompt =\n%s\nwant\n%s", prompt, wantPrompt)

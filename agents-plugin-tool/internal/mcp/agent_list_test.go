@@ -35,7 +35,7 @@ func TestHostedRestoreBundleCapsInactiveChildren(t *testing.T) {
 	children := childListFixture(43, 3)
 	// An older waiting child recently settled a turn, so it outranks newer records.
 	children[3].Activity = &wsagent.AgentChildActivity{LastActiveAt: "2026-01-02T00:00:00Z"}
-	got := renderHostedRestoreBundle("session-key", "compaction", sessionRecord{}, children)
+	got := renderHostedRestoreBundle("session-key", "compaction", sessionRecord{}, children, false)
 	_, section, _ := strings.Cut(got, "## Direct Children\n")
 	lines := strings.Split(strings.TrimSpace(section), "\n")
 	if len(lines) != 14 || strings.Count(section, "; tier=pi.small; authority=read-only; last=done:") != 3 {

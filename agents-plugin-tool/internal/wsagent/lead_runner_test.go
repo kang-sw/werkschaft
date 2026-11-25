@@ -242,8 +242,8 @@ func TestClaudeLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 		t.Helper()
 		text := appendedPrompt(t, argv)
 		if !strings.HasPrefix(text, leadKeySentence(key)+"The workflow manual below is binding") ||
-			!strings.Contains(text, "Use the session state delivered with your first turn or in a restore bundle.") ||
-			!strings.HasSuffix(text, ".\n\n# Workflow Manual\n\n## Session Key\nrendered\n") || strings.Contains(text, "## Session State") {
+			!strings.Contains(text, "Use the session state delivered with your first turn or in a `## Hosted Session Restore` bundle: it already carries fresh `## Session State` after compaction or daemon restart") ||
+			!strings.HasSuffix(text, ".\n\n# Workflow Manual\n\n## Session Key\nrendered\n") || strings.Contains(text, "\n## Session State") {
 			t.Fatalf("the appended prompt is not the key sentence and the manual:\n%s", text)
 		}
 	}
