@@ -232,3 +232,60 @@ func TestWhiteboardInputsRetainedRecordsOnly(t *testing.T) {
 		t.Fatal("answer-check nudge credited as owner input")
 	}
 }
+
+func TestWhiteboardInputsFiltersExecAndCronSystemEntries(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	dir, err := f.s.sessionInboxDir(f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.update(t, `<wb:topic name="t"><wb:log>activate</wb:log></wb:topic>`)
+
+	const execText = "[ws exec] exec_abc exited with code 0\nno output.\nRead more with exec.tail (exec_id exec_abc)."
+	if _, _, err := wsinbox.Send(dir, wsinbox.Entry{
+		Parts:   []string{execText},
+		Steer:   true,
+		EventID: "exec:exec_abc:exit",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wsinbox.Drain(dir); err != nil {
+		t.Fatal(err)
+	}
+	f.update(t, `<wb:topic name="t"><wb:log>after exec notice</wb:log></wb:topic>`)
+	if got := lastInput(t, f).Inputs; got != nil {
+		t.Fatalf("exec completion notice stamped as owner input: %s", got)
+	}
+
+	if _, _, err := wsinbox.Send(dir, wsinbox.Entry{
+		Parts: []string{"nightly status check"},
+		Steer: true,
+		Cron:  &wsinbox.Cron{ID: "c1", Name: "nightly", At: "2026-11-26T00:00:00Z"},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wsinbox.Drain(dir); err != nil {
+		t.Fatal(err)
+	}
+	f.update(t, `<wb:topic name="t"><wb:log>after cron prompt</wb:log></wb:topic>`)
+	if got := lastInput(t, f).Inputs; got != nil {
+		t.Fatalf("scheduled cron prompt stamped as owner input: %s", got)
+	}
+
+	const quotedText = "[ws exec] exec_abc exited with code 0 — why did this happen?"
+	userName, _, err := wsinbox.Send(dir, wsinbox.Entry{
+		Parts: []string{quotedText},
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wsinbox.Drain(dir); err != nil {
+		t.Fatal(err)
+	}
+	f.update(t, `<wb:topic name="t"><wb:log>after user quote</wb:log></wb:topic>`)
+	inputs := stampList(t, lastInput(t, f))
+	wantID := (wsinbox.Record{Name: userName}).ID()
+	if len(inputs) != 1 || inputs[0].InboxID != wantID || inputs[0].Excerpt != quotedText {
+		t.Fatalf("quoted user message inputs = %+v, want single input id=%q excerpt=%q", inputs, wantID, quotedText)
+	}
+}

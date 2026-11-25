@@ -80,7 +80,7 @@ func (s *Server) stampBoardInputs(key string, st *wswhiteboard.State, before int
 	var inputs []boardInputStamp
 	answerTimes := map[int]int64{}
 	for _, r := range records {
-		if r.ID() <= floor || used[r.ID()] || wsdashboard.IsAnswerCheckNudge(r.Entry) || r.Entry.Command != nil || r.Entry.Interrupt {
+		if r.ID() <= floor || used[r.ID()] || wsdashboard.IsAnswerCheckNudge(r.Entry) || r.Entry.Command != nil || r.Entry.Interrupt || r.Entry.Cron != nil || r.Entry.EventID != "" {
 			continue
 		}
 		input := boardInputStamp{InboxID: r.ID(), SentAt: r.Entry.SentAt, Excerpt: r.Entry.Excerpt()}
