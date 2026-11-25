@@ -21,7 +21,7 @@
   --tk-av-d1: #1d7348; --tk-av-d2: #2f7a54; --tk-av-d3: #4b7f62;   /* avatars: the viewer's reports, 1 / 2 / 3+ down */
   --tk-agent: #6a4fc4; --tk-on-agent: #ffffff; --tk-agent-ink: #6a4fc4;
   --tk-conc: #e9a100; --tk-on-conc: #1b1d21;              /* concurrent-write markers */
-  --tk-topic: #2c3038; --tk-on-topic: #ffffff;            /* admin chip */
+  --tk-topic: #e3e4e8; --tk-on-topic: #1b1d21;            /* admin chip */
   --tk-blu-bg: #e7f0fe; --tk-blu: #2563eb; --tk-blu-fg: #1d4ed8;
   --tk-amb-bg: #fef3d9; --tk-amb: #b45309;
   --tk-grn-bg: #e4f6ec; --tk-grn: #1d7348;

@@ -38,12 +38,10 @@
    unknown stems dim. */
 .dw.wbtk .dbtn { opacity: .72; }
 .dw.wbtk .dbtn:hover, .dw.wbtk .dbtn[aria-expanded="true"] { opacity: 1; }
-.dw.wbtk .dbtn.open { --tk-open: #7aa2ff; color: var(--tk-open); opacity: 1; background: color-mix(in srgb, var(--tk-open) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tk-open) 38%, transparent); }
-.topic.quiet .dw.wbtk .dbtn.open { --tk-open: var(--wb-primary); }
+.dw.wbtk .dbtn.open { --tk-open: var(--wb-primary); color: var(--tk-open); opacity: 1; background: color-mix(in srgb, var(--tk-open) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tk-open) 38%, transparent); }
 .dw.wbtk .dbtn.open:hover, .dw.wbtk .dbtn.open[aria-expanded="true"] { background: color-mix(in srgb, var(--tk-open) 26%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tk-open) 55%, transparent); }
-.dw.wbtk .bd { top: -2px; right: -5px; background: rgb(127 127 127 / .6); color: #fff; }
-.dw.wbtk .dbtn.open .bd { background: var(--tk-open); color: #0c1424; }
-.topic.quiet .dw.wbtk .dbtn.open .bd { background: var(--wb-primary); color: var(--wb-primary-fg); }
+.dw.wbtk .bd { top: -2px; right: -5px; background: light-dark(#5f646b, rgb(127 127 127 / .6)); color: #fff; }
+.dw.wbtk .dbtn.open .bd { background: var(--tk-open); color: var(--wb-primary-fg); }
 .dw.wbtk .pop { width: 400px; }
 .wbtk .row > .i { width: 10px; height: 10px; stroke-width: 2.4; }
 .wbtk .row.open .wb-dot { box-shadow: inset 0 0 0 1.5px var(--wb-primary); }
