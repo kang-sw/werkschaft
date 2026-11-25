@@ -1,12 +1,15 @@
 package wsdashboard
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,4 +247,111 @@ func TestPersistedSecretConcurrentFirstUseMintsOnce(t *testing.T) {
 			t.Fatalf("caller %d got a different secret than caller 0", i)
 		}
 	}
+}
+
+func TestPersistedSecretSharingViolationRecoveryAndAccessDeniedFastFail(t *testing.T) {
+	errSharing := errors.New("simulated ERROR_SHARING_VIOLATION")
+
+	t.Run("same_daemon_publish_race_serves_published_secret_immediately", func(t *testing.T) {
+		d := authFixture(t)
+		d.lan = true
+		minted, ok, err := d.persistedSecret(LANTokenFileName)
+		if err != nil || !ok || minted == "" {
+			t.Fatalf("initial persistedSecret = (%q, %v, %v)", minted, ok, err)
+		}
+
+		var reads atomic.Int32
+		d.secretSharing = func(err error) bool { return errors.Is(err, errSharing) }
+		d.secretRead = func(string) ([]byte, error) {
+			reads.Add(1)
+			return nil, errSharing
+		}
+		d.secretRetryWait = 250 * time.Millisecond
+
+		start := time.Now()
+		got, mintedAgain, err := d.persistedSecret(LANTokenFileName)
+		elapsed := time.Since(start)
+		if err != nil || mintedAgain || got != minted {
+			t.Fatalf("persistedSecret under publish race = (%q, %v, %v), want (%q, false, nil)", got, mintedAgain, err, minted)
+		}
+		if reads.Load() != 1 {
+			t.Fatalf("same-daemon publish race read attempts = %d, want 1 (fast path without sleeping)", reads.Load())
+		}
+		if elapsed > 100*time.Millisecond {
+			t.Fatalf("same-daemon publish race took %v, want immediate fast path", elapsed)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "198.51.100.10:12345"
+		req.Header.Set("Cookie", lanTokenCookie+"="+minted)
+		if code := guardCode(d, req); code != http.StatusNoContent {
+			t.Fatalf("accessGuard under publish race = %d, want 204", code)
+		}
+	})
+
+	t.Run("external_rotation_under_sharing_violation_observes_new_secret", func(t *testing.T) {
+		d := authFixture(t)
+		minted, _, err := d.persistedSecret(LANTokenFileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(d.dir, LANTokenFileName)
+		backdateSecret(t, path, time.Hour)
+		const rotated = "externally-rotated-secret-value"
+		if err := writePrivateFile(d.dir, LANTokenFileName, []byte(rotated+"\n")); err != nil {
+			t.Fatal(err)
+		}
+
+		var reads atomic.Int32
+		d.secretSharing = func(err error) bool { return errors.Is(err, errSharing) }
+		d.secretRead = func(p string) ([]byte, error) {
+			if reads.Add(1) <= 2 {
+				return nil, errSharing
+			}
+			return wsstate.ReadFileCached(p)
+		}
+		d.secretRetryWait = 300 * time.Millisecond
+
+		got, mintedAgain, err := d.persistedSecret(LANTokenFileName)
+		if err != nil || mintedAgain || got != rotated {
+			t.Fatalf("persistedSecret after external rotation = (%q, %v, %v), want (%q, false, nil) (old=%q)", got, mintedAgain, err, rotated, minted)
+		}
+		if reads.Load() < 3 {
+			t.Fatalf("expected retry loop after metadata changed, got %d reads", reads.Load())
+		}
+	})
+
+	t.Run("access_denied_fails_fast_without_retry", func(t *testing.T) {
+		d := authFixture(t)
+		d.lan = true
+		minted, _, err := d.persistedSecret(LANTokenFileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reads atomic.Int32
+		d.secretSharing = func(err error) bool { return errors.Is(err, errSharing) }
+		d.secretRead = func(string) ([]byte, error) {
+			reads.Add(1)
+			return nil, fs.ErrPermission
+		}
+		d.secretRetryWait = 500 * time.Millisecond
+
+		start := time.Now()
+		_, _, err = d.persistedSecret(LANTokenFileName)
+		elapsed := time.Since(start)
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("err = %v, want fs.ErrPermission", err)
+		}
+		if reads.Load() != 1 {
+			t.Fatalf("permission error attempted %d reads, want 1 (fast fail)", reads.Load())
+		}
+		if elapsed > 100*time.Millisecond {
+			t.Fatalf("permission error took %v, want fast fail", elapsed)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "198.51.100.10:12345"
+		req.Header.Set("Cookie", lanTokenCookie+"="+minted)
+		if code := guardCode(d, req); code != http.StatusServiceUnavailable {
+			t.Fatalf("accessGuard on permission error = %d, want 503", code)
+		}
+	})
 }

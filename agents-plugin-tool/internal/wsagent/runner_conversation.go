@@ -138,12 +138,24 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			c.lastErr = appendDiagnostic(c.lastErr, "worker permission selection: "+err.Error())
 		}
 	}
+	stalePendingCompaction := false
 	if loaded != nil && rec.PendingCompaction != nil {
-		// Restore a rotated lead's carry-forward compaction handoff before
-		// the loop or any inbox/mail signal can kick. canKick's scan/replay
-		// gates order delivery after holder reconciliation.
-		c.restorePendingCompaction(rec.PendingCompaction)
-	} else if loaded != nil && r.opts.RestoreBundle != nil {
+		pc := rec.PendingCompaction
+		if pc.RotatedAfterSends != nil && rec.Sends > *pc.RotatedAfterSends {
+			// An older daemon (which preserves unknown Record fields as T0)
+			// ran at least one newer turn after rotation without consuming
+			// PendingCompaction. Drop the stale handoff and fall through to
+			// normal restart restore.
+			stalePendingCompaction = true
+			c.rec.PendingCompaction = nil
+		} else {
+			// Restore a rotated lead's carry-forward compaction handoff before
+			// the loop or any inbox/mail signal can kick. canKick's scan/replay
+			// gates order delivery after holder reconciliation.
+			c.restorePendingCompaction(pc)
+		}
+	}
+	if loaded != nil && (rec.PendingCompaction == nil || stalePendingCompaction) && r.opts.RestoreBundle != nil {
 		// Install the marker before the loop or any inbox/mail signal can
 		// kick. canKick's scan/replay gates then order delivery after holder
 		// reconciliation without admitting sessions spawned during the scan.
@@ -235,6 +247,9 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	// starts for it.
 	foreign := c.isForeign()
 	if !foreign {
+		if stalePendingCompaction {
+			_ = c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		}
 		if r.opts.LiveHost != nil {
 			if slot, ok := r.opts.LiveHost.OpenHostedSlot(dir); ok {
 				c.live.setSlot(slot)
