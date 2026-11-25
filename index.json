@@ -279,6 +279,16 @@
         }
       }
     },
+    "261116-feat-ws-daemon-plugin-package-select": {
+      "registered_at": "2026-11-25T12:09:30Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-25T12:09:30Z"
+      }
+    },
     "261116-feat-ws-dashboard-generalized-mentions": {
       "registered_at": "2026-11-16T13:07:35Z"
     },
