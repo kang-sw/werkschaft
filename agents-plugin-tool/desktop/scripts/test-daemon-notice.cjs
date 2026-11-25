@@ -19,8 +19,9 @@ test('replacement refusal reaches only the pinned dashboard and keeps its docume
   const browser = await chromium.launch({ headless: true });
   const origin = 'http://127.0.0.1:49152';
   const message = 'No healthy replacement was found. Keeping the current connection.';
-  const invoke = (frame, pin, reason) =>
-    frame.evaluate(`(${notice})(${JSON.stringify(pin)}, ${JSON.stringify(reason)})`);
+  const invoke = (frame, pin, reason, fallback) =>
+    frame.evaluate(`(${notice})(${JSON.stringify(pin)}, ${JSON.stringify(reason)}${
+      fallback === undefined ? '' : ', ' + JSON.stringify(fallback)})`);
   const capture = async (page, name) => {
     if (shots) {
       fs.mkdirSync(shots, { recursive: true });
@@ -66,6 +67,25 @@ test('replacement refusal reaches only the pinned dashboard and keeps its docume
       assert.equal(await toast.count(), 1);
       assert.equal(await toast.textContent(), '<b>New warning</b>');
       assert.equal(await toast.locator('b').count(), 0);
+      // A fallback notice is sticky and dismissible; it offers the update
+      // check only when the shell has injected the update bridge.
+      const fallback = 'Running on Safe Fallback v0.52.0';
+      assert.equal(await invoke(page, origin, fallback, { version: '0.52.0' }), 1);
+      assert.equal(await toast.count(), 1);
+      assert.equal(await toast.locator('.wst-x').count(), 1, 'fallback is dismissible');
+      assert.equal(await toast.locator('.wst-act').count(), 0, 'no bridge, no update action');
+      await page.evaluate(() => {
+        window.werkschaftDesktop = { update: { check() { window.__checked = 1; } } };
+      });
+      assert.equal(await invoke(page, origin, fallback, { version: '0.52.0' }), 1);
+      assert.equal(await toast.count(), 1);
+      assert.equal(await toast.locator('.wst-x').count(), 1);
+      const action = toast.locator('.wst-act');
+      assert.equal(await action.textContent(), 'Check for Updates');
+      await capture(page, 'fallback-' + colorScheme);
+      await action.click();
+      assert.equal(await page.evaluate(() => window.__checked), 1);
+      assert.equal(await toast.count(), 0, 'the action closes the notice');
       await page.setViewportSize({ width: 980, height: 650 });
       for (const [file, heading] of [['index', 'Connect to your dashboard'], ['python-missing', 'Python 3 is required']]) {
         await page.goto(pathToFileURL(path.join(desktop, 'ui', file + '.html')).href);

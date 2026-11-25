@@ -3,10 +3,106 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Werkschaft — Connection</title>
-<link rel="stylesheet" href="status.css">
-<main>
-  <h1>Connect to your dashboard</h1>
-  <p>Choose <strong>Connection → Retry</strong> to start or reconnect to the dashboard.</p>
-  <p>The window title shows the current connection status.</p>
+<link rel="stylesheet" href="recovery.css">
+<script src="recovery.js" defer></script>
+<main class="stack">
+  <section class="card" data-k="idle">
+    <h1 class="h2">Connect to your dashboard</h1>
+    <p class="copy">Choose <strong>Connection → Retry</strong> to start or reconnect to the dashboard.</p>
+    <div class="actions">
+      <button type="button" class="btn btn-tonal" data-act="retry">Retry</button>
+    </div>
+    <p class="notice" data-notice hidden></p>
+  </section>
+
+  <section class="card" data-k="failure" hidden>
+    <div class="card-top">
+      <span class="pill pill-fail" data-k="fTag"></span>
+      <span class="pill num" data-k="fBundle"></span>
+    </div>
+    <h2 class="h2" data-k="fReason"></h2>
+    <p class="copy" data-k="fCopy"></p>
+    <div class="meta-well">
+      <div class="kv">
+        <span class="k">Failure Variant</span>
+        <span class="v"><span data-k="fVariant"></span></span>
+      </div>
+      <div class="kv" data-k="fPathRow">
+        <span class="k">Offending Path</span>
+        <span class="v"><span class="code" data-k="fPath"></span></span>
+      </div>
+      <div class="kv" data-k="fBundledRow">
+        <span class="k">Bundled Version</span>
+        <span class="v num"><span data-k="fBundled"></span> <span class="copy" data-k="fDetail"></span></span>
+      </div>
+      <div class="kv">
+        <span class="k">LKG Fallback</span>
+        <span class="v" data-k="fLkg"></span>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-tonal" data-act="retry">Retry</button>
+      <button type="button" class="btn btn-tonal" data-act="copy-diagnostics">Copy Diagnostics</button>
+      <button type="button" class="btn btn-tonal" data-act="open-logs">Open Logs</button>
+      <span class="path-hint" data-k="fLog" hidden></span>
+    </div>
+    <p class="notice" data-notice hidden></p>
+  </section>
+
+  <section class="card" data-k="blocked" hidden>
+    <div class="callout">
+      <div class="card-top">
+        <span class="pill pill-warn">Automatic Fallback Blocked</span>
+        <span class="pill num" data-k="bFloorPill"></span>
+      </div>
+      <h2 class="h2" data-k="bTitle"></h2>
+      <p class="copy" data-k="bCopy"></p>
+      <div class="inline-meta num">
+        <span data-k="bBundledRow">Bundled: <strong data-k="bBundled"></strong> (failed)</span>
+        <span data-k="bFloorRow">Minor floor: <strong data-k="bFloor"></strong></span>
+        <span data-k="bLkgRow">LKG candidate: <span class="code code-warn" data-k="bLkg"></span></span>
+      </div>
+    </div>
+    <div class="actions" data-k="bActions">
+      <button type="button" class="btn btn-tonal" data-act="retry">Retry</button>
+      <button type="button" class="btn btn-tonal" data-act="open-logs">Open Logs</button>
+      <button type="button" class="btn btn-tonal" data-act="copy-diagnostics">Copy Diagnostics</button>
+    </div>
+    <p class="notice" data-notice hidden></p>
+  </section>
+
+  <section class="update" data-k="update" hidden>
+    <div class="card-top">
+      <span class="pill" data-k="uPill"></span>
+      <span class="pill pill-primary" data-k="uTag">Self-Update Recovery</span>
+    </div>
+    <h2 class="h3" data-k="uTitle"></h2>
+    <p class="copy" data-k="uCopy"></p>
+    <div class="progress" data-k="uProgress" hidden>
+      <div class="progress-head">
+        <span class="progress-label num" data-k="uProgressLabel"></span>
+        <span class="progress-meta">Verifying the signature before install</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill"></div></div>
+    </div>
+    <div class="actions" data-k="uActions">
+      <button type="button" class="btn btn-primary" data-k="uDownload">Download &amp; Install</button>
+      <button type="button" class="btn btn-ok num" data-k="uRestart"></button>
+      <button type="button" class="btn btn-tonal" data-k="uCheck">Check for Updates</button>
+      <a class="link" data-k="uLink" hidden>Release page</a>
+    </div>
+  </section>
+
+  <details class="details" data-k="diag" hidden open>
+    <summary class="details-summary">
+      <span>Diagnostic Preview<span data-k="dCode" hidden> — <span class="mono">daemon-start</span> exit code <span class="num" data-k="dExit"></span></span></span>
+      <span class="pill">Toggle Details</span>
+    </summary>
+    <div class="details-body">
+      <pre class="log"><span data-k="dLogRow"><span class="log-ok">log_path:</span> <span data-k="dLog"></span>
+</span><span class="log-ok">stage:</span>    <span data-k="dStage"></span>
+<span data-k="dTail"></span></pre>
+    </div>
+  </details>
 </main>
 </html>
