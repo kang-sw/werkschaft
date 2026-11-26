@@ -193,9 +193,9 @@
     return !!(node.querySelector && node.querySelector(VIRTUAL_ASK_SEL));
   }
 
-  function virtualCaptureForCollapse(sec, cold) {
+  function virtualCaptureForCollapse(sec, cold, preScrollTop) {
     return {
-      scrollTop: cold ? 0 : (sec.scrollTop || 0),
+      scrollTop: cold ? 0 : (typeof preScrollTop === "number" ? preScrollTop : (sec.scrollTop || 0)),
       history: window.wbHistory && window.wbHistory.capture ? window.wbHistory.capture(sec) : null,
       answers: typeof readAnswers === "function" ? readAnswers(sec) : null,
       frameH: typeof frameHeights === "function" ? frameHeights(sec) : null,
@@ -212,7 +212,8 @@
     if (k === null) return false;
     // Capture scrollTop and state before unmountFrames/DOM detachment so a
     // collapse never interleaves DOM writes with a forced scrollTop reflow.
-    var snap = opts && opts.snapshot ? opts.snapshot : virtualCaptureForCollapse(sec, !!(opts && opts.cold));
+    var preScrollTop = opts && typeof opts.preScrollTop === "number" ? opts.preScrollTop : undefined;
+    var snap = opts && opts.snapshot ? opts.snapshot : virtualCaptureForCollapse(sec, !!(opts && opts.cold), preScrollTop);
     if (typeof unmountFrames === "function") unmountFrames(sec);
     var raw = Array.prototype.slice.call(sec.childNodes || []);
     var children = [], detached = 0;
@@ -605,9 +606,11 @@
           virtualExemptSet.add(list[h]);
         }
       }
+      var preScrollTops = opts && opts.preScrollTops;
       for (var c = 0; c < plan.actions.length; c++) {
         if (plan.actions[c].action === "collapse") {
-          if (virtualCollapse(list[c], items[c])) changed = true;
+          var preTop = preScrollTops && preScrollTops.has(list[c]) ? preScrollTops.get(list[c]) : undefined;
+          if (virtualCollapse(list[c], items[c], typeof preTop === "number" ? { preScrollTop: preTop } : undefined)) changed = true;
         }
       }
     } else {
@@ -656,6 +659,7 @@
       for (var eh = 0; eh < entering.length; eh++) {
         if (virtualHydrate(entering[eh].node, { immediate: entering[eh].immediate })) changed = true;
       }
+      var preScrollTopsDelta = opts && opts.preScrollTops;
       for (var ci = 0; ci < candidates.length; ci++) {
         var cn = candidates[ci];
         virtualExemptDirty.delete(cn);
@@ -669,7 +673,8 @@
           if (desc.collapsed && virtualHydrate(cn, { immediate: false })) changed = true;
         } else {
           virtualExemptSet.delete(cn);
-          if (!desc.collapsed && virtualCollapse(cn, desc)) changed = true;
+          var preTopDelta = preScrollTopsDelta && preScrollTopsDelta.has(cn) ? preScrollTopsDelta.get(cn) : undefined;
+          if (!desc.collapsed && virtualCollapse(cn, desc, typeof preTopDelta === "number" ? { preScrollTop: preTopDelta } : undefined)) changed = true;
         }
       }
     }

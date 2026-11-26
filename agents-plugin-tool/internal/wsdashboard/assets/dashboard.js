@@ -397,14 +397,23 @@
   // The conversation stays at the bottom while the user has it there. Its
   // two regions (entries, convlive) scroll together inside #convo, which
   // owns the scroll and the pin.
-  var convo = $("convo"), stick = true, pinConvoFrame = 0;
+  var convo = $("convo"), stick = true, pinConvoFrame = 0, pinConvoProgrammatic = false;
   function convoVisible() {
     if (!convo) return false;
     return paneObserver && Object.prototype.hasOwnProperty.call(paneVisible, "convo") ? paneVisible.convo : visible(convo);
   }
   function atBottom() { return convo.scrollTop + convo.clientHeight >= convo.scrollHeight - 24; }
-  function pinned() { if (convoVisible()) stick = atBottom(); return stick; }
-  function pinConvo() { if (stick && convoVisible()) convo.scrollTop = convo.scrollHeight; }
+  // Return cached bottom-pin state instead of reading scrollHeight/clientHeight
+  // synchronously inside post-mutation swap/leadDraw paths (avoids forced reflow).
+  function pinned() { return stick; }
+  function pinConvo() {
+    if (!stick || !convoVisible()) return;
+    var target = convo.scrollHeight;
+    if (convo.scrollTop !== target) {
+      pinConvoProgrammatic = true;
+      convo.scrollTop = target;
+    }
+  }
   function queuePinConvo() {
     if (!stick || !convo || pinConvoFrame) return;
     if (typeof requestAnimationFrame !== "function") { pinConvo(); return; }
@@ -417,7 +426,20 @@
   // even when the user had scrolled up. A later user scroll still cancels it.
   function followConvo() { stick = true; pinConvo(); }
   if (convo) {
-    convo.addEventListener("scroll", function () { if (convoVisible()) stick = atBottom(); }, { passive: true });
+    function clearConvoProgrammatic() { pinConvoProgrammatic = false; }
+    convo.addEventListener("wheel", clearConvoProgrammatic, { passive: true });
+    convo.addEventListener("touchstart", clearConvoProgrammatic, { passive: true });
+    convo.addEventListener("pointerdown", clearConvoProgrammatic, { passive: true });
+    convo.addEventListener("keydown", clearConvoProgrammatic, { passive: true });
+    convo.addEventListener("scroll", function () {
+      if (pinConvoProgrammatic) {
+        pinConvoProgrammatic = false;
+        // Ignore a stale async scroll event from an earlier pinConvo() while
+        // another rAF pin is already queued for a concurrent DOM swap burst.
+        if (pinConvoFrame) return;
+      }
+      if (convoVisible()) stick = atBottom();
+    }, { passive: true });
     // A resize (another pane grew, the window changed, the tab came back)
     // keeps a pinned conversation at the bottom.
     if (window.ResizeObserver) new ResizeObserver(queuePinConvo).observe(convo);

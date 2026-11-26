@@ -112,7 +112,32 @@
     // Per-frame overflowY cache (timestamp-bounded, zero rAF timer overhead)
     // so ancestor walks across many topics do not repeat getComputedStyle.
     var overflowCache = null, overflowCacheAt = -Infinity;
-    function clearOverflowCache() { overflowCache = null; overflowCacheAt = -Infinity; }
+    var scrollerCache = typeof WeakMap === "function" ? new WeakMap() : null, scrollerCacheGen = 0;
+    function clearOverflowCache() { overflowCache = null; overflowCacheAt = -Infinity; scrollerCacheGen++; }
+    function inOverviewMode() {
+      return !!(doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-overview"));
+    }
+    function isNonScrollWrapper(p) {
+      if (!p) return false;
+      if (p.id === "r-board") return true;
+      var cl = p.classList;
+      return !!(cl && (cl.contains("r-board") || cl.contains("closed-page") || cl.contains("wb-history") || cl.contains("history-live") || cl.contains("tophead") || cl.contains("bc-in")));
+    }
+    function isOverviewClippedTopic(p, overview) {
+      return !!(overview && p && p.classList && p.classList.contains("topic") && p.hasAttribute && p.hasAttribute("data-topic") && !p.hasAttribute("data-overview-live") && !p.hasAttribute("data-max"));
+    }
+    function isFastScrollOwner(p) {
+      return !!(p && p.wbScrollOwner && (p.id === "bcol" || (p.classList && p.classList.contains("gal-pbody"))));
+    }
+    function scrollerAncestorState(p) {
+      var st = isFastScrollOwner(p) ? 1 : 0;
+      if (p.hasAttribute) {
+        if (p.hasAttribute("data-max")) st |= 2;
+        if (p.hasAttribute("data-overview-live")) st |= 4;
+        if (p.hasAttribute("data-docked")) st |= 8;
+      }
+      return st;
+    }
     function overflowYOf(p) {
       var now = win.performance ? win.performance.now() : Date.now();
       if (overflowCache && now >= overflowCacheAt && now - overflowCacheAt < 16) {
@@ -127,12 +152,34 @@
     }
     if (win.addEventListener) win.addEventListener('resize', clearOverflowCache, { passive: true });
     function scrollerOf(node) {
-      for (var p = node && node.parentElement; p && p !== doc.body && p !== doc.documentElement; p = p.parentElement) {
-        if (p.wbScrollOwner && p.id === "bcol") return p;
-        var oy = overflowYOf(p);
-        if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (ownsBody(p) || p.scrollHeight > p.clientHeight)) return p;
+      var overview = inOverviewMode();
+      if (scrollerCache && node && typeof node === "object") {
+        var cached = scrollerCache.get(node);
+        if (cached && cached.gen === scrollerCacheGen && cached.overview === overview) {
+          var valid = true, p0 = node.parentElement;
+          for (var i = 0; i < cached.parents.length; i++, p0 = p0 && p0.parentElement) {
+            if (p0 !== cached.parents[i] || scrollerAncestorState(p0) !== cached.states[i]) { valid = false; break; }
+          }
+          if (valid && (cached.hitTerminal || !p0 || p0 === doc.body || p0 === doc.documentElement)) return cached.scroller;
+        }
       }
-      return docScroller();
+      var parents = [], states = [], found = null, speculative = false, hitTerminal = false;
+      for (var p = node && node.parentElement; p && p !== doc.body && p !== doc.documentElement; p = p.parentElement) {
+        parents.push(p);
+        states.push(scrollerAncestorState(p));
+        if (isFastScrollOwner(p)) { found = p; hitTerminal = true; break; }
+        if (isNonScrollWrapper(p) || isOverviewClippedTopic(p, overview)) continue;
+        var oy = overflowYOf(p);
+        if (oy === "auto" || oy === "scroll" || oy === "overlay") {
+          if (ownsBody(p) || p.scrollHeight > p.clientHeight) { found = p; hitTerminal = true; break; }
+          speculative = true;
+        }
+      }
+      if (!found) found = docScroller();
+      if (scrollerCache && node && typeof node === "object" && !speculative) {
+        scrollerCache.set(node, { scroller: found, parents: parents, states: states, overview: overview, gen: scrollerCacheGen, hitTerminal: hitTerminal });
+      }
+      return found;
     }
     function shiftY(el) {
       var t = win.getComputedStyle(el).transform, m = t && /^matrix(3d)?\((.*)\)$/.exec(t);
@@ -172,8 +219,16 @@
     // client box or scroller inspection; the details' own summary still shows.
     function rendered(node) {
       if (!node || node.isConnected === false) return false;
+      var overview = inOverviewMode();
       for (var p = node, branch = node; p; branch = p, p = p.parentElement) {
         if (p.hidden) return false;
+        if (p.hasAttribute) {
+          if (p.hasAttribute("data-state-filtered")) return false;
+          if (!overview && !p.hasAttribute("data-max")) {
+            var off = p.getAttribute("data-wb-offwindow");
+            if (off === "hidden" || off === "parked") return false;
+          }
+        }
         if (p !== node && p.tagName === 'DETAILS' && !p.open) {
           var summary = Array.from(p.children || []).find(function (n) { return n.tagName === 'SUMMARY'; });
           if (branch !== summary) return false;
@@ -532,12 +587,15 @@
     function snapshot() {
       var views = new Map(), under = new Map(), rects = new Map(), visibility = new Map();
       function read(node) { if (!rects.has(node)) rects.set(node, node.getBoundingClientRect()); return rects.get(node); }
+      var overview = inOverviewMode();
       function scroller(node) {
         var chain = [], found = null;
         for (var p = node && node.parentElement; p && p !== doc.body && p !== doc.documentElement; p = p.parentElement) {
           if (under.has(p)) { found = under.get(p); break; }
           chain.push(p);
-          var oy = win.getComputedStyle(p).overflowY;
+          if (isFastScrollOwner(p)) { found = p; break; }
+          if (isNonScrollWrapper(p) || isOverviewClippedTopic(p, overview)) continue;
+          var oy = overflowYOf(p);
           if ((oy === "auto" || oy === "scroll" || oy === "overlay") && (p.scrollHeight > p.clientHeight || ownsBody(p))) { found = p; break; }
         }
         if (!found) found = docScroller();

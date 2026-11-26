@@ -90,7 +90,7 @@
   var boardw = 0, convow = 0;
   var toolbar = null, overviewOn = false;
   var stateFilter = "all", stateUI = null;
-  var toolbarFit = { width: 0, actsWidth: 0, probing: false, modes: ["", "compact", "dropdown", "tight"] };
+  var toolbarFit = { width: 0, actsWidth: 0, contentSig: "", probing: false, modes: ["", "compact", "dropdown", "tight"] };
   var filterValues = ["all", "asks", "researching", "discussing", "waiting", "implementing", "awaiting-confirmation", "closed", "cards", "tickets"];
   var metaFilterValues = ["all", "asks", "closed", "cards", "tickets"];
   var pipelineFilterValues = ["researching", "discussing", "waiting", "implementing", "awaiting-confirmation"];
@@ -176,6 +176,7 @@
     toolbar.appendChild(face);
     toolbarFit.width = 0;
     toolbarFit.actsWidth = 0;
+    toolbarFit.contentSig = "";
     toolbarFit.probing = false;
     window.addEventListener("resize", function () { fitToolbar(false); });
     if (window.ResizeObserver) new window.ResizeObserver(function () { fitToolbar(false); }).observe(toolbar);
@@ -374,13 +375,19 @@
     pop.style.top = top + "px";
     pop.style.maxHeight = Math.max(0, window.innerHeight - top - 8) + "px";
   }
+  function toolbarContentSig() {
+    if (!stateUI || !stateUI.totals) return "";
+    var counts = filterValues.map(function (v) { return stateUI.totals[v] || 0; }).join(",");
+    return stateUI.inline.hidden ? counts + "|" + stateFilter : counts;
+  }
   function applyToolbarFit(mode) {
-    if (mode) toolbar.setAttribute("data-toolbar-fit", mode);
-    else toolbar.removeAttribute("data-toolbar-fit");
+    var cur = toolbar.getAttribute("data-toolbar-fit");
+    if (mode) { if (cur !== mode) toolbar.setAttribute("data-toolbar-fit", mode); }
+    else if (cur !== null) toolbar.removeAttribute("data-toolbar-fit");
     if (stateUI && stateUI.root.isConnected) {
       var narrow = mode === "dropdown" || mode === "tight";
-      stateUI.inline.hidden = narrow;
-      stateUI.trigger.hidden = !narrow;
+      if (stateUI.inline.hidden !== narrow) stateUI.inline.hidden = narrow;
+      if (stateUI.trigger.hidden !== !narrow) stateUI.trigger.hidden = !narrow;
     }
   }
   function toolbarRowFits(face, row) {
@@ -419,12 +426,14 @@
     if (!width) return;
     var acts = row.querySelector(".board-acts");
     var actsWidth = acts ? acts.getBoundingClientRect().width : 0;
-    if (!force && Math.abs(width - toolbarFit.width) < 0.25 && Math.abs(actsWidth - toolbarFit.actsWidth) < 0.25) {
+    var sig = toolbarContentSig();
+    if (!force && toolbarFit.contentSig === sig && Math.abs(width - toolbarFit.width) < 0.25 && Math.abs(actsWidth - toolbarFit.actsWidth) < 0.25) {
       placeStatePop();
       return;
     }
     toolbarFit.width = width;
     toolbarFit.actsWidth = actsWidth;
+    toolbarFit.contentSig = sig;
     var ui = stateUI && stateUI.root.isConnected ? stateUI : null;
     var active = doc.activeElement;
     var wasNarrow = !!(ui && ui.inline.hidden);
@@ -455,7 +464,9 @@
     }
   }
   function filtered(n, hide) {
-    if (hide) n.setAttribute("data-state-filtered", ""); else n.removeAttribute("data-state-filtered");
+    var has = n.hasAttribute("data-state-filtered");
+    if (hide) { if (!has) n.setAttribute("data-state-filtered", ""); }
+    else if (has) n.removeAttribute("data-state-filtered");
   }
   function countTopics() {
     if (!stateUI || !galEl) return;
@@ -487,26 +498,40 @@
     }
     Array.prototype.forEach.call(board.querySelectorAll(".closed-more"), function (n) { filtered(n, stateFilter !== "all" && stateFilter !== "closed"); });
     stateUI.totals = totals;
+    var toolbarChanged = false;
     stateUI.radios.forEach(function (b) {
       var value = b.getAttribute("data-filter"), checked = value === stateFilter;
-      var count = totals[value] || 0;
+      var count = totals[value] || 0, countStr = String(count);
       var label = stateUI.labels[filterValues.indexOf(value)] + " " + count;
-      b.setAttribute("aria-checked", String(checked));
-      b.setAttribute("tabindex", checked ? "0" : "-1");
-      b.setAttribute("aria-label", label); b.title = label;
-      b.setAttribute("data-count", String(count));
-      if (count === 0) b.setAttribute("data-zero", ""); else b.removeAttribute("data-zero");
-      b.querySelector(".board-state-count").textContent = String(count);
+      var checkedStr = String(checked), tabStr = checked ? "0" : "-1";
+      if (b.getAttribute("aria-checked") !== checkedStr) b.setAttribute("aria-checked", checkedStr);
+      if (b.getAttribute("tabindex") !== tabStr) b.setAttribute("tabindex", tabStr);
+      if (b.getAttribute("aria-label") !== label) b.setAttribute("aria-label", label);
+      if (b.title !== label) b.title = label;
+      if (b.getAttribute("data-count") !== countStr) { b.setAttribute("data-count", countStr); toolbarChanged = true; }
+      var hadZero = b.hasAttribute("data-zero");
+      if (count === 0) { if (!hadZero) { b.setAttribute("data-zero", ""); toolbarChanged = true; } }
+      else if (hadZero) { b.removeAttribute("data-zero"); toolbarChanged = true; }
+      var countEl = b.querySelector(".board-state-count");
+      if (countEl && countEl.textContent !== countStr) { countEl.textContent = countStr; toolbarChanged = true; }
     });
     var i = filterValues.indexOf(stateFilter), trigger = stateUI.trigger;
-    trigger.setAttribute("data-filter", stateFilter);
-    trigger.innerHTML = licon("list-filter");
-    trigger.appendChild(filterMark(stateFilter));
-    trigger.appendChild(mk("span", "board-state-label", stateUI.labels[i]));
-    trigger.appendChild(mk("span", "board-state-count", String(totals[stateFilter])));
-    trigger.appendChild(mk("span", "term-arrow", "▾"));
-    trigger.setAttribute("aria-label", wsT("js.board.filter.label") + ": " + stateUI.labels[i] + " " + totals[stateFilter]);
-    fitToolbar(true);
+    var trigCount = totals[stateFilter] || 0;
+    var trigKey = stateFilter + "|" + trigCount;
+    if (stateUI.trigKey !== trigKey) {
+      stateUI.trigKey = trigKey;
+      trigger.setAttribute("data-filter", stateFilter);
+      trigger.innerHTML = licon("list-filter");
+      trigger.appendChild(filterMark(stateFilter));
+      trigger.appendChild(mk("span", "board-state-label", stateUI.labels[i]));
+      trigger.appendChild(mk("span", "board-state-count", String(trigCount)));
+      trigger.appendChild(mk("span", "term-arrow", "▾"));
+      trigger.setAttribute("aria-label", wsT("js.board.filter.label") + ": " + stateUI.labels[i] + " " + trigCount);
+      if (stateUI.inline.hidden) toolbarChanged = true;
+    }
+    var sig = toolbarContentSig();
+    if (!toolbarChanged && toolbarFit.width > 0 && toolbarFit.contentSig === sig) placeStatePop();
+    else fitToolbar(false);
     if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
   }
   function topicName(n) {

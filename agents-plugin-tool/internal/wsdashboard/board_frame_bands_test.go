@@ -247,9 +247,12 @@ if (bad.length) console.log(bad.join("\n"));
 // TestBoardTopicSkipKeepsHeadsAndSheets pins where the board may skip
 // rendering. Owner (627)=a dropped content-visibility on whole topics; the
 // owner's 2026-11-17 visible-only directive brings it back on topic parts
-// only: a topic's head (sticky, carries the stuck shadow) and a card's head
-// never skip, nor does a maximized topic or a card holding focus, and
-// overview renders everything.
+// only: in normal board mode, a topic's head (sticky, carries the stuck
+// shadow) and a card's head never skip, nor does a maximized topic or a card
+// holding focus. Owner (1642)=a keeps off-screen collapsed Overview tiles
+// under content-visibility: auto with an explicit intrinsic block size while
+// keeping motion/live/max Overview tiles visible without a :focus-within
+// guard (focused tiles remain relevant to the user under CSS spec).
 func TestBoardTopicSkipKeepsHeadsAndSheets(t *testing.T) {
 	css, err := dashboardTestAsset("assets/dashboard.css")
 	if err != nil {
@@ -263,11 +266,25 @@ func TestBoardTopicSkipKeepsHeadsAndSheets(t *testing.T) {
 	if len(rules) == 0 {
 		t.Fatal("board topic parts take no content-visibility: auto")
 	}
+	overviewSkipSeen := 0
 	for _, r := range rules {
 		for _, sel := range strings.Split(r[1], ",") {
 			sel = strings.TrimSpace(sel)
 			if !strings.Contains(sel, ":not([data-max])") {
 				t.Errorf("%q skips a maximized topic or card", sel)
+			}
+			if strings.HasPrefix(sel, ":root[data-overview]") {
+				overviewSkipSeen++
+				if !strings.Contains(sel, ":not([data-overview-motion])") || !strings.Contains(sel, ":not([data-overview-live])") {
+					t.Errorf("%q must keep motion and live Overview tiles visible", sel)
+				}
+				// Focused elements are already relevant to the user under
+				// content-visibility: auto; avoid toggling skip state on focus
+				// (same Edge renderer crash guard as topic parts).
+				if strings.Contains(sel, ":focus-within") {
+					t.Errorf("%q must not take a :focus-within guard", sel)
+				}
+				continue
 			}
 			// A topic part takes no focus guard: a focused part is relevant to
 			// the user and renders anyway, and the guard on the topic flipped
@@ -281,9 +298,13 @@ func TestBoardTopicSkipKeepsHeadsAndSheets(t *testing.T) {
 			}
 		}
 	}
+	if overviewSkipSeen != 2 {
+		t.Errorf("expected 2 overview content-visibility: auto tile selectors (topic + card), got %d", overviewSkipSeen)
+	}
 	for _, want := range []string{
 		"section.topic[data-topic] > :not(.tophead) { contain-intrinsic-block-size: auto",
-		":root[data-overview] .r-board :is(section.topic > :not(.tophead), .bcard .bc-body) { content-visibility: visible !important; }",
+		":root[data-overview] .r-board section.topic[data-topic]:not([data-overview-motion]):not([data-overview-live]):not([data-max]),\n:root[data-overview] .r-board .bcard[data-card]:not([data-overview-motion]):not([data-overview-live]):not([data-max]) { content-visibility: auto; contain-intrinsic-block-size: auto 76px; }",
+		":root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]):is([data-overview-motion], [data-overview-live], [data-max]) { contain: none; content-visibility: visible; }",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("dashboard.css lacks %q", want)

@@ -161,6 +161,9 @@
   function restorePreviewNode(opts) {
     if (!preview || !preview.node) return;
     var node = preview.node, ph = preview.placeholder;
+    // Capture scrollTop BEFORE any DOM mutation so virtualCollapse never
+    // triggers a post-mutation forced layout reflow during reconcile.
+    var preScrollTop = node.scrollTop || 0;
     if (!(opts && opts.keepLiveAttr)) node.removeAttribute("data-overview-live");
     if (ph && ph.parentNode) {
       var wasFocused = doc.activeElement === ph;
@@ -173,7 +176,10 @@
     preview.node = null;
     preview.placeholder = null;
     if (window.WsBoardVirtual && window.WsBoardVirtual.markExemptDirty) window.WsBoardVirtual.markExemptDirty(node);
-    if (!(opts && opts.skipReconcile) && window.WsBoardAnchor && window.WsBoardAnchor.reconcile) window.WsBoardAnchor.reconcile();
+    if (!(opts && opts.skipReconcile) && window.WsBoardAnchor && window.WsBoardAnchor.reconcile) {
+      var preScrollTops = typeof Map === "function" ? new Map([[node, preScrollTop]]) : null;
+      window.WsBoardAnchor.reconcile(preScrollTops ? { preScrollTops: preScrollTops } : undefined);
+    }
   }
   function teardownPreview(opts) {
     clearPreviewTimer();
@@ -196,7 +202,7 @@
     var gal = preview.gal, galWasHidden = preview.galWasHidden;
     root.removeAttribute("data-overview-preview");
     preview = null;
-    if (window.WsCards && window.WsCards.relayout) window.WsCards.relayout();
+    if (!(opts && opts.skipRelayout) && window.WsCards && window.WsCards.relayout) window.WsCards.relayout();
     else if (gal) gal.hidden = galWasHidden;
   }
   function showPreview(slot) {
@@ -331,7 +337,8 @@
   function filter(run) {
     if (busy) { callbacks.push(function () { filter(run); }); return; }
     if (!on) { run(); return; }
-    teardownPreview();
+    var hadPreview = !!preview;
+    teardownPreview({ skipRelayout: true });
     var before = all(ITEM, o.board), list = items(), current = list.filter(function (n) { return n.getAttribute("tabindex") === "0"; })[0];
     var index = before.indexOf(current), v = view(scroller(o.toolbar)), face = o.toolbar.firstChild.getBoundingClientRect();
     var top = o.toolbar.hasAttribute("data-floating") ? Math.max(v.top, face.bottom) : v.top;
@@ -346,6 +353,7 @@
     else if (list.length) keep(list[0], clearance(list[0]));
     else keep(o.toolbar, Math.max(0, toolbarOffset));
     if (next && canPreview()) showPreview(next);
+    else if (hadPreview && window.WsCards && window.WsCards.relayout) window.WsCards.relayout();
     save();
   }
   function calm() { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
@@ -418,6 +426,10 @@
     var shown = n ? Math.max(entry.offset, clearance(n)) : entry.offset;
     var freeBoard = !!(window.WsBoardAnchor && window.WsBoardAnchor.bounded && window.WsBoardAnchor.bounded());
     var h = o.frames ? o.frames() : null, before = !state && !calm() && !freeBoard ? snapshot() : null;
+    // Capture inner-scroller keep handles BEFORE toggling :root[data-overview]
+    // so checkVisibility() does not force a full-document style recalc on a
+    // freshly invalidated tree.
+    var kept = h && Object.keys(h).length && o.keepFrames ? o.keepFrames() : null;
     busy = !!before;
     if (window.WsBoardAnchor && window.WsBoardAnchor.suspendForOverview) window.WsBoardAnchor.suspendForOverview();
     // Keep enough tail to reach even a partly-visible last topic's negative
@@ -432,7 +444,7 @@
     bindPreviewCancel();
     if (n) n.classList.add("overview-here");
     o.place(true);
-    if (o.restoreFrames) o.restoreFrames(h);
+    if (o.restoreFrames) o.restoreFrames(h, kept);
     o.toolbar.querySelector(".board-overview").setAttribute("aria-pressed", "true");
     save(); changed();
     var complete = function () {
@@ -479,6 +491,7 @@
     var n = resolved;
     if (n && n.hasAttribute("data-state-filtered")) n = null;
     var h = o.frames ? o.frames() : null;
+    var kept = h && Object.keys(h).length && o.keepFrames ? o.keepFrames() : null;
     var restore = find(entry.key);
     if (restore && restore.hasAttribute("data-state-filtered")) { restore = null; if (!n) n = items()[0] || null; }
     var fastSnap = !!(window.WsBoardAnchor && window.WsBoardAnchor.bounded && window.WsBoardAnchor.bounded());
@@ -487,7 +500,7 @@
       root.removeAttribute("data-overview");
       unrove();
       o.place(false);
-      if (o.restoreFrames) o.restoreFrames(h);
+      if (o.restoreFrames) o.restoreFrames(h, kept);
       if (spacer) { spacer.remove(); spacer = null; }
       var landedFast = n && n.isConnected ? n : null;
       var targetFast = landedFast || restore || items()[0] || null;
@@ -531,7 +544,7 @@
     root.removeAttribute("data-overview");
     unrove();
     o.place(false);
-    if (o.restoreFrames) o.restoreFrames(h);
+    if (o.restoreFrames) o.restoreFrames(h, kept);
     var landed = n && n.isConnected ? n : null;
     var boardTarget = landed || restore;
     var arrival = clearance(boardTarget || o.toolbar);

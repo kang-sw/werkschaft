@@ -87,8 +87,40 @@
       gear.setAttribute("aria-current", active ? "page" : "false");
     });
   }
+  var railScrollRaf = 0, railScrollTarget = null, railScrollBound = null;
+  function cancelRailScroll() {
+    if (railScrollRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(railScrollRaf);
+    railScrollRaf = 0;
+    railScrollTarget = null;
+  }
+  function bindRailScrollCancel(l) {
+    if (!l || railScrollBound === l || !l.addEventListener) return;
+    railScrollBound = l;
+    l.addEventListener("wheel", cancelRailScroll, { passive: true });
+    l.addEventListener("touchstart", cancelRailScroll, { passive: true });
+    l.addEventListener("pointerdown", cancelRailScroll, { passive: true });
+  }
   function railScrollTop() { var l = $("rlist"); return l ? l.scrollTop : null; }
-  function railScrollTo(top) { var l = $("rlist"); if (l && top !== null && top !== undefined && l.scrollTop !== top) l.scrollTop = top; }
+  function railScrollTo(top) {
+    var l = $("rlist");
+    if (!l || top === null || top === undefined) return;
+    bindRailScrollCancel(l);
+    if (typeof requestAnimationFrame !== "function") {
+      if (l.scrollTop !== top) l.scrollTop = top;
+      return;
+    }
+    // Defer scroll restoration into the next animation frame so callers right
+    // after DOM writes (swap("rail", ...)) never force a synchronous reflow.
+    railScrollTarget = top;
+    if (railScrollRaf) return;
+    railScrollRaf = requestAnimationFrame(function () {
+      railScrollRaf = 0;
+      var target = railScrollTarget;
+      railScrollTarget = null;
+      var cur = $("rlist");
+      if (cur && target !== null && target !== undefined && cur.scrollTop !== target) cur.scrollTop = target;
+    });
+  }
   // railMarks applies the page's marks to the rail as rendered: after
   // load and after every rail swap.
   function railMarks() {
