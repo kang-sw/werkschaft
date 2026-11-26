@@ -658,7 +658,7 @@
       if (kept) kept.h.apply();
       if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
       if (typeof boardDialSync === "function") boardDialSync();
-      syncWbUpdateItems();
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
       return true;
     }, function () { btn.disabled = false; return false; });
   }

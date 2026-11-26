@@ -164,6 +164,11 @@ func renderEntries(a *dashboardAssets, cache *entryCache, replyID string, cv *Co
 			ts.Lang = cv.Lang
 			e.TurnSummary = &ts
 		}
+		if e.TurnPlain != nil {
+			tp := *e.TurnPlain
+			tp.Lang = cv.Lang
+			e.TurnPlain = &tp
+		}
 		if len(e.UserBlocks) > 0 {
 			blocks := make([]ConvEntry, len(e.UserBlocks))
 			copy(blocks, e.UserBlocks)

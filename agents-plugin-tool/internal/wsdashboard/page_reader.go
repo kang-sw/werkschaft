@@ -234,6 +234,9 @@ func (r pageReader) readSessionWith(replyID string, prev *sessionReads, ringChan
 				in.IsChild = true
 			}
 			in.ChildCloseKnown, in.ChildClosed, in.ChildActive = meta.IsChild, meta.Closed, meta.Active
+			// AgentSessionMeta.Hosted is the conversation's Lead flag, the
+			// predicate wsagent's resolveAmbient gates on.
+			in.WhiteboardCapable = meta.Hosted
 			in.Model, in.Effort = meta.Model, meta.Effort
 		}
 	} else if s.Registration.Agent {
@@ -243,6 +246,7 @@ func (r pageReader) readSessionWith(replyID string, prev *sessionReads, ringChan
 			if record.Parent != nil {
 				in.IsChild = true
 			}
+			in.WhiteboardCapable = record.Lead
 			in.Model, in.Effort = record.Model, record.Effort
 		}
 	}

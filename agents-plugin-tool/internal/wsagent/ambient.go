@@ -2,9 +2,11 @@ package wsagent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 const ambientBlockName = "ws-ambient"
@@ -67,7 +69,10 @@ func (c *conv) refreshAmbient() {
 
 // turnInput composes model-only turn input. Compaction notes go first, then
 // the passive receipts of dashboard-run commands, and ambient stays last. Both are kept out of dashboard and history user text.
-func (c *conv) turnInput(text string) string {
+//
+// whiteboard is the union of the composed entries' whiteboard_first flags: the
+// whiteboard-only directive joins the ambient block once, model-only.
+func (c *conv) turnInput(text string, whiteboard bool) string {
 	if block, took := c.passive.render(c.openGen()); block != "" {
 		// Passive receipts of dashboard-run commands ride this send; they are
 		// acknowledged only once the send is accepted (passiveTook).
@@ -79,13 +84,53 @@ func (c *conv) turnInput(text string) string {
 		}
 	}
 	text = c.compactInput(text)
-	if c.ambient == "" {
+	ambient := c.ambient
+	if whiteboard && c.rec.Lead {
+		ambient = ambientWithDirective(ambient, whiteboardFirstDirective)
+	}
+	if ambient == "" {
 		return text
 	}
 	if strings.TrimSpace(text) == "" {
-		return c.ambient
+		return ambient
 	}
-	return text + "\n\n" + c.ambient
+	return text + "\n\n" + ambient
+}
+
+// whiteboardFirstDirective is what a message sent with the composer's
+// whiteboard-only toggle on adds to the model's input.
+const whiteboardFirstDirective = "The user reads your output through the whiteboard only. Record every response, progress note, and explanation on the relevant topic with wb:log or wb:panel, and keep plain-text output to a minimum."
+
+// ambientWithDirective joins directive into block, an already rendered
+// ambient block (empty when none), keeping a single <ws-ambient> element.
+func ambientWithDirective(block, directive string) string {
+	closing := "\n</" + ambientBlockName + ">"
+	if block == "" {
+		return ambientBlock(directive)
+	}
+	if body, ok := strings.CutSuffix(block, closing); ok {
+		return body + "\n" + directive + closing
+	}
+	return block + "\n\n" + ambientBlock(directive)
+}
+
+// steerWithDirective appends the whiteboard-only directive, as its own
+// ambient block, to a steered text; unflagged text is returned unchanged.
+func (c *conv) steerWithDirective(text string, recs []wsinbox.Record) string {
+	if !c.rec.Lead || !slices.ContainsFunc(recs, func(r wsinbox.Record) bool { return r.Entry.WhiteboardFirst }) {
+		return text
+	}
+	return text + "\n\n" + ambientBlock(whiteboardFirstDirective)
+}
+
+// directedSteer builds the durable steer for recs: Text carries the directive
+// when flagged and Clean the plain text a requeue falls back to.
+func (c *conv) directedSteer(text string, recs []wsinbox.Record, mark uint64) durableSteer {
+	steer := durableSteer{Text: c.steerWithDirective(text, recs), Mark: mark}
+	if steer.Text != text {
+		steer.Clean = text
+	}
+	return steer
 }
 
 // RefreshAmbient synchronously republishes every open hosted lead's rendered

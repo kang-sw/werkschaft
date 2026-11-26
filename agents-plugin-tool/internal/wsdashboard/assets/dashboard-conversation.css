@@ -1173,3 +1173,20 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .wbupdate-ans.st-held { color: var(--wb-qcap-ans-held); }
 .wbupdate-ans.st-sent { color: var(--wb-qcap-ans-sent); }
 .wbupdate-ans.st-settled { color: var(--wb-qcap-ans-settled); }
+
+/* Whiteboard-only mode: the composer toggle, its hint, and the folded replies. */
+.cfoot > .wbonly-hint { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--wb-primary); }
+.cfoot > .wbonly-hint[hidden] { display: none; }
+.cfoot > .wbonly-btn { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--wb-card); color: var(--wb-muted-fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.cfoot > .wbonly-hint:not([hidden]) + .wbonly-btn { margin-left: 8px; }
+.wbonly-btn:hover { color: var(--wb-fg); }
+.wbonly-btn:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+.wbonly-dot { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--wb-muted-fg) 55%, transparent); }
+.wbonly-btn[aria-pressed="true"] { background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card)); color: var(--wb-primary); }
+.wbonly-btn[aria-pressed="true"] .wbonly-dot { background: var(--wb-primary); }
+[data-wb-folded] { display: none !important; }
+.turn-plain-host { display: contents; }
+.d-turn-folded { display: inline-flex; align-items: baseline; gap: 6px; color: var(--wb-muted-fg); }
+.d-turn-folded[hidden] { display: none; }
+.d-turn-drawer > .msg.fromlead[data-wb-clone] { align-self: stretch; max-width: none; background: color-mix(in srgb, var(--wb-fg) 4%, transparent); border-radius: 6px; padding: 4px 8px; }
+.d-turn[hidden] { display: none; }
