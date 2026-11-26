@@ -852,6 +852,8 @@
   "js.notif.idle.title": "Terminado · {0}",
   "js.notif.lan": "No puedes responder en este dispositivo. Responde en el PC del panel.",
   "js.notif.title": "Esperando aprobación · {0}",
+  "js.panel.jump": "Ir al panel en el tema",
+  "js.panel.unavailable": "El panel ya no está disponible",
   "js.perm.adv": "Avanzado: modo de permisos nativo",
   "js.perm.adv.owned": "Lo define el nivel",
   "js.perm.adv.owned.note": "Lo define el nivel de permiso ({0}). Elige un nivel arriba para cambiarlo.",

@@ -852,6 +852,8 @@
   "js.notif.idle.title": "Completato · {0}",
   "js.notif.lan": "Non puoi rispondere da questo dispositivo. Rispondi dal PC della dashboard.",
   "js.notif.title": "In attesa di approvazione · {0}",
+  "js.panel.jump": "Vai al pannello nell'argomento",
+  "js.panel.unavailable": "Il pannello non è più disponibile",
   "js.perm.adv": "Avanzate: modalità permessi nativa",
   "js.perm.adv.owned": "Impostato dal livello",
   "js.perm.adv.owned.note": "Impostato dal livello di permesso ({0}). Scegli un livello sopra per modificarlo.",

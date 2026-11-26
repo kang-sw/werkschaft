@@ -852,6 +852,8 @@
   "js.notif.idle.title": "완료 · {0}",
   "js.notif.lan": "이 기기에서는 답할 수 없습니다. 대시보드 PC에서 답하세요.",
   "js.notif.title": "승인 대기 · {0}",
+  "js.panel.jump": "주제의 원본 패널로 이동",
+  "js.panel.unavailable": "패널을 더 이상 사용할 수 없습니다",
   "js.perm.adv": "고급: 네이티브 권한 모드",
   "js.perm.adv.owned": "권한 수준이 결정",
   "js.perm.adv.owned.note": "권한 수준({0})에서 정해집니다. 바꾸려면 위에서 수준을 고르세요.",

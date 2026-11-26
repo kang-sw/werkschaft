@@ -852,6 +852,8 @@
   "js.notif.idle.title": "Fertig · {0}",
   "js.notif.lan": "Auf diesem Gerät können Sie nicht antworten. Antworten Sie am Dashboard-PC.",
   "js.notif.title": "Wartet auf Freigabe · {0}",
+  "js.panel.jump": "Zum Panel im Thema springen",
+  "js.panel.unavailable": "Panel ist nicht mehr verfügbar",
   "js.perm.adv": "Erweitert: nativer Berechtigungsmodus",
   "js.perm.adv.owned": "Durch die Stufe festgelegt",
   "js.perm.adv.owned.note": "Durch die Berechtigungsstufe ({0}) festgelegt. Wähle oben eine Stufe, um sie zu ändern.",

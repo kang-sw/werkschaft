@@ -852,6 +852,8 @@
   "js.notif.idle.title": "已完成 · {0}",
   "js.notif.lan": "无法在此设备上回答。请在仪表盘所在的电脑上回答。",
   "js.notif.title": "等待批准 · {0}",
+  "js.panel.jump": "跳转到主题中的面板",
+  "js.panel.unavailable": "该面板已不可用",
   "js.perm.adv": "高级：原生权限模式",
   "js.perm.adv.owned": "由级别设定",
   "js.perm.adv.owned.note": "由权限级别（{0}）设定。请在上方选择级别来更改。",

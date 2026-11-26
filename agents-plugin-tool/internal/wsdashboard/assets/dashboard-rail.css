@@ -238,10 +238,10 @@
    board's flow, and the gallery's rail shows (data-bdrag on the root)
    with the drop target under the pointer lit (.drop: a rail dot, the +
    page, a docked page). */
-.tbar .tpin { color: inherit; opacity: .45; }
-.tbar:hover .tpin, .tbar .tpin:focus-visible { opacity: .9; }
-.tbar .tpin[aria-pressed="true"] { opacity: 1; color: var(--wb-primary); }
-.tbar .tpin[aria-pressed="true"] .li, .bc-pin[aria-pressed="true"] .li { fill: color-mix(in srgb, var(--wb-primary) 25%, transparent); }
+.tbar .tpin, .entry-panel > summary > .ppin { color: inherit; opacity: .45; }
+.tbar:hover .tpin, .tbar .tpin:focus-visible, .entry-panel > summary:hover > .ppin, .entry-panel > summary > .ppin:focus-visible { opacity: .9; }
+.tbar .tpin[aria-pressed="true"], .entry-panel > summary > .ppin[aria-pressed="true"] { opacity: 1; color: var(--wb-primary); }
+.tbar .tpin[aria-pressed="true"] .li, .bc-pin[aria-pressed="true"] .li, .entry-panel > summary > .ppin[aria-pressed="true"] .li { fill: color-mix(in srgb, var(--wb-primary) 25%, transparent); }
 .r-board section.topic > .tophead > .tbar, .bgal section.topic > .tophead > .tbar, .bc-hd { cursor: grab; }
 :root[data-bdrag], :root[data-bdrag] * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .bdrag { opacity: .4; }

@@ -899,7 +899,7 @@
     var c = cards.filter(function (x) { return "c:" + x.id === ref; })[0];
     var use = c && c.icon && c.icon.querySelector("use"), href = use && use.getAttribute("href");
     if (!href || !/^#l-[a-z0-9-]+$/.test(href)) {
-      var kinds = { explorer: "folder-open", terminal: "square-terminal", preview: "file", web: "globe" };
+      var kinds = { explorer: "folder-open", terminal: "square-terminal", preview: "file", web: "globe", panel: "file-text" };
       href = "#l-" + (c && kinds[c.kind] || "file");
     }
     return { href: href, state: "card" };
@@ -1550,6 +1550,26 @@
       b.setAttribute("aria-pressed", String(on));
       if (on) sec.setAttribute("data-docked", ""); else sec.removeAttribute("data-docked");
       if (on && inGallery) wrapTopic(sec); else unwrapTopic(sec);
+      Array.prototype.forEach.call(sec.querySelectorAll("details.entry-panel"), function (det) {
+        if (det.classList.contains("msg")) return;
+        var art = det.parentNode;
+        if (!art || !art.classList || !art.classList.contains("wb-entry") || !art.classList.contains("panel") || art.classList.contains("historical")) return;
+        var sum = null;
+        for (var n = det.firstElementChild; n; n = n.nextElementSibling) {
+          if (n.tagName === "SUMMARY") { sum = n; break; }
+        }
+        if (!sum) return;
+        var dmax = child(sum, "d-max");
+        if (!dmax) return;
+        var pp = child(sum, "ppin");
+        if (!pp) {
+          pp = ibtn("ppin", "pin", wsT("js.card.pin"));
+          sum.insertBefore(pp, dmax);
+        }
+        var pid = art.getAttribute && art.getAttribute("data-panel");
+        var pOn = !!(pid && window.WsPanelCard && window.WsPanelCard.isPinned && window.WsPanelCard.isPinned(pid));
+        pp.setAttribute("aria-pressed", String(pOn));
+      });
     }
     if (scope && scope.nodeType === 1) {
       var inGal = !!(galEl && (scope === galEl || galEl.contains(scope)));
@@ -1864,8 +1884,10 @@
     foldUnit(this, on);
   };
   // pin docks the card on a new page, shown, or undocks it (its page goes
-  // with its last pane).
+  // with its last pane). A kind with unpinCloses (panel mirror cards) closes
+  // on unpin instead of returning to the Main Board flow.
   Card.prototype.pin = function (on) {
+    if (!on && this.k.unpinCloses) { this.close(); return; }
     galSet(on ? G.dock(gal, refOf(this)) : G.undock(gal, refOf(this)), this);
   };
   // bump counts as an open: the card moves to the head of the unpinned
@@ -2244,6 +2266,7 @@
       g = G.dock(gal, refOf(u));
       if (topic) u.at = 0;
     } else {
+      if (!topic && u.k && u.k.unpinCloses) { u.close(); return; }
       g = G.undock(gal, refOf(u));
       u.pinned = 0;
       if (topic && topicAt(u.el) === null) u.at = 0;
@@ -2265,9 +2288,13 @@
     var ref = refOf(u);
     delete u.rank;
     if (!isCard(u.el)) u.at = 0;
-    if (to.gal === "home") galSet(G.activate(G.undock(gal, ref), -1, true), u);
-    else if (to.gal === "unpin") galSet(G.undock(gal, ref), u);
-    else if (to.gal === "place") galSet(G.place(gal, ref, to.target, to.zone), u);
+    if (to.gal === "home") {
+      if (isCard(u.el) && u.k && u.k.unpinCloses) { u.close(); show(-1, 0); return; }
+      galSet(G.activate(G.undock(gal, ref), -1, true), u);
+    } else if (to.gal === "unpin") {
+      if (isCard(u.el) && u.k && u.k.unpinCloses) { u.close(); return; }
+      galSet(G.undock(gal, ref), u);
+    } else if (to.gal === "place") galSet(G.place(gal, ref, to.target, to.zone), u);
     else galSet(to.gal === "append" ? G.append(gal, ref, to.pos) : G.dock(gal, ref), u);
   }
 
@@ -2630,6 +2657,7 @@
       s.topics.forEach(function (r) { topics[r.n] = { name: r.n, pinned: +r.p || 0, at: +r.a || 0, bar: r.b === null ? null : +r.b || 0, folded: !!r.f, rank: r.rank, el: null }; });
       s.cards.forEach(function (r) { add(r.kind, r); });
       sync();
+      cards.slice().forEach(function (c) { if (c.k.unpinCloses && !c.pinned) c.close(); });
       cards.forEach(function (c) { c.paint(); });
       board.insertBefore(toolbar, board.firstChild);
       place(weave(Array.prototype.filter.call(board.childNodes, function (n) { return !fixedNode(n); })), fixedNode);
@@ -2637,6 +2665,18 @@
       [board, galEl].forEach(function (box) {
         box.addEventListener("pointerdown", dragStart);
         box.addEventListener("click", function (e) {
+          var pp = e.target.closest && e.target.closest(".ppin");
+          if (pp && pp.parentNode && pp.parentNode.tagName === "SUMMARY") {
+            e.preventDefault();
+            e.stopPropagation();
+            var art = pp.closest && pp.closest(".wb-entry.panel[data-panel]");
+            var sec = pp.closest && pp.closest("section.topic[data-topic]");
+            var pid = art && art.getAttribute("data-panel");
+            if (pid && window.WsPanelCard && window.WsPanelCard.toggle) {
+              window.WsPanelCard.toggle(pid, sec && sec.getAttribute("data-topic") || "", art);
+            }
+            return;
+          }
           var b = e.target.closest && e.target.closest(".tpin");
           if (b && b.parentNode.classList.contains("tbar")) pinTopic(b.parentNode.closest("section.topic"), b.getAttribute("aria-pressed") !== "true");
           var action = e.target.closest && e.target.closest(".t-fold, .t-raise");

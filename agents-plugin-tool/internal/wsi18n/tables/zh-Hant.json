@@ -852,6 +852,8 @@
   "js.notif.idle.title": "已完成 · {0}",
   "js.notif.lan": "無法在此裝置上回答。請在儀表板所在的電腦上回答。",
   "js.notif.title": "等待核准 · {0}",
+  "js.panel.jump": "跳轉到主題中的面板",
+  "js.panel.unavailable": "該面板已無法使用",
   "js.perm.adv": "進階：原生權限模式",
   "js.perm.adv.owned": "由級別設定",
   "js.perm.adv.owned.note": "由權限級別（{0}）設定。請在上方選擇級別以變更。",

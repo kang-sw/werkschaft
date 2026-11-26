@@ -852,6 +852,8 @@
   "js.notif.idle.title": "完了 · {0}",
   "js.notif.lan": "このデバイスでは回答できません。ダッシュボード PC で回答してください。",
   "js.notif.title": "承認待ち · {0}",
+  "js.panel.jump": "トピック内の元のパネルへ移動",
+  "js.panel.unavailable": "パネルはもう利用できません",
   "js.perm.adv": "詳細: ネイティブの権限モード",
   "js.perm.adv.owned": "レベルで設定",
   "js.perm.adv.owned.note": "権限レベル（{0}）で設定されています。変更するには上でレベルを選んでください。",

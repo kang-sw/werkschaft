@@ -852,6 +852,8 @@
   "js.notif.idle.title": "Finished · {0}",
   "js.notif.lan": "You cannot answer on this device. Answer on the dashboard PC.",
   "js.notif.title": "Awaiting approval · {0}",
+  "js.panel.jump": "Jump to panel in topic",
+  "js.panel.unavailable": "Panel is no longer available",
   "js.perm.adv": "Advanced: native permission mode",
   "js.perm.adv.owned": "Set by the level",
   "js.perm.adv.owned.note": "Set by the permission level ({0}). Pick a level above to change it.",
