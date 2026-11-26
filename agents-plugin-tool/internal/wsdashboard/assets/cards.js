@@ -1112,9 +1112,10 @@
             var rtextEl = el && el.querySelector && el.querySelector(":scope > .tophead > .tsub .trecap .rtext");
             var subEl = rtextEl || (el && el.querySelector && el.querySelector(":scope > .tophead > .tsub"));
             var askChip = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar > .chip.policy");
-            var asks = el ? (el.hasAttribute("data-open-asks") ? el.getAttribute("data-open-asks") === "true" : !!askChip) : false;
+            var okChip = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar > .chip.ok");
             var askNumEl = askChip && !askChip.hidden ? (askChip.querySelector(".n") || askChip) : null;
             var asksCount = askNumEl && askNumEl.textContent ? askNumEl.textContent.trim() : "";
+            var asks = el ? (askChip ? !!(asksCount || (okChip && !okChip.hidden)) : (el.hasAttribute("data-open-asks") ? el.getAttribute("data-open-asks") === "true" : false)) : false;
             var closed = !!(el && el.classList.contains("closed"));
             var rawState = el ? (el.getAttribute("data-state") || "") : "";
             var state = closed ? "closed" : rawState;

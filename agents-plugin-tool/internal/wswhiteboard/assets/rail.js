@@ -617,7 +617,7 @@
 
   kick();
 
-  st.refresh = kick;
+  st.refresh = function () { last = null; kick(); };
   st.off = function () {
     st.refresh = null;
     if (raf) cancelAnimationFrame(raf);

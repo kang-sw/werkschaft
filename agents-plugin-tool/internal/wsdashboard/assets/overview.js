@@ -167,7 +167,8 @@
       if (sn && pn) {
         if (pn.textContent !== sn.textContent) pn.textContent = sn.textContent;
       } else if (p.textContent !== s.textContent) {
-        p.textContent = s.textContent;
+        structural = true;
+        break;
       }
     }
     if (structural) syncPlaceholder(src, true);
