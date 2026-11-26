@@ -362,7 +362,7 @@
       if (mentionPop) { mentionPop.destroy(); mentionPop = null; }
       if (!features.mentions || !window.wsMention || typeof providers.files !== "function") return;
       mentionPop = window.wsMention.attach(field, {
-        label: opts.mentionLabel || wsT("js.composer.files"),
+        label: opts.mentionLabel || wsT("js.mention.label"),
         token: function (v, c) {
           if (!features.mentions || isBangActive()) return null;
           return window.wsMention.tokenAt(v, c);
@@ -398,7 +398,7 @@
       if (!features.slash || !window.wsMention || typeof providers.commands !== "function") return;
       var slashTok = opts.slashToken || defaultSlashToken;
       var slashOpts = {
-        label: opts.slashLabel || wsT("js.composer.commands"),
+        label: opts.slashLabel || wsT("js.cmd.label"),
         max: opts.slashMax || 50,
         token: function (v, c) {
           if (!features.slash || isBangActive()) return null;

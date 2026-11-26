@@ -709,6 +709,13 @@ func TestCompanionAuthoringMarketplaceSchemaMatchesParser(t *testing.T) {
 		{"newline in description", `{"description":"a\nb","path":"p"}`},
 		{"unknown field", `{"path":"p","future":1}`},
 		{"non-string version", `{"version":1,"path":"p"}`},
+		{"format 2d", `{"path":"p","format":"2d"}`},
+		{"format vrm", `{"path":"p","format":"vrm"}`},
+		{"format invalid", `{"path":"p","format":"3d"}`},
+		{"format empty", `{"path":"p","format":""}`},
+		{"vroidSourceUrl https", `{"path":"p","vroidSourceUrl":"https://example.invalid/model"}`},
+		{"vroidSourceUrl http", `{"path":"p","vroidSourceUrl":"http://example.invalid/model"}`},
+		{"vroidSourceUrl empty", `{"path":"p","vroidSourceUrl":""}`},
 	} {
 		entryAgree("entry: "+tc.name, companionOverlay(base, companionParse(t, tc.patch)))
 	}

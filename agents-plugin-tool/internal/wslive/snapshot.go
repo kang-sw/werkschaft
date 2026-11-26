@@ -362,6 +362,9 @@ type Lead struct {
 	// TurnOrigin is what started the current turn (terminal, whiteboard,
 	// mail), when the adapter knows.
 	TurnOrigin string `json:"turnOrigin,omitempty"`
+	// TurnAddedTokens is the open turn's running context-token increase
+	// (max(latest - start, 0)); cleared when RingTurn is written (T0 additive).
+	TurnAddedTokens int64 `json:"turnAddedTokens,omitempty"`
 	// PreviousTurnMs is the last finished turn's duration.
 	PreviousTurnMs int64 `json:"previousTurnMs,omitempty"`
 	// Reply is the lead's reply text still streaming; a finished reply moves

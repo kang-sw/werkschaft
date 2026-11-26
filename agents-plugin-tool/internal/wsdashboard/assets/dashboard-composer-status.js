@@ -497,6 +497,7 @@
         if (!head) return;
         for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
       });
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
       return;
     }
     var sigParts = [];
@@ -515,4 +516,5 @@
       if (!head) return;
       for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
     });
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
   }

@@ -1695,6 +1695,7 @@
   if (cardBoard) mountBoardOverview();
   boardRestoreReload();
   applySent();
+  if (typeof initWbUpdateCards === "function") initWbUpdateCards();
   startDraftRecovery();
   tlCount();
   apScan(region(mode === "index" ? "sessions" : "rail"), mode === "index" ? "sessions" : "rail");

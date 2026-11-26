@@ -298,9 +298,17 @@
     if (d.classList.contains("panel") && d.id) return "p:" + d.id;
     return null;
   }
+  function syncTurnAria(d) {
+    if (!d || d.tagName !== "DETAILS") return;
+    var sum = d.firstElementChild;
+    if (sum && sum.hasAttribute("data-conv-turn-summary")) {
+      sum.setAttribute("aria-expanded", d.open ? "true" : "false");
+    }
+  }
   doc.addEventListener("toggle", function (e) {
     var d = e.target;
     if (!d || d.tagName !== "DETAILS") return;
+    syncTurnAria(d);
     if (isPeer(d)) { save(PEER_KEY + d.getAttribute("data-peer"), d.open ? "1" : null); return; }
     if (d.classList.contains("rended") && d.hasAttribute("data-key") && railSets) { railSets.ended.put(d.getAttribute("data-key"), d.open); return; }
     // A graft's temporary open attribute is not an actual reader open.
@@ -312,16 +320,18 @@
     if (isPanel(d)) shutPut(shutId(d), !d.open);
   }, true);
   function restoreOpenOne(d) {
-    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; return; }
-    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) return;
+    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; syncTurnAria(d); return; }
+    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) { syncTurnAria(d); return; }
     var k = openKey(d);
     if (k && Object.prototype.hasOwnProperty.call(openState, k)) d.open = openState[k];
     else if (isPanel(d) && shutHas(shutId(d))) d.open = false;
+    syncTurnAria(d);
   }
   function restoreOpen(el) {
     if (el.tagName === "DETAILS") restoreOpenOne(el);
     q("details", el).forEach(restoreOpenOne);
   }
+  q('details[data-conv-turn="1"]').forEach(syncTurnAria);
   // forgetOpen drops what the user chose for the keyed details inside el,
   // so the next restoreOpen leaves the server's markup as it arrived.
   function forgetOpen(el) {
@@ -890,6 +900,7 @@
         if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
       }
     });
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
   }
   // A board swap waits while the user is typing in the answer form, and
   // lands when the focus leaves it.

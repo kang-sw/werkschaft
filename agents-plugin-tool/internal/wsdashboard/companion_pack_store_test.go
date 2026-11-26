@@ -188,13 +188,13 @@ func TestCompanionPackLimits(t *testing.T) {
 			t.Fatal("earlier packs missing")
 		}
 	})
-	t.Run("64 MiB catalog budget", func(t *testing.T) {
+	t.Run("128 MiB catalog budget", func(t *testing.T) {
 		home := t.TempDir()
 		layers := make([]string, 8)
 		for i := range layers {
 			layers[i] = fmt.Sprintf(`{"file":"%d.webp"}`, i)
 		}
-		for n := 0; n < 5; n++ {
+		for n := 0; n < 9; n++ {
 			id := fmt.Sprintf("p%d", n)
 			raw := []byte(fmt.Sprintf(`{"schema":"ws-companion/v1","id":%q,"name":%q,"canvas":[512,512],"poses":{"stand":{"layers":[%s]}}}`, id, id, strings.Join(layers, ",")))
 			dir := companionTestPack(t, home, id, raw)
@@ -212,12 +212,13 @@ func TestCompanionPackLimits(t *testing.T) {
 			}
 		}
 		s := new(CompanionPackStore).snapshot(wsconfig.Options{ConfigHome: home})
-		for _, id := range []string{"p0", "p1", "p2", "p3"} {
+		for n := 0; n < 8; n++ {
+			id := fmt.Sprintf("p%d", n)
 			if s.byID[id] == nil {
 				t.Fatalf("earlier pack %s rejected: %+v", id, s.errors)
 			}
 		}
-		if s.byID["p4"] != nil || !companionTestError(s, "p4") || s.byID["default"] == nil {
+		if s.byID["p8"] != nil || !companionTestError(s, "p8") || s.byID["default"] == nil {
 			t.Fatalf("cache budget: %+v", s.errors)
 		}
 	})
