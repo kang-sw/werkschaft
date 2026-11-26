@@ -33,7 +33,7 @@ for line in sys.stdin:
 sys.exit(0)
 `
 
-func pidAlive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+func pidAlive(pid int) bool { return processAlive(pid) }
 
 // TestDescendantsOfAHeldChildSurviveAManagerReplace: closing a daemon's
 // manager and opening the next one only drops sockets. Neither the child nor
