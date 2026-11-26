@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1acd0c5d8f567f0c
 sage-review-completeness-reviewed: 1acd0c5d8f567f0c
+completed: 2026-11-26
 ---
 
 # Automatic Static Serving for Multi-File Whiteboard HTML Mockups and `lead-mockup` / `mockup-writer` Playbooks
@@ -256,6 +257,23 @@ Implement the runtime foundation so `<wb:panel src=".../index.html">` mounts sin
    - Local Node tests: `dashboard-frames.js` lazy mount, re-mint on remount after expiry with no reload of a visible kept mockup frame, unmount cleanup, and sandbox attribute without `allow-same-origin`; `frameKeep` keeping a mockup frame across a topic morph with the same `sha256`, and remounting it on a different one; `paletteBodyText` on a mockup placeholder; and `dashboard.js` bundle syntax.
    - Done when every item above passes and the existing `TestPanelSrc*` fragment tests are unchanged.
 
+### Result (9c0c462) - 2026-11-26
+
+- **Landed (`9c0c462`, review fix `180629f`):**
+  - `wswhiteboard`: Added `mockup.go` (`CollectMockupBundle`, `DecodeMockupZip`, `MockupContentType`, `ValidMockupRel`, strict subdirectory + non-dot + `ReadPanelSource` symlink/junction/handle-pin guards, extension allowlist skipping non-allowlisted files uncounted, early-stop 256 files / 8 MiB uncompressed cap, deterministic sorted zip + sha256, `mockupMaxZipBytes = MockupMaxBundleBytes + 1 MiB` pre-decode container headroom). Updated `entries.go`, `entry_json.go`, `store.go` (full-HTML `.html`/`.htm` `src` classification, Markdown fallback in `panels.body`, `Entry.Mockup`, `wb:change` refusal on mockup panels, `Outcome.MockupBundles` side channel with per-command rollback). Updated `board_db*.go` and `folders_archive.go` (`mockup_bundles` table with `ON DELETE CASCADE`, schema versions unchanged at 1/2, `CreateBoardDBWithBundles`/`UpdateWithBundles`/`ReadMockupBundle`/`MockupIndex`, `OnLoadArchive` callback, `_mockups/<entryID>.zip` export, backup, and direct zip-reader load without temp extraction). Updated `view.go`, `stream_view.go`, `render.go`, `render_topics.go`, `page-stream.css` (`70vh` resizable `.mockup-wrap`, lazy `.doc-frame.mockup-frame` placeholder with `data-doc-key`/`data-mockup-sha`/`data-mockup-src`/`data-fallback-text`, missing-bundle fallback note).
+  - `mcp`: Wired `boardMockups`, `pendingMockupBundles`, `WhiteboardStores.SetOnLoadArchive` (dynamic closure so evictors installed after board open still fire), and `DashboardSessionSource` `BoardMockupSource` (`LookupMockup`, `ReadMockupBundle`, `SetMockupEvictor`, `servedViewInput` `MockupSrc`).
+  - `wsdashboard` & frontend: Added `mockup_route.go` (`GET /s/<rid>/board/mockup?entry=` 302 `Cache-Control: no-store` mint redirect, `/s/<rid>/fs/mock/<cap>/<rel>` with MAC binding `(part, replyID, entryID, sha256, expiry)`, 64 MiB LRU keyed by `(boardDir, instance, entryID, sha256)`, `connect-src <prefix>`, `Sec-Fetch-Dest: empty/json`, `Access-Control-Allow-Origin: null` + `Vary: Origin`, `/fs/cap/` & `/fs/view/` unchanged), wired `page.go`, `agent_sessions.go`, `fs_capability.go`, `fs_routes.go`, `page_routes.go`, `daemon.go`, `daemon_start.go`, and updated `dashboard-frames.js`, `dashboard-board.js`, and `dashboard-tracker.js` (lazy mount/unmount without `allow-same-origin`, `frameKeepKey` preservation across morphs, `paletteBodyText` fallback search).
+- **Decisions & adaptations:**
+  - Updated `TestPanelSrcRefusals` full-document refusal subtests from `.html` to `.md`/`.svg` (Decision 1 supersedes c44f5f78 for full-HTML `.html`/`.htm` `src` while preserving refusal on non-HTML `src`; all fragment `TestPanelSrc*` tests remain unchanged).
+  - Moved the POSIX `syscall.Mkfifo` test into `mockup_unix_test.go` (`//go:build !windows`) for clean `GOOS=windows` cross-compilation.
+  - Added compound selector entries to `board_frame_lazy_test.go`'s minimal DOM shim so existing lazy-frame tests match the updated selector in `dashboard-frames.js`.
+  - Fixed `code-review-lite` Important finding (`180629f`): widened raw pre-decode zip size cap in `extractArchiveWithMockups` and `readLegacyMockupBundles` from `8 MiB + 64 KiB` to `8 MiB + 1 MiB` (`mockupMaxZipBytes`) and added `TestMockupMaxCapIncompressibleArchiveRoundTrip`.
+- **Verification:**
+  - `cd agents-plugin-tool && go test -race ./internal/wswhiteboard/...`: PASS (`ok`, plus post-fix `go test -v -race -run 'TestMockup|TestArchive|TestBoardDBArchive|TestLoadArchive|TestPanelSrc' ./internal/wswhiteboard/...`: PASS)
+  - `cd agents-plugin-tool && go test -race -run 'TestMockup|TestFS|TestFileRoute|TestBoard|TestDashboard|TestAccess|TestPage' ./internal/wsdashboard/...`: PASS (including Node JS tests for lazy mount, remount, unmount, `frameKeep`, `paletteBodyText`, and `dashboard.js` bundle syntax)
+  - `cd agents-plugin-tool && go test -race -run 'TestWhiteboard|TestDashboard' ./internal/mcp/...`: PASS
+  - `cd agents-plugin-tool && GOOS=windows go vet ./... && GOOS=windows go build ./...`: PASS
+
 ### Phase 2: `lead-mockup` & `mockup-writer` playbooks, `tier-role` inventory, skills, `wsflow` mirrors, and `whiteboard` doc updates
 
 Depends on Phase 1 landing so the shipped playbooks and `whiteboard` documentation match live multi-file `wb:panel src` behavior.
@@ -279,3 +297,24 @@ Depends on Phase 1 landing so the shipped playbooks and `whiteboard` documentati
      - Both `whiteboard` and `mockup-writer` state the Decision 11 subfolder and file-type allowlist rules, and the Decision 15 reopen-a-stale-mock note.
      - The shipped-surface boundary check finds no `devenv`-only manual or repo-posture reference.
    - Done when every command above passes, the content check holds, and `/lead-mockup` resolves as a skill in both `agents-plugin` and `agents-plugin-wsflow`.
+
+### Result (c054d54) - 2026-11-26
+
+- **Landed (`c054d54`):**
+  - Authored downstream-first, host-neutral playbooks `agents-plugin/rsrc/lead-mockup/lead-mockup.md` and `agents-plugin/rsrc/mockup-writer/mockup-writer.md` (`kind: render`, `delegates: true`, `role: worker`, `tier: medium`, `tier-role: mockup-writer`, `tier-parent: implement:*`, `includes: [worker-stop-protocol]`), covering `visual` vs `interactive-mock` (with separate `mock-api.js`), `ExploreAgent` research, `ai-docs/assets/mockups/YYMMDD/<topic>/index.html`, Decision 11 subfolder/allowlist rules, Decision 15 TTL reopen note, and entry-path + design-decisions reporting.
+  - Updated `agents-plugin/rsrc/whiteboard/whiteboard.md` with post-time snapshot rules, subfolder/allowlist/cap rules, `wb:change` refusal on mockups, TTL reopen note, and `lead-mockup` workflow pointers.
+  - Added `agents-plugin/skills/lead-mockup/SKILL.md` and `agents-plugin-wsflow/skills/lead-mockup/SKILL.md`, regenerated `agents-plugin/rsrc/manifest.json`, `agents-plugin-wsflow/rsrc/` mirror & manifest, and `agents-plugin/skills/manifest.json`, and updated `shippedTierRoleInventory` (`tier_roles_test.go`) and `EXPECTED_SKILLS` (`test_wsflow_skill_bundle.py`).
+- **Verification:**
+  - `WS_REGEN_MANIFEST=1 go test ./internal/wsrsrc -count=1 -run TestRegenerateShippedManifest`: PASS
+  - `WS_REGEN_WSFLOW_RSRC=1 go test ./internal/wsrsrc -count=1 -run TestRegenerateWsflowRsrcMirror`: PASS
+  - `WSRSRC_REGEN_SKILLS=1 go test ./internal/wsrsrc -count=1 -run TestGenerateRealSkillsManifest`: PASS
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py && python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: PASS
+  - `cd agents-plugin-tool && GOOS=windows go vet ./... && go test -race ./internal/wsrsrc/... ./internal/wspackage/... ./internal/wsdoc/...`: PASS
+  - `cd agents-plugin-tool && go test -race -run 'TestPlaybook|TestTier|TestSkill|TestDashboardSettings|TestDashboardTierRouting' ./internal/mcp/...`: PASS
+  - `python3 -m unittest discover -s agents-plugin-wsflow/tests -v`: PASS (22 tests, 2 Windows-only skipped)
+  - Content & shipped-surface boundary check on regenerated `agents-plugin-wsflow/rsrc/{lead-mockup,mockup-writer,whiteboard}` and skills: PASS (zero `devenv`-only references; zero `ws/`/`ws:`/`ws.` leaks in `agents-plugin-wsflow`).
+
+
+## Resolution (2026-11-26)
+
+Completed Phases 1 and 2 on `impl/develop/said-shirt-crock` (`9c0c462`, `c054d54`, review fix `180629f`). Multi-file full-HTML `wb:panel src` snapshotting, T1 SQLite `mockup_bundles` persistence, archive/backup round-trip, `/s/<rid>/board/mockup` + `/s/<rid>/fs/mock/` serving with 64 MiB LRU, lazy iframe mounting & morph preservation, `lead-mockup` & `mockup-writer` playbooks, `ws`/`wsflow` skills, manifests/mirrors, and `whiteboard` doc updates are verified and reviewed.

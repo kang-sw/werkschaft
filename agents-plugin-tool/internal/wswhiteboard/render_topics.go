@@ -28,6 +28,15 @@ func (p *pageData) topicRevision(t TopicView) string {
 	h := sha256.New()
 	h.Write([]byte(p.topicContext))
 	h.Write(raw)
+	if p.MockupSrc != nil {
+		for _, page := range append([]EntryPage{t.Stream}, t.Older...) {
+			for _, run := range page.Runs {
+				if run.Entry.Kind == EntryPanel && run.Entry.Mockup != nil {
+					h.Write([]byte("\x00" + run.Entry.ID + "=" + p.MockupSrc(run.Entry.ID, run.Entry.Mockup.SHA256)))
+				}
+			}
+		}
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
