@@ -452,6 +452,8 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	}
 	ctx := ev.Context
 	c.compactUsageFresh = false
+	// A sample without a window stays stale: no threshold resolves without
+	// one (wsconfig.Threshold.Point), and the next sample carries it.
 	if ctx.Tokens == nil || *ctx.Tokens < 0 || *ctx.Tokens > wslive.MaxContextTokens || ctx.Window <= 0 {
 		return
 	}

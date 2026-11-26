@@ -234,6 +234,11 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	if !durable {
 		spec.Env = environ()
 	}
+	if !refused {
+		// Claude compacts by itself mid-turn at or before the hard point
+		// (claudeAutoCompactEnv); a rejoin's process keeps its launch env.
+		spec.compactAdvisory, spec.compactHard = c.compactAdvisory, c.compactHard
+	}
 	if attach {
 		// Harness-initiated wakeups also set TurnOpen. Only a runner send
 		// saves the start time alongside it.
