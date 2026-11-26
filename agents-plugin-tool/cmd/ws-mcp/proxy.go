@@ -196,6 +196,9 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 			if binding, ok := h.agents.(mcp.CallerBindingReader); ok {
 				opts.CallerBinding = binding
 			}
+			if reader, ok := h.agents.(mcp.AgentRecordReader); ok {
+				opts.RecordReader = reader
+			}
 			// A worker now connects through the launcher too. Its capability
 			// token, not a lead runner handle, scopes its nested pi.* calls.
 			if strings.TrimSpace(hello.Env[wsagent.EnvPiToken]) == "" {

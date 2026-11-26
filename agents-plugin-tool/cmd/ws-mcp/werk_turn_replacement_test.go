@@ -209,7 +209,7 @@ func TestWerkRecoversInterruptedFileWritesAcrossDaemonReplacement(t *testing.T) 
 					if err != nil {
 						return nil, err
 					}
-					if call.Method != "tools/call" || call.Params.Name != "fs.write" {
+					if call.Method != "tools/call" || (call.Params.Name != "fs.write" && call.Params.Name != "fs_write") {
 						return wrapped.RoundTrip(req)
 					}
 					if fileCalls.Add(1) != 1 {

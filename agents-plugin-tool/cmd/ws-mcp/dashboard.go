@@ -528,7 +528,8 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		loadProviderConfig = credentials.LoadLocalEndpoints
 	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
-	return wsagent.NewRunner(wsagent.Options{
+	var runner *wsagent.Runner
+	runner = wsagent.NewRunner(wsagent.Options{
 		LoadProviderConfig:         loadProviderConfig,
 		Dir:                        dir,
 		DaemonVersion:              version,
@@ -552,15 +553,15 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// and a lead without ws skills runs the package's lead playbooks as
 		// dashboard commands whose turn carries the playbook body.
 		LeadManual: func(backend, dir, key string) (string, error) {
-			return renderLeadManual(hostedRender(backends[backend], boards), dir, key)
+			return renderLeadManual(hostedRender(backends[backend], boards, runner), dir, key)
 		},
 		LeadSessionState: keys.RenderHostedSessionState,
 		RestoreBundle: func(backend, dir, key string, cause wsagent.RestoreCause, children []wsagent.AgentChild) (string, error) {
-			return renderHostedRestoreBundle(hostedRender(backends[backend], boards), dir, key, cause, children)
+			return renderHostedRestoreBundle(hostedRender(backends[backend], boards, runner), dir, key, cause, children)
 		},
 		PlaybookCommands: hostedPlaybookCommands,
 		ExpandCommand: func(backend, dir, key, name string) (string, error) {
-			return renderLeadPlaybook(hostedRender(backends[backend], boards), dir, key, name)
+			return renderLeadPlaybook(hostedRender(backends[backend], boards, runner), dir, key, name)
 		},
 		Log:            logw,
 		TrackerChanged: trackerChanged,
@@ -578,6 +579,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// bound there never reaches it; its sender hears why.
 		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
 	})
+	return runner
 }
 
 // dashboardSpawner starts a detached daemon process with the given ws-mcp
@@ -683,6 +685,6 @@ func serveDashboard(server *mcp.Server) {
 
 // hostedRender is what reg says about text the daemon renders for its
 // hosted lead.
-func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores) mcp.HostedRender {
-	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ResolveLeadSubagent: reg.ResolveLeadSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
+func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores, records mcp.AgentRecordReader) mcp.HostedRender {
+	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ResolveLeadSubagent: reg.ResolveLeadSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards, Records: records}
 }

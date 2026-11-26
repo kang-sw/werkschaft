@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
-	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wsrsrc"
 )
 
@@ -73,23 +71,8 @@ func playbookTerminology(harness string, daemonAgents bool, namespace string) ma
 // through the key's reply-id and naming this exact key, read as tracker
 // support reads it. A key with no such record (a terminal harness, a
 // keyless render, a native-subagent child) has none.
-func (s *Server) callerRecord(key string) (wsagent.Record, bool) {
-	if key == "" {
-		return wsagent.Record{}, false
-	}
-	replyID := wsmailbox.ReplyID(key)
-	if !wsdashboard.ValidReplyID(replyID) {
-		return wsagent.Record{}, false
-	}
-	dir, err := s.dashboard.stateDir()
-	if err != nil {
-		return wsagent.Record{}, false
-	}
-	rec, err := wsagent.ReadRecord(dir, replyID)
-	if err != nil || rec.WSKey != key {
-		return wsagent.Record{}, false
-	}
-	return rec, true
+func (s *Server) callerRecord(key string) (wsagent.Record, bool, error) {
+	return s.lookupAgentRecord(key)
 }
 
 // callerDaemonAgents reports whether key belongs to a conversation that
@@ -99,10 +82,13 @@ func (s *Server) callerRecord(key string) (wsagent.Record, bool) {
 // a Claude conversation launched without its native subagent tool
 // (wsagent.RemovesSubagents). The record's backend decides, which a profile
 // override can make differ from the harness the connection is detected as.
-func (s *Server) callerDaemonAgents(key string) bool {
-	rec, ok := s.callerRecord(key)
+func (s *Server) callerDaemonAgents(key string) (bool, error) {
+	rec, ok, err := s.callerRecord(key)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
-		return false
+		return false, nil
 	}
 	delegates := s.connectionOf(rec.Backend).DelegatesThroughDaemon
 	return delegates != nil && delegates(rec, func() *wsagent.Profile {
@@ -112,7 +98,7 @@ func (s *Server) callerDaemonAgents(key string) bool {
 			return &rp.Definition
 		}
 		return nil
-	})
+	}), nil
 }
 
 // piMCPOnlyTerminology names the daemon's agent tools, which a Pi session

@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -133,6 +134,46 @@ type AgentSessionMeta struct {
 // metadata for the session view and rail.
 type AgentSessionMetaHost interface {
 	SessionMeta(replyID string) (AgentSessionMeta, bool)
+}
+
+// AgentRecordParent mirrors wsagent.ParentRef without importing wsagent.
+type AgentRecordParent struct {
+	Kind    string `json:"kind"`
+	ReplyID string `json:"reply_id"`
+}
+
+// AgentRecordSnapshot is the daemon-owned metadata snapshot served over the
+// authenticated loopback /meta/* routes and read in-process by page rendering
+// and registry pruning. WSKey is retained in memory for caller authentication
+// and never serialized onto HTTP responses.
+type AgentRecordSnapshot struct {
+	ReplyID            string             `json:"reply_id,omitempty"`
+	WSKey              string             `json:"-"`
+	Profile            string             `json:"profile,omitempty"`
+	ResolvedDefinition json.RawMessage    `json:"resolved_definition,omitempty"`
+	Backend            string             `json:"backend,omitempty"`
+	Root               string             `json:"root,omitempty"`
+	Model              string             `json:"model,omitempty"`
+	Effort             string             `json:"effort,omitempty"`
+	Lead               bool               `json:"lead,omitempty"`
+	ClosedAt           string             `json:"closed_at,omitempty"`
+	HandedOffAt        string             `json:"handed_off_at,omitempty"`
+	HolderID           string             `json:"holder_id,omitempty"`
+	HostPID            int                `json:"host_pid,omitempty"`
+	Tier               string             `json:"tier,omitempty"`
+	Parent             *AgentRecordParent `json:"parent,omitempty"`
+}
+
+// AgentMetadataHost is an optional AgentHost that answers in-memory agent
+// record lookups without reading agent.json from disk.
+type AgentMetadataHost interface {
+	AgentRecord(replyID string) (AgentRecordSnapshot, bool)
+}
+
+// MetaPruner is an optional LiveHost that prunes expired registrations for its
+// own state directory using daemon-owned agent metadata in memory.
+type MetaPruner interface {
+	PruneRegistrationsFor(stateDir string, now time.Time, retention time.Duration) (pruned int, handled bool)
 }
 
 // AgentRoutePrefix is where the daemon mounts AgentHost.Handler.

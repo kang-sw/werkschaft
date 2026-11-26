@@ -450,6 +450,13 @@ type Daemon struct {
 	// forgotten is DaemonOptions.SessionForgotten.
 	forgotten func(replyID string)
 
+	// metaMu/metaClosed/metaWG gate /meta/* requests and in-process metadata
+	// pruning so Close refuses new callers (503) and drains in-flight calls
+	// before tearing down agents or metadata stores.
+	metaMu     sync.RWMutex
+	metaClosed bool
+	metaWG     sync.WaitGroup
+
 	closeOnce sync.Once
 	stop      chan struct{}
 	done      chan struct{}

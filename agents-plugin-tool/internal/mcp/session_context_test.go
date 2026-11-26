@@ -43,6 +43,7 @@ func TestResolveSessionSelection(t *testing.T) {
 	}
 	hostedSessionEnv(t, lead)
 	s = NewServer(root, "test")
+	s.recordReader = newTestRecordReader()
 	recordSpawned(t, s, canonical, child, wsmailbox.ReplyID(lead), wsagent.ParentLead)
 	before := sessionKeyFileCount(t, s)
 	for _, tt := range []struct {

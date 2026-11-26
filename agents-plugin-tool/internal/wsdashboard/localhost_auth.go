@@ -109,6 +109,9 @@ func accessExempt(r *http.Request) bool {
 		// The token route checks the session bearer, the change route the
 		// endpoint token (credential_routes.go).
 		return r.Method == http.MethodPost && loopbackExemptCaller(r)
+	case MetaAgentRecordPath, MetaHostedDescendantPath, MetaUnregisterCheckPath, MetaPrunePath:
+		// Machine-only metadata routes: loopback + no Origin + Bearer endpoint token.
+		return r.Method == http.MethodPost && loopbackExemptCaller(r)
 	}
 	if (r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/agents/by-token/") &&
 		strings.TrimPrefix(r.URL.Path, "/agents/by-token/") != "") || (read && strings.HasPrefix(r.URL.Path, pwaPrefix)) {
