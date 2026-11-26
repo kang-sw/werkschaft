@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 177d2eeb9ef67368
 sage-review-completeness-reviewed: 177d2eeb9ef67368
+completed: 2026-11-26
 ---
 
 # Cellophane Question Link Capsules & Live Status Display in Chat Stream Topic Cards
@@ -188,3 +189,28 @@ Approved visual reference: `ai-docs/assets/mockups/261126/chat-stream-question-c
   - Capsule click triggering jump/highlight to the matching `#r-board` card.
   - Graceful fallback to plain `(ID)` link chip when `#r-board` DOM is absent or lacks the item.
 - Headless Chromium (Playwright) visual verification in both **dark** and **light** themes with result captures compared side-by-side against `ai-docs/assets/mockups/261126/chat-stream-question-cards/mockup.html` (the mockup is dark-only: dark captures match it directly; light captures match its proportions, class-tint distinction, and dim-ink hierarchy, with the light legibility judged per Decision 7 and the passing light captures committed under `ai-docs/assets/captures/<date>/`) (verifying 1-line capsule truncation, cellophane class tint distinction, outside dim answer legibility, and `#r-board` jump highlight).
+
+### Result (23c4ca1d5) - 2026-11-26
+
+- **Landed:**
+  - `9f0e9270c` (`feat(wsdashboard): hydrate chat-stream question link capsules with live status`):
+    - Added additive `data-item`, `data-class`, and `data-state` (`ask` / `settled`) attributes on `historyitem`, `original-question`, and settled `ckrow` templates in `agents-plugin-tool/internal/wswhiteboard/assets/page.tmpl`, with template tests in `question_card_attrs_test.go` and updated assertions in `render_test.go`.
+    - Added 10 surgical `js.wbupdate.*` i18n keys across all 11 locale tables (`agents-plugin-tool/internal/wsi18n/tables/*.json`) preserving existing key order and reusing `js.pill.held`.
+    - Added 22px 1-line cellophane question link capsule styling (`.wbupdate-cap`, `.wbupdate-cap-{id,cls,ttl,arr}`) and outside dim status/answer styling (`.wbupdate-ans`, `.st-{open,staged,staged-ok,staged-no,held,sent,settled}`) with dark and light theme variables in `dashboard-conversation.css` (placed outside the display-only presentation contract section).
+    - Implemented T0 client-side progressive hydration and live `#r-board` sync in `dashboard-conversation.js` (delegating hold state strictly through `pill.js` with zero direct `localStorage` `ws.wb.holds.*` reads; leaving server-rendered `dashboard.tmpl` and `.wbupdate-status` untouched), wired into `dashboard.js`, `dashboard-board.js`, `dashboard-composer.js`, `dashboard-composer-status.js`, and `dashboard-lifecycle.js`.
+    - Added loopback Playwright headless Chromium acceptance test (`question_cards_browser_test.go` + `testdata/question-cards.browser.cjs`).
+  - `23c4ca1d5` (`fix(wsdashboard): address lite-review findings for question link capsules`):
+    - Fixed `readBoardQuestionState` precedence so an actively open item (`openEl`) always wins over historical `.wb-hitem.commented[data-state="settled"]` rows while settled rows without `openEl` still win over stale `.sent-held` / `.sent-sent`.
+    - Added `wbUpdateQueryBoard` fallback into `virtualStore` (`rec.stashed` and `rec.children`) so virtualized off-window board topics keep settled/assumed capsules hydrated instead of reverting to bare `(ID)` chips.
+    - Extended `wbUpdateFlattenMemo` to strip `<textref>` tags in addition to `<mailbox>` tags.
+    - Added default-running Node unit test `TestChatStreamQuestionCardsUnit` (`question_cards_test.go`) and expanded `testdata/question-cards.browser.cjs` with memo-only staging, composer unchip removal, and `#r-board` focus verification on capsule jump.
+- **Verification:**
+  - `go test -v -count=1 -run 'TestChatStreamQuestionCardsUnit|TestConversationPresentation' ./internal/wsdashboard/...`: PASS (0.935s).
+  - `WS_PLAYWRIGHT_MODULE=... go test -v -count=1 -run TestChatStreamQuestionCardsBrowser ./internal/wsdashboard/...`: PASS (1.11s, `ALL QUESTION CARD BROWSER CHECKS PASSED`).
+  - `go test -count=1 -run 'TestRenderRegionsSettledRowExpands|TestQuestionCardDataAttributes' ./internal/wswhiteboard/...`: PASS (0.591s); full `go test -count=1 ./internal/wswhiteboard/...`: PASS (333.388s).
+  - `go test -count=1 ./internal/wsi18n/...`: PASS (3.005s).
+  - `GOOS=windows go vet ./...`: PASS (exit 0).
+  - Visual comparison: `compared ai-docs/assets/captures/261126-question-cards/live-dark.png and ai-docs/assets/captures/261126-question-cards/live-light.png vs ai-docs/assets/mockups/261126/chat-stream-question-cards/mockup.html: match` (temporary capture PNGs kept untracked per task instructions).
+- **Decisions / Notes:**
+  - Kept temporary visual capture PNGs untracked under `ai-docs/assets/captures/261126-question-cards/` (not committed, per explicit task instruction).
+  - `code-review-lite` found 0 Critical, 3 Important, 2 Minor; all 3 Important findings and 1 Minor (`<textref>` stripping) were fixed in `23c4ca1d5` and re-verified.
