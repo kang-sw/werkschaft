@@ -1,10 +1,13 @@
 package wsdashboard
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -495,5 +498,274 @@ func TestCompanionT1OldValidatorSkipsVRMPack(t *testing.T) {
 	newSnap := new(CompanionPackStore).snapshot(wsconfig.Options{ConfigHome: home})
 	if newSnap.byID["sibling-2d"] == nil || newSnap.byID["new-vrm"] == nil {
 		t.Fatalf("new store did not restore both packs: %+v", newSnap.errors)
+	}
+}
+
+func TestCompanionImportVRMRoute(t *testing.T) {
+	f := newCompanionRouteFixture(t)
+	model0 := syntheticVRM0GLB()
+	model1 := syntheticVRM1GLB()
+
+	postVRM := func(path, contentType string, body []byte) *httptest.ResponseRecorder {
+		r := authRequest(http.MethodPost, path, string(body))
+		r.AddCookie(f.cookie)
+		r.Header.Set("Origin", companionTestOrigin)
+		if contentType != "" {
+			r.Header.Set("Content-Type", contentType)
+		}
+		return authServe(f.d, r)
+	}
+
+	// TrustedWrite gate: unauthenticated, cross-origin, LAN, wrong method.
+	t.Run("trusted write gate", func(t *testing.T) {
+		token, err := f.d.lanToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := companionPacksRoute + "/import-vrm?id=gate-test"
+		send := func(method, origin string, cookie *http.Cookie) *httptest.ResponseRecorder {
+			r := authRequest(method, path, string(model1))
+			r.Header.Set("Content-Type", "model/gltf-binary")
+			if cookie != nil {
+				r.AddCookie(cookie)
+			}
+			if origin != "" {
+				r.Header.Set("Origin", origin)
+			}
+			return authServe(f.d, r)
+		}
+		if w := send(http.MethodPost, companionTestOrigin, nil); w.Code != http.StatusUnauthorized {
+			t.Errorf("unauthenticated: %d", w.Code)
+		}
+		if w := send(http.MethodPost, "http://evil.test", f.cookie); w.Code != http.StatusForbidden {
+			t.Errorf("cross-origin: %d", w.Code)
+		}
+		r := authRequest(http.MethodPost, path, string(model1))
+		r.Header.Set("Content-Type", "model/gltf-binary")
+		r.Host, r.RemoteAddr = "192.0.2.1:43210", "192.0.2.2:1234"
+		r.AddCookie(&http.Cookie{Name: lanTokenCookie, Value: token})
+		r.Header.Set("Origin", "http://"+r.Host)
+		if w := authServe(f.d, r); w.Code != http.StatusNotFound {
+			t.Errorf("LAN: %d", w.Code)
+		}
+		if w := send(http.MethodGet, "", f.cookie); w.Code != http.StatusMethodNotAllowed ||
+			w.Header().Get("Allow") != "POST" || w.Header().Get("Cache-Control") != "private, no-store" {
+			t.Errorf("GET: %d %+v", w.Code, w.Header())
+		}
+	})
+
+	// 415 on unsupported content type; 400 on invalid/non-VRM GLB; 413 over cap.
+	t.Run("validation and caps", func(t *testing.T) {
+		if w := postVRM(companionPacksRoute+"/import-vrm", "application/json", []byte(`{}`)); w.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("bad content-type: %d %s", w.Code, w.Body)
+		}
+		if w := postVRM(companionPacksRoute+"/import-vrm", "", model1); w.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("missing content-type: %d %s", w.Code, w.Body)
+		}
+		nonVRM := buildSyntheticGLB(`{"asset":{"version":"2.0"}}`, nil)
+		if w := postVRM(companionPacksRoute+"/import-vrm", "model/gltf-binary", nonVRM); w.Code != http.StatusBadRequest {
+			t.Fatalf("non-VRM GLB: %d %s", w.Code, w.Body)
+		}
+		if w := postVRM(companionPacksRoute+"/import-vrm?id=INVALID", "model/gltf-binary", model1); w.Code != http.StatusBadRequest {
+			t.Fatalf("bad explicit id: %d %s", w.Code, w.Body)
+		}
+		oldCap := companionVrmImportCap
+		companionVrmImportCap = 64
+		defer func() { companionVrmImportCap = oldCap }()
+		if w := postVRM(companionPacksRoute+"/import-vrm", "model/gltf-binary", model1); w.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("over cap raw: %d %s", w.Code, w.Body)
+		}
+	})
+
+	// Raw model/gltf-binary with explicit id + 409 collision on repeat + uninstall.
+	t.Run("raw upload explicit id and 409 collision", func(t *testing.T) {
+		w := postVRM(companionPacksRoute+"/import-vrm?id=my-vrm&name=My%20VRM", "model/gltf-binary", model1)
+		if w.Code != http.StatusOK {
+			t.Fatalf("raw import: %d %s", w.Code, w.Body)
+		}
+		info := companionRouteDecode[companionPackInfo](t, w)
+		if info.ID != "my-vrm" || info.Name != "My VRM" || info.Schema != companionPackVRMSchema || info.Renderer != companionPackRendererVRM || info.Rev == "" {
+			t.Fatalf("unexpected info: %+v", info)
+		}
+		// Explicit id collision answers 409 without overwriting.
+		if w = postVRM(companionPacksRoute+"/import-vrm?id=my-vrm&name=Other", "application/octet-stream", model0); w.Code != http.StatusConflict {
+			t.Fatalf("explicit collision: %d %s", w.Code, w.Body)
+		}
+		// Model asset is immediately served from the reloaded in-memory snapshot.
+		assetW := companionTestRequest(f.d, f.cookie, http.MethodGet, companionPacksRoute+"/my-vrm/assets/model.vrm?rev="+info.Rev, "")
+		if assetW.Code != http.StatusOK || assetW.Header().Get("Content-Type") != "model/gltf-binary" || !bytes.Equal(assetW.Body.Bytes(), model1) {
+			t.Fatalf("served asset: %d %q len=%d", assetW.Code, assetW.Header().Get("Content-Type"), assetW.Body.Len())
+		}
+		// Uninstall removes the sidecar-installed VRM pack.
+		unW := f.post(companionPacksRoute+"/my-vrm/uninstall", nil)
+		if unW.Code != http.StatusOK {
+			t.Fatalf("uninstall: %d %s", unW.Code, unW.Body)
+		}
+		cat := companionRouteDecode[companionCatalog](t, unW)
+		if companionRouteCatalogPack(&cat, "my-vrm") != nil {
+			t.Fatalf("uninstalled pack still in catalog: %+v", cat.Packs)
+		}
+	})
+
+	// Multipart upload + derived slug collision suffixing (-2, -3).
+	t.Run("multipart and derived slug collision suffix", func(t *testing.T) {
+		sendMultipart := func(filename, id, name string, payload []byte) *httptest.ResponseRecorder {
+			var buf bytes.Buffer
+			mw := multipart.NewWriter(&buf)
+			if id != "" {
+				_ = mw.WriteField("id", id)
+			}
+			if name != "" {
+				_ = mw.WriteField("name", name)
+			}
+			fw, err := mw.CreateFormFile("file", filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fw.Write(payload)
+			_ = mw.Close()
+			return postVRM(companionPacksRoute+"/import-vrm", mw.FormDataContentType(), buf.Bytes())
+		}
+		w1 := sendMultipart("Sample Avatar.vrm", "", "", model0)
+		if w1.Code != http.StatusOK {
+			t.Fatalf("multipart 1: %d %s", w1.Code, w1.Body)
+		}
+		i1 := companionRouteDecode[companionPackInfo](t, w1)
+		if i1.ID != "sample-avatar" || i1.Name != "Sample Avatar" || i1.Renderer != companionPackRendererVRM {
+			t.Fatalf("first derived info: %+v", i1)
+		}
+		w2 := sendMultipart("Sample Avatar.vrm", "", "", model1)
+		if w2.Code != http.StatusOK {
+			t.Fatalf("multipart 2: %d %s", w2.Code, w2.Body)
+		}
+		i2 := companionRouteDecode[companionPackInfo](t, w2)
+		if i2.ID != "sample-avatar-2" {
+			t.Fatalf("second derived info should get -2 suffix: %+v", i2)
+		}
+		w3 := sendMultipart("Sample Avatar.vrm", "", "", model1)
+		if w3.Code != http.StatusOK {
+			t.Fatalf("multipart 3: %d %s", w3.Code, w3.Body)
+		}
+		i3 := companionRouteDecode[companionPackInfo](t, w3)
+		if i3.ID != "sample-avatar-3" {
+			t.Fatalf("third derived info should get -3 suffix: %+v", i3)
+		}
+		// Multipart over cap answers 413.
+		oldCap := companionVrmImportCap
+		companionVrmImportCap = 64
+		defer func() { companionVrmImportCap = oldCap }()
+		if wOver := sendMultipart("Huge.vrm", "", "", model1); wOver.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("multipart over cap: %d %s", wOver.Code, wOver.Body)
+		}
+	})
+}
+
+func TestCompanionZipVRMPackAndMarketplaceMetadata(t *testing.T) {
+	f := newCompanionRouteFixture(t)
+	model := syntheticVRM1GLB()
+	vrma := syntheticVRMAGLB()
+	thumb := companionTestPNG(t, 16, 16)
+
+	vrmManifest := companionTestVRMManifest("vrm-pack", "model.vrm",
+		`,"thumbnail":"thumb.png","animations":{"wave":"wave.vrma"}`)
+	market := []byte(`{
+		"schema":"ws-companion-marketplace/v1",
+		"name":"Mixed Source",
+		"packs":[
+			{
+				"id":"vrm-pack",
+				"name":"VRM Pack",
+				"version":"1.0.0",
+				"format":"vrm",
+				"vroidSourceUrl":"https://example.invalid/avatar",
+				"path":"packs/vrm-pack"
+			},
+			{
+				"id":"bad-2d",
+				"name":"Bad 2D",
+				"version":"1.0.0",
+				"format":"2d",
+				"path":"packs/bad-2d"
+			}
+		]
+	}`)
+	zipBytes := companionTestZip(t,
+		companionZipEntry{name: "marketplace.json", data: market},
+		companionZipEntry{name: "packs/vrm-pack/pack.json", data: vrmManifest},
+		companionZipEntry{name: "packs/vrm-pack/model.vrm", data: model},
+		companionZipEntry{name: "packs/vrm-pack/wave.vrma", data: vrma},
+		companionZipEntry{name: "packs/vrm-pack/thumb.png", data: thumb},
+		// 2D pack smuggling a .vrm file must still be rejected.
+		companionZipEntry{name: "packs/bad-2d/pack.json", data: companionTestManifest("bad-2d", "stand.png", "")},
+		companionZipEntry{name: "packs/bad-2d/stand.png", data: thumb},
+		companionZipEntry{name: "packs/bad-2d/extra.vrm", data: model},
+	)
+
+	// Validate lists both packs: vrm-pack succeeds with format & vroidSourceUrl preserved; bad-2d is rejected.
+	valW := f.post(companionPacksRoute+"/validate?name=mixed.zip", zipBytes)
+	if valW.Code != http.StatusOK {
+		t.Fatalf("validate: %d %s", valW.Code, valW.Body)
+	}
+	valRes := companionRouteDecode[companionInstallResult](t, valW)
+	vp := companionListed(valRes, "vrm-pack")
+	if vp == nil || vp.Error != nil || vp.Status != companionStatusAvailable ||
+		vp.Format != "vrm" || vp.VroidSourceURL != "https://example.invalid/avatar" {
+		t.Fatalf("vrm-pack listing: %+v", vp)
+	}
+	b2 := companionListed(valRes, "bad-2d")
+	if b2 == nil || b2.Error == nil || b2.Format != "2d" {
+		t.Fatalf("2D pack with .vrm should fail: %+v", b2)
+	}
+
+	// Import vrm-pack, serve assets, and uninstall it cleanly.
+	impW := f.post(companionPacksRoute+"/import?name=mixed.zip&id=vrm-pack", zipBytes)
+	if impW.Code != http.StatusOK {
+		t.Fatalf("import: %d %s", impW.Code, impW.Body)
+	}
+	impRes := companionRouteDecode[companionInstallResult](t, impW)
+	info := companionRouteCatalogPack(impRes.Catalog, "vrm-pack")
+	if info == nil || info.Renderer != companionPackRendererVRM || info.Schema != companionPackVRMSchema {
+		t.Fatalf("installed vrm-pack info: %+v", info)
+	}
+	aw := companionTestRequest(f.d, f.cookie, http.MethodGet, companionPacksRoute+"/vrm-pack/assets/wave.vrma?rev="+info.Rev, "")
+	if aw.Code != http.StatusOK || aw.Header().Get("Content-Type") != "model/gltf-binary" || !bytes.Equal(aw.Body.Bytes(), vrma) {
+		t.Fatalf("wave.vrma: %d %q", aw.Code, aw.Header().Get("Content-Type"))
+	}
+	unW := f.post(companionPacksRoute+"/vrm-pack/uninstall", nil)
+	if unW.Code != http.StatusOK {
+		t.Fatalf("uninstall vrm-pack: %d %s", unW.Code, unW.Body)
+	}
+	unCat := companionRouteDecode[companionCatalog](t, unW)
+	if companionRouteCatalogPack(&unCat, "vrm-pack") != nil {
+		t.Fatalf("vrm-pack remained after uninstall: %+v", unCat.Packs)
+	}
+
+	// Official source fetch preserves format and vroidSourceUrl on listed entries.
+	oldMarket := companionOfficialMarketplace
+	companionOfficialMarketplace = []byte(`{
+		"schema":"ws-companion-marketplace/v1",
+		"name":"Official Packs",
+		"packs":[
+			{
+				"id":"official-vrm",
+				"name":"Official VRM",
+				"version":"1.0.0",
+				"format":"vrm",
+				"vroidSourceUrl":"https://example.invalid/official-vrm",
+				"url":"https://example.invalid/official-vrm.zip",
+				"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			}
+		]
+	}`)
+	defer func() { companionOfficialMarketplace = oldMarket }()
+	f.d.companion.snapshot.Store(&companionConfigSnapshot{wake: make(chan struct{}), config: CompanionConfig{Enabled: true}})
+	srcW := f.post(companionSourcesRoute+"/fetch", []byte(`{"source":"official"}`))
+	if srcW.Code != http.StatusOK {
+		t.Fatalf("official source fetch: %d %s", srcW.Code, srcW.Body)
+	}
+	srcRes := companionRouteDecode[companionInstallResult](t, srcW)
+	ov := companionListed(srcRes, "official-vrm")
+	if ov == nil || ov.Format != "vrm" || ov.VroidSourceURL != "https://example.invalid/official-vrm" {
+		t.Fatalf("official source listing entry: %+v", ov)
 	}
 }
