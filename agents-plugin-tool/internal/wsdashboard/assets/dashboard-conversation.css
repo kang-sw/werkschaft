@@ -933,3 +933,16 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .exec-row-expired { font-size: 11px; color: var(--wb-muted-fg); }
 .exec-row-expired[hidden] { display: none; }
 .exec-notice.held-exec { opacity: .82; }
+
+/* User command Ask Agent request card (<ws:ucmd>): borderless tonal Material surface inside .msg .bub. */
+.ucmd-req { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--wb-muted) 65%, var(--wb-card)); color: var(--wb-fg); white-space: normal; min-width: 0; max-width: 100%; }
+.ucmd-req + .ucmd-req { margin-top: 6px; }
+.ucmd-req-hd { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; font-size: 12px; line-height: 1.3; }
+.ucmd-req-ico { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; flex: none; background: color-mix(in srgb, var(--wb-primary) 14%, transparent); color: var(--wb-primary); }
+.ucmd-req-ico .li { width: 13px; height: 13px; }
+.ucmd-req-label { font-weight: 700; color: var(--wb-fg); min-width: 0; overflow-wrap: anywhere; }
+.ucmd-req-edited { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--wb-warn) 16%, transparent); color: var(--wb-warn); white-space: nowrap; }
+.ucmd-req-cwd { font-family: var(--wb-mono); font-size: 11px; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--wb-fg) 7%, transparent); color: var(--wb-muted-fg); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ucmd-req-cmd { margin: 0; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--wb-bg) 62%, transparent); color: var(--wb-fg); font: 12px/1.45 var(--wb-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.ucmd-req-cmd code { font: inherit; background: none; padding: 0; }
+.ucmd-req-prompt { font-size: 12.5px; line-height: 1.45; color: var(--wb-fg); white-space: pre-wrap; overflow-wrap: anywhere; }

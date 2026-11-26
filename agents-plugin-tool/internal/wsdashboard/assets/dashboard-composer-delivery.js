@@ -129,6 +129,125 @@
     b.setAttribute("data-" + kind, id);
     return b;
   }
+  function ucmdUnescapeXml(text) {
+    var entities = { "&#91;": "[", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'", "&#39;": "'", "&amp;": "&" };
+    return String(text || "").replace(/&#91;|&lt;|&gt;|&quot;|&apos;|&#39;|&amp;/g, function (s) { return entities[s]; });
+  }
+  function parseUcmdBlock(raw) {
+    var norm = String(raw || "").replace(/\r\n/g, "\n");
+    if (norm.indexOf("<ws:ucmd") !== 0 || norm.slice(-11) !== "\n</ws:ucmd>") return null;
+    var firstNL = norm.indexOf("\n");
+    if (firstNL < 0 || norm.charAt(firstNL - 1) !== ">") return null;
+    var attrStr = norm.slice(8, firstNL - 1), label = "", edited = false, seenLabel = false, seenEdited = false;
+    while (attrStr) {
+      if (attrStr.charAt(0) !== " ") return null;
+      attrStr = attrStr.slice(1);
+      var am = /^([a-z]+)="([^"<]*)"/.exec(attrStr);
+      if (!am) return null;
+      if (am[1] === "label") {
+        if (seenLabel) return null;
+        seenLabel = true;
+        label = ucmdUnescapeXml(am[2]);
+      } else if (am[1] === "edited") {
+        if (seenEdited || am[2] !== "true") return null;
+        seenEdited = true;
+        edited = true;
+      } else {
+        return null;
+      }
+      attrStr = attrStr.slice(am[0].length);
+    }
+    var body = norm.slice(firstNL + 1, -11);
+    var cmdIdx = body.indexOf("<cmd");
+    if (cmdIdx < 0) return null;
+    if (cmdIdx > 0) {
+      var lead = body.slice(0, cmdIdx);
+      if (lead.charAt(lead.length - 1) !== "\n" || lead.indexOf("<") >= 0) return null;
+    }
+    var rest = body.slice(cmdIdx), cm = /^<cmd(?: cwd="([^"<]*)")?>/.exec(rest);
+    if (!cm) return null;
+    var cwd = cm[1] ? ucmdUnescapeXml(cm[1]) : "";
+    rest = rest.slice(cm[0].length);
+    var cmdEnd = rest.indexOf("</cmd>");
+    if (cmdEnd < 0 || rest.slice(0, cmdEnd).indexOf("<") >= 0) return null;
+    var cmd = ucmdUnescapeXml(rest.slice(0, cmdEnd));
+    if (!cmd.trim()) return null;
+    var tail = rest.slice(cmdEnd + 6), prompt = "";
+    if (tail) {
+      if (tail.indexOf("\n<prompt>") !== 0 || tail.slice(-9) !== "</prompt>") return null;
+      var pBody = tail.slice(9, -9);
+      if (pBody.indexOf("<") >= 0) return null;
+      prompt = ucmdUnescapeXml(pBody);
+    }
+    return { label: label, edited: edited, cwd: cwd, cmd: cmd, prompt: prompt };
+  }
+  function splitUcmdParts(text) {
+    if (!text || text.indexOf("<ws:ucmd") < 0) return [{ text: text || "" }];
+    var tags = [], depth = 0, pos = 0;
+    while (pos < text.length) {
+      var start = text.indexOf("<", pos);
+      if (start < 0) break;
+      var body = text.slice(start);
+      var term = body.indexOf("<!--") === 0 ? "-->" : body.indexOf("<![CDATA[") === 0 ? "]]>" : body.indexOf("<?") === 0 ? "?>" : "";
+      if (!term && body.indexOf("<!") === 0) break;
+      if (term) {
+        var stop = body.indexOf(term);
+        if (stop < 0) break;
+        pos = start + stop + term.length; continue;
+      }
+      var candidate = /^<\/?ws:ucmd(?:[^A-Za-z0-9_.:-]|$)/.test(body), quote = "", end = start + 1;
+      for (; end < text.length; end++) {
+        var ch = text.charAt(end);
+        if (quote) { if (ch === quote) quote = ""; continue; }
+        if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === ">" || ch === "<") break;
+      }
+      if (end === text.length || text.charAt(end) !== ">") {
+        if (candidate) { tags.push([start, text.length]); break; }
+        if (depth > 0) break;
+        pos = start + 1; continue;
+      }
+      pos = end + 1;
+      if (candidate) {
+        tags.push([start, pos]);
+        if (text.charAt(start + 1) !== "/") depth++;
+        else if (depth > 0) depth--;
+      }
+    }
+    var parts = [], last = 0;
+    for (var i = 0; i < tags.length; i++) {
+      var s = tags[i][0];
+      if (text.charAt(s + 1) === "/") continue;
+      if (s > last) parts.push({ text: text.slice(last, s) });
+      var d = 1, e = text.length;
+      for (i++; i < tags.length; i++) {
+        d += text.charAt(tags[i][0] + 1) === "/" ? -1 : 1;
+        if (!d) { e = tags[i][1]; break; }
+      }
+      var raw = text.slice(s, e);
+      var cmd = (s === 0 || text.charAt(s - 1) === "\n") && (e === text.length || /^\r?\n/.test(text.slice(e))) ? parseUcmdBlock(raw) : null;
+      if (cmd) parts.push({ text: raw, ucmd: cmd });
+      else parts.push({ text: raw });
+      last = e;
+    }
+    if (last < text.length) parts.push({ text: text.slice(last) });
+    return parts;
+  }
+  function formatUcmdPreview(text) {
+    if (!text || text.indexOf("<ws:ucmd") < 0) return text || "";
+    var out = [];
+    splitUcmdParts(text).forEach(function (p) {
+      if (p.ucmd) {
+        var cmdLine = p.ucmd.cmd.replace(/\s+/g, " ").trim();
+        if (p.ucmd.label && cmdLine) out.push("[" + p.ucmd.label + "] " + cmdLine);
+        else if (cmdLine) out.push(cmdLine);
+        else if (p.ucmd.label) out.push("[" + p.ucmd.label + "]");
+      } else if (p.text && p.text.trim()) {
+        out.push(p.text.trim());
+      }
+    });
+    return out.join(" ");
+  }
   // outboxRow is an unanswered send's place in the composer: its text on
   // one line, or its image markers when it has no text, and its cancel.
   function outboxRow(m) {
@@ -137,6 +256,7 @@
     spin.className = "spin";
     text.className = "d-outbox-text";
     var rowSummary = typeof stripTextRefs === "function" ? stripTextRefs(m.back.text || "").text : (m.back.text || "");
+    rowSummary = formatUcmdPreview(rowSummary);
     text.textContent = rowSummary || m.pics.map(function (p) { return marker(p.n); }).join(" ");
     el.appendChild(spin);
     el.appendChild(text);
@@ -481,6 +601,74 @@
       });
       return pill;
     }
+    function buildUcmdCard(cmd) {
+      var card = doc.createElement("div"), hd = doc.createElement("div");
+      card.className = "ucmd-req";
+      hd.className = "ucmd-req-hd";
+      var ico = doc.createElement("span");
+      ico.className = "ucmd-req-ico";
+      ico.setAttribute("aria-hidden", "true");
+      if (typeof doc.createElementNS === "function") {
+        var svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "li");
+        svg.setAttribute("aria-hidden", "true");
+        var use = doc.createElementNS("http://www.w3.org/2000/svg", "use");
+        use.setAttribute("href", "#l-square-terminal");
+        svg.appendChild(use);
+        ico.appendChild(svg);
+      }
+      hd.appendChild(ico);
+      var lbl = doc.createElement("span");
+      lbl.className = "ucmd-req-label";
+      lbl.textContent = cmd.label || wsT("js.ucmd.ask.header");
+      hd.appendChild(lbl);
+      if (cmd.edited) {
+        var edText = String(wsT("js.ucmd.ask.edited") || "").trim().replace(/^\(+|\)+$/g, "");
+        if (edText) {
+          var ed = doc.createElement("span");
+          ed.className = "ucmd-req-edited";
+          ed.textContent = edText;
+          hd.appendChild(ed);
+        }
+      }
+      if (cmd.cwd) {
+        var cwdEl = doc.createElement("span");
+        cwdEl.className = "ucmd-req-cwd";
+        cwdEl.setAttribute("title", cmd.cwd);
+        cwdEl.textContent = cmd.cwd;
+        hd.appendChild(cwdEl);
+      }
+      card.appendChild(hd);
+      var pre = doc.createElement("pre"), code = doc.createElement("code");
+      pre.className = "ucmd-req-cmd";
+      code.textContent = cmd.cmd;
+      pre.appendChild(code);
+      card.appendChild(pre);
+      if (cmd.prompt) {
+        var pr = doc.createElement("div");
+        pr.className = "ucmd-req-prompt";
+        pr.textContent = cmd.prompt;
+        card.appendChild(pr);
+      }
+      return card;
+    }
+    function hydrateUcmdOrProseInto(parent, text) {
+      if (!text || text.indexOf("<ws:ucmd") < 0) {
+        hydrateProseInto(parent, text);
+        return;
+      }
+      var uparts = splitUcmdParts(text);
+      uparts.forEach(function (up, idx) {
+        if (up.ucmd) {
+          parent.appendChild(buildUcmdCard(up.ucmd));
+          return;
+        }
+        var t = up.text;
+        if (idx > 0 && uparts[idx - 1].ucmd) t = t.replace(/^(?:\r?\n){1,2}/, "");
+        if (idx + 1 < uparts.length && uparts[idx + 1].ucmd) t = t.replace(/(?:\r?\n){1,2}$/, "");
+        if (t) hydrateProseInto(parent, t);
+      });
+    }
     var part = null;
     if (strippedText.text) {
       part = doc.createElement("div");
@@ -515,10 +703,10 @@
           if (!t) { if (prevS && nextS) appendText(part, " "); return; }
           if (hp && !/^\s/.test(t)) t = " " + t;
           if (hn && !/\s$/.test(t)) t = t + " ";
-          hydrateProseInto(part, t);
+          hydrateUcmdOrProseInto(part, t);
         });
       } else {
-        hydrateProseInto(part, raw);
+        hydrateUcmdOrProseInto(part, raw);
       }
     }
     function chip(cls, label, value, note, title) {
@@ -611,6 +799,7 @@
       title.textContent = wsT(m.recoveryState === "queued" ? "js.delivery.unsent" : "js.delivery.unknown");
       text.className = "d-outbox-text";
       var recSummary = typeof stripTextRefs === "function" ? stripTextRefs(m.back.text || "").text : (m.back.text || "");
+      recSummary = formatUcmdPreview(recSummary);
       text.textContent = recSummary || m.pics.map(function (p) { return marker(p.n); }).join(" ") ||
         (m.back.chips || []).map(function (c) { return c.note || c.answer || c.id; }).join(" · ") ||
         (m.back.topics || []).map(function (n) { return n.note || n.topic; }).join(" · ");

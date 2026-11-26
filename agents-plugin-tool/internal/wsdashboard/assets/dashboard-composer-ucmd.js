@@ -952,11 +952,23 @@
     });
   }
 
+  function ucmdEscapeXml(text, attr) {
+    var out = String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    if (attr) out = out.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    return out.replace(/\[Image #([1-9][0-9]{0,5})\]/g, "&#91;Image #$1]");
+  }
+
   function ucmdAskText(c, eff) {
-    var lines = [wsT("js.ucmd.ask.header") + ": " + (c.label || c.id) + (eff.anyDirty ? " " + wsT("js.ucmd.ask.edited") : "")];
-    if (c.cwd) lines.push("cwd: " + c.cwd);
-    lines.push("```\n" + eff.line + "\n```");
-    lines.push(eff.prompt || wsT("js.ucmd.ask.default"));
+    var label = c.label || c.id || "";
+    var open = "<ws:ucmd";
+    if (label) open += ' label="' + ucmdEscapeXml(label, true) + '"';
+    if (eff.anyDirty) open += ' edited="true"';
+    open += ">";
+    var cmdTag = "<cmd" + (c.cwd ? ' cwd="' + ucmdEscapeXml(c.cwd, true) + '"' : "") + ">" + ucmdEscapeXml(eff.line, false) + "</cmd>";
+    var lines = [open, "User requested execution of the following command.", cmdTag];
+    var prompt = eff.prompt || wsT("js.ucmd.ask.default");
+    if (prompt) lines.push("<prompt>" + ucmdEscapeXml(prompt, false) + "</prompt>");
+    lines.push("</ws:ucmd>");
     return lines.join("\n");
   }
 
