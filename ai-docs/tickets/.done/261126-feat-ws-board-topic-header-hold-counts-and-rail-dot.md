@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7962bbe9f8e24d14
 sage-review-completeness-reviewed: 7962bbe9f8e24d14
+completed: 2026-11-27
 ---
 
 # Daemon-Persisted Ask Hold, Topic Header Open/Answered/Held Breakdown, and Hold-Aware Session Rail Dot
@@ -157,3 +158,10 @@ The hold itself lives only in the browser (`pill.js`, `localStorage` `ws.wb.hold
 - Node DOM tests: `.tbar` and Overview placeholder show distinct `미결` / `응답함` / `보류` counts as asks are held, unheld, staged (including bulk quick-pick) and settled; no `localStorage` hold reads or writes remain.
 - `GOOS=windows go vet ./...` and `go test -race ./internal/wswhiteboard/... ./internal/wsdashboard/...` for template output.
 - Live dashboard check of board headers, Overview and the left rail across session switches, in dark and light themes.
+
+### Result (040ddd88) - 2026-11-26
+
+- **Topic header & Overview chips (`wswhiteboard`, `wsdashboard`, `wsi18n`):** Implemented distinct `미결` (`chip.open`), `응답함` (`chip.answered`), and `보류` (`chip.held`) count chips for policy+check asks in `.tophead .tbar` (`page.tmpl`, `view.go`, `TopicView.UnheldAskCount()` / `HeldAskCount()`) while keeping the bulk action on the open-ask chip and `.chip.ok` ack chip intact. Wired live chip updates and Overview placeholder mirroring (`pill.js`, `overview.js`, `cards.js`, `rail.js`) and added translations across all 11 `wsi18n/tables/*.json` locales (committed in `8bde8828`).
+- **Browser-local hold removal (`pill.js`):** Deleted all unused browser-local hold machinery (`HOLD_PREFIX`, `itemFingerprint`, `reconcileHolds`, `"storage"` listener, etc.), leaving server-rendered `.wb-held` + `POST /s/<rid>/board/hold` as the sole source of truth.
+- **`code-review-lite` fixes (`040ddd88`) & `develop` sync (`301145b2`):** Resolved all 3 findings from `code-review-lite` over `20f2ba7..8bde8828` — Critical (`rail.js`: `st.refresh = kick` now invalidates `last` cache key before kicking, covered by `TestRailRefreshUpdatesCapsuleAskCount`) and 2 Minor (`cards.js`: guard all-held preview `data-open-asks="true"`; `overview.js`: preserve `.chip.ok` `<svg>` icon instead of overwriting with `p.textContent`). Merged `develop` via `--no-ff` (`301145b2`) preserving all Phase 1 & Phase 2 SHAs.
+- **Verification:** `go test -race -count=1 ./internal/wsi18n/...` (full package including `TestEveryUsedKeyIsInTheEnglishTable`), `GOOS=windows go vet ./...`, Node DOM tests (`pill-hold.test.cjs`, `rail-hold-dot.test.cjs`, `overview-preview-shape.test.cjs`: 13/13 pass; full Node DOM 22/22 prior to merge), targeted `-race` Go tests (`TestRailRefreshUpdatesCapsuleAskCount|TestTopicHeader|TestBoardHold` across `wswhiteboard` and `wsdashboard`), and live Chromium dark+light Playwright acceptance (`TestBoardHoldHeaderOverviewRailBrowser`, `TestBoardChatSmallUXBrowser`) all passed.
