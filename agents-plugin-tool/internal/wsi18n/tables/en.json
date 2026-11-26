@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "Transcription timed out",
   "js.voice.err.auth": "Voice provider key rejected",
   "js.voice.err.too_large": "Recording exceeds size limit",
-  "js.voice.err.failed": "Transcription failed"
+  "js.voice.err.failed": "Transcription failed",
+  "conv.turn.tools.one": "1 tool call",
+  "conv.turn.tools.other": "{0} tool calls",
+  "conv.turn.failed": "{0} failed",
+  "conv.turn.tokens.exact": "+{0} context tokens added in this turn",
+  "conv.turn.tokens.est": "~+{0} estimated tokens (byte fallback)",
+  "conv.turn.wake": "Wake turn"
 }

@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "음성 인식 시간이 초과되었습니다",
   "js.voice.err.auth": "음성 공급자 키가 거부되었습니다",
   "js.voice.err.too_large": "녹음 크기가 한도를 초과했습니다",
-  "js.voice.err.failed": "음성 인식에 실패했습니다"
+  "js.voice.err.failed": "음성 인식에 실패했습니다",
+  "conv.turn.tools.one": "도구 호출 1회",
+  "conv.turn.tools.other": "도구 호출 {0}회",
+  "conv.turn.failed": "{0}건 실패",
+  "conv.turn.tokens.exact": "이 턴에서 추가된 컨텍스트 토큰 +{0}",
+  "conv.turn.tokens.est": "추정 토큰 ~+{0} (바이트 기반)",
+  "conv.turn.wake": "웨이크 턴"
 }

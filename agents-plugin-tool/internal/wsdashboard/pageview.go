@@ -444,6 +444,9 @@ type ConversationView struct {
 	// ToolGap is the lead's finished tool calls since its last conversation
 	// entry, shown as a live tools row until the ring takes it.
 	ToolGap *wslive.ToolSummary
+	// LiveTurnSummary is the active turn's collapsed live header in r-convlive
+	// aggregating any flushed open-span RingTools plus ToolGap and TurnAddedTokens.
+	LiveTurnSummary *TurnSummaryView
 	// Users and Mails count the user messages and mail lines.
 	Users, Mails int
 	// Subagents counts the running subagents for the composer's badge.

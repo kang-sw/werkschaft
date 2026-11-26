@@ -140,6 +140,19 @@ type ConvEntry struct {
 	// ExecNotice is set when a background_exit wake or a legacy user entry
 	// parses strictly as a hosted ws/exec completion or user-stop notice.
 	ExecNotice *ExecNoticeView
+	// TurnSummary anchors a collapsed turn tool summary at the first RingTools
+	// entry of a turn span (or orphan tool span).
+	TurnSummary *TurnSummaryView
+	// TurnAbsorbed marks subsequent RingTools and closing RingTurn entries
+	// absorbed into their turn's TurnSummary anchor.
+	TurnAbsorbed bool
+	// TurnLiveAbsorbed marks flushed open-span RingTools currently aggregated
+	// into ConversationView.LiveTurnSummary while the turn is running.
+	TurnLiveAbsorbed bool
+	// TurnReasoningOnly marks a closing RingTurn whose .turnline was replaced
+	// by the span's TurnSummary while its .turn-with-summary reasoning host
+	// stays at turn-end position.
+	TurnReasoningOnly bool
 }
 
 // WhiteboardChanges decodes only the supported carrier; values remain plain

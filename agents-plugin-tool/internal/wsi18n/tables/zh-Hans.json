@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "语音转写超时",
   "js.voice.err.auth": "语音提供商密钥被拒绝",
   "js.voice.err.too_large": "录音超出大小限制",
-  "js.voice.err.failed": "语音转写失败"
+  "js.voice.err.failed": "语音转写失败",
+  "conv.turn.tools.one": "1 次工具调用",
+  "conv.turn.tools.other": "{0} 次工具调用",
+  "conv.turn.failed": "{0} 次失败",
+  "conv.turn.tokens.exact": "本轮新增上下文 token +{0}",
+  "conv.turn.tokens.est": "估算 token ~+{0}（按字节估算）",
+  "conv.turn.wake": "唤醒轮次"
 }

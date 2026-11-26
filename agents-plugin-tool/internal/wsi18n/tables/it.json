@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "Tempo scaduto per la trascrizione",
   "js.voice.err.auth": "Chiave del provider vocale rifiutata",
   "js.voice.err.too_large": "La registrazione supera il limite di dimensione",
-  "js.voice.err.failed": "Trascrizione non riuscita"
+  "js.voice.err.failed": "Trascrizione non riuscita",
+  "conv.turn.tools.one": "1 chiamata strumento",
+  "conv.turn.tools.other": "{0} chiamate strumento",
+  "conv.turn.failed": "{0} fallite",
+  "conv.turn.tokens.exact": "+{0} token di contesto aggiunti in questo turno",
+  "conv.turn.tokens.est": "~+{0} token stimati (stima in byte)",
+  "conv.turn.wake": "Turno di risveglio"
 }

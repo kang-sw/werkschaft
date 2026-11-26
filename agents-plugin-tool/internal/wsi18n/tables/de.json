@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "Zeitüberschreitung bei der Transkription",
   "js.voice.err.auth": "Schlüssel des Sprachanbieters abgelehnt",
   "js.voice.err.too_large": "Aufnahme überschreitet das Größenlimit",
-  "js.voice.err.failed": "Transkription fehlgeschlagen"
+  "js.voice.err.failed": "Transkription fehlgeschlagen",
+  "conv.turn.tools.one": "1 Tool-Aufruf",
+  "conv.turn.tools.other": "{0} Tool-Aufrufe",
+  "conv.turn.failed": "{0} fehlgeschlagen",
+  "conv.turn.tokens.exact": "+{0} Kontext-Token in diesem Turn hinzugefügt",
+  "conv.turn.tokens.est": "~+{0} geschätzte Token (Byte-Fallback)",
+  "conv.turn.wake": "Wake-Turn"
 }

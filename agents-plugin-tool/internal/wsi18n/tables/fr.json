@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "Délai de transcription dépassé",
   "js.voice.err.auth": "Clé du fournisseur vocal refusée",
   "js.voice.err.too_large": "L'enregistrement dépasse la taille limite",
-  "js.voice.err.failed": "Échec de la transcription"
+  "js.voice.err.failed": "Échec de la transcription",
+  "conv.turn.tools.one": "1 appel d'outil",
+  "conv.turn.tools.other": "{0} appels d'outil",
+  "conv.turn.failed": "{0} échec(s)",
+  "conv.turn.tokens.exact": "+{0} jetons de contexte ajoutés dans ce tour",
+  "conv.turn.tokens.est": "~+{0} jetons estimés (estimation par octets)",
+  "conv.turn.wake": "Tour de réveil"
 }

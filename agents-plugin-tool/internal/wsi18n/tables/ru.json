@@ -3722,5 +3722,11 @@
   "js.voice.err.timeout": "Превышено время ожидания распознавания",
   "js.voice.err.auth": "Ключ голосового провайдера отклонён",
   "js.voice.err.too_large": "Запись превышает допустимый размер",
-  "js.voice.err.failed": "Ошибка распознавания речи"
+  "js.voice.err.failed": "Ошибка распознавания речи",
+  "conv.turn.tools.one": "1 вызов инструмента",
+  "conv.turn.tools.other": "вызовов инструментов: {0}",
+  "conv.turn.failed": "ошибок: {0}",
+  "conv.turn.tokens.exact": "+{0} токенов контекста добавлено за этот ход",
+  "conv.turn.tokens.est": "~+{0} токенов (оценка по байтам)",
+  "conv.turn.wake": "Ход пробуждения"
 }
