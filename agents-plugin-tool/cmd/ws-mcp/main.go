@@ -13,7 +13,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-var version = "0.52.2-dev"
+var version = "0.53.0-dev"
 var sourceCommit = "dev"
 
 func main() {
