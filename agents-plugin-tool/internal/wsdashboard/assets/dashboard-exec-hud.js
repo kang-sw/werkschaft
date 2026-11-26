@@ -62,6 +62,12 @@
     var s = xhSt(j);
     return s === "failed" || s === "lost" || s === "nostart" || s === "stopping" || (s === "stopped" && j.stopped_by_user && j.origin !== "user" && (j.stop_notice === "failed" || j.stop_notice === "closed"));
   }
+  // Normally-completed synchronous agent commands disappear from the strip,
+  // quiet "ended N" count, and peek list once ended; running, attention,
+  // backgrounded/async, and user `!` jobs remain visible.
+  function xhSkipSyncAgent(j) {
+    return xhEnded(j) && !xhAttn(j) && j.origin !== "user" && !j.async;
+  }
   function xhEndedAt(j) { return j.ended_at || j.seenEnded || 0; }
   function xhByStartAsc(a, b) { return (a.started_at || 0) - (b.started_at || 0); }
   // visible: what the strip may draw now. Timers count from the job's end, so
@@ -70,7 +76,7 @@
   function xhVisible(now) {
     var vis = [], hid = 0;
     xhJobs.forEach(function (j) {
-      if (xhDismissed[j.id]) return;
+      if (xhDismissed[j.id] || xhSkipSyncAgent(j)) return;
       if (!xhEnded(j) || xhAttn(j) || now - xhEndedAt(j) < XH_FADE_MS) vis.push(j);
       else hid++;
     });
@@ -241,7 +247,7 @@
     clearTimeout(xhFadeTimer);
     var next = 0;
     xhJobs.forEach(function (j) {
-      if (!xhEnded(j) || xhDismissed[j.id]) return;
+      if (!xhEnded(j) || xhDismissed[j.id] || xhSkipSyncAgent(j)) return;
       var at = xhEndedAt(j), cand = [at + XH_PIN_MS, at + XH_FADE_MS];
       cand.forEach(function (c) { if (c > now && (!next || c < next)) next = c; });
     });
@@ -301,7 +307,7 @@
       xhAgg.appendChild(xhEl("span", "xst mute", wsT("js.xhud.agg.ended", String(xhHidden))));
       xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(xhHidden)));
       xhShown = [];
-      xhFolded = xhJobs.filter(function (j) { return !xhDismissed[j.id]; });
+      xhFolded = xhJobs.filter(function (j) { return !xhDismissed[j.id] && !xhSkipSyncAgent(j); });
     } else {
       // +N is measured as it will be drawn: the widest count it can show (all
       // jobs, three digits included) with the corner badge a failure adds.

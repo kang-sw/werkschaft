@@ -92,6 +92,7 @@ type execJobView struct {
 	State         string   `json:"state"`
 	Error         string   `json:"error,omitempty"`
 	Origin        string   `json:"origin"`
+	Async         bool     `json:"async,omitempty"`
 	ExitCode      *int     `json:"exit_code,omitempty"`
 	Signal        *int     `json:"signal,omitempty"`
 	StartedAt     int64    `json:"started_at,omitempty"`
@@ -107,7 +108,7 @@ type execJobView struct {
 
 func execJobViewOf(s execjob.HostedSummary) execJobView {
 	return execJobView{
-		ID: s.ID, Tool: s.Tool, Command: s.Command, Cwd: s.Cwd, State: s.State, Error: s.Error, Origin: s.Origin,
+		ID: s.ID, Tool: s.Tool, Command: s.Command, Cwd: s.Cwd, State: s.State, Error: s.Error, Origin: s.Origin, Async: s.Async,
 		ExitCode: s.ExitCode, Signal: s.Signal, StartedAt: s.StartedAt, EndedAt: s.EndedAt, Written: s.Written,
 		StoppedByUser: s.StoppedByUser, StopNotice: s.StopNotice,
 	}

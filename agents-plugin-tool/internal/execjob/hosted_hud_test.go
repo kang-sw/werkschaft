@@ -1240,3 +1240,66 @@ func TestHostedRunningAgentOwnersAndTreeOps(t *testing.T) {
 	fx.holders.exit(leadUser.HolderID, 0)
 	fx.holders.exit(peerAgent.HolderID, 0)
 }
+
+// TestHostedSummaryAsyncReflectsNotify verifies HostedSummary.Async mirrors
+// row.Notify: false for foreground jobs that finish within Window, true for
+// explicit Async launches and jobs converted past Window, and preserved across
+// a daemon restart over the same store.
+func TestHostedSummaryAsyncReflectsNotify(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+
+	// 1. Synchronous job that exits within the wait window -> Async == false.
+	syncSpawned := make(chan string, 1)
+	fx.holders.onSpawn = func(id string) {
+		select {
+		case syncSpawned <- id:
+		default:
+		}
+	}
+	go func() {
+		hid := <-syncSpawned
+		fx.holders.exit(hid, 0)
+	}()
+	syncView, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "echo hi", Command: "echo hi"})
+	if err != nil || syncView.Outcome != OutcomeDone {
+		t.Fatalf("sync launch = %+v, %v", syncView, err)
+	}
+	fx.holders.onSpawn = nil
+
+	// 2. Explicit async job -> Async == true.
+	asyncView := fx.asyncJob(HostedLaunch{Display: "sleep 10", Command: "sleep 10"})
+	fx.holders.exit(asyncView.HolderID, 0)
+	eventuallyExec(t, "async exit", func() bool { g, _ := fx.h.Get("lead", asyncView.ID); return g.Terminal() })
+
+	// 3. Foreground job that outlives its Window and converts -> Async == true.
+	convView, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "sleep 20", Command: "sleep 20", Window: 20 * time.Millisecond})
+	if err != nil || convView.Outcome != OutcomeConverted {
+		t.Fatalf("converted launch = %+v, %v", convView, err)
+	}
+	fx.holders.exit(convView.HolderID, 0)
+	eventuallyExec(t, "converted exit", func() bool { g, _ := fx.h.Get("lead", convView.ID); return g.Terminal() })
+
+	check := func(phase string) {
+		t.Helper()
+		byID := map[string]HostedSummary{}
+		for _, s := range fx.h.Jobs("lead") {
+			byID[s.ID] = s
+		}
+		if len(byID) != 3 {
+			t.Fatalf("%s: jobs = %+v, want 3", phase, byID)
+		}
+		if byID[syncView.ID].Async {
+			t.Fatalf("%s: sync job Async = true, want false: %+v", phase, byID[syncView.ID])
+		}
+		if !byID[asyncView.ID].Async {
+			t.Fatalf("%s: async job Async = false, want true: %+v", phase, byID[asyncView.ID])
+		}
+		if !byID[convView.ID].Async {
+			t.Fatalf("%s: converted job Async = false, want true: %+v", phase, byID[convView.ID])
+		}
+	}
+
+	check("live")
+	fx.open(time.Second) // restart over the same store; row.Notify is durable
+	check("restarted")
+}
