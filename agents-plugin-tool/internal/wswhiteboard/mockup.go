@@ -26,6 +26,12 @@ const (
 	// mockup bundle LRU cache.
 	MockupLRUMaxBytes int64 = 64 << 20
 
+	// mockupMaxZipBytes caps raw compressed zip bytes before DecodeMockupZip
+	// enforces MockupMaxFiles and MockupMaxBundleBytes on inflated members.
+	// 1 MiB of headroom covers worst-case zip headers, long relative paths,
+	// and deflate stored-block framing across 256 incompressible files.
+	mockupMaxZipBytes = MockupMaxBundleBytes + (1 << 20)
+
 	mockupArchivePrefix = "_mockups/"
 )
 
@@ -480,7 +486,7 @@ func readLegacyMockupBundles(dir string, state *State) (map[string]MockupBundle,
 		if err != nil || !linfo.Mode().IsRegular() {
 			continue
 		}
-		if linfo.Size() > MockupMaxBundleBytes+(64<<10) {
+		if linfo.Size() > mockupMaxZipBytes {
 			return nil, fmt.Errorf("legacy mockup bundle %s exceeds maximum bundle size", name)
 		}
 		data, err := os.ReadFile(full)

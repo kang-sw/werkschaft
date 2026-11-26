@@ -210,7 +210,7 @@ func extractArchiveWithMockups(zipPath, dir string, extractMockups bool) (map[st
 			if err != nil {
 				return nil, err
 			}
-			if int64(len(data)) > MockupMaxBundleBytes+(64<<10) {
+			if int64(len(data)) > mockupMaxZipBytes {
 				return nil, fmt.Errorf("the archive entry %q exceeds the maximum mockup bundle size", zf.Name)
 			}
 			if mockups == nil {

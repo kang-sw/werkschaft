@@ -505,3 +505,102 @@ func TestMockupPanelRenderingAndFallback(t *testing.T) {
 		t.Fatalf("missing bundle should render fallback note without mockup iframe: %s", htmlMissing)
 	}
 }
+
+func TestMockupMaxCapIncompressibleArchiveRoundTrip(t *testing.T) {
+	// 256 incompressible allowlisted files with ~100-char nested paths totaling
+	// exactly MockupMaxBundleBytes uncompressed exceed 64 KiB of zip container
+	// overhead; export, LoadNewBoardDB, LoadArchive, and backup recovery must
+	// all accept the valid bundle.
+	root := t.TempDir()
+	indexHTML := []byte("<!DOCTYPE html><html><body>max-cap</body></html>")
+	rem := int(MockupMaxBundleBytes) - len(indexHTML)
+	const otherCount = MockupMaxFiles - 1
+	perFile := rem / otherCount
+	extra := rem % otherCount
+
+	files := map[string][]byte{
+		"index.html": indexHTML,
+	}
+	var x uint64 = 0x9e3779b97f4a7c15
+	nextBytes := func(n int) []byte {
+		buf := make([]byte, n)
+		for i := 0; i < n; i++ {
+			x ^= x << 13
+			x ^= x >> 7
+			x ^= x << 17
+			buf[i] = byte(x)
+		}
+		return buf
+	}
+	nestedPrefix := "assets/nested-component-directory-with-long-name/sub-segment-for-header-overhead/file-"
+	for i := 0; i < otherCount; i++ {
+		sz := perFile
+		if i == 0 {
+			sz += extra
+		}
+		rel := nestedPrefix + strings.Repeat("0", 3-len(string(rune('0'+i%10)))) +
+			string([]byte{byte('a' + (i/26)%26), byte('a' + i%26)}) + ".png"
+		files[rel] = nextBytes(sz)
+	}
+	writeMockupFixture(t, root, "mock/maxcap", files)
+
+	state := &State{}
+	outcome, problems := Apply(state, `<wb:topic name="MaxCap"><wb:panel name="m" recap="MaxCap" src="mock/maxcap/index.html" /></wb:topic>`, Env{
+		Now:        time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC),
+		SourceRoot: root,
+	})
+	if len(problems) > 0 {
+		t.Fatalf("Apply problems: %v", problems)
+	}
+	boardDir := filepath.Join(t.TempDir(), "board")
+	db, err := CreateBoardDBWithBundles(boardDir, state, outcome.MockupBundles, BoardDBOptions{})
+	if err != nil {
+		t.Fatalf("CreateBoardDBWithBundles: %v", err)
+	}
+	defer db.Close()
+	if len(outcome.MockupBundles) != 1 || outcome.MockupBundles[0].FileCount != MockupMaxFiles || outcome.MockupBundles[0].ByteSize != MockupMaxBundleBytes {
+		t.Fatalf("unexpected bundle stats: %+v", outcome.MockupBundles)
+	}
+	if int64(len(outcome.MockupBundles[0].Zip)) <= MockupMaxBundleBytes+(64<<10) {
+		t.Fatalf("expected incompressible 256-file zip (%d bytes) to exceed 8MiB+64KiB so the regression is genuinely exercised", len(outcome.MockupBundles[0].Zip))
+	}
+
+	archiveBytes, err := db.ExportArchive()
+	if err != nil {
+		t.Fatalf("ExportArchive: %v", err)
+	}
+	zipPath := filepath.Join(t.TempDir(), "maxcap.zip")
+	if err := os.WriteFile(zipPath, archiveBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// LoadNewBoardDB round-trip.
+	freshDir := filepath.Join(t.TempDir(), "fresh")
+	db2, _, err := LoadNewBoardDB(freshDir, zipPath, BoardDBOptions{})
+	if err != nil {
+		t.Fatalf("LoadNewBoardDB: %v", err)
+	}
+	defer db2.Close()
+	got, ok, err := db2.ReadMockupBundle("e1")
+	if err != nil || !ok || got.SHA256 != outcome.MockupBundles[0].SHA256 {
+		t.Fatalf("LoadNewBoardDB ReadMockupBundle = (%+v, %v, %v)", got, ok, err)
+	}
+
+	// LoadArchive round-trip + backup folder recovery via OpenBoardDB.
+	backupDir, _, err := db2.LoadArchive(zipPath, time.Date(2026, 11, 26, 13, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("LoadArchive: %v", err)
+	}
+	if backupDir == "" {
+		t.Fatal("expected backup dir from LoadArchive")
+	}
+	backupDB, err := OpenBoardDB(backupDir, nil, BoardDBOptions{})
+	if err != nil {
+		t.Fatalf("OpenBoardDB(backupDir): %v", err)
+	}
+	defer backupDB.Close()
+	gotBackup, ok, err := backupDB.ReadMockupBundle("e1")
+	if err != nil || !ok || gotBackup.SHA256 != outcome.MockupBundles[0].SHA256 {
+		t.Fatalf("backup OpenBoardDB ReadMockupBundle = (%+v, %v, %v)", gotBackup, ok, err)
+	}
+}
