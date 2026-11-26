@@ -12,6 +12,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3fb999ce54465b58
 sage-review-completeness-reviewed: 3fb999ce54465b58
+completed: 2026-11-27
 ---
 
 # Lazy-Loaded Pure-VRM Companion Runtime, Procedural 2-Bone IK / 3D Props & Bottom-Right Bust Dock
@@ -187,3 +188,24 @@ Build on Phase 1's landed VRM renderer to replace simple Euler arm presets with 
    - The Phase 1 iterate-all-12-scenarios test still passes, and every scenario left as a no-op after this phase is declared as such in the director vocabulary table.
    - Headless Chromium visual verification across both VRM 0.x and VRM 1.0 avatars exercising `typing` (smartphone IK), `subagent_dispatch`/`subagent_return` (3D drone + `lookAt`), `thinking` (coffee), `wave`, `point`, and `oo`, confirming the projected bounds of both hands and every prop stay within the `240×280` dock canvas rect inset by 4 px on every captured frame with 0 console/page errors, compared side by side against `ai-docs/assets/mockups/261126/companion-vrm-spike/`.
    - Windows WebView2 smoke & idle CPU/GPU/native-memory measurement (`ai-docs/manuals/performance.md`, `261123-bug-ws-dashboard-webview-idle-cpu`) confirming active 30 fps, idle 6 fps throttle, and hidden 0 fps pause hold within the same tolerances as Phase 1, with native memory after 10 VRM/2D pack switches within 10% of the post-warm-up baseline.
+
+### Result (5ee670eb) - 2026-11-27
+
+Landed Phase 2 across commits `f7232b20` and `5ee670eb`:
+
+- **2-bone analytical arm IK & finger presets (`assets/dashboard-companion-vrm-ik.js`):** Implemented pure analytical 2-bone shoulder-elbow-hand IK (`solveTwoBoneArmIK` + `createArmIKSolver`) with elbow pole vectors, VRM 0.x/1.0 world-space parity (matching `VRMUtils.rotateVRM0` / `R_y(π)`), zero-allocation hot-path scratch pools (`createIKScratch`), `syncArmFromCurrentBones` / `syncFingersFromCurrentBones` transitions, and 5 VRM humanoid finger presets (`relaxed`, `open`, `hold_phone`, `point`, `cup`) with graceful fallback when finger bones are absent.
+- **Procedural 3D toon props, IK gestures & director vocabulary (`assets/dashboard-companion-vrm-props.js`, `companion_director.go`, `pages.go`):** Added lightweight procedural Three.js toon props attached to IK hand targets / scene curves — smartphone (`typing`/`working_tatata`, two-hand grip + tap motion + screen bounce light), quad-rotor subagent drone (`subagent_dispatch`/`subagent_return`, palm liftoff, spinning rotors, 3D cubic bezier flight + `vrm.lookAt` world-position tracking), coffee mug + rising steam (`thinking`/`coffee`), and mail envelope (`mail_send`/`mailbox_bonk`) — plus IK-framed `wave`, `point`, `headrub`, `cup_hands`, `perched`, `dangle`, and `oo`, camera-frustum 4 px inset clamping (`clampWorldToInset`), and `getProjectedBounds()`. Extended `companion_director.go` (`vrmDirectorGestures`, `vrmDirectorProps`, `vrmPhase2Capabilities`) so all 14 built-in scenarios resolve cleanly (`mode: "full"`), updated `pages.go` + `asset_source_test.go`, and wired `markVrmActivity()` on incoming commands in `dashboard-companion-stage.js`.
+- **Optional `.vrma` playback (`assets/dashboard-companion-vrm.js`):** Enabled `C.vrmProps.enableVrma` using `VRMAnimationLoaderPlugin` + `createVRMAnimationClip`, hiding active 3D props/light/`lookAt` during `.vrma` playback, negative-caching failed/empty `.vrma` fetches (cleared on `disposeVrmOnly`), guarding post-`parseAsync` disposal, and handing back cleanly to the procedural rig without mixer overwrite or snapping.
+- **Verification & review:**
+  - `GOOS=windows go vet ./...`: pass.
+  - `node --test internal/wsdashboard/frontend-companion*.test.js internal/wsdashboard/frontend-settings.test.js`: 123/123 pass (all 14 built-in scenarios resolve `mode === "full"`, real-THREE 2-bone IK VRM 0.x/1.0 parity, 5 finger presets + missing-finger fallback, all 3D toon props + `headrub`/`cup_hands`/`perched`/`dangle` bounds, `IK -> stand -> IK` arm cache sync, `.vrma` prop hide & negative cache).
+  - Go companion/VRM/director/asset tests + macOS headless Chromium `TestCompanionVrmBrowser` (synthetic VRM 1.0 with finger bones + VRM 0.x without finger bones): pass (`phase: "2"`, `packsTested: ["vrm1","vrm0"]`, `activeFps: 30.11`, `idleFps: 5.99`, `hiddenFrames: 0`, `switchCycles: 10`, `vrmRuntimeRequests: 1`, `vrmModelRequests: 12`, all Phase 2 scenarios `allWithinInset4: true`, 0 console/page errors).
+  - Side-by-side visual comparison of macOS Chromium Phase 2 captures (`typing`, `subagent_dispatch`, `thinking`, `wave`, `point`, `oo`, `mail_send` across VRM 1.0 & 0.x) against `ai-docs/assets/mockups/261126/companion-vrm-spike/`: match (hands and 3D props cleanly framed within 4 px inset on the borderless Digital Dissolve bust dock).
+  - Windows 11 host (`ki608@192.168.33.6`) live `TestCompanionVrmBrowser` run via cross-compiled `wsdashboard.test.exe` and headless Edge CDP (`Edg/158.0.4370.33`, identical engine build to installed `msedgewebview2.exe 158.0.4370.33`, hardware `ANGLE (AMD, AMD Radeon PRO Graphics Direct3D11)`): pass (`activeFps: 30.12`, `idleFps: 5.97`, `hiddenFrames: 0`, idle CPU renderer `0%` / GPU `1.73%` / tree `12.97%`, hidden CPU renderer `0%` / GPU `0%` / tree `0.56%`, native `PrivateMemorySize64` after 10 VRM↔2D switches `382.50 MiB -> 390.86 MiB` = `+2.18%` [within `<= 10%` gate], working set `745.94 MiB -> 751.32 MiB` = `+0.72%`, 0 errors; temporary Windows staging dir cleaned up).
+  - Independent `code-review-lite` over `2bc2dce..f7232b20` (`1bb0062e-01-findings.md`): 0 Critical, 4 Important, 3 Minor; all 7 fixed in one pass and verified in `5ee670eb`.
+- **Decisions:** Added `markVrmActivity()` inside `dashboard-companion-stage.js` `command()` so director commands immediately exit 6 fps idle mode when transitioning poses; executed the Windows 11 measurement against `msedge.exe 158.0.4370.33` (same Chromium/Edge engine build as installed `msedgewebview2.exe 158.0.4370.33`) because standalone `msedgewebview2.exe` requires a Win32 host window in Session 0 SSH.
+
+
+## Resolution (2026-11-27)
+
+Completed Phase 1 (lazy VRM runtime bundle, auth-gated `/s/` route, VRM 0.x/1.0 renderer & 7 expressions, bottom-right Digital Dissolve bust dock, right-column avoidance, adaptive 30/6/0 fps & context-loss recovery) and Phase 2 (procedural 2-bone analytical arm IK, 5 finger presets, 3D toon props & director vocabulary, optional `.vrma` cross-fade playback, macOS Chromium + Windows 11 D3D11 Edge/WebView2 158.0.4370.33 smoke/FPS/CPU/10x-switch native-memory verification).
