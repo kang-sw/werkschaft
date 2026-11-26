@@ -141,6 +141,27 @@ const captureDir = process.env.WS_QUESTION_CARDS_CAPTURE_DIR || '';
       return a && a.textContent === 'no selected' && a.classList.contains('st-staged-no');
     });
 
+    // Memo-only staged state on item 2 (no pick), then clear back to unanswered.
+    await page.evaluate(() => {
+      const note = document.querySelector('#r-board #item-2 textarea.note');
+      note.hidden = false;
+      note.value = 'check caching later';
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForFunction(() => {
+      const a2 = document.querySelector('[data-entry="e-001"] .wbupdate-qitem[data-wb-qitem="2"] .wbupdate-ans');
+      return a2 && a2.textContent === 'note: check caching later' && a2.classList.contains('st-staged');
+    });
+    await page.evaluate(() => {
+      const note = document.querySelector('#r-board #item-2 textarea.note');
+      note.value = '';
+      note.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForFunction(() => {
+      const a2 = document.querySelector('[data-entry="e-001"] .wbupdate-qitem[data-wb-qitem="2"] .wbupdate-ans');
+      return a2 && a2.textContent === 'unanswered' && a2.classList.contains('st-open');
+    });
+
     // Bulk ack (#ack-all) stages technical (2) and announced (3) to ok without attr mutation.
     await page.evaluate(() => {
       const all = document.querySelector('#r-board #ack-all');
@@ -153,8 +174,13 @@ const captureDir = process.env.WS_QUESTION_CARDS_CAPTURE_DIR || '';
       return a2 && a3 && a2.textContent === 'ok selected' && a3.textContent === 'ok selected';
     });
 
-    // Unstage item 2 via composer chip remove (if present) or checkbox uncheck -> returns to unanswered.
-    await page.locator('#r-board #item-2 label.ack input[type="checkbox"]').click();
+    // Unstage item 2 via composer chip remove button (dropChip -> syncWbUpdateItems) when present, else checkbox.
+    const unchipBtn = page.locator('#cchips .achip .unchip[data-unchip="02"], #cchips .achip .unchip[data-unchip="2"]').first();
+    if (await unchipBtn.count() > 0) {
+      await unchipBtn.click();
+    } else {
+      await page.locator('#r-board #item-2 label.ack input[type="checkbox"]').click();
+    }
     await page.waitForFunction(() => {
       const a2 = document.querySelector('[data-entry="e-001"] .wbupdate-qitem[data-wb-qitem="2"] .wbupdate-ans');
       return a2 && a2.textContent === 'unanswered';
@@ -215,10 +241,16 @@ const captureDir = process.env.WS_QUESTION_CARDS_CAPTURE_DIR || '';
     assert.equal(liveHydrated.ok, true, 'live-inserted card hydrates immediately');
     assert.ok(liveHydrated.ans.startsWith('✓'), 'live-inserted card reflects settled state');
 
-    // Click capsule jumps to board item (URL hash or highlight / no error in .wbupdate-status).
+    // Click capsule jumps to board item (focuses target on #r-board and leaves .wbupdate-status empty).
     await page.locator('[data-entry="e-001"] .wbupdate-cap[data-wb-item-id="4"]').click();
-    const statusAfterClick = await page.evaluate(() => document.querySelector('[data-entry="e-001"] .wbupdate-status')?.textContent || '');
-    assert.equal(statusAfterClick, '', 'clicking valid capsule jumps without missing error');
+    const jumpState = await page.evaluate(() => ({
+      status: document.querySelector('[data-entry="e-001"] .wbupdate-status')?.textContent || '',
+      focusedId: document.activeElement ? document.activeElement.id : '',
+      inBoard: !!(document.activeElement && document.activeElement.closest('#r-board'))
+    }));
+    assert.equal(jumpState.status, '', 'clicking valid capsule jumps without missing error');
+    assert.equal(jumpState.inBoard, true, `clicking valid capsule focuses target on #r-board: ${JSON.stringify(jumpState)}`);
+    assert.equal(jumpState.focusedId, 'item-4', `clicking valid capsule focuses #item-4: ${JSON.stringify(jumpState)}`);
 
     // Verify ZERO localStorage ws.wb.holds.* reads from dashboard-conversation.js.
     const badReads = await page.evaluate(() =>
