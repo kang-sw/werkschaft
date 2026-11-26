@@ -824,3 +824,11 @@ func TestUserCommandRootScopedSSEFanOut(t *testing.T) {
 		t.Fatalf("foreign-root session received usercmd: %v", g)
 	}
 }
+
+// TestUserCommandClientSuites runs the user command client suites under Node:
+// the v2 popover contracts and the compact two-zone tiles (one-line $ collapse,
+// the bash-highlighted overlay editor, inline rename, and its CSS contract).
+func TestUserCommandClientSuites(t *testing.T) {
+	runNodeTestSuite(t, "testdata/composer-usercmd-v2.test.cjs")
+	runNodeTestSuite(t, "testdata/composer-usercmd-compact.test.cjs")
+}

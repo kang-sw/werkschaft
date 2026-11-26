@@ -1,9 +1,13 @@
 // User commands v2: compact always-visible .cbadges trigger button beside
-// #sbadge, floating borderless popover above #composer, 3-line inline-editable
-// cards keyed by source+id, 1s press-and-hold confirmation (WsHoldConfirm)
-// for Run / Ask Agent / Delete, single-click Save / Revert, inline Create form,
-// and direct composer-preserving Ask Agent dispatch.
+// #sbadge, floating borderless popover above #composer, two-zone tiles keyed
+// by source+id (header band: scope, inline-editable name, actions; body well:
+// a one-line $ preview that expands into the bash-highlighted overlay editor
+// from dashboard-composer-ucmd-editor.js, plus the prompt note), 1s
+// press-and-hold confirmation (WsHoldConfirm) for Run / Ask Agent / Delete,
+// single-click Save / Revert, inline Create form, and direct
+// composer-preserving Ask Agent dispatch.
   var ucmdEnabled = cexecEnabled;
+  var ucmdExpanded = "", ucmdFormLine = null;
   var ucmdList = [], ucmdRev = "", ucmdDirty = false, ucmdDenied = false;
   var ucmdOpen = false, ucmdAdding = false, ucmdFetching = false;
   var ucmdBusy = Object.create(null), ucmdDrafts = Object.create(null);
@@ -29,63 +33,10 @@
     ask: "js.ucmd.hold.early.ask",
     del: "js.ucmd.hold.early.del"
   };
-  var UCMD_SVG_NS = "http://www.w3.org/2000/svg";
 
   function ucmdKey(c) {
     return (c && c.source ? c.source : "agent") + ":" + (c ? c.id : "");
   }
-  function ucmdSvg(w, h, vb, parts) {
-    var s = doc.createElementNS(UCMD_SVG_NS, "svg");
-    s.setAttribute("width", String(w));
-    s.setAttribute("height", String(h));
-    s.setAttribute("viewBox", vb);
-    s.setAttribute("fill", "none");
-    s.setAttribute("aria-hidden", "true");
-    parts.forEach(function (p) {
-      var el = doc.createElementNS(UCMD_SVG_NS, p.t);
-      Object.keys(p.a).forEach(function (k) { el.setAttribute(k, p.a[k]); });
-      s.appendChild(el);
-    });
-    return s;
-  }
-  function ucmdTermIcon(sz) {
-    return ucmdSvg(sz, sz, "0 0 16 16", [
-      { t: "path", a: { d: "M3 5l3 3-3 3", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round" } },
-      { t: "path", a: { d: "M8 11h5", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round" } }
-    ]);
-  }
-  function ucmdPlayIcon() {
-    return ucmdSvg(12, 12, "0 0 16 16", [
-      { t: "path", a: { d: "M4.5 3.3l8.5 4.7-8.5 4.7V3.3z", fill: "currentColor" } }
-    ]);
-  }
-  function ucmdAskIcon() {
-    return ucmdSvg(13, 13, "0 0 16 16", [
-      { t: "path", a: { d: "M4 12L12 4M6 4h6v6", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round" } }
-    ]);
-  }
-  function ucmdSaveIcon() {
-    return ucmdSvg(13, 13, "0 0 16 16", [
-      { t: "path", a: { d: "M3.2 2.5h7.8l2.5 2.5v8.5a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8V3.3a.8.8 0 0 1 .8-.8z", stroke: "currentColor", "stroke-width": "1.4", "stroke-linejoin": "round" } },
-      { t: "path", a: { d: "M5 2.5v3.6h5V2.5M5 13.5V9.2h6v4.3", stroke: "currentColor", "stroke-width": "1.4", "stroke-linejoin": "round" } }
-    ]);
-  }
-  function ucmdDelIcon() {
-    return ucmdSvg(12, 12, "0 0 16 16", [
-      { t: "path", a: { d: "M4 4l8 8M12 4l-8 8", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round" } }
-    ]);
-  }
-  function ucmdPromptIcon() {
-    return ucmdSvg(11, 11, "0 0 16 16", [
-      { t: "path", a: { d: "M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6.5l-3 2.5v-2.5h-1a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z", stroke: "currentColor", "stroke-width": "1.4", "stroke-linejoin": "round" } }
-    ]);
-  }
-  function ucmdRevertIcon() {
-    return ucmdSvg(12, 12, "0 0 16 16", [
-      { t: "path", a: { d: "M4 6.5A4.8 4.8 0 1 1 4.2 10.5M4 3v3.8h3.8", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round" } }
-    ]);
-  }
-
   // The attempt in flight per command (submission id, displayed revision,
   // effective line and cwd) is stored in sessionStorage and cleared once the
   // daemon settles it. Keyed by source:id so agent and user scopes never collide.
@@ -145,10 +96,12 @@
         o.textContent = wsT("js.ucmd.form.opt");
         lbl.appendChild(o);
       }
-      var inp = doc.createElement(kind === "ta" ? "textarea" : "input");
+      var inp = doc.createElement(kind === "ta" || kind === "code" ? "textarea" : "input");
       if (kind === "ta") {
         inp.className = "ucmd-ta";
         inp.rows = 2;
+      } else if (kind === "code") {
+        inp.className = "ucmd-form-code";
       } else {
         inp.type = "text";
         inp.className = kind === "mono" ? "ucmd-input is-mono" : "ucmd-input";
@@ -159,7 +112,22 @@
       inp.autocomplete = "off";
       inp.spellcheck = false;
       wrap.appendChild(lbl);
-      wrap.appendChild(inp);
+      if (kind !== "code") {
+        wrap.appendChild(inp);
+        return wrap;
+      }
+      // The new command's shell line uses the same highlighted editor as
+      // the tiles; Enter submits, Shift+Enter adds a line.
+      var ed = ucmdFormLine = ucmdCodeEditor(inp);
+      inp.addEventListener("input", function () { ucmdCodePaint(ed); });
+      inp.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+          ev.preventDefault();
+          ucmdCreateSubmit();
+        }
+      });
+      ucmdCodePaint(ed);
+      wrap.appendChild(ed.wrap);
       return wrap;
     }
 
@@ -168,7 +136,7 @@
     grid.appendChild(makeField("label", wsT("js.ucmd.form.label"), false, wsT("js.ucmd.form.label.ph"), "text", 80));
     grid.appendChild(makeField("cwd", wsT("js.ucmd.form.cwd"), true, wsT("js.ucmd.form.cwd.ph"), "mono", 256));
     form.appendChild(grid);
-    form.appendChild(makeField("line", wsT("js.ucmd.form.line"), false, wsT("js.ucmd.form.line.ph"), "mono", 2048));
+    form.appendChild(makeField("line", wsT("js.ucmd.form.line"), false, wsT("js.ucmd.form.line.ph"), "code", 2048));
     form.appendChild(makeField("prompt", wsT("js.ucmd.form.prompt"), true, wsT("js.ucmd.form.prompt.ph"), "ta", 2048));
 
     ucmdFormErr = doc.createElement("div");
@@ -348,17 +316,27 @@
       });
     }
 
+    // A press anywhere in the popover outside the open $ editor folds it back
+    // to its one-line preview. Action buttons are exempt so a hold never
+    // shifts the tiles under the pointer.
+    ucmdPop.addEventListener("mousedown", function (ev) {
+      var node = ucmdExpanded && ucmdNodes[ucmdExpanded], t = ev.target;
+      if (!node || node.cmdBox.contains(t)) return;
+      if (t && typeof t.closest === "function" && t.closest(".ucmd-ibtn")) return;
+      ucmdCollapse(false);
+    });
     doc.addEventListener("mousedown", function (ev) {
       if (!ucmdOpen || ucmdHoldBusy()) return;
       if (ucmdPop.contains(ev.target) || ucmdBadge.contains(ev.target)) return;
       ucmdClosePopover(false);
     });
     doc.addEventListener("keydown", function (ev) {
-      if (!ucmdOpen || ev.key !== "Escape") return;
+      if (!ucmdOpen || ev.key !== "Escape" || ev.isComposing) return;
       if (ucmdHoldBusy()) return;
       ev.preventDefault();
       ev.stopPropagation();
-      if (ucmdAdding) ucmdSetAdding(false);
+      if (ucmdExpanded) ucmdCollapse(true);
+      else if (ucmdAdding) ucmdSetAdding(false);
       else ucmdClosePopover(true);
     });
     ucmdSyncHud();
@@ -377,6 +355,7 @@
   function ucmdClosePopover(refocus) {
     if (!ucmdOpen) return;
     if (ucmdHoldControl) ucmdHoldControl.cancel();
+    ucmdCollapse(false);
     ucmdOpen = false;
     ucmdAdding = false;
     if (ucmdPop) ucmdPop.hidden = true;
@@ -406,13 +385,26 @@
     ucmdListEl.hidden = empty;
   }
 
+  // ucmdSaved is a field's stored value as its editor shows it before any
+  // edit; a command without a label shows (and renames from) its id.
+  function ucmdSaved(c, field) {
+    if (field === "label") return c.label || c.id || "";
+    return c[field] || "";
+  }
   function ucmdEffective(c) {
     var draft = ucmdDrafts[ucmdKey(c)] || {};
-    var savedLine = c.line || "", savedPrompt = c.prompt || "";
+    var savedLine = c.line || "", savedPrompt = c.prompt || "", savedLabel = ucmdSaved(c, "label");
     var line = draft.line === undefined ? savedLine : draft.line;
     var prompt = draft.prompt === undefined ? savedPrompt : draft.prompt;
-    var cmdDirty = line !== savedLine, prDirty = prompt !== savedPrompt;
-    return { line: line, prompt: prompt, cmdDirty: cmdDirty, prDirty: prDirty, anyDirty: cmdDirty || prDirty };
+    var label = draft.label === undefined ? savedLabel : draft.label;
+    var cmdDirty = line !== savedLine, prDirty = prompt !== savedPrompt, lbDirty = label !== savedLabel;
+    // anyDirty marks the Ask/Run payload as edited (line or prompt); a pending
+    // rename only needs Save, so saveDirty adds the label.
+    return {
+      line: line, prompt: prompt, label: label,
+      cmdDirty: cmdDirty, prDirty: prDirty, lbDirty: lbDirty,
+      anyDirty: cmdDirty || prDirty, saveDirty: cmdDirty || prDirty || lbDirty
+    };
   }
 
   function ucmdHoldCurrent(hold) {
@@ -438,221 +430,12 @@
     var c = ucmdByKey[key];
     if (!c || ucmdBusy[key] === "save") return;
     var draft = ucmdDrafts[key] || {};
-    if (value === ucmdEditorValue(c[field] || "", multi)) delete draft[field];
+    if (value === ucmdEditorValue(ucmdSaved(c, field), multi)) delete draft[field];
     else draft[field] = value;
-    if (draft.line === undefined && draft.prompt === undefined) delete ucmdDrafts[key];
+    if (draft.line === undefined && draft.prompt === undefined && draft.label === undefined) delete ucmdDrafts[key];
     else ucmdDrafts[key] = draft;
     ucmdSyncDirty(key);
     ucmdCheckHold();
-  }
-
-  function ucmdSyncDirty(key) {
-    var c = ucmdByKey[key], node = ucmdNodes[key];
-    if (!c || !node) return;
-    var eff = ucmdEffective(c);
-    var cmdDirty = eff.cmdDirty, prDirty = eff.prDirty, any = eff.anyDirty;
-    var saving = ucmdBusy[key] === "save";
-    node.el.classList.toggle("is-dirty", any);
-    node.cmdBar.classList.toggle("is-dirty", cmdDirty);
-    node.cmdRev.classList.toggle("is-dirty", cmdDirty);
-    node.cmdRev.disabled = saving || !cmdDirty;
-    node.prBar.classList.toggle("is-dirty", prDirty);
-    node.prRev.classList.toggle("is-dirty", prDirty);
-    node.prRev.disabled = saving || !prDirty;
-  }
-
-  function ucmdBuildCard(c) {
-    var key = ucmdKey(c);
-    var multi = (c.line || "").indexOf("\n") >= 0;
-    var el = doc.createElement("div");
-    el.className = "ucmd-card";
-    el.setAttribute("role", "listitem");
-    el.setAttribute("data-ucmd-key", key);
-    el.setAttribute("data-ucmd", c.id);
-    el.setAttribute("data-source", c.source || "agent");
-
-    // Line 1: source pill + label + dirty dot + cwd + 26x26 action icons
-    var line1 = doc.createElement("div");
-    line1.className = "ucmd-line1";
-    var headL = doc.createElement("div");
-    headL.className = "ucmd-head-l";
-    var srcEl = doc.createElement("span");
-    srcEl.className = "ucmd-src";
-    var titleEl = doc.createElement("span");
-    titleEl.className = "ucmd-title";
-    var dot = doc.createElement("span");
-    dot.className = "ucmd-dirty-dot";
-    dot.title = wsT("js.ucmd.dirty.dot");
-    var cwdEl = doc.createElement("span");
-    cwdEl.className = "ucmd-cwd";
-    headL.appendChild(srcEl);
-    headL.appendChild(titleEl);
-    headL.appendChild(dot);
-    headL.appendChild(cwdEl);
-
-    var acts = doc.createElement("div");
-    acts.className = "ucmd-acts";
-    function makeAct(cls, act, iconEl, hold) {
-      var b = doc.createElement("button");
-      b.type = "button";
-      b.className = "ucmd-ibtn " + cls + (hold ? " is-hold" : "");
-      b.setAttribute("data-act", act);
-      b.setAttribute("data-ucmd-key", key);
-      b.appendChild(iconEl);
-      return b;
-    }
-    var runBtn = makeAct("ucmd-ibtn-run", "run", ucmdPlayIcon(), true);
-    var askBtn = makeAct("ucmd-ibtn-ask", "ask", ucmdAskIcon(), true);
-    var saveBtn = makeAct("ucmd-ibtn-save", "save", ucmdSaveIcon(), false);
-    saveBtn.title = wsT("js.ucmd.save.title");
-    saveBtn.setAttribute("aria-label", wsT("js.ucmd.save.title"));
-    saveBtn.addEventListener("click", function () {
-      var cur = ucmdByKey[key];
-      if (cur) ucmdSave(cur);
-    });
-    var delBtn = makeAct("ucmd-ibtn-del", "del", ucmdDelIcon(), true);
-    acts.appendChild(runBtn);
-    acts.appendChild(askBtn);
-    acts.appendChild(saveBtn);
-    acts.appendChild(delBtn);
-
-    line1.appendChild(headL);
-    line1.appendChild(acts);
-    el.appendChild(line1);
-
-    // Line 2: always-editable shell command bar ($ + input/textarea + ↺)
-    var cmdBar = doc.createElement("div");
-    cmdBar.className = "ucmd-inline-bar";
-    var cmdGlyph = doc.createElement("span");
-    cmdGlyph.className = "ucmd-glyph";
-    cmdGlyph.textContent = "$";
-    var cmdIn = doc.createElement(multi ? "textarea" : "input");
-    if (multi) {
-      cmdIn.className = "ucmd-inline-input is-cmd is-multi";
-      cmdIn.rows = Math.min(4, (c.line || "").split("\n").length);
-    } else {
-      cmdIn.type = "text";
-      cmdIn.className = "ucmd-inline-input is-cmd";
-    }
-    cmdIn.placeholder = wsT("js.ucmd.placeholder.cmd");
-    cmdIn.spellcheck = false;
-    cmdIn.autocomplete = "off";
-    cmdIn.addEventListener("input", function () { ucmdEdit(key, "line", cmdIn.value, multi); });
-    cmdIn.addEventListener("keydown", function (ev) {
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
-        ev.preventDefault();
-        runBtn.focus();
-        noteWarn(wsT("js.ucmd.enter.hint"));
-      }
-    });
-    var cmdRev = doc.createElement("button");
-    cmdRev.type = "button";
-    cmdRev.className = "ucmd-rev-btn";
-    cmdRev.title = wsT("js.ucmd.revert.cmd");
-    cmdRev.setAttribute("aria-label", wsT("js.ucmd.revert.cmd"));
-    cmdRev.disabled = true;
-    cmdRev.appendChild(ucmdRevertIcon());
-    cmdRev.addEventListener("click", function () {
-      var cur = ucmdByKey[key];
-      if (!cur) return;
-      cmdIn.value = ucmdEditorValue(cur.line || "", multi);
-      ucmdEdit(key, "line", cmdIn.value, multi);
-      noteOk(wsT("js.ucmd.reverted.cmd", cur.label));
-    });
-    cmdBar.appendChild(cmdGlyph);
-    cmdBar.appendChild(cmdIn);
-    cmdBar.appendChild(cmdRev);
-    el.appendChild(cmdBar);
-
-    // Line 3: always-editable prompt bar (speech glyph + input + ↺)
-    var prBar = doc.createElement("div");
-    prBar.className = "ucmd-inline-bar";
-    var prGlyph = doc.createElement("span");
-    prGlyph.className = "ucmd-glyph is-prompt";
-    prGlyph.appendChild(ucmdPromptIcon());
-    var prIn = doc.createElement("textarea");
-    prIn.className = "ucmd-inline-input is-prompt";
-    prIn.placeholder = wsT("js.ucmd.placeholder.prompt");
-    prIn.autocomplete = "off";
-    prIn.addEventListener("input", function () {
-      prIn.rows = Math.min(4, prIn.value.split("\n").length);
-      ucmdEdit(key, "prompt", prIn.value, true);
-    });
-    prIn.addEventListener("keydown", function (ev) {
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
-        ev.preventDefault();
-        askBtn.focus();
-        noteWarn(wsT("js.ucmd.enter.hint"));
-      }
-    });
-    var prRev = doc.createElement("button");
-    prRev.type = "button";
-    prRev.className = "ucmd-rev-btn";
-    prRev.title = wsT("js.ucmd.revert.prompt");
-    prRev.setAttribute("aria-label", wsT("js.ucmd.revert.prompt"));
-    prRev.disabled = true;
-    prRev.appendChild(ucmdRevertIcon());
-    prRev.addEventListener("click", function () {
-      var cur = ucmdByKey[key];
-      if (!cur) return;
-      prIn.value = ucmdEditorValue(cur.prompt || "", true);
-      prIn.rows = Math.min(4, prIn.value.split("\n").length);
-      ucmdEdit(key, "prompt", prIn.value, true);
-      noteOk(wsT("js.ucmd.reverted.prompt", cur.label));
-    });
-    prBar.appendChild(prGlyph);
-    prBar.appendChild(prIn);
-    prBar.appendChild(prRev);
-    el.appendChild(prBar);
-
-    return {
-      key: key, multi: multi, el: el, srcEl: srcEl, titleEl: titleEl, cwdEl: cwdEl,
-      runBtn: runBtn, askBtn: askBtn, saveBtn: saveBtn, delBtn: delBtn,
-      cmdBar: cmdBar, cmdIn: cmdIn, cmdRev: cmdRev,
-      prBar: prBar, prIn: prIn, prRev: prRev
-    };
-  }
-
-  function ucmdUpdateCard(node, c) {
-    var key = node.key;
-    var src = c.source === "user" ? "user" : "agent";
-    node.el.setAttribute("data-source", src);
-    node.srcEl.className = "ucmd-src " + src;
-    node.srcEl.textContent = wsT(src === "user" ? "js.ucmd.source.user" : "js.ucmd.source.agent");
-    node.titleEl.textContent = c.label || c.id;
-    node.titleEl.title = c.description ? (c.label + " — " + c.description) : (c.label || c.id);
-    if (c.cwd) {
-      node.cwdEl.textContent = c.cwd;
-      node.cwdEl.title = c.cwd;
-      node.cwdEl.hidden = false;
-    } else {
-      node.cwdEl.textContent = "";
-      node.cwdEl.hidden = true;
-    }
-    var busy = !!ucmdBusy[key];
-    node.runBtn.disabled = busy;
-    node.askBtn.disabled = busy;
-    node.saveBtn.disabled = busy;
-    node.delBtn.disabled = busy;
-    node.cmdIn.readOnly = node.prIn.readOnly = ucmdBusy[key] === "save";
-    var rt = wsT("js.ucmd.run.title", c.label || c.id);
-    node.runBtn.title = rt;
-    node.runBtn.setAttribute("aria-label", rt);
-    var at = wsT("js.ucmd.ask.title", c.label || c.id);
-    node.askBtn.title = at;
-    node.askBtn.setAttribute("aria-label", at);
-    var dt = wsT("js.ucmd.remove", c.label || c.id);
-    node.delBtn.title = dt;
-    node.delBtn.setAttribute("aria-label", dt);
-
-    var eff = ucmdEffective(c);
-    var targetLine = ucmdEditorValue(eff.line, node.multi);
-    var targetPrompt = ucmdEditorValue(eff.prompt, true);
-    if (node.cmdIn.value !== targetLine) node.cmdIn.value = targetLine;
-    if (node.prIn.value !== targetPrompt) node.prIn.value = targetPrompt;
-    var rows = Math.min(4, targetPrompt.split("\n").length);
-    if (node.prIn.rows !== rows) node.prIn.rows = rows;
-    ucmdSyncDirty(key);
   }
 
   function ucmdRender() {
@@ -687,18 +470,19 @@
     Object.keys(ucmdDrafts).forEach(function (k) { if (!seen[k]) delete ucmdDrafts[k]; });
     Object.keys(ucmdNodes).forEach(function (k) {
       if (!seen[k]) {
+        if (ucmdExpanded === k) ucmdExpanded = "";
         if (ucmdNodes[k].el.parentNode) ucmdNodes[k].el.parentNode.removeChild(ucmdNodes[k].el);
         delete ucmdNodes[k];
       }
     });
 
+    // Tiles are patched in place by key: single- and multi-line commands
+    // share one editor, so a line gaining a newline keeps focus and expansion.
     for (var j = 0; j < count; j++) {
       var cmd = ucmdList[j];
       var k = ucmdKey(cmd);
-      var wantMulti = (cmd.line || "").indexOf("\n") >= 0;
       var node = ucmdNodes[k];
-      if (!node || node.multi !== wantMulti) {
-        if (node && node.el.parentNode) node.el.parentNode.removeChild(node.el);
+      if (!node) {
         node = ucmdBuildCard(cmd);
         ucmdNodes[k] = node;
       }
@@ -815,9 +599,14 @@
         fCwd.value = "";
         fLine.value = "";
         fPrompt.value = "";
+        if (ucmdFormLine) ucmdCodePaint(ucmdFormLine);
         ucmdSetAdding(false);
+        var before = Object.assign(Object.create(null), ucmdNodes);
         ucmdApply(parsed.body, true);
         noteOk(wsT("js.ucmd.created", label));
+        // The new tile opens with its command expanded and focused.
+        var fresh = Object.keys(ucmdNodes).filter(function (k) { return !before[k]; })[0];
+        if (fresh && ucmdOpen) ucmdExpand(fresh, true);
         return;
       }
       ucmdFormErr.textContent = parsed.msg;
@@ -837,8 +626,13 @@
       noteWarn(wsT("js.ucmd.save.empty"));
       return;
     }
-    if (!eff.anyDirty) return;
+    if (eff.lbDirty && !eff.label.trim()) {
+      noteWarn(wsT("js.ucmd.label.empty"));
+      return;
+    }
+    if (!eff.saveDirty) return;
     var patch = { source: c.source || "agent", revision: c.revision };
+    if (eff.lbDirty) patch.label = eff.label.trim();
     if (eff.cmdDirty) patch.line = eff.line;
     if (eff.prDirty) patch.prompt = eff.prompt;
     ucmdBusy[key] = "save";

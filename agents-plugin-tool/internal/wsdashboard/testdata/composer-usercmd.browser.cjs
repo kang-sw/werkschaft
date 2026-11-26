@@ -1,5 +1,5 @@
 // Run by TestUserCommandBrowser against a live daemon whose launch service is a
-// fake: the v2 user commands trigger, popover, 3-line inline cards, and 1s hold UX in ko and en.
+// fake: the v2 user commands trigger, popover, two-zone tiles with the collapsible $ editor, and 1s hold UX in ko and en.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -92,10 +92,23 @@ async function holdButton(page, locator, ms = 1100) {
       assert.equal(await view.locator('.ucmd-card').count(), 2);
       assert.equal(await view.locator('.ucmd-count').textContent(), t.count);
       const build = view.locator('.ucmd-card[data-ucmd="build"]');
-      assert.equal(await build.locator('.ucmd-title').textContent(), 'Build');
+      assert.equal(await build.locator('.ucmd-title').inputValue(), 'Build');
       assert.equal(await build.locator('.ucmd-inline-input.is-cmd').inputValue(), 'make all');
       assert.equal(await view.locator('.ucmd-card[data-ucmd="test"] .ucmd-inline-input.is-cmd').inputValue(), 'make test\n./run --verbose');
       await shot('list');
+
+      // The $ command rests as a one-line preview and expands in place into
+      // the highlighted editor; Esc folds it back without closing the popover.
+      const testCard = view.locator('.ucmd-card[data-ucmd="test"]');
+      assert.equal(await testCard.locator('.ucmd-cmd-box.is-expanded').count(), 0);
+      assert.ok((await testCard.locator('.ucmd-cmd-row').boundingBox()).height <= 27, 'collapsed $ row stays one line');
+      await testCard.locator('.ucmd-cmd-row').click();
+      await testCard.locator('.ucmd-cmd-box.is-expanded .ucmd-code-ta').waitFor();
+      assert.equal(await testCard.locator('.ucmd-code-hl code').textContent(), 'make test\n./run --verbose');
+      await shot('expanded');
+      await page.keyboard.press('Escape');
+      assert.equal(await testCard.locator('.ucmd-cmd-box.is-expanded').count(), 0);
+      assert.equal(await view.locator('.ucmd-pop:not([hidden])').count(), 1, 'Esc in the editor keeps the popover open');
 
       // Quick click does NOT run and shows reminder toast.
       await build.locator('.ucmd-ibtn-run').click();
@@ -180,6 +193,7 @@ async function holdButton(page, locator, ms = 1100) {
           await saveBlocked;
           await route.continue();
         });
+        await entry.locator('.ucmd-cmd-row').click();
         await line.fill('echo edited');
         await entry.locator('.ucmd-ibtn-save').click();
         const patch = await saveArrived;

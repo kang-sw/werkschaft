@@ -22,7 +22,7 @@ function slice(src, from, to) {
   return src.slice(a, b);
 }
 const pickers = read('dashboard-composer-pickers.js');
-const css = [WB, read('dashboard.css'), read('dashboard-conversation.css'), read('dashboard-exec-hud.css'), read('dashboard-composer-ucmd.css'), read('dashboard-rail.css')].join('\n');
+const css = [WB, read('dashboard.css'), read('dashboard-conversation.css'), read('dashboard-exec-hud.css'), read('dashboard-composer-ucmd.css'), read('dashboard-composer-ucmd-editor.css'), read('dashboard-rail.css')].join('\n');
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body style="margin:0;padding:340px 24px 24px;width:760px">
 <div id="composer" class="composer" data-cexec="1"><div class="cbadges"><button type="button" class="ibadge" id="ibadge" hidden><span class="istop"></span><span class="ilabel">Stop</span></button><span class="sbwrap"><button type="button" class="sbadge" id="sbadge" hidden><span class="spin"></span><span class="slabel"></span><span class="sword">running</span></button><span class="bgbadge" id="bgbadge" hidden><span class="blabel"></span></span><span class="bgbadge" id="monbadge" hidden><span class="blabel"></span></span></span></div><div class="cimgs" id="cimgs"></div><div class="cchips" id="cchips"></div><div class="crow"><div class="cfield"><div class="chl" id="chl"></div><textarea id="ctext" rows="1" placeholder="x"></textarea></div><button type="button" class="csend" id="csend">s</button></div><div class="cfoot"></div></div>
 <button id="after" type="button">after</button></body></html>`;
@@ -30,6 +30,7 @@ const shim = `
 var doc = document, $ = function (id) { return document.getElementById(id); }, q = function (s, r) { return Array.prototype.slice.call((r || doc).querySelectorAll(s)); }, rid = "fx";
 var T = ${JSON.stringify(en)};
 function wsT(k) { var s = T[k] || k; for (var i = 1; i < arguments.length; i++) s = s.replace("{" + (i - 1) + "}", arguments[i]); return s; }
+function wsTn(k, n) { return wsT(k + (n === 1 ? ".one" : ".other"), n); }
 var composer = $("composer"), ctext = $("ctext"), inputMode = "enter", mention = null, slash = null, cmdSel = null;
 var xhPeekEl = null; function xhPeekOpen() { return false; } function xhPeekId() { return ""; } function xhOpenPeek() {} function xhClosePeek() {} function xhAskStop() {} function xhPeekSync() {} function xhPeekJobsChanged() {} function xhStopSettle() {} function xhPeekDestroy() {}
 if (window.WsCapsules) window.WsCapsules.attach(ctext);
@@ -101,7 +102,7 @@ async function open(t, pre, opts) {
     await page.addScriptTag({ content: route });
     const hook = afterReloadPre !== undefined ? afterReloadPre : pre;
     if (hook) await page.evaluate(hook);
-    const scriptNames = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js'];
+    const scriptNames = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd-editor.js', 'dashboard-composer-ucmd-card.js', 'dashboard-composer-ucmd.js'];
     if (opts && opts.hud) scriptNames.push('dashboard-exec-hud.js');
     scriptNames.push('dashboard-composer-keyboard.js');
     const files = scriptNames.map(read).join('\n');
@@ -309,7 +310,7 @@ test('user command popover shows the whole stored line on an inline-editable car
   await page.click('#ucmdbadge');
   await page.waitForSelector('.ucmd-pop:not([hidden]) .ucmd-card');
   assert.equal(await page.locator('.ucmd-card .ucmd-inline-input.is-cmd').inputValue(), 'make test\n./run --verbose');
-  assert.equal(await page.locator('.ucmd-card .ucmd-title').textContent(), 'Run tests');
+  assert.equal(await page.locator('.ucmd-card .ucmd-title').inputValue(), 'Run tests');
   assert.equal(await page.locator('.ucmd-card .ucmd-glyph').first().textContent(), '$');
 });
 
@@ -639,7 +640,7 @@ test('cross-page storage sync prevents stale page from reviving deleted/cleared 
   await pageB.addScriptTag({ content: read('capsules.js') });
   await pageB.addScriptTag({ content: read('mention.js') });
   await pageB.addScriptTag({ content: route + `\nwindow.__slots = { rev: "1.1.${tag}", token: "tok", commands: [] };` });
-  const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
+  const files = ['dashboard-composer-exec.js', 'dashboard-composer-ucmd-editor.js', 'dashboard-composer-ucmd-card.js', 'dashboard-composer-ucmd.js', 'dashboard-composer-keyboard.js'].map(read).join('\n');
   await pageB.addScriptTag({ content: '(function(){' + shim + files + '\nwindow.__t = { ucmdApply: function (l) { ucmdApply(l, false); } };})();' });
 
   // 1) Page A launches running command; Page B deletes it before exit code resolves on A.

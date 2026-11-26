@@ -1,11 +1,19 @@
 /* User Commands v2: always-visible .cbadges trigger button beside #sbadge,
-   floating borderless tonal popover above #composer, 3-line inline-editable
-   command cards, and 1s hold-to-confirm radial fills (WsHoldConfirm). */
+   floating borderless tonal popover above #composer, two-zone command tiles
+   (lifted header band + recessed body well) on a darker tray, a one-line
+   collapsible $ command that expands into a bash-highlighted overlay editor,
+   and 1s hold-to-confirm radial fills (WsHoldConfirm). */
 .composer {
   --ucmd-well: color-mix(in srgb, var(--wb-fg) 4.5%, var(--wb-card));
   --ucmd-input: var(--wb-muted);
   --ucmd-dim: color-mix(in srgb, var(--wb-muted-fg) 84%, transparent);
   --ucmd-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  --ucmd-hair: color-mix(in srgb, var(--wb-fg) 8%, transparent);
+  --ucmd-tray: color-mix(in srgb, var(--wb-fg) 4%, var(--wb-bg));
+  --ucmd-band: var(--wb-card);
+  --ucmd-band-hover: color-mix(in srgb, var(--wb-primary) 3%, var(--wb-card));
+  --ucmd-body: color-mix(in srgb, var(--wb-fg) 3.5%, var(--wb-card));
+  --ucmd-ed-bg: var(--wb-card);
   --ucmd-primary-ink: var(--wb-primary);
   --ucmd-ok-ink: var(--wb-ok);
   --ucmd-cmd-fg: var(--wb-fg);
@@ -22,6 +30,12 @@
     --ucmd-input: #16181c;
     --ucmd-dim: #6f747d;
     --ucmd-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --ucmd-hair: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --ucmd-tray: var(--wb-bg);
+    --ucmd-band: #262930;
+    --ucmd-band-hover: #2a2e36;
+    --ucmd-body: #181a1f;
+    --ucmd-ed-bg: #131519;
     --ucmd-primary-ink: #b7cdff;
     --ucmd-ok-ink: #9ad8ba;
     --ucmd-cmd-fg: #c8cbd2;
@@ -38,6 +52,12 @@
   --ucmd-input: #16181c;
   --ucmd-dim: #6f747d;
   --ucmd-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --ucmd-hair: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --ucmd-tray: var(--wb-bg);
+  --ucmd-band: #262930;
+  --ucmd-band-hover: #2a2e36;
+  --ucmd-body: #181a1f;
+  --ucmd-ed-bg: #131519;
   --ucmd-primary-ink: #b7cdff;
   --ucmd-ok-ink: #9ad8ba;
   --ucmd-cmd-fg: #c8cbd2;
@@ -238,14 +258,26 @@
   color: var(--wb-fg);
 }
 
+/* Recessed tray: tiles float on it with a clear 10px gap. */
 .ucmd-pop-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px;
+  gap: 10px;
+  padding: 10px;
+  background: var(--ucmd-tray);
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
+}
+.ucmd-pop-body::-webkit-scrollbar,
+.ucmd-code-ta::-webkit-scrollbar { width: 6px; height: 6px; }
+.ucmd-pop-body::-webkit-scrollbar-track,
+.ucmd-code-ta::-webkit-scrollbar-track,
+.ucmd-code-ta::-webkit-scrollbar-corner { background: transparent; }
+.ucmd-pop-body::-webkit-scrollbar-thumb,
+.ucmd-code-ta::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--wb-fg) 18%, transparent);
+  border-radius: 999px;
 }
 
 /* Empty state inside popover */
@@ -255,10 +287,10 @@
   justify-content: space-between;
   gap: 12px;
   padding: 16px 14px;
-  margin: 4px;
   border: 0;
-  border-radius: 8px;
-  background: var(--ucmd-well);
+  border-radius: 10px;
+  background: var(--ucmd-band);
+  box-shadow: var(--wb-shadow);
   color: var(--wb-fg);
   font-size: 12.5px;
 }
@@ -276,10 +308,10 @@
   flex-direction: column;
   gap: 9px;
   padding: 11px 12px;
-  margin: 2px;
   border: 0;
-  border-radius: 8px;
-  background: var(--ucmd-well);
+  border-radius: 10px;
+  background: var(--ucmd-band);
+  box-shadow: var(--wb-shadow);
 }
 .ucmd-add-form[hidden] { display: none; }
 .ucmd-form-hd {
@@ -405,33 +437,50 @@
   cursor: progress;
 }
 
-/* 3-line inline-editable command card */
+/* Two-zone command tiles (mockup Option C): one monolithic rounded tile per
+   command, a lifted header band fused onto a recessed body well that holds
+   both the $ command and the agent prompt note. No nested capsules. */
 .ucmd-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
 }
 .ucmd-list[hidden] { display: none; }
 .ucmd-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 8px 10px 9px;
   border: 0;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--wb-fg) 2%, transparent);
-  transition: background-color .14s;
+  border-radius: 10px;
+  background: var(--ucmd-body);
+  box-shadow: var(--wb-shadow);
+  transition: box-shadow .14s;
   min-width: 0;
 }
-.ucmd-card:hover {
-  background: var(--ucmd-well);
+.ucmd-card:hover,
+.ucmd-card:focus-within {
+  box-shadow: var(--wb-shadow-hi);
 }
-.ucmd-card.is-dirty {
-  background: color-mix(in srgb, var(--wb-warn) 4.5%, var(--ucmd-well));
+.ucmd-card.is-dirty::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-warn) 40%, transparent);
+  pointer-events: none;
 }
 
-/* Line 1: Single-line Header + Compact 26x26 Icon Actions (no wrapping) */
+/* Zone 1: lifted tonal header band */
+.ucmd-band {
+  padding: 6px 9px 6px 10px;
+  border-radius: 10px 10px 0 0;
+  background: var(--ucmd-band);
+  transition: background-color .14s;
+}
+.ucmd-card:hover .ucmd-band {
+  background: var(--ucmd-band-hover);
+}
 .ucmd-line1 {
   display: flex;
   align-items: center;
@@ -465,17 +514,42 @@
   color: var(--ucmd-agent-fg);
 }
 .ucmd-src.user {
-  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
-  color: var(--wb-muted-fg);
+  background: color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  color: var(--ucmd-primary-ink);
 }
+/* Inline-editable title: reads as plain text until hovered or focused. */
 .ucmd-title {
-  font-size: 13px;
+  flex: 0 1 auto;
+  field-sizing: content;
+  min-width: 4ch;
+  max-width: 100%;
+  margin: 0 0 0 -4px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 5px;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.45;
   color: var(--wb-fg);
-  min-width: 0;
-  overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  transition: background-color .12s, box-shadow .12s;
+}
+.ucmd-title:hover {
+  background: var(--ucmd-wash);
+}
+.ucmd-title:focus {
+  background: var(--ucmd-ed-bg);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+  text-overflow: clip;
+}
+.ucmd-title.is-dirty {
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--wb-warn) 80%, transparent);
+}
+.ucmd-title.is-dirty:focus {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent), inset 0 -1.5px 0 var(--wb-warn);
 }
 .ucmd-dirty-dot {
   display: none;
@@ -492,7 +566,7 @@
   font-family: var(--wb-mono);
   font-size: 10.5px;
   color: var(--ucmd-dim);
-  background: color-mix(in srgb, var(--wb-fg) 4.5%, transparent);
+  background: color-mix(in srgb, var(--wb-fg) 5%, transparent);
   padding: 1px 6px;
   border-radius: 4px;
   max-width: 138px;
@@ -503,7 +577,7 @@
 }
 .ucmd-cwd[hidden] { display: none; }
 
-/* Line 1 Right: Compressed 26x26 borderless tonal icon actions */
+/* Header band right: 24x24 borderless tonal icon actions */
 .ucmd-acts {
   display: inline-flex;
   align-items: center;
@@ -516,11 +590,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   cursor: pointer;
   flex: none;
   transition: background-color .12s, color .12s, transform .08s, box-shadow .12s;
@@ -550,8 +624,8 @@
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   transform: scale(0);
   opacity: 0;
@@ -566,7 +640,7 @@
   color: var(--ucmd-hold-ink);
 }
 .ucmd-ibtn.is-hold.d-hold-active::before {
-  transform: scale(1.55);
+  transform: scale(1.6);
   opacity: .95;
   transition: transform var(--d-hold-dur, 1000ms) linear, opacity 120ms ease-out;
 }
@@ -575,7 +649,7 @@
   transform: scale(1.06);
 }
 .ucmd-ibtn.is-hold.d-hold-ready::before {
-  transform: scale(1.65);
+  transform: scale(1.7);
   opacity: 1;
 }
 
@@ -642,26 +716,20 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-fail) 75%, transparent);
 }
 
-/* Line 2 & Line 3: Always-editable recessed borderless inline bars */
-.ucmd-inline-bar {
+/* Zone 2: continuous recessed body well ($ command + prompt note) */
+.ucmd-well {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--ucmd-input);
-  border: 0;
-  border-radius: 7px;
-  padding: 3px 5px 3px 9px;
-  transition: box-shadow .14s, background-color .14s;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 5px;
+  border-radius: 0 0 10px 10px;
+  background: var(--ucmd-body);
   min-width: 0;
 }
-.ucmd-inline-bar.is-dirty {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-warn) 78%, transparent);
-}
-.ucmd-inline-bar:focus-within {
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
-}
-.ucmd-inline-bar.is-dirty:focus-within {
-  box-shadow: inset 2px 0 0 var(--wb-warn), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+.ucmd-divider {
+  height: 1px;
+  margin: 1px 6px;
+  background: var(--ucmd-hair);
 }
 .ucmd-glyph {
   flex: none;
@@ -669,6 +737,7 @@
   align-items: center;
   justify-content: center;
   width: 13px;
+  height: 16px;
   font-family: var(--wb-mono);
   font-size: 11.5px;
   font-weight: 700;
@@ -678,49 +747,67 @@
 .ucmd-glyph.is-prompt {
   color: color-mix(in srgb, var(--wb-primary) 70%, var(--ucmd-dim));
 }
+
+/* Prompt note row: shares the body well, separated by a hairline only */
+.ucmd-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 2px 8px;
+  border-radius: 6px;
+  min-width: 0;
+  transition: background-color .12s, box-shadow .12s;
+}
+.ucmd-note:hover,
+.ucmd-note:focus-within {
+  background: color-mix(in srgb, var(--wb-fg) 3.5%, transparent);
+}
+.ucmd-note.is-dirty {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-warn) 80%, transparent);
+}
+.ucmd-note.has-val .ucmd-glyph.is-prompt { color: var(--ucmd-ask-ink); }
 .ucmd-inline-input {
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
   background: transparent;
   outline: none;
-  padding: 2px 0;
-  line-height: 1.4;
 }
-.ucmd-inline-input.is-cmd {
-  font-family: var(--wb-mono);
-  font-size: 11.5px;
-  color: var(--ucmd-cmd-fg);
-}
-.ucmd-inline-input.is-multi {
+/* Scoped under .composer to outrank the composer field rule .composer textarea. */
+.composer .ucmd-inline-input.is-prompt {
+  display: block;
+  width: auto;
+  min-height: 0;
+  max-height: none;
+  border-radius: 0;
+  background: transparent;
   resize: none;
-  overflow-x: auto;
-  white-space: pre;
-}
-.ucmd-inline-input.is-prompt {
-  resize: none;
+  padding: 1px 0;
   font-family: var(--wb-sans);
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--ucmd-prompt-fg);
 }
-.ucmd-inline-input::placeholder {
+.composer .ucmd-inline-input:focus { outline: none; }
+.ucmd-inline-input.is-prompt::placeholder {
   color: var(--ucmd-dim);
+  opacity: .8;
 }
 
-/* Right-side ↺ Revert icon button (22x22) */
+/* ↺ Revert icon button: invisible until its field is dirty */
 .ucmd-rev-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 0;
   border-radius: 5px;
   flex: none;
   background: transparent;
   color: var(--ucmd-dim);
-  opacity: .22;
+  opacity: 0;
   cursor: default;
   pointer-events: none;
   transition: background-color .12s, color .12s, opacity .12s;
@@ -729,11 +816,11 @@
   opacity: 1;
   pointer-events: auto;
   cursor: pointer;
-  background: color-mix(in srgb, var(--wb-warn) 14%, transparent);
+  background: color-mix(in srgb, var(--wb-warn) 16%, transparent);
   color: var(--wb-warn);
 }
 .ucmd-rev-btn.is-dirty:hover {
-  background: color-mix(in srgb, var(--wb-warn) 25%, transparent);
+  background: color-mix(in srgb, var(--wb-warn) 26%, transparent);
 }
 .ucmd-rev-btn:focus-visible {
   outline: 1.5px solid var(--wb-warn);
@@ -744,7 +831,11 @@
   .ucmd-pop,
   .ucmd-trigger,
   .ucmd-ibtn,
-  .ucmd-ibtn.is-hold::before {
+  .ucmd-ibtn.is-hold::before,
+  .ucmd-card,
+  .ucmd-band,
+  .ucmd-cmd-box,
+  .ucmd-title {
     animation: none !important;
     transition: none !important;
   }

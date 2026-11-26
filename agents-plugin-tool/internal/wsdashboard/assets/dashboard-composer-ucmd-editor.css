@@ -1,0 +1,237 @@
+/* User command $ editor: the collapsed one-line preview row, the expanded
+   overlay code editor (highlighted <pre> behind a transparent-ink <textarea>)
+   and its bash token colours. Paired with dashboard-composer-ucmd-editor.js. */
+/* $ command box: collapsed 1-line preview <-> expanded overlay editor */
+.ucmd-cmd-box {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 6px;
+  transition: background-color .14s, box-shadow .14s;
+}
+.ucmd-cmd-box:hover {
+  background: color-mix(in srgb, var(--wb-fg) 3.5%, transparent);
+}
+.ucmd-cmd-box.is-dirty {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-warn) 80%, transparent);
+}
+.ucmd-cmd-box.is-expanded {
+  background: var(--ucmd-ed-bg);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-cmd-box.is-expanded.is-dirty {
+  box-shadow: inset 2px 0 0 var(--wb-warn), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 6px;
+  cursor: text;
+  outline: none;
+  min-width: 0;
+}
+.ucmd-cmd-row:focus-visible {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-cmd-box.is-expanded .ucmd-cmd-row { display: none; }
+.ucmd-cmd-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--ucmd-cmd-fg);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ucmd-cmd-preview.is-empty { color: var(--ucmd-dim); }
+.ucmd-lines-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--wb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums;
+  transition: background-color .12s, color .12s;
+}
+.ucmd-lines-pill.is-single {
+  background: transparent;
+  padding: 1px 2px;
+  opacity: .55;
+}
+.ucmd-lines-pill svg { display: block; flex: none; }
+.ucmd-cmd-row:hover .ucmd-lines-pill,
+.ucmd-cmd-row:focus-visible .ucmd-lines-pill {
+  background: color-mix(in srgb, var(--wb-primary) 18%, transparent);
+  color: var(--ucmd-primary-ink);
+  opacity: 1;
+}
+.ucmd-cmd-editor {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 7px 5px 8px;
+  min-width: 0;
+}
+.ucmd-cmd-box.is-expanded .ucmd-cmd-editor { display: flex; }
+.ucmd-cmd-ed-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.ucmd-cmd-ed-row .ucmd-glyph { margin-top: 1px; }
+.ucmd-cmd-ed-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 3px;
+  border-top: 1px solid var(--ucmd-hair);
+}
+.ucmd-ed-meta {
+  font-family: var(--wb-mono);
+  font-size: 10px;
+  color: var(--ucmd-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ucmd-ed-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ucmd-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 7px;
+  background: var(--ucmd-wash);
+  color: var(--wb-muted-fg);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.ucmd-collapse-btn:hover,
+.ucmd-collapse-btn:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--wb-primary) 18%, transparent);
+  color: var(--ucmd-primary-ink);
+}
+
+/* Overlay code editor: the <pre> backdrop and the transparent-ink <textarea>
+   share every text metric so glyphs, caret and selection line up exactly;
+   rows grow 16px per line up to 140px (~2x the old 4-row field), then scroll.
+   Scoped under .composer to outrank the composer field rule `.composer textarea`. */
+.ucmd-code {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.composer .ucmd-code-hl,
+.composer .ucmd-code-ta {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: 1px 2px 1px 0;
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 16px;
+  letter-spacing: 0;
+  word-spacing: 0;
+  tab-size: 4;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  text-transform: none;
+  text-indent: 0;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.ucmd-code-hl {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--ucmd-cmd-fg);
+  background: transparent;
+}
+.ucmd-code-hl > code {
+  display: block;
+  font: inherit;
+  white-space: inherit;
+}
+.composer .ucmd-code-ta {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  border-radius: 0;
+  height: calc(var(--ucmd-rows, 2) * 16px + 2px + 8px);
+  min-height: 42px;
+  max-height: 140px;
+  overflow: auto;
+  resize: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--wb-fg);
+}
+.composer .ucmd-code-ta:focus { outline: none; }
+.ucmd-code-ta::selection {
+  background: color-mix(in srgb, var(--wb-primary) 32%, transparent);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.ucmd-code-ta::placeholder {
+  color: var(--ucmd-dim);
+  -webkit-text-fill-color: var(--ucmd-dim);
+}
+.ucmd-code-ta:read-only { caret-color: transparent; }
+
+/* Bash tokens, painted with the theme's shared --hl-* syntax colours
+   (dashboard-drawer.css defines light and dark values). Weight and style
+   stay normal so glyph advances match the textarea exactly. */
+.ucmd-hl-k { color: var(--hl-k); }
+.ucmd-hl-x { color: var(--hl-nf); }
+.ucmd-hl-s { color: var(--hl-s); }
+.ucmd-hl-v { color: var(--hl-kt); }
+.ucmd-hl-c { color: var(--hl-c); }
+.ucmd-hl-o { color: color-mix(in srgb, var(--hl-k) 62%, var(--ucmd-cmd-fg)); }
+.ucmd-hl-f { color: color-mix(in srgb, var(--hl-nf) 55%, var(--ucmd-cmd-fg)); }
+.ucmd-hl-n { color: var(--hl-mi); }
+.ucmd-hl-sep { color: var(--ucmd-dim); }
+
+/* Create form: the shell command field reuses the overlay editor */
+.ucmd-field .ucmd-code {
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--ucmd-input);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  transition: box-shadow .12s;
+}
+.ucmd-field .ucmd-code:focus-within {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.ucmd-field .ucmd-code-hl { inset: 6px 9px; }
+.composer .ucmd-field .ucmd-code-ta {
+  min-height: 26px;
+  height: calc(var(--ucmd-rows, 1) * 16px + 2px + 8px);
+}

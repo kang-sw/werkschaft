@@ -51,6 +51,8 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
 	"dashboard-composer-exec.js",
+	"dashboard-composer-ucmd-editor.js",
+	"dashboard-composer-ucmd-card.js",
 	"dashboard-composer-ucmd.js",
 	"dashboard-composer-restore.js",
 	"dashboard-composer-status.js",
@@ -112,6 +114,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-exec-hud.css",
 	"dashboard-bg-exec-monitor.css",
 	"dashboard-composer-ucmd.css",
+	"dashboard-composer-ucmd-editor.css",
 	"dashboard-voice.css",
 }
 
