@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const tick = () => new Promise(setImmediate);
 const { readAssetSource } = require('./asset-source.cjs');
 
-function fixture(cacheLimit = 0, deepHash = '') {
+function fixture(cacheLimit = 0, deepHash = '', opts = {}) {
   const go = fs.readFileSync(path.join(__dirname, '../shell_frame_test.go'), 'utf8');
   const harness = go.match(/const shellGlueHarness = `([\s\S]*?)\n`/)[1];
   const js = readAssetSource('wsdashboard', 'dashboard.js');
@@ -29,6 +29,7 @@ function fixture(cacheLimit = 0, deepHash = '') {
     window.WsShell.cacheLimit = ${cacheLimit};
     root.getAttribute = function (key) { return attrs[key] || null; };
     function cacheSafety(frame) {
+      frame.contentWindow.location.reload = function () { frame.reloads = (frame.reloads || 0) + 1; };
       frame.contentWindow.wsCanCacheSession = function () { frame.saved++; return !frame.unsafe && !frame.tool && !frame.draft; };
       frame.contentWindow.wsPrepareSessionLeave = function () {
         frame.prepared = (frame.prepared || 0) + 1;
@@ -52,6 +53,8 @@ function fixture(cacheLimit = 0, deepHash = '') {
     cacheSafety(first);
   ` + '\n(function () {\n' + glue + init + `
     first.contentDocument.readyState = 'complete';
+    ${opts.initialURL ? `first.contentDocument.URL = ${JSON.stringify(opts.initialURL)};` : ''}
+    ${opts.initialHref ? `first.contentWindow.location.href = ${JSON.stringify(opts.initialHref)};` : ''}
     ${deepHash ? `
     // The shell page's own address carries a hash, which lands as a
     // fragment-only src change: the loaded document stays, no load follows.
@@ -61,6 +64,7 @@ function fixture(cacheLimit = 0, deepHash = '') {
     shOn.head = {html: '', qs: '', pad: 0, top: 40};
     window.testShell = {
       open: shOpen,
+      reload: shReload,
       count: function () { return shFrames.length; },
       current: function () { return shOn && shOn.el; },
       pending: function () { return shWant && shWant.el; }
@@ -430,7 +434,76 @@ async function testLoadedPendingRepick() {
   }
   assert.equal(s.current(), b, 'the loaded destination is shown, not left hidden');
 }
+function testInitialAboutBlankGuard() {
+  for (const opts of [{ initialURL: 'about:blank' }, { initialHref: 'about:blank' }]) {
+    const c = fixture(0, '', opts), first = c.first;
+    assert.deepEqual(plain(first.got), ['sync'], 'uncommitted about:blank must not receive settings or shown:true');
+    c.from(first.contentWindow, { wsShell: 'ready', hideAck: true });
+    assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true'], 'real document ready delivers settings and shown:true');
+    first.load();
+    assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true'], 'following load is deduplicated');
+  }
+}
+function testInPlaceReloadResendsShown() {
+  const c = fixture(5), s = c.window.testShell, a = c.first;
+  assert.deepEqual(plain(a.got), ['sync', 'settings', 'shown:true']);
+  a.got.length = 0;
+  // Simulate in-place location.reload() (e.g. onAssets or modeChanged) of active shOn.
+  c.from(a.contentWindow, { wsShell: 'ready', hideAck: true });
+  assert.deepEqual(plain(a.got), ['settings', 'shown:true'], 'reloaded active frame receives fresh settings and shown:true');
+  a.load();
+  assert.deepEqual(plain(a.got), ['settings', 'shown:true'], 'following load is deduplicated after reload ready');
+
+  // Inactive cached frame posting ready must NOT receive shown:true.
+  const b = cachedSwitch(c, '/s/b');
+  assert.equal(s.current(), b);
+  a.got.length = 0;
+  c.from(a.contentWindow, { wsShell: 'ready', hideAck: true });
+  assert.deepEqual(plain(a.got), ['settings'], 'inactive cached frame ready does not receive shown:true');
+}
+function testShReloadResetsFlags() {
+  // Case 1: reload followed by ready + load (deduplicated).
+  const c1 = fixture(5), s1 = c1.window.testShell, a1 = c1.first;
+  a1.got.length = 0;
+  s1.reload();
+  assert.equal(a1.reloads, 1);
+  c1.from(a1.contentWindow, { wsShell: 'ready', hideAck: true });
+  assert.deepEqual(plain(a1.got), ['settings', 'shown:true']);
+  a1.load();
+  assert.deepEqual(plain(a1.got), ['settings', 'shown:true'], 'load after ready on shReload is deduplicated');
+
+  // Case 2: load-only fallback without ready.
+  const c2 = fixture(5), s2 = c2.window.testShell, a2 = c2.first;
+  a2.got.length = 0;
+  s2.reload();
+  assert.equal(a2.reloads, 1);
+  a2.load();
+  assert.deepEqual(plain(a2.got), ['settings', 'shown:true'], 'load-only fallback on shReload still delivers settings and shown:true');
+}
+function testHandoffGatingOnReady() {
+  const c = fixture(5), s = c.window.testShell, a = c.first;
+  c.from(a.contentWindow, { wsShell: 'ready', hideAck: true });
+  c.click('/s/b');
+  const b = s.pending();
+  assert.ok(b);
+  c.from(b.contentWindow, { wsShell: 'head', html: '<b>b</b>', qs: '', pad: 0, top: 40 });
+  c.from(b.contentWindow, { wsShell: 'ready', hideAck: true });
+  assert.equal(s.current(), b);
+  assert.deepEqual(plain(b.got), ['settings'], 'handoff gates shown:true until outgoing frame acks hide');
+  // A second ready or load while handoff is still pending must not bypass the gate.
+  c.from(b.contentWindow, { wsShell: 'ready', hideAck: true });
+  b.load();
+  assert.equal(b.got.includes('shown:true'), false, 'ready and load during active handoff remain gated');
+  // Outgoing frame acknowledges hide (first shShow token is 1) -> shown:true fires once.
+  c.from(a.contentWindow, { wsShell: 'hidden-ack', token: 1 });
+  assert.equal(c.timerCount(), 0);
+  assert.equal(b.got.filter(m => m === 'shown:true').length, 1, 'hidden-ack releases shown:true once');
+}
 const cases = {
+  'shShellInit ignores uncommitted about:blank and activates on real ready': testInitialAboutBlankGuard,
+  'in-place reload of active frame re-sends settings and shown:true': testInPlaceReloadResendsShown,
+  'shReload resets per-document flags for ready and load-only reload': testShReloadResetsFlags,
+  'shHandoff gating on ready remains intact until hidden-ack': testHandoffGatingOnReady,
   'repick of an already loaded pending destination still shows it': testLoadedPendingRepick,
   'repick of the pending destination keeps its iframe': testPendingRepick,
   'header handoff waits for load and head in either order': testHeaderReadiness,
