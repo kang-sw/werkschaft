@@ -1803,7 +1803,13 @@
     [c.icon, c.name, c.sub, c.badge, c.acts, c.pinBtn, c.foldBtn, c.raiseBtn, c.maxBtn, c.minBtn, c.closeBtn].forEach(function (n) { head.appendChild(n); });
     c.foldEl = mk("div", "bc-folded");
     c.body = mk("div", "bc-body");
-    [head, c.foldEl, c.body].forEach(function (n) { inner.appendChild(n); });
+    c.grip = mk("div", "bc-grip");
+    c.grip.setAttribute("role", "separator");
+    c.grip.setAttribute("aria-orientation", "horizontal");
+    c.grip.tabIndex = 0;
+    c.grip.title = wsT("js.card.grip");
+    c.grip.setAttribute("aria-label", wsT("js.card.grip"));
+    [head, c.foldEl, c.body, c.grip].forEach(function (n) { inner.appendChild(n); });
     el.appendChild(inner);
     c.pinBtn.addEventListener("click", function () { c.pin(!c.pinned); });
     c.foldBtn.addEventListener("click", function () { c.fold(!c.folded); });
@@ -1813,6 +1819,7 @@
     c.closeBtn.addEventListener("click", async function () {
       if (!c.k.closing || (await c.k.closing(c, c.closeBtn)) !== false) c.close();
     });
+    c.wireGrip();
     c.paint();
   };
   // paint writes the framework's own view state to the card's node.
@@ -1894,6 +1901,46 @@
     if (this.pinned) { gal = G.undock(gal, refOf(this)); sync(); arrange(null); }
     else { countTopics(); if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle(); }
     persist();
+  };
+  // The handle under the body drags its height; the pointer is captured, so
+  // the drag keeps going over a frame in the body. Double click (or Home)
+  // goes back to the base height.
+  Card.prototype.wireGrip = function () {
+    var c = this, from = null;
+    function set(h) {
+      var next = Math.max(MIN, Math.round(h));
+      if (c.h === next && c.body.style.height === next + "px") return;
+      c.h = next;
+      c.body.style.height = c.h + "px";
+    }
+    function end() {
+      if (from === null) return;
+      from = null;
+      c.el.classList.remove("drag");
+      persist();
+      c.sized();
+    }
+    c.grip.addEventListener("pointerdown", function (e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      from = { y: e.clientY, h: c.body.getBoundingClientRect().height };
+      c.el.classList.add("drag");
+      try { c.grip.setPointerCapture(e.pointerId); } catch (x) { /* no capture: the move still lands */ }
+      e.preventDefault();
+    });
+    c.grip.addEventListener("pointermove", function (e) { if (from) set(from.h + e.clientY - from.y); });
+    c.grip.addEventListener("pointerup", end);
+    c.grip.addEventListener("pointercancel", end);
+    function reset() { c.h = 0; c.paint(); persist(); c.sized(); }
+    c.grip.addEventListener("dblclick", reset);
+    c.grip.addEventListener("keydown", function (e) {
+      var d = e.key === "ArrowUp" ? -STEP : e.key === "ArrowDown" ? STEP : 0;
+      if (e.key === "Home") { e.preventDefault(); reset(); return; }
+      if (!d) return;
+      e.preventDefault();
+      set(c.body.getBoundingClientRect().height + d);
+      persist();
+      c.sized();
+    });
   };
 
   // --- the maximize sheet -------------------------------------------------------

@@ -16,7 +16,7 @@
 // 5. Zero layout shift (scrollTop / anchor stability) across rapid dial scrub
 //    (WsBoardAnchor.scrubbing() deferral + reconcile on settle) and fast wheel
 //    flicks, plus zero idle rAF after settle.
-// 6. Phase 1 dead-code cleanup: no .bc-grip, no .bdrop, no --board-runway.
+// 6. Phase 1 dead-code cleanup: no .bdrop, no --board-runway (while .bc-grip is restored for variable-height cards).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,6 +26,15 @@ const { test } = require('node:test');
 const DEFAULT_PW = 'C:\\Users\\user\\AppData\\Local\\npm-cache\\_npx\\e41f203b7505f1fb\\node_modules\\playwright';
 const pwPath = process.env.WS_PLAYWRIGHT_MODULE || (fs.existsSync(DEFAULT_PW) ? DEFAULT_PW : 'playwright');
 const { chromium } = require(pwPath);
+
+function launchChromium() {
+  let executablePath;
+  if (!fs.existsSync(chromium.executablePath())) {
+    const fallback = 'C:\\Users\\user\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1248\\chrome-headless-shell-win64\\chrome-headless-shell.exe';
+    if (fs.existsSync(fallback)) executablePath = fallback;
+  }
+  return chromium.launch({ headless: true, executablePath });
+}
 
 const REPO = path.resolve(__dirname, '../../../..');
 const WSD = path.join(REPO, 'agents-plugin-tool/internal/wsdashboard/assets');
@@ -260,7 +269,9 @@ function buildBootstrapScript(opts = {}) {
       function wsT(k) { return window.wsT(k); }
       function toast() {}
       function load(k) { return k === "ws.dashboard.cards.p4test" ? ${JSON.stringify(JSON.stringify(savedCards))} : null; }
-      function save() {}
+      window.__p4Saved = Object.create(null);
+      window.__p4SizedCount = 0;
+      function save(k, v) { window.__p4Saved[k] = v; }
       function post() { return Promise.resolve({}); }
       function browsePost() { return Promise.resolve({}); }
       function copyText() {}
@@ -270,6 +281,7 @@ function buildBootstrapScript(opts = {}) {
       function tabShown() { return true; }
       function setTab() {}
       function setCtab() {}
+      function toggleStageFill() {}
       function visible() { return true; }
       function pinned() { return false; }
       function pinConvo() {}
@@ -440,6 +452,7 @@ function buildBootstrapScript(opts = {}) {
       // Register all 4 unpinned .bcard kinds (terminal, web, preview, explorer)
       window.WsCards.register("terminal", {
         base: 320,
+        sized: function () { window.__p4SizedCount++; },
         open: function (c) {
           c.title({ icon: "terminal", name: "Dev Terminal", sub: "zsh · live pty", badge: "Terminal" });
           var box = doc.createElement("div");
@@ -519,7 +532,7 @@ async function waitFrames(page, n = 4) {
 
 test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preserved state, strict exemptions, scrub stability, and dead-code removal', async () => {
   if (SHOTS_DIR) fs.mkdirSync(SHOTS_DIR, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromium();
   try {
     const context = await browser.newContext({ viewport: { width: 2560, height: 960 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
@@ -530,16 +543,19 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
     await waitFrames(page, 10);
     assert.deepEqual(pageErrors, [], 'no uncaught page errors during bootstrap');
 
-    // 1. Dead-code cleanup checks
+    // 1. Dead-code cleanup & restored .bc-grip checks
     const deadCode = await page.evaluate(() => {
       const bcol = document.getElementById('bcol');
+      const bcards = document.querySelectorAll('.bcard');
+      const grips = document.querySelectorAll('.bcard > .bc-in > .bc-grip');
       return {
-        gripCount: document.querySelectorAll('.bc-grip').length,
+        bcardCount: bcards.length,
+        gripCount: grips.length,
         bdropCount: document.querySelectorAll('.bdrop').length,
         runwayVar: bcol.style.getPropertyValue('--board-runway'),
       };
     });
-    assert.equal(deadCode.gripCount, 0, 'retired .bc-grip must not exist in DOM');
+    assert.ok(deadCode.bcardCount > 0 && deadCode.gripCount === deadCode.bcardCount, 'every .bcard must render its .bc-grip resize handle');
     assert.equal(deadCode.bdropCount, 0, 'retired .bdrop must not exist in DOM');
     assert.equal(deadCode.runwayVar, '', 'retired --board-runway must not be set on #bcol');
 
@@ -866,7 +882,7 @@ test('Phase 4: O(1) ±2 topic virtualization, stashed SSE reconciliation, preser
 });
 
 test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, tnote draft, close forgetOpen, template/filtered jump, Quick Look click no-thrash, bindCapsuleNotes', async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromium();
   try {
     const context = await browser.newContext({ viewport: { width: 2560, height: 960 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
@@ -1121,6 +1137,215 @@ test('Phase 4 review regressions: state-filter survival, non-stashed SSE state, 
     assert.equal(noThrash.sameFrame, true, '(f) 0 collapse/re-hydrate thrash: exact iframe.doc-frame node preserved: ' + JSON.stringify(noThrash));
 
     assert.deepEqual(pageErrors, [], 'no uncaught page errors across all review regression checks');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Vertical card resize handle (.bc-grip): visibility states, pointer/keyboard resize, persistence, free-canvas layout, and freePin safety', async () => {
+  const browser = await launchChromium();
+  try {
+    const context = await browser.newContext({ viewport: { width: 2560, height: 960 }, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', err => pageErrors.push(String(err && err.stack || err)));
+    await page.setContent(buildFixtureHtml({ theme: 'dark', topicCount: 18 }), { waitUntil: 'domcontentloaded' });
+    await page.addScriptTag({ content: buildBootstrapScript() });
+    await waitFrames(page, 10);
+    assert.deepEqual(pageErrors, [], 'no uncaught page errors during bootstrap');
+
+    // 1. Visibility across normal, folded, maximized, Overview, Overview preview stage, and docked #bgal states
+    const vis = await page.evaluate(() => {
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      const grip = card.querySelector(':scope > .bc-in > .bc-grip');
+      const normalDisplay = getComputedStyle(grip).display;
+      const normalRect = grip.getBoundingClientRect();
+      const role = grip.getAttribute('role');
+      const orient = grip.getAttribute('aria-orientation');
+      const tabIndex = grip.tabIndex;
+
+      // Folded
+      card.querySelector('.bc-fold').click();
+      const foldedDisplay = getComputedStyle(grip).display;
+      card.querySelector('.bc-fold').click();
+
+      // Maximized
+      card.querySelector('.bc-max').click();
+      const maxDisplay = getComputedStyle(grip).display;
+      card.querySelector('.bc-min').click();
+
+      // Overview mode
+      document.documentElement.setAttribute('data-overview', '');
+      const overviewDisplay = getComputedStyle(grip).display;
+      document.documentElement.removeAttribute('data-overview');
+
+      // Overview preview stage
+      const stage = document.createElement('div');
+      stage.className = 'overview-preview-stage';
+      const cloneCard = card.cloneNode(true);
+      stage.appendChild(cloneCard);
+      document.body.appendChild(stage);
+      const previewStageDisplay = getComputedStyle(cloneCard.querySelector(':scope > .bc-in > .bc-grip')).display;
+      stage.remove();
+
+      // Docked in #bgal
+      const expCard = document.querySelector('#r-board .bcard[data-kind="explorer"]');
+      expCard.querySelector('.bc-pin').click();
+      const dockedCard = document.querySelector('#bgal .gal-pane > .bcard[data-kind="explorer"]');
+      const dockedGrip = dockedCard ? dockedCard.querySelector(':scope > .bc-in > .bc-grip') : null;
+      const dockedDisplay = dockedGrip ? getComputedStyle(dockedGrip).display : 'missing';
+
+      return {
+        normalDisplay,
+        normalHeight: normalRect.height,
+        role,
+        orient,
+        tabIndex,
+        foldedDisplay,
+        maxDisplay,
+        overviewDisplay,
+        previewStageDisplay,
+        dockedDisplay,
+      };
+    });
+    assert.notEqual(vis.normalDisplay, 'none', '.bc-grip is visible on normal free-canvas .bcard');
+    assert.ok(vis.normalHeight >= 8, `.bc-grip has clickable height (${vis.normalHeight})`);
+    assert.equal(vis.role, 'separator');
+    assert.equal(vis.orient, 'horizontal');
+    assert.equal(vis.tabIndex, 0);
+    assert.equal(vis.foldedDisplay, 'none', '.bc-grip is hidden when folded');
+    assert.equal(vis.maxDisplay, 'none', '.bc-grip is hidden when maximized');
+    assert.equal(vis.overviewDisplay, 'none', '.bc-grip is hidden in Overview mode');
+    assert.equal(vis.previewStageDisplay, 'none', '.bc-grip is hidden in Overview preview stage');
+    assert.equal(vis.dockedDisplay, 'none', '.bc-grip is hidden when docked in #bgal');
+
+    // 2. Pointer drag resize: releases active freePin, toggles .bcard.drag,
+    //    does 0 forced reflows during pointermove, persists h, calls sized(),
+    //    updates freeHeightCache, and shifts downstream cards without jumping resized card's top.
+    await page.evaluate(() => {
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      window.WsBoardAnchor.select(card, { smooth: false });
+    });
+    await waitFrames(page, 6);
+
+    const beforeDrag = await page.evaluate(() => {
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      const body = card.querySelector(':scope > .bc-in > .bc-body');
+      const grip = card.querySelector(':scope > .bc-in > .bc-grip');
+      const info = window.WsBoardAnchor.windowInfo();
+      const idx = info.indexOf(card);
+      const next = info.list[idx + 1];
+      return {
+        pinning: window.WsBoardAnchor.pinning(),
+        bodyH: body.getBoundingClientRect().height,
+        cardTop: parseFloat(card.style.top),
+        nextTop: next ? parseFloat(next.style.top) : null,
+        cachedH: info.heightOf(card),
+        gripRect: grip.getBoundingClientRect().toJSON(),
+        sizedBefore: window.__p4SizedCount,
+      };
+    });
+    assert.equal(beforeDrag.pinning, true, 'freePin is active right after select()');
+
+    // Instrument body.getBoundingClientRect during pointermove to prove zero per-move forced reflow reads
+    const dragResult = await page.evaluate(() => {
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      const body = card.querySelector(':scope > .bc-in > .bc-body');
+      const grip = card.querySelector(':scope > .bc-in > .bc-grip');
+      const r = grip.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      grip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: x, clientY: y }));
+      const pinningAfterDown = window.WsBoardAnchor.pinning();
+      const dragClassDuring = card.classList.contains('drag');
+      const bodyPointerEventsDuring = getComputedStyle(body).pointerEvents;
+
+      let moveRectReads = 0;
+      const origRect = body.getBoundingClientRect;
+      body.getBoundingClientRect = function () { moveRectReads++; return origRect.call(this); };
+      try {
+        grip.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y + 40 }));
+        grip.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y + 80 }));
+      } finally {
+        body.getBoundingClientRect = origRect;
+      }
+      grip.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y + 80 }));
+      return {
+        pinningAfterDown,
+        dragClassDuring,
+        bodyPointerEventsDuring,
+        moveRectReads,
+        dragClassAfter: card.classList.contains('drag'),
+      };
+    });
+    await waitFrames(page, 6);
+
+    const afterDrag = await page.evaluate(() => {
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      const cardId = card.getAttribute('data-card');
+      const body = card.querySelector(':scope > .bc-in > .bc-body');
+      const info = window.WsBoardAnchor.windowInfo();
+      const idx = info.indexOf(card);
+      const next = info.list[idx + 1];
+      const saved = JSON.parse(window.__p4Saved['ws.dashboard.cards.p4test'] || '{}');
+      const rec = (saved.cards || []).find(c => c.id === cardId);
+      return {
+        bodyH: body.getBoundingClientRect().height,
+        cardTop: parseFloat(card.style.top),
+        nextTop: next ? parseFloat(next.style.top) : null,
+        cachedH: info.heightOf(card),
+        persistedH: rec ? rec.h : null,
+        sizedAfter: window.__p4SizedCount,
+      };
+    });
+
+    assert.equal(dragResult.pinningAfterDown, false, 'pointerdown on .bc-grip releases active freePin');
+    assert.equal(dragResult.dragClassDuring, true, '.bcard.drag class is set during resize drag');
+    assert.equal(dragResult.bodyPointerEventsDuring, 'none', '.bcard.drag disables pointer-events on .bc-body');
+    assert.equal(dragResult.moveRectReads, 0, 'pointermove performs zero forced layout reads on .bc-body');
+    assert.equal(dragResult.dragClassAfter, false, '.bcard.drag class is removed on pointerup');
+    assert.equal(Math.round(afterDrag.bodyH), Math.round(beforeDrag.bodyH) + 80, 'pointer drag updates .bc-body height by +80px');
+    assert.equal(afterDrag.persistedH, Math.round(beforeDrag.bodyH) + 80, 'pointerup persists new card height');
+    assert.ok(afterDrag.sizedAfter > beforeDrag.sizedBefore, 'pointerup calls c.sized()');
+    assert.equal(Math.round(afterDrag.cachedH), Math.round(beforeDrag.cachedH) + 80, 'freeCardRO updates freeHeightCache by +80px');
+    assert.equal(afterDrag.cardTop, beforeDrag.cardTop, 'resized card top does not jump');
+    assert.equal(afterDrag.nextTop, beforeDrag.nextTop + 80, 'downstream card top shifts down by +80px');
+
+    // 3. Keyboard resize (ArrowDown / ArrowUp / Home) without scrolling #bcol
+    const kbResult = await page.evaluate(() => {
+      const bcol = document.getElementById('bcol');
+      const card = document.querySelector('#r-board .bcard[data-kind="terminal"]');
+      const cardId = card.getAttribute('data-card');
+      const body = card.querySelector(':scope > .bc-in > .bc-body');
+      const grip = card.querySelector(':scope > .bc-in > .bc-grip');
+      grip.focus();
+      const scrollBefore = bcol.scrollTop;
+      const h0 = Math.round(body.getBoundingClientRect().height);
+      grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      const hDown = Math.round(body.getBoundingClientRect().height);
+      grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+      const hUp = Math.round(body.getBoundingClientRect().height);
+      grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }));
+      const hHome = Math.round(body.getBoundingClientRect().height);
+      const saved = JSON.parse(window.__p4Saved['ws.dashboard.cards.p4test'] || '{}');
+      const rec = (saved.cards || []).find(c => c.id === cardId);
+      return {
+        scrollBefore,
+        scrollAfter: bcol.scrollTop,
+        h0,
+        hDown,
+        hUp,
+        hHome,
+        persistedAfterHome: rec ? rec.h : null,
+      };
+    });
+    assert.equal(kbResult.scrollAfter, kbResult.scrollBefore, 'ArrowDown/ArrowUp/Home on .bc-grip do not scroll #bcol');
+    assert.equal(kbResult.hDown, kbResult.h0 + 24, 'ArrowDown grows card height by STEP (24px)');
+    assert.equal(kbResult.hUp, kbResult.h0, 'ArrowUp shrinks card height by STEP (24px)');
+    assert.equal(kbResult.hHome, 320, 'Home resets card body height to base (320px)');
+    assert.equal(kbResult.persistedAfterHome, 0, 'Home persists h: 0');
+
+    assert.deepEqual(pageErrors, [], 'no uncaught page errors during .bc-grip regression suite');
   } finally {
     await browser.close();
   }

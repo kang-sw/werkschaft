@@ -484,7 +484,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
 
     // Designated-Y free-canvas assertions: no CSS scroll-snap, hidden scrollbar,
     // contain: layout style (no contain: strict) with entry-panel[data-max] &
-    // overview lifts, hidden .bcard .bc-grip, and .oq-pill 2-level offscreen
+    // overview lifts, visible .bcard .bc-grip, and .oq-pill 2-level offscreen
     // jump back to Topic 1's #item-1.
     await page.locator('#topic-4').evaluate(n => window.WsBoardAnchor.select(n, { smooth: false }));
     await waitFrames(page, 4);
@@ -536,6 +536,7 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
         cardSnap: getComputedStyle(card).scrollSnapAlign,
         cardInH: cardIn.getBoundingClientRect().height,
         hasGrip: !!grip,
+        gripDisplay: grip ? getComputedStyle(grip).display : '',
       };
     });
     assert.equal(freeCanvas.freeAttr, true, '#bcol enters Designated-Y free-canvas mode');
@@ -556,7 +557,8 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     assert.equal(freeCanvas.ovContain, 'none', 'overview lifts containment');
     assert.equal(freeCanvas.cardSnap, 'none', '.bcard uses no CSS scroll-snap-align');
     assert.ok(freeCanvas.cardInH > 0, `.bcard > .bc-in keeps positive height (${freeCanvas.cardInH})`);
-    assert.equal(freeCanvas.hasGrip, false, 'retired .bc-grip is not rendered on .bcard');
+    assert.equal(freeCanvas.hasGrip, true, '.bc-grip is rendered on free-canvas .bcard');
+    assert.notEqual(freeCanvas.gripDisplay, 'none', '.bc-grip is visible on unpinned free-canvas .bcard');
 
     // Offscreen .oq-pill 2-level jump: from Topic 4 (offscreen from Topic 1), update pill and click.
     await page.evaluate(() => {

@@ -64,7 +64,10 @@
    with the column like a topic's bar. */
 .bc-body, .bc-folded { isolation: isolate; }
 .bc-body { overflow: auto; border-top: 1px solid var(--wb-muted); min-height: 0; }
-.bcard[data-size="fold"]:not([data-overview-live]) .bc-body { display: none; }
+.bc-grip { height: 9px; flex: none; cursor: ns-resize; display: grid; place-items: center; touch-action: none; outline: 0; }
+.bc-grip::after { content: ""; width: 28px; height: 3px; border-radius: 2px; background: var(--wb-muted); transition: background .15s; }
+.bc-grip:hover::after, .bcard.drag .bc-grip::after, .bc-grip:focus-visible::after { background: var(--wb-primary); }
+.bcard[data-size="fold"]:not([data-overview-live]) .bc-body, .bcard[data-size="fold"]:not([data-overview-live]) .bc-grip { display: none; }
 .bcard[data-size="fold"]:not([data-overview-live]) .bc-folded:not(:empty) { display: block; }
 .bcard[data-size="fold"] .bc-fold .li, section.topic[data-size="fold"] > .tophead > .tbar > .t-fold .li { transform: rotate(-90deg); }
 /* Mask renderer-owned regions without mutating inner disclosures. Maximum
@@ -101,7 +104,7 @@ section.topic:not([data-max]) > [data-wbcv]:not(.tophead):not([data-has-panel-ma
 .bc-scrim[hidden] { display: none; }
 .bcard[data-max] .bc-in { position: fixed; z-index: var(--z-modal, 70); top: 52px; left: 16px; right: 16px; bottom: 12px; box-shadow: var(--wb-shadow-hi); }
 .bcard[data-max] .bc-body { display: block; flex: 1 1 0; height: auto !important; }
-.bcard[data-max] .bc-folded, .bcard[data-max] .bc-pin, .bcard[data-max] .bc-fold, .bcard[data-max] .bc-raise, .bcard[data-max] .bc-max, .bcard[data-max] .bc-close { display: none; }
+.bcard[data-max] .bc-folded, .bcard[data-max] .bc-grip, .bcard[data-max] .bc-pin, .bcard[data-max] .bc-fold, .bcard[data-max] .bc-raise, .bcard[data-max] .bc-max, .bcard[data-max] .bc-close { display: none; }
 .bcard[data-max] .bc-min { display: inline-grid; }
 /* The one shared sheet owns a transient normal width and an in-sheet toggle.
    Mobile retains its original insets; only wide sheets use the captured span. */
@@ -132,7 +135,7 @@ details.entry-panel[data-max] > summary { background: var(--wb-bg); cursor: defa
 section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max { display: none; }
 section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-max] > summary > .d-min { display: inline-grid; }
 @media (max-width: 640px) { section.topic[data-max], details.entry-panel[data-max] { top: 46px; left: 8px; right: 8px; bottom: 8px; } }
-@media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } .bc-grip::after { transition: none; } }
 
 /* ===== overview picker (overview.js) =====
    Only the view folds: no card record or disclosure is changed. Off-screen
@@ -151,7 +154,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 :root[data-overview] .r-board .bcard[data-card]:not([data-overview-motion]):not([data-overview-live]):not([data-max]) { content-visibility: auto; contain-intrinsic-block-size: auto 76px; }
 :root[data-overview] .r-board section.topic:not([data-overview-motion]) > :not(.tophead),
 :root[data-overview] .r-board .tophead > .tnote,
-:root[data-overview] .r-board .bcard:not([data-overview-motion]) :is(.bc-body, .bc-folded),
+:root[data-overview] .r-board .bcard:not([data-overview-motion]) :is(.bc-body, .bc-grip, .bc-folded),
 :root[data-overview] .r-board > .reply { display: none !important; }
 :root[data-overview] .r-board .tophead, :root[data-overview] .r-board .bc-hd { position: static !important; }
 :root[data-overview] .r-board .tophead { box-shadow: none; }
@@ -180,6 +183,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .overview-preview-stage > .bcard { flex: 1 1 auto; min-height: 0; height: 100%; margin: 0; display: flex; flex-direction: column; contain: none; }
 .overview-preview-stage > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; contain: none; }
 .overview-preview-stage > .bcard > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; content-visibility: visible !important; }
+.overview-preview-stage > .bcard > .bc-in > .bc-grip { display: none; }
 .overview-preview-stage :is(.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close) { display: none; }
 .r-board [data-overview-motion] { content-visibility: visible !important; position: relative; }
 .r-board [data-overview-motion] :is(section.topic > :not(.tophead), .bc-body) { content-visibility: visible !important; }
