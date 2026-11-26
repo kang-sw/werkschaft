@@ -16,6 +16,7 @@ EXPECTED_SKILLS = {
     "lead-coauthor-paged-document",
     "lead-bootstrap",
     "lead-discuss",
+    "lead-mockup",
     "lead-check-blockers",
     "lead-proceed",
     "lead-review",

@@ -35,9 +35,11 @@ live by the daemon.
 - Text mockups (HTML/SVG) → save under
   `ai-docs/assets/mockups/YYMMDD/<topic name>/`; track only text mockups there
   and include them in your next commit. Keep PNG and other raster images under
-  `ai-docs/assets/mockups/` gitignored and never commit them. Write a large
-  mockup as a file there and post it with `wb:panel src="<path>"`; never pass
-  mockup HTML bodies between agents.
+  `ai-docs/assets/mockups/` gitignored and never commit them. Write a mockup
+  as a file there (entry `index.html` for full/multi-file HTML mockups) and
+  post it with `wb:panel src="<path>"`; never pass mockup HTML bodies between
+  agents. Use `{{.SkillNamespace}}:lead-mockup` to author `visual` or
+  `interactive-mock` mockups through `mockup-writer`.
 - Confirmed decisions reach a ticket only through
   `{{.SkillNamespace}}:lead-ticket`, once the user moves to capture.
 
@@ -135,11 +137,25 @@ it.
   full version. `wb:change` bundles patch the latest version: `wb:old` must
   match exactly once; empty `wb:new` deletes.
 - `src="<path>"` (empty element, with `recap`) → the server reads the file
-  once and stores its content as the payload; later edits need a new post.
-  Path: in the project, `.html`, `.htm`, `.svg`, or `.md`, at most 2 MiB, a
-  fragment, not a full document. Not with inline content or `wb:change`.
-- Payload: block Markdown with inline HTML, SVG, or canvas script; no full
-  HTML document and nothing external. Images: `![alt](path)`, local files.
+  once at post time and stores an immutable snapshot; later edits need a new
+  post. Not with inline content or `wb:change`.
+  - Fragment `src` (`.html`, `.htm`, `.svg`, `.md` up to 2 MiB, not a full
+    document) → stored inline as the panel payload.
+  - Full-HTML mockup `src` (`.html` or `.htm` starting with `<!DOCTYPE` or
+    `<html`, inside a strict subdirectory of the session root — convention
+    `ai-docs/assets/mockups/YYMMDD/<topic>/index.html`; never directly in the
+    session root) → the server snapshots that subfolder into a bundle (at
+    most 256 files and 8 MiB uncompressed; no dot-files, dot-directories, or
+    symlinks) and serves it in a sandboxed iframe. Only allowlisted file
+    types (`.html .htm .css .js .mjs .json .svg .png .jpg .jpeg .gif .webp
+    .avif .ico .woff .woff2 .ttf .otf .md .txt`) are bundled; references to
+    other files return `404`. `wb:change` is refused on mockup panels —
+    re-post `<wb:panel src="..."/>` instead. A mockup left open past the
+    15-minute capability TTL may fail later lazy asset loads; reopen it to
+    refresh.
+- Payload: block Markdown with inline HTML, SVG, or canvas script; inline
+  bodies and non-HTML `src` (`.svg`, `.md`) reject full HTML documents and
+  nothing external is loaded. Images: `![alt](path)`, local files.
   A standalone document → a `{{.McpNamespace}}/path.generate` file, linked.
   An HTML block stays HTML until its opening element closes; blank lines and indentation do not resume Markdown.
 - Titles take inline Markdown; options, `wb:why`, and `wb:recommend` take
