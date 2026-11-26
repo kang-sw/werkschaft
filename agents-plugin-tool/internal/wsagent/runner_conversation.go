@@ -116,6 +116,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
+	c.parkedReports = restoredParkedReports(rec, r.opts.Now().UnixMilli())
 	// Its root and effective working directory never change after this:
 	// resolved once here, they serve every occupancy scan (boundConvs) from
 	// memory.

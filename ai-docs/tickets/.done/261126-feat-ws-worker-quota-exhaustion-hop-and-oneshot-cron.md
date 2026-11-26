@@ -6,6 +6,7 @@ related:
   261124-feat-ws-harness-quota-continuation: "landed substrate: NoticeUsageLimit alert unification, QuotaContinuation scheduling, cancel-on-input fence; this ticket reuses them and must keep the lead-only continuation contract"
 sage-review-completeness-reviewed: a58c1ea550e5a4dc
 sage-review-design-reviewed: a58c1ea550e5a4dc
+completed: 2026-11-26
 ---
 
 # Worker Quota-Exhaustion Notification with Ancestor Hop and `ws/cron` One-Shot (`at`) Support
@@ -201,3 +202,22 @@ Depends on Phase 1 (its `ws/cron` `at` guidance names the Phase 1 capability).
      - Report shape: header, key lines, and the action block.
      - Dynamic guidance for hosted vs external leads and for available vs unavailable alternate harnesses.
    - Done when every item above passes and the existing quota-continuation tests are unchanged.
+
+### Result (phase-2) - 2026-11-26
+
+- **Landed:**
+  - `agents-plugin-tool/internal/wsagent/claude_alerts.go`, `claude_alerts_test.go`: changed `claude_alerts.go:103` from `!m.lead()` to `!m.sessionState()` so Claude agent workers emit `NoticeUsageLimit` while plain non-agent profiles still emit none, keeping all `c.rec.Lead` guards on `QuotaContinuation` and lead chips intact.
+  - `agents-plugin-tool/internal/wsagent/quota_hop.go`: implemented synchronized ancestor walk over `Record.Parent` with cycle guard, 3-signal quota exhaustion detection (`failure`, `QuotaContinuation` in `{Exhausted, InFlight, Scheduled}` with non-elapsed `ResumeAt`, and `QuotaResetAt`), hop past exhausted intermediate sub-leads without waking them (retrying up to 8 times if a hopped ancestor closes mid-handoff without falling back to an exhausted direct parent), parked-report handling in `Record.Reports` when all ancestors are exhausted and the top-most hosted lead has a scheduled continuation, immediate `ALL ANCESTORS QUOTA-EXHAUSTED` delivery otherwise, plain-text exhaustion report formatting (Decision 4 `(1677)`), and dynamic hosted-lead `ws/cron` `at` + `AgentTiers`-checked alternate-harness guidance.
+  - `agents-plugin-tool/internal/wsagent/children.go`, `spawn.go`, `runner_conv.go`, `runner_conversation.go`, `runner_events.go`, `runner_recovery.go`, `durable_turn.go`, `durable_settle.go`: wired `TurnReport.Text`, unified `ParentLead` delivery without duplicate wakes (`suppressReportDelivery` / `reportLast`), tracked `parkedReports` in memory (T0, no `Record` schema change), gated live/processless/startup `kickInput` and `sendRetried` paths on `!c.reportsParked()`, restored parked count on restart while continuation is scheduled, and reset `parkedReports` across `takeReport`, `kickInput`, `admitDurableTurn`, `requeueDurableSteers`, and `finishClose`.
+  - `agents-plugin-tool/internal/mcp/agent_report.go`, `pi_tools_test.go`: delivered `rep.Text` directly without prepending the generic `Reply with mailbox.send...` prefix when `TurnReport.Text` is set, preserving the exact `QUOTA EXHAUSTED` / `ALL ANCESTORS QUOTA-EXHAUSTED` first-line contract.
+  - `agents-plugin-tool/internal/wsagent/quota_hop_test.go`: added full unit, restart, race, cycle-guard, non-lead ancestor, all-exhausted hold/resume/no-input-kick/ordinary-report-wake, no-duplicate-ParentLead, report-shape, and dynamic-guidance tests.
+- **Verification (remote `w5090`):**
+  - `gofmt -l` on all Phase 2 files: clean.
+  - `GOOS=windows GOARCH=amd64 go vet ./...` and `go build ./...`: PASS.
+  - `go test -race -timeout 10m -count=1 ./internal/wsagent/...`: PASS (`181.003s`, all 1,215 tests including all new `TestQuotaHop*`, `TestClaudeWorkerUsageLimitAlert`, `TestClaudeLeadTypedFailures`, and all existing `TestQuotaContinuation*`).
+  - `go test -v -race -count=1 -run 'TestListedToolSchemasFitByteCap|TestCron|TestAgentTurnReporter' ./internal/mcp/...`: PASS (`3.470s`).
+
+
+## Resolution (2026-11-26)
+
+Implemented Phase 1 (wscron/ws/cron one-shot RFC3339 at scheduling with T0 additive migration and writer-goroutine auto-delete) and Phase 2 (Claude worker NoticeUsageLimit emission, synchronized ancestor-hop quota exhaustion reporting, all-exhausted parked-report hold across restarts, and dynamic ws/cron at + AgentTiers guidance), verified clean on remote w5090.

@@ -447,7 +447,8 @@ func (r *Runner) deliverLater(id string) {
 // on another conversation's loop elsewhere, and a parent is never its
 // child's descendant, so the nesting cannot cycle. A report whose parent
 // is closed or unknown, or whose own conversation closed, stays where it
-// is.
+// is. A usage-limit failure's report goes to the nearest ancestor whose
+// quota is not out instead, as its exhaustion report (quota_hop.go).
 func (r *Runner) deliver(id string) {
 	child := r.conv(id)
 	if child == nil {
@@ -465,6 +466,7 @@ func (r *Runner) deliver(id string) {
 		if child.closed {
 			return
 		}
+		texts := child.routeExhausted(parent)
 		var taken []PendingReport
 		parent.do(func() {
 			if parent.closed {
@@ -480,7 +482,11 @@ func (r *Runner) deliver(id string) {
 			}
 			st := child.state()
 			for _, rep := range taken {
-				parent.takeReport(ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result}))
+				text, ok := texts[rep.ID]
+				if !ok {
+					text = ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result})
+				}
+				parent.takeReport(text)
 			}
 		})
 	})
@@ -595,6 +601,9 @@ func (c *conv) takeSteerLive(text string, mark uint64, live []wslive.Event) {
 				return
 			}
 		}
+		// An ordinary report starts its turn, which carries any parked ones
+		// with it (reportsParked).
+		c.parkedReports = 0
 		c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(text)...) })
 		c.kick()
 		c.changed(false)
@@ -622,6 +631,7 @@ func (c *conv) takeSteerLive(text string, mark uint64, live []wslive.Event) {
 		c.saveSteered()
 		fmt.Fprintf(c.r.opts.Log, "agent %s: steer a message: %v\n", c.rec.ReplyID, err)
 	}
+	c.parkedReports = 0
 	c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(text)...) })
 	c.kick()
 	c.changed(false)
@@ -639,6 +649,7 @@ func (c *conv) steerAnswered(refusal string) {
 				fmt.Fprintf(c.r.opts.Log, "agent %s: the harness refused a steered report (%s); it goes as a turn\n", c.rec.ReplyID, refusal)
 				c.steered = slices.Delete(c.steered, i, i+1)
 				c.saveSteered()
+				c.parkedReports = 0
 				c.update(func(rec *Record) { rec.Reports = append(rec.Reports, splitReportTexts(s.requeued())...) })
 				break
 			}
@@ -700,6 +711,7 @@ func (c *conv) requeueSteered() bool {
 	}
 	c.steered = nil
 	c.saveSteered()
+	c.parkedReports = 0
 	c.update(func(rec *Record) { rec.Reports = append(rec.Reports, texts...) })
 	return true
 }
@@ -1019,6 +1031,9 @@ func (c *conv) parentWaitTakes(mark uint64) bool {
 // completion mail, a Pi worker's steered message or turn): a head naming
 // the child and how its turn ended, then its final assistant message.
 func ReportText(rep TurnReport) string {
+	if rep.Text != "" {
+		return rep.Text
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[subagent %s", AgentAddress(rep.Result.ID))
 	if label := rep.Child.Label; label != "" {

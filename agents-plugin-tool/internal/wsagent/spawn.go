@@ -61,6 +61,10 @@ type TurnReport struct {
 	// Child is the conversation's state after the settle.
 	Child  State
 	Result TurnResult
+	// Text, when set, is the report's text in place of ReportText's: a
+	// usage-limit failure's exhaustion report (quota_hop.go), which
+	// Parent may name past the child's own parent.
+	Text string
 }
 
 // SpawnSpec is a spawned conversation's launch: Runner.Spawn.
@@ -316,6 +320,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
+	exhausted := c.noteExhaustion(res)
 	settle := func() {
 		res.n = c.settled.n + 1
 		c.settled = res
@@ -361,6 +366,10 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 	if parent == nil {
 		return nil
 	}
+	if !waited {
+		// A wait that took the turn answered with it; nothing is routed.
+		c.keepExhaustion(exhausted)
+	}
 	c.reportLast()
 	st := c.state()
 	if toConv && !waited {
@@ -380,8 +389,23 @@ func (c *conv) reportLast() {
 	if suppress := c.r.opts.suppressReportDelivery; suppress != nil && suppress(c.record()) {
 		return
 	}
+	rep := TurnReport{Parent: *c.rec.Parent, Child: c.state(), Result: last.Result}
+	if c.exhaustReport != "" && c.exhaustReport == c.rec.ReportID {
+		note := c.exhaustNotice
+		c.exhaustReport, c.exhaustNotice = "", wslive.Notice{}
+		if c.rec.Parent.Kind != ParentConversation {
+			// The exhaustion report replaces this generic one: one report,
+			// to the lead or past it (quota_hop.go). A conversation
+			// parent's goes through deliver instead.
+			if route := c.r.exhaustionRoute(c.record()); route.ok {
+				c.handOffExhaustion(route, c.r.exhaustionText(c.record(), last.Result, note, route), rep, "")
+				c.update(func(rec *Record) { rec.LastReportedTurn = rec.ReportID })
+				return
+			}
+		}
+	}
 	if report := c.r.opts.Report; report != nil {
-		report(TurnReport{Parent: *c.rec.Parent, Child: c.state(), Result: last.Result})
+		report(rep)
 	}
 	c.update(func(rec *Record) { rec.LastReportedTurn = rec.ReportID })
 }

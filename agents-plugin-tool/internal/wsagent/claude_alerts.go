@@ -95,12 +95,14 @@ func (m *claudeMapper) observation(l claudeLine, msg claudeMessage) *wslive.Mode
 	return &observed
 }
 
-// alert reads the typed failure a lead's assistant line carries: a login
-// needed (authentication_failed), the model unavailable (model_not_found),
-// or a usage limit (usage_limit_reached, or a rate_limit refusal with no
-// other typed cause), with the line's text. Nil for any other line.
+// alert reads the typed failure a lead's or agent worker's assistant line
+// carries: a login needed (authentication_failed), the model unavailable
+// (model_not_found), or a usage limit (usage_limit_reached, or a rate_limit
+// refusal with no other typed cause), with the line's text. Nil for any
+// other line, and for a plain profile's. A worker's usage limit only routes
+// its report (quota_hop.go): quota continuation stays a lead's.
 func (m *claudeMapper) alert(l claudeLine) *wslive.Notice {
-	if !m.lead() {
+	if !m.sessionState() {
 		return nil
 	}
 	errKind, apiErr := rawString(l.Error), rawString(l.APIError)

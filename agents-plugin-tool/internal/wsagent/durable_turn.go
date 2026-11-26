@@ -89,6 +89,9 @@ func (c *conv) admitDurableTurn(text string, rest []QueuedInput, mark uint64, st
 	if err != nil {
 		return false, err
 	}
+	if reports {
+		c.parkedReports = 0
+	}
 	return true, c.submitDurableTurn(input)
 }
 

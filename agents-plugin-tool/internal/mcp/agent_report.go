@@ -20,8 +20,11 @@ func AgentTurnReporter(log io.Writer) func(wsagent.TurnReport) {
 		if rep.Parent.Kind != wsagent.ParentLead {
 			return
 		}
-		address := wsagent.AgentAddress(rep.Result.ID)
-		content := fmt.Sprintf("Reply with mailbox.send(to: %q).\n%s", address, wsagent.ReportText(rep))
+		content := rep.Text
+		if content == "" {
+			address := wsagent.AgentAddress(rep.Result.ID)
+			content = fmt.Sprintf("Reply with mailbox.send(to: %q).\n%s", address, wsagent.ReportText(rep))
+		}
 		if err := (wsmailbox.Paths{}).Store().PostSystem(rep.Parent.ReplyID, "agent:"+rep.Result.ID, content, time.Now()); err != nil {
 			if log != nil {
 				fmt.Fprintf(log, "agent %s: report to %s: %v\n", rep.Result.ID, rep.Parent.ReplyID, err)

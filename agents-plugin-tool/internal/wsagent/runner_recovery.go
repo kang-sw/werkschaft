@@ -88,6 +88,7 @@ func (c *conv) turnSettled(turnErr string, quiet, compactCommand bool) {
 	alerted := c.alerted
 	usageLimitAlerted := c.quotaUsageLimitAlerted
 	c.alerted, c.quotaUsageLimitAlerted, c.quotaUsageLimitHandled, c.retry = false, false, false, nil
+	c.usageLimitSettled = usageLimitAlerted
 	if turnErr == "" && !alerted && c.failure != nil {
 		c.setStatus(func() { c.failure = nil })
 		c.changed(quiet)

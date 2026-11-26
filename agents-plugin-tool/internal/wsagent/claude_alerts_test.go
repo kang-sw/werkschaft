@@ -99,6 +99,60 @@ func TestClaudeLeadTypedFailures(t *testing.T) {
 	}
 }
 
+// TestClaudeWorkerUsageLimitAlert verifies that agent workers (SessionState
+// true, Lead nil) emit NoticeUsageLimit from both inline rate_limit_info and
+// prior rate_limit_event lines, while plain profiles still emit no alerts.
+func TestClaudeWorkerUsageLimitAlert(t *testing.T) {
+	workerSpec := func() StartSpec {
+		spec := claudeSpec(t, `{"backend":"claude"}`)
+		spec.SessionState = true
+		return spec
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  wslive.Notice
+	}{
+		{
+			name: "inline usage_limit_reached",
+			lines: []string{failureLine(map[string]any{
+				"error":     "rate_limit",
+				"api_error": "usage_limit_reached",
+				"api_error_params": map[string]any{
+					"rate_limit_info": map[string]any{"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1_800_000_000},
+				},
+			}, "You've hit your limit · resets 3pm")},
+			want: wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "You've hit your limit · resets 3pm", ResetsAt: 1_800_000_000_000},
+		},
+		{
+			name: "rate_limit_event before refusal",
+			lines: []string{
+				rateLimitLine("rejected", "five_hour", 1_800_000_000),
+				rateLimitLine("rejected", "seven_day", 1_800_100_000),
+				failureLine(map[string]any{"error": "rate_limit"}, "You've hit your limit"),
+			},
+			want: wslive.Notice{Kind: wslive.NoticeUsageLimit, Text: "You've hit your limit", ResetsAt: 1_800_100_000_000},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, evs := alerts(t, newClaudeMapper(workerSpec()), tc.lines...)
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("worker alerts = %+v, want %+v", got, tc.want)
+			}
+			if n := countEvents(evs, func(ev Event) bool { return ev.Live != nil && ev.Live.Kind == wslive.KindReply }); n != 0 {
+				t.Fatalf("alert text must not become a reply: %+v", evs)
+			}
+			if n := countEvents(evs, func(ev Event) bool { return ev.TurnStart }); n != 0 {
+				t.Fatalf("worker alert must not emit lead-only TurnStart: %+v", evs)
+			}
+			plain := newClaudeMapper(claudeSpec(t, `{"backend":"claude"}`))
+			if got, _ := alerts(t, plain, tc.lines...); len(got) != 0 {
+				t.Fatalf("plain profile must emit no alerts: %+v", got)
+			}
+		})
+	}
+}
+
 // TestClaudeLeadRetryAndFailedCompaction: an api_retry line is a retry
 // with its attempt, bound, error, and status, settled by the next
 // assistant output or the turn's result; a compaction that failed is a
