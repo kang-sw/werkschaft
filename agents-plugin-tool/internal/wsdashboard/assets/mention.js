@@ -111,15 +111,22 @@
   // written where the group changes from the row before.
   // It returns {key(e), close(), sync()}: the caller's keydown handler calls
   // key(e) first after its IME guard, and stops when it returns true.
+  function mountHost(input) {
+    var dlg = input && input.closest ? input.closest("dialog[open]") : null;
+    if (dlg) return dlg;
+    var r = input && input.ownerDocument ? input.ownerDocument : doc;
+    return r.body || doc.body;
+  }
+
   function attach(input, opts) {
-    var id = "wsm" + (++popSeq), pop = doc.createElement("ul");
+    var id = "wsm" + (++popSeq), ownerDoc = (input && input.ownerDocument) || doc, pop = ownerDoc.createElement("ul");
     var composing = false, st = null, ask = 0, timer = 0, token = opts.token || tokenAt, max = opts.max || 50;
     pop.className = "wsm-pop";
     pop.id = id;
     pop.setAttribute("role", "listbox");
     if (opts.label) pop.setAttribute("aria-label", opts.label);
     pop.hidden = true;
-    doc.body.appendChild(pop);
+    mountHost(input).appendChild(pop);
     input.setAttribute("aria-autocomplete", "list");
     if (!input.getAttribute("aria-controls")) input.setAttribute("aria-controls", id);
     input.setAttribute("aria-expanded", "false");
@@ -147,7 +154,7 @@
     function sync() {
       // While an IME composes, some report the whole marked text as the
       // selection; the caret is then its end, never a reason to close.
-      var tok = (doc.activeElement === input || input.wsc && doc.activeElement === input.wsc.editor) && (composing || input.selectionStart === input.selectionEnd) && token(input.value, input.selectionEnd);
+      var tok = (ownerDoc.activeElement === input || input.wsc && ownerDoc.activeElement === input.wsc.editor) && (composing || input.selectionStart === input.selectionEnd) && token(input.value, input.selectionEnd);
       if (!tok) { close(); return; }
       var keep = st && st.start === tok.start;
       // The rows of the last answer stay up while the next is asked for;
@@ -173,7 +180,7 @@
     }
     // pathRow is the file mention's row: the name, then its directory.
     function pathRow(li, it) {
-      var name = doc.createElement("span"), dir = doc.createElement("span");
+      var name = ownerDoc.createElement("span"), dir = ownerDoc.createElement("span");
       var p = String(it.path || ""), cut = p.lastIndexOf("/") + 1;
       name.className = "wsm-name";
       name.textContent = p.slice(cut) + (it.dir ? "/" : "");
@@ -184,18 +191,20 @@
       li.title = p + (it.dir ? "/" : "");
     }
     function draw() {
+      var host = mountHost(input);
+      if (host && pop.parentNode !== host) host.appendChild(pop);
       pop.textContent = "";
       var group = "";
       st.items.forEach(function (it, i) {
         if (it.group && it.group !== group) {
-          var head = doc.createElement("li");
+          var head = ownerDoc.createElement("li");
           head.className = "wsm-head";
           head.setAttribute("role", "presentation");
           head.textContent = it.group;
           pop.appendChild(head);
         }
         group = it.group || "";
-        var li = doc.createElement("li");
+        var li = ownerDoc.createElement("li");
         li.className = "wsm-opt" + (i === st.idx ? " on" : "");
         li.id = id + "-" + i;
         li.setAttribute("role", "option");
@@ -272,17 +281,21 @@
     // popup must follow composing text too; only picking waits (key above).
     // Not every IME emits input events while composing, so the composition
     // events drive sync too; none of them closes the popup.
+    function onCompStart() { composing = true; }
+    function onCompUpdate() { composing = true; sync(); }
+    function onCompEnd() { composing = false; sync(); }
+    function follow() { if (st) sync(); }
+    function onKeyUp(e) {
+      if (/^(ArrowLeft|ArrowRight|Home|End)$/.test(e.key)) follow();
+    }
     input.addEventListener("input", sync);
-    input.addEventListener("compositionstart", function () { composing = true; });
-    input.addEventListener("compositionupdate", function () { composing = true; sync(); });
-    input.addEventListener("compositionend", function () { composing = false; sync(); });
+    input.addEventListener("compositionstart", onCompStart);
+    input.addEventListener("compositionupdate", onCompUpdate);
+    input.addEventListener("compositionend", onCompEnd);
     input.addEventListener("blur", close);
     // A caret moved by a click or the arrow keys may leave the token.
-    function follow() { if (st) sync(); }
     input.addEventListener("click", follow);
-    input.addEventListener("keyup", function (e) {
-      if (/^(ArrowLeft|ArrowRight|Home|End)$/.test(e.key)) follow();
-    });
+    input.addEventListener("keyup", onKeyUp);
     input.addEventListener("scroll", place);
     window.addEventListener("resize", place);
     pop.addEventListener("mousedown", function (e) {
@@ -294,8 +307,19 @@
       var o = e.target.closest && e.target.closest("[data-i]"), i = o ? +o.getAttribute("data-i") : -1;
       if (i >= 0 && st && i !== st.idx) { st.idx = i; draw(); }
     });
-    return { key: key, close: close, sync: sync, destroy: function () {
-      close(); window.removeEventListener("resize", place);
+    return { key: key, close: close, sync: sync, pop: pop, destroy: function () {
+      close();
+      if (typeof input.removeEventListener === "function") {
+        input.removeEventListener("input", sync);
+        input.removeEventListener("compositionstart", onCompStart);
+        input.removeEventListener("compositionupdate", onCompUpdate);
+        input.removeEventListener("compositionend", onCompEnd);
+        input.removeEventListener("blur", close);
+        input.removeEventListener("click", follow);
+        input.removeEventListener("keyup", onKeyUp);
+        input.removeEventListener("scroll", place);
+      }
+      if (typeof window.removeEventListener === "function") window.removeEventListener("resize", place);
       if (pop.parentNode) pop.parentNode.removeChild(pop);
     } };
   }

@@ -4,6 +4,7 @@
   var mdComposing = false, mdEditor = null;
 
   function ensureComposerMdEditor() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.reconcileMarkdown === "function") return null;
     if (mdEditor) return mdEditor;
     var editor = ctext && ctext.wsc && ctext.wsc.editor;
     if (!editor || !window.WsMdEditor || typeof window.WsMdEditor.attach !== "function") return null;
@@ -19,17 +20,29 @@
   }
 
   function clearComposerHighlights() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.clearMarkdown === "function") {
+      ctext.wsInput.clearMarkdown();
+      return;
+    }
     var inst = ensureComposerMdEditor();
     if (inst && typeof inst.reconcile === "function") inst.reconcile();
   }
 
   function applyComposerHighlights() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.reconcileMarkdown === "function") {
+      ctext.wsInput.reconcileMarkdown();
+      return;
+    }
     var inst = ensureComposerMdEditor();
     if (inst && typeof inst.reconcile === "function") inst.reconcile();
   }
 
   function scheduleComposerHighlights() {
     if (mdComposing) return;
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.syncMarkdown === "function") {
+      ctext.wsInput.syncMarkdown();
+      return;
+    }
     var inst = ensureComposerMdEditor();
     if (!inst) return;
     if (typeof inst.schedule === "function") inst.schedule();

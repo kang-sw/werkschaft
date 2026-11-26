@@ -18,6 +18,12 @@
   // trackMentions follows an edit, found as the span between the common
   // prefix and suffix of the text before and after it.
   function trackMentions() {
+    if (ctext && ctext.wsInput) {
+      ctext.wsInput.trackMentions();
+      mentions = ctext.wsInput.getMentions();
+      mentionWas = ctext.value;
+      return;
+    }
     var v = ctext.value, was = mentionWas, a = 0, s = 0;
     mentionWas = v;
     if (!mentions.length) return;
@@ -31,12 +37,22 @@
   }
   // shiftMentions moves every mention by d after the text was set whole.
   function shiftMentions(d) {
+    if (ctext && ctext.wsInput) {
+      ctext.wsInput.shiftMentions(d);
+      mentions = ctext.wsInput.getMentions();
+      mentionWas = ctext.value;
+      paintMentions();
+      return;
+    }
     var v = ctext.value;
     mentions = mentions.filter(function (m) { m.start += d; m.end += d; return liveMention(m, v); });
     mentionWas = v;
     paintMentions();
   }
   function clearMentions() {
+    if (ctext && ctext.wsInput) {
+      ctext.wsInput.clearMentions();
+    }
     mentions = [];
     mentionWas = ctext.value;
     paintMentions();
@@ -55,6 +71,7 @@
   }
   // sendText is the composer's text with each mention's @ stripped.
   function sendText() {
+    if (ctext && ctext.wsInput) return ctext.wsInput.sendText();
     var v = ctext.value, out = "", at = 0;
     mentions.slice().sort(function (x, y) { return x.start - y.start; }).forEach(function (m) {
       if (m.start < at || !liveMention(m, v)) return;
@@ -70,18 +87,21 @@
       return r.ok ? r.json() : { items: [] };
     }).then(function (v) { done((v && v.items) || []); }, function () { done([]); });
   }
+  window.wsComposerFiles = fileCandidates;
   if (ctext && rid && window.wsMention) {
-    mention = window.wsMention.attach(ctext, {
-      label: wsT("js.mention.label"),
-      source: fileCandidates,
-      // No file popup in shell mode: an @ in a command is just an @.
-      token: function (v, caret) { return bangMode() ? null : window.wsMention.tokenAt(v, caret); },
-      insert: editText,
-      onPick: function (p) {
-        mentions.push({ start: p.start, end: p.end, text: p.text });
-        paintMentions();
-      }
-    });
+    if (!window.WsInput) {
+      mention = window.wsMention.attach(ctext, {
+        label: wsT("js.mention.label"),
+        source: fileCandidates,
+        // No file popup in shell mode: an @ in a command is just an @.
+        token: function (v, caret) { return bangMode() ? null : window.wsMention.tokenAt(v, caret); },
+        insert: editText,
+        onPick: function (p) {
+          mentions.push({ start: p.start, end: p.end, text: p.text });
+          paintMentions();
+        }
+      });
+    }
     ctext.addEventListener("scroll", function () { if (chl) chl.scrollTop = ctext.scrollTop; });
     window.addEventListener("resize", paintMentions);
   }
@@ -194,12 +214,14 @@
     if (!fixed && (imgs.length || (typeof textRefs !== "undefined" && textRefs.length))) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, fixed ? sel.args : sendText().trim(), !fixed);
   }
-  if (ctext && rid && ccmd && window.wsMention) {
+  function commandCandidates(q, done) { done(commandRows(commandList(), q)); }
+  window.wsComposerCommands = commandCandidates;
+  if (ctext && rid && ccmd && window.wsMention && !window.WsInput) {
     slash = window.wsMention.attach(ctext, {
       label: wsT("js.cmd.label"),
       max: 500,
       token: slashToken,
-      source: function (q, done) { done(commandRows(commandList(), q)); },
+      source: commandCandidates,
       render: commandRow,
       exact: function (c, q) { return c.name === q; },
       choose: function (c, at) {
@@ -213,20 +235,95 @@
     if (imgs.length || (typeof textRefs !== "undefined" && textRefs.length)) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, sendText().slice(sel.end).trim(), true);
   }
-  // Topic-only editors keep their textarea owner and canonical [stem] strings.
-  function bindCapsuleNotes(scope) {
-    if (!window.WsCapsules) return;
-    if (scope && scope.querySelectorAll) {
-      q(".tnote[data-topic], textarea.note", scope).forEach(function (note) {
-        if (note.wscTopicPicker) return;
-        note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
+  // Board notes use WsInput (markdown, capsules, @/#//, image paste, list
+  // continuation, newline-only keymap) when loaded, falling back to topic-only
+  // capsules otherwise.
+  function bindBoardNote(note) {
+    if (note.wscTopicPicker) return;
+    if (window.WsInput) {
+      var inst = window.WsInput.attach(note, {
+        keymap: "newline-only",
+        features: {
+          markdown: true,
+          capsules: true,
+          mentions: true,
+          topics: true,
+          slash: true,
+          imagePaste: true,
+          longPaste: false,
+          listContinuation: true,
+          bangMode: false,
+          autoGrow: true
+        },
+        providers: {
+          files: rid ? fileCandidates : null,
+          topics: capsuleTopics,
+          commands: rid ? commandCandidates : null
+        },
+        preformattedCommands: true,
+        renderCommand: commandRow,
+        slashMax: 500,
+        mentionLabel: wsT("js.mention.label"),
+        slashLabel: wsT("js.cmd.label")
       });
+      note.wscTopicPicker = (inst && inst.getPopups().topic) || true;
       return;
     }
-    window.WsCapsules.sweep();
-    boardNotes().forEach(function (note) {
-      if (note.wscTopicPicker) return;
-      note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
-    });
+    note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
+  }
+  function bindCapsuleNotes(scope) {
+    if (!window.WsCapsules && !window.WsInput) return;
+    if (scope && scope.querySelectorAll) {
+      q(".tnote[data-topic], textarea.note", scope).forEach(bindBoardNote);
+      return;
+    }
+    if (window.WsInput && window.WsInput.sweep) window.WsInput.sweep();
+    if (window.WsCapsules && window.WsCapsules.sweep) window.WsCapsules.sweep();
+    boardNotes().forEach(bindBoardNote);
   }
   if (ctext && window.WsCapsules) window.WsCapsules.topicPicker(ctext, capsuleTopics);
+  if (ctext && window.WsInput) {
+    var ctextInput = window.WsInput.attach(ctext, {
+      managedKeydown: true,
+      features: {
+        markdown: true,
+        capsules: true,
+        mentions: true,
+        topics: true,
+        slash: true,
+        imagePaste: true,
+        longPaste: true,
+        listContinuation: true,
+        bangMode: true,
+        autoGrow: true
+      },
+      isBang: function () { return typeof bangMode === "function" && bangMode(); },
+      onMarkdownReconciled: function () {
+        if (typeof bangMode === "function" && bangMode() && typeof bangPaint === "function") bangPaint(true);
+      },
+      providers: {
+        files: rid ? fileCandidates : null,
+        topics: capsuleTopics,
+        commands: rid && ccmd ? commandCandidates : null
+      },
+      preformattedCommands: true,
+      mentionLabel: wsT("js.mention.label"),
+      slashLabel: wsT("js.cmd.label"),
+      slashMax: 500,
+      slashToken: slashToken,
+      renderCommand: commandRow,
+      slashExact: function (c, q) { return c.name === q; },
+      onSlashPick: function (c, at) {
+        if (ctext.wsc) ctext.wsc.insert("skill", c.name, c.name, at);
+        else { setCommand(c.name); editText(at.start, at.end, ""); }
+        queueDraft();
+      },
+      onMentionPick: function () {
+        mentions = ctextInput.getMentions();
+        paintMentions();
+      }
+    });
+    var ctextPops = ctextInput.getPopups();
+    if (ctextPops.mention) mention = ctextPops.mention;
+    if (ctextPops.slash) slash = ctextPops.slash;
+  }

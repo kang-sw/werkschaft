@@ -610,6 +610,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .close-request-chip > b { min-width: 0; overflow-wrap: anywhere; }
 .close-request-reason { flex: 1 1 18ch; min-width: 0; width: 22ch; max-width: 100%; resize: vertical; border: 0; border-radius: 4px; padding: 3px 5px; background: var(--wb-card); color: var(--wb-fg); font: inherit; }
 .close-request-reason:focus-visible { outline: 1px solid var(--wb-primary); }
+.close-request-reason + .wsc-editor { flex: 1 1 18ch; min-width: 0; width: 22ch; max-width: 100%; min-height: 22px; max-height: 96px; overflow: auto; border-radius: 4px; padding: 3px 5px; background: var(--wb-card); color: var(--wb-fg); font: inherit; }
 .close-request-chip > .unchip { margin-left: auto; }
 .achip .anote { color: var(--wb-muted-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 22ch; }
 .achip .anote::before { content: " · "; }

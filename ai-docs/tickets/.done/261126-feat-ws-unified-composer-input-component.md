@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 06844ee4429d3854
 sage-review-design-reviewed: 06844ee4429d3854
+completed: 2026-11-26
 ---
 
 # Unified Feature-Flagged Input Component Across Dashboard and Whiteboard
@@ -127,3 +128,38 @@ Whenever a new input capability is added (markdown rendering, topic/skill comple
   - Regression tests for existing `#ctext` Enter/Shift+Enter scroll-follow, capsules, whiteboard `readAnswers`/`writeAnswers` morph preservation, and `.wbmention-note` / `#memo-input` submit/cancel flows.
 - Go verification (host-neutral): `GOOS=windows go vet ./...` and targeted `go test -race ./internal/wsdashboard/... ./internal/wswhiteboard/...`, plus the Node DOM harness (`node` over `agents-plugin-tool/internal/wsdashboard/testdata/*.test.cjs`) run on whichever host the worker uses.
 - Live dashboard manual check across all 6 migrated surfaces confirming consistent `#` topic search, `/` autocomplete, badge rendering, and zero cross-input draft leakage.
+
+### Result (324af0ec) - 2026-11-26
+
+Implemented `window.WsInput` and migrated all 6 Phase 1 multi-line surfaces with T0 transparency across commits `da2f17fc`, `e2b95dff`, `7ad9d34a`, and `324af0ec` on `impl/develop/froth-late-slam`:
+
+- **Core component (`agents-plugin-tool/internal/wsdashboard/assets/ws-input.js`, embedded in `pages.go` `MentionScript`):**
+  - Exports `window.WsInput = { attach, get, sweep, DEFAULTS, indentLines, listContinuation, formatCommandRows, renderCommandRow, defaultSlashToken, stripMentions }`.
+  - Mounts on either an existing `<textarea>` or any plain host element (creating an internal backing `<textarea>` for external consumers such as inline chat-card notes) with per-instance isolated mentions, capsules, `@`/`#`/`/` popups, `draftAdapter`, `attachmentHandler`, `onChange`/`onSubmit`/`onCancel`, keymap profiles (`enter-send`, `mod-send`, `enter-save`, `newline-only`, or dynamic function), CJK/Korean IME `beforeinput` newline guard, list continuation, smart Tab indent, layout-read-free `.wsc-backing` auto-grow, and `destroy()` / `sweep(root)` cleanup.
+  - Updated `mention.js` to mount `.wsm-pop` inside the nearest open `<dialog open>` (avoiding top-layer `<dialog>::backdrop` clipping) and detach cleanly on `destroy()`, and made `capsules.js` `topicPicker()` idempotent and feature-gated.
+- **Recorded `WsMdEditor` seam (for `261126-feat-ws-composer-full-spec-markdown`):**
+  - Global symbol: `window.WsMdEditor` (`ws-input.js` only installs its legacy CSS Highlight API fallback when `!window.WsMdEditor`).
+  - Contract: `WsMdEditor.attach(editorEl, opts) -> { reconcile(), clear?(), detach() }` where `opts` is `{ getMentions(): Array<{start, end, text}>, isBang(): boolean, isComposing(): boolean, getValue?(): string, onReconciled?(): void }`.
+  - Legacy fallback aggregates `Range`s per document across all mounted instances into `CSS.highlights` so updating, bang-mode clearing, or detaching one editor never clobbers another's highlights. `dashboard-composer-highlight.js` delegates to `ctext.wsInput` while preserving single-line `var MD_HIGHLIGHT_GROUPS` and pure scanner exports.
+- **Migrated 6 Phase 1 surfaces (all have `markdown`, `capsules`, `mentions`, `topics`, `slash`, `listContinuation`, `autoGrow` ON; `voice` reserved-only):**
+  1. `#ctext` (`dashboard-composer-pickers.js`): `bangMode: true`, `imagePaste: true`, `longPaste: true`, `managedKeydown: true` preserving all `#ctext`/`#composer`/`#chl`/`#cchips`/`#ccmd`/`#csend` IDs, auto-multiline, and bang-history flows; exports `window.wsComposerFiles` and `window.wsComposerCommands`.
+  2. Whiteboard `.tnote` / `.note` (`dashboard-composer-pickers.js`, `dashboard.js`): `keymap: "newline-only"`, `imagePaste: true`, `longPaste: false`, `bangMode: false`; standalone `wswhiteboard` degrades gracefully to plain `<textarea>` when `WsInput` is absent; `.wsc-backing` guard prevents synchronous `scrollHeight` reads in `openNote`.
+  3. Board selection comment popover `.wbmention-note` (`dashboard-composer-selections.js`): `keymap: "newline-only"`, `imagePaste: true`, `longPaste: false`, `bangMode: false`; Escape closes open popups before dismissing popover; keeps raw `@mentions` in draft state and strips `@` on submit.
+  4. Close-request chip reason `.close-request-reason` (`dashboard-composer.js`, `dashboard-conversation.css`): `keymap: "newline-only"`, `imagePaste: false`, `longPaste: false`, `bangMode: false`; `WsInput.sweep(cchips)` on re-render, caret/focus preserved via `WsCapsules.fieldFor`, raw `@mentions` preserved across re-renders and stripped on submit.
+  5. Workspace memo pad `#memo-input` and inline `.memo-note` (`memo.js`): `keymap: "enter-save"`, `imagePaste: false`, `longPaste: false`, `bangMode: false`; cross-frame `wsCapsuleTopics` / `wsComposerFiles` / `wsComposerCommands` providers with generation/session staleness drop; `WsInput.sweep(list)` on re-render; zero `.wsc-` rules added to `memo.css`.
+  6. Tracker support chat `.supcomp` (`dashboard-tracker.js`, `dashboard-menus.css`): dynamic keymap following `inputMode`, `imagePaste: false`, `longPaste: false`, `bangMode: false`, `.wsc-backing` guard in `supGrow`, and `destroy()`/`closePopups()`/`syncMarkdown()` lifecycle hooks.
+- **Review (`code-review-lite`, one pass):**
+  - 0 Critical; 1 Important fixed in `324af0ec` (preserve raw `@mention` text + spans in close-request reason and selection comment drafts until submit via `WsInput.stripMentions`, with round-trip regression test).
+  - Minor items noted without blocking: `enter-send` submits on Ctrl/Cmd+Enter in `.supcomp` and `enter-save` treats Alt+Enter as newline in memo; `updateConfig` rebuilds popups/mdEditor on re-attach; `destroy()` leaves caller-owned `wsc` instance attached.
+- **Verification:**
+  - `node --test agents-plugin-tool/internal/wsdashboard/testdata/{ws-input,composer-autosize,composer-indent-highlight,composer-multiline,composer-scroll-follow}.test.cjs` — PASS (32/32)
+  - `node agents-plugin-tool/internal/wsdashboard/testdata/{capsules,close-request,composer-note-chips,memo_test,textrefs}.*` — PASS (all standalone harnesses + 11/11 textref tests)
+  - `GOOS=windows go vet ./...` (in `agents-plugin-tool`) — PASS
+  - `go test -race ./internal/wswhiteboard/...` — PASS
+  - `go test -race -run "TestWsInput|TestSelectionComposer|TestCapsules|TestCSS|TestSupportChat|TestComposerTextRefsBehavior|TestComposerNoteChipsBehavior|TestComposerAutosize" ./internal/wsdashboard/...` — PASS (note: an earlier unfiltered `go test -race ./internal/wsdashboard/...` timed out at 10m in unrelated `TestPlanUsageAgyActivitySharesPopoverProbePath` shelling out to `agy` inside an active `agy` session)
+  - Live interactive browser click-through across all 6 surfaces was not executed by this headless worker and remains for owner/lead visual confirmation.
+
+
+## Resolution (2026-11-26)
+
+Phase 1 implemented across commits da2f17fc..324af0ec; window.WsInput component and all 6 multi-line surfaces migrated with T0 transparency, WsMdEditor seam documented, and code-review-lite Important finding resolved.

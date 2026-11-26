@@ -9,6 +9,11 @@
     }).filter(function (n) { return n.value.trim(); });
   }
   function inlineSend() {
+    var win = typeof window !== "undefined" ? window : null;
+    var strip = win && win.WsInput && win.WsInput.stripMentions;
+    function sendSel(s) {
+      return s && strip && s.commentMentions && s.commentMentions.length ? Object.assign({}, s, { comment: strip(s.comment, s.commentMentions) }) : s;
+    }
     var edit = inlineEditor(), rows = edit.ordered(), raw = ctext.value, notes = rows.filter(function (r) { return r.kind === "topic-note"; }).map(function (r) {
       return { el: topicNote(r.key), topic: r.key, value: r.payload.note };
     }), said = [], picks = [], consoles = [], usedSelections = {}, at = 0, text = "";
@@ -23,7 +28,7 @@
         if (hasProse || rows.some(function (x) { return x.kind !== "answer" && x.kind !== "topic-note"; })) text += anchor;
       } else if (r.kind === "mention" && p.selectionKey) {
         var s = bselections.filter(function (x) { return x.key === p.selectionKey; })[0] || p.selection;
-        if (s) { text += "\n\n" + selectionBlock(s) + "\n\n"; usedSelections[p.selectionKey] = true; }
+        if (s) { text += "\n\n" + selectionBlock(sendSel(s)) + "\n\n"; usedSelections[p.selectionKey] = true; }
       } else {
         text += anchor;
         if (r.kind === "mention" && p.mention) said.push(p.mention);
@@ -33,7 +38,7 @@
       at = r.end;
     });
     text += raw.slice(at);
-    var legacy = bselections.filter(function (s) { return !usedSelections[s.key]; });
+    var legacy = bselections.filter(function (s) { return !usedSelections[s.key]; }).map(sendSel);
     return { text: selectionPrefix(legacy) + text.replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), notes: notes, mentions: said.concat(bmentions), picks: picks.concat(wpicks), consoles: consoles.concat(wconsoles) };
   }
   function sendMessage() {
@@ -49,13 +54,18 @@
     if ((cmdSel || inline) && outboxInFlight()) return;
     if (cmdSel) { sendCommand(); return; }
     if (inline) { sendInlineCommand(inline); return; }
+    var win = typeof window !== "undefined" ? window : null;
+    var strip = win && win.WsInput && win.WsInput.stripMentions;
+    function sendSel(s) {
+      return s && strip && s.commentMentions && s.commentMentions.length ? Object.assign({}, s, { comment: strip(s.comment, s.commentMentions) }) : s;
+    }
     var groups = bselections.slice(), inlineData = inlineEditor() ? inlineSend() : null;
-    var t = inlineData ? inlineData.text : selectionPrefix(groups) + sendText().replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
+    var t = inlineData ? inlineData.text : selectionPrefix(groups.map(sendSel)) + sendText().replace(/^(?:[ \t]*\r?\n)+|\s+$/g, ""), list = chipList(), notes = inlineData ? inlineData.notes : topicNotes(), said = inlineData ? inlineData.mentions : bmentions.slice();
     var committed = {};
     groups.forEach(function (s) { s.images.forEach(function (n) { committed[n] = true; }); });
     var pics = imgs.filter(function (p) { return !mpend || (mpend.images || []).indexOf(p.n) < 0 || committed[p.n]; });
     var wp = inlineData ? inlineData.picks : wpicks.slice(), wc = inlineData ? inlineData.consoles : wconsoles.slice();
-    var closing = closeRequests.map(function (r) { return { ref: r, topic: r.topic, reason: r.reason }; });
+    var closing = closeRequests.map(function (r) { return { ref: r, topic: r.topic, reason: strip && r.mentions && r.mentions.length ? strip(r.reason, r.mentions) : r.reason }; });
     var txtAttachments = typeof textRefs !== "undefined" ? textRefs.slice() : [];
     if (!t && !list.length && !pics.length && !txtAttachments.length && !notes.length && !said.length && !wp.length && !wc.length && !closing.length) { noteWarn(wsT("js.send.empty")); return; }
     if (pics.some(function (p) { return !p.ref && !p.blob && p.data === null; })) { noteWarn(wsT("js.send.reading")); return; }

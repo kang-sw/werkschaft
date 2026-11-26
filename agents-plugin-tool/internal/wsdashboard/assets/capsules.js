@@ -753,8 +753,12 @@
   function topicPicker(field, source) {
     if (!field || !window.wsMention) return null;
     attach(field);
+    if (field.wsc && field.wsc.topicPop) return field.wsc.topicPop;
     var popup = window.wsMention.attach(field, {
-      label: wsT("js.capsule.topics"), token: function (v, c) { return token(v, c, "#"); },
+      label: wsT("js.capsule.topics"), token: function (v, c) {
+        if (field.wsInput && typeof field.wsInput.allowsTopic === "function" && !field.wsInput.allowsTopic()) return null;
+        return token(v, c, "#");
+      },
       source: function (q, done) { source(function (rows) { done(rank(rows, q, function (r) { return r.label; })); }); },
       render: function (li, row) {
         var name = doc.createElement("span"), stem = doc.createElement("span");
@@ -762,8 +766,17 @@
         li.appendChild(name); li.appendChild(stem);
       }, choose: function (row, at) { field.wsc.insert("topic", row.id, row.label, at); }
     });
+    function onKeyDown(e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); }
+    var origDestroy = popup.destroy;
+    popup.destroy = function () {
+      if (typeof field.removeEventListener === "function") field.removeEventListener("keydown", onKeyDown);
+      if (field.wsc && field.wsc.topicPop === popup) field.wsc.topicPop = null;
+      topicPickers = topicPickers.filter(function (entry) { return entry.popup !== popup; });
+      if (origDestroy) origDestroy();
+    };
+    field.wsc.topicPop = popup;
     topicPickers.push({ field: field, popup: popup });
-    field.addEventListener("keydown", function (e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); });
+    field.addEventListener("keydown", onKeyDown);
     return popup;
   }
   function rawPaste(field) { return field ? !!(field.wsc && rawPasteBypass()) : rawPasteBypass(); }
