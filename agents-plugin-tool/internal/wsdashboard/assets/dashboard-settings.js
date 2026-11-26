@@ -25,7 +25,7 @@ var wsSettingsChoiceLabels = {
   if (modal) document.documentElement.setAttribute("data-settings-modal", "");
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
-  var sections = ["workflow", "agents", "account", "compaction", "adapters", "companion", "profiles", "prompts"];
+  var sections = ["workflow", "agents", "tier_routing", "account", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "agy", "dashboard"];
   var tierHarnessOrder = ["claude", "codex", "agy", "werk"];
   var filterLabels = {
@@ -45,6 +45,7 @@ var wsSettingsChoiceLabels = {
   var sectionLabels = {
     workflow: "js.settings.section.workflow",
     agents: "js.settings.section.agents",
+    tier_routing: "js.settings.section.tier_routing",
     account: "js.settings.section.account",
     compaction: "js.settings.section.compaction",
     adapters: "js.settings.section.adapters",
@@ -58,6 +59,7 @@ var wsSettingsChoiceLabels = {
   var sectionNotes = {
     workflow: "js.settings.section_note.workflow",
     agents: "js.settings.section_note.agents",
+    tier_routing: "js.settings.section_note.tier_routing",
     account: "js.settings.section_note.account",
     compaction: "js.settings.section_note.compaction",
     adapters: "js.settings.section_note.adapters",
@@ -98,7 +100,7 @@ var wsSettingsChoiceLabels = {
     target: query.get("target") || "",
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
-  var snapshot = null, failure = "", activeSection = requestedSection === "account" ? "account" : "workflow";
+  var snapshot = null, failure = "", activeSection = requestedSection === "account" || requestedSection === "tier_routing" ? requestedSection : "workflow";
   var adapter = "claude", filter = "all", focusedTierProvider = "";
   var buckets = new Map(), warnings = new Map(), openLayers = new Set();
   var catalog = window.WsSettingsCatalog;
@@ -1367,6 +1369,70 @@ var wsSettingsChoiceLabels = {
     });
   }
 
+  // agent.tier_aliases is deprecated in favor of agent.tier_routing: its
+  // catalog row has the deprecated surface, so no tab renders a control or
+  // counts it. A stored (non-builtin) value surfaces only here, as a banner
+  // on the tier routing page that clears it.
+  var tierAliasesKey = "agent.tier_aliases";
+
+  function tierAliasOverrides() {
+    var items = [];
+    for (var entry of snapshot ? snapshot.entries : []) {
+      if (entry.key !== tierAliasesKey) continue;
+      for (var layer of entry.layers) {
+        if (layer.scope === "builtin" || layer.selected === undefined) continue;
+        items.push({entry: entry, scope: layer.scope, value: layer.selected});
+      }
+    }
+    return items;
+  }
+
+  function tierAliasesBanner() {
+    var items = tierAliasOverrides();
+    if (!items.length) return null;
+    var banner = el("div", "tier-legacy tier-aliases-legacy");
+    banner.setAttribute("role", "status");
+    banner.dataset.settingsTierAliases = "1";
+    var summary = items.map(function (item) {
+      return shownValue(item.value, item.entry.key) + " (" + scopeName(item.scope) + ")";
+    }).join(", ");
+    var text = el("span", "tier-legacy-text", tr("js.settings.tier_routing.aliases_banner", summary));
+    var clearable = items.filter(function (item) { return Boolean(preferenceTarget(item.scope)); });
+    var errHint = el("span", "hint err");
+    var clearBtn = button("tier-legacy-btn", tr("js.settings.tier_routing.aliases_clear"), async function () {
+      if (clearBtn.disabled) return;
+      clearBtn.disabled = true;
+      clearBtn.textContent = tr("js.settings.tier.legacy_default_clearing");
+      errHint.textContent = "";
+      try {
+        for (var item of clearable) {
+          var result = await request("/api/config/reset", Object.assign({}, preferenceTarget(item.scope), {
+            key: tierAliasesKey, selectors: item.entry.selectors
+          }));
+          if (!result || !result.entry) continue;
+          var affected = new Map((result.affected_entries || [result.entry]).map(function (it) { return [entryID(it), it]; }));
+          snapshot.entries = snapshot.entries.map(function (it) {
+            var fresh = affected.get(entryID(it));
+            return fresh ? Object.assign({}, fresh, {editable: it.editable, disabled_reason: it.disabled_reason}) : it;
+          });
+        }
+        renderCounts();
+        var next = tierAliasesBanner();
+        if (next) banner.replaceWith(next);
+        else banner.remove();
+      } catch (error) {
+        renderCounts();
+        clearBtn.disabled = false;
+        clearBtn.textContent = tr("js.settings.tier_routing.aliases_clear");
+        errHint.textContent = statusText(error.code);
+      }
+    });
+    clearBtn.dataset.settingsTierAliasesClear = "1";
+    clearBtn.disabled = scope === "builtin" || !clearable.length;
+    banner.append(text, clearBtn, errHint);
+    return banner;
+  }
+
   function group(key) {
     return snapshot.entries.filter(function (entry) { return entry.key === key; });
   }
@@ -1554,6 +1620,10 @@ var wsSettingsChoiceLabels = {
     content.append(heading);
     if (activeSection === "agents" && account) content.append(append(el("p", "info-note account-tier-note"),
       tr("js.settings.account.tiers_note"), " ", accountLink("js.settings.account.manage", function () { selectSection("account"); })));
+    if (activeSection === "tier_routing") {
+      var aliasesBanner = tierAliasesBanner();
+      if (aliasesBanner) content.append(aliasesBanner);
+    }
     if (activeSection === "adapters") {
       var tabs = append(el("div", "subtabs"), ...adapters.map(function (name) {
         var tab = button("subtab", sectionName(name), function () {

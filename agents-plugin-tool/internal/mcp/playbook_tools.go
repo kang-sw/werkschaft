@@ -34,6 +34,15 @@ func printPlaybookForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS
 		return "", "", err
 	}
 	if name == workflowManualPlaybookName {
+		// Shared by workflow_manual (RenderLeadManual) and playbook.read
+		// (RenderLeadPlaybook); empty by default, so the manual is unchanged.
+		block, err := s.tierRoutingManualBlock(callerKey, configOpts)
+		if err != nil {
+			return "", "", err
+		}
+		if block != "" {
+			body = injectAtSectionEnd(body, tierRoutingManualHeading, block)
+		}
 		enabled, err := workflowPreferSubagentEnabled(configOpts)
 		if err != nil {
 			return "", "", fmt.Errorf("resolve %s: %w", wsconfig.ItemWorkflowPreferSubagent, err)

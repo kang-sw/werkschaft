@@ -897,6 +897,9 @@
   opacity: .5;
   cursor: not-allowed;
 }
+/* The deprecated agent.tier_aliases clear banner sits directly in the
+   tier routing page's content column, outside a tier card. */
+.tier-aliases-legacy { flex: none; }
 .tier-scroll { overflow-x: auto; }
 .tier-tbl { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 660px; }
 .tier-tbl th {

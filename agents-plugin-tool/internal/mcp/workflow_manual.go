@@ -296,14 +296,21 @@ func injectSkepticalPosture(body string) string {
 // resolved list below"; a body without that heading (an override that dropped
 // it) gets the block appended so the list is never lost.
 func injectWorktreeProfiles(body, block string) string {
+	return injectAtSectionEnd(body, "### Git", block)
+}
+
+// injectAtSectionEnd places block at the end of the section that heading
+// opens, before the next "### " or "## " heading; a body without heading
+// gets block appended so the text is never lost.
+func injectAtSectionEnd(body, heading, block string) string {
 	lines := strings.Split(body, "\n")
-	inGit := false
+	inSection := false
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "### Git" {
-			inGit = true
+		if strings.TrimSpace(line) == heading {
+			inSection = true
 			continue
 		}
-		if inGit && (strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## ")) {
+		if inSection && (strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## ")) {
 			insert := strings.Split(strings.TrimRight(block, "\n")+"\n", "\n")
 			out := append(append(append([]string{}, lines[:i]...), insert...), lines[i:]...)
 			return strings.Join(out, "\n")

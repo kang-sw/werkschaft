@@ -480,13 +480,15 @@ var configRegistry = []configKeyEntry{
 	},
 	{
 		// Free-form like agent.git_search_roots, checked by the parser
-		// agent.spawn reads it with.
+		// agent.spawn reads it with. Deprecated in favor of
+		// agent.tier_routing, but still declared and resolved so an older
+		// binary's write and an alias token keep working.
 		Key:        wsconfig.ItemAgentTierAliases,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",
 		ValueFields: []tuningField{{
 			Name:        "value",
-			Description: "Whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\"; tier is small, medium, large, or xlarge, and a name has no dot. Omit when reset is true.",
+			Description: "Deprecated; prefer agent.tier_routing nodes and bundles. Whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\"; tier is small, medium, large, or xlarge, and a name has no dot. Omit when reset is true.",
 		}},
 		NoAgentVisible:        true,
 		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentTierAliases),
@@ -520,6 +522,44 @@ var configRegistry = []configKeyEntry{
 		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentTierRouting),
 		ResolverBacked:        true,
 		Structured:            true,
+	},
+	{
+		// Sibling of agent.tier_routing, never a field inside it: the
+		// routing value is strictly decoded, so an older binary would refuse
+		// a graph carrying an unknown field.
+		Key:        wsconfig.ItemAgentTierRoutingExpose,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+			Enum:        wsconfig.ScopeSchemaEnum(),
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "Desired mode: on or off. Omit when reset is true.",
+			Enum:        onOffEnum,
+		}},
+		NoAgentVisible: true,
+		ResolverBacked: true,
+	},
+	{
+		// Free-form text like workflow.lang: no Enum, so config.tune keeps
+		// the caller's text (trimmed) as written.
+		Key:        wsconfig.ItemAgentTierRoutingGuidance,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+			Enum:        wsconfig.ScopeSchemaEnum(),
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "Routing preferences in plain language, for example which tier to use for UI mockups or quick lookups. Omit when reset is true.",
+		}},
+		NoAgentVisible: true,
+		ResolverBacked: true,
 	},
 	{
 		Key:        wsconfig.ItemAgentChildWaitingDays,

@@ -154,10 +154,12 @@ test("settings panel skips companion-modal and deprecated rows and keeps enabled
     "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
     "dashboard.companion_preset", "dashboard.companion_sources"
   ]);
-  // The 0.51.0 companion_mode alias stays declared but no UI renders it.
+  // The 0.51.0 companion_mode alias and the agent.tier_aliases key that
+  // agent.tier_routing replaces stay declared, but no panel row renders them.
   const deprecated = catalog.filter(spec => spec.surface === "deprecated").map(spec => spec.key);
-  assert.deepEqual(deprecated, ["dashboard.companion_mode"]);
-  assert.equal(keys.length, shown.length + hidden.length + deprecated.length);
+  assert.deepEqual(deprecated, ["agent.tier_aliases", "dashboard.companion_mode"]);
+  const companionDeprecated = deprecated.filter(key => key.startsWith("dashboard.companion_"));
+  assert.equal(keys.length, shown.length + hidden.length + companionDeprecated.length);
 });
 
 test("settings links and frames keep the exact inspection identifiers", () => {
@@ -1136,4 +1138,154 @@ test("werk bundle and profile provider choices and i18n keys are wired across lo
   assert.match(tiersJS, /providerOptions\("werk"\)/);
   const extrasJS = read("dashboard-settings-extras.js");
   assert.match(extrasJS, /js\.settings\.profile\.provider/);
+});
+
+test("tier routing is its own settings page with the expose toggle and guidance above the graph editor", () => {
+  const catalog = JSON.parse(read("dashboard-settings-catalog.json"));
+  const rows = catalog.filter(spec => spec.section === "tier_routing").map(spec => [spec.key, spec.control, spec.surface || ""]);
+  assert.deepEqual(rows, [
+    ["agent.tier_routing_expose", "toggle", ""],
+    ["agent.tier_routing_guidance", "textarea", ""],
+    ["agent.tier_routing", "tier_routing", ""],
+    ["agent.tier_aliases", "text", "deprecated"]
+  ]);
+  assert.equal(catalog.filter(spec => spec.section === "agents" && spec.key.startsWith("agent.tier_")).length, 0);
+  const source = read("dashboard-settings.js");
+  assert.match(source, /var sections = \["workflow", "agents", "tier_routing", "account",/);
+  const keys = [
+    "js.settings.section.tier_routing",
+    "js.settings.section_note.tier_routing",
+    "js.settings.key.agent.tier_routing_expose.label",
+    "js.settings.key.agent.tier_routing_expose.description",
+    "js.settings.key.agent.tier_routing_guidance.label",
+    "js.settings.key.agent.tier_routing_guidance.description",
+    "js.settings.tier_routing.aliases_banner",
+    "js.settings.tier_routing.aliases_clear"
+  ];
+  for (const locale of ["en", "ko", "ja", "zh-Hans", "zh-Hant", "de", "es", "fr", "it", "pt-BR", "ru"]) {
+    const table = readLocale(locale);
+    for (const key of keys) {
+      assert.equal(typeof table[key], "string", `${locale} is missing ${key}`);
+      assert.notEqual(table[key].trim(), "", `${locale} has an empty ${key}`);
+    }
+    assert.match(table["js.settings.tier_routing.aliases_banner"], /\{0\}/, `${locale} banner drops its placeholder`);
+    assert.doesNotMatch(table["js.settings.key.agent.tier_aliases.description"], /pi\.large/, `${locale} names the retired pi harness`);
+  }
+  assert.equal(readLocale("ko")["js.settings.section.tier_routing"], "티어 라우팅");
+  assert.equal(readLocale("ko")["js.settings.tier_routing.aliases_clear"], "비우기");
+  assert.equal(readLocale("en")["js.settings.tier_routing.aliases_clear"], "Clear");
+});
+
+test("tier routing page hides agent.tier_aliases and offers a clear banner only while a value is stored", async () => {
+  const catalog = JSON.parse(read("dashboard-settings-catalog.json"));
+  const source = read("dashboard-settings.js");
+  const flush = () => new Promise(r => setImmediate(r));
+
+  async function mount({ aliases }) {
+    const { doc, win, FakeEvent } = createFakeDOM();
+    const view = doc.createElement("div");
+    view.setAttribute("data-settings-view", "1");
+    const search = doc.createElement("input");
+    search.setAttribute("data-settings-search", "1");
+    const count = doc.createElement("span");
+    count.setAttribute("data-settings-count", "1");
+    const targetDisplay = doc.createElement("span");
+    targetDisplay.setAttribute("data-settings-target-display", "1");
+    targetDisplay.append(doc.createElement("span"), doc.createElement("code"));
+    const precedence = doc.createElement("div");
+    precedence.setAttribute("data-settings-precedence", "1");
+    const sectionsNav = doc.createElement("nav");
+    sectionsNav.setAttribute("data-settings-sections", "1");
+    const filtersBar = doc.createElement("div");
+    filtersBar.setAttribute("data-settings-filters", "1");
+    const content = doc.createElement("div");
+    content.setAttribute("data-settings-content", "1");
+    view.append(search, count, targetDisplay, precedence, sectionsNav, filtersBar, content);
+    doc.body.appendChild(view);
+
+    const entry = (key, value, extra = {}) => Object.assign({
+      key, value, default: value, type: "string", editable: true, selectors: {},
+      layers: [{ scope: "builtin", value }, { scope: "global" }]
+    }, extra);
+    const aliasEntry = selected => entry("agent.tier_aliases", selected || "", {
+      default: "",
+      layers: [{ scope: "builtin", value: "" }, { scope: "global", selected, value: selected }]
+    });
+    const entries = [
+      entry("agent.tier_routing_expose", "off", { enum: ["on", "off"] }),
+      entry("agent.tier_routing_guidance", ""),
+      entry("agent.tier_routing", {}, { type: "object" }),
+      aliasEntry(aliases),
+      entry("agent.child_waiting_days", 15, { type: "integer" })
+    ];
+
+    const resets = [];
+    win.window = win;
+    win.parent = { location: { hash: "" }, document: { querySelectorAll: () => [] }, postMessage() {} };
+    win.WsShell = shell;
+    win.WsSettingsCatalog = catalog;
+    win.WsSettingsExtension = {};
+    win.WsSettingsTierRouting = {
+      render: () => { const node = doc.createElement("div"); node.dataset.tierRoutingEditor = "1"; return node; }
+    };
+    const url = new URL("http://localhost:19544/settings?scope=global&frame=1");
+    const ctx = {
+      window: win, document: doc, location: url, URLSearchParams, Map, Set, Event: FakeEvent,
+      fetch: async (reqUrl, opts) => {
+        if (String(reqUrl).startsWith("/api/config/snapshot")) {
+          return { ok: true, status: 200, json: async () => ({ scope: "global", target: "", context: { worktree: "", session: "" }, entries }) };
+        }
+        if (String(reqUrl) === "/api/config/reset") {
+          const body = JSON.parse(opts.body);
+          resets.push(body);
+          return { ok: true, status: 200, json: async () => ({ entry: aliasEntry(undefined) }) };
+        }
+        throw new Error("unexpected fetch " + reqUrl);
+      }
+    };
+    vm.runInNewContext(source, ctx);
+    await flush();
+    const nav = name => sectionsNav.querySelectorAll("[data-settings-section]").find(b => b.dataset.settingsSection === name);
+    const open = name => nav(name).click();
+    const rowKeys = () => content.querySelectorAll(".krow").map(r => r.dataset.configKey);
+    const banner = () => content.querySelector("[data-settings-tier-aliases]");
+    return { sectionsNav, content, nav, open, rowKeys, banner, resets, count };
+  }
+
+  // Unset: no banner, no aliases row on any page, and the page order holds.
+  const unset = await mount({ aliases: undefined });
+  const order = unset.sectionsNav.querySelectorAll("[data-settings-section]").map(b => b.dataset.settingsSection);
+  assert.equal(order[order.indexOf("agents") + 1], "tier_routing");
+  unset.open("tier_routing");
+  assert.deepEqual(unset.rowKeys(), ["agent.tier_routing_expose", "agent.tier_routing_guidance"]);
+  assert.ok(unset.content.querySelector("[data-tier-routing-editor]"), "the graph editor renders below the knobs");
+  assert.equal(unset.banner(), null);
+  unset.open("agents");
+  assert.ok(!unset.rowKeys().some(key => key.startsWith("agent.tier_")), "no tier routing row is left on the agents page");
+  assert.ok(unset.rowKeys().includes("agent.child_waiting_days"));
+  assert.equal(unset.banner(), null);
+
+  // Set: the banner shows the value and scope, the row stays hidden and
+  // uncounted, and Clear resets the key, patches the snapshot, and hides it.
+  const set = await mount({ aliases: "mockup=werk.large" });
+  set.open("tier_routing");
+  assert.ok(!set.rowKeys().includes("agent.tier_aliases"));
+  assert.equal(set.nav("tier_routing").querySelector(".cnt").textContent, "", "a deprecated row adds no section badge");
+  const banner = set.banner();
+  assert.ok(banner, "a stored alias shows the clear banner");
+  assert.ok(banner.classList.contains("tier-legacy"));
+  const clear = banner.querySelector("[data-settings-tier-aliases-clear]");
+  assert.equal(clear.textContent, "js.settings.tier_routing.aliases_clear");
+  assert.equal(clear.disabled, false);
+  clear.click();
+  await flush();
+  await flush();
+  assert.equal(set.resets.length, 1);
+  assert.equal(set.resets[0].key, "agent.tier_aliases");
+  assert.equal(set.resets[0].scope, "global");
+  assert.deepEqual(set.resets[0].selectors, {});
+  assert.equal(set.banner(), null, "the banner hides once the value is cleared");
+  set.open("agents");
+  set.open("tier_routing");
+  assert.equal(set.banner(), null, "the cleared value stays cleared in the patched snapshot");
 });
