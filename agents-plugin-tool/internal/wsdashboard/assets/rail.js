@@ -1004,6 +1004,7 @@
       var contentChanged = wasHidden || popCls !== nextCls || html !== nextHtml;
       if (popCls !== nextCls) { popCls = nextCls; pop.className = nextCls; }
       if (html !== nextHtml) { html = nextHtml; pop.innerHTML = html; }
+      if (contentChanged && typeof win.wsFmtTimes === "function") win.wsFmtTimes(pop);
       if (pop.hidden) pop.hidden = false;
       if (contentChanged || !popW || !popH) {
         popW = pop.offsetWidth;

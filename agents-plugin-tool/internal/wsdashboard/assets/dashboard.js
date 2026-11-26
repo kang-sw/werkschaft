@@ -175,6 +175,7 @@
     q("time[data-ms]", el).forEach(function (t) { fmtTime(t, now); });
     q("em.u-pace[data-reset]", el).forEach(function (e) { pace(e, now); });
   }
+  if (typeof window !== "undefined") window.wsFmtTimes = fmtTimes;
   // A usage limit's pace: its percent used against the straight line from
   // 0% at the window's start to 100% at its reset; negative is under pace,
   // nothing on the line.
