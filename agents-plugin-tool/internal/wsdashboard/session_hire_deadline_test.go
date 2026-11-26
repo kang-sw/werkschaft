@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -9,7 +10,29 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
+
+// reopenClosedMetaForTest reopens a closed daemon's SQLite metadata store for
+// deterministic post-Close replay tests without starting the background hireLoop.
+func reopenClosedMetaForTest(t *testing.T, d *Daemon) {
+	t.Helper()
+	store, err := wsmeta.Open(d.dir, wsmeta.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snap, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.meta = store
+	d.metaSnap = snap
+	d.layout = openRailLayoutStoreFromMeta(d.dir, store, snap)
+	d.loadHiringFromMeta(snap)
+	d.loadLabelsFromMeta(snap)
+}
 
 type hireTestTimer struct {
 	mu    sync.Mutex
@@ -163,6 +186,7 @@ func TestHireStartupUnrelatedCorruptRegistrationDoesNotBlockReplay(t *testing.T)
 	enableHiring(t, f.d, "livesession")
 	p := requestHiring(t, f.d, "livesession")
 	f.d.Close()
+	reopenClosedMetaForTest(t, f.d)
 	p.Launch = &HireLaunch{Harness: "claude"}
 	if err := f.d.saveHires([]HireProposal{p}); err != nil {
 		t.Fatal(err)
@@ -189,6 +213,7 @@ func TestHireStartupUnrelatedCorruptRegistrationDoesNotBlockReplay(t *testing.T)
 func TestHireReadinessIgnoresForeignWorkspaceLinks(t *testing.T) {
 	f := startPageFixture(t, hireRegistryFixture)
 	f.d.Close()
+	reopenClosedMetaForTest(t, f.d)
 	f.d.index.Refresh()
 	f.d.index.retry("unrelated")
 	doc, _ := f.d.layout.current()
@@ -196,13 +221,7 @@ func TestHireReadinessIgnoresForeignWorkspaceLinks(t *testing.T) {
 	// A stale link in another workspace is not part of the requester's
 	// displayed hierarchy, even when its old parent cannot be read.
 	doc.Workspaces[filepath.Join(f.project, "other-workspace")] = &railLayoutWS{Children: map[string][]string{"unrelated": {"livesession"}}}
-	raw, err := doc.encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writePrivateFile(f.dir, railLayoutFileName, raw); err != nil {
-		t.Fatal(err)
-	}
+	replaceLayoutForTest(t, f.d.layout, doc)
 	if !f.d.hireHierarchyReady("livesession") || f.d.hireParent("livesession") != "" {
 		t.Fatal("foreign workspace link blocked a top-level requester")
 	}
@@ -215,6 +234,7 @@ func TestHireStartupPartialIndexRetainsApprovalJournal(t *testing.T) {
 			enableHiring(t, f.d, "livesession")
 			p := requestHiring(t, f.d, "livesession")
 			f.d.Close() // replay deterministically, without the fixture's loop
+			reopenClosedMetaForTest(t, f.d)
 			p.Launch = &HireLaunch{Harness: "claude"}
 			if err := f.d.saveHires([]HireProposal{p}); err != nil {
 				t.Fatal(err)

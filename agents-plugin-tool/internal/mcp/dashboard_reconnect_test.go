@@ -72,7 +72,7 @@ func TestDashboardProxyReconnectRestoresLiveSessionsAfterDaemonRestart(t *testin
 			}
 
 			now = now.Add(time.Minute)
-			next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude"})
+			next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude", RecordReader: &testRecordReader{}})
 			t.Cleanup(next.Close)
 			next.dashboard.now = func() time.Time { return now }
 			initializeDashboardProxy(t, next)
@@ -141,7 +141,7 @@ func TestDashboardProxyReconnectDoesNotAdoptUnrelatedRows(t *testing.T) {
 			if err := wsdashboard.WriteRegistration(dir, reg); err != nil {
 				t.Fatal(err)
 			}
-			next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude"})
+			next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude", RecordReader: &testRecordReader{}})
 			t.Cleanup(next.Close)
 			initializeDashboardProxy(t, next)
 			after, _ := readRegistration(t, dir, key)
@@ -163,7 +163,7 @@ func TestDashboardProxyReconnectRespectsDashboardKeyOff(t *testing.T) {
 	// A replacement can read a new manifest/config; reconnect is not a
 	// reason to ignore the session's resolved dashboard.enabled value.
 	t.Setenv(envConfigManifests, claudeManifestPath+";"+dashboardOffManifest(t))
-	next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude"})
+	next := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: os.Environ(), OwnerPID: old.ownerPID, Harness: "claude", RecordReader: &testRecordReader{}})
 	t.Cleanup(next.Close)
 	initializeDashboardProxy(t, next)
 	if reg, ok := readRegistration(t, dir, key); ok {

@@ -54,9 +54,10 @@ const (
 
 // dashboardLink is this process's registry and nudge state.
 type dashboardLink struct {
-	mu       sync.Mutex
-	sessions map[string]*dashboardSession // by session key
-	pruned   bool
+	mu           sync.Mutex
+	sessions     map[string]*dashboardSession // by session key
+	pruned       bool
+	prunePending bool
 	// now is the clock; nil uses time.Now.
 	now func() time.Time
 	// dir resolves the daemon state directory; nil uses
@@ -405,7 +406,13 @@ retry:
 	defer d.mu.Unlock()
 	if !d.pruned {
 		d.pruned = true
-		wsdashboard.PruneRegistrations(dir, now, wsdashboard.RegistryRetention)
+		handled := false
+		if pruner, ok := s.live.host.(wsdashboard.MetaPruner); ok {
+			_, handled = pruner.PruneRegistrationsFor(dir, now, wsdashboard.RegistryRetention)
+		}
+		if !handled {
+			d.prunePending = true
+		}
 	}
 	reg := sess.reg
 	if reg.ReplyID == "" {
@@ -459,15 +466,23 @@ func dashboardWriteRow(dir string, sess *dashboardSession, reg wsdashboard.Regis
 
 // dashboardUnregister takes a session whose dashboard key resolves off out
 // of the registry: its row is removed and this server stops writing it. The
-// row of a session the dashboard daemon has hosted (its directory holds the
-// runner's record) stays as it is instead: the daemon reads that row to
-// learn the session moved to a terminal, and with the row gone it would
-// write its own again and resume a conversation this harness holds. The
+// row of a session the dashboard daemon has hosted (confirmed by the daemon's
+// in-memory runner or authenticated /meta/unregister-check) stays as it is
+// instead: the daemon reads that row to learn the session moved to a terminal,
+// and with the row gone it would write its own again and resume a conversation
+// this harness holds. When no registration file exists on disk, no daemon
+// contact is needed. When a registration file exists and the daemon is
+// unavailable, removal fails closed rather than reading legacy agent.json. The
 // caller holds d.mu.
 func (s *Server) dashboardUnregister(dir string, sess *dashboardSession) {
-	if _, err := wsstate.Stat(filepath.Join(wsdashboard.SessionDir(dir, sess.replyID), wsdashboard.AgentRecordFileName)); err != nil {
-		if err := wsdashboard.RemoveRegistration(dir, sess.replyID); err != nil {
-			s.debugEvent("dashboard.unregister_failed", map[string]any{"error": err.Error()})
+	if _, err := wsdashboard.ReadRegistration(dir, sess.replyID); err == nil {
+		hasRecord, err := s.lookupHasAgentRecord(dir, sess.replyID)
+		if err != nil {
+			s.debugEvent("dashboard.unregister_deferred", map[string]any{"error": err.Error()})
+		} else if !hasRecord {
+			if err := wsdashboard.RemoveRegistration(dir, sess.replyID); err != nil {
+				s.debugEvent("dashboard.unregister_failed", map[string]any{"error": err.Error()})
+			}
 		}
 	}
 	sess.reg = wsdashboard.Registration{}
@@ -678,6 +693,13 @@ func (s *Server) runDashboardNudges(queue <-chan wsdashboard.NudgeBody) {
 			s.recordDashboardNudges(batch, 0)
 			continue
 		}
+		if s.takeDashboardPrunePending() {
+			ctx, cancel := context.WithTimeout(context.Background(), dashboardNudgeTimeout)
+			if _, err := wsdashboard.RequestPruneRegistrations(ctx, client, dir, wsdashboard.RegistryRetention); err != nil {
+				s.debugEvent("dashboard.prune_failed", map[string]any{"error": err.Error()})
+			}
+			cancel()
+		}
 		// A hosted daemon can accept its own cache's invalidations without
 		// touching endpoint.json or making a loopback request. Other cache
 		// roots and older hosts retain the HTTP path.
@@ -712,6 +734,19 @@ func (s *Server) runDashboardNudges(queue <-chan wsdashboard.NudgeBody) {
 			s.recordDashboardNudges([]wsdashboard.NudgeBody{body}, port)
 		}
 	}
+}
+
+// takeDashboardPrunePending consumes the one-shot pending prune flag queued on
+// an out-of-daemon server's first registration.
+func (s *Server) takeDashboardPrunePending() bool {
+	d := &s.dashboard
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.prunePending {
+		return false
+	}
+	d.prunePending = false
+	return true
 }
 
 // recordDashboardNudges records the outcome of the nudges in batch on the

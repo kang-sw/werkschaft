@@ -370,6 +370,8 @@ func (n *WhiteboardNudges) deliveryGate(t nudgeTarget) func() bool {
 		return func() bool { return false }
 	}
 	var st wsagent.State
+	var rec wsagent.Record
+	var recFound bool
 	if reg.Hosted {
 		if n.agents == nil {
 			return func() bool { return false }
@@ -377,6 +379,9 @@ func (n *WhiteboardNudges) deliveryGate(t nudgeTarget) func() bool {
 		st, err = n.agents.Get(id) // runner/inbox access happens BEFORE the board lock
 		if err != nil {
 			return func() bool { return false }
+		}
+		if reader, ok := n.agents.(AgentRecordReader); ok {
+			rec, recFound = reader.RecordByReplyID(id)
 		}
 	}
 	return func() bool {
@@ -392,8 +397,7 @@ func (n *WhiteboardNudges) deliveryGate(t nudgeTarget) func() bool {
 			if !st.Lead || !st.Process || st.ID != id || st.Root != t.root || st.Parent != nil || st.ClosedAt != "" || st.HandedOffAt != "" || st.Status != wsagent.StatusIdle && st.Status != wsagent.StatusRunning || current.EndedAt != "" || current.HostStopped || current.HostPID <= 0 || current.HarnessPID != 0 {
 				return false
 			}
-			rec, err := wsagent.ReadRecord(n.dir, id)
-			return err == nil && rec.WSKey == t.key && rec.Root == t.root && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && rec.HandedOffAt == "" && rec.HostPID == current.HostPID && rec.HolderID != "" && rec.Backend == current.Harness && st.Backend == rec.Backend && n.alive(current.HostPID)
+			return recFound && rec.WSKey == t.key && rec.Root == t.root && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && rec.HandedOffAt == "" && rec.HostPID == current.HostPID && rec.HolderID != "" && rec.Backend == current.Harness && st.Backend == rec.Backend && n.alive(current.HostPID)
 		}
 		// EndedAt/heartbeat describe the MCP connection, not harness death. An
 		// idle live terminal remains eligible, but a missing registration (e.g.

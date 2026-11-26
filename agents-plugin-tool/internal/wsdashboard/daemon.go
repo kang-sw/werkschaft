@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/gofrs/flock"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"io"
 	"net"
 	"net/http"
@@ -174,6 +175,19 @@ type DaemonOptions struct {
 	// Close closes it to changes before it releases the lock, so a store
 	// serves one daemon.
 	Credentials *wscred.Store
+	// AgentRecordValidator validates legacy agent.json captures during the
+	// one-time SQLite metadata cutover (wsmeta.StoreAgentRecord). Production
+	// supplies wsagent.ValidateLegacyRecord; leaving it nil rejects a state
+	// directory that contains legacy agent.json files.
+	AgentRecordValidator wsmeta.LegacyValidator
+	// OnMetaReady runs under the singleton lock after SQLite cutover and
+	// startup snapshot load succeed, before Agents.Start and before the HTTP
+	// server starts accepting requests.
+	OnMetaReady func(d *Daemon, store *wsmeta.Store, snap *wsmeta.Snapshot)
+	// OnLegacyFallback runs under the singleton lock when SQLite cutover
+	// returns wsmeta.ErrCutoverUnsupported, so deferred legacy stores load
+	// from legacy JSON files instead.
+	OnLegacyFallback func()
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -331,8 +345,9 @@ type Daemon struct {
 	// inboxMu serializes the daemon's own inbox writes (sends and cancels,
 	// and the answer check's record and nudge).
 	inboxMu       sync.Mutex
-	answerReplay  sync.Map        // reply-id -> one active replay/retry loop
-	answerPending map[string]bool // inboxMu; absent means not yet checked at startup
+	answerReplay  sync.Map                  // reply-id -> one active replay/retry loop
+	answerPending map[string]bool           // inboxMu; absent means not yet checked at startup
+	ackChecks     map[string]ackCheckRecord // inboxMu; SQLite-backed ack-check cache when meta != nil
 	// acks runs the answer checks (ack_check.go), nil without a session
 	// index.
 	acks *ackChecker
@@ -349,7 +364,15 @@ type Daemon struct {
 	// auth holds bounded, ephemeral login codes and the exchange rate window.
 	auth      localhostAuth
 	clipboard clipboardWriter
-	memoMu    sync.Mutex // serializes daemon-local memo read/modify/write
+	memoMu    sync.Mutex                // serializes daemon-local memo read/modify/write
+	memoCache map[string]*cachedMemoDoc // memoMu; keyed by workspace hash when meta != nil
+	// labelMu and hiringMu are leaf locks ordered strictly after hireMu so
+	// approveHireLocked -> CreateHireLead -> OnHired -> RecordHired never
+	// reacquires hireMu.
+	labelMu  sync.RWMutex
+	labels   map[string]string
+	hiringMu sync.RWMutex
+	hiring   map[string]HiringMetadata
 	// beforeConfigWrite runs between a config save's layer read and its
 	// write (a test seam; nil in production).
 	beforeConfigWrite func(key string)
@@ -409,6 +432,7 @@ type Daemon struct {
 	hireInLoop bool // guarded by hireMu
 	hireWake   chan struct{}
 	hireDone   chan struct{}
+	pollDone   chan struct{}
 	// beforeUnlock is DaemonOptions.BeforeUnlock.
 	beforeUnlock func()
 	endLog       func()
@@ -451,6 +475,19 @@ type Daemon struct {
 	hostedExecJobs func() map[string]int
 	// forgotten is DaemonOptions.SessionForgotten.
 	forgotten func(replyID string)
+
+	// meta is the single daemon-owned SQLite metadata store after cutover
+	// (nil in legacy fallback); metaSnap is the startup snapshot read once
+	// under dashboard.lock.
+	meta     *wsmeta.Store
+	metaSnap *wsmeta.Snapshot
+
+	// metaMu/metaClosed/metaWG gate /meta/* requests and in-process metadata
+	// pruning so Close refuses new callers (503) and drains in-flight calls
+	// before tearing down agents or metadata stores.
+	metaMu     sync.RWMutex
+	metaClosed bool
+	metaWG     sync.WaitGroup
 
 	closeOnce sync.Once
 	stop      chan struct{}

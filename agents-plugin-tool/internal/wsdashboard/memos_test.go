@@ -135,7 +135,14 @@ func TestMemoRoutesAndRailBadge(t *testing.T) {
 	if code, _ := get(t, f.base+"/rail/memos?workspace=unknown"); code != http.StatusNotFound {
 		t.Errorf("unknown workspace: %d", code)
 	}
-	if err := os.WriteFile(memoFile(f.dir, f.project), []byte(`broken`), 0o600); err != nil {
+	legacyPath := memoFile(f.dir, f.project)
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy memo file should not be written post-cutover: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`broken`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := renderRailRegion(f.d.railView(f.d.pagesIn("en")), "en"); err != nil {

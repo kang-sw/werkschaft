@@ -234,8 +234,14 @@ func (s *Server) readPlaybook(name, keyStr string, callerContext map[string]stri
 	// The tracker section is never a spawned key's (as workflow_manual
 	// renders it); its tools refuse that key, except a store's support
 	// conversation, which the tracker gate admits.
-	if entry, found := s.lookupSession(keyStr); found && trackerOn && !entry.isTopLevelLead() && !s.trackerSupportReadsTracker(keyStr, entry) {
-		trackerOn = false
+	if entry, found := s.lookupSession(keyStr); found && trackerOn && !entry.isTopLevelLead() {
+		reads, err := s.trackerSupportReadsTracker(keyStr, entry)
+		if err != nil {
+			return "", err
+		}
+		if !reads {
+			trackerOn = false
+		}
 	}
 	body, err = applyKnobVariants(s, rsrcRoot, name, body, whiteboardOn, trackerOn)
 	if err != nil {

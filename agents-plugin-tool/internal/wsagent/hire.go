@@ -57,6 +57,22 @@ func (r *Runner) CancelHireLead(requestID string) error {
 }
 
 func (r *Runner) findHireLead(requestID string) (*Record, error) {
+	if r.meta != nil {
+		r.hiredByReqMu.Lock()
+		replyID := r.hiredByReq[requestID]
+		r.hiredByReqMu.Unlock()
+		if replyID == "" {
+			return nil, nil
+		}
+		rec, ok := r.recordOf(replyID)
+		if !ok {
+			return nil, nil
+		}
+		if !rec.Lead {
+			return nil, fmt.Errorf("hiring creation identity mismatch")
+		}
+		return &rec, nil
+	}
 	dirs, err := os.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err

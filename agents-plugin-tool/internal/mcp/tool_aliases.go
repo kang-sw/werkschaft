@@ -93,12 +93,18 @@ type connectionDescriptor struct {
 // connection's record names (wsagent.Record.Backend), through the runner
 // that hosts it. A worker carries its own delegate key in its MCP environment;
 // that identity selects spelling only, never the hosted-lead key rule. It is
-// resolved once, retrying only while the record is not readable yet.
+// resolved once, retrying only while the record is not readable yet or the
+// daemon is unavailable.
 func (s *Server) connectionDescriptor() connectionDescriptor {
+	d, _ := s.connectionDescriptorWithError()
+	return d
+}
+
+func (s *Server) connectionDescriptorWithError() (connectionDescriptor, error) {
 	s.descriptorMu.Lock()
 	defer s.descriptorMu.Unlock()
 	if s.descriptorResolved {
-		return s.descriptor
+		return s.descriptor, nil
 	}
 	key := s.hostedSessionKey()
 	worker := key == ""
@@ -107,24 +113,27 @@ func (s *Server) connectionDescriptor() connectionDescriptor {
 	}
 	if key == "" {
 		s.descriptorResolved = true
-		return s.descriptor
+		return s.descriptor, nil
 	}
-	rec, ok := s.callerRecord(key)
+	registrations := s.agentBackends()
+	if len(registrations) == 0 {
+		return s.descriptor, nil
+	}
+	rec, ok, err := s.callerRecord(key)
+	if err != nil {
+		return connectionDescriptor{}, err
+	}
 	if !ok {
-		return connectionDescriptor{}
+		return connectionDescriptor{}, nil
 	}
 	if worker && rec.Lead {
 		s.descriptorResolved = true
-		return s.descriptor
+		return s.descriptor, nil
 	}
 	s.descriptorResolved = true
-	registrations := s.agentBackends()
-	if len(registrations) == 0 {
-		return s.descriptor
-	}
 	reg, ok := registrations[0][rec.Backend]
 	if !ok {
-		return s.descriptor
+		return s.descriptor, nil
 	}
 	s.descriptor.manualHarness = reg.ManualHarness
 	s.descriptor.toolsAlwaysLoad = reg.ToolsAlwaysLoad
@@ -154,7 +163,7 @@ func (s *Server) connectionDescriptor() connectionDescriptor {
 		}
 	}
 	s.descriptor.aliases = table
-	return s.descriptor
+	return s.descriptor, nil
 }
 
 // playbookHarness is the harness a playbook render selects its overlay

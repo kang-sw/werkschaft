@@ -480,15 +480,12 @@ func TestWorktreeDeletePurgesEndedSessions(t *testing.T) {
 	if agents.forgot("other") {
 		t.Errorf("AgentForgetter.ForgetClosed was unexpectedly called for untouched session other")
 	}
-	doc, err := readRailLayout(filepath.Join(f.dir, railLayoutFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	doc, _ := reopenLayoutForTest(t, f.d).current()
 	if w := doc.Workspaces[f.root]; w != nil && slices.ContainsFunc(w.WorktreeOrder, func(p string) bool { return samePath(p, wt) }) {
-		t.Errorf("deleted worktree %s still lingers in rail-layout.json worktree_order: %v", wt, w.WorktreeOrder)
+		t.Errorf("deleted worktree %s still lingers in rail layout worktree_order: %v", wt, w.WorktreeOrder)
 	}
 	if w := doc.Workspaces[f.root]; w == nil || !slices.ContainsFunc(w.WorktreeOrder, func(p string) bool { return samePath(p, keep) }) {
-		t.Errorf("untouched worktree %s missing from rail-layout.json worktree_order: %+v", keep, w)
+		t.Errorf("untouched worktree %s missing from rail layout worktree_order: %+v", keep, w)
 	}
 }
 

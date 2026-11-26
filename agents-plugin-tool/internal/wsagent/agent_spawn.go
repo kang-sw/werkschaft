@@ -506,7 +506,7 @@ func (r *Runner) AgentList(caller AgentCaller) []AgentChild {
 			Address:   AgentAddress(st.ID),
 			Label:     rec.Label,
 			Tier:      st.Backend,
-			Authority: childLevel(wsdashboard.SessionDir(r.opts.Dir, st.ID)),
+			Authority: r.childLevel(st.ID, wsdashboard.SessionDir(r.opts.Dir, st.ID)),
 			State:     AgentStatus(st),
 			Model:     st.Model,
 			Effort:    st.Effort,

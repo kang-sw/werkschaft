@@ -193,7 +193,7 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		current, workerLevel := c.rec, c.workerPermissionLevel
 		c.mu.Unlock()
 		if current.Lead {
-			selected, explicit, readErr := cachedPermissionSelection(c.dir)
+			selected, explicit, readErr := c.r.cachedPermissionSelection(current.ReplyID, c.dir)
 			level, _, err := c.r.resolveLeadPermission(current, selected, explicit, readErr)
 			if err != nil {
 				return ""
@@ -203,7 +203,7 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		return wsfs.Authority(workerLevel)
 	}
 	_, liveModes := proc.(liveLeadMode)
-	admission := &permissionSlot(c.dir).admission
+	admission := &c.r.permissionSlot(rec.ReplyID, c.dir).admission
 	files := &wsfs.FileWriteSession{
 		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),
 		CurrentAuthority: authority, LiveAuthority: rec.Lead && liveModes,

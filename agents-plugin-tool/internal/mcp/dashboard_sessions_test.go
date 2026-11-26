@@ -90,8 +90,10 @@ func readRegistration(t *testing.T, dir, key string) (wsdashboard.Registration, 
 // fakeDaemon records the nudges it receives and answers with status, or
 // blocks every request until the test ends when hang is set.
 type fakeDaemon struct {
-	mu     sync.Mutex
-	nudges []wsdashboard.NudgeBody
+	mu           sync.Mutex
+	nudges       []wsdashboard.NudgeBody
+	agentRecords map[string]bool
+	pruneCalls   int
 }
 
 func (f *fakeDaemon) received() []wsdashboard.NudgeBody {
@@ -102,11 +104,35 @@ func (f *fakeDaemon) received() []wsdashboard.NudgeBody {
 
 func startFakeDaemon(t *testing.T, dir string, status int, hang bool) *fakeDaemon {
 	t.Helper()
-	fake := &fakeDaemon{}
+	fake := &fakeDaemon{agentRecords: map[string]bool{}}
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hang {
 			<-release
+			return
+		}
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"service":"ws-dashboard","pid":1,"version":"test"}`))
+			return
+		case wsdashboard.MetaUnregisterCheckPath:
+			var req struct {
+				ReplyID string `json:"reply_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			fake.mu.Lock()
+			has := fake.agentRecords[req.ReplyID]
+			fake.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]bool{"has_agent_record": has})
+			return
+		case wsdashboard.MetaPrunePath:
+			fake.mu.Lock()
+			fake.pruneCalls++
+			fake.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"pruned":0}`))
 			return
 		}
 		var body wsdashboard.NudgeBody
@@ -412,18 +438,52 @@ func TestDashboardHeartbeatIdleCutoffAndEnd(t *testing.T) {
 }
 
 func TestDashboardFirstRegistrationPrunesExpiredEntries(t *testing.T) {
-	dir := dashboardSessionEnv(t)
-	root := dashboardGitRoot(t)
-	old := time.Now().Add(-wsdashboard.RegistryRetention - time.Hour).UTC().Format(time.RFC3339)
-	if err := wsdashboard.WriteRegistration(dir, wsdashboard.Registration{ReplyID: "expired", Project: root, HeartbeatAt: old}); err != nil {
-		t.Fatal(err)
-	}
-	s, key, _ := dashboardSessionServer(t, root, true)
-	dashCall(t, s, "todo.list", map[string]any{"session_key": key})
-	if _, err := os.Stat(wsdashboard.SessionDir(dir, "expired")); !os.IsNotExist(err) {
-		t.Fatalf("expired registration kept: %v", err)
-	}
-	if _, ok := readRegistration(t, dir, key); !ok {
-		t.Fatal("not registered")
-	}
+	t.Run("via daemon meta prune", func(t *testing.T) {
+		dir := dashboardSessionEnv(t)
+		root := dashboardGitRoot(t)
+		daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{Dir: dir, Home: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer daemon.Close()
+		old := time.Now().Add(-wsdashboard.RegistryRetention - time.Hour).UTC().Format(time.RFC3339)
+		if err := wsdashboard.WriteRegistration(dir, wsdashboard.Registration{ReplyID: "expired", Project: root, HeartbeatAt: old}); err != nil {
+			t.Fatal(err)
+		}
+		s, key, _ := dashboardSessionServer(t, root, true)
+		defer s.Close()
+		dashCall(t, s, "todo.list", map[string]any{"session_key": key})
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			_, err := os.Stat(wsdashboard.SessionDir(dir, "expired"))
+			if os.IsNotExist(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("expired registration kept after daemon /meta/prune: %v", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("not registered")
+		}
+	})
+
+	t.Run("without daemon does not prune directly", func(t *testing.T) {
+		dir := dashboardSessionEnv(t)
+		root := dashboardGitRoot(t)
+		old := time.Now().Add(-wsdashboard.RegistryRetention - time.Hour).UTC().Format(time.RFC3339)
+		if err := wsdashboard.WriteRegistration(dir, wsdashboard.Registration{ReplyID: "expired", Project: root, HeartbeatAt: old}); err != nil {
+			t.Fatal(err)
+		}
+		s, key, _ := dashboardSessionServer(t, root, true)
+		defer s.Close()
+		dashCall(t, s, "todo.list", map[string]any{"session_key": key})
+		if _, err := os.Stat(wsdashboard.SessionDir(dir, "expired")); err != nil {
+			t.Fatalf("out-of-daemon server must not delete session dir without daemon confirmation: %v", err)
+		}
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("not registered")
+		}
+	})
 }

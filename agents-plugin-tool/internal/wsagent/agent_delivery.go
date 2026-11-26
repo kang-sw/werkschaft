@@ -311,8 +311,11 @@ var _ wsdashboard.AgentForgetter = (*Runner)(nil)
 // record. It returns whether the caller may remove the session directory.
 func (r *Runner) ForgetClosed(id string) bool {
 	rec, purge := r.forgetClosed(id)
-	if purge && rec.ReplyID != "" {
-		r.deleteDurableRecord(rec)
+	if purge {
+		if rec.ReplyID != "" {
+			r.deleteDurableRecord(rec)
+		}
+		r.deleteMetaSession(id)
 	}
 	return purge
 }
@@ -406,6 +409,7 @@ func (r *Runner) deleteSessionRecord(rec Record) bool {
 		return false
 	}
 	r.deleteDurableRecord(rec)
+	r.deleteMetaSession(id)
 	return true
 }
 

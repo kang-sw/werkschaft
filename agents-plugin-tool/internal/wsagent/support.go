@@ -15,6 +15,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // SupportRoutePrefix is where the daemon mounts the tracker support
@@ -111,6 +112,10 @@ type SupportOptions struct {
 	Config wsconfig.Options
 	// Now is the clock; nil uses time.Now.
 	Now func() time.Time
+	// DeferLoad skips reading support.json during NewSupport so the daemon can
+	// load from the SQLite metadata snapshot (LoadFromMeta) or fall back to
+	// legacy support.json (LoadLegacy) once cutover resolves.
+	DeferLoad bool
 }
 
 // ErrStoreUnregistered is the SupportOptions.StoreRoot error of a store the
@@ -130,9 +135,9 @@ type Support struct {
 	storesMu   sync.Mutex
 	storeLocks map[string]*sync.Mutex
 
-	// mu guards state and its saves; it is never held across a runner
-	// call.
+	// mu guards state, meta, and saves; it is never held across a runner call.
 	mu    sync.Mutex
+	meta  *wsmeta.Store
 	state supportState
 
 	// choicesMu guards cache; a listing runs under it, so concurrent
@@ -166,8 +171,8 @@ func (c cachedChoices) fresh(now time.Time) bool {
 	return now.Sub(c.at) < choicesTTL
 }
 
-// NewSupport returns a Support over opts, loading support.json; a missing
-// or unreadable file starts empty.
+// NewSupport returns a Support over opts, loading support.json unless
+// opts.DeferLoad is set; a missing or unreadable file starts empty.
 func NewSupport(opts SupportOptions) *Support {
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -176,19 +181,111 @@ func NewSupport(opts SupportOptions) *Support {
 		opts.Config = opts.Runner.opts.Config
 	}
 	opts.Config.RepoRoot = ""
-	s := &Support{opts: opts, cache: map[string]cachedChoices{}, storeLocks: map[string]*sync.Mutex{}}
+	s := &Support{
+		opts:       opts,
+		state:      supportState{Stores: map[string]string{}},
+		cache:      map[string]cachedChoices{},
+		storeLocks: map[string]*sync.Mutex{},
+	}
+	if !opts.DeferLoad {
+		s.loadLegacyLocked()
+	}
+	return s
+}
+
+func (s *Support) loadLegacyLocked() {
+	s.state = supportState{}
 	raw, err := os.ReadFile(s.path())
 	if err == nil {
 		err = json.Unmarshal(raw, &s.state)
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(opts.Runner.opts.Log, "support: ignore %s: %v\n", s.path(), err)
+		fmt.Fprintf(s.opts.Runner.opts.Log, "support: ignore %s: %v\n", s.path(), err)
 		s.state = supportState{}
 	}
 	if s.state.Stores == nil {
 		s.state.Stores = map[string]string{}
 	}
-	return s
+}
+
+// LoadLegacy reads legacy support.json after a deferred start falls back off
+// SQLite.
+func (s *Support) LoadLegacy() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta = nil
+	s.loadLegacyLocked()
+}
+
+// LoadFromMeta binds the daemon's SQLite metadata store and seeds state from
+// snap without touching support.json.
+func (s *Support) LoadFromMeta(store *wsmeta.Store, snap *wsmeta.Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta = store
+	s.state = supportState{Stores: map[string]string{}}
+	if snap == nil {
+		return
+	}
+	if len(snap.Support.Last) > 0 {
+		var last Selection
+		if err := json.Unmarshal(snap.Support.Last, &last); err != nil {
+			fmt.Fprintf(s.opts.Runner.opts.Log, "support: ignore sqlite last selection: %v\n", err)
+		} else {
+			s.state.Last = &last
+		}
+	}
+	for storeID, convID := range snap.Support.Stores {
+		s.state.Stores[storeID] = convID
+	}
+}
+
+func (s *Support) setStoreMapping(store, convID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.meta != nil {
+		if err := s.meta.SetSupportMapping(context.Background(), store, convID); err != nil {
+			return err
+		}
+		s.state.Stores[store] = convID
+		return nil
+	}
+	s.state.Stores[store] = convID
+	return s.save()
+}
+
+func (s *Support) deleteStoreMapping(store string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.meta != nil {
+		if err := s.meta.DeleteSupportMapping(context.Background(), store); err != nil {
+			return err
+		}
+		delete(s.state.Stores, store)
+		return nil
+	}
+	delete(s.state.Stores, store)
+	return s.save()
+}
+
+func (s *Support) setLastSelection(sel Selection) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.meta != nil {
+		raw, err := json.Marshal(sel)
+		if err != nil {
+			return err
+		}
+		if err := s.meta.SetSupportLast(context.Background(), raw); err != nil {
+			return err
+		}
+		cp := sel
+		s.state.Last = &cp
+		return nil
+	}
+	cp := sel
+	s.state.Last = &cp
+	return s.save()
 }
 
 func (s *Support) path() string { return filepath.Join(s.opts.Dir, supportFileName) }
@@ -461,7 +558,7 @@ func (s *Support) open(store, root string, sel Selection, hs []SupportHarness) (
 			return State{}, err
 		}
 	}
-	if err := s.update(func(state *supportState) { state.Stores[store] = st.ID }); err != nil {
+	if err := s.setStoreMapping(store, st.ID); err != nil {
 		return State{}, err
 	}
 	return st, nil
@@ -733,7 +830,7 @@ func (s *Support) New(store string) (State, error) {
 		if _, err := s.opts.Runner.CloseConversation(st.ID); err != nil {
 			return State{}, err
 		}
-		if err := s.update(func(state *supportState) { delete(state.Stores, store) }); err != nil {
+		if err := s.deleteStoreMapping(store); err != nil {
 			return State{}, err
 		}
 	}
@@ -787,7 +884,7 @@ func (s *Support) closeUnregistered(store string) bool {
 			return false
 		}
 	}
-	if err := s.update(func(state *supportState) { delete(state.Stores, store) }); err != nil {
+	if err := s.deleteStoreMapping(store); err != nil {
 		fmt.Fprintf(s.opts.Runner.opts.Log, "support: forget unregistered store %q: %v\n", store, err)
 		return false
 	}
@@ -865,7 +962,7 @@ func (s *Support) Select(store string, req selectRequest) (SelectAnswer, error) 
 	default:
 		ans.Conversation = &st
 	}
-	if err := s.update(func(state *supportState) { state.Last = &next }); err != nil {
+	if err := s.setLastSelection(next); err != nil {
 		return SelectAnswer{}, err
 	}
 	return ans, nil

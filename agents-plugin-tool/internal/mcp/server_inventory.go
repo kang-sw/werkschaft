@@ -173,8 +173,14 @@ func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*suble
 		return &board, ""
 	}
 	// Support conversations may reach only their profile's tracker/wiki tools.
-	if (isTrackerTool(name) || isWikiTool(name) || name == trackerShowTool || name == trackerUITool) && !entry.isTopLevelLead() && !s.trackerSupportAdmits(key, entry, name) {
-		return nil, trackerLeadOnlyDenial(name)
+	if (isTrackerTool(name) || isWikiTool(name) || name == trackerShowTool || name == trackerUITool) && !entry.isTopLevelLead() {
+		admitted, err := s.trackerSupportAdmits(key, entry, name)
+		if err != nil {
+			return nil, err.Error()
+		}
+		if !admitted {
+			return nil, trackerLeadOnlyDenial(name)
+		}
 	}
 	return nil, ""
 }

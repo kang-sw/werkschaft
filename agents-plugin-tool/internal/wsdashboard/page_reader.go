@@ -228,7 +228,8 @@ func (r pageReader) readSessionWith(replyID string, prev *sessionReads, ringChan
 	if r.cardBound != nil && r.cardBound(replyID) {
 		in.IsChild = true
 	}
-	if metaHost, ok := r.agents.(AgentSessionMetaHost); ok {
+	metaHost, hasSessionMeta := r.agents.(AgentSessionMetaHost)
+	if hasSessionMeta {
 		if meta, found := metaHost.SessionMeta(replyID); found {
 			if meta.IsChild {
 				in.IsChild = true
@@ -239,33 +240,63 @@ func (r pageReader) readSessionWith(replyID string, prev *sessionReads, ringChan
 			in.WhiteboardCapable = meta.Hosted
 			in.Model, in.Effort = meta.Model, meta.Effort
 		}
-	} else if s.Registration.Agent {
-		// Fallback when no live in-memory runner is attached (e.g. unit tests).
-		record, hosted := readAgentRecordEnd(SessionDir(r.dir, replyID))
-		if hosted {
-			if record.Parent != nil {
-				in.IsChild = true
+	}
+	recordHost, hasRecordHost := r.agents.(AgentMetadataHost)
+	if !hasSessionMeta && s.Registration.Agent {
+		if hasRecordHost {
+			if snap, found := recordHost.AgentRecord(replyID); found {
+				if snap.Parent != nil {
+					in.IsChild = true
+				}
+				in.WhiteboardCapable = snap.Lead
+				in.Model, in.Effort = snap.Model, snap.Effort
 			}
-			in.WhiteboardCapable = record.Lead
-			in.Model, in.Effort = record.Model, record.Effort
+		} else if r.agents == nil {
+			// Fallback when no live in-memory runner is attached (e.g. unit tests).
+			record, hosted := readAgentRecordEnd(SessionDir(r.dir, replyID))
+			if hosted {
+				if record.Parent != nil {
+					in.IsChild = true
+				}
+				in.WhiteboardCapable = record.Lead
+				in.Model, in.Effort = record.Model, record.Effort
+			}
 		}
 	}
 	if !s.Registration.Hosted && !s.Live {
-		record, _ := readAgentRecordEnd(SessionDir(r.dir, replyID))
-		in.HandedOff = record.Lead && record.HandedOffAt != ""
-		// An ended child's row may predate ParentReplyID; this record is
-		// already open, so naming its owner from it costs no read.
-		if in.Session.ParentReplyID == "" && record.Parent != nil {
-			in.Session.ParentReplyID = record.Parent.ReplyID
-		}
-		if record.Parent != nil {
-			in.IsChild = true
-		}
-		if in.Model == "" {
-			in.Model = record.Model
-		}
-		if in.Effort == "" {
-			in.Effort = record.Effort
+		if hasRecordHost {
+			if snap, found := recordHost.AgentRecord(replyID); found {
+				in.HandedOff = snap.Lead && snap.HandedOffAt != ""
+				if in.Session.ParentReplyID == "" && snap.Parent != nil {
+					in.Session.ParentReplyID = snap.Parent.ReplyID
+				}
+				if snap.Parent != nil {
+					in.IsChild = true
+				}
+				if in.Model == "" {
+					in.Model = snap.Model
+				}
+				if in.Effort == "" {
+					in.Effort = snap.Effort
+				}
+			}
+		} else if r.agents == nil {
+			record, _ := readAgentRecordEnd(SessionDir(r.dir, replyID))
+			in.HandedOff = record.Lead && record.HandedOffAt != ""
+			// An ended child's row may predate ParentReplyID; this record is
+			// already open, so naming its owner from it costs no read.
+			if in.Session.ParentReplyID == "" && record.Parent != nil {
+				in.Session.ParentReplyID = record.Parent.ReplyID
+			}
+			if record.Parent != nil {
+				in.IsChild = true
+			}
+			if in.Model == "" {
+				in.Model = record.Model
+			}
+			if in.Effort == "" {
+				in.Effort = record.Effort
+			}
 		}
 	}
 	looked := map[string]bool{replyID: true}

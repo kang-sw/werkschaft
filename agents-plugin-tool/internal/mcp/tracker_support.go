@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
-	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 // A tracker store's support conversation is a dashboard agent-runner
@@ -46,21 +44,20 @@ type trackerSupportScope struct {
 // environment variable admits a key. The pinned store is the registry entry
 // whose directory is the conversation's root after canonicalisation; a
 // conversation at no store's directory is not a support conversation.
-func (s *Server) trackerSupport(key string, entry sessionEntry) (trackerSupportScope, bool) {
+func (s *Server) trackerSupport(key string, entry sessionEntry) (trackerSupportScope, bool, error) {
 	if entry.scope != roleDelegate || entry.parent != "" {
-		return trackerSupportScope{}, false
+		return trackerSupportScope{}, false, nil
 	}
-	dir, err := wsdashboard.Dir(s.dashboard.cacheHome)
+	rec, found, err := s.lookupAgentRecord(key)
 	if err != nil {
-		return trackerSupportScope{}, false
+		return trackerSupportScope{}, false, err
 	}
-	rec, err := wsagent.ReadRecord(dir, wsmailbox.ReplyID(key))
-	if err != nil || rec.WSKey != key || rec.ClosedAt != "" || canonicalDir(rec.Root) != canonicalDir(entry.root) {
-		return trackerSupportScope{}, false
+	if !found || rec.WSKey != key || rec.ClosedAt != "" || canonicalDir(rec.Root) != canonicalDir(entry.root) {
+		return trackerSupportScope{}, false, nil
 	}
 	rp, err := wsagent.ResolveProfile(s.configOptions(), rec.Root, rec.Profile, s.agentBackends()...)
 	if err != nil {
-		return trackerSupportScope{}, false
+		return trackerSupportScope{}, false, nil
 	}
 	tools := map[string]bool{}
 	for _, name := range rp.Definition.WSTools {
@@ -68,42 +65,48 @@ func (s *Server) trackerSupport(key string, entry sessionEntry) (trackerSupportS
 	}
 	h, err := s.trackerHost()
 	if err != nil {
-		return trackerSupportScope{}, false
+		return trackerSupportScope{}, false, nil
 	}
 	stores, err := h.Stores()
 	if err != nil {
-		return trackerSupportScope{}, false
+		return trackerSupportScope{}, false, nil
 	}
 	root := canonicalDir(rec.Root)
 	for _, e := range stores {
 		if canonicalDir(e.Dir) == root {
-			return trackerSupportScope{store: e.ID, tools: tools}, true
+			return trackerSupportScope{store: e.ID, tools: tools}, true, nil
 		}
 	}
-	return trackerSupportScope{}, false
+	return trackerSupportScope{}, false, nil
 }
 
 // trackerSupportAdmits reports whether key is a support conversation whose
 // profile names tool.
-func (s *Server) trackerSupportAdmits(key string, entry sessionEntry, tool string) bool {
-	scope, ok := s.trackerSupport(key, entry)
-	return ok && scope.tools[tool]
+func (s *Server) trackerSupportAdmits(key string, entry sessionEntry, tool string) (bool, error) {
+	scope, ok, err := s.trackerSupport(key, entry)
+	if err != nil {
+		return false, err
+	}
+	return ok && scope.tools[tool], nil
 }
 
 // trackerSupportReadsTracker reports whether key is a support conversation
 // whose profile names any tracker tool, so its tracker manual section
 // renders as for a top-level lead.
-func (s *Server) trackerSupportReadsTracker(key string, entry sessionEntry) bool {
-	scope, ok := s.trackerSupport(key, entry)
+func (s *Server) trackerSupportReadsTracker(key string, entry sessionEntry) (bool, error) {
+	scope, ok, err := s.trackerSupport(key, entry)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
-		return false
+		return false, nil
 	}
 	for name := range scope.tools {
 		if isTrackerTool(name) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // canonicalDir is path with symlinks resolved, cleaned; a path that does

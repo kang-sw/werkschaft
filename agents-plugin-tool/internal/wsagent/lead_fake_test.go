@@ -2,9 +2,11 @@ package wsagent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -1112,9 +1114,26 @@ func (h *leadHarness) send(id, text string) {
 	h.quiesce(id)
 }
 
+func (h *leadHarness) readRecord(id string) (Record, error) {
+	if h.runner != nil && h.runner.meta != nil {
+		snap, err := h.runner.meta.Load(context.Background())
+		if err == nil {
+			if ar, ok := snap.Records[id]; ok {
+				var rec Record
+				if err := json.Unmarshal(ar.JSON, &rec); err != nil {
+					return Record{}, err
+				}
+				return rec, nil
+			}
+			return Record{}, os.ErrNotExist
+		}
+	}
+	return readRecord(wsdashboard.SessionDir(h.dir, id))
+}
+
 func (h *leadHarness) record(id string) Record {
 	h.t.Helper()
-	return readEventually(h.t, "read the record", func() (Record, error) { return readRecord(wsdashboard.SessionDir(h.dir, id)) })
+	return readEventually(h.t, "read the record", func() (Record, error) { return h.readRecord(id) })
 }
 
 // quiesce waits until the conversation's loop finished the step it is in.
@@ -1140,7 +1159,7 @@ func (h *leadHarness) holder(id string) string {
 	h.t.Helper()
 	var holder string
 	eventually(h.t, "a process under a holder", func() bool {
-		rec, err := readRecord(wsdashboard.SessionDir(h.dir, id))
+		rec, err := h.readRecord(id)
 		holder = rec.HolderID
 		return err == nil && holder != "" && rec.HostPID != 0
 	})

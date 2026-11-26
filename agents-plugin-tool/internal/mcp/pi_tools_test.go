@@ -23,6 +23,7 @@ type fakePiAgents struct {
 	n        int
 	specs    []wsagent.SpawnSpec
 	states   map[string]wsagent.State
+	records  map[string]wsagent.Record
 	order    []string
 	sent     map[string][]string
 	watchers map[int]func(wsagent.State)
@@ -34,7 +35,14 @@ type fakePiAgents struct {
 }
 
 func newFakePiAgents() *fakePiAgents {
-	return &fakePiAgents{states: map[string]wsagent.State{}, sent: map[string][]string{}, watchers: map[int]func(wsagent.State){}}
+	return &fakePiAgents{states: map[string]wsagent.State{}, records: map[string]wsagent.Record{}, sent: map[string][]string{}, watchers: map[int]func(wsagent.State){}}
+}
+
+func (f *fakePiAgents) RecordByReplyID(replyID string) (wsagent.Record, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec, ok := f.records[replyID]
+	return rec, ok
 }
 
 func (f *fakePiAgents) Spawn(spec wsagent.SpawnSpec) (wsagent.State, error) {

@@ -82,6 +82,23 @@ type ServerOptions struct {
 	// Set for every daemon-hosted connection, token-forwarding workers
 	// included; nil falls back to Agents when it implements the check.
 	CallerBinding CallerBindingReader
+	// RecordReader is the daemon runner's read-only, memory-only agent record
+	// lookup (AgentRecordReader). Set for every daemon-hosted connection,
+	// token-forwarding workers included; nil falls back to Agents when it
+	// implements the check, or to the authenticated daemon /meta/* client on
+	// out-of-daemon processes.
+	RecordReader AgentRecordReader
+	// DirectCall marks an out-of-daemon one-shot CLI invocation: daemon
+	// metadata queries never auto-start a daemon and fail immediately naming
+	// `ws-mcp daemon-start` when none is reachable.
+	DirectCall bool
+	// DirectStdio marks an out-of-daemon `ws-mcp serve --stdio` server: when
+	// daemon metadata is needed and unreachable, it runs EnsureDaemon once
+	// before returning a recoverable unavailable error.
+	DirectStdio bool
+	// EnsureDaemon triggers (or awaits) the single daemon-ensure attempt for
+	// DirectStdio servers.
+	EnsureDaemon func()
 	// WorktreeChildren exposes the daemon's read-only bound-child query for
 	// worktree.release without granting the lead runner handle (Agents).
 	WorktreeChildren WorktreeChildrenReader
@@ -238,6 +255,15 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.callerBinding = binding
 		}
 	}
+	s.recordReader = opts.RecordReader
+	if s.recordReader == nil && opts.Agents != nil {
+		if reader, ok := opts.Agents.(AgentRecordReader); ok {
+			s.recordReader = reader
+		}
+	}
+	s.directCall = opts.DirectCall
+	s.directStdio = opts.DirectStdio
+	s.ensureDaemon = opts.EnsureDaemon
 	s.worktreeChildren = opts.WorktreeChildren
 	if s.worktreeChildren == nil && opts.Agents != nil {
 		if reader, ok := opts.Agents.(WorktreeChildrenReader); ok {

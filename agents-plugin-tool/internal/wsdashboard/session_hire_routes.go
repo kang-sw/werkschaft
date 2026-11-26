@@ -166,7 +166,7 @@ func (d *Daemon) handleHiringFlag(w http.ResponseWriter, r *http.Request, replyI
 		http.NotFound(w, r)
 		return
 	}
-	meta, err := ReadHiringMetadata(d.dir, replyID)
+	meta, err := d.readHiringMetadata(replyID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -194,7 +194,7 @@ func (d *Daemon) handleHiringFlag(w http.ResponseWriter, r *http.Request, replyI
 		return
 	}
 	meta.Enabled = *req.Enabled
-	if err = writeHiringMetadata(d.dir, replyID, meta); err != nil {
+	if err = d.writeHiringMetadata(replyID, meta); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

@@ -61,7 +61,11 @@ func (s *Server) trackerSessionKey(tool string, args map[string]any) (string, *t
 	if entry.isTopLevelLead() {
 		return key, nil, nil
 	}
-	if scope, ok := s.trackerSupport(key, entry); ok && scope.tools[tool] {
+	scope, ok, err := s.trackerSupport(key, entry)
+	if err != nil {
+		return "", nil, err
+	}
+	if ok && scope.tools[tool] {
 		return key, &scope, nil
 	}
 	return "", nil, errors.New(trackerLeadOnlyDenial(tool))

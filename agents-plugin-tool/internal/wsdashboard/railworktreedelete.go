@@ -319,6 +319,9 @@ func (d *Daemon) purgeWorktreeSessions(target, realTarget string, before map[str
 			fmt.Fprintf(d.log, "dashboard: remove session %s after deleting %s: %v\n", s.ReplyID, target, err)
 			continue
 		}
+		if err := d.deleteSessionMeta(s.ReplyID); err != nil {
+			fmt.Fprintf(d.log, "dashboard: delete session metadata %s after deleting %s: %v\n", s.ReplyID, target, err)
+		}
 		d.auditDeleteSession(s.ReplyID)
 	}
 }

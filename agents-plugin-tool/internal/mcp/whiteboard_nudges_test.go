@@ -95,9 +95,7 @@ func (f *nudgeFixture) hosted(t *testing.T) (wsagent.Record, *fakePiAgents) {
 	a.states[f.row.ReplyID] = wsagent.State{ID: f.row.ReplyID, Root: f.target.root, Lead: true, Process: true, Status: wsagent.StatusIdle, Backend: "pi"}
 	rec := wsagent.Record{SchemaVersion: 1, ReplyID: f.row.ReplyID, WSKey: f.target.key, Root: f.target.root, Lead: true, HostPID: os.Getpid(), HolderID: "fixture-holder", Backend: "pi", Profile: "lead-pi"}
 	f.save(t)
-	if err := wsagent.WriteRecordForTest(f.n.dir, rec); err != nil {
-		t.Fatal(err)
-	}
+	a.records[rec.ReplyID] = rec
 	return rec, a
 }
 
@@ -250,9 +248,7 @@ func TestWhiteboardNudgeHostedOpenOwningRunnerAndRow(t *testing.T) {
 				rec.Backend = "claude"
 			}
 			f.save(t)
-			if err := wsagent.WriteRecordForTest(f.n.dir, rec); err != nil {
-				t.Fatal(err)
-			}
+			a.records[rec.ReplyID] = rec
 			gate := f.n.deliveryGate(f.target)
 			if got := gate(); got != (name == "live-idle") {
 				t.Fatalf("gate %v", got)

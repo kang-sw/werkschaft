@@ -287,6 +287,9 @@ type Options struct {
 	closedSnapshotRead func(string)
 	// sendAdmitting observes the revival admission fence in tests.
 	sendAdmitting func(string)
+	// OnHired, when not nil, notifies the daemon's in-memory hiring and label
+	// caches after SQLite MarkHired commits for a newly created hired lead.
+	OnHired func(replyID, requestID, label string)
 	// beforeDurableWrite injects a failed private record write in tests.
 	beforeDurableWrite     func(Record) error
 	removeRetiredPiArchive func(string) error // archive removal fault in tests
@@ -300,6 +303,15 @@ type Runner struct {
 	notify func(replyID, project string)
 	// Opened during daemon startup under the dashboard lock, then held
 	// until all conversations have drained.
+	// meta and metaSnap bind the shared daemon SQLite metadata store when
+	// cutover is active (SetMeta); the daemon owns closing meta.
+	meta               *wsmeta.Store
+	metaSnap           *wsmeta.Snapshot
+	recordBaseMu       sync.Mutex
+	recordBase         map[string][]byte // reply-id -> last persisted JSON in SQLite
+	perms              sync.Map          // reply-id -> *permissionSelection (when meta != nil)
+	hiredByReqMu       sync.Mutex
+	hiredByReq         map[string]string // request-id -> reply-id (when meta != nil)
 	durableRecords     *wsmeta.Store
 	durableProjections sync.Map   // reply-id -> last published projection digest
 	deadClosureMu      sync.Mutex // serializes persistence of holder-backed dead closures

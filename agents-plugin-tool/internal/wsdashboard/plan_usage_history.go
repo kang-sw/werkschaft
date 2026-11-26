@@ -1,6 +1,8 @@
 package wsdashboard
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 const (
@@ -43,6 +46,8 @@ type planUsageHistoryProjection struct {
 type planUsageHistoryRecord struct {
 	Sample planUsageSample
 	Fields map[string]json.RawMessage
+	seq    int64
+	hasSeq bool
 }
 type planUsageHistoryFile struct {
 	Fields  map[string]json.RawMessage
@@ -50,18 +55,21 @@ type planUsageHistoryFile struct {
 }
 type planUsageHistorySpec struct {
 	cacheName    string
+	storeKey     string
 	valid        func(planUsageSample) bool
 	requiredKeys []string
 }
 
 var defaultHistorySpec = planUsageHistorySpec{
 	cacheName:    planUsageHistoryCache,
+	storeKey:     wsmeta.UsageHistoryDefault,
 	valid:        validPlanUsageSample,
 	requiredKeys: []string{"harness", "kind", "source", "resetsAt", "asOf", "percent"},
 }
 
 var codexFiveHourHistorySpec = planUsageHistorySpec{
 	cacheName:    planUsageCodexHistoryCache,
+	storeKey:     wsmeta.UsageHistoryCodex,
 	valid:        validCodexFiveHourSample,
 	requiredKeys: []string{"harness", "kind", "source", "resetsAt", "asOf", "percent"},
 }
@@ -142,8 +150,61 @@ func (s *planUsageStore) readHistoryLocked() (planUsageHistoryFile, error) {
 	return s.readHistoryFileLocked(&s.hist, defaultHistorySpec)
 }
 
+func (s *planUsageStore) loadHistoryFromMetaLocked(memo *planUsageHistoryMemo, spec planUsageHistorySpec, snap *wsmeta.Snapshot) {
+	empty := planUsageHistoryFile{Fields: map[string]json.RawMessage{}}
+	if snap != nil {
+		if issue, ok := snap.ImportIssues[spec.cacheName]; ok {
+			memo.ok, memo.file, memo.err = true, empty, fmt.Errorf("usage history %s: %s", issue.Status, issue.Detail)
+			memo.rev++
+			return
+		}
+		if uh, ok := snap.UsageHistory[spec.storeKey]; ok {
+			h := planUsageHistoryFile{Fields: map[string]json.RawMessage{}}
+			if len(uh.Extra) > 0 {
+				_ = json.Unmarshal(uh.Extra, &h.Fields)
+				if h.Fields == nil {
+					h.Fields = map[string]json.RawMessage{}
+				}
+			}
+			for _, sample := range uh.Samples {
+				var v planUsageSample
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(sample.Body, &v) != nil || !spec.valid(v) || json.Unmarshal(sample.Body, &fields) != nil {
+					memo.ok, memo.file, memo.err = true, empty, errors.New("invalid usage history sample")
+					memo.rev++
+					return
+				}
+				for _, key := range spec.requiredKeys {
+					if value, ok := fields[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+						memo.ok, memo.file, memo.err = true, empty, errors.New("incomplete usage history sample")
+						memo.rev++
+						return
+					}
+				}
+				h.Records = append(h.Records, planUsageHistoryRecord{
+					Sample: v,
+					Fields: fields,
+					seq:    sample.Seq,
+					hasSeq: true,
+				})
+			}
+			memo.ok, memo.file, memo.err = true, h, nil
+			memo.rev++
+			return
+		}
+	}
+	memo.ok, memo.file, memo.err = true, empty, nil
+	memo.rev++
+}
+
 func (s *planUsageStore) readHistoryFileLocked(memo *planUsageHistoryMemo, spec planUsageHistorySpec) (planUsageHistoryFile, error) {
 	empty := planUsageHistoryFile{Fields: map[string]json.RawMessage{}}
+	if s.meta != nil {
+		if !memo.ok {
+			memo.ok, memo.file = true, empty
+		}
+		return memo.file, memo.err
+	}
 	path := filepath.Join(s.dir, spec.cacheName)
 	stat, err := s.statHistory(path)
 	if err != nil {
@@ -306,7 +367,12 @@ func (s *planUsageStore) appendHistoryFileLocked(memo *planUsageHistoryMemo, spe
 			if h.Records[i].Sample == v {
 				continue
 			}
-			h.Records[i] = planUsageHistoryRecord{Sample: v, Fields: withSampleFields(h.Records[i].Fields, v)}
+			h.Records[i] = planUsageHistoryRecord{
+				Sample: v,
+				Fields: withSampleFields(h.Records[i].Fields, v),
+				seq:    h.Records[i].seq,
+				hasSeq: h.Records[i].hasSeq,
+			}
 		} else {
 			indices[key(v)] = len(h.Records)
 			h.Records = append(h.Records, planUsageHistoryRecord{Sample: v, Fields: withSampleFields(nil, v)})
@@ -320,6 +386,75 @@ func (s *planUsageStore) appendHistoryFileLocked(memo *planUsageHistoryMemo, spe
 	// An accepted sample the prune drops at once (past the age or the cap)
 	// leaves the content as read: compare in memory and skip the write.
 	if sameHistoryRecords(h.Records, current.Records) {
+		return
+	}
+	if s.meta != nil {
+		oldBySeq := make(map[int64]planUsageSample, len(current.Records))
+		for _, r := range current.Records {
+			if r.hasSeq {
+				oldBySeq[r.seq] = r.Sample
+			}
+		}
+		keptSeq := make(map[int64]bool, len(h.Records))
+		var adds, updates []wsmeta.UsageSample
+		var addIndices []int
+		for i := range h.Records {
+			r := &h.Records[i]
+			if !r.hasSeq {
+				body, err := json.Marshal(r.Fields)
+				if err != nil {
+					return
+				}
+				adds = append(adds, wsmeta.UsageSample{
+					Harness:  r.Sample.Harness,
+					Group:    r.Sample.Group,
+					Kind:     r.Sample.Kind,
+					Source:   r.Sample.Source,
+					ResetsAt: r.Sample.ResetsAt,
+					AsOf:     r.Sample.AsOf,
+					Percent:  r.Sample.Percent,
+					Body:     body,
+				})
+				addIndices = append(addIndices, i)
+				continue
+			}
+			keptSeq[r.seq] = true
+			if old, ok := oldBySeq[r.seq]; !ok || old != r.Sample {
+				body, err := json.Marshal(r.Fields)
+				if err != nil {
+					return
+				}
+				updates = append(updates, wsmeta.UsageSample{
+					Seq:      r.seq,
+					Harness:  r.Sample.Harness,
+					Group:    r.Sample.Group,
+					Kind:     r.Sample.Kind,
+					Source:   r.Sample.Source,
+					ResetsAt: r.Sample.ResetsAt,
+					AsOf:     r.Sample.AsOf,
+					Percent:  r.Sample.Percent,
+					Body:     body,
+				})
+			}
+		}
+		var deleteSeqs []int64
+		for _, r := range current.Records {
+			if r.hasSeq && !keptSeq[r.seq] {
+				deleteSeqs = append(deleteSeqs, r.seq)
+			}
+		}
+		addedSeqs, err := s.meta.MutateUsageHistory(context.Background(), spec.storeKey, adds, updates, deleteSeqs)
+		if err != nil {
+			return
+		}
+		for k, idx := range addIndices {
+			if k < len(addedSeqs) {
+				h.Records[idx].seq = addedSeqs[k]
+				h.Records[idx].hasSeq = true
+			}
+		}
+		memo.ok, memo.file, memo.err = true, h, nil
+		memo.rev++
 		return
 	}
 	records := make([]map[string]json.RawMessage, 0, len(h.Records))

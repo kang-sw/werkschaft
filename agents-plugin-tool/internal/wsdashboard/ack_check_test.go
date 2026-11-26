@@ -205,12 +205,31 @@ func (f *ackFixture) inbox(id string) string      { return wsinbox.Dir(f.session
 // seed writes the answer check's record with through.
 func (f *ackFixture) seed(id string, through int64) {
 	f.t.Helper()
-	if err := writeAckCheck(f.sessionDir(id), ackCheckRecord{Through: through}); err != nil {
+	f.seedRecord(id, ackCheckRecord{Through: through})
+}
+
+func (f *ackFixture) seedRecord(id string, rec ackCheckRecord) {
+	f.t.Helper()
+	if f.d != nil && f.d.meta != nil {
+		f.d.inboxMu.Lock()
+		err := f.d.writeAckCheckLocked(id, f.sessionDir(id), rec)
+		f.d.inboxMu.Unlock()
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		return
+	}
+	if err := writeAckCheck(f.sessionDir(id), rec); err != nil {
 		f.t.Fatal(err)
 	}
 }
 
-func (f *ackFixture) record(id string) ackCheckRecord { return readAckCheck(f.sessionDir(id)) }
+func (f *ackFixture) record(id string) ackCheckRecord {
+	if f.d != nil {
+		return f.d.readAckCheck(id, f.sessionDir(id))
+	}
+	return readAckCheck(f.sessionDir(id))
+}
 
 // deliver sends chips at sentAt and drains them, as an adapter does when a
 // turn starts.
@@ -563,9 +582,7 @@ func TestAnswerCheckSeedsItsFirstEvaluation(t *testing.T) {
 			f := startAckFixture(t)
 			f.src.setOpen(ackID, 7)
 			if c.interrupted != 0 {
-				if err := writeAckCheck(f.sessionDir(ackID), ackCheckRecord{InterruptedAt: c.interrupted}); err != nil {
-					t.Fatal(err)
-				}
+				f.seedRecord(ackID, ackCheckRecord{InterruptedAt: c.interrupted})
 			}
 			base := time.Now()
 			f.deliver(ackID, base.Add(-30*time.Second), wsinbox.Chip{ID: "07", Answer: "a"})

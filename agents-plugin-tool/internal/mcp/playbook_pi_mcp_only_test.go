@@ -64,6 +64,7 @@ type piRecordFixture struct {
 	root    string
 	leadKey string
 	dashDir string
+	records *testRecordReader
 }
 
 func newPiRecordFixture(t *testing.T) *piRecordFixture {
@@ -75,19 +76,20 @@ func newPiRecordFixture(t *testing.T) *piRecordFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &piRecordFixture{s: s, root: root, leadKey: key, dashDir: dir}
+	records := newTestRecordReader()
+	s.recordReader = records
+	return &piRecordFixture{s: s, root: root, leadKey: key, dashDir: dir, records: records}
 }
 
-// record writes the daemon's conversation record naming key.
+// record stores the daemon's conversation record naming key in the fixture's
+// in-memory record reader.
 func (f *piRecordFixture) record(t *testing.T, key string, rec wsagent.Record) {
 	t.Helper()
 	rec.ReplyID = wsmailbox.ReplyID(key)
 	rec.WSKey = key
 	rec.Root = f.root
 	rec.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := wsagent.WriteRecordForTest(f.dashDir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 }
 
 // spawnedKey mints a Pi subagent's key as the runner's key store does and

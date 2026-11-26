@@ -201,7 +201,7 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/pageview.go", "AgentKindPi", 2, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestRetiredPiRowOpensAsEndedHistory"),
 		site("internal/wsdashboard/registry.go", "pi", 1, classPersisted, "the Pi record backend and session file location protected from retirement deletion", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claude"`, 2, classPersisted, "the plan-usage file's claude member", history),
-		site("internal/wsdashboard/plan_usage.go", "claude", 3, classPersisted, "persisted history harness label", history),
+		site("internal/wsdashboard/plan_usage.go", "claude", 5, classPersisted, "persisted plan-usage entry key and history harness label", history),
 		site("internal/wsdashboard/plan_usage.go", "codex", 1, classPersisted, "persisted history harness label", history),
 		site("internal/wsdashboard/plan_usage.go", "Claude push", 2, classPersisted, "persisted history source label", history),
 		site("internal/wsdashboard/plan_usage.go", "CLAUDE_CONFIG_DIR", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),

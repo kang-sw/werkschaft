@@ -281,7 +281,7 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 	defer runner.Close()
 	// The token binding of the agy lead's connection: the runner holds
 	// its conversation open, loaded from the record.
-	s.agents, s.callerBinding, s.conversation = runner, runner, rec.ReplyID
+	s.agents, s.recordReader, s.callerBinding, s.conversation = runner, runner, runner, rec.ReplyID
 
 	out := callToolWithKey(t, s, 2, f.hosted, "playbook.render", map[string]any{"name": "explore"})
 	lines := strings.Split(strings.TrimSpace(out), "\n")

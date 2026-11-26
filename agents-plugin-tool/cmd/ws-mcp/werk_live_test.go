@@ -247,10 +247,10 @@ func (g *werkLiveTransport) call(req *http.Request) (*http.Response, error) {
 	stage := g.steps.Load()
 	var want string
 	switch {
-	case stage == 0 && call.Params.Name == "fs.read" && args["path"] == werkLivePath && args["session_key"] != "" && len(args) == 2:
+	case stage == 0 && (call.Params.Name == "fs.read" || call.Params.Name == "fs_read") && args["path"] == werkLivePath && args["session_key"] != "" && len(args) == 2:
 		want = werkLiveBefore
-	case stage == 1 && call.Params.Name == "fs.write" && args["path"] == werkLivePath && args["content"] == werkLiveAfter && len(args) == 2:
-	case stage == 2 && call.Params.Name == "exec.shell" && args["cmd"] == werkLiveCommand && args["session_key"] != "" && len(args) == 2:
+	case stage == 1 && (call.Params.Name == "fs.write" || call.Params.Name == "fs_write") && args["path"] == werkLivePath && args["content"] == werkLiveAfter && len(args) == 2:
+	case stage == 2 && (call.Params.Name == "exec.shell" || call.Params.Name == "exec_shell") && args["cmd"] == werkLiveCommand && args["session_key"] != "" && len(args) == 2:
 		want = "werk-live-exec"
 	default:
 		_ = req.Body.Close()

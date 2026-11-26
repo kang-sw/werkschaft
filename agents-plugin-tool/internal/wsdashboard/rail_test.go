@@ -927,7 +927,7 @@ func TestSessionPagesShareOneRailRender(t *testing.T) {
 	rails, liveReads := f.d.stats.RailRenders.Load(), f.src.readCount("livesession")
 	// Board-only revisions now intentionally skip the rail template. Rename
 	// the row too, so this still proves one actual render shared by both tabs.
-	if err := writeSessionLabel(SessionDir(f.dir, "lonersession"), "renamed loner"); err != nil {
+	if err := f.d.setSessionLabel("lonersession", "renamed loner"); err != nil {
 		t.Fatal(err)
 	}
 	f.change(t, "lonersession", other, "loner changed", 2)

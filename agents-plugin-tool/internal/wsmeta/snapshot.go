@@ -22,6 +22,18 @@ type Snapshot struct {
 	UsageHistory map[string]UsageHistory
 	Memos        map[string]MemoDoc
 	TrackerHooks map[TrackerHookKey]TrackerHookState
+	// ImportIssues lists legacy paths whose import status was invalid or future
+	// (keyed by dashboard-relative slash path, e.g. "plan-usage-history.json"),
+	// so owners keep schema/error protection without re-reading legacy files.
+	ImportIssues map[string]CaptureIssue
+}
+
+// CaptureIssue records a legacy document that failed import as invalid or
+// newer-schema; its original bytes stay in legacy_captures for offline recovery.
+type CaptureIssue struct {
+	Store  string
+	Status string
+	Detail string
 }
 
 // AgentRecord is one assembled conversation record.
@@ -98,6 +110,7 @@ type UsageHistory struct {
 
 // UsageSample is one retained usage sample.
 type UsageSample struct {
+	Seq                          int64
 	Harness, Group, Kind, Source string
 	ResetsAt, AsOf               int64
 	Percent                      float64
@@ -114,8 +127,9 @@ type MemoDoc struct {
 
 // Memo is one memo item in order.
 type Memo struct {
-	ID   string
-	Body json.RawMessage
+	Position int
+	ID       string
+	Body     json.RawMessage
 }
 
 // TrackerHookKey keys hook progress by store and registration nonce.
@@ -137,6 +151,7 @@ func (s *Store) Load(ctx context.Context) (*Snapshot, error) {
 		AckChecks: map[string]json.RawMessage{}, Hiring: map[string]Hiring{}, Support: Support{Stores: map[string]string{}},
 		PiProbes: map[PiProbeKey]PiProbe{}, LatestUsage: map[string]LatestUsage{}, UsageHistory: map[string]UsageHistory{},
 		Memos: map[string]MemoDoc{}, TrackerHooks: map[TrackerHookKey]TrackerHookState{},
+		ImportIssues: map[string]CaptureIssue{},
 	}
 	err := s.read(ctx, func(q querier) error {
 		if err := s.requireImported(ctx, q); err != nil {
@@ -330,11 +345,11 @@ func loadSnapshot(ctx context.Context, q querier, snap *Snapshot) error {
 			snap.UsageHistory[h] = UsageHistory{Extra: extra, Samples: []UsageSample{}}
 			return nil
 		}},
-		{`SELECT history, harness, grp, kind, source, resets_at, as_of, percent, body_json FROM usage_samples ORDER BY history, seq`, func(r scanner) error {
+		{`SELECT history, seq, harness, grp, kind, source, resets_at, as_of, percent, body_json FROM usage_samples ORDER BY history, seq`, func(r scanner) error {
 			var h string
 			var v UsageSample
 			var body []byte
-			if err := r.Scan(&h, &v.Harness, &v.Group, &v.Kind, &v.Source, &v.ResetsAt, &v.AsOf, &v.Percent, &body); err != nil {
+			if err := r.Scan(&h, &v.Seq, &v.Harness, &v.Group, &v.Kind, &v.Source, &v.ResetsAt, &v.AsOf, &v.Percent, &body); err != nil {
 				return err
 			}
 			v.Body = body
@@ -354,11 +369,11 @@ func loadSnapshot(ctx context.Context, q querier, snap *Snapshot) error {
 			snap.Memos[hash] = d
 			return nil
 		}},
-		{`SELECT workspace_hash, memo_id, body_json FROM memos ORDER BY workspace_hash, position`, func(r scanner) error {
+		{`SELECT workspace_hash, position, memo_id, body_json FROM memos ORDER BY workspace_hash, position`, func(r scanner) error {
 			var hash string
 			var m Memo
 			var body []byte
-			if err := r.Scan(&hash, &m.ID, &body); err != nil {
+			if err := r.Scan(&hash, &m.Position, &m.ID, &body); err != nil {
 				return err
 			}
 			m.Body = body
@@ -394,6 +409,15 @@ func loadSnapshot(ctx context.Context, q querier, snap *Snapshot) error {
 				return err
 			}
 			snap.TrackerHooks[k].Due[id] = at
+			return nil
+		}},
+		{`SELECT path, store, import_status, import_detail FROM legacy_captures WHERE import_status IN ('invalid', 'future')`, func(r scanner) error {
+			var p string
+			var issue CaptureIssue
+			if err := r.Scan(&p, &issue.Store, &issue.Status, &issue.Detail); err != nil {
+				return err
+			}
+			snap.ImportIssues[p] = issue
 			return nil
 		}},
 	}

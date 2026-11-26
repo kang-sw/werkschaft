@@ -91,7 +91,7 @@ func (d *Daemon) handleRailLayout(w http.ResponseWriter, r *http.Request) {
 	d.hireMu.Lock()
 	defer d.hireMu.Unlock()
 	if req.Op == "attach" && ValidReplyID(req.RID) {
-		meta, err := ReadHiringMetadata(d.dir, req.RID)
+		meta, err := d.readHiringMetadata(req.RID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, railLayoutReply{Reason: layoutStore})
 			return
