@@ -30,9 +30,11 @@ Approved visual & interaction reference (tracked text mockup):
    - Do **not** inline into `dashboard.tmpl`. Load via dynamic `import("/s/companion-vrm-<hash>.mjs")` strictly when `dashboard.companion_enabled === true` AND the active pack summary reports `renderer === "vrm"`. When disabled or running a 2D pack, **0 bytes of 3D runtime are fetched and 0 WebGL contexts are created**.
    - Rejected: loading from an external CDN (violates local-only offline posture) or inlining into the shell HTML bundle (penalizes every dashboard load even when companion is off).
 
-2. **Pluggable renderer adapter inside `dashboard-companion-stage.js`:**
+2. **Pluggable renderer adapter inside `dashboard-companion-stage.js` & VRM director vocabulary (`companion_director.go`):**
    - Keep `dashboard-companion-relay.js`, `companion_director.go`, `dashboard-companion-scenarios.js`, `dashboard-companion-builtins.js`, and 2D `fx` badge rendering as the single shared behavior backbone.
    - Select either the existing 2D `C.makeRig(...)` compositor (`renderer: "2d"`) or the new VRM renderer adapter (`renderer: "vrm"`) per active pack. Switching from VRM back to a 2D pack or disabling the companion must explicitly dispose Three.js geometries, materials, textures, and the WebGL context (`renderer.dispose()` + `forceContextLoss()`).
+   - For `renderer: "vrm"` packs (which lack 2D `pack.json` raster dictionaries), define the built-in VRM director vocabulary tables in `companion_director.go` (the 7 unified expressions, VRM gesture IDs, and procedural 3D prop IDs) and map the 12 built-in scenarios' stage-physics and prop behaviors onto VRM-adapter equivalents (or graceful no-op via `fallback`).
+   - Hide or make inert the 2D paper-doll gear-modal wardrobe controls (`dashboard.companion_*` outfit/head picks in `dashboard-companion-settings.js`) whenever the active pack has `renderer === "vrm"`, matching the epic's 2D-only surface invariant.
 
 3. **Unified VRM 0.x & VRM 1.0 parity (spike-verified contract):**
    - **Orientation & bone conjugation:** Call `VRMUtils.rotateVRM0(vrm)` for VRM 0.x models, AND conjugate all normalized humanoid bone rotations by `R_y(π)` (negating quaternion `x` and `z`, preserving `y` and `w`, matching `@pixiv/three-vrm-animation`'s `createVRMAnimationHumanoidTracks`) whenever `vrm.meta?.metaVersion === "0"`. Both VRM 0.x and VRM 1.0 must produce identical world-space arm/head/torso poses.
@@ -85,11 +87,13 @@ Approved visual & interaction reference (tracked text mockup):
 Deliver the complete lazy-loaded VRM renderer wired into the live Werkschaft dashboard shell:
 
 1. **Reproducible vendor bundle & `/s/` static route (`pages.go`, `page_routes.go`, `frame_assets.go`):**
-   - Add a reproducible build script (and tracked minified ESM asset `assets/companion-vrm-runtime.mjs`, ~243 KiB gzipped) bundling `three`, `@pixiv/three-vrm`, and `@pixiv/three-vrm-animation` with explicit version pins.
+   - Add a reproducible build script (and tracked minified ESM asset `assets/companion-vrm-runtime.mjs`, target `<= 300 KiB` gzipped; spike measured `248,601` bytes gzipped in `261126-research-ws-companion-hybrid-vrm-bust-spike`) bundling `three`, `@pixiv/three-vrm`, and `@pixiv/three-vrm-animation` with explicit version pins.
    - Serve it at content-hashed `/s/companion-vrm-<sha256[:12]>.mjs` (`text/javascript; charset=utf-8`, `nosniff`, `immutable`) and expose its URL to the outer shell only as a data attribute / config string — never inlined in `dashboard.tmpl`.
-2. **Pluggable VRM renderer adapter (`assets/dashboard-companion-vrm.js`, `assets/dashboard-companion-stage.js`):**
+2. **Pluggable VRM renderer adapter, director vocabulary & 2D wardrobe gating (`assets/dashboard-companion-vrm.js`, `assets/dashboard-companion-stage.js`, `assets/dashboard-companion-settings.js`, `companion_director.go`, `companion_director_test.go`):**
    - Dynamically import `/s/companion-vrm-*.mjs` only when `companion_enabled` is true and the selected pack has `renderer === "vrm"`.
-   - Load the `.vrm` blob from `/api/companion/packs/{id}/assets/{model}?rev=<rev>`, apply `VRMUtils.rotateVRM0` + VRM 0.x `R_y(π)` bone conjugation, auto-frame bust camera from `head` + `chest`/`upperChest` bones, and expose a clean adapter consumed by `stage.js` (sharing `scenarios.js`, `builtins.js`, `companion_director.go`, 2D `fx` badges, and normalized `gaze`).
+   - Load the `.vrm` blob from `/api/companion/packs/{id}/assets/{model}?rev=<rev>`, apply `VRMUtils.rotateVRM0` + VRM 0.x `R_y(π)` bone conjugation, auto-frame bust camera from `head` + `chest`/`upperChest` bones, and expose a clean adapter consumed by `stage.js` (sharing `scenarios.js`, `builtins.js`, `companion_director.go`, 2D `fx` badges, and normalized `gaze`, mapping the 12 built-in scenarios' stage-physics and prop behaviors onto VRM-adapter equivalents or clean `fallback` no-ops).
+   - Add built-in VRM director vocabulary ID tables (7 unified expressions, VRM gesture IDs, procedural 3D prop IDs) to `companion_director.go` for `renderer === "vrm"` packs, with unit tests in `companion_director_test.go`.
+   - Hide or disable the 2D paper-doll wardrobe controls in `dashboard-companion-settings.js` when the active pack has `renderer === "vrm"`.
    - Implement `VrmExpressionController` (all 7 Werkschaft expressions + VRM 0.x `Surprised`/`Fcl_ALL_Surprised`/`oh` fallback + `pack.json` `expressionMap` overrides + auto-blink + breathing) and `vrm.lookAt` + `springBoneManager`.
    - Ensure full WebGL resource disposal when switching back to 2D packs or disabling companion.
 3. **Bottom-right bust dock, right-column avoidance & `Digital Dissolve` (`dashboard-companion-relay.js`, `dashboard-companion-stage.js`, `dashboard-companion.css`):**

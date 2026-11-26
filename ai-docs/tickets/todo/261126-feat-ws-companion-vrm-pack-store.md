@@ -31,7 +31,7 @@ Today, `agents-plugin-tool/internal/wsdashboard/companion_pack_store.go` and `co
        "model": "model.vrm",
        "thumbnail": "thumb.webp",
        "vroidSourceUrl": "https://...",
-       "persona": { "name": "...", "prompt": "..." },
+       "persona": { "name": "...", "voice": "...", "quipLanguage": "ko" },
        "expressionMap": {
          "oo": { "preset": "surprised", "weight": 0.95 },
          "happy": { "preset": "happy", "weight": 0.92 }
@@ -41,8 +41,8 @@ Today, `agents-plugin-tool/internal/wsdashboard/companion_pack_store.go` and `co
        }
      }
      ```
-     Required fields: `schema`, `id` (must match directory name when present), `name`, `model` (flat `.vrm` filename matching `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrm$`). Optional fields: `thumbnail` (`.webp`/`.png`), `vroidSourceUrl` (`https://` URL only), `persona`, `expressionMap` (open map of Werkschaft expression ID to preset/custom blendshape binding), `animations` (map of pose/gesture ID to flat `.vrma` filename), `framing` (optional bust camera tweaks), and open extension fields (preserved/ignored by validator).
-   - Rejected: a separate `<config-home>/companions-vrm/` directory (duplicates pack IDs, `dashboard.companion_pack` resolution, and source install/uninstall plumbing without adding compatibility safety beyond `schema` discrimination).
+     Required fields: `schema`, `id` (must match directory name when present), `name`, `model` (flat `.vrm` filename matching `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrm$`). Optional fields: `thumbnail` (`.webp`/`.png`), `vroidSourceUrl` (`https://` URL only), `persona` (reusing the shipped `CompanionPersona` shape `{name, voice, quipLanguage}` with the same schema bounds as `ws-companion/v1`, so `companion_director.go` persona voice works unchanged), `expressionMap` (open map of Werkschaft expression ID to preset/custom blendshape binding), `animations` (map of pose/gesture ID to flat `.vrma` filename), `framing` (optional bust camera tweaks), and open extension fields (preserved/ignored by validator).
+   - Rejected: a separate `<config-home>/companions-vrm/` directory (duplicates pack IDs, `dashboard.companion_pack` resolution, and source install/uninstall plumbing without adding compatibility safety beyond `schema` discrimination), and a new `{name, prompt}` persona shape (breaks reuse of shipped `CompanionPersona`).
 
 2. **Compatibility Tier Verdict — T1 (Display-Degraded, Patch-Safe) per `ai-docs/manuals/release-compatibility.md`:**
    - **Old daemon reading a VRM pack written by the new daemon:** `scanLocal` / `loadCompanionLocal` / `readCompanionLocalFile` (`companion_pack_store.go:161-270`, `companion_pack_file_unix.go:15-30`, `companion_pack_file_windows.go:14-63`) are strictly read-only (`O_RDONLY`/`GENERIC_READ`). `validateCompanionManifest` (`companion_pack_schema.go:14,220-222`) rejects `"ws-companion-vrm/v1"` for that single pack via `snapshot.addError` (`companion_pack_store.go:211-213`) without incrementing `cached` (`L215`) and preserves `"default"` plus all valid 2D packs (`L135-144,216,332-335`).
@@ -66,7 +66,7 @@ Today, `agents-plugin-tool/internal/wsdashboard/companion_pack_store.go` and `co
      - `companionVrmPackCap = 40 << 20` (`40 MiB` per VRM pack)
      - `companionCacheCap = 128 << 20` (`128 MiB` total in-memory pack cache across local packs; `companionUploadCap` / `companionSourceCap` / `companionPackZipCap` updated consistently to `64 MiB` / `64 MiB` / `40 MiB`).
    - Serve `.vrm` and `.vrma` through `GET /api/companion/packs/{id}/assets/{file}` with `Content-Type: model/gltf-binary`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `ETag`, and `?rev=<rev>` `Cache-Control: private, max-age=31536000, immutable` from the in-memory snapshot (zero per-request disk I/O).
-   - Expose `"schema"` (or `"renderer": "2d" | "vrm"`) on each pack summary in `GET /api/companion/packs` so the frontend knows whether a pack requires the lazy-loaded VRM runtime before fetching assets.
+   - Expose `"renderer": "2d" | "vrm"` and `"schema"` on each pack summary in `GET /api/companion/packs` AND expose `renderer` to `companion_director.go` (`companionPackFor`) so both the frontend and the agent director know whether a pack is 2D or VRM before fetching assets or deriving allowed vocabulary.
 
 5. **Official opt-in VRM asset pack registry & UI CTA (`(13)=a`):**
    - Keep the Go binary free of embedded `.vrm` binaries.
@@ -91,9 +91,9 @@ Implement `"schema": "ws-companion-vrm/v1"` support end to end in the Go compani
 1. **Schema & GLB/VRM header validation (`companion_pack_schema.go`, `companion_pack_vrm.go`):**
    - Parse and validate `"ws-companion-vrm/v1"` manifests (`id`, `name`, `model`, optional `thumbnail`, `vroidSourceUrl`, `persona`, `expressionMap`, `animations`, `framing`) with strict flat filename checks and unknown-field pass-through.
    - Implement a pure-Go minimal GLB header + first-JSON-chunk inspector verifying `glTF` v2 magic, length bounds, and presence of `extensions.VRM` or `extensions.VRMC_vrm` (and `extensions.VRMC_vrm_animation` for `.vrma`), returning detected VRM version (`"0.x"` | `"1.0"`).
-2. **Memory-first store & asset serving (`companion_pack_store.go`, `companion_pack_routes.go`):**
+2. **Memory-first store, asset serving & director pack exposure (`companion_pack_store.go`, `companion_pack_routes.go`, `companion_director.go`, `companion_director_test.go`):**
    - Load both `"ws-companion/v1"` and `"ws-companion-vrm/v1"` packs into `companionSnapshot` with per-type asset/pack caps (`32 MiB` `.vrm`, `4 MiB` `.vrma`, `40 MiB` VRM pack, `128 MiB` cache cap) using the existing symlink-safe file openers.
-   - Include `"renderer": "2d" | "vrm"` and `"schema"` in `GET /api/companion/packs` summaries.
+   - Include `"renderer": "2d" | "vrm"` and `"schema"` in `GET /api/companion/packs` summaries, and expose `renderer` (and `CompanionPersona`) through `companionPackFor` in `companion_director.go` (preserving existing 2D pack behavior and adding unit test coverage in `companion_director_test.go`; the VRM vocabulary ID tables themselves are owned by `261126-feat-ws-companion-vrm-engine`).
    - Serve `.vrm` and `.vrma` from `GET /api/companion/packs/{id}/assets/{file}` with `model/gltf-binary`, `nosniff`, sandbox CSP, and immutable `?rev=` caching.
 3. **Single-file `.vrm` drop-in & `.zip` VRM install (`companion_pack_zip.go`, `companion_pack_install.go`, `companion_pack_install_routes.go`, `companion_pack_source_routes.go`):**
    - Allow `.vrm` and `.vrma` in archive validation when the pack manifest declares `"schema": "ws-companion-vrm/v1"` (while keeping `.webp`/`.png`-only enforcement on `"ws-companion/v1"` packs).
