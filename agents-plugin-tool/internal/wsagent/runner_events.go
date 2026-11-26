@@ -831,6 +831,7 @@ func (c *conv) processGone() {
 		hp.Detach()
 	}
 	c.setStatus(func() { c.proc = nil })
+	c.clearWorkerRejoin()
 	c.update(func(rec *Record) {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 		if !rec.Lead {
@@ -909,6 +910,7 @@ func (c *conv) processEnded() {
 		c.background, c.monitors = nil, nil
 	})
 	c.clearProcessMCP()
+	c.clearWorkerRejoin()
 	if hadBackgroundTasks || hadBgGrace || c.heldRes != nil {
 		// A child's held background turn settles and its parent's idle
 		// timer re-arms once the process exits and clears background work

@@ -903,6 +903,7 @@ func (c *conv) retireCompactionProcess() error {
 	c.setStatus(func() { c.proc = nil })
 	c.events = nil
 	c.clearProcessMCP()
+	c.clearWorkerRejoin()
 	if proc != nil {
 		_ = proc.Close()
 		if audited, ok := proc.(interface{ waitForAudit() }); ok {

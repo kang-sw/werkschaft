@@ -15,6 +15,13 @@ func workerHolderMatches(rec Record, meta holderSession, child *wsholder.ChildSt
 		child != nil && rec.HostPID > 0 && child.PID == rec.HostPID
 }
 
+// clearWorkerRejoin resets loop-owned per-process worker rejoin state whenever
+// c.proc is cleared or ends.
+func (c *conv) clearWorkerRejoin() {
+	c.workerRejoined = false
+	c.workerMCPEnv = nil
+}
+
 // Restore only after the holder identity, including its harness PID, matches.
 // An absent or stale HTTP route waits for a safe idle restart, just as leads do.
 func (c *conv) restoreWorkerMCP() {
@@ -34,12 +41,13 @@ func (c *conv) restoreWorkerMCP() {
 		logOutcome("URL mismatch")
 	case rec.MCPEnv == nil:
 		logOutcome("no saved environment")
+	case c.workerMCPEnv == nil:
+		logOutcome("no captured harness environment")
 	default:
 		session := c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
 		if session != nil {
 			c.rejoinExecCutover(rec)
 			session.Started(c.workerMCPEnv, rec.HostPID)
-			c.workerMCPEnv = nil
 			logOutcome("restored")
 			if c.r.takeMCPWaitMiss(rec.MCPToken) {
 				logOutcome("missed wait before restoration")
@@ -96,6 +104,7 @@ func (c *conv) retireCrossHarnessWorker(hp holderProcess) {
 	c.replaying, c.replayAsked = false, false
 	// A failed attempt's stop error no longer applies.
 	c.setStatus(func() { c.proc, c.lastErr = nil, reason })
+	c.clearWorkerRejoin()
 	c.r.revokeToken(c.rec.ReplyID)
 	// The holder and the credentials it carried go in one write. A daemon
 	// that dies right after it leaves an open turn the next load settles
@@ -222,6 +231,7 @@ func (c *conv) retireDowngradedWorker(hp holderProcess, wake bool) bool {
 		return true
 	}
 	c.setStatus(func() { c.proc, c.lastErr = nil, "" })
+	c.clearWorkerRejoin()
 	c.r.revokeToken(rec.ReplyID)
 	c.update(func(rec *Record) {
 		finishActiveTurn(rec, c.r.opts.Now().UnixMilli())

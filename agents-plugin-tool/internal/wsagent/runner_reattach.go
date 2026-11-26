@@ -129,6 +129,7 @@ func (c *conv) checkReattach() {
 					hp.Detach()
 					c.setStatus(func() { c.proc = nil })
 					c.events = nil
+					c.clearWorkerRejoin()
 					c.update(func(rec *Record) {
 						rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 						if !rec.Lead {
@@ -155,11 +156,14 @@ func (c *conv) checkReattach() {
 				} else if _, _, err := c.r.childAdmission(rec, rp.Definition); err != nil {
 					fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin permission admission (advisory; applies on next launch): %v\n", c.rec.ReplyID, err)
 				}
-				c.r.restoreToken(c.record())
-				c.restoreWorkerMCP()
-				c.events = c.proc.Events()
-				if gated, ok := c.proc.(interface{ allowHolderReplay() }); ok {
-					gated.allowHolderReplay()
+				if !c.workerRejoined {
+					c.r.restoreToken(c.record())
+					c.restoreWorkerMCP()
+					c.events = c.proc.Events()
+					if gated, ok := c.proc.(interface{ allowHolderReplay() }); ok {
+						gated.allowHolderReplay()
+					}
+					c.workerRejoined = true
 				}
 			}
 		}
