@@ -371,7 +371,11 @@ func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("report = %+v", rep.Result)
 	}
-	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" })
+	eventually(t, "the record to forget the holder", func() bool {
+		rec := h.record(id)
+		return rec.HolderID == "" && !rec.TurnOpen && rec.ClosedAt != "" && h.state(id).Status == StatusClosed
+	})
+	h.quiesce(id)
 	st := h.state(id)
 	if st.Process || st.Status != StatusClosed || st.Error != wantAgyCrossHarnessRefusal {
 		t.Fatalf("state = %+v", st)

@@ -849,7 +849,7 @@ title: Risk fixture
 // ---------------------------------------------------------------------------
 
 // spawnIdiomSites are the real playbooks that substitute {{.SpawnIdiom}}.
-var spawnIdiomSites = []string{"lead-run", "lead-ticket", "ticket-worker", "ticket-worker-elevated", "ticket-handler", "review-handler", "explore", "delegate-sample"}
+var spawnIdiomSites = []string{"lead-run", "lead-ticket", "lead-mockup", "ticket-worker", "ticket-worker-elevated", "ticket-handler", "review-handler", "explore", "delegate-sample", "mockup-writer"}
 
 // wantClaudeSpawnIdiom is the hardcoded Claude SpawnIdiom per namespace, so a
 // wrong claudeSpawnIdiom cannot agree with itself in a derived assertion.
