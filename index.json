@@ -367,7 +367,7 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T04:41:33Z",
+        "touched_at": "2026-11-26T14:06:36Z",
         "impl": {
           "branch": "impl/develop/tweak-canon-owl"
         }
