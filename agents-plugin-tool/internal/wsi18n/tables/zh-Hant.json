@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "語音轉寫逾時",
   "js.voice.err.auth": "語音供應商金鑰遭拒",
   "js.voice.err.too_large": "錄音超出大小上限",
-  "js.voice.err.failed": "語音轉寫失敗"
+  "js.voice.err.failed": "語音轉寫失敗",
+  "js.wbupdate.cls.policy": "方針",
+  "js.wbupdate.cls.technical": "技術",
+  "js.wbupdate.cls.announced": "已告知",
+  "js.wbupdate.cls.check": "檢查",
+  "js.wbupdate.unanswered": "未回答",
+  "js.wbupdate.staged_pick": "已選 {0}",
+  "js.wbupdate.staged_memo": "備註：{0}",
+  "js.wbupdate.sent_waiting": "已傳送 · 等待中",
+  "js.wbupdate.sent_held": "已傳送 · 暫緩",
+  "js.wbupdate.settled": "已確定"
 }

@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "Tempo limite da transcrição excedido",
   "js.voice.err.auth": "Chave do provedor de voz rejeitada",
   "js.voice.err.too_large": "A gravação excede o limite de tamanho",
-  "js.voice.err.failed": "Falha na transcrição"
+  "js.voice.err.failed": "Falha na transcrição",
+  "js.wbupdate.cls.policy": "Diretriz",
+  "js.wbupdate.cls.technical": "Técnico",
+  "js.wbupdate.cls.announced": "Anunciado",
+  "js.wbupdate.cls.check": "Verificação",
+  "js.wbupdate.unanswered": "sem resposta",
+  "js.wbupdate.staged_pick": "{0} selecionado",
+  "js.wbupdate.staged_memo": "nota: {0}",
+  "js.wbupdate.sent_waiting": "enviado · aguardando",
+  "js.wbupdate.sent_held": "enviado · em espera",
+  "js.wbupdate.settled": "definido"
 }
