@@ -265,6 +265,26 @@ func TestRemoveWorktreeFailedRollbackIsLoud(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(aside, "src", "y.go")); err != nil {
 		t.Fatalf("stranded checkout lost its files: %v", err)
 	}
+
+	// A sweep past the grace period keeps the stranded checkout while git
+	// still registers it, and deletes it once its registration is gone.
+	sweeper := newTrashBin()
+	sweeper.now = func() time.Time { return time.Now().Add(time.Hour) }
+	sweeper.maybeSweep(runner, root, "")
+	sweeper.wait()
+	if _, err := os.Stat(filepath.Join(aside, "src", "y.go")); err != nil {
+		t.Fatalf("a sweep deleted the stranded checkout of a registered worktree: %v", err)
+	}
+	runGit(t, root, "worktree", "prune")
+	if worktreeRegistered(t, root, wt.Path) {
+		t.Fatal("prune must drop the registration of the missing checkout")
+	}
+	sweeper.swept = map[string]time.Time{}
+	sweeper.maybeSweep(runner, root, "")
+	sweeper.wait()
+	if _, err := os.Stat(aside); !os.IsNotExist(err) {
+		t.Fatalf("a sweep kept a trash entry no worktree registers: %v", err)
+	}
 }
 
 // TestRemoveWorktreeRefusesLockedWorktree: a locked worktree is refused

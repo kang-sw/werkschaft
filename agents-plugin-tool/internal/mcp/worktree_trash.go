@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -140,28 +141,41 @@ func (b *trashBin) maybeSweep(runner wsgit.Runner, root, poolConfigValue string)
 	})
 }
 
+// trashDir is one trash directory a sweep empties.
+type trashDir struct {
+	path string
+	// commonDir is set for a pool trash (the repository's Git common dir):
+	// its entries are checked against the worktree registrations before
+	// deletion (strandedCheckout).
+	commonDir string
+}
+
 // trashDirs lists the trash directories of the repository at root.
-func trashDirs(runner wsgit.Runner, root, poolConfigValue string) []string {
+func trashDirs(runner wsgit.Runner, root, poolConfigValue string) []trashDir {
 	ctx, cancel := context.WithTimeout(context.Background(), poolTrashSweepTimeout)
 	defer cancel()
 	entries, err := listWorktrees(ctx, runner, root)
 	if err != nil || len(entries) == 0 {
 		return nil
 	}
-	var dirs []string
+	common, err := wtRun(ctx, runner, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		// Without the common dir no pool trash entry can be checked against
+		// the registrations, so nothing is swept.
+		return nil
+	}
+	common = filepath.Clean(common)
+	var dirs []trashDir
 	for _, pool := range ownedPoolRoots(poolConfigValue, entries[0].Path) {
-		dirs = append(dirs, filepath.Join(pool, poolTrashDirName))
+		dirs = append(dirs, trashDir{path: filepath.Join(pool, poolTrashDirName), commonDir: common})
 	}
-	if common, err := wtRun(ctx, runner, root, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
-		dirs = append(dirs, filepath.Join(filepath.Clean(common), adminTrashDirName))
-	}
-	return dirs
+	return append(dirs, trashDir{path: filepath.Join(common, adminTrashDirName)})
 }
 
 // sweepDir deletes up to poolTrashSweepLimit entries of dir older than
-// poolTrashGrace.
-func (b *trashBin) sweepDir(dir string) {
-	entries, err := os.ReadDir(dir)
+// poolTrashGrace, keeping a stranded checkout (strandedCheckout).
+func (b *trashBin) sweepDir(dir trashDir) {
+	entries, err := os.ReadDir(dir.path)
 	if err != nil {
 		return
 	}
@@ -181,9 +195,46 @@ func (b *trashBin) sweepDir(dir string) {
 		if b.now().Sub(at) < poolTrashGrace {
 			continue
 		}
-		_ = b.removeAll(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir.path, e.Name())
+		if dir.commonDir != "" && strandedCheckout(path, dir.commonDir) {
+			continue
+		}
+		_ = b.removeAll(path)
 		deleted++
 	}
+}
+
+// strandedCheckout reports whether the pool trash entry at entry may still be
+// a registered worktree's only checkout: its .git file names an admin
+// directory that is still under commonDir/worktrees, and the path that admin
+// directory registers has no checkout. A remove whose unregister and rollback
+// both failed leaves exactly that (retireRegisteredWorktree), and the user is
+// told to move it back, so a sweep must not delete it. When the admin
+// directory was moved into the trash (a completed removal), or its registered
+// path holds a checkout (the id was reused), the entry is not one.
+func strandedCheckout(entry, commonDir string) bool {
+	data, err := os.ReadFile(filepath.Join(entry, ".git"))
+	if err != nil {
+		return false
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return false
+	}
+	admin := filepath.Join(commonDir, "worktrees", filepath.Base(filepath.Clean(strings.TrimSpace(gitdir))))
+	if _, err := os.Stat(admin); errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	back, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+	if err != nil {
+		return true
+	}
+	registered := strings.TrimSpace(string(back))
+	if !filepath.IsAbs(registered) {
+		registered = filepath.Join(admin, registered)
+	}
+	_, err = os.Lstat(registered)
+	return err != nil
 }
 
 const trashTimeLayout = "20060102T150405Z"
@@ -447,7 +498,7 @@ func retireRegisteredWorktree(target, poolRoot, adminDir, commonDir string) (str
 	adminAside := filepath.Join(adminTrash, filepath.Base(aside))
 	if err := unregisterWorktreeAdmin(adminDir, adminAside); err != nil {
 		if rbErr := renameWorktreeAside(aside, target); rbErr != nil {
-			return "", fmt.Errorf("worktree.remove: unregistering %s failed (%v) after its directory was moved aside, and moving it back failed too (%v). Its files are now at %s while git still registers it at %s. Move %s back to %s, then remove again", target, err, rbErr, aside, target, aside, target)
+			return "", fmt.Errorf("worktree.remove: unregistering %s failed (%v) after its directory was moved aside, and moving it back failed too (%v). Its files are now at %s while git still registers it at %s (the trash sweep keeps them while it does). Move %s back to %s, then remove again", target, err, rbErr, aside, target, aside, target)
 		}
 		return "", fmt.Errorf("worktree.remove: could not unregister %s by moving %s aside (%v); its directory was moved back, so nothing was changed", target, adminDir, err)
 	}

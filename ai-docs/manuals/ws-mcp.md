@@ -1093,7 +1093,10 @@ this route.
   `worktree.*` call or dashboard rail read per repository in each process,
   then at most every 30 minutes; a sweep skips entries younger than one
   minute (a concurrent remove's rollback window, read from the entry name)
-  and deletes at most 32 per directory. Pool scans (`worktree.list`,
+  and deletes at most 32 per directory. It also keeps a pool trash entry
+  whose `.git` names an admin directory still under `worktrees/` whose
+  registered path has no checkout (the failed-move-back case), until it is
+  moved back or the registration is pruned. Pool scans (`worktree.list`,
   `worktree.acquire` reuse, the stale nudge, the dashboard pool card) skip
   `.trash/`, and release and remove refuse paths in it. A path under an
   owned pool root that is no longer a registered worktree (git unregistered
