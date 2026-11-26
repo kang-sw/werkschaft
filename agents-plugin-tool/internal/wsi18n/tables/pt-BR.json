@@ -3759,5 +3759,12 @@
   "js.wbupdate.staged_memo": "nota: {0}",
   "js.wbupdate.sent_waiting": "enviado · aguardando",
   "js.wbupdate.sent_held": "enviado · em espera",
-  "js.wbupdate.settled": "definido"
+  "js.wbupdate.settled": "definido",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "Ativado",
+  "gear.motion.on.sub": "Animação de tinta para ferramentas e tokens (padrão)",
+  "gear.motion.off": "Desativado",
+  "gear.motion.off.sub": "Apenas ponto e rótulo estáticos (0 rAF)",
+  "js.motion.off": "Desativar motion",
+  "js.motion.off.title": "Desativar Extra Motion (reativável em Configurações)"
 }

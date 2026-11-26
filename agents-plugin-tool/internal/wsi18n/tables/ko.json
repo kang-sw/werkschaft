@@ -3759,5 +3759,12 @@
   "js.wbupdate.staged_memo": "메모: {0}",
   "js.wbupdate.sent_waiting": "전송됨 · 대기",
   "js.wbupdate.sent_held": "전송됨 · 보류",
-  "js.wbupdate.settled": "확정"
+  "js.wbupdate.settled": "확정",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "켜기",
+  "gear.motion.on.sub": "실시간 도구·토큰 잉크 모션 (기본)",
+  "gear.motion.off": "끄기",
+  "gear.motion.off.sub": "정적 상태 도트·텍스트만 표시 (0 rAF)",
+  "js.motion.off": "모션 끄기",
+  "js.motion.off.title": "Extra Motion 끄기 (좌하단 설정에서 다시 켤 수 있음)"
 }

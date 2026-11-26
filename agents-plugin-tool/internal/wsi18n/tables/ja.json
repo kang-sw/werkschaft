@@ -3759,5 +3759,12 @@
   "js.wbupdate.staged_memo": "メモ: {0}",
   "js.wbupdate.sent_waiting": "送信済み · 待機中",
   "js.wbupdate.sent_held": "送信済み · 保留",
-  "js.wbupdate.settled": "確定"
+  "js.wbupdate.settled": "確定",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "オン",
+  "gear.motion.on.sub": "ツールとトークンのインクモーション（既定）",
+  "gear.motion.off": "オフ",
+  "gear.motion.off.sub": "静的なドットとラベルのみ (0 rAF)",
+  "js.motion.off": "モーションをオフ",
+  "js.motion.off.title": "Extra Motion をオフにする（設定から再びオンにできます）"
 }

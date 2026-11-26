@@ -3759,5 +3759,12 @@
   "js.wbupdate.staged_memo": "note: {0}",
   "js.wbupdate.sent_waiting": "sent · waiting",
   "js.wbupdate.sent_held": "sent · held",
-  "js.wbupdate.settled": "settled"
+  "js.wbupdate.settled": "settled",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "On",
+  "gear.motion.on.sub": "Live tool & token ink motion (default)",
+  "gear.motion.off": "Off",
+  "gear.motion.off.sub": "Static dot & label only (0 rAF)",
+  "js.motion.off": "Turn off motion",
+  "js.motion.off.title": "Turn off Extra Motion (re-enable in Settings)"
 }

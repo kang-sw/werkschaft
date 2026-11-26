@@ -3759,5 +3759,12 @@
   "js.wbupdate.staged_memo": "備註：{0}",
   "js.wbupdate.sent_waiting": "已傳送 · 等待中",
   "js.wbupdate.sent_held": "已傳送 · 暫緩",
-  "js.wbupdate.settled": "已確定"
+  "js.wbupdate.settled": "已確定",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "開啟",
+  "gear.motion.on.sub": "即時工具與 Token 墨跡動效（預設）",
+  "gear.motion.off": "關閉",
+  "gear.motion.off.sub": "僅顯示靜態狀態點與標籤 (0 rAF)",
+  "js.motion.off": "關閉動效",
+  "js.motion.off.title": "關閉 Extra Motion（可在設定中重新開啟）"
 }
