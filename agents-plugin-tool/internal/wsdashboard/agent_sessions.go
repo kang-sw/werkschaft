@@ -17,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
 
@@ -99,6 +100,25 @@ type AgentLiveHost interface {
 // AgentAuditHost receives the daemon's audit sink before Start.
 type AgentAuditHost interface {
 	SetAuditSink(wsaudit.Sink)
+}
+
+// AgentMetaHost is an optional AgentHost that binds the daemon's shared SQLite
+// metadata store and startup snapshot before Start.
+type AgentMetaHost interface {
+	SetMeta(store *wsmeta.Store, snap *wsmeta.Snapshot)
+}
+
+// AgentRecordValidatorHost is an optional AgentHost that supplies the legacy
+// agent.json validator for the one-time SQLite cutover.
+type AgentRecordValidatorHost interface {
+	ValidateLegacyRecord(rel, replyID string, raw []byte) error
+}
+
+// SupportMetaHost is an optional SupportHost that defers loading support state
+// until StartDaemon acquires dashboard.lock and settles SQLite vs legacy mode.
+type SupportMetaHost interface {
+	LoadFromMeta(store *wsmeta.Store, snap *wsmeta.Snapshot)
+	LoadLegacy()
 }
 
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off

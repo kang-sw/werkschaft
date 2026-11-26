@@ -12,7 +12,18 @@ import (
 	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
-var _ wsdashboard.AgentMetadataHost = (*Runner)(nil)
+var (
+	_ wsdashboard.AgentMetadataHost        = (*Runner)(nil)
+	_ wsdashboard.AgentMetaHost            = (*Runner)(nil)
+	_ wsdashboard.AgentRecordValidatorHost = (*Runner)(nil)
+	_ wsdashboard.SupportMetaHost          = (*Support)(nil)
+)
+
+// ValidateLegacyRecord delegates to ValidateLegacyRecord so StartDaemon can
+// discover the legacy agent.json validator from opts.Agents automatically.
+func (*Runner) ValidateLegacyRecord(rel, replyID string, raw []byte) error {
+	return ValidateLegacyRecord(rel, replyID, raw)
+}
 
 // SetMeta binds the daemon's shared SQLite metadata store and startup snapshot
 // before Start. Once bound, conversation records, permissions, hiring marks,

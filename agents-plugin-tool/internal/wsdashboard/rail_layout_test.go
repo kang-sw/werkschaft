@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,41 @@ import (
 	"strings"
 	"testing"
 )
+
+func replaceLayoutForTest(t *testing.T, s *railLayoutStore, doc *railLayoutDoc) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.meta != nil {
+		if _, err := s.writePatchLocked(s.doc, doc); err != nil {
+			t.Fatal(err)
+		}
+		s.doc = doc.clone()
+		s.gen++
+		return
+	}
+	raw, err := doc.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(filepath.Dir(s.file), filepath.Base(s.file), raw); err != nil {
+		t.Fatal(err)
+	}
+	s.doc = doc.clone()
+	s.gen++
+}
+
+func reopenLayoutForTest(t *testing.T, d *Daemon) *railLayoutStore {
+	t.Helper()
+	if d.meta != nil {
+		snap, err := d.meta.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return openRailLayoutStoreFromMeta(d.dir, d.meta, snap)
+	}
+	return openRailLayoutStore(d.dir)
+}
 
 // layoutTestView is a rail as buildRailView lists it, unordered by any
 // layout: a plain folder, a repository with a root and a linked worktree,
@@ -788,8 +824,13 @@ func TestRailLayoutRoute(t *testing.T) {
 	if strings.Contains(ev.HTML, `data-star="1"`) {
 		t.Error("the rail still shows a star after the unstar")
 	}
-	if !strings.Contains(string(readLayoutFile(t, f.dir)), `"boardsession"`) {
-		t.Error("the layout file lacks the imported order")
+	persistedDoc, _ := reopenLayoutForTest(t, f.d).current()
+	persistedRaw, err := persistedDoc.encode()
+	if err != nil || !strings.Contains(string(persistedRaw), `"boardsession"`) {
+		t.Errorf("the persisted layout lacks the imported order: %s (%v)", persistedRaw, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, railLayoutFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("post-cutover layout write published legacy rail-layout.json: %v", err)
 	}
 
 	if code, _, _ := postJSON(t, f.base+railLayoutRoute, "http://evil.example", `{"op":"star","rid":"livesession"}`); code != http.StatusForbidden {

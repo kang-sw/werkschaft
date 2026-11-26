@@ -160,6 +160,9 @@ func newPlanUsageStoreFromMeta(dir, home string, getenv func(string) string, sto
 func (s *planUsageStore) loadFromMetaLocked(snap *wsmeta.Snapshot) {
 	if snap != nil {
 		if latest, ok := snap.LatestUsage[wsmeta.UsageSourcePlan]; ok {
+			// Retained name check: the plan-usage SQLite entry key "claude"
+			// preserves the persisted plan-usage.json member name
+			// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 			for _, e := range latest.Entries {
 				switch e.Key {
 				case "claude":
@@ -292,7 +295,7 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if observedAt < s.claude.AsOf {
+	if s.closed || observedAt < s.claude.AsOf {
 		return
 	}
 	// Sessions disagree near a window boundary: a stale one still reports the

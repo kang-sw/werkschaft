@@ -175,6 +175,19 @@ type DaemonOptions struct {
 	// Close closes it to changes before it releases the lock, so a store
 	// serves one daemon.
 	Credentials *wscred.Store
+	// AgentRecordValidator validates legacy agent.json captures during the
+	// one-time SQLite metadata cutover (wsmeta.StoreAgentRecord). Production
+	// supplies wsagent.ValidateLegacyRecord; leaving it nil rejects a state
+	// directory that contains legacy agent.json files.
+	AgentRecordValidator wsmeta.LegacyValidator
+	// OnMetaReady runs under the singleton lock after SQLite cutover and
+	// startup snapshot load succeed, before Agents.Start and before the HTTP
+	// server starts accepting requests.
+	OnMetaReady func(d *Daemon, store *wsmeta.Store, snap *wsmeta.Snapshot)
+	// OnLegacyFallback runs under the singleton lock when SQLite cutover
+	// returns wsmeta.ErrCutoverUnsupported, so deferred legacy stores load
+	// from legacy JSON files instead.
+	OnLegacyFallback func()
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -417,6 +430,7 @@ type Daemon struct {
 	hireInLoop bool // guarded by hireMu
 	hireWake   chan struct{}
 	hireDone   chan struct{}
+	pollDone   chan struct{}
 	// beforeUnlock is DaemonOptions.BeforeUnlock.
 	beforeUnlock func()
 	endLog       func()

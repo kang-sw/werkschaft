@@ -62,7 +62,7 @@ func TestLabelRouteSavesShowsAndResets(t *testing.T) {
 	if code != http.StatusOK || strings.TrimSpace(raw) != `{"label":"Build bot"}` {
 		t.Fatalf("label = %d %s", code, raw)
 	}
-	if got := readSessionLabel(SessionDir(f.dir, "livesession")); got != "Build bot" {
+	if got := f.d.sessionLabel("livesession"); got != "Build bot" {
 		t.Fatalf("stored label = %q", got)
 	}
 	f.waitLabel(t, "livesession", "Build bot")
@@ -155,14 +155,14 @@ func TestLabelRouteValidates(t *testing.T) {
 	if code, _, _ := postJSON(t, f.base+"/s/livesession/label", f.base, `{"label":"`+strings.Repeat("x", labelBodyLimit)+`"}`); code != http.StatusRequestEntityTooLarge {
 		t.Errorf("oversized body = %d, want 413", code)
 	}
-	if got := readSessionLabel(SessionDir(f.dir, "livesession")); got != "kept" {
+	if got := f.d.sessionLabel("livesession"); got != "kept" {
 		t.Fatalf("a refused label changed the stored one to %q", got)
 	}
 	full := strings.Repeat("가", 64)
 	if code, raw := f.labelPost(t, "livesession", `{"label":"`+full+`"}`); code != http.StatusOK {
 		t.Fatalf("64-character label = %d %s", code, raw)
 	}
-	if got := readSessionLabel(SessionDir(f.dir, "livesession")); got != full {
+	if got := f.d.sessionLabel("livesession"); got != full {
 		t.Fatalf("stored label = %q", got)
 	}
 

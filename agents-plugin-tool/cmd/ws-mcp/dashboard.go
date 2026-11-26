@@ -21,6 +21,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wstrackerhook"
 	"github.com/kang-sw/devenv/internal/wstrackerhost"
 	"github.com/kang-sw/devenv/internal/wswake"
@@ -105,9 +106,16 @@ func dashboardCommand(args []string) {
 		}
 		return 0
 	}
-	// Bound once the mailbox sweep runs; Close calls it before releasing
-	// the dashboard lock.
+	var onHired atomic.Pointer[func(replyID, requestID, label string)]
+	callOnHired := func(replyID, requestID, label string) {
+		if fn := onHired.Load(); fn != nil && *fn != nil {
+			(*fn)(replyID, requestID, label)
+		}
+	}
+	// Bound once the mailbox sweep and tracker hooks start; Close calls them
+	// before closing SQLite and releasing the dashboard lock (2122).
 	var exportMailbox lateFunc
+	var stopTrackers lateFunc
 	// The holders a predecessor left running are found in the state
 	// directory; the interpreter for a new one is the launcher's own. The
 	// runner takes the manager first: it rejoins its lead sessions'
@@ -129,7 +137,7 @@ func dashboardCommand(args []string) {
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, holders, boards, labels.label, credentials)
+	agents := newAgentRunnerWithHired(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, holders, boards, labels.label, credentials)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -150,6 +158,7 @@ func dashboardCommand(args []string) {
 		Runner:    agents,
 		Dir:       dir,
 		StoreRoot: trackerStoreRoot(tracker, trackerErr),
+		DeferLoad: true,
 	})
 	packageName, _, packageErr := wsagent.ResolveHostedPackage()
 	var settings *wsdashboard.ConfigBackend
@@ -206,8 +215,13 @@ func dashboardCommand(args []string) {
 		SessionForgotten: func(id string) { cron.sessionForgotten(agents, id) },
 		// The companion director's isolated one-shot call, dispatched
 		// through the harness's backend registration.
-		CompanionOneShot:    wsagent.RunOneShot,
-		CompanionHasOneShot: wsagent.HasOneShot,
+		CompanionOneShot:     wsagent.RunOneShot,
+		CompanionHasOneShot:  wsagent.HasOneShot,
+		AgentRecordValidator: wsagent.ValidateLegacyRecord,
+		OnMetaReady: func(d *wsdashboard.Daemon, _ *wsmeta.Store, _ *wsmeta.Snapshot) {
+			hiredFn := d.RecordHired
+			onHired.Store(&hiredFn)
+		},
 		BeforeUnlock: func() {
 			var wg sync.WaitGroup
 			run := func(fn func()) {
@@ -223,6 +237,9 @@ func dashboardCommand(args []string) {
 				}
 			})
 			run(exportMailbox.call)
+			// Stop tracker watch/poll/hooks before SQLite closes and before
+			// dashboard.lock is released so no hook writes race teardown (2122).
+			run(stopTrackers.call)
 			// Under the lock, so the successor never fires the same schedules.
 			run(func() { cron.close(logw) })
 			// And so the successor's user commands are the only ones that commit.
@@ -326,7 +343,7 @@ func dashboardCommand(args []string) {
 	}
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
-	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
+	nudgeHooks, stopHooks := startTrackerHooksWithMeta(tracker, trackerErr, dir, daemon.Endpoint().Port, logw, daemon.Meta(), daemon.MetaSnapshot())
 	stopPoll := startTrackerPoll(tracker, trackerErr, func() {
 		daemon.TrackerChanged()
 		nudgeHooks()
@@ -336,6 +353,15 @@ func dashboardCommand(args []string) {
 		support.CloseUnregistered()
 		nudgeHooks()
 	})
+	var stopTrackersOnce sync.Once
+	stopAllTrackers := func() {
+		stopTrackersOnce.Do(func() {
+			stopWatch()
+			stopPoll()
+			stopHooks()
+		})
+	}
+	stopTrackers.set(stopAllTrackers)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	select {
@@ -367,9 +393,7 @@ func dashboardCommand(args []string) {
 		}
 	}
 	cron.close(logw)
-	stopWatch()
-	stopPoll()
-	stopHooks()
+	stopAllTrackers()
 	closeTracker()
 }
 
@@ -408,11 +432,15 @@ func startTrackerWatch(h *wstrackerhost.Host, newErr error, onChange func()) (st
 // every store; stop kills a running hook and drops the queued ones. newErr
 // is h's creation error: no hook runs. The caller closes h after stop.
 func startTrackerHooks(h *wstrackerhost.Host, newErr error, dir string, port int, logw io.Writer) (nudge, stop func()) {
+	return startTrackerHooksWithMeta(h, newErr, dir, port, logw, nil, nil)
+}
+
+func startTrackerHooksWithMeta(h *wstrackerhost.Host, newErr error, dir string, port int, logw io.Writer, meta *wsmeta.Store, snap *wsmeta.Snapshot) (nudge, stop func()) {
 	if newErr != nil {
 		return func() {}, func() {}
 	}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
-	r := wstrackerhook.Start(wstrackerhook.Options{Dir: dir, Source: h, Log: logw, BaseURL: func() string { return base }})
+	r := wstrackerhook.Start(wstrackerhook.Options{Dir: dir, Source: h, Log: logw, BaseURL: func() string { return base }, Meta: meta, MetaSnapshot: snap})
 	return r.Nudge, r.Close
 }
 
@@ -515,6 +543,10 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
 func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
+	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, holders, boards, labels, credentials)
+}
+
+func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -567,6 +599,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
 		QuotaResetAt:   quotaResetAt,
+		OnHired:        onHired,
 		Report:         mcp.AgentTurnReporter(logw),
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.

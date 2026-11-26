@@ -77,7 +77,7 @@ func startParentFixture(t *testing.T) *parentFixture {
 			t.Fatal(err)
 		}
 		if label != "" {
-			if err := writeSessionLabel(SessionDir(f.dir, id), label); err != nil {
+			if err := f.d.setSessionLabel(id, label); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -93,13 +93,7 @@ func startParentFixture(t *testing.T) *parentFixture {
 	doc := &railLayoutDoc{SchemaVersion: railLayoutSchemaVersion, Workspaces: map[string]*railLayoutWS{
 		"/w/repo": {Children: map[string][]string{"rootsession": {"nestedkid"}}},
 	}}
-	raw, err := doc.encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.dir, railLayoutFileName), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	replaceLayoutForTest(t, f.d.layout, doc)
 	f.d.Index().Refresh()
 	for _, id := range []string{"rootsession", "midsession", "leafsession", "nestedkid", "orphankid", "cyclea", "cycleb"} {
 		id := id

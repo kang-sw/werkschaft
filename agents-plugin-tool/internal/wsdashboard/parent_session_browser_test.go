@@ -43,7 +43,7 @@ func TestParentSessionBrowser(t *testing.T) {
 			t.Fatal(err)
 		}
 		if label != "" {
-			if err := writeSessionLabel(SessionDir(f.dir, id), label); err != nil {
+			if err := f.d.setSessionLabel(id, label); err != nil {
 				t.Fatal(err)
 			}
 		}
