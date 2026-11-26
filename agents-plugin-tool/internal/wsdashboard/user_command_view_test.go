@@ -2,6 +2,8 @@ package wsdashboard
 
 import (
 	"html"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,6 +133,102 @@ func TestRailMessagesFormatsUserCommandPreview(t *testing.T) {
 	got2 := c.last("s", 2, dir)
 	if !got2.User || got2.Text != "git status -sb" {
 		t.Fatalf("rail unlabeled ucmd = %+v", got2)
+	}
+
+	// Literal image-syntax lines inside <ws:ucmd> stay intact in the rail preview,
+	// while real image attachment lines outside <ws:ucmd> are still stripped.
+	imgInsideCmd := wsinbox.FormatUserCommand(wsinbox.UserCommand{
+		Label: "Inspect",
+		Cmd:   "cat <<EOF\n[image: /tmp/literal.png]\nImage #1: /tmp/literal2.png\nEOF",
+	})
+	withOutsideImg := "[image: /tmp/outside.png]\n" + imgInsideCmd + "\nImage #2: /tmp/outside2.png"
+	if err := wslive.AppendRing(dir, []wslive.RingEntry{
+		{Kind: wslive.RingUser, Origin: wslive.OriginWhiteboard, Text: withOutsideImg},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got3 := c.last("s", 3, dir)
+	want3 := "[Inspect] cat <<EOF [image: /tmp/literal.png] Image #1: /tmp/literal2.png EOF"
+	if !got3.User || got3.Text != want3 {
+		t.Fatalf("rail ucmd with literal image lines = %q, want %q", got3.Text, want3)
+	}
+}
+
+func TestUserCommandWithAdjacentImages(t *testing.T) {
+	attachDir := filepath.Join(t.TempDir(), "attachments")
+	if err := os.MkdirAll(attachDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	imgName := "0123456789abcdef-1.png"
+	imgPath := filepath.Join(attachDir, imgName)
+	if err := os.WriteFile(imgPath, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	imgLine := "[image: " + imgPath + "]"
+	cmd1 := wsinbox.FormatUserCommand(wsinbox.UserCommand{
+		Label: "First",
+		Cmd:   "echo one",
+	})
+	cmd2 := wsinbox.FormatUserCommand(wsinbox.UserCommand{
+		Label: "Second",
+		Cmd:   "echo two",
+	})
+
+	cases := []struct {
+		name      string
+		input     string
+		wantCards int
+		wantText  []string
+	}{
+		{
+			name:      "prose then image then ucmd",
+			input:     "hello\n" + imgLine + "\n" + cmd1,
+			wantCards: 1,
+			wantText:  []string{"hello", "echo one"},
+		},
+		{
+			name:      "ucmd then image then prose",
+			input:     cmd1 + "\n" + imgLine + "\nworld",
+			wantCards: 1,
+			wantText:  []string{"echo one", "world"},
+		},
+		{
+			name:      "ucmd then image then ucmd",
+			input:     cmd1 + "\n" + imgLine + "\n" + cmd2,
+			wantCards: 2,
+			wantText:  []string{"echo one", "echo two"},
+		},
+		{
+			name:      "image only before ucmd",
+			input:     imgLine + "\n" + cmd1,
+			wantCards: 1,
+			wantText:  []string{"echo one"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rest, content, images, _ := splitSelectionContent(tc.input, attachDir, "livesession")
+			if len(images) != 1 || images[0].Name != imgName {
+				t.Fatalf("images = %+v, want 1 attachment %s", images, imgName)
+			}
+			hyd := hydrateUserMessage("en", mailboxContext{}, nil, nil, nil, nil, nil, nil, nil, rest, nil, content)
+			if !hyd.Grouped {
+				t.Fatalf("expected grouped content for %q", tc.input)
+			}
+			body := string(hyd.Body)
+			if gotCards := strings.Count(body, `class="ucmd-req"`); gotCards != tc.wantCards {
+				t.Fatalf("card count = %d, want %d; body:\n%s", gotCards, tc.wantCards, body)
+			}
+			if strings.Contains(body, "&lt;ws:ucmd") || strings.Contains(body, "&lt;/ws:ucmd") {
+				t.Fatalf("raw <ws:ucmd> leaked into body:\n%s", body)
+			}
+			for _, want := range tc.wantText {
+				if !strings.Contains(body, want) {
+					t.Fatalf("body missing %q:\n%s", want, body)
+				}
+			}
+		})
 	}
 }
 

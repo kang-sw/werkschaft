@@ -716,3 +716,102 @@ test('Ask Agent serializes <ws:ucmd> XML with proper escaping and omits optional
   assert.equal(h.posts[0].body.text.includes('cwd='), false);
   assert.equal(h.posts[0].body.text.includes('[Image #1]'), false);
 });
+
+test('optimistic held outboxBubble hydrates <ws:ucmd> cards adjacent to <wb:selection> blocks', () => {
+  const deliverySrc = readAssetSource('wsdashboard', 'dashboard-composer-delivery.js');
+  const bundlesSrc = readAssetSource('wsdashboard', 'dashboard-bundles.js');
+
+  function extractFunc(src, name) {
+    const marker = '  function ' + name + '(';
+    const start = src.indexOf(marker);
+    assert(start >= 0, 'missing ' + marker);
+    const end = src.indexOf('\n  }\n', start);
+    assert(end >= 0, 'unterminated ' + name);
+    return src.slice(start, end + 4);
+  }
+
+  function makeEl(tag) {
+    return {
+      tagName: tag.toUpperCase(),
+      className: '',
+      attrs: {},
+      children: [],
+      _text: '',
+      get textContent() {
+        return this.children.length ? this.children.map(c => c.textContent).join('') : this._text;
+      },
+      set textContent(v) { this._text = String(v); this.children = []; },
+      get firstChild() { return this.children[0] || null; },
+      setAttribute(k, v) { this.attrs[k] = String(v); },
+      getAttribute(k) { return this.attrs[k]; },
+      appendChild(c) { this.children.push(c); return c; },
+      cloneNode() { return makeEl(tag); },
+      addEventListener() {},
+      querySelectorAll(sel) {
+        const out = [];
+        for (const c of this.children) {
+          if (sel.startsWith('.') && c.className && c.className.split(/\s+/).includes(sel.slice(1))) out.push(c);
+          if (c.querySelectorAll) out.push(...c.querySelectorAll(sel));
+        }
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    };
+  }
+
+  const doc = {
+    createElement: makeEl,
+    createElementNS: (_ns, tag) => makeEl(tag),
+    createTextNode: t => ({ nodeType: 3, textContent: String(t) }),
+    querySelector: () => null
+  };
+  const ctx = vm.createContext({
+    window: {},
+    doc,
+    TextEncoder,
+    Object,
+    Array,
+    String,
+    RegExp,
+    heldAct: () => null,
+    wsT: k => EN[k] || k,
+    marker: n => '[Image #' + n + ']'
+  });
+  vm.runInContext(
+    bundlesSrc + '\n' +
+    extractFunc(deliverySrc, 'ucmdUnescapeXml') + '\n' +
+    extractFunc(deliverySrc, 'parseUcmdBlock') + '\n' +
+    extractFunc(deliverySrc, 'splitUcmdParts') + '\n' +
+    extractFunc(deliverySrc, 'outboxBubble'),
+    ctx
+  );
+
+  const sel = [
+    '<wb:selection>',
+    '<wb:mention topic="Plan">check this line</wb:mention>',
+    '<wb:comment>looks good</wb:comment>',
+    '</wb:selection>'
+  ].join('\n');
+  const ucmd = [
+    '<ws:ucmd label="Run Tests">',
+    'User requested execution of the following command.',
+    '<cmd cwd="pkg">go test ./...</cmd>',
+    '</ws:ucmd>'
+  ].join('\n');
+
+  const cases = [
+    { name: 'selection before ucmd', text: sel + '\n\n' + ucmd, wantSels: 1, wantCards: 1 },
+    { name: 'ucmd before selection', text: ucmd + '\n\n' + sel, wantSels: 1, wantCards: 1 },
+    { name: 'ucmd between selections', text: sel + '\n\n' + ucmd + '\n\n' + sel, wantSels: 2, wantCards: 1 },
+    { name: 'selection, prose, and ucmd', text: sel + '\n\nPlease run:\n\n' + ucmd, wantSels: 1, wantCards: 1 }
+  ];
+
+  for (const tc of cases) {
+    const bub = ctx.outboxBubble({ id: 'h-' + tc.name, back: { text: tc.text }, pics: [] });
+    assert.equal(bub.querySelectorAll('.icapsule-selection').length, tc.wantSels, tc.name + ': selection count');
+    assert.equal(bub.querySelectorAll('.ucmd-req').length, tc.wantCards, tc.name + ': ucmd card count');
+    assert.equal(bub.querySelector('.ucmd-req-cmd').textContent, 'go test ./...', tc.name + ': cmd text');
+    assert.equal(bub.textContent.includes('<ws:ucmd'), false, tc.name + ': raw <ws:ucmd leaked');
+    assert.equal(bub.textContent.includes('<wb:selection'), false, tc.name + ': raw <wb:selection leaked');
+  }
+});

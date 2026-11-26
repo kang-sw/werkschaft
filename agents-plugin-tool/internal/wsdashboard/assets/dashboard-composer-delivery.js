@@ -652,21 +652,20 @@
       }
       return card;
     }
-    function hydrateUcmdOrProseInto(parent, text) {
-      if (!text || text.indexOf("<ws:ucmd") < 0) {
-        hydrateProseInto(parent, text);
-        return;
-      }
-      var uparts = splitUcmdParts(text);
+    function hydrateUcmdOrProseInto(parent, text, prevS, nextS) {
+      var uparts = text && text.indexOf("<ws:ucmd") >= 0 ? splitUcmdParts(text) : [{ text: text || "" }];
       uparts.forEach(function (up, idx) {
-        if (up.ucmd) {
-          parent.appendChild(buildUcmdCard(up.ucmd));
-          return;
-        }
-        var t = up.text;
+        if (up.ucmd) { parent.appendChild(buildUcmdCard(up.ucmd)); return; }
+        var ps = idx === 0 && !!prevS, ns = idx === uparts.length - 1 && !!nextS;
+        var t = up.text, hp = false, hn = false;
+        if (ps) { var t1 = t.replace(/^(?:\r?\n){1,2}/, ""); hp = t1 !== t; t = t1; }
+        if (ns) { var t2 = t.replace(/(?:\r?\n){1,2}$/, ""); hn = t2 !== t; t = t2; }
         if (idx > 0 && uparts[idx - 1].ucmd) t = t.replace(/^(?:\r?\n){1,2}/, "");
         if (idx + 1 < uparts.length && uparts[idx + 1].ucmd) t = t.replace(/(?:\r?\n){1,2}$/, "");
-        if (t) hydrateProseInto(parent, t);
+        if (!t) { if (ps && ns) appendText(parent, " "); return; }
+        if (hp && !/^\s/.test(t)) t = " " + t;
+        if (hn && !/\s$/.test(t)) t = t + " ";
+        hydrateProseInto(parent, t);
       });
     }
     var part = null;
@@ -695,15 +694,7 @@
         segs.forEach(function (sg, idx) {
           if (sg.selection) { part.appendChild(buildSelectionPill(sg.selection)); return; }
           if (sg.plain) { appendText(part, sg.text); return; }
-          var prevS = idx > 0 && !!segs[idx - 1].selection, nextS = idx + 1 < segs.length && !!segs[idx + 1].selection;
-          var t = sg.text;
-          var hp = false, hn = false;
-          if (prevS) { var t1 = t.replace(/^(?:\r?\n){1,2}/, ""); hp = t1 !== t; t = t1; }
-          if (nextS) { var t2 = t.replace(/(?:\r?\n){1,2}$/, ""); hn = t2 !== t; t = t2; }
-          if (!t) { if (prevS && nextS) appendText(part, " "); return; }
-          if (hp && !/^\s/.test(t)) t = " " + t;
-          if (hn && !/\s$/.test(t)) t = t + " ";
-          hydrateUcmdOrProseInto(part, t);
+          hydrateUcmdOrProseInto(part, sg.text, idx > 0 && !!segs[idx - 1].selection, idx + 1 < segs.length && !!segs[idx + 1].selection);
         });
       } else {
         hydrateUcmdOrProseInto(part, raw);

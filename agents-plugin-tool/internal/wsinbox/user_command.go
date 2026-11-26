@@ -255,7 +255,11 @@ func parseUserCommand(raw string) *UserCommand {
 	if !ok {
 		return nil
 	}
-	body := norm[firstNL+1 : len(norm)-len(ucmdClose)-1]
+	end := len(norm) - len(ucmdClose) - 1
+	if end <= firstNL+1 {
+		return nil
+	}
+	body := norm[firstNL+1 : end]
 	cmdIdx := strings.Index(body, "<cmd")
 	if cmdIdx < 0 {
 		return nil
