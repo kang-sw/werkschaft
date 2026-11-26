@@ -3751,5 +3751,12 @@
   "js.wbupdate.staged_memo": "заметка: {0}",
   "js.wbupdate.sent_waiting": "отправлено · ожидание",
   "js.wbupdate.sent_held": "отправлено · отложено",
-  "js.wbupdate.settled": "завершено"
+  "js.wbupdate.settled": "завершено",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "Вкл",
+  "gear.motion.on.sub": "Анимация чернил для инструментов и токенов (по умолчанию)",
+  "gear.motion.off": "Выкл",
+  "gear.motion.off.sub": "Только статичная точка и подпись (0 rAF)",
+  "js.motion.off": "Откл. анимацию",
+  "js.motion.off.title": "Отключить Extra Motion (можно снова включить в настройках)"
 }

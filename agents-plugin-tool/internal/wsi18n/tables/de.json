@@ -3751,5 +3751,12 @@
   "js.wbupdate.staged_memo": "Notiz: {0}",
   "js.wbupdate.sent_waiting": "gesendet · wartet",
   "js.wbupdate.sent_held": "gesendet · zurückgestellt",
-  "js.wbupdate.settled": "erledigt"
+  "js.wbupdate.settled": "erledigt",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "Ein",
+  "gear.motion.on.sub": "Live-Tintenanimation für Tools & Tokens (Standard)",
+  "gear.motion.off": "Aus",
+  "gear.motion.off.sub": "Nur statischer Punkt & Text (0 rAF)",
+  "js.motion.off": "Motion aus",
+  "js.motion.off.title": "Extra Motion ausschalten (in den Einstellungen wieder aktivierbar)"
 }

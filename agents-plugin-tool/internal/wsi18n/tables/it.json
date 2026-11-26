@@ -3751,5 +3751,12 @@
   "js.wbupdate.staged_memo": "nota: {0}",
   "js.wbupdate.sent_waiting": "inviato · in attesa",
   "js.wbupdate.sent_held": "inviato · in sospeso",
-  "js.wbupdate.settled": "definito"
+  "js.wbupdate.settled": "definito",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "Attivo",
+  "gear.motion.on.sub": "Animazione inchiostro per strumenti e token (predefinito)",
+  "gear.motion.off": "Disattivo",
+  "gear.motion.off.sub": "Solo punto ed etichetta statici (0 rAF)",
+  "js.motion.off": "Disattiva motion",
+  "js.motion.off.title": "Disattiva Extra Motion (riattivabile nelle Impostazioni)"
 }

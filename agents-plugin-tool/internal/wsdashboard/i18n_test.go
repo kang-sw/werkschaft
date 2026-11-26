@@ -116,9 +116,14 @@ func TestEveryPageHasSettingsWithTheLanguageItem(t *testing.T) {
 				t.Errorf("%s: no item for %s", c.name, l.Code)
 			}
 		}
-		for _, want := range []string{`data-layout="auto"`, `data-layout="split"`, `data-layout="tabs"`, `data-input="enter"`, `data-input="mod"`, `data-theme-set="light"`, `data-theme-set="dark"`, `id="glang"`, `aria-label="설정"`} {
+		for _, want := range []string{`data-input="enter"`, `data-input="mod"`, `data-theme-set="light"`, `data-theme-set="dark"`, `data-extra-motion="on"`, `data-extra-motion="off"`, `id="glang"`, `aria-label="설정"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s: settings lacks %q", c.name, want)
+			}
+		}
+		for _, absent := range []string{`<button data-layout=`, `data-layout="auto"`} {
+			if strings.Contains(body, absent) {
+				t.Errorf("%s: settings must not render obsolete layout control %q", c.name, absent)
 			}
 		}
 	}

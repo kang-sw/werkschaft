@@ -42,8 +42,8 @@
     if (th) { setTheme(th.getAttribute("data-theme-set")); return; }
     var b = t.closest(".gmenu [data-input]");
     if (b) { save(INPUT_KEY, b.getAttribute("data-input")); setInput(b.getAttribute("data-input")); if (shell) shFrames.forEach(shSettings); return; }
-    b = t.closest(".gmenu [data-layout]");
-    if (b) { save(LAYOUT_KEY, b.getAttribute("data-layout")); setLayout(b.getAttribute("data-layout")); if (shell) shFrames.forEach(shSettings); return; }
+    b = t.closest(".gmenu [data-extra-motion]");
+    if (b) { setExtraMotion(b.getAttribute("data-extra-motion"), true); return; }
     if (!live) return;
     b = t.closest("#tabbar [data-tab]");
     if (b) { setTab(b.getAttribute("data-tab")); return; }

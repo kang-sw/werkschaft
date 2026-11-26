@@ -1,0 +1,134 @@
+/* Unified #r-convlive Extra Motion 2D canvas overlay, inline hover mute button,
+   and static semantic dot fallback (0 rAF when OFF / reduced-motion / stale). */
+
+.dgrid.live > .d-conv-motion-canvas {
+  grid-area: convo;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+  z-index: 4;
+  display: block;
+}
+.dgrid.live > .d-conv-motion-canvas[hidden],
+.dgrid.live[data-tab="board"] > .d-conv-motion-canvas,
+.dgrid.live[data-ctab="files"] > .d-conv-motion-canvas,
+.dgrid.live[data-ctab="term"] > .d-conv-motion-canvas {
+  display: none;
+}
+@media (min-width: 1100px) {
+  .dgrid.live:not([data-layout="tabs"]) > .d-conv-motion-canvas:not([hidden]) {
+    display: block;
+  }
+  .dgrid.live:not([data-layout="tabs"])[data-ctab="files"] > .d-conv-motion-canvas,
+  .dgrid.live:not([data-layout="tabs"])[data-ctab="term"] > .d-conv-motion-canvas {
+    display: none;
+  }
+}
+
+/* Active Extra Motion: keep a capsule-free 38px ink slot in place of the CSS spinner
+   so horizontal sway (+-12px + blob radius) never grazes the activity label. */
+.clive .activity[data-motion-active="1"] .spin {
+  width: 38px;
+  min-width: 38px;
+  flex: 0 0 38px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  animation: none;
+  visibility: hidden;
+}
+
+/* Static semantic dot fallback (Extra Motion OFF, prefers-reduced-motion, or stale):
+   calm category-colored dot with zero CSS spin and 0 rAF. */
+.clive .activity[data-motion-fallback="1"] .spin {
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  border: 0;
+  border-radius: 50%;
+  animation: none;
+  background: var(--d-motion-dot, var(--wb-muted-fg));
+}
+.clive .activity[data-motion-cat="exec"]     { --d-motion-dot: #b4690e; }
+.clive .activity[data-motion-cat="tickets"]  { --d-motion-dot: #2d5bd1; }
+.clive .activity[data-motion-cat="agent"]    { --d-motion-dot: #7248c7; }
+.clive .activity[data-motion-cat="git"]      { --d-motion-dot: #0b7c96; }
+.clive .activity[data-motion-cat="file"]     { --d-motion-dot: #4b6484; }
+.clive .activity[data-motion-cat="thinking"] { --d-motion-dot: #4d63b8; }
+
+:root[data-theme="dark"] .clive .activity[data-motion-cat="exec"]     { --d-motion-dot: #e5b567; }
+:root[data-theme="dark"] .clive .activity[data-motion-cat="tickets"]  { --d-motion-dot: #7aa2ff; }
+:root[data-theme="dark"] .clive .activity[data-motion-cat="agent"]    { --d-motion-dot: #b392f0; }
+:root[data-theme="dark"] .clive .activity[data-motion-cat="git"]      { --d-motion-dot: #5ccfe6; }
+:root[data-theme="dark"] .clive .activity[data-motion-cat="file"]     { --d-motion-dot: #8ea6c8; }
+:root[data-theme="dark"] .clive .activity[data-motion-cat="thinking"] { --d-motion-dot: #96a8e8; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="exec"]     { --d-motion-dot: #e5b567; }
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="tickets"]  { --d-motion-dot: #7aa2ff; }
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="agent"]    { --d-motion-dot: #b392f0; }
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="git"]      { --d-motion-dot: #5ccfe6; }
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="file"]     { --d-motion-dot: #8ea6c8; }
+  :root:not([data-theme="light"]) .clive .activity[data-motion-cat="thinking"] { --d-motion-dot: #96a8e8; }
+}
+
+/* Inline hover quick-disable ("모션 끄기") micro-button beside the live activity row. */
+.clive .activity .d-motion-mute {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted-fg) 10%, transparent);
+  color: var(--wb-muted-fg);
+  font: 500 11px/1.35 inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease, background .15s ease, color .15s ease;
+}
+.clive .activity:hover .d-motion-mute,
+.clive .activity:focus-within .d-motion-mute,
+.clive .activity .d-motion-mute:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.clive .activity .d-motion-mute:hover {
+  background: color-mix(in srgb, var(--wb-muted-fg) 18%, transparent);
+  color: var(--wb-fg);
+}
+.clive .activity .d-motion-mute:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+
+/* Subtle arrival highlight / micro-shake on [data-conv-turn-tokens]. */
+.d-turn-tok.d-motion-tok-flash {
+  color: var(--wb-ok);
+  background: color-mix(in srgb, var(--wb-ok) 14%, transparent);
+  border-radius: 5px;
+  padding: 0 4px;
+  transition: background .38s ease, color .38s ease;
+}
+.d-turn-tok.d-motion-tok-shake {
+  color: var(--wb-fail);
+  background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
+  border-radius: 5px;
+  padding: 0 4px;
+  animation: d-motion-shake .36s ease-out;
+}
+@keyframes d-motion-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  45% { transform: translateX(2px); }
+  70% { transform: translateX(-1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dgrid.live > .d-conv-motion-canvas { display: none !important; }
+  .clive .activity .d-motion-mute { display: none !important; }
+  .d-turn-tok.d-motion-tok-shake { animation: none; }
+}

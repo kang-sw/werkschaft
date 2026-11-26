@@ -39,6 +39,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-board-anchor.js",
 	"dashboard-board-dial.js",
 	"dashboard-conversation.js",
+	"dashboard-conv-motion.js",
 	"dashboard-bundles.js",
 	"dashboard-hud.js",
 	"dashboard-composer.js",
@@ -101,6 +102,7 @@ var companionScriptFiles = []string{
 var dashboardStyleFiles = []string{
 	"dashboard.css",
 	"dashboard-conversation.css",
+	"dashboard-conv-motion.css",
 	"dashboard-composer-md.css",
 	"dashboard-board.css",
 	"dashboard-layout.css",

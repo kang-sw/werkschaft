@@ -231,6 +231,7 @@
     if (name === "tree") agSwapped();
     if (TL_REGIONS[name]) { delete tlHeld[name]; tlCount(); }
     if (name === "convlive") syncBadge();
+    if ((name === "convlive" || name === "entries") && typeof convMotionSync === "function") convMotionSync(name);
     // A list that arrives while a / waits in the box opens the picker.
     if (name === "cmds" && slash) slash.sync();
     if (name === "entries") syncChead();
@@ -411,7 +412,7 @@
   // whether the layout menu shows one column at a time.
   function galMode() {
     return { width: window.innerWidth || 0,
-      tabs: !!(live && (grid.getAttribute("data-layout") || load(LAYOUT_KEY)) === "tabs") };
+      tabs: !!(live && grid.getAttribute("data-layout") === "tabs") };
   }
   // placeGallery lays the narrow view's gallery over the board's column:
   // the column's box, cut to the window. A hidden column (another tab)

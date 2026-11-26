@@ -3751,5 +3751,12 @@
   "js.wbupdate.staged_memo": "备注：{0}",
   "js.wbupdate.sent_waiting": "已发送 · 等待中",
   "js.wbupdate.sent_held": "已发送 · 暂缓",
-  "js.wbupdate.settled": "已确定"
+  "js.wbupdate.settled": "已确定",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "开启",
+  "gear.motion.on.sub": "实时工具与 Token 墨迹动效（默认）",
+  "gear.motion.off": "关闭",
+  "gear.motion.off.sub": "仅显示静态状态点与标签 (0 rAF)",
+  "js.motion.off": "关闭动效",
+  "js.motion.off.title": "关闭 Extra Motion（可在设置中重新开启）"
 }

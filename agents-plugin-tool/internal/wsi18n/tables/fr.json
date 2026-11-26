@@ -3751,5 +3751,12 @@
   "js.wbupdate.staged_memo": "note : {0}",
   "js.wbupdate.sent_waiting": "envoyé · en attente",
   "js.wbupdate.sent_held": "envoyé · retenu",
-  "js.wbupdate.settled": "réglé"
+  "js.wbupdate.settled": "réglé",
+  "gear.motion": "Extra Motion",
+  "gear.motion.on": "Activé",
+  "gear.motion.on.sub": "Animation d’encre outils et tokens en direct (par défaut)",
+  "gear.motion.off": "Désactivé",
+  "gear.motion.off.sub": "Point et libellé statiques uniquement (0 rAF)",
+  "js.motion.off": "Couper l’animation",
+  "js.motion.off.title": "Désactiver Extra Motion (réactivable dans les paramètres)"
 }
