@@ -235,21 +235,51 @@
     if (imgs.length || (typeof textRefs !== "undefined" && textRefs.length)) { noteWarn(wsT("js.cmd.images")); return; }
     submitCommand(sel.name, sendText().slice(sel.end).trim(), true);
   }
-  // Topic-only editors keep their textarea owner and canonical [stem] strings.
-  function bindCapsuleNotes(scope) {
-    if (!window.WsCapsules) return;
-    if (scope && scope.querySelectorAll) {
-      q(".tnote[data-topic], textarea.note", scope).forEach(function (note) {
-        if (note.wscTopicPicker) return;
-        note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
+  // Board notes use WsInput (markdown, capsules, @/#//, image paste, list
+  // continuation, newline-only keymap) when loaded, falling back to topic-only
+  // capsules otherwise.
+  function bindBoardNote(note) {
+    if (note.wscTopicPicker) return;
+    if (window.WsInput) {
+      var inst = window.WsInput.attach(note, {
+        keymap: "newline-only",
+        features: {
+          markdown: true,
+          capsules: true,
+          mentions: true,
+          topics: true,
+          slash: true,
+          imagePaste: true,
+          longPaste: false,
+          listContinuation: true,
+          bangMode: false,
+          autoGrow: true
+        },
+        providers: {
+          files: rid ? fileCandidates : null,
+          topics: capsuleTopics,
+          commands: rid ? commandCandidates : null
+        },
+        preformattedCommands: true,
+        renderCommand: commandRow,
+        slashMax: 500,
+        mentionLabel: wsT("js.mention.label"),
+        slashLabel: wsT("js.cmd.label")
       });
+      note.wscTopicPicker = (inst && inst.getPopups().topic) || true;
       return;
     }
-    window.WsCapsules.sweep();
-    boardNotes().forEach(function (note) {
-      if (note.wscTopicPicker) return;
-      note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
-    });
+    note.wscTopicPicker = window.WsCapsules.topicPicker(note, capsuleTopics);
+  }
+  function bindCapsuleNotes(scope) {
+    if (!window.WsCapsules && !window.WsInput) return;
+    if (scope && scope.querySelectorAll) {
+      q(".tnote[data-topic], textarea.note", scope).forEach(bindBoardNote);
+      return;
+    }
+    if (window.WsInput && window.WsInput.sweep) window.WsInput.sweep();
+    if (window.WsCapsules && window.WsCapsules.sweep) window.WsCapsules.sweep();
+    boardNotes().forEach(bindBoardNote);
   }
   if (ctext && window.WsCapsules) window.WsCapsules.topicPicker(ctext, capsuleTopics);
   if (ctext && window.WsInput) {

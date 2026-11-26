@@ -976,15 +976,45 @@
       if (e.relatedTarget && !r.contains(e.relatedTarget)) { c.focus = null; return; }
       setTimeout(function () { if (c.root.isConnected && !c.root.contains(doc.activeElement)) c.focus = null; }, 0);
     });
-    c.ta.addEventListener("input", function () { supGrow(c); });
-    c.ta.addEventListener("keydown", function (e) {
-      if (e.isComposing || e.keyCode === 229) return;
-      // Escape leaves the box (the next one, outside it, collapses the drawer)
-      if (e.key === "Escape") { e.preventDefault(); if (c.pop) supPop(c, false); else c.ta.blur(); return; }
-      if (e.key !== "Enter") return;
-      var mod = e.ctrlKey || e.metaKey;
-      if (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod) { e.preventDefault(); supSend(c); }
-    });
+    if (window.WsInput) {
+      c.input = window.WsInput.attach(c.ta, {
+        keymap: function () { return inputMode === "mod" ? "mod-send" : "enter-send"; },
+        features: {
+          markdown: true,
+          capsules: true,
+          mentions: true,
+          topics: true,
+          slash: true,
+          imagePaste: false,
+          longPaste: false,
+          listContinuation: true,
+          bangMode: false,
+          autoGrow: true
+        },
+        providers: {
+          files: typeof fileCandidates === "function" && rid ? fileCandidates : null,
+          topics: typeof capsuleTopics === "function" ? capsuleTopics : null,
+          commands: typeof commandCandidates === "function" && rid ? commandCandidates : null
+        },
+        preformattedCommands: true,
+        renderCommand: typeof commandRow === "function" ? commandRow : undefined,
+        slashMax: 500,
+        mentionLabel: wsT("js.mention.label"),
+        slashLabel: wsT("js.cmd.label"),
+        onSubmit: function () { supSend(c); },
+        onCancel: function () { if (c.pop) supPop(c, false); else c.ta.blur(); }
+      });
+    } else {
+      c.ta.addEventListener("input", function () { supGrow(c); });
+      c.ta.addEventListener("keydown", function (e) {
+        if (e.isComposing || e.keyCode === 229) return;
+        // Escape leaves the box (the next one, outside it, collapses the drawer)
+        if (e.key === "Escape") { e.preventDefault(); if (c.pop) supPop(c, false); else c.ta.blur(); return; }
+        if (e.key !== "Enter") return;
+        var mod = e.ctrlKey || e.metaKey;
+        if (inputMode === "enter" ? !e.shiftKey && !e.altKey : mod) { e.preventDefault(); supSend(c); }
+      });
+    }
     r.querySelector(".csend").addEventListener("click", function () { supSend(c); c.ta.focus(); });
     c.chip.addEventListener("click", function () { supPop(c, !c.pop); });
     c.popEl.addEventListener("click", function (e) { supPopClick(c, e); });
@@ -997,6 +1027,7 @@
     return c;
   }
   function supGrow(c) {
+    if (c.ta.classList && c.ta.classList.contains("wsc-backing")) return;
     c.ta.style.height = "auto";
     c.ta.style.height = Math.min(c.ta.scrollHeight, 160) + "px";
   }
@@ -1012,10 +1043,15 @@
     var slot = name && doc.querySelector('.supslot[data-store="' + CSS.escape(name) + '"]');
     Object.keys(supChats).forEach(function (id) {
       var c = supChats[id];
-      if (id !== name || !supShown(slot)) { supClose(c); if (c.pop) supPop(c, false); }
+      if (id !== name || !supShown(slot)) {
+        supClose(c);
+        if (c.pop) supPop(c, false);
+        if (c.input) { c.input.closePopups(); c.input.clearMarkdown(); }
+      }
       // a store no longer listed (hidden, or unregistered, which ended its
       // conversation) drops its chat with its draft and log
       if (tkOrder.indexOf(id) < 0) {
+        if (c.input) c.input.destroy();
         if (c.root.parentNode) c.root.parentNode.removeChild(c.root);
         delete supChats[id];
       }
@@ -1024,10 +1060,12 @@
     var c = supChat(name);
     if (c.root.parentNode !== slot) slot.appendChild(c.root);
     c.ta.placeholder = wsT(inputMode === "mod" ? "js.sup.hint.mod" : "js.sup.hint.enter");
+    if (c.input) c.input.syncMarkdown();
     supCards(c);
     c.log.scrollTop = c.stick ? c.log.scrollHeight : c.top;
     if (c.focus && c.root.contains(c.focus) && !c.root.contains(doc.activeElement)) {
-      var f = c.focus, s0 = f.selectionStart, s1 = f.selectionEnd;
+      var f = (window.WsCapsules && window.WsCapsules.fieldFor && window.WsCapsules.fieldFor(c.focus)) || c.focus;
+      var s0 = f.selectionStart, s1 = f.selectionEnd;
       f.focus({ preventScroll: true });
       try { if (s0 != null) f.setSelectionRange(s0, s1); } catch (x) { /* not a text field */ }
     }
@@ -1188,13 +1226,16 @@
     c.ta.disabled = !c.loaded || none;
   }
   function supSend(c) {
-    var text = c.ta.value;
+    var raw = c.ta.value, text = c.input ? c.input.sendText() : raw;
     if (c.sending || !text.trim()) return;
     c.sending = true; c.err = ""; supDraw(c);
     tkFetch(supUrl(c.id, "send"), { text: text }, function (status, v) {
       c.sending = false;
       if (status !== 200) { c.err = tkErrText(status, v); supDraw(c); return; }
-      if (c.ta.value === text) { c.ta.value = ""; supGrow(c); }
+      if (c.ta.value === raw) {
+        if (c.input) c.input.setValue("");
+        else { c.ta.value = ""; supGrow(c); }
+      }
       c.stick = true;
       supSetConv(c, v);
       supDraw(c);

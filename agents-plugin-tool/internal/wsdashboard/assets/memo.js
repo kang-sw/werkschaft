@@ -28,24 +28,77 @@
     var pickers = [], topicGeneration = 0;
     function closePickers() {
       ++topicGeneration;
-      pickers.forEach(function (picker) { if (picker) picker.close(); });
+      pickers.forEach(function (picker) {
+        if (!picker) return;
+        if (typeof picker.closePopups === "function") picker.closePopups();
+        else if (typeof picker.close === "function") picker.close();
+      });
     }
-    function topics(done) {
-      var rid = session, gen = topicGeneration, sourceWindow = null;
-      if (!rid) { done([]); return; }
+    function activeSourceWindow(rid) {
+      if (!rid) return null;
       try {
         var frame = doc.querySelector(".sframe.on");
-        sourceWindow = frame ? frame.contentWindow : window;
-        if (sourceWindow.document.documentElement.getAttribute("data-rid") !== rid || !sourceWindow.wsCapsuleTopics) { done([]); return; }
-        sourceWindow.wsCapsuleTopics(function (rows) {
+        var sw = frame ? frame.contentWindow : window;
+        if (!sw || sw.document.documentElement.getAttribute("data-rid") !== rid) return null;
+        return sw;
+      } catch (_) { return null; }
+    }
+    function topics(done) {
+      var rid = session, gen = topicGeneration, sw = activeSourceWindow(rid);
+      if (!sw || !sw.wsCapsuleTopics) { done([]); return; }
+      try {
+        sw.wsCapsuleTopics(function (rows) {
           if (gen === topicGeneration && session === rid) done(rows);
         });
       } catch (_) { done([]); }
     }
-    function attach(area) {
-      if (!window.WsCapsules) return;
+    function files(q, done) {
+      var rid = session, gen = topicGeneration, sw = activeSourceWindow(rid);
+      if (!sw || !sw.wsComposerFiles) { done([]); return; }
+      try {
+        sw.wsComposerFiles(q, function (rows) {
+          if (gen === topicGeneration && session === rid) done(rows);
+        });
+      } catch (_) { done([]); }
+    }
+    function commands(q, done) {
+      var rid = session, gen = topicGeneration, sw = activeSourceWindow(rid);
+      if (!sw || !sw.wsComposerCommands) { done([]); return; }
+      try {
+        sw.wsComposerCommands(q, function (rows) {
+          if (gen === topicGeneration && session === rid) done(rows);
+        });
+      } catch (_) { done([]); }
+    }
+    function attach(area, cfg) {
+      if (window.WsInput) {
+        var inst = window.WsInput.attach(area, {
+          keymap: "enter-save",
+          features: {
+            markdown: true,
+            capsules: true,
+            mentions: true,
+            topics: true,
+            slash: true,
+            imagePaste: false,
+            longPaste: false,
+            listContinuation: true,
+            bangMode: false,
+            autoGrow: true
+          },
+          providers: { topics: topics, files: files, commands: commands },
+          preformattedCommands: true,
+          onChange: function (val) { fits(val); },
+          onSubmit: cfg && cfg.onSubmit,
+          onCancel: cfg && cfg.onCancel
+        });
+        pickers.push(inst);
+        return inst;
+      }
+      if (!window.WsCapsules) return null;
       window.WsCapsules.attach(area);
       pickers.push(window.WsCapsules.topicPicker(area, topics));
+      return null;
     }
     function say(text) { status.textContent = text; }
     // The server refuses trimmed text over 8000 UTF-8 bytes (a lone surrogate
@@ -93,6 +146,7 @@
     // Everything else re-places, as does a keep render after a width change.
     function render(keep) {
       closePickers(); pickers = pickers.slice(0, 1);
+      if (window.WsInput && window.WsInput.sweep) window.WsInput.sweep(list);
       list.textContent = "";
       if (window.WsCapsules && window.WsCapsules.sweep) window.WsCapsules.sweep();
       input.hidden = !writable; input.disabled = busy;
@@ -114,22 +168,34 @@
           function edit() {
             if (busy || row.querySelector("textarea")) return;
             var area = doc.createElement("textarea"); area.value = m.text; area.maxLength = 8000;
-            area.addEventListener("input", function () { fits(area.value); });
-            area.setAttribute("aria-label", "Edit memo"); text.hidden = true; row.appendChild(area); attach(area);
+            area.setAttribute("aria-label", "Edit memo"); text.hidden = true; row.appendChild(area);
+            var areaInst = attach(area, {
+              onSubmit: function () {
+                var val = areaInst ? areaInst.sendText() : area.value;
+                if (val.trim()) change("edit", m.id, val);
+              },
+              onCancel: function (_inst, e) {
+                if (e && e.stopPropagation) e.stopPropagation();
+                fits(input.value); render(true);
+              }
+            });
             var keys = doc.createElement("div"); keys.className = "memo-hint"; keys.setAttribute("aria-hidden", "true");
             keys.innerHTML = count > 1 ? KEYS_SHORT : KEYS_FULL;
             row.appendChild(keys); row.className = "memo-note memo-editing"; area.focus();
-            area.addEventListener("keydown", function (e) {
-              if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-              if (e.key === "Escape") {
-                // The cancelled edit's over-limit refusal no longer applies; recheck the add draft instead.
-                e.preventDefault(); e.stopPropagation(); fits(input.value); render(true);
-              }
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (area.value.trim()) change("edit", m.id, area.value);
-              }
-            });
+            if (!areaInst) {
+              area.addEventListener("input", function () { fits(area.value); });
+              area.addEventListener("keydown", function (e) {
+                if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+                if (e.key === "Escape") {
+                  // The cancelled edit's over-limit refusal no longer applies; recheck the add draft instead.
+                  e.preventDefault(); e.stopPropagation(); fits(input.value); render(true);
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (area.value.trim()) change("edit", m.id, area.value);
+                }
+              });
+            }
           }
           text.addEventListener("click", function (e) { if (!e.target.closest("a")) edit(); });
           text.addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target === text) { e.preventDefault(); edit(); } });
@@ -194,7 +260,10 @@
       }).then(function (data) {
         if (gen !== generation) return false;
         items = data.memos;
-        if (action === "add") input.value = "";
+        if (action === "add") {
+          if (input.wsInput) input.wsInput.setValue("");
+          else input.value = "";
+        }
         return true;
       }).catch(function (e) { if (gen === generation) say(e.message); return false; }).then(function (ok) {
         busy = false; input.disabled = false;
@@ -208,7 +277,9 @@
       if (workspace === next) return;
       closePickers();
       workspace = next; title.textContent = (ws.querySelector(".nm") || {}).textContent || next;
-      title.title = next; input.value = ""; deleted = null; undo.hidden = true; clearTimeout(timer);
+      title.title = next;
+      if (input.wsInput) input.wsInput.setValue(""); else input.value = "";
+      deleted = null; undo.hidden = true; clearTimeout(timer);
       if (shown) reload();
     }
     function sync(rid) {
@@ -231,14 +302,21 @@
       position();
       if (on) reload(); else { ++generation; closePickers(); input.blur(); }
     }
-    attach(input);
-    input.addEventListener("input", function () { fits(input.value); });
-    input.addEventListener("keydown", function (e) {
-      if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault(); if (input.value.trim()) change("add", "", input.value);
+    var inputInst = attach(input, {
+      onSubmit: function () {
+        var val = inputInst ? inputInst.sendText() : input.value;
+        if (val.trim()) change("add", "", val);
       }
     });
+    if (!inputInst) {
+      input.addEventListener("input", function () { fits(input.value); });
+      input.addEventListener("keydown", function (e) {
+        if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault(); if (input.value.trim()) change("add", "", input.value);
+        }
+      });
+    }
     undo.querySelector("button").addEventListener("click", function () {
       if (!deleted || deleted.workspace !== workspace) return;
       var text = deleted.text, draft = input.value;

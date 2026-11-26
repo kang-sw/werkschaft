@@ -844,8 +844,11 @@
     note.value = s.note || "";
     if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
     note.hidden = false;
-    note.style.height = "auto";
-    if (note.scrollHeight) note.style.height = note.scrollHeight + "px";
+    if (note.wsInput) note.wsInput.syncMarkdown();
+    if (!note.classList || !note.classList.contains("wsc-backing")) {
+      note.style.height = "auto";
+      if (note.scrollHeight) note.style.height = note.scrollHeight + "px";
+    }
   }
   // setCheckNo presses or releases a check row's x, as the whiteboard form
   // script does: the row carries data-no while it stages "no".

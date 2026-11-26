@@ -92,7 +92,7 @@ function makeHarness(extraOpts) {
       super(1, tag.toUpperCase(), ownerDocument);
       this.tagName = tag.toUpperCase();
       this.attrs = {};
-      this.style = {};
+      this.style = { setProperty() {} };
       this.listeners = {};
       this.hidden = false;
       this.id = "";
@@ -503,4 +503,260 @@ test("WsInput can mount on a plain host element and honors keymaps (enter-save, 
   inst.destroy();
   assert.equal(customDetached, 1);
   assert.equal(inst.field.parentNode, null);
+});
+
+test("multi-surface coexistence: bangMode, dynamic keymap, Escape-popup priority, and container sweep", () => {
+  const { window, doc, highlights, FakeEvent, flushTimers } = makeHarness();
+
+  const ctext = doc.createElement("textarea");
+  const boardNote = doc.createElement("textarea");
+  const chipWrap = doc.createElement("div");
+  const closeReason = doc.createElement("textarea");
+  chipWrap.appendChild(closeReason);
+  const supArea = doc.createElement("textarea");
+  doc.body.appendChild(ctext);
+  doc.body.appendChild(boardNote);
+  doc.body.appendChild(chipWrap);
+  doc.body.appendChild(supArea);
+
+  let supMode = "enter";
+  let supSubmits = 0, supCancels = 0;
+  let noteImgPastes = 0, reasonImgPastes = 0;
+
+  const mainInst = window.WsInput.attach(ctext, {
+    managedKeydown: true,
+    features: { bangMode: true, imagePaste: true, longPaste: true },
+    providers: { files: (q, done) => done([{ path: "main.go", dir: false }]) }
+  });
+  const noteInst = window.WsInput.attach(boardNote, {
+    keymap: "newline-only",
+    features: { bangMode: false, imagePaste: true, longPaste: false },
+    attachmentHandler: { onImagePaste: () => { noteImgPastes++; } },
+    providers: { files: (q, done) => done([{ path: "note.go", dir: false }]) }
+  });
+  const reasonInst = window.WsInput.attach(closeReason, {
+    keymap: "newline-only",
+    features: { bangMode: false, imagePaste: false, longPaste: false },
+    attachmentHandler: { onImagePaste: () => { reasonImgPastes++; } },
+    providers: { files: (q, done) => done([{ path: "reason.go", dir: false }]) }
+  });
+  const supInst = window.WsInput.attach(supArea, {
+    keymap: () => supMode === "mod" ? "mod-send" : "enter-send",
+    features: { bangMode: false, imagePaste: false, longPaste: false },
+    onSubmit: () => { supSubmits++; },
+    onCancel: () => { supCancels++; },
+    providers: { files: (q, done) => done([{ path: "sup.go", dir: false }]) }
+  });
+
+  mainInst.setValue("**main**");
+  noteInst.setValue("**note**");
+  reasonInst.setValue("**reason**");
+  supInst.setValue("**sup**");
+  flushTimers();
+  assert.equal(highlights.get("ws-md-strong").ranges.length, 4, "all four surfaces register strong highlights");
+
+  // Bang mode only applies to main composer; !cmd in boardNote/supArea still highlights markdown
+  mainInst.setValue("!echo **hi**");
+  noteInst.setValue("!echo **still-bold**");
+  flushTimers();
+  assert.equal(highlights.get("ws-md-strong").ranges.length, 3, "bangMode suppresses markdown only on main composer");
+
+  // Image paste gated per surface
+  const mkImgPaste = () => {
+    const ev = new FakeEvent("paste", { bubbles: true, cancelable: true });
+    ev.clipboardData = { items: [{ kind: "file", type: "image/png", getAsFile: () => ({ type: "image/png" }) }] };
+    return ev;
+  };
+  boardNote.dispatchEvent(mkImgPaste());
+  closeReason.dispatchEvent(mkImgPaste());
+  assert.equal(noteImgPastes, 1, "board note allows image paste");
+  assert.equal(reasonImgPastes, 0, "close-request reason rejects image paste");
+
+  // Dynamic keymap on .supcomp switches between enter-send and mod-send
+  supArea.focus();
+  let ev = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  ev.key = "Enter";
+  supArea.dispatchEvent(ev);
+  assert.equal(supSubmits, 1, "enter-send submits on bare Enter");
+
+  supMode = "mod";
+  ev = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  ev.key = "Enter";
+  supArea.dispatchEvent(ev);
+  assert.equal(supSubmits, 1, "mod-send does not submit on bare Enter");
+
+  ev = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  ev.key = "Enter";
+  ev.ctrlKey = true;
+  supArea.dispatchEvent(ev);
+  assert.equal(supSubmits, 2, "mod-send submits on Ctrl+Enter");
+
+  // Escape closes open @ popup first without calling onCancel
+  supArea.focus();
+  supArea.value = "@su";
+  supArea.setSelectionRange(3, 3);
+  supArea.dispatchEvent(new FakeEvent("input", { bubbles: true }));
+  flushTimers();
+  assert.equal(supInst.getPopups().mention.pop.hidden, false);
+
+  ev = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  ev.key = "Escape";
+  supArea.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true, "popup Escape prevents outer handler");
+  assert.equal(supInst.getPopups().mention.pop.hidden, true);
+  assert.equal(supCancels, 0, "first Escape only closes popup");
+
+  ev = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  ev.key = "Escape";
+  supArea.dispatchEvent(ev);
+  assert.equal(supCancels, 1, "second Escape invokes onCancel");
+
+  // Sweeping chipWrap destroys closeReason without touching other instances
+  // (supArea currently holds "@su", so boardNote's strong range stays).
+  const reasonPop = reasonInst.getPopups().mention.pop;
+  window.WsInput.sweep(chipWrap);
+  assert.equal(reasonPop.parentNode, null, "swept popup detached");
+  assert.equal(highlights.get("ws-md-strong").ranges.length, 1, "only swept editor highlights removed");
+
+  mainInst.destroy();
+  noteInst.destroy();
+  supInst.destroy();
+  assert.equal(highlights.has("ws-md-strong"), false);
+});
+
+test("memo.js with real WsInput: cross-frame providers, stale-session drop, list continuation, and sweep", async () => {
+  const { window, doc, highlights, FakeEvent, flushTimers } = makeHarness();
+  const memoSrc = fs.readFileSync(path.join(assetsDir, "memo.js"), "utf8");
+
+  // Extend FakeElement matching for memo.js selectors
+  const origMatches = doc.body.constructor.prototype.matches;
+  doc.body.constructor.prototype.matches = function (sel) {
+    if (origMatches.call(this, sel)) return true;
+    if (sel === ".sframe.on") return this.classList.contains("sframe") && this.classList.contains("on");
+    if (sel.startsWith(".")) return this.classList.contains(sel.slice(1));
+    if (sel.startsWith("#")) return this.id === sel.slice(1);
+    return this.tagName === sel.toUpperCase();
+  };
+
+  const ids = {};
+  for (const id of ["memo-input", "memo-list", "memo-workspace", "memo-n", "memo-status", "memo-undo", "memo-close"]) {
+    const el = doc.createElement(id === "memo-input" ? "textarea" : "div");
+    el.id = id;
+    el.style.setProperty = () => {};
+    doc.body.appendChild(el);
+    ids[id] = el;
+  }
+  ids["memo-undo"].appendChild(doc.createElement("button"));
+  ids["memo-list"].clientWidth = 444;
+
+  const rail = doc.createElement("div");
+  const ws = doc.createElement("section");
+  ws.className = "rws";
+  ws.setAttribute("data-ws", "/repo");
+  const nm = doc.createElement("span"); nm.className = "nm"; nm.textContent = "repo";
+  ws.appendChild(nm);
+  const row = doc.createElement("div"); row.className = "rs"; row.setAttribute("data-rid", "session");
+  ws.appendChild(row);
+  const badge = doc.createElement("button"); badge.className = "memo-count";
+  badge.appendChild(doc.createElement("span"));
+  ws.appendChild(badge);
+  rail.appendChild(ws);
+  doc.body.appendChild(rail);
+
+  let activeFrame = null;
+  doc.getElementById = (id) => ids[id] || null;
+  doc.querySelector = (sel) => sel === ".sframe.on" ? activeFrame : doc.body.querySelector(sel);
+  doc.documentElement = { getAttribute: () => "standalone" };
+
+  let remote = [];
+  let nextID = 0;
+  const storage = new Map();
+  window.sessionStorage = {
+    setItem: (k, v) => storage.set(k, v),
+    getItem: (k) => storage.get(k),
+    removeItem: (k) => storage.delete(k)
+  };
+  window.fetch = async (url, opts) => {
+    if (opts && opts.method === "POST") {
+      const req = JSON.parse(opts.body);
+      if (req.action === "add") remote.unshift({ id: String(++nextID), text: req.text.trim() });
+      if (req.action === "edit") remote.find((m) => m.id === req.id).text = req.text.trim();
+      if (req.action === "delete") remote = remote.filter((m) => m.id !== req.id);
+    }
+    return { ok: true, json: async () => ({ memos: remote.map((m) => ({ ...m })), writable: true }) };
+  };
+
+  vm.runInContext(memoSrc, vm.createContext(window), { filename: "memo.js" });
+
+  const panel = doc.createElement("div");
+  doc.body.appendChild(panel);
+  const memo = window.WsMemo.mount(doc, rail, panel, () => {});
+  memo.sync("session");
+  memo.open(true, false);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+
+  const input = ids["memo-input"];
+  assert.ok(input.wsInput, "memo-input attached WsInput");
+
+  // Cross-frame file/command/topic providers work and drop stale answers on session switch
+  let delayedFiles = null;
+  let fileQueries = 0;
+  activeFrame = {
+    contentWindow: {
+      document: { documentElement: { getAttribute: () => "session" } },
+      wsCapsuleTopics(done) { done([{ id: "t1", label: "Topic 1" }]); },
+      wsComposerFiles(q, done) { fileQueries++; delayedFiles = done; },
+      wsComposerCommands(q, done) { done([{ name: "ws:go", description: "Go" }]); }
+    }
+  };
+
+  input.focus();
+  input.value = "@src";
+  input.setSelectionRange(4, 4);
+  input.dispatchEvent(new FakeEvent("input", { bubbles: true }));
+  flushTimers();
+  assert.equal(fileQueries, 1, "cross-frame wsComposerFiles queried");
+
+  // Switching session before delayed response arrives drops the stale candidates and closes popup
+  memo.sync("other-session");
+  delayedFiles([{ path: "src/stale.go", dir: false }]);
+  assert.equal(input.wsInput.getPopups().mention.pop.hidden, true, "stale cross-frame file candidates dropped");
+
+  // Restore matching session and verify Shift+Enter list continuation + Enter save
+  memo.sync("session");
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  input.focus();
+  input.value = "- **memo item**";
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.dispatchEvent(new FakeEvent("input", { bubbles: true }));
+  flushTimers();
+  assert.ok(highlights.get("ws-md-strong"), "memo-input renders markdown highlights");
+
+  const shiftEnter = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  shiftEnter.key = "Enter";
+  shiftEnter.shiftKey = true;
+  input.dispatchEvent(shiftEnter);
+  assert.equal(remote.length, 0, "Shift+Enter continues list without saving");
+  assert.equal(input.value, "- **memo item**\n- ");
+
+  const enter = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  enter.key = "Enter";
+  input.dispatchEvent(enter);
+  for (let i = 0; i < 15; i++) await Promise.resolve();
+  assert.equal(remote.length, 1, "Enter saves memo");
+  assert.equal(remote[0].text, "- **memo item**\n-");
+
+  // Inline edit attaches WsInput and sweeps cleanly when closed
+  const textEl = ids["memo-list"].querySelector(".memo-text");
+  assert.ok(textEl, "rendered memo text element");
+  textEl.dispatchEvent(new FakeEvent("click", { bubbles: true }));
+  const editArea = ids["memo-list"].querySelector("textarea");
+  assert.ok(editArea && editArea.wsInput, "inline memo-note attached WsInput");
+  const editPop = editArea.wsInput.getPopups().mention.pop;
+  assert.ok(editPop.parentNode, "inline edit popup mounted");
+
+  const esc = new FakeEvent("keydown", { bubbles: true, cancelable: true });
+  esc.key = "Escape";
+  editArea.dispatchEvent(esc);
+  assert.equal(editPop.parentNode, null, "sweeping memo-list detaches inline WsInput popup");
 });
