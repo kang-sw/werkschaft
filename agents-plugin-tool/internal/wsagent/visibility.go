@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
@@ -80,6 +81,10 @@ func (r *Runner) PageInput(id string, write func() bool) error {
 	committed := write()
 	if committed {
 		c.cancelQuotaContinuationForInput()
+		if c.rec.Lead {
+			// Update in memory only; rides the next agent.json write (0 extra I/O).
+			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
+		}
 	}
 	hidden := c.hidden
 	c.mu.Unlock()
