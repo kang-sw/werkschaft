@@ -160,6 +160,20 @@ Land the one-shot scheduler first so Phase 2's exhaustion guidance can point hos
      - `ws/cron` MCP `add` / `list` / `remove` with `at`.
    - Done when every item above passes and existing recurring-schedule tests are unchanged.
 
+### Result (phase-1) - 2026-11-26
+
+- **Landed:**
+  - `agents-plugin-tool/internal/wscron/store.go`: kept `storeSchemaVersion = 1` (T0) and added `run_at INTEGER NOT NULL DEFAULT 0` via `PRAGMA table_info(schedules)` + `ALTER TABLE` in `ensureV1Extensions` (running on both fresh create and already-v1 early return), extending `Row`, `Load`, and `Put`.
+  - `agents-plugin-tool/internal/wscron/scheduler.go`: added `AddAt` and one-shot `run_at` lifecycle (RFC3339 validation, `at > now`, rejecting `tz` with `at`, single-fire recovery across restarts/sleep without the `> 1m` stale drop, clearing `sch.next` before unlocking to prevent concurrent double-fires, off-path writer-goroutine deletion via coalesced `deletes` map on `Delivered` or permanent target loss, bounded 3-attempt `+1m` retry on transient `Deliver` error, and `ErrAmbiguousName` handling for downgrade-period duplicate names). Also cleaned up pending `s.deletes` entries in `Delete` and `goneLocked`.
+  - `agents-plugin-tool/internal/mcp/server_schemas.go`, `agents-plugin-tool/internal/mcp/server_cron.go`: added optional `add.at` (mutually exclusive with `add.expr`), rejected `tz` with `at`, formatted one-shot schedules with `at=<RFC3339>` / JSON `at`, and tightened `cron` tool schema text to stay under the 1450-byte schema cap while preserving all shipped-text invariants.
+  - `agents-plugin-tool/internal/wscron/oneshot_test.go`, `agents-plugin-tool/internal/mcp/server_cron_test.go`: added full unit, race, migration, downgrade/reopen T0, retry, concurrency, and MCP `add`/`list`/`remove` coverage.
+- **Verification (remote `w5090`):**
+  - `gofmt -l` on all Phase 1 files: clean.
+  - `GOOS=windows GOARCH=amd64 go vet ./...` and `go build ./...`: PASS.
+  - `go test -race -count=1 ./internal/wscron/...`: PASS (`3.411s`).
+  - `go test -v -race -count=1 -run 'TestListedToolSchemasFitByteCap|TestCron' ./internal/mcp/...`: PASS (all 7 byte-cap subtests and all 7 cron tests).
+  - `go test -v -race -count=1 -run 'TestOpenCron|TestCronHost' ./cmd/ws-mcp/...`: PASS (`1.201s`).
+
 ### Phase 2: Worker `NoticeUsageLimit` emission and exhaustion-report ancestor-hop delivery
 
 Depends on Phase 1 (its `ws/cron` `at` guidance names the Phase 1 capability).

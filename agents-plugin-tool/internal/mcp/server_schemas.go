@@ -959,7 +959,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "cron",
-			"description": `Schedule prompts for yourself: when a cron expression matches, the daemon sends the prompt to this session as a cron envelope. Hosted lead sessions only. No arguments lists; add {name, expr, prompt, tz?}; delete takes an id or name. Names are unique. expr: 5-field cron (lists, ranges, steps, names, 7 = Sunday; day-of-month and day-of-week OR when both restricted) or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly; @reboot and never-firing forms are refused. tz: UTC, Z or +HH:MM/-HH:MM (-12:00 to +14:00), default UTC. A fire arrives as your next turn; while one waits, further fires are dropped. Fires missed while down are skipped, not caught up. 32 schedules per session, 16 KiB a prompt; kept across restarts.`,
+			"description": `Schedule prompts for yourself as cron envelopes. Hosted lead sessions only. No args lists; add {name, expr|at, prompt, tz?}; delete takes id or name. Unique names. at: future RFC 3339 time with offset for a one-shot (fires once even after downtime, then deletes); exclusive with expr and tz. expr: 5-field cron (DOM/DOW OR'd) or @yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly (@reboot refused). tz: UTC/Z/+HH:MM/-HH:MM (default UTC). Fires arrive as next turn; pending drops further fires; missed recurring fires are not caught up. 32 schedules/session, 16 KiB/prompt, persistent.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -968,14 +968,15 @@ func tools() []map[string]any {
 						"type":        "object",
 						"description": "Register a schedule.",
 						"properties": map[string]any{
-							"name":   stringProperty("Unique in your session, 64 characters at most."),
-							"expr":   stringProperty("5-field cron or a macro."),
-							"prompt": stringProperty("Message delivered at each match."),
-							"tz":     stringProperty("UTC, Z or +HH:MM/-HH:MM. Default UTC."),
+							"name":   stringProperty("Unique name, max 64 chars."),
+							"expr":   stringProperty("5-field cron or macro. Exclusive with at."),
+							"at":     stringProperty("One-shot RFC 3339 time with offset. Exclusive with expr and tz."),
+							"prompt": stringProperty("Prompt text delivered on fire."),
+							"tz":     stringProperty("UTC, Z or +HH:MM/-HH:MM (expr only)."),
 						},
-						"required": []string{"name", "expr", "prompt"},
+						"required": []string{"name", "prompt"},
 					},
-					"delete": stringProperty("Schedule id or name to delete."),
+					"delete": stringProperty("Schedule id or name."),
 					"format": stringProperty(formatPropertyDescription),
 				},
 			},

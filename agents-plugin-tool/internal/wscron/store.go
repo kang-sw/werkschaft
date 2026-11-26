@@ -44,10 +44,14 @@ const storeSchema = `CREATE TABLE IF NOT EXISTS schedules (
 )`
 
 // Row is one stored schedule. Times are Unix seconds; LastFire is 0 before
-// the first fire.
+// the first fire. RunAt > 0 marks a one-shot schedule (Expr is then empty):
+// it fires once at or after RunAt and is deleted. The run_at column is an
+// additive extension of schema 1, so a binary that predates it ignores the
+// column and skips the empty-expr row instead of rewriting it.
 type Row struct {
 	ID, Owner, Name, Expr, TZ, Prompt string
 	CreatedAt, LastFire               int64
+	RunAt                             int64
 }
 
 // Store is the schedules' small SQLite database, held open by the daemon for
@@ -106,15 +110,62 @@ func storeMigrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("%w: version %d, this build knows %d", ErrStoreNewer, version, storeSchemaVersion)
 	}
 	if version == storeSchemaVersion {
-		return nil
+		changed, err := ensureV1Extensions(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		return tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx, storeSchema); err != nil {
 		return fmt.Errorf("create cron store schema: %w", err)
+	}
+	if _, err := ensureV1Extensions(ctx, tx); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, storeSchemaVersion)); err != nil {
 		return fmt.Errorf("stamp cron store version: %w", err)
 	}
 	return tx.Commit()
+}
+
+// ensureV1Extensions idempotently adds schema 1's additive columns without
+// bumping PRAGMA user_version (a bump would lock older binaries out): run_at,
+// the one-shot fire time. When every extension is present it only inspects.
+func ensureV1Extensions(ctx context.Context, tx *sql.Tx) (bool, error) {
+	cols, err := tableColumns(ctx, tx, "schedules")
+	if err != nil {
+		return false, err
+	}
+	if cols["run_at"] {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE schedules ADD COLUMN run_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return false, fmt.Errorf("add schedules.run_at column: %w", err)
+	}
+	return true, nil
+}
+
+func tableColumns(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("scan %s column info: %w", table, err)
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 // Load returns every stored row, oldest first.
@@ -129,14 +180,14 @@ func (s *Store) Load() ([]Row, error) {
 	var out []Row
 	err := sqliteRetry(ctx, func() error {
 		out = nil
-		rows, err := s.db.QueryContext(ctx, `SELECT id, owner, name, expr, tz, prompt, created_at, last_fire FROM schedules ORDER BY created_at, id`)
+		rows, err := s.db.QueryContext(ctx, `SELECT id, owner, name, expr, tz, prompt, created_at, last_fire, run_at FROM schedules ORDER BY created_at, id`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var r Row
-			if err := rows.Scan(&r.ID, &r.Owner, &r.Name, &r.Expr, &r.TZ, &r.Prompt, &r.CreatedAt, &r.LastFire); err != nil {
+			if err := rows.Scan(&r.ID, &r.Owner, &r.Name, &r.Expr, &r.TZ, &r.Prompt, &r.CreatedAt, &r.LastFire, &r.RunAt); err != nil {
 				return err
 			}
 			out = append(out, r)
@@ -159,10 +210,10 @@ func (s *Store) Put(r Row) error {
 	ctx := context.Background()
 	s.ops.Add(1)
 	err := sqliteRetry(ctx, func() error {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (id, owner, name, expr, tz, prompt, created_at, last_fire) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO schedules (id, owner, name, expr, tz, prompt, created_at, last_fire, run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, name = excluded.name, expr = excluded.expr, tz = excluded.tz,
-			prompt = excluded.prompt, created_at = excluded.created_at, last_fire = excluded.last_fire`,
-			r.ID, r.Owner, r.Name, r.Expr, r.TZ, r.Prompt, r.CreatedAt, r.LastFire)
+			prompt = excluded.prompt, created_at = excluded.created_at, last_fire = excluded.last_fire, run_at = excluded.run_at`,
+			r.ID, r.Owner, r.Name, r.Expr, r.TZ, r.Prompt, r.CreatedAt, r.LastFire, r.RunAt)
 		return err
 	})
 	if err != nil {

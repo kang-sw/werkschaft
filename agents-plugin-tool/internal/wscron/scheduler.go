@@ -31,6 +31,16 @@ var (
 	ErrDuplicateName   = errors.New("a schedule with this name already exists in this session; delete it first to change it")
 	ErrTooMany         = fmt.Errorf("a session holds at most %d schedules", MaxPerSession)
 	ErrClosed          = errors.New("the scheduler is closed")
+	ErrAtNotFuture     = errors.New("at must be in the future")
+	ErrAmbiguousName   = errors.New("more than one schedule in this session has this name; delete it by id")
+)
+
+// One-shot delivery retry: a Deliver error re-arms the schedule
+// onceRetryDelay later, for at most onceAttempts deliveries in total; then
+// the schedule is deleted.
+const (
+	onceAttempts   = 3
+	onceRetryDelay = time.Minute
 )
 
 // Delivery is the outcome of handing one fire to a session.
@@ -82,9 +92,11 @@ type Options struct {
 	Log      io.Writer // nil: discarded
 }
 
-// Info is one schedule as List reports it.
+// Info is one schedule as List reports it. A one-shot schedule has an empty
+// Expr and its fire time in At (RFC 3339 in its offset); a recurring one has
+// an empty At.
 type Info struct {
-	ID, Name, Expr, TZ string
+	ID, Name, Expr, TZ, At string
 	// NextAt, LastAt are RFC 3339 in the schedule's offset; LastAt is empty
 	// before the first fire.
 	NextAt, LastAt string
@@ -94,7 +106,10 @@ type Info struct {
 
 type schedule struct {
 	id, owner, name string
-	expr            *Expr
+	expr            *Expr // nil for a one-shot
+	once            bool
+	runAt           time.Time // a one-shot's fire time
+	attempts        int       // a one-shot's failed deliveries
 	tz              string
 	loc             *time.Location
 	prompt          string
@@ -127,6 +142,9 @@ type Scheduler struct {
 	gen     uint64
 	closed  bool
 	dirty   map[string]int64 // last-fire deltas waiting for the writer
+	// deletes holds the ids of finished one-shots whose rows the writer
+	// deletes, so the fire path never touches the store.
+	deletes map[string]bool
 	stopObs func()
 	// inflight counts deliveries admitted (past the recheck, handed to the
 	// runner, outcome not yet recorded); delivered signals when one ends.
@@ -163,14 +181,16 @@ const logCloseWait = 2 * time.Second
 // New builds a scheduler over opts and starts it: it loads every stored
 // schedule once, deletes those whose conversation the runner no longer
 // knows, rebuilds pending from the cron entries still held in inboxes, and
-// arms the timer. Missed fires are not caught up.
+// arms the timer. Missed recurring fires are not caught up; a one-shot whose
+// time passed while the daemon was down fires once now, and one whose entry
+// is still held in its inbox was delivered already and is deleted.
 func New(opts Options) (*Scheduler, error) {
 	if opts.Store == nil || opts.Sessions == nil {
 		return nil, errors.New("wscron: a store and sessions are required")
 	}
 	s := &Scheduler{
 		store: opts.Store, sessions: opts.Sessions, clock: opts.Clock, log: opts.Log,
-		byID: map[string]*schedule{}, byOwner: map[string]map[string]*schedule{}, dirty: map[string]int64{},
+		byID: map[string]*schedule{}, byOwner: map[string]map[string]*schedule{}, dirty: map[string]int64{}, deletes: map[string]bool{},
 		writeKick: make(chan struct{}, 1), writeDone: make(chan struct{}), writeQuit: make(chan struct{}),
 		logCh: make(chan string, logQueue), logQuit: make(chan struct{}), logDone: make(chan struct{}), closeDone: make(chan struct{}),
 	}
@@ -211,9 +231,28 @@ func New(opts Options) (*Scheduler, error) {
 			}
 		}
 		s.mu.Lock()
+		if sch.once && (held[r.Owner][sch.id] || s.loadRemoved[sch.id]) {
+			// Delivered before the restart; its row's delete did not land.
+			s.mu.Unlock()
+			gone = append(gone, r.ID)
+			continue
+		}
 		sch.pending = held[r.Owner][sch.id] && !s.loadRemoved[sch.id]
+		dup := false
+		for _, other := range s.byOwner[r.Owner] {
+			if other.name == sch.name {
+				dup = true
+				break
+			}
+		}
 		s.insertLocked(sch)
 		s.mu.Unlock()
+		if dup {
+			// A binary without one-shot support skips one-shot rows, so a name
+			// can be reused while it runs; both schedules are kept, and a delete
+			// by that name asks for the id.
+			s.logf("cron: session %s holds more than one schedule named %q; delete by id\n", r.Owner, sch.name)
+		}
 	}
 	if len(gone) > 0 {
 		if err := s.store.Delete(gone...); err != nil {
@@ -229,6 +268,20 @@ func New(opts Options) (*Scheduler, error) {
 }
 
 func scheduleFromRow(r Row, now time.Time) (*schedule, error) {
+	if r.RunAt > 0 {
+		tz, loc, err := ParseTZ(r.TZ)
+		if err != nil {
+			return nil, err
+		}
+		sch := &schedule{id: r.ID, owner: r.Owner, name: r.Name, once: true, runAt: time.Unix(r.RunAt, 0), tz: tz, loc: loc, prompt: r.Prompt, created: time.Unix(r.CreatedAt, 0)}
+		// A one-shot whose time passed while the daemon was down fires once
+		// now: the recurring stale-fire skip never applies to it.
+		sch.next = sch.runAt
+		if sch.next.Before(now) {
+			sch.next = now
+		}
+		return sch, nil
+	}
 	expr, err := Parse(r.Expr)
 	if err != nil {
 		return nil, err
@@ -331,6 +384,17 @@ func (s *Scheduler) fire(gen uint64) {
 		if sch.next.IsZero() || sch.next.After(now) {
 			continue
 		}
+		if sch.once {
+			// Cleared before the lock is released, so a concurrent tick never
+			// fires it again; only a failed delivery re-arms it.
+			sch.next = time.Time{}
+			sch.pending = true
+			jobs = append(jobs, fireJob{
+				sch: sch, id: sch.id, owner: sch.owner, prompt: sch.prompt, at: sch.runAt,
+				mark: wsinbox.Cron{ID: sch.id, Name: sch.name, At: sch.runAt.In(sch.loc).Format(time.RFC3339)},
+			})
+			continue
+		}
 		matched := sch.next
 		// The next fire is always computed from now (Decision 9).
 		sch.next, _ = sch.expr.Next(now, sch.loc)
@@ -372,6 +436,8 @@ func (s *Scheduler) fire(gen uint64) {
 		var note string
 		s.mu.Lock()
 		switch {
+		case job.sch.once:
+			note = s.onceSettledLocked(job, out, err)
 		case err != nil || out != Delivered:
 			job.sch.pending = false
 			job.sch.dropped++
@@ -409,8 +475,56 @@ func (s *Scheduler) fire(gen uint64) {
 	}
 }
 
-// writer persists last-fire deltas off the delivery path, coalescing the
-// fires that arrived while a write ran into one transaction.
+// onceSettledLocked records a one-shot delivery's outcome and returns the
+// note to log, if any. A delivery, or a target that is closed or handed off,
+// removes the schedule and queues its row's delete for the writer; a Deliver
+// error re-arms it until onceAttempts deliveries failed. A schedule a Delete
+// or ConversationGone already removed is left to them. s.mu is held.
+func (s *Scheduler) onceSettledLocked(job fireJob, out Delivery, err error) string {
+	sch := job.sch
+	live := s.byID[job.id] == sch
+	switch {
+	case err == nil && out == Delivered:
+		if live {
+			s.dropOnceLocked(sch)
+		}
+		return ""
+	case err == nil:
+		if !live {
+			return ""
+		}
+		s.dropOnceLocked(sch)
+		return fmt.Sprintf("cron: one-shot schedule %s (%s) not delivered: its session is closed or handed off; deleted\n", job.id, sch.name)
+	}
+	sch.pending = false
+	sch.attempts++
+	if !live {
+		return ""
+	}
+	if sch.attempts >= onceAttempts {
+		s.dropOnceLocked(sch)
+		return fmt.Sprintf("cron: one-shot schedule %s (%s) not delivered after %d attempts: %v; deleted\n", job.id, sch.name, sch.attempts, err)
+	}
+	sch.next = s.clock.Now().Add(onceRetryDelay)
+	s.armLocked()
+	return ""
+}
+
+// dropOnceLocked removes a finished one-shot from memory and queues its
+// row's delete for the writer. s.mu is held.
+func (s *Scheduler) dropOnceLocked(sch *schedule) {
+	s.removeLocked(sch)
+	delete(s.dirty, sch.id)
+	s.deletes[sch.id] = true
+	select {
+	case s.writeKick <- struct{}{}:
+	default:
+	}
+}
+
+// writer persists last-fire deltas and finished one-shots' deletes off the
+// delivery path, coalescing what arrived while a write ran into one
+// transaction each.
 func (s *Scheduler) writer() {
 	defer close(s.writeDone)
 	for {
@@ -426,19 +540,28 @@ func (s *Scheduler) writer() {
 
 func (s *Scheduler) flush() {
 	s.mu.Lock()
-	batch := s.dirty
-	s.dirty = map[string]int64{}
+	batch, deletes := s.dirty, s.deletes
+	s.dirty, s.deletes = map[string]int64{}, map[string]bool{}
 	s.mu.Unlock()
-	if len(batch) == 0 {
-		return
+	if len(batch) > 0 {
+		if err := s.store.SetLastFire(batch); err != nil {
+			s.logf("cron: persist last fires: %v\n", err)
+		}
 	}
-	if err := s.store.SetLastFire(batch); err != nil {
-		s.logf("cron: persist last fires: %v\n", err)
+	if len(deletes) > 0 {
+		ids := make([]string, 0, len(deletes))
+		for id := range deletes {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		if err := s.store.Delete(ids...); err != nil {
+			s.logf("cron: delete finished one-shot schedules: %v\n", err)
+		}
 	}
 }
 
-// Flush writes any waiting last-fire deltas now; it returns when they are
-// written. Tests use it; the writer does the same on its own.
+// Flush writes any waiting last-fire deltas and one-shot deletes now; it
+// returns when they are written. Tests use it; the writer does the same on its own.
 func (s *Scheduler) Flush() { s.flush() }
 
 func newID() (string, error) {
@@ -484,10 +607,61 @@ func checkName(name string) (string, error) {
 // deliver to; the error says it is not (closed, handed off or unknown).
 func (s *Scheduler) IsLead(owner string) (bool, error) { return s.sessions.IsLead(owner) }
 
-// Add registers a schedule for conversation owner, which must be a hosted
-// lead, and returns its id and first fire (RFC 3339 in the schedule's
+// Add registers a recurring schedule for conversation owner, which must be a
+// hosted lead, and returns its id and first fire (RFC 3339 in the schedule's
 // offset). tz is empty, UTC, Z or a fixed offset (ParseTZ).
 func (s *Scheduler) Add(owner, name, expr, prompt, tz string) (id, nextAt string, err error) {
+	return s.add(owner, name, prompt, func(now time.Time) (*schedule, error) {
+		parsed, err := Parse(expr)
+		if err != nil {
+			return nil, err
+		}
+		tzName, loc, err := ParseTZ(tz)
+		if err != nil {
+			return nil, err
+		}
+		next, ok := parsed.Next(now, loc)
+		if !ok {
+			return nil, fmt.Errorf("expr %q: %w", parsed, ErrNeverMatches)
+		}
+		return &schedule{expr: parsed, tz: tzName, loc: loc, next: next}, nil
+	})
+}
+
+// AddAt registers a one-shot schedule for conversation owner, which must be
+// a hosted lead: it fires once at or after at, then is deleted. at must be
+// in the future. The schedule reports times in at's own offset when that is
+// an accepted tz (ParseTZ), else in UTC.
+func (s *Scheduler) AddAt(owner, name, prompt string, at time.Time) (id, nextAt string, err error) {
+	return s.add(owner, name, prompt, func(now time.Time) (*schedule, error) {
+		if !at.After(now) {
+			return nil, fmt.Errorf("%w (at %s, now %s)", ErrAtNotFuture, at.Format(time.RFC3339), now.In(at.Location()).Format(time.RFC3339))
+		}
+		tzName, loc := onceZone(at)
+		return &schedule{once: true, runAt: at, tz: tzName, loc: loc, next: at}, nil
+	})
+}
+
+// onceZone is the accepted tz of at's offset, or UTC.
+func onceZone(at time.Time) (string, *time.Location) {
+	_, off := at.Zone()
+	if off == 0 || off%60 != 0 {
+		return "UTC", time.UTC
+	}
+	sign := '+'
+	if off < 0 {
+		sign, off = '-', -off
+	}
+	if name, loc, err := ParseTZ(fmt.Sprintf("%c%02d:%02d", sign, off/3600, off%3600/60)); err == nil {
+		return name, loc
+	}
+	return "UTC", time.UTC
+}
+
+// add runs Add and AddAt's shared checks and the store write; build validates
+// the schedule's timing at the add's clock reading and returns it with expr
+// or once/runAt, tz, loc and next set.
+func (s *Scheduler) add(owner, name, prompt string, build func(now time.Time) (*schedule, error)) (id, nextAt string, err error) {
 	if lead, err := s.sessions.IsLead(owner); err != nil || !lead {
 		if err != nil {
 			return "", "", fmt.Errorf("%w: %v", ErrNotLead, err)
@@ -504,18 +678,10 @@ func (s *Scheduler) Add(owner, name, expr, prompt, tz string) (id, nextAt string
 	if len(prompt) > MaxPromptSize {
 		return "", "", fmt.Errorf("prompt is longer than %d bytes", MaxPromptSize)
 	}
-	parsed, err := Parse(expr)
-	if err != nil {
-		return "", "", err
-	}
-	tzName, loc, err := ParseTZ(tz)
-	if err != nil {
-		return "", "", err
-	}
 	now := s.clock.Now()
-	next, ok := parsed.Next(now, loc)
-	if !ok {
-		return "", "", fmt.Errorf("expr %q: %w", parsed, ErrNeverMatches)
+	sch, err := build(now)
+	if err != nil {
+		return "", "", err
 	}
 	if id, err = newID(); err != nil {
 		return "", "", err
@@ -540,16 +706,22 @@ func (s *Scheduler) Add(owner, name, expr, prompt, tz string) (id, nextAt string
 		s.mu.Unlock()
 		return "", "", ErrTooMany
 	}
-	for _, sch := range mine {
-		if sch.name == name {
+	for _, other := range mine {
+		if other.name == name {
 			s.mu.Unlock()
 			return "", "", ErrDuplicateName
 		}
 	}
 	s.mu.Unlock()
 
-	sch := &schedule{id: id, owner: owner, name: name, expr: parsed, tz: tzName, loc: loc, prompt: prompt, created: now, next: next}
-	if err := s.store.Put(Row{ID: id, Owner: owner, Name: name, Expr: parsed.String(), TZ: tzName, Prompt: prompt, CreatedAt: now.Unix()}); err != nil {
+	sch.id, sch.owner, sch.name, sch.prompt, sch.created = id, owner, name, prompt, now
+	row := Row{ID: id, Owner: owner, Name: name, TZ: sch.tz, Prompt: prompt, CreatedAt: now.Unix()}
+	if sch.once {
+		row.RunAt = sch.runAt.Unix()
+	} else {
+		row.Expr = sch.expr.String()
+	}
+	if err := s.store.Put(row); err != nil {
 		return "", "", err
 	}
 	s.mu.Lock()
@@ -557,12 +729,12 @@ func (s *Scheduler) Add(owner, name, expr, prompt, tz string) (id, nextAt string
 		s.mu.Unlock()
 		return "", "", ErrClosed
 	}
-	// The first fire is the first minute after the add, as computed at the
-	// add; a timer that did not run yet cannot have passed it.
+	// The first fire is the first minute after the add (a one-shot's at), as
+	// computed at the add; a timer that did not run yet cannot have passed it.
 	s.insertLocked(sch)
 	s.armLocked()
 	s.mu.Unlock()
-	return id, next.Format(time.RFC3339), nil
+	return id, sch.next.In(sch.loc).Format(time.RFC3339), nil
 }
 
 // Delete removes the schedule key (its id or its name) of conversation
@@ -574,15 +746,25 @@ func (s *Scheduler) Delete(owner, key string) error {
 	key = strings.TrimSpace(key)
 	s.mu.Lock()
 	var target *schedule
+	byName := 0
 	for _, sch := range s.byOwner[owner] {
-		if sch.id == key || sch.name == key {
-			target = sch
+		if sch.id == key {
+			target, byName = sch, 0
 			break
+		}
+		if sch.name == key {
+			target = sch
+			byName++
 		}
 	}
 	s.mu.Unlock()
 	if target == nil {
 		return ErrUnknownSchedule
+	}
+	if byName > 1 {
+		// Only after a downgrade period (New keeps both): the caller picks
+		// one by id.
+		return ErrAmbiguousName
 	}
 	if err := s.store.Delete(target.id); err != nil {
 		return err
@@ -590,6 +772,7 @@ func (s *Scheduler) Delete(owner, key string) error {
 	s.mu.Lock()
 	s.removeLocked(target)
 	delete(s.dirty, target.id)
+	delete(s.deletes, target.id)
 	s.armLocked()
 	// Out of the maps no new delivery is admitted; every one already admitted
 	// (overlapping ones included: the next minute can fire while an earlier
@@ -618,7 +801,12 @@ func (s *Scheduler) List(owner string) []Info {
 	})
 	out := make([]Info, len(mine))
 	for i, sch := range mine {
-		info := Info{ID: sch.id, Name: sch.name, Expr: sch.expr.String(), TZ: sch.tz, Pending: sch.pending, Dropped: sch.dropped}
+		info := Info{ID: sch.id, Name: sch.name, TZ: sch.tz, Pending: sch.pending, Dropped: sch.dropped}
+		if sch.once {
+			info.At = sch.runAt.In(sch.loc).Format(time.RFC3339)
+		} else {
+			info.Expr = sch.expr.String()
+		}
 		if !sch.next.IsZero() {
 			info.NextAt = sch.next.In(sch.loc).Format(time.RFC3339)
 		}
@@ -653,6 +841,7 @@ func (s *Scheduler) goneLocked(owner string) {
 	for _, sch := range s.byOwner[owner] {
 		s.removeLocked(sch)
 		delete(s.dirty, sch.id)
+		delete(s.deletes, sch.id)
 	}
 	s.armLocked()
 	s.mu.Unlock()
