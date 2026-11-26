@@ -33,6 +33,8 @@
     if (u) { if (!u.disabled) cancelHeld(u); return; }
     u = t.closest("#r-convlive [data-steer]");
     if (u) { if (!u.disabled) steerHeld(u); return; }
+    u = t.closest("#convo-steer-all-btn");
+    if (u) { if (!u.disabled) steerAllHeld(u); return; }
     if (ibadge && t.closest("#ibadge")) { if (!ibadge.disabled) interruptTurn(); return; }
     if (gmenu && t.closest("#settings-close")) { railPopClose(true); return; }
     if (t.closest("#login-copy")) { copyLoginLink(t.closest("#login-copy")); return; }
