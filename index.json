@@ -461,7 +461,14 @@
       "registered_at": "2026-11-26T07:19:03Z"
     },
     "261126-feat-ws-worker-quota-exhaustion-hop-and-oneshot-cron": {
-      "registered_at": "2026-11-26T07:19:19Z"
+      "registered_at": "2026-11-26T07:19:19Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T07:40:43Z"
+      }
     },
     "261126-refactor-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-26T05:40:46Z"
