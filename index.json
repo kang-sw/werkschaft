@@ -486,19 +486,6 @@
         }
       }
     },
-    "261126-feat-ws-dashboard-conv-collapsed-tool-summary-tokens": {
-      "registered_at": "2026-11-26T13:46:35Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T14:09:27Z",
-        "impl": {
-          "branch": "impl/develop/blurb-feel-bust"
-        }
-      }
-    },
     "261126-feat-ws-dashboard-conv-extra-motion-live-engine": {
       "registered_at": "2026-11-26T13:46:49Z"
     },
