@@ -1061,6 +1061,21 @@ this route.
   children per spawner.
 - **Close.** Closing a conversation closes open descendants deepest first.
   A worker's idle timeout stops its process and puts the conversation to sleep.
+  A forced `worktree.release` closes the conversations bound there and ends
+  their processes (holder stop: graceful, then killed) before it persists the
+  closure; a stop that fails keeps the closure with its holder, which still
+  counts as occupancy until a later daemon with a complete holder inventory
+  ends it (`wsagent/dead_binding.go`). A spawned non-lead conversation whose
+  working directory, or a bound checkout's `.git` entry or admin directory,
+  is gone is closed
+  at startup and refused at any later start or wake, so a removed worktree is
+  never repopulated (`goneBinding`, `wsgit.CheckoutRegistrationGone`; an
+  emptied directory that still exists but has lost its `.git` cannot be told
+  apart and is not caught). `worktree.remove` refuses, before it touches
+  files or Git state, while any bound conversation occupies the worktree (an
+  open binding, or a released one whose process still lives), naming each
+  one's address, state, holder, PID and cwd; a daemon that cannot answer
+  fails it closed.
   Waiting children expire after `agent.child_waiting_days` (default 15),
   measured from their last activity.
 - **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on
@@ -1823,7 +1838,7 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 |---|---|---|---|
 | Hosted Claude, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Durable werk lead or worker | Daemon (`internal/wsagent/runner_durable.go`) | The loop stops and the successor recovers the conversation and its recoverable turn from the journal | Replace to keep durable sessions open. Use Full Quit to close them. |
-| Claude, Codex, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Claude, Codex, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes inside a turn, while holder and child survive; a finished, idle worker is put to sleep instead (see below) | Replace; check rejoin if progress stalls. A sleeping worker wakes on its next message. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
 Healthy held leads and workers can continue through a normal daemon replacement.
@@ -1869,6 +1884,22 @@ does: a worker whose native background task (for example a Bash
 stale-route restart (`restartIfDue`) stops it, and its done turn is held until
 the task ends and any wake-up turn it brings settles. A worker started before
 this change has no such lines and keeps the old behaviour until its next launch.
+
+A spawned non-lead worker that has finished its turn and is idle (no open or
+held turn, no queued input, mail or reports, no approvals, compaction, quota
+or model-wait continuation, no held children or unsettled sends; a Codex
+worker's unknown background count does not keep it awake) does not survive
+a replacement as a running process. At shutdown its holder is detached and
+asked to stop without waiting, so the successor's lock budget is not spent,
+and the record drops its holder fields. A worker the successor rejoins and
+finds finished and idle after replay is put to sleep the same way, instead
+of the stale-route restart (`replayDone`, `finishedIdleChild` in
+`internal/wsagent/runner_events.go`). Either way the successor runs no
+standalone restart-restore turn for it; the restore bundle is prepended to
+the input of its next wake. Leads and workers still inside a turn keep the
+detach-and-rejoin behaviour above. This keeps an idle worker's process (and
+its working directory) from outliving its usefulness in a worktree that is
+about to be released or removed.
 
 Interrupt remains turn-scoped. Idle timeout, explicit stop, close, and expiry
 end the holder and revoke its tokens. A legacy direct worker's open turn
@@ -1973,7 +2004,9 @@ boot clock and moves with every wall-clock step; elsewhere the OS creation
 time must be within 2 seconds of the recorded wall-clock start. The stop route answers only a browser on this
 machine that sends the daemon's own Origin. For a durable ID, it uses the
 conversation's close path. A LAN viewer sees the card
-without the stop button. Closing the daemon detaches and ends no holder.
+without the stop button. Closing the daemon detaches and ends no holder,
+except a finished, idle spawned worker's, which it asks to stop (Daemon
+replacement and process ownership).
 
 The interpreter is `WS_MCP_HOLDER_PYTHON`, which the launcher sets to its
 own interpreter when it starts the daemon (the detached daemon inherits
