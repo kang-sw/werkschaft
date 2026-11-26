@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "Снять отложение",
   "js.convo.jump.up": "Перейти к вашему последнему сообщению выше",
   "js.convo.jump.down": "Перейти к вашему последнему сообщению ниже",
+  "js.convo.jump.bottom": "Перейти вниз",
   "js.find.label": "Поиск в карточке",
   "js.find.placeholder": "Поиск в карточке…",
   "js.find.prev": "Предыдущее совпадение (Shift+Enter)",

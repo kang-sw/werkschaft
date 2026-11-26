@@ -39,7 +39,7 @@
 .dgrid.history > * { min-width: 0; min-height: 0; }
 .dgrid.history > .tabbar { grid-column: 1 / -1; }
 .dgrid.history > .convo, .dgrid.history > .bcol { grid-column: 1; grid-row: 2; overflow: auto; }
-.dgrid.history > .convo { contain: layout style; }
+.dgrid.history > .convo { contain: layout style; overflow-anchor: none; }
 .dgrid.history > .d-board-dial { grid-column: 1; grid-row: 2; justify-self: end; align-self: center; }
 .dgrid.history > .bcol { overflow-anchor: auto; padding: 2px 4px 0 2px; }
 .dgrid.history[data-tab="board"] > .convo, .dgrid.history:not([data-tab="board"]) > .bcol, .dgrid.history:not([data-tab="board"]) > .d-board-dial { display: none; }
@@ -104,7 +104,7 @@
   grid-template-areas: "tabbar" "chead" "convo" "composer"; }
 .dgrid.live > * { min-width: 0; min-height: 0; }
 .dgrid.live > .tabbar { grid-area: tabbar; margin-bottom: 10px; }
-.dgrid.live > .convo { grid-area: convo; overflow: auto; contain: layout style; }
+.dgrid.live > .convo { grid-area: convo; overflow: auto; contain: layout style; overflow-anchor: none; }
 .dgrid.live > .composer { grid-area: composer; margin-top: 10px; }
 /* One shared release control for staged rendering, placement and heights.
    Fixed outside the board flow so the badge itself changes no reading geometry. */

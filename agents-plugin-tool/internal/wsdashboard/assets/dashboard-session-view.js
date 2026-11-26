@@ -100,9 +100,12 @@
     var box = entriesBox(), n = saved && !saved.bottom && box && Array.from(box.children).find(function (entry) { return entry.getAttribute("data-entry") === saved.entry; });
     if (n && Number.isFinite(saved.offset)) {
       var edge = convo.getBoundingClientRect().top + convo.clientTop;
-      convo.scrollTop += n.getBoundingClientRect().top - edge - saved.offset;
+      var nextTop = convo.scrollTop + n.getBoundingClientRect().top - edge - saved.offset;
+      if (typeof setConvoScrollTop === "function") setConvoScrollTop(nextTop);
+      else convo.scrollTop = nextTop;
       paneScroll.convo = convo.scrollTop;
       stick = false;
+      if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     } else {
       // Missing/older window or bottom on leave: retain Phase 1's bottom follow.
       stick = true;

@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "保留を解除",
   "js.convo.jump.up": "上の最新の自分のメッセージへ移動",
   "js.convo.jump.down": "下の最新の自分のメッセージへ移動",
+  "js.convo.jump.bottom": "一番下へ移動",
   "js.find.label": "カード内を検索",
   "js.find.placeholder": "カード内を検索…",
   "js.find.prev": "前の一致 (Shift+Enter)",

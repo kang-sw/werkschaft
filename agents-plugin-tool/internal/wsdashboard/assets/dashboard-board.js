@@ -118,68 +118,73 @@
     // A finished reply's mermaid
     // fences draw once merged; the streaming reply (convlive) keeps them
     // code blocks.
-    var ins = null;
-    if (name === "entries") {
-      var entryNext = typeof html === "string" ? entryInputFull(html) : html;
-      mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
-      entryRendered = entryNext;
-    }
-    else if (name === "tree") {
-      var treeNext = typeof html === "string" ? treeInputFull(html) : html;
-      ins = treeNext && mergeTreeRows(el, treeRendered, treeNext);
-      treeRendered = treeNext;
-      if (!ins) {
-        el.innerHTML = treeNext ? treeInputHTML(treeNext) : html;
-        restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
-      } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
-    }
-    else if (name === "panels") {
-      var panelNext = typeof html === "string" ? panelInputFull(html) : html;
-      ins = panelNext && mergePanelRows(el, panelRendered, panelNext);
-      panelRendered = panelNext;
-      if (!ins) {
-        el.innerHTML = panelNext ? panelInputHTML(panelNext) : html;
-        restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
-      } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
-    }
-    else if (board) {
-      ins = morphBoard(el, html);
-      if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
-      ins.forEach(bandBoard);
-      ins.forEach(function (n) {
-        var taken = n && n.__wbVirtualTaken || null;
-        if (taken) delete n.__wbVirtualTaken;
-        // Materialize the reader's older pages before restoring disclosures
-        // and frame heights, including immutable panel versions off the tail.
-        if (window.wbHistory) {
-          window.wbHistory.init(n);
-          window.wbHistory.restore(n, history);
-          if (taken && taken.history) window.wbHistory.restore(n, taken.history);
-        }
-        watchBoard(n);
-        if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
-        restoreOpen(n);
-        fmtTimes(n);
-        sweepOutImgs(n);
-        if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
-        setFrameHeights(n, frameH);
-        mountFrames(n);
-        if (taken && taken.answers) writeAnswers(n, taken.answers);
-        writeAnswers(n, answers);
-        if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
-        // A placeholder a swap brought (the viewport bands mount it later)
-        // takes the mark too, and its frame takes it once mounted.
-        q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
-      });
-      // The morph retains unchanged topic nodes, including hydrated closed
-      // pages. Their image frames still follow the board's external-file stamp.
-      if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
-    } else {
-      el.innerHTML = html;
-      if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
-      restoreOpen(el);
-      fmtTimes(el);
-      sweepOutImgs(el);
+    var ins = null, convoRegion = name === "entries" || name === "convlive";
+    if (convoRegion) convoSwapping++;
+    try {
+      if (name === "entries") {
+        var entryNext = typeof html === "string" ? entryInputFull(html) : html;
+        mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
+        entryRendered = entryNext;
+      }
+      else if (name === "tree") {
+        var treeNext = typeof html === "string" ? treeInputFull(html) : html;
+        ins = treeNext && mergeTreeRows(el, treeRendered, treeNext);
+        treeRendered = treeNext;
+        if (!ins) {
+          el.innerHTML = treeNext ? treeInputHTML(treeNext) : html;
+          restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
+        } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
+      }
+      else if (name === "panels") {
+        var panelNext = typeof html === "string" ? panelInputFull(html) : html;
+        ins = panelNext && mergePanelRows(el, panelRendered, panelNext);
+        panelRendered = panelNext;
+        if (!ins) {
+          el.innerHTML = panelNext ? panelInputHTML(panelNext) : html;
+          restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
+        } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
+      }
+      else if (board) {
+        ins = morphBoard(el, html);
+        if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
+        ins.forEach(bandBoard);
+        ins.forEach(function (n) {
+          var taken = n && n.__wbVirtualTaken || null;
+          if (taken) delete n.__wbVirtualTaken;
+          // Materialize the reader's older pages before restoring disclosures
+          // and frame heights, including immutable panel versions off the tail.
+          if (window.wbHistory) {
+            window.wbHistory.init(n);
+            window.wbHistory.restore(n, history);
+            if (taken && taken.history) window.wbHistory.restore(n, taken.history);
+          }
+          watchBoard(n);
+          if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
+          restoreOpen(n);
+          fmtTimes(n);
+          sweepOutImgs(n);
+          if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
+          setFrameHeights(n, frameH);
+          mountFrames(n);
+          if (taken && taken.answers) writeAnswers(n, taken.answers);
+          writeAnswers(n, answers);
+          if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
+          // A placeholder a swap brought (the viewport bands mount it later)
+          // takes the mark too, and its frame takes it once mounted.
+          q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
+        });
+        // The morph retains unchanged topic nodes, including hydrated closed
+        // pages. Their image frames still follow the board's external-file stamp.
+        if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
+      } else {
+        el.innerHTML = html;
+        if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
+        restoreOpen(el);
+        fmtTimes(el);
+        sweepOutImgs(el);
+      }
+    } finally {
+      if (convoRegion) convoSwapping--;
     }
     syncSpinnerPhases(el);
     el.setAttribute("data-h", hash);
@@ -211,6 +216,7 @@
       boardApplied();
     }
     if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
+    else if (convoRegion && typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     if (live && TAB[name] && !tabShown(TAB[name])) {
       var dot = tabDot(TAB[name]);
       if (dot) dot.classList.add("on");

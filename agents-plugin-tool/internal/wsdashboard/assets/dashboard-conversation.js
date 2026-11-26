@@ -483,7 +483,9 @@
       scrollRestore.delete(convo);
       // Keep what the user was reading in place: the prepended height goes
       // above the scroll offset.
-      convo.scrollTop = top + (convo.scrollHeight - h);
+      var nextTop = top + (convo.scrollHeight - h);
+      if (typeof setConvoScrollTop === "function") setConvoScrollTop(nextTop);
+      else convo.scrollTop = nextTop;
       mermaid(added);
       if (res.before) histBefore = res.before;
       if (res.end || !res.before) histEnd = true;
@@ -532,6 +534,7 @@
     btn.addEventListener("click", function () {
       if (!userJumpCur || !userJumpCur.el || userJumpCur.el.isConnected === false) return;
       stick = false;
+      if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
       userJumpCur.el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "instant" : "smooth" });
     });
     wrap.appendChild(btn);

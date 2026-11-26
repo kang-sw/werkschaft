@@ -387,7 +387,10 @@
         if (el.isConnected !== false && !(el === convo && stick) && !el.wbScrollOwner && !(kept && kept(el)) && el.scrollTop !== top) writes.push([el, top]);
       });
       scrollRestore.clear();
-      writes.forEach(function (p) { p[0].scrollTop = p[1]; });
+      writes.forEach(function (p) {
+        if (p[0] === convo) setConvoScrollTop(p[1]);
+        else p[0].scrollTop = p[1];
+      });
     });
   }
   ["wheel", "touchstart", "pointerdown", "keydown"].forEach(function (type) {
@@ -398,6 +401,8 @@
   // two regions (entries, convlive) scroll together inside #convo, which
   // owns the scroll and the pin.
   var convo = $("convo"), stick = true, pinConvoFrame = 0, pinConvoProgrammatic = false;
+  var convoSwapping = 0, convoPointerDown = false, convoUserScrollDownUntil = 0, convoTouchY = null;
+  var convoBottomBtn = $("convo-bottom-btn"), convoBottomShown = false, convoBottomFrame = 0;
   function convoVisible() {
     if (!convo) return false;
     return paneObserver && Object.prototype.hasOwnProperty.call(paneVisible, "convo") ? paneVisible.convo : visible(convo);
@@ -406,12 +411,21 @@
   // Return cached bottom-pin state instead of reading scrollHeight/clientHeight
   // synchronously inside post-mutation swap/leadDraw paths (avoids forced reflow).
   function pinned() { return stick; }
+  function setConvoScrollTop(top) {
+    if (!convo || convo.scrollTop === top) return;
+    pinConvoProgrammatic = true;
+    var prev = convo.scrollTop;
+    convo.scrollTop = top;
+    if (convo.scrollTop === prev) pinConvoProgrammatic = false;
+  }
   function pinConvo() {
     if (!stick || !convoVisible()) return;
     var target = convo.scrollHeight;
     if (convo.scrollTop !== target) {
       pinConvoProgrammatic = true;
+      var prev = convo.scrollTop;
       convo.scrollTop = target;
+      if (convo.scrollTop === prev) pinConvoProgrammatic = false;
     }
   }
   function queuePinConvo() {
@@ -422,27 +436,125 @@
       pinConvo();
     });
   }
+  function setConvoBottomShown(show) {
+    show = !!show;
+    if (show === convoBottomShown) return;
+    convoBottomShown = show;
+    if (!convoBottomBtn) return;
+    convoBottomBtn.classList.toggle("is-shown", show);
+    convoBottomBtn.setAttribute("aria-hidden", show ? "false" : "true");
+    convoBottomBtn.tabIndex = show ? 0 : -1;
+  }
+  function syncConvoBottom() {
+    if (!convoBottomBtn || !convo) return;
+    if (stick || !convoVisible()) { setConvoBottomShown(false); return; }
+    setConvoBottomShown(convo.scrollHeight - convo.clientHeight > 24 && !atBottom());
+  }
+  function queueSyncConvoBottom() {
+    if (!convoBottomBtn || !convo || convoBottomFrame) return;
+    if (typeof requestAnimationFrame !== "function") { syncConvoBottom(); return; }
+    convoBottomFrame = requestAnimationFrame(function () {
+      convoBottomFrame = 0;
+      syncConvoBottom();
+    });
+  }
   // An accepted message starts a new reply, so sending re-arms bottom follow
   // even when the user had scrolled up. A later user scroll still cancels it.
-  function followConvo() { stick = true; pinConvo(); }
+  function followConvo() { stick = true; pinConvo(); if (typeof syncConvoBottom === "function") syncConvoBottom(); }
+  function convoUserScrollDownActive() {
+    return convoPointerDown || (convoUserScrollDownUntil > 0 && Date.now() <= convoUserScrollDownUntil);
+  }
   if (convo) {
-    function clearConvoProgrammatic() { pinConvoProgrammatic = false; }
-    convo.addEventListener("wheel", clearConvoProgrammatic, { passive: true });
-    convo.addEventListener("touchstart", clearConvoProgrammatic, { passive: true });
-    convo.addEventListener("pointerdown", clearConvoProgrammatic, { passive: true });
-    convo.addEventListener("keydown", clearConvoProgrammatic, { passive: true });
+    function invalidateConvoScrollSnap() {
+      if (typeof scrollRestore !== "undefined" && scrollRestore) scrollRestore.delete(convo);
+      scrollSnap = null;
+    }
+    function noteConvoUserScrollDown() { convoUserScrollDownUntil = Date.now() + 800; }
+    function clearConvoUserScrollDown() { convoUserScrollDownUntil = 0; }
+    convo.addEventListener("wheel", function (e) {
+      pinConvoProgrammatic = false;
+      invalidateConvoScrollSnap();
+      if (e && typeof e.deltaY === "number") {
+        if (e.deltaY < 0) clearConvoUserScrollDown();
+        else if (e.deltaY > 0) noteConvoUserScrollDown();
+      } else {
+        noteConvoUserScrollDown();
+      }
+    }, { passive: true });
+    convo.addEventListener("touchstart", function (e) {
+      pinConvoProgrammatic = false;
+      invalidateConvoScrollSnap();
+      convoTouchY = e && e.touches && e.touches.length ? e.touches[0].clientY : null;
+      if (convoTouchY === null) noteConvoUserScrollDown();
+    }, { passive: true });
+    convo.addEventListener("touchmove", function (e) {
+      pinConvoProgrammatic = false;
+      invalidateConvoScrollSnap();
+      if (e && e.touches && e.touches.length && convoTouchY !== null) {
+        var y = e.touches[0].clientY;
+        if (y < convoTouchY) noteConvoUserScrollDown();
+        else if (y > convoTouchY) clearConvoUserScrollDown();
+        convoTouchY = y;
+      } else {
+        noteConvoUserScrollDown();
+      }
+    }, { passive: true });
+    convo.addEventListener("pointerdown", function () {
+      pinConvoProgrammatic = false;
+      invalidateConvoScrollSnap();
+      convoPointerDown = true;
+    }, { passive: true });
+    function endConvoPointer() {
+      if (!convoPointerDown) return;
+      convoPointerDown = false;
+      noteConvoUserScrollDown();
+    }
+    if (window.addEventListener) {
+      window.addEventListener("pointerup", endConvoPointer, { passive: true });
+      window.addEventListener("pointercancel", endConvoPointer, { passive: true });
+    }
+    convo.addEventListener("keydown", function (e) {
+      var k = e && e.key;
+      if (k === "ArrowDown" || k === "PageDown" || k === "End" || (k === " " && !e.shiftKey)) {
+        pinConvoProgrammatic = false;
+        invalidateConvoScrollSnap();
+        noteConvoUserScrollDown();
+      } else if (k === "ArrowUp" || k === "PageUp" || k === "Home" || (k === " " && e.shiftKey)) {
+        pinConvoProgrammatic = false;
+        invalidateConvoScrollSnap();
+        clearConvoUserScrollDown();
+      }
+    }, { passive: true });
     convo.addEventListener("scroll", function () {
       if (pinConvoProgrammatic) {
         pinConvoProgrammatic = false;
-        // Ignore a stale async scroll event from an earlier pinConvo() while
-        // another rAF pin is already queued for a concurrent DOM swap burst.
-        if (pinConvoFrame) return;
+        queueSyncConvoBottom();
+        return;
       }
-      if (convoVisible()) stick = atBottom();
+      if (!convoVisible()) return;
+      if (convoSwapping > 0) {
+        queueSyncConvoBottom();
+        return;
+      }
+      var bottom = atBottom();
+      if (stick) {
+        if (!bottom) stick = false;
+      } else if (bottom && convoUserScrollDownActive()) {
+        stick = true;
+      }
+      queueSyncConvoBottom();
     }, { passive: true });
     // A resize (another pane grew, the window changed, the tab came back)
     // keeps a pinned conversation at the bottom.
-    if (window.ResizeObserver) new ResizeObserver(queuePinConvo).observe(convo);
+    if (window.ResizeObserver) new ResizeObserver(function () {
+      queuePinConvo();
+      queueSyncConvoBottom();
+    }).observe(convo);
+  }
+  if (convoBottomBtn) {
+    convoBottomBtn.addEventListener("click", function () {
+      followConvo();
+    });
   }
 
   // --- layout and tabs (live or saved session conversation) ----------------
@@ -485,9 +597,13 @@
       var shown = visible(el);
       paneVisible[id] = shown;
       if (shown && el.wbScrollOwner && window.WsBoardAnchor) window.WsBoardAnchor.restore();
-      else if (shown && Object.prototype.hasOwnProperty.call(paneScroll, id)) el.scrollTop = paneScroll[id];
+      else if (shown && Object.prototype.hasOwnProperty.call(paneScroll, id)) {
+        if (el === convo) setConvoScrollTop(paneScroll[id]);
+        else el.scrollTop = paneScroll[id];
+      }
     });
     pinConvo();
+    queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
     var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));
