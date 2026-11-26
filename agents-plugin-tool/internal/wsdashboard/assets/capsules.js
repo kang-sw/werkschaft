@@ -226,9 +226,62 @@
   }
   function focused(field) { return doc.activeElement === field || !!(field && field.wsc && doc.activeElement === field.wsc.editor); }
   function fieldFor(node) { return node && node.closest && node.closest(".wsc-editor") ? node.closest(".wsc-editor").wscField : node; }
+  function editorCaretRect(editor) {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    var r = sel.getRangeAt(0);
+    if (!editor.contains(r.endContainer)) return null;
+    var cr = r.cloneRange ? r.cloneRange() : r;
+    if (cr.collapse) cr.collapse(false);
+    var rect = cr.getBoundingClientRect ? cr.getBoundingClientRect() : null;
+    if (rect && rect.height > 0) return rect;
+    if (cr.getClientRects) {
+      var list = cr.getClientRects();
+      if (list && list.length && list[0].height > 0) return list[0];
+    }
+    var node = cr.endContainer, off = cr.endOffset;
+    if (node && node.nodeType === 3) {
+      var txt = node.nodeValue || "";
+      if (off < txt.length && doc.createRange) {
+        var probe = doc.createRange();
+        probe.setStart(node, off); probe.setEnd(node, off + 1);
+        var rects = probe.getClientRects ? probe.getClientRects() : null;
+        rect = rects && rects.length ? rects[rects.length - 1] : probe.getBoundingClientRect();
+        if (rect && rect.height > 0) return rect;
+      }
+      if (off > 0 && doc.createRange) {
+        var prev = doc.createRange();
+        prev.setStart(node, off - 1); prev.setEnd(node, off);
+        var prects = prev.getClientRects ? prev.getClientRects() : null;
+        rect = prects && prects.length ? prects[prects.length - 1] : prev.getBoundingClientRect();
+        if (rect && rect.height > 0) {
+          return txt.charAt(off - 1) === "\n" ? { top: rect.bottom, bottom: rect.bottom + rect.height, height: rect.height } : rect;
+        }
+      }
+    } else if (node && node.nodeType === 1) {
+      if (node !== editor && node.getBoundingClientRect) {
+        rect = node.getBoundingClientRect();
+        if (rect && rect.height > 0) return rect;
+      }
+      var child = node.childNodes && (node.childNodes[off] || node.childNodes[off - 1]);
+      if (child) {
+        if (child.nodeType === 1 && child.getBoundingClientRect) {
+          rect = child.getBoundingClientRect();
+          if (rect && rect.height > 0) return rect;
+        } else if (child.nodeType === 3 && child.nodeValue && doc.createRange) {
+          var cprobe = doc.createRange();
+          var at = node.childNodes[off] ? 0 : Math.max(0, child.nodeValue.length - 1);
+          cprobe.setStart(child, at); cprobe.setEnd(child, at + 1);
+          rect = cprobe.getBoundingClientRect();
+          if (rect && rect.height > 0) return rect;
+        }
+      }
+    }
+    return null;
+  }
   function attach(field) {
     if (!field || field.wsc) return field && field.wsc;
-    var editor = doc.createElement("div"), text = field.value, ranges = [], selection = [0, 0], seenCaret = false, composing = false, nextKey = 0;
+    var editor = doc.createElement("div"), text = field.value, ranges = [], selection = [0, 0], seenCaret = false, composing = false, nextKey = 0, revealFrame = 0;
     var nativeValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
     // Board snapshots clone DOM, not expando properties or event handlers.
     if (field.nextElementSibling && field.nextElementSibling.classList.contains("wsc-editor")) field.nextElementSibling.remove();
@@ -402,6 +455,31 @@
       var sel = offsets(), before = valid(text, ranges);
       if (!doc.execCommand("insertText", false, value)) { replace(value, sel[0], sel[1]); notify(before); }
     }
+    function revealCaret() {
+      if (revealFrame || typeof requestAnimationFrame !== "function") return;
+      revealFrame = requestAnimationFrame(function () {
+        revealFrame = 0;
+        if (!focused(field)) return;
+        var maxScroll = editor.scrollHeight - editor.clientHeight;
+        if (!(maxScroll > 0)) return;
+        var pos = offsets()[1];
+        if (pos >= text.length) {
+          if (editor.scrollTop < maxScroll) editor.scrollTop = maxScroll;
+          return;
+        }
+        var rect = editorCaretRect(editor);
+        if (!rect || !editor.getBoundingClientRect) return;
+        var edRect = editor.getBoundingClientRect();
+        var cs = window.getComputedStyle ? window.getComputedStyle(editor) : null;
+        var padTop = cs ? parseFloat(cs.paddingTop) || 0 : 0;
+        var padBottom = cs ? parseFloat(cs.paddingBottom) || 0 : 0;
+        if (rect.bottom > edRect.bottom - padBottom) {
+          editor.scrollTop = Math.min(maxScroll, editor.scrollTop + (rect.bottom - (edRect.bottom - padBottom)));
+        } else if (rect.top < edRect.top + padTop) {
+          editor.scrollTop = Math.max(0, editor.scrollTop - ((edRect.top + padTop) - rect.top));
+        }
+      });
+    }
     Object.defineProperties(field, {
       value: { configurable: true, get: function () { return text; }, set: function (v) { var before = valid(text, ranges); v = String(v); ranges = shifted(text, v, ranges); text = v; render(); changed(before); } },
       selectionStart: { configurable: true, get: function () { return offsets()[0]; } },
@@ -463,7 +541,7 @@
             if (!doc.execCommand("delete", false)) { replace("", a, b); notify(before, "remove"); }
           }
         } else if (e.key === "Enter") {
-          e.preventDefault(); insertPlain("\n");
+          e.preventDefault(); insertPlain("\n"); revealCaret();
         }
       });
     });
@@ -561,6 +639,7 @@
       editor: editor, snapshot: function () { return valid(text, ranges); },
       rawPaste: function () { return rawPasteActive || rawPasteArmed; },
       rememberCaret: offsets,
+      revealCaret: revealCaret,
       ordered: function () { return valid(text, ranges); },
       restore: function (saved) { var before = valid(text, ranges); ranges = valid(text, saved); render(); changed(before, "restore"); },
       insertCapsule: insertGeneric,

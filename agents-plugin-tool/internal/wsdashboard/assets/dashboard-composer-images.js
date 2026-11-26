@@ -53,6 +53,70 @@
     Object.keys(allNums()).forEach(function (k) { imgSeq = Math.max(imgSeq, +k); });
     return ++imgSeq;
   }
+  var revealFrame = 0, revealEl = null, revealMirror = null;
+  function textareaCaretScroll(el, pos, maxScroll) {
+    if (!el.parentNode || !doc.createElement) return;
+    if (!revealMirror || revealMirror.parentNode !== el.parentNode) {
+      if (revealMirror && revealMirror.parentNode) revealMirror.parentNode.removeChild(revealMirror);
+      revealMirror = doc.createElement("div");
+      revealMirror.className = "chl chm";
+      revealMirror.setAttribute("aria-hidden", "true");
+      el.parentNode.appendChild(revealMirror);
+    }
+    var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (el === ctext) {
+      var pr = typeof chl !== "undefined" && chl ? chl.style.paddingRight : "";
+      if (revealMirror.style.paddingRight !== pr) revealMirror.style.paddingRight = pr;
+    } else if (cs) {
+      revealMirror.style.width = el.clientWidth + "px";
+      revealMirror.style.font = cs.font;
+      revealMirror.style.lineHeight = cs.lineHeight;
+      revealMirror.style.padding = cs.padding;
+      revealMirror.style.boxSizing = cs.boxSizing;
+    }
+    var pre = (el.value || "").slice(0, pos);
+    if (!pre || pre.slice(-1) === "\n") pre += "\u200b";
+    if (revealMirror.textContent !== pre) revealMirror.textContent = pre;
+    var padTop = cs ? parseFloat(cs.paddingTop) || 0 : 0;
+    var padBottom = cs ? parseFloat(cs.paddingBottom) || 0 : 0;
+    var lineH = (cs && parseFloat(cs.lineHeight)) || ((cs && parseFloat(cs.fontSize) || 13.5) * 1.45);
+    var caretBottom = revealMirror.offsetHeight - padBottom;
+    var caretTop = Math.max(padTop, caretBottom - lineH);
+    var viewTop = el.scrollTop + padTop;
+    var viewBottom = el.scrollTop + el.clientHeight - padBottom;
+    if (caretBottom > viewBottom) {
+      el.scrollTop = Math.min(maxScroll, caretBottom - (el.clientHeight - padBottom));
+    } else if (caretTop < viewTop) {
+      el.scrollTop = Math.max(0, caretTop - padTop);
+    }
+  }
+  // revealCaret scrolls a maxed-out composer or textarea so a programmatically
+  // inserted newline brings the caret into view (block: "nearest"), coalesced
+  // into a single rAF so layout reads stay off the synchronous input path.
+  function revealCaret(el) {
+    if (!el) return;
+    if (el.wsc && typeof el.wsc.revealCaret === "function") { el.wsc.revealCaret(); return; }
+    if (typeof requestAnimationFrame !== "function") return;
+    revealEl = el;
+    if (revealFrame) return;
+    revealFrame = requestAnimationFrame(function () {
+      revealFrame = 0;
+      var target = revealEl;
+      revealEl = null;
+      if (!target) return;
+      var scroller = target.wsc ? target.wsc.editor : target;
+      if (!scroller || (doc.activeElement !== target && doc.activeElement !== scroller)) return;
+      var maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      if (!(maxScroll > 0)) return;
+      var v = target.value || "";
+      var pos = typeof target.selectionEnd === "number" ? target.selectionEnd : v.length;
+      if (pos >= v.length) {
+        if (scroller.scrollTop < maxScroll) scroller.scrollTop = maxScroll;
+        return;
+      }
+      if (!target.wsc) textareaCaretScroll(target, pos, maxScroll);
+    });
+  }
   // editField replaces [start, end) of a text field's value with s through
   // the browser's editing command, so the undo stack keeps the edit, else
   // through setRangeText; either way an input event follows. A field that
@@ -69,6 +133,7 @@
       el.setRangeText(s, start, end, "end");
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }
+    if (s && s.indexOf("\n") >= 0) revealCaret(el);
   }
   // editText is editField on the composer's text.
   function editText(start, end, s) { editField(ctext, start, end, s); }

@@ -94,6 +94,54 @@ const assets = path.join(__dirname, '../assets');
     assert.deepEqual(await raw.locator('.wsm-pop:not([hidden]) .wsm-opt .wsm-name').allTextContents(), ['현재 작업 상태 오버뷰']);
     console.log('capsules: topic popup follows composition events without input events or a collapsed caret');
     console.log('capsules: topic popup opens while a Hangul syllable is still composing, NFC/NFD-insensitive');
+
+    // Enter at bottom of a maxed-out .wsc-editor immediately scrolls the new blank line
+    // into view without typing another character; Enter on an earlier visible line keeps scrollTop.
+    const sc = await browser.newPage();
+    await sc.route('**/*', route => route.abort());
+    await sc.setContent('<style>' + fs.readFileSync(path.join(assets, 'dashboard-conversation.css'), 'utf8') + '</style><div class="composer" style="width:420px"><textarea id="ctext"></textarea></div>');
+    await sc.evaluate(() => { window.wsT = key => key; });
+    await sc.addScriptTag({ content: fs.readFileSync(path.join(assets, 'capsules.js'), 'utf8') });
+    await sc.evaluate(() => {
+      const field = document.getElementById('ctext');
+      WsCapsules.attach(field);
+      field.value = Array.from({ length: 14 }, (_, i) => 'line ' + (i + 1)).join('\n');
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+      field.wsc.editor.scrollTop = field.wsc.editor.scrollHeight - field.wsc.editor.clientHeight;
+    });
+    const beforeEnter = await sc.evaluate(() => {
+      const ed = document.getElementById('ctext').wsc.editor;
+      return { top: ed.scrollTop, sh: ed.scrollHeight, ch: ed.clientHeight };
+    });
+    assert(beforeEnter.sh > beforeEnter.ch, 'editor is overflowing at max-height');
+    await sc.keyboard.press('Enter');
+    await sc.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const afterBottomEnter = await sc.evaluate(() => {
+      const ed = document.getElementById('ctext').wsc.editor;
+      return { top: ed.scrollTop, sh: ed.scrollHeight, ch: ed.clientHeight, val: document.getElementById('ctext').value };
+    });
+    assert(afterBottomEnter.val.endsWith('\n'), 'Enter inserted trailing newline');
+    assert(afterBottomEnter.top > beforeEnter.top, 'Enter at bottom immediately increased scrollTop without typing another character');
+    assert(afterBottomEnter.top >= afterBottomEnter.sh - afterBottomEnter.ch - 2, 'new trailing blank line is scrolled into view');
+
+    // Pressing Enter on an earlier visible line (line 2 at scrollTop=0) must NOT jump to bottom.
+    await sc.evaluate(() => {
+      const field = document.getElementById('ctext');
+      const ed = field.wsc.editor;
+      ed.scrollTop = 0;
+      const at = field.value.indexOf('\nline 3');
+      field.focus();
+      field.setSelectionRange(at, at);
+    });
+    await sc.keyboard.press('Enter');
+    await sc.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const afterMidEnter = await sc.evaluate(() => {
+      const ed = document.getElementById('ctext').wsc.editor;
+      return { top: ed.scrollTop, max: ed.scrollHeight - ed.clientHeight };
+    });
+    assert.equal(afterMidEnter.top, 0, 'Enter on an earlier visible line preserves scrollTop without jumping to bottom');
+    console.log('capsules: Enter scroll-follow reveals trailing blank line and preserves earlier-line scrollTop');
   } finally {
     await browser.close();
   }
