@@ -474,7 +474,14 @@
       }
     },
     "261126-feat-ws-chat-stream-interactive-question-cards": {
-      "registered_at": "2026-11-26T08:39:11Z"
+      "registered_at": "2026-11-26T08:39:11Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T13:47:18Z"
+      }
     },
     "261126-feat-ws-dashboard-conv-collapsed-tool-summary-tokens": {
       "registered_at": "2026-11-26T13:46:35Z"
