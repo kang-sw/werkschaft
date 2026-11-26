@@ -190,6 +190,7 @@
     el.setAttribute("data-h", hash);
     if (board) {
       indexFrames();
+      if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
       if (window.wbForm) window.wbForm();
       bindCapsuleNotes();
       mermaid(ins);
@@ -429,6 +430,7 @@
   function queueGallery() { if (galNarrow && !galFrame) galFrame = requestAnimationFrame(placeGallery); }
   if (cardBoard) {
     if (window.WsPreview) window.WsPreview.setup({ renderDiff: gwRender, post: worktree ? browsePost : post, toast: toast });
+    if (window.WsPanelCard) window.WsPanelCard.setup({ mountFrames: mountFrames, boardBoxes: boardBoxes });
     if (window.WsTerm) window.WsTerm.setup({ post: worktree ? browsePost : post, toast: toast, setCtab: live ? setCtab : null, stage: shStage });
     // The composer's chips come later in this script: the hooks are hoisted
     // functions, and cchips is not yet assigned here.
@@ -500,6 +502,7 @@
         mountFrames(n);
         if (window.wbBindBoard) window.wbBindBoard(n);
         if (window.wbAgo) window.wbAgo(n);
+        if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
         mermaid([n]);
       },
       drag: function (on) {
@@ -509,6 +512,7 @@
         if (h) swap("board", h.hash, h.html, true);
       }
     });
+    if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
     if (worktree) {
       var tools = window.WsCards.toolbar().querySelector(".board-tools"), explorer = doc.createElement("button");
       q(".board-overview, .board-state-filter", tools).forEach(function (n) { n.remove(); });
@@ -892,15 +896,22 @@
       // already-admitted rows before looking for their frame placeholders;
       // the normal post-morph restore still owns folds, mounting and layout.
       if (window.wbHistory) window.wbHistory.prepare(c.n, window.wbHistory.capture(c.old));
+      function frameKeepKey(el) {
+        if (el.hasAttribute("data-mockup-sha")) return "m\n" + el.getAttribute("data-doc-key") + "\n" + el.getAttribute("data-mockup-sha");
+        if (el.hasAttribute("data-srcdoc")) return "s\n" + el.getAttribute("data-doc-key") + "\n" + el.getAttribute("data-srcdoc");
+        return "";
+      }
       var held = c.g ? c.g.oc[0] : null, olds = {};
       q('iframe.doc-frame[data-doc-key^="entry:"]:not(.doc-frame-next)', c.old).forEach(function (f) {
-        if (f === held || !f.hasAttribute("data-srcdoc")) return;
-        var k = f.getAttribute("data-doc-key") + "\n" + f.getAttribute("data-srcdoc");
+        if (f === held) return;
+        var k = frameKeepKey(f);
+        if (!k) return;
         (olds[k] = olds[k] || []).push(f);
       });
       q('div.doc-frame[data-doc-key^="entry:"]', c.n).forEach(function (p) {
         if (c.g && p === c.g.nc[0]) return;
-        var list = olds[p.getAttribute("data-doc-key") + "\n" + p.getAttribute("data-srcdoc")];
+        var k = frameKeepKey(p);
+        var list = k ? olds[k] : null;
         if (list && list.length) pairs.push({ f: list.shift(), p: p });
       });
     });

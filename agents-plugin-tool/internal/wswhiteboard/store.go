@@ -369,6 +369,10 @@ type Outcome struct {
 	// "" when the batch carries none. It is for the caller's
 	// tool result only; no page shows it.
 	Info string
+	// MockupBundles carries the binary snapshot zips captured by accepted
+	// full-HTML wb:panel src commands in this batch so BoardDB can commit them
+	// in the same transaction without putting binary blobs into State.
+	MockupBundles []MockupBundle
 }
 
 // FormatID renders an item ID as the board shows it: (nn), three digits
@@ -696,6 +700,7 @@ func applyCommands(state *State, cmds []command, env Env, p *problems, defaults 
 	work.Seq++
 	mark := work.Seq
 	var out Outcome
+	var pendingBundles []MockupBundle
 	created := map[string]Item{} // only this Apply knows these entries' batch membership
 	previous := effectSnapshot(work)
 	embedDir := false
@@ -727,6 +732,7 @@ func applyCommands(state *State, cmds []command, env Env, p *problems, defaults 
 		before := effectSnapshot(work)
 		beforeUpdates := updates.clone()
 		beforeOrigins := cloneOrigins(origins)
+		beforeBundles := len(pendingBundles)
 		cp := &problems{List: append([]string(nil), cmd.Problems...)}
 		if cmd.IsGroup() {
 			cp.List = append(cp.List, cmd.Scope.Problems...)
@@ -765,7 +771,7 @@ func applyCommands(state *State, cmds []command, env Env, p *problems, defaults 
 			case "wb:edit":
 				applyEdit(p, work, origins, cmd, topicOf, mark, env.Now)
 			case "wb:panel":
-				applyPanel(p, work, origins, statusCommand(cmd, env), topicOf, mark, env.Now, env.SourceRoot)
+				applyPanel(p, work, origins, statusCommand(cmd, env), topicOf, mark, env.Now, env.SourceRoot, &pendingBundles)
 			case "wb:log":
 				applyLog(p, work, statusCommand(cmd, env), topicOf, env.Now)
 			case "wb:state":
@@ -793,6 +799,7 @@ func applyCommands(state *State, cmds []command, env Env, p *problems, defaults 
 		}
 		if len(cp.List) > 0 {
 			work, updates, origins = before, beforeUpdates, beforeOrigins
+			pendingBundles = pendingBundles[:beforeBundles]
 			if cmd.IsGroup() {
 				blocked[cmd.Scope] = true
 			}
@@ -848,6 +855,7 @@ func applyCommands(state *State, cmds []command, env Env, p *problems, defaults 
 	work.stampChanges(mark, env.Now)
 	work.stampBodyTimeProofs(origins)
 	work.markMetadataRevision(out.Effects)
+	out.MockupBundles = pendingBundles
 	out.Info = joinInfo(embedDirDeprecatedInfo(embedDir), withdrawnInfo(out.Withdrawn), work.staleNudge(env.Now), work.transitionNudge(statesBefore), work.structuralWarnings())
 	return work, out, updates
 }

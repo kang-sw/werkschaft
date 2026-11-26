@@ -117,15 +117,16 @@ type AgentHistoryPurger interface {
 // AgentSessionMeta holds a runner conversation's in-memory metadata for
 // dashboard rendering without touching disk.
 type AgentSessionMeta struct {
-	Hosted     bool
-	IsChild    bool
-	Closed     bool
-	Active     bool
-	HasProcess bool
-	SafeStop   bool
-	Backend    string
-	Model      string
-	Effort     string
+	Hosted       bool
+	IsChild      bool
+	Closed       bool
+	Active       bool
+	HasProcess   bool
+	SafeStop     bool
+	Backend      string
+	Model        string
+	Effort       string
+	LastActiveAt string
 }
 
 // AgentSessionMetaHost is an optional AgentHost that exposes in-memory
@@ -256,6 +257,32 @@ func (s agentSessions) BoardItems(reg Registration) (BoardItems, bool) {
 		return bs.BoardItems(reg)
 	}
 	return BoardItems{}, false
+}
+
+func (s agentSessions) LookupMockup(reg Registration, entryID string) (MockupLookup, bool, error) {
+	if reg.Agent {
+		return MockupLookup{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.LookupMockup(reg, entryID)
+	}
+	return MockupLookup{}, false, nil
+}
+
+func (s agentSessions) ReadMockupBundle(reg Registration, entryID string) (wswhiteboard.MockupBundle, bool, error) {
+	if reg.Agent {
+		return wswhiteboard.MockupBundle{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.ReadMockupBundle(reg, entryID)
+	}
+	return wswhiteboard.MockupBundle{}, false, nil
+}
+
+func (s agentSessions) SetMockupEvictor(fn func(boardDir string)) {
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		ms.SetMockupEvictor(fn)
+	}
 }
 
 // readsBoardItems reports whether the configured source reads board items

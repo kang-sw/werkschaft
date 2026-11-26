@@ -1,0 +1,1305 @@
+<style>
+.qcm-root {
+  --qcm-bg: #141518;
+  --qcm-card: #1e2024;
+  --qcm-muted: #2b2d32;
+  --qcm-hover: #24272d;
+  --qcm-topic: #2a2d33;
+  --qcm-on-topic: #e4e5e8;
+  --qcm-well: #16181c;
+  --qcm-fg: #e7e7e4;
+  --qcm-muted-fg: #a2a6ad;
+  --qcm-dim: rgb(220 226 236 / .46);
+  --qcm-line: color-mix(in srgb, #e7e7e4 11%, transparent);
+
+  /* Canonical board class hues (from wswhiteboard/assets/page.css) */
+  --qcm-c-policy: 224 163 108;     /* --wb-accent-policy: #e0a36c */
+  --qcm-c-technical: 122 162 255;  /* --wb-technical / #7aa2ff */
+  --qcm-c-announced: 108 195 154;  /* --wb-announced / --wb-ck-ok: #6cc39a */
+  --qcm-c-check: 162 166 173;      /* neutral check row: #a2a6ad */
+
+  --qcm-primary: #7aa2ff;
+  --qcm-primary-fg: #0c1424;
+  --qcm-ok: #6cc39a;
+  --qcm-warn: #e0a36c;
+  --qcm-fail: #f0797e;
+  --qcm-sent: #7eb6cc;
+  --qcm-policy-bar: #5b3a1c;
+  --qcm-on-policy: #f6d9bd;
+  --qcm-tech-bar: #26385e;
+  --qcm-on-tech: #d2dcf6;
+  --qcm-shadow: 0 1px 2px rgb(0 0 0 / .48), 0 2px 6px rgb(0 0 0 / .28);
+  --qcm-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --qcm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--qcm-bg);
+  color: var(--qcm-fg);
+  font: 12.5px/1.45 var(--qcm-sans);
+  box-sizing: border-box;
+}
+.qcm-root *, .qcm-root *::before, .qcm-root *::after {
+  box-sizing: border-box;
+}
+
+/* Quiet top bar */
+.qcm-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 0 2px;
+}
+.qcm-top-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--qcm-fg);
+}
+.qcm-ver {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(122 162 255 / .12);
+  color: color-mix(in srgb, var(--qcm-primary) 82%, var(--qcm-fg));
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.qcm-top-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.qcm-top-hint {
+  font-size: 11px;
+  color: var(--qcm-dim);
+}
+.qcm-reset {
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: var(--qcm-muted);
+  color: var(--qcm-muted-fg);
+  font: 600 11px/1.4 var(--qcm-sans);
+  cursor: pointer;
+}
+.qcm-reset:hover {
+  background: rgb(122 162 255 / .16);
+  color: var(--qcm-fg);
+}
+
+/* 2-column split */
+.qcm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 57%) minmax(0, 43%);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .qcm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.qcm-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.qcm-col-lbl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--qcm-dim);
+}
+.qcm-col-sub {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ===== Left: Compact .convo -> .wbupdate-topic ===== */
+.qcm-wb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--qcm-dim);
+}
+.qcm-wb-head b {
+  color: var(--qcm-muted-fg);
+  font-weight: 700;
+}
+.qcm-wb-head .qcm-time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.qcm-topic {
+  min-width: 0;
+  border-radius: 10px;
+  background: var(--qcm-card);
+  box-shadow: var(--qcm-shadow);
+  overflow: hidden;
+  overflow: clip;
+}
+.qcm-topic-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 7px;
+  padding: 4px 10px;
+  background: var(--qcm-topic);
+  color: var(--qcm-on-topic);
+  font-size: 12.5px;
+}
+.qcm-topic-bar b {
+  font-weight: 700;
+}
+.qcm-topic-key {
+  font: 10px var(--qcm-mono);
+  opacity: .62;
+}
+.qcm-topic-jump {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: inherit;
+  font: 600 10.5px/1.3 var(--qcm-sans);
+  cursor: pointer;
+  opacity: .75;
+}
+.qcm-topic-jump:hover {
+  opacity: 1;
+  background: rgb(255 255 255 / .08);
+}
+
+.qcm-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 7px;
+  min-width: 0;
+}
+
+/* L log row */
+.qcm-row-log {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 3px;
+  font-size: 11.5px;
+  color: var(--qcm-muted-fg);
+}
+.qcm-badge-l {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 8.5px;
+  font-weight: 800;
+  color: var(--qcm-primary);
+  background: rgb(122 162 255 / .14);
+}
+
+/* P panel recap row (recap + jump only) */
+.qcm-row-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-left: 2.5px solid color-mix(in srgb, var(--qcm-primary) 75%, transparent);
+  border-radius: 2px 5px 5px 2px;
+  background: rgb(122 162 255 / .08);
+  font-size: 11.5px;
+  min-width: 0;
+}
+.qcm-panel-lbl {
+  flex: none;
+  color: color-mix(in srgb, var(--qcm-primary) 85%, var(--qcm-fg));
+  font-size: 10px;
+  font-weight: 800;
+}
+.qcm-panel-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--qcm-fg) 88%, var(--qcm-muted-fg));
+  font-weight: 600;
+}
+.qcm-panel-ref {
+  flex: none;
+  border: 0;
+  background: transparent;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--qcm-primary) 82%, var(--qcm-muted-fg));
+  font: 600 10.5px var(--qcm-mono);
+  cursor: pointer;
+}
+.qcm-panel-ref:hover {
+  background: rgb(122 162 255 / .14);
+}
+
+/* ===== Cellophane 1-Line Question Capsule + Outside Dim Answer ===== */
+.qcm-qlist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 2px 2px 0;
+}
+.qcm-qitem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 7px;
+  min-width: 0;
+}
+
+/* Strictly 1-line cellophane capsule */
+.qcm-cap {
+  --qcm-rgb: var(--qcm-c-check);
+  --qcm-cap-ink: #d7dbe0;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid rgb(var(--qcm-rgb) / .16);
+  border-radius: 6px;
+  background: rgb(var(--qcm-rgb) / .09);
+  color: var(--qcm-cap-ink);
+  font: 500 11.5px/1 var(--qcm-sans);
+  cursor: pointer;
+  min-width: 0;
+  transition: background-color .13s, border-color .13s, color .13s;
+}
+.qcm-cap:hover {
+  background: rgb(var(--qcm-rgb) / .15);
+  border-color: rgb(var(--qcm-rgb) / .26);
+  color: var(--qcm-fg);
+}
+.qcm-cap:focus-visible {
+  outline: 1.5px solid var(--qcm-primary);
+  outline-offset: 1px;
+}
+
+/* Board-accurate class cellophane hues */
+.qcm-cap.policy {
+  --qcm-rgb: var(--qcm-c-policy);
+  --qcm-cap-ink: #e8d5c2;
+}
+.qcm-cap.check {
+  --qcm-rgb: var(--qcm-c-check);
+  --qcm-cap-ink: #d5d8de;
+}
+.qcm-cap.technical {
+  --qcm-rgb: var(--qcm-c-technical);
+  --qcm-cap-ink: #cfd9f2;
+}
+.qcm-cap.announced {
+  --qcm-rgb: var(--qcm-c-announced);
+  --qcm-cap-ink: #c6e4d3;
+}
+
+.qcm-cap-id {
+  flex: none;
+  font: 700 10.5px/1 var(--qcm-mono);
+  color: rgb(var(--qcm-rgb) / .88);
+  font-variant-numeric: tabular-nums;
+}
+.qcm-cap-cls {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgb(var(--qcm-rgb) / .16);
+  color: rgb(var(--qcm-rgb) / .95);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.qcm-cap-ttl {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qcm-cap-arr {
+  flex: none;
+  font-size: 10px;
+  opacity: .38;
+  transition: opacity .12s;
+}
+.qcm-cap:hover .qcm-cap-arr {
+  opacity: .85;
+}
+
+/* Settled capsule stays even quieter */
+.qcm-qitem.is-settled .qcm-cap {
+  background: rgb(var(--qcm-rgb) / .06);
+  border-color: rgb(var(--qcm-rgb) / .12);
+  opacity: .84;
+}
+.qcm-qitem.is-settled .qcm-cap:hover {
+  opacity: 1;
+  background: rgb(var(--qcm-rgb) / .12);
+}
+
+/* Response / Status OUTSIDE capsule, calm DIM tone */
+.qcm-ans {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--qcm-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qcm-ans.st-staged {
+  color: rgb(156 184 245 / .74);
+}
+.qcm-ans.st-staged-ok {
+  color: rgb(134 205 170 / .74);
+}
+.qcm-ans.st-staged-no {
+  color: rgb(235 142 146 / .74);
+}
+.qcm-ans.st-held {
+  color: rgb(224 178 122 / .68);
+}
+.qcm-ans.st-sent {
+  color: rgb(138 190 212 / .72);
+}
+.qcm-ans.st-settled {
+  color: rgb(126 198 162 / .72);
+}
+.qcm-ans b {
+  font-family: var(--qcm-mono);
+  font-weight: 700;
+  color: inherit;
+}
+.qcm-ans-q {
+  color: rgb(220 226 236 / .44);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact <wb:answers> Staging Strip */
+.qcm-composer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  padding: 6px 9px;
+  border-radius: 9px;
+  background: var(--qcm-card);
+  box-shadow: var(--qcm-shadow);
+}
+.qcm-comp-tag {
+  font: 700 10.5px var(--qcm-mono);
+  color: color-mix(in srgb, var(--qcm-primary) 75%, var(--qcm-muted-fg));
+}
+.qcm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  align-items: center;
+}
+.qcm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 4px 0 7px;
+  border-radius: 999px;
+  background: rgb(122 162 255 / .11);
+  color: color-mix(in srgb, var(--qcm-fg) 88%, var(--qcm-primary));
+  font: 600 10.5px/1 var(--qcm-mono);
+}
+.qcm-chip.is-ok {
+  background: rgb(108 195 154 / .11);
+}
+.qcm-chip.is-no {
+  background: rgb(240 121 126 / .12);
+}
+.qcm-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--qcm-muted-fg);
+  font: 700 11px/1 var(--qcm-sans);
+  cursor: pointer;
+  padding: 0;
+}
+.qcm-chip-x:hover {
+  background: rgb(240 121 126 / .2);
+  color: var(--qcm-fail);
+}
+.qcm-chips-empty {
+  font-size: 10.5px;
+  color: var(--qcm-dim);
+}
+.qcm-status {
+  min-height: 15px;
+  padding: 0 3px;
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--qcm-primary) 80%, var(--qcm-muted-fg));
+}
+
+/* ===== Right: Compact Interactive #r-board ===== */
+.qcm-rboard {
+  border-radius: 10px;
+  background: var(--qcm-card);
+  box-shadow: var(--qcm-shadow);
+  overflow: hidden;
+  overflow: clip;
+}
+.qcm-rb-tbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--qcm-topic);
+  color: var(--qcm-on-topic);
+  font-size: 12px;
+  font-weight: 700;
+}
+.qcm-rb-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--qcm-policy-bar);
+  color: var(--qcm-on-policy);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.qcm-rb-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* Compact board policy card */
+.qcm-wb-card {
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--qcm-bg);
+  transition: box-shadow .18s, opacity .14s;
+}
+.qcm-wb-card.is-flash,
+.qcm-wb-row.is-flash {
+  box-shadow: 0 0 0 1.5px var(--qcm-primary), 0 0 10px rgb(122 162 255 / .28);
+}
+.qcm-wb-cbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px 4px 8px;
+  background: var(--qcm-policy-bar);
+  color: var(--qcm-on-policy);
+  font-size: 11.5px;
+}
+.qcm-wb-card.is-held .qcm-wb-cbar {
+  background: var(--qcm-muted);
+  color: var(--qcm-muted-fg);
+}
+.qcm-wb-card.is-held .qcm-wb-cbody {
+  opacity: .56;
+}
+.qcm-wb-card.is-held:hover .qcm-wb-cbody {
+  opacity: .95;
+}
+.qcm-wb-card.is-sent .qcm-wb-cbar {
+  background: rgb(126 182 204 / .2);
+  color: var(--qcm-fg);
+}
+.qcm-wb-card.is-locked .qcm-wb-cbar {
+  background: rgb(108 195 154 / .2);
+  color: var(--qcm-fg);
+}
+.qcm-wb-card.is-sent .qcm-wb-cbody,
+.qcm-wb-card.is-locked .qcm-wb-cbody {
+  opacity: .62;
+  pointer-events: none;
+}
+.qcm-wb-id {
+  font: 700 10.5px var(--qcm-mono);
+  opacity: .85;
+}
+.qcm-wb-cls {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  opacity: .75;
+}
+.qcm-wb-ttl {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qcm-wb-mini {
+  flex: none;
+  height: 19px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / .14);
+  color: inherit;
+  font: 700 10px/1 var(--qcm-sans);
+  cursor: pointer;
+}
+.qcm-wb-mini:hover {
+  background: rgb(255 255 255 / .22);
+}
+.qcm-wb-mini.is-on {
+  background: rgb(224 163 108 / .25);
+  color: var(--qcm-warn);
+}
+.qcm-wb-cbody {
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.qcm-wb-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qcm-wb-opt {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 5px;
+  align-items: start;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--qcm-card);
+  color: var(--qcm-fg);
+  font: 11.5px/1.35 var(--qcm-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.qcm-wb-opt:hover {
+  background: var(--qcm-hover);
+}
+.qcm-wb-opt .k {
+  font: 800 11px var(--qcm-mono);
+  color: var(--qcm-warn);
+}
+.qcm-wb-opt[aria-pressed="true"] {
+  background: rgb(122 162 255 / .13);
+  box-shadow: inset 0 0 0 1.25px var(--qcm-primary);
+  font-weight: 600;
+}
+.qcm-wb-opt[aria-pressed="true"] .k {
+  color: var(--qcm-primary);
+}
+.qcm-wb-note {
+  width: 100%;
+  height: 26px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--qcm-well);
+  color: var(--qcm-fg);
+  font: 11.5px/1.35 var(--qcm-sans);
+  resize: none;
+}
+.qcm-wb-note::placeholder {
+  color: var(--qcm-dim);
+}
+.qcm-wb-note:focus {
+  outline: 1.5px solid rgb(122 162 255 / .6);
+}
+
+/* Compact board check / technical ack rows */
+.qcm-wb-row {
+  border-radius: 8px;
+  background: var(--qcm-bg);
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: box-shadow .18s, opacity .14s;
+}
+.qcm-wb-row.is-staged {
+  box-shadow: inset 2.5px 0 0 var(--qcm-ok);
+}
+.qcm-wb-row.is-staged-no {
+  box-shadow: inset 2.5px 0 0 var(--qcm-fail);
+}
+.qcm-wb-row.is-held {
+  box-shadow: inset 2.5px 0 0 rgb(224 163 108 / .55);
+}
+.qcm-wb-row.is-held .qcm-wb-rtxt {
+  opacity: .56;
+}
+.qcm-wb-row.is-sent,
+.qcm-wb-row.is-locked {
+  opacity: .62;
+  pointer-events: none;
+}
+.qcm-wb-rtop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.qcm-wb-rtop input[type="checkbox"] {
+  accent-color: var(--qcm-ok);
+  cursor: pointer;
+}
+.qcm-wb-rtxt {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--qcm-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qcm-wb-rtxt .rid {
+  font: 700 10.5px var(--qcm-mono);
+  color: var(--qcm-muted-fg);
+}
+.qcm-tag-tech {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--qcm-tech-bar);
+  color: var(--qcm-on-tech);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.qcm-wb-racts {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+}
+.qcm-wb-rbtn {
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--qcm-muted-fg);
+  font: 700 10px/1 var(--qcm-sans);
+  cursor: pointer;
+}
+.qcm-wb-rbtn:hover {
+  background: var(--qcm-muted);
+  color: var(--qcm-fg);
+}
+.qcm-wb-rbtn.no[aria-pressed="true"] {
+  background: var(--qcm-fail);
+  color: #141518;
+}
+.qcm-wb-rbtn.hold.is-on {
+  background: rgb(224 163 108 / .2);
+  color: var(--qcm-warn);
+}
+
+/* Board demo action bar */
+.qcm-rb-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 8px;
+  border-top: 1px solid var(--qcm-line);
+  background: rgb(20 21 24 / .45);
+}
+.qcm-rb-foot-hint {
+  font-size: 10.5px;
+  color: var(--qcm-dim);
+}
+.qcm-sim-btn {
+  flex: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--qcm-primary) 88%, var(--qcm-card));
+  color: var(--qcm-primary-fg);
+  font: 700 11px/1.2 var(--qcm-sans);
+  cursor: pointer;
+}
+.qcm-sim-btn:hover:not(:disabled) {
+  background: var(--qcm-primary);
+}
+.qcm-sim-btn:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+</style>
+
+<div class="qcm-root" id="qcm-root">
+  <div class="qcm-top">
+    <div class="qcm-top-title">
+      <span>대화창 토픽 카드 질문 캡슐</span>
+      <span class="qcm-ver">v3 셀로판 틴트 · 초컴팩트</span>
+    </div>
+    <div class="qcm-top-right">
+      <span class="qcm-top-hint">캡슐 클릭 → #r-board 이동 · 응답은 캡슐 밖 dim 표시</span>
+      <button type="button" class="qcm-reset" data-qcm-reset>초기화</button>
+    </div>
+  </div>
+
+  <div class="qcm-grid">
+    <!-- Left: .convo -> .wbupdate-topic -->
+    <div class="qcm-col">
+      <div class="qcm-col-lbl">
+        <span>대화창 (.convo)</span>
+        <span class="qcm-col-sub">1줄 셀로판 캡슐 + 외부 dim 상태</span>
+      </div>
+
+      <div class="qcm-wb-head">
+        <b>화이트보드</b>
+        <span>음성 채팅 Epic</span>
+        <span class="qcm-time">22:28</span>
+      </div>
+
+      <section class="qcm-topic">
+        <div class="qcm-topic-bar">
+          <b>음성 채팅 Epic (STT · 라이브 · 회의록)</b>
+          <span class="qcm-topic-key">voice-chat-epic</span>
+          <button type="button" class="qcm-topic-jump" data-qcm-jump="topic">토픽 ↗</button>
+        </div>
+
+        <div class="qcm-rows">
+          <div class="qcm-row-log">
+            <span class="qcm-badge-l">L</span>
+            <span>트랙 1b 우선 확정 반영 — 정책·확인·기술 항목 3건 추가</span>
+          </div>
+
+          <div class="qcm-row-panel">
+            <span class="qcm-panel-lbl">▤ 패널</span>
+            <span class="qcm-panel-text">음성 채팅 아키텍처 &amp; 단계별 트랙 구성안</span>
+            <button type="button" class="qcm-panel-ref" data-qcm-jump="topic">#p-arch-v2</button>
+          </div>
+
+          <!-- Ultra-compact 1-line cellophane question capsules + outside dim answers -->
+          <div class="qcm-qlist">
+            <!-- 1. (1695) policy · orange cellophane · starts unanswered -->
+            <div class="qcm-qitem" data-qcm-item="1695">
+              <button type="button" class="qcm-cap policy" data-qcm-link="1695" title="정책 (1695) · #r-board로 이동">
+                <span class="qcm-cap-id">(1695)</span>
+                <span class="qcm-cap-cls">정책</span>
+                <span class="qcm-cap-ttl">STT 엔진 기본 제공자 선택</span>
+                <span class="qcm-cap-arr" aria-hidden="true">↗</span>
+              </button>
+              <span class="qcm-ans" data-qcm-ans="1695">미응답</span>
+            </div>
+
+            <!-- 2. (1696) check · neutral slate cellophane · starts staged ok -->
+            <div class="qcm-qitem" data-qcm-item="1696">
+              <button type="button" class="qcm-cap check" data-qcm-link="1696" title="확인 (1696) · #r-board로 이동">
+                <span class="qcm-cap-id">(1696)</span>
+                <span class="qcm-cap-cls">확인</span>
+                <span class="qcm-cap-ttl">회의록 요약 자동 저장 기본값 확인</span>
+                <span class="qcm-cap-arr" aria-hidden="true">↗</span>
+              </button>
+              <span class="qcm-ans st-staged-ok" data-qcm-ans="1696">ok 선택됨</span>
+            </div>
+
+            <!-- 3. (1697) technical · blue cellophane · starts held -->
+            <div class="qcm-qitem" data-qcm-item="1697">
+              <button type="button" class="qcm-cap technical" data-qcm-link="1697" title="기술 (1697) · #r-board로 이동">
+                <span class="qcm-cap-id">(1697)</span>
+                <span class="qcm-cap-cls">기술</span>
+                <span class="qcm-cap-ttl">라이브 자막 1초 버퍼링 스키마 적용</span>
+                <span class="qcm-cap-arr" aria-hidden="true">↗</span>
+              </button>
+              <span class="qcm-ans st-held" data-qcm-ans="1697">보류</span>
+            </div>
+
+            <!-- 4. (1693) announced · emerald cellophane · in-flight sent -->
+            <div class="qcm-qitem" data-qcm-item="1693">
+              <button type="button" class="qcm-cap announced" data-qcm-link="1693" title="공지 (1693) · 전송 완료">
+                <span class="qcm-cap-id">(1693)</span>
+                <span class="qcm-cap-cls">공지</span>
+                <span class="qcm-cap-ttl">오디오 청크 포맷 기준 (Opus 48kHz)</span>
+                <span class="qcm-cap-arr" aria-hidden="true">↗</span>
+              </button>
+              <span class="qcm-ans st-sent">전송됨 · 대기</span>
+            </div>
+
+            <!-- 5. (1694) policy · orange cellophane · settled -->
+            <div class="qcm-qitem is-settled" data-qcm-item="1694">
+              <button type="button" class="qcm-cap policy" data-qcm-link="1694" title="정책 (1694) · 확정됨">
+                <span class="qcm-cap-id">(1694)</span>
+                <span class="qcm-cap-cls">정책</span>
+                <span class="qcm-cap-ttl">음성 채팅 1단계 착수 트랙 결정</span>
+                <span class="qcm-cap-arr" aria-hidden="true">↗</span>
+              </button>
+              <span class="qcm-ans st-settled">✓ 확정 · <b>b</b> <span class="qcm-ans-q">“트랙 1b 우선 진행”</span></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Compact <wb:answers> staging strip -->
+      <div class="qcm-composer">
+        <span class="qcm-comp-tag">&lt;wb:answers&gt;</span>
+        <div class="qcm-chips" data-qcm-chips></div>
+      </div>
+
+      <div class="qcm-status" data-qcm-status aria-live="polite"></div>
+    </div>
+
+    <!-- Right: Compact Interactive #r-board -->
+    <div class="qcm-col">
+      <div class="qcm-col-lbl">
+        <span>화이트보드 (#r-board)</span>
+        <span class="qcm-col-sub">응답 조작 영역</span>
+      </div>
+
+      <section class="qcm-rboard" data-qcm-rb="topic">
+        <div class="qcm-rb-tbar">
+          <span>음성 채팅 Epic</span>
+          <span class="qcm-rb-badge" data-qcm-open-count>열림 3</span>
+        </div>
+
+        <div class="qcm-rb-body">
+          <!-- (1695) Policy Card -->
+          <div class="qcm-wb-card" data-qcm-rb="1695">
+            <div class="qcm-wb-cbar">
+              <span class="qcm-wb-id">(1695)</span>
+              <span class="qcm-wb-cls">policy</span>
+              <span class="qcm-wb-ttl">STT 엔진 기본 제공자 선택</span>
+              <button type="button" class="qcm-wb-mini" data-qcm-hold="1695" aria-pressed="false">보류</button>
+            </div>
+            <div class="qcm-wb-cbody">
+              <div class="qcm-wb-opts">
+                <button type="button" class="qcm-wb-opt" data-qcm-opt="1695:a" aria-pressed="false">
+                  <span class="k">a</span><span>Whisper 로컬 우선</span>
+                </button>
+                <button type="button" class="qcm-wb-opt" data-qcm-opt="1695:b" aria-pressed="false">
+                  <span class="k">b★</span><span>트랙 1b (OS 네이티브 STT + 폴백)</span>
+                </button>
+                <button type="button" class="qcm-wb-opt" data-qcm-opt="1695:c" aria-pressed="false">
+                  <span class="k">c</span><span>클라우드 하이브리드 스트리밍</span>
+                </button>
+              </div>
+              <textarea class="qcm-wb-note" rows="1" data-qcm-note="1695" placeholder="✎ 메모 (캡슐 밖 dim 요약에 반영)…" aria-label="(1695) 메모"></textarea>
+            </div>
+          </div>
+
+          <!-- (1696) Check Row -->
+          <div class="qcm-wb-row" data-qcm-rb="1696">
+            <div class="qcm-wb-rtop">
+              <input type="checkbox" data-qcm-rb-ck="1696" checked aria-label="(1696) ok">
+              <span class="qcm-wb-rtxt"><span class="rid">(1696)</span>회의록 요약 자동 저장 기본값 확인</span>
+              <span class="qcm-wb-racts">
+                <button type="button" class="qcm-wb-rbtn hold" data-qcm-hold="1696" aria-pressed="false">보류</button>
+                <button type="button" class="qcm-wb-rbtn no" data-qcm-ck="1696:no" aria-pressed="false" title="no">✕</button>
+              </span>
+            </div>
+            <textarea class="qcm-wb-note" rows="1" data-qcm-note="1696" placeholder="✎ 확인 메모…" aria-label="(1696) 메모"></textarea>
+          </div>
+
+          <!-- (1697) Technical Ack Row (starts held) -->
+          <div class="qcm-wb-row" data-qcm-rb="1697">
+            <div class="qcm-wb-rtop">
+              <input type="checkbox" data-qcm-rb-ck="1697" aria-label="(1697) ok">
+              <span class="qcm-wb-rtxt"><span class="rid">(1697)</span><span class="qcm-tag-tech">technical</span>라이브 자막 1초 버퍼링 스키마 적용</span>
+              <span class="qcm-wb-racts">
+                <button type="button" class="qcm-wb-rbtn hold" data-qcm-hold="1697" aria-pressed="true">보류</button>
+              </span>
+            </div>
+            <textarea class="qcm-wb-note" rows="1" data-qcm-note="1697" placeholder="✎ 기술 메모…" aria-label="(1697) 메모"></textarea>
+          </div>
+        </div>
+
+        <div class="qcm-rb-foot">
+          <span class="qcm-rb-foot-hint">선택됨 → 전송됨 → ✓ 확정 전환</span>
+          <button type="button" class="qcm-sim-btn" data-qcm-sim>응답 전송 → 확정 시뮬레이션</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('qcm-root');
+  if (!root) return;
+
+  var OPT_SHORT = {
+    '1695': {
+      a: 'Whisper 로컬',
+      b: '트랙 1b 네이티브 STT',
+      c: '클라우드 하이브리드'
+    }
+  };
+
+  function makeInitial() {
+    return {
+      '1695': { kind: 'policy', phase: 'open', pick: '', note: '', held: false },
+      '1696': { kind: 'check', phase: 'open', pick: 'ok', note: '', held: false },
+      '1697': { kind: 'technical', phase: 'open', pick: '', note: '', held: true }
+    };
+  }
+
+  var state = makeInitial();
+  var statusTimer = null;
+  var simTimers = [];
+
+  function clearSimTimers() {
+    while (simTimers.length) clearTimeout(simTimers.pop());
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function setStatus(msg) {
+    var el = root.querySelector('[data-qcm-status]');
+    if (!el) return;
+    el.textContent = msg;
+    if (statusTimer) clearTimeout(statusTimer);
+    if (msg) {
+      statusTimer = setTimeout(function () { el.textContent = ''; }, 2400);
+    }
+  }
+
+  function flashBoard(key) {
+    var target = root.querySelector('[data-qcm-rb="' + key + '"]');
+    if (target) {
+      target.classList.remove('is-flash');
+      void target.offsetWidth;
+      target.classList.add('is-flash');
+      if (typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      setTimeout(function () { target.classList.remove('is-flash'); }, 900);
+      setStatus('#r-board ' + (key === 'topic' ? 'voice-chat-epic' : '(' + key + ')') + ' 포커스');
+    } else if (key === '1693') {
+      setStatus('(1693) 전송됨 · 에이전트 응답 반영 대기 중');
+    } else if (key === '1694') {
+      setStatus('(1694) 확정됨 · 보드 히스토리 항목');
+    }
+  }
+
+  function renderLeftItem(id) {
+    var it = state[id];
+    var row = root.querySelector('[data-qcm-item="' + id + '"]');
+    var ans = root.querySelector('[data-qcm-ans="' + id + '"]');
+    if (!row || !ans) return;
+
+    row.classList.toggle('is-settled', it.phase === 'settled');
+    ans.className = 'qcm-ans';
+
+    var note = (it.note || '').trim();
+    var shortLabel = (OPT_SHORT[id] && it.pick && OPT_SHORT[id][it.pick]) ? OPT_SHORT[id][it.pick] : '';
+    var quoteHtml = note ? ' <span class="qcm-ans-q">“' + esc(note) + '”</span>' : (shortLabel ? ' <span class="qcm-ans-q">' + esc(shortLabel) + '</span>' : '');
+
+    if (it.phase === 'sent') {
+      ans.classList.add('st-sent');
+      ans.innerHTML = '전송됨 · 대기' + (it.pick ? ' · <b>' + esc(it.pick) + '</b>' : '');
+    } else if (it.phase === 'settled') {
+      ans.classList.add('st-settled');
+      ans.innerHTML = '✓ 확정' + (it.pick ? ' · <b>' + esc(it.pick) + '</b>' : '') + quoteHtml;
+    } else if (it.held) {
+      ans.classList.add('st-held');
+      ans.textContent = '보류';
+    } else if (it.pick) {
+      if (it.pick === 'ok') ans.classList.add('st-staged-ok');
+      else if (it.pick === 'no') ans.classList.add('st-staged-no');
+      else ans.classList.add('st-staged');
+      ans.innerHTML = '<b>' + esc(it.pick) + '</b> 선택됨' + (note ? ' · <span class="qcm-ans-q">“' + esc(note) + '”</span>' : '');
+    } else if (note) {
+      ans.classList.add('st-staged');
+      ans.innerHTML = '메모 <span class="qcm-ans-q">“' + esc(note) + '”</span>';
+    } else {
+      ans.textContent = '미응답';
+    }
+  }
+
+  function renderChips() {
+    var box = root.querySelector('[data-qcm-chips]');
+    var simBtn = root.querySelector('[data-qcm-sim]');
+    if (!box) return;
+
+    var ids = ['1695', '1696', '1697'];
+    var staged = [];
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var it = state[id];
+      if (it.phase === 'open' && (it.pick || (it.note && it.note.trim()))) {
+        staged.push({ id: id, pick: it.pick, note: (it.note || '').trim() });
+      }
+    }
+
+    if (simBtn) simBtn.disabled = staged.length === 0;
+
+    box.innerHTML = '';
+    if (!staged.length) {
+      var empty = document.createElement('span');
+      empty.className = 'qcm-chips-empty';
+      empty.textContent = '스테이징 없음';
+      box.appendChild(empty);
+      return;
+    }
+
+    for (var j = 0; j < staged.length; j++) {
+      var s = staged[j];
+      var chip = document.createElement('span');
+      chip.className = 'qcm-chip' + (s.pick === 'ok' ? ' is-ok' : s.pick === 'no' ? ' is-no' : '');
+
+      var lbl = document.createElement('span');
+      lbl.textContent = '(' + s.id + ')' + (s.pick ? '=' + s.pick : ' ✎') + (s.pick && s.note ? ' ✎' : '');
+      chip.appendChild(lbl);
+
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'qcm-chip-x';
+      rm.setAttribute('data-qcm-drop', s.id);
+      rm.setAttribute('aria-label', '(' + s.id + ') 해제');
+      rm.textContent = '×';
+      chip.appendChild(rm);
+
+      box.appendChild(chip);
+    }
+  }
+
+  function renderAll(activeEl) {
+    var ids = ['1695', '1696', '1697'];
+    var openCount = 0;
+
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var it = state[id];
+      if (it.phase === 'open') openCount++;
+      renderLeftItem(id);
+
+      var rb = root.querySelector('[data-qcm-rb="' + id + '"]');
+      if (rb) {
+        rb.classList.toggle('is-held', it.phase === 'open' && !!it.held);
+        rb.classList.toggle('is-sent', it.phase === 'sent');
+        rb.classList.toggle('is-locked', it.phase === 'settled');
+        if (id !== '1695') {
+          rb.classList.toggle('is-staged', it.phase === 'open' && !it.held && it.pick === 'ok');
+          rb.classList.toggle('is-staged-no', it.phase === 'open' && !it.held && it.pick === 'no');
+        }
+      }
+    }
+
+    var badge = root.querySelector('[data-qcm-open-count]');
+    if (badge) badge.textContent = '열림 ' + openCount;
+
+    var optBtns = root.querySelectorAll('[data-qcm-opt]');
+    for (var o = 0; o < optBtns.length; o++) {
+      var btn = optBtns[o];
+      var p = btn.getAttribute('data-qcm-opt').split(':');
+      btn.setAttribute('aria-pressed', state[p[0]].pick === p[1] ? 'true' : 'false');
+    }
+
+    var ckBtns = root.querySelectorAll('[data-qcm-ck]');
+    for (var c = 0; c < ckBtns.length; c++) {
+      var cb = ckBtns[c];
+      var cp = cb.getAttribute('data-qcm-ck').split(':');
+      cb.setAttribute('aria-pressed', state[cp[0]].pick === cp[1] ? 'true' : 'false');
+    }
+
+    var rbCks = root.querySelectorAll('[data-qcm-rb-ck]');
+    for (var r = 0; r < rbCks.length; r++) {
+      var box = rbCks[r];
+      var rid = box.getAttribute('data-qcm-rb-ck');
+      box.checked = state[rid].pick === 'ok';
+    }
+
+    var holdBtns = root.querySelectorAll('[data-qcm-hold]');
+    for (var h = 0; h < holdBtns.length; h++) {
+      var hb = holdBtns[h];
+      var hid = hb.getAttribute('data-qcm-hold');
+      var on = state[hid].phase === 'open' && !!state[hid].held;
+      hb.setAttribute('aria-pressed', on ? 'true' : 'false');
+      hb.classList.toggle('is-on', on);
+    }
+
+    var notes = root.querySelectorAll('[data-qcm-note]');
+    for (var n = 0; n < notes.length; n++) {
+      var ni = notes[n];
+      if (ni === activeEl) continue;
+      var nid = ni.getAttribute('data-qcm-note');
+      if (ni.value !== state[nid].note) ni.value = state[nid].note;
+    }
+
+    renderChips();
+  }
+
+  function runSendSimulation() {
+    var ids = ['1695', '1696', '1697'];
+    var sending = [];
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var it = state[id];
+      if (it.phase === 'open' && (it.pick || (it.note && it.note.trim()))) {
+        it.phase = 'sent';
+        it.held = false;
+        sending.push(id);
+      }
+    }
+    if (!sending.length) return;
+    renderAll(null);
+    setStatus(sending.map(function (x) { return '(' + x + ')'; }).join(', ') + ' 전송됨 · 대기 중…');
+
+    var t = setTimeout(function () {
+      for (var j = 0; j < sending.length; j++) {
+        var sid = sending[j];
+        if (state[sid] && state[sid].phase === 'sent') state[sid].phase = 'settled';
+      }
+      renderAll(null);
+      setStatus(sending.map(function (x) { return '(' + x + ')'; }).join(', ') + ' ✓ 확정 전환');
+    }, 1050);
+    simTimers.push(t);
+  }
+
+  root.addEventListener('click', function (e) {
+    var target = e.target;
+    if (!target || !target.closest) return;
+
+    var linkBtn = target.closest('[data-qcm-link]');
+    if (linkBtn) {
+      flashBoard(linkBtn.getAttribute('data-qcm-link'));
+      return;
+    }
+
+    var jumpBtn = target.closest('[data-qcm-jump]');
+    if (jumpBtn) {
+      flashBoard(jumpBtn.getAttribute('data-qcm-jump'));
+      return;
+    }
+
+    var optBtn = target.closest('[data-qcm-opt]');
+    if (optBtn) {
+      var p = optBtn.getAttribute('data-qcm-opt').split(':');
+      var it = state[p[0]];
+      if (it.phase !== 'open') return;
+      it.pick = it.pick === p[1] ? '' : p[1];
+      if (it.pick) it.held = false;
+      renderAll(null);
+      return;
+    }
+
+    var ckBtn = target.closest('[data-qcm-ck]');
+    if (ckBtn) {
+      var cp = ckBtn.getAttribute('data-qcm-ck').split(':');
+      var cit = state[cp[0]];
+      if (cit.phase !== 'open') return;
+      cit.pick = cit.pick === cp[1] ? '' : cp[1];
+      if (cit.pick) cit.held = false;
+      renderAll(null);
+      return;
+    }
+
+    var holdBtn = target.closest('[data-qcm-hold]');
+    if (holdBtn) {
+      var hid = holdBtn.getAttribute('data-qcm-hold');
+      var hit = state[hid];
+      if (hit.phase !== 'open') return;
+      hit.held = !hit.held;
+      renderAll(null);
+      return;
+    }
+
+    var dropBtn = target.closest('[data-qcm-drop]');
+    if (dropBtn) {
+      var did = dropBtn.getAttribute('data-qcm-drop');
+      if (state[did] && state[did].phase === 'open') {
+        state[did].pick = '';
+        state[did].note = '';
+        renderAll(null);
+      }
+      return;
+    }
+
+    if (target.closest('[data-qcm-sim]')) {
+      runSendSimulation();
+      return;
+    }
+
+    if (target.closest('[data-qcm-reset]')) {
+      clearSimTimers();
+      state = makeInitial();
+      renderAll(null);
+      setStatus('초기 상태 복원');
+    }
+  });
+
+  root.addEventListener('change', function (e) {
+    var rbCk = e.target && e.target.closest ? e.target.closest('[data-qcm-rb-ck]') : null;
+    if (!rbCk) return;
+    var id = rbCk.getAttribute('data-qcm-rb-ck');
+    if (state[id].phase !== 'open') return;
+    state[id].pick = rbCk.checked ? 'ok' : '';
+    if (state[id].pick) state[id].held = false;
+    renderAll(null);
+  });
+
+  root.addEventListener('input', function (e) {
+    var ni = e.target && e.target.closest ? e.target.closest('[data-qcm-note]') : null;
+    if (!ni) return;
+    var id = ni.getAttribute('data-qcm-note');
+    if (state[id].phase !== 'open') return;
+    state[id].note = ni.value;
+    if (ni.value.trim()) state[id].held = false;
+    renderAll(ni);
+  });
+
+  renderAll(null);
+})();
+</script>

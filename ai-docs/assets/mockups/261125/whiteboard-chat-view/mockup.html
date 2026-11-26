@@ -1,0 +1,2507 @@
+<style>
+.wbv10-root {
+  --bg: #141518;
+  --card: #1e2024;
+  --muted: #2b2d32;
+  --hover: #25272c;
+  --topic: #2a2d33;
+  --on-topic: #e4e5e8;
+  --well: #16181c;
+  --fg: #e7e7e4;
+  --muted-fg: #a2a6ad;
+  --line: color-mix(in srgb, #e7e7e4 14%, transparent);
+  --wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --primary: #7aa2ff;
+  --primary-fg: #0c1424;
+  --ok: #6cc39a;
+  --warn: #e0a36c;
+  --fail: #f0797e;
+  --c-exec: #e5b567;
+  --c-tickets: #7aa2ff;
+  --c-agent: #b392f0;
+  --c-git: #5ccfe6;
+  --c-file: #8ea6c8;
+  --c-think: #96a8e8;
+  --shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  --radius: 12px;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  font: 13px/1.5 var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-width: 870px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+.wbv10-root *, .wbv10-root *::before, .wbv10-root *::after { box-sizing: border-box; }
+
+/* 2-column dashboard slice: left mini-rail (with bottom-left settings) + main stage/conv */
+.wbv10-shell {
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+@media (max-width: 740px) {
+  .wbv10-shell { grid-template-columns: 1fr; }
+}
+
+/* Left Rail + Bottom-Left Dashboard Settings Popover */
+.wbv10-rail {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.wbv10-rail-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.wbv10-rail-title {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted-fg);
+}
+.wbv10-rail-ver {
+  font: 700 10px/1 var(--mono);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  padding: 3px 6px;
+  border-radius: 999px;
+}
+.wbv10-rail-nav { display: flex; flex-direction: column; gap: 2px; }
+.wbv10-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--muted-fg);
+  user-select: none;
+}
+.wbv10-rail-item.is-active {
+  background: color-mix(in srgb, var(--primary) 13%, var(--card));
+  color: var(--fg);
+  font-weight: 600;
+}
+.wbv10-rail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ok);
+  flex: none;
+}
+.wbv10-rail-dot.dim { background: var(--muted-fg); opacity: .55; }
+.wbv10-rail-spacer { flex: 1 1 auto; min-height: 12px; }
+
+/* Bottom-left settings popover preview (authentic Werkschaft .rpop style) */
+.wbv10-settings-card {
+  background: var(--bg);
+  border-radius: 10px;
+  box-shadow: var(--shadow-hi), inset 0 0 0 1px var(--line);
+  padding: 9px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.wbv10-set-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 5px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--fg);
+}
+.wbv10-set-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted-fg);
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  cursor: default;
+}
+.wbv10-set-sec { display: flex; flex-direction: column; gap: 2px; }
+.wbv10-set-lbl {
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted-fg);
+  padding: 2px 5px 2px;
+}
+.wbv10-set-opt {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  color: var(--muted-fg);
+  font: 500 11.5px/1.3 var(--sans);
+  cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
+}
+.wbv10-set-opt:hover { background: var(--hover); color: var(--fg); }
+.wbv10-set-opt.is-active {
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  color: var(--fg);
+  font-weight: 600;
+}
+.wbv10-set-ico {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--well);
+  color: var(--muted-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 10px/1 var(--mono);
+  margin-top: 1px;
+}
+.wbv10-set-opt.is-active .wbv10-set-ico {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primary);
+}
+.wbv10-set-opt-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wbv10-set-opt-sub { font-size: 10px; font-weight: 400; color: var(--muted-fg); line-height: 1.3; }
+.wbv10-set-foot {
+  border-top: 1px solid var(--line);
+  padding: 6px 4px 1px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.wbv10-set-hint { font-size: 10.5px; color: var(--muted-fg); }
+.wbv10-raf-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--well);
+  font: 600 10.5px/1.2 var(--mono);
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.wbv10-raf-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--ok); flex: none; }
+.wbv10-raf-pill.is-idle .wbv10-raf-dot { background: var(--muted-fg); opacity: .55; }
+.wbv10-raf-pill.is-off .wbv10-raf-dot { background: var(--warn); }
+
+/* Main Column */
+.wbv10-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* Axis B Control Panel + Unified #r-convlive Stage */
+.wbv10-stage-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 10px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wbv10-stage-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.wbv10-stage-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted-fg);
+}
+.wbv10-stage-kicker code { font-family: var(--mono); text-transform: none; color: var(--primary); font-weight: 700; }
+.wbv10-stage-tag {
+  margin-left: auto;
+  font: 600 10.5px/1 var(--mono);
+  color: var(--muted-fg);
+  background: var(--well);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Category / State Selector Pills */
+.wbv10-cats { display: flex; flex-wrap: wrap; gap: 5px; }
+.wbv10-cat {
+  appearance: none;
+  border: 0;
+  background: var(--well);
+  color: var(--muted-fg);
+  font: 600 11.5px/1 var(--sans);
+  padding: 6px 9px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+.wbv10-cat:hover { background: var(--hover); color: var(--fg); }
+.wbv10-cat-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--cat-col, var(--primary)); flex: none; }
+.wbv10-cat.is-active {
+  background: color-mix(in srgb, var(--cat-col, var(--primary)) 16%, var(--card));
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cat-col, var(--primary)) 44%, transparent);
+}
+
+/* Action Triggers Row */
+.wbv10-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.wbv10-btn {
+  appearance: none;
+  border: 0;
+  background: var(--muted);
+  color: var(--fg);
+  font: 600 11.5px/1 var(--sans);
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color .14s ease, color .14s ease;
+}
+.wbv10-btn:hover { background: color-mix(in srgb, var(--fg) 14%, var(--muted)); }
+.wbv10-btn.chain {
+  background: color-mix(in srgb, var(--primary) 20%, var(--card));
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.wbv10-btn.chain:hover { background: color-mix(in srgb, var(--primary) 28%, var(--card)); }
+.wbv10-btn.ok { background: color-mix(in srgb, var(--ok) 16%, var(--card)); color: var(--ok); }
+.wbv10-btn.ok:hover { background: color-mix(in srgb, var(--ok) 24%, var(--card)); }
+.wbv10-btn.fail { background: color-mix(in srgb, var(--fail) 16%, var(--card)); color: var(--fail); }
+.wbv10-btn.fail:hover { background: color-mix(in srgb, var(--fail) 24%, var(--card)); }
+.wbv10-btn.handoff { background: color-mix(in srgb, var(--primary) 16%, var(--card)); color: var(--primary); }
+.wbv10-btn.ghost { background: transparent; color: var(--muted-fg); }
+.wbv10-btn.ghost:hover { background: var(--wash); color: var(--fg); }
+.wbv10-btn.ghost.is-on { background: color-mix(in srgb, var(--primary) 13%, var(--card)); color: var(--primary); }
+.wbv10-actions-right { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+
+/* Unified #r-convlive Host Container */
+.wbv10-convlive {
+  position: relative;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+  contain: layout style paint;
+  min-height: 118px;
+}
+.wbv10-canvas { display: block; width: 100%; height: 118px; cursor: pointer; }
+
+/* Inline Hover Quick-Disable ("모션 끄기") overlaid right beside live spinner row */
+.wbv10-hover-bar {
+  position: absolute;
+  right: 8px;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0;
+  transform: translateY(2px);
+  pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.wbv10-convlive:hover .wbv10-hover-bar,
+.wbv10-convlive:focus-within .wbv10-hover-bar {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.wbv10-quick-off {
+  appearance: none;
+  border: 0;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--muted-fg);
+  font: 600 11px/1 var(--sans);
+  padding: 5px 9px;
+  border-radius: 999px;
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--line);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color .14s ease, color .14s ease;
+}
+.wbv10-quick-off:hover { background: var(--muted); color: var(--fg); }
+
+/* Static fallback when Extra Motion is OFF */
+.wbv10-static-live { display: none; padding: 12px 14px; flex-direction: column; gap: 10px; }
+.wbv10-convlive.is-motion-off { min-height: 0; }
+.wbv10-convlive.is-motion-off .wbv10-canvas,
+.wbv10-convlive.is-motion-off .wbv10-hover-bar { display: none; }
+.wbv10-convlive.is-motion-off .wbv10-static-live { display: flex; }
+.wbv10-static-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.wbv10-static-sum b { color: var(--fg); font-weight: 600; }
+.wbv10-static-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.wbv10-static-runner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--well);
+}
+.wbv10-static-verb { font-weight: 700; color: var(--fg); flex: none; }
+.wbv10-static-arg {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.wbv10-static-on-btn {
+  appearance: none;
+  border: 0;
+  background: color-mix(in srgb, var(--primary) 15%, var(--card));
+  color: var(--primary);
+  font: 600 10.5px/1 var(--sans);
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+}
+.wbv10-static-on-btn:hover { background: color-mix(in srgb, var(--primary) 24%, var(--card)); }
+
+/* Conversation Stream (Axis A + Axis C) */
+.wbv10-conv { display: flex; flex-direction: column; gap: 10px; padding: 2px 2px 4px; }
+.wbv10-msg-user { align-self: flex-end; max-width: 86%; }
+.wbv10-mh {
+  font-size: 11.5px;
+  color: var(--muted-fg);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.wbv10-mh b { color: var(--fg); font-weight: 700; }
+.wbv10-user-bub {
+  background: color-mix(in srgb, var(--primary) 13%, var(--card));
+  color: var(--fg);
+  border-radius: 12px 12px 4px 12px;
+  padding: 8px 11px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Collapsed completed turn summary row (Axis A) */
+.wbv10-fold { align-self: stretch; min-width: 0; }
+.wbv10-fold > summary {
+  list-style: none;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 40px 18px;
+  column-gap: 8px;
+  align-items: center;
+  padding: 5px 6px 5px 2px;
+  border-radius: 8px;
+  color: var(--muted-fg);
+  font-size: 12.5px;
+  user-select: none;
+  transition: background-color .14s ease, color .14s ease;
+}
+.wbv10-fold > summary::-webkit-details-marker { display: none; }
+.wbv10-fold > summary:hover { background: color-mix(in srgb, var(--muted) 70%, transparent); color: var(--fg); }
+.wbv10-fold[open] > summary { color: var(--fg); }
+.wbv10-r-ico { display: flex; justify-content: center; align-items: center; color: var(--ok); font-size: 12px; font-weight: 700; }
+.wbv10-r-body { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 7px; min-width: 0; font-variant-numeric: tabular-nums; }
+.wbv10-r-cnt { color: var(--fg); font-weight: 600; }
+.wbv10-r-dot { opacity: .45; }
+.wbv10-r-tok { color: var(--primary); font-weight: 600; font-family: var(--mono); font-size: 11.5px; }
+.wbv10-r-folded-chip {
+  display: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.wbv10-root.is-wb-only .wbv10-r-folded-chip { display: inline-flex; align-items: center; }
+.wbv10-r-time { text-align: right; font-size: 11px; color: var(--muted-fg); font-variant-numeric: tabular-nums; }
+.wbv10-r-chev {
+  display: flex;
+  justify-content: center;
+  font-size: 11px;
+  opacity: .7;
+  transform: rotate(-90deg);
+  transition: transform .15s ease;
+}
+.wbv10-fold[open] > summary .wbv10-r-chev { transform: rotate(0deg); }
+
+.wbv10-brows {
+  margin: 4px 18px 0 34px;
+  padding: 7px 10px;
+  background: var(--card);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wbv10-brow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-fg); padding: 3px 5px; border-radius: 5px; }
+.wbv10-brow:hover { background: var(--wash); }
+.wbv10-fdot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.wbv10-btool { font-family: var(--mono); font-size: 11.5px; color: var(--fg); font-weight: 600; flex: none; }
+.wbv10-barg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.wbv10-bmeta { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.wbv10-folded-reply {
+  display: none;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--well);
+  color: var(--muted-fg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.wbv10-folded-reply-hd { font-size: 10.5px; font-weight: 700; color: var(--primary); margin-bottom: 3px; }
+.wbv10-root.is-wb-only .wbv10-folded-reply { display: block; }
+
+/* Preserved .wbeffects.wbupdate card */
+.wbv10-wbupdate { align-self: stretch; min-width: 0; }
+.wbv10-wbhead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 6px 5px 8px;
+  font-size: 11px;
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.wbv10-wbhead .wbv10-t { margin-left: auto; }
+.wbv10-wbtopic { border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); overflow: clip; }
+.wbv10-wbbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  padding: 5px 12px;
+  background: var(--topic);
+  color: var(--on-topic);
+  font-size: 13px;
+}
+.wbv10-wbbar b { font-weight: 700; }
+.wbv10-wbkey { font: 10.5px var(--mono); opacity: .7; }
+.wbv10-wblink { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--on-topic); opacity: .9; }
+.wbv10-wbrows { display: flex; flex-direction: column; gap: 4px; padding: 6px; }
+.wbv10-wbrow { display: flex; align-items: baseline; gap: 7px; padding: 2px 6px; font-size: 12.5px; color: var(--muted-fg); }
+.wbv10-wbl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.wbv10-wbl.recap { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+
+/* Assistant plain-text message (.msg.fromlead) */
+.wbv10-msg-lead-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows .2s ease, opacity .18s ease, margin .2s ease;
+}
+.wbv10-root.is-wb-only .wbv10-msg-lead-wrap {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: -10px;
+  pointer-events: none;
+}
+.wbv10-msg-lead-inner { overflow: hidden; }
+.wbv10-msg-lead { padding: 2px 8px 0; font-size: 13px; line-height: 1.55; color: var(--fg); }
+.wbv10-msg-lead-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted-fg);
+  margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.wbv10-msg-lead-hd b { color: var(--fg); font-weight: 700; }
+
+/* Composer with Bottom-Right "화이트보드 전용" Toggle (Axis C) */
+.wbv10-composer {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hi);
+  padding: 10px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.wbv10-crow { display: flex; align-items: flex-end; gap: 8px; }
+.wbv10-cfield {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--well);
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 11px;
+  color: var(--fg);
+  font: 13px/1.45 var(--sans);
+  resize: none;
+  min-height: 38px;
+}
+.wbv10-cfield::placeholder { color: var(--muted-fg); }
+.wbv10-cfield:focus { outline: 1.5px solid color-mix(in srgb, var(--primary) 55%, transparent); }
+.wbv10-csend-wrap { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.wbv10-mic {
+  appearance: none;
+  border: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--well);
+  color: var(--muted-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color .14s ease, color .14s ease;
+}
+.wbv10-mic:hover { background: var(--muted); color: var(--fg); }
+.wbv10-csend {
+  appearance: none;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: var(--primary-fg);
+  font: 700 12px/1 var(--sans);
+  cursor: pointer;
+  transition: filter .14s ease;
+}
+.wbv10-csend:hover { filter: brightness(1.06); }
+.wbv10-cfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; min-height: 24px; }
+.wbv10-ambient-hint { font-size: 11px; color: var(--muted-fg); line-height: 1.35; min-width: 0; }
+.wbv10-ambient-on {
+  display: none;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.wbv10-ambient-on code { font-family: var(--mono); font-size: 10.5px; color: var(--fg); }
+.wbv10-root.is-wb-only .wbv10-ambient-off { display: none; }
+.wbv10-root.is-wb-only .wbv10-ambient-on { display: inline-block; }
+
+.wbv10-wbonly-btn {
+  appearance: none;
+  border: 0;
+  background: var(--well);
+  color: var(--muted-fg);
+  font: 600 11px/1 var(--sans);
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+.wbv10-wbonly-btn:hover { background: var(--muted); color: var(--fg); }
+.wbv10-wbonly-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted-fg);
+  opacity: .55;
+  transition: background-color .14s ease, opacity .14s ease;
+}
+.wbv10-root.is-wb-only .wbv10-wbonly-btn {
+  background: color-mix(in srgb, var(--primary) 18%, var(--card));
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.wbv10-root.is-wb-only .wbv10-wbonly-dot { background: var(--primary); opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wbv10-msg-lead-wrap, .wbv10-hover-bar { transition: none; }
+}
+</style>
+
+<div class="wbv10-root" id="wbv10-root">
+  <div class="wbv10-shell">
+    <!-- Left Sidebar Strip with Bottom-Left Settings Popover Preview -->
+    <aside class="wbv10-rail" aria-label="대시보드 좌측 사이드바 및 설정 미리보기">
+      <div class="wbv10-rail-hd">
+        <span class="wbv10-rail-title">Werkschaft</span>
+        <span class="wbv10-rail-ver">v10 · 3-Axis</span>
+      </div>
+      <div class="wbv10-rail-nav">
+        <div class="wbv10-rail-item is-active">
+          <span class="wbv10-rail-dot"></span>
+          <span>lead · 대화창</span>
+        </div>
+        <div class="wbv10-rail-item">
+          <span class="wbv10-rail-dot dim"></span>
+          <span>ticket-worker</span>
+        </div>
+        <div class="wbv10-rail-item">
+          <span class="wbv10-rail-dot dim"></span>
+          <span>화이트보드</span>
+        </div>
+      </div>
+
+      <div class="wbv10-rail-spacer"></div>
+
+      <!-- Bottom-Left Settings Popover Preview -->
+      <div class="wbv10-settings-card" aria-label="좌하단 설정 팝오버">
+        <div class="wbv10-set-hd">
+          <span>설정</span>
+          <span class="wbv10-set-close" aria-hidden="true">×</span>
+        </div>
+
+        <div class="wbv10-set-sec">
+          <div class="wbv10-set-lbl">입력 방식</div>
+          <button type="button" class="wbv10-set-opt is-active" data-set-group="input">
+            <span class="wbv10-set-ico">↵</span>
+            <span class="wbv10-set-opt-body"><span>Enter로 전송</span></span>
+          </button>
+          <button type="button" class="wbv10-set-opt" data-set-group="input">
+            <span class="wbv10-set-ico">^↵</span>
+            <span class="wbv10-set-opt-body"><span>Ctrl/Cmd+Enter로 전송</span></span>
+          </button>
+        </div>
+
+        <div class="wbv10-set-sec">
+          <div class="wbv10-set-lbl">테마</div>
+          <button type="button" class="wbv10-set-opt is-active" data-set-group="theme">
+            <span class="wbv10-set-ico">◐</span>
+            <span class="wbv10-set-opt-body"><span>시스템 설정 따르기</span></span>
+          </button>
+          <button type="button" class="wbv10-set-opt" data-set-group="theme">
+            <span class="wbv10-set-ico">○</span>
+            <span class="wbv10-set-opt-body"><span>라이트</span></span>
+          </button>
+          <button type="button" class="wbv10-set-opt" data-set-group="theme">
+            <span class="wbv10-set-ico">●</span>
+            <span class="wbv10-set-opt-body"><span>다크</span></span>
+          </button>
+        </div>
+
+        <div class="wbv10-set-sec" role="radiogroup" aria-label="Extra Motion">
+          <div class="wbv10-set-lbl">Extra Motion</div>
+          <button type="button" class="wbv10-set-opt is-active" id="wbv10-motion-on" role="radio" aria-checked="true">
+            <span class="wbv10-set-ico">✦</span>
+            <span class="wbv10-set-opt-body">
+              <span>켜기</span>
+              <span class="wbv10-set-opt-sub">툴·상태별 물감 라이브 연출 표시 · 호버 시 즉시 끄기 가능</span>
+            </span>
+          </button>
+          <button type="button" class="wbv10-set-opt" id="wbv10-motion-off" role="radio" aria-checked="false">
+            <span class="wbv10-set-ico">○</span>
+            <span class="wbv10-set-opt-body">
+              <span>끄기</span>
+              <span class="wbv10-set-opt-sub">정적 상태 점만 표시 · prefers-reduced-motion 자동 준수</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="wbv10-set-foot">
+          <div class="wbv10-set-hint">이 브라우저에 저장됩니다.</div>
+          <div class="wbv10-raf-pill" id="wbv10-raf-pill" title="유휴 상태 또는 Extra Motion OFF 시 requestAnimationFrame 완전 정지">
+            <span class="wbv10-raf-dot"></span>
+            <span id="wbv10-raf-text">rAF 활성 (60/15fps)</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Column -->
+    <div class="wbv10-main">
+      <!-- 1. Axis B Controls & Unified #r-convlive Stage -->
+      <section class="wbv10-stage-card" aria-label="통합 Extra Motion 라이브 스테이지 v10">
+        <div class="wbv10-stage-top">
+          <span class="wbv10-stage-kicker">Axis B · <code>#r-convlive</code> 휘잉-스톱-슈욱 · 동적 토큰 타깃</span>
+          <span class="wbv10-stage-tag" id="wbv10-stage-tag">연속 체인 준비</span>
+        </div>
+
+        <!-- 6 Category / State Selector Pills -->
+        <div class="wbv10-cats" role="tablist" aria-label="툴 카테고리 및 추론 상태 선택">
+          <button type="button" class="wbv10-cat is-active" data-cat="exec" style="--cat-col:#e5b567">
+            <span class="wbv10-cat-dot"></span>ws/exec · 쉘
+          </button>
+          <button type="button" class="wbv10-cat" data-cat="tickets" style="--cat-col:#7aa2ff">
+            <span class="wbv10-cat-dot"></span>ws/tickets · 보드
+          </button>
+          <button type="button" class="wbv10-cat" data-cat="agent" style="--cat-col:#b392f0">
+            <span class="wbv10-cat-dot"></span>ws/agent · 메일
+          </button>
+          <button type="button" class="wbv10-cat" data-cat="git" style="--cat-col:#5ccfe6">
+            <span class="wbv10-cat-dot"></span>ws/git · 워크트리
+          </button>
+          <button type="button" class="wbv10-cat" data-cat="file" style="--cat-col:#8ea6c8">
+            <span class="wbv10-cat-dot"></span>파일 · 일반 툴
+          </button>
+          <button type="button" class="wbv10-cat" data-cat="thinking" style="--cat-col:#96a8e8">
+            <span class="wbv10-cat-dot"></span>생각 중 (추론)
+          </button>
+        </div>
+
+        <!-- Action Triggers -->
+        <div class="wbv10-actions">
+          <button type="button" class="wbv10-btn chain" id="wbv10-chain-btn" title="생각 중 → pop-in 연속 툴 호출(성공·실패·동적 토큰X 이동) → 유휴(0 rAF)">▶ 연속 체인 시연</button>
+          <button type="button" class="wbv10-btn ok" id="wbv10-play-ok">✓ 성공</button>
+          <button type="button" class="wbv10-btn fail" id="wbv10-play-fail">✕ 실패</button>
+          <button type="button" class="wbv10-btn handoff" id="wbv10-handoff-btn" style="display:none">툴 실행 전환 ▶</button>
+          <span class="wbv10-actions-right">
+            <button type="button" class="wbv10-btn ghost" id="wbv10-auto-btn" aria-pressed="false" title="ON 시 자동 반복, OFF 시 시연 종료 후 0 rAF 유휴">자동 반복</button>
+            <button type="button" class="wbv10-btn ghost" id="wbv10-guide-btn" aria-pressed="false" title="궤적 곡선 및 피크스톱 정점 표시">궤적 힌트</button>
+          </span>
+        </div>
+
+        <!-- Unified #r-convlive Host -->
+        <div class="wbv10-convlive" id="wbv10-convlive">
+          <canvas
+            class="wbv10-canvas"
+            id="wbv10-canvas"
+            aria-label="좌하단에서 우상단 동적 토큰 마커로 휘잉-피크스톱-슈욱 수렴하며 +m 대미지 숫자가 뜨는 라이브 애니메이션"
+          ></canvas>
+
+          <!-- Inline Hover Quick-Disable -->
+          <div class="wbv10-hover-bar">
+            <button type="button" class="wbv10-quick-off" id="wbv10-quick-off" title="Extra Motion 즉시 끄기 (좌하단 설정과 연동)">
+              <span>모션 끄기</span>
+            </button>
+          </div>
+
+          <!-- Static semantic dot fallback when Extra Motion is OFF -->
+          <div class="wbv10-static-live" id="wbv10-static-live">
+            <div class="wbv10-static-sum">
+              <span class="wbv10-static-dot" id="wbv10-st-sum-dot" style="background:#6cc39a"></span>
+              <b id="wbv10-st-sum-cnt">4개 툴 호출</b>
+              <span id="wbv10-st-sum-time">· 6.2s ·</span>
+              <span id="wbv10-st-sum-fail" style="color:#f0797e;font-weight:700;display:none"></span>
+              <span id="wbv10-st-sum-tok" style="color:#7aa2ff;font-weight:600;font-family:var(--mono)">+1.1k tok</span>
+            </div>
+            <div class="wbv10-static-runner">
+              <span class="wbv10-static-dot" id="wbv10-st-run-dot" style="background:#e5b567"></span>
+              <span class="wbv10-static-verb" id="wbv10-st-run-verb">실행 중</span>
+              <span class="wbv10-static-arg" id="wbv10-st-run-arg">go test ./internal/wsdashboard</span>
+              <button type="button" class="wbv10-static-on-btn" id="wbv10-quick-on">모션 켜기</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Realistic Conversation Stream (Axis A + Axis C) -->
+      <div class="wbv10-conv" aria-label="대화창 스트림 미리보기">
+        <div class="wbv10-msg-user">
+          <div class="wbv10-mh"><b>나</b> <span>22:32</span></div>
+          <div class="wbv10-user-bub">3축 구조대로 툴 요약 접힘이랑 화이트보드 전용 모드까지 정리해줘</div>
+        </div>
+
+        <details class="wbv10-fold" id="wbv10-fold">
+          <summary>
+            <span class="wbv10-r-ico">✓</span>
+            <span class="wbv10-r-body">
+              <span class="wbv10-r-cnt">7개 툴 호출</span>
+              <span class="wbv10-r-dot">·</span>
+              <span>11.4s</span>
+              <span class="wbv10-r-dot">·</span>
+              <span class="wbv10-r-tok">+2.8k tok</span>
+              <span class="wbv10-r-folded-chip">· 일반 응답 접힘</span>
+            </span>
+            <span class="wbv10-r-time">22:32</span>
+            <span class="wbv10-r-chev">▾</span>
+          </summary>
+          <div class="wbv10-brows">
+            <div class="wbv10-brow">
+              <span class="wbv10-fdot" style="background:#e5b567" title="ws/exec"></span>
+              <span class="wbv10-btool">ws/exec.run</span>
+              <span class="wbv10-barg">go test ./internal/wsdashboard/...</span>
+              <span class="wbv10-bmeta">3.4s · +340</span>
+            </div>
+            <div class="wbv10-brow">
+              <span class="wbv10-fdot" style="background:#7aa2ff" title="ws/tickets"></span>
+              <span class="wbv10-btool">ws/tickets.query</span>
+              <span class="wbv10-barg">261125-feat-conv-ux-restyle</span>
+              <span class="wbv10-bmeta">0.4s · +210</span>
+            </div>
+            <div class="wbv10-brow">
+              <span class="wbv10-fdot" style="background:#b392f0" title="ws/agent"></span>
+              <span class="wbv10-btool">ws/mailbox.send</span>
+              <span class="wbv10-barg">id:lead · v10 모션 텐션 시안 공유</span>
+              <span class="wbv10-bmeta">0.6s · +520</span>
+            </div>
+            <div class="wbv10-brow">
+              <span class="wbv10-fdot" style="background:#5ccfe6" title="ws/git"></span>
+              <span class="wbv10-btool">ws/git.status</span>
+              <span class="wbv10-barg">develop · clean worktree</span>
+              <span class="wbv10-bmeta">0.3s · +180</span>
+            </div>
+            <div class="wbv10-brow">
+              <span class="wbv10-fdot" style="background:#8ea6c8" title="파일 · 일반 툴"></span>
+              <span class="wbv10-btool">read_file</span>
+              <span class="wbv10-barg">dashboard-conversation.css</span>
+              <span class="wbv10-bmeta">0.5s · +1.6k</span>
+            </div>
+
+            <div class="wbv10-folded-reply">
+              <div class="wbv10-folded-reply-hd">일반 응답 (화이트보드 전용으로 자동 접힘)</div>
+              <div>3축 구조와 v10 휘잉-피크스톱-슈욱 모션 엔진을 화이트보드에 반영했습니다. 좌하단 설정과 스피너 호버에서 Extra Motion을 즉시 제어할 수 있습니다.</div>
+            </div>
+          </div>
+        </details>
+
+        <div class="wbv10-wbupdate">
+          <div class="wbv10-wbhead">
+            <span>화이트보드 업데이트 확정됨</span>
+            <span class="wbv10-t">22:32</span>
+          </div>
+          <div class="wbv10-wbtopic">
+            <div class="wbv10-wbbar">
+              <b>대화창 UX 리스타일</b>
+              <span class="wbv10-wbkey">conv-ux-restyle</span>
+              <span class="wbv10-wblink">토픽 ↗</span>
+            </div>
+            <div class="wbv10-wbrows">
+              <div class="wbv10-wbrow">
+                <span class="wbv10-wbl">L</span>
+                <span>v10 모션 텐션(가속-피크스톱-가속) · 5종 궤적 다양화 · 동적 우상단 토큰 마커 수렴 &amp; +m 대미지 팝업 반영.</span>
+              </div>
+              <div class="wbv10-wbrow">
+                <span class="wbv10-wbl recap">P</span>
+                <span>생각 중 → 툴 팝인 및 연속 툴 체인 시연 구현 완료 — 유휴/OFF 시 0 rAF 검증.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="wbv10-msg-lead-wrap" aria-live="polite">
+          <div class="wbv10-msg-lead-inner">
+            <div class="wbv10-msg-lead">
+              <div class="wbv10-msg-lead-hd"><b>리드</b> <span>22:32</span></div>
+              <div>3축 구조와 v10 휘잉-피크스톱-슈욱 모션 엔진을 화이트보드에 반영했습니다. 좌하단 설정과 스피너 호버에서 Extra Motion을 즉시 제어할 수 있습니다.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Composer with Bottom-Right "화이트보드 전용" Toggle (Axis C) -->
+      <div class="wbv10-composer" aria-label="메시지 컴포저">
+        <div class="wbv10-crow">
+          <textarea
+            class="wbv10-cfield"
+            rows="1"
+            placeholder="메시지 입력… (우하단 '화이트보드 전용'을 눌러 일반 응답 접힘을 확인하세요)"
+            aria-label="메시지 입력"
+          ></textarea>
+          <div class="wbv10-csend-wrap">
+            <button type="button" class="wbv10-mic" title="음성 입력 (STT)" aria-label="음성 입력">🎤</button>
+            <button type="button" class="wbv10-csend" id="wbv10-send-btn">전송</button>
+          </div>
+        </div>
+        <div class="wbv10-cfoot">
+          <div class="wbv10-ambient-hint">
+            <span class="wbv10-ambient-off">일반 대화 모드 · 화이트보드 카드와 일반 응답 모두 표시</span>
+            <span class="wbv10-ambient-on">🔒 <code>&lt;ws-ambient&gt;</code> 화이트보드 전용 프롬프트 주입 활성 (유저 말풍선 미노출 · 일반 응답 자동 접힘)</span>
+          </div>
+          <button
+            type="button"
+            class="wbv10-wbonly-btn"
+            id="wbv10-wbonly-btn"
+            aria-pressed="false"
+            title="화이트보드 전용 모드 토글 (일반 응답을 상단 툴 요약 서랍으로 자동 접음)"
+          >
+            <span class="wbv10-wbonly-dot"></span>
+            <span>화이트보드 전용</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById("wbv10-root");
+  if (!root) return;
+
+  var BG_HEX = "#141518";
+  var GREEN = [108, 195, 154];
+  var GREEN_HI = [217, 247, 232];
+  var RED = [240, 121, 126];
+  var RED_HI = [255, 210, 212];
+  var FG = "#e7e7e4";
+  var MUTED_FG = "#a2a6ad";
+  var PRIMARY_HEX = "#7aa2ff";
+  var OK_HEX = "#6cc39a";
+  var FAIL_HEX = "#f0797e";
+  var SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif';
+  var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+  var CATEGORIES = {
+    exec: {
+      id: "exec", label: "ws/exec · 쉘", hex: "#e5b567", rgb: [229, 181, 103], hi: [253, 232, 188],
+      verb: "실행 중", arg: "go test ./internal/wsdashboard", swayStyle: "spark", swayAmp: 14.5, tokRange: [260, 480]
+    },
+    tickets: {
+      id: "tickets", label: "ws/tickets · 보드", hex: "#7aa2ff", rgb: [122, 162, 255], hi: [210, 220, 246],
+      verb: "보드 갱신", arg: "261125-feat-conv-ux-restyle", swayStyle: "classic", swayAmp: 13.5, tokRange: [180, 320]
+    },
+    agent: {
+      id: "agent", label: "ws/agent · 메일", hex: "#b392f0", rgb: [179, 146, 240], hi: [230, 217, 253],
+      verb: "통신 중", arg: "mailbox.send → ticket-worker", swayStyle: "orbit", swayAmp: 13.0, tokRange: [380, 620]
+    },
+    git: {
+      id: "git", label: "ws/git · 워크트리", hex: "#5ccfe6", rgb: [92, 207, 230], hi: [198, 243, 252],
+      verb: "워크트리", arg: "impl/develop/conv-ux-restyle", swayStyle: "weave", swayAmp: 13.8, tokRange: [140, 260]
+    },
+    file: {
+      id: "file", label: "파일 · 일반 툴", hex: "#8ea6c8", rgb: [142, 166, 200], hi: [214, 226, 242],
+      verb: "읽는 중", arg: "dashboard-conversation.css", swayStyle: "classic", swayAmp: 13.0, tokRange: [220, 460]
+    },
+    thinking: {
+      id: "thinking", label: "생각 중 (추론)", hex: "#96a8e8", rgb: [150, 168, 232], hi: [221, 228, 252],
+      verb: "생각 중", arg: "대화창 툴 요약·Extra Motion·화이트보드 전용 경계를 정리하는 중…", swayStyle: "thinking", swayAmp: 0, tokRange: [0, 0]
+    }
+  };
+
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function randRange(lo, hi) { return lo + Math.random() * (hi - lo); }
+  function mixRgb(c1, c2, t) {
+    t = clamp(t, 0, 1);
+    return [
+      Math.round(lerp(c1[0], c2[0], t)),
+      Math.round(lerp(c1[1], c2[1], t)),
+      Math.round(lerp(c1[2], c2[2], t))
+    ];
+  }
+  function rgba(c, a) {
+    return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + clamp(a, 0, 1).toFixed(3) + ")";
+  }
+  function formatTokens(n) {
+    if (n >= 1000) return "+" + (n / 1000).toFixed(1) + "k tok";
+    return "+" + Math.round(n) + " tok";
+  }
+
+  // 1D Piecewise Cubic Hermite (for modern 3-beat tension time-warp)
+  function evalHermite1D(keys, t) {
+    t = clamp(t, 0, 1);
+    var i = 0;
+    while (i < keys.length - 2 && t > keys[i + 1].t) i++;
+    var k0 = keys[i], k1 = keys[i + 1];
+    var dt = k1.t - k0.t;
+    var s = dt > 0 ? (t - k0.t) / dt : 0;
+    var s2 = s * s, s3 = s2 * s;
+    var h00 = 2 * s3 - 3 * s2 + 1;
+    var h10 = s3 - 2 * s2 + s;
+    var h01 = -2 * s3 + 3 * s2;
+    var h11 = s3 - s2;
+    var v = h00 * k0.v + h10 * dt * k0.m + h01 * k1.v + h11 * dt * k1.m;
+    var dh00 = (6 * s2 - 6 * s) / dt;
+    var dh10 = (3 * s2 - 4 * s + 1);
+    var dh01 = (-6 * s2 + 6 * s) / dt;
+    var dh11 = (3 * s2 - 2 * s);
+    var dv = dh00 * k0.v + dh10 * k0.m + dh01 * k1.v + dh11 * k1.m;
+    return { v: clamp(v, 0, 1), dv: Math.max(0.02, dv) };
+  }
+
+  // Modern 3-beat tension curve:
+  // Beat 1 (0..0.41): brisk launch accelerate ("휘잉—") into apex (u=0.50)
+  // Beat 2 (0.41..0.57): poised apex peak-stop / hang (velocity dips to ~0.14)
+  // Beat 3 (0.57..1.00): razor-sharp snap-dive accelerate ("—슈욱!") into target
+  var TENSION_KEYS = [
+    { t: 0.00, v: 0.00, m: 1.35 },
+    { t: 0.41, v: 0.50, m: 0.13 },
+    { t: 0.57, v: 0.53, m: 0.16 },
+    { t: 1.00, v: 1.00, m: 2.55 }
+  ];
+  function warpTension(uRaw) {
+    return evalHermite1D(TENSION_KEYS, uRaw);
+  }
+
+  // 2D Piecewise Cubic Hermite spline evaluation
+  function evalHermite2D(keys, u) {
+    u = clamp(u, 0, 1);
+    var i = 0;
+    while (i < keys.length - 2 && u > keys[i + 1].u) i++;
+    var k0 = keys[i], k1 = keys[i + 1];
+    var du = k1.u - k0.u;
+    var s = du > 0 ? (u - k0.u) / du : 0;
+    var s2 = s * s, s3 = s2 * s;
+    var h00 = 2 * s3 - 3 * s2 + 1;
+    var h10 = s3 - 2 * s2 + s;
+    var h01 = -2 * s3 + 3 * s2;
+    var h11 = s3 - s2;
+    var x = h00 * k0.x + h10 * du * k0.tx + h01 * k1.x + h11 * du * k1.tx;
+    var y = h00 * k0.y + h10 * du * k0.ty + h01 * k1.y + h11 * du * k1.ty;
+    var dh00 = (6 * s2 - 6 * s) / du;
+    var dh10 = (3 * s2 - 4 * s + 1);
+    var dh01 = (-6 * s2 + 6 * s) / du;
+    var dh11 = (3 * s2 - 2 * s);
+    var vx = dh00 * k0.x + dh10 * k0.tx + dh01 * k1.x + dh11 * k1.tx;
+    var vy = dh00 * k0.y + dh10 * k0.ty + dh01 * k1.y + dh11 * k1.ty;
+    return { x: x, y: y, vx: vx, vy: vy };
+  }
+
+  // Organic wet paint blob oriented along angle
+  function drawPaintBlob(ctx, x, y, rx, ry, angle, wobblePhase, fillCol, hiCol, alpha, lobes) {
+    if (alpha <= 0.005 || rx <= 0.25 || ry <= 0.25) return;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.globalAlpha = clamp(alpha, 0, 1);
+
+    var n = 22;
+    var lob = lobes || 3;
+    ctx.beginPath();
+    for (var i = 0; i <= n; i++) {
+      var a = (i / n) * Math.PI * 2;
+      var nose = 1 + 0.14 * Math.cos(a);
+      var wob = 1 + 0.09 * Math.sin(a * lob + wobblePhase) + 0.05 * Math.cos(a * (lob + 2) - wobblePhase * 1.3);
+      var px = Math.cos(a) * rx * nose * wob;
+      var py = Math.sin(a) * ry * (1 - 0.10 * Math.cos(a)) * wob;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgba(fillCol, 1);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.ellipse(rx * 0.22, -ry * 0.26, rx * 0.34, ry * 0.20, -0.25, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(hiCol, 0.58);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Calligraphic tapering brushstroke ribbon tail
+  function drawBrushTail(ctx, pts) {
+    if (pts.length < 2) return;
+    var left = [];
+    var right = [];
+    var n = pts.length;
+    for (var i = 0; i < n; i++) {
+      var p = pts[i];
+      var prev = pts[i > 0 ? i - 1 : i];
+      var next = pts[i < n - 1 ? i + 1 : i];
+      var dx = next.x - prev.x;
+      var dy = next.y - prev.y;
+      var len = Math.hypot(dx, dy) || 1;
+      var nx = -dy / len;
+      var ny = dx / len;
+      var frac = i / (n - 1);
+      var w = p.r * Math.pow(frac, 1.35);
+      left.push({ x: p.x + nx * w, y: p.y + ny * w });
+      right.push({ x: p.x - nx * w, y: p.y - ny * w });
+    }
+
+    for (var j = 0; j < n - 1; j++) {
+      var frac1 = (j + 1) / (n - 1);
+      var p1 = pts[j + 1];
+      var alpha = p1.a * Math.pow(frac1, 1.25) * 0.86;
+      if (alpha < 0.01) continue;
+      ctx.beginPath();
+      ctx.moveTo(left[j].x, left[j].y);
+      ctx.lineTo(left[j + 1].x, left[j + 1].y);
+      ctx.lineTo(right[j + 1].x, right[j + 1].y);
+      ctx.lineTo(right[j].x, right[j].y);
+      ctx.closePath();
+      ctx.fillStyle = rgba(p1.col, alpha);
+      ctx.fill();
+    }
+
+    var start = Math.floor(n * 0.35);
+    if (n - start >= 2) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (var k = start; k < n - 1; k++) {
+        var f = (k - start) / Math.max(1, n - 1 - start);
+        ctx.beginPath();
+        ctx.moveTo(pts[k].x, pts[k].y);
+        ctx.lineTo(pts[k + 1].x, pts[k + 1].y);
+        ctx.strokeStyle = rgba(pts[k + 1].hi, f * f * pts[k + 1].a * 0.50);
+        ctx.lineWidth = Math.max(0.8, pts[k + 1].r * 0.34 * f);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  // Compact organic multi-lobe splat at token marker on FAIL impact
+  function drawSplat(ctx, cx, cy, scale, alpha, dripY, seed) {
+    if (alpha <= 0.01 || scale <= 0.02) return;
+    var sd = seed || 0;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.globalAlpha = clamp(alpha, 0, 1);
+    ctx.scale(scale, scale);
+
+    ctx.beginPath();
+    var lobes = 8 + Math.floor((sd * 3.7) % 3);
+    var steps = 48;
+    for (var i = 0; i <= steps; i++) {
+      var a = (i / steps) * Math.PI * 2;
+      var spike = Math.pow(Math.max(0, Math.sin(a * lobes * 0.5 + 0.4 + sd * 2.1)), 2.15);
+      var asym = 1 + 0.25 * Math.cos(a * 3 - 0.8 + sd * 1.7) + 0.15 * Math.sin(a * 5 + 1.2 - sd * 1.3);
+      var r = (9.0 + 7.4 * spike) * asym;
+      var px = Math.cos(a) * r;
+      var py = Math.sin(a) * r * (0.78 + 0.10 * Math.sin(sd * 3.1));
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgba(RED, 0.94);
+    ctx.fill();
+
+    if (dripY > 0.5) {
+      var dxOff = Math.sin(sd * 5.3) * 2.8;
+      ctx.beginPath();
+      ctx.moveTo(dxOff + 1.8, 5);
+      ctx.quadraticCurveTo(dxOff + 3.6, 5 + dripY * 0.65, dxOff + 2.2, 7 + dripY);
+      ctx.arc(dxOff + 1.0, 7 + dripY, 1.9, 0, Math.PI, false);
+      ctx.quadraticCurveTo(dxOff - 0.5, 5 + dripY * 0.65, dxOff - 1.3, 5);
+      ctx.closePath();
+      ctx.fillStyle = rgba(RED, 0.88);
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.ellipse(-2.8, -3.0, 3.1, 1.8, -0.45, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(RED_HI, 0.52);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Thinking / Reasoning 15fps layered breathing painterly ink-cloud bloom
+  function drawThinkingCloud(ctx, cx, cy, tq, col, hiCol, alpha, scaleOverride) {
+    if (alpha <= 0.01) return;
+    var sc = typeof scaleOverride === "number" ? scaleOverride : 1;
+    if (sc <= 0.02) return;
+    var breath = 0.5 + 0.5 * Math.sin(tq * 2.35);
+    var slowDrift = tq * 0.72;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(sc, sc);
+    ctx.globalAlpha = clamp(alpha, 0, 1);
+
+    var haloR = 13.5 + breath * 4.5;
+    var grad = ctx.createRadialGradient(0, 0, 3, 0, 0, haloR);
+    grad.addColorStop(0, rgba(col, 0.24 + breath * 0.12));
+    grad.addColorStop(1, rgba(col, 0));
+    ctx.beginPath();
+    ctx.arc(0, 0, haloR, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    var layers = [
+      { ox: Math.cos(slowDrift) * 2.4, oy: Math.sin(slowDrift * 1.1) * 1.8, r: 9.2 + breath * 1.8, a: 0.34, ph: slowDrift },
+      { ox: Math.cos(slowDrift + 2.1) * 2.1, oy: Math.sin(slowDrift * 0.9 + 2.1) * 1.6, r: 7.8 + (1 - breath) * 1.5, a: 0.52, ph: -slowDrift * 1.2 },
+      { ox: 0, oy: Math.sin(tq * 1.8) * 0.9, r: 6.4 + breath * 1.2, a: 0.88, ph: slowDrift * 0.8 }
+    ];
+    for (var li = 0; li < layers.length; li++) {
+      var L = layers[li];
+      ctx.beginPath();
+      var steps = 26;
+      for (var i = 0; i <= steps; i++) {
+        var ang = (i / steps) * Math.PI * 2;
+        var wob = 1 + 0.12 * Math.sin(ang * 3 + L.ph) + 0.07 * Math.cos(ang * 5 - L.ph * 1.4);
+        var px = L.ox + Math.cos(ang) * L.r * wob;
+        var py = L.oy + Math.sin(ang) * L.r * 0.86 * wob;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = rgba(li === 2 ? col : mixRgb(col, hiCol, 0.28), L.a);
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.ellipse(-1.4, -1.8, 3.0 + breath * 0.5, 1.9 + breath * 0.3, -0.35, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(hiCol, 0.55);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // =========================================================
+  // 5 Diverse Directional OK Trajectory Archetypes
+  // Bottom-Left (ox, oy) -> Poised Apex (u = 0.51) -> Dynamic Top-Right Token (tx, ty)
+  // Zero repetitive multi-loop spinning; modern "휘잉-피크스톱-슈욱" tension!
+  // =========================================================
+  var OK_ARCHETYPES = [
+    { id: 0, name: "하이 로프트" },
+    { id: 1, name: "언더 스쿱" },
+    { id: 2, name: "대각 S-윕" },
+    { id: 3, name: "싱글 뱅크" },
+    { id: 4, name: "스냅 다트" }
+  ];
+
+  function buildOkFlightProfile(lastKind, ox, oy, tx, ty, launchVx, launchVy, W) {
+    var pick = Math.floor(Math.random() * OK_ARCHETYPES.length);
+    if (pick === lastKind) {
+      pick = (pick + 1 + Math.floor(Math.random() * (OK_ARCHETYPES.length - 1))) % OK_ARCHETYPES.length;
+    }
+    var arch = OK_ARCHETYPES[pick];
+    var dx = Math.max(80, tx - ox);
+    var dur, keys, apexX, apexY;
+
+    if (arch.id === 0) {
+      // 1. High Loft Apex Dive: shoots steeply upward/center-high, hangs poised, dives diagonally right
+      dur = randRange(0.84, 0.94);
+      apexX = clamp(ox + dx * randRange(0.24, 0.42), 54, tx - 35);
+      apexY = randRange(11, 20);
+      keys = [
+        { u: 0.00, x: ox,    y: oy,    tx: launchVx * dur,             ty: -randRange(145, 205) },
+        { u: 0.51, x: apexX, y: apexY, tx: dx * randRange(0.55, 0.85), ty: randRange(-10, 14) },
+        { u: 1.00, x: tx,    y: ty,    tx: dx * randRange(0.85, 1.15), ty: randRange(40, 85) }
+      ];
+    } else if (arch.id === 1) {
+      // 2. Under-Scoop Slingshot: dips gracefully down, pauses at low-mid inflection, rockets up-right
+      dur = randRange(0.86, 0.96);
+      apexX = clamp(ox + dx * randRange(0.52, 0.70), ox + 65, Math.min(W - 40, tx + 24));
+      apexY = randRange(96, 106);
+      keys = [
+        { u: 0.00, x: ox,    y: oy,    tx: launchVx * dur + 50,         ty: randRange(55, 95) },
+        { u: 0.51, x: apexX, y: apexY, tx: dx * randRange(0.65, 0.95),  ty: randRange(-18, 8) },
+        { u: 1.00, x: tx,    y: ty,    tx: -randRange(20, 65),          ty: -randRange(165, 220) }
+      ];
+    } else if (arch.id === 2) {
+      // 3. Tight Diagonal S-Whip: sleek compact S-curve directly across middle with mid-crest hang
+      dur = randRange(0.80, 0.90);
+      apexX = clamp(ox + dx * randRange(0.46, 0.58), ox + 55, tx - 30);
+      apexY = randRange(44, 56);
+      keys = [
+        { u: 0.00, x: ox,    y: oy,    tx: launchVx * dur + 70,         ty: randRange(-35, 10) },
+        { u: 0.51, x: apexX, y: apexY, tx: dx * randRange(0.28, 0.48),  ty: -randRange(95, 130) },
+        { u: 1.00, x: tx,    y: ty,    tx: dx * randRange(0.70, 1.05),  ty: randRange(-15, 22) }
+      ];
+    } else if (arch.id === 3) {
+      // 4. Sleek Single Ribbon Bank: ONE tight elegant outer curve slightly past tx, poised crest, snap home
+      dur = randRange(0.88, 0.98);
+      apexX = clamp(tx + randRange(56, 98), tx + 44, W - 26);
+      apexY = randRange(56, 70);
+      keys = [
+        { u: 0.00, x: ox,    y: oy,    tx: launchVx * dur + 110,        ty: randRange(15, 45) },
+        { u: 0.51, x: apexX, y: apexY, tx: randRange(15, 48),           ty: -randRange(115, 155) },
+        { u: 1.00, x: tx,    y: ty,    tx: -randRange(160, 230),        ty: randRange(-25, 18) }
+      ];
+    } else {
+      // 5. Short Punchy Snap-Dart: low-arc, tight-radius dart — fast rise, crisp micro-hang, sharp strike
+      dur = randRange(0.72, 0.80);
+      apexX = clamp(ox + dx * randRange(0.40, 0.54), ox + 50, tx - 32);
+      apexY = randRange(58, 68);
+      keys = [
+        { u: 0.00, x: ox,    y: oy,    tx: launchVx * dur + 40,         ty: -randRange(45, 75) },
+        { u: 0.51, x: apexX, y: apexY, tx: dx * randRange(0.70, 0.95),  ty: -randRange(55, 85) },
+        { u: 1.00, x: tx,    y: ty,    tx: dx * randRange(0.85, 1.15),  ty: -randRange(35, 65) }
+      ];
+    }
+
+    return {
+      kind: arch.id,
+      name: arch.name,
+      dur: dur,
+      keys: keys,
+      apexX: apexX,
+      apexY: apexY,
+      dropOffset: randRange(-0.02, 0.02)
+    };
+  }
+
+  // Frail, sputtering, jittery FAIL trajectory into dynamic top-right token marker (tx, ty)
+  var FAIL_ARCHETYPES = [
+    { id: 0, name: "비실비실 기진맥진" },
+    { id: 1, name: "덜덜 지그재그" },
+    { id: 2, name: "푸드득 실속" }
+  ];
+
+  function buildFailFlightProfile(lastKind, ox, oy, tx, ty, launchVx, W) {
+    var pick = Math.floor(Math.random() * FAIL_ARCHETYPES.length);
+    if (pick === lastKind) {
+      pick = (pick + 1 + Math.floor(Math.random() * (FAIL_ARCHETYPES.length - 1))) % FAIL_ARCHETYPES.length;
+    }
+    var arch = FAIL_ARCHETYPES[pick];
+    var dx = Math.max(80, tx - ox);
+    var dur = randRange(1.12, 1.28);
+    var midX = clamp(ox + dx * randRange(0.45, 0.68), ox + 55, W - 36);
+    var midY = arch.id === 0 ? randRange(76, 92) : arch.id === 1 ? randRange(54, 68) : randRange(66, 84);
+    var keys = [
+      { u: 0.00, x: ox,   y: oy,   tx: launchVx * dur * 0.72,           ty: arch.id === 1 ? -40 : 28 },
+      { u: 0.54, x: midX, y: midY, tx: dx * randRange(0.32, 0.55),      ty: arch.id === 2 ? 32 : -55 },
+      { u: 1.00, x: tx,   y: ty,   tx: dx * randRange(0.28, 0.46),      ty: -randRange(40, 80) }
+    ];
+    return {
+      kind: arch.id,
+      name: arch.name,
+      dur: dur,
+      keys: keys,
+      jitterAmp: randRange(5.0, 7.2),
+      jitterFreq: randRange(48, 68),
+      sputterDepth: randRange(0.025, 0.036),
+      sputterCount: arch.id === 1 ? 4.5 : 3.5,
+      shiverSeed: randRange(0.5, 9.5),
+      splatSeed: randRange(0.2, 9.8)
+    };
+  }
+
+  function warpFail(uRaw, prof) {
+    var u = clamp(uRaw, 0, 1);
+    var env = Math.sin(Math.PI * u) * Math.sin(Math.PI * u);
+    var sputter = prof.sputterDepth * Math.sin(u * Math.PI * 2 * prof.sputterCount + prof.shiverSeed) * env;
+    return clamp(u + sputter, 0, 1);
+  }
+
+  function evalFlightPos(prof, mode, uRaw, W) {
+    if (mode === "ok") {
+      var w = warpTension(uRaw);
+      var p = evalHermite2D(prof.keys, w.v);
+      return { x: clamp(p.x, 10, W - 10), y: clamp(p.y, 8, 110), tensionSpeed: w.dv };
+    }
+    var uf = warpFail(uRaw, prof);
+    var pf = evalHermite2D(prof.keys, uf);
+    var jEnv = Math.pow(Math.sin(Math.PI * uRaw), 1.35);
+    var sd = prof.shiverSeed;
+    var freq = prof.jitterFreq;
+    var qStep = Math.floor(uRaw * 24) / 24;
+    var jitX = (
+      Math.sin(uRaw * freq + sd) * 0.55 +
+      Math.sin(uRaw * freq * 1.93 + sd * 2.1) * 0.30 +
+      Math.sin(qStep * 43 + sd * 3.7) * 0.35
+    ) * prof.jitterAmp * 0.85 * jEnv;
+    var jitY = (
+      Math.cos(uRaw * freq * 1.17 + sd * 1.4) * 0.55 +
+      Math.sin(uRaw * freq * 2.27 - sd * 1.8) * 0.35 +
+      Math.cos(qStep * 51 + sd * 2.9) * 0.35
+    ) * prof.jitterAmp * jEnv;
+    var sag = Math.sin(uRaw * Math.PI * 3.0 + sd) * 3.0 * jEnv;
+    return { x: clamp(pf.x + jitX, 10, W - 10), y: clamp(pf.y + jitY + sag, 10, 110), tensionSpeed: 0.7 };
+  }
+
+  function evalFlight(prof, mode, uRaw, W) {
+    var cur = evalFlightPos(prof, mode, uRaw, W);
+    var eps = 0.0025;
+    var uA = clamp(uRaw - eps, 0, 1);
+    var uB = clamp(uRaw + eps, 0, 1);
+    var pA = evalFlightPos(prof, mode, uA, W);
+    var pB = evalFlightPos(prof, mode, uB, W);
+    var span = Math.max(0.0005, uB - uA);
+    return {
+      x: cur.x,
+      y: cur.y,
+      vx: (pB.x - pA.x) / span,
+      vy: (pB.y - pA.y) / span,
+      tensionSpeed: cur.tensionSpeed
+    };
+  }
+
+  // DOM References
+  var canvas = document.getElementById("wbv10-canvas");
+  var ctx = canvas ? canvas.getContext("2d") : null;
+  var convlive = document.getElementById("wbv10-convlive");
+  var stageTag = document.getElementById("wbv10-stage-tag");
+  var motionOnOpt = document.getElementById("wbv10-motion-on");
+  var motionOffOpt = document.getElementById("wbv10-motion-off");
+  var setGroupBtns = root.querySelectorAll("[data-set-group]");
+  var quickOffBtn = document.getElementById("wbv10-quick-off");
+  var quickOnBtn = document.getElementById("wbv10-quick-on");
+  var rafPill = document.getElementById("wbv10-raf-pill");
+  var rafText = document.getElementById("wbv10-raf-text");
+  var chainBtn = document.getElementById("wbv10-chain-btn");
+  var playOkBtn = document.getElementById("wbv10-play-ok");
+  var playFailBtn = document.getElementById("wbv10-play-fail");
+  var handoffBtn = document.getElementById("wbv10-handoff-btn");
+  var autoBtn = document.getElementById("wbv10-auto-btn");
+  var guideBtn = document.getElementById("wbv10-guide-btn");
+  var wbOnlyBtn = document.getElementById("wbv10-wbonly-btn");
+  var catBtns = root.querySelectorAll(".wbv10-cat");
+
+  var stSumDot = document.getElementById("wbv10-st-sum-dot");
+  var stSumCnt = document.getElementById("wbv10-st-sum-cnt");
+  var stSumTime = document.getElementById("wbv10-st-sum-time");
+  var stSumFail = document.getElementById("wbv10-st-sum-fail");
+  var stSumTok = document.getElementById("wbv10-st-sum-tok");
+  var stRunDot = document.getElementById("wbv10-st-run-dot");
+  var stRunVerb = document.getElementById("wbv10-st-run-verb");
+  var stRunArg = document.getElementById("wbv10-st-run-arg");
+
+  if (!canvas || !ctx) return;
+
+  var reducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  var ANCHOR_X = 38;
+  var ANCHOR_Y = 86;
+  var TARGET_Y = 23;
+  var SWAY_PERIOD = 0.82; // 1 full sway period = 0.82s
+
+  var state = {
+    extraMotion: !reducedMotion,
+    autoDemo: false,
+    showGuide: false,
+    wbOnly: false,
+    W: 610,
+    H: 118,
+    dpr: 1,
+
+    // Live summary counters (drive dynamic targetX!)
+    toolCalls: 4,
+    failCount: 0,
+    elapsedSec: 6.2,
+    tokens: 1100,
+    lastOutcome: "ok",
+    tokenFlashT: 0,
+    tokenFlashCol: GREEN,
+    summaryShakeT: 0,
+    summaryBumpT: 0,
+    targetX: 208,
+    targetW: 62,
+
+    // Active bottom-left runner
+    catId: "exec",
+    runnerMode: "idle", // "idle" | "thinking" | "sway"
+    runnerT: 0,
+    runnerDur: 0.92,
+    runnerNextOutcome: "ok",
+    runnerNextTokens: 340,
+    popT: 1,
+    condenseT: 0,
+    lastStepFrame: -1,
+    swayTrail: [],
+    swayWeave: [],
+
+    // Active flights, impacts, popups, particles
+    flights: [],
+    impacts: [],
+    popups: [],
+    drops: [],
+    motes: [],
+    lastOkKind: -1,
+    lastFailKind: -1,
+    lastGuide: null,
+    runCount: 0,
+
+    // Chain sequencer
+    chainQueue: [],
+    chainStepIdx: 0,
+    chainTotal: 0
+  };
+
+  var rafId = null;
+  var lastNow = 0;
+
+  function curCat() { return CATEGORIES[state.catId] || CATEGORIES.exec; }
+
+  function resize() {
+    var rect = canvas.getBoundingClientRect();
+    var w = Math.max(320, Math.round(rect.width || 610));
+    var h = 118;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (state.W === w && state.dpr === dpr) return;
+    state.W = w;
+    state.H = h;
+    state.dpr = dpr;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+
+  function updateCatPills(catId) {
+    for (var i = 0; i < catBtns.length; i++) {
+      catBtns[i].classList.toggle("is-active", catBtns[i].getAttribute("data-cat") === catId);
+    }
+    if (handoffBtn) handoffBtn.style.display = catId === "thinking" ? "inline-flex" : "none";
+  }
+
+  function updateStaticFallback() {
+    var cat = curCat();
+    if (stSumDot) stSumDot.style.background = state.failCount > 0 && state.lastOutcome === "fail" ? FAIL_HEX : OK_HEX;
+    if (stSumCnt) stSumCnt.textContent = state.toolCalls + "개 툴 호출";
+    if (stSumTime) stSumTime.textContent = "· " + state.elapsedSec.toFixed(1) + "s ·";
+    if (stSumFail) {
+      stSumFail.style.display = state.failCount > 0 ? "inline" : "none";
+      stSumFail.textContent = "실패 " + state.failCount + " ·";
+    }
+    if (stSumTok) stSumTok.textContent = formatTokens(state.tokens);
+    if (stRunDot) stRunDot.style.background = cat.hex;
+    if (stRunVerb) stRunVerb.textContent = state.runnerMode === "idle" ? "대기 중" : cat.verb;
+    if (stRunArg) stRunArg.textContent = state.runnerMode === "idle" ? "다음 툴 호출 대기 (0 rAF)" : cat.arg;
+  }
+
+  function updateRafBadge() {
+    if (!rafPill || !rafText) return;
+    rafPill.classList.remove("is-idle", "is-off");
+    if (!state.extraMotion || reducedMotion) {
+      rafPill.classList.add("is-off");
+      rafText.textContent = reducedMotion ? "0 rAF (감속 설정)" : "0 rAF (OFF)";
+    } else if (rafId === null) {
+      rafPill.classList.add("is-idle");
+      rafText.textContent = "0 rAF (유휴)";
+    } else if (state.runnerMode === "thinking" && state.flights.length === 0) {
+      rafText.textContent = "rAF 활성 (15fps 추론)";
+    } else {
+      rafText.textContent = "rAF 활성 (60/15fps)";
+    }
+  }
+
+  function hasActiveWork() {
+    return (
+      state.runnerMode !== "idle" ||
+      state.flights.length > 0 ||
+      state.impacts.length > 0 ||
+      state.popups.length > 0 ||
+      state.drops.length > 0 ||
+      state.motes.length > 0 ||
+      state.condenseT > 0 ||
+      state.tokenFlashT > 0 ||
+      state.summaryShakeT > 0 ||
+      state.summaryBumpT > 0 ||
+      state.chainQueue.length > 0
+    );
+  }
+
+  function stopLoop() {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    updateRafBadge();
+  }
+
+  function startLoop() {
+    if (!state.extraMotion || reducedMotion || document.hidden) {
+      stopLoop();
+      return;
+    }
+    if (rafId !== null) {
+      updateRafBadge();
+      return;
+    }
+    lastNow = performance.now();
+    rafId = requestAnimationFrame(tick);
+    updateRafBadge();
+  }
+
+  // Spawn pop-in micro-ring & 3 tiny radial pop-sparks at bottom-left origin
+  function spawnPopIn(cat, fromThinking) {
+    state.popT = 0;
+    if (fromThinking) state.condenseT = 0.14;
+    state.impacts.push({
+      kind: "popring",
+      x: ANCHOR_X,
+      y: ANCHOR_Y,
+      col: cat.rgb,
+      t: 0,
+      dur: 0.26
+    });
+    for (var i = 0; i < 3; i++) {
+      var ang = -2.3 + i * 2.1 + randRange(-0.25, 0.25);
+      var spd = randRange(34, 58);
+      state.drops.push({
+        x: ANCHOR_X + Math.cos(ang) * 4,
+        y: ANCHOR_Y + Math.sin(ang) * 4,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        r: randRange(1.4, 2.1),
+        col: i === 1 ? cat.hi : cat.rgb,
+        grav: 22,
+        age: 0,
+        life: randRange(0.24, 0.34)
+      });
+    }
+  }
+
+  // Measure live dynamic X coordinate of the top-right "+Nk tok" marker
+  function measureAndDrawSummary(ctx) {
+    var sumX = 0;
+    if (state.summaryBumpT > 0) {
+      var el = 0.38 - state.summaryBumpT;
+      sumX = Math.exp(-el * 12) * Math.sin(el * 30) * 3.0;
+    } else if (state.summaryShakeT > 0) {
+      var sl = 0.42 - state.summaryShakeT;
+      sumX = Math.exp(-sl * 11) * Math.sin(sl * 56) * 4.4;
+    }
+
+    // Left status dot (no longer the flight landing target)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(20, TARGET_Y, 4.0, 0, Math.PI * 2);
+    ctx.fillStyle = state.failCount > 0 && state.lastOutcome === "fail" ? FAIL_HEX : OK_HEX;
+    ctx.fill();
+    ctx.restore();
+
+    var x = 34 + sumX;
+    var y = 27;
+
+    ctx.save();
+    // 1. "N개 툴 호출"
+    var cntStr = state.toolCalls + "개 툴 호출";
+    ctx.font = "600 12.5px " + SANS;
+    ctx.fillStyle = FG;
+    ctx.fillText(cntStr, x, y);
+    x += ctx.measureText(cntStr).width;
+
+    // 2. " · 6.2s"
+    var timeStr = " · " + state.elapsedSec.toFixed(1) + "s";
+    ctx.font = "400 12px " + SANS;
+    ctx.fillStyle = MUTED_FG;
+    ctx.fillText(timeStr, x, y);
+    x += ctx.measureText(timeStr).width;
+
+    // 3. Optional " · 실패 N" (shifts token marker rightward!)
+    if (state.failCount > 0) {
+      var sepF = " · ";
+      ctx.fillStyle = MUTED_FG;
+      ctx.fillText(sepF, x, y);
+      x += ctx.measureText(sepF).width;
+
+      var failStr = "실패 " + state.failCount;
+      ctx.font = "700 12px " + SANS;
+      ctx.fillStyle = FAIL_HEX;
+      ctx.fillText(failStr, x, y);
+      x += ctx.measureText(failStr).width;
+    }
+
+    // 4. " · "
+    ctx.font = "400 12px " + SANS;
+    ctx.fillStyle = MUTED_FG;
+    var sepT = " · ";
+    ctx.fillText(sepT, x, y);
+    x += ctx.measureText(sepT).width;
+
+    // 5. Dynamic "+Nk tok" target marker!
+    var tokStr = formatTokens(state.tokens);
+    ctx.font = "700 12px " + MONO;
+    var tokW = ctx.measureText(tokStr).width;
+    var tokCenterX = clamp(x + tokW * 0.5, 130, state.W - 34);
+    state.targetX = tokCenterX;
+    state.targetW = tokW;
+
+    // Subtle tonal pill backdrop behind token marker (flashes softly on impact)
+    var flash = clamp(state.tokenFlashT / 0.42, 0, 1);
+    var pillPadX = 6;
+    ctx.beginPath();
+    var px = x - pillPadX;
+    var py = 12;
+    var pw = tokW + pillPadX * 2;
+    var ph = 21;
+    var pr = 6;
+    ctx.moveTo(px + pr, py);
+    ctx.lineTo(px + pw - pr, py);
+    ctx.quadraticCurveTo(px + pw, py, px + pw, py + pr);
+    ctx.lineTo(px + pw, py + ph - pr);
+    ctx.quadraticCurveTo(px + pw, py + ph, px + pw - pr, py + ph);
+    ctx.lineTo(px + pr, py + ph);
+    ctx.quadraticCurveTo(px, py + ph, px, py + ph - pr);
+    ctx.lineTo(px, py + pr);
+    ctx.quadraticCurveTo(px, py, px + pr, py);
+    ctx.closePath();
+    ctx.fillStyle = flash > 0.02
+      ? rgba(state.tokenFlashCol, 0.16 + flash * 0.22)
+      : "rgba(122,162,255,0.10)";
+    ctx.fill();
+
+    ctx.fillStyle = flash > 0.05
+      ? rgba(mixRgb([122, 162, 255], state.tokenFlashCol, flash), 1)
+      : PRIMARY_HEX;
+    ctx.fillText(tokStr, x, y);
+    ctx.restore();
+  }
+
+  // Launch current swaying tool into flight toward live dynamic targetX
+  function launchCurrentRunner() {
+    var cat = curCat();
+    var mode = state.runnerNextOutcome === "fail" ? "fail" : "ok";
+    var amp = cat.swayAmp || 13.5;
+    var omega = (2 * Math.PI) / SWAY_PERIOD;
+    var tq = Math.floor(state.runnerT * 15) / 15;
+    var ox = ANCHOR_X + amp * Math.sin(omega * tq);
+    var oy = ANCHOR_Y + 2.0 * (1 - Math.cos(2 * omega * tq));
+    var rawVx = amp * omega * Math.cos(omega * tq);
+    var launchVx = Math.max(55, rawVx * 0.85 + 75);
+    var launchVy = 4.0 * omega * Math.sin(2 * omega * tq);
+
+    // Ensure targetX is measured for current counter text
+    var tx = state.targetX;
+    var ty = TARGET_Y;
+    var prof;
+    if (mode === "ok") {
+      prof = buildOkFlightProfile(state.lastOkKind, ox, oy, tx, ty, launchVx, launchVy, state.W);
+      state.lastOkKind = prof.kind;
+    } else {
+      prof = buildFailFlightProfile(state.lastFailKind, ox, oy, tx, ty, launchVx, state.W);
+      state.lastFailKind = prof.kind;
+    }
+
+    state.runCount += 1;
+    state.lastGuide = { prof: prof, mode: mode };
+    if (stageTag) {
+      var prefix = state.chainTotal > 0 ? ("체인 " + state.chainStepIdx + "/" + state.chainTotal + " · ") : ("#" + state.runCount + " · ");
+      stageTag.textContent = prefix + prof.name + (mode === "ok" ? " · 휘잉-스톱-슈욱" : " · 지터리 실패");
+    }
+
+    state.flights.push({
+      cat: cat,
+      mode: mode,
+      prof: prof,
+      t: 0,
+      dur: prof.dur,
+      trail: state.swayTrail.slice(-5),
+      weave: state.swayWeave.slice(-4),
+      dropFlags: [false, false, false, false, false],
+      tokensDelta: state.runnerNextTokens || Math.round(randRange(cat.tokRange[0], cat.tokRange[1]) / 10) * 10
+    });
+
+    state.swayTrail.length = 0;
+    state.swayWeave.length = 0;
+    state.runnerMode = "idle";
+  }
+
+  function startRunnerStep(step) {
+    var wasThinking = state.runnerMode === "thinking";
+    state.catId = step.catId;
+    updateCatPills(step.catId);
+    state.swayTrail.length = 0;
+    state.swayWeave.length = 0;
+    state.lastStepFrame = -1;
+    state.runnerT = 0;
+
+    if (step.catId === "thinking") {
+      state.runnerMode = "thinking";
+      state.runnerDur = step.dur || 0;
+      if (stageTag) {
+        stageTag.textContent = state.chainTotal > 0
+          ? ("체인 · 생각 중 (15fps 호흡)")
+          : "생각 중 · 15fps 잉크 호흡";
+      }
+      updateStaticFallback();
+      startLoop();
+      return;
+    }
+
+    state.runnerMode = "sway";
+    state.runnerDur = step.dur || 0.90;
+    state.runnerNextOutcome = step.outcome || "ok";
+    var cat = curCat();
+    state.runnerNextTokens = step.tokens || Math.round(randRange(cat.tokRange[0], cat.tokRange[1]) / 10) * 10;
+    spawnPopIn(cat, wasThinking);
+    updateStaticFallback();
+    startLoop();
+  }
+
+  function advanceChain() {
+    if (state.chainQueue.length === 0) {
+      if (state.autoDemo && state.extraMotion && state.catId !== "thinking") {
+        // Auto-repeat with rotating categories
+        var order = ["exec", "tickets", "agent", "git", "file"];
+        var nextIdx = (order.indexOf(state.catId) + 1) % order.length;
+        state.chainTotal = 0;
+        startRunnerStep({
+          catId: order[nextIdx],
+          dur: 0.92,
+          outcome: state.runnerNextOutcome
+        });
+      } else {
+        state.chainTotal = 0;
+      }
+      return;
+    }
+    var next = state.chainQueue.shift();
+    if (next.catId !== "thinking") state.chainStepIdx += 1;
+    startRunnerStep(next);
+  }
+
+  // Prominent "[▶ 연속 체인 시연]" sequence!
+  function runChainDemo() {
+    if (!state.extraMotion) setExtraMotion(true);
+    state.chainQueue.length = 0;
+    state.flights.length = 0;
+    state.impacts.length = 0;
+    state.popups.length = 0;
+    state.drops.length = 0;
+    state.motes.length = 0;
+    state.toolCalls = 4;
+    state.failCount = 0;
+    state.elapsedSec = 6.2;
+    state.tokens = 1100;
+    state.lastOutcome = "ok";
+    state.chainStepIdx = 0;
+    state.chainTotal = 4;
+
+    state.chainQueue = [
+      { catId: "exec",    dur: 0.92, outcome: "ok",   tokens: 340 },
+      { catId: "tickets", dur: 0.84, outcome: "ok",   tokens: 210 },
+      { catId: "git",     dur: 0.86, outcome: "fail", tokens: 180 },
+      { catId: "agent",   dur: 0.92, outcome: "ok",   tokens: 520 }
+    ];
+    startRunnerStep({ catId: "thinking", dur: 1.10 });
+  }
+
+  function triggerSingle(catId, outcome) {
+    state.chainQueue.length = 0;
+    state.chainTotal = 0;
+    if (catId === "thinking") {
+      startRunnerStep({ catId: "thinking", dur: 0 });
+      return;
+    }
+    startRunnerStep({ catId: catId, dur: 0.88, outcome: outcome });
+  }
+
+  // Handle landing impact at dynamic top-right token marker + RPG floating damage number "+m"
+  function handleFlightImpact(fl) {
+    var tx = state.targetX;
+    var ty = TARGET_Y;
+    var delta = fl.tokensDelta;
+    state.toolCalls += 1;
+    state.elapsedSec += fl.mode === "ok" ? randRange(0.7, 1.5) : randRange(1.1, 1.9);
+    state.tokens += delta;
+    state.lastOutcome = fl.mode;
+
+    if (fl.mode === "ok") {
+      state.tokenFlashT = 0.42;
+      state.tokenFlashCol = GREEN;
+      state.summaryBumpT = 0.38;
+      state.impacts.push({ kind: "okring", x: tx, y: ty, t: 0, dur: 0.56 });
+      // Crisp settle micro-sparks
+      var angs = [-2.4, -0.8, 0.7, 2.3];
+      for (var k = 0; k < angs.length; k++) {
+        state.drops.push({
+          x: tx, y: ty,
+          vx: Math.cos(angs[k]) * (38 + k * 6),
+          vy: Math.sin(angs[k]) * (38 + k * 6),
+          r: 1.9,
+          col: k % 2 === 0 ? GREEN : GREEN_HI,
+          grav: 18, age: 0, life: 0.34
+        });
+      }
+      // Floating emerald damage number "+m"
+      state.popups.push({
+        text: "+" + delta,
+        x: tx + state.targetW * 0.32,
+        y: ty - 3,
+        col: GREEN,
+        hex: OK_HEX,
+        jitter: false,
+        t: 0,
+        dur: 0.82
+      });
+    } else {
+      state.failCount += 1;
+      state.tokenFlashT = 0.42;
+      state.tokenFlashCol = RED;
+      state.summaryShakeT = 0.42;
+      var sDrops = [];
+      for (var si = 0; si < 7; si++) {
+        var bAng = -Math.PI + (si / 7) * Math.PI * 2 + randRange(-0.28, 0.28);
+        var spd = randRange(36, 74);
+        sDrops.push({
+          x: tx, y: ty,
+          vx: Math.cos(bAng) * spd, vy: Math.sin(bAng) * spd,
+          r: randRange(1.3, 2.3), drag: randRange(6.2, 7.8), creep: randRange(3.0, 6.5)
+        });
+      }
+      state.impacts.push({
+        kind: "splat", x: tx, y: ty, t: 0, dur: 0.96,
+        seed: fl.prof.splatSeed, drops: sDrops
+      });
+      // Floating coral-red damage number "+m" with subtle jitter
+      state.popups.push({
+        text: "+" + delta,
+        x: tx + state.targetW * 0.32,
+        y: ty - 2,
+        col: RED,
+        hex: FAIL_HEX,
+        jitter: true,
+        t: 0,
+        dur: 0.86
+      });
+    }
+    updateStaticFallback();
+  }
+
+  function drawRunnerLabel(cat, alpha, W) {
+    ctx.save();
+    ctx.globalAlpha = clamp(alpha, 0, 1);
+    ctx.translate(66, 90);
+    ctx.font = "700 12.5px " + SANS;
+    ctx.fillStyle = state.runnerMode === "idle" ? MUTED_FG : cat.hex;
+    var verb = state.runnerMode === "idle" ? "대기 중" : cat.verb;
+    ctx.fillText(verb, 0, 0);
+    var verbW = ctx.measureText(verb).width;
+    ctx.font = state.runnerMode === "thinking" || state.runnerMode === "idle"
+      ? ("400 12px " + SANS)
+      : ("400 11.5px " + MONO);
+    ctx.fillStyle = MUTED_FG;
+    var arg = state.runnerMode === "idle"
+      ? (state.flights.length > 0 ? "토큰 마커로 수렴 중…" : "시연 완료 · 유휴 상태 (0 rAF)")
+      : cat.arg;
+    var maxArgW = Math.max(110, W - 160 - verbW);
+    while (arg.length > 8 && ctx.measureText(arg).width > maxArgW) {
+      arg = arg.slice(0, -2) + "…";
+    }
+    ctx.fillText(arg, verbW + 10, 0);
+    ctx.restore();
+  }
+
+  function drawGuide(g) {
+    if (!g || !g.prof) return;
+    ctx.save();
+    ctx.beginPath();
+    var steps = 64;
+    for (var i = 0; i <= steps; i++) {
+      var pt = evalFlightPos(g.prof, g.mode, i / steps, state.W);
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.strokeStyle = g.mode === "ok" ? "rgba(108,195,154,0.22)" : "rgba(240,121,126,0.22)";
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([3, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Mark peak-stop apex on OK guides
+    if (g.mode === "ok" && typeof g.prof.apexX === "number") {
+      ctx.beginPath();
+      ctx.arc(g.prof.apexX, g.prof.apexY, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(122,162,255,0.55)";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawStaticCanvas() {
+    resize();
+    ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    ctx.clearRect(0, 0, state.W, state.H);
+    measureAndDrawSummary(ctx);
+    var cat = curCat();
+    if (state.runnerMode === "thinking") {
+      drawThinkingCloud(ctx, ANCHOR_X, ANCHOR_Y, 0.4, cat.rgb, cat.hi, 1, 1);
+    } else if (state.runnerMode === "sway") {
+      drawPaintBlob(ctx, ANCHOR_X, ANCHOR_Y, 8.0, 6.6, 0, 0, cat.rgb, cat.hi, 1, 3);
+    } else {
+      ctx.beginPath();
+      ctx.arc(ANCHOR_X, ANCHOR_Y, 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(162,166,173,0.40)";
+      ctx.fill();
+    }
+    drawRunnerLabel(cat, 1, state.W);
+  }
+
+  function stepAndDraw(dt) {
+    resize();
+    var W = state.W, H = state.H;
+    ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    // Decay summary flash/shake timers
+    if (state.tokenFlashT > 0) state.tokenFlashT = Math.max(0, state.tokenFlashT - dt);
+    if (state.summaryShakeT > 0) state.summaryShakeT = Math.max(0, state.summaryShakeT - dt);
+    if (state.summaryBumpT > 0) state.summaryBumpT = Math.max(0, state.summaryBumpT - dt);
+    if (state.condenseT > 0) state.condenseT = Math.max(0, state.condenseT - dt);
+
+    // Optional trajectory + apex guide
+    if (state.showGuide && state.lastGuide) {
+      drawGuide(state.lastGuide);
+    }
+
+    // Top summary row with live dynamic "+Nk tok" target measurement
+    measureAndDrawSummary(ctx);
+
+    // Update & draw loose drops / pop-sparks / embers
+    for (var di = state.drops.length - 1; di >= 0; di--) {
+      var dr = state.drops[di];
+      dr.age += dt;
+      if (dr.age >= dr.life) {
+        state.drops.splice(di, 1);
+        continue;
+      }
+      dr.vx *= Math.pow(0.25, dt);
+      dr.vy = dr.vy * Math.pow(0.25, dt) + dr.grav * dt;
+      dr.x += dr.vx * dt;
+      dr.y += dr.vy * dt;
+      var da = 1 - dr.age / dr.life;
+      ctx.beginPath();
+      ctx.arc(dr.x, dr.y, dr.r * (0.45 + 0.55 * da), 0, Math.PI * 2);
+      ctx.fillStyle = rgba(dr.col, da * 0.90);
+      ctx.fill();
+    }
+
+    // Update & draw thinking motes
+    for (var mi = state.motes.length - 1; mi >= 0; mi--) {
+      var mt = state.motes[mi];
+      mt.age += dt;
+      if (mt.age >= mt.life) {
+        state.motes.splice(mi, 1);
+        continue;
+      }
+      mt.x += (mt.vx + Math.sin(mt.age * 3.2 + mi) * 4) * dt;
+      mt.y += mt.vy * dt;
+      var mp = mt.age / mt.life;
+      ctx.beginPath();
+      ctx.arc(mt.x, mt.y, mt.r * (0.7 + 0.3 * (1 - mp)), 0, Math.PI * 2);
+      ctx.fillStyle = rgba(CATEGORIES.thinking.hi, Math.sin(mp * Math.PI) * 0.65);
+      ctx.fill();
+    }
+
+    // Thinking condense-inward handoff visual
+    if (state.condenseT > 0) {
+      var cp = state.condenseT / 0.14; // 1 -> 0
+      drawThinkingCloud(ctx, ANCHOR_X, ANCHOR_Y, 0.5, CATEGORIES.thinking.rgb, CATEGORIES.thinking.hi, cp * 0.85, cp);
+    }
+
+    // ---- Bottom-Left Live Runner (Thinking OR 15fps Tool Sway with Pop-In) ----
+    var cat = curCat();
+    if (state.runnerMode === "thinking") {
+      state.runnerT += dt;
+      var qThink = Math.floor(state.runnerT * 15) / 15;
+      var tf = Math.floor(state.runnerT * 15);
+      if (tf !== state.lastStepFrame) {
+        state.lastStepFrame = tf;
+        if (tf % 5 === 0 && state.motes.length < 7) {
+          state.motes.push({
+            x: ANCHOR_X + randRange(-9, 9), y: ANCHOR_Y + randRange(-4, 4),
+            vx: randRange(-6, 9), vy: randRange(-14, -7),
+            r: randRange(1.2, 2.2), age: 0, life: randRange(1.1, 1.8)
+          });
+        }
+      }
+      drawThinkingCloud(ctx, ANCHOR_X, ANCHOR_Y, qThink, cat.rgb, cat.hi, 1, 1);
+      drawRunnerLabel(cat, 0.92 + 0.08 * Math.sin(qThink * 2.35), W);
+
+      if (state.runnerDur > 0 && state.runnerT >= state.runnerDur) {
+        advanceChain();
+      }
+    } else if (state.runnerMode === "sway") {
+      state.runnerT += dt;
+      state.popT = Math.min(1, state.popT + dt / 0.24);
+      // Elastic spring pop-in overshoot: 0 -> 1.27 -> 0.94 -> 1.0
+      var popScale = state.popT < 1
+        ? clamp(1 - Math.exp(-state.popT * 9.5) * Math.cos(state.popT * Math.PI * 2.25), 0.05, 1.32)
+        : 1;
+
+      var amp = cat.swayAmp || 13.5;
+      var omega = (2 * Math.PI) / SWAY_PERIOD;
+      var stepFrame = Math.floor(state.runnerT * 15);
+      var tq = stepFrame / 15;
+      var bx = ANCHOR_X + amp * Math.sin(omega * tq) * Math.min(1, state.popT * 1.6);
+      var by = ANCHOR_Y + 2.0 * (1 - Math.cos(2 * omega * tq));
+      var bvx = amp * omega * Math.cos(omega * tq);
+      var bvy = 4.0 * omega * Math.sin(2 * omega * tq);
+      var speed = Math.hypot(bvx, bvy);
+      var ang = Math.atan2(bvy, bvx);
+
+      if (stepFrame !== state.lastStepFrame) {
+        state.lastStepFrame = stepFrame;
+        state.swayTrail.push({ x: bx, y: by, r: 5.4 * Math.min(1, popScale), col: cat.rgb, hi: cat.hi, a: 0.72 });
+        if (state.swayTrail.length > 6) state.swayTrail.shift();
+
+        if (cat.swayStyle === "spark" && stepFrame % 3 === 0) {
+          var spAng = randRange(-Math.PI, Math.PI);
+          var spSpd = randRange(24, 48);
+          state.drops.push({
+            x: bx + Math.cos(spAng) * 5, y: by + Math.sin(spAng) * 4,
+            vx: Math.cos(spAng) * spSpd + bvx * 0.1, vy: Math.sin(spAng) * spSpd - 8,
+            r: randRange(1.1, 1.8), col: stepFrame % 6 === 0 ? cat.hi : cat.rgb,
+            grav: 26, age: 0, life: randRange(0.20, 0.34)
+          });
+        } else if (cat.swayStyle === "weave") {
+          var wOff = Math.sin(tq * omega * 1.5) * 4.4;
+          state.swayWeave.push({ x: bx - Math.cos(ang) * 3, y: by + wOff, r: 2.9, col: cat.hi, hi: cat.hi, a: 0.44 });
+          if (state.swayWeave.length > 7) state.swayWeave.shift();
+        }
+      }
+
+      if (cat.swayStyle === "weave" && state.swayWeave.length >= 2) drawBrushTail(ctx, state.swayWeave);
+      drawBrushTail(ctx, state.swayTrail);
+
+      var stretch = clamp(1 + (speed / 125) * 0.25, 0.92, 1.26);
+      drawPaintBlob(ctx, bx, by, 8.1 * stretch * popScale, (6.7 / Math.sqrt(stretch)) * popScale, ang, stepFrame * 0.85, cat.rgb, cat.hi, 1, 3);
+
+      if (cat.swayStyle === "orbit") {
+        var orbAng = tq * 6.8;
+        drawPaintBlob(
+          ctx,
+          bx + Math.cos(orbAng) * 12.2 * Math.min(1, popScale),
+          by + Math.sin(orbAng) * 7.0 * Math.min(1, popScale),
+          3.0 * popScale, 2.5 * popScale, orbAng + 1.5, stepFrame * 0.6, cat.hi, cat.hi, 0.92, 3
+        );
+      }
+
+      drawRunnerLabel(cat, clamp(state.popT * 1.5, 0.35, 1), W);
+
+      if (state.runnerT >= state.runnerDur) {
+        launchCurrentRunner();
+      }
+    } else {
+      // Idle dot at bottom-left
+      ctx.beginPath();
+      ctx.arc(ANCHOR_X, ANCHOR_Y, 4.0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(162,166,173,0.34)";
+      ctx.fill();
+      drawRunnerLabel(cat, 0.72, W);
+    }
+
+    // ---- Active Flights (Modern 3-Beat "휘잉-피크스톱-슈욱" OK / Frail Jittery FAIL) ----
+    for (var fi = state.flights.length - 1; fi >= 0; fi--) {
+      var fl = state.flights[fi];
+      fl.t += dt;
+      var uRaw = clamp(fl.t / fl.dur, 0, 1);
+      var p = evalFlight(fl.prof, fl.mode, uRaw, W);
+
+      var colMix = clamp(uRaw / 0.32, 0, 1);
+      var targetCol = fl.mode === "ok" ? GREEN : RED;
+      var targetHi = fl.mode === "ok" ? GREEN_HI : RED_HI;
+      var curCol = mixRgb(fl.cat.rgb, targetCol, colMix);
+      var curHi = mixRgb(fl.cat.hi, targetHi, colMix);
+
+      var vx = p.vx / fl.dur;
+      var vy = p.vy / fl.dur;
+      var spd = Math.hypot(vx, vy);
+      var tangentAng = Math.atan2(vy, vx);
+
+      // During Beat 2 apex peak-stop (tensionSpeed < 0.35), head rounds up tautly; during Beat 3 whip, it elongates sleekly!
+      var drawAng = fl.mode === "ok"
+        ? tangentAng
+        : tangentAng + Math.sin(uRaw * 52 + fl.prof.shiverSeed) * 0.56 + Math.cos(uRaw * 89) * 0.26;
+      var aeroStretch = fl.mode === "ok"
+        ? clamp(0.96 + (spd / 440) * 0.52, 0.96, 1.72)
+        : clamp(0.88 + 0.16 * Math.sin(uRaw * 46 + fl.prof.shiverSeed), 0.78, 1.12);
+
+      var headR = fl.mode === "ok"
+        ? lerp(7.6, 5.8, uRaw * 0.45) * (p.tensionSpeed < 0.30 ? 1.08 : 1.0)
+        : lerp(7.2, 5.6, uRaw * 0.45) * (0.90 + 0.14 * Math.sin(uRaw * 62));
+      var rxF = headR * aeroStretch;
+      var ryF = headR * ((fl.mode === "ok" ? 0.80 : 0.90) / Math.sqrt(aeroStretch));
+
+      var failJitterR = 3.5 * (0.55 + 0.55 * Math.abs(Math.sin(uRaw * 44 + fl.prof.shiverSeed)));
+      fl.trail.push({
+        x: p.x, y: p.y,
+        r: fl.mode === "ok" ? lerp(6.2, 4.4, uRaw * 0.45) : failJitterR,
+        col: curCol, hi: curHi,
+        a: fl.mode === "ok" ? 0.95 : clamp(0.54 + 0.34 * Math.sin(uRaw * 38), 0.38, 0.84)
+      });
+      var maxTrail = fl.mode === "ok" ? 30 : 16;
+      while (fl.trail.length > maxTrail) fl.trail.shift();
+
+      if (fl.mode === "ok" && fl.cat.swayStyle === "weave") {
+        var perpX = -vy / (spd || 1);
+        var perpY = vx / (spd || 1);
+        var wv = Math.sin(uRaw * 20) * 4.6 * Math.sin(uRaw * Math.PI);
+        fl.weave.push({ x: p.x + perpX * wv, y: p.y + perpY * wv, r: 2.3, col: curHi, hi: curHi, a: 0.46 });
+        while (fl.weave.length > 20) fl.weave.shift();
+        drawBrushTail(ctx, fl.weave);
+      }
+
+      // Flung beads on snap-whip (OK) OR leaky gravity drops (FAIL)
+      var marks = fl.mode === "ok"
+        ? [0.22, 0.56, 0.72, 0.84, 0.92]
+        : [0.18, 0.34, 0.52, 0.70, 0.86];
+      for (var m = 0; m < marks.length; m++) {
+        if (!fl.dropFlags[m] && uRaw >= marks[m]) {
+          fl.dropFlags[m] = true;
+          if (fl.mode === "ok") {
+            var pX = -vy / (spd || 1);
+            var pY = vx / (spd || 1);
+            var side = m % 2 === 0 ? -1 : 1;
+            var kick = randRange(22, 46);
+            state.drops.push({
+              x: p.x + pX * side * 3, y: p.y + pY * side * 3,
+              vx: vx * 0.12 + pX * side * kick, vy: vy * 0.12 + pY * side * kick,
+              r: randRange(1.4, 2.2), col: fl.cat.swayStyle === "spark" && m === 1 ? curHi : curCol,
+              grav: 16, age: 0, life: randRange(0.30, 0.44)
+            });
+          } else {
+            state.drops.push({
+              x: p.x + randRange(-3, 3), y: p.y + randRange(2, 5),
+              vx: vx * 0.08 + randRange(-14, 14), vy: randRange(12, 34),
+              r: randRange(1.4, 2.2), col: curCol,
+              grav: 96, age: 0, life: randRange(0.42, 0.64)
+            });
+          }
+        }
+      }
+
+      drawBrushTail(ctx, fl.trail);
+      drawPaintBlob(ctx, p.x, p.y, rxF, ryF, drawAng, uRaw * (fl.mode === "ok" ? 12 : 36), curCol, curHi, 1, fl.mode === "ok" ? 3 : 5);
+
+      // ws/agent companion droplet chasing along flight
+      if (fl.mode === "ok" && fl.cat.swayStyle === "orbit") {
+        var lag = evalFlightPos(fl.prof, "ok", clamp(uRaw - 0.06, 0, 1), W);
+        var chAng = uRaw * 14;
+        drawPaintBlob(
+          ctx,
+          lag.x + Math.cos(chAng) * 6.5 * (1 - uRaw * 0.55),
+          lag.y + Math.sin(chAng) * 6.5 * (1 - uRaw * 0.55),
+          3.0, 2.4, tangentAng, uRaw * 10, curHi, curHi, 0.86, 3
+        );
+      }
+
+      if (uRaw >= 1) {
+        handleFlightImpact(fl);
+        state.flights.splice(fi, 1);
+        // Trigger next chained tool pop-in right upon landing so dynamic targetX is already updated!
+        if (state.runnerMode === "idle") {
+          advanceChain();
+        }
+      }
+    }
+
+    // ---- Active Impacts (Pop-in rings, OK absorption rings, FAIL splats) ----
+    for (var ii = state.impacts.length - 1; ii >= 0; ii--) {
+      var imp = state.impacts[ii];
+      imp.t += dt;
+      if (imp.t >= imp.dur) {
+        state.impacts.splice(ii, 1);
+        continue;
+      }
+      var ip = imp.t / imp.dur;
+      if (imp.kind === "popring") {
+        var rPop = 4 + (1 - Math.pow(1 - ip, 3)) * 15;
+        ctx.beginPath();
+        ctx.arc(imp.x, imp.y, rPop, 0, Math.PI * 2);
+        ctx.strokeStyle = rgba(imp.col, (1 - ip) * 0.65);
+        ctx.lineWidth = 1.8 * (1 - ip * 0.5);
+        ctx.stroke();
+      } else if (imp.kind === "okring") {
+        var rOk = 6 + (1 - Math.pow(1 - ip, 3)) * 18;
+        ctx.beginPath();
+        ctx.arc(imp.x, imp.y, rOk, 0, Math.PI * 2);
+        ctx.strokeStyle = rgba(GREEN, (1 - ip) * 0.82);
+        ctx.lineWidth = 2.0 * (1 - ip * 0.5);
+        ctx.stroke();
+      } else if (imp.kind === "splat") {
+        var sFade = ip < 0.62 ? 1 : clamp(1 - (ip - 0.62) / 0.38, 0, 1);
+        var sScale = (imp.t < 0.18
+          ? 0.30 + 0.70 * (1 - Math.exp(-imp.t * 24) * Math.cos(imp.t * 28))
+          : 1.0) * 0.62;
+        var dripY = clamp((imp.t - 0.12) * 5.0, 0, 5.8);
+        drawSplat(ctx, imp.x, imp.y, sScale, sFade, dripY, imp.seed);
+        for (var sdi = 0; sdi < imp.drops.length; sdi++) {
+          var sd = imp.drops[sdi];
+          var dec = Math.exp(-sd.drag * dt);
+          sd.vx *= dec;
+          sd.vy *= dec;
+          sd.x += sd.vx * dt;
+          sd.y += sd.vy * dt + (imp.t > 0.14 ? sd.creep * dt : 0);
+          ctx.beginPath();
+          ctx.arc(sd.x, sd.y, sd.r, 0, Math.PI * 2);
+          ctx.fillStyle = rgba(RED, sFade * 0.90);
+          ctx.fill();
+        }
+      }
+    }
+
+    // ---- Floating RPG Damage-Number Popups ("+340", "+210", "+180", "+520") ----
+    for (var pi = state.popups.length - 1; pi >= 0; pi--) {
+      var pop = state.popups[pi];
+      pop.t += dt;
+      if (pop.t >= pop.dur) {
+        state.popups.splice(pi, 1);
+        continue;
+      }
+      var pp = pop.t / pop.dur;
+      var scPop = pop.t < 0.18
+        ? clamp(0.45 + 0.55 * (1 - Math.exp(-pop.t * 24) * Math.cos(pop.t * 32)) * 1.18, 0.45, 1.24)
+        : 1.0;
+      var alphaPop = pp < 0.14 ? pp / 0.14 : (pp > 0.64 ? clamp(1 - (pp - 0.64) / 0.36, 0, 1) : 1);
+      var floatY = pop.y - (1 - Math.pow(1 - pp, 2.2)) * 16;
+      var jx = pop.jitter && pop.t < 0.32 ? Math.sin(pop.t * 78) * 2.2 * (1 - pop.t / 0.32) : 0;
+
+      ctx.save();
+      ctx.translate(pop.x + jx, floatY);
+      ctx.scale(scPop, scPop);
+      ctx.globalAlpha = alphaPop;
+      ctx.font = "800 12.5px " + MONO;
+      ctx.lineWidth = 3.2;
+      ctx.strokeStyle = BG_HEX;
+      ctx.lineJoin = "round";
+      ctx.strokeText(pop.text, 0, 0);
+      ctx.fillStyle = pop.hex;
+      ctx.fillText(pop.text, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  function tick(now) {
+    rafId = null;
+    if (!state.extraMotion || reducedMotion || document.hidden) {
+      updateRafBadge();
+      return;
+    }
+    var dt = clamp((now - lastNow) / 1000, 0, 0.05);
+    lastNow = now;
+    stepAndDraw(dt);
+    if (hasActiveWork() && state.extraMotion && !reducedMotion && !document.hidden) {
+      rafId = requestAnimationFrame(tick);
+    } else if (stageTag && state.runnerMode === "idle") {
+      stageTag.textContent = "유휴 · 0 rAF";
+    }
+    updateRafBadge();
+  }
+
+  function setExtraMotion(on) {
+    state.extraMotion = !!on && !reducedMotion;
+    if (motionOnOpt) {
+      motionOnOpt.classList.toggle("is-active", state.extraMotion);
+      motionOnOpt.setAttribute("aria-checked", state.extraMotion ? "true" : "false");
+    }
+    if (motionOffOpt) {
+      motionOffOpt.classList.toggle("is-active", !state.extraMotion);
+      motionOffOpt.setAttribute("aria-checked", !state.extraMotion ? "true" : "false");
+    }
+    if (convlive) convlive.classList.toggle("is-motion-off", !state.extraMotion);
+    updateStaticFallback();
+    if (!state.extraMotion) {
+      stopLoop();
+    } else {
+      if (!hasActiveWork()) {
+        triggerSingle(state.catId === "thinking" ? "exec" : state.catId, "ok");
+      } else {
+        startLoop();
+      }
+    }
+  }
+
+  // Event Bindings
+  for (var ci = 0; ci < catBtns.length; ci++) {
+    catBtns[ci].addEventListener("click", function () {
+      var id = this.getAttribute("data-cat");
+      if (!state.extraMotion) setExtraMotion(true);
+      triggerSingle(id, "ok");
+    });
+  }
+
+  if (chainBtn) chainBtn.addEventListener("click", runChainDemo);
+  if (playOkBtn) playOkBtn.addEventListener("click", function () {
+    if (!state.extraMotion) setExtraMotion(true);
+    triggerSingle(state.catId === "thinking" ? "exec" : state.catId, "ok");
+  });
+  if (playFailBtn) playFailBtn.addEventListener("click", function () {
+    if (!state.extraMotion) setExtraMotion(true);
+    triggerSingle(state.catId === "thinking" ? "git" : state.catId, "fail");
+  });
+  if (handoffBtn) handoffBtn.addEventListener("click", function () {
+    if (!state.extraMotion) setExtraMotion(true);
+    triggerSingle("exec", "ok");
+  });
+
+  if (autoBtn) {
+    autoBtn.addEventListener("click", function () {
+      state.autoDemo = !state.autoDemo;
+      autoBtn.classList.toggle("is-on", state.autoDemo);
+      autoBtn.setAttribute("aria-pressed", state.autoDemo ? "true" : "false");
+      if (state.autoDemo && state.extraMotion && !hasActiveWork()) {
+        triggerSingle(state.catId === "thinking" ? "exec" : state.catId, "ok");
+      }
+    });
+  }
+
+  if (guideBtn) {
+    guideBtn.addEventListener("click", function () {
+      state.showGuide = !state.showGuide;
+      guideBtn.classList.toggle("is-on", state.showGuide);
+      guideBtn.setAttribute("aria-pressed", state.showGuide ? "true" : "false");
+      if (rafId === null && state.extraMotion) {
+        drawStaticCanvas();
+        if (state.showGuide && state.lastGuide) drawGuide(state.lastGuide);
+      }
+    });
+  }
+
+  canvas.addEventListener("click", function () {
+    if (!state.extraMotion) return;
+    if (state.runnerMode === "thinking") {
+      triggerSingle("exec", "ok");
+    } else if (state.runnerMode === "idle" && state.flights.length === 0) {
+      runChainDemo();
+    } else {
+      triggerSingle(state.catId, state.lastOutcome);
+    }
+  });
+
+  // Bidirectional sync: Bottom-left settings Extra Motion <-> Inline hover "모션 끄기"
+  if (motionOnOpt) motionOnOpt.addEventListener("click", function () { setExtraMotion(true); });
+  if (motionOffOpt) motionOffOpt.addEventListener("click", function () { setExtraMotion(false); });
+  if (quickOffBtn) quickOffBtn.addEventListener("click", function () { setExtraMotion(false); });
+  if (quickOnBtn) quickOnBtn.addEventListener("click", function () { setExtraMotion(true); });
+
+  for (var si = 0; si < setGroupBtns.length; si++) {
+    setGroupBtns[si].addEventListener("click", function () {
+      var grp = this.getAttribute("data-set-group");
+      var peers = root.querySelectorAll('[data-set-group="' + grp + '"]');
+      for (var pi = 0; pi < peers.length; pi++) {
+        peers[pi].classList.toggle("is-active", peers[pi] === this);
+      }
+    });
+  }
+
+  if (wbOnlyBtn) {
+    wbOnlyBtn.addEventListener("click", function () {
+      state.wbOnly = !state.wbOnly;
+      root.classList.toggle("is-wb-only", state.wbOnly);
+      wbOnlyBtn.setAttribute("aria-pressed", state.wbOnly ? "true" : "false");
+    });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) stopLoop();
+    else if (state.extraMotion && hasActiveWork()) startLoop();
+  });
+
+  // Initialize: start the full realistic chain demo once on open, then settle to 0 rAF idle!
+  updateStaticFallback();
+  if (reducedMotion) {
+    setExtraMotion(false);
+    drawStaticCanvas();
+  } else {
+    runChainDemo();
+  }
+})();
+</script>

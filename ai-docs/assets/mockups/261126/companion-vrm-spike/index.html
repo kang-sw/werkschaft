@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pure-VRM Companion Bust Spike — Werkschaft</title>
+  <link rel="stylesheet" href="./spike.css" />
+</head>
+<body>
+  <div class="ws-shell">
+    <!-- Top Bar -->
+    <header class="ws-topbar">
+      <div class="ws-brand">
+        <span class="ws-dot" id="status-dot"></span>
+        <span class="ws-title">Werkschaft Dashboard</span>
+        <span class="ws-crumb">Pure-VRM Companion Bust Spike</span>
+        <span class="ws-chip primary" id="model-badge">Loading Sample VRM...</span>
+      </div>
+      <div class="ws-top-actions">
+        <button class="ws-btn compact" id="btn-toggle-avoid" type="button" title="Toggle right-panel avoidance slide">
+          Avoid Right Panel
+        </button>
+        <button class="ws-btn compact" id="btn-reframe" type="button" title="Auto-frame upper-body bust from head/chest bones">
+          Auto-Reframe
+        </button>
+        <label class="ws-btn compact primary" for="file-input" title="Load a local .vrm or .vrma file">
+          Load Local .vrm / .vrma
+        </label>
+        <input id="file-input" type="file" accept=".vrm,.vrma" hidden />
+      </div>
+    </header>
+
+    <!-- 3-Column Simulated Dashboard Body -->
+    <div class="ws-body">
+      <!-- Left Rail -->
+      <aside class="ws-card ws-rail" aria-label="Simulated Session Rail">
+        <div class="ws-panel-hd">
+          <span>Sessions</span>
+          <span class="ws-sec-lbl">3 active</span>
+        </div>
+        <div class="ws-rail-list">
+          <button class="ws-rail-row is-active" type="button">
+            <div class="ws-rail-row-top">
+              <span class="ws-rail-name">companion-vrm-spike</span>
+              <span class="ws-phase tool">tool</span>
+            </div>
+            <span class="ws-rail-meta">Pure-VRM bust validation</span>
+          </button>
+          <button class="ws-rail-row" type="button">
+            <div class="ws-rail-row-top">
+              <span class="ws-rail-name">dashboard-shell</span>
+              <span class="ws-phase reply">reply</span>
+            </div>
+            <span class="ws-rail-meta">Bottom-right dock &amp; avoidance</span>
+          </button>
+          <button class="ws-rail-row" type="button">
+            <div class="ws-rail-row-top">
+              <span class="ws-rail-name">idle-cpu-budget</span>
+              <span class="ws-phase think">think</span>
+            </div>
+            <span class="ws-rail-meta">Adaptive 30/6/0 FPS throttle</span>
+          </button>
+        </div>
+        <div class="ws-rail-foot">
+          <span class="ws-sec-lbl">Drag &amp; Drop</span>
+          <span>Drop any local <code>.vrm</code> (0.x or 1.0) or <code>.vrma</code> anywhere on this window.</span>
+        </div>
+      </aside>
+
+      <!-- Main Workspace -->
+      <main class="ws-main">
+        <section class="ws-card ws-main-hero">
+          <div>
+            <h1>Pure-VRM Companion Bust Spike</h1>
+            <p>Validates unified VRM 0.x/1.0 expressions, procedural upper-body poses, auto-framed bust camera, right-panel avoidance, and adaptive WebGL budgeting.</p>
+          </div>
+          <div class="ws-pill-row">
+            <span class="ws-chip ok tabular" id="hero-fps-chip">-- FPS</span>
+            <span class="ws-chip tabular" id="hero-ver-chip">VRM --</span>
+          </div>
+        </section>
+
+        <div class="ws-grid-2">
+          <!-- Expression Engine Card -->
+          <section class="ws-card ws-section">
+            <div class="ws-section-hd">
+              <span class="ws-sec-lbl">Expression Engine (7 States)</span>
+              <span class="ws-chip" id="expr-active-chip">idle</span>
+            </div>
+            <div class="ws-pill-row" id="expr-buttons">
+              <button class="ws-btn is-active" data-expr="idle" type="button">idle</button>
+              <button class="ws-btn" data-expr="idle_doze" type="button">idle_doze</button>
+              <button class="ws-btn" data-expr="focused" type="button">focused</button>
+              <button class="ws-btn" data-expr="half_lid" type="button">half_lid</button>
+              <button class="ws-btn" data-expr="oo" type="button">oo</button>
+              <button class="ws-btn" data-expr="cry" type="button">cry</button>
+              <button class="ws-btn" data-expr="happy" type="button">happy</button>
+            </div>
+            <div class="ws-well">
+              <div class="ws-field-row">
+                <span class="ws-sec-lbl">Live Expression Diagnostics</span>
+                <span class="mono tabular" style="font-size:11px;color:var(--wb-muted-fg)" id="diag-fallback"></span>
+              </div>
+              <div class="ws-diag-list" id="diag-weights"></div>
+              <div class="ws-field-row" style="margin-top:2px;">
+                <label>Detected Presets</label>
+                <span class="mono tabular" style="font-size:11px;color:var(--wb-muted-fg)" id="diag-preset-count">0</span>
+              </div>
+              <div class="ws-diag-list" id="diag-presets"></div>
+              <div class="ws-field-row" style="margin-top:2px;">
+                <label>Custom Expressions</label>
+                <span class="mono tabular" style="font-size:11px;color:var(--wb-muted-fg)" id="diag-custom-count">0</span>
+              </div>
+              <div class="ws-diag-list" id="diag-customs"></div>
+            </div>
+          </section>
+
+          <!-- Upper-Body Poses & VRMA Card -->
+          <section class="ws-card ws-section">
+            <div class="ws-section-hd">
+              <span class="ws-sec-lbl">Upper-Body Poses &amp; Gestures</span>
+              <span class="ws-chip" id="pose-active-chip">stand</span>
+            </div>
+            <div class="ws-pill-row" id="pose-buttons">
+              <button class="ws-btn is-active" data-pose="stand" type="button">stand</button>
+              <button class="ws-btn" data-pose="perched" type="button">perched</button>
+              <button class="ws-btn" data-pose="typing" type="button">typing</button>
+              <button class="ws-btn" data-pose="dangle" type="button">dangle</button>
+              <button class="ws-btn" data-pose="wave" type="button">wave</button>
+              <button class="ws-btn" data-pose="point" type="button">point</button>
+              <button class="ws-btn" data-pose="headrub" type="button">headrub</button>
+              <button class="ws-btn" data-pose="cup_hands" type="button">cup_hands</button>
+              <button class="ws-btn" data-pose="coffee" type="button">coffee</button>
+            </div>
+            <div class="ws-well">
+              <div class="ws-field-row">
+                <label for="chk-lookat">Cursor LookAt (clamped yaw/pitch)</label>
+                <input id="chk-lookat" type="checkbox" checked />
+              </div>
+              <div class="ws-field-row">
+                <label>VRMA Clip Playback</label>
+                <div class="ws-pill-row">
+                  <span class="mono" style="font-size:11px;color:var(--wb-muted-fg)" id="vrma-status">None loaded</span>
+                  <button class="ws-btn compact" id="btn-vrma-stop" type="button" hidden>Stop VRMA</button>
+                </div>
+              </div>
+            </div>
+            <div class="ws-dropzone" id="dropzone">
+              <div class="ws-dropzone-text">
+                <strong>Drop Local .vrm or .vrma</strong>
+                <span>Replaces avatar immediately and auto-reframes bust camera.</span>
+              </div>
+              <button class="ws-btn compact" id="btn-reset-sample" type="button">Sample VRM</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="ws-grid-2">
+          <!-- Dock & Framing Controls -->
+          <section class="ws-card ws-section">
+            <div class="ws-section-hd">
+              <span class="ws-sec-lbl">Dock, Framing &amp; Detach Preview</span>
+              <span class="ws-chip tabular" id="size-readout">240×280</span>
+            </div>
+            <div class="ws-well">
+              <div class="ws-field-row">
+                <label for="dock-width">Bust Dock Width (180..340 px)</label>
+                <input class="ws-range" id="dock-width" type="range" min="180" max="340" step="4" value="240" />
+              </div>
+              <div class="ws-field-row">
+                <label>Detach Frame Mode</label>
+                <div class="ws-pill-row" id="detach-buttons">
+                  <button class="ws-btn compact is-active" data-detach="docked" type="button">Docked</button>
+                  <button class="ws-btn compact" data-detach="detach-card" type="button">Bust Card</button>
+                  <button class="ws-btn compact" data-detach="detach-dissolve" type="button">Digital Dissolve</button>
+                </div>
+              </div>
+              <div class="ws-field-row">
+                <label>Right-Panel Avoidance</label>
+                <span class="ws-chip" id="avoid-status-chip">Docked Right</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Performance & Renderer Controls -->
+          <section class="ws-card ws-section">
+            <div class="ws-section-hd">
+              <span class="ws-sec-lbl">Adaptive Performance &amp; WebGL</span>
+              <span class="ws-chip ok tabular" id="perf-mode-chip">Adaptive 30/6/0</span>
+            </div>
+            <div class="ws-well">
+              <div class="ws-field-row">
+                <label for="fps-mode">FPS Cap</label>
+                <select class="ws-select" id="fps-mode">
+                  <option value="adaptive" selected>Adaptive (30 active / 6 idle / 0 hidden)</option>
+                  <option value="60">60 FPS</option>
+                  <option value="30">30 FPS</option>
+                  <option value="24">24 FPS</option>
+                </select>
+              </div>
+              <div class="ws-field-row">
+                <label for="dpr-mode">Device Pixel Ratio Cap</label>
+                <select class="ws-select" id="dpr-mode">
+                  <option value="2" selected>&lt;= 2x (Crisp)</option>
+                  <option value="1">1x (Low GPU)</option>
+                </select>
+              </div>
+              <div class="ws-field-row">
+                <label for="light-mode">MToon / Lighting Preset</label>
+                <select class="ws-select" id="light-mode">
+                  <option value="anime" selected>Flat Anime (1-light + Hemisphere)</option>
+                  <option value="studio">Studio 3-Point</option>
+                </select>
+              </div>
+              <div class="ws-pill-row" style="margin-top:4px;">
+                <button class="ws-btn compact" id="btn-sim-idle" type="button">Simulate Idle (6 FPS)</button>
+                <button class="ws-btn compact warn" id="btn-ctx-loss" type="button">Test WebGL Context Loss</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <!-- Right Utility Panel (hover/click triggers companion avoidance) -->
+      <aside class="ws-card ws-right-panel" id="right-panel" aria-label="Right Utility Panel">
+        <div class="ws-panel-hd">
+          <span>Inspector &amp; Telemetry</span>
+          <span class="ws-chip" id="right-panel-badge">Hover to slide</span>
+        </div>
+        <div class="ws-right-body">
+          <div class="ws-kv-grid">
+            <div class="ws-kv">
+              <span class="ws-kv-k">Measured FPS</span>
+              <span class="ws-kv-v mono tabular" id="tel-fps">--</span>
+            </div>
+            <div class="ws-kv">
+              <span class="ws-kv-k">Render ms/f</span>
+              <span class="ws-kv-v mono tabular" id="tel-ms">--</span>
+            </div>
+            <div class="ws-kv">
+              <span class="ws-kv-k">Draw Calls</span>
+              <span class="ws-kv-v mono tabular" id="tel-calls">--</span>
+            </div>
+            <div class="ws-kv">
+              <span class="ws-kv-k">Triangles</span>
+              <span class="ws-kv-v mono tabular" id="tel-tris">--</span>
+            </div>
+            <div class="ws-kv">
+              <span class="ws-kv-k">Canvas Pixels</span>
+              <span class="ws-kv-v mono tabular" id="tel-pixels">--</span>
+            </div>
+            <div class="ws-kv">
+              <span class="ws-kv-k">JS Heap</span>
+              <span class="ws-kv-v mono tabular" id="tel-mem">n/a</span>
+            </div>
+          </div>
+
+          <div class="ws-note-item">
+            <strong>Right-Panel Avoidance</strong>
+            Hovering or clicking inside this utility panel slides the bottom-right companion horizontally along the bottom edge into the main workspace area so inspector controls stay unobstructed.
+          </div>
+
+          <div class="ws-note-item">
+            <strong>Auto-Framed Bust Camera</strong>
+            Camera target and distance are derived directly from the loaded VRM's normalized <code>head</code> and <code>chest</code>/<code>upperChest</code> bones so framing adapts automatically to any avatar height.
+          </div>
+
+          <div class="ws-note-item">
+            <strong>Idle &amp; Hidden Pause</strong>
+            In Adaptive mode, rendering drops from 30 FPS to 6 FPS after 5 seconds without interaction and pauses completely (0 FPS) when <code>document.hidden</code> is true.
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Bottom-Right Companion Bust Viewport -->
+  <div class="ws-companion-dock" id="companion-dock" role="region" aria-label="Companion Bust Viewport">
+    <div class="ws-dock-hud-top">
+      <span class="ws-hud-pill mono tabular" id="dock-hud-fps">-- fps</span>
+      <span class="ws-hud-pill mono" id="dock-hud-state">idle · stand</span>
+    </div>
+
+    <div class="ws-expr-badge" id="expr-badge" data-kind=""></div>
+
+    <div class="ws-companion-canvas-wrap">
+      <canvas id="vrm-canvas"></canvas>
+    </div>
+    <div class="ws-dissolve-grid" aria-hidden="true"></div>
+
+    <div class="ws-dock-hud-bottom">
+      <span class="ws-hud-pill mono tabular" id="dock-hud-stats">-- calls · -- tris</span>
+    </div>
+
+    <div class="ws-dock-overlay is-visible" id="dock-overlay">Loading Sample VRM...</div>
+  </div>
+
+  <!-- Global Drag & Drop Overlay -->
+  <div class="ws-global-drop" id="global-drop">
+    <div class="ws-global-drop-card">
+      <strong>Drop Local .vrm or .vrma</strong>
+      <span>Supports VRM 0.x, VRM 1.0, and VRMAnimation (.vrma) clips</span>
+    </div>
+  </div>
+
+  <script type="module" src="./spike.js"></script>
+</body>
+</html>

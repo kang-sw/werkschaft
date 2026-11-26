@@ -112,6 +112,9 @@ section.topic:not([data-max]) > [data-wbcv]:not(.tophead):not([data-has-panel-ma
 .sheet-width[hidden] { display: none !important; }
 details.entry-panel:not(.msg):not([data-max]) > summary:has(> .d-max) { grid-template-columns: var(--pcol) minmax(0, 1fr) auto auto; }
 details.entry-panel:not(.msg):not([data-max]) > summary > .d-max { grid-column: 3; grid-row: 1; height: 22px; }
+details.entry-panel:not(.msg):not([data-max]) > summary:has(> .ppin):has(> .d-max) { grid-template-columns: var(--pcol) minmax(0, 1fr) auto auto auto; }
+details.entry-panel:not(.msg):not([data-max]) > summary > .ppin { display: inline-grid; grid-column: 3; grid-row: 1; height: 22px; }
+details.entry-panel:not(.msg):not([data-max]) > summary:has(> .ppin) > .d-max { grid-column: 4; }
 details.entry-panel[data-max] > summary { grid-template-columns: var(--pcol) minmax(0, 1fr) auto; }
 details.entry-panel[data-max] > summary > .d-min { grid-column: 3; grid-row: 1; height: 22px; }
 details.entry-panel[data-max] > summary:has(> .sheet-width:not([hidden])) { grid-template-columns: var(--pcol) minmax(0, 1fr) auto auto; }
@@ -132,7 +135,7 @@ details.entry-panel[data-max] { background: var(--wb-bg); }
 section.topic[data-max] > .tophead, details.entry-panel[data-max] > summary { position: sticky; top: 0; z-index: 2; }
 section.topic.quiet[data-max] > .tophead > .tbar { border-top-left-radius: 0; border-top-right-radius: 0; }
 details.entry-panel[data-max] > summary { background: var(--wb-bg); cursor: default; }
-section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max { display: none; }
+section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max, details.entry-panel[data-max] > summary > .ppin { display: none; }
 section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-max] > summary > .d-min { display: inline-grid; }
 @media (max-width: 640px) { section.topic[data-max], details.entry-panel[data-max] { top: 46px; left: 8px; right: 8px; bottom: 8px; } }
 @media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } .bc-grip::after { transition: none; } }
@@ -184,7 +187,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .overview-preview-stage > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; height: 100%; max-height: none; contain: none; }
 .overview-preview-stage > .bcard > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; min-height: 0; content-visibility: visible !important; }
 .overview-preview-stage > .bcard > .bc-in > .bc-grip { display: none; }
-.overview-preview-stage :is(.tpin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close) { display: none; }
+.overview-preview-stage :is(.tpin, .ppin, .t-fold, .t-raise, .bc-pin, .bc-fold, .bc-raise, .bc-close) { display: none; }
 .r-board [data-overview-motion] { content-visibility: visible !important; position: relative; }
 .r-board [data-overview-motion] :is(section.topic > :not(.tophead), .bc-body) { content-visibility: visible !important; }
 .r-board [data-overview-motion] :is(.tophead, .bc-hd) { position: static !important; }
@@ -228,6 +231,9 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .pv-txt { margin: 0; padding: 0 12px; font: 12px/18px var(--wb-mono); white-space: pre; tab-size: 4; color: var(--wb-fg); background: transparent; }
 .pv-mark { position: absolute; left: 0; right: 0; height: 18px; margin-top: 8px; background: color-mix(in srgb, var(--wb-policy) 20%, transparent); pointer-events: none; }
 .pv-none { padding: 18px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; color: var(--wb-muted-fg); font-size: 13px; }
+/* ===== pinned panel mirror cards (panelcard.js) ===== */
+.bcard[data-kind="panel"] .panel-card-doc { padding: 8px 12px 10px; }
+.bcard[data-kind="panel"] .panel-card-empty { padding: 18px 16px; color: var(--wb-muted-fg); font-size: 13px; }
 .pv-none p { margin: 0; }
 .pv-none .btn { color: var(--wb-fg); height: 26px; }
 

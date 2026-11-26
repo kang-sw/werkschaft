@@ -403,6 +403,7 @@
       var tail = text.slice(at);
       if (tail || ranges.length) editor.appendChild(doc.createTextNode(tail));
       select(selection[0], selection[1]);
+      if (typeof editor._wsmdRenderHook === "function") editor._wsmdRenderHook();
     }
     function changed(before, action) {
       var after = valid(text, ranges), left = before.slice(), added = [], removed = [], updated = [];
@@ -515,7 +516,14 @@
         field.dispatchEvent(new Event("compositionupdate"));
       }, 0);
     });
-    editor.addEventListener("compositionend", function () { composing = false; field.dispatchEvent(new Event("compositionend")); });
+    editor.addEventListener("compositionend", function () {
+      composing = false;
+      var state = read(editor);
+      if (state.text !== text || state.ranges.length !== ranges.length) {
+        text = state.text; ranges = state.ranges; cache(); offsets();
+      }
+      field.dispatchEvent(new Event("compositionend"));
+    });
     ["keydown", "keyup"].forEach(function (type) {
       editor.addEventListener(type, function (e) {
         e.stopPropagation();
@@ -562,7 +570,7 @@
         }
         if (rich && typeof rich.text === "string" && Array.isArray(rich.ranges) && valid(rich.text, rich.ranges).length === rich.ranges.length) {
           var sel = expanded.apply(null, offsets()), before = valid(text, ranges), start = sel[0];
-          replace(rich.text, sel[0], sel[1]);
+          spliceText(rich.text, sel[0], sel[1]);
           ranges = valid(text, ranges.concat(rich.ranges.map(function (r) { return Object.assign({}, r, { start: r.start + start, end: r.end + start }); })).sort(function (a, b) { return a.start - b.start; }));
           render(); notify(before, "paste");
         } else {
@@ -629,7 +637,7 @@
       var mark = { start: at[0] + prefix.length, end: at[0] + prefix.length + payload.anchor.length, kind: kind, id: key, key: key, label: label, payload: Object.assign({}, payload, { anchor: payload.anchor }) };
       var kept = options.preserveCaret ? (focused(field) ? offsets().slice() : selection.slice()) : null;
       if (!options.preserveCaret) field.focus();
-      replace(prefix + payload.anchor + suffix, at[0], at[1]);
+      spliceText(prefix + payload.anchor + suffix, at[0], at[1]);
       ranges = valid(text, ranges.concat(mark).sort(function (a, b) { return a.start - b.start; }));
       render(); if (kept) { var moved = movedSelection(kept, at[0], at[1], prefix.length + payload.anchor.length + suffix.length); select(moved[0], moved[1]); }
       notify(before, "insert");
@@ -642,6 +650,18 @@
       revealCaret: revealCaret,
       ordered: function () { return valid(text, ranges); },
       restore: function (saved) { var before = valid(text, ranges); ranges = valid(text, saved); render(); changed(before, "restore"); },
+      applyState: function (nextText, nextRanges, nextSel, action) {
+        var before = valid(text, ranges);
+        text = String(nextText == null ? "" : nextText);
+        ranges = valid(text, nextRanges);
+        if (Array.isArray(nextSel) && nextSel.length >= 2) {
+          selection = [Math.max(0, Math.min(text.length, nextSel[0])), Math.max(0, Math.min(text.length, nextSel[1]))];
+        } else {
+          selection = [text.length, text.length];
+        }
+        render();
+        notify(before, action || "history");
+      },
       insertCapsule: insertGeneric,
       upsert: function (kind, key, payload) {
         key = String(key); var old = ranges.find(function (r) { return r.kind === kind && r.key === key; });
@@ -691,19 +711,54 @@
         field.focus(); select(at.start, at.end);
         // A browser editing transaction keeps capsule insertion/deletion undoable.
         if (doc.execCommand("insertHTML", false, capsule(kind, id, label).outerHTML + tail)) return;
-        replace(value + tail, at.start, at.end);
+        spliceText(value + tail, at.start, at.end);
         ranges.push({ start: at.start, end: at.start + value.length, kind: kind, id: id, label: label });
         ranges.sort(function (a, b) { return a.start - b.start; }); render(); notify(before, "insert");
       },
-      anchor: function (at) { var p = point(at), r = doc.createRange(); r.setStart(p[0], p[1]); r.collapse(true); var box = r.getBoundingClientRect(); return box.height ? { x: box.left, top: box.top, bottom: box.bottom } : { x: editor.getBoundingClientRect().left, top: editor.getBoundingClientRect().top, bottom: editor.getBoundingClientRect().bottom }; }
+      anchor: function (at) {
+        var p = point(at), r = doc.createRange();
+        r.setStart(p[0], p[1]); r.collapse(true);
+        var box = r.getBoundingClientRect ? r.getBoundingClientRect() : null;
+        if (!box || !box.height) {
+          var list = r.getClientRects ? r.getClientRects() : null;
+          if (list && list.length && list[0].height) box = list[0];
+        }
+        if ((!box || !box.height) && p[0] && p[0].nodeType === 3) {
+          var v = p[0].nodeValue || "";
+          if (p[1] < v.length) {
+            var pr = doc.createRange(); pr.setStart(p[0], p[1]); pr.setEnd(p[0], p[1] + 1);
+            var pb = pr.getBoundingClientRect();
+            if (pb && pb.height) box = pb;
+          } else if (p[1] > 0) {
+            var qr = doc.createRange(); qr.setStart(p[0], p[1] - 1); qr.setEnd(p[0], p[1]);
+            var qb = qr.getBoundingClientRect();
+            if (qb && qb.height) {
+              box = v.charAt(p[1] - 1) === "\n"
+                ? { left: editor.getBoundingClientRect().left, top: qb.bottom, bottom: qb.bottom + qb.height, height: qb.height }
+                : { left: qb.right, top: qb.top, bottom: qb.bottom, height: qb.height };
+            }
+          }
+        }
+        if ((!box || !box.height) && p[0] && p[0].nodeType === 1 && p[0] !== editor && p[0].getBoundingClientRect) {
+          var eb = p[0].getBoundingClientRect();
+          if (eb && eb.height) box = eb;
+        }
+        if (box && box.height) return { x: box.left, top: box.top, bottom: box.bottom };
+        var ed = editor.getBoundingClientRect();
+        return { x: ed.left, top: ed.top, bottom: ed.bottom };
+      }
     };
     render(); return api;
   }
   function topicPicker(field, source) {
     if (!field || !window.wsMention) return null;
     attach(field);
+    if (field.wsc && field.wsc.topicPop) return field.wsc.topicPop;
     var popup = window.wsMention.attach(field, {
-      label: wsT("js.capsule.topics"), token: function (v, c) { return token(v, c, "#"); },
+      label: wsT("js.capsule.topics"), token: function (v, c) {
+        if (field.wsInput && typeof field.wsInput.allowsTopic === "function" && !field.wsInput.allowsTopic()) return null;
+        return token(v, c, "#");
+      },
       source: function (q, done) { source(function (rows) { done(rank(rows, q, function (r) { return r.label; })); }); },
       render: function (li, row) {
         var name = doc.createElement("span"), stem = doc.createElement("span");
@@ -711,8 +766,17 @@
         li.appendChild(name); li.appendChild(stem);
       }, choose: function (row, at) { field.wsc.insert("topic", row.id, row.label, at); }
     });
+    function onKeyDown(e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); }
+    var origDestroy = popup.destroy;
+    popup.destroy = function () {
+      if (typeof field.removeEventListener === "function") field.removeEventListener("keydown", onKeyDown);
+      if (field.wsc && field.wsc.topicPop === popup) field.wsc.topicPop = null;
+      topicPickers = topicPickers.filter(function (entry) { return entry.popup !== popup; });
+      if (origDestroy) origDestroy();
+    };
+    field.wsc.topicPop = popup;
     topicPickers.push({ field: field, popup: popup });
-    field.addEventListener("keydown", function (e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); });
+    field.addEventListener("keydown", onKeyDown);
     return popup;
   }
   function rawPaste(field) { return field ? !!(field.wsc && rawPasteBypass()) : rawPasteBypass(); }

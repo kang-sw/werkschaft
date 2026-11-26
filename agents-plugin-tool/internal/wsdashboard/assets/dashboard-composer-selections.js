@@ -102,7 +102,15 @@
       if (it) { dropImg(it); release(it); }
     });
     mcomposing = false;
-    if (mnote) mnote.value = "";
+    if (mnote) {
+      if (mnote.wsInput) {
+        mnote.wsInput.closePopups();
+        mnote.wsInput.clearMarkdown();
+        mnote.wsInput.setValue("");
+      } else {
+        mnote.value = "";
+      }
+    }
     if (mbtn) mbtn.hidden = true;
     if (cimgs) {
       if (keepImages && p && p.edit && p.edit.row && mimgs) {
@@ -150,7 +158,35 @@
       mimgs = doc.createElement("div"); mimgs.className = "selection-images";
       mbtn.appendChild(mimgs);
       mbtn.appendChild(add);
-      if (window.WsCapsules) window.WsCapsules.topicPicker(mnote, capsuleTopics);
+      if (window.WsInput) {
+        window.WsInput.attach(mnote, {
+          keymap: "newline-only",
+          features: {
+            markdown: true,
+            capsules: true,
+            mentions: true,
+            topics: true,
+            slash: true,
+            imagePaste: true,
+            longPaste: false,
+            listContinuation: true,
+            bangMode: false,
+            autoGrow: true
+          },
+          providers: {
+            files: typeof fileCandidates === "function" && rid ? fileCandidates : null,
+            topics: typeof capsuleTopics === "function" ? capsuleTopics : null,
+            commands: typeof commandCandidates === "function" && rid ? commandCandidates : null
+          },
+          preformattedCommands: true,
+          renderCommand: typeof commandRow === "function" ? commandRow : undefined,
+          slashMax: 500,
+          mentionLabel: wsT("js.mention.label"),
+          slashLabel: wsT("js.cmd.label")
+        });
+      } else if (window.WsCapsules) {
+        window.WsCapsules.topicPicker(mnote, capsuleTopics);
+      }
       mnote.addEventListener("paste", function (e) { pasteImages(e, mnote); });
       mbtn.addEventListener("dragover", function (e) {
         if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0) e.preventDefault();
@@ -167,6 +203,7 @@
       mbtn.addEventListener("compositionstart", function () { mcomposing = true; });
       mbtn.addEventListener("compositionend", function () { mcomposing = false; });
       mbtn.addEventListener("keydown", function (e) {
+        if (e.defaultPrevented) return;
         if (e.isComposing || e.keyCode === 229 || mcomposing) { if (e.target === add) e.preventDefault(); e.stopPropagation(); return; }
         if (e.key === "Escape") {
           e.preventDefault(); e.stopPropagation();
@@ -185,7 +222,12 @@
     if (p !== mpend) {
       if (mpend) hideMention();
       p = Object.assign({}, p, { ms: validMentions(p.ms || [p.m]), rid: rid, images: (p.images || []).slice() });
-      mnote.value = p.comment || "";
+      if (mnote.wsInput) {
+        mnote.wsInput.setValue(p.comment || "");
+        if (p.commentMentions && p.commentMentions.length) mnote.wsInput.setMentions(p.commentMentions);
+      } else {
+        mnote.value = p.comment || "";
+      }
     }
     p.screenX = x; p.screenY = y;
     mpend = p;
@@ -215,7 +257,7 @@
     var p = mpend;
     if (!p || p.rid !== rid || mcomposing) return;
     if (!p.ms.length) return;
-    var s = { mentions: validMentions(p.ms), comment: mnote.value, images: p.images.slice() }, index = bselections.indexOf(p.edit);
+    var s = { mentions: validMentions(p.ms), comment: mnote.value, commentMentions: mnote.wsInput ? mnote.wsInput.getMentions() : [], images: p.images.slice() }, index = bselections.indexOf(p.edit);
     s.key = index >= 0 ? p.edit.key : "selection-" + Date.now() + "-" + Math.random().toString(36).slice(2);
     if (index >= 0) { s.row = p.edit.row; bselections[index] = s; }
     else bselections.push(s);
@@ -264,6 +306,7 @@
       if (mpend && !mpend.locked && mpend.frame && !(e.target.closest && e.target.closest("[data-wbmention-pop]"))) hideMention();
     }, true);
     doc.addEventListener("keydown", function (e) {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && !mcomposing && mpend) hideMention();
     });
     // The button follows its selection when the board scrolls or the

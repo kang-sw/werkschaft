@@ -283,6 +283,9 @@
 /* a served page's topic body: a sandboxed frame sized to its content, which pads itself */
 .doc-body.framed { padding: 0; }
 iframe.doc-frame { display: block; width: 100%; height: 0; border: 0; }
+.mockup-wrap { height: 70vh; min-height: 240px; resize: vertical; overflow: hidden; border: 1px solid var(--wb-line); border-radius: 6px; background: var(--wb-bg); }
+.mockup-wrap > .doc-frame.mockup-frame { display: block; width: 100%; height: 100%; border: 0; }
+.mockup-missing { font-size: 12px; color: var(--wb-muted-fg); font-style: italic; margin: 0 0 8px; }
 /* drawing kit for topic bodies: theme-aware classes for inline SVG (the
    selectors key on .doc-body, which a body frame's document holds too) */
 .doc-body .box { fill: var(--wb-muted); }

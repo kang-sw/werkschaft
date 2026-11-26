@@ -99,6 +99,8 @@ function walk(root, out) { root.childNodes.forEach(function (c) { out.push(c); w
 var SEL = {
   "div.doc-frame[data-srcdoc]": function (n) { return n.tagName === "DIV" && n.classList.contains("doc-frame") && n.hasAttribute("data-srcdoc"); },
   "iframe.doc-frame[data-srcdoc]": function (n) { return n.tagName === "IFRAME" && n.classList.contains("doc-frame") && n.hasAttribute("data-srcdoc"); },
+  "div.doc-frame[data-srcdoc], div.doc-frame[data-mockup-src]": function (n) { return n.tagName === "DIV" && n.classList.contains("doc-frame") && (n.hasAttribute("data-srcdoc") || n.hasAttribute("data-mockup-src")); },
+  "iframe.doc-frame[data-srcdoc], iframe.doc-frame[data-mockup-src]": function (n) { return n.tagName === "IFRAME" && n.classList.contains("doc-frame") && (n.hasAttribute("data-srcdoc") || n.hasAttribute("data-mockup-src")); },
   "section.topic[data-topic]": function (n) { return n.tagName === "SECTION" && n.classList.contains("topic") && n.hasAttribute("data-topic"); },
   "details": function (n) { return n.tagName === "DETAILS"; },
   "details[data-key]": function (n) { return n.tagName === "DETAILS" && n.hasAttribute("data-key"); }

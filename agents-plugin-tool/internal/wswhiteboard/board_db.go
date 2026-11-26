@@ -35,9 +35,10 @@ const (
 
 // BoardDBOptions supplies observability and deterministic test seams.
 type BoardDBOptions struct {
-	Logf    func(format string, args ...any)
-	Observe func(stage string)
-	Fault   func(stage string) error
+	Logf          func(format string, args ...any)
+	Observe       func(stage string)
+	Fault         func(stage string) error
+	OnLoadArchive func(dir string)
 }
 
 // boardDBInstances numbers every opened board (BoardDB.Instance).
@@ -61,6 +62,8 @@ type BoardDB struct {
 	nextTopic          int
 	topicDirs          map[string]string
 	holds              map[int]boardItemHold
+	mockups            map[string]string
+	mockupRoots        map[string]string
 	checkpointTimer    *time.Timer
 	checkpointDue      time.Time
 	closed             bool
@@ -143,6 +146,15 @@ var boardDBSchema = []string{
 		item_id INTEGER PRIMARY KEY,
 		loaded_at TEXT NOT NULL,
 		item_changed INTEGER NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS mockup_bundles (
+		entry_id TEXT PRIMARY KEY REFERENCES entries(entry_id) ON DELETE CASCADE,
+		root_file TEXT NOT NULL,
+		sha256 TEXT NOT NULL,
+		bundle BLOB NOT NULL,
+		byte_size INTEGER NOT NULL,
+		file_count INTEGER NOT NULL,
+		created_at TEXT NOT NULL
 	)`,
 }
 
@@ -307,7 +319,7 @@ func boardDBOpenError(path string, err error) error {
 // table openBoardDBHandle creates is empty.
 func (b *BoardDB) uncommitted() (bool, error) {
 	var n int
-	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)+(SELECT COUNT(*) FROM item_holds)`).Scan(&n)
+	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)+(SELECT COUNT(*) FROM item_holds)+(SELECT COUNT(*) FROM mockup_bundles)`).Scan(&n)
 	return err == nil && n == 0, err
 }
 
@@ -340,9 +352,16 @@ func boardFilesPresent(dir string, names ...string) (bool, error) {
 
 // CreateBoardDB installs initial state directly, refusing existing authority.
 func CreateBoardDB(dir string, initial *State, opts BoardDBOptions) (*BoardDB, error) {
+	return CreateBoardDBWithBundles(dir, initial, nil, opts)
+}
+
+// CreateBoardDBWithBundles installs initial state and any accompanying mockup
+// bundles in one transaction, refusing existing authority.
+func CreateBoardDBWithBundles(dir string, initial *State, bundles []MockupBundle, opts BoardDBOptions) (*BoardDB, error) {
 	if dir == "" || initial == nil {
 		return nil, fmt.Errorf("whiteboard board DB: directory and initial state are required")
 	}
+	bundleMap := mockupBundleMap(bundles)
 	f := FolderStore{Dir: dir}
 	var b *BoardDB
 	err := f.withGuard(true, func() error {
@@ -372,7 +391,7 @@ func CreateBoardDB(dir string, initial *State, opts BoardDBOptions) (*BoardDB, e
 			return err
 		}
 		defer tx.Rollback()
-		if err = boardInsertAll(tx, rows, 1, 0); err == nil && (initial.MetadataRevision != 0 || initial.StaleNudgeRevision != "") {
+		if err = boardInsertAll(tx, rows, 1, 0, bundleMap); err == nil && (initial.MetadataRevision != 0 || initial.StaleNudgeRevision != "") {
 			_, err = tx.Exec(`INSERT INTO revision_receipts(slot,generation,metadata_revision,stale_nudge_revision) VALUES(1,1,?,?)`, initial.MetadataRevision, initial.StaleNudgeRevision)
 			b.revisionSlot = 1
 		}
@@ -392,6 +411,7 @@ func CreateBoardDB(dir string, initial *State, opts BoardDBOptions) (*BoardDB, e
 			return err
 		}
 		b.state, b.generation, b.nextTopic, b.topicDirs = initial.clone(), 1, rows.NextTopic, rows.Dirs
+		b.setMockupIndexLocked(rows, bundleMap)
 		if err := b.writeSentinel(f); err != nil {
 			b.logf("whiteboard board DB %s: write migration sentinel: %v", dir, err)
 		}
@@ -405,6 +425,97 @@ func CreateBoardDB(dir string, initial *State, opts BoardDBOptions) (*BoardDB, e
 	return b, nil
 }
 
+// Dir returns the board directory path this BoardDB owns.
+func (b *BoardDB) Dir() string {
+	if b == nil {
+		return ""
+	}
+	return b.dir
+}
+
+// MockupIndex returns a copy of the in-memory entry_id -> sha256 index for
+// mockup bundles currently present in this board.
+func (b *BoardDB) MockupIndex() map[string]string {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.mockups) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(b.mockups))
+	for k, v := range b.mockups {
+		out[k] = v
+	}
+	return out
+}
+
+// LookupMockupMeta returns the root filename and sha256 digest of a mockup
+// bundle from the in-memory index without issuing a SQLite query.
+func (b *BoardDB) LookupMockupMeta(entryID string) (rootFile, sha256Hex string, ok bool) {
+	if b == nil || entryID == "" {
+		return "", "", false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return "", "", false
+	}
+	sha, exists := b.mockups[entryID]
+	if !exists {
+		return "", "", false
+	}
+	return b.mockupRoots[entryID], sha, true
+}
+
+// ReadMockupBundle loads one mockup bundle's zip blob on demand from SQLite.
+func (b *BoardDB) ReadMockupBundle(entryID string) (MockupBundle, bool, error) {
+	if b == nil || entryID == "" {
+		return MockupBundle{}, false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return MockupBundle{}, false, fmt.Errorf("whiteboard board DB is closed")
+	}
+	if _, exists := b.mockups[entryID]; !exists {
+		return MockupBundle{}, false, nil
+	}
+	if b.opts.Observe != nil {
+		b.opts.Observe("mockup-read")
+	}
+	var out MockupBundle
+	out.EntryID = entryID
+	err := b.db.QueryRow(
+		`SELECT root_file, sha256, bundle, byte_size, file_count, created_at FROM mockup_bundles WHERE entry_id=?`,
+		entryID,
+	).Scan(&out.RootFile, &out.SHA256, &out.Zip, &out.ByteSize, &out.FileCount, &out.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MockupBundle{}, false, nil
+	}
+	if err != nil {
+		return MockupBundle{}, false, err
+	}
+	return out, true, nil
+}
+
+func (b *BoardDB) setMockupIndexLocked(rows boardDBRows, bundles map[string]MockupBundle) {
+	b.mockups = map[string]string{}
+	b.mockupRoots = map[string]string{}
+	if len(bundles) == 0 {
+		return
+	}
+	for _, topic := range rows.Topics {
+		for _, entry := range topic.Entries {
+			if bundle, ok := bundles[entry.ID]; ok {
+				b.mockups[entry.ID] = bundle.SHA256
+				b.mockupRoots[entry.ID] = bundle.RootFile
+			}
+		}
+	}
+}
+
 func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -415,7 +526,17 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	b := &BoardDB{instance: boardDBInstances.Add(1), dir: dir, path: path, db: db, opts: opts, topicDirs: map[string]string{}, holds: map[int]boardItemHold{}}
+	b := &BoardDB{
+		instance:    boardDBInstances.Add(1),
+		dir:         dir,
+		path:        path,
+		db:          db,
+		opts:        opts,
+		topicDirs:   map[string]string{},
+		holds:       map[int]boardItemHold{},
+		mockups:     map[string]string{},
+		mockupRoots: map[string]string{},
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), BoardDBOpenRetryBound)
 	defer cancel()
 	// locking_mode is deliberately first: WAL never opens a shared-memory

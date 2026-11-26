@@ -90,6 +90,7 @@ var shippedTierRoleInventory = map[string][2]string{
 	"ticket-batch-selector":        {"explore:*", "medium"},
 	"ticket-classifier":            {"explore:*", "medium"},
 	"implementer":                  {"implement:*", "medium"},
+	"mockup-writer":                {"implement:*", "medium"},
 	"ticket-worker":                {"implement:*", "medium"},
 	"ticket-worker-elevated":       {"implement:*", "large"},
 	"ticket-handler":               {"implement:*", "large"},

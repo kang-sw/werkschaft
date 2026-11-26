@@ -244,6 +244,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	}
 	if opts.Sessions != nil {
 		d.source = agentSessions{inner: opts.Sessions, dir: opts.Dir, now: time.Now, snaps: d.snapshots, hosted: d.live.hasOwner}
+		if ms, ok := d.source.(BoardMockupSource); ok {
+			ms.SetMockupEvictor(d.getMockupLRU().EvictBoard)
+		}
 		delay := opts.ackDelay
 		if delay <= 0 {
 			delay = ackCheckDelay

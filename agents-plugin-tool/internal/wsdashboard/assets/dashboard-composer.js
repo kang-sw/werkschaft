@@ -174,8 +174,12 @@
   function renderChips() {
     if (!cchips) return;
     if (inlineEditor()) syncInlineTopics();
-    var active = doc.activeElement, focused = active && active.getAttribute("data-close-reason");
-    var selection = focused != null ? [active.selectionStart, active.selectionEnd] : null;
+    var win = typeof window !== "undefined" ? window : null;
+    var active = doc.activeElement;
+    var activeField = (win && win.WsCapsules && win.WsCapsules.fieldFor && win.WsCapsules.fieldFor(active)) || active;
+    var focused = activeField && activeField.getAttribute("data-close-reason");
+    var selection = focused != null ? [activeField.selectionStart, activeField.selectionEnd] : null;
+    if (win && win.WsInput && win.WsInput.sweep) win.WsInput.sweep(cchips);
     cchips.textContent = "";
     if (!inlineEditor()) chipList().forEach(function (c) {
       var el = doc.createElement("span"), b = doc.createElement("b"), x = doc.createElement("button");
@@ -253,7 +257,11 @@
       input.placeholder = wsT("js.closerequest.reason");
       input.setAttribute("aria-label", wsT("js.closerequest.reasonfor", r.topic));
       input.setAttribute("data-close-reason", r.topic);
-      input.addEventListener("input", function () { r.reason = input.value; queueDraft(); });
+      input.addEventListener("input", function () {
+        r.reason = input.value;
+        r.mentions = input.wsInput ? input.wsInput.getMentions() : [];
+        queueDraft();
+      });
       el.appendChild(input);
       x.type = "button";
       x.className = "unchip";
@@ -263,6 +271,34 @@
       x.textContent = "×";
       el.appendChild(x);
       cchips.appendChild(el);
+      if (win && win.WsInput) {
+        var reasonInst = win.WsInput.attach(input, {
+          keymap: "newline-only",
+          features: {
+            markdown: true,
+            capsules: true,
+            mentions: true,
+            topics: true,
+            slash: true,
+            imagePaste: false,
+            longPaste: false,
+            listContinuation: true,
+            bangMode: false,
+            autoGrow: true
+          },
+          providers: {
+            files: typeof fileCandidates === "function" && rid ? fileCandidates : null,
+            topics: typeof capsuleTopics === "function" ? capsuleTopics : null,
+            commands: typeof commandCandidates === "function" && rid ? commandCandidates : null
+          },
+          preformattedCommands: true,
+          renderCommand: typeof commandRow === "function" ? commandRow : undefined,
+          slashMax: 500,
+          mentionLabel: wsT("js.mention.label"),
+          slashLabel: wsT("js.cmd.label")
+        });
+        if (reasonInst && r.mentions && r.mentions.length) reasonInst.setMentions(r.mentions);
+      }
     });
     // A web card's picked element: its selector and text; a console block:
     // its error count and page. The held message shows the same capsules
@@ -304,7 +340,7 @@
     });
     if (focused != null) {
       focusCloseRequest(focused);
-      var next = doc.activeElement;
+      var next = (win && win.WsCapsules && win.WsCapsules.fieldFor && win.WsCapsules.fieldFor(doc.activeElement)) || doc.activeElement;
       if (next && next.getAttribute("data-close-reason") === focused) next.setSelectionRange(selection[0], selection[1]);
     }
     if (cimgs) renderImgs();
@@ -363,7 +399,7 @@
     var row = s.row && s.row.parentNode;
     if (!row && inlineEditor()) row = q(".wsc-mention", inlineEditor().editor).filter(function (n) { return n.getAttribute("data-wsc-key") === s.key; })[0];
     var rect = row ? row.getBoundingClientRect() : { left: 4, bottom: 4 };
-    placeMention({ ms: s.mentions, x: rect.left, y: rect.bottom, edit: s, comment: s.comment, images: s.images.slice() });
+    placeMention({ ms: s.mentions, x: rect.left, y: rect.bottom, edit: s, comment: s.comment, commentMentions: s.commentMentions, images: s.images.slice() });
     lockMention(); mnote.focus();
     mnote.setSelectionRange(mnote.value.length, mnote.value.length);
   }
