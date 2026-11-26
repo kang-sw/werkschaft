@@ -32,11 +32,12 @@ func claudeTaskEnd(status string) string {
 }
 
 // assistant maps the lead's assistant message: its text (left out when
-// alerted, since the alert's line carries it) and its tool calls. A lead's
+// alerted, since the alert's line carries it) and its tool calls. A
 // message whose usage changes the context figure reports it (a status) at
-// once, so the meter follows each model call rather than the turn's end; a
-// message is often split over several lines carrying the same usage, and
-// those report it once.
+// once, a lead's and a worker's alike, so the meter and the compaction
+// thresholds follow each model call rather than the turn's end; a message
+// is often split over several lines carrying the same usage, and those
+// report it once.
 func (m *claudeMapper) assistant(raw json.RawMessage, now int64, alerted bool) []Event {
 	var msg claudeMessage
 	if json.Unmarshal(raw, &msg) != nil {
@@ -48,7 +49,7 @@ func (m *claudeMapper) assistant(raw json.RawMessage, now int64, alerted bool) [
 		tokens := msg.Usage.InputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.OutputTokens
 		changed := m.context == nil || m.context.Tokens == nil || *m.context.Tokens != tokens
 		m.context = &wslive.UsageContext{Tokens: &tokens}
-		if changed && m.lead() {
+		if changed {
 			out = append(out, m.status())
 		}
 	}

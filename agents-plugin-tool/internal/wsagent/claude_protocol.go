@@ -35,9 +35,11 @@ type claudeMapper struct {
 	// window is the largest modelUsage.contextWindow a result reported: the
 	// model's window, the fallback for compactWindow.
 	window int64
-	// model is the model the lead's last init named. compactWindow is the
-	// window the harness compacts against (get_context_usage's
-	// rawMaxTokens, which honours CLAUDE_CODE_AUTO_COMPACT_WINDOW), as
+	// model is the model the last init named (a lead's or a worker's).
+	// compactWindow is the window the harness compacts against
+	// (get_context_usage's rawMaxTokens, which honours
+	// CLAUDE_CODE_AUTO_COMPACT_WINDOW, a worker's set by
+	// claudeAutoCompactEnv), as
 	// answered for compactModel; it counts only while that is model.
 	// askModel is the model the last ask was sent under, and asks numbers
 	// them.

@@ -277,7 +277,7 @@ func TestClaudeCatalogValues(t *testing.T) {
 			ItemRewind: GradeUnsupported, ItemToolRemoval: GradeNative, ItemSubagentRemoval: GradeNative,
 			ItemModelEffort: GradeNative, ItemApproval: GradeUnsupported, ItemSteer: GradeUnsupported,
 			ItemInterrupt: GradeNative, ItemFollowUp: GradeSubstitute, ItemResume: GradeNative,
-			ItemReasoningStream: GradeUnsupported, ItemUsageQuery: GradeUnsupported,
+			ItemReasoningStream: GradeUnsupported, ItemUsageQuery: GradeNative,
 		},
 	}
 	for _, version := range []string{p.Oldest, p.Newest} {

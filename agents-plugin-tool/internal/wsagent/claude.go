@@ -408,7 +408,15 @@ type claudeInit struct {
 //	                  launch removed is still listed
 //	permissionMode -> approval: the field is absent
 //	slash_commands -> compaction: a list without "compact"; an absent field
-//	                  (an older harness) changes nothing
+//	                  (an older harness) changes nothing. A worker launched
+//	                  with today's flags (no --disable-slash-commands; Skill
+//	                  denied instead, claudeRemovedTools) lists "compact"
+//	                  even under --setting-sources "" (2.1.332 probe,
+//	                  2026-11-26). The empty list of the recorded
+//	                  2.1.322/2.1.326 worker inits comes from the retired
+//	                  --disable-slash-commands, under which a typed /compact
+//	                  does not run, so a worker rejoined from such a launch
+//	                  is rightly demoted
 //	model          -> model/effort: the field is absent
 //	mcp_servers    -> none: MCP injection is an admission condition, and a
 //	                  worker's init check refuses a missing ws server
@@ -550,6 +558,13 @@ func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, erro
 	cmd.Env = claudeEnv(spec.Env)
 	if spec.SessionState && spec.Lead == nil {
 		cmd.Env = claudeWorkerEnv(spec.Env)
+	}
+	if spec.Lead == nil {
+		// claudeEnv dropped any inherited CLAUDE_* value, so these are ws's
+		// own: the worker compacts mid-turn by compaction.worker_hard.
+		if set := claudeAutoCompactEnv(spec.compactAdvisory, spec.compactHard); set != nil {
+			cmd.Env = harnessEnv(cmd.Env, nil, nil, set)
+		}
 	}
 	if spec.Lead != nil {
 		cmd.Env = claudeLeadEnv(spec)

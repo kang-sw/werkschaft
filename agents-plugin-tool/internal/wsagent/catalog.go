@@ -434,10 +434,8 @@ func ClaudeCatalog() *HarnessProfile {
 				Source: "--resume of the recorded session id (claudeArgs, claudeLeadArgs)"},
 			{Item: ItemReasoningStream, Grade: GradeUnsupported,
 				Source: "lead thinking lines are skipped (claudeRingSkip); no summary producer yet"},
-			{Item: ItemUsageQuery, Role: RoleLead, Grade: GradeNative,
-				Source: "the get_context_usage control (claudeMapper.askContextUsage, asked from leadInit)"},
-			{Item: ItemUsageQuery, Role: RoleWorker, Grade: GradeUnsupported,
-				Source: "a worker's usage comes only from its result lines; nothing asks"},
+			{Item: ItemUsageQuery, Grade: GradeNative,
+				Source: "the get_context_usage control, asked at a lead's and a worker's init (claudeMapper.askContextUsage) and after a reattach (conv.queryRecoveryUsage); each assistant message's usage reports at once (claudeMapper.assistant)"},
 		},
 	}
 }

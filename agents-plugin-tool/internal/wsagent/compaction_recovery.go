@@ -49,19 +49,22 @@ const claudeRecoveryContextAsk = "ws-recovery-context"
 
 // Query only harnesses with a documented usage request. The answer, not
 // replayed usage, becomes the first live observation after reattachment.
+// A Claude worker asks too: its process runs the same control channel, and
+// a worker resumed or rejoined at idle above its hard point compacts before
+// its next input instead of after one more turn.
 func (c *conv) queryRecoveryUsage() {
-	switch p := c.proc.(type) {
+	var p *claudeProcess
+	switch proc := c.proc.(type) {
 	case claudeProcess:
-		if p.lead {
-			c.compactUsageFresh = false
-			p.send(claudeProtocol{}.requestLine(claudeRecoveryContextAsk, map[string]any{"subtype": "get_context_usage"}))
-		}
+		p = &proc
 	case *claudeProcess:
-		if p.lead {
-			c.compactUsageFresh = false
-			p.send(claudeProtocol{}.requestLine(claudeRecoveryContextAsk, map[string]any{"subtype": "get_context_usage"}))
-		}
+		p = proc
 	}
+	if p == nil {
+		return
+	}
+	c.compactUsageFresh = false
+	p.send(claudeProtocol{}.requestLine(claudeRecoveryContextAsk, map[string]any{"subtype": "get_context_usage"}))
 }
 
 func (m *claudeMapper) recoveryContextUsage(l claudeLine) []Event {

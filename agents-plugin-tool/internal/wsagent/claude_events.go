@@ -84,6 +84,11 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 			if err := checkClaudeInit(init, m.spec); err != nil {
 				return []Event{{Fatal: err}}
 			}
+			// A worker runs the same control channel as a lead: its window
+			// is known from its first turn on, so the meter and the
+			// compaction thresholds never see a zero window mid-turn.
+			m.model = init.Model
+			m.askContextUsage(replies)
 			out := []Event{m.harnessReport(init)}
 			if init.SessionID != "" {
 				out = append(out, Event{SessionID: init.SessionID})

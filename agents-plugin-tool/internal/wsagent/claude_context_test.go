@@ -100,7 +100,7 @@ func contextOf(t *testing.T, what string, evs []Event) wslive.UsageContext {
 // TestClaudeLeadContextPerModelCall: a lead's assistant message whose
 // usage changes the token count reports it at once; the same usage again
 // (a message split over lines), a subagent's message, and an alert's do
-// not, and neither does a profile conversation's message.
+// not. A profile conversation's (worker's) message reports the same way.
 func TestClaudeLeadContextPerModelCall(t *testing.T) {
 	m := newClaudeMapper(leadSpec())
 	if c := contextOf(t, "first call", m.mapLine(usageLine(1200, ""), nopReplies{})); *c.Tokens != 1200 {
@@ -123,9 +123,15 @@ func TestClaudeLeadContextPerModelCall(t *testing.T) {
 		t.Fatalf("the context stays the lead's last call: %d", *c.Tokens)
 	}
 
+	// A worker reports each changed usage as well, so its meter and its
+	// compaction thresholds follow the turn instead of freezing until the
+	// result.
 	profile := newClaudeMapper(claudeSpec(t, `{"backend":"claude"}`))
+	if c := contextOf(t, "worker call", profile.mapLine(usageLine(1200, ""), nopReplies{})); *c.Tokens != 1200 {
+		t.Fatalf("worker tokens = %d, want 1200", *c.Tokens)
+	}
 	if got := statuses(profile.mapLine(usageLine(1200, ""), nopReplies{})); len(got) != 0 {
-		t.Fatalf("a profile conversation reports its context at the result only, got %+v", got)
+		t.Fatalf("a worker's same usage again reports nothing new, got %+v", got)
 	}
 }
 

@@ -105,6 +105,11 @@ type StartSpec struct {
 	compactState       func(time.Time) compactionState
 	sessionSecret      string
 	modelContextWindow func(string) int64
+	// compactAdvisory and compactHard are a worker's compaction.worker_*
+	// thresholds as loaded for this start (conv.loadCompaction). A backend
+	// whose harness compacts by itself maps them to its own automatic
+	// compaction (claudeAutoCompactEnv). Both are zero for a lead.
+	compactAdvisory, compactHard wsconfig.Threshold
 	// sessionConfig returns the conversation's layered config options,
 	// optional session override reader, and session key for backends that
 	// resolve per-turn config directly. Nil when the runner disables session

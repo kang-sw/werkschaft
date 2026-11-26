@@ -59,6 +59,15 @@ func ParseThreshold(value string) (Threshold, error) {
 }
 
 // Point is the first threshold inside window; counts beyond it never fire.
+//
+// An unknown window (<= 0) is +Inf even for a token count: a token term is
+// checked against the window (a count past it never fires), and that check
+// cannot run without one. A fallback on the bare count could fire a hard
+// compaction against a window that turns out smaller than the count. Every
+// hosted harness reports its window with its usage: Claude from each init's
+// get_context_usage and every result, Codex and agy with each usage push.
+// So a zero window is only a brief gap, and the observation after it
+// decides.
 func (t Threshold) Point(window float64) float64 {
 	point := math.Inf(1)
 	if t.Percent > 0 && window > 0 {
