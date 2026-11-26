@@ -86,7 +86,7 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 			names = append(names, rec.Name)
 		}
 		parts := recordParts(recs)
-		c.queueDurableSteer(p, durableSteer{Text: partsText(parts), Mark: covered}, names, liveEvents(parts))
+		c.queueDurableSteer(p, durableSteer{Text: c.steerWithDirective(partsText(parts), recs), Mark: covered}, names, liveEvents(parts))
 	})
 }
 

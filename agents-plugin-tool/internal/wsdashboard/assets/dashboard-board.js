@@ -125,6 +125,7 @@
         var entryNext = typeof html === "string" ? entryInputFull(html) : html;
         mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
         entryRendered = entryNext;
+        if (wbOnlyOn()) wbFoldSync();
       }
       else if (name === "tree") {
         var treeNext = typeof html === "string" ? treeInputFull(html) : html;

@@ -333,6 +333,9 @@ type QueuedInput struct {
 	// wake, not as the user's text. An older binary ignores the field and
 	// shows the notice as it did before.
 	Exec bool `json:"exec,omitempty"`
+	// WhiteboardFirst carries Entry.WhiteboardFirst through the queue, so a
+	// retried turn composes the same directive. An older binary ignores it.
+	WhiteboardFirst bool `json:"whiteboard_first,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

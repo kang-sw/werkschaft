@@ -37,6 +37,10 @@ type TurnSummaryView struct {
 	Reason      string
 	Gaps        []TurnGapItem
 	Lang        string
+	// Plain marks the summary of a turn that ran no tool: it renders hidden
+	// and the page shows it only while the whiteboard-only toggle folds the
+	// turn's plain replies into its drawer.
+	Plain bool
 }
 
 // TurnGapItem is one RingTools or live ToolGap slice rendered inside
@@ -80,6 +84,9 @@ func NewFoldedPlainTurnSummary(key, entryKey string, turn wslive.RingEntry, at i
 func (v *TurnSummaryView) CountText() string {
 	if v == nil {
 		return ""
+	}
+	if v.Plain {
+		return wsi18n.T(v.Lang, "conv.turn.plain")
 	}
 	if v.CustomLabel != "" {
 		return v.CustomLabel
@@ -156,6 +163,8 @@ func (v *TurnSummaryView) CacheFingerprint() string {
 	b.WriteString(strconv.FormatBool(v.WakeTurn))
 	b.WriteByte('|')
 	b.WriteString(v.Reason)
+	b.WriteByte('|')
+	b.WriteString(strconv.FormatBool(v.Plain))
 	for _, g := range v.Gaps {
 		b.WriteByte(',')
 		b.WriteString(g.EntryKey)
@@ -252,7 +261,7 @@ func groupTurnSummaries(lead wslive.Lead, entries []ConvEntry) *TurnSummaryView 
 }
 
 func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
-	var toolIdxs []int
+	var toolIdxs, replyIdxs []int
 	var replyBytes int64
 	for j := spanStart; j < turnIdx; j++ {
 		switch entries[j].Kind {
@@ -261,12 +270,16 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 				toolIdxs = append(toolIdxs, j)
 			}
 		case wslive.RingReply:
+			replyIdxs = append(replyIdxs, j)
 			replyBytes += int64(len(entries[j].Text))
 		}
 	}
 	if len(toolIdxs) == 0 {
-		// 0-tool turns keep their existing .turnline unchanged unless Child 2 folds them.
+		foldPlainTurn(entries, replyIdxs, turnIdx, replyBytes)
 		return
+	}
+	for _, idx := range replyIdxs {
+		entries[idx].TurnKey = "turn-" + entries[toolIdxs[0]].Key
 	}
 
 	turn := entries[turnIdx]
@@ -336,6 +349,30 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 	} else {
 		entries[turnIdx].TurnAbsorbed = true
 	}
+}
+
+// foldPlainTurn prepares a completed turn that ran no tool for the page's
+// whiteboard-only fold: Child 1's reusable summary (NewFoldedPlainTurnSummary)
+// is anchored at the turn's first reply, rendered hidden, and the span's
+// replies and closing .turnline name it, so the page can fold the replies into
+// its drawer and show it only while the toggle is on. A turn with no reply
+// has nothing to fold and keeps its .turnline alone.
+func foldPlainTurn(entries []ConvEntry, replyIdxs []int, turnIdx int, replyBytes int64) {
+	if len(replyIdxs) == 0 {
+		return
+	}
+	first := entries[replyIdxs[0]]
+	key := "turn-plain-" + first.Key
+	summary := NewFoldedPlainTurnSummary(key, "", entries[turnIdx].RingEntry, entries[turnIdx].At, first.AtRFC, replyBytes, "")
+	summary.Plain = true
+	// The .turnline stays the turn's audit host; a second audit container
+	// inside the hidden summary would duplicate its rows.
+	summary.Completed = false
+	entries[replyIdxs[0]].TurnPlain = summary
+	for _, idx := range replyIdxs {
+		entries[idx].TurnKey = key
+	}
+	entries[turnIdx].TurnKey = key
 }
 
 func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) *TurnSummaryView {
@@ -448,6 +485,11 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 	entries[anchorIdx].TurnSummary = orphan
 	for _, idx := range toolIdxs[1:] {
 		entries[idx].TurnAbsorbed = true
+	}
+	for j := spanStart; j < len(entries); j++ {
+		if entries[j].Kind == wslive.RingReply {
+			entries[j].TurnKey = orphan.Key
+		}
 	}
 	return nil
 }

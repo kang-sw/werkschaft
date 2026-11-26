@@ -86,7 +86,7 @@ func TestPassiveInputAckKeepsNewerWrites(t *testing.T) {
 func TestTurnInputCarriesPassiveReceiptsAfterTheNoteBeforeAmbient(t *testing.T) {
 	c := &conv{rec: Record{Lead: true, OpenGen: 2}, ambient: "<amb>", compactNote: "restore"}
 	c.passive.put(2, "exec_a", "receipt A")
-	got := c.turnInput("hello")
+	got := c.turnInput("hello", false)
 	block, _ := c.passive.render(2)
 	if want := "restore\n\n" + block + "\n\nhello\n\n<amb>"; got != want {
 		t.Fatalf("input = %q\nwant %q", got, want)
@@ -97,7 +97,7 @@ func TestTurnInputCarriesPassiveReceiptsAfterTheNoteBeforeAmbient(t *testing.T) 
 	// Composition alone consumes nothing; a stale generation's receipts are
 	// not carried.
 	c.rec.OpenGen = 3
-	if got := c.turnInput("hello"); strings.Contains(got, "receipt A") {
+	if got := c.turnInput("hello", false); strings.Contains(got, "receipt A") {
 		t.Fatalf("a reopened conversation carried the old receipt: %q", got)
 	}
 }

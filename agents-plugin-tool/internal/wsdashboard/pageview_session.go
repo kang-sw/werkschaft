@@ -153,6 +153,13 @@ type ConvEntry struct {
 	// by the span's TurnSummary while its .turn-with-summary reasoning host
 	// stays at turn-end position.
 	TurnReasoningOnly bool
+	// TurnKey names the turn summary (its data-key) whose drawer a lead reply
+	// belongs to; the page folds the reply into that drawer while the
+	// whiteboard-only toggle is on. Empty for a reply outside a collapsed turn.
+	TurnKey string
+	// TurnPlain anchors the hidden summary of a completed turn that ran no
+	// tool: it sits at the turn's first reply and holds the folded replies.
+	TurnPlain *TurnSummaryView
 }
 
 // WhiteboardChanges decodes only the supported carrier; values remain plain
@@ -187,6 +194,9 @@ type pageInputs struct {
 	// IsChild marks a spawned worker or card-bound subordinate session.
 	IsChild                                   bool
 	ChildCloseKnown, ChildClosed, ChildActive bool
+	// WhiteboardCapable reports a lead conversation, the only session with an
+	// <ws-ambient> path (wsagent resolveAmbient).
+	WhiteboardCapable bool
 	// Model and Effort are the session's configured spawn/selected values.
 	Model, Effort string
 	// Lookup resolves the other sessions this daemon serves that the view
@@ -251,34 +261,35 @@ func harnessRunning(reg Registration, now time.Time) bool {
 func buildSessionView(in pageInputs) SessionView {
 	reg := in.Session.Registration
 	v := SessionView{
-		ReplyID:          reg.ReplyID,
-		Parent:           resolveParent(in.Session, in.Parents),
-		Label:            in.Session.Label,
-		Project:          reg.Project,
-		ProjectName:      filepath.Base(reg.Project),
-		Harness:          reg.Harness,
-		Live:             reg.Live(in.Now),
-		Lifecycle:        DeriveSessionLifecycle(reg, in.Session.Hidden, in.Now),
-		ProcessRunning:   harnessRunning(reg, in.Now),
-		Adapter:          adapterPresent(in.Snapshot, in.Now),
-		Hosted:           reg.Hosted,
-		HandedOff:        in.HandedOff && !reg.Hosted && !reg.Live(in.Now),
-		IsChild:          in.IsChild || reg.ParentReplyID != "",
-		ChildCloseKnown:  in.ChildCloseKnown,
-		ChildClosed:      in.ChildClosed,
-		ChildActive:      in.ChildActive,
-		Model:            in.Model,
-		Effort:           in.Effort,
-		Version:          in.Version,
-		HasBoard:         in.Page.HasBoard,
-		Seq:              in.Page.Seq,
-		BoardIncarnation: in.Page.BoardIncarnation,
-		CountPolicy:      in.Page.Board.CountPolicy,
-		CountAcks:        in.Page.Board.CountAcks,
-		Board:            in.Page.Board.Board,
-		BoardUnits:       in.Page.BoardUnits,
-		Panels:           in.Page.Board.Panels,
-		Mermaid:          in.Page.Board.Mermaid,
+		ReplyID:           reg.ReplyID,
+		Parent:            resolveParent(in.Session, in.Parents),
+		Label:             in.Session.Label,
+		Project:           reg.Project,
+		ProjectName:       filepath.Base(reg.Project),
+		Harness:           reg.Harness,
+		Live:              reg.Live(in.Now),
+		Lifecycle:         DeriveSessionLifecycle(reg, in.Session.Hidden, in.Now),
+		ProcessRunning:    harnessRunning(reg, in.Now),
+		Adapter:           adapterPresent(in.Snapshot, in.Now),
+		Hosted:            reg.Hosted,
+		HandedOff:         in.HandedOff && !reg.Hosted && !reg.Live(in.Now),
+		IsChild:           in.IsChild || reg.ParentReplyID != "",
+		ChildCloseKnown:   in.ChildCloseKnown,
+		ChildClosed:       in.ChildClosed,
+		ChildActive:       in.ChildActive,
+		WhiteboardCapable: in.WhiteboardCapable && !in.IsChild && reg.ParentReplyID == "",
+		Model:             in.Model,
+		Effort:            in.Effort,
+		Version:           in.Version,
+		HasBoard:          in.Page.HasBoard,
+		Seq:               in.Page.Seq,
+		BoardIncarnation:  in.Page.BoardIncarnation,
+		CountPolicy:       in.Page.Board.CountPolicy,
+		CountAcks:         in.Page.Board.CountAcks,
+		Board:             in.Page.Board.Board,
+		BoardUnits:        in.Page.BoardUnits,
+		Panels:            in.Page.Board.Panels,
+		Mermaid:           in.Page.Board.Mermaid,
 	}
 	if in.Snapshot != nil {
 		v.ActivityAt = in.Snapshot.UpdatedAt
