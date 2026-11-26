@@ -21,6 +21,18 @@ func TestComposerAutosizeClient(t *testing.T) {
 	t.Log(string(out))
 }
 
+func TestComposerEnterScrollFollowClient(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; run testdata/composer-scroll-follow.test.cjs locally")
+	}
+	out, err := exec.Command(node, "--test", "testdata/composer-scroll-follow.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("composer scroll-follow cases: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
 // Placeholder swaps, font loading, and width changes still resize the legacy
 // textarea. CSS-sized editors follow those changes without script measurement.
 func TestComposerRegrowsOnPlaceholderAndWidth(t *testing.T) {
