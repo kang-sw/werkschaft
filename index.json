@@ -460,19 +460,6 @@
     "261126-epic-ws-dashboard-conversation-ux-restyle": {
       "registered_at": "2026-11-26T13:46:28Z"
     },
-    "261126-feat-ws-board-topic-header-hold-counts-and-rail-dot": {
-      "registered_at": "2026-11-26T08:39:04Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T14:13:06Z",
-        "impl": {
-          "branch": "impl/develop/lived-sniff-mumps"
-        }
-      }
-    },
     "261126-feat-ws-companion-vrm-engine": {
       "registered_at": "2026-11-26T13:52:18Z",
       "lease": {
