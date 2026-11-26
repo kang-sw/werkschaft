@@ -336,6 +336,68 @@ under `<cache root>/dashboard/`:
   cwd are omitted by v1 and restored when v2 reloads the surviving rows (T1,
   `internal/wsusercmd/store.go:263–289`). Withdrawing an agent command
   still deletes that row in either version.
+- `metadata.sqlite` (`internal/wsmeta`) - owner-only SQLite store (storage type
+  2 in `ai-docs/manuals/performance.md`, opened by the lock-owning daemon under
+  `dashboard.lock` with `PRAGMA locking_mode=EXCLUSIVE`, `journal_mode=WAL`,
+  `wal_autocheckpoint=0`, write-class `PRAGMA synchronous` (`NORMAL` for
+  routine updates, `FULL` for durable journal/commit boundaries), a 30 s idle
+  WAL checkpoint away from interactive actions, and a final checkpoint on
+  close). It owns the bundled daemon-only metadata stores loaded once into
+  memory at startup: conversation records (`agent_records`, bounded top-level
+  deltas in `agent_record_deltas`, and per-holder cursors in
+  `agent_holder_cursors` so sequence-only updates never rewrite whole records),
+  durable Werk records (`durable_agent_records`), pending retired-Pi purges
+  (`retired_pi_purges`), explicit permission selections (`permissions`),
+  tracker support selection and store mappings (`support_state`,
+  `support_mappings`), Pi probe observations (`pi_probes`), rail layout
+  (`rail_layout`, `rail_layout_workspaces`), latest usage projections and
+  history samples (`usage_latest_*`, `usage_history_*`), workspace memos
+  (`memo_docs`, `memo_items`), session labels (`session_labels`), answer checks
+  (`ack_checks`), hiring metadata (`session_hiring`), and tracker hook progress
+  (`tracker_hooks_state`). Shared/external contracts stay in their existing
+  files outside SQLite: `workspaces.json`, tracker `ui-seen.json`,
+  `workspace-admission.json`, `hire-proposals.json`, `visibility.json`,
+  `registration.json`, holder files, `wslive` snapshots/rings, `wsinbox`,
+  `wsmailbox`, `wswhiteboard`, and `wscred`.
+  - **One-time cutover and fences:** On the first start against a legacy state
+    directory, `wsmeta.Cutover` runs under `dashboard.lock`, stages original
+    legacy bytes into the durable `legacy_captures` journal, applies four
+    one-time fences so a downgraded older binary cannot silently act on stale
+    state — (1) invalid `permission.json` selector on every imported session
+    (including previously absent files), (2) `Enabled=false` in `hiring.json`
+    while keeping `Hired` and `RequestID`, (3) `closed_at` on open parentless
+    non-lead support `agent.json` records and `profile: "!cutover-fenced"`
+    (preserving `cutover_profile`) on open parented non-lead child `agent.json`
+    records so the older tracker gate refuses stale writes without making child
+    directories prune-eligible, and (4) moving `tracker-hooks.json` to the
+    live reloadable input `tracker-hooks-v2.json` — and commits imported rows
+    plus the completion marker in one transaction. An interrupted cutover
+    re-stages unfenced files on retry so intervening permission lowerings or
+    pruned sessions are respected; an unreadable removal target returns
+    `ErrCutoverUnsupported` and leaves the daemon in legacy file mode. Once
+    committed, SQLite is authoritative, the surviving legacy files remain as
+    the frozen cutover snapshot, and the daemon makes zero further bundled-file
+    publications.
+  - **Direct Go callers (`/meta/*`):** Raw `ws-mcp call` and `serve --stdio`
+    never open `metadata.sqlite` directly; they query daemon-owned state over
+    authenticated loopback routes (`/meta/agent-record`,
+    `/meta/hosted-descendant`, `/meta/unregister-check`, `/meta/prune`). When
+    no daemon is running, an affected `ws-mcp call` fails immediately with an
+    error naming `ws-mcp daemon-start` for the same cache/config root, while
+    `serve --stdio` ensures the daemon once under dashboard policy and
+    otherwise returns a recoverable unavailable error.
+  - **Offline SQLite recovery (schema/error protection):** Legacy files that
+    failed import as invalid JSON or a newer schema version are recorded in
+    `legacy_captures` (`import_status` of `invalid` or `future`) and surfaced
+    through `Snapshot.ImportIssues` so owners (such as rail layout and usage
+    history) refuse destructive overwrites without re-reading legacy files. To
+    inspect or repair stored metadata offline: (1) stop the dashboard daemon so
+    it checkpoints WAL and releases `PRAGMA locking_mode=EXCLUSIVE`, (2) back
+    up `metadata.sqlite` (and `metadata.sqlite-wal` if present), (3) open
+    `metadata.sqlite` with an offline SQLite client to inspect
+    `legacy_captures` (original captured bytes and `import_detail`) or repair /
+    remove corrupted rows (for example in `usage_history_docs` /
+    `usage_history_samples` or `rail_layout*`), and (4) restart the daemon.
 - `sessions/<reply-id>/registration.json` - one entry per top-level lead
   session whose `dashboard.enabled` resolves on (session scope included),
   written by the serving ws-mcp at its first keyed call and heartbeated every
@@ -348,13 +410,14 @@ under `<cache root>/dashboard/`:
   (and `unlisted: true` when its profile keeps it off the index page) while
   the daemon runs. A session counts as live while
   its heartbeat is under 5 minutes old and it has not ended. The daemon's
-  index only reads this registry; ws-mcp prunes entries unseen for 7 days,
-  except an agent conversation (an `agent` registration, or a directory
-  holding `agent.json`), whose lifetime is the runner's while it may serve
-  it: it heartbeats only while the daemon runs. Ended records age from their
-  last registry row write. Pruning removes the session directory and its
-  files. Retired Pi runner records keep their session directory and recovery
-  archive (see [Retired Pi history](#retired-pi-history)).
+  index only reads this registry; pruning runs through daemon-owned metadata
+  (in-process or via `/meta/prune`), consulting `AgentForgetter.ForgetClosed`
+  for hosted sessions before removing entries unseen for 7 days and deleting
+  their per-session SQLite rows (`wsmeta.Store.DeleteSession`). Agent
+  conversations stay protected while the runner may still serve them; ended
+  records age from their last registry row write. Retired Pi runner records
+  keep their session directory and recovery archive (see
+  [Retired Pi history](#retired-pi-history)).
 - `sessions/<reply-id>/snapshot.json` and `sessions/<reply-id>/ring/` - the
   session's live snapshot (current lead and subagent activity, served from
   daemon RAM for slotted sessions and flushed for recovery on turn end, close,
@@ -437,8 +500,9 @@ under `<cache root>/dashboard/`:
   delivered message and the drained record. The settled turn is the ring's
   newest `turn` entry, which starts at its time minus `durationMs`. A
   `turn` entry without a duration settles nothing.
-- `sessions/<reply-id>/ack-check.json` - the daemon's answer check
-  (`internal/wsdashboard/ack_check.go`) record, a sibling of `label.json`:
+- `sessions/<reply-id>/ack-check.json` - legacy cutover input for the daemon's
+  answer check (`internal/wsdashboard/ack_check.go`); live state is stored in
+  `metadata.sqlite` (`ack_checks`, zero post-cutover writes to `ack-check.json`):
   `{"through": <epoch ms>, "interruptedAt": <epoch ms>}`. When a session's
   turn settles, the daemon checks the batch of answers that turn received
   and holds one plain inbox message (no chips) naming the batch items still
@@ -468,24 +532,26 @@ under `<cache root>/dashboard/`:
   and only when it is unchanged since the check read it. A crash can
   therefore lose a nudge but never double one, and two checks never both
   send.
-- `sessions/<reply-id>/agent.json` and `instructions.md` - an agent
-  runner conversation's own files (`internal/wsagent`): the owner-only
-  record a process start needs after a daemon restart (profile, backend,
-  working root, backend session id, model and effort, the conversation's ws
-  session key), the composed instruction file appended to the harness's
-  system prompt (owner-only; it carries the session key when the profile
-  allows ws tools, and a Claude lead's file always carries the key and the
-  `workflow_manual` instruction). A legacy Pi record can still refer to the
+- `sessions/<reply-id>/agent.json` and `instructions.md` - live conversation
+  records (`internal/wsagent`) are stored in `metadata.sqlite` (`agent_records`
+  + bounded `agent_record_deltas`, with holder sequence-only updates written to
+  `agent_holder_cursors` rather than rewriting the whole record); `agent.json`
+  is the frozen/fenced cutover snapshot only. The record holds what a process
+  start needs after a daemon restart (profile, backend, working root, backend
+  session id, model and effort, the conversation's ws session key), and
+  `instructions.md` stays on disk as the composed instruction file appended to
+  the harness's system prompt (owner-only; it carries the session key when the
+  profile allows ws tools, and a Claude lead's file always carries the key and
+  the `workflow_manual` instruction). A legacy Pi record can still refer to the
   session file under its `pi/` directory.
   The daemon reads the conversation from its live stores alone, since no
   ws-mcp serves it and it has no session record.
-- `sessions/<reply-id>/permission.json` - a hosted lead's explicit common
-  permission selection, separate from `agent.json`: `{permission_level}`,
-  written atomically with mode 0600 and preserving unknown members. Absence
-  uses a legacy-derived level without writing a selection; an existing
-  unreadable or invalid selection is an error, not absence
-  (`internal/wsagent/permission_store.go:11-60`,
-  `internal/wsagent/permission.go:98-111`).
+- `sessions/<reply-id>/permission.json` - legacy cutover input and one-time
+  downgrade fence for a hosted lead's explicit common permission selection
+  (`{permission_level}`); live selections are stored in `metadata.sqlite`
+  (`permissions`), preserving unknown members and keeping an existing
+  unreadable or invalid selection distinct from absence (fail closed,
+  `internal/wsagent/permission_store.go`, `internal/wsagent/permission.go`).
 
 After a store write the serving ws-mcp sends `POST /nudge {reply_id,
 project}`. The daemon wakes every `mailbox wait` it hosts on each nudge,
@@ -1638,8 +1704,11 @@ effort?}` (`{conversation, selection}`: saves the machine-wide last choice;
 a harness change replaces the open conversation with one on that harness's
 profile, resetting model and effort unless given; a model or effort change
 goes through the runner's settings, from the next message; with no open
-conversation it only saves). `<state dir>/support.json` (0600) holds `{last:
-{harness, model, effort}, stores: {<store>: <reply-id>}}`, so a store keeps
+conversation it only saves). Live support selection (`last`) and per-store
+conversation mappings (`stores`) are stored in `metadata.sqlite`
+(`support_state` and `support_mappings`, loaded after the daemon acquires
+`dashboard.lock`, importing legacy `<state dir>/support.json` once at cutover),
+so a store keeps
 the same conversation across restarts; with no saved choice, or one whose
 harness is unavailable, the selection is the first available harness with
 the profile's defaults. A saved legacy Pi choice falls back with a retirement
@@ -1945,6 +2014,46 @@ MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 
 After rolling back the daemon, terminal sessions refresh their tool list.
+
+#### Metadata lock/drain barrier and downgrade residuals
+
+During daemon replacement, the predecessor stops `/meta/*` admission, drains
+in-flight HTTP/MCP/proxy calls, polling, agent runner shutdown, and tracker
+hook/watch/poll goroutines (`BeforeUnlock`), and checkpoints and closes
+`metadata.sqlite` strictly before removing `endpoint.json` and releasing
+`dashboard.lock`. Every successor — including a prestarted successor and its
+tracker `Support` controller — acquires `dashboard.lock` before opening
+`metadata.sqlite`, running cutover/snapshot load, or serving requests.
+
+Under owner compatibility exception `(2125)=a` (2026-11-22), running a
+pre-cutover binary against an already-cutover state directory (same-root
+downgrade) has the following disclosed residuals:
+
+- **No T2 recovery for old-side bundled edits:** once the cutover completion
+  marker commits, re-upgrade always restores from `metadata.sqlite` and ignores
+  edits, additions, or deletions made to legacy bundled files while downgraded.
+- **Mixed-version prune residual:** an older `ws-mcp` binary pruning `sessions/`
+  consults stale on-disk `agent.json` and can delete an aged session directory
+  that was revived in SQLite after cutover.
+- **Stale holder replay or orphaning:** an older daemon reading stale holder
+  identity or `holder_seq` from frozen `agent.json` can replay or orphan a
+  holder.
+- **Pending hire approval journal replay and nested CLI toggle:** an older
+  daemon can replay pending entries from the separate `hire-proposals.json`
+  journal (the hiring gate still applies), and can accept an owner's trusted
+  toggle to re-enable hiring on a CLI lead nested after cutover because the
+  frozen `rail-layout.json` still lists it as a root (`(2137)=b`).
+- **Post-downgrade support records:** a support conversation newly created by a
+  downgraded older binary stays open on re-upgrade because the one-time `(2136)`
+  support fence already ran, so stale authenticated tracker writes from its
+  retained key remain admissible against a downgraded binary.
+- **Fenced open children during downgrade:** an older daemon cannot launch a
+  fresh process for a child that was open at cutover because its legacy
+  `profile` was fenced to `!cutover-fenced`; surviving holders can still
+  reattach (and held Pi workers keep their stored resolved definition), tracker
+  writes stay refused because the gate resolves profile on every call, old
+  prune keeps their directories because `closed_at` stays empty, and re-upgrade
+  restores their original profile and open state from SQLite.
 
 Minor floor (`<daemon dir>/daemon-minor-floor`): a plain text file beside
 `dashboard.lock` and `last-port` holding one numeric `major.minor` (storage
