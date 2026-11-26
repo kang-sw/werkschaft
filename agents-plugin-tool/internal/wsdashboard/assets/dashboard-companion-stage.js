@@ -248,7 +248,17 @@
     const loader = C.packLoader((pack, shared) => {
       const nextIsVrm = pack.renderer === "vrm";
       const makeAdapter = C.makeVrmAdapter || C.makeVrmRig;
-      const next = nextIsVrm ? makeAdapter(pack, { onReady: () => { markVrmActivity(); invalidated(); } }) : C.makeRig(pack, shared, preset, currentConfig);
+      const next = nextIsVrm ? makeAdapter(pack, {
+        onReady: () => { markVrmActivity(); invalidated(); },
+        onContextLost: () => {
+          cancelAnimationFrame(frame);
+          if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+          frame = 0;
+          last = 0;
+          lastVrmRenderAt = -Infinity;
+        },
+        onContextRestored: () => { markVrmActivity(); invalidated(); }
+      }) : C.makeRig(pack, shared, preset, currentConfig);
       // Prepare the neutral body and its tint cache before replacing the active rig.
       next.view("stand", null, "idle", []);
       const prevRig = rig;
@@ -810,7 +820,7 @@
 
     function animate(stamp) {
       frame = 0;
-      if (doc.hidden || cancel.signal.aborted) return;
+      if (doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
       if (!rig) return;
       if (isVrm()) {
         const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" ||
@@ -890,7 +900,7 @@
     }
 
     function schedule(stamp) {
-      if (frame || idleTimer || !rig || doc.hidden || cancel.signal.aborted) return;
+      if (frame || idleTimer || !rig || doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
       if (isVrm() && vrmIdleMode) {
         const nowMs = typeof stamp === "number" ? stamp : performance.now();
         const elapsedSinceRender = lastVrmRenderAt > -Infinity ? Math.max(0, nowMs - lastVrmRenderAt) : 1000 / VRM_IDLE_FPS;

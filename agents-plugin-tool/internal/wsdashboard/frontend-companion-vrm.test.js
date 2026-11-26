@@ -533,12 +533,14 @@ test("stage drives both a fake adapter and makeVrmRig through the same lifecycle
       vrmCanvas.dispatchEvent({ type: "webglcontextlost", preventDefault() { prevented = true; } });
       assert.equal(prevented, true);
       assert.equal(stage.debugState().vrm.contextLost, true);
+      assert.equal(raf, null, "contextLost must pause the stage rAF loop");
       const rendersBefore = fakeThree.stats.renders;
       step();
       assert.equal(fakeThree.stats.renders, rendersBefore, "contextLost must not render");
       vrmCanvas.dispatchEvent({ type: "webglcontextrestored" });
       for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
       assert.equal(stage.debugState().vrm.contextLost, false);
+      assert.notEqual(raf, null, "context restore must resume the stage rAF loop");
       assert.equal(fakeThree.stats.contextLossForced, 0, "context restore must not call forceContextLoss on restored canvas");
       assert.equal(vrmAssetFetches, 1, "context restore must reuse cached ArrayBuffer with 0 network refetches");
       assert.ok(fakeThree.stats.renders > rendersBefore, "context restore must resume rendering");
@@ -621,4 +623,69 @@ test("settings modal hides 2D paper-doll wardrobe controls when active pack is V
   for (const want of ["pack", "preset", "outfit", "hair", "eyes", "attachments", "palette", "cooldown"]) {
     assert.ok(labels2d.includes(want), `2D mode should include wardrobe row ${want}`);
   }
+});
+
+test("VRM adapter recovers from webglcontextlost during initial .vrm fetch and gates Phase 2 .vrma playback", async () => {
+  const doc = {
+    createElement: tag => makeFakeElement(tag, doc),
+    addEventListener() {}
+  };
+  let resolveFetch = null;
+  let fetchCalls = [];
+  const fakeThree = makeFakeVrmRuntime("1");
+  const { C } = loadCompanion({
+    document: doc,
+    window: { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1, addEventListener() {} },
+    fetch: url => {
+      fetchCalls.push(url);
+      return new Promise(resolve => {
+        resolveFetch = () => resolve({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
+      });
+    }
+  });
+  C.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+  let lostCount = 0, restoredCount = 0, readyCount = 0;
+  const pack = {
+    id: "vrm-midload", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm",
+    manifest: {}, expressionMap: {}, animations: { stand: "stand.vrma" }
+  };
+  const rig = C.makeVrmRig(pack, {
+    onContextLost: () => { lostCount++; },
+    onContextRestored: () => { restoredCount++; },
+    onReady: () => { readyCount++; }
+  });
+  const container = makeFakeElement("div", doc);
+  const mountPromise = rig.mount(container, { width: 240, height: 280, dpr: 1 });
+  for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
+  assert.equal(fetchCalls.length, 1, "initial .vrm fetch should be in flight");
+
+  // Lose and restore WebGL context BEFORE the .vrm fetch completes.
+  const canvas = container.all().find(el => el.className === "ws-companion-vrm-canvas");
+  const overlay = container.all().find(el => el.className === "ws-companion-vrm-overlay");
+  canvas.dispatchEvent({ type: "webglcontextlost", preventDefault() {} });
+  assert.equal(lostCount, 1);
+  assert.equal(rig.isContextLost(), true);
+  assert.equal(overlay.hidden, false);
+
+  canvas.dispatchEvent({ type: "webglcontextrestored" });
+  assert.equal(restoredCount, 1);
+  assert.equal(rig.isContextLost(), false);
+  assert.equal(overlay.hidden, true);
+
+  resolveFetch();
+  await mountPromise;
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+
+  assert.equal(rig.debugState().loaded, true, "rig must finish loading after mid-fetch context restore");
+  assert.equal(rig.debugState().modelFetchCount, 1, "in-flight fetch must be reused without refetching");
+  assert.equal(readyCount, 1, "single parse should fire onReady once without duplicate mounts");
+  assert.ok(fakeThree.stats.renders >= 1);
+
+  // Phase 1 gates optional .vrma playback (animations.stand must not trigger a .vrma fetch).
+  const v = rig.view("stand", null, "idle", []);
+  v.render(0.5, { x: 0, y: 0 }, null, {});
+  for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
+  assert.equal(fetchCalls.some(u => u.includes("stand.vrma")), false, "Phase 1 must not hijack stand pose with .vrma");
+  rig.dispose();
 });

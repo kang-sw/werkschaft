@@ -321,6 +321,7 @@
     let propsCtrl = null, vrmaClips = new Map(), vrmaLoading = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
+    let modelFetchPromise = null, loadEpoch = 0;
     let modelFetchCount = 0, framesRendered = 0;
     let lastSeconds = 0, elapsed = 0;
     let activePose = "stand", activeGesture = null, activeExpression = "idle", activeProp = null;
@@ -546,9 +547,11 @@
       const { THREE } = runtime;
       elapsed += dt;
 
-      const vrmaKey = (activeGesture && pack?.animations?.[activeGesture]) ? activeGesture
-        : (activePose && pack?.animations?.[activePose]) ? activePose : "";
-      syncVrma(vrmaKey);
+      const vrmaKey = C.vrmProps?.enableVrma
+        ? ((activeGesture && pack?.animations?.[activeGesture]) ? activeGesture
+          : (activePose && pack?.animations?.[activePose]) ? activePose : "")
+        : "";
+      if (vrmaKey || activeVrmaAction) syncVrma(vrmaKey);
 
       if (activeVrmaAction && mixer) {
         mixer.update(dt);
@@ -656,44 +659,60 @@
 
       container.replaceChildren(canvasWrap, dissolveGrid, overlay);
 
+      async function ensureCachedModel() {
+        const cacheKey = (pack?.id || "") + ":" + (pack?.rev || "");
+        if (cachedModel && cachedModel.key === cacheKey) return cachedModel;
+        if (!modelFetchPromise) {
+          modelFetchCount++;
+          modelFetchPromise = C.fetchPackAsset(pack, pack.modelFile, loadCancel.signal)
+            .then(fetched => {
+              cachedModel = { key: (pack?.id || "") + ":" + fetched.rev, buffer: fetched.buffer };
+              return cachedModel;
+            })
+            .finally(() => { modelFetchPromise = null; });
+        }
+        return modelFetchPromise;
+      }
+
+      async function loadAndParse(isRestore) {
+        const myEpoch = ++loadEpoch;
+        try {
+          if (!runtime) runtime = await loadVrmRuntime();
+          if (disposed || contextLost || myEpoch !== loadEpoch) return;
+          if (isRestore) {
+            // Do not call forceContextLoss() on the newly restored canvas context.
+            disposeRendererOnly(false);
+          }
+          if (!renderer) initSceneAndRenderer(runtime);
+          const cached = await ensureCachedModel();
+          if (disposed || contextLost || myEpoch !== loadEpoch) return;
+          if (!renderer) initSceneAndRenderer(runtime);
+          await parseVrmBuffer(cached.buffer);
+        } catch (err) {
+          if (!disposed && !contextLost && !loadCancel.signal.aborted && myEpoch === loadEpoch) {
+            setOverlay(isRestore ? "VRM restore failed" : "VRM unavailable");
+            if (!isRestore) options.onError?.(err);
+          }
+        }
+      }
+
       listenersCancel = new AbortController();
       const sig = { signal: listenersCancel.signal };
       canvas.addEventListener("webglcontextlost", event => {
         event.preventDefault();
         contextLost = true;
         setOverlay("Paused");
+        options.onContextLost?.();
       }, sig);
       canvas.addEventListener("webglcontextrestored", () => {
-        if (disposed || !runtime || !cachedModel?.buffer) return;
+        if (disposed) return;
         contextLost = false;
         setOverlay("");
-        // Do not call forceContextLoss() on the newly restored canvas context.
-        disposeRendererOnly(false);
-        initSceneAndRenderer(runtime);
-        parseVrmBuffer(cachedModel.buffer).catch(() => {
-          if (!disposed) setOverlay("VRM restore failed");
-        });
+        options.onContextRestored?.();
+        loadAndParse(true);
       }, sig);
 
-      try {
-        runtime = await loadVrmRuntime();
-        if (disposed) return;
-        initSceneAndRenderer(runtime);
-
-        const cacheKey = (pack?.id || "") + ":" + (pack?.rev || "");
-        if (!cachedModel || cachedModel.key !== cacheKey) {
-          modelFetchCount++;
-          const fetched = await C.fetchPackAsset(pack, pack.modelFile, loadCancel.signal);
-          if (disposed) return;
-          cachedModel = { key: (pack?.id || "") + ":" + fetched.rev, buffer: fetched.buffer };
-        }
-        await parseVrmBuffer(cachedModel.buffer);
-      } catch (err) {
-        if (!disposed && !loadCancel.signal.aborted) {
-          setOverlay("VRM unavailable");
-          options.onError?.(err);
-        }
-      }
+      await loadAndParse(false);
     }
 
     const viewObj = {
@@ -757,6 +776,7 @@
       },
       pause() { paused = true; },
       resume() { paused = false; },
+      isContextLost() { return contextLost; },
       setPreset() {},
       setWardrobe() {},
       wardrobe() { return null; },
@@ -786,11 +806,13 @@
       dispose() {
         if (disposed) return;
         disposed = true;
+        loadEpoch++;
         loadCancel.abort();
         listenersCancel?.abort();
         listenersCancel = null;
         disposeRendererOnly(true);
         cachedModel = null;
+        modelFetchPromise = null;
         if (container) container.replaceChildren();
         container = canvasWrap = canvas = dissolveGrid = overlay = null;
       }
