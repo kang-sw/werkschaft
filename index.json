@@ -470,7 +470,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T12:40:15Z"
+        "touched_at": "2026-11-26T12:41:52Z",
+        "impl": {
+          "branch": "impl/develop/silly-sleet-muck"
+        }
       }
     },
     "261126-feat-ws-lead-mockup-and-multifile-panel": {
