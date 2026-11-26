@@ -480,19 +480,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T15:07:10Z"
-      }
-    },
-    "261126-feat-ws-companion-vrm-pack-store": {
-      "registered_at": "2026-11-26T13:52:11Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T14:15:29Z",
+        "touched_at": "2026-11-26T15:09:54Z",
         "impl": {
-          "branch": "impl/develop/gift-acorn-heat"
+          "branch": "impl/develop/chip-juror-shy"
         }
       }
     },
