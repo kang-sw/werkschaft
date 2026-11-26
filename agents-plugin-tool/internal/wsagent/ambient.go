@@ -123,6 +123,16 @@ func (c *conv) steerWithDirective(text string, recs []wsinbox.Record) string {
 	return text + "\n\n" + ambientBlock(whiteboardFirstDirective)
 }
 
+// directedSteer builds the durable steer for recs: Text carries the directive
+// when flagged and Clean the plain text a requeue falls back to.
+func (c *conv) directedSteer(text string, recs []wsinbox.Record, mark uint64) durableSteer {
+	steer := durableSteer{Text: c.steerWithDirective(text, recs), Mark: mark}
+	if steer.Text != text {
+		steer.Clean = text
+	}
+	return steer
+}
+
 // RefreshAmbient synchronously republishes every open hosted lead's rendered
 // ambient block. config.tune calls it only after a successful workflow.lang
 // set/reset, so the next turn observes the new value without polling files.

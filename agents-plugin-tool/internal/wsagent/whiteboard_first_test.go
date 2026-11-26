@@ -60,3 +60,20 @@ func TestAmbientWithDirectiveFallsBackToASecondBlock(t *testing.T) {
 		t.Fatalf("ambientWithDirective = %q", got)
 	}
 }
+
+func TestDirectedSteerRequeuesWithoutTheDirective(t *testing.T) {
+	lead := &conv{rec: Record{Lead: true}}
+	flagged := []wsinbox.Record{{Entry: wsinbox.Entry{WhiteboardFirst: true}}}
+	steer := lead.directedSteer("steer text", flagged, 3)
+	if !strings.Contains(steer.Text, whiteboardFirstDirective) || steer.Clean != "steer text" {
+		t.Fatalf("flagged steer = %+v", steer)
+	}
+	if plain := lead.directedSteer("steer text", []wsinbox.Record{{}}, 3); plain.Clean != "" || plain.Text != "steer text" {
+		t.Fatalf("unflagged steer must stay byte-identical: %+v", plain)
+	}
+	rec := &Record{DurableSteers: []durableSteer{steer}}
+	requeueDurableSteers(rec)
+	if len(rec.Reports) != 1 || rec.Reports[0] != "steer text" || len(rec.DurableSteers) != 0 {
+		t.Fatalf("requeued reports = %q", rec.Reports)
+	}
+}
