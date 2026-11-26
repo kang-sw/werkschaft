@@ -331,8 +331,9 @@ func heldWorkerCompletesAcrossReplacement(t *testing.T, backend, authority strin
 	if whileDown {
 		eventually(t, "the finished worker asleep", func() bool {
 			rec := h.record(id)
-			return rec.HolderID == "" && h.holders.opCount("stop "+holder) == 1
+			return rec.HolderID == "" && rec.MCPToken == "" && h.holders.opCount("stop "+holder) == 1
 		})
+		h.quiesce(id)
 	}
 	after := h.record(id)
 	if after.TurnOpen || after.LastTurn == nil || after.LastTurn.Result.Status != TurnDone {
