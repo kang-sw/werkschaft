@@ -178,7 +178,7 @@ func TestOneShotTimeoutKillsProcessTree(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		proc, _ := os.FindProcess(pid)
-		if proc.Signal(syscall.Signal(0)) != nil {
+		if proc.Signal(syscall.Signal(0)) != nil || oneShotProcessZombie(pid) {
 			return
 		}
 		if time.Now().After(deadline) {

@@ -4,13 +4,40 @@ package mcp
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// hostedTestProcessEnded reports whether pid has exited. On Linux, a killed
+// child may stay as a zombie (Z/X) until reaped, during which kill(pid, 0)
+// still succeeds; match internal/wsholder/zombie_linux.go.
+func hostedTestProcessEnded(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+		}
+		return false
+	}
+	end := strings.LastIndexByte(string(raw), ')')
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(string(raw)[end+1:])
+	return len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
+}
 
 // TestHostedExecStopEndsTheJobsProcessGroup: exec.stop ends the job's
 // shell and the children it started in the background, not only the
@@ -42,7 +69,7 @@ func TestHostedExecStopEndsTheJobsProcessGroup(t *testing.T) {
 	}
 	for _, pid := range append([]int{view.PID}, children...) {
 		waitExec(t, "process "+strconv.Itoa(pid)+" to end", func() bool {
-			return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+			return hostedTestProcessEnded(pid)
 		})
 	}
 }

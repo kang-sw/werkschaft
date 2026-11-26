@@ -46,14 +46,15 @@ def read_text(path: str) -> str:
 
 
 def write_text(path: str, content: str) -> None:
-    rel(path).write_text(content, encoding="utf-8")
+    with rel(path).open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
 
 
 def update_json(path: str, mutator) -> None:
     file_path = rel(path)
     data = json.loads(file_path.read_text(encoding="utf-8"))
     mutator(data)
-    file_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 def update_plugin_manifest(data) -> None:

@@ -435,3 +435,19 @@ func TestCIReleasePublication(t *testing.T) {
 		}
 	}
 }
+
+func TestBumpWSVersionWritesLF(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "bump-ws-version.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	if !strings.Contains(script, `newline="\n"`) {
+		t.Fatal(`bump-ws-version.sh must open files with newline="\n" so Windows runs do not emit CRLF`)
+	}
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, ".write_text(") && !strings.Contains(line, `newline="\n"`) {
+			t.Fatalf("bump-ws-version.sh has write_text call without explicit LF newline: %s", strings.TrimSpace(line))
+		}
+	}
+}
