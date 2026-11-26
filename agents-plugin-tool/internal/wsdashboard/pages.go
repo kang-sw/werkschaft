@@ -95,6 +95,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-menu.js",
 	"dashboard-companion-sources.js",
 	"dashboard-companion-settings.js",
+	"dashboard-companion-vrm.js",
 	"dashboard-companion-stage.js",
 }
 
@@ -281,6 +282,9 @@ type pageAssetsData struct {
 	ShellScript     template.JS
 	CompanionScript template.JS
 	CompanionCSS    template.CSS
+	// CompanionVrmFile is the content-hashed filename of the lazy-loaded pure-VRM
+	// runtime ES module (/s/<CompanionVrmFile>); never inlined into dashboard.tmpl.
+	CompanionVrmFile string
 	// CompanionModalRows is the settings catalog's companion-modal rows as
 	// a JSON array: the shell loads no settings catalog of its own.
 	CompanionModalRows template.JS
@@ -385,6 +389,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		return nil, werr
 	}
 	mermaidName, _ := wswhiteboard.MermaidAsset()
+	companionVrmName, _ := CompanionVrmAsset()
 	lucide, lerr := lucideSprite()
 	if lerr != nil {
 		return nil, lerr
@@ -405,6 +410,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		ShellScript:       template.JS(get("shell.js")),
 		CompanionScript:   template.JS(get("dashboard-companion.js")),
 		CompanionCSS:      template.CSS(get("dashboard-companion.css")),
+		CompanionVrmFile:  companionVrmName,
 		SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css")),
 		SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),

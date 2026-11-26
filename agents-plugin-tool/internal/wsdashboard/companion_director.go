@@ -576,6 +576,14 @@ func (d *Daemon) companionRing(sessionID string) []wslive.RingRecord {
 	return page.Records
 }
 
+// Built-in VRM director vocabulary: IDs the pure-VRM adapter renders directly
+// without 2D pack.json raster dictionaries.
+var (
+	companionVrmExpressions = []string{"idle", "idle_doze", "focused", "half_lid", "oo", "cry", "happy"}
+	companionVrmGestures    = []string{}
+	companionVrmProps       = []string{}
+)
+
 // companionPackData is what the prompt needs from the active pack.
 type companionPackData struct {
 	renderer string // "2d" or "vrm"
@@ -583,8 +591,10 @@ type companionPackData struct {
 	dicts    map[string][]string // expressions, gestures, props, fx, scenarios
 }
 
-// companionPackFor reads the reported pack (else the default) and the
-// default pack's shared props and fx from the in-memory pack snapshot.
+// companionPackFor reads the reported pack (else the default) and, for 2D
+// packs, the default pack's shared props and fx from the in-memory pack
+// snapshot. VRM packs use the built-in VRM vocabulary tables instead of 2D
+// raster dictionaries and skip the default-pack props/fx merge.
 func (d *Daemon) companionPackFor(id string) companionPackData {
 	snap := d.companionPacks.snapshot(d.companionOptions())
 	out := companionPackData{renderer: companionPackRenderer2D, dicts: map[string][]string{}}
@@ -615,6 +625,14 @@ func (d *Daemon) companionPackFor(id string) companionPackData {
 			out.renderer = pack.info.Renderer
 		}
 		out.persona = pack.info.Persona
+	}
+	if out.renderer == companionPackRendererVRM {
+		out.dicts["expressions"] = append([]string(nil), companionVrmExpressions...)
+		out.dicts["gestures"] = append([]string(nil), companionVrmGestures...)
+		out.dicts["props"] = append([]string(nil), companionVrmProps...)
+		return out
+	}
+	if pack != nil {
 		add(pack, "expressions", "gestures", "props", "fx", "scenarios")
 	}
 	if pack == nil || pack.info.ID != companionDefaultID {

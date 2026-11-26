@@ -110,7 +110,8 @@ until then. */}}
 <script>{{.Assets.MemoScript}}</script>
 <script>{{.Assets.UsageScript}}</script>
 <script>window.wsCompanionConfig = {{.Companion}};
-window.wsCompanionModalRows = {{.Assets.CompanionModalRows}};</script>
+window.wsCompanionModalRows = {{.Assets.CompanionModalRows}};
+window.wsCompanionVrmRuntime = "/s/{{.Assets.CompanionVrmFile}}";</script>
 <script>{{.Assets.CompanionScript}}</script>
 <script>{{.Assets.ShellScript}}</script>{{if .SysOpen}}
 <script>{{.Assets.CardsScript}}</script>

@@ -201,3 +201,86 @@
 }
 .rail[data-companion-dock="unregistered"] .rlist > [data-companion-before-unreg] { margin-bottom: var(--companion-slot); }
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }
+
+/* Pure-VRM bottom-right bust dock: borderless transparent WebGL canvas with
+   bottom-edge Digital Dissolve pixel-scatter mask. */
+.ws-companion-vrm-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  contain: layout style;
+  pointer-events: none;
+}
+.ws-companion-vrm-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 72%,
+    rgb(0 0 0 / 0.65) 84%,
+    rgb(0 0 0 / 0.18) 93%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 72%,
+    rgb(0 0 0 / 0.65) 84%,
+    rgb(0 0 0 / 0.18) 93%,
+    transparent 100%
+  );
+}
+.ws-companion-vrm-canvas {
+  display: block;
+  position: static;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.ws-companion-hit .ws-companion-vrm-canvas {
+  position: static;
+}
+.ws-dissolve-grid {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 44px;
+  pointer-events: none;
+  opacity: 0.9;
+  background-image:
+    radial-gradient(color-mix(in srgb, var(--wb-primary) 55%, transparent) 1.4px, transparent 1.4px),
+    radial-gradient(color-mix(in srgb, var(--wb-fg) 25%, transparent) 1px, transparent 1px);
+  background-size: 10px 10px, 6px 6px;
+  background-position: 0 0, 3px 4px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 65%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 65%, transparent 100%);
+}
+.ws-companion-vrm-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-bg) 78%, transparent);
+  color: var(--wb-muted-fg);
+  font: 600 12px/1.3 var(--wb-sans, system-ui, sans-serif);
+  pointer-events: none;
+}
+.ws-companion[data-renderer="vrm"] .ws-companion-resize {
+  left: 2px;
+  right: auto;
+  top: 2px;
+  cursor: nwse-resize;
+  transform: scaleX(-1);
+}
+.ws-companion[data-renderer="vrm"] .ws-companion-gear {
+  top: 2px;
+  right: 2px;
+}

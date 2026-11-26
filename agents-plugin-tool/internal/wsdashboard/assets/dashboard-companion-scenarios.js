@@ -253,9 +253,16 @@
   // most 140 code points.
   function directedCommand(command, pack, shared, runner) {
     if (!C.record(command)) return null;
+    const isVrm = pack?.renderer === "vrm";
     const manifest = pack?.manifest || {}, sharedManifest = shared?.manifest || {};
+    const vrmVocab = isVrm ? (C.vrmVocabulary?.() || {}) : null;
     const patch = {};
-    const fields = [
+    const fields = isVrm ? [
+      ["expression", [vrmVocab.expressions]],
+      ["gesture", [vrmVocab.gestures]],
+      ["prop", [vrmVocab.props]],
+      ["fx", [], fxDefaults]
+    ] : [
       ["expression", [manifest.expressions]],
       ["gesture", [manifest.gestures]],
       ["prop", [manifest.props, sharedManifest.props]],

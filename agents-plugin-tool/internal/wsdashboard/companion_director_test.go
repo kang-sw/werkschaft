@@ -608,6 +608,20 @@ func TestCompanionPackForRendererAndPersona(t *testing.T) {
 	if pvrm.persona == nil || pvrm.persona.Name != "Echo" || pvrm.persona.Voice != "Dry wit." || pvrm.persona.QuipLanguage != "ko" {
 		t.Fatalf("vrm persona = %+v", pvrm.persona)
 	}
+	allowedVRM := companionAllowedIDs(pvrm)
+	wantVRMExpr := []string{"cry", "focused", "half_lid", "happy", "idle", "idle_doze", "oo"}
+	if !slices.Equal(allowedVRM["expression"], wantVRMExpr) {
+		t.Fatalf("vrm allowed expressions = %v, want %v", allowedVRM["expression"], wantVRMExpr)
+	}
+	if len(allowedVRM["gesture"]) != 0 {
+		t.Fatalf("vrm Phase 1 allowed gestures = %v, want empty", allowedVRM["gesture"])
+	}
+	if len(allowedVRM["prop"]) != 0 {
+		t.Fatalf("vrm Phase 1 allowed props = %v, want empty (default-pack props must not merge into VRM)", allowedVRM["prop"])
+	}
+	if !slices.Contains(allowedVRM["scenario"], "celebrate_done") || !slices.Contains(allowedVRM["fx"], "sparkle") {
+		t.Fatalf("vrm built-in scenarios/fx missing: %+v", allowedVRM)
+	}
 
 	// Unknown pack falls back to default 2D.
 	fallback := d.companionPackFor("missing-pack")
