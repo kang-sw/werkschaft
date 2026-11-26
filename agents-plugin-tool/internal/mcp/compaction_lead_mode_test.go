@@ -15,10 +15,10 @@ func TestCompactionLeadModeConfigResolutionAndWSOnlyGuard(t *testing.T) {
 	s, _, key := manifestServer(t)
 	s.observeHarness("test", wsagent.BackendClaude)
 
-	// Default is native for external harnesses.
+	// Default is ws for external harnesses.
 	rv, err := s.resolveConfigGet(key, wsconfig.ItemCompactionLeadMode)
-	if err != nil || rv.Value != wsconfig.CompactionModeNative {
-		t.Fatalf("default claude compaction.lead_mode = (%+v, %v), want native", rv, err)
+	if err != nil || rv.Value != wsconfig.CompactionModeWS {
+		t.Fatalf("default claude compaction.lead_mode = (%+v, %v), want ws", rv, err)
 	}
 
 	// Explicit werk=native is rejected by config.tune.
@@ -29,12 +29,16 @@ func TestCompactionLeadModeConfigResolutionAndWSOnlyGuard(t *testing.T) {
 		t.Fatalf("expected config.tune to reject compaction.lead_mode.werk=native, got: %s", r)
 	}
 
-	// Wildcard *=native is accepted, and resolves to ws for werk while staying native for claude.
+	// Wildcard *=native opt-out is accepted, resolving to native for claude while staying ws for werk.
 	r = keyedCall(t, s, 2, key, "config.tune", map[string]any{
 		"key": wsconfig.ItemCompactionLeadMode, "value": wsconfig.CompactionModeNative, "harness": "*", "scope": "global",
 	})
 	if toolIsError(t, r) {
 		t.Fatalf("expected wildcard *=native accepted, got: %s", r)
+	}
+	rv, err = s.resolveConfigGet(key, wsconfig.ItemCompactionLeadMode)
+	if err != nil || rv.Value != wsconfig.CompactionModeNative || rv.Scope != string(wsconfig.ScopeGlobal) {
+		t.Fatalf("claude compaction.lead_mode after wildcard native opt-out = (%+v, %v), want native/global", rv, err)
 	}
 	resolver := s.sessionResolver(key, builtinConfigDefaults())
 	werkVal, _, err := resolveCompactionValue(&resolver, key, wsconfig.ItemCompactionLeadMode, wsagent.BackendWerk)
@@ -42,7 +46,7 @@ func TestCompactionLeadModeConfigResolutionAndWSOnlyGuard(t *testing.T) {
 		t.Fatalf("werk effective compaction.lead_mode = (%+v, %v), want ws", werkVal, err)
 	}
 
-	// Opt-in ws at project scope shadows global native for claude.
+	// Explicit ws at project scope shadows global native opt-out for claude.
 	r = keyedCall(t, s, 3, key, "config.tune", map[string]any{
 		"key": wsconfig.ItemCompactionLeadMode, "value": wsconfig.CompactionModeWS, "harness": wsagent.BackendClaude, "scope": "project",
 	})
@@ -73,16 +77,17 @@ func TestDashboardCompactionModeProjectsHarnessPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name       string
-		layers     wsconfigservice.Layers
-		werkSource wsconfig.Scope
+		name          string
+		layers        wsconfigservice.Layers
+		werkSource    wsconfig.Scope
+		unlockedValue string
 	}{
-		{name: "builtin", werkSource: wsconfig.ScopeBuiltin},
+		{name: "builtin", werkSource: wsconfig.ScopeBuiltin, unlockedValue: wsconfig.CompactionModeWS},
 		{name: "wildcard native", layers: wsconfigservice.Layers{
 			Files: map[wsconfig.Scope]wsconfig.Config{
 				wsconfig.ScopeGlobal: {Overrides: map[string]string{wsconfig.ItemCompactionLeadMode: wsconfig.CompactionModeNative}},
 			},
-		}, werkSource: wsconfig.ScopeGlobal},
+		}, werkSource: wsconfig.ScopeGlobal, unlockedValue: wsconfig.CompactionModeNative},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries := catalog.KeyEntries(wsconfig.ItemCompactionLeadMode, wsconfig.ScopeGlobal, tc.layers)
@@ -96,7 +101,7 @@ func TestDashboardCompactionModeProjectsHarnessPolicy(t *testing.T) {
 						t.Fatalf("Werk compaction setting = %+v", entry)
 					}
 				case wsagent.BackendClaude, "*":
-					if entry.Default != wsconfig.CompactionModeNative || entry.Value != wsconfig.CompactionModeNative || len(entry.Enum) != 2 {
+					if entry.Default != wsconfig.CompactionModeWS || entry.Value != tc.unlockedValue || len(entry.Enum) != 2 {
 						t.Fatalf("unlocked compaction setting = %+v", entry)
 					}
 				}
@@ -170,7 +175,7 @@ func TestCompactToolListConditionalLeadSummaryAndAgyWSCall(t *testing.T) {
 		t.Fatal("worker should not see lead_summary in tools/list")
 	}
 
-	// 3. Hosted external lead with default native mode: stripped.
+	// 3. Hosted external lead with default ws mode: tools/list and ws_call schema discovery expose lead_summary.
 	leadRunner := &compactSchemaRunner{state: wsagent.State{ID: "lead1", Lead: true, Backend: wsagent.BackendAgy}}
 	ls := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Agents: leadRunner})
 	t.Cleanup(ls.Close)
@@ -182,6 +187,30 @@ func TestCompactToolListConditionalLeadSummaryAndAgyWSCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	has, size := compactToolHasLeadSummary(t, ls)
+	if !has {
+		t.Fatal("default ws-mode hosted lead should see lead_summary in tools/list")
+	}
+	if size > toolSchemaByteCap {
+		t.Fatalf("compact schema with lead_summary = %d bytes, exceeds cap %d", size, toolSchemaByteCap)
+	}
+
+	// agy ws_call schema discovery reflects lead_summary under default ws mode.
+	schemaResp := callToolOnce(t, ls, 1, "call", map[string]any{
+		"tool": "compact",
+	})
+	if toolIsError(t, schemaResp) || !strings.Contains(toolText(t, schemaResp), `"lead_summary"`) {
+		t.Fatalf("agy ws_call schema discovery missing lead_summary: %s", toolText(t, schemaResp))
+	}
+
+	// 4. Opt-out compaction.lead_mode=native for agy -> lead_summary stripped from tools/list.
+	tuneResp := keyedCall(t, ls, 2, leadKey, "config.tune", map[string]any{
+		"key": wsconfig.ItemCompactionLeadMode, "value": wsconfig.CompactionModeNative, "harness": wsagent.BackendAgy, "scope": "project",
+	})
+	if toolIsError(t, tuneResp) {
+		t.Fatalf("config.tune agy=native failed: %s", tuneResp)
+	}
+	leadRunner.mode = wsconfig.CompactionModeNative
 	if has, _ := compactToolHasLeadSummary(t, ls); has {
 		t.Fatal("native-mode hosted lead should not see lead_summary in tools/list")
 	}
@@ -192,7 +221,7 @@ func TestCompactToolListConditionalLeadSummaryAndAgyWSCall(t *testing.T) {
 		"user_preferences": "concise", "working_practices": "", "unrecorded_decisions": "",
 		"current_work": "phase 1", "next_step": "test", "mood_rapport": "", "residual_details": "",
 	}
-	callResp := callToolOnce(t, ls, 1, "call", map[string]any{
+	callResp := callToolOnce(t, ls, 3, "call", map[string]any{
 		"tool":      "compact",
 		"arguments": map[string]any{"session_key": leadKey, "lead_summary": summaryArg},
 	})
@@ -200,32 +229,8 @@ func TestCompactToolListConditionalLeadSummaryAndAgyWSCall(t *testing.T) {
 		t.Fatalf("ws_call compact(lead_summary) should succeed under single acceptance contract: %+v", callResp)
 	}
 
-	// 4. Flip compaction.lead_mode=ws for agy -> tools/list and ws_call schema discovery now expose lead_summary.
-	tuneResp := keyedCall(t, ls, 2, leadKey, "config.tune", map[string]any{
-		"key": wsconfig.ItemCompactionLeadMode, "value": wsconfig.CompactionModeWS, "harness": wsagent.BackendAgy, "scope": "project",
-	})
-	if toolIsError(t, tuneResp) {
-		t.Fatalf("config.tune agy=ws failed: %s", tuneResp)
-	}
-	leadRunner.mode = wsconfig.CompactionModeWS
-	has, size := compactToolHasLeadSummary(t, ls)
-	if !has {
-		t.Fatal("ws-mode hosted lead should see lead_summary in tools/list")
-	}
-	if size > toolSchemaByteCap {
-		t.Fatalf("compact schema with lead_summary = %d bytes, exceeds cap %d", size, toolSchemaByteCap)
-	}
-
-	// agy ws_call schema discovery reflects lead_summary.
-	schemaResp := callToolOnce(t, ls, 3, "call", map[string]any{
-		"tool": "compact",
-	})
-	if toolIsError(t, schemaResp) || !strings.Contains(toolText(t, schemaResp), `"lead_summary"`) {
-		t.Fatalf("agy ws_call schema discovery missing lead_summary: %s", toolText(t, schemaResp))
-	}
-
-	// 5. Hosted werk lead always sees lead_summary even with default native config.
-	werkRunner := &compactSchemaRunner{state: wsagent.State{ID: "werk1", Lead: true, Backend: wsagent.BackendWerk}}
+	// 5. Hosted werk lead always sees lead_summary even when native mode is requested.
+	werkRunner := &compactSchemaRunner{state: wsagent.State{ID: "werk1", Lead: true, Backend: wsagent.BackendWerk}, mode: wsconfig.CompactionModeNative}
 	werks := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Agents: werkRunner})
 	t.Cleanup(werks.Close)
 	werks.conversation = "werk1"

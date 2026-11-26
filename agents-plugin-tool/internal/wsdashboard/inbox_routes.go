@@ -109,6 +109,10 @@ type messageRequest struct {
 	// else.
 	Command string `json:"command"`
 	Args    string `json:"args"`
+	// WhiteboardFirst is the composer's whiteboard-only toggle: the runner
+	// appends a model-only <ws-ambient> directive when it delivers this
+	// message. T0: an older daemon ignores it, an older page omits it.
+	WhiteboardFirst bool `json:"whiteboard_first,omitempty"`
 }
 
 // imageUpload is one new image: the browser's file name, used only in
@@ -572,7 +576,7 @@ func (d *Daemon) sendMessage(dir string, req messageRequest, images []decodedIma
 		fmt.Fprintf(d.log, "dashboard: write attachments: %v\n", err)
 		return http.StatusInternalServerError, "could not store the images"
 	}
-	entry := wsinbox.Entry{Operator: operator, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes}
+	entry := wsinbox.Entry{Operator: operator, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes, WhiteboardFirst: req.WhiteboardFirst}
 	var name string
 	var merged bool
 	if hasBoardAnswer(req) {

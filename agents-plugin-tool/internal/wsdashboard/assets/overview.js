@@ -128,6 +128,51 @@
     }
     return ph;
   }
+  function syncPlaceholder(node, full) {
+    if (!preview || !preview.placeholder || !preview.node) return;
+    if (node && preview.node !== node) return;
+    var src = preview.node, ph = preview.placeholder;
+    if (!src.hasAttribute || !src.hasAttribute("data-topic")) return;
+    if (full) {
+      if (src.classList.contains("quiet")) ph.classList.add("quiet"); else ph.classList.remove("quiet");
+      if (src.classList.contains("closed")) ph.classList.add("closed"); else ph.classList.remove("closed");
+      copyAttrs(src, ph, ["data-state", "data-size", "data-board-held"]);
+      var srcHead = src.querySelector(":scope > .tophead");
+      var oldHead = ph.querySelector(":scope > .tophead");
+      if (srcHead && srcHead.cloneNode) {
+        var headClone = stripIds(srcHead.cloneNode(true));
+        headClone.inert = true;
+        headClone.setAttribute("aria-hidden", "true");
+        if (oldHead && oldHead.parentNode) {
+          oldHead.parentNode.insertBefore(headClone, oldHead);
+          oldHead.parentNode.removeChild(oldHead);
+        } else {
+          ph.appendChild(headClone);
+        }
+      }
+      return;
+    }
+    var srcBar = src.querySelector(":scope > .tophead > .tbar");
+    var phBar = ph.querySelector(":scope > .tophead > .tbar");
+    if (!srcBar || !phBar) return;
+    var sels = [".chip.policy", ".chip.wb-chip-ans", ".chip.wb-chip-held", ".chip.ok"];
+    var structural = false;
+    for (var i = 0; i < sels.length; i++) {
+      var s = srcBar.querySelector(sels[i]), p = phBar.querySelector(sels[i]);
+      if (!!s !== !!p) { structural = true; break; }
+      if (!s) continue;
+      if (p.hidden !== s.hidden) p.hidden = s.hidden;
+      var sn = s.querySelector ? s.querySelector(".n") : null;
+      var pn = p.querySelector ? p.querySelector(".n") : null;
+      if (sn && pn) {
+        if (pn.textContent !== sn.textContent) pn.textContent = sn.textContent;
+      } else if (p.textContent !== s.textContent) {
+        structural = true;
+        break;
+      }
+    }
+    if (structural) syncPlaceholder(src, true);
+  }
   function ensurePreviewHost() {
     if (preview && preview.host && preview.host.isConnected) return preview;
     var gal = doc.getElementById("bgal");
@@ -708,6 +753,7 @@
     holding: function () { return on || busy; },
     inPreview: function (el) { return !!(preview && preview.host && el && preview.host.contains(el)); },
     previewNode: function () { return preview ? preview.node : null; },
+    syncPlaceholder: syncPlaceholder,
     syncPreview: syncPreview,
     replacePreviewNode: function (oldNode, newNode) {
       if (!preview || preview.node !== oldNode || !newNode) return;
@@ -719,6 +765,7 @@
         tabs.delete(oldNode);
       }
       preview.node = newNode;
+      syncPlaceholder(newNode, true);
     },
     toggle: function () { if (on) exit(null); else enter(null); },
     exit: exit,

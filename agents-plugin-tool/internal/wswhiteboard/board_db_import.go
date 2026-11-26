@@ -287,5 +287,5 @@ func (b *BoardDB) load() error {
 		return err
 	}
 	b.state = state.clone()
-	return nil
+	return b.loadHoldsLocked()
 }

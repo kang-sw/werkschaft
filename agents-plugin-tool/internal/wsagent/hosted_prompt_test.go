@@ -176,6 +176,7 @@ func TestPlaybookCommandTurnText(t *testing.T) {
 // list is read once per runner.
 func TestHostedLeadPlaybookCommands(t *testing.T) {
 	h := newLeadHarness(t)
+	setNativeLeadCompaction(t, h)
 	reg := h.opts.Backends[BackendClaude]
 	reg.Catalog, reg.PlaybookCommands = ClaudeCatalog(), true
 	h.opts.Backends[BackendClaude] = reg

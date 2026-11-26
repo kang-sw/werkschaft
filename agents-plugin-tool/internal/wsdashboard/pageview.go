@@ -75,6 +75,10 @@ type SessionView struct {
 	// CanEditSettings reports whether the viewer may edit model/effort from
 	// the composer footer (hosted non-child session viewed from the host).
 	CanEditSettings bool
+	// WhiteboardCapable reports a hosted lead conversation: only it receives
+	// the whiteboard-only <ws-ambient> directive, so only it offers the
+	// composer's whiteboard-only toggle.
+	WhiteboardCapable bool
 	// Model and Effort are the session's resolved display values for the
 	// composer footer strip.
 	Model, Effort string

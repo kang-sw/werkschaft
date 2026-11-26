@@ -54,6 +54,13 @@ type BoardArchiveSource interface {
 	BoardArchive(reg Registration) (zip []byte, ok bool, err error)
 }
 
+// BoardHoldSource sets or clears the user-side hold on one open item of a
+// session's board and returns the board's sorted held item IDs. ok is false
+// when the session has no board or holds are unsupported.
+type BoardHoldSource interface {
+	SetBoardHold(reg Registration, itemID int, held bool) (heldIDs []int, ok bool, err error)
+}
+
 // MockupLookup is the in-memory metadata of one stored mockup snapshot bundle,
 // used to mint capabilities and key the daemon's decoded mockup LRU without
 // touching SQLite on cache hits.
@@ -73,7 +80,6 @@ type BoardMockupSource interface {
 	ReadMockupBundle(reg Registration, entryID string) (wswhiteboard.MockupBundle, bool, error)
 	SetMockupEvictor(fn func(boardDir string))
 }
-
 // TopicHistorySource is a PageSource that also renders board topics with
 // the complete history the served board leaves out (View.LazyHistory): the
 // topics named, or, when target is set, the one topic that holds that eN,

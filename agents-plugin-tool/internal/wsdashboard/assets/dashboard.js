@@ -312,7 +312,7 @@
   doc.addEventListener("toggle", function (e) {
     var d = e.target;
     if (!d || d.tagName !== "DETAILS") return;
-    syncTurnAria(d);
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
     if (isPeer(d)) { save(PEER_KEY + d.getAttribute("data-peer"), d.open ? "1" : null); return; }
     if (d.classList.contains("rended") && d.hasAttribute("data-key") && railSets) { railSets.ended.put(d.getAttribute("data-key"), d.open); return; }
     // A graft's temporary open attribute is not an actual reader open.
@@ -324,12 +324,12 @@
     if (isPanel(d)) shutPut(shutId(d), !d.open);
   }, true);
   function restoreOpenOne(d) {
-    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; syncTurnAria(d); return; }
-    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) { syncTurnAria(d); return; }
+    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
+    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) { if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
     var k = openKey(d);
     if (k && Object.prototype.hasOwnProperty.call(openState, k)) d.open = openState[k];
     else if (isPanel(d) && shutHas(shutId(d))) d.open = false;
-    syncTurnAria(d);
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
   }
   function restoreOpen(el) {
     if (el.tagName === "DETAILS") restoreOpenOne(el);
@@ -630,7 +630,7 @@
       }
     });
     pinConvo();
-    queueSyncConvoBottom();
+    if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
     var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));

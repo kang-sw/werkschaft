@@ -276,9 +276,15 @@ func TestTurnSummaryWakeLabelZeroToolPreservationAndReasoningHost(t *testing.T) 
 			t.Errorf("wake/reasoning turn missing %q:\n%s", want, entries)
 		}
 	}
-	// Zero bytes and zero AddedTokens omits [data-conv-turn-tokens] cleanly.
-	if strings.Contains(entries, `data-conv-turn-tokens`) {
-		t.Errorf("zero AddedTokens and zero bytes should omit token span:\n%s", entries)
+	// Zero bytes and zero AddedTokens omits [data-conv-turn-tokens] cleanly:
+	// the tool turn has none. Turn 1's reply is foldable text, so only its
+	// hidden plain summary (before the tool turn) estimates tokens.
+	toolTurn := strings.Index(entries, `data-wake-turn="1"><summary`)
+	if toolTurn < 0 || strings.Contains(entries[toolTurn:], `data-conv-turn-tokens`) {
+		t.Errorf("zero AddedTokens and zero bytes should omit token span on the tool turn:\n%s", entries)
+	}
+	if got := strings.Count(entries[:toolTurn], `data-conv-turn-tokens`); got != 1 || !strings.Contains(entries[:toolTurn], `data-conv-turn-plain="1" hidden`) {
+		t.Errorf("0-tool turn's hidden plain summary should carry the one token estimate, got %d", got)
 	}
 }
 

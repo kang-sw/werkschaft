@@ -54,6 +54,7 @@ func entryCacheKey(e ConvEntry) string {
 	b.WriteString(boardNavigationKey(e))
 	b.WriteString("\x00" + strconv.FormatBool(e.MailWakeSuppressed) + "\x00" + strconv.FormatBool(e.MatchedMailWake()) + "\x00" + e.BoardNudgeState() + "\x00" + strconv.Itoa(e.MailBytes()))
 	b.WriteString("\x00" + strconv.FormatBool(e.TurnAbsorbed) + "\x00" + strconv.FormatBool(e.TurnLiveAbsorbed) + "\x00" + strconv.FormatBool(e.TurnReasoningOnly) + e.TurnSummary.CacheFingerprint())
+	b.WriteString("\x00tp:" + e.TurnPlain.CacheFingerprint())
 	if entryHasMailbox(e) {
 		b.WriteString("\x00mb:" + e.MailboxCtx.Dir + "\x00" + e.MailboxCtx.Branch)
 	}

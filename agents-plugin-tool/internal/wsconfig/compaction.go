@@ -17,11 +17,11 @@ const (
 
 // CompactionDefaults are shared by every hosted harness and both readers.
 var CompactionDefaults = map[string]string{
-	ItemCompactionLeadMode:       CompactionModeNative,
-	"compaction.lead_advisory":   "50%",
-	"compaction.lead_hard":       "80%",
-	"compaction.worker_advisory": "50%",
-	"compaction.worker_hard":     "80%",
+	ItemCompactionLeadMode:       CompactionModeWS,
+	"compaction.lead_advisory":   "60%|180k",
+	"compaction.lead_hard":       "80%|230k",
+	"compaction.worker_advisory": "60%|180k",
+	"compaction.worker_hard":     "80%|230k",
 }
 
 // ThresholdPattern is the existing percent/token/whichever-first grammar.

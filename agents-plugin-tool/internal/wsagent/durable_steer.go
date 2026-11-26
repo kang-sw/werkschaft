@@ -14,6 +14,10 @@ type durableSteer struct {
 	Text string `json:"text"`
 	Mark uint64 `json:"mark,omitempty"`
 	Mail string `json:"mail,omitempty"`
+	// Clean is the text without the model-only whiteboard directive Text
+	// carries; a requeued steer returns to the report queue as Clean so the
+	// directive never leaks into a later turn. Empty when Text has none.
+	Clean string `json:"clean,omitempty"`
 }
 
 type durableSteerProcess interface {
@@ -86,7 +90,7 @@ func (c *conv) steerDurableInbox(p durableSteerProcess) {
 			names = append(names, rec.Name)
 		}
 		parts := recordParts(recs)
-		c.queueDurableSteer(p, durableSteer{Text: partsText(parts), Mark: covered}, names, liveEvents(parts))
+		c.queueDurableSteer(p, c.directedSteer(partsText(parts), recs, covered), names, liveEvents(parts))
 	})
 }
 
@@ -149,6 +153,9 @@ func requeueDurableSteers(rec *Record) {
 	rec.Reports = slices.Clone(rec.Reports)
 	for _, steer := range rec.DurableSteers {
 		text := steer.Text
+		if steer.Clean != "" {
+			text = steer.Clean
+		}
 		if steer.Mail != "" {
 			text = steer.Mail
 		}

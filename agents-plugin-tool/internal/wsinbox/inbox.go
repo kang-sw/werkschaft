@@ -200,6 +200,11 @@ type Entry struct {
 	// injects it at the session's next tool boundary instead of at the turn
 	// end. Steered entries queue ahead of the rest (queueRecords).
 	Steer bool `json:"steer,omitempty"`
+	// WhiteboardFirst marks a message sent while the composer's whiteboard-only
+	// toggle was on: the runner appends a model-only <ws-ambient> directive to
+	// the turn or steer that delivers it. It never changes the stored or
+	// displayed text, and an older binary ignores it.
+	WhiteboardFirst bool `json:"whiteboard_first,omitempty"`
 	// EventID is the stable id of the event a system notice delivers (an
 	// exec job's completion), empty for every other entry. The runner
 	// reads it back to admit one event once (EventIDs).

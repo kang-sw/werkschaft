@@ -105,7 +105,7 @@ func TestOpenChecksCountAsAsksNotAcks(t *testing.T) {
 		t.Fatalf("a board of open checks is answerable with no bulk ack box: %+v", view)
 	}
 	page := render(t, view)
-	if !strings.Contains(page, `<span class="chip policy" title="to answer">`) || strings.Contains(page, `class="chip ok"`) || strings.Contains(page, `id="ack-all"`) {
+	if !strings.Contains(page, `<span class="chip policy" data-tbar-ask="open" title="to answer">`) || strings.Contains(page, `class="chip ok"`) || strings.Contains(page, `id="ack-all"`) {
 		t.Fatalf("open checks count in the amber chip only:\n%s", page)
 	}
 	mustApply(t, st, `<wb:answer id="1" value="ok">ok</wb:answer>`)
@@ -135,7 +135,7 @@ func TestChecksOnlyTopicChipIsAPlainCount(t *testing.T) {
 	if c := topic("c"); strings.Contains(c, "data-bulk") || !strings.Contains(c, `<span class="chip policy"`) {
 		t.Fatalf("a checks-only topic's amber chip is a plain count:\n%s", c)
 	}
-	if p := topic("p"); !regexp.MustCompile(`data-bulk="policy"[^>]*>.*?</svg>2</button>`).MatchString(p) {
+	if p := topic("p"); !regexp.MustCompile(`data-bulk="policy"[^>]*>.*?</svg><span class="chip-lbl">open</span><span class="n">2</span></button>`).MatchString(p) {
 		t.Fatalf("a topic with a policy item keeps the bulk button, counting its check too:\n%s", p)
 	}
 	if regions.CountPolicy != 3 {

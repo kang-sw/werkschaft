@@ -51,6 +51,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-highlight.js",
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
+	"dashboard-whiteboard-only.js",
 	"dashboard-composer-exec.js",
 	"dashboard-composer-ucmd-editor.js",
 	"dashboard-composer-ucmd-card.js",
