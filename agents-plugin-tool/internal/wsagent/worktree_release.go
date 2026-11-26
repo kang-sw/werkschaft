@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -174,7 +175,7 @@ func (r *Runner) resolveAgentBinding(rec Record) resolvedAgentBinding {
 	checkouts := resolveCheckouts(rec, root, cwd)
 	binding := resolvedAgentBinding{root: root, cwd: cwd, checkouts: checkouts, released: r.releasedOnDisk(rec, checkouts)}
 	if binding.released == "" {
-		binding.gone = goneBinding(rec, cwd, checkouts)
+		binding.gone = goneBinding(rec, root, cwd, checkouts)
 	}
 	return binding
 }
@@ -189,34 +190,76 @@ func (b resolvedAgentBinding) ended() string {
 }
 
 // goneBinding is the first path of a release-bound conversation's binding
-// that no longer exists: its effective working directory cwd, or one of its
-// checkouts whose directory, .git entry, or registered admin directory is
-// gone (wsgit.CheckoutRegistrationGone). A checkout removed after a release
-// can take its release marker with it (the marker lives in the admin
-// directory), so this is the cold paths' evidence that a binding must not
-// launch there again. "" when every path still exists or rec is not
-// release-bound. It costs an Lstat per path and a gitfile read per checkout.
+// that was removed: one of its checkouts whose directory, .git entry, or
+// registered admin directory is gone (wsgit.CheckoutRegistrationGone), or
+// its canonical root or working directory, when no live checkout of the
+// binding contains it (its checkouts were resolved after the worktree had
+// already vanished), removed from a parent that still exists (removedDir).
+// A checkout removed
+// after a release can take its release marker with it (the marker lives in
+// the admin directory), so this is the cold paths' evidence that a binding
+// must not launch there again. "" when there is no such evidence or rec is
+// not release-bound. It costs an Lstat per path and a gitfile read per
+// checkout.
 //
-// A checkout emptied in place, with its .git entry deleted but its
-// directory kept (a removal a process's working directory blocked on
+// A missing working directory under a checkout that is still registered (a
+// subdirectory a branch switch or a clean removed) is not evidence: the
+// checkout lives, and the start fails and can be retried as before. Neither
+// is a path whose parent is missing too (an unavailable drive or share reads
+// as not found), nor, once loaded after the removal, a worktree that lay
+// inside another live checkout (an in-repository pool): that checkout
+// contains its path. A checkout emptied in place, with its .git entry deleted but
+// its directory kept (a removal a process's working directory blocked on
 // Windows), leaves no checkout above cwd to compare: it is not detected
 // here; the persisted release closure and the finished-child sleep keep
 // such a conversation from launching there.
-func goneBinding(rec Record, cwd string, checkouts []string) string {
+func goneBinding(rec Record, root, cwd string, checkouts []string) string {
 	if !releaseBound(rec) {
 		return ""
-	}
-	if cwd != "" {
-		if _, err := os.Lstat(cwd); errors.Is(err, os.ErrNotExist) {
-			return cwd
-		}
 	}
 	for _, checkout := range checkouts {
 		if wsgit.CheckoutRegistrationGone(checkout) {
 			return checkout
 		}
 	}
+	for _, path := range []string{root, cwd} {
+		if !slices.ContainsFunc(checkouts, func(checkout string) bool { return pathWithin(checkout, path) }) && removedDir(path) {
+			return path
+		}
+	}
 	return ""
+}
+
+// pathWithin reports whether path is dir or lies under it; Windows paths
+// compare without case, as sameWorktreePath does.
+func pathWithin(dir, path string) bool {
+	if dir == "" || path == "" {
+		return false
+	}
+	dir, path = filepath.Clean(dir), filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		dir, path = strings.ToLower(dir), strings.ToLower(path)
+	}
+	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+}
+
+// removedDir reports whether path no longer exists while its parent
+// directory does: the evidence of a removal rather than of an unreachable
+// volume, whose parents read as missing as well.
+func removedDir(path string) bool {
+	if path == "" {
+		return false
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	if parent == path {
+		return false
+	}
+	_, err := os.Lstat(parent)
+	return err == nil
 }
 
 // deadCheckoutRefusal is the refusal of a binding checkout ended: removed

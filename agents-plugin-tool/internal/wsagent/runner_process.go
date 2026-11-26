@@ -95,7 +95,7 @@ func (c *conv) startProcess() error {
 	// marker can go with its admin directory) refuses the start the same
 	// way: nothing launches into a deleted or unregistered directory. Its
 	// file checks run before mu is taken.
-	gone := goneBinding(rec, c.canonCwd, c.checkouts)
+	gone := goneBinding(rec, c.canonRoot, c.canonCwd, c.checkouts)
 	c.mu.Lock()
 	checkout := c.releasedOnDiskLocked()
 	if checkout == "" && gone != "" {

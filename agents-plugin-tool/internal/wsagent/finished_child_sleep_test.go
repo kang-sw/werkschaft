@@ -209,6 +209,95 @@ func TestStartupClosesSleepingChildWhoseCheckoutIsGone(t *testing.T) {
 	}
 }
 
+// goneBinding reads a binding as removed only on evidence of a removal: a
+// bound checkout gone, or a root or working directory missing from a parent
+// that still exists and contained by no live bound checkout. A missing
+// subdirectory of a live checkout, or a path whose parent is missing too (an
+// unreachable volume), is not evidence; a lead is never release-bound.
+func TestGoneBindingNeedsEvidenceOfRemoval(t *testing.T) {
+	wt, err := filepath.EvalSymlinks(releaseTestWorktree(t, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := Record{Parent: &ParentRef{Kind: ParentLead, ReplyID: "lead"}}
+	missingSub := filepath.Join(wt, "build", "out")
+	removed := filepath.Join(filepath.Dir(wt), "removed-wt")
+	unreachable := filepath.Join(filepath.Dir(wt), "no-volume", "wt")
+	for _, tc := range []struct {
+		name            string
+		rec             Record
+		root, cwd, want string
+		checkouts       []string
+	}{
+		{name: "intact binding", rec: child, root: wt, cwd: wt, checkouts: []string{wt}},
+		{name: "missing subdirectory of a live checkout", rec: child, root: wt, cwd: missingSub, checkouts: []string{wt}},
+		{name: "root removed, resolved after the removal", rec: child, root: removed, cwd: removed, want: removed},
+		{name: "cwd removed outside the live root checkout", rec: child, root: wt, cwd: removed, checkouts: []string{wt}, want: removed},
+		{name: "parent missing too", rec: child, root: unreachable, cwd: unreachable},
+		{name: "lead", rec: Record{Lead: true}, root: removed, cwd: removed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := goneBinding(tc.rec, tc.root, tc.cwd, tc.checkouts); got != tc.want {
+				t.Fatalf("goneBinding = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("bound checkout removed", func(t *testing.T) {
+		if err := os.RemoveAll(adminDir(t, wt)); err != nil {
+			t.Fatal(err)
+		}
+		if got := goneBinding(child, wt, missingSub, []string{wt}); got != wt {
+			t.Fatalf("goneBinding = %q, want the unregistered checkout %s", got, wt)
+		}
+	})
+}
+
+// A sleeping worker whose working directory, a subdirectory of its still
+// registered checkout, is missing at startup (a branch switch or a clean took
+// it) stays open: the checkout lives, so nothing ended the binding.
+func TestStartupKeepsSleepingChildWhoseCwdSubdirectoryIsMissing(t *testing.T) {
+	h, wt, leadID := heldReleaseHarness(t)
+	sub := filepath.Join(wt, "build")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := h.runner.Spawn(SpawnSpec{
+		Profile:            AgentWorkerProfile(BackendClaude),
+		PermissionLevel:    PermissionWorkdirWrite,
+		delegatedAuthority: true,
+		Root:               wt,
+		Cwd:                sub,
+		Prompt:             "work",
+		Tier:               "small",
+		Parent:             &ParentRef{Kind: ParentLead, ReplyID: leadID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := st.ID
+	holder := h.holder(id)
+	h.holders.out(holder, stateLine(HarnessRunning), initLine("worker-s1", "dontAsk"))
+	h.holders.out(holder, recoveryWorkerReply("done")...)
+	h.idle(id)
+	h.runner.Close()
+	if rec := h.record(id); rec.HolderID != "" || rec.ClosedAt != "" {
+		t.Fatalf("fixture: worker not asleep after shutdown: %+v", rec)
+	}
+	if err := os.Remove(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.restart()
+	h.start()
+	wait(t, "restart holder scan", h.runner.rejoined)
+	time.Sleep(50 * time.Millisecond)
+	if st := h.state(id); st.Status == StatusClosed {
+		t.Fatalf("a missing subdirectory of a live checkout closed the worker: %+v", st)
+	}
+	if rec := h.record(id); rec.ClosedAt != "" || rec.DeadBindingClosure != nil {
+		t.Fatalf("a missing subdirectory of a live checkout persisted a closure: %+v", rec)
+	}
+}
+
 // A finished-idle Codex worker (WorkerHTTPMCP, whose ws-mcp route a restart
 // on another port makes stale) sleeps across a daemon restart rather than
 // restarting or taking a standalone restore turn, both when the shutdown
