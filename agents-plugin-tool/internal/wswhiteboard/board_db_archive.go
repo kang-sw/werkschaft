@@ -107,7 +107,7 @@ func (b *BoardDB) LoadArchive(zipPath string, now time.Time) (backup string, top
 		return backup, 0, err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"panels", "entries", "topics", "revision_receipts", "load_floors", "board_meta"} {
+	for _, table := range []string{"item_holds", "panels", "entries", "topics", "revision_receipts", "load_floors", "board_meta"} {
 		if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
 			return backup, 0, err
 		}
@@ -138,6 +138,7 @@ func (b *BoardDB) LoadArchive(zipPath string, now time.Time) (backup string, top
 	b.nextTopic = rows.NextTopic
 	b.topicDirs = rows.Dirs
 	b.state = next.clone()
+	b.holds = map[int]boardItemHold{}
 	b.armCheckpointLocked()
 	return backup, len(next.Topics), nil
 }

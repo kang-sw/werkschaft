@@ -515,7 +515,7 @@ func pageDataBase(view View, a *pageAssets) *pageData {
 		for _, panel := range t.PanelRecaps {
 			p.panelOnPage[panel.PanelID] = true
 		}
-		p.CountPolicy += t.AskCount()
+		p.CountPolicy += t.UnheldAskCount()
 		p.CountAcks += len(t.Acks)
 		for _, list := range [][]ItemView{t.Policy, t.Acks, t.Checks, t.Expanded, t.Collapsed} {
 			for _, iv := range list {

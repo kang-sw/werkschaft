@@ -60,6 +60,7 @@ type BoardDB struct {
 	revisionSlot       int
 	nextTopic          int
 	topicDirs          map[string]string
+	holds              map[int]boardItemHold
 	checkpointTimer    *time.Timer
 	checkpointDue      time.Time
 	closed             bool
@@ -137,6 +138,11 @@ var boardDBSchema = []string{
 	`CREATE TABLE IF NOT EXISTS load_floors (
 		generation INTEGER PRIMARY KEY,
 		loaded_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS item_holds (
+		item_id INTEGER PRIMARY KEY,
+		loaded_at TEXT NOT NULL,
+		item_changed INTEGER NOT NULL
 	)`,
 }
 
@@ -301,7 +307,7 @@ func boardDBOpenError(path string, err error) error {
 // table openBoardDBHandle creates is empty.
 func (b *BoardDB) uncommitted() (bool, error) {
 	var n int
-	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)`).Scan(&n)
+	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)+(SELECT COUNT(*) FROM item_holds)`).Scan(&n)
 	return err == nil && n == 0, err
 }
 
@@ -409,7 +415,7 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	b := &BoardDB{instance: boardDBInstances.Add(1), dir: dir, path: path, db: db, opts: opts, topicDirs: map[string]string{}}
+	b := &BoardDB{instance: boardDBInstances.Add(1), dir: dir, path: path, db: db, opts: opts, topicDirs: map[string]string{}, holds: map[int]boardItemHold{}}
 	ctx, cancel := context.WithTimeout(context.Background(), BoardDBOpenRetryBound)
 	defer cancel()
 	// locking_mode is deliberately first: WAL never opens a shared-memory

@@ -78,7 +78,11 @@ func (b *BoardDB) updateLocked(fn func(*State) error) error {
 	if b.revisionSlot == 1 {
 		nextRevisionSlot = 2
 	}
+	clearAllHolds, clearHoldIDs := boardHoldClears(b.state, work, b.holds)
 	if err := boardWriteDelta(tx, beforeRows, afterRows, b.generation+1, b.importedGeneration, nextRevisionSlot, b.state, work); err != nil {
+		return err
+	}
+	if err := boardApplyHoldClears(tx, clearAllHolds, clearHoldIDs); err != nil {
 		return err
 	}
 	if err := b.hit("transaction-before-commit"); err != nil {
@@ -89,6 +93,13 @@ func (b *BoardDB) updateLocked(fn func(*State) error) error {
 	}
 	if work.MetadataRevision != b.state.MetadataRevision || work.StaleNudgeRevision != b.state.StaleNudgeRevision {
 		b.revisionSlot = nextRevisionSlot
+	}
+	if clearAllHolds {
+		b.holds = map[int]boardItemHold{}
+	} else {
+		for _, id := range clearHoldIDs {
+			delete(b.holds, id)
+		}
 	}
 	b.generation++
 	b.nextTopic = afterRows.NextTopic

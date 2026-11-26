@@ -394,6 +394,24 @@ func (t TopicView) AnsweredChecks() int { return len(t.Checks) - t.OpenChecks() 
 // items and open checks.
 func (t TopicView) AskCount() int { return len(t.Policy) + t.OpenChecks() }
 
+// UnheldAskCount is the topic's open policy and open check items excluding
+// daemon-held items (used for board/rail header pending counts while AskCount
+// and waiting keep counting held items).
+func (t TopicView) UnheldAskCount() int {
+	n := 0
+	for _, it := range t.Policy {
+		if !it.Held {
+			n++
+		}
+	}
+	for _, c := range t.Checks {
+		if c.Status == StatusOpen && !c.Held {
+			n++
+		}
+	}
+	return n
+}
+
 // waiting reports whether anything in the topic waits on the user.
 func (t TopicView) waiting() bool { return t.AskCount() > 0 || len(t.Acks) > 0 }
 
@@ -404,6 +422,7 @@ type ItemView struct {
 	Class string
 	// Status is the store status.
 	Status    string
+	Held      bool
 	Title     string
 	Options   []OptionView
 	RecLetter string // recommended option letter, empty when none
@@ -551,6 +570,8 @@ type ViewInput struct {
 	LazyHistory bool
 	// Location is the time zone of UpdatedClock; nil is the local zone.
 	Location *time.Location
+	// Held lists item IDs currently held on the daemon board DB.
+	Held []int
 }
 
 // ClosedWindow selects capped closed topics by index in close order, the
@@ -611,9 +632,16 @@ func BuildView(state *State, in ViewInput) View {
 		}
 		return block
 	}
+	heldSet := map[int]bool{}
+	for _, id := range in.Held {
+		heldSet[id] = true
+	}
 	for _, item := range state.Items {
 		block := blockOf(item.Topic)
 		iv := itemView(item)
+		if item.Status == StatusOpen && heldSet[item.ID] {
+			iv.Held = true
+		}
 		itemsChanged[item.Topic] = max(itemsChanged[item.Topic], item.Changed)
 		if item.Status != StatusOpen {
 			historyItems[item.Topic] = append(historyItems[item.Topic], iv)
@@ -666,7 +694,7 @@ func BuildView(state *State, in ViewInput) View {
 	inputs := boardInputs(state)
 	for _, name := range order {
 		block := blocks[name]
-		block.Timeline, block.Asks = timelineView(*block, state.Items, inputs, in.Location)
+		block.Timeline, block.Asks = timelineView(*block, state.Items, inputs, in.Location, heldSet)
 	}
 	stampUpdated(state, blocks, in.Location)
 
