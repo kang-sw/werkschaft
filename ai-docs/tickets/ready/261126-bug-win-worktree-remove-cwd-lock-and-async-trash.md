@@ -1,0 +1,133 @@
+---
+title: "Windows worktree.remove CWD 잠금·불사 holder·복구 재기동 및 대용량 비동기 삭제 개선"
+related:
+  261126-research-housekeeping-sparse-dirty-and-einval: sibling research ticket for housekeeping sparse ' D' / EINVAL
+  261121-refactor-ws-daemon-metadata-sqlite: both touch runner Record persistence (HolderID/ClosedAt) and restart restore; whichever lands second re-verifies that path and TestRestartRestoreIdleLeadAndChildAfterReplay
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 8b0d1206d51638db
+sage-review-completeness-reviewed: 8b0d1206d51638db
+---
+
+# Fix Windows `worktree.remove` CWD locking, daemon-restore respawns, and synchronous large-tree deletion timeouts
+
+## Background
+
+Dogfooding pooled worktree cleanup on Windows (`InspectTGV_AIDriven`, 20 idle pooled worktrees) exposed 18/20 failures across three root causes confirmed in the codebase and in a live daemon restart observation:
+
+1. **Immortal detached holders holding worktree CWD (`16/20` `Permission denied` on empty dirs):**
+   - External harness workers (`agy`, `codex`, `claude`) launch via `wsholder` with OS `cwd` inside the pooled worktree (`agents-plugin-tool/internal/wsagent/agent_spawn.go:101,120`, `holder.go:218`, `wsholder/holder.py:590,653,955`).
+   - On forced `worktree.release`, `Runner.CheckoutReleased` (`worktree_release.go:291-341`) calls `closeDeadBinding` (`dead_binding.go:68-130`), which calls `hp.Detach()` (line 94) without stopping the child process and calls `c.stopIdle()` (line 101), cancelling the 10-minute runner idle timeout (`profile.go:49`). Meanwhile `holder.py:1336-1345` only idle-exits when `child_status["state"] != "running"`, so detached workers remain alive indefinitely holding the pooled worktree as their OS CWD.
+   - `removeWorktreeFenced` (`internal/mcp/worktree_remove.go:53-149`) checks only `worktreeExecFence` (`execjob`) and never checks `s.worktreeOccupancy`, `ActiveChildrenInWorktree`, or `deadBindings` (unlike `worktree.acquire` and dashboard `railworktreedelete.go`). On Windows, `git worktree remove --force` deletes every unlocked file and unregisters `.git/worktrees/<id>`, then fails `RemoveDirectory` on the empty directory with `Permission denied`.
+2. **Daemon restart respawning released/removed-worktree children and idle finished workers (`internal/wsagent`):**
+   - **Bug B (released/removed-worktree resurrection — ~11 long-finished Codex workers in `InspectTGV_AIDriven`):** `closeDeadBinding` (`dead_binding.go:72-101`) skips persisting `ClosedAt` on disk when `rec.HolderID != ""` (relying on `persistRetainedReleaseClosures`, which `worktree.remove` never runs), detaches the holder without stopping it, and cancels the 600s idle timer. When `git worktree remove --force` deletes `.git/worktrees/<id>` (which held `ws-worktree-released.json`) before failing `RemoveDirectory` on Windows, the next daemon startup sees `wsgit.WorktreeReleasedAt()` return `ok = false` (`worktree_released.go:98-102`) and `rec.ClosedAt == ""`. The daemon treats those long-finished workers as open sessions, reattaches their immortal holders, hits `c.mcpStale = true` (`worker_rejoin.go:33-50`), calls `restartProcess()` -> `startProcess()` (whose `releasedOnDiskLocked()` (defined at `worktree_release.go:205`, called at `runner_process.go:95-102`) never checks whether the checkout was deleted), launches fresh `codex app-server` processes into the emptied directories (`codex.go:132`), and sends `"## Hosted Session Restore"` (`"The daemon restarted."`).
+   - **Bug A (idle completed child workers within the 600s idle window):** `letGo()` (`runner_events.go:1046-1062`) states in its doc comment that only leads remain alive under holders and *"any other process ends"*, yet its code detaches all holders including already-finished idle child workers. On restart, `WorkerHTTPMCP: true` backends (`Claude`, `Codex`) see a new ephemeral MCP port (`c.mcpStale = true`), so `replayDone()` -> `restartIfDue()` -> `restartProcess()` kills and freshly respawns the idle child and `compactIdle()` (`compaction.go:551-754`) sends a standalone `"The daemon restarted."` LLM turn even though the child was finished and waiting to sleep.
+3. **Permanent retry lockout & synchronous `11–16 GB` deletion timeouts (`2/20` timeouts):**
+   - Once `git worktree remove --force` unregisters `.git/worktrees/<id>` before failing `RemoveDirectory`, retrying `worktree.remove` is permanently refused by `ownedPoolWorktree` (`internal/mcp/worktree_tools.go:916-949`, `not a registered git worktree`).
+   - `server_dispatch.go:924` runs `removeWorktreeFenced` -> `git worktree remove --force` synchronously on the MCP request thread (`worktree_remove.go:144`). Under Windows antivirus (10-100x per file touch), unlinking 11-16 GB of files exceeds caller MCP client timeouts and violates interactive-path file-I/O budgets.
+
+## Decisions
+
+- **Two-ticket split (`(1631)=a`):** This actionable ticket covers CWD holder/restore lifecycle, `worktree.remove` occupancy checks and reporting, O(1) `.trash/` rename-aside + async deletion, and orphan empty-directory recovery. The `housekeeping` sparse-checkout empty-index `'D '` / `Invalid argument` case is separated into `261126-research-housekeeping-sparse-dirty-and-einval`.
+  - *Rejected:* Bundling the unverified sparse-checkout / `Invalid argument` case into this ticket (would block fixing the 18/20 confirmed failures) or implementing the core fix without ticket capture.
+- **Sleep idle completed child workers across daemon restart (`(1636)=a`, updating Decision 24 `(1895)` in `261117-feat-ws-hosted-compaction-lifecycle`):** On daemon restart / `letGo()` / `c.mcpStale`, only top-level leads and actively mid-turn child workers remain live and receive standalone restore turns; already-finished idle non-lead child workers transition to sleeping (`c.proc == nil`) instead of being detached/respawned to burn standalone `"The daemon restarted."` turns, and receive the restore bundle prepended via `compactInput()` only if later woken by follow-up mail/input. Update `TestRestartRestoreIdleLeadAndChildAfterReplay` (`restore_bundle_test.go:58-142`) to reflect this contract.
+  - *Rejected:* Keeping Decision 24's standalone restore turn for idle non-lead workers and fixing only Bug B (wastes LLM turns on every daemon restart and contradicts `letGo()`'s stated intent at `runner_events.go:1046-1048`).
+- **Technical choices settled in review (auto-confirmed):** orphan recovery accepts directory-only trees resolved by filesystem path; rename-aside rolls back if Git unregister fails; the holder is stopped before `ClosedAt` is persisted via `persistAgentRecord`; finished-idle non-lead children sleep on both the `letGo()` and the rejoin paths.
+  - *Rejected:* running `CountUnreachedCommits` or `ownedPoolWorktree` against an unregistered directory (no admin dir, cannot fire); repo-wide `git worktree prune` (touches unrelated worktrees); leaving a stale-MCP-port idle child to restart (keeps the wasted standalone turn Decision `(1636)=a` removes).
+- **Compatibility tier (`T0` transparent):** Keep `worktree.remove` input arguments (`path`, `key`, `format`) and existing output fields backwards-compatible. Do not add new required MCP arguments or change persisted store schemas; any newly surfaced diagnostic detail uses existing error/text fields or optional `omitempty` JSON fields.
+  - *Rejected:* Adding new required MCP arguments or schema-breaking changes (`T3`).
+
+## Constraints
+
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- **Required manuals to read before editing:**
+  - `ai-docs/manuals/shipped-surface-boundary.md`
+  - `ai-docs/manuals/ws-mcp.md`
+  - `ai-docs/manuals/release-compatibility.md`
+  - `ai-docs/manuals/performance.md`
+- **File-touch & interactive-path budget (`performance.md`):** Interactive `worktree.remove` must avoid O(N) synchronous file unlinks on the MCP request path; directory retirement on the request path must stay O(1) (same-volume rename) with bulk unlinks deferred to background/async cleanup.
+- **Pool scan isolation:** Any pool `.trash/` staging directory must be excluded from worktree pool listing, reuse, stale-nudge, and orphan scans so trashed checkouts are never treated as live or reusable worktrees.
+- **Out of scope:**
+  - Adding a new lead-side `agent.close` MCP tool (separate MCP surface change).
+  - `housekeeping` sparse-checkout `' D'` false dirty / `Invalid argument` (`261126-research-housekeeping-sparse-dirty-and-einval`).
+- **Windows / AV verification constraint:** Run Go test suites on remote Linux `w5090` (with `-race` on affected packages) plus `GOOS=windows GOARCH=amd64 go vet` / cross-compile checks; verify Windows rename/CWD semantics in targeted Windows-safe tests without tripping local AV rules.
+
+## Prior Decisions
+
+- 261126-research-housekeeping-sparse-dirty-and-einval (2026-11-26, Decisions): "Track this empty-index / D / Invalid argument investigation separately ... so the confirmed 18/20 CWD-lock and large-tree timeout fixes are not blocked." — bearing: supports
+- 261117-feat-ws-hosted-compaction-lifecycle (2026-11-26, ea8d14fb): "Owner chose (1636)=a to update Decision 24 ((1895)) so already-finished idle non-lead child workers sleep across daemon restart / c.mcpStale instead of respawning" — bearing: supports
+- 261121-bug-compaction-advisory-followups (2026-11-22, b9395576): "Hard guidance delivery and idle compaction are separate ... The runner dispatches fallback at turn end and sends the restore bundle with continuation" — bearing: constrains
+- 261113-bug-ws-pi-subagent-turn-dies-on-daemon-restart (2026-11-13, dcbebe50): "Rejected restart warnings/refusal as a substitute for preserving running turns." — bearing: constrains
+- 0f27fd01 (2026-11-25, commit): "0.52.1 lead fixes ... (startup expiry race, closed-bridge heartbeat expiry, occupancy restore)" — bearing: constrains
+- 0c31c268 (2026-11-25, commit): "Give queued compaction and its requested continuation precedence over automatic restart" — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/internal/wsagent (dead_binding.go, runner_events.go, runner_process.go, compaction.go, restore_bundle_test.go), internal/wsholder, internal/mcp (worktree_remove.go, worktree_tools.go, server_dispatch.go) |
+| scope.surface | cross-module | spans wsagent, wsholder and mcp; worktree.remove MCP tool behavior and error text change |
+| scope.new_public_symbol | unknown | no exported symbol named; .trash/ sweep hook shape not specified |
+| scope.new_type_contract | no | T0 decision: no new required arguments or store schema change |
+| scope.test_surface | existing | internal/wsagent/restore_bundle_test.go, internal/mcp/worktree_remove_test.go, internal/wsagent/worktree_release_test.go; new tests also expected |
+| complexity.reuse_points | confirmed | worktree.acquire occupancy checks in internal/mcp/worktree_tools.go, dashboard wsdashboard/railworktreedelete.go, wsagent persistRetainedReleaseClosures (dead_binding.go:336) |
+| complexity.side_effect_risk | high | changes daemon restart/restore lifecycle and holder termination, plus destructive directory rename and async delete |
+| risk.correctness | high | Windows CWD-lock and rename semantics and restart ordering are hard to reproduce locally |
+| risk.fit | moderate | supersedes Decision 24 restore contract in 261117-feat-ws-hosted-compaction-lifecycle |
+| risk.test | high | Windows-only behavior verified on Linux w5090 plus cross-vet; holder tests have known flaky orphan issue |
+| risk.security_or_contract | moderate | path-containment for orphan cleanup must refuse paths outside the pool; T0 contract |
+
+## Phases
+
+### Phase 1: Worker/Holder CWD Lifecycle, Daemon Restore Filtering, and `worktree.remove` Occupancy Checks
+
+**Goal:** Eliminate immortal detached holders and post-restart zombie respawns into released/removed worktrees, and make `worktree.remove` refuse occupied checkouts cleanly with actionable occupant diagnostics before touching disk.
+
+**Behavior Contract:**
+1. **End detached dead-binding CWD leaks & persist closure (`internal/wsagent`, `internal/wsholder`):**
+   - When `closeDeadBinding` (`dead_binding.go:68-130`) runs on `worktree.release`, stop the released dead-binding holder/child cleanly (instead of calling `hp.Detach()` + `c.stopIdle()` and leaving an immortal holder) and persist `ClosedAt` durably on disk even when `rec.HolderID != ""`, so no idle child retains an OS CWD handle inside a released checkout and a later daemon restart cannot lose the closed state if `.git/worktrees/<id>` is subsequently removed.
+   - Sequencing: stop the holder/child first (graceful stop with a bounded timeout, then kill; a mid-turn worker at forced release is stopped the same way after the existing release-time turn cancellation), then persist `ClosedAt` through `persistAgentRecord` (not a direct `agent.json` write, so it survives the planned SQLite metadata cutover in `261121-refactor-ws-daemon-metadata-sqlite`). This supersedes the `closeDeadBinding` comment that keeps the old disk record open so a predecessor daemon's orphan sweep (which protects open records only) keeps protecting the holder: that protection is no longer needed once the holder is stopped before the record closes. The removed `c.stopIdle()` call is moot once the holder is stopped.
+   - Observable check: after forced `worktree.release`, the holder/child process has exited (no process whose OS CWD is inside the released checkout remains).
+2. **Prevent daemon restart/restore from respawning released/removed-worktree or idle completed children (`internal/wsagent`):**
+   - Guard startup/dead-binding resolution (`dead_binding.go`, `runner_process.go:95-102`) so a child bound to a worktree whose checkout directory or `.git` registration no longer exists on disk is closed/refused rather than spawned into an emptied or deleted directory.
+   - Per `(1636)=a`, align `letGo()` (`runner_events.go:1046-1062`), `replayDone()` / `c.mcpStale` handling (`runner_reattach.go:251`, `worker_rejoin.go:33-50`), and `compactIdle()` (`compaction.go:551-754`) so already-finished idle non-lead child workers (no active turn, no queued input/mail/reports) are stopped/put to sleep instead of kept alive or respawned to burn standalone `"The daemon restarted."` turns. The finished-idle predicate is evaluated in `letGo()` at daemon shutdown, where state is authoritative (after `finishLine()` / `persistSeq()`); sleeping must also end the detached holder and its child process (an idle holder only exits when its child is not running). The startup/rejoin path applies the same predicate to a child that was not slept at shutdown (for example after a crash): a rejoined finished-idle non-lead child, including one whose `WorkerHTTPMCP` port went stale (`c.mcpStale`), is put to sleep (holder and child stopped) rather than restarted; the rejoin-path check is evaluated at `replayDone()` (after ring replay completes, since the persisted record cannot show a turn that ended during daemon downtime) and tested with such a turn; the holder-stop timeout reuses an existing runner stop timeout (no new constant is introduced unless none fits) for a standalone `"The daemon restarted."` turn. Leads and actively mid-turn child workers retain existing restart-restore behavior; sleeping children still receive the restore bundle prepended via `compactInput()` if later woken by follow-up mail/input. Update `TestRestartRestoreIdleLeadAndChildAfterReplay` (`restore_bundle_test.go:58-142`) to assert the updated contract.
+3. **Occupancy pre-flight check & occupant diagnostics in `worktree.remove` (`internal/mcp`):**
+   - In `removeWorktreeFenced`, check `worktreeOccupancy` / active children / dead-binding holders (consistent with `worktree.acquire` and dashboard worktree delete) before running any destructive removal.
+   - When occupied, refuse without modifying files or Git registration, and surface the locking occupant details (child address, state, PID/holder if known, CWD) in the error output.
+
+**Verification:**
+- Unit and `-race` tests in `internal/wsagent`, `internal/wsholder`, and `internal/mcp` covering:
+  - Forced `worktree.release` stops the dead-binding holder (no immortal CWD holder) and persists `ClosedAt` on disk even when `HolderID != ""`.
+  - Daemon restart does not resurrect a closed/released child even if `.git/worktrees/<id>` (`ws-worktree-released.json`) was deleted, and does not spawn into an emptied/missing checkout directory.
+  - Daemon restart keeps leads and mid-turn children on the restore path, while idle completed non-lead child workers sleep without burning a standalone `"The daemon restarted."` turn, both via the `letGo()` shutdown path and via the rejoin path with a `WorkerHTTPMCP: true` port change and receive the prepended restore bundle on a later follow-up wake.
+  - `worktree.remove` refuses occupied worktrees with occupant identity and leaves files + Git registration intact.
+- `GOOS=windows GOARCH=amd64 go vet` passes across modified packages.
+
+### Phase 2: O(1) `.trash/` Rename-Aside, Async Deletion, and Orphan Directory Recovery
+
+**Goal:** Prevent interactive MCP timeouts on multi-GB Windows worktrees, avoid destructive partial-cleanup states under external CWD locks, and allow recovering already-unregistered orphan directories inside the pool.
+
+**Behavior Contract:**
+1. **Atomic rename-aside before Git unregister (`internal/mcp`):**
+   - In `removeWorktreeFenced` (after pre-flight checks and `pre_remove` hooks succeed), move `<target>` via same-volume `os.Rename` into a pool-scoped `.trash/<unique-id>` directory *before* unregistering/pruning Git worktree admin metadata (`.git/worktrees/<id>`).
+   - If `os.Rename` fails (for example, an external non-`ws` process holds a CWD handle inside `<target>` on Windows), abort cleanly without deleting any files or unregistering the Git worktree, returning a clear actionable error (including any known occupant/hint).
+   - Once renamed aside, immediately unregister the Git worktree metadata and return success to the MCP caller in O(1) time. Prefer removing only this worktree's admin dir (`.git/worktrees/<id>`) over a repo-wide `git worktree prune`, which acts on every missing worktree. If the unregister step fails after the rename-aside, roll the rename back so the worktree stays registered and intact (never leave a registered worktree with a missing directory).
+   - The `.trash/` directory lives inside the owned pool root that contains the target (`ownedPoolRoots`; the default config yields an out-of-tree root plus the legacy in-tree root, so there is one `.trash/` per root and the pool-scan exclusion applies to each). Pool worktrees are provisioned as direct children `<poolRoot>/<stem>` (`worktree.acquire`), but a nested target under a pool root keeps working: only a rename that fails (including a cross-volume rename) aborts cleanly with an actionable error; never fall back to copy+delete on the request path.
+   - If the rename rollback itself fails (for example an antivirus handle), return a loud error naming both the `.trash/` path and the original path rather than staying silent. Leftover `.trash/` entries are retried by the daemon startup sweep and by opportunistic sweeps in later `worktree.*` calls; when no daemon runs, the next `worktree.*` call from any `ws-mcp` process performs the bounded sweep. A sweep must not race an in-flight remove's rollback window: it skips `.trash/` entries younger than a short grace period (or runs under the same per-pool serialization the remove holds). The orphan branch likewise runs under the pool serialization that `worktree.acquire` / `worktree.release` use, or requires a minimum directory age, so it never trashes the transient empty directory of an acquire partway through `git worktree add`; add a test for each.
+2. **Asynchronous background deletion & sweep retry (`internal/mcp`, daemon lifecycle):**
+   - Queue the `.trash/<unique-id>` entry for background `os.RemoveAll` outside the MCP request goroutine.
+   - Retry leftover `.trash/` entries on daemon startup and opportunistic pool sweeps (bounded, non-blocking, no busy loops), ignoring `.trash/` in `worktree.list`, `worktree.acquire`, and stale-worktree nudges.
+3. **Orphan empty-directory recovery (`internal/mcp`):**
+   - When `worktree.remove(path)` targets a directory inside the managed pool root that is no longer registered in `git worktree list` (left behind by a prior failed `git worktree remove` or interrupted cleanup), allow safe cleanup via the same `.trash/` rename-aside + async delete path (refusing paths outside the managed pool and refusing `.trash/` itself). The orphan branch cannot reuse `ownedPoolWorktree`'s git-in-target resolution (`git rev-parse --show-toplevel` fails or resolves to an ancestor repository in an emptied directory with no admin dir, and a `git worktree list` match is impossible by definition). It resolves the target by filesystem path instead: `EvalSymlinks` + `Lstat`, the main root and pool config taken from the caller's repository context, and containment checked against `ownedPoolRoots` (a strict descendant of an owned pool root; the pool root itself and `.trash/` are refused explicitly, since `underAnyPool` accepts `path == root`). The target directory itself must not be a symlink or junction. Acceptance predicate: an unregistered directory has no admin dir, so unreached-commit checks cannot run; accept only a directory tree that contains directories only (no regular files, no `.git` file or directory, no symlink or junction) and refuse anything else with an error naming the offending entry. This matches the Windows failure state, where git has already deleted every unlocked file and only empty directories remain.
+
+**Verification:**
+- Unit and `-race` tests in `internal/mcp` (plus Windows build/vet verification) covering:
+  - Successful O(1) rename-aside + Git prune + background `.trash/` deletion, verifying `.trash/` is excluded from `worktree.list` / `worktree.acquire` / stale nudges.
+  - Rename-aside failure leaves Git registration and worktree files intact (no partial unregistered state).
+  - Startup/pool sweep cleans leftover `.trash/` entries without blocking interactive calls.
+  - `worktree.remove(path)` cleans an already-unregistered orphan empty pool directory while rejecting paths outside the managed pool, and refuses a directory holding a leftover regular file, a dangling `.git` file, or a symlink/junction.
+  - Rename-aside failure and unregister-after-rename failure (rollback) are simulated through an injectable rename/unregister seam, since the real Windows CWD lock cannot be asserted on Linux.
+  - `T0` compatibility check: existing `worktree.remove` call signatures and JSON/text fields remain backwards-compatible.

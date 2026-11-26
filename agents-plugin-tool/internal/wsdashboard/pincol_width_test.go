@@ -276,6 +276,26 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	}
 }
 
+func TestStageFillBand3Overrides(t *testing.T) {
+	css := mustAsset(t, "dashboard.css")
+	for _, want := range []string{
+		`.board-acts .board-stage-fill { display: none; }`,
+		`.board-acts .board-action[aria-pressed="true"] {`,
+		`  :root[data-stage-fill]:not([data-mode="index"]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dbody > .dgrid { max-width: none; }`,
+		`  :root[data-stage-fill]:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: 0px; }`,
+		`  :root:not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .board-acts .board-stage-fill { display: inline-flex; }`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard.css lacks %q", want)
+		}
+	}
+	for _, line := range strings.Split(css, "\n") {
+		if (strings.Contains(line, "data-stage-fill") || strings.Contains(line, "board-stage-fill")) && strings.Contains(line, ":has(") {
+			t.Errorf("stage-fill rule must not use :has(): %s", strings.TrimSpace(line))
+		}
+	}
+}
+
 // TestTrackerStopsAtItsWidestLayout pins the tracker's wide cap: from 1600px,
 // where it lays out layout D (Items at two shares, Notifications, the tab
 // pane: four panels' worth), its drawer sheet is 1600px at most, anchored

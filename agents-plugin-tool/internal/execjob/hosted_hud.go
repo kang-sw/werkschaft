@@ -48,7 +48,10 @@ type HostedSummary struct {
 	State   string
 	Error   string
 	// Origin is OriginUser for the composer's `!` command, else OriginAgent.
-	Origin   string
+	Origin string
+	// Async reports whether the job ran asynchronously (started with
+	// async: true or converted past the sync execution window).
+	Async    bool
 	ExitCode *int
 	Signal   *int
 	// StartedAt and EndedAt are epoch milliseconds; EndedAt is zero while
@@ -75,7 +78,7 @@ func (h *Hosted) summaryLocked(j *hostedJob) HostedSummary {
 	}
 	return HostedSummary{
 		ID: row.ID, Owner: row.Owner, Tool: row.Tool, Command: displayCommand(*row), Cwd: row.Cwd, State: row.State, Error: row.Error,
-		Origin: origin, ExitCode: row.ExitCode, Signal: row.Signal, StartedAt: row.StartedAt, EndedAt: row.EndedAt,
+		Origin: origin, Async: row.Notify, ExitCode: row.ExitCode, Signal: row.Signal, StartedAt: row.StartedAt, EndedAt: row.EndedAt,
 		Written:       j.out.Written(StreamCombined),
 		StoppedByUser: j.userStopped && row.State == HostedStopped,
 		StopNotice:    j.stopNotice,

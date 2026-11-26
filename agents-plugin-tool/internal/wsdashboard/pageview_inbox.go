@@ -642,6 +642,10 @@ func hydrateUserMessage(lang string, mailboxCtx mailboxContext, answers []wsinbo
 				b.WriteString(string(renderSelectionInlineHTML(lang, part.Selection, targets)))
 				continue
 			}
+			if part.UserCommand != nil {
+				b.WriteString(string(renderUserCommandCardHTML(lang, part.UserCommand)))
+				continue
+			}
 			if part.Plain {
 				b.WriteString(template.HTMLEscapeString(part.Text))
 				continue
@@ -649,6 +653,12 @@ func hydrateUserMessage(lang string, mailboxCtx mailboxContext, answers []wsinbo
 			prevSel := i > 0 && content[i-1].Selection != nil
 			nextSel := i+1 < len(content) && content[i+1].Selection != nil
 			t := trimSelectionSeparator(part.Text, prevSel, nextSel)
+			if i > 0 && content[i-1].UserCommand != nil {
+				t = inlineLeadingNewlineRe.ReplaceAllString(t, "")
+			}
+			if i+1 < len(content) && content[i+1].UserCommand != nil {
+				t = inlineTrailingNewlineRe.ReplaceAllString(t, "")
+			}
 			b.WriteString(string(h.hydrateProse(t)))
 		}
 		out.Body = template.HTML(b.String())
@@ -741,9 +751,10 @@ func regularFile(path string) bool {
 // Selection source and memo are decoded once by ParseSelections and escaped
 // by html/template, never passed through markedText or a second parser.
 type SelectionContentPart struct {
-	Text      string
-	Plain     bool
-	Selection *SelectionView
+	Text        string
+	Plain       bool
+	Selection   *SelectionView
+	UserCommand *wsinbox.UserCommand
 }
 
 type SelectionView struct {
@@ -754,34 +765,49 @@ type SelectionView struct {
 
 // selectionViews associates thumbnails by the current message's numbers, not
 // across messages. Missing references retain their number; the original path
-// line remains ordinary text through userImages' existing fallback.
+// line remains ordinary text through userImages' existing fallback. It also
+// splits valid <ws:ucmd> blocks into structured UserCommand segments.
 func selectionViews(parts []wsinbox.SelectionPart, images []AttachmentView) ([]SelectionContentPart, []AttachmentView) {
 	grouped := false
-	for _, p := range parts {
-		grouped = grouped || p.Selection != nil || strings.Contains(p.Text, "<wb:selection")
-	}
-	if !grouped {
-		return nil, images
-	}
 	used := map[int]bool{}
 	var out []SelectionContentPart
 	for _, p := range parts {
-		v := SelectionContentPart{Text: p.Text, Plain: strings.Contains(p.Text, "<wb:selection")}
-		if s := p.Selection; s != nil {
-			v.Selection = &SelectionView{Mentions: s.Mentions, Comment: s.Comment}
-			for _, n := range s.Images {
-				img := AttachmentView{Num: n}
-				for _, candidate := range images {
-					if candidate.Num == n {
-						img = candidate
-						break
+		isSelectionOpaque := strings.Contains(p.Text, "<wb:selection")
+		if p.Selection != nil || isSelectionOpaque {
+			grouped = true
+			v := SelectionContentPart{Text: p.Text, Plain: isSelectionOpaque}
+			if s := p.Selection; s != nil {
+				v.Selection = &SelectionView{Mentions: s.Mentions, Comment: s.Comment}
+				for _, n := range s.Images {
+					img := AttachmentView{Num: n}
+					for _, candidate := range images {
+						if candidate.Num == n {
+							img = candidate
+							break
+						}
 					}
+					v.Selection.Images = append(v.Selection.Images, img)
+					used[n] = true
 				}
-				v.Selection.Images = append(v.Selection.Images, img)
-				used[n] = true
 			}
+			out = append(out, v)
+			continue
 		}
-		out = append(out, v)
+		if strings.Contains(p.Text, "<ws:ucmd") {
+			for _, up := range wsinbox.ParseUserCommands(p.Text) {
+				if up.Command != nil {
+					grouped = true
+					out = append(out, SelectionContentPart{Text: up.Text, UserCommand: up.Command})
+				} else {
+					out = append(out, SelectionContentPart{Text: up.Text})
+				}
+			}
+			continue
+		}
+		out = append(out, SelectionContentPart{Text: p.Text})
+	}
+	if !grouped {
+		return nil, images
 	}
 	var loose []AttachmentView
 	for _, img := range images {
@@ -796,7 +822,7 @@ func selectionViews(parts []wsinbox.SelectionPart, images []AttachmentView) ([]S
 // blocks (and, when present, the caller-owned message envelope). Strip valid
 // <textref> blocks first so anything inside their bodies stays opaque to
 // selection, image, and inline-anchor parsing. Extract image definitions only
-// outside selections so source/memo path lines stay literal.
+// outside selections and <ws:ucmd> blocks so source/memo/command lines stay literal.
 func splitSelectionContent(text, attachDir, replyID string) (string, []SelectionContentPart, []AttachmentView, []TextRefView) {
 	stripped, rawTextRefs := wsinbox.StripTextRefs(text)
 	parts := wsinbox.ParseSelections(stripped)
@@ -807,9 +833,23 @@ func splitSelectionContent(text, attachDir, replyID string) (string, []Selection
 		// plain text. Keep that entire segment opaque rather than guessing a
 		// second boundary grammar or extracting an image from a failed group.
 		if p.Selection == nil && !strings.Contains(p.Text, "<wb:selection") {
-			var found []AttachmentView
-			parts[i].Text, found = userImages(p.Text, attachDir, replyID)
-			images = append(images, found...)
+			if strings.Contains(p.Text, "<ws:ucmd") {
+				var seg strings.Builder
+				for _, up := range wsinbox.ParseUserCommands(p.Text) {
+					if up.Command != nil {
+						seg.WriteString(up.Text)
+						continue
+					}
+					cleaned, found := userImages(up.Text, attachDir, replyID)
+					images = append(images, found...)
+					seg.WriteString(cleaned)
+				}
+				parts[i].Text = seg.String()
+			} else {
+				var found []AttachmentView
+				parts[i].Text, found = userImages(p.Text, attachDir, replyID)
+				images = append(images, found...)
+			}
 		}
 		rest.WriteString(parts[i].Text)
 	}

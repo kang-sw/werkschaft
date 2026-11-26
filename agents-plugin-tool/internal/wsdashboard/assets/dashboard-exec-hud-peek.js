@@ -69,7 +69,7 @@
     else xhClosePeek(true);
   }, true);
   function xhPeekJobs() {
-    return xhJobs.filter(function (j) { return !xhDismissed[j.id] || j.id === xhPk.id; }).sort(function (a, b) { return xhByStartAsc(a, b) || (a.id < b.id ? -1 : 1); });
+    return xhJobs.filter(function (j) { return (!xhDismissed[j.id] && !xhSkipSyncAgent(j)) || j.id === xhPk.id; }).sort(function (a, b) { return xhByStartAsc(a, b) || (a.id < b.id ? -1 : 1); });
   }
   function xhOpenPeek(id, origin) {
     if (!xhById[id]) return;

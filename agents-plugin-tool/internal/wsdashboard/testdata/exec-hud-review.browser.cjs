@@ -162,7 +162,7 @@ async function run(browser, { lang, scheme }) {
 
   // I2: a read in flight across a stop and an end: one read at a time, and an older answer takes nothing back.
   await sect('I2', async () => {
-    await setJobs([J('exec_d1', 'long task one'), J('exec_d2', 'long task two', { started_at: Date.now() - 80000 })]);
+    await setJobs([J('exec_d1', 'long task one', { async: true }), J('exec_d2', 'long task two', { started_at: Date.now() - 80000 })]);
     await post('/out', { ID: 'exec_d1', Stream: 'stdout', Text: 'D1-LINE\n' });
     await post('/out', { ID: 'exec_d2', Stream: 'stdout', Text: 'D2-LINE\n' });
     await view.waitForSelector('.xchip[data-xid="exec_d1"]');
@@ -632,7 +632,7 @@ async function run(browser, { lang, scheme }) {
 
   // a stop's answer (pending) arriving after a newer list (sent): no stale toast, no stale state
   await sect('ORDER-STOP', async () => {
-    await setJobs([J('exec_o3', 'worker three', { started_at: Date.now() - 60000 }), J('exec_o4', 'worker four', { started_at: Date.now() - 50000 })]);
+    await setJobs([J('exec_o3', 'worker three', { async: true, started_at: Date.now() - 60000 }), J('exec_o4', 'worker four', { started_at: Date.now() - 50000 })]);
     await view.waitForSelector('.xchip[data-xid="exec_o4"]', { state: 'attached' });
     await post('/set', { notice: 'pending', stopHold: true });
     await openChip(view, 'exec_o3');
@@ -668,7 +668,7 @@ async function run(browser, { lang, scheme }) {
     await post('/set', { notice: 'pending' });
     await post('/manual', { on: true });
     const net = netLog(page, /\/exec\/(jobs$|exec_s1\/stop)/);
-    const run3 = [J('exec_s1', 'worker one', { started_at: Date.now() - 60000 }), J('exec_s2', 'worker two', { started_at: Date.now() - 50000 })];
+    const run3 = [J('exec_s1', 'worker one', { async: true, started_at: Date.now() - 60000 }), J('exec_s2', 'worker two', { started_at: Date.now() - 50000 })];
     await wake(net, run3);
     await view.waitForSelector('.xchip[data-xid="exec_s2"]', { state: 'attached' });
     await openChip(view, 'exec_s1');
@@ -828,7 +828,7 @@ async function run(browser, { lang, scheme }) {
 
   // Minor: the 10 s pin ends: an ok job that just ended is ahead of a running one, then behind it.
   await sect('PIN', async () => {
-    await setJobs([J('exec_run', 'watch it', { started_at: Date.now() - 300000 }), J('exec_ok', 'make', { state: 'exited', exit_code: 0, started_at: Date.now() - 20000, ended_at: Date.now() - 8600 })]);
+    await setJobs([J('exec_run', 'watch it', { started_at: Date.now() - 300000 }), J('exec_ok', 'make', { state: 'exited', exit_code: 0, async: true, started_at: Date.now() - 20000, ended_at: Date.now() - 8600 })]);
     await view.waitForSelector('.xchip[data-xid="exec_ok"]');
     const order = () => view.evaluate(() => [...document.querySelectorAll('.xgroup .xchip[data-xid]')].filter(n => n.getClientRects().length).map(n => n.getAttribute('data-xid')));
     assert.deepEqual(await order(), ['exec_ok', 'exec_run'], 'before 10 s a just-ended ok job is pinned ahead of the running one');

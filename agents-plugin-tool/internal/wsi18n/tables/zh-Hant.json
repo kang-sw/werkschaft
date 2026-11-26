@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "將此看板下載為 zip",
   "js.board.toolbar.files": "檔案",
   "js.board.toolbar.files.title": "檔案 (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "填滿寬度",
+  "js.board.toolbar.stage_fill.title": "切換全寬檢視",
   "js.board.overview.hint": "點擊外部或 Esc：返回原位 · 點擊卡片：前往該卡片",
   "js.wb.state.awaiting-confirmation": "待確認",
   "js.wb.state.waiting": "等待中",

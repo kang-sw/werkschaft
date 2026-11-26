@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Baixar este quadro como zip",
   "js.board.toolbar.files": "Arquivos",
   "js.board.toolbar.files.title": "Arquivos (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Largura total",
+  "js.board.toolbar.stage_fill.title": "Alternar visualização em largura total",
   "js.board.overview.hint": "Clique fora · Esc: voltar · Clique no cartão: ir ao cartão",
   "js.wb.state.awaiting-confirmation": "Aguardando confirmação",
   "js.wb.state.waiting": "Aguardando",
