@@ -496,7 +496,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T14:14:04Z"
+        "touched_at": "2026-11-26T14:15:29Z",
+        "impl": {
+          "branch": "impl/develop/gift-acorn-heat"
+        }
       }
     },
     "261126-feat-ws-dashboard-conv-collapsed-tool-summary-tokens": {
